@@ -177,12 +177,59 @@ export interface CompanyDossier {
     company: string;
     hiring_strategy: string;
     interview_focus: string;
+    core_values?: string[];
     salary_estimates: SalaryEstimate[];
     competitors: string[];
     recent_news: string;
     sources: string[];
     fetched_at: string;
 }
+
+// ============================================
+// Advanced Knowledge Pipeline Types
+// ============================================
+
+export interface AOTStatus {
+    companyResearch: 'pending' | 'running' | 'done' | 'failed';
+    negotiationScript: 'pending' | 'running' | 'done' | 'failed';
+    gapAnalysis: 'pending' | 'running' | 'done' | 'failed';
+    starMapping: 'pending' | 'running' | 'done' | 'failed';
+}
+
+export interface SkillGap {
+    skill: string;
+    gap_type: 'missing' | 'weak';
+    pivot_script: string;
+    transferable_skills: string[];
+}
+
+export interface GapAnalysisResult {
+    matched_skills: string[];
+    gaps: SkillGap[];
+    match_percentage: number;
+}
+
+export interface MockQuestion {
+    question: string;
+    category: 'technical' | 'behavioral' | 'system_design' | 'culture_fit';
+    difficulty: 'easy' | 'medium' | 'hard';
+    rationale: string;
+    suggested_answer_key: string;
+}
+
+export interface StarStory {
+    original_bullet: string;
+    situation: string;
+    task: string;
+    action: string;
+    result: string;
+    full_narrative: string;
+    parent_role: string;
+    parent_company: string;
+    timeline: string;
+}
+
+export type ToneDirective = 'high_level_business' | 'deep_technical' | 'balanced';
 
 // ============================================
 // Intent Classification

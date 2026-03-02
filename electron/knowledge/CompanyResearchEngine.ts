@@ -388,3 +388,7 @@ Rules:
         return cached ? cached.dossier as CompanyDossier : null;
     }
 }
+
+export function jdContextFromStructured(jd: any): string {
+    return `${jd.title} at ${jd.company} (${jd.location} - ${jd.employment_type || 'full_time'})`;
+}

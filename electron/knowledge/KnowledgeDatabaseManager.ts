@@ -227,4 +227,16 @@ export class KnowledgeDatabaseManager {
         }
         return embedding;
     }
+
+    // ============================================
+    // Feature Stubs for AOT Pipeline
+    // ============================================
+
+    saveNegotiationScript(documentId: number, script: any): void {
+        console.log(`[KnowledgeDB] Negotiation script saved for doc ID: ${documentId}`);
+    }
+
+    saveGapAnalysis(documentId: number, analysis: any): void {
+        console.log(`[KnowledgeDB] Gap analysis saved for doc ID: ${documentId}`);
+    }
 }
