@@ -241,6 +241,7 @@ export class CompanyResearchEngine {
         queries.push(`${companyName} recent funding news layoffs`);
         queries.push(`${companyName} competitors`);
         queries.push(`${companyName} core values leadership principles culture`);
+        queries.push(`${companyName} careers about us values mission`);
 
         // Tech-stack specific query when technologies are known
         if (technologies && technologies.length > 0) {
@@ -389,6 +390,3 @@ Rules:
     }
 }
 
-export function jdContextFromStructured(jd: any): string {
-    return `${jd.title} at ${jd.company} (${jd.location} - ${jd.employment_type || 'full_time'})`;
-}

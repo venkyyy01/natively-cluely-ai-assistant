@@ -11,11 +11,14 @@ import { CompanyResearchEngine, jdContextFromStructured } from './CompanyResearc
 import { TechnicalDepthScorer } from './TechnicalDepthScorer';
 import { AOTPipeline } from './AOTPipeline';
 import { generateStarStories, generateStarStoryNodes } from './StarStoryGenerator';
+import { generateMockQuestions } from './MockInterviewGenerator';
+import { findRelevantValueAlignments, formatValueAlignmentBlock, CultureMappingResult } from './CultureValuesMapper';
 
 export class KnowledgeOrchestrator {
     private db: KnowledgeDatabaseManager;
     private knowledgeModeActive: boolean = false;
     private depthScorer: TechnicalDepthScorer;
+    private aotPipeline: AOTPipeline;
 
     // Cached state for fast retrieval
     private activeResume: KnowledgeDocument | null = null;
@@ -34,6 +37,7 @@ export class KnowledgeOrchestrator {
         this.db.initializeSchema();
         this.companyResearch = new CompanyResearchEngine(db);
         this.depthScorer = new TechnicalDepthScorer();
+        this.aotPipeline = new AOTPipeline(db, this.companyResearch);
         this.refreshCache();
     }
 
@@ -44,6 +48,7 @@ export class KnowledgeOrchestrator {
     setGenerateContentFn(fn: (contents: any[]) => Promise<string>): void {
         this.generateContentFn = fn;
         this.companyResearch.setGenerateContentFn(fn);
+        this.aotPipeline.setGenerateContentFn(fn);
     }
 
     setEmbedFn(fn: (text: string) => Promise<number[]>): void {
@@ -68,6 +73,60 @@ export class KnowledgeOrchestrator {
      */
     getCompanyResearchEngine(): CompanyResearchEngine {
         return this.companyResearch;
+    }
+
+    /**
+     * Get the AOT pipeline for status and results.
+     */
+    getAOTPipeline(): AOTPipeline {
+        return this.aotPipeline;
+    }
+
+    /**
+     * Get cached gap analysis from AOT pipeline or DB.
+     */
+    getGapAnalysis(): any | null {
+        const cached = this.aotPipeline.getCachedGapAnalysis();
+        if (cached) return cached;
+        // Fallback to DB
+        if (this.activeJD?.id) {
+            return this.db.getGapAnalysis(this.activeJD.id);
+        }
+        return null;
+    }
+
+    /**
+     * Get cached negotiation script from AOT pipeline or DB.
+     */
+    getNegotiationScript(): any | null {
+        const cached = this.aotPipeline.getCachedNegotiationScript();
+        if (cached) return cached;
+        if (this.activeJD?.id) {
+            return this.db.getNegotiationScript(this.activeJD.id);
+        }
+        return null;
+    }
+
+    /**
+     * Get cached mock questions from DB.
+     */
+    getMockQuestions(): any | null {
+        if (this.activeJD?.id) {
+            return this.db.getMockQuestions(this.activeJD.id);
+        }
+        return null;
+    }
+
+    /**
+     * Get cached culture value mappings from AOT pipeline or DB.
+     */
+    getCultureMappings(): CultureMappingResult | null {
+        const cached = this.aotPipeline.getCachedCultureMapping();
+        if (cached) return cached;
+        if (this.activeJD?.id) {
+            return this.db.getCultureMappings(this.activeJD.id) as CultureMappingResult | null;
+        }
+        return null;
     }
 
     // ============================================
@@ -145,21 +204,31 @@ export class KnowledgeOrchestrator {
                 structured_data: structuredData
             });
 
-            // 6. Chunk and Embed
-            const nodesWithEmbeddings = await chunkAndEmbedDocument(structuredData, type, this.embedFn);
+            // Steps 6-8 can fail — recover by deleting the partially saved document
+            try {
+                // 6. Chunk and Embed
+                const nodesWithEmbeddings = await chunkAndEmbedDocument(structuredData, type, this.embedFn);
 
-            // 7. Save Nodes
-            this.db.saveNodes(nodesWithEmbeddings, docId);
+                // 7. Save Nodes
+                this.db.saveNodes(nodesWithEmbeddings, docId);
 
-            // 8. Generate STAR Stories (Resume Only)
-            if (type === DocType.RESUME) {
-                try {
-                    console.log(`[KnowledgeOrchestrator] Generating STAR stories for resume...`);
-                    const starNodes = await generateStarStoryNodes(structuredData as StructuredResume, this.generateContentFn, this.embedFn);
-                    this.db.saveNodes(starNodes, docId);
-                } catch (err: any) {
-                    console.error('[KnowledgeOrchestrator] Failed to generate STAR stories:', err.message);
+                // 8. Generate STAR Stories (Resume Only)
+                if (type === DocType.RESUME) {
+                    try {
+                        console.log(`[KnowledgeOrchestrator] Generating STAR stories for resume...`);
+                        const starNodes = await generateStarStoryNodes(structuredData as StructuredResume, this.generateContentFn, this.embedFn);
+                        this.db.saveNodes(starNodes, docId);
+                    } catch (err: any) {
+                        console.error('[KnowledgeOrchestrator] Failed to generate STAR stories:', err.message);
+                        // Non-fatal — STAR stories are optional enrichment
+                    }
                 }
+            } catch (embedError: any) {
+                // Rollback: delete the partially saved document + any nodes (cascade)
+                console.error(`[KnowledgeOrchestrator] Embedding/storage failed, rolling back document ${docId}:`, embedError.message);
+                this.db.deleteDocumentsByType(type);
+                this.refreshCache();
+                return { success: false, error: `Embedding failed: ${embedError.message}. Document rolled back.` };
             }
 
             this.refreshCache();
@@ -167,11 +236,8 @@ export class KnowledgeOrchestrator {
 
             // 9. Fire AOT Pipeline (JD Only)
             if (type === DocType.JD) {
-                const aot = new AOTPipeline(this.db, this.companyResearch);
-                if (this.generateContentFn) {
-                    aot.setGenerateContentFn(this.generateContentFn);
-                }
-                aot.runForJD(
+                this.aotPipeline.reset();
+                this.aotPipeline.runForJD(
                     this.db.getDocumentByType(DocType.JD)!,
                     this.db.getDocumentByType(DocType.RESUME)
                 ).catch((err: Error) => console.error('[KnowledgeOrchestrator] AOT Pipeline failed:', err));
@@ -219,21 +285,52 @@ export class KnowledgeOrchestrator {
             }
         }
 
-        // Company research (if intent warrants it and JD has a company)
+        // Company research — prefer pre-computed AOT dossier, fallback to DB cache
         let dossierContext = '';
         if (needsCompanyResearch(question) && this.activeJD) {
             const jd = this.activeJD.structured_data as StructuredJD;
             if (jd.company) {
                 try {
-                    const dossier = await this.companyResearch.researchCompany(
-                        jd.company, jdContextFromStructured(jd)
-                    );
+                    // 1. Try AOT pipeline cache (in-memory)
+                    let dossier = this.aotPipeline.getCachedDossier();
+                    // 2. Fallback: DB cache (persisted from previous AOT runs)
+                    if (!dossier) {
+                        dossier = this.companyResearch.getCachedDossier(jd.company);
+                    }
+                    // 3. Last resort: live research (only if no cached data exists at all)
+                    if (!dossier) {
+                        console.warn('[KnowledgeOrchestrator] No cached dossier found, running live research (consider uploading JD first)');
+                        dossier = await this.companyResearch.researchCompany(
+                            jd.company, jdContextFromStructured(jd)
+                        );
+                    }
                     dossierContext = formatDossierBlock(dossier);
                 } catch (error: any) {
                     console.warn('[KnowledgeOrchestrator] Company research failed:', error.message);
                 }
             }
         }
+        // Gap analysis pivot injection — if question mentions a gap skill, inject the pre-computed pivot script
+        let gapContext = '';
+        if (this.activeJD) {
+            const gapAnalysis = this.getGapAnalysis() as import('./types').GapAnalysisResult | null;
+            if (gapAnalysis && gapAnalysis.gaps && gapAnalysis.gaps.length > 0) {
+                const questionLower = question.toLowerCase();
+                const matchingGaps = gapAnalysis.gaps.filter(gap =>
+                    questionLower.includes(gap.skill.toLowerCase())
+                );
+                if (matchingGaps.length > 0) {
+                    const pivotLines = matchingGaps.map(gap =>
+                        `[Gap: ${gap.skill} (${gap.gap_type})] Pivot: ${gap.pivot_script}${gap.transferable_skills.length > 0 ? ` Transferable skills: ${gap.transferable_skills.join(', ')}` : ''}`
+                    );
+                    gapContext = `<gap_pivot_scripts>\n${pivotLines.join('\n')}\n</gap_pivot_scripts>`;
+                    console.log(`[KnowledgeOrchestrator] Injecting ${matchingGaps.length} pivot script(s) for detected gap skills`);
+                }
+            }
+        }
+
+        // Get tone directive from technical depth scorer
+        const toneXML = this.depthScorer.getToneXML();
 
         // Pass everything to the Context Assembler for JIT prompt construction
         const result = await assemblePromptContext(
@@ -241,7 +338,8 @@ export class KnowledgeOrchestrator {
             this.activeResume,
             this.activeJD,
             relevantNodes.map(n => ({ node: n, score: 1 })),
-            this.generateContentFn
+            this.generateContentFn,
+            toneXML
         );
 
         // Append dossier context if available
@@ -249,6 +347,31 @@ export class KnowledgeOrchestrator {
             result.contextBlock = result.contextBlock
                 ? `${result.contextBlock}\n\n${dossierContext}`
                 : dossierContext;
+        }
+
+        // Append gap pivot scripts if available
+        if (gapContext && result) {
+            result.contextBlock = result.contextBlock
+                ? `${result.contextBlock}\n\n${gapContext}`
+                : gapContext;
+        }
+
+        // Culture values alignment injection
+        const cultureMappings = this.getCultureMappings();
+        if (cultureMappings && cultureMappings.mappings.length > 0 && this.activeJD && result) {
+            const jd = this.activeJD.structured_data as StructuredJD;
+            const alignments = findRelevantValueAlignments(
+                question, cultureMappings.mappings, cultureMappings.core_values, 2
+            );
+            if (alignments.length > 0) {
+                const cultureBlock = formatValueAlignmentBlock(alignments, jd.company);
+                if (cultureBlock) {
+                    result.contextBlock = result.contextBlock
+                        ? `${result.contextBlock}\n\n${cultureBlock}`
+                        : cultureBlock;
+                    console.log(`[KnowledgeOrchestrator] Injecting ${alignments.length} culture alignment(s) for ${jd.company}`);
+                }
+            }
         }
 
         return result;
@@ -335,6 +458,13 @@ Keywords: ${jd.keywords?.join(', ')}`;
                 };
             }
 
+            // Get AOT results
+            const gapAnalysis = this.getGapAnalysis();
+            const negotiationScript = this.getNegotiationScript();
+            const mockQuestions = this.getMockQuestions();
+            const cultureMappings = this.getCultureMappings();
+            const aotStatus = this.aotPipeline.getStatus();
+
             return {
                 identity: structured.identity,
                 skills: structured.skills,
@@ -352,10 +482,16 @@ Keywords: ${jd.keywords?.join(', ')}`;
                 activeJD: jdData,
                 hasActiveJD: this.activeJD !== null,
 
-                // Mock these since UI still expects them
-                compactPersona: "Resume-Aware Mode Active",
-                introShort: "Just-in-Time generation enabled",
-                introInterview: "Just-in-Time generation enabled"
+                // AOT pipeline results
+                gapAnalysis,
+                negotiationScript,
+                mockQuestions,
+                cultureMappings,
+                aotStatus,
+
+                // Dynamic persona info
+                compactPersona: this.getCompactJDHeader() || 'Resume-Aware Mode Active',
+                toneDirective: this.depthScorer.getToneDirective()
             };
         } catch {
             return null;

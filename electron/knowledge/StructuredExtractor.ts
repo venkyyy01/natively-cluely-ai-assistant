@@ -2,6 +2,7 @@
 // LLM call to parse raw text into structured JSON based on Document Type
 
 import { DocType, StructuredResume, StructuredJD } from './types';
+import { callWithRetry } from './llmUtils';
 
 const RESUME_SCHEMA = `{
   "identity": {
@@ -136,7 +137,10 @@ export async function extractStructuredData<T>(
   const documentName = type === DocType.RESUME ? "RESUME" : "JOB DESCRIPTION";
   const prompt = `${systemPrompt}\n\n--- ${documentName} TEXT ---\n${rawText}\n--- END ${documentName} TEXT ---\n\nReturn ONLY the JSON object. No markdown fences, no explanation.`;
 
-  const response = await generateContent([{ text: prompt }]);
+  const response = await callWithRetry(
+    () => generateContent([{ text: prompt }]),
+    45000 // 45s timeout for structured extraction (larger docs need more time)
+  );
   const cleaned = cleanJsonResponse(response);
 
   try {

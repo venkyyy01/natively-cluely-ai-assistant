@@ -54,6 +54,7 @@ export function createDocumentNodes(structuredData: any, type: DocType): Omit<Co
         if (resume.experience) {
             for (const exp of resume.experience) {
                 const duration = calculateDurationMonths(exp.start_date, exp.end_date);
+                const contextPrefix = `[${exp.role} @ ${exp.company}, ${exp.start_date}–${exp.end_date || 'Present'}]`;
                 for (const bullet of exp.bullets) {
                     nodes.push({
                         source_type: DocType.RESUME,
@@ -63,7 +64,7 @@ export function createDocumentNodes(structuredData: any, type: DocType): Omit<Co
                         start_date: exp.start_date,
                         end_date: exp.end_date,
                         duration_months: duration,
-                        text_content: bullet,
+                        text_content: `${contextPrefix} ${bullet}`,
                         tags: extractTags(`${exp.role} ${exp.company} ${bullet}`)
                     });
                 }
@@ -193,29 +194,32 @@ export async function chunkAndEmbedDocument(
     const rawNodes = createDocumentNodes(structuredData, type);
     const nodesWithEmbeddings: ContextNode[] = [];
 
-    console.log(`[DocumentChunker] Generating embeddings for ${rawNodes.length} nodes...`);
+    console.log(`[DocumentChunker] Generating embeddings for ${rawNodes.length} nodes (batched)...`);
 
-    for (let i = 0; i < rawNodes.length; i++) {
-        try {
-            const embedding = await embedFn(rawNodes[i].text_content);
+    const EMBED_BATCH_SIZE = 10;
+    for (let i = 0; i < rawNodes.length; i += EMBED_BATCH_SIZE) {
+        const batch = rawNodes.slice(i, i + EMBED_BATCH_SIZE);
+
+        const results = await Promise.allSettled(
+            batch.map(node => embedFn(node.text_content))
+        );
+
+        for (let j = 0; j < batch.length; j++) {
+            const result = results[j];
             nodesWithEmbeddings.push({
-                ...rawNodes[i],
-                embedding
+                ...batch[j],
+                embedding: result.status === 'fulfilled' ? result.value : undefined
             });
-
-            if ((i + 1) % 10 === 0) {
-                console.log(`[DocumentChunker] Embedded ${i + 1}/${rawNodes.length} nodes`);
+            if (result.status === 'rejected') {
+                console.warn(`[DocumentChunker] Failed to embed node ${i + j}: ${(result.reason as Error)?.message}. Skipping embedding.`);
             }
+        }
 
-            if (i < rawNodes.length - 1) {
-                await new Promise(resolve => setTimeout(resolve, 50)); // Adjusted to 50ms to be faster
-            }
-        } catch (error: any) {
-            console.warn(`[DocumentChunker] Failed to embed node ${i}: ${error.message}. Skipping embedding.`);
-            nodesWithEmbeddings.push({
-                ...rawNodes[i],
-                embedding: undefined
-            });
+        console.log(`[DocumentChunker] Embedded batch ${Math.floor(i / EMBED_BATCH_SIZE) + 1}/${Math.ceil(rawNodes.length / EMBED_BATCH_SIZE)} (${Math.min(i + EMBED_BATCH_SIZE, rawNodes.length)}/${rawNodes.length})`);
+
+        // Small delay between batches to avoid rate limiting
+        if (i + EMBED_BATCH_SIZE < rawNodes.length) {
+            await new Promise(resolve => setTimeout(resolve, 100));
         }
     }
 

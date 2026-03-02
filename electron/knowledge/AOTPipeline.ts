@@ -2,12 +2,14 @@
 // Ahead-of-Time background pipeline triggered at JD upload
 // Runs company research, negotiation script, and gap analysis concurrently
 
-import { KnowledgeDocument, StructuredResume, StructuredJD, CompanyDossier, AOTStatus, GapAnalysisResult } from './types';
+import { KnowledgeDocument, StructuredResume, StructuredJD, CompanyDossier, AOTStatus, GapAnalysisResult, StarStory, DocType } from './types';
 import { KnowledgeDatabaseManager } from './KnowledgeDatabaseManager';
 import { CompanyResearchEngine, jdContextFromStructured } from './CompanyResearchEngine';
 import { generateNegotiationScript, NegotiationScript } from './NegotiationEngine';
 import { analyzeGaps } from './GapAnalysisEngine';
 import { processResume } from './PostProcessor';
+import { generateMockQuestions } from './MockInterviewGenerator';
+import { resolveCompanyValues, mapStoriesToValues, CultureMappingResult } from './CultureValuesMapper';
 
 export class AOTPipeline {
     private db: KnowledgeDatabaseManager;
@@ -24,6 +26,7 @@ export class AOTPipeline {
     private cachedDossier: CompanyDossier | null = null;
     private cachedNegotiationScript: NegotiationScript | null = null;
     private cachedGapAnalysis: GapAnalysisResult | null = null;
+    private cachedCultureMapping: CultureMappingResult | null = null;
 
     constructor(db: KnowledgeDatabaseManager, companyResearch: CompanyResearchEngine) {
         this.db = db;
@@ -48,6 +51,10 @@ export class AOTPipeline {
 
     getCachedGapAnalysis(): GapAnalysisResult | null {
         return this.cachedGapAnalysis;
+    }
+
+    getCachedCultureMapping(): CultureMappingResult | null {
+        return this.cachedCultureMapping;
     }
 
     /**
@@ -80,6 +87,16 @@ export class AOTPipeline {
                 this.preComputeNegotiationScript(jdDoc, resumeDoc),
                 this.preComputeGapAnalysis(jdDoc, resumeDoc)
             ]);
+        }
+
+        // Phase 3: Mock interview questions (uses dossier + gap analysis)
+        if (resumeDoc) {
+            await this.preComputeMockQuestions(jdDoc, resumeDoc);
+        }
+
+        // Phase 4: Culture values mapping (maps STAR stories to company core values)
+        if (resumeDoc) {
+            await this.preComputeCultureMapping(jdDoc, resumeDoc);
         }
 
         console.log('[AOTPipeline] ✅ AOT pipeline complete. Status:', JSON.stringify(this.status));
@@ -141,6 +158,72 @@ export class AOTPipeline {
         }
     }
 
+    private async preComputeMockQuestions(jdDoc: KnowledgeDocument, resumeDoc: KnowledgeDocument): Promise<void> {
+        try {
+            const questions = await generateMockQuestions(
+                resumeDoc, jdDoc, this.cachedDossier, this.cachedGapAnalysis, this.generateContentFn!
+            );
+            if (questions.length > 0) {
+                this.db.saveMockQuestions(jdDoc.id!, questions);
+            }
+            console.log(`[AOTPipeline] Mock questions pre-computed: ${questions.length} questions`);
+        } catch (error: any) {
+            console.error(`[AOTPipeline] Mock questions failed: ${error.message}`);
+        }
+    }
+
+    private async preComputeCultureMapping(jdDoc: KnowledgeDocument, resumeDoc: KnowledgeDocument): Promise<void> {
+        try {
+            this.status.starMapping = 'running';
+            const jd = jdDoc.structured_data as StructuredJD;
+
+            // 1. Resolve core values for this company
+            const coreValues = resolveCompanyValues(jd.company, this.cachedDossier);
+            if (coreValues.length === 0) {
+                console.log(`[AOTPipeline] No core values found for ${jd.company}, skipping culture mapping`);
+                this.status.starMapping = 'done';
+                return;
+            }
+
+            // 2. Retrieve STAR stories from DB
+            const starNodes = this.db.getNodesBySourceType(DocType.RESUME)
+                .filter(n => n.category === 'star_story');
+
+            if (starNodes.length === 0) {
+                console.log('[AOTPipeline] No STAR stories found, skipping culture mapping');
+                this.status.starMapping = 'done';
+                return;
+            }
+
+            // 3. Convert context nodes back to StarStory-like objects
+            const stories: StarStory[] = starNodes.map(node => ({
+                original_bullet: node.text_content,
+                situation: '',
+                task: '',
+                action: '',
+                result: '',
+                full_narrative: node.text_content,
+                parent_role: node.title.replace('STAR: ', '').split(' at ')[0] || '',
+                parent_company: node.organization || '',
+                timeline: node.start_date ? `${node.start_date}–${node.end_date || 'Present'}` : ''
+            }));
+
+            // 4. Map stories to values
+            const mapping = await mapStoriesToValues(
+                stories, coreValues, jd.company, this.generateContentFn!
+            );
+
+            // 5. Cache and persist
+            this.cachedCultureMapping = mapping;
+            this.db.saveCultureMappings(jdDoc.id!, mapping);
+            this.status.starMapping = 'done';
+            console.log(`[AOTPipeline] Culture mapping complete: ${mapping.mappings.length} mappings, ${mapping.unmapped_values.length} unmapped values`);
+        } catch (error: any) {
+            this.status.starMapping = 'failed';
+            console.error(`[AOTPipeline] Culture mapping failed: ${error.message}`);
+        }
+    }
+
     /**
      * Reset cached state (e.g., when a new JD is uploaded).
      */
@@ -148,6 +231,7 @@ export class AOTPipeline {
         this.cachedDossier = null;
         this.cachedNegotiationScript = null;
         this.cachedGapAnalysis = null;
+        this.cachedCultureMapping = null;
         this.status = {
             companyResearch: 'pending',
             negotiationScript: 'pending',

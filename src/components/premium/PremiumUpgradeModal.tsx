@@ -5,6 +5,8 @@ interface PremiumUpgradeModalProps {
     isOpen: boolean;
     onClose: () => void;
     onActivated: () => void;
+    onDeactivated?: () => void;
+    isPremium?: boolean;
 }
 
 /**
@@ -13,7 +15,7 @@ interface PremiumUpgradeModalProps {
  *
  * ⚠️  PRIVATE FILE — Do NOT commit to the public/OSS repository.
  */
-export const PremiumUpgradeModal: React.FC<PremiumUpgradeModalProps> = ({ isOpen, onClose, onActivated }) => {
+export const PremiumUpgradeModal: React.FC<PremiumUpgradeModalProps> = ({ isOpen, onClose, onActivated, onDeactivated, isPremium }) => {
     const [licenseKey, setLicenseKey] = useState('');
     const [hardwareId, setHardwareId] = useState('');
     const [status, setStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
@@ -49,6 +51,16 @@ export const PremiumUpgradeModal: React.FC<PremiumUpgradeModalProps> = ({ isOpen
         } catch (e: any) {
             setStatus('error');
             setErrorMessage(e.message || 'Activation failed.');
+        }
+    };
+
+    const handleDeactivate = async () => {
+        try {
+            await window.electronAPI?.licenseDeactivate?.();
+            onDeactivated?.();
+            onClose();
+        } catch (e: any) {
+            setErrorMessage(e.message || 'Deactivation failed.');
         }
     };
 
@@ -124,49 +136,71 @@ export const PremiumUpgradeModal: React.FC<PremiumUpgradeModalProps> = ({ isOpen
                         <div className="flex-1 h-px bg-white/[0.04]" />
                     </div>
 
-                    {/* License key input */}
-                    <div className="space-y-2.5">
-                        <div className="relative">
-                            <Key size={12} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-white/30" />
-                            <input
-                                type="text"
-                                value={licenseKey}
-                                onChange={(e) => setLicenseKey(e.target.value)}
-                                onKeyDown={(e) => e.key === 'Enter' && handleActivate()}
-                                placeholder="Enter your license key"
-                                disabled={status === 'loading' || status === 'success'}
-                                className="w-full bg-black/30 border border-white/[0.06] rounded-[10px] pl-9 pr-3 py-2 text-[12px] text-white/90 placeholder-white/20 focus:outline-none focus:border-white/20 focus:bg-black/50 transition-all disabled:opacity-50 shadow-inner"
-                            />
-                        </div>
-
-                        <button
-                            onClick={handleActivate}
-                            disabled={!licenseKey.trim() || status === 'loading' || status === 'success'}
-                            className={`w-full py-2.5 rounded-[10px] text-[12px] font-medium transition-all duration-200 flex items-center justify-center gap-2 ${status === 'success'
-                                ? 'bg-green-500/10 text-green-400 border border-green-500/20'
-                                : status === 'loading'
-                                    ? 'bg-white/[0.02] border border-white/[0.05] text-white/30 cursor-wait'
-                                    : !licenseKey.trim()
-                                        ? 'bg-white/[0.02] border border-white/[0.05] text-white/30 cursor-not-allowed'
-                                        : 'bg-white/90 text-black hover:bg-white active:scale-[0.98]'
-                                }`}
-                        >
-                            {status === 'success' ? (
-                                <><CheckCircle size={12} /> Activated!</>
-                            ) : status === 'loading' ? (
-                                <><div className="w-3 h-3 border-2 border-white/20 border-t-transparent rounded-full animate-spin" /> Verifying...</>
-                            ) : (
-                                <><Lock size={12} /> Activate License</>
-                            )}
-                        </button>
-
-                        {/* Error message */}
-                        {status === 'error' && errorMessage && (
-                            <div className="flex items-center gap-2 px-3 py-2 bg-red-500/10 border border-red-500/20 rounded-lg text-[11px] text-red-500 font-medium animated fadeIn">
-                                <AlertCircle size={12} /> {errorMessage}
+                    {isPremium ? (
+                        <div className="space-y-4">
+                            <div className="bg-green-500/10 border border-green-500/20 rounded-xl p-4 flex flex-col items-center justify-center text-center">
+                                <CheckCircle size={24} className="text-green-400 mb-2" />
+                                <h3 className="text-[13px] font-bold text-green-400">Pro License Active</h3>
+                                <p className="text-[11px] text-green-400/70 mt-1">This device is authorized for all premium features.</p>
                             </div>
-                        )}
-                    </div>
+
+                            <button
+                                onClick={handleDeactivate}
+                                className="w-full py-2.5 rounded-[10px] bg-red-500/10 text-red-400 border border-red-500/20 text-[12px] font-medium hover:bg-red-500/20 active:scale-[0.98] transition-all duration-200 flex items-center justify-center gap-2"
+                            >
+                                <X size={14} /> Deactivate License
+                            </button>
+                            <p className="text-[10px] text-white/30 text-center px-4 leading-relaxed">
+                                Deactivating will remove the license from this device, allowing you to use it on another computer.
+                            </p>
+                        </div>
+                    ) : (
+                        <>
+                            {/* License key input for non-premium */}
+                            <div className="space-y-2.5">
+                                <div className="relative">
+                                    <Key size={12} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-white/30" />
+                                    <input
+                                        type="text"
+                                        value={licenseKey}
+                                        onChange={(e) => setLicenseKey(e.target.value)}
+                                        onKeyDown={(e) => e.key === 'Enter' && handleActivate()}
+                                        placeholder="Enter your license key"
+                                        disabled={status === 'loading' || status === 'success'}
+                                        className="w-full bg-black/30 border border-white/[0.06] rounded-[10px] pl-9 pr-3 py-2 text-[12px] text-white/90 placeholder-white/20 focus:outline-none focus:border-white/20 focus:bg-black/50 transition-all disabled:opacity-50 shadow-inner"
+                                    />
+                                </div>
+
+                                <button
+                                    onClick={handleActivate}
+                                    disabled={!licenseKey.trim() || status === 'loading' || status === 'success'}
+                                    className={`w-full py-2.5 rounded-[10px] text-[12px] font-medium transition-all duration-200 flex items-center justify-center gap-2 ${status === 'success'
+                                        ? 'bg-green-500/10 text-green-400 border border-green-500/20'
+                                        : status === 'loading'
+                                            ? 'bg-white/[0.02] border border-white/[0.05] text-white/30 cursor-wait'
+                                            : !licenseKey.trim()
+                                                ? 'bg-white/[0.02] border border-white/[0.05] text-white/30 cursor-not-allowed'
+                                                : 'bg-white/90 text-black hover:bg-white active:scale-[0.98]'
+                                        }`}
+                                >
+                                    {status === 'success' ? (
+                                        <><CheckCircle size={12} /> Activated!</>
+                                    ) : status === 'loading' ? (
+                                        <><div className="w-3 h-3 border-2 border-white/20 border-t-transparent rounded-full animate-spin" /> Verifying...</>
+                                    ) : (
+                                        <><Lock size={12} /> Activate License</>
+                                    )}
+                                </button>
+
+                                {/* Error message */}
+                                {status === 'error' && errorMessage && (
+                                    <div className="flex items-center gap-2 px-3 py-2 bg-red-500/10 border border-red-500/20 rounded-lg text-[11px] text-red-500 font-medium animated fadeIn">
+                                        <AlertCircle size={12} /> {errorMessage}
+                                    </div>
+                                )}
+                            </div>
+                        </>
+                    )}
 
                     {/* Hardware ID */}
                     {hardwareId && (

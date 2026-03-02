@@ -49,10 +49,21 @@ export class KnowledgeDatabaseManager {
                 ttl_hours INTEGER DEFAULT 24
             );
 
+            CREATE TABLE IF NOT EXISTS aot_results (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                document_id INTEGER NOT NULL,
+                result_type TEXT NOT NULL,
+                result_json TEXT NOT NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY(document_id) REFERENCES knowledge_documents(id) ON DELETE CASCADE,
+                UNIQUE(document_id, result_type)
+            );
+
             -- Indexes for fast retrieval
             CREATE INDEX IF NOT EXISTS idx_nodes_source_type ON context_nodes(source_type);
             CREATE INDEX IF NOT EXISTS idx_nodes_doc_id ON context_nodes(document_id);
             CREATE INDEX IF NOT EXISTS idx_dossier_company ON company_dossiers(company_name);
+            CREATE INDEX IF NOT EXISTS idx_aot_results_doc ON aot_results(document_id, result_type);
         `);
         console.log('[KnowledgeDB] Schema initialized successfully');
     }
@@ -229,14 +240,75 @@ export class KnowledgeDatabaseManager {
     }
 
     // ============================================
-    // Feature Stubs for AOT Pipeline
+    // AOT Results CRUD
     // ============================================
 
     saveNegotiationScript(documentId: number, script: any): void {
+        const stmt = this.db.prepare(`
+            INSERT OR REPLACE INTO aot_results (document_id, result_type, result_json)
+            VALUES (?, 'negotiation_script', ?)
+        `);
+        stmt.run(documentId, JSON.stringify(script));
         console.log(`[KnowledgeDB] Negotiation script saved for doc ID: ${documentId}`);
     }
 
+    getNegotiationScript(documentId: number): any | null {
+        const row = this.db.prepare(
+            `SELECT result_json FROM aot_results WHERE document_id = ? AND result_type = 'negotiation_script'`
+        ).get(documentId) as any;
+        return row ? JSON.parse(row.result_json) : null;
+    }
+
     saveGapAnalysis(documentId: number, analysis: any): void {
+        const stmt = this.db.prepare(`
+            INSERT OR REPLACE INTO aot_results (document_id, result_type, result_json)
+            VALUES (?, 'gap_analysis', ?)
+        `);
+        stmt.run(documentId, JSON.stringify(analysis));
         console.log(`[KnowledgeDB] Gap analysis saved for doc ID: ${documentId}`);
+    }
+
+    getGapAnalysis(documentId: number): any | null {
+        const row = this.db.prepare(
+            `SELECT result_json FROM aot_results WHERE document_id = ? AND result_type = 'gap_analysis'`
+        ).get(documentId) as any;
+        return row ? JSON.parse(row.result_json) : null;
+    }
+
+    saveMockQuestions(documentId: number, questions: any): void {
+        const stmt = this.db.prepare(`
+            INSERT OR REPLACE INTO aot_results (document_id, result_type, result_json)
+            VALUES (?, 'mock_questions', ?)
+        `);
+        stmt.run(documentId, JSON.stringify(questions));
+        console.log(`[KnowledgeDB] Mock questions saved for doc ID: ${documentId}`);
+    }
+
+    getMockQuestions(documentId: number): any | null {
+        const row = this.db.prepare(
+            `SELECT result_json FROM aot_results WHERE document_id = ? AND result_type = 'mock_questions'`
+        ).get(documentId) as any;
+        return row ? JSON.parse(row.result_json) : null;
+    }
+
+    saveCultureMappings(documentId: number, mappings: any): void {
+        const stmt = this.db.prepare(`
+            INSERT OR REPLACE INTO aot_results (document_id, result_type, result_json)
+            VALUES (?, 'culture_mappings', ?)
+        `);
+        stmt.run(documentId, JSON.stringify(mappings));
+        console.log(`[KnowledgeDB] Culture mappings saved for doc ID: ${documentId}`);
+    }
+
+    getCultureMappings(documentId: number): any | null {
+        const row = this.db.prepare(
+            `SELECT result_json FROM aot_results WHERE document_id = ? AND result_type = 'culture_mappings'`
+        ).get(documentId) as any;
+        return row ? JSON.parse(row.result_json) : null;
+    }
+
+    deleteAOTResults(documentId: number): void {
+        this.db.prepare('DELETE FROM aot_results WHERE document_id = ?').run(documentId);
+        console.log(`[KnowledgeDB] AOT results deleted for doc ID: ${documentId}`);
     }
 }

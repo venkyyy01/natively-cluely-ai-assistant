@@ -21,7 +21,7 @@ const COMPANY_RESEARCH_PATTERNS = [
     'company', 'about the company', 'hiring strategy', 'hiring style',
     'interview process', 'work culture', 'competitor', 'competitors',
     'funding', 'layoffs', 'glassdoor', 'levels.fyi', 'reviews',
-    'what is it like to work at', 'tell me about'
+    'what is it like to work at', 'tell me about the company'
 ];
 
 const NEGOTIATION_PATTERNS = [

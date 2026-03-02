@@ -1,8 +1,39 @@
 import React from 'react';
 import { Briefcase, Code, GraduationCap, Calendar, ExternalLink } from 'lucide-react';
 
+interface ExperienceEntry {
+    company: string;
+    role: string;
+    start_date: string;
+    end_date: string | null;
+    bullets: string[];
+}
+
+interface ProjectEntry {
+    name: string;
+    description: string;
+    technologies: string[];
+    url?: string;
+}
+
+interface EducationEntry {
+    institution: string;
+    degree: string;
+    field: string;
+    start_date: string;
+    end_date: string | null;
+    gpa?: string;
+}
+
+interface ProfileData {
+    experience?: ExperienceEntry[];
+    projects?: ProjectEntry[];
+    education?: EducationEntry[];
+    [key: string]: any; // Allow additional profile fields
+}
+
 interface ProfileVisualizerProps {
-    profileData: any;
+    profileData: ProfileData | null;
 }
 
 export const ProfileVisualizer: React.FC<ProfileVisualizerProps> = ({ profileData }) => {
@@ -29,7 +60,7 @@ export const ProfileVisualizer: React.FC<ProfileVisualizerProps> = ({ profileDat
                     </div>
 
                     <div className="relative pl-6 space-y-10 before:absolute before:inset-0 before:ml-[31px] before:-translate-x-px before:h-full before:w-px before:bg-gradient-to-b before:from-border-muted before:to-transparent">
-                        {experience.map((exp: any, idx: number) => (
+                        {experience.map((exp, idx) => (
                             <div key={idx} className="relative flex gap-6 group">
                                 {/* Timeline Node */}
                                 <div className="absolute left-[-29px] top-1.5 h-2 w-2 rounded-full border-[1.5px] border-text-tertiary bg-bg-item-surface group-hover:border-accent-primary group-hover:bg-accent-primary transition-colors z-10" />
@@ -51,7 +82,7 @@ export const ProfileVisualizer: React.FC<ProfileVisualizerProps> = ({ profileDat
 
                                     {exp.bullets && exp.bullets.length > 0 && (
                                         <ul className="space-y-2 mt-2">
-                                            {exp.bullets.map((bullet: string, bIdx: number) => (
+                                            {exp.bullets.map((bullet, bIdx) => (
                                                 <li key={bIdx} className="text-[11px] text-text-secondary leading-relaxed pl-3.5 relative before:absolute before:left-0 before:top-[7px] before:w-[3px] before:h-[3px] before:bg-border-muted before:rounded-full group-hover:before:bg-text-tertiary transition-colors">
                                                     {bullet}
                                                 </li>
@@ -76,7 +107,7 @@ export const ProfileVisualizer: React.FC<ProfileVisualizerProps> = ({ profileDat
                     </div>
 
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                        {projects.map((proj: any, idx: number) => (
+                        {projects.map((proj, idx) => (
                             <div key={idx} className="h-[140px] p-4 rounded-xl bg-bg-input flex flex-col group transition-colors duration-200">
                                 <div className="flex items-center justify-between mb-2">
                                     <h4 className="text-[12px] font-semibold text-text-primary tracking-tight line-clamp-1 pr-3">{proj.name}</h4>
@@ -90,7 +121,7 @@ export const ProfileVisualizer: React.FC<ProfileVisualizerProps> = ({ profileDat
                                     {proj.description}
                                 </p>
                                 <div className="flex flex-wrap gap-1 mt-auto">
-                                    {proj.technologies?.slice(0, 4).map((tech: string, tIdx: number) => (
+                                    {proj.technologies?.slice(0, 4).map((tech, tIdx) => (
                                         <span key={tIdx} className="px-2 py-[2px] rounded-full bg-bg-item-surface text-[9px] font-medium text-text-tertiary">
                                             {tech}
                                         </span>
@@ -118,7 +149,7 @@ export const ProfileVisualizer: React.FC<ProfileVisualizerProps> = ({ profileDat
                     </div>
 
                     <div className="space-y-4">
-                        {education.map((edu: any, idx: number) => (
+                        {education.map((edu, idx) => (
                             <div key={idx} className="flex justify-between items-start border-b border-border-subtle pb-4 last:border-0 last:pb-0">
                                 <div className="flex flex-col gap-0.5">
                                     <h4 className="text-sm font-bold text-text-primary tracking-tight">{edu.degree} in {edu.field}</h4>

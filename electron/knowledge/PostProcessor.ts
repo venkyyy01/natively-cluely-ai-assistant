@@ -98,7 +98,9 @@ export function deduplicateSkills(skills: string[]): string[] {
 export function processResume(resume: StructuredResume): ProcessedResumeData {
     console.log('[PostProcessor] Running deterministic post-processing...');
 
-    const normalized = normalizeTimeline(resume);
+    // Deep clone to avoid mutating the original object
+    const cloned: StructuredResume = JSON.parse(JSON.stringify(resume));
+    const normalized = normalizeTimeline(cloned);
     const totalExperienceYears = computeTotalExperience(normalized);
     const skillExperienceMap = buildSkillExperienceMap(normalized);
 
