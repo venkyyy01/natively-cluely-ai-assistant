@@ -12,6 +12,71 @@
 </head>
 
 <body style="background-color: #000000; margin: 0; overflow: hidden;">
+  <script>
+    // Mock electronAPI for browser development
+    if (typeof window.electronAPI === 'undefined') {
+      window.electronAPI = {
+        onUpdateAvailable: () => () => {},
+        onDownloadProgress: () => () => {},
+        onUpdateDownloaded: () => () => {},
+        onUpdateChecking: () => () => {},
+        onUpdateNotAvailable: () => () => {},
+        onUpdateError: () => () => {},
+        getStoredCredentials: () => Promise.resolve({}),
+        getThemeMode: () => Promise.resolve({ mode: 'dark', resolved: 'dark' }),
+        onThemeChanged: () => () => {},
+        getRecentMeetings: () => Promise.resolve([]),
+        getUpcomingEvents: () => Promise.resolve([]),
+        onMeetingsUpdated: () => () => {},
+        onNativeAudioTranscript: () => () => {},
+        onNativeAudioSuggestion: () => () => {},
+        onIntelligenceAssistUpdate: () => () => {},
+        onIntelligenceSuggestedAnswer: () => () => {},
+        onIntelligenceRefinedAnswer: () => () => {},
+        onIntelligenceRecap: () => () => {},
+        onIntelligenceModeChanged: () => () => {},
+        onIntelligenceError: () => () => {},
+        onUndetectableChanged: () => () => {},
+        onGroqFastTextChanged: () => () => {},
+        onModelChanged: () => () => {},
+        onKeybindsUpdate: () => () => {},
+        onOverlayOpacityChanged: () => () => {},
+        onAudioTestLevel: () => () => {},
+        onToggleExpand: () => () => {},
+        onSettingsVisibilityChange: () => () => {},
+        checkForUpdates: () => Promise.resolve(),
+        downloadUpdate: () => Promise.resolve(),
+        restartAndInstall: () => Promise.resolve(),
+        getRecognitionLanguage: () => Promise.resolve('en-US'),
+        getAiResponseLanguage: () => Promise.resolve('en-US'),
+        getDefaultModel: () => Promise.resolve({ model: 'gemini-3.1-flash-lite-preview' }),
+        getCurrentLlmConfig: () => Promise.resolve({ provider: 'gemini', model: 'gemini-3.1-flash-lite-preview', isOllama: false }),
+        getGroqFastTextMode: () => Promise.resolve({ enabled: false }),
+        getUndetectable: () => Promise.resolve(false),
+        getOpenAtLogin: () => Promise.resolve(false),
+        getDisguise: () => Promise.resolve('none'),
+        getKeybinds: () => Promise.resolve([]),
+        getCalendarStatus: () => Promise.resolve({ connected: false }),
+        // License — always unlocked
+        licenseCheckPremium: () => Promise.resolve(true),
+        licenseActivate: () => Promise.resolve({ success: true }),
+        licenseDeactivate: () => Promise.resolve(),
+        licenseGetHardwareId: () => Promise.resolve('mock-hw-id'),
+        // Donation — always satisfied
+        getDonationStatus: () => Promise.resolve({ shouldShow: false, hasDonated: true, lifetimeShows: 0 }),
+        markDonationToastShown: () => Promise.resolve({ success: true }),
+        setDonationComplete: () => Promise.resolve({ success: true }),
+        // Profile — unlocked
+        profileGetStatus: () => Promise.resolve({ hasProfile: false, profileMode: false }),
+        profileSetMode: () => Promise.resolve({ success: true }),
+        profileGetProfile: () => Promise.resolve(null),
+        profileUploadResume: () => Promise.resolve({ success: true }),
+        profileDelete: () => Promise.resolve({ success: true }),
+        profileSelectFile: () => Promise.resolve({ cancelled: true }),
+        // ... add more as needed
+      };
+    }
+  </script>
   <div id="root"></div>
   <script type="module" src="/src/main.tsx"></script>
 </body>

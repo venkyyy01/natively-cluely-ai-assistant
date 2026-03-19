@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useLayoutEffect, useRef } from 'react';
-import { MessageSquare, Link, Camera, Zap, Heart, User } from 'lucide-react';
+import { MessageSquare, Camera, Zap, User } from 'lucide-react';
 import { useShortcuts } from '../hooks/useShortcuts';
 
 const SettingsPopup = () => {
@@ -10,7 +10,7 @@ const SettingsPopup = () => {
     });
     const [profileMode, setProfileMode] = useState(false);
     const [hasProfile, setHasProfile] = useState(false);
-    const [isPremium, setIsPremium] = useState(false);
+    const isPremium = true; // All features unlocked
 
     const isFirstRender = React.useRef(true);
 
@@ -49,10 +49,7 @@ const SettingsPopup = () => {
                     setHasProfile(status.hasProfile);
                     setProfileMode(status.profileMode);
                 }
-                // Check premium status
-                const premium = await window.electronAPI?.licenseCheckPremium?.();
-                setIsPremium(!!premium);
-            } catch (e) { console.warn('[SettingsPopup] Failed to load profile/premium status:', e); }
+            } catch (e) { console.warn('[SettingsPopup] Failed to load profile status:', e); }
 
         };
         loadProfile();
@@ -231,17 +228,16 @@ const SettingsPopup = () => {
 
                 {/* Profile Mode Toggle */}
                 {hasProfile && (
-                    <div className={`flex items-center justify-between px-3 py-2 rounded-lg transition-colors duration-200 group ${!isPremium ? 'opacity-50 grayscale cursor-not-allowed' : 'hover:bg-white/5 cursor-default'}`} title={!isPremium ? 'Requires Pro license to be active' : ''}>
+                    <div className={`flex items-center justify-between px-3 py-2 rounded-lg transition-colors duration-200 group hover:bg-white/5 cursor-default`}>
                         <div className="flex items-center gap-3">
                             <User
-                                className={`w-3.5 h-3.5 transition-colors ${profileMode && isPremium ? 'text-accent-primary' : 'text-slate-500 group-hover:text-slate-300'}`}
-                                fill={profileMode && isPremium ? "currentColor" : "none"}
+                                className={`w-3.5 h-3.5 transition-colors ${profileMode ? 'text-accent-primary' : 'text-slate-500 group-hover:text-slate-300'}`}
+                                fill={profileMode ? "currentColor" : "none"}
                             />
-                            <span className={`text-[12px] font-medium transition-colors ${profileMode && isPremium ? 'text-white' : 'text-slate-400 group-hover:text-slate-200'}`}>Profile Mode</span>
+                            <span className={`text-[12px] font-medium transition-colors ${profileMode ? 'text-white' : 'text-slate-400 group-hover:text-slate-200'}`}>Profile Mode</span>
                         </div>
                         <button
                             onClick={async () => {
-                                if (!isPremium) return;
                                 const newState = !profileMode;
                                 setProfileMode(newState);
                                 try {
@@ -249,10 +245,9 @@ const SettingsPopup = () => {
                                     await window.electronAPI?.profileSetMode?.(newState);
                                 } catch (e) { console.error(e); }
                             }}
-                            className={`w-[30px] h-[18px] rounded-full p-[1.5px] transition-all duration-300 ease-spring active:scale-[0.92] ${profileMode && isPremium ? 'bg-accent-primary shadow-[0_2px_10px_rgba(var(--color-accent-primary),0.3)]' : 'bg-white/10'}`}
-                            disabled={!isPremium}
+                            className={`w-[30px] h-[18px] rounded-full p-[1.5px] transition-all duration-300 ease-spring active:scale-[0.92] ${profileMode ? 'bg-accent-primary shadow-[0_2px_10px_rgba(var(--color-accent-primary),0.3)]' : 'bg-white/10'}`}
                         >
-                            <div className={`w-[15px] h-[15px] rounded-full bg-black shadow-sm transition-transform duration-300 ease-spring ${profileMode && isPremium ? 'translate-x-[12px]' : 'translate-x-0'}`} />
+                            <div className={`w-[15px] h-[15px] rounded-full bg-black shadow-sm transition-transform duration-300 ease-spring ${profileMode ? 'translate-x-[12px]' : 'translate-x-0'}`} />
                         </button>
                     </div>
                 )}
@@ -291,22 +286,7 @@ const SettingsPopup = () => {
                     </div>
                 </div>
 
-                <div className="h-px bg-white/[0.04] my-0.5 mx-2" />
 
-                {/* Donate */}
-                <div
-                    // @ts-ignore
-                    onClick={() => window.electronAPI.openExternal('https://buymeacoffee.com/evinjohnn')}
-                    className="flex items-center justify-between px-3 py-2 hover:bg-pink-500/10 rounded-lg transition-colors duration-200 group interaction-base interaction-press"
-                >
-                    <div className="flex items-center gap-3">
-                        <Heart className="w-3.5 h-3.5 text-pink-400 group-hover:fill-pink-400 transition-all duration-300" />
-                        <span className="text-[12px] text-slate-400 group-hover:text-pink-100 transition-colors">Donate</span>
-                    </div>
-                    <div className="opacity-60 group-hover:opacity-100 transition-opacity">
-                        <Link className="w-3 h-3 text-slate-500 group-hover:text-pink-400" />
-                    </div>
-                </div>
 
             </div>
         </div>

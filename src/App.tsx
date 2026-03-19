@@ -9,16 +9,7 @@ import SettingsOverlay from "./components/SettingsOverlay"
 import StartupSequence from "./components/StartupSequence"
 import { AnimatePresence, motion } from "framer-motion"
 import UpdateBanner from "./components/UpdateBanner"
-import { SupportToaster } from "./components/SupportToaster"
 import { AlertCircle } from "lucide-react"
-import {
-  JDAwarenessToaster,
-  ProfileFeatureToaster,
-  PremiumPromoToaster,
-  RemoteCampaignToaster,
-  PremiumUpgradeModal,
-  useAdCampaigns
-} from './premium'
 import { analytics } from "./lib/analytics/analytics.service"
 import { ErrorBoundary } from "./components/ErrorBoundary"
 
@@ -71,8 +62,6 @@ const App: React.FC = () => {
   const [showStartup, setShowStartup] = useState(true);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [settingsInitialTab, setSettingsInitialTab] = useState('general');
-  const [showPremiumModal, setShowPremiumModal] = useState(false);
-  const [isPremiumActive, setIsPremiumActive] = useState(false);
 
   // Overlay opacity — only meaningful when isOverlayWindow, but stored centrally
   // so it can be initialized once from localStorage and updated via IPC.
@@ -81,13 +70,8 @@ const App: React.FC = () => {
     return stored ? parseFloat(stored) : 0.65;
   });
   
-  // Profile state for ad targeting
-  const [hasProfile, setHasProfile] = useState(false);
   const [isLauncherMainView, setIsLauncherMainView] = useState(true);
 
-  // Initialize Ads Campaign Manager
-  const [appStartTime] = useState<number>(Date.now());
-  const [lastMeetingEndTime, setLastMeetingEndTime] = useState<number | null>(null);
   const [isProcessingMeeting, setIsProcessingMeeting] = useState<boolean>(false);
   
   // Ollama Auto-Pull State
@@ -97,30 +81,14 @@ const App: React.FC = () => {
 
   // Re-index State
   const [incompatibleWarning, setIncompatibleWarning] = useState<{count: number; oldProvider: string; newProvider: string} | null>(null);
-  
-  const isAppReady = !isSettingsWindow && !isOverlayWindow && !isModelSelectorWindow && !showStartup && !isSettingsOpen && isLauncherMainView;
-  const { activeAd, dismissAd } = useAdCampaigns(
-    isPremiumActive, 
-    hasProfile, 
-    isAppReady,
-    appStartTime,
-    lastMeetingEndTime,
-    isProcessingMeeting
-  );
 
   useEffect(() => {
     // Clean up old local storage
     localStorage.removeItem('useLegacyAudioBackend');
 
-    // Basic status check for campaign targeting
-    window.electronAPI?.profileGetStatus?.().then(s => setHasProfile(s?.hasProfile || false)).catch(() => {});
-    window.electronAPI?.licenseCheckPremium?.().then(setIsPremiumActive).catch(() => {});
-
-    // Listen for meeting processing completion to trigger post-meeting ads
     const removeMeetingsListener = window.electronAPI?.onMeetingsUpdated?.(() => {
-      console.log("[App.tsx] Meetings updated (processing finished), starting ad delay timer");
+      console.log("[App.tsx] Meetings updated (processing finished)");
       setIsProcessingMeeting(false);
-      setLastMeetingEndTime(Date.now());
     });
 
     // Listen for Ollama Auto-Pull Progress
@@ -382,57 +350,6 @@ const App: React.FC = () => {
       </AnimatePresence>
 
       <UpdateBanner />
-      <SupportToaster />
-      {isLauncherMainView && !isSettingsOpen && (
-        <>
-          <ProfileFeatureToaster 
-            isOpen={activeAd === 'profile'} 
-            onDismiss={dismissAd}
-            onSetupProfile={() => {
-              setSettingsInitialTab('profile');
-              setIsSettingsOpen(true);
-            }} 
-          />
-          <JDAwarenessToaster 
-            isOpen={activeAd === 'jd'} 
-            onDismiss={dismissAd}
-            onSetupJD={() => {
-              setSettingsInitialTab('profile');
-              setIsSettingsOpen(true);
-            }} 
-          />
-          <PremiumPromoToaster 
-            isOpen={activeAd === 'promo'} 
-            onDismiss={dismissAd}
-            onUpgrade={() => {
-              setShowPremiumModal(true);
-            }} 
-          />
-          
-          {/* Remote Campaigns Render Logic */}
-          <RemoteCampaignToaster
-            isOpen={typeof activeAd === 'object' && activeAd !== null}
-            campaign={typeof activeAd === 'object' && activeAd !== null ? activeAd : undefined as any}
-            onDismiss={dismissAd}
-          />
-        </>
-      )}
-
-      <PremiumUpgradeModal
-        isOpen={showPremiumModal}
-        onClose={() => setShowPremiumModal(false)}
-        isPremium={isPremiumActive}
-        onActivated={() => {
-          setIsPremiumActive(true);
-          setShowPremiumModal(false);
-          // After activation, open settings to Profile Intelligence
-          setTimeout(() => {
-            setSettingsInitialTab('profile');
-            setIsSettingsOpen(true);
-          }, 300);
-        }}
-        onDeactivated={() => setIsPremiumActive(false)}
-      />
     </div>
     </ErrorBoundary>
   )
