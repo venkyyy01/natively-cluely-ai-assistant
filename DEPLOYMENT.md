@@ -2,6 +2,13 @@
 
 Complete instructions to build, sign, and install Natively as a standalone macOS application.
 
+> [!TIP]
+> **One-Click Build:** Skip all manual steps — just run:
+> ```bash
+> chmod +x build-and-install.sh && ./build-and-install.sh
+> ```
+> This handles prerequisites, dependencies, build, signing, and installation automatically.
+
 ---
 
 ## Prerequisites
