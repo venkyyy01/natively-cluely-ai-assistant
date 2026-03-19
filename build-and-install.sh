@@ -20,6 +20,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="Natively"
 INSTALL_DIR="/Applications"
 ENTITLEMENTS="$SCRIPT_DIR/assets/entitlements.mac.plist"
+RELEASE_DIR="$SCRIPT_DIR/release"
 
 # ── Helpers ──
 info()    { echo -e "${BLUE}[INFO]${NC}  $1"; }
@@ -27,6 +28,17 @@ success() { echo -e "${GREEN}[  ✓ ]${NC}  $1"; }
 warn()    { echo -e "${YELLOW}[WARN]${NC}  $1"; }
 fail()    { echo -e "${RED}[FAIL]${NC}  $1"; exit 1; }
 step()    { echo -e "\n${CYAN}${BOLD}━━━ $1 ━━━${NC}"; }
+
+require_plist_key() {
+    local plist_path="$1"
+    local key="$2"
+
+    if /usr/bin/plutil -extract "$key" raw -o - "$plist_path" >/dev/null 2>&1; then
+        success "Manifest key present: $key"
+    else
+        fail "Missing manifest key in $(basename "$plist_path"): $key"
+    fi
+}
 
 # ── Detect Architecture ──
 ARCH="$(uname -m)"
@@ -54,7 +66,7 @@ echo -e "${NC}"
 # ╔═══════════════════════════════════════════════════════════════════╗
 # ║  Step 1: Check Prerequisites                                     ║
 # ╚═══════════════════════════════════════════════════════════════════╝
-step "Step 1/7 — Checking Prerequisites"
+step "Step 1/8 — Checking Prerequisites"
 
 # macOS check
 if [[ "$(uname)" != "Darwin" ]]; then
@@ -108,7 +120,7 @@ fi
 # ╔═══════════════════════════════════════════════════════════════════╗
 # ║  Step 2: Environment Configuration                               ║
 # ╚═══════════════════════════════════════════════════════════════════╝
-step "Step 2/7 — Environment Configuration"
+step "Step 2/8 — Environment Configuration"
 
 if [[ ! -f "$SCRIPT_DIR/.env" ]]; then
     warn "No .env file found. Creating template..."
@@ -166,7 +178,7 @@ fi
 # ╔═══════════════════════════════════════════════════════════════════╗
 # ║  Step 3: Install Dependencies                                    ║
 # ╚═══════════════════════════════════════════════════════════════════╝
-step "Step 3/7 — Installing Dependencies"
+step "Step 3/8 — Installing Dependencies"
 
 cd "$SCRIPT_DIR"
 
@@ -183,29 +195,28 @@ success "Dependencies installed"
 # ╔═══════════════════════════════════════════════════════════════════╗
 # ║  Step 4: Build Production App                                    ║
 # ╚═══════════════════════════════════════════════════════════════════╝
-step "Step 4/7 — Building Production App"
+step "Step 4/8 — Building Production App"
 
 info "Cleaning previous builds..."
 npm run clean 2>/dev/null || true
 
-info "Compiling TypeScript & bundling frontend..."
-npx tsc 2>&1 | tail -3 || true
-npx vite build 2>&1 | tail -5
+info "Running app build pipeline..."
+npm run build
 
 info "Compiling Electron main process..."
-npx tsc -p electron/tsconfig.json 2>&1 | tail -3
+npx tsc -p electron/tsconfig.json
 
 success "Compilation complete"
 
 # ╔═══════════════════════════════════════════════════════════════════╗
 # ║  Step 5: Package with Electron Builder                           ║
 # ╚═══════════════════════════════════════════════════════════════════╝
-step "Step 5/7 — Packaging macOS App (${ARCH_LABEL})"
+step "Step 5/8 — Packaging macOS App (${ARCH_LABEL})"
 
 info "Running electron-builder for $BUILD_ARCH..."
 info "This may take several minutes on first run..."
 
-npx electron-builder --mac --$BUILD_ARCH 2>&1 | grep -E "(Building|afterPack|Signing|Packing|DMG|ZIP|✓|ERROR|FAIL)" || true
+npx electron-builder --mac --$BUILD_ARCH
 
 # Find the built .app
 APP_GLOB="$SCRIPT_DIR/release/mac-${BUILD_ARCH}/${APP_NAME}.app"
@@ -217,7 +228,7 @@ fi
 
 # Fallback: search for it
 if [[ ! -d "$APP_GLOB" ]]; then
-    APP_GLOB=$(find "$SCRIPT_DIR/release" -name "${APP_NAME}.app" -maxdepth 3 -type d 2>/dev/null | head -1)
+    APP_GLOB=$(find "$RELEASE_DIR" -maxdepth 3 -name "${APP_NAME}.app" -type d -print -quit 2>/dev/null)
 fi
 
 if [[ -z "$APP_GLOB" || ! -d "$APP_GLOB" ]]; then
@@ -229,7 +240,7 @@ success "Built: $APP_GLOB"
 # ╔═══════════════════════════════════════════════════════════════════╗
 # ║  Step 6: Force Sign                                              ║
 # ╚═══════════════════════════════════════════════════════════════════╝
-step "Step 6/7 — Force Signing (Ad-Hoc)"
+step "Step 6/8 — Force Signing (Ad-Hoc)"
 
 # The electron-builder afterPack hook already signs, but we force re-sign
 # to ensure it's clean (handles edge cases where build partially failed)
@@ -252,10 +263,22 @@ else
     info "Ad-hoc signature applied (codesign verify may show warnings — this is normal)"
 fi
 
+step "Step 7/8 — Verifying macOS Permission Manifest"
+
+APP_PLIST="$APP_GLOB/Contents/Info.plist"
+[[ -f "$APP_PLIST" ]] || fail "Info.plist not found in built app"
+
+require_plist_key "$APP_PLIST" "NSMicrophoneUsageDescription"
+require_plist_key "$APP_PLIST" "NSCameraUsageDescription"
+require_plist_key "$APP_PLIST" "NSScreenCaptureUsageDescription"
+require_plist_key "$APP_PLIST" "NSAppleEventsUsageDescription"
+
+success "Permission manifest verified"
+
 # ╔═══════════════════════════════════════════════════════════════════╗
-# ║  Step 7: Install & Launch                                        ║
+# ║  Step 8: Install & Launch                                        ║
 # ╚═══════════════════════════════════════════════════════════════════╝
-step "Step 7/7 — Installing to ${INSTALL_DIR}"
+step "Step 8/8 — Installing to ${INSTALL_DIR}"
 
 # Kill existing instance if running
 if pgrep -x "$APP_NAME" &>/dev/null; then
@@ -267,15 +290,28 @@ fi
 # Remove old installation
 if [[ -d "${INSTALL_DIR}/${APP_NAME}.app" ]]; then
     info "Removing previous installation..."
-    rm -rf "${INSTALL_DIR}/${APP_NAME}.app"
+    if [[ -w "${INSTALL_DIR}/${APP_NAME}.app" ]]; then
+        rm -rf "${INSTALL_DIR}/${APP_NAME}.app"
+    else
+        sudo rm -rf "${INSTALL_DIR}/${APP_NAME}.app"
+    fi
 fi
 
 # Copy to Applications
 info "Copying to ${INSTALL_DIR}/${APP_NAME}.app ..."
-cp -R "$APP_GLOB" "${INSTALL_DIR}/"
+if [[ -w "$INSTALL_DIR" ]]; then
+    ditto "$APP_GLOB" "${INSTALL_DIR}/${APP_NAME}.app"
+else
+    info "Administrator access required to install into ${INSTALL_DIR}"
+    sudo ditto "$APP_GLOB" "${INSTALL_DIR}/${APP_NAME}.app"
+fi
 
 # Remove quarantine flag (bypass Gatekeeper)
-xattr -d com.apple.quarantine "${INSTALL_DIR}/${APP_NAME}.app" 2>/dev/null || true
+if [[ -w "${INSTALL_DIR}/${APP_NAME}.app" ]]; then
+    xattr -dr com.apple.quarantine "${INSTALL_DIR}/${APP_NAME}.app" 2>/dev/null || true
+else
+    sudo xattr -dr com.apple.quarantine "${INSTALL_DIR}/${APP_NAME}.app" 2>/dev/null || true
+fi
 success "Installed to ${INSTALL_DIR}/${APP_NAME}.app"
 
 # ╔═══════════════════════════════════════════════════════════════════╗

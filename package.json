@@ -55,6 +55,12 @@
     ],
     "mac": {
       "category": "public.app-category.productivity",
+      "extendInfo": {
+        "NSMicrophoneUsageDescription": "Natively needs microphone access to capture meeting audio and voice input.",
+        "NSCameraUsageDescription": "Natively needs camera access only when a camera-enabled workflow is used.",
+        "NSScreenCaptureUsageDescription": "Natively needs screen recording access so you can capture screenshots and analyze on-screen meeting content.",
+        "NSAppleEventsUsageDescription": "Natively needs automation access for desktop integrations you trigger from the app."
+      },
       "target": [
         {
           "target": "zip",
