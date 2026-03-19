@@ -275,7 +275,7 @@ info "Copying to ${INSTALL_DIR}/${APP_NAME}.app ..."
 cp -R "$APP_GLOB" "${INSTALL_DIR}/"
 
 # Remove quarantine flag (bypass Gatekeeper)
-xattr -cr "${INSTALL_DIR}/${APP_NAME}.app" 2>/dev/null || true
+xattr -d com.apple.quarantine "${INSTALL_DIR}/${APP_NAME}.app" 2>/dev/null || true
 success "Installed to ${INSTALL_DIR}/${APP_NAME}.app"
 
 # ╔═══════════════════════════════════════════════════════════════════╗
