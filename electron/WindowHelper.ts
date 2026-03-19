@@ -4,17 +4,15 @@ import { AppState } from "./main"
 import path from "node:path"
 
 const isEnvDev = process.env.NODE_ENV === "development"
-const isPackaged = app.isPackaged;
-const inAppBundle = process.execPath.includes('.app/') || process.execPath.includes('.app\\');
+const isPackaged = app.isPackaged
 
-console.log(`[WindowHelper] isEnvDev: ${isEnvDev}, isPackaged: ${isPackaged}, inAppBundle: ${inAppBundle}`);
+console.log(`[WindowHelper] isEnvDev: ${isEnvDev}, isPackaged: ${isPackaged}`)
 
-// Force production mode if running as packaged app or inside app bundle
-const isDev = isEnvDev && !isPackaged;
+const isDev = isEnvDev && !isPackaged
 
 const startUrl = isDev
   ? "http://localhost:5180"
-  : `file://${path.join(__dirname, "../../dist/index.html")}`
+  : `file://${path.join(app.getAppPath(), "dist/index.html")}`
 
 export class WindowHelper {
   private launcherWindow: BrowserWindow | null = null

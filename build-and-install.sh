@@ -153,6 +153,29 @@ require_plist_key() {
     fi
 }
 
+require_file() {
+    local file_path="$1"
+    local label="$2"
+
+    if [[ -f "$file_path" ]]; then
+        success "$label present"
+    else
+        fail "Missing required file: $file_path"
+    fi
+}
+
+require_asar_entry() {
+    local asar_path="$1"
+    local entry_path="$2"
+    local label="$3"
+
+    if npx asar list "$asar_path" | grep -Fxq "$entry_path"; then
+        success "$label present"
+    else
+        fail "Missing required app.asar entry: $entry_path"
+    fi
+}
+
 # ── Detect Architecture ──
 ARCH="$(uname -m)"
 if [[ "$ARCH" == "arm64" ]]; then
@@ -380,6 +403,12 @@ require_plist_key "$APP_PLIST" "NSMicrophoneUsageDescription"
 require_plist_key "$APP_PLIST" "NSCameraUsageDescription"
 require_plist_key "$APP_PLIST" "NSScreenCaptureUsageDescription"
 require_plist_key "$APP_PLIST" "NSAppleEventsUsageDescription"
+
+APP_RESOURCES_DIR="$APP_GLOB/Contents/Resources"
+APP_ASAR_PATH="$APP_RESOURCES_DIR/app.asar"
+require_file "$APP_ASAR_PATH" "Packaged app archive"
+require_asar_entry "$APP_ASAR_PATH" "/dist/index.html" "Packaged renderer entry"
+require_asar_entry "$APP_ASAR_PATH" "/dist-electron/main.js" "Packaged Electron main entry"
 
 success "Permission manifest verified"
 
