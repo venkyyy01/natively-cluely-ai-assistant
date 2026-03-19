@@ -11,7 +11,15 @@ RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
+MAGENTA='\033[0;35m'
 CYAN='\033[0;36m'
+WHITE='\033[1;37m'
+NEON_PINK='\033[38;5;213m'
+NEON_CYAN='\033[38;5;51m'
+NEON_GREEN='\033[38;5;118m'
+NEON_VIOLET='\033[38;5;99m'
+NEON_ORANGE='\033[38;5;208m'
+STEEL='\033[38;5;250m'
 BOLD='\033[1m'
 NC='\033[0m' # No Color
 
@@ -21,13 +29,118 @@ APP_NAME="Natively"
 INSTALL_DIR="/Applications"
 ENTITLEMENTS="$SCRIPT_DIR/assets/entitlements.mac.plist"
 RELEASE_DIR="$SCRIPT_DIR/release"
+IS_TTY=false
+if [[ -t 1 ]]; then
+    IS_TTY=true
+fi
 
 # ── Helpers ──
-info()    { echo -e "${BLUE}[INFO]${NC}  $1"; }
-success() { echo -e "${GREEN}[  ✓ ]${NC}  $1"; }
-warn()    { echo -e "${YELLOW}[WARN]${NC}  $1"; }
-fail()    { echo -e "${RED}[FAIL]${NC}  $1"; exit 1; }
-step()    { echo -e "\n${CYAN}${BOLD}━━━ $1 ━━━${NC}"; }
+info()    { echo -e "${NEON_CYAN}[INFO]${NC}  ${STEEL}$1${NC}"; }
+success() { echo -e "${NEON_GREEN}[ OK ]${NC}  ${WHITE}$1${NC}"; }
+warn()    { echo -e "${NEON_ORANGE}[WARN]${NC}  ${WHITE}$1${NC}"; }
+fail()    { echo -e "${RED}[FAIL]${NC}  ${WHITE}$1${NC}"; exit 1; }
+step()    { echo -e "\n${NEON_VIOLET}${BOLD}################################################################${NC}"; echo -e "${NEON_PINK}${BOLD}##${NC} ${NEON_CYAN}${BOLD}$1${NC}"; echo -e "${NEON_VIOLET}${BOLD}################################################################${NC}"; }
+
+boot_line() {
+    local color="$1"
+    local label="$2"
+    local detail="$3"
+    echo -e "${color}${BOLD}>${NC} ${WHITE}${label}${NC} ${STEEL}${detail}${NC}"
+}
+
+boot_sequence() {
+    boot_line "$NEON_GREEN" "reactor" "waking xeno-forge core"
+    sleep 0.05
+    boot_line "$NEON_CYAN" "sensors" "calibrating host architecture matrix"
+    sleep 0.05
+    boot_line "$NEON_PINK" "shields" "arming manifest and signing rails"
+    sleep 0.05
+    boot_line "$NEON_ORANGE" "nav" "locking install vector to /Applications"
+    sleep 0.05
+    echo -e "${NEON_VIOLET}${BOLD}~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~${NC}"
+}
+
+spinner() {
+    local pid="$1"
+    local label="$2"
+    local frames=('⠋' '⠙' '⠹' '⠸' '⠼' '⠴' '⠦' '⠧' '⠇' '⠏')
+    local i=0
+
+    if [[ "$IS_TTY" != true ]]; then
+        wait "$pid"
+        return $?
+    fi
+
+    while kill -0 "$pid" 2>/dev/null; do
+        printf "\r${NEON_VIOLET}${BOLD}[${frames[i]}]${NC} ${NEON_CYAN}${BOLD}%s${NC} ${STEEL}...${NC}" "$label"
+        i=$(( (i + 1) % ${#frames[@]} ))
+        sleep 0.08
+    done
+
+    wait "$pid"
+    local status=$?
+    if [[ $status -eq 0 ]]; then
+        printf "\r${NEON_GREEN}${BOLD}[OK]${NC} ${WHITE}%s${NC}                                                       \n" "$label"
+    else
+        printf "\r${RED}${BOLD}[XX]${NC} ${WHITE}%s${NC}                                                        \n" "$label"
+    fi
+    return $status
+}
+
+run_with_spinner() {
+    local label="$1"
+    shift
+    local log_file
+    log_file=$(mktemp)
+
+    if [[ "$IS_TTY" == true ]]; then
+        "$@" >"$log_file" 2>&1 &
+        local pid=$!
+        if ! spinner "$pid" "$label"; then
+            echo -e "${RED}${BOLD}--- command output -------------------------------------------------------${NC}"
+            sed -n '1,200p' "$log_file"
+            rm -f "$log_file"
+            return 1
+        fi
+    else
+        info "$label"
+        if ! "$@" >"$log_file" 2>&1; then
+            echo -e "${RED}${BOLD}--- command output -------------------------------------------------------${NC}"
+            sed -n '1,200p' "$log_file"
+            rm -f "$log_file"
+            return 1
+        fi
+    fi
+
+    rm -f "$log_file"
+}
+
+print_banner() {
+    echo ""
+    echo -e "${NEON_VIOLET}${BOLD}################################################################################${NC}"
+    echo -e "${NEON_VIOLET}${BOLD}#                                                                              #${NC}"
+    echo -e "${NEON_VIOLET}${BOLD}#${NC} ${NEON_GREEN}${BOLD}                 .        *        .      .       *       .           ${NC} ${NEON_VIOLET}${BOLD}#${NC}"
+    echo -e "${NEON_VIOLET}${BOLD}#${NC} ${NEON_CYAN}${BOLD}      _   _      _  _____ ___ __     _______ _    __   __           ${NC} ${NEON_VIOLET}${BOLD}#${NC}"
+    echo -e "${NEON_VIOLET}${BOLD}#${NC} ${NEON_CYAN}${BOLD}     | \\ | |    / \|_   _|_ _|\\ \\   / / ____| |   \\ \\ / /           ${NC} ${NEON_VIOLET}${BOLD}#${NC}"
+    echo -e "${NEON_VIOLET}${BOLD}#${NC} ${NEON_PINK}${BOLD}     |  \\| |   / _ \\ | |  | |  \\ \\ / /|  _| | |    \\ V /            ${NC} ${NEON_VIOLET}${BOLD}#${NC}"
+    echo -e "${NEON_VIOLET}${BOLD}#${NC} ${NEON_ORANGE}${BOLD}     | |\\  |  / ___ \\| |  | |   \\ V / | |___| |___  | |             ${NC} ${NEON_VIOLET}${BOLD}#${NC}"
+    echo -e "${NEON_VIOLET}${BOLD}#${NC} ${NEON_GREEN}${BOLD}     |_| \\_| /_/   \\_\\_| |___|   \\_/  |_____|_____| |_|             ${NC} ${NEON_VIOLET}${BOLD}#${NC}"
+    echo -e "${NEON_VIOLET}${BOLD}#                                                                              #${NC}"
+    echo -e "${NEON_VIOLET}${BOLD}#${NC} ${WHITE}${BOLD}   [ XENO-FORGE ]${NC} ${STEEL}macOS release pipeline armed and ready${NC}               ${NEON_VIOLET}${BOLD}#${NC}"
+    echo -e "${NEON_VIOLET}${BOLD}#${NC} ${NEON_ORANGE}${BOLD}   SIGNAL:${NC} ${WHITE}$ARCH_LABEL${NC}  ${NEON_ORANGE}${BOLD}CORE:${NC} ${WHITE}$BUILD_ARCH${NC}  ${NEON_ORANGE}${BOLD}TARGET:${NC} ${WHITE}${APP_NAME}.app${NC}                 ${NEON_VIOLET}${BOLD}#${NC}"
+    echo -e "${NEON_VIOLET}${BOLD}#                                                                              #${NC}"
+    echo -e "${NEON_VIOLET}${BOLD}################################################################################${NC}"
+}
+
+print_done_card() {
+    echo ""
+    echo -e "${NEON_GREEN}${BOLD}########################################################################${NC}"
+    echo -e "${NEON_GREEN}${BOLD}#${NC} ${WHITE}${BOLD}ALIEN SHIPYARD STATUS: INSTALL COMPLETE${NC}                             ${NEON_GREEN}${BOLD}#${NC}"
+    echo -e "${NEON_GREEN}${BOLD}#${NC} ${NEON_CYAN}${BOLD}APP   ${NC}${WHITE}${INSTALL_DIR}/${APP_NAME}.app${NC}                                      ${NEON_GREEN}${BOLD}#${NC}"
+    echo -e "${NEON_GREEN}${BOLD}#${NC} ${NEON_CYAN}${BOLD}ARCH  ${NC}${WHITE}${ARCH_LABEL} (${BUILD_ARCH})${NC}                                             ${NEON_GREEN}${BOLD}#${NC}"
+    echo -e "${NEON_GREEN}${BOLD}#${NC} ${NEON_CYAN}${BOLD}STATE ${NC}${WHITE}rebuilt | signed | manifest-verified | launch-ready${NC}             ${NEON_GREEN}${BOLD}#${NC}"
+    echo -e "${NEON_GREEN}${BOLD}########################################################################${NC}"
+}
 
 require_plist_key() {
     local plist_path="$1"
@@ -55,13 +168,8 @@ fi
 # ╔═══════════════════════════════════════════════════════════════════╗
 # ║  Banner                                                          ║
 # ╚═══════════════════════════════════════════════════════════════════╝
-echo ""
-echo -e "${CYAN}${BOLD}"
-echo "  ┌─────────────────────────────────────────┐"
-echo "  │     Natively — Build & Install           │"
-echo "  │     macOS • $ARCH_LABEL ($BUILD_ARCH)              │"
-echo "  └─────────────────────────────────────────┘"
-echo -e "${NC}"
+print_banner
+boot_sequence
 
 # ╔═══════════════════════════════════════════════════════════════════╗
 # ║  Step 1: Check Prerequisites                                     ║
@@ -189,7 +297,7 @@ else
     info "Fresh install — this may take a few minutes..."
 fi
 
-npm install 2>&1 | tail -5
+run_with_spinner "syncing npm dependency matrix" npm install
 success "Dependencies installed"
 
 # ╔═══════════════════════════════════════════════════════════════════╗
@@ -201,10 +309,10 @@ info "Cleaning previous builds..."
 npm run clean 2>/dev/null || true
 
 info "Running app build pipeline..."
-npm run build
+run_with_spinner "forging renderer production artifacts" npm run build
 
 info "Compiling Electron main process..."
-npx tsc -p electron/tsconfig.json
+run_with_spinner "compiling electron command core" npx tsc -p electron/tsconfig.json
 
 success "Compilation complete"
 
@@ -216,7 +324,7 @@ step "Step 5/8 — Packaging macOS App (${ARCH_LABEL})"
 info "Running electron-builder for $BUILD_ARCH..."
 info "This may take several minutes on first run..."
 
-npx electron-builder --mac --$BUILD_ARCH
+run_with_spinner "assembling macOS release vessel" npx electron-builder --mac --$BUILD_ARCH
 
 # Find the built .app
 APP_GLOB="$SCRIPT_DIR/release/mac-${BUILD_ARCH}/${APP_NAME}.app"
@@ -247,11 +355,11 @@ step "Step 6/8 — Force Signing (Ad-Hoc)"
 
 if [[ -f "$ENTITLEMENTS" ]]; then
     info "Signing with entitlements: $ENTITLEMENTS"
-    codesign --force --deep --entitlements "$ENTITLEMENTS" --sign - "$APP_GLOB"
+    run_with_spinner "engraving ad-hoc signature lattice" codesign --force --deep --entitlements "$ENTITLEMENTS" --sign - "$APP_GLOB"
     success "Signed with entitlements (JIT, audio, dylib, Apple Events)"
 else
     warn "Entitlements file not found, signing without entitlements"
-    codesign --force --deep --sign - "$APP_GLOB"
+    run_with_spinner "engraving ad-hoc signature lattice" codesign --force --deep --sign - "$APP_GLOB"
     success "Signed (ad-hoc, no entitlements)"
 fi
 
@@ -300,10 +408,10 @@ fi
 # Copy to Applications
 info "Copying to ${INSTALL_DIR}/${APP_NAME}.app ..."
 if [[ -w "$INSTALL_DIR" ]]; then
-    ditto "$APP_GLOB" "${INSTALL_DIR}/${APP_NAME}.app"
+    run_with_spinner "transferring vessel into /Applications" ditto "$APP_GLOB" "${INSTALL_DIR}/${APP_NAME}.app"
 else
     info "Administrator access required to install into ${INSTALL_DIR}"
-    sudo ditto "$APP_GLOB" "${INSTALL_DIR}/${APP_NAME}.app"
+    run_with_spinner "transferring vessel into /Applications" sudo ditto "$APP_GLOB" "${INSTALL_DIR}/${APP_NAME}.app"
 fi
 
 # Remove quarantine flag (bypass Gatekeeper)
@@ -317,27 +425,19 @@ success "Installed to ${INSTALL_DIR}/${APP_NAME}.app"
 # ╔═══════════════════════════════════════════════════════════════════╗
 # ║  Done!                                                           ║
 # ╚═══════════════════════════════════════════════════════════════════╝
-echo ""
-echo -e "${GREEN}${BOLD}"
-echo "  ┌─────────────────────────────────────────┐"
-echo "  │  ✓  Build & Install Complete!            │"
-echo "  │                                          │"
-echo "  │  App:  ${INSTALL_DIR}/${APP_NAME}.app    │"
-echo "  │  Arch: ${ARCH_LABEL} (${BUILD_ARCH})               │"
-echo "  └─────────────────────────────────────────┘"
-echo -e "${NC}"
+print_done_card
 
-echo -e "${CYAN}Next steps:${NC}"
+echo -e "${MAGENTA}${BOLD}Next steps:${NC}"
 echo ""
-echo "  1. Launch:  open ${INSTALL_DIR}/${APP_NAME}.app"
+echo -e "  ${CYAN}1.${NC} Launch with ${WHITE}open ${INSTALL_DIR}/${APP_NAME}.app${NC}"
 echo ""
-echo "  2. Grant permissions when prompted:"
-echo "     • Microphone    (for transcription)"
-echo "     • Screen Record (for screenshots)"
-echo "     • Accessibility (for keyboard shortcuts)"
+echo -e "  ${CYAN}2.${NC} Grant permissions when prompted:"
+echo -e "     ${YELLOW}>${NC} Microphone     ${BLUE}-${NC} transcription"
+echo -e "     ${YELLOW}>${NC} Screen Record  ${BLUE}-${NC} screenshots"
+echo -e "     ${YELLOW}>${NC} Accessibility  ${BLUE}-${NC} keyboard shortcuts"
 echo ""
-echo "  3. Configure API keys in Settings → AI Providers"
-echo "     (or use Ollama for fully local, free AI)"
+echo -e "  ${CYAN}3.${NC} Configure API keys in Settings -> AI Providers"
+echo -e "     ${YELLOW}>${NC} Or use Ollama for a fully local setup"
 echo ""
 
 # Ask to launch
