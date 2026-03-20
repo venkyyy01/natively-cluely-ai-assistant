@@ -271,6 +271,9 @@ export interface ElectronAPI {
   // Overlay Opacity (Stealth Mode)
   setOverlayOpacity: (opacity: number) => Promise<void>
   onOverlayOpacityChanged: (callback: (opacity: number) => void) => () => void
+
+  // Diagnostics
+  logErrorToMain: (payload: any) => Promise<{ success: boolean; error?: string }>
 }
 
 declare global {

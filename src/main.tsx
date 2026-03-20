@@ -15,6 +15,26 @@ if (window.electronAPI && window.electronAPI.getThemeMode) {
   });
 }
 
+window.addEventListener("error", (event) => {
+  void window.electronAPI?.logErrorToMain?.({
+    type: "window-error",
+    message: event.message,
+    filename: event.filename,
+    lineno: event.lineno,
+    colno: event.colno,
+    stack: event.error?.stack,
+  })
+})
+
+window.addEventListener("unhandledrejection", (event) => {
+  const reason = event.reason
+  void window.electronAPI?.logErrorToMain?.({
+    type: "unhandled-rejection",
+    message: reason?.message ?? String(reason),
+    stack: reason?.stack,
+  })
+})
+
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
     <App />

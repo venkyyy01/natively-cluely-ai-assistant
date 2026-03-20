@@ -237,6 +237,9 @@ interface ElectronAPI {
   // Overlay Opacity (Stealth Mode)
   setOverlayOpacity: (opacity: number) => Promise<void>;
   onOverlayOpacityChanged: (callback: (opacity: number) => void) => () => void;
+
+  // Diagnostics
+  logErrorToMain: (payload: any) => Promise<{ success: boolean; error?: string }>;
 }
 
 export const PROCESSING_EVENTS = {
@@ -912,4 +915,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
       ipcRenderer.removeListener('overlay-opacity-changed', subscription)
     }
   },
+
+  // Diagnostics
+  logErrorToMain: (payload: any) => ipcRenderer.invoke('renderer:log-error', payload),
 } as ElectronAPI)

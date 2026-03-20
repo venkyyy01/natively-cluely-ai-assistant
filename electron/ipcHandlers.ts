@@ -45,6 +45,16 @@ export function initializeIpcHandlers(appState: AppState): void {
     }
   });
 
+  safeHandle("renderer:log-error", async (_, payload: any) => {
+    try {
+      console.error('[RendererError]', JSON.stringify(payload));
+      return { success: true };
+    } catch (err: any) {
+      console.error('[RendererError] Failed to log payload:', err);
+      return { success: false, error: err?.message || 'Failed to log renderer error' };
+    }
+  });
+
   safeHandle("license:activate", async (event, key: string) => {
     try {
       const { LicenseManager } = require('../premium/electron/services/LicenseManager');
@@ -2151,4 +2161,3 @@ export function initializeIpcHandlers(appState: AppState): void {
     return;
   });
 }
-

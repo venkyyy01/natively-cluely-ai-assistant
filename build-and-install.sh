@@ -408,7 +408,9 @@ APP_RESOURCES_DIR="$APP_GLOB/Contents/Resources"
 APP_ASAR_PATH="$APP_RESOURCES_DIR/app.asar"
 require_file "$APP_ASAR_PATH" "Packaged app archive"
 require_asar_entry "$APP_ASAR_PATH" "/dist/index.html" "Packaged renderer entry"
-require_asar_entry "$APP_ASAR_PATH" "/dist-electron/main.js" "Packaged Electron main entry"
+require_asar_entry "$APP_ASAR_PATH" "/dist-electron/electron/main.js" "Packaged Electron main entry"
+require_asar_entry "$APP_ASAR_PATH" "/dist-electron/premium/electron/services/LicenseManager.js" "Packaged premium license manager"
+require_asar_entry "$APP_ASAR_PATH" "/dist-electron/premium/electron/knowledge/KnowledgeOrchestrator.js" "Packaged knowledge orchestrator"
 
 success "Permission manifest verified"
 
@@ -445,9 +447,9 @@ fi
 
 # Remove quarantine flag (bypass Gatekeeper)
 if [[ -w "${INSTALL_DIR}/${APP_NAME}.app" ]]; then
-    xattr -dr com.apple.quarantine "${INSTALL_DIR}/${APP_NAME}.app" 2>/dev/null || true
+    xattr -d com.apple.quarantine "${INSTALL_DIR}/${APP_NAME}.app" 2>/dev/null || true
 else
-    sudo xattr -dr com.apple.quarantine "${INSTALL_DIR}/${APP_NAME}.app" 2>/dev/null || true
+    sudo xattr -d com.apple.quarantine "${INSTALL_DIR}/${APP_NAME}.app" 2>/dev/null || true
 fi
 success "Installed to ${INSTALL_DIR}/${APP_NAME}.app"
 
