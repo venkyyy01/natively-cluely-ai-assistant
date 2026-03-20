@@ -39,6 +39,17 @@ export class CalendarManager extends EventEmitter {
     private updateInterval: NodeJS.Timeout | null = null;
     private pendingOauthState: string | null = null;
 
+    private createPkcePair(): { verifier: string; challenge: string } {
+        const verifier = crypto.randomBytes(48).toString('base64url');
+        const challenge = crypto.createHash('sha256').update(verifier).digest('base64url');
+        return { verifier, challenge };
+    }
+
+    private isLoopbackRequest(req: http.IncomingMessage): boolean {
+        const remoteAddress = req.socket.remoteAddress;
+        return remoteAddress === '127.0.0.1' || remoteAddress === '::1' || remoteAddress === '::ffff:127.0.0.1';
+    }
+
     private constructor() {
         super();
         // Tokens loaded in init() to ensure safeStorage is ready
@@ -64,62 +75,91 @@ export class CalendarManager extends EventEmitter {
             throw new Error('Google Calendar is not configured. Set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET before connecting.');
         }
 
+        if (this.pendingOauthState) {
+            throw new Error('Google Calendar authentication is already in progress.');
+        }
+
         const expectedState = crypto.randomBytes(24).toString('hex');
+        const { verifier, challenge } = this.createPkcePair();
         this.pendingOauthState = expectedState;
 
         return new Promise((resolve, reject) => {
+            let settled = false;
+
+            const finish = (server: http.Server, callback: () => void) => {
+                if (settled) return;
+                settled = true;
+                clearTimeout(timeout);
+                this.pendingOauthState = null;
+                server.close(() => callback());
+            };
+
             // 1. Create Loopback Server
             const server = http.createServer(async (req, res) => {
                 try {
-                    if (req.url?.startsWith('/auth/callback')) {
-                        const qs = new url.URL(req.url, `http://${CALLBACK_HOST}:${CALLBACK_PORT}`).searchParams;
-                        const code = qs.get('code');
-                        const error = qs.get('error');
-                        const state = qs.get('state');
-
-                        if (error) {
-                            res.end('Authentication failed! You can close this window.');
-                            server.close();
-                            this.pendingOauthState = null;
-                            reject(new Error(error));
-                            return;
-                        }
-
-                         if (!state || state !== expectedState) {
-                            res.end('Authentication failed due to invalid session state. You can close this window.');
-                            server.close();
-                            this.pendingOauthState = null;
-                            reject(new Error('OAuth state mismatch'));
-                            return;
-                        }
-
-                        if (code) {
-                            res.end('Authentication successful! You can close this window and return to Natively.');
-                            server.close();
-                            this.pendingOauthState = null;
-
-                            // 2. Exchange code for tokens
-                            await this.exchangeCodeForToken(code);
-                            resolve();
-                        }
+                    const parsedUrl = new url.URL(req.url || '/', `http://${CALLBACK_HOST}:${CALLBACK_PORT}`);
+                    if (parsedUrl.pathname !== '/auth/callback') {
+                        res.statusCode = 404;
+                        res.end('Not found.');
+                        return;
                     }
+
+                    if (req.method !== 'GET' || !this.isLoopbackRequest(req)) {
+                        res.statusCode = 400;
+                        res.end('Authentication request rejected.');
+                        finish(server, () => reject(new Error('Rejected non-loopback OAuth callback')));
+                        return;
+                    }
+
+                    const code = parsedUrl.searchParams.get('code');
+                    const error = parsedUrl.searchParams.get('error');
+                    const state = parsedUrl.searchParams.get('state');
+
+                    if (error) {
+                        res.end('Authentication failed! You can close this window.');
+                        finish(server, () => reject(new Error(error)));
+                        return;
+                    }
+
+                    if (!state || state !== expectedState || this.pendingOauthState !== state) {
+                        res.end('Authentication failed due to invalid session state. You can close this window.');
+                        finish(server, () => reject(new Error('OAuth state mismatch')));
+                        return;
+                    }
+
+                    if (!code) {
+                        res.end('Authentication failed because no authorization code was returned.');
+                        finish(server, () => reject(new Error('OAuth callback missing authorization code')));
+                        return;
+                    }
+
+                    res.end('Authentication successful! You can close this window and return to Natively.');
+                    finish(server, async () => {
+                        try {
+                            await this.exchangeCodeForToken(code, verifier);
+                            resolve();
+                        } catch (err) {
+                            reject(err);
+                        }
+                    });
                 } catch (err) {
                     res.end('Authentication error.');
-                    server.close();
-                    this.pendingOauthState = null;
-                    reject(err);
+                    finish(server, () => reject(err));
                 }
             });
 
+            const timeout = setTimeout(() => {
+                finish(server, () => reject(new Error('Google Calendar authentication timed out')));
+            }, 120000);
+
             server.listen(CALLBACK_PORT, CALLBACK_HOST, () => {
                 // 3. Open Browser
-                const authUrl = this.getAuthUrl(expectedState);
+                const authUrl = this.getAuthUrl(expectedState, challenge);
                 shell.openExternal(authUrl);
             });
 
             server.on('error', (err) => {
-                this.pendingOauthState = null;
-                reject(err);
+                finish(server, () => reject(err));
             });
         });
     }
@@ -143,7 +183,7 @@ export class CalendarManager extends EventEmitter {
         return { connected: this.isConnected };
     }
 
-    private getAuthUrl(state: string): string {
+    private getAuthUrl(state: string, codeChallenge: string): string {
         const params = new URLSearchParams({
             client_id: GOOGLE_CLIENT_ID,
             redirect_uri: REDIRECT_URI,
@@ -152,18 +192,21 @@ export class CalendarManager extends EventEmitter {
             access_type: 'offline', // For refresh token
             prompt: 'consent', // Force prompts to ensure we get refresh token
             state,
+            code_challenge: codeChallenge,
+            code_challenge_method: 'S256',
         });
         return `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`;
     }
 
-    private async exchangeCodeForToken(code: string) {
+    private async exchangeCodeForToken(code: string, codeVerifier: string) {
         try {
             const response = await axios.post('https://oauth2.googleapis.com/token', {
                 code,
                 client_id: GOOGLE_CLIENT_ID,
                 client_secret: GOOGLE_CLIENT_SECRET,
                 redirect_uri: REDIRECT_URI,
-                grant_type: 'authorization_code'
+                grant_type: 'authorization_code',
+                code_verifier: codeVerifier,
             });
 
             this.handleTokenResponse(response.data);

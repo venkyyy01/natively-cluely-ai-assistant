@@ -90,6 +90,7 @@ export class OpenAIStreamingSTT extends EventEmitter {
     private sessionSetupTimer: NodeJS.Timeout | null = null;
     private isSessionReady = false;     // set after transcription_session.created
     private wsCloseHandled = false;
+    private wsCloseContext: { ws: WebSocket; code: number; reason: Buffer } | null = null;
 
     // Audio batching state
     private pcmAccumulator: Int16Array[] = [];
@@ -258,20 +259,19 @@ export class OpenAIStreamingSTT extends EventEmitter {
                 'OpenAI-Beta':   'realtime=v1',
             },
         });
+        const ws = this.ws;
 
         // 10-second connection timeout to prevent hanging on dropped networks
         this.connectionTimeoutTimer = setTimeout(() => {
             console.warn(`[OpenAIStreaming] WebSocket connection timed out after 10s (attempt=${this.reconnectAttempts + 1})`);
-            if (this.ws) {
-                this.ws.removeAllListeners();
-                this.ws.close();
-                this.ws = null;
-                this.isConnecting = false;
-                this._handleWsClose(1006, Buffer.from('Connection Timeout'));
+            if (this.ws === ws) {
+                this.wsCloseContext = { ws, code: 1006, reason: Buffer.from('Connection Timeout') };
+                ws.close();
             }
         }, 10_000);
 
-        this.ws.on('open', () => {
+        ws.on('open', () => {
+            if (this.ws !== ws) return;
             if (this.connectionTimeoutTimer) {
                 clearTimeout(this.connectionTimeoutTimer);
                 this.connectionTimeoutTimer = null;
@@ -284,11 +284,9 @@ export class OpenAIStreamingSTT extends EventEmitter {
             this.sessionSetupTimer = setTimeout(() => {
                 console.warn(`[OpenAIStreaming] Server accepted connection but failed to create session within 5s. Forcing disconnect...`);
                 // Force a disconnect to trigger the fallback logic
-                if (this.ws) {
-                    this.ws.removeAllListeners();
-                    this.ws.close();
-                    this.ws = null;
-                    this._handleWsClose(1008, Buffer.from('Session Setup Timeout'));
+                if (this.ws === ws) {
+                    this.wsCloseContext = { ws, code: 1008, reason: Buffer.from('Session Setup Timeout') };
+                    ws.close();
                 }
             }, 5_000);
 
@@ -297,7 +295,7 @@ export class OpenAIStreamingSTT extends EventEmitter {
                 ? (RECOGNITION_LANGUAGES[this.languageKey]?.iso639 ?? '')
                 : '';
 
-            this.ws!.send(JSON.stringify({
+            ws.send(JSON.stringify({
                 type: 'transcription_session.update',
                 session: {
                     input_audio_format: 'pcm16',
@@ -321,7 +319,8 @@ export class OpenAIStreamingSTT extends EventEmitter {
             }));
         });
 
-        this.ws.on('message', (raw: WebSocket.Data) => {
+        ws.on('message', (raw: WebSocket.Data) => {
+            if (this.ws !== ws) return;
             try {
                 const msg = JSON.parse(raw.toString());
                 this._handleWsMessage(msg);
@@ -330,21 +329,30 @@ export class OpenAIStreamingSTT extends EventEmitter {
             }
         });
 
-        this.ws.on('error', (err: Error) => {
+        ws.on('error', (err: Error) => {
+            if (this.ws !== ws) return;
             console.error(`[OpenAIStreaming] WS error: ${err.message}`);
             // The 'close' event will follow, so we handle reconnect there.
         });
 
-        this.ws.on('close', (code: number, reason: Buffer) => {
-            this._handleWsClose(code, reason);
+        ws.on('close', (code: number, reason: Buffer) => {
+            const override = this.wsCloseContext?.ws === ws ? this.wsCloseContext : null;
+            if (override) {
+                this.wsCloseContext = null;
+            }
+            this._handleWsClose(ws, override?.code ?? code, override?.reason ?? reason);
         });
     }
 
-    private _handleWsClose(code: number, reason: Buffer): void {
+    private _handleWsClose(ws: WebSocket, code: number, reason: Buffer): void {
         if (this.wsCloseHandled) {
             return;
         }
+        if (this.ws !== ws) {
+            return;
+        }
         this.wsCloseHandled = true;
+        this.ws = null;
         this.isConnecting   = false;
         this.isSessionReady = false;
         this._clearKeepAlive();
@@ -484,14 +492,16 @@ export class OpenAIStreamingSTT extends EventEmitter {
 
     private _closeWs(graceful: boolean): void {
         if (!this.ws) return;
+        const ws = this.ws;
         try {
-            if (graceful && this.ws.readyState === WebSocket.OPEN) {
-                this.ws.send(JSON.stringify({ type: 'session.close' }));
+            if (graceful && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ type: 'session.close' }));
             }
         } catch { /* ignore */ }
-        this.ws.removeAllListeners();
-        this.ws.close();
+        ws.removeAllListeners();
+        ws.close();
         this.ws = null;
+        this.wsCloseContext = null;
         this.isSessionReady = false;
         this.isConnecting = false; // Allow immediate reconnect (e.g. language change)
         this.pcmAccumulator = [];

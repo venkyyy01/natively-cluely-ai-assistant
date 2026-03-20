@@ -160,6 +160,17 @@ export class AppState {
   private trackDisguiseTimer(timer: NodeJS.Timeout): void {
     this._disguiseTimers.push(timer)
   }
+
+  private scheduleDisguiseTimer(callback: () => void, delayMs: number): void {
+    const timer = setTimeout(() => {
+      try {
+        callback()
+      } finally {
+        this._disguiseTimers = this._disguiseTimers.filter(t => t !== timer)
+      }
+    }, delayMs)
+    this.trackDisguiseTimer(timer)
+  }
   private _ollamaBootstrapPromise: Promise<void> | null = null;
 
 
@@ -1744,11 +1755,9 @@ export class AppState {
     // Persist state via SettingsManager
     SettingsManager.getInstance().set('isUndetectable', state);
 
-    // Cancel all pending disguise timers to prevent their app.setName() calls
-    // from re-registering the dock icon after we hide it
-    if (state) {
-      this.clearDisguiseTimers()
-    }
+    // Cancel pending disguise timers from prior dock/disguise transitions so
+    // stale blur-reset or app.setName() callbacks cannot fire after a rapid toggle.
+    this.clearDisguiseTimers()
 
     // Broadcast state change to all relevant windows
     this._broadcastToAllWindows('undetectable-changed', state);
@@ -1801,16 +1810,14 @@ export class AppState {
 
       // Re-enable blur handling after the transition logic has settled
       if (targetFocusWindow && (targetFocusWindow === settingsWindow)) {
-        const timer = setTimeout(() => {
+        this.scheduleDisguiseTimer(() => {
           this.settingsWindowHelper.setIgnoreBlur(false);
-        }, 500);
-        this.trackDisguiseTimer(timer)
+        }, 500)
       }
       if (isModelSelectorVisible) {
-        const timer = setTimeout(() => {
+        this.scheduleDisguiseTimer(() => {
           this.modelSelectorWindowHelper.setIgnoreBlur(false);
-        }, 500);
-        this.trackDisguiseTimer(timer)
+        }, 500)
       }
     }
   }
@@ -1967,13 +1974,10 @@ export class AppState {
       }
     };
 
-    // Helper to queue a timeout and remove it from array once executed smoothly
     const scheduleUpdate = (ms: number) => {
-      const ts = setTimeout(() => {
+      this.scheduleDisguiseTimer(() => {
         forceUpdate();
-        this._disguiseTimers = this._disguiseTimers.filter(t => t !== ts);
-      }, ms);
-      this.trackDisguiseTimer(ts)
+      }, ms)
     };
 
     scheduleUpdate(200);

@@ -735,6 +735,9 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
     const sttRequestIdRef = React.useRef(0);
     const sttStatusTimerRef = React.useRef<number | null>(null);
     const sttSavedTimerRef = React.useRef<number | null>(null);
+    const sttProviderRef = React.useRef(sttProvider);
+    const sttSaveInFlightRef = React.useRef<null | { requestId: number; provider: string }>(null);
+    const sttTestInFlightRef = React.useRef<null | { requestId: number; provider: string }>(null);
 
     const nextSttRequestId = React.useCallback(() => {
         sttRequestIdRef.current += 1;
@@ -755,6 +758,14 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
             sttSavedTimerRef.current = null;
         }
     }, []);
+
+    useEffect(() => {
+        sttProviderRef.current = sttProvider;
+    }, [sttProvider]);
+
+    const isCurrentSttProviderRequest = React.useCallback((requestId: number, provider: string) => {
+        return isCurrentSttRequest(requestId) && sttProviderRef.current === provider;
+    }, [isCurrentSttRequest]);
 
     const scheduleSttStatusReset = React.useCallback(() => {
         if (sttStatusTimerRef.current) {
@@ -825,7 +836,10 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
     }, [isOpen]);
 
     const handleSttProviderChange = async (provider: 'google' | 'groq' | 'openai' | 'deepgram' | 'elevenlabs' | 'azure' | 'ibmwatson' | 'soniox') => {
+        const previousProvider = sttProvider;
         nextSttRequestId();
+        sttSaveInFlightRef.current = null;
+        sttTestInFlightRef.current = null;
         clearSttTimers();
         setSttProvider(provider);
         setIsSttDropdownOpen(false);
@@ -835,16 +849,23 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
         setSttSaved(false);
         try {
             // @ts-ignore
-            await window.electronAPI?.setSttProvider?.(provider);
+            const result = await window.electronAPI?.setSttProvider?.(provider);
+            if (!result?.success) {
+                throw new Error(result?.error || 'Failed to update STT provider');
+            }
         } catch (e) {
             console.error('Failed to set STT provider:', e);
+            setSttProvider(previousProvider);
         }
     };
 
     const handleSttKeySubmit = async (provider: 'groq' | 'openai' | 'deepgram' | 'elevenlabs' | 'azure' | 'ibmwatson' | 'soniox', key: string) => {
-        if (!key.trim() || sttSaving) return;
+        if (!key.trim()) return;
+        if (sttTestInFlightRef.current?.provider === provider) return;
+        if (sttSaveInFlightRef.current?.provider === provider) return;
 
         const requestId = nextSttRequestId();
+        sttSaveInFlightRef.current = { requestId, provider };
         clearSttTimers();
 
         // Auto-test before saving
@@ -860,7 +881,7 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
                 provider === 'azure' ? sttAzureRegion : undefined
             );
 
-            if (!isCurrentSttRequest(requestId)) return;
+            if (!isCurrentSttProviderRequest(requestId, provider)) return;
 
             if (!testResult?.success) {
                 setSttTestStatus('error');
@@ -872,30 +893,35 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
             setSttTestStatus('success');
             scheduleSttStatusReset();
 
+            let saveResult: { success: boolean; error?: string } | undefined;
             if (provider === 'groq') {
                 // @ts-ignore
-                await window.electronAPI?.setGroqSttApiKey?.(key.trim());
+                saveResult = await window.electronAPI?.setGroqSttApiKey?.(key.trim());
             } else if (provider === 'openai') {
                 // @ts-ignore
-                await window.electronAPI?.setOpenAiSttApiKey?.(key.trim());
+                saveResult = await window.electronAPI?.setOpenAiSttApiKey?.(key.trim());
             } else if (provider === 'elevenlabs') {
                 // @ts-ignore
-                await window.electronAPI?.setElevenLabsApiKey?.(key.trim());
+                saveResult = await window.electronAPI?.setElevenLabsApiKey?.(key.trim());
             } else if (provider === 'azure') {
                 // @ts-ignore
-                await window.electronAPI?.setAzureApiKey?.(key.trim());
+                saveResult = await window.electronAPI?.setAzureApiKey?.(key.trim());
             } else if (provider === 'ibmwatson') {
                 // @ts-ignore
-                await window.electronAPI?.setIbmWatsonApiKey?.(key.trim());
+                saveResult = await window.electronAPI?.setIbmWatsonApiKey?.(key.trim());
             } else if (provider === 'soniox') {
                 // @ts-ignore
-                await window.electronAPI?.setSonioxApiKey?.(key.trim());
+                saveResult = await window.electronAPI?.setSonioxApiKey?.(key.trim());
             } else {
                 // @ts-ignore
-                await window.electronAPI?.setDeepgramApiKey?.(key.trim());
+                saveResult = await window.electronAPI?.setDeepgramApiKey?.(key.trim());
             }
 
-            if (!isCurrentSttRequest(requestId)) return;
+            if (!saveResult?.success) {
+                throw new Error(saveResult?.error || 'Failed to save API key');
+            }
+
+            if (!isCurrentSttProviderRequest(requestId, provider)) return;
 
             if (provider === 'groq') setHasStoredSttGroqKey(true);
             else if (provider === 'openai') setHasStoredSttOpenaiKey(true);
@@ -908,12 +934,15 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
             setSttSaved(true);
             scheduleSttSavedReset();
         } catch (e: any) {
-            if (!isCurrentSttRequest(requestId)) return;
+            if (!isCurrentSttProviderRequest(requestId, provider)) return;
             console.error(`Failed to save ${provider} STT key:`, e);
             setSttTestStatus('error');
             setSttTestError(e.message || 'Validation failed');
         } finally {
-            if (isCurrentSttRequest(requestId)) {
+            if (sttSaveInFlightRef.current?.requestId === requestId) {
+                sttSaveInFlightRef.current = null;
+            }
+            if (isCurrentSttProviderRequest(requestId, provider)) {
                 setSttSaving(false);
             }
         }
@@ -984,9 +1013,12 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
 
     const handleTestSttConnection = async () => {
         if (sttProvider === 'google') return;
+        if (sttSaveInFlightRef.current?.provider === sttProvider) return;
+        if (sttTestInFlightRef.current?.provider === sttProvider) return;
         const requestId = nextSttRequestId();
         clearSttTimers();
         const providerUnderTest = sttProvider;
+        sttTestInFlightRef.current = { requestId, provider: providerUnderTest };
         const keyMap: Record<string, string> = {
             groq: sttGroqKey, openai: sttOpenaiKey, deepgram: sttDeepgramKey,
             elevenlabs: sttElevenLabsKey, azure: sttAzureKey, ibmwatson: sttIbmKey,
@@ -1009,7 +1041,7 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
                 providerUnderTest === 'azure' ? sttAzureRegion : undefined
             );
 
-            if (!isCurrentSttRequest(requestId)) return;
+            if (!isCurrentSttProviderRequest(requestId, providerUnderTest)) return;
 
             if (result?.success) {
                 setSttTestStatus('success');
@@ -1019,9 +1051,13 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
                 setSttTestError(result?.error || 'Connection failed');
             }
         } catch (e: any) {
-            if (!isCurrentSttRequest(requestId)) return;
+            if (!isCurrentSttProviderRequest(requestId, providerUnderTest)) return;
             setSttTestStatus('error');
             setSttTestError(e.message || 'Test failed');
+        } finally {
+            if (sttTestInFlightRef.current?.requestId === requestId) {
+                sttTestInFlightRef.current = null;
+            }
         }
     };
 

@@ -2,8 +2,8 @@
 
 Single source of truth for remaining remediation work and implementation planning.
 
-**Updated:** March 2026  
-**Basis:** Re-analyzed directly from source in isolation  
+**Updated:** March 2026 (completed P0/P1 source re-check, STT lifecycle fixes, settings async guards, disguise timer hardening, calendar OAuth state/PKCE hardening, and premium gate investigation)  
+**Basis:** Re-analyzed directly from source and updated after implementation/build verification  
 **Scope:** Only verified next steps and already-completed work
 
 ---
@@ -25,6 +25,18 @@ Single source of truth for remaining remediation work and implementation plannin
   - `electron/preload.ts`
   - `src/types/electron.d.ts`
 - [x] Added smooth scrolling, persisted overlay sizing, and edge/corner resize affordances in `src/components/NativelyInterface.tsx`
+- [x] Fixed ElevenLabs stale-close WebSocket race and auth failure normalization in `electron/audio/ElevenLabsStreamingSTT.ts`
+- [x] Fixed OpenAI STT duplicate close/failure accounting in `electron/audio/OpenAIStreamingSTT.ts`
+- [x] Added quit-path meeting/audio teardown hardening in `electron/main.ts`
+- [x] Converted overlay opacity slider to a controlled input in `src/components/SettingsOverlay.tsx`
+- [x] Added `startMeeting()` lifecycle guard against re-entrant async initialization in `electron/main.ts`
+- [x] Added global shortcut cleanup during quit in `electron/main.ts`
+- [x] Added validated rollback/error contracts for undetectable and open-at-login toggles in `electron/ipc/registerSettingsHandlers.ts` and `src/components/SettingsOverlay.tsx`
+- [x] Isolated STT settings async results by request/provider and deduplicated concurrent save/test flows in `src/components/SettingsOverlay.tsx`
+- [x] Hardened disguise timer tracking/cleanup across rapid stealth toggles in `electron/main.ts`
+- [x] Re-verified Deepgram user-facing code paths already reference Nova-3 in `electron/audio/DeepgramStreamingSTT.ts` and `src/config/stt.constants.ts`
+- [x] Hardened Google Calendar OAuth callback flow with PKCE, loopback-only callback checks, and auth timeout handling in `electron/services/CalendarManager.ts`
+- [x] Re-verified `premium/electron/services/LicenseManager.ts` is an intentional always-unlocked variant in this repo, not an accidental fallback path
 - [x] Verified current build health:
   - `npm run build`
   - `npx tsc -p electron/tsconfig.json`
@@ -35,8 +47,8 @@ Single source of truth for remaining remediation work and implementation plannin
 
 ### 1. Fix ElevenLabs stale-close WebSocket race
 
-- [ ] File: `electron/audio/ElevenLabsStreamingSTT.ts:88`
-- [ ] File: `electron/audio/ElevenLabsStreamingSTT.ts:306`
+- [x] File: `electron/audio/ElevenLabsStreamingSTT.ts:88`
+- [x] File: `electron/audio/ElevenLabsStreamingSTT.ts:306`
 - Verified issue:
   - `stop()` calls `removeAllListeners()`, `close()`, and nulls `this.ws`
   - `setRecognitionLanguage()` can immediately call `stop()` then `start()`
@@ -50,8 +62,8 @@ Single source of truth for remaining remediation work and implementation plannin
 
 ### 2. Fix ElevenLabs error contract and auth-failure behavior
 
-- [ ] File: `electron/audio/ElevenLabsStreamingSTT.ts:282`
-- [ ] File: `electron/audio/ElevenLabsStreamingSTT.ts:294`
+- [x] File: `electron/audio/ElevenLabsStreamingSTT.ts:282`
+- [x] File: `electron/audio/ElevenLabsStreamingSTT.ts:294`
 - Verified issue:
   - emits raw `msg` / `msg.error` instead of `Error`
   - on `auth_error`, reconnect is disabled but active state is not fully normalized before close path
@@ -64,9 +76,9 @@ Single source of truth for remaining remediation work and implementation plannin
 
 ### 3. Fix OpenAI STT duplicate close/failure accounting
 
-- [ ] File: `electron/audio/OpenAIStreamingSTT.ts:261`
-- [ ] File: `electron/audio/OpenAIStreamingSTT.ts:282`
-- [ ] File: `electron/audio/OpenAIStreamingSTT.ts:341`
+- [x] File: `electron/audio/OpenAIStreamingSTT.ts:261`
+- [x] File: `electron/audio/OpenAIStreamingSTT.ts:282`
+- [x] File: `electron/audio/OpenAIStreamingSTT.ts:341`
 - Verified issue:
   - timeout handlers call `_handleWsClose(...)` manually
   - `close` event also calls `_handleWsClose(...)`
@@ -80,9 +92,9 @@ Single source of truth for remaining remediation work and implementation plannin
 
 ### 4. Add meeting/audio teardown in `before-quit`
 
-- [ ] File: `electron/main.ts:1014`
-- [ ] File: `electron/main.ts:1067`
-- [ ] File: `electron/main.ts:2030`
+- [x] File: `electron/main.ts:1014`
+- [x] File: `electron/main.ts:1067`
+- [x] File: `electron/main.ts:2030`
 - Verified issue:
   - `before-quit` only stops Ollama and scrubs credentials
   - active meeting resources are stopped in `endMeeting()` but not on app quit
@@ -94,7 +106,7 @@ Single source of truth for remaining remediation work and implementation plannin
 
 ### 5. Fix uncontrolled opacity slider
 
-- [ ] File: `src/components/SettingsOverlay.tsx:1559`
+- [x] File: `src/components/SettingsOverlay.tsx:1559`
 - Verified issue:
   - slider uses `defaultValue={overlayOpacity}` instead of `value={overlayOpacity}`
 - Required implementation:
@@ -108,10 +120,10 @@ Single source of truth for remaining remediation work and implementation plannin
 
 ### 6. Add rollback/error handling for undetectable and open-at-login toggles
 
-- [ ] File: `src/components/SettingsOverlay.tsx:1315`
-- [ ] File: `src/components/SettingsOverlay.tsx:1345`
-- [ ] File: `electron/ipcHandlers.ts:431`
-- [ ] File: `electron/ipcHandlers.ts:449`
+- [x] File: `src/components/SettingsOverlay.tsx:1315`
+- [x] File: `src/components/SettingsOverlay.tsx:1345`
+- [x] File: `electron/ipc/registerSettingsHandlers.ts:42`
+- [x] File: `electron/ipc/registerSettingsHandlers.ts:55`
 - Verified issue:
   - UI flips state immediately and does not await/catch failures from IPC
   - backend currently returns `{ success: true }`, so frontend should still normalize around an explicit result contract
@@ -124,7 +136,7 @@ Single source of truth for remaining remediation work and implementation plannin
 
 ### 7. Guard `startMeeting()` against re-entrant async initialization
 
-- [ ] File: `electron/main.ts:1014`
+- [x] File: `electron/main.ts:1014`
 - Verified issue:
   - `isMeetingActive = true` is set immediately
   - actual audio init is deferred via `setTimeout(..., 0)`
@@ -137,7 +149,7 @@ Single source of truth for remaining remediation work and implementation plannin
 
 ### 8. Prevent stale STT connection test results from updating the wrong provider UI
 
-- [ ] File: `src/components/SettingsOverlay.tsx:909`
+- [x] File: `src/components/SettingsOverlay.tsx:909`
 - Verified issue:
   - `handleTestSttConnection()` reads `sttProvider` and current key from closure
   - provider can change while async request is in flight
@@ -149,7 +161,7 @@ Single source of truth for remaining remediation work and implementation plannin
 
 ### 9. Deduplicate concurrent STT key validation/save flows
 
-- [ ] File: `src/components/SettingsOverlay.tsx:778`
+- [x] File: `src/components/SettingsOverlay.tsx:778`
 - Verified issue:
   - `handleSttKeySubmit()` can be re-entered while async test/save work is running
   - state is global (`sttSaving`, `sttTestStatus`) rather than request-scoped
@@ -161,12 +173,14 @@ Single source of truth for remaining remediation work and implementation plannin
 
 ### 10. Track and clear delayed disguise-related timers
 
-- [ ] File: `electron/main.ts` around `setUndetectable(...)`
-- Verified status:
-  - previously identified as likely timer hygiene issue in disguise flow
-  - needs one more direct source pass before patching
-- Next step:
-  - verify all `setTimeout` branches in `setUndetectable()` are tracked/cleared consistently
+- [x] File: `electron/main.ts` around `setUndetectable(...)`
+- Verified issue:
+  - blur-reset timers and disguise force-update timers shared the same tracking array, but not every tracked timer removed itself after firing
+  - rapid stealth toggles could leave stale transition callbacks pending until the next cleanup pass
+- Implemented:
+  - centralized tracked disguise timer scheduling
+  - clear pending disguise timers before every stealth transition
+  - remove fired timers from the tracking array consistently
 
 ---
 
@@ -174,18 +188,16 @@ Single source of truth for remaining remediation work and implementation plannin
 
 ### 11. Align Deepgram UI labels with actual implementation
 
-- [ ] File: `electron/audio/DeepgramStreamingSTT.ts:2`
-- [ ] File: `src/config/stt.constants.ts:68`
-- [ ] File: `src/components/SettingsOverlay.tsx:2290`
-- Verified issue:
-  - implementation uses `model=nova-3`
-  - some labels/comments still say Nova-2
-- Required implementation:
-  - rename labels/comments to Nova-3 everywhere user-facing or developer-facing
+- [x] File: `electron/audio/DeepgramStreamingSTT.ts:2`
+- [x] File: `src/config/stt.constants.ts:68`
+- [x] File: `src/components/SettingsOverlay.tsx:2290`
+- Re-verified status:
+  - source paths now reference Nova-3 already
+  - no remaining Nova-2 mentions were found in active TS/TSX source during the latest pass
 
 ### 12. Add global shortcut cleanup during quit
 
-- [ ] File: `electron/main.ts:2030`
+- [x] File: `electron/main.ts:2030`
 - Verified status:
   - useful cleanup improvement
   - not yet re-verified as a live bug, but still a low-cost shutdown hardening step
@@ -196,12 +208,12 @@ Single source of truth for remaining remediation work and implementation plannin
 
 ## Investigate Separately Before Editing
 
-- [ ] `electron/main.ts` disguise timer cleanup path near `setUndetectable(...)`
+- [x] `electron/main.ts` disguise timer cleanup path near `setUndetectable(...)`
 - [x] `electron/rag/LiveRAGIndexer.ts` queue growth/rate limiting
 - [x] `native-module/src/resampler.rs` buffer bounds
 - [x] `native-module/src/silence_suppression.rs` VAD decimation correctness
-- [ ] `premium/electron/services/LicenseManager.ts` fake premium enablement path
-- [ ] `electron/services/CalendarManager.ts` OAuth CSRF/state flow
+- [x] `premium/electron/services/LicenseManager.ts` fake premium enablement path
+- [x] `electron/services/CalendarManager.ts` OAuth CSRF/state flow
 
 ---
 
@@ -433,10 +445,10 @@ Single source of truth for remaining remediation work and implementation plannin
 
 ## Recommended Execution Order
 
-- [ ] 1. ElevenLabs WebSocket race
-- [ ] 2. OpenAI duplicate close handling
-- [ ] 3. `before-quit` meeting/audio teardown
-- [ ] 4. Controlled opacity slider
+- [x] 1. ElevenLabs WebSocket race
+- [x] 2. OpenAI duplicate close handling
+- [x] 3. `before-quit` meeting/audio teardown
+- [x] 4. Controlled opacity slider
 - [ ] 5. Toggle rollback/error handling
 - [ ] 6. `startMeeting()` lifecycle guard
 - [ ] 7. STT settings request isolation

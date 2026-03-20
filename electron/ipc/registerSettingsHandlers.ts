@@ -39,9 +39,14 @@ export function registerSettingsHandlers({ appState, safeHandle, safeHandleValid
     appState.settingsWindowHelper.closeWindow();
   });
 
-  safeHandle('set-undetectable', async (_event, state: boolean) => {
-    appState.setUndetectable(state);
-    return { success: true };
+  safeHandleValidated('set-undetectable', (args) => [parseIpcInput(ipcSchemas.booleanFlag, args[0], 'set-undetectable')] as const, async (_event, state) => {
+    try {
+      appState.setUndetectable(state);
+      return { success: true };
+    } catch (error: any) {
+      console.error('Error setting undetectable state:', error);
+      return { success: false, error: error?.message || 'Unable to update stealth mode' };
+    }
   });
 
   safeHandle('set-disguise', async (_event, mode: 'terminal' | 'settings' | 'activity' | 'none') => {
@@ -52,13 +57,18 @@ export function registerSettingsHandlers({ appState, safeHandle, safeHandleValid
   safeHandle('get-undetectable', async () => appState.getUndetectable());
   safeHandle('get-disguise', async () => appState.getDisguise());
 
-  safeHandle('set-open-at-login', async (_event, openAtLogin: boolean) => {
-    app.setLoginItemSettings({
-      openAtLogin,
-      openAsHidden: false,
-      path: app.getPath('exe'),
-    });
-    return { success: true };
+  safeHandleValidated('set-open-at-login', (args) => [parseIpcInput(ipcSchemas.booleanFlag, args[0], 'set-open-at-login')] as const, async (_event, openAtLogin) => {
+    try {
+      app.setLoginItemSettings({
+        openAtLogin,
+        openAsHidden: false,
+        path: app.getPath('exe'),
+      });
+      return { success: true };
+    } catch (error: any) {
+      console.error('Error setting open-at-login:', error);
+      return { success: false, error: error?.message || 'Unable to update login preference' };
+    }
   });
 
   safeHandle('get-open-at-login', async () => app.getLoginItemSettings().openAtLogin);

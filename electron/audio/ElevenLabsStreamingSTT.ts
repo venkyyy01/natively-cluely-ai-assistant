@@ -31,6 +31,14 @@ export class ElevenLabsStreamingSTT extends EventEmitter {
     
     private debugMessageCount = 0;
 
+    private resetLiveSessionState(markInactive = false): void {
+        this.isConnecting = false;
+        this.isSessionReady = false;
+        if (markInactive) {
+            this.isActive = false;
+        }
+    }
+
     private ensureDebugWriteStream(): void {
         if (process.env.NODE_ENV !== 'development' || this.debugWriteStream) return;
 
@@ -101,9 +109,7 @@ export class ElevenLabsStreamingSTT extends EventEmitter {
             this.ws.close();
             this.ws = null;
         }
-        this.isActive = false;
-        this.isConnecting = false;
-        this.isSessionReady = false;
+        this.resetLiveSessionState(true);
         this.buffer = [];
         this.pcmAccumulator = [];
         this.pcmAccumulatorLen = 0;
@@ -289,11 +295,13 @@ export class ElevenLabsStreamingSTT extends EventEmitter {
 
                     case 'auth_error':
                         console.error('[ElevenLabsStreaming] Auth error — check key scope/permissions in ElevenLabs dashboard:', msg);
-                        this.isActive = false;
-                        this.isSessionReady = false;
+                        this.shouldReconnect = false;
+                        this.buffer = [];
+                        this.pcmAccumulator = [];
+                        this.pcmAccumulatorLen = 0;
+                        this.resetLiveSessionState(true);
                         this.emit('error', new Error(msg?.message || msg?.error?.message || 'ElevenLabs authentication failed'));
                         // Stop reconnection loops for auth failures to save API credits
-                        this.shouldReconnect = false;
                         if (this.ws === ws) {
                             ws.close();
                         }
@@ -314,12 +322,15 @@ export class ElevenLabsStreamingSTT extends EventEmitter {
         });
 
         ws.on('close', (code, reason) => {
-            if (this.ws === ws) {
+            const isActiveSocket = this.ws === ws;
+            if (isActiveSocket) {
                 this.ws = null;
+                this.resetLiveSessionState(false);
             }
-            this.isConnecting = false;
-            this.isSessionReady = false;
             console.log(`[ElevenLabsStreaming] Closed: code=${code} reason=${reason}`);
+            if (!isActiveSocket) {
+                return;
+            }
             if (this.shouldReconnect && code !== 1000) {
                 this.scheduleReconnect();
             } else {
