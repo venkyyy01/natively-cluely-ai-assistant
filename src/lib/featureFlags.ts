@@ -1,13 +1,9 @@
 /**
  * Frontend Feature Flags
  *
- * Premium features are gated on the backend via electronAPI IPC calls.
- * This file provides an optional compile-time switch to completely
- * hide premium UI elements from the open-source build.
- *
- * All premium components already degrade gracefully when the backend
- * returns `false` for license checks, so this flag is primarily
- * for cosmetic control (hiding upgrade buttons, promo toasters, etc.).
+ * This repository variant runs as a fully unlocked open build.
+ * Keep premium-oriented UI capability enabled, but suppress upgrade/paywall
+ * surfaces elsewhere so the app behaves like a single unrestricted product.
  */
 
 export const FEATURES = {

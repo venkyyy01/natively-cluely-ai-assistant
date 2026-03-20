@@ -60,17 +60,14 @@ function get<T>(mods: Record<string, any>, name: string, fallback: T): T {
 }
 
 // ─── Exports (always safe to import) ─────────────────────────────────
-export const PremiumUpgradeModal: React.FC<any> =
-  get(_premiumModal, 'PremiumUpgradeModal', NullComponent);
+export const PremiumUpgradeModal: React.FC<any> = NullComponent;
 
 export const ProfileVisualizer: React.FC<any> =
   get(_profileVis, 'ProfileVisualizer', NullComponent);
 
-export const PremiumPromoToaster: React.FC<any> =
-  get(_promoToaster, 'PremiumPromoToaster', NullComponent);
+export const PremiumPromoToaster: React.FC<any> = NullComponent;
 
-export const ProfileFeatureToaster: React.FC<any> =
-  get(_profileToaster, 'ProfileFeatureToaster', NullComponent);
+export const ProfileFeatureToaster: React.FC<any> = NullComponent;
 
 export const JDAwarenessToaster: React.FC<any> =
   get(_jdToaster, 'JDAwarenessToaster', NullComponent);
