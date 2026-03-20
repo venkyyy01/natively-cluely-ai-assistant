@@ -177,12 +177,12 @@ native-module/target/
 native-module/*.node
 
 .github/RepoGuide.md
-# .opencode
-# .adal
-# .agent
-# .agents
-# .claude
-# .cursorrules
-# .windsurfrules
-# .opencode
-# .opencode
+.opencode
+.adal
+.agent
+.agents
+.claude
+.cursorrules
+.windsurfrules
+.opencode
+.opencode
