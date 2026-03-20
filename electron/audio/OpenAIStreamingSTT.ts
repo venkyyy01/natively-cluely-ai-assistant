@@ -200,6 +200,11 @@ export class OpenAIStreamingSTT extends EventEmitter {
         this.pcmAccumulatorLen = 0;
     }
 
+    public destroy(): void {
+        this.stop();
+        this.removeAllListeners();
+    }
+
     public write(chunk: Buffer): void {
         if (!this.isActive) return;
 

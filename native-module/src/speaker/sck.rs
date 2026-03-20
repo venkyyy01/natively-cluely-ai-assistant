@@ -281,9 +281,8 @@ impl SpeakerStream {
 impl Drop for SpeakerStream {
     fn drop(&mut self) {
         println!("[SpeakerStream] Stopping ScreenCaptureKit stream...");
-        self.stream.stop_with_ch(|_| {
+        let _ = self.stream.stop_with_ch(|_| {
             println!("[SpeakerStream] Stream stopped");
         });
-        std::thread::sleep(std::time::Duration::from_millis(100));
     }
 }

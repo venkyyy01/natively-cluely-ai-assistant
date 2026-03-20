@@ -43,11 +43,6 @@ export class LocalEmbeddingProvider implements IEmbeddingProvider {
     }
 
     this.loadingPromise = (async () => {
-      // Use new Function() to force a true ESM dynamic import at runtime.
-      // TypeScript with module:commonjs rewrites `await import(...)` to
-      // `Promise.resolve().then(() => require(...))`, which fails for ESM-only
-      // packages like @xenova/transformers. The new Function() trick is opaque
-      // to the TypeScript compiler so it is left as a real import() call.
       const { pipeline, env } = await (new Function('return import("@xenova/transformers")')()) as typeof import('@xenova/transformers');
 
       // Tell transformers.js to use the local path, never download in production

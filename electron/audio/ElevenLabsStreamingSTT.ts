@@ -109,6 +109,11 @@ export class ElevenLabsStreamingSTT extends EventEmitter {
         console.log('[ElevenLabsStreaming] Stopped');
     }
 
+    public destroy(): void {
+        this.stop();
+        this.removeAllListeners();
+    }
+
     /**
      * Write raw PCM audio data.
      * ElevenLabs WebSocket expects "input_audio_chunk" in base64 16-bit PCM.

@@ -12,6 +12,7 @@ import UpdateBanner from "./components/UpdateBanner"
 import { AlertCircle } from "lucide-react"
 import { analytics } from "./lib/analytics/analytics.service"
 import { ErrorBoundary } from "./components/ErrorBoundary"
+import { getElectronAPI } from "./lib/electronApi"
 
 const queryClient = new QueryClient()
 
@@ -82,12 +83,13 @@ const App: React.FC = () => {
   // Re-index State
   const [incompatibleWarning, setIncompatibleWarning] = useState<{count: number; oldProvider: string; newProvider: string} | null>(null);
   const [meetingAudioError, setMeetingAudioError] = useState<string | null>(null);
+  const electronAPI = getElectronAPI();
 
   useEffect(() => {
     // Clean up old local storage
     localStorage.removeItem('useLegacyAudioBackend');
 
-    const removeMeetingsListener = window.electronAPI?.onMeetingsUpdated?.(() => {
+    const removeMeetingsListener = electronAPI.onMeetingsUpdated(() => {
       console.log("[App.tsx] Meetings updated (processing finished)");
       setIsProcessingMeeting(false);
     });
@@ -95,14 +97,14 @@ const App: React.FC = () => {
     // Listen for Ollama Auto-Pull Progress
     let removeProgress: (() => void) | undefined;
     let removeComplete: (() => void) | undefined;
-    if (window.electronAPI?.onOllamaPullProgress && window.electronAPI?.onOllamaPullComplete) {
-      removeProgress = window.electronAPI.onOllamaPullProgress((data) => {
+    if (electronAPI.onOllamaPullProgress && electronAPI.onOllamaPullComplete) {
+      removeProgress = electronAPI.onOllamaPullProgress((data) => {
         setOllamaPullStatus('downloading');
         setOllamaPullPercent(data.percent || 0);
         setOllamaPullMessage(data.status || 'Downloading...');
       });
 
-      removeComplete = window.electronAPI.onOllamaPullComplete(() => {
+      removeComplete = electronAPI.onOllamaPullComplete(() => {
         setOllamaPullStatus('complete');
         setOllamaPullMessage('Local AI memory ready');
         setOllamaPullPercent(100);
@@ -111,15 +113,15 @@ const App: React.FC = () => {
     }
 
     let removeWarning: (() => void) | undefined;
-    if (window.electronAPI?.onIncompatibleProviderWarning) {
-      removeWarning = window.electronAPI.onIncompatibleProviderWarning((data) => {
+    if (electronAPI.onIncompatibleProviderWarning) {
+      removeWarning = electronAPI.onIncompatibleProviderWarning((data) => {
         setIncompatibleWarning(data);
       });
     }
 
     let removeMeetingAudioError: (() => void) | undefined;
-    if (window.electronAPI?.onMeetingAudioError) {
-      removeMeetingAudioError = window.electronAPI.onMeetingAudioError((message) => {
+    if (electronAPI.onMeetingAudioError) {
+      removeMeetingAudioError = electronAPI.onMeetingAudioError((message) => {
         setMeetingAudioError(message);
       });
     }
@@ -131,18 +133,18 @@ const App: React.FC = () => {
       if (removeWarning) removeWarning();
       if (removeMeetingAudioError) removeMeetingAudioError();
     }
-  }, []);
+  }, [electronAPI]);
 
   // Listen for overlay opacity changes — scoped to overlay window only
   useEffect(() => {
     if (!isOverlayWindow) return;
-    const removeOpacityListener = window.electronAPI?.onOverlayOpacityChanged?.((opacity) => {
+    const removeOpacityListener = electronAPI.onOverlayOpacityChanged?.((opacity) => {
       setOverlayOpacity(opacity);
     });
     return () => {
       if (removeOpacityListener) removeOpacityListener();
     };
-  }, [isOverlayWindow]);
+  }, [electronAPI, isOverlayWindow]);
 
   // Handlers
   const handleReindex = async () => {

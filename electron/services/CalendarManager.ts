@@ -4,13 +4,16 @@ import http from 'http';
 import url from 'url';
 import fs from 'fs';
 import path from 'path';
+import crypto from 'crypto';
 import { EventEmitter } from 'events';
 
 // Configuration
 // In a real app, these should be in environment variables or build configs
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || "YOUR_CLIENT_ID_HERE";
 const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET || "YOUR_CLIENT_SECRET_HERE";
-const REDIRECT_URI = "http://localhost:11111/auth/callback";
+const CALLBACK_HOST = '127.0.0.1';
+const CALLBACK_PORT = 11111;
+const REDIRECT_URI = `http://${CALLBACK_HOST}:${CALLBACK_PORT}/auth/callback`;
 const SCOPES = ["https://www.googleapis.com/auth/calendar.readonly"];
 const TOKEN_PATH = path.join(app.getPath('userData'), 'calendar_tokens.enc');
 
@@ -34,6 +37,7 @@ export class CalendarManager extends EventEmitter {
     private expiryDate: number | null = null;
     private isConnected: boolean = false;
     private updateInterval: NodeJS.Timeout | null = null;
+    private pendingOauthState: string | null = null;
 
     private constructor() {
         super();
@@ -56,25 +60,43 @@ export class CalendarManager extends EventEmitter {
     // =========================================================================
 
     public async startAuthFlow(): Promise<void> {
+        if (GOOGLE_CLIENT_ID === "YOUR_CLIENT_ID_HERE" || GOOGLE_CLIENT_SECRET === "YOUR_CLIENT_SECRET_HERE") {
+            throw new Error('Google Calendar is not configured. Set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET before connecting.');
+        }
+
+        const expectedState = crypto.randomBytes(24).toString('hex');
+        this.pendingOauthState = expectedState;
+
         return new Promise((resolve, reject) => {
             // 1. Create Loopback Server
             const server = http.createServer(async (req, res) => {
                 try {
                     if (req.url?.startsWith('/auth/callback')) {
-                        const qs = new url.URL(req.url, 'http://localhost:11111').searchParams;
+                        const qs = new url.URL(req.url, `http://${CALLBACK_HOST}:${CALLBACK_PORT}`).searchParams;
                         const code = qs.get('code');
                         const error = qs.get('error');
+                        const state = qs.get('state');
 
                         if (error) {
                             res.end('Authentication failed! You can close this window.');
                             server.close();
+                            this.pendingOauthState = null;
                             reject(new Error(error));
+                            return;
+                        }
+
+                         if (!state || state !== expectedState) {
+                            res.end('Authentication failed due to invalid session state. You can close this window.');
+                            server.close();
+                            this.pendingOauthState = null;
+                            reject(new Error('OAuth state mismatch'));
                             return;
                         }
 
                         if (code) {
                             res.end('Authentication successful! You can close this window and return to Natively.');
                             server.close();
+                            this.pendingOauthState = null;
 
                             // 2. Exchange code for tokens
                             await this.exchangeCodeForToken(code);
@@ -84,17 +106,19 @@ export class CalendarManager extends EventEmitter {
                 } catch (err) {
                     res.end('Authentication error.');
                     server.close();
+                    this.pendingOauthState = null;
                     reject(err);
                 }
             });
 
-            server.listen(11111, () => {
+            server.listen(CALLBACK_PORT, CALLBACK_HOST, () => {
                 // 3. Open Browser
-                const authUrl = this.getAuthUrl();
+                const authUrl = this.getAuthUrl(expectedState);
                 shell.openExternal(authUrl);
             });
 
             server.on('error', (err) => {
+                this.pendingOauthState = null;
                 reject(err);
             });
         });
@@ -119,14 +143,15 @@ export class CalendarManager extends EventEmitter {
         return { connected: this.isConnected };
     }
 
-    private getAuthUrl(): string {
+    private getAuthUrl(state: string): string {
         const params = new URLSearchParams({
             client_id: GOOGLE_CLIENT_ID,
             redirect_uri: REDIRECT_URI,
             response_type: 'code',
             scope: SCOPES.join(' '),
             access_type: 'offline', // For refresh token
-            prompt: 'consent' // Force prompts to ensure we get refresh token
+            prompt: 'consent', // Force prompts to ensure we get refresh token
+            state,
         });
         return `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`;
     }

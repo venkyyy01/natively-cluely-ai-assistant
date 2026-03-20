@@ -7,6 +7,7 @@ import { DatabaseManager } from "./db/DatabaseManager"; // Import Database Manag
 import * as path from "path";
 import * as fs from "fs";
 import { AudioDevices } from "./audio/AudioDevices";
+import { ipcSchemas, parseIpcInput } from "./ipcValidation";
 
 import { RECOGNITION_LANGUAGES, AI_RESPONSE_LANGUAGES } from "./config/languages"
 
@@ -14,6 +15,14 @@ export function initializeIpcHandlers(appState: AppState): void {
   const safeHandle = (channel: string, listener: (event: any, ...args: any[]) => Promise<any> | any) => {
     ipcMain.removeHandler(channel);
     ipcMain.handle(channel, listener);
+  };
+
+  const safeHandleValidated = <T extends unknown[]>(
+    channel: string,
+    parser: (args: unknown[]) => T,
+    listener: (event: any, ...args: T) => Promise<any> | any,
+  ) => {
+    safeHandle(channel, (event, ...args) => listener(event, ...parser(args)));
   };
 
   // --- NEW Test Helper ---
@@ -261,7 +270,7 @@ export function initializeIpcHandlers(appState: AppState): void {
     }
   })
 
-  safeHandle("gemini-chat", async (event, message: string, imagePaths?: string[], context?: string, options?: { skipSystemPrompt?: boolean }) => {
+  safeHandleValidated("gemini-chat", (args) => parseIpcInput(ipcSchemas.geminiChatArgs, args, 'gemini-chat'), async (event, message, imagePaths, context, options) => {
     try {
       const result = await appState.processingHelper.getLLMHelper().chatWithGemini(message, imagePaths, context, options?.skipSystemPrompt);
 
@@ -302,7 +311,7 @@ export function initializeIpcHandlers(appState: AppState): void {
   });
 
   // Streaming IPC Handler
-  safeHandle("gemini-chat-stream", async (event, message: string, imagePaths?: string[], context?: string, options?: { skipSystemPrompt?: boolean }) => {
+  safeHandleValidated("gemini-chat-stream", (args) => parseIpcInput(ipcSchemas.geminiChatArgs, args, 'gemini-chat-stream'), async (event, message, imagePaths, context, options) => {
     try {
       console.log("[IPC] gemini-chat-stream started using LLMHelper.streamChat");
       const llmHelper = appState.processingHelper.getLLMHelper();
@@ -635,7 +644,7 @@ export function initializeIpcHandlers(appState: AppState): void {
     }
   });
 
-  safeHandle("save-custom-provider", async (_, provider: any) => {
+  safeHandleValidated("save-custom-provider", (args) => [parseIpcInput(ipcSchemas.customProvider, args[0], 'save-custom-provider')] as const, async (_, provider) => {
     try {
       const { CredentialsManager } = require('./services/CredentialsManager');
       // Save as CurlProvider (supports responsePath)
@@ -811,8 +820,10 @@ export function initializeIpcHandlers(appState: AppState): void {
     try {
       const { CredentialsManager } = require('./services/CredentialsManager');
       CredentialsManager.getInstance().setPreferredModel(provider, modelId);
+      return { success: true };
     } catch (error: any) {
       console.error(`[IPC] Failed to set preferred model for ${provider}:`, error);
+      return { success: false, error: error?.message || 'Failed to set preferred model' };
     }
   });
 
@@ -1600,7 +1611,7 @@ export function initializeIpcHandlers(appState: AppState): void {
   // Follow-up Email Handlers
   // ==========================================
 
-  safeHandle("generate-followup-email", async (_, input: any) => {
+  safeHandleValidated("generate-followup-email", (args) => [parseIpcInput(ipcSchemas.followUpEmailInput, args[0], 'generate-followup-email')] as const, async (_, input) => {
     try {
       const { FOLLOWUP_EMAIL_PROMPT, GROQ_FOLLOWUP_EMAIL_PROMPT } = require('./llm/prompts');
       const { buildFollowUpEmailPromptInput } = require('./utils/emailUtils');
@@ -1624,7 +1635,7 @@ export function initializeIpcHandlers(appState: AppState): void {
     }
   });
 
-  safeHandle("extract-emails-from-transcript", async (_, transcript: Array<{ text: string }>) => {
+  safeHandleValidated("extract-emails-from-transcript", (args) => [parseIpcInput(ipcSchemas.transcriptEntries, args[0], 'extract-emails-from-transcript')] as const, async (_, transcript) => {
     try {
       const { extractEmailsFromTranscript } = require('./utils/emailUtils');
       return extractEmailsFromTranscript(transcript);
@@ -1657,7 +1668,7 @@ export function initializeIpcHandlers(appState: AppState): void {
     }
   });
 
-  safeHandle("open-mailto", async (_, { to, subject, body }: { to: string; subject: string; body: string }) => {
+  safeHandleValidated("open-mailto", (args) => [parseIpcInput(ipcSchemas.openMailtoInput, args[0], 'open-mailto')] as const, async (_, { to, subject, body }) => {
     try {
       const { buildMailtoLink } = require('./utils/emailUtils');
       const mailtoUrl = buildMailtoLink(to, subject, body);

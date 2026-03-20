@@ -91,6 +91,7 @@ type STTProvider = (GoogleSTT | RestSTT | DeepgramStreamingSTT | SonioxStreaming
   finalize?: () => void;
   setAudioChannelCount?: (count: number) => void;
   notifySpeechEnded?: () => void;
+  destroy?: () => void;
 };
 
 // Premium: Knowledge modules loaded conditionally
@@ -927,11 +928,13 @@ export class AppState {
 
     // Stop existing STT instances
     if (this.googleSTT) {
+      this.googleSTT.destroy?.();
       this.googleSTT.stop();
       this.googleSTT.removeAllListeners();
       this.googleSTT = null;
     }
     if (this.googleSTT_User) {
+      this.googleSTT_User.destroy?.();
       this.googleSTT_User.stop();
       this.googleSTT_User.removeAllListeners();
       this.googleSTT_User = null;

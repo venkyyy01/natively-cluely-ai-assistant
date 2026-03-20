@@ -14,6 +14,8 @@ import { EmbeddingPipeline } from './EmbeddingPipeline';
 
 const INDEXING_INTERVAL_MS = 30_000;  // 30 seconds
 const MIN_NEW_SEGMENTS = 3;           // Don't chunk unless we have enough new content
+const LIVE_SEGMENT_BACKLOG_LIMIT = 2000;
+const EMBEDDING_DELAY_MS = 250;
 
 export class LiveRAGIndexer {
     private vectorStore: VectorStore;
@@ -66,6 +68,11 @@ export class LiveRAGIndexer {
     feedSegments(segments: RawSegment[]): void {
         if (!this.isActive || !this.meetingId) return;
         this.allSegments.push(...segments);
+        if (this.allSegments.length > LIVE_SEGMENT_BACKLOG_LIMIT) {
+            const overflow = this.allSegments.length - LIVE_SEGMENT_BACKLOG_LIMIT;
+            this.allSegments.splice(0, overflow);
+            this.indexedSegmentCount = Math.max(0, this.indexedSegmentCount - overflow);
+        }
     }
 
     /**
@@ -127,6 +134,9 @@ export class LiveRAGIndexer {
                         const embedding = await this.embeddingPipeline.getEmbedding(indexedChunks[i].text);
                         this.vectorStore.storeEmbedding(chunkIds[i], embedding);
                         embeddedCount++;
+                        if (i < chunkIds.length - 1) {
+                            await new Promise(resolve => setTimeout(resolve, EMBEDDING_DELAY_MS));
+                        }
                     } catch (err) {
                         console.warn(`[LiveRAGIndexer] Failed to embed chunk ${chunkIds[i]}:`, err);
                         // Continue with remaining chunks — partial indexing is better than none

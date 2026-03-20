@@ -693,7 +693,6 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
     const [outputDevices, setOutputDevices] = useState<MediaDeviceInfo[]>([]);
     const [selectedInput, setSelectedInput] = useState('');
     const [selectedOutput, setSelectedOutput] = useState('');
-    const [micLevel, setMicLevel] = useState(0);
     const [useExperimentalSck, setUseExperimentalSck] = useState(false);
 
     // STT Provider settings
@@ -952,6 +951,13 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
     const sourceRef = React.useRef<MediaStreamAudioSourceNode | null>(null);
     const rafRef = React.useRef<number | null>(null);
     const streamRef = React.useRef<MediaStream | null>(null);
+    const micLevelBarRef = React.useRef<HTMLDivElement | null>(null);
+
+    const updateMicLevelBar = React.useCallback((level: number) => {
+        if (micLevelBarRef.current) {
+            micLevelBarRef.current.style.width = `${Math.max(0, Math.min(100, level))}%`;
+        }
+    }, []);
 
     // Load stored credentials on mount
 
@@ -1129,7 +1135,7 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
                             smoothLevel = smoothLevel * 0.95 + targetLevel * 0.05; // Slow decay
                         }
 
-                        setMicLevel(smoothLevel);
+                        updateMicLevelBar(smoothLevel);
 
                         rafRef.current = requestAnimationFrame(updateLevel);
                     };
@@ -1137,7 +1143,7 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
                     updateLevel();
                 } catch (error) {
                     console.error("Error accessing microphone:", error);
-                    setMicLevel(0); // Reset level on error
+                    updateMicLevelBar(0);
                 }
             };
 
@@ -1155,7 +1161,7 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
                     streamRef.current.getTracks().forEach(track => track.stop());
                     streamRef.current = null;
                 }
-                setMicLevel(0); // Reset mic level on cleanup
+                updateMicLevelBar(0);
             };
         } else {
             // Cleanup when closing tab or overlay or switching away from audio tab
@@ -1169,9 +1175,9 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
                 streamRef.current.getTracks().forEach(track => track.stop());
                 streamRef.current = null;
             }
-            setMicLevel(0);
+            updateMicLevelBar(0);
         }
-    }, [isOpen, activeTab, selectedInput]);
+    }, [isOpen, activeTab, selectedInput, updateMicLevelBar]);
 
     return (
         <AnimatePresence>
@@ -2584,8 +2590,9 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
                                                 </div>
                                                 <div className="h-1.5 bg-bg-input rounded-full overflow-hidden">
                                                     <div
+                                                        ref={micLevelBarRef}
                                                         className="h-full bg-green-500 transition-all duration-100 ease-out"
-                                                        style={{ width: `${micLevel}%` }}
+                                                        style={{ width: '0%' }}
                                                     />
                                                 </div>
                                             </div>

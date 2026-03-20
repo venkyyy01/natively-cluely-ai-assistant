@@ -13,6 +13,8 @@
     "electron:build": "node scripts/ensure-electron-native-deps.js && npm run build:native:current && tsc -p electron/tsconfig.json && cross-env NODE_ENV=production electron .",
     "app:dev": "concurrently \"npm run dev -- --port 5180\" \"wait-on http://localhost:5180 && npm run electron:dev\"",
     "app:build": "node scripts/ensure-electron-native-deps.js && npm run build && npm run build:native && tsc -p electron/tsconfig.json && electron-builder",
+    "test:electron": "tsc -p electron/tsconfig.json && node --test dist-electron/electron/tests/*.test.js",
+    "test": "npm run test:electron && cargo test --manifest-path native-module/Cargo.toml",
     "watch": "tsc -p electron/tsconfig.json --watch",
     "start": "npm run app:dev",
     "dist": "npm run app:build",
@@ -80,7 +82,9 @@
       ],
       "icon": "assets/natively.icns",
       "identity": null,
-      "hardenedRuntime": false
+      "hardenedRuntime": true,
+      "entitlements": "assets/entitlements.mac.plist",
+      "entitlementsInherit": "assets/entitlements.mac.plist"
     },
     "win": {
       "target": [
@@ -223,7 +227,8 @@
     "three": "^0.182.0",
     "tree-kill": "^1.2.2",
     "uuid": "^11.0.3",
-    "ws": "^8.19.0"
+    "ws": "^8.19.0",
+    "zod": "^3.24.1"
   },
   "optionalDependencies": {
     "natively-audio": "file:./native-module",

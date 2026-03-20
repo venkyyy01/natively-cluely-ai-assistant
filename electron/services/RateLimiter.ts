@@ -10,16 +10,18 @@ export class RateLimiter {
     private lastRefillTime: number;
     private waitQueue: Array<() => void> = [];
     private refillTimer: ReturnType<typeof setInterval> | null = null;
+    private readonly maxQueueSize: number;
 
     /**
      * @param maxTokens - Maximum burst capacity (e.g. 30 for Groq free tier)
      * @param refillRatePerSecond - Tokens added per second (e.g. 0.5 = 30/min)
      */
-    constructor(maxTokens: number, refillRatePerSecond: number) {
+    constructor(maxTokens: number, refillRatePerSecond: number, maxQueueSize: number = 100) {
         this.maxTokens = maxTokens;
         this.tokens = maxTokens;
         this.refillRatePerSecond = refillRatePerSecond;
         this.lastRefillTime = Date.now();
+        this.maxQueueSize = maxQueueSize;
 
         // Refill tokens periodically
         this.refillTimer = setInterval(() => this.refill(), 1000);
@@ -28,7 +30,7 @@ export class RateLimiter {
     /**
      * Acquire a token. Resolves immediately if available, otherwise waits.
      */
-    public async acquire(): Promise<void> {
+    public async acquire(timeoutMs: number = 30000): Promise<void> {
         this.refill();
 
         if (this.tokens >= 1) {
@@ -37,8 +39,24 @@ export class RateLimiter {
         }
 
         // Wait for a token to become available
-        return new Promise<void>((resolve) => {
-            this.waitQueue.push(resolve);
+        if (this.waitQueue.length >= this.maxQueueSize) {
+            throw new Error('Rate limiter queue is full');
+        }
+
+        return new Promise<void>((resolve, reject) => {
+            const wrapped = () => {
+                clearTimeout(timeoutHandle);
+                resolve();
+            };
+            const timeoutHandle = setTimeout(() => {
+                const index = this.waitQueue.indexOf(wrapped);
+                if (index !== -1) {
+                    this.waitQueue.splice(index, 1);
+                }
+                reject(new Error('Rate limiter timeout'));
+            }, timeoutMs);
+
+            this.waitQueue.push(wrapped);
         });
     }
 
@@ -79,7 +97,7 @@ export class RateLimiter {
  */
 export function createProviderRateLimiters() {
     return {
-        groq: new RateLimiter(6, 0.1),        // 6 req/min
+        groq: new RateLimiter(20, 0.5),       // 30 req/min with burst room
         gemini: new RateLimiter(120, 2.0),    // 120 req/min
         openai: new RateLimiter(120, 2.0),    // 120 req/min
         claude: new RateLimiter(120, 2.0),    // 120 req/min

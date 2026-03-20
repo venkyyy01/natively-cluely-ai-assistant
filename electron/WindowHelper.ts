@@ -134,7 +134,7 @@ export class WindowHelper {
         contextIsolation: true,
         preload: path.join(__dirname, "preload.js"),
         scrollBounce: true,
-        webSecurity: !isDev, // DEBUG: Disable web security only in dev
+        webSecurity: true,
       },
       show: false, // DEBUG: Force show -> Fixed white screen, now relies on ready-to-show
       titleBarStyle: 'hiddenInset',

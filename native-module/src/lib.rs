@@ -143,6 +143,7 @@ impl SystemAudioCapture {
             let mut frame_buffer: Vec<i16> = Vec::with_capacity(chunk_size * 4);
             let mut raw_batch: Vec<f32> = Vec::with_capacity(4096);
             let mut last_emit_at = Instant::now();
+            let silence = vec![0u8; chunk_size * 2];
 
             loop {
                 if stop_signal.load(Ordering::Relaxed) {
@@ -176,10 +177,8 @@ impl SystemAudioCapture {
                             last_emit_at = Instant::now();
                         }
                         FrameAction::SendSilence => {
-                            // Send zero-filled buffer to keep streaming APIs alive
-                            let silence = vec![0u8; chunk_size * 2];
                             tsfn.call(
-                                Buffer::from(silence),
+                                Buffer::from(silence.clone()),
                                 ThreadsafeFunctionCallMode::NonBlocking,
                             );
                             last_emit_at = Instant::now();
@@ -201,9 +200,8 @@ impl SystemAudioCapture {
                     && frame_buffer.is_empty()
                     && last_emit_at.elapsed() >= Duration::from_millis(100)
                 {
-                    let silence = vec![0u8; chunk_size * 2];
                     tsfn.call(
-                        Buffer::from(silence),
+                        Buffer::from(silence.clone()),
                         ThreadsafeFunctionCallMode::NonBlocking,
                     );
                     last_emit_at = Instant::now();

@@ -30,6 +30,8 @@ jobs:
           npm ci
           npx tsc --noEmit
           npx tsc -p electron/tsconfig.json --noEmit
+          npm run test
+          npm audit --audit-level=high
           npx vite build
           
       - name: Sync to Public Repository

@@ -97,18 +97,12 @@ class ZeroShotClassifier {
 
         this.loadingPromise = (async () => {
             try {
-                // Bypass TypeScript converting import() to require() for ESM packages
                 const { pipeline, env } = await new Function("return import('@xenova/transformers')")();
 
-                // In production, use bundled model. In dev, allow remote download.
-                if (app.isPackaged) {
-                    env.allowRemoteModels = false;
-                    env.localModelPath = path.join(process.resourcesPath, 'models');
-                } else {
-                    // Dev mode: allow downloading from HuggingFace Hub
-                    env.allowRemoteModels = true;
-                    env.cacheDir = path.join(__dirname, '../../resources/models');
-                }
+                env.allowRemoteModels = false;
+                env.localModelPath = app.isPackaged
+                    ? path.join(process.resourcesPath, 'models')
+                    : path.join(__dirname, '../../resources/models');
 
                 console.log('[IntentClassifier] Loading zero-shot classifier (mobilebert-uncased-mnli)...');
                 this.pipe = await pipeline(

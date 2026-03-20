@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer } from "electron"
+import type { CustomProviderPayload, FollowUpEmailInput, GeminiChatOptions, OverlayBounds, TranscriptTextEntry } from "../shared/ipc"
 
 // Types for the exposed Electron API
 interface ElectronAPI {
@@ -6,6 +7,7 @@ interface ElectronAPI {
     width: number
     height: number
   }) => Promise<void>
+  setOverlayBounds: (bounds: OverlayBounds) => Promise<{ success: boolean }>
   getRecognitionLanguages: () => Promise<Record<string, any>>
   getScreenshots: () => Promise<Array<{ path: string; preview: string }>>
   deleteScreenshot: (
@@ -133,13 +135,13 @@ interface ElectronAPI {
   seedDemo: () => Promise<{ success: boolean }>
 
   // Custom Providers
-  saveCustomProvider: (provider: any) => Promise<{ success: boolean; id?: string; error?: string }>
-  getCustomProviders: () => Promise<any[]>
+  saveCustomProvider: (provider: CustomProviderPayload) => Promise<{ success: boolean; id?: string; error?: string }>
+  getCustomProviders: () => Promise<CustomProviderPayload[]>
   deleteCustomProvider: (id: string) => Promise<{ success: boolean; error?: string }>
 
   // Follow-up Email
-  generateFollowupEmail: (input: any) => Promise<string>
-  extractEmailsFromTranscript: (transcript: Array<{ text: string }>) => Promise<string[]>
+  generateFollowupEmail: (input: FollowUpEmailInput) => Promise<string>
+  extractEmailsFromTranscript: (transcript: TranscriptTextEntry[]) => Promise<string[]>
   getCalendarAttendees: (eventId: string) => Promise<Array<{ email: string; name: string }>>
   openMailto: (params: { to: string; subject: string; body: string }) => Promise<{ success: boolean; error?: string }>
 
@@ -156,7 +158,7 @@ interface ElectronAPI {
   toggleAdvancedSettings: () => Promise<void>
 
   // Streaming listeners
-  streamGeminiChat: (message: string, imagePaths?: string[], context?: string, options?: { skipSystemPrompt?: boolean }) => Promise<void>
+  streamGeminiChat: (message: string, imagePaths?: string[], context?: string, options?: GeminiChatOptions) => Promise<void>
   onGeminiStreamToken: (callback: (token: string) => void) => () => void
   onGeminiStreamDone: (callback: () => void) => () => void
   onGeminiStreamError: (callback: (error: string) => void) => () => void
@@ -264,6 +266,8 @@ export const PROCESSING_EVENTS = {
 contextBridge.exposeInMainWorld("electronAPI", {
   updateContentDimensions: (dimensions: { width: number; height: number }) =>
     ipcRenderer.invoke("update-content-dimensions", dimensions),
+  setOverlayBounds: (bounds: OverlayBounds) =>
+    ipcRenderer.invoke("set-overlay-bounds", bounds),
   getRecognitionLanguages: () => ipcRenderer.invoke("get-recognition-languages"),
   takeScreenshot: () => ipcRenderer.invoke("take-screenshot"),
   takeSelectiveScreenshot: () => ipcRenderer.invoke("take-selective-screenshot"),
@@ -653,7 +657,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
 
 
   // Streaming Chat
-  streamGeminiChat: (message: string, imagePaths?: string[], context?: string, options?: { skipSystemPrompt?: boolean }) => ipcRenderer.invoke("gemini-chat-stream", message, imagePaths, context, options),
+  streamGeminiChat: (message: string, imagePaths?: string[], context?: string, options?: GeminiChatOptions) => ipcRenderer.invoke("gemini-chat-stream", message, imagePaths, context, options),
 
   onGeminiStreamToken: (callback: (token: string) => void) => {
     const subscription = (_: any, token: string) => callback(token)
@@ -697,13 +701,13 @@ contextBridge.exposeInMainWorld("electronAPI", {
   seedDemo: () => ipcRenderer.invoke('seed-demo'),
 
   // Custom Providers
-  saveCustomProvider: (provider: any) => ipcRenderer.invoke('save-custom-provider', provider),
+  saveCustomProvider: (provider: CustomProviderPayload) => ipcRenderer.invoke('save-custom-provider', provider),
   getCustomProviders: () => ipcRenderer.invoke('get-custom-providers'),
   deleteCustomProvider: (id: string) => ipcRenderer.invoke('delete-custom-provider', id),
 
   // Follow-up Email
-  generateFollowupEmail: (input: any) => ipcRenderer.invoke('generate-followup-email', input),
-  extractEmailsFromTranscript: (transcript: Array<{ text: string }>) => ipcRenderer.invoke('extract-emails-from-transcript', transcript),
+  generateFollowupEmail: (input: FollowUpEmailInput) => ipcRenderer.invoke('generate-followup-email', input),
+  extractEmailsFromTranscript: (transcript: TranscriptTextEntry[]) => ipcRenderer.invoke('extract-emails-from-transcript', transcript),
   getCalendarAttendees: (eventId: string) => ipcRenderer.invoke('get-calendar-attendees', eventId),
   openMailto: (params: { to: string; subject: string; body: string }) => ipcRenderer.invoke('open-mailto', params),
 

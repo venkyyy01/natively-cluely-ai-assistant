@@ -109,6 +109,11 @@ export class DeepgramStreamingSTT extends EventEmitter {
         console.log('[DeepgramStreaming] Stopped');
     }
 
+    public destroy(): void {
+        this.stop();
+        this.removeAllListeners();
+    }
+
     // =========================================================================
     // Audio Data
     // =========================================================================

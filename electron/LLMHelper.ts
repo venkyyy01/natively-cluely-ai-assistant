@@ -32,8 +32,10 @@ const GEMINI_PRO_MODEL = "gemini-3.1-pro-preview"
 const GROQ_MODEL = "llama-3.3-70b-versatile"
 const OPENAI_MODEL = "gpt-5.4-chat"
 const CLAUDE_MODEL = "claude-sonnet-4-6"
-const MAX_OUTPUT_TOKENS = 65536
-const CLAUDE_MAX_OUTPUT_TOKENS = 64000
+const MAX_OUTPUT_TOKENS = 8192
+const CLAUDE_MAX_OUTPUT_TOKENS = 8192
+const DEFAULT_INPUT_TOKEN_BUDGET = 24000
+const SUMMARY_INPUT_TOKEN_BUDGET = 100000
 
 // Simple prompt for image analysis (not interview copilot - kept separate)
 const IMAGE_ANALYSIS_PROMPT = `Analyze concisely. Be direct. No markdown formatting. Return plain text only.`
@@ -405,20 +407,66 @@ export class LLMHelper {
     return clean;
   }
 
+  private estimateTokens(text: string): number {
+    return Math.ceil(text.length / 4);
+  }
+
+  private trimTextToTokenBudget(text: string, maxTokens: number, preserveTail: boolean = false): string {
+    if (!text) return text;
+    if (this.estimateTokens(text) <= maxTokens) return text;
+
+    const maxChars = maxTokens * 4;
+    if (preserveTail) {
+      return `...[truncated]\n${text.slice(-maxChars)}`;
+    }
+
+    return `${text.slice(0, maxChars)}\n...[truncated]`;
+  }
+
+  private prepareUserContent(message: string, context?: string, budget: number = DEFAULT_INPUT_TOKEN_BUDGET): string {
+    const safeMessage = this.trimTextToTokenBudget(message, Math.max(512, Math.floor(budget * 0.25)));
+    if (!context) {
+      return safeMessage;
+    }
+
+    const reservedForMessage = this.estimateTokens(safeMessage) + 64;
+    const availableForContext = Math.max(512, budget - reservedForMessage);
+    const trimmedContext = this.trimTextToTokenBudget(context, availableForContext, true);
+    return `CONTEXT:\n${trimmedContext}\n\nUSER QUESTION:\n${safeMessage}`;
+  }
+
+  private joinPrompt(systemPrompt: string | undefined, userContent: string, budget: number = DEFAULT_INPUT_TOKEN_BUDGET): string {
+    const base = systemPrompt ? `${systemPrompt}\n\n${userContent}` : userContent;
+    return this.trimTextToTokenBudget(base, budget, true);
+  }
+
   /**
    * Retry logic with exponential backoff
-   * Specifically handles 503 Service Unavailable
+   * Handles common transient provider failures consistently.
    */
+  private isRetryableError(error: any): boolean {
+    const message = String(error?.message || error || '').toLowerCase();
+    return (
+      message.includes('503') ||
+      message.includes('429') ||
+      message.includes('overloaded') ||
+      message.includes('rate limit') ||
+      message.includes('timeout') ||
+      message.includes('temporar') ||
+      message.includes('econnreset') ||
+      message.includes('network')
+    );
+  }
+
   private async withRetry<T>(fn: () => Promise<T>, retries = 3): Promise<T> {
     let delay = 400;
     for (let i = 0; i < retries; i++) {
       try {
         return await fn();
       } catch (e: any) {
-        // Only retry on 503 or overload errors
-        if (!e.message?.includes("503") && !e.message?.includes("overloaded")) throw e;
+        if (!this.isRetryableError(e)) throw e;
 
-        console.warn(`[LLMHelper] 503 Overload. Retrying in ${delay}ms...`);
+        console.warn(`[LLMHelper] Transient model failure. Retrying in ${delay}ms...`);
         await new Promise(r => setTimeout(r, delay));
         delay *= 2;
       }
@@ -728,20 +776,15 @@ ANSWER DIRECTLY:`;
 
       // Helper to build combined prompts for Groq/Gemini
       const buildMessage = (systemPrompt: string) => {
+        const preparedUserContent = this.prepareUserContent(message, context);
         if (skipSystemPrompt) {
-          return context
-            ? `CONTEXT:\n${context}\n\nUSER QUESTION:\n${message}`
-            : message;
+          return preparedUserContent;
         }
-        return context
-          ? `${systemPrompt}\n\nCONTEXT:\n${context}\n\nUSER QUESTION:\n${message}`
-          : `${systemPrompt}\n\n${message}`;
+        return this.joinPrompt(systemPrompt, preparedUserContent);
       };
 
       // For OpenAI/Claude: separate system prompt + user message
-      const userContent = context
-        ? `CONTEXT:\n${context}\n\nUSER QUESTION:\n${message}`
-        : message;
+      const userContent = this.prepareUserContent(message, context);
 
       const finalGeminiPrompt = this.injectLanguageInstruction(HARD_SYSTEM_PROMPT);
       const finalGroqPrompt = alternateGroqMessage || this.injectLanguageInstruction(GROQ_SYSTEM_PROMPT);
@@ -974,7 +1017,7 @@ ANSWER DIRECTLY:`;
     for (const provider of providers) {
       try {
         console.log(`[LLMHelper] 🧠 Structured generation: trying ${provider.name}...`);
-        const result = await provider.execute();
+        const result = await this.withRetry(() => provider.execute(), 3);
         if (result && result.trim().length > 0) {
           console.log(`[LLMHelper] ✅ Structured generation succeeded with ${provider.name}`);
           return result;
@@ -1567,9 +1610,7 @@ ANSWER DIRECTLY:`;
     };
 
     // For OpenAI/Claude: separate system prompt + user message (proper API pattern)
-    const userContent = context
-      ? `CONTEXT:\n${context}\n\nUSER QUESTION:\n${message}`
-      : message;
+    const userContent = this.prepareUserContent(message, context);
 
     const combinedMessages = {
       gemini: buildCombinedMessage(HARD_SYSTEM_PROMPT),
@@ -1732,7 +1773,7 @@ ANSWER DIRECTLY:`;
       try {
         const groqSystem = systemPromptOverride || GROQ_SYSTEM_PROMPT;
         const finalGroqSystem = this.injectLanguageInstruction(groqSystem);
-        const groqFullMessage = `${finalGroqSystem}\n\n${userContent}`;
+        const groqFullMessage = this.joinPrompt(finalGroqSystem, userContent);
         yield* this.streamWithGroq(groqFullMessage);
         return;
       } catch (e: any) {
@@ -1799,7 +1840,7 @@ ANSWER DIRECTLY:`;
       // Text-only Groq
       const groqSystem = systemPromptOverride ? baseSystemPrompt : GROQ_SYSTEM_PROMPT;
       const finalGroqSystem = this.injectLanguageInstruction(groqSystem);
-      const groqFullMessage = `${finalGroqSystem}\n\n${userContent}`;
+      const groqFullMessage = this.joinPrompt(finalGroqSystem, userContent);
       yield* this.streamWithGroq(groqFullMessage);
       return;
     }
@@ -1808,13 +1849,13 @@ ANSWER DIRECTLY:`;
     if (this.client) {
       // Direct model use if specified
       if (this.isGeminiModel(this.currentModelId)) {
-        const fullMsg = `${finalSystemPrompt}\n\n${userContent}`;
+        const fullMsg = this.joinPrompt(finalSystemPrompt, userContent);
         yield* this.streamWithGeminiModel(fullMsg, this.currentModelId, imagePaths);
         return;
       }
 
       // Race strategy (default)
-      const raceMsg = `${finalSystemPrompt}\n\n${userContent}`;
+      const raceMsg = this.joinPrompt(finalSystemPrompt, userContent);
       yield* this.streamWithGeminiParallelRace(raceMsg, imagePaths);
     } else {
       throw new Error("No LLM provider available");
@@ -2059,25 +2100,52 @@ ANSWER DIRECTLY:`;
   private async * streamWithGeminiParallelRace(fullMessage: string, imagePaths?: string[]): AsyncGenerator<string, void, unknown> {
     if (!this.client) throw new Error("Gemini client not initialized");
 
-    // Start both streams
-    const flashPromise = this.collectStreamResponse(fullMessage, GEMINI_FLASH_MODEL, imagePaths);
-    const proPromise = this.collectStreamResponse(fullMessage, GEMINI_PRO_MODEL, imagePaths);
+    const streams = {
+      flash: this.streamGeminiModelChunks(fullMessage, GEMINI_FLASH_MODEL, imagePaths)[Symbol.asyncIterator](),
+      pro: this.streamGeminiModelChunks(fullMessage, GEMINI_PRO_MODEL, imagePaths)[Symbol.asyncIterator](),
+    } as const;
 
-    // Race - whoever finishes first wins
-    const result = await Promise.any([flashPromise, proPromise]);
+    const nextChunk = (name: keyof typeof streams) =>
+      streams[name].next().then(result => ({ name, result }));
 
-    // Yield the collected response character by character to simulate streaming
-    // (Or yield in chunks for efficiency)
-    const chunkSize = 10;
-    for (let i = 0; i < result.length; i += chunkSize) {
-      yield result.substring(i, i + chunkSize);
+    let winner: keyof typeof streams | null = null;
+    const pending = new Map<keyof typeof streams, Promise<{ name: keyof typeof streams; result: IteratorResult<string> }>>();
+    pending.set('flash', nextChunk('flash'));
+    pending.set('pro', nextChunk('pro'));
+
+    while (pending.size > 0) {
+      const { name, result } = await Promise.race(Array.from(pending.values()));
+      pending.delete(name);
+
+      if (result.done) {
+        if (winner === name) {
+          return;
+        }
+        if (pending.size === 0 && winner === null) {
+          throw new Error('Both Gemini race streams completed without output');
+        }
+        continue;
+      }
+
+      if (!winner) {
+        winner = name;
+        const loser = name === 'flash' ? 'pro' : 'flash';
+        pending.delete(loser);
+        await streams[loser].return?.(undefined);
+        console.log(`[LLMHelper] Gemini race winner: ${winner}`);
+      }
+
+      if (name === winner) {
+        yield result.value;
+        pending.set(name, nextChunk(name));
+      }
     }
   }
 
   /**
-   * Collect full response from a Gemini model (non-streaming for race)
+   * Stream chunks from a specific Gemini model.
    */
-  private async collectStreamResponse(fullMessage: string, model: string, imagePaths?: string[]): Promise<string> {
+  private async * streamGeminiModelChunks(fullMessage: string, model: string, imagePaths?: string[]): AsyncGenerator<string, void, unknown> {
     if (!this.client) throw new Error("Gemini client not initialized");
 
     const contents: any[] = [{ text: fullMessage }];
@@ -2095,7 +2163,7 @@ ANSWER DIRECTLY:`;
       }
     }
 
-    const response = await this.client.models.generateContent({
+    const streamResult = await this.client.models.generateContentStream({
       model: model,
       contents: contents,
       config: {
@@ -2104,7 +2172,22 @@ ANSWER DIRECTLY:`;
       }
     });
 
-    return response.text || "";
+    // @ts-ignore
+    const stream = streamResult.stream || streamResult;
+
+    for await (const chunk of stream) {
+      let chunkText = "";
+      if (typeof chunk.text === 'function') {
+        chunkText = chunk.text();
+      } else if (typeof chunk.text === 'string') {
+        chunkText = chunk.text;
+      } else if (chunk.candidates?.[0]?.content?.parts?.[0]?.text) {
+        chunkText = chunk.candidates[0].content.parts[0].text;
+      }
+      if (chunkText) {
+        yield chunkText;
+      }
+    }
   }
 
   // --- OLLAMA STREAMING ---
@@ -2589,9 +2672,8 @@ ANSWER DIRECTLY:`;
   public async generateMeetingSummary(systemPrompt: string, context: string, groqSystemPrompt?: string): Promise<string> {
     console.log(`[LLMHelper] generateMeetingSummary called. Context length: ${context.length}`);
 
-    // Helper: Estimate tokens (crude approximation: 4 chars = 1 token)
-    const estimateTokens = (text: string) => Math.ceil(text.length / 4);
-    const tokenCount = estimateTokens(context);
+    const safeContext = this.trimTextToTokenBudget(context, SUMMARY_INPUT_TOKEN_BUDGET, true);
+    const tokenCount = this.estimateTokens(safeContext);
     console.log(`[LLMHelper] Estimated tokens: ${tokenCount}`);
 
     // ATTEMPT 1: Groq (if text-only and within limits)
@@ -2606,7 +2688,7 @@ ANSWER DIRECTLY:`;
             model: GROQ_MODEL,
             messages: [
               { role: "system", content: groqPrompt },
-              { role: "user", content: `Context:\n${context}` }
+              { role: "user", content: `Context:\n${safeContext}` }
             ],
             temperature: 0.3,
             max_tokens: 8192,
@@ -2632,7 +2714,7 @@ ANSWER DIRECTLY:`;
 
     // ATTEMPT 2: Gemini Flash (with 2 retries = 3 attempts total)
     console.log(`[LLMHelper] Attempting Gemini Flash for summary...`);
-    const contents = [{ text: `${systemPrompt}\n\nCONTEXT:\n${context}` }];
+    const contents = [{ text: `${systemPrompt}\n\nCONTEXT:\n${safeContext}` }];
 
     for (let attempt = 1; attempt <= 3; attempt++) {
       try {

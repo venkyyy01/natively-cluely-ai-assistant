@@ -1,8 +1,11 @@
+import type { CustomProviderPayload, FollowUpEmailInput, GeminiChatOptions, OverlayBounds, TranscriptTextEntry } from '../../shared/ipc'
+
 export interface ElectronAPI {
   updateContentDimensions: (dimensions: {
     width: number
     height: number
   }) => Promise<void>
+  setOverlayBounds: (bounds: OverlayBounds) => Promise<{ success: boolean }>
   onToggleExpand: (callback: () => void) => () => void
   getRecognitionLanguages: () => Promise<Record<string, any>>
   getScreenshots: () => Promise<Array<{ path: string; preview: string }>>
@@ -140,7 +143,7 @@ export interface ElectronAPI {
   onSessionReset: (callback: () => void) => () => void;
 
   // Streaming listeners
-  streamGeminiChat: (message: string, imagePaths?: string[], context?: string, options?: { skipSystemPrompt?: boolean }) => Promise<void>
+  streamGeminiChat: (message: string, imagePaths?: string[], context?: string, options?: GeminiChatOptions) => Promise<void>
   onGeminiStreamToken: (callback: (token: string) => void) => () => void
   onGeminiStreamDone: (callback: () => void) => () => void
   onGeminiStreamError: (callback: (error: string) => void) => () => void;
@@ -163,13 +166,13 @@ export interface ElectronAPI {
   seedDemo: () => Promise<{ success: boolean }>;
 
   // Custom Providers
-  saveCustomProvider: (provider: any) => Promise<{ success: boolean; id?: string; error?: string }>;
-  getCustomProviders: () => Promise<any[]>;
+  saveCustomProvider: (provider: CustomProviderPayload) => Promise<{ success: boolean; id?: string; error?: string }>;
+  getCustomProviders: () => Promise<CustomProviderPayload[]>;
   deleteCustomProvider: (id: string) => Promise<{ success: boolean; error?: string }>;
 
   // Follow-up Email
-  generateFollowupEmail: (input: any) => Promise<string>;
-  extractEmailsFromTranscript: (transcript: Array<{ text: string }>) => Promise<string[]>;
+  generateFollowupEmail: (input: FollowUpEmailInput) => Promise<string>;
+  extractEmailsFromTranscript: (transcript: TranscriptTextEntry[]) => Promise<string[]>;
   getCalendarAttendees: (eventId: string) => Promise<Array<{ email: string; name: string }>>;
   openMailto: (params: { to: string; subject: string; body: string }) => Promise<{ success: boolean; error?: string }>;
 
