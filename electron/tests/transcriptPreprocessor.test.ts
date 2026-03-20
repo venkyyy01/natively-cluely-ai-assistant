@@ -1,9 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { estimateTokens, preprocessTranscript } from '../rag/TranscriptPreprocessor';
+import { __testUtils, estimateTokens, preprocessTranscript } from '../rag/TranscriptPreprocessor';
 
 test('preprocessTranscript returns empty array for no segments', () => {
   assert.deepEqual(preprocessTranscript([]), []);
+  assert.deepEqual(__testUtils.mergeConsecutiveSpeakerSegments([]), []);
 });
 
 test('preprocessTranscript merges nearby speaker segments and annotates semantics', () => {

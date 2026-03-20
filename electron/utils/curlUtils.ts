@@ -1,4 +1,4 @@
-import curl2Json from "@bany/curl-to-json";
+const curl2Json: (curl: string) => any = require("@bany/curl-to-json");
 
 export interface CurlValidationResult {
     isValid: boolean;

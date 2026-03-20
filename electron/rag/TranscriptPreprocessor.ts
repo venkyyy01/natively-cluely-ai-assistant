@@ -152,6 +152,10 @@ function mergeConsecutiveSpeakerSegments(
     return merged;
 }
 
+export const __testUtils = {
+    mergeConsecutiveSpeakerSegments
+};
+
 /**
  * Main preprocessing pipeline
  * Takes raw transcript segments and returns cleaned, annotated segments

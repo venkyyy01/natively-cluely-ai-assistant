@@ -1,8 +1,15 @@
-import React from 'react';
 import { render, screen } from '@testing-library/react';
 import App from './App';
 
-test('renders application shell', () => {
+test('renders the default app shell content', () => {
   render(<App />);
-  expect(screen.getByRole('heading', { name: /natively/i })).toBeInTheDocument();
+
+  expect(screen.getByAltText('logo')).toBeInTheDocument();
+  expect(screen.getByText(/edit/i)).toBeInTheDocument();
+  expect(screen.getByText('src/App.tsx')).toBeInTheDocument();
+
+  const link = screen.getByRole('link', { name: /learn react/i });
+  expect(link).toHaveAttribute('href', 'https://reactjs.org');
+  expect(link).toHaveAttribute('target', '_blank');
+  expect(link).toHaveAttribute('rel', 'noopener noreferrer');
 });
