@@ -115,6 +115,39 @@ run_with_spinner() {
     rm -f "$log_file"
 }
 
+cleanup_stale_artifacts() {
+    local paths=(
+        "$SCRIPT_DIR/dist"
+        "$SCRIPT_DIR/dist-electron"
+        "$SCRIPT_DIR/release"
+        "$SCRIPT_DIR/node_modules/.cache"
+        "$SCRIPT_DIR/.vite"
+        "$SCRIPT_DIR/native-module/target"
+        "$SCRIPT_DIR/native-module/index.darwin-arm64.node"
+        "$SCRIPT_DIR/native-module/index.darwin-x64.node"
+        "$SCRIPT_DIR/native-module/index.linux-x64-gnu.node"
+        "$SCRIPT_DIR/native-module/index.win32-x64-msvc.node"
+        "$HOME/Library/Caches/electron-builder"
+        "$HOME/Library/Caches/electron"
+    )
+
+    info "Removing previous build artifacts and packaging caches..."
+    for path in "${paths[@]}"; do
+        if [[ -e "$path" ]]; then
+            rm -rf "$path"
+        fi
+    done
+
+    info "Removing stale packaged artifacts..."
+    rm -f "$SCRIPT_DIR"/*.dmg "$SCRIPT_DIR"/*.zip "$SCRIPT_DIR"/*.blockmap 2>/dev/null || true
+    rm -f "$RELEASE_DIR"/*.dmg "$RELEASE_DIR"/*.zip "$RELEASE_DIR"/*.blockmap "$RELEASE_DIR"/*.yml 2>/dev/null || true
+
+    info "Clearing npm cache for a truly fresh packaging pass..."
+    npm cache clean --force >/dev/null 2>&1 || warn "npm cache cleanup skipped"
+
+    success "Fresh-build cleanup complete"
+}
+
 print_banner() {
     echo ""
     echo -e "${NEON_VIOLET}${BOLD}################################################################################${NC}"
@@ -336,12 +369,11 @@ else
 fi
 
 # ╔═══════════════════════════════════════════════════════════════════╗
-# ║  Step 4: Build Production App                                    ║
+# ║  Step 4: Fresh Cleanup & Build Production App                    ║
 # ╚═══════════════════════════════════════════════════════════════════╝
-step "Step 4/8 — Building Production App"
+step "Step 4/8 — Fresh Cleanup & Building Production App"
 
-info "Cleaning previous builds..."
-npm run clean 2>/dev/null || true
+cleanup_stale_artifacts
 
 info "Running production build pipeline..."
 run_with_spinner "forging full production bundle" npm run app:build
@@ -417,16 +449,16 @@ APP_ASAR_UNPACKED_DIR="$APP_RESOURCES_DIR/app.asar.unpacked"
 require_file "$APP_ASAR_PATH" "Packaged app archive"
 require_asar_entry "$APP_ASAR_PATH" "/dist/index.html" "Packaged renderer entry"
 require_asar_entry "$APP_ASAR_PATH" "/dist-electron/electron/main.js" "Packaged Electron main entry"
-require_asar_entry "$APP_ASAR_PATH" "/native-module/index.js" "Packaged native module loader"
+require_asar_entry "$APP_ASAR_PATH" "/node_modules/natively-audio/index.js" "Packaged native module loader"
 require_asar_entry "$APP_ASAR_PATH" "/dist-electron/premium/electron/services/LicenseManager.js" "Packaged premium license manager"
 require_asar_entry "$APP_ASAR_PATH" "/dist-electron/premium/electron/knowledge/KnowledgeOrchestrator.js" "Packaged knowledge orchestrator"
 
 if [[ "$BUILD_ARCH" == "arm64" ]]; then
-    require_file "$APP_ASAR_UNPACKED_DIR/native-module/index.darwin-arm64.node" "Unpacked arm64 native audio binary"
+    require_file "$APP_ASAR_UNPACKED_DIR/node_modules/natively-audio/index.darwin-arm64.node" "Unpacked arm64 native audio binary"
     require_file "$APP_ASAR_UNPACKED_DIR/node_modules/better-sqlite3/build/Release/better_sqlite3.node" "Unpacked arm64 better-sqlite3 binary"
     require_file "$APP_ASAR_UNPACKED_DIR/node_modules/sqlite3/build/Release/node_sqlite3.node" "Unpacked arm64 sqlite3 binary"
 else
-    require_file "$APP_ASAR_UNPACKED_DIR/native-module/index.darwin-x64.node" "Unpacked x64 native audio binary"
+    require_file "$APP_ASAR_UNPACKED_DIR/node_modules/natively-audio/index.darwin-x64.node" "Unpacked x64 native audio binary"
     require_file "$APP_ASAR_UNPACKED_DIR/node_modules/better-sqlite3/build/Release/better_sqlite3.node" "Unpacked x64 better-sqlite3 binary"
     require_file "$APP_ASAR_UNPACKED_DIR/node_modules/sqlite3/build/Release/node_sqlite3.node" "Unpacked x64 sqlite3 binary"
 fi
