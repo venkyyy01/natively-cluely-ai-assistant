@@ -33,3 +33,37 @@ export interface TranscriptTextEntry {
 export interface GeminiChatOptions {
   skipSystemPrompt?: boolean;
 }
+
+export interface SettingsWindowCoords {
+  x?: number;
+  y?: number;
+}
+
+export type ProviderKind = 'gemini' | 'groq' | 'openai' | 'claude';
+
+export interface MeetingAudioMetadata {
+  inputDeviceId?: string | null;
+  outputDeviceId?: string | null;
+}
+
+export interface StartMeetingMetadata {
+  audio?: MeetingAudioMetadata;
+}
+
+export interface MeetingSummaryUpdates {
+  overview?: string;
+  actionItems?: string[];
+  keyPoints?: string[];
+  actionItemsTitle?: string;
+  keyPointsTitle?: string;
+}
+
+export interface UpdateMeetingSummaryPayload {
+  id: string;
+  updates: MeetingSummaryUpdates;
+}
+
+export interface UpdateMeetingTitlePayload {
+  id: string;
+  title: string;
+}

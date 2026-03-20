@@ -10,6 +10,7 @@ import {
 import { analytics } from '../lib/analytics/analytics.service';
 import { AboutSection } from './AboutSection';
 import { AIProvidersSettings } from './settings/AIProvidersSettings';
+import { AudioConfigSection } from './settings/AudioConfigSection';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useShortcuts } from '../hooks/useShortcuts';
 import { KeyRecorder } from './ui/KeyRecorder';
@@ -347,6 +348,7 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
     const [isThemeDropdownOpen, setIsThemeDropdownOpen] = useState(false);
     const [isAiLangDropdownOpen, setIsAiLangDropdownOpen] = useState(false);
     const [updateStatus, setUpdateStatus] = useState<'idle' | 'checking' | 'available' | 'uptodate' | 'error'>('idle');
+    const [generalSettingsError, setGeneralSettingsError] = useState('');
     const themeDropdownRef = React.useRef<HTMLDivElement>(null);
     const aiLangDropdownRef = React.useRef<HTMLDivElement>(null);
 
@@ -448,6 +450,13 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
 
     // Ref to hold the latest opacity value without triggering renders during drag
     const latestOpacityRef = React.useRef(overlayOpacity);
+
+    const showGeneralSettingsError = React.useCallback((message: string) => {
+        setGeneralSettingsError(message);
+        window.setTimeout(() => {
+            setGeneralSettingsError(current => current === message ? '' : current);
+        }, 4000);
+    }, []);
 
     const handleOpacityChange = (val: number) => {
         // DOM-direct updates for 0-lag 60fps drag (bypasses React reconciliation)
@@ -720,6 +729,49 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
     const [hasStoredSonioxKey, setHasStoredSonioxKey] = useState(false);
     const [isSttDropdownOpen, setIsSttDropdownOpen] = useState(false);
     const sttDropdownRef = React.useRef<HTMLDivElement>(null);
+    const sttRequestIdRef = React.useRef(0);
+    const sttStatusTimerRef = React.useRef<number | null>(null);
+    const sttSavedTimerRef = React.useRef<number | null>(null);
+
+    const nextSttRequestId = React.useCallback(() => {
+        sttRequestIdRef.current += 1;
+        return sttRequestIdRef.current;
+    }, []);
+
+    const isCurrentSttRequest = React.useCallback((requestId: number) => {
+        return sttRequestIdRef.current === requestId;
+    }, []);
+
+    const clearSttTimers = React.useCallback(() => {
+        if (sttStatusTimerRef.current) {
+            window.clearTimeout(sttStatusTimerRef.current);
+            sttStatusTimerRef.current = null;
+        }
+        if (sttSavedTimerRef.current) {
+            window.clearTimeout(sttSavedTimerRef.current);
+            sttSavedTimerRef.current = null;
+        }
+    }, []);
+
+    const scheduleSttStatusReset = React.useCallback(() => {
+        if (sttStatusTimerRef.current) {
+            window.clearTimeout(sttStatusTimerRef.current);
+        }
+        sttStatusTimerRef.current = window.setTimeout(() => {
+            setSttTestStatus('idle');
+            sttStatusTimerRef.current = null;
+        }, 3000);
+    }, []);
+
+    const scheduleSttSavedReset = React.useCallback(() => {
+        if (sttSavedTimerRef.current) {
+            window.clearTimeout(sttSavedTimerRef.current);
+        }
+        sttSavedTimerRef.current = window.setTimeout(() => {
+            setSttSaved(false);
+            sttSavedTimerRef.current = null;
+        }, 2000);
+    }, []);
 
     // Close STT dropdown when clicking outside
     useEffect(() => {
@@ -733,6 +785,13 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
         }
         return () => document.removeEventListener('mousedown', handleClickOutside);
     }, [isSttDropdownOpen]);
+
+    useEffect(() => {
+        return () => {
+            clearSttTimers();
+            sttRequestIdRef.current += 1;
+        };
+    }, [clearSttTimers]);
 
     // Load STT settings on mount
     useEffect(() => {
@@ -763,10 +822,14 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
     }, [isOpen]);
 
     const handleSttProviderChange = async (provider: 'google' | 'groq' | 'openai' | 'deepgram' | 'elevenlabs' | 'azure' | 'ibmwatson' | 'soniox') => {
+        nextSttRequestId();
+        clearSttTimers();
         setSttProvider(provider);
         setIsSttDropdownOpen(false);
         setSttTestStatus('idle');
         setSttTestError('');
+        setSttSaving(false);
+        setSttSaved(false);
         try {
             // @ts-ignore
             await window.electronAPI?.setSttProvider?.(provider);
@@ -776,7 +839,10 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
     };
 
     const handleSttKeySubmit = async (provider: 'groq' | 'openai' | 'deepgram' | 'elevenlabs' | 'azure' | 'ibmwatson' | 'soniox', key: string) => {
-        if (!key.trim()) return;
+        if (!key.trim() || sttSaving) return;
+
+        const requestId = nextSttRequestId();
+        clearSttTimers();
 
         // Auto-test before saving
         setSttSaving(true);
@@ -791,16 +857,17 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
                 provider === 'azure' ? sttAzureRegion : undefined
             );
 
+            if (!isCurrentSttRequest(requestId)) return;
+
             if (!testResult?.success) {
                 setSttTestStatus('error');
                 setSttTestError(testResult?.error || 'Validation failed. Key not saved.');
-                setSttSaving(false);
                 return; // Stop save
             }
 
             // If success, proceed to save
             setSttTestStatus('success');
-            setTimeout(() => setSttTestStatus('idle'), 3000);
+            scheduleSttStatusReset();
 
             if (provider === 'groq') {
                 // @ts-ignore
@@ -824,6 +891,9 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
                 // @ts-ignore
                 await window.electronAPI?.setDeepgramApiKey?.(key.trim());
             }
+
+            if (!isCurrentSttRequest(requestId)) return;
+
             if (provider === 'groq') setHasStoredSttGroqKey(true);
             else if (provider === 'openai') setHasStoredSttOpenaiKey(true);
             else if (provider === 'elevenlabs') setHasStoredElevenLabsKey(true);
@@ -833,13 +903,16 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
             else setHasStoredDeepgramKey(true);
 
             setSttSaved(true);
-            setTimeout(() => setSttSaved(false), 2000);
+            scheduleSttSavedReset();
         } catch (e: any) {
+            if (!isCurrentSttRequest(requestId)) return;
             console.error(`Failed to save ${provider} STT key:`, e);
             setSttTestStatus('error');
             setSttTestError(e.message || 'Validation failed');
         } finally {
-            setSttSaving(false);
+            if (isCurrentSttRequest(requestId)) {
+                setSttSaving(false);
+            }
         }
     };
 
@@ -908,12 +981,15 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
 
     const handleTestSttConnection = async () => {
         if (sttProvider === 'google') return;
+        const requestId = nextSttRequestId();
+        clearSttTimers();
+        const providerUnderTest = sttProvider;
         const keyMap: Record<string, string> = {
             groq: sttGroqKey, openai: sttOpenaiKey, deepgram: sttDeepgramKey,
             elevenlabs: sttElevenLabsKey, azure: sttAzureKey, ibmwatson: sttIbmKey,
             soniox: sttSonioxKey,
         };
-        const keyToTest = keyMap[sttProvider] || '';
+        const keyToTest = keyMap[providerUnderTest] || '';
         if (!keyToTest.trim()) {
             setSttTestStatus('error');
             setSttTestError('Please enter an API key first');
@@ -925,18 +1001,22 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
         try {
             // @ts-ignore
             const result = await window.electronAPI?.testSttConnection?.(
-                sttProvider,
+                providerUnderTest,
                 keyToTest.trim(),
-                sttProvider === 'azure' ? sttAzureRegion : undefined
+                providerUnderTest === 'azure' ? sttAzureRegion : undefined
             );
+
+            if (!isCurrentSttRequest(requestId)) return;
+
             if (result?.success) {
                 setSttTestStatus('success');
-                setTimeout(() => setSttTestStatus('idle'), 3000);
+                scheduleSttStatusReset();
             } else {
                 setSttTestStatus('error');
                 setSttTestError(result?.error || 'Connection failed');
             }
         } catch (e: any) {
+            if (!isCurrentSttRequest(requestId)) return;
             setSttTestStatus('error');
             setSttTestError(e.message || 'Test failed');
         }
@@ -958,6 +1038,43 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
             micLevelBarRef.current.style.width = `${Math.max(0, Math.min(100, level))}%`;
         }
     }, []);
+
+    const handleTestSound = async () => {
+        try {
+            const AudioContext = window.AudioContext || (window as any).webkitAudioContext;
+            if (!AudioContext) {
+                console.error("Web Audio API not supported");
+                return;
+            }
+
+            const ctx = new AudioContext();
+            if (ctx.state === 'suspended') {
+                await ctx.resume();
+            }
+
+            const oscillator = ctx.createOscillator();
+            const gainNode = ctx.createGain();
+            oscillator.connect(gainNode);
+            gainNode.connect(ctx.destination);
+            oscillator.type = 'sine';
+            oscillator.frequency.setValueAtTime(523.25, ctx.currentTime);
+            gainNode.gain.setValueAtTime(0.5, ctx.currentTime);
+            gainNode.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 1.0);
+
+            if (selectedOutput && (ctx as any).setSinkId) {
+                try {
+                    await (ctx as any).setSinkId(selectedOutput);
+                } catch (e) {
+                    console.warn("Error setting sink for AudioContext", e);
+                }
+            }
+
+            oscillator.start();
+            oscillator.stop(ctx.currentTime + 1.0);
+        } catch (e) {
+            console.error("Error playing test sound", e);
+        }
+    };
 
     // Load stored credentials on mount
 
@@ -1312,12 +1429,19 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
                                                 </p>
                                             </div>
                                             <div
-                                                onClick={() => {
+                                                onClick={async () => {
                                                     const newState = !isUndetectable;
                                                     setIsUndetectable(newState);
-                                                    window.electronAPI?.setUndetectable(newState);
-                                                    // Analytics: Undetectable Mode Toggle
-                                                    analytics.trackModeSelected(newState ? 'undetectable' : 'overlay');
+                                                    try {
+                                                        const result = await window.electronAPI?.setUndetectable(newState);
+                                                        if (!result?.success) {
+                                                            throw new Error(result?.error || 'Unable to update stealth mode');
+                                                        }
+                                                        analytics.trackModeSelected(newState ? 'undetectable' : 'overlay');
+                                                    } catch (error: any) {
+                                                        setIsUndetectable(!newState);
+                                                        showGeneralSettingsError(error?.message || 'Unable to update stealth mode');
+                                                    }
                                                 }}
                                                 className={`w-11 h-6 rounded-full relative transition-colors ${isUndetectable ? 'bg-accent-primary' : 'bg-bg-toggle-switch border border-border-muted'}`}
                                             >
@@ -1330,6 +1454,12 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
                                             <p className="text-xs text-text-secondary mb-2">Customize how Natively works for you</p>
 
                                             <div className="space-y-4">
+                                                {generalSettingsError && (
+                                                    <div className="rounded-lg border border-red-500/20 bg-red-500/10 px-3 py-2 text-xs text-red-300">
+                                                        {generalSettingsError}
+                                                    </div>
+                                                )}
+
                                                 {/* Open at Login */}
                                                 <div className="flex items-center justify-between">
                                                     <div className="flex items-center gap-4">
@@ -1342,10 +1472,18 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
                                                         </div>
                                                     </div>
                                                     <div
-                                                        onClick={() => {
+                                                        onClick={async () => {
                                                             const newState = !openOnLogin;
                                                             setOpenOnLogin(newState);
-                                                            window.electronAPI?.setOpenAtLogin(newState);
+                                                            try {
+                                                                const result = await window.electronAPI?.setOpenAtLogin(newState);
+                                                                if (!result?.success) {
+                                                                    throw new Error(result?.error || 'Unable to update login preference');
+                                                                }
+                                                            } catch (error: any) {
+                                                                setOpenOnLogin(!newState);
+                                                                showGeneralSettingsError(error?.message || 'Unable to update login preference');
+                                                            }
                                                         }}
                                                         className={`w-11 h-6 rounded-full relative transition-colors ${openOnLogin ? 'bg-accent-primary' : 'bg-bg-toggle-switch border border-border-muted'}`}
                                                     >
@@ -1561,7 +1699,7 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
                                                         min={0.35}
                                                         max={1.0}
                                                         step={0.01}
-                                                        defaultValue={overlayOpacity}
+                                                        value={overlayOpacity}
                                                         onChange={(e) => handleOpacityChange(parseFloat(e.target.value))}
                                                         onPointerDown={startPreviewingOpacity}
                                                         onPointerUp={stopPreviewingOpacity}
@@ -2287,7 +2425,7 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
                                                             { id: 'google', label: 'Google Cloud', badge: googleServiceAccountPath ? 'Saved' : null, recommended: true, desc: 'gRPC streaming via Service Account', color: 'blue', icon: <Mic size={14} /> },
                                                             { id: 'groq', label: 'Groq Whisper', badge: hasStoredSttGroqKey ? 'Saved' : null, recommended: true, desc: 'Ultra-fast REST transcription', color: 'orange', icon: <Mic size={14} /> },
                                                             { id: 'openai', label: 'OpenAI Whisper', badge: hasStoredSttOpenaiKey ? 'Saved' : null, desc: 'OpenAI-compatible Whisper API', color: 'green', icon: <Mic size={14} /> },
-                                                            { id: 'deepgram', label: 'Deepgram Nova-2', badge: hasStoredDeepgramKey ? 'Saved' : null, recommended: true, desc: 'High-accuracy REST transcription', color: 'purple', icon: <Mic size={14} /> },
+                                                            { id: 'deepgram', label: 'Deepgram Nova-3', badge: hasStoredDeepgramKey ? 'Saved' : null, recommended: true, desc: 'High-accuracy REST transcription', color: 'purple', icon: <Mic size={14} /> },
                                                             { id: 'elevenlabs', label: 'ElevenLabs Scribe', badge: hasStoredElevenLabsKey ? 'Saved' : null, desc: 'Scribe v2 Realtime API', color: 'teal', icon: <Mic size={14} /> },
                                                             { id: 'azure', label: 'Azure Speech', badge: hasStoredAzureKey ? 'Saved' : null, desc: 'Microsoft Cognitive Services STT', color: 'cyan', icon: <Mic size={14} /> },
                                                             { id: 'ibmwatson', label: 'IBM Watson', badge: hasStoredIbmWatsonKey ? 'Saved' : null, desc: 'IBM Watson cloud STT service', color: 'indigo', icon: <Mic size={14} /> },
@@ -2566,131 +2704,30 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
 
                                     <div className="h-px bg-border-subtle" />
 
-                                    {/* ── Audio Configuration Section ── */}
-                                    <div>
-                                        <h3 className="text-lg font-bold text-text-primary mb-1">Audio Configuration</h3>
-                                        <p className="text-xs text-text-secondary mb-5">Manage input and output devices.</p>
-
-                                        <div className="space-y-4">
-                                            <CustomSelect
-                                                label="Input Device"
-                                                icon={<Mic size={16} />}
-                                                value={selectedInput}
-                                                options={inputDevices}
-                                                onChange={(id) => {
-                                                    setSelectedInput(id);
-                                                    localStorage.setItem('preferredInputDeviceId', id);
-                                                }}
-                                                placeholder="Default Microphone"
-                                            />
-
-                                            <div>
-                                                <div className="flex justify-between text-xs text-text-secondary mb-2 px-1">
-                                                    <span>Input Level</span>
-                                                </div>
-                                                <div className="h-1.5 bg-bg-input rounded-full overflow-hidden">
-                                                    <div
-                                                        ref={micLevelBarRef}
-                                                        className="h-full bg-green-500 transition-all duration-100 ease-out"
-                                                        style={{ width: '0%' }}
-                                                    />
-                                                </div>
-                                            </div>
-
-                                            <div className="h-px bg-border-subtle my-2" />
-
-                                            <CustomSelect
-                                                label="Output Device"
-                                                icon={<Speaker size={16} />}
-                                                value={selectedOutput}
-                                                options={outputDevices}
-                                                onChange={(id) => {
-                                                    setSelectedOutput(id);
-                                                    localStorage.setItem('preferredOutputDeviceId', id);
-                                                }}
-                                                placeholder="Default Speakers"
-                                            />
-
-                                            <div className="flex justify-end">
-                                                <button
-                                                    onClick={async () => {
-                                                        try {
-                                                            const AudioContext = window.AudioContext || (window as any).webkitAudioContext;
-                                                            if (!AudioContext) {
-                                                                console.error("Web Audio API not supported");
-                                                                return;
-                                                            }
-
-                                                            const ctx = new AudioContext();
-
-                                                            if (ctx.state === 'suspended') {
-                                                                await ctx.resume();
-                                                            }
-
-                                                            const oscillator = ctx.createOscillator();
-                                                            const gainNode = ctx.createGain();
-
-                                                            oscillator.connect(gainNode);
-                                                            gainNode.connect(ctx.destination);
-
-                                                            oscillator.type = 'sine';
-                                                            oscillator.frequency.setValueAtTime(523.25, ctx.currentTime);
-                                                            gainNode.gain.setValueAtTime(0.5, ctx.currentTime);
-                                                            gainNode.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 1.0);
-
-                                                            if (selectedOutput && (ctx as any).setSinkId) {
-                                                                try {
-                                                                    await (ctx as any).setSinkId(selectedOutput);
-                                                                } catch (e) {
-                                                                    console.warn("Error setting sink for AudioContext", e);
-                                                                }
-                                                            }
-
-                                                            oscillator.start();
-                                                            oscillator.stop(ctx.currentTime + 1.0);
-                                                        } catch (e) {
-                                                            console.error("Error playing test sound", e);
-                                                        }
-                                                    }}
-                                                    className="text-xs bg-bg-input hover:bg-bg-elevated text-text-primary px-3 py-1.5 rounded-md transition-colors flex items-center gap-2"
-                                                >
-                                                    <Speaker size={12} /> Test Sound
-                                                </button>
-                                            </div>
-
-                                            <div className="h-px bg-border-subtle my-2" />
-
-                                            {/* SCK Backend Toggle */}
-                                            <div className="bg-amber-500/5 rounded-xl border border-amber-500/20 p-4">
-                                                <div className="flex items-center justify-between">
-                                                    <div className="flex items-start gap-3">
-                                                        <div className="mt-0.5 p-1.5 rounded-lg bg-amber-500/10 text-amber-500">
-                                                            <FlaskConical size={18} />
-                                                        </div>
-                                                        <div>
-                                                            <div className="flex items-center gap-2 mb-0.5">
-                                                                <h3 className="text-sm font-bold text-text-primary">SCK Backend</h3>
-                                                                <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-indigo-500/20 text-indigo-400 uppercase tracking-wide">Alternative</span>
-                                                            </div>
-                                                            <p className="text-xs text-text-secondary leading-relaxed max-w-[300px]">
-                                                                Use the ScreenCaptureKit backend. An optimized alternative to CoreAudio if you experience any capture issues.
-                                                            </p>
-                                                        </div>
-                                                    </div>
-                                                    <div
-                                                        onClick={() => {
-                                                            const newState = !useExperimentalSck;
-                                                            setUseExperimentalSck(newState);
-                                                            window.localStorage.setItem('useExperimentalSckBackend', newState ? 'true' : 'false');
-                                                        }}
-                                                        className={`w-11 h-6 rounded-full relative transition-colors shrink-0 ${useExperimentalSck ? 'bg-amber-500' : 'bg-bg-toggle-switch border border-border-muted'}`}
-                                                    >
-                                                        <div className={`absolute top-1 left-1 w-4 h-4 rounded-full bg-white transition-transform ${useExperimentalSck ? 'translate-x-5' : 'translate-x-0'}`} />
-                                                    </div>
-                                                </div>
-                                            </div>
-                                        </div>
-                                    </div>
+                                    <AudioConfigSection
+                                        CustomSelect={CustomSelect}
+                                        inputDevices={inputDevices}
+                                        outputDevices={outputDevices}
+                                        selectedInput={selectedInput}
+                                        selectedOutput={selectedOutput}
+                                        onInputChange={(id) => {
+                                            setSelectedInput(id);
+                                            localStorage.setItem('preferredInputDeviceId', id);
+                                        }}
+                                        onOutputChange={(id) => {
+                                            setSelectedOutput(id);
+                                            localStorage.setItem('preferredOutputDeviceId', id);
+                                        }}
+                                        micLevelBarRef={micLevelBarRef}
+                                        selectedOutputSupportsSink={Boolean(selectedOutput)}
+                                        onTestSound={handleTestSound}
+                                        useExperimentalSck={useExperimentalSck}
+                                        onToggleExperimentalSck={() => {
+                                            const newState = !useExperimentalSck;
+                                            setUseExperimentalSck(newState);
+                                            window.localStorage.setItem('useExperimentalSckBackend', newState ? 'true' : 'false');
+                                        }}
+                                    />
                                 </div>
                             )}
 

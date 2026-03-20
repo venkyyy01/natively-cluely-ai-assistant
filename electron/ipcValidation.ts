@@ -1,5 +1,5 @@
 import { z, type ZodIssue } from 'zod';
-import type { FollowUpMeetingType, FollowUpTone } from '../shared/ipc';
+import type { FollowUpMeetingType, FollowUpTone, ProviderKind } from '../shared/ipc';
 
 const boundedString = (max: number) => z.string().trim().min(1).max(max);
 const optionalBoundedString = (max: number) => z.string().trim().max(max).optional();
@@ -28,6 +28,36 @@ export const ipcSchemas = {
     tone: z.enum(['friendly', 'neutral', 'formal'] as [FollowUpTone, ...FollowUpTone[]]).optional(),
   }).strict(),
   transcriptEntries: z.array(z.object({ text: boundedString(10000) }).strict()).max(2000),
+  settingsWindowCoords: z.object({
+    x: z.number().finite().optional(),
+    y: z.number().finite().optional(),
+  }).strict(),
+  providerPreferredModel: z.tuple([
+    z.enum(['gemini', 'groq', 'openai', 'claude'] as [ProviderKind, ...ProviderKind[]]),
+    boundedString(256),
+  ]),
+  recognitionLanguage: boundedString(64),
+  aiResponseLanguage: boundedString(64),
+  startMeetingMetadata: z.object({
+    audio: z.object({
+      inputDeviceId: z.string().trim().max(256).nullable().optional(),
+      outputDeviceId: z.string().trim().max(256).nullable().optional(),
+    }).strict().optional(),
+  }).strict().optional(),
+  updateMeetingSummaryPayload: z.object({
+    id: boundedString(128),
+    updates: z.object({
+      overview: z.string().max(20000).optional(),
+      actionItems: z.array(z.string().trim().max(500)).max(100).optional(),
+      keyPoints: z.array(z.string().trim().max(500)).max(100).optional(),
+      actionItemsTitle: z.string().trim().max(120).optional(),
+      keyPointsTitle: z.string().trim().max(120).optional(),
+    }).strict(),
+  }).strict(),
+  updateMeetingTitlePayload: z.object({
+    id: boundedString(128),
+    title: boundedString(300),
+  }).strict(),
   openMailtoInput: z.object({
     to: z.string().trim().max(2000),
     subject: z.string().max(500),

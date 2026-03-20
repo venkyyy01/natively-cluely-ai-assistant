@@ -31,20 +31,24 @@ export class ElevenLabsStreamingSTT extends EventEmitter {
     
     private debugMessageCount = 0;
 
+    private ensureDebugWriteStream(): void {
+        if (process.env.NODE_ENV !== 'development' || this.debugWriteStream) return;
+
+        try {
+            const debugPath = path.join(os.homedir(), 'elevenlabs_debug.raw');
+            this.debugWriteStream = fs.createWriteStream(debugPath);
+            console.log(`[ElevenLabsStreaming] Audio debug stream opened at: ${debugPath}`);
+        } catch (e) {
+            console.error('[ElevenLabsStreaming] Failed to open debug stream:', e);
+        }
+    }
+
     constructor(apiKey: string) {
         super();
         this.apiKey = apiKey;
         
         // Open a debug file only in development to avoid disk fill-up in production
-        if (process.env.NODE_ENV === 'development') {
-            try {
-                const debugPath = path.join(os.homedir(), 'elevenlabs_debug.raw');
-                this.debugWriteStream = fs.createWriteStream(debugPath);
-                console.log(`[ElevenLabsStreaming] Audio debug stream opened at: ${debugPath}`);
-            } catch (e) {
-                console.error('[ElevenLabsStreaming] Failed to open debug stream:', e);
-            }
-        }
+        this.ensureDebugWriteStream();
     }
 
     public setSampleRate(rate: number): void {
@@ -82,6 +86,7 @@ export class ElevenLabsStreamingSTT extends EventEmitter {
         if (this.isConnecting) return; // Already mid-connect (prevents double-connect race)
         this.shouldReconnect = true;
         this.reconnectAttempts = 0;
+        this.ensureDebugWriteStream();
         this.connect();
     }
 
@@ -221,8 +226,10 @@ export class ElevenLabsStreamingSTT extends EventEmitter {
                 'xi-api-key': this.apiKey,
             }
         });
+        const ws = this.ws;
 
-        this.ws.on('open', () => {
+        ws.on('open', () => {
+            if (this.ws !== ws) return;
             this.isActive = true;
             this.isConnecting = false;
             this.reconnectAttempts = 0;
@@ -232,7 +239,8 @@ export class ElevenLabsStreamingSTT extends EventEmitter {
             // We'll flush the buffer in 'session_started'.
         });
 
-        this.ws.on('message', (data: WebSocket.RawData) => {
+        ws.on('message', (data: WebSocket.RawData) => {
+            if (this.ws !== ws) return;
             try {
                 const rawStr = data.toString();
                 if (this.debugMessageCount < 10) {
@@ -281,11 +289,13 @@ export class ElevenLabsStreamingSTT extends EventEmitter {
 
                     case 'auth_error':
                         console.error('[ElevenLabsStreaming] Auth error — check key scope/permissions in ElevenLabs dashboard:', msg);
-                        this.emit('error', msg);
+                        this.isActive = false;
+                        this.isSessionReady = false;
+                        this.emit('error', new Error(msg?.message || msg?.error?.message || 'ElevenLabs authentication failed'));
                         // Stop reconnection loops for auth failures to save API credits
                         this.shouldReconnect = false;
-                        if (this.ws) {
-                            this.ws.close();
+                        if (this.ws === ws) {
+                            ws.close();
                         }
                         break;
 
@@ -293,7 +303,7 @@ export class ElevenLabsStreamingSTT extends EventEmitter {
                         // Log other messages for debugging (e.g. metadata or unknowns)
                         if (msg.error) {
                             console.error('[ElevenLabsStreaming] Server error:', msg.error);
-                            this.emit('error', msg.error);
+                            this.emit('error', new Error(msg.error?.message || 'ElevenLabs server error'));
                         } else {
                             console.log('[ElevenLabsStreaming] Received message:', msgType, Object.keys(msg));
                         }
@@ -303,9 +313,10 @@ export class ElevenLabsStreamingSTT extends EventEmitter {
             }
         });
 
-        this.ws.on('close', (code, reason) => {
-            // Null out the ws reference immediately to prevent stale reuse
-            this.ws = null;
+        ws.on('close', (code, reason) => {
+            if (this.ws === ws) {
+                this.ws = null;
+            }
             this.isConnecting = false;
             this.isSessionReady = false;
             console.log(`[ElevenLabsStreaming] Closed: code=${code} reason=${reason}`);
@@ -317,7 +328,8 @@ export class ElevenLabsStreamingSTT extends EventEmitter {
             }
         });
 
-        this.ws.on('error', (err) => {
+        ws.on('error', (err) => {
+            if (this.ws !== ws) return;
             console.error('[ElevenLabsStreaming] WS error:', err);
             this.emit('error', err);
         });

@@ -89,6 +89,7 @@ export class OpenAIStreamingSTT extends EventEmitter {
     private connectionTimeoutTimer: NodeJS.Timeout | null = null;
     private sessionSetupTimer: NodeJS.Timeout | null = null;
     private isSessionReady = false;     // set after transcription_session.created
+    private wsCloseHandled = false;
 
     // Audio batching state
     private pcmAccumulator: Int16Array[] = [];
@@ -246,6 +247,7 @@ export class OpenAIStreamingSTT extends EventEmitter {
         if (this.isConnecting || !this.shouldReconnect) return;
         this.isConnecting  = true;
         this.isSessionReady = false;
+        this.wsCloseHandled = false;
 
         const model: WsModel = WS_MODELS[this.wsModelIndex] ?? WS_MODELS[0];
         console.log(`[OpenAIStreaming] Connecting WebSocket (model=${model}, attempt=${this.reconnectAttempts + 1})...`);
@@ -339,6 +341,10 @@ export class OpenAIStreamingSTT extends EventEmitter {
     }
 
     private _handleWsClose(code: number, reason: Buffer): void {
+        if (this.wsCloseHandled) {
+            return;
+        }
+        this.wsCloseHandled = true;
         this.isConnecting   = false;
         this.isSessionReady = false;
         this._clearKeepAlive();

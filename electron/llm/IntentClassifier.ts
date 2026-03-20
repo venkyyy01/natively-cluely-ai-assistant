@@ -6,8 +6,8 @@
 //   1. Regex fast-path (< 1ms) for common patterns
 //   2. Local SLM fallback (zero-shot, ~10-50ms) for messy/ambiguous speech
 
-import path from 'path';
 import { app } from 'electron';
+import { resolveBundledModelsPath } from '../utils/modelPaths';
 
 export type ConversationIntent =
     | 'clarification'      // "Can you explain that?"
@@ -100,9 +100,7 @@ class ZeroShotClassifier {
                 const { pipeline, env } = await new Function("return import('@xenova/transformers')")();
 
                 env.allowRemoteModels = false;
-                env.localModelPath = app.isPackaged
-                    ? path.join(process.resourcesPath, 'models')
-                    : path.join(__dirname, '../../resources/models');
+                env.localModelPath = resolveBundledModelsPath();
 
                 console.log('[IntentClassifier] Loading zero-shot classifier (mobilebert-uncased-mnli)...');
                 this.pipe = await pipeline(

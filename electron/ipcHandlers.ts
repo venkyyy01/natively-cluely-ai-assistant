@@ -6,10 +6,10 @@ import { GEMINI_FLASH_MODEL } from "./IntelligenceManager"
 import { DatabaseManager } from "./db/DatabaseManager"; // Import Database Manager
 import * as path from "path";
 import * as fs from "fs";
-import { AudioDevices } from "./audio/AudioDevices";
 import { ipcSchemas, parseIpcInput } from "./ipcValidation";
+import { registerMeetingHandlers } from "./ipc/registerMeetingHandlers";
+import { registerSettingsHandlers } from "./ipc/registerSettingsHandlers";
 
-import { RECOGNITION_LANGUAGES, AI_RESPONSE_LANGUAGES } from "./config/languages"
 
 export function initializeIpcHandlers(appState: AppState): void {
   const safeHandle = (channel: string, listener: (event: any, ...args: any[]) => Promise<any> | any) => {
@@ -77,30 +77,7 @@ export function initializeIpcHandlers(appState: AppState): void {
     return 'open-build';
   });
 
-  safeHandle("get-recognition-languages", async () => {
-    return RECOGNITION_LANGUAGES;
-  });
-
-  safeHandle("get-ai-response-languages", async () => {
-    return AI_RESPONSE_LANGUAGES;
-  });
-
-  safeHandle("set-ai-response-language", async (_, language: string) => {
-    const { CredentialsManager } = require('./services/CredentialsManager');
-    CredentialsManager.getInstance().setAiResponseLanguage(language);
-    appState.processingHelper?.getLLMHelper?.().setAiResponseLanguage?.(language);
-    return { success: true };
-  });
-
-  safeHandle("get-stt-language", async () => {
-    const { CredentialsManager } = require('./services/CredentialsManager');
-    return CredentialsManager.getInstance().getSttLanguage();
-  });
-
-  safeHandle("get-ai-response-language", async () => {
-    const { CredentialsManager } = require('./services/CredentialsManager');
-    return CredentialsManager.getInstance().getAiResponseLanguage();
-  });
+  registerSettingsHandlers({ appState, safeHandle, safeHandleValidated });
   safeHandle(
     "update-content-dimensions",
     async (event, { width, height }: { width: number; height: number }) => {
@@ -166,7 +143,7 @@ export function initializeIpcHandlers(appState: AppState): void {
   safeHandle("get-screenshots", async () => {
     // console.log({ view: appState.getView() })
     try {
-      let previews = []
+      let previews: Array<{ path: string; preview: string }> = []
       if (appState.getView() === "queue") {
         previews = await Promise.all(
           appState.getScreenshotQueue().map(async (path) => ({
@@ -417,49 +394,6 @@ export function initializeIpcHandlers(appState: AppState): void {
     appState.centerAndShowWindow()
   })
 
-  // Settings Window
-  safeHandle("toggle-settings-window", (event, { x, y } = {}) => {
-    appState.settingsWindowHelper.toggleWindow(x, y)
-  })
-
-  safeHandle("close-settings-window", () => {
-    appState.settingsWindowHelper.closeWindow()
-  })
-
-
-
-  safeHandle("set-undetectable", async (_, state: boolean) => {
-    appState.setUndetectable(state)
-    return { success: true }
-  })
-
-  safeHandle("set-disguise", async (_, mode: 'terminal' | 'settings' | 'activity' | 'none') => {
-    appState.setDisguise(mode)
-    return { success: true }
-  })
-
-  safeHandle("get-undetectable", async () => {
-    return appState.getUndetectable()
-  })
-
-  safeHandle("get-disguise", async () => {
-    return appState.getDisguise()
-  })
-
-  safeHandle("set-open-at-login", async (_, openAtLogin: boolean) => {
-    app.setLoginItemSettings({
-      openAtLogin,
-      openAsHidden: false,
-      path: app.getPath('exe') // Explicitly point to executable for production reliability
-    });
-    return { success: true };
-  });
-
-  safeHandle("get-open-at-login", async () => {
-    const settings = app.getLoginItemSettings();
-    return settings.openAtLogin;
-  });
-
   // LLM Model Management Handlers
   safeHandle("get-current-llm-config", async () => {
     try {
@@ -702,7 +636,7 @@ export function initializeIpcHandlers(appState: AppState): void {
     }
   });
 
-  safeHandle("save-curl-provider", async (_, provider: any) => {
+  safeHandleValidated("save-curl-provider", (args) => [parseIpcInput(ipcSchemas.customProvider, args[0], 'save-curl-provider')] as const, async (_, provider) => {
     try {
       const { CredentialsManager } = require('./services/CredentialsManager');
       CredentialsManager.getInstance().saveCurlProvider(provider);
@@ -816,7 +750,7 @@ export function initializeIpcHandlers(appState: AppState): void {
     }
   });
 
-  safeHandle("set-provider-preferred-model", async (_, provider: 'gemini' | 'groq' | 'openai' | 'claude', modelId: string) => {
+  safeHandleValidated("set-provider-preferred-model", (args) => parseIpcInput(ipcSchemas.providerPreferredModel, args, 'set-provider-preferred-model'), async (_, provider, modelId) => {
     try {
       const { CredentialsManager } = require('./services/CredentialsManager');
       CredentialsManager.getInstance().setPreferredModel(provider, modelId);
@@ -1329,101 +1263,7 @@ export function initializeIpcHandlers(appState: AppState): void {
   safeHandle("native-audio-status", async () => {
     return appState.getNativeAudioStatus();
   });
-
-  safeHandle("get-input-devices", async () => {
-    return AudioDevices.getInputDevices();
-  });
-
-  safeHandle("get-output-devices", async () => {
-    return AudioDevices.getOutputDevices();
-  });
-
-  safeHandle("start-audio-test", async (event, deviceId?: string) => {
-    appState.startAudioTest(deviceId);
-    return { success: true };
-  });
-
-  safeHandle("stop-audio-test", async () => {
-    appState.stopAudioTest();
-    return { success: true };
-  });
-
-  safeHandle("set-recognition-language", async (_, key: string) => {
-    appState.setRecognitionLanguage(key);
-    return { success: true };
-  });
-
-  // ==========================================
-  // Meeting Lifecycle Handlers
-  // ==========================================
-
-  safeHandle("start-meeting", async (event, metadata?: any) => {
-    try {
-      await appState.startMeeting(metadata);
-      return { success: true };
-    } catch (error: any) {
-      console.error("Error starting meeting:", error);
-      return { success: false, error: error.message };
-    }
-  });
-
-  safeHandle("end-meeting", async () => {
-    try {
-      await appState.endMeeting();
-      return { success: true };
-    } catch (error: any) {
-      console.error("Error ending meeting:", error);
-      return { success: false, error: error.message };
-    }
-  });
-
-  safeHandle("get-recent-meetings", async () => {
-    // Fetch from SQLite (limit 50)
-    return DatabaseManager.getInstance().getRecentMeetings(50);
-  });
-
-  safeHandle("get-meeting-details", async (event, id) => {
-    // Helper to fetch full details
-    return DatabaseManager.getInstance().getMeetingDetails(id);
-  });
-
-  safeHandle("update-meeting-title", async (_, { id, title }: { id: string; title: string }) => {
-    return DatabaseManager.getInstance().updateMeetingTitle(id, title);
-  });
-
-  safeHandle("update-meeting-summary", async (_, { id, updates }: { id: string; updates: any }) => {
-    return DatabaseManager.getInstance().updateMeetingSummary(id, updates);
-  });
-
-  safeHandle("seed-demo", async () => {
-    DatabaseManager.getInstance().seedDemoMeeting();
-
-    // Trigger RAG processing for the new demo meeting
-    const ragManager = appState.getRAGManager();
-    if (ragManager && ragManager.isReady()) {
-      ragManager.reprocessMeeting('demo-meeting').catch(console.error);
-    }
-
-    return { success: true };
-  });
-
-  safeHandle("flush-database", async () => {
-    const result = DatabaseManager.getInstance().clearAllData();
-    return { success: result };
-  });
-
-  safeHandle("open-external", async (event, url: string) => {
-    try {
-      const parsed = new URL(url);
-      if (['http:', 'https:', 'mailto:'].includes(parsed.protocol)) {
-        await shell.openExternal(url);
-      } else {
-        console.warn(`[IPC] Blocked potentially unsafe open-external: ${url}`);
-      }
-    } catch {
-      console.warn(`[IPC] Invalid URL in open-external: ${url}`);
-    }
-  });
+  registerMeetingHandlers({ appState, safeHandle, safeHandleValidated });
 
   // ==========================================
   // Intelligence Mode Handlers
