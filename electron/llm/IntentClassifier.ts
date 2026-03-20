@@ -8,6 +8,7 @@
 
 import { app } from 'electron';
 import { resolveBundledModelsPath } from '../utils/modelPaths';
+const { loadTransformers } = require('../utils/transformersLoader');
 
 export type ConversationIntent =
     | 'clarification'      // "Can you explain that?"
@@ -97,7 +98,7 @@ class ZeroShotClassifier {
 
         this.loadingPromise = (async () => {
             try {
-                const { pipeline, env } = await new Function("return import('@xenova/transformers')")();
+                const { pipeline, env } = await loadTransformers();
 
                 env.allowRemoteModels = false;
                 env.localModelPath = resolveBundledModelsPath();

@@ -1,6 +1,7 @@
 // @xenova/transformers is ESM-only — must use dynamic import()
 import { IEmbeddingProvider } from './IEmbeddingProvider';
 import { resolveBundledModelsPath } from '../../utils/modelPaths';
+const { loadTransformers } = require('../../utils/transformersLoader');
 
 export class LocalEmbeddingProvider implements IEmbeddingProvider {
   readonly name = 'local';
@@ -36,7 +37,7 @@ export class LocalEmbeddingProvider implements IEmbeddingProvider {
     }
 
     this.loadingPromise = (async () => {
-      const { pipeline, env } = await (new Function('return import("@xenova/transformers")')()) as typeof import('@xenova/transformers');
+      const { pipeline, env } = await loadTransformers();
 
       // Tell transformers.js to use the local path, never download in production
       env.allowRemoteModels = false;
