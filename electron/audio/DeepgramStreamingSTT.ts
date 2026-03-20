@@ -34,6 +34,8 @@ export class DeepgramStreamingSTT extends EventEmitter {
     private keepAliveTimer: NodeJS.Timeout | null = null;
     private buffer: Buffer[] = [];
     private isConnecting = false;
+    private lastInterimTranscript = '';
+    private lastInterimConfidence = 1;
 
     constructor(apiKey: string) {
         super();
@@ -103,6 +105,7 @@ export class DeepgramStreamingSTT extends EventEmitter {
         this.isActive = false;
         this.isConnecting = false;
         this.buffer = [];
+        this.lastInterimTranscript = '';
         console.log('[DeepgramStreaming] Stopped');
     }
 
@@ -147,6 +150,8 @@ export class DeepgramStreamingSTT extends EventEmitter {
             `&language=${this.languageCode}` +
             `&smart_format=true` +
             `&interim_results=true` +
+            `&endpointing=300` +
+            `&utterance_end_ms=1000` +
             `&keepalive=true`;
 
         console.log(`[DeepgramStreaming] Connecting (input=${this.inputSampleRate}, target=${this.targetSampleRate}, ch=1)...`);
@@ -184,15 +189,37 @@ export class DeepgramStreamingSTT extends EventEmitter {
 
                 // Deepgram response structure:
                 // { type: "Results", channel: { alternatives: [{ transcript, confidence }] }, is_final }
+                if (msg.type === 'UtteranceEnd') {
+                    if (this.lastInterimTranscript.trim()) {
+                        this.emit('transcript', {
+                            text: this.lastInterimTranscript,
+                            isFinal: true,
+                            confidence: this.lastInterimConfidence,
+                        });
+                        this.lastInterimTranscript = '';
+                    }
+                    return;
+                }
+
                 if (msg.type !== 'Results') return;
 
                 const transcript = msg.channel?.alternatives?.[0]?.transcript;
                 if (!transcript) return;
 
+                const confidence = msg.channel?.alternatives?.[0]?.confidence ?? 1.0;
+                const isFinal = Boolean(msg.is_final || msg.speech_final);
+
+                if (!isFinal) {
+                    this.lastInterimTranscript = transcript;
+                    this.lastInterimConfidence = confidence;
+                } else {
+                    this.lastInterimTranscript = '';
+                }
+
                 this.emit('transcript', {
                     text: transcript,
-                    isFinal: msg.is_final ?? false,
-                    confidence: msg.channel?.alternatives?.[0]?.confidence ?? 1.0,
+                    isFinal,
+                    confidence,
                 });
             } catch (err) {
                 console.error('[DeepgramStreaming] Parse error:', err);

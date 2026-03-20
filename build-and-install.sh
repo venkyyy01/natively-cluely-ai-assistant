@@ -323,6 +323,18 @@ fi
 run_with_spinner "syncing npm dependency matrix" npm install
 success "Dependencies installed"
 
+info "Rebuilding Electron native database dependencies for ${ARCH_LABEL}..."
+run_with_spinner "realigning sqlite and native addon binaries" node scripts/ensure-electron-native-deps.js
+success "Electron native dependencies aligned"
+
+if [[ "$HAS_RUST" == "true" ]]; then
+    info "Building native audio module for ${ARCH_LABEL}..."
+    run_with_spinner "forging native audio addon" npm run build:native:current
+    success "Native audio addon built"
+else
+    warn "Rust unavailable — packaged app may miss native audio capture"
+fi
+
 # ╔═══════════════════════════════════════════════════════════════════╗
 # ║  Step 4: Build Production App                                    ║
 # ╚═══════════════════════════════════════════════════════════════════╝
@@ -331,11 +343,8 @@ step "Step 4/8 — Building Production App"
 info "Cleaning previous builds..."
 npm run clean 2>/dev/null || true
 
-info "Running app build pipeline..."
-run_with_spinner "forging renderer production artifacts" npm run build
-
-info "Compiling Electron main process..."
-run_with_spinner "compiling electron command core" npx tsc -p electron/tsconfig.json
+info "Running production build pipeline..."
+run_with_spinner "forging full production bundle" npm run app:build
 
 success "Compilation complete"
 
@@ -344,10 +353,8 @@ success "Compilation complete"
 # ╚═══════════════════════════════════════════════════════════════════╝
 step "Step 5/8 — Packaging macOS App (${ARCH_LABEL})"
 
-info "Running electron-builder for $BUILD_ARCH..."
+info "Using packaged release created by app:build..."
 info "This may take several minutes on first run..."
-
-run_with_spinner "assembling macOS release vessel" npx electron-builder --mac --$BUILD_ARCH
 
 # Find the built .app
 APP_GLOB="$SCRIPT_DIR/release/mac-${BUILD_ARCH}/${APP_NAME}.app"
@@ -406,11 +413,23 @@ require_plist_key "$APP_PLIST" "NSAppleEventsUsageDescription"
 
 APP_RESOURCES_DIR="$APP_GLOB/Contents/Resources"
 APP_ASAR_PATH="$APP_RESOURCES_DIR/app.asar"
+APP_ASAR_UNPACKED_DIR="$APP_RESOURCES_DIR/app.asar.unpacked"
 require_file "$APP_ASAR_PATH" "Packaged app archive"
 require_asar_entry "$APP_ASAR_PATH" "/dist/index.html" "Packaged renderer entry"
 require_asar_entry "$APP_ASAR_PATH" "/dist-electron/electron/main.js" "Packaged Electron main entry"
+require_asar_entry "$APP_ASAR_PATH" "/native-module/index.js" "Packaged native module loader"
 require_asar_entry "$APP_ASAR_PATH" "/dist-electron/premium/electron/services/LicenseManager.js" "Packaged premium license manager"
 require_asar_entry "$APP_ASAR_PATH" "/dist-electron/premium/electron/knowledge/KnowledgeOrchestrator.js" "Packaged knowledge orchestrator"
+
+if [[ "$BUILD_ARCH" == "arm64" ]]; then
+    require_file "$APP_ASAR_UNPACKED_DIR/native-module/index.darwin-arm64.node" "Unpacked arm64 native audio binary"
+    require_file "$APP_ASAR_UNPACKED_DIR/node_modules/better-sqlite3/build/Release/better_sqlite3.node" "Unpacked arm64 better-sqlite3 binary"
+    require_file "$APP_ASAR_UNPACKED_DIR/node_modules/sqlite3/build/Release/node_sqlite3.node" "Unpacked arm64 sqlite3 binary"
+else
+    require_file "$APP_ASAR_UNPACKED_DIR/native-module/index.darwin-x64.node" "Unpacked x64 native audio binary"
+    require_file "$APP_ASAR_UNPACKED_DIR/node_modules/better-sqlite3/build/Release/better_sqlite3.node" "Unpacked x64 better-sqlite3 binary"
+    require_file "$APP_ASAR_UNPACKED_DIR/node_modules/sqlite3/build/Release/node_sqlite3.node" "Unpacked x64 sqlite3 binary"
+fi
 
 success "Permission manifest verified"
 
@@ -464,7 +483,7 @@ echo -e "  ${CYAN}1.${NC} Launch with ${WHITE}open ${INSTALL_DIR}/${APP_NAME}.ap
 echo ""
 echo -e "  ${CYAN}2.${NC} Grant permissions when prompted:"
 echo -e "     ${YELLOW}>${NC} Microphone     ${BLUE}-${NC} transcription"
-echo -e "     ${YELLOW}>${NC} Screen Record  ${BLUE}-${NC} screenshots"
+echo -e "     ${YELLOW}>${NC} Screen Record  ${BLUE}-${NC} system audio capture + screenshots"
 echo -e "     ${YELLOW}>${NC} Accessibility  ${BLUE}-${NC} keyboard shortcuts"
 echo ""
 echo -e "  ${CYAN}3.${NC} Configure API keys in Settings -> AI Providers"

@@ -139,6 +139,7 @@ export class AppState {
 
   private hasDebugged: boolean = false
   private isMeetingActive: boolean = false; // Guard for session state leaks
+  private nativeAudioConnected: boolean = false;
   private _disguiseTimers: NodeJS.Timeout[] = []; // Track forceUpdate timeouts
   private _ollamaBootstrapPromise: Promise<void> | null = null;
 
@@ -266,6 +267,19 @@ export class AppState {
         win.webContents.send(channel, ...args);
       }
     });
+  }
+
+  private setNativeAudioConnected(connected: boolean): void {
+    if (this.nativeAudioConnected === connected) {
+      return;
+    }
+
+    this.nativeAudioConnected = connected;
+    this.broadcast(connected ? 'native-audio-connected' : 'native-audio-disconnected');
+  }
+
+  public getNativeAudioStatus(): { connected: boolean } {
+    return { connected: this.nativeAudioConnected };
   }
 
   private async ensureMeetingAudioAccess(): Promise<void> {
