@@ -24,3 +24,49 @@ test('follow-up email validation rejects malformed meeting type', () => {
     );
   }, /Invalid IPC payload/);
 });
+
+test('ipc schemas validate additional accepted shapes', () => {
+  const provider = parseIpcInput(
+    ipcSchemas.customProvider,
+    {
+      id: 'provider-1',
+      name: 'Provider 1',
+      curlCommand: 'curl https://example.com -d "{{TEXT}}"',
+      responsePath: 'choices[0].message.content',
+    },
+    'save-custom-provider',
+  );
+  assert.equal(provider.id, 'provider-1');
+
+  const transcript = parseIpcInput(
+    ipcSchemas.transcriptEntries,
+    [{ text: 'hello' }, { text: 'world' }],
+    'transcript-entries',
+  );
+  assert.equal(transcript.length, 2);
+
+  const mailto = parseIpcInput(
+    ipcSchemas.openMailtoInput,
+    { to: 'test@example.com', subject: 'hello', body: 'body' },
+    'open-mailto',
+  );
+  assert.equal(mailto.to, 'test@example.com');
+});
+
+test('parseIpcInput reports joined zod issue paths', () => {
+  assert.throws(() => {
+    parseIpcInput(
+      ipcSchemas.customProvider,
+      {
+        id: 'provider-1',
+        name: 'Provider 1',
+        curlCommand: 'curl https://example.com -d "{{TEXT}}"',
+      },
+      'save-custom-provider',
+    );
+  }, /responsePath: Required/);
+
+  assert.throws(() => {
+    parseIpcInput(ipcSchemas.openMailtoInput, null, 'open-mailto');
+  }, /root:/);
+});

@@ -1,279 +1,225 @@
-# Natively Codebase TODO
+# Natively Verified TODO
 
-**Generated:** March 2026  
-**Total Issues:** 40+  
-**Priority Legend:** P0 = Critical, P1 = High, P2 = Medium, P3 = Low
-
----
-
-## Phase 0: Critical Production Fixes (Week 1)
-
-### P0 - Must Fix Immediately
-
-- [ ] **0.1** Fix ElevenLabs WebSocket race condition (`electron/audio/ElevenLabsStreamingSTT.ts:88-110, 301-313`)
-  - Add instance ID tracking to prevent stale close handler from nulling new WebSocket
-  - Effort: 🟡 (2-8 hours)
-  - Owner: Backend Engineer
-
-- [ ] **0.2** Fix OpenAI STT double-failure counting (`electron/audio/OpenAIStreamingSTT.ts:256-263, 277-284, 336-373`)
-  - Add re-entrancy guard to `_handleWsClose()`
-  - Remove manual calls, let close event fire naturally
-  - Effort: 🟢 (< 2 hours)
-  - Owner: Backend Engineer
-
-- [ ] **0.3** Add audio resource teardown on quit (`electron/main.ts:2030-2043`)
-  - Call `endMeeting()` in `before-quit` handler
-  - Stop all audio captures (system, mic, test)
-  - Effort: 🟢 (< 2 hours)
-  - Owner: Backend Engineer
-
-- [ ] **0.4** Fix uncontrolled opacity slider (`src/components/SettingsOverlay.tsx:1564`)
-  - Change `defaultValue` to `value={overlayOpacity}`
-  - Effort: 🟢 (< 2 hours)
-  - Owner: Frontend Engineer
-
-- [ ] **0.5** Add rollback to settings toggles (`src/components/SettingsOverlay.tsx:1315-1318, 1345-1348`)
-  - Wrap toggles with `await` + try/catch
-  - Rollback UI state on IPC failure
-  - Show error toast to user
-  - Effort: 🟡 (2-8 hours)
-  - Owner: Frontend Engineer
-
-- [ ] **0.6** Enable TypeScript strict mode (`electron/tsconfig.json`)
-  - Add `strict: true`, `strictNullChecks`, `noImplicitAny`
-  - Fix all compilation errors
-  - Effort: 🟡 (2-8 hours)
-  - Owner: Backend Engineer
+**Updated:** March 2026  
+**Basis:** Re-analyzed directly from source in isolation  
+**Scope:** Only verified next steps and already-completed work
 
 ---
 
-## Phase 1: High-Priority Stability (Week 2-3)
+## Done Already
 
-### P1 - Fix This Sprint
-
-- [ ] **1.1** Fix STT test stale closure (`src/components/SettingsOverlay.tsx:909-943`)
-  - Use ref to capture current provider at test time
-  - Ignore test results if provider changed during async call
-  - Effort: 🟢 (< 2 hours)
-  - Owner: Frontend Engineer
-
-- [ ] **1.2** Add request dedup to STT key save (`src/components/SettingsOverlay.tsx:778-843`)
-  - Use AbortController to cancel in-flight tests
-  - Prevent double-click race conditions
-  - Effort: 🟢 (< 2 hours)
-  - Owner: Frontend Engineer
-
-- [ ] **1.3** Fix `startMeeting` setTimeout race (`electron/main.ts:1029-1061`)
-  - Add state machine: `idle | starting | active | stopping`
-  - Remove `setTimeout(0)`, inline audio setup
-  - Guard against re-entrant calls
-  - Effort: 🟡 (2-8 hours)
-  - Owner: Backend Engineer
-
-- [ ] **1.4** Track untracked timers in `setUndetectable` (`electron/main.ts:1699-1707`)
-  - Add 500ms timers to `_disguiseTimers` array
-  - Clear on rapid toggle
-  - Effort: 🟢 (< 2 hours)
-  - Owner: Backend Engineer
-
-- [ ] **1.5** Clear STT test error on provider switch (`src/components/SettingsOverlay.tsx:765-777`)
-  - Reset both `sttTestStatus` AND `sttTestError`
-  - Effort: 🟢 (< 2 hours)
-  - Owner: Frontend Engineer
-
-- [ ] **1.6** Wrap ElevenLabs error emission (`electron/audio/ElevenLabsStreamingSTT.ts:279, 291`)
-  - Emit `Error` instances, not raw JSON
-  - Set `isActive = false` on auth_error
-  - Effort: 🟢 (< 2 hours)
-  - Owner: Backend Engineer
+- [x] Wrote architecture/code review reports:
+  - `CODEBASE_REVIEW_REPORT.md`
+  - `IMPLEMENTATION_PLAN.md`
+- [x] Fixed native module packaging verification in `build-and-install.sh`
+- [x] Added aggressive fresh-clean build/package behavior in `build-and-install.sh`
+- [x] Fixed meeting details stale-state rendering in:
+  - `src/components/MeetingDetails.tsx`
+  - `src/components/Launcher.tsx`
+- [x] Improved screenshot capture robustness in `electron/ScreenshotHelper.ts`
+- [x] Improved overlay stealth/window behavior in `electron/WindowHelper.ts`
+- [x] Added overlay resize plumbing in:
+  - `electron/ipcHandlers.ts`
+  - `electron/preload.ts`
+  - `src/types/electron.d.ts`
+- [x] Added smooth scrolling, persisted overlay sizing, and edge/corner resize affordances in `src/components/NativelyInterface.tsx`
+- [x] Verified current build health:
+  - `npm run build`
+  - `npx tsc -p electron/tsconfig.json`
 
 ---
 
-## Phase 2: Security Hardening (Week 4-5)
+## P0 - Verified Next Fixes
 
-### P1 - Security Critical
+### 1. Fix ElevenLabs stale-close WebSocket race
 
-- [ ] **2.1** Add IPC input validation with Zod (`electron/ipcHandlers.ts`, new `electron/validators.ts`)
-  - Create schemas for all 100+ IPC channels
-  - Validate all inputs before processing
-  - Effort: 🔴 (1-3 days)
-  - Owner: Backend Engineer
+- [ ] File: `electron/audio/ElevenLabsStreamingSTT.ts:88`
+- [ ] File: `electron/audio/ElevenLabsStreamingSTT.ts:306`
+- Verified issue:
+  - `stop()` calls `removeAllListeners()`, `close()`, and nulls `this.ws`
+  - `setRecognitionLanguage()` can immediately call `stop()` then `start()`
+  - the old socket can still close later and `close` handler unconditionally sets `this.ws = null`
+- Required implementation:
+  - capture the socket instance in each handler and only mutate state if the closing socket is still the active one
+  - avoid unconditionally nulling shared connection state from stale handlers
+- Acceptance:
+  - rapid language switching does not kill the newly opened session
+  - no reconnect storm after stop/start
 
-- [ ] **2.2** Add OAuth state parameter for Calendar (`electron/services/CalendarManager.ts`)
-  - Generate CSRF protection state token
-  - Validate on callback
-  - Effort: 🟡 (2-8 hours)
-  - Owner: Backend Engineer
+### 2. Fix ElevenLabs error contract and auth-failure behavior
 
-- [ ] **2.3** Enable hardened runtime for macOS (`package.json`, `entitlements.mac.plist`)
-  - Set `hardenedRuntime: true`
-  - Remove dangerous entitlements
-  - Add notarization
-  - Effort: 🟡 (2-8 hours)
-  - Owner: DevOps Engineer
+- [ ] File: `electron/audio/ElevenLabsStreamingSTT.ts:282`
+- [ ] File: `electron/audio/ElevenLabsStreamingSTT.ts:294`
+- Verified issue:
+  - emits raw `msg` / `msg.error` instead of `Error`
+  - on `auth_error`, reconnect is disabled but active state is not fully normalized before close path
+- Required implementation:
+  - always emit `Error` instances
+  - make auth failures transition cleanly into a non-active state
+- Acceptance:
+  - downstream consumers always receive `.message`
+  - auth failures surface clearly and do not leave dead buffered sessions
 
-- [ ] **2.4** Add `globalShortcut.unregisterAll()` on quit (`electron/main.ts:2030`)
-  - Prevent race with `autoUpdater.quitAndInstall()`
-  - Effort: 🟢 (< 2 hours)
-  - Owner: Backend Engineer
+### 3. Fix OpenAI STT duplicate close/failure accounting
 
----
+- [ ] File: `electron/audio/OpenAIStreamingSTT.ts:261`
+- [ ] File: `electron/audio/OpenAIStreamingSTT.ts:282`
+- [ ] File: `electron/audio/OpenAIStreamingSTT.ts:341`
+- Verified issue:
+  - timeout handlers call `_handleWsClose(...)` manually
+  - `close` event also calls `_handleWsClose(...)`
+  - same failure can be counted twice via `wsFailures++`
+- Required implementation:
+  - make close handling single-owner
+  - either let the `close` event own it, or add a guard to prevent duplicate handling
+- Acceptance:
+  - one timeout increments failure count once
+  - fallback model switching happens only after real repeated failures
 
-## Phase 3: Infrastructure & Testing (Week 6-8)
+### 4. Add meeting/audio teardown in `before-quit`
 
-### P1 - Test Coverage
+- [ ] File: `electron/main.ts:1014`
+- [ ] File: `electron/main.ts:1067`
+- [ ] File: `electron/main.ts:2030`
+- Verified issue:
+  - `before-quit` only stops Ollama and scrubs credentials
+  - active meeting resources are stopped in `endMeeting()` but not on app quit
+- Required implementation:
+  - if a meeting is active, invoke the same shutdown path before quit completes
+  - explicitly stop any remaining system/mic/test capture handles if needed
+- Acceptance:
+  - no live meeting/STT/audio resources survive app shutdown path
 
-- [ ] **3.1** Add integration tests for STT lifecycle (`tests/stt-lifecycle.test.ts`)
-  - Test rapid provider switches
-  - Test meeting start/end race
-  - Use Playwright or similar
-  - Effort: 🔴 (1-3 days)
-  - Owner: QA Engineer
+### 5. Fix uncontrolled opacity slider
 
-- [ ] **3.2** Add unit tests for audio components (`tests/unit/audio.test.ts`)
-  - Test WebSocket lifecycle
-  - Test resampling
-  - Test error handling
-  - Effort: 🔴 (1-3 days)
-  - Owner: Backend Engineer
-
-- [ ] **3.3** Add CI security scanning (`.github/workflows/ci.yml`)
-  - TypeScript strict check
-  - `npm audit`
-  - Secret scanning
-  - Build verification
-  - Effort: 🟡 (2-8 hours)
-  - Owner: DevOps Engineer
-
----
-
-## Phase 4: RAG & Native Module Audit (Week 9-12)
-
-### P0/P1 - Unknown Risk
-
-- [ ] **4.1** Audit RAG embedding queue atomicity (`electron/rag/LiveRAGIndexer.ts`, `electron/rag/VectorStore.ts`)
-  - Verify transactions are atomic
-  - Check for race conditions
-  - Add retry logic
-  - Implement rate limiting
-  - Add queue size bounds
-  - Effort: 🔴 (1-3 days)
-  - Owner: Backend Engineer
-
-- [ ] **4.2** Audit native Rust module (`native-module/src/resampler.rs`, `native-module/src/silence_suppression.rs`)
-  - Fix resampler buffer bounds (add `MAX_BUFFER_SIZE`)
-  - Fix VAD decimation array index bug (`pos.round() as usize`)
-  - Add panic handling in NAPI bindings
-  - Pre-allocate audio buffers
-  - Add memory pressure monitoring
-  - Effort: 🔴 (1-3 days)
-  - Owner: Rust Engineer
-
-- [ ] **4.3** Replace fake LicenseManager (`premium/electron/services/LicenseManager.ts`)
-  - Implement actual license verification OR
-  - Remove premium gating entirely
-  - Effort: 🟡 (2-8 hours)
-  - Owner: Backend Engineer
+- [ ] File: `src/components/SettingsOverlay.tsx:1559`
+- Verified issue:
+  - slider uses `defaultValue={overlayOpacity}` instead of `value={overlayOpacity}`
+- Required implementation:
+  - convert to controlled input
+- Acceptance:
+  - slider thumb always matches current persisted opacity state
 
 ---
 
-## Phase 5: UX Polish (Week 13+)
+## P1 - Verified Stability Fixes
 
-### P2/P3 - Nice to Have
+### 6. Add rollback/error handling for undetectable and open-at-login toggles
 
-- [ ] **5.1** Add overlay position persistence (`src/components/NativelyInterface.tsx`)
-  - Save position on every move
-  - Restore on mount
-  - Effort: 🟢 (< 2 hours)
-  - Owner: Frontend Engineer
+- [ ] File: `src/components/SettingsOverlay.tsx:1315`
+- [ ] File: `src/components/SettingsOverlay.tsx:1345`
+- [ ] File: `electron/ipcHandlers.ts:431`
+- [ ] File: `electron/ipcHandlers.ts:449`
+- Verified issue:
+  - UI flips state immediately and does not await/catch failures from IPC
+  - backend currently returns `{ success: true }`, so frontend should still normalize around an explicit result contract
+- Required implementation:
+  - await IPC call
+  - rollback UI on failure
+  - show visible error feedback
+- Acceptance:
+  - UI state reflects backend truth after failures
 
-- [ ] **5.2** Add double-click reset for overlay (`src/components/NativelyInterface.tsx`)
-  - Reset to default size on double-click
-  - Effort: 🟢 (< 2 hours)
-  - Owner: Frontend Engineer
+### 7. Guard `startMeeting()` against re-entrant async initialization
 
-- [ ] **5.3** Add snap zones for overlay presets
-  - Common sizes (small, medium, large)
-  - Magnetic snapping
-  - Effort: 🟡 (2-8 hours)
-  - Owner: Frontend Engineer
+- [ ] File: `electron/main.ts:1014`
+- Verified issue:
+  - `isMeetingActive = true` is set immediately
+  - actual audio init is deferred via `setTimeout(..., 0)`
+  - repeated calls can overlap with partially initialized state
+- Required implementation:
+  - introduce explicit meeting lifecycle state (`idle`, `starting`, `active`, `stopping`)
+  - block or collapse duplicate starts
+- Acceptance:
+  - rapid start/end/start cannot double-start audio/STT resources
 
-- [ ] **5.4** Improve resize handle discoverability
-  - Hover animations
-  - Tooltip hints on first open
-  - Effort: 🟢 (< 2 hours)
-  - Owner: Frontend Engineer
+### 8. Prevent stale STT connection test results from updating the wrong provider UI
 
----
+- [ ] File: `src/components/SettingsOverlay.tsx:909`
+- Verified issue:
+  - `handleTestSttConnection()` reads `sttProvider` and current key from closure
+  - provider can change while async request is in flight
+- Required implementation:
+  - capture a request-scoped provider token
+  - ignore stale responses when provider changed
+- Acceptance:
+  - test result always appears under the provider that initiated it
 
-## Backlog - Unreviewed Areas
+### 9. Deduplicate concurrent STT key validation/save flows
 
-### Unknown Risk - Need Investigation
+- [ ] File: `src/components/SettingsOverlay.tsx:778`
+- Verified issue:
+  - `handleSttKeySubmit()` can be re-entered while async test/save work is running
+  - state is global (`sttSaving`, `sttTestStatus`) rather than request-scoped
+- Required implementation:
+  - add request IDs or in-flight guard
+  - prevent concurrent save/test overlap per provider
+- Acceptance:
+  - repeated clicks cannot interleave conflicting save results
 
-- [ ] **?** IntelligenceEngine screen capture OCR (`electron/IntelligenceEngine.ts`)
-- [ ] **?** Profile engine resume parsing (`electron/services/ProfileEngine.ts`)
-- [ ] **?** Auto-updater signature verification (`electron/main.ts`)
-- [ ] **?** Database migration atomicity (`electron/db/DatabaseManager.ts`)
-- [ ] **?** Screenshot queue thread safety (`electron/ScreenshotHelper.ts`)
+### 10. Track and clear delayed disguise-related timers
 
----
-
-## Quick Wins (< 30 minutes each)
-
-- [ ] Fix opacity slider `defaultValue` → `value` (0.4)
-- [ ] Clear STT error on provider switch (1.5)
-- [ ] Add `globalShortcut.unregisterAll()` on quit (2.4)
-- [ ] Track untracked timers in `setUndetectable` (1.4)
-- [ ] Wrap ElevenLabs errors in `Error` instances (1.6)
-- [ ] Add overlay double-click reset (5.2)
-
----
-
-## Progress Tracking
-
-### Sprint 1 (Week 1) - Phase 0
-- [ ] 0.1 ElevenLabs WebSocket race
-- [ ] 0.2 OpenAI double-failure count
-- [ ] 0.3 Audio teardown on quit
-- [ ] 0.4 Opacity slider
-- [ ] 0.5 Settings toggle rollback
-- [ ] 0.6 TypeScript strict mode
-
-### Sprint 2 (Week 2-3) - Phase 1
-- [ ] 1.1 STT test stale closure
-- [ ] 1.2 STT key save dedup
-- [ ] 1.3 startMeeting race
-- [ ] 1.4 Untracked timers
-- [ ] 1.5 Clear STT error
-- [ ] 1.6 ElevenLabs error wrapping
-
-### Sprint 3 (Week 4-5) - Phase 2
-- [ ] 2.1 IPC validation
-- [ ] 2.2 OAuth CSRF
-- [ ] 2.3 Hardened runtime
-- [ ] 2.4 globalShortcut cleanup
-
-### Sprint 4-6 (Week 6-12) - Phase 3-4
-- [ ] 3.1 STT integration tests
-- [ ] 3.2 Audio unit tests
-- [ ] 3.3 CI security scanning
-- [ ] 4.1 RAG audit
-- [ ] 4.2 Native module audit
-- [ ] 4.3 LicenseManager fix
+- [ ] File: `electron/main.ts` around `setUndetectable(...)`
+- Verified status:
+  - previously identified as likely timer hygiene issue in disguise flow
+  - needs one more direct source pass before patching
+- Next step:
+  - verify all `setTimeout` branches in `setUndetectable()` are tracked/cleared consistently
 
 ---
 
-## Success Metrics
+## P2 - Verified Cleanup / Consistency
 
-| Metric | Baseline | Target | Current |
-|--------|----------|--------|---------|
-| Test coverage | 0% | 60% | 0% |
-| Critical bugs | 12 | 0 | 12 |
-| High bugs | 17 | 0 | 17 |
-| TypeScript strictness | Partial | 100% | Partial |
-| CI security checks | 0 | 4 | 0 |
+### 11. Align Deepgram UI labels with actual implementation
+
+- [ ] File: `electron/audio/DeepgramStreamingSTT.ts:2`
+- [ ] File: `src/config/stt.constants.ts:68`
+- [ ] File: `src/components/SettingsOverlay.tsx:2290`
+- Verified issue:
+  - implementation uses `model=nova-3`
+  - some labels/comments still say Nova-2
+- Required implementation:
+  - rename labels/comments to Nova-3 everywhere user-facing or developer-facing
+
+### 12. Add global shortcut cleanup during quit
+
+- [ ] File: `electron/main.ts:2030`
+- Verified status:
+  - useful cleanup improvement
+  - not yet re-verified as a live bug, but still a low-cost shutdown hardening step
+- Required implementation:
+  - call `globalShortcut.unregisterAll()` in quit path
 
 ---
 
-*Last updated: March 2026*  
-*Next review: End of Sprint 1*
+## Investigate Separately Before Editing
+
+- [ ] `electron/main.ts` disguise timer cleanup path near `setUndetectable(...)`
+- [ ] `electron/rag/LiveRAGIndexer.ts` queue growth/rate limiting
+- [ ] `native-module/src/resampler.rs` buffer bounds
+- [ ] `native-module/src/silence_suppression.rs` VAD decimation correctness
+- [ ] `premium/electron/services/LicenseManager.ts` fake premium enablement path
+- [ ] `electron/services/CalendarManager.ts` OAuth CSRF/state flow
+
+---
+
+## Recommended Execution Order
+
+- [ ] 1. ElevenLabs WebSocket race
+- [ ] 2. OpenAI duplicate close handling
+- [ ] 3. `before-quit` meeting/audio teardown
+- [ ] 4. Controlled opacity slider
+- [ ] 5. Toggle rollback/error handling
+- [ ] 6. `startMeeting()` lifecycle guard
+- [ ] 7. STT settings request isolation
+- [ ] 8. Label/consistency cleanup
+
+---
+
+## Exit Criteria For This TODO
+
+- [ ] STT providers survive rapid switching and retries
+- [ ] Quit path leaves no active meeting/audio resources behind
+- [ ] Settings UI does not drift from backend truth
+- [ ] No stale async settings results render under the wrong provider
+- [ ] Build still passes after each tranche
