@@ -3,6 +3,7 @@ export interface ElectronAPI {
     width: number
     height: number
   }) => Promise<void>
+  setOverlayBounds: (bounds: { width: number; height: number; x?: number; y?: number }) => Promise<{ success: boolean }>
   onToggleExpand: (callback: () => void) => () => void
   getRecognitionLanguages: () => Promise<Record<string, any>>
   getScreenshots: () => Promise<Array<{ path: string; preview: string }>>

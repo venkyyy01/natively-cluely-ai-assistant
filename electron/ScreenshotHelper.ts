@@ -28,10 +28,26 @@ export class ScreenshotHelper {
 
     // Create directories if they don't exist
     if (!fs.existsSync(this.screenshotDir)) {
-      fs.mkdirSync(this.screenshotDir)
+      fs.mkdirSync(this.screenshotDir, { recursive: true })
     }
     if (!fs.existsSync(this.extraScreenshotDir)) {
-      fs.mkdirSync(this.extraScreenshotDir)
+      fs.mkdirSync(this.extraScreenshotDir, { recursive: true })
+    }
+  }
+
+  private async waitForWindowHide(): Promise<void> {
+    await new Promise(resolve => setTimeout(resolve, process.platform === 'darwin' ? 180 : 120))
+  }
+
+  private async trimQueue(queue: string[]): Promise<void> {
+    while (queue.length > this.MAX_SCREENSHOTS) {
+      const removedPath = queue.shift()
+      if (!removedPath) continue
+      try {
+        await fs.promises.unlink(removedPath)
+      } catch (error) {
+        console.error("Error removing old screenshot:", error)
+      }
     }
   }
 
@@ -113,8 +129,7 @@ export class ScreenshotHelper {
     try {
       hideMainWindow()
 
-      // Add a small delay to ensure window is hidden
-      await new Promise(resolve => setTimeout(resolve, 50))
+      await this.waitForWindowHide()
 
       let screenshotPath = ""
 
@@ -128,31 +143,13 @@ export class ScreenshotHelper {
         await exec(this.getScreenshotCommand(screenshotPath, false))
 
         this.screenshotQueue.push(screenshotPath)
-        if (this.screenshotQueue.length > this.MAX_SCREENSHOTS) {
-          const removedPath = this.screenshotQueue.shift()
-          if (removedPath) {
-            try {
-              await fs.promises.unlink(removedPath)
-            } catch (error) {
-              console.error("Error removing old screenshot:", error)
-            }
-          }
-        }
+        await this.trimQueue(this.screenshotQueue)
       } else {
         screenshotPath = path.join(this.extraScreenshotDir, `${uuidv4()}.png`)
         await exec(this.getScreenshotCommand(screenshotPath, false))
 
         this.extraScreenshotQueue.push(screenshotPath)
-        if (this.extraScreenshotQueue.length > this.MAX_SCREENSHOTS) {
-          const removedPath = this.extraScreenshotQueue.shift()
-          if (removedPath) {
-            try {
-              await fs.promises.unlink(removedPath)
-            } catch (error) {
-              console.error("Error removing old screenshot:", error)
-            }
-          }
-        }
+        await this.trimQueue(this.extraScreenshotQueue)
       }
 
       return screenshotPath
@@ -172,8 +169,7 @@ export class ScreenshotHelper {
     try {
       hideMainWindow()
 
-      // Add a small delay to ensure window is hidden
-      await new Promise(resolve => setTimeout(resolve, 50))
+      await this.waitForWindowHide()
 
       let screenshotPath = ""
       const exec = util.promisify(require('child_process').exec)
@@ -194,6 +190,9 @@ export class ScreenshotHelper {
       if (!fs.existsSync(screenshotPath)) {
         throw new Error("Selection cancelled")
       }
+
+      this.screenshotQueue.push(screenshotPath)
+      await this.trimQueue(this.screenshotQueue)
 
       return screenshotPath
     } catch (error) {

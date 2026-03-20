@@ -27,6 +27,7 @@ export class WindowHelper {
   private appState: AppState
   private contentProtection: boolean = false
   private opacityTimeout: NodeJS.Timeout | null = null
+  private readonly overlayContentProtection: boolean = true
 
   // Initialize with explicit number type and 0 value
   private screenWidth: number = 0
@@ -47,12 +48,13 @@ export class WindowHelper {
   }
 
   private applyContentProtection(enable: boolean): void {
-    const windows = [this.launcherWindow, this.overlayWindow]
-    windows.forEach(win => {
-      if (win && !win.isDestroyed()) {
-        win.setContentProtection(enable);
-      }
-    });
+    if (this.launcherWindow && !this.launcherWindow.isDestroyed()) {
+      this.launcherWindow.setContentProtection(enable)
+    }
+
+    if (this.overlayWindow && !this.overlayWindow.isDestroyed()) {
+      this.overlayWindow.setContentProtection(this.overlayContentProtection || enable)
+    }
   }
 
   public setWindowDimensions(width: number, height: number): void {
@@ -101,6 +103,24 @@ export class WindowHelper {
 
     this.overlayWindow.setContentSize(newWidth, newHeight)
     this.overlayWindow.setPosition(newX, newY)
+  }
+
+  public setOverlayBounds(bounds: { width: number; height: number; x?: number; y?: number }): void {
+    if (!this.overlayWindow || this.overlayWindow.isDestroyed()) return
+
+    const primaryDisplay = screen.getPrimaryDisplay()
+    const workArea = primaryDisplay.workAreaSize
+    const currentBounds = this.overlayWindow.getBounds()
+    const newWidth = Math.min(Math.max(bounds.width, 300), Math.floor(workArea.width * 0.9))
+    const newHeight = Math.min(Math.max(bounds.height, 1), Math.floor(workArea.height * 0.9))
+    const rawX = bounds.x ?? currentBounds.x
+    const rawY = bounds.y ?? currentBounds.y
+    const maxX = workArea.width - newWidth
+    const maxY = workArea.height - newHeight
+    const newX = Math.min(Math.max(rawX, 0), maxX)
+    const newY = Math.min(Math.max(rawY, 0), maxY)
+
+    this.overlayWindow.setBounds({ x: newX, y: newY, width: newWidth, height: newHeight })
   }
 
   public createWindow(): void {
@@ -224,14 +244,14 @@ export class WindowHelper {
       backgroundColor: "#00000000",
       alwaysOnTop: true,
       focusable: true,
-      resizable: false, // Enforce automatic resizing only
+      resizable: true,
       movable: true,
       skipTaskbar: true, // Don't show separately in dock/taskbar
       hasShadow: false, // Prevent shadow from adding perceived size/artifacts
     }
 
     this.overlayWindow = new BrowserWindow(overlaySettings)
-    this.overlayWindow.setContentProtection(this.contentProtection)
+    this.overlayWindow.setContentProtection(this.overlayContentProtection || this.contentProtection)
 
     if (process.platform === "darwin") {
       this.overlayWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
@@ -363,7 +383,7 @@ export class WindowHelper {
       const x = Math.floor(workArea.x + (workArea.width - 600) / 2)
       const y = Math.floor(workArea.y + (workArea.height - 600) / 2)
 
-      this.overlayWindow.setBounds({ x, y, width: 600, height: targetHeight });
+      this.overlayWindow.setBounds({ x, y, width: currentBounds.width || 600, height: targetHeight });
 
       if (process.platform === 'win32' && this.contentProtection) {
         // Opacity Shield: Show at 0 opacity first to prevent frame leak
@@ -377,14 +397,14 @@ export class WindowHelper {
           if (this.overlayWindow && !this.overlayWindow.isDestroyed()) {
             this.overlayWindow.setOpacity(1);
             this.overlayWindow.focus();
-            this.overlayWindow.setAlwaysOnTop(true, "floating");
+            this.overlayWindow.setAlwaysOnTop(true, process.platform === 'darwin' ? "screen-saver" : "floating");
           }
         }, 60);
       } else {
-        this.overlayWindow.setContentProtection(this.contentProtection);
+        this.overlayWindow.setContentProtection(this.overlayContentProtection || this.contentProtection);
         this.overlayWindow.show();
         this.overlayWindow.focus();
-        this.overlayWindow.setAlwaysOnTop(true, "floating");
+        this.overlayWindow.setAlwaysOnTop(true, process.platform === 'darwin' ? "screen-saver" : "floating");
       }
       this.isWindowVisible = true;
     }

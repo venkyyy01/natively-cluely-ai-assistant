@@ -6,6 +6,7 @@ interface ElectronAPI {
     width: number
     height: number
   }) => Promise<void>
+  setOverlayBounds: (bounds: { width: number; height: number; x?: number; y?: number }) => Promise<{ success: boolean }>
   getRecognitionLanguages: () => Promise<Record<string, any>>
   getScreenshots: () => Promise<Array<{ path: string; preview: string }>>
   deleteScreenshot: (
@@ -264,6 +265,8 @@ export const PROCESSING_EVENTS = {
 contextBridge.exposeInMainWorld("electronAPI", {
   updateContentDimensions: (dimensions: { width: number; height: number }) =>
     ipcRenderer.invoke("update-content-dimensions", dimensions),
+  setOverlayBounds: (bounds: { width: number; height: number; x?: number; y?: number }) =>
+    ipcRenderer.invoke("set-overlay-bounds", bounds),
   getRecognitionLanguages: () => ipcRenderer.invoke("get-recognition-languages"),
   takeScreenshot: () => ipcRenderer.invoke("take-screenshot"),
   takeSelectiveScreenshot: () => ipcRenderer.invoke("take-selective-screenshot"),

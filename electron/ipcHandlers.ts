@@ -113,6 +113,15 @@ export function initializeIpcHandlers(appState: AppState): void {
     }
   )
 
+  safeHandle(
+    "set-overlay-bounds",
+    async (_event, bounds: { width: number; height: number; x?: number; y?: number }) => {
+      if (!bounds?.width || !bounds?.height) return
+      appState.getWindowHelper().setOverlayBounds(bounds)
+      return { success: true }
+    }
+  )
+
   safeHandle("set-window-mode", async (event, mode: 'launcher' | 'overlay') => {
     appState.getWindowHelper().setWindowMode(mode);
     return { success: true };
