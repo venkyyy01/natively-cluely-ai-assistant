@@ -1778,6 +1778,8 @@ export class AppState {
 
       if (state) {
         console.log('[Stealth] Calling app.dock.hide()');
+        this.settingsWindowHelper.closeWindow();
+        this.modelSelectorWindowHelper.hideWindow();
         app.dock.hide();
         this.hideTray();
 
