@@ -12,6 +12,7 @@
 import { EventEmitter } from 'events';
 import WebSocket from 'ws';
 import { RECOGNITION_LANGUAGES } from '../config/languages';
+import { resampleToMonoPcm16 } from './pcm';
 
 const RECONNECT_BASE_DELAY_MS = 1000;
 const RECONNECT_MAX_DELAY_MS = 30000;
@@ -23,8 +24,9 @@ export class DeepgramStreamingSTT extends EventEmitter {
     private isActive = false;
     private shouldReconnect = false;
 
-    private sampleRate = 16000;
+    private inputSampleRate = 16000;
     private numChannels = 1;
+    private readonly targetSampleRate = 16000;
     private languageCode = 'en'; // Default to English
 
     private reconnectAttempts = 0;
@@ -43,8 +45,8 @@ export class DeepgramStreamingSTT extends EventEmitter {
     // =========================================================================
 
     public setSampleRate(rate: number): void {
-        this.sampleRate = rate;
-        console.log(`[DeepgramStreaming] Sample rate set to ${rate}`);
+        this.inputSampleRate = rate;
+        console.log(`[DeepgramStreaming] Input sample rate set to ${rate}`);
     }
 
     public setAudioChannelCount(count: number): void {
@@ -122,7 +124,10 @@ export class DeepgramStreamingSTT extends EventEmitter {
             return;
         }
 
-        this.ws.send(chunk);
+        const pcm16 = resampleToMonoPcm16(chunk, this.inputSampleRate, this.numChannels, this.targetSampleRate);
+        if (pcm16.length > 0) {
+            this.ws.send(pcm16);
+        }
     }
 
     // =========================================================================
@@ -137,14 +142,14 @@ export class DeepgramStreamingSTT extends EventEmitter {
             `wss://api.deepgram.com/v1/listen` +
             `?model=nova-3` +
             `&encoding=linear16` +
-            `&sample_rate=${this.sampleRate}` +
-            `&channels=${this.numChannels}` +
+            `&sample_rate=${this.targetSampleRate}` +
+            `&channels=1` +
             `&language=${this.languageCode}` +
             `&smart_format=true` +
             `&interim_results=true` +
             `&keepalive=true`;
 
-        console.log(`[DeepgramStreaming] Connecting (rate=${this.sampleRate}, ch=${this.numChannels})...`);
+        console.log(`[DeepgramStreaming] Connecting (input=${this.inputSampleRate}, target=${this.targetSampleRate}, ch=1)...`);
 
         this.ws = new WebSocket(url, {
             headers: {
@@ -162,7 +167,10 @@ export class DeepgramStreamingSTT extends EventEmitter {
             while (this.buffer.length > 0) {
                 const chunk = this.buffer.shift();
                 if (chunk && this.ws?.readyState === WebSocket.OPEN) {
-                    this.ws.send(chunk);
+                    const pcm16 = resampleToMonoPcm16(chunk, this.inputSampleRate, this.numChannels, this.targetSampleRate);
+                    if (pcm16.length > 0) {
+                        this.ws.send(pcm16);
+                    }
                 }
             }
 

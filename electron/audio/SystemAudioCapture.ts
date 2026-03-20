@@ -1,13 +1,10 @@
 import { EventEmitter } from 'events';
-import { app } from 'electron';
-import path from 'path';
+import { assertNativeAudioAvailable, getNativeAudioLoadError, loadNativeAudioModule } from './nativeModule';
 
-let NativeModule: any = null;
+const NativeModule = loadNativeAudioModule();
 
-try {
-    NativeModule = require('natively-audio');
-} catch (e) {
-    console.error('[SystemAudioCapture] Failed to load native module:', e);
+if (!NativeModule) {
+    console.error('[SystemAudioCapture] Failed to load native module:', getNativeAudioLoadError());
 }
 
 const { SystemAudioCapture: RustAudioCapture } = NativeModule || {};
@@ -21,18 +18,19 @@ export class SystemAudioCapture extends EventEmitter {
     constructor(deviceId?: string | null) {
         super();
         this.deviceId = deviceId || null;
-        if (!RustAudioCapture) {
-            console.error('[SystemAudioCapture] Rust class implementation not found.');
-        } else {
-            // LAZY INIT: Don't create native monitor here - it causes 1-second audio mute + quality drop
-            // The monitor will be created in start() when the meeting actually begins
-            console.log(`[SystemAudioCapture] Initialized (lazy). Device ID: ${this.deviceId || 'default'}`);
+        const RustAudioCtor = assertNativeAudioAvailable('SystemAudioCapture')?.SystemAudioCapture;
+        if (!RustAudioCtor) {
+            throw new Error('[SystemAudioCapture] Rust class implementation not found.');
         }
+
+        // LAZY INIT: Don't create native monitor here - it causes 1-second audio mute + quality drop
+        // The monitor will be created in start() when the meeting actually begins
+        console.log(`[SystemAudioCapture] Initialized (lazy). Device ID: ${this.deviceId || 'default'}`);
     }
 
     public getSampleRate(): number {
-        if (this.monitor && typeof this.monitor.get_sample_rate === 'function') {
-            const nativeRate = this.monitor.get_sample_rate();
+        if (this.monitor && typeof this.monitor.getSampleRate === 'function') {
+            const nativeRate = this.monitor.getSampleRate();
             if (nativeRate !== this.detectedSampleRate) {
                 console.log(`[SystemAudioCapture] Real native rate: ${nativeRate}`);
                 this.detectedSampleRate = nativeRate;
@@ -49,8 +47,7 @@ export class SystemAudioCapture extends EventEmitter {
         if (this.isRecording) return;
 
         if (!RustAudioCapture) {
-            console.error('[SystemAudioCapture] Cannot start: Rust module missing');
-            return;
+            throw new Error(getNativeAudioLoadError()?.message || '[SystemAudioCapture] Cannot start: Rust module missing');
         }
 
         // LAZY INIT: Create monitor here when meeting starts (not in constructor)
@@ -70,8 +67,8 @@ export class SystemAudioCapture extends EventEmitter {
             console.log('[SystemAudioCapture] Starting native capture...');
             
             // Fetch real sample rate as soon as monitor starts
-            if (typeof this.monitor.get_sample_rate === 'function') {
-                this.detectedSampleRate = this.monitor.get_sample_rate();
+            if (typeof this.monitor.getSampleRate === 'function') {
+                this.detectedSampleRate = this.monitor.getSampleRate();
                 console.log(`[SystemAudioCapture] Detected sample rate: ${this.detectedSampleRate}`);
             }
 

@@ -1,14 +1,10 @@
 import { EventEmitter } from 'events';
-import { app } from 'electron';
-import path from 'path';
+import { assertNativeAudioAvailable, getNativeAudioLoadError, loadNativeAudioModule } from './nativeModule';
 
-// Load the native module
-let NativeModule: any = null;
+const NativeModule = loadNativeAudioModule();
 
-try {
-    NativeModule = require('natively-audio');
-} catch (e) {
-    console.error('[MicrophoneCapture] Failed to load native module:', e);
+if (!NativeModule) {
+    console.error('[MicrophoneCapture] Failed to load native module:', getNativeAudioLoadError());
 }
 
 const { MicrophoneCapture: RustMicCapture } = NativeModule || {};
@@ -21,23 +17,24 @@ export class MicrophoneCapture extends EventEmitter {
     constructor(deviceId?: string | null) {
         super();
         this.deviceId = deviceId || null;
-        if (!RustMicCapture) {
-            console.error('[MicrophoneCapture] Rust class implementation not found.');
-        } else {
-            console.log(`[MicrophoneCapture] Initialized wrapper. Device ID: ${this.deviceId || 'default'}`);
-            try {
-                console.log('[MicrophoneCapture] Creating native monitor (Eager Init)...');
-                this.monitor = new RustMicCapture(this.deviceId);
-            } catch (e) {
-                console.error('[MicrophoneCapture] Failed to create native monitor:', e);
-                // We don't throw here to allow app to start, but start() will fail
-            }
+        const RustMicCtor = assertNativeAudioAvailable('MicrophoneCapture')?.MicrophoneCapture;
+        if (!RustMicCtor) {
+            throw new Error('[MicrophoneCapture] Rust class implementation not found.');
+        }
+
+        console.log(`[MicrophoneCapture] Initialized wrapper. Device ID: ${this.deviceId || 'default'}`);
+        try {
+            console.log('[MicrophoneCapture] Creating native monitor (Eager Init)...');
+            this.monitor = new RustMicCtor(this.deviceId);
+        } catch (e) {
+            console.error('[MicrophoneCapture] Failed to create native monitor:', e);
+            throw e;
         }
     }
 
     public getSampleRate(): number {
-        if (this.monitor && typeof this.monitor.get_sample_rate === 'function') {
-            const nativeRate = this.monitor.get_sample_rate();
+        if (this.monitor && typeof this.monitor.getSampleRate === 'function') {
+            const nativeRate = this.monitor.getSampleRate();
             console.log(`[MicrophoneCapture] Real native rate: ${nativeRate}`);
             return nativeRate;
         }
@@ -51,8 +48,7 @@ export class MicrophoneCapture extends EventEmitter {
         if (this.isRecording) return;
 
         if (!RustMicCapture) {
-            console.error('[MicrophoneCapture] Cannot start: Rust module missing');
-            return;
+            throw new Error(getNativeAudioLoadError()?.message || '[MicrophoneCapture] Cannot start: Rust module missing');
         }
 
         // Monitor should be ready from constructor
@@ -61,8 +57,9 @@ export class MicrophoneCapture extends EventEmitter {
             try {
                 this.monitor = new RustMicCapture(this.deviceId);
             } catch (e) {
+                console.error('[MicrophoneCapture] Failed to re-initialize monitor:', e);
                 this.emit('error', e);
-                return;
+                throw e;
             }
         }
 

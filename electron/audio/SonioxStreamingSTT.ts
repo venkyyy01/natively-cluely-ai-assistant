@@ -19,6 +19,7 @@
 import { EventEmitter } from 'events';
 import WebSocket from 'ws';
 import { RECOGNITION_LANGUAGES } from '../config/languages';
+import { resampleToMonoPcm16 } from './pcm';
 
 const SONIOX_WEBSOCKET_URL = 'wss://stt-rt.soniox.com/transcribe-websocket';
 const RECONNECT_BASE_DELAY_MS = 1000;
@@ -32,8 +33,9 @@ export class SonioxStreamingSTT extends EventEmitter {
     private shouldReconnect = false;
     private configSent = false;
 
-    private sampleRate = 16000;
+    private inputSampleRate = 16000;
     private numChannels = 1;
+    private readonly targetSampleRate = 16000;
 
     private reconnectAttempts = 0;
     private reconnectTimer: NodeJS.Timeout | null = null;
@@ -55,8 +57,8 @@ export class SonioxStreamingSTT extends EventEmitter {
     // =========================================================================
 
     public setSampleRate(rate: number): void {
-        this.sampleRate = rate;
-        console.log(`[SonioxStreaming] Sample rate set to ${rate}`);
+        this.inputSampleRate = rate;
+        console.log(`[SonioxStreaming] Input sample rate set to ${rate}`);
     }
 
     public setAudioChannelCount(count: number): void {
@@ -147,7 +149,10 @@ export class SonioxStreamingSTT extends EventEmitter {
             return;
         }
 
-        this.ws.send(chunk);
+        const pcm16 = resampleToMonoPcm16(chunk, this.inputSampleRate, this.numChannels, this.targetSampleRate);
+        if (pcm16.length > 0) {
+            this.ws.send(pcm16);
+        }
     }
 
     public finalize(): void {
@@ -171,7 +176,7 @@ export class SonioxStreamingSTT extends EventEmitter {
         if (this.isConnecting) return;
         this.isConnecting = true;
         
-        console.log(`[SonioxStreaming] Connecting (rate=${this.sampleRate}, ch=${this.numChannels})...`);
+        console.log(`[SonioxStreaming] Connecting (input=${this.inputSampleRate}, target=${this.targetSampleRate}, ch=1)...`);
 
         this.configSent = false;
         this.pendingFinalText = '';
@@ -187,8 +192,8 @@ export class SonioxStreamingSTT extends EventEmitter {
                 api_key: this.apiKey,
                 model: 'stt-rt-v4',
                 audio_format: 'pcm_s16le',
-                sample_rate: this.sampleRate,
-                num_channels: this.numChannels,
+                sample_rate: this.targetSampleRate,
+                num_channels: 1,
                 enable_language_identification: true,
                 enable_endpoint_detection: true,
             };
@@ -207,7 +212,10 @@ export class SonioxStreamingSTT extends EventEmitter {
                 while (this.buffer.length > 0) {
                     const chunk = this.buffer.shift();
                     if (chunk && this.ws?.readyState === WebSocket.OPEN) {
-                        this.ws.send(chunk);
+                        const pcm16 = resampleToMonoPcm16(chunk, this.inputSampleRate, this.numChannels, this.targetSampleRate);
+                        if (pcm16.length > 0) {
+                            this.ws.send(pcm16);
+                        }
                     }
                 }
             } catch (err) {

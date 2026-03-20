@@ -81,6 +81,7 @@ const App: React.FC = () => {
 
   // Re-index State
   const [incompatibleWarning, setIncompatibleWarning] = useState<{count: number; oldProvider: string; newProvider: string} | null>(null);
+  const [meetingAudioError, setMeetingAudioError] = useState<string | null>(null);
 
   useEffect(() => {
     // Clean up old local storage
@@ -116,11 +117,19 @@ const App: React.FC = () => {
       });
     }
 
+    let removeMeetingAudioError: (() => void) | undefined;
+    if (window.electronAPI?.onMeetingAudioError) {
+      removeMeetingAudioError = window.electronAPI.onMeetingAudioError((message) => {
+        setMeetingAudioError(message);
+      });
+    }
+
     return () => {
       if (removeMeetingsListener) removeMeetingsListener();
       if (removeProgress) removeProgress();
       if (removeComplete) removeComplete();
       if (removeWarning) removeWarning();
+      if (removeMeetingAudioError) removeMeetingAudioError();
     }
   }, []);
 
@@ -145,6 +154,7 @@ const App: React.FC = () => {
 
   const handleStartMeeting = async () => {
     try {
+      setMeetingAudioError(null);
       localStorage.setItem('natively_last_meeting_start', Date.now().toString());
       const inputDeviceId = localStorage.getItem('preferredInputDeviceId');
       let outputDeviceId = localStorage.getItem('preferredOutputDeviceId');
@@ -172,9 +182,11 @@ const App: React.FC = () => {
         await window.electronAPI.setWindowMode('overlay');
       } else {
         console.error("Failed to start meeting:", result.error);
+        setMeetingAudioError(result.error || 'Audio pipeline failed to start.');
       }
     } catch (err) {
       console.error("Failed to start meeting:", err);
+      setMeetingAudioError(err instanceof Error ? err.message : 'Audio pipeline failed to start.');
     }
   };
 
@@ -182,6 +194,7 @@ const App: React.FC = () => {
     console.log("[App.tsx] handleEndMeeting triggered");
     analytics.trackMeetingEnded();
     setIsProcessingMeeting(true);
+    setMeetingAudioError(null);
     try {
       await window.electronAPI.endMeeting();
       console.log("[App.tsx] endMeeting IPC completed");
@@ -243,6 +256,32 @@ const App: React.FC = () => {
         <div className="w-full relative bg-transparent">
           <QueryClientProvider client={queryClient}>
             <ToastProvider>
+              <AnimatePresence>
+                {meetingAudioError && (
+                  <motion.div
+                    initial={{ opacity: 0, y: -12, scale: 0.98 }}
+                    animate={{ opacity: 1, y: 0, scale: 1 }}
+                    exit={{ opacity: 0, y: -8, scale: 0.98 }}
+                    className="absolute left-3 right-3 top-3 z-50"
+                  >
+                    <div className="rounded-2xl border border-[#ff3333]/35 bg-[#1A1A1A]/95 px-4 py-3 shadow-2xl backdrop-blur-md">
+                      <div className="flex items-start gap-3">
+                        <AlertCircle className="mt-0.5 h-5 w-5 shrink-0 text-[#ff3333]" />
+                        <div className="min-w-0 flex-1">
+                          <p className="text-sm font-semibold text-[#F4F4F4]">Audio startup failed</p>
+                          <p className="mt-1 text-xs leading-relaxed text-[#B8B8B8]">{meetingAudioError}</p>
+                        </div>
+                        <button
+                          onClick={() => setMeetingAudioError(null)}
+                          className="text-xs font-medium text-[#A0A0A0] transition-colors hover:text-white"
+                        >
+                          Dismiss
+                        </button>
+                      </div>
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
               <div style={{ opacity: overlayOpacity, transition: 'opacity 75ms ease' }}>
                 <NativelyInterface
                   onEndMeeting={handleEndMeeting}
@@ -285,6 +324,32 @@ const App: React.FC = () => {
             <QueryClientProvider client={queryClient}>
               <ToastProvider>
                 <div id="launcher-container" className="h-full w-full relative">
+                  <AnimatePresence>
+                    {meetingAudioError && (
+                      <motion.div
+                        initial={{ opacity: 0, y: 16, scale: 0.98 }}
+                        animate={{ opacity: 1, y: 0, scale: 1 }}
+                        exit={{ opacity: 0, y: 8, scale: 0.98 }}
+                        className="pointer-events-none absolute left-6 right-6 top-6 z-40"
+                      >
+                        <div className="pointer-events-auto rounded-2xl border border-[#ff3333]/35 bg-[#1A1A1A]/96 px-5 py-4 shadow-2xl backdrop-blur-md">
+                          <div className="flex items-start gap-3">
+                            <AlertCircle className="mt-0.5 h-5 w-5 shrink-0 text-[#ff3333]" />
+                            <div className="min-w-0 flex-1">
+                              <p className="text-sm font-semibold text-[#F4F4F4]">Audio setup needs attention</p>
+                              <p className="mt-1 text-xs leading-relaxed text-[#B8B8B8]">{meetingAudioError}</p>
+                            </div>
+                            <button
+                              onClick={() => setMeetingAudioError(null)}
+                              className="text-xs font-medium text-[#A0A0A0] transition-colors hover:text-white"
+                            >
+                              Dismiss
+                            </button>
+                          </div>
+                        </div>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
                   <Launcher
                     onStartMeeting={handleStartMeeting}
                     onOpenSettings={(tab = 'general') => {

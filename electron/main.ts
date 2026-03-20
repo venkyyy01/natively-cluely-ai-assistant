@@ -1,4 +1,4 @@
-import { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, shell } from "electron"
+import { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, shell, systemPreferences } from "electron"
 import path from "path"
 import fs from "fs"
 import { autoUpdater } from "electron-updater"
@@ -73,12 +73,14 @@ import { ProcessingHelper } from "./ProcessingHelper"
 import { IntelligenceManager } from "./IntelligenceManager"
 import { SystemAudioCapture } from "./audio/SystemAudioCapture"
 import { MicrophoneCapture } from "./audio/MicrophoneCapture"
+import { AudioDevices, type AudioDevice } from "./audio/AudioDevices"
 import { GoogleSTT } from "./audio/GoogleSTT"
 import { RestSTT } from "./audio/RestSTT"
 import { DeepgramStreamingSTT } from "./audio/DeepgramStreamingSTT"
 import { SonioxStreamingSTT } from "./audio/SonioxStreamingSTT"
 import { ElevenLabsStreamingSTT } from "./audio/ElevenLabsStreamingSTT"
 import { OpenAIStreamingSTT } from "./audio/OpenAIStreamingSTT"
+import { getNativeAudioLoadError } from "./audio/nativeModule"
 import { ThemeManager } from "./ThemeManager"
 import { RAGManager } from "./rag/RAGManager"
 import { DatabaseManager } from "./db/DatabaseManager"
@@ -264,6 +266,62 @@ export class AppState {
         win.webContents.send(channel, ...args);
       }
     });
+  }
+
+  private async ensureMeetingAudioAccess(): Promise<void> {
+    const nativeLoadError = getNativeAudioLoadError();
+    if (nativeLoadError) {
+      throw new Error(nativeLoadError.message);
+    }
+
+    if (process.platform !== 'darwin') {
+      return;
+    }
+
+    const micStatus = systemPreferences.getMediaAccessStatus('microphone');
+    if (micStatus !== 'granted') {
+      const granted = micStatus === 'not-determined'
+        ? await systemPreferences.askForMediaAccess('microphone')
+        : false;
+
+      if (!granted) {
+        throw new Error('Microphone access is blocked. Enable Natively in System Settings > Privacy & Security > Microphone.');
+      }
+    }
+
+    const screenStatus = systemPreferences.getMediaAccessStatus('screen');
+    if (screenStatus !== 'granted') {
+      throw new Error('Screen Recording access is blocked. Enable Natively in System Settings > Privacy & Security > Screen Recording to capture system audio.');
+    }
+  }
+
+  private async validateMeetingAudioSetup(metadata?: any): Promise<void> {
+    await this.ensureMeetingAudioAccess();
+
+    const inputDeviceId = metadata?.audio?.inputDeviceId;
+    const outputDeviceId = metadata?.audio?.outputDeviceId;
+
+    const inputDevices = AudioDevices.getInputDevices();
+    if (inputDevices.length === 0) {
+      throw new Error('No microphone devices were detected. Rebuild native audio with `npm run build:native:current` and confirm microphone permission is granted.');
+    }
+
+    if (inputDeviceId && inputDeviceId !== 'default' && !inputDevices.some((device: AudioDevice) => device.id === inputDeviceId)) {
+      throw new Error(`Selected microphone is unavailable: ${inputDeviceId}`);
+    }
+
+    const outputDevices = AudioDevices.getOutputDevices();
+    if (!outputDeviceId || outputDeviceId === 'default' || outputDeviceId === 'sck') {
+      return;
+    }
+
+    if (outputDevices.length === 0) {
+      throw new Error('No system audio output devices were detected. Rebuild native audio with `npm run build:native:current` and confirm Screen Recording permission is granted.');
+    }
+
+    if (!outputDevices.some((device: AudioDevice) => device.id === outputDeviceId)) {
+      throw new Error(`Selected speaker output is unavailable: ${outputDeviceId}`);
+    }
   }
 
   private async bootstrapOllamaEmbeddings() {
@@ -649,6 +707,22 @@ export class AppState {
       };
       helper.getLauncherWindow()?.webContents.send('native-audio-transcript', payload);
       helper.getOverlayWindow()?.webContents.send('native-audio-transcript', payload);
+
+      if (speaker === 'interviewer' && segment.isFinal) {
+        const trimmed = segment.text.trim();
+        const wordCount = trimmed.split(/\s+/).filter(Boolean).length;
+        const looksActionable = trimmed.endsWith('?') || wordCount >= 5;
+
+        if (looksActionable) {
+          void this.intelligenceManager.handleSuggestionTrigger({
+            context: this.intelligenceManager.getFormattedContext(180),
+            lastQuestion: trimmed,
+            confidence: segment.confidence ?? 0.8,
+          }).catch((error) => {
+            console.error('[Main] Failed to auto-trigger interview assist:', error);
+          });
+        }
+      }
     });
 
     stt.on('error', (err: Error) => {
@@ -911,6 +985,8 @@ export class AppState {
   public async startMeeting(metadata?: any): Promise<void> {
     console.log('[Main] Starting Meeting...', metadata);
 
+    await this.validateMeetingAudioSetup(metadata);
+
     this.isMeetingActive = true;
     if (metadata) {
       this.intelligenceManager.setMeetingMetadata(metadata);
@@ -952,6 +1028,7 @@ export class AppState {
         console.error('[Main] Error initializing audio pipeline:', err);
         // Notify UI so user knows microphone/audio failed to start
         this.broadcast('meeting-audio-error', (err as Error).message || 'Audio pipeline failed to start');
+        this.isMeetingActive = false;
       }
     }, 0); // Defer to next event loop tick — ensures IPC response reaches renderer before audio init
   }

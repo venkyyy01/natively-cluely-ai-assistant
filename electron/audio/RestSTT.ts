@@ -15,6 +15,7 @@ import { EventEmitter } from 'events';
 import axios from 'axios';
 import FormData from 'form-data';
 import { RECOGNITION_LANGUAGES } from '../config/languages';
+import { resampleToMonoPcm16 } from './pcm';
 
 export type RestSttProvider = 'groq' | 'openai' | 'elevenlabs' | 'azure' | 'ibmwatson';
 
@@ -143,6 +144,7 @@ export class RestSTT extends EventEmitter {
     private sampleRate = 16000;
     private numChannels = 1;
     private bitsPerSample = 16;
+    private readonly targetSampleRate = 16000;
 
     constructor(provider: RestSttProvider, apiKey: string, modelOverride?: string, region?: string) {
         super();
@@ -240,8 +242,10 @@ export class RestSTT extends EventEmitter {
      */
     public write(audioData: Buffer): void {
         if (!this.isActive) return;
-        this.chunks.push(audioData);
-        this.totalBufferedBytes += audioData.length;
+        const pcm16 = resampleToMonoPcm16(audioData, this.sampleRate, this.numChannels, this.targetSampleRate);
+        if (pcm16.length === 0) return;
+        this.chunks.push(pcm16);
+        this.totalBufferedBytes += pcm16.length;
     }
 
     /**
@@ -295,7 +299,7 @@ export class RestSTT extends EventEmitter {
         }
 
         // Add WAV header
-        const wavBuffer = this.addWavHeader(rawPcm, this.sampleRate);
+        const wavBuffer = this.addWavHeader(rawPcm, this.targetSampleRate);
 
         this.isUploading = true;
 

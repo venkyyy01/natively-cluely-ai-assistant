@@ -76,6 +76,7 @@ interface ElectronAPI {
   onSuggestionGenerated: (callback: (data: { question: string; suggestion: string; confidence: number }) => void) => () => void
   onSuggestionProcessingStart: (callback: () => void) => () => void
   onSuggestionError: (callback: (error: { error: string }) => void) => () => void
+  onMeetingAudioError: (callback: (message: string) => void) => () => void
   generateSuggestion: (context: string, lastQuestion: string) => Promise<{ suggestion: string }>
   getInputDevices: () => Promise<Array<{ id: string; name: string }>>
   getOutputDevices: () => Promise<Array<{ id: string; name: string }>>
@@ -498,6 +499,13 @@ contextBridge.exposeInMainWorld("electronAPI", {
     ipcRenderer.on("suggestion-error", subscription)
     return () => {
       ipcRenderer.removeListener("suggestion-error", subscription)
+    }
+  },
+  onMeetingAudioError: (callback: (message: string) => void) => {
+    const subscription = (_: any, data: string) => callback(data)
+    ipcRenderer.on("meeting-audio-error", subscription)
+    return () => {
+      ipcRenderer.removeListener("meeting-audio-error", subscription)
     }
   },
   generateSuggestion: (context: string, lastQuestion: string) =>
