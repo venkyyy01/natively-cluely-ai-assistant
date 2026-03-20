@@ -1,10 +1,11 @@
 import React from 'react';
 import { Check, ExternalLink, Globe, Info, MapPin, Mic, RefreshCw, Upload } from 'lucide-react';
+import { getElectronAPI } from '../../lib/electronApi';
 
 interface SpeechProviderSectionProps {
   sttProvider: string;
   ProviderSelect: React.FC<any>;
-  googleServiceAccountPath: string;
+  googleServiceAccountPath: string | null;
   hasStoredSttGroqKey: boolean;
   hasStoredSttOpenaiKey: boolean;
   hasStoredDeepgramKey: boolean;
@@ -31,10 +32,9 @@ interface SpeechProviderSectionProps {
   setSttSonioxKey: (value: string) => void;
   sttSaving: boolean;
   sttSaved: boolean;
+  handleRemoveSttKey?: (provider: any) => void;
   sttAzureRegion: string;
   setSttAzureRegion: (value: string) => void;
-  sttIbmRegion: string;
-  setSttIbmRegion: (value: string) => void;
   sttTestStatus: 'idle' | 'testing' | 'success' | 'error';
   sttTestError: string;
   recognitionLanguage: string;
@@ -50,6 +50,7 @@ interface SpeechProviderSectionProps {
 }
 
 export const SpeechProviderSection: React.FC<SpeechProviderSectionProps> = (props) => {
+  const electronAPI = getElectronAPI();
   const {
     sttProvider,
     ProviderSelect,
@@ -80,10 +81,9 @@ export const SpeechProviderSection: React.FC<SpeechProviderSectionProps> = (prop
     setSttSonioxKey,
     sttSaving,
     sttSaved,
+    handleRemoveSttKey,
     sttAzureRegion,
     setSttAzureRegion,
-    sttIbmRegion,
-    setSttIbmRegion,
     sttTestStatus,
     sttTestError,
     recognitionLanguage,
@@ -148,7 +148,7 @@ export const SpeechProviderSection: React.FC<SpeechProviderSectionProps> = (prop
                     onClick={async () => {
                       setGroqSttModel(m.id);
                       try {
-                        await window.electronAPI.setGroqSttModel(m.id);
+                        await electronAPI.setGroqSttModel(m.id);
                       } catch (e) {
                         console.error('Failed to set Groq model:', e);
                       }
@@ -172,7 +172,7 @@ export const SpeechProviderSection: React.FC<SpeechProviderSectionProps> = (prop
                 </div>
                 <button
                   onClick={async () => {
-                    const result = await window.electronAPI.selectServiceAccount();
+                    const result = await electronAPI.selectServiceAccount();
                     if (result?.success && result.path) {
                       setGoogleServiceAccountPath(result.path);
                     }
@@ -214,6 +214,15 @@ export const SpeechProviderSection: React.FC<SpeechProviderSectionProps> = (prop
                 >
                   {sttSaved ? <span className="flex items-center gap-1.5"><Check size={13} /> Saved</span> : 'Save'}
                 </button>
+                {handleRemoveSttKey && keyMap[sttProvider] !== undefined && (
+                  <button
+                    onClick={() => handleRemoveSttKey(sttProvider as any)}
+                    className="px-2.5 py-2.5 rounded-lg text-xs font-medium text-text-tertiary hover:text-red-500 hover:bg-red-500/10 transition-all"
+                    title="Remove API Key"
+                  >
+                    Remove
+                  </button>
+                )}
               </div>
 
               {sttProvider === 'azure' && (
@@ -221,16 +230,9 @@ export const SpeechProviderSection: React.FC<SpeechProviderSectionProps> = (prop
                   <label className="text-xs font-medium text-text-secondary mb-1.5 block">Azure Region</label>
                   <div className="flex gap-2">
                     <input value={sttAzureRegion} onChange={(e) => setSttAzureRegion(e.target.value)} className="flex-1 bg-bg-input border border-border-subtle rounded-lg px-3 py-2 text-sm text-text-primary" />
-                    <button onClick={() => window.electronAPI.setAzureRegion(sttAzureRegion.trim())} className="px-4 py-2 bg-bg-input hover:bg-bg-elevated border border-border-subtle rounded-lg text-xs font-medium text-text-primary transition-colors">Save</button>
+                    <button onClick={() => electronAPI.setAzureRegion(sttAzureRegion.trim())} className="px-4 py-2 bg-bg-input hover:bg-bg-elevated border border-border-subtle rounded-lg text-xs font-medium text-text-primary transition-colors">Save</button>
                   </div>
                   <p className="text-[10px] text-text-tertiary">e.g. eastus, westeurope, westus2</p>
-                </div>
-              )}
-
-              {sttProvider === 'ibmwatson' && (
-                <div>
-                  <label className="text-xs font-medium text-text-secondary mb-1.5 block">IBM Region</label>
-                  <input value={sttIbmRegion} onChange={(e) => setSttIbmRegion(e.target.value)} className="w-full bg-bg-input border border-border-subtle rounded-lg px-3 py-2 text-sm text-text-primary" />
                 </div>
               )}
 
@@ -248,7 +250,7 @@ export const SpeechProviderSection: React.FC<SpeechProviderSectionProps> = (prop
                       azure: 'https://portal.azure.com/#create/Microsoft.CognitiveServicesSpeech',
                       ibmwatson: 'https://cloud.ibm.com/catalog/services/speech-to-text',
                     };
-                    if (urls[sttProvider]) window.electronAPI.openExternal(urls[sttProvider]);
+                    if (urls[sttProvider]) electronAPI.openExternal(urls[sttProvider]);
                   }}
                   className="text-xs text-text-tertiary hover:text-text-primary flex items-center gap-1 transition-colors ml-1"
                   title="Get API Key"

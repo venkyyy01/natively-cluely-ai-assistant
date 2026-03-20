@@ -46,11 +46,29 @@ export class WindowHelper {
     this.applyContentProtection(enable)
   }
 
+  private applyStealthFlags(win: BrowserWindow, enable: boolean, isAuxiliary: boolean = false): void {
+    win.setContentProtection(enable);
+
+    if (process.platform === 'darwin') {
+      win.setHiddenInMissionControl(enable || isAuxiliary);
+      if (typeof (win as any).setExcludedFromShownWindowsMenu === 'function') {
+        (win as any).setExcludedFromShownWindowsMenu(enable || isAuxiliary);
+      }
+    }
+
+    if (!isAuxiliary) {
+      win.setSkipTaskbar(enable);
+    }
+  }
+
   private applyContentProtection(enable: boolean): void {
-    const windows = [this.launcherWindow, this.overlayWindow]
-    windows.forEach(win => {
+    const windows = [
+      { win: this.launcherWindow, auxiliary: false },
+      { win: this.overlayWindow, auxiliary: true },
+    ]
+    windows.forEach(({ win, auxiliary }) => {
       if (win && !win.isDestroyed()) {
-        win.setContentProtection(enable);
+        this.applyStealthFlags(win, enable, auxiliary);
       }
     });
   }
@@ -137,6 +155,7 @@ export class WindowHelper {
         webSecurity: true,
       },
       show: false, // DEBUG: Force show -> Fixed white screen, now relies on ready-to-show
+      skipTaskbar: this.contentProtection,
       titleBarStyle: 'hiddenInset',
       trafficLightPosition: { x: 14, y: 14 },
       vibrancy: 'under-window',
@@ -192,7 +211,7 @@ export class WindowHelper {
       return;
     }
 
-    this.launcherWindow.setContentProtection(this.contentProtection)
+    this.applyStealthFlags(this.launcherWindow, this.contentProtection)
 
     this.launcherWindow.loadURL(`${startUrl}?window=launcher`)
       .then(() => console.log('[WindowHelper] loadURL success'))
@@ -231,7 +250,7 @@ export class WindowHelper {
     }
 
     this.overlayWindow = new BrowserWindow(overlaySettings)
-    this.overlayWindow.setContentProtection(this.contentProtection)
+    this.applyStealthFlags(this.overlayWindow, this.contentProtection, true)
 
     if (process.platform === "darwin") {
       this.overlayWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
@@ -369,7 +388,7 @@ export class WindowHelper {
         // Opacity Shield: Show at 0 opacity first to prevent frame leak
         this.overlayWindow.setOpacity(0);
         this.overlayWindow.show();
-        this.overlayWindow.setContentProtection(true);
+        this.applyStealthFlags(this.overlayWindow, true, true);
         // Small delay to ensure Windows DWM processes the flag before making it opaque
         
         if (this.opacityTimeout) clearTimeout(this.opacityTimeout);
@@ -381,7 +400,7 @@ export class WindowHelper {
           }
         }, 60);
       } else {
-        this.overlayWindow.setContentProtection(this.contentProtection);
+        this.applyStealthFlags(this.overlayWindow, this.contentProtection, true);
         this.overlayWindow.show();
         this.overlayWindow.focus();
         this.overlayWindow.setAlwaysOnTop(true, "floating");
@@ -405,7 +424,7 @@ export class WindowHelper {
         // Opacity Shield: Show at 0 opacity first
         this.launcherWindow.setOpacity(0);
         this.launcherWindow.show();
-        this.launcherWindow.setContentProtection(true);
+        this.applyStealthFlags(this.launcherWindow, true);
         
         if (this.opacityTimeout) clearTimeout(this.opacityTimeout);
         this.opacityTimeout = setTimeout(() => {
@@ -415,7 +434,7 @@ export class WindowHelper {
           }
         }, 60);
       } else {
-        this.launcherWindow.setContentProtection(this.contentProtection);
+        this.applyStealthFlags(this.launcherWindow, this.contentProtection);
         this.launcherWindow.show();
         this.launcherWindow.focus();
       }
