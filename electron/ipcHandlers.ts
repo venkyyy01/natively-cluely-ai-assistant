@@ -59,7 +59,7 @@ export function initializeIpcHandlers(appState: AppState): void {
     }
   });
 
-  safeHandle("renderer:log-error", async (_, payload: any) => {
+  safeHandleValidated("renderer:log-error", (args) => [parseIpcInput(ipcSchemas.rendererLogPayload, args[0], 'renderer:log-error')] as const, async (_, payload) => {
     try {
       console.error('[RendererError]', JSON.stringify(payload));
       return { success: true };
@@ -88,9 +88,10 @@ export function initializeIpcHandlers(appState: AppState): void {
   registerRagHandlers({ appState, safeHandle });
   registerProfileHandlers({ appState, safeHandle });
   registerIntelligenceHandlers({ appState, safeHandle });
-  safeHandle(
+  safeHandleValidated(
     "update-content-dimensions",
-    async (event, { width, height }: { width: number; height: number }) => {
+    (args) => [parseIpcInput(ipcSchemas.contentDimensions, args[0], 'update-content-dimensions')] as const,
+    async (event, { width, height }) => {
       if (!width || !height) return
 
       const senderWebContents = event.sender
@@ -109,13 +110,13 @@ export function initializeIpcHandlers(appState: AppState): void {
     }
   )
 
-  safeHandle("set-window-mode", async (event, mode: 'launcher' | 'overlay') => {
+  safeHandleValidated("set-window-mode", (args) => [parseIpcInput(ipcSchemas.windowMode, args[0], 'set-window-mode')] as const, async (event, mode) => {
     appState.getWindowHelper().setWindowMode(mode);
     return { success: true };
   })
 
 
-  safeHandle("delete-screenshot", async (event, filePath: string) => {
+  safeHandleValidated("delete-screenshot", (args) => [parseIpcInput(ipcSchemas.absoluteUserDataPath, args[0], 'delete-screenshot')] as const, async (event, filePath) => {
     // Guard: only allow deletion of files within the app's own userData directory
     const userDataDir = app.getPath('userData');
     const resolved = path.resolve(filePath);
@@ -371,7 +372,7 @@ export function initializeIpcHandlers(appState: AppState): void {
     appState.quitAndInstallUpdate()
   })
 
-  safeHandle("delete-meeting", async (_, id: string) => {
+  safeHandleValidated("delete-meeting", (args) => [parseIpcInput(ipcSchemas.providerId, args[0], 'delete-meeting')] as const, async (_, id) => {
     return DatabaseManager.getInstance().deleteMeeting(id);
   });
 
@@ -430,7 +431,7 @@ export function initializeIpcHandlers(appState: AppState): void {
     }
   });
 
-  safeHandle("switch-to-ollama", async (_, model?: string, url?: string) => {
+  safeHandleValidated("switch-to-ollama", (args) => parseIpcInput(ipcSchemas.ollamaSwitchArgs, args, 'switch-to-ollama'), async (_, model, url) => {
     try {
       const llmHelper = appState.processingHelper.getLLMHelper();
       await llmHelper.switchToOllama(model, url);
@@ -477,7 +478,7 @@ export function initializeIpcHandlers(appState: AppState): void {
     }
   });
 
-  safeHandle("switch-to-gemini", async (_, apiKey?: string, modelId?: string) => {
+  safeHandleValidated("switch-to-gemini", (args) => parseIpcInput(ipcSchemas.providerSwitchGeminiArgs, args, 'switch-to-gemini'), async (_, apiKey, modelId) => {
     try {
       const llmHelper = appState.processingHelper.getLLMHelper();
       await llmHelper.switchToGemini(apiKey, modelId);
@@ -496,7 +497,7 @@ export function initializeIpcHandlers(appState: AppState): void {
   });
 
   // Dedicated API key setters (for Settings UI Save buttons)
-  safeHandle("set-gemini-api-key", async (_, apiKey: string) => {
+  safeHandleValidated("set-gemini-api-key", (args) => [parseIpcInput(ipcSchemas.apiKey, args[0], 'set-gemini-api-key')] as const, async (_, apiKey) => {
     try {
       const { CredentialsManager } = require('./services/CredentialsManager');
       CredentialsManager.getInstance().setGeminiApiKey(apiKey);
@@ -515,7 +516,7 @@ export function initializeIpcHandlers(appState: AppState): void {
     }
   });
 
-  safeHandle("set-groq-api-key", async (_, apiKey: string) => {
+  safeHandleValidated("set-groq-api-key", (args) => [parseIpcInput(ipcSchemas.apiKey, args[0], 'set-groq-api-key')] as const, async (_, apiKey) => {
     try {
       const { CredentialsManager } = require('./services/CredentialsManager');
       CredentialsManager.getInstance().setGroqApiKey(apiKey);
@@ -534,7 +535,7 @@ export function initializeIpcHandlers(appState: AppState): void {
     }
   });
 
-  safeHandle("set-openai-api-key", async (_, apiKey: string) => {
+  safeHandleValidated("set-openai-api-key", (args) => [parseIpcInput(ipcSchemas.apiKey, args[0], 'set-openai-api-key')] as const, async (_, apiKey) => {
     try {
       const { CredentialsManager } = require('./services/CredentialsManager');
       CredentialsManager.getInstance().setOpenaiApiKey(apiKey);
@@ -553,7 +554,7 @@ export function initializeIpcHandlers(appState: AppState): void {
     }
   });
 
-  safeHandle("set-claude-api-key", async (_, apiKey: string) => {
+  safeHandleValidated("set-claude-api-key", (args) => [parseIpcInput(ipcSchemas.apiKey, args[0], 'set-claude-api-key')] as const, async (_, apiKey) => {
     try {
       const { CredentialsManager } = require('./services/CredentialsManager');
       CredentialsManager.getInstance().setClaudeApiKey(apiKey);
@@ -600,7 +601,7 @@ export function initializeIpcHandlers(appState: AppState): void {
     }
   });
 
-  safeHandle("delete-custom-provider", async (_, id: string) => {
+  safeHandleValidated("delete-custom-provider", (args) => [parseIpcInput(ipcSchemas.providerId, args[0], 'delete-custom-provider')] as const, async (_, id) => {
     try {
       const { CredentialsManager } = require('./services/CredentialsManager');
       // Try deleting from both storages to be safe
@@ -613,7 +614,7 @@ export function initializeIpcHandlers(appState: AppState): void {
     }
   });
 
-  safeHandle("switch-to-custom-provider", async (_, providerId: string) => {
+  safeHandleValidated("switch-to-custom-provider", (args) => [parseIpcInput(ipcSchemas.providerId, args[0], 'switch-to-custom-provider')] as const, async (_, providerId) => {
     try {
       const { CredentialsManager } = require('./services/CredentialsManager');
       const provider = CredentialsManager.getInstance().getCustomProviders().find((p: any) => p.id === providerId);
@@ -657,7 +658,7 @@ export function initializeIpcHandlers(appState: AppState): void {
     }
   });
 
-  safeHandle("delete-curl-provider", async (_, id: string) => {
+  safeHandleValidated("delete-curl-provider", (args) => [parseIpcInput(ipcSchemas.providerId, args[0], 'delete-curl-provider')] as const, async (_, id) => {
     try {
       const { CredentialsManager } = require('./services/CredentialsManager');
       CredentialsManager.getInstance().deleteCurlProvider(id);
@@ -668,7 +669,7 @@ export function initializeIpcHandlers(appState: AppState): void {
     }
   });
 
-  safeHandle("switch-to-curl-provider", async (_, providerId: string) => {
+  safeHandleValidated("switch-to-curl-provider", (args) => [parseIpcInput(ipcSchemas.providerId, args[0], 'switch-to-curl-provider')] as const, async (_, providerId) => {
     try {
       const { CredentialsManager } = require('./services/CredentialsManager');
       const provider = CredentialsManager.getInstance().getCurlProviders().find((p: any) => p.id === providerId);
@@ -733,7 +734,7 @@ export function initializeIpcHandlers(appState: AppState): void {
   // Dynamic Model Discovery Handlers
   // ==========================================
 
-  safeHandle("fetch-provider-models", async (_, provider: 'gemini' | 'groq' | 'openai' | 'claude', apiKey: string) => {
+  safeHandleValidated("fetch-provider-models", (args) => parseIpcInput(ipcSchemas.providerModelFetchArgs, args, 'fetch-provider-models'), async (_, provider, apiKey) => {
     try {
       // Fall back to stored key if no key was explicitly provided
       let key = apiKey?.trim();
@@ -775,7 +776,7 @@ export function initializeIpcHandlers(appState: AppState): void {
   // STT Provider Management Handlers
   // ==========================================
 
-  safeHandle("set-stt-provider", async (_, provider: 'google' | 'groq' | 'openai' | 'deepgram' | 'elevenlabs' | 'azure' | 'ibmwatson' | 'soniox') => {
+  safeHandleValidated("set-stt-provider", (args) => [parseIpcInput(ipcSchemas.sttProvider, args[0], 'set-stt-provider')] as const, async (_, provider) => {
     try {
       const { CredentialsManager } = require('./services/CredentialsManager');
       CredentialsManager.getInstance().setSttProvider(provider);
@@ -799,7 +800,7 @@ export function initializeIpcHandlers(appState: AppState): void {
     }
   });
 
-  safeHandle("set-groq-stt-api-key", async (_, apiKey: string) => {
+  safeHandleValidated("set-groq-stt-api-key", (args) => [parseIpcInput(ipcSchemas.apiKey, args[0], 'set-groq-stt-api-key')] as const, async (_, apiKey) => {
     try {
       const { CredentialsManager } = require('./services/CredentialsManager');
       CredentialsManager.getInstance().setGroqSttApiKey(apiKey);
@@ -810,7 +811,7 @@ export function initializeIpcHandlers(appState: AppState): void {
     }
   });
 
-  safeHandle("set-openai-stt-api-key", async (_, apiKey: string) => {
+  safeHandleValidated("set-openai-stt-api-key", (args) => [parseIpcInput(ipcSchemas.apiKey, args[0], 'set-openai-stt-api-key')] as const, async (_, apiKey) => {
     try {
       const { CredentialsManager } = require('./services/CredentialsManager');
       CredentialsManager.getInstance().setOpenAiSttApiKey(apiKey);
@@ -821,7 +822,7 @@ export function initializeIpcHandlers(appState: AppState): void {
     }
   });
 
-  safeHandle("set-deepgram-api-key", async (_, apiKey: string) => {
+  safeHandleValidated("set-deepgram-api-key", (args) => [parseIpcInput(ipcSchemas.apiKey, args[0], 'set-deepgram-api-key')] as const, async (_, apiKey) => {
     try {
       const { CredentialsManager } = require('./services/CredentialsManager');
       CredentialsManager.getInstance().setDeepgramApiKey(apiKey);
@@ -832,7 +833,7 @@ export function initializeIpcHandlers(appState: AppState): void {
     }
   });
 
-  safeHandle("set-groq-stt-model", async (_, model: string) => {
+  safeHandleValidated("set-groq-stt-model", (args) => [parseIpcInput(ipcSchemas.modelId, args[0], 'set-groq-stt-model')] as const, async (_, model) => {
     try {
       const { CredentialsManager } = require('./services/CredentialsManager');
       CredentialsManager.getInstance().setGroqSttModel(model);
@@ -847,7 +848,7 @@ export function initializeIpcHandlers(appState: AppState): void {
     }
   });
 
-  safeHandle("set-elevenlabs-api-key", async (_, apiKey: string) => {
+  safeHandleValidated("set-elevenlabs-api-key", (args) => [parseIpcInput(ipcSchemas.apiKey, args[0], 'set-elevenlabs-api-key')] as const, async (_, apiKey) => {
     try {
       const { CredentialsManager } = require('./services/CredentialsManager');
       CredentialsManager.getInstance().setElevenLabsApiKey(apiKey);
@@ -858,7 +859,7 @@ export function initializeIpcHandlers(appState: AppState): void {
     }
   });
 
-  safeHandle("set-azure-api-key", async (_, apiKey: string) => {
+  safeHandleValidated("set-azure-api-key", (args) => [parseIpcInput(ipcSchemas.apiKey, args[0], 'set-azure-api-key')] as const, async (_, apiKey) => {
     try {
       const { CredentialsManager } = require('./services/CredentialsManager');
       CredentialsManager.getInstance().setAzureApiKey(apiKey);
@@ -869,7 +870,7 @@ export function initializeIpcHandlers(appState: AppState): void {
     }
   });
 
-  safeHandle("set-azure-region", async (_, region: string) => {
+  safeHandleValidated("set-azure-region", (args) => [parseIpcInput(ipcSchemas.azureRegion, args[0], 'set-azure-region')] as const, async (_, region) => {
     try {
       const { CredentialsManager } = require('./services/CredentialsManager');
       CredentialsManager.getInstance().setAzureRegion(region);
@@ -884,7 +885,7 @@ export function initializeIpcHandlers(appState: AppState): void {
     }
   });
 
-  safeHandle("set-ibmwatson-api-key", async (_, apiKey: string) => {
+  safeHandleValidated("set-ibmwatson-api-key", (args) => [parseIpcInput(ipcSchemas.apiKey, args[0], 'set-ibmwatson-api-key')] as const, async (_, apiKey) => {
     try {
       const { CredentialsManager } = require('./services/CredentialsManager');
       CredentialsManager.getInstance().setIbmWatsonApiKey(apiKey);
@@ -895,7 +896,7 @@ export function initializeIpcHandlers(appState: AppState): void {
     }
   });
 
-  safeHandle("set-soniox-api-key", async (_, apiKey: string) => {
+  safeHandleValidated("set-soniox-api-key", (args) => [parseIpcInput(ipcSchemas.apiKey, args[0], 'set-soniox-api-key')] as const, async (_, apiKey) => {
     try {
       const { CredentialsManager } = require('./services/CredentialsManager');
       CredentialsManager.getInstance().setSonioxApiKey(apiKey);
@@ -912,7 +913,7 @@ export function initializeIpcHandlers(appState: AppState): void {
     return msg.replace(/:\s*[a-zA-Z0-9*]+\*+[a-zA-Z0-9*]+\.?$/g, '').trim();
   };
 
-  safeHandle("test-stt-connection", async (_, provider: 'groq' | 'openai' | 'deepgram' | 'elevenlabs' | 'azure' | 'ibmwatson' | 'soniox', apiKey: string, region?: string) => {
+  safeHandleValidated("test-stt-connection", (args) => parseIpcInput(ipcSchemas.sttConnectionArgs, args, 'test-stt-connection'), async (_, provider, apiKey, region) => {
     console.log(`[IPC] Received test - stt - connection request for provider: ${provider} `);
     try {
       if (provider === 'deepgram') {
@@ -1082,7 +1083,7 @@ export function initializeIpcHandlers(appState: AppState): void {
     }
   });
 
-  safeHandle("test-llm-connection", async (_, provider: 'gemini' | 'groq' | 'openai' | 'claude', apiKey?: string) => {
+  safeHandleValidated("test-llm-connection", (args) => parseIpcInput(ipcSchemas.llmConnectionArgs, args, 'test-llm-connection'), async (_, provider, apiKey) => {
     console.log(`[IPC] Received test-llm-connection request for provider: ${provider}`);
     try {
       if (!apiKey || !apiKey.trim()) {
@@ -1164,7 +1165,7 @@ export function initializeIpcHandlers(appState: AppState): void {
   });
 
   // Set Groq Fast Text Mode
-  safeHandle("set-groq-fast-text-mode", (_, enabled: boolean) => {
+  safeHandleValidated("set-groq-fast-text-mode", (args) => [parseIpcInput(ipcSchemas.booleanFlag, args[0], 'set-groq-fast-text-mode')] as const, (_, enabled) => {
     try {
       const llmHelper = appState.processingHelper.getLLMHelper();
       llmHelper.setGroqFastTextMode(enabled);
@@ -1180,7 +1181,7 @@ export function initializeIpcHandlers(appState: AppState): void {
     }
   });
 
-  safeHandle("set-model", async (_, modelId: string) => {
+  safeHandleValidated("set-model", (args) => [parseIpcInput(ipcSchemas.modelId, args[0], 'set-model')] as const, async (_, modelId) => {
     try {
       const llmHelper = appState.processingHelper.getLLMHelper();
       const { CredentialsManager } = require('./services/CredentialsManager');
@@ -1211,7 +1212,7 @@ export function initializeIpcHandlers(appState: AppState): void {
   });
 
   // Persist default model (from Settings) + update runtime + broadcast to all windows
-  safeHandle("set-default-model", async (_, modelId: string) => {
+  safeHandleValidated("set-default-model", (args) => [parseIpcInput(ipcSchemas.modelId, args[0], 'set-default-model')] as const, async (_, modelId) => {
     try {
       const { CredentialsManager } = require('./services/CredentialsManager');
       const cm = CredentialsManager.getInstance();
@@ -1255,7 +1256,7 @@ export function initializeIpcHandlers(appState: AppState): void {
 
   // --- Model Selector Window IPC ---
 
-  safeHandle("show-model-selector", (_, coords: { x: number; y: number }) => {
+  safeHandleValidated("show-model-selector", (args) => [parseIpcInput(ipcSchemas.modelSelectorCoords, args[0], 'show-model-selector')] as const, (_, coords) => {
     appState.modelSelectorWindowHelper.showWindow(coords.x, coords.y);
   });
 
@@ -1263,7 +1264,7 @@ export function initializeIpcHandlers(appState: AppState): void {
     appState.modelSelectorWindowHelper.hideWindow();
   });
 
-  safeHandle("toggle-model-selector", (_, coords: { x: number; y: number }) => {
+  safeHandleValidated("toggle-model-selector", (args) => [parseIpcInput(ipcSchemas.modelSelectorCoords, args[0], 'toggle-model-selector')] as const, (_, coords) => {
     appState.modelSelectorWindowHelper.toggleWindow(coords.x, coords.y);
   });
 
@@ -1318,7 +1319,7 @@ export function initializeIpcHandlers(appState: AppState): void {
     };
   });
 
-  safeHandle("theme:set-mode", (_, mode: 'system' | 'light' | 'dark') => {
+  safeHandleValidated("theme:set-mode", (args) => [parseIpcInput(ipcSchemas.themeMode, args[0], 'theme:set-mode')] as const, (_, mode) => {
     appState.getThemeManager().setMode(mode);
     return { success: true };
   });

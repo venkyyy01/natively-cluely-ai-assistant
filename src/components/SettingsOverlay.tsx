@@ -12,6 +12,8 @@ import { AboutSection } from './AboutSection';
 import { AIProvidersSettings } from './settings/AIProvidersSettings';
 import { AudioConfigSection } from './settings/AudioConfigSection';
 import { SpeechProviderSection } from './settings/SpeechProviderSection';
+import { CalendarSettingsSection } from './settings/CalendarSettingsSection';
+import { SettingsSidebar } from './settings/SettingsSidebar';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useShortcuts } from '../hooks/useShortcuts';
 import { KeyRecorder } from './ui/KeyRecorder';
@@ -1326,74 +1328,15 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
                             className="flex w-full h-full"
                             style={{ visibility: isPreviewingOpacity ? 'hidden' : 'visible' }}
                         >
-                        {/* Sidebar */}
-                        <div className="w-64 bg-bg-sidebar flex flex-col border-r border-border-subtle">
-                            <div className="p-6">
-                                <h2 className="font-semibold text-gray-400 text-xs uppercase tracking-wider mb-2">Settings</h2>
-                                <nav className="space-y-1">
-                                    <button
-                                        onClick={() => setActiveTab('general')}
-                                        className={`w-full text-left px-3 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-3 ${activeTab === 'general' ? 'bg-bg-item-active text-text-primary' : 'text-text-secondary hover:text-text-primary hover:bg-bg-item-active/50'}`}
-                                    >
-                                        <Monitor size={16} /> General
-                                    </button>
-                                    <button
-                                        onClick={() => setActiveTab('ai-providers')}
-                                        className={`w-full text-left px-3 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-3 ${activeTab === 'ai-providers' ? 'bg-bg-item-active text-text-primary' : 'text-text-secondary hover:text-text-primary hover:bg-bg-item-active/50'}`}
-                                    >
-                                        <FlaskConical size={16} /> AI Providers
-                                    </button>
-                                    <button
-                                        onClick={() => setActiveTab('calendar')}
-                                        className={`w-full text-left px-3 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-3 ${activeTab === 'calendar' ? 'bg-bg-item-active text-text-primary' : 'text-text-secondary hover:text-text-primary hover:bg-bg-item-active/50'}`}
-                                    >
-                                        <Calendar size={16} /> Calendar
-                                    </button>
-                                    <button
-                                        onClick={() => setActiveTab('audio')}
-                                        className={`w-full text-left px-3 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-3 ${activeTab === 'audio' ? 'bg-bg-item-active text-text-primary' : 'text-text-secondary hover:text-text-primary hover:bg-bg-item-active/50'}`}
-                                    >
-                                        <Mic size={16} /> Audio
-                                    </button>
-                                    <button
-                                        onClick={() => setActiveTab('keybinds')}
-                                        className={`w-full text-left px-3 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-3 ${activeTab === 'keybinds' ? 'bg-bg-item-active text-text-primary' : 'text-text-secondary hover:text-text-primary hover:bg-bg-item-active/50'}`}
-                                    >
-                                        <Keyboard size={16} /> Keybinds
-                                    </button>
-                                    <button
-                                        onClick={() => {
-                                            setActiveTab('profile');
-                                            // Load profile status when switching to this tab
-                                            window.electronAPI?.profileGetStatus?.().then(setProfileStatus).catch(() => { });
-                                            window.electronAPI?.profileGetProfile?.().then(setProfileData).catch(() => { });
-                                        }}
-                                        className={`w-full text-left px-3 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-3 ${activeTab === 'profile' ? 'bg-bg-item-active text-text-primary' : 'text-text-secondary hover:text-text-primary hover:bg-bg-item-active/50'}`}
-                                    >
-                                        <User size={16} /> Profile Intelligence
-                                    </button>
-
-                                    <button
-                                        onClick={() => setActiveTab('about')}
-                                        className={`w-full text-left px-3 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-3 ${activeTab === 'about' ? 'bg-bg-item-active text-text-primary' : 'text-text-secondary hover:text-text-primary hover:bg-bg-item-active/50'}`}
-                                    >
-                                        <Info size={16} /> About
-                                    </button>
-                                </nav>
-                            </div>
-
-                            <div className="mt-auto p-6 border-t border-border-subtle">
-                                <button
-                                    onClick={() => window.electronAPI.quitApp()}
-                                    className="w-full text-left px-3 py-2 rounded-lg text-sm font-medium text-red-400 hover:bg-red-500/10 transition-colors flex items-center gap-3"
-                                >
-                                    <LogOut size={16} /> Quit Natively
-                                </button>
-                                <button onClick={onClose} className="group mt-2 w-full text-left px-3 py-2 rounded-lg text-sm font-medium text-text-secondary hover:text-text-primary hover:bg-bg-item-active/50 transition-colors flex items-center gap-3">
-                                    <X size={18} className="group-hover:text-red-500 transition-colors" /> Close
-                                </button>
-                            </div>
-                        </div>
+                        <SettingsSidebar
+                            activeTab={activeTab}
+                            setActiveTab={setActiveTab}
+                            onClose={onClose}
+                            onProfileOpen={() => {
+                                window.electronAPI?.profileGetStatus?.().then(setProfileStatus).catch(() => { });
+                                window.electronAPI?.profileGetProfile?.().then(setProfileData).catch(() => { });
+                            }}
+                        />
 
                         {/* Content */}
                         <div className="flex-1 overflow-y-auto bg-bg-main p-8">
@@ -2488,84 +2431,12 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
 
 
                             {activeTab === 'calendar' && (
-                                <div className="space-y-6 animated fadeIn h-full">
-                                    <div>
-                                        <h3 className="text-lg font-bold text-text-primary mb-2">Visible Calendars</h3>
-                                        <p className="text-xs text-text-secondary mb-4">Upcoming meetings are synchronized from these calendars</p>
-                                    </div>
-
-                                    <div className="bg-bg-card rounded-xl p-6 border border-border-subtle flex flex-col items-start gap-4">
-                                        {calendarStatus.connected ? (
-                                            <div className="w-full flex items-center justify-between">
-                                                <div className="flex items-center gap-4">
-                                                    <div className="w-10 h-10 rounded-lg bg-blue-500/10 flex items-center justify-center text-blue-500">
-                                                        <Calendar size={20} />
-                                                    </div>
-                                                    <div>
-                                                        <h4 className="text-sm font-medium text-text-primary">Google Calendar</h4>
-                                                        <p className="text-xs text-text-secondary">Connected as {calendarStatus.email || 'User'}</p>
-                                                    </div>
-                                                </div>
-
-                                                <button
-                                                    onClick={async () => {
-                                                        setIsCalendarsLoading(true);
-                                                        try {
-                                                            await window.electronAPI.calendarDisconnect();
-                                                            const status = await window.electronAPI.getCalendarStatus();
-                                                            setCalendarStatus(status);
-                                                        } catch (e) {
-                                                            console.error(e);
-                                                        } finally {
-                                                            setIsCalendarsLoading(false);
-                                                        }
-                                                    }}
-                                                    disabled={isCalendarsLoading}
-                                                    className="px-3 py-1.5 bg-bg-input hover:bg-bg-elevated border border-border-subtle text-text-primary rounded-md text-xs font-medium transition-colors"
-                                                >
-                                                    {isCalendarsLoading ? 'Disconnecting...' : 'Disconnect'}
-                                                </button>
-                                            </div>
-                                        ) : (
-                                            <div className="w-full py-4">
-                                                <div className="mb-4">
-                                                    <Calendar size={24} className="text-text-tertiary mb-3" />
-                                                    <h4 className="text-sm font-bold text-text-primary mb-1">No calendars</h4>
-                                                    <p className="text-xs text-text-secondary">Get started by connecting a Google account.</p>
-                                                </div>
-
-                                                <button
-                                                    onClick={async () => {
-                                                        setIsCalendarsLoading(true);
-                                                        try {
-                                                            const res = await window.electronAPI.calendarConnect();
-                                                            if (res.success) {
-                                                                const status = await window.electronAPI.getCalendarStatus();
-                                                                setCalendarStatus(status);
-                                                            }
-                                                        } catch (e) {
-                                                            console.error(e);
-                                                        } finally {
-                                                            setIsCalendarsLoading(false);
-                                                        }
-                                                    }}
-                                                    disabled={isCalendarsLoading}
-                                                    className="bg-[#303033] hover:bg-[#3A3A3D] text-white px-4 py-2 rounded-lg text-xs font-medium transition-all flex items-center gap-2.5"
-                                                >
-                                                    <svg viewBox="0 0 24 24" width="14" height="14" xmlns="http://www.w3.org/2000/svg">
-                                                        <g transform="matrix(1, 0, 0, 1, 27.009001, -39.238998)">
-                                                            <path fill="#4285F4" d="M -3.264 51.509 C -3.264 50.719 -3.334 49.969 -3.454 49.239 L -14.754 49.239 L -14.754 53.749 L -8.284 53.749 C -8.574 55.229 -9.424 56.479 -10.684 57.329 L -10.684 60.329 L -6.824 60.329 C -4.564 58.239 -3.264 55.159 -3.264 51.509 Z" />
-                                                            <path fill="#34A853" d="M -14.754 63.239 C -11.514 63.239 -8.804 62.159 -6.824 60.329 L -10.684 57.329 C -11.764 58.049 -13.134 58.489 -14.754 58.489 C -17.884 58.489 -20.534 56.379 -21.484 53.529 L -25.464 53.529 L -25.464 56.619 C -23.494 60.539 -19.444 63.239 -14.754 63.239 Z" />
-                                                            <path fill="#FBBC05" d="M -21.484 53.529 C -21.734 52.809 -21.864 52.039 -21.864 51.239 C -21.864 50.439 -21.734 49.669 -21.484 48.949 L -21.484 45.859 L -25.464 45.859 C -26.284 47.479 -26.754 49.299 -26.754 51.239 C -26.754 53.179 -26.284 54.999 -25.464 56.619 L -21.484 53.529 Z" />
-                                                            <path fill="#EA4335" d="M -14.754 43.989 C -12.984 43.989 -11.404 44.599 -10.154 45.789 L -6.734 42.369 C -8.804 40.429 -11.514 39.239 -14.754 39.239 C -19.444 39.239 -23.494 41.939 -25.464 45.859 L -21.484 48.949 C -20.534 46.099 -17.884 43.989 -14.754 43.989 Z" />
-                                                        </g>
-                                                    </svg>
-                                                    {isCalendarsLoading ? 'Connecting...' : 'Connect Google'}
-                                                </button>
-                                            </div>
-                                        )}
-                                    </div>
-                                </div>
+                                <CalendarSettingsSection
+                                    calendarStatus={calendarStatus}
+                                    isCalendarsLoading={isCalendarsLoading}
+                                    setIsCalendarsLoading={setIsCalendarsLoading}
+                                    setCalendarStatus={setCalendarStatus}
+                                />
                             )}
 
                             {activeTab === 'about' && (

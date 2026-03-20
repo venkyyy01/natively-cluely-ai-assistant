@@ -3,6 +3,8 @@ import type { FollowUpMeetingType, FollowUpTone, ProviderKind } from '../shared/
 
 const boundedString = (max: number) => z.string().trim().min(1).max(max);
 const optionalBoundedString = (max: number) => z.string().trim().max(max).optional();
+const sttProviderEnum = z.enum(['google', 'groq', 'openai', 'deepgram', 'elevenlabs', 'azure', 'ibmwatson', 'soniox']);
+const llmProviderEnum = z.enum(['gemini', 'groq', 'openai', 'claude']);
 
 export const ipcSchemas = {
   geminiChatArgs: z.tuple([
@@ -58,6 +60,35 @@ export const ipcSchemas = {
     id: boundedString(128),
     title: boundedString(300),
   }).strict(),
+  rendererLogPayload: z.object({
+    message: z.string().max(20000).optional(),
+    stack: z.string().max(50000).optional(),
+    context: z.string().max(2000).optional(),
+    metadata: z.record(z.unknown()).optional(),
+  }).passthrough(),
+  contentDimensions: z.object({
+    width: z.number().finite().positive().max(4000),
+    height: z.number().finite().positive().max(4000),
+  }).strict(),
+  windowMode: z.enum(['launcher', 'overlay']),
+  absoluteUserDataPath: z.string().trim().min(1).max(2000),
+  modelSelectorCoords: z.object({
+    x: z.number().finite(),
+    y: z.number().finite(),
+  }).strict(),
+  modelId: boundedString(256),
+  sttProvider: sttProviderEnum,
+  apiKey: boundedString(4096),
+  optionalApiKey: z.string().trim().max(4096).optional(),
+  azureRegion: boundedString(128),
+  sttConnectionArgs: z.tuple([sttProviderEnum.exclude(['google']), boundedString(4096), z.string().trim().max(128).optional()]),
+  llmConnectionArgs: z.tuple([llmProviderEnum, z.string().trim().max(4096).optional()]),
+  providerModelFetchArgs: z.tuple([llmProviderEnum, z.string().trim().max(4096)]),
+  providerSwitchGeminiArgs: z.tuple([z.string().trim().max(4096).optional(), z.string().trim().max(256).optional()]),
+  ollamaSwitchArgs: z.tuple([z.string().trim().max(256).optional(), z.string().trim().max(2048).optional()]),
+  providerId: boundedString(128),
+  booleanFlag: z.boolean(),
+  themeMode: z.enum(['system', 'light', 'dark']),
   openMailtoInput: z.object({
     to: z.string().trim().max(2000),
     subject: z.string().max(500),
