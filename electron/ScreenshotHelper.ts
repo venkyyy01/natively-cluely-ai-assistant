@@ -32,6 +32,7 @@ export class ScreenshotHelper {
     if (!fs.existsSync(this.screenshotDir)) {
       fs.mkdirSync(this.screenshotDir)
     }
+    if (!fs.existsSync(this.extraScreenshotDir)) {
       fs.mkdirSync(this.extraScreenshotDir, { recursive: true })
     }
   }
@@ -75,7 +76,6 @@ export class ScreenshotHelper {
       await fs.promises.unlink(screenshotPath)
       throw new Error(`Screenshot exceeds ${this.MAX_FILE_BYTES} byte limit`)
     }
-  }
   }
 
   /**

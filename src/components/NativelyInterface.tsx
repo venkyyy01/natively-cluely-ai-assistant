@@ -38,6 +38,7 @@ import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
 import 'katex/dist/katex.min.css';
+import { getElectronAPI } from '../lib/electronApi';
 import { analytics, detectProviderType } from '../lib/analytics/analytics.service';
 import { useShortcuts } from '../hooks/useShortcuts';
 
@@ -71,6 +72,7 @@ interface NativelyInterfaceProps {
 }
 
 const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) => {
+    const electronAPI = getElectronAPI();
     const [isExpanded, setIsExpanded] = useState(true);
     const [inputValue, setInputValue] = useState('');
     const { shortcuts, isShortcutPressed } = useShortcuts();
@@ -249,24 +251,24 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
 
     // Listen for settings window visibility changes
     useEffect(() => {
-        if (!window.electronAPI?.onSettingsVisibilityChange) return;
-        const unsubscribe = window.electronAPI.onSettingsVisibilityChange((isVisible) => {
+        if (!electronAPI.onSettingsVisibilityChange) return;
+        const unsubscribe = electronAPI.onSettingsVisibilityChange((isVisible: boolean) => {
             setIsSettingsOpen(isVisible);
         });
         return () => unsubscribe();
-    }, []);
+    }, [electronAPI]);
 
     // Sync Window Visibility with Expanded State
     useEffect(() => {
         if (isExpanded) {
-            window.electronAPI.showWindow();
+            electronAPI.showWindow();
         } else {
             // Slight delay to allow animation to clean up if needed, though immediate is safer for click-through
             // Using setTimeout to ensure the render cycle completes first
             // Increased to 400ms to allow "contract to bottom" exit animation to finish
-            setTimeout(() => window.electronAPI.hideWindow(), 400);
+            setTimeout(() => electronAPI.hideWindow(), 400);
         }
-    }, [isExpanded]);
+    }, [electronAPI, isExpanded]);
 
     // Keyboard shortcut to toggle expanded state (via Main Process)
     useEffect(() => {
@@ -625,15 +627,15 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
             }]);
         }));
         // Screenshot taken - attach to chat input instead of auto-analyzing
-        cleanups.push(window.electronAPI.onScreenshotTaken(handleScreenshotAttach));
+        cleanups.push(electronAPI.onScreenshotTaken(handleScreenshotAttach));
 
         // Selective Screenshot (Latent Context)
-        if (window.electronAPI.onScreenshotAttached) {
-            cleanups.push(window.electronAPI.onScreenshotAttached(handleScreenshotAttach));
+        if (electronAPI.onScreenshotAttached) {
+            cleanups.push(electronAPI.onScreenshotAttached(handleScreenshotAttach));
         }
 
         return () => cleanups.forEach(fn => fn());
-    }, [isExpanded]);
+    }, [electronAPI]);
 
     // Quick Actions - Updated to use new Intelligence APIs
 
