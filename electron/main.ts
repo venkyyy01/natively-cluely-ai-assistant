@@ -763,6 +763,8 @@ export class AppState {
         });
         this.systemAudioCapture.on('error', (err: Error) => {
           console.error('[Main] SystemAudioCapture Error:', err);
+          this.setNativeAudioConnected(false);
+          this.broadcast('meeting-audio-error', err.message || 'System audio capture failed');
         });
       }
 
@@ -776,6 +778,8 @@ export class AppState {
         });
         this.microphoneCapture.on('error', (err: Error) => {
           console.error('[Main] MicrophoneCapture Error:', err);
+          this.setNativeAudioConnected(false);
+          this.broadcast('meeting-audio-error', err.message || 'Microphone capture failed');
         });
       }
 
@@ -835,6 +839,8 @@ export class AppState {
       });
       this.systemAudioCapture.on('error', (err: Error) => {
         console.error('[Main] SystemAudioCapture Error:', err);
+        this.setNativeAudioConnected(false);
+        this.broadcast('meeting-audio-error', err.message || 'System audio capture failed');
       });
       console.log('[Main] SystemAudioCapture initialized.');
     } catch (err) {
@@ -853,6 +859,8 @@ export class AppState {
         });
         this.systemAudioCapture.on('error', (err: Error) => {
           console.error('[Main] SystemAudioCapture (Default) Error:', err);
+          this.setNativeAudioConnected(false);
+          this.broadcast('meeting-audio-error', err.message || 'System audio capture failed');
         });
       } catch (err2) {
         console.error('[Main] Failed to initialize SystemAudioCapture (Default):', err2);
@@ -881,6 +889,8 @@ export class AppState {
       });
       this.microphoneCapture.on('error', (err: Error) => {
         console.error('[Main] MicrophoneCapture Error:', err);
+        this.setNativeAudioConnected(false);
+        this.broadcast('meeting-audio-error', err.message || 'Microphone capture failed');
       });
       console.log('[Main] MicrophoneCapture initialized.');
     } catch (err) {
@@ -899,6 +909,8 @@ export class AppState {
         });
         this.microphoneCapture.on('error', (err: Error) => {
           console.error('[Main] MicrophoneCapture (Default) Error:', err);
+          this.setNativeAudioConnected(false);
+          this.broadcast('meeting-audio-error', err.message || 'Microphone capture failed');
         });
       } catch (err2) {
         console.error('[Main] Failed to initialize MicrophoneCapture (Default):', err2);
@@ -1037,10 +1049,12 @@ export class AppState {
           this.ragManager.startLiveIndexing('live-meeting-current');
         }
 
+        this.setNativeAudioConnected(true);
         console.log('[Main] Audio pipeline started successfully.');
       } catch (err) {
         console.error('[Main] Error initializing audio pipeline:', err);
         // Notify UI so user knows microphone/audio failed to start
+        this.setNativeAudioConnected(false);
         this.broadcast('meeting-audio-error', (err as Error).message || 'Audio pipeline failed to start');
         this.isMeetingActive = false;
       }
@@ -1050,6 +1064,7 @@ export class AppState {
   public async endMeeting(): Promise<void> {
     console.log('[Main] Ending Meeting...');
     this.isMeetingActive = false; // Block new data immediately
+    this.setNativeAudioConnected(false);
 
     // 3. Stop System Audio
     this.systemAudioCapture?.stop();

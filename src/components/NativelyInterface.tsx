@@ -52,6 +52,20 @@ interface Message {
     intent?: string;
 }
 
+const MAX_ROLLING_TRANSCRIPT_CHARS = 1200;
+
+function appendRollingTranscript(existing: string, nextSegment: string): string {
+    const addition = nextSegment.trim();
+    if (!addition) return existing;
+
+    const combined = existing ? `${existing}  ·  ${addition}` : addition;
+    if (combined.length <= MAX_ROLLING_TRANSCRIPT_CHARS) {
+        return combined;
+    }
+
+    return combined.slice(combined.length - MAX_ROLLING_TRANSCRIPT_CHARS);
+}
+
 interface NativelyInterfaceProps {
     onEndMeeting?: () => void;
 }
@@ -89,6 +103,7 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
 
     const [rollingTranscript, setRollingTranscript] = useState('');  // For interviewer rolling text bar
     const [isInterviewerSpeaking, setIsInterviewerSpeaking] = useState(false);  // Track if actively speaking
+    const rollingTranscriptCommittedRef = useRef('');
     const [voiceInput, setVoiceInput] = useState('');  // Accumulated user voice input
     const voiceInputRef = useRef<string>('');  // Ref for capturing in async handlers
     const textInputRef = useRef<HTMLInputElement>(null); // Ref for input focus
@@ -272,6 +287,11 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
             setAttachedContext([]);
             setManualTranscript('');
             setVoiceInput('');
+            voiceInputRef.current = '';
+            manualTranscriptRef.current = '';
+            rollingTranscriptCommittedRef.current = '';
+            setRollingTranscript('');
+            setIsInterviewerSpeaking(false);
             setIsProcessing(false);
             // Optionally reset connection status if needed, but connection persists
 
@@ -348,23 +368,18 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
 
             if (transcript.final) {
                 // Append finalized text to accumulated transcript
-                setRollingTranscript(prev => {
-                    const separator = prev ? '  ·  ' : '';
-                    return prev + separator + transcript.text;
-                });
+                const committed = appendRollingTranscript(rollingTranscriptCommittedRef.current, transcript.text);
+                rollingTranscriptCommittedRef.current = committed;
+                setRollingTranscript(committed);
 
                 // Clear speaking indicator after pause
                 setTimeout(() => {
                     setIsInterviewerSpeaking(false);
                 }, 3000);
             } else {
-                // For partial transcripts, show current segment appended to accumulated
-                setRollingTranscript(prev => {
-                    // Find where previous finalized content ends (look for last separator)
-                    const lastSeparator = prev.lastIndexOf('  ·  ');
-                    const accumulated = lastSeparator >= 0 ? prev.substring(0, lastSeparator + 5) : '';
-                    return accumulated + transcript.text;
-                });
+                // For partial transcripts, show the active utterance without mutating finalized history
+                const committed = rollingTranscriptCommittedRef.current;
+                setRollingTranscript(committed ? `${committed}  ·  ${transcript.text}` : transcript.text);
             }
         }));
 
