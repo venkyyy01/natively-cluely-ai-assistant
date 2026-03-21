@@ -13,15 +13,18 @@ test('Conscious Mode prompt family exports dedicated prompt variants from source
   assert.equal(typeof family.followUpContinuation, 'string');
 });
 
-test('Conscious Mode opening reasoning prompt prioritizes spoken reasoning over code-first answers', () => {
+test('Conscious Mode opening reasoning prompt prioritizes understanding and natural speech over code dumps', () => {
   const family = (prompts as Record<string, unknown>).CONSCIOUS_MODE_PROMPT_FAMILY as Record<string, string>;
 
-  assert.match(family.openingReasoning, /spoken reasoning/i);
-  assert.match(family.openingReasoning, /do not jump straight to code|avoid code-first/i);
-  assert.match(family.openingReasoning, /natural enough to say in an interview|natural spoken/i);
+  // Must emphasize understanding before answering
+  assert.match(family.openingReasoning, /understand|EXACTLY what.*ask/i);
+  // Must have anti-dump guidance
+  assert.match(family.openingReasoning, /dump|wall.*text|paragraph/i);
+  // Must emphasize natural/spoken response
+  assert.match(family.openingReasoning, /spoken|natural|human/i);
 });
 
-test('Conscious Mode prompt family aligns with the structured reasoning response contract', () => {
+test('Conscious Mode prompt family includes core response contract fields', () => {
   const family = (prompts as Record<string, unknown>).CONSCIOUS_MODE_PROMPT_FAMILY as Record<string, string>;
   const combined = [
     family.openingReasoning,
@@ -30,15 +33,12 @@ test('Conscious Mode prompt family aligns with the structured reasoning response
     family.followUpContinuation,
   ].join('\n');
 
+  // Core fields that should exist in new anti-dump contract
   for (const key of [
     'openingReasoning',
-    'implementationPlan',
+    'spokenResponse',
     'tradeoffs',
-    'edgeCases',
-    'scaleConsiderations',
-    'pushbackResponses',
     'likelyFollowUps',
-    'codeTransition',
   ]) {
     assert.match(combined, new RegExp(key));
   }
