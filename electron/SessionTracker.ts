@@ -8,6 +8,7 @@ import {
     ReasoningThread,
     mergeConsciousModeResponses,
 } from './ConsciousMode';
+import { ThreadManager, InterviewPhaseDetector, TokenBudgetManager, InterviewPhase } from './conscious';
 
 export interface TranscriptSegment {
     marker?: string;
@@ -76,6 +77,11 @@ export class SessionTracker {
 
     // Reference to RecapLLM for epoch summarization (injected later)
     private recapLLM: RecapLLM | null = null;
+
+    // Conscious Mode Realtime components
+    private threadManager: ThreadManager = new ThreadManager();
+    private phaseDetector: InterviewPhaseDetector = new InterviewPhaseDetector();
+    private tokenBudgetManager: TokenBudgetManager = new TokenBudgetManager('openai');
 
     // ============================================
     // Configuration
@@ -410,6 +416,39 @@ export class SessionTracker {
     }
 
     // ============================================
+    // Conscious Mode Realtime Accessors
+    // ============================================
+
+    getThreadManager(): ThreadManager {
+        return this.threadManager;
+    }
+
+    getPhaseDetector(): InterviewPhaseDetector {
+        return this.phaseDetector;
+    }
+
+    getTokenBudgetManager(): TokenBudgetManager {
+        return this.tokenBudgetManager;
+    }
+
+    getCurrentPhase(): InterviewPhase {
+        return this.phaseDetector.getCurrentPhase();
+    }
+
+    setCurrentPhase(phase: InterviewPhase): void {
+        this.phaseDetector.setPhase(phase);
+    }
+
+    detectPhaseFromTranscript(transcript: string): InterviewPhase {
+        const result = this.phaseDetector.detectPhase(
+            transcript,
+            this.phaseDetector.getCurrentPhase(),
+            this.contextItems.slice(-5).map(item => item.text)
+        );
+        return result.phase;
+    }
+
+    // ============================================
     // Reset
     // ============================================
 
@@ -426,6 +465,9 @@ export class SessionTracker {
         this.consciousModeEnabled = consciousModeEnabled;
         this.latestConsciousResponse = null;
         this.activeReasoningThread = null;
+        this.threadManager.reset();
+        this.phaseDetector.reset();
+        this.tokenBudgetManager.reset();
     }
 
     // ============================================
