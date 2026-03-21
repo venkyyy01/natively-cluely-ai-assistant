@@ -697,10 +697,10 @@ If issues arise:
 
 ## Open Questions
 
-1. **ONNX Model Hosting**: Bundle with app or download on first run?
-2. **Worker Thread Count**: Fixed (e.g., 4) or adaptive to CPU cores?
-3. **Prefetch Aggressiveness**: How many predictions during silence?
-4. **Semantic Cache Threshold**: What similarity score for cache hit?
+1. **ONNX Model Hosting**: Bundle with app or download on first run? ( bundle)
+2. **Worker Thread Count**: Fixed (e.g., 4) or adaptive to CPU cores?( use 6 cores but leave option to be adaptable by user )
+3. **Prefetch Aggressiveness**: How many predictions during silence? (go by best practice)
+4. **Semantic Cache Threshold**: What similarity score for cache hit? (go by best practice)
 
 ---
 
