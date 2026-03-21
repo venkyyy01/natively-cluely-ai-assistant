@@ -1,5 +1,11 @@
 const { spawnSync } = require('node:child_process');
 
+const THRESHOLDS = {
+  lines: 50,
+  branches: 75,
+  functions: 30,
+};
+
 function run(command, args) {
   const result = spawnSync(command, args, {
     encoding: 'utf8',
@@ -20,28 +26,72 @@ function run(command, args) {
   return `${result.stdout ?? ''}${result.stderr ?? ''}`;
 }
 
-run('npx', ['tsc', '-p', 'electron/tsconfig.json']);
+function parseCoverageSummary(output) {
+  const allFilesLine = output
+    .split('\n')
+    .find((line) => line.includes('all files'));
 
-const coverageOutput = run('node', [
-  '--test',
-  '--experimental-test-coverage',
-  'dist-electron/electron/tests/*.test.js',
-]);
+  if (!allFilesLine) {
+    throw new Error('Coverage summary not found in test output.');
+  }
 
-const allFilesLine = coverageOutput
-  .split('\n')
-  .find((line) => line.includes('all files'));
+  const percentages = [...allFilesLine.matchAll(/(\d+(?:\.\d+)?)/g)].map((match) => Number(match[1]));
 
-if (!allFilesLine) {
-  console.error('Coverage summary not found in test output.');
-  process.exit(1);
+  if (percentages.length < 3) {
+    throw new Error(`Electron coverage gate failed: could not parse metrics from ${allFilesLine.trim()}`);
+  }
+
+  return {
+    lines: percentages[0],
+    branches: percentages[1],
+    functions: percentages[2],
+  };
 }
 
-const percentages = [...allFilesLine.matchAll(/(\d+\.\d+)/g)].map((match) => Number(match[1]));
+function evaluateCoverage(summary) {
+  const failures = Object.entries(THRESHOLDS)
+    .filter(([metric, threshold]) => summary[metric] < threshold)
+    .map(([metric, threshold]) => `${metric} ${summary[metric]}% < ${threshold}%`);
 
-if (percentages.length < 3 || percentages.slice(0, 3).some((value) => value < 100)) {
-  console.error(`Electron coverage gate failed: ${allFilesLine.trim()}`);
-  process.exit(1);
+  return failures.length > 0 ? failures.join(', ') : null;
 }
 
-console.log('Electron coverage gate passed at 100%.');
+function main() {
+  run('npx', ['tsc', '-p', 'electron/tsconfig.json']);
+
+  const coverageOutput = run('node', [
+    '--test',
+    '--experimental-test-coverage',
+    'dist-electron/electron/tests/*.test.js',
+  ]);
+
+  let summary;
+
+  try {
+    summary = parseCoverageSummary(coverageOutput);
+  } catch (error) {
+    console.error(error.message);
+    process.exit(1);
+  }
+
+  const failureMessage = evaluateCoverage(summary);
+
+  if (failureMessage) {
+    console.error(`Electron coverage gate failed: ${failureMessage}`);
+    process.exit(1);
+  }
+
+  console.log(
+    `Electron coverage gate passed (lines >= ${THRESHOLDS.lines}%, branches >= ${THRESHOLDS.branches}%, functions >= ${THRESHOLDS.functions}%).`
+  );
+}
+
+if (require.main === module) {
+  main();
+}
+
+module.exports = {
+  THRESHOLDS,
+  parseCoverageSummary,
+  evaluateCoverage,
+};

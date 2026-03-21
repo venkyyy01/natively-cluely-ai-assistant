@@ -2,6 +2,8 @@
 // Works in Electron by dynamically loading the gtag script into the renderer DOM
 // Only requires the public Measurement ID — no API secrets needed
 
+import { buildConsciousModeModeSelectedPayload } from '../consciousModeSettings';
+
 // --- Types ---
 
 export type ModelProviderType = 'cloud' | 'local';
@@ -29,7 +31,14 @@ export type AnalyticsEventName =
     | 'session_duration'
     // Engagement
     | 'command_executed'
-    | 'conversation_started';
+    | 'conversation_started'
+    | 'interview_assist_rendered';
+
+interface InterviewAssistRenderedPayload {
+    output_variant: 'conscious_mode' | 'standard_interview_assist';
+    thread_type: 'fresh_reasoning_thread' | 'follow_up_extension' | 'fresh_answer';
+    source_intent: string;
+}
 
 interface ModelUsedPayload {
     model_name: string;
@@ -178,6 +187,12 @@ class AnalyticsService {
         this.trackEvent('mode_selected', { mode });
     }
 
+    public trackConsciousModeSelected(enabled: boolean): void {
+        if (!this.initialized) return;
+
+        this.trackEvent('mode_selected', buildConsciousModeModeSelectedPayload(enabled));
+    }
+
     public trackModelUsed(payload: ModelUsedPayload): void {
         if (!this.initialized) return;
 
@@ -197,6 +212,11 @@ class AnalyticsService {
     public trackConversationStarted(): void {
         if (!this.initialized) return;
         this.trackEvent('conversation_started');
+    }
+
+    public trackInterviewAssistRendered(payload: InterviewAssistRenderedPayload): void {
+        if (!this.initialized) return;
+        this.trackEvent('interview_assist_rendered', payload);
     }
 
     public trackCalendarConnected(): void {

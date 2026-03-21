@@ -1,3 +1,12 @@
+let transformersPromise = null;
+
 exports.loadTransformers = function loadTransformers() {
-  return (0, eval)('import("@xenova/transformers")');
+  if (!transformersPromise) {
+    transformersPromise = Promise.resolve().then(() => require('@xenova/transformers')).catch((error) => {
+      transformersPromise = null;
+      throw error;
+    });
+  }
+
+  return transformersPromise;
 };

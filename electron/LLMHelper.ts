@@ -18,6 +18,7 @@ import { CustomProvider, CurlProvider } from './services/CredentialsManager';
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import axios from 'axios';
+import { createHash } from 'crypto';
 import { createProviderRateLimiters, RateLimiter } from './services/RateLimiter';
 const execAsync = promisify(exec);
 
@@ -36,6 +37,15 @@ const MAX_OUTPUT_TOKENS = 8192
 const CLAUDE_MAX_OUTPUT_TOKENS = 8192
 const DEFAULT_INPUT_TOKEN_BUDGET = 24000
 const SUMMARY_INPUT_TOKEN_BUDGET = 100000
+const OPENAI_INPUT_TOKEN_BUDGET = 32000
+const GEMINI_FLASH_INPUT_TOKEN_BUDGET = 28000
+const GEMINI_PRO_INPUT_TOKEN_BUDGET = 48000
+const CLAUDE_INPUT_TOKEN_BUDGET = 60000
+const GROQ_INPUT_TOKEN_BUDGET = 24000
+const LOCAL_INPUT_TOKEN_BUDGET = 16000
+const SYSTEM_PROMPT_CACHE_TTL_MS = 5 * 60 * 1000
+const FINAL_PAYLOAD_CACHE_TTL_MS = 15 * 1000
+const RESPONSE_CACHE_TTL_MS = 1500
 
 // Simple prompt for image analysis (not interview copilot - kept separate)
 const IMAGE_ANALYSIS_PROMPT = `Analyze concisely. Be direct. No markdown formatting. Return plain text only.`
@@ -60,6 +70,10 @@ export class LLMHelper {
   private knowledgeOrchestrator: any = null;
   private aiResponseLanguage: string = 'English';
   private sttLanguage: string = 'english-us';
+  private systemPromptCache = new Map<string, { expiresAt: number; value: string }>();
+  private finalPayloadCache = new Map<string, { expiresAt: number; value: any }>();
+  private responseCache = new Map<string, { expiresAt: number; value: string }>();
+  private inFlightResponseCache = new Map<string, Promise<string>>();
 
   // Rate limiters per provider to prevent 429 errors on free tiers
   private rateLimiters: ReturnType<typeof createProviderRateLimiters>;
@@ -445,12 +459,36 @@ export class LLMHelper {
    * Handles common transient provider failures consistently.
    */
   private isRetryableError(error: any): boolean {
-    const message = String(error?.message || error || '').toLowerCase();
+    const status = error?.status ?? error?.statusCode ?? error?.response?.status ?? error?.error?.status;
+    const code = String(error?.code ?? error?.error?.code ?? '').toLowerCase();
+    const type = String(error?.type ?? error?.error?.type ?? '').toLowerCase();
+    const message = [error?.message, error?.error?.message, error?.cause?.message, error]
+      .filter(Boolean)
+      .map(value => String(value).toLowerCase())
+      .join(' ');
+
     return (
+      status === 408 ||
+      status === 409 ||
+      status === 425 ||
+      status === 429 ||
+      status === 500 ||
+      status === 502 ||
+      status === 503 ||
+      status === 504 ||
+      code === 'econnreset' ||
+      code === 'etimedout' ||
+      code === 'eai_again' ||
+      type.includes('overloaded') ||
+      type.includes('rate_limit') ||
       message.includes('503') ||
+      message.includes('502') ||
+      message.includes('504') ||
       message.includes('429') ||
+      message.includes('500') ||
       message.includes('overloaded') ||
       message.includes('rate limit') ||
+      message.includes('temporarily unavailable') ||
       message.includes('timeout') ||
       message.includes('temporar') ||
       message.includes('econnreset') ||
@@ -465,9 +503,10 @@ export class LLMHelper {
         return await fn();
       } catch (e: any) {
         if (!this.isRetryableError(e)) throw e;
+        if (i === retries - 1) break;
 
         console.warn(`[LLMHelper] Transient model failure. Retrying in ${delay}ms...`);
-        await new Promise(r => setTimeout(r, delay));
+        await this.delay(delay);
         delay *= 2;
       }
     }
@@ -482,17 +521,33 @@ export class LLMHelper {
 
     const targetModel = modelIdOverride || this.geminiModel;
     console.log(`[LLMHelper] Calling ${targetModel}...`)
+    const systemPromptHash = '';
+    const payloadHash = this.hashValue({
+      contents,
+      config: {
+        maxOutputTokens: MAX_OUTPUT_TOKENS,
+        temperature: 0.4,
+      }
+    });
 
-    return this.withRetry(async () => {
+    return this.withResponseCache('gemini', targetModel, systemPromptHash, payloadHash, () => this.withRetry(async () => {
+      const requestPayload = await this.withFinalPayloadCache(
+        'gemini',
+        targetModel,
+        systemPromptHash,
+        payloadHash,
+        () => ({
+          model: targetModel,
+          contents,
+          config: {
+            maxOutputTokens: MAX_OUTPUT_TOKENS,
+            temperature: 0.4,
+          }
+        }),
+      );
+
       // @ts-ignore
-      const response = await this.client!.models.generateContent({
-        model: targetModel,
-        contents: contents,
-        config: {
-          maxOutputTokens: MAX_OUTPUT_TOKENS,
-          temperature: 0.4,
-        }
-      });
+      const response = await this.client!.models.generateContent(requestPayload);
 
       // Debug: log full response structure
       // console.log(`[LLMHelper] Full response:`, JSON.stringify(response, null, 2).substring(0, 500))
@@ -548,7 +603,7 @@ export class LLMHelper {
 
       console.log(`[LLMHelper] Extracted text length: ${text.length}`);
       return text;
-    });
+    }));
   }
 
   public async extractProblemFromImages(imagePaths: string[]) {
@@ -734,6 +789,130 @@ ANSWER DIRECTLY:`;
     return `${systemPrompt}\n\nCRITICAL: You MUST respond ONLY in ${this.aiResponseLanguage}. This is an absolute requirement. All generated text that the user should say must be in ${this.aiResponseLanguage}.`;
   }
 
+  private hashValue(value: unknown): string {
+    const serialized = typeof value === 'string' ? value : JSON.stringify(value);
+    return createHash('sha256').update(serialized).digest('hex');
+  }
+
+  private cloneCacheValue<T>(value: T): T {
+    if (value === null || value === undefined) return value;
+    if (typeof value === 'string') return value;
+    return JSON.parse(JSON.stringify(value));
+  }
+
+  private getCacheKey(...parts: Array<string | undefined>): string {
+    return parts.map(part => part ?? '').join('::');
+  }
+
+  private readCacheEntry<T>(cache: Map<string, { expiresAt: number; value: T }>, key: string): T | undefined {
+    const entry = cache.get(key);
+    if (!entry) return undefined;
+    if (entry.expiresAt <= Date.now()) {
+      cache.delete(key);
+      return undefined;
+    }
+    return this.cloneCacheValue(entry.value);
+  }
+
+  private writeCacheEntry<T>(cache: Map<string, { expiresAt: number; value: T }>, key: string, value: T, ttlMs: number): T {
+    cache.set(key, {
+      expiresAt: Date.now() + ttlMs,
+      value: this.cloneCacheValue(value),
+    });
+    return this.cloneCacheValue(value);
+  }
+
+  private async withSystemPromptCache(
+    provider: string,
+    model: string,
+    basePrompt: string,
+    builder: () => Promise<string> | string,
+    ttlMs: number = SYSTEM_PROMPT_CACHE_TTL_MS,
+  ): Promise<string> {
+    const cacheKey = this.getCacheKey('system-prompt', provider, model, this.hashValue(basePrompt), this.aiResponseLanguage);
+    const cached = this.readCacheEntry(this.systemPromptCache, cacheKey);
+    if (cached !== undefined) {
+      return cached;
+    }
+
+    const built = await builder();
+    return this.writeCacheEntry(this.systemPromptCache, cacheKey, built, ttlMs);
+  }
+
+  private async withFinalPayloadCache<T>(
+    provider: string,
+    model: string,
+    systemPromptHash: string,
+    payloadHash: string,
+    builder: () => Promise<T> | T,
+    ttlMs: number = FINAL_PAYLOAD_CACHE_TTL_MS,
+  ): Promise<T> {
+    const cacheKey = this.getCacheKey('final-payload', provider, model, systemPromptHash, payloadHash);
+    const cached = this.readCacheEntry(this.finalPayloadCache, cacheKey);
+    if (cached !== undefined) {
+      return cached;
+    }
+
+    const built = await builder();
+    return this.writeCacheEntry(this.finalPayloadCache, cacheKey, built, ttlMs);
+  }
+
+  private async withResponseCache(
+    provider: string,
+    model: string,
+    systemPromptHash: string,
+    payloadHash: string,
+    request: () => Promise<string>,
+    ttlMs: number = RESPONSE_CACHE_TTL_MS,
+  ): Promise<string> {
+    const cacheKey = this.getCacheKey('response', provider, model, systemPromptHash, payloadHash);
+    const cached = this.readCacheEntry(this.responseCache, cacheKey);
+    if (cached !== undefined) {
+      return cached;
+    }
+
+    const inFlight = this.inFlightResponseCache.get(cacheKey);
+    if (inFlight) {
+      return inFlight;
+    }
+
+    const pending = request()
+      .then(result => {
+        this.writeCacheEntry(this.responseCache, cacheKey, result, ttlMs);
+        this.inFlightResponseCache.delete(cacheKey);
+        return result;
+      })
+      .catch(error => {
+        this.inFlightResponseCache.delete(cacheKey);
+        throw error;
+      });
+
+    this.inFlightResponseCache.set(cacheKey, pending);
+    return pending;
+  }
+
+  private getInputTokenBudget(provider: string, modelId: string, summaryMode: boolean = false): number {
+    if (summaryMode) {
+      return SUMMARY_INPUT_TOKEN_BUDGET;
+    }
+
+    const normalizedProvider = provider.toLowerCase();
+    const normalizedModelId = modelId.toLowerCase();
+
+    if (normalizedProvider === 'claude' || normalizedModelId.startsWith('claude-')) return CLAUDE_INPUT_TOKEN_BUDGET;
+    if (normalizedProvider === 'openai' || this.isOpenAiModel(normalizedModelId)) return OPENAI_INPUT_TOKEN_BUDGET;
+    if (normalizedProvider === 'groq' || normalizedProvider === 'text_groq' || this.isGroqModel(normalizedModelId)) return GROQ_INPUT_TOKEN_BUDGET;
+    if (normalizedProvider === 'gemini_pro' || (normalizedModelId.includes('gemini') && normalizedModelId.includes('pro'))) return GEMINI_PRO_INPUT_TOKEN_BUDGET;
+    if (normalizedProvider === 'gemini' || normalizedProvider === 'gemini_flash' || this.isGeminiModel(normalizedModelId)) return GEMINI_FLASH_INPUT_TOKEN_BUDGET;
+    if (normalizedProvider === 'ollama' || normalizedProvider === 'custom' || normalizedProvider === 'curl') return LOCAL_INPUT_TOKEN_BUDGET;
+
+    return DEFAULT_INPUT_TOKEN_BUDGET;
+  }
+
+  private prepareUserContentForModel(provider: string, modelId: string, message: string, context?: string): string {
+    return this.prepareUserContent(message, context, this.getInputTokenBudget(provider, modelId));
+  }
+
   public async chatWithGemini(message: string, imagePaths?: string[], context?: string, skipSystemPrompt: boolean = false, alternateGroqMessage?: string): Promise<string> {
     try {
       console.log(`[LLMHelper] chatWithGemini called with message:`, message.substring(0, 50))
@@ -775,23 +954,24 @@ ANSWER DIRECTLY:`;
       const isMultimodal = !!(imagePaths?.length);
 
       // Helper to build combined prompts for Groq/Gemini
-      const buildMessage = (systemPrompt: string) => {
-        const preparedUserContent = this.prepareUserContent(message, context);
+      const buildMessage = (provider: string, modelId: string, systemPrompt: string) => {
+        const preparedUserContent = this.prepareUserContentForModel(provider, modelId, message, context);
         if (skipSystemPrompt) {
           return preparedUserContent;
         }
-        return this.joinPrompt(systemPrompt, preparedUserContent);
+        return this.joinPrompt(systemPrompt, preparedUserContent, this.getInputTokenBudget(provider, modelId));
       };
 
       // For OpenAI/Claude: separate system prompt + user message
-      const userContent = this.prepareUserContent(message, context);
+      const openaiUserContent = this.prepareUserContentForModel('openai', OPENAI_MODEL, message, context);
+      const claudeUserContent = this.prepareUserContentForModel('claude', CLAUDE_MODEL, message, context);
 
-      const finalGeminiPrompt = this.injectLanguageInstruction(HARD_SYSTEM_PROMPT);
-      const finalGroqPrompt = alternateGroqMessage || this.injectLanguageInstruction(GROQ_SYSTEM_PROMPT);
+      const finalGeminiPrompt = await this.withSystemPromptCache('gemini', this.currentModelId, HARD_SYSTEM_PROMPT, () => this.injectLanguageInstruction(HARD_SYSTEM_PROMPT));
+      const finalGroqPrompt = alternateGroqMessage || await this.withSystemPromptCache('groq', GROQ_MODEL, GROQ_SYSTEM_PROMPT, () => this.injectLanguageInstruction(GROQ_SYSTEM_PROMPT));
 
       const combinedMessages = {
-        gemini: buildMessage(finalGeminiPrompt),
-        groq: buildMessage(finalGroqPrompt),
+        gemini: buildMessage('gemini', this.currentModelId, finalGeminiPrompt),
+        groq: buildMessage('groq', GROQ_MODEL, finalGroqPrompt),
       };
 
       // GROQ FAST TEXT OVERRIDE (Text-Only)
@@ -806,8 +986,8 @@ ANSWER DIRECTLY:`;
       }
 
       // System prompts for OpenAI/Claude (skipped if skipSystemPrompt)
-      const openaiSystemPrompt = skipSystemPrompt ? undefined : this.injectLanguageInstruction(OPENAI_SYSTEM_PROMPT);
-      const claudeSystemPrompt = skipSystemPrompt ? undefined : this.injectLanguageInstruction(CLAUDE_SYSTEM_PROMPT);
+      const openaiSystemPrompt = skipSystemPrompt ? undefined : await this.withSystemPromptCache('openai', OPENAI_MODEL, OPENAI_SYSTEM_PROMPT, () => this.injectLanguageInstruction(OPENAI_SYSTEM_PROMPT));
+      const claudeSystemPrompt = skipSystemPrompt ? undefined : await this.withSystemPromptCache('claude', CLAUDE_MODEL, CLAUDE_SYSTEM_PROMPT, () => this.injectLanguageInstruction(CLAUDE_SYSTEM_PROMPT));
 
       if (this.useOllama) {
         return await this.callOllama(combinedMessages.gemini);
@@ -833,14 +1013,14 @@ ANSWER DIRECTLY:`;
 
       // --- Direct Routing based on Selected Model ---
       if (this.isOpenAiModel(this.currentModelId) && this.openaiClient) {
-        return await this.generateWithOpenai(userContent, openaiSystemPrompt, imagePaths);
+        return await this.generateWithOpenai(openaiUserContent, openaiSystemPrompt, imagePaths);
       }
       if (this.isClaudeModel(this.currentModelId) && this.claudeClient) {
-        return await this.generateWithClaude(userContent, claudeSystemPrompt, imagePaths);
+        return await this.generateWithClaude(claudeUserContent, claudeSystemPrompt, imagePaths);
       }
       if (this.isGroqModel(this.currentModelId) && this.groqClient) {
         if (isMultimodal && imagePaths) {
-          return await this.generateWithGroqMultimodal(userContent, imagePaths, openaiSystemPrompt);
+          return await this.generateWithGroqMultimodal(openaiUserContent, imagePaths, openaiSystemPrompt);
         }
         return await this.generateWithGroq(combinedMessages.groq);
       }
@@ -866,7 +1046,7 @@ ANSWER DIRECTLY:`;
       if (isMultimodal) {
         // MULTIMODAL PROVIDER ORDER: OpenAI -> Gemini Flash -> Claude -> Gemini Pro -> Groq -> Custom/Ollama
         if (this.openaiClient) {
-          providers.push({ name: `OpenAI (${textOpenAI})`, execute: () => this.generateWithOpenai(userContent, openaiSystemPrompt, imagePaths) });
+          providers.push({ name: `OpenAI (${textOpenAI})`, execute: () => this.generateWithOpenai(openaiUserContent, openaiSystemPrompt, imagePaths) });
         }
         if (this.client) {
           providers.push({
@@ -875,7 +1055,7 @@ ANSWER DIRECTLY:`;
           });
         }
         if (this.claudeClient) {
-          providers.push({ name: `Claude (${textClaude})`, execute: () => this.generateWithClaude(userContent, claudeSystemPrompt, imagePaths) });
+          providers.push({ name: `Claude (${textClaude})`, execute: () => this.generateWithClaude(claudeUserContent, claudeSystemPrompt, imagePaths) });
         }
         if (this.client) {
           providers.push({
@@ -886,7 +1066,7 @@ ANSWER DIRECTLY:`;
         if (this.groqClient) {
           providers.push({
             name: `Groq (meta-llama/llama-4-scout-17b-16e-instruct)`,
-            execute: () => this.generateWithGroqMultimodal(userContent, imagePaths!, openaiSystemPrompt)
+            execute: () => this.generateWithGroqMultimodal(openaiUserContent, imagePaths!, openaiSystemPrompt)
           });
         }
       } else {
@@ -905,10 +1085,10 @@ ANSWER DIRECTLY:`;
           });
         }
         if (this.openaiClient) {
-          providers.push({ name: `OpenAI (${textOpenAI})`, execute: () => this.generateWithOpenai(userContent, openaiSystemPrompt) });
+          providers.push({ name: `OpenAI (${textOpenAI})`, execute: () => this.generateWithOpenai(openaiUserContent, openaiSystemPrompt) });
         }
         if (this.claudeClient) {
-          providers.push({ name: `Claude (${textClaude})`, execute: () => this.generateWithClaude(userContent, claudeSystemPrompt) });
+          providers.push({ name: `Claude (${textClaude})`, execute: () => this.generateWithClaude(claudeUserContent, claudeSystemPrompt) });
         }
       }
 
@@ -1035,17 +1215,26 @@ ANSWER DIRECTLY:`;
     if (!this.groqClient) throw new Error("Groq client not initialized");
 
     await this.rateLimiters.groq.acquire();
+    const payloadHash = this.hashValue(fullMessage);
 
-    // Non-streaming Groq call
-    const response = await this.groqClient.chat.completions.create({
-      model: GROQ_MODEL,
-      messages: [{ role: "user", content: fullMessage }],
-      temperature: 0.4,
-      max_tokens: 8192,
-      stream: false
+    return this.withResponseCache('groq', GROQ_MODEL, '', payloadHash, async () => {
+      const requestPayload = await this.withFinalPayloadCache(
+        'groq',
+        GROQ_MODEL,
+        '',
+        payloadHash,
+        () => ({
+          model: GROQ_MODEL,
+          messages: [{ role: "user", content: fullMessage }],
+          temperature: 0.4,
+          max_tokens: 8192,
+          stream: false
+        }),
+      );
+
+      const response = await this.groqClient!.chat.completions.create(requestPayload as any);
+      return response.choices[0]?.message?.content || "";
     });
-
-    return response.choices[0]?.message?.content || "";
   }
 
   /**
@@ -1055,32 +1244,45 @@ ANSWER DIRECTLY:`;
     if (!this.openaiClient) throw new Error("OpenAI client not initialized");
 
     await this.rateLimiters.openai.acquire();
+    const systemPromptHash = this.hashValue(systemPrompt || '');
+    const payloadHash = this.hashValue({ userMessage, systemPrompt: systemPrompt || '', imagePaths: imagePaths || [] });
 
-    const messages: any[] = [];
-    if (systemPrompt) {
-      messages.push({ role: "system", content: systemPrompt });
-    }
+    return this.withResponseCache('openai', OPENAI_MODEL, systemPromptHash, payloadHash, async () => {
+      const requestPayload = await this.withFinalPayloadCache(
+        'openai',
+        OPENAI_MODEL,
+        systemPromptHash,
+        payloadHash,
+        async () => {
+          const messages: any[] = [];
+          if (systemPrompt) {
+            messages.push({ role: "system", content: systemPrompt });
+          }
 
-    if (imagePaths?.length) {
-      const contentParts: any[] = [{ type: "text", text: userMessage }];
-      for (const p of imagePaths) {
-        if (fs.existsSync(p)) {
-          const imageData = await fs.promises.readFile(p);
-          contentParts.push({ type: "image_url", image_url: { url: `data:image/png;base64,${imageData.toString("base64")}` } });
-        }
-      }
-      messages.push({ role: "user", content: contentParts });
-    } else {
-      messages.push({ role: "user", content: userMessage });
-    }
+          if (imagePaths?.length) {
+            const contentParts: any[] = [{ type: "text", text: userMessage }];
+            for (const p of imagePaths) {
+              if (fs.existsSync(p)) {
+                const imageData = await fs.promises.readFile(p);
+                contentParts.push({ type: "image_url", image_url: { url: `data:image/png;base64,${imageData.toString("base64")}` } });
+              }
+            }
+            messages.push({ role: "user", content: contentParts });
+          } else {
+            messages.push({ role: "user", content: userMessage });
+          }
 
-    const response = await this.openaiClient.chat.completions.create({
-      model: OPENAI_MODEL,
-      messages,
-      max_completion_tokens: MAX_OUTPUT_TOKENS,
+          return {
+            model: OPENAI_MODEL,
+            messages,
+            max_completion_tokens: MAX_OUTPUT_TOKENS,
+          };
+        },
+      );
+
+      const response = await this.openaiClient!.chat.completions.create(requestPayload as any);
+      return response.choices[0]?.message?.content || "";
     });
-
-    return response.choices[0]?.message?.content || "";
   }
 
   // The handler for cURL requests
@@ -1138,34 +1340,47 @@ ANSWER DIRECTLY:`;
     if (!this.claudeClient) throw new Error("Claude client not initialized");
 
     await this.rateLimiters.claude.acquire();
+    const systemPromptHash = this.hashValue(systemPrompt || '');
+    const payloadHash = this.hashValue({ userMessage, systemPrompt: systemPrompt || '', imagePaths: imagePaths || [] });
 
-    const content: any[] = [];
-    if (imagePaths?.length) {
-      for (const p of imagePaths) {
-        if (fs.existsSync(p)) {
-          const imageData = await fs.promises.readFile(p);
-          content.push({
-            type: "image",
-            source: {
-              type: "base64",
-              media_type: "image/png",
-              data: imageData.toString("base64")
+    return this.withResponseCache('claude', CLAUDE_MODEL, systemPromptHash, payloadHash, async () => {
+      const requestPayload = await this.withFinalPayloadCache(
+        'claude',
+        CLAUDE_MODEL,
+        systemPromptHash,
+        payloadHash,
+        async () => {
+          const content: any[] = [];
+          if (imagePaths?.length) {
+            for (const p of imagePaths) {
+              if (fs.existsSync(p)) {
+                const imageData = await fs.promises.readFile(p);
+                content.push({
+                  type: "image",
+                  source: {
+                    type: "base64",
+                    media_type: "image/png",
+                    data: imageData.toString("base64")
+                  }
+                });
+              }
             }
-          });
-        }
-      }
-    }
-    content.push({ type: "text", text: userMessage });
+          }
+          content.push({ type: "text", text: userMessage });
 
-    const response = await this.claudeClient.messages.create({
-      model: CLAUDE_MODEL,
-      max_tokens: CLAUDE_MAX_OUTPUT_TOKENS,
-      ...(systemPrompt ? { system: systemPrompt } : {}),
-      messages: [{ role: "user", content }],
+          return {
+            model: CLAUDE_MODEL,
+            max_tokens: CLAUDE_MAX_OUTPUT_TOKENS,
+            ...(systemPrompt ? { system: systemPrompt } : {}),
+            messages: [{ role: "user", content }],
+          };
+        },
+      );
+
+      const response = await this.claudeClient!.messages.create(requestPayload as any);
+      const textBlock = response.content.find((block: any) => block.type === 'text') as any;
+      return textBlock?.text || "";
     });
-
-    const textBlock = response.content.find((block: any) => block.type === 'text') as any;
-    return textBlock?.text || "";
   }
 
   /**

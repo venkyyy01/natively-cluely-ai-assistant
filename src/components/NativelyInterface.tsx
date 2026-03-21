@@ -41,6 +41,16 @@ import 'katex/dist/katex.min.css';
 import { getElectronAPI } from '../lib/electronApi';
 import { analytics, detectProviderType } from '../lib/analytics/analytics.service';
 import { useShortcuts } from '../hooks/useShortcuts';
+import {
+    classifyAssistRender,
+    ConsciousModeAnswer,
+    parseConsciousModeAnswer,
+} from '../lib/consciousMode';
+import {
+    classifyConsciousModeQuestion,
+    createEmptyConsciousModeResponse,
+    type ReasoningThread,
+} from '../../electron/ConsciousMode';
 
 interface Message {
     id: string;
@@ -113,6 +123,7 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
     const messagesEndRef = useRef<HTMLDivElement>(null);
     const contentRef = useRef<HTMLDivElement>(null);
     const scrollContainerRef = useRef<HTMLDivElement>(null);
+    const activeConsciousThreadRef = useRef<ReasoningThread | null>(null);
     // const settingsButtonRef = useRef<HTMLButtonElement>(null);
 
     // Latent Context State (Screenshots attached but not sent)
@@ -295,6 +306,7 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
             setRollingTranscript('');
             setIsInterviewerSpeaking(false);
             setIsProcessing(false);
+            activeConsciousThreadRef.current = null;
             // Optionally reset connection status if needed, but connection persists
 
             // Track new conversation/session if applicable?
@@ -439,6 +451,32 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
 
         cleanups.push(window.electronAPI.onIntelligenceSuggestedAnswer((data) => {
             setIsProcessing(false);
+            const threadRoute = classifyConsciousModeQuestion(data.question, activeConsciousThreadRef.current);
+            const assistRender = classifyAssistRender({
+                answerText: data.answer,
+                threadAction: threadRoute.threadAction,
+            });
+
+            analytics.trackInterviewAssistRendered({
+                ...assistRender,
+                source_intent: 'what_to_answer',
+            });
+
+            if (assistRender.output_variant === 'conscious_mode') {
+                const currentThread = activeConsciousThreadRef.current;
+                const continuesThread = Boolean(threadRoute.threadAction === 'continue' && currentThread);
+
+                activeConsciousThreadRef.current = {
+                    rootQuestion: continuesThread && currentThread ? currentThread.rootQuestion : data.question,
+                    lastQuestion: data.question,
+                    response: createEmptyConsciousModeResponse(),
+                    followUpCount: continuesThread && currentThread ? currentThread.followUpCount + 1 : 0,
+                    updatedAt: Date.now(),
+                };
+            } else {
+                activeConsciousThreadRef.current = null;
+            }
+
             setMessages(prev => {
                 const lastMsg = prev[prev.length - 1];
 
@@ -1073,6 +1111,17 @@ Provide only the answer, nothing else.`;
 
 
     const renderMessageText = (msg: Message) => {
+        if (msg.intent === 'what_to_answer') {
+            const consciousModeAnswer = parseConsciousModeAnswer(msg.text);
+            if (consciousModeAnswer) {
+                return <ConsciousModeAnswer text={msg.text} isStreaming={msg.isStreaming} />;
+            }
+
+            if (msg.isStreaming) {
+                return <ConsciousModeAnswer text={msg.text} isStreaming />;
+            }
+        }
+
         // Code-containing messages get special styling
         // We split by code blocks to keep the "Code Solution" UI intact for the code parts
         // But use ReactMarkdown for the text parts around it

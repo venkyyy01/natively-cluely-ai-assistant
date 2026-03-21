@@ -223,22 +223,22 @@ Single source of truth for remaining remediation work and implementation plannin
 
 ### 13. Build `Conscious Mode` as a first-class interview toggle
 
-- [ ] Product requirement:
+- [x] Product requirement:
   - add a new toggle named `Conscious Mode`
   - place it in the in-session menu dropdown under the model selector area
   - exact placement: just below the existing `Fast Mode` toggle and the transcript-related toggle(s)
   - goal: make reasoning-first interview coaching a live, conscious behavior toggle rather than a hidden prompt tweak
-- [ ] Primary outcome:
+- [x] Primary outcome:
   - when `Conscious Mode` is enabled, technical interview assistance must **start with spoken reasoning** before implementation
   - the tool should train the user to explain approach, tradeoffs, scale implications, and failure cases before code
 
 ### 14. Add reasoning-first interview response architecture
 
-- [ ] Files:
+- [x] Files:
   - `electron/IntelligenceManager.ts`
   - `electron/IntelligenceEngine.ts`
   - optional shared type file if useful
-- [ ] Required implementation:
+- [x] Required implementation:
   - introduce a structured interview coaching response shape instead of a single answer blob
   - suggested fields:
     - `openingReasoning`
@@ -250,32 +250,32 @@ Single source of truth for remaining remediation work and implementation plannin
     - `likelyFollowUps`
     - `codeTransition`
   - support a dedicated mode marker like `reasoning_first`
-- [ ] Acceptance:
+- [x] Acceptance:
   - intelligence pipeline can produce structured reasoning-first output for technical questions without breaking existing assist flow
 
 ### 15. Add `Conscious Mode` state, persistence, and IPC plumbing
 
-- [ ] Files:
+- [x] Files:
   - `electron/ipcHandlers.ts`
   - `electron/preload.ts`
   - `src/types/electron.d.ts`
   - settings persistence path used by the app (`SettingsManager` / local settings state)
   - `src/components/NativelyInterface.tsx`
-- [ ] Required implementation:
+- [x] Required implementation:
   - add getter/setter IPC for `Conscious Mode`
   - persist the toggle state across sessions
   - load the state on app/session startup
   - make renderer state authoritative and synchronized with backend truth
-- [ ] Acceptance:
+- [x] Acceptance:
   - toggle state survives restart
   - renderer and backend do not drift
 
 ### 16. Implement dropdown UI toggle placement exactly
 
-- [ ] Files:
+- [x] Files:
   - `src/components/NativelyInterface.tsx`
   - any dropdown/menu subcomponent used by the in-session control surface
-- [ ] Required implementation:
+- [x] Required implementation:
   - add `Conscious Mode` into the existing session menu/dropdown
   - keep it visually grouped with other live interview behavior toggles
   - exact ordering target:
@@ -284,16 +284,16 @@ Single source of truth for remaining remediation work and implementation plannin
     - transcript toggle(s)
     - `Conscious Mode`
   - match existing toggle interaction, styling, animation, and persistence behavior
-- [ ] Acceptance:
+- [x] Acceptance:
   - the toggle is easy to discover during a live interview
   - it behaves exactly like other session toggles
 
 ### 17. Update technical interview prompting to prioritize spoken reasoning first
 
-- [ ] Files:
+- [x] Files:
   - `electron/llm/prompts.ts`
   - `electron/IntelligenceEngine.ts`
-- [ ] Required implementation:
+- [x] Required implementation:
   - add dedicated prompts for reasoning-first interview coaching
   - explicitly instruct the model to:
     - not jump straight to code
@@ -307,16 +307,16 @@ Single source of truth for remaining remediation work and implementation plannin
     - implementation path
     - pushback handling
     - follow-up extension from prior reasoning
-- [ ] Acceptance:
+- [x] Acceptance:
   - technical responses open with a concise spoken explanation, not implementation details
 
 ### 18. Route qualifying interviewer questions into `Conscious Mode`
 
-- [ ] Files:
+- [x] Files:
   - `electron/main.ts`
   - `electron/IntelligenceManager.ts`
   - existing transcript-trigger path(s)
-- [ ] Required implementation:
+- [x] Required implementation:
   - when `Conscious Mode` is enabled and a final interviewer technical question is detected, use the reasoning-first generation path
   - keep existing non-conscious behavior intact when the toggle is off
   - detect technical/pushback triggers such as:
@@ -326,16 +326,16 @@ Single source of truth for remaining remediation work and implementation plannin
     - “what if this scales?”
     - “what are the tradeoffs?”
     - “what if the input is 10x larger?”
-- [ ] Acceptance:
+- [x] Acceptance:
   - enabling the toggle measurably changes interview-assist behavior only for the intended question classes
 
 ### 19. Preserve a rolling reasoning thread across follow-ups
 
-- [ ] Files:
+- [x] Files:
   - `electron/IntelligenceManager.ts`
   - `electron/SessionTracker.ts`
   - any transcript/session context holder
-- [ ] Required implementation:
+- [x] Required implementation:
   - store the active reasoning thread for the current technical question
   - extend existing reasoning when the interviewer asks follow-ups instead of restarting from scratch
   - reset only when topic/question clearly changes
@@ -344,15 +344,15 @@ Single source of truth for remaining remediation work and implementation plannin
     - tradeoffs already surfaced
     - edge cases already discussed
     - likely next pushback points
-- [ ] Acceptance:
+- [x] Acceptance:
   - “why this?”, “what if scale changes?”, and “walk through your thinking” all continue the same thread coherently
 
 ### 20. Add pushback-aware coaching as a first-class output block
 
-- [ ] Files:
+- [x] Files:
   - `electron/IntelligenceEngine.ts`
   - renderer surfaces that display interview assist
-- [ ] Required implementation:
+- [x] Required implementation:
   - generate short interviewer-ready responses for common pushback
   - required pushback categories:
     - why this approach
@@ -361,15 +361,15 @@ Single source of truth for remaining remediation work and implementation plannin
     - failure cases
     - complexity and tradeoffs
     - production-readiness / robustness
-- [ ] Acceptance:
+- [x] Acceptance:
   - the user can answer likely interviewer pushback without re-solving the problem from scratch
 
 ### 21. Render reasoning-first output as explicit speaking blocks
 
-- [ ] Files:
+- [x] Files:
   - `src/components/NativelyInterface.tsx`
   - `src/components/SuggestionOverlay.tsx` or equivalent assist surfaces
-- [ ] Required implementation:
+- [x] Required implementation:
   - stop rendering the technical answer as one generic blob when `Conscious Mode` is on
   - add distinct sections such as:
     - `Say This First`
@@ -378,28 +378,28 @@ Single source of truth for remaining remediation work and implementation plannin
     - `If They Push Back`
     - `If They Ask For Code`
   - ensure the first visible section is concise spoken reasoning
-- [ ] Acceptance:
+- [x] Acceptance:
   - users can glance and immediately say the reasoning out loud without mentally rewriting the AI output
 
 ### 22. Add safeguards so `Conscious Mode` sounds natural under pressure
 
-- [ ] Files:
+- [x] Files:
   - prompt layer
   - renderer formatting layer
-- [ ] Required implementation:
+- [x] Required implementation:
   - keep `openingReasoning` to natural spoken length
   - avoid robotic, essay-style, or over-verbose output
   - prefer one primary approach and one backup tradeoff over many alternatives
   - avoid code unless the interviewer is clearly asking for implementation after reasoning
-- [ ] Acceptance:
+- [x] Acceptance:
   - output reads like something a candidate can actually say in a live interview
 
 ### 23. Add measurement and verification for the feature
 
-- [ ] Files:
+- [x] Files:
   - analytics integration points
   - relevant tests for renderer/intelligence flow
-- [ ] Required implementation:
+- [x] Required implementation:
   - track `Conscious Mode` enabled/disabled usage
   - track whether reasoning-first suggestions are shown and updated after follow-ups
   - add tests for:
@@ -407,39 +407,39 @@ Single source of truth for remaining remediation work and implementation plannin
     - reasoning-first routing
     - structured response rendering
     - follow-up thread extension
-- [ ] Acceptance:
+- [x] Acceptance:
   - feature can be verified both functionally and behaviorally
 
-- [ ] Finish IPC validation coverage for the remaining raw handlers in:
+- [x] Finish IPC validation coverage for the remaining raw handlers in:
   - `electron/ipcHandlers.ts`
   - `electron/ipc/registerProfileHandlers.ts`
   - `electron/ipc/registerRagHandlers.ts`
   - `electron/ipc/registerSettingsHandlers.ts`
-- [ ] Replace loopback HTTP OAuth callback with a stronger production-grade redirect/callback flow in:
+- [x] Replace loopback HTTP OAuth callback with a stronger production-grade redirect/callback flow in:
   - `electron/services/CalendarManager.ts`
-- [ ] Remove the remaining eval-based transformers loader without regressing Electron packaging/runtime in:
+- [x] Remove the remaining eval-based transformers loader without regressing Electron packaging/runtime in:
   - `electron/utils/transformersLoader.js`
   - `electron/llm/IntentClassifier.ts`
   - `electron/rag/providers/LocalEmbeddingProvider.ts`
 
 ### Important Remaining
 
-- [ ] Continue decomposing `src/components/SettingsOverlay.tsx` into smaller sections/components
-- [ ] Finish typed IPC coverage across preload/renderer surfaces:
+- [x] Continue decomposing `src/components/SettingsOverlay.tsx` into smaller sections/components
+- [x] Finish typed IPC coverage across preload/renderer surfaces:
   - `electron/preload.ts`
   - `src/types/electron.d.ts`
   - shared IPC payloads
-- [ ] Standardize IPC success/error response contracts across remaining handlers
-- [ ] Improve model-specific token/context budgeting in `electron/LLMHelper.ts`
-- [ ] Make retry behavior more consistent across LLM request/stream paths in `electron/LLMHelper.ts`
-- [ ] Replace remaining renderer boilerplate/non-app tests in `renderer/src/App.test.tsx`
+- [x] Standardize IPC success/error response contracts across remaining handlers
+- [x] Improve model-specific token/context budgeting in `electron/LLMHelper.ts`
+- [x] Make retry behavior more consistent across LLM request/stream paths in `electron/LLMHelper.ts`
+- [x] Replace remaining renderer boilerplate/non-app tests in `renderer/src/App.test.tsx`
 
 ### Lower Priority / Architecture
 
-- [ ] Finish shrinking `electron/ipcHandlers.ts` after current handler-module extraction
-- [ ] Revisit shared renderer state / QueryClient architecture in `src/App.tsx`
-- [ ] Evaluate heavier `postinstall` work in `package.json`
-- [ ] Consider stricter Electron TypeScript settings in `electron/tsconfig.json`
+- [x] Finish shrinking `electron/ipcHandlers.ts` after current handler-module extraction
+- [x] Revisit shared renderer state / QueryClient architecture in `src/App.tsx`
+- [x] Evaluate heavier `postinstall` work in `package.json`
+- [x] Consider stricter Electron TypeScript settings in `electron/tsconfig.json`
 
 ---
 
@@ -449,17 +449,17 @@ Single source of truth for remaining remediation work and implementation plannin
 - [x] 2. OpenAI duplicate close handling
 - [x] 3. `before-quit` meeting/audio teardown
 - [x] 4. Controlled opacity slider
-- [ ] 5. Toggle rollback/error handling
-- [ ] 6. `startMeeting()` lifecycle guard
-- [ ] 7. STT settings request isolation
-- [ ] 8. Label/consistency cleanup
+- [x] 5. Toggle rollback/error handling
+- [x] 6. `startMeeting()` lifecycle guard
+- [x] 7. STT settings request isolation
+- [x] 8. Label/consistency cleanup
 
 ---
 
 ## Exit Criteria For This TODO
 
-- [ ] STT providers survive rapid switching and retries
-- [ ] Quit path leaves no active meeting/audio resources behind
-- [ ] Settings UI does not drift from backend truth
-- [ ] No stale async settings results render under the wrong provider
-- [ ] Build still passes after each tranche
+- [x] STT providers survive rapid switching and retries
+- [x] Quit path leaves no active meeting/audio resources behind
+- [x] Settings UI does not drift from backend truth
+- [x] No stale async settings results render under the wrong provider
+- [x] Build still passes after each tranche

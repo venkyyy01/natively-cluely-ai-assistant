@@ -40,6 +40,7 @@ export const ipcSchemas = {
   ]),
   recognitionLanguage: boundedString(64),
   aiResponseLanguage: boundedString(64),
+  disguiseMode: z.enum(['terminal', 'settings', 'activity', 'none']),
   startMeetingMetadata: z.object({
     audio: z.object({
       inputDeviceId: z.string().trim().max(256).nullable().optional(),
@@ -66,6 +67,10 @@ export const ipcSchemas = {
     context: z.string().max(2000).optional(),
     metadata: z.record(z.unknown()).optional(),
   }).passthrough(),
+  generateSuggestionArgs: z.tuple([
+    boundedString(100000),
+    boundedString(10000),
+  ]),
   contentDimensions: z.object({
     width: z.number().finite().positive().max(4000),
     height: z.number().finite().positive().max(4000),
@@ -88,6 +93,26 @@ export const ipcSchemas = {
   ollamaSwitchArgs: z.tuple([z.string().trim().max(256).optional(), z.string().trim().max(2048).optional()]),
   providerId: boundedString(128),
   booleanFlag: z.boolean(),
+  overlayOpacity: z.number().finite(),
+  profileFilePath: boundedString(2000),
+  profileCompanyName: boundedString(256),
+  googleSearchCseId: boundedString(256),
+  ragMeetingQuery: z.object({
+    meetingId: boundedString(128),
+    query: boundedString(10000),
+  }).strict(),
+  ragLiveQuery: z.object({
+    query: boundedString(10000),
+  }).strict(),
+  ragGlobalQuery: z.object({
+    query: boundedString(10000),
+  }).strict(),
+  ragCancelQuery: z.object({
+    meetingId: boundedString(128).optional(),
+    global: z.boolean().optional(),
+  }).strict().refine((value) => value.global === true || typeof value.meetingId === 'string', {
+    message: 'meetingId or global is required',
+  }),
   themeMode: z.enum(['system', 'light', 'dark']),
   openMailtoInput: z.object({
     to: z.string().trim().max(2000),

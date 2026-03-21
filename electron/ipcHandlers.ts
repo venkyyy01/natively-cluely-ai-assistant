@@ -14,6 +14,7 @@ import { registerRagHandlers } from "./ipc/registerRagHandlers";
 import { registerEmailHandlers } from "./ipc/registerEmailHandlers";
 import { registerProfileHandlers } from "./ipc/registerProfileHandlers";
 import { registerIntelligenceHandlers } from "./ipc/registerIntelligenceHandlers";
+import { registerWindowHandlers } from "./ipc/registerWindowHandlers";
 
 
 export function initializeIpcHandlers(appState: AppState): void {
@@ -29,6 +30,15 @@ export function initializeIpcHandlers(appState: AppState): void {
   ) => {
     safeHandle(channel, (event, ...args) => listener(event, ...parser(args)));
   };
+
+  const ok = <T>(data: T) => ({ success: true as const, data });
+  const fail = (code: string, error: unknown, fallbackMessage: string) => ({
+    success: false as const,
+    error: {
+      code,
+      message: error instanceof Error ? error.message : fallbackMessage,
+    },
+  });
 
   // --- NEW Test Helper ---
   safeHandle("test-release-fetch", async () => {
@@ -50,12 +60,12 @@ export function initializeIpcHandlers(appState: AppState): void {
         };
         // Send to renderer
         appState.getMainWindow()?.webContents.send("update-available", info);
-        return { success: true };
+        return ok(null);
       }
-      return { success: false, error: "No notes returned" };
+      return fail('RELEASE_NOTES_EMPTY', new Error('No notes returned'), 'No notes returned');
     } catch (err: any) {
       console.error("[IPC] test-release-fetch failed:", err);
-      return { success: false, error: err.message };
+      return fail('RELEASE_FETCH_FAILED', err, 'Failed to fetch release notes');
     }
   });
 
@@ -85,35 +95,10 @@ export function initializeIpcHandlers(appState: AppState): void {
   registerSettingsHandlers({ appState, safeHandle, safeHandleValidated });
   registerCalendarHandlers({ appState, safeHandle });
   registerEmailHandlers({ appState, safeHandleValidated });
-  registerRagHandlers({ appState, safeHandle });
-  registerProfileHandlers({ appState, safeHandle });
+  registerRagHandlers({ appState, safeHandle, safeHandleValidated });
+  registerProfileHandlers({ appState, safeHandle, safeHandleValidated });
   registerIntelligenceHandlers({ appState, safeHandle });
-  safeHandleValidated(
-    "update-content-dimensions",
-    (args) => [parseIpcInput(ipcSchemas.contentDimensions, args[0], 'update-content-dimensions')] as const,
-    async (event, { width, height }) => {
-      if (!width || !height) return
-
-      const senderWebContents = event.sender
-      const settingsWin = appState.settingsWindowHelper.getSettingsWindow()
-      const overlayWin = appState.getWindowHelper().getOverlayWindow()
-      const launcherWin = appState.getWindowHelper().getLauncherWindow()
-
-      if (settingsWin && !settingsWin.isDestroyed() && settingsWin.webContents.id === senderWebContents.id) {
-        appState.settingsWindowHelper.setWindowDimensions(settingsWin, width, height)
-      } else if (
-        overlayWin && !overlayWin.isDestroyed() && overlayWin.webContents.id === senderWebContents.id
-      ) {
-        // NativelyInterface logic - Resize ONLY the overlay window using dedicated method
-        appState.getWindowHelper().setOverlayDimensions(width, height)
-      }
-    }
-  )
-
-  safeHandleValidated("set-window-mode", (args) => [parseIpcInput(ipcSchemas.windowMode, args[0], 'set-window-mode')] as const, async (event, mode) => {
-    appState.getWindowHelper().setWindowMode(mode);
-    return { success: true };
-  })
+  registerWindowHandlers({ appState, safeHandle, safeHandleValidated });
 
 
   safeHandleValidated("delete-screenshot", (args) => [parseIpcInput(ipcSchemas.absoluteUserDataPath, args[0], 'delete-screenshot')] as const, async (event, filePath) => {
@@ -131,10 +116,9 @@ export function initializeIpcHandlers(appState: AppState): void {
     try {
       const screenshotPath = await appState.takeScreenshot()
       const preview = await appState.getImagePreview(screenshotPath)
-      return { path: screenshotPath, preview }
+      return ok({ path: screenshotPath, preview })
     } catch (error) {
-      // console.error("Error taking screenshot:", error)
-      throw error
+      return fail('SCREENSHOT_CAPTURE_FAILED', error, 'Failed to take screenshot')
     }
   })
 
@@ -142,12 +126,12 @@ export function initializeIpcHandlers(appState: AppState): void {
     try {
       const screenshotPath = await appState.takeSelectiveScreenshot()
       const preview = await appState.getImagePreview(screenshotPath)
-      return { path: screenshotPath, preview }
-    } catch (error) {
-      if (error.message === "Selection cancelled") {
-        return { cancelled: true }
+      return ok({ path: screenshotPath, preview })
+    } catch (error: any) {
+      if (error?.message === "Selection cancelled") {
+        return ok({ cancelled: true })
       }
-      throw error
+      return fail('SELECTIVE_SCREENSHOT_FAILED', error, 'Failed to take selective screenshot')
     }
   })
 
@@ -171,24 +155,10 @@ export function initializeIpcHandlers(appState: AppState): void {
         )
       }
       // previews.forEach((preview: any) => console.log(preview.path))
-      return previews
+      return ok(previews)
     } catch (error) {
-      // console.error("Error getting screenshots:", error)
-      throw error
+      return fail('SCREENSHOT_LIST_FAILED', error, 'Failed to load screenshots')
     }
-  })
-
-  safeHandle("toggle-window", async () => {
-    appState.toggleMainWindow()
-  })
-
-  safeHandle("show-window", async () => {
-    // Default show main window (Launcher usually)
-    appState.showMainWindow()
-  })
-
-  safeHandle("hide-window", async () => {
-    appState.hideMainWindow()
   })
 
   safeHandle("reset-queues", async () => {
@@ -227,34 +197,34 @@ export function initializeIpcHandlers(appState: AppState): void {
 
 
   // Generate suggestion from transcript - Natively-style text-only reasoning
-  safeHandle("generate-suggestion", async (event, context: string, lastQuestion: string) => {
+  safeHandleValidated("generate-suggestion", (args) => parseIpcInput(ipcSchemas.generateSuggestionArgs, args, 'generate-suggestion'), async (_event, context, lastQuestion) => {
     try {
       const suggestion = await appState.processingHelper.getLLMHelper().generateSuggestion(context, lastQuestion)
-      return { suggestion }
+      return ok({ suggestion })
     } catch (error: any) {
-      // console.error("Error generating suggestion:", error)
-      throw error
+      return fail('SUGGESTION_GENERATION_FAILED', error, 'Failed to generate suggestion')
     }
   })
 
   safeHandle("finalize-mic-stt", async () => {
     appState.finalizeMicSTT();
+    return ok(null);
   });
 
   // IPC handler for analyzing image from file path
-  safeHandle("analyze-image-file", async (event, filePath: string) => {
+  safeHandleValidated("analyze-image-file", (args) => [parseIpcInput(ipcSchemas.absoluteUserDataPath, args[0], 'analyze-image-file')] as const, async (_event, filePath) => {
     // Guard: only allow reading files within the app's own userData directory
     const userDataDir = app.getPath('userData');
     const resolved = path.resolve(filePath);
     if (!resolved.startsWith(userDataDir + path.sep)) {
       console.warn('[IPC] analyze-image-file: path outside userData rejected:', filePath);
-      throw new Error('Path not allowed');
+      return fail('PATH_NOT_ALLOWED', new Error('Path not allowed'), 'Path not allowed');
     }
     try {
       const result = await appState.processingHelper.getLLMHelper().analyzeImageFiles([resolved])
-      return result
+      return ok(result)
     } catch (error: any) {
-      throw error
+      return fail('IMAGE_ANALYSIS_FAILED', error, 'Failed to analyze image file')
     }
   })
 
@@ -365,11 +335,13 @@ export function initializeIpcHandlers(appState: AppState): void {
 
   safeHandle("quit-app", () => {
     app.quit()
+    return ok(null)
   })
 
   safeHandle("quit-and-install-update", () => {
     console.log('[IPC] quit-and-install-update handler called')
     appState.quitAndInstallUpdate()
+    return ok(null)
   })
 
   safeHandleValidated("delete-meeting", (args) => [parseIpcInput(ipcSchemas.providerId, args[0], 'delete-meeting')] as const, async (_, id) => {
@@ -377,46 +349,34 @@ export function initializeIpcHandlers(appState: AppState): void {
   });
 
   safeHandle("check-for-updates", async () => {
-    await appState.checkForUpdates()
+    try {
+      await appState.checkForUpdates()
+      return ok(null)
+    } catch (error) {
+      return fail('UPDATE_CHECK_FAILED', error, 'Failed to check for updates')
+    }
   })
 
   safeHandle("download-update", async () => {
-    appState.downloadUpdate()
-  })
-
-  // Window movement handlers
-  safeHandle("move-window-left", async () => {
-    appState.moveWindowLeft()
-  })
-
-  safeHandle("move-window-right", async () => {
-    appState.moveWindowRight()
-  })
-
-  safeHandle("move-window-up", async () => {
-    appState.moveWindowUp()
-  })
-
-  safeHandle("move-window-down", async () => {
-    appState.moveWindowDown()
-  })
-
-  safeHandle("center-and-show-window", async () => {
-    appState.centerAndShowWindow()
+    try {
+      appState.downloadUpdate()
+      return ok(null)
+    } catch (error) {
+      return fail('UPDATE_DOWNLOAD_FAILED', error, 'Failed to start update download')
+    }
   })
 
   // LLM Model Management Handlers
   safeHandle("get-current-llm-config", async () => {
     try {
       const llmHelper = appState.processingHelper.getLLMHelper();
-      return {
+      return ok({
         provider: llmHelper.getCurrentProvider(),
         model: llmHelper.getCurrentModel(),
         isOllama: llmHelper.isUsingOllama()
-      };
+      });
     } catch (error: any) {
-      // console.error("Error getting current LLM config:", error);
-      throw error;
+      return fail('LLM_CONFIG_READ_FAILED', error, 'Failed to read current LLM config');
     }
   });
 
@@ -424,10 +384,9 @@ export function initializeIpcHandlers(appState: AppState): void {
     try {
       const llmHelper = appState.processingHelper.getLLMHelper();
       const models = await llmHelper.getOllamaModels();
-      return models;
+      return ok(models);
     } catch (error: any) {
-      // console.error("Error getting Ollama models:", error);
-      throw error;
+      return fail('OLLAMA_MODELS_READ_FAILED', error, 'Failed to get Ollama models');
     }
   });
 
@@ -445,11 +404,11 @@ export function initializeIpcHandlers(appState: AppState): void {
   safeHandle("force-restart-ollama", async () => {
     try {
       const llmHelper = appState.processingHelper.getLLMHelper();
-      const success = await llmHelper.forceRestartOllama();
-      return { success };
+      const restarted = await llmHelper.forceRestartOllama();
+      return ok({ restarted });
     } catch (error: any) {
       console.error("Error force restarting Ollama:", error);
-      return { success: false, error: error.message };
+      return fail('OLLAMA_FORCE_RESTART_FAILED', error, 'Failed to force restart Ollama');
     }
   });
 
@@ -461,10 +420,10 @@ export function initializeIpcHandlers(appState: AppState): void {
       // The forceRestartOllama now calls OllamaManager.getInstance().init() internally
       // so we don't need to do it again here.
       
-      return true;
+      return ok({ restarted: true });
     } catch (error: any) {
       console.error("[IPC restart-ollama] Failed to restart:", error);
-      return false;
+      return fail('OLLAMA_RESTART_FAILED', error, 'Failed to restart Ollama');
     }
   });
 
@@ -472,9 +431,9 @@ export function initializeIpcHandlers(appState: AppState): void {
     try {
       const { OllamaManager } = require('./services/OllamaManager');
       await OllamaManager.getInstance().init();
-      return { success: true };
+      return ok({ running: true });
     } catch (error: any) {
-      return { success: false, message: error.message };
+      return fail('OLLAMA_INIT_FAILED', error, 'Failed to ensure Ollama is running');
     }
   });
 
@@ -582,10 +541,10 @@ export function initializeIpcHandlers(appState: AppState): void {
       // New ones take precedence if IDs conflict (though unlikely as UUIDs)
       const curlProviders = cm.getCurlProviders();
       const legacyProviders = cm.getCustomProviders() || [];
-      return [...curlProviders, ...legacyProviders];
+      return ok([...curlProviders, ...legacyProviders]);
     } catch (error: any) {
       console.error("Error getting custom providers:", error);
-      return [];
+      return fail('CUSTOM_PROVIDERS_READ_FAILED', error, 'Failed to get custom providers');
     }
   });
 
@@ -640,10 +599,10 @@ export function initializeIpcHandlers(appState: AppState): void {
   safeHandle("get-curl-providers", async () => {
     try {
       const { CredentialsManager } = require('./services/CredentialsManager');
-      return CredentialsManager.getInstance().getCurlProviders();
+      return ok(CredentialsManager.getInstance().getCurlProviders());
     } catch (error: any) {
       console.error("Error getting curl providers:", error);
-      return [];
+      return fail('CURL_PROVIDERS_READ_FAILED', error, 'Failed to get curl providers');
     }
   });
 
@@ -700,7 +659,7 @@ export function initializeIpcHandlers(appState: AppState): void {
       // Return masked versions for security (just indicate if set)
       const hasKey = (key?: string) => !!(key && key.trim().length > 0);
 
-      return {
+      return ok({
         hasGeminiKey: hasKey(creds.geminiApiKey),
         hasGroqKey: hasKey(creds.groqApiKey),
         hasOpenaiKey: hasKey(creds.openaiApiKey),
@@ -724,9 +683,9 @@ export function initializeIpcHandlers(appState: AppState): void {
         groqPreferredModel: creds.groqPreferredModel || undefined,
         openaiPreferredModel: creds.openaiPreferredModel || undefined,
         claudePreferredModel: creds.claudePreferredModel || undefined,
-      };
+      });
     } catch (error: any) {
-      return { hasGeminiKey: false, hasGroqKey: false, hasOpenaiKey: false, hasClaudeKey: false, googleServiceAccountPath: null, sttProvider: 'google', groqSttModel: 'whisper-large-v3-turbo', hasSttGroqKey: false, hasSttOpenaiKey: false, hasDeepgramKey: false, hasElevenLabsKey: false, hasAzureKey: false, azureRegion: 'eastus', hasIbmWatsonKey: false, ibmWatsonRegion: 'us-south', hasSonioxKey: false, hasGoogleSearchKey: false, hasGoogleSearchCseId: false };
+      return fail('CREDENTIALS_READ_FAILED', error, 'Failed to get stored credentials');
     }
   });
 
@@ -794,9 +753,9 @@ export function initializeIpcHandlers(appState: AppState): void {
   safeHandle("get-stt-provider", async () => {
     try {
       const { CredentialsManager } = require('./services/CredentialsManager');
-      return CredentialsManager.getInstance().getSttProvider();
+      return ok(CredentialsManager.getInstance().getSttProvider());
     } catch (error: any) {
-      return 'google';
+      return fail('STT_PROVIDER_READ_FAILED', error, 'Failed to get STT provider');
     }
   });
 
@@ -1158,9 +1117,9 @@ export function initializeIpcHandlers(appState: AppState): void {
   safeHandle("get-groq-fast-text-mode", () => {
     try {
       const llmHelper = appState.processingHelper.getLLMHelper();
-      return { enabled: llmHelper.getGroqFastTextMode() };
+      return ok({ enabled: llmHelper.getGroqFastTextMode() });
     } catch (error: any) {
-      return { enabled: false };
+      return fail('GROQ_FAST_TEXT_READ_FAILED', error, 'Failed to get Groq Fast Text mode');
     }
   });
 
@@ -1247,10 +1206,10 @@ export function initializeIpcHandlers(appState: AppState): void {
     try {
       const { CredentialsManager } = require('./services/CredentialsManager');
       const cm = CredentialsManager.getInstance();
-      return { model: cm.getDefaultModel() };
+      return ok({ model: cm.getDefaultModel() });
     } catch (error: any) {
       console.error("Error getting default model:", error);
-      return { model: 'gemini-3.1-flash-lite-preview' };
+      return fail('DEFAULT_MODEL_READ_FAILED', error, 'Failed to get default model');
     }
   });
 
@@ -1262,6 +1221,7 @@ export function initializeIpcHandlers(appState: AppState): void {
 
   safeHandle("hide-model-selector", () => {
     appState.modelSelectorWindowHelper.hideWindow();
+    return ok(null);
   });
 
   safeHandleValidated("toggle-model-selector", (args) => [parseIpcInput(ipcSchemas.modelSelectorCoords, args[0], 'toggle-model-selector')] as const, (_, coords) => {
@@ -1272,7 +1232,11 @@ export function initializeIpcHandlers(appState: AppState): void {
 
   // Native Audio Service Handlers
   safeHandle("native-audio-status", async () => {
-    return appState.getNativeAudioStatus();
+    try {
+      return ok(appState.getNativeAudioStatus());
+    } catch (error) {
+      return fail('NATIVE_AUDIO_STATUS_FAILED', error, 'Failed to get native audio status');
+    }
   });
   registerMeetingHandlers({ appState, safeHandle, safeHandleValidated });
 
@@ -1288,7 +1252,7 @@ export function initializeIpcHandlers(appState: AppState): void {
       });
 
       if (result.canceled || result.filePaths.length === 0) {
-        return { success: false, cancelled: true };
+        return ok({ cancelled: true });
       }
 
       const filePath = result.filePaths[0];
@@ -1300,10 +1264,10 @@ export function initializeIpcHandlers(appState: AppState): void {
       const { CredentialsManager } = require('./services/CredentialsManager');
       CredentialsManager.getInstance().setGoogleServiceAccountPath(filePath);
 
-      return { success: true, path: filePath };
+      return ok({ path: filePath });
     } catch (error: any) {
       console.error("Error selecting service account:", error);
-      return { success: false, error: error.message };
+      return fail('SERVICE_ACCOUNT_SELECTION_FAILED', error, 'Failed to select service account');
     }
   });
 
@@ -1312,11 +1276,15 @@ export function initializeIpcHandlers(appState: AppState): void {
   // ==========================================
 
   safeHandle("theme:get-mode", () => {
-    const tm = appState.getThemeManager();
-    return {
-      mode: tm.getMode(),
-      resolved: tm.getResolvedTheme()
-    };
+    try {
+      const tm = appState.getThemeManager();
+      return ok({
+        mode: tm.getMode(),
+        resolved: tm.getResolvedTheme()
+      });
+    } catch (error) {
+      return fail('THEME_MODE_READ_FAILED', error, 'Failed to get theme mode');
+    }
   });
 
   safeHandleValidated("theme:set-mode", (args) => [parseIpcInput(ipcSchemas.themeMode, args[0], 'theme:set-mode')] as const, (_, mode) => {
@@ -1326,7 +1294,7 @@ export function initializeIpcHandlers(appState: AppState): void {
 
   registerCalendarHandlers({ appState, safeHandle });
 
-  registerRagHandlers({ appState, safeHandle });
+  registerRagHandlers({ appState, safeHandle, safeHandleValidated });
 
   
 
@@ -1334,7 +1302,7 @@ export function initializeIpcHandlers(appState: AppState): void {
   // Overlay Opacity (Stealth Mode)
   // ==========================================
 
-  safeHandle("set-overlay-opacity", async (_, opacity: number) => {
+  safeHandleValidated("set-overlay-opacity", (args) => [parseIpcInput(ipcSchemas.overlayOpacity, args[0], 'set-overlay-opacity')] as const, async (_, opacity) => {
     // Clamp to valid range
     const clamped = Math.min(1.0, Math.max(0.15, opacity));
     // Broadcast to all renderer windows so the overlay picks it up in real-time
@@ -1343,6 +1311,6 @@ export function initializeIpcHandlers(appState: AppState): void {
         win.webContents.send('overlay-opacity-changed', clamped);
       }
     });
-    return;
+    return ok({ opacity: clamped });
   });
 }

@@ -86,6 +86,7 @@ import { ThemeManager } from "./ThemeManager"
 import { RAGManager } from "./rag/RAGManager"
 import { DatabaseManager } from "./db/DatabaseManager"
 import { warmupIntentClassifier } from "./llm"
+import { maybeHandleSuggestionTriggerFromTranscript } from "./ConsciousMode"
 
 /** Unified type for all STT providers with optional extended capabilities */
 type STTProvider = (GoogleSTT | RestSTT | DeepgramStreamingSTT | SonioxStreamingSTT | ElevenLabsStreamingSTT | OpenAIStreamingSTT) & {
@@ -130,6 +131,7 @@ export class AppState {
   private tray: Tray | null = null
   private updateAvailable: boolean = false
   private disguiseMode: 'terminal' | 'settings' | 'activity' | 'none' = 'none'
+  private consciousModeEnabled: boolean = false
 
   // View management
   private view: "queue" | "solutions" = "queue"
@@ -197,7 +199,8 @@ export class AppState {
     const settingsManager = SettingsManager.getInstance();
     this.isUndetectable = settingsManager.get('isUndetectable') ?? false;
     this.disguiseMode = settingsManager.get('disguiseMode') ?? 'none';
-    console.log(`[AppState] Initialized with isUndetectable=${this.isUndetectable}, disguiseMode=${this.disguiseMode}`);
+    this.consciousModeEnabled = settingsManager.get('consciousModeEnabled') ?? false;
+    console.log(`[AppState] Initialized with isUndetectable=${this.isUndetectable}, disguiseMode=${this.disguiseMode}, consciousModeEnabled=${this.consciousModeEnabled}`);
 
     // 2. Initialize Helpers with loaded state
     this.windowHelper = new WindowHelper(this)
@@ -264,6 +267,7 @@ export class AppState {
 
     // Initialize IntelligenceManager with LLMHelper
     this.intelligenceManager = new IntelligenceManager(this.processingHelper.getLLMHelper())
+    this.intelligenceManager.setConsciousModeEnabled(this.consciousModeEnabled)
 
     // Initialize ThemeManager
     this.themeManager = ThemeManager.getInstance()
@@ -754,21 +758,16 @@ export class AppState {
       helper.getLauncherWindow()?.webContents.send('native-audio-transcript', payload);
       helper.getOverlayWindow()?.webContents.send('native-audio-transcript', payload);
 
-      if (speaker === 'interviewer' && segment.isFinal) {
-        const trimmed = segment.text.trim();
-        const wordCount = trimmed.split(/\s+/).filter(Boolean).length;
-        const looksActionable = trimmed.endsWith('?') || wordCount >= 5;
-
-        if (looksActionable) {
-          void this.intelligenceManager.handleSuggestionTrigger({
-            context: this.intelligenceManager.getFormattedContext(180),
-            lastQuestion: trimmed,
-            confidence: segment.confidence ?? 0.8,
-          }).catch((error) => {
-            console.error('[Main] Failed to auto-trigger interview assist:', error);
-          });
-        }
-      }
+      void maybeHandleSuggestionTriggerFromTranscript({
+        speaker,
+        text: segment.text,
+        final: segment.isFinal,
+        confidence: segment.confidence,
+        consciousModeEnabled: this.consciousModeEnabled,
+        intelligenceManager: this.intelligenceManager,
+      }).catch((error) => {
+        console.error('[Main] Failed to auto-trigger interview assist:', error);
+      });
     });
 
     sttEmitter.on('error', (err: Error) => {
@@ -1824,6 +1823,26 @@ export class AppState {
 
   public getUndetectable(): boolean {
     return this.isUndetectable
+  }
+
+  public setConsciousModeEnabled(enabled: boolean): boolean {
+    if (this.consciousModeEnabled === enabled) {
+      return true
+    }
+
+    const persisted = SettingsManager.getInstance().set('consciousModeEnabled', enabled)
+    if (!persisted) {
+      throw new Error('Unable to persist Conscious Mode')
+    }
+
+    this.consciousModeEnabled = enabled
+    this.intelligenceManager.setConsciousModeEnabled(enabled)
+    this._broadcastToAllWindows('conscious-mode-changed', enabled)
+    return true
+  }
+
+  public getConsciousModeEnabled(): boolean {
+    return this.consciousModeEnabled
   }
 
   public setDisguise(mode: 'terminal' | 'settings' | 'activity' | 'none'): void {

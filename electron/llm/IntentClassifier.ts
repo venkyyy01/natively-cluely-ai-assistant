@@ -6,8 +6,7 @@
 //   1. Regex fast-path (< 1ms) for common patterns
 //   2. Local SLM fallback (zero-shot, ~10-50ms) for messy/ambiguous speech
 
-import { app } from 'electron';
-import { resolveBundledModelsPath } from '../utils/modelPaths';
+import { isElectronAppPackaged, resolveBundledModelsPath } from '../utils/modelPaths';
 const { loadTransformers } = require('../utils/transformersLoader');
 
 export type ConversationIntent =
@@ -107,7 +106,7 @@ class ZeroShotClassifier {
                 this.pipe = await pipeline(
                     'zero-shot-classification',
                     'Xenova/mobilebert-uncased-mnli',
-                    { local_files_only: app.isPackaged }
+                    { local_files_only: isElectronAppPackaged() }
                 );
                 console.log('[IntentClassifier] Zero-shot classifier loaded successfully.');
             } catch (e) {

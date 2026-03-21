@@ -8,6 +8,32 @@ export interface AppSettings {
     // can be moved here from CredentialsManager to allow early boot access.
     isUndetectable?: boolean;
     disguiseMode?: 'terminal' | 'settings' | 'activity' | 'none';
+    consciousModeEnabled?: boolean;
+}
+
+const ALLOWED_DISGUISE_MODES = new Set<AppSettings['disguiseMode']>(['terminal', 'settings', 'activity', 'none']);
+
+function sanitizeSettings(candidate: unknown): AppSettings {
+    if (typeof candidate !== 'object' || candidate === null) {
+        return {};
+    }
+
+    const raw = candidate as Record<string, unknown>;
+    const sanitized: AppSettings = {};
+
+    if (typeof raw.isUndetectable === 'boolean') {
+        sanitized.isUndetectable = raw.isUndetectable;
+    }
+
+    if (typeof raw.consciousModeEnabled === 'boolean') {
+        sanitized.consciousModeEnabled = raw.consciousModeEnabled;
+    }
+
+    if (typeof raw.disguiseMode === 'string' && ALLOWED_DISGUISE_MODES.has(raw.disguiseMode as AppSettings['disguiseMode'])) {
+        sanitized.disguiseMode = raw.disguiseMode as AppSettings['disguiseMode'];
+    }
+
+    return sanitized;
 }
 
 export class SettingsManager {
@@ -34,9 +60,15 @@ export class SettingsManager {
         return this.settings[key];
     }
 
-    public set<K extends keyof AppSettings>(key: K, value: AppSettings[K]): void {
+    public set<K extends keyof AppSettings>(key: K, value: AppSettings[K]): boolean {
+        const previousSettings = { ...this.settings };
         this.settings[key] = value;
-        this.saveSettings();
+        if (this.saveSettings()) {
+            return true;
+        }
+
+        this.settings = previousSettings;
+        return false;
     }
 
     private loadSettings(): void {
@@ -47,7 +79,7 @@ export class SettingsManager {
                     const parsed = JSON.parse(data);
                     // Minimal validation to ensure it's an object before assigning
                     if (typeof parsed === 'object' && parsed !== null) {
-                        this.settings = parsed;
+                        this.settings = sanitizeSettings(parsed);
                         console.log('[SettingsManager] Settings loaded successfully:', JSON.stringify(this.settings));
                     } else {
                         throw new Error('Settings JSON is not a valid object');
@@ -64,13 +96,15 @@ export class SettingsManager {
         }
     }
 
-    private saveSettings(): void {
+    private saveSettings(): boolean {
         try {
             const tmpPath = this.settingsPath + '.tmp';
             fs.writeFileSync(tmpPath, JSON.stringify(this.settings, null, 2));
             fs.renameSync(tmpPath, this.settingsPath);
+            return true;
         } catch (e) {
             console.error('[SettingsManager] Failed to save settings:', e);
+            return false;
         }
     }
 }
