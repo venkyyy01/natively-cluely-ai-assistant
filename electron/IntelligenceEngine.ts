@@ -20,6 +20,13 @@ import {
 // Mode types
 export type IntelligenceMode = 'idle' | 'assist' | 'what_to_say' | 'follow_up' | 'recap' | 'manual' | 'follow_up_questions' | 'reasoning_first';
 
+type SuggestionTriggerSource = 'live' | 'manual';
+
+interface SuggestionCycle {
+    id: number;
+    source: SuggestionTriggerSource;
+}
+
 // Refinement intent detection (refined to avoid false positives)
 function detectRefinementIntent(userText: string): { isRefinement: boolean; intent: string } {
     const lowercased = userText.toLowerCase().trim();
@@ -83,6 +90,8 @@ export class IntelligenceEngine extends EventEmitter {
     private lastTranscriptTime: number = 0;
     private lastTriggerTime: number = 0;
     private readonly triggerCooldown: number = 3000; // 3 seconds
+    private nextSuggestionCycleId: number = 0;
+    private latestSuggestionCycleId: number = 0;
 
     constructor(llmHelper: LLMHelper, session: SessionTracker) {
         super();
@@ -221,6 +230,8 @@ export class IntelligenceEngine extends EventEmitter {
             return null;
         }
 
+        const cycle = this.beginSuggestionCycle('live');
+
         if (this.assistCancellationToken) {
             this.assistCancellationToken.abort();
             this.assistCancellationToken = null;
@@ -230,157 +241,11 @@ export class IntelligenceEngine extends EventEmitter {
         this.lastTriggerTime = now;
 
         try {
-            if (!this.whatToAnswerLLM) {
-                if (!this.answerLLM) {
-                    this.setMode('idle');
-                    return "Please configure your API Keys in Settings to use this feature.";
-                }
-                const context = this.session.getFormattedContext(180);
-                const answer = await this.answerLLM.generate(question || '', context);
-                if (answer) {
-                    this.session.addAssistantMessage(answer);
-                    this.emit('suggested_answer', answer, question || 'inferred', confidence);
-                }
-                this.setMode('idle');
-                return answer || "Could you repeat that? I want to make sure I address your question properly.";
-            }
-
-            const contextItems = this.session.getContext(180);
-
-            // Inject latest interim transcript if available
-            const lastInterim = this.session.getLastInterimInterviewer();
-            if (lastInterim && lastInterim.text.trim().length > 0) {
-                const lastItem = contextItems[contextItems.length - 1];
-                const isDuplicate = lastItem &&
-                    lastItem.role === 'interviewer' &&
-                    (lastItem.text === lastInterim.text || Math.abs(lastItem.timestamp - lastInterim.timestamp) < 1000);
-
-                if (!isDuplicate) {
-                    console.log(`[IntelligenceEngine] Injecting interim transcript: "${lastInterim.text.substring(0, 50)}..."`);
-                    contextItems.push({
-                        role: 'interviewer',
-                        text: lastInterim.text,
-                        timestamp: lastInterim.timestamp
-                    });
-                }
-            }
-
-            const transcriptTurns = contextItems.map(item => ({
-                role: item.role,
-                text: item.text,
-                timestamp: item.timestamp
-            }));
-
-            const preparedTranscript = prepareTranscriptForWhatToAnswer(transcriptTurns, 12);
-
-            const temporalContext = buildTemporalContext(
-                contextItems,
-                this.session.getAssistantResponseHistory(),
-                180
-            );
-
-            const lastInterviewerTurn = this.session.getLastInterviewerTurn();
-            const activeReasoningThread = this.session.getActiveReasoningThread();
-            const resolvedQuestion = question || lastInterviewerTurn || '';
-            const intentResult = await classifyIntent(
-                lastInterviewerTurn,
-                preparedTranscript,
-                this.session.getAssistantResponseHistory().length
-            );
-            const consciousRoute = this.session.isConsciousModeEnabled()
-                ? classifyConsciousModeQuestion(resolvedQuestion, activeReasoningThread, intentResult.intent)
-                : { qualifies: false, threadAction: 'ignore' as const };
-
-            if (consciousRoute.threadAction === 'reset') {
-                this.session.clearConsciousModeThread();
-            }
-
-            if (!consciousRoute.qualifies && consciousRoute.threadAction === 'reset') {
-                // Thread already cleared above so non-Conscious fallback cannot reuse stale state.
-            }
-
-            if (consciousRoute.qualifies) {
-                let structuredResponse;
-                if (consciousRoute.threadAction === 'continue' && activeReasoningThread && this.followUpLLM) {
-                    structuredResponse = await this.followUpLLM.generateReasoningFirstFollowUp(
-                        activeReasoningThread,
-                        resolvedQuestion,
-                        this.session.getFormattedContext(180)
-                    );
-                } else if (this.whatToAnswerLLM) {
-                    structuredResponse = await this.whatToAnswerLLM.generateReasoningFirst(
-                        preparedTranscript,
-                        resolvedQuestion,
-                        temporalContext,
-                        intentResult,
-                        imagePaths
-                    );
-                } else if (this.answerLLM) {
-                    structuredResponse = await this.answerLLM.generateReasoningFirst(
-                        resolvedQuestion,
-                        this.session.getFormattedContext(180)
-                    );
-                }
-
-                if (isValidConsciousModeResponse(structuredResponse)) {
-                    console.log(`[IntelligenceEngine] Temporal RAG: ${temporalContext.previousResponses.length} responses, tone: ${temporalContext.toneSignals[0]?.type || 'neutral'}, intent: conscious_reasoning${imagePaths?.length ? `, with ${imagePaths.length} image(s)` : ''}`);
-                    this.setMode('reasoning_first');
-
-                    const fullAnswer = formatConsciousModeResponse(structuredResponse);
-
-                    if (consciousRoute.threadAction !== 'ignore' && resolvedQuestion) {
-                        this.session.recordConsciousResponse(
-                            resolvedQuestion,
-                            structuredResponse,
-                            consciousRoute.threadAction === 'start' ? 'start' : consciousRoute.threadAction === 'reset' ? 'reset' : 'continue'
-                        );
-                    }
-
-                    this.emit('suggested_answer_token', fullAnswer, question || 'What to Answer', confidence);
-                    this.session.addAssistantMessage(fullAnswer);
-                    this.session.pushUsage({
-                        type: 'assist',
-                        timestamp: Date.now(),
-                        question: question || 'What to Answer',
-                        answer: fullAnswer
-                    });
-                    this.emit('suggested_answer', fullAnswer, question || 'What to Answer', confidence);
-                    this.setMode('idle');
-                    return fullAnswer;
-                }
-            }
-
-            console.log(`[IntelligenceEngine] Temporal RAG: ${temporalContext.previousResponses.length} responses, tone: ${temporalContext.toneSignals[0]?.type || 'neutral'}, intent: ${intentResult.intent}${imagePaths?.length ? `, with ${imagePaths.length} image(s)` : ''}`);
-
-            let fullAnswer = "";
-            const stream = this.whatToAnswerLLM.generateStream(preparedTranscript, temporalContext, intentResult, imagePaths);
-
-            for await (const token of stream) {
-                this.emit('suggested_answer_token', token, question || 'inferred', confidence);
-                fullAnswer += token;
-            }
-
-            if (!fullAnswer || fullAnswer.trim().length < 5) {
-                fullAnswer = "Could you repeat that? I want to make sure I address your question properly.";
-            }
-
-            this.session.addAssistantMessage(fullAnswer);
-
-            this.session.pushUsage({
-                type: 'assist',
-                timestamp: Date.now(),
-                question: question || 'What to Answer',
-                answer: fullAnswer
-            });
-
-            this.emit('suggested_answer', fullAnswer, question || 'What to Answer', confidence);
-
-            this.setMode('idle');
-            return fullAnswer;
+            return await this.runSuggestionCycle({ question, confidence, imagePaths, source: 'live', cycle });
 
         } catch (error) {
             this.emit('error', error as Error, 'what_to_say');
-            this.setMode('idle');
+            this.finishSuggestionCycle(cycle);
             return "Could you repeat that? I want to make sure I address your question properly.";
         }
     }
@@ -560,37 +425,279 @@ export class IntelligenceEngine extends EventEmitter {
      * Explicit bypass when auto-detection fails
      */
     async runManualAnswer(question: string): Promise<string | null> {
+        const cycle = this.beginSuggestionCycle('manual');
         this.emit('manual_answer_started');
         this.setMode('manual');
 
         try {
-            if (!this.answerLLM) {
-                this.setMode('idle');
-                return null;
-            }
-
-            const context = this.session.getFormattedContext(120);
-            const answer = await this.answerLLM.generate(question, context);
-
-            if (answer) {
-                this.session.addAssistantMessage(answer);
-                this.emit('manual_answer_result', answer, question);
-
-                this.session.pushUsage({
-                    type: 'chat',
-                    timestamp: Date.now(),
-                    question: question,
-                    answer: answer
-                });
-            }
-
-            this.setMode('idle');
-            return answer;
+            return await this.runSuggestionCycle({
+                question,
+                confidence: 0.8,
+                source: 'manual',
+                cycle,
+            });
 
         } catch (error) {
             this.emit('error', error as Error, 'manual');
-            this.setMode('idle');
+            this.finishSuggestionCycle(cycle);
             return null;
+        }
+    }
+
+    private async runSuggestionCycle({
+        question,
+        confidence,
+        imagePaths,
+        source,
+        cycle,
+    }: {
+        question?: string;
+        confidence: number;
+        imagePaths?: string[];
+        source: SuggestionTriggerSource;
+        cycle: SuggestionCycle;
+    }): Promise<string | null> {
+        const contextItems = this.session.getContext(180);
+
+        const lastInterim = this.session.getLastInterimInterviewer();
+        if (lastInterim && lastInterim.text.trim().length > 0) {
+            const lastItem = contextItems[contextItems.length - 1];
+            const isDuplicate = lastItem &&
+                lastItem.role === 'interviewer' &&
+                (lastItem.text === lastInterim.text || Math.abs(lastItem.timestamp - lastInterim.timestamp) < 1000);
+
+            if (!isDuplicate) {
+                console.log(`[IntelligenceEngine] Injecting interim transcript: "${lastInterim.text.substring(0, 50)}..."`);
+                contextItems.push({
+                    role: 'interviewer',
+                    text: lastInterim.text,
+                    timestamp: lastInterim.timestamp
+                });
+            }
+        }
+
+        const transcriptTurns = contextItems.map(item => ({
+            role: item.role,
+            text: item.text,
+            timestamp: item.timestamp
+        }));
+
+        const preparedTranscript = prepareTranscriptForWhatToAnswer(transcriptTurns, 12);
+        const temporalContext = buildTemporalContext(
+            contextItems,
+            this.session.getAssistantResponseHistory(),
+            180
+        );
+        const lastInterviewerTurn = this.session.getLastInterviewerTurn();
+        const activeReasoningThread = this.session.getActiveReasoningThread();
+        const suspendedReasoningThread = this.session.getSuspendedReasoningThread();
+        const resolvedQuestion = question || lastInterviewerTurn || '';
+
+        const intentResult = await classifyIntent(
+            lastInterviewerTurn,
+            preparedTranscript,
+            this.session.getAssistantResponseHistory().length
+        );
+
+        const consciousRoute = this.session.isConsciousModeEnabled()
+            ? classifyConsciousModeQuestion(resolvedQuestion, activeReasoningThread, intentResult.intent, suspendedReasoningThread)
+            : { qualifies: false, threadAction: 'ignore' as const, confidence: 0 };
+        const manualLiveAttach = source === 'manual'
+            && (consciousRoute.threadAction === 'continue' || consciousRoute.threadAction === 'resume')
+            && consciousRoute.confidence >= 0.9;
+        const shouldMutateThread = source === 'live' || manualLiveAttach;
+        const shouldUseThreadContext = shouldMutateThread
+            && (consciousRoute.threadAction === 'continue' || consciousRoute.threadAction === 'resume');
+
+        if (consciousRoute.qualifies) {
+            let structuredResponse;
+            if (consciousRoute.threadAction === 'continue' && activeReasoningThread && this.followUpLLM && shouldUseThreadContext) {
+                structuredResponse = await this.followUpLLM.generateReasoningFirstFollowUp(
+                    activeReasoningThread,
+                    resolvedQuestion,
+                    this.session.getFormattedContext(180)
+                );
+            } else if (consciousRoute.threadAction === 'resume' && suspendedReasoningThread && this.followUpLLM && shouldUseThreadContext) {
+                structuredResponse = await this.followUpLLM.generateReasoningFirstFollowUp(
+                    suspendedReasoningThread,
+                    resolvedQuestion,
+                    this.session.getFormattedContext(180)
+                );
+            } else if (this.whatToAnswerLLM) {
+                structuredResponse = await this.whatToAnswerLLM.generateReasoningFirst(
+                    preparedTranscript,
+                    resolvedQuestion,
+                    temporalContext,
+                    intentResult,
+                    imagePaths
+                );
+            } else if (this.answerLLM) {
+                structuredResponse = await this.answerLLM.generateReasoningFirst(
+                    resolvedQuestion,
+                    this.session.getFormattedContext(180)
+                );
+            }
+
+            if (isValidConsciousModeResponse(structuredResponse)) {
+                console.log(`[IntelligenceEngine] Temporal RAG: ${temporalContext.previousResponses.length} responses, tone: ${temporalContext.toneSignals[0]?.type || 'neutral'}, intent: conscious_reasoning${imagePaths?.length ? `, with ${imagePaths.length} image(s)` : ''}`);
+                this.setMode('reasoning_first');
+
+                const fullAnswer = formatConsciousModeResponse(structuredResponse);
+
+                if (!this.isCurrentSuggestionCycle(cycle)) {
+                    return null;
+                }
+
+                if (shouldMutateThread && consciousRoute.threadAction !== 'ignore' && resolvedQuestion) {
+                    this.applyThreadLifecycle(consciousRoute.threadAction);
+                    this.session.recordConsciousResponse(
+                        resolvedQuestion,
+                        structuredResponse,
+                        consciousRoute.threadAction
+                    );
+                }
+
+                this.publishSuggestionResult({
+                    answer: fullAnswer,
+                    confidence,
+                    question: question || 'What to Answer',
+                    source,
+                });
+                this.finishSuggestionCycle(cycle);
+                return fullAnswer;
+            }
+        }
+
+        if (shouldMutateThread && consciousRoute.threadAction === 'reset') {
+            this.applyThreadLifecycle('reset');
+        }
+
+        return this.runFallbackSuggestion({
+            preparedTranscript,
+            temporalContext,
+            intentResult,
+            question,
+            resolvedQuestion,
+            confidence,
+            imagePaths,
+            source,
+            cycle,
+        });
+    }
+
+    private async runFallbackSuggestion({
+        preparedTranscript,
+        temporalContext,
+        intentResult,
+        question,
+        resolvedQuestion,
+        confidence,
+        imagePaths,
+        source,
+        cycle,
+    }: {
+        preparedTranscript: string;
+        temporalContext: ReturnType<typeof buildTemporalContext>;
+        intentResult: Awaited<ReturnType<typeof classifyIntent>>;
+        question?: string;
+        resolvedQuestion: string;
+        confidence: number;
+        imagePaths?: string[];
+        source: SuggestionTriggerSource;
+        cycle: SuggestionCycle;
+    }): Promise<string | null> {
+        console.log(`[IntelligenceEngine] Temporal RAG: ${temporalContext.previousResponses.length} responses, tone: ${temporalContext.toneSignals[0]?.type || 'neutral'}, intent: ${intentResult.intent}${imagePaths?.length ? `, with ${imagePaths.length} image(s)` : ''}`);
+
+        let fullAnswer = "";
+        if (source === 'manual' && this.answerLLM) {
+            fullAnswer = await this.answerLLM.generate(resolvedQuestion, this.session.getFormattedContext(120)) || "";
+        } else if (this.whatToAnswerLLM) {
+            const stream = this.whatToAnswerLLM.generateStream(preparedTranscript, temporalContext, intentResult, imagePaths);
+
+            for await (const token of stream) {
+                if (!this.isCurrentSuggestionCycle(cycle)) {
+                    return null;
+                }
+
+                if (source === 'live') {
+                    this.emit('suggested_answer_token', token, question || 'inferred', confidence);
+                }
+                fullAnswer += token;
+            }
+        }
+
+        if (!fullAnswer || fullAnswer.trim().length < 5) {
+            fullAnswer = "Could you repeat that? I want to make sure I address your question properly.";
+        }
+
+        if (!this.isCurrentSuggestionCycle(cycle)) {
+            return null;
+        }
+
+        this.publishSuggestionResult({
+            answer: fullAnswer,
+            confidence,
+            question: question || 'What to Answer',
+            source,
+        });
+        this.finishSuggestionCycle(cycle);
+        return fullAnswer;
+    }
+
+    private publishSuggestionResult({
+        answer,
+        confidence,
+        question,
+        source,
+    }: {
+        answer: string;
+        confidence: number;
+        question: string;
+        source: SuggestionTriggerSource;
+    }): void {
+        this.session.addAssistantMessage(answer);
+        this.session.pushUsage({
+            type: source === 'manual' ? 'chat' : 'assist',
+            timestamp: Date.now(),
+            question,
+            answer,
+        });
+
+        if (source === 'manual') {
+            this.emit('manual_answer_result', answer, question);
+            return;
+        }
+
+        this.emit('suggested_answer', answer, question, confidence);
+    }
+
+    private applyThreadLifecycle(threadAction: ReturnType<typeof classifyConsciousModeQuestion>['threadAction']): void {
+        if (threadAction === 'reset') {
+            this.session.clearConsciousModeThread();
+            return;
+        }
+
+        if (threadAction === 'suspend') {
+            this.session.suspendActiveReasoningThread();
+        }
+    }
+
+    private beginSuggestionCycle(source: SuggestionTriggerSource): SuggestionCycle {
+        const cycle = {
+            id: ++this.nextSuggestionCycleId,
+            source,
+        };
+        this.latestSuggestionCycleId = cycle.id;
+        return cycle;
+    }
+
+    private isCurrentSuggestionCycle(cycle: SuggestionCycle): boolean {
+        return this.latestSuggestionCycleId === cycle.id;
+    }
+
+    private finishSuggestionCycle(cycle: SuggestionCycle): void {
+        if (this.isCurrentSuggestionCycle(cycle)) {
+            this.setMode('idle');
         }
     }
 

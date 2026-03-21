@@ -241,7 +241,7 @@ export function classifyAssistRender({
   threadAction,
 }: {
   answerText: string;
-  threadAction?: 'start' | 'continue' | 'reset' | 'ignore';
+  threadAction?: 'start' | 'continue' | 'suspend' | 'resume' | 'reset' | 'ignore';
 }): AssistRenderClassification {
   const parsed = parseConsciousModeAnswer(answerText);
   if (!parsed) {
@@ -253,7 +253,7 @@ export function classifyAssistRender({
 
   return {
     output_variant: 'conscious_mode',
-    thread_type: threadAction === 'continue' ? 'follow_up_extension' : 'fresh_reasoning_thread',
+    thread_type: threadAction === 'continue' || threadAction === 'resume' ? 'follow_up_extension' : 'fresh_reasoning_thread',
   };
 }
 

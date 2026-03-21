@@ -649,11 +649,26 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
 
         cleanups.push(window.electronAPI.onIntelligenceManualResult((data) => {
             setIsProcessing(false);
-            setMessages(prev => [...prev, {
-                id: Date.now().toString(),
-                role: 'system',
-                text: `🎯 **Answer:**\n\n${data.answer}`
-            }]);
+            setMessages(prev => {
+                const lastMsg = prev[prev.length - 1];
+                if (lastMsg && lastMsg.isStreaming && lastMsg.intent === 'manual') {
+                    const updated = [...prev];
+                    updated[prev.length - 1] = {
+                        ...lastMsg,
+                        text: data.answer,
+                        intent: 'manual',
+                        isStreaming: false,
+                    };
+                    return updated;
+                }
+
+                return [...prev, {
+                    id: Date.now().toString(),
+                    role: 'system',
+                    text: data.answer,
+                    intent: 'manual'
+                }];
+            });
         }));
 
         cleanups.push(window.electronAPI.onIntelligenceError((data) => {
@@ -1054,18 +1069,25 @@ Provide only the answer, nothing else.`;
             screenshotPreview: currentAttachments[0]?.preview
         }]);
 
-        // Add placeholder for streaming response
-        setMessages(prev => [...prev, {
-            id: Date.now().toString(),
-            role: 'system',
-            text: '',
-            isStreaming: true
-        }]);
-
         setIsExpanded(true);
         setIsProcessing(true);
 
         try {
+            const shouldUseManualOverride = currentAttachments.length === 0 && Boolean(userText.trim());
+
+            if (shouldUseManualOverride) {
+                setMessages(prev => [...prev, {
+                    id: Date.now().toString(),
+                    role: 'system',
+                    text: '',
+                    intent: 'manual',
+                    isStreaming: true
+                }]);
+
+                await window.electronAPI.submitManualQuestion(userText.trim());
+                return;
+            }
+
             // JIT RAG pre-flight: try to use indexed meeting context first
             if (currentAttachments.length === 0) {
                 const ragResult = await window.electronAPI.ragQueryLive?.(userText || '');
@@ -1074,6 +1096,14 @@ Provide only the answer, nothing else.`;
                     return;
                 }
             }
+
+            // Add placeholder for streaming response
+            setMessages(prev => [...prev, {
+                id: Date.now().toString(),
+                role: 'system',
+                text: '',
+                isStreaming: true
+            }]);
 
             // Pass imagePath if attached, AND conversation context
             requestStartTimeRef.current = Date.now();

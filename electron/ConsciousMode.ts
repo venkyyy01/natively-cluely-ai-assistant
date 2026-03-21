@@ -18,13 +18,16 @@ export interface ReasoningThread {
   response: ConsciousModeStructuredResponse;
   followUpCount: number;
   updatedAt: number;
+  state?: 'active' | 'suspended';
+  suspendedAt?: number;
 }
 
-export type ConsciousModeThreadAction = 'start' | 'continue' | 'reset' | 'ignore';
+export type ConsciousModeThreadAction = 'start' | 'continue' | 'suspend' | 'resume' | 'reset' | 'ignore';
 
 export interface ConsciousModeQuestionRoute {
   qualifies: boolean;
   threadAction: ConsciousModeThreadAction;
+  confidence: number;
 }
 
 export interface TranscriptSuggestionDecision {
@@ -34,6 +37,7 @@ export interface TranscriptSuggestionDecision {
 
 export interface TranscriptSuggestionIntelligenceManager {
   getActiveReasoningThread(): ReasoningThread | null;
+  getSuspendedReasoningThread?(): ReasoningThread | null;
   getFormattedContext(lastSeconds: number): string;
   handleSuggestionTrigger(trigger: {
     context: string;
@@ -231,58 +235,118 @@ function isStandaloneSpecPushback(lower: string): boolean {
 }
 
 function isExplicitTopicShift(lower: string): boolean {
-  return /(switch gears|talk about the launch plan|talk about launch|move on to|different topic|new topic)/i.test(lower);
+  return /(switch gears|talk about the launch plan|talk about launch|move on to|different topic|new topic|on a different topic|instead\b)/i.test(lower);
+}
+
+function isResumePhrase(lower: string): boolean {
+  return /(back to|circling back|circle back|return to|resume|coming back to|as we were saying)/i.test(lower);
+}
+
+function isTemporaryTangent(lower: string): boolean {
+  return /(quick tangent|small tangent|brief tangent|side question|before we continue|before moving on)/i.test(lower);
+}
+
+function isSuspendedThread(thread: ReasoningThread | null): boolean {
+  return thread?.state === 'suspended';
+}
+
+function route(qualifies: boolean, threadAction: ConsciousModeThreadAction, confidence: number): ConsciousModeQuestionRoute {
+  return { qualifies, threadAction, confidence };
 }
 
 export function classifyConsciousModeQuestion(
   question: string | null | undefined,
   activeThread: ReasoningThread | null,
   intent: string | null = null,
+  suspendedThread: ReasoningThread | null = null,
 ): ConsciousModeQuestionRoute {
   const normalizedQuestion = normalizeText(question);
   if (!normalizedQuestion) {
-    return { qualifies: false, threadAction: 'ignore' };
+    return route(false, 'ignore', 0);
   }
 
   const lower = normalizedQuestion.toLowerCase();
   const questionLike = isQuestionLike(lower);
   const technicalQuestion = isTechnicalQuestion(lower);
-  const overlap = activeThread ? countTopicOverlap(normalizedQuestion, activeThread.rootQuestion) : 0;
+  const currentActiveThread = activeThread && !isSuspendedThread(activeThread) ? activeThread : null;
+  const suspendedCandidate = suspendedThread ?? (isSuspendedThread(activeThread) ? activeThread : null);
+  const activeOverlap = currentActiveThread ? countTopicOverlap(normalizedQuestion, currentActiveThread.rootQuestion) : 0;
+  const suspendedOverlap = suspendedCandidate ? countTopicOverlap(normalizedQuestion, suspendedCandidate.rootQuestion) : 0;
   const explicitContinuation = isQuestionContinuationPhrase(lower);
+  const explicitResume = isResumePhrase(lower);
+  const explicitTopicShift = isExplicitTopicShift(lower);
+  const temporaryTangent = isTemporaryTangent(lower);
   const codingIntent = intent === 'coding';
   const standaloneSpecPushback = isStandaloneSpecPushback(lower);
+  const technicalFreshPrompt = technicalQuestion || codingIntent || standaloneSpecPushback;
+  const safeFreshQuestion = (questionLike || technicalFreshPrompt) && technicalFreshPrompt;
+  const ambiguousResumeShift = explicitResume && explicitTopicShift && safeFreshQuestion;
+  const prefersSuspendedThread = Boolean(
+    currentActiveThread && suspendedCandidate && explicitResume && suspendedOverlap > activeOverlap
+  );
 
-  if (activeThread) {
-    if (explicitContinuation && (!isGenericPushback(lower) || overlap >= 2 || /again/.test(lower) || standaloneSpecPushback)) {
-      return { qualifies: true, threadAction: 'continue' };
+  if (currentActiveThread && !prefersSuspendedThread) {
+    if (temporaryTangent && safeFreshQuestion) {
+      return route(true, 'suspend', 0.88);
     }
 
-    if (questionLike && overlap >= 2) {
-      return { qualifies: true, threadAction: 'continue' };
+    if (explicitTopicShift && safeFreshQuestion) {
+      return route(true, 'reset', 0.92);
+    }
+
+    if (explicitContinuation && (!isGenericPushback(lower) || activeOverlap >= 2 || /again/.test(lower) || standaloneSpecPushback)) {
+      return route(true, 'continue', 0.93);
+    }
+
+    if (questionLike && activeOverlap >= 2) {
+      return route(true, 'continue', 0.8);
     }
 
     if (questionLike && (technicalQuestion || codingIntent)) {
-      return { qualifies: true, threadAction: 'reset' };
+      return route(true, 'reset', 0.78);
     }
 
-    if (isExplicitTopicShift(lower)) {
-      return { qualifies: false, threadAction: 'reset' };
+    if (explicitTopicShift) {
+      return route(false, 'reset', 0.9);
+    }
+  }
+
+  if (suspendedCandidate) {
+    if (ambiguousResumeShift) {
+      return route(true, 'start', 0.55);
     }
 
-    return { qualifies: false, threadAction: 'ignore' };
+    if ((explicitResume && suspendedOverlap >= 1) || (explicitContinuation && suspendedOverlap >= 2)) {
+      return route(true, 'resume', explicitResume ? 0.96 : 0.82);
+    }
+
+    if (!currentActiveThread && questionLike && suspendedOverlap >= 2 && !explicitTopicShift) {
+      return route(true, 'resume', 0.74);
+    }
+
+    if (safeFreshQuestion) {
+      return route(true, 'start', 0.72);
+    }
+
+    return route(false, 'ignore', 0.12);
+  }
+
+  if (currentActiveThread) {
+    return route(false, 'ignore', 0.18);
   }
 
   if (questionLike && (technicalQuestion || codingIntent || standaloneSpecPushback)) {
-    return { qualifies: true, threadAction: 'start' };
+    return route(true, 'start', standaloneSpecPushback ? 0.84 : 0.8);
   }
 
-  return { qualifies: false, threadAction: 'ignore' };
+  return route(false, 'ignore', 0.08);
 }
 
 export function shouldAutoTriggerSuggestionFromTranscript(
   text: string,
   consciousModeEnabled: boolean,
   activeReasoningThread: ReasoningThread | null,
+  suspendedReasoningThread: ReasoningThread | null = null,
 ): boolean {
   const trimmed = normalizeText(text);
   if (!trimmed) {
@@ -290,7 +354,7 @@ export function shouldAutoTriggerSuggestionFromTranscript(
   }
 
   if (consciousModeEnabled) {
-    return classifyConsciousModeQuestion(trimmed, activeReasoningThread).qualifies;
+    return classifyConsciousModeQuestion(trimmed, activeReasoningThread, null, suspendedReasoningThread).qualifies;
   }
 
   const wordCount = trimmed.split(/\s+/).filter(Boolean).length;
@@ -301,10 +365,11 @@ export function getTranscriptSuggestionDecision(
   text: string,
   consciousModeEnabled: boolean,
   activeReasoningThread: ReasoningThread | null,
+  suspendedReasoningThread: ReasoningThread | null = null,
 ): TranscriptSuggestionDecision {
   const lastQuestion = normalizeText(text);
   return {
-    shouldTrigger: shouldAutoTriggerSuggestionFromTranscript(lastQuestion, consciousModeEnabled, activeReasoningThread),
+    shouldTrigger: shouldAutoTriggerSuggestionFromTranscript(lastQuestion, consciousModeEnabled, activeReasoningThread, suspendedReasoningThread),
     lastQuestion,
   };
 }
@@ -320,6 +385,7 @@ export async function maybeHandleSuggestionTriggerFromTranscript(
     input.text,
     input.consciousModeEnabled,
     input.intelligenceManager.getActiveReasoningThread(),
+    input.intelligenceManager.getSuspendedReasoningThread?.() ?? null,
   );
 
   if (!decision.shouldTrigger) {

@@ -1268,6 +1268,11 @@ export class AppState {
 
   private setupIntelligenceEvents(): void {
     const mainWindow = this.getMainWindow.bind(this)
+    const broadcastIntelligenceEvent = (channel: string, payload?: any) => {
+      const helper = this.getWindowHelper();
+      helper.getLauncherWindow()?.webContents.send(channel, payload);
+      helper.getOverlayWindow()?.webContents.send(channel, payload);
+    }
 
     // Forward intelligence events to renderer
     this.intelligenceManager.on('assist_update', (insight: string) => {
@@ -1278,18 +1283,12 @@ export class AppState {
     })
 
     this.intelligenceManager.on('suggested_answer', (answer: string, question: string, confidence: number) => {
-      const win = mainWindow()
-      if (win) {
-        win.webContents.send('intelligence-suggested-answer', { answer, question, confidence })
-      }
+      broadcastIntelligenceEvent('intelligence-suggested-answer', { answer, question, confidence })
 
     })
 
     this.intelligenceManager.on('suggested_answer_token', (token: string, question: string, confidence: number) => {
-      const win = mainWindow()
-      if (win) {
-        win.webContents.send('intelligence-suggested-answer-token', { token, question, confidence })
-      }
+      broadcastIntelligenceEvent('intelligence-suggested-answer-token', { token, question, confidence })
     })
 
     this.intelligenceManager.on('refined_answer_token', (token: string, intent: string) => {
@@ -1336,33 +1335,21 @@ export class AppState {
     })
 
     this.intelligenceManager.on('manual_answer_started', () => {
-      const win = mainWindow()
-      if (win) {
-        win.webContents.send('intelligence-manual-started')
-      }
+      broadcastIntelligenceEvent('intelligence-manual-started')
     })
 
     this.intelligenceManager.on('manual_answer_result', (answer: string, question: string) => {
-      const win = mainWindow()
-      if (win) {
-        win.webContents.send('intelligence-manual-result', { answer, question })
-      }
+      broadcastIntelligenceEvent('intelligence-manual-result', { answer, question })
 
     })
 
     this.intelligenceManager.on('mode_changed', (mode: string) => {
-      const win = mainWindow()
-      if (win) {
-        win.webContents.send('intelligence-mode-changed', { mode })
-      }
+      broadcastIntelligenceEvent('intelligence-mode-changed', { mode })
     })
 
     this.intelligenceManager.on('error', (error: Error, mode: string) => {
       console.error(`[IntelligenceManager] Error in ${mode}:`, error)
-      const win = mainWindow()
-      if (win) {
-        win.webContents.send('intelligence-error', { error: error.message, mode })
-      }
+      broadcastIntelligenceEvent('intelligence-error', { error: error.message, mode })
     })
   }
 

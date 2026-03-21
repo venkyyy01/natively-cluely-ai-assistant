@@ -4,10 +4,17 @@
 
 import { RecapLLM } from './llm';
 import {
+    ConsciousModeThreadAction,
     ConsciousModeStructuredResponse,
     ReasoningThread,
     mergeConsciousModeResponses,
 } from './ConsciousMode';
+import { consciousModeRealtimeConfig } from './consciousModeConfig';
+
+const DUPLICATE_TRANSCRIPT_WINDOW_MS = 2_000;
+const PARTIAL_REVISION_WINDOW_MS = 2_000;
+const LOW_CONFIDENCE_REJECTION_THRESHOLD = 0.45;
+const SHORT_LOW_CONFIDENCE_TEXT_LENGTH = 4;
 
 export interface TranscriptSegment {
     marker?: string;
@@ -68,11 +75,14 @@ export class SessionTracker {
 
     // Track interim interviewer segment
     private lastInterimInterviewer: TranscriptSegment | null = null;
+    private recentAcceptedTranscriptKeys: Array<{ speaker: string; normalizedText: string; timestamp: number }> = [];
+    private latestContextInterviewerTimestamp: number = 0;
 
     // Conscious Mode state
     private consciousModeEnabled: boolean = false;
     private latestConsciousResponse: ConsciousModeStructuredResponse | null = null;
     private activeReasoningThread: ReasoningThread | null = null;
+    private suspendedReasoningThread: ReasoningThread | null = null;
 
     // Reference to RecapLLM for epoch summarization (injected later)
     private recapLLM: RecapLLM | null = null;
@@ -128,6 +138,10 @@ export class SessionTracker {
             text,
             timestamp: segment.timestamp
         });
+
+        if (role === 'interviewer') {
+            this.latestContextInterviewerTimestamp = Math.max(this.latestContextInterviewerTimestamp, segment.timestamp);
+        }
 
         this.evictOldEntries();
 
@@ -212,6 +226,13 @@ export class SessionTracker {
      * Handle incoming transcript from native audio service
      */
     handleTranscript(segment: TranscriptSegment): { role: 'interviewer' | 'user' | 'assistant' } | null {
+        this.promoteBufferedInterviewerIfNeeded(segment);
+
+        if (this.isOverlappingSpeakerFailure(segment)) {
+            this.lastInterimInterviewer = null;
+            return null;
+        }
+
         // Track interim segments for interviewer to prevent data loss on stop
         if (segment.speaker === 'interviewer') {
             if (Math.random() < 0.05 || segment.final) {
@@ -219,10 +240,35 @@ export class SessionTracker {
             }
 
             if (!segment.final) {
+                if (this.shouldIgnoreTranscript(segment)) {
+                    this.lastInterimInterviewer = null;
+                    return null;
+                }
+
                 this.lastInterimInterviewer = segment;
-            } else {
-                this.lastInterimInterviewer = null;
+                return null;
             }
+
+            if (this.isDuplicateAcceptedTranscript(segment)) {
+                this.lastInterimInterviewer = null;
+                return null;
+            }
+
+            if (segment.timestamp < this.latestContextInterviewerTimestamp) {
+                this.lastInterimInterviewer = null;
+                this.storeRawTranscriptSegment(segment);
+                return null;
+            }
+
+            this.lastInterimInterviewer = null;
+        }
+
+        if (this.shouldIgnoreTranscript(segment)) {
+            return null;
+        }
+
+        if (segment.final) {
+            this.rememberAcceptedTranscript(segment);
         }
 
         return this.addTranscript(segment);
@@ -257,6 +303,7 @@ export class SessionTracker {
         if (!enabled) {
             this.latestConsciousResponse = null;
             this.activeReasoningThread = null;
+            this.suspendedReasoningThread = null;
         }
     }
 
@@ -272,22 +319,65 @@ export class SessionTracker {
         return this.activeReasoningThread;
     }
 
-    clearConsciousModeThread(): void {
-        this.latestConsciousResponse = null;
+    getSuspendedReasoningThread(): ReasoningThread | null {
+        return this.suspendedReasoningThread;
+    }
+
+    suspendActiveReasoningThread(): void {
+        if (!this.activeReasoningThread) {
+            return;
+        }
+
+        this.suspendedReasoningThread = {
+            ...this.activeReasoningThread,
+            state: 'suspended',
+            suspendedAt: Date.now(),
+        };
         this.activeReasoningThread = null;
     }
 
-    recordConsciousResponse(question: string, response: ConsciousModeStructuredResponse, threadAction: 'start' | 'continue' | 'reset'): void {
+    clearConsciousModeThread(): void {
+        this.latestConsciousResponse = null;
+        this.activeReasoningThread = null;
+        this.suspendedReasoningThread = null;
+    }
+
+    recordConsciousResponse(question: string, response: ConsciousModeStructuredResponse, threadAction: ConsciousModeThreadAction): void {
         this.latestConsciousResponse = response;
 
-        if (threadAction === 'continue' && this.activeReasoningThread) {
+        if (threadAction === 'continue' && this.activeReasoningThread?.state !== 'suspended') {
             this.activeReasoningThread = {
                 ...this.activeReasoningThread,
                 lastQuestion: question,
                 followUpCount: this.activeReasoningThread.followUpCount + 1,
                 response: mergeConsciousModeResponses(this.activeReasoningThread.response, response),
+                state: 'active',
+                suspendedAt: undefined,
                 updatedAt: Date.now(),
             };
+            this.latestConsciousResponse = this.activeReasoningThread.response;
+            return;
+        }
+
+        if (threadAction === 'resume' && this.suspendedReasoningThread) {
+            const previousActiveThread = this.activeReasoningThread
+                ? {
+                    ...this.activeReasoningThread,
+                    state: 'suspended' as const,
+                    suspendedAt: Date.now(),
+                }
+                : null;
+
+            this.activeReasoningThread = {
+                ...this.suspendedReasoningThread,
+                lastQuestion: question,
+                followUpCount: this.suspendedReasoningThread.followUpCount + 1,
+                response: mergeConsciousModeResponses(this.suspendedReasoningThread.response, response),
+                state: 'active',
+                suspendedAt: undefined,
+                updatedAt: Date.now(),
+            };
+            this.suspendedReasoningThread = previousActiveThread;
             this.latestConsciousResponse = this.activeReasoningThread.response;
             return;
         }
@@ -297,6 +387,8 @@ export class SessionTracker {
             lastQuestion: question,
             response,
             followUpCount: 0,
+            state: 'active',
+            suspendedAt: undefined,
             updatedAt: Date.now(),
         };
     }
@@ -404,7 +496,10 @@ export class SessionTracker {
         if (this.lastInterimInterviewer) {
             console.log('[SessionTracker] Force-saving pending interim transcript:', this.lastInterimInterviewer.text);
             const finalSegment = { ...this.lastInterimInterviewer, final: true };
-            this.addTranscript(finalSegment);
+            if (!this.isDuplicateAcceptedTranscript(finalSegment)) {
+                this.rememberAcceptedTranscript(finalSegment);
+                this.addTranscript(finalSegment);
+            }
             this.lastInterimInterviewer = null;
         }
     }
@@ -423,9 +518,12 @@ export class SessionTracker {
         this.lastAssistantMessage = null;
         this.assistantResponseHistory = [];
         this.lastInterimInterviewer = null;
+        this.recentAcceptedTranscriptKeys = [];
+        this.latestContextInterviewerTimestamp = 0;
         this.consciousModeEnabled = consciousModeEnabled;
         this.latestConsciousResponse = null;
         this.activeReasoningThread = null;
+        this.suspendedReasoningThread = null;
     }
 
     // ============================================
@@ -446,6 +544,102 @@ export class SessionTracker {
         if (this.contextItems.length > this.maxContextItems) {
             this.contextItems = this.contextItems.slice(-this.maxContextItems);
         }
+    }
+
+    private normalizeTranscriptText(text: string): string {
+        return text.trim().replace(/\s+/g, ' ').toLowerCase();
+    }
+
+    private shouldIgnoreTranscript(segment: TranscriptSegment): boolean {
+        const text = segment.text.trim();
+        if (!text) {
+            return true;
+        }
+
+        return (segment.confidence ?? 1) < LOW_CONFIDENCE_REJECTION_THRESHOLD
+            && text.length <= SHORT_LOW_CONFIDENCE_TEXT_LENGTH;
+    }
+
+    private isDuplicateAcceptedTranscript(segment: TranscriptSegment): boolean {
+        const normalizedText = this.normalizeTranscriptText(segment.text);
+        return this.recentAcceptedTranscriptKeys.some(entry => (
+            entry.speaker === segment.speaker
+            && entry.normalizedText === normalizedText
+            && Math.abs(entry.timestamp - segment.timestamp) <= DUPLICATE_TRANSCRIPT_WINDOW_MS
+        ));
+    }
+
+    private rememberAcceptedTranscript(segment: TranscriptSegment): void {
+        this.recentAcceptedTranscriptKeys.push({
+            speaker: segment.speaker,
+            normalizedText: this.normalizeTranscriptText(segment.text),
+            timestamp: segment.timestamp,
+        });
+
+        if (this.recentAcceptedTranscriptKeys.length > 20) {
+            this.recentAcceptedTranscriptKeys = this.recentAcceptedTranscriptKeys.slice(-20);
+        }
+    }
+
+    private promoteBufferedInterviewerIfNeeded(incomingSegment: TranscriptSegment): void {
+        if (!this.lastInterimInterviewer) {
+            return;
+        }
+
+        const isIncomingInterviewerRevision = incomingSegment.speaker === 'interviewer'
+            && Math.abs(incomingSegment.timestamp - this.lastInterimInterviewer.timestamp) <= PARTIAL_REVISION_WINDOW_MS
+            && this.isLikelyInterviewerRevision(this.lastInterimInterviewer, incomingSegment);
+        const debounceExpired = incomingSegment.timestamp - this.lastInterimInterviewer.timestamp >= consciousModeRealtimeConfig.transcriptDebounceMs;
+
+        if (isIncomingInterviewerRevision || !debounceExpired) {
+            return;
+        }
+
+        const promotedSegment: TranscriptSegment = {
+            ...this.lastInterimInterviewer,
+            final: true,
+        };
+        this.lastInterimInterviewer = null;
+
+        if (this.shouldIgnoreTranscript(promotedSegment) || this.isDuplicateAcceptedTranscript(promotedSegment)) {
+            return;
+        }
+
+        this.rememberAcceptedTranscript(promotedSegment);
+        this.addTranscript(promotedSegment);
+    }
+
+    private isOverlappingSpeakerFailure(segment: TranscriptSegment): boolean {
+        return (segment.marker ?? '').toLowerCase().includes('overlap');
+    }
+
+    private storeRawTranscriptSegment(segment: TranscriptSegment): void {
+        if (this.isDuplicateAcceptedTranscript(segment)) {
+            return;
+        }
+
+        this.rememberAcceptedTranscript(segment);
+        this.fullTranscript.push(segment);
+    }
+
+    private isLikelyInterviewerRevision(previousSegment: TranscriptSegment, incomingSegment: TranscriptSegment): boolean {
+        const previousText = this.normalizeTranscriptText(previousSegment.text);
+        const incomingText = this.normalizeTranscriptText(incomingSegment.text);
+
+        if (!previousText || !incomingText) {
+            return false;
+        }
+
+        if (incomingText.startsWith(previousText) || previousText.startsWith(incomingText)) {
+            return true;
+        }
+
+        const previousTokens = new Set(previousText.split(' '));
+        const incomingTokens = incomingText.split(' ');
+        const overlappingTokens = incomingTokens.filter(token => previousTokens.has(token)).length;
+        const smallerTokenCount = Math.min(previousTokens.size, incomingTokens.length);
+
+        return smallerTokenCount > 0 && (overlappingTokens / smallerTokenCount) >= 0.6;
     }
 
     /**
