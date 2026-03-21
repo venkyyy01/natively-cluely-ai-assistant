@@ -2,6 +2,15 @@
 // Manages session state, transcript arrays, context windows, and epoch compaction.
 // Extracted from IntelligenceManager to decouple state management from LLM orchestration.
 
+/** Maximum transcript entries before forced eviction (prevents memory exhaustion) */
+const MAX_TRANSCRIPT_ENTRIES = 5000;
+
+/** Maximum assistant response history entries */
+const MAX_ASSISTANT_HISTORY = 100;
+
+/** Maximum context history entries (beyond time-based eviction) */
+const MAX_CONTEXT_HISTORY = 200;
+
 import { RecapLLM } from './llm';
 import {
     ConsciousModeStructuredResponse,
@@ -145,6 +154,12 @@ export class SessionTracker {
         if (!isInternalPrompt) {
             // Add to session transcript
             this.fullTranscript.push(segment);
+
+            // Hard cap to prevent memory exhaustion in very long meetings
+            while (this.fullTranscript.length > MAX_TRANSCRIPT_ENTRIES) {
+                this.fullTranscript.shift(); // Remove oldest entries
+            }
+
             // Compact transcript with summarization instead of losing early context
             // Fire-and-forget: sync context; errors are caught internally
             void this.compactTranscriptIfNeeded().catch(e =>
@@ -190,6 +205,11 @@ export class SessionTracker {
             confidence: 1.0
         });
 
+        // Hard cap to prevent memory exhaustion in very long meetings
+        while (this.fullTranscript.length > MAX_TRANSCRIPT_ENTRIES) {
+            this.fullTranscript.shift(); // Remove oldest entries
+        }
+
         // Compact transcript with summarization instead of losing early context
         // Fire-and-forget: sync context; errors are caught internally
         void this.compactTranscriptIfNeeded().catch(e =>
@@ -205,9 +225,9 @@ export class SessionTracker {
             questionContext: this.getLastInterviewerTurn() || 'unknown'
         });
 
-        // Keep history bounded (last 10 responses)
-        if (this.assistantResponseHistory.length > 10) {
-            this.assistantResponseHistory = this.assistantResponseHistory.slice(-10);
+        // Keep history bounded
+        if (this.assistantResponseHistory.length > MAX_ASSISTANT_HISTORY) {
+            this.assistantResponseHistory = this.assistantResponseHistory.slice(-MAX_ASSISTANT_HISTORY);
         }
 
         console.log(`[SessionTracker] lastAssistantMessage updated, history size: ${this.assistantResponseHistory.length}`);

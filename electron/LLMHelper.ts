@@ -22,6 +22,56 @@ import { createHash } from 'crypto';
 import { createProviderRateLimiters, RateLimiter } from './services/RateLimiter';
 const execAsync = promisify(exec);
 
+/** Default timeout for LLM API calls in milliseconds */
+const LLM_API_TIMEOUT_MS = 30000; // 30 seconds
+
+/**
+ * Create an AbortSignal that times out after the specified duration
+ */
+function createTimeoutSignal(timeoutMs: number = LLM_API_TIMEOUT_MS): AbortSignal {
+  const controller = new AbortController();
+  setTimeout(() => controller.abort(new Error(`LLM API timeout after ${timeoutMs}ms`)), timeoutMs);
+  return controller.signal;
+}
+
+/**
+ * Wrap a promise with a timeout
+ */
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number = LLM_API_TIMEOUT_MS): Promise<T> {
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    setTimeout(() => reject(new Error(`LLM API timeout after ${timeoutMs}ms`)), timeoutMs);
+  });
+  return Promise.race([promise, timeoutPromise]);
+}
+
+/**
+ * Sanitize error objects to remove sensitive data before logging
+ */
+function sanitizeError(error: unknown): string {
+  if (error instanceof Error) {
+    // Only return message and stack, not the full error object which may contain headers
+    return `${error.name}: ${error.message}${error.stack ? `\n${error.stack}` : ''}`;
+  }
+  if (typeof error === 'object' && error !== null) {
+    // Remove potentially sensitive fields
+    const sanitized = { ...error } as Record<string, unknown>;
+    delete sanitized.config;
+    delete sanitized.request;
+    delete sanitized.headers;
+    const response = sanitized.response as Record<string, unknown> | undefined;
+    if (response) {
+      delete response.config;
+      delete response.request;
+    }
+    try {
+      return JSON.stringify(sanitized, null, 2);
+    } catch {
+      return String(error);
+    }
+  }
+  return String(error);
+}
+
 interface OllamaResponse {
   response: string
   done: boolean
@@ -691,7 +741,7 @@ export class LLMHelper {
         data: processedBuffer.toString("base64")
       };
     } catch (error) {
-      console.error("[LLMHelper] Failed to process image with sharp:", error);
+      console.error("[LLMHelper] Failed to process image with sharp:", sanitizeError(error));
       // Fallback to raw read if sharp fails
       const data = await fs.promises.readFile(path);
       return {
@@ -709,7 +759,7 @@ export class LLMHelper {
       return { text: text, timestamp: Date.now() };
 
     } catch (error: any) {
-      console.error("Error analyzing image files:", error);
+      console.error("Error analyzing image files:", sanitizeError(error));
       return {
         text: `I couldn't analyze the screen right now (${error.message}). Please try again.`,
         timestamp: Date.now()
@@ -1129,7 +1179,7 @@ ANSWER DIRECTLY:`;
       return "I apologize, but I couldn't generate a response. Please try again.";
 
     } catch (error: any) {
-      console.error("[LLMHelper] Critical Error in chatWithGemini:", error);
+      console.error("[LLMHelper] Critical Error in chatWithGemini:", sanitizeError(error));
 
       if (error.message.includes("503") || error.message.includes("overloaded")) {
         return "The AI service is currently overloaded. Please try again in a moment.";
@@ -1232,7 +1282,10 @@ ANSWER DIRECTLY:`;
         }),
       );
 
-      const response = await this.groqClient!.chat.completions.create(requestPayload as any);
+      const response = await withTimeout(
+        this.groqClient!.chat.completions.create(requestPayload as any),
+        LLM_API_TIMEOUT_MS
+      );
       return response.choices[0]?.message?.content || "";
     });
   }
@@ -1280,7 +1333,10 @@ ANSWER DIRECTLY:`;
         },
       );
 
-      const response = await this.openaiClient!.chat.completions.create(requestPayload as any);
+      const response = await withTimeout(
+        this.openaiClient!.chat.completions.create(requestPayload as any),
+        LLM_API_TIMEOUT_MS
+      );
       return response.choices[0]?.message?.content || "";
     });
   }
@@ -1377,7 +1433,10 @@ ANSWER DIRECTLY:`;
         },
       );
 
-      const response = await this.claudeClient!.messages.create(requestPayload as any);
+      const response = await withTimeout(
+        this.claudeClient!.messages.create(requestPayload as any),
+        LLM_API_TIMEOUT_MS
+      );
       const textBlock = response.content.find((block: any) => block.type === 'text') as any;
       return textBlock?.text || "";
     });
@@ -1444,7 +1503,7 @@ ANSWER DIRECTLY:`;
       console.log(`[LLMHelper] Custom Provider extracted text length: ${extracted.length}`);
       return extracted;
     } catch (error) {
-      console.error("Custom Provider Error:", error);
+      console.error("Custom Provider Error:", sanitizeError(error));
       throw error;
     }
   }
@@ -1557,15 +1616,18 @@ ANSWER DIRECTLY:`;
     }
     messages.push({ role: "user", content: contentParts });
 
-    const response = await this.groqClient.chat.completions.create({
-      model: "meta-llama/llama-4-scout-17b-16e-instruct",
-      messages,
-      temperature: 1,
-      max_completion_tokens: 28672,
-      top_p: 1,
-      stream: false,
-      stop: null
-    });
+    const response = await withTimeout(
+      this.groqClient.chat.completions.create({
+        model: "meta-llama/llama-4-scout-17b-16e-instruct",
+        messages,
+        temperature: 1,
+        max_completion_tokens: 28672,
+        top_p: 1,
+        stream: false,
+        stop: null
+      }),
+      LLM_API_TIMEOUT_MS
+    );
 
     return response.choices[0]?.message?.content || "";
   }
@@ -2083,13 +2145,15 @@ ANSWER DIRECTLY:`;
   private async * streamWithGroq(fullMessage: string): AsyncGenerator<string, void, unknown> {
     if (!this.groqClient) throw new Error("Groq client not initialized");
 
+    const timeoutSignal = createTimeoutSignal(LLM_API_TIMEOUT_MS);
+    
     const stream = await this.groqClient.chat.completions.create({
       model: GROQ_MODEL,
       messages: [{ role: "user", content: fullMessage }],
       stream: true,
       temperature: 0.4,
       max_tokens: 8192,
-    });
+    }, { signal: timeoutSignal });
 
     for await (const chunk of stream) {
       const content = chunk.choices[0]?.delta?.content;
@@ -2120,6 +2184,8 @@ ANSWER DIRECTLY:`;
     }
     messages.push({ role: "user", content: contentParts });
 
+    const timeoutSignal = createTimeoutSignal(LLM_API_TIMEOUT_MS);
+    
     const stream = await this.groqClient.chat.completions.create({
       model: "meta-llama/llama-4-scout-17b-16e-instruct",
       messages,
@@ -2128,7 +2194,7 @@ ANSWER DIRECTLY:`;
       temperature: 1,
       top_p: 1,
       stop: null
-    });
+    }, { signal: timeoutSignal });
 
     for await (const chunk of stream) {
       const content = chunk.choices[0]?.delta?.content;
@@ -2150,12 +2216,14 @@ ANSWER DIRECTLY:`;
     }
     messages.push({ role: "user", content: userMessage });
 
+    const timeoutSignal = createTimeoutSignal(LLM_API_TIMEOUT_MS);
+    
     const stream = await this.openaiClient.chat.completions.create({
       model: OPENAI_MODEL,
       messages,
       stream: true,
       max_completion_tokens: MAX_OUTPUT_TOKENS,
-    });
+    }, { signal: timeoutSignal });
 
     for await (const chunk of stream) {
       const content = chunk.choices[0]?.delta?.content;
@@ -2205,12 +2273,14 @@ ANSWER DIRECTLY:`;
     }
     messages.push({ role: "user", content: contentParts });
 
+    const timeoutSignal = createTimeoutSignal(LLM_API_TIMEOUT_MS);
+    
     const stream = await this.openaiClient.chat.completions.create({
       model: OPENAI_MODEL,
       messages,
       stream: true,
       max_completion_tokens: MAX_OUTPUT_TOKENS,
-    });
+    }, { signal: timeoutSignal });
 
     for await (const chunk of stream) {
       const content = chunk.choices[0]?.delta?.content;
@@ -2442,7 +2512,7 @@ ANSWER DIRECTLY:`;
         }
       }
     } catch (e) {
-      console.error("Ollama streaming failed", e);
+      console.error("Ollama streaming failed", sanitizeError(e));
       yield "Error: Failed to stream from Ollama.";
     }
   }
@@ -2631,7 +2701,7 @@ ANSWER DIRECTLY:`;
 
       return true;
     } catch (error) {
-      console.error("[LLMHelper] Failed to restart Ollama:", error);
+      console.error("[LLMHelper] Failed to restart Ollama:", sanitizeError(error));
       return false;
     }
   }
@@ -2718,13 +2788,15 @@ ANSWER DIRECTLY:`;
     if (this.groqClient) {
       try {
         console.log(`[LLMHelper] 🚀 Mode-specific Groq stream starting...`);
+        const timeoutSignal = createTimeoutSignal(LLM_API_TIMEOUT_MS);
+        
         const stream = await this.groqClient.chat.completions.create({
           model: GROQ_MODEL,
           messages: [{ role: "user", content: groqMessage }],
           stream: true,
           temperature: temperature,
           max_tokens: maxTokens,
-        });
+        }, { signal: timeoutSignal });
 
         for await (const chunk of stream) {
           const content = chunk.choices[0]?.delta?.content;

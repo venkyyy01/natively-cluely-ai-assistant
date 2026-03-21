@@ -96,6 +96,21 @@ export class ConfidenceScorer {
     };
   }
   
+  /**
+   * Calculate BM25 relevance score between query and document keywords.
+   * 
+   * BM25 formula: score = Σ IDF(qi) * (f(qi,D) * (k1 + 1)) / (f(qi,D) + k1 * (1 - b + b * |D|/avgdl))
+   * 
+   * Where:
+   * - IDF(qi) = log((N - n(qi) + 0.5) / (n(qi) + 0.5) + 1)
+   * - f(qi,D) = term frequency of qi in document D
+   * - N = total documents (we assume small corpus of 3 suspended threads)
+   * - n(qi) = number of documents containing qi (assume 1 for matching terms)
+   * - k1 = term frequency saturation parameter (typically 1.2-2.0)
+   * - b = length normalization parameter (typically 0.75)
+   * - |D| = document length
+   * - avgdl = average document length
+   */
   private calculateBM25(
     query: string,
     documentKeywords: string[],
@@ -105,30 +120,34 @@ export class ConfidenceScorer {
     const queryTerms = this.tokenize(query);
     if (queryTerms.length === 0 || documentKeywords.length === 0) return 0;
     
-    const avgDocLength = 10;
+    const N = 3; // Assume small corpus of suspended threads
+    const avgDocLength = 10; // Average expected keywords per thread
     const docLength = documentKeywords.length;
+    const docKeywordsLower = documentKeywords.map(k => k.toLowerCase());
     
     let score = 0;
     
     for (const term of queryTerms) {
-      const tf = documentKeywords.filter(k => 
-        k.toLowerCase().includes(term.toLowerCase()) ||
-        term.toLowerCase().includes(k.toLowerCase())
+      // Calculate term frequency in this document
+      const tf = docKeywordsLower.filter(k => 
+        k.includes(term) || term.includes(k)
       ).length;
       
       if (tf === 0) continue;
       
-      // Simplified IDF
-      const idf = Math.log(1 + (3 - tf + 0.5) / (tf + 0.5));
+      // IDF: assume df=1 for matching terms (term appears in 1 of N docs)
+      // This gives higher weight to rarer terms
+      const df = 1;
+      const idf = Math.log((N - df + 0.5) / (df + 0.5) + 1);
       
-      // BM25 term score
+      // BM25 term weight with length normalization
       const numerator = tf * (k1 + 1);
       const denominator = tf + k1 * (1 - b + b * (docLength / avgDocLength));
       
       score += idf * (numerator / denominator);
     }
     
-    // Normalize to 0-1 range
+    // Normalize by query length to get a 0-1 range
     return Math.min(1, score / queryTerms.length);
   }
   

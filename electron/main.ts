@@ -1,4 +1,4 @@
-import { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, shell, systemPreferences, globalShortcut } from "electron"
+import { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, shell, systemPreferences, globalShortcut, session } from "electron"
 import { EventEmitter } from "events"
 import path from "path"
 import fs from "fs"
@@ -149,6 +149,7 @@ export class AppState {
   private isMeetingActive: boolean = false; // Guard for session state leaks
   private meetingLifecycleState: 'idle' | 'starting' | 'active' | 'stopping' = 'idle'
   private meetingStartSequence = 0
+  private meetingStartMutex: Promise<void> = Promise.resolve() // Prevents race conditions
   private nativeAudioConnected: boolean = false;
   private _disguiseTimers: NodeJS.Timeout[] = []; // Track forceUpdate timeouts
 
@@ -1046,79 +1047,83 @@ export class AppState {
   public async startMeeting(metadata?: any): Promise<void> {
     console.log('[Main] Starting Meeting...', metadata);
 
-    if (this.meetingLifecycleState === 'starting' || this.meetingLifecycleState === 'active') {
-      console.warn(`[Main] Ignoring startMeeting while state=${this.meetingLifecycleState}`)
-      return
-    }
-
-    this.meetingLifecycleState = 'starting'
-    const startSequence = ++this.meetingStartSequence
-
-    try {
-      await this.validateMeetingAudioSetup(metadata);
-    } catch (error) {
-      this.meetingLifecycleState = 'idle'
-      throw error
-    }
-
-    this.isMeetingActive = true;
-    if (metadata) {
-      this.intelligenceManager.setMeetingMetadata(metadata);
-    }
-
-    // Emit session reset to clear UI state immediately
-    this.getWindowHelper().getOverlayWindow()?.webContents.send('session-reset');
-    this.getWindowHelper().getLauncherWindow()?.webContents.send('session-reset');
-
-    // ★ ASYNC AUDIO INIT: Return INSTANTLY so the IPC response goes back
-    // to the renderer immediately, allowing the UI to switch to overlay
-    // without waiting for SCK/audio initialization (which takes 5-7 seconds).
-    // setTimeout(100) ensures setWindowMode IPC is processed first.
-    setTimeout(async () => {
-      if (startSequence !== this.meetingStartSequence || this.meetingLifecycleState !== 'starting') {
-        console.warn('[Main] Skipping stale deferred meeting start')
+    // Chain this operation after any pending meeting start operations
+    return this.meetingStartMutex = this.meetingStartMutex.then(async () => {
+      // Critical section: check and update state atomically
+      if (this.meetingLifecycleState === 'starting' || this.meetingLifecycleState === 'active') {
+        console.warn(`[Main] Ignoring startMeeting while state=${this.meetingLifecycleState}`)
         return
       }
 
-      try {
-        // Check for audio configuration preference
-        if (metadata?.audio) {
-          await this.reconfigureAudio(metadata.audio.inputDeviceId, metadata.audio.outputDeviceId);
-        }
+      this.meetingLifecycleState = 'starting'
+      const startSequence = ++this.meetingStartSequence
 
+      try {
+        await this.validateMeetingAudioSetup(metadata);
+      } catch (error) {
+        this.meetingLifecycleState = 'idle'
+        throw error
+      }
+
+      this.isMeetingActive = true;
+      if (metadata) {
+        this.intelligenceManager.setMeetingMetadata(metadata);
+      }
+
+      // Emit session reset to clear UI state immediately
+      this.getWindowHelper().getOverlayWindow()?.webContents.send('session-reset');
+      this.getWindowHelper().getLauncherWindow()?.webContents.send('session-reset');
+
+      // ★ ASYNC AUDIO INIT: Return INSTANTLY so the IPC response goes back
+      // to the renderer immediately, allowing the UI to switch to overlay
+      // without waiting for SCK/audio initialization (which takes 5-7 seconds).
+      // setTimeout(100) ensures setWindowMode IPC is processed first.
+      setTimeout(async () => {
         if (startSequence !== this.meetingStartSequence || this.meetingLifecycleState !== 'starting') {
-          console.warn('[Main] Meeting start invalidated during async initialization')
+          console.warn('[Main] Skipping stale deferred meeting start')
           return
         }
 
-        // LAZY INIT: Ensure pipeline is ready (if not reconfigured above)
-        this.setupSystemAudioPipeline();
+        try {
+          // Check for audio configuration preference
+          if (metadata?.audio) {
+            await this.reconfigureAudio(metadata.audio.inputDeviceId, metadata.audio.outputDeviceId);
+          }
 
-        // Start System Audio
-        this.systemAudioCapture?.start();
-        this.googleSTT?.start();
+          if (startSequence !== this.meetingStartSequence || this.meetingLifecycleState !== 'starting') {
+            console.warn('[Main] Meeting start invalidated during async initialization')
+            return
+          }
 
-        // Start Microphone
-        this.microphoneCapture?.start();
-        this.googleSTT_User?.start();
+          // LAZY INIT: Ensure pipeline is ready (if not reconfigured above)
+          this.setupSystemAudioPipeline();
 
-        // Start JIT RAG live indexing
-        if (this.ragManager) {
-          this.ragManager.startLiveIndexing('live-meeting-current');
+          // Start System Audio
+          this.systemAudioCapture?.start();
+          this.googleSTT?.start();
+
+          // Start Microphone
+          this.microphoneCapture?.start();
+          this.googleSTT_User?.start();
+
+          // Start JIT RAG live indexing
+          if (this.ragManager) {
+            this.ragManager.startLiveIndexing('live-meeting-current');
+          }
+
+          this.setNativeAudioConnected(true);
+          this.meetingLifecycleState = 'active'
+          console.log('[Main] Audio pipeline started successfully.');
+        } catch (err) {
+          console.error('[Main] Error initializing audio pipeline:', err);
+          // Notify UI so user knows microphone/audio failed to start
+          this.setNativeAudioConnected(false);
+          this.broadcast('meeting-audio-error', (err as Error).message || 'Audio pipeline failed to start');
+          this.isMeetingActive = false;
+          this.meetingLifecycleState = 'idle'
         }
-
-        this.setNativeAudioConnected(true);
-        this.meetingLifecycleState = 'active'
-        console.log('[Main] Audio pipeline started successfully.');
-      } catch (err) {
-        console.error('[Main] Error initializing audio pipeline:', err);
-        // Notify UI so user knows microphone/audio failed to start
-        this.setNativeAudioConnected(false);
-        this.broadcast('meeting-audio-error', (err as Error).message || 'Audio pipeline failed to start');
-        this.isMeetingActive = false;
-        this.meetingLifecycleState = 'idle'
-      }
-    }, 0); // Defer to next event loop tick — ensures IPC response reaches renderer before audio init
+      }, 0); // Defer to next event loop tick — ensures IPC response reaches renderer before audio init
+    });
   }
 
   public async endMeeting(): Promise<void> {
@@ -1129,16 +1134,40 @@ export class AppState {
     this.setNativeAudioConnected(false);
 
     // 3. Stop System Audio
-    this.systemAudioCapture?.stop();
-    this.googleSTT?.stop();
+    try {
+      this.systemAudioCapture?.stop();
+    } catch (error) {
+      console.error('[Main] Failed to stop system audio during endMeeting:', error)
+    }
+
+    try {
+      this.googleSTT?.stop();
+      this.googleSTT?.removeAllListeners();
+    } catch (error) {
+      console.error('[Main] Failed to stop interviewer STT during endMeeting:', error)
+    }
 
     // 4. Stop Microphone
-    this.microphoneCapture?.stop();
-    this.googleSTT_User?.stop();
+    try {
+      this.microphoneCapture?.stop();
+    } catch (error) {
+      console.error('[Main] Failed to stop microphone capture during endMeeting:', error)
+    }
+
+    try {
+      this.googleSTT_User?.stop();
+      this.googleSTT_User?.removeAllListeners();
+    } catch (error) {
+      console.error('[Main] Failed to stop user STT during endMeeting:', error)
+    }
 
     // 4b. Stop JIT RAG live indexing (flush remaining segments)
     if (this.ragManager) {
-      await this.ragManager.stopLiveIndexing();
+      try {
+        await this.ragManager.stopLiveIndexing();
+      } catch (error) {
+        console.error('[Main] Failed to stop live indexing during endMeeting:', error)
+      }
     }
 
     // 4. Reset Intelligence Context & Save
@@ -1193,6 +1222,7 @@ export class AppState {
 
     try {
       this.googleSTT?.stop()
+      this.googleSTT?.removeAllListeners()
       this.googleSTT?.destroy?.()
     } catch (error) {
       console.error('[Main] Failed to stop interviewer STT during quit:', error)
@@ -1206,6 +1236,7 @@ export class AppState {
 
     try {
       this.googleSTT_User?.stop()
+      this.googleSTT_User?.removeAllListeners()
       this.googleSTT_User?.destroy?.()
     } catch (error) {
       console.error('[Main] Failed to stop user STT during quit:', error)
@@ -2033,7 +2064,27 @@ async function initializeApp() {
   // 2. Wait for app to be ready
   await app.whenReady()
 
-  // 3. Initialize Managers
+  // 3. Set Content Security Policy headers for XSS protection
+  session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
+    callback({
+      responseHeaders: {
+        ...details.responseHeaders,
+        'Content-Security-Policy': 
+          "default-src 'self'; " +
+          "script-src 'self' 'unsafe-inline' 'unsafe-eval'; " +
+          "style-src 'self' 'unsafe-inline'; " +
+          "img-src 'self' data: blob: https:; " +
+          "font-src 'self' data:; " +
+          "connect-src 'self' https: wss: ws:; " +
+          "media-src 'self' blob:; " +
+          "object-src 'none'; " +
+          "frame-src 'self'; " +
+          "base-uri 'self';"
+      }
+    });
+  });
+
+  // 4. Initialize Managers
   // Initialize CredentialsManager and load keys explicitly
   // This fixes the issue where keys (especially in production) aren't loaded in time for RAG/LLM
   const { CredentialsManager } = require('./services/CredentialsManager');

@@ -1,4 +1,5 @@
 // electron/conscious/ThreadManager.ts
+import { randomUUID } from 'crypto';
 import { 
   ConversationThread, 
   InterviewPhase, 
@@ -10,11 +11,8 @@ import { ConfidenceScorer } from './ConfidenceScorer';
 const MAX_SUSPENDED_THREADS = 3;
 const DEFAULT_TTL_MS = 5 * 60 * 1000; // 5 minutes
 
-let threadIdCounter = 0;
-
 function generateThreadId(): string {
-  threadIdCounter += 1;
-  return `thread_${Date.now()}_${threadIdCounter}_${Math.random().toString(36).substr(2, 9)}`;
+  return `thread_${randomUUID()}`;
 }
 
 function extractKeywords(text: string): string[] {
@@ -90,23 +88,31 @@ export class ThreadManager {
   }
 
   resumeThread(threadId: string): boolean {
+    // First, find if thread exists
     const index = this.suspendedThreads.findIndex(t => t.id === threadId);
     if (index === -1) return false;
     
-    // Remove the thread from suspended list FIRST (before suspending active)
-    const thread = this.suspendedThreads.splice(index, 1)[0];
-    
-    // Suspend current active (this may add to suspendedThreads)
+    // Suspend current active thread FIRST (this modifies suspendedThreads)
     if (this.activeThread) {
       this.suspendActive();
     }
     
-    // Resume the target thread
-    thread.status = 'active';
+    // Re-find the thread since array may have changed after suspendActive
+    const newIndex = this.suspendedThreads.findIndex(t => t.id === threadId);
+    if (newIndex === -1) {
+      // Thread may have been evicted when we suspended (hit MAX_SUSPENDED limit)
+      return false;
+    }
+    
+    // Now safe to splice
+    const [thread] = this.suspendedThreads.splice(newIndex, 1);
+    
+    // Clean up suspension metadata and reactivate thread
+    thread.suspendedAt = undefined;
+    thread.interruptedBy = undefined;
     thread.lastActiveAt = Date.now();
-    thread.resumeCount += 1;
-    delete thread.suspendedAt;
-    delete thread.interruptedBy;
+    thread.status = 'active';
+    thread.resumeCount++;
     
     this.activeThread = thread;
     return true;

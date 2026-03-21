@@ -105,13 +105,14 @@ export interface ConfidenceScore {
   total: number;
 }
 
+// Redistribute embedding weight since it's not implemented
 export const CONFIDENCE_WEIGHTS = {
-  bm25: 0.15,
-  embedding: 0.25,
-  explicitMarkers: 0.20,
-  temporalDecay: 0.10,
-  phaseAlignment: 0.15,
-  sttQuality: 0.05,
+  bm25: 0.25,              // was 0.15, increased since embedding disabled
+  embedding: 0.0,          // disabled until implemented
+  explicitMarkers: 0.30,   // was 0.20
+  temporalDecay: 0.15,     // was 0.10
+  phaseAlignment: 0.15,    // unchanged
+  sttQuality: 0.05,        // unchanged
   topicShiftPenalty: -0.10,
   interruptionRecency: -0.05,
 } as const;
