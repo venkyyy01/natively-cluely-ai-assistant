@@ -119,13 +119,13 @@ export class InterviewPhaseDetector {
     let bestScore = 0;
     let bestSignals: string[] = [];
     
-    for (const [phase, { score, signals }] of scores) {
+    scores.forEach(({ score, signals }, phase) => {
       if (score > bestScore) {
         bestScore = score;
         bestPhase = phase;
         bestSignals = signals;
       }
-    }
+    });
     
     // Require minimum confidence to change phase
     const PHASE_CHANGE_THRESHOLD = 0.4;
