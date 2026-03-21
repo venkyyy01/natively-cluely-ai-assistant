@@ -1,33 +1,30 @@
 // electron/tests/intelligenceEngineConscious.test.ts
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import test from 'node:test';
+import assert from 'node:assert/strict';
 import { IntelligenceEngine } from '../IntelligenceEngine';
 import { SessionTracker } from '../SessionTracker';
 import { LLMHelper } from '../LLMHelper';
 
-// Mock LLMHelper
-vi.mock('../LLMHelper', () => ({
-  LLMHelper: vi.fn().mockImplementation(() => ({
+test('IntelligenceEngine Conscious Integration - should have fallback executor', () => {
+  const mockLLMHelper = {
     getProvider: () => 'openai',
-  })),
-}));
+  } as unknown as LLMHelper;
+  
+  const session = new SessionTracker();
+  const engine = new IntelligenceEngine(mockLLMHelper, session);
+  
+  assert.ok(engine.getFallbackExecutor());
+});
 
-describe('IntelligenceEngine Conscious Integration', () => {
-  let engine: IntelligenceEngine;
-  let session: SessionTracker;
-
-  beforeEach(() => {
-    const mockLLMHelper = new LLMHelper({} as any, {} as any);
-    session = new SessionTracker();
-    engine = new IntelligenceEngine(mockLLMHelper, session);
-  });
-
-  it('should have fallback executor', () => {
-    expect(engine.getFallbackExecutor()).toBeDefined();
-  });
-
-  it('should detect phase from transcript', () => {
-    session.setConsciousModeEnabled(true);
-    const phase = session.detectPhaseFromTranscript('Can I clarify the requirements?');
-    expect(phase).toBe('requirements_gathering');
-  });
+test('IntelligenceEngine Conscious Integration - should detect phase from transcript', () => {
+  const mockLLMHelper = {
+    getProvider: () => 'openai',
+  } as unknown as LLMHelper;
+  
+  const session = new SessionTracker();
+  const engine = new IntelligenceEngine(mockLLMHelper, session);
+  
+  session.setConsciousModeEnabled(true);
+  const phase = session.detectPhaseFromTranscript('Can I clarify the requirements?');
+  assert.equal(phase, 'requirements_gathering');
 });

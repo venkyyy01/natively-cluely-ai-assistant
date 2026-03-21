@@ -1,31 +1,28 @@
 // electron/tests/sessionTrackerConscious.test.ts
-import { describe, it, expect, beforeEach } from 'vitest';
+import test from 'node:test';
+import assert from 'node:assert/strict';
 import { SessionTracker } from '../SessionTracker';
 
-describe('SessionTracker Conscious Integration', () => {
-  let tracker: SessionTracker;
+test('SessionTracker Conscious Integration - should initialize with thread manager', () => {
+  const tracker = new SessionTracker();
+  assert.ok(tracker.getThreadManager());
+});
 
-  beforeEach(() => {
-    tracker = new SessionTracker();
-  });
+test('SessionTracker Conscious Integration - should initialize with phase detector', () => {
+  const tracker = new SessionTracker();
+  assert.ok(tracker.getPhaseDetector());
+});
 
-  it('should initialize with thread manager', () => {
-    expect(tracker.getThreadManager()).toBeDefined();
-  });
+test('SessionTracker Conscious Integration - should get current interview phase', () => {
+  const tracker = new SessionTracker();
+  const phase = tracker.getCurrentPhase();
+  assert.equal(phase, 'requirements_gathering'); // Default
+});
 
-  it('should initialize with phase detector', () => {
-    expect(tracker.getPhaseDetector()).toBeDefined();
-  });
-
-  it('should get current interview phase', () => {
-    const phase = tracker.getCurrentPhase();
-    expect(phase).toBe('requirements_gathering'); // Default
-  });
-
-  it('should create thread on conscious mode activation', () => {
-    tracker.setConsciousModeEnabled(true);
-    const thread = tracker.getThreadManager().createThread('Test topic', 'high_level_design');
-    expect(thread).toBeDefined();
-    expect(thread.status).toBe('active');
-  });
+test('SessionTracker Conscious Integration - should create thread on conscious mode activation', () => {
+  const tracker = new SessionTracker();
+  tracker.setConsciousModeEnabled(true);
+  const thread = tracker.getThreadManager().createThread('Test topic', 'high_level_design');
+  assert.ok(thread);
+  assert.equal(thread.status, 'active');
 });
