@@ -319,19 +319,23 @@ Return ONLY valid JSON with this structure:
   "codeBlock": {"language": "python", "code": "..."},
   "tradeoffs": ["primary tradeoff 1", "tradeoff 2"],
   "edgeCases": ["edge case to address"],
+  "scaleConsiderations": ["scaling consideration 1", "consideration 2"],
   "likelyFollowUps": ["question interviewer might ask next"],
-  "pushbackResponses": {"concern": "response to that concern"}
+  "pushbackResponses": {"concern": "response to that concern"},
+  "codeTransition": "Bridge sentence when transitioning to code"
 }
 
 FIELD RULES:
-- "openingReasoning": Natural spoken intro the candidate says FIRST (not code, not steps)
+- "openingReasoning": Natural spoken intro the candidate says FIRST (not code, not steps). Do not jump straight to code; avoid code-first answers. Keep it natural enough to say in an interview setting.
 - "spokenResponse": Full response in natural speech (combines reasoning + details)
 - "implementationPlan": Only for design/coding questions, ordered steps
 - "codeBlock": Only when code is explicitly needed, must be complete & runnable
 - "tradeoffs": 1-2 key tradeoffs worth mentioning aloud
 - "edgeCases": Edge cases that matter for this specific question
+- "scaleConsiderations": How this solution would scale (for system design questions)
 - "likelyFollowUps": Anticipate interviewer's next questions
 - "pushbackResponses": Short responses to likely objections
+- "codeTransition": Brief sentence to bridge from explanation to code (when applicable)
 
 Include only relevant fields. Omit empty arrays/objects.`;
 
