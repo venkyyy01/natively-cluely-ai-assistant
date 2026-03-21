@@ -16,6 +16,7 @@ import {
     prepareTranscriptForWhatToAnswer, buildTemporalContext,
     AssistantResponse as LLMAssistantResponse, classifyIntent
 } from './llm';
+import { FallbackExecutor } from './conscious';
 
 // Mode types
 export type IntelligenceMode = 'idle' | 'assist' | 'what_to_say' | 'follow_up' | 'recap' | 'manual' | 'follow_up_questions' | 'reasoning_first';
@@ -79,6 +80,9 @@ export class IntelligenceEngine extends EventEmitter {
     // Reference to SessionTracker for context
     private session: SessionTracker;
 
+    // Conscious Mode Realtime fallback executor
+    private fallbackExecutor: FallbackExecutor = new FallbackExecutor();
+
     // Timestamps for tracking
     private lastTranscriptTime: number = 0;
     private lastTriggerTime: number = 0;
@@ -97,6 +101,10 @@ export class IntelligenceEngine extends EventEmitter {
 
     getRecapLLM(): RecapLLM | null {
         return this.recapLLM;
+    }
+
+    getFallbackExecutor(): FallbackExecutor {
+        return this.fallbackExecutor;
     }
 
     // ============================================
