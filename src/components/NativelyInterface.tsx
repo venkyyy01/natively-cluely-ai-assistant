@@ -38,8 +38,19 @@ import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
 import 'katex/dist/katex.min.css';
+import { getElectronAPI } from '../lib/electronApi';
 import { analytics, detectProviderType } from '../lib/analytics/analytics.service';
 import { useShortcuts } from '../hooks/useShortcuts';
+import {
+    classifyAssistRender,
+    ConsciousModeAnswer,
+    parseConsciousModeAnswer,
+} from '../lib/consciousMode';
+import {
+    classifyConsciousModeQuestion,
+    createEmptyConsciousModeResponse,
+    type ReasoningThread,
+} from '../../electron/ConsciousMode';
 
 interface Message {
     id: string;
@@ -71,6 +82,7 @@ interface NativelyInterfaceProps {
 }
 
 const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) => {
+    const electronAPI = getElectronAPI();
     const [isExpanded, setIsExpanded] = useState(true);
     const [inputValue, setInputValue] = useState('');
     const { shortcuts, isShortcutPressed } = useShortcuts();
@@ -111,6 +123,7 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
     const messagesEndRef = useRef<HTMLDivElement>(null);
     const contentRef = useRef<HTMLDivElement>(null);
     const scrollContainerRef = useRef<HTMLDivElement>(null);
+    const activeConsciousThreadRef = useRef<ReasoningThread | null>(null);
     // const settingsButtonRef = useRef<HTMLButtonElement>(null);
 
     // Latent Context State (Screenshots attached but not sent)
@@ -249,24 +262,24 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
 
     // Listen for settings window visibility changes
     useEffect(() => {
-        if (!window.electronAPI?.onSettingsVisibilityChange) return;
-        const unsubscribe = window.electronAPI.onSettingsVisibilityChange((isVisible) => {
+        if (!electronAPI.onSettingsVisibilityChange) return;
+        const unsubscribe = electronAPI.onSettingsVisibilityChange((isVisible: boolean) => {
             setIsSettingsOpen(isVisible);
         });
         return () => unsubscribe();
-    }, []);
+    }, [electronAPI]);
 
     // Sync Window Visibility with Expanded State
     useEffect(() => {
         if (isExpanded) {
-            window.electronAPI.showWindow();
+            electronAPI.showWindow();
         } else {
             // Slight delay to allow animation to clean up if needed, though immediate is safer for click-through
             // Using setTimeout to ensure the render cycle completes first
             // Increased to 400ms to allow "contract to bottom" exit animation to finish
-            setTimeout(() => window.electronAPI.hideWindow(), 400);
+            setTimeout(() => electronAPI.hideWindow(), 400);
         }
-    }, [isExpanded]);
+    }, [electronAPI, isExpanded]);
 
     // Keyboard shortcut to toggle expanded state (via Main Process)
     useEffect(() => {
@@ -293,6 +306,7 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
             setRollingTranscript('');
             setIsInterviewerSpeaking(false);
             setIsProcessing(false);
+            activeConsciousThreadRef.current = null;
             // Optionally reset connection status if needed, but connection persists
 
             // Track new conversation/session if applicable?
@@ -437,6 +451,32 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
 
         cleanups.push(window.electronAPI.onIntelligenceSuggestedAnswer((data) => {
             setIsProcessing(false);
+            const threadRoute = classifyConsciousModeQuestion(data.question, activeConsciousThreadRef.current);
+            const assistRender = classifyAssistRender({
+                answerText: data.answer,
+                threadAction: threadRoute.threadAction,
+            });
+
+            analytics.trackInterviewAssistRendered({
+                ...assistRender,
+                source_intent: 'what_to_answer',
+            });
+
+            if (assistRender.output_variant === 'conscious_mode') {
+                const currentThread = activeConsciousThreadRef.current;
+                const continuesThread = Boolean(threadRoute.threadAction === 'continue' && currentThread);
+
+                activeConsciousThreadRef.current = {
+                    rootQuestion: continuesThread && currentThread ? currentThread.rootQuestion : data.question,
+                    lastQuestion: data.question,
+                    response: createEmptyConsciousModeResponse(),
+                    followUpCount: continuesThread && currentThread ? currentThread.followUpCount + 1 : 0,
+                    updatedAt: Date.now(),
+                };
+            } else {
+                activeConsciousThreadRef.current = null;
+            }
+
             setMessages(prev => {
                 const lastMsg = prev[prev.length - 1];
 
@@ -625,15 +665,15 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
             }]);
         }));
         // Screenshot taken - attach to chat input instead of auto-analyzing
-        cleanups.push(window.electronAPI.onScreenshotTaken(handleScreenshotAttach));
+        cleanups.push(electronAPI.onScreenshotTaken(handleScreenshotAttach));
 
         // Selective Screenshot (Latent Context)
-        if (window.electronAPI.onScreenshotAttached) {
-            cleanups.push(window.electronAPI.onScreenshotAttached(handleScreenshotAttach));
+        if (electronAPI.onScreenshotAttached) {
+            cleanups.push(electronAPI.onScreenshotAttached(handleScreenshotAttach));
         }
 
         return () => cleanups.forEach(fn => fn());
-    }, [isExpanded]);
+    }, [electronAPI]);
 
     // Quick Actions - Updated to use new Intelligence APIs
 
@@ -1071,6 +1111,17 @@ Provide only the answer, nothing else.`;
 
 
     const renderMessageText = (msg: Message) => {
+        if (msg.intent === 'what_to_answer') {
+            const consciousModeAnswer = parseConsciousModeAnswer(msg.text);
+            if (consciousModeAnswer) {
+                return <ConsciousModeAnswer text={msg.text} isStreaming={msg.isStreaming} />;
+            }
+
+            if (msg.isStreaming) {
+                return <ConsciousModeAnswer text={msg.text} isStreaming />;
+            }
+        }
+
         // Code-containing messages get special styling
         // We split by code blocks to keep the "Code Solution" UI intact for the code parts
         // But use ReactMarkdown for the text parts around it

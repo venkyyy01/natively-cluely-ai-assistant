@@ -6,8 +6,8 @@
 //   1. Regex fast-path (< 1ms) for common patterns
 //   2. Local SLM fallback (zero-shot, ~10-50ms) for messy/ambiguous speech
 
-import path from 'path';
-import { app } from 'electron';
+import { isElectronAppPackaged, resolveBundledModelsPath } from '../utils/modelPaths';
+const { loadTransformers } = require('../utils/transformersLoader');
 
 export type ConversationIntent =
     | 'clarification'      // "Can you explain that?"
@@ -97,24 +97,16 @@ class ZeroShotClassifier {
 
         this.loadingPromise = (async () => {
             try {
-                // Bypass TypeScript converting import() to require() for ESM packages
-                const { pipeline, env } = await new Function("return import('@xenova/transformers')")();
+                const { pipeline, env } = await loadTransformers();
 
-                // In production, use bundled model. In dev, allow remote download.
-                if (app.isPackaged) {
-                    env.allowRemoteModels = false;
-                    env.localModelPath = path.join(process.resourcesPath, 'models');
-                } else {
-                    // Dev mode: allow downloading from HuggingFace Hub
-                    env.allowRemoteModels = true;
-                    env.cacheDir = path.join(__dirname, '../../resources/models');
-                }
+                env.allowRemoteModels = false;
+                env.localModelPath = resolveBundledModelsPath();
 
                 console.log('[IntentClassifier] Loading zero-shot classifier (mobilebert-uncased-mnli)...');
                 this.pipe = await pipeline(
                     'zero-shot-classification',
                     'Xenova/mobilebert-uncased-mnli',
-                    { local_files_only: app.isPackaged }
+                    { local_files_only: isElectronAppPackaged() }
                 );
                 console.log('[IntentClassifier] Zero-shot classifier loaded successfully.');
             } catch (e) {

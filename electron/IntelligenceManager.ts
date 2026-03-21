@@ -12,10 +12,12 @@ import { LLMHelper } from './LLMHelper';
 import { SessionTracker } from './SessionTracker';
 import { IntelligenceEngine } from './IntelligenceEngine';
 import { MeetingPersistence } from './MeetingPersistence';
+import type { ConsciousModeStructuredResponse, ReasoningThread } from './ConsciousMode';
 
 // Re-export types for backward compatibility
 export type { TranscriptSegment, SuggestionTrigger, ContextItem } from './SessionTracker';
 export type { IntelligenceMode, IntelligenceModeEvents } from './IntelligenceEngine';
+export type { ConsciousModeStructuredResponse, ReasoningThread } from './ConsciousMode';
 
 export const GEMINI_FLASH_MODEL = "gemini-3.1-flash-lite-preview";
 
@@ -103,6 +105,22 @@ export class IntelligenceManager extends EventEmitter {
 
     getLastAssistantMessage(): string | null {
         return this.session.getLastAssistantMessage();
+    }
+
+    setConsciousModeEnabled(enabled: boolean): void {
+        this.session.setConsciousModeEnabled(enabled);
+    }
+
+    isConsciousModeEnabled(): boolean {
+        return this.session.isConsciousModeEnabled();
+    }
+
+    getLatestConsciousResponse(): ConsciousModeStructuredResponse | null {
+        return this.session.getLatestConsciousResponse();
+    }
+
+    getActiveReasoningThread(): ReasoningThread | null {
+        return this.session.getActiveReasoningThread();
     }
 
     getFormattedContext(lastSeconds: number = 120): string {

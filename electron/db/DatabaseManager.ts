@@ -38,11 +38,13 @@ export class DatabaseManager {
     private static instance: DatabaseManager;
     private db: Database.Database | null = null;
     private dbPath: string;
+    private migrationBackupPath: string;
     private resolvedExtPath: string = '';
 
     private constructor() {
         const userDataPath = app.getPath('userData');
         this.dbPath = path.join(userDataPath, 'natively.db');
+        this.migrationBackupPath = path.join(userDataPath, 'natively.db.migration-backup');
         this.init();
     }
 
@@ -383,6 +385,7 @@ export class DatabaseManager {
         if (version < 10) {
             console.log('[DatabaseManager] Applying migration v9 → v10: Add UNIQUE constraint to embedding_queue');
             try {
+                this.createMigrationBackup();
                 // Wrap all steps in an explicit better-sqlite3 transaction for atomicity.
                 // If any step throws, the entire migration is rolled back cleanly —
                 // preventing the dangerous half-renamed table state that a bare exec() chain would leave.
@@ -417,19 +420,42 @@ export class DatabaseManager {
                     this.db!.exec('DROP TABLE embedding_queue_old;');
                 });
                 migrate();
+                this.verifyEmbeddingQueueConsistency();
+                this.removeMigrationBackup();
                 console.log('[DatabaseManager] v10 migration: embedding_queue UNIQUE constraint added ✓');
             } catch (e) {
                 console.error('[DatabaseManager] v10 migration failed — table structure unchanged:', e);
-                // user_version still advances. We do NOT retry — a failed rename leaves
-                // embedding_queue_old behind; retrying would cause "table already exists".
-                // In the failure case, INSERT OR IGNORE in queueMeeting() will still work
-                // for natural uniqueness (same meeting queued twice picks up existing rows),
-                // just without DB-enforced deduplication.
+                this.restoreMigrationBackup();
+                throw e;
             }
             this.db.pragma('user_version = 10');
         }
 
         console.log('[DatabaseManager] Migrations completed.');
+    }
+
+    private createMigrationBackup(): void {
+        if (fs.existsSync(this.dbPath)) {
+            fs.copyFileSync(this.dbPath, this.migrationBackupPath);
+        }
+    }
+
+    private restoreMigrationBackup(): void {
+        if (fs.existsSync(this.migrationBackupPath)) {
+            fs.copyFileSync(this.migrationBackupPath, this.dbPath);
+            this.removeMigrationBackup();
+        }
+    }
+
+    private removeMigrationBackup(): void {
+        if (fs.existsSync(this.migrationBackupPath)) {
+            fs.unlinkSync(this.migrationBackupPath);
+        }
+    }
+
+    private verifyEmbeddingQueueConsistency(): void {
+        if (!this.db) return;
+        this.db.prepare('SELECT count(*) as count FROM embedding_queue').get();
     }
 
     // ============================================

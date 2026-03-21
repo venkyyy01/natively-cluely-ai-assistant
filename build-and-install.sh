@@ -369,21 +369,31 @@ else
 fi
 
 # ╔═══════════════════════════════════════════════════════════════════╗
-# ║  Step 4: Fresh Cleanup & Build Production App                    ║
+# ║  Step 4: Fresh Cleanup & Production Quality Gates                ║
 # ╚═══════════════════════════════════════════════════════════════════╝
-step "Step 4/8 — Fresh Cleanup & Building Production App"
+step "Step 4/9 — Fresh Cleanup & Production Quality Gates"
 
 cleanup_stale_artifacts
 
+info "Running typechecks, full Electron coverage gate, renderer coverage gate, and native tests..."
+run_with_spinner "verifying production readiness gates" npm run verify:production
+
+success "Quality gates passed"
+
+# ╔═══════════════════════════════════════════════════════════════════╗
+# ║  Step 5: Build Production App                                    ║
+# ╚═══════════════════════════════════════════════════════════════════╝
+step "Step 5/9 — Building Production App"
+
 info "Running production build pipeline..."
-run_with_spinner "forging full production bundle" npm run app:build
+run_with_spinner "forging full production bundle" env SKIP_PRODUCTION_VERIFY=1 npm run app:build
 
 success "Compilation complete"
 
 # ╔═══════════════════════════════════════════════════════════════════╗
-# ║  Step 5: Package with Electron Builder                           ║
+# ║  Step 6: Package with Electron Builder                           ║
 # ╚═══════════════════════════════════════════════════════════════════╝
-step "Step 5/8 — Packaging macOS App (${ARCH_LABEL})"
+step "Step 6/9 — Packaging macOS App (${ARCH_LABEL})"
 
 info "Using packaged release created by app:build..."
 info "This may take several minutes on first run..."
@@ -408,9 +418,9 @@ fi
 success "Built: $APP_GLOB"
 
 # ╔═══════════════════════════════════════════════════════════════════╗
-# ║  Step 6: Force Sign                                              ║
+# ║  Step 7: Force Sign                                              ║
 # ╚═══════════════════════════════════════════════════════════════════╝
-step "Step 6/8 — Force Signing (Ad-Hoc)"
+step "Step 7/9 — Force Signing (Ad-Hoc)"
 
 # The electron-builder afterPack hook already signs, but we force re-sign
 # to ensure it's clean (handles edge cases where build partially failed)
@@ -433,7 +443,7 @@ else
     info "Ad-hoc signature applied (codesign verify may show warnings — this is normal)"
 fi
 
-step "Step 7/8 — Verifying macOS Permission Manifest"
+step "Step 8/9 — Verifying macOS Permission Manifest"
 
 APP_PLIST="$APP_GLOB/Contents/Info.plist"
 [[ -f "$APP_PLIST" ]] || fail "Info.plist not found in built app"
@@ -466,9 +476,9 @@ fi
 success "Permission manifest verified"
 
 # ╔═══════════════════════════════════════════════════════════════════╗
-# ║  Step 8: Install & Launch                                        ║
+# ║  Step 9: Install & Launch                                        ║
 # ╚═══════════════════════════════════════════════════════════════════╝
-step "Step 8/8 — Installing to ${INSTALL_DIR}"
+step "Step 9/9 — Installing to ${INSTALL_DIR}"
 
 # Kill existing instance if running
 if pgrep -x "$APP_NAME" &>/dev/null; then

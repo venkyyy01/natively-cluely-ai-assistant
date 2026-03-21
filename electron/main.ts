@@ -1,4 +1,5 @@
-import { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, shell, systemPreferences } from "electron"
+import { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, shell, systemPreferences, globalShortcut } from "electron"
+import { EventEmitter } from "events"
 import path from "path"
 import fs from "fs"
 import { autoUpdater } from "electron-updater"
@@ -85,12 +86,18 @@ import { ThemeManager } from "./ThemeManager"
 import { RAGManager } from "./rag/RAGManager"
 import { DatabaseManager } from "./db/DatabaseManager"
 import { warmupIntentClassifier } from "./llm"
+import { maybeHandleSuggestionTriggerFromTranscript } from "./ConsciousMode"
 
 /** Unified type for all STT providers with optional extended capabilities */
 type STTProvider = (GoogleSTT | RestSTT | DeepgramStreamingSTT | SonioxStreamingSTT | ElevenLabsStreamingSTT | OpenAIStreamingSTT) & {
+  start: () => void;
+  stop: () => void;
+  on: EventEmitter['on'];
+  removeAllListeners: EventEmitter['removeAllListeners'];
   finalize?: () => void;
   setAudioChannelCount?: (count: number) => void;
   notifySpeechEnded?: () => void;
+  destroy?: () => void;
 };
 
 // Premium: Knowledge modules loaded conditionally
@@ -124,6 +131,7 @@ export class AppState {
   private tray: Tray | null = null
   private updateAvailable: boolean = false
   private disguiseMode: 'terminal' | 'settings' | 'activity' | 'none' = 'none'
+  private consciousModeEnabled: boolean = false
 
   // View management
   private view: "queue" | "solutions" = "queue"
@@ -139,8 +147,32 @@ export class AppState {
 
   private hasDebugged: boolean = false
   private isMeetingActive: boolean = false; // Guard for session state leaks
+  private meetingLifecycleState: 'idle' | 'starting' | 'active' | 'stopping' = 'idle'
+  private meetingStartSequence = 0
   private nativeAudioConnected: boolean = false;
   private _disguiseTimers: NodeJS.Timeout[] = []; // Track forceUpdate timeouts
+
+  private clearDisguiseTimers(): void {
+    for (const timer of this._disguiseTimers) {
+      clearTimeout(timer)
+    }
+    this._disguiseTimers = []
+  }
+
+  private trackDisguiseTimer(timer: NodeJS.Timeout): void {
+    this._disguiseTimers.push(timer)
+  }
+
+  private scheduleDisguiseTimer(callback: () => void, delayMs: number): void {
+    const timer = setTimeout(() => {
+      try {
+        callback()
+      } finally {
+        this._disguiseTimers = this._disguiseTimers.filter(t => t !== timer)
+      }
+    }, delayMs)
+    this.trackDisguiseTimer(timer)
+  }
   private _ollamaBootstrapPromise: Promise<void> | null = null;
 
 
@@ -167,7 +199,8 @@ export class AppState {
     const settingsManager = SettingsManager.getInstance();
     this.isUndetectable = settingsManager.get('isUndetectable') ?? false;
     this.disguiseMode = settingsManager.get('disguiseMode') ?? 'none';
-    console.log(`[AppState] Initialized with isUndetectable=${this.isUndetectable}, disguiseMode=${this.disguiseMode}`);
+    this.consciousModeEnabled = settingsManager.get('consciousModeEnabled') ?? false;
+    console.log(`[AppState] Initialized with isUndetectable=${this.isUndetectable}, disguiseMode=${this.disguiseMode}, consciousModeEnabled=${this.consciousModeEnabled}`);
 
     // 2. Initialize Helpers with loaded state
     this.windowHelper = new WindowHelper(this)
@@ -234,6 +267,7 @@ export class AppState {
 
     // Initialize IntelligenceManager with LLMHelper
     this.intelligenceManager = new IntelligenceManager(this.processingHelper.getLLMHelper())
+    this.intelligenceManager.setConsciousModeEnabled(this.consciousModeEnabled)
 
     // Initialize ThemeManager
     this.themeManager = ThemeManager.getInstance()
@@ -689,7 +723,9 @@ export class AppState {
     stt.setRecognitionLanguage(sttLanguage);
 
     // Wire Transcript Events
-    stt.on('transcript', (segment: { text: string, isFinal: boolean, confidence: number }) => {
+    const sttEmitter = stt as EventEmitter
+
+    sttEmitter.on('transcript', (segment: { text: string, isFinal: boolean, confidence: number }) => {
       if (!this.isMeetingActive) {
         return;
       }
@@ -722,24 +758,19 @@ export class AppState {
       helper.getLauncherWindow()?.webContents.send('native-audio-transcript', payload);
       helper.getOverlayWindow()?.webContents.send('native-audio-transcript', payload);
 
-      if (speaker === 'interviewer' && segment.isFinal) {
-        const trimmed = segment.text.trim();
-        const wordCount = trimmed.split(/\s+/).filter(Boolean).length;
-        const looksActionable = trimmed.endsWith('?') || wordCount >= 5;
-
-        if (looksActionable) {
-          void this.intelligenceManager.handleSuggestionTrigger({
-            context: this.intelligenceManager.getFormattedContext(180),
-            lastQuestion: trimmed,
-            confidence: segment.confidence ?? 0.8,
-          }).catch((error) => {
-            console.error('[Main] Failed to auto-trigger interview assist:', error);
-          });
-        }
-      }
+      void maybeHandleSuggestionTriggerFromTranscript({
+        speaker,
+        text: segment.text,
+        final: segment.isFinal,
+        confidence: segment.confidence,
+        consciousModeEnabled: this.consciousModeEnabled,
+        intelligenceManager: this.intelligenceManager,
+      }).catch((error) => {
+        console.error('[Main] Failed to auto-trigger interview assist:', error);
+      });
     });
 
-    stt.on('error', (err: Error) => {
+    sttEmitter.on('error', (err: Error) => {
       console.error(`[Main] STT (${speaker}) Error:`, err);
     });
 
@@ -927,11 +958,13 @@ export class AppState {
 
     // Stop existing STT instances
     if (this.googleSTT) {
+      this.googleSTT.destroy?.();
       this.googleSTT.stop();
       this.googleSTT.removeAllListeners();
       this.googleSTT = null;
     }
     if (this.googleSTT_User) {
+      this.googleSTT_User.destroy?.();
       this.googleSTT_User.stop();
       this.googleSTT_User.removeAllListeners();
       this.googleSTT_User = null;
@@ -942,8 +975,10 @@ export class AppState {
 
     // Start the new STT instances if a meeting is active
     if (this.isMeetingActive) {
-      this.googleSTT?.start();
-      this.googleSTT_User?.start();
+      const interviewerStt = this.googleSTT as STTProvider | null;
+      const userStt = this.googleSTT_User as STTProvider | null;
+      interviewerStt?.start?.();
+      userStt?.start?.();
     }
 
     console.log('[Main] STT Provider reconfigured');
@@ -1011,7 +1046,20 @@ export class AppState {
   public async startMeeting(metadata?: any): Promise<void> {
     console.log('[Main] Starting Meeting...', metadata);
 
-    await this.validateMeetingAudioSetup(metadata);
+    if (this.meetingLifecycleState === 'starting' || this.meetingLifecycleState === 'active') {
+      console.warn(`[Main] Ignoring startMeeting while state=${this.meetingLifecycleState}`)
+      return
+    }
+
+    this.meetingLifecycleState = 'starting'
+    const startSequence = ++this.meetingStartSequence
+
+    try {
+      await this.validateMeetingAudioSetup(metadata);
+    } catch (error) {
+      this.meetingLifecycleState = 'idle'
+      throw error
+    }
 
     this.isMeetingActive = true;
     if (metadata) {
@@ -1027,10 +1075,20 @@ export class AppState {
     // without waiting for SCK/audio initialization (which takes 5-7 seconds).
     // setTimeout(100) ensures setWindowMode IPC is processed first.
     setTimeout(async () => {
+      if (startSequence !== this.meetingStartSequence || this.meetingLifecycleState !== 'starting') {
+        console.warn('[Main] Skipping stale deferred meeting start')
+        return
+      }
+
       try {
         // Check for audio configuration preference
         if (metadata?.audio) {
           await this.reconfigureAudio(metadata.audio.inputDeviceId, metadata.audio.outputDeviceId);
+        }
+
+        if (startSequence !== this.meetingStartSequence || this.meetingLifecycleState !== 'starting') {
+          console.warn('[Main] Meeting start invalidated during async initialization')
+          return
         }
 
         // LAZY INIT: Ensure pipeline is ready (if not reconfigured above)
@@ -1050,6 +1108,7 @@ export class AppState {
         }
 
         this.setNativeAudioConnected(true);
+        this.meetingLifecycleState = 'active'
         console.log('[Main] Audio pipeline started successfully.');
       } catch (err) {
         console.error('[Main] Error initializing audio pipeline:', err);
@@ -1057,12 +1116,15 @@ export class AppState {
         this.setNativeAudioConnected(false);
         this.broadcast('meeting-audio-error', (err as Error).message || 'Audio pipeline failed to start');
         this.isMeetingActive = false;
+        this.meetingLifecycleState = 'idle'
       }
     }, 0); // Defer to next event loop tick — ensures IPC response reaches renderer before audio init
   }
 
   public async endMeeting(): Promise<void> {
     console.log('[Main] Ending Meeting...');
+    this.meetingStartSequence += 1
+    this.meetingLifecycleState = 'stopping'
     this.isMeetingActive = false; // Block new data immediately
     this.setNativeAudioConnected(false);
 
@@ -1113,6 +1175,60 @@ export class AppState {
     if (this.ragManager) {
       this.ragManager.deleteMeetingData('live-meeting-current');
     }
+
+    this.meetingLifecycleState = 'idle'
+  }
+
+  public cleanupForQuit(): void {
+    this.meetingStartSequence += 1
+    this.meetingLifecycleState = 'idle'
+    this.isMeetingActive = false
+    this.setNativeAudioConnected(false)
+
+    try {
+      this.systemAudioCapture?.stop()
+    } catch (error) {
+      console.error('[Main] Failed to stop system audio during quit:', error)
+    }
+
+    try {
+      this.googleSTT?.stop()
+      this.googleSTT?.destroy?.()
+    } catch (error) {
+      console.error('[Main] Failed to stop interviewer STT during quit:', error)
+    }
+
+    try {
+      this.microphoneCapture?.stop()
+    } catch (error) {
+      console.error('[Main] Failed to stop microphone capture during quit:', error)
+    }
+
+    try {
+      this.googleSTT_User?.stop()
+      this.googleSTT_User?.destroy?.()
+    } catch (error) {
+      console.error('[Main] Failed to stop user STT during quit:', error)
+    }
+
+    try {
+      this.audioTestCapture?.stop()
+    } catch (error) {
+      console.error('[Main] Failed to stop audio test capture during quit:', error)
+    }
+
+    this.systemAudioCapture = null
+    this.microphoneCapture = null
+    this.audioTestCapture = null
+    this.googleSTT = null
+    this.googleSTT_User = null
+
+    this.ragManager?.stopLiveIndexing().catch(err => {
+      console.error('[Main] Failed to stop live indexing during quit:', err)
+    })
+    this.intelligenceManager.stopMeeting().catch(err => {
+      console.error('[Main] Failed to stop intelligence manager during quit:', err)
+    })
   }
 
   private async processCompletedMeetingForRAG(): Promise<void> {
@@ -1638,14 +1754,9 @@ export class AppState {
     // Persist state via SettingsManager
     SettingsManager.getInstance().set('isUndetectable', state);
 
-    // Cancel all pending disguise timers to prevent their app.setName() calls
-    // from re-registering the dock icon after we hide it
-    if (state) {
-      for (const timer of this._disguiseTimers) {
-        clearTimeout(timer);
-      }
-      this._disguiseTimers = [];
-    }
+    // Cancel pending disguise timers from prior dock/disguise transitions so
+    // stale blur-reset or app.setName() callbacks cannot fire after a rapid toggle.
+    this.clearDisguiseTimers()
 
     // Broadcast state change to all relevant windows
     this._broadcastToAllWindows('undetectable-changed', state);
@@ -1675,6 +1786,8 @@ export class AppState {
 
       if (state) {
         console.log('[Stealth] Calling app.dock.hide()');
+        this.settingsWindowHelper.closeWindow();
+        this.modelSelectorWindowHelper.hideWindow();
         app.dock.hide();
         this.hideTray();
 
@@ -1696,20 +1809,40 @@ export class AppState {
 
       // Re-enable blur handling after the transition logic has settled
       if (targetFocusWindow && (targetFocusWindow === settingsWindow)) {
-        setTimeout(() => {
+        this.scheduleDisguiseTimer(() => {
           this.settingsWindowHelper.setIgnoreBlur(false);
-        }, 500);
+        }, 500)
       }
       if (isModelSelectorVisible) {
-        setTimeout(() => {
+        this.scheduleDisguiseTimer(() => {
           this.modelSelectorWindowHelper.setIgnoreBlur(false);
-        }, 500);
+        }, 500)
       }
     }
   }
 
   public getUndetectable(): boolean {
     return this.isUndetectable
+  }
+
+  public setConsciousModeEnabled(enabled: boolean): boolean {
+    if (this.consciousModeEnabled === enabled) {
+      return true
+    }
+
+    const persisted = SettingsManager.getInstance().set('consciousModeEnabled', enabled)
+    if (!persisted) {
+      throw new Error('Unable to persist Conscious Mode')
+    }
+
+    this.consciousModeEnabled = enabled
+    this.intelligenceManager.setConsciousModeEnabled(enabled)
+    this._broadcastToAllWindows('conscious-mode-changed', enabled)
+    return true
+  }
+
+  public getConsciousModeEnabled(): boolean {
+    return this.consciousModeEnabled
   }
 
   public setDisguise(mode: 'terminal' | 'settings' | 'activity' | 'none'): void {
@@ -1849,10 +1982,7 @@ export class AppState {
     }
 
     // Cancel any stale forceUpdate timeouts from previous disguise changes
-    for (const timer of this._disguiseTimers) {
-      clearTimeout(timer);
-    }
-    this._disguiseTimers = [];
+    this.clearDisguiseTimers()
 
     // Force periodic updates to ensure process title sticks
     const forceUpdate = () => {
@@ -1863,13 +1993,10 @@ export class AppState {
       }
     };
 
-    // Helper to queue a timeout and remove it from array once executed smoothly
     const scheduleUpdate = (ms: number) => {
-      const ts = setTimeout(() => {
+      this.scheduleDisguiseTimer(() => {
         forceUpdate();
-        this._disguiseTimers = this._disguiseTimers.filter(t => t !== ts);
-      }, ms);
-      this._disguiseTimers.push(ts);
+      }, ms)
     };
 
     scheduleUpdate(200);
@@ -2029,6 +2156,9 @@ async function initializeApp() {
   // Scrub API keys from memory on quit to minimize exposure window
   app.on("before-quit", () => {
     console.log("App is quitting, cleaning up resources...");
+    appState.cleanupForQuit();
+    globalShortcut.unregisterAll();
+
     // Kill Ollama if we started it
     OllamaManager.getInstance().stop();
 

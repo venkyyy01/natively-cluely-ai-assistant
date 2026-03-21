@@ -2,6 +2,7 @@ import { LLMHelper } from "../LLMHelper";
 import { UNIVERSAL_WHAT_TO_ANSWER_PROMPT } from "./prompts";
 import { TemporalContext } from "./TemporalContextBuilder";
 import { IntentResult } from "./IntentClassifier";
+import { ConsciousModeStructuredResponse, parseConsciousModeResponse } from "../ConsciousMode";
 
 export class WhatToAnswerLLM {
     private llmHelper: LLMHelper;
@@ -61,5 +62,42 @@ ANSWER SHAPE: ${intentResult.answerShape}
             console.error("[WhatToAnswerLLM] Stream failed:", error);
             yield "Could you repeat that? I want to make sure I address your question properly.";
         }
+    }
+
+    async generateReasoningFirst(
+        cleanedTranscript: string,
+        question: string,
+        temporalContext?: TemporalContext,
+        intentResult?: IntentResult,
+        imagePaths?: string[]
+    ): Promise<ConsciousModeStructuredResponse> {
+        let full = "";
+
+        const contextParts: string[] = [
+            'STRUCTURED_REASONING_RESPONSE',
+            'Return JSON with keys: mode, openingReasoning, implementationPlan, tradeoffs, edgeCases, scaleConsiderations, pushbackResponses, likelyFollowUps, codeTransition.',
+            'Set mode to reasoning_first.',
+            `QUESTION: ${question}`,
+        ];
+
+        if (intentResult) {
+            contextParts.push(`INTENT: ${intentResult.intent}`);
+            contextParts.push(`ANSWER_SHAPE: ${intentResult.answerShape}`);
+        }
+
+        if (temporalContext?.hasRecentResponses) {
+            contextParts.push(`PREVIOUS_RESPONSES: ${temporalContext.previousResponses.join(' | ')}`);
+        }
+
+        contextParts.push(`CONVERSATION:\n${cleanedTranscript}`);
+
+        const message = contextParts.join('\n\n');
+        const stream = this.llmHelper.streamChat(message, imagePaths, undefined, UNIVERSAL_WHAT_TO_ANSWER_PROMPT);
+
+        for await (const chunk of stream) {
+            full += chunk;
+        }
+
+        return parseConsciousModeResponse(full);
     }
 }

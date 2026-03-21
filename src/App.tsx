@@ -1,384 +1,227 @@
-import React, { useState, useEffect } from "react" // forcing refresh
-import { QueryClient, QueryClientProvider } from "react-query"
-import { ToastProvider, ToastViewport } from "./components/ui/toast"
-import NativelyInterface from "./components/NativelyInterface"
-import SettingsPopup from "./components/SettingsPopup" // Keeping for legacy/specific window support if needed
-import Launcher from "./components/Launcher"
-import ModelSelectorWindow from "./components/ModelSelectorWindow"
-import SettingsOverlay from "./components/SettingsOverlay"
-import StartupSequence from "./components/StartupSequence"
-import { AnimatePresence, motion } from "framer-motion"
-import UpdateBanner from "./components/UpdateBanner"
-import { AlertCircle } from "lucide-react"
-import { analytics } from "./lib/analytics/analytics.service"
-import { ErrorBoundary } from "./components/ErrorBoundary"
+import React, { useEffect, useState } from 'react'
+import { QueryClient, QueryClientProvider } from 'react-query'
+import { AnimatePresence, motion } from 'framer-motion'
+import { AlertCircle } from 'lucide-react'
+import { ErrorBoundary } from './components/ErrorBoundary'
+import Launcher from './components/Launcher'
+import ModelSelectorWindow from './components/ModelSelectorWindow'
+import NativelyInterface from './components/NativelyInterface'
+import SettingsOverlay from './components/SettingsOverlay'
+import SettingsPopup from './components/SettingsPopup'
+import StartupSequence from './components/StartupSequence'
+import UpdateBanner from './components/UpdateBanner'
+import { ToastProvider, ToastViewport } from './components/ui/toast'
+import {
+  getCurrentEnvironment,
+  getProfileToasterThresholdMs,
+  getWindowAnalyticsPlan,
+  resolveWindowContext,
+  shouldListenForOverlayOpacity,
+  type AppWindowContext,
+} from './appBootstrap'
+import { analytics } from './lib/analytics/analytics.service'
+import { getElectronAPI } from './lib/electronApi'
 
 const queryClient = new QueryClient()
 
-const App: React.FC = () => {
-  const isSettingsWindow = new URLSearchParams(window.location.search).get('window') === 'settings';
-  const isLauncherWindow = new URLSearchParams(window.location.search).get('window') === 'launcher';
-  const isOverlayWindow = new URLSearchParams(window.location.search).get('window') === 'overlay';
-  const isModelSelectorWindow = new URLSearchParams(window.location.search).get('window') === 'model-selector';
+const AppProviders: React.FC<{ children: React.ReactNode }> = ({ children }) => (
+  <QueryClientProvider client={queryClient}>
+    <ToastProvider>
+      {children}
+      <ToastViewport />
+    </ToastProvider>
+  </QueryClientProvider>
+)
 
-  // Default to launcher if not specified (dev mode safety)
-  const isDefault = !isSettingsWindow && !isOverlayWindow && !isModelSelectorWindow;
+type MeetingAudioBannerProps = {
+  message: string
+  title: string
+  variant: 'overlay' | 'launcher'
+  onDismiss: () => void
+}
 
-  // Initialize Analytics
-  useEffect(() => {
-    // Only init if we are in a main window context to avoid duplicate events from helper windows
-    // Actually, we probably want to track app open from the main entry point.
-    // Let's protect initialization to ensure single run per window.
-    // The service handles single-init, but let's be thoughtful about WHICH window tracks "App Open".
-    // Launcher is the main entry. Overlay is the "Assistant".
-
-    analytics.initAnalytics();
-
-    if (isLauncherWindow || isDefault) {
-      analytics.trackAppOpen();
-    }
-
-    if (isOverlayWindow) {
-      analytics.trackAssistantStart();
-    }
-
-    // Cleanup / Session End
-    const handleUnload = () => {
-      if (isOverlayWindow) {
-        analytics.trackAssistantStop();
+const MeetingAudioBanner: React.FC<MeetingAudioBannerProps> = ({ message, title, variant, onDismiss }) => {
+  const motionProps = variant === 'overlay'
+    ? {
+        initial: { opacity: 0, y: -12, scale: 0.98 },
+        animate: { opacity: 1, y: 0, scale: 1 },
+        exit: { opacity: 0, y: -8, scale: 0.98 },
+        className: 'absolute left-3 right-3 top-3 z-50',
+        containerClassName: 'rounded-2xl border border-[#ff3333]/35 bg-[#1A1A1A]/95 px-4 py-3 shadow-2xl backdrop-blur-md',
       }
-      if (isLauncherWindow || isDefault) {
-        analytics.trackAppClose();
-      }
-    };
-
-    window.addEventListener('beforeunload', handleUnload);
-    return () => {
-      window.removeEventListener('beforeunload', handleUnload);
-    };
-  }, [isLauncherWindow, isOverlayWindow, isDefault]);
-
-  // State
-  const [showStartup, setShowStartup] = useState(true);
-  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-  const [settingsInitialTab, setSettingsInitialTab] = useState('general');
-
-  // Overlay opacity — only meaningful when isOverlayWindow, but stored centrally
-  // so it can be initialized once from localStorage and updated via IPC.
-  const [overlayOpacity, setOverlayOpacity] = useState<number>(() => {
-    const stored = localStorage.getItem('natively_overlay_opacity');
-    return stored ? parseFloat(stored) : 0.65;
-  });
-  
-  const [isLauncherMainView, setIsLauncherMainView] = useState(true);
-
-  const [isProcessingMeeting, setIsProcessingMeeting] = useState<boolean>(false);
-  
-  // Ollama Auto-Pull State
-  const [ollamaPullStatus, setOllamaPullStatus] = useState<'idle' | 'downloading' | 'complete' | 'failed'>('idle');
-  const [ollamaPullPercent, setOllamaPullPercent] = useState<number>(0);
-  const [ollamaPullMessage, setOllamaPullMessage] = useState<string>('');
-
-  // Re-index State
-  const [incompatibleWarning, setIncompatibleWarning] = useState<{count: number; oldProvider: string; newProvider: string} | null>(null);
-  const [meetingAudioError, setMeetingAudioError] = useState<string | null>(null);
-
-  useEffect(() => {
-    // Clean up old local storage
-    localStorage.removeItem('useLegacyAudioBackend');
-
-    const removeMeetingsListener = window.electronAPI?.onMeetingsUpdated?.(() => {
-      console.log("[App.tsx] Meetings updated (processing finished)");
-      setIsProcessingMeeting(false);
-    });
-
-    // Listen for Ollama Auto-Pull Progress
-    let removeProgress: (() => void) | undefined;
-    let removeComplete: (() => void) | undefined;
-    if (window.electronAPI?.onOllamaPullProgress && window.electronAPI?.onOllamaPullComplete) {
-      removeProgress = window.electronAPI.onOllamaPullProgress((data) => {
-        setOllamaPullStatus('downloading');
-        setOllamaPullPercent(data.percent || 0);
-        setOllamaPullMessage(data.status || 'Downloading...');
-      });
-
-      removeComplete = window.electronAPI.onOllamaPullComplete(() => {
-        setOllamaPullStatus('complete');
-        setOllamaPullMessage('Local AI memory ready');
-        setOllamaPullPercent(100);
-        setTimeout(() => setOllamaPullStatus('idle'), 3000);
-      });
-    }
-
-    let removeWarning: (() => void) | undefined;
-    if (window.electronAPI?.onIncompatibleProviderWarning) {
-      removeWarning = window.electronAPI.onIncompatibleProviderWarning((data) => {
-        setIncompatibleWarning(data);
-      });
-    }
-
-    let removeMeetingAudioError: (() => void) | undefined;
-    if (window.electronAPI?.onMeetingAudioError) {
-      removeMeetingAudioError = window.electronAPI.onMeetingAudioError((message) => {
-        setMeetingAudioError(message);
-      });
-    }
-
-    return () => {
-      if (removeMeetingsListener) removeMeetingsListener();
-      if (removeProgress) removeProgress();
-      if (removeComplete) removeComplete();
-      if (removeWarning) removeWarning();
-      if (removeMeetingAudioError) removeMeetingAudioError();
-    }
-  }, []);
-
-  // Listen for overlay opacity changes — scoped to overlay window only
-  useEffect(() => {
-    if (!isOverlayWindow) return;
-    const removeOpacityListener = window.electronAPI?.onOverlayOpacityChanged?.((opacity) => {
-      setOverlayOpacity(opacity);
-    });
-    return () => {
-      if (removeOpacityListener) removeOpacityListener();
-    };
-  }, [isOverlayWindow]);
-
-  // Handlers
-  const handleReindex = async () => {
-    if (window.electronAPI?.reindexIncompatibleMeetings) {
-      setIncompatibleWarning(null);
-      await window.electronAPI.reindexIncompatibleMeetings();
-    }
-  };
-
-  const handleStartMeeting = async () => {
-    try {
-      setMeetingAudioError(null);
-      localStorage.setItem('natively_last_meeting_start', Date.now().toString());
-      const inputDeviceId = localStorage.getItem('preferredInputDeviceId');
-      let outputDeviceId = localStorage.getItem('preferredOutputDeviceId');
-      const useExperimentalSck = localStorage.getItem('useExperimentalSckBackend') === 'true';
-
-      // Override output device ID to force SCK if experimental mode is enabled
-      // Default to CoreAudio unless experimental is enabled
-      if (useExperimentalSck) {
-        console.log("[App] Using ScreenCaptureKit backend (Experimental).");
-        outputDeviceId = "sck";
-      } else {
-        console.log("[App] Using CoreAudio backend (Default).");
+    : {
+        initial: { opacity: 0, y: 16, scale: 0.98 },
+        animate: { opacity: 1, y: 0, scale: 1 },
+        exit: { opacity: 0, y: 8, scale: 0.98 },
+        className: 'pointer-events-none absolute left-6 right-6 top-6 z-40',
+        containerClassName: 'pointer-events-auto rounded-2xl border border-[#ff3333]/35 bg-[#1A1A1A]/96 px-5 py-4 shadow-2xl backdrop-blur-md',
       }
 
-      const result = await window.electronAPI.startMeeting({
-        audio: { inputDeviceId, outputDeviceId }
-      });
-      if (result.success) {
-        analytics.trackMeetingStarted();
-        // Switch to Overlay Mode via IPC
-        // The main process handles window switching, but we can reinforce it or just trust main.
-        // Actually, main process startMeeting triggers nothing UI-wise unless we tell it to switch window
-        // But we configured main.ts to not auto-switch?
-        // Let's explicitly request mode change.
-        await window.electronAPI.setWindowMode('overlay');
-      } else {
-        console.error("Failed to start meeting:", result.error);
-        setMeetingAudioError(result.error || 'Audio pipeline failed to start.');
-      }
-    } catch (err) {
-      console.error("Failed to start meeting:", err);
-      setMeetingAudioError(err instanceof Error ? err.message : 'Audio pipeline failed to start.');
-    }
-  };
-
-  const handleEndMeeting = async () => {
-    console.log("[App.tsx] handleEndMeeting triggered");
-    analytics.trackMeetingEnded();
-    setIsProcessingMeeting(true);
-    setMeetingAudioError(null);
-    try {
-      await window.electronAPI.endMeeting();
-      console.log("[App.tsx] endMeeting IPC completed");
-      
-      const startStr = localStorage.getItem('natively_last_meeting_start');
-      if (startStr) {
-        const duration = Date.now() - parseInt(startStr, 10);
-        const threshold = import.meta.env.DEV ? 10000 : 180000;
-        if (duration >= threshold) {
-          localStorage.setItem('natively_show_profile_toaster', 'true');
-        }
-        localStorage.removeItem('natively_last_meeting_start');
-      }
-
-      // Switch back to Native Launcher Mode
-      // (Ad delay tracking moved to onMeetingsUpdated listener so ads wait for note generation to finish)
-      await window.electronAPI.setWindowMode('launcher');
-    } catch (err) {
-      console.error("Failed to end meeting:", err);
-      window.electronAPI.setWindowMode('launcher');
-    }
-  };
-
-  // Render Logic
-  if (isSettingsWindow) {
-    return (
-      <ErrorBoundary context="SettingsPopup">
-        <div className="h-full min-h-0 w-full">
-          <QueryClientProvider client={queryClient}>
-            <ToastProvider>
-              <SettingsPopup />
-              <ToastViewport />
-            </ToastProvider>
-          </QueryClientProvider>
-        </div>
-      </ErrorBoundary>
-    );
-  }
-
-  if (isModelSelectorWindow) {
-    return (
-      <ErrorBoundary context="ModelSelector">
-        <div className="h-full min-h-0 w-full overflow-hidden">
-          <QueryClientProvider client={queryClient}>
-            <ToastProvider>
-              <ModelSelectorWindow />
-              <ToastViewport />
-            </ToastProvider>
-          </QueryClientProvider>
-        </div>
-      </ErrorBoundary>
-    );
-  }
-
-  // --- OVERLAY WINDOW (Meeting Interface) ---
-  if (isOverlayWindow) {
-    return (
-      <ErrorBoundary context="Overlay">
-        <div className="w-full relative bg-transparent">
-          <QueryClientProvider client={queryClient}>
-            <ToastProvider>
-              <AnimatePresence>
-                {meetingAudioError && (
-                  <motion.div
-                    initial={{ opacity: 0, y: -12, scale: 0.98 }}
-                    animate={{ opacity: 1, y: 0, scale: 1 }}
-                    exit={{ opacity: 0, y: -8, scale: 0.98 }}
-                    className="absolute left-3 right-3 top-3 z-50"
-                  >
-                    <div className="rounded-2xl border border-[#ff3333]/35 bg-[#1A1A1A]/95 px-4 py-3 shadow-2xl backdrop-blur-md">
-                      <div className="flex items-start gap-3">
-                        <AlertCircle className="mt-0.5 h-5 w-5 shrink-0 text-[#ff3333]" />
-                        <div className="min-w-0 flex-1">
-                          <p className="text-sm font-semibold text-[#F4F4F4]">Audio startup failed</p>
-                          <p className="mt-1 text-xs leading-relaxed text-[#B8B8B8]">{meetingAudioError}</p>
-                        </div>
-                        <button
-                          onClick={() => setMeetingAudioError(null)}
-                          className="text-xs font-medium text-[#A0A0A0] transition-colors hover:text-white"
-                        >
-                          Dismiss
-                        </button>
-                      </div>
-                    </div>
-                  </motion.div>
-                )}
-              </AnimatePresence>
-              <div style={{ opacity: overlayOpacity, transition: 'opacity 75ms ease' }}>
-                <NativelyInterface
-                  onEndMeeting={handleEndMeeting}
-                />
-              </div>
-              <ToastViewport />
-            </ToastProvider>
-          </QueryClientProvider>
-        </div>
-      </ErrorBoundary>
-    );
-  }
-
-  // --- LAUNCHER WINDOW (Default) ---
-  // Renders if window=launcher OR no param
   return (
-    <ErrorBoundary context="Launcher">
+    <motion.div
+      initial={motionProps.initial}
+      animate={motionProps.animate}
+      exit={motionProps.exit}
+      className={motionProps.className}
+    >
+      <div className={motionProps.containerClassName}>
+        <div className="flex items-start gap-3">
+          <AlertCircle className="mt-0.5 h-5 w-5 shrink-0 text-[#ff3333]" />
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-semibold text-[#F4F4F4]">{title}</p>
+            <p className="mt-1 text-xs leading-relaxed text-[#B8B8B8]">{message}</p>
+          </div>
+          <button
+            onClick={onDismiss}
+            className="text-xs font-medium text-[#A0A0A0] transition-colors hover:text-white"
+          >
+            Dismiss
+          </button>
+        </div>
+      </div>
+    </motion.div>
+  )
+}
+
+type OverlayWindowContentProps = {
+  meetingAudioError: string | null
+  overlayOpacity: number
+  onClearMeetingAudioError: () => void
+  onEndMeeting: () => Promise<void>
+}
+
+const OverlayWindowContent: React.FC<OverlayWindowContentProps> = ({
+  meetingAudioError,
+  overlayOpacity,
+  onClearMeetingAudioError,
+  onEndMeeting,
+}) => (
+  <ErrorBoundary context="Overlay">
+    <div className="w-full relative bg-transparent">
+      <AppProviders>
+        <AnimatePresence>
+          {meetingAudioError && (
+            <MeetingAudioBanner
+              message={meetingAudioError}
+              title="Audio startup failed"
+              variant="overlay"
+              onDismiss={onClearMeetingAudioError}
+            />
+          )}
+        </AnimatePresence>
+        <div style={{ opacity: overlayOpacity, transition: 'opacity 75ms ease' }}>
+          <NativelyInterface onEndMeeting={onEndMeeting} />
+        </div>
+      </AppProviders>
+    </div>
+  </ErrorBoundary>
+)
+
+type LauncherWindowContentProps = {
+  incompatibleWarning: { count: number; oldProvider: string; newProvider: string } | null
+  isDefaultLauncherWindow: boolean
+  isSettingsOpen: boolean
+  meetingAudioError: string | null
+  ollamaPullMessage: string
+  ollamaPullPercent: number
+  ollamaPullStatus: 'idle' | 'downloading' | 'complete' | 'failed'
+  settingsInitialTab: string
+  showStartup: boolean
+  onClearIncompatibleWarning: () => void
+  onClearMeetingAudioError: () => void
+  onOpenSettings: (tab?: string) => void
+  onPageChange: (isMainView: boolean) => void
+  onReindex: () => Promise<void>
+  onSetShowStartup: (show: boolean) => void
+  onStartMeeting: () => Promise<void>
+  onToggleSettings: (open: boolean) => void
+}
+
+const LauncherWindowContent: React.FC<LauncherWindowContentProps> = ({
+  incompatibleWarning,
+  isDefaultLauncherWindow,
+  isSettingsOpen,
+  meetingAudioError,
+  ollamaPullMessage,
+  ollamaPullPercent,
+  ollamaPullStatus,
+  settingsInitialTab,
+  showStartup,
+  onClearIncompatibleWarning,
+  onClearMeetingAudioError,
+  onOpenSettings,
+  onPageChange,
+  onReindex,
+  onSetShowStartup,
+  onStartMeeting,
+  onToggleSettings,
+}) => (
+  <ErrorBoundary context="Launcher">
     <div className="h-full min-h-0 w-full relative">
       <AnimatePresence>
         {showStartup ? (
           <motion.div
             key="startup"
             initial={{ opacity: 1 }}
-            exit={{ opacity: 0, scale: 1.1, pointerEvents: "none", transition: { duration: 0.6, ease: "easeInOut" } }}
+            exit={{ opacity: 0, scale: 1.1, pointerEvents: 'none', transition: { duration: 0.6, ease: 'easeInOut' } }}
           >
-            <StartupSequence onComplete={() => setShowStartup(false)} />
+            <StartupSequence onComplete={() => onSetShowStartup(false)} />
           </motion.div>
         ) : (
           <motion.div
             key="main"
             className="h-full w-full"
-            initial={{ opacity: 0, scale: 0.98, y: 15 }} // "Linear" style entry: slightly down and scaled down
-            animate={{ opacity: 1, scale: 1, y: 0 }}      // Slide up and snap to place
+            initial={{ opacity: 0, scale: 0.98, y: 15 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
             transition={{
               duration: 0.8,
-              ease: [0.19, 1, 0.22, 1], // Expo-out: snappy start, smooth landing
-              delay: 0.1
+              ease: [0.19, 1, 0.22, 1],
+              delay: 0.1,
             }}
           >
-            <QueryClientProvider client={queryClient}>
-              <ToastProvider>
-                <div id="launcher-container" className="h-full w-full relative">
-                  <AnimatePresence>
-                    {meetingAudioError && (
-                      <motion.div
-                        initial={{ opacity: 0, y: 16, scale: 0.98 }}
-                        animate={{ opacity: 1, y: 0, scale: 1 }}
-                        exit={{ opacity: 0, y: 8, scale: 0.98 }}
-                        className="pointer-events-none absolute left-6 right-6 top-6 z-40"
-                      >
-                        <div className="pointer-events-auto rounded-2xl border border-[#ff3333]/35 bg-[#1A1A1A]/96 px-5 py-4 shadow-2xl backdrop-blur-md">
-                          <div className="flex items-start gap-3">
-                            <AlertCircle className="mt-0.5 h-5 w-5 shrink-0 text-[#ff3333]" />
-                            <div className="min-w-0 flex-1">
-                              <p className="text-sm font-semibold text-[#F4F4F4]">Audio setup needs attention</p>
-                              <p className="mt-1 text-xs leading-relaxed text-[#B8B8B8]">{meetingAudioError}</p>
-                            </div>
-                            <button
-                              onClick={() => setMeetingAudioError(null)}
-                              className="text-xs font-medium text-[#A0A0A0] transition-colors hover:text-white"
-                            >
-                              Dismiss
-                            </button>
-                          </div>
-                        </div>
-                      </motion.div>
-                    )}
-                  </AnimatePresence>
-                  <Launcher
-                    onStartMeeting={handleStartMeeting}
-                    onOpenSettings={(tab = 'general') => {
-                      setSettingsInitialTab(tab);
-                      setIsSettingsOpen(true);
-                    }}
-                    onPageChange={setIsLauncherMainView}
-                    ollamaPullStatus={ollamaPullStatus}
-                    ollamaPullPercent={ollamaPullPercent}
-                    ollamaPullMessage={ollamaPullMessage}
+            <AppProviders>
+              <AnimatePresence>
+                {meetingAudioError && (
+                  <MeetingAudioBanner
+                    message={meetingAudioError}
+                    title="Audio setup needs attention"
+                    variant="launcher"
+                    onDismiss={onClearMeetingAudioError}
                   />
-                </div>
-                <SettingsOverlay
-                  isOpen={isSettingsOpen}
-                  onClose={() => {
-                    setIsSettingsOpen(false);
-                  }}
-                  initialTab={settingsInitialTab}
+                )}
+              </AnimatePresence>
+              <div id="launcher-container" className="h-full w-full relative">
+                <AnimatePresence>
+                  {meetingAudioError && (
+                    <MeetingAudioBanner
+                      message={meetingAudioError}
+                      title="Audio setup needs attention"
+                      variant="launcher"
+                      onDismiss={onClearMeetingAudioError}
+                    />
+                  )}
+                </AnimatePresence>
+                <Launcher
+                  onStartMeeting={onStartMeeting}
+                  onOpenSettings={onOpenSettings}
+                  onPageChange={onPageChange}
+                  ollamaPullStatus={ollamaPullStatus}
+                  ollamaPullPercent={ollamaPullPercent}
+                  ollamaPullMessage={ollamaPullMessage}
                 />
-                <ToastViewport />
-              </ToastProvider>
-            </QueryClientProvider>
+              </div>
+              <SettingsOverlay
+                isOpen={isSettingsOpen}
+                onClose={() => onToggleSettings(false)}
+                initialTab={settingsInitialTab}
+              />
+            </AppProviders>
           </motion.div>
         )}
       </AnimatePresence>
 
-
       <AnimatePresence>
-        {incompatibleWarning && isDefault && (
+        {incompatibleWarning && isDefaultLauncherWindow && (
           <motion.div
             initial={{ opacity: 0, y: 50, scale: 0.95 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
@@ -391,19 +234,19 @@ const App: React.FC = () => {
                 <div>
                   <h3 className="text-[#E0E0E0] font-medium text-sm">Provider Changed</h3>
                   <p className="text-[#A0A0A0] text-xs mt-1 leading-relaxed">
-                    ⚠ {incompatibleWarning.count} meetings used your previous AI provider ({incompatibleWarning.oldProvider}) and won't appear in search results under {incompatibleWarning.newProvider}.
+                    {incompatibleWarning.count} meetings used your previous AI provider ({incompatibleWarning.oldProvider}) and won't appear in search results under {incompatibleWarning.newProvider}.
                   </p>
                 </div>
               </div>
               <div className="flex gap-2 mt-1 justify-end">
-                <button 
-                  onClick={() => setIncompatibleWarning(null)}
+                <button
+                  onClick={onClearIncompatibleWarning}
                   className="px-3 py-1.5 rounded-lg text-xs font-medium text-[#A0A0A0] hover:text-white hover:bg-white/5 transition-colors"
                 >
                   Dismiss
                 </button>
-                <button 
-                  onClick={handleReindex}
+                <button
+                  onClick={onReindex}
                   className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-[#ff3333]/10 text-[#ff3333] hover:bg-[#ff3333]/20 transition-colors"
                 >
                   Re-index automatically
@@ -416,7 +259,252 @@ const App: React.FC = () => {
 
       <UpdateBanner />
     </div>
-    </ErrorBoundary>
+  </ErrorBoundary>
+)
+
+const useWindowAnalytics = ({ kind, isDefaultLauncherWindow }: AppWindowContext) => {
+  useEffect(() => {
+    const analyticsPlan = getWindowAnalyticsPlan({ kind, isDefaultLauncherWindow })
+
+    analytics.initAnalytics()
+
+    if (analyticsPlan.trackAppLifecycle) {
+      analytics.trackAppOpen()
+    }
+
+    if (analyticsPlan.trackAssistantLifecycle) {
+      analytics.trackAssistantStart()
+    }
+
+    const handleUnload = () => {
+      if (analyticsPlan.trackAssistantLifecycle) {
+        analytics.trackAssistantStop()
+      }
+
+      if (analyticsPlan.trackAppLifecycle) {
+        analytics.trackAppClose()
+      }
+    }
+
+    window.addEventListener('beforeunload', handleUnload)
+
+    return () => {
+      window.removeEventListener('beforeunload', handleUnload)
+    }
+  }, [kind, isDefaultLauncherWindow])
+}
+
+const App: React.FC = () => {
+  const windowContext = resolveWindowContext(window.location.search)
+  const { kind: windowKind, isDefaultLauncherWindow } = windowContext
+
+  useWindowAnalytics(windowContext)
+
+  const [showStartup, setShowStartup] = useState(true)
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false)
+  const [settingsInitialTab, setSettingsInitialTab] = useState('general')
+  const [overlayOpacity, setOverlayOpacity] = useState<number>(() => {
+    const stored = localStorage.getItem('natively_overlay_opacity')
+    return stored ? parseFloat(stored) : 0.65
+  })
+
+  const [isLauncherMainView, setIsLauncherMainView] = useState(true)
+
+  const [isProcessingMeeting, setIsProcessingMeeting] = useState<boolean>(false)
+
+  const [ollamaPullStatus, setOllamaPullStatus] = useState<'idle' | 'downloading' | 'complete' | 'failed'>('idle')
+  const [ollamaPullPercent, setOllamaPullPercent] = useState<number>(0)
+  const [ollamaPullMessage, setOllamaPullMessage] = useState<string>('')
+
+  const [incompatibleWarning, setIncompatibleWarning] = useState<{ count: number; oldProvider: string; newProvider: string } | null>(null)
+  const [meetingAudioError, setMeetingAudioError] = useState<string | null>(null)
+  const electronAPI = getElectronAPI()
+
+  useEffect(() => {
+    localStorage.removeItem('useLegacyAudioBackend')
+
+    const removeMeetingsListener = electronAPI.onMeetingsUpdated(() => {
+      console.log('[App.tsx] Meetings updated (processing finished)')
+      setIsProcessingMeeting(false)
+    })
+
+    let removeProgress: (() => void) | undefined
+    let removeComplete: (() => void) | undefined
+    if (electronAPI.onOllamaPullProgress && electronAPI.onOllamaPullComplete) {
+      removeProgress = electronAPI.onOllamaPullProgress((data) => {
+        setOllamaPullStatus('downloading')
+        setOllamaPullPercent(data.percent || 0)
+        setOllamaPullMessage(data.status || 'Downloading...')
+      })
+
+      removeComplete = electronAPI.onOllamaPullComplete(() => {
+        setOllamaPullStatus('complete')
+        setOllamaPullMessage('Local AI memory ready')
+        setOllamaPullPercent(100)
+        setTimeout(() => setOllamaPullStatus('idle'), 3000)
+      })
+    }
+
+    let removeWarning: (() => void) | undefined
+    if (electronAPI.onIncompatibleProviderWarning) {
+      removeWarning = electronAPI.onIncompatibleProviderWarning((data) => {
+        setIncompatibleWarning(data)
+      })
+    }
+
+    let removeMeetingAudioError: (() => void) | undefined
+    if (electronAPI.onMeetingAudioError) {
+      removeMeetingAudioError = electronAPI.onMeetingAudioError((message) => {
+        setMeetingAudioError(message)
+      })
+    }
+
+    return () => {
+      if (removeMeetingsListener) removeMeetingsListener()
+      if (removeProgress) removeProgress()
+      if (removeComplete) removeComplete()
+      if (removeWarning) removeWarning()
+      if (removeMeetingAudioError) removeMeetingAudioError()
+    }
+  }, [electronAPI])
+
+  useEffect(() => {
+    if (!shouldListenForOverlayOpacity(windowContext)) return
+
+    const removeOpacityListener = electronAPI.onOverlayOpacityChanged?.((opacity) => {
+      setOverlayOpacity(opacity)
+    })
+
+    return () => {
+      if (removeOpacityListener) removeOpacityListener()
+    }
+  }, [electronAPI, windowContext, windowKind])
+
+  const handleReindex = async () => {
+    if (window.electronAPI?.reindexIncompatibleMeetings) {
+      setIncompatibleWarning(null)
+      await window.electronAPI.reindexIncompatibleMeetings()
+    }
+  }
+
+  const handleStartMeeting = async () => {
+    try {
+      setMeetingAudioError(null)
+      localStorage.setItem('natively_last_meeting_start', Date.now().toString())
+      const inputDeviceId = localStorage.getItem('preferredInputDeviceId')
+      let outputDeviceId = localStorage.getItem('preferredOutputDeviceId')
+      const useExperimentalSck = localStorage.getItem('useExperimentalSckBackend') === 'true'
+
+      if (useExperimentalSck) {
+        console.log('[App] Using ScreenCaptureKit backend (Experimental).')
+        outputDeviceId = 'sck'
+      } else {
+        console.log('[App] Using CoreAudio backend (Default).')
+      }
+
+      const result = await window.electronAPI.startMeeting({
+        audio: { inputDeviceId, outputDeviceId }
+      })
+
+      if (result.success) {
+        analytics.trackMeetingStarted()
+        await window.electronAPI.setWindowMode('overlay')
+      } else {
+        console.error('Failed to start meeting:', result.error)
+        setMeetingAudioError(result.error || 'Audio pipeline failed to start.')
+      }
+    } catch (err) {
+      console.error('Failed to start meeting:', err)
+      setMeetingAudioError(err instanceof Error ? err.message : 'Audio pipeline failed to start.')
+    }
+  }
+
+  const handleEndMeeting = async () => {
+    console.log('[App.tsx] handleEndMeeting triggered')
+    analytics.trackMeetingEnded()
+    setIsProcessingMeeting(true)
+    setMeetingAudioError(null)
+
+    try {
+      await window.electronAPI.endMeeting()
+      console.log('[App.tsx] endMeeting IPC completed')
+
+      const startStr = localStorage.getItem('natively_last_meeting_start')
+      if (startStr) {
+        const duration = Date.now() - parseInt(startStr, 10)
+        const threshold = getProfileToasterThresholdMs(getCurrentEnvironment())
+
+        if (duration >= threshold) {
+          localStorage.setItem('natively_show_profile_toaster', 'true')
+        }
+        localStorage.removeItem('natively_last_meeting_start')
+      }
+
+      await window.electronAPI.setWindowMode('launcher')
+    } catch (err) {
+      console.error('Failed to end meeting:', err)
+      window.electronAPI.setWindowMode('launcher')
+    }
+  }
+
+  if (windowKind === 'settings') {
+    return (
+      <ErrorBoundary context="SettingsPopup">
+        <div className="h-full min-h-0 w-full">
+          <AppProviders>
+            <SettingsPopup />
+          </AppProviders>
+        </div>
+      </ErrorBoundary>
+    )
+  }
+
+  if (windowKind === 'model-selector') {
+    return (
+      <ErrorBoundary context="ModelSelector">
+        <div className="h-full min-h-0 w-full overflow-hidden">
+          <AppProviders>
+            <ModelSelectorWindow />
+          </AppProviders>
+        </div>
+      </ErrorBoundary>
+    )
+  }
+
+  if (windowKind === 'overlay') {
+    return (
+      <OverlayWindowContent
+        meetingAudioError={meetingAudioError}
+        overlayOpacity={overlayOpacity}
+        onClearMeetingAudioError={() => setMeetingAudioError(null)}
+        onEndMeeting={handleEndMeeting}
+      />
+    )
+  }
+
+  return (
+    <LauncherWindowContent
+      incompatibleWarning={incompatibleWarning}
+      isDefaultLauncherWindow={isDefaultLauncherWindow}
+      isSettingsOpen={isSettingsOpen}
+      meetingAudioError={meetingAudioError}
+      ollamaPullMessage={ollamaPullMessage}
+      ollamaPullPercent={ollamaPullPercent}
+      ollamaPullStatus={ollamaPullStatus}
+      settingsInitialTab={settingsInitialTab}
+      showStartup={showStartup}
+      onClearIncompatibleWarning={() => setIncompatibleWarning(null)}
+      onClearMeetingAudioError={() => setMeetingAudioError(null)}
+      onOpenSettings={(tab = 'general') => {
+        setSettingsInitialTab(tab)
+        setIsSettingsOpen(true)
+      }}
+      onPageChange={setIsLauncherMainView}
+      onReindex={handleReindex}
+      onSetShowStartup={setShowStartup}
+      onStartMeeting={handleStartMeeting}
+      onToggleSettings={setIsSettingsOpen}
+    />
   )
 }
 

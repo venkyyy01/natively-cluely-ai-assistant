@@ -14,6 +14,8 @@ import { EmbeddingPipeline } from './EmbeddingPipeline';
 
 const INDEXING_INTERVAL_MS = 30_000;  // 30 seconds
 const MIN_NEW_SEGMENTS = 3;           // Don't chunk unless we have enough new content
+const LIVE_SEGMENT_BACKLOG_LIMIT = 2000;
+const EMBEDDING_DELAY_MS = 250;
 
 export class LiveRAGIndexer {
     private vectorStore: VectorStore;
@@ -26,6 +28,16 @@ export class LiveRAGIndexer {
     private indexedChunkCount = 0;    // Total chunks with embeddings
     private isProcessing = false;     // Guard against concurrent ticks
     private isActive = false;
+    private runId = 0;
+
+    private resetState(meetingId: string | null = null): void {
+        this.meetingId = meetingId;
+        this.allSegments = [];
+        this.indexedSegmentCount = 0;
+        this.chunkCounter = 0;
+        this.indexedChunkCount = 0;
+        this.isProcessing = false;
+    }
 
     constructor(vectorStore: VectorStore, embeddingPipeline: EmbeddingPipeline) {
         this.vectorStore = vectorStore;
@@ -38,15 +50,15 @@ export class LiveRAGIndexer {
      */
     start(meetingId: string): void {
         if (this.isActive) {
-            this.stop();
+            console.warn(`[LiveRAGIndexer] Restarting while active; dropping previous live session ${this.meetingId}`);
+            if (this.timer) {
+                clearInterval(this.timer);
+                this.timer = null;
+            }
         }
 
-        this.meetingId = meetingId;
-        this.allSegments = [];
-        this.indexedSegmentCount = 0;
-        this.chunkCounter = 0;
-        this.indexedChunkCount = 0;
-        this.isProcessing = false;
+        this.runId += 1;
+        this.resetState(meetingId);
         this.isActive = true;
 
         console.log(`[LiveRAGIndexer] Started for meeting ${meetingId}`);
@@ -66,6 +78,11 @@ export class LiveRAGIndexer {
     feedSegments(segments: RawSegment[]): void {
         if (!this.isActive || !this.meetingId) return;
         this.allSegments.push(...segments);
+        if (this.allSegments.length > LIVE_SEGMENT_BACKLOG_LIMIT) {
+            const overflow = this.allSegments.length - LIVE_SEGMENT_BACKLOG_LIMIT;
+            this.allSegments.splice(0, overflow);
+            this.indexedSegmentCount = Math.max(0, this.indexedSegmentCount - overflow);
+        }
     }
 
     /**
@@ -88,6 +105,7 @@ export class LiveRAGIndexer {
 
         this.isProcessing = true;
         const meetingId = this.meetingId;
+        const runId = this.runId;
 
         try {
             // 1. Get only new segments
@@ -123,10 +141,21 @@ export class LiveRAGIndexer {
             if (this.embeddingPipeline.isReady()) {
                 let embeddedCount = 0;
                 for (let i = 0; i < chunkIds.length; i++) {
+                    if (!this.isActive || this.runId !== runId || this.meetingId !== meetingId) {
+                        console.warn('[LiveRAGIndexer] Aborting stale embedding loop');
+                        break;
+                    }
                     try {
                         const embedding = await this.embeddingPipeline.getEmbedding(indexedChunks[i].text);
+                        if (!this.isActive || this.runId !== runId || this.meetingId !== meetingId) {
+                            console.warn('[LiveRAGIndexer] Skipping stale embedding result');
+                            break;
+                        }
                         this.vectorStore.storeEmbedding(chunkIds[i], embedding);
                         embeddedCount++;
+                        if (i < chunkIds.length - 1) {
+                            await new Promise(resolve => setTimeout(resolve, EMBEDDING_DELAY_MS));
+                        }
                     } catch (err) {
                         console.warn(`[LiveRAGIndexer] Failed to embed chunk ${chunkIds[i]}:`, err);
                         // Continue with remaining chunks — partial indexing is better than none
@@ -139,12 +168,16 @@ export class LiveRAGIndexer {
             }
 
             // 6. Advance high-water mark
-            this.indexedSegmentCount = this.allSegments.length;
+            if (this.isActive && this.runId === runId && this.meetingId === meetingId) {
+                this.indexedSegmentCount = this.allSegments.length;
+            }
 
         } catch (err) {
             console.error('[LiveRAGIndexer] Processing error:', err);
         } finally {
-            this.isProcessing = false;
+            if (this.runId === runId) {
+                this.isProcessing = false;
+            }
         }
     }
 
@@ -155,6 +188,7 @@ export class LiveRAGIndexer {
         if (!this.isActive) return;
 
         console.log(`[LiveRAGIndexer] Stopping for meeting ${this.meetingId}`);
+        const runId = this.runId;
 
         if (this.timer) {
             clearInterval(this.timer);
@@ -164,13 +198,14 @@ export class LiveRAGIndexer {
         // Final flush — process any remaining segments
         await this.tick();
 
+        if (this.runId !== runId) {
+            console.warn('[LiveRAGIndexer] Stop detected a newer run; skipping reset of current session');
+            return;
+        }
+
         const meetingId = this.meetingId;
         this.isActive = false;
-        this.meetingId = null;
-        this.allSegments = [];
-        this.indexedSegmentCount = 0;
-        this.chunkCounter = 0;
-        this.indexedChunkCount = 0;
+        this.resetState(null);
 
         console.log(`[LiveRAGIndexer] Stopped for meeting ${meetingId}`);
     }

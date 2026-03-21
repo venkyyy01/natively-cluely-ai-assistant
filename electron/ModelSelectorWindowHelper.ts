@@ -20,6 +20,20 @@ export class ModelSelectorWindowHelper {
 
     constructor() { }
 
+    private applyStealthFlags(enable: boolean): void {
+        if (!this.window || this.window.isDestroyed()) return;
+
+        this.window.setContentProtection(enable);
+        this.window.setSkipTaskbar(true);
+
+        if (process.platform === 'darwin') {
+            this.window.setHiddenInMissionControl(true);
+            if (typeof (this.window as any).setExcludedFromShownWindowsMenu === 'function') {
+                (this.window as any).setExcludedFromShownWindowsMenu(true);
+            }
+        }
+    }
+
     public setIgnoreBlur(ignore: boolean): void {
         this.ignoreBlur = ignore;
     }
@@ -69,7 +83,7 @@ export class ModelSelectorWindowHelper {
         if (process.platform === 'win32' && this.contentProtection) {
             this.window.setOpacity(0);
             this.window.show();
-            this.window.setContentProtection(true);
+            this.applyStealthFlags(true);
             
             if (this.opacityTimeout) clearTimeout(this.opacityTimeout);
             this.opacityTimeout = setTimeout(() => {
@@ -79,7 +93,7 @@ export class ModelSelectorWindowHelper {
                 }
             }, 60);
         } else {
-            this.window.setContentProtection(this.contentProtection);
+            this.applyStealthFlags(this.contentProtection);
             this.window.show();
             this.window.focus();
         }
@@ -154,7 +168,7 @@ export class ModelSelectorWindowHelper {
 
         // Apply content protection for Undetectable Mode
         console.log(`[ModelSelectorWindowHelper] Creating window with Content Protection: ${this.contentProtection}`);
-        this.window.setContentProtection(this.contentProtection)
+        this.applyStealthFlags(this.contentProtection)
 
         // Load with query param for routing
         const url = isDev
@@ -210,8 +224,6 @@ export class ModelSelectorWindowHelper {
     public setContentProtection(enable: boolean): void {
         console.log(`[ModelSelectorWindowHelper] Setting content protection to: ${enable}`);
         this.contentProtection = enable;
-        if (this.window && !this.window.isDestroyed()) {
-            this.window.setContentProtection(enable);
-        }
+        this.applyStealthFlags(enable);
     }
 }

@@ -6,6 +6,11 @@ import { EventEmitter } from 'events';
 import { LLMHelper } from './LLMHelper';
 import { SessionTracker, TranscriptSegment, SuggestionTrigger, ContextItem } from './SessionTracker';
 import {
+    classifyConsciousModeQuestion,
+    formatConsciousModeResponse,
+    isValidConsciousModeResponse,
+} from './ConsciousMode';
+import {
     AnswerLLM, AssistLLM, FollowUpLLM, RecapLLM,
     FollowUpQuestionsLLM, WhatToAnswerLLM,
     prepareTranscriptForWhatToAnswer, buildTemporalContext,
@@ -13,7 +18,7 @@ import {
 } from './llm';
 
 // Mode types
-export type IntelligenceMode = 'idle' | 'assist' | 'what_to_say' | 'follow_up' | 'recap' | 'manual' | 'follow_up_questions';
+export type IntelligenceMode = 'idle' | 'assist' | 'what_to_say' | 'follow_up' | 'recap' | 'manual' | 'follow_up_questions' | 'reasoning_first';
 
 // Refinement intent detection (refined to avoid false positives)
 function detectRefinementIntent(userText: string): { isRefinement: boolean; intent: string } {
@@ -275,11 +280,75 @@ export class IntelligenceEngine extends EventEmitter {
             );
 
             const lastInterviewerTurn = this.session.getLastInterviewerTurn();
+            const activeReasoningThread = this.session.getActiveReasoningThread();
+            const resolvedQuestion = question || lastInterviewerTurn || '';
             const intentResult = await classifyIntent(
                 lastInterviewerTurn,
                 preparedTranscript,
                 this.session.getAssistantResponseHistory().length
             );
+            const consciousRoute = this.session.isConsciousModeEnabled()
+                ? classifyConsciousModeQuestion(resolvedQuestion, activeReasoningThread, intentResult.intent)
+                : { qualifies: false, threadAction: 'ignore' as const };
+
+            if (consciousRoute.threadAction === 'reset') {
+                this.session.clearConsciousModeThread();
+            }
+
+            if (!consciousRoute.qualifies && consciousRoute.threadAction === 'reset') {
+                // Thread already cleared above so non-Conscious fallback cannot reuse stale state.
+            }
+
+            if (consciousRoute.qualifies) {
+                let structuredResponse;
+                if (consciousRoute.threadAction === 'continue' && activeReasoningThread && this.followUpLLM) {
+                    structuredResponse = await this.followUpLLM.generateReasoningFirstFollowUp(
+                        activeReasoningThread,
+                        resolvedQuestion,
+                        this.session.getFormattedContext(180)
+                    );
+                } else if (this.whatToAnswerLLM) {
+                    structuredResponse = await this.whatToAnswerLLM.generateReasoningFirst(
+                        preparedTranscript,
+                        resolvedQuestion,
+                        temporalContext,
+                        intentResult,
+                        imagePaths
+                    );
+                } else if (this.answerLLM) {
+                    structuredResponse = await this.answerLLM.generateReasoningFirst(
+                        resolvedQuestion,
+                        this.session.getFormattedContext(180)
+                    );
+                }
+
+                if (isValidConsciousModeResponse(structuredResponse)) {
+                    console.log(`[IntelligenceEngine] Temporal RAG: ${temporalContext.previousResponses.length} responses, tone: ${temporalContext.toneSignals[0]?.type || 'neutral'}, intent: conscious_reasoning${imagePaths?.length ? `, with ${imagePaths.length} image(s)` : ''}`);
+                    this.setMode('reasoning_first');
+
+                    const fullAnswer = formatConsciousModeResponse(structuredResponse);
+
+                    if (consciousRoute.threadAction !== 'ignore' && resolvedQuestion) {
+                        this.session.recordConsciousResponse(
+                            resolvedQuestion,
+                            structuredResponse,
+                            consciousRoute.threadAction === 'start' ? 'start' : consciousRoute.threadAction === 'reset' ? 'reset' : 'continue'
+                        );
+                    }
+
+                    this.emit('suggested_answer_token', fullAnswer, question || 'What to Answer', confidence);
+                    this.session.addAssistantMessage(fullAnswer);
+                    this.session.pushUsage({
+                        type: 'assist',
+                        timestamp: Date.now(),
+                        question: question || 'What to Answer',
+                        answer: fullAnswer
+                    });
+                    this.emit('suggested_answer', fullAnswer, question || 'What to Answer', confidence);
+                    this.setMode('idle');
+                    return fullAnswer;
+                }
+            }
 
             console.log(`[IntelligenceEngine] Temporal RAG: ${temporalContext.previousResponses.length} responses, tone: ${temporalContext.toneSignals[0]?.type || 'neutral'}, intent: ${intentResult.intent}${imagePaths?.length ? `, with ${imagePaths.length} image(s)` : ''}`);
 

@@ -146,6 +146,11 @@ export class GoogleSTT extends EventEmitter {
         }
     }
 
+    public destroy(): void {
+        this.stop();
+        this.removeAllListeners();
+    }
+
     private buffer: Buffer[] = [];
     private isConnecting = false;
     private lastConnectAttempt = 0;

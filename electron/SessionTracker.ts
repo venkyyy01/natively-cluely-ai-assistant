@@ -3,6 +3,11 @@
 // Extracted from IntelligenceManager to decouple state management from LLM orchestration.
 
 import { RecapLLM } from './llm';
+import {
+    ConsciousModeStructuredResponse,
+    ReasoningThread,
+    mergeConsciousModeResponses,
+} from './ConsciousMode';
 
 export interface TranscriptSegment {
     marker?: string;
@@ -63,6 +68,11 @@ export class SessionTracker {
 
     // Track interim interviewer segment
     private lastInterimInterviewer: TranscriptSegment | null = null;
+
+    // Conscious Mode state
+    private consciousModeEnabled: boolean = false;
+    private latestConsciousResponse: ConsciousModeStructuredResponse | null = null;
+    private activeReasoningThread: ReasoningThread | null = null;
 
     // Reference to RecapLLM for epoch summarization (injected later)
     private recapLLM: RecapLLM | null = null;
@@ -242,6 +252,55 @@ export class SessionTracker {
         return this.lastInterimInterviewer;
     }
 
+    setConsciousModeEnabled(enabled: boolean): void {
+        this.consciousModeEnabled = enabled;
+        if (!enabled) {
+            this.latestConsciousResponse = null;
+            this.activeReasoningThread = null;
+        }
+    }
+
+    isConsciousModeEnabled(): boolean {
+        return this.consciousModeEnabled;
+    }
+
+    getLatestConsciousResponse(): ConsciousModeStructuredResponse | null {
+        return this.latestConsciousResponse;
+    }
+
+    getActiveReasoningThread(): ReasoningThread | null {
+        return this.activeReasoningThread;
+    }
+
+    clearConsciousModeThread(): void {
+        this.latestConsciousResponse = null;
+        this.activeReasoningThread = null;
+    }
+
+    recordConsciousResponse(question: string, response: ConsciousModeStructuredResponse, threadAction: 'start' | 'continue' | 'reset'): void {
+        this.latestConsciousResponse = response;
+
+        if (threadAction === 'continue' && this.activeReasoningThread) {
+            this.activeReasoningThread = {
+                ...this.activeReasoningThread,
+                lastQuestion: question,
+                followUpCount: this.activeReasoningThread.followUpCount + 1,
+                response: mergeConsciousModeResponses(this.activeReasoningThread.response, response),
+                updatedAt: Date.now(),
+            };
+            this.latestConsciousResponse = this.activeReasoningThread.response;
+            return;
+        }
+
+        this.activeReasoningThread = {
+            rootQuestion: question,
+            lastQuestion: question,
+            response,
+            followUpCount: 0,
+            updatedAt: Date.now(),
+        };
+    }
+
     /**
      * Get formatted context string for LLM prompts
      */
@@ -355,6 +414,7 @@ export class SessionTracker {
     // ============================================
 
     reset(): void {
+        const consciousModeEnabled = this.consciousModeEnabled;
         this.contextItems = [];
         this.fullTranscript = [];
         this.fullUsage = [];
@@ -363,6 +423,9 @@ export class SessionTracker {
         this.lastAssistantMessage = null;
         this.assistantResponseHistory = [];
         this.lastInterimInterviewer = null;
+        this.consciousModeEnabled = consciousModeEnabled;
+        this.latestConsciousResponse = null;
+        this.activeReasoningThread = null;
     }
 
     // ============================================

@@ -28,8 +28,8 @@ jobs:
       - name: Verify Open-Source Build Integrity
         run: |
           npm ci
-          npx tsc --noEmit
-          npx tsc -p electron/tsconfig.json --noEmit
+          npm run verify:production
+          npm audit --audit-level=high
           npx vite build
           
       - name: Sync to Public Repository

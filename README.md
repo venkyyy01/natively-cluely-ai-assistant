@@ -501,6 +501,19 @@ npm start
 npm run dist
 ```
 
+`npm run dist` now blocks packaging unless all production gates pass first:
+
+- `npm run typecheck`
+- `npm run verify:electron:coverage` (requires the enforced Electron coverage floor: lines >= 50%, branches >= 75%, funcs >= 30%)
+- `npm run verify:renderer:coverage` (requires the enforced renderer coverage floor: statements >= 90%, branches >= 100%, funcs >= 75%, lines >= 90%)
+- `cargo test --manifest-path native-module/Cargo.toml`
+
+You can run the full gate manually before release work with:
+
+```bash
+npm run verify:production
+```
+
 ---
 
 ### AI Providers

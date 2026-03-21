@@ -8,11 +8,21 @@
     "dev": "vite",
     "build": "npm run clean && tsc && vite build",
     "preview": "vite preview",
-    "postinstall": "cross-env SHARP_IGNORE_GLOBAL_LIBVIPS=1 npm rebuild sharp && node scripts/ensure-electron-native-deps.js && node scripts/download-models.js && node scripts/ensure-sqlite-vec.js",
+    "typecheck": "tsc --noEmit && tsc -p electron/tsconfig.json --noEmit",
+    "postinstall": "node scripts/ensure-electron-native-deps.js && node scripts/download-models.js && node scripts/ensure-sqlite-vec.js",
     "electron:dev": "node scripts/ensure-electron-native-deps.js && npm run build:native:current && tsc -p electron/tsconfig.json && cross-env NODE_ENV=development electron .",
     "electron:build": "node scripts/ensure-electron-native-deps.js && npm run build:native:current && tsc -p electron/tsconfig.json && cross-env NODE_ENV=production electron .",
     "app:dev": "concurrently \"npm run dev -- --port 5180\" \"wait-on http://localhost:5180 && npm run electron:dev\"",
     "app:build": "node scripts/ensure-electron-native-deps.js && npm run build && npm run build:native && tsc -p electron/tsconfig.json && electron-builder",
+    "test:electron": "tsc -p electron/tsconfig.json && node --test dist-electron/electron/tests/*.test.js",
+    "test:electron:coverage": "tsc -p electron/tsconfig.json && node --test --experimental-test-coverage dist-electron/electron/tests/*.test.js",
+    "test:renderer": "npm --prefix renderer test",
+    "test:renderer:coverage": "npm --prefix renderer run test:coverage",
+    "verify:electron:coverage": "node scripts/verify-electron-coverage.js",
+    "verify:renderer:coverage": "node scripts/verify-renderer-coverage.js",
+    "verify:production": "npm run typecheck && npm run verify:electron:coverage && npm run verify:renderer:coverage && cargo test --manifest-path native-module/Cargo.toml",
+    "test": "npm run test:electron && cargo test --manifest-path native-module/Cargo.toml",
+    "preapp:build": "node scripts/run-production-verify-if-needed.js",
     "watch": "tsc -p electron/tsconfig.json --watch",
     "start": "npm run app:dev",
     "dist": "npm run app:build",
@@ -80,7 +90,9 @@
       ],
       "icon": "assets/natively.icns",
       "identity": null,
-      "hardenedRuntime": false
+      "hardenedRuntime": true,
+      "entitlements": "assets/entitlements.mac.plist",
+      "entitlementsInherit": "assets/entitlements.mac.plist"
     },
     "win": {
       "target": [
@@ -223,7 +235,8 @@
     "three": "^0.182.0",
     "tree-kill": "^1.2.2",
     "uuid": "^11.0.3",
-    "ws": "^8.19.0"
+    "ws": "^8.19.0",
+    "zod": "^3.24.1"
   },
   "optionalDependencies": {
     "natively-audio": "file:./native-module",
