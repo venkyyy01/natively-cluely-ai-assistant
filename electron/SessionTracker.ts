@@ -84,6 +84,10 @@ export class SessionTracker {
     private activeReasoningThread: ReasoningThread | null = null;
     private suspendedReasoningThread: ReasoningThread | null = null;
 
+    // Degraded mode tracking for repeated failures
+    private consecutiveFailures: number = 0;
+    private isDegraded: boolean = false;
+
     // Reference to RecapLLM for epoch summarization (injected later)
     private recapLLM: RecapLLM | null = null;
 
@@ -343,6 +347,10 @@ export class SessionTracker {
     }
 
     recordConsciousResponse(question: string, response: ConsciousModeStructuredResponse, threadAction: ConsciousModeThreadAction): void {
+        if (threadAction === 'reset' || threadAction === 'suspend') {
+            return;
+        }
+
         this.latestConsciousResponse = response;
 
         if (threadAction === 'continue' && this.activeReasoningThread?.state !== 'suspended') {
@@ -391,6 +399,30 @@ export class SessionTracker {
             suspendedAt: undefined,
             updatedAt: Date.now(),
         };
+    }
+
+    recordConsciousFailure(): void {
+        this.consecutiveFailures++;
+        if (this.consecutiveFailures >= consciousModeRealtimeConfig.repeatedFailureThreshold) {
+            this.isDegraded = true;
+        }
+    }
+
+    recordConsciousSuccess(): void {
+        this.consecutiveFailures = 0;
+        this.isDegraded = false;
+    }
+
+    isConsciousModeDegraded(): boolean {
+        return this.isDegraded;
+    }
+
+    getConsciousModeDegradedFlag(): boolean {
+        return this.isDegraded;
+    }
+
+    getConsciousModeConsecutiveFailures(): number {
+        return this.consecutiveFailures;
     }
 
     /**

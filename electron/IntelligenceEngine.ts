@@ -16,6 +16,7 @@ import {
     prepareTranscriptForWhatToAnswer, buildTemporalContext,
     AssistantResponse as LLMAssistantResponse, classifyIntent
 } from './llm';
+import { consciousModeRealtimeConfig } from './consciousModeConfig';
 
 // Mode types
 export type IntelligenceMode = 'idle' | 'assist' | 'what_to_say' | 'follow_up' | 'recap' | 'manual' | 'follow_up_questions' | 'reasoning_first';
@@ -509,67 +510,99 @@ export class IntelligenceEngine extends EventEmitter {
         const shouldUseThreadContext = shouldMutateThread
             && (consciousRoute.threadAction === 'continue' || consciousRoute.threadAction === 'resume');
 
-        if (consciousRoute.qualifies) {
-            let structuredResponse;
-            if (consciousRoute.threadAction === 'continue' && activeReasoningThread && this.followUpLLM && shouldUseThreadContext) {
-                structuredResponse = await this.followUpLLM.generateReasoningFirstFollowUp(
-                    activeReasoningThread,
-                    resolvedQuestion,
-                    this.session.getFormattedContext(180)
-                );
-            } else if (consciousRoute.threadAction === 'resume' && suspendedReasoningThread && this.followUpLLM && shouldUseThreadContext) {
-                structuredResponse = await this.followUpLLM.generateReasoningFirstFollowUp(
-                    suspendedReasoningThread,
-                    resolvedQuestion,
-                    this.session.getFormattedContext(180)
-                );
-            } else if (this.whatToAnswerLLM) {
-                structuredResponse = await this.whatToAnswerLLM.generateReasoningFirst(
-                    preparedTranscript,
-                    resolvedQuestion,
-                    temporalContext,
-                    intentResult,
-                    imagePaths
-                );
-            } else if (this.answerLLM) {
-                structuredResponse = await this.answerLLM.generateReasoningFirst(
-                    resolvedQuestion,
-                    this.session.getFormattedContext(180)
-                );
-            }
+        if (this.session.isConsciousModeDegraded()) {
+            return this.runFallbackSuggestion({
+                preparedTranscript,
+                temporalContext,
+                intentResult,
+                question,
+                resolvedQuestion,
+                confidence,
+                imagePaths,
+                source,
+                cycle,
+            });
+        }
 
-            if (isValidConsciousModeResponse(structuredResponse)) {
-                console.log(`[IntelligenceEngine] Temporal RAG: ${temporalContext.previousResponses.length} responses, tone: ${temporalContext.toneSignals[0]?.type || 'neutral'}, intent: conscious_reasoning${imagePaths?.length ? `, with ${imagePaths.length} image(s)` : ''}`);
-                this.setMode('reasoning_first');
-
-                const fullAnswer = formatConsciousModeResponse(structuredResponse);
-
-                if (!this.isCurrentSuggestionCycle(cycle)) {
-                    return null;
-                }
-
-                if (shouldMutateThread && consciousRoute.threadAction !== 'ignore' && resolvedQuestion) {
-                    this.applyThreadLifecycle(consciousRoute.threadAction);
-                    this.session.recordConsciousResponse(
+        const consciousGenerationPromise = (async () => {
+            if (consciousRoute.qualifies) {
+                if (consciousRoute.threadAction === 'continue' && activeReasoningThread && this.followUpLLM && shouldUseThreadContext) {
+                    return await this.followUpLLM.generateReasoningFirstFollowUp(
+                        activeReasoningThread,
                         resolvedQuestion,
-                        structuredResponse,
-                        consciousRoute.threadAction
+                        this.session.getFormattedContext(180)
+                    );
+                } else if (consciousRoute.threadAction === 'resume' && suspendedReasoningThread && this.followUpLLM && shouldUseThreadContext) {
+                    return await this.followUpLLM.generateReasoningFirstFollowUp(
+                        suspendedReasoningThread,
+                        resolvedQuestion,
+                        this.session.getFormattedContext(180)
+                    );
+                } else if (this.whatToAnswerLLM) {
+                    return await this.whatToAnswerLLM.generateReasoningFirst(
+                        preparedTranscript,
+                        resolvedQuestion,
+                        temporalContext,
+                        intentResult,
+                        imagePaths
+                    );
+                } else if (this.answerLLM) {
+                    return await this.answerLLM.generateReasoningFirst(
+                        resolvedQuestion,
+                        this.session.getFormattedContext(180)
                     );
                 }
-
-                this.publishSuggestionResult({
-                    answer: fullAnswer,
-                    confidence,
-                    question: question || 'What to Answer',
-                    source,
-                });
-                this.finishSuggestionCycle(cycle);
-                return fullAnswer;
             }
+            return null;
+        })();
+
+        const timeoutPromise = new Promise<null>((resolve) => 
+            setTimeout(() => resolve(null), consciousModeRealtimeConfig.structuredGenerationTimeoutMs)
+        );
+
+        const structuredResponse = await Promise.race([
+            consciousGenerationPromise,
+            timeoutPromise,
+        ]);
+
+        if (structuredResponse && isValidConsciousModeResponse(structuredResponse)) {
+            if (!this.isCurrentSuggestionCycle(cycle)) {
+                return null;
+            }
+
+            console.log(`[IntelligenceEngine] Temporal RAG: ${temporalContext.previousResponses.length} responses, tone: ${temporalContext.toneSignals[0]?.type || 'neutral'}, intent: conscious_reasoning${imagePaths?.length ? `, with ${imagePaths.length} image(s)` : ''}`);
+            this.setMode('reasoning_first');
+
+            const fullAnswer = formatConsciousModeResponse(structuredResponse);
+
+            if (shouldMutateThread && consciousRoute.threadAction !== 'ignore' && resolvedQuestion) {
+                this.applyThreadLifecycle(consciousRoute.threadAction);
+                this.session.recordConsciousResponse(
+                    resolvedQuestion,
+                    structuredResponse,
+                    consciousRoute.threadAction
+                );
+            }
+
+            this.session.recordConsciousSuccess();
+
+            this.publishSuggestionResult({
+                answer: fullAnswer,
+                confidence,
+                question: question || 'What to Answer',
+                source,
+                cycle,
+            });
+            this.finishSuggestionCycle(cycle);
+            return fullAnswer;
         }
 
         if (shouldMutateThread && consciousRoute.threadAction === 'reset') {
             this.applyThreadLifecycle('reset');
+        }
+
+        if (consciousRoute.qualifies) {
+            this.session.recordConsciousFailure();
         }
 
         return this.runFallbackSuggestion({
@@ -639,6 +672,7 @@ export class IntelligenceEngine extends EventEmitter {
             confidence,
             question: question || 'What to Answer',
             source,
+            cycle,
         });
         this.finishSuggestionCycle(cycle);
         return fullAnswer;
@@ -649,12 +683,18 @@ export class IntelligenceEngine extends EventEmitter {
         confidence,
         question,
         source,
+        cycle,
     }: {
         answer: string;
         confidence: number;
         question: string;
         source: SuggestionTriggerSource;
+        cycle?: SuggestionCycle;
     }): void {
+        if (cycle && !this.isCurrentSuggestionCycle(cycle)) {
+            return;
+        }
+
         this.session.addAssistantMessage(answer);
         this.session.pushUsage({
             type: source === 'manual' ? 'chat' : 'assist',
