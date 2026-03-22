@@ -3,37 +3,42 @@ import fs from 'fs';
 import path from 'path';
 
 export interface AppSettings {
-    // Only boot-critical or non-encrypted settings should live here.
-    // In the future, other non-secret data like 'language' or 'theme' 
-    // can be moved here from CredentialsManager to allow early boot access.
-    isUndetectable?: boolean;
-    disguiseMode?: 'terminal' | 'settings' | 'activity' | 'none';
-    consciousModeEnabled?: boolean;
+  // Only boot-critical or non-encrypted settings should live here.
+  // In the future, other non-secret data like 'language' or 'theme'
+  // can be moved here from CredentialsManager to allow early boot access.
+  isUndetectable?: boolean;
+  disguiseMode?: 'terminal' | 'settings' | 'activity' | 'none';
+  consciousModeEnabled?: boolean;
+  accelerationModeEnabled?: boolean;
 }
 
 const ALLOWED_DISGUISE_MODES = new Set<AppSettings['disguiseMode']>(['terminal', 'settings', 'activity', 'none']);
 
 function sanitizeSettings(candidate: unknown): AppSettings {
-    if (typeof candidate !== 'object' || candidate === null) {
-        return {};
-    }
+  if (typeof candidate !== 'object' || candidate === null) {
+    return {};
+  }
 
-    const raw = candidate as Record<string, unknown>;
-    const sanitized: AppSettings = {};
+  const raw = candidate as Record<string, unknown>;
+  const sanitized: AppSettings = {};
 
-    if (typeof raw.isUndetectable === 'boolean') {
-        sanitized.isUndetectable = raw.isUndetectable;
-    }
+  if (typeof raw.isUndetectable === 'boolean') {
+    sanitized.isUndetectable = raw.isUndetectable;
+  }
 
-    if (typeof raw.consciousModeEnabled === 'boolean') {
-        sanitized.consciousModeEnabled = raw.consciousModeEnabled;
-    }
+  if (typeof raw.consciousModeEnabled === 'boolean') {
+    sanitized.consciousModeEnabled = raw.consciousModeEnabled;
+  }
 
-    if (typeof raw.disguiseMode === 'string' && ALLOWED_DISGUISE_MODES.has(raw.disguiseMode as AppSettings['disguiseMode'])) {
-        sanitized.disguiseMode = raw.disguiseMode as AppSettings['disguiseMode'];
-    }
+  if (typeof raw.accelerationModeEnabled === 'boolean') {
+    sanitized.accelerationModeEnabled = raw.accelerationModeEnabled;
+  }
 
-    return sanitized;
+  if (typeof raw.disguiseMode === 'string' && ALLOWED_DISGUISE_MODES.has(raw.disguiseMode as AppSettings['disguiseMode'])) {
+    sanitized.disguiseMode = raw.disguiseMode as AppSettings['disguiseMode'];
+  }
+
+  return sanitized;
 }
 
 export class SettingsManager {
@@ -60,16 +65,20 @@ export class SettingsManager {
         return this.settings[key];
     }
 
-    public set<K extends keyof AppSettings>(key: K, value: AppSettings[K]): boolean {
-        const previousSettings = { ...this.settings };
-        this.settings[key] = value;
-        if (this.saveSettings()) {
-            return true;
-        }
-
-        this.settings = previousSettings;
-        return false;
+  public set<K extends keyof AppSettings>(key: K, value: AppSettings[K]): boolean {
+    const previousSettings = { ...this.settings };
+    this.settings[key] = value;
+    if (this.saveSettings()) {
+      return true;
     }
+
+    this.settings = previousSettings;
+    return false;
+  }
+
+  public getAccelerationModeEnabled(): boolean {
+    return this.settings.accelerationModeEnabled ?? false;
+  }
 
     private loadSettings(): void {
         try {

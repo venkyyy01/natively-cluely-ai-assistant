@@ -20,6 +20,9 @@ export interface OptimizationFlags {
   useAdaptiveWindow: boolean;
   usePrefetching: boolean;
 
+  /** Phase 4: Stealth & Process Isolation */
+  useStealthMode: boolean;
+
   /** Worker thread configuration */
   workerThreadCount: number;
 
@@ -48,6 +51,9 @@ export const DEFAULT_OPTIMIZATION_FLAGS: OptimizationFlags = {
   useAdaptiveWindow: true,
   usePrefetching: true,
 
+  // Phase 4
+  useStealthMode: true,
+
   // Worker config (6 cores default, user-adjustable)
   workerThreadCount: 6,
 
@@ -67,6 +73,16 @@ let currentFlags: OptimizationFlags = { ...DEFAULT_OPTIMIZATION_FLAGS };
  */
 export function getOptimizationFlags(): Readonly<OptimizationFlags> {
   return currentFlags;
+}
+
+/**
+ * Update optimization flags from settings
+ */
+export function syncOptimizationFlagsFromSettings(getAccelerationModeEnabled: () => boolean): void {
+  const accelerationEnabled = getAccelerationModeEnabled();
+  if (currentFlags.accelerationEnabled !== accelerationEnabled) {
+    currentFlags = { ...currentFlags, accelerationEnabled };
+  }
 }
 
 /**
