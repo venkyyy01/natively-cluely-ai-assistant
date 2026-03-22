@@ -3,8 +3,10 @@ import { EventEmitter } from "events"
 import path from "path"
 import fs from "fs"
 import { autoUpdater } from "electron-updater"
+import { syncOptimizationFlagsFromSettings } from "./config/optimizations"
+import { StealthManager } from "./stealth/StealthManager"
 if (!app.isPackaged) {
-  require('dotenv').config();
+require('dotenv').config();
 }
 
 // Handle stdout/stderr errors at the process level to prevent EIO crashes
@@ -195,26 +197,34 @@ export class AppState {
     DEBUG_ERROR: "debug-error"
   } as const
 
-  constructor() {
-    // 1. Load boot-critical settings first (used by WindowHelpers)
-    const settingsManager = SettingsManager.getInstance();
-    this.isUndetectable = settingsManager.get('isUndetectable') ?? false;
-    this.disguiseMode = settingsManager.get('disguiseMode') ?? 'none';
-    this.consciousModeEnabled = settingsManager.get('consciousModeEnabled') ?? false;
-    console.log(`[AppState] Initialized with isUndetectable=${this.isUndetectable}, disguiseMode=${this.disguiseMode}, consciousModeEnabled=${this.consciousModeEnabled}`);
+constructor() {
+// 1. Load boot-critical settings first (used by WindowHelpers)
+const settingsManager = SettingsManager.getInstance();
+this.isUndetectable = settingsManager.get('isUndetectable') ?? false;
+this.disguiseMode = settingsManager.get('disguiseMode') ?? 'none';
+this.consciousModeEnabled = settingsManager.get('consciousModeEnabled') ?? false;
+
+// 1a. Sync acceleration optimization flags from settings
+syncOptimizationFlagsFromSettings(() => settingsManager.getAccelerationModeEnabled());
+
+console.log(`[AppState] Initialized with isUndetectable=${this.isUndetectable}, disguiseMode=${this.disguiseMode}, consciousModeEnabled=${this.consciousModeEnabled}`);
 
     // 2. Initialize Helpers with loaded state
     this.windowHelper = new WindowHelper(this)
     this.settingsWindowHelper = new SettingsWindowHelper()
     this.modelSelectorWindowHelper = new ModelSelectorWindowHelper()
 
-    // 3. Initialize other helpers
-    this.screenshotHelper = new ScreenshotHelper(this.view)
-    this.processingHelper = new ProcessingHelper(this)
+// 3. Initialize other helpers
+this.screenshotHelper = new ScreenshotHelper(this.view)
+this.processingHelper = new ProcessingHelper(this)
 
-    this.windowHelper.setContentProtection(this.isUndetectable);
-    this.settingsWindowHelper.setContentProtection(this.isUndetectable);
-    this.modelSelectorWindowHelper.setContentProtection(this.isUndetectable);
+// 3a. Apply stealth mode if acceleration enabled (Apple Silicon enhancement)
+const stealthManager = new StealthManager({ enabled: this.isUndetectable });
+stealthManager.applyToWindow(this.windowHelper as unknown as { setContentProtection: (v: boolean) => void; setSkipTaskbar: (v: boolean) => void });
+
+this.windowHelper.setContentProtection(this.isUndetectable);
+this.settingsWindowHelper.setContentProtection(this.isUndetectable);
+this.modelSelectorWindowHelper.setContentProtection(this.isUndetectable);
 
     // Initialize KeybindManager
     const keybindManager = KeybindManager.getInstance();
@@ -258,29 +268,28 @@ export class AppState {
       }
     });
 
-    // Inject WindowHelper into other helpers
-    this.settingsWindowHelper.setWindowHelper(this.windowHelper);
-    this.modelSelectorWindowHelper.setWindowHelper(this.windowHelper);
+// Inject WindowHelper into other helpers
+this.settingsWindowHelper.setWindowHelper(this.windowHelper);
+this.modelSelectorWindowHelper.setWindowHelper(this.windowHelper);
 
 
+// Initialize IntelligenceManager with LLMHelper
+this.intelligenceManager = new IntelligenceManager(this.processingHelper.getLLMHelper())
+this.intelligenceManager.setConsciousModeEnabled(this.consciousModeEnabled)
 
+// Initialize ThemeManager
+this.themeManager = ThemeManager.getInstance()
 
+// Initialize RAGManager (requires database to be ready)
+this.initializeRAGManager()
 
-    // Initialize IntelligenceManager with LLMHelper
-    this.intelligenceManager = new IntelligenceManager(this.processingHelper.getLLMHelper())
-    this.intelligenceManager.setConsciousModeEnabled(this.consciousModeEnabled)
+// Check and prep Ollama embedding model
+this.bootstrapOllamaEmbeddings()
 
-    // Initialize ThemeManager
-    this.themeManager = ThemeManager.getInstance()
+// Initialize AccelerationManager (Apple Silicon enhancement)
+this.initializeAccelerationManager()
 
-    // Initialize RAGManager (requires database to be ready)
-    this.initializeRAGManager()
-    
-    // Check and prep Ollama embedding model
-    this.bootstrapOllamaEmbeddings()
-
-
-    this.setupIntelligenceEvents()
+this.setupIntelligenceEvents()
 
     // Pre-warm the zero-shot intent classifier in background
     warmupIntentClassifier();
@@ -427,12 +436,25 @@ export class AppState {
         this.ragManager.setLLMHelper(this.processingHelper.getLLMHelper());
         console.log('[AppState] RAGManager initialized');
       }
-    } catch (error) {
-      console.error('[AppState] Failed to initialize RAGManager:', error);
-    }
+} catch (error) {
+console.error('[AppState] Failed to initialize RAGManager:', error);
+}
+}
 
-    // Initialize Knowledge Orchestrator
-    try {
+private async initializeAccelerationManager(): Promise<void> {
+try {
+const { AccelerationManager } = await import('./services/AccelerationManager');
+const accelerationManager = new AccelerationManager();
+await accelerationManager.initialize();
+console.log('[AppState] AccelerationManager initialized (Apple Silicon enhancement)');
+} catch (error) {
+console.warn('[AppState] AccelerationManager initialization skipped (optional):', error);
+}
+}
+
+private initializeKnowledgeOrchestrator(): void {
+// Initialize Knowledge Orchestrator
+try {
       const db = DatabaseManager.getInstance();
       const sqliteDb = db.getDb();
 
