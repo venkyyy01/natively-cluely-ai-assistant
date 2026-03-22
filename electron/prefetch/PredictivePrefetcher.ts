@@ -179,10 +179,11 @@ export class PredictivePrefetcher {
 
   private estimateConfidence(query: string): number {
     const phaseQuestions = PHASE_FOLLOWUP_PATTERNS[this.currentPhase] || [];
-    if (phaseQuestions.includes(query)) {
-      return 0.8 + Math.random() * 0.15;
+    const queryIndex = phaseQuestions.indexOf(query);
+    if (queryIndex >= 0) {
+      return 0.85 + (queryIndex * 0.03);
     }
-    return 0.5 + Math.random() * 0.3;
+    return 0.55 + (this.simpleHash(query) % 10) * 0.03;
   }
 
   private async assembleContext(query: string): Promise<{

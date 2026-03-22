@@ -34,7 +34,7 @@ export interface OptimizationFlags {
   maxPrefetchPredictions: number;
 }
 
-/** Default optimization flags - all disabled by default */
+/** Default optimization flags - master toggle disabled, individual flags enabled for when toggle is ON */
 export const DEFAULT_OPTIMIZATION_FLAGS: OptimizationFlags = {
   accelerationEnabled: false,
 
@@ -67,6 +67,9 @@ export const DEFAULT_OPTIMIZATION_FLAGS: OptimizationFlags = {
 
 /** Runtime optimization state */
 let currentFlags: OptimizationFlags = { ...DEFAULT_OPTIMIZATION_FLAGS };
+
+/** Cached CPU count to avoid repeated os.cpus() calls */
+let cachedCpuCount: number | null = null;
 
 /**
  * Get current optimization flags
@@ -112,6 +115,8 @@ export function isAppleSilicon(): boolean {
  * Respects user setting but caps at available cores
  */
 export function getEffectiveWorkerCount(): number {
-  const cpuCount = require('os').cpus().length;
-  return Math.min(currentFlags.workerThreadCount, cpuCount - 1);
+  if (cachedCpuCount === null) {
+    cachedCpuCount = require('os').cpus().length;
+  }
+  return Math.min(currentFlags.workerThreadCount, cachedCpuCount - 1);
 }

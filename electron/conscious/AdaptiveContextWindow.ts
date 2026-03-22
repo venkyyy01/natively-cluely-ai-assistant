@@ -1,4 +1,4 @@
-import { InterviewPhase, INTERVIEW_PHASES } from './types';
+import { InterviewPhase } from './types';
 import { isOptimizationActive } from '../config/optimizations';
 
 export interface ContextEntry {

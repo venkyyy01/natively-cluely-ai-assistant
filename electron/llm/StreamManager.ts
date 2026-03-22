@@ -104,16 +104,17 @@ export class StreamManager {
         await Promise.all(this.backgroundTasks);
       }
 
-      if (config.consciousMode && this.jsonAccumulator) {
-        try {
-          const full = JSON.parse(this.jsonAccumulator);
-          this.callbacks.onComplete(full);
-        } catch {
-          this.callbacks.onComplete({ raw: this.jsonAccumulator });
-        }
+  if (config.consciousMode && this.jsonAccumulator) {
+      try {
+        const full = JSON.parse(this.jsonAccumulator);
+        this.callbacks.onComplete(full);
+      } catch {
+        this.callbacks.onComplete({ raw: this.jsonAccumulator });
       }
+    }
 
     } catch (error) {
+      this.backgroundTasks = [];
       this.callbacks.onError(error instanceof Error ? error : new Error(String(error)));
     }
   }

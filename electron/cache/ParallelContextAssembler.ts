@@ -28,6 +28,8 @@ function computeBM25(
   k1: number = 1.5,
   b: number = 0.75
 ): Array<{ text: string; score: number; timestamp: number }> {
+  if (documents.length === 0) return [];
+
   const queryTerms = query.toLowerCase().split(/\s+/);
   const docTerms = documents.map(d => d.text.toLowerCase().split(/\s+/));
 
