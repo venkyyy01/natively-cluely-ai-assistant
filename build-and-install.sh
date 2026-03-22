@@ -115,7 +115,6 @@ run_with_spinner() {
     rm -f "$log_file"
 }
 
-cleanup_stale_artifacts() {
     local paths=(
         "$SCRIPT_DIR/dist"
         "$SCRIPT_DIR/dist-electron"
@@ -369,11 +368,10 @@ else
 fi
 
 # ╔═══════════════════════════════════════════════════════════════════╗
-# ║  Step 4: Fresh Cleanup & Production Quality Gates                ║
+# ║  Step 4: Run Quality Gates                                        
 # ╚═══════════════════════════════════════════════════════════════════╝
-step "Step 4/9 — Fresh Cleanup & Production Quality Gates"
+step "Step 4/9 — Running Production Quality Gates"
 
-cleanup_stale_artifacts
 
 info "Running typechecks, full Electron coverage gate, renderer coverage gate, and native tests..."
 run_with_spinner "verifying production readiness gates" npm run verify:production

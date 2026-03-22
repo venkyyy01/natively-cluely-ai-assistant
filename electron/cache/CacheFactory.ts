@@ -110,14 +110,13 @@ class EnhancedCacheAdapter<K, V> implements OptimizedCache<K, V> {
 
   get(key: K): V | undefined {
     const stringKey = this.serializeKey(key);
-    const syncEntry = this.syncCache.get(stringKey);
-    if (syncEntry && syncEntry.expiresAt > Date.now()) {
-      return syncEntry.value;
-    }
-    if (syncEntry) {
+    const entry = this.syncCache.get(stringKey);
+    if (!entry) return undefined;
+    if (entry.expiresAt <= Date.now()) {
       this.syncCache.delete(stringKey);
+      return undefined;
     }
-    return undefined;
+    return entry.value;
   }
 
   set(key: K, value: V, ttlMs?: number): void {

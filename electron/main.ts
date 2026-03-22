@@ -306,9 +306,10 @@ this.disguiseMode = settingsManager.get('disguiseMode') ?? 'none';
 this.consciousModeEnabled = settingsManager.get('consciousModeEnabled') ?? false;
 
 // 1a. Sync acceleration optimization flags from settings
-syncOptimizationFlagsFromSettings(settingsManager.getAccelerationModeEnabled());
+const accelerationModeEnabled = settingsManager.getAccelerationModeEnabled();
+syncOptimizationFlagsFromSettings(accelerationModeEnabled);
 
-console.log(`[AppState] Initialized with isUndetectable=${this.isUndetectable}, disguiseMode=${this.disguiseMode}, consciousModeEnabled=${this.consciousModeEnabled}`);
+console.log(`[AppState] Initialized with isUndetectable=${this.isUndetectable}, disguiseMode=${this.disguiseMode}, consciousModeEnabled=${this.consciousModeEnabled}, accelerationModeEnabled=${accelerationModeEnabled}`);
 
     // 2. Initialize Helpers with loaded state
     this.windowHelper = new WindowHelper(this)

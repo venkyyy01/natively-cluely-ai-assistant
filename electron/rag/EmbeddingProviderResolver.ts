@@ -14,6 +14,7 @@ export interface AppAPIConfig {
 
 export class EmbeddingProviderResolver {
   private static aneProviderAvailable: boolean | null = null;
+  private static aneProviderChecked: boolean = false;
 
   /**
    * Returns the best available provider.
@@ -21,14 +22,13 @@ export class EmbeddingProviderResolver {
    * Local model is the unconditional fallback — always last.
    */
   static async resolve(config: AppAPIConfig): Promise<IEmbeddingProvider> {
-    const candidates: IEmbeddingProvider[] = [];
-
     // ANE (Apple Neural Engine) provider - highest priority when acceleration enabled
     if (isOptimizationActive('useANEEmbeddings')) {
       const aneProvider = new ANEEmbeddingProvider();
       
-      if (EmbeddingProviderResolver.aneProviderAvailable === null) {
+      if (!EmbeddingProviderResolver.aneProviderChecked) {
         EmbeddingProviderResolver.aneProviderAvailable = await aneProvider.isAvailable();
+        EmbeddingProviderResolver.aneProviderChecked = true;
       }
 
       if (EmbeddingProviderResolver.aneProviderAvailable) {
@@ -37,6 +37,8 @@ export class EmbeddingProviderResolver {
       }
       console.log('[EmbeddingProviderResolver] ANE provider unavailable, falling back to other providers');
     }
+
+    const candidates: IEmbeddingProvider[] = [];
 
     if (config.openaiKey) {
       candidates.push(new OpenAIEmbeddingProvider(config.openaiKey));

@@ -117,14 +117,14 @@ export class StreamManager {
         await Promise.allSettled(this.backgroundTasks);
       }
 
-  if (config.consciousMode && this.jsonAccumulator) {
-      try {
-        const full = JSON.parse(this.jsonAccumulator);
-        this.callbacks.onComplete(full);
-      } catch {
-        this.callbacks.onComplete({ raw: this.jsonAccumulator });
+      if (config.consciousMode && this.jsonAccumulator) {
+        try {
+          const full = JSON.parse(this.jsonAccumulator);
+          this.callbacks.onComplete(full);
+        } catch {
+          this.callbacks.onComplete({ raw: this.jsonAccumulator });
+        }
       }
-    }
 
     } catch (error) {
       this.backgroundTasks = [];

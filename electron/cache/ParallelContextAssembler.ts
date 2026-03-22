@@ -23,12 +23,12 @@ export interface ContextAssemblyOutput {
   relevantContext: Array<{ text: string; timestamp: number }>;
 }
 
-function computeBM25(
+async function computeBM25(
   query: string,
   documents: Array<{ text: string; timestamp: number }>,
   k1: number = 1.5,
   b: number = 0.75
-): Array<{ text: string; score: number; timestamp: number }> {
+): Promise<Array<{ text: string; score: number; timestamp: number }>> {
   if (documents.length === 0) return [];
 
   const queryTerms = query.toLowerCase().split(/\s+/);
@@ -102,7 +102,9 @@ function generateEmbeddingSync(query: string): number[] {
 if (!isMainThread) {
   const { type, payload } = workerData;
   if (type === 'bm25') {
-    parentPort?.postMessage(computeBM25(payload.query, payload.documents));
+    computeBM25(payload.query, payload.documents).then(result => {
+      parentPort?.postMessage(result);
+    });
   } else if (type === 'embedding') {
     parentPort?.postMessage(generateEmbeddingSync(payload.query));
   } else if (type === 'phase') {
@@ -143,13 +145,14 @@ export class ParallelContextAssembler {
       .filter(t => t.speaker !== 'assistant')
       .map(t => ({ text: t.text, timestamp: t.timestamp }));
 
-    const [embedding, bm25ResultsRaw, phase] = await Promise.all([
+    const [embedding, bm25ResultsRaw, phaseResult] = await Promise.all([
       this.runInWorker<number[]>('embedding', { query: input.query }),
       this.runInWorker<Array<{ text: string; score: number; timestamp: number }>>('bm25', { query: input.query, documents: docs }),
       this.runInWorker<InterviewPhase>('phase', { transcript: input.transcript }),
     ]);
 
-    const bm25Results = bm25ResultsRaw.map(r => ({ text: r.text, score: r.score }));
+    const bm25Results = (await bm25ResultsRaw).map((r: { text: string; score: number }) => ({ text: r.text, score: r.score }));
+    const phase = await phaseResult;
     const relevantContext = this.selectRelevantContext(bm25Results, phase);
     const confidence = this.calculateConfidence(embedding, relevantContext);
 
@@ -206,10 +209,9 @@ export class ParallelContextAssembler {
     const docs = input.transcript
       .filter(t => t.speaker !== 'assistant')
       .map(t => ({ text: t.text, timestamp: t.timestamp }));
-    const bm25ResultsRaw = computeBM25(input.query, docs);
-    const bm25Results = bm25ResultsRaw.map(r => ({ text: r.text, score: r.score }));
+    const bm25ResultsRaw = await computeBM25(input.query, docs);
+    const bm25Results = bm25ResultsRaw.map((r: { text: string; score: number }) => ({ text: r.text, score: r.score }));
     const phase = detectPhase(input.transcript);
-    
     const relevantContext = this.selectRelevantContext(bm25Results, phase);
     const confidence = this.calculateConfidence(embedding, relevantContext);
 
