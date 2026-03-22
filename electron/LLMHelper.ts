@@ -18,7 +18,7 @@ import { CustomProvider, CurlProvider } from './services/CredentialsManager';
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import axios from 'axios';
-import { validateResponseQuality } from './llm/postProcessor';
+import { validateResponseQuality, logValidationMetrics } from './llm/postProcessor';
 import { createHash } from 'crypto';
 import { createProviderRateLimiters, RateLimiter } from './services/RateLimiter';
 const execAsync = promisify(exec);
@@ -800,13 +800,13 @@ ANSWER DIRECTLY:`;
     try {
       if (this.useOllama) {
         const ollamaResponse = await this.callOllama(systemPrompt);
-        return this.validateAndProcessResponse(ollamaResponse);
+        return this.validateAndProcessResponse(ollamaResponse, systemPrompt);
       } else if (this.client) {
         // Use Flash model as default (Pro is experimental)
         // Wraps generateWithFlash logic but with retry
         const text = await this.generateWithFlash([{ text: systemPrompt }]);
         const processedResponse = this.processResponse(text);
-        return this.validateAndProcessResponse(processedResponse);
+        return this.validateAndProcessResponse(processedResponse, systemPrompt);
       } else {
         throw new Error("No LLM provider configured");
       }
@@ -857,12 +857,15 @@ ANSWER DIRECTLY:`;
   /**
    * Validate response quality and optionally add warning for violations
    */
-  private validateAndProcessResponse(response: string): string {
+  private validateAndProcessResponse(response: string, context?: string): string {
     if (!this.shouldEnforceValidation) {
       return response;
     }
 
     const validation = validateResponseQuality(response);
+    
+    // Log metrics for monitoring
+    logValidationMetrics(validation, context || 'unknown');
 
     if (!validation.isValid) {
       // Log violation for monitoring

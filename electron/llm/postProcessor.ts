@@ -317,3 +317,25 @@ function generateRewriteHint(violations: string[]): string {
   
   return `Rewrite to fix: ${hints.join(', ')}`;
 }
+
+/**
+ * Log validation metrics for monitoring and debugging
+ */
+export function logValidationMetrics(validation: ValidationResult, prompt: string): void {
+  if (process.env.NODE_ENV === 'development') {
+    console.log('Response Validation Metrics:', {
+      isValid: validation.isValid,
+      violations: validation.violations,
+      sentenceCount: validation.metrics.sentenceCount,
+      maxWordsPerSentence: validation.metrics.maxWordsPerSentence,
+      speakingTime: `${validation.metrics.estimatedSpeakingTime.toFixed(1)}s`,
+      promptType: detectPromptType(prompt)
+    });
+  }
+}
+
+function detectPromptType(prompt: string): string {
+  if (prompt.includes('coding') || prompt.includes('algorithm')) return 'technical';
+  if (prompt.includes('define') || prompt.includes('what is')) return 'definition';
+  return 'general';
+}
