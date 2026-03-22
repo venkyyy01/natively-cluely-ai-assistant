@@ -55,6 +55,9 @@ export class StreamManager {
   private partialParser: PartialJsonParser = new DefaultPartialJsonParser();
   private callbacks: StreamConfigCallbacks;
   private backgroundTasks: Promise<void>[] = [];
+  private activeTasksCount: number = 0;
+  private readonly maxConcurrency = 3;
+  private readonly maxAccumulatorLength = 500000; // ~500kb limit
 
   constructor(callbacks: StreamConfigCallbacks) {
     this.callbacks = callbacks;
@@ -72,11 +75,15 @@ export class StreamManager {
     this.jsonAccumulator = '';
     this.pendingBuffer = '';
     this.backgroundTasks = [];
+    this.activeTasksCount = 0;
 
     try {
       for await (const chunk of stream) {
         this.pendingBuffer += chunk.text;
-        this.jsonAccumulator += chunk.text;
+        
+        if (this.jsonAccumulator.length < this.maxAccumulatorLength) {
+          this.jsonAccumulator += chunk.text;
+        }
 
         if (this.isSemanticBoundary(this.pendingBuffer)) {
           this.callbacks.onToken(this.pendingBuffer);
@@ -87,8 +94,14 @@ export class StreamManager {
             if (partial) {
               this.callbacks.onPartialJson(partial);
 
-              if (config.onBackgroundTask) {
-                this.backgroundTasks.push(config.onBackgroundTask());
+              if (config.onBackgroundTask && this.activeTasksCount < this.maxConcurrency) {
+                this.activeTasksCount++;
+                const task = config.onBackgroundTask().finally(() => {
+                  this.activeTasksCount--;
+                  const index = this.backgroundTasks.indexOf(task);
+                  if (index > -1) this.backgroundTasks.splice(index, 1);
+                });
+                this.backgroundTasks.push(task);
               }
             }
           }
@@ -101,7 +114,7 @@ export class StreamManager {
       }
 
       if (this.backgroundTasks.length > 0) {
-        await Promise.all(this.backgroundTasks);
+        await Promise.allSettled(this.backgroundTasks);
       }
 
   if (config.consciousMode && this.jsonAccumulator) {

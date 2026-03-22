@@ -81,8 +81,7 @@ export function getOptimizationFlags(): Readonly<OptimizationFlags> {
 /**
  * Update optimization flags from settings
  */
-export function syncOptimizationFlagsFromSettings(getAccelerationModeEnabled: () => boolean): void {
-  const accelerationEnabled = getAccelerationModeEnabled();
+export function syncOptimizationFlagsFromSettings(accelerationEnabled: boolean): void {
   if (currentFlags.accelerationEnabled !== accelerationEnabled) {
     currentFlags = { ...currentFlags, accelerationEnabled };
   }

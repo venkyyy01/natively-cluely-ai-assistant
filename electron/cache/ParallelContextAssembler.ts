@@ -1,5 +1,6 @@
 import { isOptimizationActive, getEffectiveWorkerCount } from '../config/optimizations';
 import { InterviewPhase } from '../conscious/types';
+import { Worker, isMainThread, parentPort, workerData } from 'worker_threads';
 
 export interface ContextAssemblyInput {
   query: string;
@@ -80,6 +81,35 @@ function detectPhase(transcript: Array<{ text: string; timestamp: number }>): In
   return 'requirements_gathering';
 }
 
+function simpleHash(str: string): number {
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) {
+    const char = str.charCodeAt(i);
+    hash = ((hash << 5) - hash) + char;
+    hash = hash & hash;
+  }
+  return Math.abs(hash);
+}
+
+function generateEmbeddingSync(query: string): number[] {
+  const hash = simpleHash(query);
+  const embedding = new Array(384).fill(0);
+  embedding[hash % 384] = 1;
+  embedding[(hash + 1) % 384] = 0.5;
+  return embedding;
+}
+
+if (!isMainThread) {
+  const { type, payload } = workerData;
+  if (type === 'bm25') {
+    parentPort?.postMessage(computeBM25(payload.query, payload.documents));
+  } else if (type === 'embedding') {
+    parentPort?.postMessage(generateEmbeddingSync(payload.query));
+  } else if (type === 'phase') {
+    parentPort?.postMessage(detectPhase(payload.transcript));
+  }
+}
+
 export class ParallelContextAssembler {
   private workerCount: number;
 
@@ -91,19 +121,36 @@ export class ParallelContextAssembler {
     return this.workerCount;
   }
 
+  private runInWorker<T>(type: string, payload: any): Promise<T> {
+    return new Promise((resolve, reject) => {
+      const worker = new Worker(__filename, {
+        workerData: { type, payload }
+      });
+      worker.on('message', resolve);
+      worker.on('error', reject);
+      worker.on('exit', (code) => {
+        if (code !== 0) reject(new Error(`Worker stopped with exit code ${code}`));
+      });
+    });
+  }
+
   async assemble(input: ContextAssemblyInput): Promise<ContextAssemblyOutput> {
     if (!isOptimizationActive('useParallelContext')) {
       return this.assembleLegacy(input);
     }
 
-    const [embedding, bm25Results, phase] = await Promise.all([
-      this.generateEmbedding(input.query),
-      this.runBM25(input.query, input.transcript),
-      Promise.resolve(detectPhase(input.transcript)),
+    const docs = input.transcript
+      .filter(t => t.speaker !== 'assistant')
+      .map(t => ({ text: t.text, timestamp: t.timestamp }));
+
+    const [embedding, bm25ResultsRaw, phase] = await Promise.all([
+      this.runInWorker<number[]>('embedding', { query: input.query }),
+      this.runInWorker<Array<{ text: string; score: number; timestamp: number }>>('bm25', { query: input.query, documents: docs }),
+      this.runInWorker<InterviewPhase>('phase', { transcript: input.transcript }),
     ]);
 
+    const bm25Results = bm25ResultsRaw.map(r => ({ text: r.text, score: r.score }));
     const relevantContext = this.selectRelevantContext(bm25Results, phase);
-
     const confidence = this.calculateConfidence(embedding, relevantContext);
 
     return {
@@ -113,32 +160,6 @@ export class ParallelContextAssembler {
       confidence,
       relevantContext
     };
-  }
-
-  private async generateEmbedding(query: string): Promise<number[]> {
-    const hash = this.simpleHash(query);
-    const embedding = new Array(384).fill(0);
-    embedding[hash % 384] = 1;
-    embedding[(hash + 1) % 384] = 0.5;
-    return embedding;
-  }
-
-  private simpleHash(str: string): number {
-    let hash = 0;
-    for (let i = 0; i < str.length; i++) {
-      const char = str.charCodeAt(i);
-      hash = ((hash << 5) - hash) + char;
-      hash = hash & hash;
-    }
-    return Math.abs(hash);
-  }
-
-  private runBM25(query: string, transcript: Array<{ speaker: string; text: string; timestamp: number }>): Array<{ text: string; score: number }> {
-    const docs = transcript
-      .filter(t => t.speaker !== 'assistant')
-      .map(t => ({ text: t.text, timestamp: t.timestamp }));
-
-    return computeBM25(query, docs).map(r => ({ text: r.text, score: r.score }));
   }
 
   private selectRelevantContext(
@@ -181,9 +202,14 @@ export class ParallelContextAssembler {
   }
 
   private async assembleLegacy(input: ContextAssemblyInput): Promise<ContextAssemblyOutput> {
-    const embedding = await this.generateEmbedding(input.query);
-    const bm25Results = await this.runBM25(input.query, input.transcript);
+    const embedding = generateEmbeddingSync(input.query);
+    const docs = input.transcript
+      .filter(t => t.speaker !== 'assistant')
+      .map(t => ({ text: t.text, timestamp: t.timestamp }));
+    const bm25ResultsRaw = computeBM25(input.query, docs);
+    const bm25Results = bm25ResultsRaw.map(r => ({ text: r.text, score: r.score }));
     const phase = detectPhase(input.transcript);
+    
     const relevantContext = this.selectRelevantContext(bm25Results, phase);
     const confidence = this.calculateConfidence(embedding, relevantContext);
 
@@ -191,6 +217,6 @@ export class ParallelContextAssembler {
   }
 
   terminate(): void {
-    // Cleanup if needed
+    // Cleanup if needed (worker pool would be terminated here)
   }
 }

@@ -306,7 +306,7 @@ this.disguiseMode = settingsManager.get('disguiseMode') ?? 'none';
 this.consciousModeEnabled = settingsManager.get('consciousModeEnabled') ?? false;
 
 // 1a. Sync acceleration optimization flags from settings
-syncOptimizationFlagsFromSettings(() => settingsManager.getAccelerationModeEnabled());
+syncOptimizationFlagsFromSettings(settingsManager.getAccelerationModeEnabled());
 
 console.log(`[AppState] Initialized with isUndetectable=${this.isUndetectable}, disguiseMode=${this.disguiseMode}, consciousModeEnabled=${this.consciousModeEnabled}`);
 
@@ -2111,7 +2111,7 @@ public setAccelerationModeEnabled(enabled: boolean): boolean {
     throw new Error('Unable to persist Acceleration Mode')
   }
 
-  syncOptimizationFlagsFromSettings(() => settings.getAccelerationModeEnabled())
+  syncOptimizationFlagsFromSettings(settings.getAccelerationModeEnabled())
   this._broadcastToAllWindows('acceleration-mode-changed', enabled)
   return true
 }

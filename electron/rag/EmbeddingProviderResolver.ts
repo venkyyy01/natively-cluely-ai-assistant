@@ -3,6 +3,8 @@ import { OpenAIEmbeddingProvider } from './providers/OpenAIEmbeddingProvider';
 import { GeminiEmbeddingProvider } from './providers/GeminiEmbeddingProvider';
 import { OllamaEmbeddingProvider } from './providers/OllamaEmbeddingProvider';
 import { LocalEmbeddingProvider } from './providers/LocalEmbeddingProvider';
+import { ANEEmbeddingProvider } from './providers/ANEEmbeddingProvider';
+import { isOptimizationActive } from '../config/optimizations';
 
 export interface AppAPIConfig {
   openaiKey?: string;
@@ -11,6 +13,8 @@ export interface AppAPIConfig {
 }
 
 export class EmbeddingProviderResolver {
+  private static aneProviderAvailable: boolean | null = null;
+
   /**
    * Returns the best available provider.
    * Runs isAvailable() checks in priority order.
@@ -19,13 +23,28 @@ export class EmbeddingProviderResolver {
   static async resolve(config: AppAPIConfig): Promise<IEmbeddingProvider> {
     const candidates: IEmbeddingProvider[] = [];
 
+    // ANE (Apple Neural Engine) provider - highest priority when acceleration enabled
+    if (isOptimizationActive('useANEEmbeddings')) {
+      const aneProvider = new ANEEmbeddingProvider();
+      
+      if (EmbeddingProviderResolver.aneProviderAvailable === null) {
+        EmbeddingProviderResolver.aneProviderAvailable = await aneProvider.isAvailable();
+      }
+
+      if (EmbeddingProviderResolver.aneProviderAvailable) {
+        console.log(`[EmbeddingProviderResolver] ANE provider available, using ${aneProvider.name} (${aneProvider.dimensions}d)`);
+        return aneProvider;
+      }
+      console.log('[EmbeddingProviderResolver] ANE provider unavailable, falling back to other providers');
+    }
+
     if (config.openaiKey) {
       candidates.push(new OpenAIEmbeddingProvider(config.openaiKey));
     }
     if (config.geminiKey) {
       candidates.push(new GeminiEmbeddingProvider(config.geminiKey));
     }
-    
+
     candidates.push(new OllamaEmbeddingProvider(config.ollamaUrl || 'http://localhost:11434'));
     candidates.push(new LocalEmbeddingProvider()); // always last, always works
 
@@ -38,7 +57,7 @@ export class EmbeddingProviderResolver {
       console.log(`[EmbeddingProviderResolver] Provider ${provider.name} unavailable, trying next...`);
     }
 
-    // This should never happen since LocalEmbeddingProvider.isAvailable() 
+    // This should never happen since LocalEmbeddingProvider.isAvailable()
     // only returns false if the bundled model is corrupted — a fatal install error
     throw new Error('No embedding provider available. The bundled model may be corrupted. Please reinstall.');
   }

@@ -13,11 +13,13 @@ const MAX_CONTEXT_HISTORY = 200;
 
 import { RecapLLM } from './llm';
 import {
-    ConsciousModeStructuredResponse,
-    ReasoningThread,
-    mergeConsciousModeResponses,
+  ConsciousModeStructuredResponse,
+  ReasoningThread,
+  mergeConsciousModeResponses,
 } from './ConsciousMode';
 import { ThreadManager, InterviewPhaseDetector, TokenBudgetManager, InterviewPhase } from './conscious';
+import { AdaptiveContextWindow, ContextEntry, ContextSelectionConfig } from './conscious/AdaptiveContextWindow';
+import { isOptimizationActive } from './config/optimizations';
 
 export interface TranscriptSegment {
     marker?: string;
@@ -87,10 +89,13 @@ export class SessionTracker {
     // Reference to RecapLLM for epoch summarization (injected later)
     private recapLLM: RecapLLM | null = null;
 
-    // Conscious Mode Realtime components
-    private threadManager: ThreadManager = new ThreadManager();
-    private phaseDetector: InterviewPhaseDetector = new InterviewPhaseDetector();
-    private tokenBudgetManager: TokenBudgetManager = new TokenBudgetManager('openai');
+// Conscious Mode Realtime components
+  private threadManager: ThreadManager = new ThreadManager();
+  private phaseDetector: InterviewPhaseDetector = new InterviewPhaseDetector();
+  private tokenBudgetManager: TokenBudgetManager = new TokenBudgetManager('openai');
+
+  // Adaptive context window for acceleration
+  private adaptiveContextWindow: AdaptiveContextWindow | null = null;
 
     // ============================================
     // Configuration
@@ -286,9 +291,48 @@ export class SessionTracker {
         }
     }
 
-    isConsciousModeEnabled(): boolean {
-        return this.consciousModeEnabled;
+isConsciousModeEnabled(): boolean {
+    return this.consciousModeEnabled;
+  }
+
+  private getAdaptiveContextWindow(): AdaptiveContextWindow {
+    if (!this.adaptiveContextWindow) {
+      this.adaptiveContextWindow = new AdaptiveContextWindow();
     }
+    return this.adaptiveContextWindow;
+  }
+
+  async getAdaptiveContext(
+    query: string,
+    queryEmbedding: number[],
+    tokenBudget: number = 500
+  ): Promise<ContextItem[]> {
+    if (!isOptimizationActive('useAdaptiveWindow')) {
+      return this.getContext(Math.floor(tokenBudget / 4));
+    }
+
+    const candidates: ContextEntry[] = this.contextItems.map(item => ({
+      text: item.text,
+      timestamp: item.timestamp,
+      phase: undefined as InterviewPhase | undefined,
+    }));
+
+    const config: ContextSelectionConfig = {
+      tokenBudget,
+      recencyWeight: 0.4,
+      semanticWeight: 0.4,
+      phaseAlignmentWeight: 0.2,
+    };
+
+    const window = this.getAdaptiveContextWindow();
+    const selected = await window.selectContext(query, queryEmbedding, candidates, config);
+
+    return selected.map(entry => ({
+      role: 'interviewer' as const,
+      text: entry.text,
+      timestamp: entry.timestamp,
+    }));
+  }
 
     getLatestConsciousResponse(): ConsciousModeStructuredResponse | null {
         return this.latestConsciousResponse;

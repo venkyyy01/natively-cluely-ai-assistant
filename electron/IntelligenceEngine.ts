@@ -6,17 +6,19 @@ import { EventEmitter } from 'events';
 import { LLMHelper } from './LLMHelper';
 import { SessionTracker, TranscriptSegment, SuggestionTrigger, ContextItem } from './SessionTracker';
 import {
-    classifyConsciousModeQuestion,
-    formatConsciousModeResponse,
-    isValidConsciousModeResponse,
+  classifyConsciousModeQuestion,
+  formatConsciousModeResponse,
+  isValidConsciousModeResponse,
 } from './ConsciousMode';
 import {
-    AnswerLLM, AssistLLM, FollowUpLLM, RecapLLM,
-    FollowUpQuestionsLLM, WhatToAnswerLLM,
-    prepareTranscriptForWhatToAnswer, buildTemporalContext,
-    AssistantResponse as LLMAssistantResponse, classifyIntent
+  AnswerLLM, AssistLLM, FollowUpLLM, RecapLLM,
+  FollowUpQuestionsLLM, WhatToAnswerLLM,
+  prepareTranscriptForWhatToAnswer, buildTemporalContext,
+  AssistantResponse as LLMAssistantResponse, classifyIntent
 } from './llm';
 import { FallbackExecutor } from './conscious';
+import { ParallelContextAssembler, ContextAssemblyInput, ContextAssemblyOutput } from './cache/ParallelContextAssembler';
+import { isOptimizationActive } from './config/optimizations';
 
 // Mode types
 export type IntelligenceMode = 'idle' | 'assist' | 'what_to_say' | 'follow_up' | 'recap' | 'manual' | 'follow_up_questions' | 'reasoning_first';
@@ -62,40 +64,91 @@ export interface IntelligenceModeEvents {
 }
 
 export class IntelligenceEngine extends EventEmitter {
-    // Mode state
-    private activeMode: IntelligenceMode = 'idle';
-    private assistCancellationToken: AbortController | null = null;
+  // Mode state
+  private activeMode: IntelligenceMode = 'idle';
+  private assistCancellationToken: AbortController | null = null;
 
-    // Mode-specific LLMs
-    private answerLLM: AnswerLLM | null = null;
-    private assistLLM: AssistLLM | null = null;
-    private followUpLLM: FollowUpLLM | null = null;
-    private recapLLM: RecapLLM | null = null;
-    private followUpQuestionsLLM: FollowUpQuestionsLLM | null = null;
-    private whatToAnswerLLM: WhatToAnswerLLM | null = null;
+  // Mode-specific LLMs
+  private answerLLM: AnswerLLM | null = null;
+  private assistLLM: AssistLLM | null = null;
+  private followUpLLM: FollowUpLLM | null = null;
+  private recapLLM: RecapLLM | null = null;
+  private followUpQuestionsLLM: FollowUpQuestionsLLM | null = null;
+  private whatToAnswerLLM: WhatToAnswerLLM | null = null;
 
-    // Keep reference to LLMHelper for client access
-    private llmHelper: LLMHelper;
+  // Keep reference to LLMHelper for client access
+  private llmHelper: LLMHelper;
 
-    // Reference to SessionTracker for context
-    private session: SessionTracker;
+  // Reference to SessionTracker for context
+  private session: SessionTracker;
 
-    // Conscious Mode Realtime fallback executor
-    private fallbackExecutor: FallbackExecutor = new FallbackExecutor();
+  // Conscious Mode Realtime fallback executor
+  private fallbackExecutor: FallbackExecutor = new FallbackExecutor();
 
-    // Timestamps for tracking
-    private lastTranscriptTime: number = 0;
-    private lastTriggerTime: number = 0;
-    private readonly triggerCooldown: number = 3000; // 3 seconds
+  // Parallel context assembler for acceleration
+  private parallelContextAssembler: ParallelContextAssembler | null = null;
 
-    constructor(llmHelper: LLMHelper, session: SessionTracker) {
-        super();
-        this.llmHelper = llmHelper;
-        this.session = session;
-        this.initializeLLMs();
+  // Timestamps for tracking
+  private lastTranscriptTime: number = 0;
+  private lastTriggerTime: number = 0;
+  private readonly triggerCooldown: number = 3000; // 3 seconds
+
+  constructor(llmHelper: LLMHelper, session: SessionTracker) {
+    super();
+    this.llmHelper = llmHelper;
+    this.session = session;
+    this.initializeLLMs();
+    
+    if (isOptimizationActive('useParallelContext')) {
+      this.parallelContextAssembler = new ParallelContextAssembler({});
+    }
+  }
+
+  private async getAssembledContext(query: string, tokenBudget: number): Promise<{
+    contextItems: ContextItem[];
+    assemblyResult?: ContextAssemblyOutput;
+  }> {
+    const contextItems = this.session.getContext(tokenBudget);
+    
+    if (!this.parallelContextAssembler || !isOptimizationActive('useParallelContext')) {
+      return { contextItems };
     }
 
-    getLLMHelper(): LLMHelper {
+    const transcript = contextItems.map(item => ({
+      speaker: item.role,
+      text: item.text,
+      timestamp: item.timestamp,
+    }));
+
+    const input: ContextAssemblyInput = {
+      query,
+      transcript,
+      previousContext: {
+        recentTopics: [],
+        activeThread: null,
+      },
+    };
+
+    try {
+      const assemblyResult = await this.parallelContextAssembler.assemble(input);
+      
+      const relevantItems = assemblyResult.relevantContext.map(ctx => ({
+        role: 'interviewer' as const,
+        text: ctx.text,
+        timestamp: ctx.timestamp,
+      }));
+
+      return {
+        contextItems: relevantItems.length > 0 ? relevantItems : contextItems,
+        assemblyResult,
+      };
+    } catch (error) {
+      console.warn('[IntelligenceEngine] ParallelContextAssembler failed, using fallback:', error);
+      return { contextItems };
+    }
+  }
+
+  getLLMHelper(): LLMHelper {
         return this.llmHelper;
     }
 

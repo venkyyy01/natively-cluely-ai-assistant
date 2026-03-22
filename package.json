@@ -240,6 +240,7 @@
   },
   "optionalDependencies": {
     "natively-audio": "file:./native-module",
+    "onnxruntime-node": "^1.18.0",
     "sqlite-vec-darwin-arm64": "^0.1.7-alpha.2",
     "sqlite-vec-darwin-x64": "^0.1.7-alpha.2"
   }

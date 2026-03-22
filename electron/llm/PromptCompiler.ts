@@ -1,6 +1,15 @@
 import { CORE_IDENTITY, STRICT_BEHAVIOR_RULES, PHASE_GUIDANCE, PROVIDER_ADAPTERS } from './promptComponents';
 import { InterviewPhase } from '../conscious/types';
 import { isOptimizationActive } from '../config/optimizations';
+import {
+  HARD_SYSTEM_PROMPT,
+  GROQ_SYSTEM_PROMPT,
+  OPENAI_SYSTEM_PROMPT,
+  CLAUDE_SYSTEM_PROMPT,
+  UNIVERSAL_SYSTEM_PROMPT,
+  CUSTOM_SYSTEM_PROMPT,
+  CONSCIOUS_MODE_PHASE_PROMPTS,
+} from './prompts';
 
 export interface CompileOptions {
   provider: string;
@@ -22,6 +31,15 @@ interface CacheEntry {
   prompt: CompiledPrompt;
   createdAt: number;
 }
+
+const PROVIDER_PROMPT_MAP: Record<string, string> = {
+  groq: GROQ_SYSTEM_PROMPT,
+  openai: OPENAI_SYSTEM_PROMPT,
+  claude: CLAUDE_SYSTEM_PROMPT,
+  gemini: HARD_SYSTEM_PROMPT,
+  ollama: UNIVERSAL_SYSTEM_PROMPT,
+  custom: CUSTOM_SYSTEM_PROMPT,
+};
 
 export class PromptCompiler {
   private cache: Map<string, CacheEntry> = new Map();
@@ -70,7 +88,7 @@ export class PromptCompiler {
       finalPrompt += `\n\n<active_thread>${options.contextSnapshot.activeThread}</active_thread>`;
     }
     if (options.contextSnapshot?.recentTopics?.length) {
-      finalPrompt += `\n\n<recent_topics>${options.contextSnapshot.recentTopics.join(', ')}</recent_topics>`;
+      finalPrompt += `\n\n<recent_topics>${options.contextSnapshot.recentTopics.join(',')}</recent_topics>`;
     }
 
     const systemPrompt = adapter.systemPromptWrapper(finalPrompt);
@@ -103,11 +121,24 @@ DO NOT include any other text outside the JSON.
     return Math.ceil(text.length / 4);
   }
 
-  private async compileLegacy(options: CompileOptions): Promise<CompiledPrompt> {
+  private compileLegacy(options: CompileOptions): CompiledPrompt {
+    const basePrompt = PROVIDER_PROMPT_MAP[options.provider] || HARD_SYSTEM_PROMPT;
+    
+    if (options.mode === 'conscious') {
+      const consciousPrompt = CONSCIOUS_MODE_PHASE_PROMPTS[options.phase];
+      if (consciousPrompt) {
+        return {
+          systemPrompt: consciousPrompt,
+          responseFormat: 'json',
+          estimatedTokens: this.estimateTokens(consciousPrompt),
+        };
+      }
+    }
+
     return {
-      systemPrompt: 'Legacy prompt compilation - using existing prompts.ts',
+      systemPrompt: basePrompt,
       responseFormat: 'markdown',
-      estimatedTokens: 4000,
+      estimatedTokens: this.estimateTokens(basePrompt),
     };
   }
 
