@@ -276,7 +276,7 @@ func spawnBackend() throws -> Process {
 | Window class | Custom `ASPanel`, `ASWindow` |
 | V8/Chromium heap | Eliminated (no Electron) |
 | Electron IPC patterns | Eliminated (stdio JSON-RPC) |
-| Code signature | Valid Apple Developer signature |
+| Code signature | Ad-hoc signed (local dev) or self-signed certificate |
 | Memory allocation | Node.js generic pattern |
 
 ### Activity Monitor Appearance
@@ -948,11 +948,107 @@ REMOVED:
               └────────┬────────┘
                        ▼
               ┌─────────────────┐
-              │  Code Signing   │
-              │  Notarization   │
+              │  Ad-Hoc Signing │
+              │  (local only)   │
               └────────┬────────┘
                        ▼
-              NativelyHost.app (DMG)
+              NativelyHost.app
+```
+
+### Code Signing (Local Development - No Apple Developer Account)
+
+**Ad-hoc signing** allows the app to run on your device without an Apple Developer account. This is device-specific and won't work on other Macs without repeating the trust process.
+
+#### Option 1: Ad-Hoc Signing (Recommended for Development)
+
+```bash
+# Sign with ad-hoc identity (no certificate required)
+codesign --force --deep --sign - NativelyHost.app
+
+# Sign embedded binaries individually first
+codesign --force --sign - NativelyHost.app/Contents/Resources/assistantd
+codesign --force --sign - NativelyHost.app/Contents/Frameworks/native.node
+codesign --force --deep --sign - NativelyHost.app
+```
+
+#### Option 2: Self-Signed Certificate (More Persistent)
+
+```bash
+# 1. Create a self-signed certificate in Keychain Access:
+#    - Open Keychain Access → Certificate Assistant → Create a Certificate
+#    - Name: "NativelyDev"
+#    - Identity Type: Self-Signed Root
+#    - Certificate Type: Code Signing
+#    - Check "Let me override defaults" → Continue through wizard
+
+# 2. Sign with your self-signed certificate
+codesign --force --deep --sign "NativelyDev" NativelyHost.app
+```
+
+#### Bypassing Gatekeeper (First Run)
+
+After building, macOS will block the unsigned/ad-hoc app. Bypass with:
+
+```bash
+# Method 1: Remove quarantine attribute
+xattr -cr NativelyHost.app
+
+# Method 2: Allow in System Settings (if prompted)
+# System Settings → Privacy & Security → "Allow Anyway"
+
+# Method 3: Right-click → Open (first time only)
+# This adds a one-time exception
+```
+
+#### Disabling SIP (Not Recommended - Last Resort)
+
+If all else fails and you need to debug signing issues:
+
+```bash
+# Only do this temporarily for debugging
+# Reboot into Recovery Mode (hold Cmd+R on Intel, hold Power on M-series)
+# Terminal → csrutil disable
+# Reboot normally
+
+# Re-enable after debugging:
+# Recovery Mode → Terminal → csrutil enable
+```
+
+#### Automated Build Script with Ad-Hoc Signing
+
+```bash
+#!/bin/bash
+# scripts/build-macos.sh
+
+set -e
+
+echo "Building React UI..."
+pnpm build
+
+echo "Building Node.js backend..."
+pnpm build:backend
+
+echo "Building Rust native module..."
+cd native-module && pnpm build && cd ..
+
+echo "Building Swift host..."
+cd swift-host && xcodebuild -scheme NativelyHost -configuration Release && cd ..
+
+echo "Assembling bundle..."
+./scripts/assemble-bundle.sh
+
+echo "Ad-hoc signing..."
+# Sign embedded executables first
+codesign --force --sign - "NativelyHost.app/Contents/Resources/assistantd"
+codesign --force --sign - "NativelyHost.app/Contents/Frameworks/native.node"
+# Sign the main app bundle
+codesign --force --deep --sign - "NativelyHost.app"
+
+echo "Removing quarantine..."
+xattr -cr NativelyHost.app
+
+echo "Build complete: NativelyHost.app"
+echo "Run with: open NativelyHost.app"
 ```
 
 ### App Bundle Structure
@@ -979,7 +1075,10 @@ NativelyHost.app/
 │   └── _CodeSignature/
 ```
 
-### Entitlements
+### Entitlements (For Future Distribution)
+
+> **Note:** Entitlements are only enforced with hardened runtime and notarization. 
+> For local ad-hoc signing, these are not strictly required but included for future reference.
 
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
@@ -990,16 +1089,34 @@ NativelyHost.app/
     <key>com.apple.security.app-sandbox</key>
     <false/>
     
-    <key>com.apple.security.hardened-runtime</key>
-    <true/>
-    
     <key>com.apple.security.device.audio-input</key>
     <true/>
     
     <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
     <true/>
+    
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
 </dict>
 </plist>
+```
+
+### Local Trust Setup (One-Time)
+
+After first build, run these commands to trust the app on your device:
+
+```bash
+# 1. Remove quarantine (required after every build)
+xattr -cr NativelyHost.app
+
+# 2. Add to Accessibility (for global hotkeys) - manual step
+# System Settings → Privacy & Security → Accessibility → Add NativelyHost
+
+# 3. Add to Screen Recording (for screenshot capture) - manual step  
+# System Settings → Privacy & Security → Screen Recording → Add NativelyHost
+
+# 4. Add to Microphone (for audio capture) - manual step
+# System Settings → Privacy & Security → Microphone → Add NativelyHost
 ```
 
 ---
