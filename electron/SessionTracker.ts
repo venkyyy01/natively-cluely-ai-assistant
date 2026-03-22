@@ -554,6 +554,20 @@ export class SessionTracker {
 
             // Evict ONLY the exact 500 oldest entries that we just summarized
             this.fullTranscript = this.fullTranscript.slice(summarizeCount);
+        } catch (error) {
+            console.error('[SessionTracker] Error during transcript compaction:', error);
+            // Continue with compaction even if summarization fails
+            try {
+                // Fallback: create a simple marker without LLM summarization
+                const oldEntries = this.fullTranscript.slice(0, 500);
+                const fallback = `[Earlier discussion: ${oldEntries.length} segments, topics: ${oldEntries.slice(0, 3).map(s => s.text.substring(0, 40)).join('; ')}...]`;
+                this.transcriptEpochSummaries.push(fallback);
+                this.transcriptEpochSummaries = this.transcriptEpochSummaries.slice(-SessionTracker.MAX_EPOCH_SUMMARIES);
+                this.fullTranscript = this.fullTranscript.slice(500);
+                console.warn('[SessionTracker] Using fallback compaction due to error');
+            } catch (fallbackError) {
+                console.error('[SessionTracker] Fallback compaction also failed:', fallbackError);
+            }
         } finally {
             this.isCompacting = false;
         }

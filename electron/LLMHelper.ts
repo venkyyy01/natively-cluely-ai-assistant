@@ -238,12 +238,14 @@ export class LLMHelper {
     this.groqClient = null;
     this.openaiClient = null;
     this.claudeClient = null;
-    // Destroy rate limiters
+    // Destroy rate limiters and null reference
     if (this.rateLimiters) {
       Object.values(this.rateLimiters).forEach(rl => rl.destroy());
+      this.rateLimiters = null as any;
     }
-    // Stop model version manager background scheduler
+    // Stop model version manager background scheduler and null reference
     this.modelVersionManager.stopScheduler();
+    this.modelVersionManager = null as any;
     console.log('[LLMHelper] Keys scrubbed from memory');
   }
 

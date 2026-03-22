@@ -23,6 +23,8 @@ process.on('unhandledRejection', (reason, promise) => {
 });
 
 const logFile = path.join(app.getPath('documents'), 'natively_debug.log');
+const LOG_MAX_SIZE_BYTES = 10 * 1024 * 1024; // 10MB
+const LOG_ROTATION_COUNT = 3; // Keep 3 rotated files
 
 const originalLog = console.log;
 const originalWarn = console.warn;
@@ -30,11 +32,52 @@ const originalError = console.error;
 
 const isDev = process.env.NODE_ENV === "development";
 
+/**
+ * Rotate log files if they exceed the maximum size.
+ * Keeps LOG_ROTATION_COUNT rotated files (e.g., .log.1, .log.2, .log.3)
+ */
+function rotateLogsIfNeeded(): void {
+  try {
+    const fs = require('fs');
+    
+    // Check if log file exists and exceeds max size
+    if (!fs.existsSync(logFile)) return;
+    
+    const stats = fs.statSync(logFile);
+    if (stats.size < LOG_MAX_SIZE_BYTES) return;
+    
+    // Rotate existing files: .log.3 -> delete, .log.2 -> .log.3, .log.1 -> .log.2, .log -> .log.1
+    for (let i = LOG_ROTATION_COUNT; i >= 1; i--) {
+      const rotatedPath = `${logFile}.${i}`;
+      if (fs.existsSync(rotatedPath)) {
+        if (i === LOG_ROTATION_COUNT) {
+          // Delete oldest rotation
+          fs.unlinkSync(rotatedPath);
+        } else {
+          // Rename to next rotation number
+          fs.renameSync(rotatedPath, `${logFile}.${i + 1}`);
+        }
+      }
+    }
+    
+    // Rename current log to .log.1
+    fs.renameSync(logFile, `${logFile}.1`);
+    
+    originalLog(`[LogRotation] Rotated debug log (size was ${Math.round(stats.size / 1024 / 1024)}MB)`);
+  } catch (e) {
+    // Ignore rotation errors - don't disrupt logging
+    originalError('[LogRotation] Failed to rotate logs:', e);
+  }
+}
+
 function logToFile(msg: string) {
   // Only log to file in development
   if (!isDev) return;
 
   try {
+    // Check and rotate logs if needed before writing
+    rotateLogsIfNeeded();
+    
     require('fs').appendFileSync(logFile, new Date().toISOString() + ' ' + msg + '\n');
   } catch (e) {
     // Ignore logging errors
@@ -101,6 +144,64 @@ type STTProvider = (GoogleSTT | RestSTT | DeepgramStreamingSTT | SonioxStreaming
   notifySpeechEnded?: () => void;
   destroy?: () => void;
 };
+
+/** Type guard functions for STT provider optional methods */
+function hasFinalize(stt: STTProvider): stt is STTProvider & { finalize: () => void } {
+  return 'finalize' in stt && typeof stt.finalize === 'function';
+}
+
+function hasSetAudioChannelCount(stt: STTProvider): stt is STTProvider & { setAudioChannelCount: (count: number) => void } {
+  return 'setAudioChannelCount' in stt && typeof stt.setAudioChannelCount === 'function';
+}
+
+function hasNotifySpeechEnded(stt: STTProvider): stt is STTProvider & { notifySpeechEnded: () => void } {
+  return 'notifySpeechEnded' in stt && typeof stt.notifySpeechEnded === 'function';
+}
+
+function hasDestroy(stt: STTProvider): stt is STTProvider & { destroy: () => void } {
+  return 'destroy' in stt && typeof stt.destroy === 'function';
+}
+
+/** Safe wrapper functions for STT provider optional methods */
+function safeFinalize(stt: STTProvider | null): void {
+  if (stt && hasFinalize(stt)) {
+    try {
+      stt.finalize();
+    } catch (error) {
+      console.error('[Main] Error calling finalize on STT provider:', error);
+    }
+  }
+}
+
+function safeSetAudioChannelCount(stt: STTProvider | null, count: number): void {
+  if (stt && hasSetAudioChannelCount(stt)) {
+    try {
+      stt.setAudioChannelCount(count);
+    } catch (error) {
+      console.error('[Main] Error calling setAudioChannelCount on STT provider:', error);
+    }
+  }
+}
+
+function safeNotifySpeechEnded(stt: STTProvider | null): void {
+  if (stt && hasNotifySpeechEnded(stt)) {
+    try {
+      stt.notifySpeechEnded();
+    } catch (error) {
+      console.error('[Main] Error calling notifySpeechEnded on STT provider:', error);
+    }
+  }
+}
+
+function safeDestroy(stt: STTProvider | null): void {
+  if (stt && hasDestroy(stt)) {
+    try {
+      stt.destroy();
+    } catch (error) {
+      console.error('[Main] Error calling destroy on STT provider:', error);
+    }
+  }
+}
 
 // Premium: Knowledge modules loaded conditionally
 let KnowledgeOrchestratorClass: any = null;
@@ -672,6 +773,12 @@ try {
   private googleSTT: STTProvider | null = null; // Interviewer
   private googleSTT_User: STTProvider | null = null; // User
 
+  // Listener references for proper cleanup (prevent memory leaks)
+  private sttTranscriptListener_Interviewer: ((segment: { text: string, isFinal: boolean, confidence: number }) => void) | null = null;
+  private sttErrorListener_Interviewer: ((err: Error) => void) | null = null;
+  private sttTranscriptListener_User: ((segment: { text: string, isFinal: boolean, confidence: number }) => void) | null = null;
+  private sttErrorListener_User: ((err: Error) => void) | null = null;
+
   private createSTTProvider(speaker: 'interviewer' | 'user'): STTProvider {
     const { CredentialsManager } = require('./services/CredentialsManager');
     const sttProvider = CredentialsManager.getInstance().getSttProvider();
@@ -745,10 +852,10 @@ try {
 
     stt.setRecognitionLanguage(sttLanguage);
 
-    // Wire Transcript Events
+    // Wire Transcript Events - store references for proper cleanup
     const sttEmitter = stt as EventEmitter
 
-    sttEmitter.on('transcript', (segment: { text: string, isFinal: boolean, confidence: number }) => {
+    const transcriptHandler = (segment: { text: string, isFinal: boolean, confidence: number }) => {
       if (!this.isMeetingActive) {
         return;
       }
@@ -791,11 +898,23 @@ try {
       }).catch((error) => {
         console.error('[Main] Failed to auto-trigger interview assist:', error);
       });
-    });
+    };
 
-    sttEmitter.on('error', (err: Error) => {
+    const errorHandler = (err: Error) => {
       console.error(`[Main] STT (${speaker}) Error:`, err);
-    });
+    };
+
+    // Store listener references based on speaker
+    if (speaker === 'interviewer') {
+      this.sttTranscriptListener_Interviewer = transcriptHandler;
+      this.sttErrorListener_Interviewer = errorHandler;
+    } else {
+      this.sttTranscriptListener_User = transcriptHandler;
+      this.sttErrorListener_User = errorHandler;
+    }
+
+    sttEmitter.on('transcript', transcriptHandler);
+    sttEmitter.on('error', errorHandler);
 
     return stt;
   }
@@ -813,7 +932,7 @@ try {
           this.googleSTT?.write(chunk);
         });
         this.systemAudioCapture.on('speech_ended', () => {
-          this.googleSTT?.notifySpeechEnded?.();
+          safeNotifySpeechEnded(this.googleSTT);
         });
         this.systemAudioCapture.on('error', (err: Error) => {
           console.error('[Main] SystemAudioCapture Error:', err);
@@ -828,7 +947,7 @@ try {
           this.googleSTT_User?.write(chunk);
         });
         this.microphoneCapture.on('speech_ended', () => {
-          this.googleSTT_User?.notifySpeechEnded?.();
+          safeNotifySpeechEnded(this.googleSTT_User);
         });
         this.microphoneCapture.on('error', (err: Error) => {
           console.error('[Main] MicrophoneCapture Error:', err);
@@ -846,20 +965,20 @@ try {
         this.googleSTT_User = this.createSTTProvider('user');
       }
 
-      // --- CRITICAL FIX: SYNC SAMPLE RATES ---
-      // Always sync rates, even if just initialized, to ensure consistency
+    // --- CRITICAL FIX: SYNC SAMPLE RATES ---
+    // Always sync rates, even if just initialized, to ensure consistency
 
-      // 1. Sync System Audio Rate
-      const sysRate = this.systemAudioCapture?.getSampleRate() || 48000;
-      console.log(`[Main] Configuring Interviewer STT to ${sysRate}Hz`);
-      this.googleSTT?.setSampleRate(sysRate);
-      this.googleSTT?.setAudioChannelCount?.(1);
+    // 1. Sync System Audio Rate
+    const sysRate = this.systemAudioCapture?.getSampleRate() || 48000;
+    console.log(`[Main] Configuring Interviewer STT to ${sysRate}Hz`);
+    this.googleSTT?.setSampleRate(sysRate);
+    safeSetAudioChannelCount(this.googleSTT, 1);
 
-      // 2. Sync Mic Rate
-      const micRate = this.microphoneCapture?.getSampleRate() || 48000;
-      console.log(`[Main] Configuring User STT to ${micRate}Hz`);
-      this.googleSTT_User?.setSampleRate(micRate);
-      this.googleSTT_User?.setAudioChannelCount?.(1);
+    // 2. Sync Mic Rate
+    const micRate = this.microphoneCapture?.getSampleRate() || 48000;
+    console.log(`[Main] Configuring User STT to ${micRate}Hz`);
+    this.googleSTT_User?.setSampleRate(micRate);
+    safeSetAudioChannelCount(this.googleSTT_User, 1);
 
       console.log('[Main] Full Audio Pipeline (System + Mic) Initialized (Ready)');
 
@@ -889,7 +1008,7 @@ try {
         this.googleSTT?.write(chunk);
       });
       this.systemAudioCapture.on('speech_ended', () => {
-        this.googleSTT?.notifySpeechEnded?.();
+        safeNotifySpeechEnded(this.googleSTT);
       });
       this.systemAudioCapture.on('error', (err: Error) => {
         console.error('[Main] SystemAudioCapture Error:', err);
@@ -908,9 +1027,9 @@ try {
         this.systemAudioCapture.on('data', (chunk: Buffer) => {
           this.googleSTT?.write(chunk);
         });
-        this.systemAudioCapture.on('speech_ended', () => {
-          this.googleSTT?.notifySpeechEnded?.();
-        });
+      this.systemAudioCapture.on('speech_ended', () => {
+        safeNotifySpeechEnded(this.googleSTT);
+      });
         this.systemAudioCapture.on('error', (err: Error) => {
           console.error('[Main] SystemAudioCapture (Default) Error:', err);
           this.setNativeAudioConnected(false);
@@ -939,7 +1058,7 @@ try {
         this.googleSTT_User?.write(chunk);
       });
       this.microphoneCapture.on('speech_ended', () => {
-        this.googleSTT_User?.notifySpeechEnded?.();
+        safeNotifySpeechEnded(this.googleSTT_User);
       });
       this.microphoneCapture.on('error', (err: Error) => {
         console.error('[Main] MicrophoneCapture Error:', err);
@@ -979,16 +1098,34 @@ try {
   public async reconfigureSttProvider(): Promise<void> {
     console.log('[Main] Reconfiguring STT Provider...');
 
-    // Stop existing STT instances
+    // Stop existing STT instances - remove listeners using stored references first
     if (this.googleSTT) {
-      this.googleSTT.destroy?.();
-      this.googleSTT.stop();
-      this.googleSTT.removeAllListeners();
-      this.googleSTT = null;
+      const sttEmitter = this.googleSTT as EventEmitter;
+      if (this.sttTranscriptListener_Interviewer) {
+        sttEmitter.removeListener('transcript', this.sttTranscriptListener_Interviewer);
+        this.sttTranscriptListener_Interviewer = null;
+      }
+      if (this.sttErrorListener_Interviewer) {
+        sttEmitter.removeListener('error', this.sttErrorListener_Interviewer);
+        this.sttErrorListener_Interviewer = null;
+      }
+    safeDestroy(this.googleSTT);
+    this.googleSTT.stop();
+    this.googleSTT.removeAllListeners();
+    this.googleSTT = null;
+  }
+  if (this.googleSTT_User) {
+    const sttEmitter = this.googleSTT_User as EventEmitter;
+    if (this.sttTranscriptListener_User) {
+      sttEmitter.removeListener('transcript', this.sttTranscriptListener_User);
+      this.sttTranscriptListener_User = null;
     }
-    if (this.googleSTT_User) {
-      this.googleSTT_User.destroy?.();
-      this.googleSTT_User.stop();
+    if (this.sttErrorListener_User) {
+      sttEmitter.removeListener('error', this.sttErrorListener_User);
+      this.sttErrorListener_User = null;
+    }
+    safeDestroy(this.googleSTT_User);
+    this.googleSTT_User.stop();
       this.googleSTT_User.removeAllListeners();
       this.googleSTT_User = null;
     }
@@ -1060,10 +1197,8 @@ try {
 
   public finalizeMicSTT(): void {
     // We only want to finalize the user microphone, because the context is Manual Answer
-    if (this.googleSTT_User?.finalize) {
-      console.log('[Main] Finalizing STT');
-      this.googleSTT_User.finalize();
-    }
+    safeFinalize(this.googleSTT_User);
+    console.log('[Main] STT finalized');
   }
 
   public async startMeeting(metadata?: any): Promise<void> {
@@ -1100,60 +1235,75 @@ try {
       // to the renderer immediately, allowing the UI to switch to overlay
       // without waiting for SCK/audio initialization (which takes 5-7 seconds).
       // setTimeout(100) ensures setWindowMode IPC is processed first.
-      setTimeout(async () => {
-        if (startSequence !== this.meetingStartSequence || this.meetingLifecycleState !== 'starting') {
-          console.warn('[Main] Skipping stale deferred meeting start')
-          return
-        }
-
-        try {
-          // Check for audio configuration preference
-          if (metadata?.audio) {
-            await this.reconfigureAudio(metadata.audio.inputDeviceId, metadata.audio.outputDeviceId);
-          }
-
+      return new Promise<void>((resolve, reject) => {
+        setTimeout(async () => {
+          // Check if this is still the current meeting start sequence
           if (startSequence !== this.meetingStartSequence || this.meetingLifecycleState !== 'starting') {
-            console.warn('[Main] Meeting start invalidated during async initialization')
+            console.warn('[Main] Skipping stale deferred meeting start')
+            resolve() // Resolve rather than reject as this is expected behavior
             return
           }
 
-          // LAZY INIT: Ensure pipeline is ready (if not reconfigured above)
-          this.setupSystemAudioPipeline();
+          try {
+            // Check for audio configuration preference
+            if (metadata?.audio) {
+              await this.reconfigureAudio(metadata.audio.inputDeviceId, metadata.audio.outputDeviceId);
+            }
 
-          // Start System Audio
-          this.systemAudioCapture?.start();
-          this.googleSTT?.start();
+            // Double-check sequence after async operations
+            if (startSequence !== this.meetingStartSequence || this.meetingLifecycleState !== 'starting') {
+              console.warn('[Main] Meeting start invalidated during async initialization')
+              resolve() // Resolve rather than reject as this is expected behavior
+              return
+            }
 
-          // Start Microphone
-          this.microphoneCapture?.start();
-          this.googleSTT_User?.start();
+            // LAZY INIT: Ensure pipeline is ready (if not reconfigured above)
+            this.setupSystemAudioPipeline();
 
-          // Start JIT RAG live indexing
-          if (this.ragManager) {
-            this.ragManager.startLiveIndexing('live-meeting-current');
+            // Start System Audio
+            this.systemAudioCapture?.start();
+            this.googleSTT?.start();
+
+            // Start Microphone
+            this.microphoneCapture?.start();
+            this.googleSTT_User?.start();
+
+            // Start JIT RAG live indexing
+            if (this.ragManager) {
+              this.ragManager.startLiveIndexing('live-meeting-current');
+            }
+
+            this.setNativeAudioConnected(true);
+            this.meetingLifecycleState = 'active'
+            console.log('[Main] Audio pipeline started successfully.');
+            resolve()
+          } catch (err) {
+            console.error('[Main] Error initializing audio pipeline:', err);
+            // Notify UI so user knows microphone/audio failed to start
+            this.setNativeAudioConnected(false);
+            this.broadcast('meeting-audio-error', (err as Error).message || 'Audio pipeline failed to start');
+            this.isMeetingActive = false;
+            this.meetingLifecycleState = 'idle'
+            reject(err)
           }
-
-          this.setNativeAudioConnected(true);
-          this.meetingLifecycleState = 'active'
-          console.log('[Main] Audio pipeline started successfully.');
-        } catch (err) {
-          console.error('[Main] Error initializing audio pipeline:', err);
-          // Notify UI so user knows microphone/audio failed to start
-          this.setNativeAudioConnected(false);
-          this.broadcast('meeting-audio-error', (err as Error).message || 'Audio pipeline failed to start');
-          this.isMeetingActive = false;
-          this.meetingLifecycleState = 'idle'
-        }
-      }, 0); // Defer to next event loop tick — ensures IPC response reaches renderer before audio init
+        }, 0); // Defer to next event loop tick — ensures IPC response reaches renderer before audio init
+      })
     });
   }
 
   public async endMeeting(): Promise<void> {
     console.log('[Main] Ending Meeting...');
-    this.meetingStartSequence += 1
+    const endSequence = ++this.meetingStartSequence  // Increment sequence to invalidate any pending starts
     this.meetingLifecycleState = 'stopping'
     this.isMeetingActive = false; // Block new data immediately
     this.setNativeAudioConnected(false);
+
+    // Wait for any pending meeting start operations to complete before proceeding
+    // This prevents race conditions between start and end operations
+    await this.meetingStartMutex.catch(() => {
+      // Ignore errors from the mutex as we're ending the meeting anyway
+      console.log('[Main] Ignoring pending meeting start errors during endMeeting');
+    });
 
     // 3. Stop System Audio
     try {
@@ -1162,9 +1312,21 @@ try {
       console.error('[Main] Failed to stop system audio during endMeeting:', error)
     }
 
+    // Stop interviewer STT with proper listener cleanup
     try {
-      this.googleSTT?.stop();
-      this.googleSTT?.removeAllListeners();
+      if (this.googleSTT) {
+        const sttEmitter = this.googleSTT as EventEmitter;
+        if (this.sttTranscriptListener_Interviewer) {
+          sttEmitter.removeListener('transcript', this.sttTranscriptListener_Interviewer);
+          this.sttTranscriptListener_Interviewer = null;
+        }
+        if (this.sttErrorListener_Interviewer) {
+          sttEmitter.removeListener('error', this.sttErrorListener_Interviewer);
+          this.sttErrorListener_Interviewer = null;
+        }
+        this.googleSTT?.stop();
+        this.googleSTT?.removeAllListeners();
+      }
     } catch (error) {
       console.error('[Main] Failed to stop interviewer STT during endMeeting:', error)
     }
@@ -1176,9 +1338,21 @@ try {
       console.error('[Main] Failed to stop microphone capture during endMeeting:', error)
     }
 
+    // Stop user STT with proper listener cleanup
     try {
-      this.googleSTT_User?.stop();
-      this.googleSTT_User?.removeAllListeners();
+      if (this.googleSTT_User) {
+        const sttEmitter = this.googleSTT_User as EventEmitter;
+        if (this.sttTranscriptListener_User) {
+          sttEmitter.removeListener('transcript', this.sttTranscriptListener_User);
+          this.sttTranscriptListener_User = null;
+        }
+        if (this.sttErrorListener_User) {
+          sttEmitter.removeListener('error', this.sttErrorListener_User);
+          this.sttErrorListener_User = null;
+        }
+        this.googleSTT_User?.stop();
+        this.googleSTT_User?.removeAllListeners();
+      }
     } catch (error) {
       console.error('[Main] Failed to stop user STT during endMeeting:', error)
     }
@@ -1236,30 +1410,57 @@ try {
     this.isMeetingActive = false
     this.setNativeAudioConnected(false)
 
+    // Clear disguise timers to prevent memory leaks
+    this.clearDisguiseTimers()
+
     try {
       this.systemAudioCapture?.stop()
     } catch (error) {
       console.error('[Main] Failed to stop system audio during quit:', error)
     }
 
+    // Stop interviewer STT with proper listener cleanup
     try {
+      if (this.googleSTT) {
+        const sttEmitter = this.googleSTT as EventEmitter
+        if (this.sttTranscriptListener_Interviewer) {
+          sttEmitter.removeListener('transcript', this.sttTranscriptListener_Interviewer)
+          this.sttTranscriptListener_Interviewer = null
+        }
+        if (this.sttErrorListener_Interviewer) {
+          sttEmitter.removeListener('error', this.sttErrorListener_Interviewer)
+          this.sttErrorListener_Interviewer = null
+        }
       this.googleSTT?.stop()
       this.googleSTT?.removeAllListeners()
-      this.googleSTT?.destroy?.()
-    } catch (error) {
-      console.error('[Main] Failed to stop interviewer STT during quit:', error)
+      safeDestroy(this.googleSTT)
     }
+  } catch (error) {
+    console.error('[Main] Failed to stop interviewer STT during quit:', error)
+  }
 
-    try {
-      this.microphoneCapture?.stop()
-    } catch (error) {
-      console.error('[Main] Failed to stop microphone capture during quit:', error)
-    }
+  try {
+    this.microphoneCapture?.stop()
+  } catch (error) {
+    console.error('[Main] Failed to stop microphone capture during quit:', error)
+  }
 
-    try {
+  // Stop user STT with proper listener cleanup
+  try {
+    if (this.googleSTT_User) {
+      const sttEmitter = this.googleSTT_User as EventEmitter
+      if (this.sttTranscriptListener_User) {
+        sttEmitter.removeListener('transcript', this.sttTranscriptListener_User)
+        this.sttTranscriptListener_User = null
+      }
+      if (this.sttErrorListener_User) {
+        sttEmitter.removeListener('error', this.sttErrorListener_User)
+        this.sttErrorListener_User = null
+      }
       this.googleSTT_User?.stop()
       this.googleSTT_User?.removeAllListeners()
-      this.googleSTT_User?.destroy?.()
+      safeDestroy(this.googleSTT_User)
+    }
     } catch (error) {
       console.error('[Main] Failed to stop user STT during quit:', error)
     }
