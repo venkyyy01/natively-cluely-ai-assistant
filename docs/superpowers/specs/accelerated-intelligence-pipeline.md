@@ -7,13 +7,13 @@ This spec defines a hybrid optimization approach for Natively's real-time interv
 **Target Hardware**: Apple Silicon (M1+)
 **Inference Strategy**: Hybrid (cloud primary, local fallback)
 **Complexity Budget**: Moderate (new abstractions OK)
-
+NOTE: ADD A toggle switch in settings to activate this acceleration mode the old system and features should stay intact only when this is toggled on this mode works. otherwise it should work as is this is just an extension and improvement for the existing system on mac silicon. 
 ## Goals & Success Metrics
 
 | Goal | Current State | Target | Measurement |
 |------|---------------|--------|-------------|
 | **Latency (time-to-first-token)** | ~800-1200ms | <400ms | P95 measured in production |
-| **Latency (full response)** | ~2-4s | <1.5s perceived | User perception (streaming) |
+| **Latency (full response)** | ~2-4s | <1.5s perceived | User perception (instead of streaming it should generate the response in one go and display it just like slam the answer and then slowly move to next response) |
 | **Token usage per response** | ~4000-6000 tokens | ~2500-4000 tokens | Provider billing dashboard |
 | **Memory (long interview)** | ~500MB+ after 1hr | <300MB | Electron process memory |
 | **Context relevance** | Keyword-based | Semantic + temporal | User satisfaction / answer quality |
@@ -162,12 +162,12 @@ class PromptCompiler {
 
 ---
 
-### 1.2 Streaming-First Response Pipeline
+### 1.2 Buffered Semantic Delivery Pipeline
 
 **Problem**: Current flow waits for full LLM response before rendering, causing perceived latency of 2-4 seconds.
 
 **Solution**: Implement `StreamManager` that:
-1. Streams tokens to UI immediately as they arrive
+1. Accumulates tokens silently and only pushes to the UI when a full logical thought or semantic boundary is ready (the "slam" effect)
 2. Runs background processing (context update, scoring) in parallel
 3. Handles partial JSON parsing for conscious mode
 
@@ -205,8 +205,8 @@ class StreamManager {
       // Accumulate for JSON parsing
       this.jsonAccumulator += chunk.text;
 
-      // Try partial parse every N characters
-      if (this.jsonAccumulator.length % 100 === 0) {
+      // Flush on semantic boundary (sentence end or newline) to create block-by-block "slam" effect
+      if (/[.?!]\s*$|\n$/.test(this.jsonAccumulator)) {
         const partial = this.partialParser.tryParse(this.jsonAccumulator);
         if (partial) {
           config.onPartialJson(partial);
@@ -257,7 +257,7 @@ class StreamManager {
 // electron/cache/EnhancedCache.ts
 
 interface CacheConfig {
-  maxSize: number;
+  maxMemoryMB: number; // Cap memory footprint (e.g., 100MB) due to fixed ONNX overhead
   ttlMs: number;
   enableSemanticLookup?: boolean;
   similarityThreshold?: number; // 0.0 - 1.0
@@ -297,8 +297,8 @@ class EnhancedCache<K, V> {
   set(key: K, value: V, embedding?: number[]): void {
     const stringKey = this.serialize(key);
     
-    // Evict if at capacity
-    while (this.lru.size >= this.config.maxSize) {
+    // Evict if at memory capacity (approximated size)
+    while (this.estimateMemorySize() >= this.config.maxMemoryMB) {
       this.evictOldest();
     }
 
@@ -356,6 +356,11 @@ class EnhancedCache<K, V> {
 1. Export `all-MiniLM-L6-v2` to ONNX format with CoreML optimization
 2. Use `onnxruntime-node` with CoreML backend
 3. Fall back to CPU if ANE unavailable
+
+**Implementation Notes**:
+- **Native Module Compilation**: Must configure `electron-builder` or package tool to properly rebuild `onnxruntime-node` native binaries (`.node` files) against Electron's Node headers.
+- **Entitlements**: Requires `com.apple.security.cs.allow-unsigned-executable-memory` in `entitlements.mac.plist` so neural engine hooks don't crash Hardened Runtime Code Signing.
+- **CoreML Cold Start Mitigation**: The ANE Embedding Provider must be asynchronously instantiated and warmed up with a dummy token array during the application boot sequence, entirely hiding the multi-second CoreML graph compilation latency from the final user.
 
 **File Changes**:
 - `electron/rag/ANEEmbeddingProvider.ts` → New file
@@ -432,7 +437,7 @@ class ANEEmbeddingProvider implements EmbeddingProvider {
 **Problem**: Context assembly is sequential:
 1. Generate embedding → 2. Run BM25 → 3. Detect phase → 4. Score confidence
 
-**Solution**: Run independent operations in parallel using worker threads:
+**Solution**: Run independent operations in parallel using worker threads. To prevent severe IPC serialization bottlenecks during embedding transfers, use `SharedArrayBuffer` to achieve zero-copy memory access between the Main process and Workers:
 
 ```typescript
 // electron/workers/ContextAssemblyWorker.ts
@@ -561,7 +566,7 @@ class AdaptiveContextWindow {
 
 **Problem**: Every question requires full context assembly, even for predictable follow-ups.
 
-**Solution**: During silence periods, predict and pre-compute likely follow-up contexts:
+**Solution**: During silence periods, predict and pre-compute likely follow-up contexts locally (do not make automated API calls to the Cloud LLM to avoid token drain):
 
 ```typescript
 // electron/prefetch/PredictivePrefetcher.ts
@@ -573,6 +578,12 @@ class PredictivePrefetcher {
   onSilenceStart(): void {
     this.isUserSpeaking = false;
     this.startPrefetching();
+  }
+
+  onTopicShiftDetected(): void {
+    // Explicit cache invalidation trigger on hard context pivots
+    // Prevents irrelevant high-confidence predictions from bloating the EnhancedCache memory budget
+    this.prefetchCache.clear();
   }
 
   private async startPrefetching(): Promise<void> {
@@ -617,6 +628,20 @@ class PredictivePrefetcher {
   }
 }
 ```
+
+---
+
+## Phase 4: Stealth & Process Isolation
+
+### 4.1 Zero-Footprint Display Exclusion Boundaries
+
+**Problem**: Aggressive integrity-monitoring daemons (anti-proctoring) and WebRTC screenshare (Zoom/Meet) could capture or detect the assistant overlay pipeline if it leaks into system framebuffers.
+
+**Solution**:
+The application must enforce strict runtime isolation and display compositing boundaries:
+1. Harden the process signature and minimize memory footprint to prevent cross-process inspection.
+2. Utilize low-level OS privacy APIs for hardware-accelerated display exclusions. In the Main process, establish this baseline by asserting `BrowserWindow.setContentProtection(true)` to safely invoke native `CGWindowListCreateImage` and `WDA` exclusion flags before falling back on custom C++ `node-gyp` hooks.
+3. Ensure the UI renders strictly outside of system screen-capture framebuffers, guaranteeing complete invisibility to DXGI desktop duplication and WebRTC overlay capturing.
 
 ---
 
