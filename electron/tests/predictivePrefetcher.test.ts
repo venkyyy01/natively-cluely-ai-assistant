@@ -1,15 +1,21 @@
-import { describe, it, beforeEach } from 'node:test';
+import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert';
 import { PredictivePrefetcher } from '../prefetch/PredictivePrefetcher';
+import { setOptimizationFlags } from '../config/optimizations';
 
 describe('PredictivePrefetcher', () => {
   let prefetcher: PredictivePrefetcher;
 
   beforeEach(() => {
+    setOptimizationFlags({ accelerationEnabled: true, usePrefetching: true });
     prefetcher = new PredictivePrefetcher({
       maxPrefetchPredictions: 5,
       maxMemoryMB: 50,
     });
+  });
+
+  afterEach(() => {
+    setOptimizationFlags({ accelerationEnabled: false, usePrefetching: true });
   });
 
   it('should predict follow-ups based on phase', async () => {

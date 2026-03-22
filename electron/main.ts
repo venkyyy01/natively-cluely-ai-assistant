@@ -2095,11 +2095,32 @@ try {
     return true
   }
 
-  public getConsciousModeEnabled(): boolean {
-    return this.consciousModeEnabled
+public getConsciousModeEnabled(): boolean {
+  return this.consciousModeEnabled
+}
+
+public setAccelerationModeEnabled(enabled: boolean): boolean {
+  const settings = SettingsManager.getInstance()
+  const previousEnabled = settings.getAccelerationModeEnabled()
+  if (previousEnabled === enabled) {
+    return true
   }
 
-  public setDisguise(mode: 'terminal' | 'settings' | 'activity' | 'none'): void {
+  const persisted = settings.set('accelerationModeEnabled', enabled)
+  if (!persisted) {
+    throw new Error('Unable to persist Acceleration Mode')
+  }
+
+  syncOptimizationFlagsFromSettings(() => settings.getAccelerationModeEnabled())
+  this._broadcastToAllWindows('acceleration-mode-changed', enabled)
+  return true
+}
+
+public getAccelerationModeEnabled(): boolean {
+  return SettingsManager.getInstance().getAccelerationModeEnabled()
+}
+
+public setDisguise(mode: 'terminal' | 'settings' | 'activity' | 'none'): void {
     this.disguiseMode = mode;
     SettingsManager.getInstance().set('disguiseMode', mode);
 

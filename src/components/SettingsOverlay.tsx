@@ -344,11 +344,12 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
         }
     }, [isOpen, initialTab]);
     
-    const { shortcuts, updateShortcut, resetShortcuts } = useShortcuts();
-    const [isUndetectable, setIsUndetectable] = useState(false);
-    const [disguiseMode, setDisguiseMode] = useState<'terminal' | 'settings' | 'activity' | 'none'>('none');
-    const [openOnLogin, setOpenOnLogin] = useState(false);
-    const [themeMode, setThemeMode] = useState<'system' | 'light' | 'dark'>('system');
+const { shortcuts, updateShortcut, resetShortcuts } = useShortcuts();
+  const [isUndetectable, setIsUndetectable] = useState(false);
+  const [disguiseMode, setDisguiseMode] = useState<'terminal' | 'settings' | 'activity' | 'none'>('none');
+  const [openOnLogin, setOpenOnLogin] = useState(false);
+  const [accelerationModeEnabled, setAccelerationModeEnabled] = useState(false);
+  const [themeMode, setThemeMode] = useState<'system' | 'light' | 'dark'>('system');
     const [isThemeDropdownOpen, setIsThemeDropdownOpen] = useState(false);
     const [isAiLangDropdownOpen, setIsAiLangDropdownOpen] = useState(false);
     const [updateStatus, setUpdateStatus] = useState<'idle' | 'checking' | 'available' | 'uptodate' | 'error'>('idle');
@@ -379,27 +380,41 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
     const [hasStoredGoogleSearchCseId, setHasStoredGoogleSearchCseId] = useState(false);
     const [googleSearchSaving, setGoogleSearchSaving] = useState(false);
 
-    // Close dropdown when clicking outside
-    // Sync with global state changes
-    useEffect(() => {
-        if (isOpen) {
-            // Fetch true initial state from main process
-            window.electronAPI?.getUndetectable?.().then(setIsUndetectable).catch(() => { });
-            window.electronAPI?.getDisguise?.().then(setDisguiseMode).catch(() => { });
+// Close dropdown when clicking outside
+  // Sync with global state changes
+  useEffect(() => {
+    if (isOpen) {
+      // Fetch true initial state from main process
+      window.electronAPI?.getUndetectable?.().then(setIsUndetectable).catch(() => { });
+      window.electronAPI?.getDisguise?.().then(setDisguiseMode).catch(() => { });
+      window.electronAPI?.getAccelerationMode?.().then((result) => {
+        if (result.success) {
+          setAccelerationModeEnabled(result.data.enabled);
         }
-    }, [isOpen]);
+      }).catch(() => { });
+    }
+  }, [isOpen]);
 
-    useEffect(() => {
-        if (window.electronAPI?.onUndetectableChanged) {
-            const unsubscribe = window.electronAPI.onUndetectableChanged((newState: boolean) => {
-                setIsUndetectable(newState);
-            });
-            return () => unsubscribe();
-        }
-    }, []);
+  useEffect(() => {
+    if (window.electronAPI?.onUndetectableChanged) {
+      const unsubscribe = window.electronAPI.onUndetectableChanged((newState: boolean) => {
+        setIsUndetectable(newState);
+      });
+      return () => unsubscribe();
+    }
+  }, []);
 
-    useEffect(() => {
-        if (window.electronAPI?.onDisguiseChanged) {
+  useEffect(() => {
+    if (window.electronAPI?.onAccelerationModeChanged) {
+      const unsubscribe = window.electronAPI.onAccelerationModeChanged((newState: boolean) => {
+        setAccelerationModeEnabled(newState);
+      });
+      return () => unsubscribe();
+    }
+  }, []);
+
+  useEffect(() => {
+    if (window.electronAPI?.onDisguiseChanged) {
             const unsubscribe = window.electronAPI.onDisguiseChanged((newMode: any) => {
                 setDisguiseMode(newMode);
             });
@@ -1377,39 +1392,41 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
 
                         {/* Content */}
                         <div className="flex-1 overflow-y-auto bg-bg-main p-8">
-                            {activeTab === 'general' && (
-                                <GeneralSettingsSection
-                                    isUndetectable={isUndetectable}
-                                    setIsUndetectable={setIsUndetectable}
-                                    openOnLogin={openOnLogin}
-                                    setOpenOnLogin={setOpenOnLogin}
-                                    showTranscript={showTranscript}
-                                    setShowTranscript={setShowTranscript}
-                                    generalSettingsError={generalSettingsError}
-                                    themeMode={themeMode}
-                                    isThemeDropdownOpen={isThemeDropdownOpen}
-                                    setIsThemeDropdownOpen={setIsThemeDropdownOpen}
-                                    themeDropdownRef={themeDropdownRef}
-                                    handleSetTheme={handleSetTheme}
-                                    aiResponseLanguage={aiResponseLanguage}
-                                    isAiLangDropdownOpen={isAiLangDropdownOpen}
-                                    setIsAiLangDropdownOpen={setIsAiLangDropdownOpen}
-                                    aiLangDropdownRef={aiLangDropdownRef}
-                                    availableAiLanguages={availableAiLanguages}
-                                    handleAiLanguageChange={handleAiLanguageChange}
-                                    overlayOpacity={overlayOpacity}
-                                    handleOpacityChange={handleOpacityChange}
-                                    startPreviewingOpacity={startPreviewingOpacity}
-                                    stopPreviewingOpacity={stopPreviewingOpacity}
-                                    isPreviewingOpacity={isPreviewingOpacity}
-                                    disguiseMode={disguiseMode}
-                                    setDisguiseMode={setDisguiseMode}
-                                    updateStatus={updateStatus}
-                                    handleCheckForUpdates={handleCheckForUpdates}
-                                    onClose={onClose}
-                                    showGeneralSettingsError={showGeneralSettingsError}
-                                />
-                            )}
+{activeTab === 'general' && (
+          <GeneralSettingsSection
+            isUndetectable={isUndetectable}
+            setIsUndetectable={setIsUndetectable}
+            openOnLogin={openOnLogin}
+            setOpenOnLogin={setOpenOnLogin}
+            showTranscript={showTranscript}
+            setShowTranscript={setShowTranscript}
+            generalSettingsError={generalSettingsError}
+            themeMode={themeMode}
+            isThemeDropdownOpen={isThemeDropdownOpen}
+            setIsThemeDropdownOpen={setIsThemeDropdownOpen}
+            themeDropdownRef={themeDropdownRef}
+            handleSetTheme={handleSetTheme}
+            aiResponseLanguage={aiResponseLanguage}
+            isAiLangDropdownOpen={isAiLangDropdownOpen}
+            setIsAiLangDropdownOpen={setIsAiLangDropdownOpen}
+            aiLangDropdownRef={aiLangDropdownRef}
+            availableAiLanguages={availableAiLanguages}
+            handleAiLanguageChange={handleAiLanguageChange}
+            overlayOpacity={overlayOpacity}
+            handleOpacityChange={handleOpacityChange}
+            startPreviewingOpacity={startPreviewingOpacity}
+            stopPreviewingOpacity={stopPreviewingOpacity}
+            isPreviewingOpacity={isPreviewingOpacity}
+            disguiseMode={disguiseMode}
+            setDisguiseMode={setDisguiseMode}
+            updateStatus={updateStatus}
+            handleCheckForUpdates={handleCheckForUpdates}
+            onClose={onClose}
+            showGeneralSettingsError={showGeneralSettingsError}
+            accelerationModeEnabled={accelerationModeEnabled}
+            setAccelerationModeEnabled={setAccelerationModeEnabled}
+          />
+        )}
                             {activeTab === 'profile' && (
                                 <div className="space-y-6 animated fadeIn">
                                     {/* Introduction */}

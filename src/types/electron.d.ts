@@ -46,10 +46,13 @@ export interface ElectronAPI {
   openExternal: (url: string) => Promise<void>
   setUndetectable: (state: boolean) => Promise<StatusResult>
   getUndetectable: () => Promise<boolean>
-  setConsciousMode: (enabled: boolean) => Promise<{ success: true; data: { enabled: boolean } } | { success: false; error: { code: string; message: string } }>
-  getConsciousMode: () => Promise<{ success: true; data: { enabled: boolean } } | { success: false; error: { code: string; message: string } }>
-  onConsciousModeChanged: (callback: (enabled: boolean) => void) => () => void
-  setDisguise: (mode: 'terminal' | 'settings' | 'activity' | 'none') => Promise<StatusResult>
+setConsciousMode: (enabled: boolean) => Promise<{ success: true; data: { enabled: boolean } } | { success: false; error: { code: string; message: string } }>
+getConsciousMode: () => Promise<{ success: true; data: { enabled: boolean } } | { success: false; error: { code: string; message: string } }>
+onConsciousModeChanged: (callback: (enabled: boolean) => void) => () => void
+setAccelerationMode: (enabled: boolean) => Promise<{ success: true; data: { enabled: boolean } } | { success: false; error: { code: string; message: string } }>
+getAccelerationMode: () => Promise<{ success: true; data: { enabled: boolean } } | { success: false; error: { code: string; message: string } }>
+onAccelerationModeChanged: (callback: (enabled: boolean) => void) => () => void
+setDisguise: (mode: 'terminal' | 'settings' | 'activity' | 'none') => Promise<StatusResult>
   getDisguise: () => Promise<'none' | 'terminal' | 'settings' | 'activity'>
   onDisguiseChanged: (callback: (mode: 'terminal' | 'settings' | 'activity' | 'none') => void) => () => void
   setOpenAtLogin: (open: boolean) => Promise<StatusResult>

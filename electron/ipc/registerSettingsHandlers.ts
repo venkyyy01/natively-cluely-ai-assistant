@@ -115,16 +115,39 @@ export function registerSettingsHandlers({ appState, safeHandle, safeHandleValid
     }
   });
 
-  safeHandle('get-conscious-mode', async () => {
-    try {
-      return settingsSuccess({ enabled: appState.getConsciousModeEnabled() });
-    } catch (error: any) {
-      console.error('Error getting Conscious Mode state:', error);
-      return settingsError('SETTINGS_READ_FAILED', error?.message || 'Unable to read Conscious Mode');
-    }
-  });
+safeHandle('get-conscious-mode', async () => {
+  try {
+    return settingsSuccess({ enabled: appState.getConsciousModeEnabled() });
+  } catch (error: any) {
+    console.error('Error getting Conscious Mode state:', error);
+    return settingsError('SETTINGS_READ_FAILED', error?.message || 'Unable to read Conscious Mode');
+  }
+});
 
-  safeHandleValidated('set-disguise', (args) => [parseIpcInput(ipcSchemas.disguiseMode, args[0], 'set-disguise')] as const, async (_event, mode) => {
+safeHandleValidated('set-acceleration-mode', (args) => [parseIpcInput(ipcSchemas.booleanFlag, args[0], 'set-acceleration-mode')] as const, async (_event, enabled) => {
+  try {
+    const result = appState.setAccelerationModeEnabled(enabled);
+    if (result === false) {
+      return settingsError('SETTINGS_PERSIST_FAILED', 'Unable to persist Acceleration Mode');
+    }
+
+    return settingsSuccess({ enabled });
+  } catch (error: any) {
+    console.error('Error setting Acceleration Mode state:', error);
+    return settingsError('SETTINGS_PERSIST_FAILED', error?.message || 'Unable to persist Acceleration Mode');
+  }
+});
+
+safeHandle('get-acceleration-mode', async () => {
+  try {
+    return settingsSuccess({ enabled: appState.getAccelerationModeEnabled() });
+  } catch (error: any) {
+    console.error('Error getting Acceleration Mode state:', error);
+    return settingsError('SETTINGS_READ_FAILED', error?.message || 'Unable to read Acceleration Mode');
+  }
+});
+
+safeHandleValidated('set-disguise', (args) => [parseIpcInput(ipcSchemas.disguiseMode, args[0], 'set-disguise')] as const, async (_event, mode) => {
     try {
       appState.setDisguise(mode);
       return settingsSuccess({ mode });

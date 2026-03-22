@@ -20,6 +20,7 @@ import {
   Sun,
   Terminal,
   X,
+  Zap,
 } from 'lucide-react';
 import { analytics } from '../../lib/analytics/analytics.service';
 
@@ -64,6 +65,8 @@ interface GeneralSettingsSectionProps {
   handleCheckForUpdates: () => void | Promise<void>;
   onClose: () => void;
   showGeneralSettingsError: (message: string) => void;
+  accelerationModeEnabled: boolean;
+  setAccelerationModeEnabled: (value: boolean) => void;
 }
 
 export const GeneralSettingsSection: React.FC<GeneralSettingsSectionProps> = ({
@@ -96,6 +99,8 @@ export const GeneralSettingsSection: React.FC<GeneralSettingsSectionProps> = ({
   handleCheckForUpdates,
   onClose,
   showGeneralSettingsError,
+  accelerationModeEnabled,
+  setAccelerationModeEnabled,
 }) => {
   return (
     <div className="space-y-6 animated fadeIn">
@@ -203,23 +208,53 @@ export const GeneralSettingsSection: React.FC<GeneralSettingsSectionProps> = ({
                   <p className="text-xs text-text-secondary mt-0.5">Show real-time transcription of the interviewer</p>
                 </div>
               </div>
-              <div
-                onClick={() => {
-                  const newState = !showTranscript;
-                  setShowTranscript(newState);
-                  localStorage.setItem('natively_interviewer_transcript', String(newState));
-                  window.dispatchEvent(new Event('storage'));
-                }}
-                className={`w-11 h-6 rounded-full relative transition-colors ${showTranscript ? 'bg-accent-primary' : 'bg-bg-toggle-switch border border-border-muted'}`}
-              >
-                <div className={`absolute top-1 left-1 w-4 h-4 rounded-full bg-white transition-transform ${showTranscript ? 'translate-x-5' : 'translate-x-0'}`} />
-              </div>
-            </div>
+<div
+      onClick={() => {
+        const newState = !showTranscript;
+        setShowTranscript(newState);
+        localStorage.setItem('natively_interviewer_transcript', String(newState));
+        window.dispatchEvent(new Event('storage'));
+      }}
+      className={`w-11 h-6 rounded-full relative transition-colors ${showTranscript ? 'bg-accent-primary' : 'bg-bg-toggle-switch border border-border-muted'}`}
+    >
+      <div className={`absolute top-1 left-1 w-4 h-4 rounded-full bg-white transition-transform ${showTranscript ? 'translate-x-5' : 'translate-x-0'}`} />
+    </div>
+  </div>
 
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-4">
-                <div className="w-10 h-10 bg-bg-item-surface rounded-lg border border-border-subtle flex items-center justify-center text-text-tertiary">
-                  <Palette size={20} />
+  <div className="flex items-center justify-between">
+    <div className="flex items-center gap-4">
+      <div className="w-10 h-10 bg-bg-item-surface rounded-lg border border-border-subtle flex items-center justify-center text-text-tertiary">
+        <Zap size={20} />
+      </div>
+      <div>
+        <h3 className="text-sm font-bold text-text-primary">Acceleration Mode</h3>
+        <p className="text-xs text-text-secondary mt-0.5">Neural Engine acceleration for faster embeddings and context assembly (Apple Silicon)</p>
+      </div>
+    </div>
+    <div
+      onClick={async () => {
+        const newState = !accelerationModeEnabled;
+        setAccelerationModeEnabled(newState);
+        try {
+          const result = await window.electronAPI?.setAccelerationMode(newState);
+          if (result && !result.success) {
+            throw new Error(result.error?.message || 'Unable to update acceleration mode');
+          }
+        } catch (error: any) {
+          setAccelerationModeEnabled(!newState);
+          showGeneralSettingsError(error?.message || 'Unable to update acceleration mode');
+        }
+      }}
+      className={`w-11 h-6 rounded-full relative transition-colors ${accelerationModeEnabled ? 'bg-accent-primary' : 'bg-bg-toggle-switch border border-border-muted'}`}
+    >
+      <div className={`absolute top-1 left-1 w-4 h-4 rounded-full bg-white transition-transform ${accelerationModeEnabled ? 'translate-x-5' : 'translate-x-0'}`} />
+    </div>
+  </div>
+
+  <div className="flex items-center justify-between">
+    <div className="flex items-center gap-4">
+      <div className="w-10 h-10 bg-bg-item-surface rounded-lg border border-border-subtle flex items-center justify-center text-text-tertiary">
+        <Palette size={20} />
                 </div>
                 <div>
                   <h3 className="text-sm font-bold text-text-primary">Theme</h3>

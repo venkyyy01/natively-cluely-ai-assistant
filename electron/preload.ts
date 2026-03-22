@@ -84,6 +84,9 @@ interface ElectronAPI {
   setConsciousMode: (enabled: boolean) => Promise<{ success: true; data: { enabled: boolean } } | { success: false; error: { code: string; message: string } }>
   getConsciousMode: () => Promise<{ success: true; data: { enabled: boolean } } | { success: false; error: { code: string; message: string } }>
   onConsciousModeChanged: (callback: (enabled: boolean) => void) => () => void
+  setAccelerationMode: (enabled: boolean) => Promise<{ success: true; data: { enabled: boolean } } | { success: false; error: { code: string; message: string } }>
+  getAccelerationMode: () => Promise<{ success: true; data: { enabled: boolean } } | { success: false; error: { code: string; message: string } }>
+  onAccelerationModeChanged: (callback: (enabled: boolean) => void) => () => void
   setOpenAtLogin: (open: boolean) => Promise<StatusResult>
   getOpenAtLogin: () => Promise<boolean>
   closeSettingsWindow: () => Promise<void>
@@ -449,16 +452,25 @@ contextBridge.exposeInMainWorld("electronAPI", {
   openExternal: (url: string) => ipcRenderer.invoke("open-external", url),
   setUndetectable: (state: boolean) => invokeStatus("set-undetectable", state),
   getUndetectable: async () => (await invokeAndUnwrap<{ enabled: boolean }>("get-undetectable")).enabled,
-  setConsciousMode: (enabled: boolean) => ipcRenderer.invoke('set-conscious-mode', enabled),
-  getConsciousMode: () => ipcRenderer.invoke('get-conscious-mode'),
-  onConsciousModeChanged: (callback: (enabled: boolean) => void) => {
-    const subscription = (_: any, enabled: boolean) => callback(enabled)
-    ipcRenderer.on('conscious-mode-changed', subscription)
-    return () => {
-      ipcRenderer.removeListener('conscious-mode-changed', subscription)
-    }
-  },
-  setOpenAtLogin: (open: boolean) => invokeStatus("set-open-at-login", open),
+setConsciousMode: (enabled: boolean) => ipcRenderer.invoke('set-conscious-mode', enabled),
+getConsciousMode: () => ipcRenderer.invoke('get-conscious-mode'),
+onConsciousModeChanged: (callback: (enabled: boolean) => void) => {
+  const subscription = (_: any, enabled: boolean) => callback(enabled)
+  ipcRenderer.on('conscious-mode-changed', subscription)
+  return () => {
+    ipcRenderer.removeListener('conscious-mode-changed', subscription)
+  }
+},
+setAccelerationMode: (enabled: boolean) => ipcRenderer.invoke('set-acceleration-mode', enabled),
+getAccelerationMode: () => ipcRenderer.invoke('get-acceleration-mode'),
+onAccelerationModeChanged: (callback: (enabled: boolean) => void) => {
+  const subscription = (_: any, enabled: boolean) => callback(enabled)
+  ipcRenderer.on('acceleration-mode-changed', subscription)
+  return () => {
+    ipcRenderer.removeListener('acceleration-mode-changed', subscription)
+  }
+},
+setOpenAtLogin: (open: boolean) => invokeStatus("set-open-at-login", open),
   getOpenAtLogin: async () => (await invokeAndUnwrap<{ enabled: boolean }>("get-open-at-login")).enabled,
   closeSettingsWindow: () => invokeVoid('close-settings-window'),
   setDisguise: (mode: 'terminal' | 'settings' | 'activity' | 'none') => invokeStatus("set-disguise", mode),

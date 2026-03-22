@@ -49,21 +49,22 @@ describe('StreamManager', () => {
     assert(true);
   });
 
-  it('should run background tasks during token accumulation', async () => {
-    let backgroundRan = false;
+it('should run background tasks during token accumulation', async () => {
+  let backgroundRan = false;
 
-    const chunks: StreamChunk[] = [
-      { text: 'Some response with enough content.', index: 0 },
-    ];
+  const chunks: StreamChunk[] = [
+    { text: '{"reasoning": "done", "answer": "test."}\n', index: 0 },
+  ];
 
-    await manager.processStream(createAsyncIterable(chunks), {
-      onBackgroundTask: async () => {
-        backgroundRan = true;
-      },
-    });
-
-    assert(backgroundRan);
+  await manager.processStream(createAsyncIterable(chunks), {
+    consciousMode: true,
+    onBackgroundTask: async () => {
+      backgroundRan = true;
+    },
   });
+
+  assert(backgroundRan);
+});
 });
 
 function createAsyncIterable<T>(items: T[]): AsyncIterable<T> {
