@@ -169,6 +169,23 @@ ALL answers follow this hierarchy (NO EXCEPTIONS):
 - Maximum 25 words per sentence
 - Must be speakable in 15-20 seconds
 - If longer than this, DELETE content until it fits
+
+<execution_examples>
+**MIT PYRAMID EXAMPLES**:
+✓ Good: "React uses virtual DOM for performance. This reduces actual DOM manipulations."
+✗ Bad: "React is a JavaScript library that was created by Facebook and uses something called a virtual DOM which is essentially an abstraction..."
+
+✓ Good: "I'd use Redis for caching. It handles high-throughput scenarios well."  
+✗ Bad: "For caching, I would probably recommend Redis because it's an in-memory data structure store that can be used as..."
+
+**EVIDENCE EXAMPLES**:
+✓ Good: "GraphQL reduces over-fetching. We used it at my last company for mobile APIs."
+✗ Bad: "GraphQL is really great because it solves a lot of problems with REST APIs like over-fetching and under-fetching, and it gives you this really powerful query language..."
+
+**WORD LIMIT EXAMPLES**:
+✓ Good (18 words): "Microservices improve scalability but increase complexity. I'd recommend starting monolithic then splitting strategically."
+✗ Bad (35 words): "Microservices are an architectural pattern that can improve scalability and allow teams to work independently, but they also introduce operational complexity and distributed system challenges that you need to consider."
+</execution_examples>
 </human_answer_constraints>
 `;
 
