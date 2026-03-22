@@ -18,6 +18,7 @@ import { CustomProvider, CurlProvider } from './services/CredentialsManager';
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import axios from 'axios';
+import { validateResponseQuality } from './llm/postProcessor';
 import { createHash } from 'crypto';
 import { createProviderRateLimiters, RateLimiter } from './services/RateLimiter';
 const execAsync = promisify(exec);
@@ -120,6 +121,7 @@ export class LLMHelper {
   private knowledgeOrchestrator: any = null;
   private aiResponseLanguage: string = 'English';
   private sttLanguage: string = 'english-us';
+  private shouldEnforceValidation: boolean = process.env.ENFORCE_RESPONSE_VALIDATION === 'true';
   private systemPromptCache = new Map<string, { expiresAt: number; value: string }>();
   private finalPayloadCache = new Map<string, { expiresAt: number; value: any }>();
   private responseCache = new Map<string, { expiresAt: number; value: string }>();
@@ -797,12 +799,14 @@ ANSWER DIRECTLY:`;
 
     try {
       if (this.useOllama) {
-        return await this.callOllama(systemPrompt);
+        const ollamaResponse = await this.callOllama(systemPrompt);
+        return this.validateAndProcessResponse(ollamaResponse);
       } else if (this.client) {
         // Use Flash model as default (Pro is experimental)
         // Wraps generateWithFlash logic but with retry
         const text = await this.generateWithFlash([{ text: systemPrompt }]);
-        return this.processResponse(text);
+        const processedResponse = this.processResponse(text);
+        return this.validateAndProcessResponse(processedResponse);
       } else {
         throw new Error("No LLM provider configured");
       }
@@ -848,6 +852,27 @@ ANSWER DIRECTLY:`;
     if (value === null || value === undefined) return value;
     if (typeof value === 'string') return value;
     return JSON.parse(JSON.stringify(value));
+  }
+
+  /**
+   * Validate response quality and optionally add warning for violations
+   */
+  private validateAndProcessResponse(response: string): string {
+    if (!this.shouldEnforceValidation) {
+      return response;
+    }
+
+    const validation = validateResponseQuality(response);
+
+    if (!validation.isValid) {
+      // Log violation for monitoring
+      console.warn('[LLMHelper] Response validation failed:', validation.violations);
+      
+      // For now, return with warning comment - can enhance with regeneration later
+      return `${response}\n\n<!-- Validation: ${validation.violations.join(', ')} -->`;
+    }
+
+    return response;
   }
 
   private getCacheKey(...parts: Array<string | undefined>): string {
