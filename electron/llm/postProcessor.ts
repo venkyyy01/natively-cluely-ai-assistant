@@ -2,6 +2,9 @@
 // Hard post-processing clamp to enforce constraints
 // Even if Gemini misbehaves, this ensures clean output
 
+import { ValidationResult, ResponseQuality } from './types';
+import { LLM_SPEAK_BLOCKLIST } from './prompts';
+
 /**
  * Filler phrases to strip from end of responses
  */
@@ -244,4 +247,73 @@ function stripPrefixes(text: string): string {
     result = result.replace(/^Refined \([^)]+\):\s*/i, "");
 
     return result.trim();
+}
+
+/**
+ * Validate response quality against MIT Pyramid structure and constraints
+ */
+export function validateResponseQuality(response: string): ValidationResult {
+  const sentences = splitIntoSentences(response);
+  const violations: string[] = [];
+  
+  // Sentence limit check
+  if (sentences.length > 2) {
+    violations.push(`Too many sentences: ${sentences.length}/2`);
+  }
+  
+  // Word limit per sentence
+  let maxWordsPerSentence = 0;
+  sentences.forEach((sentence, i) => {
+    const wordCount = sentence.trim().split(/\s+/).length;
+    maxWordsPerSentence = Math.max(maxWordsPerSentence, wordCount);
+    if (wordCount > 25) {
+      violations.push(`Sentence ${i+1} too long: ${wordCount}/25 words`);
+    }
+  });
+  
+  // Anti-pattern check
+  const blockedPhrases = LLM_SPEAK_BLOCKLIST.filter(phrase => 
+    response.toLowerCase().includes(phrase.toLowerCase())
+  );
+  if (blockedPhrases.length > 0) {
+    violations.push(`Contains AI-speak: ${blockedPhrases.slice(0, 2).join(', ')}`);
+  }
+  
+  // Estimate speaking time (150 words per minute average)
+  const totalWords = response.split(/\s+/).length;
+  const estimatedSpeakingTime = (totalWords / 150) * 60; // seconds
+  
+  return {
+    isValid: violations.length === 0,
+    violations,
+    regenerationHint: violations.length > 0 ? generateRewriteHint(violations) : undefined,
+    metrics: {
+      sentenceCount: sentences.length,
+      maxWordsPerSentence,
+      estimatedSpeakingTime
+    }
+  };
+}
+
+function splitIntoSentences(text: string): string[] {
+  // Simple sentence splitting - can be enhanced
+  return text.split(/[.!?]+/).filter(s => s.trim().length > 0);
+}
+
+function generateRewriteHint(violations: string[]): string {
+  const hints = [];
+  
+  if (violations.some(v => v.includes('Too many sentences'))) {
+    hints.push('Combine or remove sentences');
+  }
+  
+  if (violations.some(v => v.includes('too long'))) {
+    hints.push('Shorten sentences to under 25 words each');
+  }
+  
+  if (violations.some(v => v.includes('AI-speak'))) {
+    hints.push('Remove conversational fluff phrases');
+  }
+  
+  return `Rewrite to fix: ${hints.join(', ')}`;
 }

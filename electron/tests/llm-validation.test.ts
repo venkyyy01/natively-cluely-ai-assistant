@@ -17,7 +17,7 @@ test('should fail on too many sentences', () => {
 });
 
 test('should fail on long sentences', () => {
-  const response = "This is a really long sentence that definitely exceeds the twenty-five word limit that we have established for maintaining conciseness.";
+  const response = "This is a really long sentence that definitely exceeds the twenty-five word limit that we have established for maintaining conciseness and clarity in all of our communications.";
   const result = validateResponseQuality(response);
   assert.equal(result.isValid, false);
   assert.ok(result.violations.some((v: string) => v.includes('too long')));
