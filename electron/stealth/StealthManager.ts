@@ -44,14 +44,25 @@ export class StealthManager {
     };
   }
 
-  applyToWindow(win: { setContentProtection: (v: boolean) => void; setSkipTaskbar: (v: boolean) => void }): void {
+  applyToWindow(win: { setContentProtection: (v: boolean) => void; setSkipTaskbar?: (v: boolean) => void }): void {
     if (!this.config.enabled || !isOptimizationActive('useStealthMode')) {
       return;
     }
 
-    win.setContentProtection(true);
-    win.setSkipTaskbar(true);
+    try {
+      win.setContentProtection(true);
+    } catch (e) {
+      console.warn('[StealthManager] setContentProtection failed:', e);
+    }
 
-    console.log('[StealthManager] Content protection enabled via BrowserWindow.setContentProtection(true)');
+    if (typeof win.setSkipTaskbar === 'function') {
+      try {
+        win.setSkipTaskbar(true);
+      } catch (e) {
+        console.warn('[StealthManager] setSkipTaskbar failed:', e);
+      }
+    }
+
+    console.log('[StealthManager] Content protection enabled');
   }
 }
