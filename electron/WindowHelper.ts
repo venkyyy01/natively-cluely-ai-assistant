@@ -46,6 +46,18 @@ export class WindowHelper {
     this.applyContentProtection(enable)
   }
 
+  public setSkipTaskbar(skip: boolean): void {
+    const windows = [
+      { win: this.launcherWindow, auxiliary: false },
+      { win: this.overlayWindow, auxiliary: true },
+    ]
+    windows.forEach(({ win, auxiliary }) => {
+      if (win && !win.isDestroyed()) {
+        win.setSkipTaskbar(skip && !auxiliary)
+      }
+    })
+  }
+
   private applyStealthFlags(win: BrowserWindow, enable: boolean, isAuxiliary: boolean = false): void {
     win.setContentProtection(enable);
 

@@ -186,3 +186,4 @@ native-module/*.node
 .windsurfrules
 .opencode
 .opencode
+.worktrees/
