@@ -112,26 +112,27 @@ run_with_spinner() {
         fi
     fi
 
-    rm -f "$log_file"
+rm -f "$log_file"
 }
 
-    local paths=(
-        "$SCRIPT_DIR/dist"
-        "$SCRIPT_DIR/dist-electron"
-        "$SCRIPT_DIR/release"
-        "$SCRIPT_DIR/node_modules/.cache"
-        "$SCRIPT_DIR/.vite"
-        "$SCRIPT_DIR/native-module/target"
-        "$SCRIPT_DIR/native-module/index.darwin-arm64.node"
-        "$SCRIPT_DIR/native-module/index.darwin-x64.node"
-        "$SCRIPT_DIR/native-module/index.linux-x64-gnu.node"
-        "$SCRIPT_DIR/native-module/index.win32-x64-msvc.node"
-        "$HOME/Library/Caches/electron-builder"
-        "$HOME/Library/Caches/electron"
-    )
+clean_build_artifacts() {
+local paths=(
+"$SCRIPT_DIR/dist"
+"$SCRIPT_DIR/dist-electron"
+"$SCRIPT_DIR/release"
+"$SCRIPT_DIR/node_modules/.cache"
+"$SCRIPT_DIR/.vite"
+"$SCRIPT_DIR/native-module/target"
+"$SCRIPT_DIR/native-module/index.darwin-arm64.node"
+"$SCRIPT_DIR/native-module/index.darwin-x64.node"
+"$SCRIPT_DIR/native-module/index.linux-x64-gnu.node"
+"$SCRIPT_DIR/native-module/index.win32-x64-msvc.node"
+"$HOME/Library/Caches/electron-builder"
+"$HOME/Library/Caches/electron"
+)
 
-    info "Removing previous build artifacts and packaging caches..."
-    for path in "${paths[@]}"; do
+info "Removing previous build artifacts and packaging caches..."
+for path in "${paths[@]}"; do
         if [[ -e "$path" ]]; then
             rm -rf "$path"
         fi
@@ -211,20 +212,33 @@ require_asar_entry() {
 # ── Detect Architecture ──
 ARCH="$(uname -m)"
 if [[ "$ARCH" == "arm64" ]]; then
-    BUILD_ARCH="arm64"
-    ARCH_LABEL="Apple Silicon"
+BUILD_ARCH="arm64"
+ARCH_LABEL="Apple Silicon"
 elif [[ "$ARCH" == "x86_64" ]]; then
-    BUILD_ARCH="x64"
-    ARCH_LABEL="Intel"
+BUILD_ARCH="x64"
+ARCH_LABEL="Intel"
 else
-    fail "Unsupported architecture: $ARCH"
+fail "Unsupported architecture: $ARCH"
+fi
+
+# ── Detect Rust ──
+if command -v cargo &>/dev/null; then
+HAS_RUST="true"
+else
+HAS_RUST="false"
 fi
 
 # ╔═══════════════════════════════════════════════════════════════════╗
-# ║  Banner                                                          ║
+# ║ Banner ║
 # ╚═══════════════════════════════════════════════════════════════════╝
 print_banner
 boot_sequence
+
+# ╔═══════════════════════════════════════════════════════════════════╗
+# ║ Step 2: Clean Build Artifacts ║
+# ╚═══════════════════════════════════════════════════════════════════╝
+step "Step 2/9 — Cleaning Build Artifacts"
+clean_build_artifacts
 
 # ╔═══════════════════════════════════════════════════════════════════╗
 # ║ Step 3: Install Dependencies ║

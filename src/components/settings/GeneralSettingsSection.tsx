@@ -1,26 +1,27 @@
 import React from 'react';
 import packageJson from '../../../package.json';
 import {
-  Activity,
-  ArrowDown,
-  BadgeCheck,
-  Check,
-  ChevronDown,
-  Eye,
-  Ghost,
-  Globe,
-  Layout,
-  MessageSquare,
-  Monitor,
-  Moon,
-  Palette,
-  Power,
-  RefreshCw,
-  Settings,
-  Sun,
-  Terminal,
-  X,
-  Zap,
+Activity,
+ArrowDown,
+BadgeCheck,
+Brain,
+Check,
+ChevronDown,
+Eye,
+Ghost,
+Globe,
+Layout,
+MessageSquare,
+Monitor,
+Moon,
+Palette,
+Power,
+RefreshCw,
+Settings,
+Sun,
+Terminal,
+X,
+Zap,
 } from 'lucide-react';
 import { analytics } from '../../lib/analytics/analytics.service';
 
@@ -36,71 +37,75 @@ const DISGUISE_OPTIONS: Array<{
 ];
 
 interface GeneralSettingsSectionProps {
-  isUndetectable: boolean;
-  setIsUndetectable: (value: boolean) => void;
-  openOnLogin: boolean;
-  setOpenOnLogin: (value: boolean) => void;
-  showTranscript: boolean;
-  setShowTranscript: (value: boolean) => void;
-  generalSettingsError: string;
-  themeMode: 'system' | 'light' | 'dark';
-  isThemeDropdownOpen: boolean;
-  setIsThemeDropdownOpen: (open: boolean) => void;
-  themeDropdownRef: React.RefObject<HTMLDivElement>;
-  handleSetTheme: (mode: 'system' | 'light' | 'dark') => void | Promise<void>;
-  aiResponseLanguage: string;
-  isAiLangDropdownOpen: boolean;
-  setIsAiLangDropdownOpen: (open: boolean) => void;
-  aiLangDropdownRef: React.RefObject<HTMLDivElement>;
-  availableAiLanguages: Array<{ code: string; label: string }>;
-  handleAiLanguageChange: (code: string) => void | Promise<void>;
-  overlayOpacity: number;
-  handleOpacityChange: (value: number) => void;
-  startPreviewingOpacity: () => void;
-  stopPreviewingOpacity: () => void;
-  isPreviewingOpacity: boolean;
-  disguiseMode: 'none' | 'terminal' | 'settings' | 'activity';
-  setDisguiseMode: (mode: 'none' | 'terminal' | 'settings' | 'activity') => void;
-  updateStatus: 'idle' | 'checking' | 'available' | 'uptodate' | 'error';
-  handleCheckForUpdates: () => void | Promise<void>;
-  onClose: () => void;
-  showGeneralSettingsError: (message: string) => void;
-  accelerationModeEnabled: boolean;
-  setAccelerationModeEnabled: (value: boolean) => void;
+isUndetectable: boolean;
+setIsUndetectable: (value: boolean) => void;
+openOnLogin: boolean;
+setOpenOnLogin: (value: boolean) => void;
+showTranscript: boolean;
+setShowTranscript: (value: boolean) => void;
+generalSettingsError: string;
+themeMode: 'system' | 'light' | 'dark';
+isThemeDropdownOpen: boolean;
+setIsThemeDropdownOpen: (open: boolean) => void;
+themeDropdownRef: React.RefObject<HTMLDivElement>;
+handleSetTheme: (mode: 'system' | 'light' | 'dark') => void | Promise<void>;
+aiResponseLanguage: string;
+isAiLangDropdownOpen: boolean;
+setIsAiLangDropdownOpen: (open: boolean) => void;
+aiLangDropdownRef: React.RefObject<HTMLDivElement>;
+availableAiLanguages: Array<{ code: string; label: string }>;
+handleAiLanguageChange: (code: string) => void | Promise<void>;
+overlayOpacity: number;
+handleOpacityChange: (value: number) => void;
+startPreviewingOpacity: () => void;
+stopPreviewingOpacity: () => void;
+isPreviewingOpacity: boolean;
+disguiseMode: 'none' | 'terminal' | 'settings' | 'activity';
+setDisguiseMode: (mode: 'none' | 'terminal' | 'settings' | 'activity') => void;
+updateStatus: 'idle' | 'checking' | 'available' | 'uptodate' | 'error';
+handleCheckForUpdates: () => void | Promise<void>;
+onClose: () => void;
+showGeneralSettingsError: (message: string) => void;
+accelerationModeEnabled: boolean;
+setAccelerationModeEnabled: (value: boolean) => void;
+consciousModeEnabled: boolean;
+setConsciousModeEnabled: (value: boolean) => void;
 }
 
 export const GeneralSettingsSection: React.FC<GeneralSettingsSectionProps> = ({
-  isUndetectable,
-  setIsUndetectable,
-  openOnLogin,
-  setOpenOnLogin,
-  showTranscript,
-  setShowTranscript,
-  generalSettingsError,
-  themeMode,
-  isThemeDropdownOpen,
-  setIsThemeDropdownOpen,
-  themeDropdownRef,
-  handleSetTheme,
-  aiResponseLanguage,
-  isAiLangDropdownOpen,
-  setIsAiLangDropdownOpen,
-  aiLangDropdownRef,
-  availableAiLanguages,
-  handleAiLanguageChange,
-  overlayOpacity,
-  handleOpacityChange,
-  startPreviewingOpacity,
-  stopPreviewingOpacity,
-  isPreviewingOpacity,
-  disguiseMode,
-  setDisguiseMode,
-  updateStatus,
-  handleCheckForUpdates,
-  onClose,
-  showGeneralSettingsError,
-  accelerationModeEnabled,
-  setAccelerationModeEnabled,
+isUndetectable,
+setIsUndetectable,
+openOnLogin,
+setOpenOnLogin,
+showTranscript,
+setShowTranscript,
+generalSettingsError,
+themeMode,
+isThemeDropdownOpen,
+setIsThemeDropdownOpen,
+themeDropdownRef,
+handleSetTheme,
+aiResponseLanguage,
+isAiLangDropdownOpen,
+setIsAiLangDropdownOpen,
+aiLangDropdownRef,
+availableAiLanguages,
+handleAiLanguageChange,
+overlayOpacity,
+handleOpacityChange,
+startPreviewingOpacity,
+stopPreviewingOpacity,
+isPreviewingOpacity,
+disguiseMode,
+setDisguiseMode,
+updateStatus,
+handleCheckForUpdates,
+onClose,
+showGeneralSettingsError,
+accelerationModeEnabled,
+setAccelerationModeEnabled,
+consciousModeEnabled,
+setConsciousModeEnabled,
 }) => {
   return (
     <div className="space-y-6 animated fadeIn">
@@ -245,16 +250,46 @@ export const GeneralSettingsSection: React.FC<GeneralSettingsSectionProps> = ({
           showGeneralSettingsError(error?.message || 'Unable to update acceleration mode');
         }
       }}
-      className={`w-11 h-6 rounded-full relative transition-colors ${accelerationModeEnabled ? 'bg-accent-primary' : 'bg-bg-toggle-switch border border-border-muted'}`}
-    >
-      <div className={`absolute top-1 left-1 w-4 h-4 rounded-full bg-white transition-transform ${accelerationModeEnabled ? 'translate-x-5' : 'translate-x-0'}`} />
-    </div>
-  </div>
+className={`w-11 h-6 rounded-full relative transition-colors ${accelerationModeEnabled ? 'bg-accent-primary' : 'bg-bg-toggle-switch border border-border-muted'}`}
+>
+<div className={`absolute top-1 left-1 w-4 h-4 rounded-full bg-white transition-transform ${accelerationModeEnabled ? 'translate-x-5' : 'translate-x-0'}`} />
+</div>
+</div>
 
-  <div className="flex items-center justify-between">
-    <div className="flex items-center gap-4">
-      <div className="w-10 h-10 bg-bg-item-surface rounded-lg border border-border-subtle flex items-center justify-center text-text-tertiary">
-        <Palette size={20} />
+<div className="flex items-center justify-between">
+<div className="flex items-center gap-4">
+<div className="w-10 h-10 bg-bg-item-surface rounded-lg border border-border-subtle flex items-center justify-center text-text-tertiary">
+<Brain size={20} />
+</div>
+<div>
+<h3 className="text-sm font-bold text-text-primary">Conscious Mode</h3>
+<p className="text-xs text-text-secondary mt-0.5">Phase-aware interview assistance with structured responses</p>
+</div>
+</div>
+<div
+onClick={async () => {
+const newState = !consciousModeEnabled;
+setConsciousModeEnabled(newState);
+try {
+const result = await window.electronAPI?.setConsciousMode(newState);
+if (result && !result.success) {
+throw new Error(result.error?.message || 'Unable to update conscious mode');
+}
+} catch (error: any) {
+setConsciousModeEnabled(!newState);
+showGeneralSettingsError(error?.message || 'Unable to update conscious mode');
+}
+}}
+className={`w-11 h-6 rounded-full relative transition-colors ${consciousModeEnabled ? 'bg-accent-primary' : 'bg-bg-toggle-switch border border-border-muted'}`}
+>
+<div className={`absolute top-1 left-1 w-4 h-4 rounded-full bg-white transition-transform ${consciousModeEnabled ? 'translate-x-5' : 'translate-x-0'}`} />
+</div>
+</div>
+
+<div className="flex items-center justify-between">
+<div className="flex items-center gap-4">
+<div className="w-10 h-10 bg-bg-item-surface rounded-lg border border-border-subtle flex items-center justify-center text-text-tertiary">
+<Palette size={20} />
                 </div>
                 <div>
                   <h3 className="text-sm font-bold text-text-primary">Theme</h3>
