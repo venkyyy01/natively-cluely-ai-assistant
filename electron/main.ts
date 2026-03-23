@@ -322,7 +322,7 @@ this.processingHelper = new ProcessingHelper(this)
 
 // 3a. Apply stealth mode if acceleration enabled (Apple Silicon enhancement)
 const stealthManager = new StealthManager({ enabled: this.isUndetectable });
-stealthManager.applyToWindow(this.windowHelper as unknown as { setContentProtection: (v: boolean) => void; setSkipTaskbar: (v: boolean) => void });
+stealthManager.applyToWindow(this.windowHelper);
 
 this.windowHelper.setContentProtection(this.isUndetectable);
 this.settingsWindowHelper.setContentProtection(this.isUndetectable);
@@ -389,10 +389,10 @@ this.initializeRAGManager()
 this.initializeKnowledgeOrchestrator()
 
 // Check and prep Ollama embedding model
-this.bootstrapOllamaEmbeddings()
+this.bootstrapOllamaEmbeddings().catch(err => console.error('[AppState] Ollama bootstrap failed:', err))
 
 // Initialize AccelerationManager (Apple Silicon enhancement)
-this.initializeAccelerationManager()
+this.initializeAccelerationManager().catch(err => console.warn('[AppState] AccelerationManager init failed:', err))
 
 this.setupIntelligenceEvents()
 
@@ -1113,24 +1113,24 @@ try {
         sttEmitter.removeListener('error', this.sttErrorListener_Interviewer);
         this.sttErrorListener_Interviewer = null;
       }
-    safeDestroy(this.googleSTT);
-    this.googleSTT.stop();
-    this.googleSTT.removeAllListeners();
-    this.googleSTT = null;
-  }
-  if (this.googleSTT_User) {
-    const sttEmitter = this.googleSTT_User as EventEmitter;
-    if (this.sttTranscriptListener_User) {
-      sttEmitter.removeListener('transcript', this.sttTranscriptListener_User);
-      this.sttTranscriptListener_User = null;
+      this.googleSTT.stop();
+      this.googleSTT.removeAllListeners();
+      safeDestroy(this.googleSTT);
+      this.googleSTT = null;
     }
-    if (this.sttErrorListener_User) {
-      sttEmitter.removeListener('error', this.sttErrorListener_User);
-      this.sttErrorListener_User = null;
-    }
-    safeDestroy(this.googleSTT_User);
-    this.googleSTT_User.stop();
+    if (this.googleSTT_User) {
+      const sttEmitter = this.googleSTT_User as EventEmitter;
+      if (this.sttTranscriptListener_User) {
+        sttEmitter.removeListener('transcript', this.sttTranscriptListener_User);
+        this.sttTranscriptListener_User = null;
+      }
+      if (this.sttErrorListener_User) {
+        sttEmitter.removeListener('error', this.sttErrorListener_User);
+        this.sttErrorListener_User = null;
+      }
+      this.googleSTT_User.stop();
       this.googleSTT_User.removeAllListeners();
+      safeDestroy(this.googleSTT_User);
       this.googleSTT_User = null;
     }
 
@@ -1274,7 +1274,11 @@ try {
 
             // Start JIT RAG live indexing
             if (this.ragManager) {
-              this.ragManager.startLiveIndexing('live-meeting-current');
+              try {
+                this.ragManager.startLiveIndexing('live-meeting-current');
+              } catch (err) {
+                console.error('[Main] Live indexing failed:', err);
+              }
             }
 
             this.setNativeAudioConnected(true);
@@ -1330,6 +1334,7 @@ try {
         }
         this.googleSTT?.stop();
         this.googleSTT?.removeAllListeners();
+        this.googleSTT = null;
       }
     } catch (error) {
       console.error('[Main] Failed to stop interviewer STT during endMeeting:', error)
@@ -1356,6 +1361,7 @@ try {
         }
         this.googleSTT_User?.stop();
         this.googleSTT_User?.removeAllListeners();
+        this.googleSTT_User = null;
       }
     } catch (error) {
       console.error('[Main] Failed to stop user STT during endMeeting:', error)
@@ -1416,6 +1422,9 @@ try {
 
     // Clear disguise timers to prevent memory leaks
     this.clearDisguiseTimers()
+
+    // Remove intelligence event listeners to prevent memory leaks
+    this.intelligenceManager.removeAllListeners()
 
     try {
       this.systemAudioCapture?.stop()
@@ -1531,13 +1540,15 @@ try {
     this.intelligenceManager.on('assist_update', (insight: string) => {
       // Send to both if both exist, though mostly overlay needs it
       const helper = this.getWindowHelper();
-      helper.getLauncherWindow()?.webContents.send('intelligence-assist-update', { insight });
-      helper.getOverlayWindow()?.webContents.send('intelligence-assist-update', { insight });
+      const launcher = helper.getLauncherWindow();
+      const overlay = helper.getOverlayWindow();
+      if (launcher && !launcher.isDestroyed()) launcher.webContents.send('intelligence-assist-update', { insight });
+      if (overlay && !overlay.isDestroyed()) overlay.webContents.send('intelligence-assist-update', { insight });
     })
 
     this.intelligenceManager.on('suggested_answer', (answer: string, question: string, confidence: number) => {
       const win = mainWindow()
-      if (win) {
+      if (win && !win.isDestroyed()) {
         win.webContents.send('intelligence-suggested-answer', { answer, question, confidence })
       }
 
@@ -1545,21 +1556,21 @@ try {
 
     this.intelligenceManager.on('suggested_answer_token', (token: string, question: string, confidence: number) => {
       const win = mainWindow()
-      if (win) {
+      if (win && !win.isDestroyed()) {
         win.webContents.send('intelligence-suggested-answer-token', { token, question, confidence })
       }
     })
 
     this.intelligenceManager.on('refined_answer_token', (token: string, intent: string) => {
       const win = mainWindow()
-      if (win) {
+      if (win && !win.isDestroyed()) {
         win.webContents.send('intelligence-refined-answer-token', { token, intent })
       }
     })
 
     this.intelligenceManager.on('refined_answer', (answer: string, intent: string) => {
       const win = mainWindow()
-      if (win) {
+      if (win && !win.isDestroyed()) {
         win.webContents.send('intelligence-refined-answer', { answer, intent })
       }
 
@@ -1567,42 +1578,42 @@ try {
 
     this.intelligenceManager.on('recap', (summary: string) => {
       const win = mainWindow()
-      if (win) {
+      if (win && !win.isDestroyed()) {
         win.webContents.send('intelligence-recap', { summary })
       }
     })
 
     this.intelligenceManager.on('recap_token', (token: string) => {
       const win = mainWindow()
-      if (win) {
+      if (win && !win.isDestroyed()) {
         win.webContents.send('intelligence-recap-token', { token })
       }
     })
 
     this.intelligenceManager.on('follow_up_questions_update', (questions: string) => {
       const win = mainWindow()
-      if (win) {
+      if (win && !win.isDestroyed()) {
         win.webContents.send('intelligence-follow-up-questions-update', { questions })
       }
     })
 
     this.intelligenceManager.on('follow_up_questions_token', (token: string) => {
       const win = mainWindow()
-      if (win) {
+      if (win && !win.isDestroyed()) {
         win.webContents.send('intelligence-follow-up-questions-token', { token })
       }
     })
 
     this.intelligenceManager.on('manual_answer_started', () => {
       const win = mainWindow()
-      if (win) {
+      if (win && !win.isDestroyed()) {
         win.webContents.send('intelligence-manual-started')
       }
     })
 
     this.intelligenceManager.on('manual_answer_result', (answer: string, question: string) => {
       const win = mainWindow()
-      if (win) {
+      if (win && !win.isDestroyed()) {
         win.webContents.send('intelligence-manual-result', { answer, question })
       }
 
@@ -1610,7 +1621,7 @@ try {
 
     this.intelligenceManager.on('mode_changed', (mode: string) => {
       const win = mainWindow()
-      if (win) {
+      if (win && !win.isDestroyed()) {
         win.webContents.send('intelligence-mode-changed', { mode })
       }
     })
@@ -1618,7 +1629,7 @@ try {
     this.intelligenceManager.on('error', (error: Error, mode: string) => {
       console.error(`[IntelligenceManager] Error in ${mode}:`, error)
       const win = mainWindow()
-      if (win) {
+      if (win && !win.isDestroyed()) {
         win.webContents.send('intelligence-error', { error: error.message, mode })
       }
     })

@@ -532,6 +532,7 @@ isConsciousModeEnabled(): boolean {
         this.threadManager.reset();
         this.phaseDetector.reset();
         this.tokenBudgetManager.reset();
+        this.adaptiveContextWindow = null;
     }
 
     // ============================================

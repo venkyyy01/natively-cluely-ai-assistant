@@ -297,8 +297,9 @@ export class IntelligenceEngine extends EventEmitter {
                     return "Please configure your API Keys in Settings to use this feature.";
                 }
                 const context = this.session.getFormattedContext(180);
-                const answer = await this.answerLLM.generate(question || '', context);
+                let answer = await this.answerLLM.generate(question || '', context);
                 if (answer) {
+                // No clamping - prompt enforces brevity
                     this.session.addAssistantMessage(answer);
                     this.emit('suggested_answer', answer, question || 'inferred', confidence);
                 }
@@ -424,6 +425,8 @@ export class IntelligenceEngine extends EventEmitter {
             if (!fullAnswer || fullAnswer.trim().length < 5) {
                 fullAnswer = "Could you repeat that? I want to make sure I address your question properly.";
             }
+
+            // No post-processing - prompt enforces brevity, code blocks preserved
 
             this.session.addAssistantMessage(fullAnswer);
 

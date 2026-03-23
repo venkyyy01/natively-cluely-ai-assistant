@@ -10,7 +10,8 @@ import {
   UNIVERSAL_SYSTEM_PROMPT, UNIVERSAL_ANSWER_PROMPT, UNIVERSAL_WHAT_TO_ANSWER_PROMPT,
   UNIVERSAL_RECAP_PROMPT, UNIVERSAL_FOLLOWUP_PROMPT, UNIVERSAL_FOLLOW_UP_QUESTIONS_PROMPT, UNIVERSAL_ASSIST_PROMPT,
   CUSTOM_SYSTEM_PROMPT, CUSTOM_ANSWER_PROMPT, CUSTOM_WHAT_TO_ANSWER_PROMPT,
-  CUSTOM_RECAP_PROMPT, CUSTOM_FOLLOWUP_PROMPT, CUSTOM_FOLLOW_UP_QUESTIONS_PROMPT, CUSTOM_ASSIST_PROMPT
+  CUSTOM_RECAP_PROMPT, CUSTOM_FOLLOWUP_PROMPT, CUSTOM_FOLLOW_UP_QUESTIONS_PROMPT, CUSTOM_ASSIST_PROMPT,
+  CORE_IDENTITY, UNIVERSAL_ANTI_DUMP_RULES
 } from "./llm/prompts"
 import { deepVariableReplacer, getByPath } from './utils/curlUtils';
 import curl2Json from "@bany/curl-to-json";
@@ -451,19 +452,15 @@ export class LLMHelper {
 
   /**
    * Post-process the response
-   * NOTE: Truncation/clamping removed - response length is handled in prompts
+   * Prompt enforces brevity - no clamping needed
    */
   private processResponse(text: string): string {
     // Basic cleaning
     let clean = this.cleanJsonResponse(text);
 
-    // Truncation/clamping removed - prompts already handle response length
-    // clean = clampResponse(clean, 3, 60);
-
     // Filter out fallback phrases
     const fallbackPhrases = [
       "I'm not sure",
-      "It depends",
       "I can't answer",
       "I don't know"
     ];
@@ -778,18 +775,21 @@ export class LLMHelper {
    * @param lastQuestion - The most recent question from the interviewer
    * @returns Suggested response for the user
    */
-  public async generateSuggestion(context: string, lastQuestion: string): Promise<string> {
-    const systemPrompt = `You are an expert interview coach. Based on the conversation transcript, provide a concise, natural response the user could say.
+public async generateSuggestion(context: string, lastQuestion: string): Promise<string> {
+    const systemPrompt = `${CORE_IDENTITY}
+
+${UNIVERSAL_ANTI_DUMP_RULES}
+
+Provide a concise, natural response the user could say in their interview.
 
 RULES:
 - Be direct and conversational
-- Keep responses under 3 sentences unless complexity requires more  
+- Keep responses under 3 sentences for simple questions
 - Focus on answering the specific question asked
-- If it's a technical question, provide a clear, structured answer
-- Do NOT preface with "You could say" or similar - just give the answer directly
-- If unsure, answer briefly and confidently anyway.
-- Never hedge.
-- Never say "it depends".
+- If technical, provide a clear, structured answer with code if needed
+- Do NOT preface with "You could say" - just give the answer directly
+- Never hedge. Never say "it depends".
+- NON-CODE ANSWERS >100 WORDS ARE WRONG. DELETE AND REWRITE SHORTER.
 
 CONVERSATION SO FAR:
 ${context}
@@ -2097,10 +2097,14 @@ ANSWER DIRECTLY:`;
 
     // 2. Custom Provider Streaming (via cURL - Non-streaming fallback for now)
     if (this.activeCurlProvider) {
+      // Map UNIVERSAL prompts to CUSTOM before injecting language instruction,
+      // because injectLanguageInstruction modifies the string and breaks mapToCustomPrompt matching
+      const mappedBase = this.mapToCustomPrompt(baseSystemPrompt);
+      const curlSystemPrompt = this.injectLanguageInstruction(mappedBase);
       const response = await this.executeCustomProvider(
         this.activeCurlProvider.curlCommand,
         userContent,
-        finalSystemPrompt,
+        curlSystemPrompt,
         message,
         context || "",
         imagePaths?.[0]

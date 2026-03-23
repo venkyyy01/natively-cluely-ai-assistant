@@ -200,6 +200,49 @@ function limitWords(text: string, maxWords: number): string {
 }
 
 /**
+ * Clamp response length but PRESERVE markdown formatting.
+ * The UI renders markdown, so we only enforce sentence/word limits.
+ * For non-code responses only - code blocks skip clamping.
+ */
+export function clampProseResponse(
+    text: string,
+    maxSentences: number = 8,
+    maxWords: number = 200
+): string {
+    if (!text || typeof text !== "string") {
+        return "";
+    }
+
+    let result = text.trim();
+
+    // Strip prefixes
+    result = stripPrefixes(result);
+
+    // Remove filler phrases from end
+    result = stripFillerPhrases(result);
+
+    // If code blocks present, don't clamp length
+    const hasCodeBlocks = /```[\s\S]*?```/.test(result);
+    if (hasCodeBlocks) {
+        return result.trim();
+    }
+
+    // Sentence limit (operates on markdown text directly - fine for cutting)
+    const sentences = result.match(/[^.!?]+[.!?]+/g) || [result];
+    if (sentences.length > maxSentences) {
+        result = sentences.slice(0, maxSentences).join(' ').trim();
+    }
+
+    // Word limit (approximate - markdown tokens add ~10% overhead, acceptable)
+    const words = result.split(/\s+/);
+    if (words.length > maxWords) {
+        result = words.slice(0, maxWords).join(' ').replace(/[,;:]?\s*$/, '...');
+    }
+
+    return result.trim();
+}
+
+/**
  * Validate response meets constraints
  * Returns true if valid, false if clamping was needed
  */

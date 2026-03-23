@@ -229,21 +229,49 @@ HAS_RUST="false"
 fi
 
 # ╔═══════════════════════════════════════════════════════════════════╗
+# ║ Check for Uncommitted Changes (warn user)                         ║
+# ╚═══════════════════════════════════════════════════════════════════╝
+step "Step 1/9 — Checking Source Code Status"
+
+cd "$SCRIPT_DIR"
+
+# Check for uncommitted changes
+if [[ -d ".git" ]]; then
+    UNCOMMITTED=$(git status --porcelain 2>/dev/null | grep -E "^[ AM]" | head -20 || true)
+    if [[ -n "$UNCOMMITTED" ]]; then
+        warn "Uncommitted changes detected in source:"
+        echo "$UNCOMMITTED"
+        echo ""
+        warn "These changes will be included in the build."
+        echo ""
+    else
+        success "Source code is clean"
+    fi
+    
+    # Show current branch and commit
+    BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
+    COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+    info "Building from branch: $BRANCH (commit: $COMMIT)"
+else
+    warn "Not a git repository - cannot check source status"
+fi
+
+# ╔═══════════════════════════════════════════════════════════════════╗
 # ║ Banner ║
 # ╚═══════════════════════════════════════════════════════════════════╝
 print_banner
 boot_sequence
 
 # ╔═══════════════════════════════════════════════════════════════════╗
-# ║ Step 2: Clean Build Artifacts ║
+# ║ Step 3: Clean Build Artifacts ║
 # ╚═══════════════════════════════════════════════════════════════════╝
-step "Step 2/9 — Cleaning Build Artifacts"
+step "Step 3/9 — Cleaning Build Artifacts"
 clean_build_artifacts
 
 # ╔═══════════════════════════════════════════════════════════════════╗
-# ║ Step 3: Install Dependencies ║
+# ║ Step 4: Install Dependencies                                        ║
 # ╚═══════════════════════════════════════════════════════════════════╝
-step "Step 3/9 — Installing Dependencies"
+step "Step 4/9 — Installing Dependencies"
 
 cd "$SCRIPT_DIR"
 
@@ -270,9 +298,9 @@ else
 fi
 
 # ╔═══════════════════════════════════════════════════════════════════╗
-# ║  Step 4: Run Quality Gates                                        
+# ║ Step 5: Run Quality Gates                                        
 # ╚═══════════════════════════════════════════════════════════════════╝
-step "Step 4/9 — Running Production Quality Gates"
+step "Step 5/9 — Running Production Quality Gates"
 
 
 info "Running typechecks, full Electron coverage gate, renderer coverage gate, and native tests..."
@@ -281,9 +309,9 @@ run_with_spinner "verifying production readiness gates" npm run verify:productio
 success "Quality gates passed"
 
 # ╔═══════════════════════════════════════════════════════════════════╗
-# ║  Step 5: Build Production App                                    ║
+# ║ Step 6: Build Production App                                    ║
 # ╚═══════════════════════════════════════════════════════════════════╝
-step "Step 5/9 — Building Production App"
+step "Step 6/9 — Building Production App"
 
 info "Running production build pipeline..."
 run_with_spinner "forging full production bundle" env SKIP_PRODUCTION_VERIFY=1 npm run app:build
@@ -291,9 +319,9 @@ run_with_spinner "forging full production bundle" env SKIP_PRODUCTION_VERIFY=1 n
 success "Compilation complete"
 
 # ╔═══════════════════════════════════════════════════════════════════╗
-# ║  Step 6: Package with Electron Builder                           ║
+# ║ Step 7: Package with Electron Builder                           ║
 # ╚═══════════════════════════════════════════════════════════════════╝
-step "Step 6/9 — Packaging macOS App (${ARCH_LABEL})"
+step "Step 7/9 — Packaging macOS App (${ARCH_LABEL})"
 
 info "Using packaged release created by app:build..."
 info "This may take several minutes on first run..."
@@ -318,9 +346,9 @@ fi
 success "Built: $APP_GLOB"
 
 # ╔═══════════════════════════════════════════════════════════════════╗
-# ║  Step 7: Force Sign                                              ║
+# ║ Step 8: Force Sign                                              ║
 # ╚═══════════════════════════════════════════════════════════════════╝
-step "Step 7/9 — Force Signing (Ad-Hoc)"
+step "Step 8/9 — Force Signing (Ad-Hoc)"
 
 # The electron-builder afterPack hook already signs, but we force re-sign
 # to ensure it's clean (handles edge cases where build partially failed)
@@ -343,7 +371,7 @@ else
     info "Ad-hoc signature applied (codesign verify may show warnings — this is normal)"
 fi
 
-step "Step 8/9 — Verifying macOS Permission Manifest"
+step "Step 9/9 — Verifying macOS Permission Manifest"
 
 APP_PLIST="$APP_GLOB/Contents/Info.plist"
 [[ -f "$APP_PLIST" ]] || fail "Info.plist not found in built app"
@@ -376,7 +404,7 @@ fi
 success "Permission manifest verified"
 
 # ╔═══════════════════════════════════════════════════════════════════╗
-# ║  Step 9: Install & Launch                                        ║
+# ║ Step 9: Install & Launch                                        ║
 # ╚═══════════════════════════════════════════════════════════════════╝
 step "Step 9/9 — Installing to ${INSTALL_DIR}"
 
