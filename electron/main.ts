@@ -385,6 +385,9 @@ this.themeManager = ThemeManager.getInstance()
 // Initialize RAGManager (requires database to be ready)
 this.initializeRAGManager()
 
+// Initialize KnowledgeOrchestrator (requires RAGManager for embeddings)
+this.initializeKnowledgeOrchestrator()
+
 // Check and prep Ollama embedding model
 this.bootstrapOllamaEmbeddings()
 

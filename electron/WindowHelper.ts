@@ -46,6 +46,10 @@ export class WindowHelper {
     this.applyContentProtection(enable)
   }
 
+  public setSkipTaskbar(enable: boolean): void {
+    this.launcherWindow?.setSkipTaskbar(enable);
+  }
+
   private applyStealthFlags(win: BrowserWindow, enable: boolean, isAuxiliary: boolean = false): void {
     win.setContentProtection(enable);
 
