@@ -335,20 +335,24 @@ export class IntelligenceEngine extends EventEmitter {
 
             const preparedTranscript = prepareTranscriptForWhatToAnswer(transcriptTurns, 12);
 
-            const temporalContext = buildTemporalContext(
-                contextItems,
-                this.session.getAssistantResponseHistory(),
-                180
-            );
-
             const lastInterviewerTurn = this.session.getLastInterviewerTurn();
             const activeReasoningThread = this.session.getActiveReasoningThread();
             const resolvedQuestion = question || lastInterviewerTurn || '';
-            const intentResult = await classifyIntent(
-                lastInterviewerTurn,
-                preparedTranscript,
-                this.session.getAssistantResponseHistory().length
-            );
+            const accelerationFastPath = isOptimizationActive('useParallelContext') && !this.session.isConsciousModeEnabled();
+            const temporalContext = accelerationFastPath
+                ? undefined
+                : buildTemporalContext(
+                    contextItems,
+                    this.session.getAssistantResponseHistory(),
+                    180
+                );
+            const intentResult = accelerationFastPath
+                ? undefined
+                : await classifyIntent(
+                    lastInterviewerTurn,
+                    preparedTranscript,
+                    this.session.getAssistantResponseHistory().length
+                );
             const consciousRoute = this.session.isConsciousModeEnabled()
                 ? classifyConsciousModeQuestion(resolvedQuestion, activeReasoningThread, intentResult.intent)
                 : { qualifies: false, threadAction: 'ignore' as const };
@@ -412,7 +416,10 @@ export class IntelligenceEngine extends EventEmitter {
                 }
             }
 
-            console.log(`[IntelligenceEngine] Temporal RAG: ${temporalContext.previousResponses.length} responses, tone: ${temporalContext.toneSignals[0]?.type || 'neutral'}, intent: ${intentResult.intent}${imagePaths?.length ? `, with ${imagePaths.length} image(s)` : ''}`);
+            const temporalResponseCount = temporalContext?.previousResponses.length ?? 0;
+            const temporalTone = temporalContext?.toneSignals[0]?.type || 'neutral';
+            const detectedIntent = intentResult?.intent || 'general';
+            console.log(`[IntelligenceEngine] Temporal RAG: ${temporalResponseCount} responses, tone: ${temporalTone}, intent: ${detectedIntent}${imagePaths?.length ? `, with ${imagePaths.length} image(s)` : ''}`);
 
             let fullAnswer = "";
             const stream = this.whatToAnswerLLM.generateStream(preparedTranscript, temporalContext, intentResult, imagePaths);
