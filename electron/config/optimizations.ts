@@ -95,6 +95,13 @@ export function setOptimizationFlags(flags: Partial<OptimizationFlags>): void {
 }
 
 /**
+ * Set optimization flags for testing purposes
+ */
+export function setOptimizationFlagsForTesting(flags: Partial<OptimizationFlags>): void {
+  currentFlags = { ...DEFAULT_OPTIMIZATION_FLAGS, ...flags };
+}
+
+/**
  * Check if a specific optimization is active
  * Returns false if master toggle is off, regardless of individual flag
  */
@@ -111,11 +118,15 @@ export function isAppleSilicon(): boolean {
 
 /**
  * Get effective worker thread count
- * Respects user setting but caps at available cores
  */
 export function getEffectiveWorkerCount(): number {
   if (cachedCpuCount === null) {
-    cachedCpuCount = require('os').cpus().length;
+    try {
+      const os = require('os');
+      cachedCpuCount = os.cpus().length;
+    } catch {
+      cachedCpuCount = 4;
+    }
   }
-  return Math.min(currentFlags.workerThreadCount, cachedCpuCount - 1);
+  return Math.min(currentFlags.workerThreadCount, cachedCpuCount);
 }
