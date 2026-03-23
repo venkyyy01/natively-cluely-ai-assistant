@@ -1,27 +1,24 @@
 import React from 'react';
 import packageJson from '../../../package.json';
 import {
-Activity,
-ArrowDown,
-BadgeCheck,
-Brain,
-Check,
-ChevronDown,
-Eye,
-Ghost,
-Globe,
-Layout,
-MessageSquare,
-Monitor,
-Moon,
-Palette,
-Power,
-RefreshCw,
-Settings,
-Sun,
-Terminal,
-X,
-Zap,
+  Activity,
+  BadgeCheck,
+  Brain,
+  Check,
+  ChevronDown,
+  Eye,
+  Ghost,
+  Globe,
+  Layout,
+  MessageSquare,
+  Monitor,
+  Moon,
+  Palette,
+  Power,
+  Settings,
+  Sun,
+  Terminal,
+  Zap,
 } from 'lucide-react';
 import { analytics } from '../../lib/analytics/analytics.service';
 
@@ -60,52 +57,46 @@ handleOpacityChange: (value: number) => void;
 startPreviewingOpacity: () => void;
 stopPreviewingOpacity: () => void;
 isPreviewingOpacity: boolean;
-disguiseMode: 'none' | 'terminal' | 'settings' | 'activity';
-setDisguiseMode: (mode: 'none' | 'terminal' | 'settings' | 'activity') => void;
-updateStatus: 'idle' | 'checking' | 'available' | 'uptodate' | 'error';
-handleCheckForUpdates: () => void | Promise<void>;
-onClose: () => void;
-showGeneralSettingsError: (message: string) => void;
-accelerationModeEnabled: boolean;
-setAccelerationModeEnabled: (value: boolean) => void;
-consciousModeEnabled: boolean;
-setConsciousModeEnabled: (value: boolean) => void;
+  disguiseMode: 'none' | 'terminal' | 'settings' | 'activity';
+  setDisguiseMode: (mode: 'none' | 'terminal' | 'settings' | 'activity') => void;
+  showGeneralSettingsError: (message: string) => void;
+  accelerationModeEnabled: boolean;
+  setAccelerationModeEnabled: (value: boolean) => void;
+  consciousModeEnabled: boolean;
+  setConsciousModeEnabled: (value: boolean) => void;
 }
 
 export const GeneralSettingsSection: React.FC<GeneralSettingsSectionProps> = ({
-isUndetectable,
-setIsUndetectable,
-openOnLogin,
-setOpenOnLogin,
-showTranscript,
-setShowTranscript,
-generalSettingsError,
-themeMode,
-isThemeDropdownOpen,
-setIsThemeDropdownOpen,
-themeDropdownRef,
-handleSetTheme,
-aiResponseLanguage,
-isAiLangDropdownOpen,
-setIsAiLangDropdownOpen,
-aiLangDropdownRef,
-availableAiLanguages,
-handleAiLanguageChange,
-overlayOpacity,
-handleOpacityChange,
-startPreviewingOpacity,
-stopPreviewingOpacity,
-isPreviewingOpacity,
-disguiseMode,
-setDisguiseMode,
-updateStatus,
-handleCheckForUpdates,
-onClose,
-showGeneralSettingsError,
-accelerationModeEnabled,
-setAccelerationModeEnabled,
-consciousModeEnabled,
-setConsciousModeEnabled,
+  isUndetectable,
+  setIsUndetectable,
+  openOnLogin,
+  setOpenOnLogin,
+  showTranscript,
+  setShowTranscript,
+  generalSettingsError,
+  themeMode,
+  isThemeDropdownOpen,
+  setIsThemeDropdownOpen,
+  themeDropdownRef,
+  handleSetTheme,
+  aiResponseLanguage,
+  isAiLangDropdownOpen,
+  setIsAiLangDropdownOpen,
+  aiLangDropdownRef,
+  availableAiLanguages,
+  handleAiLanguageChange,
+  overlayOpacity,
+  handleOpacityChange,
+  startPreviewingOpacity,
+  stopPreviewingOpacity,
+  isPreviewingOpacity,
+  disguiseMode,
+  setDisguiseMode,
+  showGeneralSettingsError,
+  accelerationModeEnabled,
+  setAccelerationModeEnabled,
+  consciousModeEnabled,
+  setConsciousModeEnabled,
 }) => {
   return (
     <div className="space-y-6 animated fadeIn">
@@ -376,60 +367,17 @@ className={`w-11 h-6 rounded-full relative transition-colors ${consciousModeEnab
               </div>
             </div>
 
-            <div className="flex items-start justify-between gap-4">
-              <div className="flex items-start gap-4">
-                <div className="w-10 h-10 bg-bg-item-surface rounded-lg border border-border-subtle flex items-center justify-center text-text-tertiary shrink-0">
-                  <BadgeCheck size={20} />
-                </div>
-                <div>
-                  <h3 className="text-sm font-bold text-text-primary">Version</h3>
-                  <p className="text-xs text-text-secondary mt-0.5">You are currently using Natively version {packageJson.version}</p>
-                </div>
-              </div>
-              <button
-                onClick={async () => {
-                  if (updateStatus === 'available') {
-                    try {
-                      await window.electronAPI.downloadUpdate();
-                      onClose();
-                    } catch (err) {
-                      console.error('Failed to start download:', err);
-                    }
-                  } else {
-                    handleCheckForUpdates();
-                  }
-                }}
-                disabled={updateStatus === 'checking'}
-                className={`px-5 py-2 rounded-lg text-[13px] font-bold transition-all flex items-center gap-2 shrink-0 ${updateStatus === 'checking' ? 'bg-bg-input text-text-tertiary cursor-wait' : updateStatus === 'available' ? 'bg-accent-primary text-white hover:bg-accent-secondary shadow-lg shadow-blue-500/20' : updateStatus === 'uptodate' ? 'bg-green-500/10 text-green-400 border border-green-500/20' : updateStatus === 'error' ? 'bg-red-500/10 text-red-400 border border-red-500/20' : 'bg-bg-component hover:bg-bg-input text-text-primary'}`}
-              >
-                {updateStatus === 'checking' ? (
-                  <>
-                    <RefreshCw size={14} className="animate-spin" />
-                    Checking...
-                  </>
-                ) : updateStatus === 'available' ? (
-                  <>
-                    <ArrowDown size={14} />
-                    Update Available
-                  </>
-                ) : updateStatus === 'uptodate' ? (
-                  <>
-                    <Check size={14} />
-                    Up to date
-                  </>
-                ) : updateStatus === 'error' ? (
-                  <>
-                    <X size={14} />
-                    Error
-                  </>
-                ) : (
-                  <>
-                    <RefreshCw size={14} />
-                    Check for updates
-                  </>
-                )}
-              </button>
-            </div>
+<div className="flex items-start justify-between gap-4">
+        <div className="flex items-start gap-4">
+          <div className="w-10 h-10 bg-bg-item-surface rounded-lg border border-border-subtle flex items-center justify-center text-text-tertiary shrink-0">
+            <BadgeCheck size={20} />
+          </div>
+          <div>
+            <h3 className="text-sm font-bold text-text-primary">Version</h3>
+            <p className="text-xs text-text-secondary mt-0.5">Natively v{packageJson.version}</p>
+          </div>
+        </div>
+      </div>
 
             <div
               id="opacity-slider-card"

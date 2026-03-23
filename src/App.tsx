@@ -9,7 +9,6 @@ import NativelyInterface from './components/NativelyInterface'
 import SettingsOverlay from './components/SettingsOverlay'
 import SettingsPopup from './components/SettingsPopup'
 import StartupSequence from './components/StartupSequence'
-import UpdateBanner from './components/UpdateBanner'
 import { ToastProvider, ToastViewport } from './components/ui/toast'
 import {
   getCurrentEnvironment,
@@ -253,11 +252,9 @@ const LauncherWindowContent: React.FC<LauncherWindowContentProps> = ({
                 </button>
               </div>
             </div>
-          </motion.div>
-        )}
+        </motion.div>
+      )}
       </AnimatePresence>
-
-      <UpdateBanner />
     </div>
   </ErrorBoundary>
 )

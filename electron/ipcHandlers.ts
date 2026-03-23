@@ -35,41 +35,12 @@ export function initializeIpcHandlers(appState: AppState): void {
   const fail = (code: string, error: unknown, fallbackMessage: string) => ({
     success: false as const,
     error: {
-      code,
-      message: error instanceof Error ? error.message : fallbackMessage,
-    },
-  });
+  code,
+    message: error instanceof Error ? error.message : fallbackMessage,
+  },
+});
 
-  // --- NEW Test Helper ---
-  safeHandle("test-release-fetch", async () => {
-    try {
-      console.log("[IPC] Manual Test Fetch triggered (forcing refresh)...");
-      const { ReleaseNotesManager } = require('./update/ReleaseNotesManager');
-      const notes = await ReleaseNotesManager.getInstance().fetchReleaseNotes('latest', true);
-
-      if (notes) {
-        console.log("[IPC] Notes fetched for:", notes.version);
-        const info = {
-          version: notes.version || 'latest',
-          files: [] as any[],
-          path: '',
-          sha512: '',
-          releaseName: notes.summary,
-          releaseNotes: notes.fullBody,
-          parsedNotes: notes
-        };
-        // Send to renderer
-        appState.getMainWindow()?.webContents.send("update-available", info);
-        return ok(null);
-      }
-      return fail('RELEASE_NOTES_EMPTY', new Error('No notes returned'), 'No notes returned');
-    } catch (err: any) {
-      console.error("[IPC] test-release-fetch failed:", err);
-      return fail('RELEASE_FETCH_FAILED', err, 'Failed to fetch release notes');
-    }
-  });
-
-  safeHandleValidated("renderer:log-error", (args) => [parseIpcInput(ipcSchemas.rendererLogPayload, args[0], 'renderer:log-error')] as const, async (_, payload) => {
+safeHandleValidated("renderer:log-error", (args) => [parseIpcInput(ipcSchemas.rendererLogPayload, args[0], 'renderer:log-error')] as const, async (_, payload) => {
     try {
       console.error('[RendererError]', JSON.stringify(payload));
       return { success: true };
@@ -333,40 +304,16 @@ export function initializeIpcHandlers(appState: AppState): void {
 
 
 
-  safeHandle("quit-app", () => {
-    app.quit()
-    return ok(null)
-  })
+safeHandle("quit-app", () => {
+  app.quit()
+  return ok(null)
+})
 
-  safeHandle("quit-and-install-update", () => {
-    console.log('[IPC] quit-and-install-update handler called')
-    appState.quitAndInstallUpdate()
-    return ok(null)
-  })
+safeHandleValidated("delete-meeting", (args) => [parseIpcInput(ipcSchemas.providerId, args[0], 'delete-meeting')] as const, async (_, id) => {
+  return DatabaseManager.getInstance().deleteMeeting(id);
+});
 
-  safeHandleValidated("delete-meeting", (args) => [parseIpcInput(ipcSchemas.providerId, args[0], 'delete-meeting')] as const, async (_, id) => {
-    return DatabaseManager.getInstance().deleteMeeting(id);
-  });
-
-  safeHandle("check-for-updates", async () => {
-    try {
-      await appState.checkForUpdates()
-      return ok(null)
-    } catch (error) {
-      return fail('UPDATE_CHECK_FAILED', error, 'Failed to check for updates')
-    }
-  })
-
-  safeHandle("download-update", async () => {
-    try {
-      appState.downloadUpdate()
-      return ok(null)
-    } catch (error) {
-      return fail('UPDATE_DOWNLOAD_FAILED', error, 'Failed to start update download')
-    }
-  })
-
-  // LLM Model Management Handlers
+// LLM Model Management Handlers
   safeHandle("get-current-llm-config", async () => {
     try {
       const llmHelper = appState.processingHelper.getLLMHelper();

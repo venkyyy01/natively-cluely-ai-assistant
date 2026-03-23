@@ -205,7 +205,6 @@
     "clsx": "^2.1.1",
     "diff": "^8.0.3",
     "electron-store": "^8.1.0",
-    "electron-updater": "^6.7.3",
     "form-data": "^4.0.1",
     "framer-motion": "^12.29.2",
     "groq-sdk": "^0.37.0",

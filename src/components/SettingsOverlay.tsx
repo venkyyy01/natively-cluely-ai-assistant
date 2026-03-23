@@ -347,16 +347,15 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
 const { shortcuts, updateShortcut, resetShortcuts } = useShortcuts();
   const [isUndetectable, setIsUndetectable] = useState(false);
   const [disguiseMode, setDisguiseMode] = useState<'terminal' | 'settings' | 'activity' | 'none'>('none');
-  const [openOnLogin, setOpenOnLogin] = useState(false);
+const [openOnLogin, setOpenOnLogin] = useState(false);
 const [accelerationModeEnabled, setAccelerationModeEnabled] = useState(false);
 const [consciousModeEnabled, setConsciousModeEnabled] = useState(false);
 const [themeMode, setThemeMode] = useState<'system' | 'light' | 'dark'>('system');
-    const [isThemeDropdownOpen, setIsThemeDropdownOpen] = useState(false);
-    const [isAiLangDropdownOpen, setIsAiLangDropdownOpen] = useState(false);
-    const [updateStatus, setUpdateStatus] = useState<'idle' | 'checking' | 'available' | 'uptodate' | 'error'>('idle');
-    const [generalSettingsError, setGeneralSettingsError] = useState('');
-    const themeDropdownRef = React.useRef<HTMLDivElement>(null);
-    const aiLangDropdownRef = React.useRef<HTMLDivElement>(null);
+const [isThemeDropdownOpen, setIsThemeDropdownOpen] = useState(false);
+const [isAiLangDropdownOpen, setIsAiLangDropdownOpen] = useState(false);
+const [generalSettingsError, setGeneralSettingsError] = useState('');
+const themeDropdownRef = React.useRef<HTMLDivElement>(null);
+const aiLangDropdownRef = React.useRef<HTMLDivElement>(null);
 
     // Profile Engine State
     const [profileStatus, setProfileStatus] = useState<{
@@ -1142,57 +1141,15 @@ return () => unsubscribe();
             oscillator.start();
             oscillator.stop(ctx.currentTime + 1.0);
         } catch (e) {
-            console.error("Error playing test sound", e);
-        }
-    };
+    console.error("Error playing test sound", e);
+    }
+  };
 
-    // Load stored credentials on mount
+  // Load stored credentials on mount
 
-
-
-
-    const handleCheckForUpdates = async () => {
-        if (updateStatus === 'checking') return;
-        setUpdateStatus('checking');
-        try {
-            await window.electronAPI.checkForUpdates();
-        } catch (error) {
-            console.error("Failed to check for updates:", error);
-            setUpdateStatus('error');
-            setTimeout(() => setUpdateStatus('idle'), 3000);
-        }
-    };
-
-    useEffect(() => {
-        if (!isOpen) return;
-
-        const unsubs = [
-            window.electronAPI.onUpdateChecking(() => {
-                setUpdateStatus('checking');
-            }),
-            window.electronAPI.onUpdateAvailable(() => {
-                setUpdateStatus('available');
-                // Don't close settings - let user see the button change to "Update Available"
-            }),
-            window.electronAPI.onUpdateNotAvailable(() => {
-                setUpdateStatus('uptodate');
-                setTimeout(() => setUpdateStatus('idle'), 3000);
-            }),
-            window.electronAPI.onUpdateError((err) => {
-                console.error('[Settings] Update error:', err);
-                setUpdateStatus('error');
-                setTimeout(() => setUpdateStatus('idle'), 3000);
-            })
-        ];
-
-        return () => unsubs.forEach(unsub => unsub());
-    }, [isOpen, onClose]);
-
-
-
-    useEffect(() => {
-        if (isOpen) {
-            // Load detectable status
+  useEffect(() => {
+    if (isOpen) {
+      // Load detectable status
             if (window.electronAPI?.getUndetectable) {
                 window.electronAPI.getUndetectable().then(setIsUndetectable);
             }
@@ -1427,22 +1384,19 @@ setIsAiLangDropdownOpen={setIsAiLangDropdownOpen}
 aiLangDropdownRef={aiLangDropdownRef}
 availableAiLanguages={availableAiLanguages}
 handleAiLanguageChange={handleAiLanguageChange}
-overlayOpacity={overlayOpacity}
-handleOpacityChange={handleOpacityChange}
-startPreviewingOpacity={startPreviewingOpacity}
-stopPreviewingOpacity={stopPreviewingOpacity}
-isPreviewingOpacity={isPreviewingOpacity}
-disguiseMode={disguiseMode}
-setDisguiseMode={setDisguiseMode}
-updateStatus={updateStatus}
-handleCheckForUpdates={handleCheckForUpdates}
-onClose={onClose}
-showGeneralSettingsError={showGeneralSettingsError}
-accelerationModeEnabled={accelerationModeEnabled}
-setAccelerationModeEnabled={setAccelerationModeEnabled}
-consciousModeEnabled={consciousModeEnabled}
-setConsciousModeEnabled={setConsciousModeEnabled}
-/>
+              overlayOpacity={overlayOpacity}
+              handleOpacityChange={handleOpacityChange}
+              startPreviewingOpacity={startPreviewingOpacity}
+              stopPreviewingOpacity={stopPreviewingOpacity}
+              isPreviewingOpacity={isPreviewingOpacity}
+              disguiseMode={disguiseMode}
+              setDisguiseMode={setDisguiseMode}
+              showGeneralSettingsError={showGeneralSettingsError}
+              accelerationModeEnabled={accelerationModeEnabled}
+              setAccelerationModeEnabled={setAccelerationModeEnabled}
+              consciousModeEnabled={consciousModeEnabled}
+              setConsciousModeEnabled={setConsciousModeEnabled}
+            />
         )}
                             {activeTab === 'profile' && (
                                 <div className="space-y-6 animated fadeIn">

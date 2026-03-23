@@ -2,7 +2,6 @@ import { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, shell, systemPref
 import { EventEmitter } from "events"
 import path from "path"
 import fs from "fs"
-import { autoUpdater } from "electron-updater"
 import { syncOptimizationFlagsFromSettings } from "./config/optimizations"
 import { StealthManager } from "./stealth/StealthManager"
 if (!app.isPackaged) {
@@ -215,7 +214,6 @@ try {
 
 import { CredentialsManager } from "./services/CredentialsManager"
 import { SettingsManager } from "./services/SettingsManager"
-import { ReleaseNotesManager } from "./update/ReleaseNotesManager"
 import { OllamaManager } from './services/OllamaManager'
 
 export class AppState {
@@ -232,7 +230,6 @@ export class AppState {
   private ragManager: RAGManager | null = null
   private knowledgeOrchestrator: any = null
   private tray: Tray | null = null
-  private updateAvailable: boolean = false
   private disguiseMode: 'terminal' | 'settings' | 'activity' | 'none' = 'none'
   private consciousModeEnabled: boolean = false
 
@@ -405,9 +402,6 @@ this.setupIntelligenceEvents()
     // --- NEW SYSTEM AUDIO PIPELINE (SOX + NODE GOOGLE STT) ---
     // LAZY INIT: Do not setup pipeline here to prevent launch volume surge.
     // this.setupSystemAudioPipeline()
-
-    // Initialize Auto-Updater
-    this.setupAutoUpdater()
   }
 
   private broadcast(channel: string, ...args: any[]): void {
@@ -603,172 +597,11 @@ try {
         console.log('[AppState] KnowledgeOrchestrator initialized');
       }
     } catch (error) {
-      console.error('[AppState] Failed to initialize KnowledgeOrchestrator:', error);
+    console.error('[AppState] Failed to initialize KnowledgeOrchestrator:', error);
     }
   }
 
-  private setupAutoUpdater(): void {
-    autoUpdater.autoDownload = false
-    autoUpdater.autoInstallOnAppQuit = false  // Manual install only via button
-
-    autoUpdater.on("checking-for-update", () => {
-      console.log("[AutoUpdater] Checking for update...")
-      this.broadcast("update-checking")
-    })
-
-    autoUpdater.on("update-available", async (info) => {
-      console.log("[AutoUpdater] Update available:", info.version)
-      this.updateAvailable = true
-
-      // Fetch structured release notes
-      const releaseManager = ReleaseNotesManager.getInstance();
-      const notes = await releaseManager.fetchReleaseNotes(info.version);
-
-      // Notify renderer that an update is available with parsed notes if available
-      this.broadcast("update-available", {
-        ...info,
-        parsedNotes: notes
-      })
-    })
-
-    autoUpdater.on("update-not-available", (info) => {
-      console.log("[AutoUpdater] Update not available:", info.version)
-      this.broadcast("update-not-available", info)
-    })
-
-    autoUpdater.on("error", (err) => {
-      console.error("[AutoUpdater] Error:", err)
-      this.broadcast("update-error", err.message)
-    })
-
-    autoUpdater.on("download-progress", (progressObj) => {
-      let log_message = "Download speed: " + progressObj.bytesPerSecond
-      log_message = log_message + " - Downloaded " + progressObj.percent + "%"
-      log_message = log_message + " (" + progressObj.transferred + "/" + progressObj.total + ")"
-      console.log("[AutoUpdater] " + log_message)
-      this.broadcast("download-progress", progressObj)
-    })
-
-    autoUpdater.on("update-downloaded", (info) => {
-      console.log("[AutoUpdater] Update downloaded:", info.version)
-      // Notify renderer that update is ready to install
-      this.broadcast("update-downloaded", info)
-    })
-
-    // Start checking for updates with a 10-second delay
-    setTimeout(() => {
-      if (process.env.NODE_ENV === "development") {
-        console.log("[AutoUpdater] Development mode: Running manual update check...");
-        this.checkForUpdatesManual();
-      } else {
-        autoUpdater.checkForUpdatesAndNotify().catch(err => {
-          console.error("[AutoUpdater] Failed to check for updates:", err);
-        });
-      }
-    }, 10000);
-  }
-
-  private async checkForUpdatesManual(): Promise<void> {
-    try {
-      console.log('[AutoUpdater] Checking for updates manually via GitHub API...');
-      const releaseManager = ReleaseNotesManager.getInstance();
-      // Fetch latest release
-      const notes = await releaseManager.fetchReleaseNotes('latest');
-
-      if (notes) {
-        const currentVersion = app.getVersion();
-        const latestVersionTag = notes.version; // e.g., "v1.2.0" or "1.2.0"
-        const latestVersion = latestVersionTag.replace(/^v/, '');
-
-        console.log(`[AutoUpdater] Manual Check: Current=${currentVersion}, Latest=${latestVersion}`);
-
-        if (this.isVersionNewer(currentVersion, latestVersion)) {
-          console.log('[AutoUpdater] Manual Check: New version found!');
-          this.updateAvailable = true;
-
-          // Mock an info object compatible with electron-updater
-          const info = {
-            version: latestVersion,
-            files: [] as any[],
-            path: '',
-            sha512: '',
-            releaseName: notes.summary,
-            releaseNotes: notes.fullBody
-          };
-
-          // Notify renderer
-          this.broadcast("update-available", {
-            ...info,
-            parsedNotes: notes
-          });
-        } else {
-          console.log('[AutoUpdater] Manual Check: App is up to date.');
-          this.broadcast("update-not-available", { version: currentVersion });
-        }
-      }
-    } catch (err) {
-      console.error('[AutoUpdater] Manual update check failed:', err);
-    }
-  }
-
-  private isVersionNewer(current: string, latest: string): boolean {
-    const c = current.split('.').map(Number);
-    const l = latest.split('.').map(Number);
-
-    for (let i = 0; i < 3; i++) {
-      const cv = c[i] || 0;
-      const lv = l[i] || 0;
-      if (lv > cv) return true;
-      if (lv < cv) return false;
-    }
-    return false;
-  }
-
-
-  public async quitAndInstallUpdate(): Promise<void> {
-    console.log('[AutoUpdater] quitAndInstall called - applying update...')
-
-    // On macOS, unsigned apps can't auto-restart via quitAndInstall
-    // Workaround: Open the folder containing the downloaded update so user can install manually
-    if (process.platform === 'darwin') {
-      try {
-        // Get the downloaded update file path (e.g., .../Natively-1.0.9-mac.zip)
-        const updateFile = (autoUpdater as any).downloadedUpdateHelper?.file
-        console.log('[AutoUpdater] Downloaded update file:', updateFile)
-
-        if (updateFile) {
-          const updateDir = path.dirname(updateFile)
-          // Open the directory containing the update in Finder
-          await shell.openPath(updateDir)
-          console.log('[AutoUpdater] Opened update directory:', updateDir)
-
-          // Quit the app so user can install new version
-          setTimeout(() => app.quit(), 1000)
-          return
-        }
-      } catch (err) {
-        console.error('[AutoUpdater] Failed to open update directory:', err)
-      }
-    }
-
-    // Fallback to standard quitAndInstall (works on Windows/Linux or if signed)
-    setImmediate(() => {
-      try {
-        autoUpdater.quitAndInstall(false, true)
-      } catch (err) {
-        console.error('[AutoUpdater] quitAndInstall failed:', err)
-        app.exit(0)
-      }
-    })
-  }
-
-  public async checkForUpdates(): Promise<void> {
-    await autoUpdater.checkForUpdatesAndNotify()
-  }
-
-  public downloadUpdate(): void {
-    autoUpdater.downloadUpdate()
-  }
+  // Update-related methods removed
 
   // New Property for System Audio & Microphone
   private systemAudioCapture: SystemAudioCapture | null = null;

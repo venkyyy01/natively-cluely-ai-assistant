@@ -5,7 +5,6 @@ import Module from 'node:module';
 type Handler = (event: unknown, ...args: unknown[]) => Promise<unknown> | unknown;
 
 function installIpcHandlersTestHarness(options?: {
-  checkForUpdatesError?: string;
   restartOllamaError?: string;
   serviceAccountResult?: { canceled: boolean; filePaths: string[] };
 }) {
@@ -138,19 +137,12 @@ function installIpcHandlersTestHarness(options?: {
     getScreenshotQueue: () => ['/tmp/user-data/one.png'],
     getExtraScreenshotQueue: () => ['/tmp/user-data/two.png'],
     toggleMainWindow: () => {},
-    showMainWindow: () => {},
-    hideMainWindow: () => {},
-    clearQueues: () => {},
-    processingHelper: { getLLMHelper: () => llmHelper },
-    finalizeMicSTT: () => {},
-    quitAndInstallUpdate: () => {},
-    checkForUpdates: async () => {
-      if (options?.checkForUpdatesError) {
-        throw new Error(options.checkForUpdatesError);
-      }
-    },
-    downloadUpdate: () => {},
-    moveWindowLeft: () => {},
+showMainWindow: () => {},
+      hideMainWindow: () => {},
+      clearQueues: () => {},
+      processingHelper: { getLLMHelper: () => llmHelper },
+      finalizeMicSTT: () => {},
+      moveWindowLeft: () => {},
     moveWindowRight: () => {},
     moveWindowUp: () => {},
     moveWindowDown: () => {},
@@ -285,20 +277,12 @@ test('root IPC handlers validate inputs and return normalized contracts', async 
 });
 
 test('root IPC handlers normalize cancellation and failures into success/data/error shapes', async () => {
-  const harness = installIpcHandlersTestHarness({ checkForUpdatesError: 'network down', restartOllamaError: 'restart failed' });
+  const harness = installIpcHandlersTestHarness({ restartOllamaError: 'restart failed' });
   await initializeHandlers(harness);
 
   assert.deepEqual(await harness.handlers.get('select-service-account')?.({}), {
     success: true,
     data: { cancelled: true },
-  });
-
-  assert.deepEqual(await harness.handlers.get('check-for-updates')?.({}), {
-    success: false,
-    error: {
-      code: 'UPDATE_CHECK_FAILED',
-      message: 'network down',
-    },
   });
 
   assert.deepEqual(await harness.handlers.get('restart-ollama')?.({}), {

@@ -238,19 +238,7 @@ interface ElectronAPI {
   getUpcomingEvents: () => Promise<Array<{ id: string; title: string; startTime: string; endTime: string; link?: string; source: 'google' }>>
   calendarRefresh: () => Promise<{ success: boolean; error?: string }>
 
-  // Auto-Update
-  onUpdateAvailable: (callback: (info: any) => void) => () => void
-  onUpdateDownloaded: (callback: (info: any) => void) => () => void
-  onUpdateChecking: (callback: () => void) => () => void
-  onUpdateNotAvailable: (callback: (info: any) => void) => () => void
-  onUpdateError: (callback: (err: string) => void) => () => void
-  onDownloadProgress: (callback: (progressObj: any) => void) => () => void
-  restartAndInstall: () => Promise<void>
-  checkForUpdates: () => Promise<void>
-  downloadUpdate: () => Promise<void>
-  testReleaseFetch: () => Promise<{ success: boolean; error?: string }>
-
-  // RAG (Retrieval-Augmented Generation) API
+// RAG (Retrieval-Augmented Generation) API
   ragQueryMeeting: (meetingId: string, query: string) => Promise<{ success?: boolean; fallback?: boolean; error?: string }>
   ragQueryLive: (query: string) => Promise<{ success?: boolean; fallback?: boolean; error?: string }>
   ragQueryGlobal: (query: string) => Promise<{ success?: boolean; fallback?: boolean; error?: string }>
@@ -865,55 +853,7 @@ setOpenAtLogin: (open: boolean) => invokeStatus("set-open-at-login", open),
   getUpcomingEvents: () => ipcRenderer.invoke('get-upcoming-events'),
   calendarRefresh: () => ipcRenderer.invoke('calendar-refresh'),
 
-  // Auto-Update
-  onUpdateAvailable: (callback: (info: any) => void) => {
-    const subscription = (_: any, info: any) => callback(info)
-    ipcRenderer.on("update-available", subscription)
-    return () => {
-      ipcRenderer.removeListener("update-available", subscription)
-    }
-  },
-  onUpdateDownloaded: (callback: (info: any) => void) => {
-    const subscription = (_: any, info: any) => callback(info)
-    ipcRenderer.on("update-downloaded", subscription)
-    return () => {
-      ipcRenderer.removeListener("update-downloaded", subscription)
-    }
-  },
-  onUpdateChecking: (callback: () => void) => {
-    const subscription = () => callback()
-    ipcRenderer.on("update-checking", subscription)
-    return () => {
-      ipcRenderer.removeListener("update-checking", subscription)
-    }
-  },
-  onUpdateNotAvailable: (callback: (info: any) => void) => {
-    const subscription = (_: any, info: any) => callback(info)
-    ipcRenderer.on("update-not-available", subscription)
-    return () => {
-      ipcRenderer.removeListener("update-not-available", subscription)
-    }
-  },
-  onUpdateError: (callback: (err: string) => void) => {
-    const subscription = (_: any, err: string) => callback(err)
-    ipcRenderer.on("update-error", subscription)
-    return () => {
-      ipcRenderer.removeListener("update-error", subscription)
-    }
-  },
-  onDownloadProgress: (callback: (progressObj: any) => void) => {
-    const subscription = (_: any, progressObj: any) => callback(progressObj)
-    ipcRenderer.on("download-progress", subscription)
-    return () => {
-      ipcRenderer.removeListener("download-progress", subscription)
-    }
-  },
-  restartAndInstall: () => invokeVoid("quit-and-install-update"),
-  checkForUpdates: () => invokeVoid("check-for-updates"),
-  downloadUpdate: () => invokeVoid("download-update"),
-  testReleaseFetch: () => invokeStatus("test-release-fetch"),
-
-  // RAG API
+// RAG API
   ragQueryMeeting: async (meetingId: string, query: string) => {
     try {
       return await invokeAndUnwrap<{ success?: boolean; fallback?: boolean }>('rag:query-meeting', { meetingId, query })

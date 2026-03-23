@@ -217,19 +217,7 @@ setDisguise: (mode: 'terminal' | 'settings' | 'activity' | 'none') => Promise<St
   getUpcomingEvents: () => Promise<Array<{ id: string; title: string; startTime: string; endTime: string; link?: string; source: 'google' }>>
   calendarRefresh: () => Promise<{ success: boolean; error?: string }>
 
-  // Auto-Update
-  onUpdateAvailable: (callback: (info: any) => void) => () => void
-  onUpdateDownloaded: (callback: (info: any) => void) => () => void
-  onUpdateChecking: (callback: () => void) => () => void
-  onUpdateNotAvailable: (callback: (info: any) => void) => () => void
-  onUpdateError: (callback: (err: string) => void) => () => void
-  onDownloadProgress: (callback: (progressObj: any) => void) => () => void
-  restartAndInstall: () => Promise<void>
-  checkForUpdates: () => Promise<void>
-  downloadUpdate: () => Promise<void>
-  testReleaseFetch: () => Promise<{ success: boolean; error?: string }>
-
-  // RAG (Retrieval-Augmented Generation) API
+// RAG (Retrieval-Augmented Generation) API
   ragQueryMeeting: (meetingId: string, query: string) => Promise<{ success?: boolean; fallback?: boolean; error?: string }>
   ragQueryLive: (query: string) => Promise<{ success?: boolean; fallback?: boolean; error?: string }>
   ragQueryGlobal: (query: string) => Promise<{ success?: boolean; fallback?: boolean; error?: string }>
