@@ -236,7 +236,7 @@ step "Step 1/9 — Checking Source Code Status"
 cd "$SCRIPT_DIR"
 
 # Check for uncommitted changes
-if [[ -d ".git" ]]; then
+if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     UNCOMMITTED=$(git status --porcelain 2>/dev/null | grep -E "^[ AM]" | head -20 || true)
     if [[ -n "$UNCOMMITTED" ]]; then
         warn "Uncommitted changes detected in source:"
@@ -442,6 +442,15 @@ else
 fi
 success "Installed to ${INSTALL_DIR}/${APP_NAME}.app"
 
+# Verify installed app binary exists and matches expected architecture
+INSTALLED_BINARY="${INSTALL_DIR}/${APP_NAME}.app/Contents/MacOS/${APP_NAME}"
+require_file "$INSTALLED_BINARY" "Installed app binary"
+if file "$INSTALLED_BINARY" | grep -q "$BUILD_ARCH"; then
+    success "Installed binary architecture verified (${BUILD_ARCH})"
+else
+    fail "Installed binary architecture does not match expected ${BUILD_ARCH}"
+fi
+
 # ╔═══════════════════════════════════════════════════════════════════╗
 # ║  Done!                                                           ║
 # ╚═══════════════════════════════════════════════════════════════════╝
@@ -460,10 +469,14 @@ echo -e "  ${CYAN}3.${NC} Configure API keys in Settings -> AI Providers"
 echo -e "     ${YELLOW}>${NC} Or use Ollama for a fully local setup"
 echo ""
 
-# Ask to launch
-read -rp "$(echo -e "${YELLOW}Launch ${APP_NAME} now? [Y/n]:${NC} ")" LAUNCH
-LAUNCH=${LAUNCH:-Y}
-if [[ "$LAUNCH" =~ ^[Yy]$ ]]; then
-    open "${INSTALL_DIR}/${APP_NAME}.app"
-    success "Launched ${APP_NAME}!"
+# Ask to launch only in interactive terminals
+if [[ "$IS_TTY" == true ]]; then
+    read -rp "$(echo -e "${YELLOW}Launch ${APP_NAME} now? [Y/n]:${NC} ")" LAUNCH
+    LAUNCH=${LAUNCH:-Y}
+    if [[ "$LAUNCH" =~ ^[Yy]$ ]]; then
+        open "${INSTALL_DIR}/${APP_NAME}.app"
+        success "Launched ${APP_NAME}!"
+    fi
+else
+    info "Non-interactive shell detected; skipping launch prompt"
 fi
