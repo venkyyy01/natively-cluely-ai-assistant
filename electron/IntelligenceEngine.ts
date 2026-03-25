@@ -19,6 +19,8 @@ import {
 import { FallbackExecutor } from './conscious';
 import { ParallelContextAssembler, ContextAssemblyInput, ContextAssemblyOutput } from './cache/ParallelContextAssembler';
 import { isOptimizationActive } from './config/optimizations';
+import { AnswerLatencyTracker, AnswerRoute } from './latency/AnswerLatencyTracker';
+import { selectAnswerRoute } from './latency/answerRouteSelector';
 
 // Mode types
 export type IntelligenceMode = 'idle' | 'assist' | 'what_to_say' | 'follow_up' | 'recap' | 'manual' | 'follow_up_questions' | 'reasoning_first';
@@ -87,6 +89,7 @@ export class IntelligenceEngine extends EventEmitter {
 
   // Parallel context assembler for acceleration
   private parallelContextAssembler: ParallelContextAssembler | null = null;
+  private latencyTracker: AnswerLatencyTracker = new AnswerLatencyTracker();
 
   // Timestamps for tracking
   private lastTranscriptTime: number = 0;
@@ -308,6 +311,24 @@ export class IntelligenceEngine extends EventEmitter {
             }
 
             const contextItems = this.session.getContext(180);
+            const baseQuestion = question || this.session.getLastInterviewerTurn() || '';
+            const knowledgeOrchestrator = this.llmHelper.getKnowledgeOrchestrator?.();
+            const knowledgeStatus = knowledgeOrchestrator?.getStatus?.();
+            const route = selectAnswerRoute({
+                explicitManual: false,
+                explicitFollowUp: false,
+                consciousModeEnabled: this.session.isConsciousModeEnabled(),
+                profileModeEnabled: !!knowledgeStatus?.activeMode,
+                hasProfile: !!knowledgeStatus?.hasResume,
+                hasKnowledgeData: !!knowledgeStatus?.hasResume || !!knowledgeStatus?.hasActiveJD,
+                latestQuestion: baseQuestion,
+                activeReasoningThread: this.session.getActiveReasoningThread(),
+            });
+            const capability = typeof (this.llmHelper as any).getProviderCapabilityClass === 'function'
+                ? (this.llmHelper as any).getProviderCapabilityClass()
+                : 'buffered';
+            const requestId = this.latencyTracker.start(route, capability);
+            this.latencyTracker.mark(requestId, 'contextLoaded');
 
             // Inject latest interim transcript if available
             const lastInterim = this.session.getLastInterimInterviewer();
@@ -332,13 +353,15 @@ export class IntelligenceEngine extends EventEmitter {
                 text: item.text,
                 timestamp: item.timestamp
             }));
-
-            const preparedTranscript = prepareTranscriptForWhatToAnswer(transcriptTurns, 12);
+            const preparedTranscript = route === 'fast_standard_answer'
+                ? this.session.getCompactTranscriptSnapshot(12, 'fast')
+                : prepareTranscriptForWhatToAnswer(transcriptTurns, 12);
+            this.latencyTracker.mark(requestId, 'transcriptPrepared');
 
             const lastInterviewerTurn = this.session.getLastInterviewerTurn();
             const activeReasoningThread = this.session.getActiveReasoningThread();
             const resolvedQuestion = question || lastInterviewerTurn || '';
-            const accelerationFastPath = isOptimizationActive('useParallelContext') && !this.session.isConsciousModeEnabled();
+            const accelerationFastPath = route === 'fast_standard_answer';
             const temporalContext = accelerationFastPath
                 ? undefined
                 : buildTemporalContext(
@@ -353,8 +376,9 @@ export class IntelligenceEngine extends EventEmitter {
                     preparedTranscript,
                     this.session.getAssistantResponseHistory().length
                 );
-            const consciousRoute = this.session.isConsciousModeEnabled()
-                ? classifyConsciousModeQuestion(resolvedQuestion, activeReasoningThread, intentResult.intent)
+            this.latencyTracker.mark(requestId, 'enrichmentReady');
+            const consciousRoute = route === 'conscious_answer'
+                ? classifyConsciousModeQuestion(resolvedQuestion, activeReasoningThread)
                 : { qualifies: false, threadAction: 'ignore' as const };
 
             if (consciousRoute.threadAction === 'reset') {
@@ -422,9 +446,15 @@ export class IntelligenceEngine extends EventEmitter {
             console.log(`[IntelligenceEngine] Temporal RAG: ${temporalResponseCount} responses, tone: ${temporalTone}, intent: ${detectedIntent}${imagePaths?.length ? `, with ${imagePaths.length} image(s)` : ''}`);
 
             let fullAnswer = "";
-            const stream = this.whatToAnswerLLM.generateStream(preparedTranscript, temporalContext, intentResult, imagePaths);
+            const stream = this.whatToAnswerLLM.generateStream(preparedTranscript, temporalContext, intentResult, imagePaths, {
+                fastPath: route === 'fast_standard_answer',
+            });
+            this.latencyTracker.mark(requestId, 'providerRequestStarted');
 
             for await (const token of stream) {
+                if (!fullAnswer) {
+                    this.latencyTracker.mark(requestId, 'firstToken');
+                }
                 this.emit('suggested_answer_token', token, question || 'inferred', confidence);
                 fullAnswer += token;
             }
@@ -445,6 +475,8 @@ export class IntelligenceEngine extends EventEmitter {
             });
 
             this.emit('suggested_answer', fullAnswer, question || 'What to Answer', confidence);
+            const latencySnapshot = this.latencyTracker.complete(requestId);
+            console.log('[IntelligenceEngine] Answer latency snapshot:', latencySnapshot);
 
             this.setMode('idle');
             return fullAnswer;

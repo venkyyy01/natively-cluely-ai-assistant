@@ -50,6 +50,7 @@ export interface AssistantResponse {
 }
 
 export class SessionTracker {
+    private static nextSessionId = 1;
     // Context management (mirrors Swift ContextManager)
     private contextItems: ContextItem[] = [];
     private readonly contextWindowDuration: number = 120; // 120 seconds
@@ -96,6 +97,9 @@ export class SessionTracker {
 
   // Adaptive context window for acceleration
   private adaptiveContextWindow: AdaptiveContextWindow | null = null;
+  private sessionId: string = `session_${SessionTracker.nextSessionId++}`;
+  private transcriptRevision: number = 0;
+  private compactSnapshotCache = new Map<string, { revision: number; value: string }>();
 
     // ============================================
     // Configuration
@@ -148,6 +152,8 @@ export class SessionTracker {
             text,
             timestamp: segment.timestamp
         });
+        this.transcriptRevision++;
+        this.compactSnapshotCache.clear();
 
         this.evictOldEntries();
 
@@ -200,6 +206,8 @@ export class SessionTracker {
             text: cleanText,
             timestamp: Date.now()
         });
+        this.transcriptRevision++;
+        this.compactSnapshotCache.clear();
 
         // Also add to fullTranscript so it persists in the session history (and summaries)
         this.fullTranscript.push({
@@ -384,6 +392,38 @@ isConsciousModeEnabled(): boolean {
         }).join('\n');
     }
 
+    getSessionId(): string {
+        return this.sessionId;
+    }
+
+    getTranscriptRevision(): number {
+        return this.transcriptRevision;
+    }
+
+    getCompactTranscriptSnapshot(maxTurns: number = 12, snapshotType: 'standard' | 'fast' = 'standard'): string {
+        const cacheKey = `${this.sessionId}:${snapshotType}:${maxTurns}`;
+        const cached = this.compactSnapshotCache.get(cacheKey);
+        if (cached && cached.revision === this.transcriptRevision) {
+            return cached.value;
+        }
+
+        const items = this.contextItems.slice(-maxTurns);
+        const snapshot = items.map(item => ({
+            role: item.role,
+            text: item.text,
+            timestamp: item.timestamp,
+        })).map(item => {
+            const label = item.role === 'interviewer' ? 'INTERVIEWER' : item.role === 'assistant' ? 'ASSISTANT' : 'ME';
+            return `[${label}]: ${item.text}`;
+        }).join('\n');
+
+        this.compactSnapshotCache.set(cacheKey, {
+            revision: this.transcriptRevision,
+            value: snapshot,
+        });
+        return snapshot;
+    }
+
     /**
      * Get the last interviewer turn
      */
@@ -533,6 +573,9 @@ isConsciousModeEnabled(): boolean {
         this.phaseDetector.reset();
         this.tokenBudgetManager.reset();
         this.adaptiveContextWindow = null;
+        this.transcriptRevision = 0;
+        this.compactSnapshotCache.clear();
+        this.sessionId = `session_${SessionTracker.nextSessionId++}`;
     }
 
     // ============================================

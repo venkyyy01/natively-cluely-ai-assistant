@@ -22,6 +22,7 @@ import axios from 'axios';
 import { validateResponseQuality, logValidationMetrics } from './llm/postProcessor';
 import { createHash } from 'crypto';
 import { createProviderRateLimiters, RateLimiter } from './services/RateLimiter';
+import { classifyProviderCapability, ProviderCapabilityClass } from './latency/providerCapability';
 const execAsync = promisify(exec);
 
 /** Default timeout for LLM API calls in milliseconds */
@@ -2029,13 +2030,14 @@ ANSWER DIRECTLY:`;
     message: string,
     imagePaths?: string[],
     context?: string,
-    systemPromptOverride?: string // Optional override (defaults to HARD_SYSTEM_PROMPT)
+    systemPromptOverride?: string,
+    options?: { skipKnowledgeInterception?: boolean }
   ): AsyncGenerator<string, void, unknown> {
 
     // ============================================================
     // KNOWLEDGE MODE INTERCEPT (Streaming)
     // ============================================================
-    if (this.knowledgeOrchestrator?.isKnowledgeMode()) {
+    if (!options?.skipKnowledgeInterception && this.knowledgeOrchestrator?.isKnowledgeMode()) {
       try {
         const knowledgeResult = await this.knowledgeOrchestrator.processQuestion(message);
         if (knowledgeResult) {
@@ -2063,11 +2065,27 @@ ANSWER DIRECTLY:`;
 
     // Preparation
     const isMultimodal = !!(imagePaths?.length);
+    const providerCacheKey = this.activeCurlProvider
+      ? `curl:${this.activeCurlProvider.id}`
+      : this.isOpenAiModel(this.currentModelId)
+        ? 'openai'
+        : this.isClaudeModel(this.currentModelId)
+          ? 'claude'
+          : this.isGroqModel(this.currentModelId)
+            ? 'groq'
+            : this.useOllama
+              ? 'ollama'
+              : 'gemini';
 
     // Determine the system prompt to use
     // logic: if override provided, use it. otherwise use HARD_SYSTEM_PROMPT (which is the universal base)
     const baseSystemPrompt = systemPromptOverride || HARD_SYSTEM_PROMPT;
-    const finalSystemPrompt = this.injectLanguageInstruction(baseSystemPrompt);
+    const finalSystemPrompt = await this.withSystemPromptCache(
+      providerCacheKey,
+      this.getCurrentModel(),
+      baseSystemPrompt,
+      () => this.injectLanguageInstruction(baseSystemPrompt),
+    );
 
     // Helper to build combined user message
     const userContent = context
@@ -2743,6 +2761,17 @@ ANSWER DIRECTLY:`;
   public getCurrentProvider(): "ollama" | "gemini" | "custom" {
     if (this.customProvider) return "custom";
     return this.useOllama ? "ollama" : "gemini";
+  }
+
+  public getProviderCapabilityClass(): ProviderCapabilityClass {
+    return classifyProviderCapability({
+      useOllama: this.useOllama,
+      activeCurlProvider: !!this.activeCurlProvider,
+      isOpenAiModel: this.isOpenAiModel(this.currentModelId),
+      isClaudeModel: this.isClaudeModel(this.currentModelId),
+      isGroqModel: this.isGroqModel(this.currentModelId),
+      isGeminiModel: this.isGeminiModel(this.currentModelId),
+    });
   }
 
   public getCurrentModel(): string {

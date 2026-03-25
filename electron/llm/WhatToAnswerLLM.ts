@@ -1,5 +1,5 @@
 import { LLMHelper } from "../LLMHelper";
-import { UNIVERSAL_WHAT_TO_ANSWER_PROMPT } from "./prompts";
+import { FAST_STANDARD_ANSWER_PROMPT, UNIVERSAL_WHAT_TO_ANSWER_PROMPT } from "./prompts";
 import { TemporalContext } from "./TemporalContextBuilder";
 import { IntentResult } from "./IntentClassifier";
 import { ConsciousModeStructuredResponse, parseConsciousModeResponse } from "../ConsciousMode";
@@ -24,7 +24,8 @@ export class WhatToAnswerLLM {
         cleanedTranscript: string,
         temporalContext?: TemporalContext,
         intentResult?: IntentResult,
-        imagePaths?: string[]
+        imagePaths?: string[],
+        options?: { fastPath?: boolean }
     ): AsyncGenerator<string> {
         try {
             // Build a rich message context
@@ -56,7 +57,10 @@ ANSWER SHAPE: ${intentResult.answerShape}
             // Note: WhatToAnswer has a very specific prompt. 
             // We should use UNIVERSAL_WHAT_TO_ANSWER_PROMPT as override
 
-            yield* this.llmHelper.streamChat(fullMessage, imagePaths, undefined, UNIVERSAL_WHAT_TO_ANSWER_PROMPT);
+            const prompt = options?.fastPath ? FAST_STANDARD_ANSWER_PROMPT : UNIVERSAL_WHAT_TO_ANSWER_PROMPT;
+            yield* this.llmHelper.streamChat(fullMessage, imagePaths, undefined, prompt, {
+                skipKnowledgeInterception: !!options?.fastPath,
+            });
 
         } catch (error) {
             console.error("[WhatToAnswerLLM] Stream failed:", error);
