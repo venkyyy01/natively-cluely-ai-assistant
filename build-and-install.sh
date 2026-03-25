@@ -313,8 +313,8 @@ success "Quality gates passed"
 # ╚═══════════════════════════════════════════════════════════════════╝
 step "Step 6/9 — Building Production App"
 
-info "Running production build pipeline..."
-run_with_spinner "forging full production bundle" env SKIP_PRODUCTION_VERIFY=1 npm run app:build
+info "Running production build pipeline for Apple Silicon only..."
+run_with_spinner "building renderer, native addon, and electron main" bash -lc "npm run build && npm run build:native && tsc -p electron/tsconfig.json"
 
 success "Compilation complete"
 
@@ -323,8 +323,9 @@ success "Compilation complete"
 # ╚═══════════════════════════════════════════════════════════════════╝
 step "Step 7/9 — Packaging macOS App (${ARCH_LABEL})"
 
-info "Using packaged release created by app:build..."
+info "Packaging Apple Silicon app only..."
 info "This may take several minutes on first run..."
+run_with_spinner "packaging arm64 release artifacts" npx electron-builder --mac --arm64
 
 # Find the built .app
 APP_GLOB="$SCRIPT_DIR/release/mac-${BUILD_ARCH}/${APP_NAME}.app"

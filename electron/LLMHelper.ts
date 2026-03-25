@@ -315,6 +315,7 @@ export class LLMHelper {
     // Standard Cloud Models
     this.useOllama = false;
     this.customProvider = null;
+    this.activeCurlProvider = null;
     this.currentModelId = targetModelId;
 
     // Update specific model props if needed

@@ -90,6 +90,7 @@ export class IntelligenceEngine extends EventEmitter {
   // Parallel context assembler for acceleration
   private parallelContextAssembler: ParallelContextAssembler | null = null;
   private latencyTracker: AnswerLatencyTracker = new AnswerLatencyTracker();
+  private activeWhatToSayRequestId = 0;
 
   // Timestamps for tracking
   private lastTranscriptTime: number = 0;
@@ -153,6 +154,16 @@ export class IntelligenceEngine extends EventEmitter {
 
   getLLMHelper(): LLMHelper {
         return this.llmHelper;
+    }
+
+    private buildCompactTranscriptSnapshot(
+        transcriptTurns: Array<{ role: string; text: string; timestamp: number }>,
+        maxTurns: number = 12,
+    ): string {
+        return transcriptTurns.slice(-maxTurns).map(item => {
+            const label = item.role === 'interviewer' ? 'INTERVIEWER' : item.role === 'assistant' ? 'ASSISTANT' : 'ME';
+            return `[${label}]: ${item.text}`;
+        }).join('\n');
     }
 
     getRecapLLM(): RecapLLM | null {
@@ -281,7 +292,7 @@ export class IntelligenceEngine extends EventEmitter {
     async runWhatShouldISay(question?: string, confidence: number = 0.8, imagePaths?: string[]): Promise<string | null> {
         const now = Date.now();
 
-        if (now - this.lastTriggerTime < this.triggerCooldown) {
+        if (now - this.lastTriggerTime < this.triggerCooldown && this.activeMode !== 'what_to_say') {
             return null;
         }
 
@@ -292,6 +303,7 @@ export class IntelligenceEngine extends EventEmitter {
 
         this.setMode('what_to_say');
         this.lastTriggerTime = now;
+        const requestSequence = ++this.activeWhatToSayRequestId;
 
         try {
             if (!this.whatToAnswerLLM) {
@@ -354,7 +366,7 @@ export class IntelligenceEngine extends EventEmitter {
                 timestamp: item.timestamp
             }));
             const preparedTranscript = route === 'fast_standard_answer'
-                ? this.session.getCompactTranscriptSnapshot(12, 'fast')
+                ? this.buildCompactTranscriptSnapshot(transcriptTurns, 12)
                 : prepareTranscriptForWhatToAnswer(transcriptTurns, 12);
             this.latencyTracker.mark(requestId, 'transcriptPrepared');
 
@@ -452,11 +464,19 @@ export class IntelligenceEngine extends EventEmitter {
             this.latencyTracker.mark(requestId, 'providerRequestStarted');
 
             for await (const token of stream) {
+                if (requestSequence !== this.activeWhatToSayRequestId) {
+                    continue;
+                }
                 if (!fullAnswer) {
                     this.latencyTracker.mark(requestId, 'firstToken');
                 }
                 this.emit('suggested_answer_token', token, question || 'inferred', confidence);
                 fullAnswer += token;
+            }
+
+            if (requestSequence !== this.activeWhatToSayRequestId) {
+                this.latencyTracker.complete(requestId);
+                return fullAnswer;
             }
 
             if (!fullAnswer || fullAnswer.trim().length < 5) {
