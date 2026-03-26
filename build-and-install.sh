@@ -115,6 +115,14 @@ run_with_spinner() {
 rm -f "$log_file"
 }
 
+run_logged_command() {
+    local label="$1"
+    shift
+
+    info "$label"
+    "$@"
+}
+
 clean_build_artifacts() {
 local paths=(
 "$SCRIPT_DIR/dist"
@@ -141,9 +149,6 @@ for path in "${paths[@]}"; do
     info "Removing stale packaged artifacts..."
     rm -f "$SCRIPT_DIR"/*.dmg "$SCRIPT_DIR"/*.zip "$SCRIPT_DIR"/*.blockmap 2>/dev/null || true
     rm -f "$RELEASE_DIR"/*.dmg "$RELEASE_DIR"/*.zip "$RELEASE_DIR"/*.blockmap "$RELEASE_DIR"/*.yml 2>/dev/null || true
-
-    info "Clearing npm cache for a truly fresh packaging pass..."
-    npm cache clean --force >/dev/null 2>&1 || warn "npm cache cleanup skipped"
 
     success "Fresh-build cleanup complete"
 }
@@ -231,7 +236,7 @@ fi
 # ╔═══════════════════════════════════════════════════════════════════╗
 # ║ Check for Uncommitted Changes (warn user)                         ║
 # ╚═══════════════════════════════════════════════════════════════════╝
-step "Step 1/9 — Checking Source Code Status"
+step "Step 1/8 — Checking Source Code Status"
 
 cd "$SCRIPT_DIR"
 
@@ -265,13 +270,13 @@ boot_sequence
 # ╔═══════════════════════════════════════════════════════════════════╗
 # ║ Step 3: Clean Build Artifacts ║
 # ╚═══════════════════════════════════════════════════════════════════╝
-step "Step 3/9 — Cleaning Build Artifacts"
+step "Step 2/8 — Cleaning Build Artifacts"
 clean_build_artifacts
 
 # ╔═══════════════════════════════════════════════════════════════════╗
 # ║ Step 4: Install Dependencies                                        ║
 # ╚═══════════════════════════════════════════════════════════════════╝
-step "Step 4/9 — Installing Dependencies"
+step "Step 3/8 — Installing Dependencies"
 
 cd "$SCRIPT_DIR"
 
@@ -285,47 +290,36 @@ fi
 run_with_spinner "syncing npm dependency matrix" npm install
 success "Dependencies installed"
 
-info "Rebuilding Electron native database dependencies for ${ARCH_LABEL}..."
-run_with_spinner "realigning sqlite and native addon binaries" node scripts/ensure-electron-native-deps.js
-success "Electron native dependencies aligned"
-
-if [[ "$HAS_RUST" == "true" ]]; then
-    info "Building native audio module for ${ARCH_LABEL}..."
-    run_with_spinner "forging native audio addon" npm run build:native:current
-    success "Native audio addon built"
-else
-    warn "Rust unavailable — packaged app may miss native audio capture"
-fi
-
 # ╔═══════════════════════════════════════════════════════════════════╗
 # ║ Step 5: Run Quality Gates                                        
 # ╚═══════════════════════════════════════════════════════════════════╝
-step "Step 5/9 — Running Production Quality Gates"
+step "Step 4/8 — Running Production Quality Gates"
 
+info "Running quality gates in visible stages so long-running checks do not look frozen..."
 
-info "Running typechecks, full Electron coverage gate, renderer coverage gate, and native tests..."
-run_with_spinner "verifying production readiness gates" npm run verify:production
+run_logged_command "[1/4] Running typechecks..." npm run typecheck
+success "Typechecks passed"
+
+run_logged_command "[2/4] Running Electron coverage gate (this is the longest step and may take about a minute)..." npm run verify:electron:coverage
+success "Electron coverage gate passed"
+
+run_logged_command "[3/4] Running renderer coverage gate..." npm run verify:renderer:coverage
+success "Renderer coverage gate passed"
+
+run_logged_command "[4/4] Running native Rust tests..." cargo test --manifest-path native-module/Cargo.toml
+success "Native Rust tests passed"
 
 success "Quality gates passed"
 
 # ╔═══════════════════════════════════════════════════════════════════╗
-# ║ Step 6: Build Production App                                    ║
+# ║ Step 5: Build & Package                                         ║
 # ╚═══════════════════════════════════════════════════════════════════╝
-step "Step 6/9 — Building Production App"
+step "Step 5/8 — Building & Packaging (${ARCH_LABEL})"
 
-info "Running production build pipeline for Apple Silicon only..."
-run_with_spinner "building renderer, native addon, and electron main" bash -lc "npm run build && npm run build:native && tsc -p electron/tsconfig.json"
+info "Running full build pipeline (renderer, native addon, electron, packaging)..."
+run_with_spinner "building and packaging release" env SKIP_PRODUCTION_VERIFY=1 npm run app:build
 
-success "Compilation complete"
-
-# ╔═══════════════════════════════════════════════════════════════════╗
-# ║ Step 7: Package with Electron Builder                           ║
-# ╚═══════════════════════════════════════════════════════════════════╝
-step "Step 7/9 — Packaging macOS App (${ARCH_LABEL})"
-
-info "Packaging Apple Silicon app only..."
-info "This may take several minutes on first run..."
-run_with_spinner "packaging arm64 release artifacts" npx electron-builder --mac --arm64
+success "Build & packaging complete"
 
 # Find the built .app
 APP_GLOB="$SCRIPT_DIR/release/mac-${BUILD_ARCH}/${APP_NAME}.app"
@@ -349,7 +343,7 @@ success "Built: $APP_GLOB"
 # ╔═══════════════════════════════════════════════════════════════════╗
 # ║ Step 8: Force Sign                                              ║
 # ╚═══════════════════════════════════════════════════════════════════╝
-step "Step 8/9 — Force Signing (Ad-Hoc)"
+step "Step 6/8 — Force Signing (Ad-Hoc)"
 
 # The electron-builder afterPack hook already signs, but we force re-sign
 # to ensure it's clean (handles edge cases where build partially failed)
@@ -372,7 +366,7 @@ else
     info "Ad-hoc signature applied (codesign verify may show warnings — this is normal)"
 fi
 
-step "Step 9/9 — Verifying macOS Permission Manifest"
+step "Step 7/8 — Verifying macOS Permission Manifest"
 
 APP_PLIST="$APP_GLOB/Contents/Info.plist"
 [[ -f "$APP_PLIST" ]] || fail "Info.plist not found in built app"
@@ -405,9 +399,9 @@ fi
 success "Permission manifest verified"
 
 # ╔═══════════════════════════════════════════════════════════════════╗
-# ║ Step 9: Install & Launch                                        ║
+# ║ Step 8: Install & Launch                                        ║
 # ╚═══════════════════════════════════════════════════════════════════╝
-step "Step 9/9 — Installing to ${INSTALL_DIR}"
+step "Step 8/8 — Installing to ${INSTALL_DIR}"
 
 # Kill existing instance if running
 if pgrep -x "$APP_NAME" &>/dev/null; then

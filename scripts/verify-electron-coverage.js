@@ -1,4 +1,4 @@
-const { spawnSync } = require('node:child_process');
+const { spawn } = require('node:child_process');
 
 const THRESHOLDS = {
   lines: 50,
@@ -7,23 +7,37 @@ const THRESHOLDS = {
 };
 
 function run(command, args) {
-  const result = spawnSync(command, args, {
-    encoding: 'utf8',
-    shell: false,
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, {
+      shell: false,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+
+    let output = '';
+
+    child.stdout.on('data', (chunk) => {
+      const text = chunk.toString();
+      output += text;
+      process.stdout.write(text);
+    });
+
+    child.stderr.on('data', (chunk) => {
+      const text = chunk.toString();
+      output += text;
+      process.stderr.write(text);
+    });
+
+    child.on('error', reject);
+
+    child.on('close', (code) => {
+      if (code !== 0) {
+        reject(new Error(`Command failed: ${command} ${args.join(' ')}`));
+        return;
+      }
+
+      resolve(output);
+    });
   });
-
-  if (result.stdout) {
-    process.stdout.write(result.stdout);
-  }
-  if (result.stderr) {
-    process.stderr.write(result.stderr);
-  }
-
-  if (result.status !== 0) {
-    process.exit(result.status ?? 1);
-  }
-
-  return `${result.stdout ?? ''}${result.stderr ?? ''}`;
 }
 
 function parseCoverageSummary(output) {
@@ -56,10 +70,12 @@ function evaluateCoverage(summary) {
   return failures.length > 0 ? failures.join(', ') : null;
 }
 
-function main() {
-  run('npx', ['tsc', '-p', 'electron/tsconfig.json']);
+async function main() {
+  console.log('[verify-electron-coverage] Compiling Electron tests...');
+  await run('npx', ['tsc', '-p', 'electron/tsconfig.json']);
 
-  const coverageOutput = run('node', [
+  console.log('[verify-electron-coverage] Running Electron tests with coverage...');
+  const coverageOutput = await run('node', [
     '--test',
     '--experimental-test-coverage',
     'dist-electron/electron/tests/*.test.js',
@@ -87,7 +103,10 @@ function main() {
 }
 
 if (require.main === module) {
-  main();
+  main().catch((error) => {
+    console.error(error.message);
+    process.exit(1);
+  });
 }
 
 module.exports = {

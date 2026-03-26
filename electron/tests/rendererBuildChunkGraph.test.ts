@@ -14,7 +14,7 @@ const getJavaScriptChunkImports = (filePath: string): string[] => {
 };
 
 test('production renderer build does not emit circular entry chunk imports', () => {
-  execFileSync('npm', ['run', 'build'], {
+  execFileSync('npx', ['vite', 'build'], {
     cwd: repoRoot,
     stdio: 'ignore',
   });

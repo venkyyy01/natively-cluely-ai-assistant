@@ -1,4 +1,4 @@
-const { spawnSync } = require('node:child_process');
+const { spawn } = require('node:child_process');
 
 const npmCommand = process.platform === 'win32' ? 'npm.cmd' : 'npm';
 const THRESHOLDS = {
@@ -39,27 +39,42 @@ function evaluateCoverage(summary) {
   return failures.length > 0 ? failures.join(', ') : null;
 }
 
-function main() {
-  const result = spawnSync(
-    npmCommand,
-    ['--prefix', 'renderer', 'run', 'test:coverage', '--', '--runInBand'],
-    {
-      encoding: 'utf8',
-    },
-  );
+function run(command, args) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, {
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
 
-  if (result.stdout) {
-    process.stdout.write(result.stdout);
-  }
-  if (result.stderr) {
-    process.stderr.write(result.stderr);
-  }
+    let output = '';
 
-  if (result.status !== 0) {
-    process.exit(result.status ?? 1);
-  }
+    child.stdout.on('data', (chunk) => {
+      const text = chunk.toString();
+      output += text;
+      process.stdout.write(text);
+    });
 
-  const output = `${result.stdout ?? ''}${result.stderr ?? ''}`;
+    child.stderr.on('data', (chunk) => {
+      const text = chunk.toString();
+      output += text;
+      process.stderr.write(text);
+    });
+
+    child.on('error', reject);
+
+    child.on('close', (code) => {
+      if (code !== 0) {
+        reject(new Error(`Command failed: ${command} ${args.join(' ')}`));
+        return;
+      }
+
+      resolve(output);
+    });
+  });
+}
+
+async function main() {
+  console.log('[verify-renderer-coverage] Running renderer tests with coverage...');
+  const output = await run(npmCommand, ['--prefix', 'renderer', 'run', 'test:coverage', '--', '--runInBand']);
 
   let summary;
 
@@ -83,7 +98,10 @@ function main() {
 }
 
 if (require.main === module) {
-  main();
+  main().catch((error) => {
+    console.error(error.message);
+    process.exit(1);
+  });
 }
 
 module.exports = {
