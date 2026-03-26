@@ -3,7 +3,7 @@
 import { AppState } from "./main"
 import { LLMHelper } from "./LLMHelper"
 import { CredentialsManager } from "./services/CredentialsManager"
-import { app } from "electron"
+import { app, BrowserWindow } from "electron"
 // import dotenv from "dotenv" // Removed static import
 
 if (!app.isPackaged) {
@@ -45,6 +45,15 @@ export class ProcessingHelper {
 
       this.llmHelper = new LLMHelper(apiKey, false, undefined, undefined, groqApiKey, openaiApiKey, claudeApiKey)
     }
+
+    this.llmHelper.setModelFallbackHandler((event) => {
+      BrowserWindow.getAllWindows().forEach((win) => {
+        if (!win.isDestroyed()) {
+          win.webContents.send('model-changed', event.fallbackModel)
+          win.webContents.send('model-fallback', event)
+        }
+      })
+    })
   }
 
   /**

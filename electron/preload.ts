@@ -221,6 +221,7 @@ interface ElectronAPI {
   onUndetectableChanged: (callback: (state: boolean) => void) => () => void
   onGroqFastTextChanged: (callback: (enabled: boolean) => void) => () => void
   onModelChanged: (callback: (modelId: string) => void) => () => void
+  onModelFallback: (callback: (event: { provider: 'gemini' | 'groq' | 'openai' | 'claude'; previousModel: string; fallbackModel: string; reason: string }) => void) => () => void
 
   // Ollama
   onOllamaPullProgress: (callback: (data: { status: string; percent: number }) => void) => () => void
@@ -818,6 +819,14 @@ setOpenAtLogin: (open: boolean) => invokeStatus("set-open-at-login", open),
     ipcRenderer.on('model-changed', subscription)
     return () => {
       ipcRenderer.removeListener('model-changed', subscription)
+    }
+  },
+
+  onModelFallback: (callback: (event: { provider: 'gemini' | 'groq' | 'openai' | 'claude'; previousModel: string; fallbackModel: string; reason: string }) => void) => {
+    const subscription = (_: any, event: { provider: 'gemini' | 'groq' | 'openai' | 'claude'; previousModel: string; fallbackModel: string; reason: string }) => callback(event)
+    ipcRenderer.on('model-fallback', subscription)
+    return () => {
+      ipcRenderer.removeListener('model-fallback', subscription)
     }
   },
 

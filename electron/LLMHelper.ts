@@ -4,7 +4,7 @@ import OpenAI from "openai"
 import Anthropic from "@anthropic-ai/sdk"
 import fs from "fs"
 import sharp from "sharp"
-import { ModelVersionManager, ModelFamily, TextModelFamily } from './services/ModelVersionManager'
+import { ModelVersionManager, ModelFamily, TextModelFamily, parseModelVersion, compareVersions, classifyTextModel } from './services/ModelVersionManager'
 import {
   HARD_SYSTEM_PROMPT, GROQ_SYSTEM_PROMPT, OPENAI_SYSTEM_PROMPT, CLAUDE_SYSTEM_PROMPT,
   UNIVERSAL_SYSTEM_PROMPT, UNIVERSAL_ANSWER_PROMPT, UNIVERSAL_WHAT_TO_ANSWER_PROMPT,
@@ -103,6 +103,15 @@ const RESPONSE_CACHE_TTL_MS = 1500
 // Simple prompt for image analysis (not interview copilot - kept separate)
 const IMAGE_ANALYSIS_PROMPT = `Analyze concisely. Be direct. No markdown formatting. Return plain text only.`
 
+type Provider = 'gemini' | 'groq' | 'openai' | 'claude';
+
+export interface ModelFallbackEvent {
+  provider: Provider;
+  previousModel: string;
+  fallbackModel: string;
+  reason: string;
+}
+
 export class LLMHelper {
   private client: GoogleGenAI | null = null
   private groqClient: Groq | null = null
@@ -128,6 +137,7 @@ export class LLMHelper {
   private finalPayloadCache = new Map<string, { expiresAt: number; value: any }>();
   private responseCache = new Map<string, { expiresAt: number; value: string }>();
   private inFlightResponseCache = new Map<string, Promise<string>>();
+  private modelFallbackHandler: ((event: ModelFallbackEvent) => void) | null = null;
 
   // Rate limiters per provider to prevent 429 errors on free tiers
   private rateLimiters: ReturnType<typeof createProviderRateLimiters>;
@@ -323,6 +333,68 @@ export class LLMHelper {
     if (targetModelId === GEMINI_FLASH_MODEL) this.geminiModel = GEMINI_FLASH_MODEL;
 
     console.log(`[LLMHelper] Switched to Cloud Model: ${targetModelId}`);
+  }
+
+  public setModelFallbackHandler(handler: ((event: ModelFallbackEvent) => void) | null): void {
+    this.modelFallbackHandler = handler;
+  }
+
+  private getActiveOpenAiModel(): string {
+    return this.isOpenAiModel(this.currentModelId) ? this.currentModelId : OPENAI_MODEL;
+  }
+
+  private isModelNotFoundError(error: any): boolean {
+    const status = error?.status || error?.response?.status;
+    const message = String(error?.response?.data?.error?.message || error?.message || '').toLowerCase();
+    return status === 404 || message.includes('does not exist') || message.includes('do not have access') || message.includes('not found');
+  }
+
+  private chooseBestAvailableOpenAiModel(availableModels: string[], failedModel: string): string | null {
+    const viable = availableModels
+      .filter((id) => id !== failedModel)
+      .filter((id) => this.isOpenAiModel(id))
+      .filter((id) => classifyTextModel(id) === TextModelFamily.OPENAI);
+
+    if (viable.length === 0) return null;
+
+    try {
+      const { CredentialsManager } = require('./services/CredentialsManager');
+      const preferred = CredentialsManager.getInstance().getPreferredModel('openai');
+      if (preferred && viable.includes(preferred)) {
+        return preferred;
+      }
+    } catch {
+      // ignore credentials lookup failures during fallback ranking
+    }
+
+    return [...viable].sort((a, b) => {
+      const aVersion = parseModelVersion(a);
+      const bVersion = parseModelVersion(b);
+      if (aVersion && bVersion) {
+        return compareVersions(bVersion, aVersion);
+      }
+      if (aVersion) return -1;
+      if (bVersion) return 1;
+      return a.localeCompare(b);
+    })[0] || null;
+  }
+
+  private async resolveOpenAiFallbackModel(failedModel: string): Promise<string | null> {
+    if (!this.openaiApiKey) return null;
+
+    try {
+      const { fetchProviderModels } = require('./utils/modelFetcher');
+      const models = await fetchProviderModels('openai', this.openaiApiKey);
+      return this.chooseBestAvailableOpenAiModel(models.map((model: { id: string }) => model.id), failedModel);
+    } catch (error) {
+      console.warn('[LLMHelper] Failed to resolve OpenAI fallback model:', sanitizeError(error));
+      return null;
+    }
+  }
+
+  private applyModelFallback(event: ModelFallbackEvent): void {
+    this.currentModelId = event.fallbackModel;
+    this.modelFallbackHandler?.(event);
   }
 
   public switchToCurl(provider: CurlProvider) {
@@ -1045,7 +1117,8 @@ ANSWER DIRECTLY:`;
       };
 
       // For OpenAI/Claude: separate system prompt + user message
-      const openaiUserContent = this.prepareUserContentForModel('openai', OPENAI_MODEL, message, context);
+      const activeOpenAiModel = this.getActiveOpenAiModel();
+      const openaiUserContent = this.prepareUserContentForModel('openai', activeOpenAiModel, message, context);
       const claudeUserContent = this.prepareUserContentForModel('claude', CLAUDE_MODEL, message, context);
 
       const finalGeminiPrompt = await this.withSystemPromptCache('gemini', this.currentModelId, HARD_SYSTEM_PROMPT, () => this.injectLanguageInstruction(HARD_SYSTEM_PROMPT));
@@ -1068,7 +1141,7 @@ ANSWER DIRECTLY:`;
       }
 
       // System prompts for OpenAI/Claude (skipped if skipSystemPrompt)
-      const openaiSystemPrompt = skipSystemPrompt ? undefined : await this.withSystemPromptCache('openai', OPENAI_MODEL, OPENAI_SYSTEM_PROMPT, () => this.injectLanguageInstruction(OPENAI_SYSTEM_PROMPT));
+      const openaiSystemPrompt = skipSystemPrompt ? undefined : await this.withSystemPromptCache('openai', activeOpenAiModel, OPENAI_SYSTEM_PROMPT, () => this.injectLanguageInstruction(OPENAI_SYSTEM_PROMPT));
       const claudeSystemPrompt = skipSystemPrompt ? undefined : await this.withSystemPromptCache('claude', CLAUDE_MODEL, CLAUDE_SYSTEM_PROMPT, () => this.injectLanguageInstruction(CLAUDE_SYSTEM_PROMPT));
 
       if (this.useOllama) {
@@ -1325,17 +1398,19 @@ ANSWER DIRECTLY:`;
   /**
    * Non-streaming OpenAI generation with proper system/user separation
    */
-  private async generateWithOpenai(userMessage: string, systemPrompt?: string, imagePaths?: string[]): Promise<string> {
+  private async generateWithOpenai(userMessage: string, systemPrompt?: string, imagePaths?: string[], modelOverride?: string, allowFallback: boolean = true): Promise<string> {
     if (!this.openaiClient) throw new Error("OpenAI client not initialized");
+
+    const targetModel = modelOverride || this.getActiveOpenAiModel();
 
     await this.rateLimiters.openai.acquire();
     const systemPromptHash = this.hashValue(systemPrompt || '');
-    const payloadHash = this.hashValue({ userMessage, systemPrompt: systemPrompt || '', imagePaths: imagePaths || [] });
+    const payloadHash = this.hashValue({ model: targetModel, userMessage, systemPrompt: systemPrompt || '', imagePaths: imagePaths || [] });
 
-    return this.withResponseCache('openai', OPENAI_MODEL, systemPromptHash, payloadHash, async () => {
+    return this.withResponseCache('openai', targetModel, systemPromptHash, payloadHash, async () => {
       const requestPayload = await this.withFinalPayloadCache(
         'openai',
-        OPENAI_MODEL,
+        targetModel,
         systemPromptHash,
         payloadHash,
         async () => {
@@ -1358,18 +1433,34 @@ ANSWER DIRECTLY:`;
           }
 
           return {
-            model: OPENAI_MODEL,
+            model: targetModel,
             messages,
             max_completion_tokens: MAX_OUTPUT_TOKENS,
           };
         },
       );
 
-      const response = await withTimeout(
-        this.openaiClient!.chat.completions.create(requestPayload as any),
-        LLM_API_TIMEOUT_MS
-      );
-      return response.choices[0]?.message?.content || "";
+      try {
+        const response = await withTimeout(
+          this.openaiClient!.chat.completions.create(requestPayload as any),
+          LLM_API_TIMEOUT_MS
+        );
+        return response.choices[0]?.message?.content || "";
+      } catch (error) {
+        if (allowFallback && this.isModelNotFoundError(error)) {
+          const fallbackModel = await this.resolveOpenAiFallbackModel(targetModel);
+          if (fallbackModel && fallbackModel !== targetModel) {
+            this.applyModelFallback({
+              provider: 'openai',
+              previousModel: targetModel,
+              fallbackModel,
+              reason: 'model_not_found',
+            });
+            return this.generateWithOpenai(userMessage, systemPrompt, imagePaths, fallbackModel, false);
+          }
+        }
+        throw error;
+      }
     });
   }
 
@@ -2263,6 +2354,8 @@ ANSWER DIRECTLY:`;
   private async * streamWithOpenai(userMessage: string, systemPrompt?: string): AsyncGenerator<string, void, unknown> {
     if (!this.openaiClient) throw new Error("OpenAI client not initialized");
 
+    const targetModel = this.getActiveOpenAiModel();
+
     const messages: any[] = [];
     if (systemPrompt) {
       messages.push({ role: "system", content: systemPrompt });
@@ -2271,12 +2364,30 @@ ANSWER DIRECTLY:`;
 
     const timeoutSignal = createTimeoutSignal(LLM_API_TIMEOUT_MS);
     
-    const stream = await this.openaiClient.chat.completions.create({
-      model: OPENAI_MODEL,
-      messages,
-      stream: true,
-      max_completion_tokens: MAX_OUTPUT_TOKENS,
-    }, { signal: timeoutSignal });
+    let stream;
+    try {
+      stream = await this.openaiClient.chat.completions.create({
+        model: targetModel,
+        messages,
+        stream: true,
+        max_completion_tokens: MAX_OUTPUT_TOKENS,
+      }, { signal: timeoutSignal });
+    } catch (error) {
+      if (this.isModelNotFoundError(error)) {
+        const fallbackModel = await this.resolveOpenAiFallbackModel(targetModel);
+        if (fallbackModel && fallbackModel !== targetModel) {
+          this.applyModelFallback({
+            provider: 'openai',
+            previousModel: targetModel,
+            fallbackModel,
+            reason: 'model_not_found',
+          });
+          yield* this.streamWithOpenaiUsingModel(userMessage, fallbackModel, systemPrompt);
+          return;
+        }
+      }
+      throw error;
+    }
 
     for await (const chunk of stream) {
       const content = chunk.choices[0]?.delta?.content;
@@ -2312,6 +2423,8 @@ ANSWER DIRECTLY:`;
   private async * streamWithOpenaiMultimodal(userMessage: string, imagePaths: string[], systemPrompt?: string): AsyncGenerator<string, void, unknown> {
     if (!this.openaiClient) throw new Error("OpenAI client not initialized");
 
+    const targetModel = this.getActiveOpenAiModel();
+
     const messages: any[] = [];
     if (systemPrompt) {
       messages.push({ role: "system", content: systemPrompt });
@@ -2328,8 +2441,84 @@ ANSWER DIRECTLY:`;
 
     const timeoutSignal = createTimeoutSignal(LLM_API_TIMEOUT_MS);
     
+    let stream;
+    try {
+      stream = await this.openaiClient.chat.completions.create({
+        model: targetModel,
+        messages,
+        stream: true,
+        max_completion_tokens: MAX_OUTPUT_TOKENS,
+      }, { signal: timeoutSignal });
+    } catch (error) {
+      if (this.isModelNotFoundError(error)) {
+        const fallbackModel = await this.resolveOpenAiFallbackModel(targetModel);
+        if (fallbackModel && fallbackModel !== targetModel) {
+          this.applyModelFallback({
+            provider: 'openai',
+            previousModel: targetModel,
+            fallbackModel,
+            reason: 'model_not_found',
+          });
+          yield* this.streamWithOpenaiMultimodalUsingModel(userMessage, imagePaths, fallbackModel, systemPrompt);
+          return;
+        }
+      }
+      throw error;
+    }
+
+    for await (const chunk of stream) {
+      const content = chunk.choices[0]?.delta?.content;
+      if (content) {
+        yield content;
+      }
+    }
+  }
+
+  private async * streamWithOpenaiUsingModel(userMessage: string, model: string, systemPrompt?: string): AsyncGenerator<string, void, unknown> {
+    if (!this.openaiClient) throw new Error("OpenAI client not initialized");
+
+    const messages: any[] = [];
+    if (systemPrompt) {
+      messages.push({ role: "system", content: systemPrompt });
+    }
+    messages.push({ role: "user", content: userMessage });
+
+    const timeoutSignal = createTimeoutSignal(LLM_API_TIMEOUT_MS);
     const stream = await this.openaiClient.chat.completions.create({
-      model: OPENAI_MODEL,
+      model,
+      messages,
+      stream: true,
+      max_completion_tokens: MAX_OUTPUT_TOKENS,
+    }, { signal: timeoutSignal });
+
+    for await (const chunk of stream) {
+      const content = chunk.choices[0]?.delta?.content;
+      if (content) {
+        yield content;
+      }
+    }
+  }
+
+  private async * streamWithOpenaiMultimodalUsingModel(userMessage: string, imagePaths: string[], model: string, systemPrompt?: string): AsyncGenerator<string, void, unknown> {
+    if (!this.openaiClient) throw new Error("OpenAI client not initialized");
+
+    const messages: any[] = [];
+    if (systemPrompt) {
+      messages.push({ role: "system", content: systemPrompt });
+    }
+
+    const contentParts: any[] = [{ type: "text", text: userMessage }];
+    for (const p of imagePaths) {
+      if (fs.existsSync(p)) {
+        const imageData = await fs.promises.readFile(p);
+        contentParts.push({ type: "image_url", image_url: { url: `data:image/png;base64,${imageData.toString("base64")}` } });
+      }
+    }
+    messages.push({ role: "user", content: contentParts });
+
+    const timeoutSignal = createTimeoutSignal(LLM_API_TIMEOUT_MS);
+    const stream = await this.openaiClient.chat.completions.create({
+      model,
       messages,
       stream: true,
       max_completion_tokens: MAX_OUTPUT_TOKENS,

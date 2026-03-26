@@ -138,6 +138,7 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
 
     // Model Selection State
     const [currentModel, setCurrentModel] = useState<string>('gemini-3-flash-preview');
+    const [modelFallbackNotice, setModelFallbackNotice] = useState<string>('');
 
     useEffect(() => {
         // Load the persisted default model (not the runtime model)
@@ -170,6 +171,21 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
         });
         return () => unsubscribe();
     }, []);
+
+    useEffect(() => {
+        if (!window.electronAPI?.onModelFallback) return;
+        const unsubscribe = window.electronAPI.onModelFallback(({ previousModel, fallbackModel }) => {
+            setCurrentModel(fallbackModel);
+            setModelFallbackNotice(`Selected model unavailable. Switched from ${previousModel} to ${fallbackModel}.`);
+        });
+        return () => unsubscribe();
+    }, []);
+
+    useEffect(() => {
+        if (!modelFallbackNotice) return;
+        const timer = setTimeout(() => setModelFallbackNotice(''), 6000);
+        return () => clearTimeout(timer);
+    }, [modelFallbackNotice]);
 
     // Global State Sync
     useEffect(() => {
@@ -1824,6 +1840,12 @@ Provide only the answer, nothing else.`;
                                             </span>
                                             <ChevronDown size={14} className="shrink-0 transition-transform" />
                                         </button>
+
+                                        {modelFallbackNotice && (
+                                            <div className="text-[10px] text-amber-300/90 max-w-[240px] leading-tight">
+                                                {modelFallbackNotice}
+                                            </div>
+                                        )}
 
                                         <div className="w-px h-3 bg-white/10 mx-1" />
 
