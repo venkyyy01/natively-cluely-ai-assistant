@@ -123,6 +123,95 @@ run_logged_command() {
     "$@"
 }
 
+artifact_mtime() {
+    local artifact_path="$1"
+    stat -f "%m" "$artifact_path" 2>/dev/null || printf '0\n'
+}
+
+select_newest_path() {
+    local newest_path=""
+    local newest_mtime=0
+    local candidate=""
+    local candidate_mtime=0
+
+    for candidate in "$@"; do
+        [[ -e "$candidate" ]] || continue
+        candidate_mtime=$(artifact_mtime "$candidate")
+        if [[ -z "$newest_path" || "$candidate_mtime" -gt "$newest_mtime" ]]; then
+            newest_path="$candidate"
+            newest_mtime="$candidate_mtime"
+        fi
+    done
+
+    printf '%s\n' "$newest_path"
+}
+
+find_newest_packaged_app() {
+    local release_dir="$1"
+    local app_name="${2:-$APP_NAME}"
+    local candidates=()
+
+    while IFS= read -r candidate; do
+        candidates+=("$candidate")
+    done < <(find "$release_dir" -maxdepth 3 -type d -name "${app_name}.app" -print 2>/dev/null)
+
+    if [[ ${#candidates[@]} -eq 0 ]]; then
+        return 1
+    fi
+
+    select_newest_path "${candidates[@]}"
+}
+
+find_newest_release_archive() {
+    local release_dir="$1"
+    local extension="$2"
+    local candidates=()
+
+    while IFS= read -r candidate; do
+        candidates+=("$candidate")
+    done < <(find "$release_dir" -maxdepth 1 -type f -name "*.${extension}" -print 2>/dev/null)
+
+    if [[ ${#candidates[@]} -eq 0 ]]; then
+        printf '\n'
+        return 0
+    fi
+
+    select_newest_path "${candidates[@]}"
+}
+
+collect_packaged_artifacts() {
+    local release_dir="$1"
+    local packaged_app=""
+    local packaged_dmg=""
+    local packaged_zip=""
+
+    packaged_app=$(find_newest_packaged_app "$release_dir") || fail "Missing packaged app in $release_dir"
+    packaged_dmg=$(find_newest_release_archive "$release_dir" dmg)
+    packaged_zip=$(find_newest_release_archive "$release_dir" zip)
+
+    printf '%s\n%s\n%s\n' "$packaged_app" "$packaged_dmg" "$packaged_zip"
+}
+
+print_packaged_artifacts() {
+    local packaged_app="$1"
+    local packaged_dmg="$2"
+    local packaged_zip="$3"
+
+    info "Fresh packaged artifacts:"
+    echo -e "  ${CYAN}app${NC} ${WHITE}${packaged_app}${NC}"
+    if [[ -n "$packaged_dmg" ]]; then
+        echo -e "  ${CYAN}dmg${NC} ${WHITE}${packaged_dmg}${NC}"
+    else
+        warn "No DMG artifact found in $RELEASE_DIR"
+    fi
+
+    if [[ -n "$packaged_zip" ]]; then
+        echo -e "  ${CYAN}zip${NC} ${WHITE}${packaged_zip}${NC}"
+    else
+        warn "No ZIP artifact found in $RELEASE_DIR"
+    fi
+}
+
 clean_build_artifacts() {
 local paths=(
 "$SCRIPT_DIR/dist"
@@ -137,6 +226,8 @@ local paths=(
 "$SCRIPT_DIR/native-module/index.win32-x64-msvc.node"
 "$HOME/Library/Caches/electron-builder"
 "$HOME/Library/Caches/electron"
+"$SCRIPT_DIR/release/mac/${APP_NAME}.app"
+"$SCRIPT_DIR/release/mac-arm64/${APP_NAME}.app"
 )
 
 info "Removing previous build artifacts and packaging caches..."
@@ -213,6 +304,10 @@ require_asar_entry() {
         fail "Missing required app.asar entry: $entry_path"
     fi
 }
+
+if [[ "${BUILD_AND_INSTALL_LIB:-0}" == "1" ]]; then
+    return 0 2>/dev/null || exit 0
+fi
 
 # ── Detect Architecture ──
 ARCH="$(uname -m)"
@@ -321,24 +416,13 @@ run_with_spinner "building and packaging release" env SKIP_PRODUCTION_VERIFY=1 n
 
 success "Build & packaging complete"
 
-# Find the built .app
-APP_GLOB="$SCRIPT_DIR/release/mac-${BUILD_ARCH}/${APP_NAME}.app"
-if [[ "$BUILD_ARCH" == "arm64" ]]; then
-    APP_GLOB="$SCRIPT_DIR/release/mac-arm64/${APP_NAME}.app"
-else
-    APP_GLOB="$SCRIPT_DIR/release/mac/${APP_NAME}.app"
-fi
-
-# Fallback: search for it
-if [[ ! -d "$APP_GLOB" ]]; then
-    APP_GLOB=$(find "$RELEASE_DIR" -maxdepth 3 -name "${APP_NAME}.app" -type d -print -quit 2>/dev/null)
-fi
-
-if [[ -z "$APP_GLOB" || ! -d "$APP_GLOB" ]]; then
-    fail "Build failed — ${APP_NAME}.app not found in release/"
-fi
+mapfile -t PACKAGED_ARTIFACTS < <(collect_packaged_artifacts "$RELEASE_DIR")
+APP_GLOB="${PACKAGED_ARTIFACTS[0]}"
+PACKAGED_DMG="${PACKAGED_ARTIFACTS[1]}"
+PACKAGED_ZIP="${PACKAGED_ARTIFACTS[2]}"
 
 success "Built: $APP_GLOB"
+print_packaged_artifacts "$APP_GLOB" "$PACKAGED_DMG" "$PACKAGED_ZIP"
 
 # ╔═══════════════════════════════════════════════════════════════════╗
 # ║ Step 8: Force Sign                                              ║
@@ -397,6 +481,11 @@ else
 fi
 
 success "Permission manifest verified"
+
+if [[ "${SKIP_INSTALL:-0}" == "1" ]]; then
+    info "SKIP_INSTALL=1 set; install skipped after packaging verification"
+    exit 0
+fi
 
 # ╔═══════════════════════════════════════════════════════════════════╗
 # ║ Step 8: Install & Launch                                        ║
