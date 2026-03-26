@@ -365,6 +365,11 @@ this.modelSelectorWindowHelper.setContentProtection(this.isUndetectable);
               preview
             });
           }
+        } else if (actionId === 'chat:scrollUp' || actionId === 'chat:scrollDown') {
+          const mainWindow = this.getMainWindow();
+          if (mainWindow) {
+            mainWindow.webContents.send('global-shortcut-action', actionId);
+          }
         }
       } catch (e: any) {
         if (e.message !== "Selection cancelled") {

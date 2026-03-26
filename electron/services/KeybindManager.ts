@@ -26,14 +26,14 @@ export const DEFAULT_KEYBINDS: KeybindConfig[] = [
     { id: 'chat:followUp', label: 'Follow Up', accelerator: 'CommandOrControl+3', isGlobal: false, defaultAccelerator: 'CommandOrControl+3' },
     { id: 'chat:recap', label: 'Recap', accelerator: 'CommandOrControl+4', isGlobal: false, defaultAccelerator: 'CommandOrControl+4' },
     { id: 'chat:answer', label: 'Answer / Record', accelerator: 'CommandOrControl+5', isGlobal: false, defaultAccelerator: 'CommandOrControl+5' },
-    { id: 'chat:scrollUp', label: 'Scroll Up', accelerator: 'CommandOrControl+Up', isGlobal: false, defaultAccelerator: 'CommandOrControl+Up' },
-    { id: 'chat:scrollDown', label: 'Scroll Down', accelerator: 'CommandOrControl+Down', isGlobal: false, defaultAccelerator: 'CommandOrControl+Down' },
+    { id: 'chat:scrollUp', label: 'Scroll Up', accelerator: 'Command+Up', isGlobal: true, defaultAccelerator: 'Command+Up' },
+    { id: 'chat:scrollDown', label: 'Scroll Down', accelerator: 'Command+Down', isGlobal: true, defaultAccelerator: 'Command+Down' },
 
     // Window Movement
-    { id: 'window:move-up', label: 'Move Window Up', accelerator: 'CommandOrControl+Up', isGlobal: false, defaultAccelerator: 'CommandOrControl+Up' },
-    { id: 'window:move-down', label: 'Move Window Down', accelerator: 'CommandOrControl+Down', isGlobal: false, defaultAccelerator: 'CommandOrControl+Down' },
-    { id: 'window:move-left', label: 'Move Window Left', accelerator: 'CommandOrControl+Left', isGlobal: false, defaultAccelerator: 'CommandOrControl+Left' },
-    { id: 'window:move-right', label: 'Move Window Right', accelerator: 'CommandOrControl+Right', isGlobal: false, defaultAccelerator: 'CommandOrControl+Right' },
+    { id: 'window:move-up', label: 'Move Window Up', accelerator: 'Command+Alt+Up', isGlobal: false, defaultAccelerator: 'Command+Alt+Up' },
+    { id: 'window:move-down', label: 'Move Window Down', accelerator: 'Command+Alt+Down', isGlobal: false, defaultAccelerator: 'Command+Alt+Down' },
+    { id: 'window:move-left', label: 'Move Window Left', accelerator: 'Command+Alt+Left', isGlobal: false, defaultAccelerator: 'Command+Alt+Left' },
+    { id: 'window:move-right', label: 'Move Window Right', accelerator: 'Command+Alt+Right', isGlobal: false, defaultAccelerator: 'Command+Alt+Right' },
 ];
 
 export class KeybindManager {
@@ -200,22 +200,22 @@ export class KeybindManager {
                     { type: 'separator' },
                     {
                         label: 'Move Window Up',
-                        accelerator: this.getKeybind('window:move-up') || 'CommandOrControl+Up',
+                        accelerator: this.getKeybind('window:move-up') || 'Command+Alt+Up',
                         click: () => this.windowHelper?.moveWindowUp()
                     },
                     {
                         label: 'Move Window Down',
-                        accelerator: this.getKeybind('window:move-down') || 'CommandOrControl+Down',
+                        accelerator: this.getKeybind('window:move-down') || 'Command+Alt+Down',
                         click: () => this.windowHelper?.moveWindowDown()
                     },
                     {
                         label: 'Move Window Left',
-                        accelerator: this.getKeybind('window:move-left') || 'CommandOrControl+Left',
+                        accelerator: this.getKeybind('window:move-left') || 'Command+Alt+Left',
                         click: () => this.windowHelper?.moveWindowLeft()
                     },
                     {
                         label: 'Move Window Right',
-                        accelerator: this.getKeybind('window:move-right') || 'CommandOrControl+Right',
+                        accelerator: this.getKeybind('window:move-right') || 'Command+Alt+Right',
                         click: () => this.windowHelper?.moveWindowRight()
                     },
                     { type: 'separator' },

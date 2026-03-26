@@ -2045,7 +2045,7 @@ handleAiLanguageChange={handleAiLanguageChange}
                                         <div>
                                             <h4 className="text-sm font-bold text-text-primary mb-3">Window</h4>
                                             <div className="space-y-1">
-                                                {[
+                                                    {[
                                                     { id: 'moveWindowUp', label: 'Move Window Up', icon: <ArrowUp size={14} /> },
                                                     { id: 'moveWindowDown', label: 'Move Window Down', icon: <ArrowDown size={14} /> },
                                                     { id: 'moveWindowLeft', label: 'Move Window Left', icon: <ArrowLeft size={14} /> },

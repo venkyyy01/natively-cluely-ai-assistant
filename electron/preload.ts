@@ -284,6 +284,7 @@ interface ElectronAPI {
   setOverlayOpacity: (opacity: number) => Promise<void>;
   setOverlayClickthrough: (enabled: boolean) => Promise<void>;
   onOverlayClickthroughChanged: (callback: (enabled: boolean) => void) => () => void;
+  onGlobalShortcutAction: (callback: (actionId: string) => void) => () => void;
   onOverlayOpacityChanged: (callback: (opacity: number) => void) => () => void;
 
   // Diagnostics
@@ -631,6 +632,14 @@ setOpenAtLogin: (open: boolean) => invokeStatus("set-open-at-login", open),
     ipcRenderer.on('overlay-clickthrough-changed', subscription)
     return () => {
       ipcRenderer.removeListener('overlay-clickthrough-changed', subscription)
+    }
+  },
+
+  onGlobalShortcutAction: (callback: (actionId: string) => void) => {
+    const subscription = (_: any, actionId: string) => callback(actionId)
+    ipcRenderer.on('global-shortcut-action', subscription)
+    return () => {
+      ipcRenderer.removeListener('global-shortcut-action', subscription)
     }
   },
 

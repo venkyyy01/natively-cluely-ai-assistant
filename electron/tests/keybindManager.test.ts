@@ -32,8 +32,17 @@ test('default keybinds include overlay clickthrough toggle shortcut', async () =
     assert.equal(DEFAULT_KEYBINDS.find((item) => item.id === 'general:selective-screenshot')?.accelerator, 'Command+Alt+Shift+A');
     assert.deepEqual(DEFAULT_KEYBINDS.find((item) => item.id === 'general:selective-screenshot')?.alternateAccelerators, ['F15']);
 
+    assert.equal(DEFAULT_KEYBINDS.find((item) => item.id === 'chat:scrollUp')?.accelerator, 'Command+Up');
+    assert.equal(DEFAULT_KEYBINDS.find((item) => item.id === 'chat:scrollUp')?.isGlobal, true);
+    assert.equal(DEFAULT_KEYBINDS.find((item) => item.id === 'chat:scrollDown')?.accelerator, 'Command+Down');
+    assert.equal(DEFAULT_KEYBINDS.find((item) => item.id === 'chat:scrollDown')?.isGlobal, true);
+    assert.equal(DEFAULT_KEYBINDS.find((item) => item.id === 'window:move-up')?.accelerator, 'Command+Alt+Up');
+    assert.equal(DEFAULT_KEYBINDS.find((item) => item.id === 'window:move-down')?.accelerator, 'Command+Alt+Down');
+
     const globalIds = DEFAULT_KEYBINDS.filter((item) => item.isGlobal).map((item) => item.id).sort();
     assert.deepEqual(globalIds, [
+      'chat:scrollDown',
+      'chat:scrollUp',
       'general:selective-screenshot',
       'general:take-screenshot',
       'general:toggle-clickthrough',
@@ -83,6 +92,8 @@ test('global shortcut registration includes alternate function-key accelerators 
     assert.ok(registered.includes('F15'));
     assert.ok(registered.includes('Command+Alt+Shift+M'));
     assert.ok(registered.includes('F16'));
+    assert.ok(registered.includes('Command+Up'));
+    assert.ok(registered.includes('Command+Down'));
   } finally {
     (Module as any)._load = originalLoad;
   }

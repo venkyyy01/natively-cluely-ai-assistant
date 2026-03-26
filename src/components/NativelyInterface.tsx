@@ -1563,6 +1563,18 @@ Provide only the answer, nothing else.`;
         return () => window.removeEventListener('keydown', handleGeneralKeyDown);
     }, [isShortcutPressed]);
 
+    useEffect(() => {
+        const unsubscribe = window.electronAPI?.onGlobalShortcutAction?.((actionId) => {
+            if (actionId === 'chat:scrollUp') {
+                scrollContainerRef.current?.scrollBy({ top: -100, behavior: 'smooth' });
+            } else if (actionId === 'chat:scrollDown') {
+                scrollContainerRef.current?.scrollBy({ top: 100, behavior: 'smooth' });
+            }
+        });
+
+        return () => unsubscribe?.();
+    }, []);
+
     return (
         <div ref={contentRef} className="flex flex-col items-center w-fit mx-auto h-fit min-h-0 bg-transparent p-0 rounded-[24px] font-sans text-slate-200 gap-2">
 
