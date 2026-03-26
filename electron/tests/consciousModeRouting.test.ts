@@ -136,29 +136,24 @@ test('Conscious Mode does not spuriously route casual or admin transcript lines'
   });
 });
 
-test('Conscious Mode positively qualifies standalone pushback and scale phrases from the spec examples', () => {
-  assert.deepEqual(classifyConsciousModeQuestion('Why this approach?', null), {
-    qualifies: true,
-    threadAction: 'start',
-  });
-
+test('Conscious Mode keeps continuation phrases on the normal path when no active thread exists', () => {
   assert.deepEqual(classifyConsciousModeQuestion('What are the tradeoffs?', null), {
-    qualifies: true,
-    threadAction: 'start',
+    qualifies: false,
+    threadAction: 'ignore',
   });
 
-  assert.deepEqual(classifyConsciousModeQuestion('What if this scales?', null), {
-    qualifies: true,
-    threadAction: 'start',
+  assert.deepEqual(classifyConsciousModeQuestion('How would you shard this?', null), {
+    qualifies: false,
+    threadAction: 'ignore',
   });
 
-  assert.deepEqual(classifyConsciousModeQuestion('What if the input is 10x larger?', null), {
-    qualifies: true,
-    threadAction: 'start',
+  assert.deepEqual(classifyConsciousModeQuestion('What happens during failover?', null), {
+    qualifies: false,
+    threadAction: 'ignore',
   });
 });
 
-test('Conscious Mode continuation and reset matrix handles explicit continue phrases and unrelated topics', () => {
+test('Conscious Mode only starts for system-design questions and prefers fresh starts for ambiguous new design prompts', () => {
   const thread = {
     rootQuestion: 'How would you design a rate limiter for an API?',
     lastQuestion: 'What are the tradeoffs?',
@@ -171,17 +166,36 @@ test('Conscious Mode continuation and reset matrix handles explicit continue phr
     })),
   };
 
-  assert.deepEqual(classifyConsciousModeQuestion('Walk me through your thinking again', thread), {
+  assert.deepEqual(classifyConsciousModeQuestion('How would you design a notification system?', null), {
     qualifies: true,
-    threadAction: 'continue',
+    threadAction: 'start',
   });
+
+  assert.deepEqual(classifyConsciousModeQuestion('Write the debounce function in TypeScript.', null), {
+    qualifies: false,
+    threadAction: 'ignore',
+  });
+
+  assert.deepEqual(classifyConsciousModeQuestion('How would you design the data model for billing?', thread), {
+    qualifies: true,
+    threadAction: 'reset',
+  });
+});
+
+test('Conscious Mode continuation and reset matrix handles deterministic continuation phrases and unrelated topics', () => {
+  const thread = {
+    rootQuestion: 'How would you design a rate limiter for an API?',
+    lastQuestion: 'What are the tradeoffs?',
+    followUpCount: 1,
+    updatedAt: Date.now(),
+    response: parseConsciousModeResponse(JSON.stringify({
+      mode: 'reasoning_first',
+      openingReasoning: 'Start with a token bucket.',
+      implementationPlan: ['Use Redis'],
+    })),
+  };
 
   assert.deepEqual(classifyConsciousModeQuestion('What are the tradeoffs?', thread), {
-    qualifies: true,
-    threadAction: 'continue',
-  });
-
-  assert.deepEqual(classifyConsciousModeQuestion('What if traffic spikes 10x on this API?', thread), {
     qualifies: true,
     threadAction: 'continue',
   });
@@ -196,15 +210,25 @@ test('Conscious Mode continuation and reset matrix handles explicit continue phr
     threadAction: 'continue',
   });
 
-  assert.deepEqual(classifyConsciousModeQuestion('What if the input is 10x larger?', {
-    ...thread,
-    updatedAt: Date.now() - 120_000,
-  }), {
+  assert.deepEqual(classifyConsciousModeQuestion('What metrics would you watch first?', thread), {
     qualifies: true,
     threadAction: 'continue',
   });
 
-  assert.deepEqual(classifyConsciousModeQuestion('How would you migrate a monolith to microservices?', thread), {
+  assert.deepEqual(classifyConsciousModeQuestion('What if traffic spikes 10x on this API?', thread), {
+    qualifies: false,
+    threadAction: 'ignore',
+  });
+
+  assert.deepEqual(classifyConsciousModeQuestion('How would you design a payment ledger?', {
+    ...thread,
+    updatedAt: Date.now() - 120000,
+  }), {
+    qualifies: true,
+    threadAction: 'reset',
+  });
+
+  assert.deepEqual(classifyConsciousModeQuestion('How would you design a cache invalidation service?', thread), {
     qualifies: true,
     threadAction: 'reset',
   });
@@ -230,8 +254,8 @@ test('Conscious Mode response parser rejects malformed non-JSON thread payloads'
 
 test('Conscious Mode transcript auto-trigger widens only for qualifying short technical pushback phrases', () => {
   assert.equal(shouldAutoTriggerSuggestionFromTranscript('Why this approach', false, null), false);
-  assert.equal(shouldAutoTriggerSuggestionFromTranscript('Why this approach', true, null), true);
-  assert.equal(shouldAutoTriggerSuggestionFromTranscript('What are the tradeoffs', true, null), true);
+  assert.equal(shouldAutoTriggerSuggestionFromTranscript('Why this approach', true, null), false);
+  assert.equal(shouldAutoTriggerSuggestionFromTranscript('What are the tradeoffs', true, null), false);
   assert.equal(shouldAutoTriggerSuggestionFromTranscript('Can you repeat that for me', true, null), false);
   assert.equal(shouldAutoTriggerSuggestionFromTranscript('okay sounds good', true, null), false);
 });
@@ -264,13 +288,58 @@ test('Conscious Mode transcript-trigger path only fires handleSuggestionTrigger 
     intelligenceManager: manager,
   });
 
-  assert.deepEqual(calls, [
-    {
-      context: 'ctx',
-      lastQuestion: 'Why this approach',
-      confidence: 0.91,
-    },
-  ]);
+  assert.deepEqual(calls, []);
+});
+
+test('Conscious Mode routes screenshot-backed live-coding turns but keeps the same question on the fast path without screenshots', async () => {
+  class LiveCodingHelper {
+    public calls: Array<{ message: string; prompt?: string }> = [];
+
+    async *streamChat(message: string, _imagePaths?: string[], _context?: string, prompt?: string): AsyncGenerator<string> {
+      this.calls.push({ message, prompt });
+
+      if (message.includes('STRUCTURED_REASONING_RESPONSE')) {
+        yield JSON.stringify({
+          mode: 'reasoning_first',
+          openingReasoning: 'I would read the failing state from the screenshot first, then patch the debounce flow.',
+          implementationPlan: ['Confirm stale closure path', 'Patch the debounce state update'],
+          tradeoffs: [],
+          edgeCases: [],
+          scaleConsiderations: [],
+          pushbackResponses: [],
+          likelyFollowUps: [],
+          codeTransition: '',
+        });
+        return;
+      }
+
+      yield 'Use a debounced callback and clear the previous timeout before scheduling a new one.';
+    }
+  }
+
+  const question = 'Write the debounce function in TypeScript.';
+
+  const noScreenshotSession = new SessionTracker();
+  const noScreenshotHelper = new LiveCodingHelper();
+  const noScreenshotEngine = new IntelligenceEngine(noScreenshotHelper as any, noScreenshotSession);
+  noScreenshotSession.setConsciousModeEnabled(true);
+  addInterviewerTurn(noScreenshotSession, question, Date.now() - 1000);
+
+  const fastAnswer = await noScreenshotEngine.runWhatShouldISay(undefined, 0.9);
+  assert.equal(fastAnswer, 'Use a debounced callback and clear the previous timeout before scheduling a new one.');
+  assert.equal(noScreenshotSession.getLatestConsciousResponse(), null);
+  assert.ok(noScreenshotHelper.calls.every(call => !call.message.includes('STRUCTURED_REASONING_RESPONSE')));
+
+  const screenshotSession = new SessionTracker();
+  const screenshotHelper = new LiveCodingHelper();
+  const screenshotEngine = new IntelligenceEngine(screenshotHelper as any, screenshotSession);
+  screenshotSession.setConsciousModeEnabled(true);
+  addInterviewerTurn(screenshotSession, question, Date.now());
+
+  const consciousAnswer = await screenshotEngine.runWhatShouldISay(undefined, 0.9, ['/tmp/editor.png']);
+  assert.match(consciousAnswer || '', /Opening reasoning:/);
+  assert.equal(screenshotSession.getLatestConsciousResponse()?.mode, 'reasoning_first');
+  assert.match(screenshotHelper.calls[0]?.message || '', /STRUCTURED_REASONING_RESPONSE/);
 });
 
 test('Non-Conscious transcript-trigger path preserves the existing actionable heuristic', async () => {

@@ -4,11 +4,46 @@ import { TemporalContext } from "./TemporalContextBuilder";
 import { IntentResult } from "./IntentClassifier";
 import { ConsciousModeStructuredResponse, parseConsciousModeResponse } from "../ConsciousMode";
 
+export interface StreamFailureDetails {
+    error: unknown;
+    kind: 'timeout' | 'error';
+}
+
 export class WhatToAnswerLLM {
     private llmHelper: LLMHelper;
 
     constructor(llmHelper: LLMHelper) {
         this.llmHelper = llmHelper;
+    }
+
+    private buildConversationContext(
+        cleanedTranscript: string,
+        temporalContext?: TemporalContext,
+        intentResult?: IntentResult,
+        fastPath?: boolean,
+    ): string {
+        if (fastPath) {
+            return cleanedTranscript;
+        }
+
+        const contextParts: string[] = [];
+
+        if (intentResult) {
+            contextParts.push(`<intent_and_shape>
+DETECTED INTENT: ${intentResult.intent}
+ANSWER SHAPE: ${intentResult.answerShape}
+</intent_and_shape>`);
+        }
+
+        if (temporalContext && temporalContext.hasRecentResponses) {
+            const history = temporalContext.previousResponses.map((r, i) => `${i + 1}. "${r}"`).join('\n');
+            contextParts.push(`PREVIOUS RESPONSES (Avoid Repetition):\n${history}`);
+        }
+
+        const extraContext = contextParts.join('\n\n');
+        return extraContext
+            ? `${extraContext}\n\nCONVERSATION:\n${cleanedTranscript}`
+            : `CONVERSATION:\n${cleanedTranscript}`;
     }
 
     // Deprecated non-streaming method (redirect to streaming or implement if needed)
@@ -25,47 +60,49 @@ export class WhatToAnswerLLM {
         temporalContext?: TemporalContext,
         intentResult?: IntentResult,
         imagePaths?: string[],
-        options?: { fastPath?: boolean; latestQuestion?: string }
+        options?: {
+            fastPath?: boolean;
+            latestQuestion?: string;
+            onInitialStreamFailure?: (details: StreamFailureDetails) => void;
+            onFallbackResponsePrepared?: (details: StreamFailureDetails & { hadVisibleOutput: boolean }) => void;
+        }
     ): AsyncGenerator<string> {
+        let yieldedAnyChunk = false;
         try {
-            // Build a rich message context
-            // Note: We can't easily inject the complex temporal/intent logic into universal prompt *variables* 
-            // but we can prepend it to the message.
-
-            let contextParts: string[] = [];
-
-            if (intentResult) {
-                contextParts.push(`<intent_and_shape>
-DETECTED INTENT: ${intentResult.intent}
-ANSWER SHAPE: ${intentResult.answerShape}
-</intent_and_shape>`);
-            }
-
-            if (temporalContext && temporalContext.hasRecentResponses) {
-                // ... simplify temporal context injection for universal prompt ...
-                // Just dump it in context if possible
-                const history = temporalContext.previousResponses.map((r, i) => `${i + 1}. "${r}"`).join('\n');
-                contextParts.push(`PREVIOUS RESPONSES (Avoid Repetition):\n${history}`);
-            }
-
-            const extraContext = contextParts.join('\n\n');
-            const conversationContext = extraContext
-                ? `${extraContext}\n\nCONVERSATION:\n${cleanedTranscript}`
-                : `CONVERSATION:\n${cleanedTranscript}`;
+            const conversationContext = this.buildConversationContext(
+                cleanedTranscript,
+                temporalContext,
+                intentResult,
+                options?.fastPath,
+            );
             const primaryQuestion = options?.latestQuestion?.trim() || cleanedTranscript;
 
-            // Use Universal Prompt
-            // Note: WhatToAnswer has a very specific prompt. 
-            // We should use UNIVERSAL_WHAT_TO_ANSWER_PROMPT as override
-
             const prompt = options?.fastPath ? FAST_STANDARD_ANSWER_PROMPT : UNIVERSAL_WHAT_TO_ANSWER_PROMPT;
-            yield* this.llmHelper.streamChat(primaryQuestion, imagePaths, conversationContext, prompt, {
+            for await (const chunk of this.llmHelper.streamChat(primaryQuestion, imagePaths, conversationContext, prompt, {
                 skipKnowledgeInterception: !!options?.fastPath,
-            });
+            })) {
+                yieldedAnyChunk = true;
+                yield chunk;
+            }
 
         } catch (error) {
+            const errorMessage = error instanceof Error
+                ? `${error.name}: ${error.message}`.toLowerCase()
+                : String(error).toLowerCase();
+            const failureDetails: StreamFailureDetails = {
+                error,
+                kind: errorMessage.includes('timeout') || errorMessage.includes('timed out') || errorMessage.includes('abort')
+                    ? 'timeout'
+                    : 'error',
+            };
+            if (!yieldedAnyChunk) {
+                options?.onInitialStreamFailure?.(failureDetails);
+                options?.onFallbackResponsePrepared?.({ ...failureDetails, hadVisibleOutput: false });
+                console.error("[WhatToAnswerLLM] Stream failed:", error);
+                yield "Could you repeat that? I want to make sure I address your question properly.";
+                return;
+            }
             console.error("[WhatToAnswerLLM] Stream failed:", error);
-            yield "Could you repeat that? I want to make sure I address your question properly.";
         }
     }
 

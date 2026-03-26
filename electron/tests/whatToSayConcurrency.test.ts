@@ -3,13 +3,14 @@ import assert from 'node:assert/strict';
 import { IntelligenceEngine } from '../IntelligenceEngine';
 import { SessionTracker } from '../SessionTracker';
 import { setOptimizationFlags, DEFAULT_OPTIMIZATION_FLAGS } from '../config/optimizations';
+import { AnswerLatencyTracker } from '../latency/AnswerLatencyTracker';
 
 class SequencedLLMHelper {
-  public messages: string[] = [];
+  public calls: Array<{ message: string; context?: string; prompt?: string }> = [];
   private callIndex = 0;
 
-  async *streamChat(message: string): AsyncGenerator<string> {
-    this.messages.push(message);
+  async *streamChat(message: string, _imagePaths?: string[], context?: string, prompt?: string): AsyncGenerator<string> {
+    this.calls.push({ message, context, prompt });
     this.callIndex += 1;
 
     if (this.callIndex === 1) {
@@ -19,6 +20,16 @@ class SequencedLLMHelper {
     }
 
     yield 'fresh answer';
+  }
+}
+
+class CapturingLatencyTracker extends AnswerLatencyTracker {
+  public completedSnapshots: Array<ReturnType<AnswerLatencyTracker['complete']>> = [];
+
+  override complete(requestId: string) {
+    const snapshot = super.complete(requestId);
+    this.completedSnapshots.push(snapshot);
+    return snapshot;
   }
 }
 
@@ -32,13 +43,22 @@ test('fast path uses the latest interim interviewer transcript in the generated 
   const session = new SessionTracker();
   const llmHelper = new SequencedLLMHelper();
   const engine = new IntelligenceEngine(llmHelper as any, session);
+  const latencyTracker = new CapturingLatencyTracker();
+  (engine as any).latencyTracker = latencyTracker;
 
   addTurn(session, 'interviewer', 'Old question?', Date.now() - 3000);
+  session.addAssistantMessage('I would start with the constraints first.');
   session.handleTranscript({ speaker: 'interviewer', text: 'Latest interim question?', timestamp: Date.now() - 100, final: false });
 
   await engine.runWhatShouldISay(undefined, 0.9);
+  const snapshot = latencyTracker.completedSnapshots[0];
 
-  assert.match(llmHelper.messages[0], /Latest interim question\?/);
+  assert.equal(llmHelper.calls[0].message, 'Latest interim question?');
+  assert.match(llmHelper.calls[0].context ?? '', /Latest interim question\?/);
+  assert.doesNotMatch(llmHelper.calls[0].context ?? '', /Old question\?/);
+  assert.equal(snapshot?.interimQuestionSubstitutionOccurred, true);
+  assert.equal(snapshot?.marks.providerRequestStarted !== undefined, true);
+  assert.equal(snapshot?.marks.enrichmentReady, undefined);
   setOptimizationFlags({ ...DEFAULT_OPTIMIZATION_FLAGS });
 });
 

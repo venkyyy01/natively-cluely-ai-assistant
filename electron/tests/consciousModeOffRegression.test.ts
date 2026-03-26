@@ -2,12 +2,13 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { IntelligenceEngine } from '../IntelligenceEngine';
 import { SessionTracker } from '../SessionTracker';
+import { AnswerLatencyTracker } from '../latency/AnswerLatencyTracker';
 
 class FakeLLMHelper {
-  public messages: string[] = [];
+  public calls: Array<{ message: string; context?: string; prompt?: string }> = [];
 
-  async *streamChat(message: string): AsyncGenerator<string> {
-    this.messages.push(message);
+  async *streamChat(message: string, _imagePaths?: string[], context?: string, prompt?: string): AsyncGenerator<string> {
+    this.calls.push({ message, context, prompt });
 
     if (message.includes('STRUCTURED_REASONING_RESPONSE') || message.includes('ACTIVE_REASONING_THREAD')) {
       yield JSON.stringify({ openingReasoning: 'should not happen' });
@@ -15,6 +16,16 @@ class FakeLLMHelper {
     }
 
     yield 'Start with a simple token bucket backed by Redis.';
+  }
+}
+
+class CapturingLatencyTracker extends AnswerLatencyTracker {
+  public completedSnapshots: Array<ReturnType<AnswerLatencyTracker['complete']>> = [];
+
+  override complete(requestId: string) {
+    const snapshot = super.complete(requestId);
+    this.completedSnapshots.push(snapshot);
+    return snapshot;
   }
 }
 
@@ -31,16 +42,26 @@ test('Conscious Mode off keeps the existing answer path unchanged for technical 
   const session = new SessionTracker();
   const llmHelper = new FakeLLMHelper();
   const engine = new IntelligenceEngine(llmHelper as any, session);
+  const latencyTracker = new CapturingLatencyTracker();
+  (engine as any).latencyTracker = latencyTracker;
 
+  addInterviewerTurn(session, 'Can you summarize your background first?');
+  session.addAssistantMessage('I have spent the last five years on distributed systems.');
   addInterviewerTurn(session, 'How would you implement a rate limiter for an API?');
 
   const answer = await engine.runWhatShouldISay(undefined, 0.8);
+  const snapshot = latencyTracker.completedSnapshots[0];
 
   assert.equal(answer, 'Start with a simple token bucket backed by Redis.');
   assert.equal(session.getLastAssistantMessage(), 'Start with a simple token bucket backed by Redis.');
   assert.equal(session.getLatestConsciousResponse(), null);
   assert.equal(session.getActiveReasoningThread(), null);
-  assert.ok(llmHelper.messages.every(message => !message.includes('STRUCTURED_REASONING_RESPONSE')));
+  assert.ok(llmHelper.calls.every(call => !call.message.includes('STRUCTURED_REASONING_RESPONSE')));
+  assert.equal(llmHelper.calls[0].message, 'How would you implement a rate limiter for an API?');
+  assert.doesNotMatch(llmHelper.calls[0].context ?? '', /Can you summarize your background first\?/);
+  assert.equal(snapshot?.route, 'fast_standard_answer');
+  assert.equal(snapshot?.marks.providerRequestStarted !== undefined, true);
+  assert.equal(snapshot?.marks.enrichmentReady, undefined);
 });
 
 test('Conscious Mode off leaves follow-up refinement behavior unchanged', async () => {

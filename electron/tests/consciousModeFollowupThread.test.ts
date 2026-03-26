@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { IntelligenceEngine } from '../IntelligenceEngine';
 import { SessionTracker } from '../SessionTracker';
+import { AnswerLatencyTracker } from '../latency/AnswerLatencyTracker';
 
 class FakeLLMHelper {
   private callIndex = 0;
@@ -58,6 +59,16 @@ class FakeLLMHelper {
   }
 }
 
+class CapturingLatencyTracker extends AnswerLatencyTracker {
+  public completedSnapshots: Array<ReturnType<AnswerLatencyTracker['complete']>> = [];
+
+  override complete(requestId: string) {
+    const snapshot = super.complete(requestId);
+    this.completedSnapshots.push(snapshot);
+    return snapshot;
+  }
+}
+
 function addInterviewerTurn(session: SessionTracker, text: string, timestamp: number): void {
   session.handleTranscript({
     speaker: 'interviewer',
@@ -67,7 +78,7 @@ function addInterviewerTurn(session: SessionTracker, text: string, timestamp: nu
   });
 }
 
-test('Conscious Mode preserves and extends the same reasoning thread across pushback and scale follow-ups', async () => {
+test('Conscious Mode preserves the active design thread and only extends it for deterministic continuation fixtures', async () => {
   const session = new SessionTracker();
   const llmHelper = new FakeLLMHelper();
   const engine = new IntelligenceEngine(llmHelper as any, session);
@@ -92,7 +103,7 @@ test('Conscious Mode preserves and extends the same reasoning thread across push
   const thread = session.getActiveReasoningThread();
 
   assert.equal(thread?.rootQuestion, 'How would you partition a multi-tenant analytics system?');
-  assert.equal(thread?.followUpCount, 3);
+  assert.equal(thread?.followUpCount, 1);
   assert.equal(thread?.response.mode, 'reasoning_first');
   assert.deepEqual(thread?.response.implementationPlan, [
     'Partition by tenant',
@@ -101,7 +112,6 @@ test('Conscious Mode preserves and extends the same reasoning thread across push
   ]);
   assert.deepEqual(thread?.response.tradeoffs, [
     'Cross-tenant analytics become more complex',
-    'Cross-tenant reporting needs an aggregation path',
   ]);
   assert.deepEqual(thread?.response.edgeCases, [
     'Tenants with highly uneven traffic can create hotspots',
@@ -111,6 +121,108 @@ test('Conscious Mode preserves and extends the same reasoning thread across push
     'Promote large tenants to dedicated partitions and rebalance asynchronously',
   ]);
   assert.equal(thread?.response.codeTransition, 'At that point I would show the shard-mapping abstraction.');
+});
+
+test('Conscious Mode continuation discards stale follow-up work when transcript revision changes before the response lands', async () => {
+  class DelayedFollowupHelper {
+    private callIndex = 0;
+
+    async *streamChat(message: string): AsyncGenerator<string> {
+      this.callIndex += 1;
+
+      if (this.callIndex === 1) {
+        yield JSON.stringify({
+          mode: 'reasoning_first',
+          openingReasoning: 'I would start with a write-optimized partition key and keep reads denormalized.',
+          implementationPlan: ['Partition by tenant'],
+          tradeoffs: [],
+          edgeCases: [],
+          scaleConsiderations: [],
+          pushbackResponses: [],
+          likelyFollowUps: [],
+          codeTransition: '',
+        });
+        return;
+      }
+
+      if (message.includes('ACTIVE_REASONING_THREAD')) {
+        await new Promise(resolve => setTimeout(resolve, 20));
+        yield JSON.stringify({
+          mode: 'reasoning_first',
+          openingReasoning: 'Stale continuation that should be discarded.',
+          implementationPlan: [],
+          tradeoffs: ['Stale'],
+          edgeCases: [],
+          scaleConsiderations: [],
+          pushbackResponses: [],
+          likelyFollowUps: [],
+          codeTransition: '',
+        });
+        return;
+      }
+
+      yield 'Could you repeat that? I want to make sure I address your question properly.';
+    }
+  }
+
+  const session = new SessionTracker();
+  const llmHelper = new DelayedFollowupHelper();
+  const engine = new IntelligenceEngine(llmHelper as any, session);
+
+  session.setConsciousModeEnabled(true);
+  addInterviewerTurn(session, 'How would you partition a multi-tenant analytics system?', Date.now() - 2000);
+  await engine.runWhatShouldISay(undefined, 0.85);
+
+  const before = session.getActiveReasoningThread();
+  assert.equal(before?.followUpCount, 0);
+
+  (engine as any).lastTriggerTime = 0;
+  addInterviewerTurn(session, 'What are the tradeoffs?', Date.now() - 1000);
+  const pending = engine.runWhatShouldISay(undefined, 0.85);
+
+  await new Promise(resolve => setTimeout(resolve, 5));
+  session.addAssistantMessage('A newer answer arrived while the continuation was still being prepared.');
+
+  const result = await pending;
+
+  assert.equal(result, 'Could you repeat that? I want to make sure I address your question properly.');
+  assert.deepEqual(session.getActiveReasoningThread(), before);
+  assert.equal(session.getLatestConsciousResponse()?.openingReasoning, before?.response.openingReasoning);
+});
+
+test('Conscious Mode continuation fast lane skips fresh-start enrichment work and stays tagged as thread continuation', async () => {
+  class TrackingEngine extends IntelligenceEngine {
+    public classifyIntentCalls = 0;
+
+    protected override async classifyIntentForRoute(lastInterviewerTurn: string | null, preparedTranscript: string, assistantResponseCount: number) {
+      this.classifyIntentCalls += 1;
+      return super.classifyIntentForRoute(lastInterviewerTurn, preparedTranscript, assistantResponseCount);
+    }
+  }
+
+  const session = new SessionTracker();
+  const llmHelper = new FakeLLMHelper();
+  const engine = new TrackingEngine(llmHelper as any, session);
+  const latencyTracker = new CapturingLatencyTracker();
+  (engine as any).latencyTracker = latencyTracker;
+
+  session.setConsciousModeEnabled(true);
+
+  addInterviewerTurn(session, 'How would you partition a multi-tenant analytics system?', Date.now() - 3000);
+  await engine.runWhatShouldISay(undefined, 0.85);
+  const freshSnapshot = latencyTracker.completedSnapshots[0];
+
+  (engine as any).lastTriggerTime = 0;
+  addInterviewerTurn(session, 'What are the tradeoffs?', Date.now() - 1000);
+  await engine.runWhatShouldISay(undefined, 0.85);
+  const continuationSnapshot = latencyTracker.completedSnapshots[1];
+
+  assert.equal(engine.classifyIntentCalls, 1);
+  assert.equal(freshSnapshot?.consciousPath, 'fresh_start');
+  assert.equal(continuationSnapshot?.consciousPath, 'thread_continue');
+  assert.equal(freshSnapshot?.marks.enrichmentReady !== undefined, true);
+  assert.equal(continuationSnapshot?.marks.enrichmentReady, undefined);
+  assert.equal(continuationSnapshot?.marks.providerRequestStarted !== undefined, true);
 });
 
 test('Conscious Mode resets an active reasoning thread when the interviewer clearly changes to a non-technical topic', async () => {

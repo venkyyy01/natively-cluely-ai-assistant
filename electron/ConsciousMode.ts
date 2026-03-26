@@ -51,12 +51,6 @@ export interface TranscriptSuggestionInput {
   intelligenceManager: TranscriptSuggestionIntelligenceManager;
 }
 
-const STOP_WORDS = new Set([
-  'a', 'again', 'an', 'and', 'are', 'do', 'for', 'how', 'if', 'in', 'is', 'it', 'me', 'of', 'on',
-  'or', 'please', 'the', 'their', 'them', 'this', 'through', 'to', 'what', 'why', 'with', 'would',
-  'you', 'your'
-]);
-
 function normalizeText(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
@@ -188,46 +182,16 @@ export function formatConsciousModeResponse(response: ConsciousModeStructuredRes
   return lines.join('\n').trim();
 }
 
-function tokenizeQuestion(question: string): string[] {
-  return question
-    .toLowerCase()
-    .replace(/[^a-z0-9\s]/g, ' ')
-    .split(/\s+/)
-    .filter(token => token.length > 2 && !STOP_WORDS.has(token));
-}
-
-function countTopicOverlap(currentQuestion: string, rootQuestion: string): number {
-  const currentTokens = new Set(tokenizeQuestion(currentQuestion));
-  const rootTokens = new Set(tokenizeQuestion(rootQuestion));
-
-  let overlap = 0;
-  for (const token of currentTokens) {
-    if (rootTokens.has(token)) {
-      overlap += 1;
-    }
-  }
-
-  return overlap;
-}
-
 function isQuestionLike(lower: string): boolean {
   return /\?$/.test(lower) || /^(how|what|why|when|where|which|who|can|could|would|walk me through|tell me)/i.test(lower);
 }
 
-function isTechnicalQuestion(lower: string): boolean {
-  return /(how would you|walk me through|design|implement|build|architect|migrate|optimize|debug|approach would you take|how do you)/i.test(lower);
+function isSystemDesignQuestion(lower: string): boolean {
+  return /(^how would you design\b|\bsystem design\b|\barchitect\b|\bhigh[- ]level design\b|\bdistributed system\b|\brate limiter\b|\bpartition\b|\bmonolith to microservices\b|\bmigrate a monolith\b|\bdesign the data model\b|\bdesign a .*system\b|\bdesign an .*system\b|\bdesign the .*system\b|\bdesign a .*service\b|\bdesign an .*service\b|\bdesign the .*service\b)/i.test(lower);
 }
 
 function isQuestionContinuationPhrase(lower: string): boolean {
-  return /(walk me through your thinking again|walk through your thinking again|walk me through your thinking|why this approach|why this|what are the tradeoffs|what if .*|edge cases|failure modes|how would this scale|how does this scale|what metrics would you watch first|which metrics would you watch first|how would you shard this|what happens during failover|how would you handle failover|what if a node fails|what if a shard gets hot|where is the bottleneck)/i.test(lower);
-}
-
-function isGenericPushback(lower: string): boolean {
-  return /^what if\??$/i.test(lower);
-}
-
-function isStandaloneSpecPushback(lower: string): boolean {
-  return /^(why this approach\??|what are the tradeoffs\??|what if this scales\??|what if the input is 10x larger\??)$/i.test(lower);
+  return /^(what are the tradeoffs\??|how would you shard this\??|what happens during failover\??|what metrics would you watch( first)?\??)$/i.test(lower);
 }
 
 function isExplicitTopicShift(lower: string): boolean {
@@ -237,7 +201,6 @@ function isExplicitTopicShift(lower: string): boolean {
 export function classifyConsciousModeQuestion(
   question: string | null | undefined,
   activeThread: ReasoningThread | null,
-  intent: string | null = null,
 ): ConsciousModeQuestionRoute {
   const normalizedQuestion = normalizeText(question);
   if (!normalizedQuestion) {
@@ -246,22 +209,15 @@ export function classifyConsciousModeQuestion(
 
   const lower = normalizedQuestion.toLowerCase();
   const questionLike = isQuestionLike(lower);
-  const technicalQuestion = isTechnicalQuestion(lower);
-  const overlap = activeThread ? countTopicOverlap(normalizedQuestion, activeThread.rootQuestion) : 0;
+  const systemDesignQuestion = isSystemDesignQuestion(lower);
   const explicitContinuation = isQuestionContinuationPhrase(lower);
-  const codingIntent = intent === 'coding';
-  const standaloneSpecPushback = isStandaloneSpecPushback(lower);
 
   if (activeThread) {
-    if (explicitContinuation && (!isGenericPushback(lower) || overlap >= 2 || /again/.test(lower) || standaloneSpecPushback)) {
+    if (explicitContinuation) {
       return { qualifies: true, threadAction: 'continue' };
     }
 
-    if (questionLike && overlap >= 2) {
-      return { qualifies: true, threadAction: 'continue' };
-    }
-
-    if (questionLike && (technicalQuestion || codingIntent)) {
+    if (questionLike && systemDesignQuestion) {
       return { qualifies: true, threadAction: 'reset' };
     }
 
@@ -272,7 +228,7 @@ export function classifyConsciousModeQuestion(
     return { qualifies: false, threadAction: 'ignore' };
   }
 
-  if (questionLike && (technicalQuestion || codingIntent || standaloneSpecPushback)) {
+  if (questionLike && systemDesignQuestion) {
     return { qualifies: true, threadAction: 'start' };
   }
 

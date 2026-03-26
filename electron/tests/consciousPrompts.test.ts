@@ -58,3 +58,17 @@ test('Conscious Mode prompt family prioritizes system design flow before code', 
   assert.match(combined, /scale|reliability|failover/i);
   assert.match(combined, /before code|before coding|before implementation details/i);
 });
+
+test('Conscious Mode prompts restrict fresh starts to system design and screenshot-backed live coding continuations', () => {
+  const family = (prompts as Record<string, unknown>).CONSCIOUS_MODE_PROMPT_FAMILY as Record<string, string>;
+  const combined = [
+    family.openingReasoning,
+    family.implementationPath,
+    family.followUpContinuation,
+  ].join('\n');
+
+  assert.match(combined, /system design/i);
+  assert.match(combined, /screenshot/i);
+  assert.match(combined, /continuation|continue an existing reasoning thread/i);
+  assert.doesNotMatch(combined, /all technical questions can use conscious mode/i);
+});

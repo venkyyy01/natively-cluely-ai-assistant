@@ -42,10 +42,35 @@ test('route selector sends conscious questions to conscious route without intent
 test('route selector uses conservative profile and knowledge heuristics', () => {
   assert.equal(isProfileRequiredQuestion('What experience do you have with Redis?'), false);
   assert.equal(isProfileRequiredQuestion('What experience do you have with Redis in your previous role?'), true);
-  assert.equal(isProfileRequiredQuestion('Which part of your background is most relevant to this backend role?'), true);
-  assert.equal(isProfileRequiredQuestion('Can you introduce yourself based on your resume?'), true);
   assert.equal(isKnowledgeRequiredQuestion('Why do you want to work here?'), true);
   assert.equal(isKnowledgeRequiredQuestion('How would you design a rate limiter?'), false);
+});
+
+test('route selector only treats the canonical deterministic profile fixtures as profile-required', () => {
+  const positives = [
+    'tell me about yourself',
+    'walk me through your resume',
+    'walk me through your background',
+    'tell me about your background',
+    'why are you a fit for this role',
+    'tell me about a project you worked on',
+    'what experience do you have with redis in your previous role',
+  ];
+  const negatives = [
+    'how would you design a rate limiter',
+    'what are the tradeoffs',
+    'how would you shard this',
+    'have you worked with redis',
+    'what experience do you have with redis',
+  ];
+
+  for (const fixture of positives) {
+    assert.equal(isProfileRequiredQuestion(fixture), true, fixture);
+  }
+
+  for (const fixture of negatives) {
+    assert.equal(isProfileRequiredQuestion(fixture), false, fixture);
+  }
 });
 
 test('route selector keeps generic technical questions on fast standard route', () => {

@@ -25,6 +25,8 @@ import { selectAnswerRoute } from './latency/answerRouteSelector';
 // Mode types
 export type IntelligenceMode = 'idle' | 'assist' | 'what_to_say' | 'follow_up' | 'recap' | 'manual' | 'follow_up_questions' | 'reasoning_first';
 
+const PROFILE_ENRICHMENT_TIMEOUT_MS = 250;
+
 // Refinement intent detection (refined to avoid false positives)
 function detectRefinementIntent(userText: string): { isRefinement: boolean; intent: string } {
     const lowercased = userText.toLowerCase().trim();
@@ -108,6 +110,14 @@ export class IntelligenceEngine extends EventEmitter {
     }
   }
 
+  protected async classifyIntentForRoute(
+    lastInterviewerTurn: string | null,
+    preparedTranscript: string,
+    assistantResponseCount: number,
+  ) {
+    return classifyIntent(lastInterviewerTurn, preparedTranscript, assistantResponseCount);
+  }
+
   private async getAssembledContext(query: string, tokenBudget: number): Promise<{
     contextItems: ContextItem[];
     assemblyResult?: ContextAssemblyOutput;
@@ -164,6 +174,45 @@ export class IntelligenceEngine extends EventEmitter {
             const label = item.role === 'interviewer' ? 'INTERVIEWER' : item.role === 'assistant' ? 'ASSISTANT' : 'ME';
             return `[${label}]: ${item.text}`;
         }).join('\n');
+    }
+
+    private buildFastStandardTranscriptContext(latestQuestion: string, latestAssistantMessage: string | null): string {
+        const turns: string[] = [];
+
+        if (latestAssistantMessage?.trim()) {
+            turns.push(`[ASSISTANT]: ${latestAssistantMessage.trim()}`);
+        }
+
+        if (latestQuestion.trim()) {
+            turns.push(`[INTERVIEWER]: ${latestQuestion.trim()}`);
+        }
+
+        return turns.join('\n');
+    }
+
+    private hasUsableProfileGrounding(result: {
+        systemPromptInjection?: string;
+        contextBlock?: string;
+        isIntroQuestion?: boolean;
+        introResponse?: string;
+    } | null | undefined): boolean {
+        if (!result) {
+            return false;
+        }
+
+        if (result.isIntroQuestion && result.introResponse?.trim()) {
+            return true;
+        }
+
+        return !!result.contextBlock?.trim() || !!result.systemPromptInjection?.trim();
+    }
+
+    private isLiveCodingQuestion(question: string): boolean {
+        return /(write|implement|debug|fix|refactor|code|function|typescript|javascript|python|java|bug)/i.test(question);
+    }
+
+    private isScreenshotBackedLiveCodingTurn(question: string, imagePaths?: string[]): boolean {
+        return !!imagePaths?.length && this.isLiveCodingQuestion(question);
     }
 
     getRecapLLM(): RecapLLM | null {
@@ -291,6 +340,11 @@ export class IntelligenceEngine extends EventEmitter {
      */
     async runWhatShouldISay(question?: string, confidence: number = 0.8, imagePaths?: string[]): Promise<string | null> {
         const now = Date.now();
+        let activeLatencyRequestId: string | null = null;
+        let activeProfileEnrichmentRoute = false;
+        let profileEnrichmentFailed = false;
+        let fallbackResponsePrepared = false;
+        let syntheticFallbackPending = false;
 
         if (now - this.lastTriggerTime < this.triggerCooldown && this.activeMode !== 'what_to_say') {
             return null;
@@ -326,18 +380,22 @@ export class IntelligenceEngine extends EventEmitter {
             const lastInterim = this.session.getLastInterimInterviewer();
             const interimQuestion = lastInterim?.text?.trim() || '';
             const baseQuestion = question || interimQuestion || this.session.getLastInterviewerTurn() || '';
+            const resolvedQuestion = baseQuestion;
             const knowledgeOrchestrator = this.llmHelper.getKnowledgeOrchestrator?.();
             const knowledgeStatus = knowledgeOrchestrator?.getStatus?.();
             const currentReasoningThread = this.session.getActiveReasoningThread();
             const preRouteConsciousDecision = this.session.isConsciousModeEnabled()
                 ? classifyConsciousModeQuestion(baseQuestion, currentReasoningThread)
                 : { qualifies: false, threadAction: 'ignore' as const };
+            const activeReasoningThread = preRouteConsciousDecision.threadAction === 'reset'
+                ? null
+                : currentReasoningThread;
 
             if (preRouteConsciousDecision.threadAction === 'reset') {
                 this.session.clearConsciousModeThread();
             }
 
-            const route = selectAnswerRoute({
+            const selectedRoute = selectAnswerRoute({
                 explicitManual: false,
                 explicitFollowUp: false,
                 consciousModeEnabled: this.session.isConsciousModeEnabled(),
@@ -345,15 +403,186 @@ export class IntelligenceEngine extends EventEmitter {
                 hasProfile: !!knowledgeStatus?.hasResume,
                 hasKnowledgeData: !!knowledgeStatus?.hasResume || !!knowledgeStatus?.hasActiveJD,
                 latestQuestion: baseQuestion,
-                activeReasoningThread: preRouteConsciousDecision.threadAction === 'reset'
-                    ? null
-                    : currentReasoningThread,
+                activeReasoningThread,
             });
+            const shouldUseScreenshotConsciousRoute = this.session.isConsciousModeEnabled()
+                && !preRouteConsciousDecision.qualifies
+                && this.isScreenshotBackedLiveCodingTurn(resolvedQuestion, imagePaths);
             const capability = typeof (this.llmHelper as any).getProviderCapabilityClass === 'function'
                 ? (this.llmHelper as any).getProviderCapabilityClass()
                 : 'buffered';
-            const requestId = this.latencyTracker.start(route, capability);
+            let effectiveRoute: AnswerRoute = shouldUseScreenshotConsciousRoute ? 'conscious_answer' : selectedRoute;
+            let isProfileEnrichmentRoute = effectiveRoute === 'enriched_standard_answer';
+            activeProfileEnrichmentRoute = isProfileEnrichmentRoute;
+            const requestId = this.latencyTracker.start(effectiveRoute, capability, {
+                transcriptRevision: this.session.getTranscriptRevision(),
+                fallbackOccurred: false,
+                interimQuestionSubstitutionOccurred: !question && !!interimQuestion,
+                profileEnrichmentState: isProfileEnrichmentRoute ? 'attempted' : undefined,
+                consciousPath: effectiveRoute === 'conscious_answer'
+                    ? preRouteConsciousDecision.threadAction === 'continue'
+                        ? 'thread_continue'
+                        : 'fresh_start'
+                    : undefined,
+            });
+            activeLatencyRequestId = requestId;
             this.latencyTracker.mark(requestId, 'contextLoaded');
+
+            const lastInterviewerTurn = this.session.getLastInterviewerTurn();
+
+            const runFastStandardAnswer = async (): Promise<string> => {
+                const preparedTranscript = this.buildFastStandardTranscriptContext(
+                    resolvedQuestion,
+                    this.session.getLastAssistantMessage()
+                );
+                this.latencyTracker.mark(requestId, 'transcriptPrepared');
+
+                let fullAnswer = "";
+                let fallbackResponsePrepared = false;
+                let syntheticFallbackPending = false;
+                const noteFallbackResponsePrepared = () => {
+                    fallbackResponsePrepared = true;
+                    syntheticFallbackPending = true;
+                };
+                const stream = this.whatToAnswerLLM!.generateStream(preparedTranscript, undefined, undefined, imagePaths, {
+                    fastPath: true,
+                    latestQuestion: resolvedQuestion,
+                    onFallbackResponsePrepared: noteFallbackResponsePrepared,
+                });
+                this.latencyTracker.markProviderRequestStarted(requestId);
+
+                for await (const token of stream) {
+                    if (requestSequence !== this.activeWhatToSayRequestId) {
+                        continue;
+                    }
+                    if (fallbackResponsePrepared) {
+                        this.latencyTracker.markFallbackOccurred(requestId);
+                        fallbackResponsePrepared = false;
+                    }
+                    if (!fullAnswer) {
+                        if (syntheticFallbackPending) {
+                            this.latencyTracker.markFirstVisibleAnswer(requestId);
+                            syntheticFallbackPending = false;
+                        } else {
+                            this.latencyTracker.markFirstStreamingUpdate(requestId);
+                        }
+                    }
+                    this.emit('suggested_answer_token', token, question || 'inferred', confidence);
+                    fullAnswer += token;
+                }
+
+                if (requestSequence !== this.activeWhatToSayRequestId) {
+                    this.latencyTracker.complete(requestId);
+                    return fullAnswer;
+                }
+
+                if (!fullAnswer || fullAnswer.trim().length < 5) {
+                    fullAnswer = "Could you repeat that? I want to make sure I address your question properly.";
+                }
+
+                this.session.addAssistantMessage(fullAnswer);
+
+                this.session.pushUsage({
+                    type: 'assist',
+                    timestamp: Date.now(),
+                    question: question || 'What to Answer',
+                    answer: fullAnswer
+                });
+
+                this.emit('suggested_answer', fullAnswer, question || 'What to Answer', confidence);
+                const latencySnapshot = this.latencyTracker.complete(requestId);
+                console.log('[IntelligenceEngine] Answer latency snapshot:', latencySnapshot);
+
+                this.setMode('idle');
+                return fullAnswer;
+            };
+
+            if (isProfileEnrichmentRoute) {
+                const timeoutSentinel = Symbol('profile_enrichment_timeout');
+                const processQuestion = knowledgeOrchestrator?.processQuestion?.bind(knowledgeOrchestrator);
+
+                try {
+                    const enrichmentResult = await Promise.race([
+                        processQuestion
+                            ? Promise.resolve(processQuestion(resolvedQuestion))
+                            : new Promise<typeof timeoutSentinel>(() => {
+                                // No preflight enrichment hook is available. Let the enriched route
+                                // continue and rely on the normal knowledge interception path.
+                            }),
+                        new Promise<typeof timeoutSentinel>((resolve) => {
+                            setTimeout(() => resolve(timeoutSentinel), PROFILE_ENRICHMENT_TIMEOUT_MS);
+                        }),
+                    ]);
+
+                    if (processQuestion && (enrichmentResult === timeoutSentinel || !this.hasUsableProfileGrounding(enrichmentResult))) {
+                        const fallbackReason = enrichmentResult === timeoutSentinel
+                            ? 'profile_timeout'
+                            : 'profile_no_context';
+                        profileEnrichmentFailed = true;
+                        effectiveRoute = 'fast_standard_answer';
+                        isProfileEnrichmentRoute = false;
+                        activeProfileEnrichmentRoute = false;
+                        this.latencyTracker.markFallbackOccurred(requestId, fallbackReason);
+                        this.latencyTracker.markDegradedToRoute(requestId, effectiveRoute, {
+                            profileEnrichmentState: fallbackReason === 'profile_timeout' ? 'timed_out' : 'failed',
+                            profileFallbackReason: fallbackReason,
+                        });
+                    }
+                } catch (_error) {
+                    profileEnrichmentFailed = true;
+                    effectiveRoute = 'fast_standard_answer';
+                    isProfileEnrichmentRoute = false;
+                    activeProfileEnrichmentRoute = false;
+                    this.latencyTracker.markFallbackOccurred(requestId, 'profile_error');
+                    this.latencyTracker.markDegradedToRoute(requestId, effectiveRoute, {
+                        profileEnrichmentState: 'failed',
+                        profileFallbackReason: 'profile_error',
+                    });
+                }
+            }
+
+            if (effectiveRoute === 'fast_standard_answer') {
+                return runFastStandardAnswer();
+            }
+
+            if (preRouteConsciousDecision.threadAction === 'continue' && activeReasoningThread && this.followUpLLM) {
+                this.latencyTracker.markProviderRequestStarted(requestId);
+                const continuationRevision = this.session.getTranscriptRevision();
+                const structuredResponse = await this.followUpLLM.generateReasoningFirstFollowUp(
+                    activeReasoningThread,
+                    resolvedQuestion,
+                    this.session.getFormattedContext(180)
+                );
+
+                const continuationStale = requestSequence !== this.activeWhatToSayRequestId
+                    || this.session.getTranscriptRevision() !== continuationRevision;
+
+                if (continuationStale || !isValidConsciousModeResponse(structuredResponse)) {
+                    effectiveRoute = 'fast_standard_answer';
+                    this.latencyTracker.markFallbackOccurred(requestId);
+                    this.latencyTracker.markDegradedToRoute(requestId, effectiveRoute);
+                    return runFastStandardAnswer();
+                }
+
+                this.setMode('reasoning_first');
+
+                const fullAnswer = formatConsciousModeResponse(structuredResponse);
+                this.session.recordConsciousResponse(resolvedQuestion, structuredResponse, 'continue');
+                this.emit('suggested_answer_token', fullAnswer, question || 'What to Answer', confidence);
+                this.latencyTracker.markFirstVisibleAnswer(requestId);
+                this.session.addAssistantMessage(fullAnswer);
+                this.session.pushUsage({
+                    type: 'assist',
+                    timestamp: Date.now(),
+                    question: question || 'What to Answer',
+                    answer: fullAnswer
+                });
+                this.emit('suggested_answer', fullAnswer, question || 'What to Answer', confidence);
+                const latencySnapshot = this.latencyTracker.complete(requestId);
+                console.log('[IntelligenceEngine] Answer latency snapshot:', latencySnapshot);
+                this.setMode('idle');
+                return fullAnswer;
+            }
 
             // Inject latest interim transcript if available
             if (lastInterim && lastInterim.text.trim().length > 0) {
@@ -377,33 +606,41 @@ export class IntelligenceEngine extends EventEmitter {
                 text: item.text,
                 timestamp: item.timestamp
             }));
-            const preparedTranscript = route === 'fast_standard_answer'
-                ? this.buildCompactTranscriptSnapshot(transcriptTurns, 12)
-                : prepareTranscriptForWhatToAnswer(transcriptTurns, 12);
+            const preparedTranscript = prepareTranscriptForWhatToAnswer(transcriptTurns, 12);
             this.latencyTracker.mark(requestId, 'transcriptPrepared');
-
-            const lastInterviewerTurn = this.session.getLastInterviewerTurn();
-            const activeReasoningThread = this.session.getActiveReasoningThread();
-            const resolvedQuestion = question || interimQuestion || lastInterviewerTurn || '';
-            const accelerationFastPath = route === 'fast_standard_answer';
-            const temporalContext = accelerationFastPath
-                ? undefined
-                : buildTemporalContext(
-                    contextItems,
-                    this.session.getAssistantResponseHistory(),
-                    180
-                );
-            const intentResult = accelerationFastPath
-                ? undefined
-                : await classifyIntent(
-                    lastInterviewerTurn,
-                    preparedTranscript,
-                    this.session.getAssistantResponseHistory().length
-                );
+            const temporalContext = buildTemporalContext(
+                contextItems,
+                this.session.getAssistantResponseHistory(),
+                180
+            );
+            const intentResult = await this.classifyIntentForRoute(
+                lastInterviewerTurn,
+                preparedTranscript,
+                this.session.getAssistantResponseHistory().length
+            );
+            if (isProfileEnrichmentRoute) {
+                this.latencyTracker.annotate(requestId, {
+                    profileFallbackReason: undefined,
+                });
+            }
             this.latencyTracker.mark(requestId, 'enrichmentReady');
-            const consciousRoute = route === 'conscious_answer'
-                ? classifyConsciousModeQuestion(resolvedQuestion, activeReasoningThread)
+            const consciousRoute = effectiveRoute === 'conscious_answer'
+                ? (shouldUseScreenshotConsciousRoute
+                    ? { qualifies: true, threadAction: 'start' as const }
+                    : classifyConsciousModeQuestion(resolvedQuestion, activeReasoningThread))
                 : { qualifies: false, threadAction: 'ignore' as const };
+            const standardRouteAfterConsciousFallback = effectiveRoute === 'conscious_answer'
+                ? selectAnswerRoute({
+                    explicitManual: false,
+                    explicitFollowUp: false,
+                    consciousModeEnabled: false,
+                    profileModeEnabled: !!knowledgeStatus?.activeMode,
+                    hasProfile: !!knowledgeStatus?.hasResume,
+                    hasKnowledgeData: !!knowledgeStatus?.hasResume || !!knowledgeStatus?.hasActiveJD,
+                    latestQuestion: resolvedQuestion,
+                    activeReasoningThread: null,
+                })
+                : effectiveRoute;
 
             if (consciousRoute.threadAction === 'reset') {
                 this.session.clearConsciousModeThread();
@@ -415,13 +652,8 @@ export class IntelligenceEngine extends EventEmitter {
 
             if (consciousRoute.qualifies) {
                 let structuredResponse;
-                if (consciousRoute.threadAction === 'continue' && activeReasoningThread && this.followUpLLM) {
-                    structuredResponse = await this.followUpLLM.generateReasoningFirstFollowUp(
-                        activeReasoningThread,
-                        resolvedQuestion,
-                        this.session.getFormattedContext(180)
-                    );
-                } else if (this.whatToAnswerLLM) {
+                if (this.whatToAnswerLLM) {
+                    this.latencyTracker.markProviderRequestStarted(requestId);
                     structuredResponse = await this.whatToAnswerLLM.generateReasoningFirst(
                         preparedTranscript,
                         resolvedQuestion,
@@ -430,6 +662,7 @@ export class IntelligenceEngine extends EventEmitter {
                         imagePaths
                     );
                 } else if (this.answerLLM) {
+                    this.latencyTracker.markProviderRequestStarted(requestId);
                     structuredResponse = await this.answerLLM.generateReasoningFirst(
                         resolvedQuestion,
                         this.session.getFormattedContext(180)
@@ -451,17 +684,29 @@ export class IntelligenceEngine extends EventEmitter {
                     }
 
                     this.emit('suggested_answer_token', fullAnswer, question || 'What to Answer', confidence);
+                    this.latencyTracker.markFirstVisibleAnswer(requestId);
                     this.session.addAssistantMessage(fullAnswer);
                     this.session.pushUsage({
                         type: 'assist',
                         timestamp: Date.now(),
                         question: question || 'What to Answer',
                         answer: fullAnswer
-                    });
-                    this.emit('suggested_answer', fullAnswer, question || 'What to Answer', confidence);
-                    this.setMode('idle');
-                    return fullAnswer;
+                     });
+                     this.emit('suggested_answer', fullAnswer, question || 'What to Answer', confidence);
+                     const latencySnapshot = this.latencyTracker.complete(requestId);
+                     console.log('[IntelligenceEngine] Answer latency snapshot:', latencySnapshot);
+                     this.setMode('idle');
+                     return fullAnswer;
                 }
+
+                effectiveRoute = standardRouteAfterConsciousFallback;
+                isProfileEnrichmentRoute = effectiveRoute === 'enriched_standard_answer';
+                activeProfileEnrichmentRoute = isProfileEnrichmentRoute;
+                this.latencyTracker.markFallbackOccurred(requestId);
+                this.latencyTracker.markDegradedToRoute(requestId, effectiveRoute, {
+                    profileEnrichmentState: isProfileEnrichmentRoute ? 'attempted' : undefined,
+                    profileFallbackReason: undefined,
+                });
             }
 
             const temporalResponseCount = temporalContext?.previousResponses.length ?? 0;
@@ -470,18 +715,43 @@ export class IntelligenceEngine extends EventEmitter {
             console.log(`[IntelligenceEngine] Temporal RAG: ${temporalResponseCount} responses, tone: ${temporalTone}, intent: ${detectedIntent}${imagePaths?.length ? `, with ${imagePaths.length} image(s)` : ''}`);
 
             let fullAnswer = "";
+            const annotateProfileEnrichmentFailure = (failure: { kind: 'timeout' | 'error' }) => {
+                if (!isProfileEnrichmentRoute) {
+                    return;
+                }
+
+                profileEnrichmentFailed = true;
+                const timedOut = failure.kind === 'timeout';
+
+                this.latencyTracker.markProfileEnrichmentState(requestId, timedOut ? 'timed_out' : 'failed', timedOut ? 'profile_timeout' : 'profile_error');
+            };
+            const noteFallbackResponsePrepared = () => {
+                fallbackResponsePrepared = true;
+                syntheticFallbackPending = true;
+            };
             const stream = this.whatToAnswerLLM.generateStream(preparedTranscript, temporalContext, intentResult, imagePaths, {
-                fastPath: route === 'fast_standard_answer',
+                fastPath: effectiveRoute === 'fast_standard_answer',
                 latestQuestion: resolvedQuestion,
+                onInitialStreamFailure: annotateProfileEnrichmentFailure,
+                onFallbackResponsePrepared: noteFallbackResponsePrepared,
             });
-            this.latencyTracker.mark(requestId, 'providerRequestStarted');
+            this.latencyTracker.markProviderRequestStarted(requestId);
 
             for await (const token of stream) {
                 if (requestSequence !== this.activeWhatToSayRequestId) {
                     continue;
                 }
+                if (fallbackResponsePrepared) {
+                    this.latencyTracker.markFallbackOccurred(requestId);
+                    fallbackResponsePrepared = false;
+                }
                 if (!fullAnswer) {
-                    this.latencyTracker.mark(requestId, 'firstToken');
+                    if (syntheticFallbackPending) {
+                        this.latencyTracker.markFirstVisibleAnswer(requestId);
+                        syntheticFallbackPending = false;
+                    } else {
+                        this.latencyTracker.markFirstStreamingUpdate(requestId);
+                    }
                 }
                 this.emit('suggested_answer_token', token, question || 'inferred', confidence);
                 fullAnswer += token;
@@ -508,6 +778,11 @@ export class IntelligenceEngine extends EventEmitter {
             });
 
             this.emit('suggested_answer', fullAnswer, question || 'What to Answer', confidence);
+            if (isProfileEnrichmentRoute) {
+                if (!profileEnrichmentFailed) {
+                    this.latencyTracker.markProfileEnrichmentState(requestId, 'completed');
+                }
+            }
             const latencySnapshot = this.latencyTracker.complete(requestId);
             console.log('[IntelligenceEngine] Answer latency snapshot:', latencySnapshot);
 
@@ -515,6 +790,19 @@ export class IntelligenceEngine extends EventEmitter {
             return fullAnswer;
 
         } catch (error) {
+            if (activeLatencyRequestId) {
+                if (activeProfileEnrichmentRoute) {
+                    const errorMessage = error instanceof Error ? `${error.name}: ${error.message}`.toLowerCase() : String(error).toLowerCase();
+                    const timedOut = errorMessage.includes('timeout') || errorMessage.includes('timed out') || errorMessage.includes('abort');
+                    this.latencyTracker.annotate(activeLatencyRequestId, {
+                        fallbackOccurred: true,
+                        profileEnrichmentState: timedOut ? 'timed_out' : 'failed',
+                        profileFallbackReason: timedOut ? 'profile_timeout' : 'profile_error',
+                    });
+                }
+                const latencySnapshot = this.latencyTracker.complete(activeLatencyRequestId);
+                console.log('[IntelligenceEngine] Answer latency snapshot:', latencySnapshot);
+            }
             this.emit('error', error as Error, 'what_to_say');
             this.setMode('idle');
             return "Could you repeat that? I want to make sure I address your question properly.";
