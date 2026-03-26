@@ -186,6 +186,16 @@ test('Conscious Mode continuation and reset matrix handles explicit continue phr
     threadAction: 'continue',
   });
 
+  assert.deepEqual(classifyConsciousModeQuestion('How would you shard this?', thread), {
+    qualifies: true,
+    threadAction: 'continue',
+  });
+
+  assert.deepEqual(classifyConsciousModeQuestion('What happens during failover?', thread), {
+    qualifies: true,
+    threadAction: 'continue',
+  });
+
   assert.deepEqual(classifyConsciousModeQuestion('What if the input is 10x larger?', {
     ...thread,
     updatedAt: Date.now() - 120_000,

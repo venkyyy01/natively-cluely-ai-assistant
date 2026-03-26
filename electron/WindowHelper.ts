@@ -26,6 +26,7 @@ export class WindowHelper {
 
   private appState: AppState
   private contentProtection: boolean = false
+  private overlayClickthroughEnabled: boolean = false
   private opacityTimeout: NodeJS.Timeout | null = null
 
   // Initialize with explicit number type and 0 value
@@ -123,6 +124,17 @@ export class WindowHelper {
 
     this.overlayWindow.setContentSize(newWidth, newHeight)
     this.overlayWindow.setPosition(newX, newY)
+  }
+
+  public setOverlayClickthrough(enabled: boolean): void {
+    this.overlayClickthroughEnabled = enabled
+    if (!this.overlayWindow || this.overlayWindow.isDestroyed()) return
+
+    this.overlayWindow.setIgnoreMouseEvents(enabled, enabled ? { forward: true } : undefined)
+    this.overlayWindow.setFocusable(!enabled)
+    if (enabled) {
+      this.overlayWindow.blur()
+    }
   }
 
   public createWindow(): void {
@@ -247,7 +259,7 @@ export class WindowHelper {
       backgroundColor: "#00000000",
       alwaysOnTop: true,
       focusable: true,
-      resizable: false, // Enforce automatic resizing only
+      resizable: true,
       movable: true,
       skipTaskbar: true, // Don't show separately in dock/taskbar
       hasShadow: false, // Prevent shadow from adding perceived size/artifacts
@@ -261,6 +273,7 @@ export class WindowHelper {
       this.overlayWindow.setHiddenInMissionControl(true)
       this.overlayWindow.setAlwaysOnTop(true, "floating")
     }
+    this.setOverlayClickthrough(this.overlayClickthroughEnabled)
 
     this.overlayWindow.loadURL(`${startUrl}?window=overlay`).catch(e => {
         console.error('[WindowHelper] Failed to load Overlay URL:', e);
@@ -382,31 +395,38 @@ export class WindowHelper {
       const primaryDisplay = screen.getPrimaryDisplay()
       const workArea = primaryDisplay.workArea;
       const currentBounds = this.overlayWindow.getBounds();
+      const targetWidth = Math.max(currentBounds.width, 600);
       const targetHeight = Math.max(currentBounds.height, 216);
-      const x = Math.floor(workArea.x + (workArea.width - 600) / 2)
+      const x = Math.floor(workArea.x + (workArea.width - targetWidth) / 2)
       const y = Math.floor(workArea.y + (workArea.height - 600) / 2)
 
-      this.overlayWindow.setBounds({ x, y, width: 600, height: targetHeight });
+      this.overlayWindow.setBounds({ x, y, width: targetWidth, height: targetHeight });
 
       if (process.platform === 'win32' && this.contentProtection) {
         // Opacity Shield: Show at 0 opacity first to prevent frame leak
         this.overlayWindow.setOpacity(0);
         this.overlayWindow.show();
         this.applyStealthFlags(this.overlayWindow, true, true);
+        this.setOverlayClickthrough(this.overlayClickthroughEnabled)
         // Small delay to ensure Windows DWM processes the flag before making it opaque
         
         if (this.opacityTimeout) clearTimeout(this.opacityTimeout);
         this.opacityTimeout = setTimeout(() => {
           if (this.overlayWindow && !this.overlayWindow.isDestroyed()) {
             this.overlayWindow.setOpacity(1);
-            this.overlayWindow.focus();
+            if (!this.overlayClickthroughEnabled) {
+              this.overlayWindow.focus();
+            }
             this.overlayWindow.setAlwaysOnTop(true, "floating");
           }
         }, 60);
       } else {
         this.applyStealthFlags(this.overlayWindow, this.contentProtection, true);
+        this.setOverlayClickthrough(this.overlayClickthroughEnabled)
         this.overlayWindow.show();
-        this.overlayWindow.focus();
+        if (!this.overlayClickthroughEnabled) {
+          this.overlayWindow.focus();
+        }
         this.overlayWindow.setAlwaysOnTop(true, "floating");
       }
       this.isWindowVisible = true;

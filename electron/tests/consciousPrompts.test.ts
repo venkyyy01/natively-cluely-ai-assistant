@@ -43,3 +43,18 @@ test('Conscious Mode prompt family includes core response contract fields', () =
     assert.match(combined, new RegExp(key));
   }
 });
+
+test('Conscious Mode prompt family prioritizes system design flow before code', () => {
+  const family = (prompts as Record<string, unknown>).CONSCIOUS_MODE_PROMPT_FAMILY as Record<string, string>;
+  const combined = [
+    family.openingReasoning,
+    family.implementationPath,
+    family.followUpContinuation,
+  ].join('\n');
+
+  assert.match(combined, /requirements|constraints|clarify/i);
+  assert.match(combined, /architecture|components|high-level/i);
+  assert.match(combined, /tradeoffs|bottlenecks/i);
+  assert.match(combined, /scale|reliability|failover/i);
+  assert.match(combined, /before code|before coding|before implementation details/i);
+});

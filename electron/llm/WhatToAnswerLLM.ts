@@ -25,7 +25,7 @@ export class WhatToAnswerLLM {
         temporalContext?: TemporalContext,
         intentResult?: IntentResult,
         imagePaths?: string[],
-        options?: { fastPath?: boolean }
+        options?: { fastPath?: boolean; latestQuestion?: string }
     ): AsyncGenerator<string> {
         try {
             // Build a rich message context
@@ -49,16 +49,17 @@ ANSWER SHAPE: ${intentResult.answerShape}
             }
 
             const extraContext = contextParts.join('\n\n');
-            const fullMessage = extraContext
+            const conversationContext = extraContext
                 ? `${extraContext}\n\nCONVERSATION:\n${cleanedTranscript}`
-                : cleanedTranscript;
+                : `CONVERSATION:\n${cleanedTranscript}`;
+            const primaryQuestion = options?.latestQuestion?.trim() || cleanedTranscript;
 
             // Use Universal Prompt
             // Note: WhatToAnswer has a very specific prompt. 
             // We should use UNIVERSAL_WHAT_TO_ANSWER_PROMPT as override
 
             const prompt = options?.fastPath ? FAST_STANDARD_ANSWER_PROMPT : UNIVERSAL_WHAT_TO_ANSWER_PROMPT;
-            yield* this.llmHelper.streamChat(fullMessage, imagePaths, undefined, prompt, {
+            yield* this.llmHelper.streamChat(primaryQuestion, imagePaths, conversationContext, prompt, {
                 skipKnowledgeInterception: !!options?.fastPath,
             });
 

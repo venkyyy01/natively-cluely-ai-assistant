@@ -11,9 +11,12 @@ function normalizeQuestion(text: string | null | undefined): string {
 
 const PROFILE_PHRASES = [
   'tell me about yourself',
+  'introduce yourself',
   'walk me through your background',
   'walk me through your resume',
   'tell me about your background',
+  'based on your resume',
+  'most relevant to this role',
   'why are you a fit for this role',
   'why are you a good fit for this role',
   'why do you think you are a fit for this role',
@@ -25,6 +28,7 @@ const PROFILE_PHRASES = [
 const PROFILE_QUALIFIERS = [
   'in your background',
   'from your resume',
+  'on your resume',
   'in your past work',
   'in your previous role',
   'in your past experience',
@@ -59,6 +63,7 @@ export function isProfileRequiredQuestion(latestQuestion: string | null | undefi
   const normalized = normalizeQuestion(latestQuestion);
   if (!normalized) return false;
   if (PROFILE_PHRASES.some((phrase) => normalized.includes(phrase))) return true;
+  if (normalized.includes('your background') && normalized.includes('most relevant to this')) return true;
   return normalized.includes('what experience do you have with') && PROFILE_QUALIFIERS.some((q) => normalized.includes(q));
 }
 

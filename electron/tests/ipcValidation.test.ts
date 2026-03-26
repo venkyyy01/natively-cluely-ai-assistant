@@ -85,6 +85,11 @@ test('overlay opacity validation rejects non-finite values', () => {
   assert.throws(() => {
     parseIpcInput(ipcSchemas.overlayOpacity, Number.NaN, 'set-overlay-opacity');
   }, /Invalid IPC payload/);
+
+  assert.equal(parseIpcInput(ipcSchemas.booleanFlag, true, 'set-overlay-clickthrough'), true);
+  assert.throws(() => {
+    parseIpcInput(ipcSchemas.booleanFlag, 'yes', 'set-overlay-clickthrough');
+  }, /Invalid IPC payload/);
 });
 
 test('settings, profile, and rag validation schemas accept bounded payloads', () => {

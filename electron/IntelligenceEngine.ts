@@ -323,7 +323,9 @@ export class IntelligenceEngine extends EventEmitter {
             }
 
             const contextItems = this.session.getContext(180);
-            const baseQuestion = question || this.session.getLastInterviewerTurn() || '';
+            const lastInterim = this.session.getLastInterimInterviewer();
+            const interimQuestion = lastInterim?.text?.trim() || '';
+            const baseQuestion = question || interimQuestion || this.session.getLastInterviewerTurn() || '';
             const knowledgeOrchestrator = this.llmHelper.getKnowledgeOrchestrator?.();
             const knowledgeStatus = knowledgeOrchestrator?.getStatus?.();
             const currentReasoningThread = this.session.getActiveReasoningThread();
@@ -354,7 +356,6 @@ export class IntelligenceEngine extends EventEmitter {
             this.latencyTracker.mark(requestId, 'contextLoaded');
 
             // Inject latest interim transcript if available
-            const lastInterim = this.session.getLastInterimInterviewer();
             if (lastInterim && lastInterim.text.trim().length > 0) {
                 const lastItem = contextItems[contextItems.length - 1];
                 const isDuplicate = lastItem &&
@@ -383,7 +384,7 @@ export class IntelligenceEngine extends EventEmitter {
 
             const lastInterviewerTurn = this.session.getLastInterviewerTurn();
             const activeReasoningThread = this.session.getActiveReasoningThread();
-            const resolvedQuestion = question || lastInterviewerTurn || '';
+            const resolvedQuestion = question || interimQuestion || lastInterviewerTurn || '';
             const accelerationFastPath = route === 'fast_standard_answer';
             const temporalContext = accelerationFastPath
                 ? undefined
@@ -471,6 +472,7 @@ export class IntelligenceEngine extends EventEmitter {
             let fullAnswer = "";
             const stream = this.whatToAnswerLLM.generateStream(preparedTranscript, temporalContext, intentResult, imagePaths, {
                 fastPath: route === 'fast_standard_answer',
+                latestQuestion: resolvedQuestion,
             });
             this.latencyTracker.mark(requestId, 'providerRequestStarted');
 

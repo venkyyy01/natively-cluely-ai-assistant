@@ -281,6 +281,7 @@ interface ElectronAPI {
 
   // Overlay Opacity (Stealth Mode)
   setOverlayOpacity: (opacity: number) => Promise<void>;
+  setOverlayClickthrough: (enabled: boolean) => Promise<void>;
   onOverlayOpacityChanged: (callback: (opacity: number) => void) => () => void;
 
   // Diagnostics
@@ -622,6 +623,7 @@ setOpenAtLogin: (open: boolean) => invokeStatus("set-open-at-login", open),
 
   // Window Mode
   setWindowMode: (mode: 'launcher' | 'overlay') => ipcRenderer.invoke("set-window-mode", mode),
+  setOverlayClickthrough: (enabled: boolean) => invokeVoid('set-overlay-clickthrough', enabled),
 
   // Intelligence Mode Events
   onIntelligenceAssistUpdate: (callback: (data: { insight: string }) => void) => {

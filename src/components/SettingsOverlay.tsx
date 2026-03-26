@@ -354,6 +354,7 @@ const [themeMode, setThemeMode] = useState<'system' | 'light' | 'dark'>('system'
 const [isThemeDropdownOpen, setIsThemeDropdownOpen] = useState(false);
 const [isAiLangDropdownOpen, setIsAiLangDropdownOpen] = useState(false);
 const [generalSettingsError, setGeneralSettingsError] = useState('');
+const [overlayClickthroughEnabled, setOverlayClickthroughEnabled] = useState(() => localStorage.getItem('natively_overlay_clickthrough') === 'true');
 const themeDropdownRef = React.useRef<HTMLDivElement>(null);
 const aiLangDropdownRef = React.useRef<HTMLDivElement>(null);
 
@@ -610,6 +611,13 @@ return () => unsubscribe();
         }, 150);
         return () => clearTimeout(timeoutId);
     }, [overlayOpacity]);
+
+    useEffect(() => {
+        localStorage.setItem('natively_overlay_clickthrough', String(overlayClickthroughEnabled));
+        window.electronAPI?.setOverlayClickthrough?.(overlayClickthroughEnabled).catch(() => {
+            showGeneralSettingsError('Unable to update overlay clickthrough.');
+        });
+    }, [overlayClickthroughEnabled, showGeneralSettingsError]);
 
     useEffect(() => {
         const loadLanguages = async () => {
@@ -1385,7 +1393,9 @@ aiLangDropdownRef={aiLangDropdownRef}
 availableAiLanguages={availableAiLanguages}
 handleAiLanguageChange={handleAiLanguageChange}
               overlayOpacity={overlayOpacity}
+              overlayClickthroughEnabled={overlayClickthroughEnabled}
               handleOpacityChange={handleOpacityChange}
+              setOverlayClickthroughEnabled={setOverlayClickthroughEnabled}
               startPreviewingOpacity={startPreviewingOpacity}
               stopPreviewingOpacity={stopPreviewingOpacity}
               isPreviewingOpacity={isPreviewingOpacity}

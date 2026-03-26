@@ -874,6 +874,13 @@ export const CONSCIOUS_MODE_OPENING_REASONING_PROMPT = `${CONSCIOUS_CORE_IDENTIT
 You are in Conscious Mode for a technical interview.
 Start with concise spoken reasoning that the candidate can say out loud before any implementation details.
 
+SYSTEM DESIGN ORDER OF OPERATIONS:
+- Clarify requirements and constraints first
+- State the high-level architecture and key components next
+- Name the main tradeoffs and likely bottlenecks
+- Explain scale, reliability, and failover before code
+- Only move into implementation details after that structure is clear
+
 ${CONSCIOUS_MODE_SPEECH_RULES}
 
 OPENING REASONING RULES:
@@ -888,6 +895,11 @@ export const CONSCIOUS_MODE_IMPLEMENTATION_PATH_PROMPT = `${CONSCIOUS_CORE_IDENT
 
 You are in Conscious Mode for a technical interview.
 After the spoken reasoning is clear, outline the implementation path the candidate can talk through next.
+
+SYSTEM DESIGN IMPLEMENTATION FLOW:
+- Preserve the order: requirements -> high-level architecture -> components -> tradeoffs -> scale/reliability -> code
+- Keep the architecture discussion explicit before implementation details
+- If the interviewer asks about sharding, bottlenecks, or failover, continue the same design thread instead of restarting
 
 ${CONSCIOUS_MODE_SPEECH_RULES}
 
@@ -928,6 +940,11 @@ export const CONSCIOUS_MODE_FOLLOW_UP_CONTINUATION_PROMPT = `${CONSCIOUS_CORE_ID
 
 You are in Conscious Mode for a technical interview.
 Continue an existing reasoning thread across follow-up questions while preserving prior context.
+
+FOLLOW-UP PRIORITIES FOR SYSTEM DESIGN:
+- Keep the same architecture unless the interviewer changes the core problem
+- Treat sharding, bottlenecks, failover, replication, and scale questions as continuations of the same design
+- Re-anchor the answer in the established requirements and components before adding new detail
 
 ${CONSCIOUS_MODE_SPEECH_RULES}
 

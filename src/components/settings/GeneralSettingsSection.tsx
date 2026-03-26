@@ -6,6 +6,7 @@ import {
   Brain,
   Check,
   ChevronDown,
+  MousePointerClick,
   Eye,
   Ghost,
   Globe,
@@ -52,9 +53,11 @@ setIsAiLangDropdownOpen: (open: boolean) => void;
 aiLangDropdownRef: React.RefObject<HTMLDivElement>;
 availableAiLanguages: Array<{ code: string; label: string }>;
 handleAiLanguageChange: (code: string) => void | Promise<void>;
-overlayOpacity: number;
-handleOpacityChange: (value: number) => void;
-startPreviewingOpacity: () => void;
+  overlayOpacity: number;
+  overlayClickthroughEnabled: boolean;
+  handleOpacityChange: (value: number) => void;
+  setOverlayClickthroughEnabled: (value: boolean) => void;
+  startPreviewingOpacity: () => void;
 stopPreviewingOpacity: () => void;
 isPreviewingOpacity: boolean;
   disguiseMode: 'none' | 'terminal' | 'settings' | 'activity';
@@ -86,7 +89,9 @@ export const GeneralSettingsSection: React.FC<GeneralSettingsSectionProps> = ({
   availableAiLanguages,
   handleAiLanguageChange,
   overlayOpacity,
+  overlayClickthroughEnabled,
   handleOpacityChange,
+  setOverlayClickthroughEnabled,
   startPreviewingOpacity,
   stopPreviewingOpacity,
   isPreviewingOpacity,
@@ -415,6 +420,31 @@ className={`w-11 h-6 rounded-full relative transition-colors ${consciousModeEnab
               <p className="text-xs text-text-tertiary mt-2">
                 Controls the visibility of the in-meeting overlay. <span className="text-text-secondary">Hold the slider to preview.</span>
               </p>
+            </div>
+
+            <div className="bg-bg-item-surface rounded-xl p-5 border border-border-subtle mt-4">
+              <div className="flex items-start justify-between gap-4">
+                <div className="flex items-start gap-3">
+                  <div className="w-9 h-9 bg-bg-component rounded-lg border border-border-subtle flex items-center justify-center text-text-tertiary shrink-0">
+                    <MousePointerClick size={16} />
+                  </div>
+                  <div>
+                    <h3 className="text-sm font-bold text-text-primary">Overlay Clickthrough</h3>
+                    <p className="text-xs text-text-secondary mt-0.5">
+                      Let mouse clicks pass through the meeting overlay to the app underneath while keeping the overlay visible.
+                    </p>
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  aria-pressed={overlayClickthroughEnabled}
+                  onClick={() => setOverlayClickthroughEnabled(!overlayClickthroughEnabled)}
+                  className={`w-11 h-6 rounded-full relative transition-colors ${overlayClickthroughEnabled ? 'bg-accent-primary' : 'bg-bg-toggle-switch border border-border-muted'}`}
+                >
+                  <div className={`absolute top-1 left-1 w-4 h-4 rounded-full bg-white transition-transform ${overlayClickthroughEnabled ? 'translate-x-5' : 'translate-x-0'}`} />
+                </button>
+              </div>
             </div>
           </div>
         </div>

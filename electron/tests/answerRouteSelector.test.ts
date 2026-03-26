@@ -42,6 +42,8 @@ test('route selector sends conscious questions to conscious route without intent
 test('route selector uses conservative profile and knowledge heuristics', () => {
   assert.equal(isProfileRequiredQuestion('What experience do you have with Redis?'), false);
   assert.equal(isProfileRequiredQuestion('What experience do you have with Redis in your previous role?'), true);
+  assert.equal(isProfileRequiredQuestion('Which part of your background is most relevant to this backend role?'), true);
+  assert.equal(isProfileRequiredQuestion('Can you introduce yourself based on your resume?'), true);
   assert.equal(isKnowledgeRequiredQuestion('Why do you want to work here?'), true);
   assert.equal(isKnowledgeRequiredQuestion('How would you design a rate limiter?'), false);
 });

@@ -219,7 +219,7 @@ function isTechnicalQuestion(lower: string): boolean {
 }
 
 function isQuestionContinuationPhrase(lower: string): boolean {
-  return /(walk me through your thinking again|walk through your thinking again|walk me through your thinking|why this approach|why this|what are the tradeoffs|what if .*|edge cases|failure modes|how would this scale|how does this scale|what metrics would you watch first|which metrics would you watch first)/i.test(lower);
+  return /(walk me through your thinking again|walk through your thinking again|walk me through your thinking|why this approach|why this|what are the tradeoffs|what if .*|edge cases|failure modes|how would this scale|how does this scale|what metrics would you watch first|which metrics would you watch first|how would you shard this|what happens during failover|how would you handle failover|what if a node fails|what if a shard gets hot|where is the bottleneck)/i.test(lower);
 }
 
 function isGenericPushback(lower: string): boolean {

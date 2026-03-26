@@ -388,6 +388,7 @@ test('window handlers preserve window control and resize contracts', async () =>
   const registry = createHandlerRegistry();
   const calls: string[] = [];
   const dimensionCalls: Array<{ target: 'settings' | 'overlay'; width: number; height: number }> = [];
+  const clickthroughCalls: boolean[] = [];
   const settingsWindow = { isDestroyed: () => false, webContents: { id: 101 } };
   const overlayWindow = { isDestroyed: () => false, webContents: { id: 202 } };
 
@@ -402,12 +403,16 @@ test('window handlers preserve window control and resize contracts', async () =>
       getOverlayWindow: () => typeof overlayWindow;
       getLauncherWindow: () => null;
       setOverlayDimensions: (width: number, height: number) => void;
+      setOverlayClickthrough: (enabled: boolean) => void;
       setWindowMode: (mode: string) => void;
     } => ({
       getOverlayWindow: () => overlayWindow,
       getLauncherWindow: () => null,
       setOverlayDimensions: (width: number, height: number) => {
         dimensionCalls.push({ target: 'overlay', width, height });
+      },
+      setOverlayClickthrough: (enabled: boolean) => {
+        clickthroughCalls.push(enabled);
       },
       setWindowMode: (mode: string) => {
         calls.push(`mode:${mode}`);
@@ -431,6 +436,14 @@ test('window handlers preserve window control and resize contracts', async () =>
 
   assert.deepEqual(await registry.handlers.get('set-window-mode')?.({}, 'overlay'), {
     success: true,
+  });
+  assert.deepEqual(await registry.handlers.get('set-overlay-clickthrough')?.({}, true), {
+    success: true,
+    data: { enabled: true },
+  });
+  assert.deepEqual(await registry.handlers.get('set-overlay-clickthrough')?.({}, false), {
+    success: true,
+    data: { enabled: false },
   });
   assert.deepEqual(await registry.handlers.get('toggle-window')?.({}), {
     success: true,
@@ -457,10 +470,13 @@ test('window handlers preserve window control and resize contracts', async () =>
   await registry.handlers.get('update-content-dimensions')?.({ sender: { id: 202 } }, { width: 720, height: 360 });
 
   assert.deepEqual(calls, ['mode:overlay', 'toggle', 'show', 'hide', 'right', 'center']);
+  assert.deepEqual(clickthroughCalls, [true, false]);
   assert.deepEqual(dimensionCalls, [
     { target: 'settings', width: 640, height: 480 },
     { target: 'overlay', width: 720, height: 360 },
   ]);
+
+  assert.throws(() => registry.handlers.get('set-overlay-clickthrough')?.({}, 'yes'), /Invalid IPC payload/);
 });
 
 test('profile handlers validate inputs and normalize errors', async () => {

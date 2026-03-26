@@ -41,6 +41,15 @@ export function registerWindowHandlers({ appState, safeHandle, safeHandleValidat
     },
   );
 
+  safeHandleValidated(
+    'set-overlay-clickthrough',
+    (args) => [parseIpcInput(ipcSchemas.booleanFlag, args[0], 'set-overlay-clickthrough')] as const,
+    async (_event, enabled) => {
+      appState.getWindowHelper().setOverlayClickthrough(enabled);
+      return ok({ enabled });
+    },
+  );
+
   safeHandle('toggle-window', async () => {
     appState.toggleMainWindow();
     return ok(null);
