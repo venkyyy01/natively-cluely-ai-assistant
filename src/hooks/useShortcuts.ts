@@ -35,11 +35,11 @@ export const DEFAULT_SHORTCUTS: ShortcutConfig = {
     moveWindowDown: ['⌘', '↓'],
     moveWindowLeft: ['⌘', '←'],
     moveWindowRight: ['⌘', '→'],
-    toggleVisibility: ['⌘', 'B'],
+    toggleVisibility: ['⌘', '⌥', '⇧', 'V'],
     processScreenshots: ['⌘', 'Enter'],
     resetCancel: ['⌘', 'R'],
-    takeScreenshot: ['⌘', 'H'],
-    selectiveScreenshot: ['⌘', 'Shift', 'H']
+    takeScreenshot: ['⌘', '⌥', '⇧', 'S'],
+    selectiveScreenshot: ['⌘', '⌥', '⇧', 'A']
 };
 
 export const useShortcuts = () => {

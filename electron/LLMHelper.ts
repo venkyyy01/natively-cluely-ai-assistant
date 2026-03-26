@@ -113,6 +113,7 @@ export interface ModelFallbackEvent {
 }
 
 export class LLMHelper {
+  public static __testAxios: null | ((config: any) => Promise<any>) = null;
   private client: GoogleGenAI | null = null
   private groqClient: Groq | null = null
   private openaiClient: OpenAI | null = null
@@ -1490,21 +1491,35 @@ ANSWER DIRECTLY:`;
 
     // 4. Execute
     try {
-      const response = await axios({
+      const axiosImpl = LLMHelper.__testAxios ?? axios;
+      const response = await axiosImpl({
         method: curlConfig.method || 'POST',
         url: url,
         headers: headers,
-        data: data
+        data: data,
+        timeout: LLM_API_TIMEOUT_MS,
       });
 
       // 5. Extract Answer
       // If user didn't specify a path, try to guess or dump string
-      if (!responsePath) return JSON.stringify(response.data);
+      if (!responsePath) {
+        const guessed = this.extractFromCommonFormats(response.data, true);
+        return guessed && guessed.trim().length > 0 ? guessed : JSON.stringify(response.data);
+      }
 
       const answer = getByPath(response.data, responsePath);
 
-      if (typeof answer === 'string') return answer;
-      return JSON.stringify(answer); // Fallback if they pointed to an object
+      if (typeof answer === 'string' && answer.trim().length > 0) return answer;
+      if (answer !== null && answer !== undefined) {
+        if (typeof answer === 'number' || typeof answer === 'boolean') return String(answer);
+        if (Array.isArray(answer) && answer.length > 0) return JSON.stringify(answer);
+        if (typeof answer === 'object' && Object.keys(answer).length > 0) return JSON.stringify(answer);
+      }
+
+      const guessed = this.extractFromCommonFormats(response.data, false);
+      if (guessed && guessed.trim().length > 0) return guessed;
+
+      throw new Error(`cURL response extraction failed for path: ${responsePath}`);
 
     } catch (error: any) {
       console.error("[LLMHelper] cURL Execution Error:", error.message);
@@ -1622,7 +1637,7 @@ ANSWER DIRECTLY:`;
       }
 
       // 6. Extract Answer - try common response formats
-      const extracted = this.extractFromCommonFormats(data);
+      const extracted = this.extractFromCommonFormats(data, true);
       console.log(`[LLMHelper] Custom Provider extracted text length: ${extracted.length}`);
       return extracted;
     } catch (error) {
@@ -1635,7 +1650,7 @@ ANSWER DIRECTLY:`;
    * Try to extract text content from common LLM API response formats.
    * Supports: Ollama, OpenAI, Anthropic, and generic formats.
    */
-  private extractFromCommonFormats(data: any): string {
+  private extractFromCommonFormats(data: any, allowRawJsonFallback: boolean = true): string {
     if (!data || typeof data === 'string') return data || "";
 
     // Ollama format: { response: "..." }
@@ -1660,8 +1675,12 @@ ANSWER DIRECTLY:`;
     if (typeof data.result === 'string') return data.result;
 
     // Fallback: stringify the whole response
-    console.warn("[LLMHelper] Could not extract text from custom provider response, returning raw JSON");
-    return JSON.stringify(data);
+    if (allowRawJsonFallback) {
+      console.warn("[LLMHelper] Could not extract text from custom provider response, returning raw JSON");
+      return JSON.stringify(data);
+    }
+
+    return "";
   }
 
   /**

@@ -6,17 +6,19 @@ export interface KeybindConfig {
     id: string;
     label: string;
     accelerator: string; // Electron Accelerator string
+    alternateAccelerators?: string[];
     isGlobal: boolean;   // Registered with globalShortcut
     defaultAccelerator: string;
 }
 
 export const DEFAULT_KEYBINDS: KeybindConfig[] = [
     // General
-    { id: 'general:toggle-visibility', label: 'Toggle Visibility', accelerator: 'CommandOrControl+B', isGlobal: true, defaultAccelerator: 'CommandOrControl+B' },
+    { id: 'general:toggle-visibility', label: 'Toggle Visibility', accelerator: 'Command+Alt+Shift+V', alternateAccelerators: ['F13'], isGlobal: true, defaultAccelerator: 'Command+Alt+Shift+V' },
+    { id: 'general:toggle-clickthrough', label: 'Toggle Clickthrough', accelerator: 'Command+Alt+Shift+M', alternateAccelerators: ['F16'], isGlobal: true, defaultAccelerator: 'Command+Alt+Shift+M' },
     { id: 'general:process-screenshots', label: 'Process Screenshots', accelerator: 'CommandOrControl+Enter', isGlobal: false, defaultAccelerator: 'CommandOrControl+Enter' },
     { id: 'general:reset-cancel', label: 'Reset / Cancel', accelerator: 'CommandOrControl+R', isGlobal: false, defaultAccelerator: 'CommandOrControl+R' },
-    { id: 'general:take-screenshot', label: 'Take Screenshot', accelerator: 'CommandOrControl+H', isGlobal: true, defaultAccelerator: 'CommandOrControl+H' },
-    { id: 'general:selective-screenshot', label: 'Selective Screenshot', accelerator: 'CommandOrControl+Shift+H', isGlobal: true, defaultAccelerator: 'CommandOrControl+Shift+H' },
+    { id: 'general:take-screenshot', label: 'Take Screenshot', accelerator: 'Command+Alt+Shift+S', alternateAccelerators: ['F14'], isGlobal: true, defaultAccelerator: 'Command+Alt+Shift+S' },
+    { id: 'general:selective-screenshot', label: 'Selective Screenshot', accelerator: 'Command+Alt+Shift+A', alternateAccelerators: ['F15'], isGlobal: true, defaultAccelerator: 'Command+Alt+Shift+A' },
 
     // Chat - Window Local (Handled via Menu or Renderer logic, but centralized here)
     { id: 'chat:whatToAnswer', label: 'What to Answer', accelerator: 'CommandOrControl+1', isGlobal: false, defaultAccelerator: 'CommandOrControl+1' },
@@ -139,8 +141,11 @@ export class KeybindManager {
         this.keybinds.forEach(kb => {
             if (kb.isGlobal && kb.accelerator && kb.accelerator.trim() !== '') {
                 try {
-                    globalShortcut.register(kb.accelerator, () => {
-                        this.onShortcutTriggeredCallbacks.forEach(cb => cb(kb.id));
+                    const accelerators = [kb.accelerator, ...(kb.alternateAccelerators || [])].filter(Boolean);
+                    accelerators.forEach((accelerator) => {
+                        globalShortcut.register(accelerator, () => {
+                            this.onShortcutTriggeredCallbacks.forEach(cb => cb(kb.id));
+                        });
                     });
                 } catch (e) {
                     console.error(`[KeybindManager] Failed to register global shortcut ${kb.accelerator}:`, e);
@@ -183,6 +188,13 @@ export class KeybindManager {
                             // Require AppState dynamically to avoid circular dependencies
                             const { AppState } = require('../main');
                             AppState.getInstance().toggleMainWindow();
+                        }
+                    },
+                    {
+                        label: 'Toggle Clickthrough',
+                        accelerator: this.getKeybind('general:toggle-clickthrough') || 'CommandOrControl+Shift+M',
+                        click: () => {
+                            this.windowHelper?.toggleOverlayClickthrough?.();
                         }
                     },
                     { type: 'separator' },

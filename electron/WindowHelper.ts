@@ -137,6 +137,12 @@ export class WindowHelper {
     }
   }
 
+  public toggleOverlayClickthrough(): boolean {
+    const next = !this.overlayClickthroughEnabled
+    this.setOverlayClickthrough(next)
+    return next
+  }
+
   public createWindow(): void {
     if (this.launcherWindow !== null) return // Already created
 

@@ -338,6 +338,12 @@ this.modelSelectorWindowHelper.setContentProtection(this.isUndetectable);
       try {
         if (actionId === 'general:toggle-visibility') {
           this.toggleMainWindow();
+        } else if (actionId === 'general:toggle-clickthrough') {
+          const enabled = this.windowHelper.toggleOverlayClickthrough();
+          const mainWindow = this.getMainWindow();
+          if (mainWindow) {
+            mainWindow.webContents.send('overlay-clickthrough-changed', enabled);
+          }
         } else if (actionId === 'general:take-screenshot') {
           const screenshotPath = await this.takeScreenshot();
           const preview = await this.getImagePreview(screenshotPath);
@@ -1753,7 +1759,7 @@ try {
     if (!this.tray) return;
 
     const keybindManager = KeybindManager.getInstance();
-    const screenshotAccel = keybindManager.getKeybind('general:take-screenshot') || 'CommandOrControl+H';
+    const screenshotAccel = keybindManager.getKeybind('general:take-screenshot') || 'Command+Alt+Shift+S';
 
     console.log('[Main] updateTrayMenu called. Screenshot Accelerator:', screenshotAccel);
 
@@ -1773,7 +1779,7 @@ try {
     const displayScreenshot = formatAccel(screenshotAccel);
     // We can also get the toggle visibility shortcut if desired
     const toggleKb = keybindManager.getKeybind('general:toggle-visibility');
-    const toggleAccel = toggleKb || 'CommandOrControl+B';
+    const toggleAccel = toggleKb || 'Command+Alt+Shift+V';
     const displayToggle = formatAccel(toggleAccel);
 
     const contextMenu = Menu.buildFromTemplate([

@@ -1023,8 +1023,8 @@ Click **Live Insights** during a call to view:
 - Enable **Smart Mode** for advanced reasoning and coding assistance
 
 ## Screenshots
-- **Full Screen Screenshot**: Cmd + H
-- **Selective Screenshot**: Cmd + Shift + H
+- **Full Screen Screenshot**: Cmd + Option + Shift + S (alternate: F14)
+- **Selective Screenshot**: Cmd + Option + Shift + A (alternate: F15)
 
 # Making the Most of Natively
 
@@ -1124,9 +1124,9 @@ natively.contact@gmail.com`;
                 { speaker: 'user', text: "What about the other buttons?", timestamp: 30000 },
                 { speaker: 'interviewer', text: "'Follow Up Questions' suggests questions you can ask. 'Answer' lets you speak a question and get an instant response.", timestamp: 35000 },
                 { speaker: 'user', text: "Can I take screenshots during calls?", timestamp: 45000 },
-                { speaker: 'interviewer', text: "Yes! Press Cmd+H for full screen or Cmd+Shift+H to select an area. The AI will analyze it and help you.", timestamp: 50000 },
+                { speaker: 'interviewer', text: "Yes! Press Cmd+Option+Shift+S for full screen or Cmd+Option+Shift+A to select an area. F14 and F15 also work as alternates. The AI will analyze it and help you.", timestamp: 50000 },
                 { speaker: 'user', text: "How do I hide Natively during screen share?", timestamp: 60000 },
-                { speaker: 'interviewer', text: "Press Cmd+B to toggle visibility anytime. You can also enable undetectable mode in settings.", timestamp: 65000 },
+                { speaker: 'interviewer', text: "Press Cmd+Option+Shift+V to toggle visibility anytime. F13 also works as an alternate. You can also enable undetectable mode in settings.", timestamp: 65000 },
                 { speaker: 'user', text: "This is amazing. What happens after the call?", timestamp: 75000 },
                 { speaker: 'interviewer', text: "You get detailed meeting notes with action items, key points, full transcript, and a log of all AI interactions.", timestamp: 80000 }
             ],

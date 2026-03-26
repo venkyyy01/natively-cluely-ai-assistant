@@ -133,6 +133,7 @@ setDisguise: (mode: 'terminal' | 'settings' | 'activity' | 'none') => Promise<St
   deleteMeeting: (id: string) => Promise<boolean>
   setWindowMode: (mode: 'launcher' | 'overlay') => Promise<void>
   setOverlayClickthrough: (enabled: boolean) => Promise<void>
+  onOverlayClickthroughChanged: (callback: (enabled: boolean) => void) => () => void
 
   // Intelligence Mode Events
   onIntelligenceAssistUpdate: (callback: (data: { insight: string }) => void) => () => void

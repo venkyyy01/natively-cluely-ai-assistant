@@ -5,7 +5,7 @@ import {
     ArrowUp, ArrowDown, ArrowLeft, ArrowRight,
     Camera, RotateCcw, Eye, Layout, MessageSquare, Crop,
     ChevronDown, ChevronUp, Check, BadgeCheck, Power, Palette, Calendar, Ghost, Sun, Moon, RefreshCw, Info, Globe, FlaskConical, Terminal, Settings, Activity, ExternalLink, Trash2,
-    Sparkles, Pencil, Briefcase, Building2, Search, MapPin, CheckCircle, HelpCircle, Zap, SlidersHorizontal
+    Sparkles, Pencil, Briefcase, Building2, Search, MapPin, CheckCircle, HelpCircle, Zap, SlidersHorizontal, MousePointerClick
 } from 'lucide-react';
 import { analytics } from '../lib/analytics/analytics.service';
 import { AboutSection } from './AboutSection';
@@ -345,6 +345,12 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({ isOpen, onClose, init
     }, [isOpen, initialTab]);
     
 const { shortcuts, updateShortcut, resetShortcuts } = useShortcuts();
+const globalShortcutAlternates: Record<string, string> = {
+    toggleVisibility: 'Alt: F13',
+    takeScreenshot: 'Alt: F14',
+    selectiveScreenshot: 'Alt: F15',
+    toggleClickthrough: 'Alt: F16',
+};
   const [isUndetectable, setIsUndetectable] = useState(false);
   const [disguiseMode, setDisguiseMode] = useState<'terminal' | 'settings' | 'activity' | 'none'>('none');
 const [openOnLogin, setOpenOnLogin] = useState(false);
@@ -618,6 +624,13 @@ return () => unsubscribe();
             showGeneralSettingsError('Unable to update overlay clickthrough.');
         });
     }, [overlayClickthroughEnabled, showGeneralSettingsError]);
+
+    useEffect(() => {
+        const unsubscribe = window.electronAPI?.onOverlayClickthroughChanged?.((enabled) => {
+            setOverlayClickthroughEnabled(enabled);
+        });
+        return () => unsubscribe?.();
+    }, []);
 
     useEffect(() => {
         const loadLanguages = async () => {
@@ -1928,7 +1941,10 @@ handleAiLanguageChange={handleAiLanguageChange}
                                                 <div className="flex items-center justify-between py-1.5 group">
                                                     <div className="flex items-center gap-3">
                                                         <span className="text-text-tertiary group-hover:text-text-primary transition-colors w-5 flex justify-center"><Eye size={14} /></span>
-                                                        <span className="text-sm text-text-secondary font-medium group-hover:text-text-primary transition-colors">Toggle Visibility</span>
+                                                        <div className="flex flex-col">
+                                                            <span className="text-sm text-text-secondary font-medium group-hover:text-text-primary transition-colors">Toggle Visibility</span>
+                                                            <span className="text-[11px] text-text-tertiary">{globalShortcutAlternates.toggleVisibility}</span>
+                                                        </div>
                                                     </div>
                                                     <KeyRecorder
                                                         currentKeys={shortcuts.toggleVisibility}
@@ -1958,7 +1974,10 @@ handleAiLanguageChange={handleAiLanguageChange}
                                                 <div className="flex items-center justify-between py-1.5 group">
                                                     <div className="flex items-center gap-3">
                                                         <span className="text-text-tertiary group-hover:text-text-primary transition-colors w-5 flex justify-center"><Camera size={14} /></span>
-                                                        <span className="text-sm text-text-secondary font-medium group-hover:text-text-primary transition-colors">Take Screenshot</span>
+                                                        <div className="flex flex-col">
+                                                            <span className="text-sm text-text-secondary font-medium group-hover:text-text-primary transition-colors">Take Screenshot</span>
+                                                            <span className="text-[11px] text-text-tertiary">{globalShortcutAlternates.takeScreenshot}</span>
+                                                        </div>
                                                     </div>
                                                     <KeyRecorder
                                                         currentKeys={shortcuts.takeScreenshot}
@@ -1968,12 +1987,27 @@ handleAiLanguageChange={handleAiLanguageChange}
                                                 <div className="flex items-center justify-between py-1.5 group">
                                                     <div className="flex items-center gap-3">
                                                         <span className="text-text-tertiary group-hover:text-text-primary transition-colors w-5 flex justify-center"><Crop size={14} /></span>
-                                                        <span className="text-sm text-text-secondary font-medium group-hover:text-text-primary transition-colors">Selective Screenshot</span>
+                                                        <div className="flex flex-col">
+                                                            <span className="text-sm text-text-secondary font-medium group-hover:text-text-primary transition-colors">Selective Screenshot</span>
+                                                            <span className="text-[11px] text-text-tertiary">{globalShortcutAlternates.selectiveScreenshot}</span>
+                                                        </div>
                                                     </div>
                                                     <KeyRecorder
                                                         currentKeys={shortcuts.selectiveScreenshot}
                                                         onSave={(keys) => updateShortcut('selectiveScreenshot', keys)}
                                                     />
+                                                </div>
+                                                <div className="flex items-center justify-between py-1.5 group">
+                                                    <div className="flex items-center gap-3">
+                                                        <span className="text-text-tertiary group-hover:text-text-primary transition-colors w-5 flex justify-center"><MousePointerClick size={14} /></span>
+                                                        <div className="flex flex-col">
+                                                            <span className="text-sm text-text-secondary font-medium group-hover:text-text-primary transition-colors">Toggle Clickthrough</span>
+                                                            <span className="text-[11px] text-text-tertiary">{globalShortcutAlternates.toggleClickthrough}</span>
+                                                        </div>
+                                                    </div>
+                                                    <div className="px-2.5 py-1 rounded-md border border-border-subtle text-[11px] text-text-tertiary bg-bg-subtle/30">
+                                                        Global only
+                                                    </div>
                                                 </div>
                                             </div>
                                         </div>
