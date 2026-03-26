@@ -416,7 +416,10 @@ run_with_spinner "building and packaging release" env SKIP_PRODUCTION_VERIFY=1 n
 
 success "Build & packaging complete"
 
-mapfile -t PACKAGED_ARTIFACTS < <(collect_packaged_artifacts "$RELEASE_DIR")
+PACKAGED_ARTIFACTS=()
+while IFS= read -r artifact_path; do
+    PACKAGED_ARTIFACTS+=("$artifact_path")
+done < <(collect_packaged_artifacts "$RELEASE_DIR")
 APP_GLOB="${PACKAGED_ARTIFACTS[0]}"
 PACKAGED_DMG="${PACKAGED_ARTIFACTS[1]}"
 PACKAGED_ZIP="${PACKAGED_ARTIFACTS[2]}"

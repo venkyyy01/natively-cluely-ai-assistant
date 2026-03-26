@@ -326,6 +326,15 @@ export class IntelligenceEngine extends EventEmitter {
             const baseQuestion = question || this.session.getLastInterviewerTurn() || '';
             const knowledgeOrchestrator = this.llmHelper.getKnowledgeOrchestrator?.();
             const knowledgeStatus = knowledgeOrchestrator?.getStatus?.();
+            const currentReasoningThread = this.session.getActiveReasoningThread();
+            const preRouteConsciousDecision = this.session.isConsciousModeEnabled()
+                ? classifyConsciousModeQuestion(baseQuestion, currentReasoningThread)
+                : { qualifies: false, threadAction: 'ignore' as const };
+
+            if (preRouteConsciousDecision.threadAction === 'reset') {
+                this.session.clearConsciousModeThread();
+            }
+
             const route = selectAnswerRoute({
                 explicitManual: false,
                 explicitFollowUp: false,
@@ -334,7 +343,9 @@ export class IntelligenceEngine extends EventEmitter {
                 hasProfile: !!knowledgeStatus?.hasResume,
                 hasKnowledgeData: !!knowledgeStatus?.hasResume || !!knowledgeStatus?.hasActiveJD,
                 latestQuestion: baseQuestion,
-                activeReasoningThread: this.session.getActiveReasoningThread(),
+                activeReasoningThread: preRouteConsciousDecision.threadAction === 'reset'
+                    ? null
+                    : currentReasoningThread,
             });
             const capability = typeof (this.llmHelper as any).getProviderCapabilityClass === 'function'
                 ? (this.llmHelper as any).getProviderCapabilityClass()
