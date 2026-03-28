@@ -15,7 +15,7 @@ type Options = {
   getTargetElement?: (container: HTMLElement, messageId: string) => HTMLElement | null;
 };
 
-const HUMAN_WORDS_PER_MINUTE = 250;
+const HUMAN_WORDS_PER_MINUTE = 211;
 const MIN_SCROLL_DURATION_MS = 8000;
 const MAX_SCROLL_DURATION_MS = 45000;
 const MANUAL_PAUSE_MS = 12000;
@@ -30,6 +30,15 @@ function estimateDurationMs(content: string): number {
     return MIN_SCROLL_DURATION_MS;
   }
   return clamp((words / HUMAN_WORDS_PER_MINUTE) * 60_000, MIN_SCROLL_DURATION_MS, MAX_SCROLL_DURATION_MS);
+}
+
+function getElementOffsetWithinContainer(container: HTMLElement, targetElement: HTMLElement | null): number {
+  if (!targetElement) {
+    return 0;
+  }
+  const containerRect = container.getBoundingClientRect();
+  const targetRect = targetElement.getBoundingClientRect();
+  return Math.max(0, container.scrollTop + (targetRect.top - containerRect.top));
 }
 
 export function useHumanSpeedAutoScroll({
@@ -75,15 +84,16 @@ export function useHumanSpeedAutoScroll({
       return;
     }
 
-    if (Date.now() < manualPauseUntilRef.current) {
-      return;
-    }
-
     if (activeMessageIdRef.current !== latestMessage.id) {
       const targetElement = getTargetElement?.(container, latestMessage.id);
-      const targetOffset = targetElement ? Math.max(0, targetElement.offsetTop - container.offsetTop) : 0;
+      const targetOffset = getElementOffsetWithinContainer(container, targetElement || null);
+      manualPauseUntilRef.current = 0;
       container.scrollTop = targetOffset;
       activeMessageIdRef.current = latestMessage.id;
+    }
+
+    if (Date.now() < manualPauseUntilRef.current) {
+      return;
     }
 
     const durationMs = estimateDurationMs(latestMessage.content);
@@ -91,8 +101,10 @@ export function useHumanSpeedAutoScroll({
     let targetStart = container.scrollTop;
     const computeSpeed = () => {
       const targetElement = getTargetElement?.(container, latestMessage.id);
-      targetStart = targetElement ? Math.max(0, targetElement.offsetTop - container.offsetTop) : targetStart;
-      const targetBottom = targetElement ? Math.max(targetStart, targetElement.offsetTop - container.offsetTop + targetElement.scrollHeight - container.clientHeight) : Math.max(0, container.scrollHeight - container.clientHeight);
+      targetStart = getElementOffsetWithinContainer(container, targetElement || null);
+      const targetBottom = targetElement
+        ? Math.max(targetStart, targetStart + targetElement.scrollHeight - container.clientHeight)
+        : Math.max(0, container.scrollHeight - container.clientHeight);
       speedPxPerMs = Math.max(0, targetBottom - targetStart) / durationMs;
       return targetBottom;
     };
