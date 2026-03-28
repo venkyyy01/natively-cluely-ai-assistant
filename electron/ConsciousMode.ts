@@ -186,6 +186,21 @@ function isQuestionLike(lower: string): boolean {
   return /\?$/.test(lower) || /^(how|what|why|when|where|which|who|can|could|would|walk me through|tell me)/i.test(lower);
 }
 
+function isSubstantialConversationTurn(lower: string): boolean {
+  const words = lower.split(/\s+/).filter(Boolean);
+  if (words.length < 4) return false;
+  if (isAdministrativePrompt(lower)) return false;
+  return isBroadConsciousSeed(lower) || /^(let me (walk through|start with|explain|show)|walk me through|tell me about|describe|give me an example|switch gears and talk about)/i.test(lower);
+}
+
+function isBroadConsciousSeed(lower: string): boolean {
+  return /(design|architecture|component|service|database|api|scale|scaling|throughput|latency|tradeoff|failure|retry|cache|queue|shard|replica|microservice|monolith|algorithm|data structure|complexity|optimi[sz]e|tell me about a time|describe a situation|give me an example|challenge|conflict|leadership|project)/i.test(lower);
+}
+
+function isAdministrativePrompt(lower: string): boolean {
+  return /(repeat that|say that again|calendar invite|sounds good|okay|ok|got it|fine|warmup is done|done already|all set)/i.test(lower);
+}
+
 function isSystemDesignQuestion(lower: string): boolean {
   return /(^how would you design\b|\bsystem design\b|\barchitect\b|\bhigh[- ]level design\b|\bdistributed system\b|\brate limiter\b|\bpartition\b|\bmonolith to microservices\b|\bmigrate a monolith\b|\bdesign the data model\b|\bdesign a .*system\b|\bdesign an .*system\b|\bdesign the .*system\b|\bdesign a .*service\b|\bdesign an .*service\b|\bdesign the .*service\b)/i.test(lower);
 }
@@ -222,13 +237,17 @@ export function classifyConsciousModeQuestion(
     }
 
     if (isExplicitTopicShift(lower)) {
-      return { qualifies: false, threadAction: 'reset' };
+      return { qualifies: true, threadAction: 'reset' };
+    }
+
+    if (((questionLike && normalizedQuestion.split(/\s+/).length >= 3) || isSubstantialConversationTurn(lower)) && !isAdministrativePrompt(lower)) {
+      return { qualifies: true, threadAction: 'continue' };
     }
 
     return { qualifies: false, threadAction: 'ignore' };
   }
 
-  if (questionLike && systemDesignQuestion) {
+  if ((((questionLike && normalizedQuestion.split(/\s+/).length >= 3) && (systemDesignQuestion || isBroadConsciousSeed(lower) || normalizedQuestion.split(/\s+/).length >= 5)) || isSubstantialConversationTurn(lower)) && !isAdministrativePrompt(lower)) {
     return { qualifies: true, threadAction: 'start' };
   }
 
@@ -246,7 +265,7 @@ export function shouldAutoTriggerSuggestionFromTranscript(
   }
 
   if (consciousModeEnabled) {
-    return classifyConsciousModeQuestion(trimmed, activeReasoningThread).qualifies;
+    return classifyConsciousModeQuestion(trimmed, activeReasoningThread).qualifies || isSubstantialConversationTurn(trimmed.toLowerCase());
   }
 
   const wordCount = trimmed.split(/\s+/).filter(Boolean).length;

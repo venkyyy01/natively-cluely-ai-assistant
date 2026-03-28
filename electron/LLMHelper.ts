@@ -959,6 +959,9 @@ ANSWER DIRECTLY:`;
    * Helper to inject language instruction into system prompt
    */
   private injectLanguageInstruction(systemPrompt: string): string {
+    if (this.isStructuredOutputRequest(systemPrompt)) {
+      return `${systemPrompt}\n\nCRITICAL: You MUST respond ONLY in ${this.aiResponseLanguage}. This is an absolute requirement.`;
+    }
     return `${systemPrompt}\n\n${INDIAN_ENGLISH_STYLE_INSTRUCTION}\n\nCRITICAL: You MUST respond ONLY in ${this.aiResponseLanguage}. This is an absolute requirement. All generated text that the user should say must be in ${this.aiResponseLanguage}.`;
   }
 
@@ -1150,8 +1153,13 @@ ANSWER DIRECTLY:`;
     return /\b(detailed|detail|deep dive|in depth|step by step|thorough|comprehensive|elaborate|full explanation|longer version)\b/i.test(message);
   }
 
+  private isStructuredOutputRequest(input?: string): boolean {
+    if (!input) return false;
+    return /(STRUCTURED_REASONING_RESPONSE|Return JSON|mode, openingReasoning, implementationPlan|JSON with keys|reasoning_first)/i.test(input);
+  }
+
   private applyDefaultBrevityHint(message: string): string {
-    if (this.wantsDetailedResponse(message)) {
+    if (this.wantsDetailedResponse(message) || this.isStructuredOutputRequest(message)) {
       return message;
     }
     return `${message}\n\nAnswer briefly and directly. Keep it to 2-3 short sentences unless code is required.`;

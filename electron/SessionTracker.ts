@@ -18,6 +18,7 @@ import {
   mergeConsciousModeResponses,
 } from './ConsciousMode';
 import { ThreadManager, InterviewPhaseDetector, TokenBudgetManager, InterviewPhase } from './conscious';
+import { RESUME_THRESHOLD } from './conscious/types';
 import { AdaptiveContextWindow, ContextEntry, ContextSelectionConfig } from './conscious/AdaptiveContextWindow';
 import { isOptimizationActive } from './config/optimizations';
 
@@ -279,7 +280,67 @@ export class SessionTracker {
             }
         }
 
-        return this.addTranscript(segment);
+        const result = this.addTranscript(segment);
+
+        if (segment.final && segment.speaker === 'interviewer' && this.consciousModeEnabled) {
+            this.updateConsciousConversationState(segment.text);
+        }
+
+        return result;
+    }
+
+    private updateConsciousConversationState(transcript: string): void {
+        const normalized = transcript.trim();
+        if (!normalized) {
+            return;
+        }
+
+        const phase = this.detectPhaseFromTranscript(normalized);
+        this.setCurrentPhase(phase);
+        this.threadManager.pruneExpired();
+
+        const activeThread = this.threadManager.getActiveThread();
+        const matchingThread = this.threadManager.findMatchingThread(normalized, phase);
+
+        if (!activeThread && matchingThread && matchingThread.confidence.total >= RESUME_THRESHOLD) {
+            this.threadManager.resumeThread(matchingThread.thread.id);
+        }
+
+        const currentThread = this.threadManager.getActiveThread();
+        const resumeKeywords = Array.from(new Set(
+            normalized
+                .toLowerCase()
+                .replace(/[^a-z0-9\s]/g, ' ')
+                .split(/\s+/)
+                .filter(word => word.length >= 4)
+        ));
+
+        if (!currentThread) {
+            if (resumeKeywords.length > 0 || normalized.split(/\s+/).length >= 4) {
+                this.threadManager.createThread(normalized, phase);
+                this.threadManager.addKeywordsToActive(resumeKeywords);
+            }
+            return;
+        }
+
+        const phaseShift = currentThread.phase !== phase;
+        const majorPhaseShift = phaseShift && (
+            phase === 'behavioral_story' ||
+            phase === 'wrap_up' ||
+            currentThread.phase === 'behavioral_story'
+        );
+
+        if (majorPhaseShift) {
+            this.threadManager.createThread(normalized, phase);
+            this.threadManager.addKeywordsToActive(resumeKeywords);
+            return;
+        }
+
+        this.threadManager.updateActiveThread({
+            phase,
+            turnCount: currentThread.turnCount + 1,
+        });
+        this.threadManager.addKeywordsToActive(resumeKeywords);
     }
 
     // ============================================

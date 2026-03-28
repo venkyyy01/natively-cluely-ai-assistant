@@ -78,7 +78,7 @@ function addInterviewerTurn(session: SessionTracker, text: string, timestamp: nu
   });
 }
 
-test('Conscious Mode preserves the active design thread and only extends it for deterministic continuation fixtures', async () => {
+test('Conscious Mode preserves the active design thread and keeps extending it through relevant ongoing follow-ups', async () => {
   const session = new SessionTracker();
   const llmHelper = new FakeLLMHelper();
   const engine = new IntelligenceEngine(llmHelper as any, session);
@@ -103,8 +103,9 @@ test('Conscious Mode preserves the active design thread and only extends it for 
   const thread = session.getActiveReasoningThread();
 
   assert.equal(thread?.rootQuestion, 'How would you partition a multi-tenant analytics system?');
-  assert.equal(thread?.followUpCount, 1);
+  assert.equal(thread?.followUpCount, 3);
   assert.equal(thread?.response.mode, 'reasoning_first');
+  assert.equal(thread?.response.openingReasoning, 'If one tenant is 10x larger, I would split that tenant again before changing the whole design.');
   assert.deepEqual(thread?.response.implementationPlan, [
     'Partition by tenant',
     'Cache hot reads',
@@ -112,6 +113,7 @@ test('Conscious Mode preserves the active design thread and only extends it for 
   ]);
   assert.deepEqual(thread?.response.tradeoffs, [
     'Cross-tenant analytics become more complex',
+    'Cross-tenant reporting needs an aggregation path',
   ]);
   assert.deepEqual(thread?.response.edgeCases, [
     'Tenants with highly uneven traffic can create hotspots',
@@ -119,6 +121,11 @@ test('Conscious Mode preserves the active design thread and only extends it for 
   ]);
   assert.deepEqual(thread?.response.scaleConsiderations, [
     'Promote large tenants to dedicated partitions and rebalance asynchronously',
+  ]);
+  assert.deepEqual(thread?.response.pushbackResponses, [
+    'The partitioning keeps the operational model straightforward while we validate load patterns.',
+    'I would call out that the tradeoff buys us better tenant isolation on the write path.',
+    'That lets me preserve the base design while scaling the exceptional tenant separately.',
   ]);
   assert.equal(thread?.response.codeTransition, 'At that point I would show the shard-mapping abstraction.');
 });

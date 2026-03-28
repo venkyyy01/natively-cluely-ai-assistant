@@ -138,13 +138,13 @@ test('Conscious Mode does not spuriously route casual or admin transcript lines'
 
 test('Conscious Mode keeps continuation phrases on the normal path when no active thread exists', () => {
   assert.deepEqual(classifyConsciousModeQuestion('What are the tradeoffs?', null), {
-    qualifies: false,
-    threadAction: 'ignore',
+    qualifies: true,
+    threadAction: 'start',
   });
 
   assert.deepEqual(classifyConsciousModeQuestion('How would you shard this?', null), {
-    qualifies: false,
-    threadAction: 'ignore',
+    qualifies: true,
+    threadAction: 'start',
   });
 
   assert.deepEqual(classifyConsciousModeQuestion('What happens during failover?', null), {
@@ -216,8 +216,8 @@ test('Conscious Mode continuation and reset matrix handles deterministic continu
   });
 
   assert.deepEqual(classifyConsciousModeQuestion('What if traffic spikes 10x on this API?', thread), {
-    qualifies: false,
-    threadAction: 'ignore',
+    qualifies: true,
+    threadAction: 'continue',
   });
 
   assert.deepEqual(classifyConsciousModeQuestion('How would you design a payment ledger?', {
@@ -239,7 +239,7 @@ test('Conscious Mode continuation and reset matrix handles deterministic continu
   });
 
   assert.deepEqual(classifyConsciousModeQuestion('Let us switch gears and talk about the launch plan.', thread), {
-    qualifies: false,
+    qualifies: true,
     threadAction: 'reset',
   });
 });
@@ -255,12 +255,12 @@ test('Conscious Mode response parser rejects malformed non-JSON thread payloads'
 test('Conscious Mode transcript auto-trigger widens only for qualifying short technical pushback phrases', () => {
   assert.equal(shouldAutoTriggerSuggestionFromTranscript('Why this approach', false, null), false);
   assert.equal(shouldAutoTriggerSuggestionFromTranscript('Why this approach', true, null), false);
-  assert.equal(shouldAutoTriggerSuggestionFromTranscript('What are the tradeoffs', true, null), false);
+  assert.equal(shouldAutoTriggerSuggestionFromTranscript('What are the tradeoffs', true, null), true);
   assert.equal(shouldAutoTriggerSuggestionFromTranscript('Can you repeat that for me', true, null), false);
   assert.equal(shouldAutoTriggerSuggestionFromTranscript('okay sounds good', true, null), false);
 });
 
-test('Conscious Mode transcript-trigger path only fires handleSuggestionTrigger for qualifying interviewer prompts', async () => {
+test('Conscious Mode transcript-trigger path fires for substantive interviewer prompts when awareness is enabled', async () => {
   const calls: Array<{ context: string; lastQuestion: string; confidence: number }> = [];
   const manager = {
     getActiveReasoningThread: (): ReasoningThread | null => null,
@@ -272,7 +272,7 @@ test('Conscious Mode transcript-trigger path only fires handleSuggestionTrigger 
 
   await maybeHandleSuggestionTriggerFromTranscript({
     speaker: 'interviewer',
-    text: 'Why this approach',
+    text: 'What are the tradeoffs',
     final: true,
     confidence: 0.91,
     consciousModeEnabled: true,
@@ -288,7 +288,13 @@ test('Conscious Mode transcript-trigger path only fires handleSuggestionTrigger 
     intelligenceManager: manager,
   });
 
-  assert.deepEqual(calls, []);
+  assert.deepEqual(calls, [
+    {
+      context: 'ctx',
+      lastQuestion: 'What are the tradeoffs',
+      confidence: 0.91,
+    },
+  ]);
 });
 
 test('Conscious Mode routes screenshot-backed live-coding turns but keeps the same question on the fast path without screenshots', async () => {

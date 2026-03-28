@@ -26,3 +26,19 @@ test('SessionTracker Conscious Integration - should create thread on conscious m
   assert.ok(thread);
   assert.equal(thread.status, 'active');
 });
+
+test('SessionTracker Conscious Integration - should keep live conscious state from interviewer transcript', () => {
+  const tracker = new SessionTracker();
+  tracker.setConsciousModeEnabled(true);
+
+  tracker.handleTranscript({
+    speaker: 'interviewer',
+    text: 'Let me walk through the high level architecture and main components',
+    timestamp: Date.now(),
+    final: true,
+  });
+
+  assert.equal(tracker.getCurrentPhase(), 'high_level_design');
+  assert.ok(tracker.getThreadManager().getActiveThread());
+  assert.equal(tracker.getThreadManager().getActiveThread()?.phase, 'high_level_design');
+});
