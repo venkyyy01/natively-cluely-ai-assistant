@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { ArrowLeft, Search, Mail, Link, ChevronDown, Play, ArrowUp, Copy, Check, MoreHorizontal, Settings, ArrowRight } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import MeetingChatOverlay from './MeetingChatOverlay';
@@ -67,6 +67,15 @@ const MeetingDetails: React.FC<MeetingDetailsProps> = ({ meeting: initialMeeting
     const [isCopied, setIsCopied] = useState(false);
     const [isChatOpen, setIsChatOpen] = useState(false);
     const [submittedQuery, setSubmittedQuery] = useState('');
+    const summaryOverview = meeting.detailedSummary?.overview || meeting.summary || '';
+
+    useEffect(() => {
+        setMeeting(initialMeeting);
+        setActiveTab('summary');
+        setQuery('');
+        setSubmittedQuery('');
+        setIsChatOpen(false);
+    }, [initialMeeting]);
 
     const handleSubmitQuestion = () => {
         if (query.trim()) {
@@ -88,19 +97,19 @@ const MeetingDetails: React.FC<MeetingDetailsProps> = ({ meeting: initialMeeting
     const handleCopy = async () => {
         let textToCopy = '';
 
-        if (activeTab === 'summary' && meeting.detailedSummary) {
+        if (activeTab === 'summary' && (meeting.detailedSummary || meeting.summary)) {
             textToCopy = `
 Meeting: ${meeting.title}
 Date: ${new Date(meeting.date).toLocaleDateString()}
 
 OVERVIEW:
-${meeting.detailedSummary.overview || ''}
+${summaryOverview}
 
 ACTION ITEMS:
-${meeting.detailedSummary.actionItems?.map(item => `- ${item}`).join('\n') || 'None'}
+${meeting.detailedSummary?.actionItems?.map(item => `- ${item}`).join('\n') || 'None'}
 
 KEY POINTS:
-${meeting.detailedSummary.keyPoints?.map(item => `- ${item}`).join('\n') || 'None'}
+${meeting.detailedSummary?.keyPoints?.map(item => `- ${item}`).join('\n') || 'None'}
             `.trim();
         } else if (activeTab === 'transcript' && meeting.transcript) {
             textToCopy = meeting.transcript.map(t => `[${formatTime(t.timestamp)}] ${t.speaker === 'user' ? 'Me' : 'Them'}: ${t.text}`).join('\n');
@@ -267,7 +276,7 @@ ${meeting.detailedSummary.keyPoints?.map(item => `- ${item}`).join('\n') || 'Non
                                             a: ({ node, ...props }) => <a className="text-blue-500 hover:underline" {...props} />,
                                         }}
                                     >
-                                        {meeting.detailedSummary?.overview || ''}
+                                        {summaryOverview}
                                     </ReactMarkdown>
                                 </div>
 

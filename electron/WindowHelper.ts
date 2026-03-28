@@ -28,6 +28,7 @@ export class WindowHelper {
   private contentProtection: boolean = false
   private overlayClickthroughEnabled: boolean = false
   private opacityTimeout: NodeJS.Timeout | null = null
+  private readonly overlayContentProtection: boolean = true
 
   // Initialize with explicit number type and 0 value
   private screenWidth: number = 0
@@ -266,6 +267,7 @@ export class WindowHelper {
       alwaysOnTop: true,
       focusable: true,
       resizable: true,
+      resizable: true,
       movable: true,
       skipTaskbar: true, // Don't show separately in dock/taskbar
       hasShadow: false, // Prevent shadow from adding perceived size/artifacts
@@ -282,7 +284,7 @@ export class WindowHelper {
     this.setOverlayClickthrough(this.overlayClickthroughEnabled)
 
     this.overlayWindow.loadURL(`${startUrl}?window=overlay`).catch(e => {
-        console.error('[WindowHelper] Failed to load Overlay URL:', e);
+      console.error('[WindowHelper] Failed to load Overlay URL:', e);
     })
 
     // --- 3. Startup Sequence ---
@@ -415,7 +417,7 @@ export class WindowHelper {
         this.applyStealthFlags(this.overlayWindow, true, true);
         this.setOverlayClickthrough(this.overlayClickthroughEnabled)
         // Small delay to ensure Windows DWM processes the flag before making it opaque
-        
+
         if (this.opacityTimeout) clearTimeout(this.opacityTimeout);
         this.opacityTimeout = setTimeout(() => {
           if (this.overlayWindow && !this.overlayWindow.isDestroyed()) {
@@ -455,7 +457,7 @@ export class WindowHelper {
         this.launcherWindow.setOpacity(0);
         this.launcherWindow.show();
         this.applyStealthFlags(this.launcherWindow, true);
-        
+
         if (this.opacityTimeout) clearTimeout(this.opacityTimeout);
         this.opacityTimeout = setTimeout(() => {
           if (this.launcherWindow && !this.launcherWindow.isDestroyed()) {

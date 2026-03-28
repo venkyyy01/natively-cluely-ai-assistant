@@ -65,6 +65,11 @@ interface Message {
 }
 
 const MAX_ROLLING_TRANSCRIPT_CHARS = 1200;
+const MIN_OVERLAY_WIDTH = 420;
+const MAX_OVERLAY_WIDTH = 960;
+const MIN_CHAT_HEIGHT = 260;
+const MAX_CHAT_HEIGHT = 760;
+type ResizeDirection = 'left' | 'right' | 'top' | 'bottom' | 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right';
 
 function appendRollingTranscript(existing: string, nextSegment: string): string {
     const addition = nextSegment.trim();
@@ -131,10 +136,22 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
 
     // Settings State with Persistence
     const [isUndetectable, setIsUndetectable] = useState(false);
+    const [panelWidth, setPanelWidth] = useState(() => {
+        const stored = localStorage.getItem('natively_overlay_width');
+        const parsed = stored ? Number(stored) : 600;
+        return Number.isFinite(parsed) ? Math.min(MAX_OVERLAY_WIDTH, Math.max(MIN_OVERLAY_WIDTH, parsed)) : 600;
+    });
+    const [chatViewportHeight, setChatViewportHeight] = useState(() => {
+        const stored = localStorage.getItem('natively_overlay_chat_height');
+        const parsed = stored ? Number(stored) : 450;
+        return Number.isFinite(parsed) ? Math.min(MAX_CHAT_HEIGHT, Math.max(MIN_CHAT_HEIGHT, parsed)) : 450;
+    });
+    const [isResizing, setIsResizing] = useState(false);
     const [hideChatHidesWidget, setHideChatHidesWidget] = useState(() => {
         const stored = localStorage.getItem('natively_hideChatHidesWidget');
         return stored ? stored === 'true' : true;
     });
+    const resizeStartRef = useRef<{ x: number; y: number; width: number; height: number; direction: ResizeDirection; windowX: number; windowY: number } | null>(null);
 
     // Model Selection State
     const [currentModel, setCurrentModel] = useState<string>('gemini-3-flash-preview');
@@ -350,6 +367,80 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
             const updated = [...prev, data];
             return updated.slice(-5); // Keep last 5
         });
+    };
+
+    useEffect(() => {
+        localStorage.setItem('natively_overlay_width', String(panelWidth));
+        localStorage.setItem('natively_overlay_chat_height', String(chatViewportHeight));
+    }, [panelWidth, chatViewportHeight]);
+
+    useEffect(() => {
+        const handlePointerMove = (event: MouseEvent) => {
+            if (!resizeStartRef.current) return;
+            const deltaX = event.clientX - resizeStartRef.current.x;
+            const deltaY = event.clientY - resizeStartRef.current.y;
+            const { direction, width, height, windowX, windowY } = resizeStartRef.current;
+
+            const affectsLeft = direction === 'left' || direction === 'top-left' || direction === 'bottom-left';
+            const affectsRight = direction === 'right' || direction === 'top-right' || direction === 'bottom-right';
+            const affectsTop = direction === 'top' || direction === 'top-left' || direction === 'top-right';
+            const affectsBottom = direction === 'bottom' || direction === 'bottom-left' || direction === 'bottom-right';
+
+            let nextWidth = width;
+            let nextHeight = height;
+            let nextX = windowX;
+            let nextY = windowY;
+
+            if (affectsRight) {
+                nextWidth = Math.min(MAX_OVERLAY_WIDTH, Math.max(MIN_OVERLAY_WIDTH, width + deltaX));
+            }
+
+            if (affectsLeft) {
+                nextWidth = Math.min(MAX_OVERLAY_WIDTH, Math.max(MIN_OVERLAY_WIDTH, width - deltaX));
+                nextX = windowX + (width - nextWidth);
+            }
+
+            if (affectsBottom) {
+                nextHeight = Math.min(MAX_CHAT_HEIGHT, Math.max(MIN_CHAT_HEIGHT, height + deltaY));
+            }
+
+            if (affectsTop) {
+                nextHeight = Math.min(MAX_CHAT_HEIGHT, Math.max(MIN_CHAT_HEIGHT, height - deltaY));
+                nextY = windowY + (height - nextHeight);
+            }
+
+            setPanelWidth(nextWidth);
+            setChatViewportHeight(nextHeight);
+            window.electronAPI?.setOverlayBounds({ width: nextWidth, height: nextHeight, x: nextX, y: nextY }).catch(() => { });
+        };
+
+        const stopResize = () => {
+            resizeStartRef.current = null;
+            setIsResizing(false);
+        };
+
+        window.addEventListener('mousemove', handlePointerMove);
+        window.addEventListener('mouseup', stopResize);
+        return () => {
+            window.removeEventListener('mousemove', handlePointerMove);
+            window.removeEventListener('mouseup', stopResize);
+        };
+    }, []);
+
+    const handleResizeStart = (direction: ResizeDirection) => (event: React.MouseEvent<HTMLButtonElement>) => {
+        event.preventDefault();
+        event.stopPropagation();
+        resizeStartRef.current = {
+            x: event.clientX,
+            y: event.clientY,
+            width: panelWidth,
+            height: chatViewportHeight,
+            direction,
+            windowX: window.screenX,
+            windowY: window.screenY
+        };
+        setIsExpanded(true);
+        setIsResizing(true);
     };
 
     // Connect to Native Audio Backend
@@ -1488,6 +1579,11 @@ Provide only the answer, nothing else.`;
                     handleScreenshotAttach(data as { path: string; preview: string });
                 }
             } catch (err) {
+                setMessages(prev => [...prev, {
+                    id: Date.now().toString(),
+                    role: 'system',
+                    text: 'Unable to capture screenshot. Check Screen Recording permission in macOS Settings and try again.'
+                }]);
                 console.error("Error triggering screenshot:", err);
             }
         },
@@ -1498,6 +1594,11 @@ Provide only the answer, nothing else.`;
                     handleScreenshotAttach(data as { path: string; preview: string });
                 }
             } catch (err) {
+                setMessages(prev => [...prev, {
+                    id: Date.now().toString(),
+                    role: 'system',
+                    text: 'Unable to capture area screenshot. Check Screen Recording permission in macOS Settings and try again.'
+                }]);
                 console.error("Error triggering selective screenshot:", err);
             }
         }
@@ -1524,6 +1625,11 @@ Provide only the answer, nothing else.`;
                     handleScreenshotAttach(data as { path: string; preview: string });
                 }
             } catch (err) {
+                setMessages(prev => [...prev, {
+                    id: Date.now().toString(),
+                    role: 'system',
+                    text: 'Unable to capture screenshot. Check Screen Recording permission in macOS Settings and try again.'
+                }]);
                 console.error("Error triggering screenshot:", err);
             }
         },
@@ -1534,6 +1640,11 @@ Provide only the answer, nothing else.`;
                     handleScreenshotAttach(data as { path: string; preview: string });
                 }
             } catch (err) {
+                setMessages(prev => [...prev, {
+                    id: Date.now().toString(),
+                    role: 'system',
+                    text: 'Unable to capture area screenshot. Check Screen Recording permission in macOS Settings and try again.'
+                }]);
                 console.error("Error triggering selective screenshot:", err);
             }
         }
@@ -1601,7 +1712,7 @@ Provide only the answer, nothing else.`;
                             onQuit={() => onEndMeeting ? onEndMeeting() : window.electronAPI.quitApp()}
                         />
                         <div className="
-                    relative w-[600px] max-w-full
+                    relative max-w-full
                     bg-[#1E1E1E]/95
                     backdrop-blur-2xl
                     border border-white/10
@@ -1610,7 +1721,7 @@ Provide only the answer, nothing else.`;
                     overflow-hidden 
                     flex flex-col
                     draggable-area
-                ">
+                " style={{ width: `${panelWidth}px`, transition: isResizing ? 'none' : 'width 180ms ease, max-height 180ms ease' }}>
 
 
 
@@ -1625,7 +1736,7 @@ Provide only the answer, nothing else.`;
 
                             {/* Chat History - Only show if there are messages OR active states */}
                             {(messages.length > 0 || isManualRecording || isProcessing) && (
-                                <div ref={scrollContainerRef} className="flex-1 overflow-y-auto p-4 space-y-3 max-h-[clamp(300px,35vh,450px)] no-drag" style={{ scrollbarWidth: 'none' }}>
+                                <div ref={scrollContainerRef} className="flex-1 overflow-y-auto p-4 space-y-3 no-drag scroll-smooth custom-scrollbar" style={{ scrollbarWidth: 'thin', scrollBehavior: 'smooth', WebkitOverflowScrolling: 'touch', overscrollBehavior: 'contain', maxHeight: `${chatViewportHeight}px` }}>
                                     {messages.map((msg) => (
                                         <div key={msg.id} data-autoscroll-message-id={msg.id} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'} animate-fade-in-up`}>
                                             <div className={`
@@ -1923,6 +2034,86 @@ Provide only the answer, nothing else.`;
                                     </button>
                                 </div>
                             </div>
+
+                            <button
+                                type="button"
+                                aria-label="Resize overlay from left edge"
+                                onMouseDown={handleResizeStart('left')}
+                                className="group absolute left-0 top-8 bottom-8 w-2 no-drag z-20 cursor-ew-resize bg-transparent"
+                                title="Drag to resize width"
+                            >
+                                <span className="pointer-events-none absolute left-0 top-1/2 h-16 w-[2px] -translate-y-1/2 rounded-full bg-white/8 transition-all group-hover:h-24 group-hover:bg-white/35" />
+                            </button>
+
+                            <button
+                                type="button"
+                                aria-label="Resize overlay width"
+                                onMouseDown={handleResizeStart('right')}
+                                className="group absolute right-0 top-8 bottom-8 w-2 no-drag z-20 cursor-ew-resize bg-transparent"
+                                title="Drag to resize width"
+                            >
+                                <span className="pointer-events-none absolute right-0 top-1/2 h-16 w-[2px] -translate-y-1/2 rounded-full bg-white/8 transition-all group-hover:h-24 group-hover:bg-white/35" />
+                            </button>
+
+                            <button
+                                type="button"
+                                aria-label="Resize overlay from top edge"
+                                onMouseDown={handleResizeStart('top')}
+                                className="group absolute left-8 right-8 top-0 h-2 no-drag z-20 cursor-ns-resize bg-transparent"
+                                title="Drag to resize height"
+                            >
+                                <span className="pointer-events-none absolute left-1/2 top-0 h-[2px] w-20 -translate-x-1/2 rounded-full bg-white/8 transition-all group-hover:w-28 group-hover:bg-white/35" />
+                            </button>
+
+                            <button
+                                type="button"
+                                aria-label="Resize overlay height"
+                                onMouseDown={handleResizeStart('bottom')}
+                                className="group absolute left-8 right-8 bottom-0 h-2 no-drag z-20 cursor-ns-resize bg-transparent"
+                                title="Drag to resize height"
+                            >
+                                <span className="pointer-events-none absolute bottom-0 left-1/2 h-[2px] w-20 -translate-x-1/2 rounded-full bg-white/8 transition-all group-hover:w-28 group-hover:bg-white/35" />
+                            </button>
+
+                            <button
+                                type="button"
+                                aria-label="Resize overlay from top left corner"
+                                onMouseDown={handleResizeStart('top-left')}
+                                className="group absolute left-2 top-2 no-drag z-30 h-5 w-5 cursor-nwse-resize rounded-full border border-white/10 bg-white/5 text-white/30 transition hover:bg-white/10 hover:text-white/80"
+                                title="Drag to resize"
+                            >
+                                <span className="pointer-events-none absolute left-[3px] top-[3px] text-[10px] leading-none">↖</span>
+                            </button>
+
+                            <button
+                                type="button"
+                                aria-label="Resize overlay from top right corner"
+                                onMouseDown={handleResizeStart('top-right')}
+                                className="group absolute right-2 top-2 no-drag z-30 h-5 w-5 cursor-nesw-resize rounded-full border border-white/10 bg-white/5 text-white/30 transition hover:bg-white/10 hover:text-white/80"
+                                title="Drag to resize"
+                            >
+                                <span className="pointer-events-none absolute right-[3px] top-[3px] text-[10px] leading-none">↗</span>
+                            </button>
+
+                            <button
+                                type="button"
+                                aria-label="Resize overlay from bottom left corner"
+                                onMouseDown={handleResizeStart('bottom-left')}
+                                className="group absolute bottom-2 left-2 no-drag z-30 h-5 w-5 cursor-nesw-resize rounded-full border border-white/10 bg-white/5 text-white/30 transition hover:bg-white/10 hover:text-white/80"
+                                title="Drag to resize"
+                            >
+                                <span className="pointer-events-none absolute bottom-[3px] left-[3px] text-[10px] leading-none">↙</span>
+                            </button>
+
+                            <button
+                                type="button"
+                                aria-label="Resize overlay"
+                                onMouseDown={handleResizeStart('bottom-right')}
+                                className="group absolute bottom-2 right-2 no-drag z-30 h-5 w-5 cursor-nwse-resize rounded-full border border-white/10 bg-white/5 text-white/30 transition hover:bg-white/10 hover:text-white/80"
+                                title="Drag to resize"
+                            >
+                                <span className="pointer-events-none absolute bottom-[3px] right-[3px] text-[10px] leading-none">↘</span>
+                            </button>
                         </div>
                     </motion.div>
                 )}
