@@ -123,15 +123,6 @@ const IN_FLIGHT_RESPONSE_CACHE_MAX = 10
 
 // Simple prompt for image analysis (not interview copilot - kept separate)
 const IMAGE_ANALYSIS_PROMPT = `Analyze concisely. Be direct. No markdown formatting. Return plain text only.`
-const TLDR_RESPONSE_INSTRUCTION = `CRITICAL RESPONSE STYLE: Default to a TL;DR-style answer.
-- Start every answer with exactly: TL;DR:
-- Start with the direct answer immediately after that.
-- Keep it short unless the user explicitly asks for more detail.
-- Default to 2-3 short sentences maximum.
-- If bullets are necessary, use at most 3 short bullets.
-- Do NOT return a wall of text.
-- If the answer could become long, compress it into the shortest useful version.`
-
 type Provider = 'gemini' | 'groq' | 'openai' | 'claude';
 
 export interface ModelFallbackEvent {
@@ -963,7 +954,7 @@ ANSWER DIRECTLY:`;
    * Helper to inject language instruction into system prompt
    */
   private injectLanguageInstruction(systemPrompt: string): string {
-    return `${systemPrompt}\n\n${TLDR_RESPONSE_INSTRUCTION}\n\nCRITICAL: You MUST respond ONLY in ${this.aiResponseLanguage}. This is an absolute requirement. All generated text that the user should say must be in ${this.aiResponseLanguage}.`;
+    return `${systemPrompt}\n\nCRITICAL: You MUST respond ONLY in ${this.aiResponseLanguage}. This is an absolute requirement. All generated text that the user should say must be in ${this.aiResponseLanguage}.`;
   }
 
   private hashValue(value: unknown): string {
@@ -1232,7 +1223,7 @@ ANSWER DIRECTLY:`;
       }
 
       if (this.activeCurlProvider) {
-        return await this.chatWithCurl(message, skipSystemPrompt ? undefined : this.injectLanguageInstruction(CUSTOM_SYSTEM_PROMPT));
+        return await this.chatWithCurl(message, skipSystemPrompt ? undefined : CUSTOM_SYSTEM_PROMPT);
       }
 
       if (this.customProvider) {
@@ -1241,7 +1232,7 @@ ANSWER DIRECTLY:`;
         const response = await this.executeCustomProvider(
           this.customProvider.curlCommand,
           combinedMessages.gemini,
-          skipSystemPrompt ? "" : this.injectLanguageInstruction(CUSTOM_SYSTEM_PROMPT),
+          skipSystemPrompt ? "" : CUSTOM_SYSTEM_PROMPT,
           message,
           context || "",
           imagePaths?.[0]
@@ -1560,8 +1551,7 @@ ANSWER DIRECTLY:`;
     // 2. Prepare Variables
     // We combine System Prompt + User Message into {{TEXT}} for simplicity in raw mode, 
     // or you can support {{SYSTEM}} if you want to get fancy later.
-    const enforcedSystemPrompt = systemPrompt || this.injectLanguageInstruction(CUSTOM_SYSTEM_PROMPT);
-    const fullPrompt = `${enforcedSystemPrompt}\n\n${userMessage}`;
+    const fullPrompt = systemPrompt ? `${systemPrompt}\n\n${userMessage}` : userMessage;
 
     const variables = {
       TEXT: fullPrompt.replace(/\n/g, "\\n").replace(/"/g, '\\"') // Basic escaping
@@ -1677,7 +1667,6 @@ ANSWER DIRECTLY:`;
 
     // 1. Parse cURL to JSON object
     const requestConfig = curl2Json(curlCommand);
-    const enforcedSystemPrompt = systemPrompt || this.injectLanguageInstruction(CUSTOM_SYSTEM_PROMPT);
 
     // 2. Prepare Image (if any)
     let base64Image = "";
@@ -1694,7 +1683,7 @@ ANSWER DIRECTLY:`;
     const variables = {
       TEXT: combinedMessage,             // Deprecated but kept for compat: System + Context + User
       PROMPT: combinedMessage,           // Alias for TEXT
-      SYSTEM_PROMPT: enforcedSystemPrompt,       // Raw System Prompt
+      SYSTEM_PROMPT: systemPrompt,       // Raw System Prompt
       USER_MESSAGE: rawUserMessage,      // Raw User Message
       CONTEXT: context,                  // Raw Context
       IMAGE_BASE64: base64Image,         // Base64 encoded image string

@@ -210,6 +210,7 @@ const MeetingChatOverlay: React.FC<MeetingChatOverlayProps> = ({
             isStreaming: latestReadableMessage.isStreaming,
         } : null,
         eligibleRoles: ['assistant'],
+        getTargetElement: (container, messageId) => container.querySelector(`[data-autoscroll-message-id="${messageId}"]`) as HTMLElement | null,
     });
 
     // Submit initial query when overlay opens
@@ -531,9 +532,11 @@ ${contextString}`;
                         {/* Messages area - scrollable */}
                         <div ref={scrollContainerRef} className="flex-1 overflow-y-auto px-6 py-4 pb-32 custom-scrollbar">
                             {messages.map((msg) => (
-                                msg.role === 'user'
-                                    ? <UserMessage key={msg.id} content={msg.content} />
-                                    : <AssistantMessage key={msg.id} content={msg.content} isStreaming={msg.isStreaming} />
+                                <div key={msg.id} data-autoscroll-message-id={msg.id}>
+                                    {msg.role === 'user'
+                                        ? <UserMessage content={msg.content} />
+                                        : <AssistantMessage content={msg.content} isStreaming={msg.isStreaming} />}
+                                </div>
                             ))}
 
                             {chatState === 'waiting_for_llm' && <TypingIndicator />}

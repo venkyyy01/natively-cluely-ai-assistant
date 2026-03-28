@@ -12,6 +12,7 @@ type Options = {
   containerRef: RefObject<HTMLElement>;
   latestMessage: AutoScrollMessage | null;
   eligibleRoles?: string[];
+  getTargetElement?: (container: HTMLElement, messageId: string) => HTMLElement | null;
 };
 
 const HUMAN_WORDS_PER_MINUTE = 220;
@@ -36,6 +37,7 @@ export function useHumanSpeedAutoScroll({
   containerRef,
   latestMessage,
   eligibleRoles = ['system', 'assistant'],
+  getTargetElement,
 }: Options): void {
   const animationFrameRef = useRef<number | null>(null);
   const lastTimestampRef = useRef<number | null>(null);
@@ -78,16 +80,21 @@ export function useHumanSpeedAutoScroll({
     }
 
     if (activeMessageIdRef.current !== latestMessage.id) {
-      container.scrollTop = 0;
+      const targetElement = getTargetElement?.(container, latestMessage.id);
+      const targetOffset = targetElement ? Math.max(0, targetElement.offsetTop - container.offsetTop) : 0;
+      container.scrollTop = targetOffset;
       activeMessageIdRef.current = latestMessage.id;
     }
 
     const durationMs = estimateDurationMs(latestMessage.content);
     let speedPxPerMs = 0;
+    let targetStart = container.scrollTop;
     const computeSpeed = () => {
-      const maxScrollTop = Math.max(0, container.scrollHeight - container.clientHeight);
-      speedPxPerMs = maxScrollTop / durationMs;
-      return maxScrollTop;
+      const targetElement = getTargetElement?.(container, latestMessage.id);
+      targetStart = targetElement ? Math.max(0, targetElement.offsetTop - container.offsetTop) : targetStart;
+      const targetBottom = targetElement ? Math.max(targetStart, targetElement.offsetTop - container.offsetTop + targetElement.scrollHeight - container.clientHeight) : Math.max(0, container.scrollHeight - container.clientHeight);
+      speedPxPerMs = Math.max(0, targetBottom - targetStart) / durationMs;
+      return targetBottom;
     };
 
     const step = (timestamp: number) => {
@@ -105,7 +112,7 @@ export function useHumanSpeedAutoScroll({
       lastTimestampRef.current = timestamp;
       const maxScrollTop = computeSpeed();
 
-      if (maxScrollTop <= 0) {
+      if (maxScrollTop <= targetStart) {
         animationFrameRef.current = requestAnimationFrame(step);
         return;
       }
