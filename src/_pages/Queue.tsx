@@ -212,7 +212,6 @@ const Queue: React.FC<QueueProps> = ({ setView }) => {
     updateDimensions()
 
     const cleanupFunctions = [
-      window.electronAPI.onScreenshotTaken(() => refetch()),
       window.electronAPI.onResetView(() => refetch()),
       window.electronAPI.onSolutionError((error: string) => {
         showToast(

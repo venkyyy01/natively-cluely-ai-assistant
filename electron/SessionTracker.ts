@@ -49,6 +49,21 @@ export interface AssistantResponse {
     questionContext: string;
 }
 
+export interface MeetingMetadataSnapshot {
+    title?: string;
+    calendarEventId?: string;
+    source?: 'manual' | 'calendar';
+}
+
+export interface MeetingSnapshot {
+    transcript: TranscriptSegment[];
+    usage: any[];
+    startTime: number;
+    durationMs: number;
+    context: string;
+    meetingMetadata: MeetingMetadataSnapshot | null;
+}
+
 export class SessionTracker {
     private static nextSessionId = 1;
     // Context management (mirrors Swift ContextManager)
@@ -440,7 +455,11 @@ isConsciousModeEnabled(): boolean {
      * Get full session context from accumulated transcript (User + Interviewer + Assistant)
      */
     getFullSessionContext(): string {
-        const recentTranscript = this.fullTranscript.map(segment => {
+        return this.buildFullSessionContext(this.fullTranscript, this.transcriptEpochSummaries);
+    }
+
+    private buildFullSessionContext(transcript: TranscriptSegment[], epochSummaries: string[]): string {
+        const recentTranscript = transcript.map(segment => {
             const role = this.mapSpeakerToRole(segment.speaker);
             const label = role === 'interviewer' ? 'INTERVIEWER' :
                 role === 'user' ? 'ME' :
@@ -448,9 +467,8 @@ isConsciousModeEnabled(): boolean {
             return `[${label}]: ${segment.text}`;
         }).join('\n');
 
-        // Prepend epoch summaries for full session context preservation
-        if (this.transcriptEpochSummaries.length > 0) {
-            const epochContext = this.transcriptEpochSummaries.join('\n---\n');
+        if (epochSummaries.length > 0) {
+            const epochContext = epochSummaries.join('\n---\n');
             return `[SESSION HISTORY - EARLIER DISCUSSION]\n${epochContext}\n\n[RECENT TRANSCRIPT]\n${recentTranscript}`;
         }
 
@@ -471,6 +489,19 @@ isConsciousModeEnabled(): boolean {
 
     getSessionStartTime(): number {
         return this.sessionStartTime;
+    }
+
+    createSnapshot(now: number = Date.now()): MeetingSnapshot {
+        const transcript = this.fullTranscript.map(segment => ({ ...segment }));
+        const epochSummaries = [...this.transcriptEpochSummaries];
+        return {
+            transcript,
+            usage: this.fullUsage.map(entry => ({ ...entry })),
+            startTime: this.sessionStartTime,
+            durationMs: Math.max(0, now - this.sessionStartTime),
+            context: this.buildFullSessionContext(transcript, epochSummaries),
+            meetingMetadata: this.currentMeetingMetadata ? { ...this.currentMeetingMetadata } : null,
+        };
     }
 
     // ============================================
@@ -561,6 +592,7 @@ isConsciousModeEnabled(): boolean {
         this.contextItems = [];
         this.fullTranscript = [];
         this.fullUsage = [];
+        this.currentMeetingMetadata = null;
         this.transcriptEpochSummaries = [];
         this.sessionStartTime = Date.now();
         this.lastAssistantMessage = null;

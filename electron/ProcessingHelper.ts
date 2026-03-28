@@ -163,9 +163,13 @@ export class ProcessingHelper {
       // NEW: Handle screenshot as plain text (like audio)
       mainWindow.webContents.send(this.appState.PROCESSING_EVENTS.INITIAL_START)
       this.appState.setView("solutions")
+      this.currentProcessingAbortController?.abort()
       this.currentProcessingAbortController = new AbortController()
       try {
-        const imageResult = await this.llmHelper.analyzeImageFiles(allPaths);
+        const imageResult = await this.llmHelper.analyzeImageFiles(allPaths, this.currentProcessingAbortController.signal);
+        if (this.currentProcessingAbortController.signal.aborted) {
+          return
+        }
         const problemInfo = {
           problem_statement: imageResult.text,
           input_format: { description: "Generated from screenshot", parameters: [] as any[] },
@@ -178,6 +182,9 @@ export class ProcessingHelper {
         mainWindow.webContents.send(this.appState.PROCESSING_EVENTS.PROBLEM_EXTRACTED, problemInfo);
         this.appState.setProblemInfo(problemInfo);
       } catch (error: any) {
+        if (this.currentProcessingAbortController?.signal.aborted) {
+          return
+        }
         // console.error("Image processing error:", error)
         mainWindow.webContents.send(this.appState.PROCESSING_EVENTS.INITIAL_SOLUTION_ERROR, error.message)
       } finally {
@@ -194,6 +201,7 @@ export class ProcessingHelper {
       }
 
       mainWindow.webContents.send(this.appState.PROCESSING_EVENTS.DEBUG_START)
+      this.currentExtraProcessingAbortController?.abort()
       this.currentExtraProcessingAbortController = new AbortController()
 
       try {
@@ -204,15 +212,22 @@ export class ProcessingHelper {
         }
 
         // Get current solution from state
-        const currentSolution = await this.llmHelper.generateSolution(problemInfo)
+        const currentSolution = await this.llmHelper.generateSolution(problemInfo, this.currentExtraProcessingAbortController.signal)
+        if (this.currentExtraProcessingAbortController.signal.aborted) {
+          return
+        }
         const currentCode = currentSolution.solution.code
 
         // Debug the solution using vision model
         const debugResult = await this.llmHelper.debugSolutionWithImages(
           problemInfo,
           currentCode,
-          extraScreenshotQueue
+          extraScreenshotQueue,
+          this.currentExtraProcessingAbortController.signal
         )
+        if (this.currentExtraProcessingAbortController.signal.aborted) {
+          return
+        }
 
         this.appState.setHasDebugged(true)
         mainWindow.webContents.send(
@@ -221,6 +236,9 @@ export class ProcessingHelper {
         )
 
       } catch (error: any) {
+        if (this.currentExtraProcessingAbortController?.signal.aborted) {
+          return
+        }
         // console.error("Debug processing error:", error)
         mainWindow.webContents.send(
           this.appState.PROCESSING_EVENTS.DEBUG_ERROR,

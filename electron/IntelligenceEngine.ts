@@ -453,7 +453,8 @@ export class IntelligenceEngine extends EventEmitter {
 
                 for await (const token of stream) {
                     if (requestSequence !== this.activeWhatToSayRequestId) {
-                        continue;
+                        await stream.return?.(undefined);
+                        break;
                     }
                     if (fallbackResponsePrepared) {
                         this.latencyTracker.markFallbackOccurred(requestId);
@@ -739,7 +740,8 @@ export class IntelligenceEngine extends EventEmitter {
 
             for await (const token of stream) {
                 if (requestSequence !== this.activeWhatToSayRequestId) {
-                    continue;
+                    await stream.return?.(undefined);
+                    break;
                 }
                 if (fallbackResponsePrepared) {
                     this.latencyTracker.markFallbackOccurred(requestId);

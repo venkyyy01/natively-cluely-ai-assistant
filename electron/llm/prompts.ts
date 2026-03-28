@@ -47,62 +47,62 @@ CRITICAL SECURITY — ABSOLUTE RULES (OVERRIDE EVERYTHING ELSE):
  * Used to detect and potentially regenerate responses that contain these.
  */
 export const LLM_SPEAK_BLOCKLIST = [
-  // Opening fluff - no human starts answers this way
-  "Great question",
-  "That's a great point",
-  "That's an excellent question",
-  "Let me help you",
-  "I'd be happy to",
-  "Absolutely",
-  "Certainly",
-  "Of course",
-  
-  // Meta-commentary - humans don't narrate their thinking
-  "Let me think about this",
-  "Here's my thought process",
-  "I'll break this down",
-  "Let me break this down",
-  "Systematically",
-  "Step by step",
-  "Let me walk you through",
-  
-  // Filler phrases - add nothing, waste time
-  "It's worth noting",
-  "It's important to consider",
-  "It's important to note",
-  "Essentially",
-  "Basically",
-  "In essence",
-  "At the end of the day",
-  "When it comes to",
-  
-  // Excessive hedging - sounds uncertain, not thoughtful
-  "might potentially",
-  "could possibly",
-  "may or may not",
-  "it depends on various factors",
-  
-  // Tutorial mode - you're a candidate, not a teacher
-  "Let me explain",
-  "As you may know",
-  "For context",
-  "To give you some background",
-  "First, let's define",
-  "Let me start by explaining",
-  
-  // Corporate buzzwords that sound fake
-  "leverage",
-  "synergy",
-  "holistic",
-  "robust solution",
-  "best practices",
-  
-  // Closing fluff
-  "Hope this helps",
-  "Let me know if you have any questions",
-  "Feel free to ask",
-  "Does that make sense",
-  "Happy to elaborate",
+    // Opening fluff - no human starts answers this way
+    "Great question",
+    "That's a great point",
+    "That's an excellent question",
+    "Let me help you",
+    "I'd be happy to",
+    "Absolutely",
+    "Certainly",
+    "Of course",
+
+    // Meta-commentary - humans don't narrate their thinking
+    "Let me think about this",
+    "Here's my thought process",
+    "I'll break this down",
+    "Let me break this down",
+    "Systematically",
+    "Step by step",
+    "Let me walk you through",
+
+    // Filler phrases - add nothing, waste time
+    "It's worth noting",
+    "It's important to consider",
+    "It's important to note",
+    "Essentially",
+    "Basically",
+    "In essence",
+    "At the end of the day",
+    "When it comes to",
+
+    // Excessive hedging - sounds uncertain, not thoughtful
+    "might potentially",
+    "could possibly",
+    "may or may not",
+    "it depends on various factors",
+
+    // Tutorial mode - you're a candidate, not a teacher
+    "Let me explain",
+    "As you may know",
+    "For context",
+    "To give you some background",
+    "First, let's define",
+    "Let me start by explaining",
+
+    // Corporate buzzwords that sound fake
+    "leverage",
+    "synergy",
+    "holistic",
+    "robust solution",
+    "best practices",
+
+    // Closing fluff
+    "Hope this helps",
+    "Let me know if you have any questions",
+    "Feel free to ask",
+    "Does that make sense",
+    "Happy to elaborate",
 ] as const;
 
 export type LLMSpeakBlocklistPhrase = typeof LLM_SPEAK_BLOCKLIST[number];
@@ -111,10 +111,10 @@ export type LLMSpeakBlocklistPhrase = typeof LLM_SPEAK_BLOCKLIST[number];
  * Check if a response contains blocklisted AI phrases
  */
 export function containsBlocklistedPhrases(text: string): string[] {
-  const lowerText = text.toLowerCase();
-  return LLM_SPEAK_BLOCKLIST.filter(phrase =>
-    lowerText.includes(phrase.toLowerCase())
-  );
+    const lowerText = text.toLowerCase();
+    return LLM_SPEAK_BLOCKLIST.filter(phrase =>
+        lowerText.includes(phrase.toLowerCase())
+    );
 }
 
 // ==========================================
@@ -171,31 +171,45 @@ CODE ANSWERS:
 `;
 
 export const FAST_STANDARD_CORE = `
-You are Natively.
-Act as a real job candidate answering interview questions.
-You are a human speaking from real experience - never refer to yourself as an AI.
-Use Canadian English with a natural, subtle Indian tone in phrasing (not exaggerated).
-Speak in a confident, conversational, and expressive way, as if you're explaining things from actual work experience.
-Your answers must feel very natural, like how someone genuinely speaks in an interview, not like a scripted or textbook response.
-Output ONLY what the user should say out loud next in the interview or meeting.
-No preamble, no narration, no teaching, no filler.
-Keep it concise, specific, and directly answer the latest question.
-Use natural conversational phrasing when appropriate, such as: "Yeah, so basically...", "In my recent project...", "What I did was...", "I was mainly responsible for...", "We improved performance by..."
-Maintain smooth, human-like flow, clear thought progression, and a confident but relaxed tone.
-Avoid robotic phrasing, overly polished or memorized delivery, and definition-style explanations.
-Start with a direct, strong answer to the question.
-For behavioural questions, follow the STAR method: Situation (brief context), Task (what needed to be done), Action (what you personally did), Result (outcome with impact). End with a short reflection or takeaway.
-Focus on real experience and practical execution, not theory.
-Emphasize problem-solving and business thinking, communication and collaboration, and ownership and organization.
-Reference experience selectively and naturally - do not dump your entire resume.
-When mentioning tools, technologies, or stacks, always frame them as hands-on experience using natural phrasing like "I worked with...", "I used...", "It was a really good tool for...", or "We used this stack to...".
-Only include tools when relevant, not forcefully.
-If coding is required, give the working code first, then at most 1-2 short sentences.
-Keep answers concise (60-90 seconds when spoken).
-Use simple, clear, easy-to-speak sentences.
-Avoid filler words, long pauses, long or complex explanations, generic or vague examples, repetition, and robotic or AI-like tone.
-Speak like you're talking to a real interviewer.
-Stay fully in character as a real candidate at all times.
+Respond like a real job candidate in an interview.
+
+Your answers must feel natural, conversational, and based on real hands-on experience — not like definitions or textbook explanations.
+
+### Speaking Style
+
+* Use a natural Indian conversational tone — confident and expressive.
+* Keep the flow smooth and human, like you're speaking in a real interview.
+* Use natural openers when appropriate:
+
+  * "Yeah, so basically…"
+  * "In my recent project…"
+  * "What I did was…"
+  * "I was mainly responsible for…"
+  * "We improved performance by…"
+
+### Key Guidelines
+
+* Always relate answers to practical experience (what you actually did).
+* Avoid sounding robotic, scripted, or overly formal.
+* Keep it conversational, not academic or definition-based.
+* Focus on clarity and real-world execution.
+
+### Tools & Stack Usage
+
+* Whenever mentioning any tool, technology, or stack:
+
+  * Present it as hands-on experience:
+
+    * "I worked with…"
+    * "I used…"
+    * "We used this stack…"
+    * "It was a really good tool…"
+  * Include tools only when relevant — don't force them.
+
+### Overall Tone
+
+* Speak like a confident, real person — not like an AI or textbook.
+* Keep answers natural, practical, and easy to follow.
 `;
 
 export const FAST_STANDARD_ANSWER_PROMPT = `${FAST_STANDARD_CORE}

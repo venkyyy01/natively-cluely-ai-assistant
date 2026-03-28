@@ -2,7 +2,7 @@
 // Handles meeting lifecycle: stop, save, and recovery.
 // Extracted from IntelligenceManager to decouple DB operations from LLM orchestration.
 
-import { SessionTracker, TranscriptSegment } from './SessionTracker';
+import { MeetingMetadataSnapshot, MeetingSnapshot, SessionTracker, TranscriptSegment } from './SessionTracker';
 import { LLMHelper } from './LLMHelper';
 import { DatabaseManager, Meeting } from './db/DatabaseManager';
 import { GROQ_TITLE_PROMPT, GROQ_SUMMARY_JSON_PROMPT } from './llm';
@@ -28,20 +28,12 @@ export class MeetingPersistence {
         this.session.flushInterimTranscript();
 
         // 1. Snapshot valid data BEFORE resetting
-        const durationMs = Date.now() - this.session.getSessionStartTime();
-        if (durationMs < 1000) {
+        const snapshot = this.session.createSnapshot();
+        if (snapshot.durationMs < 1000) {
             console.log("Meeting too short, ignoring.");
             this.session.reset();
             return;
         }
-
-        const snapshot = {
-            transcript: [...this.session.getFullTranscript()],
-            usage: [...this.session.getFullUsage()],
-            startTime: this.session.getSessionStartTime(),
-            durationMs: durationMs,
-            context: this.session.getFullSessionContext()
-        };
 
         // 2. Reset state immediately so new meeting can start or UI is clean
         this.session.reset();
@@ -52,24 +44,27 @@ export class MeetingPersistence {
         });
 
         // 4. Initial Save (Placeholder)
-        const minutes = Math.floor(durationMs / 60000);
-        const seconds = ((durationMs % 60000) / 1000).toFixed(0);
+        const minutes = Math.floor(snapshot.durationMs / 60000);
+        const seconds = ((snapshot.durationMs % 60000) / 1000).toFixed(0);
         const durationStr = `${minutes}:${Number(seconds) < 10 ? '0' : ''}${seconds}`;
+        const metadata = snapshot.meetingMetadata;
 
         const placeholder: Meeting = {
             id: meetingId,
-            title: "Processing...",
+            title: metadata?.title || "Processing...",
             date: new Date().toISOString(),
             duration: durationStr,
             summary: "Generating summary...",
             detailedSummary: { actionItems: [], keyPoints: [] },
             transcript: snapshot.transcript,
             usage: snapshot.usage,
+            calendarEventId: metadata?.calendarEventId,
+            source: metadata?.source || 'manual',
             isProcessed: false
         };
 
         try {
-            DatabaseManager.getInstance().saveMeeting(placeholder, snapshot.startTime, durationMs);
+            DatabaseManager.getInstance().createOrUpdateMeetingProcessingRecord(placeholder, snapshot.startTime, snapshot.durationMs);
             // Notify Frontend
             const wins = require('electron').BrowserWindow.getAllWindows();
             wins.forEach((w: any) => w.webContents.send('meetings-updated'));
@@ -81,11 +76,11 @@ export class MeetingPersistence {
     /**
      * Heavy lifting: LLM Title, Summary, and DB Write
      */
-    private async processAndSaveMeeting(data: { transcript: TranscriptSegment[], usage: any[], startTime: number, durationMs: number, context: string }, meetingId: string): Promise<void> {
+    private async processAndSaveMeeting(data: MeetingSnapshot, meetingId: string): Promise<void> {
         let title = "Untitled Session";
         let summaryData: { actionItems: string[], keyPoints: string[] } = { actionItems: [], keyPoints: [] };
 
-        const metadata = this.session.getMeetingMetadata();
+        const metadata: MeetingMetadataSnapshot | null = data.meetingMetadata || null;
         let calendarEventId: string | undefined;
         let source: 'manual' | 'calendar' = 'manual';
 
@@ -164,10 +159,7 @@ export class MeetingPersistence {
                 isProcessed: true
             };
 
-            DatabaseManager.getInstance().saveMeeting(meetingData, data.startTime, data.durationMs);
-
-            // Clear metadata
-            this.session.clearMeetingMetadata();
+            DatabaseManager.getInstance().finalizeMeetingProcessing(meetingData, data.startTime, data.durationMs);
 
             // Notify Frontend to refresh list
             const wins = require('electron').BrowserWindow.getAllWindows();
@@ -175,6 +167,7 @@ export class MeetingPersistence {
 
         } catch (error) {
             console.error('[MeetingPersistence] Failed to save meeting:', error);
+            DatabaseManager.getInstance().markMeetingProcessingFailed(meetingId, error);
         }
     }
 
@@ -206,16 +199,20 @@ export class MeetingPersistence {
                     return `[${label}]: ${t.text}`;
                 }).join('\n') || "";
 
-                const parts = details.duration.split(':');
-                const durationMs = ((parseInt(parts[0]) * 60) + parseInt(parts[1])) * 1000;
+                const durationMs = this.parseDurationToMs(details.duration);
                 const startTime = new Date(details.date).getTime();
 
-                const snapshot = {
+                const snapshot: MeetingSnapshot = {
                     transcript: details.transcript as TranscriptSegment[],
                     usage: details.usage,
                     startTime: startTime,
                     durationMs: durationMs,
-                    context: context
+                    context: context,
+                    meetingMetadata: {
+                        title: details.title,
+                        calendarEventId: details.calendarEventId,
+                        source: details.source,
+                    },
                 };
 
                 await this.processAndSaveMeeting(snapshot, m.id);
@@ -225,5 +222,19 @@ export class MeetingPersistence {
                 console.error(`[MeetingPersistence] Failed to recover meeting ${m.id}`, e);
             }
         }
+    }
+
+    private parseDurationToMs(duration: string): number {
+        const parts = duration.split(':').map(part => Number.parseInt(part, 10));
+        if (parts.some(part => Number.isNaN(part))) {
+            return 0;
+        }
+        if (parts.length === 2) {
+            return ((parts[0] * 60) + parts[1]) * 1000;
+        }
+        if (parts.length === 3) {
+            return ((parts[0] * 3600) + (parts[1] * 60) + parts[2]) * 1000;
+        }
+        return 0;
     }
 }

@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useStreamBuffer } from '../hooks/useStreamBuffer';
+import { useHumanSpeedAutoScroll } from '../hooks/useHumanSpeedAutoScroll';
 import { X, Copy, Check, Globe, ArrowUp } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import nativelyIcon from './icon.png';
@@ -122,30 +123,45 @@ const GlobalChatOverlay: React.FC<GlobalChatOverlayProps> = ({
     const [query, setQuery] = useState('');
     const streamBuffer = useStreamBuffer();
 
-    const messagesEndRef = useRef<HTMLDivElement>(null);
     const chatWindowRef = useRef<HTMLDivElement>(null);
+    const scrollContainerRef = useRef<HTMLDivElement>(null);
+    const activeRequestIdRef = useRef<string | null>(null);
+    const lastHandledInitialQueryRef = useRef<string>('');
+    const activeCleanupRef = useRef<Array<() => void>>([]);
+    const chatStateRef = useRef<ChatState>('idle');
 
-    // Auto-scroll to bottom on new messages
     useEffect(() => {
-        messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-    }, [messages]);
+        chatStateRef.current = chatState;
+    }, [chatState]);
 
-    // Submit initial query when overlay opens
-    useEffect(() => {
-        if (isOpen && initialQuery && messages.length === 0) {
-            setTimeout(() => {
-                submitQuestion(initialQuery);
-            }, 100);
+    const cleanupActiveRequest = useCallback(() => {
+        for (const cleanup of activeCleanupRef.current) {
+            cleanup();
         }
-    }, [isOpen, initialQuery]);
+        activeCleanupRef.current = [];
+        activeRequestIdRef.current = null;
+        streamBuffer.reset();
+    }, [streamBuffer]);
 
-    // Listen for new queries from parent
+    const latestReadableMessage = [...messages].reverse().find(msg => msg.role === 'assistant') || null;
+
+    useHumanSpeedAutoScroll({
+        enabled: isOpen,
+        containerRef: scrollContainerRef,
+        latestMessage: latestReadableMessage ? {
+            id: latestReadableMessage.id,
+            role: latestReadableMessage.role,
+            content: latestReadableMessage.content,
+            isStreaming: latestReadableMessage.isStreaming,
+        } : null,
+        eligibleRoles: ['assistant'],
+    });
+
     useEffect(() => {
-        if (isOpen && initialQuery && messages.length > 0) {
-            // This is a follow-up query
-            submitQuestion(initialQuery);
-        }
-    }, [initialQuery]);
+        return () => {
+            cleanupActiveRequest();
+        };
+    }, [cleanupActiveRequest]);
 
     // ESC key handler
     useEffect(() => {
@@ -175,7 +191,11 @@ const GlobalChatOverlay: React.FC<GlobalChatOverlayProps> = ({
 
     // Submit question using global RAG
     const submitQuestion = useCallback(async (question: string) => {
-        if (!question.trim() || chatState === 'waiting_for_llm' || chatState === 'streaming_response') return;
+        if (!question.trim() || chatStateRef.current === 'waiting_for_llm' || chatStateRef.current === 'streaming_response') return;
+
+        cleanupActiveRequest();
+        const requestId = `request-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+        activeRequestIdRef.current = requestId;
 
         const userMessage: Message = {
             id: `user-${Date.now()}`,
@@ -188,9 +208,18 @@ const GlobalChatOverlay: React.FC<GlobalChatOverlayProps> = ({
 
         const assistantMessageId = `assistant-${Date.now()}`;
 
+        const isCurrentRequest = () => activeRequestIdRef.current === requestId;
+        const finishRequest = () => {
+            if (!isCurrentRequest()) {
+                return;
+            }
+            cleanupActiveRequest();
+        };
+
         try {
             // Add typing indicator delay (200ms) - makes the AI feel "thoughtful"
             await new Promise(resolve => setTimeout(resolve, 200));
+            if (!isCurrentRequest()) return;
 
             // Create assistant message placeholder
             setMessages(prev => [...prev, {
@@ -203,8 +232,10 @@ const GlobalChatOverlay: React.FC<GlobalChatOverlayProps> = ({
             // Set up RAG streaming listeners (RAF-batched)
             streamBuffer.reset();
             const tokenCleanup = window.electronAPI?.onRAGStreamChunk((data: { chunk: string }) => {
+                if (!isCurrentRequest()) return;
                 setChatState('streaming_response');
                 streamBuffer.appendToken(data.chunk, (content) => {
+                    if (!isCurrentRequest()) return;
                     setMessages(prev => prev.map(msg =>
                         msg.id === assistantMessageId
                             ? { ...msg, content }
@@ -214,6 +245,7 @@ const GlobalChatOverlay: React.FC<GlobalChatOverlayProps> = ({
             });
 
             const doneCleanup = window.electronAPI?.onRAGStreamComplete(() => {
+                if (!isCurrentRequest()) return;
                 const finalContent = streamBuffer.getBufferedContent();
                 setMessages(prev => prev.map(msg =>
                     msg.id === assistantMessageId
@@ -221,38 +253,36 @@ const GlobalChatOverlay: React.FC<GlobalChatOverlayProps> = ({
                         : msg
                 ));
                 setChatState('idle');
-                streamBuffer.reset();
-                tokenCleanup?.();
-                doneCleanup?.();
-                errorCleanup?.();
+                finishRequest();
             });
 
             const errorCleanup = window.electronAPI?.onRAGStreamError((data: { error: string }) => {
+                if (!isCurrentRequest()) return;
                 console.error('[GlobalChat] RAG stream error:', data.error);
                 setMessages(prev => prev.filter(msg => msg.id !== assistantMessageId));
                 setErrorMessage("Couldn't get a response. Please try again.");
                 setChatState('error');
-                streamBuffer.reset();
-                tokenCleanup?.();
-                doneCleanup?.();
-                errorCleanup?.();
+                finishRequest();
             });
+
+            activeCleanupRef.current = [tokenCleanup, doneCleanup, errorCleanup].filter(Boolean) as Array<() => void>;
 
             // Use global RAG query
             const result = await window.electronAPI?.ragQueryGlobal(question);
+            if (!isCurrentRequest()) return;
 
             if (result?.fallback) {
                 console.log("[GlobalChat] RAG unavailable, falling back to standard chat");
-                // Cleanup RAG listeners
-                tokenCleanup?.();
-                doneCleanup?.();
-                errorCleanup?.();
+                cleanupActiveRequest();
+                activeRequestIdRef.current = requestId;
 
                 // Setup fallback listeners (Standard Gemini)
                 streamBuffer.reset();
                 const oldTokenCleanup = window.electronAPI?.onGeminiStreamToken((token: string) => {
+                    if (!isCurrentRequest()) return;
                     setChatState('streaming_response');
                     streamBuffer.appendToken(token, (content) => {
+                        if (!isCurrentRequest()) return;
                         setMessages(prev => prev.map(msg =>
                             msg.id === assistantMessageId
                                 ? { ...msg, content }
@@ -262,6 +292,7 @@ const GlobalChatOverlay: React.FC<GlobalChatOverlayProps> = ({
                 });
 
                 const oldDoneCleanup = window.electronAPI?.onGeminiStreamDone(() => {
+                    if (!isCurrentRequest()) return;
                     const finalContent = streamBuffer.getBufferedContent();
                     setMessages(prev => prev.map(msg =>
                         msg.id === assistantMessageId
@@ -269,38 +300,50 @@ const GlobalChatOverlay: React.FC<GlobalChatOverlayProps> = ({
                             : msg
                     ));
                     setChatState('idle');
-                    streamBuffer.reset();
-                    oldTokenCleanup?.();
-                    oldDoneCleanup?.();
-                    oldErrorCleanup?.();
+                    finishRequest();
                 });
 
                 const oldErrorCleanup = window.electronAPI?.onGeminiStreamError((error: string) => {
+                    if (!isCurrentRequest()) return;
                     console.error('[GlobalChat] Gemini stream error:', error);
                     setMessages(prev => prev.filter(msg => msg.id !== assistantMessageId));
                     setErrorMessage("Couldn't get a response. Please check your settings.");
                     setChatState('error');
-                    streamBuffer.reset();
-                    oldTokenCleanup?.();
-                    oldDoneCleanup?.();
-                    oldErrorCleanup?.();
+                    finishRequest();
                 });
+
+                activeCleanupRef.current = [oldTokenCleanup, oldDoneCleanup, oldErrorCleanup].filter(Boolean) as Array<() => void>;
 
                 // Call standard chat
                 await window.electronAPI?.streamGeminiChat(question, undefined, undefined, { skipSystemPrompt: false });
             }
 
         } catch (error) {
+            if (!isCurrentRequest()) return;
             console.error('[GlobalChat] Error:', error);
             setMessages(prev => prev.filter(msg => msg.id !== assistantMessageId));
             setErrorMessage("Something went wrong. Please try again.");
             setChatState('error');
+            finishRequest();
         }
-    }, [chatState]);
+    }, [cleanupActiveRequest, streamBuffer]);
+
+    useEffect(() => {
+        if (!isOpen) {
+            lastHandledInitialQueryRef.current = '';
+            return;
+        }
+        const trimmed = initialQuery.trim();
+        if (trimmed && trimmed !== lastHandledInitialQueryRef.current) {
+            lastHandledInitialQueryRef.current = trimmed;
+            submitQuestion(initialQuery);
+        }
+    }, [isOpen, initialQuery, submitQuestion]);
 
     return (
         <AnimatePresence
             onExitComplete={() => {
+                cleanupActiveRequest();
                 setChatState('idle');
                 setMessages([]);
                 setErrorMessage(null);
@@ -351,7 +394,7 @@ const GlobalChatOverlay: React.FC<GlobalChatOverlayProps> = ({
                         </div>
 
                         {/* Messages area - scrollable */}
-                        <div className="flex-1 overflow-y-auto px-6 py-4 pb-32 custom-scrollbar">
+                        <div ref={scrollContainerRef} className="flex-1 overflow-y-auto px-6 py-4 pb-32 custom-scrollbar">
                             {messages.map((msg) => (
                                 msg.role === 'user'
                                     ? <UserMessage key={msg.id} content={msg.content} />
@@ -370,7 +413,6 @@ const GlobalChatOverlay: React.FC<GlobalChatOverlayProps> = ({
                                 </motion.div>
                             )}
 
-                            <div ref={messagesEndRef} />
                         </div>
 
                         {/* Floating Footer (Ask Bar) */}

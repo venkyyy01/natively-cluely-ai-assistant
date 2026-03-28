@@ -81,6 +81,19 @@ export class DatabaseManager {
             }
 
             this.db = new Database(this.dbPath);
+            this.db.pragma('foreign_keys = ON');
+            this.db.pragma('journal_mode = WAL');
+            this.db.pragma('synchronous = NORMAL');
+            this.db.pragma('wal_autocheckpoint = 1000');
+            this.db.pragma('busy_timeout = 5000');
+            try {
+                const integrity = this.db.pragma('integrity_check(1)', { simple: true });
+                if (integrity !== 'ok') {
+                    console.warn('[DatabaseManager] integrity_check reported:', integrity);
+                }
+            } catch (integrityError) {
+                console.error('[DatabaseManager] Failed to run integrity_check:', integrityError);
+            }
 
             // Load sqlite-vec extension for native vector search
             try {
@@ -655,6 +668,8 @@ export class DatabaseManager {
             INSERT INTO ai_interactions (meeting_id, type, timestamp, user_query, ai_response, metadata_json)
             VALUES (?, ?, ?, ?, ?, ?)
         `);
+        const deleteTranscripts = this.db.prepare('DELETE FROM transcripts WHERE meeting_id = ?');
+        const deleteInteractions = this.db.prepare('DELETE FROM ai_interactions WHERE meeting_id = ?');
 
         const summaryJson = JSON.stringify({
             legacySummary: meeting.summary,
@@ -674,6 +689,9 @@ export class DatabaseManager {
                 meeting.source || 'manual',
                 meeting.isProcessed ? 1 : 0
             );
+
+            deleteTranscripts.run(meeting.id);
+            deleteInteractions.run(meeting.id);
 
             // 2. Insert Transcript
             if (meeting.transcript) {
@@ -724,6 +742,39 @@ export class DatabaseManager {
         } catch (err) {
             console.error(`[DatabaseManager] Failed to save meeting ${meeting.id}`, err);
             throw err;
+        }
+    }
+
+    public createOrUpdateMeetingProcessingRecord(meeting: Meeting, startTimeMs: number, durationMs: number): void {
+        this.saveMeeting({
+            ...meeting,
+            isProcessed: false,
+        }, startTimeMs, durationMs);
+    }
+
+    public finalizeMeetingProcessing(meeting: Meeting, startTimeMs: number, durationMs: number): void {
+        this.saveMeeting({
+            ...meeting,
+            isProcessed: true,
+        }, startTimeMs, durationMs);
+    }
+
+    public markMeetingProcessingFailed(id: string, error: unknown): boolean {
+        if (!this.db) return false;
+        try {
+            const current = this.db.prepare('SELECT summary_json FROM meetings WHERE id = ?').get(id) as { summary_json?: string } | undefined;
+            const existing = current?.summary_json ? JSON.parse(current.summary_json) : {};
+            const summaryJson = JSON.stringify({
+                ...existing,
+                legacySummary: 'Meeting processing failed',
+                error: error instanceof Error ? error.message : String(error),
+            });
+            const stmt = this.db.prepare('UPDATE meetings SET is_processed = -1, summary_json = ? WHERE id = ?');
+            const info = stmt.run(summaryJson, id);
+            return info.changes > 0;
+        } catch (updateError) {
+            console.error(`[DatabaseManager] Failed to mark meeting ${id} as failed:`, updateError);
+            return false;
         }
     }
 
@@ -785,7 +836,8 @@ export class DatabaseManager {
         if (!this.db) return [];
 
         const stmt = this.db.prepare(`
-            SELECT * FROM meetings 
+            SELECT id, title, created_at, duration_ms, summary_json, calendar_event_id, source
+            FROM meetings 
             ORDER BY created_at DESC 
             LIMIT ?
         `);
@@ -887,8 +939,32 @@ export class DatabaseManager {
         if (!this.db) return false;
 
         try {
-            const stmt = this.db.prepare('DELETE FROM meetings WHERE id = ?');
-            const info = stmt.run(id);
+            const deleteTransaction = this.db.transaction(() => {
+                const chunkIds = (this.db!.prepare('SELECT id FROM chunks WHERE meeting_id = ?').all(id) as Array<{ id: number }>).map(row => row.id);
+                const summaryIds = (this.db!.prepare('SELECT id FROM chunk_summaries WHERE meeting_id = ?').all(id) as Array<{ id: number }>).map(row => row.id);
+
+                this.db!.prepare('DELETE FROM embedding_queue WHERE meeting_id = ?').run(id);
+
+                for (const dim of this.getKnownVecDimensions()) {
+                    try {
+                        if (chunkIds.length > 0) {
+                            const chunkPlaceholders = chunkIds.map(() => '?').join(', ');
+                            this.db!.prepare(`DELETE FROM vec_chunks_${dim} WHERE chunk_id IN (${chunkPlaceholders})`).run(...chunkIds);
+                        }
+                        if (summaryIds.length > 0) {
+                            const summaryPlaceholders = summaryIds.map(() => '?').join(', ');
+                            this.db!.prepare(`DELETE FROM vec_summaries_${dim} WHERE summary_id IN (${summaryPlaceholders})`).run(...summaryIds);
+                        }
+                    } catch (vecError) {
+                        console.warn(`[DatabaseManager] Failed to delete vec rows for dim=${dim}:`, vecError);
+                    }
+                }
+
+                this.db!.prepare('DELETE FROM chunk_summaries WHERE meeting_id = ?').run(id);
+                this.db!.prepare('DELETE FROM chunks WHERE meeting_id = ?').run(id);
+                return this.db!.prepare('DELETE FROM meetings WHERE id = ?').run(id);
+            });
+            const info = deleteTransaction();
             console.log(`[DatabaseManager] Deleted meeting ${id}. Changes: ${info.changes}`);
             return info.changes > 0;
         } catch (error) {
@@ -937,10 +1013,15 @@ export class DatabaseManager {
         if (!this.db) return false;
 
         try {
-            // Clear all tables atomically (order matters due to foreign keys,
-            // but SQLite handles cascades). Using a transaction ensures we never
-            // end up in a half-cleared state if one statement fails.
             this.db.transaction(() => {
+                for (const dim of this.getKnownVecDimensions()) {
+                    try {
+                        this.db!.exec(`DELETE FROM vec_chunks_${dim}`);
+                        this.db!.exec(`DELETE FROM vec_summaries_${dim}`);
+                    } catch (vecError) {
+                        console.warn(`[DatabaseManager] Failed clearing vec tables for dim=${dim}:`, vecError);
+                    }
+                }
                 this.db!.exec('DELETE FROM embedding_queue');
                 this.db!.exec('DELETE FROM chunk_summaries');
                 this.db!.exec('DELETE FROM chunks');
@@ -1139,5 +1220,9 @@ natively.contact@gmail.com`;
 
         this.saveMeeting(demoMeeting, today.getTime(), durationMs);
         console.log('[DatabaseManager] Seeded demo meeting.');
+    }
+
+    private getKnownVecDimensions(): number[] {
+        return Array.from(new Set([...DatabaseManager.KNOWN_DIMS, ...this.ensuredDims]));
     }
 }

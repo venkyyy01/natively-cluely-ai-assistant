@@ -41,6 +41,7 @@ import 'katex/dist/katex.min.css';
 import { getElectronAPI } from '../lib/electronApi';
 import { analytics, detectProviderType } from '../lib/analytics/analytics.service';
 import { useShortcuts } from '../hooks/useShortcuts';
+import { useHumanSpeedAutoScroll } from '../hooks/useHumanSpeedAutoScroll';
 import {
     classifyAssistRender,
     ConsciousModeAnswer,
@@ -120,7 +121,6 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
     const voiceInputRef = useRef<string>('');  // Ref for capturing in async handlers
     const textInputRef = useRef<HTMLInputElement>(null); // Ref for input focus
 
-    const messagesEndRef = useRef<HTMLDivElement>(null);
     const contentRef = useRef<HTMLDivElement>(null);
     const scrollContainerRef = useRef<HTMLDivElement>(null);
     const activeConsciousThreadRef = useRef<ReasoningThread | null>(null);
@@ -259,12 +259,19 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
         return () => clearTimeout(timer);
     }, []);
 
-    // Auto-scroll
-    useEffect(() => {
-        if (isExpanded) {
-            messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-        }
-    }, [messages, isExpanded, isProcessing]);
+    const latestReadableMessage = [...messages].reverse().find(msg => msg.role === 'system') || null;
+
+    useHumanSpeedAutoScroll({
+        enabled: isExpanded,
+        containerRef: scrollContainerRef,
+        latestMessage: latestReadableMessage ? {
+            id: latestReadableMessage.id,
+            role: latestReadableMessage.role,
+            content: latestReadableMessage.text,
+            isStreaming: latestReadableMessage.isStreaming,
+        } : null,
+        eligibleRoles: ['system'],
+    });
 
     // Build conversation context from messages
     useEffect(() => {
@@ -1690,7 +1697,6 @@ Provide only the answer, nothing else.`;
                                             </div>
                                         </div>
                                     )}
-                                    <div ref={messagesEndRef} />
                                 </div>
                             )}
 

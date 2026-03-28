@@ -32,8 +32,12 @@ const LLM_API_TIMEOUT_MS = 30000; // 30 seconds
  * Create an AbortSignal that times out after the specified duration
  */
 function createTimeoutSignal(timeoutMs: number = LLM_API_TIMEOUT_MS): AbortSignal {
+  if (typeof AbortSignal.timeout === 'function') {
+    return AbortSignal.timeout(timeoutMs);
+  }
   const controller = new AbortController();
-  setTimeout(() => controller.abort(new Error(`LLM API timeout after ${timeoutMs}ms`)), timeoutMs);
+  const timeoutHandle = setTimeout(() => controller.abort(new Error(`LLM API timeout after ${timeoutMs}ms`)), timeoutMs);
+  controller.signal.addEventListener('abort', () => clearTimeout(timeoutHandle), { once: true });
   return controller.signal;
 }
 
@@ -41,10 +45,17 @@ function createTimeoutSignal(timeoutMs: number = LLM_API_TIMEOUT_MS): AbortSigna
  * Wrap a promise with a timeout
  */
 async function withTimeout<T>(promise: Promise<T>, timeoutMs: number = LLM_API_TIMEOUT_MS): Promise<T> {
+  let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
   const timeoutPromise = new Promise<never>((_, reject) => {
-    setTimeout(() => reject(new Error(`LLM API timeout after ${timeoutMs}ms`)), timeoutMs);
+    timeoutHandle = setTimeout(() => reject(new Error(`LLM API timeout after ${timeoutMs}ms`)), timeoutMs);
   });
-  return Promise.race([promise, timeoutPromise]);
+  try {
+    return await Promise.race([promise, timeoutPromise]);
+  } finally {
+    if (timeoutHandle) {
+      clearTimeout(timeoutHandle);
+    }
+  }
 }
 
 /**
@@ -75,6 +86,12 @@ function sanitizeError(error: unknown): string {
   return String(error);
 }
 
+function throwIfAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) {
+    throw signal.reason instanceof Error ? signal.reason : new Error('Operation aborted');
+  }
+}
+
 interface OllamaResponse {
   response: string
   done: boolean
@@ -99,9 +116,21 @@ const LOCAL_INPUT_TOKEN_BUDGET = 16000
 const SYSTEM_PROMPT_CACHE_TTL_MS = 5 * 60 * 1000
 const FINAL_PAYLOAD_CACHE_TTL_MS = 15 * 1000
 const RESPONSE_CACHE_TTL_MS = 1500
+const SYSTEM_PROMPT_CACHE_MAX = 50
+const FINAL_PAYLOAD_CACHE_MAX = 20
+const RESPONSE_CACHE_MAX = 100
+const IN_FLIGHT_RESPONSE_CACHE_MAX = 10
 
 // Simple prompt for image analysis (not interview copilot - kept separate)
 const IMAGE_ANALYSIS_PROMPT = `Analyze concisely. Be direct. No markdown formatting. Return plain text only.`
+const TLDR_RESPONSE_INSTRUCTION = `CRITICAL RESPONSE STYLE: Default to a TL;DR-style answer.
+- Start every answer with exactly: TL;DR:
+- Start with the direct answer immediately after that.
+- Keep it short unless the user explicitly asks for more detail.
+- Default to 2-3 short sentences maximum.
+- If bullets are necessary, use at most 3 short bullets.
+- Do NOT return a wall of text.
+- If the answer could become long, compress it into the shortest useful version.`
 
 type Provider = 'gemini' | 'groq' | 'openai' | 'claude';
 
@@ -139,6 +168,7 @@ export class LLMHelper {
   private responseCache = new Map<string, { expiresAt: number; value: string }>();
   private inFlightResponseCache = new Map<string, Promise<string>>();
   private modelFallbackHandler: ((event: ModelFallbackEvent) => void) | null = null;
+  private cacheCleanupInterval: ReturnType<typeof setInterval> | null = null;
 
   // Rate limiters per provider to prevent 429 errors on free tiers
   private rateLimiters: ReturnType<typeof createProviderRateLimiters>;
@@ -154,6 +184,8 @@ export class LLMHelper {
 
     // Initialize model version manager
     this.modelVersionManager = new ModelVersionManager();
+    this.cacheCleanupInterval = setInterval(() => this.cleanupExpiredCaches(), 60_000);
+    this.cacheCleanupInterval.unref?.();
 
     // Initialize Groq client if API key provided
     if (groqApiKey) {
@@ -256,6 +288,14 @@ export class LLMHelper {
       Object.values(this.rateLimiters).forEach(rl => rl.destroy());
       this.rateLimiters = null as any;
     }
+    if (this.cacheCleanupInterval) {
+      clearInterval(this.cacheCleanupInterval);
+      this.cacheCleanupInterval = null;
+    }
+    this.systemPromptCache.clear();
+    this.finalPayloadCache.clear();
+    this.responseCache.clear();
+    this.inFlightResponseCache.clear();
     // Stop model version manager background scheduler and null reference
     this.modelVersionManager.stopScheduler();
     this.modelVersionManager = null as any;
@@ -749,7 +789,7 @@ export class LLMHelper {
     }
   }
 
-  public async generateSolution(problemInfo: any) {
+  public async generateSolution(problemInfo: any, signal?: AbortSignal) {
     const prompt = `Given this problem or situation:\n${JSON.stringify(problemInfo, null, 2)}\n\nPlease provide your response in the following JSON format:\n{
   "solution": {
     "code": "The code or main answer here.",
@@ -761,7 +801,9 @@ export class LLMHelper {
 }\nImportant: Return ONLY the JSON object, without any markdown formatting or code blocks.`
 
     try {
-      const text = await this.generateWithVisionFallback(IMAGE_ANALYSIS_PROMPT, prompt)
+      throwIfAborted(signal)
+      const text = await this.generateWithVisionFallback(IMAGE_ANALYSIS_PROMPT, prompt, [], signal)
+      throwIfAborted(signal)
       const parsed = JSON.parse(this.cleanJsonResponse(text))
       return parsed
     } catch (error) {
@@ -769,7 +811,7 @@ export class LLMHelper {
     }
   }
 
-  public async debugSolutionWithImages(problemInfo: any, currentCode: string, debugImagePaths: string[]) {
+  public async debugSolutionWithImages(problemInfo: any, currentCode: string, debugImagePaths: string[], signal?: AbortSignal) {
     try {
       const prompt = `You are a wingman. Given:\n1. The original problem or situation: ${JSON.stringify(problemInfo, null, 2)}\n2. The current response or approach: ${currentCode}\n3. The debug information in the provided images\n\nPlease analyze the debug information and provide feedback in this JSON format:\n{
   "solution": {
@@ -781,7 +823,9 @@ export class LLMHelper {
   }
 }\nImportant: Return ONLY the JSON object, without any markdown formatting or code blocks.`
 
-      const text = await this.generateWithVisionFallback(IMAGE_ANALYSIS_PROMPT, prompt, debugImagePaths)
+      throwIfAborted(signal)
+      const text = await this.generateWithVisionFallback(IMAGE_ANALYSIS_PROMPT, prompt, debugImagePaths, signal)
+      throwIfAborted(signal)
       const parsed = JSON.parse(this.cleanJsonResponse(text))
       return parsed
     } catch (error) {
@@ -827,10 +871,12 @@ export class LLMHelper {
     }
   }
 
-  public async analyzeImageFiles(imagePaths: string[]) {
+  public async analyzeImageFiles(imagePaths: string[], signal?: AbortSignal) {
     try {
       const prompt = `Describe the content of ${imagePaths.length > 1 ? 'these images' : 'this image'} in a short, concise answer. If it contains code or a problem, solve it.`;
-      const text = await this.generateWithVisionFallback(HARD_SYSTEM_PROMPT, prompt, imagePaths);
+      throwIfAborted(signal)
+      const text = await this.generateWithVisionFallback(HARD_SYSTEM_PROMPT, prompt, imagePaths, signal);
+      throwIfAborted(signal)
 
       return { text: text, timestamp: Date.now() };
 
@@ -917,7 +963,7 @@ ANSWER DIRECTLY:`;
    * Helper to inject language instruction into system prompt
    */
   private injectLanguageInstruction(systemPrompt: string): string {
-    return `${systemPrompt}\n\nCRITICAL: You MUST respond ONLY in ${this.aiResponseLanguage}. This is an absolute requirement. All generated text that the user should say must be in ${this.aiResponseLanguage}.`;
+    return `${systemPrompt}\n\n${TLDR_RESPONSE_INSTRUCTION}\n\nCRITICAL: You MUST respond ONLY in ${this.aiResponseLanguage}. This is an absolute requirement. All generated text that the user should say must be in ${this.aiResponseLanguage}.`;
   }
 
   private hashValue(value: unknown): string {
@@ -974,7 +1020,36 @@ ANSWER DIRECTLY:`;
       expiresAt: Date.now() + ttlMs,
       value: this.cloneCacheValue(value),
     });
+    this.enforceCacheLimit(cache, this.getCacheLimit(cache));
     return this.cloneCacheValue(value);
+  }
+
+  private getCacheLimit(cache: Map<string, unknown>): number {
+    if (cache === this.systemPromptCache) return SYSTEM_PROMPT_CACHE_MAX;
+    if (cache === this.finalPayloadCache) return FINAL_PAYLOAD_CACHE_MAX;
+    if (cache === this.responseCache) return RESPONSE_CACHE_MAX;
+    return RESPONSE_CACHE_MAX;
+  }
+
+  private enforceCacheLimit<T>(cache: Map<string, T>, maxEntries: number): void {
+    while (cache.size > maxEntries) {
+      const oldestKey = cache.keys().next().value;
+      if (oldestKey === undefined) {
+        break;
+      }
+      cache.delete(oldestKey);
+    }
+  }
+
+  private cleanupExpiredCaches(): void {
+    const now = Date.now();
+    for (const cache of [this.systemPromptCache, this.finalPayloadCache, this.responseCache]) {
+      for (const [key, value] of cache.entries()) {
+        if (value.expiresAt <= now) {
+          cache.delete(key);
+        }
+      }
+    }
   }
 
   private async withSystemPromptCache(
@@ -1029,6 +1104,13 @@ ANSWER DIRECTLY:`;
     const inFlight = this.inFlightResponseCache.get(cacheKey);
     if (inFlight) {
       return inFlight;
+    }
+
+    if (this.inFlightResponseCache.size >= IN_FLIGHT_RESPONSE_CACHE_MAX) {
+      const oldestKey = this.inFlightResponseCache.keys().next().value;
+      if (oldestKey !== undefined) {
+        this.inFlightResponseCache.delete(oldestKey);
+      }
     }
 
     const pending = request()
@@ -1150,7 +1232,7 @@ ANSWER DIRECTLY:`;
       }
 
       if (this.activeCurlProvider) {
-        return await this.chatWithCurl(message, skipSystemPrompt ? undefined : CUSTOM_SYSTEM_PROMPT);
+        return await this.chatWithCurl(message, skipSystemPrompt ? undefined : this.injectLanguageInstruction(CUSTOM_SYSTEM_PROMPT));
       }
 
       if (this.customProvider) {
@@ -1159,7 +1241,7 @@ ANSWER DIRECTLY:`;
         const response = await this.executeCustomProvider(
           this.customProvider.curlCommand,
           combinedMessages.gemini,
-          skipSystemPrompt ? "" : CUSTOM_SYSTEM_PROMPT,
+          skipSystemPrompt ? "" : this.injectLanguageInstruction(CUSTOM_SYSTEM_PROMPT),
           message,
           context || "",
           imagePaths?.[0]
@@ -1478,7 +1560,8 @@ ANSWER DIRECTLY:`;
     // 2. Prepare Variables
     // We combine System Prompt + User Message into {{TEXT}} for simplicity in raw mode, 
     // or you can support {{SYSTEM}} if you want to get fancy later.
-    const fullPrompt = systemPrompt ? `${systemPrompt}\n\n${userMessage}` : userMessage;
+    const enforcedSystemPrompt = systemPrompt || this.injectLanguageInstruction(CUSTOM_SYSTEM_PROMPT);
+    const fullPrompt = `${enforcedSystemPrompt}\n\n${userMessage}`;
 
     const variables = {
       TEXT: fullPrompt.replace(/\n/g, "\\n").replace(/"/g, '\\"') // Basic escaping
@@ -1594,6 +1677,7 @@ ANSWER DIRECTLY:`;
 
     // 1. Parse cURL to JSON object
     const requestConfig = curl2Json(curlCommand);
+    const enforcedSystemPrompt = systemPrompt || this.injectLanguageInstruction(CUSTOM_SYSTEM_PROMPT);
 
     // 2. Prepare Image (if any)
     let base64Image = "";
@@ -1610,7 +1694,7 @@ ANSWER DIRECTLY:`;
     const variables = {
       TEXT: combinedMessage,             // Deprecated but kept for compat: System + Context + User
       PROMPT: combinedMessage,           // Alias for TEXT
-      SYSTEM_PROMPT: systemPrompt,       // Raw System Prompt
+      SYSTEM_PROMPT: enforcedSystemPrompt,       // Raw System Prompt
       USER_MESSAGE: rawUserMessage,      // Raw User Message
       CONTEXT: context,                  // Raw Context
       IMAGE_BASE64: base64Image,         // Base64 encoded image string
@@ -1785,9 +1869,10 @@ ANSWER DIRECTLY:`;
    * Provider order per tier: OpenAI -> Gemini Flash -> Claude -> Gemini Pro -> Groq Scout
    * After all cloud tiers: Custom Provider -> cURL Provider -> Ollama
    */
-  private async generateWithVisionFallback(systemPrompt: string, userPrompt: string, imagePaths: string[] = []): Promise<string> {
+  private async generateWithVisionFallback(systemPrompt: string, userPrompt: string, imagePaths: string[] = [], signal?: AbortSignal): Promise<string> {
     type ProviderAttempt = { name: string; execute: () => Promise<string> };
     const isMultimodal = imagePaths.length > 0;
+    throwIfAborted(signal);
 
     // Helper: build a provider attempt for a given family + model ID
     const buildProviderForFamily = (family: ModelFamily, modelId: string): ProviderAttempt | null => {
@@ -1807,6 +1892,7 @@ ANSWER DIRECTLY:`;
               execute: async () => {
                 const contents: any[] = [{ text: `${systemPrompt}\n\n${userPrompt}` }];
                 for (const p of imagePaths) {
+                  throwIfAborted(signal)
                   if (fs.existsSync(p)) {
                     const { mimeType, data } = await this.processImage(p);
                     contents.push({ inlineData: { mimeType, data } });
@@ -1836,6 +1922,7 @@ ANSWER DIRECTLY:`;
               execute: async () => {
                 const contents: any[] = [{ text: `${systemPrompt}\n\n${userPrompt}` }];
                 for (const p of imagePaths) {
+                  throwIfAborted(signal)
                   if (fs.existsSync(p)) {
                     const { mimeType, data } = await this.processImage(p);
                     contents.push({ inlineData: { mimeType, data } });
