@@ -307,9 +307,6 @@ const MeetingChatOverlay: React.FC<MeetingChatOverlayProps> = ({
         const assistantMessageId = `assistant-${Date.now()}`;
 
         try {
-            // Add typing indicator delay (200ms) - makes the AI feel "thoughtful"
-            await new Promise(resolve => setTimeout(resolve, 200));
-
             // Create assistant message placeholder
             setMessages(prev => [...prev, {
                 id: assistantMessageId,

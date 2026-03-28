@@ -1141,9 +1141,21 @@ ANSWER DIRECTLY:`;
     return this.prepareUserContent(message, context, this.getInputTokenBudget(provider, modelId));
   }
 
+  private wantsDetailedResponse(message: string): boolean {
+    return /\b(detailed|detail|deep dive|in depth|step by step|thorough|comprehensive|elaborate|full explanation|longer version)\b/i.test(message);
+  }
+
+  private applyDefaultBrevityHint(message: string): string {
+    if (this.wantsDetailedResponse(message)) {
+      return message;
+    }
+    return `${message}\n\nAnswer briefly and directly. Keep it to 2-3 short sentences unless code is required.`;
+  }
+
   public async chatWithGemini(message: string, imagePaths?: string[], context?: string, skipSystemPrompt: boolean = false, alternateGroqMessage?: string): Promise<string> {
     try {
       console.log(`[LLMHelper] chatWithGemini called with message:`, message.substring(0, 50))
+      const effectiveMessage = this.applyDefaultBrevityHint(message)
 
       // ============================================================
       // KNOWLEDGE MODE INTERCEPT
@@ -1183,7 +1195,7 @@ ANSWER DIRECTLY:`;
 
       // Helper to build combined prompts for Groq/Gemini
       const buildMessage = (provider: string, modelId: string, systemPrompt: string) => {
-        const preparedUserContent = this.prepareUserContentForModel(provider, modelId, message, context);
+        const preparedUserContent = this.prepareUserContentForModel(provider, modelId, effectiveMessage, context);
         if (skipSystemPrompt) {
           return preparedUserContent;
         }
@@ -1192,8 +1204,8 @@ ANSWER DIRECTLY:`;
 
       // For OpenAI/Claude: separate system prompt + user message
       const activeOpenAiModel = this.getActiveOpenAiModel();
-      const openaiUserContent = this.prepareUserContentForModel('openai', activeOpenAiModel, message, context);
-      const claudeUserContent = this.prepareUserContentForModel('claude', CLAUDE_MODEL, message, context);
+      const openaiUserContent = this.prepareUserContentForModel('openai', activeOpenAiModel, effectiveMessage, context);
+      const claudeUserContent = this.prepareUserContentForModel('claude', CLAUDE_MODEL, effectiveMessage, context);
 
       const finalGeminiPrompt = await this.withSystemPromptCache('gemini', this.currentModelId, HARD_SYSTEM_PROMPT, () => this.injectLanguageInstruction(HARD_SYSTEM_PROMPT));
       const finalGroqPrompt = alternateGroqMessage || await this.withSystemPromptCache('groq', GROQ_MODEL, GROQ_SYSTEM_PROMPT, () => this.injectLanguageInstruction(GROQ_SYSTEM_PROMPT));
@@ -1576,8 +1588,8 @@ ANSWER DIRECTLY:`;
       // 5. Extract Answer
       // If user didn't specify a path, try to guess or dump string
       if (!responsePath) {
-        const guessed = this.extractFromCommonFormats(response.data, true);
-        return guessed && guessed.trim().length > 0 ? guessed : JSON.stringify(response.data);
+        const extracted = this.extractOpenAIFormattedText(response.data, true);
+        return extracted && extracted.trim().length > 0 ? extracted : JSON.stringify(response.data);
       }
 
       const answer = getByPath(response.data, responsePath);
@@ -1589,7 +1601,7 @@ ANSWER DIRECTLY:`;
         if (typeof answer === 'object' && Object.keys(answer).length > 0) return JSON.stringify(answer);
       }
 
-      const guessed = this.extractFromCommonFormats(response.data, false);
+      const guessed = this.extractOpenAIFormattedText(response.data, false);
       if (guessed && guessed.trim().length > 0) return guessed;
 
       throw new Error(`cURL response extraction failed for path: ${responsePath}`);
@@ -1710,7 +1722,7 @@ ANSWER DIRECTLY:`;
       }
 
       // 6. Extract Answer - try common response formats
-      const extracted = this.extractFromCommonFormats(data, true);
+      const extracted = this.extractOpenAIFormattedText(data, true);
       console.log(`[LLMHelper] Custom Provider extracted text length: ${extracted.length}`);
       return extracted;
     } catch (error) {
@@ -1754,6 +1766,46 @@ ANSWER DIRECTLY:`;
     }
 
     return "";
+  }
+
+  private extractOpenAIFormattedText(data: any, allowRawJsonFallback: boolean = true): string {
+    if (!data || typeof data === 'string') return data || "";
+
+    if (typeof data.choices?.[0]?.message?.content === 'string') {
+      return data.choices[0].message.content;
+    }
+
+    if (Array.isArray(data.choices?.[0]?.message?.content)) {
+      const text = data.choices[0].message.content
+        .map((part: any) => typeof part?.text === 'string' ? part.text : '')
+        .join('')
+        .trim();
+      if (text) return text;
+    }
+
+    if (typeof data.choices?.[0]?.delta?.content === 'string') {
+      return data.choices[0].delta.content;
+    }
+
+    if (Array.isArray(data.output_text)) {
+      const text = data.output_text.join('').trim();
+      if (text) return text;
+    }
+
+    if (typeof data.output_text === 'string') {
+      return data.output_text;
+    }
+
+    if (Array.isArray(data.output)) {
+      const text = data.output
+        .flatMap((item: any) => Array.isArray(item?.content) ? item.content : [])
+        .map((part: any) => typeof part?.text === 'string' ? part.text : '')
+        .join('')
+        .trim();
+      if (text) return text;
+    }
+
+    return this.extractFromCommonFormats(data, allowRawJsonFallback);
   }
 
   /**
@@ -2088,24 +2140,25 @@ ANSWER DIRECTLY:`;
    */
   public async * streamChatWithGemini(message: string, imagePaths?: string[], context?: string, skipSystemPrompt: boolean = false): AsyncGenerator<string, void, unknown> {
     console.log(`[LLMHelper] streamChatWithGemini called with message:`, message.substring(0, 50));
+    const effectiveMessage = this.applyDefaultBrevityHint(message);
 
     const isMultimodal = !!(imagePaths?.length);
 
     // Build single-string messages for Groq/Gemini (which use combined prompts)
     const buildCombinedMessage = (systemPrompt: string) => {
       const finalPrompt = skipSystemPrompt ? systemPrompt : this.injectLanguageInstruction(systemPrompt);
-      if (skipSystemPrompt) {
-        return context
-          ? `CONTEXT:\n${context}\n\nUSER QUESTION:\n${message}`
-          : message;
-      }
+        if (skipSystemPrompt) {
+          return context
+          ? `CONTEXT:\n${context}\n\nUSER QUESTION:\n${effectiveMessage}`
+          : effectiveMessage;
+        }
       return context
-        ? `${finalPrompt}\n\nCONTEXT:\n${context}\n\nUSER QUESTION:\n${message}`
-        : `${finalPrompt}\n\n${message}`;
+        ? `${finalPrompt}\n\nCONTEXT:\n${context}\n\nUSER QUESTION:\n${effectiveMessage}`
+        : `${finalPrompt}\n\n${effectiveMessage}`;
     };
 
     // For OpenAI/Claude: separate system prompt + user message (proper API pattern)
-    const userContent = this.prepareUserContent(message, context);
+    const userContent = this.prepareUserContent(effectiveMessage, context);
 
     const combinedMessages = {
       gemini: buildCombinedMessage(HARD_SYSTEM_PROMPT),
@@ -2182,7 +2235,7 @@ ANSWER DIRECTLY:`;
     // RELENTLESS RETRY: Try all providers, then retry entire chain
     // with exponential backoff. Max 2 full rotations.
     // ============================================================
-    const MAX_FULL_ROTATIONS = 3;
+    const MAX_FULL_ROTATIONS = 1;
 
     for (let rotation = 0; rotation < MAX_FULL_ROTATIONS; rotation++) {
       if (rotation > 0) {
@@ -2220,6 +2273,7 @@ ANSWER DIRECTLY:`;
     systemPromptOverride?: string,
     options?: { skipKnowledgeInterception?: boolean }
   ): AsyncGenerator<string, void, unknown> {
+    const effectiveMessage = this.applyDefaultBrevityHint(message);
 
     // ============================================================
     // KNOWLEDGE MODE INTERCEPT (Streaming)
@@ -2276,8 +2330,8 @@ ANSWER DIRECTLY:`;
 
     // Helper to build combined user message
     const userContent = context
-      ? `CONTEXT:\n${context}\n\nUSER QUESTION:\n${message}`
-      : message;
+      ? `CONTEXT:\n${context}\n\nUSER QUESTION:\n${effectiveMessage}`
+      : effectiveMessage;
 
     // GROQ FAST TEXT OVERRIDE (Text-Only)
     if (this.groqFastTextMode && !isMultimodal && this.groqClient) {
@@ -2296,7 +2350,7 @@ ANSWER DIRECTLY:`;
 
     // 1. Ollama Streaming
     if (this.useOllama) {
-      yield* this.streamWithOllama(message, context, finalSystemPrompt);
+      yield* this.streamWithOllama(effectiveMessage, context, finalSystemPrompt);
       return;
     }
 
@@ -2310,7 +2364,7 @@ ANSWER DIRECTLY:`;
         this.activeCurlProvider.curlCommand,
         userContent,
         curlSystemPrompt,
-        message,
+        effectiveMessage,
         context || "",
         imagePaths?.[0]
       );

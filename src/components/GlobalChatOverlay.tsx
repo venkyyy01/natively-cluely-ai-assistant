@@ -218,8 +218,6 @@ const GlobalChatOverlay: React.FC<GlobalChatOverlayProps> = ({
         };
 
         try {
-            // Add typing indicator delay (200ms) - makes the AI feel "thoughtful"
-            await new Promise(resolve => setTimeout(resolve, 200));
             if (!isCurrentRequest()) return;
 
             // Create assistant message placeholder
