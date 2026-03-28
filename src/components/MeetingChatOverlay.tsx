@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useStreamBuffer } from '../hooks/useStreamBuffer';
+import { useHumanSpeedAutoScroll } from '../hooks/useHumanSpeedAutoScroll';
 import { X, Copy, Check } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import nativelyIcon from './icon.png';
@@ -193,14 +194,24 @@ const MeetingChatOverlay: React.FC<MeetingChatOverlayProps> = ({
     const [chatState, setChatState] = useState<ChatState>('idle');
     const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-    const messagesEndRef = useRef<HTMLDivElement>(null);
     const chatWindowRef = useRef<HTMLDivElement>(null);
+    const scrollContainerRef = useRef<HTMLDivElement>(null);
     const streamBuffer = useStreamBuffer();
 
-    // Auto-scroll to bottom on new messages
-    useEffect(() => {
-        messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-    }, [messages]);
+    const latestReadableMessage = [...messages].reverse().find(msg => msg.role === 'assistant') || null;
+
+    useHumanSpeedAutoScroll({
+        enabled: isOpen,
+        containerRef: scrollContainerRef,
+        latestMessage: latestReadableMessage ? {
+            id: latestReadableMessage.id,
+            role: latestReadableMessage.role,
+            content: latestReadableMessage.content,
+            isStreaming: latestReadableMessage.isStreaming,
+        } : null,
+        eligibleRoles: ['assistant'],
+        getTargetElement: (container, messageId) => container.querySelector(`[data-autoscroll-message-id="${messageId}"]`) as HTMLElement | null,
+    });
 
     // Submit initial query when overlay opens
     useEffect(() => {
@@ -296,9 +307,6 @@ const MeetingChatOverlay: React.FC<MeetingChatOverlayProps> = ({
         const assistantMessageId = `assistant-${Date.now()}`;
 
         try {
-            // Add typing indicator delay (200ms) - makes the AI feel "thoughtful"
-            await new Promise(resolve => setTimeout(resolve, 200));
-
             // Create assistant message placeholder
             setMessages(prev => [...prev, {
                 id: assistantMessageId,
@@ -519,11 +527,13 @@ ${contextString}`;
                         </div>
 
                         {/* Messages area - scrollable */}
-                        <div className="flex-1 overflow-y-auto px-6 py-4 pb-32 custom-scrollbar">
+                        <div ref={scrollContainerRef} className="flex-1 overflow-y-auto px-6 py-4 pb-32 custom-scrollbar">
                             {messages.map((msg) => (
-                                msg.role === 'user'
-                                    ? <UserMessage key={msg.id} content={msg.content} />
-                                    : <AssistantMessage key={msg.id} content={msg.content} isStreaming={msg.isStreaming} />
+                                <div key={msg.id} data-autoscroll-message-id={msg.id}>
+                                    {msg.role === 'user'
+                                        ? <UserMessage content={msg.content} />
+                                        : <AssistantMessage content={msg.content} isStreaming={msg.isStreaming} />}
+                                </div>
                             ))}
 
                             {chatState === 'waiting_for_llm' && <TypingIndicator />}
@@ -538,7 +548,6 @@ ${contextString}`;
                                 </motion.div>
                             )}
 
-                            <div ref={messagesEndRef} />
                         </div>
                     </motion.div>
                 </motion.div>

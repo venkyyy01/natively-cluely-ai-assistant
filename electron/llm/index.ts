@@ -7,7 +7,7 @@ export { FollowUpLLM } from "./FollowUpLLM";
 export { FollowUpQuestionsLLM } from "./FollowUpQuestionsLLM";
 export { RecapLLM } from "./RecapLLM";
 export { WhatToAnswerLLM } from "./WhatToAnswerLLM";
-export { clampResponse, validateResponse } from "./postProcessor";
+export { clampResponse, clampProseResponse, validateResponse } from "./postProcessor";
 export {
     cleanTranscript,
     sparsifyTranscript,

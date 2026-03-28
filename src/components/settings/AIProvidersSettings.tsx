@@ -3,13 +3,9 @@ import { Plus, Trash2, Edit2, AlertCircle, CheckCircle, Save, ChevronDown, Check
 import { STANDARD_CLOUD_MODELS, prettifyModelId } from '../../utils/modelUtils';
 import { validateCurl } from '../../lib/curl-validator';
 import { ProviderCard } from './ProviderCard';
+import type { CustomProviderPayload } from '../../../shared/ipc';
 
-interface CustomProvider {
-    id: string;
-    name: string;
-    curlCommand: string;
-    responsePath: string;
-}
+type CustomProvider = CustomProviderPayload;
 
 interface ModelOption {
     id: string;

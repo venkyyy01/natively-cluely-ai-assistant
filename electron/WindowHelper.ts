@@ -26,6 +26,7 @@ export class WindowHelper {
 
   private appState: AppState
   private contentProtection: boolean = false
+  private overlayClickthroughEnabled: boolean = false
   private opacityTimeout: NodeJS.Timeout | null = null
 
   // Initialize with explicit number type and 0 value
@@ -46,11 +47,33 @@ export class WindowHelper {
     this.applyContentProtection(enable)
   }
 
+  public setSkipTaskbar(enable: boolean): void {
+    this.launcherWindow?.setSkipTaskbar(enable);
+  }
+
+  private applyStealthFlags(win: BrowserWindow, enable: boolean, isAuxiliary: boolean = false): void {
+    win.setContentProtection(enable);
+
+    if (process.platform === 'darwin') {
+      win.setHiddenInMissionControl(enable || isAuxiliary);
+      if (typeof (win as any).setExcludedFromShownWindowsMenu === 'function') {
+        (win as any).setExcludedFromShownWindowsMenu(enable || isAuxiliary);
+      }
+    }
+
+    if (!isAuxiliary) {
+      win.setSkipTaskbar(enable);
+    }
+  }
+
   private applyContentProtection(enable: boolean): void {
-    const windows = [this.launcherWindow, this.overlayWindow]
-    windows.forEach(win => {
+    const windows = [
+      { win: this.launcherWindow, auxiliary: false },
+      { win: this.overlayWindow, auxiliary: true },
+    ]
+    windows.forEach(({ win, auxiliary }) => {
       if (win && !win.isDestroyed()) {
-        win.setContentProtection(enable);
+        this.applyStealthFlags(win, enable, auxiliary);
       }
     });
   }
@@ -103,6 +126,23 @@ export class WindowHelper {
     this.overlayWindow.setPosition(newX, newY)
   }
 
+  public setOverlayClickthrough(enabled: boolean): void {
+    this.overlayClickthroughEnabled = enabled
+    if (!this.overlayWindow || this.overlayWindow.isDestroyed()) return
+
+    this.overlayWindow.setIgnoreMouseEvents(enabled, enabled ? { forward: true } : undefined)
+    this.overlayWindow.setFocusable(!enabled)
+    if (enabled) {
+      this.overlayWindow.blur()
+    }
+  }
+
+  public toggleOverlayClickthrough(): boolean {
+    const next = !this.overlayClickthroughEnabled
+    this.setOverlayClickthrough(next)
+    return next
+  }
+
   public createWindow(): void {
     if (this.launcherWindow !== null) return // Already created
 
@@ -119,7 +159,7 @@ export class WindowHelper {
     const x = Math.round(workArea.x + (workArea.width - width) / 2);
     // Ensure y is at least workArea.y (don't go offscreen top)
     const topMargin = Math.round(workArea.height * 0.05);
-    const y = Math.round(workArea.x + topMargin);
+    const y = Math.round(workArea.y + topMargin);
 
     // --- 1. Create Launcher Window ---
     const launcherSettings: Electron.BrowserWindowConstructorOptions = {
@@ -134,9 +174,10 @@ export class WindowHelper {
         contextIsolation: true,
         preload: path.join(__dirname, "preload.js"),
         scrollBounce: true,
-        webSecurity: !isDev, // DEBUG: Disable web security only in dev
+        webSecurity: true,
       },
       show: false, // DEBUG: Force show -> Fixed white screen, now relies on ready-to-show
+      skipTaskbar: this.contentProtection,
       titleBarStyle: 'hiddenInset',
       trafficLightPosition: { x: 14, y: 14 },
       vibrancy: 'under-window',
@@ -192,7 +233,7 @@ export class WindowHelper {
       return;
     }
 
-    this.launcherWindow.setContentProtection(this.contentProtection)
+    this.applyStealthFlags(this.launcherWindow, this.contentProtection)
 
     this.launcherWindow.loadURL(`${startUrl}?window=launcher`)
       .then(() => console.log('[WindowHelper] loadURL success'))
@@ -224,20 +265,21 @@ export class WindowHelper {
       backgroundColor: "#00000000",
       alwaysOnTop: true,
       focusable: true,
-      resizable: false, // Enforce automatic resizing only
+      resizable: true,
       movable: true,
       skipTaskbar: true, // Don't show separately in dock/taskbar
       hasShadow: false, // Prevent shadow from adding perceived size/artifacts
     }
 
     this.overlayWindow = new BrowserWindow(overlaySettings)
-    this.overlayWindow.setContentProtection(this.contentProtection)
+    this.applyStealthFlags(this.overlayWindow, this.contentProtection, true)
 
     if (process.platform === "darwin") {
       this.overlayWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
       this.overlayWindow.setHiddenInMissionControl(true)
       this.overlayWindow.setAlwaysOnTop(true, "floating")
     }
+    this.setOverlayClickthrough(this.overlayClickthroughEnabled)
 
     this.overlayWindow.loadURL(`${startUrl}?window=overlay`).catch(e => {
         console.error('[WindowHelper] Failed to load Overlay URL:', e);
@@ -359,31 +401,38 @@ export class WindowHelper {
       const primaryDisplay = screen.getPrimaryDisplay()
       const workArea = primaryDisplay.workArea;
       const currentBounds = this.overlayWindow.getBounds();
+      const targetWidth = Math.max(currentBounds.width, 600);
       const targetHeight = Math.max(currentBounds.height, 216);
-      const x = Math.floor(workArea.x + (workArea.width - 600) / 2)
+      const x = Math.floor(workArea.x + (workArea.width - targetWidth) / 2)
       const y = Math.floor(workArea.y + (workArea.height - 600) / 2)
 
-      this.overlayWindow.setBounds({ x, y, width: 600, height: targetHeight });
+      this.overlayWindow.setBounds({ x, y, width: targetWidth, height: targetHeight });
 
       if (process.platform === 'win32' && this.contentProtection) {
         // Opacity Shield: Show at 0 opacity first to prevent frame leak
         this.overlayWindow.setOpacity(0);
         this.overlayWindow.show();
-        this.overlayWindow.setContentProtection(true);
+        this.applyStealthFlags(this.overlayWindow, true, true);
+        this.setOverlayClickthrough(this.overlayClickthroughEnabled)
         // Small delay to ensure Windows DWM processes the flag before making it opaque
         
         if (this.opacityTimeout) clearTimeout(this.opacityTimeout);
         this.opacityTimeout = setTimeout(() => {
           if (this.overlayWindow && !this.overlayWindow.isDestroyed()) {
             this.overlayWindow.setOpacity(1);
-            this.overlayWindow.focus();
+            if (!this.overlayClickthroughEnabled) {
+              this.overlayWindow.focus();
+            }
             this.overlayWindow.setAlwaysOnTop(true, "floating");
           }
         }, 60);
       } else {
-        this.overlayWindow.setContentProtection(this.contentProtection);
+        this.applyStealthFlags(this.overlayWindow, this.contentProtection, true);
+        this.setOverlayClickthrough(this.overlayClickthroughEnabled)
         this.overlayWindow.show();
-        this.overlayWindow.focus();
+        if (!this.overlayClickthroughEnabled) {
+          this.overlayWindow.focus();
+        }
         this.overlayWindow.setAlwaysOnTop(true, "floating");
       }
       this.isWindowVisible = true;
@@ -405,7 +454,7 @@ export class WindowHelper {
         // Opacity Shield: Show at 0 opacity first
         this.launcherWindow.setOpacity(0);
         this.launcherWindow.show();
-        this.launcherWindow.setContentProtection(true);
+        this.applyStealthFlags(this.launcherWindow, true);
         
         if (this.opacityTimeout) clearTimeout(this.opacityTimeout);
         this.opacityTimeout = setTimeout(() => {
@@ -415,7 +464,7 @@ export class WindowHelper {
           }
         }, 60);
       } else {
-        this.launcherWindow.setContentProtection(this.contentProtection);
+        this.applyStealthFlags(this.launcherWindow, this.contentProtection);
         this.launcherWindow.show();
         this.launcherWindow.focus();
       }

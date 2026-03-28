@@ -6,14 +6,11 @@
 import { app, safeStorage } from 'electron';
 import fs from 'fs';
 import path from 'path';
+import type { CustomProviderPayload } from '../../shared/ipc';
 
 const CREDENTIALS_PATH = path.join(app.getPath('userData'), 'credentials.enc');
 
-export interface CustomProvider {
-    id: string;
-    name: string;
-    curlCommand: string;
-}
+export interface CustomProvider extends CustomProviderPayload {}
 
 export interface CurlProvider {
     id: string;
@@ -379,13 +376,16 @@ export class CredentialsManager {
      * Called on app quit and credential clear.
      */
     public scrubMemory(): void {
-        // Overwrite each string field with empty before discarding
-        for (const key of Object.keys(this.credentials) as (keyof StoredCredentials)[]) {
-            const val = this.credentials[key];
-            if (typeof val === 'string') {
-                (this.credentials as any)[key] = '';
+        const scrubValue = (value: unknown): unknown => {
+            if (typeof value === 'string') return '';
+            if (Array.isArray(value)) return value.map(scrubValue);
+            if (value && typeof value === 'object') {
+                return Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([key, nested]) => [key, scrubValue(nested)]));
             }
-        }
+            return value;
+        };
+
+        this.credentials = scrubValue(this.credentials) as StoredCredentials;
         this.credentials = {};
         console.log('[CredentialsManager] Memory scrubbed');
     }
@@ -397,13 +397,7 @@ export class CredentialsManager {
     private saveCredentials(): void {
         try {
             if (!safeStorage.isEncryptionAvailable()) {
-                console.warn('[CredentialsManager] Encryption not available, falling back to plaintext');
-                // Fallback: save as plaintext (less secure, but functional)
-                const plainPath = CREDENTIALS_PATH + '.json';
-                const tmpPlain = plainPath + '.tmp';
-                fs.writeFileSync(tmpPlain, JSON.stringify(this.credentials));
-                fs.renameSync(tmpPlain, plainPath);
-                return;
+                throw new Error('OS encryption is unavailable; refusing to persist credentials in plaintext');
             }
 
             const data = JSON.stringify(this.credentials);
@@ -453,23 +447,14 @@ export class CredentialsManager {
                 return;
             }
 
-            // Fallback: try plaintext file
             const plaintextPath = CREDENTIALS_PATH + '.json';
             if (fs.existsSync(plaintextPath)) {
-                const data = fs.readFileSync(plaintextPath, 'utf-8');
                 try {
-                    const parsed = JSON.parse(data);
-                    if (typeof parsed === 'object' && parsed !== null) {
-                        this.credentials = parsed;
-                        console.log('[CredentialsManager] Loaded plaintext credentials');
-                    } else {
-                        throw new Error('Plaintext credentials is not a valid object');
-                    }
-                } catch (parseError) {
-                    console.error('[CredentialsManager] Failed to parse plaintext credentials — file may be corrupted. Starting fresh:', parseError);
-                    this.credentials = {};
+                    fs.unlinkSync(plaintextPath);
+                    console.warn('[CredentialsManager] Removed insecure plaintext credential file');
+                } catch (cleanupErr) {
+                    console.warn('[CredentialsManager] Could not remove insecure plaintext credential file:', cleanupErr);
                 }
-                return;
             }
 
             console.log('[CredentialsManager] No stored credentials found');

@@ -1,5 +1,6 @@
 import { LLMHelper } from "../LLMHelper";
 import { UNIVERSAL_FOLLOWUP_PROMPT } from "./prompts";
+import { ConsciousModeStructuredResponse, ReasoningThread, parseConsciousModeResponse } from "../ConsciousMode";
 
 export class FollowUpLLM {
     private llmHelper: LLMHelper;
@@ -27,6 +28,35 @@ export class FollowUpLLM {
             yield* this.llmHelper.streamChat(message, undefined, context, UNIVERSAL_FOLLOWUP_PROMPT);
         } catch (e) {
             console.error("[FollowUpLLM] Stream Failed:", e);
+        }
+    }
+
+    async generateReasoningFirstFollowUp(
+        reasoningThread: ReasoningThread,
+        followUpQuestion: string,
+        context?: string
+    ): Promise<ConsciousModeStructuredResponse> {
+        try {
+            const message = [
+                'ACTIVE_REASONING_THREAD',
+                `ROOT_QUESTION: ${reasoningThread.rootQuestion}`,
+                `LAST_QUESTION: ${reasoningThread.lastQuestion}`,
+                `CURRENT_RESPONSE: ${JSON.stringify(reasoningThread.response)}`,
+                `FOLLOW_UP_QUESTION: ${followUpQuestion}`,
+                'Return JSON with keys: mode, openingReasoning, implementationPlan, tradeoffs, edgeCases, scaleConsiderations, pushbackResponses, likelyFollowUps, codeTransition.',
+                'Set mode to reasoning_first.',
+            ].join('\n\n');
+            const stream = this.llmHelper.streamChat(message, undefined, context, UNIVERSAL_FOLLOWUP_PROMPT);
+
+            let full = "";
+            for await (const chunk of stream) {
+                full += chunk;
+            }
+
+            return parseConsciousModeResponse(full);
+        } catch (e) {
+            console.error("[FollowUpLLM] Conscious Mode follow-up failed:", e);
+            return parseConsciousModeResponse('');
         }
     }
 }

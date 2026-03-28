@@ -1,0 +1,98 @@
+- generic [ref=e7]:
+  - generic [ref=e9]:
+    - banner [ref=e10]:
+      - generic [ref=e11]:
+        - button [disabled] [ref=e12]:
+          - img [ref=e13]
+        - button [disabled] [ref=e15]:
+          - img [ref=e16]
+      - generic [ref=e23]:
+        - generic:
+          - img
+        - textbox "Search or ask anything..." [ref=e24]
+      - button "Settings" [ref=e26]:
+        - img [ref=e27]
+    - generic [ref=e31]:
+      - generic [ref=e33]:
+        - generic [ref=e34]:
+          - generic [ref=e35]:
+            - heading "My Natively" [level=1] [ref=e36]
+            - button "Refresh State" [ref=e37]:
+              - img [ref=e38]
+            - generic [ref=e43]:
+              - img [ref=e44]
+              - generic [ref=e46]: Detectable
+          - button "Logo Start Natively" [ref=e49]:
+            - img "Logo" [ref=e50]
+            - generic [ref=e51]: Start Natively
+        - generic [ref=e52]:
+          - generic [ref=e58]:
+            - heading "Upcoming features" [level=2] [ref=e59]
+            - paragraph [ref=e60]: Answers, tailored to you
+            - generic [ref=e61]:
+              - generic [ref=e63]: Repo aware explanations
+              - generic [ref=e65]: System design interview specialization
+            - generic:
+              - paragraph: Designed to work silently during live interviews.
+            - button "Mark interest" [ref=e66]:
+              - generic [ref=e67]:
+                - generic [ref=e68]: Mark interest
+                - img [ref=e70]
+          - generic [ref=e75]:
+            - heading "Link your calendar to see upcoming events" [level=3] [ref=e76]:
+              - generic [ref=e77]: Link your calendar to
+              - generic [ref=e78]: see upcoming events
+            - button "Connect calendar" [ref=e79]:
+              - generic [ref=e80]:
+                - img [ref=e81]
+                - text: Connect calendar
+                - img [ref=e86]
+      - main [ref=e88]:
+        - generic [ref=e91]: No recent meetings.
+  - generic:
+    - generic:
+      - generic:
+        - generic:
+          - generic:
+            - generic:
+              - img "Natively"
+            - generic:
+              - img
+              - generic: Hide
+        - generic:
+          - generic:
+            - paragraph: InterviewerSo how would you optimize the current algorithm?
+          - generic:
+            - generic:
+              - generic:
+                - generic: Suggestion
+                - text: A good approach would be to use a hash map to cache the intermediate results, which brings the time complexity down from O(n²) to O(n).
+          - generic:
+            - generic:
+              - img
+              - text: What to answer?
+            - generic:
+              - img
+              - text: Shorten
+            - generic:
+              - img
+              - text: Recap
+            - generic:
+              - img
+              - text: Follow Up Question
+            - generic:
+              - img
+              - text: Answer
+          - generic:
+            - generic:
+              - generic:
+                - generic: Ask anything on screen or conversation
+            - generic:
+              - generic:
+                - generic:
+                  - generic: Gemini 3 Flash
+                  - img
+                - generic:
+                  - img
+  - region "Notifications (F8)":
+    - list

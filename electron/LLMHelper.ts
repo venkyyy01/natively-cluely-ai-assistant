@@ -4,13 +4,14 @@ import OpenAI from "openai"
 import Anthropic from "@anthropic-ai/sdk"
 import fs from "fs"
 import sharp from "sharp"
-import { ModelVersionManager, ModelFamily, TextModelFamily } from './services/ModelVersionManager'
+import { ModelVersionManager, ModelFamily, TextModelFamily, parseModelVersion, compareVersions, classifyTextModel } from './services/ModelVersionManager'
 import {
   HARD_SYSTEM_PROMPT, GROQ_SYSTEM_PROMPT, OPENAI_SYSTEM_PROMPT, CLAUDE_SYSTEM_PROMPT,
   UNIVERSAL_SYSTEM_PROMPT, UNIVERSAL_ANSWER_PROMPT, UNIVERSAL_WHAT_TO_ANSWER_PROMPT,
   UNIVERSAL_RECAP_PROMPT, UNIVERSAL_FOLLOWUP_PROMPT, UNIVERSAL_FOLLOW_UP_QUESTIONS_PROMPT, UNIVERSAL_ASSIST_PROMPT,
   CUSTOM_SYSTEM_PROMPT, CUSTOM_ANSWER_PROMPT, CUSTOM_WHAT_TO_ANSWER_PROMPT,
-  CUSTOM_RECAP_PROMPT, CUSTOM_FOLLOWUP_PROMPT, CUSTOM_FOLLOW_UP_QUESTIONS_PROMPT, CUSTOM_ASSIST_PROMPT
+  CUSTOM_RECAP_PROMPT, CUSTOM_FOLLOWUP_PROMPT, CUSTOM_FOLLOW_UP_QUESTIONS_PROMPT, CUSTOM_ASSIST_PROMPT,
+  CORE_IDENTITY, UNIVERSAL_ANTI_DUMP_RULES
 } from "./llm/prompts"
 import { deepVariableReplacer, getByPath } from './utils/curlUtils';
 import curl2Json from "@bany/curl-to-json";
@@ -18,8 +19,78 @@ import { CustomProvider, CurlProvider } from './services/CredentialsManager';
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import axios from 'axios';
+import { validateResponseQuality, logValidationMetrics } from './llm/postProcessor';
+import { createHash } from 'crypto';
 import { createProviderRateLimiters, RateLimiter } from './services/RateLimiter';
+import { classifyProviderCapability, ProviderCapabilityClass } from './latency/providerCapability';
 const execAsync = promisify(exec);
+
+/** Default timeout for LLM API calls in milliseconds */
+const LLM_API_TIMEOUT_MS = 30000; // 30 seconds
+
+/**
+ * Create an AbortSignal that times out after the specified duration
+ */
+function createTimeoutSignal(timeoutMs: number = LLM_API_TIMEOUT_MS): AbortSignal {
+  if (typeof AbortSignal.timeout === 'function') {
+    return AbortSignal.timeout(timeoutMs);
+  }
+  const controller = new AbortController();
+  const timeoutHandle = setTimeout(() => controller.abort(new Error(`LLM API timeout after ${timeoutMs}ms`)), timeoutMs);
+  controller.signal.addEventListener('abort', () => clearTimeout(timeoutHandle), { once: true });
+  return controller.signal;
+}
+
+/**
+ * Wrap a promise with a timeout
+ */
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number = LLM_API_TIMEOUT_MS): Promise<T> {
+  let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timeoutHandle = setTimeout(() => reject(new Error(`LLM API timeout after ${timeoutMs}ms`)), timeoutMs);
+  });
+  try {
+    return await Promise.race([promise, timeoutPromise]);
+  } finally {
+    if (timeoutHandle) {
+      clearTimeout(timeoutHandle);
+    }
+  }
+}
+
+/**
+ * Sanitize error objects to remove sensitive data before logging
+ */
+function sanitizeError(error: unknown): string {
+  if (error instanceof Error) {
+    // Only return message and stack, not the full error object which may contain headers
+    return `${error.name}: ${error.message}${error.stack ? `\n${error.stack}` : ''}`;
+  }
+  if (typeof error === 'object' && error !== null) {
+    // Remove potentially sensitive fields
+    const sanitized = { ...error } as Record<string, unknown>;
+    delete sanitized.config;
+    delete sanitized.request;
+    delete sanitized.headers;
+    const response = sanitized.response as Record<string, unknown> | undefined;
+    if (response) {
+      delete response.config;
+      delete response.request;
+    }
+    try {
+      return JSON.stringify(sanitized, null, 2);
+    } catch {
+      return String(error);
+    }
+  }
+  return String(error);
+}
+
+function throwIfAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) {
+    throw signal.reason instanceof Error ? signal.reason : new Error('Operation aborted');
+  }
+}
 
 interface OllamaResponse {
   response: string
@@ -32,13 +103,42 @@ const GEMINI_PRO_MODEL = "gemini-3.1-pro-preview"
 const GROQ_MODEL = "llama-3.3-70b-versatile"
 const OPENAI_MODEL = "gpt-5.4-chat"
 const CLAUDE_MODEL = "claude-sonnet-4-6"
-const MAX_OUTPUT_TOKENS = 65536
-const CLAUDE_MAX_OUTPUT_TOKENS = 64000
+const MAX_OUTPUT_TOKENS = 8192
+const CLAUDE_MAX_OUTPUT_TOKENS = 8192
+const DEFAULT_INPUT_TOKEN_BUDGET = 24000
+const SUMMARY_INPUT_TOKEN_BUDGET = 100000
+const OPENAI_INPUT_TOKEN_BUDGET = 32000
+const GEMINI_FLASH_INPUT_TOKEN_BUDGET = 28000
+const GEMINI_PRO_INPUT_TOKEN_BUDGET = 48000
+const CLAUDE_INPUT_TOKEN_BUDGET = 60000
+const GROQ_INPUT_TOKEN_BUDGET = 24000
+const LOCAL_INPUT_TOKEN_BUDGET = 16000
+const SYSTEM_PROMPT_CACHE_TTL_MS = 5 * 60 * 1000
+const FINAL_PAYLOAD_CACHE_TTL_MS = 15 * 1000
+const RESPONSE_CACHE_TTL_MS = 1500
+const SYSTEM_PROMPT_CACHE_MAX = 50
+const FINAL_PAYLOAD_CACHE_MAX = 20
+const RESPONSE_CACHE_MAX = 100
+const IN_FLIGHT_RESPONSE_CACHE_MAX = 10
 
 // Simple prompt for image analysis (not interview copilot - kept separate)
 const IMAGE_ANALYSIS_PROMPT = `Analyze concisely. Be direct. No markdown formatting. Return plain text only.`
+const INDIAN_ENGLISH_STYLE_INSTRUCTION = `CRITICAL STYLE: Write in natural Indian English.
+- Keep the flow conversational and human.
+- Be concrete, clear, concise, and complete.
+- No fluff, no jargon, no text walls.
+- Sound natural, practical, and confident.`
+type Provider = 'gemini' | 'groq' | 'openai' | 'claude';
+
+export interface ModelFallbackEvent {
+  provider: Provider;
+  previousModel: string;
+  fallbackModel: string;
+  reason: string;
+}
 
 export class LLMHelper {
+  public static __testAxios: null | ((config: any) => Promise<any>) = null;
   private client: GoogleGenAI | null = null
   private groqClient: Groq | null = null
   private openaiClient: OpenAI | null = null
@@ -58,6 +158,13 @@ export class LLMHelper {
   private knowledgeOrchestrator: any = null;
   private aiResponseLanguage: string = 'English';
   private sttLanguage: string = 'english-us';
+  private shouldEnforceValidation: boolean = process.env.ENFORCE_RESPONSE_VALIDATION === 'true';
+  private systemPromptCache = new Map<string, { expiresAt: number; value: string }>();
+  private finalPayloadCache = new Map<string, { expiresAt: number; value: any }>();
+  private responseCache = new Map<string, { expiresAt: number; value: string }>();
+  private inFlightResponseCache = new Map<string, Promise<string>>();
+  private modelFallbackHandler: ((event: ModelFallbackEvent) => void) | null = null;
+  private cacheCleanupInterval: ReturnType<typeof setInterval> | null = null;
 
   // Rate limiters per provider to prevent 429 errors on free tiers
   private rateLimiters: ReturnType<typeof createProviderRateLimiters>;
@@ -73,6 +180,8 @@ export class LLMHelper {
 
     // Initialize model version manager
     this.modelVersionManager = new ModelVersionManager();
+    this.cacheCleanupInterval = setInterval(() => this.cleanupExpiredCaches(), 60_000);
+    this.cacheCleanupInterval.unref?.();
 
     // Initialize Groq client if API key provided
     if (groqApiKey) {
@@ -170,12 +279,22 @@ export class LLMHelper {
     this.groqClient = null;
     this.openaiClient = null;
     this.claudeClient = null;
-    // Destroy rate limiters
+    // Destroy rate limiters and null reference
     if (this.rateLimiters) {
       Object.values(this.rateLimiters).forEach(rl => rl.destroy());
+      this.rateLimiters = null as any;
     }
-    // Stop model version manager background scheduler
+    if (this.cacheCleanupInterval) {
+      clearInterval(this.cacheCleanupInterval);
+      this.cacheCleanupInterval = null;
+    }
+    this.systemPromptCache.clear();
+    this.finalPayloadCache.clear();
+    this.responseCache.clear();
+    this.inFlightResponseCache.clear();
+    // Stop model version manager background scheduler and null reference
     this.modelVersionManager.stopScheduler();
+    this.modelVersionManager = null as any;
     console.log('[LLMHelper] Keys scrubbed from memory');
   }
 
@@ -243,6 +362,7 @@ export class LLMHelper {
     // Standard Cloud Models
     this.useOllama = false;
     this.customProvider = null;
+    this.activeCurlProvider = null;
     this.currentModelId = targetModelId;
 
     // Update specific model props if needed
@@ -250,6 +370,68 @@ export class LLMHelper {
     if (targetModelId === GEMINI_FLASH_MODEL) this.geminiModel = GEMINI_FLASH_MODEL;
 
     console.log(`[LLMHelper] Switched to Cloud Model: ${targetModelId}`);
+  }
+
+  public setModelFallbackHandler(handler: ((event: ModelFallbackEvent) => void) | null): void {
+    this.modelFallbackHandler = handler;
+  }
+
+  private getActiveOpenAiModel(): string {
+    return this.isOpenAiModel(this.currentModelId) ? this.currentModelId : OPENAI_MODEL;
+  }
+
+  private isModelNotFoundError(error: any): boolean {
+    const status = error?.status || error?.response?.status;
+    const message = String(error?.response?.data?.error?.message || error?.message || '').toLowerCase();
+    return status === 404 || message.includes('does not exist') || message.includes('do not have access') || message.includes('not found');
+  }
+
+  private chooseBestAvailableOpenAiModel(availableModels: string[], failedModel: string): string | null {
+    const viable = availableModels
+      .filter((id) => id !== failedModel)
+      .filter((id) => this.isOpenAiModel(id))
+      .filter((id) => classifyTextModel(id) === TextModelFamily.OPENAI);
+
+    if (viable.length === 0) return null;
+
+    try {
+      const { CredentialsManager } = require('./services/CredentialsManager');
+      const preferred = CredentialsManager.getInstance().getPreferredModel('openai');
+      if (preferred && viable.includes(preferred)) {
+        return preferred;
+      }
+    } catch {
+      // ignore credentials lookup failures during fallback ranking
+    }
+
+    return [...viable].sort((a, b) => {
+      const aVersion = parseModelVersion(a);
+      const bVersion = parseModelVersion(b);
+      if (aVersion && bVersion) {
+        return compareVersions(bVersion, aVersion);
+      }
+      if (aVersion) return -1;
+      if (bVersion) return 1;
+      return a.localeCompare(b);
+    })[0] || null;
+  }
+
+  private async resolveOpenAiFallbackModel(failedModel: string): Promise<string | null> {
+    if (!this.openaiApiKey) return null;
+
+    try {
+      const { fetchProviderModels } = require('./utils/modelFetcher');
+      const models = await fetchProviderModels('openai', this.openaiApiKey);
+      return this.chooseBestAvailableOpenAiModel(models.map((model: { id: string }) => model.id), failedModel);
+    } catch (error) {
+      console.warn('[LLMHelper] Failed to resolve OpenAI fallback model:', sanitizeError(error));
+      return null;
+    }
+  }
+
+  private applyModelFallback(event: ModelFallbackEvent): void {
+    this.currentModelId = event.fallbackModel;
+    this.modelFallbackHandler?.(event);
   }
 
   public switchToCurl(provider: CurlProvider) {
@@ -381,19 +563,15 @@ export class LLMHelper {
 
   /**
    * Post-process the response
-   * NOTE: Truncation/clamping removed - response length is handled in prompts
+   * Prompt enforces brevity - no clamping needed
    */
   private processResponse(text: string): string {
     // Basic cleaning
     let clean = this.cleanJsonResponse(text);
 
-    // Truncation/clamping removed - prompts already handle response length
-    // clean = clampResponse(clean, 3, 60);
-
     // Filter out fallback phrases
     const fallbackPhrases = [
       "I'm not sure",
-      "It depends",
       "I can't answer",
       "I don't know"
     ];
@@ -405,21 +583,92 @@ export class LLMHelper {
     return clean;
   }
 
+  private estimateTokens(text: string): number {
+    return Math.ceil(text.length / 4);
+  }
+
+  private trimTextToTokenBudget(text: string, maxTokens: number, preserveTail: boolean = false): string {
+    if (!text) return text;
+    if (this.estimateTokens(text) <= maxTokens) return text;
+
+    const maxChars = maxTokens * 4;
+    if (preserveTail) {
+      return `...[truncated]\n${text.slice(-maxChars)}`;
+    }
+
+    return `${text.slice(0, maxChars)}\n...[truncated]`;
+  }
+
+  private prepareUserContent(message: string, context?: string, budget: number = DEFAULT_INPUT_TOKEN_BUDGET): string {
+    const safeMessage = this.trimTextToTokenBudget(message, Math.max(512, Math.floor(budget * 0.25)));
+    if (!context) {
+      return safeMessage;
+    }
+
+    const reservedForMessage = this.estimateTokens(safeMessage) + 64;
+    const availableForContext = Math.max(512, budget - reservedForMessage);
+    const trimmedContext = this.trimTextToTokenBudget(context, availableForContext, true);
+    return `CONTEXT:\n${trimmedContext}\n\nUSER QUESTION:\n${safeMessage}`;
+  }
+
+  private joinPrompt(systemPrompt: string | undefined, userContent: string, budget: number = DEFAULT_INPUT_TOKEN_BUDGET): string {
+    const base = systemPrompt ? `${systemPrompt}\n\n${userContent}` : userContent;
+    return this.trimTextToTokenBudget(base, budget, true);
+  }
+
   /**
    * Retry logic with exponential backoff
-   * Specifically handles 503 Service Unavailable
+   * Handles common transient provider failures consistently.
    */
+  private isRetryableError(error: any): boolean {
+    const status = error?.status ?? error?.statusCode ?? error?.response?.status ?? error?.error?.status;
+    const code = String(error?.code ?? error?.error?.code ?? '').toLowerCase();
+    const type = String(error?.type ?? error?.error?.type ?? '').toLowerCase();
+    const message = [error?.message, error?.error?.message, error?.cause?.message, error]
+      .filter(Boolean)
+      .map(value => String(value).toLowerCase())
+      .join(' ');
+
+    return (
+      status === 408 ||
+      status === 409 ||
+      status === 425 ||
+      status === 429 ||
+      status === 500 ||
+      status === 502 ||
+      status === 503 ||
+      status === 504 ||
+      code === 'econnreset' ||
+      code === 'etimedout' ||
+      code === 'eai_again' ||
+      type.includes('overloaded') ||
+      type.includes('rate_limit') ||
+      message.includes('503') ||
+      message.includes('502') ||
+      message.includes('504') ||
+      message.includes('429') ||
+      message.includes('500') ||
+      message.includes('overloaded') ||
+      message.includes('rate limit') ||
+      message.includes('temporarily unavailable') ||
+      message.includes('timeout') ||
+      message.includes('temporar') ||
+      message.includes('econnreset') ||
+      message.includes('network')
+    );
+  }
+
   private async withRetry<T>(fn: () => Promise<T>, retries = 3): Promise<T> {
     let delay = 400;
     for (let i = 0; i < retries; i++) {
       try {
         return await fn();
       } catch (e: any) {
-        // Only retry on 503 or overload errors
-        if (!e.message?.includes("503") && !e.message?.includes("overloaded")) throw e;
+        if (!this.isRetryableError(e)) throw e;
+        if (i === retries - 1) break;
 
-        console.warn(`[LLMHelper] 503 Overload. Retrying in ${delay}ms...`);
-        await new Promise(r => setTimeout(r, delay));
+        console.warn(`[LLMHelper] Transient model failure. Retrying in ${delay}ms...`);
+        await this.delay(delay);
         delay *= 2;
       }
     }
@@ -434,17 +683,33 @@ export class LLMHelper {
 
     const targetModel = modelIdOverride || this.geminiModel;
     console.log(`[LLMHelper] Calling ${targetModel}...`)
+    const systemPromptHash = '';
+    const payloadHash = this.hashValue({
+      contents,
+      config: {
+        maxOutputTokens: MAX_OUTPUT_TOKENS,
+        temperature: 0.4,
+      }
+    });
 
-    return this.withRetry(async () => {
+    return this.withResponseCache('gemini', targetModel, systemPromptHash, payloadHash, () => this.withRetry(async () => {
+      const requestPayload = await this.withFinalPayloadCache(
+        'gemini',
+        targetModel,
+        systemPromptHash,
+        payloadHash,
+        () => ({
+          model: targetModel,
+          contents,
+          config: {
+            maxOutputTokens: MAX_OUTPUT_TOKENS,
+            temperature: 0.4,
+          }
+        }),
+      );
+
       // @ts-ignore
-      const response = await this.client!.models.generateContent({
-        model: targetModel,
-        contents: contents,
-        config: {
-          maxOutputTokens: MAX_OUTPUT_TOKENS,
-          temperature: 0.4,
-        }
-      });
+      const response = await this.client!.models.generateContent(requestPayload);
 
       // Debug: log full response structure
       // console.log(`[LLMHelper] Full response:`, JSON.stringify(response, null, 2).substring(0, 500))
@@ -500,7 +765,7 @@ export class LLMHelper {
 
       console.log(`[LLMHelper] Extracted text length: ${text.length}`);
       return text;
-    });
+    }));
   }
 
   public async extractProblemFromImages(imagePaths: string[]) {
@@ -520,7 +785,7 @@ export class LLMHelper {
     }
   }
 
-  public async generateSolution(problemInfo: any) {
+  public async generateSolution(problemInfo: any, signal?: AbortSignal) {
     const prompt = `Given this problem or situation:\n${JSON.stringify(problemInfo, null, 2)}\n\nPlease provide your response in the following JSON format:\n{
   "solution": {
     "code": "The code or main answer here.",
@@ -532,7 +797,9 @@ export class LLMHelper {
 }\nImportant: Return ONLY the JSON object, without any markdown formatting or code blocks.`
 
     try {
-      const text = await this.generateWithVisionFallback(IMAGE_ANALYSIS_PROMPT, prompt)
+      throwIfAborted(signal)
+      const text = await this.generateWithVisionFallback(IMAGE_ANALYSIS_PROMPT, prompt, [], signal)
+      throwIfAborted(signal)
       const parsed = JSON.parse(this.cleanJsonResponse(text))
       return parsed
     } catch (error) {
@@ -540,7 +807,7 @@ export class LLMHelper {
     }
   }
 
-  public async debugSolutionWithImages(problemInfo: any, currentCode: string, debugImagePaths: string[]) {
+  public async debugSolutionWithImages(problemInfo: any, currentCode: string, debugImagePaths: string[], signal?: AbortSignal) {
     try {
       const prompt = `You are a wingman. Given:\n1. The original problem or situation: ${JSON.stringify(problemInfo, null, 2)}\n2. The current response or approach: ${currentCode}\n3. The debug information in the provided images\n\nPlease analyze the debug information and provide feedback in this JSON format:\n{
   "solution": {
@@ -552,7 +819,9 @@ export class LLMHelper {
   }
 }\nImportant: Return ONLY the JSON object, without any markdown formatting or code blocks.`
 
-      const text = await this.generateWithVisionFallback(IMAGE_ANALYSIS_PROMPT, prompt, debugImagePaths)
+      throwIfAborted(signal)
+      const text = await this.generateWithVisionFallback(IMAGE_ANALYSIS_PROMPT, prompt, debugImagePaths, signal)
+      throwIfAborted(signal)
       const parsed = JSON.parse(this.cleanJsonResponse(text))
       return parsed
     } catch (error) {
@@ -588,7 +857,7 @@ export class LLMHelper {
         data: processedBuffer.toString("base64")
       };
     } catch (error) {
-      console.error("[LLMHelper] Failed to process image with sharp:", error);
+      console.error("[LLMHelper] Failed to process image with sharp:", sanitizeError(error));
       // Fallback to raw read if sharp fails
       const data = await fs.promises.readFile(path);
       return {
@@ -598,15 +867,17 @@ export class LLMHelper {
     }
   }
 
-  public async analyzeImageFiles(imagePaths: string[]) {
+  public async analyzeImageFiles(imagePaths: string[], signal?: AbortSignal) {
     try {
       const prompt = `Describe the content of ${imagePaths.length > 1 ? 'these images' : 'this image'} in a short, concise answer. If it contains code or a problem, solve it.`;
-      const text = await this.generateWithVisionFallback(HARD_SYSTEM_PROMPT, prompt, imagePaths);
+      throwIfAborted(signal)
+      const text = await this.generateWithVisionFallback(HARD_SYSTEM_PROMPT, prompt, imagePaths, signal);
+      throwIfAborted(signal)
 
       return { text: text, timestamp: Date.now() };
 
     } catch (error: any) {
-      console.error("Error analyzing image files:", error);
+      console.error("Error analyzing image files:", sanitizeError(error));
       return {
         text: `I couldn't analyze the screen right now (${error.message}). Please try again.`,
         timestamp: Date.now()
@@ -621,18 +892,21 @@ export class LLMHelper {
    * @param lastQuestion - The most recent question from the interviewer
    * @returns Suggested response for the user
    */
-  public async generateSuggestion(context: string, lastQuestion: string): Promise<string> {
-    const systemPrompt = `You are an expert interview coach. Based on the conversation transcript, provide a concise, natural response the user could say.
+public async generateSuggestion(context: string, lastQuestion: string): Promise<string> {
+    const systemPrompt = `${CORE_IDENTITY}
+
+${UNIVERSAL_ANTI_DUMP_RULES}
+
+Provide a concise, natural response the user could say in their interview.
 
 RULES:
 - Be direct and conversational
-- Keep responses under 3 sentences unless complexity requires more  
+- Keep responses under 3 sentences for simple questions
 - Focus on answering the specific question asked
-- If it's a technical question, provide a clear, structured answer
-- Do NOT preface with "You could say" or similar - just give the answer directly
-- If unsure, answer briefly and confidently anyway.
-- Never hedge.
-- Never say "it depends".
+- If technical, provide a clear, structured answer with code if needed
+- Do NOT preface with "You could say" - just give the answer directly
+- Never hedge. Never say "it depends".
+- NON-CODE ANSWERS >100 WORDS ARE WRONG. DELETE AND REWRITE SHORTER.
 
 CONVERSATION SO FAR:
 ${context}
@@ -644,12 +918,14 @@ ANSWER DIRECTLY:`;
 
     try {
       if (this.useOllama) {
-        return await this.callOllama(systemPrompt);
+        const ollamaResponse = await this.callOllama(systemPrompt);
+        return this.validateAndProcessResponse(ollamaResponse, systemPrompt);
       } else if (this.client) {
         // Use Flash model as default (Pro is experimental)
         // Wraps generateWithFlash logic but with retry
         const text = await this.generateWithFlash([{ text: systemPrompt }]);
-        return this.processResponse(text);
+        const processedResponse = this.processResponse(text);
+        return this.validateAndProcessResponse(processedResponse, systemPrompt);
       } else {
         throw new Error("No LLM provider configured");
       }
@@ -683,12 +959,216 @@ ANSWER DIRECTLY:`;
    * Helper to inject language instruction into system prompt
    */
   private injectLanguageInstruction(systemPrompt: string): string {
-    return `${systemPrompt}\n\nCRITICAL: You MUST respond ONLY in ${this.aiResponseLanguage}. This is an absolute requirement. All generated text that the user should say must be in ${this.aiResponseLanguage}.`;
+    if (this.isStructuredOutputRequest(systemPrompt)) {
+      return `${systemPrompt}\n\nCRITICAL: You MUST respond ONLY in ${this.aiResponseLanguage}. This is an absolute requirement.`;
+    }
+    return `${systemPrompt}\n\n${INDIAN_ENGLISH_STYLE_INSTRUCTION}\n\nCRITICAL: You MUST respond ONLY in ${this.aiResponseLanguage}. This is an absolute requirement. All generated text that the user should say must be in ${this.aiResponseLanguage}.`;
+  }
+
+  private hashValue(value: unknown): string {
+    const serialized = typeof value === 'string' ? value : JSON.stringify(value);
+    return createHash('sha256').update(serialized).digest('hex');
+  }
+
+  private cloneCacheValue<T>(value: T): T {
+    if (value === null || value === undefined) return value;
+    if (typeof value === 'string') return value;
+    return JSON.parse(JSON.stringify(value));
+  }
+
+  /**
+   * Validate response quality and optionally add warning for violations
+   */
+  private validateAndProcessResponse(response: string, context?: string): string {
+    if (!this.shouldEnforceValidation) {
+      return response;
+    }
+
+    const validation = validateResponseQuality(response);
+    
+    // Log metrics for monitoring
+    logValidationMetrics(validation, context || 'unknown');
+
+    if (!validation.isValid) {
+      // Log violation for monitoring
+      console.warn('[LLMHelper] Response validation failed:', validation.violations);
+      
+      // For now, return with warning comment - can enhance with regeneration later
+      return `${response}\n\n<!-- Validation: ${validation.violations.join(', ')} -->`;
+    }
+
+    return response;
+  }
+
+  private getCacheKey(...parts: Array<string | undefined>): string {
+    return parts.map(part => part ?? '').join('::');
+  }
+
+  private readCacheEntry<T>(cache: Map<string, { expiresAt: number; value: T }>, key: string): T | undefined {
+    const entry = cache.get(key);
+    if (!entry) return undefined;
+    if (entry.expiresAt <= Date.now()) {
+      cache.delete(key);
+      return undefined;
+    }
+    return this.cloneCacheValue(entry.value);
+  }
+
+  private writeCacheEntry<T>(cache: Map<string, { expiresAt: number; value: T }>, key: string, value: T, ttlMs: number): T {
+    cache.set(key, {
+      expiresAt: Date.now() + ttlMs,
+      value: this.cloneCacheValue(value),
+    });
+    this.enforceCacheLimit(cache, this.getCacheLimit(cache));
+    return this.cloneCacheValue(value);
+  }
+
+  private getCacheLimit(cache: Map<string, unknown>): number {
+    if (cache === this.systemPromptCache) return SYSTEM_PROMPT_CACHE_MAX;
+    if (cache === this.finalPayloadCache) return FINAL_PAYLOAD_CACHE_MAX;
+    if (cache === this.responseCache) return RESPONSE_CACHE_MAX;
+    return RESPONSE_CACHE_MAX;
+  }
+
+  private enforceCacheLimit<T>(cache: Map<string, T>, maxEntries: number): void {
+    while (cache.size > maxEntries) {
+      const oldestKey = cache.keys().next().value;
+      if (oldestKey === undefined) {
+        break;
+      }
+      cache.delete(oldestKey);
+    }
+  }
+
+  private cleanupExpiredCaches(): void {
+    const now = Date.now();
+    for (const cache of [this.systemPromptCache, this.finalPayloadCache, this.responseCache]) {
+      for (const [key, value] of cache.entries()) {
+        if (value.expiresAt <= now) {
+          cache.delete(key);
+        }
+      }
+    }
+  }
+
+  private async withSystemPromptCache(
+    provider: string,
+    model: string,
+    basePrompt: string,
+    builder: () => Promise<string> | string,
+    ttlMs: number = SYSTEM_PROMPT_CACHE_TTL_MS,
+  ): Promise<string> {
+    const cacheKey = this.getCacheKey('system-prompt', provider, model, this.hashValue(basePrompt), this.aiResponseLanguage);
+    const cached = this.readCacheEntry(this.systemPromptCache, cacheKey);
+    if (cached !== undefined) {
+      return cached;
+    }
+
+    const built = await builder();
+    return this.writeCacheEntry(this.systemPromptCache, cacheKey, built, ttlMs);
+  }
+
+  private async withFinalPayloadCache<T>(
+    provider: string,
+    model: string,
+    systemPromptHash: string,
+    payloadHash: string,
+    builder: () => Promise<T> | T,
+    ttlMs: number = FINAL_PAYLOAD_CACHE_TTL_MS,
+  ): Promise<T> {
+    const cacheKey = this.getCacheKey('final-payload', provider, model, systemPromptHash, payloadHash);
+    const cached = this.readCacheEntry(this.finalPayloadCache, cacheKey);
+    if (cached !== undefined) {
+      return cached;
+    }
+
+    const built = await builder();
+    return this.writeCacheEntry(this.finalPayloadCache, cacheKey, built, ttlMs);
+  }
+
+  private async withResponseCache(
+    provider: string,
+    model: string,
+    systemPromptHash: string,
+    payloadHash: string,
+    request: () => Promise<string>,
+    ttlMs: number = RESPONSE_CACHE_TTL_MS,
+  ): Promise<string> {
+    const cacheKey = this.getCacheKey('response', provider, model, systemPromptHash, payloadHash);
+    const cached = this.readCacheEntry(this.responseCache, cacheKey);
+    if (cached !== undefined) {
+      return cached;
+    }
+
+    const inFlight = this.inFlightResponseCache.get(cacheKey);
+    if (inFlight) {
+      return inFlight;
+    }
+
+    if (this.inFlightResponseCache.size >= IN_FLIGHT_RESPONSE_CACHE_MAX) {
+      const oldestKey = this.inFlightResponseCache.keys().next().value;
+      if (oldestKey !== undefined) {
+        this.inFlightResponseCache.delete(oldestKey);
+      }
+    }
+
+    const pending = request()
+      .then(result => {
+        this.writeCacheEntry(this.responseCache, cacheKey, result, ttlMs);
+        this.inFlightResponseCache.delete(cacheKey);
+        return result;
+      })
+      .catch(error => {
+        this.inFlightResponseCache.delete(cacheKey);
+        throw error;
+      });
+
+    this.inFlightResponseCache.set(cacheKey, pending);
+    return pending;
+  }
+
+  private getInputTokenBudget(provider: string, modelId: string, summaryMode: boolean = false): number {
+    if (summaryMode) {
+      return SUMMARY_INPUT_TOKEN_BUDGET;
+    }
+
+    const normalizedProvider = provider.toLowerCase();
+    const normalizedModelId = modelId.toLowerCase();
+
+    if (normalizedProvider === 'claude' || normalizedModelId.startsWith('claude-')) return CLAUDE_INPUT_TOKEN_BUDGET;
+    if (normalizedProvider === 'openai' || this.isOpenAiModel(normalizedModelId)) return OPENAI_INPUT_TOKEN_BUDGET;
+    if (normalizedProvider === 'groq' || normalizedProvider === 'text_groq' || this.isGroqModel(normalizedModelId)) return GROQ_INPUT_TOKEN_BUDGET;
+    if (normalizedProvider === 'gemini_pro' || (normalizedModelId.includes('gemini') && normalizedModelId.includes('pro'))) return GEMINI_PRO_INPUT_TOKEN_BUDGET;
+    if (normalizedProvider === 'gemini' || normalizedProvider === 'gemini_flash' || this.isGeminiModel(normalizedModelId)) return GEMINI_FLASH_INPUT_TOKEN_BUDGET;
+    if (normalizedProvider === 'ollama' || normalizedProvider === 'custom' || normalizedProvider === 'curl') return LOCAL_INPUT_TOKEN_BUDGET;
+
+    return DEFAULT_INPUT_TOKEN_BUDGET;
+  }
+
+  private prepareUserContentForModel(provider: string, modelId: string, message: string, context?: string): string {
+    return this.prepareUserContent(message, context, this.getInputTokenBudget(provider, modelId));
+  }
+
+  private wantsDetailedResponse(message: string): boolean {
+    return /\b(detailed|detail|deep dive|in depth|step by step|thorough|comprehensive|elaborate|full explanation|longer version)\b/i.test(message);
+  }
+
+  private isStructuredOutputRequest(input?: string): boolean {
+    if (!input) return false;
+    return /(STRUCTURED_REASONING_RESPONSE|Return JSON|mode, openingReasoning, implementationPlan|JSON with keys|reasoning_first)/i.test(input);
+  }
+
+  private applyDefaultBrevityHint(message: string): string {
+    if (this.wantsDetailedResponse(message) || this.isStructuredOutputRequest(message)) {
+      return message;
+    }
+    return `${message}\n\nAnswer briefly and directly. Keep it to 2-3 short sentences unless code is required.`;
   }
 
   public async chatWithGemini(message: string, imagePaths?: string[], context?: string, skipSystemPrompt: boolean = false, alternateGroqMessage?: string): Promise<string> {
     try {
       console.log(`[LLMHelper] chatWithGemini called with message:`, message.substring(0, 50))
+      const effectiveMessage = this.applyDefaultBrevityHint(message)
 
       // ============================================================
       // KNOWLEDGE MODE INTERCEPT
@@ -727,28 +1207,25 @@ ANSWER DIRECTLY:`;
       const isMultimodal = !!(imagePaths?.length);
 
       // Helper to build combined prompts for Groq/Gemini
-      const buildMessage = (systemPrompt: string) => {
+      const buildMessage = (provider: string, modelId: string, systemPrompt: string) => {
+        const preparedUserContent = this.prepareUserContentForModel(provider, modelId, effectiveMessage, context);
         if (skipSystemPrompt) {
-          return context
-            ? `CONTEXT:\n${context}\n\nUSER QUESTION:\n${message}`
-            : message;
+          return preparedUserContent;
         }
-        return context
-          ? `${systemPrompt}\n\nCONTEXT:\n${context}\n\nUSER QUESTION:\n${message}`
-          : `${systemPrompt}\n\n${message}`;
+        return this.joinPrompt(systemPrompt, preparedUserContent, this.getInputTokenBudget(provider, modelId));
       };
 
       // For OpenAI/Claude: separate system prompt + user message
-      const userContent = context
-        ? `CONTEXT:\n${context}\n\nUSER QUESTION:\n${message}`
-        : message;
+      const activeOpenAiModel = this.getActiveOpenAiModel();
+      const openaiUserContent = this.prepareUserContentForModel('openai', activeOpenAiModel, effectiveMessage, context);
+      const claudeUserContent = this.prepareUserContentForModel('claude', CLAUDE_MODEL, effectiveMessage, context);
 
-      const finalGeminiPrompt = this.injectLanguageInstruction(HARD_SYSTEM_PROMPT);
-      const finalGroqPrompt = alternateGroqMessage || this.injectLanguageInstruction(GROQ_SYSTEM_PROMPT);
+      const finalGeminiPrompt = await this.withSystemPromptCache('gemini', this.currentModelId, HARD_SYSTEM_PROMPT, () => this.injectLanguageInstruction(HARD_SYSTEM_PROMPT));
+      const finalGroqPrompt = alternateGroqMessage || await this.withSystemPromptCache('groq', GROQ_MODEL, GROQ_SYSTEM_PROMPT, () => this.injectLanguageInstruction(GROQ_SYSTEM_PROMPT));
 
       const combinedMessages = {
-        gemini: buildMessage(finalGeminiPrompt),
-        groq: buildMessage(finalGroqPrompt),
+        gemini: buildMessage('gemini', this.currentModelId, finalGeminiPrompt),
+        groq: buildMessage('groq', GROQ_MODEL, finalGroqPrompt),
       };
 
       // GROQ FAST TEXT OVERRIDE (Text-Only)
@@ -763,8 +1240,8 @@ ANSWER DIRECTLY:`;
       }
 
       // System prompts for OpenAI/Claude (skipped if skipSystemPrompt)
-      const openaiSystemPrompt = skipSystemPrompt ? undefined : this.injectLanguageInstruction(OPENAI_SYSTEM_PROMPT);
-      const claudeSystemPrompt = skipSystemPrompt ? undefined : this.injectLanguageInstruction(CLAUDE_SYSTEM_PROMPT);
+      const openaiSystemPrompt = skipSystemPrompt ? undefined : await this.withSystemPromptCache('openai', activeOpenAiModel, OPENAI_SYSTEM_PROMPT, () => this.injectLanguageInstruction(OPENAI_SYSTEM_PROMPT));
+      const claudeSystemPrompt = skipSystemPrompt ? undefined : await this.withSystemPromptCache('claude', CLAUDE_MODEL, CLAUDE_SYSTEM_PROMPT, () => this.injectLanguageInstruction(CLAUDE_SYSTEM_PROMPT));
 
       if (this.useOllama) {
         return await this.callOllama(combinedMessages.gemini);
@@ -790,14 +1267,14 @@ ANSWER DIRECTLY:`;
 
       // --- Direct Routing based on Selected Model ---
       if (this.isOpenAiModel(this.currentModelId) && this.openaiClient) {
-        return await this.generateWithOpenai(userContent, openaiSystemPrompt, imagePaths);
+        return await this.generateWithOpenai(openaiUserContent, openaiSystemPrompt, imagePaths);
       }
       if (this.isClaudeModel(this.currentModelId) && this.claudeClient) {
-        return await this.generateWithClaude(userContent, claudeSystemPrompt, imagePaths);
+        return await this.generateWithClaude(claudeUserContent, claudeSystemPrompt, imagePaths);
       }
       if (this.isGroqModel(this.currentModelId) && this.groqClient) {
         if (isMultimodal && imagePaths) {
-          return await this.generateWithGroqMultimodal(userContent, imagePaths, openaiSystemPrompt);
+          return await this.generateWithGroqMultimodal(openaiUserContent, imagePaths, openaiSystemPrompt);
         }
         return await this.generateWithGroq(combinedMessages.groq);
       }
@@ -823,7 +1300,7 @@ ANSWER DIRECTLY:`;
       if (isMultimodal) {
         // MULTIMODAL PROVIDER ORDER: OpenAI -> Gemini Flash -> Claude -> Gemini Pro -> Groq -> Custom/Ollama
         if (this.openaiClient) {
-          providers.push({ name: `OpenAI (${textOpenAI})`, execute: () => this.generateWithOpenai(userContent, openaiSystemPrompt, imagePaths) });
+          providers.push({ name: `OpenAI (${textOpenAI})`, execute: () => this.generateWithOpenai(openaiUserContent, openaiSystemPrompt, imagePaths) });
         }
         if (this.client) {
           providers.push({
@@ -832,7 +1309,7 @@ ANSWER DIRECTLY:`;
           });
         }
         if (this.claudeClient) {
-          providers.push({ name: `Claude (${textClaude})`, execute: () => this.generateWithClaude(userContent, claudeSystemPrompt, imagePaths) });
+          providers.push({ name: `Claude (${textClaude})`, execute: () => this.generateWithClaude(claudeUserContent, claudeSystemPrompt, imagePaths) });
         }
         if (this.client) {
           providers.push({
@@ -843,7 +1320,7 @@ ANSWER DIRECTLY:`;
         if (this.groqClient) {
           providers.push({
             name: `Groq (meta-llama/llama-4-scout-17b-16e-instruct)`,
-            execute: () => this.generateWithGroqMultimodal(userContent, imagePaths!, openaiSystemPrompt)
+            execute: () => this.generateWithGroqMultimodal(openaiUserContent, imagePaths!, openaiSystemPrompt)
           });
         }
       } else {
@@ -862,10 +1339,10 @@ ANSWER DIRECTLY:`;
           });
         }
         if (this.openaiClient) {
-          providers.push({ name: `OpenAI (${textOpenAI})`, execute: () => this.generateWithOpenai(userContent, openaiSystemPrompt) });
+          providers.push({ name: `OpenAI (${textOpenAI})`, execute: () => this.generateWithOpenai(openaiUserContent, openaiSystemPrompt) });
         }
         if (this.claudeClient) {
-          providers.push({ name: `Claude (${textClaude})`, execute: () => this.generateWithClaude(userContent, claudeSystemPrompt) });
+          providers.push({ name: `Claude (${textClaude})`, execute: () => this.generateWithClaude(claudeUserContent, claudeSystemPrompt) });
         }
       }
 
@@ -906,7 +1383,7 @@ ANSWER DIRECTLY:`;
       return "I apologize, but I couldn't generate a response. Please try again.";
 
     } catch (error: any) {
-      console.error("[LLMHelper] Critical Error in chatWithGemini:", error);
+      console.error("[LLMHelper] Critical Error in chatWithGemini:", sanitizeError(error));
 
       if (error.message.includes("503") || error.message.includes("overloaded")) {
         return "The AI service is currently overloaded. Please try again in a moment.";
@@ -974,7 +1451,7 @@ ANSWER DIRECTLY:`;
     for (const provider of providers) {
       try {
         console.log(`[LLMHelper] 🧠 Structured generation: trying ${provider.name}...`);
-        const result = await provider.execute();
+        const result = await this.withRetry(() => provider.execute(), 3);
         if (result && result.trim().length > 0) {
           console.log(`[LLMHelper] ✅ Structured generation succeeded with ${provider.name}`);
           return result;
@@ -992,52 +1469,98 @@ ANSWER DIRECTLY:`;
     if (!this.groqClient) throw new Error("Groq client not initialized");
 
     await this.rateLimiters.groq.acquire();
+    const payloadHash = this.hashValue(fullMessage);
 
-    // Non-streaming Groq call
-    const response = await this.groqClient.chat.completions.create({
-      model: GROQ_MODEL,
-      messages: [{ role: "user", content: fullMessage }],
-      temperature: 0.4,
-      max_tokens: 8192,
-      stream: false
+    return this.withResponseCache('groq', GROQ_MODEL, '', payloadHash, async () => {
+      const requestPayload = await this.withFinalPayloadCache(
+        'groq',
+        GROQ_MODEL,
+        '',
+        payloadHash,
+        () => ({
+          model: GROQ_MODEL,
+          messages: [{ role: "user", content: fullMessage }],
+          temperature: 0.4,
+          max_tokens: 8192,
+          stream: false
+        }),
+      );
+
+      const response = await withTimeout(
+        this.groqClient!.chat.completions.create(requestPayload as any),
+        LLM_API_TIMEOUT_MS
+      );
+      return response.choices[0]?.message?.content || "";
     });
-
-    return response.choices[0]?.message?.content || "";
   }
 
   /**
    * Non-streaming OpenAI generation with proper system/user separation
    */
-  private async generateWithOpenai(userMessage: string, systemPrompt?: string, imagePaths?: string[]): Promise<string> {
+  private async generateWithOpenai(userMessage: string, systemPrompt?: string, imagePaths?: string[], modelOverride?: string, allowFallback: boolean = true): Promise<string> {
     if (!this.openaiClient) throw new Error("OpenAI client not initialized");
 
+    const targetModel = modelOverride || this.getActiveOpenAiModel();
+
     await this.rateLimiters.openai.acquire();
+    const systemPromptHash = this.hashValue(systemPrompt || '');
+    const payloadHash = this.hashValue({ model: targetModel, userMessage, systemPrompt: systemPrompt || '', imagePaths: imagePaths || [] });
 
-    const messages: any[] = [];
-    if (systemPrompt) {
-      messages.push({ role: "system", content: systemPrompt });
-    }
+    return this.withResponseCache('openai', targetModel, systemPromptHash, payloadHash, async () => {
+      const requestPayload = await this.withFinalPayloadCache(
+        'openai',
+        targetModel,
+        systemPromptHash,
+        payloadHash,
+        async () => {
+          const messages: any[] = [];
+          if (systemPrompt) {
+            messages.push({ role: "system", content: systemPrompt });
+          }
 
-    if (imagePaths?.length) {
-      const contentParts: any[] = [{ type: "text", text: userMessage }];
-      for (const p of imagePaths) {
-        if (fs.existsSync(p)) {
-          const imageData = await fs.promises.readFile(p);
-          contentParts.push({ type: "image_url", image_url: { url: `data:image/png;base64,${imageData.toString("base64")}` } });
+          if (imagePaths?.length) {
+            const contentParts: any[] = [{ type: "text", text: userMessage }];
+            for (const p of imagePaths) {
+              if (fs.existsSync(p)) {
+                const imageData = await fs.promises.readFile(p);
+                contentParts.push({ type: "image_url", image_url: { url: `data:image/png;base64,${imageData.toString("base64")}` } });
+              }
+            }
+            messages.push({ role: "user", content: contentParts });
+          } else {
+            messages.push({ role: "user", content: userMessage });
+          }
+
+          return {
+            model: targetModel,
+            messages,
+            max_completion_tokens: MAX_OUTPUT_TOKENS,
+          };
+        },
+      );
+
+      try {
+        const response = await withTimeout(
+          this.openaiClient!.chat.completions.create(requestPayload as any),
+          LLM_API_TIMEOUT_MS
+        );
+        return response.choices[0]?.message?.content || "";
+      } catch (error) {
+        if (allowFallback && this.isModelNotFoundError(error)) {
+          const fallbackModel = await this.resolveOpenAiFallbackModel(targetModel);
+          if (fallbackModel && fallbackModel !== targetModel) {
+            this.applyModelFallback({
+              provider: 'openai',
+              previousModel: targetModel,
+              fallbackModel,
+              reason: 'model_not_found',
+            });
+            return this.generateWithOpenai(userMessage, systemPrompt, imagePaths, fallbackModel, false);
+          }
         }
+        throw error;
       }
-      messages.push({ role: "user", content: contentParts });
-    } else {
-      messages.push({ role: "user", content: userMessage });
-    }
-
-    const response = await this.openaiClient.chat.completions.create({
-      model: OPENAI_MODEL,
-      messages,
-      max_completion_tokens: MAX_OUTPUT_TOKENS,
     });
-
-    return response.choices[0]?.message?.content || "";
   }
 
   // The handler for cURL requests
@@ -1066,21 +1589,35 @@ ANSWER DIRECTLY:`;
 
     // 4. Execute
     try {
-      const response = await axios({
+      const axiosImpl = LLMHelper.__testAxios ?? axios;
+      const response = await axiosImpl({
         method: curlConfig.method || 'POST',
         url: url,
         headers: headers,
-        data: data
+        data: data,
+        timeout: LLM_API_TIMEOUT_MS,
       });
 
       // 5. Extract Answer
       // If user didn't specify a path, try to guess or dump string
-      if (!responsePath) return JSON.stringify(response.data);
+      if (!responsePath) {
+        const extracted = this.extractOpenAIFormattedText(response.data, true);
+        return extracted && extracted.trim().length > 0 ? extracted : JSON.stringify(response.data);
+      }
 
       const answer = getByPath(response.data, responsePath);
 
-      if (typeof answer === 'string') return answer;
-      return JSON.stringify(answer); // Fallback if they pointed to an object
+      if (typeof answer === 'string' && answer.trim().length > 0) return answer;
+      if (answer !== null && answer !== undefined) {
+        if (typeof answer === 'number' || typeof answer === 'boolean') return String(answer);
+        if (Array.isArray(answer) && answer.length > 0) return JSON.stringify(answer);
+        if (typeof answer === 'object' && Object.keys(answer).length > 0) return JSON.stringify(answer);
+      }
+
+      const guessed = this.extractOpenAIFormattedText(response.data, false);
+      if (guessed && guessed.trim().length > 0) return guessed;
+
+      throw new Error(`cURL response extraction failed for path: ${responsePath}`);
 
     } catch (error: any) {
       console.error("[LLMHelper] cURL Execution Error:", error.message);
@@ -1095,34 +1632,50 @@ ANSWER DIRECTLY:`;
     if (!this.claudeClient) throw new Error("Claude client not initialized");
 
     await this.rateLimiters.claude.acquire();
+    const systemPromptHash = this.hashValue(systemPrompt || '');
+    const payloadHash = this.hashValue({ userMessage, systemPrompt: systemPrompt || '', imagePaths: imagePaths || [] });
 
-    const content: any[] = [];
-    if (imagePaths?.length) {
-      for (const p of imagePaths) {
-        if (fs.existsSync(p)) {
-          const imageData = await fs.promises.readFile(p);
-          content.push({
-            type: "image",
-            source: {
-              type: "base64",
-              media_type: "image/png",
-              data: imageData.toString("base64")
+    return this.withResponseCache('claude', CLAUDE_MODEL, systemPromptHash, payloadHash, async () => {
+      const requestPayload = await this.withFinalPayloadCache(
+        'claude',
+        CLAUDE_MODEL,
+        systemPromptHash,
+        payloadHash,
+        async () => {
+          const content: any[] = [];
+          if (imagePaths?.length) {
+            for (const p of imagePaths) {
+              if (fs.existsSync(p)) {
+                const imageData = await fs.promises.readFile(p);
+                content.push({
+                  type: "image",
+                  source: {
+                    type: "base64",
+                    media_type: "image/png",
+                    data: imageData.toString("base64")
+                  }
+                });
+              }
             }
-          });
-        }
-      }
-    }
-    content.push({ type: "text", text: userMessage });
+          }
+          content.push({ type: "text", text: userMessage });
 
-    const response = await this.claudeClient.messages.create({
-      model: CLAUDE_MODEL,
-      max_tokens: CLAUDE_MAX_OUTPUT_TOKENS,
-      ...(systemPrompt ? { system: systemPrompt } : {}),
-      messages: [{ role: "user", content }],
+          return {
+            model: CLAUDE_MODEL,
+            max_tokens: CLAUDE_MAX_OUTPUT_TOKENS,
+            ...(systemPrompt ? { system: systemPrompt } : {}),
+            messages: [{ role: "user", content }],
+          };
+        },
+      );
+
+      const response = await withTimeout(
+        this.claudeClient!.messages.create(requestPayload as any),
+        LLM_API_TIMEOUT_MS
+      );
+      const textBlock = response.content.find((block: any) => block.type === 'text') as any;
+      return textBlock?.text || "";
     });
-
-    const textBlock = response.content.find((block: any) => block.type === 'text') as any;
-    return textBlock?.text || "";
   }
 
   /**
@@ -1182,11 +1735,11 @@ ANSWER DIRECTLY:`;
       }
 
       // 6. Extract Answer - try common response formats
-      const extracted = this.extractFromCommonFormats(data);
+      const extracted = this.extractOpenAIFormattedText(data, true);
       console.log(`[LLMHelper] Custom Provider extracted text length: ${extracted.length}`);
       return extracted;
     } catch (error) {
-      console.error("Custom Provider Error:", error);
+      console.error("Custom Provider Error:", sanitizeError(error));
       throw error;
     }
   }
@@ -1195,7 +1748,7 @@ ANSWER DIRECTLY:`;
    * Try to extract text content from common LLM API response formats.
    * Supports: Ollama, OpenAI, Anthropic, and generic formats.
    */
-  private extractFromCommonFormats(data: any): string {
+  private extractFromCommonFormats(data: any, allowRawJsonFallback: boolean = true): string {
     if (!data || typeof data === 'string') return data || "";
 
     // Ollama format: { response: "..." }
@@ -1220,8 +1773,52 @@ ANSWER DIRECTLY:`;
     if (typeof data.result === 'string') return data.result;
 
     // Fallback: stringify the whole response
-    console.warn("[LLMHelper] Could not extract text from custom provider response, returning raw JSON");
-    return JSON.stringify(data);
+    if (allowRawJsonFallback) {
+      console.warn("[LLMHelper] Could not extract text from custom provider response, returning raw JSON");
+      return JSON.stringify(data);
+    }
+
+    return "";
+  }
+
+  private extractOpenAIFormattedText(data: any, allowRawJsonFallback: boolean = true): string {
+    if (!data || typeof data === 'string') return data || "";
+
+    if (typeof data.choices?.[0]?.message?.content === 'string') {
+      return data.choices[0].message.content;
+    }
+
+    if (Array.isArray(data.choices?.[0]?.message?.content)) {
+      const text = data.choices[0].message.content
+        .map((part: any) => typeof part?.text === 'string' ? part.text : '')
+        .join('')
+        .trim();
+      if (text) return text;
+    }
+
+    if (typeof data.choices?.[0]?.delta?.content === 'string') {
+      return data.choices[0].delta.content;
+    }
+
+    if (Array.isArray(data.output_text)) {
+      const text = data.output_text.join('').trim();
+      if (text) return text;
+    }
+
+    if (typeof data.output_text === 'string') {
+      return data.output_text;
+    }
+
+    if (Array.isArray(data.output)) {
+      const text = data.output
+        .flatMap((item: any) => Array.isArray(item?.content) ? item.content : [])
+        .map((part: any) => typeof part?.text === 'string' ? part.text : '')
+        .join('')
+        .trim();
+      if (text) return text;
+    }
+
+    return this.extractFromCommonFormats(data, allowRawJsonFallback);
   }
 
   /**
@@ -1299,15 +1896,18 @@ ANSWER DIRECTLY:`;
     }
     messages.push({ role: "user", content: contentParts });
 
-    const response = await this.groqClient.chat.completions.create({
-      model: "meta-llama/llama-4-scout-17b-16e-instruct",
-      messages,
-      temperature: 1,
-      max_completion_tokens: 28672,
-      top_p: 1,
-      stream: false,
-      stop: null
-    });
+    const response = await withTimeout(
+      this.groqClient.chat.completions.create({
+        model: "meta-llama/llama-4-scout-17b-16e-instruct",
+        messages,
+        temperature: 1,
+        max_completion_tokens: 28672,
+        top_p: 1,
+        stream: false,
+        stop: null
+      }),
+      LLM_API_TIMEOUT_MS
+    );
 
     return response.choices[0]?.message?.content || "";
   }
@@ -1323,9 +1923,10 @@ ANSWER DIRECTLY:`;
    * Provider order per tier: OpenAI -> Gemini Flash -> Claude -> Gemini Pro -> Groq Scout
    * After all cloud tiers: Custom Provider -> cURL Provider -> Ollama
    */
-  private async generateWithVisionFallback(systemPrompt: string, userPrompt: string, imagePaths: string[] = []): Promise<string> {
+  private async generateWithVisionFallback(systemPrompt: string, userPrompt: string, imagePaths: string[] = [], signal?: AbortSignal): Promise<string> {
     type ProviderAttempt = { name: string; execute: () => Promise<string> };
     const isMultimodal = imagePaths.length > 0;
+    throwIfAborted(signal);
 
     // Helper: build a provider attempt for a given family + model ID
     const buildProviderForFamily = (family: ModelFamily, modelId: string): ProviderAttempt | null => {
@@ -1345,6 +1946,7 @@ ANSWER DIRECTLY:`;
               execute: async () => {
                 const contents: any[] = [{ text: `${systemPrompt}\n\n${userPrompt}` }];
                 for (const p of imagePaths) {
+                  throwIfAborted(signal)
                   if (fs.existsSync(p)) {
                     const { mimeType, data } = await this.processImage(p);
                     contents.push({ inlineData: { mimeType, data } });
@@ -1374,6 +1976,7 @@ ANSWER DIRECTLY:`;
               execute: async () => {
                 const contents: any[] = [{ text: `${systemPrompt}\n\n${userPrompt}` }];
                 for (const p of imagePaths) {
+                  throwIfAborted(signal)
                   if (fs.existsSync(p)) {
                     const { mimeType, data } = await this.processImage(p);
                     contents.push({ inlineData: { mimeType, data } });
@@ -1550,26 +2153,25 @@ ANSWER DIRECTLY:`;
    */
   public async * streamChatWithGemini(message: string, imagePaths?: string[], context?: string, skipSystemPrompt: boolean = false): AsyncGenerator<string, void, unknown> {
     console.log(`[LLMHelper] streamChatWithGemini called with message:`, message.substring(0, 50));
+    const effectiveMessage = this.applyDefaultBrevityHint(message);
 
     const isMultimodal = !!(imagePaths?.length);
 
     // Build single-string messages for Groq/Gemini (which use combined prompts)
     const buildCombinedMessage = (systemPrompt: string) => {
       const finalPrompt = skipSystemPrompt ? systemPrompt : this.injectLanguageInstruction(systemPrompt);
-      if (skipSystemPrompt) {
-        return context
-          ? `CONTEXT:\n${context}\n\nUSER QUESTION:\n${message}`
-          : message;
-      }
+        if (skipSystemPrompt) {
+          return context
+          ? `CONTEXT:\n${context}\n\nUSER QUESTION:\n${effectiveMessage}`
+          : effectiveMessage;
+        }
       return context
-        ? `${finalPrompt}\n\nCONTEXT:\n${context}\n\nUSER QUESTION:\n${message}`
-        : `${finalPrompt}\n\n${message}`;
+        ? `${finalPrompt}\n\nCONTEXT:\n${context}\n\nUSER QUESTION:\n${effectiveMessage}`
+        : `${finalPrompt}\n\n${effectiveMessage}`;
     };
 
     // For OpenAI/Claude: separate system prompt + user message (proper API pattern)
-    const userContent = context
-      ? `CONTEXT:\n${context}\n\nUSER QUESTION:\n${message}`
-      : message;
+    const userContent = this.prepareUserContent(effectiveMessage, context);
 
     const combinedMessages = {
       gemini: buildCombinedMessage(HARD_SYSTEM_PROMPT),
@@ -1646,7 +2248,7 @@ ANSWER DIRECTLY:`;
     // RELENTLESS RETRY: Try all providers, then retry entire chain
     // with exponential backoff. Max 2 full rotations.
     // ============================================================
-    const MAX_FULL_ROTATIONS = 3;
+    const MAX_FULL_ROTATIONS = 1;
 
     for (let rotation = 0; rotation < MAX_FULL_ROTATIONS; rotation++) {
       if (rotation > 0) {
@@ -1681,13 +2283,15 @@ ANSWER DIRECTLY:`;
     message: string,
     imagePaths?: string[],
     context?: string,
-    systemPromptOverride?: string // Optional override (defaults to HARD_SYSTEM_PROMPT)
+    systemPromptOverride?: string,
+    options?: { skipKnowledgeInterception?: boolean }
   ): AsyncGenerator<string, void, unknown> {
+    const effectiveMessage = this.applyDefaultBrevityHint(message);
 
     // ============================================================
     // KNOWLEDGE MODE INTERCEPT (Streaming)
     // ============================================================
-    if (this.knowledgeOrchestrator?.isKnowledgeMode()) {
+    if (!options?.skipKnowledgeInterception && this.knowledgeOrchestrator?.isKnowledgeMode()) {
       try {
         const knowledgeResult = await this.knowledgeOrchestrator.processQuestion(message);
         if (knowledgeResult) {
@@ -1715,16 +2319,32 @@ ANSWER DIRECTLY:`;
 
     // Preparation
     const isMultimodal = !!(imagePaths?.length);
+    const providerCacheKey = this.activeCurlProvider
+      ? `curl:${this.activeCurlProvider.id}`
+      : this.isOpenAiModel(this.currentModelId)
+        ? 'openai'
+        : this.isClaudeModel(this.currentModelId)
+          ? 'claude'
+          : this.isGroqModel(this.currentModelId)
+            ? 'groq'
+            : this.useOllama
+              ? 'ollama'
+              : 'gemini';
 
     // Determine the system prompt to use
     // logic: if override provided, use it. otherwise use HARD_SYSTEM_PROMPT (which is the universal base)
     const baseSystemPrompt = systemPromptOverride || HARD_SYSTEM_PROMPT;
-    const finalSystemPrompt = this.injectLanguageInstruction(baseSystemPrompt);
+    const finalSystemPrompt = await this.withSystemPromptCache(
+      providerCacheKey,
+      this.getCurrentModel(),
+      baseSystemPrompt,
+      () => this.injectLanguageInstruction(baseSystemPrompt),
+    );
 
     // Helper to build combined user message
     const userContent = context
-      ? `CONTEXT:\n${context}\n\nUSER QUESTION:\n${message}`
-      : message;
+      ? `CONTEXT:\n${context}\n\nUSER QUESTION:\n${effectiveMessage}`
+      : effectiveMessage;
 
     // GROQ FAST TEXT OVERRIDE (Text-Only)
     if (this.groqFastTextMode && !isMultimodal && this.groqClient) {
@@ -1732,7 +2352,7 @@ ANSWER DIRECTLY:`;
       try {
         const groqSystem = systemPromptOverride || GROQ_SYSTEM_PROMPT;
         const finalGroqSystem = this.injectLanguageInstruction(groqSystem);
-        const groqFullMessage = `${finalGroqSystem}\n\n${userContent}`;
+        const groqFullMessage = this.joinPrompt(finalGroqSystem, userContent);
         yield* this.streamWithGroq(groqFullMessage);
         return;
       } catch (e: any) {
@@ -1743,17 +2363,21 @@ ANSWER DIRECTLY:`;
 
     // 1. Ollama Streaming
     if (this.useOllama) {
-      yield* this.streamWithOllama(message, context, finalSystemPrompt);
+      yield* this.streamWithOllama(effectiveMessage, context, finalSystemPrompt);
       return;
     }
 
     // 2. Custom Provider Streaming (via cURL - Non-streaming fallback for now)
     if (this.activeCurlProvider) {
+      // Map UNIVERSAL prompts to CUSTOM before injecting language instruction,
+      // because injectLanguageInstruction modifies the string and breaks mapToCustomPrompt matching
+      const mappedBase = this.mapToCustomPrompt(baseSystemPrompt);
+      const curlSystemPrompt = this.injectLanguageInstruction(mappedBase);
       const response = await this.executeCustomProvider(
         this.activeCurlProvider.curlCommand,
         userContent,
-        finalSystemPrompt,
-        message,
+        curlSystemPrompt,
+        effectiveMessage,
         context || "",
         imagePaths?.[0]
       );
@@ -1799,7 +2423,7 @@ ANSWER DIRECTLY:`;
       // Text-only Groq
       const groqSystem = systemPromptOverride ? baseSystemPrompt : GROQ_SYSTEM_PROMPT;
       const finalGroqSystem = this.injectLanguageInstruction(groqSystem);
-      const groqFullMessage = `${finalGroqSystem}\n\n${userContent}`;
+      const groqFullMessage = this.joinPrompt(finalGroqSystem, userContent);
       yield* this.streamWithGroq(groqFullMessage);
       return;
     }
@@ -1808,13 +2432,13 @@ ANSWER DIRECTLY:`;
     if (this.client) {
       // Direct model use if specified
       if (this.isGeminiModel(this.currentModelId)) {
-        const fullMsg = `${finalSystemPrompt}\n\n${userContent}`;
+        const fullMsg = this.joinPrompt(finalSystemPrompt, userContent);
         yield* this.streamWithGeminiModel(fullMsg, this.currentModelId, imagePaths);
         return;
       }
 
       // Race strategy (default)
-      const raceMsg = `${finalSystemPrompt}\n\n${userContent}`;
+      const raceMsg = this.joinPrompt(finalSystemPrompt, userContent);
       yield* this.streamWithGeminiParallelRace(raceMsg, imagePaths);
     } else {
       throw new Error("No LLM provider available");
@@ -1827,13 +2451,15 @@ ANSWER DIRECTLY:`;
   private async * streamWithGroq(fullMessage: string): AsyncGenerator<string, void, unknown> {
     if (!this.groqClient) throw new Error("Groq client not initialized");
 
+    const timeoutSignal = createTimeoutSignal(LLM_API_TIMEOUT_MS);
+    
     const stream = await this.groqClient.chat.completions.create({
       model: GROQ_MODEL,
       messages: [{ role: "user", content: fullMessage }],
       stream: true,
       temperature: 0.4,
       max_tokens: 8192,
-    });
+    }, { signal: timeoutSignal });
 
     for await (const chunk of stream) {
       const content = chunk.choices[0]?.delta?.content;
@@ -1864,6 +2490,8 @@ ANSWER DIRECTLY:`;
     }
     messages.push({ role: "user", content: contentParts });
 
+    const timeoutSignal = createTimeoutSignal(LLM_API_TIMEOUT_MS);
+    
     const stream = await this.groqClient.chat.completions.create({
       model: "meta-llama/llama-4-scout-17b-16e-instruct",
       messages,
@@ -1872,7 +2500,7 @@ ANSWER DIRECTLY:`;
       temperature: 1,
       top_p: 1,
       stop: null
-    });
+    }, { signal: timeoutSignal });
 
     for await (const chunk of stream) {
       const content = chunk.choices[0]?.delta?.content;
@@ -1888,18 +2516,40 @@ ANSWER DIRECTLY:`;
   private async * streamWithOpenai(userMessage: string, systemPrompt?: string): AsyncGenerator<string, void, unknown> {
     if (!this.openaiClient) throw new Error("OpenAI client not initialized");
 
+    const targetModel = this.getActiveOpenAiModel();
+
     const messages: any[] = [];
     if (systemPrompt) {
       messages.push({ role: "system", content: systemPrompt });
     }
     messages.push({ role: "user", content: userMessage });
 
-    const stream = await this.openaiClient.chat.completions.create({
-      model: OPENAI_MODEL,
-      messages,
-      stream: true,
-      max_completion_tokens: MAX_OUTPUT_TOKENS,
-    });
+    const timeoutSignal = createTimeoutSignal(LLM_API_TIMEOUT_MS);
+    
+    let stream;
+    try {
+      stream = await this.openaiClient.chat.completions.create({
+        model: targetModel,
+        messages,
+        stream: true,
+        max_completion_tokens: MAX_OUTPUT_TOKENS,
+      }, { signal: timeoutSignal });
+    } catch (error) {
+      if (this.isModelNotFoundError(error)) {
+        const fallbackModel = await this.resolveOpenAiFallbackModel(targetModel);
+        if (fallbackModel && fallbackModel !== targetModel) {
+          this.applyModelFallback({
+            provider: 'openai',
+            previousModel: targetModel,
+            fallbackModel,
+            reason: 'model_not_found',
+          });
+          yield* this.streamWithOpenaiUsingModel(userMessage, fallbackModel, systemPrompt);
+          return;
+        }
+      }
+      throw error;
+    }
 
     for await (const chunk of stream) {
       const content = chunk.choices[0]?.delta?.content;
@@ -1935,6 +2585,8 @@ ANSWER DIRECTLY:`;
   private async * streamWithOpenaiMultimodal(userMessage: string, imagePaths: string[], systemPrompt?: string): AsyncGenerator<string, void, unknown> {
     if (!this.openaiClient) throw new Error("OpenAI client not initialized");
 
+    const targetModel = this.getActiveOpenAiModel();
+
     const messages: any[] = [];
     if (systemPrompt) {
       messages.push({ role: "system", content: systemPrompt });
@@ -1949,12 +2601,90 @@ ANSWER DIRECTLY:`;
     }
     messages.push({ role: "user", content: contentParts });
 
+    const timeoutSignal = createTimeoutSignal(LLM_API_TIMEOUT_MS);
+    
+    let stream;
+    try {
+      stream = await this.openaiClient.chat.completions.create({
+        model: targetModel,
+        messages,
+        stream: true,
+        max_completion_tokens: MAX_OUTPUT_TOKENS,
+      }, { signal: timeoutSignal });
+    } catch (error) {
+      if (this.isModelNotFoundError(error)) {
+        const fallbackModel = await this.resolveOpenAiFallbackModel(targetModel);
+        if (fallbackModel && fallbackModel !== targetModel) {
+          this.applyModelFallback({
+            provider: 'openai',
+            previousModel: targetModel,
+            fallbackModel,
+            reason: 'model_not_found',
+          });
+          yield* this.streamWithOpenaiMultimodalUsingModel(userMessage, imagePaths, fallbackModel, systemPrompt);
+          return;
+        }
+      }
+      throw error;
+    }
+
+    for await (const chunk of stream) {
+      const content = chunk.choices[0]?.delta?.content;
+      if (content) {
+        yield content;
+      }
+    }
+  }
+
+  private async * streamWithOpenaiUsingModel(userMessage: string, model: string, systemPrompt?: string): AsyncGenerator<string, void, unknown> {
+    if (!this.openaiClient) throw new Error("OpenAI client not initialized");
+
+    const messages: any[] = [];
+    if (systemPrompt) {
+      messages.push({ role: "system", content: systemPrompt });
+    }
+    messages.push({ role: "user", content: userMessage });
+
+    const timeoutSignal = createTimeoutSignal(LLM_API_TIMEOUT_MS);
     const stream = await this.openaiClient.chat.completions.create({
-      model: OPENAI_MODEL,
+      model,
       messages,
       stream: true,
       max_completion_tokens: MAX_OUTPUT_TOKENS,
-    });
+    }, { signal: timeoutSignal });
+
+    for await (const chunk of stream) {
+      const content = chunk.choices[0]?.delta?.content;
+      if (content) {
+        yield content;
+      }
+    }
+  }
+
+  private async * streamWithOpenaiMultimodalUsingModel(userMessage: string, imagePaths: string[], model: string, systemPrompt?: string): AsyncGenerator<string, void, unknown> {
+    if (!this.openaiClient) throw new Error("OpenAI client not initialized");
+
+    const messages: any[] = [];
+    if (systemPrompt) {
+      messages.push({ role: "system", content: systemPrompt });
+    }
+
+    const contentParts: any[] = [{ type: "text", text: userMessage }];
+    for (const p of imagePaths) {
+      if (fs.existsSync(p)) {
+        const imageData = await fs.promises.readFile(p);
+        contentParts.push({ type: "image_url", image_url: { url: `data:image/png;base64,${imageData.toString("base64")}` } });
+      }
+    }
+    messages.push({ role: "user", content: contentParts });
+
+    const timeoutSignal = createTimeoutSignal(LLM_API_TIMEOUT_MS);
+    const stream = await this.openaiClient.chat.completions.create({
+      model,
+      messages,
+      stream: true,
+      max_completion_tokens: MAX_OUTPUT_TOKENS,
+    }, { signal: timeoutSignal });
 
     for await (const chunk of stream) {
       const content = chunk.choices[0]?.delta?.content;
@@ -2059,25 +2789,52 @@ ANSWER DIRECTLY:`;
   private async * streamWithGeminiParallelRace(fullMessage: string, imagePaths?: string[]): AsyncGenerator<string, void, unknown> {
     if (!this.client) throw new Error("Gemini client not initialized");
 
-    // Start both streams
-    const flashPromise = this.collectStreamResponse(fullMessage, GEMINI_FLASH_MODEL, imagePaths);
-    const proPromise = this.collectStreamResponse(fullMessage, GEMINI_PRO_MODEL, imagePaths);
+    const streams = {
+      flash: this.streamGeminiModelChunks(fullMessage, GEMINI_FLASH_MODEL, imagePaths)[Symbol.asyncIterator](),
+      pro: this.streamGeminiModelChunks(fullMessage, GEMINI_PRO_MODEL, imagePaths)[Symbol.asyncIterator](),
+    } as const;
 
-    // Race - whoever finishes first wins
-    const result = await Promise.any([flashPromise, proPromise]);
+    const nextChunk = (name: keyof typeof streams) =>
+      streams[name].next().then(result => ({ name, result }));
 
-    // Yield the collected response character by character to simulate streaming
-    // (Or yield in chunks for efficiency)
-    const chunkSize = 10;
-    for (let i = 0; i < result.length; i += chunkSize) {
-      yield result.substring(i, i + chunkSize);
+    let winner: keyof typeof streams | null = null;
+    const pending = new Map<keyof typeof streams, Promise<{ name: keyof typeof streams; result: IteratorResult<string> }>>();
+    pending.set('flash', nextChunk('flash'));
+    pending.set('pro', nextChunk('pro'));
+
+    while (pending.size > 0) {
+      const { name, result } = await Promise.race(Array.from(pending.values()));
+      pending.delete(name);
+
+      if (result.done) {
+        if (winner === name) {
+          return;
+        }
+        if (pending.size === 0 && winner === null) {
+          throw new Error('Both Gemini race streams completed without output');
+        }
+        continue;
+      }
+
+      if (!winner) {
+        winner = name;
+        const loser = name === 'flash' ? 'pro' : 'flash';
+        pending.delete(loser);
+        await streams[loser].return?.(undefined);
+        console.log(`[LLMHelper] Gemini race winner: ${winner}`);
+      }
+
+      if (name === winner) {
+        yield result.value;
+        pending.set(name, nextChunk(name));
+      }
     }
   }
 
   /**
-   * Collect full response from a Gemini model (non-streaming for race)
+   * Stream chunks from a specific Gemini model.
    */
-  private async collectStreamResponse(fullMessage: string, model: string, imagePaths?: string[]): Promise<string> {
+  private async * streamGeminiModelChunks(fullMessage: string, model: string, imagePaths?: string[]): AsyncGenerator<string, void, unknown> {
     if (!this.client) throw new Error("Gemini client not initialized");
 
     const contents: any[] = [{ text: fullMessage }];
@@ -2095,7 +2852,7 @@ ANSWER DIRECTLY:`;
       }
     }
 
-    const response = await this.client.models.generateContent({
+    const streamResult = await this.client.models.generateContentStream({
       model: model,
       contents: contents,
       config: {
@@ -2104,7 +2861,22 @@ ANSWER DIRECTLY:`;
       }
     });
 
-    return response.text || "";
+    // @ts-ignore
+    const stream = streamResult.stream || streamResult;
+
+    for await (const chunk of stream) {
+      let chunkText = "";
+      if (typeof chunk.text === 'function') {
+        chunkText = chunk.text();
+      } else if (typeof chunk.text === 'string') {
+        chunkText = chunk.text;
+      } else if (chunk.candidates?.[0]?.content?.parts?.[0]?.text) {
+        chunkText = chunk.candidates[0].content.parts[0].text;
+      }
+      if (chunkText) {
+        yield chunkText;
+      }
+    }
   }
 
   // --- OLLAMA STREAMING ---
@@ -2144,7 +2916,7 @@ ANSWER DIRECTLY:`;
         }
       }
     } catch (e) {
-      console.error("Ollama streaming failed", e);
+      console.error("Ollama streaming failed", sanitizeError(e));
       yield "Error: Failed to stream from Ollama.";
     }
   }
@@ -2333,7 +3105,7 @@ ANSWER DIRECTLY:`;
 
       return true;
     } catch (error) {
-      console.error("[LLMHelper] Failed to restart Ollama:", error);
+      console.error("[LLMHelper] Failed to restart Ollama:", sanitizeError(error));
       return false;
     }
   }
@@ -2341,6 +3113,17 @@ ANSWER DIRECTLY:`;
   public getCurrentProvider(): "ollama" | "gemini" | "custom" {
     if (this.customProvider) return "custom";
     return this.useOllama ? "ollama" : "gemini";
+  }
+
+  public getProviderCapabilityClass(): ProviderCapabilityClass {
+    return classifyProviderCapability({
+      useOllama: this.useOllama,
+      activeCurlProvider: !!this.activeCurlProvider,
+      isOpenAiModel: this.isOpenAiModel(this.currentModelId),
+      isClaudeModel: this.isClaudeModel(this.currentModelId),
+      isGroqModel: this.isGroqModel(this.currentModelId),
+      isGeminiModel: this.isGeminiModel(this.currentModelId),
+    });
   }
 
   public getCurrentModel(): string {
@@ -2420,13 +3203,15 @@ ANSWER DIRECTLY:`;
     if (this.groqClient) {
       try {
         console.log(`[LLMHelper] 🚀 Mode-specific Groq stream starting...`);
+        const timeoutSignal = createTimeoutSignal(LLM_API_TIMEOUT_MS);
+        
         const stream = await this.groqClient.chat.completions.create({
           model: GROQ_MODEL,
           messages: [{ role: "user", content: groqMessage }],
           stream: true,
           temperature: temperature,
           max_tokens: maxTokens,
-        });
+        }, { signal: timeoutSignal });
 
         for await (const chunk of stream) {
           const content = chunk.choices[0]?.delta?.content;
@@ -2589,9 +3374,8 @@ ANSWER DIRECTLY:`;
   public async generateMeetingSummary(systemPrompt: string, context: string, groqSystemPrompt?: string): Promise<string> {
     console.log(`[LLMHelper] generateMeetingSummary called. Context length: ${context.length}`);
 
-    // Helper: Estimate tokens (crude approximation: 4 chars = 1 token)
-    const estimateTokens = (text: string) => Math.ceil(text.length / 4);
-    const tokenCount = estimateTokens(context);
+    const safeContext = this.trimTextToTokenBudget(context, SUMMARY_INPUT_TOKEN_BUDGET, true);
+    const tokenCount = this.estimateTokens(safeContext);
     console.log(`[LLMHelper] Estimated tokens: ${tokenCount}`);
 
     // ATTEMPT 1: Groq (if text-only and within limits)
@@ -2606,7 +3390,7 @@ ANSWER DIRECTLY:`;
             model: GROQ_MODEL,
             messages: [
               { role: "system", content: groqPrompt },
-              { role: "user", content: `Context:\n${context}` }
+              { role: "user", content: `Context:\n${safeContext}` }
             ],
             temperature: 0.3,
             max_tokens: 8192,
@@ -2632,7 +3416,7 @@ ANSWER DIRECTLY:`;
 
     // ATTEMPT 2: Gemini Flash (with 2 retries = 3 attempts total)
     console.log(`[LLMHelper] Attempting Gemini Flash for summary...`);
-    const contents = [{ text: `${systemPrompt}\n\nCONTEXT:\n${context}` }];
+    const contents = [{ text: `${systemPrompt}\n\nCONTEXT:\n${safeContext}` }];
 
     for (let attempt = 1; attempt <= 3; attempt++) {
       try {

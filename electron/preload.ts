@@ -1,4 +1,43 @@
 import { contextBridge, ipcRenderer } from "electron"
+import type { CustomProviderPayload, FollowUpEmailInput, GeminiChatOptions, OverlayBounds, TranscriptTextEntry } from "../shared/ipc"
+
+type IpcErrorContract = { code: string; message: string }
+type IpcResult<T> = { success: true; data: T } | { success: false; error: IpcErrorContract }
+type StatusResult = { success: boolean; error?: string }
+
+const isIpcResult = <T>(value: unknown): value is IpcResult<T> => {
+  return Boolean(value) && typeof value === 'object' && 'success' in (value as Record<string, unknown>)
+}
+
+const getErrorMessage = (error: unknown): string => {
+  return error instanceof Error ? error.message : 'IPC request failed'
+}
+
+const invokeAndUnwrap = async <T>(channel: string, ...args: unknown[]): Promise<T> => {
+  const result = await ipcRenderer.invoke(channel, ...args)
+  if (!isIpcResult<T>(result)) {
+    return result as T
+  }
+
+  if (result.success) {
+    return result.data
+  }
+
+  throw new Error((result as { success: false; error: IpcErrorContract }).error.message)
+}
+
+const invokeVoid = async (channel: string, ...args: unknown[]): Promise<void> => {
+  await invokeAndUnwrap<unknown>(channel, ...args)
+}
+
+const invokeStatus = async (channel: string, ...args: unknown[]): Promise<StatusResult> => {
+  try {
+    await invokeVoid(channel, ...args)
+    return { success: true }
+  } catch (error) {
+    return { success: false, error: getErrorMessage(error) }
+  }
+}
 
 // Types for the exposed Electron API
 interface ElectronAPI {
@@ -6,6 +45,7 @@ interface ElectronAPI {
     width: number
     height: number
   }) => Promise<void>
+  setOverlayBounds: (bounds: OverlayBounds) => Promise<{ success: boolean }>
   getRecognitionLanguages: () => Promise<Record<string, any>>
   getScreenshots: () => Promise<Array<{ path: string; preview: string }>>
   deleteScreenshot: (
@@ -29,15 +69,30 @@ interface ElectronAPI {
 
   onUnauthorized: (callback: () => void) => () => void
   onDebugError: (callback: (error: string) => void) => () => void
-  takeScreenshot: () => Promise<void>
-  takeSelectiveScreenshot: () => Promise<{ path: string; preview: string; cancelled?: boolean }>
+  takeScreenshot: () => Promise<{ path: string; preview: string }>
+  takeSelectiveScreenshot: () => Promise<{ path?: string; preview?: string; cancelled?: boolean }>
   moveWindowLeft: () => Promise<void>
   moveWindowRight: () => Promise<void>
   moveWindowUp: () => Promise<void>
   moveWindowDown: () => Promise<void>
 
-  analyzeImageFile: (path: string) => Promise<void>
+  analyzeImageFile: (path: string) => Promise<unknown>
   quitApp: () => Promise<void>
+  openExternal: (url: string) => Promise<void>
+  setUndetectable: (state: boolean) => Promise<StatusResult>
+  getUndetectable: () => Promise<boolean>
+  setConsciousMode: (enabled: boolean) => Promise<{ success: true; data: { enabled: boolean } } | { success: false; error: { code: string; message: string } }>
+  getConsciousMode: () => Promise<{ success: true; data: { enabled: boolean } } | { success: false; error: { code: string; message: string } }>
+  onConsciousModeChanged: (callback: (enabled: boolean) => void) => () => void
+  setAccelerationMode: (enabled: boolean) => Promise<{ success: true; data: { enabled: boolean } } | { success: false; error: { code: string; message: string } }>
+  getAccelerationMode: () => Promise<{ success: true; data: { enabled: boolean } } | { success: false; error: { code: string; message: string } }>
+  onAccelerationModeChanged: (callback: (enabled: boolean) => void) => () => void
+  setOpenAtLogin: (open: boolean) => Promise<StatusResult>
+  getOpenAtLogin: () => Promise<boolean>
+  closeSettingsWindow: () => Promise<void>
+  setDisguise: (mode: 'terminal' | 'settings' | 'activity' | 'none') => Promise<StatusResult>
+  getDisguise: () => Promise<'none' | 'terminal' | 'settings' | 'activity'>
+  onDisguiseChanged: (callback: (mode: 'terminal' | 'settings' | 'activity' | 'none') => void) => () => void
 
   // LLM Model Management
   getCurrentLlmConfig: () => Promise<{ provider: "ollama" | "gemini"; model: string; isOllama: boolean }>
@@ -78,11 +133,12 @@ interface ElectronAPI {
   onSuggestionError: (callback: (error: { error: string }) => void) => () => void
   onMeetingAudioError: (callback: (message: string) => void) => () => void
   generateSuggestion: (context: string, lastQuestion: string) => Promise<{ suggestion: string }>
+  getNativeAudioStatus: () => Promise<{ connected: boolean }>
   getInputDevices: () => Promise<Array<{ id: string; name: string }>>
   getOutputDevices: () => Promise<Array<{ id: string; name: string }>>
   setRecognitionLanguage: (key: string) => Promise<{ success: boolean; error?: string }>
   getAiResponseLanguages: () => Promise<Array<{ label: string; code: string }>>
-  setAiResponseLanguage: (language: string) => Promise<{ success: boolean; error?: string }>
+  setAiResponseLanguage: (language: string) => Promise<StatusResult>
   getSttLanguage: () => Promise<string>
   getAiResponseLanguage: () => Promise<string>
 
@@ -133,13 +189,13 @@ interface ElectronAPI {
   seedDemo: () => Promise<{ success: boolean }>
 
   // Custom Providers
-  saveCustomProvider: (provider: any) => Promise<{ success: boolean; id?: string; error?: string }>
-  getCustomProviders: () => Promise<any[]>
+  saveCustomProvider: (provider: CustomProviderPayload) => Promise<{ success: boolean; id?: string; error?: string }>
+  getCustomProviders: () => Promise<CustomProviderPayload[]>
   deleteCustomProvider: (id: string) => Promise<{ success: boolean; error?: string }>
 
   // Follow-up Email
-  generateFollowupEmail: (input: any) => Promise<string>
-  extractEmailsFromTranscript: (transcript: Array<{ text: string }>) => Promise<string[]>
+  generateFollowupEmail: (input: FollowUpEmailInput) => Promise<string>
+  extractEmailsFromTranscript: (transcript: TranscriptTextEntry[]) => Promise<string[]>
   getCalendarAttendees: (eventId: string) => Promise<Array<{ email: string; name: string }>>
   openMailto: (params: { to: string; subject: string; body: string }) => Promise<{ success: boolean; error?: string }>
 
@@ -156,7 +212,7 @@ interface ElectronAPI {
   toggleAdvancedSettings: () => Promise<void>
 
   // Streaming listeners
-  streamGeminiChat: (message: string, imagePaths?: string[], context?: string, options?: { skipSystemPrompt?: boolean }) => Promise<void>
+  streamGeminiChat: (message: string, imagePaths?: string[], context?: string, options?: GeminiChatOptions) => Promise<void>
   onGeminiStreamToken: (callback: (token: string) => void) => () => void
   onGeminiStreamDone: (callback: () => void) => () => void
   onGeminiStreamError: (callback: (error: string) => void) => () => void
@@ -165,6 +221,7 @@ interface ElectronAPI {
   onUndetectableChanged: (callback: (state: boolean) => void) => () => void
   onGroqFastTextChanged: (callback: (enabled: boolean) => void) => () => void
   onModelChanged: (callback: (modelId: string) => void) => () => void
+  onModelFallback: (callback: (event: { provider: 'gemini' | 'groq' | 'openai' | 'claude'; previousModel: string; fallbackModel: string; reason: string }) => void) => () => void
 
   // Ollama
   onOllamaPullProgress: (callback: (data: { status: string; percent: number }) => void) => () => void
@@ -182,26 +239,14 @@ interface ElectronAPI {
   getUpcomingEvents: () => Promise<Array<{ id: string; title: string; startTime: string; endTime: string; link?: string; source: 'google' }>>
   calendarRefresh: () => Promise<{ success: boolean; error?: string }>
 
-  // Auto-Update
-  onUpdateAvailable: (callback: (info: any) => void) => () => void
-  onUpdateDownloaded: (callback: (info: any) => void) => () => void
-  onUpdateChecking: (callback: () => void) => () => void
-  onUpdateNotAvailable: (callback: (info: any) => void) => () => void
-  onUpdateError: (callback: (err: string) => void) => () => void
-  onDownloadProgress: (callback: (progressObj: any) => void) => () => void
-  restartAndInstall: () => Promise<void>
-  checkForUpdates: () => Promise<void>
-  downloadUpdate: () => Promise<void>
-  testReleaseFetch: () => Promise<{ success: boolean; error?: string }>
-
-  // RAG (Retrieval-Augmented Generation) API
+// RAG (Retrieval-Augmented Generation) API
   ragQueryMeeting: (meetingId: string, query: string) => Promise<{ success?: boolean; fallback?: boolean; error?: string }>
   ragQueryLive: (query: string) => Promise<{ success?: boolean; fallback?: boolean; error?: string }>
   ragQueryGlobal: (query: string) => Promise<{ success?: boolean; fallback?: boolean; error?: string }>
-  ragCancelQuery: (options: { meetingId?: string; global?: boolean }) => Promise<{ success: boolean }>
+  ragCancelQuery: (options: { meetingId?: string; global?: boolean }) => Promise<StatusResult>
   ragIsMeetingProcessed: (meetingId: string) => Promise<boolean>
   ragGetQueueStatus: () => Promise<{ pending: number; processing: number; completed: number; failed: number }>
-  ragRetryEmbeddings: () => Promise<{ success: boolean }>
+  ragRetryEmbeddings: () => Promise<StatusResult>
   onRAGStreamChunk: (callback: (data: { meetingId?: string; global?: boolean; chunk: string }) => void) => () => void
   onRAGStreamComplete: (callback: (data: { meetingId?: string; global?: boolean }) => void) => () => void
   onRAGStreamError: (callback: (data: { meetingId?: string; global?: boolean; error: string }) => void) => () => void
@@ -218,25 +263,28 @@ interface ElectronAPI {
   setDonationComplete: () => Promise<{ success: boolean }>;
 
   // Profile Engine API
-  profileUploadResume: (filePath: string) => Promise<{ success: boolean; error?: string }>;
+  profileUploadResume: (filePath: string) => Promise<StatusResult>;
   profileGetStatus: () => Promise<{ hasProfile: boolean; profileMode: boolean; name?: string; role?: string; totalExperienceYears?: number }>;
-  profileSetMode: (enabled: boolean) => Promise<{ success: boolean; error?: string }>;
-  profileDelete: () => Promise<{ success: boolean; error?: string }>;
+  profileSetMode: (enabled: boolean) => Promise<StatusResult>;
+  profileDelete: () => Promise<StatusResult>;
   profileGetProfile: () => Promise<any>;
   profileSelectFile: () => Promise<{ success?: boolean; cancelled?: boolean; filePath?: string; error?: string }>;
 
   // JD & Research API
-  profileUploadJD: (filePath: string) => Promise<{ success: boolean; error?: string }>;
-  profileDeleteJD: () => Promise<{ success: boolean; error?: string }>;
+  profileUploadJD: (filePath: string) => Promise<StatusResult>;
+  profileDeleteJD: () => Promise<StatusResult>;
   profileResearchCompany: (companyName: string) => Promise<{ success: boolean; dossier?: any; error?: string }>;
   profileGenerateNegotiation: () => Promise<{ success: boolean; dossier?: any; profileData?: any; error?: string }>;
 
   // Google Search API
-  setGoogleSearchApiKey: (apiKey: string) => Promise<{ success: boolean; error?: string }>;
-  setGoogleSearchCseId: (cseId: string) => Promise<{ success: boolean; error?: string }>;
+  setGoogleSearchApiKey: (apiKey: string) => Promise<StatusResult>;
+  setGoogleSearchCseId: (cseId: string) => Promise<StatusResult>;
 
   // Overlay Opacity (Stealth Mode)
   setOverlayOpacity: (opacity: number) => Promise<void>;
+  setOverlayClickthrough: (enabled: boolean) => Promise<void>;
+  onOverlayClickthroughChanged: (callback: (enabled: boolean) => void) => () => void;
+  onGlobalShortcutAction: (callback: (actionId: string) => void) => () => void;
   onOverlayOpacityChanged: (callback: (opacity: number) => void) => () => void;
 
   // Diagnostics
@@ -264,10 +312,12 @@ export const PROCESSING_EVENTS = {
 contextBridge.exposeInMainWorld("electronAPI", {
   updateContentDimensions: (dimensions: { width: number; height: number }) =>
     ipcRenderer.invoke("update-content-dimensions", dimensions),
-  getRecognitionLanguages: () => ipcRenderer.invoke("get-recognition-languages"),
-  takeScreenshot: () => ipcRenderer.invoke("take-screenshot"),
-  takeSelectiveScreenshot: () => ipcRenderer.invoke("take-selective-screenshot"),
-  getScreenshots: () => ipcRenderer.invoke("get-screenshots"),
+  setOverlayBounds: (bounds: OverlayBounds) =>
+    ipcRenderer.invoke("set-overlay-bounds", bounds),
+  getRecognitionLanguages: () => invokeAndUnwrap<Record<string, any>>("get-recognition-languages"),
+  takeScreenshot: () => invokeAndUnwrap<{ path: string; preview: string }>("take-screenshot"),
+  takeSelectiveScreenshot: () => invokeAndUnwrap<{ path?: string; preview?: string; cancelled?: boolean }>("take-selective-screenshot"),
+  getScreenshots: () => invokeAndUnwrap<Array<{ path: string; preview: string }>>("get-screenshots"),
   deleteScreenshot: (path: string) =>
     ipcRenderer.invoke("delete-screenshot", path),
 
@@ -380,24 +430,43 @@ contextBridge.exposeInMainWorld("electronAPI", {
       ipcRenderer.removeListener(PROCESSING_EVENTS.UNAUTHORIZED, subscription)
     }
   },
-  moveWindowLeft: () => ipcRenderer.invoke("move-window-left"),
-  moveWindowRight: () => ipcRenderer.invoke("move-window-right"),
-  moveWindowUp: () => ipcRenderer.invoke("move-window-up"),
-  moveWindowDown: () => ipcRenderer.invoke("move-window-down"),
+  moveWindowLeft: () => invokeVoid("move-window-left"),
+  moveWindowRight: () => invokeVoid("move-window-right"),
+  moveWindowUp: () => invokeVoid("move-window-up"),
+  moveWindowDown: () => invokeVoid("move-window-down"),
 
-  analyzeImageFile: (path: string) => ipcRenderer.invoke("analyze-image-file", path),
-  quitApp: () => ipcRenderer.invoke("quit-app"),
-  toggleWindow: () => ipcRenderer.invoke("toggle-window"),
-  showWindow: () => ipcRenderer.invoke("show-window"),
-  hideWindow: () => ipcRenderer.invoke("hide-window"),
+  analyzeImageFile: (path: string) => invokeAndUnwrap<unknown>("analyze-image-file", path),
+  quitApp: () => invokeVoid("quit-app"),
+  toggleWindow: () => invokeVoid("toggle-window"),
+  showWindow: () => invokeVoid("show-window"),
+  hideWindow: () => invokeVoid("hide-window"),
   toggleAdvancedSettings: () => ipcRenderer.invoke("toggle-advanced-settings"),
   openExternal: (url: string) => ipcRenderer.invoke("open-external", url),
-  setUndetectable: (state: boolean) => ipcRenderer.invoke("set-undetectable", state),
-  getUndetectable: () => ipcRenderer.invoke("get-undetectable"),
-  setOpenAtLogin: (open: boolean) => ipcRenderer.invoke("set-open-at-login", open),
-  getOpenAtLogin: () => ipcRenderer.invoke("get-open-at-login"),
-  setDisguise: (mode: 'terminal' | 'settings' | 'activity' | 'none') => ipcRenderer.invoke("set-disguise", mode),
-  getDisguise: () => ipcRenderer.invoke("get-disguise"),
+  setUndetectable: (state: boolean) => invokeStatus("set-undetectable", state),
+  getUndetectable: async () => (await invokeAndUnwrap<{ enabled: boolean }>("get-undetectable")).enabled,
+setConsciousMode: (enabled: boolean) => ipcRenderer.invoke('set-conscious-mode', enabled),
+getConsciousMode: () => ipcRenderer.invoke('get-conscious-mode'),
+onConsciousModeChanged: (callback: (enabled: boolean) => void) => {
+  const subscription = (_: any, enabled: boolean) => callback(enabled)
+  ipcRenderer.on('conscious-mode-changed', subscription)
+  return () => {
+    ipcRenderer.removeListener('conscious-mode-changed', subscription)
+  }
+},
+setAccelerationMode: (enabled: boolean) => ipcRenderer.invoke('set-acceleration-mode', enabled),
+getAccelerationMode: () => ipcRenderer.invoke('get-acceleration-mode'),
+onAccelerationModeChanged: (callback: (enabled: boolean) => void) => {
+  const subscription = (_: any, enabled: boolean) => callback(enabled)
+  ipcRenderer.on('acceleration-mode-changed', subscription)
+  return () => {
+    ipcRenderer.removeListener('acceleration-mode-changed', subscription)
+  }
+},
+setOpenAtLogin: (open: boolean) => invokeStatus("set-open-at-login", open),
+  getOpenAtLogin: async () => (await invokeAndUnwrap<{ enabled: boolean }>("get-open-at-login")).enabled,
+  closeSettingsWindow: () => invokeVoid('close-settings-window'),
+  setDisguise: (mode: 'terminal' | 'settings' | 'activity' | 'none') => invokeStatus("set-disguise", mode),
+  getDisguise: async () => (await invokeAndUnwrap<{ mode: 'none' | 'terminal' | 'settings' | 'activity' }>("get-disguise")).mode,
   onDisguiseChanged: (callback: (mode: 'terminal' | 'settings' | 'activity' | 'none') => void) => {
     const subscription = (_: any, mode: any) => callback(mode)
     ipcRenderer.on('disguise-changed', subscription)
@@ -423,23 +492,30 @@ contextBridge.exposeInMainWorld("electronAPI", {
   },
 
   // LLM Model Management
-  getCurrentLlmConfig: () => ipcRenderer.invoke("get-current-llm-config"),
-  getAvailableOllamaModels: () => ipcRenderer.invoke("get-available-ollama-models"),
+  getCurrentLlmConfig: () => invokeAndUnwrap<{ provider: "ollama" | "gemini"; model: string; isOllama: boolean }>("get-current-llm-config"),
+  getAvailableOllamaModels: () => invokeAndUnwrap<string[]>("get-available-ollama-models"),
   switchToOllama: (model?: string, url?: string) => ipcRenderer.invoke("switch-to-ollama", model, url),
   switchToGemini: (apiKey?: string, modelId?: string) => ipcRenderer.invoke("switch-to-gemini", apiKey, modelId),
   testLlmConnection: (provider: 'gemini' | 'groq' | 'openai' | 'claude', apiKey: string) => ipcRenderer.invoke("test-llm-connection", provider, apiKey),
-  selectServiceAccount: () => ipcRenderer.invoke("select-service-account"),
+  selectServiceAccount: async () => {
+    try {
+      const data = await invokeAndUnwrap<{ path?: string; cancelled?: boolean }>("select-service-account")
+      return { success: true, ...data }
+    } catch (error) {
+      return { success: false, error: getErrorMessage(error) }
+    }
+  },
 
   // API Key Management
   setGeminiApiKey: (apiKey: string) => ipcRenderer.invoke("set-gemini-api-key", apiKey),
   setGroqApiKey: (apiKey: string) => ipcRenderer.invoke("set-groq-api-key", apiKey),
   setOpenaiApiKey: (apiKey: string) => ipcRenderer.invoke("set-openai-api-key", apiKey),
   setClaudeApiKey: (apiKey: string) => ipcRenderer.invoke("set-claude-api-key", apiKey),
-  getStoredCredentials: () => ipcRenderer.invoke("get-stored-credentials"),
+  getStoredCredentials: () => invokeAndUnwrap("get-stored-credentials"),
 
   // STT Provider Management
   setSttProvider: (provider: 'google' | 'groq' | 'openai' | 'deepgram' | 'elevenlabs' | 'azure' | 'ibmwatson' | 'soniox') => ipcRenderer.invoke("set-stt-provider", provider),
-  getSttProvider: () => ipcRenderer.invoke("get-stt-provider"),
+  getSttProvider: () => invokeAndUnwrap<string>("get-stt-provider"),
   setGroqSttApiKey: (apiKey: string) => ipcRenderer.invoke("set-groq-stt-api-key", apiKey),
   setOpenAiSttApiKey: (apiKey: string) => ipcRenderer.invoke("set-openai-stt-api-key", apiKey),
   setDeepgramApiKey: (apiKey: string) => ipcRenderer.invoke("set-deepgram-api-key", apiKey),
@@ -509,16 +585,16 @@ contextBridge.exposeInMainWorld("electronAPI", {
     }
   },
   generateSuggestion: (context: string, lastQuestion: string) =>
-    ipcRenderer.invoke("generate-suggestion", context, lastQuestion),
+    invokeAndUnwrap<{ suggestion: string }>("generate-suggestion", context, lastQuestion),
 
-  getNativeAudioStatus: () => ipcRenderer.invoke("native-audio-status"),
+  getNativeAudioStatus: () => invokeAndUnwrap<{ connected: boolean }>("native-audio-status"),
   getInputDevices: () => ipcRenderer.invoke("get-input-devices"),
   getOutputDevices: () => ipcRenderer.invoke("get-output-devices"),
   setRecognitionLanguage: (key: string) => ipcRenderer.invoke("set-recognition-language", key),
-  getAiResponseLanguages: () => ipcRenderer.invoke("get-ai-response-languages"),
-  setAiResponseLanguage: (language: string) => ipcRenderer.invoke("set-ai-response-language", language),
-  getSttLanguage: () => ipcRenderer.invoke("get-stt-language"),
-  getAiResponseLanguage: () => ipcRenderer.invoke("get-ai-response-language"),
+  getAiResponseLanguages: () => invokeAndUnwrap<Array<{ label: string; code: string }>>("get-ai-response-languages"),
+  setAiResponseLanguage: (language: string) => invokeStatus("set-ai-response-language", language),
+  getSttLanguage: async () => (await invokeAndUnwrap<{ language: string }>("get-stt-language")).language,
+  getAiResponseLanguage: async () => (await invokeAndUnwrap<{ language: string }>("get-ai-response-language")).language,
 
   // Intelligence Mode IPC
   generateAssist: () => ipcRenderer.invoke("generate-assist"),
@@ -533,7 +609,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
   // Meeting Lifecycle
   startMeeting: (metadata?: any) => ipcRenderer.invoke("start-meeting", metadata),
   endMeeting: () => ipcRenderer.invoke("end-meeting"),
-  finalizeMicSTT: () => ipcRenderer.invoke("finalize-mic-stt"),
+  finalizeMicSTT: () => invokeVoid("finalize-mic-stt"),
   getRecentMeetings: () => ipcRenderer.invoke("get-recent-meetings"),
   getMeetingDetails: (id: string) => ipcRenderer.invoke("get-meeting-details", id),
   updateMeetingTitle: (id: string, title: string) => ipcRenderer.invoke("update-meeting-title", { id, title }),
@@ -550,6 +626,22 @@ contextBridge.exposeInMainWorld("electronAPI", {
 
   // Window Mode
   setWindowMode: (mode: 'launcher' | 'overlay') => ipcRenderer.invoke("set-window-mode", mode),
+  setOverlayClickthrough: (enabled: boolean) => invokeVoid('set-overlay-clickthrough', enabled),
+  onOverlayClickthroughChanged: (callback: (enabled: boolean) => void) => {
+    const subscription = (_: any, enabled: boolean) => callback(enabled)
+    ipcRenderer.on('overlay-clickthrough-changed', subscription)
+    return () => {
+      ipcRenderer.removeListener('overlay-clickthrough-changed', subscription)
+    }
+  },
+
+  onGlobalShortcutAction: (callback: (actionId: string) => void) => {
+    const subscription = (_: any, actionId: string) => callback(actionId)
+    ipcRenderer.on('global-shortcut-action', subscription)
+    return () => {
+      ipcRenderer.removeListener('global-shortcut-action', subscription)
+    }
+  },
 
   // Intelligence Mode Events
   onIntelligenceAssistUpdate: (callback: (data: { insight: string }) => void) => {
@@ -653,7 +745,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
 
 
   // Streaming Chat
-  streamGeminiChat: (message: string, imagePaths?: string[], context?: string, options?: { skipSystemPrompt?: boolean }) => ipcRenderer.invoke("gemini-chat-stream", message, imagePaths, context, options),
+  streamGeminiChat: (message: string, imagePaths?: string[], context?: string, options?: GeminiChatOptions) => ipcRenderer.invoke("gemini-chat-stream", message, imagePaths, context, options),
 
   onGeminiStreamToken: (callback: (token: string) => void) => {
     const subscription = (_: any, token: string) => callback(token)
@@ -680,30 +772,30 @@ contextBridge.exposeInMainWorld("electronAPI", {
   },
 
   // Model Management
-  getDefaultModel: () => ipcRenderer.invoke('get-default-model'),
+  getDefaultModel: () => invokeAndUnwrap<{ model: string }>('get-default-model'),
   setModel: (modelId: string) => ipcRenderer.invoke('set-model', modelId),
   setDefaultModel: (modelId: string) => ipcRenderer.invoke('set-default-model', modelId),
   toggleModelSelector: (coords: { x: number; y: number }) => ipcRenderer.invoke('toggle-model-selector', coords),
-  forceRestartOllama: () => ipcRenderer.invoke('force-restart-ollama'),
+  forceRestartOllama: () => invokeVoid('force-restart-ollama'),
 
   // Settings Window
-  toggleSettingsWindow: (coords?: { x: number; y: number }) => ipcRenderer.invoke('toggle-settings-window', coords),
+  toggleSettingsWindow: (coords?: { x: number; y: number }) => invokeVoid('toggle-settings-window', coords),
 
   // Groq Fast Text Mode
-  getGroqFastTextMode: () => ipcRenderer.invoke('get-groq-fast-text-mode'),
+  getGroqFastTextMode: () => invokeAndUnwrap<{ enabled: boolean }>('get-groq-fast-text-mode'),
   setGroqFastTextMode: (enabled: boolean) => ipcRenderer.invoke('set-groq-fast-text-mode', enabled),
 
   // Demo
   seedDemo: () => ipcRenderer.invoke('seed-demo'),
 
   // Custom Providers
-  saveCustomProvider: (provider: any) => ipcRenderer.invoke('save-custom-provider', provider),
-  getCustomProviders: () => ipcRenderer.invoke('get-custom-providers'),
+  saveCustomProvider: (provider: CustomProviderPayload) => ipcRenderer.invoke('save-custom-provider', provider),
+  getCustomProviders: () => invokeAndUnwrap<CustomProviderPayload[]>('get-custom-providers'),
   deleteCustomProvider: (id: string) => ipcRenderer.invoke('delete-custom-provider', id),
 
   // Follow-up Email
-  generateFollowupEmail: (input: any) => ipcRenderer.invoke('generate-followup-email', input),
-  extractEmailsFromTranscript: (transcript: Array<{ text: string }>) => ipcRenderer.invoke('extract-emails-from-transcript', transcript),
+  generateFollowupEmail: (input: FollowUpEmailInput) => ipcRenderer.invoke('generate-followup-email', input),
+  extractEmailsFromTranscript: (transcript: TranscriptTextEntry[]) => ipcRenderer.invoke('extract-emails-from-transcript', transcript),
   getCalendarAttendees: (eventId: string) => ipcRenderer.invoke('get-calendar-attendees', eventId),
   openMailto: (params: { to: string; subject: string; body: string }) => ipcRenderer.invoke('open-mailto', params),
 
@@ -747,6 +839,14 @@ contextBridge.exposeInMainWorld("electronAPI", {
     }
   },
 
+  onModelFallback: (callback: (event: { provider: 'gemini' | 'groq' | 'openai' | 'claude'; previousModel: string; fallbackModel: string; reason: string }) => void) => {
+    const subscription = (_: any, event: { provider: 'gemini' | 'groq' | 'openai' | 'claude'; previousModel: string; fallbackModel: string; reason: string }) => callback(event)
+    ipcRenderer.on('model-fallback', subscription)
+    return () => {
+      ipcRenderer.removeListener('model-fallback', subscription)
+    }
+  },
+
   onOllamaPullProgress: (callback: (data: { status: string; percent: number }) => void) => {
     const subscription = (_: any, data: any) => callback(data)
     ipcRenderer.on('ollama:pull-progress', subscription)
@@ -764,7 +864,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
   },
 
   // Theme API
-  getThemeMode: () => ipcRenderer.invoke('theme:get-mode'),
+  getThemeMode: () => invokeAndUnwrap<{ mode: 'system' | 'light' | 'dark', resolved: 'light' | 'dark' }>('theme:get-mode'),
   setThemeMode: (mode: 'system' | 'light' | 'dark') => ipcRenderer.invoke('theme:set-mode', mode),
   onThemeChanged: (callback: (data: { mode: 'system' | 'light' | 'dark', resolved: 'light' | 'dark' }) => void) => {
     const subscription = (_: any, data: any) => callback(data)
@@ -781,63 +881,33 @@ contextBridge.exposeInMainWorld("electronAPI", {
   getUpcomingEvents: () => ipcRenderer.invoke('get-upcoming-events'),
   calendarRefresh: () => ipcRenderer.invoke('calendar-refresh'),
 
-  // Auto-Update
-  onUpdateAvailable: (callback: (info: any) => void) => {
-    const subscription = (_: any, info: any) => callback(info)
-    ipcRenderer.on("update-available", subscription)
-    return () => {
-      ipcRenderer.removeListener("update-available", subscription)
+// RAG API
+  ragQueryMeeting: async (meetingId: string, query: string) => {
+    try {
+      return await invokeAndUnwrap<{ success?: boolean; fallback?: boolean }>('rag:query-meeting', { meetingId, query })
+    } catch (error) {
+      return { success: false, error: getErrorMessage(error) }
     }
   },
-  onUpdateDownloaded: (callback: (info: any) => void) => {
-    const subscription = (_: any, info: any) => callback(info)
-    ipcRenderer.on("update-downloaded", subscription)
-    return () => {
-      ipcRenderer.removeListener("update-downloaded", subscription)
+  ragQueryLive: async (query: string) => {
+    try {
+      return await invokeAndUnwrap<{ success?: boolean; fallback?: boolean }>('rag:query-live', { query })
+    } catch (error) {
+      return { success: false, error: getErrorMessage(error) }
     }
   },
-  onUpdateChecking: (callback: () => void) => {
-    const subscription = () => callback()
-    ipcRenderer.on("update-checking", subscription)
-    return () => {
-      ipcRenderer.removeListener("update-checking", subscription)
+  ragQueryGlobal: async (query: string) => {
+    try {
+      return await invokeAndUnwrap<{ success?: boolean; fallback?: boolean }>('rag:query-global', { query })
+    } catch (error) {
+      return { success: false, error: getErrorMessage(error) }
     }
   },
-  onUpdateNotAvailable: (callback: (info: any) => void) => {
-    const subscription = (_: any, info: any) => callback(info)
-    ipcRenderer.on("update-not-available", subscription)
-    return () => {
-      ipcRenderer.removeListener("update-not-available", subscription)
-    }
-  },
-  onUpdateError: (callback: (err: string) => void) => {
-    const subscription = (_: any, err: string) => callback(err)
-    ipcRenderer.on("update-error", subscription)
-    return () => {
-      ipcRenderer.removeListener("update-error", subscription)
-    }
-  },
-  onDownloadProgress: (callback: (progressObj: any) => void) => {
-    const subscription = (_: any, progressObj: any) => callback(progressObj)
-    ipcRenderer.on("download-progress", subscription)
-    return () => {
-      ipcRenderer.removeListener("download-progress", subscription)
-    }
-  },
-  restartAndInstall: () => ipcRenderer.invoke("quit-and-install-update"),
-  checkForUpdates: () => ipcRenderer.invoke("check-for-updates"),
-  downloadUpdate: () => ipcRenderer.invoke("download-update"),
-  testReleaseFetch: () => ipcRenderer.invoke("test-release-fetch"),
+  ragCancelQuery: (options: { meetingId?: string; global?: boolean }) => invokeStatus('rag:cancel-query', options),
+  ragIsMeetingProcessed: (meetingId: string) => invokeAndUnwrap<boolean>('rag:is-meeting-processed', meetingId),
+  ragGetQueueStatus: () => invokeAndUnwrap<{ pending: number; processing: number; completed: number; failed: number }>('rag:get-queue-status'),
+  ragRetryEmbeddings: () => invokeStatus('rag:retry-embeddings'),
 
-  // RAG API
-  ragQueryMeeting: (meetingId: string, query: string) => ipcRenderer.invoke('rag:query-meeting', { meetingId, query }),
-  ragQueryLive: (query: string) => ipcRenderer.invoke('rag:query-live', { query }),
-  ragQueryGlobal: (query: string) => ipcRenderer.invoke('rag:query-global', { query }),
-  ragCancelQuery: (options: { meetingId?: string; global?: boolean }) => ipcRenderer.invoke('rag:cancel-query', options),
-  ragIsMeetingProcessed: (meetingId: string) => ipcRenderer.invoke('rag:is-meeting-processed', meetingId),
-  ragGetQueueStatus: () => ipcRenderer.invoke('rag:get-queue-status'),
-  ragRetryEmbeddings: () => ipcRenderer.invoke('rag:retry-embeddings'),
-  
   onIncompatibleProviderWarning: (callback: (data: { count: number, oldProvider: string, newProvider: string }) => void) => {
     const subscription = (_: any, data: any) => callback(data)
     ipcRenderer.on('embedding:incompatible-provider-warning', subscription)
@@ -845,7 +915,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
       ipcRenderer.removeListener('embedding:incompatible-provider-warning', subscription)
     }
   },
-  reindexIncompatibleMeetings: () => ipcRenderer.invoke('rag:reindex-incompatible-meetings'),
+  reindexIncompatibleMeetings: () => invokeVoid('rag:reindex-incompatible-meetings'),
 
   onRAGStreamChunk: (callback: (data: { meetingId?: string; global?: boolean; chunk: string }) => void) => {
     const subscription = (_: any, data: any) => callback(data)
@@ -887,22 +957,44 @@ contextBridge.exposeInMainWorld("electronAPI", {
   setDonationComplete: () => ipcRenderer.invoke('set-donation-complete'),
 
   // Profile Engine API
-  profileUploadResume: (filePath: string) => ipcRenderer.invoke('profile:upload-resume', filePath),
-  profileGetStatus: () => ipcRenderer.invoke('profile:get-status'),
-  profileSetMode: (enabled: boolean) => ipcRenderer.invoke('profile:set-mode', enabled),
-  profileDelete: () => ipcRenderer.invoke('profile:delete'),
-  profileGetProfile: () => ipcRenderer.invoke('profile:get-profile'),
-  profileSelectFile: () => ipcRenderer.invoke('profile:select-file'),
+  profileUploadResume: (filePath: string) => invokeStatus('profile:upload-resume', filePath),
+  profileGetStatus: () => invokeAndUnwrap<{ hasProfile: boolean; profileMode: boolean; name?: string; role?: string; totalExperienceYears?: number }>('profile:get-status'),
+  profileSetMode: (enabled: boolean) => invokeStatus('profile:set-mode', enabled),
+  profileDelete: () => invokeStatus('profile:delete'),
+  profileGetProfile: () => invokeAndUnwrap<any>('profile:get-profile'),
+  profileSelectFile: async () => {
+    try {
+      const data = await invokeAndUnwrap<{ cancelled?: boolean; filePath?: string }>('profile:select-file')
+      if (data.cancelled) {
+        return { cancelled: true }
+      }
+      return { success: true, ...data }
+    } catch (error) {
+      return { success: false, error: getErrorMessage(error) }
+    }
+  },
 
   // JD & Research API
-  profileUploadJD: (filePath: string) => ipcRenderer.invoke('profile:upload-jd', filePath),
-  profileDeleteJD: () => ipcRenderer.invoke('profile:delete-jd'),
-  profileResearchCompany: (companyName: string) => ipcRenderer.invoke('profile:research-company', companyName),
-  profileGenerateNegotiation: () => ipcRenderer.invoke('profile:generate-negotiation'),
+  profileUploadJD: (filePath: string) => invokeStatus('profile:upload-jd', filePath),
+  profileDeleteJD: () => invokeStatus('profile:delete-jd'),
+  profileResearchCompany: async (companyName: string) => {
+    try {
+      return await invokeAndUnwrap<{ success: boolean; dossier?: any }>('profile:research-company', companyName)
+    } catch (error) {
+      return { success: false, error: getErrorMessage(error) }
+    }
+  },
+  profileGenerateNegotiation: async () => {
+    try {
+      return await invokeAndUnwrap<{ success: boolean; dossier?: any; profileData?: any }>('profile:generate-negotiation')
+    } catch (error) {
+      return { success: false, error: getErrorMessage(error) }
+    }
+  },
 
   // Google Search API
-  setGoogleSearchApiKey: (apiKey: string) => ipcRenderer.invoke('set-google-search-api-key', apiKey),
-  setGoogleSearchCseId: (cseId: string) => ipcRenderer.invoke('set-google-search-cse-id', cseId),
+  setGoogleSearchApiKey: (apiKey: string) => invokeStatus('set-google-search-api-key', apiKey),
+  setGoogleSearchCseId: (cseId: string) => invokeStatus('set-google-search-cse-id', cseId),
 
   // Dynamic Model Discovery
   fetchProviderModels: (provider: 'gemini' | 'groq' | 'openai' | 'claude', apiKey: string) => ipcRenderer.invoke('fetch-provider-models', provider, apiKey),
@@ -915,7 +1007,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
   licenseGetHardwareId: () => ipcRenderer.invoke('license:get-hardware-id'),
 
   // Overlay Opacity (Stealth Mode)
-  setOverlayOpacity: (opacity: number) => ipcRenderer.invoke('set-overlay-opacity', opacity),
+  setOverlayOpacity: (opacity: number) => invokeVoid('set-overlay-opacity', opacity),
   onOverlayOpacityChanged: (callback: (opacity: number) => void) => {
     const subscription = (_: any, opacity: number) => callback(opacity)
     ipcRenderer.on('overlay-opacity-changed', subscription)

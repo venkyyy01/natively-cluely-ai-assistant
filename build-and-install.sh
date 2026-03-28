@@ -112,27 +112,126 @@ run_with_spinner() {
         fi
     fi
 
-    rm -f "$log_file"
+rm -f "$log_file"
 }
 
-cleanup_stale_artifacts() {
-    local paths=(
-        "$SCRIPT_DIR/dist"
-        "$SCRIPT_DIR/dist-electron"
-        "$SCRIPT_DIR/release"
-        "$SCRIPT_DIR/node_modules/.cache"
-        "$SCRIPT_DIR/.vite"
-        "$SCRIPT_DIR/native-module/target"
-        "$SCRIPT_DIR/native-module/index.darwin-arm64.node"
-        "$SCRIPT_DIR/native-module/index.darwin-x64.node"
-        "$SCRIPT_DIR/native-module/index.linux-x64-gnu.node"
-        "$SCRIPT_DIR/native-module/index.win32-x64-msvc.node"
-        "$HOME/Library/Caches/electron-builder"
-        "$HOME/Library/Caches/electron"
-    )
+run_logged_command() {
+    local label="$1"
+    shift
 
-    info "Removing previous build artifacts and packaging caches..."
-    for path in "${paths[@]}"; do
+    info "$label"
+    "$@"
+}
+
+artifact_mtime() {
+    local artifact_path="$1"
+    stat -f "%m" "$artifact_path" 2>/dev/null || printf '0\n'
+}
+
+select_newest_path() {
+    local newest_path=""
+    local newest_mtime=0
+    local candidate=""
+    local candidate_mtime=0
+
+    for candidate in "$@"; do
+        [[ -e "$candidate" ]] || continue
+        candidate_mtime=$(artifact_mtime "$candidate")
+        if [[ -z "$newest_path" || "$candidate_mtime" -gt "$newest_mtime" ]]; then
+            newest_path="$candidate"
+            newest_mtime="$candidate_mtime"
+        fi
+    done
+
+    printf '%s\n' "$newest_path"
+}
+
+find_newest_packaged_app() {
+    local release_dir="$1"
+    local app_name="${2:-$APP_NAME}"
+    local candidates=()
+
+    while IFS= read -r candidate; do
+        candidates+=("$candidate")
+    done < <(find "$release_dir" -maxdepth 3 -type d -name "${app_name}.app" -print 2>/dev/null)
+
+    if [[ ${#candidates[@]} -eq 0 ]]; then
+        return 1
+    fi
+
+    select_newest_path "${candidates[@]}"
+}
+
+find_newest_release_archive() {
+    local release_dir="$1"
+    local extension="$2"
+    local candidates=()
+
+    while IFS= read -r candidate; do
+        candidates+=("$candidate")
+    done < <(find "$release_dir" -maxdepth 1 -type f -name "*.${extension}" -print 2>/dev/null)
+
+    if [[ ${#candidates[@]} -eq 0 ]]; then
+        printf '\n'
+        return 0
+    fi
+
+    select_newest_path "${candidates[@]}"
+}
+
+collect_packaged_artifacts() {
+    local release_dir="$1"
+    local packaged_app=""
+    local packaged_dmg=""
+    local packaged_zip=""
+
+    packaged_app=$(find_newest_packaged_app "$release_dir") || fail "Missing packaged app in $release_dir"
+    packaged_dmg=$(find_newest_release_archive "$release_dir" dmg)
+    packaged_zip=$(find_newest_release_archive "$release_dir" zip)
+
+    printf '%s\n%s\n%s\n' "$packaged_app" "$packaged_dmg" "$packaged_zip"
+}
+
+print_packaged_artifacts() {
+    local packaged_app="$1"
+    local packaged_dmg="$2"
+    local packaged_zip="$3"
+
+    info "Fresh packaged artifacts:"
+    echo -e "  ${CYAN}app${NC} ${WHITE}${packaged_app}${NC}"
+    if [[ -n "$packaged_dmg" ]]; then
+        echo -e "  ${CYAN}dmg${NC} ${WHITE}${packaged_dmg}${NC}"
+    else
+        warn "No DMG artifact found in $RELEASE_DIR"
+    fi
+
+    if [[ -n "$packaged_zip" ]]; then
+        echo -e "  ${CYAN}zip${NC} ${WHITE}${packaged_zip}${NC}"
+    else
+        warn "No ZIP artifact found in $RELEASE_DIR"
+    fi
+}
+
+clean_build_artifacts() {
+local paths=(
+"$SCRIPT_DIR/dist"
+"$SCRIPT_DIR/dist-electron"
+"$SCRIPT_DIR/release"
+"$SCRIPT_DIR/node_modules/.cache"
+"$SCRIPT_DIR/.vite"
+"$SCRIPT_DIR/native-module/target"
+"$SCRIPT_DIR/native-module/index.darwin-arm64.node"
+"$SCRIPT_DIR/native-module/index.darwin-x64.node"
+"$SCRIPT_DIR/native-module/index.linux-x64-gnu.node"
+"$SCRIPT_DIR/native-module/index.win32-x64-msvc.node"
+"$HOME/Library/Caches/electron-builder"
+"$HOME/Library/Caches/electron"
+"$SCRIPT_DIR/release/mac/${APP_NAME}.app"
+"$SCRIPT_DIR/release/mac-arm64/${APP_NAME}.app"
+)
+
+info "Removing previous build artifacts and packaging caches..."
+for path in "${paths[@]}"; do
         if [[ -e "$path" ]]; then
             rm -rf "$path"
         fi
@@ -141,9 +240,6 @@ cleanup_stale_artifacts() {
     info "Removing stale packaged artifacts..."
     rm -f "$SCRIPT_DIR"/*.dmg "$SCRIPT_DIR"/*.zip "$SCRIPT_DIR"/*.blockmap 2>/dev/null || true
     rm -f "$RELEASE_DIR"/*.dmg "$RELEASE_DIR"/*.zip "$RELEASE_DIR"/*.blockmap "$RELEASE_DIR"/*.yml 2>/dev/null || true
-
-    info "Clearing npm cache for a truly fresh packaging pass..."
-    npm cache clean --force >/dev/null 2>&1 || warn "npm cache cleanup skipped"
 
     success "Fresh-build cleanup complete"
 }
@@ -209,138 +305,71 @@ require_asar_entry() {
     fi
 }
 
+if [[ "${BUILD_AND_INSTALL_LIB:-0}" == "1" ]]; then
+    return 0 2>/dev/null || exit 0
+fi
+
 # ── Detect Architecture ──
 ARCH="$(uname -m)"
 if [[ "$ARCH" == "arm64" ]]; then
-    BUILD_ARCH="arm64"
-    ARCH_LABEL="Apple Silicon"
+BUILD_ARCH="arm64"
+ARCH_LABEL="Apple Silicon"
 elif [[ "$ARCH" == "x86_64" ]]; then
-    BUILD_ARCH="x64"
-    ARCH_LABEL="Intel"
+BUILD_ARCH="x64"
+ARCH_LABEL="Intel"
 else
-    fail "Unsupported architecture: $ARCH"
+fail "Unsupported architecture: $ARCH"
+fi
+
+# ── Detect Rust ──
+if command -v cargo &>/dev/null; then
+HAS_RUST="true"
+else
+HAS_RUST="false"
 fi
 
 # ╔═══════════════════════════════════════════════════════════════════╗
-# ║  Banner                                                          ║
+# ║ Check for Uncommitted Changes (warn user)                         ║
+# ╚═══════════════════════════════════════════════════════════════════╝
+step "Step 1/8 — Checking Source Code Status"
+
+cd "$SCRIPT_DIR"
+
+# Check for uncommitted changes
+if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    UNCOMMITTED=$(git status --porcelain 2>/dev/null | grep -E "^[ AM]" | head -20 || true)
+    if [[ -n "$UNCOMMITTED" ]]; then
+        warn "Uncommitted changes detected in source:"
+        echo "$UNCOMMITTED"
+        echo ""
+        warn "These changes will be included in the build."
+        echo ""
+    else
+        success "Source code is clean"
+    fi
+    
+    # Show current branch and commit
+    BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
+    COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+    info "Building from branch: $BRANCH (commit: $COMMIT)"
+else
+    warn "Not a git repository - cannot check source status"
+fi
+
+# ╔═══════════════════════════════════════════════════════════════════╗
+# ║ Banner ║
 # ╚═══════════════════════════════════════════════════════════════════╝
 print_banner
 boot_sequence
 
 # ╔═══════════════════════════════════════════════════════════════════╗
-# ║  Step 1: Check Prerequisites                                     ║
+# ║ Step 3: Clean Build Artifacts ║
 # ╚═══════════════════════════════════════════════════════════════════╝
-step "Step 1/8 — Checking Prerequisites"
-
-# macOS check
-if [[ "$(uname)" != "Darwin" ]]; then
-    fail "This script is macOS only."
-fi
-success "macOS $(sw_vers -productVersion) detected"
-
-# Xcode CLI tools
-if ! xcode-select -p &>/dev/null; then
-    warn "Xcode Command Line Tools not found. Installing..."
-    xcode-select --install
-    echo "Please complete the Xcode CLI Tools installation, then re-run this script."
-    exit 1
-fi
-success "Xcode CLI Tools found"
-
-# Node.js
-if ! command -v node &>/dev/null; then
-    fail "Node.js not found. Install it: brew install node@18"
-fi
-NODE_VERSION=$(node -v | sed 's/v//' | cut -d. -f1)
-if [[ "$NODE_VERSION" -lt 18 ]]; then
-    fail "Node.js 18+ required. Found: $(node -v). Run: brew install node@18"
-fi
-success "Node.js $(node -v)"
-
-# npm
-if ! command -v npm &>/dev/null; then
-    fail "npm not found (should come with Node.js)"
-fi
-success "npm $(npm -v)"
-
-# Python (needed for node-gyp)
-if command -v python3 &>/dev/null; then
-    success "Python 3 found ($(python3 --version 2>&1))"
-elif command -v python &>/dev/null; then
-    success "Python found ($(python --version 2>&1))"
-else
-    warn "Python not found. node-gyp may fail. Install: brew install python3"
-fi
-
-# Rust (optional - for native audio module)
-if command -v rustc &>/dev/null; then
-    success "Rust $(rustc --version | awk '{print $2}') (native audio module will be built)"
-    HAS_RUST=true
-else
-    warn "Rust not found (optional — native audio module will be skipped)"
-    HAS_RUST=false
-fi
+step "Step 2/8 — Cleaning Build Artifacts"
+clean_build_artifacts
 
 # ╔═══════════════════════════════════════════════════════════════════╗
-# ║  Step 2: Environment Configuration                               ║
-# ╚═══════════════════════════════════════════════════════════════════╝
-step "Step 2/8 — Environment Configuration"
-
-if [[ ! -f "$SCRIPT_DIR/.env" ]]; then
-    warn "No .env file found. Creating template..."
-    cat > "$SCRIPT_DIR/.env" << 'ENVEOF'
-# ── Cloud AI Providers (at least one required) ──
-GEMINI_API_KEY=
-GROQ_API_KEY=
-OPENAI_API_KEY=
-CLAUDE_API_KEY=
-
-# ── Speech Provider (for transcription) ──
-DEEPGRAM_API_KEY=
-
-# ── Local AI via Ollama (free alternative) ──
-USE_OLLAMA=true
-OLLAMA_MODEL=llama3.2
-OLLAMA_URL=http://localhost:11434
-
-# ── Default Model ──
-DEFAULT_MODEL=gemini-3.1-flash-lite-preview
-ENVEOF
-    warn "Created .env with defaults. Edit it later to add your API keys."
-    warn "The app will work with Ollama (local) without any API keys."
-else
-    success ".env file exists"
-fi
-
-# Check if at least one AI key is configured
-HAS_KEY=false
-while IFS='=' read -r key value; do
-    # Skip comments and empty lines
-    [[ "$key" =~ ^#.*$ ]] && continue
-    [[ -z "$key" ]] && continue
-    key=$(echo "$key" | xargs) # trim whitespace
-    value=$(echo "$value" | xargs)
-    
-    if [[ "$key" == "GEMINI_API_KEY" || "$key" == "GROQ_API_KEY" || "$key" == "OPENAI_API_KEY" || "$key" == "CLAUDE_API_KEY" ]]; then
-        if [[ -n "$value" && "$value" != "dummy_key" ]]; then
-            HAS_KEY=true
-            break
-        fi
-    fi
-    if [[ "$key" == "USE_OLLAMA" && "$value" == "true" ]]; then
-        HAS_KEY=true
-        break
-    fi
-done < "$SCRIPT_DIR/.env"
-
-if [[ "$HAS_KEY" == "true" ]]; then
-    success "AI provider configured"
-else
-    warn "No AI provider API key set. Add keys to .env or install Ollama for local AI."
-fi
-
-# ╔═══════════════════════════════════════════════════════════════════╗
-# ║  Step 3: Install Dependencies                                    ║
+# ║ Step 4: Install Dependencies                                        ║
 # ╚═══════════════════════════════════════════════════════════════════╝
 step "Step 3/8 — Installing Dependencies"
 
@@ -356,59 +385,50 @@ fi
 run_with_spinner "syncing npm dependency matrix" npm install
 success "Dependencies installed"
 
-info "Rebuilding Electron native database dependencies for ${ARCH_LABEL}..."
-run_with_spinner "realigning sqlite and native addon binaries" node scripts/ensure-electron-native-deps.js
-success "Electron native dependencies aligned"
+# ╔═══════════════════════════════════════════════════════════════════╗
+# ║ Step 5: Run Quality Gates                                        
+# ╚═══════════════════════════════════════════════════════════════════╝
+step "Step 4/8 — Running Production Quality Gates"
 
-if [[ "$HAS_RUST" == "true" ]]; then
-    info "Building native audio module for ${ARCH_LABEL}..."
-    run_with_spinner "forging native audio addon" npm run build:native:current
-    success "Native audio addon built"
-else
-    warn "Rust unavailable — packaged app may miss native audio capture"
-fi
+info "Running quality gates in visible stages so long-running checks do not look frozen..."
+
+run_logged_command "[1/4] Running typechecks..." npm run typecheck
+success "Typechecks passed"
+
+run_logged_command "[2/4] Running Electron coverage gate (this is the longest step and may take about a minute)..." npm run verify:electron:coverage
+success "Electron coverage gate passed"
+
+run_logged_command "[3/4] Running renderer coverage gate..." npm run verify:renderer:coverage
+success "Renderer coverage gate passed"
+
+run_logged_command "[4/4] Running native Rust tests..." cargo test --manifest-path native-module/Cargo.toml
+success "Native Rust tests passed"
+
+success "Quality gates passed"
 
 # ╔═══════════════════════════════════════════════════════════════════╗
-# ║  Step 4: Fresh Cleanup & Build Production App                    ║
+# ║ Step 5: Build & Package                                         ║
 # ╚═══════════════════════════════════════════════════════════════════╝
-step "Step 4/8 — Fresh Cleanup & Building Production App"
+step "Step 5/8 — Building & Packaging (${ARCH_LABEL})"
 
-cleanup_stale_artifacts
+info "Running full build pipeline (renderer, native addon, electron, packaging)..."
+run_with_spinner "building and packaging release" env SKIP_PRODUCTION_VERIFY=1 npm run app:build
 
-info "Running production build pipeline..."
-run_with_spinner "forging full production bundle" npm run app:build
+success "Build & packaging complete"
 
-success "Compilation complete"
-
-# ╔═══════════════════════════════════════════════════════════════════╗
-# ║  Step 5: Package with Electron Builder                           ║
-# ╚═══════════════════════════════════════════════════════════════════╝
-step "Step 5/8 — Packaging macOS App (${ARCH_LABEL})"
-
-info "Using packaged release created by app:build..."
-info "This may take several minutes on first run..."
-
-# Find the built .app
-APP_GLOB="$SCRIPT_DIR/release/mac-${BUILD_ARCH}/${APP_NAME}.app"
-if [[ "$BUILD_ARCH" == "arm64" ]]; then
-    APP_GLOB="$SCRIPT_DIR/release/mac-arm64/${APP_NAME}.app"
-else
-    APP_GLOB="$SCRIPT_DIR/release/mac/${APP_NAME}.app"
-fi
-
-# Fallback: search for it
-if [[ ! -d "$APP_GLOB" ]]; then
-    APP_GLOB=$(find "$RELEASE_DIR" -maxdepth 3 -name "${APP_NAME}.app" -type d -print -quit 2>/dev/null)
-fi
-
-if [[ -z "$APP_GLOB" || ! -d "$APP_GLOB" ]]; then
-    fail "Build failed — ${APP_NAME}.app not found in release/"
-fi
+PACKAGED_ARTIFACTS=()
+while IFS= read -r artifact_path; do
+    PACKAGED_ARTIFACTS+=("$artifact_path")
+done < <(collect_packaged_artifacts "$RELEASE_DIR")
+APP_GLOB="${PACKAGED_ARTIFACTS[0]}"
+PACKAGED_DMG="${PACKAGED_ARTIFACTS[1]}"
+PACKAGED_ZIP="${PACKAGED_ARTIFACTS[2]}"
 
 success "Built: $APP_GLOB"
+print_packaged_artifacts "$APP_GLOB" "$PACKAGED_DMG" "$PACKAGED_ZIP"
 
 # ╔═══════════════════════════════════════════════════════════════════╗
-# ║  Step 6: Force Sign                                              ║
+# ║ Step 8: Force Sign                                              ║
 # ╚═══════════════════════════════════════════════════════════════════╝
 step "Step 6/8 — Force Signing (Ad-Hoc)"
 
@@ -465,8 +485,13 @@ fi
 
 success "Permission manifest verified"
 
+if [[ "${SKIP_INSTALL:-0}" == "1" ]]; then
+    info "SKIP_INSTALL=1 set; install skipped after packaging verification"
+    exit 0
+fi
+
 # ╔═══════════════════════════════════════════════════════════════════╗
-# ║  Step 8: Install & Launch                                        ║
+# ║ Step 8: Install & Launch                                        ║
 # ╚═══════════════════════════════════════════════════════════════════╝
 step "Step 8/8 — Installing to ${INSTALL_DIR}"
 
@@ -504,6 +529,15 @@ else
 fi
 success "Installed to ${INSTALL_DIR}/${APP_NAME}.app"
 
+# Verify installed app binary exists and matches expected architecture
+INSTALLED_BINARY="${INSTALL_DIR}/${APP_NAME}.app/Contents/MacOS/${APP_NAME}"
+require_file "$INSTALLED_BINARY" "Installed app binary"
+if file "$INSTALLED_BINARY" | grep -q "$BUILD_ARCH"; then
+    success "Installed binary architecture verified (${BUILD_ARCH})"
+else
+    fail "Installed binary architecture does not match expected ${BUILD_ARCH}"
+fi
+
 # ╔═══════════════════════════════════════════════════════════════════╗
 # ║  Done!                                                           ║
 # ╚═══════════════════════════════════════════════════════════════════╝
@@ -522,10 +556,14 @@ echo -e "  ${CYAN}3.${NC} Configure API keys in Settings -> AI Providers"
 echo -e "     ${YELLOW}>${NC} Or use Ollama for a fully local setup"
 echo ""
 
-# Ask to launch
-read -rp "$(echo -e "${YELLOW}Launch ${APP_NAME} now? [Y/n]:${NC} ")" LAUNCH
-LAUNCH=${LAUNCH:-Y}
-if [[ "$LAUNCH" =~ ^[Yy]$ ]]; then
-    open "${INSTALL_DIR}/${APP_NAME}.app"
-    success "Launched ${APP_NAME}!"
+# Ask to launch only in interactive terminals
+if [[ "$IS_TTY" == true ]]; then
+    read -rp "$(echo -e "${YELLOW}Launch ${APP_NAME} now? [Y/n]:${NC} ")" LAUNCH
+    LAUNCH=${LAUNCH:-Y}
+    if [[ "$LAUNCH" =~ ^[Yy]$ ]]; then
+        open "${INSTALL_DIR}/${APP_NAME}.app"
+        success "Launched ${APP_NAME}!"
+    fi
+else
+    info "Non-interactive shell detected; skipping launch prompt"
 fi

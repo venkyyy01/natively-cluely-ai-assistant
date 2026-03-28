@@ -152,6 +152,10 @@ function mergeConsecutiveSpeakerSegments(
     return merged;
 }
 
+export const __testUtils = {
+    mergeConsecutiveSpeakerSegments
+};
+
 /**
  * Main preprocessing pipeline
  * Takes raw transcript segments and returns cleaned, annotated segments
@@ -188,8 +192,13 @@ export function preprocessTranscript(segments: RawSegment[]): CleanedSegment[] {
 
 /**
  * Estimate token count for a text string
- * Rough estimate: 1 token ≈ 4 characters for English
+ * Heuristic: blend word and character counts for better cross-language behavior.
  */
 export function estimateTokens(text: string): number {
-    return Math.ceil(text.length / 4);
+    const trimmed = text.trim();
+    if (!trimmed) return 0;
+    const words = trimmed.split(/\s+/).filter(Boolean).length;
+    const charBased = Math.ceil(trimmed.length / 4);
+    const wordBased = Math.ceil(words * 1.33);
+    return Math.max(charBased, wordBased);
 }

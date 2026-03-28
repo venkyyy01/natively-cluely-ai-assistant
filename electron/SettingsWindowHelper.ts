@@ -36,6 +36,20 @@ export class SettingsWindowHelper {
 
     constructor() { }
 
+    private applyStealthFlags(enable: boolean): void {
+        if (!this.settingsWindow || this.settingsWindow.isDestroyed()) return;
+
+        this.settingsWindow.setContentProtection(enable);
+        this.settingsWindow.setSkipTaskbar(true);
+
+        if (process.platform === 'darwin') {
+            this.settingsWindow.setHiddenInMissionControl(true);
+            if (typeof (this.settingsWindow as any).setExcludedFromShownWindowsMenu === 'function') {
+                (this.settingsWindow as any).setExcludedFromShownWindowsMenu(true);
+            }
+        }
+    }
+
     public setIgnoreBlur(ignore: boolean): void {
         this.ignoreBlur = ignore;
     }
@@ -100,7 +114,7 @@ export class SettingsWindowHelper {
         if (process.platform === 'win32' && this.contentProtection) {
             this.settingsWindow.setOpacity(0);
             this.settingsWindow.show();
-            this.settingsWindow.setContentProtection(true);
+            this.applyStealthFlags(true);
             
             if (this.opacityTimeout) clearTimeout(this.opacityTimeout);
             this.opacityTimeout = setTimeout(() => {
@@ -110,7 +124,7 @@ export class SettingsWindowHelper {
                 }
             }, 60);
         } else {
-            this.settingsWindow.setContentProtection(this.contentProtection);
+            this.applyStealthFlags(this.contentProtection);
             this.settingsWindow.show();
             this.settingsWindow.focus();
         }
@@ -176,7 +190,7 @@ export class SettingsWindowHelper {
         }
 
         console.log(`[SettingsWindowHelper] Creating Settings Window with Content Protection: ${this.contentProtection}`);
-        this.settingsWindow.setContentProtection(this.contentProtection);
+        this.applyStealthFlags(this.contentProtection);
 
         // Load with query param
         const settingsUrl = isDev
@@ -232,9 +246,6 @@ export class SettingsWindowHelper {
     public setContentProtection(enable: boolean): void {
         console.log(`[SettingsWindowHelper] Setting content protection to: ${enable}`);
         this.contentProtection = enable;
-
-        if (this.settingsWindow && !this.settingsWindow.isDestroyed()) {
-            this.settingsWindow.setContentProtection(enable);
-        }
+        this.applyStealthFlags(enable);
     }
 }

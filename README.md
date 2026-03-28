@@ -98,6 +98,15 @@ Natively works as a **free, undetectable AI coding interview assistant** for sta
 2. Natively OCRs the question and sends it to your chosen AI (GPT, Claude, Gemini, or local Ollama)
 3. Response appears in the invisible overlay — never on screen share
 
+**Default low-interference global shortcuts (macOS):**
+
+- Toggle visibility: `Cmd+Option+Shift+V` (alternate: `F13`)
+- Full screenshot: `Cmd+Option+Shift+S` (alternate: `F14`)
+- Selective screenshot: `Cmd+Option+Shift+A` (alternate: `F15`)
+- Toggle clickthrough: `Cmd+Option+Shift+M` (alternate: `F16`)
+
+These defaults are intentionally chosen to reduce collisions with Zoom, Teams, Meet, Chime, HackerRank, and browser shortcuts. They are low-interference, not invisible to OS-level monitoring software.
+
 > ⚠️ **Important:** Natively is not designed to bypass dedicated proctoring software like **Pearson VUE**, **ProctorU**, or **Respondus Lockdown Browser** — these run at the OS level and are a different category entirely. For standard online coding assessments without dedicated proctoring software, Natively's stealth mode is not detectable.
 
 ---
@@ -501,6 +510,19 @@ npm start
 npm run dist
 ```
 
+`npm run dist` now blocks packaging unless all production gates pass first:
+
+- `npm run typecheck`
+- `npm run verify:electron:coverage` (requires the enforced Electron coverage floor: lines >= 50%, branches >= 75%, funcs >= 30%)
+- `npm run verify:renderer:coverage` (requires the enforced renderer coverage floor: statements >= 90%, branches >= 100%, funcs >= 75%, lines >= 90%)
+- `cargo test --manifest-path native-module/Cargo.toml`
+
+You can run the full gate manually before release work with:
+
+```bash
+npm run verify:production
+```
+
 ---
 
 ### AI Providers
@@ -567,7 +589,7 @@ Natively understands that _listening_ to a meeting and _talking_ to an AI are di
 
 ### Spotlight Search & Customization
 
-- Global activation shortcut (`Cmd+K` / `Ctrl+K`)
+- Low-interference global shortcuts with alternate function-key bindings (`F13`-`F16`)
 - **Custom Key Bindings**: Customize global shortcuts for easier control.
 - Instant answer overlay
 - Upcoming meeting readiness
