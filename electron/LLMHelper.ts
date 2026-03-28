@@ -123,6 +123,11 @@ const IN_FLIGHT_RESPONSE_CACHE_MAX = 10
 
 // Simple prompt for image analysis (not interview copilot - kept separate)
 const IMAGE_ANALYSIS_PROMPT = `Analyze concisely. Be direct. No markdown formatting. Return plain text only.`
+const INDIAN_ENGLISH_STYLE_INSTRUCTION = `CRITICAL STYLE: Write in natural Indian English.
+- Keep the flow conversational and human.
+- Be concrete, clear, concise, and complete.
+- No fluff, no jargon, no text walls.
+- Sound natural, practical, and confident.`
 type Provider = 'gemini' | 'groq' | 'openai' | 'claude';
 
 export interface ModelFallbackEvent {
@@ -954,7 +959,7 @@ ANSWER DIRECTLY:`;
    * Helper to inject language instruction into system prompt
    */
   private injectLanguageInstruction(systemPrompt: string): string {
-    return `${systemPrompt}\n\nCRITICAL: You MUST respond ONLY in ${this.aiResponseLanguage}. This is an absolute requirement. All generated text that the user should say must be in ${this.aiResponseLanguage}.`;
+    return `${systemPrompt}\n\n${INDIAN_ENGLISH_STYLE_INSTRUCTION}\n\nCRITICAL: You MUST respond ONLY in ${this.aiResponseLanguage}. This is an absolute requirement. All generated text that the user should say must be in ${this.aiResponseLanguage}.`;
   }
 
   private hashValue(value: unknown): string {
