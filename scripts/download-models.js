@@ -12,6 +12,8 @@ async function downloadModels() {
 
     // Let Transformers.js handle the download but specify the local directory cache
     env.cacheDir = modelsDir;
+    env.localModelPath = modelsDir;
+    env.allowRemoteModels = true;
     
     try {
         // 1. Embedding model (RAG)
@@ -32,4 +34,3 @@ async function downloadModels() {
 }
 
 downloadModels();
-

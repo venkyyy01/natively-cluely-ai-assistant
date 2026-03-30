@@ -212,7 +212,6 @@ const Queue: React.FC<QueueProps> = ({ setView }) => {
     updateDimensions()
 
     const cleanupFunctions = [
-      window.electronAPI.onScreenshotTaken(() => refetch()),
       window.electronAPI.onResetView(() => refetch()),
       window.electronAPI.onSolutionError((error: string) => {
         showToast(
@@ -338,7 +337,7 @@ const Queue: React.FC<QueueProps> = ({ setView }) => {
                   <div className="text-sm text-gray-600 text-center mt-8">
                     💬 Chat with {currentModel}
                     <br />
-                    <span className="text-xs text-gray-500">Take a screenshot (Cmd+H) for automatic analysis</span>
+                    <span className="text-xs text-gray-500">Take a screenshot (Cmd+Option+Shift+S or F14) for automatic analysis</span>
                     <br />
                     <span className="text-xs text-gray-500">Click ⚙️ Models to switch AI providers</span>
                   </div>

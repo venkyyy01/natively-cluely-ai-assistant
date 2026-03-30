@@ -252,7 +252,8 @@ impl SilenceSuppressor {
         } else {
             let mut pos = 0.0_f64;
             while (pos as usize) < frame.len() {
-                self.vad_buf.push(frame[pos as usize]);
+                let idx = (pos.round() as usize).min(frame.len().saturating_sub(1));
+                self.vad_buf.push(frame[idx]);
                 pos += factor;
             }
         }

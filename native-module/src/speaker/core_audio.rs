@@ -164,7 +164,7 @@ extern "C" fn proc(
             let actual_ch = if buffer_channels > 1 {
                 buffer_channels
             } else {
-                2
+                1
             };
             push_audio(ctx, data, actual_ch);
         }
@@ -183,7 +183,7 @@ extern "C" fn proc(
             let actual_ch = if buffer_channels > 1 {
                 buffer_channels
             } else {
-                2
+                1
             };
 
             push_audio(ctx, data, actual_ch);

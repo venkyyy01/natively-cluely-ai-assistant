@@ -38,8 +38,20 @@ import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
 import 'katex/dist/katex.min.css';
+import { getElectronAPI } from '../lib/electronApi';
 import { analytics, detectProviderType } from '../lib/analytics/analytics.service';
 import { useShortcuts } from '../hooks/useShortcuts';
+import { useHumanSpeedAutoScroll } from '../hooks/useHumanSpeedAutoScroll';
+import {
+    classifyAssistRender,
+    ConsciousModeAnswer,
+    parseConsciousModeAnswer,
+} from '../lib/consciousMode';
+import {
+    classifyConsciousModeQuestion,
+    createEmptyConsciousModeResponse,
+    type ReasoningThread,
+} from '../../electron/ConsciousMode';
 
 interface Message {
     id: string;
@@ -76,6 +88,7 @@ interface NativelyInterfaceProps {
 }
 
 const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) => {
+    const electronAPI = getElectronAPI();
     const [isExpanded, setIsExpanded] = useState(true);
     const [inputValue, setInputValue] = useState('');
     const { shortcuts, isShortcutPressed } = useShortcuts();
@@ -113,9 +126,9 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
     const voiceInputRef = useRef<string>('');  // Ref for capturing in async handlers
     const textInputRef = useRef<HTMLInputElement>(null); // Ref for input focus
 
-    const messagesEndRef = useRef<HTMLDivElement>(null);
     const contentRef = useRef<HTMLDivElement>(null);
     const scrollContainerRef = useRef<HTMLDivElement>(null);
+    const activeConsciousThreadRef = useRef<ReasoningThread | null>(null);
     // const settingsButtonRef = useRef<HTMLButtonElement>(null);
 
     // Latent Context State (Screenshots attached but not sent)
@@ -142,6 +155,7 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
 
     // Model Selection State
     const [currentModel, setCurrentModel] = useState<string>('gemini-3-flash-preview');
+    const [modelFallbackNotice, setModelFallbackNotice] = useState<string>('');
 
     useEffect(() => {
         // Load the persisted default model (not the runtime model)
@@ -174,6 +188,21 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
         });
         return () => unsubscribe();
     }, []);
+
+    useEffect(() => {
+        if (!window.electronAPI?.onModelFallback) return;
+        const unsubscribe = window.electronAPI.onModelFallback(({ previousModel, fallbackModel }) => {
+            setCurrentModel(fallbackModel);
+            setModelFallbackNotice(`Selected model unavailable. Switched from ${previousModel} to ${fallbackModel}.`);
+        });
+        return () => unsubscribe();
+    }, []);
+
+    useEffect(() => {
+        if (!modelFallbackNotice) return;
+        const timer = setTimeout(() => setModelFallbackNotice(''), 6000);
+        return () => clearTimeout(timer);
+    }, [modelFallbackNotice]);
 
     // Global State Sync
     useEffect(() => {
@@ -247,12 +276,20 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
         return () => clearTimeout(timer);
     }, []);
 
-    // Auto-scroll
-    useEffect(() => {
-        if (isExpanded) {
-            messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-        }
-    }, [messages, isExpanded, isProcessing]);
+    const latestReadableMessage = [...messages].reverse().find(msg => msg.role === 'system') || null;
+
+    useHumanSpeedAutoScroll({
+        enabled: isExpanded,
+        containerRef: scrollContainerRef,
+        latestMessage: latestReadableMessage ? {
+            id: latestReadableMessage.id,
+            role: latestReadableMessage.role,
+            content: latestReadableMessage.text,
+            isStreaming: latestReadableMessage.isStreaming,
+        } : null,
+        eligibleRoles: ['system'],
+        getTargetElement: (container, messageId) => container.querySelector(`[data-autoscroll-message-id="${messageId}"]`) as HTMLElement | null,
+    });
 
     // Build conversation context from messages
     useEffect(() => {
@@ -266,24 +303,24 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
 
     // Listen for settings window visibility changes
     useEffect(() => {
-        if (!window.electronAPI?.onSettingsVisibilityChange) return;
-        const unsubscribe = window.electronAPI.onSettingsVisibilityChange((isVisible) => {
+        if (!electronAPI.onSettingsVisibilityChange) return;
+        const unsubscribe = electronAPI.onSettingsVisibilityChange((isVisible: boolean) => {
             setIsSettingsOpen(isVisible);
         });
         return () => unsubscribe();
-    }, []);
+    }, [electronAPI]);
 
     // Sync Window Visibility with Expanded State
     useEffect(() => {
         if (isExpanded) {
-            window.electronAPI.showWindow();
+            electronAPI.showWindow();
         } else {
             // Slight delay to allow animation to clean up if needed, though immediate is safer for click-through
             // Using setTimeout to ensure the render cycle completes first
             // Increased to 400ms to allow "contract to bottom" exit animation to finish
-            setTimeout(() => window.electronAPI.hideWindow(), 400);
+            setTimeout(() => electronAPI.hideWindow(), 400);
         }
-    }, [isExpanded]);
+    }, [electronAPI, isExpanded]);
 
     // Keyboard shortcut to toggle expanded state (via Main Process)
     useEffect(() => {
@@ -310,6 +347,7 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
             setRollingTranscript('');
             setIsInterviewerSpeaking(false);
             setIsProcessing(false);
+            activeConsciousThreadRef.current = null;
             // Optionally reset connection status if needed, but connection persists
 
             // Track new conversation/session if applicable?
@@ -528,6 +566,32 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
 
         cleanups.push(window.electronAPI.onIntelligenceSuggestedAnswer((data) => {
             setIsProcessing(false);
+            const threadRoute = classifyConsciousModeQuestion(data.question, activeConsciousThreadRef.current);
+            const assistRender = classifyAssistRender({
+                answerText: data.answer,
+                threadAction: threadRoute.threadAction,
+            });
+
+            analytics.trackInterviewAssistRendered({
+                ...assistRender,
+                source_intent: 'what_to_answer',
+            });
+
+            if (assistRender.output_variant === 'conscious_mode') {
+                const currentThread = activeConsciousThreadRef.current;
+                const continuesThread = Boolean(threadRoute.threadAction === 'continue' && currentThread);
+
+                activeConsciousThreadRef.current = {
+                    rootQuestion: continuesThread && currentThread ? currentThread.rootQuestion : data.question,
+                    lastQuestion: data.question,
+                    response: createEmptyConsciousModeResponse(),
+                    followUpCount: continuesThread && currentThread ? currentThread.followUpCount + 1 : 0,
+                    updatedAt: Date.now(),
+                };
+            } else {
+                activeConsciousThreadRef.current = null;
+            }
+
             setMessages(prev => {
                 const lastMsg = prev[prev.length - 1];
 
@@ -716,15 +780,15 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
             }]);
         }));
         // Screenshot taken - attach to chat input instead of auto-analyzing
-        cleanups.push(window.electronAPI.onScreenshotTaken(handleScreenshotAttach));
+        cleanups.push(electronAPI.onScreenshotTaken(handleScreenshotAttach));
 
         // Selective Screenshot (Latent Context)
-        if (window.electronAPI.onScreenshotAttached) {
-            cleanups.push(window.electronAPI.onScreenshotAttached(handleScreenshotAttach));
+        if (electronAPI.onScreenshotAttached) {
+            cleanups.push(electronAPI.onScreenshotAttached(handleScreenshotAttach));
         }
 
         return () => cleanups.forEach(fn => fn());
-    }, [isExpanded]);
+    }, [electronAPI]);
 
     // Quick Actions - Updated to use new Intelligence APIs
 
@@ -1162,6 +1226,17 @@ Provide only the answer, nothing else.`;
 
 
     const renderMessageText = (msg: Message) => {
+        if (msg.intent === 'what_to_answer') {
+            const consciousModeAnswer = parseConsciousModeAnswer(msg.text);
+            if (consciousModeAnswer) {
+                return <ConsciousModeAnswer text={msg.text} isStreaming={msg.isStreaming} />;
+            }
+
+            if (msg.isStreaming) {
+                return <ConsciousModeAnswer text={msg.text} isStreaming />;
+            }
+        }
+
         // Code-containing messages get special styling
         // We split by code blocks to keep the "Code Solution" UI intact for the code parts
         // But use ReactMarkdown for the text parts around it
@@ -1607,6 +1682,18 @@ Provide only the answer, nothing else.`;
         return () => window.removeEventListener('keydown', handleGeneralKeyDown);
     }, [isShortcutPressed]);
 
+    useEffect(() => {
+        const unsubscribe = window.electronAPI?.onGlobalShortcutAction?.((actionId) => {
+            if (actionId === 'chat:scrollUp') {
+                scrollContainerRef.current?.scrollBy({ top: -100, behavior: 'smooth' });
+            } else if (actionId === 'chat:scrollDown') {
+                scrollContainerRef.current?.scrollBy({ top: 100, behavior: 'smooth' });
+            }
+        });
+
+        return () => unsubscribe?.();
+    }, []);
+
     return (
         <div ref={contentRef} className="flex flex-col items-center w-fit mx-auto h-fit min-h-0 bg-transparent p-0 rounded-[24px] font-sans text-slate-200 gap-2">
 
@@ -1651,7 +1738,7 @@ Provide only the answer, nothing else.`;
                             {(messages.length > 0 || isManualRecording || isProcessing) && (
                                 <div ref={scrollContainerRef} className="flex-1 overflow-y-auto p-4 space-y-3 no-drag scroll-smooth custom-scrollbar" style={{ scrollbarWidth: 'thin', scrollBehavior: 'smooth', WebkitOverflowScrolling: 'touch', overscrollBehavior: 'contain', maxHeight: `${chatViewportHeight}px` }}>
                                     {messages.map((msg) => (
-                                        <div key={msg.id} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'} animate-fade-in-up`}>
+                                        <div key={msg.id} data-autoscroll-message-id={msg.id} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'} animate-fade-in-up`}>
                                             <div className={`
                       ${msg.role === 'user' ? 'max-w-[72.25%] px-[13.6px] py-[10.2px]' : 'max-w-[85%] px-4 py-3'} text-[14px] leading-relaxed relative group whitespace-pre-wrap
                       ${msg.role === 'user'
@@ -1722,7 +1809,6 @@ Provide only the answer, nothing else.`;
                                             </div>
                                         </div>
                                     )}
-                                    <div ref={messagesEndRef} />
                                 </div>
                             )}
 
@@ -1884,6 +1970,12 @@ Provide only the answer, nothing else.`;
                                             </span>
                                             <ChevronDown size={14} className="shrink-0 transition-transform" />
                                         </button>
+
+                                        {modelFallbackNotice && (
+                                            <div className="text-[10px] text-amber-300/90 max-w-[240px] leading-tight">
+                                                {modelFallbackNotice}
+                                            </div>
+                                        )}
 
                                         <div className="w-px h-3 bg-white/10 mx-1" />
 

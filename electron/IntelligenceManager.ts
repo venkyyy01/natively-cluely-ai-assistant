@@ -12,10 +12,12 @@ import { LLMHelper } from './LLMHelper';
 import { SessionTracker } from './SessionTracker';
 import { IntelligenceEngine } from './IntelligenceEngine';
 import { MeetingPersistence } from './MeetingPersistence';
+import type { ConsciousModeStructuredResponse, ReasoningThread } from './ConsciousMode';
 
 // Re-export types for backward compatibility
 export type { TranscriptSegment, SuggestionTrigger, ContextItem } from './SessionTracker';
 export type { IntelligenceMode, IntelligenceModeEvents } from './IntelligenceEngine';
+export type { ConsciousModeStructuredResponse, ReasoningThread } from './ConsciousMode';
 
 export const GEMINI_FLASH_MODEL = "gemini-3.1-flash-lite-preview";
 
@@ -83,6 +85,10 @@ export class IntelligenceManager extends EventEmitter {
         this.session.setMeetingMetadata(metadata);
     }
 
+    getSessionTracker(): SessionTracker {
+        return this.session;
+    }
+
     addTranscript(segment: import('./SessionTracker').TranscriptSegment, skipRefinementCheck: boolean = false): void {
         if (skipRefinementCheck) {
             // Direct add without refinement detection
@@ -105,6 +111,22 @@ export class IntelligenceManager extends EventEmitter {
         return this.session.getLastAssistantMessage();
     }
 
+    setConsciousModeEnabled(enabled: boolean): void {
+        this.session.setConsciousModeEnabled(enabled);
+    }
+
+    isConsciousModeEnabled(): boolean {
+        return this.session.isConsciousModeEnabled();
+    }
+
+    getLatestConsciousResponse(): ConsciousModeStructuredResponse | null {
+        return this.session.getLatestConsciousResponse();
+    }
+
+    getActiveReasoningThread(): ReasoningThread | null {
+        return this.session.getActiveReasoningThread();
+    }
+
     getFormattedContext(lastSeconds: number = 120): string {
         return this.session.getFormattedContext(lastSeconds);
     }
@@ -113,7 +135,7 @@ export class IntelligenceManager extends EventEmitter {
         return this.session.getLastInterviewerTurn();
     }
 
-    logUsage(type: string, question: string, answer: string): void {
+    logUsage(type: 'assist' | 'followup' | 'chat' | 'followup_questions', question: string, answer: string): void {
         this.session.logUsage(type, question, answer);
     }
 
@@ -174,20 +196,26 @@ export class IntelligenceManager extends EventEmitter {
     // Meeting Lifecycle (delegates to persistence)
     // ============================================
 
-    async stopMeeting(): Promise<void> {
-        return this.persistence.stopMeeting();
-    }
+  async stopMeeting(): Promise<void> {
+    return this.persistence.stopMeeting();
+  }
 
-    async recoverUnprocessedMeetings(): Promise<void> {
-        return this.persistence.recoverUnprocessedMeetings();
-    }
+  async recoverUnprocessedMeetings(): Promise<void> {
+    return this.persistence.recoverUnprocessedMeetings();
+  }
+
+  async waitForPendingSaves(timeoutMs?: number): Promise<void> {
+    return this.persistence.waitForPendingSaves(timeoutMs);
+  }
 
     // ============================================
     // Reset (resets all sub-modules)
     // ============================================
 
-    reset(): void {
-        this.session.reset();
-        this.engine.reset();
-    }
+  async reset(): Promise<void> {
+    this.engine.removeAllListeners();
+    this.removeAllListeners();
+    await this.session.reset();
+    this.engine.reset();
+  }
 }

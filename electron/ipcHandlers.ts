@@ -6,9 +6,16 @@ import { GEMINI_FLASH_MODEL } from "./IntelligenceManager"
 import { DatabaseManager } from "./db/DatabaseManager"; // Import Database Manager
 import * as path from "path";
 import * as fs from "fs";
-import { AudioDevices } from "./audio/AudioDevices";
+import { ipcSchemas, parseIpcInput } from "./ipcValidation";
+import { registerMeetingHandlers } from "./ipc/registerMeetingHandlers";
+import { registerSettingsHandlers } from "./ipc/registerSettingsHandlers";
+import { registerCalendarHandlers } from "./ipc/registerCalendarHandlers";
+import { registerRagHandlers } from "./ipc/registerRagHandlers";
+import { registerEmailHandlers } from "./ipc/registerEmailHandlers";
+import { registerProfileHandlers } from "./ipc/registerProfileHandlers";
+import { registerIntelligenceHandlers } from "./ipc/registerIntelligenceHandlers";
+import { registerWindowHandlers } from "./ipc/registerWindowHandlers";
 
-import { RECOGNITION_LANGUAGES, AI_RESPONSE_LANGUAGES } from "./config/languages"
 
 export function initializeIpcHandlers(appState: AppState): void {
   const safeHandle = (channel: string, listener: (event: any, ...args: any[]) => Promise<any> | any) => {
@@ -16,36 +23,24 @@ export function initializeIpcHandlers(appState: AppState): void {
     ipcMain.handle(channel, listener);
   };
 
-  // --- NEW Test Helper ---
-  safeHandle("test-release-fetch", async () => {
-    try {
-      console.log("[IPC] Manual Test Fetch triggered (forcing refresh)...");
-      const { ReleaseNotesManager } = require('./update/ReleaseNotesManager');
-      const notes = await ReleaseNotesManager.getInstance().fetchReleaseNotes('latest', true);
+  const safeHandleValidated = <T extends unknown[]>(
+    channel: string,
+    parser: (args: unknown[]) => T,
+    listener: (event: any, ...args: T) => Promise<any> | any,
+  ) => {
+    safeHandle(channel, (event, ...args) => listener(event, ...parser(args)));
+  };
 
-      if (notes) {
-        console.log("[IPC] Notes fetched for:", notes.version);
-        const info = {
-          version: notes.version || 'latest',
-          files: [] as any[],
-          path: '',
-          sha512: '',
-          releaseName: notes.summary,
-          releaseNotes: notes.fullBody,
-          parsedNotes: notes
-        };
-        // Send to renderer
-        appState.getMainWindow()?.webContents.send("update-available", info);
-        return { success: true };
-      }
-      return { success: false, error: "No notes returned" };
-    } catch (err: any) {
-      console.error("[IPC] test-release-fetch failed:", err);
-      return { success: false, error: err.message };
-    }
-  });
+  const ok = <T>(data: T) => ({ success: true as const, data });
+  const fail = (code: string, error: unknown, fallbackMessage: string) => ({
+    success: false as const,
+    error: {
+  code,
+    message: error instanceof Error ? error.message : fallbackMessage,
+  },
+});
 
-  safeHandle("renderer:log-error", async (_, payload: any) => {
+safeHandleValidated("renderer:log-error", (args) => [parseIpcInput(ipcSchemas.rendererLogPayload, args[0], 'renderer:log-error')] as const, async (_, payload) => {
     try {
       console.error('[RendererError]', JSON.stringify(payload));
       return { success: true };
@@ -68,67 +63,16 @@ export function initializeIpcHandlers(appState: AppState): void {
     return 'open-build';
   });
 
-  safeHandle("get-recognition-languages", async () => {
-    return RECOGNITION_LANGUAGES;
-  });
-
-  safeHandle("get-ai-response-languages", async () => {
-    return AI_RESPONSE_LANGUAGES;
-  });
-
-  safeHandle("set-ai-response-language", async (_, language: string) => {
-    const { CredentialsManager } = require('./services/CredentialsManager');
-    CredentialsManager.getInstance().setAiResponseLanguage(language);
-    appState.processingHelper?.getLLMHelper?.().setAiResponseLanguage?.(language);
-    return { success: true };
-  });
-
-  safeHandle("get-stt-language", async () => {
-    const { CredentialsManager } = require('./services/CredentialsManager');
-    return CredentialsManager.getInstance().getSttLanguage();
-  });
-
-  safeHandle("get-ai-response-language", async () => {
-    const { CredentialsManager } = require('./services/CredentialsManager');
-    return CredentialsManager.getInstance().getAiResponseLanguage();
-  });
-  safeHandle(
-    "update-content-dimensions",
-    async (event, { width, height }: { width: number; height: number }) => {
-      if (!width || !height) return
-
-      const senderWebContents = event.sender
-      const settingsWin = appState.settingsWindowHelper.getSettingsWindow()
-      const overlayWin = appState.getWindowHelper().getOverlayWindow()
-      const launcherWin = appState.getWindowHelper().getLauncherWindow()
-
-      if (settingsWin && !settingsWin.isDestroyed() && settingsWin.webContents.id === senderWebContents.id) {
-        appState.settingsWindowHelper.setWindowDimensions(settingsWin, width, height)
-      } else if (
-        overlayWin && !overlayWin.isDestroyed() && overlayWin.webContents.id === senderWebContents.id
-      ) {
-        // NativelyInterface logic - Resize ONLY the overlay window using dedicated method
-        appState.getWindowHelper().setOverlayDimensions(width, height)
-      }
-    }
-  )
-
-  safeHandle(
-    "set-overlay-bounds",
-    async (_event, bounds: { width: number; height: number; x?: number; y?: number }) => {
-      if (!bounds?.width || !bounds?.height) return
-      appState.getWindowHelper().setOverlayBounds(bounds)
-      return { success: true }
-    }
-  )
-
-  safeHandle("set-window-mode", async (event, mode: 'launcher' | 'overlay') => {
-    appState.getWindowHelper().setWindowMode(mode);
-    return { success: true };
-  })
+  registerSettingsHandlers({ appState, safeHandle, safeHandleValidated });
+  registerCalendarHandlers({ appState, safeHandle });
+  registerEmailHandlers({ appState, safeHandleValidated });
+  registerRagHandlers({ appState, safeHandle, safeHandleValidated });
+  registerProfileHandlers({ appState, safeHandle, safeHandleValidated });
+  registerIntelligenceHandlers({ appState, safeHandle });
+  registerWindowHandlers({ appState, safeHandle, safeHandleValidated });
 
 
-  safeHandle("delete-screenshot", async (event, filePath: string) => {
+  safeHandleValidated("delete-screenshot", (args) => [parseIpcInput(ipcSchemas.absoluteUserDataPath, args[0], 'delete-screenshot')] as const, async (event, filePath) => {
     // Guard: only allow deletion of files within the app's own userData directory
     const userDataDir = app.getPath('userData');
     const resolved = path.resolve(filePath);
@@ -143,10 +87,9 @@ export function initializeIpcHandlers(appState: AppState): void {
     try {
       const screenshotPath = await appState.takeScreenshot()
       const preview = await appState.getImagePreview(screenshotPath)
-      return { path: screenshotPath, preview }
+      return ok({ path: screenshotPath, preview })
     } catch (error) {
-      // console.error("Error taking screenshot:", error)
-      throw error
+      return fail('SCREENSHOT_CAPTURE_FAILED', error, 'Failed to take screenshot')
     }
   })
 
@@ -154,19 +97,19 @@ export function initializeIpcHandlers(appState: AppState): void {
     try {
       const screenshotPath = await appState.takeSelectiveScreenshot()
       const preview = await appState.getImagePreview(screenshotPath)
-      return { path: screenshotPath, preview }
-    } catch (error) {
-      if (error.message === "Selection cancelled") {
-        return { cancelled: true }
+      return ok({ path: screenshotPath, preview })
+    } catch (error: any) {
+      if (error?.message === "Selection cancelled") {
+        return ok({ cancelled: true })
       }
-      throw error
+      return fail('SELECTIVE_SCREENSHOT_FAILED', error, 'Failed to take selective screenshot')
     }
   })
 
   safeHandle("get-screenshots", async () => {
     // console.log({ view: appState.getView() })
     try {
-      let previews = []
+      let previews: Array<{ path: string; preview: string }> = []
       if (appState.getView() === "queue") {
         previews = await Promise.all(
           appState.getScreenshotQueue().map(async (path) => ({
@@ -183,24 +126,10 @@ export function initializeIpcHandlers(appState: AppState): void {
         )
       }
       // previews.forEach((preview: any) => console.log(preview.path))
-      return previews
+      return ok(previews)
     } catch (error) {
-      // console.error("Error getting screenshots:", error)
-      throw error
+      return fail('SCREENSHOT_LIST_FAILED', error, 'Failed to load screenshots')
     }
-  })
-
-  safeHandle("toggle-window", async () => {
-    appState.toggleMainWindow()
-  })
-
-  safeHandle("show-window", async () => {
-    // Default show main window (Launcher usually)
-    appState.showMainWindow()
-  })
-
-  safeHandle("hide-window", async () => {
-    appState.hideMainWindow()
   })
 
   safeHandle("reset-queues", async () => {
@@ -239,38 +168,38 @@ export function initializeIpcHandlers(appState: AppState): void {
 
 
   // Generate suggestion from transcript - Natively-style text-only reasoning
-  safeHandle("generate-suggestion", async (event, context: string, lastQuestion: string) => {
+  safeHandleValidated("generate-suggestion", (args) => parseIpcInput(ipcSchemas.generateSuggestionArgs, args, 'generate-suggestion'), async (_event, context, lastQuestion) => {
     try {
       const suggestion = await appState.processingHelper.getLLMHelper().generateSuggestion(context, lastQuestion)
-      return { suggestion }
+      return ok({ suggestion })
     } catch (error: any) {
-      // console.error("Error generating suggestion:", error)
-      throw error
+      return fail('SUGGESTION_GENERATION_FAILED', error, 'Failed to generate suggestion')
     }
   })
 
   safeHandle("finalize-mic-stt", async () => {
     appState.finalizeMicSTT();
+    return ok(null);
   });
 
   // IPC handler for analyzing image from file path
-  safeHandle("analyze-image-file", async (event, filePath: string) => {
+  safeHandleValidated("analyze-image-file", (args) => [parseIpcInput(ipcSchemas.absoluteUserDataPath, args[0], 'analyze-image-file')] as const, async (_event, filePath) => {
     // Guard: only allow reading files within the app's own userData directory
     const userDataDir = app.getPath('userData');
     const resolved = path.resolve(filePath);
     if (!resolved.startsWith(userDataDir + path.sep)) {
       console.warn('[IPC] analyze-image-file: path outside userData rejected:', filePath);
-      throw new Error('Path not allowed');
+      return fail('PATH_NOT_ALLOWED', new Error('Path not allowed'), 'Path not allowed');
     }
     try {
       const result = await appState.processingHelper.getLLMHelper().analyzeImageFiles([resolved])
-      return result
+      return ok(result)
     } catch (error: any) {
-      throw error
+      return fail('IMAGE_ANALYSIS_FAILED', error, 'Failed to analyze image file')
     }
   })
 
-  safeHandle("gemini-chat", async (event, message: string, imagePaths?: string[], context?: string, options?: { skipSystemPrompt?: boolean }) => {
+  safeHandleValidated("gemini-chat", (args) => parseIpcInput(ipcSchemas.geminiChatArgs, args, 'gemini-chat'), async (event, message, imagePaths, context, options) => {
     try {
       const result = await appState.processingHelper.getLLMHelper().chatWithGemini(message, imagePaths, context, options?.skipSystemPrompt);
 
@@ -311,7 +240,7 @@ export function initializeIpcHandlers(appState: AppState): void {
   });
 
   // Streaming IPC Handler
-  safeHandle("gemini-chat-stream", async (event, message: string, imagePaths?: string[], context?: string, options?: { skipSystemPrompt?: boolean }) => {
+  safeHandleValidated("gemini-chat-stream", (args) => parseIpcInput(ipcSchemas.geminiChatArgs, args, 'gemini-chat-stream'), async (event, message, imagePaths, context, options) => {
     try {
       console.log("[IPC] gemini-chat-stream started using LLMHelper.streamChat");
       const llmHelper = appState.processingHelper.getLLMHelper();
@@ -375,103 +304,26 @@ export function initializeIpcHandlers(appState: AppState): void {
 
 
 
-  safeHandle("quit-app", () => {
-    app.quit()
-  })
+safeHandle("quit-app", () => {
+  app.quit()
+  return ok(null)
+})
 
-  safeHandle("quit-and-install-update", () => {
-    console.log('[IPC] quit-and-install-update handler called')
-    appState.quitAndInstallUpdate()
-  })
+safeHandleValidated("delete-meeting", (args) => [parseIpcInput(ipcSchemas.providerId, args[0], 'delete-meeting')] as const, async (_, id) => {
+  return DatabaseManager.getInstance().deleteMeeting(id);
+});
 
-  safeHandle("delete-meeting", async (_, id: string) => {
-    return DatabaseManager.getInstance().deleteMeeting(id);
-  });
-
-  safeHandle("check-for-updates", async () => {
-    await appState.checkForUpdates()
-  })
-
-  safeHandle("download-update", async () => {
-    appState.downloadUpdate()
-  })
-
-  // Window movement handlers
-  safeHandle("move-window-left", async () => {
-    appState.moveWindowLeft()
-  })
-
-  safeHandle("move-window-right", async () => {
-    appState.moveWindowRight()
-  })
-
-  safeHandle("move-window-up", async () => {
-    appState.moveWindowUp()
-  })
-
-  safeHandle("move-window-down", async () => {
-    appState.moveWindowDown()
-  })
-
-  safeHandle("center-and-show-window", async () => {
-    appState.centerAndShowWindow()
-  })
-
-  // Settings Window
-  safeHandle("toggle-settings-window", (event, { x, y } = {}) => {
-    appState.settingsWindowHelper.toggleWindow(x, y)
-  })
-
-  safeHandle("close-settings-window", () => {
-    appState.settingsWindowHelper.closeWindow()
-  })
-
-
-
-  safeHandle("set-undetectable", async (_, state: boolean) => {
-    appState.setUndetectable(state)
-    return { success: true }
-  })
-
-  safeHandle("set-disguise", async (_, mode: 'terminal' | 'settings' | 'activity' | 'none') => {
-    appState.setDisguise(mode)
-    return { success: true }
-  })
-
-  safeHandle("get-undetectable", async () => {
-    return appState.getUndetectable()
-  })
-
-  safeHandle("get-disguise", async () => {
-    return appState.getDisguise()
-  })
-
-  safeHandle("set-open-at-login", async (_, openAtLogin: boolean) => {
-    app.setLoginItemSettings({
-      openAtLogin,
-      openAsHidden: false,
-      path: app.getPath('exe') // Explicitly point to executable for production reliability
-    });
-    return { success: true };
-  });
-
-  safeHandle("get-open-at-login", async () => {
-    const settings = app.getLoginItemSettings();
-    return settings.openAtLogin;
-  });
-
-  // LLM Model Management Handlers
+// LLM Model Management Handlers
   safeHandle("get-current-llm-config", async () => {
     try {
       const llmHelper = appState.processingHelper.getLLMHelper();
-      return {
+      return ok({
         provider: llmHelper.getCurrentProvider(),
         model: llmHelper.getCurrentModel(),
         isOllama: llmHelper.isUsingOllama()
-      };
+      });
     } catch (error: any) {
-      // console.error("Error getting current LLM config:", error);
-      throw error;
+      return fail('LLM_CONFIG_READ_FAILED', error, 'Failed to read current LLM config');
     }
   });
 
@@ -479,14 +331,13 @@ export function initializeIpcHandlers(appState: AppState): void {
     try {
       const llmHelper = appState.processingHelper.getLLMHelper();
       const models = await llmHelper.getOllamaModels();
-      return models;
+      return ok(models);
     } catch (error: any) {
-      // console.error("Error getting Ollama models:", error);
-      throw error;
+      return fail('OLLAMA_MODELS_READ_FAILED', error, 'Failed to get Ollama models');
     }
   });
 
-  safeHandle("switch-to-ollama", async (_, model?: string, url?: string) => {
+  safeHandleValidated("switch-to-ollama", (args) => parseIpcInput(ipcSchemas.ollamaSwitchArgs, args, 'switch-to-ollama'), async (_, model, url) => {
     try {
       const llmHelper = appState.processingHelper.getLLMHelper();
       await llmHelper.switchToOllama(model, url);
@@ -500,11 +351,11 @@ export function initializeIpcHandlers(appState: AppState): void {
   safeHandle("force-restart-ollama", async () => {
     try {
       const llmHelper = appState.processingHelper.getLLMHelper();
-      const success = await llmHelper.forceRestartOllama();
-      return { success };
+      const restarted = await llmHelper.forceRestartOllama();
+      return ok({ restarted });
     } catch (error: any) {
       console.error("Error force restarting Ollama:", error);
-      return { success: false, error: error.message };
+      return fail('OLLAMA_FORCE_RESTART_FAILED', error, 'Failed to force restart Ollama');
     }
   });
 
@@ -516,10 +367,10 @@ export function initializeIpcHandlers(appState: AppState): void {
       // The forceRestartOllama now calls OllamaManager.getInstance().init() internally
       // so we don't need to do it again here.
       
-      return true;
+      return ok({ restarted: true });
     } catch (error: any) {
       console.error("[IPC restart-ollama] Failed to restart:", error);
-      return false;
+      return fail('OLLAMA_RESTART_FAILED', error, 'Failed to restart Ollama');
     }
   });
 
@@ -527,13 +378,13 @@ export function initializeIpcHandlers(appState: AppState): void {
     try {
       const { OllamaManager } = require('./services/OllamaManager');
       await OllamaManager.getInstance().init();
-      return { success: true };
+      return ok({ running: true });
     } catch (error: any) {
-      return { success: false, message: error.message };
+      return fail('OLLAMA_INIT_FAILED', error, 'Failed to ensure Ollama is running');
     }
   });
 
-  safeHandle("switch-to-gemini", async (_, apiKey?: string, modelId?: string) => {
+  safeHandleValidated("switch-to-gemini", (args) => parseIpcInput(ipcSchemas.providerSwitchGeminiArgs, args, 'switch-to-gemini'), async (_, apiKey, modelId) => {
     try {
       const llmHelper = appState.processingHelper.getLLMHelper();
       await llmHelper.switchToGemini(apiKey, modelId);
@@ -552,7 +403,7 @@ export function initializeIpcHandlers(appState: AppState): void {
   });
 
   // Dedicated API key setters (for Settings UI Save buttons)
-  safeHandle("set-gemini-api-key", async (_, apiKey: string) => {
+  safeHandleValidated("set-gemini-api-key", (args) => [parseIpcInput(ipcSchemas.apiKey, args[0], 'set-gemini-api-key')] as const, async (_, apiKey) => {
     try {
       const { CredentialsManager } = require('./services/CredentialsManager');
       CredentialsManager.getInstance().setGeminiApiKey(apiKey);
@@ -571,7 +422,7 @@ export function initializeIpcHandlers(appState: AppState): void {
     }
   });
 
-  safeHandle("set-groq-api-key", async (_, apiKey: string) => {
+  safeHandleValidated("set-groq-api-key", (args) => [parseIpcInput(ipcSchemas.apiKey, args[0], 'set-groq-api-key')] as const, async (_, apiKey) => {
     try {
       const { CredentialsManager } = require('./services/CredentialsManager');
       CredentialsManager.getInstance().setGroqApiKey(apiKey);
@@ -590,7 +441,7 @@ export function initializeIpcHandlers(appState: AppState): void {
     }
   });
 
-  safeHandle("set-openai-api-key", async (_, apiKey: string) => {
+  safeHandleValidated("set-openai-api-key", (args) => [parseIpcInput(ipcSchemas.apiKey, args[0], 'set-openai-api-key')] as const, async (_, apiKey) => {
     try {
       const { CredentialsManager } = require('./services/CredentialsManager');
       CredentialsManager.getInstance().setOpenaiApiKey(apiKey);
@@ -609,7 +460,7 @@ export function initializeIpcHandlers(appState: AppState): void {
     }
   });
 
-  safeHandle("set-claude-api-key", async (_, apiKey: string) => {
+  safeHandleValidated("set-claude-api-key", (args) => [parseIpcInput(ipcSchemas.apiKey, args[0], 'set-claude-api-key')] as const, async (_, apiKey) => {
     try {
       const { CredentialsManager } = require('./services/CredentialsManager');
       CredentialsManager.getInstance().setClaudeApiKey(apiKey);
@@ -637,14 +488,14 @@ export function initializeIpcHandlers(appState: AppState): void {
       // New ones take precedence if IDs conflict (though unlikely as UUIDs)
       const curlProviders = cm.getCurlProviders();
       const legacyProviders = cm.getCustomProviders() || [];
-      return [...curlProviders, ...legacyProviders];
+      return ok([...curlProviders, ...legacyProviders]);
     } catch (error: any) {
       console.error("Error getting custom providers:", error);
-      return [];
+      return fail('CUSTOM_PROVIDERS_READ_FAILED', error, 'Failed to get custom providers');
     }
   });
 
-  safeHandle("save-custom-provider", async (_, provider: any) => {
+  safeHandleValidated("save-custom-provider", (args) => [parseIpcInput(ipcSchemas.customProvider, args[0], 'save-custom-provider')] as const, async (_, provider) => {
     try {
       const { CredentialsManager } = require('./services/CredentialsManager');
       // Save as CurlProvider (supports responsePath)
@@ -656,7 +507,7 @@ export function initializeIpcHandlers(appState: AppState): void {
     }
   });
 
-  safeHandle("delete-custom-provider", async (_, id: string) => {
+  safeHandleValidated("delete-custom-provider", (args) => [parseIpcInput(ipcSchemas.providerId, args[0], 'delete-custom-provider')] as const, async (_, id) => {
     try {
       const { CredentialsManager } = require('./services/CredentialsManager');
       // Try deleting from both storages to be safe
@@ -669,7 +520,7 @@ export function initializeIpcHandlers(appState: AppState): void {
     }
   });
 
-  safeHandle("switch-to-custom-provider", async (_, providerId: string) => {
+  safeHandleValidated("switch-to-custom-provider", (args) => [parseIpcInput(ipcSchemas.providerId, args[0], 'switch-to-custom-provider')] as const, async (_, providerId) => {
     try {
       const { CredentialsManager } = require('./services/CredentialsManager');
       const provider = CredentialsManager.getInstance().getCustomProviders().find((p: any) => p.id === providerId);
@@ -695,14 +546,14 @@ export function initializeIpcHandlers(appState: AppState): void {
   safeHandle("get-curl-providers", async () => {
     try {
       const { CredentialsManager } = require('./services/CredentialsManager');
-      return CredentialsManager.getInstance().getCurlProviders();
+      return ok(CredentialsManager.getInstance().getCurlProviders());
     } catch (error: any) {
       console.error("Error getting curl providers:", error);
-      return [];
+      return fail('CURL_PROVIDERS_READ_FAILED', error, 'Failed to get curl providers');
     }
   });
 
-  safeHandle("save-curl-provider", async (_, provider: any) => {
+  safeHandleValidated("save-curl-provider", (args) => [parseIpcInput(ipcSchemas.customProvider, args[0], 'save-curl-provider')] as const, async (_, provider) => {
     try {
       const { CredentialsManager } = require('./services/CredentialsManager');
       CredentialsManager.getInstance().saveCurlProvider(provider);
@@ -713,7 +564,7 @@ export function initializeIpcHandlers(appState: AppState): void {
     }
   });
 
-  safeHandle("delete-curl-provider", async (_, id: string) => {
+  safeHandleValidated("delete-curl-provider", (args) => [parseIpcInput(ipcSchemas.providerId, args[0], 'delete-curl-provider')] as const, async (_, id) => {
     try {
       const { CredentialsManager } = require('./services/CredentialsManager');
       CredentialsManager.getInstance().deleteCurlProvider(id);
@@ -724,7 +575,7 @@ export function initializeIpcHandlers(appState: AppState): void {
     }
   });
 
-  safeHandle("switch-to-curl-provider", async (_, providerId: string) => {
+  safeHandleValidated("switch-to-curl-provider", (args) => [parseIpcInput(ipcSchemas.providerId, args[0], 'switch-to-curl-provider')] as const, async (_, providerId) => {
     try {
       const { CredentialsManager } = require('./services/CredentialsManager');
       const provider = CredentialsManager.getInstance().getCurlProviders().find((p: any) => p.id === providerId);
@@ -755,7 +606,7 @@ export function initializeIpcHandlers(appState: AppState): void {
       // Return masked versions for security (just indicate if set)
       const hasKey = (key?: string) => !!(key && key.trim().length > 0);
 
-      return {
+      return ok({
         hasGeminiKey: hasKey(creds.geminiApiKey),
         hasGroqKey: hasKey(creds.groqApiKey),
         hasOpenaiKey: hasKey(creds.openaiApiKey),
@@ -779,9 +630,9 @@ export function initializeIpcHandlers(appState: AppState): void {
         groqPreferredModel: creds.groqPreferredModel || undefined,
         openaiPreferredModel: creds.openaiPreferredModel || undefined,
         claudePreferredModel: creds.claudePreferredModel || undefined,
-      };
+      });
     } catch (error: any) {
-      return { hasGeminiKey: false, hasGroqKey: false, hasOpenaiKey: false, hasClaudeKey: false, googleServiceAccountPath: null, sttProvider: 'google', groqSttModel: 'whisper-large-v3-turbo', hasSttGroqKey: false, hasSttOpenaiKey: false, hasDeepgramKey: false, hasElevenLabsKey: false, hasAzureKey: false, azureRegion: 'eastus', hasIbmWatsonKey: false, ibmWatsonRegion: 'us-south', hasSonioxKey: false, hasGoogleSearchKey: false, hasGoogleSearchCseId: false };
+      return fail('CREDENTIALS_READ_FAILED', error, 'Failed to get stored credentials');
     }
   });
 
@@ -789,7 +640,7 @@ export function initializeIpcHandlers(appState: AppState): void {
   // Dynamic Model Discovery Handlers
   // ==========================================
 
-  safeHandle("fetch-provider-models", async (_, provider: 'gemini' | 'groq' | 'openai' | 'claude', apiKey: string) => {
+  safeHandleValidated("fetch-provider-models", (args) => parseIpcInput(ipcSchemas.providerModelFetchArgs, args, 'fetch-provider-models'), async (_, provider, apiKey) => {
     try {
       // Fall back to stored key if no key was explicitly provided
       let key = apiKey?.trim();
@@ -816,12 +667,14 @@ export function initializeIpcHandlers(appState: AppState): void {
     }
   });
 
-  safeHandle("set-provider-preferred-model", async (_, provider: 'gemini' | 'groq' | 'openai' | 'claude', modelId: string) => {
+  safeHandleValidated("set-provider-preferred-model", (args) => parseIpcInput(ipcSchemas.providerPreferredModel, args, 'set-provider-preferred-model'), async (_, provider, modelId) => {
     try {
       const { CredentialsManager } = require('./services/CredentialsManager');
       CredentialsManager.getInstance().setPreferredModel(provider, modelId);
+      return { success: true };
     } catch (error: any) {
       console.error(`[IPC] Failed to set preferred model for ${provider}:`, error);
+      return { success: false, error: error?.message || 'Failed to set preferred model' };
     }
   });
 
@@ -829,7 +682,7 @@ export function initializeIpcHandlers(appState: AppState): void {
   // STT Provider Management Handlers
   // ==========================================
 
-  safeHandle("set-stt-provider", async (_, provider: 'google' | 'groq' | 'openai' | 'deepgram' | 'elevenlabs' | 'azure' | 'ibmwatson' | 'soniox') => {
+  safeHandleValidated("set-stt-provider", (args) => [parseIpcInput(ipcSchemas.sttProvider, args[0], 'set-stt-provider')] as const, async (_, provider) => {
     try {
       const { CredentialsManager } = require('./services/CredentialsManager');
       CredentialsManager.getInstance().setSttProvider(provider);
@@ -847,13 +700,13 @@ export function initializeIpcHandlers(appState: AppState): void {
   safeHandle("get-stt-provider", async () => {
     try {
       const { CredentialsManager } = require('./services/CredentialsManager');
-      return CredentialsManager.getInstance().getSttProvider();
+      return ok(CredentialsManager.getInstance().getSttProvider());
     } catch (error: any) {
-      return 'google';
+      return fail('STT_PROVIDER_READ_FAILED', error, 'Failed to get STT provider');
     }
   });
 
-  safeHandle("set-groq-stt-api-key", async (_, apiKey: string) => {
+  safeHandleValidated("set-groq-stt-api-key", (args) => [parseIpcInput(ipcSchemas.apiKey, args[0], 'set-groq-stt-api-key')] as const, async (_, apiKey) => {
     try {
       const { CredentialsManager } = require('./services/CredentialsManager');
       CredentialsManager.getInstance().setGroqSttApiKey(apiKey);
@@ -864,7 +717,7 @@ export function initializeIpcHandlers(appState: AppState): void {
     }
   });
 
-  safeHandle("set-openai-stt-api-key", async (_, apiKey: string) => {
+  safeHandleValidated("set-openai-stt-api-key", (args) => [parseIpcInput(ipcSchemas.apiKey, args[0], 'set-openai-stt-api-key')] as const, async (_, apiKey) => {
     try {
       const { CredentialsManager } = require('./services/CredentialsManager');
       CredentialsManager.getInstance().setOpenAiSttApiKey(apiKey);
@@ -875,7 +728,7 @@ export function initializeIpcHandlers(appState: AppState): void {
     }
   });
 
-  safeHandle("set-deepgram-api-key", async (_, apiKey: string) => {
+  safeHandleValidated("set-deepgram-api-key", (args) => [parseIpcInput(ipcSchemas.apiKey, args[0], 'set-deepgram-api-key')] as const, async (_, apiKey) => {
     try {
       const { CredentialsManager } = require('./services/CredentialsManager');
       CredentialsManager.getInstance().setDeepgramApiKey(apiKey);
@@ -886,7 +739,7 @@ export function initializeIpcHandlers(appState: AppState): void {
     }
   });
 
-  safeHandle("set-groq-stt-model", async (_, model: string) => {
+  safeHandleValidated("set-groq-stt-model", (args) => [parseIpcInput(ipcSchemas.modelId, args[0], 'set-groq-stt-model')] as const, async (_, model) => {
     try {
       const { CredentialsManager } = require('./services/CredentialsManager');
       CredentialsManager.getInstance().setGroqSttModel(model);
@@ -901,7 +754,7 @@ export function initializeIpcHandlers(appState: AppState): void {
     }
   });
 
-  safeHandle("set-elevenlabs-api-key", async (_, apiKey: string) => {
+  safeHandleValidated("set-elevenlabs-api-key", (args) => [parseIpcInput(ipcSchemas.apiKey, args[0], 'set-elevenlabs-api-key')] as const, async (_, apiKey) => {
     try {
       const { CredentialsManager } = require('./services/CredentialsManager');
       CredentialsManager.getInstance().setElevenLabsApiKey(apiKey);
@@ -912,7 +765,7 @@ export function initializeIpcHandlers(appState: AppState): void {
     }
   });
 
-  safeHandle("set-azure-api-key", async (_, apiKey: string) => {
+  safeHandleValidated("set-azure-api-key", (args) => [parseIpcInput(ipcSchemas.apiKey, args[0], 'set-azure-api-key')] as const, async (_, apiKey) => {
     try {
       const { CredentialsManager } = require('./services/CredentialsManager');
       CredentialsManager.getInstance().setAzureApiKey(apiKey);
@@ -923,7 +776,7 @@ export function initializeIpcHandlers(appState: AppState): void {
     }
   });
 
-  safeHandle("set-azure-region", async (_, region: string) => {
+  safeHandleValidated("set-azure-region", (args) => [parseIpcInput(ipcSchemas.azureRegion, args[0], 'set-azure-region')] as const, async (_, region) => {
     try {
       const { CredentialsManager } = require('./services/CredentialsManager');
       CredentialsManager.getInstance().setAzureRegion(region);
@@ -938,7 +791,7 @@ export function initializeIpcHandlers(appState: AppState): void {
     }
   });
 
-  safeHandle("set-ibmwatson-api-key", async (_, apiKey: string) => {
+  safeHandleValidated("set-ibmwatson-api-key", (args) => [parseIpcInput(ipcSchemas.apiKey, args[0], 'set-ibmwatson-api-key')] as const, async (_, apiKey) => {
     try {
       const { CredentialsManager } = require('./services/CredentialsManager');
       CredentialsManager.getInstance().setIbmWatsonApiKey(apiKey);
@@ -949,7 +802,7 @@ export function initializeIpcHandlers(appState: AppState): void {
     }
   });
 
-  safeHandle("set-soniox-api-key", async (_, apiKey: string) => {
+  safeHandleValidated("set-soniox-api-key", (args) => [parseIpcInput(ipcSchemas.apiKey, args[0], 'set-soniox-api-key')] as const, async (_, apiKey) => {
     try {
       const { CredentialsManager } = require('./services/CredentialsManager');
       CredentialsManager.getInstance().setSonioxApiKey(apiKey);
@@ -966,7 +819,7 @@ export function initializeIpcHandlers(appState: AppState): void {
     return msg.replace(/:\s*[a-zA-Z0-9*]+\*+[a-zA-Z0-9*]+\.?$/g, '').trim();
   };
 
-  safeHandle("test-stt-connection", async (_, provider: 'groq' | 'openai' | 'deepgram' | 'elevenlabs' | 'azure' | 'ibmwatson' | 'soniox', apiKey: string, region?: string) => {
+  safeHandleValidated("test-stt-connection", (args) => parseIpcInput(ipcSchemas.sttConnectionArgs, args, 'test-stt-connection'), async (_, provider, apiKey, region) => {
     console.log(`[IPC] Received test - stt - connection request for provider: ${provider} `);
     try {
       if (provider === 'deepgram') {
@@ -1136,7 +989,7 @@ export function initializeIpcHandlers(appState: AppState): void {
     }
   });
 
-  safeHandle("test-llm-connection", async (_, provider: 'gemini' | 'groq' | 'openai' | 'claude', apiKey?: string) => {
+  safeHandleValidated("test-llm-connection", (args) => parseIpcInput(ipcSchemas.llmConnectionArgs, args, 'test-llm-connection'), async (_, provider, apiKey) => {
     console.log(`[IPC] Received test-llm-connection request for provider: ${provider}`);
     try {
       if (!apiKey || !apiKey.trim()) {
@@ -1211,14 +1064,14 @@ export function initializeIpcHandlers(appState: AppState): void {
   safeHandle("get-groq-fast-text-mode", () => {
     try {
       const llmHelper = appState.processingHelper.getLLMHelper();
-      return { enabled: llmHelper.getGroqFastTextMode() };
+      return ok({ enabled: llmHelper.getGroqFastTextMode() });
     } catch (error: any) {
-      return { enabled: false };
+      return fail('GROQ_FAST_TEXT_READ_FAILED', error, 'Failed to get Groq Fast Text mode');
     }
   });
 
   // Set Groq Fast Text Mode
-  safeHandle("set-groq-fast-text-mode", (_, enabled: boolean) => {
+  safeHandleValidated("set-groq-fast-text-mode", (args) => [parseIpcInput(ipcSchemas.booleanFlag, args[0], 'set-groq-fast-text-mode')] as const, (_, enabled) => {
     try {
       const llmHelper = appState.processingHelper.getLLMHelper();
       llmHelper.setGroqFastTextMode(enabled);
@@ -1234,7 +1087,7 @@ export function initializeIpcHandlers(appState: AppState): void {
     }
   });
 
-  safeHandle("set-model", async (_, modelId: string) => {
+  safeHandleValidated("set-model", (args) => [parseIpcInput(ipcSchemas.modelId, args[0], 'set-model')] as const, async (_, modelId) => {
     try {
       const llmHelper = appState.processingHelper.getLLMHelper();
       const { CredentialsManager } = require('./services/CredentialsManager');
@@ -1265,7 +1118,7 @@ export function initializeIpcHandlers(appState: AppState): void {
   });
 
   // Persist default model (from Settings) + update runtime + broadcast to all windows
-  safeHandle("set-default-model", async (_, modelId: string) => {
+  safeHandleValidated("set-default-model", (args) => [parseIpcInput(ipcSchemas.modelId, args[0], 'set-default-model')] as const, async (_, modelId) => {
     try {
       const { CredentialsManager } = require('./services/CredentialsManager');
       const cm = CredentialsManager.getInstance();
@@ -1300,24 +1153,25 @@ export function initializeIpcHandlers(appState: AppState): void {
     try {
       const { CredentialsManager } = require('./services/CredentialsManager');
       const cm = CredentialsManager.getInstance();
-      return { model: cm.getDefaultModel() };
+      return ok({ model: cm.getDefaultModel() });
     } catch (error: any) {
       console.error("Error getting default model:", error);
-      return { model: 'gemini-3.1-flash-lite-preview' };
+      return fail('DEFAULT_MODEL_READ_FAILED', error, 'Failed to get default model');
     }
   });
 
   // --- Model Selector Window IPC ---
 
-  safeHandle("show-model-selector", (_, coords: { x: number; y: number }) => {
+  safeHandleValidated("show-model-selector", (args) => [parseIpcInput(ipcSchemas.modelSelectorCoords, args[0], 'show-model-selector')] as const, (_, coords) => {
     appState.modelSelectorWindowHelper.showWindow(coords.x, coords.y);
   });
 
   safeHandle("hide-model-selector", () => {
     appState.modelSelectorWindowHelper.hideWindow();
+    return ok(null);
   });
 
-  safeHandle("toggle-model-selector", (_, coords: { x: number; y: number }) => {
+  safeHandleValidated("toggle-model-selector", (args) => [parseIpcInput(ipcSchemas.modelSelectorCoords, args[0], 'toggle-model-selector')] as const, (_, coords) => {
     appState.modelSelectorWindowHelper.toggleWindow(coords.x, coords.y);
   });
 
@@ -1325,202 +1179,15 @@ export function initializeIpcHandlers(appState: AppState): void {
 
   // Native Audio Service Handlers
   safeHandle("native-audio-status", async () => {
-    return appState.getNativeAudioStatus();
-  });
-
-  safeHandle("get-input-devices", async () => {
-    return AudioDevices.getInputDevices();
-  });
-
-  safeHandle("get-output-devices", async () => {
-    return AudioDevices.getOutputDevices();
-  });
-
-  safeHandle("start-audio-test", async (event, deviceId?: string) => {
-    appState.startAudioTest(deviceId);
-    return { success: true };
-  });
-
-  safeHandle("stop-audio-test", async () => {
-    appState.stopAudioTest();
-    return { success: true };
-  });
-
-  safeHandle("set-recognition-language", async (_, key: string) => {
-    appState.setRecognitionLanguage(key);
-    return { success: true };
-  });
-
-  // ==========================================
-  // Meeting Lifecycle Handlers
-  // ==========================================
-
-  safeHandle("start-meeting", async (event, metadata?: any) => {
     try {
-      await appState.startMeeting(metadata);
-      return { success: true };
-    } catch (error: any) {
-      console.error("Error starting meeting:", error);
-      return { success: false, error: error.message };
+      return ok(appState.getNativeAudioStatus());
+    } catch (error) {
+      return fail('NATIVE_AUDIO_STATUS_FAILED', error, 'Failed to get native audio status');
     }
   });
+  registerMeetingHandlers({ appState, safeHandle, safeHandleValidated });
 
-  safeHandle("end-meeting", async () => {
-    try {
-      await appState.endMeeting();
-      return { success: true };
-    } catch (error: any) {
-      console.error("Error ending meeting:", error);
-      return { success: false, error: error.message };
-    }
-  });
-
-  safeHandle("get-recent-meetings", async () => {
-    // Fetch from SQLite (limit 50)
-    return DatabaseManager.getInstance().getRecentMeetings(50);
-  });
-
-  safeHandle("get-meeting-details", async (event, id) => {
-    // Helper to fetch full details
-    return DatabaseManager.getInstance().getMeetingDetails(id);
-  });
-
-  safeHandle("update-meeting-title", async (_, { id, title }: { id: string; title: string }) => {
-    return DatabaseManager.getInstance().updateMeetingTitle(id, title);
-  });
-
-  safeHandle("update-meeting-summary", async (_, { id, updates }: { id: string; updates: any }) => {
-    return DatabaseManager.getInstance().updateMeetingSummary(id, updates);
-  });
-
-  safeHandle("seed-demo", async () => {
-    DatabaseManager.getInstance().seedDemoMeeting();
-
-    // Trigger RAG processing for the new demo meeting
-    const ragManager = appState.getRAGManager();
-    if (ragManager && ragManager.isReady()) {
-      ragManager.reprocessMeeting('demo-meeting').catch(console.error);
-    }
-
-    return { success: true };
-  });
-
-  safeHandle("flush-database", async () => {
-    const result = DatabaseManager.getInstance().clearAllData();
-    return { success: result };
-  });
-
-  safeHandle("open-external", async (event, url: string) => {
-    try {
-      const parsed = new URL(url);
-      if (['http:', 'https:', 'mailto:'].includes(parsed.protocol)) {
-        await shell.openExternal(url);
-      } else {
-        console.warn(`[IPC] Blocked potentially unsafe open-external: ${url}`);
-      }
-    } catch {
-      console.warn(`[IPC] Invalid URL in open-external: ${url}`);
-    }
-  });
-
-  // ==========================================
-  // Intelligence Mode Handlers
-  // ==========================================
-
-  // MODE 1: Assist (Passive observation)
-  safeHandle("generate-assist", async () => {
-    try {
-      const intelligenceManager = appState.getIntelligenceManager();
-      const insight = await intelligenceManager.runAssistMode();
-      return { insight };
-    } catch (error: any) {
-      throw error;
-    }
-  });
-
-  // MODE 2: What Should I Say (Primary auto-answer)
-  safeHandle("generate-what-to-say", async (_, question?: string, imagePaths?: string[]) => {
-    try {
-      const intelligenceManager = appState.getIntelligenceManager();
-      // Question and imagePaths are now optional - IntelligenceManager infers from transcript
-      const answer = await intelligenceManager.runWhatShouldISay(question, 0.8, imagePaths);
-      return { answer, question: question || 'inferred from context' };
-    } catch (error: any) {
-      // Return graceful fallback instead of throwing
-      return {
-        question: question || 'unknown'
-      };
-    }
-  });
-
-  // MODE 3: Follow-Up (Refinement)
-  safeHandle("generate-follow-up", async (_, intent: string, userRequest?: string) => {
-    try {
-      const intelligenceManager = appState.getIntelligenceManager();
-      const refined = await intelligenceManager.runFollowUp(intent, userRequest);
-      return { refined, intent };
-    } catch (error: any) {
-      throw error;
-    }
-  });
-
-  // MODE 4: Recap (Summary)
-  safeHandle("generate-recap", async () => {
-    try {
-      const intelligenceManager = appState.getIntelligenceManager();
-      const summary = await intelligenceManager.runRecap();
-      return { summary };
-    } catch (error: any) {
-      throw error;
-    }
-  });
-
-  // MODE 6: Follow-Up Questions
-  safeHandle("generate-follow-up-questions", async () => {
-    try {
-      const intelligenceManager = appState.getIntelligenceManager();
-      const questions = await intelligenceManager.runFollowUpQuestions();
-      return { questions };
-    } catch (error: any) {
-      throw error;
-    }
-  });
-
-  // MODE 5: Manual Answer (Fallback)
-  safeHandle("submit-manual-question", async (_, question: string) => {
-    try {
-      const intelligenceManager = appState.getIntelligenceManager();
-      const answer = await intelligenceManager.runManualAnswer(question);
-      return { answer, question };
-    } catch (error: any) {
-      throw error;
-    }
-  });
-
-  // Get current intelligence context
-  safeHandle("get-intelligence-context", async () => {
-    try {
-      const intelligenceManager = appState.getIntelligenceManager();
-      return {
-        context: intelligenceManager.getFormattedContext(),
-        lastAssistantMessage: intelligenceManager.getLastAssistantMessage(),
-        activeMode: intelligenceManager.getActiveMode()
-      };
-    } catch (error: any) {
-      throw error;
-    }
-  });
-
-  // Reset intelligence state
-  safeHandle("reset-intelligence", async () => {
-    try {
-      const intelligenceManager = appState.getIntelligenceManager();
-      intelligenceManager.reset();
-      return { success: true };
-    } catch (error: any) {
-      return { success: false, error: error.message };
-    }
-  });
+  
 
 
   // Service Account Selection
@@ -1532,7 +1199,7 @@ export function initializeIpcHandlers(appState: AppState): void {
       });
 
       if (result.canceled || result.filePaths.length === 0) {
-        return { success: false, cancelled: true };
+        return ok({ cancelled: true });
       }
 
       const filePath = result.filePaths[0];
@@ -1544,10 +1211,10 @@ export function initializeIpcHandlers(appState: AppState): void {
       const { CredentialsManager } = require('./services/CredentialsManager');
       CredentialsManager.getInstance().setGoogleServiceAccountPath(filePath);
 
-      return { success: true, path: filePath };
+      return ok({ path: filePath });
     } catch (error: any) {
       console.error("Error selecting service account:", error);
-      return { success: false, error: error.message };
+      return fail('SERVICE_ACCOUNT_SELECTION_FAILED', error, 'Failed to select service account');
     }
   });
 
@@ -1556,549 +1223,33 @@ export function initializeIpcHandlers(appState: AppState): void {
   // ==========================================
 
   safeHandle("theme:get-mode", () => {
-    const tm = appState.getThemeManager();
-    return {
-      mode: tm.getMode(),
-      resolved: tm.getResolvedTheme()
-    };
+    try {
+      const tm = appState.getThemeManager();
+      return ok({
+        mode: tm.getMode(),
+        resolved: tm.getResolvedTheme()
+      });
+    } catch (error) {
+      return fail('THEME_MODE_READ_FAILED', error, 'Failed to get theme mode');
+    }
   });
 
-  safeHandle("theme:set-mode", (_, mode: 'system' | 'light' | 'dark') => {
+  safeHandleValidated("theme:set-mode", (args) => [parseIpcInput(ipcSchemas.themeMode, args[0], 'theme:set-mode')] as const, (_, mode) => {
     appState.getThemeManager().setMode(mode);
     return { success: true };
   });
 
-  // ==========================================
-  // Calendar Integration Handlers
-  // ==========================================
+  registerCalendarHandlers({ appState, safeHandle });
 
-  safeHandle("calendar-connect", async () => {
-    try {
-      const { CalendarManager } = require('./services/CalendarManager');
-      await CalendarManager.getInstance().startAuthFlow();
-      return { success: true };
-    } catch (error: any) {
-      console.error("Calendar auth error:", error);
-      return { success: false, error: error.message };
-    }
-  });
+  registerRagHandlers({ appState, safeHandle, safeHandleValidated });
 
-  safeHandle("calendar-disconnect", async () => {
-    const { CalendarManager } = require('./services/CalendarManager');
-    await CalendarManager.getInstance().disconnect();
-    return { success: true };
-  });
-
-  safeHandle("get-calendar-status", async () => {
-    const { CalendarManager } = require('./services/CalendarManager');
-    return CalendarManager.getInstance().getConnectionStatus();
-  });
-
-  safeHandle("get-upcoming-events", async () => {
-    const { CalendarManager } = require('./services/CalendarManager');
-    return CalendarManager.getInstance().getUpcomingEvents();
-  });
-
-  safeHandle("calendar-refresh", async () => {
-    const { CalendarManager } = require('./services/CalendarManager');
-    await CalendarManager.getInstance().refreshState();
-    return { success: true };
-  });
-
-  // ==========================================
-  // Follow-up Email Handlers
-  // ==========================================
-
-  safeHandle("generate-followup-email", async (_, input: any) => {
-    try {
-      const { FOLLOWUP_EMAIL_PROMPT, GROQ_FOLLOWUP_EMAIL_PROMPT } = require('./llm/prompts');
-      const { buildFollowUpEmailPromptInput } = require('./utils/emailUtils');
-
-      const llmHelper = appState.processingHelper.getLLMHelper();
-
-      // Build the context string from input
-      const contextString = buildFollowUpEmailPromptInput(input);
-
-      // Build prompts
-      const geminiPrompt = `${FOLLOWUP_EMAIL_PROMPT}\n\nMEETING DETAILS:\n${contextString}`;
-      const groqPrompt = `${GROQ_FOLLOWUP_EMAIL_PROMPT}\n\nMEETING DETAILS:\n${contextString}`;
-
-      // Use chatWithGemini with alternateGroqMessage for fallback
-      const emailBody = await llmHelper.chatWithGemini(geminiPrompt, undefined, undefined, true, groqPrompt);
-
-      return emailBody;
-    } catch (error: any) {
-      console.error("Error generating follow-up email:", error);
-      throw error;
-    }
-  });
-
-  safeHandle("extract-emails-from-transcript", async (_, transcript: Array<{ text: string }>) => {
-    try {
-      const { extractEmailsFromTranscript } = require('./utils/emailUtils');
-      return extractEmailsFromTranscript(transcript);
-    } catch (error: any) {
-      console.error("Error extracting emails:", error);
-      return [];
-    }
-  });
-
-  safeHandle("get-calendar-attendees", async (_, eventId: string) => {
-    try {
-      const { CalendarManager } = require('./services/CalendarManager');
-      const cm = CalendarManager.getInstance();
-
-      // Try to get attendees from the event
-      const events = await cm.getUpcomingEvents();
-      const event = events?.find((e: any) => e.id === eventId);
-
-      if (event && event.attendees) {
-        return event.attendees.map((a: any) => ({
-          email: a.email,
-          name: a.displayName || a.email?.split('@')[0] || ''
-        })).filter((a: any) => a.email);
-      }
-
-      return [];
-    } catch (error: any) {
-      console.error("Error getting calendar attendees:", error);
-      return [];
-    }
-  });
-
-  safeHandle("open-mailto", async (_, { to, subject, body }: { to: string; subject: string; body: string }) => {
-    try {
-      const { buildMailtoLink } = require('./utils/emailUtils');
-      const mailtoUrl = buildMailtoLink(to, subject, body);
-      await shell.openExternal(mailtoUrl);
-      return { success: true };
-    } catch (error: any) {
-      console.error("Error opening mailto:", error);
-      return { success: false, error: error.message };
-    }
-  });
-
-  // ==========================================
-  // RAG (Retrieval-Augmented Generation) Handlers
-  // ==========================================
-
-  // Store active query abort controllers for cancellation
-  const activeRAGQueries = new Map<string, AbortController>();
-
-  // Query meeting with RAG (meeting-scoped)
-  safeHandle("rag:query-meeting", async (event, { meetingId, query }: { meetingId: string; query: string }) => {
-    const ragManager = appState.getRAGManager();
-
-    if (!ragManager || !ragManager.isReady()) {
-      // Fallback to regular chat if RAG not available
-      console.log("[RAG] Not ready, falling back to regular chat");
-      return { fallback: true };
-    }
-
-    // For completed meetings, check if post-meeting RAG is processed.
-    // For live meetings with JIT indexing, let RAGManager.queryMeeting() decide.
-    if (!ragManager.isMeetingProcessed(meetingId) && !ragManager.isLiveIndexingActive(meetingId)) {
-      console.log(`[RAG] Meeting ${meetingId} not processed and no JIT indexing, falling back to regular chat`);
-      return { fallback: true };
-    }
-
-    const abortController = new AbortController();
-    const queryKey = `meeting-${meetingId}`;
-    activeRAGQueries.set(queryKey, abortController);
-
-    try {
-      const stream = ragManager.queryMeeting(meetingId, query, abortController.signal);
-
-      for await (const chunk of stream) {
-        if (abortController.signal.aborted) break;
-        event.sender.send("rag:stream-chunk", { meetingId, chunk });
-      }
-
-      event.sender.send("rag:stream-complete", { meetingId });
-      return { success: true };
-
-    } catch (error: any) {
-      if (error.name !== 'AbortError') {
-        const msg = error.message || "";
-        // If specific RAG failures, return fallback to use transcript window
-        if (msg.includes('NO_RELEVANT_CONTEXT') || msg.includes('NO_MEETING_EMBEDDINGS')) {
-          console.log(`[RAG] Query failed with '${msg}', falling back to regular chat`);
-          return { fallback: true };
-        }
-
-        console.error("[RAG] Query error:", error);
-        event.sender.send("rag:stream-error", { meetingId, error: msg });
-      }
-      return { success: false, error: error.message };
-    } finally {
-      activeRAGQueries.delete(queryKey);
-    }
-  });
-
-  // Query live meeting with JIT RAG
-  safeHandle("rag:query-live", async (event, { query }: { query: string }) => {
-    const ragManager = appState.getRAGManager();
-
-    if (!ragManager || !ragManager.isReady()) {
-      return { fallback: true };
-    }
-
-    // Check if JIT indexing is active and has chunks
-    if (!ragManager.isLiveIndexingActive('live-meeting-current')) {
-      return { fallback: true };
-    }
-
-    const abortController = new AbortController();
-    const queryKey = `live-${Date.now()}`;
-    activeRAGQueries.set(queryKey, abortController);
-
-    try {
-      const stream = ragManager.queryMeeting('live-meeting-current', query, abortController.signal);
-
-      for await (const chunk of stream) {
-        if (abortController.signal.aborted) break;
-        event.sender.send("rag:stream-chunk", { live: true, chunk });
-      }
-
-      event.sender.send("rag:stream-complete", { live: true });
-      return { success: true };
-
-    } catch (error: any) {
-      if (error.name !== 'AbortError') {
-        const msg = error.message || "";
-        // If JIT RAG failed (no embeddings yet, no relevant context), fallback to regular chat
-        if (msg.includes('NO_RELEVANT_CONTEXT') || msg.includes('NO_MEETING_EMBEDDINGS')) {
-          console.log(`[RAG] JIT query failed with '${msg}', falling back to regular live chat`);
-          return { fallback: true };
-        }
-        console.error("[RAG] Live query error:", error);
-        event.sender.send("rag:stream-error", { live: true, error: msg });
-      }
-      return { success: false, error: error.message };
-    } finally {
-      activeRAGQueries.delete(queryKey);
-    }
-  });
-
-  // Query global (cross-meeting search)
-  safeHandle("rag:query-global", async (event, { query }: { query: string }) => {
-    const ragManager = appState.getRAGManager();
-
-    if (!ragManager || !ragManager.isReady()) {
-      return { fallback: true };
-    }
-
-    const abortController = new AbortController();
-    const queryKey = `global-${Date.now()}`;
-    activeRAGQueries.set(queryKey, abortController);
-
-    try {
-      const stream = ragManager.queryGlobal(query, abortController.signal);
-
-      for await (const chunk of stream) {
-        if (abortController.signal.aborted) break;
-        event.sender.send("rag:stream-chunk", { global: true, chunk });
-      }
-
-      event.sender.send("rag:stream-complete", { global: true });
-      return { success: true };
-
-    } catch (error: any) {
-      if (error.name !== 'AbortError') {
-        event.sender.send("rag:stream-error", { global: true, error: error.message });
-      }
-      return { success: false, error: error.message };
-    } finally {
-      activeRAGQueries.delete(queryKey);
-    }
-  });
-
-  // Cancel active RAG query
-  safeHandle("rag:cancel-query", async (_, { meetingId, global }: { meetingId?: string; global?: boolean }) => {
-    const queryKey = global ? 'global' : `meeting-${meetingId}`;
-
-    // Cancel any matching key
-    for (const [key, controller] of activeRAGQueries) {
-      if (key.startsWith(queryKey) || (global && key.startsWith('global'))) {
-        controller.abort();
-        activeRAGQueries.delete(key);
-      }
-    }
-
-    return { success: true };
-  });
-
-  // Check if meeting has RAG embeddings
-  safeHandle('rag:is-meeting-processed', async (_, meetingId: string) => {
-    try {
-      const ragManager = appState.getRAGManager();
-      if (!ragManager) throw new Error('RAGManager not initialized');
-      return ragManager.isMeetingProcessed(meetingId);
-    } catch (error: any) {
-      console.error('[IPC rag:is-meeting-processed] Error:', error);
-      return false;
-    }
-  });
-
-  safeHandle('rag:reindex-incompatible-meetings', async () => {
-    try {
-      const ragManager = appState.getRAGManager();
-      if (!ragManager) throw new Error('RAGManager not initialized');
-      await ragManager.reindexIncompatibleMeetings();
-      return { success: true };
-    } catch (error: any) {
-      console.error('[IPC rag:reindex-incompatible-meetings] Error:', error);
-      return { success: false, error: error.message };
-    }
-  });
-
-  // Get RAG queue status
-  safeHandle("rag:get-queue-status", async () => {
-    const ragManager = appState.getRAGManager();
-    if (!ragManager) return { pending: 0, processing: 0, completed: 0, failed: 0 };
-    return ragManager.getQueueStatus();
-  });
-
-  // Retry pending embeddings
-  safeHandle("rag:retry-embeddings", async () => {
-    const ragManager = appState.getRAGManager();
-    if (!ragManager) return { success: false };
-    await ragManager.retryPendingEmbeddings();
-    return { success: true };
-  });
-
-  // ==========================================
-  // Profile Engine IPC Handlers
-  // ==========================================
-
-  safeHandle("profile:upload-resume", async (_, filePath: string) => {
-    try {
-      console.log(`[IPC] profile:upload-resume called with: ${filePath}`);
-      const orchestrator = appState.getKnowledgeOrchestrator();
-      if (!orchestrator) {
-        return { success: false, error: 'Knowledge engine not initialized. Please ensure API keys are configured.' };
-      }
-      const { DocType } = require('../premium/electron/knowledge/types');
-      const result = await orchestrator.ingestDocument(filePath, DocType.RESUME);
-      return result;
-    } catch (error: any) {
-      console.error('[IPC] profile:upload-resume error:', error);
-      return { success: false, error: error.message };
-    }
-  });
-
-  safeHandle("profile:get-status", async () => {
-    try {
-      const orchestrator = appState.getKnowledgeOrchestrator();
-      if (!orchestrator) {
-        return { hasProfile: false, profileMode: false };
-      }
-      // Map new KnowledgeStatus back to legacy UI shape temporarily
-      const status = orchestrator.getStatus();
-      return {
-        hasProfile: status.hasResume,
-        profileMode: status.activeMode,
-        name: status.resumeSummary?.name,
-        role: status.resumeSummary?.role,
-        totalExperienceYears: status.resumeSummary?.totalExperienceYears
-      };
-    } catch (error: any) {
-      return { hasProfile: false, profileMode: false };
-    }
-  });
-
-  safeHandle("profile:set-mode", async (_, enabled: boolean) => {
-    try {
-      const orchestrator = appState.getKnowledgeOrchestrator();
-      if (!orchestrator) {
-        return { success: false, error: 'Knowledge engine not initialized' };
-      }
-      orchestrator.setKnowledgeMode(enabled);
-      return { success: true };
-    } catch (error: any) {
-      return { success: false, error: error.message };
-    }
-  });
-
-  safeHandle("profile:delete", async () => {
-    try {
-      const orchestrator = appState.getKnowledgeOrchestrator();
-      if (!orchestrator) {
-        return { success: false, error: 'Knowledge engine not initialized' };
-      }
-      const { DocType } = require('../premium/electron/knowledge/types');
-      orchestrator.deleteDocumentsByType(DocType.RESUME);
-      return { success: true };
-    } catch (error: any) {
-      return { success: false, error: error.message };
-    }
-  });
-
-  safeHandle("profile:get-profile", async () => {
-    try {
-      const orchestrator = appState.getKnowledgeOrchestrator();
-      if (!orchestrator) return null;
-      return orchestrator.getProfileData();
-    } catch (error: any) {
-      return null;
-    }
-  });
-
-  safeHandle("profile:select-file", async () => {
-    try {
-      const result: any = await dialog.showOpenDialog({
-        properties: ['openFile'],
-        filters: [
-          { name: 'Resume Files', extensions: ['pdf', 'docx', 'txt'] }
-        ]
-      });
-
-      if (result.canceled || result.filePaths.length === 0) {
-        return { cancelled: true };
-      }
-
-      return { success: true, filePath: result.filePaths[0] };
-    } catch (error: any) {
-      return { success: false, error: error.message };
-    }
-  });
-
-  // ==========================================
-  // JD & Research IPC Handlers
-  // ==========================================
-
-  safeHandle("profile:upload-jd", async (_, filePath: string) => {
-    try {
-      console.log(`[IPC] profile:upload-jd called with: ${filePath}`);
-      const orchestrator = appState.getKnowledgeOrchestrator();
-      if (!orchestrator) {
-        return { success: false, error: 'Knowledge engine not initialized. Please ensure API keys are configured.' };
-      }
-      const { DocType } = require('../premium/electron/knowledge/types');
-      const result = await orchestrator.ingestDocument(filePath, DocType.JD);
-      return result;
-    } catch (error: any) {
-      console.error('[IPC] profile:upload-jd error:', error);
-      return { success: false, error: error.message };
-    }
-  });
-
-  safeHandle("profile:delete-jd", async () => {
-    try {
-      const orchestrator = appState.getKnowledgeOrchestrator();
-      if (!orchestrator) {
-        return { success: false, error: 'Knowledge engine not initialized' };
-      }
-      const { DocType } = require('../premium/electron/knowledge/types');
-      orchestrator.deleteDocumentsByType(DocType.JD);
-      return { success: true };
-    } catch (error: any) {
-      return { success: false, error: error.message };
-    }
-  });
-
-  safeHandle("profile:research-company", async (_, companyName: string) => {
-    try {
-      const orchestrator = appState.getKnowledgeOrchestrator();
-      if (!orchestrator) {
-        return { success: false, error: 'Knowledge engine not initialized' };
-      }
-      const engine = orchestrator.getCompanyResearchEngine();
-
-      // Wire Google Custom Search provider if keys are configured
-      const { CredentialsManager } = require('./services/CredentialsManager');
-      const cm = CredentialsManager.getInstance();
-      const googleSearchKey = cm.getGoogleSearchApiKey();
-      const googleSearchCseId = cm.getGoogleSearchCseId();
-      if (googleSearchKey && googleSearchCseId) {
-        const { GoogleCustomSearchProvider } = require('../premium/electron/knowledge/GoogleCustomSearchProvider');
-        engine.setSearchProvider(new GoogleCustomSearchProvider(googleSearchKey, googleSearchCseId));
-      }
-
-      // Build full JD context so the dossier is tailored to the exact role
-      const profileData = orchestrator.getProfileData();
-      const activeJD = profileData?.activeJD;
-      const jdCtx = activeJD ? {
-        title: activeJD.title,
-        location: activeJD.location,
-        level: activeJD.level,
-        technologies: activeJD.technologies,
-        requirements: activeJD.requirements,
-        keywords: activeJD.keywords,
-        compensation_hint: activeJD.compensation_hint,
-        min_years_experience: activeJD.min_years_experience,
-      } : {};
-      const dossier = await engine.researchCompany(companyName, jdCtx, true);
-      return { success: true, dossier };
-    } catch (error: any) {
-      console.error('[IPC] profile:research-company error:', error);
-      return { success: false, error: error.message };
-    }
-  });
-
-  safeHandle("profile:generate-negotiation", async () => {
-    try {
-      const orchestrator = appState.getKnowledgeOrchestrator();
-      if (!orchestrator) {
-        return { success: false, error: 'Knowledge engine not initialized' };
-      }
-      const profileData = orchestrator.getProfileData();
-      if (!profileData) {
-        return { success: false, error: 'No resume uploaded' };
-      }
-
-      // Get the active documents and dossier
-      const status = orchestrator.getStatus();
-      if (!status.hasResume) {
-        return { success: false, error: 'No resume loaded' };
-      }
-
-      // Use the research engine to get cached dossier if a JD is active
-      let dossier = null;
-      if (profileData.activeJD?.company) {
-        const engine = orchestrator.getCompanyResearchEngine();
-        dossier = engine.getCachedDossier(profileData.activeJD.company);
-      }
-
-      const { generateNegotiationScript } = require('../premium/electron/knowledge/NegotiationEngine');
-      // We need access to internal docs - use the orchestrator's methods
-      // For now, return the dossier data so the frontend can display it
-      return { success: true, dossier, profileData };
-    } catch (error: any) {
-      console.error('[IPC] profile:generate-negotiation error:', error);
-      return { success: false, error: error.message };
-    }
-  });
-
-  // ==========================================
-  // Google Search API Credentials
-  // ==========================================
-
-  safeHandle("set-google-search-api-key", async (_, apiKey: string) => {
-    try {
-      const { CredentialsManager } = require('./services/CredentialsManager');
-      CredentialsManager.getInstance().setGoogleSearchApiKey(apiKey);
-      return { success: true };
-    } catch (error: any) {
-      return { success: false, error: error.message };
-    }
-  });
-
-  safeHandle("set-google-search-cse-id", async (_, cseId: string) => {
-    try {
-      const { CredentialsManager } = require('./services/CredentialsManager');
-      CredentialsManager.getInstance().setGoogleSearchCseId(cseId);
-      return { success: true };
-    } catch (error: any) {
-      return { success: false, error: error.message };
-    }
-  });
+  
 
   // ==========================================
   // Overlay Opacity (Stealth Mode)
   // ==========================================
 
-  safeHandle("set-overlay-opacity", async (_, opacity: number) => {
+  safeHandleValidated("set-overlay-opacity", (args) => [parseIpcInput(ipcSchemas.overlayOpacity, args[0], 'set-overlay-opacity')] as const, async (_, opacity) => {
     // Clamp to valid range
     const clamped = Math.min(1.0, Math.max(0.15, opacity));
     // Broadcast to all renderer windows so the overlay picks it up in real-time
@@ -2107,6 +1258,6 @@ export function initializeIpcHandlers(appState: AppState): void {
         win.webContents.send('overlay-opacity-changed', clamped);
       }
     });
-    return;
+    return ok({ opacity: clamped });
   });
 }

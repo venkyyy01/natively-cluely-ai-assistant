@@ -131,6 +131,11 @@ export class SonioxStreamingSTT extends EventEmitter {
         console.log('[SonioxStreaming] Stopped');
     }
 
+    public destroy(): void {
+        this.stop();
+        this.removeAllListeners();
+    }
+
     // =========================================================================
     // Audio Data
     // =========================================================================

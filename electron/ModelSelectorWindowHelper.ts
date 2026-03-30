@@ -1,5 +1,6 @@
 import { BrowserWindow, screen, app } from "electron"
 import path from "node:path"
+import { StealthManager } from "./stealth/StealthManager"
 
 const isDev = process.env.NODE_ENV === "development"
 
@@ -13,12 +14,24 @@ export class ModelSelectorWindowHelper {
     private window: BrowserWindow | null = null
     private contentProtection: boolean = false
     private opacityTimeout: NodeJS.Timeout | null = null;
+    private readonly stealthManager: StealthManager;
 
     // Store offsets relative to main window if needed, but absolute positioning is simpler for dropdowns
     private lastBlurTime: number = 0
     private ignoreBlur: boolean = false;
 
-    constructor() { }
+    constructor(stealthManager: StealthManager) {
+        this.stealthManager = stealthManager;
+    }
+
+    private applyStealth(enable: boolean): void {
+        if (!this.window || this.window.isDestroyed()) return;
+
+        this.stealthManager.applyToWindow(this.window, enable, {
+            role: 'auxiliary',
+            hideFromSwitcher: true,
+        });
+    }
 
     public setIgnoreBlur(ignore: boolean): void {
         this.ignoreBlur = ignore;
@@ -47,7 +60,7 @@ export class ModelSelectorWindowHelper {
         }
 
         // Set parent and align window settings
-        const mainWin = this.windowHelper?.getMainWindow();
+        const mainWin = this.windowHelper?.getVisibleMainWindow();
         const isOverlay = mainWin === this.windowHelper?.getOverlayWindow();
 
         if (mainWin && !mainWin.isDestroyed()) {
@@ -69,18 +82,20 @@ export class ModelSelectorWindowHelper {
         if (process.platform === 'win32' && this.contentProtection) {
             this.window.setOpacity(0);
             this.window.show();
-            this.window.setContentProtection(true);
+            this.applyStealth(true);
             
             if (this.opacityTimeout) clearTimeout(this.opacityTimeout);
             this.opacityTimeout = setTimeout(() => {
                 if (this.window && !this.window.isDestroyed()) {
                     this.window.setOpacity(1);
+                    this.stealthManager.reapplyAfterShow(this.window);
                     this.window.focus();
                 }
             }, 60);
         } else {
-            this.window.setContentProtection(this.contentProtection);
+            this.applyStealth(this.contentProtection);
             this.window.show();
+            this.stealthManager.reapplyAfterShow(this.window);
             this.window.focus();
         }
     }
@@ -91,7 +106,7 @@ export class ModelSelectorWindowHelper {
             this.window.hide()
 
             // Restore focus
-            const mainWin = this.windowHelper?.getMainWindow();
+            const mainWin = this.windowHelper?.getVisibleMainWindow();
             if (mainWin && !mainWin.isDestroyed() && mainWin.isVisible()) {
                 mainWin.focus();
             }
@@ -154,7 +169,7 @@ export class ModelSelectorWindowHelper {
 
         // Apply content protection for Undetectable Mode
         console.log(`[ModelSelectorWindowHelper] Creating window with Content Protection: ${this.contentProtection}`);
-        this.window.setContentProtection(this.contentProtection)
+        this.applyStealth(this.contentProtection)
 
         // Load with query param for routing
         const url = isDev
@@ -210,8 +225,6 @@ export class ModelSelectorWindowHelper {
     public setContentProtection(enable: boolean): void {
         console.log(`[ModelSelectorWindowHelper] Setting content protection to: ${enable}`);
         this.contentProtection = enable;
-        if (this.window && !this.window.isDestroyed()) {
-            this.window.setContentProtection(enable);
-        }
+        this.applyStealth(enable);
     }
 }

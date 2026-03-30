@@ -7,6 +7,12 @@
 export declare function getHardwareId(): string
 /** Open build compatibility shim - always resolves successfully. */
 export declare function verifyGumroadKey(licenseKey: string): Promise<unknown>
+export declare function applyMacosWindowStealth(windowNumber: number): void
+export declare function removeMacosWindowStealth(windowNumber: number): void
+export declare function applyMacosPrivateWindowStealth(windowNumber: number): void
+export declare function removeMacosPrivateWindowStealth(windowNumber: number): void
+export declare function applyWindowsWindowStealth(hwndBuffer: Buffer): void
+export declare function removeWindowsWindowStealth(hwndBuffer: Buffer): void
 export interface AudioDeviceInfo {
   id: string
   name: string

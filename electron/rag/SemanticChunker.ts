@@ -23,6 +23,14 @@ const MIN_TOKENS = 100;
 // Sliding window overlap: keep last N segments (~50 tokens) from previous chunk
 const OVERLAP_TARGET_TOKENS = 50;
 
+function endsSentence(text: string): boolean {
+    return /[.!?]["')\]]?$/.test(text.trim());
+}
+
+function startsTopicShift(text: string): boolean {
+    return /^(anyway|now|next|switching gears|moving on|on another note|separately|however|but|so)\b/i.test(text.trim());
+}
+
 /**
  * Build a chunk from accumulated segments
  */
@@ -97,13 +105,19 @@ export function chunkTranscript(
 
     for (const seg of segments) {
         const segTokens = estimateTokens(seg.text);
+        const lastSegment = currentChunk[currentChunk.length - 1];
+        const semanticBoundary =
+            currentChunk.length > 0 &&
+            endsSentence(lastSegment.text) &&
+            startsTopicShift(seg.text);
 
         // Decide whether to start a new chunk
         const shouldSplit =
             // Speaker changed and we have content
             (currentChunk.length > 0 && seg.speaker !== currentChunk[0].speaker) ||
             // Would exceed max tokens and we have minimum content
-            (currentTokens + segTokens > MAX_TOKENS && currentTokens >= MIN_TOKENS);
+            (currentTokens + segTokens > MAX_TOKENS && currentTokens >= MIN_TOKENS) ||
+            semanticBoundary;
 
         if (shouldSplit && currentChunk.length > 0) {
             chunks.push(buildChunk(meetingId, chunkIndex++, currentChunk));

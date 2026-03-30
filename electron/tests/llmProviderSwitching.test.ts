@@ -1,0 +1,101 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import Module from 'node:module';
+
+async function loadLLMHelper() {
+  const originalRequire = Module.prototype.require;
+  Module.prototype.require = function patchedRequire(this: unknown, id: string) {
+    if (id === 'electron') {
+      return {
+        app: {
+          getPath: () => '/tmp',
+          isPackaged: false,
+        },
+      };
+    }
+    return originalRequire.call(this, id);
+  };
+
+  try {
+    return (await import('../LLMHelper')).LLMHelper;
+  } finally {
+    Module.prototype.require = originalRequire;
+  }
+}
+
+test('switching from cURL provider back to cloud model clears stale cURL routing state', async () => {
+  const LLMHelper = await loadLLMHelper();
+  const helper = new LLMHelper() as any;
+
+  helper.setModel('curl-provider', [{ id: 'curl-provider', name: 'cURL', curlCommand: 'curl https://example.com' }]);
+  assert.equal(helper.getProviderCapabilityClass(), 'non_streaming');
+
+  helper.setModel('gemini', []);
+
+  assert.notEqual(helper.getProviderCapabilityClass(), 'non_streaming');
+  assert.notEqual(helper.getCurrentModel(), 'curl-provider');
+  helper.scrubKeys();
+});
+
+test('selected OpenAI model ids pass through unchanged to the outbound request', async () => {
+  const LLMHelper = await loadLLMHelper();
+  const helper = new LLMHelper() as any;
+  let seenModel = '';
+
+  helper.setModel('gpt-5.4-nano', []);
+  helper.openaiClient = {
+    chat: {
+      completions: {
+        create: async (payload: any) => {
+          seenModel = payload.model;
+          return { choices: [{ message: { content: 'ok' } }] };
+        },
+      },
+    },
+  };
+
+  const result = await helper.generateWithOpenai('hello');
+
+  assert.equal(result, 'ok');
+  assert.equal(seenModel, 'gpt-5.4-nano');
+  helper.scrubKeys();
+});
+
+test('OpenAI model-not-found errors fall back to a safe discovered model', async () => {
+  const LLMHelper = await loadLLMHelper();
+  const helper = new LLMHelper() as any;
+  const seenModels: string[] = [];
+  const fallbackEvents: any[] = [];
+
+  helper.setModel('gpt-5.4-nano', []);
+  helper.resolveOpenAiFallbackModel = async () => 'gpt-5.4-mini';
+  helper.setModelFallbackHandler((event: any) => fallbackEvents.push(event));
+  helper.openaiClient = {
+    chat: {
+      completions: {
+        create: async (payload: any) => {
+          seenModels.push(payload.model);
+          if (payload.model === 'gpt-5.4-nano') {
+            const error: any = new Error('The model `gpt-5.4-nano` does not exist or you do not have access to it.');
+            error.status = 404;
+            throw error;
+          }
+          return { choices: [{ message: { content: 'fallback ok' } }] };
+        },
+      },
+    },
+  };
+
+  const result = await helper.generateWithOpenai('hello');
+
+  assert.equal(result, 'fallback ok');
+  assert.deepEqual(seenModels, ['gpt-5.4-nano', 'gpt-5.4-mini']);
+  assert.equal(helper.getCurrentModel(), 'gpt-5.4-mini');
+  assert.deepEqual(fallbackEvents, [{
+    provider: 'openai',
+    previousModel: 'gpt-5.4-nano',
+    fallbackModel: 'gpt-5.4-mini',
+    reason: 'model_not_found',
+  }]);
+  helper.scrubKeys();
+});

@@ -2,6 +2,8 @@
 import { BrowserWindow, screen, app } from "electron"
 import { AppState } from "./main"
 import path from "node:path"
+import { StealthManager } from "./stealth/StealthManager"
+import { StealthRuntime } from "./stealth/StealthRuntime"
 
 const isEnvDev = process.env.NODE_ENV === "development"
 const isPackaged = app.isPackaged
@@ -16,7 +18,11 @@ const startUrl = isDev
 
 export class WindowHelper {
   private launcherWindow: BrowserWindow | null = null
+  private launcherContentWindow: BrowserWindow | null = null
   private overlayWindow: BrowserWindow | null = null
+  private overlayContentWindow: BrowserWindow | null = null
+  private launcherRuntime: StealthRuntime | null = null
+  private overlayRuntime: StealthRuntime | null = null
   private isWindowVisible: boolean = false
   // Position/Size tracking for Launcher
   private launcherPosition: { x: number; y: number } | null = null
@@ -26,6 +32,7 @@ export class WindowHelper {
 
   private appState: AppState
   private contentProtection: boolean = false
+  private overlayClickthroughEnabled: boolean = false
   private opacityTimeout: NodeJS.Timeout | null = null
   private readonly overlayContentProtection: boolean = true
 
@@ -37,9 +44,11 @@ export class WindowHelper {
   private step: number = 20
   private currentX: number = 0
   private currentY: number = 0
+  private readonly stealthManager: StealthManager
 
-  constructor(appState: AppState) {
+  constructor(appState: AppState, stealthManager: StealthManager) {
     this.appState = appState
+    this.stealthManager = stealthManager
   }
 
   public setContentProtection(enable: boolean): void {
@@ -47,18 +56,28 @@ export class WindowHelper {
     this.applyContentProtection(enable)
   }
 
-  private applyContentProtection(enable: boolean): void {
-    if (this.launcherWindow && !this.launcherWindow.isDestroyed()) {
-      this.launcherWindow.setContentProtection(enable)
-    }
+  public setSkipTaskbar(enable: boolean): void {
+    this.launcherWindow?.setSkipTaskbar(enable);
+  }
 
-    if (this.overlayWindow && !this.overlayWindow.isDestroyed()) {
-      this.overlayWindow.setContentProtection(this.overlayContentProtection || enable)
-    }
+  private applyStealth(win: BrowserWindow, enable: boolean, role: 'primary' | 'auxiliary', hideFromSwitcher: boolean): void {
+    this.stealthManager.applyToWindow(win, enable, { role, hideFromSwitcher });
+  }
+
+  private applyContentProtection(enable: boolean): void {
+    const windows = [
+      { win: this.launcherWindow, auxiliary: false },
+      { win: this.overlayWindow, auxiliary: false },
+    ]
+    windows.forEach(({ win, auxiliary }) => {
+      if (win && !win.isDestroyed()) {
+        this.applyStealth(win, enable, auxiliary ? 'auxiliary' : 'primary', auxiliary);
+      }
+    });
   }
 
   public setWindowDimensions(width: number, height: number): void {
-    const activeWindow = this.getMainWindow(); // Gets currently focused/relevant window
+    const activeWindow = this.getVisibleMainWindow();
     if (!activeWindow || activeWindow.isDestroyed()) return
 
     const [currentX, currentY] = activeWindow.getPosition()
@@ -105,22 +124,21 @@ export class WindowHelper {
     this.overlayWindow.setPosition(newX, newY)
   }
 
-  public setOverlayBounds(bounds: { width: number; height: number; x?: number; y?: number }): void {
+  public setOverlayClickthrough(enabled: boolean): void {
+    this.overlayClickthroughEnabled = enabled
     if (!this.overlayWindow || this.overlayWindow.isDestroyed()) return
 
-    const primaryDisplay = screen.getPrimaryDisplay()
-    const workArea = primaryDisplay.workAreaSize
-    const currentBounds = this.overlayWindow.getBounds()
-    const newWidth = Math.min(Math.max(bounds.width, 300), Math.floor(workArea.width * 0.9))
-    const newHeight = Math.min(Math.max(bounds.height, 1), Math.floor(workArea.height * 0.9))
-    const rawX = bounds.x ?? currentBounds.x
-    const rawY = bounds.y ?? currentBounds.y
-    const maxX = workArea.width - newWidth
-    const maxY = workArea.height - newHeight
-    const newX = Math.min(Math.max(rawX, 0), maxX)
-    const newY = Math.min(Math.max(rawY, 0), maxY)
+    this.overlayWindow.setIgnoreMouseEvents(enabled, enabled ? { forward: true } : undefined)
+    this.overlayWindow.setFocusable(!enabled)
+    if (enabled) {
+      this.overlayWindow.blur()
+    }
+  }
 
-    this.overlayWindow.setBounds({ x: newX, y: newY, width: newWidth, height: newHeight })
+  public toggleOverlayClickthrough(): boolean {
+    const next = !this.overlayClickthroughEnabled
+    this.setOverlayClickthrough(next)
+    return next
   }
 
   public createWindow(): void {
@@ -139,7 +157,7 @@ export class WindowHelper {
     const x = Math.round(workArea.x + (workArea.width - width) / 2);
     // Ensure y is at least workArea.y (don't go offscreen top)
     const topMargin = Math.round(workArea.height * 0.05);
-    const y = Math.round(workArea.x + topMargin);
+    const y = Math.round(workArea.y + topMargin);
 
     // --- 1. Create Launcher Window ---
     const launcherSettings: Electron.BrowserWindowConstructorOptions = {
@@ -154,9 +172,10 @@ export class WindowHelper {
         contextIsolation: true,
         preload: path.join(__dirname, "preload.js"),
         scrollBounce: true,
-        webSecurity: !isDev, // DEBUG: Disable web security only in dev
+        webSecurity: true,
       },
-      show: false, // DEBUG: Force show -> Fixed white screen, now relies on ready-to-show
+      show: false,
+      skipTaskbar: this.contentProtection,
       titleBarStyle: 'hiddenInset',
       trafficLightPosition: { x: 14, y: 14 },
       vibrancy: 'under-window',
@@ -205,20 +224,21 @@ export class WindowHelper {
     console.log(`[WindowHelper] Start URL: ${startUrl}`);
 
     try {
-      this.launcherWindow = new BrowserWindow(launcherSettings)
-      console.log('[WindowHelper] BrowserWindow created successfully');
+      this.launcherRuntime = new StealthRuntime({
+        stealthManager: this.stealthManager,
+        startUrl: `${startUrl}?window=launcher`,
+      })
+      this.launcherWindow = this.launcherRuntime.createPrimaryStealthSurface(launcherSettings) as BrowserWindow
+      this.launcherContentWindow = this.launcherRuntime.getContentWindow()
+      console.log('[WindowHelper] StealthRuntime created successfully');
     } catch (err) {
       console.error('[WindowHelper] Failed to create BrowserWindow:', err);
       return;
     }
 
-    this.launcherWindow.setContentProtection(this.contentProtection)
+    this.launcherRuntime.applyStealth(this.contentProtection)
 
-    this.launcherWindow.loadURL(`${startUrl}?window=launcher`)
-      .then(() => console.log('[WindowHelper] loadURL success'))
-      .catch((e) => { console.error("[WindowHelper] Failed to load URL:", e) })
-
-    this.launcherWindow.webContents.on('did-fail-load', (event, errorCode, errorDescription) => {
+    this.launcherContentWindow?.webContents.on('did-fail-load', (_event, errorCode, errorDescription) => {
       console.error(`[WindowHelper] did-fail-load: ${errorCode} ${errorDescription}`);
     });
 
@@ -246,24 +266,30 @@ export class WindowHelper {
       focusable: true,
       resizable: true,
       movable: true,
-      skipTaskbar: true, // Don't show separately in dock/taskbar
+      skipTaskbar: false,
       hasShadow: false, // Prevent shadow from adding perceived size/artifacts
     }
 
-    this.overlayWindow = new BrowserWindow(overlaySettings)
-    this.overlayWindow.setContentProtection(this.overlayContentProtection || this.contentProtection)
+    try {
+      this.overlayRuntime = new StealthRuntime({
+        stealthManager: this.stealthManager,
+        startUrl: `${startUrl}?window=overlay`,
+      })
+      this.overlayWindow = this.overlayRuntime.createPrimaryStealthSurface(overlaySettings) as BrowserWindow
+      this.overlayContentWindow = this.overlayRuntime.getContentWindow()
+      console.log('[WindowHelper] StealthRuntime (overlay) created successfully');
+    } catch (err) {
+      console.error('[WindowHelper] Failed to create overlay BrowserWindow:', err);
+      return;
+    }
+
+    this.overlayRuntime.applyStealth(this.contentProtection)
 
     if (process.platform === "darwin") {
       this.overlayWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
-      this.overlayWindow.setHiddenInMissionControl(true)
       this.overlayWindow.setAlwaysOnTop(true, "floating")
     }
-
-    this.overlayWindow.loadURL(`${startUrl}?window=overlay`).catch(e => {
-        console.error('[WindowHelper] Failed to load Overlay URL:', e);
-    })
-
-    // --- 3. Startup Sequence ---
+    this.setOverlayClickthrough(this.overlayClickthroughEnabled)
     this.launcherWindow.once('ready-to-show', () => {
       this.switchToLauncher()
       this.isWindowVisible = true
@@ -291,12 +317,17 @@ export class WindowHelper {
       }
     })
 
-    this.launcherWindow.on("closed", () => {
+      this.launcherWindow.on("closed", () => {
+      this.launcherRuntime?.destroy()
+      this.launcherRuntime = null
       this.launcherWindow = null
-      // If launcher closes, we should probably quit app or close overlay
+      this.launcherContentWindow = null
       if (this.overlayWindow && !this.overlayWindow.isDestroyed()) {
         this.overlayWindow.close()
       }
+      this.overlayRuntime?.destroy()
+      this.overlayRuntime = null
+      this.overlayContentWindow = null
       this.overlayWindow = null
       this.isWindowVisible = false
     })
@@ -318,6 +349,13 @@ export class WindowHelper {
   // Helper to get whichever window should be treated as "Main" for IPC
   public getMainWindow(): BrowserWindow | null {
     if (this.currentWindowMode === 'overlay' && this.overlayWindow) {
+      return this.overlayContentWindow || this.overlayWindow;
+    }
+    return this.launcherContentWindow;
+  }
+
+  public getVisibleMainWindow(): BrowserWindow | null {
+    if (this.currentWindowMode === 'overlay' && this.overlayWindow) {
       return this.overlayWindow;
     }
     return this.launcherWindow;
@@ -325,7 +363,9 @@ export class WindowHelper {
 
   // Specific getters if needed
   public getLauncherWindow(): BrowserWindow | null { return this.launcherWindow }
+  public getLauncherContentWindow(): BrowserWindow | null { return this.launcherContentWindow }
   public getOverlayWindow(): BrowserWindow | null { return this.overlayWindow }
+  public getOverlayContentWindow(): BrowserWindow | null { return this.overlayContentWindow || this.overlayWindow }
   public getCurrentWindowMode(): 'launcher' | 'overlay' { return this.currentWindowMode }
 
   public isVisible(): boolean {
@@ -334,7 +374,7 @@ export class WindowHelper {
 
   public hideMainWindow(): void {
     // Hide BOTH
-    this.launcherWindow?.hide()
+    this.launcherRuntime?.hide()
     this.overlayWindow?.hide()
     this.isWindowVisible = false
   }
@@ -379,32 +419,41 @@ export class WindowHelper {
       const primaryDisplay = screen.getPrimaryDisplay()
       const workArea = primaryDisplay.workArea;
       const currentBounds = this.overlayWindow.getBounds();
+      const targetWidth = Math.max(currentBounds.width, 600);
       const targetHeight = Math.max(currentBounds.height, 216);
-      const x = Math.floor(workArea.x + (workArea.width - 600) / 2)
+      const x = Math.floor(workArea.x + (workArea.width - targetWidth) / 2)
       const y = Math.floor(workArea.y + (workArea.height - 600) / 2)
 
-      this.overlayWindow.setBounds({ x, y, width: currentBounds.width || 600, height: targetHeight });
+      this.overlayWindow.setBounds({ x, y, width: targetWidth, height: targetHeight });
 
       if (process.platform === 'win32' && this.contentProtection) {
         // Opacity Shield: Show at 0 opacity first to prevent frame leak
         this.overlayWindow.setOpacity(0);
         this.overlayWindow.show();
-        this.overlayWindow.setContentProtection(true);
+        this.applyStealth(this.overlayWindow, true, 'primary', false);
+        this.setOverlayClickthrough(this.overlayClickthroughEnabled)
         // Small delay to ensure Windows DWM processes the flag before making it opaque
-        
+
         if (this.opacityTimeout) clearTimeout(this.opacityTimeout);
         this.opacityTimeout = setTimeout(() => {
           if (this.overlayWindow && !this.overlayWindow.isDestroyed()) {
             this.overlayWindow.setOpacity(1);
-            this.overlayWindow.focus();
-            this.overlayWindow.setAlwaysOnTop(true, process.platform === 'darwin' ? "screen-saver" : "floating");
+            this.stealthManager.reapplyAfterShow(this.overlayWindow);
+            if (!this.overlayClickthroughEnabled) {
+              this.overlayWindow.focus();
+            }
+            this.overlayWindow.setAlwaysOnTop(true, "floating");
           }
         }, 60);
       } else {
-        this.overlayWindow.setContentProtection(this.overlayContentProtection || this.contentProtection);
+        this.applyStealth(this.overlayWindow, this.contentProtection, 'primary', false);
+        this.setOverlayClickthrough(this.overlayClickthroughEnabled)
         this.overlayWindow.show();
-        this.overlayWindow.focus();
-        this.overlayWindow.setAlwaysOnTop(true, process.platform === 'darwin' ? "screen-saver" : "floating");
+        this.stealthManager.reapplyAfterShow(this.overlayWindow);
+        if (!this.overlayClickthroughEnabled) {
+          this.overlayWindow.focus();
+        }
+        this.overlayWindow.setAlwaysOnTop(true, "floating");
       }
       this.isWindowVisible = true;
     }
@@ -424,19 +473,21 @@ export class WindowHelper {
       if (process.platform === 'win32' && this.contentProtection) {
         // Opacity Shield: Show at 0 opacity first
         this.launcherWindow.setOpacity(0);
-        this.launcherWindow.show();
-        this.launcherWindow.setContentProtection(true);
-        
+        this.launcherRuntime?.show();
+        this.launcherRuntime?.applyStealth(true);
+
         if (this.opacityTimeout) clearTimeout(this.opacityTimeout);
         this.opacityTimeout = setTimeout(() => {
           if (this.launcherWindow && !this.launcherWindow.isDestroyed()) {
             this.launcherWindow.setOpacity(1);
+            this.stealthManager.reapplyAfterShow(this.launcherWindow);
             this.launcherWindow.focus();
           }
         }, 60);
       } else {
-        this.launcherWindow.setContentProtection(this.contentProtection);
-        this.launcherWindow.show();
+        this.launcherRuntime?.applyStealth(this.contentProtection);
+        this.launcherRuntime?.show();
+        this.stealthManager.reapplyAfterShow(this.launcherWindow);
         this.launcherWindow.focus();
       }
       this.isWindowVisible = true;
@@ -459,7 +510,7 @@ export class WindowHelper {
 
   // --- Window Movement (Applies to Overlay mostly, but generalized to active) ---
   private moveActiveWindow(dx: number, dy: number): void {
-    const win = this.getMainWindow();
+    const win = this.getVisibleMainWindow();
     if (!win) return;
 
     const [x, y] = win.getPosition();

@@ -10,6 +10,8 @@ export class ScreenshotHelper {
   private screenshotQueue: string[] = []
   private extraScreenshotQueue: string[] = []
   private readonly MAX_SCREENSHOTS = 5
+  private readonly MAX_FILE_BYTES = 10 * 1024 * 1024
+  private queueOp: Promise<void> = Promise.resolve()
 
   private readonly screenshotDir: string
   private readonly extraScreenshotDir: string
@@ -39,15 +41,40 @@ export class ScreenshotHelper {
     await new Promise(resolve => setTimeout(resolve, process.platform === 'darwin' ? 180 : 120))
   }
 
+  private async withQueueLock<T>(operation: () => Promise<T>): Promise<T> {
+    const previous = this.queueOp
+    let release!: () => void
+    this.queueOp = new Promise<void>(resolve => {
+      release = resolve
+    })
+
+    await previous
+    try {
+      return await operation()
+    } finally {
+      release()
+    }
+  }
+
   private async trimQueue(queue: string[]): Promise<void> {
-    while (queue.length > this.MAX_SCREENSHOTS) {
-      const removedPath = queue.shift()
-      if (!removedPath) continue
-      try {
-        await fs.promises.unlink(removedPath)
-      } catch (error) {
-        console.error("Error removing old screenshot:", error)
+    await this.withQueueLock(async () => {
+      while (queue.length > this.MAX_SCREENSHOTS) {
+        const removedPath = queue.shift()
+        if (!removedPath) continue
+        try {
+          await fs.promises.unlink(removedPath)
+        } catch (error) {
+          console.error("Error removing old screenshot:", error)
+        }
       }
+    })
+  }
+
+  private async enforceFileSizeLimit(screenshotPath: string): Promise<void> {
+    const stats = await fs.promises.stat(screenshotPath)
+    if (stats.size > this.MAX_FILE_BYTES) {
+      await fs.promises.unlink(screenshotPath)
+      throw new Error(`Screenshot exceeds ${this.MAX_FILE_BYTES} byte limit`)
     }
   }
 
@@ -141,12 +168,14 @@ export class ScreenshotHelper {
         // -x: do not play sound
         // -C: capture cursor
         await exec(this.getScreenshotCommand(screenshotPath, false))
+        await this.enforceFileSizeLimit(screenshotPath)
 
         this.screenshotQueue.push(screenshotPath)
         await this.trimQueue(this.screenshotQueue)
       } else {
         screenshotPath = path.join(this.extraScreenshotDir, `${uuidv4()}.png`)
         await exec(this.getScreenshotCommand(screenshotPath, false))
+        await this.enforceFileSizeLimit(screenshotPath)
 
         this.extraScreenshotQueue.push(screenshotPath)
         await this.trimQueue(this.extraScreenshotQueue)
@@ -155,7 +184,7 @@ export class ScreenshotHelper {
       return screenshotPath
     } catch (error) {
       // console.error("Error taking screenshot:", error)
-      throw new Error(`Failed to take screenshot: ${error.message}`)
+      throw new Error(`Failed to take screenshot: ${error instanceof Error ? error.message : String(error)}`)
     } finally {
       // Ensure window is always shown again
       showMainWindow()
@@ -190,6 +219,8 @@ export class ScreenshotHelper {
       if (!fs.existsSync(screenshotPath)) {
         throw new Error("Selection cancelled")
       }
+
+      await this.enforceFileSizeLimit(screenshotPath)
 
       this.screenshotQueue.push(screenshotPath)
       await this.trimQueue(this.screenshotQueue)
@@ -243,7 +274,7 @@ export class ScreenshotHelper {
       return { success: true }
     } catch (error) {
       // console.error("Error deleting file:", error)
-      return { success: false, error: error.message }
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
     }
   }
 }

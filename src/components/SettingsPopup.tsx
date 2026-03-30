@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useLayoutEffect, useRef } from 'react';
-import { MessageSquare, Camera, Zap, User } from 'lucide-react';
+import { Brain, MessageSquare, Camera, Zap, User } from 'lucide-react';
 import { useShortcuts } from '../hooks/useShortcuts';
+import { analytics } from '../lib/analytics/analytics.service';
+import { SESSION_MENU_TOGGLE_ORDER } from '../lib/consciousModeSettings';
 
 const SettingsPopup = () => {
     const { shortcuts } = useShortcuts();
@@ -10,6 +12,7 @@ const SettingsPopup = () => {
     });
     const [profileMode, setProfileMode] = useState(false);
     const [hasProfile, setHasProfile] = useState(false);
+    const [consciousModeEnabled, setConsciousModeEnabled] = useState(false);
     const isPremium = true; // All features unlocked
 
     const isFirstRender = React.useRef(true);
@@ -86,6 +89,34 @@ const SettingsPopup = () => {
             });
             return () => unsubscribe();
         }
+    }, []);
+
+    useEffect(() => {
+        let cancelled = false;
+
+        if (window.electronAPI?.getConsciousMode) {
+            window.electronAPI.getConsciousMode().then((result) => {
+                if (!cancelled && result.success) {
+                    setConsciousModeEnabled(result.data.enabled);
+                }
+            }).catch((error) => {
+                console.warn('[SettingsPopup] Failed to load Conscious Mode:', error);
+            });
+        }
+
+        if (window.electronAPI?.onConsciousModeChanged) {
+            const unsubscribe = window.electronAPI.onConsciousModeChanged((enabled: boolean) => {
+                setConsciousModeEnabled(enabled);
+            });
+            return () => {
+                cancelled = true;
+                unsubscribe();
+            };
+        }
+
+        return () => {
+            cancelled = true;
+        };
     }, []);
 
     useEffect(() => {
@@ -189,7 +220,7 @@ const SettingsPopup = () => {
                             className={`w-4 h-4 transition-colors ${useGroqFastText ? 'text-orange-500' : 'text-slate-500 group-hover:text-slate-300'}`}
                             fill={useGroqFastText ? "currentColor" : "none"}
                         />
-                        <span className={`text-[12px] font-medium transition-colors ${useGroqFastText ? 'text-white' : 'text-slate-400 group-hover:text-slate-200'}`}>Fast Response</span>
+                        <span className={`text-[12px] font-medium transition-colors ${useGroqFastText ? 'text-white' : 'text-slate-400 group-hover:text-slate-200'}`}>{SESSION_MENU_TOGGLE_ORDER[0]}</span>
                     </div>
                     <button
                         onClick={() => {
@@ -210,7 +241,7 @@ const SettingsPopup = () => {
                             className={`w-3.5 h-3.5 transition-colors ${showTranscript ? 'text-emerald-400' : 'text-slate-500 group-hover:text-slate-300'}`}
                             fill={showTranscript ? "currentColor" : "none"}
                         />
-                        <span className={`text-[12px] font-medium transition-colors ${showTranscript ? 'text-white' : 'text-slate-400 group-hover:text-slate-200'}`}>Transcript</span>
+                        <span className={`text-[12px] font-medium transition-colors ${showTranscript ? 'text-white' : 'text-slate-400 group-hover:text-slate-200'}`}>{SESSION_MENU_TOGGLE_ORDER[1]}</span>
                     </div>
                     <button
                         onClick={() => {
@@ -223,6 +254,38 @@ const SettingsPopup = () => {
                         className={`w-[30px] h-[18px] rounded-full p-[1.5px] transition-all duration-300 ease-spring active:scale-[0.92] ${showTranscript ? 'bg-emerald-500 shadow-[0_2px_10px_rgba(16,185,129,0.3)]' : 'bg-white/10'}`}
                     >
                         <div className={`w-[15px] h-[15px] rounded-full bg-black shadow-sm transition-transform duration-300 ease-spring ${showTranscript ? 'translate-x-[12px]' : 'translate-x-0'}`} />
+                    </button>
+                </div>
+
+                <div className="flex items-center justify-between px-3 py-2 hover:bg-white/5 rounded-lg transition-colors duration-200 group cursor-default">
+                    <div className="flex items-center gap-3">
+                        <Brain
+                            className={`w-3.5 h-3.5 transition-colors ${consciousModeEnabled ? 'text-violet-400' : 'text-slate-500 group-hover:text-slate-300'}`}
+                            fill={consciousModeEnabled ? 'currentColor' : 'none'}
+                        />
+                        <span className={`text-[12px] font-medium transition-colors ${consciousModeEnabled ? 'text-white' : 'text-slate-400 group-hover:text-slate-200'}`}>{SESSION_MENU_TOGGLE_ORDER[2]}</span>
+                    </div>
+                    <button
+                        onClick={async () => {
+                            const nextState = !consciousModeEnabled;
+                            setConsciousModeEnabled(nextState);
+
+                            try {
+                                const result = await window.electronAPI?.setConsciousMode(nextState);
+                                if (!result?.success) {
+                                    throw new Error(result?.error?.message || 'Unable to persist Conscious Mode');
+                                }
+
+                                setConsciousModeEnabled(result.data.enabled);
+                                analytics.trackConsciousModeSelected(result.data.enabled);
+                            } catch (error) {
+                                console.error('[SettingsPopup] Failed to toggle Conscious Mode:', error);
+                                setConsciousModeEnabled(!nextState);
+                            }
+                        }}
+                        className={`w-[30px] h-[18px] rounded-full p-[1.5px] transition-all duration-300 ease-spring active:scale-[0.92] ${consciousModeEnabled ? 'bg-violet-500 shadow-[0_2px_10px_rgba(139,92,246,0.35)]' : 'bg-white/10'}`}
+                    >
+                        <div className={`w-[15px] h-[15px] rounded-full bg-black shadow-sm transition-transform duration-300 ease-spring ${consciousModeEnabled ? 'translate-x-[12px]' : 'translate-x-0'}`} />
                     </button>
                 </div>
 
@@ -262,7 +325,7 @@ const SettingsPopup = () => {
                     </div>
                     <div className="flex gap-1 opacity-60 group-hover:opacity-100 transition-opacity">
                         {/* Dynamic Keys for Toggle Visibility */}
-                        {(shortcuts.toggleVisibility || ['⌘', 'B']).map((key, index) => (
+                        {(shortcuts.toggleVisibility || ['⌘', '⌥', '⇧', 'V']).map((key, index) => (
                             <div key={index} className="px-1.5 py-0.5 rounded border border-white/10 bg-white/5 text-[10px] text-slate-500 font-medium min-w-[20px] text-center">
                                 {key}
                             </div>
@@ -278,7 +341,7 @@ const SettingsPopup = () => {
                     </div>
                     <div className="flex gap-1 opacity-60 group-hover:opacity-100 transition-opacity">
                         {/* Dynamic Keys for Take Screenshot */}
-                        {(shortcuts.takeScreenshot || ['⌘', 'H']).map((key, index) => (
+                        {(shortcuts.takeScreenshot || ['⌘', '⌥', '⇧', 'S']).map((key, index) => (
                             <div key={index} className="px-1.5 py-0.5 rounded border border-white/10 bg-white/5 text-[10px] text-slate-500 font-medium min-w-[20px] text-center">
                                 {key}
                             </div>
