@@ -98,7 +98,7 @@ export class SettingsWindowHelper {
         }
 
         // Set parent to ensure it stays on top of the correct window
-        const mainWin = this.windowHelper?.getMainWindow();
+        const mainWin = this.windowHelper?.getVisibleMainWindow();
         if (mainWin && !mainWin.isDestroyed()) {
             this.settingsWindow.setParentWindow(mainWin);
         }

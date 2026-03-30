@@ -38,11 +38,11 @@ mod macos {
     }
 
     pub fn apply_private(window_number: u32) -> napi::Result<()> {
-        apply_cgs(window_number, K_CGS_DO_NOT_SHARE)
+        apply_cgs(window_number, K_CGS_DO_NOT_SHARE, "apply")
     }
 
     pub fn remove_private(window_number: u32) -> napi::Result<()> {
-        apply_cgs(window_number, K_CGS_NORMAL_SHARE)
+        apply_cgs(window_number, K_CGS_NORMAL_SHARE, "remove")
     }
 
     unsafe fn find_window(window_number: u32) -> Option<id> {
@@ -72,7 +72,7 @@ mod macos {
         None
     }
 
-    fn apply_cgs(window_number: u32, sharing_state: i32) -> napi::Result<()> {
+    fn apply_cgs(window_number: u32, sharing_state: i32, operation: &str) -> napi::Result<()> {
         unsafe {
             let connection_symbol = c"CGSMainConnectionID";
             let sharing_symbol = c"CGSSetWindowSharingState";
@@ -81,7 +81,7 @@ mod macos {
             let sharing_ptr = dlsym(RTLD_DEFAULT, sharing_symbol.as_ptr() as *const c_char);
 
             if connection_ptr.is_null() || sharing_ptr.is_null() {
-                eprintln!("[stealth] CGS private symbols unavailable; skipping private macOS stealth path");
+                eprintln!("[stealth] CGS private symbols unavailable; skipping private macOS stealth path during {}", operation);
                 return Ok(());
             }
 
@@ -91,7 +91,9 @@ mod macos {
             let connection_id = connection_fn();
             let result = sharing_fn(connection_id, window_number as i32, sharing_state);
             if result != 0 {
-                eprintln!("[stealth] CGSSetWindowSharingState failed with {}", result);
+                eprintln!("[stealth] CGSSetWindowSharingState {} rejected with {}", operation, result);
+            } else {
+                eprintln!("[stealth] CGSSetWindowSharingState {} applied for window {}", operation, window_number);
             }
         }
 

@@ -22,6 +22,8 @@ class FakeWindow extends EventEmitter {
   public mediaSourceId = 'window:101:0';
   public destroyed = false;
   public visible = true;
+  public bounds = { x: 10, y: 20, width: 1280, height: 720 };
+  public setBoundsCalls: Array<{ x: number; y: number; width: number; height: number }> = [];
 
   setContentProtection(value: boolean): void {
     this.contentProtectionCalls.push(value);
@@ -63,6 +65,15 @@ class FakeWindow extends EventEmitter {
 
   isVisible(): boolean {
     return this.visible;
+  }
+
+  getBounds(): { x: number; y: number; width: number; height: number } {
+    return { ...this.bounds };
+  }
+
+  setBounds(bounds: { x: number; y: number; width: number; height: number }): void {
+    this.bounds = { ...bounds };
+    this.setBoundsCalls.push({ ...bounds });
   }
 
   destroy(): void {
@@ -181,6 +192,58 @@ describe('StealthManager', () => {
     assert.strictEqual(nativeCalls.length, 3);
   });
 
+  it('reapplies managed windows after display metrics changes on Windows', () => {
+    const nativeCalls: number[] = [];
+    const displayEvents = new EventEmitter();
+    const manager = new StealthManager(
+      { enabled: true },
+      {
+        platform: 'win32',
+        displayEvents,
+        nativeModule: {
+          applyWindowsWindowStealth() {
+            nativeCalls.push(Date.now());
+          },
+        },
+        logger: silentLogger,
+      } as any
+    );
+    const win = new FakeWindow();
+
+    manager.applyToWindow(win as any, true, { role: 'primary' });
+    displayEvents.emit('display-metrics-changed');
+
+    assert.strictEqual(nativeCalls.length, 2);
+  });
+
+  it('reapplies managed windows after screen-api display metrics changes on Windows', () => {
+    const nativeCalls: number[] = [];
+    const screenApi = new EventEmitter() as EventEmitter & {
+      getAllDisplays: () => Array<{ id: number; workArea: { x: number; y: number; width: number; height: number } }>;
+    };
+    screenApi.getAllDisplays = () => [];
+
+    const manager = new StealthManager(
+      { enabled: true },
+      {
+        platform: 'win32',
+        screenApi,
+        nativeModule: {
+          applyWindowsWindowStealth() {
+            nativeCalls.push(Date.now());
+          },
+        },
+        logger: silentLogger,
+      } as any
+    );
+    const win = new FakeWindow();
+
+    manager.applyToWindow(win as any, true, { role: 'primary' });
+    screenApi.emit('display-metrics-changed');
+
+    assert.strictEqual(nativeCalls.length, 2);
+  });
+
   it('enables the private macOS stealth path only when the feature flag is set', () => {
     const nativeCalls: string[] = [];
     const nativeModule: NativeStealthBindings = {
@@ -251,5 +314,277 @@ describe('StealthManager', () => {
 
     timeouts[0]();
     assert.strictEqual(win.showCalls, 1);
+  });
+
+  it('starts macOS virtual display isolation with the current window bounds when the feature flag is enabled', async () => {
+    const calls: Array<{ action: string; windowId: string; width?: number; height?: number }> = [];
+    const manager = new StealthManager(
+      { enabled: true },
+      {
+        platform: 'darwin',
+        screenApi: {
+          getAllDisplays() {
+            return [{ id: 777, workArea: { x: 200, y: 100, width: 1600, height: 900 } }];
+          },
+        },
+        logger: silentLogger,
+        featureFlags: { enableVirtualDisplayIsolation: true },
+        virtualDisplayCoordinator: {
+          ensureIsolationForWindow({ windowId, width, height }: { windowId: string; width: number; height: number }) {
+            calls.push({ action: 'ensure', windowId, width, height });
+            return Promise.resolve({ ready: true, sessionId: windowId, mode: 'virtual-display' as const, surfaceToken: 'display-777' });
+          },
+          releaseIsolationForWindow({ windowId }: { windowId: string }) {
+            calls.push({ action: 'release', windowId });
+            return Promise.resolve();
+          },
+        },
+      } as any
+    );
+    const win = new FakeWindow();
+
+    manager.applyToWindow(win as any, true, { role: 'primary', allowVirtualDisplayIsolation: true });
+    await Promise.resolve();
+    manager.applyToWindow(win as any, false, { role: 'primary', allowVirtualDisplayIsolation: true });
+
+    assert.deepStrictEqual(calls, [
+      { action: 'ensure', windowId: 'window:101:0', width: 1280, height: 720 },
+      { action: 'release', windowId: 'window:101:0' },
+    ]);
+    assert.deepStrictEqual(win.setBoundsCalls, [
+      { x: 200, y: 100, width: 1280, height: 720 },
+    ]);
+  });
+
+  it('retries moving macOS windows to the virtual display until Electron reports the display', async () => {
+    const timeouts: Array<() => void> = [];
+    const displays: Array<{ id: number; workArea: { x: number; y: number; width: number; height: number } }> = [];
+    const manager = new StealthManager(
+      { enabled: true },
+      {
+        platform: 'darwin',
+        screenApi: {
+          getAllDisplays() {
+            return [...displays];
+          },
+        },
+        logger: silentLogger,
+        featureFlags: { enableVirtualDisplayIsolation: true },
+        timeoutScheduler: (fn: () => void) => {
+          timeouts.push(fn);
+          return timeouts.length;
+        },
+        virtualDisplayCoordinator: {
+          ensureIsolationForWindow({ windowId }: { windowId: string }) {
+            return Promise.resolve({ ready: true, sessionId: windowId, mode: 'virtual-display' as const, surfaceToken: 'display-777' });
+          },
+          releaseIsolationForWindow() {
+            return Promise.resolve();
+          },
+        },
+      } as any
+    );
+    const win = new FakeWindow();
+
+    manager.applyToWindow(win as any, true, { role: 'primary', allowVirtualDisplayIsolation: true });
+    await Promise.resolve();
+
+    assert.deepStrictEqual(win.setBoundsCalls, []);
+    assert.strictEqual(timeouts.length, 1);
+
+    displays.push({ id: 777, workArea: { x: 200, y: 100, width: 1600, height: 900 } });
+    timeouts[0]();
+
+    assert.deepStrictEqual(win.setBoundsCalls, [
+      { x: 200, y: 100, width: 1280, height: 720 },
+    ]);
+  });
+
+  it('does not start virtual display isolation unless the window opts in', async () => {
+    const calls: Array<{ action: string; windowId: string }> = [];
+    const manager = new StealthManager(
+      { enabled: true },
+      {
+        platform: 'darwin',
+        logger: silentLogger,
+        featureFlags: { enableVirtualDisplayIsolation: true },
+        virtualDisplayCoordinator: {
+          ensureIsolationForWindow({ windowId }: { windowId: string }) {
+            calls.push({ action: 'ensure', windowId });
+            return Promise.resolve({ ready: true, sessionId: windowId, mode: 'virtual-display' as const, surfaceToken: 'display-777' });
+          },
+          releaseIsolationForWindow({ windowId }: { windowId: string }) {
+            calls.push({ action: 'release', windowId });
+            return Promise.resolve();
+          },
+        },
+      } as any
+    );
+    const win = new FakeWindow();
+
+    manager.applyToWindow(win as any, true, { role: 'primary' });
+    await Promise.resolve();
+    manager.applyToWindow(win as any, false, { role: 'primary' });
+
+    assert.deepStrictEqual(calls, []);
+  });
+
+  it('retries virtual display isolation after a non-ready helper response', async () => {
+    const calls: string[] = [];
+    let ready = false;
+    const manager = new StealthManager(
+      { enabled: true },
+      {
+        platform: 'darwin',
+        screenApi: {
+          getAllDisplays() {
+            return [{ id: 777, workArea: { x: 200, y: 100, width: 1600, height: 900 } }];
+          },
+        },
+        logger: silentLogger,
+        featureFlags: { enableVirtualDisplayIsolation: true },
+        virtualDisplayCoordinator: {
+          ensureIsolationForWindow({ windowId }: { windowId: string }) {
+            calls.push(ready ? 'ready' : 'not-ready');
+            if (ready) {
+              return Promise.resolve({ ready: true, sessionId: windowId, mode: 'virtual-display' as const, surfaceToken: 'display-777' });
+            }
+            return Promise.resolve({ ready: false, sessionId: windowId, reason: 'warming-up' });
+          },
+          releaseIsolationForWindow() {
+            return Promise.resolve();
+          },
+        },
+      } as any
+    );
+    const win = new FakeWindow();
+
+    manager.applyToWindow(win as any, true, { role: 'primary', allowVirtualDisplayIsolation: true });
+    await Promise.resolve();
+
+    ready = true;
+    manager.reapplyAfterShow(win as any);
+    await Promise.resolve();
+
+    assert.deepStrictEqual(calls, ['not-ready', 'ready']);
+    assert.deepStrictEqual(win.setBoundsCalls, [
+      { x: 200, y: 100, width: 1280, height: 720 },
+    ]);
+  });
+
+  it('cancels pending virtual display moves when stealth is disabled', async () => {
+    const timeouts: Array<() => void> = [];
+    const displays: Array<{ id: number; workArea: { x: number; y: number; width: number; height: number } }> = [];
+    const manager = new StealthManager(
+      { enabled: true },
+      {
+        platform: 'darwin',
+        screenApi: {
+          getAllDisplays() {
+            return [...displays];
+          },
+        },
+        logger: silentLogger,
+        featureFlags: { enableVirtualDisplayIsolation: true },
+        timeoutScheduler: (fn: () => void) => {
+          timeouts.push(fn);
+          return timeouts.length;
+        },
+        virtualDisplayCoordinator: {
+          ensureIsolationForWindow({ windowId }: { windowId: string }) {
+            return Promise.resolve({ ready: true, sessionId: windowId, mode: 'virtual-display' as const, surfaceToken: 'display-777' });
+          },
+          releaseIsolationForWindow() {
+            return Promise.resolve();
+          },
+        },
+      } as any
+    );
+    const win = new FakeWindow();
+
+    manager.applyToWindow(win as any, true, { role: 'primary', allowVirtualDisplayIsolation: true });
+    await Promise.resolve();
+    manager.applyToWindow(win as any, false, { role: 'primary', allowVirtualDisplayIsolation: true });
+
+    displays.push({ id: 777, workArea: { x: 200, y: 100, width: 1600, height: 900 } });
+    timeouts[0]();
+
+    assert.deepStrictEqual(win.setBoundsCalls, []);
+  });
+
+  it('allows virtual display isolation to retry after display move retries are exhausted', async () => {
+    const calls: string[] = [];
+    const timeouts: Array<() => void> = [];
+    const manager = new StealthManager(
+      { enabled: true },
+      {
+        platform: 'darwin',
+        screenApi: {
+          getAllDisplays(): Array<{ id: number; workArea: { x: number; y: number; width: number; height: number } }> {
+            return [];
+          },
+        },
+        logger: silentLogger,
+        featureFlags: { enableVirtualDisplayIsolation: true },
+        timeoutScheduler: (fn: () => void) => {
+          timeouts.push(fn);
+          return timeouts.length;
+        },
+        virtualDisplayCoordinator: {
+          ensureIsolationForWindow({ windowId }: { windowId: string }) {
+            calls.push(windowId);
+            return Promise.resolve({ ready: true, sessionId: windowId, mode: 'virtual-display' as const, surfaceToken: 'display-777' });
+          },
+          releaseIsolationForWindow() {
+            return Promise.resolve();
+          },
+        },
+      } as any
+    );
+    const win = new FakeWindow();
+
+    manager.applyToWindow(win as any, true, { role: 'primary', allowVirtualDisplayIsolation: true });
+    await Promise.resolve();
+
+    for (let i = 0; i < 10; i += 1) {
+      timeouts[i]();
+    }
+
+    manager.reapplyAfterShow(win as any);
+    await Promise.resolve();
+
+    assert.deepStrictEqual(calls, ['window:101:0', 'window:101:0']);
+  });
+
+  it('releases virtual display isolation when an opted-in window closes', async () => {
+    const calls: Array<{ action: string; windowId: string }> = [];
+    const manager = new StealthManager(
+      { enabled: true },
+      {
+        platform: 'darwin',
+        logger: silentLogger,
+        featureFlags: { enableVirtualDisplayIsolation: true },
+        virtualDisplayCoordinator: {
+          ensureIsolationForWindow({ windowId }: { windowId: string }) {
+            calls.push({ action: 'ensure', windowId });
+            return Promise.resolve({ ready: true, sessionId: windowId, mode: 'virtual-display' as const, surfaceToken: 'display-777' });
+          },
+          releaseIsolationForWindow({ windowId }: { windowId: string }) {
+            calls.push({ action: 'release', windowId });
+            return Promise.resolve();
+          },
+        },
+      } as any
+    );
+    const win = new FakeWindow();
+
+    manager.applyToWindow(win as any, true, { role: 'primary', allowVirtualDisplayIsolation: true });
+    await Promise.resolve();
+    win.destroy();
+
+    assert.deepStrictEqual(calls, [
+      { action: 'ensure', windowId: 'window:101:0' },
+      { action: 'release', windowId: 'window:101:0' },
+    ]);
   });
 });

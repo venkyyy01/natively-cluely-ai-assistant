@@ -4,6 +4,7 @@ import path from "path"
 import fs from "fs"
 import { syncOptimizationFlagsFromSettings } from "./config/optimizations"
 import { StealthManager } from "./stealth/StealthManager"
+import { createMacosVirtualDisplayCoordinator, resolveMacosVirtualDisplayHelperPath } from "./stealth/macosVirtualDisplayIntegration"
 if (!app.isPackaged) {
 require('dotenv').config();
 }
@@ -327,18 +328,50 @@ syncOptimizationFlagsFromSettings(accelerationModeEnabled);
 console.log(`[AppState] Initialized with isUndetectable=${this.isUndetectable}, disguiseMode=${this.disguiseMode}, consciousModeEnabled=${this.consciousModeEnabled}, accelerationModeEnabled=${accelerationModeEnabled}`);
 
 // 2. Initialize Helpers with loaded state
+const enablePrivateMacosStealthApi =
+  !(process as NodeJS.Process & { mas?: boolean }).mas && (
+    isEnvFlagEnabled(process.env.NATIVELY_ENABLE_PRIVATE_MACOS_STEALTH_API) ??
+    (settingsManager.get('enablePrivateMacosStealthApi') ?? false)
+  )
+const enableCaptureDetectionWatchdog =
+  isEnvFlagEnabled(process.env.NATIVELY_ENABLE_CAPTURE_DETECTION_WATCHDOG) ??
+  (settingsManager.get('enableCaptureDetectionWatchdog') ?? false)
+const enableVirtualDisplayIsolation =
+  isEnvFlagEnabled(process.env.NATIVELY_ENABLE_VIRTUAL_DISPLAY_ISOLATION) ??
+  (settingsManager.get('enableVirtualDisplayIsolation') ?? false)
+
+const virtualDisplayCoordinator =
+  process.platform === 'darwin' && enableVirtualDisplayIsolation
+    ? (() => {
+        const helperPath = resolveMacosVirtualDisplayHelperPath()
+        if (!helperPath) {
+          console.warn('[Stealth] macOS virtual display helper was requested but no helper binary was found')
+          return null
+        }
+
+        console.log(`[Stealth] macOS virtual display helper: ${helperPath}`)
+        return createMacosVirtualDisplayCoordinator(helperPath)
+      })()
+    : null
+
+if (process.platform === 'darwin') {
+  const macosStealthLevel = enableVirtualDisplayIsolation
+    ? 'virtual-display'
+    : enablePrivateMacosStealthApi
+      ? 'native-plus-cgs'
+      : this.isUndetectable
+        ? 'native-baseline'
+        : 'fallback-only'
+  console.log(`[Stealth] macOS level=${macosStealthLevel}, helper=${virtualDisplayCoordinator ? 'connected' : 'none'}`)
+}
+
 this.stealthManager = new StealthManager({ enabled: this.isUndetectable }, {
   featureFlags: {
-    enablePrivateMacosStealthApi:
-      isEnvFlagEnabled(process.env.NATIVELY_ENABLE_PRIVATE_MACOS_STEALTH_API) ??
-      (settingsManager.get('enablePrivateMacosStealthApi') ?? false),
-    enableCaptureDetectionWatchdog:
-      isEnvFlagEnabled(process.env.NATIVELY_ENABLE_CAPTURE_DETECTION_WATCHDOG) ??
-      (settingsManager.get('enableCaptureDetectionWatchdog') ?? false),
-    enableVirtualDisplayIsolation:
-      isEnvFlagEnabled(process.env.NATIVELY_ENABLE_VIRTUAL_DISPLAY_ISOLATION) ??
-      (settingsManager.get('enableVirtualDisplayIsolation') ?? false),
+    enablePrivateMacosStealthApi,
+    enableCaptureDetectionWatchdog,
+    enableVirtualDisplayIsolation,
   },
+  virtualDisplayCoordinator,
 })
 this.windowHelper = new WindowHelper(this, this.stealthManager)
 this.settingsWindowHelper = new SettingsWindowHelper(this.stealthManager)
@@ -1647,7 +1680,7 @@ try {
     // If we use getMainWindow(), it might return the launcher window when the overlay is hidden,
     // causing the IPC event to go to the wrong React tree and silently fail.
     const mode = this.windowHelper.getCurrentWindowMode();
-    const targetWindow = mode === 'overlay' ? this.windowHelper.getOverlayWindow() : this.windowHelper.getLauncherWindow();
+    const targetWindow = mode === 'overlay' ? this.windowHelper.getOverlayWindow() : this.windowHelper.getLauncherContentWindow();
 
     if (targetWindow && !targetWindow.isDestroyed()) {
       targetWindow.webContents.send('toggle-expand');
@@ -1904,7 +1937,7 @@ try {
 
     // --- STEALTH MODE LOGIC (restored from working version a820380) ---
     if (process.platform === 'darwin') {
-      const activeWindow = this.windowHelper.getMainWindow();
+      const activeWindow = this.windowHelper.getVisibleMainWindow();
 
       // Determine the truly active window to restore focus to
       const settingsWindow = this.settingsWindowHelper.getSettingsWindow();

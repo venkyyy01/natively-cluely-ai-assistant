@@ -6,13 +6,13 @@
 
 ## 1  Executive Summary
 
-This document is the single source of truth for the Natively stealth hardening effort. It combines the existing production plan (centralized `StealthManager`, Rust `napi-rs` native module, phased rollout) with a comprehensive defense-in-depth specification covering six protection layers (L0–L5) mapped against a formal threat model.
+This document is the single source of truth for the Natively stealth hardening work that can be implemented, verified, and shipped from the current Electron repository. It combines the existing production plan (centralized `StealthManager`, Rust `napi-rs` native module, phased rollout) with a defense-in-depth specification covering the repo-owned layers and feature flags. External native programs that require separate driver, compositor, or kernel delivery are tracked in `stealth-separate-project-blueprint.md` and `electron/stealth/separateProjectContracts.ts`.
 
 The shipping plan is:
 
 - **Phase 1 (ship)** — Layer 0 + Layer 1. Harden the existing multi-window Electron app using a centralized `StealthManager` plus a Rust `napi-rs` native module. Defeats user-space screenshot/screen-share (L1), Chromium-internal capture (L2), and most user-space privileged capture (L3).
-- **Phase 2 (experimental)** — Layer 2 + Layer 5. Add virtual display isolation and capture-detection watchdog behind feature flags. Hardens against kernel-mode adversaries (L4).
-- **Phase 3 (separate project)** — Layer 3, Layer 4. Hardware-protected GPU surfaces and optional kernel-mode driver. Only if the product truly requires defeating signed kernel-mode capture agents.
+- **Phase 2 (repo experimental)** — Layer 1B + Layer 5, plus the repo-side control plane for future Layer 2 work. Add feature-gated macOS private API support, capture-detection watchdog behavior, and bounded `CGVirtualDisplay` helper/session orchestration without over-claiming full compositor isolation.
+- **External follow-on programs** — Full Layer 2 compositor/driver delivery, Layer 3, and Layer 4 remain separate native programs only if the product truly requires them.
 
 ---
 
@@ -265,6 +265,7 @@ powerMonitor.on('resume', () => reapplyAllProtections());
 - No DLL injection, API hooking, or EDR-sensitive behavior in the shipping path.
 - No off-screen rendering rewrite in Phase 1.
 - No App Store distribution promise for the private macOS API path.
+- No Windows IDD driver, hardware-protected swap-chain host, kernel-mode driver, or full macOS compositor handoff inside this implementation plan; those are tracked separately.
 
 ---
 
@@ -287,7 +288,7 @@ Keep the existing multi-window design:
 - Layer 0 — `BrowserWindow.setContentProtection(true)` as the Electron fallback.
 - Layer 1A — `NSWindowSharingNone` on the backing `NSWindow`.
 - Layer 1B — optional `CGSSetWindowSharingState(..., kCGSDoNotShare)` behind a feature flag (Phase 2).
-- Layer 2 — `CGVirtualDisplay` isolation (Phase 2, feature-flagged).
+- Layer 2 repo boundary — feature-gated `CGVirtualDisplay` helper discovery, session orchestration, and opted-in backing-surface routing for a future compositor path.
 - Layer 5 — Capture-detection watchdog (Phase 2).
 - UI hardening — `setHiddenInMissionControl(true)` and `setExcludedFromShownWindowsMenu(true)` where supported.
 
@@ -295,7 +296,7 @@ Keep the existing multi-window design:
 
 - Layer 0 — `BrowserWindow.setContentProtection(true)` as the fallback.
 - Layer 1 — `SetWindowDisplayAffinity(WDA_EXCLUDEFROMCAPTURE)` on supported builds, re-applied on restore/unminimize/monitor-change.
-- Layer 2 — IDD virtual display driver (Phase 2, feature-flagged).
+- Layer 2 separate-program boundary — IDD virtual display driver work is tracked outside this implementation plan.
 - Layer 5 — Capture-detection watchdog (Phase 2).
 - UI hardening — `setSkipTaskbar(true)` for auxiliary windows; optional native extended style updates for dropdown-style windows.
 - Deferred — do **not** use `DWMWA_CLOAK` by default on launcher or overlay windows.
@@ -404,7 +405,7 @@ In `electron/main.ts`:
 - keep `setContentProtection(state)` as the external toggle surface for existing helpers if that reduces churn
 - ensure toggling undetectable mode fans out through the helpers, which then route into the centralized manager
 
-### 7.2  Phase 2 — Layer 2 + Layer 5 (experimental, hardens against L4)
+### 7.2  Phase 2 — Layer 2 + Layer 5 (experimental, does not by itself claim L4 resistance)
 
 Add deeper protections only after Phase 1 is stable.
 
@@ -415,20 +416,14 @@ Add deeper protections only after Phase 1 is stable.
 - Log whether CGS was applied, unavailable, or rejected
 - Keep `NSWindowSharingNone` as the baseline even when CGS is disabled
 
-#### B. Virtual Display Isolation (Layer 2)
-
-**Windows — IDD driver:**
-
-- Implement or integrate a UMDF2 IddCx driver
-- Feature-flagged: `enableVirtualDisplayIsolation`
-- Electron renders sensitive window to virtual display
-- Compositor copies framebuffer to real-monitor overlay
-
-**macOS — `CGVirtualDisplay`:**
+#### B. Repo-Side macOS Virtual Display Control Plane (Layer 2 boundary)
 
 - Requires macOS 12.4+
 - Feature-flagged: `enableVirtualDisplayIsolation`
-- Sensitive content renders on virtual display, never enters WindowServer composition tree for primary display
+- Resolve the helper binary, establish the client/coordinator path, and request/release helper sessions
+- Apply virtual-display routing only to opted-in backing surfaces, never to the visible shell window
+- Retry display moves with bounded retries and release helper sessions on disable/close/failure paths
+- Gracefully degrade when the helper is unavailable, non-ready, or the display never appears
 
 #### C. Capture Detection Watchdog (Layer 5)
 
@@ -439,24 +434,16 @@ Add deeper protections only after Phase 1 is stable.
 - Wire `powerMonitor` listeners (`unlock-screen`, `resume`) to re-apply all protections
 - Feature-flagged: `enableCaptureDetectionWatchdog`
 
-### 7.3  Phase 3 — Layer 3 + Layer 4 (separate project)
+### 7.3  External Follow-On Programs (tracked separately, not part of this plan)
 
-If product requires high-confidence invisibility against kernel-mode adversaries, stop extending the Phase 1/2 design and open a separate project.
+If product requires high-confidence isolation beyond the main Electron repo boundary, stop extending this plan and execute the separate blueprint instead.
 
-#### A. Hardware-Protected GPU Surfaces (Layer 3)
+- Full macOS Layer 2 compositor handoff that keeps sensitive content usable on the physical display
+- Windows IDD virtual display driver + compositor service
+- Windows Layer 3 protected render host (`DXGI_SWAP_CHAIN_FLAG_HW_PROTECTED` / protected textures)
+- Layer 4 kernel-adjacent delivery work
 
-- D3D11 protected swap chain with `DXGI_SWAP_CHAIN_FLAG_HW_PROTECTED`
-- Protected textures with `D3D11_RESOURCE_MISC_HW_PROTECTED`
-- Requires offscreen rendering mode feeding into D3D11 swap chain via native addon
-- Defeats DXGI Desktop Duplication at hardware scanout stage
-
-#### B. Kernel-Mode Driver (Layer 4)
-
-- Windows: WDDM-compatible kernel driver, EV code signing + WHQL attestation
-- macOS: DriverKit (DEXT) extension (no SIP disable required)
-- Only if building a dedicated security product
-
-Do not mix Layer 3/4 work into the Phase 1/2 implementation plan.
+These are tracked in `stealth-separate-project-blueprint.md` and `electron/stealth/separateProjectContracts.ts`, not as open checklist items in this document.
 
 ---
 
@@ -566,7 +553,7 @@ Implement in this order:
 8. Run manual capture verification.
 9. Gate private macOS API behind a feature flag (Phase 2 — Layer 1B).
 10. Implement capture-detection watchdog (Phase 2 — Layer 5).
-11. Implement virtual display isolation (Phase 2 — Layer 2).
+11. Integrate the repo-side macOS virtual-display control plane (Phase 2 — Layer 2 boundary).
 
 This order keeps the app runnable after each step and makes rollback simple.
 
@@ -601,13 +588,14 @@ With Phase 1 stealth on (Layer 0 + Layer 1):
 4. the app remains usable during rapid show/hide of launcher, overlay, settings, and model selector
 5. Chromium-internal capture (Chrome tab share, Google Meet) does not show protected content
 
-With Phase 2 flags on (Layer 1B + Layer 5):
+With Phase 2 flags on (Layer 1B + Layer 5 + repo-side Layer 2 control plane):
 
 1. repeat the same matrix
-2. verify no startup crash when CGS symbols are unavailable
-3. verify notarized builds still launch cleanly in the intended distribution channel
-4. verify capture-detection watchdog hides windows when capture tool is detected
-5. verify windows re-appear after capture tool stops
+2. verify no startup crash when CGS symbols or the virtual-display helper are unavailable
+3. verify the helper session create/release path succeeds without moving the visible shell window
+4. verify notarized builds still launch cleanly in the intended distribution channel
+5. verify capture-detection watchdog hides windows when capture tool is detected
+6. verify windows re-appear after capture tool stops
 
 ### 10.3  Manual Windows Matrix
 
@@ -623,10 +611,9 @@ With Phase 1 stealth on (Layer 0 + Layer 1):
 4. no flashing or stuck-transparent windows occur during show/hide transitions
 5. protections survive restore/unminimize/monitor-change cycles
 
-With Phase 2 flags on (Layer 2 + Layer 5):
+With Phase 2 flags on (Layer 5):
 
-1. verify virtual IDD display isolation prevents physical display capture leak
-2. verify capture-detection watchdog behavior
+1. verify capture-detection watchdog behavior
 
 Document full-desktop-share results separately as **best-effort**, not pass/fail for GA.
 
@@ -644,19 +631,40 @@ Document full-desktop-share results separately as **best-effort**, not pass/fail
 ## 11  Implementation Checklist
 
 ```
-[ ] setContentProtection(true) before win.show() on ALL windows (Layer 0)
-[ ] Direct WDA_EXCLUDEFROMCAPTURE via napi-rs on Windows (Layer 1)
-[ ] Re-apply affinity on restore/unminimize/monitor-change events (Layer 1)
-[ ] Native Rust addon enforcing NSWindowSharingNone on macOS (Layer 1)
-[ ] powerMonitor listeners to re-apply protections after sleep/resume (Layer 1)
-[ ] All child/secondary BrowserWindows also protected — no leaking window (Layer 0+1)
-[ ] Private macOS CGS API behind feature flag (Layer 1B — Phase 2)
-[ ] Capture-detection watchdog polling desktopCapturer.getSources() (Layer 5 — Phase 2)
-[ ] Virtual IDD display driver on Windows (Layer 2 — Phase 2)
-[ ] CGVirtualDisplay rendering on macOS (Layer 2 — Phase 2)
-[ ] D3D11 hardware-protected swap chain for highest-sensitivity surfaces (Layer 3 — Phase 3)
-[ ] Kernel-mode driver (Layer 4 — Phase 3, only if building security product)
+[x] setContentProtection(true) before win.show() on ALL windows (Layer 0)
+[x] Direct WDA_EXCLUDEFROMCAPTURE via napi-rs on Windows (Layer 1)
+[x] Re-apply affinity on restore/unminimize/monitor-change events (Layer 1)
+[x] Native Rust addon enforcing NSWindowSharingNone on macOS (Layer 1)
+[x] powerMonitor listeners to re-apply protections after sleep/resume (Layer 1)
+[x] All child/secondary BrowserWindows also protected — no leaking window (Layer 0+1)
+[x] Private macOS CGS API behind feature flag (Layer 1B — Phase 2)
+[x] Capture-detection watchdog polling desktopCapturer.getSources() (Layer 5 — Phase 2)
+[x] Repo-side macOS virtual-display helper discovery/session orchestration is feature-flagged, bounded, and limited to opted-in backing surfaces (Layer 2 boundary)
+[x] External Layer 2/3/4 native programs are moved to the separate-project blueprint instead of remaining open items in this plan
 ```
+
+### 11.1  Repository Audit Status (rescoped main-repo boundary)
+
+The table below reflects the current repository state against the rescoped main-repo checklist above. Full macOS compositor delivery, Windows IDD, Layer 3, and Layer 4 are intentionally tracked in the separate blueprint and are no longer counted as open items in this document.
+
+| Checklist item | Status | Evidence | Notes |
+|---|---|---|---|
+| `setContentProtection(true)` before `win.show()` on all windows (Layer 0) | Done | `electron/stealth/StealthManager.ts`, `electron/WindowHelper.ts`, `electron/SettingsWindowHelper.ts`, `electron/ModelSelectorWindowHelper.ts` | All current `BrowserWindow` creation paths route through `StealthManager.applyToWindow(...)` before visible show flows. |
+| Direct `WDA_EXCLUDEFROMCAPTURE` via `napi-rs` on Windows (Layer 1) | Done | `native-module/src/stealth.rs` | `apply_windows_window_stealth` calls `SetWindowDisplayAffinity(WDA_EXCLUDEFROMCAPTURE)` with `WDA_MONITOR` fallback. |
+| Re-apply affinity on restore/unminimize/monitor-change events (Layer 1) | Done | `electron/stealth/StealthManager.ts`, `electron/tests/stealthManager.test.ts` | Restore/unminimize/show/move reapply hooks exist and Windows display metrics changes trigger managed-window reapply. |
+| Native Rust addon enforcing `NSWindowSharingNone` on macOS (Layer 1) | Done | `native-module/src/stealth.rs` | Native macOS path resolves `NSWindow` by window number and applies `setSharingType: 0`. |
+| `powerMonitor` listeners re-apply protections after sleep/resume (Layer 1) | Done | `electron/stealth/StealthManager.ts` | `unlock-screen` and `resume` listeners are bound and reapply protections to managed windows. |
+| All child/secondary `BrowserWindow`s also protected (Layer 0+1) | Done | `electron/WindowHelper.ts`, `electron/SettingsWindowHelper.ts`, `electron/ModelSelectorWindowHelper.ts`, `electron/stealth/StealthRuntime.ts` | Launcher, overlay, settings, model selector, and the `StealthRuntime` shell/content pair all route through the shared manager. |
+| Private macOS CGS API behind feature flag (Layer 1B — Phase 2) | Done | `electron/main.ts`, `electron/stealth/StealthManager.ts`, `native-module/src/stealth.rs` | CGS calls are gated by `enablePrivateMacosStealthApi` and disabled for MAS builds. |
+| Capture-detection watchdog polling `desktopCapturer.getSources()` (Layer 5 — Phase 2) | Done | `electron/stealth/StealthManager.ts` | Feature-flagged watchdog polls sources, hides visible windows, restores them, and reapplies stealth. |
+| Repo-side macOS virtual-display helper discovery/session orchestration is feature-flagged, bounded, and limited to opted-in backing surfaces (Layer 2 boundary) | Done | `electron/main.ts`, `electron/stealth/MacosVirtualDisplayClient.ts`, `electron/stealth/macosVirtualDisplayIntegration.ts`, `electron/stealth/StealthManager.ts`, `stealth-projects/macos-virtual-display-helper/Sources/CGVirtualDisplayBackend.swift`, `electron/tests/stealthManager.test.ts` | Helper resolution, client/coordinator plumbing, bounded retry/release behavior, and opted-in backing-surface routing are implemented and verified. |
+| External Layer 2/3/4 native programs are transferred to the separate-project blueprint instead of remaining open items in this plan | Done | `stealth-separate-project-blueprint.md`, `electron/stealth/separateProjectContracts.ts` | Full compositor/driver/kernel delivery now lives behind an explicit separate-project boundary rather than as open checklist gaps in this document. |
+
+### 11.2  Strict Audit Summary
+
+- **Done:** 10
+- **Open in this plan:** 0
+- **External native programs tracked separately:** yes
 
 ---
 
@@ -675,7 +683,7 @@ Phase 1 is ready to merge only when:
 Phase 2 is ready only when:
 
 - the private macOS path is feature-flagged
-- virtual display isolation is feature-flagged
+- the repo-side virtual-display control plane is feature-flagged
 - capture-detection watchdog is feature-flagged
 - distribution owners sign off on the compatibility risk
 - QA verifies graceful degradation when APIs are unavailable
@@ -691,7 +699,7 @@ Phase 2 is ready only when:
 | Windows show/hide race | Transparent or flashing windows | Keep the existing opacity shield and reapply after show |
 | Windows affinity reset on state change | Protection silently lost | Re-apply on restore/unminimize/monitor-change/unlock/resume |
 | Over-aggressive window hiding | UX regressions | Treat primary and auxiliary windows differently |
-| Virtual display driver complexity | High development cost, driver signing | Phase 2 only, feature-flagged, production IDD examples exist |
+| Repo-side virtual-display/control-plane complexity | Helper compatibility drift or session lifecycle bugs | Keep it feature-flagged, bounded, and separate from the external compositor/driver blueprint |
 | Hardware-protected swap chain GPU compat | Not all GPUs support protected content | Phase 3 only, requires GPU capability detection |
 | Kernel-mode driver certification | Long lead time, high compliance bar | Phase 3 only, separate project, only if product demands it |
 | Misleading product claims | Support and trust issues | Use the support matrix in docs and QA sign-off |
@@ -701,9 +709,9 @@ Phase 2 is ready only when:
 ## 14  Decision Log
 
 - **Adopt now (Phase 1):** Layer 0 + Layer 1. Rust native module + centralized Electron orchestration with re-application hooks.
-- **Adopt carefully (Phase 2):** Layer 1B (macOS CGS), Layer 2 (virtual display), Layer 5 (capture watchdog) — all behind feature flags.
+- **Adopt carefully (Phase 2):** Layer 1B (macOS CGS), Layer 5 (capture watchdog), and the repo-side Layer 2 control plane — all behind feature flags.
 - **Reject for Phase 1/2:** default `DWMWA_CLOAK` on visible windows.
-- **Defer (Phase 3):** Layer 3 (D3D11 hardware-protected swap chain), Layer 4 (kernel-mode driver), and any Windows compositor-interception work.
+- **Move to separate blueprint:** full macOS compositor handoff, Windows IDD driver/compositor work, Layer 3 (D3D11 hardware-protected swap chain), and Layer 4 (kernel-mode driver).
 
 ---
 

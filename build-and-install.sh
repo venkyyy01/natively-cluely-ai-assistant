@@ -217,6 +217,7 @@ local paths=(
 "$SCRIPT_DIR/dist"
 "$SCRIPT_DIR/dist-electron"
 "$SCRIPT_DIR/release"
+"$SCRIPT_DIR/assets/bin/macos/stealth-virtual-display-helper"
 "$SCRIPT_DIR/node_modules/.cache"
 "$SCRIPT_DIR/.vite"
 "$SCRIPT_DIR/native-module/target"
@@ -404,6 +405,9 @@ success "Renderer coverage gate passed"
 run_logged_command "[4/4] Running native Rust tests..." cargo test --manifest-path native-module/Cargo.toml
 success "Native Rust tests passed"
 
+run_logged_command "[macOS helper] Building virtual display helper..." npm run prepare:macos:virtual-display-helper
+success "macOS virtual display helper prepared"
+
 success "Quality gates passed"
 
 # ╔═══════════════════════════════════════════════════════════════════╗
@@ -469,9 +473,11 @@ APP_ASAR_UNPACKED_DIR="$APP_RESOURCES_DIR/app.asar.unpacked"
 require_file "$APP_ASAR_PATH" "Packaged app archive"
 require_asar_entry "$APP_ASAR_PATH" "/dist/index.html" "Packaged renderer entry"
 require_asar_entry "$APP_ASAR_PATH" "/dist-electron/electron/main.js" "Packaged Electron main entry"
+require_asar_entry "$APP_ASAR_PATH" "/electron/renderer/shell.html" "Packaged stealth shell HTML"
 require_asar_entry "$APP_ASAR_PATH" "/node_modules/natively-audio/index.js" "Packaged native module loader"
 require_asar_entry "$APP_ASAR_PATH" "/dist-electron/premium/electron/services/LicenseManager.js" "Packaged premium license manager"
 require_asar_entry "$APP_ASAR_PATH" "/dist-electron/premium/electron/knowledge/KnowledgeOrchestrator.js" "Packaged knowledge orchestrator"
+require_file "$APP_RESOURCES_DIR/bin/macos/stealth-virtual-display-helper" "Packaged macOS virtual display helper"
 
 if [[ "$BUILD_ARCH" == "arm64" ]]; then
     require_file "$APP_ASAR_UNPACKED_DIR/node_modules/natively-audio/index.darwin-arm64.node" "Unpacked arm64 native audio binary"

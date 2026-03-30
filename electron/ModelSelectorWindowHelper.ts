@@ -60,7 +60,7 @@ export class ModelSelectorWindowHelper {
         }
 
         // Set parent and align window settings
-        const mainWin = this.windowHelper?.getMainWindow();
+        const mainWin = this.windowHelper?.getVisibleMainWindow();
         const isOverlay = mainWin === this.windowHelper?.getOverlayWindow();
 
         if (mainWin && !mainWin.isDestroyed()) {
@@ -106,7 +106,7 @@ export class ModelSelectorWindowHelper {
             this.window.hide()
 
             // Restore focus
-            const mainWin = this.windowHelper?.getMainWindow();
+            const mainWin = this.windowHelper?.getVisibleMainWindow();
             if (mainWin && !mainWin.isDestroyed() && mainWin.isVisible()) {
                 mainWin.focus();
             }

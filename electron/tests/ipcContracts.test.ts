@@ -129,7 +129,7 @@ function installIpcHandlersTestHarness(options?: {
   const appState = {
     getMainWindow: () => ({ webContents: { send: (channel: string, payload: unknown) => sentEvents.push({ channel, payload }) } }),
     settingsWindowHelper: { getSettingsWindow: (): null => null, setWindowDimensions: (): void => {}, hideWindow: (): void => {} },
-    getWindowHelper: () => ({ getOverlayWindow: (): null => null, getLauncherWindow: (): null => null, setOverlayDimensions: (): void => {} }),
+    getWindowHelper: () => ({ getOverlayWindow: (): null => null, getLauncherWindow: (): null => null, getLauncherContentWindow: (): null => null, setOverlayDimensions: (): void => {} }),
     takeScreenshot: async () => '/tmp/user-data/screenshot.png',
     getImagePreview: async (filePath: string) => `preview:${filePath}`,
     takeSelectiveScreenshot: async () => '/tmp/user-data/selective.png',
@@ -402,12 +402,14 @@ test('window handlers preserve window control and resize contracts', async () =>
     getWindowHelper: (): {
       getOverlayWindow: () => typeof overlayWindow;
       getLauncherWindow: () => null;
+      getLauncherContentWindow: () => null;
       setOverlayDimensions: (width: number, height: number) => void;
       setOverlayClickthrough: (enabled: boolean) => void;
       setWindowMode: (mode: string) => void;
     } => ({
       getOverlayWindow: () => overlayWindow,
       getLauncherWindow: () => null,
+      getLauncherContentWindow: () => null,
       setOverlayDimensions: (width: number, height: number) => {
         dimensionCalls.push({ target: 'overlay', width, height });
       },
