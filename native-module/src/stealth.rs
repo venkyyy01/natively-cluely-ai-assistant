@@ -2,8 +2,15 @@ use napi::bindgen_prelude::Buffer;
 
 #[cfg(target_os = "macos")]
 mod macos {
+    use libc::{c_char, c_void, dlsym, RTLD_DEFAULT};
     use cocoa::base::{id, nil};
     use objc::{class, msg_send, sel, sel_impl};
+
+    type CGSMainConnectionIDFn = unsafe extern "C" fn() -> i32;
+    type CGSSetWindowSharingStateFn = unsafe extern "C" fn(i32, i32, i32) -> i32;
+
+    const K_CGS_DO_NOT_SHARE: i32 = 0;
+    const K_CGS_NORMAL_SHARE: i32 = 1;
 
     pub fn apply(window_number: u32) -> napi::Result<()> {
         unsafe {
@@ -28,6 +35,14 @@ mod macos {
         }
 
         Ok(())
+    }
+
+    pub fn apply_private(window_number: u32) -> napi::Result<()> {
+        apply_cgs(window_number, K_CGS_DO_NOT_SHARE)
+    }
+
+    pub fn remove_private(window_number: u32) -> napi::Result<()> {
+        apply_cgs(window_number, K_CGS_NORMAL_SHARE)
     }
 
     unsafe fn find_window(window_number: u32) -> Option<id> {
@@ -56,6 +71,32 @@ mod macos {
 
         None
     }
+
+    fn apply_cgs(window_number: u32, sharing_state: i32) -> napi::Result<()> {
+        unsafe {
+            let connection_symbol = c"CGSMainConnectionID";
+            let sharing_symbol = c"CGSSetWindowSharingState";
+
+            let connection_ptr = dlsym(RTLD_DEFAULT, connection_symbol.as_ptr() as *const c_char);
+            let sharing_ptr = dlsym(RTLD_DEFAULT, sharing_symbol.as_ptr() as *const c_char);
+
+            if connection_ptr.is_null() || sharing_ptr.is_null() {
+                eprintln!("[stealth] CGS private symbols unavailable; skipping private macOS stealth path");
+                return Ok(());
+            }
+
+            let connection_fn: CGSMainConnectionIDFn = std::mem::transmute::<*mut c_void, CGSMainConnectionIDFn>(connection_ptr);
+            let sharing_fn: CGSSetWindowSharingStateFn = std::mem::transmute::<*mut c_void, CGSSetWindowSharingStateFn>(sharing_ptr);
+
+            let connection_id = connection_fn();
+            let result = sharing_fn(connection_id, window_number as i32, sharing_state);
+            if result != 0 {
+                eprintln!("[stealth] CGSSetWindowSharingState failed with {}", result);
+            }
+        }
+
+        Ok(())
+    }
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -65,6 +106,14 @@ mod macos {
     }
 
     pub fn remove(_window_number: u32) -> napi::Result<()> {
+        Ok(())
+    }
+
+    pub fn apply_private(_window_number: u32) -> napi::Result<()> {
+        Ok(())
+    }
+
+    pub fn remove_private(_window_number: u32) -> napi::Result<()> {
         Ok(())
     }
 }
@@ -152,6 +201,16 @@ pub fn apply_macos_window_stealth(window_number: u32) -> napi::Result<()> {
 #[napi]
 pub fn remove_macos_window_stealth(window_number: u32) -> napi::Result<()> {
     macos::remove(window_number)
+}
+
+#[napi]
+pub fn apply_macos_private_window_stealth(window_number: u32) -> napi::Result<()> {
+    macos::apply_private(window_number)
+}
+
+#[napi]
+pub fn remove_macos_private_window_stealth(window_number: u32) -> napi::Result<()> {
+    macos::remove_private(window_number)
 }
 
 #[napi]

@@ -20,9 +20,17 @@ export interface PlatformCapabilities {
 
 export interface NativeStealthBindings {
   applyMacosWindowStealth?: (windowNumber: number) => void;
+  applyMacosPrivateWindowStealth?: (windowNumber: number) => void;
   removeMacosWindowStealth?: (windowNumber: number) => void;
+  removeMacosPrivateWindowStealth?: (windowNumber: number) => void;
   applyWindowsWindowStealth?: (handle: Buffer) => void;
   removeWindowsWindowStealth?: (handle: Buffer) => void;
+}
+
+export interface StealthFeatureFlags {
+  enablePrivateMacosStealthApi?: boolean;
+  enableCaptureDetectionWatchdog?: boolean;
+  enableVirtualDisplayIsolation?: boolean;
 }
 
 export type StealthWindowRole = 'primary' | 'auxiliary';
@@ -37,6 +45,11 @@ interface StealthManagerDependencies {
   platform?: string;
   powerMonitor?: { on: (event: string, listener: () => void) => void } | null;
   logger?: Pick<Console, 'log' | 'warn' | 'error'>;
+  featureFlags?: StealthFeatureFlags;
+  desktopCapturer?: { getSources: (options: { types: string[] }) => Promise<Array<{ name: string }>> } | null;
+  intervalScheduler?: (callback: () => Promise<void> | void, intervalMs: number) => unknown;
+  clearIntervalScheduler?: (handle: unknown) => void;
+  timeoutScheduler?: (callback: () => void, delayMs: number) => unknown;
 }
 
 interface StealthCapableWindow {
@@ -45,8 +58,11 @@ interface StealthCapableWindow {
   setHiddenInMissionControl?: (value: boolean) => void;
   setExcludedFromShownWindowsMenu?: (value: boolean) => void;
   setSkipTaskbar?: (value: boolean) => void;
+  hide?: () => void;
+  show?: () => void;
   getNativeWindowHandle?: () => Buffer;
   getMediaSourceId?: () => string;
+  isVisible?: () => boolean;
   isDestroyed?: () => boolean;
 }
 
@@ -57,21 +73,48 @@ interface ManagedWindowRecord {
   listenersAttached: boolean;
 }
 
+const WATCHDOG_INTERVAL_MS = 1000;
+const WATCHDOG_RESTORE_DELAY_MS = 500;
+const KNOWN_CAPTURE_TOOL_PATTERNS = [
+  /obs/i,
+  /zoom/i,
+  /teams/i,
+  /meet/i,
+  /webex/i,
+  /snipping/i,
+  /screen ?studio/i,
+  /quicktime/i,
+  /loom/i,
+  /capture/i,
+];
+
 export class StealthManager {
   private config: StealthConfig;
   private readonly platform: string;
   private readonly logger: Pick<Console, 'log' | 'warn' | 'error'>;
   private readonly powerMonitor: { on: (event: string, listener: () => void) => void } | null;
+  private readonly desktopCapturer: { getSources: (options: { types: string[] }) => Promise<Array<{ name: string }>> } | null;
+  private readonly featureFlags: StealthFeatureFlags;
+  private readonly intervalScheduler: (callback: () => Promise<void> | void, intervalMs: number) => unknown;
+  private readonly clearIntervalScheduler: (handle: unknown) => void;
+  private readonly timeoutScheduler: (callback: () => void, delayMs: number) => unknown;
   private readonly managedWindows = new Set<ManagedWindowRecord>();
   private readonly managedWindowLookup = new WeakMap<object, ManagedWindowRecord>();
   private nativeModule: NativeStealthBindings | null | undefined;
   private powerMonitorBound = false;
+  private watchdogHandle: unknown = null;
+  private watchdogRunning = false;
 
   constructor(config: StealthConfig, deps: StealthManagerDependencies = {}) {
     this.config = config;
     this.platform = deps.platform ?? process.platform;
     this.logger = deps.logger ?? console;
     this.powerMonitor = deps.powerMonitor ?? this.resolvePowerMonitor();
+    this.desktopCapturer = deps.desktopCapturer ?? this.resolveDesktopCapturer();
+    this.featureFlags = deps.featureFlags ?? {};
+    this.intervalScheduler = deps.intervalScheduler ?? ((callback, intervalMs) => setInterval(callback, intervalMs));
+    this.clearIntervalScheduler = deps.clearIntervalScheduler ?? ((handle) => clearInterval(handle as NodeJS.Timeout));
+    this.timeoutScheduler = deps.timeoutScheduler ?? ((callback, delayMs) => setTimeout(callback, delayMs));
     this.nativeModule = deps.nativeModule;
   }
 
@@ -131,6 +174,7 @@ export class StealthManager {
     this.applyNativeStealth(win);
     this.attachLifecycleListeners(record);
     this.bindPowerMonitor();
+    this.ensureWatchdog();
   }
 
   reapplyAfterShow(win: StealthCapableWindow): void {
@@ -210,6 +254,9 @@ export class StealthManager {
         const windowNumber = this.getMacosWindowNumber(win);
         if (windowNumber !== null) {
           nativeModule.applyMacosWindowStealth(windowNumber);
+          if (this.featureFlags.enablePrivateMacosStealthApi && nativeModule.applyMacosPrivateWindowStealth) {
+            nativeModule.applyMacosPrivateWindowStealth(windowNumber);
+          }
         }
       }
     } catch (error) {
@@ -236,6 +283,9 @@ export class StealthManager {
         const windowNumber = this.getMacosWindowNumber(win);
         if (windowNumber !== null) {
           nativeModule.removeMacosWindowStealth(windowNumber);
+          if (this.featureFlags.enablePrivateMacosStealthApi && nativeModule.removeMacosPrivateWindowStealth) {
+            nativeModule.removeMacosPrivateWindowStealth(windowNumber);
+          }
         }
       }
     } catch (error) {
@@ -312,6 +362,76 @@ export class StealthManager {
     this.powerMonitorBound = true;
   }
 
+  private ensureWatchdog(): void {
+    if (
+      this.watchdogHandle ||
+      !this.isEnabled() ||
+      !this.featureFlags.enableCaptureDetectionWatchdog ||
+      !this.desktopCapturer
+    ) {
+      return;
+    }
+
+    this.watchdogHandle = this.intervalScheduler(() => this.pollCaptureTools(), WATCHDOG_INTERVAL_MS);
+  }
+
+  private async pollCaptureTools(): Promise<void> {
+    if (this.watchdogRunning || !this.desktopCapturer) {
+      return;
+    }
+
+    this.watchdogRunning = true;
+    try {
+      const sources = await this.desktopCapturer.getSources({ types: ['screen', 'window'] });
+      const suspicious = sources.some((source) => this.isCaptureToolProcess(source.name));
+      if (suspicious) {
+        this.hideAndRestoreVisibleWindows();
+      }
+    } catch (error) {
+      this.logger.warn('[StealthManager] Capture watchdog poll failed:', error);
+    } finally {
+      this.watchdogRunning = false;
+    }
+  }
+
+  private hideAndRestoreVisibleWindows(): void {
+    const windowsToRestore: StealthCapableWindow[] = [];
+
+    for (const record of this.managedWindows) {
+      const win = record.win;
+      if (this.isWindowDestroyed(win) || typeof win.hide !== 'function' || typeof win.show !== 'function') {
+        continue;
+      }
+
+      const wasVisible = typeof win.isVisible === 'function' ? win.isVisible() : true;
+      if (!wasVisible) {
+        continue;
+      }
+
+      win.hide();
+      windowsToRestore.push(win);
+    }
+
+    if (windowsToRestore.length === 0) {
+      return;
+    }
+
+    this.timeoutScheduler(() => {
+      for (const win of windowsToRestore) {
+        if (this.isWindowDestroyed(win)) {
+          continue;
+        }
+
+        win.show?.();
+        this.reapplyAfterShow(win);
+      }
+    }, WATCHDOG_RESTORE_DELAY_MS);
+  }
+
+  private isCaptureToolProcess(sourceName: string): boolean {
+    return KNOWN_CAPTURE_TOOL_PATTERNS.some((pattern) => pattern.test(sourceName));
+  }
+
   private getNativeModule(): NativeStealthBindings | null {
     if (this.nativeModule !== undefined) {
       return this.nativeModule;
@@ -325,6 +445,15 @@ export class StealthManager {
     try {
       const electronModule = require('electron');
       return electronModule?.powerMonitor ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  private resolveDesktopCapturer(): { getSources: (options: { types: string[] }) => Promise<Array<{ name: string }>> } | null {
+    try {
+      const electronModule = require('electron');
+      return electronModule?.desktopCapturer ?? null;
     } catch {
       return null;
     }

@@ -83,6 +83,23 @@ function logToFile(msg: string) {
   }
 }
 
+function isEnvFlagEnabled(value: string | undefined): boolean | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  const normalized = value.trim().toLowerCase();
+  if (['1', 'true', 'yes', 'on'].includes(normalized)) {
+    return true;
+  }
+
+  if (['0', 'false', 'no', 'off'].includes(normalized)) {
+    return false;
+  }
+
+  return undefined;
+}
+
 console.log = (...args: any[]) => {
   const msg = args.map(a => (a instanceof Error) ? a.stack || a.message : (typeof a === 'object' ? JSON.stringify(a) : String(a))).join(' ');
   logToFile('[LOG] ' + msg);
@@ -310,7 +327,19 @@ syncOptimizationFlagsFromSettings(accelerationModeEnabled);
 console.log(`[AppState] Initialized with isUndetectable=${this.isUndetectable}, disguiseMode=${this.disguiseMode}, consciousModeEnabled=${this.consciousModeEnabled}, accelerationModeEnabled=${accelerationModeEnabled}`);
 
 // 2. Initialize Helpers with loaded state
-this.stealthManager = new StealthManager({ enabled: this.isUndetectable })
+this.stealthManager = new StealthManager({ enabled: this.isUndetectable }, {
+  featureFlags: {
+    enablePrivateMacosStealthApi:
+      isEnvFlagEnabled(process.env.NATIVELY_ENABLE_PRIVATE_MACOS_STEALTH_API) ??
+      (settingsManager.get('enablePrivateMacosStealthApi') ?? false),
+    enableCaptureDetectionWatchdog:
+      isEnvFlagEnabled(process.env.NATIVELY_ENABLE_CAPTURE_DETECTION_WATCHDOG) ??
+      (settingsManager.get('enableCaptureDetectionWatchdog') ?? false),
+    enableVirtualDisplayIsolation:
+      isEnvFlagEnabled(process.env.NATIVELY_ENABLE_VIRTUAL_DISPLAY_ISOLATION) ??
+      (settingsManager.get('enableVirtualDisplayIsolation') ?? false),
+  },
+})
 this.windowHelper = new WindowHelper(this, this.stealthManager)
 this.settingsWindowHelper = new SettingsWindowHelper(this.stealthManager)
 this.modelSelectorWindowHelper = new ModelSelectorWindowHelper(this.stealthManager)

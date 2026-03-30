@@ -10,6 +10,9 @@ export interface AppSettings {
   disguiseMode?: 'terminal' | 'settings' | 'activity' | 'none';
   consciousModeEnabled?: boolean;
   accelerationModeEnabled?: boolean;
+  enablePrivateMacosStealthApi?: boolean;
+  enableCaptureDetectionWatchdog?: boolean;
+  enableVirtualDisplayIsolation?: boolean;
 }
 
 const ALLOWED_DISGUISE_MODES = new Set<AppSettings['disguiseMode']>(['terminal', 'settings', 'activity', 'none']);
@@ -32,6 +35,18 @@ function sanitizeSettings(candidate: unknown): AppSettings {
 
   if (typeof raw.accelerationModeEnabled === 'boolean') {
     sanitized.accelerationModeEnabled = raw.accelerationModeEnabled;
+  }
+
+  if (typeof raw.enablePrivateMacosStealthApi === 'boolean') {
+    sanitized.enablePrivateMacosStealthApi = raw.enablePrivateMacosStealthApi;
+  }
+
+  if (typeof raw.enableCaptureDetectionWatchdog === 'boolean') {
+    sanitized.enableCaptureDetectionWatchdog = raw.enableCaptureDetectionWatchdog;
+  }
+
+  if (typeof raw.enableVirtualDisplayIsolation === 'boolean') {
+    sanitized.enableVirtualDisplayIsolation = raw.enableVirtualDisplayIsolation;
   }
 
   if (typeof raw.disguiseMode === 'string' && ALLOWED_DISGUISE_MODES.has(raw.disguiseMode as AppSettings['disguiseMode'])) {
