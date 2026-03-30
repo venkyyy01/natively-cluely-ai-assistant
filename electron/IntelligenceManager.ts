@@ -85,6 +85,10 @@ export class IntelligenceManager extends EventEmitter {
         this.session.setMeetingMetadata(metadata);
     }
 
+    getSessionTracker(): SessionTracker {
+        return this.session;
+    }
+
     addTranscript(segment: import('./SessionTracker').TranscriptSegment, skipRefinementCheck: boolean = false): void {
         if (skipRefinementCheck) {
             // Direct add without refinement detection
@@ -131,7 +135,7 @@ export class IntelligenceManager extends EventEmitter {
         return this.session.getLastInterviewerTurn();
     }
 
-    logUsage(type: string, question: string, answer: string): void {
+    logUsage(type: 'assist' | 'followup' | 'chat' | 'followup_questions', question: string, answer: string): void {
         this.session.logUsage(type, question, answer);
     }
 
@@ -192,20 +196,26 @@ export class IntelligenceManager extends EventEmitter {
     // Meeting Lifecycle (delegates to persistence)
     // ============================================
 
-    async stopMeeting(): Promise<void> {
-        return this.persistence.stopMeeting();
-    }
+  async stopMeeting(): Promise<void> {
+    return this.persistence.stopMeeting();
+  }
 
-    async recoverUnprocessedMeetings(): Promise<void> {
-        return this.persistence.recoverUnprocessedMeetings();
-    }
+  async recoverUnprocessedMeetings(): Promise<void> {
+    return this.persistence.recoverUnprocessedMeetings();
+  }
+
+  async waitForPendingSaves(timeoutMs?: number): Promise<void> {
+    return this.persistence.waitForPendingSaves(timeoutMs);
+  }
 
     // ============================================
     // Reset (resets all sub-modules)
     // ============================================
 
-    reset(): void {
-        this.session.reset();
-        this.engine.reset();
-    }
+  async reset(): Promise<void> {
+    this.engine.removeAllListeners();
+    this.removeAllListeners();
+    await this.session.reset();
+    this.engine.reset();
+  }
 }
