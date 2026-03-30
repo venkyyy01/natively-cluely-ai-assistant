@@ -2151,7 +2151,7 @@ ANSWER DIRECTLY:`;
    * 
    * MULTIMODAL: Gemini-only (existing logic)
    */
-  public async * streamChatWithGemini(message: string, imagePaths?: string[], context?: string, skipSystemPrompt: boolean = false): AsyncGenerator<string, void, unknown> {
+  public async * streamChatWithGemini(message: string, imagePaths?: string[], context?: string, skipSystemPrompt: boolean = false, abortSignal?: AbortSignal): AsyncGenerator<string, void, unknown> {
     console.log(`[LLMHelper] streamChatWithGemini called with message:`, message.substring(0, 50));
     const effectiveMessage = this.applyDefaultBrevityHint(message);
 
@@ -2160,11 +2160,11 @@ ANSWER DIRECTLY:`;
     // Build single-string messages for Groq/Gemini (which use combined prompts)
     const buildCombinedMessage = (systemPrompt: string) => {
       const finalPrompt = skipSystemPrompt ? systemPrompt : this.injectLanguageInstruction(systemPrompt);
-        if (skipSystemPrompt) {
-          return context
+      if (skipSystemPrompt) {
+        return context
           ? `CONTEXT:\n${context}\n\nUSER QUESTION:\n${effectiveMessage}`
           : effectiveMessage;
-        }
+      }
       return context
         ? `${finalPrompt}\n\nCONTEXT:\n${context}\n\nUSER QUESTION:\n${effectiveMessage}`
         : `${finalPrompt}\n\n${effectiveMessage}`;
@@ -2211,13 +2211,13 @@ ANSWER DIRECTLY:`;
         providers.push({ name: `OpenAI (${textOpenAI})`, execute: () => this.streamWithOpenaiMultimodal(userContent, imagePaths!, openaiSystemPrompt) });
       }
       if (this.client) {
-        providers.push({ name: `Gemini Flash (${textGeminiFlash})`, execute: () => this.streamWithGeminiModel(combinedMessages.gemini, textGeminiFlash, imagePaths) });
+        providers.push({ name: `Gemini Flash (${textGeminiFlash})`, execute: () => this.streamWithGeminiModel(combinedMessages.gemini, textGeminiFlash, imagePaths, abortSignal) });
       }
       if (this.claudeClient) {
         providers.push({ name: `Claude (${textClaude})`, execute: () => this.streamWithClaudeMultimodal(userContent, imagePaths!, claudeSystemPrompt) });
       }
       if (this.client) {
-        providers.push({ name: `Gemini Pro (${textGeminiPro})`, execute: () => this.streamWithGeminiModel(combinedMessages.gemini, textGeminiPro, imagePaths) });
+        providers.push({ name: `Gemini Pro (${textGeminiPro})`, execute: () => this.streamWithGeminiModel(combinedMessages.gemini, textGeminiPro, imagePaths, abortSignal) });
       }
       if (this.groqClient) {
         providers.push({ name: `Groq (meta-llama/llama-4-scout-17b-16e-instruct)`, execute: () => this.streamWithGroqMultimodal(userContent, imagePaths!, openaiSystemPrompt) });
@@ -2234,8 +2234,8 @@ ANSWER DIRECTLY:`;
         providers.push({ name: `Claude (${textClaude})`, execute: () => this.streamWithClaude(userContent, claudeSystemPrompt) });
       }
       if (this.client) {
-        providers.push({ name: `Gemini Flash (${textGeminiFlash})`, execute: () => this.streamWithGeminiModel(combinedMessages.gemini, textGeminiFlash) });
-        providers.push({ name: `Gemini Pro (${textGeminiPro})`, execute: () => this.streamWithGeminiModel(combinedMessages.gemini, textGeminiPro) });
+        providers.push({ name: `Gemini Flash (${textGeminiFlash})`, execute: () => this.streamWithGeminiModel(combinedMessages.gemini, textGeminiFlash, undefined, abortSignal) });
+        providers.push({ name: `Gemini Pro (${textGeminiPro})`, execute: () => this.streamWithGeminiModel(combinedMessages.gemini, textGeminiPro, undefined, abortSignal) });
       }
     }
 
@@ -2251,6 +2251,10 @@ ANSWER DIRECTLY:`;
     const MAX_FULL_ROTATIONS = 1;
 
     for (let rotation = 0; rotation < MAX_FULL_ROTATIONS; rotation++) {
+      if (abortSignal?.aborted) {
+        console.log('[LLMHelper] streamChatWithGemini aborted by signal');
+        return;
+      }
       if (rotation > 0) {
         const backoffMs = 1000 * rotation;
         console.log(`[LLMHelper] 🔄 Starting rotation ${rotation + 1}/${MAX_FULL_ROTATIONS} after ${backoffMs}ms backoff...`);
@@ -2258,6 +2262,10 @@ ANSWER DIRECTLY:`;
       }
 
       for (let i = 0; i < providers.length; i++) {
+        if (abortSignal?.aborted) {
+          console.log('[LLMHelper] streamChatWithGemini aborted by signal');
+          return;
+        }
         const provider = providers[i];
         try {
           console.log(`[LLMHelper] ${rotation === 0 ? '🚀' : '🔁'} Attempting ${provider.name}...`);
@@ -2738,7 +2746,7 @@ ANSWER DIRECTLY:`;
   /**
    * Stream response from a specific Gemini model
    */
-  private async * streamWithGeminiModel(fullMessage: string, model: string, imagePaths?: string[]): AsyncGenerator<string, void, unknown> {
+  private async * streamWithGeminiModel(fullMessage: string, model: string, imagePaths?: string[], abortSignal?: AbortSignal): AsyncGenerator<string, void, unknown> {
     if (!this.client) throw new Error("Gemini client not initialized");
 
     const contents: any[] = [{ text: fullMessage }];
@@ -2756,30 +2764,47 @@ ANSWER DIRECTLY:`;
       }
     }
 
-    const streamResult = await this.client.models.generateContentStream({
-      model: model,
-      contents: contents,
-      config: {
-        maxOutputTokens: MAX_OUTPUT_TOKENS,
-        temperature: 0.4,
-      }
-    });
+    // Create abort controller for timeout/cancellation
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), LLM_API_TIMEOUT_MS);
+    
+    // Wire up external abort signal if provided
+    if (abortSignal) {
+      abortSignal.addEventListener('abort', () => controller.abort(abortSignal.reason), { once: true });
+    }
 
-    // @ts-ignore
-    const stream = streamResult.stream || streamResult;
+    try {
+      const streamResult = await this.client.models.generateContentStream({
+        model: model,
+        contents: contents,
+        config: {
+          maxOutputTokens: MAX_OUTPUT_TOKENS,
+          temperature: 0.4,
+        }
+      });
 
-    for await (const chunk of stream) {
-      let chunkText = "";
-      if (typeof chunk.text === 'function') {
-        chunkText = chunk.text();
-      } else if (typeof chunk.text === 'string') {
-        chunkText = chunk.text;
-      } else if (chunk.candidates?.[0]?.content?.parts?.[0]?.text) {
-        chunkText = chunk.candidates[0].content.parts[0].text;
+      // @ts-ignore
+      const stream = streamResult.stream || streamResult;
+
+      for await (const chunk of stream) {
+        if (controller.signal.aborted) {
+          console.log('[LLMHelper] streamWithGeminiModel aborted');
+          return;
+        }
+        let chunkText = "";
+        if (typeof chunk.text === 'function') {
+          chunkText = chunk.text();
+        } else if (typeof chunk.text === 'string') {
+          chunkText = chunk.text;
+        } else if (chunk.candidates?.[0]?.content?.parts?.[0]?.text) {
+          chunkText = chunk.candidates[0].content.parts[0].text;
+        }
+        if (chunkText) {
+          yield chunkText;
+        }
       }
-      if (chunkText) {
-        yield chunkText;
-      }
+    } finally {
+      clearTimeout(timeoutId);
     }
   }
 

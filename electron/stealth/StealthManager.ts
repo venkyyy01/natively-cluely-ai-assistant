@@ -1,7 +1,12 @@
 import { isOptimizationActive } from '../config/optimizations';
+import { EventEmitter } from 'events';
 import type { VirtualDisplayCoordinator } from './MacosVirtualDisplayClient';
 
 import { loadNativeStealthModule } from './nativeStealthModule';
+import { exec } from 'node:child_process';
+import { promisify } from 'node:util';
+
+const execAsync = promisify(exec);
 
 export interface StealthConfig {
   enabled: boolean;
@@ -55,11 +60,11 @@ interface StealthManagerDependencies {
   screenApi?: ScreenApi | null;
   logger?: Pick<Console, 'log' | 'warn' | 'error'>;
   featureFlags?: StealthFeatureFlags;
-  desktopCapturer?: { getSources: (options: { types: string[] }) => Promise<Array<{ name: string }>> } | null;
   intervalScheduler?: (callback: () => Promise<void> | void, intervalMs: number) => unknown;
   clearIntervalScheduler?: (handle: unknown) => void;
   timeoutScheduler?: (callback: () => void, delayMs: number) => unknown;
   virtualDisplayCoordinator?: VirtualDisplayCoordinator | null;
+  captureToolPatterns?: RegExp[];
 }
 
 interface StealthCapableWindow {
@@ -105,19 +110,38 @@ const KNOWN_CAPTURE_TOOL_PATTERNS = [
   /capture/i,
 ];
 
-export class StealthManager {
+export class StealthManager extends EventEmitter {
   private config: StealthConfig;
+  private stealthDegradationWarnings = new Set<string>();
+
+  public getStealthDegradationWarnings(): string[] {
+    return Array.from(this.stealthDegradationWarnings);
+  }
+
+  private addWarning(warning: string): void {
+    if (!this.stealthDegradationWarnings.has(warning)) {
+      this.stealthDegradationWarnings.add(warning);
+      this.emit('stealth-degraded', this.getStealthDegradationWarnings());
+    }
+  }
+
+  private clearWarning(warning: string): void {
+    if (this.stealthDegradationWarnings.has(warning)) {
+      this.stealthDegradationWarnings.delete(warning);
+      this.emit('stealth-degraded', this.getStealthDegradationWarnings());
+    }
+  }
   private readonly platform: string;
   private readonly logger: Pick<Console, 'log' | 'warn' | 'error'>;
   private readonly powerMonitor: { on: (event: string, listener: () => void) => void } | null;
   private readonly displayEvents: DisplayEventSource | null;
   private readonly screenApi: ScreenApi | null;
-  private readonly desktopCapturer: { getSources: (options: { types: string[] }) => Promise<Array<{ name: string }>> } | null;
   private readonly featureFlags: StealthFeatureFlags;
   private readonly intervalScheduler: (callback: () => Promise<void> | void, intervalMs: number) => unknown;
   private readonly clearIntervalScheduler: (handle: unknown) => void;
   private readonly timeoutScheduler: (callback: () => void, delayMs: number) => unknown;
   private readonly virtualDisplayCoordinator: VirtualDisplayCoordinator | null;
+  private readonly captureToolPatterns: RegExp[];
   private readonly managedWindows = new Set<ManagedWindowRecord>();
   private readonly managedWindowLookup = new WeakMap<object, ManagedWindowRecord>();
   private nativeModule: NativeStealthBindings | null | undefined;
@@ -127,18 +151,19 @@ export class StealthManager {
   private watchdogRunning = false;
 
   constructor(config: StealthConfig, deps: StealthManagerDependencies = {}) {
+    super();
     this.config = config;
     this.platform = deps.platform ?? process.platform;
     this.logger = deps.logger ?? console;
     this.powerMonitor = deps.powerMonitor ?? this.resolvePowerMonitor();
     this.screenApi = deps.screenApi ?? this.resolveScreenApi();
     this.displayEvents = deps.displayEvents ?? this.resolveDisplayEvents(this.screenApi);
-    this.desktopCapturer = deps.desktopCapturer ?? this.resolveDesktopCapturer();
     this.featureFlags = deps.featureFlags ?? {};
     this.intervalScheduler = deps.intervalScheduler ?? ((callback, intervalMs) => setInterval(callback, intervalMs));
     this.clearIntervalScheduler = deps.clearIntervalScheduler ?? ((handle) => clearInterval(handle as NodeJS.Timeout));
     this.timeoutScheduler = deps.timeoutScheduler ?? ((callback, delayMs) => setTimeout(callback, delayMs));
     this.virtualDisplayCoordinator = deps.virtualDisplayCoordinator ?? null;
+    this.captureToolPatterns = deps.captureToolPatterns ?? KNOWN_CAPTURE_TOOL_PATTERNS;
     this.nativeModule = deps.nativeModule;
   }
 
@@ -294,6 +319,7 @@ export class StealthManager {
       }
     } catch (error) {
       this.logger.warn('[StealthManager] Native stealth application failed:', error);
+      if (this.isEnabled()) this.addWarning('native_stealth_failed');
     }
   }
 
@@ -374,8 +400,12 @@ export class StealthManager {
 
       if (!response.ready || !response.surfaceToken) {
         record.virtualDisplayIsolationStarted = false;
+        if (this.isEnabled()) this.addWarning('virtual_display_failed');
         return;
       }
+
+      this.clearWarning('virtual_display_failed');
+      this.clearWarning('virtual_display_exhausted');
 
       this.moveWindowToVirtualDisplay(record, response.surfaceToken, requestId);
     }).catch((error) => {
@@ -383,6 +413,13 @@ export class StealthManager {
         record.virtualDisplayIsolationStarted = false;
       }
       this.logger.warn('[StealthManager] Virtual display isolation failed:', error);
+      if (this.isEnabled()) {
+        if (this.virtualDisplayCoordinator.isExhausted?.()) {
+          this.addWarning('virtual_display_exhausted');
+        } else {
+          this.addWarning('virtual_display_failed');
+        }
+      }
     });
   }
 
@@ -470,11 +507,15 @@ export class StealthManager {
 
     this.powerMonitor.on('unlock-screen', reapplyAll);
     this.powerMonitor.on('resume', reapplyAll);
+    if (this.platform === 'darwin') {
+      this.powerMonitor.on('on-ac', reapplyAll);
+      this.powerMonitor.on('on-battery', reapplyAll);
+    }
     this.powerMonitorBound = true;
   }
 
   private bindDisplayEvents(): void {
-    if (this.displayEventsBound || !this.displayEvents || this.platform !== 'win32') {
+    if (this.displayEventsBound || !this.displayEvents || (this.platform !== 'win32' && this.platform !== 'darwin')) {
       return;
     }
 
@@ -489,6 +530,10 @@ export class StealthManager {
     };
 
     this.displayEvents.on('display-metrics-changed', reapplyAll);
+    if (this.platform === 'darwin') {
+      this.displayEvents.on('display-added', reapplyAll);
+      this.displayEvents.on('display-removed', reapplyAll);
+    }
     this.displayEventsBound = true;
   }
 
@@ -570,8 +615,7 @@ export class StealthManager {
     if (
       this.watchdogHandle ||
       !this.isEnabled() ||
-      !this.featureFlags.enableCaptureDetectionWatchdog ||
-      !this.desktopCapturer
+      !this.featureFlags.enableCaptureDetectionWatchdog
     ) {
       return;
     }
@@ -580,15 +624,29 @@ export class StealthManager {
   }
 
   private async pollCaptureTools(): Promise<void> {
-    if (this.watchdogRunning || !this.desktopCapturer) {
+    if (this.watchdogRunning) {
       return;
     }
 
     this.watchdogRunning = true;
     try {
-      const sources = await this.desktopCapturer.getSources({ types: ['screen', 'window'] });
-      const suspicious = sources.some((source) => this.isCaptureToolProcess(source.name));
-      if (suspicious) {
+      let command = '';
+      if (this.platform === 'win32') {
+        command = 'tasklist /NH /FO CSV';
+      } else if (this.platform === 'darwin' || this.platform === 'linux') {
+        command = 'ps -eo comm=';
+      } else {
+         return;
+      }
+
+      const { stdout } = await execAsync(command);
+      
+      const suspiciousToolMatches = this.captureToolPatterns.filter((pattern) => pattern.test(stdout));
+
+      if (suspiciousToolMatches.length > 0) {
+        this.logger.log(
+          `[StealthManager] Capture watchdog detected suspicious tools running. Patterns triggered: ${suspiciousToolMatches.length}`
+        );
         this.hideAndRestoreVisibleWindows();
       }
     } catch (error) {
@@ -632,16 +690,20 @@ export class StealthManager {
     }, WATCHDOG_RESTORE_DELAY_MS);
   }
 
-  private isCaptureToolProcess(sourceName: string): boolean {
-    return KNOWN_CAPTURE_TOOL_PATTERNS.some((pattern) => pattern.test(sourceName));
-  }
-
   private getNativeModule(): NativeStealthBindings | null {
     if (this.nativeModule !== undefined) {
+      if (this.nativeModule === null && this.isEnabled()) {
+        this.addWarning('native_module_unavailable');
+      } else if (this.nativeModule !== null) {
+        this.clearWarning('native_module_unavailable');
+      }
       return this.nativeModule;
     }
 
     this.nativeModule = loadNativeStealthModule();
+    if (this.nativeModule === null && this.isEnabled()) {
+      this.addWarning('native_module_unavailable');
+    }
     return this.nativeModule;
   }
 
@@ -649,15 +711,6 @@ export class StealthManager {
     try {
       const electronModule = require('electron');
       return electronModule?.powerMonitor ?? null;
-    } catch {
-      return null;
-    }
-  }
-
-  private resolveDesktopCapturer(): { getSources: (options: { types: string[] }) => Promise<Array<{ name: string }>> } | null {
-    try {
-      const electronModule = require('electron');
-      return electronModule?.desktopCapturer ?? null;
     } catch {
       return null;
     }

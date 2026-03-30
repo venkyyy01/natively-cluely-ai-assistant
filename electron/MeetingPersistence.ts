@@ -9,13 +9,38 @@ import { GROQ_TITLE_PROMPT, GROQ_SUMMARY_JSON_PROMPT } from './llm';
 const crypto = require('crypto');
 
 export class MeetingPersistence {
-    private session: SessionTracker;
-    private llmHelper: LLMHelper;
+  private session: SessionTracker;
+  private llmHelper: LLMHelper;
+  private pendingSaves: Set<Promise<void>> = new Set();
 
-    constructor(session: SessionTracker, llmHelper: LLMHelper) {
-        this.session = session;
-        this.llmHelper = llmHelper;
+  constructor(session: SessionTracker, llmHelper: LLMHelper) {
+    this.session = session;
+    this.llmHelper = llmHelper;
+  }
+
+  /**
+  * Wait for all pending meeting saves to complete.
+  * Call this before app quit to prevent data loss.
+  */
+  async waitForPendingSaves(timeoutMs: number = 10000): Promise<void> {
+    if (this.pendingSaves.size === 0) return;
+
+    console.log(`[MeetingPersistence] Waiting for ${this.pendingSaves.size} pending saves...`);
+
+    const timeout = new Promise<void>((_, reject) => 
+      setTimeout(() => reject(new Error('Timeout waiting for pending saves')), timeoutMs)
+    );
+
+    try {
+      await Promise.race([
+        Promise.all(Array.from(this.pendingSaves)),
+        timeout
+      ]);
+      console.log('[MeetingPersistence] All pending saves completed');
+    } catch (e) {
+      console.warn('[MeetingPersistence] Some saves may not have completed:', e);
     }
+  }
 
     /**
      * Stops the meeting immediately, snapshots data, and triggers background processing.
@@ -35,13 +60,15 @@ export class MeetingPersistence {
             return;
         }
 
-        // 2. Reset state immediately so new meeting can start or UI is clean
-        this.session.reset();
+    // 2. Reset state immediately so new meeting can start or UI is clean
+    this.session.reset();
 
-        const meetingId = crypto.randomUUID();
-        this.processAndSaveMeeting(snapshot, meetingId).catch(err => {
-            console.error('[MeetingPersistence] Background processing failed:', err);
-        });
+    const meetingId = crypto.randomUUID();
+    const savePromise = this.processAndSaveMeeting(snapshot, meetingId);
+    this.pendingSaves.add(savePromise);
+    savePromise
+      .catch(err => console.error('[MeetingPersistence] Background processing failed:', err))
+      .finally(() => this.pendingSaves.delete(savePromise));
 
         // 4. Initial Save (Placeholder)
         const minutes = Math.floor(snapshot.durationMs / 60000);

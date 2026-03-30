@@ -107,8 +107,14 @@ export class MicrophoneCapture extends EventEmitter {
         this.emit('stop');
     }
 
-    public destroy(): void {
-        this.stop();
-        this.monitor = null;
-    }
+  /**
+  * Fully destroy the capture instance, releasing all native resources.
+  * Use this when completely tearing down audio (e.g., reconfigureAudio, app quit).
+  * For pause/resume, use stop() instead.
+  */
+  public destroy(): void {
+    this.stop();
+    this.monitor = null;
+    this.removeAllListeners();
+  }
 }

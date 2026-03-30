@@ -13,6 +13,7 @@ export interface AppSettings {
   enablePrivateMacosStealthApi?: boolean;
   enableCaptureDetectionWatchdog?: boolean;
   enableVirtualDisplayIsolation?: boolean;
+  captureToolPatterns?: string[];
 }
 
 const ALLOWED_DISGUISE_MODES = new Set<AppSettings['disguiseMode']>(['terminal', 'settings', 'activity', 'none']);
@@ -47,6 +48,13 @@ function sanitizeSettings(candidate: unknown): AppSettings {
 
   if (typeof raw.enableVirtualDisplayIsolation === 'boolean') {
     sanitized.enableVirtualDisplayIsolation = raw.enableVirtualDisplayIsolation;
+  }
+
+  if (Array.isArray(raw.captureToolPatterns)) {
+    const patterns = raw.captureToolPatterns.filter((value): value is string => typeof value === 'string' && value.trim().length > 0);
+    if (patterns.length > 0) {
+      sanitized.captureToolPatterns = patterns;
+    }
   }
 
   if (typeof raw.disguiseMode === 'string' && ALLOWED_DISGUISE_MODES.has(raw.disguiseMode as AppSettings['disguiseMode'])) {

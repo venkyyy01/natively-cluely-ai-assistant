@@ -451,11 +451,15 @@ export class IntelligenceEngine extends EventEmitter {
                 });
                 this.latencyTracker.markProviderRequestStarted(requestId);
 
-                for await (const token of stream) {
-                    if (requestSequence !== this.activeWhatToSayRequestId) {
-                        await stream.return?.(undefined);
-                        break;
-                    }
+      for await (const token of stream) {
+        if (requestSequence !== this.activeWhatToSayRequestId) {
+          try {
+            await stream.return?.(undefined);
+          } catch {
+            // Stream cleanup failed - safe to ignore
+          }
+          break;
+        }
                     if (fallbackResponsePrepared) {
                         this.latencyTracker.markFallbackOccurred(requestId);
                         fallbackResponsePrepared = false;
@@ -738,11 +742,15 @@ export class IntelligenceEngine extends EventEmitter {
             });
             this.latencyTracker.markProviderRequestStarted(requestId);
 
-            for await (const token of stream) {
-                if (requestSequence !== this.activeWhatToSayRequestId) {
-                    await stream.return?.(undefined);
-                    break;
-                }
+      for await (const token of stream) {
+        if (requestSequence !== this.activeWhatToSayRequestId) {
+          try {
+            await stream.return?.(undefined);
+          } catch {
+            // Stream cleanup failed - safe to ignore
+          }
+          break;
+        }
                 if (fallbackResponsePrepared) {
                     this.latencyTracker.markFallbackOccurred(requestId);
                     fallbackResponsePrepared = false;
@@ -1035,14 +1043,22 @@ export class IntelligenceEngine extends EventEmitter {
         return this.activeMode;
     }
 
-    /**
-     * Reset engine state (cancels any in-flight operations)
-     */
-    reset(): void {
-        this.activeMode = 'idle';
-        if (this.assistCancellationToken) {
-            this.assistCancellationToken.abort();
-            this.assistCancellationToken = null;
-        }
+  /**
+  * Reset engine state (cancels any in-flight operations)
+  */
+  reset(): void {
+    this.activeMode = 'idle';
+    if (this.assistCancellationToken) {
+      this.assistCancellationToken.abort();
+      this.assistCancellationToken = null;
     }
+  }
+
+  /**
+  * Clean up all event listeners for garbage collection
+  */
+  override removeAllListeners(): this {
+    super.removeAllListeners();
+    return this;
+  }
 }

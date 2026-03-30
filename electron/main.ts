@@ -2,6 +2,7 @@ import { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, shell, systemPref
 import { EventEmitter } from "events"
 import path from "path"
 import fs from "fs"
+import fsPromises from "fs/promises"
 import { syncOptimizationFlagsFromSettings } from "./config/optimizations"
 import { StealthManager } from "./stealth/StealthManager"
 import { createMacosVirtualDisplayCoordinator, resolveMacosVirtualDisplayHelperPath } from "./stealth/macosVirtualDisplayIntegration"
@@ -15,11 +16,11 @@ process.stdout?.on?.('error', () => { });
 process.stderr?.on?.('error', () => { });
 
 process.on('uncaughtException', (err) => {
-  logToFile('[CRITICAL] Uncaught Exception: ' + (err.stack || err.message || err));
+  void logToFileAsync('[CRITICAL] Uncaught Exception: ' + (err.stack || err.message || err));
 });
 
 process.on('unhandledRejection', (reason, promise) => {
-  logToFile('[CRITICAL] Unhandled Rejection at: ' + promise + ' reason: ' + (reason instanceof Error ? reason.stack : reason));
+  void logToFileAsync('[CRITICAL] Unhandled Rejection at: ' + promise + ' reason: ' + (reason instanceof Error ? reason.stack : reason));
 });
 
 const logFile = path.join(app.getPath('documents'), 'natively_debug.log');
@@ -32,56 +33,91 @@ const originalError = console.error;
 
 const isDev = process.env.NODE_ENV === "development";
 
+// Log queue for non-blocking async writes
+let logQueue: string[] = [];
+let logFlushInProgress = false;
+let logRotationCheckPending = false;
+
 /**
- * Rotate log files if they exceed the maximum size.
+ * Rotate log files asynchronously if they exceed the maximum size.
  * Keeps LOG_ROTATION_COUNT rotated files (e.g., .log.1, .log.2, .log.3)
  */
-function rotateLogsIfNeeded(): void {
+async function rotateLogsIfNeededAsync(): Promise<void> {
+  if (logRotationCheckPending) return;
+  logRotationCheckPending = true;
+
   try {
-    const fs = require('fs');
-    
     // Check if log file exists and exceeds max size
-    if (!fs.existsSync(logFile)) return;
-    
-    const stats = fs.statSync(logFile);
-    if (stats.size < LOG_MAX_SIZE_BYTES) return;
-    
-    // Rotate existing files: .log.3 -> delete, .log.2 -> .log.3, .log.1 -> .log.2, .log -> .log.1
-    for (let i = LOG_ROTATION_COUNT; i >= 1; i--) {
-      const rotatedPath = `${logFile}.${i}`;
-      if (fs.existsSync(rotatedPath)) {
-        if (i === LOG_ROTATION_COUNT) {
-          // Delete oldest rotation
-          fs.unlinkSync(rotatedPath);
-        } else {
-          // Rename to next rotation number
-          fs.renameSync(rotatedPath, `${logFile}.${i + 1}`);
+    try {
+      const stats = await fsPromises.stat(logFile);
+      if (stats.size < LOG_MAX_SIZE_BYTES) return;
+
+      // Rotate existing files: .log.3 -> delete, .log.2 -> .log.3, .log.1 -> .log.2, .log -> .log.1
+      for (let i = LOG_ROTATION_COUNT; i >= 1; i--) {
+        const rotatedPath = `${logFile}.${i}`;
+        try {
+          await fsPromises.access(rotatedPath);
+          if (i === LOG_ROTATION_COUNT) {
+            await fsPromises.unlink(rotatedPath);
+          } else {
+            await fsPromises.rename(rotatedPath, `${logFile}.${i + 1}`);
+          }
+        } catch {
+          // File doesn't exist, skip
         }
       }
+
+      // Rename current log to .log.1
+      await fsPromises.rename(logFile, `${logFile}.1`);
+      originalLog(`[LogRotation] Rotated debug log (size was ${Math.round(stats.size / 1024 / 1024)}MB)`);
+    } catch {
+      // Log file doesn't exist yet, nothing to rotate
     }
-    
-    // Rename current log to .log.1
-    fs.renameSync(logFile, `${logFile}.1`);
-    
-    originalLog(`[LogRotation] Rotated debug log (size was ${Math.round(stats.size / 1024 / 1024)}MB)`);
   } catch (e) {
-    // Ignore rotation errors - don't disrupt logging
     originalError('[LogRotation] Failed to rotate logs:', e);
+  } finally {
+    logRotationCheckPending = false;
   }
 }
 
-function logToFile(msg: string) {
-  // Only log to file in development
-  if (!isDev) return;
+/**
+ * Flush the log queue to disk asynchronously
+ */
+async function flushLogQueue(): Promise<void> {
+  if (logFlushInProgress || logQueue.length === 0) return;
+  logFlushInProgress = true;
+
+  const pending = logQueue.splice(0, logQueue.length);
+  if (pending.length === 0) {
+    logFlushInProgress = false;
+    return;
+  }
 
   try {
-    // Check and rotate logs if needed before writing
-    rotateLogsIfNeeded();
-    
-    require('fs').appendFileSync(logFile, new Date().toISOString() + ' ' + msg + '\n');
-  } catch (e) {
+    await rotateLogsIfNeededAsync();
+    const content = pending.map(msg => `${new Date().toISOString()} ${msg}`).join('\n') + '\n';
+    await fsPromises.appendFile(logFile, content);
+  } catch {
     // Ignore logging errors
+  } finally {
+    logFlushInProgress = false;
+    if (logQueue.length > 0) {
+      void flushLogQueue();
+    }
   }
+}
+
+/**
+ * Non-blocking async log to file
+ */
+async function logToFileAsync(msg: string): Promise<void> {
+  logQueue.push(msg);
+  void flushLogQueue();
+}
+
+// Synchronous version for backwards compatibility with console overrides
+function logToFile(msg: string): void {
+  void logToFileAsync(msg);
 }
 
 function isEnvFlagEnabled(value: string | undefined): boolean | undefined {
@@ -149,6 +185,8 @@ import { RAGManager } from "./rag/RAGManager"
 import { DatabaseManager } from "./db/DatabaseManager"
 import { warmupIntentClassifier } from "./llm"
 import { maybeHandleSuggestionTriggerFromTranscript } from "./ConsciousMode"
+import { MeetingCheckpointer } from "./MeetingCheckpointer"
+import { STTReconnector } from "./STTReconnector"
 
 /** Unified type for all STT providers with optional extended capabilities */
 type STTProvider = (GoogleSTT | RestSTT | DeepgramStreamingSTT | SonioxStreamingSTT | ElevenLabsStreamingSTT | OpenAIStreamingSTT) & {
@@ -248,6 +286,8 @@ export class AppState {
   private themeManager: ThemeManager
   private ragManager: RAGManager | null = null
   private knowledgeOrchestrator: any = null
+  private checkpointer: MeetingCheckpointer | null = null
+  private sttReconnector: STTReconnector | null = null
   private tray: Tray | null = null
   private disguiseMode: 'terminal' | 'settings' | 'activity' | 'none' = 'none'
   private consciousModeEnabled: boolean = false
@@ -294,6 +334,7 @@ export class AppState {
     this.trackDisguiseTimer(timer)
   }
   private _ollamaBootstrapPromise: Promise<void> | null = null;
+  private audioRecoveryAttempted: boolean = false;
 
 
   // Processing events
@@ -336,6 +377,16 @@ const enablePrivateMacosStealthApi =
 const enableCaptureDetectionWatchdog =
   isEnvFlagEnabled(process.env.NATIVELY_ENABLE_CAPTURE_DETECTION_WATCHDOG) ??
   (settingsManager.get('enableCaptureDetectionWatchdog') ?? false)
+const configuredCaptureToolPatterns = (settingsManager.get('captureToolPatterns') ?? [])
+  .map((pattern) => {
+    try {
+      return new RegExp(pattern, 'i')
+    } catch (error) {
+      console.warn(`[Stealth] Ignoring invalid capture tool pattern: ${pattern}`, error)
+      return null
+    }
+  })
+  .filter((pattern): pattern is RegExp => pattern !== null)
 const enableVirtualDisplayIsolation =
   isEnvFlagEnabled(process.env.NATIVELY_ENABLE_VIRTUAL_DISPLAY_ISOLATION) ??
   (settingsManager.get('enableVirtualDisplayIsolation') ?? false)
@@ -371,15 +422,43 @@ this.stealthManager = new StealthManager({ enabled: this.isUndetectable }, {
     enableCaptureDetectionWatchdog,
     enableVirtualDisplayIsolation,
   },
+  captureToolPatterns: configuredCaptureToolPatterns.length > 0 ? configuredCaptureToolPatterns : undefined,
   virtualDisplayCoordinator,
 })
 this.windowHelper = new WindowHelper(this, this.stealthManager)
 this.settingsWindowHelper = new SettingsWindowHelper(this.stealthManager)
 this.modelSelectorWindowHelper = new ModelSelectorWindowHelper(this.stealthManager)
 
+this.stealthManager.on('stealth-degraded', (warnings: string[]) => {
+  console.warn(`[Main] Stealth degraded: ${warnings.join(', ')}`);
+  this._broadcastToAllWindows('stealth-degraded', warnings);
+});
 // 3. Initialize other helpers
 this.screenshotHelper = new ScreenshotHelper(this.view)
 this.processingHelper = new ProcessingHelper(this)
+
+this.sttReconnector = new STTReconnector(async (speaker) => {
+  if (!this.isMeetingActive) return;
+  if (speaker === 'interviewer') {
+    safeDestroy(this.googleSTT);
+    this.googleSTT = this.createSTTProvider('interviewer');
+    if (this.systemAudioCapture) {
+      const rate = this.systemAudioCapture.getSampleRate();
+      this.googleSTT?.setSampleRate(rate);
+      safeSetAudioChannelCount(this.googleSTT, 1);
+    }
+    this.googleSTT?.start();
+  } else {
+    safeDestroy(this.googleSTT_User);
+    this.googleSTT_User = this.createSTTProvider('user');
+    if (this.microphoneCapture) {
+      const rate = this.microphoneCapture.getSampleRate() || 48000;
+      this.googleSTT_User?.setSampleRate(rate);
+      safeSetAudioChannelCount(this.googleSTT_User, 1);
+    }
+    this.googleSTT_User?.start();
+  }
+});
 
 this.windowHelper.setContentProtection(this.isUndetectable);
 this.settingsWindowHelper.setContentProtection(this.isUndetectable);
@@ -446,6 +525,12 @@ this.modelSelectorWindowHelper.setWindowHelper(this.windowHelper);
 // Initialize IntelligenceManager with LLMHelper
 this.intelligenceManager = new IntelligenceManager(this.processingHelper.getLLMHelper())
 this.intelligenceManager.setConsciousModeEnabled(this.consciousModeEnabled)
+
+// Initialize Checkpointer
+this.checkpointer = new MeetingCheckpointer(
+  DatabaseManager.getInstance(),
+  this.intelligenceManager.getSessionTracker()
+);
 
 // Initialize ThemeManager
 this.themeManager = ThemeManager.getInstance()
@@ -794,7 +879,7 @@ try {
         confidence: segment.confidence
       };
       helper.getLauncherWindow()?.webContents.send('native-audio-transcript', payload);
-      helper.getOverlayWindow()?.webContents.send('native-audio-transcript', payload);
+      helper.getOverlayContentWindow()?.webContents.send('native-audio-transcript', payload);
 
       void maybeHandleSuggestionTriggerFromTranscript({
         speaker,
@@ -810,6 +895,9 @@ try {
 
     const errorHandler = (err: Error) => {
       console.error(`[Main] STT (${speaker}) Error:`, err);
+      if (this.isMeetingActive) {
+        this.sttReconnector?.onError(speaker);
+      }
     };
 
     // Store listener references based on speaker
@@ -898,9 +986,9 @@ try {
   private async reconfigureAudio(inputDeviceId?: string, outputDeviceId?: string): Promise<void> {
     console.log(`[Main] Reconfiguring Audio: Input=${inputDeviceId}, Output=${outputDeviceId}`);
 
-    // 1. System Audio (Output Capture)
+    // 1. System Audio (Output Capture) - use destroy() for full cleanup
     if (this.systemAudioCapture) {
-      this.systemAudioCapture.stop();
+      this.systemAudioCapture.destroy();
       this.systemAudioCapture = null;
     }
 
@@ -918,10 +1006,24 @@ try {
       this.systemAudioCapture.on('speech_ended', () => {
         safeNotifySpeechEnded(this.googleSTT);
       });
-      this.systemAudioCapture.on('error', (err: Error) => {
+      this.systemAudioCapture.on('error', async (err: Error) => {
         console.error('[Main] SystemAudioCapture Error:', err);
         this.setNativeAudioConnected(false);
-        this.broadcast('meeting-audio-error', err.message || 'System audio capture failed');
+        
+        if (this.isMeetingActive && !this.audioRecoveryAttempted) {
+          this.audioRecoveryAttempted = true;
+          console.log('[Main] Attempting audio pipeline recovery...');
+          try {
+            await this.reconfigureAudio();
+            console.log('[Main] Audio pipeline recovered successfully');
+            this.setNativeAudioConnected(true);
+          } catch (recoveryErr) {
+            console.error('[Main] Audio recovery failed:', recoveryErr);
+            this.broadcast('meeting-audio-error', 'Audio capture failed and recovery unsuccessful');
+          }
+        } else {
+          this.broadcast('meeting-audio-error', err.message || 'System audio capture failed');
+        }
       });
       console.log('[Main] SystemAudioCapture initialized.');
     } catch (err) {
@@ -948,9 +1050,9 @@ try {
       }
     }
 
-    // 2. Microphone (Input Capture)
+    // 2. Microphone (Input Capture) - use destroy() for full cleanup
     if (this.microphoneCapture) {
-      this.microphoneCapture.stop();
+      this.microphoneCapture.destroy();
       this.microphoneCapture = null;
     }
 
@@ -968,10 +1070,24 @@ try {
       this.microphoneCapture.on('speech_ended', () => {
         safeNotifySpeechEnded(this.googleSTT_User);
       });
-      this.microphoneCapture.on('error', (err: Error) => {
+      this.microphoneCapture.on('error', async (err: Error) => {
         console.error('[Main] MicrophoneCapture Error:', err);
         this.setNativeAudioConnected(false);
-        this.broadcast('meeting-audio-error', err.message || 'Microphone capture failed');
+        
+        if (this.isMeetingActive && !this.audioRecoveryAttempted) {
+          this.audioRecoveryAttempted = true;
+          console.log('[Main] Attempting microphone recovery...');
+          try {
+            await this.reconfigureAudio();
+            console.log('[Main] Microphone recovered successfully');
+            this.setNativeAudioConnected(true);
+          } catch (recoveryErr) {
+            console.error('[Main] Microphone recovery failed:', recoveryErr);
+            this.broadcast('meeting-audio-error', 'Microphone failed and recovery unsuccessful');
+          }
+        } else {
+          this.broadcast('meeting-audio-error', err.message || 'Microphone capture failed');
+        }
       });
       console.log('[Main] MicrophoneCapture initialized.');
     } catch (err) {
@@ -1111,6 +1227,7 @@ try {
 
   public async startMeeting(metadata?: any): Promise<void> {
     console.log('[Main] Starting Meeting...', metadata);
+    this.audioRecoveryAttempted = false;
 
     // Chain this operation after any pending meeting start operations
     return this.meetingStartMutex = this.meetingStartMutex.then(async () => {
@@ -1136,7 +1253,7 @@ try {
       }
 
       // Emit session reset to clear UI state immediately
-      this.getWindowHelper().getOverlayWindow()?.webContents.send('session-reset');
+      this.getWindowHelper().getOverlayContentWindow()?.webContents.send('session-reset');
       this.getWindowHelper().getLauncherWindow()?.webContents.send('session-reset');
 
       // ★ ASYNC AUDIO INIT: Return INSTANTLY so the IPC response goes back
@@ -1188,6 +1305,13 @@ try {
             this.setNativeAudioConnected(true);
             this.meetingLifecycleState = 'active'
             console.log('[Main] Audio pipeline started successfully.');
+            
+            // Start checkpointer with current session ID
+            if (this.intelligenceManager) {
+              const sessionId = this.intelligenceManager.getSessionTracker().getSessionId();
+              this.checkpointer?.start(sessionId);
+            }
+            
             resolve()
           } catch (err) {
             console.error('[Main] Error initializing audio pipeline:', err);
@@ -1217,9 +1341,16 @@ try {
       console.log('[Main] Ignoring pending meeting start errors during endMeeting');
     });
 
+    this.sttReconnector?.stopAll();
+    this.checkpointer?.stop();
+
     // 3. Stop System Audio
     try {
       this.systemAudioCapture?.stop();
+      if (typeof this.systemAudioCapture?.destroy === 'function') {
+        this.systemAudioCapture.destroy();
+      }
+      this.systemAudioCapture = null;
     } catch (error) {
       console.error('[Main] Failed to stop system audio during endMeeting:', error)
     }
@@ -1247,6 +1378,10 @@ try {
     // 4. Stop Microphone
     try {
       this.microphoneCapture?.stop();
+      if (typeof this.microphoneCapture?.destroy === 'function') {
+        this.microphoneCapture.destroy();
+      }
+      this.microphoneCapture = null;
     } catch (error) {
       console.error('[Main] Failed to stop microphone capture during endMeeting:', error)
     }
@@ -1327,11 +1462,17 @@ try {
     // Clear disguise timers to prevent memory leaks
     this.clearDisguiseTimers()
 
+    this.sttReconnector?.stopAll();
+    this.checkpointer?.destroy();
+
     // Remove intelligence event listeners to prevent memory leaks
     this.intelligenceManager.removeAllListeners()
 
     try {
       this.systemAudioCapture?.stop()
+      if (typeof this.systemAudioCapture?.destroy === 'function') {
+        this.systemAudioCapture.destroy()
+      }
     } catch (error) {
       console.error('[Main] Failed to stop system audio during quit:', error)
     }
@@ -1358,6 +1499,9 @@ try {
 
   try {
     this.microphoneCapture?.stop()
+    if (typeof this.microphoneCapture?.destroy === 'function') {
+      this.microphoneCapture.destroy()
+    }
   } catch (error) {
     console.error('[Main] Failed to stop microphone capture during quit:', error)
   }
@@ -1447,7 +1591,8 @@ try {
       const launcher = helper.getLauncherWindow();
       const overlay = helper.getOverlayWindow();
       if (launcher && !launcher.isDestroyed()) launcher.webContents.send('intelligence-assist-update', { insight });
-      if (overlay && !overlay.isDestroyed()) overlay.webContents.send('intelligence-assist-update', { insight });
+      const overlayContent = this.getWindowHelper().getOverlayContentWindow();
+      if (overlayContent && !overlayContent.isDestroyed()) overlayContent.webContents.send('intelligence-assist-update', { insight });
     })
 
     this.intelligenceManager.on('suggested_answer', (answer: string, question: string, confidence: number) => {
@@ -1574,6 +1719,10 @@ try {
   }
 
   // Getters and Setters
+  public getIsMeetingActive(): boolean {
+    return this.isMeetingActive;
+  }
+
   public getMainWindow(): BrowserWindow | null {
     return this.windowHelper.getMainWindow()
   }
@@ -2368,24 +2517,50 @@ async function initializeApp() {
     }
   })
 
-  // Scrub API keys from memory on quit to minimize exposure window
-  app.on("before-quit", () => {
-    console.log("App is quitting, cleaning up resources...");
-    appState.cleanupForQuit();
-    globalShortcut.unregisterAll();
+let isForceQuitting = false;
 
-    // Kill Ollama if we started it
-    OllamaManager.getInstance().stop();
+app.on("before-quit", async (e) => {
+  if (isForceQuitting) return;
 
+  e.preventDefault();
+  console.log("[Main] App quitting, preventing default to ensure pending saves complete...");
+
+  if (appState.getIsMeetingActive()) {
+    console.log("[Main] Meeting active during quit, ending meeting before exit...");
     try {
-      const { CredentialsManager } = require('./services/CredentialsManager');
-      CredentialsManager.getInstance().scrubMemory();
-      appState.processingHelper.getLLMHelper().scrubKeys();
-      console.log('[Main] Credentials scrubbed from memory on quit');
-    } catch (e) {
-      console.error('[Main] Failed to scrub credentials on quit:', e);
+      await appState.endMeeting();
+    } catch (err) {
+      console.error("[Main] Error ending meeting on quit:", err);
     }
-  })
+  }
+
+  console.log("App is quitting, cleaning up resources...");
+
+  try {
+    await appState.getIntelligenceManager()?.waitForPendingSaves(10000);
+    console.log('[Main] All pending saves completed');
+  } catch (err) {
+    console.warn('[Main] Failed to wait for pending saves:', err);
+  }
+
+  appState.cleanupForQuit();
+  globalShortcut.unregisterAll();
+
+  // Kill Ollama if we started it
+  OllamaManager.getInstance().stop();
+
+  try {
+    const { CredentialsManager } = require('./services/CredentialsManager');
+    CredentialsManager.getInstance().scrubMemory();
+    appState.processingHelper.getLLMHelper().scrubKeys();
+    console.log('[Main] Credentials scrubbed from memory on quit');
+  } catch (err) {
+    console.error('[Main] Failed to scrub credentials on quit:', err);
+  }
+
+  isForceQuitting = true;
+  app.exit();
+})
 
 
 

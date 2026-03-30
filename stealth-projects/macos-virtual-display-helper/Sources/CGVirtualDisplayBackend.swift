@@ -171,7 +171,13 @@ public final class CGVirtualDisplayBackend: VirtualDisplayBackend {
         return fn(display, selector, settings)
     }
 
-    private static func stableSerial(for request: SessionRequest) -> UInt32 {
-        UInt32(abs(request.sessionId.hashValue) % Int(UInt32.max - 1)) + 1
+    static func stableSerial(for request: SessionRequest) -> UInt32 {
+        var hash: UInt32 = 2166136261
+        for byte in request.sessionId.utf8 {
+            hash ^= UInt32(byte)
+            hash = hash &* 16777619
+        }
+
+        return max(hash, 1)
     }
 }

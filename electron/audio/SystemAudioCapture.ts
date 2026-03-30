@@ -91,22 +91,31 @@ export class SystemAudioCapture extends EventEmitter {
         }
     }
 
-    /**
-     * Stop capturing
-     */
-    public stop(): void {
-        if (!this.isRecording) return;
+  /**
+  * Stop capturing
+  */
+  public stop(): void {
+    if (!this.isRecording) return;
 
-        console.log('[SystemAudioCapture] Stopping capture...');
-        try {
-            this.monitor?.stop();
-        } catch (e) {
-            console.error('[SystemAudioCapture] Error stopping:', e);
-        }
-
-        // Destroy monitor so it's recreated fresh on next start()
-        this.monitor = null;
-        this.isRecording = false;
-        this.emit('stop');
+    console.log('[SystemAudioCapture] Stopping capture...');
+    try {
+      this.monitor?.stop();
+    } catch (e) {
+      console.error('[SystemAudioCapture] Error stopping:', e);
     }
+
+    this.isRecording = false;
+    this.emit('stop');
+  }
+
+  /**
+  * Fully destroy the capture instance, releasing all native resources.
+  * Use this when completely tearing down audio (e.g., reconfigureAudio, app quit).
+  * For pause/resume, use stop() instead.
+  */
+  public destroy(): void {
+    this.stop();
+    this.monitor = null;
+    this.removeAllListeners();
+  }
 }

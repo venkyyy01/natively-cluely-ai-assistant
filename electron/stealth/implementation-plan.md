@@ -10,7 +10,7 @@ This document is the single source of truth for the Natively stealth hardening w
 
 The shipping plan is:
 
-- **Phase 1 (ship)** — Layer 0 + Layer 1. Harden the existing multi-window Electron app using a centralized `StealthManager` plus a Rust `napi-rs` native module. Defeats user-space screenshot/screen-share (L1), Chromium-internal capture (L2), and most user-space privileged capture (L3).
+- **Phase 1 (ship)** — Layer 0 + Layer 1. Harden the existing multi-window Electron app using a centralized `StealthManager` plus a Rust `napi-rs` native module. Defeats user-space screenshot/screen-share (L1), closes key Chromium-internal capture gaps (L2), and raises the bar against some user-space privileged capture paths without claiming canonical Layer 3.
 - **Phase 2 (repo experimental)** — Layer 1B + Layer 5, plus the repo-side control plane for future Layer 2 work. Add feature-gated macOS private API support, capture-detection watchdog behavior, and bounded `CGVirtualDisplay` helper/session orchestration without over-claiming full compositor isolation.
 - **External follow-on programs** — Full Layer 2 compositor/driver delivery, Layer 3, and Layer 4 remain separate native programs only if the product truly requires them.
 
@@ -74,7 +74,7 @@ win.show();
 
 ---
 
-### Layer 1 — Direct Native API Enforcement (Defeats L1 + L2 + L3)
+### Layer 1 — Direct Native API Enforcement (Defeats L1 + L2; raises the bar for some user-space privileged capture)
 
 Do not rely solely on Electron's wrapper. Call OS APIs directly from a native Node addon (`napi-rs` / Rust).
 
@@ -146,7 +146,7 @@ let display = CGVirtualDisplay(descriptor: desc)
 // Set Electron window's screen to this display
 ```
 
-Sensitive content renders on the virtual display and never enters the WindowServer composition tree for the primary display.
+In the separate-program design, `CGVirtualDisplay` is only the prerequisite isolated display/control plane. Full protection depends on a native secure presenter plus compositor handoff; the main repo intentionally does not claim that this outcome is already delivered.
 
 > [!IMPORTANT]
 > Layer 2 is Phase 2 scope. Only implement after Phase 1 is stable and if L4 threat is confirmed.
@@ -156,6 +156,8 @@ Sensitive content renders on the virtual display and never enters the WindowServ
 ### Layer 3 — Hardware-Protected GPU Surfaces (Defeats L1–L4)
 
 This is the same mechanism used by Widevine L1 / HDCP / Blu-ray DRM. Content is composited at the GPU hardware overlay plane, below DWM. DXGI Desktop Duplication cannot capture hardware-protected surfaces because by the time the API reads the frame, the protected pixels have already been replaced by black/empty at the hardware scanout stage.
+
+Current concrete implementation guidance is Windows-first. Any macOS Layer 3 claim requires a separate feasibility program to determine whether a canonical hardware-protected GPU presentation path exists at all; do not assume parity with Windows.
 
 #### Windows — D3D11 Protected Swap Chain (via Native Addon)
 
@@ -182,6 +184,12 @@ texDesc.MiscFlags = D3D11_RESOURCE_MISC_HW_PROTECTED; // <-- key flag
 - Requires GPU driver support for protected content (DirectX 11.1+, most discrete + integrated GPUs on Win10+)
 - Must be running as an HWND-backed D3D surface, not a pure software renderer
 - In Electron: requires an offscreen rendering mode that feeds into a D3D11 swap chain via a native addon — non-trivial but achievable
+
+#### macOS — Feasibility Gate
+
+- Keep the canonical Layer 3 meaning the same: hardware-protected GPU surfaces.
+- No supported macOS primitive is currently approved in this repo as satisfying that definition.
+- A separate macOS program may attempt to prove a valid hardware-protected presentation path exists; if it cannot, macOS must no-go instead of shipping a weaker Layer 3 claim under the same name.
 
 > [!CAUTION]
 > Layer 3 is Phase 3 scope (separate project). Do not mix into the main implementation plan.
@@ -313,7 +321,7 @@ Keep the existing multi-window design:
 
 ## 7  Implementation Plan
 
-### 7.1  Phase 1 — Layer 0 + Layer 1 (shipping scope, defeats L1–L3)
+### 7.1  Phase 1 — Layer 0 + Layer 1 (shipping scope, defeats L1-L2 and hardens selected user-space privileged capture paths)
 
 #### A. Add a new native stealth module
 

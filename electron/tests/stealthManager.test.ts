@@ -276,45 +276,97 @@ describe('StealthManager', () => {
     assert.deepStrictEqual(nativeCalls, ['base', 'base', 'private']);
   });
 
-  it('starts the capture watchdog and hides then restores visible windows on detection', async () => {
-    const powerMonitor = new EventEmitter();
-    const intervals: Array<() => Promise<void> | void> = [];
-    const timeouts: Array<() => void> = [];
-    const desktopCapturer = {
-      async getSources() {
-        return [{ name: 'OBS Virtual Camera' }];
-      },
-    };
-    const manager = new StealthManager(
-      { enabled: true },
-      {
-        platform: 'darwin',
-        powerMonitor,
-        logger: silentLogger,
-        desktopCapturer,
-        featureFlags: { enableCaptureDetectionWatchdog: true },
-        intervalScheduler: (fn: () => Promise<void> | void) => {
-          intervals.push(fn);
-          return intervals.length;
-        },
-        clearIntervalScheduler() {},
-        timeoutScheduler: (fn: () => void) => {
-          timeouts.push(fn);
-          return timeouts.length;
-        },
-      }
-    );
-    const win = new FakeWindow();
+ it('starts the capture watchdog and hides then restores visible windows on detection', async () => {
+        const powerMonitor = new EventEmitter();
+        const intervals: Array<() => Promise<void> | void> = [];
+        const timeouts: Array<() => void> = [];
+        const manager = new StealthManager(
+            { enabled: true },
+            {
+                platform: 'darwin',
+                powerMonitor,
+                logger: silentLogger,
+                featureFlags: { enableCaptureDetectionWatchdog: true },
+                intervalScheduler: (fn: () => Promise<void> | void) => {
+                    intervals.push(fn);
+                    return intervals.length;
+                },
+                clearIntervalScheduler() {},
+                timeoutScheduler: (fn: () => void) => {
+                    timeouts.push(fn);
+                    return timeouts.length;
+                },
+            } as any
+        );
+        const win = new FakeWindow();
 
-    manager.applyToWindow(win as any, true, { role: 'primary' });
-    assert.strictEqual(intervals.length, 1);
+        manager.applyToWindow(win as any, true, { role: 'primary' });
+        assert.strictEqual(intervals.length, 1);
 
-    await intervals[0]();
-    assert.strictEqual(win.hideCalls, 1);
+        await intervals[0]();
+        assert.strictEqual(win.hideCalls, 1);
 
-    timeouts[0]();
-    assert.strictEqual(win.showCalls, 1);
-  });
+        timeouts[0]();
+        assert.strictEqual(win.showCalls, 1);
+    });
+
+    it('uses a configurable capture tool matcher list for watchdog detection', async () => {
+        const intervals: Array<() => Promise<void> | void> = [];
+        const win = new FakeWindow();
+        const manager = new StealthManager(
+            { enabled: true },
+            {
+                platform: 'darwin',
+                logger: silentLogger,
+                featureFlags: { enableCaptureDetectionWatchdog: false },
+                captureToolPatterns: [/internal recorder/i],
+                intervalScheduler: (fn: () => Promise<void> | void) => {
+                    intervals.push(fn);
+                    return intervals.length;
+                },
+                clearIntervalScheduler() {},
+                timeoutScheduler() {
+                    return 1;
+                },
+            } as any
+        );
+
+        manager.applyToWindow(win as any, true, { role: 'primary' });
+        assert.strictEqual(intervals.length, 0);
+    });
+
+    it('logs capture detections when the watchdog hides windows', async () => {
+        const intervals: Array<() => Promise<void> | void> = [];
+        const logs: string[] = [];
+        const manager = new StealthManager(
+            { enabled: true },
+            {
+                platform: 'darwin',
+                logger: {
+                    log(message: string) {
+                        logs.push(message);
+                    },
+                    warn() {},
+                    error() {},
+                },
+                featureFlags: { enableCaptureDetectionWatchdog: true },
+                intervalScheduler: (fn: () => Promise<void> | void) => {
+                    intervals.push(fn);
+                    return intervals.length;
+                },
+                clearIntervalScheduler() {},
+                timeoutScheduler() {
+                    return 1;
+                },
+            } as any
+        );
+        const win = new FakeWindow();
+
+        manager.applyToWindow(win as any, true, { role: 'primary' });
+        await intervals[0]();
+
+        assert.ok(logs.some((entry) => entry.includes('Capture watchdog detected suspicious tools running')));
+    });
 
   it('starts macOS virtual display isolation with the current window bounds when the feature flag is enabled', async () => {
     const calls: Array<{ action: string; windowId: string; width?: number; height?: number }> = [];

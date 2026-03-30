@@ -28,6 +28,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="Natively"
 INSTALL_DIR="/Applications"
 ENTITLEMENTS="$SCRIPT_DIR/assets/entitlements.mac.plist"
+HELPER_ENTITLEMENTS="$SCRIPT_DIR/stealth-projects/macos-virtual-display-helper/entitlements.plist"
 RELEASE_DIR="$SCRIPT_DIR/release"
 IS_TTY=false
 if [[ -t 1 ]]; then
@@ -438,6 +439,22 @@ step "Step 6/8 — Force Signing (Ad-Hoc)"
 
 # The electron-builder afterPack hook already signs, but we force re-sign
 # to ensure it's clean (handles edge cases where build partially failed)
+
+PACKAGED_HELPER="$APP_GLOB/Contents/Resources/bin/macos/stealth-virtual-display-helper"
+
+if [[ -f "$PACKAGED_HELPER" ]]; then
+    if [[ -f "$HELPER_ENTITLEMENTS" ]]; then
+        info "Signing packaged macOS virtual display helper with helper entitlements: $HELPER_ENTITLEMENTS"
+        run_with_spinner "signing packaged virtual display helper" codesign --force --options runtime --entitlements "$HELPER_ENTITLEMENTS" --sign - "$PACKAGED_HELPER"
+        success "Packaged macOS virtual display helper signed"
+    else
+        warn "Helper entitlements file not found, signing packaged helper without helper entitlements"
+        run_with_spinner "signing packaged virtual display helper" codesign --force --sign - "$PACKAGED_HELPER"
+        success "Packaged macOS virtual display helper signed (ad-hoc, no helper entitlements)"
+    fi
+else
+    warn "Packaged macOS virtual display helper not found before app signing"
+fi
 
 if [[ -f "$ENTITLEMENTS" ]]; then
     info "Signing with entitlements: $ENTITLEMENTS"
