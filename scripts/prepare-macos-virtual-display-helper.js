@@ -12,12 +12,38 @@ function log(message) {
 }
 
 function pathExists(candidate) {
-  try {
-    fs.accessSync(candidate, fs.constants.F_OK);
-    return true;
-  } catch {
-    return false;
-  }
+    try {
+        fs.accessSync(candidate, fs.constants.F_OK);
+        return true;
+    } catch {
+        return false;
+    }
+}
+
+function signBinary(binaryPath) {
+    const identity = process.env.CODESIGN_IDENTITY || '-';
+    const entitlementsPath = path.join(packageDir, 'entitlements.plist');
+
+    if (!pathExists(entitlementsPath)) {
+        log('Warning: entitlements.plist not found, skipping signing');
+        return false;
+    }
+
+    try {
+        const args = [
+            '--sign', identity,
+            '--force',
+            '--options', 'runtime',
+            '--entitlements', entitlementsPath,
+            binaryPath
+        ];
+        execFileSync('codesign', args, { stdio: 'inherit' });
+        log(`Signed ${binaryPath} with entitlements`);
+        return true;
+    } catch (error) {
+        log(`Warning: codesign failed: ${error.message}`);
+        return false;
+    }
 }
 
 function findBuiltBinary(configuration) {
@@ -47,10 +73,14 @@ function main() {
     throw new Error(`Unable to locate built helper binary for configuration '${configuration}'`);
   }
 
-  fs.mkdirSync(outputDir, { recursive: true });
-  fs.copyFileSync(builtBinary, outputBinary);
-  fs.chmodSync(outputBinary, 0o755);
-  log(`Prepared helper at ${outputBinary}`);
+    fs.mkdirSync(outputDir, { recursive: true });
+    fs.copyFileSync(builtBinary, outputBinary);
+    fs.chmodSync(outputBinary, 0o755);
+    log(`Prepared helper at ${outputBinary}`);
+
+    if (process.env.SKIP_CODESIGN !== '1') {
+        signBinary(outputBinary);
+    }
 }
 
 main();
