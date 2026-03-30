@@ -222,6 +222,7 @@ export class AppState {
   private windowHelper: WindowHelper
   public settingsWindowHelper: SettingsWindowHelper
   public modelSelectorWindowHelper: ModelSelectorWindowHelper
+  private stealthManager: StealthManager
   private screenshotHelper: ScreenshotHelper
   public processingHelper: ProcessingHelper
 
@@ -308,18 +309,15 @@ syncOptimizationFlagsFromSettings(accelerationModeEnabled);
 
 console.log(`[AppState] Initialized with isUndetectable=${this.isUndetectable}, disguiseMode=${this.disguiseMode}, consciousModeEnabled=${this.consciousModeEnabled}, accelerationModeEnabled=${accelerationModeEnabled}`);
 
-    // 2. Initialize Helpers with loaded state
-    this.windowHelper = new WindowHelper(this)
-    this.settingsWindowHelper = new SettingsWindowHelper()
-    this.modelSelectorWindowHelper = new ModelSelectorWindowHelper()
+// 2. Initialize Helpers with loaded state
+this.stealthManager = new StealthManager({ enabled: this.isUndetectable })
+this.windowHelper = new WindowHelper(this, this.stealthManager)
+this.settingsWindowHelper = new SettingsWindowHelper(this.stealthManager)
+this.modelSelectorWindowHelper = new ModelSelectorWindowHelper(this.stealthManager)
 
 // 3. Initialize other helpers
 this.screenshotHelper = new ScreenshotHelper(this.view)
 this.processingHelper = new ProcessingHelper(this)
-
-// 3a. Apply stealth mode if acceleration enabled (Apple Silicon enhancement)
-const stealthManager = new StealthManager({ enabled: this.isUndetectable });
-stealthManager.applyToWindow(this.windowHelper);
 
 this.windowHelper.setContentProtection(this.isUndetectable);
 this.settingsWindowHelper.setContentProtection(this.isUndetectable);
@@ -1860,6 +1858,7 @@ try {
     console.log(`[Stealth] setUndetectable(${state}) called`);
 
     this.isUndetectable = state
+    this.stealthManager.setEnabled(state)
     this.windowHelper.setContentProtection(state)
     this.settingsWindowHelper.setContentProtection(state)
     this.modelSelectorWindowHelper.setContentProtection(state)

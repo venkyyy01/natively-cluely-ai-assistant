@@ -1,6 +1,7 @@
 import { BrowserWindow, screen, app } from "electron"
 import { WindowHelper } from "./WindowHelper"
 import path from "node:path"
+import { StealthManager } from "./stealth/StealthManager"
 
 const isDev = process.env.NODE_ENV === "development"
 
@@ -12,6 +13,7 @@ export class SettingsWindowHelper {
     private settingsWindow: BrowserWindow | null = null
     private windowHelper: WindowHelper | null = null;
     private opacityTimeout: NodeJS.Timeout | null = null;
+    private readonly stealthManager: StealthManager;
 
     public getSettingsWindow(): BrowserWindow | null {
         return this.settingsWindow
@@ -34,20 +36,17 @@ export class SettingsWindowHelper {
     private lastBlurTime: number = 0
     private ignoreBlur: boolean = false;
 
-    constructor() { }
+    constructor(stealthManager: StealthManager) {
+        this.stealthManager = stealthManager;
+    }
 
-    private applyStealthFlags(enable: boolean): void {
+    private applyStealth(enable: boolean): void {
         if (!this.settingsWindow || this.settingsWindow.isDestroyed()) return;
 
-        this.settingsWindow.setContentProtection(enable);
-        this.settingsWindow.setSkipTaskbar(true);
-
-        if (process.platform === 'darwin') {
-            this.settingsWindow.setHiddenInMissionControl(true);
-            if (typeof (this.settingsWindow as any).setExcludedFromShownWindowsMenu === 'function') {
-                (this.settingsWindow as any).setExcludedFromShownWindowsMenu(true);
-            }
-        }
+        this.stealthManager.applyToWindow(this.settingsWindow, enable, {
+            role: 'auxiliary',
+            hideFromSwitcher: true,
+        });
     }
 
     public setIgnoreBlur(ignore: boolean): void {
@@ -114,18 +113,20 @@ export class SettingsWindowHelper {
         if (process.platform === 'win32' && this.contentProtection) {
             this.settingsWindow.setOpacity(0);
             this.settingsWindow.show();
-            this.applyStealthFlags(true);
+            this.applyStealth(true);
             
             if (this.opacityTimeout) clearTimeout(this.opacityTimeout);
             this.opacityTimeout = setTimeout(() => {
                 if (this.settingsWindow && !this.settingsWindow.isDestroyed()) {
                     this.settingsWindow.setOpacity(1);
+                    this.stealthManager.reapplyAfterShow(this.settingsWindow);
                     this.settingsWindow.focus();
                 }
             }, 60);
         } else {
-            this.applyStealthFlags(this.contentProtection);
+            this.applyStealth(this.contentProtection);
             this.settingsWindow.show();
+            this.stealthManager.reapplyAfterShow(this.settingsWindow);
             this.settingsWindow.focus();
         }
         
@@ -190,7 +191,7 @@ export class SettingsWindowHelper {
         }
 
         console.log(`[SettingsWindowHelper] Creating Settings Window with Content Protection: ${this.contentProtection}`);
-        this.applyStealthFlags(this.contentProtection);
+        this.applyStealth(this.contentProtection);
 
         // Load with query param
         const settingsUrl = isDev
@@ -246,6 +247,6 @@ export class SettingsWindowHelper {
     public setContentProtection(enable: boolean): void {
         console.log(`[SettingsWindowHelper] Setting content protection to: ${enable}`);
         this.contentProtection = enable;
-        this.applyStealthFlags(enable);
+        this.applyStealth(enable);
     }
 }

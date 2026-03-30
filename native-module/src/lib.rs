@@ -17,6 +17,7 @@ pub mod license;
 pub mod microphone;
 pub mod silence_suppression;
 pub mod speaker;
+pub mod stealth;
 
 use crate::audio_config::DSP_POLL_MS;
 use crate::silence_suppression::{FrameAction, SilenceSuppressionConfig, SilenceSuppressor};

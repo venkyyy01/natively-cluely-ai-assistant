@@ -2,6 +2,7 @@
 import { BrowserWindow, screen, app } from "electron"
 import { AppState } from "./main"
 import path from "node:path"
+import { StealthManager } from "./stealth/StealthManager"
 
 const isEnvDev = process.env.NODE_ENV === "development"
 const isPackaged = app.isPackaged
@@ -38,9 +39,11 @@ export class WindowHelper {
   private step: number = 20
   private currentX: number = 0
   private currentY: number = 0
+  private readonly stealthManager: StealthManager
 
-  constructor(appState: AppState) {
+  constructor(appState: AppState, stealthManager: StealthManager) {
     this.appState = appState
+    this.stealthManager = stealthManager
   }
 
   public setContentProtection(enable: boolean): void {
@@ -52,19 +55,8 @@ export class WindowHelper {
     this.launcherWindow?.setSkipTaskbar(enable);
   }
 
-  private applyStealthFlags(win: BrowserWindow, enable: boolean, isAuxiliary: boolean = false): void {
-    win.setContentProtection(enable);
-
-    if (process.platform === 'darwin') {
-      win.setHiddenInMissionControl(enable || isAuxiliary);
-      if (typeof (win as any).setExcludedFromShownWindowsMenu === 'function') {
-        (win as any).setExcludedFromShownWindowsMenu(enable || isAuxiliary);
-      }
-    }
-
-    if (!isAuxiliary) {
-      win.setSkipTaskbar(enable);
-    }
+  private applyStealth(win: BrowserWindow, enable: boolean, role: 'primary' | 'auxiliary', hideFromSwitcher: boolean): void {
+    this.stealthManager.applyToWindow(win, enable, { role, hideFromSwitcher });
   }
 
   private applyContentProtection(enable: boolean): void {
@@ -74,7 +66,7 @@ export class WindowHelper {
     ]
     windows.forEach(({ win, auxiliary }) => {
       if (win && !win.isDestroyed()) {
-        this.applyStealthFlags(win, enable, auxiliary);
+        this.applyStealth(win, enable, auxiliary ? 'auxiliary' : 'primary', auxiliary);
       }
     });
   }
@@ -234,7 +226,7 @@ export class WindowHelper {
       return;
     }
 
-    this.applyStealthFlags(this.launcherWindow, this.contentProtection)
+    this.applyStealth(this.launcherWindow, this.contentProtection, 'primary', false)
 
     this.launcherWindow.loadURL(`${startUrl}?window=launcher`)
       .then(() => console.log('[WindowHelper] loadURL success'))
@@ -273,7 +265,7 @@ export class WindowHelper {
     }
 
     this.overlayWindow = new BrowserWindow(overlaySettings)
-    this.applyStealthFlags(this.overlayWindow, this.contentProtection, true)
+    this.applyStealth(this.overlayWindow, this.contentProtection, 'primary', true)
 
     if (process.platform === "darwin") {
       this.overlayWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
@@ -413,7 +405,7 @@ export class WindowHelper {
         // Opacity Shield: Show at 0 opacity first to prevent frame leak
         this.overlayWindow.setOpacity(0);
         this.overlayWindow.show();
-        this.applyStealthFlags(this.overlayWindow, true, true);
+        this.applyStealth(this.overlayWindow, true, 'primary', true);
         this.setOverlayClickthrough(this.overlayClickthroughEnabled)
         // Small delay to ensure Windows DWM processes the flag before making it opaque
 
@@ -421,6 +413,7 @@ export class WindowHelper {
         this.opacityTimeout = setTimeout(() => {
           if (this.overlayWindow && !this.overlayWindow.isDestroyed()) {
             this.overlayWindow.setOpacity(1);
+            this.stealthManager.reapplyAfterShow(this.overlayWindow);
             if (!this.overlayClickthroughEnabled) {
               this.overlayWindow.focus();
             }
@@ -428,9 +421,10 @@ export class WindowHelper {
           }
         }, 60);
       } else {
-        this.applyStealthFlags(this.overlayWindow, this.contentProtection, true);
+        this.applyStealth(this.overlayWindow, this.contentProtection, 'primary', true);
         this.setOverlayClickthrough(this.overlayClickthroughEnabled)
         this.overlayWindow.show();
+        this.stealthManager.reapplyAfterShow(this.overlayWindow);
         if (!this.overlayClickthroughEnabled) {
           this.overlayWindow.focus();
         }
@@ -455,18 +449,20 @@ export class WindowHelper {
         // Opacity Shield: Show at 0 opacity first
         this.launcherWindow.setOpacity(0);
         this.launcherWindow.show();
-        this.applyStealthFlags(this.launcherWindow, true);
+        this.applyStealth(this.launcherWindow, true, 'primary', false);
 
         if (this.opacityTimeout) clearTimeout(this.opacityTimeout);
         this.opacityTimeout = setTimeout(() => {
           if (this.launcherWindow && !this.launcherWindow.isDestroyed()) {
             this.launcherWindow.setOpacity(1);
+            this.stealthManager.reapplyAfterShow(this.launcherWindow);
             this.launcherWindow.focus();
           }
         }, 60);
       } else {
-        this.applyStealthFlags(this.launcherWindow, this.contentProtection);
+        this.applyStealth(this.launcherWindow, this.contentProtection, 'primary', false);
         this.launcherWindow.show();
+        this.stealthManager.reapplyAfterShow(this.launcherWindow);
         this.launcherWindow.focus();
       }
       this.isWindowVisible = true;
