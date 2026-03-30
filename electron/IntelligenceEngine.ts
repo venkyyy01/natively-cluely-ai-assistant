@@ -6,14 +6,24 @@ import { EventEmitter } from 'events';
 import { LLMHelper } from './LLMHelper';
 import { SessionTracker, TranscriptSegment, SuggestionTrigger, ContextItem } from './SessionTracker';
 import {
-    AnswerLLM, AssistLLM, FollowUpLLM, RecapLLM,
-    FollowUpQuestionsLLM, WhatToAnswerLLM,
-    prepareTranscriptForWhatToAnswer, buildTemporalContext,
-    AssistantResponse as LLMAssistantResponse, classifyIntent
+  classifyConsciousModeQuestion,
+  formatConsciousModeResponse,
+  isValidConsciousModeResponse,
+} from './ConsciousMode';
+import {
+  AnswerLLM, AssistLLM, FollowUpLLM, RecapLLM,
+  FollowUpQuestionsLLM, WhatToAnswerLLM,
+  prepareTranscriptForWhatToAnswer, buildTemporalContext,
+  AssistantResponse as LLMAssistantResponse, classifyIntent
 } from './llm';
+import { FallbackExecutor } from './conscious';
+import { ParallelContextAssembler, ContextAssemblyInput, ContextAssemblyOutput } from './cache/ParallelContextAssembler';
+import { isOptimizationActive } from './config/optimizations';
+import { AnswerLatencyTracker, AnswerRoute } from './latency/AnswerLatencyTracker';
+import { selectAnswerRoute } from './latency/answerRouteSelector';
 
 // Mode types
-export type IntelligenceMode = 'idle' | 'assist' | 'what_to_say' | 'follow_up' | 'recap' | 'manual' | 'follow_up_questions';
+export type IntelligenceMode = 'idle' | 'assist' | 'what_to_say' | 'follow_up' | 'recap' | 'manual' | 'follow_up_questions' | 'reasoning_first';
 
 // Refinement intent detection (refined to avoid false positives)
 function detectRefinementIntent(userText: string): { isRefinement: boolean; intent: string } {
@@ -56,42 +66,112 @@ export interface IntelligenceModeEvents {
 }
 
 export class IntelligenceEngine extends EventEmitter {
-    // Mode state
-    private activeMode: IntelligenceMode = 'idle';
-    private assistCancellationToken: AbortController | null = null;
+  // Mode state
+  private activeMode: IntelligenceMode = 'idle';
+  private assistCancellationToken: AbortController | null = null;
 
-    // Mode-specific LLMs
-    private answerLLM: AnswerLLM | null = null;
-    private assistLLM: AssistLLM | null = null;
-    private followUpLLM: FollowUpLLM | null = null;
-    private recapLLM: RecapLLM | null = null;
-    private followUpQuestionsLLM: FollowUpQuestionsLLM | null = null;
-    private whatToAnswerLLM: WhatToAnswerLLM | null = null;
+  // Mode-specific LLMs
+  private answerLLM: AnswerLLM | null = null;
+  private assistLLM: AssistLLM | null = null;
+  private followUpLLM: FollowUpLLM | null = null;
+  private recapLLM: RecapLLM | null = null;
+  private followUpQuestionsLLM: FollowUpQuestionsLLM | null = null;
+  private whatToAnswerLLM: WhatToAnswerLLM | null = null;
 
-    // Keep reference to LLMHelper for client access
-    private llmHelper: LLMHelper;
+  // Keep reference to LLMHelper for client access
+  private llmHelper: LLMHelper;
 
-    // Reference to SessionTracker for context
-    private session: SessionTracker;
+  // Reference to SessionTracker for context
+  private session: SessionTracker;
 
-    // Timestamps for tracking
-    private lastTranscriptTime: number = 0;
-    private lastTriggerTime: number = 0;
-    private readonly triggerCooldown: number = 3000; // 3 seconds
+  // Conscious Mode Realtime fallback executor
+  private fallbackExecutor: FallbackExecutor = new FallbackExecutor();
 
-    constructor(llmHelper: LLMHelper, session: SessionTracker) {
-        super();
-        this.llmHelper = llmHelper;
-        this.session = session;
-        this.initializeLLMs();
+  // Parallel context assembler for acceleration
+  private parallelContextAssembler: ParallelContextAssembler | null = null;
+  private latencyTracker: AnswerLatencyTracker = new AnswerLatencyTracker();
+  private activeWhatToSayRequestId = 0;
+
+  // Timestamps for tracking
+  private lastTranscriptTime: number = 0;
+  private lastTriggerTime: number = 0;
+  private readonly triggerCooldown: number = 3000; // 3 seconds
+
+  constructor(llmHelper: LLMHelper, session: SessionTracker) {
+    super();
+    this.llmHelper = llmHelper;
+    this.session = session;
+    this.initializeLLMs();
+    
+    if (isOptimizationActive('useParallelContext')) {
+      this.parallelContextAssembler = new ParallelContextAssembler({});
+    }
+  }
+
+  private async getAssembledContext(query: string, tokenBudget: number): Promise<{
+    contextItems: ContextItem[];
+    assemblyResult?: ContextAssemblyOutput;
+  }> {
+    const contextItems = this.session.getContext(tokenBudget);
+    
+    if (!this.parallelContextAssembler || !isOptimizationActive('useParallelContext')) {
+      return { contextItems };
     }
 
-    getLLMHelper(): LLMHelper {
+    const transcript = contextItems.map(item => ({
+      speaker: item.role,
+      text: item.text,
+      timestamp: item.timestamp,
+    }));
+
+    const input: ContextAssemblyInput = {
+      query,
+      transcript,
+      previousContext: {
+        recentTopics: [],
+        activeThread: null,
+      },
+    };
+
+    try {
+      const assemblyResult = await this.parallelContextAssembler.assemble(input);
+      
+      const relevantItems = assemblyResult.relevantContext.map(ctx => ({
+        role: 'interviewer' as const,
+        text: ctx.text,
+        timestamp: ctx.timestamp,
+      }));
+
+      return {
+        contextItems: relevantItems.length > 0 ? relevantItems : contextItems,
+        assemblyResult,
+      };
+    } catch (error) {
+      console.warn('[IntelligenceEngine] ParallelContextAssembler failed, using fallback:', error);
+      return { contextItems };
+    }
+  }
+
+  getLLMHelper(): LLMHelper {
         return this.llmHelper;
+    }
+
+    private buildCompactTranscriptSnapshot(
+        transcriptTurns: Array<{ role: string; text: string; timestamp: number }>,
+        maxTurns: number = 12,
+    ): string {
+        return transcriptTurns.slice(-maxTurns).map(item => {
+            const label = item.role === 'interviewer' ? 'INTERVIEWER' : item.role === 'assistant' ? 'ASSISTANT' : 'ME';
+            return `[${label}]: ${item.text}`;
+        }).join('\n');
     }
 
     getRecapLLM(): RecapLLM | null {
         return this.recapLLM;
+    }
+
+    getFallbackExecutor(): FallbackExecutor {
+        return this.fallbackExecutor;
     }
 
     // ============================================
@@ -212,7 +292,7 @@ export class IntelligenceEngine extends EventEmitter {
     async runWhatShouldISay(question?: string, confidence: number = 0.8, imagePaths?: string[]): Promise<string | null> {
         const now = Date.now();
 
-        if (now - this.lastTriggerTime < this.triggerCooldown) {
+        if (now - this.lastTriggerTime < this.triggerCooldown && this.activeMode !== 'what_to_say') {
             return null;
         }
 
@@ -223,6 +303,7 @@ export class IntelligenceEngine extends EventEmitter {
 
         this.setMode('what_to_say');
         this.lastTriggerTime = now;
+        const requestSequence = ++this.activeWhatToSayRequestId;
 
         try {
             if (!this.whatToAnswerLLM) {
@@ -231,8 +312,9 @@ export class IntelligenceEngine extends EventEmitter {
                     return "Please configure your API Keys in Settings to use this feature.";
                 }
                 const context = this.session.getFormattedContext(180);
-                const answer = await this.answerLLM.generate(question || '', context);
+                let answer = await this.answerLLM.generate(question || '', context);
                 if (answer) {
+                // No clamping - prompt enforces brevity
                     this.session.addAssistantMessage(answer);
                     this.emit('suggested_answer', answer, question || 'inferred', confidence);
                 }
@@ -241,6 +323,24 @@ export class IntelligenceEngine extends EventEmitter {
             }
 
             const contextItems = this.session.getContext(180);
+            const baseQuestion = question || this.session.getLastInterviewerTurn() || '';
+            const knowledgeOrchestrator = this.llmHelper.getKnowledgeOrchestrator?.();
+            const knowledgeStatus = knowledgeOrchestrator?.getStatus?.();
+            const route = selectAnswerRoute({
+                explicitManual: false,
+                explicitFollowUp: false,
+                consciousModeEnabled: this.session.isConsciousModeEnabled(),
+                profileModeEnabled: !!knowledgeStatus?.activeMode,
+                hasProfile: !!knowledgeStatus?.hasResume,
+                hasKnowledgeData: !!knowledgeStatus?.hasResume || !!knowledgeStatus?.hasActiveJD,
+                latestQuestion: baseQuestion,
+                activeReasoningThread: this.session.getActiveReasoningThread(),
+            });
+            const capability = typeof (this.llmHelper as any).getProviderCapabilityClass === 'function'
+                ? (this.llmHelper as any).getProviderCapabilityClass()
+                : 'buffered';
+            const requestId = this.latencyTracker.start(route, capability);
+            this.latencyTracker.mark(requestId, 'contextLoaded');
 
             // Inject latest interim transcript if available
             const lastInterim = this.session.getLastInterimInterviewer();
@@ -265,35 +365,125 @@ export class IntelligenceEngine extends EventEmitter {
                 text: item.text,
                 timestamp: item.timestamp
             }));
-
-            const preparedTranscript = prepareTranscriptForWhatToAnswer(transcriptTurns, 12);
-
-            const temporalContext = buildTemporalContext(
-                contextItems,
-                this.session.getAssistantResponseHistory(),
-                180
-            );
+            const preparedTranscript = route === 'fast_standard_answer'
+                ? this.buildCompactTranscriptSnapshot(transcriptTurns, 12)
+                : prepareTranscriptForWhatToAnswer(transcriptTurns, 12);
+            this.latencyTracker.mark(requestId, 'transcriptPrepared');
 
             const lastInterviewerTurn = this.session.getLastInterviewerTurn();
-            const intentResult = await classifyIntent(
-                lastInterviewerTurn,
-                preparedTranscript,
-                this.session.getAssistantResponseHistory().length
-            );
+            const activeReasoningThread = this.session.getActiveReasoningThread();
+            const resolvedQuestion = question || lastInterviewerTurn || '';
+            const accelerationFastPath = route === 'fast_standard_answer';
+            const temporalContext = accelerationFastPath
+                ? undefined
+                : buildTemporalContext(
+                    contextItems,
+                    this.session.getAssistantResponseHistory(),
+                    180
+                );
+            const intentResult = accelerationFastPath
+                ? undefined
+                : await classifyIntent(
+                    lastInterviewerTurn,
+                    preparedTranscript,
+                    this.session.getAssistantResponseHistory().length
+                );
+            this.latencyTracker.mark(requestId, 'enrichmentReady');
+            const consciousRoute = route === 'conscious_answer'
+                ? classifyConsciousModeQuestion(resolvedQuestion, activeReasoningThread)
+                : { qualifies: false, threadAction: 'ignore' as const };
 
-            console.log(`[IntelligenceEngine] Temporal RAG: ${temporalContext.previousResponses.length} responses, tone: ${temporalContext.toneSignals[0]?.type || 'neutral'}, intent: ${intentResult.intent}${imagePaths?.length ? `, with ${imagePaths.length} image(s)` : ''}`);
+            if (consciousRoute.threadAction === 'reset') {
+                this.session.clearConsciousModeThread();
+            }
+
+            if (!consciousRoute.qualifies && consciousRoute.threadAction === 'reset') {
+                // Thread already cleared above so non-Conscious fallback cannot reuse stale state.
+            }
+
+            if (consciousRoute.qualifies) {
+                let structuredResponse;
+                if (consciousRoute.threadAction === 'continue' && activeReasoningThread && this.followUpLLM) {
+                    structuredResponse = await this.followUpLLM.generateReasoningFirstFollowUp(
+                        activeReasoningThread,
+                        resolvedQuestion,
+                        this.session.getFormattedContext(180)
+                    );
+                } else if (this.whatToAnswerLLM) {
+                    structuredResponse = await this.whatToAnswerLLM.generateReasoningFirst(
+                        preparedTranscript,
+                        resolvedQuestion,
+                        temporalContext,
+                        intentResult,
+                        imagePaths
+                    );
+                } else if (this.answerLLM) {
+                    structuredResponse = await this.answerLLM.generateReasoningFirst(
+                        resolvedQuestion,
+                        this.session.getFormattedContext(180)
+                    );
+                }
+
+                if (isValidConsciousModeResponse(structuredResponse)) {
+                    console.log(`[IntelligenceEngine] Temporal RAG: ${temporalContext.previousResponses.length} responses, tone: ${temporalContext.toneSignals[0]?.type || 'neutral'}, intent: conscious_reasoning${imagePaths?.length ? `, with ${imagePaths.length} image(s)` : ''}`);
+                    this.setMode('reasoning_first');
+
+                    const fullAnswer = formatConsciousModeResponse(structuredResponse);
+
+                    if (consciousRoute.threadAction !== 'ignore' && resolvedQuestion) {
+                        this.session.recordConsciousResponse(
+                            resolvedQuestion,
+                            structuredResponse,
+                            consciousRoute.threadAction === 'start' ? 'start' : consciousRoute.threadAction === 'reset' ? 'reset' : 'continue'
+                        );
+                    }
+
+                    this.emit('suggested_answer_token', fullAnswer, question || 'What to Answer', confidence);
+                    this.session.addAssistantMessage(fullAnswer);
+                    this.session.pushUsage({
+                        type: 'assist',
+                        timestamp: Date.now(),
+                        question: question || 'What to Answer',
+                        answer: fullAnswer
+                    });
+                    this.emit('suggested_answer', fullAnswer, question || 'What to Answer', confidence);
+                    this.setMode('idle');
+                    return fullAnswer;
+                }
+            }
+
+            const temporalResponseCount = temporalContext?.previousResponses.length ?? 0;
+            const temporalTone = temporalContext?.toneSignals[0]?.type || 'neutral';
+            const detectedIntent = intentResult?.intent || 'general';
+            console.log(`[IntelligenceEngine] Temporal RAG: ${temporalResponseCount} responses, tone: ${temporalTone}, intent: ${detectedIntent}${imagePaths?.length ? `, with ${imagePaths.length} image(s)` : ''}`);
 
             let fullAnswer = "";
-            const stream = this.whatToAnswerLLM.generateStream(preparedTranscript, temporalContext, intentResult, imagePaths);
+            const stream = this.whatToAnswerLLM.generateStream(preparedTranscript, temporalContext, intentResult, imagePaths, {
+                fastPath: route === 'fast_standard_answer',
+            });
+            this.latencyTracker.mark(requestId, 'providerRequestStarted');
 
             for await (const token of stream) {
+                if (requestSequence !== this.activeWhatToSayRequestId) {
+                    continue;
+                }
+                if (!fullAnswer) {
+                    this.latencyTracker.mark(requestId, 'firstToken');
+                }
                 this.emit('suggested_answer_token', token, question || 'inferred', confidence);
                 fullAnswer += token;
+            }
+
+            if (requestSequence !== this.activeWhatToSayRequestId) {
+                this.latencyTracker.complete(requestId);
+                return fullAnswer;
             }
 
             if (!fullAnswer || fullAnswer.trim().length < 5) {
                 fullAnswer = "Could you repeat that? I want to make sure I address your question properly.";
             }
+
+            // No post-processing - prompt enforces brevity, code blocks preserved
 
             this.session.addAssistantMessage(fullAnswer);
 
@@ -305,6 +495,8 @@ export class IntelligenceEngine extends EventEmitter {
             });
 
             this.emit('suggested_answer', fullAnswer, question || 'What to Answer', confidence);
+            const latencySnapshot = this.latencyTracker.complete(requestId);
+            console.log('[IntelligenceEngine] Answer latency snapshot:', latencySnapshot);
 
             this.setMode('idle');
             return fullAnswer;

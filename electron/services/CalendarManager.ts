@@ -1,4 +1,4 @@
-import { app, safeStorage, shell, net } from 'electron';
+import { app, safeStorage, shell } from 'electron';
 import axios from 'axios';
 import http from 'http';
 import url from 'url';
@@ -12,8 +12,9 @@ import { EventEmitter } from 'events';
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || "YOUR_CLIENT_ID_HERE";
 const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET || "YOUR_CLIENT_SECRET_HERE";
 const CALLBACK_HOST = '127.0.0.1';
-const CALLBACK_PORT = 11111;
-const REDIRECT_URI = `http://${CALLBACK_HOST}:${CALLBACK_PORT}/auth/callback`;
+const CALLBACK_PORT = 0;
+const CALLBACK_PATH = '/auth/callback';
+const AUTH_FLOW_TIMEOUT_MS = 120000;
 const SCOPES = ["https://www.googleapis.com/auth/calendar.readonly"];
 const TOKEN_PATH = path.join(app.getPath('userData'), 'calendar_tokens.enc');
 
@@ -48,6 +49,15 @@ export class CalendarManager extends EventEmitter {
     private isLoopbackRequest(req: http.IncomingMessage): boolean {
         const remoteAddress = req.socket.remoteAddress;
         return remoteAddress === '127.0.0.1' || remoteAddress === '::1' || remoteAddress === '::ffff:127.0.0.1';
+    }
+
+    private getRedirectUri(server: http.Server): string {
+        const address = server.address();
+        if (!address || typeof address === 'string') {
+            throw new Error('OAuth loopback listener did not expose a usable address');
+        }
+
+        return `http://${CALLBACK_HOST}:${address.port}${CALLBACK_PATH}`;
     }
 
     private constructor() {
@@ -97,8 +107,9 @@ export class CalendarManager extends EventEmitter {
             // 1. Create Loopback Server
             const server = http.createServer(async (req, res) => {
                 try {
-                    const parsedUrl = new url.URL(req.url || '/', `http://${CALLBACK_HOST}:${CALLBACK_PORT}`);
-                    if (parsedUrl.pathname !== '/auth/callback') {
+                    const redirectUri = this.getRedirectUri(server);
+                    const parsedUrl = new url.URL(req.url || '/', redirectUri);
+                    if (parsedUrl.pathname !== CALLBACK_PATH) {
                         res.statusCode = 404;
                         res.end('Not found.');
                         return;
@@ -136,7 +147,7 @@ export class CalendarManager extends EventEmitter {
                     res.end('Authentication successful! You can close this window and return to Natively.');
                     finish(server, async () => {
                         try {
-                            await this.exchangeCodeForToken(code, verifier);
+                            await this.exchangeCodeForToken(code, verifier, redirectUri);
                             resolve();
                         } catch (err) {
                             reject(err);
@@ -150,12 +161,17 @@ export class CalendarManager extends EventEmitter {
 
             const timeout = setTimeout(() => {
                 finish(server, () => reject(new Error('Google Calendar authentication timed out')));
-            }, 120000);
+            }, AUTH_FLOW_TIMEOUT_MS);
 
             server.listen(CALLBACK_PORT, CALLBACK_HOST, () => {
-                // 3. Open Browser
-                const authUrl = this.getAuthUrl(expectedState, challenge);
-                shell.openExternal(authUrl);
+                try {
+                    const authUrl = this.getAuthUrl(expectedState, challenge, this.getRedirectUri(server));
+                    void Promise.resolve(shell.openExternal(authUrl)).catch((err: unknown) => {
+                        finish(server, () => reject(err));
+                    });
+                } catch (err) {
+                    finish(server, () => reject(err));
+                }
             });
 
             server.on('error', (err) => {
@@ -183,10 +199,10 @@ export class CalendarManager extends EventEmitter {
         return { connected: this.isConnected };
     }
 
-    private getAuthUrl(state: string, codeChallenge: string): string {
+    private getAuthUrl(state: string, codeChallenge: string, redirectUri: string): string {
         const params = new URLSearchParams({
             client_id: GOOGLE_CLIENT_ID,
-            redirect_uri: REDIRECT_URI,
+            redirect_uri: redirectUri,
             response_type: 'code',
             scope: SCOPES.join(' '),
             access_type: 'offline', // For refresh token
@@ -198,13 +214,13 @@ export class CalendarManager extends EventEmitter {
         return `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`;
     }
 
-    private async exchangeCodeForToken(code: string, codeVerifier: string) {
+    private async exchangeCodeForToken(code: string, codeVerifier: string, redirectUri: string) {
         try {
             const response = await axios.post('https://oauth2.googleapis.com/token', {
                 code,
                 client_id: GOOGLE_CLIENT_ID,
                 client_secret: GOOGLE_CLIENT_SECRET,
-                redirect_uri: REDIRECT_URI,
+                redirect_uri: redirectUri,
                 grant_type: 'authorization_code',
                 code_verifier: codeVerifier,
             });

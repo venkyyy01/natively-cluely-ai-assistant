@@ -1,18 +1,50 @@
 import type { AppState } from '../main';
-import type { SafeHandle } from './registerTypes';
+import { ipcSchemas, parseIpcInput } from '../ipcValidation';
+import type { SafeHandle, SafeHandleValidated } from './registerTypes';
 
 type RegisterRagHandlersDeps = {
   appState: AppState;
   safeHandle: SafeHandle;
+  safeHandleValidated: SafeHandleValidated;
 };
 
-export function registerRagHandlers({ appState, safeHandle }: RegisterRagHandlersDeps): void {
+type RagIpcSuccess<T> = {
+  success: true;
+  data: T;
+};
+
+type RagIpcFailure = {
+  success: false;
+  error: {
+    code: string;
+    message: string;
+  };
+};
+
+function ragSuccess<T>(data: T): RagIpcSuccess<T> {
+  return {
+    success: true,
+    data,
+  };
+}
+
+function ragError(code: string, message: string): RagIpcFailure {
+  return {
+    success: false,
+    error: {
+      code,
+      message,
+    },
+  };
+}
+
+export function registerRagHandlers({ appState, safeHandle, safeHandleValidated }: RegisterRagHandlersDeps): void {
   const activeRAGQueries = new Map<string, AbortController>();
 
-  safeHandle('rag:query-meeting', async (event, { meetingId, query }: { meetingId: string; query: string }) => {
+  safeHandleValidated('rag:query-meeting', (args) => [parseIpcInput(ipcSchemas.ragMeetingQuery, args[0], 'rag:query-meeting')] as const, async (event, { meetingId, query }) => {
     const ragManager = appState.getRAGManager();
-    if (!ragManager || !ragManager.isReady()) return { fallback: true };
-    if (!ragManager.isMeetingProcessed(meetingId) && !ragManager.isLiveIndexingActive(meetingId)) return { fallback: true };
+    if (!ragManager || !ragManager.isReady()) return ragSuccess({ fallback: true });
+    if (!ragManager.isMeetingProcessed(meetingId) && !ragManager.isLiveIndexingActive(meetingId)) return ragSuccess({ fallback: true });
 
     const abortController = new AbortController();
     const queryKey = `meeting-${meetingId}`;
@@ -25,23 +57,23 @@ export function registerRagHandlers({ appState, safeHandle }: RegisterRagHandler
         event.sender.send('rag:stream-chunk', { meetingId, chunk });
       }
       event.sender.send('rag:stream-complete', { meetingId });
-      return { success: true };
+      return ragSuccess({ success: true });
     } catch (error: any) {
       if (error.name !== 'AbortError') {
         const msg = error.message || '';
-        if (msg.includes('NO_RELEVANT_CONTEXT') || msg.includes('NO_MEETING_EMBEDDINGS')) return { fallback: true };
+        if (msg.includes('NO_RELEVANT_CONTEXT') || msg.includes('NO_MEETING_EMBEDDINGS')) return ragSuccess({ fallback: true });
         event.sender.send('rag:stream-error', { meetingId, error: msg });
       }
-      return { success: false, error: error.message };
+      return ragError('RAG_QUERY_FAILED', error?.message || 'Unable to query meeting context');
     } finally {
       activeRAGQueries.delete(queryKey);
     }
   });
 
-  safeHandle('rag:query-live', async (event, { query }: { query: string }) => {
+  safeHandleValidated('rag:query-live', (args) => [parseIpcInput(ipcSchemas.ragLiveQuery, args[0], 'rag:query-live')] as const, async (event, { query }) => {
     const ragManager = appState.getRAGManager();
-    if (!ragManager || !ragManager.isReady()) return { fallback: true };
-    if (!ragManager.isLiveIndexingActive('live-meeting-current')) return { fallback: true };
+    if (!ragManager || !ragManager.isReady()) return ragSuccess({ fallback: true });
+    if (!ragManager.isLiveIndexingActive('live-meeting-current')) return ragSuccess({ fallback: true });
 
     const abortController = new AbortController();
     const queryKey = `live-${Date.now()}`;
@@ -54,22 +86,22 @@ export function registerRagHandlers({ appState, safeHandle }: RegisterRagHandler
         event.sender.send('rag:stream-chunk', { live: true, chunk });
       }
       event.sender.send('rag:stream-complete', { live: true });
-      return { success: true };
+      return ragSuccess({ success: true });
     } catch (error: any) {
       if (error.name !== 'AbortError') {
         const msg = error.message || '';
-        if (msg.includes('NO_RELEVANT_CONTEXT') || msg.includes('NO_MEETING_EMBEDDINGS')) return { fallback: true };
+        if (msg.includes('NO_RELEVANT_CONTEXT') || msg.includes('NO_MEETING_EMBEDDINGS')) return ragSuccess({ fallback: true });
         event.sender.send('rag:stream-error', { live: true, error: msg });
       }
-      return { success: false, error: error.message };
+      return ragError('RAG_QUERY_FAILED', error?.message || 'Unable to query live context');
     } finally {
       activeRAGQueries.delete(queryKey);
     }
   });
 
-  safeHandle('rag:query-global', async (event, { query }: { query: string }) => {
+  safeHandleValidated('rag:query-global', (args) => [parseIpcInput(ipcSchemas.ragGlobalQuery, args[0], 'rag:query-global')] as const, async (event, { query }) => {
     const ragManager = appState.getRAGManager();
-    if (!ragManager || !ragManager.isReady()) return { fallback: true };
+    if (!ragManager || !ragManager.isReady()) return ragSuccess({ fallback: true });
 
     const abortController = new AbortController();
     const queryKey = `global-${Date.now()}`;
@@ -82,18 +114,18 @@ export function registerRagHandlers({ appState, safeHandle }: RegisterRagHandler
         event.sender.send('rag:stream-chunk', { global: true, chunk });
       }
       event.sender.send('rag:stream-complete', { global: true });
-      return { success: true };
+      return ragSuccess({ success: true });
     } catch (error: any) {
       if (error.name !== 'AbortError') {
         event.sender.send('rag:stream-error', { global: true, error: error.message });
       }
-      return { success: false, error: error.message };
+      return ragError('RAG_QUERY_FAILED', error?.message || 'Unable to query global context');
     } finally {
       activeRAGQueries.delete(queryKey);
     }
   });
 
-  safeHandle('rag:cancel-query', async (_event, { meetingId, global }: { meetingId?: string; global?: boolean }) => {
+  safeHandleValidated('rag:cancel-query', (args) => [parseIpcInput(ipcSchemas.ragCancelQuery, args[0], 'rag:cancel-query')] as const, async (_event, { meetingId, global }) => {
     const queryKey = global ? 'global' : `meeting-${meetingId}`;
     for (const [key, controller] of activeRAGQueries) {
       if (key.startsWith(queryKey) || (global && key.startsWith('global'))) {
@@ -101,40 +133,44 @@ export function registerRagHandlers({ appState, safeHandle }: RegisterRagHandler
         activeRAGQueries.delete(key);
       }
     }
-    return { success: true };
+    return ragSuccess({ success: true });
   });
 
-  safeHandle('rag:is-meeting-processed', async (_event, meetingId: string) => {
+  safeHandleValidated('rag:is-meeting-processed', (args) => [parseIpcInput(ipcSchemas.providerId, args[0], 'rag:is-meeting-processed')] as const, async (_event, meetingId) => {
     try {
       const ragManager = appState.getRAGManager();
-      if (!ragManager) throw new Error('RAGManager not initialized');
-      return ragManager.isMeetingProcessed(meetingId);
+      if (!ragManager) return ragSuccess(false);
+      return ragSuccess(ragManager.isMeetingProcessed(meetingId));
     } catch {
-      return false;
+      return ragSuccess(false);
     }
   });
 
   safeHandle('rag:reindex-incompatible-meetings', async () => {
     try {
       const ragManager = appState.getRAGManager();
-      if (!ragManager) throw new Error('RAGManager not initialized');
+      if (!ragManager) return ragError('RAG_MANAGER_UNAVAILABLE', 'RAGManager not initialized');
       await ragManager.reindexIncompatibleMeetings();
-      return { success: true };
+      return ragSuccess({ success: true });
     } catch (error: any) {
-      return { success: false, error: error.message };
+      return ragError('RAG_REINDEX_FAILED', error?.message || 'Unable to reindex incompatible meetings');
     }
   });
 
   safeHandle('rag:get-queue-status', async () => {
     const ragManager = appState.getRAGManager();
-    if (!ragManager) return { pending: 0, processing: 0, completed: 0, failed: 0 };
-    return ragManager.getQueueStatus();
+    if (!ragManager) return ragSuccess({ pending: 0, processing: 0, completed: 0, failed: 0 });
+    return ragSuccess(ragManager.getQueueStatus());
   });
 
   safeHandle('rag:retry-embeddings', async () => {
-    const ragManager = appState.getRAGManager();
-    if (!ragManager) return { success: false };
-    await ragManager.retryPendingEmbeddings();
-    return { success: true };
+    try {
+      const ragManager = appState.getRAGManager();
+      if (!ragManager) return ragError('RAG_MANAGER_UNAVAILABLE', 'RAGManager not initialized');
+      await ragManager.retryPendingEmbeddings();
+      return ragSuccess({ success: true });
+    } catch (error: any) {
+      return ragError('RAG_RETRY_FAILED', error?.message || 'Unable to retry embeddings');
+    }
   });
 }

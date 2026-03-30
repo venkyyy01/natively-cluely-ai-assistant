@@ -2,7 +2,24 @@
 // Manages session state, transcript arrays, context windows, and epoch compaction.
 // Extracted from IntelligenceManager to decouple state management from LLM orchestration.
 
+/** Maximum transcript entries before forced eviction (prevents memory exhaustion) */
+const MAX_TRANSCRIPT_ENTRIES = 5000;
+
+/** Maximum assistant response history entries */
+const MAX_ASSISTANT_HISTORY = 100;
+
+/** Maximum context history entries (beyond time-based eviction) */
+const MAX_CONTEXT_HISTORY = 200;
+
 import { RecapLLM } from './llm';
+import {
+  ConsciousModeStructuredResponse,
+  ReasoningThread,
+  mergeConsciousModeResponses,
+} from './ConsciousMode';
+import { ThreadManager, InterviewPhaseDetector, TokenBudgetManager, InterviewPhase } from './conscious';
+import { AdaptiveContextWindow, ContextEntry, ContextSelectionConfig } from './conscious/AdaptiveContextWindow';
+import { isOptimizationActive } from './config/optimizations';
 
 export interface TranscriptSegment {
     marker?: string;
@@ -33,6 +50,7 @@ export interface AssistantResponse {
 }
 
 export class SessionTracker {
+    private static nextSessionId = 1;
     // Context management (mirrors Swift ContextManager)
     private contextItems: ContextItem[] = [];
     private readonly contextWindowDuration: number = 120; // 120 seconds
@@ -64,8 +82,24 @@ export class SessionTracker {
     // Track interim interviewer segment
     private lastInterimInterviewer: TranscriptSegment | null = null;
 
+    // Conscious Mode state
+    private consciousModeEnabled: boolean = false;
+    private latestConsciousResponse: ConsciousModeStructuredResponse | null = null;
+    private activeReasoningThread: ReasoningThread | null = null;
+
     // Reference to RecapLLM for epoch summarization (injected later)
     private recapLLM: RecapLLM | null = null;
+
+// Conscious Mode Realtime components
+  private threadManager: ThreadManager = new ThreadManager();
+  private phaseDetector: InterviewPhaseDetector = new InterviewPhaseDetector();
+  private tokenBudgetManager: TokenBudgetManager = new TokenBudgetManager('openai');
+
+  // Adaptive context window for acceleration
+  private adaptiveContextWindow: AdaptiveContextWindow | null = null;
+  private sessionId: string = `session_${SessionTracker.nextSessionId++}`;
+  private transcriptRevision: number = 0;
+  private compactSnapshotCache = new Map<string, { revision: number; value: string }>();
 
     // ============================================
     // Configuration
@@ -118,6 +152,8 @@ export class SessionTracker {
             text,
             timestamp: segment.timestamp
         });
+        this.transcriptRevision++;
+        this.compactSnapshotCache.clear();
 
         this.evictOldEntries();
 
@@ -129,6 +165,12 @@ export class SessionTracker {
         if (!isInternalPrompt) {
             // Add to session transcript
             this.fullTranscript.push(segment);
+
+            // Hard cap to prevent memory exhaustion in very long meetings
+            while (this.fullTranscript.length > MAX_TRANSCRIPT_ENTRIES) {
+                this.fullTranscript.shift(); // Remove oldest entries
+            }
+
             // Compact transcript with summarization instead of losing early context
             // Fire-and-forget: sync context; errors are caught internally
             void this.compactTranscriptIfNeeded().catch(e =>
@@ -164,6 +206,8 @@ export class SessionTracker {
             text: cleanText,
             timestamp: Date.now()
         });
+        this.transcriptRevision++;
+        this.compactSnapshotCache.clear();
 
         // Also add to fullTranscript so it persists in the session history (and summaries)
         this.fullTranscript.push({
@@ -173,6 +217,11 @@ export class SessionTracker {
             final: true,
             confidence: 1.0
         });
+
+        // Hard cap to prevent memory exhaustion in very long meetings
+        while (this.fullTranscript.length > MAX_TRANSCRIPT_ENTRIES) {
+            this.fullTranscript.shift(); // Remove oldest entries
+        }
 
         // Compact transcript with summarization instead of losing early context
         // Fire-and-forget: sync context; errors are caught internally
@@ -189,9 +238,9 @@ export class SessionTracker {
             questionContext: this.getLastInterviewerTurn() || 'unknown'
         });
 
-        // Keep history bounded (last 10 responses)
-        if (this.assistantResponseHistory.length > 10) {
-            this.assistantResponseHistory = this.assistantResponseHistory.slice(-10);
+        // Keep history bounded
+        if (this.assistantResponseHistory.length > MAX_ASSISTANT_HISTORY) {
+            this.assistantResponseHistory = this.assistantResponseHistory.slice(-MAX_ASSISTANT_HISTORY);
         }
 
         console.log(`[SessionTracker] lastAssistantMessage updated, history size: ${this.assistantResponseHistory.length}`);
@@ -242,6 +291,94 @@ export class SessionTracker {
         return this.lastInterimInterviewer;
     }
 
+    setConsciousModeEnabled(enabled: boolean): void {
+        this.consciousModeEnabled = enabled;
+        if (!enabled) {
+            this.latestConsciousResponse = null;
+            this.activeReasoningThread = null;
+        }
+    }
+
+isConsciousModeEnabled(): boolean {
+    return this.consciousModeEnabled;
+  }
+
+  private getAdaptiveContextWindow(): AdaptiveContextWindow {
+    if (!this.adaptiveContextWindow) {
+      this.adaptiveContextWindow = new AdaptiveContextWindow();
+    }
+    return this.adaptiveContextWindow;
+  }
+
+  async getAdaptiveContext(
+    query: string,
+    queryEmbedding: number[],
+    tokenBudget: number = 500
+  ): Promise<ContextItem[]> {
+    if (!isOptimizationActive('useAdaptiveWindow')) {
+      return this.getContext(Math.floor(tokenBudget / 4));
+    }
+
+    const candidates: ContextEntry[] = this.contextItems.map(item => ({
+      text: item.text,
+      timestamp: item.timestamp,
+      phase: undefined as InterviewPhase | undefined,
+    }));
+
+    const config: ContextSelectionConfig = {
+      tokenBudget,
+      recencyWeight: 0.4,
+      semanticWeight: 0.4,
+      phaseAlignmentWeight: 0.2,
+    };
+
+    const window = this.getAdaptiveContextWindow();
+    const selected = await window.selectContext(query, queryEmbedding, candidates, config);
+
+    return selected.map(entry => ({
+      role: 'interviewer' as const,
+      text: entry.text,
+      timestamp: entry.timestamp,
+    }));
+  }
+
+    getLatestConsciousResponse(): ConsciousModeStructuredResponse | null {
+        return this.latestConsciousResponse;
+    }
+
+    getActiveReasoningThread(): ReasoningThread | null {
+        return this.activeReasoningThread;
+    }
+
+    clearConsciousModeThread(): void {
+        this.latestConsciousResponse = null;
+        this.activeReasoningThread = null;
+    }
+
+    recordConsciousResponse(question: string, response: ConsciousModeStructuredResponse, threadAction: 'start' | 'continue' | 'reset'): void {
+        this.latestConsciousResponse = response;
+
+        if (threadAction === 'continue' && this.activeReasoningThread) {
+            this.activeReasoningThread = {
+                ...this.activeReasoningThread,
+                lastQuestion: question,
+                followUpCount: this.activeReasoningThread.followUpCount + 1,
+                response: mergeConsciousModeResponses(this.activeReasoningThread.response, response),
+                updatedAt: Date.now(),
+            };
+            this.latestConsciousResponse = this.activeReasoningThread.response;
+            return;
+        }
+
+        this.activeReasoningThread = {
+            rootQuestion: question,
+            lastQuestion: question,
+            response,
+            followUpCount: 0,
+            updatedAt: Date.now(),
+        };
+    }
+
     /**
      * Get formatted context string for LLM prompts
      */
@@ -253,6 +390,38 @@ export class SessionTracker {
                     'ASSISTANT (PREVIOUS SUGGESTION)';
             return `[${label}]: ${item.text}`;
         }).join('\n');
+    }
+
+    getSessionId(): string {
+        return this.sessionId;
+    }
+
+    getTranscriptRevision(): number {
+        return this.transcriptRevision;
+    }
+
+    getCompactTranscriptSnapshot(maxTurns: number = 12, snapshotType: 'standard' | 'fast' = 'standard'): string {
+        const cacheKey = `${this.sessionId}:${snapshotType}:${maxTurns}`;
+        const cached = this.compactSnapshotCache.get(cacheKey);
+        if (cached && cached.revision === this.transcriptRevision) {
+            return cached.value;
+        }
+
+        const items = this.contextItems.slice(-maxTurns);
+        const snapshot = items.map(item => ({
+            role: item.role,
+            text: item.text,
+            timestamp: item.timestamp,
+        })).map(item => {
+            const label = item.role === 'interviewer' ? 'INTERVIEWER' : item.role === 'assistant' ? 'ASSISTANT' : 'ME';
+            return `[${label}]: ${item.text}`;
+        }).join('\n');
+
+        this.compactSnapshotCache.set(cacheKey, {
+            revision: this.transcriptRevision,
+            value: snapshot,
+        });
+        return snapshot;
     }
 
     /**
@@ -351,10 +520,44 @@ export class SessionTracker {
     }
 
     // ============================================
+    // Conscious Mode Realtime Accessors
+    // ============================================
+
+    getThreadManager(): ThreadManager {
+        return this.threadManager;
+    }
+
+    getPhaseDetector(): InterviewPhaseDetector {
+        return this.phaseDetector;
+    }
+
+    getTokenBudgetManager(): TokenBudgetManager {
+        return this.tokenBudgetManager;
+    }
+
+    getCurrentPhase(): InterviewPhase {
+        return this.phaseDetector.getCurrentPhase();
+    }
+
+    setCurrentPhase(phase: InterviewPhase): void {
+        this.phaseDetector.setPhase(phase);
+    }
+
+    detectPhaseFromTranscript(transcript: string): InterviewPhase {
+        const result = this.phaseDetector.detectPhase(
+            transcript,
+            this.phaseDetector.getCurrentPhase(),
+            this.contextItems.slice(-5).map(item => item.text)
+        );
+        return result.phase;
+    }
+
+    // ============================================
     // Reset
     // ============================================
 
     reset(): void {
+        const consciousModeEnabled = this.consciousModeEnabled;
         this.contextItems = [];
         this.fullTranscript = [];
         this.fullUsage = [];
@@ -363,6 +566,16 @@ export class SessionTracker {
         this.lastAssistantMessage = null;
         this.assistantResponseHistory = [];
         this.lastInterimInterviewer = null;
+        this.consciousModeEnabled = consciousModeEnabled;
+        this.latestConsciousResponse = null;
+        this.activeReasoningThread = null;
+        this.threadManager.reset();
+        this.phaseDetector.reset();
+        this.tokenBudgetManager.reset();
+        this.adaptiveContextWindow = null;
+        this.transcriptRevision = 0;
+        this.compactSnapshotCache.clear();
+        this.sessionId = `session_${SessionTracker.nextSessionId++}`;
     }
 
     // ============================================
@@ -429,6 +642,20 @@ export class SessionTracker {
 
             // Evict ONLY the exact 500 oldest entries that we just summarized
             this.fullTranscript = this.fullTranscript.slice(summarizeCount);
+        } catch (error) {
+            console.error('[SessionTracker] Error during transcript compaction:', error);
+            // Continue with compaction even if summarization fails
+            try {
+                // Fallback: create a simple marker without LLM summarization
+                const oldEntries = this.fullTranscript.slice(0, 500);
+                const fallback = `[Earlier discussion: ${oldEntries.length} segments, topics: ${oldEntries.slice(0, 3).map(s => s.text.substring(0, 40)).join('; ')}...]`;
+                this.transcriptEpochSummaries.push(fallback);
+                this.transcriptEpochSummaries = this.transcriptEpochSummaries.slice(-SessionTracker.MAX_EPOCH_SUMMARIES);
+                this.fullTranscript = this.fullTranscript.slice(500);
+                console.warn('[SessionTracker] Using fallback compaction due to error');
+            } catch (fallbackError) {
+                console.error('[SessionTracker] Fallback compaction also failed:', fallbackError);
+            }
         } finally {
             this.isCompacting = false;
         }

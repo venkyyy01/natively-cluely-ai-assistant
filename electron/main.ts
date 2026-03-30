@@ -1,10 +1,11 @@
-import { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, shell, systemPreferences, globalShortcut } from "electron"
+import { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, shell, systemPreferences, globalShortcut, session } from "electron"
 import { EventEmitter } from "events"
 import path from "path"
 import fs from "fs"
-import { autoUpdater } from "electron-updater"
+import { syncOptimizationFlagsFromSettings } from "./config/optimizations"
+import { StealthManager } from "./stealth/StealthManager"
 if (!app.isPackaged) {
-  require('dotenv').config();
+require('dotenv').config();
 }
 
 // Handle stdout/stderr errors at the process level to prevent EIO crashes
@@ -21,6 +22,8 @@ process.on('unhandledRejection', (reason, promise) => {
 });
 
 const logFile = path.join(app.getPath('documents'), 'natively_debug.log');
+const LOG_MAX_SIZE_BYTES = 10 * 1024 * 1024; // 10MB
+const LOG_ROTATION_COUNT = 3; // Keep 3 rotated files
 
 const originalLog = console.log;
 const originalWarn = console.warn;
@@ -28,11 +31,52 @@ const originalError = console.error;
 
 const isDev = process.env.NODE_ENV === "development";
 
+/**
+ * Rotate log files if they exceed the maximum size.
+ * Keeps LOG_ROTATION_COUNT rotated files (e.g., .log.1, .log.2, .log.3)
+ */
+function rotateLogsIfNeeded(): void {
+  try {
+    const fs = require('fs');
+    
+    // Check if log file exists and exceeds max size
+    if (!fs.existsSync(logFile)) return;
+    
+    const stats = fs.statSync(logFile);
+    if (stats.size < LOG_MAX_SIZE_BYTES) return;
+    
+    // Rotate existing files: .log.3 -> delete, .log.2 -> .log.3, .log.1 -> .log.2, .log -> .log.1
+    for (let i = LOG_ROTATION_COUNT; i >= 1; i--) {
+      const rotatedPath = `${logFile}.${i}`;
+      if (fs.existsSync(rotatedPath)) {
+        if (i === LOG_ROTATION_COUNT) {
+          // Delete oldest rotation
+          fs.unlinkSync(rotatedPath);
+        } else {
+          // Rename to next rotation number
+          fs.renameSync(rotatedPath, `${logFile}.${i + 1}`);
+        }
+      }
+    }
+    
+    // Rename current log to .log.1
+    fs.renameSync(logFile, `${logFile}.1`);
+    
+    originalLog(`[LogRotation] Rotated debug log (size was ${Math.round(stats.size / 1024 / 1024)}MB)`);
+  } catch (e) {
+    // Ignore rotation errors - don't disrupt logging
+    originalError('[LogRotation] Failed to rotate logs:', e);
+  }
+}
+
 function logToFile(msg: string) {
   // Only log to file in development
   if (!isDev) return;
 
   try {
+    // Check and rotate logs if needed before writing
+    rotateLogsIfNeeded();
+    
     require('fs').appendFileSync(logFile, new Date().toISOString() + ' ' + msg + '\n');
   } catch (e) {
     // Ignore logging errors
@@ -86,6 +130,7 @@ import { ThemeManager } from "./ThemeManager"
 import { RAGManager } from "./rag/RAGManager"
 import { DatabaseManager } from "./db/DatabaseManager"
 import { warmupIntentClassifier } from "./llm"
+import { maybeHandleSuggestionTriggerFromTranscript } from "./ConsciousMode"
 
 /** Unified type for all STT providers with optional extended capabilities */
 type STTProvider = (GoogleSTT | RestSTT | DeepgramStreamingSTT | SonioxStreamingSTT | ElevenLabsStreamingSTT | OpenAIStreamingSTT) & {
@@ -99,6 +144,64 @@ type STTProvider = (GoogleSTT | RestSTT | DeepgramStreamingSTT | SonioxStreaming
   destroy?: () => void;
 };
 
+/** Type guard functions for STT provider optional methods */
+function hasFinalize(stt: STTProvider): stt is STTProvider & { finalize: () => void } {
+  return 'finalize' in stt && typeof stt.finalize === 'function';
+}
+
+function hasSetAudioChannelCount(stt: STTProvider): stt is STTProvider & { setAudioChannelCount: (count: number) => void } {
+  return 'setAudioChannelCount' in stt && typeof stt.setAudioChannelCount === 'function';
+}
+
+function hasNotifySpeechEnded(stt: STTProvider): stt is STTProvider & { notifySpeechEnded: () => void } {
+  return 'notifySpeechEnded' in stt && typeof stt.notifySpeechEnded === 'function';
+}
+
+function hasDestroy(stt: STTProvider): stt is STTProvider & { destroy: () => void } {
+  return 'destroy' in stt && typeof stt.destroy === 'function';
+}
+
+/** Safe wrapper functions for STT provider optional methods */
+function safeFinalize(stt: STTProvider | null): void {
+  if (stt && hasFinalize(stt)) {
+    try {
+      stt.finalize();
+    } catch (error) {
+      console.error('[Main] Error calling finalize on STT provider:', error);
+    }
+  }
+}
+
+function safeSetAudioChannelCount(stt: STTProvider | null, count: number): void {
+  if (stt && hasSetAudioChannelCount(stt)) {
+    try {
+      stt.setAudioChannelCount(count);
+    } catch (error) {
+      console.error('[Main] Error calling setAudioChannelCount on STT provider:', error);
+    }
+  }
+}
+
+function safeNotifySpeechEnded(stt: STTProvider | null): void {
+  if (stt && hasNotifySpeechEnded(stt)) {
+    try {
+      stt.notifySpeechEnded();
+    } catch (error) {
+      console.error('[Main] Error calling notifySpeechEnded on STT provider:', error);
+    }
+  }
+}
+
+function safeDestroy(stt: STTProvider | null): void {
+  if (stt && hasDestroy(stt)) {
+    try {
+      stt.destroy();
+    } catch (error) {
+      console.error('[Main] Error calling destroy on STT provider:', error);
+    }
+  }
+}
+
 // Premium: Knowledge modules loaded conditionally
 let KnowledgeOrchestratorClass: any = null;
 let KnowledgeDatabaseManagerClass: any = null;
@@ -111,7 +214,6 @@ try {
 
 import { CredentialsManager } from "./services/CredentialsManager"
 import { SettingsManager } from "./services/SettingsManager"
-import { ReleaseNotesManager } from "./update/ReleaseNotesManager"
 import { OllamaManager } from './services/OllamaManager'
 
 export class AppState {
@@ -128,8 +230,8 @@ export class AppState {
   private ragManager: RAGManager | null = null
   private knowledgeOrchestrator: any = null
   private tray: Tray | null = null
-  private updateAvailable: boolean = false
   private disguiseMode: 'terminal' | 'settings' | 'activity' | 'none' = 'none'
+  private consciousModeEnabled: boolean = false
 
   // View management
   private view: "queue" | "solutions" = "queue"
@@ -147,6 +249,7 @@ export class AppState {
   private isMeetingActive: boolean = false; // Guard for session state leaks
   private meetingLifecycleState: 'idle' | 'starting' | 'active' | 'stopping' = 'idle'
   private meetingStartSequence = 0
+  private meetingStartMutex: Promise<void> = Promise.resolve() // Prevents race conditions
   private nativeAudioConnected: boolean = false;
   private _disguiseTimers: NodeJS.Timeout[] = []; // Track forceUpdate timeouts
 
@@ -192,25 +295,35 @@ export class AppState {
     DEBUG_ERROR: "debug-error"
   } as const
 
-  constructor() {
-    // 1. Load boot-critical settings first (used by WindowHelpers)
-    const settingsManager = SettingsManager.getInstance();
-    this.isUndetectable = settingsManager.get('isUndetectable') ?? false;
-    this.disguiseMode = settingsManager.get('disguiseMode') ?? 'none';
-    console.log(`[AppState] Initialized with isUndetectable=${this.isUndetectable}, disguiseMode=${this.disguiseMode}`);
+constructor() {
+// 1. Load boot-critical settings first (used by WindowHelpers)
+const settingsManager = SettingsManager.getInstance();
+this.isUndetectable = settingsManager.get('isUndetectable') ?? false;
+this.disguiseMode = settingsManager.get('disguiseMode') ?? 'none';
+this.consciousModeEnabled = settingsManager.get('consciousModeEnabled') ?? false;
+
+// 1a. Sync acceleration optimization flags from settings
+const accelerationModeEnabled = settingsManager.getAccelerationModeEnabled();
+syncOptimizationFlagsFromSettings(accelerationModeEnabled);
+
+console.log(`[AppState] Initialized with isUndetectable=${this.isUndetectable}, disguiseMode=${this.disguiseMode}, consciousModeEnabled=${this.consciousModeEnabled}, accelerationModeEnabled=${accelerationModeEnabled}`);
 
     // 2. Initialize Helpers with loaded state
     this.windowHelper = new WindowHelper(this)
     this.settingsWindowHelper = new SettingsWindowHelper()
     this.modelSelectorWindowHelper = new ModelSelectorWindowHelper()
 
-    // 3. Initialize other helpers
-    this.screenshotHelper = new ScreenshotHelper(this.view)
-    this.processingHelper = new ProcessingHelper(this)
+// 3. Initialize other helpers
+this.screenshotHelper = new ScreenshotHelper(this.view)
+this.processingHelper = new ProcessingHelper(this)
 
-    this.windowHelper.setContentProtection(this.isUndetectable);
-    this.settingsWindowHelper.setContentProtection(this.isUndetectable);
-    this.modelSelectorWindowHelper.setContentProtection(this.isUndetectable);
+// 3a. Apply stealth mode if acceleration enabled (Apple Silicon enhancement)
+const stealthManager = new StealthManager({ enabled: this.isUndetectable });
+stealthManager.applyToWindow(this.windowHelper);
+
+this.windowHelper.setContentProtection(this.isUndetectable);
+this.settingsWindowHelper.setContentProtection(this.isUndetectable);
+this.modelSelectorWindowHelper.setContentProtection(this.isUndetectable);
 
     // Initialize KeybindManager
     const keybindManager = KeybindManager.getInstance();
@@ -254,28 +367,31 @@ export class AppState {
       }
     });
 
-    // Inject WindowHelper into other helpers
-    this.settingsWindowHelper.setWindowHelper(this.windowHelper);
-    this.modelSelectorWindowHelper.setWindowHelper(this.windowHelper);
+// Inject WindowHelper into other helpers
+this.settingsWindowHelper.setWindowHelper(this.windowHelper);
+this.modelSelectorWindowHelper.setWindowHelper(this.windowHelper);
 
 
+// Initialize IntelligenceManager with LLMHelper
+this.intelligenceManager = new IntelligenceManager(this.processingHelper.getLLMHelper())
+this.intelligenceManager.setConsciousModeEnabled(this.consciousModeEnabled)
 
+// Initialize ThemeManager
+this.themeManager = ThemeManager.getInstance()
 
+// Initialize RAGManager (requires database to be ready)
+this.initializeRAGManager()
 
-    // Initialize IntelligenceManager with LLMHelper
-    this.intelligenceManager = new IntelligenceManager(this.processingHelper.getLLMHelper())
+// Initialize KnowledgeOrchestrator (requires RAGManager for embeddings)
+this.initializeKnowledgeOrchestrator()
 
-    // Initialize ThemeManager
-    this.themeManager = ThemeManager.getInstance()
+// Check and prep Ollama embedding model
+this.bootstrapOllamaEmbeddings().catch(err => console.error('[AppState] Ollama bootstrap failed:', err))
 
-    // Initialize RAGManager (requires database to be ready)
-    this.initializeRAGManager()
-    
-    // Check and prep Ollama embedding model
-    this.bootstrapOllamaEmbeddings()
+// Initialize AccelerationManager (Apple Silicon enhancement)
+this.initializeAccelerationManager().catch(err => console.warn('[AppState] AccelerationManager init failed:', err))
 
-
-    this.setupIntelligenceEvents()
+this.setupIntelligenceEvents()
 
     // Pre-warm the zero-shot intent classifier in background
     warmupIntentClassifier();
@@ -286,9 +402,6 @@ export class AppState {
     // --- NEW SYSTEM AUDIO PIPELINE (SOX + NODE GOOGLE STT) ---
     // LAZY INIT: Do not setup pipeline here to prevent launch volume surge.
     // this.setupSystemAudioPipeline()
-
-    // Initialize Auto-Updater
-    this.setupAutoUpdater()
   }
 
   private broadcast(channel: string, ...args: any[]): void {
@@ -422,12 +535,25 @@ export class AppState {
         this.ragManager.setLLMHelper(this.processingHelper.getLLMHelper());
         console.log('[AppState] RAGManager initialized');
       }
-    } catch (error) {
-      console.error('[AppState] Failed to initialize RAGManager:', error);
-    }
+} catch (error) {
+console.error('[AppState] Failed to initialize RAGManager:', error);
+}
+}
 
-    // Initialize Knowledge Orchestrator
-    try {
+private async initializeAccelerationManager(): Promise<void> {
+try {
+const { AccelerationManager } = await import('./services/AccelerationManager');
+const accelerationManager = new AccelerationManager();
+await accelerationManager.initialize();
+console.log('[AppState] AccelerationManager initialized (Apple Silicon enhancement)');
+} catch (error) {
+console.warn('[AppState] AccelerationManager initialization skipped (optional):', error);
+}
+}
+
+private initializeKnowledgeOrchestrator(): void {
+// Initialize Knowledge Orchestrator
+try {
       const db = DatabaseManager.getInstance();
       const sqliteDb = db.getDb();
 
@@ -471,172 +597,11 @@ export class AppState {
         console.log('[AppState] KnowledgeOrchestrator initialized');
       }
     } catch (error) {
-      console.error('[AppState] Failed to initialize KnowledgeOrchestrator:', error);
+    console.error('[AppState] Failed to initialize KnowledgeOrchestrator:', error);
     }
   }
 
-  private setupAutoUpdater(): void {
-    autoUpdater.autoDownload = false
-    autoUpdater.autoInstallOnAppQuit = false  // Manual install only via button
-
-    autoUpdater.on("checking-for-update", () => {
-      console.log("[AutoUpdater] Checking for update...")
-      this.broadcast("update-checking")
-    })
-
-    autoUpdater.on("update-available", async (info) => {
-      console.log("[AutoUpdater] Update available:", info.version)
-      this.updateAvailable = true
-
-      // Fetch structured release notes
-      const releaseManager = ReleaseNotesManager.getInstance();
-      const notes = await releaseManager.fetchReleaseNotes(info.version);
-
-      // Notify renderer that an update is available with parsed notes if available
-      this.broadcast("update-available", {
-        ...info,
-        parsedNotes: notes
-      })
-    })
-
-    autoUpdater.on("update-not-available", (info) => {
-      console.log("[AutoUpdater] Update not available:", info.version)
-      this.broadcast("update-not-available", info)
-    })
-
-    autoUpdater.on("error", (err) => {
-      console.error("[AutoUpdater] Error:", err)
-      this.broadcast("update-error", err.message)
-    })
-
-    autoUpdater.on("download-progress", (progressObj) => {
-      let log_message = "Download speed: " + progressObj.bytesPerSecond
-      log_message = log_message + " - Downloaded " + progressObj.percent + "%"
-      log_message = log_message + " (" + progressObj.transferred + "/" + progressObj.total + ")"
-      console.log("[AutoUpdater] " + log_message)
-      this.broadcast("download-progress", progressObj)
-    })
-
-    autoUpdater.on("update-downloaded", (info) => {
-      console.log("[AutoUpdater] Update downloaded:", info.version)
-      // Notify renderer that update is ready to install
-      this.broadcast("update-downloaded", info)
-    })
-
-    // Start checking for updates with a 10-second delay
-    setTimeout(() => {
-      if (process.env.NODE_ENV === "development") {
-        console.log("[AutoUpdater] Development mode: Running manual update check...");
-        this.checkForUpdatesManual();
-      } else {
-        autoUpdater.checkForUpdatesAndNotify().catch(err => {
-          console.error("[AutoUpdater] Failed to check for updates:", err);
-        });
-      }
-    }, 10000);
-  }
-
-  private async checkForUpdatesManual(): Promise<void> {
-    try {
-      console.log('[AutoUpdater] Checking for updates manually via GitHub API...');
-      const releaseManager = ReleaseNotesManager.getInstance();
-      // Fetch latest release
-      const notes = await releaseManager.fetchReleaseNotes('latest');
-
-      if (notes) {
-        const currentVersion = app.getVersion();
-        const latestVersionTag = notes.version; // e.g., "v1.2.0" or "1.2.0"
-        const latestVersion = latestVersionTag.replace(/^v/, '');
-
-        console.log(`[AutoUpdater] Manual Check: Current=${currentVersion}, Latest=${latestVersion}`);
-
-        if (this.isVersionNewer(currentVersion, latestVersion)) {
-          console.log('[AutoUpdater] Manual Check: New version found!');
-          this.updateAvailable = true;
-
-          // Mock an info object compatible with electron-updater
-          const info = {
-            version: latestVersion,
-            files: [] as any[],
-            path: '',
-            sha512: '',
-            releaseName: notes.summary,
-            releaseNotes: notes.fullBody
-          };
-
-          // Notify renderer
-          this.broadcast("update-available", {
-            ...info,
-            parsedNotes: notes
-          });
-        } else {
-          console.log('[AutoUpdater] Manual Check: App is up to date.');
-          this.broadcast("update-not-available", { version: currentVersion });
-        }
-      }
-    } catch (err) {
-      console.error('[AutoUpdater] Manual update check failed:', err);
-    }
-  }
-
-  private isVersionNewer(current: string, latest: string): boolean {
-    const c = current.split('.').map(Number);
-    const l = latest.split('.').map(Number);
-
-    for (let i = 0; i < 3; i++) {
-      const cv = c[i] || 0;
-      const lv = l[i] || 0;
-      if (lv > cv) return true;
-      if (lv < cv) return false;
-    }
-    return false;
-  }
-
-
-  public async quitAndInstallUpdate(): Promise<void> {
-    console.log('[AutoUpdater] quitAndInstall called - applying update...')
-
-    // On macOS, unsigned apps can't auto-restart via quitAndInstall
-    // Workaround: Open the folder containing the downloaded update so user can install manually
-    if (process.platform === 'darwin') {
-      try {
-        // Get the downloaded update file path (e.g., .../Natively-1.0.9-mac.zip)
-        const updateFile = (autoUpdater as any).downloadedUpdateHelper?.file
-        console.log('[AutoUpdater] Downloaded update file:', updateFile)
-
-        if (updateFile) {
-          const updateDir = path.dirname(updateFile)
-          // Open the directory containing the update in Finder
-          await shell.openPath(updateDir)
-          console.log('[AutoUpdater] Opened update directory:', updateDir)
-
-          // Quit the app so user can install new version
-          setTimeout(() => app.quit(), 1000)
-          return
-        }
-      } catch (err) {
-        console.error('[AutoUpdater] Failed to open update directory:', err)
-      }
-    }
-
-    // Fallback to standard quitAndInstall (works on Windows/Linux or if signed)
-    setImmediate(() => {
-      try {
-        autoUpdater.quitAndInstall(false, true)
-      } catch (err) {
-        console.error('[AutoUpdater] quitAndInstall failed:', err)
-        app.exit(0)
-      }
-    })
-  }
-
-  public async checkForUpdates(): Promise<void> {
-    await autoUpdater.checkForUpdatesAndNotify()
-  }
-
-  public downloadUpdate(): void {
-    autoUpdater.downloadUpdate()
-  }
+  // Update-related methods removed
 
   // New Property for System Audio & Microphone
   private systemAudioCapture: SystemAudioCapture | null = null;
@@ -644,6 +609,12 @@ export class AppState {
   private audioTestCapture: MicrophoneCapture | null = null; // For audio settings test
   private googleSTT: STTProvider | null = null; // Interviewer
   private googleSTT_User: STTProvider | null = null; // User
+
+  // Listener references for proper cleanup (prevent memory leaks)
+  private sttTranscriptListener_Interviewer: ((segment: { text: string, isFinal: boolean, confidence: number }) => void) | null = null;
+  private sttErrorListener_Interviewer: ((err: Error) => void) | null = null;
+  private sttTranscriptListener_User: ((segment: { text: string, isFinal: boolean, confidence: number }) => void) | null = null;
+  private sttErrorListener_User: ((err: Error) => void) | null = null;
 
   private createSTTProvider(speaker: 'interviewer' | 'user'): STTProvider {
     const { CredentialsManager } = require('./services/CredentialsManager');
@@ -718,10 +689,10 @@ export class AppState {
 
     stt.setRecognitionLanguage(sttLanguage);
 
-    // Wire Transcript Events
+    // Wire Transcript Events - store references for proper cleanup
     const sttEmitter = stt as EventEmitter
 
-    sttEmitter.on('transcript', (segment: { text: string, isFinal: boolean, confidence: number }) => {
+    const transcriptHandler = (segment: { text: string, isFinal: boolean, confidence: number }) => {
       if (!this.isMeetingActive) {
         return;
       }
@@ -754,26 +725,33 @@ export class AppState {
       helper.getLauncherWindow()?.webContents.send('native-audio-transcript', payload);
       helper.getOverlayWindow()?.webContents.send('native-audio-transcript', payload);
 
-      if (speaker === 'interviewer' && segment.isFinal) {
-        const trimmed = segment.text.trim();
-        const wordCount = trimmed.split(/\s+/).filter(Boolean).length;
-        const looksActionable = trimmed.endsWith('?') || wordCount >= 5;
+      void maybeHandleSuggestionTriggerFromTranscript({
+        speaker,
+        text: segment.text,
+        final: segment.isFinal,
+        confidence: segment.confidence,
+        consciousModeEnabled: this.consciousModeEnabled,
+        intelligenceManager: this.intelligenceManager,
+      }).catch((error) => {
+        console.error('[Main] Failed to auto-trigger interview assist:', error);
+      });
+    };
 
-        if (looksActionable) {
-          void this.intelligenceManager.handleSuggestionTrigger({
-            context: this.intelligenceManager.getFormattedContext(180),
-            lastQuestion: trimmed,
-            confidence: segment.confidence ?? 0.8,
-          }).catch((error) => {
-            console.error('[Main] Failed to auto-trigger interview assist:', error);
-          });
-        }
-      }
-    });
-
-    sttEmitter.on('error', (err: Error) => {
+    const errorHandler = (err: Error) => {
       console.error(`[Main] STT (${speaker}) Error:`, err);
-    });
+    };
+
+    // Store listener references based on speaker
+    if (speaker === 'interviewer') {
+      this.sttTranscriptListener_Interviewer = transcriptHandler;
+      this.sttErrorListener_Interviewer = errorHandler;
+    } else {
+      this.sttTranscriptListener_User = transcriptHandler;
+      this.sttErrorListener_User = errorHandler;
+    }
+
+    sttEmitter.on('transcript', transcriptHandler);
+    sttEmitter.on('error', errorHandler);
 
     return stt;
   }
@@ -791,7 +769,7 @@ export class AppState {
           this.googleSTT?.write(chunk);
         });
         this.systemAudioCapture.on('speech_ended', () => {
-          this.googleSTT?.notifySpeechEnded?.();
+          safeNotifySpeechEnded(this.googleSTT);
         });
         this.systemAudioCapture.on('error', (err: Error) => {
           console.error('[Main] SystemAudioCapture Error:', err);
@@ -806,7 +784,7 @@ export class AppState {
           this.googleSTT_User?.write(chunk);
         });
         this.microphoneCapture.on('speech_ended', () => {
-          this.googleSTT_User?.notifySpeechEnded?.();
+          safeNotifySpeechEnded(this.googleSTT_User);
         });
         this.microphoneCapture.on('error', (err: Error) => {
           console.error('[Main] MicrophoneCapture Error:', err);
@@ -824,20 +802,20 @@ export class AppState {
         this.googleSTT_User = this.createSTTProvider('user');
       }
 
-      // --- CRITICAL FIX: SYNC SAMPLE RATES ---
-      // Always sync rates, even if just initialized, to ensure consistency
+    // --- CRITICAL FIX: SYNC SAMPLE RATES ---
+    // Always sync rates, even if just initialized, to ensure consistency
 
-      // 1. Sync System Audio Rate
-      const sysRate = this.systemAudioCapture?.getSampleRate() || 48000;
-      console.log(`[Main] Configuring Interviewer STT to ${sysRate}Hz`);
-      this.googleSTT?.setSampleRate(sysRate);
-      this.googleSTT?.setAudioChannelCount?.(1);
+    // 1. Sync System Audio Rate
+    const sysRate = this.systemAudioCapture?.getSampleRate() || 48000;
+    console.log(`[Main] Configuring Interviewer STT to ${sysRate}Hz`);
+    this.googleSTT?.setSampleRate(sysRate);
+    safeSetAudioChannelCount(this.googleSTT, 1);
 
-      // 2. Sync Mic Rate
-      const micRate = this.microphoneCapture?.getSampleRate() || 48000;
-      console.log(`[Main] Configuring User STT to ${micRate}Hz`);
-      this.googleSTT_User?.setSampleRate(micRate);
-      this.googleSTT_User?.setAudioChannelCount?.(1);
+    // 2. Sync Mic Rate
+    const micRate = this.microphoneCapture?.getSampleRate() || 48000;
+    console.log(`[Main] Configuring User STT to ${micRate}Hz`);
+    this.googleSTT_User?.setSampleRate(micRate);
+    safeSetAudioChannelCount(this.googleSTT_User, 1);
 
       console.log('[Main] Full Audio Pipeline (System + Mic) Initialized (Ready)');
 
@@ -867,7 +845,7 @@ export class AppState {
         this.googleSTT?.write(chunk);
       });
       this.systemAudioCapture.on('speech_ended', () => {
-        this.googleSTT?.notifySpeechEnded?.();
+        safeNotifySpeechEnded(this.googleSTT);
       });
       this.systemAudioCapture.on('error', (err: Error) => {
         console.error('[Main] SystemAudioCapture Error:', err);
@@ -886,9 +864,9 @@ export class AppState {
         this.systemAudioCapture.on('data', (chunk: Buffer) => {
           this.googleSTT?.write(chunk);
         });
-        this.systemAudioCapture.on('speech_ended', () => {
-          this.googleSTT?.notifySpeechEnded?.();
-        });
+      this.systemAudioCapture.on('speech_ended', () => {
+        safeNotifySpeechEnded(this.googleSTT);
+      });
         this.systemAudioCapture.on('error', (err: Error) => {
           console.error('[Main] SystemAudioCapture (Default) Error:', err);
           this.setNativeAudioConnected(false);
@@ -917,7 +895,7 @@ export class AppState {
         this.googleSTT_User?.write(chunk);
       });
       this.microphoneCapture.on('speech_ended', () => {
-        this.googleSTT_User?.notifySpeechEnded?.();
+        safeNotifySpeechEnded(this.googleSTT_User);
       });
       this.microphoneCapture.on('error', (err: Error) => {
         console.error('[Main] MicrophoneCapture Error:', err);
@@ -957,17 +935,35 @@ export class AppState {
   public async reconfigureSttProvider(): Promise<void> {
     console.log('[Main] Reconfiguring STT Provider...');
 
-    // Stop existing STT instances
+    // Stop existing STT instances - remove listeners using stored references first
     if (this.googleSTT) {
-      this.googleSTT.destroy?.();
+      const sttEmitter = this.googleSTT as EventEmitter;
+      if (this.sttTranscriptListener_Interviewer) {
+        sttEmitter.removeListener('transcript', this.sttTranscriptListener_Interviewer);
+        this.sttTranscriptListener_Interviewer = null;
+      }
+      if (this.sttErrorListener_Interviewer) {
+        sttEmitter.removeListener('error', this.sttErrorListener_Interviewer);
+        this.sttErrorListener_Interviewer = null;
+      }
       this.googleSTT.stop();
       this.googleSTT.removeAllListeners();
+      safeDestroy(this.googleSTT);
       this.googleSTT = null;
     }
     if (this.googleSTT_User) {
-      this.googleSTT_User.destroy?.();
+      const sttEmitter = this.googleSTT_User as EventEmitter;
+      if (this.sttTranscriptListener_User) {
+        sttEmitter.removeListener('transcript', this.sttTranscriptListener_User);
+        this.sttTranscriptListener_User = null;
+      }
+      if (this.sttErrorListener_User) {
+        sttEmitter.removeListener('error', this.sttErrorListener_User);
+        this.sttErrorListener_User = null;
+      }
       this.googleSTT_User.stop();
       this.googleSTT_User.removeAllListeners();
+      safeDestroy(this.googleSTT_User);
       this.googleSTT_User = null;
     }
 
@@ -1038,108 +1034,179 @@ export class AppState {
 
   public finalizeMicSTT(): void {
     // We only want to finalize the user microphone, because the context is Manual Answer
-    if (this.googleSTT_User?.finalize) {
-      console.log('[Main] Finalizing STT');
-      this.googleSTT_User.finalize();
-    }
+    safeFinalize(this.googleSTT_User);
+    console.log('[Main] STT finalized');
   }
 
   public async startMeeting(metadata?: any): Promise<void> {
     console.log('[Main] Starting Meeting...', metadata);
 
-    if (this.meetingLifecycleState === 'starting' || this.meetingLifecycleState === 'active') {
-      console.warn(`[Main] Ignoring startMeeting while state=${this.meetingLifecycleState}`)
-      return
-    }
-
-    this.meetingLifecycleState = 'starting'
-    const startSequence = ++this.meetingStartSequence
-
-    try {
-      await this.validateMeetingAudioSetup(metadata);
-    } catch (error) {
-      this.meetingLifecycleState = 'idle'
-      throw error
-    }
-
-    this.isMeetingActive = true;
-    if (metadata) {
-      this.intelligenceManager.setMeetingMetadata(metadata);
-    }
-
-    // Emit session reset to clear UI state immediately
-    this.getWindowHelper().getOverlayWindow()?.webContents.send('session-reset');
-    this.getWindowHelper().getLauncherWindow()?.webContents.send('session-reset');
-
-    // ★ ASYNC AUDIO INIT: Return INSTANTLY so the IPC response goes back
-    // to the renderer immediately, allowing the UI to switch to overlay
-    // without waiting for SCK/audio initialization (which takes 5-7 seconds).
-    // setTimeout(100) ensures setWindowMode IPC is processed first.
-    setTimeout(async () => {
-      if (startSequence !== this.meetingStartSequence || this.meetingLifecycleState !== 'starting') {
-        console.warn('[Main] Skipping stale deferred meeting start')
+    // Chain this operation after any pending meeting start operations
+    return this.meetingStartMutex = this.meetingStartMutex.then(async () => {
+      // Critical section: check and update state atomically
+      if (this.meetingLifecycleState === 'starting' || this.meetingLifecycleState === 'active') {
+        console.warn(`[Main] Ignoring startMeeting while state=${this.meetingLifecycleState}`)
         return
       }
 
+      this.meetingLifecycleState = 'starting'
+      const startSequence = ++this.meetingStartSequence
+
       try {
-        // Check for audio configuration preference
-        if (metadata?.audio) {
-          await this.reconfigureAudio(metadata.audio.inputDeviceId, metadata.audio.outputDeviceId);
-        }
-
-        if (startSequence !== this.meetingStartSequence || this.meetingLifecycleState !== 'starting') {
-          console.warn('[Main] Meeting start invalidated during async initialization')
-          return
-        }
-
-        // LAZY INIT: Ensure pipeline is ready (if not reconfigured above)
-        this.setupSystemAudioPipeline();
-
-        // Start System Audio
-        this.systemAudioCapture?.start();
-        this.googleSTT?.start();
-
-        // Start Microphone
-        this.microphoneCapture?.start();
-        this.googleSTT_User?.start();
-
-        // Start JIT RAG live indexing
-        if (this.ragManager) {
-          this.ragManager.startLiveIndexing('live-meeting-current');
-        }
-
-        this.setNativeAudioConnected(true);
-        this.meetingLifecycleState = 'active'
-        console.log('[Main] Audio pipeline started successfully.');
-      } catch (err) {
-        console.error('[Main] Error initializing audio pipeline:', err);
-        // Notify UI so user knows microphone/audio failed to start
-        this.setNativeAudioConnected(false);
-        this.broadcast('meeting-audio-error', (err as Error).message || 'Audio pipeline failed to start');
-        this.isMeetingActive = false;
+        await this.validateMeetingAudioSetup(metadata);
+      } catch (error) {
         this.meetingLifecycleState = 'idle'
+        throw error
       }
-    }, 0); // Defer to next event loop tick — ensures IPC response reaches renderer before audio init
+
+      this.isMeetingActive = true;
+      if (metadata) {
+        this.intelligenceManager.setMeetingMetadata(metadata);
+      }
+
+      // Emit session reset to clear UI state immediately
+      this.getWindowHelper().getOverlayWindow()?.webContents.send('session-reset');
+      this.getWindowHelper().getLauncherWindow()?.webContents.send('session-reset');
+
+      // ★ ASYNC AUDIO INIT: Return INSTANTLY so the IPC response goes back
+      // to the renderer immediately, allowing the UI to switch to overlay
+      // without waiting for SCK/audio initialization (which takes 5-7 seconds).
+      // setTimeout(100) ensures setWindowMode IPC is processed first.
+      return new Promise<void>((resolve, reject) => {
+        setTimeout(async () => {
+          // Check if this is still the current meeting start sequence
+          if (startSequence !== this.meetingStartSequence || this.meetingLifecycleState !== 'starting') {
+            console.warn('[Main] Skipping stale deferred meeting start')
+            resolve() // Resolve rather than reject as this is expected behavior
+            return
+          }
+
+          try {
+            // Check for audio configuration preference
+            if (metadata?.audio) {
+              await this.reconfigureAudio(metadata.audio.inputDeviceId, metadata.audio.outputDeviceId);
+            }
+
+            // Double-check sequence after async operations
+            if (startSequence !== this.meetingStartSequence || this.meetingLifecycleState !== 'starting') {
+              console.warn('[Main] Meeting start invalidated during async initialization')
+              resolve() // Resolve rather than reject as this is expected behavior
+              return
+            }
+
+            // LAZY INIT: Ensure pipeline is ready (if not reconfigured above)
+            this.setupSystemAudioPipeline();
+
+            // Start System Audio
+            this.systemAudioCapture?.start();
+            this.googleSTT?.start();
+
+            // Start Microphone
+            this.microphoneCapture?.start();
+            this.googleSTT_User?.start();
+
+            // Start JIT RAG live indexing
+            if (this.ragManager) {
+              try {
+                this.ragManager.startLiveIndexing('live-meeting-current');
+              } catch (err) {
+                console.error('[Main] Live indexing failed:', err);
+              }
+            }
+
+            this.setNativeAudioConnected(true);
+            this.meetingLifecycleState = 'active'
+            console.log('[Main] Audio pipeline started successfully.');
+            resolve()
+          } catch (err) {
+            console.error('[Main] Error initializing audio pipeline:', err);
+            // Notify UI so user knows microphone/audio failed to start
+            this.setNativeAudioConnected(false);
+            this.broadcast('meeting-audio-error', (err as Error).message || 'Audio pipeline failed to start');
+            this.isMeetingActive = false;
+            this.meetingLifecycleState = 'idle'
+            reject(err)
+          }
+        }, 0); // Defer to next event loop tick — ensures IPC response reaches renderer before audio init
+      })
+    });
   }
 
   public async endMeeting(): Promise<void> {
     console.log('[Main] Ending Meeting...');
-    this.meetingStartSequence += 1
+    const endSequence = ++this.meetingStartSequence  // Increment sequence to invalidate any pending starts
     this.meetingLifecycleState = 'stopping'
     this.isMeetingActive = false; // Block new data immediately
     this.setNativeAudioConnected(false);
 
+    // Wait for any pending meeting start operations to complete before proceeding
+    // This prevents race conditions between start and end operations
+    await this.meetingStartMutex.catch(() => {
+      // Ignore errors from the mutex as we're ending the meeting anyway
+      console.log('[Main] Ignoring pending meeting start errors during endMeeting');
+    });
+
     // 3. Stop System Audio
-    this.systemAudioCapture?.stop();
-    this.googleSTT?.stop();
+    try {
+      this.systemAudioCapture?.stop();
+    } catch (error) {
+      console.error('[Main] Failed to stop system audio during endMeeting:', error)
+    }
+
+    // Stop interviewer STT with proper listener cleanup
+    try {
+      if (this.googleSTT) {
+        const sttEmitter = this.googleSTT as EventEmitter;
+        if (this.sttTranscriptListener_Interviewer) {
+          sttEmitter.removeListener('transcript', this.sttTranscriptListener_Interviewer);
+          this.sttTranscriptListener_Interviewer = null;
+        }
+        if (this.sttErrorListener_Interviewer) {
+          sttEmitter.removeListener('error', this.sttErrorListener_Interviewer);
+          this.sttErrorListener_Interviewer = null;
+        }
+        this.googleSTT?.stop();
+        this.googleSTT?.removeAllListeners();
+        this.googleSTT = null;
+      }
+    } catch (error) {
+      console.error('[Main] Failed to stop interviewer STT during endMeeting:', error)
+    }
 
     // 4. Stop Microphone
-    this.microphoneCapture?.stop();
-    this.googleSTT_User?.stop();
+    try {
+      this.microphoneCapture?.stop();
+    } catch (error) {
+      console.error('[Main] Failed to stop microphone capture during endMeeting:', error)
+    }
+
+    // Stop user STT with proper listener cleanup
+    try {
+      if (this.googleSTT_User) {
+        const sttEmitter = this.googleSTT_User as EventEmitter;
+        if (this.sttTranscriptListener_User) {
+          sttEmitter.removeListener('transcript', this.sttTranscriptListener_User);
+          this.sttTranscriptListener_User = null;
+        }
+        if (this.sttErrorListener_User) {
+          sttEmitter.removeListener('error', this.sttErrorListener_User);
+          this.sttErrorListener_User = null;
+        }
+        this.googleSTT_User?.stop();
+        this.googleSTT_User?.removeAllListeners();
+        this.googleSTT_User = null;
+      }
+    } catch (error) {
+      console.error('[Main] Failed to stop user STT during endMeeting:', error)
+    }
 
     // 4b. Stop JIT RAG live indexing (flush remaining segments)
     if (this.ragManager) {
-      await this.ragManager.stopLiveIndexing();
+      try {
+        await this.ragManager.stopLiveIndexing();
+      } catch (error) {
+        console.error('[Main] Failed to stop live indexing during endMeeting:', error)
+      }
     }
 
     // 4. Reset Intelligence Context & Save
@@ -1186,28 +1253,60 @@ export class AppState {
     this.isMeetingActive = false
     this.setNativeAudioConnected(false)
 
+    // Clear disguise timers to prevent memory leaks
+    this.clearDisguiseTimers()
+
+    // Remove intelligence event listeners to prevent memory leaks
+    this.intelligenceManager.removeAllListeners()
+
     try {
       this.systemAudioCapture?.stop()
     } catch (error) {
       console.error('[Main] Failed to stop system audio during quit:', error)
     }
 
+    // Stop interviewer STT with proper listener cleanup
     try {
+      if (this.googleSTT) {
+        const sttEmitter = this.googleSTT as EventEmitter
+        if (this.sttTranscriptListener_Interviewer) {
+          sttEmitter.removeListener('transcript', this.sttTranscriptListener_Interviewer)
+          this.sttTranscriptListener_Interviewer = null
+        }
+        if (this.sttErrorListener_Interviewer) {
+          sttEmitter.removeListener('error', this.sttErrorListener_Interviewer)
+          this.sttErrorListener_Interviewer = null
+        }
       this.googleSTT?.stop()
-      this.googleSTT?.destroy?.()
-    } catch (error) {
-      console.error('[Main] Failed to stop interviewer STT during quit:', error)
+      this.googleSTT?.removeAllListeners()
+      safeDestroy(this.googleSTT)
     }
+  } catch (error) {
+    console.error('[Main] Failed to stop interviewer STT during quit:', error)
+  }
 
-    try {
-      this.microphoneCapture?.stop()
-    } catch (error) {
-      console.error('[Main] Failed to stop microphone capture during quit:', error)
-    }
+  try {
+    this.microphoneCapture?.stop()
+  } catch (error) {
+    console.error('[Main] Failed to stop microphone capture during quit:', error)
+  }
 
-    try {
+  // Stop user STT with proper listener cleanup
+  try {
+    if (this.googleSTT_User) {
+      const sttEmitter = this.googleSTT_User as EventEmitter
+      if (this.sttTranscriptListener_User) {
+        sttEmitter.removeListener('transcript', this.sttTranscriptListener_User)
+        this.sttTranscriptListener_User = null
+      }
+      if (this.sttErrorListener_User) {
+        sttEmitter.removeListener('error', this.sttErrorListener_User)
+        this.sttErrorListener_User = null
+      }
       this.googleSTT_User?.stop()
-      this.googleSTT_User?.destroy?.()
+      this.googleSTT_User?.removeAllListeners()
+      safeDestroy(this.googleSTT_User)
+    }
     } catch (error) {
       console.error('[Main] Failed to stop user STT during quit:', error)
     }
@@ -1274,13 +1373,15 @@ export class AppState {
     this.intelligenceManager.on('assist_update', (insight: string) => {
       // Send to both if both exist, though mostly overlay needs it
       const helper = this.getWindowHelper();
-      helper.getLauncherWindow()?.webContents.send('intelligence-assist-update', { insight });
-      helper.getOverlayWindow()?.webContents.send('intelligence-assist-update', { insight });
+      const launcher = helper.getLauncherWindow();
+      const overlay = helper.getOverlayWindow();
+      if (launcher && !launcher.isDestroyed()) launcher.webContents.send('intelligence-assist-update', { insight });
+      if (overlay && !overlay.isDestroyed()) overlay.webContents.send('intelligence-assist-update', { insight });
     })
 
     this.intelligenceManager.on('suggested_answer', (answer: string, question: string, confidence: number) => {
       const win = mainWindow()
-      if (win) {
+      if (win && !win.isDestroyed()) {
         win.webContents.send('intelligence-suggested-answer', { answer, question, confidence })
       }
 
@@ -1288,21 +1389,21 @@ export class AppState {
 
     this.intelligenceManager.on('suggested_answer_token', (token: string, question: string, confidence: number) => {
       const win = mainWindow()
-      if (win) {
+      if (win && !win.isDestroyed()) {
         win.webContents.send('intelligence-suggested-answer-token', { token, question, confidence })
       }
     })
 
     this.intelligenceManager.on('refined_answer_token', (token: string, intent: string) => {
       const win = mainWindow()
-      if (win) {
+      if (win && !win.isDestroyed()) {
         win.webContents.send('intelligence-refined-answer-token', { token, intent })
       }
     })
 
     this.intelligenceManager.on('refined_answer', (answer: string, intent: string) => {
       const win = mainWindow()
-      if (win) {
+      if (win && !win.isDestroyed()) {
         win.webContents.send('intelligence-refined-answer', { answer, intent })
       }
 
@@ -1310,42 +1411,42 @@ export class AppState {
 
     this.intelligenceManager.on('recap', (summary: string) => {
       const win = mainWindow()
-      if (win) {
+      if (win && !win.isDestroyed()) {
         win.webContents.send('intelligence-recap', { summary })
       }
     })
 
     this.intelligenceManager.on('recap_token', (token: string) => {
       const win = mainWindow()
-      if (win) {
+      if (win && !win.isDestroyed()) {
         win.webContents.send('intelligence-recap-token', { token })
       }
     })
 
     this.intelligenceManager.on('follow_up_questions_update', (questions: string) => {
       const win = mainWindow()
-      if (win) {
+      if (win && !win.isDestroyed()) {
         win.webContents.send('intelligence-follow-up-questions-update', { questions })
       }
     })
 
     this.intelligenceManager.on('follow_up_questions_token', (token: string) => {
       const win = mainWindow()
-      if (win) {
+      if (win && !win.isDestroyed()) {
         win.webContents.send('intelligence-follow-up-questions-token', { token })
       }
     })
 
     this.intelligenceManager.on('manual_answer_started', () => {
       const win = mainWindow()
-      if (win) {
+      if (win && !win.isDestroyed()) {
         win.webContents.send('intelligence-manual-started')
       }
     })
 
     this.intelligenceManager.on('manual_answer_result', (answer: string, question: string) => {
       const win = mainWindow()
-      if (win) {
+      if (win && !win.isDestroyed()) {
         win.webContents.send('intelligence-manual-result', { answer, question })
       }
 
@@ -1353,7 +1454,7 @@ export class AppState {
 
     this.intelligenceManager.on('mode_changed', (mode: string) => {
       const win = mainWindow()
-      if (win) {
+      if (win && !win.isDestroyed()) {
         win.webContents.send('intelligence-mode-changed', { mode })
       }
     })
@@ -1361,7 +1462,7 @@ export class AppState {
     this.intelligenceManager.on('error', (error: Error, mode: string) => {
       console.error(`[IntelligenceManager] Error in ${mode}:`, error)
       const win = mainWindow()
-      if (win) {
+      if (win && !win.isDestroyed()) {
         win.webContents.send('intelligence-error', { error: error.message, mode })
       }
     })
@@ -1826,7 +1927,48 @@ export class AppState {
     return this.isUndetectable
   }
 
-  public setDisguise(mode: 'terminal' | 'settings' | 'activity' | 'none'): void {
+  public setConsciousModeEnabled(enabled: boolean): boolean {
+    if (this.consciousModeEnabled === enabled) {
+      return true
+    }
+
+    const persisted = SettingsManager.getInstance().set('consciousModeEnabled', enabled)
+    if (!persisted) {
+      throw new Error('Unable to persist Conscious Mode')
+    }
+
+    this.consciousModeEnabled = enabled
+    this.intelligenceManager.setConsciousModeEnabled(enabled)
+    this._broadcastToAllWindows('conscious-mode-changed', enabled)
+    return true
+  }
+
+public getConsciousModeEnabled(): boolean {
+  return this.consciousModeEnabled
+}
+
+public setAccelerationModeEnabled(enabled: boolean): boolean {
+  const settings = SettingsManager.getInstance()
+  const previousEnabled = settings.getAccelerationModeEnabled()
+  if (previousEnabled === enabled) {
+    return true
+  }
+
+  const persisted = settings.set('accelerationModeEnabled', enabled)
+  if (!persisted) {
+    throw new Error('Unable to persist Acceleration Mode')
+  }
+
+  syncOptimizationFlagsFromSettings(settings.getAccelerationModeEnabled())
+  this._broadcastToAllWindows('acceleration-mode-changed', enabled)
+  return true
+}
+
+public getAccelerationModeEnabled(): boolean {
+  return SettingsManager.getInstance().getAccelerationModeEnabled()
+}
+
+public setDisguise(mode: 'terminal' | 'settings' | 'activity' | 'none'): void {
     this.disguiseMode = mode;
     SettingsManager.getInstance().set('disguiseMode', mode);
 
@@ -2014,7 +2156,27 @@ async function initializeApp() {
   // 2. Wait for app to be ready
   await app.whenReady()
 
-  // 3. Initialize Managers
+  // 3. Set Content Security Policy headers for XSS protection
+  session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
+    callback({
+      responseHeaders: {
+        ...details.responseHeaders,
+        'Content-Security-Policy': 
+          "default-src 'self'; " +
+          "script-src 'self' 'unsafe-inline' 'unsafe-eval'; " +
+          "style-src 'self' 'unsafe-inline'; " +
+          "img-src 'self' data: blob: https:; " +
+          "font-src 'self' data:; " +
+          "connect-src 'self' https: wss: ws:; " +
+          "media-src 'self' blob:; " +
+          "object-src 'none'; " +
+          "frame-src 'self'; " +
+          "base-uri 'self';"
+      }
+    });
+  });
+
+  // 4. Initialize Managers
   // Initialize CredentialsManager and load keys explicitly
   // This fixes the issue where keys (especially in production) aren't loaded in time for RAG/LLM
   const { CredentialsManager } = require('./services/CredentialsManager');

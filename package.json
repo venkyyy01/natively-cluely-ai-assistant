@@ -38,9 +38,11 @@
       "dist-electron",
       "package.json",
       "node_modules",
+      "native-module",
       "!**/native-module/target",
       "!**/native-module/src",
-      "!**/native-module/.cargo"
+      "!**/native-module/.cargo",
+      "!**/native-module/node_modules"
     ],
     "asarUnpack": [
       "**/*.node",

@@ -1,5 +1,7 @@
 import type { CustomProviderPayload, FollowUpEmailInput, GeminiChatOptions, OverlayBounds, TranscriptTextEntry } from '../../shared/ipc'
 
+type StatusResult = { success: boolean; error?: string }
+
 export interface ElectronAPI {
   updateContentDimensions: (dimensions: {
     width: number
@@ -30,24 +32,30 @@ export interface ElectronAPI {
   onUnauthorized: (callback: () => void) => () => void
   onDebugError: (callback: (error: string) => void) => () => void
   takeScreenshot: () => Promise<{ path: string; preview: string }>
-  takeSelectiveScreenshot: () => Promise<{ path: string; preview: string; cancelled?: boolean }>
+  takeSelectiveScreenshot: () => Promise<{ path?: string; preview?: string; cancelled?: boolean }>
   moveWindowLeft: () => Promise<void>
   moveWindowRight: () => Promise<void>
   moveWindowUp: () => Promise<void>
   moveWindowDown: () => Promise<void>
 
-  analyzeImageFile: (path: string) => Promise<void>
+  analyzeImageFile: (path: string) => Promise<unknown>
   quitApp: () => Promise<void>
   toggleWindow: () => Promise<void>
   showWindow: () => Promise<void>
   hideWindow: () => Promise<void>
   openExternal: (url: string) => Promise<void>
-  setUndetectable: (state: boolean) => Promise<{ success: boolean; error?: string }>
+  setUndetectable: (state: boolean) => Promise<StatusResult>
   getUndetectable: () => Promise<boolean>
-  setDisguise: (mode: 'terminal' | 'settings' | 'activity' | 'none') => Promise<{ success: boolean; error?: string }>
+setConsciousMode: (enabled: boolean) => Promise<{ success: true; data: { enabled: boolean } } | { success: false; error: { code: string; message: string } }>
+getConsciousMode: () => Promise<{ success: true; data: { enabled: boolean } } | { success: false; error: { code: string; message: string } }>
+onConsciousModeChanged: (callback: (enabled: boolean) => void) => () => void
+setAccelerationMode: (enabled: boolean) => Promise<{ success: true; data: { enabled: boolean } } | { success: false; error: { code: string; message: string } }>
+getAccelerationMode: () => Promise<{ success: true; data: { enabled: boolean } } | { success: false; error: { code: string; message: string } }>
+onAccelerationModeChanged: (callback: (enabled: boolean) => void) => () => void
+setDisguise: (mode: 'terminal' | 'settings' | 'activity' | 'none') => Promise<StatusResult>
   getDisguise: () => Promise<'none' | 'terminal' | 'settings' | 'activity'>
   onDisguiseChanged: (callback: (mode: 'terminal' | 'settings' | 'activity' | 'none') => void) => () => void
-  setOpenAtLogin: (open: boolean) => Promise<{ success: boolean; error?: string }>
+  setOpenAtLogin: (open: boolean) => Promise<StatusResult>
   getOpenAtLogin: () => Promise<boolean>
   onSettingsVisibilityChange: (callback: (isVisible: boolean) => void) => () => void
   toggleSettingsWindow: (coords?: { x: number; y: number }) => Promise<void>
@@ -98,7 +106,7 @@ export interface ElectronAPI {
   getOutputDevices: () => Promise<Array<{ id: string; name: string }>>
   setRecognitionLanguage: (key: string) => Promise<{ success: boolean; error?: string }>
   getAiResponseLanguages: () => Promise<Array<{ label: string; code: string }>>
-  setAiResponseLanguage: (language: string) => Promise<{ success: boolean; error?: string }>
+  setAiResponseLanguage: (language: string) => Promise<StatusResult>
   getSttLanguage: () => Promise<string>
   getAiResponseLanguage: () => Promise<string>
 
@@ -209,26 +217,14 @@ export interface ElectronAPI {
   getUpcomingEvents: () => Promise<Array<{ id: string; title: string; startTime: string; endTime: string; link?: string; source: 'google' }>>
   calendarRefresh: () => Promise<{ success: boolean; error?: string }>
 
-  // Auto-Update
-  onUpdateAvailable: (callback: (info: any) => void) => () => void
-  onUpdateDownloaded: (callback: (info: any) => void) => () => void
-  onUpdateChecking: (callback: () => void) => () => void
-  onUpdateNotAvailable: (callback: (info: any) => void) => () => void
-  onUpdateError: (callback: (err: string) => void) => () => void
-  onDownloadProgress: (callback: (progressObj: any) => void) => () => void
-  restartAndInstall: () => Promise<void>
-  checkForUpdates: () => Promise<void>
-  downloadUpdate: () => Promise<void>
-  testReleaseFetch: () => Promise<{ success: boolean; error?: string }>
-
-  // RAG (Retrieval-Augmented Generation) API
+// RAG (Retrieval-Augmented Generation) API
   ragQueryMeeting: (meetingId: string, query: string) => Promise<{ success?: boolean; fallback?: boolean; error?: string }>
   ragQueryLive: (query: string) => Promise<{ success?: boolean; fallback?: boolean; error?: string }>
   ragQueryGlobal: (query: string) => Promise<{ success?: boolean; fallback?: boolean; error?: string }>
-  ragCancelQuery: (options: { meetingId?: string; global?: boolean }) => Promise<{ success: boolean }>
+  ragCancelQuery: (options: { meetingId?: string; global?: boolean }) => Promise<StatusResult>
   ragIsMeetingProcessed: (meetingId: string) => Promise<boolean>
   ragGetQueueStatus: () => Promise<{ pending: number; processing: number; completed: number; failed: number }>
-  ragRetryEmbeddings: () => Promise<{ success: boolean }>
+  ragRetryEmbeddings: () => Promise<StatusResult>
   onRAGStreamChunk: (callback: (data: { meetingId?: string; global?: boolean; chunk: string }) => void) => () => void
   onRAGStreamComplete: (callback: (data: { meetingId?: string; global?: boolean }) => void) => () => void
   onRAGStreamError: (callback: (data: { meetingId?: string; global?: boolean; error: string }) => void) => () => void
@@ -245,22 +241,22 @@ export interface ElectronAPI {
   onKeybindsUpdate: (callback: (keybinds: Array<any>) => void) => () => void
 
   // Profile Engine API
-  profileUploadResume: (filePath: string) => Promise<{ success: boolean; error?: string }>
+  profileUploadResume: (filePath: string) => Promise<StatusResult>
   profileGetStatus: () => Promise<{ hasProfile: boolean; profileMode: boolean; name?: string; role?: string; totalExperienceYears?: number }>
-  profileSetMode: (enabled: boolean) => Promise<{ success: boolean; error?: string }>
-  profileDelete: () => Promise<{ success: boolean; error?: string }>
+  profileSetMode: (enabled: boolean) => Promise<StatusResult>
+  profileDelete: () => Promise<StatusResult>
   profileGetProfile: () => Promise<any>
   profileSelectFile: () => Promise<{ success?: boolean; cancelled?: boolean; filePath?: string; error?: string }>
 
   // JD & Research API
-  profileUploadJD: (filePath: string) => Promise<{ success: boolean; error?: string }>
-  profileDeleteJD: () => Promise<{ success: boolean; error?: string }>
+  profileUploadJD: (filePath: string) => Promise<StatusResult>
+  profileDeleteJD: () => Promise<StatusResult>
   profileResearchCompany: (companyName: string) => Promise<{ success: boolean; dossier?: any; error?: string }>
   profileGenerateNegotiation: () => Promise<{ success: boolean; dossier?: any; profileData?: any; error?: string }>
 
   // Google Search API
-  setGoogleSearchApiKey: (apiKey: string) => Promise<{ success: boolean; error?: string }>
-  setGoogleSearchCseId: (cseId: string) => Promise<{ success: boolean; error?: string }>
+  setGoogleSearchApiKey: (apiKey: string) => Promise<StatusResult>
+  setGoogleSearchCseId: (cseId: string) => Promise<StatusResult>
 
   // Dynamic Model Discovery
   fetchProviderModels: (provider: 'gemini' | 'groq' | 'openai' | 'claude', apiKey: string) => Promise<{ success: boolean; models?: { id: string, label: string }[]; error?: string }>

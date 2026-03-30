@@ -18,8 +18,60 @@ import { CustomProvider, CurlProvider } from './services/CredentialsManager';
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import axios from 'axios';
+import { validateResponseQuality, logValidationMetrics } from './llm/postProcessor';
+import { createHash } from 'crypto';
 import { createProviderRateLimiters, RateLimiter } from './services/RateLimiter';
 const execAsync = promisify(exec);
+
+/** Default timeout for LLM API calls in milliseconds */
+const LLM_API_TIMEOUT_MS = 30000; // 30 seconds
+
+/**
+ * Create an AbortSignal that times out after the specified duration
+ */
+function createTimeoutSignal(timeoutMs: number = LLM_API_TIMEOUT_MS): AbortSignal {
+  const controller = new AbortController();
+  setTimeout(() => controller.abort(new Error(`LLM API timeout after ${timeoutMs}ms`)), timeoutMs);
+  return controller.signal;
+}
+
+/**
+ * Wrap a promise with a timeout
+ */
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number = LLM_API_TIMEOUT_MS): Promise<T> {
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    setTimeout(() => reject(new Error(`LLM API timeout after ${timeoutMs}ms`)), timeoutMs);
+  });
+  return Promise.race([promise, timeoutPromise]);
+}
+
+/**
+ * Sanitize error objects to remove sensitive data before logging
+ */
+function sanitizeError(error: unknown): string {
+  if (error instanceof Error) {
+    // Only return message and stack, not the full error object which may contain headers
+    return `${error.name}: ${error.message}${error.stack ? `\n${error.stack}` : ''}`;
+  }
+  if (typeof error === 'object' && error !== null) {
+    // Remove potentially sensitive fields
+    const sanitized = { ...error } as Record<string, unknown>;
+    delete sanitized.config;
+    delete sanitized.request;
+    delete sanitized.headers;
+    const response = sanitized.response as Record<string, unknown> | undefined;
+    if (response) {
+      delete response.config;
+      delete response.request;
+    }
+    try {
+      return JSON.stringify(sanitized, null, 2);
+    } catch {
+      return String(error);
+    }
+  }
+  return String(error);
+}
 
 interface OllamaResponse {
   response: string
@@ -36,6 +88,15 @@ const MAX_OUTPUT_TOKENS = 8192
 const CLAUDE_MAX_OUTPUT_TOKENS = 8192
 const DEFAULT_INPUT_TOKEN_BUDGET = 24000
 const SUMMARY_INPUT_TOKEN_BUDGET = 100000
+const OPENAI_INPUT_TOKEN_BUDGET = 32000
+const GEMINI_FLASH_INPUT_TOKEN_BUDGET = 28000
+const GEMINI_PRO_INPUT_TOKEN_BUDGET = 48000
+const CLAUDE_INPUT_TOKEN_BUDGET = 60000
+const GROQ_INPUT_TOKEN_BUDGET = 24000
+const LOCAL_INPUT_TOKEN_BUDGET = 16000
+const SYSTEM_PROMPT_CACHE_TTL_MS = 5 * 60 * 1000
+const FINAL_PAYLOAD_CACHE_TTL_MS = 15 * 1000
+const RESPONSE_CACHE_TTL_MS = 1500
 
 // Simple prompt for image analysis (not interview copilot - kept separate)
 const IMAGE_ANALYSIS_PROMPT = `Analyze concisely. Be direct. No markdown formatting. Return plain text only.`
@@ -60,6 +121,11 @@ export class LLMHelper {
   private knowledgeOrchestrator: any = null;
   private aiResponseLanguage: string = 'English';
   private sttLanguage: string = 'english-us';
+  private shouldEnforceValidation: boolean = process.env.ENFORCE_RESPONSE_VALIDATION === 'true';
+  private systemPromptCache = new Map<string, { expiresAt: number; value: string }>();
+  private finalPayloadCache = new Map<string, { expiresAt: number; value: any }>();
+  private responseCache = new Map<string, { expiresAt: number; value: string }>();
+  private inFlightResponseCache = new Map<string, Promise<string>>();
 
   // Rate limiters per provider to prevent 429 errors on free tiers
   private rateLimiters: ReturnType<typeof createProviderRateLimiters>;
@@ -172,12 +238,14 @@ export class LLMHelper {
     this.groqClient = null;
     this.openaiClient = null;
     this.claudeClient = null;
-    // Destroy rate limiters
+    // Destroy rate limiters and null reference
     if (this.rateLimiters) {
       Object.values(this.rateLimiters).forEach(rl => rl.destroy());
+      this.rateLimiters = null as any;
     }
-    // Stop model version manager background scheduler
+    // Stop model version manager background scheduler and null reference
     this.modelVersionManager.stopScheduler();
+    this.modelVersionManager = null as any;
     console.log('[LLMHelper] Keys scrubbed from memory');
   }
 
@@ -445,12 +513,36 @@ export class LLMHelper {
    * Handles common transient provider failures consistently.
    */
   private isRetryableError(error: any): boolean {
-    const message = String(error?.message || error || '').toLowerCase();
+    const status = error?.status ?? error?.statusCode ?? error?.response?.status ?? error?.error?.status;
+    const code = String(error?.code ?? error?.error?.code ?? '').toLowerCase();
+    const type = String(error?.type ?? error?.error?.type ?? '').toLowerCase();
+    const message = [error?.message, error?.error?.message, error?.cause?.message, error]
+      .filter(Boolean)
+      .map(value => String(value).toLowerCase())
+      .join(' ');
+
     return (
+      status === 408 ||
+      status === 409 ||
+      status === 425 ||
+      status === 429 ||
+      status === 500 ||
+      status === 502 ||
+      status === 503 ||
+      status === 504 ||
+      code === 'econnreset' ||
+      code === 'etimedout' ||
+      code === 'eai_again' ||
+      type.includes('overloaded') ||
+      type.includes('rate_limit') ||
       message.includes('503') ||
+      message.includes('502') ||
+      message.includes('504') ||
       message.includes('429') ||
+      message.includes('500') ||
       message.includes('overloaded') ||
       message.includes('rate limit') ||
+      message.includes('temporarily unavailable') ||
       message.includes('timeout') ||
       message.includes('temporar') ||
       message.includes('econnreset') ||
@@ -465,9 +557,10 @@ export class LLMHelper {
         return await fn();
       } catch (e: any) {
         if (!this.isRetryableError(e)) throw e;
+        if (i === retries - 1) break;
 
         console.warn(`[LLMHelper] Transient model failure. Retrying in ${delay}ms...`);
-        await new Promise(r => setTimeout(r, delay));
+        await this.delay(delay);
         delay *= 2;
       }
     }
@@ -482,17 +575,33 @@ export class LLMHelper {
 
     const targetModel = modelIdOverride || this.geminiModel;
     console.log(`[LLMHelper] Calling ${targetModel}...`)
+    const systemPromptHash = '';
+    const payloadHash = this.hashValue({
+      contents,
+      config: {
+        maxOutputTokens: MAX_OUTPUT_TOKENS,
+        temperature: 0.4,
+      }
+    });
 
-    return this.withRetry(async () => {
+    return this.withResponseCache('gemini', targetModel, systemPromptHash, payloadHash, () => this.withRetry(async () => {
+      const requestPayload = await this.withFinalPayloadCache(
+        'gemini',
+        targetModel,
+        systemPromptHash,
+        payloadHash,
+        () => ({
+          model: targetModel,
+          contents,
+          config: {
+            maxOutputTokens: MAX_OUTPUT_TOKENS,
+            temperature: 0.4,
+          }
+        }),
+      );
+
       // @ts-ignore
-      const response = await this.client!.models.generateContent({
-        model: targetModel,
-        contents: contents,
-        config: {
-          maxOutputTokens: MAX_OUTPUT_TOKENS,
-          temperature: 0.4,
-        }
-      });
+      const response = await this.client!.models.generateContent(requestPayload);
 
       // Debug: log full response structure
       // console.log(`[LLMHelper] Full response:`, JSON.stringify(response, null, 2).substring(0, 500))
@@ -548,7 +657,7 @@ export class LLMHelper {
 
       console.log(`[LLMHelper] Extracted text length: ${text.length}`);
       return text;
-    });
+    }));
   }
 
   public async extractProblemFromImages(imagePaths: string[]) {
@@ -636,7 +745,7 @@ export class LLMHelper {
         data: processedBuffer.toString("base64")
       };
     } catch (error) {
-      console.error("[LLMHelper] Failed to process image with sharp:", error);
+      console.error("[LLMHelper] Failed to process image with sharp:", sanitizeError(error));
       // Fallback to raw read if sharp fails
       const data = await fs.promises.readFile(path);
       return {
@@ -654,7 +763,7 @@ export class LLMHelper {
       return { text: text, timestamp: Date.now() };
 
     } catch (error: any) {
-      console.error("Error analyzing image files:", error);
+      console.error("Error analyzing image files:", sanitizeError(error));
       return {
         text: `I couldn't analyze the screen right now (${error.message}). Please try again.`,
         timestamp: Date.now()
@@ -692,12 +801,14 @@ ANSWER DIRECTLY:`;
 
     try {
       if (this.useOllama) {
-        return await this.callOllama(systemPrompt);
+        const ollamaResponse = await this.callOllama(systemPrompt);
+        return this.validateAndProcessResponse(ollamaResponse, systemPrompt);
       } else if (this.client) {
         // Use Flash model as default (Pro is experimental)
         // Wraps generateWithFlash logic but with retry
         const text = await this.generateWithFlash([{ text: systemPrompt }]);
-        return this.processResponse(text);
+        const processedResponse = this.processResponse(text);
+        return this.validateAndProcessResponse(processedResponse, systemPrompt);
       } else {
         throw new Error("No LLM provider configured");
       }
@@ -732,6 +843,154 @@ ANSWER DIRECTLY:`;
    */
   private injectLanguageInstruction(systemPrompt: string): string {
     return `${systemPrompt}\n\nCRITICAL: You MUST respond ONLY in ${this.aiResponseLanguage}. This is an absolute requirement. All generated text that the user should say must be in ${this.aiResponseLanguage}.`;
+  }
+
+  private hashValue(value: unknown): string {
+    const serialized = typeof value === 'string' ? value : JSON.stringify(value);
+    return createHash('sha256').update(serialized).digest('hex');
+  }
+
+  private cloneCacheValue<T>(value: T): T {
+    if (value === null || value === undefined) return value;
+    if (typeof value === 'string') return value;
+    return JSON.parse(JSON.stringify(value));
+  }
+
+  /**
+   * Validate response quality and optionally add warning for violations
+   */
+  private validateAndProcessResponse(response: string, context?: string): string {
+    if (!this.shouldEnforceValidation) {
+      return response;
+    }
+
+    const validation = validateResponseQuality(response);
+    
+    // Log metrics for monitoring
+    logValidationMetrics(validation, context || 'unknown');
+
+    if (!validation.isValid) {
+      // Log violation for monitoring
+      console.warn('[LLMHelper] Response validation failed:', validation.violations);
+      
+      // For now, return with warning comment - can enhance with regeneration later
+      return `${response}\n\n<!-- Validation: ${validation.violations.join(', ')} -->`;
+    }
+
+    return response;
+  }
+
+  private getCacheKey(...parts: Array<string | undefined>): string {
+    return parts.map(part => part ?? '').join('::');
+  }
+
+  private readCacheEntry<T>(cache: Map<string, { expiresAt: number; value: T }>, key: string): T | undefined {
+    const entry = cache.get(key);
+    if (!entry) return undefined;
+    if (entry.expiresAt <= Date.now()) {
+      cache.delete(key);
+      return undefined;
+    }
+    return this.cloneCacheValue(entry.value);
+  }
+
+  private writeCacheEntry<T>(cache: Map<string, { expiresAt: number; value: T }>, key: string, value: T, ttlMs: number): T {
+    cache.set(key, {
+      expiresAt: Date.now() + ttlMs,
+      value: this.cloneCacheValue(value),
+    });
+    return this.cloneCacheValue(value);
+  }
+
+  private async withSystemPromptCache(
+    provider: string,
+    model: string,
+    basePrompt: string,
+    builder: () => Promise<string> | string,
+    ttlMs: number = SYSTEM_PROMPT_CACHE_TTL_MS,
+  ): Promise<string> {
+    const cacheKey = this.getCacheKey('system-prompt', provider, model, this.hashValue(basePrompt), this.aiResponseLanguage);
+    const cached = this.readCacheEntry(this.systemPromptCache, cacheKey);
+    if (cached !== undefined) {
+      return cached;
+    }
+
+    const built = await builder();
+    return this.writeCacheEntry(this.systemPromptCache, cacheKey, built, ttlMs);
+  }
+
+  private async withFinalPayloadCache<T>(
+    provider: string,
+    model: string,
+    systemPromptHash: string,
+    payloadHash: string,
+    builder: () => Promise<T> | T,
+    ttlMs: number = FINAL_PAYLOAD_CACHE_TTL_MS,
+  ): Promise<T> {
+    const cacheKey = this.getCacheKey('final-payload', provider, model, systemPromptHash, payloadHash);
+    const cached = this.readCacheEntry(this.finalPayloadCache, cacheKey);
+    if (cached !== undefined) {
+      return cached;
+    }
+
+    const built = await builder();
+    return this.writeCacheEntry(this.finalPayloadCache, cacheKey, built, ttlMs);
+  }
+
+  private async withResponseCache(
+    provider: string,
+    model: string,
+    systemPromptHash: string,
+    payloadHash: string,
+    request: () => Promise<string>,
+    ttlMs: number = RESPONSE_CACHE_TTL_MS,
+  ): Promise<string> {
+    const cacheKey = this.getCacheKey('response', provider, model, systemPromptHash, payloadHash);
+    const cached = this.readCacheEntry(this.responseCache, cacheKey);
+    if (cached !== undefined) {
+      return cached;
+    }
+
+    const inFlight = this.inFlightResponseCache.get(cacheKey);
+    if (inFlight) {
+      return inFlight;
+    }
+
+    const pending = request()
+      .then(result => {
+        this.writeCacheEntry(this.responseCache, cacheKey, result, ttlMs);
+        this.inFlightResponseCache.delete(cacheKey);
+        return result;
+      })
+      .catch(error => {
+        this.inFlightResponseCache.delete(cacheKey);
+        throw error;
+      });
+
+    this.inFlightResponseCache.set(cacheKey, pending);
+    return pending;
+  }
+
+  private getInputTokenBudget(provider: string, modelId: string, summaryMode: boolean = false): number {
+    if (summaryMode) {
+      return SUMMARY_INPUT_TOKEN_BUDGET;
+    }
+
+    const normalizedProvider = provider.toLowerCase();
+    const normalizedModelId = modelId.toLowerCase();
+
+    if (normalizedProvider === 'claude' || normalizedModelId.startsWith('claude-')) return CLAUDE_INPUT_TOKEN_BUDGET;
+    if (normalizedProvider === 'openai' || this.isOpenAiModel(normalizedModelId)) return OPENAI_INPUT_TOKEN_BUDGET;
+    if (normalizedProvider === 'groq' || normalizedProvider === 'text_groq' || this.isGroqModel(normalizedModelId)) return GROQ_INPUT_TOKEN_BUDGET;
+    if (normalizedProvider === 'gemini_pro' || (normalizedModelId.includes('gemini') && normalizedModelId.includes('pro'))) return GEMINI_PRO_INPUT_TOKEN_BUDGET;
+    if (normalizedProvider === 'gemini' || normalizedProvider === 'gemini_flash' || this.isGeminiModel(normalizedModelId)) return GEMINI_FLASH_INPUT_TOKEN_BUDGET;
+    if (normalizedProvider === 'ollama' || normalizedProvider === 'custom' || normalizedProvider === 'curl') return LOCAL_INPUT_TOKEN_BUDGET;
+
+    return DEFAULT_INPUT_TOKEN_BUDGET;
+  }
+
+  private prepareUserContentForModel(provider: string, modelId: string, message: string, context?: string): string {
+    return this.prepareUserContent(message, context, this.getInputTokenBudget(provider, modelId));
   }
 
   public async chatWithGemini(message: string, imagePaths?: string[], context?: string, skipSystemPrompt: boolean = false, alternateGroqMessage?: string): Promise<string> {
@@ -775,23 +1034,24 @@ ANSWER DIRECTLY:`;
       const isMultimodal = !!(imagePaths?.length);
 
       // Helper to build combined prompts for Groq/Gemini
-      const buildMessage = (systemPrompt: string) => {
-        const preparedUserContent = this.prepareUserContent(message, context);
+      const buildMessage = (provider: string, modelId: string, systemPrompt: string) => {
+        const preparedUserContent = this.prepareUserContentForModel(provider, modelId, message, context);
         if (skipSystemPrompt) {
           return preparedUserContent;
         }
-        return this.joinPrompt(systemPrompt, preparedUserContent);
+        return this.joinPrompt(systemPrompt, preparedUserContent, this.getInputTokenBudget(provider, modelId));
       };
 
       // For OpenAI/Claude: separate system prompt + user message
-      const userContent = this.prepareUserContent(message, context);
+      const openaiUserContent = this.prepareUserContentForModel('openai', OPENAI_MODEL, message, context);
+      const claudeUserContent = this.prepareUserContentForModel('claude', CLAUDE_MODEL, message, context);
 
-      const finalGeminiPrompt = this.injectLanguageInstruction(HARD_SYSTEM_PROMPT);
-      const finalGroqPrompt = alternateGroqMessage || this.injectLanguageInstruction(GROQ_SYSTEM_PROMPT);
+      const finalGeminiPrompt = await this.withSystemPromptCache('gemini', this.currentModelId, HARD_SYSTEM_PROMPT, () => this.injectLanguageInstruction(HARD_SYSTEM_PROMPT));
+      const finalGroqPrompt = alternateGroqMessage || await this.withSystemPromptCache('groq', GROQ_MODEL, GROQ_SYSTEM_PROMPT, () => this.injectLanguageInstruction(GROQ_SYSTEM_PROMPT));
 
       const combinedMessages = {
-        gemini: buildMessage(finalGeminiPrompt),
-        groq: buildMessage(finalGroqPrompt),
+        gemini: buildMessage('gemini', this.currentModelId, finalGeminiPrompt),
+        groq: buildMessage('groq', GROQ_MODEL, finalGroqPrompt),
       };
 
       // GROQ FAST TEXT OVERRIDE (Text-Only)
@@ -806,8 +1066,8 @@ ANSWER DIRECTLY:`;
       }
 
       // System prompts for OpenAI/Claude (skipped if skipSystemPrompt)
-      const openaiSystemPrompt = skipSystemPrompt ? undefined : this.injectLanguageInstruction(OPENAI_SYSTEM_PROMPT);
-      const claudeSystemPrompt = skipSystemPrompt ? undefined : this.injectLanguageInstruction(CLAUDE_SYSTEM_PROMPT);
+      const openaiSystemPrompt = skipSystemPrompt ? undefined : await this.withSystemPromptCache('openai', OPENAI_MODEL, OPENAI_SYSTEM_PROMPT, () => this.injectLanguageInstruction(OPENAI_SYSTEM_PROMPT));
+      const claudeSystemPrompt = skipSystemPrompt ? undefined : await this.withSystemPromptCache('claude', CLAUDE_MODEL, CLAUDE_SYSTEM_PROMPT, () => this.injectLanguageInstruction(CLAUDE_SYSTEM_PROMPT));
 
       if (this.useOllama) {
         return await this.callOllama(combinedMessages.gemini);
@@ -833,14 +1093,14 @@ ANSWER DIRECTLY:`;
 
       // --- Direct Routing based on Selected Model ---
       if (this.isOpenAiModel(this.currentModelId) && this.openaiClient) {
-        return await this.generateWithOpenai(userContent, openaiSystemPrompt, imagePaths);
+        return await this.generateWithOpenai(openaiUserContent, openaiSystemPrompt, imagePaths);
       }
       if (this.isClaudeModel(this.currentModelId) && this.claudeClient) {
-        return await this.generateWithClaude(userContent, claudeSystemPrompt, imagePaths);
+        return await this.generateWithClaude(claudeUserContent, claudeSystemPrompt, imagePaths);
       }
       if (this.isGroqModel(this.currentModelId) && this.groqClient) {
         if (isMultimodal && imagePaths) {
-          return await this.generateWithGroqMultimodal(userContent, imagePaths, openaiSystemPrompt);
+          return await this.generateWithGroqMultimodal(openaiUserContent, imagePaths, openaiSystemPrompt);
         }
         return await this.generateWithGroq(combinedMessages.groq);
       }
@@ -866,7 +1126,7 @@ ANSWER DIRECTLY:`;
       if (isMultimodal) {
         // MULTIMODAL PROVIDER ORDER: OpenAI -> Gemini Flash -> Claude -> Gemini Pro -> Groq -> Custom/Ollama
         if (this.openaiClient) {
-          providers.push({ name: `OpenAI (${textOpenAI})`, execute: () => this.generateWithOpenai(userContent, openaiSystemPrompt, imagePaths) });
+          providers.push({ name: `OpenAI (${textOpenAI})`, execute: () => this.generateWithOpenai(openaiUserContent, openaiSystemPrompt, imagePaths) });
         }
         if (this.client) {
           providers.push({
@@ -875,7 +1135,7 @@ ANSWER DIRECTLY:`;
           });
         }
         if (this.claudeClient) {
-          providers.push({ name: `Claude (${textClaude})`, execute: () => this.generateWithClaude(userContent, claudeSystemPrompt, imagePaths) });
+          providers.push({ name: `Claude (${textClaude})`, execute: () => this.generateWithClaude(claudeUserContent, claudeSystemPrompt, imagePaths) });
         }
         if (this.client) {
           providers.push({
@@ -886,7 +1146,7 @@ ANSWER DIRECTLY:`;
         if (this.groqClient) {
           providers.push({
             name: `Groq (meta-llama/llama-4-scout-17b-16e-instruct)`,
-            execute: () => this.generateWithGroqMultimodal(userContent, imagePaths!, openaiSystemPrompt)
+            execute: () => this.generateWithGroqMultimodal(openaiUserContent, imagePaths!, openaiSystemPrompt)
           });
         }
       } else {
@@ -905,10 +1165,10 @@ ANSWER DIRECTLY:`;
           });
         }
         if (this.openaiClient) {
-          providers.push({ name: `OpenAI (${textOpenAI})`, execute: () => this.generateWithOpenai(userContent, openaiSystemPrompt) });
+          providers.push({ name: `OpenAI (${textOpenAI})`, execute: () => this.generateWithOpenai(openaiUserContent, openaiSystemPrompt) });
         }
         if (this.claudeClient) {
-          providers.push({ name: `Claude (${textClaude})`, execute: () => this.generateWithClaude(userContent, claudeSystemPrompt) });
+          providers.push({ name: `Claude (${textClaude})`, execute: () => this.generateWithClaude(claudeUserContent, claudeSystemPrompt) });
         }
       }
 
@@ -949,7 +1209,7 @@ ANSWER DIRECTLY:`;
       return "I apologize, but I couldn't generate a response. Please try again.";
 
     } catch (error: any) {
-      console.error("[LLMHelper] Critical Error in chatWithGemini:", error);
+      console.error("[LLMHelper] Critical Error in chatWithGemini:", sanitizeError(error));
 
       if (error.message.includes("503") || error.message.includes("overloaded")) {
         return "The AI service is currently overloaded. Please try again in a moment.";
@@ -1035,17 +1295,29 @@ ANSWER DIRECTLY:`;
     if (!this.groqClient) throw new Error("Groq client not initialized");
 
     await this.rateLimiters.groq.acquire();
+    const payloadHash = this.hashValue(fullMessage);
 
-    // Non-streaming Groq call
-    const response = await this.groqClient.chat.completions.create({
-      model: GROQ_MODEL,
-      messages: [{ role: "user", content: fullMessage }],
-      temperature: 0.4,
-      max_tokens: 8192,
-      stream: false
+    return this.withResponseCache('groq', GROQ_MODEL, '', payloadHash, async () => {
+      const requestPayload = await this.withFinalPayloadCache(
+        'groq',
+        GROQ_MODEL,
+        '',
+        payloadHash,
+        () => ({
+          model: GROQ_MODEL,
+          messages: [{ role: "user", content: fullMessage }],
+          temperature: 0.4,
+          max_tokens: 8192,
+          stream: false
+        }),
+      );
+
+      const response = await withTimeout(
+        this.groqClient!.chat.completions.create(requestPayload as any),
+        LLM_API_TIMEOUT_MS
+      );
+      return response.choices[0]?.message?.content || "";
     });
-
-    return response.choices[0]?.message?.content || "";
   }
 
   /**
@@ -1055,32 +1327,48 @@ ANSWER DIRECTLY:`;
     if (!this.openaiClient) throw new Error("OpenAI client not initialized");
 
     await this.rateLimiters.openai.acquire();
+    const systemPromptHash = this.hashValue(systemPrompt || '');
+    const payloadHash = this.hashValue({ userMessage, systemPrompt: systemPrompt || '', imagePaths: imagePaths || [] });
 
-    const messages: any[] = [];
-    if (systemPrompt) {
-      messages.push({ role: "system", content: systemPrompt });
-    }
+    return this.withResponseCache('openai', OPENAI_MODEL, systemPromptHash, payloadHash, async () => {
+      const requestPayload = await this.withFinalPayloadCache(
+        'openai',
+        OPENAI_MODEL,
+        systemPromptHash,
+        payloadHash,
+        async () => {
+          const messages: any[] = [];
+          if (systemPrompt) {
+            messages.push({ role: "system", content: systemPrompt });
+          }
 
-    if (imagePaths?.length) {
-      const contentParts: any[] = [{ type: "text", text: userMessage }];
-      for (const p of imagePaths) {
-        if (fs.existsSync(p)) {
-          const imageData = await fs.promises.readFile(p);
-          contentParts.push({ type: "image_url", image_url: { url: `data:image/png;base64,${imageData.toString("base64")}` } });
-        }
-      }
-      messages.push({ role: "user", content: contentParts });
-    } else {
-      messages.push({ role: "user", content: userMessage });
-    }
+          if (imagePaths?.length) {
+            const contentParts: any[] = [{ type: "text", text: userMessage }];
+            for (const p of imagePaths) {
+              if (fs.existsSync(p)) {
+                const imageData = await fs.promises.readFile(p);
+                contentParts.push({ type: "image_url", image_url: { url: `data:image/png;base64,${imageData.toString("base64")}` } });
+              }
+            }
+            messages.push({ role: "user", content: contentParts });
+          } else {
+            messages.push({ role: "user", content: userMessage });
+          }
 
-    const response = await this.openaiClient.chat.completions.create({
-      model: OPENAI_MODEL,
-      messages,
-      max_completion_tokens: MAX_OUTPUT_TOKENS,
+          return {
+            model: OPENAI_MODEL,
+            messages,
+            max_completion_tokens: MAX_OUTPUT_TOKENS,
+          };
+        },
+      );
+
+      const response = await withTimeout(
+        this.openaiClient!.chat.completions.create(requestPayload as any),
+        LLM_API_TIMEOUT_MS
+      );
+      return response.choices[0]?.message?.content || "";
     });
-
-    return response.choices[0]?.message?.content || "";
   }
 
   // The handler for cURL requests
@@ -1138,34 +1426,50 @@ ANSWER DIRECTLY:`;
     if (!this.claudeClient) throw new Error("Claude client not initialized");
 
     await this.rateLimiters.claude.acquire();
+    const systemPromptHash = this.hashValue(systemPrompt || '');
+    const payloadHash = this.hashValue({ userMessage, systemPrompt: systemPrompt || '', imagePaths: imagePaths || [] });
 
-    const content: any[] = [];
-    if (imagePaths?.length) {
-      for (const p of imagePaths) {
-        if (fs.existsSync(p)) {
-          const imageData = await fs.promises.readFile(p);
-          content.push({
-            type: "image",
-            source: {
-              type: "base64",
-              media_type: "image/png",
-              data: imageData.toString("base64")
+    return this.withResponseCache('claude', CLAUDE_MODEL, systemPromptHash, payloadHash, async () => {
+      const requestPayload = await this.withFinalPayloadCache(
+        'claude',
+        CLAUDE_MODEL,
+        systemPromptHash,
+        payloadHash,
+        async () => {
+          const content: any[] = [];
+          if (imagePaths?.length) {
+            for (const p of imagePaths) {
+              if (fs.existsSync(p)) {
+                const imageData = await fs.promises.readFile(p);
+                content.push({
+                  type: "image",
+                  source: {
+                    type: "base64",
+                    media_type: "image/png",
+                    data: imageData.toString("base64")
+                  }
+                });
+              }
             }
-          });
-        }
-      }
-    }
-    content.push({ type: "text", text: userMessage });
+          }
+          content.push({ type: "text", text: userMessage });
 
-    const response = await this.claudeClient.messages.create({
-      model: CLAUDE_MODEL,
-      max_tokens: CLAUDE_MAX_OUTPUT_TOKENS,
-      ...(systemPrompt ? { system: systemPrompt } : {}),
-      messages: [{ role: "user", content }],
+          return {
+            model: CLAUDE_MODEL,
+            max_tokens: CLAUDE_MAX_OUTPUT_TOKENS,
+            ...(systemPrompt ? { system: systemPrompt } : {}),
+            messages: [{ role: "user", content }],
+          };
+        },
+      );
+
+      const response = await withTimeout(
+        this.claudeClient!.messages.create(requestPayload as any),
+        LLM_API_TIMEOUT_MS
+      );
+      const textBlock = response.content.find((block: any) => block.type === 'text') as any;
+      return textBlock?.text || "";
     });
-
-    const textBlock = response.content.find((block: any) => block.type === 'text') as any;
-    return textBlock?.text || "";
   }
 
   /**
@@ -1229,7 +1533,7 @@ ANSWER DIRECTLY:`;
       console.log(`[LLMHelper] Custom Provider extracted text length: ${extracted.length}`);
       return extracted;
     } catch (error) {
-      console.error("Custom Provider Error:", error);
+      console.error("Custom Provider Error:", sanitizeError(error));
       throw error;
     }
   }
@@ -1342,15 +1646,18 @@ ANSWER DIRECTLY:`;
     }
     messages.push({ role: "user", content: contentParts });
 
-    const response = await this.groqClient.chat.completions.create({
-      model: "meta-llama/llama-4-scout-17b-16e-instruct",
-      messages,
-      temperature: 1,
-      max_completion_tokens: 28672,
-      top_p: 1,
-      stream: false,
-      stop: null
-    });
+    const response = await withTimeout(
+      this.groqClient.chat.completions.create({
+        model: "meta-llama/llama-4-scout-17b-16e-instruct",
+        messages,
+        temperature: 1,
+        max_completion_tokens: 28672,
+        top_p: 1,
+        stream: false,
+        stop: null
+      }),
+      LLM_API_TIMEOUT_MS
+    );
 
     return response.choices[0]?.message?.content || "";
   }
@@ -1868,13 +2175,15 @@ ANSWER DIRECTLY:`;
   private async * streamWithGroq(fullMessage: string): AsyncGenerator<string, void, unknown> {
     if (!this.groqClient) throw new Error("Groq client not initialized");
 
+    const timeoutSignal = createTimeoutSignal(LLM_API_TIMEOUT_MS);
+    
     const stream = await this.groqClient.chat.completions.create({
       model: GROQ_MODEL,
       messages: [{ role: "user", content: fullMessage }],
       stream: true,
       temperature: 0.4,
       max_tokens: 8192,
-    });
+    }, { signal: timeoutSignal });
 
     for await (const chunk of stream) {
       const content = chunk.choices[0]?.delta?.content;
@@ -1905,6 +2214,8 @@ ANSWER DIRECTLY:`;
     }
     messages.push({ role: "user", content: contentParts });
 
+    const timeoutSignal = createTimeoutSignal(LLM_API_TIMEOUT_MS);
+    
     const stream = await this.groqClient.chat.completions.create({
       model: "meta-llama/llama-4-scout-17b-16e-instruct",
       messages,
@@ -1913,7 +2224,7 @@ ANSWER DIRECTLY:`;
       temperature: 1,
       top_p: 1,
       stop: null
-    });
+    }, { signal: timeoutSignal });
 
     for await (const chunk of stream) {
       const content = chunk.choices[0]?.delta?.content;
@@ -1935,12 +2246,14 @@ ANSWER DIRECTLY:`;
     }
     messages.push({ role: "user", content: userMessage });
 
+    const timeoutSignal = createTimeoutSignal(LLM_API_TIMEOUT_MS);
+    
     const stream = await this.openaiClient.chat.completions.create({
       model: OPENAI_MODEL,
       messages,
       stream: true,
       max_completion_tokens: MAX_OUTPUT_TOKENS,
-    });
+    }, { signal: timeoutSignal });
 
     for await (const chunk of stream) {
       const content = chunk.choices[0]?.delta?.content;
@@ -1990,12 +2303,14 @@ ANSWER DIRECTLY:`;
     }
     messages.push({ role: "user", content: contentParts });
 
+    const timeoutSignal = createTimeoutSignal(LLM_API_TIMEOUT_MS);
+    
     const stream = await this.openaiClient.chat.completions.create({
       model: OPENAI_MODEL,
       messages,
       stream: true,
       max_completion_tokens: MAX_OUTPUT_TOKENS,
-    });
+    }, { signal: timeoutSignal });
 
     for await (const chunk of stream) {
       const content = chunk.choices[0]?.delta?.content;
@@ -2227,7 +2542,7 @@ ANSWER DIRECTLY:`;
         }
       }
     } catch (e) {
-      console.error("Ollama streaming failed", e);
+      console.error("Ollama streaming failed", sanitizeError(e));
       yield "Error: Failed to stream from Ollama.";
     }
   }
@@ -2416,7 +2731,7 @@ ANSWER DIRECTLY:`;
 
       return true;
     } catch (error) {
-      console.error("[LLMHelper] Failed to restart Ollama:", error);
+      console.error("[LLMHelper] Failed to restart Ollama:", sanitizeError(error));
       return false;
     }
   }
@@ -2503,13 +2818,15 @@ ANSWER DIRECTLY:`;
     if (this.groqClient) {
       try {
         console.log(`[LLMHelper] 🚀 Mode-specific Groq stream starting...`);
+        const timeoutSignal = createTimeoutSignal(LLM_API_TIMEOUT_MS);
+        
         const stream = await this.groqClient.chat.completions.create({
           model: GROQ_MODEL,
           messages: [{ role: "user", content: groqMessage }],
           stream: true,
           temperature: temperature,
           max_tokens: maxTokens,
-        });
+        }, { signal: timeoutSignal });
 
         for await (const chunk of stream) {
           const content = chunk.choices[0]?.delta?.content;

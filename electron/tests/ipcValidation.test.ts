@@ -70,3 +70,52 @@ test('parseIpcInput reports joined zod issue paths', () => {
     parseIpcInput(ipcSchemas.openMailtoInput, null, 'open-mailto');
   }, /root:/);
 });
+
+test('generate suggestion args validation accepts bounded valid payload', () => {
+  const parsed = parseIpcInput(
+    ipcSchemas.generateSuggestionArgs,
+    ['context', 'last question'],
+    'generate-suggestion',
+  );
+
+  assert.deepEqual(parsed, ['context', 'last question']);
+});
+
+test('overlay opacity validation rejects non-finite values', () => {
+  assert.throws(() => {
+    parseIpcInput(ipcSchemas.overlayOpacity, Number.NaN, 'set-overlay-opacity');
+  }, /Invalid IPC payload/);
+});
+
+test('settings, profile, and rag validation schemas accept bounded payloads', () => {
+  assert.equal(parseIpcInput(ipcSchemas.disguiseMode, 'activity', 'set-disguise'), 'activity');
+  assert.equal(parseIpcInput(ipcSchemas.profileFilePath, '/tmp/resume.pdf', 'profile:upload-resume'), '/tmp/resume.pdf');
+  assert.equal(parseIpcInput(ipcSchemas.profileCompanyName, 'Acme', 'profile:research-company'), 'Acme');
+
+  assert.deepEqual(
+    parseIpcInput(ipcSchemas.ragMeetingQuery, { meetingId: 'meeting-1', query: 'summarize blockers' }, 'rag:query-meeting'),
+    { meetingId: 'meeting-1', query: 'summarize blockers' },
+  );
+  assert.deepEqual(
+    parseIpcInput(ipcSchemas.ragCancelQuery, { global: true }, 'rag:cancel-query'),
+    { global: true },
+  );
+});
+
+test('settings, profile, and rag validation schemas reject malformed payloads', () => {
+  assert.throws(() => {
+    parseIpcInput(ipcSchemas.disguiseMode, 'spaceship', 'set-disguise');
+  }, /Invalid IPC payload/);
+
+  assert.throws(() => {
+    parseIpcInput(ipcSchemas.profileFilePath, '   ', 'profile:upload-resume');
+  }, /Invalid IPC payload/);
+
+  assert.throws(() => {
+    parseIpcInput(ipcSchemas.ragMeetingQuery, { meetingId: '', query: 'hello' }, 'rag:query-meeting');
+  }, /Invalid IPC payload/);
+
+  assert.throws(() => {
+    parseIpcInput(ipcSchemas.ragCancelQuery, {}, 'rag:cancel-query');
+  }, /Invalid IPC payload/);
+});
