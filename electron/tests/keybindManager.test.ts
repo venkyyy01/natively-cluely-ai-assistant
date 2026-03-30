@@ -22,8 +22,8 @@ test('default keybinds include overlay clickthrough toggle shortcut', async () =
     const shortcut = DEFAULT_KEYBINDS.find((item) => item.id === 'general:toggle-clickthrough');
     assert.ok(shortcut);
     assert.equal(shortcut?.isGlobal, true);
-    assert.equal(shortcut?.accelerator, 'Command+Alt+Shift+M');
-    assert.deepEqual(shortcut?.alternateAccelerators, ['F16']);
+    assert.equal(shortcut?.accelerator, 'Command+Shift+M');
+    assert.deepEqual(shortcut?.alternateAccelerators, ['Command+Alt+Shift+M']);
 
     assert.equal(DEFAULT_KEYBINDS.find((item) => item.id === 'general:toggle-visibility')?.accelerator, 'Command+Alt+Shift+V');
     assert.deepEqual(DEFAULT_KEYBINDS.find((item) => item.id === 'general:toggle-visibility')?.alternateAccelerators, ['F13']);
@@ -90,10 +90,10 @@ test('global shortcut registration includes alternate function-key accelerators 
     assert.ok(registered.includes('F14'));
     assert.ok(registered.includes('Command+Alt+Shift+A'));
     assert.ok(registered.includes('F15'));
+    assert.ok(registered.includes('Command+Shift+M'));
     assert.ok(registered.includes('Command+Alt+Shift+M'));
-    assert.ok(registered.includes('F16'));
-    assert.ok(registered.includes('Command+Up'));
-    assert.ok(registered.includes('Command+Down'));
+  assert.ok(registered.includes('Command+Up'));
+  assert.ok(registered.includes('Command+Down'));
   } finally {
     (Module as any)._load = originalLoad;
   }

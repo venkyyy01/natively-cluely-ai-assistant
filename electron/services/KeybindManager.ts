@@ -14,7 +14,7 @@ export interface KeybindConfig {
 export const DEFAULT_KEYBINDS: KeybindConfig[] = [
     // General
     { id: 'general:toggle-visibility', label: 'Toggle Visibility', accelerator: 'Command+Alt+Shift+V', alternateAccelerators: ['F13'], isGlobal: true, defaultAccelerator: 'Command+Alt+Shift+V' },
-    { id: 'general:toggle-clickthrough', label: 'Toggle Clickthrough', accelerator: 'Command+Alt+Shift+M', alternateAccelerators: ['F16'], isGlobal: true, defaultAccelerator: 'Command+Alt+Shift+M' },
+    { id: 'general:toggle-clickthrough', label: 'Toggle Clickthrough', accelerator: 'Command+Shift+M', alternateAccelerators: ['Command+Alt+Shift+M'], isGlobal: true, defaultAccelerator: 'Command+Shift+M' },
     { id: 'general:process-screenshots', label: 'Process Screenshots', accelerator: 'CommandOrControl+Enter', isGlobal: false, defaultAccelerator: 'CommandOrControl+Enter' },
     { id: 'general:reset-cancel', label: 'Reset / Cancel', accelerator: 'CommandOrControl+R', isGlobal: false, defaultAccelerator: 'CommandOrControl+R' },
     { id: 'general:take-screenshot', label: 'Take Screenshot', accelerator: 'Command+Alt+Shift+S', alternateAccelerators: ['F14'], isGlobal: true, defaultAccelerator: 'Command+Alt+Shift+S' },

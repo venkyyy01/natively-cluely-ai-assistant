@@ -177,7 +177,7 @@ Natively treats listening and speaking as separate tasks:
 
 ### Spotlight Search & Customization
 
-- Low-interference global shortcuts with alternate function-key bindings (`F13`–`F16`)
+- Low-interference global shortcuts with alternate fallback bindings for screenshot and clickthrough controls
 - **Custom Key Bindings:** Customize global shortcuts for easier control
 - Instant answer overlay
 - Upcoming meeting readiness
@@ -208,7 +208,7 @@ Natively is a desktop Electron application with a Rust native audio backend. The
 | Toggle visibility | `Cmd+Option+Shift+V` | `F13` |
 | Full screenshot | `Cmd+Option+Shift+S` | `F14` |
 | Selective screenshot | `Cmd+Option+Shift+A` | `F15` |
-| Toggle clickthrough | `Cmd+Option+Shift+M` | `F16` |
+| Toggle clickthrough | `Cmd+Shift+M` | `Cmd+Option+Shift+M` |
 
 These defaults are intentionally chosen to reduce collisions with Zoom, Teams, Meet, Chime, HackerRank, and browser shortcuts.
 

@@ -267,7 +267,6 @@ export class WindowHelper {
       alwaysOnTop: true,
       focusable: true,
       resizable: true,
-      resizable: true,
       movable: true,
       skipTaskbar: true, // Don't show separately in dock/taskbar
       hasShadow: false, // Prevent shadow from adding perceived size/artifacts
