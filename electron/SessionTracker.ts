@@ -297,11 +297,7 @@ export class SessionTracker {
             this.fullTranscript.shift(); // Remove oldest entries
         }
 
-        // Compact transcript with summarization instead of losing early context
-        // Fire-and-forget: sync context; errors are caught internally
-        void this.compactTranscriptIfNeeded().catch(e =>
-            console.warn('[SessionTracker] compactTranscript error (non-fatal):', e)
-        );
+        this.scheduleCompaction();
 
         this.lastAssistantMessage = cleanText;
 
@@ -603,8 +599,15 @@ isConsciousModeEnabled(): boolean {
         return this.fullTranscript;
     }
 
-    getFullUsage(): any[] {
+    getFullUsage(): UsageInteraction[] {
         return this.fullUsage;
+    }
+
+    createSuccessorSession(): SessionTracker {
+        const next = new SessionTracker();
+        next.setRecapLLM(this.recapLLM);
+        next.setConsciousModeEnabled(this.consciousModeEnabled);
+        return next;
     }
 
     getSessionStartTime(): number {

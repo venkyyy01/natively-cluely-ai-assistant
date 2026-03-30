@@ -4,13 +4,15 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 
-describe('MacOS Virtual Display Helper Integration', { skip: process.platform !== 'darwin' }, () => {
-    const helperPath = process.env.NATIVELY_MACOS_VIRTUAL_DISPLAY_HELPER || 
-        path.join(process.cwd(), 'assets/bin/macos/stealth-virtual-display-helper');
+const helperPath = process.env.NATIVELY_MACOS_VIRTUAL_DISPLAY_HELPER || 
+    path.join(process.cwd(), 'assets/bin/macos/stealth-virtual-display-helper');
 
+describe('MacOS Virtual Display Helper Integration', {
+    skip: process.platform !== 'darwin' || !fs.existsSync(helperPath),
+}, () => {
     before(function() {
         if (!fs.existsSync(helperPath)) {
-            throw new Error(`Helper not found at ${helperPath}`);
+            this.skip();
         }
     });
 

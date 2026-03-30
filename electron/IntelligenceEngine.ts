@@ -166,6 +166,13 @@ export class IntelligenceEngine extends EventEmitter {
         return this.llmHelper;
     }
 
+    setSession(session: SessionTracker): void {
+        this.session = session;
+        if (this.recapLLM) {
+            this.session.setRecapLLM(this.recapLLM);
+        }
+    }
+
     private buildCompactTranscriptSnapshot(
         transcriptTurns: Array<{ role: string; text: string; timestamp: number }>,
         maxTurns: number = 12,

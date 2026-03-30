@@ -45,6 +45,17 @@ mod macos {
         apply_cgs(window_number, K_CGS_NORMAL_SHARE, "remove")
     }
 
+    pub fn verify(window_number: u32) -> napi::Result<i32> {
+        unsafe {
+            if let Some(window) = find_window(window_number) {
+                let sharing_type: usize = msg_send![window, sharingType];
+                return Ok(sharing_type as i32);
+            }
+        }
+
+        Ok(-1)
+    }
+
     unsafe fn find_window(window_number: u32) -> Option<id> {
         let app: id = msg_send![class!(NSApplication), sharedApplication];
         if app == nil {
@@ -118,6 +129,10 @@ mod macos {
     pub fn remove_private(_window_number: u32) -> napi::Result<()> {
         Ok(())
     }
+
+    pub fn verify(_window_number: u32) -> napi::Result<i32> {
+        Ok(-1)
+    }
 }
 
 #[cfg(target_os = "windows")]
@@ -125,7 +140,7 @@ mod windows_impl {
     use super::Buffer;
     use windows::Win32::Foundation::{GetLastError, HWND};
     use windows::Win32::UI::WindowsAndMessaging::{
-        SetWindowDisplayAffinity, WDA_MONITOR, WDA_NONE, WINDOW_DISPLAY_AFFINITY,
+        GetWindowDisplayAffinity, SetWindowDisplayAffinity, WDA_MONITOR, WDA_NONE, WINDOW_DISPLAY_AFFINITY,
     };
 
     const WDA_EXCLUDEFROMCAPTURE: WINDOW_DISPLAY_AFFINITY = WINDOW_DISPLAY_AFFINITY(0x00000011);
@@ -168,6 +183,19 @@ mod windows_impl {
         ))
     }
 
+    pub fn verify(hwnd_buffer: Buffer) -> napi::Result<i32> {
+        let hwnd = hwnd_from_buffer(&hwnd_buffer)?;
+        let mut affinity = WINDOW_DISPLAY_AFFINITY(0);
+
+        unsafe {
+            if GetWindowDisplayAffinity(hwnd, &mut affinity).as_bool() {
+                return Ok(affinity.0 as i32);
+            }
+        }
+
+        Ok(-1)
+    }
+
     fn hwnd_from_buffer(buffer: &Buffer) -> napi::Result<HWND> {
         let pointer_size = std::mem::size_of::<isize>();
         if buffer.len() < pointer_size {
@@ -193,6 +221,10 @@ mod windows_impl {
     pub fn remove(_hwnd_buffer: Buffer) -> napi::Result<()> {
         Ok(())
     }
+
+    pub fn verify(_hwnd_buffer: Buffer) -> napi::Result<i32> {
+        Ok(-1)
+    }
 }
 
 #[napi]
@@ -216,6 +248,11 @@ pub fn remove_macos_private_window_stealth(window_number: u32) -> napi::Result<(
 }
 
 #[napi]
+pub fn verify_macos_stealth_state(window_number: u32) -> napi::Result<i32> {
+    macos::verify(window_number)
+}
+
+#[napi]
 pub fn apply_windows_window_stealth(hwnd_buffer: Buffer) -> napi::Result<()> {
     windows_impl::apply(hwnd_buffer)
 }
@@ -223,4 +260,9 @@ pub fn apply_windows_window_stealth(hwnd_buffer: Buffer) -> napi::Result<()> {
 #[napi]
 pub fn remove_windows_window_stealth(hwnd_buffer: Buffer) -> napi::Result<()> {
     windows_impl::remove(hwnd_buffer)
+}
+
+#[napi]
+pub fn verify_windows_stealth_state(hwnd_buffer: Buffer) -> napi::Result<i32> {
+    windows_impl::verify(hwnd_buffer)
 }

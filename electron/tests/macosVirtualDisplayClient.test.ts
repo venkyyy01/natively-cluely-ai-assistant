@@ -199,6 +199,16 @@ test('MacosVirtualDisplayClient rejects pending requests on malformed helper JSO
   assert.equal(killed, true);
 });
 
+test('MacosVirtualDisplayClient reports exhaustion after repeated respawns', () => {
+  const client = new MacosVirtualDisplayClient({ helperPath: '/tmp/helper' });
+  const internal = client as unknown as { respawnTimestamps: number[]; isExhausted: () => boolean };
+
+  const now = Date.now();
+  internal.respawnTimestamps = [now - 1_000, now - 2_000, now - 3_000];
+
+  assert.equal(internal.isExhausted(), true);
+});
+
 test('MacosVirtualDisplayClient serve mode works against the built helper when available', async (t) => {
   if (process.platform !== 'darwin') {
     t.skip('macOS-only helper integration test');

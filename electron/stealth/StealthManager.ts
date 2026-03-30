@@ -3,10 +3,7 @@ import { EventEmitter } from 'events';
 import type { VirtualDisplayCoordinator } from './MacosVirtualDisplayClient';
 
 import { loadNativeStealthModule } from './nativeStealthModule';
-import { exec } from 'node:child_process';
-import { promisify } from 'node:util';
-
-const execAsync = promisify(exec);
+import { execFile } from 'node:child_process';
 
 export interface StealthConfig {
   enabled: boolean;
@@ -29,8 +26,10 @@ export interface NativeStealthBindings {
   applyMacosPrivateWindowStealth?: (windowNumber: number) => void;
   removeMacosWindowStealth?: (windowNumber: number) => void;
   removeMacosPrivateWindowStealth?: (windowNumber: number) => void;
+  verifyMacosStealthState?: (windowNumber: number) => number;
   applyWindowsWindowStealth?: (handle: Buffer) => void;
   removeWindowsWindowStealth?: (handle: Buffer) => void;
+  verifyWindowsStealthState?: (handle: Buffer) => number;
 }
 
 export interface StealthFeatureFlags {
@@ -65,6 +64,7 @@ interface StealthManagerDependencies {
   timeoutScheduler?: (callback: () => void, delayMs: number) => unknown;
   virtualDisplayCoordinator?: VirtualDisplayCoordinator | null;
   captureToolPatterns?: RegExp[];
+  processEnumerator?: (command: string, args: string[]) => Promise<string>;
 }
 
 interface StealthCapableWindow {
@@ -73,6 +73,7 @@ interface StealthCapableWindow {
   setHiddenInMissionControl?: (value: boolean) => void;
   setExcludedFromShownWindowsMenu?: (value: boolean) => void;
   setSkipTaskbar?: (value: boolean) => void;
+  setOpacity?: (value: number) => void;
   setBounds?: (bounds: { x: number; y: number; width: number; height: number }) => void;
   hide?: () => void;
   show?: () => void;
@@ -108,7 +109,40 @@ const KNOWN_CAPTURE_TOOL_PATTERNS = [
   /quicktime/i,
   /loom/i,
   /capture/i,
+  /sharex/i,
+  /greenshot/i,
+  /flameshot/i,
+  /discord/i,
+  /slack/i,
+  /ffmpeg/i,
+  /screencapture/i,
+  /vnc/i,
+  /anydesk/i,
+  /teamviewer/i,
+  /screen ?recorder/i,
+  /camtasia/i,
+  /bandicam/i,
+  /printwindow/i,
 ];
+
+function defaultProcessEnumerator(command: string, args: string[]): Promise<string> {
+  return new Promise((resolve, reject) => {
+    execFile(command, args, (error, stdout) => {
+      if (!error) {
+        resolve(stdout);
+        return;
+      }
+
+      const err = error as NodeJS.ErrnoException & { code?: number };
+      if (command === 'pgrep' && err.code === 1) {
+        resolve('');
+        return;
+      }
+
+      reject(error);
+    });
+  });
+}
 
 export class StealthManager extends EventEmitter {
   private config: StealthConfig;
@@ -142,6 +176,7 @@ export class StealthManager extends EventEmitter {
   private readonly timeoutScheduler: (callback: () => void, delayMs: number) => unknown;
   private readonly virtualDisplayCoordinator: VirtualDisplayCoordinator | null;
   private readonly captureToolPatterns: RegExp[];
+  private readonly processEnumerator: (command: string, args: string[]) => Promise<string>;
   private readonly managedWindows = new Set<ManagedWindowRecord>();
   private readonly managedWindowLookup = new WeakMap<object, ManagedWindowRecord>();
   private nativeModule: NativeStealthBindings | null | undefined;
@@ -164,6 +199,7 @@ export class StealthManager extends EventEmitter {
     this.timeoutScheduler = deps.timeoutScheduler ?? ((callback, delayMs) => setTimeout(callback, delayMs));
     this.virtualDisplayCoordinator = deps.virtualDisplayCoordinator ?? null;
     this.captureToolPatterns = deps.captureToolPatterns ?? KNOWN_CAPTURE_TOOL_PATTERNS;
+    this.processEnumerator = deps.processEnumerator ?? defaultProcessEnumerator;
     this.nativeModule = deps.nativeModule;
   }
 
@@ -252,7 +288,11 @@ export class StealthManager extends EventEmitter {
   }
 
   private isEnabled(): boolean {
-    return this.config.enabled && isOptimizationActive('useStealthMode');
+    return this.config.enabled;
+  }
+
+  private isEnhancedStealthEnabled(): boolean {
+    return isOptimizationActive('useStealthMode');
   }
 
   private applyLayer0(win: StealthCapableWindow, enable: boolean): void {
@@ -304,6 +344,7 @@ export class StealthManager extends EventEmitter {
         const handle = win.getNativeWindowHandle?.();
         if (handle) {
           nativeModule.applyWindowsWindowStealth(handle);
+          this.verifyStealth(win);
         }
         return;
       }
@@ -315,6 +356,7 @@ export class StealthManager extends EventEmitter {
           if (this.featureFlags.enablePrivateMacosStealthApi && nativeModule.applyMacosPrivateWindowStealth) {
             nativeModule.applyMacosPrivateWindowStealth(windowNumber);
           }
+          this.verifyStealth(win);
         }
       }
     } catch (error) {
@@ -371,6 +413,7 @@ export class StealthManager extends EventEmitter {
     if (
       this.platform !== 'darwin' ||
       !this.featureFlags.enableVirtualDisplayIsolation ||
+      !this.isEnhancedStealthEnabled() ||
       !this.virtualDisplayCoordinator ||
       !record.allowVirtualDisplayIsolation ||
       record.virtualDisplayIsolationStarted
@@ -615,6 +658,7 @@ export class StealthManager extends EventEmitter {
     if (
       this.watchdogHandle ||
       !this.isEnabled() ||
+      !this.isEnhancedStealthEnabled() ||
       !this.featureFlags.enableCaptureDetectionWatchdog
     ) {
       return;
@@ -630,18 +674,7 @@ export class StealthManager extends EventEmitter {
 
     this.watchdogRunning = true;
     try {
-      let command = '';
-      if (this.platform === 'win32') {
-        command = 'tasklist /NH /FO CSV';
-      } else if (this.platform === 'darwin' || this.platform === 'linux') {
-        command = 'ps -eo comm=';
-      } else {
-         return;
-      }
-
-      const { stdout } = await execAsync(command);
-      
-      const suspiciousToolMatches = this.captureToolPatterns.filter((pattern) => pattern.test(stdout));
+      const suspiciousToolMatches = await this.detectCaptureProcesses();
 
       if (suspiciousToolMatches.length > 0) {
         this.logger.log(
@@ -656,12 +689,32 @@ export class StealthManager extends EventEmitter {
     }
   }
 
+  private async detectCaptureProcesses(): Promise<RegExp[]> {
+    if (this.platform === 'win32') {
+      const stdout = await this.processEnumerator('tasklist', ['/FO', 'CSV', '/NH']);
+      return this.captureToolPatterns.filter((pattern) => pattern.test(stdout));
+    }
+
+    if (this.platform === 'darwin') {
+      const matches: RegExp[] = [];
+      for (const pattern of this.captureToolPatterns) {
+        const stdout = await this.processEnumerator('pgrep', ['-lif', pattern.source]);
+        if (pattern.test(stdout)) {
+          matches.push(pattern);
+        }
+      }
+      return matches;
+    }
+
+    return [];
+  }
+
   private hideAndRestoreVisibleWindows(): void {
-    const windowsToRestore: StealthCapableWindow[] = [];
+    const windowsToRestore: Array<{ win: StealthCapableWindow; restoreWithOpacity: boolean }> = [];
 
     for (const record of this.managedWindows) {
       const win = record.win;
-      if (this.isWindowDestroyed(win) || typeof win.hide !== 'function' || typeof win.show !== 'function') {
+      if (this.isWindowDestroyed(win)) {
         continue;
       }
 
@@ -670,8 +723,14 @@ export class StealthManager extends EventEmitter {
         continue;
       }
 
-      win.hide();
-      windowsToRestore.push(win);
+      if (typeof win.setOpacity === 'function') {
+        win.setOpacity(0);
+        this.reapplyAfterShow(win);
+        windowsToRestore.push({ win, restoreWithOpacity: true });
+      } else if (typeof win.hide === 'function' && typeof win.show === 'function') {
+        win.hide();
+        windowsToRestore.push({ win, restoreWithOpacity: false });
+      }
     }
 
     if (windowsToRestore.length === 0) {
@@ -679,15 +738,60 @@ export class StealthManager extends EventEmitter {
     }
 
     this.timeoutScheduler(() => {
-      for (const win of windowsToRestore) {
+      for (const { win, restoreWithOpacity } of windowsToRestore) {
         if (this.isWindowDestroyed(win)) {
           continue;
         }
 
-        win.show?.();
+        if (restoreWithOpacity && typeof win.setOpacity === 'function') {
+          win.setOpacity(1);
+        } else {
+          win.show?.();
+        }
         this.reapplyAfterShow(win);
       }
     }, WATCHDOG_RESTORE_DELAY_MS);
+  }
+
+  verifyStealth(win: StealthCapableWindow): boolean {
+    const nativeModule = this.getNativeModule();
+    if (!nativeModule) {
+      return false;
+    }
+
+    try {
+      if (this.platform === 'darwin' && nativeModule.verifyMacosStealthState) {
+        const windowNumber = this.getMacosWindowNumber(win);
+        if (windowNumber === null) {
+          return false;
+        }
+
+        const sharingType = nativeModule.verifyMacosStealthState(windowNumber);
+        const verified = sharingType === 0;
+        if (!verified && this.isEnabled()) {
+          this.addWarning('stealth_verification_failed');
+        }
+        return verified;
+      }
+
+      if (this.platform === 'win32' && nativeModule.verifyWindowsStealthState) {
+        const handle = win.getNativeWindowHandle?.();
+        if (!handle) {
+          return false;
+        }
+
+        const affinity = nativeModule.verifyWindowsStealthState(handle);
+        const verified = affinity === 0x11 || affinity === 0x01;
+        if (!verified && this.isEnabled()) {
+          this.addWarning('stealth_verification_failed');
+        }
+        return verified;
+      }
+    } catch (error) {
+      this.logger.warn('[StealthManager] Stealth verification failed:', error);
+    }
+
+    return false;
   }
 
   private getNativeModule(): NativeStealthBindings | null {

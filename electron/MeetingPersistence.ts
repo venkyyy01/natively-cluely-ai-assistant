@@ -18,6 +18,10 @@ export class MeetingPersistence {
     this.llmHelper = llmHelper;
   }
 
+  setSession(session: SessionTracker): void {
+    this.session = session;
+  }
+
   /**
   * Wait for all pending meeting saves to complete.
   * Call this before app quit to prevent data loss.
@@ -46,7 +50,7 @@ export class MeetingPersistence {
      * Stops the meeting immediately, snapshots data, and triggers background processing.
      * Returns immediately so UI can switch.
      */
-    public async stopMeeting(): Promise<void> {
+    public async stopMeeting(meetingId?: string): Promise<SessionTracker> {
         console.log('[MeetingPersistence] Stopping meeting and queueing save...');
 
         // 0. Force-save any pending interim transcript
@@ -54,17 +58,16 @@ export class MeetingPersistence {
 
         // 1. Snapshot valid data BEFORE resetting
         const snapshot = this.session.createSnapshot();
+        const nextSession = this.session.createSuccessorSession();
+        this.session = nextSession;
+
         if (snapshot.durationMs < 1000) {
             console.log("Meeting too short, ignoring.");
-            this.session.reset();
-            return;
+            return nextSession;
         }
 
-    // 2. Reset state immediately so new meeting can start or UI is clean
-    this.session.reset();
-
-    const meetingId = crypto.randomUUID();
-    const savePromise = this.processAndSaveMeeting(snapshot, meetingId);
+    const resolvedMeetingId = meetingId ?? crypto.randomUUID();
+    const savePromise = this.processAndSaveMeeting(snapshot, resolvedMeetingId);
     this.pendingSaves.add(savePromise);
     savePromise
       .catch(err => console.error('[MeetingPersistence] Background processing failed:', err))
@@ -77,7 +80,7 @@ export class MeetingPersistence {
         const metadata = snapshot.meetingMetadata;
 
         const placeholder: Meeting = {
-            id: meetingId,
+            id: resolvedMeetingId,
             title: metadata?.title || "Processing...",
             date: new Date().toISOString(),
             duration: durationStr,
@@ -98,6 +101,8 @@ export class MeetingPersistence {
         } catch (e) {
             console.error("Failed to save placeholder", e);
         }
+
+        return nextSession;
     }
 
     /**
