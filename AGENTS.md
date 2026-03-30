@@ -196,6 +196,193 @@ Usage notes:
 <location>project</location>
 </skill>
 
+<!-- oh-my-claudecode (OMC) skills -->
+<skill>
+<name>omc-autopilot</name>
+<description>Full autonomous execution from idea to working code. Takes a brief product idea and autonomously handles: requirements analysis, technical design, planning, parallel implementation, QA cycling, and multi-perspective validation. Trigger when user says "autopilot", "build me", "create me", "full auto", or wants end-to-end autonomous execution.</description>
+<location>project</location>
+</skill>
+
+<skill>
+<name>omc-team</name>
+<description>N coordinated agents on shared task list using Claude Code native teams. Spawns N agents working through staged pipeline: team-plan → team-prd → team-exec → team-verify → team-fix. Trigger when user says "team N:agent-type task" or wants coordinated multi-agent execution.</description>
+<location>project</location>
+</skill>
+
+<skill>
+<name>omc-ralph</name>
+<description>Self-referential persistence loop until task completion with configurable verification. Keeps working until ALL user stories pass verification. Includes ultrawork parallel execution with retry on failure. Trigger when user says "ralph", "don't stop", "must complete", "finish this", or "keep going until done".</description>
+<location>project</location>
+</skill>
+
+<skill>
+<name>omc-ultrawork</name>
+<description>Parallel execution engine for high-throughput task completion. Fires multiple agents simultaneously for independent tasks with smart model routing (Haiku/Sonnet/Opus). Trigger when user says "ulw", "ultrawork", or wants parallel execution.</description>
+<location>project</location>
+</skill>
+
+<skill>
+<name>omc-ccg</name>
+<description>Claude-Codex-Gemini tri-model orchestration. Routes to codex + gemini via /ask, then Claude synthesizes results. Trigger when user says "ccg" or wants multi-model cross-validation.</description>
+<location>project</location>
+</skill>
+
+<skill>
+<name>omc-deep-interview</name>
+<description>Socratic deep interview with mathematical ambiguity gating before execution. Uses Socratic questioning to clarify vague ideas, exposes hidden assumptions, measures clarity across weighted dimensions. Trigger when user says "deep-interview" or has a vague idea needing clarification.</description>
+<location>project</location>
+</skill>
+
+<skill>
+<name>omc-ralplan</name>
+<description>Consensus planning entrypoint that auto-gates vague requests before execution. 3-stage pipeline: deep-interview → ralplan → autopilot. Trigger when user says "ralplan" or wants validated planning before execution.</description>
+<location>project</location>
+</skill>
+
+<skill>
+<name>omc-ai-slop-cleaner</name>
+<description>Clean AI-generated code slop with regression-safe, deletion-first workflow. Optional reviewer-only mode for identifying issues without fixing. Trigger when user says "deslop", "anti-slop", or wants to clean up AI-generated code smells.</description>
+<location>project</location>
+</skill>
+
+<skill>
+<name>omc-deepinit</name>
+<description>Deep codebase initialization with hierarchical AGENTS.md documentation. Scans and documents the entire project structure. Trigger when user says "deepinit" or wants comprehensive project initialization.</description>
+<location>project</location>
+</skill>
+
+<skill>
+<name>omc-deep-dive</name>
+<description>2-stage pipeline: trace (causal investigation) → deep-interview (requirements crystallization) with 3-point injection. Trigger when user says "deep-dive" or wants to investigate a problem before requirements gathering.</description>
+<location>project</location>
+</skill>
+
+<skill>
+<name>omc-ultraqa</name>
+<description>QA cycling workflow - test, verify, fix, repeat until goal met. Runs build/test/fix loops with up to 5 cycles, stopping if same error persists 3 times. Trigger when user says "ultraqa" or wants intensive QA cycling.</description>
+<location>project</location>
+</skill>
+
+<skill>
+<name>omc-cancel</name>
+<description>Cancel any active OMC mode (autopilot, ralph, ultrawork, team, etc). Handles graceful shutdown of teammates, state cleanup, and resource deallocation. Trigger when user says "cancelomc", "stopomc", or wants to stop an active OMC mode.</description>
+<location>project</location>
+</skill>
+
+<skill>
+<name>omc-ask</name>
+<description>Process-first advisor routing for Claude, Codex, or Gemini via omc ask. Runs local provider CLIs and saves markdown artifacts. Trigger when user says "ask codex", "ask gemini", or wants external AI advisor input.</description>
+<location>project</location>
+</skill>
+
+<skill>
+<name>omc-teams</name>
+<description>CLI-team runtime for claude, codex, or gemini workers in tmux panes. Spawns real tmux worker processes for process-based parallel execution. Trigger when user says "omc team N:codex" or "omc team N:gemini".</description>
+<location>project</location>
+</skill>
+
+<skill>
+<name>omc-hud</name>
+<description>Configure HUD display options (layout, presets, display elements). Real-time orchestration metrics in your status bar. Trigger when user says "hud" or wants to configure the OMC HUD.</description>
+<location>project</location>
+</skill>
+
+<skill>
+<name>omc-learner</name>
+<description>Extract a learned skill from the current conversation. Identifies reusable patterns with strict quality gates and creates portable skill files. Trigger when user says "learner" or wants to learn from the current session.</description>
+<location>project</location>
+</skill>
+
+<skill>
+<name>omc-skill</name>
+<description>Manage local skills - list, add, remove, search, edit, setup wizard. Trigger when user says "skill list", "skill add", or wants to manage OMC skills.</description>
+<location>project</location>
+</skill>
+
+<skill>
+<name>omc-setup</name>
+<description>Install or refresh oh-my-claudecode for plugin, npm, and local-dev setups. Canonical setup flow for OMC installation. Trigger when user says "setup omc" or "omc-setup".</description>
+<location>project</location>
+</skill>
+
+<skill>
+<name>omc-setup-router</name>
+<description>Unified setup/configuration entrypoint. Routes setup, doctor, or MCP requests to the correct OMC setup flow. Trigger when user says "/setup" or wants OMC configuration routing.</description>
+<location>project</location>
+</skill>
+
+<skill>
+<name>omc-doctor</name>
+<description>Diagnose and fix oh-my-claudecode installation issues. Checks dependencies, configuration, and state. Trigger when user says "omc-doctor" or has OMC installation problems.</description>
+<location>project</location>
+</skill>
+
+<skill>
+<name>omc-reference</name>
+<description>OMC agent catalog, available tools, team pipeline routing, commit protocol, and skills registry. Auto-loads when delegating to agents or using OMC tools.</description>
+<location>project</location>
+</skill>
+
+<skill>
+<name>omc-mcp-setup</name>
+<description>Configure popular MCP servers for enhanced agent capabilities. Sets up MCP integrations for extended tool access. Trigger when user says "mcp-setup" or wants to configure MCP servers.</description>
+<location>project</location>
+</skill>
+
+<skill>
+<name>omc-configure-notifications</name>
+<description>Configure notification integrations (Telegram, Discord, Slack, OpenClaw) via natural language. Trigger when user says "configure notifications" or wants to set up OMC notifications.</description>
+<location>project</location>
+</skill>
+
+<skill>
+<name>omc-plan</name>
+<description>Strategic planning with optional interview workflow. Creates implementation plans with optional deep-interview pre-gate. Pipeline: deep-interview → omc-plan → autopilot. Trigger when user says "plan" or wants strategic planning.</description>
+<location>project</location>
+</skill>
+
+<skill>
+<name>omc-trace</name>
+<description>Evidence-driven tracing lane that orchestrates competing tracer hypotheses. Causal investigation using systematic hypothesis testing. Trigger when user says "trace" or wants evidence-driven debugging.</description>
+<location>project</location>
+</skill>
+
+<skill>
+<name>omc-release</name>
+<description>Automated release workflow for oh-my-claudecode. Handles versioning, changelog, and publishing. Trigger when user says "release" or wants to publish an OMC release.</description>
+<location>project</location>
+</skill>
+
+<skill>
+<name>omc-sciomc</name>
+<description>Orchestrate parallel scientist agents for comprehensive analysis with AUTO mode. Runs multiple research agents in parallel for thorough investigation. Trigger when user says "sciomc" or wants comprehensive multi-agent analysis.</description>
+<location>project</location>
+</skill>
+
+<skill>
+<name>omc-external-context</name>
+<description>Invoke parallel document-specialist agents for external web searches and documentation lookup. Trigger when user says "external-context" or needs parallel documentation research.</description>
+<location>project</location>
+</skill>
+
+<skill>
+<name>omc-project-session-manager</name>
+<description>Worktree-first dev environment manager for issues, PRs, and features with optional tmux sessions. Trigger when user says "psm" or wants project session management.</description>
+<location>project</location>
+</skill>
+
+<skill>
+<name>omc-visual-verdict</name>
+<description>Structured visual QA verdict for screenshot-to-reference comparisons. Trigger when user says "visual-verdict" or wants structured visual quality assessment.</description>
+<location>project</location>
+</skill>
+
+<skill>
+<name>omc-writer-memory</name>
+<description>Agentic memory system for writers - track characters, relationships, scenes, and themes. Commands: init, char, rel, scene, query, validate, synopsis, status, export. Trigger when user says "writer-memory" or wants narrative tracking.</description>
+<location>project</location>
+</skill>
+
 </available_skills>
 <!-- SKILLS_TABLE_END -->
 
