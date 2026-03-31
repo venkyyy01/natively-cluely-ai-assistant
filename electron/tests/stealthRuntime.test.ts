@@ -27,14 +27,22 @@ class FakeWindow extends EventEmitter {
   public hidden = false;
   public shown = false;
   public destroyed = false;
+  public loadUrls: string[] = [];
+  public loadFiles: string[] = [];
 
   constructor(id: number) {
     super();
     this.webContents = new FakeWebContents(id);
   }
 
-  loadURL(): Promise<void> { return Promise.resolve(); }
-  loadFile(): Promise<void> { return Promise.resolve(); }
+  loadURL(url?: string): Promise<void> {
+    if (url) this.loadUrls.push(url);
+    return Promise.resolve();
+  }
+  loadFile(file?: string): Promise<void> {
+    if (file) this.loadFiles.push(file);
+    return Promise.resolve();
+  }
   show(): void { this.shown = true; }
   hide(): void { this.hidden = true; }
   close(): void { this.destroyed = true; }
@@ -109,4 +117,29 @@ test('StealthRuntime ignores shell events from unrelated senders and cleans up s
 
   assert.equal(created[1]?.shown, true);
   assert.equal(created[1]?.hidden, true);
+});
+
+test('StealthRuntime uses loadURL for packaged file targets so query params survive', () => {
+  const created: FakeWindow[] = [];
+  const runtime = new StealthRuntime({
+    startUrl: 'file:///Applications/Natively.app/Contents/Resources/app.asar/dist/index.html?window=launcher',
+    stealthManager: { applyToWindow() {} } as never,
+    createWindow: () => {
+      const win = new FakeWindow(created.length + 21);
+      created.push(win);
+      return win as never;
+    },
+    shellHtmlPath: '/tmp/shell.html',
+    preloadPath: '/tmp/preload.js',
+    shellPreloadPath: '/tmp/shellPreload.js',
+    ipcMain: new EventEmitter() as never,
+    logger: { log() {}, warn() {} },
+  });
+
+  runtime.createPrimaryStealthSurface({ width: 100, height: 100, webPreferences: {} });
+
+  assert.deepEqual(created[0]?.loadUrls, [
+    'file:///Applications/Natively.app/Contents/Resources/app.asar/dist/index.html?window=launcher',
+  ]);
+  assert.deepEqual(created[0]?.loadFiles, []);
 });

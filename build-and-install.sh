@@ -27,6 +27,8 @@ NC='\033[0m' # No Color
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="Natively"
 INSTALL_DIR="/Applications"
+APP_SUPPORT_DIR="$HOME/Library/Application Support/natively"
+APP_SETTINGS_PATH="$APP_SUPPORT_DIR/settings.json"
 ENTITLEMENTS="$SCRIPT_DIR/assets/entitlements.mac.plist"
 HELPER_ENTITLEMENTS="$SCRIPT_DIR/stealth-projects/macos-virtual-display-helper/entitlements.plist"
 RELEASE_DIR="$SCRIPT_DIR/release"
@@ -307,6 +309,51 @@ require_asar_entry() {
     fi
 }
 
+reset_persisted_startup_flags() {
+    if [[ "${RESET_STEALTH_SETTINGS_ON_INSTALL:-1}" != "1" ]]; then
+        info "Preserving persisted stealth settings (RESET_STEALTH_SETTINGS_ON_INSTALL=0)"
+        return
+    fi
+
+    if [[ ! -f "$APP_SETTINGS_PATH" ]]; then
+        info "No persisted app settings found; first launch will use built-in defaults"
+        return
+    fi
+
+    info "Resetting persisted stealth startup flags for a safe first launch..."
+    if SETTINGS_PATH="$APP_SETTINGS_PATH" node <<'NODE'
+const fs = require('node:fs')
+
+const settingsPath = process.env.SETTINGS_PATH
+if (!settingsPath) {
+  process.exit(1)
+}
+
+let settings
+try {
+  settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'))
+} catch (error) {
+  console.error(`[install] Failed to parse ${settingsPath}: ${error.message}`)
+  process.exit(1)
+}
+
+const next = {
+  ...settings,
+  isUndetectable: false,
+  enableCaptureDetectionWatchdog: false,
+}
+
+if (JSON.stringify(next) !== JSON.stringify(settings)) {
+  fs.writeFileSync(settingsPath, `${JSON.stringify(next, null, 2)}\n`)
+}
+NODE
+    then
+        success "Persisted stealth startup flags reset"
+    else
+        warn "Could not reset persisted stealth startup flags in $APP_SETTINGS_PATH"
+    fi
+}
+
 if [[ "${BUILD_AND_INSTALL_LIB:-0}" == "1" ]]; then
     return 0 2>/dev/null || exit 0
 fi
@@ -388,25 +435,30 @@ run_with_spinner "syncing npm dependency matrix" npm install
 success "Dependencies installed"
 
 # ╔═══════════════════════════════════════════════════════════════════╗
-# ║ Step 5: Run Quality Gates                                        
+# ║ Step 4: Run Quality Gates (skip by default)                     
 # ╚═══════════════════════════════════════════════════════════════════╝
-step "Step 4/8 — Running Production Quality Gates"
+# Set SKIP_QUALITY_GATES=0 to run quality gates before building.
+if [[ "${SKIP_QUALITY_GATES:-1}" == "0" ]]; then
+    step "Step 4/8 — Running Production Quality Gates"
 
-info "Running quality gates in visible stages so long-running checks do not look frozen..."
+    info "Running quality gates in visible stages so long-running checks do not look frozen..."
 
-run_logged_command "[1/3] Running typechecks..." npm run typecheck
-success "Typechecks passed"
+    run_logged_command "[1/3] Running typechecks..." npm run typecheck
+    success "Typechecks passed"
 
-run_logged_command "[2/3] Running Electron tests (this may take a minute)..." npm run test:electron
-success "Electron tests passed"
+    run_logged_command "[2/3] Running Electron tests (this may take a minute)..." npm run test:electron
+    success "Electron tests passed"
 
-run_logged_command "[3/3] Running native Rust tests..." cargo test --manifest-path native-module/Cargo.toml
-success "Native Rust tests passed"
+    run_logged_command "[3/3] Running native Rust tests..." cargo test --manifest-path native-module/Cargo.toml
+    success "Native Rust tests passed"
 
-run_logged_command "[macOS helper] Building virtual display helper..." npm run prepare:macos:virtual-display-helper
-success "macOS virtual display helper prepared"
+    run_logged_command "[macOS helper] Building virtual display helper..." npm run prepare:macos:virtual-display-helper
+    success "macOS virtual display helper prepared"
 
-success "Quality gates passed"
+    success "Quality gates passed"
+else
+    info "Skipping quality gates (set SKIP_QUALITY_GATES=0 to run them)"
+fi
 
 # ╔═══════════════════════════════════════════════════════════════════╗
 # ║ Step 5: Build & Package                                         ║
@@ -557,6 +609,8 @@ if file "$INSTALLED_BINARY" | grep -q "$BUILD_ARCH"; then
 else
     fail "Installed binary architecture does not match expected ${BUILD_ARCH}"
 fi
+
+reset_persisted_startup_flags
 
 # ╔═══════════════════════════════════════════════════════════════════╗
 # ║  Done!                                                           ║

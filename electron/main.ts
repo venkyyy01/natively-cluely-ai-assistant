@@ -387,7 +387,9 @@ const enablePrivateMacosStealthApi =
   )
 const enableCaptureDetectionWatchdog =
   isEnvFlagEnabled(process.env.NATIVELY_ENABLE_CAPTURE_DETECTION_WATCHDOG) ??
-  (settingsManager.get('enableCaptureDetectionWatchdog') ?? true)
+  // Off by default. The heuristic matches common apps like Chrome/Slack and
+  // visibly hides/restores the main window in normal desktop sessions.
+  (settingsManager.get('enableCaptureDetectionWatchdog') ?? false)
 const configuredCaptureToolPatterns = (settingsManager.get('captureToolPatterns') ?? [])
   .map((pattern) => {
     try {

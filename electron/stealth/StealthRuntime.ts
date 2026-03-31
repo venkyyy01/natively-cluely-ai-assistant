@@ -118,18 +118,10 @@ export class StealthRuntime {
     this.frameBridge.attach(this.contentWindow.webContents as unknown as Parameters<FrameBridge['attach']>[0]);
     this.bindShellEvents();
 
-    const isDevUrl = this.startUrl.startsWith('http');
-
-    if (isDevUrl) {
-      void this.contentWindow.loadURL(this.startUrl).catch((err) => {
-        this.logger.warn('[StealthRuntime] Content window loadURL failed:', err);
-      });
-    } else {
-      const contentPath = this.startUrl.replace(/^file:\/\//, '');
-      void this.contentWindow.loadFile(contentPath).catch((err) => {
-        this.logger.warn('[StealthRuntime] Content window loadFile failed:', err);
-      });
-    }
+    // Always use loadURL so packaged file:// targets keep their query string.
+    void this.contentWindow.loadURL(this.startUrl).catch((err) => {
+      this.logger.warn('[StealthRuntime] Content window loadURL failed:', err);
+    });
 
     void this.shellWindow.loadFile(this.shellHtmlPath).catch((err) => {
       this.logger.warn('[StealthRuntime] Shell window loadFile failed:', err);
