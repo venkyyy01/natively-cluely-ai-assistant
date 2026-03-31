@@ -149,6 +149,18 @@ const KNOWN_CAPTURE_TOOL_PATTERNS = [
   /vmware/i,
 ];
 
+function scheduleUnrefInterval(callback: () => Promise<void> | void, intervalMs: number): NodeJS.Timeout {
+  const handle = setInterval(callback, intervalMs);
+  handle.unref?.();
+  return handle;
+}
+
+function scheduleUnrefTimeout(callback: () => void, delayMs: number): NodeJS.Timeout {
+  const handle = setTimeout(callback, delayMs);
+  handle.unref?.();
+  return handle;
+}
+
 function defaultProcessEnumerator(command: string, args: string[]): Promise<string> {
   return new Promise((resolve, reject) => {
     execFile(command, args, (error, stdout) => {
@@ -231,9 +243,9 @@ export class StealthManager extends EventEmitter {
     this.screenApi = deps.screenApi ?? this.resolveScreenApi();
     this.displayEvents = deps.displayEvents ?? this.resolveDisplayEvents(this.screenApi);
     this.featureFlags = deps.featureFlags ?? {};
-    this.intervalScheduler = deps.intervalScheduler ?? ((callback, intervalMs) => setInterval(callback, intervalMs));
+    this.intervalScheduler = deps.intervalScheduler ?? scheduleUnrefInterval;
     this.clearIntervalScheduler = deps.clearIntervalScheduler ?? ((handle) => clearInterval(handle as NodeJS.Timeout));
-    this.timeoutScheduler = deps.timeoutScheduler ?? ((callback, delayMs) => setTimeout(callback, delayMs));
+    this.timeoutScheduler = deps.timeoutScheduler ?? scheduleUnrefTimeout;
     this.virtualDisplayCoordinator = deps.virtualDisplayCoordinator ?? null;
     this.captureToolPatterns = deps.captureToolPatterns ?? KNOWN_CAPTURE_TOOL_PATTERNS;
     this.processEnumerator = deps.processEnumerator ?? defaultProcessEnumerator;
@@ -1167,7 +1179,7 @@ for window in windows:
 
     if (typeof win.setOpacity === 'function') {
       win.setOpacity(0);
-      setTimeout(() => {
+      this.timeoutScheduler(() => {
         if (!this.isWindowDestroyed(win) && typeof win.setOpacity === 'function') {
           win.setOpacity(1);
           this.applyLayer0(win, true);

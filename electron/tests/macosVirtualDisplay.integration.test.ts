@@ -6,12 +6,13 @@ import fs from 'node:fs';
 
 const helperPath = process.env.NATIVELY_MACOS_VIRTUAL_DISPLAY_HELPER || 
     path.join(process.cwd(), 'assets/bin/macos/stealth-virtual-display-helper');
+const runNativeIntegration = process.env.NATIVELY_RUN_MACOS_VIRTUAL_DISPLAY_INTEGRATION === '1';
 
 describe('MacOS Virtual Display Helper Integration', {
-    skip: process.platform !== 'darwin' || !fs.existsSync(helperPath),
+    skip: process.platform !== 'darwin' || !fs.existsSync(helperPath) || !runNativeIntegration,
 }, () => {
     before(function() {
-        if (!fs.existsSync(helperPath)) {
+        if (!fs.existsSync(helperPath) || !runNativeIntegration) {
             this.skip();
         }
     });

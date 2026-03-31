@@ -341,7 +341,7 @@ cd "$SCRIPT_DIR"
 
 # Check for uncommitted changes
 if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-    UNCOMMITTED=$(git status --porcelain 2>/dev/null | grep -E "^[ AM]" | head -20 || true)
+    UNCOMMITTED=$(git status --porcelain 2>/dev/null | head -20 || true)
     if [[ -n "$UNCOMMITTED" ]]; then
         warn "Uncommitted changes detected in source:"
         echo "$UNCOMMITTED"
@@ -379,40 +379,40 @@ step "Step 3/8 — Installing Dependencies"
 
 cd "$SCRIPT_DIR"
 
-# Clean install
+INSTALL_COMMAND=(npm install)
+if [[ -f "package-lock.json" ]]; then
+    INSTALL_COMMAND=(npm ci)
+fi
+
 if [[ -d "node_modules" ]]; then
-    info "node_modules exists, running npm install to sync..."
+    info "node_modules exists, syncing dependencies with ${INSTALL_COMMAND[*]}..."
 else
     info "Fresh install — this may take a few minutes..."
 fi
 
-run_with_spinner "syncing npm dependency matrix" npm install
+run_with_spinner "syncing npm dependency matrix" "${INSTALL_COMMAND[@]}"
 success "Dependencies installed"
 
 # ╔═══════════════════════════════════════════════════════════════════╗
-# ║ Step 4: Run Quality Gates (skip by default)                     
+# ║ Step 4: Run Quality Gates                                        
 # ╚═══════════════════════════════════════════════════════════════════╝
-# Set SKIP_QUALITY_GATES=0 to run quality gates before building.
-if [[ "${SKIP_QUALITY_GATES:-1}" == "0" ]]; then
+QUALITY_GATES_RAN=false
+if [[ "${SKIP_QUALITY_GATES:-0}" == "0" ]]; then
     step "Step 4/8 — Running Production Quality Gates"
 
     info "Running quality gates in visible stages so long-running checks do not look frozen..."
 
-    run_logged_command "[1/3] Running typechecks..." npm run typecheck
-    success "Typechecks passed"
-
-    run_logged_command "[2/3] Running Electron tests (this may take a minute)..." npm run test:electron
+    run_logged_command "[1/2] Running Electron tests (this may take a minute)..." npm run test:electron
     success "Electron tests passed"
 
-    run_logged_command "[3/3] Running native Rust tests..." cargo test --manifest-path native-module/Cargo.toml
-    success "Native Rust tests passed"
+    run_logged_command "[2/2] Running production verification..." npm run verify:production
+    success "Production verification passed"
 
-    run_logged_command "[macOS helper] Building virtual display helper..." npm run prepare:macos:virtual-display-helper
-    success "macOS virtual display helper prepared"
-
+    QUALITY_GATES_RAN=true
     success "Quality gates passed"
 else
-    info "Skipping quality gates (set SKIP_QUALITY_GATES=0 to run them)"
+    info "Skipping visible quality gates (set SKIP_QUALITY_GATES=0 to run them before packaging)"
+    info "Package-level production verification remains enabled"
 fi
 
 # ╔═══════════════════════════════════════════════════════════════════╗
@@ -421,7 +421,11 @@ fi
 step "Step 5/8 — Building & Packaging (${ARCH_LABEL})"
 
 info "Running ${BUILD_ARCH}-only build pipeline (renderer, native addon, electron, packaging)..."
-run_with_spinner "building and packaging ${BUILD_ARCH} release" env SKIP_PRODUCTION_VERIFY=1 "${BUILD_COMMAND[@]}"
+if [[ "$QUALITY_GATES_RAN" == "true" ]]; then
+    run_with_spinner "building and packaging ${BUILD_ARCH} release" env SKIP_PRODUCTION_VERIFY=1 "${BUILD_COMMAND[@]}"
+else
+    run_with_spinner "building and packaging ${BUILD_ARCH} release" "${BUILD_COMMAND[@]}"
+fi
 
 success "Build & packaging complete"
 

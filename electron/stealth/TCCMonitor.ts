@@ -53,7 +53,9 @@ export class TCCMonitor extends EventEmitter {
       return;
     }
 
-    this.checkHandle = setInterval(() => this.check(), this.checkIntervalMs);
+    const handle = setInterval(() => this.check(), this.checkIntervalMs);
+    handle.unref?.();
+    this.checkHandle = handle;
     this.logger.log('[TCCMonitor] Started monitoring ScreenCapture permissions');
   }
 

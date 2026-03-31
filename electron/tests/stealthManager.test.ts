@@ -12,6 +12,7 @@ const silentLogger = {
 };
 
 class FakeWindow extends EventEmitter {
+  private static readonly instances = new Set<FakeWindow>();
   public contentProtectionCalls: boolean[] = [];
   public skipTaskbarCalls: boolean[] = [];
   public hiddenInMissionControlCalls: boolean[] = [];
@@ -25,6 +26,11 @@ class FakeWindow extends EventEmitter {
   public visible = true;
   public bounds = { x: 10, y: 20, width: 1280, height: 720 };
   public setBoundsCalls: Array<{ x: number; y: number; width: number; height: number }> = [];
+
+  constructor() {
+    super();
+    FakeWindow.instances.add(this);
+  }
 
   setContentProtection(value: boolean): void {
     this.contentProtectionCalls.push(value);
@@ -83,8 +89,19 @@ class FakeWindow extends EventEmitter {
   }
 
   destroy(): void {
+    if (this.destroyed) {
+      return;
+    }
     this.destroyed = true;
+    FakeWindow.instances.delete(this);
     this.emit('closed');
+  }
+
+  static destroyAll(): void {
+    for (const win of [...FakeWindow.instances]) {
+      win.destroy();
+    }
+    FakeWindow.instances.clear();
   }
 }
 
@@ -94,6 +111,7 @@ describe('StealthManager', () => {
   });
 
   afterEach(() => {
+    FakeWindow.destroyAll();
     setOptimizationFlagsForTesting({ accelerationEnabled: false, useStealthMode: true });
   });
 
