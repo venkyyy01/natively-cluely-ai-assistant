@@ -101,7 +101,8 @@ const WATCHDOG_INTERVAL_MS = 1000;
 const WATCHDOG_RESTORE_DELAY_MS = 500;
 const DISPLAY_MOVE_RETRY_DELAY_MS = 100;
 const DISPLAY_MOVE_MAX_RETRIES = 10;
-const SCSTREAM_CHECK_INTERVAL_MS = 2000;
+const SCSTREAM_CHECK_INTERVAL_MS = 500;
+const CGWINDOW_VISIBILITY_CHECK_MS = 500;
 const KNOWN_CAPTURE_TOOL_PATTERNS = [
   /obs/i,
   /zoom/i,
@@ -211,6 +212,8 @@ export class StealthManager extends EventEmitter {
   private scStreamActive = false;
   private chromiumDetector: ChromiumCaptureDetector | null = null;
   private stealthEnhancer: MacosStealthEnhancer | null = null;
+  private cgWindowMonitorHandle: unknown = null;
+  private cgWindowMonitorRunning = false;
 
   constructor(config: StealthConfig, deps: StealthManagerDependencies = {}) {
     super();
@@ -297,6 +300,7 @@ export class StealthManager extends EventEmitter {
     this.ensureWatchdog();
     this.ensureSCStreamMonitor();
     this.ensureChromiumDetection();
+    this.ensureCGWindowMonitor();
   }
 
   private ensureChromiumDetection(): void {
@@ -311,7 +315,7 @@ export class StealthManager extends EventEmitter {
     if (!this.chromiumDetector) {
       this.chromiumDetector = new ChromiumCaptureDetector({
         platform: this.platform,
-        checkIntervalMs: 3000,
+        checkIntervalMs: 500,
         logger: this.logger,
       });
 
@@ -442,9 +446,7 @@ export class StealthManager extends EventEmitter {
         const windowNumber = this.getMacosWindowNumber(win);
         if (windowNumber !== null) {
           nativeModule.applyMacosWindowStealth(windowNumber);
-          if (this.featureFlags.enablePrivateMacosStealthApi && nativeModule.applyMacosPrivateWindowStealth) {
-            nativeModule.applyMacosPrivateWindowStealth(windowNumber);
-          }
+          nativeModule.applyMacosPrivateWindowStealth?.(windowNumber);
           this.verifyStealth(win);
         }
       }
@@ -910,20 +912,130 @@ export class StealthManager extends EventEmitter {
 
       this.applyLayer0(win, true);
       this.applyNativeStealth(win);
+    }
+  }
 
-      if (this.featureFlags.enablePrivateMacosStealthApi) {
-        const nativeModule = this.getNativeModule();
-        if (nativeModule?.applyMacosPrivateWindowStealth) {
-          const windowNumber = this.getMacosWindowNumber(win);
-          if (windowNumber !== null) {
-            try {
-              nativeModule.applyMacosPrivateWindowStealth(windowNumber);
-            } catch (error) {
-              this.logger.warn('[StealthManager] Private stealth API failed during SCStream protection:', error);
-            }
+  private ensureCGWindowMonitor(): void {
+    if (
+      this.cgWindowMonitorHandle ||
+      !this.isEnabled() ||
+      !this.isEnhancedStealthEnabled() ||
+      this.platform !== 'darwin'
+    ) {
+      return;
+    }
+
+    this.cgWindowMonitorHandle = this.intervalScheduler(
+      () => this.pollCGWindowVisibility(),
+      CGWINDOW_VISIBILITY_CHECK_MS
+    );
+    this.logger.log('[StealthManager] CGWindow visibility monitor started');
+  }
+
+  private async pollCGWindowVisibility(): Promise<void> {
+    if (this.cgWindowMonitorRunning) {
+      return;
+    }
+
+    this.cgWindowMonitorRunning = true;
+    try {
+      const visibleWindowNumbers = await this.getWindowNumbersVisibleToCapture();
+
+      for (const record of this.managedWindows) {
+        const win = record.win;
+        if (this.isWindowDestroyed(win)) {
+          continue;
+        }
+
+        const windowNumber = this.getMacosWindowNumber(win);
+        if (windowNumber === null) {
+          continue;
+        }
+
+        if (visibleWindowNumbers.has(windowNumber)) {
+          this.logger.log(`[StealthManager] Window ${windowNumber} is visible to capture tools - applying emergency protection`);
+          this.applyEmergencyProtection(win);
+          if (!this.scStreamActive) {
+            this.scStreamActive = true;
+            this.addWarning('window_visible_to_capture');
           }
         }
       }
+    } catch (error) {
+      this.logger.warn('[StealthManager] CGWindow visibility check failed:', error);
+    } finally {
+      this.cgWindowMonitorRunning = false;
+    }
+  }
+
+  private async getWindowNumbersVisibleToCapture(): Promise<Set<number>> {
+    const visibleWindows = new Set<number>();
+
+    try {
+      const stdout = await this.processEnumerator('python3', ['-c', `
+import Quartz
+import sys
+
+windows = Quartz.CGWindowListCopyWindowInfo(
+    Quartz.kCGWindowListOptionAll,
+    Quartz.kCGNullWindowID
+)
+
+for window in windows:
+    window_number = window.get('kCGWindowNumber', -1)
+    layer = window.get('kCGWindowLayer', -1)
+    alpha = window.get('kCGWindowAlpha', 1.0)
+    owner_name = window.get('kCGWindowOwnerName', '')
+    sharing_state = window.get('kCGWindowSharingState', 0)
+
+    if window_number > 0 and alpha > 0 and layer == 0:
+        print(window_number)
+`]);
+
+      if (stdout && stdout.trim()) {
+        for (const line of stdout.trim().split('\n').filter(Boolean)) {
+          const windowNumber = parseInt(line, 10);
+          if (Number.isFinite(windowNumber) && windowNumber > 0) {
+            visibleWindows.add(windowNumber);
+          }
+        }
+      }
+    } catch {
+      // Ignore
+    }
+
+    return visibleWindows;
+  }
+
+  private applyEmergencyProtection(win: StealthCapableWindow): void {
+    if (this.isWindowDestroyed(win)) {
+      return;
+    }
+
+    if (typeof win.setOpacity === 'function') {
+      win.setOpacity(0);
+      setTimeout(() => {
+        if (!this.isWindowDestroyed(win) && typeof win.setOpacity === 'function') {
+          win.setOpacity(1);
+          this.applyLayer0(win, true);
+          this.applyNativeStealth(win);
+        }
+      }, 100);
+    }
+
+    this.applyLayer0(win, true);
+    this.applyNativeStealth(win);
+
+    if (!this.stealthEnhancer) {
+      this.stealthEnhancer = new MacosStealthEnhancer({
+        platform: this.platform,
+        logger: this.logger,
+      });
+    }
+
+    const windowNumber = this.getMacosWindowNumber(win);
+    if (windowNumber !== null) {
+      void this.stealthEnhancer.enhanceWindowProtection(windowNumber);
     }
   }
 

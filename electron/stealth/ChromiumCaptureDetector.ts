@@ -44,7 +44,7 @@ export class ChromiumCaptureDetector extends EventEmitter {
   constructor(options: ChromiumCaptureDetectorOptions = {}) {
     super();
     this.platform = options.platform ?? process.platform;
-    this.checkIntervalMs = options.checkIntervalMs ?? 3000;
+    this.checkIntervalMs = options.checkIntervalMs ?? 500;
     this.logger = options.logger ?? console;
   }
 
