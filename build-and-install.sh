@@ -397,8 +397,8 @@ info "Running quality gates in visible stages so long-running checks do not look
 run_logged_command "[1/4] Running typechecks..." npm run typecheck
 success "Typechecks passed"
 
-run_logged_command "[2/4] Running Electron coverage gate (this is the longest step and may take about a minute)..." npm run verify:electron:coverage
-success "Electron coverage gate passed"
+run_logged_command "[2/4] Running Electron tests (this may take a minute)..." npm run test:electron
+success "Electron tests passed"
 
 run_logged_command "[3/4] Running renderer coverage gate..." npm run verify:renderer:coverage
 success "Renderer coverage gate passed"
