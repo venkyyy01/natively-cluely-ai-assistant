@@ -60,7 +60,7 @@ export class StealthRuntime {
   constructor(options: StealthRuntimeOptions) {
     this.stealthManager = options.stealthManager;
     this.startUrl = options.startUrl;
-    this.shellHtmlPath = options.shellHtmlPath ?? path.join(app.getAppPath(), 'electron/renderer/shell.html');
+    this.shellHtmlPath = options.shellHtmlPath ?? path.join(app.getAppPath().replace('app.asar', 'app.asar.unpacked'), 'electron', 'renderer', 'shell.html');
     if (!this.shellHtmlPath.endsWith('.html') || this.shellHtmlPath.includes('..')) {
       throw new Error(`Invalid shellHtmlPath: ${this.shellHtmlPath}`);
     }

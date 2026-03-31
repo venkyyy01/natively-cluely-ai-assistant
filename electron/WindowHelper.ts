@@ -14,7 +14,7 @@ const isDev = isEnvDev && !isPackaged
 
 const startUrl = isDev
   ? "http://localhost:5180"
-  : `file://${path.join(app.getAppPath(), "dist/index.html")}`
+  : `file://${path.join(app.getAppPath().replace("app.asar", "app.asar.unpacked"), "dist", "index.html")}`
 
 export class WindowHelper {
   private launcherWindow: BrowserWindow | null = null
@@ -238,8 +238,24 @@ export class WindowHelper {
 
     this.launcherRuntime.applyStealth(this.contentProtection)
 
-    this.launcherContentWindow?.webContents.on('did-fail-load', (_event, errorCode, errorDescription) => {
-      console.error(`[WindowHelper] did-fail-load: ${errorCode} ${errorDescription}`);
+    this.launcherContentWindow?.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL) => {
+      console.error(`[WindowHelper] did-fail-load: ${errorCode} ${errorDescription} URL: ${validatedURL}`);
+    });
+
+    this.launcherContentWindow?.webContents.on('did-finish-load', () => {
+      console.log('[WindowHelper] Launcher content window did-finish-load');
+    });
+
+    this.launcherContentWindow?.webContents.on('dom-ready', () => {
+      console.log('[WindowHelper] Launcher content window dom-ready');
+    });
+
+    this.launcherContentWindow?.webContents.on('crashed', (_event, killed) => {
+      console.error(`[WindowHelper] Launcher content window crashed (killed=${killed})`);
+    });
+
+    this.launcherContentWindow?.webContents.on('render-process-gone', (_event, details) => {
+      console.error(`[WindowHelper] Launcher render process gone: reason=${details.reason} exitCode=${details.exitCode}`);
     });
 
     // if (isDev) {
