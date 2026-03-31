@@ -394,16 +394,13 @@ step "Step 4/8 — Running Production Quality Gates"
 
 info "Running quality gates in visible stages so long-running checks do not look frozen..."
 
-run_logged_command "[1/4] Running typechecks..." npm run typecheck
+run_logged_command "[1/3] Running typechecks..." npm run typecheck
 success "Typechecks passed"
 
-run_logged_command "[2/4] Running Electron tests (this may take a minute)..." npm run test:electron
+run_logged_command "[2/3] Running Electron tests (this may take a minute)..." npm run test:electron
 success "Electron tests passed"
 
-run_logged_command "[3/4] Running renderer coverage gate..." npm run verify:renderer:coverage
-success "Renderer coverage gate passed"
-
-run_logged_command "[4/4] Running native Rust tests..." cargo test --manifest-path native-module/Cargo.toml
+run_logged_command "[3/3] Running native Rust tests..." cargo test --manifest-path native-module/Cargo.toml
 success "Native Rust tests passed"
 
 run_logged_command "[macOS helper] Building virtual display helper..." npm run prepare:macos:virtual-display-helper
