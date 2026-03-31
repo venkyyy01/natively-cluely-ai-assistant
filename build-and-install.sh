@@ -314,13 +314,15 @@ fi
 # ── Detect Architecture ──
 ARCH="$(uname -m)"
 if [[ "$ARCH" == "arm64" ]]; then
-BUILD_ARCH="arm64"
-ARCH_LABEL="Apple Silicon"
+    BUILD_ARCH="arm64"
+    ARCH_LABEL="Apple Silicon"
+    BUILD_COMMAND=(npm run app:build:arm64)
 elif [[ "$ARCH" == "x86_64" ]]; then
-BUILD_ARCH="x64"
-ARCH_LABEL="Intel"
+    BUILD_ARCH="x64"
+    ARCH_LABEL="Intel"
+    BUILD_COMMAND=(npm run app:build:x64)
 else
-fail "Unsupported architecture: $ARCH"
+    fail "Unsupported architecture: $ARCH"
 fi
 
 # ── Detect Rust ──
@@ -418,8 +420,8 @@ fi
 # ╚═══════════════════════════════════════════════════════════════════╝
 step "Step 5/8 — Building & Packaging (${ARCH_LABEL})"
 
-info "Running full build pipeline (renderer, native addon, electron, packaging)..."
-run_with_spinner "building and packaging release" env SKIP_PRODUCTION_VERIFY=1 npm run app:build
+info "Running ${BUILD_ARCH}-only build pipeline (renderer, native addon, electron, packaging)..."
+run_with_spinner "building and packaging ${BUILD_ARCH} release" env SKIP_PRODUCTION_VERIFY=1 "${BUILD_COMMAND[@]}"
 
 success "Build & packaging complete"
 

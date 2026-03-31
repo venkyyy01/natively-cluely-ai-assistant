@@ -16,6 +16,8 @@
 "notarize:helper": "node scripts/notarize-macos-helper.js",
     "app:dev": "concurrently \"npm run dev -- --port 5180\" \"wait-on http://localhost:5180 && npm run electron:dev\"",
     "app:build": "node scripts/ensure-electron-native-deps.js && npm run build && npm run build:native && npm run prepare:macos:virtual-display-helper && tsc -p electron/tsconfig.json && electron-builder",
+    "app:build:arm64": "node scripts/ensure-electron-native-deps.js && npm run build && npm run build:native:current && npm run prepare:macos:virtual-display-helper && tsc -p electron/tsconfig.json && electron-builder --mac --arm64",
+    "app:build:x64": "node scripts/ensure-electron-native-deps.js && npm run build && npm run build:native:current && npm run prepare:macos:virtual-display-helper && tsc -p electron/tsconfig.json && electron-builder --mac --x64",
     "test:electron": "tsc -p electron/tsconfig.json && node --test dist-electron/electron/tests/*.test.js",
     "test:electron:coverage": "tsc -p electron/tsconfig.json && node --test --experimental-test-coverage dist-electron/electron/tests/*.test.js",
     "test:renderer": "npm --prefix renderer test",
