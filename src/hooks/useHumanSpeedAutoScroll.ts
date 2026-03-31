@@ -15,7 +15,7 @@ type Options = {
   getTargetElement?: (container: HTMLElement, messageId: string) => HTMLElement | null;
 };
 
-const HUMAN_WORDS_PER_MINUTE = 150;
+const HUMAN_WORDS_PER_MINUTE = 170;
 const MIN_SCROLL_DURATION_MS = 8000;
 const MAX_SCROLL_DURATION_MS = 45000;
 const MANUAL_PAUSE_MS = 12000;

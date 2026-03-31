@@ -21,20 +21,20 @@ interface FrameBridgeOptions {
   logger?: Pick<Console, 'warn'>;
 }
 
-const normalizeDirtyRects = (dirtyRects: Array<Partial<DirtyRect>>): DirtyRect[] =>
-  dirtyRects.map((rect) => ({
+const normalizeDirtyRects = (dirtyRects: Array<Partial<DirtyRect>> | undefined): DirtyRect[] =>
+  Array.isArray(dirtyRects) ? dirtyRects.map((rect) => ({
     x: rect.x ?? 0,
     y: rect.y ?? 0,
     width: rect.width ?? 0,
     height: rect.height ?? 0,
-  }));
+  })) : [];
 
 export class FrameBridge {
   private readonly target: ShellFrameTarget;
   private readonly frameRate: number;
   private readonly logger: Pick<Console, 'warn'>;
   private paintSource: PaintEventEmitter | null = null;
-  private readonly paintListener = (_event: unknown, dirty: Array<Partial<DirtyRect>>, image: NativeImageLike) => {
+  private readonly paintListener = (_event: unknown, image: NativeImageLike, dirty: Array<Partial<DirtyRect>>) => {
     try {
       const size = image.getSize();
       this.target.send('stealth-shell:frame', {

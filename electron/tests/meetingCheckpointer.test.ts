@@ -65,6 +65,7 @@ test('MeetingCheckpointer skips writes when the snapshot has no transcript', asy
 
   checkpointer.start('meeting-3');
   await (checkpointer as unknown as { checkpoint: () => Promise<void> }).checkpoint();
+  checkpointer.stop();
 
   assert.equal(writes, 0);
 });

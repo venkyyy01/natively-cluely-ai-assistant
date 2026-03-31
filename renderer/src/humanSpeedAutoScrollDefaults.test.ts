@@ -6,5 +6,5 @@ const hookPath = path.resolve(__dirname, '../../src/hooks/useHumanSpeedAutoScrol
 test('uses the updated human reading speed default', () => {
   const source = fs.readFileSync(hookPath, 'utf8');
 
-  expect(source).toContain('const HUMAN_WORDS_PER_MINUTE = 196;');
+  expect(source).toContain('const HUMAN_WORDS_PER_MINUTE = 170;');
 });

@@ -444,8 +444,8 @@ describe('StealthManager', () => {
         processEnumerator: async () => 'obs',
       } as any,
     );
-    const win = new FakeWindow() as FakeWindow & { setOpacity?: undefined };
-    delete win.setOpacity;
+    const win = new FakeWindow();
+    (win as any).setOpacity = undefined;
 
     manager.applyToWindow(win as any, true, { role: 'primary' });
     await intervals[0]();
