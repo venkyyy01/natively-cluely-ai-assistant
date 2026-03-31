@@ -61,6 +61,9 @@ export class StealthRuntime {
     this.stealthManager = options.stealthManager;
     this.startUrl = options.startUrl;
     this.shellHtmlPath = options.shellHtmlPath ?? path.join(app.getAppPath(), 'electron/renderer/shell.html');
+    if (!this.shellHtmlPath.endsWith('.html') || this.shellHtmlPath.includes('..')) {
+      throw new Error(`Invalid shellHtmlPath: ${this.shellHtmlPath}`);
+    }
     this.createWindow = options.createWindow ?? ((windowOptions) => new BrowserWindow(windowOptions));
     this.logger = options.logger ?? console;
     this.preloadPath = options.preloadPath ?? path.join(__dirname, '../preload.js');
@@ -82,28 +85,36 @@ export class StealthRuntime {
     }
 
     const { webPreferences, show, ...shellOptions } = options;
-    this.contentWindow = this.createWindow({
-      ...shellOptions,
-      show: false,
-      webPreferences: {
-        ...webPreferences,
-        preload: this.preloadPath,
-        offscreen: true,
-        backgroundThrottling: false,
-      },
-      skipTaskbar: true,
-    });
-    this.shellWindow = this.createWindow({
-      ...shellOptions,
-      show: false,
-      webPreferences: {
-        nodeIntegration: false,
-        contextIsolation: true,
-        preload: this.shellPreloadPath,
-        backgroundThrottling: false,
-      },
-    });
+    let contentWindow: BrowserWindow | null = null;
+    try {
+      contentWindow = this.createWindow({
+        ...shellOptions,
+        show: false,
+        webPreferences: {
+          ...webPreferences,
+          preload: this.preloadPath,
+          offscreen: true,
+          backgroundThrottling: false,
+        },
+        skipTaskbar: true,
+      });
+      this.shellWindow = this.createWindow({
+        ...shellOptions,
+        show: false,
+        webPreferences: {
+          nodeIntegration: false,
+          contextIsolation: true,
+          preload: this.shellPreloadPath,
+          backgroundThrottling: false,
+        },
+      });
+    } catch (error) {
+      contentWindow?.close();
+      this.shellWindow?.close();
+      throw error;
+    }
 
+    this.contentWindow = contentWindow;
     this.frameBridge.attach(this.contentWindow.webContents as unknown as Parameters<FrameBridge['attach']>[0]);
     this.bindShellEvents();
 

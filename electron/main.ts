@@ -289,6 +289,7 @@ export class AppState {
   private knowledgeOrchestrator: any = null
   private checkpointer: MeetingCheckpointer | null = null
   private sttReconnector: STTReconnector | null = null
+  private virtualDisplayCoordinator: import('./stealth/MacosVirtualDisplayClient').VirtualDisplayCoordinator | null = null
   private tray: Tray | null = null
   private disguiseMode: 'terminal' | 'settings' | 'activity' | 'none' = 'none'
   private consciousModeEnabled: boolean = false
@@ -393,7 +394,7 @@ const enableVirtualDisplayIsolation =
   isEnvFlagEnabled(process.env.NATIVELY_ENABLE_VIRTUAL_DISPLAY_ISOLATION) ??
   (settingsManager.get('enableVirtualDisplayIsolation') ?? false)
 
-const virtualDisplayCoordinator =
+this.virtualDisplayCoordinator =
   process.platform === 'darwin' && enableVirtualDisplayIsolation
     ? (() => {
         const helperPath = resolveMacosVirtualDisplayHelperPath()
@@ -415,7 +416,7 @@ if (process.platform === 'darwin') {
       : this.isUndetectable
         ? 'native-baseline'
         : 'fallback-only'
-  console.log(`[Stealth] macOS level=${macosStealthLevel}, helper=${virtualDisplayCoordinator ? 'connected' : 'none'}`)
+  console.log(`[Stealth] macOS level=${macosStealthLevel}, helper=${this.virtualDisplayCoordinator ? 'connected' : 'none'}`)
 }
 
 this.stealthManager = new StealthManager({ enabled: this.isUndetectable }, {
@@ -425,7 +426,7 @@ this.stealthManager = new StealthManager({ enabled: this.isUndetectable }, {
     enableVirtualDisplayIsolation,
   },
   captureToolPatterns: configuredCaptureToolPatterns.length > 0 ? configuredCaptureToolPatterns : undefined,
-  virtualDisplayCoordinator,
+  virtualDisplayCoordinator: this.virtualDisplayCoordinator ?? undefined,
 })
 this.windowHelper = new WindowHelper(this, this.stealthManager)
 this.settingsWindowHelper = new SettingsWindowHelper(this.stealthManager)
@@ -1287,9 +1288,16 @@ try {
     console.log('[Main] Starting Meeting...', metadata);
     this.audioRecoveryAttempted = false;
 
-    // Chain this operation after any pending meeting start operations
-    return this.meetingStartMutex = this.meetingStartMutex.then(async () => {
-      // Critical section: check and update state atomically
+    if (metadata && typeof metadata !== 'object') {
+      throw new Error('startMeeting metadata must be an object or undefined');
+    }
+    if (metadata?.audio && (typeof metadata.audio.inputDeviceId !== 'string' || typeof metadata.audio.outputDeviceId !== 'string')) {
+      throw new Error('startMeeting metadata.audio requires string inputDeviceId and outputDeviceId');
+    }
+
+    const currentMutex = this.meetingStartMutex;
+    let settled = false;
+    this.meetingStartMutex = currentMutex.then(async () => {
       if (this.meetingLifecycleState === 'starting' || this.meetingLifecycleState === 'active') {
         console.warn(`[Main] Ignoring startMeeting while state=${this.meetingLifecycleState}`)
         return
@@ -1312,48 +1320,34 @@ try {
         this.intelligenceManager.setMeetingMetadata(metadata);
       }
 
-      // Emit session reset to clear UI state immediately
       this.getWindowHelper().getOverlayContentWindow()?.webContents.send('session-reset');
       this.getWindowHelper().getLauncherWindow()?.webContents.send('session-reset');
 
-      // ★ ASYNC AUDIO INIT: Return INSTANTLY so the IPC response goes back
-      // to the renderer immediately, allowing the UI to switch to overlay
-      // without waiting for SCK/audio initialization (which takes 5-7 seconds).
-      // setTimeout(100) ensures setWindowMode IPC is processed first.
       return new Promise<void>((resolve, reject) => {
         setTimeout(async () => {
-          // Check if this is still the current meeting start sequence
           if (startSequence !== this.meetingStartSequence || this.meetingLifecycleState !== 'starting') {
             console.warn('[Main] Skipping stale deferred meeting start')
-            resolve() // Resolve rather than reject as this is expected behavior
+            resolve()
             return
           }
 
           try {
-            // Check for audio configuration preference
             if (metadata?.audio) {
               await this.reconfigureAudio(metadata.audio.inputDeviceId, metadata.audio.outputDeviceId);
             }
 
-            // Double-check sequence after async operations
             if (startSequence !== this.meetingStartSequence || this.meetingLifecycleState !== 'starting') {
               console.warn('[Main] Meeting start invalidated during async initialization')
-              resolve() // Resolve rather than reject as this is expected behavior
+              resolve()
               return
             }
 
-            // LAZY INIT: Ensure pipeline is ready (if not reconfigured above)
             this.setupSystemAudioPipeline();
-
-            // Start System Audio
             this.systemAudioCapture?.start();
             this.googleSTT?.start();
-
-            // Start Microphone
             this.microphoneCapture?.start();
             this.googleSTT_User?.start();
 
-            // Start JIT RAG live indexing
             if (this.ragManager) {
               try {
                 this.ragManager.startLiveIndexing('live-meeting-current');
@@ -1366,7 +1360,6 @@ try {
             this.meetingLifecycleState = 'active'
             console.log('[Main] Audio pipeline started successfully.');
             
-            // Start checkpointer with current session ID
             if (this.currentMeetingId) {
               this.checkpointer?.start(this.currentMeetingId);
             }
@@ -1374,7 +1367,6 @@ try {
             resolve()
           } catch (err) {
             console.error('[Main] Error initializing audio pipeline:', err);
-            // Notify UI so user knows microphone/audio failed to start
             this.setNativeAudioConnected(false);
             this.broadcast('meeting-audio-error', (err as Error).message || 'Audio pipeline failed to start');
             this.isMeetingActive = false;
@@ -1382,9 +1374,18 @@ try {
             this.meetingLifecycleState = 'idle'
             reject(err)
           }
-        }, 0); // Defer to next event loop tick — ensures IPC response reaches renderer before audio init
+        }, 0);
       })
+    }).then(
+      () => { settled = true; },
+      (err) => { settled = true; throw err; }
+    ).catch((err) => {
+      if (!settled) {
+        console.error('[Main] startMeeting mutex error:', err);
+      }
     });
+
+    return this.meetingStartMutex;
   }
 
   public async endMeeting(): Promise<void> {
@@ -1609,6 +1610,10 @@ try {
     this.ragManager?.stopLiveIndexing().catch(err => {
       console.error('[Main] Failed to stop live indexing during quit:', err)
     })
+
+    this.processingHelper.getLLMHelper().scrubKeys();
+
+    this.virtualDisplayCoordinator?.dispose?.();
   }
 
   private async processCompletedMeetingForRAG(): Promise<void> {
@@ -2449,7 +2454,7 @@ async function initializeApp() {
         ...details.responseHeaders,
         'Content-Security-Policy': 
           "default-src 'self'; " +
-          "script-src 'self' 'unsafe-inline' 'unsafe-eval'; " +
+          "script-src 'self'; " +
           "style-src 'self' 'unsafe-inline'; " +
           "img-src 'self' data: blob: https:; " +
           "font-src 'self' data:; " +

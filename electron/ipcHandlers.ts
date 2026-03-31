@@ -823,7 +823,6 @@ safeHandleValidated("delete-meeting", (args) => [parseIpcInput(ipcSchemas.provid
     console.log(`[IPC] Received test - stt - connection request for provider: ${provider} `);
     try {
       if (provider === 'deepgram') {
-        // Test Deepgram via WebSocket connection
         const WebSocket = require('ws');
         return await new Promise<{ success: boolean; error?: string }>((resolve) => {
           const url = 'wss://api.deepgram.com/v1/listen?model=nova-3&encoding=linear16&sample_rate=16000&channels=1';
@@ -831,38 +830,43 @@ safeHandleValidated("delete-meeting", (args) => [parseIpcInput(ipcSchemas.provid
             headers: { Authorization: `Token ${apiKey} ` },
           });
 
+          const cleanupAndResolve = (result: { success: boolean; error?: string }) => {
+            clearTimeout(timeout);
+            try { ws.close(); } catch { }
+            resolve(result);
+          };
+
           const timeout = setTimeout(() => {
-            ws.close();
-            resolve({ success: false, error: 'Connection timed out' });
+            cleanupAndResolve({ success: false, error: 'Connection timed out' });
           }, 15000);
 
           ws.on('open', () => {
-            clearTimeout(timeout);
             try { ws.send(JSON.stringify({ type: 'CloseStream' })); } catch { }
-            ws.close();
-            resolve({ success: true });
+            cleanupAndResolve({ success: true });
           });
 
           ws.on('error', (err: any) => {
-            clearTimeout(timeout);
-            resolve({ success: false, error: err.message || 'Connection failed' });
+            cleanupAndResolve({ success: false, error: err.message || 'Connection failed' });
           });
         });
       }
 
       if (provider === 'soniox') {
-        // Test Soniox via WebSocket connection
         const WebSocket = require('ws');
         return await new Promise<{ success: boolean; error?: string }>((resolve) => {
           const ws = new WebSocket('wss://stt-rt.soniox.com/transcribe-websocket');
 
+          const cleanupAndResolve = (result: { success: boolean; error?: string }) => {
+            clearTimeout(timeout);
+            try { ws.close(); } catch { }
+            resolve(result);
+          };
+
           const timeout = setTimeout(() => {
-            ws.close();
-            resolve({ success: false, error: 'Connection timed out' });
+            cleanupAndResolve({ success: false, error: 'Connection timed out' });
           }, 15000);
 
           ws.on('open', () => {
-            // Send a minimal config to validate the API key
             ws.send(JSON.stringify({
               api_key: apiKey,
               model: 'stt-rt-v4',
@@ -873,23 +877,20 @@ safeHandleValidated("delete-meeting", (args) => [parseIpcInput(ipcSchemas.provid
           });
 
           ws.on('message', (msg: any) => {
-            clearTimeout(timeout);
             try {
               const res = JSON.parse(msg.toString());
               if (res.error_code) {
-                resolve({ success: false, error: `${res.error_code}: ${res.error_message}` });
+                cleanupAndResolve({ success: false, error: `${res.error_code}: ${res.error_message}` });
               } else {
-                resolve({ success: true });
+                cleanupAndResolve({ success: true });
               }
             } catch {
-              resolve({ success: true });
+              cleanupAndResolve({ success: true });
             }
-            ws.close();
           });
 
           ws.on('error', (err: any) => {
-            clearTimeout(timeout);
-            resolve({ success: false, error: err.message || 'Connection failed' });
+            cleanupAndResolve({ success: false, error: err.message || 'Connection failed' });
           });
         });
       }

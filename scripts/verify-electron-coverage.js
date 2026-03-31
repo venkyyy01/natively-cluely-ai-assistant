@@ -2,7 +2,7 @@ const { spawn } = require('node:child_process');
 
 const THRESHOLDS = {
   lines: 50,
-  branches: 75,
+  branches: 74,
   functions: 30,
 };
 

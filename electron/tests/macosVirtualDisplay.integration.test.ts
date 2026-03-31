@@ -74,7 +74,8 @@ describe('MacOS Virtual Display Helper Integration', {
             assert.strictEqual(response.id, 'probe-1');
             assert.strictEqual(response.ok, true);
             assert.ok(response.result);
-            assert.ok(response.result.candidateRenderer);
+            assert.ok(response.result.data);
+            assert.ok(response.result.data.candidateRenderer);
         } finally {
             child.kill();
         }

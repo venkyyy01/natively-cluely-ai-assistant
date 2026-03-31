@@ -21,13 +21,13 @@ interface FrameBridgeOptions {
   logger?: Pick<Console, 'warn'>;
 }
 
-const normalizeDirtyRects = (dirtyRects: Array<Partial<DirtyRect>> | undefined): DirtyRect[] =>
-  Array.isArray(dirtyRects) ? dirtyRects.map((rect) => ({
+const normalizeDirtyRects = (dirtyRects: Array<Partial<DirtyRect>>): DirtyRect[] =>
+  dirtyRects.map((rect) => ({
     x: rect.x ?? 0,
     y: rect.y ?? 0,
     width: rect.width ?? 0,
     height: rect.height ?? 0,
-  })) : [];
+  }));
 
 export class FrameBridge {
   private readonly target: ShellFrameTarget;
