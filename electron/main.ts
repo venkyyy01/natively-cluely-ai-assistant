@@ -424,6 +424,7 @@ this.stealthManager = new StealthManager({ enabled: this.isUndetectable }, {
     enablePrivateMacosStealthApi,
     enableCaptureDetectionWatchdog,
     enableVirtualDisplayIsolation,
+    enableSCStreamDetection: true,
   },
   captureToolPatterns: configuredCaptureToolPatterns.length > 0 ? configuredCaptureToolPatterns : undefined,
   virtualDisplayCoordinator: this.virtualDisplayCoordinator ?? undefined,

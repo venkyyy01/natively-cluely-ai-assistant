@@ -4,6 +4,8 @@ import type { VirtualDisplayCoordinator } from './MacosVirtualDisplayClient';
 
 import { loadNativeStealthModule } from './nativeStealthModule';
 import { execFile } from 'node:child_process';
+import { ChromiumCaptureDetector } from './ChromiumCaptureDetector';
+import { MacosStealthEnhancer } from './MacosStealthEnhancer';
 
 export interface StealthConfig {
   enabled: boolean;
@@ -36,6 +38,7 @@ export interface StealthFeatureFlags {
   enablePrivateMacosStealthApi?: boolean;
   enableCaptureDetectionWatchdog?: boolean;
   enableVirtualDisplayIsolation?: boolean;
+  enableSCStreamDetection?: boolean;
 }
 
 export type StealthWindowRole = 'primary' | 'auxiliary';
@@ -98,6 +101,7 @@ const WATCHDOG_INTERVAL_MS = 1000;
 const WATCHDOG_RESTORE_DELAY_MS = 500;
 const DISPLAY_MOVE_RETRY_DELAY_MS = 100;
 const DISPLAY_MOVE_MAX_RETRIES = 10;
+const SCSTREAM_CHECK_INTERVAL_MS = 2000;
 const KNOWN_CAPTURE_TOOL_PATTERNS = [
   /obs/i,
   /zoom/i,
@@ -123,6 +127,24 @@ const KNOWN_CAPTURE_TOOL_PATTERNS = [
   /camtasia/i,
   /bandicam/i,
   /printwindow/i,
+  /chrome/i,
+  /chromium/i,
+  /msedge/i,
+  /microsoft edge/i,
+  /brave/i,
+  /nvidia/i,
+  /shadowplay/i,
+  /geforce/i,
+  /gamebar/i,
+  /xbox/i,
+  /skype/i,
+  /gotomeeting/i,
+  /goto/i,
+  /bluejeans/i,
+  /jitsi/i,
+  /screenshot/i,
+  /parallels/i,
+  /vmware/i,
 ];
 
 function defaultProcessEnumerator(command: string, args: string[]): Promise<string> {
@@ -184,6 +206,11 @@ export class StealthManager extends EventEmitter {
   private displayEventsBound = false;
   private watchdogHandle: unknown = null;
   private watchdogRunning = false;
+  private scStreamMonitorHandle: unknown = null;
+  private scStreamMonitorRunning = false;
+  private scStreamActive = false;
+  private chromiumDetector: ChromiumCaptureDetector | null = null;
+  private stealthEnhancer: MacosStealthEnhancer | null = null;
 
   constructor(config: StealthConfig, deps: StealthManagerDependencies = {}) {
     super();
@@ -268,6 +295,68 @@ export class StealthManager extends EventEmitter {
     this.bindPowerMonitor();
     this.bindDisplayEvents();
     this.ensureWatchdog();
+    this.ensureSCStreamMonitor();
+    this.ensureChromiumDetection();
+  }
+
+  private ensureChromiumDetection(): void {
+    if (
+      !this.isEnabled() ||
+      !this.isEnhancedStealthEnabled() ||
+      this.platform !== 'darwin'
+    ) {
+      return;
+    }
+
+    if (!this.chromiumDetector) {
+      this.chromiumDetector = new ChromiumCaptureDetector({
+        platform: this.platform,
+        checkIntervalMs: 3000,
+        logger: this.logger,
+      });
+
+      this.chromiumDetector.on('browser-detected', (info) => {
+        this.logger.log(`[StealthManager] Chromium browser detected: ${info.name} (PID: ${info.pid})`);
+        this.addWarning('chromium_browser_detected');
+      });
+
+      this.chromiumDetector.on('capture-active', () => {
+        this.logger.log('[StealthManager] Chromium-based screen capture detected - activating countermeasures');
+        this.applyChromiumCountermeasures();
+        this.addWarning('chromium_capture_active');
+      });
+
+      this.chromiumDetector.on('capture-inactive', () => {
+        this.logger.log('[StealthManager] Chromium-based screen capture ended');
+        this.clearWarning('chromium_capture_active');
+      });
+
+      this.chromiumDetector.start();
+    }
+  }
+
+  private applyChromiumCountermeasures(): void {
+    for (const record of this.managedWindows) {
+      const win = record.win;
+      if (this.isWindowDestroyed(win)) {
+        continue;
+      }
+
+      this.applyLayer0(win, true);
+      this.applyNativeStealth(win);
+
+      if (!this.stealthEnhancer) {
+        this.stealthEnhancer = new MacosStealthEnhancer({
+          platform: this.platform,
+          logger: this.logger,
+        });
+      }
+
+      const windowNumber = this.getMacosWindowNumber(win);
+      if (windowNumber !== null) {
+        void this.stealthEnhancer.enhanceWindowProtection(windowNumber);
+      }
+    }
   }
 
   reapplyAfterShow(win: StealthCapableWindow): void {
@@ -697,16 +786,145 @@ export class StealthManager extends EventEmitter {
 
     if (this.platform === 'darwin') {
       const matches: RegExp[] = [];
-      for (const pattern of this.captureToolPatterns) {
+      const browserPatterns = this.getBrowserCapturePatterns();
+      const nonBrowserPatterns = this.captureToolPatterns.filter((p) => !browserPatterns.includes(p));
+
+      for (const pattern of nonBrowserPatterns) {
         const stdout = await this.processEnumerator('pgrep', ['-lif', pattern.source]);
         if (pattern.test(stdout)) {
           matches.push(pattern);
         }
       }
+
+      const browserStdout = await this.processEnumerator('pgrep', ['-lif', 'chrome|chromium|msedge|brave']);
+      if (browserStdout) {
+        const browserLines = browserStdout.trim().split('\n').filter(Boolean);
+        for (const line of browserLines) {
+          const appPathMatch = line.match(/\/(Chrome|Chromium|Microsoft Edge|Brave Browser)\.app\//i);
+          if (appPathMatch) {
+            const appName = appPathMatch[1].toLowerCase();
+            for (const pattern of browserPatterns) {
+              if (pattern.test(appName) && !matches.includes(pattern)) {
+                matches.push(pattern);
+              }
+            }
+          }
+        }
+      }
+
       return matches;
     }
 
     return [];
+  }
+
+  private getBrowserCapturePatterns(): RegExp[] {
+    return [
+      /chrome/i,
+      /chromium/i,
+      /msedge/i,
+      /microsoft edge/i,
+      /brave/i,
+    ];
+  }
+
+  private async checkSCStreamActive(): Promise<boolean> {
+    if (this.platform !== 'darwin') {
+      return false;
+    }
+
+    try {
+      const stdout = await this.processEnumerator('pgrep', ['-lf', 'ScreenCaptureAgent']);
+      if (stdout && stdout.trim()) {
+        return true;
+      }
+
+      const stdout2 = await this.processEnumerator('pgrep', ['-lf', 'controlcenter']);
+      if (stdout2 && stdout2.trim()) {
+        const controlCenterOutput = stdout2.toLowerCase();
+        if (controlCenterOutput.includes('screen') || controlCenterOutput.includes('capture')) {
+          return true;
+        }
+      }
+
+      const stdout3 = await this.processEnumerator('pgrep', ['-lf', 'WindowServer']);
+      if (stdout3 && stdout3.trim()) {
+        return false;
+      }
+
+      return false;
+    } catch {
+      return false;
+    }
+  }
+
+  private ensureSCStreamMonitor(): void {
+    if (
+      this.scStreamMonitorHandle ||
+      !this.isEnabled() ||
+      !this.isEnhancedStealthEnabled() ||
+      !this.featureFlags.enableSCStreamDetection
+    ) {
+      return;
+    }
+
+    this.scStreamMonitorHandle = this.intervalScheduler(
+      () => this.pollSCStreamState(),
+      SCSTREAM_CHECK_INTERVAL_MS
+    );
+    this.logger.log('[StealthManager] SCStream capture monitor started');
+  }
+
+  private async pollSCStreamState(): Promise<void> {
+    if (this.scStreamMonitorRunning) {
+      return;
+    }
+
+    this.scStreamMonitorRunning = true;
+    try {
+      const isActive = await this.checkSCStreamActive();
+
+      if (isActive && !this.scStreamActive) {
+        this.scStreamActive = true;
+        this.logger.log('[StealthManager] SCStream capture session detected - activating enhanced protection');
+        this.applyEnhancedProtectionForSCStream();
+        this.addWarning('scstream_capture_detected');
+      } else if (!isActive && this.scStreamActive) {
+        this.scStreamActive = false;
+        this.logger.log('[StealthManager] SCStream capture session ended');
+        this.clearWarning('scstream_capture_detected');
+      }
+    } catch (error) {
+      this.logger.warn('[StealthManager] SCStream monitor poll failed:', error);
+    } finally {
+      this.scStreamMonitorRunning = false;
+    }
+  }
+
+  private applyEnhancedProtectionForSCStream(): void {
+    for (const record of this.managedWindows) {
+      const win = record.win;
+      if (this.isWindowDestroyed(win)) {
+        continue;
+      }
+
+      this.applyLayer0(win, true);
+      this.applyNativeStealth(win);
+
+      if (this.featureFlags.enablePrivateMacosStealthApi) {
+        const nativeModule = this.getNativeModule();
+        if (nativeModule?.applyMacosPrivateWindowStealth) {
+          const windowNumber = this.getMacosWindowNumber(win);
+          if (windowNumber !== null) {
+            try {
+              nativeModule.applyMacosPrivateWindowStealth(windowNumber);
+            } catch (error) {
+              this.logger.warn('[StealthManager] Private stealth API failed during SCStream protection:', error);
+            }
+          }
+        }
+      }
+    }
   }
 
   private hideAndRestoreVisibleWindows(): void {
