@@ -60,7 +60,7 @@ export class StealthRuntime {
   constructor(options: StealthRuntimeOptions) {
     this.stealthManager = options.stealthManager;
     this.startUrl = options.startUrl;
-    this.shellHtmlPath = options.shellHtmlPath ?? path.join(app.getAppPath().replace('app.asar', 'app.asar.unpacked'), 'electron', 'renderer', 'shell.html');
+    this.shellHtmlPath = options.shellHtmlPath ?? path.join(app.getAppPath(), 'electron', 'renderer', 'shell.html');
     if (!this.shellHtmlPath.endsWith('.html') || this.shellHtmlPath.includes('..')) {
       throw new Error(`Invalid shellHtmlPath: ${this.shellHtmlPath}`);
     }
@@ -118,8 +118,66 @@ export class StealthRuntime {
     this.frameBridge.attach(this.contentWindow.webContents as unknown as Parameters<FrameBridge['attach']>[0]);
     this.bindShellEvents();
 
-    void this.contentWindow.loadURL(this.startUrl);
-    void this.shellWindow.loadFile(this.shellHtmlPath);
+    const isDevUrl = this.startUrl.startsWith('http');
+
+    if (isDevUrl) {
+      void this.contentWindow.loadURL(this.startUrl).catch((err) => {
+        this.logger.warn('[StealthRuntime] Content window loadURL failed:', err);
+      });
+    } else {
+      const contentPath = this.startUrl.replace(/^file:\/\//, '');
+      void this.contentWindow.loadFile(contentPath).catch((err) => {
+        this.logger.warn('[StealthRuntime] Content window loadFile failed:', err);
+      });
+    }
+
+    void this.shellWindow.loadFile(this.shellHtmlPath).catch((err) => {
+      this.logger.warn('[StealthRuntime] Shell window loadFile failed:', err);
+    });
+
+    this.shellWindow.webContents.on('did-finish-load', () => {
+      this.logger.log('[StealthRuntime] Shell window did-finish-load');
+    });
+
+    this.shellWindow.webContents.on('did-fail-load', (_event, code, desc) => {
+      this.logger.warn(`[StealthRuntime] Shell window did-fail-load: ${code} ${desc}`);
+    });
+
+    this.contentWindow.webContents.on('did-finish-load', () => {
+      this.logger.log('[StealthRuntime] Content window did-finish-load');
+    });
+
+    this.contentWindow.webContents.on('did-fail-load', (_event, code, desc, url) => {
+      this.logger.warn(`[StealthRuntime] Content window did-fail-load: ${code} ${desc} URL: ${url}`);
+    });
+
+    this.contentWindow.webContents.on('crashed', (_event, killed) => {
+      this.logger.warn(`[StealthRuntime] Content window crashed (killed=${killed})`);
+    });
+
+    this.contentWindow.webContents.on('render-process-gone', (_event, details) => {
+      this.logger.warn(`[StealthRuntime] Content render process gone: ${details.reason} exitCode=${details.exitCode}`);
+    });
+
+    let frameReceived = false;
+    const originalAttach = this.frameBridge.attach.bind(this.frameBridge);
+    this.frameBridge.attach = (source) => {
+      originalAttach(source);
+      const originalSend = this.frameBridge['target'].send.bind(this.frameBridge['target']);
+      this.frameBridge['target'].send = (channel, payload) => {
+        if (channel === 'stealth-shell:frame' && !frameReceived) {
+          frameReceived = true;
+          this.logger.log('[StealthRuntime] First frame received by shell');
+        }
+        originalSend(channel, payload);
+      };
+    };
+
+    setTimeout(() => {
+      if (!frameReceived) {
+        this.logger.warn('[StealthRuntime] No frames received after 10s - content window may have failed to load');
+      }
+    }, 10000);
 
     this.shellWindow.on('resize', () => this.syncBounds());
     this.shellWindow.on('move', () => this.syncBounds());

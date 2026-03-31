@@ -2967,7 +2967,9 @@ ANSWER DIRECTLY:`;
         // Use the first image for custom providers (they typically only support one)
         const data = await fs.promises.readFile(imagePaths[0]);
         base64Image = data.toString("base64");
-      } catch (e) { }
+      } catch (e) {
+        console.warn('[LLMHelper] Failed to read image for custom provider:', e);
+      }
     }
 
     const combinedMessage = context ? `${context}\n\n${message}` : message;

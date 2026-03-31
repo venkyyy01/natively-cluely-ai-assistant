@@ -344,7 +344,7 @@ safeHandleValidated("delete-meeting", (args) => [parseIpcInput(ipcSchemas.provid
       return { success: true };
     } catch (error: any) {
       // console.error("Error switching to Ollama:", error);
-      return { success: false, error: error.message };
+      return fail('IPC_ERROR', error, 'Operation failed');
     }
   });
 
@@ -398,7 +398,7 @@ safeHandleValidated("delete-meeting", (args) => [parseIpcInput(ipcSchemas.provid
       return { success: true };
     } catch (error: any) {
       // console.error("Error switching to Gemini:", error);
-      return { success: false, error: error.message };
+      return fail('IPC_ERROR', error, 'Operation failed');
     }
   });
 
@@ -418,7 +418,7 @@ safeHandleValidated("delete-meeting", (args) => [parseIpcInput(ipcSchemas.provid
       return { success: true };
     } catch (error: any) {
       console.error("Error saving Gemini API key:", error);
-      return { success: false, error: error.message };
+      return fail('IPC_ERROR', error, 'Operation failed');
     }
   });
 
@@ -437,7 +437,7 @@ safeHandleValidated("delete-meeting", (args) => [parseIpcInput(ipcSchemas.provid
       return { success: true };
     } catch (error: any) {
       console.error("Error saving Groq API key:", error);
-      return { success: false, error: error.message };
+      return fail('IPC_ERROR', error, 'Operation failed');
     }
   });
 
@@ -456,7 +456,7 @@ safeHandleValidated("delete-meeting", (args) => [parseIpcInput(ipcSchemas.provid
       return { success: true };
     } catch (error: any) {
       console.error("Error saving OpenAI API key:", error);
-      return { success: false, error: error.message };
+      return fail('IPC_ERROR', error, 'Operation failed');
     }
   });
 
@@ -475,7 +475,7 @@ safeHandleValidated("delete-meeting", (args) => [parseIpcInput(ipcSchemas.provid
       return { success: true };
     } catch (error: any) {
       console.error("Error saving Claude API key:", error);
-      return { success: false, error: error.message };
+      return fail('IPC_ERROR', error, 'Operation failed');
     }
   });
 
@@ -503,7 +503,7 @@ safeHandleValidated("delete-meeting", (args) => [parseIpcInput(ipcSchemas.provid
       return { success: true };
     } catch (error: any) {
       console.error("Error saving custom provider:", error);
-      return { success: false, error: error.message };
+      return fail('IPC_ERROR', error, 'Operation failed');
     }
   });
 
@@ -516,7 +516,7 @@ safeHandleValidated("delete-meeting", (args) => [parseIpcInput(ipcSchemas.provid
       return { success: true };
     } catch (error: any) {
       console.error("Error deleting custom provider:", error);
-      return { success: false, error: error.message };
+      return fail('IPC_ERROR', error, 'Operation failed');
     }
   });
 
@@ -538,7 +538,7 @@ safeHandleValidated("delete-meeting", (args) => [parseIpcInput(ipcSchemas.provid
       return { success: true };
     } catch (error: any) {
       console.error("Error switching to custom provider:", error);
-      return { success: false, error: error.message };
+      return fail('IPC_ERROR', error, 'Operation failed');
     }
   });
 
@@ -560,7 +560,7 @@ safeHandleValidated("delete-meeting", (args) => [parseIpcInput(ipcSchemas.provid
       return { success: true };
     } catch (error: any) {
       console.error("Error saving curl provider:", error);
-      return { success: false, error: error.message };
+      return fail('IPC_ERROR', error, 'Operation failed');
     }
   });
 
@@ -571,7 +571,7 @@ safeHandleValidated("delete-meeting", (args) => [parseIpcInput(ipcSchemas.provid
       return { success: true };
     } catch (error: any) {
       console.error("Error deleting curl provider:", error);
-      return { success: false, error: error.message };
+      return fail('IPC_ERROR', error, 'Operation failed');
     }
   });
 
@@ -593,7 +593,7 @@ safeHandleValidated("delete-meeting", (args) => [parseIpcInput(ipcSchemas.provid
       return { success: true };
     } catch (error: any) {
       console.error("Error switching to curl provider:", error);
-      return { success: false, error: error.message };
+      return fail('IPC_ERROR', error, 'Operation failed');
     }
   });
 
@@ -693,7 +693,7 @@ safeHandleValidated("delete-meeting", (args) => [parseIpcInput(ipcSchemas.provid
       return { success: true };
     } catch (error: any) {
       console.error("Error setting STT provider:", error);
-      return { success: false, error: error.message };
+      return fail('IPC_ERROR', error, 'Operation failed');
     }
   });
 
@@ -713,7 +713,7 @@ safeHandleValidated("delete-meeting", (args) => [parseIpcInput(ipcSchemas.provid
       return { success: true };
     } catch (error: any) {
       console.error("Error saving Groq STT API key:", error);
-      return { success: false, error: error.message };
+      return fail('IPC_ERROR', error, 'Operation failed');
     }
   });
 
@@ -724,7 +724,7 @@ safeHandleValidated("delete-meeting", (args) => [parseIpcInput(ipcSchemas.provid
       return { success: true };
     } catch (error: any) {
       console.error("Error saving OpenAI STT API key:", error);
-      return { success: false, error: error.message };
+      return fail('IPC_ERROR', error, 'Operation failed');
     }
   });
 
@@ -735,7 +735,7 @@ safeHandleValidated("delete-meeting", (args) => [parseIpcInput(ipcSchemas.provid
       return { success: true };
     } catch (error: any) {
       console.error("Error saving Deepgram API key:", error);
-      return { success: false, error: error.message };
+      return fail('IPC_ERROR', error, 'Operation failed');
     }
   });
 
@@ -750,7 +750,7 @@ safeHandleValidated("delete-meeting", (args) => [parseIpcInput(ipcSchemas.provid
       return { success: true };
     } catch (error: any) {
       console.error("Error setting Groq STT model:", error);
-      return { success: false, error: error.message };
+      return fail('IPC_ERROR', error, 'Operation failed');
     }
   });
 
@@ -761,7 +761,7 @@ safeHandleValidated("delete-meeting", (args) => [parseIpcInput(ipcSchemas.provid
       return { success: true };
     } catch (error: any) {
       console.error("Error saving ElevenLabs API key:", error);
-      return { success: false, error: error.message };
+      return fail('IPC_ERROR', error, 'Operation failed');
     }
   });
 
@@ -772,7 +772,7 @@ safeHandleValidated("delete-meeting", (args) => [parseIpcInput(ipcSchemas.provid
       return { success: true };
     } catch (error: any) {
       console.error("Error saving Azure API key:", error);
-      return { success: false, error: error.message };
+      return fail('IPC_ERROR', error, 'Operation failed');
     }
   });
 
@@ -787,7 +787,7 @@ safeHandleValidated("delete-meeting", (args) => [parseIpcInput(ipcSchemas.provid
       return { success: true };
     } catch (error: any) {
       console.error("Error setting Azure region:", error);
-      return { success: false, error: error.message };
+      return fail('IPC_ERROR', error, 'Operation failed');
     }
   });
 
@@ -798,7 +798,7 @@ safeHandleValidated("delete-meeting", (args) => [parseIpcInput(ipcSchemas.provid
       return { success: true };
     } catch (error: any) {
       console.error("Error saving IBM Watson API key:", error);
-      return { success: false, error: error.message };
+      return fail('IPC_ERROR', error, 'Operation failed');
     }
   });
 
@@ -809,7 +809,7 @@ safeHandleValidated("delete-meeting", (args) => [parseIpcInput(ipcSchemas.provid
       return { success: true };
     } catch (error: any) {
       console.error("Error saving Soniox API key:", error);
-      return { success: false, error: error.message };
+      return fail('IPC_ERROR', error, 'Operation failed');
     }
   });
 
@@ -1084,7 +1084,7 @@ safeHandleValidated("delete-meeting", (args) => [parseIpcInput(ipcSchemas.provid
 
       return { success: true };
     } catch (error: any) {
-      return { success: false, error: error.message };
+      return fail('IPC_ERROR', error, 'Operation failed');
     }
   });
 
@@ -1114,7 +1114,7 @@ safeHandleValidated("delete-meeting", (args) => [parseIpcInput(ipcSchemas.provid
       return { success: true };
     } catch (error: any) {
       console.error("Error setting model:", error);
-      return { success: false, error: error.message };
+      return fail('IPC_ERROR', error, 'Operation failed');
     }
   });
 
@@ -1145,7 +1145,7 @@ safeHandleValidated("delete-meeting", (args) => [parseIpcInput(ipcSchemas.provid
       return { success: true };
     } catch (error: any) {
       console.error("Error setting default model:", error);
-      return { success: false, error: error.message };
+      return fail('IPC_ERROR', error, 'Operation failed');
     }
   });
 

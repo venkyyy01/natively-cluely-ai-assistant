@@ -35,6 +35,7 @@ const originalError = console.error;
 const isDev = process.env.NODE_ENV === "development";
 
 // Log queue for non-blocking async writes
+const LOG_QUEUE_MAX_SIZE = 10000;
 let logQueue: string[] = [];
 let logFlushInProgress = false;
 let logRotationCheckPending = false;
@@ -112,6 +113,9 @@ async function flushLogQueue(): Promise<void> {
  * Non-blocking async log to file
  */
 async function logToFileAsync(msg: string): Promise<void> {
+  if (logQueue.length >= LOG_QUEUE_MAX_SIZE) {
+    logQueue.splice(0, logQueue.length - LOG_QUEUE_MAX_SIZE + 1);
+  }
   logQueue.push(msg);
   void flushLogQueue();
 }
@@ -336,8 +340,11 @@ export class AppState {
     this.trackDisguiseTimer(timer)
   }
   private _ollamaBootstrapPromise: Promise<void> | null = null;
-  private audioRecoveryAttempted: boolean = false;
+  private audioRecoveryAttempts: number = 0;
+  private readonly MAX_AUDIO_RECOVERY_ATTEMPTS = 3;
+  private audioRecoveryBackoffMs: number = 5000;
   private currentMeetingId: string | null = null;
+  private startAbortController: AbortController | null = null;
 
 
   // Processing events
@@ -372,14 +379,15 @@ syncOptimizationFlagsFromSettings(accelerationModeEnabled);
 console.log(`[AppState] Initialized with isUndetectable=${this.isUndetectable}, disguiseMode=${this.disguiseMode}, consciousModeEnabled=${this.consciousModeEnabled}, accelerationModeEnabled=${accelerationModeEnabled}`);
 
 // 2. Initialize Helpers with loaded state
+// Feature flags default to ON with safe fallback to Layer 0 if broken
 const enablePrivateMacosStealthApi =
   !(process as NodeJS.Process & { mas?: boolean }).mas && (
     isEnvFlagEnabled(process.env.NATIVELY_ENABLE_PRIVATE_MACOS_STEALTH_API) ??
-    (settingsManager.get('enablePrivateMacosStealthApi') ?? false)
+    (settingsManager.get('enablePrivateMacosStealthApi') ?? true)
   )
 const enableCaptureDetectionWatchdog =
   isEnvFlagEnabled(process.env.NATIVELY_ENABLE_CAPTURE_DETECTION_WATCHDOG) ??
-  (settingsManager.get('enableCaptureDetectionWatchdog') ?? false)
+  (settingsManager.get('enableCaptureDetectionWatchdog') ?? true)
 const configuredCaptureToolPatterns = (settingsManager.get('captureToolPatterns') ?? [])
   .map((pattern) => {
     try {
@@ -391,8 +399,12 @@ const configuredCaptureToolPatterns = (settingsManager.get('captureToolPatterns'
   })
   .filter((pattern): pattern is RegExp => pattern !== null)
 const enableVirtualDisplayIsolation =
-  isEnvFlagEnabled(process.env.NATIVELY_ENABLE_VIRTUAL_DISPLAY_ISOLATION) ??
-  (settingsManager.get('enableVirtualDisplayIsolation') ?? false)
+  process.platform === 'darwin' &&
+  !(process as NodeJS.Process & { mas?: boolean }).mas &&
+  (
+    isEnvFlagEnabled(process.env.NATIVELY_ENABLE_VIRTUAL_DISPLAY_ISOLATION) ??
+    (settingsManager.get('enableVirtualDisplayIsolation') ?? true)
+  )
 
 this.virtualDisplayCoordinator =
   process.platform === 'darwin' && enableVirtualDisplayIsolation
@@ -922,18 +934,29 @@ try {
     console.error(`[Main] ${source === 'system' ? 'SystemAudioCapture' : 'MicrophoneCapture'} Error:`, err);
     this.setNativeAudioConnected(false);
 
-    if (this.isMeetingActive && !this.audioRecoveryAttempted) {
-      this.audioRecoveryAttempted = true;
-      console.log(`[Main] Attempting ${noun.toLowerCase()} recovery...`);
+    if (this.isMeetingActive && this.audioRecoveryAttempts < this.MAX_AUDIO_RECOVERY_ATTEMPTS) {
+      this.audioRecoveryAttempts += 1;
+      const attempt = this.audioRecoveryAttempts;
+      const delayMs = this.audioRecoveryBackoffMs * attempt;
+      console.log(`[Main] Attempting ${noun.toLowerCase()} recovery (attempt ${attempt}/${this.MAX_AUDIO_RECOVERY_ATTEMPTS}, delay ${delayMs}ms)...`);
+
+      await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
+
+      if (!this.isMeetingActive) {
+        return;
+      }
+
       try {
         await this.reconfigureAudio();
-        console.log(`[Main] ${noun} recovered successfully`);
+        console.log(`[Main] ${noun} recovered successfully on attempt ${attempt}`);
         this.setNativeAudioConnected(true);
         return;
       } catch (recoveryErr) {
-        console.error(`[Main] ${noun} recovery failed:`, recoveryErr);
-        this.broadcast('meeting-audio-error', failureMessage);
-        return;
+        console.error(`[Main] ${noun} recovery attempt ${attempt} failed:`, recoveryErr);
+        if (this.audioRecoveryAttempts >= this.MAX_AUDIO_RECOVERY_ATTEMPTS) {
+          this.broadcast('meeting-audio-error', failureMessage);
+          return;
+        }
       }
     }
 
@@ -1287,7 +1310,10 @@ try {
 
   public async startMeeting(metadata?: any): Promise<void> {
     console.log('[Main] Starting Meeting...', metadata);
-    this.audioRecoveryAttempted = false;
+    this.audioRecoveryAttempts = 0;
+    this.audioRecoveryBackoffMs = 5000;
+    this.startAbortController = new AbortController();
+    const { signal } = this.startAbortController;
 
     if (metadata && typeof metadata !== 'object') {
       throw new Error('startMeeting metadata must be an object or undefined');
@@ -1299,6 +1325,11 @@ try {
     const currentMutex = this.meetingStartMutex;
     let settled = false;
     this.meetingStartMutex = currentMutex.then(async () => {
+      if (signal.aborted) {
+        console.log('[Main] Start meeting aborted (canceled by endMeeting)');
+        return;
+      }
+
       if (this.meetingLifecycleState === 'starting' || this.meetingLifecycleState === 'active') {
         console.warn(`[Main] Ignoring startMeeting while state=${this.meetingLifecycleState}`)
         return
@@ -1315,6 +1346,12 @@ try {
         throw error
       }
 
+      if (signal.aborted) {
+        console.log('[Main] Start meeting aborted after validation');
+        this.meetingLifecycleState = 'idle';
+        return;
+      }
+
       this.currentMeetingId = randomUUID()
       this.isMeetingActive = true;
       if (metadata) {
@@ -1325,7 +1362,25 @@ try {
       this.getWindowHelper().getLauncherWindow()?.webContents.send('session-reset');
 
       return new Promise<void>((resolve, reject) => {
+        if (signal.aborted) {
+          console.log('[Main] Start meeting aborted before deferred step');
+          this.meetingLifecycleState = 'idle';
+          this.isMeetingActive = false;
+          this.currentMeetingId = null;
+          resolve();
+          return;
+        }
+
         setTimeout(async () => {
+          if (signal.aborted) {
+            console.log('[Main] Start meeting aborted during deferred step');
+            this.meetingLifecycleState = 'idle';
+            this.isMeetingActive = false;
+            this.currentMeetingId = null;
+            resolve();
+            return;
+          }
+
           if (startSequence !== this.meetingStartSequence || this.meetingLifecycleState !== 'starting') {
             console.warn('[Main] Skipping stale deferred meeting start')
             resolve()
@@ -1335,6 +1390,15 @@ try {
           try {
             if (metadata?.audio) {
               await this.reconfigureAudio(metadata.audio.inputDeviceId, metadata.audio.outputDeviceId);
+            }
+
+            if (signal.aborted) {
+              console.log('[Main] Start meeting aborted during audio reconfig');
+              this.meetingLifecycleState = 'idle';
+              this.isMeetingActive = false;
+              this.currentMeetingId = null;
+              resolve();
+              return;
             }
 
             if (startSequence !== this.meetingStartSequence || this.meetingLifecycleState !== 'starting') {
@@ -1391,6 +1455,8 @@ try {
 
   public async endMeeting(): Promise<void> {
     console.log('[Main] Ending Meeting...');
+    this.startAbortController?.abort();
+    this.startAbortController = null;
     const meetingId = this.currentMeetingId;
     this.currentMeetingId = null;
     const endSequence = ++this.meetingStartSequence  // Increment sequence to invalidate any pending starts

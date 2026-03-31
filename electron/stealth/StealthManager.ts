@@ -217,6 +217,8 @@ export class StealthManager extends EventEmitter {
   private cgWindowMonitorRunning = false;
   private tccMonitor: TCCMonitor | null = null;
   private isMacOS15Plus = false;
+  private macOSMajor: number = 0;
+  private macOSMinor: number = 0;
   private opacityFlickerHandle: unknown = null;
 
   constructor(config: StealthConfig, deps: StealthManagerDependencies = {}) {
@@ -246,12 +248,32 @@ export class StealthManager extends EventEmitter {
     try {
       const { execSync } = require('child_process');
       const version = execSync('sw_vers -productVersion', { encoding: 'utf8' }).trim();
-      const [major] = version.split('.').map(Number);
+      const [major, minor = 0] = version.split('.').map(Number);
       this.isMacOS15Plus = major >= 15;
       this.logger.log(`[StealthManager] macOS version: ${version}, 15.4+ screen capture bypass: ${this.isMacOS15Plus}`);
-    } catch {
+      
+      // Store parsed version for later checks
+      this.macOSMajor = major;
+      this.macOSMinor = minor;
+    } catch (error) {
+      this.logger.warn('[StealthManager] Failed to detect macOS version:', error);
       this.isMacOS15Plus = false;
+      this.macOSMajor = 0;
+      this.macOSMinor = 0;
     }
+  }
+
+  private isMacOSVersionCompatible(minVersion: string): boolean {
+    if (this.platform !== 'darwin') {
+      return false;
+    }
+    
+    const [requiredMajor] = minVersion.split('.').map(Number);
+    if (!requiredMajor) {
+      return false;
+    }
+    
+    return (this.macOSMajor || 0) >= requiredMajor;
   }
 
   setEnabled(enabled: boolean): void {
@@ -396,11 +418,16 @@ export class StealthManager extends EventEmitter {
       return;
     }
 
-    this.applyToWindow(win, true, {
-      role: record.role,
-      hideFromSwitcher: record.hideFromSwitcher,
-      allowVirtualDisplayIsolation: record.allowVirtualDisplayIsolation,
-    });
+    try {
+      this.applyToWindow(win, true, {
+        role: record.role,
+        hideFromSwitcher: record.hideFromSwitcher,
+        allowVirtualDisplayIsolation: record.allowVirtualDisplayIsolation,
+      });
+    } catch (error) {
+      this.logger.warn('[StealthManager] reapplyAfterShow failed, maintaining Layer 0 protection:', error);
+      this.applyLayer0(win, true);
+    }
   }
 
   private isEnabled(): boolean {
@@ -469,12 +496,25 @@ export class StealthManager extends EventEmitter {
         const windowNumber = this.getMacosWindowNumber(win);
         if (windowNumber !== null) {
           nativeModule.applyMacosWindowStealth(windowNumber);
-          nativeModule.applyMacosPrivateWindowStealth?.(windowNumber);
+          
+          if (this.featureFlags.enablePrivateMacosStealthApi && nativeModule.applyMacosPrivateWindowStealth) {
+            if (this.isMacOSVersionCompatible('15.0')) {
+              try {
+                nativeModule.applyMacosPrivateWindowStealth(windowNumber);
+              } catch (privateError) {
+                this.logger.warn('[StealthManager] Private macOS stealth API failed (incompatible version), falling back to Layer 0:', privateError);
+                this.addWarning('private_api_failed');
+              }
+            } else {
+              this.logger.warn('[StealthManager] macOS version < 15.0, skipping private API');
+            }
+          }
+          
           this.verifyStealth(win);
         }
       }
     } catch (error) {
-      this.logger.warn('[StealthManager] Native stealth application failed:', error);
+      this.logger.warn('[StealthManager] Native stealth application failed, falling back to Layer 0 (setContentProtection):', error);
       if (this.isEnabled()) this.addWarning('native_stealth_failed');
     }
   }
@@ -557,6 +597,7 @@ export class StealthManager extends EventEmitter {
 
       if (!response.ready || !response.surfaceToken) {
         record.virtualDisplayIsolationStarted = false;
+        this.logger.warn('[StealthManager] Virtual display isolation not ready, falling back to Layer 0+1');
         if (this.isEnabled()) this.addWarning('virtual_display_failed');
         return;
       }
@@ -569,7 +610,7 @@ export class StealthManager extends EventEmitter {
       if (this.isCurrentVirtualDisplayRequest(record, requestId)) {
         record.virtualDisplayIsolationStarted = false;
       }
-      this.logger.warn('[StealthManager] Virtual display isolation failed:', error);
+      this.logger.warn('[StealthManager] Virtual display isolation failed, falling back to Layer 0+1:', error);
       if (this.isEnabled()) {
         if (this.virtualDisplayCoordinator.isExhausted?.()) {
           this.addWarning('virtual_display_exhausted');
@@ -605,7 +646,7 @@ export class StealthManager extends EventEmitter {
     }
 
     this.virtualDisplayCoordinator.releaseIsolationForWindow({ windowId }).catch((error) => {
-      this.logger.warn('[StealthManager] Virtual display isolation release failed:', error);
+      this.logger.warn('[StealthManager] Virtual display isolation release failed, continuing with Layer 0+1:', error);
     });
   }
 
@@ -643,6 +684,11 @@ export class StealthManager extends EventEmitter {
       this.disableVirtualDisplayIsolation(record);
       this.managedWindows.delete(record);
       this.managedWindowLookup.delete(record.win as object);
+      
+      if (this.watchdogHandle && this.clearIntervalScheduler) {
+        this.clearIntervalScheduler(this.watchdogHandle);
+        this.watchdogHandle = null;
+      }
     });
     record.listenersAttached = true;
   }
@@ -953,7 +999,7 @@ export class StealthManager extends EventEmitter {
         this.clearWarning('scstream_capture_detected');
       }
     } catch (error) {
-      this.logger.warn('[StealthManager] SCStream monitor poll failed:', error);
+      this.logger.warn('[StealthManager] SCStream monitor poll failed, maintaining Layer 0 protection:', error);
     } finally {
       this.scStreamMonitorRunning = false;
     }
@@ -1018,7 +1064,7 @@ export class StealthManager extends EventEmitter {
         }
       }
     } catch (error) {
-      this.logger.warn('[StealthManager] CGWindow visibility check failed:', error);
+      this.logger.warn('[StealthManager] CGWindow visibility check failed, maintaining Layer 0 protection:', error);
     } finally {
       this.cgWindowMonitorRunning = false;
     }
@@ -1154,12 +1200,16 @@ for window in windows:
       }
 
       if (typeof win.setOpacity === 'function') {
-        win.setOpacity(0.99);
-        this.timeoutScheduler(() => {
-          if (!this.isWindowDestroyed(win) && typeof win.setOpacity === 'function') {
-            win.setOpacity(1);
-          }
-        }, 30);
+        try {
+          win.setOpacity(0.99);
+          this.timeoutScheduler(() => {
+            if (!this.isWindowDestroyed(win) && typeof win.setOpacity === 'function') {
+              win.setOpacity(1);
+            }
+          }, 30);
+        } catch (error) {
+          this.logger.warn('[StealthManager] Opacity flicker failed, continuing with Layer 0+1:', error);
+        }
       }
     }
   }
@@ -1225,6 +1275,7 @@ for window in windows:
         const verified = sharingType === 0;
         if (!verified && this.isEnabled()) {
           this.addWarning('stealth_verification_failed');
+          this.logger.warn('[StealthManager] macOS stealth verification failed, maintaining Layer 0 protection');
         }
         return verified;
       }
@@ -1239,11 +1290,12 @@ for window in windows:
         const verified = affinity === 0x11 || affinity === 0x01;
         if (!verified && this.isEnabled()) {
           this.addWarning('stealth_verification_failed');
+          this.logger.warn('[StealthManager] Windows stealth verification failed, maintaining Layer 0 protection');
         }
         return verified;
       }
     } catch (error) {
-      this.logger.warn('[StealthManager] Stealth verification failed:', error);
+      this.logger.warn('[StealthManager] Stealth verification failed, falling back to Layer 0:', error);
     }
 
     return false;
@@ -1259,9 +1311,12 @@ for window in windows:
       return this.nativeModule;
     }
 
-    this.nativeModule = loadNativeStealthModule();
+    this.nativeModule = loadNativeStealthModule({ retryOnFailure: true });
     if (this.nativeModule === null && this.isEnabled()) {
       this.addWarning('native_module_unavailable');
+      this.logger.warn('[StealthManager] Native module unavailable, operating in Layer 0 mode only');
+    } else if (this.nativeModule !== null) {
+      this.clearWarning('native_module_unavailable');
     }
     return this.nativeModule;
   }
