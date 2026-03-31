@@ -207,6 +207,7 @@ export class StealthManager extends EventEmitter {
   private powerMonitorBound = false;
   private displayEventsBound = false;
   private watchdogHandle: unknown = null;
+  private windowsAffinityHandle: unknown = null;
   private watchdogRunning = false;
   private scStreamMonitorHandle: unknown = null;
   private scStreamMonitorRunning = false;
@@ -248,8 +249,8 @@ export class StealthManager extends EventEmitter {
     try {
       const { execSync } = require('child_process');
       const version = execSync('sw_vers -productVersion', { encoding: 'utf8' }).trim();
-      const [major, minor = 0] = version.split('.').map(Number);
-      this.isMacOS15Plus = major >= 15;
+      const [major, minor = 0] = version.split('.').map((part: string) => Number.parseInt(part, 10) || 0);
+      this.isMacOS15Plus = major > 15 || (major === 15 && minor >= 4);
       this.logger.log(`[StealthManager] macOS version: ${version}, 15.4+ screen capture bypass: ${this.isMacOS15Plus}`);
       
       // Store parsed version for later checks
@@ -267,17 +268,25 @@ export class StealthManager extends EventEmitter {
     if (this.platform !== 'darwin') {
       return false;
     }
-    
-    const [requiredMajor] = minVersion.split('.').map(Number);
+
+    const [requiredMajor = 0, requiredMinor = 0] = minVersion
+      .split('.')
+      .map((part: string) => Number.parseInt(part, 10) || 0);
     if (!requiredMajor) {
       return false;
     }
-    
-    return (this.macOSMajor || 0) >= requiredMajor;
+
+    const currentMajor = this.macOSMajor || 0;
+    const currentMinor = this.macOSMinor || 0;
+
+    return currentMajor > requiredMajor || (currentMajor === requiredMajor && currentMinor >= requiredMinor);
   }
 
   setEnabled(enabled: boolean): void {
     this.config = { ...this.config, enabled };
+    if (!enabled) {
+      this.stopBackgroundMonitorsIfIdle();
+    }
   }
 
   getBrowserWindowOptions(): StealthWindowOptions {
@@ -684,13 +693,56 @@ export class StealthManager extends EventEmitter {
       this.disableVirtualDisplayIsolation(record);
       this.managedWindows.delete(record);
       this.managedWindowLookup.delete(record.win as object);
-      
-      if (this.watchdogHandle && this.clearIntervalScheduler) {
-        this.clearIntervalScheduler(this.watchdogHandle);
-        this.watchdogHandle = null;
-      }
+
+      this.stopBackgroundMonitorsIfIdle();
     });
     record.listenersAttached = true;
+  }
+
+  private stopBackgroundMonitorsIfIdle(): void {
+    if (this.isEnabled() && this.managedWindows.size > 0) {
+      return;
+    }
+
+    if (this.watchdogHandle) {
+      this.clearIntervalScheduler(this.watchdogHandle);
+      this.watchdogHandle = null;
+    }
+
+    if (this.windowsAffinityHandle) {
+      this.clearIntervalScheduler(this.windowsAffinityHandle);
+      this.windowsAffinityHandle = null;
+    }
+
+    if (this.scStreamMonitorHandle) {
+      this.clearIntervalScheduler(this.scStreamMonitorHandle);
+      this.scStreamMonitorHandle = null;
+    }
+
+    if (this.cgWindowMonitorHandle) {
+      this.clearIntervalScheduler(this.cgWindowMonitorHandle);
+      this.cgWindowMonitorHandle = null;
+    }
+
+    if (this.opacityFlickerHandle) {
+      this.clearIntervalScheduler(this.opacityFlickerHandle);
+      this.opacityFlickerHandle = null;
+    }
+
+    this.watchdogRunning = false;
+    this.scStreamMonitorRunning = false;
+    this.cgWindowMonitorRunning = false;
+    this.scStreamActive = false;
+
+    if (this.chromiumDetector) {
+      this.chromiumDetector.stop();
+      this.chromiumDetector = null;
+    }
+
+    if (this.tccMonitor) {
+      this.tccMonitor.stop();
+      this.tccMonitor = null;
+    }
   }
 
   private bindPowerMonitor(): void {
@@ -826,8 +878,8 @@ export class StealthManager extends EventEmitter {
 
     this.watchdogHandle = this.intervalScheduler(() => this.pollCaptureTools(), WATCHDOG_INTERVAL_MS);
 
-    if (this.platform === 'win32') {
-      this.watchdogHandle = this.intervalScheduler(() => this.verifyWindowsAffinity(), 1000);
+    if (this.platform === 'win32' && !this.windowsAffinityHandle) {
+      this.windowsAffinityHandle = this.intervalScheduler(() => this.verifyWindowsAffinity(), 1000);
     }
   }
 
@@ -1087,10 +1139,9 @@ for window in windows:
     window_number = window.get('kCGWindowNumber', -1)
     layer = window.get('kCGWindowLayer', -1)
     alpha = window.get('kCGWindowAlpha', 1.0)
-    owner_name = window.get('kCGWindowOwnerName', '')
     sharing_state = window.get('kCGWindowSharingState', 0)
 
-    if window_number > 0 and alpha > 0 and layer == 0:
+    if window_number > 0 and alpha > 0 and layer == 0 and sharing_state > 0:
         print(window_number)
 `]);
 

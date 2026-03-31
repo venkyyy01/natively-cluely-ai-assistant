@@ -56,3 +56,42 @@ test('WindowHelper treats overlay as a primary stealth surface', async () => {
     restoreElectron();
   }
 });
+
+test('WindowHelper centers overlay using the overlay height', async () => {
+  const restoreElectron = installElectronMock();
+  const windowHelperPath = require.resolve('../WindowHelper');
+  delete require.cache[windowHelperPath];
+
+  try {
+    const { WindowHelper } = await import('../WindowHelper');
+    const helper = new WindowHelper({} as never, { applyToWindow() {}, reapplyAfterShow() {} } as never);
+    let appliedBounds: { x: number; y: number; width: number; height: number } | null = null;
+
+    (helper as any).overlayWindow = {
+      isDestroyed: () => false,
+      getBounds: () => ({ x: 0, y: 0, width: 600, height: 300 }),
+      setBounds: (bounds: { x: number; y: number; width: number; height: number }) => {
+        appliedBounds = bounds;
+      },
+      setIgnoreMouseEvents() {},
+      setFocusable() {},
+      blur() {},
+      show() {},
+      focus() {},
+      setAlwaysOnTop() {},
+    };
+    (helper as any).overlayRuntime = {
+      applyStealth() {},
+    };
+    (helper as any).launcherWindow = {
+      isDestroyed: () => false,
+      hide() {},
+    };
+
+    helper.switchToOverlay();
+
+    assert.deepEqual(appliedBounds, { x: 420, y: 300, width: 600, height: 300 });
+  } finally {
+    restoreElectron();
+  }
+});

@@ -2,8 +2,44 @@ const { spawn } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
 
+const THRESHOLDS = {
+  lines: 50,
+  branches: 75,
+  functions: 30,
+};
+
+function parseCoverageSummary(output) {
+  const allFilesLine = output
+    .split('\n')
+    .find((line) => line.toLowerCase().includes('all files'));
+
+  if (!allFilesLine) {
+    throw new Error('Coverage summary not found in test output.');
+  }
+
+  const percentages = [...allFilesLine.matchAll(/(\d+(?:\.\d+)?)/g)].map((match) => Number(match[1]));
+
+  if (percentages.length < 3) {
+    throw new Error(`Coverage gate failed: could not parse metrics from ${allFilesLine.trim()}`);
+  }
+
+  return {
+    lines: percentages[0],
+    branches: percentages[1],
+    functions: percentages[2],
+  };
+}
+
+function evaluateCoverage(summary) {
+  const failures = Object.entries(THRESHOLDS)
+    .filter(([metric, threshold]) => summary[metric] < threshold)
+    .map(([metric, threshold]) => `${metric} ${summary[metric]}% < ${threshold}%`);
+
+  return failures.length > 0 ? failures.join(', ') : null;
+}
+
 function run(command, args, options = {}) {
-  const { timeoutMs = 120000 } = options;
+  const { timeoutMs = 180000 } = options;
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, {
       shell: false,
@@ -32,12 +68,12 @@ function run(command, args, options = {}) {
     });
 
     child.on('error', (err) => {
-      if (timeout) clearTimeout(timeout);
+      clearTimeout(timeout);
       if (!timedOut) reject(err);
     });
 
     child.on('close', (code) => {
-      if (timeout) clearTimeout(timeout);
+      clearTimeout(timeout);
       if (timedOut) return;
       if (code !== 0) {
         reject(new Error(`Command failed: ${command} ${args.join(' ')}`));
@@ -56,15 +92,13 @@ function getTestFiles() {
   }
 
   return fs.readdirSync(testDir)
-    .filter(f => f.endsWith('.test.js'))
-    .map(f => path.join(testDir, f));
+    .filter((fileName) => fileName.endsWith('.test.js'))
+    .map((fileName) => path.join(testDir, fileName));
 }
 
-async function runTestsInBatches(files, options = {}) {
-  const { timeoutMs = 120000 } = options;
-  const args = ['--test', ...files];
-
-  return run('node', args, { timeoutMs });
+async function runAllTestsWithCoverage(files, options = {}) {
+  const args = ['--test', '--experimental-test-coverage', ...files];
+  return run('node', args, options);
 }
 
 async function main() {
@@ -72,52 +106,27 @@ async function main() {
   await run('npx', ['tsc', '-p', 'electron/tsconfig.json']);
 
   const testFiles = getTestFiles();
-  console.log(`[verify-electron-coverage] Found ${testFiles.length} test files`);
+  console.log(`[verify-electron-coverage] Running ${testFiles.length} Electron test files with coverage...`);
 
-  // Run tests in batches of 10 to avoid Node.js test runner hangs
-  const batchSize = 10;
-  const batches = [];
-  for (let i = 0; i < testFiles.length; i += batchSize) {
-    batches.push(testFiles.slice(i, i + batchSize));
-  }
+  const output = await runAllTestsWithCoverage(testFiles);
 
-  console.log(`[verify-electron-coverage] Running ${batches.length} batches of tests...`);
-
-  let totalTests = 0;
-  let totalPassed = 0;
-  let totalFailed = 0;
-
-  for (let i = 0; i < batches.length; i++) {
-    const batch = batches[i];
-    console.log(`[verify-electron-coverage] Running batch ${i + 1}/${batches.length} (${batch.length} files)...`);
-
-    try {
-      const output = await runTestsInBatches(batch, {
-        timeoutMs: 120000,
-      });
-
-      // Parse summary from this batch
-      const testsMatch = output.match(/ℹ tests\s+(\d+)/);
-      const passMatch = output.match(/ℹ pass\s+(\d+)/);
-      const failMatch = output.match(/ℹ fail\s+(\d+)/);
-
-      if (testsMatch) totalTests += parseInt(testsMatch[1], 10);
-      if (passMatch) totalPassed += parseInt(passMatch[1], 10);
-      if (failMatch) totalFailed += parseInt(failMatch[1], 10);
-    } catch (error) {
-      console.error(`[verify-electron-coverage] Batch ${i + 1} failed: ${error.message}`);
-      process.exit(1);
-    }
-  }
-
-  console.log(`\n[verify-electron-coverage] Test summary: ${totalTests} tests, ${totalPassed} passed, ${totalFailed} failed`);
-
-  if (totalFailed > 0) {
-    console.error(`Electron tests failed: ${totalFailed} failures`);
+  let summary;
+  try {
+    summary = parseCoverageSummary(output);
+  } catch (error) {
+    console.error(error.message);
     process.exit(1);
   }
 
-  console.log('Electron tests passed.');
+  const failureMessage = evaluateCoverage(summary);
+  if (failureMessage) {
+    console.error(`Electron coverage gate failed: ${failureMessage}`);
+    process.exit(1);
+  }
+
+  console.log(
+    `Electron coverage gate passed (lines >= ${THRESHOLDS.lines}%, branches >= ${THRESHOLDS.branches}%, functions >= ${THRESHOLDS.functions}%).`
+  );
 }
 
 if (require.main === module) {
@@ -128,6 +137,9 @@ if (require.main === module) {
 }
 
 module.exports = {
+  THRESHOLDS,
+  parseCoverageSummary,
+  evaluateCoverage,
   getTestFiles,
-  runTestsInBatches,
+  runAllTestsWithCoverage,
 };

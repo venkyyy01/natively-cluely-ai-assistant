@@ -6,7 +6,7 @@ export class STTReconnector extends EventEmitter {
   private readonly maxRetries = 5;
   private readonly baseDelayMs = 1000;
   private readonly errorWindowMs = 30_000;
-  private readonly requiredErrorCount = 3;
+  private readonly requiredErrorCount = 1;
   private readonly retryCounts = new Map<Speaker, number>();
   private readonly errorTimestamps = new Map<Speaker, number[]>();
   private readonly timeouts = new Map<Speaker, NodeJS.Timeout>();

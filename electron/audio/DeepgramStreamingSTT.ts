@@ -207,13 +207,18 @@ export class DeepgramStreamingSTT extends EventEmitter {
 
         console.log(`[DeepgramStreaming] Connecting (input=${this.inputSampleRate}, target=${this.targetSampleRate}, ch=1)...`);
 
-        this.ws = new WebSocket(url, {
+        const socket = new WebSocket(url, {
             headers: {
                 Authorization: `Token ${this.apiKey}`,
             },
         });
+        this.ws = socket;
 
-  this.ws.on('open', () => {
+  socket.on('open', () => {
+    if (this.ws !== socket) {
+      return;
+    }
+
     this.isActive = true;
     this.isConnecting = false;
     this.reconnectAttempts = 0;
@@ -234,7 +239,11 @@ export class DeepgramStreamingSTT extends EventEmitter {
     this.startKeepAlive();
   });
 
-        this.ws.on('message', (data: WebSocket.Data) => {
+        socket.on('message', (data: WebSocket.Data) => {
+            if (this.ws !== socket) {
+                return;
+            }
+
             try {
                 const msg = JSON.parse(data.toString());
 
@@ -277,12 +286,21 @@ export class DeepgramStreamingSTT extends EventEmitter {
             }
         });
 
-        this.ws.on('error', (err: Error) => {
+        socket.on('error', (err: Error) => {
+            if (this.ws !== socket) {
+                return;
+            }
+
             console.error('[DeepgramStreaming] WebSocket error:', err.message);
             this.emit('error', err);
         });
 
-        this.ws.on('close', (code: number, reason: Buffer) => {
+        socket.on('close', (code: number, reason: Buffer) => {
+            if (this.ws !== socket) {
+                return;
+            }
+
+            this.ws = null;
             // Do not force isActive=false; let write() trigger reconnect if isActive is still true
             this.isConnecting = false;
             this.clearKeepAlive();

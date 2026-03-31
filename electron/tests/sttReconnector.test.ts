@@ -3,18 +3,13 @@ import assert from 'node:assert/strict';
 
 import { STTReconnector } from '../STTReconnector';
 
-test('STTReconnector waits for three errors before reconnecting', async () => {
+test('STTReconnector reconnects after the first error', async () => {
   let reconnects = 0;
   const reconnector = new STTReconnector(async () => {
     reconnects += 1;
   });
   const internal = reconnector as unknown as { baseDelayMs: number };
   internal.baseDelayMs = 1;
-
-  reconnector.onError('interviewer');
-  reconnector.onError('interviewer');
-  await new Promise((resolve) => setTimeout(resolve, 5));
-  assert.equal(reconnects, 0);
 
   reconnector.onError('interviewer');
   await new Promise((resolve) => setTimeout(resolve, 10));
@@ -35,8 +30,6 @@ test('STTReconnector emits reconnect lifecycle events', async () => {
   });
 
   reconnector.onError('user');
-  reconnector.onError('user');
-  reconnector.onError('user');
   await new Promise((resolve) => setTimeout(resolve, 10));
 
   assert.deepEqual(events, ['reconnecting:user', 'reconnected:user']);
@@ -55,8 +48,6 @@ test('STTReconnector emits exhausted after max retries fail', async () => {
     events.push(speaker);
   });
 
-  reconnector.onError('interviewer');
-  reconnector.onError('interviewer');
   reconnector.onError('interviewer');
   await new Promise((resolve) => setTimeout(resolve, 10));
 

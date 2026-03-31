@@ -20,14 +20,14 @@ test('FrameBridge forwards paint payloads to shell target', () => {
   });
 
   bridge.attach(source);
-  source.emit('paint', {}, {
+  source.emit('paint', {}, { x: 1, y: 2, width: 3, height: 4 }, {
     toPNG() {
       return Buffer.from('frame');
     },
     getSize() {
       return { width: 100, height: 80 };
     },
-  }, [{ x: 1, y: 2, width: 3, height: 4 }]);
+  });
 
   assert.equal(frameRate, 30);
   assert.equal(sent.length, 1);
@@ -44,14 +44,14 @@ test('FrameBridge normalizes partial rects and detaches cleanly', () => {
 
   bridge.attach(source);
   bridge.attach(source);
-  source.emit('paint', {}, {
+  source.emit('paint', {}, {}, {
     toPNG() {
       return Buffer.from('frame');
     },
     getSize() {
       return { width: 1, height: 1 };
     },
-  }, [{}]);
+  });
   bridge.detach();
   bridge.detach();
 
@@ -68,14 +68,14 @@ test('FrameBridge warns when frame serialization fails', () => {
   });
 
   bridge.attach(source);
-  source.emit('paint', {}, {
+  source.emit('paint', {}, { x: 0, y: 0, width: 1, height: 1 }, {
     toPNG() {
       throw new Error('boom');
     },
     getSize() {
       return { width: 1, height: 1 };
     },
-  }, []);
+  });
 
   assert.equal(warnings.length, 1);
 });

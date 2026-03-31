@@ -8,6 +8,8 @@ import { DatabaseManager, Meeting } from './db/DatabaseManager';
 import { GROQ_TITLE_PROMPT, GROQ_SUMMARY_JSON_PROMPT } from './llm';
 const crypto = require('crypto');
 
+const PLACEHOLDER_MEETING_TITLES = new Set(['', 'Processing...', 'Untitled Session']);
+
 export class MeetingPersistence {
   private session: SessionTracker;
   private llmHelper: LLMHelper;
@@ -20,6 +22,25 @@ export class MeetingPersistence {
 
   setSession(session: SessionTracker): void {
     this.session = session;
+  }
+
+  private isMeaningfulTitle(title?: string | null): title is string {
+    return typeof title === 'string' && !PLACEHOLDER_MEETING_TITLES.has(title.trim());
+  }
+
+  private toMeetingDate(startTimeMs: number, fallbackDate?: string): string {
+    if (Number.isFinite(startTimeMs) && startTimeMs > 0) {
+      return new Date(startTimeMs).toISOString();
+    }
+
+    if (fallbackDate) {
+      const parsedFallback = new Date(fallbackDate).getTime();
+      if (Number.isFinite(parsedFallback)) {
+        return new Date(parsedFallback).toISOString();
+      }
+    }
+
+    return new Date().toISOString();
   }
 
   /**
@@ -81,8 +102,8 @@ export class MeetingPersistence {
 
         const placeholder: Meeting = {
             id: resolvedMeetingId,
-            title: metadata?.title || "Processing...",
-            date: new Date().toISOString(),
+            title: this.isMeaningfulTitle(metadata?.title) ? metadata.title : "Processing...",
+            date: this.toMeetingDate(snapshot.startTime),
             duration: durationStr,
             summary: "Generating summary...",
             detailedSummary: { actionItems: [], keyPoints: [] },
@@ -117,7 +138,7 @@ export class MeetingPersistence {
         let source: 'manual' | 'calendar' = 'manual';
 
         if (metadata) {
-            if (metadata.title) title = metadata.title;
+            if (this.isMeaningfulTitle(metadata.title)) title = metadata.title;
             if (metadata.calendarEventId) calendarEventId = metadata.calendarEventId;
             if (metadata.source) source = metadata.source;
         }
@@ -180,7 +201,7 @@ export class MeetingPersistence {
             const meetingData: Meeting = {
                 id: meetingId,
                 title: title,
-                date: new Date().toISOString(),
+                date: this.toMeetingDate(data.startTime),
                 duration: durationStr,
                 summary: "See detailed summary",
                 detailedSummary: summaryData,
@@ -241,7 +262,7 @@ export class MeetingPersistence {
                     durationMs: durationMs,
                     context: context,
                     meetingMetadata: {
-                        title: details.title,
+                        title: this.isMeaningfulTitle(details.title) ? details.title : undefined,
                         calendarEventId: details.calendarEventId,
                         source: details.source,
                     },

@@ -27,8 +27,6 @@ NC='\033[0m' # No Color
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="Natively"
 INSTALL_DIR="/Applications"
-APP_SUPPORT_DIR="$HOME/Library/Application Support/natively"
-APP_SETTINGS_PATH="$APP_SUPPORT_DIR/settings.json"
 ENTITLEMENTS="$SCRIPT_DIR/assets/entitlements.mac.plist"
 HELPER_ENTITLEMENTS="$SCRIPT_DIR/stealth-projects/macos-virtual-display-helper/entitlements.plist"
 RELEASE_DIR="$SCRIPT_DIR/release"
@@ -309,51 +307,6 @@ require_asar_entry() {
     fi
 }
 
-reset_persisted_startup_flags() {
-    if [[ "${RESET_STEALTH_SETTINGS_ON_INSTALL:-1}" != "1" ]]; then
-        info "Preserving persisted stealth settings (RESET_STEALTH_SETTINGS_ON_INSTALL=0)"
-        return
-    fi
-
-    if [[ ! -f "$APP_SETTINGS_PATH" ]]; then
-        info "No persisted app settings found; first launch will use built-in defaults"
-        return
-    fi
-
-    info "Resetting persisted stealth startup flags for a safe first launch..."
-    if SETTINGS_PATH="$APP_SETTINGS_PATH" node <<'NODE'
-const fs = require('node:fs')
-
-const settingsPath = process.env.SETTINGS_PATH
-if (!settingsPath) {
-  process.exit(1)
-}
-
-let settings
-try {
-  settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'))
-} catch (error) {
-  console.error(`[install] Failed to parse ${settingsPath}: ${error.message}`)
-  process.exit(1)
-}
-
-const next = {
-  ...settings,
-  isUndetectable: false,
-  enableCaptureDetectionWatchdog: false,
-}
-
-if (JSON.stringify(next) !== JSON.stringify(settings)) {
-  fs.writeFileSync(settingsPath, `${JSON.stringify(next, null, 2)}\n`)
-}
-NODE
-    then
-        success "Persisted stealth startup flags reset"
-    else
-        warn "Could not reset persisted stealth startup flags in $APP_SETTINGS_PATH"
-    fi
-}
-
 if [[ "${BUILD_AND_INSTALL_LIB:-0}" == "1" ]]; then
     return 0 2>/dev/null || exit 0
 fi
@@ -609,8 +562,6 @@ if file "$INSTALLED_BINARY" | grep -q "$BUILD_ARCH"; then
 else
     fail "Installed binary architecture does not match expected ${BUILD_ARCH}"
 fi
-
-reset_persisted_startup_flags
 
 # ╔═══════════════════════════════════════════════════════════════════╗
 # ║  Done!                                                           ║

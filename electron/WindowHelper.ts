@@ -296,6 +296,13 @@ export class WindowHelper {
       console.log('[WindowHelper] StealthRuntime (overlay) created successfully');
     } catch (err) {
       console.error('[WindowHelper] Failed to create overlay BrowserWindow:', err);
+      this.launcherRuntime?.destroy()
+      this.launcherRuntime = null
+      this.launcherContentWindow = null
+      this.launcherWindow = null
+      this.overlayRuntime = null
+      this.overlayContentWindow = null
+      this.overlayWindow = null
       return;
     }
 
@@ -437,8 +444,12 @@ export class WindowHelper {
       const currentBounds = this.overlayWindow.getBounds();
       const targetWidth = Math.max(currentBounds.width, 600);
       const targetHeight = Math.max(currentBounds.height, 216);
-      const x = Math.floor(workArea.x + (workArea.width - targetWidth) / 2)
-      const y = Math.floor(workArea.y + (workArea.height - 600) / 2)
+      const centeredX = Math.floor(workArea.x + (workArea.width - targetWidth) / 2)
+      const centeredY = Math.floor(workArea.y + (workArea.height - targetHeight) / 2)
+      const maxX = workArea.x + Math.max(0, workArea.width - targetWidth)
+      const maxY = workArea.y + Math.max(0, workArea.height - targetHeight)
+      const x = Math.min(Math.max(centeredX, workArea.x), maxX)
+      const y = Math.min(Math.max(centeredY, workArea.y), maxY)
 
       this.overlayWindow.setBounds({ x, y, width: targetWidth, height: targetHeight });
 

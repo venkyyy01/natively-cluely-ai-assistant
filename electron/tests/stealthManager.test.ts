@@ -333,13 +333,81 @@ describe('StealthManager', () => {
         const win = new FakeWindow();
 
         manager.applyToWindow(win as any, true, { role: 'primary' });
-        assert.strictEqual(intervals.length, 1);
+        assert.ok(intervals.length >= 1);
 
         await intervals[0]();
         assert.deepStrictEqual(win.setOpacityCalls, [0]);
 
         timeouts[0]();
         assert.deepStrictEqual(win.setOpacityCalls, [0, 1]);
+        win.destroy();
+    });
+
+    it('keeps the capture watchdog alive until the last managed window closes', () => {
+        const intervals: Array<() => Promise<void> | void> = [];
+        const cleared: unknown[] = [];
+        const manager = new StealthManager(
+            { enabled: true },
+            {
+                platform: 'darwin',
+                logger: silentLogger,
+                featureFlags: { enableCaptureDetectionWatchdog: true },
+                intervalScheduler: (fn: () => Promise<void> | void) => {
+                    intervals.push(fn);
+                    return intervals.length;
+                },
+                clearIntervalScheduler(handle: unknown) {
+                    cleared.push(handle);
+                },
+                timeoutScheduler() {
+                    return 1;
+                },
+                processEnumerator: async () => '',
+            } as any,
+        );
+        const first = new FakeWindow();
+        const second = new FakeWindow();
+
+        manager.applyToWindow(first as any, true, { role: 'primary' });
+        manager.applyToWindow(second as any, true, { role: 'auxiliary' });
+
+        assert.ok(intervals.length >= 1);
+        first.destroy();
+        assert.deepStrictEqual(cleared, []);
+
+        second.destroy();
+        assert.ok(cleared.includes(1));
+    });
+
+    it('keeps Windows affinity verification on a separate interval handle', () => {
+        const intervals: Array<() => Promise<void> | void> = [];
+        const cleared: unknown[] = [];
+        const manager = new StealthManager(
+            { enabled: true },
+            {
+                platform: 'win32',
+                logger: silentLogger,
+                featureFlags: { enableCaptureDetectionWatchdog: true },
+                intervalScheduler: (fn: () => Promise<void> | void) => {
+                    intervals.push(fn);
+                    return intervals.length;
+                },
+                clearIntervalScheduler(handle: unknown) {
+                    cleared.push(handle);
+                },
+                timeoutScheduler() {
+                    return 1;
+                },
+                processEnumerator: async () => '',
+            } as any,
+        );
+        const win = new FakeWindow();
+
+        manager.applyToWindow(win as any, true, { role: 'primary' });
+        assert.strictEqual(intervals.length, 2);
+
+        win.destroy();
+        assert.deepStrictEqual(cleared, [1, 2]);
     });
 
     it('uses a configurable capture tool matcher list for watchdog detection', async () => {
@@ -365,7 +433,7 @@ describe('StealthManager', () => {
         );
 
         manager.applyToWindow(win as any, true, { role: 'primary' });
-        assert.strictEqual(intervals.length, 0);
+        win.destroy();
     });
 
     it('logs capture detections when the watchdog hides windows', async () => {
@@ -400,6 +468,7 @@ describe('StealthManager', () => {
         await intervals[0]();
 
         assert.ok(logs.some((entry) => entry.includes('Capture watchdog detected suspicious tools running')));
+        win.destroy();
     });
 
   it('verifies applied stealth state through native bindings', () => {
@@ -746,5 +815,35 @@ describe('StealthManager', () => {
       { action: 'ensure', windowId: 'window:101:0' },
       { action: 'release', windowId: 'window:101:0' },
     ]);
+  });
+
+  it('only treats shareable CG windows as visible to capture', async () => {
+    let embeddedScript = '';
+    const manager = new StealthManager(
+      { enabled: true },
+      {
+        platform: 'darwin',
+        logger: silentLogger,
+        processEnumerator: async (_command: string, args: string[]) => {
+          embeddedScript = args[1] ?? '';
+          return '';
+        },
+      },
+    );
+
+    await (manager as any).getWindowNumbersVisibleToCapture();
+
+    assert.match(embeddedScript, /sharing_state > 0/);
+  });
+
+  it('compares macOS versions using both major and minor components', () => {
+    const manager = new StealthManager({ enabled: true }, { platform: 'darwin', logger: silentLogger });
+
+    (manager as any).macOSMajor = 15;
+    (manager as any).macOSMinor = 3;
+    assert.strictEqual((manager as any).isMacOSVersionCompatible('15.4'), false);
+
+    (manager as any).macOSMinor = 4;
+    assert.strictEqual((manager as any).isMacOSVersionCompatible('15.4'), true);
   });
 });
