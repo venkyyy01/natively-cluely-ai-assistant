@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { resolveMacosVirtualDisplayHelperPath } from '../stealth/macosVirtualDisplayIntegration';
+import { resolveMacosVirtualDisplayHelperPath, createMacosVirtualDisplayCoordinator } from '../stealth/macosVirtualDisplayIntegration';
 
 test('resolveMacosVirtualDisplayHelperPath prefers explicit env override', () => {
   const resolved = resolveMacosVirtualDisplayHelperPath({
@@ -21,4 +21,19 @@ test('resolveMacosVirtualDisplayHelperPath falls back to the local Swift build o
   });
 
   assert.match(resolved ?? '', /stealth-virtual-display-helper$/);
+});
+
+test('resolveMacosVirtualDisplayHelperPath returns null when no candidates exist', () => {
+  const resolved = resolveMacosVirtualDisplayHelperPath({
+    env: {},
+    cwd: '/workspace',
+    pathExists: () => false,
+  });
+
+  assert.equal(resolved, null);
+});
+
+test('createMacosVirtualDisplayCoordinator returns a coordinator with the given helper path', () => {
+  const coordinator = createMacosVirtualDisplayCoordinator('/usr/local/bin/helper');
+  assert.ok(coordinator);
 });
