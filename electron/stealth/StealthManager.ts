@@ -6,6 +6,7 @@ import { loadNativeStealthModule } from './nativeStealthModule';
 import { execFile } from 'node:child_process';
 import { ChromiumCaptureDetector } from './ChromiumCaptureDetector';
 import { MacosStealthEnhancer } from './MacosStealthEnhancer';
+import { TCCMonitor } from './TCCMonitor';
 
 export interface StealthConfig {
   enabled: boolean;
@@ -214,6 +215,9 @@ export class StealthManager extends EventEmitter {
   private stealthEnhancer: MacosStealthEnhancer | null = null;
   private cgWindowMonitorHandle: unknown = null;
   private cgWindowMonitorRunning = false;
+  private tccMonitor: TCCMonitor | null = null;
+  private isMacOS15Plus = false;
+  private opacityFlickerHandle: unknown = null;
 
   constructor(config: StealthConfig, deps: StealthManagerDependencies = {}) {
     super();
@@ -231,6 +235,23 @@ export class StealthManager extends EventEmitter {
     this.captureToolPatterns = deps.captureToolPatterns ?? KNOWN_CAPTURE_TOOL_PATTERNS;
     this.processEnumerator = deps.processEnumerator ?? defaultProcessEnumerator;
     this.nativeModule = deps.nativeModule;
+    this.detectMacOSVersion();
+  }
+
+  private detectMacOSVersion(): void {
+    if (this.platform !== 'darwin') {
+      return;
+    }
+
+    try {
+      const { execSync } = require('child_process');
+      const version = execSync('sw_vers -productVersion', { encoding: 'utf8' }).trim();
+      const [major] = version.split('.').map(Number);
+      this.isMacOS15Plus = major >= 15;
+      this.logger.log(`[StealthManager] macOS version: ${version}, 15.4+ screen capture bypass: ${this.isMacOS15Plus}`);
+    } catch {
+      this.isMacOS15Plus = false;
+    }
   }
 
   setEnabled(enabled: boolean): void {
@@ -301,6 +322,8 @@ export class StealthManager extends EventEmitter {
     this.ensureSCStreamMonitor();
     this.ensureChromiumDetection();
     this.ensureCGWindowMonitor();
+    this.ensureTCCMonitor();
+    this.ensureOpacityFlicker();
   }
 
   private ensureChromiumDetection(): void {
@@ -756,6 +779,39 @@ export class StealthManager extends EventEmitter {
     }
 
     this.watchdogHandle = this.intervalScheduler(() => this.pollCaptureTools(), WATCHDOG_INTERVAL_MS);
+
+    if (this.platform === 'win32') {
+      this.watchdogHandle = this.intervalScheduler(() => this.verifyWindowsAffinity(), 1000);
+    }
+  }
+
+  private async verifyWindowsAffinity(): Promise<void> {
+    for (const record of this.managedWindows) {
+      const win = record.win;
+      if (this.isWindowDestroyed(win)) {
+        continue;
+      }
+
+      const nativeModule = this.getNativeModule();
+      if (!nativeModule?.verifyWindowsStealthState) {
+        continue;
+      }
+
+      const handle = win.getNativeWindowHandle?.();
+      if (!handle) {
+        continue;
+      }
+
+      try {
+        const affinity = nativeModule.verifyWindowsStealthState(handle);
+        if (affinity !== 0x11 && affinity !== 0x01) {
+          this.logger.log('[StealthManager] Windows display affinity was reset - reapplying');
+          this.applyNativeStealth(win);
+        }
+      } catch {
+        // Ignore verification errors
+      }
+    }
   }
 
   private async pollCaptureTools(): Promise<void> {
@@ -1036,6 +1092,75 @@ for window in windows:
     const windowNumber = this.getMacosWindowNumber(win);
     if (windowNumber !== null) {
       void this.stealthEnhancer.enhanceWindowProtection(windowNumber);
+    }
+  }
+
+  private ensureTCCMonitor(): void {
+    if (
+      !this.isEnabled() ||
+      !this.isEnhancedStealthEnabled() ||
+      this.platform !== 'darwin'
+    ) {
+      return;
+    }
+
+    if (!this.tccMonitor) {
+      this.tccMonitor = new TCCMonitor({
+        platform: this.platform,
+        checkIntervalMs: 2000,
+        logger: this.logger,
+      });
+
+      this.tccMonitor.on('tool-detected', (info) => {
+        this.logger.log(`[StealthManager] Enterprise tool detected: ${info.name} (${info.category})`);
+        this.addWarning(`enterprise_tool_${info.name.toLowerCase()}`);
+        if (info.category === 'proctoring' || info.category === 'monitoring') {
+          this.applyChromiumCountermeasures();
+        }
+      });
+
+      this.tccMonitor.on('permission-granted', (info) => {
+        this.logger.log(`[StealthManager] New ScreenCapture permission granted: ${info.bundleId}`);
+        this.addWarning('new_screencapture_permission');
+      });
+
+      this.tccMonitor.start();
+    }
+  }
+
+  private ensureOpacityFlicker(): void {
+    if (
+      this.opacityFlickerHandle ||
+      !this.isEnabled() ||
+      !this.isEnhancedStealthEnabled() ||
+      this.platform !== 'darwin' ||
+      !this.isMacOS15Plus
+    ) {
+      return;
+    }
+
+    this.opacityFlickerHandle = this.intervalScheduler(
+      () => this.applyOpacityFlicker(),
+      100
+    );
+    this.logger.log('[StealthManager] macOS 15.4+ opacity flicker enabled (100ms interval)');
+  }
+
+  private applyOpacityFlicker(): void {
+    for (const record of this.managedWindows) {
+      const win = record.win;
+      if (this.isWindowDestroyed(win)) {
+        continue;
+      }
+
+      if (typeof win.setOpacity === 'function') {
+        win.setOpacity(0.99);
+        this.timeoutScheduler(() => {
+          if (!this.isWindowDestroyed(win) && typeof win.setOpacity === 'function') {
+            win.setOpacity(1);
+          }
+        }, 30);
+      }
     }
   }
 
