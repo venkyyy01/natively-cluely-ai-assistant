@@ -506,8 +506,8 @@ The app is ad-hoc signed (no Apple Developer account needed). macOS will block i
 
 ```
 release/
-├── Natively Setup 2.0.6.exe          # NSIS installer
-├── Natively 2.0.6.exe                # Portable (single file)
+├── Natively Setup 2.0.9.exe          # NSIS installer
+├── Natively 2.0.9.exe                # Portable (single file)
 └── win-unpacked/                     # Unpacked app directory
 ```
 
@@ -609,10 +609,10 @@ electron-builder      → Packages → signs → creates DMG + ZIP
 
 ```
 release/
-├── Natively-2.0.6-arm64.dmg        # Apple Silicon installer
-├── Natively-2.0.6-x64.dmg          # Intel Mac installer
-├── Natively-2.0.6-arm64-mac.zip    # Apple Silicon portable
-├── Natively-2.0.6-x64-mac.zip      # Intel Mac portable
+├── Natively-2.0.9-arm64.dmg        # Apple Silicon installer
+├── Natively-2.0.9-x64.dmg          # Intel Mac installer
+├── Natively-2.0.9-arm64-mac.zip    # Apple Silicon portable
+├── Natively-2.0.9-x64-mac.zip      # Intel Mac portable
 └── mac-arm64/                       # Unpackaged .app
     └── Natively.app
 ```
@@ -751,8 +751,8 @@ npm run dist
 
 ```
 release/
-├── Natively Setup 2.0.6.exe          # NSIS installer
-├── Natively 2.0.6.exe                # Portable executable
+├── Natively Setup 2.0.9.exe          # NSIS installer
+├── Natively 2.0.9.exe                # Portable executable
 └── win-unpacked/                     # Unpacked application
     ├── Natively.exe
     └── resources/
@@ -773,13 +773,13 @@ npx electron-builder --win --ia32
 **Option A — NSIS installer (recommended):**
 ```powershell
 # Run the installer
-.\release\"Natively Setup 2.0.6.exe"
+.\release\"Natively Setup 2.0.9.exe"
 ```
 
 **Option B — Portable:**
 ```powershell
 # Copy the portable exe anywhere and run directly
-copy release\"Natively 2.0.6.exe" "%USERPROFILE%\Desktop\"
+copy release\"Natively 2.0.9.exe" "%USERPROFILE%\Desktop\"
 ```
 
 **Option C — From unpacked directory:**
