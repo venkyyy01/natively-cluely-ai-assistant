@@ -137,7 +137,7 @@ Works undetected on:
 
 1. Screenshot the problem with a single shortcut
 2. Natively OCRs the question and sends it to your chosen AI
-3. Response appears in the invisible overlay — never on screen share
+3. Response appears in the invisible overlay, with the strongest protection in window-share and browser tab-share flows
 4. Multiple screenshot support for multi-part problems
 5. Smart fallback to Groq Llama 4 Scout if primary vision model fails
 
@@ -198,7 +198,7 @@ Natively is a desktop Electron application with a Rust native audio backend. The
 2. **Speech-to-Text** — Audio streams are sent to your chosen speech provider (Google STT, Deepgram, Groq, Whisper, etc.) for real-time transcription
 3. **Rolling Context Window** — Transcripts are maintained in a sliding context window with epoch summarization, keeping the AI aware of the full conversation without token overflow
 4. **AI Processing** — The context + your action (question, screenshot, prompt) is sent to your chosen LLM (Gemini, GPT, Claude, Groq, or local Ollama)
-5. **Response Delivery** — The AI response appears instantly in the invisible overlay, never captured by screen share or recordings
+5. **Response Delivery** — The AI response appears instantly in the invisible overlay. Protection is strongest for window share and browser tab share; full desktop share and advanced OS-level capture remain best-effort.
 6. **Local RAG Indexing** — After the meeting, transcripts are chunked, embedded, and stored locally in SQLite with `sqlite-vec` for future semantic search
 
 ### Default Global Shortcuts (macOS)
@@ -354,55 +354,74 @@ For security vulnerability reporting, see [SECURITY.md](SECURITY.md).
 
 ## Architecture
 
-Natively processes audio, screen context, and user input locally, maintains a rolling context window, and sends only the required prompt data to the selected AI provider (local or cloud).
+Natively is now organized around four cooperating layers: native capture, Electron main-process orchestration, a stealth window runtime, and a local-first memory plus provider pipeline. Audio, screenshots, transcript state, and window state are coordinated locally, and only the prompt data needed for a given answer is sent to the selected provider.
 
+### System Topology
+
+```mermaid
+flowchart LR
+  subgraph Inputs["Input and Capture"]
+    SYS["System audio + microphone\nRust native module"]
+    SHOT["Screenshot + OCR\nScreenshotHelper, Sharp, Tesseract"]
+    HOTKEY["Global shortcuts, tray, IPC"]
+  end
+
+  subgraph Main["Electron Main Process"]
+    APP["AppState\nelectron/main.ts"]
+    WIN["Window helpers\nlauncher, overlay, settings, model selector"]
+    PROC["ProcessingHelper + IntelligenceManager"]
+    SESSION["SessionTracker + Conscious Mode\nrolling context, phase detection, resume logic"]
+    MEMORY["MeetingPersistence + RAGManager\nlive indexing and post-meeting retrieval"]
+  end
+
+  subgraph Runtime["Stealth Runtime"]
+    STEALTH["StealthManager\nfeature flags, native stealth, watchdogs"]
+    SHELL["Visible shell windows\nlauncher and overlay"]
+    CONTENT["Offscreen content windows\nReact app surfaces"]
+  end
+
+  subgraph Providers["Providers and Storage"]
+    STT["STT providers\nDeepgram, Google, Groq, Whisper, Soniox"]
+    LLM["LLM providers\nOpenAI, Anthropic, Gemini, Groq, Ollama, custom"]
+    DB["SQLite + sqlite-vec\nmeeting history and vector search"]
+  end
+
+  SYS --> STT --> SESSION
+  SHOT --> PROC
+  HOTKEY --> APP
+  APP --> WIN
+  APP --> PROC
+  APP --> SESSION
+  WIN --> STEALTH
+  PROC --> LLM
+  SESSION --> LLM
+  SESSION --> MEMORY
+  MEMORY --> DB
+  STEALTH --> SHELL
+  STEALTH --> CONTENT
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                        Natively Desktop                         │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                 │
-│  ┌──────────────┐  ┌──────────────┐  ┌───────────────────────┐ │
-│  │ System Audio │  │ Microphone   │  │ Screenshot / OCR      │ │
-│  │ (Rust/Node)  │  │ (Rust/Node)  │  │ (Tesseract.js/Sharp)  │ │
-│  └──────┬───────┘  └──────┬───────┘  └───────────┬───────────┘ │
-│         │                 │                       │             │
-│         ▼                 ▼                       ▼             │
-│  ┌─────────────────────────────────────────────────────────────┐│
-│  │              Speech-to-Text Engine                          ││
-│  │  (Google STT / Deepgram / Groq / Whisper / Soniox / etc.)  ││
-│  └─────────────────────────┬───────────────────────────────────┘│
-│                            │                                    │
-│                            ▼                                    │
-│  ┌─────────────────────────────────────────────────────────────┐│
-│  │              Rolling Context Window                         ││
-│  │  ┌─────────────┐  ┌──────────────┐  ┌──────────────────┐  ││
-│  │  │ Transcript  │  │   Epoch      │  │  Interview Phase │  ││
-│  │  │ Buffer      │  │ Summarizer   │  │  Detector        │  ││
-│  │  └─────────────┘  └──────────────┘  └──────────────────┘  ││
-│  └─────────────────────────┬───────────────────────────────────┘│
-│                            │                                    │
-│              ┌─────────────┼─────────────┐                      │
-│              ▼             ▼             ▼                      │
-│  ┌───────────────┐ ┌──────────────┐ ┌──────────────────────┐   │
-│  │ Cloud LLM     │ │ Local Ollama │ │ Custom Endpoint      │   │
-│  │ (Gemini/GPT/  │ │ (Llama 3,    │ │ (OpenRouter/         │   │
-│  │  Claude/Groq) │ │  Mistral)    │ │  vLLM/LM Studio)     │   │
-│  └───────┬───────┘ └──────┬───────┘ └──────────┬───────────┘   │
-│          │                │                     │               │
-│          └────────────────┼─────────────────────┘               │
-│                           ▼                                     │
-│  ┌─────────────────────────────────────────────────────────────┐│
-│  │              Invisible Overlay (Response)                   ││
-│  └─────────────────────────────────────────────────────────────┘│
-│                                                                 │
-│  ┌─────────────────────────────────────────────────────────────┐│
-│  │              Local RAG (SQLite + sqlite-vec)                ││
-│  │  ┌─────────────┐  ┌──────────────┐  ┌──────────────────┐  ││
-│  │  │ Semantic    │  │  Vector      │  │  Meeting         │  ││
-│  │  │ Chunker     │  │  Store       │  │  Dashboard       │  ││
-│  │  └─────────────┘  └──────────────┘  └──────────────────┘  ││
-│  └─────────────────────────────────────────────────────────────┘│
-└─────────────────────────────────────────────────────────────────┘
+
+### Stealth Window Runtime
+
+The biggest architectural change is the stealth surface runtime. The visible Electron window is no longer the same renderer that owns the React UI. Instead, `StealthRuntime` creates a paired surface:
+
+- a visible shell window that the local user sees
+- an offscreen content window that runs the real React UI
+- a `FrameBridge` that forwards offscreen paint frames into the shell
+- an `InputBridge` that routes shell mouse and keyboard input back into the content window
+- a centralized `StealthManager` that applies Layer 0, Layer 1, feature-gated Layer 1B and Layer 2 boundary behavior, plus watchdogs and lifecycle re-application
+
+```mermaid
+flowchart LR
+  REACT["React renderer\nlauncher or overlay UI"] --> OFFSCREEN["Offscreen content window"]
+  OFFSCREEN -- paint frames --> FRAME["FrameBridge"]
+  FRAME --> SHELLWIN["Visible shell window"]
+  SHELLWIN -- mouse and keyboard --> INPUT["InputBridge"]
+  INPUT --> OFFSCREEN
+  STEALTHMGR["StealthManager"] --> OFFSCREEN
+  STEALTHMGR --> SHELLWIN
+  NATIVE["napi-rs native stealth bindings"] --> STEALTHMGR
+  HELPER["macOS virtual-display helper\nfeature-gated"] -. optional .-> STEALTHMGR
 ```
 
 ### Component Breakdown
@@ -410,14 +429,15 @@ Natively processes audio, screen context, and user input locally, maintains a ro
 | Component | Technology | Location |
 | :--- | :--- | :--- |
 | **Frontend (Renderer)** | React, Vite, TypeScript, TailwindCSS | `src/` |
-| **Desktop Shell** | Electron (Main Process) | `electron/` |
-| **Native Audio** | Rust (`napi-rs` Zero-Copy ABI Transfers) | `native-module/` |
-| **Conscious Mode** | Rolling context, confidence scoring, interview phase detection | `electron/conscious/` |
-| **RAG System** | SQLite + sqlite-vec, semantic chunking, vector search | `electron/rag/` |
-| **Stealth System** | Process disguise, dock hiding, state sync | `electron/stealth/` |
-| **LLM Integration** | Multi-provider with 3-tier fallback | `electron/llm/`, `electron/LLMHelper.ts` |
-| **IPC Layer** | Type-safe Electron IPC with validation | `electron/ipc/`, `electron/ipcValidation.ts` |
-| **Settings** | Persistent config with electron-store | `electron/config/` |
+| **Main Orchestrator** | `AppState`, IPC wiring, feature flags, lifecycle control | `electron/main.ts`, `electron/ipc/` |
+| **Window System** | Launcher, overlay, settings, model selector window helpers | `electron/WindowHelper.ts`, `electron/SettingsWindowHelper.ts`, `electron/ModelSelectorWindowHelper.ts` |
+| **Stealth Runtime** | `StealthRuntime`, `FrameBridge`, `InputBridge`, shell preload | `electron/stealth/` |
+| **Stealth Enforcement** | `StealthManager`, native platform bindings, feature-gated virtual-display control plane | `electron/stealth/`, `native-module/src/stealth.rs` |
+| **Native Audio** | Rust `napi-rs` capture with zero-copy buffers | `native-module/` |
+| **Live Reasoning** | `ProcessingHelper`, `IntelligenceManager`, `IntelligenceEngine`, provider routing | `electron/`, `electron/llm/` |
+| **Conscious Mode** | Rolling context, confidence scoring, interview phase detection, thread resume | `electron/conscious/`, `electron/SessionTracker.ts` |
+| **Memory and Retrieval** | Meeting persistence, SQLite, `sqlite-vec`, semantic chunking, live indexing | `electron/rag/`, `electron/db/`, `electron/MeetingPersistence.ts` |
+| **Settings and Persistence** | Local config, credentials, provider configuration | `electron/services/SettingsManager.ts`, `electron/services/CredentialsManager.ts` |
 
 ---
 
@@ -486,8 +506,8 @@ The app is ad-hoc signed (no Apple Developer account needed). macOS will block i
 
 ```
 release/
-├── Natively Setup 2.0.6.exe          # NSIS installer
-├── Natively 2.0.6.exe                # Portable (single file)
+├── Natively Setup 2.0.9.exe          # NSIS installer
+├── Natively 2.0.9.exe                # Portable (single file)
 └── win-unpacked/                     # Unpacked app directory
 ```
 
@@ -589,10 +609,10 @@ electron-builder      → Packages → signs → creates DMG + ZIP
 
 ```
 release/
-├── Natively-2.0.6-arm64.dmg        # Apple Silicon installer
-├── Natively-2.0.6-x64.dmg          # Intel Mac installer
-├── Natively-2.0.6-arm64-mac.zip    # Apple Silicon portable
-├── Natively-2.0.6-x64-mac.zip      # Intel Mac portable
+├── Natively-2.0.9-arm64.dmg        # Apple Silicon installer
+├── Natively-2.0.9-x64.dmg          # Intel Mac installer
+├── Natively-2.0.9-arm64-mac.zip    # Apple Silicon portable
+├── Natively-2.0.9-x64-mac.zip      # Intel Mac portable
 └── mac-arm64/                       # Unpackaged .app
     └── Natively.app
 ```
@@ -731,8 +751,8 @@ npm run dist
 
 ```
 release/
-├── Natively Setup 2.0.6.exe          # NSIS installer
-├── Natively 2.0.6.exe                # Portable executable
+├── Natively Setup 2.0.9.exe          # NSIS installer
+├── Natively 2.0.9.exe                # Portable executable
 └── win-unpacked/                     # Unpacked application
     ├── Natively.exe
     └── resources/
@@ -753,13 +773,13 @@ npx electron-builder --win --ia32
 **Option A — NSIS installer (recommended):**
 ```powershell
 # Run the installer
-.\release\"Natively Setup 2.0.6.exe"
+.\release\"Natively Setup 2.0.9.exe"
 ```
 
 **Option B — Portable:**
 ```powershell
 # Copy the portable exe anywhere and run directly
-copy release\"Natively 2.0.6.exe" "%USERPROFILE%\Desktop\"
+copy release\"Natively 2.0.9.exe" "%USERPROFILE%\Desktop\"
 ```
 
 **Option C — From unpacked directory:**
@@ -869,7 +889,7 @@ Natively includes a powerful, local-first meeting management system to review, s
 
 - Works undetected on LeetCode, HackerRank, CoderPad, Codility, HackerEarth, and Karat
 - Capture any visible coding problem and get full solutions, explanations, and complexity analysis
-- Invisible overlay never appears in screen recordings or screen shares
+- Overlay protection is strongest in window-share and browser tab-share flows; do not assume invisibility during full desktop share, display capture, or proctoring tools
 
 ---
 
@@ -999,6 +1019,7 @@ timeline
 - **No Linux support** — actively looking for maintainers to help bring Natively to Linux
 - **API key setup overhead** — you need to bring your own API keys (or install Ollama), which adds initial setup friction compared to all-in-one cloud tools
 - **No built-in mock interview mode** — focus is on live, real-time assistance
+- **Full desktop share remains best-effort** — if stealth matters, prefer browser tab share or window share instead of sharing your entire screen
 - **Not designed to bypass dedicated proctoring software** (Pearson VUE, ProctorU, Respondus Lockdown Browser) — these run at the OS level and are a different category entirely
 
 ---
@@ -1057,7 +1078,7 @@ Yes. Natively is open-source. You only pay for what you use by bringing your own
 
 #### Does Natively work with Zoom, Teams, and Google Meet?
 
-Yes. Natively uses a Rust-based system audio capture that works universally across any desktop application, including Zoom, Microsoft Teams, Google Meet, Slack, and Discord.
+Yes. Natively uses a Rust-based system audio capture that works across desktop applications, including Zoom, Microsoft Teams, Google Meet, Slack, and Discord. Stealth coverage depends on how the app is being shared or captured.
 
 #### Is my data safe?
 
@@ -1077,7 +1098,22 @@ Cluely is $20/month, cloud-based, and suffered a data breach exposing 83,000 use
 
 #### Is stealth mode actually undetectable?
 
-Yes. Natively hides from the dock, disguises process names as harmless system utilities, and syncs state across all windows. It has been hardened across five major releases and tested against screen share detection in Zoom, Teams, and Google Meet.
+Not universally. Undetectable Mode hides from the dock, disguises process names as harmless system utilities, and hardens protected windows across the app, but the strongest coverage is in window-share and browser tab-share flows. Full desktop share, display capture, and enterprise/proctoring tools are not covered with a hard guarantee.
+
+For the strongest coverage, enable both **Undetectable Mode** and **Acceleration Mode**, then prefer browser tab share or window share over sharing your entire screen.
+
+Assuming **Undetectable Mode** is enabled, the current guidance is:
+
+| Scenario | macOS | Windows | Recommended setting |
+| :--- | :--- | :--- | :--- |
+| Google Meet in Chrome: Share tab | Strong target | Strong target | Safest Meet option |
+| Google Meet in Chrome: Share window | Strong target | Strong target | Also preferred over entire screen |
+| Google Meet in Chrome: Share entire screen | Experimental | Best-effort only | Do not assume hidden |
+| Zoom or Teams: Share window | Strong target | Strong target | Preferred share mode |
+| Zoom or Teams: Share entire screen | Experimental | Best-effort only | Do not assume hidden |
+| QuickTime recording of a protected window | Strong target | n/a | Verify on your own machine |
+| OBS or Loom display capture | Experimental | Best-effort only | Treat like full-display capture |
+| Proctoring or enterprise monitoring tools | No guarantee | No guarantee | Out of scope for stealth guarantees |
 
 #### Does Natively work on LeetCode and HackerRank?
 

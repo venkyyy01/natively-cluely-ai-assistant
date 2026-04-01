@@ -1,45 +1,55 @@
-test('reportWebVitals does nothing when callback is missing', async () => {
-  jest.resetModules();
-  const mod = require('./reportWebVitals');
-  const reportWebVitals = mod.default;
-  const loadSpy = jest.spyOn(mod.__testUtils, 'loadWebVitals');
+import reportWebVitals, { __testUtils } from './reportWebVitals';
 
-  reportWebVitals();
-  expect(loadSpy).not.toHaveBeenCalled();
+const originalLoadWebVitals = __testUtils.loadWebVitals;
 
-  await mod.__testUtils.loadWebVitals();
-  await Promise.resolve();
-  await Promise.resolve();
-
-  expect(loadSpy).toHaveBeenCalledTimes(1);
-});
-
-test('reportWebVitals wires all web-vitals callbacks when a handler is provided', async () => {
-  jest.resetModules();
-  const mockGetCLS = jest.fn();
-  const mockGetFID = jest.fn();
-  const mockGetFCP = jest.fn();
-  const mockGetLCP = jest.fn();
-  const mockGetTTFB = jest.fn();
-
-  const mod = require('./reportWebVitals');
-  const reportWebVitals = mod.default;
-  const onPerfEntry = () => undefined;
-  jest.spyOn(mod.__testUtils, 'loadWebVitals').mockResolvedValue({
-    getCLS: mockGetCLS,
-    getFID: mockGetFID,
-    getFCP: mockGetFCP,
-    getLCP: mockGetLCP,
-    getTTFB: mockGetTTFB,
+describe('reportWebVitals', () => {
+  afterEach(() => {
+    __testUtils.loadWebVitals = originalLoadWebVitals;
+    jest.restoreAllMocks();
   });
 
-  reportWebVitals(onPerfEntry);
-  await Promise.resolve();
-  await Promise.resolve();
+  test('loads web-vitals and registers every metric callback when a handler is provided', async () => {
+    const onPerfEntry = () => {};
+    const getCLS = jest.fn();
+    const getFID = jest.fn();
+    const getFCP = jest.fn();
+    const getLCP = jest.fn();
+    const getTTFB = jest.fn();
 
-  expect(mockGetCLS).toHaveBeenCalledWith(onPerfEntry);
-  expect(mockGetFID).toHaveBeenCalledWith(onPerfEntry);
-  expect(mockGetFCP).toHaveBeenCalledWith(onPerfEntry);
-  expect(mockGetLCP).toHaveBeenCalledWith(onPerfEntry);
-  expect(mockGetTTFB).toHaveBeenCalledWith(onPerfEntry);
+    const loadWebVitals = jest.fn().mockResolvedValue({
+      getCLS,
+      getFID,
+      getFCP,
+      getLCP,
+      getTTFB,
+    } as never);
+    __testUtils.loadWebVitals = loadWebVitals as typeof __testUtils.loadWebVitals;
+
+    reportWebVitals(onPerfEntry);
+    await Promise.resolve();
+
+    expect(loadWebVitals).toHaveBeenCalledTimes(1);
+    expect(getCLS).toHaveBeenCalledWith(onPerfEntry);
+    expect(getFID).toHaveBeenCalledWith(onPerfEntry);
+    expect(getFCP).toHaveBeenCalledWith(onPerfEntry);
+    expect(getLCP).toHaveBeenCalledWith(onPerfEntry);
+    expect(getTTFB).toHaveBeenCalledWith(onPerfEntry);
+  });
+
+  test('does nothing when the performance handler is missing or invalid', async () => {
+    const loadWebVitals = jest.fn().mockResolvedValue({
+      getCLS: jest.fn(),
+      getFID: jest.fn(),
+      getFCP: jest.fn(),
+      getLCP: jest.fn(),
+      getTTFB: jest.fn(),
+    } as never);
+    __testUtils.loadWebVitals = loadWebVitals as typeof __testUtils.loadWebVitals;
+
+    reportWebVitals();
+    reportWebVitals('not-a-function' as never);
+    await Promise.resolve();
+
+    expect(loadWebVitals).not.toHaveBeenCalled();
+  });
 });

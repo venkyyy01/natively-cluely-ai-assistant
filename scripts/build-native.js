@@ -1,14 +1,30 @@
-const { execSync } = require('child_process');
+const { execFileSync, execSync } = require('child_process');
+const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
 const nativeModulePath = path.join(__dirname, '..', 'native-module');
+const localNapiCli = path.join(nativeModulePath, 'node_modules', '@napi-rs', 'cli', 'scripts', 'index.js');
 const args = new Set(process.argv.slice(2));
 const buildCurrentOnly = args.has('--current');
 
 function runCommand(command) {
   console.log(`> ${command}`);
   execSync(command, { stdio: 'inherit', cwd: nativeModulePath });
+}
+
+function runNapiBuild(buildArgs) {
+  if (fs.existsSync(localNapiCli)) {
+    const resolvedArgs = [localNapiCli, 'build', ...buildArgs];
+    console.log(`> ${process.execPath} ${resolvedArgs.join(' ')}`);
+    execFileSync(process.execPath, resolvedArgs, {
+      stdio: 'inherit',
+      cwd: nativeModulePath,
+    });
+    return;
+  }
+
+  runCommand(`npx napi build ${buildArgs.join(' ')}`);
 }
 
 if (os.platform() === 'darwin') {
@@ -22,7 +38,7 @@ if (os.platform() === 'darwin') {
       console.warn(`Warning: Could not configure rust target ${target} via rustup. Continuing anyway.`);
     }
 
-    runCommand(`npx napi build --platform --target ${target} --release`);
+    runNapiBuild(['--platform', '--target', target, '--release']);
   } else {
     console.log('Building native audio for macOS dual architectures...');
 
@@ -34,13 +50,13 @@ if (os.platform() === 'darwin') {
     }
 
     console.log('\n--- Building for x64 ---');
-    runCommand('npx napi build --platform --target x86_64-apple-darwin --release');
+    runNapiBuild(['--platform', '--target', 'x86_64-apple-darwin', '--release']);
 
     console.log('\n--- Building for arm64 ---');
-    runCommand('npx napi build --platform --target aarch64-apple-darwin --release');
+    runNapiBuild(['--platform', '--target', 'aarch64-apple-darwin', '--release']);
   }
   
 } else {
   console.log(`Building for current platform: ${os.platform()}`);
-  runCommand('npx napi build --platform --release');
+  runNapiBuild(['--platform', '--release']);
 }

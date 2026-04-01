@@ -17,6 +17,7 @@ pub mod license;
 pub mod microphone;
 pub mod silence_suppression;
 pub mod speaker;
+pub mod stealth;
 
 use crate::audio_config::DSP_POLL_MS;
 use crate::silence_suppression::{FrameAction, SilenceSuppressionConfig, SilenceSuppressor};
@@ -222,7 +223,22 @@ impl SystemAudioCapture {
     pub fn stop(&mut self) {
         self.stop_signal.store(true, Ordering::SeqCst);
         if let Some(handle) = self.capture_thread.take() {
-            let _ = handle.join();
+            // Wait up to 2 seconds for graceful shutdown.
+            // If the DSP thread is stuck (e.g. in a long I/O wait),
+            // we detach rather than freezing the entire app.
+            let join_result = Arc::new(std::sync::Mutex::new(None));
+            let join_result_clone = join_result.clone();
+            let _join_thread = thread::spawn(move || {
+                *join_result_clone.lock().unwrap() = Some(handle.join());
+            });
+            let deadline = Instant::now() + Duration::from_secs(2);
+            while join_result.lock().unwrap().is_none() {
+                if Instant::now() >= deadline {
+                    eprintln!("[SystemAudioCapture] DSP thread did not exit in 2s, detaching");
+                    break;
+                }
+                thread::sleep(Duration::from_millis(50));
+            }
         }
     }
 }

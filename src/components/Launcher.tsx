@@ -37,6 +37,7 @@ interface Meeting {
     }>;
     active?: boolean; // UI state
     time?: string; // Optional for compatibility
+    processingState?: 'processing' | 'completed' | 'failed';
 }
 
 interface LauncherProps {
@@ -47,6 +48,11 @@ interface LauncherProps {
     ollamaPullPercent?: number;
     ollamaPullMessage?: string;
 }
+
+const getStoredAudioDeviceId = (storageKey: string, fallback = 'default'): string => {
+    const value = localStorage.getItem(storageKey)?.trim();
+    return value && value.length > 0 ? value : fallback;
+};
 
 // Helper to format date groups
 const getGroupLabel = (dateStr: string) => {
@@ -192,16 +198,23 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onP
         if (!preparedEvent) return;
         analytics.trackCommandExecuted('start_prepared_meeting');
         try {
-            const inputDeviceId = localStorage.getItem('preferredInputDeviceId');
-            const outputDeviceId = localStorage.getItem('preferredOutputDeviceId');
+            const inputDeviceId = getStoredAudioDeviceId('preferredInputDeviceId');
+            const outputDeviceId = getStoredAudioDeviceId('preferredOutputDeviceId');
 
-            await window.electronAPI.startMeeting({
+            const result = await window.electronAPI.startMeeting({
                 title: preparedEvent.title,
                 calendarEventId: preparedEvent.id,
                 source: 'calendar',
                 audio: { inputDeviceId, outputDeviceId }
             });
+
+            if (!result.success) {
+                console.error("Failed to start prepared meeting", result.error);
+                return;
+            }
+
             setIsPrepared(false);
+            await window.electronAPI.setWindowMode('overlay');
         } catch (e) {
             console.error("Failed to start prepared meeting", e);
         }
@@ -700,20 +713,22 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onP
                                             <section key={label}>
                                                 <h3 className="text-[13px] font-medium text-text-secondary mb-3 pl-1">{label}</h3>
                                                 <div className="space-y-1">
-                                                    {groupedMeetings[label].map((m) => (
+                                                    {groupedMeetings[label].map((m) => {
+                                                        const isMeetingProcessing = m.processingState === 'processing';
+                                                        return (
                                                         <motion.div
                                                             key={m.id}
                                                             layoutId={`meeting-${m.id}`}
                                                             className="group relative flex items-center justify-between px-3 py-2 rounded-lg bg-transparent hover:bg-bg-elevated transition-colors"
                                                             onClick={() => handleOpenMeeting(m)}
                                                         >
-                                                            <div className={`font-medium text-[14px] max-w-[60%] truncate ${m.title === 'Processing...' ? 'text-blue-400 italic animate-pulse' : 'text-text-primary'}`}>
+                                                            <div className={`font-medium text-[14px] max-w-[60%] truncate ${isMeetingProcessing ? 'text-blue-400 italic animate-pulse' : 'text-text-primary'}`}>
                                                                 {m.title}
                                                             </div>
 
                                                             {/* Time & Duration Section */}
                                                             <div className="flex items-center gap-4">
-                                                                {m.title === 'Processing...' ? (
+                                                                {isMeetingProcessing ? (
                                                                     <div className="flex items-center gap-2 transition-all duration-200 ease-out group-hover:opacity-0 group-hover:translate-x-2 delayed-hover-exit">
                                                                         <RefreshCw size={12} className="animate-spin text-blue-500" />
                                                                         <span className="text-xs text-blue-500 font-medium">Finalizing...</span>
@@ -808,7 +823,8 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onP
                                                                 )}
                                                             </AnimatePresence>
                                                         </motion.div>
-                                                    ))}
+                                                        );
+                                                    })}
                                                 </div>
                                             </section>
                                         ))}

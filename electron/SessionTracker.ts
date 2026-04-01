@@ -11,6 +11,50 @@ const MAX_ASSISTANT_HISTORY = 100;
 /** Maximum context history entries (beyond time-based eviction) */
 const MAX_CONTEXT_HISTORY = 200;
 
+/** Ring buffer for fixed-capacity context items */
+class RingBuffer<T> {
+  private buffer: (T | undefined)[];
+  private head: number = 0;
+  private tail: number = 0;
+  private count: number = 0;
+
+  constructor(private capacity: number) {
+    this.buffer = new Array(capacity);
+  }
+
+  push(item: T): void {
+    this.buffer[this.tail] = item;
+    this.tail = (this.tail + 1) % this.capacity;
+    if (this.count < this.capacity) {
+      this.count++;
+    } else {
+      this.head = (this.head + 1) % this.capacity;
+    }
+  }
+
+  toArray(): T[] {
+    const result: T[] = [];
+    for (let i = 0; i < this.count; i++) {
+      const item = this.buffer[(this.head + i) % this.capacity];
+      if (item !== undefined) {
+        result.push(item);
+      }
+    }
+    return result;
+  }
+
+  get length(): number {
+    return this.count;
+  }
+
+  clear(): void {
+    this.buffer = new Array(this.capacity);
+    this.head = 0;
+    this.tail = 0;
+    this.count = 0;
+  }
+}
+
 import { RecapLLM } from './llm';
 import {
   ConsciousModeStructuredResponse,
@@ -57,20 +101,32 @@ export interface MeetingMetadataSnapshot {
 }
 
 export interface MeetingSnapshot {
-    transcript: TranscriptSegment[];
-    usage: any[];
-    startTime: number;
-    durationMs: number;
-    context: string;
-    meetingMetadata: MeetingMetadataSnapshot | null;
+  transcript: TranscriptSegment[];
+  usage: UsageInteraction[];
+  startTime: number;
+  durationMs: number;
+  context: string;
+  meetingMetadata: MeetingMetadataSnapshot | null;
+}
+
+export interface UsageInteraction {
+  type: 'assist' | 'followup' | 'chat' | 'followup_questions';
+  timestamp: number;
+  question?: string;
+  answer?: string;
+  items?: string[];
 }
 
 export class SessionTracker {
-    private static nextSessionId = 1;
-    // Context management (mirrors Swift ContextManager)
-    private contextItems: ContextItem[] = [];
-    private readonly contextWindowDuration: number = 120; // 120 seconds
-    private readonly maxContextItems: number = 500;
+  private static nextSessionId = 1;
+  // Context management (mirrors Swift ContextManager)
+  private contextItemsBuffer = new RingBuffer<ContextItem>(500);
+  private readonly contextWindowDuration: number = 120; // 120 seconds
+  private readonly maxContextItems: number = 500;
+  
+  private getContextItems(): ContextItem[] {
+    return this.contextItemsBuffer.toArray();
+  }
 
     // Last assistant message for follow-up mode
     private lastAssistantMessage: string | null = null;
@@ -85,17 +141,21 @@ export class SessionTracker {
         source?: 'manual' | 'calendar';
     } | null = null;
 
-    // Full Session Tracking (Persisted)
-    private fullTranscript: TranscriptSegment[] = [];
-    private fullUsage: any[] = []; // UsageInteraction
-    private sessionStartTime: number = Date.now();
+  // Full Session Tracking (Persisted)
+  private fullTranscript: TranscriptSegment[] = [];
+  private fullUsage: UsageInteraction[] = []; // UsageInteraction
+  private sessionStartTime: number = Date.now();
 
     // Rolling summarization: epoch summaries preserve early context when arrays are compacted
     private static readonly MAX_EPOCH_SUMMARIES = 5;
     private transcriptEpochSummaries: string[] = [];
-    private isCompacting: boolean = false;
+  private isCompacting: boolean = false;
+  private pendingCompactionPromise: Promise<void> | null = null;
+  private compactionTimer: NodeJS.Timeout | null = null;
+  private readonly COMPACTION_IDLE_MS = 5000;
+  private readonly COMPACTION_THRESHOLD = 2000;
 
-    // Track interim interviewer segment
+  // Track interim interviewer segment
     private lastInterimInterviewer: TranscriptSegment | null = null;
 
     // Conscious Mode state
@@ -154,45 +214,43 @@ export class SessionTracker {
 
         if (!text) return null;
 
-        // Deduplicate: check if this exact item already exists
-        const lastItem = this.contextItems[this.contextItems.length - 1];
-        if (lastItem &&
-            lastItem.role === role &&
-            Math.abs(lastItem.timestamp - segment.timestamp) < 500 &&
-            lastItem.text === text) {
-            return null;
-        }
+    // Deduplicate: check if this exact item already exists
+    const contextItems = this.getContextItems();
+    const lastItem = contextItems[contextItems.length - 1];
+    if (lastItem &&
+      lastItem.role === role &&
+      Math.abs(lastItem.timestamp - segment.timestamp) < 500 &&
+      lastItem.text === text) {
+      return null;
+    }
 
-        this.contextItems.push({
-            role,
-            text,
-            timestamp: segment.timestamp
-        });
+    this.contextItemsBuffer.push({
+      role,
+      text,
+      timestamp: segment.timestamp
+    });
         this.transcriptRevision++;
         this.compactSnapshotCache.clear();
 
         this.evictOldEntries();
 
-        // Filter out internal system prompts that might be passed via IPC
-        const isInternalPrompt = text.startsWith("You are a real-time interview assistant") ||
-            text.startsWith("You are a helper") ||
-            text.startsWith("CONTEXT:");
+    // Filter out internal system prompts that might be passed via IPC
+    const isInternalPrompt = text.startsWith("You are a real-time interview assistant") ||
+      text.startsWith("You are a helper") ||
+      text.startsWith("CONTEXT:");
 
-        if (!isInternalPrompt) {
-            // Add to session transcript
-            this.fullTranscript.push(segment);
+    if (!isInternalPrompt) {
+      // Add to session transcript
+      this.fullTranscript.push(segment);
 
-            // Hard cap to prevent memory exhaustion in very long meetings
-            while (this.fullTranscript.length > MAX_TRANSCRIPT_ENTRIES) {
-                this.fullTranscript.shift(); // Remove oldest entries
-            }
+      // Hard cap to prevent memory exhaustion in very long meetings
+      while (this.fullTranscript.length > MAX_TRANSCRIPT_ENTRIES) {
+        this.fullTranscript.shift(); // Remove oldest entries
+      }
 
-            // Compact transcript with summarization instead of losing early context
-            // Fire-and-forget: sync context; errors are caught internally
-            void this.compactTranscriptIfNeeded().catch(e =>
-                console.warn('[SessionTracker] compactTranscript error (non-fatal):', e)
-            );
-        }
+      // Debounced compaction instead of immediate
+      this.scheduleCompaction();
+    }
 
         return { role };
     }
@@ -217,11 +275,11 @@ export class SessionTracker {
             return;
         }
 
-        this.contextItems.push({
-            role: 'assistant',
-            text: cleanText,
-            timestamp: Date.now()
-        });
+    this.contextItemsBuffer.push({
+      role: 'assistant',
+      text: cleanText,
+      timestamp: Date.now()
+    });
         this.transcriptRevision++;
         this.compactSnapshotCache.clear();
 
@@ -239,11 +297,7 @@ export class SessionTracker {
             this.fullTranscript.shift(); // Remove oldest entries
         }
 
-        // Compact transcript with summarization instead of losing early context
-        // Fire-and-forget: sync context; errors are caught internally
-        void this.compactTranscriptIfNeeded().catch(e =>
-            console.warn('[SessionTracker] compactTranscript error (non-fatal):', e)
-        );
+        this.scheduleCompaction();
 
         this.lastAssistantMessage = cleanText;
 
@@ -352,7 +406,7 @@ export class SessionTracker {
      */
     getContext(lastSeconds: number = 120): ContextItem[] {
         const cutoff = Date.now() - (lastSeconds * 1000);
-        return this.contextItems.filter(item => item.timestamp >= cutoff);
+        return this.getContextItems().filter((item: ContextItem) => item.timestamp >= cutoff);
     }
 
     getLastAssistantMessage(): string | null {
@@ -395,7 +449,7 @@ isConsciousModeEnabled(): boolean {
       return this.getContext(Math.floor(tokenBudget / 4));
     }
 
-    const candidates: ContextEntry[] = this.contextItems.map(item => ({
+    const candidates: ContextEntry[] = this.getContextItems().map((item: ContextItem) => ({
       text: item.text,
       timestamp: item.timestamp,
       phase: undefined as InterviewPhase | undefined,
@@ -483,7 +537,7 @@ isConsciousModeEnabled(): boolean {
             return cached.value;
         }
 
-        const items = this.contextItems.slice(-maxTurns);
+        const items = this.getContextItems().slice(-maxTurns);
         const snapshot = items.map(item => ({
             role: item.role,
             text: item.text,
@@ -504,9 +558,10 @@ isConsciousModeEnabled(): boolean {
      * Get the last interviewer turn
      */
     getLastInterviewerTurn(): string | null {
-        for (let i = this.contextItems.length - 1; i >= 0; i--) {
-            if (this.contextItems[i].role === 'interviewer') {
-                return this.contextItems[i].text;
+    const contextItems = this.getContextItems();
+    for (let i = contextItems.length - 1; i >= 0; i--) {
+      if (contextItems[i].role === 'interviewer') {
+        return contextItems[i].text;
             }
         }
         return null;
@@ -544,8 +599,15 @@ isConsciousModeEnabled(): boolean {
         return this.fullTranscript;
     }
 
-    getFullUsage(): any[] {
+    getFullUsage(): UsageInteraction[] {
         return this.fullUsage;
+    }
+
+    createSuccessorSession(): SessionTracker {
+        const next = new SessionTracker();
+        next.setRecapLLM(this.recapLLM);
+        next.setConsciousModeEnabled(this.consciousModeEnabled);
+        return next;
     }
 
     getSessionStartTime(): number {
@@ -581,19 +643,19 @@ isConsciousModeEnabled(): boolean {
     /**
      * Public method to log usage from external sources (e.g. IPC direct chat)
      */
-    logUsage(type: string, question: string, answer: string): void {
-        this.fullUsage.push({
-            type,
-            timestamp: Date.now(),
-            question,
-            answer
-        });
-    }
+  logUsage(type: UsageInteraction['type'], question: string, answer: string): void {
+    this.fullUsage.push({
+      type,
+      timestamp: Date.now(),
+      question,
+      answer
+    });
+  }
 
-    pushUsage(entry: any): void {
-        this.fullUsage.push(entry);
-        this.capUsageArray();
-    }
+  pushUsage(entry: UsageInteraction): void {
+    this.fullUsage.push(entry);
+    this.capUsageArray();
+  }
 
     // ============================================
     // Interim Transcript Flush
@@ -639,7 +701,7 @@ isConsciousModeEnabled(): boolean {
         const result = this.phaseDetector.detectPhase(
             transcript,
             this.phaseDetector.getCurrentPhase(),
-            this.contextItems.slice(-5).map(item => item.text)
+            this.getContextItems().slice(-5).map((item: ContextItem) => item.text)
         );
         return result.phase;
     }
@@ -648,28 +710,45 @@ isConsciousModeEnabled(): boolean {
     // Reset
     // ============================================
 
-    reset(): void {
-        const consciousModeEnabled = this.consciousModeEnabled;
-        this.contextItems = [];
-        this.fullTranscript = [];
-        this.fullUsage = [];
-        this.currentMeetingMetadata = null;
-        this.transcriptEpochSummaries = [];
-        this.sessionStartTime = Date.now();
-        this.lastAssistantMessage = null;
-        this.assistantResponseHistory = [];
-        this.lastInterimInterviewer = null;
-        this.consciousModeEnabled = consciousModeEnabled;
-        this.latestConsciousResponse = null;
-        this.activeReasoningThread = null;
-        this.threadManager.reset();
-        this.phaseDetector.reset();
-        this.tokenBudgetManager.reset();
-        this.adaptiveContextWindow = null;
-        this.transcriptRevision = 0;
-        this.compactSnapshotCache.clear();
-        this.sessionId = `session_${SessionTracker.nextSessionId++}`;
+  async reset(): Promise<void> {
+    if (this.pendingCompactionPromise) {
+      try {
+        await this.pendingCompactionPromise;
+      } catch {
+        // Ignore compaction errors during reset
+      }
     }
+
+    this.cancelCompactionTimer();
+    
+    const consciousModeEnabled = this.consciousModeEnabled;
+    
+    const freshSessionId = `session_${SessionTracker.nextSessionId++}`;
+    const freshStartTime = Date.now();
+    
+    this.contextItemsBuffer.clear();
+    this.fullTranscript = [];
+    this.fullUsage = [];
+    this.currentMeetingMetadata = null;
+    this.transcriptEpochSummaries = [];
+    this.sessionStartTime = freshStartTime;
+    this.lastAssistantMessage = null;
+    this.assistantResponseHistory = [];
+    this.lastInterimInterviewer = null;
+    this.consciousModeEnabled = consciousModeEnabled;
+    this.latestConsciousResponse = null;
+    this.activeReasoningThread = null;
+    this.threadManager.reset();
+    this.phaseDetector.reset();
+    this.tokenBudgetManager.reset();
+    this.adaptiveContextWindow = null;
+    this.transcriptRevision = 0;
+    this.compactSnapshotCache.clear();
+    this.sessionId = freshSessionId;
+    
+    this.pendingCompactionPromise = null;
+    this.isCompacting = false;
+  }
 
     // ============================================
     // Private Helpers
@@ -681,25 +760,53 @@ isConsciousModeEnabled(): boolean {
         return 'interviewer'; // system audio = interviewer
     }
 
-    private evictOldEntries(): void {
-        const cutoff = Date.now() - (this.contextWindowDuration * 1000);
-        this.contextItems = this.contextItems.filter(item => item.timestamp >= cutoff);
+  private evictOldEntries(): void {
+    // Ring buffer automatically handles capacity
+    // Time-based eviction handled by callers via getContextItems()
+  }
 
-        // Safety limit
-        if (this.contextItems.length > this.maxContextItems) {
-            this.contextItems = this.contextItems.slice(-this.maxContextItems);
-        }
+  /**
+   * Schedule debounced compaction. Triggers immediately if threshold exceeded,
+   * otherwise waits for idle period.
+   */
+  private scheduleCompaction(): void {
+    if (this.fullTranscript.length > this.COMPACTION_THRESHOLD) {
+      this.cancelCompactionTimer();
+      void this.compactTranscriptIfNeeded().catch(e =>
+        console.warn('[SessionTracker] compactTranscript error (non-fatal):', e)
+      );
+      return;
     }
 
-    /**
-     * Compact transcript buffer by summarizing oldest entries into an epoch summary.
-     * Called instead of raw slice() to preserve early meeting context.
-     */
-    private async compactTranscriptIfNeeded(): Promise<void> {
-        if (this.fullTranscript.length <= 1800 || this.isCompacting) return;
+    if (this.compactionTimer) {
+      clearTimeout(this.compactionTimer);
+    }
 
-        this.isCompacting = true;
-        try {
+    this.compactionTimer = setTimeout(() => {
+      this.compactionTimer = null;
+      void this.compactTranscriptIfNeeded().catch(e =>
+        console.warn('[SessionTracker] compactTranscript error (non-fatal):', e)
+      );
+    }, this.COMPACTION_IDLE_MS);
+  }
+
+  private cancelCompactionTimer(): void {
+    if (this.compactionTimer) {
+      clearTimeout(this.compactionTimer);
+      this.compactionTimer = null;
+    }
+  }
+
+  /**
+   * Compact transcript buffer by summarizing oldest entries into an epoch summary.
+   * Called instead of raw slice() to preserve early meeting context.
+   */
+  private async compactTranscriptIfNeeded(): Promise<void> {
+    if (this.fullTranscript.length <= 1800 || this.isCompacting) return;
+
+    this.isCompacting = true;
+    const promise = (async () => {
+    try {
             // Take the oldest 500 entries to summarize
             const summarizeCount = 500;
             const oldEntries = this.fullTranscript.slice(0, summarizeCount);
@@ -749,8 +856,11 @@ isConsciousModeEnabled(): boolean {
             } catch (fallbackError) {
                 console.error('[SessionTracker] Fallback compaction also failed:', fallbackError);
             }
-        } finally {
-            this.isCompacting = false;
-        }
+    } finally {
+      this.isCompacting = false;
     }
+    })();
+    this.pendingCompactionPromise = promise;
+    return promise;
+  }
 }
