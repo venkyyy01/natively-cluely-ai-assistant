@@ -93,8 +93,10 @@ export class SystemAudioCapture extends EventEmitter {
                 console.log(`[SystemAudioCapture] Detected sample rate: ${this.detectedSampleRate}`);
             }
 
-            this.monitor.start((chunk: Uint8Array) => {
-                // The native module sends raw PCM bytes (Uint8Array) via zero-copy napi::Buffer
+            this.monitor.start((first: Uint8Array | null, second?: Uint8Array) => {
+                // napi-rs ThreadsafeFunction payloads can arrive as either `(chunk)` or
+                // `(err, chunk)` depending on the native ErrorStrategy. Support both.
+                const chunk = second ?? first;
                 if (chunk && chunk.length > 0) {
                     const buffer = Buffer.from(chunk);
                     this.emit('data', buffer);
