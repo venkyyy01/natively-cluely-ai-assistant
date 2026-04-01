@@ -16,7 +16,7 @@ import { resampleToMonoPcm16 } from './pcm';
 
 const RECONNECT_BASE_DELAY_MS = 1000;
 const RECONNECT_MAX_DELAY_MS = 30000;
-const KEEPALIVE_INTERVAL_MS = 15000;
+const KEEPALIVE_INTERVAL_MS = 5000;
 const MAX_BUFFER_SIZE = 500;
 
 /**
@@ -127,6 +127,7 @@ export class DeepgramStreamingSTT extends EventEmitter {
 
     public start(): void {
         if (this.isActive) return;
+        this.isActive = true;
         this.shouldReconnect = true;
         this.reconnectAttempts = 0;
         this.connect();
@@ -219,7 +220,6 @@ export class DeepgramStreamingSTT extends EventEmitter {
       return;
     }
 
-    this.isActive = true;
     this.isConnecting = false;
     this.reconnectAttempts = 0;
     console.log('[DeepgramStreaming] Connected');
@@ -237,6 +237,11 @@ export class DeepgramStreamingSTT extends EventEmitter {
 
     // Start keep-alive pings
     this.startKeepAlive();
+    try {
+      this.ws.send(JSON.stringify({ type: 'KeepAlive' }));
+    } catch {
+      // Ignore eager keep-alive errors
+    }
   });
 
         socket.on('message', (data: WebSocket.Data) => {

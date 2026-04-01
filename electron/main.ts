@@ -1059,6 +1059,42 @@ try {
     this.googleSTT_User?.start();
   }
 
+  private assertMeetingAudioPipelineReady(): void {
+    const missing: string[] = [];
+
+    if (!this.systemAudioCapture) {
+      missing.push('system audio capture');
+    }
+    if (!this.microphoneCapture) {
+      missing.push('microphone capture');
+    }
+    if (!this.googleSTT) {
+      missing.push('interviewer transcription');
+    }
+    if (!this.googleSTT_User) {
+      missing.push('user transcription');
+    }
+
+    if (missing.length > 0) {
+      throw new Error(`Audio pipeline unavailable: missing ${missing.join(', ')}`);
+    }
+  }
+
+  private assertAudioCapturesReady(): void {
+    const missing: string[] = [];
+
+    if (!this.systemAudioCapture) {
+      missing.push('system audio capture');
+    }
+    if (!this.microphoneCapture) {
+      missing.push('microphone capture');
+    }
+
+    if (missing.length > 0) {
+      throw new Error(`Audio capture unavailable: missing ${missing.join(', ')}`);
+    }
+  }
+
   private setupSystemAudioPipeline(): void {
     try {
       if (!this.systemAudioCapture) {
@@ -1096,9 +1132,11 @@ try {
     safeSetAudioChannelCount(this.googleSTT_User, 1);
 
       console.log('[Main] Full Audio Pipeline (System + Mic) Initialized (Ready)');
+      this.assertMeetingAudioPipelineReady();
 
     } catch (err) {
       console.error('[Main] Failed to setup System Audio Pipeline:', err);
+      throw err;
     }
   }
 
@@ -1198,6 +1236,7 @@ try {
         console.error('[Main] Failed to initialize MicrophoneCapture (Default):', err2);
       }
     }
+    this.assertAudioCapturesReady();
   }
 
   /**
@@ -1410,10 +1449,10 @@ try {
             }
 
             this.setupSystemAudioPipeline();
-            this.systemAudioCapture?.start();
             this.googleSTT?.start();
-            this.microphoneCapture?.start();
             this.googleSTT_User?.start();
+            this.systemAudioCapture?.start();
+            this.microphoneCapture?.start();
 
             if (this.ragManager) {
               try {
