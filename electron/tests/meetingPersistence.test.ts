@@ -7,14 +7,14 @@ import { MeetingPersistence } from '../MeetingPersistence';
 import type { Meeting } from '../db/DatabaseManager';
 import type { MeetingSnapshot } from '../SessionTracker';
 
-function installElectronMock(): () => void {
+function installElectronMock(windows: unknown[] = []): () => void {
   const originalLoad = (Module as any)._load;
 
   (Module as any)._load = function patchedLoad(request: string, parent: unknown, isMain: boolean): unknown {
     if (request === 'electron') {
       return {
         BrowserWindow: {
-          getAllWindows: (): unknown[] => [],
+          getAllWindows: (): unknown[] => windows,
         },
       };
     }
@@ -302,6 +302,61 @@ test('MeetingPersistence reuses meaningful metadata titles and skips summary gen
     assert.equal(finalizedWrites[0]?.source, 'calendar');
     assert.equal(finalizedWrites[0]?.calendarEventId, 'evt-123');
     assert.deepEqual(finalizedWrites[0]?.detailedSummary, { actionItems: [], keyPoints: [] });
+  } finally {
+    DatabaseManager.getInstance = originalGetInstance;
+    restoreElectron();
+  }
+});
+
+test('MeetingPersistence marks failed finalization attempts and notifies listeners', async () => {
+  const originalGetInstance = DatabaseManager.getInstance;
+  const notifications: string[] = [];
+  const restoreElectron = installElectronMock([
+    {
+      webContents: {
+        send(channel: string) {
+          notifications.push(channel);
+        },
+      },
+    },
+  ]);
+  const failed: Array<{ id: string; message: string }> = [];
+
+  DatabaseManager.getInstance = ((() => ({
+    finalizeMeetingProcessing() {
+      throw new Error('persist failed');
+    },
+    markMeetingProcessingFailed(id: string, error: unknown) {
+      failed.push({
+        id,
+        message: error instanceof Error ? error.message : String(error),
+      });
+      return true;
+    },
+  })) as unknown) as typeof DatabaseManager.getInstance;
+
+  try {
+    const persistence = new MeetingPersistence(
+      { createSnapshot() { throw new Error('unused'); } } as never,
+      { generateMeetingSummary: async () => 'unused' } as never,
+    );
+
+    await (persistence as unknown as {
+      processAndSaveMeeting: (snapshot: MeetingSnapshot, meetingId: string) => Promise<void>;
+    }).processAndSaveMeeting({
+      transcript: [
+        { speaker: 'interviewer', text: 'one', timestamp: 1, final: true },
+        { speaker: 'user', text: 'two', timestamp: 2, final: true },
+      ],
+      usage: [],
+      startTime: 65_000,
+      durationMs: 65_000,
+      context: '[INTERVIEWER]: one\n[ME]: two',
+      meetingMetadata: null,
+    }, 'meeting-finalize-error');
+
+    assert.deepEqual(failed, [{ id: 'meeting-finalize-error', message: 'persist failed' }]);
+    assert.deepEqual(notifications, ['meetings-updated']);
   } finally {
     DatabaseManager.getInstance = originalGetInstance;
     restoreElectron();
