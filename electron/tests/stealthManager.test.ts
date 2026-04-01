@@ -191,6 +191,34 @@ describe('StealthManager', () => {
     assert.deepStrictEqual(win.contentProtectionCalls, [true]);
   });
 
+  it('ignores destroyed windows when releasing virtual display isolation', () => {
+    const releaseCalls: string[] = [];
+    const manager = new StealthManager(
+      { enabled: true },
+      {
+        platform: 'darwin',
+        logger: silentLogger,
+        featureFlags: {
+          enableVirtualDisplayIsolation: true,
+        },
+        virtualDisplayCoordinator: {
+          ensureIsolationForWindow: async () => ({ ready: true, surfaceToken: 'display-1' }),
+          releaseIsolationForWindow: async ({ windowId }: { windowId: string }) => {
+            releaseCalls.push(windowId);
+          },
+        } as any,
+      }
+    );
+    const win = new FakeWindow();
+
+    manager.applyToWindow(win as any, true, { role: 'auxiliary', allowVirtualDisplayIsolation: true });
+    win.destroyed = true;
+    win.mediaSourceId = 'window:999:0';
+
+    assert.doesNotThrow(() => win.emit('closed'));
+    assert.deepStrictEqual(releaseCalls, []);
+  });
+
   it('reapplies managed windows after power monitor events', () => {
     const nativeCalls: number[] = [];
     const powerMonitor = new EventEmitter();

@@ -570,7 +570,7 @@ export class StealthManager extends EventEmitter {
   }
 
   private getMacosWindowNumber(win: StealthCapableWindow): number | null {
-    const mediaSourceId = win.getMediaSourceId?.();
+    const mediaSourceId = this.safeGetMediaSourceId(win);
     if (!mediaSourceId) {
       return null;
     }
@@ -597,7 +597,7 @@ export class StealthManager extends EventEmitter {
     }
 
     const win = record.win;
-    const windowId = win.getMediaSourceId?.();
+    const windowId = this.safeGetMediaSourceId(win);
     if (!windowId) {
       return;
     }
@@ -661,7 +661,7 @@ export class StealthManager extends EventEmitter {
       return;
     }
 
-    const windowId = win.getMediaSourceId?.();
+    const windowId = this.safeGetMediaSourceId(win);
     if (!windowId) {
       return;
     }
@@ -709,6 +709,19 @@ export class StealthManager extends EventEmitter {
       this.stopBackgroundMonitorsIfIdle();
     });
     record.listenersAttached = true;
+  }
+
+  private safeGetMediaSourceId(win: StealthCapableWindow): string | null {
+    if (typeof win.isDestroyed === 'function' && win.isDestroyed()) {
+      return null;
+    }
+
+    try {
+      return win.getMediaSourceId?.() ?? null;
+    } catch (error) {
+      this.logger.warn('[StealthManager] Failed to read media source id from managed window:', error);
+      return null;
+    }
   }
 
   private stopBackgroundMonitorsIfIdle(): void {

@@ -269,14 +269,6 @@ export class StealthRuntime {
       hideFromSwitcher: false,
       allowVirtualDisplayIsolation: false,
     });
-
-    if (this.contentWindow && !this.contentWindow.isDestroyed()) {
-      this.stealthManager.applyToWindow(this.contentWindow, enabled, {
-        role: 'auxiliary',
-        hideFromSwitcher: true,
-        allowVirtualDisplayIsolation: true,
-      });
-    }
   }
 
   private bindShellEvents(): void {

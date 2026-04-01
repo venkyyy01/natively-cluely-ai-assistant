@@ -58,7 +58,7 @@ class FakeWindow extends EventEmitter {
   isDestroyed(): boolean { return this.destroyed; }
 }
 
-test('StealthRuntime creates shell/content pair and applies stealth to both windows', () => {
+test('StealthRuntime creates shell/content pair and applies stealth to the visible shell only', () => {
   const created: FakeWindow[] = [];
   const applied: Array<{ id: number; options: unknown }> = [];
   const runtime = new StealthRuntime({
@@ -92,7 +92,6 @@ test('StealthRuntime creates shell/content pair and applies stealth to both wind
   assert.equal(created[0]?.options.vibrancy, undefined);
   assert.deepEqual(applied, [
     { id: 2, options: { role: 'primary', hideFromSwitcher: false, allowVirtualDisplayIsolation: false } },
-    { id: 1, options: { role: 'auxiliary', hideFromSwitcher: true, allowVirtualDisplayIsolation: true } },
   ]);
   assert.deepEqual(created[0]?.bounds, created[1]?.bounds);
 });

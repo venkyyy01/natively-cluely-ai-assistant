@@ -9,7 +9,7 @@ const isDev = isEnvDev && !isPackaged
 
 const startUrl = isDev
     ? "http://localhost:5180"
-    : `file://${path.join(app.getAppPath().replace("app.asar", "app.asar.unpacked"), "dist", "index.html")}`
+    : `file://${path.join(app.getAppPath(), "dist", "index.html")}`
 
 export class SettingsWindowHelper {
     private settingsWindow: BrowserWindow | null = null
