@@ -32,6 +32,11 @@ const AppProviders: React.FC<{ children: React.ReactNode }> = ({ children }) => 
   </QueryClientProvider>
 )
 
+const getStoredAudioDeviceId = (storageKey: string, fallback = 'default'): string => {
+  const value = localStorage.getItem(storageKey)?.trim()
+  return value && value.length > 0 ? value : fallback
+}
+
 type MeetingAudioBannerProps = {
   message: string
   title: string
@@ -388,8 +393,8 @@ const App: React.FC = () => {
     try {
       setMeetingAudioError(null)
       localStorage.setItem('natively_last_meeting_start', Date.now().toString())
-      const inputDeviceId = localStorage.getItem('preferredInputDeviceId')
-      let outputDeviceId = localStorage.getItem('preferredOutputDeviceId')
+      const inputDeviceId = getStoredAudioDeviceId('preferredInputDeviceId')
+      let outputDeviceId = getStoredAudioDeviceId('preferredOutputDeviceId')
       const useExperimentalSck = localStorage.getItem('useExperimentalSckBackend') === 'true'
 
       if (useExperimentalSck) {

@@ -345,6 +345,14 @@ export class AppState {
   private audioRecoveryBackoffMs: number = 5000;
   private currentMeetingId: string | null = null;
   private startAbortController: AbortController | null = null;
+  private audioHealthCheckTimer: NodeJS.Timeout | null = null;
+  private audioPipelineStats = {
+    startedAt: 0,
+    systemChunks: 0,
+    microphoneChunks: 0,
+    interviewerTranscripts: 0,
+    userTranscripts: 0,
+  };
 
 
   // Processing events
@@ -619,6 +627,7 @@ this.setupIntelligenceEvents()
 
   private async validateMeetingAudioSetup(metadata?: any): Promise<void> {
     await this.ensureMeetingAudioAccess();
+    this.assertSelectedSttProviderReady();
 
     const inputDeviceId = metadata?.audio?.inputDeviceId;
     const outputDeviceId = metadata?.audio?.outputDeviceId;
@@ -644,6 +653,112 @@ this.setupIntelligenceEvents()
     if (!outputDevices.some((device: AudioDevice) => device.id === outputDeviceId)) {
       throw new Error(`Selected speaker output is unavailable: ${outputDeviceId}`);
     }
+  }
+
+  private assertSelectedSttProviderReady(): void {
+    const { CredentialsManager } = require('./services/CredentialsManager');
+    const credentials = CredentialsManager.getInstance();
+    const provider = credentials.getSttProvider();
+    const hasValue = (value?: string): boolean => Boolean(value && value.trim().length > 0);
+
+    if (provider === 'google') {
+      const serviceAccountPath = credentials.getGoogleServiceAccountPath();
+      if (!hasValue(serviceAccountPath)) {
+        throw new Error('Google STT is selected but no Google service account is configured. Add a service account JSON in Settings > Speech.');
+      }
+
+      if (!fs.existsSync(serviceAccountPath!)) {
+        throw new Error(`Google STT service account file is missing: ${serviceAccountPath}`);
+      }
+
+      return;
+    }
+
+    const providerKeys: Record<string, string | undefined> = {
+      deepgram: credentials.getDeepgramApiKey(),
+      soniox: credentials.getSonioxApiKey(),
+      elevenlabs: credentials.getElevenLabsApiKey(),
+      openai: credentials.getOpenAiSttApiKey(),
+      groq: credentials.getGroqSttApiKey(),
+      azure: credentials.getAzureApiKey(),
+      ibmwatson: credentials.getIbmWatsonApiKey(),
+    };
+
+    if (!hasValue(providerKeys[provider])) {
+      throw new Error(`${provider} STT is selected but its credentials are not configured. Add the API key in Settings > Speech or switch providers.`);
+    }
+  }
+
+  private resetAudioPipelineStats(): void {
+    this.audioPipelineStats = {
+      startedAt: Date.now(),
+      systemChunks: 0,
+      microphoneChunks: 0,
+      interviewerTranscripts: 0,
+      userTranscripts: 0,
+    };
+  }
+
+  private clearAudioPipelineHealthCheck(): void {
+    if (this.audioHealthCheckTimer) {
+      clearTimeout(this.audioHealthCheckTimer);
+      this.audioHealthCheckTimer = null;
+    }
+  }
+
+  private noteAudioChunk(source: 'system' | 'microphone'): void {
+    if (source === 'system') {
+      this.audioPipelineStats.systemChunks += 1;
+      return;
+    }
+
+    this.audioPipelineStats.microphoneChunks += 1;
+  }
+
+  private noteTranscript(speaker: 'interviewer' | 'user'): void {
+    if (speaker === 'interviewer') {
+      this.audioPipelineStats.interviewerTranscripts += 1;
+      return;
+    }
+
+    this.audioPipelineStats.userTranscripts += 1;
+  }
+
+  private scheduleAudioPipelineHealthCheck(): void {
+    this.clearAudioPipelineHealthCheck();
+    this.audioHealthCheckTimer = setTimeout(() => {
+      if (!this.isMeetingActive) {
+        return;
+      }
+
+      const { systemChunks, microphoneChunks, interviewerTranscripts, userTranscripts, startedAt } = this.audioPipelineStats;
+      const elapsedMs = startedAt ? Date.now() - startedAt : 0;
+
+      console.warn('[AudioHealth] Snapshot after startup:', {
+        elapsedMs,
+        systemChunks,
+        microphoneChunks,
+        interviewerTranscripts,
+        userTranscripts,
+      });
+
+      if (systemChunks === 0 && microphoneChunks === 0) {
+        console.warn('[AudioHealth] No audio chunks observed from either capture source. Investigate native capture initialization, device selection, and macOS permissions first.');
+        return;
+      }
+
+      if (microphoneChunks === 0) {
+        console.warn('[AudioHealth] Microphone capture produced no chunks. Investigate MicrophoneCapture/native CoreAudio startup.');
+      } else if (userTranscripts === 0) {
+        console.warn('[AudioHealth] Microphone chunks reached the STT layer but no user transcripts were emitted. Investigate provider auth/session startup and audio format compatibility.');
+      }
+
+      if (systemChunks === 0) {
+        console.warn('[AudioHealth] System audio capture produced no chunks. Investigate Screen Recording permission and output capture backend/device selection.');
+      } else if (interviewerTranscripts === 0) {
+        console.warn('[AudioHealth] System audio chunks reached the STT layer but no interviewer transcripts were emitted. Investigate provider auth/session startup and transcript parsing.');
+      }
+    }, 8000);
   }
 
   private async bootstrapOllamaEmbeddings() {
@@ -866,6 +981,8 @@ try {
         return;
       }
 
+      this.noteTranscript(speaker);
+
       this.intelligenceManager.handleTranscript({
         speaker: speaker,
         text: segment.text,
@@ -991,6 +1108,7 @@ try {
 
     this.systemAudioCapture.removeAllListeners();
     this.systemAudioCapture.on('data', (chunk: Buffer) => {
+      this.noteAudioChunk('system');
       this.googleSTT?.write(chunk);
     });
     this.systemAudioCapture.on('speech_ended', () => {
@@ -1008,6 +1126,7 @@ try {
 
     this.microphoneCapture.removeAllListeners();
     this.microphoneCapture.on('data', (chunk: Buffer) => {
+      this.noteAudioChunk('microphone');
       this.googleSTT_User?.write(chunk);
     });
     this.microphoneCapture.on('speech_ended', () => {
@@ -1178,6 +1297,7 @@ try {
 
       this.systemAudioCapture.on('data', (chunk: Buffer) => {
         // console.log('[Main] SysAudio chunk', chunk.length);
+        this.noteAudioChunk('system');
         this.googleSTT?.write(chunk);
       });
       this.systemAudioCapture.on('speech_ended', () => {
@@ -1196,6 +1316,7 @@ try {
         this.googleSTT?.setSampleRate(rate);
 
         this.systemAudioCapture.on('data', (chunk: Buffer) => {
+          this.noteAudioChunk('system');
           this.googleSTT?.write(chunk);
         });
       this.systemAudioCapture.on('speech_ended', () => {
@@ -1232,6 +1353,7 @@ try {
         if (Math.random() < 0.01) { // Log ~1% of chunks
           console.log(`[Main] 🎤 Audio chunk: ${chunk.length}B → STT: ${!!this.googleSTT_User}`);
         }
+        this.noteAudioChunk('microphone');
         this.googleSTT_User?.write(chunk);
       });
       
@@ -1260,6 +1382,7 @@ try {
           if (Math.random() < 0.01) { // Log ~1% of chunks
             console.log(`[Main] 🎤 Audio chunk (fallback): ${chunk.length}B → STT: ${!!this.googleSTT_User}`);
           }
+          this.noteAudioChunk('microphone');
           this.googleSTT_User?.write(chunk);
         });
         
@@ -1399,12 +1522,36 @@ try {
     this.startAbortController = new AbortController();
     const { signal } = this.startAbortController;
 
+    const normalizeDeviceId = (value: unknown): string | undefined => {
+      if (typeof value !== 'string') {
+        return undefined;
+      }
+
+      const trimmed = value.trim();
+      return trimmed.length > 0 ? trimmed : undefined;
+    };
+
     if (metadata && typeof metadata !== 'object') {
       throw new Error('startMeeting metadata must be an object or undefined');
     }
-    if (metadata?.audio && (typeof metadata.audio.inputDeviceId !== 'string' || typeof metadata.audio.outputDeviceId !== 'string')) {
+    if (metadata?.audio && (
+      (metadata.audio.inputDeviceId != null && typeof metadata.audio.inputDeviceId !== 'string') ||
+      (metadata.audio.outputDeviceId != null && typeof metadata.audio.outputDeviceId !== 'string')
+    )) {
       throw new Error('startMeeting metadata.audio requires string inputDeviceId and outputDeviceId');
     }
+
+    const normalizedMetadata = metadata
+      ? {
+          ...metadata,
+          ...(metadata.audio ? {
+            audio: {
+              inputDeviceId: normalizeDeviceId(metadata.audio.inputDeviceId),
+              outputDeviceId: normalizeDeviceId(metadata.audio.outputDeviceId),
+            },
+          } : {}),
+        }
+      : undefined;
 
     const currentMutex = this.meetingStartMutex;
     let settled = false;
@@ -1423,7 +1570,7 @@ try {
       const startSequence = ++this.meetingStartSequence
 
       try {
-        await this.validateMeetingAudioSetup(metadata);
+        await this.validateMeetingAudioSetup(normalizedMetadata);
       } catch (error) {
         this.currentMeetingId = null
         this.meetingLifecycleState = 'idle'
@@ -1438,8 +1585,9 @@ try {
 
       this.currentMeetingId = randomUUID()
       this.isMeetingActive = true;
-      if (metadata) {
-        this.intelligenceManager.setMeetingMetadata(metadata);
+      this.resetAudioPipelineStats();
+      if (normalizedMetadata) {
+        this.intelligenceManager.setMeetingMetadata(normalizedMetadata);
       }
 
       this.getWindowHelper().getOverlayContentWindow()?.webContents.send('session-reset');
@@ -1472,8 +1620,8 @@ try {
           }
 
           try {
-            if (metadata?.audio) {
-              await this.reconfigureAudio(metadata.audio.inputDeviceId, metadata.audio.outputDeviceId);
+            if (normalizedMetadata?.audio) {
+              await this.reconfigureAudio(normalizedMetadata.audio.inputDeviceId, normalizedMetadata.audio.outputDeviceId);
             }
 
             if (signal.aborted) {
@@ -1496,6 +1644,7 @@ try {
             this.googleSTT_User?.start();
             this.systemAudioCapture?.start();
             this.microphoneCapture?.start();
+            this.scheduleAudioPipelineHealthCheck();
 
             if (this.ragManager) {
               try {
@@ -1521,6 +1670,7 @@ try {
             this.isMeetingActive = false;
             this.currentMeetingId = null;
             this.meetingLifecycleState = 'idle'
+            this.clearAudioPipelineHealthCheck();
             reject(err)
           }
         }, 0);
@@ -1541,6 +1691,7 @@ try {
     console.log('[Main] Ending Meeting...');
     this.startAbortController?.abort();
     this.startAbortController = null;
+    this.clearAudioPipelineHealthCheck();
     const meetingId = this.currentMeetingId;
     this.currentMeetingId = null;
     const endSequence = ++this.meetingStartSequence  // Increment sequence to invalidate any pending starts
@@ -1676,6 +1827,7 @@ try {
     this.isMeetingActive = false
     this.setNativeAudioConnected(false)
     this.currentMeetingId = null
+    this.clearAudioPipelineHealthCheck();
 
     // Clear disguise timers to prevent memory leaks
     this.clearDisguiseTimers()

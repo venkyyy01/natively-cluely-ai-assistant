@@ -1037,6 +1037,7 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
 
             // Send manual finalization signal to STT Providers
             window.electronAPI.finalizeMicSTT().catch(err => console.error('[NativelyInterface] Failed to send finalizeMicSTT:', err));
+            const nativeAudioStatus = await window.electronAPI.getNativeAudioStatus().catch(() => ({ connected: false }));
 
             const currentAttachments = attachedContext;
             setAttachedContext([]); // Clear context immediately on send
@@ -1052,7 +1053,9 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
                 setMessages(prev => [...prev, {
                     id: Date.now().toString(),
                     role: 'system',
-                    text: '⚠️ No speech detected. Try speaking closer to your microphone.'
+                    text: nativeAudioStatus.connected
+                        ? '⚠️ No speech detected. Try speaking closer to your microphone.'
+                        : '⚠️ Audio pipeline is disconnected. Start a meeting or fix audio setup before using Answer.'
                 }]);
                 return;
             }
@@ -1133,6 +1136,16 @@ Provide only the answer, nothing else.`;
                 });
             }
         } else {
+            const nativeAudioStatus = await window.electronAPI.getNativeAudioStatus().catch(() => ({ connected: false }));
+            if (!nativeAudioStatus.connected) {
+                setMessages(prev => [...prev, {
+                    id: Date.now().toString(),
+                    role: 'system',
+                    text: '⚠️ Audio pipeline is disconnected. Start a meeting or fix audio setup before using Answer.'
+                }]);
+                return;
+            }
+
             // Start recording - reset voice input state
             setVoiceInput('');
             voiceInputRef.current = '';

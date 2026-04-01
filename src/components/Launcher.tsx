@@ -49,6 +49,11 @@ interface LauncherProps {
     ollamaPullMessage?: string;
 }
 
+const getStoredAudioDeviceId = (storageKey: string, fallback = 'default'): string => {
+    const value = localStorage.getItem(storageKey)?.trim();
+    return value && value.length > 0 ? value : fallback;
+};
+
 // Helper to format date groups
 const getGroupLabel = (dateStr: string) => {
     if (dateStr === "Today") return "Today"; // Backward compatibility
@@ -193,16 +198,23 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onP
         if (!preparedEvent) return;
         analytics.trackCommandExecuted('start_prepared_meeting');
         try {
-            const inputDeviceId = localStorage.getItem('preferredInputDeviceId');
-            const outputDeviceId = localStorage.getItem('preferredOutputDeviceId');
+            const inputDeviceId = getStoredAudioDeviceId('preferredInputDeviceId');
+            const outputDeviceId = getStoredAudioDeviceId('preferredOutputDeviceId');
 
-            await window.electronAPI.startMeeting({
+            const result = await window.electronAPI.startMeeting({
                 title: preparedEvent.title,
                 calendarEventId: preparedEvent.id,
                 source: 'calendar',
                 audio: { inputDeviceId, outputDeviceId }
             });
+
+            if (!result.success) {
+                console.error("Failed to start prepared meeting", result.error);
+                return;
+            }
+
             setIsPrepared(false);
+            await window.electronAPI.setWindowMode('overlay');
         } catch (e) {
             console.error("Failed to start prepared meeting", e);
         }
