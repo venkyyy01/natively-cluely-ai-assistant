@@ -107,6 +107,26 @@ test('cleanup preserves the tracked macOS virtual display helper source path', (
   assert.equal(fs.existsSync(helperPath), true);
 });
 
+test('cleanup treats external cache cleanup as best effort', () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'build-install-optional-cache-'));
+  const releaseDir = path.join(tempDir, 'release');
+  const homeDir = path.join(tempDir, 'home');
+  const builderCacheDir = path.join(homeDir, 'Library', 'Caches', 'electron-builder');
+  const cachesDir = path.join(homeDir, 'Library', 'Caches');
+
+  touch(path.join(releaseDir, 'mac', 'Natively.app'), 1_000);
+  touch(path.join(builderCacheDir, 'cache-file'), 1_000);
+  fs.chmodSync(cachesDir, 0o555);
+
+  const output = runShell(
+    `source "${scriptPath}" && SCRIPT_DIR="${tempDir}" RELEASE_DIR="${releaseDir}" HOME="${homeDir}" clean_build_artifacts`
+  );
+
+  assert.match(output, /Skipping optional cache cleanup/);
+  assert.equal(fs.existsSync(path.join(releaseDir, 'mac', 'Natively.app')), false);
+  assert.equal(fs.existsSync(builderCacheDir), true);
+});
+
 test('artifact helpers fail clearly when packaged app is missing', () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'build-install-missing-app-'));
   const releaseDir = path.join(tempDir, 'release');

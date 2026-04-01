@@ -254,27 +254,38 @@ print_packaged_artifacts() {
 }
 
 clean_build_artifacts() {
-local paths=(
-"$SCRIPT_DIR/dist"
-"$SCRIPT_DIR/dist-electron"
-"$SCRIPT_DIR/release"
-"$SCRIPT_DIR/node_modules/.cache"
-"$SCRIPT_DIR/.vite"
-"$SCRIPT_DIR/native-module/target"
-"$SCRIPT_DIR/native-module/index.darwin-arm64.node"
-"$SCRIPT_DIR/native-module/index.darwin-x64.node"
-"$SCRIPT_DIR/native-module/index.linux-x64-gnu.node"
-"$SCRIPT_DIR/native-module/index.win32-x64-msvc.node"
-"$HOME/Library/Caches/electron-builder"
-"$HOME/Library/Caches/electron"
-"$SCRIPT_DIR/release/mac/${APP_NAME}.app"
-"$SCRIPT_DIR/release/mac-arm64/${APP_NAME}.app"
-)
+    local required_paths=(
+        "$SCRIPT_DIR/dist"
+        "$SCRIPT_DIR/dist-electron"
+        "$SCRIPT_DIR/release"
+        "$SCRIPT_DIR/node_modules/.cache"
+        "$SCRIPT_DIR/.vite"
+        "$SCRIPT_DIR/native-module/target"
+        "$SCRIPT_DIR/native-module/index.darwin-arm64.node"
+        "$SCRIPT_DIR/native-module/index.darwin-x64.node"
+        "$SCRIPT_DIR/native-module/index.linux-x64-gnu.node"
+        "$SCRIPT_DIR/native-module/index.win32-x64-msvc.node"
+        "$SCRIPT_DIR/release/mac/${APP_NAME}.app"
+        "$SCRIPT_DIR/release/mac-arm64/${APP_NAME}.app"
+    )
+    local optional_cache_paths=(
+        "$HOME/Library/Caches/electron-builder"
+        "$HOME/Library/Caches/electron"
+    )
+    local path=""
 
-info "Removing previous build artifacts and packaging caches..."
-for path in "${paths[@]}"; do
-        if [[ -e "$path" ]]; then
-            rm -rf "$path"
+    info "Removing previous build artifacts and packaging caches..."
+    for path in "${required_paths[@]}"; do
+        [[ -e "$path" ]] || continue
+        if ! rm -rf "$path"; then
+            fail "Failed to remove build artifact: $path"
+        fi
+    done
+
+    for path in "${optional_cache_paths[@]}"; do
+        [[ -e "$path" ]] || continue
+        if ! rm -rf "$path"; then
+            warn "Skipping optional cache cleanup for $path"
         fi
     done
 
@@ -418,19 +429,38 @@ step "Step 3/8 — Installing Dependencies"
 
 cd "$SCRIPT_DIR"
 
+DEPENDENCY_TOOLCHAIN_COMPLETE=true
+if [[ -d "node_modules" ]]; then
+    for required_path in \
+        "node_modules/electron/package.json" \
+        "node_modules/electron-builder/package.json" \
+        "node_modules/.bin/tsc"; do
+        if [[ ! -e "$required_path" ]]; then
+            DEPENDENCY_TOOLCHAIN_COMPLETE=false
+            break
+        fi
+    done
+else
+    DEPENDENCY_TOOLCHAIN_COMPLETE=false
+fi
+
 INSTALL_COMMAND=(npm install)
-if [[ -f "package-lock.json" ]]; then
+if [[ -f "package-lock.json" && ( ! -d "node_modules" || "${FORCE_DEPENDENCY_SYNC:-0}" == "1" ) ]]; then
     INSTALL_COMMAND=(npm ci)
 fi
 
-if [[ -d "node_modules" ]]; then
-    info "node_modules exists, syncing dependencies with ${INSTALL_COMMAND[*]}..."
+if [[ -d "node_modules" && "$DEPENDENCY_TOOLCHAIN_COMPLETE" == true && "${FORCE_DEPENDENCY_SYNC:-0}" != "1" ]]; then
+    info "Using existing node_modules; set FORCE_DEPENDENCY_SYNC=1 to force a clean dependency reinstall."
 else
-    info "Fresh install — this may take a few minutes..."
-fi
+    if [[ -d "node_modules" ]]; then
+        info "node_modules exists but the build toolchain is incomplete, syncing dependencies with ${INSTALL_COMMAND[*]}..."
+    else
+        info "Fresh install — this may take a few minutes..."
+    fi
 
-run_with_spinner "syncing npm dependency matrix" "${INSTALL_COMMAND[@]}"
-success "Dependencies installed"
+    run_with_spinner "syncing npm dependency matrix" "${INSTALL_COMMAND[@]}"
+    success "Dependencies installed"
+fi
 
 # ╔═══════════════════════════════════════════════════════════════════╗
 # ║ Step 4: Run Quality Gates                                        
