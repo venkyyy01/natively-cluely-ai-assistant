@@ -92,6 +92,48 @@ test('Conscious Mode routes qualifying technical questions into the structured r
   assert.match(llmHelper.calls[0]?.message || '', /STRUCTURED_REASONING_RESPONSE/);
 });
 
+test('Conscious Mode reasoning prompts include merged recent turns, prior assistant responses, and epoch summaries', async () => {
+  const session = new SessionTracker();
+  const llmHelper = new FakeLLMHelper();
+  const engine = new IntelligenceEngine(llmHelper as any, session);
+
+  session.setConsciousModeEnabled(true);
+  session.addAssistantMessage('I would first pin down the burst policy before picking the storage layer.');
+  (session as any).transcriptEpochSummaries = [
+    'Earlier discussion: we aligned on Redis durability, failover, and a multi-region fallback.',
+  ];
+
+  addInterviewerTurn(session, 'How would you', Date.now() - 2000);
+  addInterviewerTurn(session, 'design a rate limiter for an API?', Date.now() - 1500);
+
+  await engine.runWhatShouldISay(undefined, 0.92);
+
+  assert.match(llmHelper.calls[0]?.message || '', /QUESTION: How would you design a rate limiter for an API\?/);
+  assert.match(llmHelper.calls[0]?.message || '', /PREVIOUS_RESPONSES: I would first pin down the burst policy before picking the storage layer\./);
+  assert.match(llmHelper.calls[0]?.message || '', /SESSION_HISTORY:/);
+  assert.match(llmHelper.calls[0]?.message || '', /Earlier discussion: we aligned on Redis durability, failover, and a multi-region fallback\./);
+  assert.match(llmHelper.calls[0]?.message || '', /CONVERSATION:/);
+  assert.match(llmHelper.calls[0]?.message || '', /\[INTERVIEWER\]: how would you design a rate limiter for an api\?/i);
+});
+
+test('Conscious Mode continuation prompts keep prior assistant responses alongside the active thread context', async () => {
+  const session = new SessionTracker();
+  const llmHelper = new FakeLLMHelper();
+  const engine = new IntelligenceEngine(llmHelper as any, session);
+
+  session.setConsciousModeEnabled(true);
+  addInterviewerTurn(session, 'How would you design a rate limiter for an API?', Date.now() - 2000);
+  await engine.runWhatShouldISay(undefined, 0.88);
+
+  (engine as any).lastTriggerTime = 0;
+  addInterviewerTurn(session, 'What are the tradeoffs?', Date.now() - 1000);
+  await engine.runWhatShouldISay(undefined, 0.88);
+
+  assert.match(llmHelper.calls[1]?.message || '', /ACTIVE_REASONING_THREAD/);
+  assert.match(llmHelper.calls[1]?.message || '', /PREVIOUS_RESPONSES:/);
+  assert.match(llmHelper.calls[1]?.message || '', /Opening reasoning: I would start by clarifying the rate limit dimension and the consistency target\./);
+});
+
 test('Conscious Mode qualifying follow-ups continue the thread, while a new technical topic resets it', async () => {
   const session = new SessionTracker();
   const llmHelper = new FakeLLMHelper();

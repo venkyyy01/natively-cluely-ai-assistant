@@ -221,3 +221,126 @@ test('SessionTracker reports P50/P95/P99 ingestion latency stats for repeated fi
     Date.now = originalNow;
   }
 });
+
+test('SessionTracker formats prompt context from assembled conversation turns instead of raw transcript fragments', () => {
+  const session = new SessionTracker();
+  const originalNow = Date.now;
+
+  Date.now = () => 5_000;
+
+  try {
+    session.addTranscript({
+      marker: 'seg-1',
+      speaker: 'interviewer',
+      text: 'How would you',
+      timestamp: 1_000,
+      final: true,
+    });
+    session.addTranscript({
+      marker: 'seg-2',
+      speaker: 'interviewer',
+      text: 'design a cache?',
+      timestamp: 1_300,
+      final: true,
+    });
+    session.addTranscript({
+      speaker: 'user',
+      text: 'I would start with cache-aside and clear ownership boundaries.',
+      timestamp: 2_000,
+      final: true,
+    });
+
+    assert.equal(
+      session.getFormattedContext(10),
+      [
+        '[INTERVIEWER]: How would you design a cache?',
+        '[ME]: I would start with cache-aside and clear ownership boundaries.',
+      ].join('\n'),
+    );
+  } finally {
+    Date.now = originalNow;
+  }
+});
+
+test('SessionTracker keeps formatted prompt context strictly bounded to the requested time window', () => {
+  const session = new SessionTracker();
+  const originalNow = Date.now;
+
+  Date.now = () => 5_000;
+
+  try {
+    session.addTranscript({
+      speaker: 'interviewer',
+      text: 'How would you',
+      timestamp: 1_800,
+      final: true,
+    });
+    session.addTranscript({
+      speaker: 'interviewer',
+      text: 'design a cache?',
+      timestamp: 2_100,
+      final: true,
+    });
+
+    assert.equal(session.getFormattedContext(3), '[INTERVIEWER]: design a cache?');
+  } finally {
+    Date.now = originalNow;
+  }
+});
+
+test('SessionTracker keeps distinct assistant suggestions separate in formatted prompt context', () => {
+  const session = new SessionTracker();
+  const originalNow = Date.now;
+
+  Date.now = () => 10_000;
+
+  try {
+    session.addAssistantMessage('Start by clarifying the write and read paths first.');
+
+    Date.now = () => 10_300;
+    session.addAssistantMessage('Then explain the cache invalidation tradeoff clearly.');
+
+    Date.now = () => 11_000;
+    assert.equal(
+      session.getFormattedContext(5),
+      [
+        '[ASSISTANT (PREVIOUS SUGGESTION)]: Start by clarifying the write and read paths first.',
+        '[ASSISTANT (PREVIOUS SUGGESTION)]: Then explain the cache invalidation tradeoff clearly.',
+      ].join('\n'),
+    );
+  } finally {
+    Date.now = originalNow;
+  }
+});
+
+test('SessionTracker does not merge out-of-order same-speaker fragments in formatted prompt context', () => {
+  const session = new SessionTracker();
+  const originalNow = Date.now;
+
+  Date.now = () => 5_000;
+
+  try {
+    session.addTranscript({
+      speaker: 'interviewer',
+      text: 'design a cache?',
+      timestamp: 2_000,
+      final: true,
+    });
+    session.addTranscript({
+      speaker: 'interviewer',
+      text: 'How would you',
+      timestamp: 1_700,
+      final: true,
+    });
+
+    assert.equal(
+      session.getFormattedContext(10),
+      [
+        '[INTERVIEWER]: design a cache?',
+        '[INTERVIEWER]: How would you',
+      ].join('\n'),
+    );
+  } finally {
+    Date.now = originalNow;
+  }
+});

@@ -400,6 +400,7 @@ export class IntelligenceEngine extends EventEmitter {
             }
 
             const contextItems = this.session.getContext(180);
+            const reasoningContextItems = this.session.getPromptContextItems(180);
             const lastInterim = this.session.getLastInterimInterviewer();
             const interimQuestion = lastInterim?.text?.trim() || '';
             const baseQuestion = question || interimQuestion || this.session.getLastInterviewerTurn() || '';
@@ -576,10 +577,16 @@ export class IntelligenceEngine extends EventEmitter {
             if (preRouteConsciousDecision.threadAction === 'continue' && activeReasoningThread && this.followUpLLM) {
                 this.latencyTracker.markProviderRequestStarted(requestId);
                 const continuationRevision = this.session.getTranscriptRevision();
+                const followUpPreviousResponses = buildTemporalContext(
+                    reasoningContextItems,
+                    this.session.getAssistantResponseHistory(),
+                    180
+                ).previousResponses;
                 const structuredResponse = await this.followUpLLM.generateReasoningFirstFollowUp(
                     activeReasoningThread,
                     resolvedQuestion,
-                    this.session.getFormattedContext(180)
+                    this.session.getReasoningPromptContext(180),
+                    followUpPreviousResponses,
                 );
 
                 const continuationStale = requestSequence !== this.activeWhatToSayRequestId
@@ -614,14 +621,14 @@ export class IntelligenceEngine extends EventEmitter {
 
             // Inject latest interim transcript if available
             if (lastInterim && lastInterim.text.trim().length > 0) {
-                const lastItem = contextItems[contextItems.length - 1];
+                const lastItem = reasoningContextItems[reasoningContextItems.length - 1];
                 const isDuplicate = lastItem &&
                     lastItem.role === 'interviewer' &&
                     (lastItem.text === lastInterim.text || Math.abs(lastItem.timestamp - lastInterim.timestamp) < 1000);
 
                 if (!isDuplicate) {
                     console.log(`[IntelligenceEngine] Injecting interim transcript: "${lastInterim.text.substring(0, 50)}..."`);
-                    contextItems.push({
+                    reasoningContextItems.push({
                         role: 'interviewer',
                         text: lastInterim.text,
                         timestamp: lastInterim.timestamp
@@ -629,7 +636,7 @@ export class IntelligenceEngine extends EventEmitter {
                 }
             }
 
-            const transcriptTurns = contextItems.map(item => ({
+            const transcriptTurns = reasoningContextItems.map(item => ({
                 role: item.role,
                 text: item.text,
                 timestamp: item.timestamp
@@ -637,7 +644,7 @@ export class IntelligenceEngine extends EventEmitter {
             const preparedTranscript = prepareTranscriptForWhatToAnswer(transcriptTurns, 12);
             this.latencyTracker.mark(requestId, 'transcriptPrepared');
             const temporalContext = buildTemporalContext(
-                contextItems,
+                reasoningContextItems,
                 this.session.getAssistantResponseHistory(),
                 180
             );
@@ -687,13 +694,14 @@ export class IntelligenceEngine extends EventEmitter {
                         resolvedQuestion,
                         temporalContext,
                         intentResult,
-                        imagePaths
+                        imagePaths,
+                        this.session.getTranscriptEpochSummaries()
                     );
                 } else if (this.answerLLM) {
                     this.latencyTracker.markProviderRequestStarted(requestId);
                     structuredResponse = await this.answerLLM.generateReasoningFirst(
                         resolvedQuestion,
-                        this.session.getFormattedContext(180)
+                        this.session.getReasoningPromptContext(180)
                     );
                 }
 

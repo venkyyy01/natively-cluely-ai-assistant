@@ -238,9 +238,9 @@ Exit criteria:
 
 ## Phase 6: Bidirectional Context Upgrade
 
-- [ ] Move context selection from segment-heavy logic toward turn-oriented context assembly
-- [ ] Feed recent turns, prior assistant responses, and epoch summaries into the live reasoning path
-- [ ] Make Conscious Mode state updates truly bidirectional rather than interviewer-centric
+- [x] Move context selection from segment-heavy logic toward turn-oriented context assembly
+- [x] Feed recent turns, prior assistant responses, and epoch summaries into the live reasoning path
+- [x] Make Conscious Mode state updates truly bidirectional rather than interviewer-centric
 - [ ] Ensure overlap context is preserved where it materially affects the response
 
 Exit criteria:

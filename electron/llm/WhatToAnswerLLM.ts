@@ -111,7 +111,8 @@ ANSWER SHAPE: ${intentResult.answerShape}
         question: string,
         temporalContext?: TemporalContext,
         intentResult?: IntentResult,
-        imagePaths?: string[]
+        imagePaths?: string[],
+        sessionHistory: string[] = [],
     ): Promise<ConsciousModeStructuredResponse> {
         let full = "";
 
@@ -129,6 +130,10 @@ ANSWER SHAPE: ${intentResult.answerShape}
 
         if (temporalContext?.hasRecentResponses) {
             contextParts.push(`PREVIOUS_RESPONSES: ${temporalContext.previousResponses.join(' | ')}`);
+        }
+
+        if (sessionHistory.length > 0) {
+            contextParts.push(`SESSION_HISTORY:\n${sessionHistory.join('\n---\n')}`);
         }
 
         contextParts.push(`CONVERSATION:\n${cleanedTranscript}`);

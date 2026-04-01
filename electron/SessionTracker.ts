@@ -62,6 +62,7 @@ import { RecapLLM } from './llm';
 import {
   ConsciousModeStructuredResponse,
   ReasoningThread,
+  getTranscriptSuggestionDecision,
   mergeConsciousModeResponses,
 } from './ConsciousMode';
 import { ThreadManager, InterviewPhaseDetector, TokenBudgetManager, InterviewPhase } from './conscious';
@@ -346,14 +347,15 @@ export class SessionTracker {
 
         const result = this.addTranscript(segment);
 
-        if (segment.final && segment.speaker === 'interviewer' && this.consciousModeEnabled) {
-            this.updateConsciousConversationState(segment.text);
+        const role = this.mapSpeakerToRole(segment.speaker);
+        if (segment.final && role !== 'assistant' && this.consciousModeEnabled) {
+            this.updateConsciousConversationState(segment.text, role);
         }
 
         return result;
     }
 
-    private updateConsciousConversationState(transcript: string): void {
+    private updateConsciousConversationState(transcript: string, role: ContextItem['role']): void {
         const normalized = transcript.trim();
         if (!normalized) {
             return;
@@ -380,6 +382,15 @@ export class SessionTracker {
         ));
 
         if (!currentThread) {
+            const userCanOpenThread = role !== 'user' || getTranscriptSuggestionDecision(normalized, true, null, {
+                speaker: 'user',
+                enableConversationStateTrigger: true,
+            }).triggerType === 'conversation_state';
+
+            if (!userCanOpenThread) {
+                return;
+            }
+
             if (resumeKeywords.length > 0 || normalized.split(/\s+/).length >= 4) {
                 this.threadManager.createThread(normalized, phase);
                 this.threadManager.addKeywordsToActive(resumeKeywords);
@@ -522,14 +533,57 @@ isConsciousModeEnabled(): boolean {
     /**
      * Get formatted context string for LLM prompts
      */
+    getPromptContextItems(lastSeconds: number = 120): ContextItem[] {
+        return this.getContext(lastSeconds).reduce<ContextItem[]>((accumulator, item) => {
+            const previousTurn = accumulator[accumulator.length - 1];
+            const canMergeWithPrevious = previousTurn
+                && previousTurn.role === item.role
+                && item.role !== 'assistant'
+                && item.timestamp >= previousTurn.timestamp
+                && item.timestamp - previousTurn.timestamp <= TURN_MERGE_GAP_MS;
+
+            if (canMergeWithPrevious) {
+                previousTurn.text = `${previousTurn.text} ${item.text}`.trim();
+                previousTurn.timestamp = item.timestamp;
+                return accumulator;
+            }
+
+            accumulator.push({
+                role: item.role,
+                text: item.text,
+                timestamp: item.timestamp,
+            });
+            return accumulator;
+        }, []);
+    }
+
     getFormattedContext(lastSeconds: number = 120): string {
-        const items = this.getContext(lastSeconds);
-        return items.map(item => {
+        return this.getPromptContextItems(lastSeconds).map(item => {
             const label = item.role === 'interviewer' ? 'INTERVIEWER' :
                 item.role === 'user' ? 'ME' :
                     'ASSISTANT (PREVIOUS SUGGESTION)';
             return `[${label}]: ${item.text}`;
         }).join('\n');
+    }
+
+    getReasoningPromptContext(lastSeconds: number = 180): string {
+        const recentTurns = this.getFormattedContext(lastSeconds);
+        const epochSummaries = this.getTranscriptEpochSummaries();
+
+        if (!epochSummaries.length) {
+            return recentTurns;
+        }
+
+        const sections = [`[SESSION HISTORY - EARLIER DISCUSSION]\n${epochSummaries.join('\n---\n')}`];
+        if (recentTurns) {
+            sections.push(`[RECENT TURNS]\n${recentTurns}`);
+        }
+
+        return sections.join('\n\n');
+    }
+
+    getTranscriptEpochSummaries(): string[] {
+        return [...this.transcriptEpochSummaries];
     }
 
     getSessionId(): string {
@@ -642,13 +696,13 @@ isConsciousModeEnabled(): boolean {
      * Get the last interviewer turn
      */
     getLastInterviewerTurn(): string | null {
-    const contextItems = this.getContextItems();
-    for (let i = contextItems.length - 1; i >= 0; i--) {
-      if (contextItems[i].role === 'interviewer') {
-        return contextItems[i].text;
-            }
-        }
-        return null;
+    const turns = this.getConversationTurns();
+    for (let i = turns.length - 1; i >= 0; i--) {
+      if (turns[i].speaker === 'interviewer') {
+        return turns[i].text;
+             }
+         }
+         return null;
     }
 
     /**

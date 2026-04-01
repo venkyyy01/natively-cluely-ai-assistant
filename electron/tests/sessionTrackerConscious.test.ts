@@ -42,3 +42,33 @@ test('SessionTracker Conscious Integration - should keep live conscious state fr
   assert.ok(tracker.getThreadManager().getActiveThread());
   assert.equal(tracker.getThreadManager().getActiveThread()?.phase, 'high_level_design');
 });
+
+test('SessionTracker Conscious Integration - should keep live conscious state from user transcript too', () => {
+  const tracker = new SessionTracker();
+  tracker.setConsciousModeEnabled(true);
+
+  tracker.handleTranscript({
+    speaker: 'user',
+    text: 'I would start with the high level architecture and separate the write path from the read path',
+    timestamp: Date.now(),
+    final: true,
+  });
+
+  assert.equal(tracker.getCurrentPhase(), 'high_level_design');
+  assert.ok(tracker.getThreadManager().getActiveThread());
+  assert.equal(tracker.getThreadManager().getActiveThread()?.phase, 'high_level_design');
+});
+
+test('SessionTracker Conscious Integration - should not create a new live thread from a generic user answer', () => {
+  const tracker = new SessionTracker();
+  tracker.setConsciousModeEnabled(true);
+
+  tracker.handleTranscript({
+    speaker: 'user',
+    text: 'I worked with a small team and iterated directly from customer feedback.',
+    timestamp: Date.now(),
+    final: true,
+  });
+
+  assert.equal(tracker.getThreadManager().getActiveThread(), null);
+});

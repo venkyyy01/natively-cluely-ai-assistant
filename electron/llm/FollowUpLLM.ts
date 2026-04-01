@@ -34,18 +34,28 @@ export class FollowUpLLM {
     async generateReasoningFirstFollowUp(
         reasoningThread: ReasoningThread,
         followUpQuestion: string,
-        context?: string
+        context?: string,
+        previousResponses: string[] = [],
     ): Promise<ConsciousModeStructuredResponse> {
         try {
-            const message = [
+            const messageParts = [
                 'ACTIVE_REASONING_THREAD',
                 `ROOT_QUESTION: ${reasoningThread.rootQuestion}`,
                 `LAST_QUESTION: ${reasoningThread.lastQuestion}`,
                 `CURRENT_RESPONSE: ${JSON.stringify(reasoningThread.response)}`,
                 `FOLLOW_UP_QUESTION: ${followUpQuestion}`,
+            ];
+
+            if (previousResponses.length > 0) {
+                messageParts.push(`PREVIOUS_RESPONSES: ${previousResponses.join(' | ')}`);
+            }
+
+            messageParts.push(
                 'Return JSON with keys: mode, openingReasoning, implementationPlan, tradeoffs, edgeCases, scaleConsiderations, pushbackResponses, likelyFollowUps, codeTransition.',
                 'Set mode to reasoning_first.',
-            ].join('\n\n');
+            );
+
+            const message = messageParts.join('\n\n');
             const stream = this.llmHelper.streamChat(message, undefined, context, UNIVERSAL_FOLLOWUP_PROMPT);
 
             let full = "";
