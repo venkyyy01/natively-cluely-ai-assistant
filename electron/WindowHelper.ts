@@ -2,6 +2,8 @@
 import { BrowserWindow, screen, app } from "electron"
 import { AppState } from "./main"
 import path from "node:path"
+import { StealthManager } from "./stealth/StealthManager"
+import { StealthRuntime } from "./stealth/StealthRuntime"
 
 const isEnvDev = process.env.NODE_ENV === "development"
 const isPackaged = app.isPackaged
@@ -12,11 +14,15 @@ const isDev = isEnvDev && !isPackaged
 
 const startUrl = isDev
   ? "http://localhost:5180"
-  : `file://${path.join(app.getAppPath(), "dist/index.html")}`
+  : `file://${path.join(app.getAppPath(), "dist", "index.html")}`
 
 export class WindowHelper {
   private launcherWindow: BrowserWindow | null = null
+  private launcherContentWindow: BrowserWindow | null = null
   private overlayWindow: BrowserWindow | null = null
+  private overlayContentWindow: BrowserWindow | null = null
+  private launcherRuntime: StealthRuntime | null = null
+  private overlayRuntime: StealthRuntime | null = null
   private isWindowVisible: boolean = false
   // Position/Size tracking for Launcher
   private launcherPosition: { x: number; y: number } | null = null
@@ -28,6 +34,7 @@ export class WindowHelper {
   private contentProtection: boolean = false
   private overlayClickthroughEnabled: boolean = false
   private opacityTimeout: NodeJS.Timeout | null = null
+  private readonly overlayContentProtection: boolean = true
 
   // Initialize with explicit number type and 0 value
   private screenWidth: number = 0
@@ -37,9 +44,64 @@ export class WindowHelper {
   private step: number = 20
   private currentX: number = 0
   private currentY: number = 0
+  private readonly stealthManager: StealthManager
 
-  constructor(appState: AppState) {
+  constructor(appState: AppState, stealthManager: StealthManager) {
     this.appState = appState
+    this.stealthManager = stealthManager
+  }
+
+  private shouldUseStealthRuntime(): boolean {
+    return process.platform !== "darwin" || process.env.NATIVELY_FORCE_STEALTH_RUNTIME === "1";
+  }
+
+  private applyLauncherSurfaceProtection(): void {
+    if (this.launcherRuntime) {
+      this.launcherRuntime.applyStealth(this.contentProtection)
+      return
+    }
+
+    if (this.launcherWindow && !this.launcherWindow.isDestroyed()) {
+      this.applyStealth(this.launcherWindow, this.contentProtection, 'primary', false)
+    }
+  }
+
+  private applyOverlaySurfaceProtection(): void {
+    if (this.overlayRuntime) {
+      this.overlayRuntime.applyStealth(this.contentProtection)
+      return
+    }
+
+    if (this.overlayWindow && !this.overlayWindow.isDestroyed()) {
+      this.applyStealth(this.overlayWindow, this.contentProtection, 'primary', false)
+    }
+  }
+
+  private showLauncherSurface(): void {
+    if (this.launcherRuntime) {
+      this.launcherRuntime.show()
+      return
+    }
+
+    this.launcherWindow?.show()
+    this.launcherWindow?.focus()
+  }
+
+  private hideLauncherSurface(): void {
+    if (this.launcherRuntime) {
+      this.launcherRuntime.hide()
+      return
+    }
+
+    this.launcherWindow?.hide()
+  }
+
+  private createDirectWindow(options: Electron.BrowserWindowConstructorOptions, url: string, label: string): BrowserWindow {
+    const win = new BrowserWindow(options)
+    void win.loadURL(url).catch((error) => {
+      console.error(`[WindowHelper] ${label} direct load failed:`, error)
+    })
+    return win
   }
 
   public setContentProtection(enable: boolean): void {
@@ -51,35 +113,24 @@ export class WindowHelper {
     this.launcherWindow?.setSkipTaskbar(enable);
   }
 
-  private applyStealthFlags(win: BrowserWindow, enable: boolean, isAuxiliary: boolean = false): void {
-    win.setContentProtection(enable);
-
-    if (process.platform === 'darwin') {
-      win.setHiddenInMissionControl(enable || isAuxiliary);
-      if (typeof (win as any).setExcludedFromShownWindowsMenu === 'function') {
-        (win as any).setExcludedFromShownWindowsMenu(enable || isAuxiliary);
-      }
-    }
-
-    if (!isAuxiliary) {
-      win.setSkipTaskbar(enable);
-    }
+  private applyStealth(win: BrowserWindow, enable: boolean, role: 'primary' | 'auxiliary', hideFromSwitcher: boolean): void {
+    this.stealthManager.applyToWindow(win, enable, { role, hideFromSwitcher });
   }
 
   private applyContentProtection(enable: boolean): void {
     const windows = [
       { win: this.launcherWindow, auxiliary: false },
-      { win: this.overlayWindow, auxiliary: true },
+      { win: this.overlayWindow, auxiliary: false },
     ]
     windows.forEach(({ win, auxiliary }) => {
       if (win && !win.isDestroyed()) {
-        this.applyStealthFlags(win, enable, auxiliary);
+        this.applyStealth(win, enable, auxiliary ? 'auxiliary' : 'primary', auxiliary);
       }
     });
   }
 
   public setWindowDimensions(width: number, height: number): void {
-    const activeWindow = this.getMainWindow(); // Gets currently focused/relevant window
+    const activeWindow = this.getVisibleMainWindow();
     if (!activeWindow || activeWindow.isDestroyed()) return
 
     const [currentX, currentY] = activeWindow.getPosition()
@@ -176,7 +227,7 @@ export class WindowHelper {
         scrollBounce: true,
         webSecurity: true,
       },
-      show: false, // DEBUG: Force show -> Fixed white screen, now relies on ready-to-show
+      show: false,
       skipTaskbar: this.contentProtection,
       titleBarStyle: 'hiddenInset',
       trafficLightPosition: { x: 14, y: 14 },
@@ -225,22 +276,46 @@ export class WindowHelper {
     console.log(`[WindowHelper] Icon Path: ${launcherSettings.icon}`);
     console.log(`[WindowHelper] Start URL: ${startUrl}`);
 
-    try {
-      this.launcherWindow = new BrowserWindow(launcherSettings)
-      console.log('[WindowHelper] BrowserWindow created successfully');
-    } catch (err) {
-      console.error('[WindowHelper] Failed to create BrowserWindow:', err);
-      return;
+    if (this.shouldUseStealthRuntime()) {
+      try {
+        this.launcherRuntime = new StealthRuntime({
+          stealthManager: this.stealthManager,
+          startUrl: `${startUrl}?window=launcher`,
+        })
+        this.launcherWindow = this.launcherRuntime.createPrimaryStealthSurface(launcherSettings) as BrowserWindow
+        this.launcherContentWindow = this.launcherRuntime.getContentWindow()
+        console.log('[WindowHelper] StealthRuntime created successfully');
+      } catch (err) {
+        console.error('[WindowHelper] Failed to create BrowserWindow:', err);
+        return;
+      }
+    } else {
+      this.launcherRuntime = null
+      this.launcherWindow = this.createDirectWindow(launcherSettings, `${startUrl}?window=launcher`, 'Launcher')
+      this.launcherContentWindow = this.launcherWindow
+      console.log('[WindowHelper] Using direct launcher window on macOS');
     }
 
-    this.applyStealthFlags(this.launcherWindow, this.contentProtection)
+    this.applyLauncherSurfaceProtection()
 
-    this.launcherWindow.loadURL(`${startUrl}?window=launcher`)
-      .then(() => console.log('[WindowHelper] loadURL success'))
-      .catch((e) => { console.error("[WindowHelper] Failed to load URL:", e) })
+    this.launcherContentWindow?.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL) => {
+      console.error(`[WindowHelper] did-fail-load: ${errorCode} ${errorDescription} URL: ${validatedURL}`);
+    });
 
-    this.launcherWindow.webContents.on('did-fail-load', (event, errorCode, errorDescription) => {
-      console.error(`[WindowHelper] did-fail-load: ${errorCode} ${errorDescription}`);
+    this.launcherContentWindow?.webContents.on('did-finish-load', () => {
+      console.log('[WindowHelper] Launcher content window did-finish-load');
+    });
+
+    this.launcherContentWindow?.webContents.on('dom-ready', () => {
+      console.log('[WindowHelper] Launcher content window dom-ready');
+    });
+
+    this.launcherContentWindow?.webContents.on('crashed', (_event, killed) => {
+      console.error(`[WindowHelper] Launcher content window crashed (killed=${killed})`);
+    });
+
+    this.launcherContentWindow?.webContents.on('render-process-gone', (_event, details) => {
+      console.error(`[WindowHelper] Launcher render process gone: reason=${details.reason} exitCode=${details.exitCode}`);
     });
 
     // if (isDev) {
@@ -267,25 +342,44 @@ export class WindowHelper {
       focusable: true,
       resizable: true,
       movable: true,
-      skipTaskbar: true, // Don't show separately in dock/taskbar
+      skipTaskbar: false,
       hasShadow: false, // Prevent shadow from adding perceived size/artifacts
     }
 
-    this.overlayWindow = new BrowserWindow(overlaySettings)
-    this.applyStealthFlags(this.overlayWindow, this.contentProtection, true)
+    if (this.shouldUseStealthRuntime()) {
+      try {
+        this.overlayRuntime = new StealthRuntime({
+          stealthManager: this.stealthManager,
+          startUrl: `${startUrl}?window=overlay`,
+        })
+        this.overlayWindow = this.overlayRuntime.createPrimaryStealthSurface(overlaySettings) as BrowserWindow
+        this.overlayContentWindow = this.overlayRuntime.getContentWindow()
+        console.log('[WindowHelper] StealthRuntime (overlay) created successfully');
+      } catch (err) {
+        console.error('[WindowHelper] Failed to create overlay BrowserWindow:', err);
+        this.launcherRuntime?.destroy()
+        this.launcherRuntime = null
+        this.launcherContentWindow = null
+        this.launcherWindow = null
+        this.overlayRuntime = null
+        this.overlayContentWindow = null
+        this.overlayWindow = null
+        return;
+      }
+    } else {
+      this.overlayRuntime = null
+      this.overlayWindow = this.createDirectWindow(overlaySettings, `${startUrl}?window=overlay`, 'Overlay')
+      this.overlayContentWindow = this.overlayWindow
+      console.log('[WindowHelper] Using direct overlay window on macOS');
+    }
+
+    this.applyOverlaySurfaceProtection()
 
     if (process.platform === "darwin") {
       this.overlayWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
-      this.overlayWindow.setHiddenInMissionControl(true)
       this.overlayWindow.setAlwaysOnTop(true, "floating")
     }
     this.setOverlayClickthrough(this.overlayClickthroughEnabled)
-
-    this.overlayWindow.loadURL(`${startUrl}?window=overlay`).catch(e => {
-        console.error('[WindowHelper] Failed to load Overlay URL:', e);
-    })
-
-    // --- 3. Startup Sequence ---
     this.launcherWindow.once('ready-to-show', () => {
       this.switchToLauncher()
       this.isWindowVisible = true
@@ -295,30 +389,39 @@ export class WindowHelper {
   }
 
   private setupWindowListeners(): void {
-    if (!this.launcherWindow) return
+    const launcherWindow = this.launcherWindow
+    if (!launcherWindow) return
 
-    this.launcherWindow.on("move", () => {
-      if (this.launcherWindow) {
-        const bounds = this.launcherWindow.getBounds()
+    launcherWindow.on("move", () => {
+      if (this.launcherWindow === launcherWindow) {
+        const bounds = launcherWindow.getBounds()
         this.launcherPosition = { x: bounds.x, y: bounds.y }
         this.appState.settingsWindowHelper.reposition(bounds)
       }
     })
 
-    this.launcherWindow.on("resize", () => {
-      if (this.launcherWindow) {
-        const bounds = this.launcherWindow.getBounds()
+    launcherWindow.on("resize", () => {
+      if (this.launcherWindow === launcherWindow) {
+        const bounds = launcherWindow.getBounds()
         this.launcherSize = { width: bounds.width, height: bounds.height }
         this.appState.settingsWindowHelper.reposition(bounds)
       }
     })
 
-    this.launcherWindow.on("closed", () => {
+      launcherWindow.on("closed", () => {
+      if (this.launcherWindow !== launcherWindow) {
+        return
+      }
+      this.launcherRuntime?.destroy()
+      this.launcherRuntime = null
       this.launcherWindow = null
-      // If launcher closes, we should probably quit app or close overlay
+      this.launcherContentWindow = null
       if (this.overlayWindow && !this.overlayWindow.isDestroyed()) {
         this.overlayWindow.close()
       }
+      this.overlayRuntime?.destroy()
+      this.overlayRuntime = null
+      this.overlayContentWindow = null
       this.overlayWindow = null
       this.isWindowVisible = false
     })
@@ -340,6 +443,13 @@ export class WindowHelper {
   // Helper to get whichever window should be treated as "Main" for IPC
   public getMainWindow(): BrowserWindow | null {
     if (this.currentWindowMode === 'overlay' && this.overlayWindow) {
+      return this.overlayContentWindow || this.overlayWindow;
+    }
+    return this.launcherContentWindow;
+  }
+
+  public getVisibleMainWindow(): BrowserWindow | null {
+    if (this.currentWindowMode === 'overlay' && this.overlayWindow) {
       return this.overlayWindow;
     }
     return this.launcherWindow;
@@ -347,7 +457,9 @@ export class WindowHelper {
 
   // Specific getters if needed
   public getLauncherWindow(): BrowserWindow | null { return this.launcherWindow }
+  public getLauncherContentWindow(): BrowserWindow | null { return this.launcherContentWindow }
   public getOverlayWindow(): BrowserWindow | null { return this.overlayWindow }
+  public getOverlayContentWindow(): BrowserWindow | null { return this.overlayContentWindow || this.overlayWindow }
   public getCurrentWindowMode(): 'launcher' | 'overlay' { return this.currentWindowMode }
 
   public isVisible(): boolean {
@@ -356,7 +468,7 @@ export class WindowHelper {
 
   public hideMainWindow(): void {
     // Hide BOTH
-    this.launcherWindow?.hide()
+    this.hideLauncherSurface()
     this.overlayWindow?.hide()
     this.isWindowVisible = false
   }
@@ -403,8 +515,12 @@ export class WindowHelper {
       const currentBounds = this.overlayWindow.getBounds();
       const targetWidth = Math.max(currentBounds.width, 600);
       const targetHeight = Math.max(currentBounds.height, 216);
-      const x = Math.floor(workArea.x + (workArea.width - targetWidth) / 2)
-      const y = Math.floor(workArea.y + (workArea.height - 600) / 2)
+      const centeredX = Math.floor(workArea.x + (workArea.width - targetWidth) / 2)
+      const centeredY = Math.floor(workArea.y + (workArea.height - targetHeight) / 2)
+      const maxX = workArea.x + Math.max(0, workArea.width - targetWidth)
+      const maxY = workArea.y + Math.max(0, workArea.height - targetHeight)
+      const x = Math.min(Math.max(centeredX, workArea.x), maxX)
+      const y = Math.min(Math.max(centeredY, workArea.y), maxY)
 
       this.overlayWindow.setBounds({ x, y, width: targetWidth, height: targetHeight });
 
@@ -412,14 +528,15 @@ export class WindowHelper {
         // Opacity Shield: Show at 0 opacity first to prevent frame leak
         this.overlayWindow.setOpacity(0);
         this.overlayWindow.show();
-        this.applyStealthFlags(this.overlayWindow, true, true);
+        this.applyStealth(this.overlayWindow, true, 'primary', false);
         this.setOverlayClickthrough(this.overlayClickthroughEnabled)
         // Small delay to ensure Windows DWM processes the flag before making it opaque
-        
+
         if (this.opacityTimeout) clearTimeout(this.opacityTimeout);
         this.opacityTimeout = setTimeout(() => {
           if (this.overlayWindow && !this.overlayWindow.isDestroyed()) {
             this.overlayWindow.setOpacity(1);
+            this.stealthManager.reapplyAfterShow(this.overlayWindow);
             if (!this.overlayClickthroughEnabled) {
               this.overlayWindow.focus();
             }
@@ -427,9 +544,10 @@ export class WindowHelper {
           }
         }, 60);
       } else {
-        this.applyStealthFlags(this.overlayWindow, this.contentProtection, true);
+        this.applyStealth(this.overlayWindow, this.contentProtection, 'primary', false);
         this.setOverlayClickthrough(this.overlayClickthroughEnabled)
         this.overlayWindow.show();
+        this.stealthManager.reapplyAfterShow(this.overlayWindow);
         if (!this.overlayClickthroughEnabled) {
           this.overlayWindow.focus();
         }
@@ -453,19 +571,25 @@ export class WindowHelper {
       if (process.platform === 'win32' && this.contentProtection) {
         // Opacity Shield: Show at 0 opacity first
         this.launcherWindow.setOpacity(0);
-        this.launcherWindow.show();
-        this.applyStealthFlags(this.launcherWindow, true);
-        
+        this.showLauncherSurface();
+        if (this.launcherRuntime) {
+          this.launcherRuntime.applyStealth(true);
+        } else {
+          this.applyStealth(this.launcherWindow, true, 'primary', false);
+        }
+
         if (this.opacityTimeout) clearTimeout(this.opacityTimeout);
         this.opacityTimeout = setTimeout(() => {
           if (this.launcherWindow && !this.launcherWindow.isDestroyed()) {
             this.launcherWindow.setOpacity(1);
+            this.stealthManager.reapplyAfterShow(this.launcherWindow);
             this.launcherWindow.focus();
           }
         }, 60);
       } else {
-        this.applyStealthFlags(this.launcherWindow, this.contentProtection);
-        this.launcherWindow.show();
+        this.applyLauncherSurfaceProtection();
+        this.showLauncherSurface();
+        this.stealthManager.reapplyAfterShow(this.launcherWindow);
         this.launcherWindow.focus();
       }
       this.isWindowVisible = true;
@@ -488,7 +612,7 @@ export class WindowHelper {
 
   // --- Window Movement (Applies to Overlay mostly, but generalized to active) ---
   private moveActiveWindow(dx: number, dy: number): void {
-    const win = this.getMainWindow();
+    const win = this.getVisibleMainWindow();
     if (!win) return;
 
     const [x, y] = win.getPosition();

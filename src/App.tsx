@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useState, useMemo } from 'react'
 import { QueryClient, QueryClientProvider } from 'react-query'
 import { AnimatePresence, motion } from 'framer-motion'
 import { AlertCircle } from 'lucide-react'
@@ -31,6 +31,11 @@ const AppProviders: React.FC<{ children: React.ReactNode }> = ({ children }) => 
     </ToastProvider>
   </QueryClientProvider>
 )
+
+const getStoredAudioDeviceId = (storageKey: string, fallback = 'default'): string => {
+  const value = localStorage.getItem(storageKey)?.trim()
+  return value && value.length > 0 ? value : fallback
+}
 
 type MeetingAudioBannerProps = {
   message: string
@@ -292,7 +297,7 @@ const useWindowAnalytics = ({ kind, isDefaultLauncherWindow }: AppWindowContext)
 }
 
 const App: React.FC = () => {
-  const windowContext = resolveWindowContext(window.location.search)
+  const windowContext = useMemo(() => resolveWindowContext(window.location.search), [])
   const { kind: windowKind, isDefaultLauncherWindow } = windowContext
 
   useWindowAnalytics(windowContext)
@@ -375,7 +380,7 @@ const App: React.FC = () => {
     return () => {
       if (removeOpacityListener) removeOpacityListener()
     }
-  }, [electronAPI, windowContext, windowKind])
+  }, [electronAPI, windowKind])
 
   const handleReindex = async () => {
     if (window.electronAPI?.reindexIncompatibleMeetings) {
@@ -388,8 +393,8 @@ const App: React.FC = () => {
     try {
       setMeetingAudioError(null)
       localStorage.setItem('natively_last_meeting_start', Date.now().toString())
-      const inputDeviceId = localStorage.getItem('preferredInputDeviceId')
-      let outputDeviceId = localStorage.getItem('preferredOutputDeviceId')
+      const inputDeviceId = getStoredAudioDeviceId('preferredInputDeviceId')
+      let outputDeviceId = getStoredAudioDeviceId('preferredOutputDeviceId')
       const useExperimentalSck = localStorage.getItem('useExperimentalSckBackend') === 'true'
 
       if (useExperimentalSck) {

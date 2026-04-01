@@ -1,0 +1,37 @@
+import fs from 'node:fs';
+import path from 'node:path';
+
+import { MacosVirtualDisplayClient, MacosVirtualDisplayCoordinator } from './MacosVirtualDisplayClient';
+
+interface ResolveOptions {
+  env?: NodeJS.ProcessEnv;
+  cwd?: string;
+  resourcesPath?: string;
+  pathExists?: (candidate: string) => boolean;
+}
+
+export function resolveMacosVirtualDisplayHelperPath(options: ResolveOptions = {}): string | null {
+  const env = options.env ?? process.env;
+  const cwd = options.cwd ?? process.cwd();
+  const resourcesPath = options.resourcesPath ?? process.resourcesPath;
+  const pathExists = options.pathExists ?? ((candidate: string) => fs.existsSync(candidate));
+
+  const envOverride = env.NATIVELY_MACOS_VIRTUAL_DISPLAY_HELPER;
+  if (envOverride && pathExists(envOverride)) {
+    return envOverride;
+  }
+
+  const candidates = [
+    ...(resourcesPath ? [path.join(resourcesPath, 'bin/macos/stealth-virtual-display-helper')] : []),
+    path.join(cwd, 'stealth-projects/macos-virtual-display-helper/.build/debug/stealth-virtual-display-helper'),
+    path.join(cwd, 'stealth-projects/macos-virtual-display-helper/.build/arm64-apple-macosx/debug/stealth-virtual-display-helper'),
+    path.join(cwd, 'stealth-projects/macos-virtual-display-helper/.build/arm64-apple-macosx/release/stealth-virtual-display-helper'),
+    path.join(cwd, 'stealth-projects/macos-virtual-display-helper/.build/release/stealth-virtual-display-helper'),
+  ];
+
+  return candidates.find((candidate) => pathExists(candidate)) ?? null;
+}
+
+export function createMacosVirtualDisplayCoordinator(helperPath: string): MacosVirtualDisplayCoordinator {
+  return new MacosVirtualDisplayCoordinator(new MacosVirtualDisplayClient({ helperPath }));
+}

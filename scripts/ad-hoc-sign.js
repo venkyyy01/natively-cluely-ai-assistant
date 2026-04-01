@@ -60,6 +60,7 @@ exports.default = async function (context) {
     const appOutDir = context.appOutDir;
     const appName = context.packager.appInfo.productFilename;
     const appPath = path.join(appOutDir, `${appName}.app`);
+    const helperPath = path.join(appPath, 'Contents', 'Resources', 'bin', 'macos', 'stealth-virtual-display-helper');
 
     // ── Step 1: Disguise helper display names (before signing) ──
     try {
@@ -75,6 +76,11 @@ exports.default = async function (context) {
     console.log(`[Ad-Hoc Signing] Signing ${appPath} with entitlements from ${entitlementsPath}...`);
 
     try {
+        if (fs.existsSync(helperPath)) {
+            console.log(`[Ad-Hoc Signing] Signing helper binary ${helperPath}...`);
+            execSync(`codesign --force --sign - "${helperPath}"`, { stdio: 'inherit' });
+        }
+
         // --force: replace existing signature
         // --deep: sign nested code
         // --entitlements: attach JIT/memory entitlements (critical for Apple Silicon)

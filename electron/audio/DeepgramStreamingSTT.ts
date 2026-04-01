@@ -16,26 +16,73 @@ import { resampleToMonoPcm16 } from './pcm';
 
 const RECONNECT_BASE_DELAY_MS = 1000;
 const RECONNECT_MAX_DELAY_MS = 30000;
-const KEEPALIVE_INTERVAL_MS = 15000;
+const KEEPALIVE_INTERVAL_MS = 5000;
+const MAX_BUFFER_SIZE = 500;
+
+/**
+ * Ring buffer for O(1) push/pop operations.
+ * Replaces array.shift() which is O(n) on large arrays.
+ */
+class AudioChunkBuffer {
+  private buffer: (Buffer | null)[];
+  private head: number = 0;
+  private tail: number = 0;
+  private count: number = 0;
+
+  constructor(private capacity: number) {
+    this.buffer = new Array(capacity).fill(null);
+  }
+
+  push(chunk: Buffer): void {
+    this.buffer[this.tail] = chunk;
+    this.tail = (this.tail + 1) % this.capacity;
+    this.count++;
+    if (this.count > this.capacity) {
+      // Overwrite oldest
+      this.head = (this.head + 1) % this.capacity;
+      this.count = this.capacity;
+    }
+  }
+
+  shift(): Buffer | null {
+    if (this.count === 0) return null;
+    const chunk = this.buffer[this.head];
+    this.buffer[this.head] = null;
+    this.head = (this.head + 1) % this.capacity;
+    this.count--;
+    return chunk;
+  }
+
+  get length(): number {
+    return this.count;
+  }
+
+  clear(): void {
+    this.buffer.fill(null);
+    this.head = 0;
+    this.tail = 0;
+    this.count = 0;
+  }
+}
 
 export class DeepgramStreamingSTT extends EventEmitter {
-    private apiKey: string;
-    private ws: WebSocket | null = null;
-    private isActive = false;
-    private shouldReconnect = false;
+  private apiKey: string;
+  private ws: WebSocket | null = null;
+  private isActive = false;
+  private shouldReconnect = false;
 
-    private inputSampleRate = 16000;
-    private numChannels = 1;
-    private readonly targetSampleRate = 16000;
-    private languageCode = 'en'; // Default to English
+  private inputSampleRate = 16000;
+  private numChannels = 1;
+  private readonly targetSampleRate = 16000;
+  private languageCode = 'en'; // Default to English
 
-    private reconnectAttempts = 0;
-    private reconnectTimer: NodeJS.Timeout | null = null;
-    private keepAliveTimer: NodeJS.Timeout | null = null;
-    private buffer: Buffer[] = [];
-    private isConnecting = false;
-    private lastInterimTranscript = '';
-    private lastInterimConfidence = 1;
+  private reconnectAttempts = 0;
+  private reconnectTimer: NodeJS.Timeout | null = null;
+  private keepAliveTimer: NodeJS.Timeout | null = null;
+  private buffer: AudioChunkBuffer = new AudioChunkBuffer(MAX_BUFFER_SIZE);
+  private isConnecting = false;
+  private lastInterimTranscript = '';
+  private lastInterimConfidence = 1;
 
     constructor(apiKey: string) {
         super();
@@ -80,34 +127,35 @@ export class DeepgramStreamingSTT extends EventEmitter {
 
     public start(): void {
         if (this.isActive) return;
+        this.isActive = true;
         this.shouldReconnect = true;
         this.reconnectAttempts = 0;
         this.connect();
     }
 
-    public stop(): void {
-        this.shouldReconnect = false;
-        this.clearTimers();
+  public stop(): void {
+    this.shouldReconnect = false;
+    this.clearTimers();
 
-        if (this.ws) {
-            try {
-                // Send Deepgram's graceful close message
-                if (this.ws.readyState === WebSocket.OPEN) {
-                    this.ws.send(JSON.stringify({ type: 'CloseStream' }));
-                }
-            } catch {
-                // Ignore send errors during shutdown
-            }
-            this.ws.close();
-            this.ws = null;
+    if (this.ws) {
+      try {
+        // Send Deepgram's graceful close message
+        if (this.ws.readyState === WebSocket.OPEN) {
+          this.ws.send(JSON.stringify({ type: 'CloseStream' }));
         }
-
-        this.isActive = false;
-        this.isConnecting = false;
-        this.buffer = [];
-        this.lastInterimTranscript = '';
-        console.log('[DeepgramStreaming] Stopped');
+      } catch {
+        // Ignore send errors during shutdown
+      }
+      this.ws.close();
+      this.ws = null;
     }
+
+    this.isActive = false;
+    this.isConnecting = false;
+    this.buffer.clear();
+    this.lastInterimTranscript = '';
+    console.log('[DeepgramStreaming] Stopped');
+  }
 
     public destroy(): void {
         this.stop();
@@ -118,25 +166,24 @@ export class DeepgramStreamingSTT extends EventEmitter {
     // Audio Data
     // =========================================================================
 
-    public write(chunk: Buffer): void {
-        if (!this.isActive) return;
+  public write(chunk: Buffer): void {
+    if (!this.isActive) return;
 
-        if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
-            this.buffer.push(chunk);
-            if (this.buffer.length > 500) this.buffer.shift(); // Cap buffer size
-            
-            if (!this.isConnecting && this.shouldReconnect && !this.reconnectTimer) {
-                console.log('[DeepgramStreaming] WS not ready. Lazy connecting on new audio...');
-                this.connect();
-            }
-            return;
-        }
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      this.buffer.push(chunk); // Ring buffer handles capacity internally
 
-        const pcm16 = resampleToMonoPcm16(chunk, this.inputSampleRate, this.numChannels, this.targetSampleRate);
-        if (pcm16.length > 0) {
-            this.ws.send(pcm16);
-        }
+      if (!this.isConnecting && this.shouldReconnect && !this.reconnectTimer) {
+        console.log('[DeepgramStreaming] WS not ready. Lazy connecting on new audio...');
+        this.connect();
+      }
+      return;
     }
+
+    const pcm16 = resampleToMonoPcm16(chunk, this.inputSampleRate, this.numChannels, this.targetSampleRate);
+    if (pcm16.length > 0) {
+      this.ws.send(pcm16);
+    }
+  }
 
     // =========================================================================
     // WebSocket Connection
@@ -161,34 +208,47 @@ export class DeepgramStreamingSTT extends EventEmitter {
 
         console.log(`[DeepgramStreaming] Connecting (input=${this.inputSampleRate}, target=${this.targetSampleRate}, ch=1)...`);
 
-        this.ws = new WebSocket(url, {
+        const socket = new WebSocket(url, {
             headers: {
                 Authorization: `Token ${this.apiKey}`,
             },
         });
+        this.ws = socket;
 
-        this.ws.on('open', () => {
-            this.isActive = true;
-            this.isConnecting = false;
-            this.reconnectAttempts = 0;
-            console.log('[DeepgramStreaming] Connected');
+  socket.on('open', () => {
+    if (this.ws !== socket) {
+      return;
+    }
 
-            // Send buffered audio
-            while (this.buffer.length > 0) {
-                const chunk = this.buffer.shift();
-                if (chunk && this.ws?.readyState === WebSocket.OPEN) {
-                    const pcm16 = resampleToMonoPcm16(chunk, this.inputSampleRate, this.numChannels, this.targetSampleRate);
-                    if (pcm16.length > 0) {
-                        this.ws.send(pcm16);
-                    }
-                }
+    this.isConnecting = false;
+    this.reconnectAttempts = 0;
+    console.log('[DeepgramStreaming] Connected');
+
+    // Send buffered audio (ring buffer O(1) per chunk)
+    while (this.buffer.length > 0) {
+      const chunk = this.buffer.shift();
+      if (chunk && this.ws?.readyState === WebSocket.OPEN) {
+        const pcm16 = resampleToMonoPcm16(chunk, this.inputSampleRate, this.numChannels, this.targetSampleRate);
+        if (pcm16.length > 0) {
+          this.ws.send(pcm16);
+        }
+      }
+    }
+
+    // Start keep-alive pings
+    this.startKeepAlive();
+    try {
+      this.ws.send(JSON.stringify({ type: 'KeepAlive' }));
+    } catch {
+      // Ignore eager keep-alive errors
+    }
+  });
+
+        socket.on('message', (data: WebSocket.Data) => {
+            if (this.ws !== socket) {
+                return;
             }
 
-            // Start keep-alive pings
-            this.startKeepAlive();
-        });
-
-        this.ws.on('message', (data: WebSocket.Data) => {
             try {
                 const msg = JSON.parse(data.toString());
 
@@ -231,12 +291,21 @@ export class DeepgramStreamingSTT extends EventEmitter {
             }
         });
 
-        this.ws.on('error', (err: Error) => {
+        socket.on('error', (err: Error) => {
+            if (this.ws !== socket) {
+                return;
+            }
+
             console.error('[DeepgramStreaming] WebSocket error:', err.message);
             this.emit('error', err);
         });
 
-        this.ws.on('close', (code: number, reason: Buffer) => {
+        socket.on('close', (code: number, reason: Buffer) => {
+            if (this.ws !== socket) {
+                return;
+            }
+
+            this.ws = null;
             // Do not force isActive=false; let write() trigger reconnect if isActive is still true
             this.isConnecting = false;
             this.clearKeepAlive();

@@ -20,7 +20,7 @@ export function registerWindowHandlers({ appState, safeHandle, safeHandleValidat
       const senderWebContents = event.sender;
       const settingsWin = appState.settingsWindowHelper.getSettingsWindow();
       const overlayWin = appState.getWindowHelper().getOverlayWindow();
-      const launcherWin = appState.getWindowHelper().getLauncherWindow();
+      const launcherWin = appState.getWindowHelper().getLauncherContentWindow();
 
       if (settingsWin && !settingsWin.isDestroyed() && settingsWin.webContents.id === senderWebContents.id) {
         appState.settingsWindowHelper.setWindowDimensions(settingsWin, width, height);

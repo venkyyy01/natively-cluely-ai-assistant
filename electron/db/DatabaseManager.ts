@@ -5,6 +5,31 @@ import { app } from 'electron';
 import fs from 'fs';
 import * as sqliteVec from 'sqlite-vec';
 
+export type MeetingProcessingState = 'processing' | 'completed' | 'failed';
+
+const PLACEHOLDER_MEETING_TITLES = new Set(['', 'Processing...', 'Untitled Session']);
+
+function toMeetingProcessingState(raw: unknown): MeetingProcessingState {
+    const value = typeof raw === 'number' ? raw : Number(raw);
+    if (value === 0) return 'processing';
+    if (value < 0) return 'failed';
+    return 'completed';
+}
+
+function normalizeMeetingTitle(title: unknown, processingState: MeetingProcessingState): string {
+    const trimmed = typeof title === 'string' ? title.trim() : '';
+
+    if (processingState !== 'processing' && PLACEHOLDER_MEETING_TITLES.has(trimmed)) {
+        return 'Untitled Session';
+    }
+
+    if (trimmed) {
+        return trimmed;
+    }
+
+    return processingState === 'processing' ? 'Processing...' : 'Untitled Session';
+}
+
 // Interfaces for our data objects
 export interface Meeting {
     id: string;
@@ -32,6 +57,7 @@ export interface Meeting {
     calendarEventId?: string;
     source?: 'manual' | 'calendar';
     isProcessed?: boolean;
+    processingState?: MeetingProcessingState;
 }
 
 export class DatabaseManager {
@@ -762,15 +788,16 @@ export class DatabaseManager {
     public markMeetingProcessingFailed(id: string, error: unknown): boolean {
         if (!this.db) return false;
         try {
-            const current = this.db.prepare('SELECT summary_json FROM meetings WHERE id = ?').get(id) as { summary_json?: string } | undefined;
+            const current = this.db.prepare('SELECT title, summary_json FROM meetings WHERE id = ?').get(id) as { title?: string; summary_json?: string } | undefined;
             const existing = current?.summary_json ? JSON.parse(current.summary_json) : {};
             const summaryJson = JSON.stringify({
                 ...existing,
                 legacySummary: 'Meeting processing failed',
                 error: error instanceof Error ? error.message : String(error),
             });
-            const stmt = this.db.prepare('UPDATE meetings SET is_processed = -1, summary_json = ? WHERE id = ?');
-            const info = stmt.run(summaryJson, id);
+            const title = normalizeMeetingTitle(current?.title, 'failed');
+            const stmt = this.db.prepare('UPDATE meetings SET title = ?, is_processed = -1, summary_json = ? WHERE id = ?');
+            const info = stmt.run(title, summaryJson, id);
             return info.changes > 0;
         } catch (updateError) {
             console.error(`[DatabaseManager] Failed to mark meeting ${id} as failed:`, updateError);
@@ -836,7 +863,7 @@ export class DatabaseManager {
         if (!this.db) return [];
 
         const stmt = this.db.prepare(`
-            SELECT id, title, created_at, duration_ms, summary_json, calendar_event_id, source
+            SELECT id, title, created_at, duration_ms, summary_json, calendar_event_id, source, is_processed
             FROM meetings 
             ORDER BY created_at DESC 
             LIMIT ?
@@ -846,6 +873,7 @@ export class DatabaseManager {
 
         return rows.map(row => {
             const summaryData = JSON.parse(row.summary_json || '{}');
+            const processingState = toMeetingProcessingState(row.is_processed);
 
             // Format duration string if needed, but we typically store ms
             // Let's recreate the 'duration' string "MM:SS" from duration_ms
@@ -855,13 +883,15 @@ export class DatabaseManager {
 
             return {
                 id: row.id,
-                title: row.title,
+                title: normalizeMeetingTitle(row.title, processingState),
                 date: row.created_at, // Use the stored ISO string
                 duration: durationStr,
                 summary: summaryData.legacySummary || '',
                 detailedSummary: summaryData.detailedSummary,
                 calendarEventId: row.calendar_event_id,
                 source: row.source as any,
+                isProcessed: processingState === 'completed',
+                processingState,
                 // We don't load full transcript/usage for list view to keep it light
                 transcript: [] as any[],
                 usage: [] as any[]
@@ -887,6 +917,7 @@ export class DatabaseManager {
 
         // Reconstruct
         const summaryData = JSON.parse(meetingRow.summary_json || '{}');
+        const processingState = toMeetingProcessingState(meetingRow.is_processed);
         const minutes = Math.floor(meetingRow.duration_ms / 60000);
         const seconds = Math.floor((meetingRow.duration_ms % 60000) / 1000);
         const durationStr = `${minutes}:${seconds.toString().padStart(2, '0')}`;
@@ -923,13 +954,15 @@ export class DatabaseManager {
 
         return {
             id: meetingRow.id,
-            title: meetingRow.title,
+            title: normalizeMeetingTitle(meetingRow.title, processingState),
             date: meetingRow.created_at,
             duration: durationStr,
             summary: summaryData.legacySummary || '',
             detailedSummary: summaryData.detailedSummary,
             calendarEventId: meetingRow.calendar_event_id,
             source: meetingRow.source,
+            isProcessed: processingState === 'completed',
+            processingState,
             transcript: transcript,
             usage: usage
         };
@@ -992,10 +1025,11 @@ export class DatabaseManager {
             const minutes = Math.floor(row.duration_ms / 60000);
             const seconds = Math.floor((row.duration_ms % 60000) / 1000);
             const durationStr = `${minutes}:${seconds.toString().padStart(2, '0')}`;
+            const processingState: MeetingProcessingState = 'processing';
 
             return {
                 id: row.id,
-                title: row.title,
+                title: normalizeMeetingTitle(row.title, processingState),
                 date: row.created_at,
                 duration: durationStr,
                 summary: summaryData.legacySummary || '',
@@ -1003,6 +1037,7 @@ export class DatabaseManager {
                 calendarEventId: row.calendar_event_id,
                 source: row.source,
                 isProcessed: false,
+                processingState,
                 transcript: [] as any[], // Fetched separately via getMeetingDetails or manually if needed
                 usage: [] as any[]
             };

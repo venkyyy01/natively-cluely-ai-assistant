@@ -244,6 +244,8 @@ test('SettingsManager narrows persisted Conscious Mode and disguise settings on 
     consciousModeEnabled: 'yes',
     disguiseMode: 'spaceship',
     isUndetectable: true,
+    enablePrivateMacosStealthApi: true,
+    enableCaptureDetectionWatchdog: 'sometimes',
   }));
 
   const { SettingsManager, restoreElectron } = await loadSettingsModules(userDataPath);
@@ -254,6 +256,8 @@ test('SettingsManager narrows persisted Conscious Mode and disguise settings on 
   assert.equal(settings.get('consciousModeEnabled'), undefined);
   assert.equal(settings.get('disguiseMode'), undefined);
   assert.equal(settings.get('isUndetectable'), true);
+  assert.equal(settings.get('enablePrivateMacosStealthApi'), true);
+  assert.equal(settings.get('enableCaptureDetectionWatchdog'), undefined);
 
   restoreElectron();
 });

@@ -39,13 +39,22 @@ function evaluateCoverage(summary) {
   return failures.length > 0 ? failures.join(', ') : null;
 }
 
-function run(command, args) {
+function run(command, args, options = {}) {
+  const { timeoutMs = 120000 } = options;
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, {
+      shell: false,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
 
     let output = '';
+    let timedOut = false;
+
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      child.kill('SIGTERM');
+      reject(new Error(`Command timed out after ${timeoutMs}ms: ${command} ${args.join(' ')}`));
+    }, timeoutMs);
 
     child.stdout.on('data', (chunk) => {
       const text = chunk.toString();
@@ -59,9 +68,14 @@ function run(command, args) {
       process.stderr.write(text);
     });
 
-    child.on('error', reject);
+    child.on('error', (err) => {
+      if (timeout) clearTimeout(timeout);
+      if (!timedOut) reject(err);
+    });
 
     child.on('close', (code) => {
+      if (timeout) clearTimeout(timeout);
+      if (timedOut) return;
       if (code !== 0) {
         reject(new Error(`Command failed: ${command} ${args.join(' ')}`));
         return;

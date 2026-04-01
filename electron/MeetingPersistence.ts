@@ -8,20 +8,71 @@ import { DatabaseManager, Meeting } from './db/DatabaseManager';
 import { GROQ_TITLE_PROMPT, GROQ_SUMMARY_JSON_PROMPT } from './llm';
 const crypto = require('crypto');
 
-export class MeetingPersistence {
-    private session: SessionTracker;
-    private llmHelper: LLMHelper;
+const PLACEHOLDER_MEETING_TITLES = new Set(['', 'Processing...', 'Untitled Session']);
+const DEFAULT_FINAL_MEETING_TITLE = 'Untitled Session';
 
-    constructor(session: SessionTracker, llmHelper: LLMHelper) {
-        this.session = session;
-        this.llmHelper = llmHelper;
+export class MeetingPersistence {
+  private session: SessionTracker;
+  private llmHelper: LLMHelper;
+  private pendingSaves: Set<Promise<void>> = new Set();
+
+  constructor(session: SessionTracker, llmHelper: LLMHelper) {
+    this.session = session;
+    this.llmHelper = llmHelper;
+  }
+
+  setSession(session: SessionTracker): void {
+    this.session = session;
+  }
+
+  private isMeaningfulTitle(title?: string | null): title is string {
+    return typeof title === 'string' && !PLACEHOLDER_MEETING_TITLES.has(title.trim());
+  }
+
+  private toMeetingDate(startTimeMs: number, fallbackDate?: string): string {
+    if (Number.isFinite(startTimeMs) && startTimeMs > 0) {
+      return new Date(startTimeMs).toISOString();
     }
+
+    if (fallbackDate) {
+      const parsedFallback = new Date(fallbackDate).getTime();
+      if (Number.isFinite(parsedFallback)) {
+        return new Date(parsedFallback).toISOString();
+      }
+    }
+
+    return new Date().toISOString();
+  }
+
+  /**
+  * Wait for all pending meeting saves to complete.
+  * Call this before app quit to prevent data loss.
+  */
+  async waitForPendingSaves(timeoutMs: number = 10000): Promise<void> {
+    if (this.pendingSaves.size === 0) return;
+
+    console.log(`[MeetingPersistence] Waiting for ${this.pendingSaves.size} pending saves...`);
+
+    const timeout = new Promise<void>((_, reject) => 
+      setTimeout(() => reject(new Error('Timeout waiting for pending saves')), timeoutMs)
+    );
+
+    try {
+      await Promise.race([
+        Promise.all(Array.from(this.pendingSaves)),
+        timeout
+      ]);
+      console.log('[MeetingPersistence] All pending saves completed');
+    } catch (e) {
+      console.warn('[MeetingPersistence] Some saves may not have completed:', e);
+    }
+  }
 
     /**
      * Stops the meeting immediately, snapshots data, and triggers background processing.
      * Returns immediately so UI can switch.
      */
-    public async stopMeeting(): Promise<void> {
+    public async stopMeeting(meetingId?: string): Promise<SessionTracker> {
         console.log('[MeetingPersistence] Stopping meeting and queueing save...');
 
         // 0. Force-save any pending interim transcript
@@ -29,19 +80,20 @@ export class MeetingPersistence {
 
         // 1. Snapshot valid data BEFORE resetting
         const snapshot = this.session.createSnapshot();
+        const nextSession = this.session.createSuccessorSession();
+        this.session = nextSession;
+
         if (snapshot.durationMs < 1000) {
             console.log("Meeting too short, ignoring.");
-            this.session.reset();
-            return;
+            return nextSession;
         }
 
-        // 2. Reset state immediately so new meeting can start or UI is clean
-        this.session.reset();
-
-        const meetingId = crypto.randomUUID();
-        this.processAndSaveMeeting(snapshot, meetingId).catch(err => {
-            console.error('[MeetingPersistence] Background processing failed:', err);
-        });
+    const resolvedMeetingId = meetingId ?? crypto.randomUUID();
+    const savePromise = this.processAndSaveMeeting(snapshot, resolvedMeetingId);
+    this.pendingSaves.add(savePromise);
+    savePromise
+      .catch(err => console.error('[MeetingPersistence] Background processing failed:', err))
+      .finally(() => this.pendingSaves.delete(savePromise));
 
         // 4. Initial Save (Placeholder)
         const minutes = Math.floor(snapshot.durationMs / 60000);
@@ -50,9 +102,9 @@ export class MeetingPersistence {
         const metadata = snapshot.meetingMetadata;
 
         const placeholder: Meeting = {
-            id: meetingId,
-            title: metadata?.title || "Processing...",
-            date: new Date().toISOString(),
+            id: resolvedMeetingId,
+            title: this.isMeaningfulTitle(metadata?.title) ? metadata.title : "Processing...",
+            date: this.toMeetingDate(snapshot.startTime),
             duration: durationStr,
             summary: "Generating summary...",
             detailedSummary: { actionItems: [], keyPoints: [] },
@@ -71,13 +123,15 @@ export class MeetingPersistence {
         } catch (e) {
             console.error("Failed to save placeholder", e);
         }
+
+        return nextSession;
     }
 
     /**
      * Heavy lifting: LLM Title, Summary, and DB Write
      */
     private async processAndSaveMeeting(data: MeetingSnapshot, meetingId: string): Promise<void> {
-        let title = "Untitled Session";
+        let title = DEFAULT_FINAL_MEETING_TITLE;
         let summaryData: { actionItems: string[], keyPoints: string[] } = { actionItems: [], keyPoints: [] };
 
         const metadata: MeetingMetadataSnapshot | null = data.meetingMetadata || null;
@@ -85,19 +139,22 @@ export class MeetingPersistence {
         let source: 'manual' | 'calendar' = 'manual';
 
         if (metadata) {
-            if (metadata.title) title = metadata.title;
+            if (this.isMeaningfulTitle(metadata.title)) title = metadata.title;
             if (metadata.calendarEventId) calendarEventId = metadata.calendarEventId;
             if (metadata.source) source = metadata.source;
         }
 
         try {
             // Generate Title (only if not set by calendar)
-            if (!metadata || !metadata.title) {
+            if (!this.isMeaningfulTitle(metadata?.title)) {
                 const titlePrompt = `Generate a concise 3-6 word title for this meeting context. Output ONLY the title text. Do not use quotes or conversational filler.`;
                 const groqTitlePrompt = GROQ_TITLE_PROMPT;
 
                 const generatedTitle = await this.llmHelper.generateMeetingSummary(titlePrompt, data.context.substring(0, 5000), groqTitlePrompt);
-                if (generatedTitle) title = generatedTitle.replace(/["*]/g, '').trim();
+                const cleanedTitle = generatedTitle?.replace(/["*]/g, '').trim();
+                if (this.isMeaningfulTitle(cleanedTitle)) {
+                    title = cleanedTitle;
+                }
             }
 
             // Generate Structured Summary
@@ -148,7 +205,7 @@ export class MeetingPersistence {
             const meetingData: Meeting = {
                 id: meetingId,
                 title: title,
-                date: new Date().toISOString(),
+                date: this.toMeetingDate(data.startTime),
                 duration: durationStr,
                 summary: "See detailed summary",
                 detailedSummary: summaryData,
@@ -168,6 +225,8 @@ export class MeetingPersistence {
         } catch (error) {
             console.error('[MeetingPersistence] Failed to save meeting:', error);
             DatabaseManager.getInstance().markMeetingProcessingFailed(meetingId, error);
+            const wins = require('electron').BrowserWindow.getAllWindows();
+            wins.forEach((w: any) => w.webContents.send('meetings-updated'));
         }
     }
 
@@ -209,7 +268,7 @@ export class MeetingPersistence {
                     durationMs: durationMs,
                     context: context,
                     meetingMetadata: {
-                        title: details.title,
+                        title: this.isMeaningfulTitle(details.title) ? details.title : undefined,
                         calendarEventId: details.calendarEventId,
                         source: details.source,
                     },

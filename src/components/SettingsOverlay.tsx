@@ -349,7 +349,7 @@ const globalShortcutAlternates: Record<string, string> = {
     toggleVisibility: 'Alt: F13',
     takeScreenshot: 'Alt: F14',
     selectiveScreenshot: 'Alt: F15',
-    toggleClickthrough: 'Alt: F16',
+    toggleClickthrough: 'Alt: Cmd+Option+Shift+M',
 };
   const [isUndetectable, setIsUndetectable] = useState(false);
   const [disguiseMode, setDisguiseMode] = useState<'terminal' | 'settings' | 'activity' | 'none'>('none');

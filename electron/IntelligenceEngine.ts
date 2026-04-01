@@ -166,6 +166,13 @@ export class IntelligenceEngine extends EventEmitter {
         return this.llmHelper;
     }
 
+    setSession(session: SessionTracker): void {
+        this.session = session;
+        if (this.recapLLM) {
+            this.session.setRecapLLM(this.recapLLM);
+        }
+    }
+
     private buildCompactTranscriptSnapshot(
         transcriptTurns: Array<{ role: string; text: string; timestamp: number }>,
         maxTurns: number = 12,
@@ -346,25 +353,41 @@ export class IntelligenceEngine extends EventEmitter {
         let fallbackResponsePrepared = false;
         let syntheticFallbackPending = false;
 
+        console.log('[INTELLIGENCE] 🤖 runWhatShouldISay triggered:', {
+            question: question?.substring(0, 50) + (question && question.length > 50 ? '...' : ''),
+            confidence: confidence,
+            activeMode: this.activeMode,
+            cooldownRemaining: Math.max(0, this.triggerCooldown - (now - this.lastTriggerTime)),
+            hasWhatToAnswerLLM: !!this.whatToAnswerLLM,
+            hasAnswerLLM: !!this.answerLLM,
+            imagePaths: imagePaths?.length || 0
+        });
+
         if (now - this.lastTriggerTime < this.triggerCooldown && this.activeMode !== 'what_to_say') {
+            console.log(`[INTELLIGENCE] ❌ Rejected: cooldown active (${Math.max(0, this.triggerCooldown - (now - this.lastTriggerTime))}ms remaining)`);
             return null;
         }
 
         if (this.assistCancellationToken) {
+            console.log('[INTELLIGENCE] 🔄 Aborting existing assist operation');
             this.assistCancellationToken.abort();
             this.assistCancellationToken = null;
         }
 
+        console.log('[INTELLIGENCE] 🎯 Setting mode to what_to_say');
         this.setMode('what_to_say');
         this.lastTriggerTime = now;
         const requestSequence = ++this.activeWhatToSayRequestId;
 
         try {
             if (!this.whatToAnswerLLM) {
+                console.log('[INTELLIGENCE] ⚠️  whatToAnswerLLM not available, checking fallback...');
                 if (!this.answerLLM) {
+                    console.log('[INTELLIGENCE] ❌ No LLM available - API keys not configured');
                     this.setMode('idle');
                     return "Please configure your API Keys in Settings to use this feature.";
                 }
+                console.log('[INTELLIGENCE] 🔄 Using fallback answerLLM');
                 const context = this.session.getFormattedContext(180);
                 let answer = await this.answerLLM.generate(question || '', context);
                 if (answer) {
@@ -451,11 +474,15 @@ export class IntelligenceEngine extends EventEmitter {
                 });
                 this.latencyTracker.markProviderRequestStarted(requestId);
 
-                for await (const token of stream) {
-                    if (requestSequence !== this.activeWhatToSayRequestId) {
-                        await stream.return?.(undefined);
-                        break;
-                    }
+      for await (const token of stream) {
+        if (requestSequence !== this.activeWhatToSayRequestId) {
+          try {
+            await stream.return?.(undefined);
+          } catch {
+            // Stream cleanup failed - safe to ignore
+          }
+          break;
+        }
                     if (fallbackResponsePrepared) {
                         this.latencyTracker.markFallbackOccurred(requestId);
                         fallbackResponsePrepared = false;
@@ -738,11 +765,15 @@ export class IntelligenceEngine extends EventEmitter {
             });
             this.latencyTracker.markProviderRequestStarted(requestId);
 
-            for await (const token of stream) {
-                if (requestSequence !== this.activeWhatToSayRequestId) {
-                    await stream.return?.(undefined);
-                    break;
-                }
+      for await (const token of stream) {
+        if (requestSequence !== this.activeWhatToSayRequestId) {
+          try {
+            await stream.return?.(undefined);
+          } catch {
+            // Stream cleanup failed - safe to ignore
+          }
+          break;
+        }
                 if (fallbackResponsePrepared) {
                     this.latencyTracker.markFallbackOccurred(requestId);
                     fallbackResponsePrepared = false;
@@ -1035,14 +1066,22 @@ export class IntelligenceEngine extends EventEmitter {
         return this.activeMode;
     }
 
-    /**
-     * Reset engine state (cancels any in-flight operations)
-     */
-    reset(): void {
-        this.activeMode = 'idle';
-        if (this.assistCancellationToken) {
-            this.assistCancellationToken.abort();
-            this.assistCancellationToken = null;
-        }
+  /**
+  * Reset engine state (cancels any in-flight operations)
+  */
+  reset(): void {
+    this.activeMode = 'idle';
+    if (this.assistCancellationToken) {
+      this.assistCancellationToken.abort();
+      this.assistCancellationToken = null;
     }
+  }
+
+  /**
+  * Clean up all event listeners for garbage collection
+  */
+  override removeAllListeners(): this {
+    super.removeAllListeners();
+    return this;
+  }
 }
