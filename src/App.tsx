@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useState, useMemo } from 'react'
 import { QueryClient, QueryClientProvider } from 'react-query'
 import { AnimatePresence, motion } from 'framer-motion'
 import { AlertCircle } from 'lucide-react'
@@ -292,7 +292,7 @@ const useWindowAnalytics = ({ kind, isDefaultLauncherWindow }: AppWindowContext)
 }
 
 const App: React.FC = () => {
-  const windowContext = resolveWindowContext(window.location.search)
+  const windowContext = useMemo(() => resolveWindowContext(window.location.search), [])
   const { kind: windowKind, isDefaultLauncherWindow } = windowContext
 
   useWindowAnalytics(windowContext)
@@ -375,7 +375,7 @@ const App: React.FC = () => {
     return () => {
       if (removeOpacityListener) removeOpacityListener()
     }
-  }, [electronAPI, windowContext, windowKind])
+  }, [electronAPI, windowKind])
 
   const handleReindex = async () => {
     if (window.electronAPI?.reindexIncompatibleMeetings) {

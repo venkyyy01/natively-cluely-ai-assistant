@@ -93,6 +93,20 @@ test('cleanup removes stale packaged app directories and archive files', () => {
   assert.equal(fs.existsSync(path.join(tempDir, 'Natively.zip')), false);
 });
 
+test('cleanup preserves the tracked macOS virtual display helper source path', () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'build-install-helper-'));
+  const releaseDir = path.join(tempDir, 'release');
+  const helperPath = path.join(tempDir, 'assets', 'bin', 'macos', 'stealth-virtual-display-helper');
+
+  touch(helperPath, 1_000);
+
+  runShell(
+    `source "${scriptPath}" && SCRIPT_DIR="${tempDir}" RELEASE_DIR="${releaseDir}" HOME="${tempDir}" clean_build_artifacts`
+  );
+
+  assert.equal(fs.existsSync(helperPath), true);
+});
+
 test('artifact helpers fail clearly when packaged app is missing', () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'build-install-missing-app-'));
   const releaseDir = path.join(tempDir, 'release');

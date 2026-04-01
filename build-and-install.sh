@@ -258,7 +258,6 @@ local paths=(
 "$SCRIPT_DIR/dist"
 "$SCRIPT_DIR/dist-electron"
 "$SCRIPT_DIR/release"
-"$SCRIPT_DIR/assets/bin/macos/stealth-virtual-display-helper"
 "$SCRIPT_DIR/node_modules/.cache"
 "$SCRIPT_DIR/.vite"
 "$SCRIPT_DIR/native-module/target"

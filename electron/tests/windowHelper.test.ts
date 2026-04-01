@@ -95,3 +95,49 @@ test('WindowHelper centers overlay using the overlay height', async () => {
     restoreElectron();
   }
 });
+
+test('WindowHelper can show and hide a direct launcher window when StealthRuntime is unavailable', async () => {
+  const restoreElectron = installElectronMock();
+  const windowHelperPath = require.resolve('../WindowHelper');
+  delete require.cache[windowHelperPath];
+
+  try {
+    const { WindowHelper } = await import('../WindowHelper');
+    const stealthCalls: Array<{ enable: boolean; role?: string }> = [];
+    const helper = new WindowHelper({} as never, {
+      applyToWindow(_win: unknown, enable: boolean, options: { role?: string }) {
+        stealthCalls.push({ enable, role: options.role });
+      },
+      reapplyAfterShow() {},
+    } as never);
+
+    let launcherShown = 0;
+    let launcherHidden = 0;
+    let launcherFocused = 0;
+    let overlayHidden = 0;
+
+    (helper as any).launcherRuntime = null;
+    (helper as any).launcherWindow = {
+      isDestroyed: () => false,
+      show() { launcherShown += 1; },
+      hide() { launcherHidden += 1; },
+      focus() { launcherFocused += 1; },
+      setOpacity() {},
+    };
+    (helper as any).overlayWindow = {
+      isDestroyed: () => false,
+      hide() { overlayHidden += 1; },
+    };
+
+    helper.switchToLauncher();
+    helper.hideMainWindow();
+
+    assert.deepEqual(stealthCalls, [{ enable: false, role: 'primary' }]);
+    assert.equal(launcherShown, 1);
+    assert.equal(launcherFocused, 2);
+    assert.equal(launcherHidden, 1);
+    assert.equal(overlayHidden, 2);
+  } finally {
+    restoreElectron();
+  }
+});
