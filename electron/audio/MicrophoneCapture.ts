@@ -4,7 +4,12 @@ import { assertNativeAudioAvailable, getNativeAudioLoadError, loadNativeAudioMod
 const NativeModule = loadNativeAudioModule();
 
 if (!NativeModule) {
-    console.error('[MicrophoneCapture] Failed to load native module:', getNativeAudioLoadError());
+    const error = getNativeAudioLoadError();
+    console.error('[MicrophoneCapture] ❌ Failed to load native module:', error?.message || 'Unknown error');
+    console.error('[MicrophoneCapture] 🔧 This will prevent audio capture from working');
+} else {
+    console.log('[MicrophoneCapture] ✅ Native module loaded successfully');
+    console.log('[MicrophoneCapture] Available exports:', Object.keys(NativeModule));
 }
 
 const { MicrophoneCapture: RustMicCapture } = NativeModule || {};

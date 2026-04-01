@@ -858,7 +858,11 @@ try {
     const sttEmitter = stt as EventEmitter
 
     const transcriptHandler = (segment: { text: string, isFinal: boolean, confidence: number }) => {
+      // Enhanced debugging for transcript flow
+      console.log(`[TRANSCRIPT] 📝 ${speaker}: "${segment.text.substring(0, 100)}${segment.text.length > 100 ? '...' : ''}" (final: ${segment.isFinal}, conf: ${segment.confidence?.toFixed(2) || 'N/A'}, meeting: ${this.isMeetingActive})`);
+      
       if (!this.isMeetingActive) {
+        console.warn('[TRANSCRIPT] ⚠️  Transcript received but meeting not active - discarding');
         return;
       }
 
@@ -887,9 +891,18 @@ try {
         final: segment.isFinal,
         confidence: segment.confidence
       };
-      helper.getLauncherWindow()?.webContents.send('native-audio-transcript', payload);
-      helper.getOverlayContentWindow()?.webContents.send('native-audio-transcript', payload);
+      
+      // Send to UI with debugging
+      const launcherWindow = helper.getLauncherWindow();
+      const overlayWindow = helper.getOverlayContentWindow();
+      console.log(`[TRANSCRIPT] 🖥️  Sending to UI: launcher=${!!launcherWindow}, overlay=${!!overlayWindow}`);
+      
+      launcherWindow?.webContents.send('native-audio-transcript', payload);
+      overlayWindow?.webContents.send('native-audio-transcript', payload);
 
+      // Auto-trigger logic with enhanced debugging
+      console.log(`[TRANSCRIPT] 🤖 Auto-trigger check: speaker=${speaker}, final=${segment.isFinal}, consciousMode=${this.consciousModeEnabled}, intelligenceManager=${!!this.intelligenceManager}`);
+      
       void maybeHandleSuggestionTriggerFromTranscript({
         speaker,
         text: segment.text,
@@ -897,8 +910,14 @@ try {
         confidence: segment.confidence,
         consciousModeEnabled: this.consciousModeEnabled,
         intelligenceManager: this.intelligenceManager,
+      }).then((triggered) => {
+        if (triggered) {
+          console.log('[TRANSCRIPT] ✅ Auto-trigger SUCCEEDED');
+        } else {
+          console.log('[TRANSCRIPT] ❌ Auto-trigger declined (conditions not met)');
+        }
       }).catch((error) => {
-        console.error('[Main] Failed to auto-trigger interview assist:', error);
+        console.error('[TRANSCRIPT] 🚨 Auto-trigger ERROR:', error);
       });
     };
 
@@ -1198,42 +1217,66 @@ try {
     }
 
     try {
-      console.log('[Main] Initializing MicrophoneCapture...');
+      console.log('[Main] 🎤 Initializing MicrophoneCapture...');
+      console.log(`[Main] 🎤 Target device: ${inputDeviceId || 'default'}`);
+      
       this.microphoneCapture = new MicrophoneCapture(inputDeviceId || undefined);
       const rate = this.microphoneCapture.getSampleRate();
-      console.log(`[Main] MicrophoneCapture rate: ${rate}Hz`);
+      console.log(`[Main] 🎤 MicrophoneCapture rate: ${rate}Hz`);
+      console.log(`[Main] 🎤 STT User ready: ${!!this.googleSTT_User}`);
+      
       this.googleSTT_User?.setSampleRate(rate);
 
       this.microphoneCapture.on('data', (chunk: Buffer) => {
-        // console.log('[Main] Mic chunk', chunk.length);
+        // Enhanced debugging - log periodically
+        if (Math.random() < 0.01) { // Log ~1% of chunks
+          console.log(`[Main] 🎤 Audio chunk: ${chunk.length}B → STT: ${!!this.googleSTT_User}`);
+        }
         this.googleSTT_User?.write(chunk);
       });
+      
       this.microphoneCapture.on('speech_ended', () => {
+        console.log('[Main] 🎤 Speech ended detected');
         safeNotifySpeechEnded(this.googleSTT_User);
       });
+      
       this.microphoneCapture.on('error', (err: Error) => {
+        console.error('[Main] 🎤 Microphone error:', err);
         void this.handleAudioCaptureError('microphone', err);
       });
-      console.log('[Main] MicrophoneCapture initialized.');
+      
+      console.log('[Main] ✅ MicrophoneCapture initialized successfully.');
     } catch (err) {
-      console.warn('[Main] Failed to initialize MicrophoneCapture with preferred ID. Falling back to default.', err);
+      console.error('[Main] ❌ Failed to initialize MicrophoneCapture with preferred ID:', err);
+      console.log('[Main] 🔄 Attempting fallback to default device...');
+      
       try {
         this.microphoneCapture = new MicrophoneCapture(); // Default
         const rate = this.microphoneCapture.getSampleRate();
-        console.log(`[Main] MicrophoneCapture (Default) rate: ${rate}Hz`);
+        console.log(`[Main] 🎤 MicrophoneCapture (Default) rate: ${rate}Hz`);
         this.googleSTT_User?.setSampleRate(rate);
 
         this.microphoneCapture.on('data', (chunk: Buffer) => {
+          if (Math.random() < 0.01) { // Log ~1% of chunks
+            console.log(`[Main] 🎤 Audio chunk (fallback): ${chunk.length}B → STT: ${!!this.googleSTT_User}`);
+          }
           this.googleSTT_User?.write(chunk);
         });
+        
         this.microphoneCapture.on('speech_ended', () => {
+          console.log('[Main] 🎤 Speech ended detected (fallback)');
           this.googleSTT_User?.notifySpeechEnded?.();
         });
+        
         this.microphoneCapture.on('error', (err: Error) => {
+          console.error('[Main] 🎤 Microphone error (fallback):', err);
           void this.handleAudioCaptureError('microphone', err);
         });
+        
+        console.log('[Main] ✅ MicrophoneCapture (Default) initialized successfully.');
       } catch (err2) {
-        console.error('[Main] Failed to initialize MicrophoneCapture (Default):', err2);
+        console.error('[Main] ❌ CRITICAL: Failed to initialize MicrophoneCapture (Default):', err2);
+        console.error('[Main] 🚨 Audio capture will not work! Check native module and permissions.');
       }
     }
     this.assertAudioCapturesReady();
@@ -2593,7 +2636,23 @@ async function initializeApp() {
   // Apply the full disguise payload (names, dock icon, AUMID) early
   appState.applyInitialDisguise();
 
-  app.whenReady().then(() => {
+  app.whenReady().then(async () => {
+    // Check microphone permissions on macOS
+    if (process.platform === 'darwin') {
+      console.log('[Init] 🎤 Checking microphone permissions...');
+      try {
+        const micAccess = await systemPreferences.askForMediaAccess('microphone');
+        console.log(`[Init] 🎤 Microphone access: ${micAccess ? '✅ GRANTED' : '❌ DENIED'}`);
+        
+        if (!micAccess) {
+          console.error('[Init] 🚨 Microphone access denied - audio transcription will not work!');
+          console.error('[Init] 🔧 Please enable microphone access in System Preferences > Security & Privacy > Privacy > Microphone');
+        }
+      } catch (error) {
+        console.error('[Init] 🎤 Failed to check microphone permissions:', error);
+      }
+    }
+    
     // Start the Ollama lifecycle manager
     OllamaManager.getInstance().init().catch(console.error);
 

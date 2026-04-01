@@ -287,25 +287,63 @@ export function getTranscriptSuggestionDecision(
 export async function maybeHandleSuggestionTriggerFromTranscript(
   input: TranscriptSuggestionInput,
 ): Promise<boolean> {
-  if (input.speaker !== 'interviewer' || !input.final) {
+  console.log('[AUTO-TRIGGER] 🔍 Processing transcript:', {
+    speaker: input.speaker,
+    final: input.final,
+    textLength: input.text.length,
+    textPreview: input.text.substring(0, 50) + (input.text.length > 50 ? '...' : ''),
+    consciousMode: input.consciousModeEnabled,
+    confidence: input.confidence,
+    hasIntelligenceManager: !!input.intelligenceManager
+  });
+  
+  if (input.speaker !== 'interviewer') {
+    console.log(`[AUTO-TRIGGER] ❌ Rejected: speaker is "${input.speaker}", need "interviewer"`);
+    return false;
+  }
+  
+  if (!input.final) {
+    console.log('[AUTO-TRIGGER] ❌ Rejected: transcript not final (interim transcript)');
     return false;
   }
 
+  const activeThread = input.intelligenceManager.getActiveReasoningThread();
+  console.log(`[AUTO-TRIGGER] 🧠 Active reasoning thread: ${!!activeThread}`);
+  
   const decision = getTranscriptSuggestionDecision(
     input.text,
     input.consciousModeEnabled,
-    input.intelligenceManager.getActiveReasoningThread(),
+    activeThread,
   );
 
+  console.log('[AUTO-TRIGGER] 📊 Decision analysis:', {
+    shouldTrigger: decision.shouldTrigger,
+    lastQuestion: decision.lastQuestion.substring(0, 50) + (decision.lastQuestion.length > 50 ? '...' : ''),
+    questionLength: decision.lastQuestion.length,
+    hasActiveThread: !!activeThread,
+    consciousModeEnabled: input.consciousModeEnabled
+  });
+
   if (!decision.shouldTrigger) {
+    console.log('[AUTO-TRIGGER] ❌ Decision logic declined to trigger');
     return false;
   }
 
-  await input.intelligenceManager.handleSuggestionTrigger({
-    context: input.intelligenceManager.getFormattedContext(180),
-    lastQuestion: decision.lastQuestion,
-    confidence: input.confidence ?? 0.8,
-  });
-
-  return true;
+  try {
+    const context = input.intelligenceManager.getFormattedContext(180);
+    console.log(`[AUTO-TRIGGER] 📝 Context length: ${context ? context.length : 0} chars`);
+    console.log('[AUTO-TRIGGER] 🚀 Calling handleSuggestionTrigger...');
+    
+    await input.intelligenceManager.handleSuggestionTrigger({
+      context: context,
+      lastQuestion: decision.lastQuestion,
+      confidence: input.confidence ?? 0.8,
+    });
+    
+    console.log('[AUTO-TRIGGER] ✅ Successfully triggered LLM response');
+    return true;
+  } catch (error) {
+    console.error('[AUTO-TRIGGER] 🚨 Failed to trigger:', error);
+    return false;
+  }
 }
