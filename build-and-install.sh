@@ -163,6 +163,41 @@ find_newest_packaged_app() {
     select_newest_path "${candidates[@]}"
 }
 
+find_packaged_app_for_arch() {
+    local release_dir="$1"
+    local app_name="${2:-$APP_NAME}"
+    local build_arch="${3:-${BUILD_ARCH:-}}"
+    local candidates=()
+    local candidate=""
+
+    case "$build_arch" in
+        arm64)
+            candidates=(
+                "$release_dir/mac-arm64/${app_name}.app"
+                "$release_dir/mac/${app_name}.app"
+            )
+            ;;
+        x64)
+            candidates=(
+                "$release_dir/mac-x64/${app_name}.app"
+                "$release_dir/mac/${app_name}.app"
+            )
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+
+    for candidate in "${candidates[@]}"; do
+        if [[ -d "$candidate" ]]; then
+            printf '%s\n' "$candidate"
+            return 0
+        fi
+    done
+
+    return 1
+}
+
 find_newest_release_archive() {
     local release_dir="$1"
     local extension="$2"
@@ -182,11 +217,16 @@ find_newest_release_archive() {
 
 collect_packaged_artifacts() {
     local release_dir="$1"
+    local build_arch="${2:-${BUILD_ARCH:-}}"
     local packaged_app=""
     local packaged_dmg=""
     local packaged_zip=""
 
-    packaged_app=$(find_newest_packaged_app "$release_dir") || fail "Missing packaged app in $release_dir"
+    packaged_app=$(find_packaged_app_for_arch "$release_dir" "$APP_NAME" "$build_arch" || true)
+    if [[ -z "$packaged_app" ]]; then
+        packaged_app=$(find_newest_packaged_app "$release_dir") || fail "Missing packaged app in $release_dir"
+    fi
+
     packaged_dmg=$(find_newest_release_archive "$release_dir" dmg)
     packaged_zip=$(find_newest_release_archive "$release_dir" zip)
 

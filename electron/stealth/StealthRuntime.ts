@@ -84,19 +84,49 @@ export class StealthRuntime {
       return this.shellWindow;
     }
 
-    const { webPreferences, show, ...shellOptions } = options;
+    const {
+      webPreferences,
+      show,
+      titleBarStyle,
+      trafficLightPosition,
+      vibrancy,
+      visualEffectState,
+      transparent,
+      hasShadow,
+      backgroundColor,
+      roundedCorners,
+      icon,
+      ...contentBaseOptions
+    } = options;
+    const shellOptions = {
+      ...contentBaseOptions,
+      titleBarStyle,
+      trafficLightPosition,
+      vibrancy,
+      visualEffectState,
+      transparent,
+      hasShadow,
+      backgroundColor,
+      roundedCorners,
+      icon,
+    };
     let contentWindow: BrowserWindow | null = null;
     try {
       contentWindow = this.createWindow({
-        ...shellOptions,
+        ...contentBaseOptions,
         show: false,
+        frame: false,
+        transparent: false,
+        hasShadow: false,
+        backgroundColor: '#000000',
+        paintWhenInitiallyHidden: true,
+        skipTaskbar: true,
         webPreferences: {
           ...webPreferences,
           preload: this.preloadPath,
           offscreen: true,
           backgroundThrottling: false,
         },
-        skipTaskbar: true,
       });
       this.shellWindow = this.createWindow({
         ...shellOptions,
@@ -137,6 +167,7 @@ export class StealthRuntime {
 
     this.contentWindow.webContents.on('did-finish-load', () => {
       this.logger.log('[StealthRuntime] Content window did-finish-load');
+      this.requestInitialFrame('content-did-finish-load');
     });
 
     this.contentWindow.webContents.on('did-fail-load', (_event, code, desc, url) => {
@@ -226,6 +257,7 @@ export class StealthRuntime {
       return;
     }
     this.contentWindow.setBounds(this.shellWindow.getBounds());
+    this.requestInitialFrame('sync-bounds');
   }
 
   applyStealth(enabled: boolean): void {
@@ -264,7 +296,21 @@ export class StealthRuntime {
         return;
       }
       this.syncBounds();
+      this.requestInitialFrame('shell-ready');
     };
     this.ipcMain.on('stealth-shell:ready', this.boundReadyHandler);
+  }
+
+  private requestInitialFrame(reason: string): void {
+    if (!this.contentWindow || this.contentWindow.isDestroyed()) {
+      return;
+    }
+
+    try {
+      this.contentWindow.webContents.invalidate();
+      this.logger.log(`[StealthRuntime] Requested content repaint (${reason})`);
+    } catch (error) {
+      this.logger.warn(`[StealthRuntime] Failed to request content repaint (${reason}):`, error);
+    }
   }
 }
