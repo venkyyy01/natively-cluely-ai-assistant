@@ -10,6 +10,9 @@ const MAX_ASSISTANT_HISTORY = 100;
 
 /** Maximum context history entries (beyond time-based eviction) */
 const MAX_CONTEXT_HISTORY = 200;
+const TURN_MERGE_GAP_MS = 1_200;
+const TURN_OVERLAP_WINDOW_MS = 750;
+const TIMING_REPORT_SAMPLE_INTERVAL = 25;
 
 /** Ring buffer for fixed-capacity context items */
 class RingBuffer<T> {
@@ -65,6 +68,7 @@ import { ThreadManager, InterviewPhaseDetector, TokenBudgetManager, InterviewPha
 import { RESUME_THRESHOLD } from './conscious/types';
 import { AdaptiveContextWindow, ContextEntry, ContextSelectionConfig } from './conscious/AdaptiveContextWindow';
 import { isOptimizationActive } from './config/optimizations';
+import type { ConversationTurn, ConversationTurnSource, TimingVarianceStats } from './types/transcript';
 
 export interface TranscriptSegment {
     marker?: string;
@@ -176,6 +180,8 @@ export class SessionTracker {
   private sessionId: string = `session_${SessionTracker.nextSessionId++}`;
   private transcriptRevision: number = 0;
   private compactSnapshotCache = new Map<string, { revision: number; value: string }>();
+  private turnCache: ConversationTurn[] | null = null;
+  private timingGapSamplesMs: number[] = [];
 
     // ============================================
     // Configuration
@@ -231,6 +237,7 @@ export class SessionTracker {
     });
         this.transcriptRevision++;
         this.compactSnapshotCache.clear();
+        this.turnCache = null;
 
         this.evictOldEntries();
 
@@ -240,6 +247,8 @@ export class SessionTracker {
       text.startsWith("CONTEXT:");
 
     if (!isInternalPrompt) {
+      this.logTimingVariance(segment);
+
       // Add to session transcript
       this.fullTranscript.push(segment);
 
@@ -282,6 +291,7 @@ export class SessionTracker {
     });
         this.transcriptRevision++;
         this.compactSnapshotCache.clear();
+        this.turnCache = null;
 
         // Also add to fullTranscript so it persists in the session history (and summaries)
         this.fullTranscript.push({
@@ -530,6 +540,80 @@ isConsciousModeEnabled(): boolean {
         return this.transcriptRevision;
     }
 
+    getConversationTurns(): ConversationTurn[] {
+        if (this.turnCache) {
+            return this.turnCache.map((turn) => ({
+                ...turn,
+                mergedSegmentIds: [...turn.mergedSegmentIds],
+            }));
+        }
+
+        let overlapGroupCounter = 0;
+        const turns: ConversationTurn[] = [];
+
+        this.fullTranscript.forEach((segment, index) => {
+            if (!segment.final) {
+                return;
+            }
+
+            const text = segment.text.trim();
+            if (!text) {
+                return;
+            }
+
+            const speaker = this.mapSpeakerToRole(segment.speaker);
+            const source = this.mapSpeakerToSource(segment.speaker);
+            const segmentReference = this.createSegmentReference(segment, index);
+            const previousTurn = turns[turns.length - 1];
+
+            if (previousTurn && this.shouldMergeTurnWithSegment(previousTurn, speaker, source, segment.timestamp)) {
+                previousTurn.text = `${previousTurn.text} ${text}`.trim();
+                previousTurn.endedAt = segment.timestamp;
+                previousTurn.final = previousTurn.final && segment.final;
+                previousTurn.mergedSegmentIds.push(segmentReference);
+
+                const nextConfidence = this.mergeTurnConfidence(previousTurn.confidence, segment.confidence, previousTurn.mergedSegmentIds.length);
+                if (nextConfidence != null) {
+                    previousTurn.confidence = nextConfidence;
+                }
+                return;
+            }
+
+            const nextTurn: ConversationTurn = {
+                id: `turn:${speaker}:${segment.timestamp}:${index}`,
+                speaker,
+                source,
+                text,
+                startedAt: segment.timestamp,
+                endedAt: segment.timestamp,
+                final: segment.final,
+                confidence: segment.confidence,
+                mergedSegmentIds: [segmentReference],
+            };
+
+            if (previousTurn && previousTurn.speaker !== nextTurn.speaker) {
+                const gapMs = Math.abs(nextTurn.startedAt - previousTurn.endedAt);
+                if (gapMs <= TURN_OVERLAP_WINDOW_MS) {
+                    const overlapGroupId = previousTurn.overlapGroupId ?? `overlap:${++overlapGroupCounter}`;
+                    previousTurn.overlapGroupId = overlapGroupId;
+                    nextTurn.overlapGroupId = overlapGroupId;
+                }
+            }
+
+            turns.push(nextTurn);
+        });
+
+        this.turnCache = turns;
+        return turns.map((turn) => ({
+            ...turn,
+            mergedSegmentIds: [...turn.mergedSegmentIds],
+        }));
+    }
+
+    getTimingVarianceStats(): TimingVarianceStats {
+        return this.buildTimingVarianceStats(this.timingGapSamplesMs);
+    }
+
     getCompactTranscriptSnapshot(maxTurns: number = 12, snapshotType: 'standard' | 'fast' = 'standard'): string {
         const cacheKey = `${this.sessionId}:${snapshotType}:${maxTurns}`;
         const cached = this.compactSnapshotCache.get(cacheKey);
@@ -596,7 +680,7 @@ isConsciousModeEnabled(): boolean {
     // ============================================
 
     getFullTranscript(): TranscriptSegment[] {
-        return this.fullTranscript;
+        return this.fullTranscript.map(segment => ({ ...segment }));
     }
 
     getFullUsage(): UsageInteraction[] {
@@ -744,6 +828,8 @@ isConsciousModeEnabled(): boolean {
     this.adaptiveContextWindow = null;
     this.transcriptRevision = 0;
     this.compactSnapshotCache.clear();
+    this.turnCache = null;
+    this.timingGapSamplesMs = [];
     this.sessionId = freshSessionId;
     
     this.pendingCompactionPromise = null;
@@ -759,6 +845,93 @@ isConsciousModeEnabled(): boolean {
         if (speaker === 'assistant') return 'assistant';
         return 'interviewer'; // system audio = interviewer
     }
+
+  private mapSpeakerToSource(speaker: string): ConversationTurnSource {
+    if (speaker === 'user') return 'microphone';
+    if (speaker === 'assistant') return 'assistant';
+    return 'system';
+  }
+
+  private createSegmentReference(segment: TranscriptSegment, index: number): string {
+    if (segment.marker && segment.marker.trim().length > 0) {
+      return segment.marker;
+    }
+
+    return `segment:${index}:${segment.speaker}:${segment.timestamp}`;
+  }
+
+  private shouldMergeTurnWithSegment(
+    turn: ConversationTurn,
+    speaker: ConversationTurn['speaker'],
+    source: ConversationTurnSource,
+    timestamp: number,
+  ): boolean {
+    return (
+      turn.speaker === speaker &&
+      turn.source === source &&
+      timestamp >= turn.endedAt &&
+      (timestamp - turn.endedAt) <= TURN_MERGE_GAP_MS
+    );
+  }
+
+  private mergeTurnConfidence(
+    currentConfidence: number | undefined,
+    nextConfidence: number | undefined,
+    segmentCount: number,
+  ): number | undefined {
+    if (currentConfidence == null) {
+      return nextConfidence;
+    }
+
+    if (nextConfidence == null) {
+      return currentConfidence;
+    }
+
+    return ((currentConfidence * (segmentCount - 1)) + nextConfidence) / segmentCount;
+  }
+
+  private logTimingVariance(segment: TranscriptSegment): void {
+    const role = this.mapSpeakerToRole(segment.speaker);
+    if (role === 'assistant') {
+      return;
+    }
+
+    const ingestionLatencyMs = Math.max(0, Date.now() - segment.timestamp);
+    this.timingGapSamplesMs.push(ingestionLatencyMs);
+    if (this.timingGapSamplesMs.length % TIMING_REPORT_SAMPLE_INTERVAL === 0) {
+      console.log('[Timing] Transcript ingestion latency stats:', this.getTimingVarianceStats());
+    }
+  }
+
+  private buildTimingVarianceStats(samples: number[]): TimingVarianceStats {
+    if (samples.length === 0) {
+      return {
+        sampleCount: 0,
+        p50: null,
+        p95: null,
+        p99: null,
+        max: null,
+      };
+    }
+
+    const sorted = [...samples].sort((left, right) => left - right);
+    return {
+      sampleCount: sorted.length,
+      p50: this.percentile(sorted, 50),
+      p95: this.percentile(sorted, 95),
+      p99: this.percentile(sorted, 99),
+      max: sorted[sorted.length - 1] ?? null,
+    };
+  }
+
+  private percentile(sortedSamples: number[], percentile: number): number | null {
+    if (sortedSamples.length === 0) {
+      return null;
+    }
+
+    const rank = Math.max(0, Math.ceil((percentile / 100) * sortedSamples.length) - 1);
+    return sortedSamples[Math.min(rank, sortedSamples.length - 1)] ?? null;
+  }
 
   private evictOldEntries(): void {
     // Ring buffer automatically handles capacity
@@ -842,6 +1015,7 @@ isConsciousModeEnabled(): boolean {
 
             // Evict ONLY the exact 500 oldest entries that we just summarized
             this.fullTranscript = this.fullTranscript.slice(summarizeCount);
+            this.turnCache = null;
         } catch (error) {
             console.error('[SessionTracker] Error during transcript compaction:', error);
             // Continue with compaction even if summarization fails
@@ -852,6 +1026,7 @@ isConsciousModeEnabled(): boolean {
                 this.transcriptEpochSummaries.push(fallback);
                 this.transcriptEpochSummaries = this.transcriptEpochSummaries.slice(-SessionTracker.MAX_EPOCH_SUMMARIES);
                 this.fullTranscript = this.fullTranscript.slice(500);
+                this.turnCache = null;
                 console.warn('[SessionTracker] Using fallback compaction due to error');
             } catch (fallbackError) {
                 console.error('[SessionTracker] Fallback compaction also failed:', fallbackError);

@@ -42,6 +42,10 @@ export interface ConsciousModeRenderModel {
   sections: ConsciousModeRenderSection[];
 }
 
+export interface ConsciousModeSimpleRenderModel {
+  paragraphs: string[];
+}
+
 export interface ConsciousModeGuardrailResult {
   isValid: boolean;
   reason?:
@@ -219,6 +223,28 @@ export function parseConsciousModeAnswer(text: string): ConsciousModeRenderModel
   };
 }
 
+export function parseSimpleConsciousModeAnswer(text: string): ConsciousModeSimpleRenderModel | null {
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  if (looksLikeStructuredConsciousModeText(trimmed)) {
+    return null;
+  }
+
+  const paragraphs = trimmed
+    .split(/\n{2,}/)
+    .map((paragraph) => paragraph.trim())
+    .filter(Boolean);
+
+  if (paragraphs.length === 0) {
+    return null;
+  }
+
+  return { paragraphs };
+}
+
 function splitCodeBlocks(value: string): Array<{ type: 'text' | 'code'; value: string }> {
   return value
     .split(/(```[\s\S]*?```)/g)
@@ -275,7 +301,31 @@ export function ConsciousModeAnswer({
       );
     }
 
-    return null;
+    const simple = parseSimpleConsciousModeAnswer(text);
+    if (simple) {
+      return (
+        <div className="rounded-lg border border-white/10 bg-white/5 p-3">
+          <div className="space-y-2 text-[13px] leading-relaxed text-slate-100">
+            {simple.paragraphs.map((paragraph, index) => (
+              <p key={`simple-${index}`} className="whitespace-pre-wrap">
+                {paragraph}
+              </p>
+            ))}
+          </div>
+        </div>
+      );
+    }
+
+    const raw = text.trim();
+    if (!raw) {
+      return null;
+    }
+
+    return (
+      <div className="rounded-lg border border-amber-400/20 bg-amber-400/5 p-3 text-[13px] leading-relaxed text-slate-100">
+        <p className="whitespace-pre-wrap">{raw}</p>
+      </div>
+    );
   }
 
   return (

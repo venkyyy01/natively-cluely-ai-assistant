@@ -3,6 +3,7 @@ import {
   ConsciousModeAnswer,
   classifyAssistRender,
   parseConsciousModeAnswer,
+  parseSimpleConsciousModeAnswer,
   validateConsciousModeGuardrails,
 } from '../../src/lib/consciousMode';
 
@@ -93,6 +94,38 @@ test('placeholder-renders streaming Conscious Mode text until the payload is gua
 
   expect(screen.getByText('Preparing Conscious Mode response...')).toBeInTheDocument();
   expect(screen.queryByText('Opening reasoning: I would start with a cache.')).not.toBeInTheDocument();
+  expect(screen.queryByText('Say This First')).not.toBeInTheDocument();
+});
+
+test('renders simple spoken fallback blocks when the answer is plain conversational text', () => {
+  const simpleAnswer = 'I would start with the API boundary first.\n\nThen I would separate reads from writes so scaling stays predictable.';
+
+  expect(parseSimpleConsciousModeAnswer(simpleAnswer)).toEqual({
+    paragraphs: [
+      'I would start with the API boundary first.',
+      'Then I would separate reads from writes so scaling stays predictable.',
+    ],
+  });
+
+  render(<ConsciousModeAnswer text={simpleAnswer} />);
+
+  expect(screen.getByText('I would start with the API boundary first.')).toBeInTheDocument();
+  expect(screen.getByText('Then I would separate reads from writes so scaling stays predictable.')).toBeInTheDocument();
+});
+
+test('falls back to raw text when the payload looks structured but is malformed', () => {
+  const malformedStructured = [
+    'Opening reasoning: I would start with the cache layer.',
+    'Implementation plan:',
+    '- Put the cache behind an interface.',
+  ].join('\n');
+
+  expect(parseConsciousModeAnswer(malformedStructured)).toBeNull();
+  expect(parseSimpleConsciousModeAnswer(malformedStructured)).toBeNull();
+
+  render(<ConsciousModeAnswer text={malformedStructured} />);
+
+  expect(screen.getByText(/Opening reasoning: I would start with the cache layer\./)).toBeInTheDocument();
   expect(screen.queryByText('Say This First')).not.toBeInTheDocument();
 });
 

@@ -4,6 +4,7 @@ import { IntelligenceEngine } from '../IntelligenceEngine';
 import { SessionTracker } from '../SessionTracker';
 import {
   classifyConsciousModeQuestion,
+  getTranscriptSuggestionDecision,
   maybeHandleSuggestionTriggerFromTranscript,
   parseConsciousModeResponse,
   shouldAutoTriggerSuggestionFromTranscript,
@@ -260,6 +261,41 @@ test('Conscious Mode transcript auto-trigger widens only for qualifying short te
   assert.equal(shouldAutoTriggerSuggestionFromTranscript('okay sounds good', true, null), false);
 });
 
+test('Conscious Mode prioritizes interviewer-question triggers over lower-priority conversation-state triggers', () => {
+  const decision = getTranscriptSuggestionDecision(
+    'What are the tradeoffs',
+    true,
+    null,
+    {
+      speaker: 'interviewer',
+      enableConversationStateTrigger: true,
+    },
+  );
+
+  assert.equal(decision.shouldTrigger, true);
+  assert.equal(decision.triggerType, 'interviewer_question');
+  assert.deepEqual(decision.suppressedTriggerTypes, ['conversation_state']);
+});
+
+test('Conscious Mode keeps conversation-state triggers disabled by default for user turns', () => {
+  const decision = getTranscriptSuggestionDecision(
+    'I would start with the API boundary and the write path.',
+    true,
+    null,
+    {
+      speaker: 'user',
+      enableConversationStateTrigger: false,
+    },
+  );
+
+  assert.deepEqual(decision, {
+    shouldTrigger: false,
+    lastQuestion: 'I would start with the API boundary and the write path.',
+    triggerType: null,
+    suppressedTriggerTypes: [],
+  });
+});
+
 test('Conscious Mode transcript-trigger path fires for substantive interviewer prompts when awareness is enabled', async () => {
   const calls: Array<{ context: string; lastQuestion: string; confidence: number }> = [];
   const manager = {
@@ -293,6 +329,35 @@ test('Conscious Mode transcript-trigger path fires for substantive interviewer p
       context: 'ctx',
       lastQuestion: 'What are the tradeoffs',
       confidence: 0.91,
+    },
+  ]);
+});
+
+test('Conscious Mode conversation-state trigger can fire for substantive user turns only when explicitly enabled', async () => {
+  const calls: Array<{ context: string; lastQuestion: string; confidence: number }> = [];
+  const manager = {
+    getActiveReasoningThread: (): ReasoningThread | null => null,
+    getFormattedContext: (): string => 'ctx',
+    handleSuggestionTrigger: async (trigger: { context: string; lastQuestion: string; confidence: number }) => {
+      calls.push(trigger);
+    },
+  };
+
+  await maybeHandleSuggestionTriggerFromTranscript({
+    speaker: 'user',
+    text: 'I would start with the API boundary and then separate reads from writes.',
+    final: true,
+    confidence: 0.87,
+    consciousModeEnabled: true,
+    enableConversationStateTrigger: true,
+    intelligenceManager: manager,
+  });
+
+  assert.deepEqual(calls, [
+    {
+      context: 'ctx',
+      lastQuestion: 'I would start with the API boundary and then separate reads from writes.',
+      confidence: 0.87,
     },
   ]);
 });
@@ -383,6 +448,28 @@ test('Non-Conscious transcript-trigger path preserves the existing actionable he
       confidence: 0.72,
     },
   ]);
+});
+
+test('Conscious Mode preserves interviewer-only behavior when conversation-state triggering is not enabled', async () => {
+  const calls: Array<{ context: string; lastQuestion: string; confidence: number }> = [];
+  const manager = {
+    getActiveReasoningThread: (): ReasoningThread | null => null,
+    getFormattedContext: (): string => 'ctx',
+    handleSuggestionTrigger: async (trigger: { context: string; lastQuestion: string; confidence: number }) => {
+      calls.push(trigger);
+    },
+  };
+
+  await maybeHandleSuggestionTriggerFromTranscript({
+    speaker: 'user',
+    text: 'I would start with the API boundary and then separate reads from writes.',
+    final: true,
+    confidence: 0.87,
+    consciousModeEnabled: true,
+    intelligenceManager: manager,
+  });
+
+  assert.deepEqual(calls, []);
 });
 
 test('Conscious Mode falls back to the normal intent path when structured output is malformed', async () => {

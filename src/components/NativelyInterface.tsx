@@ -45,7 +45,6 @@ import { useHumanSpeedAutoScroll } from '../hooks/useHumanSpeedAutoScroll';
 import {
     classifyAssistRender,
     ConsciousModeAnswer,
-    parseConsciousModeAnswer,
 } from '../lib/consciousMode';
 import {
     classifyConsciousModeQuestion,
@@ -1242,14 +1241,7 @@ Provide only the answer, nothing else.`;
 
     const renderMessageText = (msg: Message) => {
         if (msg.intent === 'what_to_answer') {
-            const consciousModeAnswer = parseConsciousModeAnswer(msg.text);
-            if (consciousModeAnswer) {
-                return <ConsciousModeAnswer text={msg.text} isStreaming={msg.isStreaming} />;
-            }
-
-            if (msg.isStreaming) {
-                return <ConsciousModeAnswer text={msg.text} isStreaming />;
-            }
+            return <ConsciousModeAnswer text={msg.text} isStreaming={msg.isStreaming} />;
         }
 
         // Code-containing messages get special styling

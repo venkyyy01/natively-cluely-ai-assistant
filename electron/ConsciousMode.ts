@@ -30,6 +30,15 @@ export interface ConsciousModeQuestionRoute {
 export interface TranscriptSuggestionDecision {
   shouldTrigger: boolean;
   lastQuestion: string;
+  triggerType: TranscriptSuggestionTriggerType | null;
+  suppressedTriggerTypes: TranscriptSuggestionTriggerType[];
+}
+
+export type TranscriptSuggestionTriggerType = 'interviewer_question' | 'conversation_state';
+
+interface TranscriptSuggestionCandidate {
+  type: TranscriptSuggestionTriggerType;
+  priority: number;
 }
 
 export interface TranscriptSuggestionIntelligenceManager {
@@ -48,6 +57,7 @@ export interface TranscriptSuggestionInput {
   final: boolean;
   confidence?: number;
   consciousModeEnabled: boolean;
+  enableConversationStateTrigger?: boolean;
   intelligenceManager: TranscriptSuggestionIntelligenceManager;
 }
 
@@ -272,15 +282,68 @@ export function shouldAutoTriggerSuggestionFromTranscript(
   return trimmed.endsWith('?') || wordCount >= 5;
 }
 
+function shouldTriggerConversationStateFromTranscript(
+  speaker: string,
+  text: string,
+  consciousModeEnabled: boolean,
+  enableConversationStateTrigger: boolean,
+): boolean {
+  if (!enableConversationStateTrigger || !consciousModeEnabled) {
+    return false;
+  }
+
+  if (speaker !== 'interviewer' && speaker !== 'user') {
+    return false;
+  }
+
+  const trimmed = normalizeText(text);
+  if (!trimmed) {
+    return false;
+  }
+
+  const lower = trimmed.toLowerCase();
+  return isSubstantialConversationTurn(lower) && !isAdministrativePrompt(lower);
+}
+
 export function getTranscriptSuggestionDecision(
   text: string,
   consciousModeEnabled: boolean,
   activeReasoningThread: ReasoningThread | null,
+  options: {
+    speaker?: string;
+    enableConversationStateTrigger?: boolean;
+  } = {},
 ): TranscriptSuggestionDecision {
   const lastQuestion = normalizeText(text);
-  return {
-    shouldTrigger: shouldAutoTriggerSuggestionFromTranscript(lastQuestion, consciousModeEnabled, activeReasoningThread),
+  const speaker = options.speaker ?? 'interviewer';
+  const candidates: TranscriptSuggestionCandidate[] = [];
+
+  if (speaker === 'interviewer' && shouldAutoTriggerSuggestionFromTranscript(lastQuestion, consciousModeEnabled, activeReasoningThread)) {
+    candidates.push({
+      type: 'interviewer_question',
+      priority: 100,
+    });
+  }
+
+  if (shouldTriggerConversationStateFromTranscript(
+    speaker,
     lastQuestion,
+    consciousModeEnabled,
+    options.enableConversationStateTrigger ?? false,
+  )) {
+    candidates.push({
+      type: 'conversation_state',
+      priority: 50,
+    });
+  }
+
+  candidates.sort((left, right) => right.priority - left.priority);
+  const winningCandidate = candidates[0] ?? null;
+  return {
+    shouldTrigger: winningCandidate != null,
+    lastQuestion,
+    triggerType: winningCandidate?.type ?? null,
+    suppressedTriggerTypes: candidates.slice(1).map(candidate => candidate.type),
   };
 }
 
@@ -293,15 +356,11 @@ export async function maybeHandleSuggestionTriggerFromTranscript(
     textLength: input.text.length,
     textPreview: input.text.substring(0, 50) + (input.text.length > 50 ? '...' : ''),
     consciousMode: input.consciousModeEnabled,
+    conversationStateTrigger: input.enableConversationStateTrigger ?? false,
     confidence: input.confidence,
     hasIntelligenceManager: !!input.intelligenceManager
   });
-  
-  if (input.speaker !== 'interviewer') {
-    console.log(`[AUTO-TRIGGER] ❌ Rejected: speaker is "${input.speaker}", need "interviewer"`);
-    return false;
-  }
-  
+
   if (!input.final) {
     console.log('[AUTO-TRIGGER] ❌ Rejected: transcript not final (interim transcript)');
     return false;
@@ -314,10 +373,16 @@ export async function maybeHandleSuggestionTriggerFromTranscript(
     input.text,
     input.consciousModeEnabled,
     activeThread,
+    {
+      speaker: input.speaker,
+      enableConversationStateTrigger: input.enableConversationStateTrigger,
+    },
   );
 
   console.log('[AUTO-TRIGGER] 📊 Decision analysis:', {
     shouldTrigger: decision.shouldTrigger,
+    triggerType: decision.triggerType,
+    suppressedTriggerTypes: decision.suppressedTriggerTypes,
     lastQuestion: decision.lastQuestion.substring(0, 50) + (decision.lastQuestion.length > 50 ? '...' : ''),
     questionLength: decision.lastQuestion.length,
     hasActiveThread: !!activeThread,

@@ -57,40 +57,40 @@ Exit criteria:
 
 ### 1.1 Remove early system-audio monitor creation
 
-- [ ] Update `electron/audio/SystemAudioCapture.ts` so pre-start sample-rate reads do not instantiate the native monitor
-- [ ] Remove `ensureMonitor('probe')` behavior from the pre-start path
-- [ ] Preserve a cached/default sample rate for pre-start configuration
-- [ ] Add a post-start sample-rate refresh path instead
+- [x] Update `electron/audio/SystemAudioCapture.ts` so pre-start sample-rate reads do not instantiate the native monitor
+- [x] Remove `ensureMonitor('probe')` behavior from the pre-start path
+- [x] Preserve a cached/default sample rate for pre-start configuration
+- [x] Add a post-start sample-rate refresh path instead
 
 ### 1.2 Fix startup ordering
 
-- [ ] Update `electron/main.ts` startup flow so system and microphone capture start before interviewer STT depends on the real system-audio sample rate
-- [ ] Avoid starting interviewer STT with a config that immediately forces a restart
-- [ ] Apply stable sample rate and channel count after capture startup and before final STT start where possible
+- [x] Update `electron/main.ts` startup flow so system and microphone capture start before interviewer STT depends on the real system-audio sample rate
+- [x] Avoid starting interviewer STT with a config that immediately forces a restart
+- [x] Apply stable sample rate and channel count after capture startup and before final STT start where possible
 
 ### 1.3 Fix recovery ordering
 
-- [ ] Update `reconfigureAudio()` in `electron/main.ts` to follow the same safe startup rules
-- [ ] Ensure recovery does not reintroduce pre-start monitor creation
-- [ ] Re-check recovery behavior for both system and microphone failure paths
+- [x] Update `reconfigureAudio()` in `electron/main.ts` to follow the same safe startup rules
+- [x] Ensure recovery does not reintroduce pre-start monitor creation
+- [x] Re-check recovery behavior for both system and microphone failure paths
 
 ### 1.4 Add backend telemetry
 
-- [ ] Log requested backend behavior
-- [ ] Log actual backend initialized
-- [ ] Log fallback events between CoreAudio and SCK
-- [ ] Log stable startup milestones:
-- [ ] capture object created
-- [ ] native monitor created
-- [ ] capture started
-- [ ] STT started
-- [ ] stable sample rate detected
+- [x] Log requested backend behavior
+- [x] Log actual backend initialized
+- [x] Log fallback events between CoreAudio and SCK
+- [x] Log stable startup milestones:
+- [x] capture object created
+- [x] native monitor created
+- [x] capture started
+- [x] STT started
+- [x] stable sample rate detected
 
 ### 1.5 Tighten tests for audio startup behavior
 
-- [ ] Update `electron/tests/systemAudioCapture.test.ts` to assert that pre-start sample-rate access does not create the native monitor
-- [ ] Update `electron/tests/audioRecovery.test.ts` for the revised recovery ordering
-- [ ] Add regression coverage for safe startup and reconfigure behavior
+- [x] Update `electron/tests/systemAudioCapture.test.ts` to assert that pre-start sample-rate access does not create the native monitor
+- [x] Update `electron/tests/audioRecovery.test.ts` for the revised recovery ordering
+- [x] Add regression coverage for safe startup and reconfigure behavior
 
 ### 1.6 Run manual validation matrix
 
@@ -127,40 +127,40 @@ Exit criteria:
 
 ### 2.1 Add transient turn model
 
-- [ ] Add `ConversationTurn` type
-- [ ] Include speaker, text, start/end times, confidence, overlap metadata, and segment references
+- [x] Add `ConversationTurn` type
+- [x] Include speaker, text, start/end times, confidence, overlap metadata, and segment references
 
 ### 2.2 Implement turn assembly
 
-- [ ] Implement turn assembly in `electron/SessionTracker.ts`
-- [ ] Merge adjacent same-speaker final segments using arrival-time heuristics
-- [ ] Preserve overlapping turns rather than flattening them into one blob
-- [ ] Invalidate turn cache on new segment arrival
+- [x] Implement turn assembly in `electron/SessionTracker.ts`
+- [x] Merge adjacent same-speaker final segments using arrival-time heuristics
+- [x] Preserve overlapping turns rather than flattening them into one blob
+- [x] Invalidate turn cache on new segment arrival
 
 ### 2.3 Keep persistence unchanged
 
-- [ ] Keep snapshots segment-based
-- [ ] Keep DB schema unchanged
-- [ ] Keep RAG ingestion segment-based
+- [x] Keep snapshots segment-based
+- [x] Keep DB schema unchanged
+- [x] Keep RAG ingestion segment-based
 
 ### 2.4 Add timing instrumentation
 
-- [ ] Record arrival-time timing stats in `SessionTracker`
-- [ ] Report P50, P95, and P99 timing metrics
-- [ ] Use this data to decide whether provider timestamps are necessary later
+- [x] Record arrival-time timing stats in `SessionTracker`
+- [x] Report P50, P95, and P99 timing metrics
+- [x] Use this data to decide whether provider timestamps are necessary later
 
 ### 2.5 Add tests
 
-- [ ] Unit tests for same-speaker merging
-- [ ] Unit tests for overlap preservation
-- [ ] Unit tests for cache invalidation
-- [ ] Integration tests for segment -> turn flow
+- [x] Unit tests for same-speaker merging
+- [x] Unit tests for overlap preservation
+- [x] Unit tests for cache invalidation
+- [x] Integration tests for segment -> turn flow
 
 Exit criteria:
 
-- [ ] Turn assembly is stable and deterministic enough for runtime use
-- [ ] Existing segment-based persistence and RAG paths remain unchanged
-- [ ] Timing metrics are available for review
+- [x] Turn assembly is stable and deterministic enough for runtime use
+- [x] Existing segment-based persistence and RAG paths remain unchanged
+- [x] Timing metrics are available for review
 
 ---
 
@@ -168,27 +168,27 @@ Exit criteria:
 
 ### 3.1 Preserve interviewer-gated path
 
-- [ ] Keep current interviewer-question trigger behavior as the primary default
-- [ ] Verify no regression in existing Conscious Mode activation
+- [x] Keep current interviewer-question trigger behavior as the primary default
+- [x] Verify no regression in existing Conscious Mode activation
 
 ### 3.2 Add conversation-state trigger
 
-- [ ] Add trigger decision types
-- [ ] Implement dual-trigger evaluation in `electron/ConsciousMode.ts`
-- [ ] Add priority ordering so interviewer-question trigger suppresses lower-priority triggers when needed
-- [ ] Keep conversation-state trigger disabled by default
+- [x] Add trigger decision types
+- [x] Implement dual-trigger evaluation in `electron/ConsciousMode.ts`
+- [x] Add priority ordering so interviewer-question trigger suppresses lower-priority triggers when needed
+- [x] Keep conversation-state trigger disabled by default
 
 ### 3.3 Add tests
 
-- [ ] Unit tests for priority sorting
-- [ ] Unit tests for trigger suppression
-- [ ] Integration tests for interviewer-only mode
-- [ ] Integration tests for conversation-state flag-off behavior
+- [x] Unit tests for priority sorting
+- [x] Unit tests for trigger suppression
+- [x] Integration tests for interviewer-only mode
+- [x] Integration tests for conversation-state flag-off behavior
 
 Exit criteria:
 
-- [ ] Existing trigger path behaves the same by default
-- [ ] Conversation-state logic exists but is safely gated
+- [x] Existing trigger path behaves the same by default
+- [x] Conversation-state logic exists but is safely gated
 
 ---
 
@@ -196,26 +196,26 @@ Exit criteria:
 
 ### 4.1 Add fallback parsing
 
-- [ ] In `src/lib/consciousMode.tsx`, implement render fallback:
-- [ ] structured
-- [ ] simple spoken response
-- [ ] raw text
+- [x] In `src/lib/consciousMode.tsx`, implement render fallback:
+- [x] structured
+- [x] simple spoken response
+- [x] raw text
 
 ### 4.2 Add simple renderer
 
-- [ ] Add a simple text render path in `src/components/NativelyInterface.tsx`
-- [ ] Keep structured rendering intact
+- [x] Add a simple text render path in `src/components/NativelyInterface.tsx`
+- [x] Keep structured rendering intact
 
 ### 4.3 Add tests
 
-- [ ] Unit tests for fallback chain
-- [ ] Tests for spoken-response extraction
-- [ ] UI verification for both structured and simple rendering
+- [x] Unit tests for fallback chain
+- [x] Tests for spoken-response extraction
+- [x] UI verification for both structured and simple rendering
 
 Exit criteria:
 
-- [ ] UI can render both old structured and newer simple responses
-- [ ] Existing structured rendering remains intact
+- [x] UI can render both old structured and newer simple responses
+- [x] Existing structured rendering remains intact
 
 ---
 
@@ -223,7 +223,7 @@ Exit criteria:
 
 - [ ] Review timing metrics from Phase 2
 - [ ] If timing P95 is greater than 500ms, escalate provider timestamp work
-- [ ] Enable conversation-state trigger for internal-only testing
+- [x] Enable conversation-state trigger for internal-only testing
 - [ ] Measure false positives for the conversation-state trigger
 - [ ] Validate turn quality on real meeting transcripts
 - [ ] Compare structured and simple spoken-response quality

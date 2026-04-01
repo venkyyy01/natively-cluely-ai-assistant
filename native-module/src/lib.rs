@@ -48,6 +48,7 @@ pub struct SystemAudioCapture {
     /// Shared atomic sample rate — updated by the background thread once the
     /// native device is initialized. Callers always get the real hardware rate.
     sample_rate: Arc<AtomicU32>,
+    initialized: Arc<AtomicBool>,
     device_id: Option<String>,
 }
 
@@ -63,6 +64,7 @@ impl SystemAudioCapture {
             // Default to 48000 until the background thread reports the real rate.
             // 48kHz is the standard macOS CoreAudio rate.
             sample_rate: Arc::new(AtomicU32::new(48000)),
+            initialized: Arc::new(AtomicBool::new(false)),
             device_id,
         })
     }
@@ -70,6 +72,11 @@ impl SystemAudioCapture {
     #[napi]
     pub fn get_sample_rate(&self) -> u32 {
         self.sample_rate.load(Ordering::Acquire)
+    }
+
+    #[napi]
+    pub fn is_initialized(&self) -> bool {
+        self.initialized.load(Ordering::Acquire)
     }
 
     #[napi]
@@ -90,9 +97,11 @@ impl SystemAudioCapture {
             };
 
         self.stop_signal.store(false, Ordering::SeqCst);
+        self.initialized.store(false, Ordering::SeqCst);
         let stop_signal = self.stop_signal.clone();
         let device_id = self.device_id.as_ref().cloned();
         let sample_rate_shared = self.sample_rate.clone();
+        let initialized_shared = self.initialized.clone();
 
         // ★ ALL init + DSP runs in background thread — start() returns INSTANTLY
         // This prevents the 5-7 second main-thread block from SCK initialization.
@@ -102,10 +111,12 @@ impl SystemAudioCapture {
             let input = match speaker::SpeakerInput::new(device_id) {
                 Ok(i) => i,
                 Err(e) => {
+                    initialized_shared.store(false, Ordering::Release);
                     println!("[SystemAudioCapture] Init failed: {}. Trying default...", e);
                     match speaker::SpeakerInput::new(None) {
                         Ok(i) => i,
                         Err(e2) => {
+                            initialized_shared.store(false, Ordering::Release);
                             eprintln!(
                                 "[SystemAudioCapture] FATAL: All init attempts failed: {}",
                                 e2
@@ -120,6 +131,7 @@ impl SystemAudioCapture {
             let mut consumer = match stream.take_consumer() {
                 Some(c) => c,
                 None => {
+                    initialized_shared.store(false, Ordering::Release);
                     eprintln!("[SystemAudioCapture] FATAL: Failed to get consumer");
                     return;
                 }
@@ -128,6 +140,7 @@ impl SystemAudioCapture {
             let native_rate = stream.sample_rate();
             // Publish the real native rate so JS can read it via get_sample_rate()
             sample_rate_shared.store(native_rate, Ordering::Release);
+            initialized_shared.store(true, Ordering::Release);
             println!(
                 "[SystemAudioCapture] Background init complete. Initial Rate: {}Hz. DSP starting.",
                 native_rate
@@ -213,6 +226,7 @@ impl SystemAudioCapture {
             }
 
             println!("[SystemAudioCapture] DSP thread stopped.");
+            initialized_shared.store(false, Ordering::Release);
             // stream is dropped here → SpeakerStream::Drop calls stop_with_ch
         }));
 
@@ -222,6 +236,7 @@ impl SystemAudioCapture {
     #[napi]
     pub fn stop(&mut self) {
         self.stop_signal.store(true, Ordering::SeqCst);
+        self.initialized.store(false, Ordering::SeqCst);
         if let Some(handle) = self.capture_thread.take() {
             // Wait up to 2 seconds for graceful shutdown.
             // If the DSP thread is stuck (e.g. in a long I/O wait),

@@ -177,6 +177,11 @@ import { ProcessingHelper } from "./ProcessingHelper"
 import { IntelligenceManager } from "./IntelligenceManager"
 import { SystemAudioCapture } from "./audio/SystemAudioCapture"
 import { MicrophoneCapture } from "./audio/MicrophoneCapture"
+import {
+  configureMeetingAudioPipeline,
+  restartMeetingAudioStreamsAfterReconfigure as restartMeetingAudioStreamsAfterReconfigureHelper,
+  startMeetingAudioStreams as startMeetingAudioStreamsHelper,
+} from "./audio/meetingAudioSequencing"
 import { AudioDevices, type AudioDevice } from "./audio/AudioDevices"
 import { GoogleSTT } from "./audio/GoogleSTT"
 import { RestSTT } from "./audio/RestSTT"
@@ -297,6 +302,7 @@ export class AppState {
   private tray: Tray | null = null
   private disguiseMode: 'terminal' | 'settings' | 'activity' | 'none' = 'none'
   private consciousModeEnabled: boolean = false
+  private enableConversationStateTrigger: boolean = process.env.NATIVELY_ENABLE_CONVERSATION_STATE_TRIGGER === '1'
 
   // View management
   private view: "queue" | "solutions" = "queue"
@@ -889,6 +895,10 @@ try {
   private audioTestCapture: MicrophoneCapture | null = null; // For audio settings test
   private googleSTT: STTProvider | null = null; // Interviewer
   private googleSTT_User: STTProvider | null = null; // User
+  private bufferSystemAudioUntilInterviewerSttReady: boolean = false;
+  private bufferedSystemAudioChunks: Buffer[] = [];
+  private bufferedSystemAudioSpeechEnded: boolean = false;
+  private readonly MAX_BUFFERED_SYSTEM_AUDIO_CHUNKS = 256;
 
   // Listener references for proper cleanup (prevent memory leaks)
   private sttTranscriptListener_Interviewer: ((segment: { text: string, isFinal: boolean, confidence: number }) => void) | null = null;
@@ -1026,6 +1036,7 @@ try {
         final: segment.isFinal,
         confidence: segment.confidence,
         consciousModeEnabled: this.consciousModeEnabled,
+        enableConversationStateTrigger: this.enableConversationStateTrigger,
         intelligenceManager: this.intelligenceManager,
       }).then((triggered) => {
         if (triggered) {
@@ -1085,7 +1096,7 @@ try {
       }
 
       try {
-        await this.reconfigureAudio();
+        await this.reconfigureAudio(undefined, undefined, { restartStreams: true });
         console.log(`[Main] ${noun} recovered successfully on attempt ${attempt}`);
         this.setNativeAudioConnected(true);
         return;
@@ -1109,10 +1120,10 @@ try {
     this.systemAudioCapture.removeAllListeners();
     this.systemAudioCapture.on('data', (chunk: Buffer) => {
       this.noteAudioChunk('system');
-      this.googleSTT?.write(chunk);
+      this.routeSystemAudioChunk(chunk);
     });
     this.systemAudioCapture.on('speech_ended', () => {
-      safeNotifySpeechEnded(this.googleSTT);
+      this.routeSystemAudioSpeechEnded();
     });
     this.systemAudioCapture.on('error', (err: Error) => {
       void this.handleAudioCaptureError('system', err);
@@ -1135,6 +1146,67 @@ try {
     this.microphoneCapture.on('error', (err: Error) => {
       void this.handleAudioCaptureError('microphone', err);
     });
+  }
+
+  private beginSystemAudioBuffering(reason: string): void {
+    this.bufferSystemAudioUntilInterviewerSttReady = true;
+    this.bufferedSystemAudioChunks = [];
+    this.bufferedSystemAudioSpeechEnded = false;
+    console.log(`[Main] Buffering system audio until interviewer STT is ready (${reason})`);
+  }
+
+  private flushBufferedSystemAudio(reason: string): void {
+    const bufferedChunkCount = this.bufferedSystemAudioChunks.length;
+    const hadSpeechEnded = this.bufferedSystemAudioSpeechEnded;
+
+    this.bufferSystemAudioUntilInterviewerSttReady = false;
+    const bufferedChunks = this.bufferedSystemAudioChunks;
+    this.bufferedSystemAudioChunks = [];
+    this.bufferedSystemAudioSpeechEnded = false;
+
+    for (const chunk of bufferedChunks) {
+      this.googleSTT?.write(chunk);
+    }
+
+    if (hadSpeechEnded) {
+      safeNotifySpeechEnded(this.googleSTT);
+    }
+
+    console.log(`[Main] Released ${bufferedChunkCount} buffered system audio chunks (${reason})`);
+  }
+
+  private clearBufferedSystemAudio(reason: string): void {
+    const droppedChunkCount = this.bufferedSystemAudioChunks.length;
+    const hadSpeechEnded = this.bufferedSystemAudioSpeechEnded;
+
+    this.bufferSystemAudioUntilInterviewerSttReady = false;
+    this.bufferedSystemAudioChunks = [];
+    this.bufferedSystemAudioSpeechEnded = false;
+
+    if (droppedChunkCount > 0 || hadSpeechEnded) {
+      console.warn(`[Main] Dropped ${droppedChunkCount} buffered system audio chunks (${reason})`);
+    }
+  }
+
+  private routeSystemAudioChunk(chunk: Buffer): void {
+    if (!this.bufferSystemAudioUntilInterviewerSttReady) {
+      this.googleSTT?.write(chunk);
+      return;
+    }
+
+    this.bufferedSystemAudioChunks.push(chunk);
+    if (this.bufferedSystemAudioChunks.length > this.MAX_BUFFERED_SYSTEM_AUDIO_CHUNKS) {
+      this.bufferedSystemAudioChunks.shift();
+    }
+  }
+
+  private routeSystemAudioSpeechEnded(): void {
+    if (!this.bufferSystemAudioUntilInterviewerSttReady) {
+      safeNotifySpeechEnded(this.googleSTT);
+      return;
+    }
+
+    this.bufferedSystemAudioSpeechEnded = true;
   }
 
   private cleanupSttProvider(speaker: 'interviewer' | 'user'): void {
@@ -1174,27 +1246,96 @@ try {
     }
   }
 
-  private async reconnectSpeakerStt(speaker: 'interviewer' | 'user'): Promise<void> {
+  private async reconnectSpeakerStt(
+    speaker: 'interviewer' | 'user',
+    options: { interviewerSampleRate?: number } = {},
+  ): Promise<void> {
     this.cleanupSttProvider(speaker);
 
     if (speaker === 'interviewer') {
       this.googleSTT = this.createSTTProvider('interviewer');
-      if (this.systemAudioCapture) {
-        const rate = this.systemAudioCapture.getSampleRate();
-        this.googleSTT?.setSampleRate(rate);
-        safeSetAudioChannelCount(this.googleSTT, 1);
-      }
+      this.syncInterviewerSttConfig({
+        refreshSystemRate: options.interviewerSampleRate == null,
+        sampleRateOverride: options.interviewerSampleRate,
+      });
       this.googleSTT?.start();
       return;
     }
 
     this.googleSTT_User = this.createSTTProvider('user');
-    if (this.microphoneCapture) {
-      const rate = this.microphoneCapture.getSampleRate() || 48000;
-      this.googleSTT_User?.setSampleRate(rate);
-      safeSetAudioChannelCount(this.googleSTT_User, 1);
-    }
+    this.syncUserSttConfig();
     this.googleSTT_User?.start();
+  }
+
+  private syncInterviewerSttConfig(options: { refreshSystemRate?: boolean; sampleRateOverride?: number } = {}): number {
+    const rate = options.sampleRateOverride
+      ?? (options.refreshSystemRate
+        ? (this.systemAudioCapture?.refreshSampleRate?.() ?? this.systemAudioCapture?.getSampleRate() ?? 48000)
+        : (this.systemAudioCapture?.getSampleRate() || 48000));
+    const source = options.sampleRateOverride != null
+      ? ' (ready override)'
+      : options.refreshSystemRate
+        ? ' (refreshed)'
+        : '';
+    console.log(`[Main] Configuring Interviewer STT to ${rate}Hz${source}`);
+    this.googleSTT?.setSampleRate(rate);
+    safeSetAudioChannelCount(this.googleSTT, 1);
+    return rate;
+  }
+
+  private syncUserSttConfig(): number {
+    const rate = this.microphoneCapture?.getSampleRate() || 48000;
+    console.log(`[Main] Configuring User STT to ${rate}Hz`);
+    this.googleSTT_User?.setSampleRate(rate);
+    safeSetAudioChannelCount(this.googleSTT_User, 1);
+    return rate;
+  }
+
+  private async startMeetingAudioStreams(): Promise<void> {
+    try {
+      const { systemRate, microphoneRate } = await startMeetingAudioStreamsHelper({
+        systemAudioCapture: this.systemAudioCapture,
+        microphoneCapture: this.microphoneCapture,
+        interviewerStt: this.googleSTT,
+        userStt: this.googleSTT_User,
+        setAudioChannelCount: safeSetAudioChannelCount,
+        beforeSystemAudioStart: () => {
+          this.beginSystemAudioBuffering('meeting start');
+        },
+        afterInterviewerSttReady: () => {
+          this.flushBufferedSystemAudio('meeting start');
+        },
+      });
+      console.log(`[Main] Audio streams started. System=${systemRate}Hz, Microphone=${microphoneRate}Hz`);
+    } catch (error) {
+      this.clearBufferedSystemAudio('meeting start failed');
+      throw error;
+    }
+  }
+
+  private async restartAudioPipelineAfterReconfigure(): Promise<void> {
+    try {
+      await restartMeetingAudioStreamsAfterReconfigureHelper({
+        systemAudioCapture: this.systemAudioCapture,
+        microphoneCapture: this.microphoneCapture,
+        beforeSystemAudioStart: () => {
+          this.beginSystemAudioBuffering('audio reconfigure');
+        },
+        reconnectInterviewerStt: async (systemRate: number) => {
+          await this.reconnectSpeakerStt('interviewer', { interviewerSampleRate: systemRate });
+        },
+        afterInterviewerSttReady: () => {
+          this.flushBufferedSystemAudio('audio reconfigure');
+        },
+        reconnectUserStt: async () => {
+          await this.reconnectSpeakerStt('user');
+        },
+      });
+      console.log('[Main] Audio pipeline streams restarted after reconfigure');
+    } catch (error) {
+      this.clearBufferedSystemAudio('audio reconfigure failed');
+      throw error;
+    }
   }
 
   private assertMeetingAudioPipelineReady(): void {
@@ -1254,20 +1395,13 @@ try {
         this.googleSTT_User = this.createSTTProvider('user');
       }
 
-    // --- CRITICAL FIX: SYNC SAMPLE RATES ---
-    // Always sync rates, even if just initialized, to ensure consistency
-
-    // 1. Sync System Audio Rate
-    const sysRate = this.systemAudioCapture?.getSampleRate() || 48000;
-    console.log(`[Main] Configuring Interviewer STT to ${sysRate}Hz`);
-    this.googleSTT?.setSampleRate(sysRate);
-    safeSetAudioChannelCount(this.googleSTT, 1);
-
-    // 2. Sync Mic Rate
-    const micRate = this.microphoneCapture?.getSampleRate() || 48000;
-    console.log(`[Main] Configuring User STT to ${micRate}Hz`);
-    this.googleSTT_User?.setSampleRate(micRate);
-    safeSetAudioChannelCount(this.googleSTT_User, 1);
+      configureMeetingAudioPipeline({
+        systemAudioCapture: this.systemAudioCapture,
+        microphoneCapture: this.microphoneCapture,
+        interviewerStt: this.googleSTT,
+        userStt: this.googleSTT_User,
+        setAudioChannelCount: safeSetAudioChannelCount,
+      });
 
       console.log('[Main] Full Audio Pipeline (System + Mic) Initialized (Ready)');
       this.assertMeetingAudioPipelineReady();
@@ -1278,8 +1412,13 @@ try {
     }
   }
 
-  private async reconfigureAudio(inputDeviceId?: string, outputDeviceId?: string): Promise<void> {
+  private async reconfigureAudio(
+    inputDeviceId?: string,
+    outputDeviceId?: string,
+    options: { restartStreams?: boolean } = {},
+  ): Promise<void> {
     console.log(`[Main] Reconfiguring Audio: Input=${inputDeviceId}, Output=${outputDeviceId}`);
+    this.clearBufferedSystemAudio('reconfigure reset');
 
     // 1. System Audio (Output Capture) - use destroy() for full cleanup
     if (this.systemAudioCapture) {
@@ -1291,17 +1430,13 @@ try {
     try {
       console.log('[Main] Initializing SystemAudioCapture...');
       this.systemAudioCapture = new SystemAudioCapture(outputDeviceId || undefined);
-      const rate = this.systemAudioCapture.getSampleRate();
-      console.log(`[Main] SystemAudioCapture rate: ${rate}Hz`);
-      this.googleSTT?.setSampleRate(rate);
 
       this.systemAudioCapture.on('data', (chunk: Buffer) => {
-        // console.log('[Main] SysAudio chunk', chunk.length);
         this.noteAudioChunk('system');
-        this.googleSTT?.write(chunk);
+        this.routeSystemAudioChunk(chunk);
       });
       this.systemAudioCapture.on('speech_ended', () => {
-        safeNotifySpeechEnded(this.googleSTT);
+        this.routeSystemAudioSpeechEnded();
       });
       this.systemAudioCapture.on('error', (err: Error) => {
         void this.handleAudioCaptureError('system', err);
@@ -1311,17 +1446,14 @@ try {
       console.warn('[Main] Failed to initialize SystemAudioCapture with preferred ID. Falling back to default.', err);
       try {
         this.systemAudioCapture = new SystemAudioCapture(); // Default
-        const rate = this.systemAudioCapture.getSampleRate();
-        console.log(`[Main] SystemAudioCapture (Default) rate: ${rate}Hz`);
-        this.googleSTT?.setSampleRate(rate);
 
         this.systemAudioCapture.on('data', (chunk: Buffer) => {
           this.noteAudioChunk('system');
-          this.googleSTT?.write(chunk);
+          this.routeSystemAudioChunk(chunk);
         });
-      this.systemAudioCapture.on('speech_ended', () => {
-        safeNotifySpeechEnded(this.googleSTT);
-      });
+        this.systemAudioCapture.on('speech_ended', () => {
+          this.routeSystemAudioSpeechEnded();
+        });
         this.systemAudioCapture.on('error', (err: Error) => {
           void this.handleAudioCaptureError('system', err);
         });
@@ -1342,11 +1474,8 @@ try {
       console.log(`[Main] 🎤 Target device: ${inputDeviceId || 'default'}`);
       
       this.microphoneCapture = new MicrophoneCapture(inputDeviceId || undefined);
-      const rate = this.microphoneCapture.getSampleRate();
-      console.log(`[Main] 🎤 MicrophoneCapture rate: ${rate}Hz`);
+      console.log(`[Main] 🎤 MicrophoneCapture rate: ${this.microphoneCapture.getSampleRate()}Hz`);
       console.log(`[Main] 🎤 STT User ready: ${!!this.googleSTT_User}`);
-      
-      this.googleSTT_User?.setSampleRate(rate);
 
       this.microphoneCapture.on('data', (chunk: Buffer) => {
         // Enhanced debugging - log periodically
@@ -1374,9 +1503,7 @@ try {
       
       try {
         this.microphoneCapture = new MicrophoneCapture(); // Default
-        const rate = this.microphoneCapture.getSampleRate();
-        console.log(`[Main] 🎤 MicrophoneCapture (Default) rate: ${rate}Hz`);
-        this.googleSTT_User?.setSampleRate(rate);
+        console.log(`[Main] 🎤 MicrophoneCapture (Default) rate: ${this.microphoneCapture.getSampleRate()}Hz`);
 
         this.microphoneCapture.on('data', (chunk: Buffer) => {
           if (Math.random() < 0.01) { // Log ~1% of chunks
@@ -1403,6 +1530,10 @@ try {
       }
     }
     this.assertAudioCapturesReady();
+
+    if (options.restartStreams) {
+      await this.restartAudioPipelineAfterReconfigure();
+    }
   }
 
   /**
@@ -1621,7 +1752,11 @@ try {
 
           try {
             if (normalizedMetadata?.audio) {
-              await this.reconfigureAudio(normalizedMetadata.audio.inputDeviceId, normalizedMetadata.audio.outputDeviceId);
+              await this.reconfigureAudio(
+                normalizedMetadata.audio.inputDeviceId,
+                normalizedMetadata.audio.outputDeviceId,
+                { restartStreams: false },
+              );
             }
 
             if (signal.aborted) {
@@ -1640,10 +1775,7 @@ try {
             }
 
             this.setupSystemAudioPipeline();
-            this.googleSTT?.start();
-            this.googleSTT_User?.start();
-            this.systemAudioCapture?.start();
-            this.microphoneCapture?.start();
+            await this.startMeetingAudioStreams();
             this.scheduleAudioPipelineHealthCheck();
 
             if (this.ragManager) {
