@@ -137,6 +137,57 @@ test('MeetingPersistence regenerates titles for recovered placeholder meetings',
   }
 });
 
+test('MeetingPersistence regenerates titles when metadata carries a placeholder title', async () => {
+  const finalizedWrites: Meeting[] = [];
+  const originalGetInstance = DatabaseManager.getInstance;
+  const restoreElectron = installElectronMock();
+  const llmCalls: string[] = [];
+
+  DatabaseManager.getInstance = ((() => ({
+    finalizeMeetingProcessing(meeting: Meeting) {
+      finalizedWrites.push(meeting);
+    },
+    markMeetingProcessingFailed() {
+      return false;
+    },
+  })) as unknown) as typeof DatabaseManager.getInstance;
+
+  try {
+    const persistence = new MeetingPersistence(
+      { createSnapshot() { throw new Error('unused'); } } as never,
+      {
+        generateMeetingSummary: async (prompt: string) => {
+          llmCalls.push(prompt);
+          return 'Recovered Title';
+        },
+      } as never,
+    );
+
+    await (persistence as unknown as {
+      processAndSaveMeeting: (snapshot: MeetingSnapshot, meetingId: string) => Promise<void>;
+    }).processAndSaveMeeting({
+      transcript: [
+        { speaker: 'interviewer', text: 'one', timestamp: 1, final: true },
+        { speaker: 'user', text: 'two', timestamp: 2, final: true },
+      ],
+      usage: [],
+      startTime: 65_000,
+      durationMs: 65_000,
+      context: '[INTERVIEWER]: one\n[ME]: two',
+      meetingMetadata: {
+        title: 'Processing...',
+        source: 'manual',
+      },
+    }, 'meeting-placeholder-title');
+
+    assert.ok(llmCalls.some(prompt => prompt.includes('Generate a concise 3-6 word title')));
+    assert.equal(finalizedWrites[0]?.title, 'Recovered Title');
+  } finally {
+    DatabaseManager.getInstance = originalGetInstance;
+    restoreElectron();
+  }
+});
+
 test('MeetingPersistence skips placeholder and background saves for meetings shorter than one second', async () => {
   const placeholderWrites: Meeting[] = [];
   const finalizedWrites: Meeting[] = [];

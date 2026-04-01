@@ -9,6 +9,7 @@ import { GROQ_TITLE_PROMPT, GROQ_SUMMARY_JSON_PROMPT } from './llm';
 const crypto = require('crypto');
 
 const PLACEHOLDER_MEETING_TITLES = new Set(['', 'Processing...', 'Untitled Session']);
+const DEFAULT_FINAL_MEETING_TITLE = 'Untitled Session';
 
 export class MeetingPersistence {
   private session: SessionTracker;
@@ -130,7 +131,7 @@ export class MeetingPersistence {
      * Heavy lifting: LLM Title, Summary, and DB Write
      */
     private async processAndSaveMeeting(data: MeetingSnapshot, meetingId: string): Promise<void> {
-        let title = "Untitled Session";
+        let title = DEFAULT_FINAL_MEETING_TITLE;
         let summaryData: { actionItems: string[], keyPoints: string[] } = { actionItems: [], keyPoints: [] };
 
         const metadata: MeetingMetadataSnapshot | null = data.meetingMetadata || null;
@@ -145,12 +146,15 @@ export class MeetingPersistence {
 
         try {
             // Generate Title (only if not set by calendar)
-            if (!metadata || !metadata.title) {
+            if (!this.isMeaningfulTitle(metadata?.title)) {
                 const titlePrompt = `Generate a concise 3-6 word title for this meeting context. Output ONLY the title text. Do not use quotes or conversational filler.`;
                 const groqTitlePrompt = GROQ_TITLE_PROMPT;
 
                 const generatedTitle = await this.llmHelper.generateMeetingSummary(titlePrompt, data.context.substring(0, 5000), groqTitlePrompt);
-                if (generatedTitle) title = generatedTitle.replace(/["*]/g, '').trim();
+                const cleanedTitle = generatedTitle?.replace(/["*]/g, '').trim();
+                if (this.isMeaningfulTitle(cleanedTitle)) {
+                    title = cleanedTitle;
+                }
             }
 
             // Generate Structured Summary
@@ -221,6 +225,8 @@ export class MeetingPersistence {
         } catch (error) {
             console.error('[MeetingPersistence] Failed to save meeting:', error);
             DatabaseManager.getInstance().markMeetingProcessingFailed(meetingId, error);
+            const wins = require('electron').BrowserWindow.getAllWindows();
+            wins.forEach((w: any) => w.webContents.send('meetings-updated'));
         }
     }
 
