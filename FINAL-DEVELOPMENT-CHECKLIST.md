@@ -11,9 +11,20 @@ Canonical implementation checklist derived from:
 
 This file is the execution order to follow.
 
-Engineering implementation is complete through Phase 7.
+Code implementation is complete through Phase 7.
 
 Remaining open items require manual validation on real macOS hardware and live meeting apps, plus review against real meeting transcripts.
+
+## Remaining Open Work
+
+These are the only blocking leftovers before final sign-off:
+
+- [ ] Run the Phase 1.6 live-call validation matrix on real macOS hardware
+- [ ] Decide and document the real meeting-safe backend policy after validation
+- [ ] Validate turn quality on real meeting transcripts
+- [ ] Confirm whether real-world timing P95 stays within the arrival-time threshold or requires provider timestamps
+
+Everything else in this checklist is implemented and covered by automated verification.
 
 ## Final Sequencing Decision
 
@@ -226,7 +237,7 @@ Exit criteria:
 ## Phase 5: Internal Validation
 
 - [x] Review timing metrics from Phase 2 in automated validation
-- [ ] If timing P95 is greater than 500ms, escalate provider timestamp work
+- [ ] If real-world timing P95 is greater than 500ms, escalate provider timestamp work
 - [x] Enable conversation-state trigger for internal-only testing
 - [x] Measure false positives for the conversation-state trigger
 - [ ] Validate turn quality on real meeting transcripts
