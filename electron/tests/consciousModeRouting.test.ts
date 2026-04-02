@@ -66,6 +66,15 @@ function addInterviewerTurn(session: SessionTracker, text: string, timestamp: nu
   });
 }
 
+function addUserTurn(session: SessionTracker, text: string, timestamp: number): void {
+  session.handleTranscript({
+    speaker: 'user',
+    text,
+    timestamp,
+    final: true,
+  });
+}
+
 test('Conscious Mode routes qualifying technical questions into the structured reasoning contract', async () => {
   const session = new SessionTracker();
   const llmHelper = new FakeLLMHelper();
@@ -114,6 +123,29 @@ test('Conscious Mode reasoning prompts include merged recent turns, prior assist
   assert.match(llmHelper.calls[0]?.message || '', /Earlier discussion: we aligned on Redis durability, failover, and a multi-region fallback\./);
   assert.match(llmHelper.calls[0]?.message || '', /CONVERSATION:/);
   assert.match(llmHelper.calls[0]?.message || '', /\[INTERVIEWER\]: how would you design a rate limiter for an api\?/i);
+});
+
+test('Conscious Mode keeps the latest overlap group in the reasoning prompt when the interviewer interrupts mid-answer near the context window boundary', async () => {
+  const session = new SessionTracker();
+  const llmHelper = new FakeLLMHelper();
+  const engine = new IntelligenceEngine(llmHelper as any, session);
+  const originalNow = Date.now;
+
+  Date.now = () => 200_000;
+
+  try {
+    session.setConsciousModeEnabled(true);
+    addInterviewerTurn(session, 'Walk me through the design.', 19_400);
+    addUserTurn(session, 'I would start with the API boundary.', 19_700);
+    addInterviewerTurn(session, 'What happens if traffic spikes?', 20_200);
+
+    await engine.runWhatShouldISay(undefined, 0.92);
+
+    assert.match(llmHelper.calls[0]?.message || '', /\[ME\]: i would start with the api boundary\./i);
+    assert.match(llmHelper.calls[0]?.message || '', /\[INTERVIEWER\]: what happens if traffic spikes\?/i);
+  } finally {
+    Date.now = originalNow;
+  }
 });
 
 test('Conscious Mode continuation prompts keep prior assistant responses alongside the active thread context', async () => {

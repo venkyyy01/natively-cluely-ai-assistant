@@ -91,6 +91,8 @@ export interface ContextItem {
     role: 'interviewer' | 'user' | 'assistant';
     text: string;
     timestamp: number;
+    segmentReference?: string;
+    overlapGroupId?: string;
 }
 
 export interface AssistantResponse {
@@ -218,6 +220,9 @@ export class SessionTracker {
 
         const role = this.mapSpeakerToRole(segment.speaker);
         const text = segment.text.trim();
+        const segmentReference = segment.marker && segment.marker.trim().length > 0
+            ? segment.marker
+            : `segment:${this.sessionId}:${segment.speaker}:${segment.timestamp}:${this.transcriptRevision}`;
 
         if (!text) return null;
 
@@ -234,7 +239,8 @@ export class SessionTracker {
     this.contextItemsBuffer.push({
       role,
       text,
-      timestamp: segment.timestamp
+      timestamp: segment.timestamp,
+      segmentReference,
     });
         this.transcriptRevision++;
         this.compactSnapshotCache.clear();
@@ -251,7 +257,10 @@ export class SessionTracker {
       this.logTimingVariance(segment);
 
       // Add to session transcript
-      this.fullTranscript.push(segment);
+      this.fullTranscript.push({
+        ...segment,
+        marker: segmentReference,
+      });
 
       // Hard cap to prevent memory exhaustion in very long meetings
       while (this.fullTranscript.length > MAX_TRANSCRIPT_ENTRIES) {
@@ -534,27 +543,61 @@ isConsciousModeEnabled(): boolean {
      * Get formatted context string for LLM prompts
      */
     getPromptContextItems(lastSeconds: number = 120): ContextItem[] {
-        return this.getContext(lastSeconds).reduce<ContextItem[]>((accumulator, item) => {
-            const previousTurn = accumulator[accumulator.length - 1];
-            const canMergeWithPrevious = previousTurn
-                && previousTurn.role === item.role
-                && item.role !== 'assistant'
-                && item.timestamp >= previousTurn.timestamp
-                && item.timestamp - previousTurn.timestamp <= TURN_MERGE_GAP_MS;
+        const cutoff = Date.now() - (lastSeconds * 1000);
+        const overlapGroups = this.getOverlapContextGroups(cutoff);
+        const emittedOverlapGroups = new Set<string>();
+        const promptItems: ContextItem[] = [];
 
-            if (canMergeWithPrevious) {
-                previousTurn.text = `${previousTurn.text} ${item.text}`.trim();
-                previousTurn.timestamp = item.timestamp;
-                return accumulator;
+        for (const item of this.getContext(lastSeconds)) {
+            const overlapGroup = item.segmentReference
+                ? overlapGroups.find(({ turns }) => (
+                    turns.some((turn) => turn.mergedSegmentIds.includes(item.segmentReference!))
+                ))
+                : undefined;
+
+            if (!overlapGroup) {
+                promptItems.push(item);
+                continue;
             }
 
-            accumulator.push({
-                role: item.role,
-                text: item.text,
-                timestamp: item.timestamp,
-            });
-            return accumulator;
-        }, []);
+            if (emittedOverlapGroups.has(overlapGroup.id)) {
+                continue;
+            }
+
+            emittedOverlapGroups.add(overlapGroup.id);
+            promptItems.push(...overlapGroup.turns.map((turn) => ({
+                role: turn.speaker,
+                text: turn.text,
+                timestamp: turn.endedAt,
+                overlapGroupId: turn.overlapGroupId,
+            })));
+        }
+
+        return promptItems
+            .reduce<ContextItem[]>((accumulator, item) => {
+                const previousTurn = accumulator[accumulator.length - 1];
+                const canMergeWithPrevious = previousTurn
+                    && previousTurn.role === item.role
+                    && item.role !== 'assistant'
+                    && !previousTurn.overlapGroupId
+                    && !item.overlapGroupId
+                    && item.timestamp >= previousTurn.timestamp
+                    && item.timestamp - previousTurn.timestamp <= TURN_MERGE_GAP_MS;
+
+                if (canMergeWithPrevious) {
+                    previousTurn.text = `${previousTurn.text} ${item.text}`.trim();
+                    previousTurn.timestamp = item.timestamp;
+                    return accumulator;
+                }
+
+                accumulator.push({
+                    role: item.role,
+                    text: item.text,
+                    timestamp: item.timestamp,
+                    overlapGroupId: item.overlapGroupId,
+                });
+                return accumulator;
+            }, []);
     }
 
     getFormattedContext(lastSeconds: number = 120): string {
@@ -912,6 +955,28 @@ isConsciousModeEnabled(): boolean {
     }
 
     return `segment:${index}:${segment.speaker}:${segment.timestamp}`;
+  }
+
+  private getOverlapContextGroups(cutoff: number): Array<{ id: string; turns: ConversationTurn[] }> {
+    const turns = this.getConversationTurns();
+    const overlapGroups = new Map<string, ConversationTurn[]>();
+
+    for (const turn of turns) {
+      if (!turn.overlapGroupId) {
+        continue;
+      }
+
+      const groupTurns = overlapGroups.get(turn.overlapGroupId) ?? [];
+      groupTurns.push(turn);
+      overlapGroups.set(turn.overlapGroupId, groupTurns);
+    }
+
+    return [...overlapGroups.entries()]
+      .filter(([, groupTurns]) => (
+        groupTurns.some((turn) => turn.startedAt < cutoff || turn.endedAt < cutoff)
+        && groupTurns.some((turn) => turn.endedAt >= cutoff)
+      ))
+      .map(([id, groupTurns]) => ({ id, turns: groupTurns }));
   }
 
   private shouldMergeTurnWithSegment(

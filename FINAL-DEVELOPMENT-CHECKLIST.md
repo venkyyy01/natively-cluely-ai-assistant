@@ -241,7 +241,7 @@ Exit criteria:
 - [x] Move context selection from segment-heavy logic toward turn-oriented context assembly
 - [x] Feed recent turns, prior assistant responses, and epoch summaries into the live reasoning path
 - [x] Make Conscious Mode state updates truly bidirectional rather than interviewer-centric
-- [ ] Ensure overlap context is preserved where it materially affects the response
+- [x] Ensure overlap context is preserved where it materially affects the response
 
 Exit criteria:
 

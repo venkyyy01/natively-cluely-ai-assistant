@@ -288,6 +288,45 @@ test('SessionTracker keeps formatted prompt context strictly bounded to the requ
   }
 });
 
+test('SessionTracker keeps the active overlap group in prompt context even when part of it falls just outside the time window', () => {
+  const session = new SessionTracker();
+  const originalNow = Date.now;
+
+  Date.now = () => 5_000;
+
+  try {
+    session.addTranscript({
+      speaker: 'interviewer',
+      text: 'Walk me through the design.',
+      timestamp: 1_400,
+      final: true,
+    });
+    session.addTranscript({
+      speaker: 'user',
+      text: 'I would start with the API boundary.',
+      timestamp: 1_800,
+      final: true,
+    });
+    session.addTranscript({
+      speaker: 'interviewer',
+      text: 'What happens if traffic spikes?',
+      timestamp: 2_200,
+      final: true,
+    });
+
+    assert.equal(
+      session.getFormattedContext(3),
+      [
+        '[INTERVIEWER]: Walk me through the design.',
+        '[ME]: I would start with the API boundary.',
+        '[INTERVIEWER]: What happens if traffic spikes?',
+      ].join('\n'),
+    );
+  } finally {
+    Date.now = originalNow;
+  }
+});
+
 test('SessionTracker keeps distinct assistant suggestions separate in formatted prompt context', () => {
   const session = new SessionTracker();
   const originalNow = Date.now;
@@ -338,6 +377,96 @@ test('SessionTracker does not merge out-of-order same-speaker fragments in forma
       [
         '[INTERVIEWER]: design a cache?',
         '[INTERVIEWER]: How would you',
+      ].join('\n'),
+    );
+  } finally {
+    Date.now = originalNow;
+  }
+});
+
+test('SessionTracker preserves overlap-group arrival order when cross-speaker turns straddle the context cutoff', () => {
+  const session = new SessionTracker();
+  const originalNow = Date.now;
+
+  Date.now = () => 5_000;
+
+  try {
+    session.addTranscript({
+      speaker: 'interviewer',
+      text: 'How would you',
+      timestamp: 2_000,
+      final: true,
+    });
+    session.addTranscript({
+      speaker: 'user',
+      text: 'start with the read path first.',
+      timestamp: 1_700,
+      final: true,
+    });
+    session.addTranscript({
+      speaker: 'interviewer',
+      text: 'design a cache?',
+      timestamp: 2_200,
+      final: true,
+    });
+
+    assert.equal(
+      session.getFormattedContext(3),
+      [
+        '[INTERVIEWER]: How would you',
+        '[ME]: start with the read path first.',
+        '[INTERVIEWER]: design a cache?',
+      ].join('\n'),
+    );
+  } finally {
+    Date.now = originalNow;
+  }
+});
+
+test('SessionTracker does not drop later out-of-order turns that share a speaker and timestamp range with an overlap group', () => {
+  const session = new SessionTracker();
+  const originalNow = Date.now;
+
+  Date.now = () => 5_000;
+
+  try {
+    session.addTranscript({
+      speaker: 'interviewer',
+      text: 'First prompt',
+      timestamp: 900,
+      final: true,
+    });
+    session.addTranscript({
+      speaker: 'interviewer',
+      text: 'second prompt',
+      timestamp: 1_600,
+      final: true,
+    });
+    session.addTranscript({
+      speaker: 'user',
+      text: 'My answer starts',
+      timestamp: 1_800,
+      final: true,
+    });
+    session.addTranscript({
+      speaker: 'user',
+      text: 'and keeps going',
+      timestamp: 3_000,
+      final: true,
+    });
+    session.addTranscript({
+      speaker: 'interviewer',
+      text: 'Late clarification',
+      timestamp: 1_500,
+      final: true,
+    });
+
+    assert.equal(
+      session.getFormattedContext(4),
+      [
+        '[INTERVIEWER]: First prompt second prompt',
+        '[ME]: My answer starts and keeps going',
+        '[INTERVIEWER]: Late clarification',
       ].join('\n'),
     );
   } finally {
