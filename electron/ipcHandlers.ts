@@ -822,6 +822,22 @@ safeHandleValidated("delete-meeting", (args) => [parseIpcInput(ipcSchemas.provid
   safeHandleValidated("test-stt-connection", (args) => parseIpcInput(ipcSchemas.sttConnectionArgs, args, 'test-stt-connection'), async (_, provider, apiKey, region) => {
     console.log(`[IPC] Received test - stt - connection request for provider: ${provider} `);
     try {
+      if (!apiKey || !apiKey.trim()) {
+        const { CredentialsManager } = require('./services/CredentialsManager');
+        const creds = CredentialsManager.getInstance();
+        if (provider === 'groq') apiKey = creds.getGroqSttApiKey();
+        else if (provider === 'openai') apiKey = creds.getOpenAiSttApiKey();
+        else if (provider === 'deepgram') apiKey = creds.getDeepgramApiKey();
+        else if (provider === 'elevenlabs') apiKey = creds.getElevenLabsApiKey();
+        else if (provider === 'azure') apiKey = creds.getAzureApiKey();
+        else if (provider === 'ibmwatson') apiKey = creds.getIbmWatsonApiKey();
+        else if (provider === 'soniox') apiKey = creds.getSonioxApiKey();
+      }
+
+      if (!apiKey || !apiKey.trim()) {
+        return { success: false, error: 'No API key provided' };
+      }
+
       if (provider === 'deepgram') {
         const WebSocket = require('ws');
         return await new Promise<{ success: boolean; error?: string }>((resolve) => {

@@ -7,6 +7,7 @@ type Handler = (event: unknown, ...args: unknown[]) => Promise<unknown> | unknow
 function installIpcHandlersTestHarness(options?: {
   restartOllamaError?: string;
   serviceAccountResult?: { canceled: boolean; filePaths: string[] };
+  moduleOverrides?: Record<string, unknown>;
 }) {
   const originalLoad = (Module as any)._load;
   const handlers = new Map<string, Handler>();
@@ -53,6 +54,19 @@ function installIpcHandlersTestHarness(options?: {
       googleSearchCseId: '',
     }),
     getSttProvider: () => 'google',
+    getGeminiApiKey: () => 'gemini-key',
+    getGroqApiKey: () => '',
+    getOpenaiApiKey: () => '',
+    getClaudeApiKey: () => '',
+    getGroqSttApiKey: () => '',
+    getOpenAiSttApiKey: () => '',
+    getDeepgramApiKey: () => '',
+    getElevenLabsApiKey: () => '',
+    getAzureApiKey: () => '',
+    getAzureRegion: () => 'eastus',
+    getIbmWatsonApiKey: () => '',
+    getIbmWatsonRegion: () => 'us-south',
+    getSonioxApiKey: () => '',
   };
 
   const electronMock = {
@@ -83,6 +97,10 @@ function installIpcHandlersTestHarness(options?: {
   };
 
   (Module as any)._load = function patchedLoad(request: string, parent: unknown, isMain: boolean) {
+    if (options?.moduleOverrides?.[request]) {
+      return options.moduleOverrides[request];
+    }
+
     if (request === 'electron') {
       return electronMock;
     }
@@ -292,6 +310,89 @@ test('root IPC handlers normalize cancellation and failures into success/data/er
       message: 'restart failed',
     },
   });
+
+  harness.restore();
+});
+
+test('root IPC test-stt-connection reuses the stored Deepgram key when the renderer field is blank', async () => {
+  let capturedAuthorizationHeader = '';
+
+  class FakeWebSocket {
+    private handlers = new Map<string, ((value?: unknown) => void)[]>();
+
+    constructor(_url: string, options: { headers?: { Authorization?: string } }) {
+      capturedAuthorizationHeader = options.headers?.Authorization || '';
+      queueMicrotask(() => this.emit('open'));
+    }
+
+    on(event: string, handler: (value?: unknown) => void) {
+      const current = this.handlers.get(event) || [];
+      current.push(handler);
+      this.handlers.set(event, current);
+    }
+
+    send(_payload: string) {}
+
+    close() {}
+
+    private emit(event: string, value?: unknown) {
+      for (const handler of this.handlers.get(event) || []) {
+        handler(value);
+      }
+    }
+  }
+
+  const harness = installIpcHandlersTestHarness({
+    moduleOverrides: {
+      ws: FakeWebSocket,
+      './services/CredentialsManager': {
+        CredentialsManager: {
+          getInstance: () => ({
+            getAllCredentials: () => ({
+              geminiApiKey: 'gemini-key',
+              groqApiKey: '',
+              openaiApiKey: '',
+              claudeApiKey: '',
+              googleServiceAccountPath: '/tmp/service.json',
+              sttProvider: 'deepgram',
+              groqSttModel: 'whisper-large-v3-turbo',
+              groqSttApiKey: '',
+              openAiSttApiKey: '',
+              deepgramApiKey: 'stored-deepgram-key',
+              elevenLabsApiKey: '',
+              azureApiKey: '',
+              azureRegion: 'eastus',
+              ibmWatsonApiKey: '',
+              ibmWatsonRegion: 'us-south',
+              sonioxApiKey: '',
+              googleSearchApiKey: '',
+              googleSearchCseId: '',
+            }),
+            getSttProvider: () => 'deepgram',
+            getGeminiApiKey: () => 'gemini-key',
+            getGroqApiKey: () => '',
+            getOpenaiApiKey: () => '',
+            getClaudeApiKey: () => '',
+            getGroqSttApiKey: () => '',
+            getOpenAiSttApiKey: () => '',
+            getDeepgramApiKey: () => 'stored-deepgram-key',
+            getElevenLabsApiKey: () => '',
+            getAzureApiKey: () => '',
+            getAzureRegion: () => 'eastus',
+            getIbmWatsonApiKey: () => '',
+            getIbmWatsonRegion: () => 'us-south',
+            getSonioxApiKey: () => '',
+          }),
+        },
+      },
+    },
+  });
+  await initializeHandlers(harness);
+
+  assert.deepEqual(await harness.handlers.get('test-stt-connection')?.({}, 'deepgram', '', undefined), {
+    success: true,
+  });
+  assert.equal(capturedAuthorizationHeader, 'Token stored-deepgram-key ');
 
   harness.restore();
 });

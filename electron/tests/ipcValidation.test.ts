@@ -96,6 +96,10 @@ test('settings, profile, and rag validation schemas accept bounded payloads', ()
   assert.equal(parseIpcInput(ipcSchemas.disguiseMode, 'activity', 'set-disguise'), 'activity');
   assert.equal(parseIpcInput(ipcSchemas.profileFilePath, '/tmp/resume.pdf', 'profile:upload-resume'), '/tmp/resume.pdf');
   assert.equal(parseIpcInput(ipcSchemas.profileCompanyName, 'Acme', 'profile:research-company'), 'Acme');
+  assert.deepEqual(
+    parseIpcInput(ipcSchemas.sttConnectionArgs, ['deepgram', '', undefined], 'test-stt-connection'),
+    ['deepgram', '', undefined],
+  );
 
   assert.deepEqual(
     parseIpcInput(ipcSchemas.ragMeetingQuery, { meetingId: 'meeting-1', query: 'summarize blockers' }, 'rag:query-meeting'),

@@ -1075,8 +1075,17 @@ return () => unsubscribe();
             elevenlabs: sttElevenLabsKey, azure: sttAzureKey, ibmwatson: sttIbmKey,
             soniox: sttSonioxKey,
         };
+        const storedKeyMap: Record<string, boolean> = {
+            groq: hasStoredSttGroqKey,
+            openai: hasStoredSttOpenaiKey,
+            deepgram: hasStoredDeepgramKey,
+            elevenlabs: hasStoredElevenLabsKey,
+            azure: hasStoredAzureKey,
+            ibmwatson: hasStoredIbmWatsonKey,
+            soniox: hasStoredSonioxKey,
+        };
         const keyToTest = keyMap[providerUnderTest] || '';
-        if (!keyToTest.trim()) {
+        if (!keyToTest.trim() && !storedKeyMap[providerUnderTest]) {
             setSttTestStatus('error');
             setSttTestError('Please enter an API key first');
             return;

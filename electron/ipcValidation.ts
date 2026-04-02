@@ -86,7 +86,7 @@ export const ipcSchemas = {
   apiKey: boundedString(4096),
   optionalApiKey: z.string().trim().max(4096).optional(),
   azureRegion: boundedString(128),
-  sttConnectionArgs: z.tuple([sttProviderEnum.exclude(['google']), boundedString(4096), z.string().trim().max(128).optional()]),
+  sttConnectionArgs: z.tuple([sttProviderEnum.exclude(['google']), z.string().trim().max(4096), z.string().trim().max(128).optional()]),
   llmConnectionArgs: z.tuple([llmProviderEnum, z.string().trim().max(4096).optional()]),
   providerModelFetchArgs: z.tuple([llmProviderEnum, z.string().trim().max(4096)]),
   providerSwitchGeminiArgs: z.tuple([z.string().trim().max(4096).optional(), z.string().trim().max(256).optional()]),
