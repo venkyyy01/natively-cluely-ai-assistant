@@ -222,6 +222,73 @@ test('SessionTracker reports P50/P95/P99 ingestion latency stats for repeated fi
   }
 });
 
+test('SessionTracker timing validation keeps arrival timestamps when P95 stays below the provider-escalation threshold', () => {
+  const session = new SessionTracker();
+  const originalNow = Date.now;
+
+  Date.now = () => 1_100;
+
+  try {
+    session.addTranscript({
+      speaker: 'interviewer',
+      text: 'Question one',
+      timestamp: 1_000,
+      final: true,
+    });
+    session.addTranscript({
+      speaker: 'user',
+      text: 'Answer one',
+      timestamp: 1_020,
+      final: true,
+    });
+
+    assert.deepEqual(session.getTimingValidation(), {
+      stats: {
+        sampleCount: 2,
+        p50: 80,
+        p95: 100,
+        p99: 100,
+        max: 100,
+      },
+      thresholdMs: 500,
+      shouldEscalateProviderTimestamps: false,
+    });
+  } finally {
+    Date.now = originalNow;
+  }
+});
+
+test('SessionTracker timing validation escalates provider timestamps when P95 exceeds the threshold', () => {
+  const session = new SessionTracker();
+  const originalNow = Date.now;
+
+  Date.now = () => 2_000;
+
+  try {
+    session.addTranscript({
+      speaker: 'interviewer',
+      text: 'Question one',
+      timestamp: 1_950,
+      final: true,
+    });
+
+    Date.now = () => 3_000;
+    session.addTranscript({
+      speaker: 'user',
+      text: 'Answer one',
+      timestamp: 2_200,
+      final: true,
+    });
+
+    const validation = session.getTimingValidation();
+    assert.equal(validation.thresholdMs, 500);
+    assert.equal(validation.shouldEscalateProviderTimestamps, true);
+    assert.equal(validation.stats.p95, 800);
+  } finally {
+    Date.now = originalNow;
+  }
+});
+
 test('SessionTracker formats prompt context from assembled conversation turns instead of raw transcript fragments', () => {
   const session = new SessionTracker();
   const originalNow = Date.now;

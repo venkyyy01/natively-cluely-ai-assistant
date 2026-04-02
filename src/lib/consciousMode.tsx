@@ -307,9 +307,22 @@ export function ConsciousModeAnswer({
         <div className="rounded-lg border border-white/10 bg-white/5 p-3">
           <div className="space-y-2 text-[13px] leading-relaxed text-slate-100">
             {simple.paragraphs.map((paragraph, index) => (
-              <p key={`simple-${index}`} className="whitespace-pre-wrap">
-                {paragraph}
-              </p>
+              <div key={`simple-${index}`} className="space-y-2">
+                {splitCodeBlocks(paragraph).map((chunk, chunkIndex) =>
+                  chunk.type === 'code' ? (
+                    <pre
+                      key={`simple-${index}-${chunkIndex}`}
+                      className="overflow-x-auto rounded-lg border border-white/10 bg-black/30 p-3 font-mono text-xs text-slate-100"
+                    >
+                      <code>{chunk.value}</code>
+                    </pre>
+                  ) : (
+                    <p key={`simple-${index}-${chunkIndex}`} className="whitespace-pre-wrap">
+                      {chunk.value}
+                    </p>
+                  ),
+                )}
+              </div>
             ))}
           </div>
         </div>

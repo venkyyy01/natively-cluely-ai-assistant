@@ -113,6 +113,27 @@ test('renders simple spoken fallback blocks when the answer is plain conversatio
   expect(screen.getByText('Then I would separate reads from writes so scaling stays predictable.')).toBeInTheDocument();
 });
 
+test('renders concise spoken fallback code blocks without dropping the natural intro', () => {
+  const conciseCodeAnswer = [
+    'I would start with a simple debounce helper so the intent is clear before I optimize it.',
+    '',
+    '```ts',
+    'function debounce<T extends (...args: unknown[]) => void>(fn: T, wait: number) {',
+    '  let timer: ReturnType<typeof setTimeout> | undefined;',
+    '  return (...args: Parameters<T>) => {',
+    '    clearTimeout(timer);',
+    '    timer = setTimeout(() => fn(...args), wait);',
+    '  };',
+    '}',
+    '```',
+  ].join('\n');
+
+  render(<ConsciousModeAnswer text={conciseCodeAnswer} />);
+
+  expect(screen.getByText('I would start with a simple debounce helper so the intent is clear before I optimize it.')).toBeInTheDocument();
+  expect(screen.getByText(/function debounce/)).toBeInTheDocument();
+});
+
 test('falls back to raw text when the payload looks structured but is malformed', () => {
   const malformedStructured = [
     'Opening reasoning: I would start with the cache layer.',

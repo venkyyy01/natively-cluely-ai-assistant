@@ -1155,7 +1155,7 @@ ANSWER DIRECTLY:`;
 
   private isStructuredOutputRequest(input?: string): boolean {
     if (!input) return false;
-    return /(STRUCTURED_REASONING_RESPONSE|Return JSON|mode, openingReasoning, implementationPlan|JSON with keys|reasoning_first)/i.test(input);
+    return /(STRUCTURED_REASONING_RESPONSE|Return JSON|mode, questionType, openingReasoning, spokenResponse|mode, openingReasoning, implementationPlan|JSON with keys|reasoning_first)/i.test(input);
   }
 
   private applyDefaultBrevityHint(message: string): string {

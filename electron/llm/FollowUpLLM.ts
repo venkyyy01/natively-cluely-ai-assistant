@@ -51,7 +51,8 @@ export class FollowUpLLM {
             }
 
             messageParts.push(
-                'Return JSON with keys: mode, openingReasoning, implementationPlan, tradeoffs, edgeCases, scaleConsiderations, pushbackResponses, likelyFollowUps, codeTransition.',
+                'Return JSON with keys: mode, questionType, openingReasoning, spokenResponse, codeBlock, tradeoffs, likelyFollowUps.',
+                'Legacy compatibility keys implementationPlan, edgeCases, scaleConsiderations, pushbackResponses, and codeTransition are optional when they materially help follow-up continuity.',
                 'Set mode to reasoning_first.',
             );
 

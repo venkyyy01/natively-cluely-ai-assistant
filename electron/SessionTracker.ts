@@ -13,6 +13,7 @@ const MAX_CONTEXT_HISTORY = 200;
 const TURN_MERGE_GAP_MS = 1_200;
 const TURN_OVERLAP_WINDOW_MS = 750;
 const TIMING_REPORT_SAMPLE_INTERVAL = 25;
+const PROVIDER_TIMESTAMP_ESCALATION_P95_MS = 500;
 
 /** Ring buffer for fixed-capacity context items */
 class RingBuffer<T> {
@@ -99,6 +100,12 @@ export interface AssistantResponse {
     text: string;
     timestamp: number;
     questionContext: string;
+}
+
+export interface TimingValidationResult {
+    stats: TimingVarianceStats;
+    thresholdMs: number;
+    shouldEscalateProviderTimestamps: boolean;
 }
 
 export interface MeetingMetadataSnapshot {
@@ -709,6 +716,15 @@ isConsciousModeEnabled(): boolean {
 
     getTimingVarianceStats(): TimingVarianceStats {
         return this.buildTimingVarianceStats(this.timingGapSamplesMs);
+    }
+
+    getTimingValidation(): TimingValidationResult {
+        const stats = this.getTimingVarianceStats();
+        return {
+            stats,
+            thresholdMs: PROVIDER_TIMESTAMP_ESCALATION_P95_MS,
+            shouldEscalateProviderTimestamps: (stats.p95 ?? 0) > PROVIDER_TIMESTAMP_ESCALATION_P95_MS,
+        };
     }
 
     getCompactTranscriptSnapshot(maxTurns: number = 12, snapshotType: 'standard' | 'fast' = 'standard'): string {

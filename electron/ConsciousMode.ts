@@ -1,9 +1,18 @@
 export type ConsciousModeResponseMode = 'reasoning_first' | 'invalid';
+export type ConsciousModeQuestionType = 'concept' | 'approach' | 'code' | 'opinion' | 'clarification' | 'unknown';
+
+interface ConsciousModeCodeBlock {
+  language: string;
+  code: string;
+}
 
 export interface ConsciousModeStructuredResponse {
   mode: ConsciousModeResponseMode;
+  questionType?: ConsciousModeQuestionType;
   openingReasoning: string;
+  spokenResponse?: string;
   implementationPlan: string[];
+  codeBlock?: ConsciousModeCodeBlock;
   tradeoffs: string[];
   edgeCases: string[];
   scaleConsiderations: string[];
@@ -74,11 +83,57 @@ function normalizeList(value: unknown): string[] {
   return text ? [text] : [];
 }
 
+function normalizeRecordValues(value: unknown): string[] {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return [];
+  }
+
+  return Array.from(
+    new Set(
+      Object.values(value as Record<string, unknown>)
+        .map(normalizeText)
+        .filter(Boolean),
+    ),
+  );
+}
+
+function normalizeQuestionType(value: unknown): ConsciousModeQuestionType {
+  const normalized = normalizeText(value);
+
+  switch (normalized) {
+    case 'concept':
+    case 'approach':
+    case 'code':
+    case 'opinion':
+    case 'clarification':
+      return normalized;
+    default:
+      return 'unknown';
+  }
+}
+
+function normalizeCodeBlock(value: unknown): ConsciousModeCodeBlock | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return undefined;
+  }
+
+  const language = normalizeText((value as { language?: unknown }).language) || 'text';
+  const code = normalizeText((value as { code?: unknown }).code);
+  if (!code) {
+    return undefined;
+  }
+
+  return { language, code };
+}
+
 export function createEmptyConsciousModeResponse(mode: ConsciousModeResponseMode = 'reasoning_first'): ConsciousModeStructuredResponse {
   return {
     mode,
+    questionType: 'unknown',
     openingReasoning: '',
+    spokenResponse: '',
     implementationPlan: [],
+    codeBlock: undefined,
     tradeoffs: [],
     edgeCases: [],
     scaleConsiderations: [],
@@ -92,12 +147,18 @@ export function normalizeConsciousModeResponse(value: Partial<ConsciousModeStruc
   const mode = value?.mode === 'reasoning_first' ? 'reasoning_first' : 'invalid';
   return {
     mode,
+    questionType: normalizeQuestionType(value?.questionType),
     openingReasoning: normalizeText(value?.openingReasoning),
+    spokenResponse: normalizeText(value?.spokenResponse),
     implementationPlan: normalizeList(value?.implementationPlan),
+    codeBlock: normalizeCodeBlock(value?.codeBlock),
     tradeoffs: normalizeList(value?.tradeoffs),
     edgeCases: normalizeList(value?.edgeCases),
     scaleConsiderations: normalizeList(value?.scaleConsiderations),
-    pushbackResponses: normalizeList(value?.pushbackResponses),
+    pushbackResponses: [
+      ...normalizeList(value?.pushbackResponses),
+      ...normalizeRecordValues(value?.pushbackResponses),
+    ].filter((item, index, array) => array.indexOf(item) === index),
     likelyFollowUps: normalizeList(value?.likelyFollowUps),
     codeTransition: normalizeText(value?.codeTransition),
   };
@@ -109,7 +170,9 @@ export function isValidConsciousModeResponse(response: ConsciousModeStructuredRe
   }
 
   return Boolean(
+    response.spokenResponse ||
     response.openingReasoning ||
+    response.codeBlock?.code ||
     response.implementationPlan.length ||
     response.tradeoffs.length ||
     response.edgeCases.length ||
@@ -152,8 +215,11 @@ export function mergeConsciousModeResponses(
 ): ConsciousModeStructuredResponse {
   return {
     mode: 'reasoning_first',
+    questionType: incoming.questionType !== 'unknown' ? incoming.questionType : base.questionType,
     openingReasoning: incoming.openingReasoning || base.openingReasoning,
+    spokenResponse: incoming.spokenResponse || base.spokenResponse,
     implementationPlan: mergeList(base.implementationPlan, incoming.implementationPlan),
+    codeBlock: incoming.codeBlock?.code ? incoming.codeBlock : base.codeBlock,
     tradeoffs: mergeList(base.tradeoffs, incoming.tradeoffs),
     edgeCases: mergeList(base.edgeCases, incoming.edgeCases),
     scaleConsiderations: mergeList(base.scaleConsiderations, incoming.scaleConsiderations),
@@ -172,6 +238,22 @@ function formatSection(label: string, values: string[]): string[] {
 }
 
 export function formatConsciousModeResponse(response: ConsciousModeStructuredResponse): string {
+  const conciseParts: string[] = [];
+  if (response.spokenResponse) {
+    conciseParts.push(response.spokenResponse);
+  } else if (response.codeBlock?.code && response.openingReasoning) {
+    conciseParts.push(response.openingReasoning);
+  }
+
+  if (response.codeBlock?.code) {
+    conciseParts.push(`\`\`\`${response.codeBlock.language}\n${response.codeBlock.code}\n\`\`\``);
+  }
+
+  if (conciseParts.length > 0) {
+    const parts = conciseParts;
+    return parts.join('\n\n').trim();
+  }
+
   const lines: string[] = [];
 
   if (response.openingReasoning) {

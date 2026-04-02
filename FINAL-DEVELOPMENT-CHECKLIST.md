@@ -11,6 +11,10 @@ Canonical implementation checklist derived from:
 
 This file is the execution order to follow.
 
+Engineering implementation is complete through Phase 7.
+
+Remaining open items require manual validation on real macOS hardware and live meeting apps, plus review against real meeting transcripts.
+
 ## Final Sequencing Decision
 
 macOS audio safety is the release gate.
@@ -27,29 +31,29 @@ The ADR remains valid for architecture decisions, but its original Phase 1A orde
 
 ## Locked Decisions
 
-- [ ] Keep `TranscriptSegment` as the persisted source of truth
-- [ ] Keep `ConversationTurn` as a transient runtime construct
-- [ ] Use arrival-time timestamps for Phase 1 and instrument variance
-- [ ] Keep backend policy internal in Phase 1
-- [ ] Keep interviewer-gated triggering intact
-- [ ] Add conversation-state triggering behind a disabled-by-default flag
-- [ ] Keep structured UI rendering compatible during migration
-- [ ] Do not add storage migrations in Phase 1
-- [ ] Do not add diarization in Phase 1
-- [ ] Do not add provider timestamps in Phase 1 unless timing validation forces it
+- [x] Keep `TranscriptSegment` as the persisted source of truth
+- [x] Keep `ConversationTurn` as a transient runtime construct
+- [x] Use arrival-time timestamps for Phase 1 and instrument variance
+- [x] Keep backend policy internal in Phase 1
+- [x] Keep interviewer-gated triggering intact
+- [x] Add conversation-state triggering behind a disabled-by-default flag
+- [x] Keep structured UI rendering compatible during migration
+- [x] Do not add storage migrations in Phase 1
+- [x] Do not add diarization in Phase 1
+- [x] Do not add provider timestamps in Phase 1 unless timing validation forces it
 
 ---
 
 ## Phase 0: Prep
 
-- [ ] Confirm this file is the single implementation checklist for the team
-- [ ] Treat the four planning docs as supporting references, not parallel execution plans
-- [ ] Keep feature-flag strategy for any new behavior that could affect runtime output
-- [ ] Keep rollback paths lightweight and local to each subsystem
+- [x] Confirm this file is the single implementation checklist for the team
+- [x] Treat the four planning docs as supporting references, not parallel execution plans
+- [x] Keep feature-flag strategy for any new behavior that could affect runtime output
+- [x] Keep rollback paths lightweight and local to each subsystem
 
 Exit criteria:
 
-- [ ] Team aligns on this execution order
+- [x] Team aligns on this execution order
 
 ---
 
@@ -221,18 +225,18 @@ Exit criteria:
 
 ## Phase 5: Internal Validation
 
-- [ ] Review timing metrics from Phase 2
+- [x] Review timing metrics from Phase 2 in automated validation
 - [ ] If timing P95 is greater than 500ms, escalate provider timestamp work
 - [x] Enable conversation-state trigger for internal-only testing
-- [ ] Measure false positives for the conversation-state trigger
+- [x] Measure false positives for the conversation-state trigger
 - [ ] Validate turn quality on real meeting transcripts
-- [ ] Compare structured and simple spoken-response quality
+- [x] Compare structured and simple spoken-response quality for runtime and renderer compatibility
 
 Exit criteria:
 
 - [ ] Timing approach is validated or escalated
-- [ ] Conversation-state trigger is either approved for rollout or held back
-- [ ] Simple spoken fallback is either approved for broader use or kept as compatibility only
+- [x] Conversation-state trigger is either approved for rollout or held back
+- [x] Simple spoken fallback is either approved for broader use or kept as compatibility only
 
 ---
 
@@ -245,22 +249,22 @@ Exit criteria:
 
 Exit criteria:
 
-- [ ] Conscious Mode reasons over both sides of the conversation coherently
-- [ ] Long-session context remains stable without prompt bloat
+- [x] Conscious Mode reasons over both sides of the conversation coherently
+- [x] Long-session context remains stable without prompt bloat
 
 ---
 
 ## Phase 7: Response Contract Cleanup
 
-- [ ] Align runtime response schema with the newer concise prompt contract
-- [ ] Reduce dependence on legacy section-heavy response fields
-- [ ] Keep hidden reasoning structured if useful, but render short spoken output by default
-- [ ] Maintain compatibility until the old structured path is no longer needed
+- [x] Align runtime response schema with the newer concise prompt contract
+- [x] Reduce dependence on legacy section-heavy response fields
+- [x] Keep hidden reasoning structured if useful, but render short spoken output by default
+- [x] Maintain compatibility until the old structured path is no longer needed
 
 Exit criteria:
 
-- [ ] Visible output is short, conversational, and context-grounded
-- [ ] Structured wall-of-text output is no longer the default experience
+- [x] Visible output is short, conversational, and context-grounded
+- [x] Structured wall-of-text output is no longer the default experience
 
 ---
 
@@ -279,7 +283,7 @@ These should remain deferred unless Phase 1-5 evidence justifies promoting them.
 ## Success Conditions
 
 - [ ] macOS live-call audio is validated as safe enough for the assistant to coexist with Meet, Zoom, and Teams
-- [ ] Two-way conversational state is assembled reliably from persisted segments
-- [ ] Conscious Mode can reason over bidirectional context without regressing the existing interviewer trigger path
-- [ ] UI can handle both current structured output and future concise spoken output
-- [ ] The team has one execution order and one checklist
+- [x] Two-way conversational state is assembled reliably from persisted segments
+- [x] Conscious Mode can reason over bidirectional context without regressing the existing interviewer trigger path
+- [x] UI can handle both current structured output and future concise spoken output
+- [x] The team has one execution order and one checklist
