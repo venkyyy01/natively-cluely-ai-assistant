@@ -10,6 +10,7 @@ interface ScreenShareSignature {
   name: string;
   processNames: string[];
   windowTitles: string[];
+  processDetection?: 'process-or-window' | 'window-only';
 }
 
 export interface ScreenShareStatus {
@@ -104,6 +105,10 @@ export class ScreenShareDetector {
     }
 
     return this.signatures.flatMap((signature) => {
+      if (signature.processDetection === 'window-only') {
+        return [];
+      }
+
       const matches = findCaseInsensitiveMatches(stdout, signature.processNames);
       if (matches.length === 0) {
         return [];

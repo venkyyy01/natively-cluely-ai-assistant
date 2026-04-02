@@ -357,6 +357,9 @@ describe('StealthManager', () => {
         const powerMonitor = new EventEmitter();
         const intervals: Array<() => Promise<void> | void> = [];
         const timeouts: Array<() => void> = [];
+        const detections: unknown[] = [];
+        const cleared: unknown[] = [];
+        let processOutput = 'obs';
         const manager = new StealthManager(
             { enabled: true },
             {
@@ -369,23 +372,34 @@ describe('StealthManager', () => {
                     return intervals.length;
                 },
                 clearIntervalScheduler() {},
-                timeoutScheduler: (fn: () => void) => {
+                timeoutScheduler(fn: () => void) {
                     timeouts.push(fn);
                     return timeouts.length;
                 },
-                processEnumerator: async () => 'obs',
+                processEnumerator: async () => processOutput,
             } as any
         );
         const win = new FakeWindow();
+        manager.on('screen-share-detected', (payload) => {
+            detections.push(payload);
+        });
+        manager.on('screen-share-cleared', (payload) => {
+            cleared.push(payload);
+        });
 
         manager.applyToWindow(win as any, true, { role: 'primary' });
         assert.ok(intervals.length >= 1);
 
         await intervals[0]();
         assert.deepStrictEqual(win.setOpacityCalls, [0]);
+        assert.strictEqual(detections.length, 1);
 
         timeouts[0]();
         assert.deepStrictEqual(win.setOpacityCalls, [0, 1]);
+
+        processOutput = '';
+        await intervals[0]();
+        assert.strictEqual(cleared.length, 1);
         win.destroy();
     });
 
@@ -470,7 +484,7 @@ describe('StealthManager', () => {
                     return intervals.length;
                 },
                 clearIntervalScheduler() {},
-                timeoutScheduler: (fn: () => void) => {
+                timeoutScheduler(fn: () => void) {
                     timeouts.push(fn);
                     return timeouts.length;
                 },
@@ -644,7 +658,7 @@ describe('StealthManager', () => {
           return intervals.length;
         },
         clearIntervalScheduler() {},
-        timeoutScheduler: (fn: () => void) => {
+        timeoutScheduler(fn: () => void) {
           timeouts.push(fn);
           return timeouts.length;
         },

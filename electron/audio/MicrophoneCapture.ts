@@ -46,6 +46,10 @@ export class MicrophoneCapture extends EventEmitter {
         return 48000; // Safe default for most modern mics before native initialization
     }
 
+    public isCapturing(): boolean {
+        return this.isRecording;
+    }
+
     /**
      * Start capturing microphone audio
      */

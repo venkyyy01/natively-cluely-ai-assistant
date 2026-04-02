@@ -234,6 +234,7 @@ export class StealthManager extends EventEmitter {
   private scStreamMonitorHandle: unknown = null;
   private scStreamMonitorRunning = false;
   private scStreamActive = false;
+  private captureSuppressionActive = false;
   private chromiumDetector: ChromiumCaptureDetector | null = null;
   private stealthEnhancer: MacosStealthEnhancer | null = null;
   private cgWindowMonitorHandle: unknown = null;
@@ -779,6 +780,14 @@ export class StealthManager extends EventEmitter {
     this.cgWindowMonitorRunning = false;
     this.scStreamActive = false;
 
+    if (this.captureSuppressionActive) {
+      this.captureSuppressionActive = false;
+      this.clearWarning('screen_share_detected');
+      this.emit('screen-share-cleared', { platform: this.platform, reason: 'monitors-stopped' });
+    }
+
+    this.clearWarning('windows_screen_share_detected');
+
     if (this.chromiumDetector) {
       this.chromiumDetector.stop();
       this.chromiumDetector = null;
@@ -977,11 +986,28 @@ export class StealthManager extends EventEmitter {
         }
       }
 
-      if (suspiciousToolMatches.length > 0 || windowsScreenShareActive) {
+      const captureDetected = suspiciousToolMatches.length > 0 || windowsScreenShareActive;
+      if (captureDetected) {
+        if (!this.captureSuppressionActive) {
+          this.captureSuppressionActive = true;
+          this.emit('screen-share-detected', {
+            platform: this.platform,
+            suspiciousToolPatterns: suspiciousToolMatches.map((pattern) => pattern.source),
+            windowsScreenShareActive,
+          });
+        }
         this.logger.log(
           `[StealthManager] Capture watchdog detected suspicious tools running. Patterns triggered: ${suspiciousToolMatches.length}${windowsScreenShareActive ? ' + windows screen-share heuristic' : ''}`
         );
+        this.addWarning('screen_share_detected');
         this.hideAndRestoreVisibleWindows();
+        return;
+      }
+
+      if (this.captureSuppressionActive) {
+        this.captureSuppressionActive = false;
+        this.clearWarning('screen_share_detected');
+        this.emit('screen-share-cleared', { platform: this.platform });
       }
     } catch (error) {
       this.logger.warn('[StealthManager] Capture watchdog poll failed:', error);

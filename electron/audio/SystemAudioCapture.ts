@@ -60,6 +60,10 @@ export class SystemAudioCapture extends EventEmitter {
         return this.detectedSampleRate;
     }
 
+    public isCapturing(): boolean {
+        return this.isRecording;
+    }
+
     private isMonitorInitialized(): boolean {
         return Boolean(
             this.monitor &&

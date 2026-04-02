@@ -93,6 +93,34 @@ test('ScreenShareDetector returns inactive when nothing matches', async () => {
   });
 });
 
+test('ScreenShareDetector does not treat browser processes as active capture without a share window title', async () => {
+  const detector = new ScreenShareDetector({
+    platform: 'win32',
+    logger: silentLogger,
+    signatures: [
+      {
+        name: 'Chrome Screen Share',
+        processNames: ['chrome.exe'],
+        windowTitles: ['Sharing this tab'],
+        processDetection: 'window-only',
+      },
+    ],
+    execCommand: async (command) => {
+      if (command === 'tasklist') {
+        return '"chrome.exe","8124","Console","1","125,000 K"\n';
+      }
+
+      return 'Chrome|Inbox - Gmail\n';
+    },
+  });
+
+  const status = await detector.detect();
+
+  assert.equal(status.active, false);
+  assert.equal(status.source, 'heuristic');
+  assert.deepEqual(status.matches, []);
+});
+
 test('ScreenShareDetector returns the safe default when all probes fail', async () => {
   const detector = new ScreenShareDetector({
     platform: 'win32',

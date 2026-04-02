@@ -47,6 +47,7 @@
   {
     "name": "Chrome Screen Share",
     "processNames": ["chrome.exe", "msedge.exe", "brave.exe"],
-    "windowTitles": ["Google Meet", "Sharing this tab", "Screen sharing"]
+    "windowTitles": ["Google Meet", "Sharing this tab", "Screen sharing"],
+    "processDetection": "window-only"
   }
 ]

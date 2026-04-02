@@ -182,6 +182,11 @@ import {
   restartMeetingAudioStreamsAfterReconfigure as restartMeetingAudioStreamsAfterReconfigureHelper,
   startMeetingAudioStreams as startMeetingAudioStreamsHelper,
 } from "./audio/meetingAudioSequencing"
+import {
+  pauseAudioForStealth,
+  resumeAudioAfterStealth,
+  type StealthAudioPauseSnapshot,
+} from "./audio/stealthAudioCoordinator"
 import { AudioDevices, type AudioDevice } from "./audio/AudioDevices"
 import { GoogleSTT } from "./audio/GoogleSTT"
 import { RestSTT } from "./audio/RestSTT"
@@ -465,6 +470,12 @@ this.stealthManager.on('stealth-degraded', (warnings: string[]) => {
   console.warn(`[Main] Stealth degraded: ${warnings.join(', ')}`);
   this._broadcastToAllWindows('stealth-degraded', warnings);
 });
+this.stealthManager.on('screen-share-detected', (payload) => {
+  this.handleStealthScreenShareDetected(payload);
+});
+this.stealthManager.on('screen-share-cleared', () => {
+  void this.handleStealthScreenShareCleared();
+});
 // 3. Initialize other helpers
 this.screenshotHelper = new ScreenshotHelper(this.view)
 this.processingHelper = new ProcessingHelper(this)
@@ -712,6 +723,69 @@ this.setupIntelligenceEvents()
     }
   }
 
+  private pauseMeetingAudioForStealth(reason: string): void {
+    if (!this.isMeetingActive || this.stealthAudioPauseSnapshot?.active) {
+      return;
+    }
+
+    this.clearAudioPipelineHealthCheck();
+    this.stealthAudioPauseSnapshot = pauseAudioForStealth({
+      systemAudioCapture: this.systemAudioCapture,
+      microphoneCapture: this.microphoneCapture,
+      clearBufferedSystemAudio: (pauseReason) => this.clearBufferedSystemAudio(pauseReason),
+    }, reason);
+    this.setNativeAudioConnected(false);
+    this.broadcast('meeting-audio-paused', {
+      reason,
+      systemPaused: this.stealthAudioPauseSnapshot.systemWasCapturing,
+      microphonePaused: this.stealthAudioPauseSnapshot.microphoneWasCapturing,
+    });
+  }
+
+  private async resumeMeetingAudioAfterStealth(reason: string): Promise<void> {
+    const snapshot = this.stealthAudioPauseSnapshot;
+    this.stealthAudioPauseSnapshot = null;
+
+    if (!snapshot?.active || !this.isMeetingActive) {
+      return;
+    }
+
+    await resumeAudioAfterStealth({
+      systemAudioCapture: this.systemAudioCapture,
+      microphoneCapture: this.microphoneCapture,
+      interviewerStt: this.googleSTT,
+      userStt: this.googleSTT_User,
+      setAudioChannelCount: safeSetAudioChannelCount,
+      beginSystemAudioBuffering: (resumeReason) => this.beginSystemAudioBuffering(resumeReason),
+      flushBufferedSystemAudio: (resumeReason) => this.flushBufferedSystemAudio(resumeReason),
+      clearBufferedSystemAudio: (resumeReason) => this.clearBufferedSystemAudio(resumeReason),
+      onError: (source, error) => {
+        void this.handleAudioCaptureError(source, error);
+      },
+    }, snapshot);
+
+    const connected =
+      (this.systemAudioCapture?.isCapturing?.() ?? false) ||
+      (this.microphoneCapture?.isCapturing?.() ?? false);
+    this.setNativeAudioConnected(connected);
+    this.scheduleAudioPipelineHealthCheck();
+    this.broadcast('meeting-audio-resumed', {
+      reason,
+      systemResumed: snapshot.systemWasCapturing,
+      microphoneResumed: snapshot.microphoneWasCapturing,
+    });
+  }
+
+  private handleStealthScreenShareDetected(payload: unknown): void {
+    this.pauseMeetingAudioForStealth('screen-share-detected');
+    this.broadcast('stealth-screen-share-detected', payload);
+  }
+
+  private async handleStealthScreenShareCleared(): Promise<void> {
+    this.broadcast('stealth-screen-share-cleared');
+    await this.resumeMeetingAudioAfterStealth('screen-share-cleared');
+  }
+
   private noteAudioChunk(source: 'system' | 'microphone'): void {
     if (source === 'system') {
       this.audioPipelineStats.systemChunks += 1;
@@ -895,6 +969,7 @@ try {
   private audioTestCapture: MicrophoneCapture | null = null; // For audio settings test
   private googleSTT: STTProvider | null = null; // Interviewer
   private googleSTT_User: STTProvider | null = null; // User
+  private stealthAudioPauseSnapshot: StealthAudioPauseSnapshot | null = null;
   private bufferSystemAudioUntilInterviewerSttReady: boolean = false;
   private bufferedSystemAudioChunks: Buffer[] = [];
   private bufferedSystemAudioSpeechEnded: boolean = false;
@@ -1830,6 +1905,7 @@ try {
     this.meetingLifecycleState = 'stopping'
     this.isMeetingActive = false; // Block new data immediately
     this.setNativeAudioConnected(false);
+    this.stealthAudioPauseSnapshot = null;
 
     // Wait for any pending meeting start operations to complete before proceeding
     // This prevents race conditions between start and end operations
@@ -1958,6 +2034,7 @@ try {
     this.meetingLifecycleState = 'idle'
     this.isMeetingActive = false
     this.setNativeAudioConnected(false)
+    this.stealthAudioPauseSnapshot = null
     this.currentMeetingId = null
     this.clearAudioPipelineHealthCheck();
 
