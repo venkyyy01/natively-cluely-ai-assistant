@@ -1,0 +1,52 @@
+[
+  {
+    "name": "Zoom",
+    "processNames": ["Zoom.exe", "zoom.exe"],
+    "windowTitles": ["You are screen sharing", "Sharing your screen", "Zoom Meeting"]
+  },
+  {
+    "name": "Microsoft Teams",
+    "processNames": ["Teams.exe", "ms-teams.exe"],
+    "windowTitles": ["Sharing your screen", "You're presenting", "Microsoft Teams"]
+  },
+  {
+    "name": "OBS Studio",
+    "processNames": ["obs64.exe", "obs32.exe"],
+    "windowTitles": ["OBS", "Studio Mode", "Start Streaming"]
+  },
+  {
+    "name": "Loom",
+    "processNames": ["Loom.exe", "Loom Helper.exe"],
+    "windowTitles": ["Loom", "Recording", "Screen Recorder"]
+  },
+  {
+    "name": "Webex",
+    "processNames": ["Webex.exe", "CiscoCollabHost.exe"],
+    "windowTitles": ["Sharing your screen", "Webex"]
+  },
+  {
+    "name": "Slack",
+    "processNames": ["slack.exe"],
+    "windowTitles": ["Huddle", "Go Live", "Sharing your screen"]
+  },
+  {
+    "name": "Discord",
+    "processNames": ["Discord.exe", "Update.exe"],
+    "windowTitles": ["Go Live", "Streaming", "Screen Share"]
+  },
+  {
+    "name": "Snipping Tool",
+    "processNames": ["SnippingTool.exe", "ScreenClippingHost.exe"],
+    "windowTitles": ["Snipping Tool", "Screen snip"]
+  },
+  {
+    "name": "Xbox Game Bar",
+    "processNames": ["GameBar.exe", "GameBarFTServer.exe"],
+    "windowTitles": ["Capture", "Xbox Game Bar"]
+  },
+  {
+    "name": "Chrome Screen Share",
+    "processNames": ["chrome.exe", "msedge.exe", "brave.exe"],
+    "windowTitles": ["Google Meet", "Sharing this tab", "Screen sharing"]
+  }
+]
