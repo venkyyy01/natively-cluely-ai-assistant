@@ -461,8 +461,12 @@ export class SessionTracker {
     setConsciousModeEnabled(enabled: boolean): void {
         this.consciousModeEnabled = enabled;
         if (!enabled) {
+            // Treat mode-off as a hard boundary for derived reasoning state so
+            // an OFF -> ON toggle cannot inherit stale Conscious threads/phases.
             this.latestConsciousResponse = null;
             this.activeReasoningThread = null;
+            this.threadManager.reset();
+            this.phaseDetector.reset();
         }
     }
 

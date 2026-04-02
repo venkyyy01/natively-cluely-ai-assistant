@@ -664,6 +664,8 @@ export class IntelligenceEngine extends EventEmitter {
                     ? { qualifies: true, threadAction: 'start' as const }
                     : classifyConsciousModeQuestion(resolvedQuestion, activeReasoningThread))
                 : { qualifies: false, threadAction: 'ignore' as const };
+            // Conscious Mode is a strict extension. Any stale or invalid structured
+            // output must degrade back to the existing standard route immediately.
             const standardRouteAfterConsciousFallback = effectiveRoute === 'conscious_answer'
                 ? selectAnswerRoute({
                     explicitManual: false,

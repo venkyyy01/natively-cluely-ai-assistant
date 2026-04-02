@@ -72,3 +72,45 @@ test('SessionTracker Conscious Integration - should not create a new live thread
 
   assert.equal(tracker.getThreadManager().getActiveThread(), null);
 });
+
+test('SessionTracker Conscious Integration - should clear derived Conscious state on mode-off without clearing transcript history', () => {
+  const tracker = new SessionTracker();
+  tracker.setConsciousModeEnabled(true);
+
+  tracker.handleTranscript({
+    speaker: 'interviewer',
+    text: 'Let me walk through the high level architecture and main components',
+    timestamp: Date.now(),
+    final: true,
+  });
+  tracker.recordConsciousResponse('How would you design this system?', {
+    mode: 'reasoning_first',
+    openingReasoning: 'I would start by clarifying scale and consistency constraints.',
+    implementationPlan: ['Define the write path first'],
+    tradeoffs: ['More moving pieces'],
+    edgeCases: [],
+    scaleConsiderations: [],
+    pushbackResponses: [],
+    likelyFollowUps: [],
+    codeTransition: '',
+  }, 'start');
+
+  assert.equal(tracker.getCurrentPhase(), 'high_level_design');
+  assert.ok(tracker.getThreadManager().getActiveThread());
+  assert.equal(tracker.getLatestConsciousResponse()?.mode, 'reasoning_first');
+  assert.equal(tracker.getFullTranscript().length, 1);
+
+  tracker.setConsciousModeEnabled(false);
+
+  assert.equal(tracker.isConsciousModeEnabled(), false);
+  assert.equal(tracker.getLatestConsciousResponse(), null);
+  assert.equal(tracker.getActiveReasoningThread(), null);
+  assert.equal(tracker.getThreadManager().getActiveThread(), null);
+  assert.equal(tracker.getCurrentPhase(), 'requirements_gathering');
+  assert.equal(tracker.getFullTranscript().length, 1);
+
+  tracker.setConsciousModeEnabled(true);
+
+  assert.equal(tracker.getThreadManager().getActiveThread(), null);
+  assert.equal(tracker.getCurrentPhase(), 'requirements_gathering');
+});
