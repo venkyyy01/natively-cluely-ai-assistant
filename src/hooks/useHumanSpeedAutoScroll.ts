@@ -34,8 +34,7 @@ function estimateDurationMs(content: string): number {
 }
 
 function isNearBottom(container: HTMLElement): boolean {
-  // With flex-col-reverse, scrollTop=0 is at the visual bottom (newest messages)
-  // Check if we're near scrollTop=0 (the top of newest messages)
+  // The latest rendered message lives at the top edge of the scroll container.
   return Math.abs(container.scrollTop) <= RESUME_THRESHOLD_PX;
 }
 
@@ -112,7 +111,7 @@ export function useHumanSpeedAutoScroll({
         previousMessageId === null || userIsNearBottom || (!isUserPaused && followLatestRef.current);
 
       if (shouldFollowNewMessage) {
-        // With flex-col-reverse, newest messages are at scrollTop=0
+        // Auto-follow keeps the newest response pinned at the top edge.
         programmaticScrollUntilRef.current = Date.now() + PROGRAMMATIC_SCROLL_GRACE_MS;
         container.scrollTo({ top: 0, behavior: 'smooth' });
         manualPauseUntilRef.current = 0;
@@ -144,7 +143,7 @@ export function useHumanSpeedAutoScroll({
         lastTimestampRef.current = timestamp;
       }
 
-      // With flex-col-reverse, keep scroll at top (scrollTop=0) for newest messages
+      // Streaming content should stay mounted at the top while it grows.
       programmaticScrollUntilRef.current = Date.now() + PROGRAMMATIC_SCROLL_GRACE_MS;
       container.scrollTop = 0;
 

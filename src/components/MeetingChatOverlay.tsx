@@ -21,6 +21,7 @@ interface Message {
     id: string;
     role: 'user' | 'assistant';
     content: string;
+    createdAt: number;
     isStreaming?: boolean;
 }
 
@@ -78,7 +79,7 @@ const UserMessage: React.FC<{ content: string }> = ({ content }) => (
         transition={{ duration: 0.15 }}
         className="flex justify-end mb-6"
     >
-        <div className="bg-accent-primary text-white px-5 py-3 rounded-2xl rounded-tr-md max-w-[70%] text-[15px] leading-relaxed">
+        <div className="bg-accent-primary text-white px-5 py-3 rounded-2xl rounded-tr-md max-w-[70%] text-[17.5px] leading-[1.72]">
             {content}
         </div>
     </motion.div>
@@ -104,7 +105,7 @@ const AssistantMessage: React.FC<{ content: string; isStreaming?: boolean }> = (
             transition={{ duration: 0.15 }}
             className="flex flex-col items-start mb-6"
         >
-            <div className="text-text-primary text-[15px] leading-relaxed max-w-[85%]">
+            <div className="text-text-primary text-[17.5px] leading-[1.72] max-w-[85%]">
                 <div className="markdown-content">
                     <ReactMarkdown
                         remarkPlugins={[remarkGfm, remarkMath]}
@@ -132,15 +133,15 @@ const AssistantMessage: React.FC<{ content: string; isStreaming?: boolean }> = (
                                                 customStyle={{
                                                     margin: 0,
                                                     borderRadius: 0,
-                                                    fontSize: '13px',
-                                                    lineHeight: '1.6',
+                                                        fontSize: '15.25px',
+                                                        lineHeight: '1.72',
                                                     background: 'transparent',
                                                     padding: '16px',
                                                     fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace'
                                                 }}
                                                 wrapLongLines={true}
                                                 showLineNumbers={true}
-                                                lineNumberStyle={{ minWidth: '2.5em', paddingRight: '1.2em', color: 'rgba(255,255,255,0.2)', textAlign: 'right', fontSize: '11px' }}
+                                                lineNumberStyle={{ minWidth: '2.5em', paddingRight: '1.2em', color: 'rgba(255,255,255,0.2)', textAlign: 'right', fontSize: '12.75px' }}
                                                 {...props}
                                             >
                                                 {String(children).replace(/\n$/, '')}
@@ -148,7 +149,7 @@ const AssistantMessage: React.FC<{ content: string; isStreaming?: boolean }> = (
                                         </div>
                                     </div>
                                 ) : (
-                                    <code className="bg-bg-tertiary px-1.5 py-0.5 rounded text-[13px] font-mono text-text-primary border border-border-subtle whitespace-pre-wrap" {...props}>
+                                    <code className="bg-bg-tertiary px-1.5 py-0.5 rounded text-[15.25px] font-mono text-text-primary border border-border-subtle whitespace-pre-wrap" {...props}>
                                         {children}
                                     </code>
                                 );
@@ -198,7 +199,7 @@ const MeetingChatOverlay: React.FC<MeetingChatOverlayProps> = ({
     const scrollContainerRef = useRef<HTMLDivElement>(null);
     const streamBuffer = useStreamBuffer();
 
-    const latestReadableMessage = [...messages].reverse().find(msg => msg.role === 'assistant') || null;
+    const latestReadableMessage = messages.find(msg => msg.role === 'assistant') || null;
 
     useHumanSpeedAutoScroll({
         enabled: isOpen,
@@ -297,9 +298,10 @@ const MeetingChatOverlay: React.FC<MeetingChatOverlayProps> = ({
         const userMessage: Message = {
             id: `user-${Date.now()}`,
             role: 'user',
-            content: question
+            content: question,
+            createdAt: Date.now()
         };
-        setMessages(prev => [...prev, userMessage]);
+        setMessages(prev => [userMessage, ...prev]);
         setChatState('waiting_for_llm');
         setErrorMessage(null);
 
@@ -307,12 +309,13 @@ const MeetingChatOverlay: React.FC<MeetingChatOverlayProps> = ({
 
         try {
             // Create assistant message placeholder
-            setMessages(prev => [...prev, {
+            setMessages(prev => [{
                 id: assistantMessageId,
                 role: 'assistant',
                 content: '',
+                createdAt: Date.now(),
                 isStreaming: true
-            }]);
+            }, ...prev]);
 
             // Set up RAG streaming listeners (RAF-batched to avoid per-token re-renders)
             streamBuffer.reset();
@@ -526,22 +529,21 @@ ${contextString}`;
                         </div>
 
                         {/* Messages area - scrollable */}
-                        <div ref={scrollContainerRef} className="flex-1 overflow-y-auto px-6 py-4 pb-32 custom-scrollbar flex flex-col-reverse">
+                        <div ref={scrollContainerRef} className="flex-1 overflow-y-auto px-6 py-4 pb-32 custom-scrollbar flex flex-col">
                             <AnimatePresence initial={false}>
-                                {messages.slice().reverse().map((msg) => (
+                                {messages.map((msg) => (
                                     <motion.div
                                         key={msg.id}
                                         data-autoscroll-message-id={msg.id}
-                                        initial={{ opacity: 0, y: -20 }}
+                                        initial={{ opacity: 0, y: -8 }}
                                         animate={{ opacity: 1, y: 0 }}
-                                        exit={{ opacity: 0, y: -20 }}
+                                        exit={{ opacity: 0, y: -4 }}
                                         transition={{ 
-                                            type: "spring",
-                                            stiffness: 500,
-                                            damping: 30,
-                                            mass: 0.5
+                                            opacity: { duration: 0.12, ease: [0.22, 1, 0.36, 1] },
+                                            y: { duration: 0.16, ease: [0.22, 1, 0.36, 1] },
+                                            layout: { duration: 0.18, ease: [0.22, 1, 0.36, 1] }
                                         }}
-                                        layout
+                                        layout="position"
                                     >
                                         {msg.role === 'user'
                                             ? <UserMessage content={msg.content} />
@@ -549,8 +551,6 @@ ${contextString}`;
                                     </motion.div>
                                 ))}
                             </AnimatePresence>
-
-                            {chatState === 'waiting_for_llm' && <TypingIndicator />}
 
                             {errorMessage && (
                                 <motion.div

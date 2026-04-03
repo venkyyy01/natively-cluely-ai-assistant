@@ -57,6 +57,7 @@ interface Message {
     id: string;
     role: 'user' | 'system' | 'interviewer';
     text: string;
+    createdAt: number;
     isStreaming?: boolean;
     hasScreenshot?: boolean;
     screenshotPreview?: string;
@@ -81,6 +82,53 @@ function appendRollingTranscript(existing: string, nextSegment: string): string 
     }
 
     return combined.slice(combined.length - MAX_ROLLING_TRANSCRIPT_CHARS);
+}
+
+function createMessage(message: Omit<Message, 'createdAt'>): Message {
+    return {
+        ...message,
+        createdAt: Date.now(),
+    };
+}
+
+function prependMessage(prev: Message[], message: Omit<Message, 'createdAt'>): Message[] {
+    return [createMessage(message), ...prev];
+}
+
+function updateTopMessage(
+    prev: Message[],
+    predicate: (message: Message) => boolean,
+    updater: (message: Message) => Message
+): Message[] {
+    const [latestMessage, ...rest] = prev;
+    if (!latestMessage || !predicate(latestMessage)) {
+        return prev;
+    }
+
+    return [updater(latestMessage), ...rest];
+}
+
+function prependOrUpdateTopMessage(
+    prev: Message[],
+    predicate: (message: Message) => boolean,
+    updater: (message: Message) => Message,
+    fallbackMessage: Omit<Message, 'createdAt'>
+): Message[] {
+    const updatedMessages = updateTopMessage(prev, predicate, updater);
+    if (updatedMessages !== prev) {
+        return updatedMessages;
+    }
+
+    return prependMessage(prev, fallbackMessage);
+}
+
+function replaceTopStreamingPlaceholder(prev: Message[], message: Omit<Message, 'createdAt'>): Message[] {
+    const [latestMessage, ...rest] = prev;
+    if (latestMessage && latestMessage.isStreaming && latestMessage.text === '') {
+        return [createMessage(message), ...rest];
+    }
+
+    return prependMessage(prev, message);
 }
 
 interface NativelyInterfaceProps {
@@ -276,7 +324,7 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
         return () => clearTimeout(timer);
     }, []);
 
-    const latestReadableMessage = [...messages].reverse().find(msg => msg.role === 'system') || null;
+    const latestReadableMessage = messages.find(msg => msg.role === 'system') || null;
 
     useHumanSpeedAutoScroll({
         enabled: isExpanded,
@@ -519,48 +567,41 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
 
         cleanups.push(window.electronAPI.onSuggestionGenerated((data) => {
             setIsProcessing(false);
-            setMessages(prev => [...prev, {
+            setMessages(prev => prependMessage(prev, {
                 id: Date.now().toString(),
                 role: 'system',
                 text: data.suggestion
-            }]);
+            }));
         }));
 
         cleanups.push(window.electronAPI.onSuggestionError((err) => {
             setIsProcessing(false);
-            setMessages(prev => [...prev, {
+            setMessages(prev => prependMessage(prev, {
                 id: Date.now().toString(),
                 role: 'system',
                 text: `Error: ${err.error}`
-            }]);
+            }));
         }));
 
 
 
         cleanups.push(window.electronAPI.onIntelligenceSuggestedAnswerToken((data) => {
             // Progressive update for 'what_to_answer' mode
-            setMessages(prev => {
-                const lastMsg = prev[prev.length - 1];
-
-                // If we already have a streaming message for this intent, append
-                if (lastMsg && lastMsg.isStreaming && lastMsg.intent === 'what_to_answer') {
-                    const updated = [...prev];
-                    updated[prev.length - 1] = {
-                        ...lastMsg,
-                        text: lastMsg.text + data.token
-                    };
-                    return updated;
-                }
-
-                // Otherwise, start a new one (First token)
-                return [...prev, {
+            setMessages(prev => prependOrUpdateTopMessage(
+                prev,
+                message => Boolean(message.isStreaming && message.intent === 'what_to_answer'),
+                message => ({
+                    ...message,
+                    text: message.text + data.token
+                }),
+                {
                     id: Date.now().toString(),
                     role: 'system',
                     text: data.token,
                     intent: 'what_to_answer',
                     isStreaming: true
-                }];
-            });
+                }
+            ));
         }));
 
         cleanups.push(window.electronAPI.onIntelligenceSuggestedAnswer((data) => {
@@ -591,118 +632,97 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
                 activeConsciousThreadRef.current = null;
             }
 
-            setMessages(prev => {
-                const lastMsg = prev[prev.length - 1];
-
-                // If we were streaming, finalize it
-                if (lastMsg && lastMsg.isStreaming && lastMsg.intent === 'what_to_answer') {
-                    // Start new array to avoid mutation
-                    const updated = [...prev];
-                    updated[prev.length - 1] = {
-                        ...lastMsg,
-                        text: data.answer, // Ensure final consistency
-                        isStreaming: false
-                    };
-                    return updated;
-                }
-
-                // If we missed the stream (or not streaming), append fresh
-                return [...prev, {
+            setMessages(prev => prependOrUpdateTopMessage(
+                prev,
+                message => Boolean(message.isStreaming && message.intent === 'what_to_answer'),
+                message => ({
+                    ...message,
+                    text: data.answer,
+                    isStreaming: false
+                }),
+                {
                     id: Date.now().toString(),
                     role: 'system',
-                    text: data.answer,  // Plain text, no markdown - ready to speak
+                    text: data.answer,
                     intent: 'what_to_answer'
-                }];
-            });
+                }
+            ));
         }));
 
         // STREAMING: Refinement
         cleanups.push(window.electronAPI.onIntelligenceRefinedAnswerToken((data) => {
-            setMessages(prev => {
-                const lastMsg = prev[prev.length - 1];
-                if (lastMsg && lastMsg.isStreaming && lastMsg.intent === data.intent) {
-                    const updated = [...prev];
-                    updated[prev.length - 1] = {
-                        ...lastMsg,
-                        text: lastMsg.text + data.token
-                    };
-                    return updated;
-                }
-                // New stream start (e.g. user clicked Shorten)
-                return [...prev, {
+            setMessages(prev => prependOrUpdateTopMessage(
+                prev,
+                message => Boolean(message.isStreaming && message.intent === data.intent),
+                message => ({
+                    ...message,
+                    text: message.text + data.token
+                }),
+                {
                     id: Date.now().toString(),
                     role: 'system',
                     text: data.token,
                     intent: data.intent,
                     isStreaming: true
-                }];
-            });
+                }
+            ));
         }));
 
         cleanups.push(window.electronAPI.onIntelligenceRefinedAnswer((data) => {
             setIsProcessing(false);
-            setMessages(prev => {
-                const lastMsg = prev[prev.length - 1];
-                if (lastMsg && lastMsg.isStreaming && lastMsg.intent === data.intent) {
-                    const updated = [...prev];
-                    updated[prev.length - 1] = {
-                        ...lastMsg,
-                        text: data.answer,
-                        isStreaming: false
-                    };
-                    return updated;
-                }
-                return [...prev, {
+            setMessages(prev => prependOrUpdateTopMessage(
+                prev,
+                message => Boolean(message.isStreaming && message.intent === data.intent),
+                message => ({
+                    ...message,
+                    text: data.answer,
+                    isStreaming: false
+                }),
+                {
                     id: Date.now().toString(),
                     role: 'system',
                     text: data.answer,
                     intent: data.intent
-                }];
-            });
+                }
+            ));
         }));
 
         // STREAMING: Recap
         cleanups.push(window.electronAPI.onIntelligenceRecapToken((data) => {
-            setMessages(prev => {
-                const lastMsg = prev[prev.length - 1];
-                if (lastMsg && lastMsg.isStreaming && lastMsg.intent === 'recap') {
-                    const updated = [...prev];
-                    updated[prev.length - 1] = {
-                        ...lastMsg,
-                        text: lastMsg.text + data.token
-                    };
-                    return updated;
-                }
-                return [...prev, {
+            setMessages(prev => prependOrUpdateTopMessage(
+                prev,
+                message => Boolean(message.isStreaming && message.intent === 'recap'),
+                message => ({
+                    ...message,
+                    text: message.text + data.token
+                }),
+                {
                     id: Date.now().toString(),
                     role: 'system',
                     text: data.token,
                     intent: 'recap',
                     isStreaming: true
-                }];
-            });
+                }
+            ));
         }));
 
         cleanups.push(window.electronAPI.onIntelligenceRecap((data) => {
             setIsProcessing(false);
-            setMessages(prev => {
-                const lastMsg = prev[prev.length - 1];
-                if (lastMsg && lastMsg.isStreaming && lastMsg.intent === 'recap') {
-                    const updated = [...prev];
-                    updated[prev.length - 1] = {
-                        ...lastMsg,
-                        text: data.summary,
-                        isStreaming: false
-                    };
-                    return updated;
-                }
-                return [...prev, {
+            setMessages(prev => prependOrUpdateTopMessage(
+                prev,
+                message => Boolean(message.isStreaming && message.intent === 'recap'),
+                message => ({
+                    ...message,
+                    text: data.summary,
+                    isStreaming: false
+                }),
+                {
                     id: Date.now().toString(),
                     role: 'system',
                     text: data.summary,
                     intent: 'recap'
-                }];
-            });
+                }
+            ));
         }));
 
         // STREAMING: Follow-Up Questions (Rendered as message? Or specific UI?)
@@ -718,65 +738,59 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
         // Assuming it's a message for consistency with "Copilot" approach.
 
         cleanups.push(window.electronAPI.onIntelligenceFollowUpQuestionsToken((data) => {
-            setMessages(prev => {
-                const lastMsg = prev[prev.length - 1];
-                if (lastMsg && lastMsg.isStreaming && lastMsg.intent === 'follow_up_questions') {
-                    const updated = [...prev];
-                    updated[prev.length - 1] = {
-                        ...lastMsg,
-                        text: lastMsg.text + data.token
-                    };
-                    return updated;
-                }
-                return [...prev, {
+            setMessages(prev => prependOrUpdateTopMessage(
+                prev,
+                message => Boolean(message.isStreaming && message.intent === 'follow_up_questions'),
+                message => ({
+                    ...message,
+                    text: message.text + data.token
+                }),
+                {
                     id: Date.now().toString(),
                     role: 'system',
                     text: data.token,
                     intent: 'follow_up_questions',
                     isStreaming: true
-                }];
-            });
+                }
+            ));
         }));
 
         cleanups.push(window.electronAPI.onIntelligenceFollowUpQuestionsUpdate((data) => {
             // This event name is slightly different ('update' vs 'answer')
             setIsProcessing(false);
-            setMessages(prev => {
-                const lastMsg = prev[prev.length - 1];
-                if (lastMsg && lastMsg.isStreaming && lastMsg.intent === 'follow_up_questions') {
-                    const updated = [...prev];
-                    updated[prev.length - 1] = {
-                        ...lastMsg,
-                        text: data.questions,
-                        isStreaming: false
-                    };
-                    return updated;
-                }
-                return [...prev, {
+            setMessages(prev => prependOrUpdateTopMessage(
+                prev,
+                message => Boolean(message.isStreaming && message.intent === 'follow_up_questions'),
+                message => ({
+                    ...message,
+                    text: data.questions,
+                    isStreaming: false
+                }),
+                {
                     id: Date.now().toString(),
                     role: 'system',
                     text: data.questions,
                     intent: 'follow_up_questions'
-                }];
-            });
+                }
+            ));
         }));
 
         cleanups.push(window.electronAPI.onIntelligenceManualResult((data) => {
             setIsProcessing(false);
-            setMessages(prev => [...prev, {
+            setMessages(prev => prependMessage(prev, {
                 id: Date.now().toString(),
                 role: 'system',
                 text: `🎯 **Answer:**\n\n${data.answer}`
-            }]);
+            }));
         }));
 
         cleanups.push(window.electronAPI.onIntelligenceError((data) => {
             setIsProcessing(false);
-            setMessages(prev => [...prev, {
+            setMessages(prev => prependMessage(prev, {
                 id: Date.now().toString(),
                 role: 'system',
                 text: `❌ Error (${data.mode}): ${data.error}`
-            }]);
+            }));
         }));
         // Screenshot taken - attach to chat input instead of auto-analyzing
         cleanups.push(electronAPI.onScreenshotTaken(handleScreenshotAttach));
@@ -807,24 +821,33 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
         if (currentAttachments.length > 0) {
             setAttachedContext([]);
             // Show the attached image in chat
-            setMessages(prev => [...prev, {
+            setMessages(prev => prependMessage(prev, {
                 id: Date.now().toString(),
                 role: 'user',
                 text: 'What should I say about this?',
                 hasScreenshot: true,
                 screenshotPreview: currentAttachments[0].preview
-            }]);
+            }));
         }
+
+        setMessages(prev => prependMessage(prev, {
+            id: Date.now().toString(),
+            role: 'system',
+            text: '',
+            intent: 'what_to_answer',
+            isStreaming: true
+        }));
 
         try {
             // Pass imagePath if attached
             await window.electronAPI.generateWhatToSay(undefined, currentAttachments.length > 0 ? currentAttachments.map(s => s.path) : undefined);
         } catch (err) {
-            setMessages(prev => [...prev, {
+            setMessages(prev => replaceTopStreamingPlaceholder(prev, {
                 id: Date.now().toString(),
                 role: 'system',
-                text: `Error: ${err}`
-            }]);
+                text: `Error: ${err}`,
+                intent: 'what_to_answer'
+            }));
         } finally {
             setIsProcessing(false);
         }
@@ -835,14 +858,23 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
         setIsProcessing(true);
         analytics.trackCommandExecuted('follow_up_' + intent);
 
+        setMessages(prev => prependMessage(prev, {
+            id: Date.now().toString(),
+            role: 'system',
+            text: '',
+            intent,
+            isStreaming: true
+        }));
+
         try {
             await window.electronAPI.generateFollowUp(intent);
         } catch (err) {
-            setMessages(prev => [...prev, {
+            setMessages(prev => replaceTopStreamingPlaceholder(prev, {
                 id: Date.now().toString(),
                 role: 'system',
-                text: `Error: ${err}`
-            }]);
+                text: `Error: ${err}`,
+                intent
+            }));
         } finally {
             setIsProcessing(false);
         }
@@ -853,14 +885,23 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
         setIsProcessing(true);
         analytics.trackCommandExecuted('recap');
 
+        setMessages(prev => prependMessage(prev, {
+            id: Date.now().toString(),
+            role: 'system',
+            text: '',
+            intent: 'recap',
+            isStreaming: true
+        }));
+
         try {
             await window.electronAPI.generateRecap();
         } catch (err) {
-            setMessages(prev => [...prev, {
+            setMessages(prev => replaceTopStreamingPlaceholder(prev, {
                 id: Date.now().toString(),
                 role: 'system',
-                text: `Error: ${err}`
-            }]);
+                text: `Error: ${err}`,
+                intent: 'recap'
+            }));
         } finally {
             setIsProcessing(false);
         }
@@ -871,14 +912,23 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
         setIsProcessing(true);
         analytics.trackCommandExecuted('suggest_questions');
 
+        setMessages(prev => prependMessage(prev, {
+            id: Date.now().toString(),
+            role: 'system',
+            text: '',
+            intent: 'follow_up_questions',
+            isStreaming: true
+        }));
+
         try {
             await window.electronAPI.generateFollowUpQuestions();
         } catch (err) {
-            setMessages(prev => [...prev, {
+            setMessages(prev => replaceTopStreamingPlaceholder(prev, {
                 id: Date.now().toString(),
                 role: 'system',
-                text: `Error: ${err}`
-            }]);
+                text: `Error: ${err}`,
+                intent: 'follow_up_questions'
+            }));
         } finally {
             setIsProcessing(false);
         }
@@ -891,22 +941,15 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
 
         // Stream Token
         cleanups.push(window.electronAPI.onGeminiStreamToken((token) => {
-            setMessages(prev => {
-                const lastMsg = prev[prev.length - 1];
-                // Should we be updating the last message or finding the specific streaming one?
-                // Assuming the last added message is the one we are streaming into.
-                if (lastMsg && lastMsg.isStreaming && lastMsg.role === 'system') {
-                    const updated = [...prev];
-                    updated[prev.length - 1] = {
-                        ...lastMsg,
-                        text: lastMsg.text + token,
-                        // re-check code status on every token? Expensive but needed for progressive highlighting
-                        isCode: (lastMsg.text + token).includes('```') || (lastMsg.text + token).includes('def ') || (lastMsg.text + token).includes('function ')
-                    };
-                    return updated;
-                }
-                return prev;
-            });
+            setMessages(prev => updateTopMessage(
+                prev,
+                message => Boolean(message.isStreaming && message.role === 'system'),
+                message => ({
+                    ...message,
+                    text: message.text + token,
+                    isCode: (message.text + token).includes('```') || (message.text + token).includes('def ') || (message.text + token).includes('function ')
+                })
+            ));
         }));
 
         // Stream Done
@@ -927,63 +970,48 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
                 latency_ms: latency
             });
 
-            setMessages(prev => {
-                const lastMsg = prev[prev.length - 1];
-                if (lastMsg && lastMsg.isStreaming) {
-                    const updated = [...prev];
-                    updated[prev.length - 1] = {
-                        ...lastMsg,
-                        isStreaming: false
-                    };
-                    return updated;
-                }
-                return prev;
-            });
+            setMessages(prev => updateTopMessage(
+                prev,
+                message => Boolean(message.isStreaming),
+                message => ({
+                    ...message,
+                    isStreaming: false
+                })
+            ));
         }));
 
         // Stream Error
         cleanups.push(window.electronAPI.onGeminiStreamError((error) => {
             setIsProcessing(false);
             requestStartTimeRef.current = null; // Clear timer on error
-            setMessages(prev => {
-                // Append error to the current message or add new one?
-                // Let's add a new error block if the previous one confusing,
-                // or just update status.
-                // Ideally we want to show the partial response AND the error.
-                const lastMsg = prev[prev.length - 1];
-                if (lastMsg && lastMsg.isStreaming) {
-                    const updated = [...prev];
-                    updated[prev.length - 1] = {
-                        ...lastMsg,
-                        isStreaming: false,
-                        text: lastMsg.text + `\n\n[Error: ${error}]`
-                    };
-                    return updated;
-                }
-                return [...prev, {
+            setMessages(prev => prependOrUpdateTopMessage(
+                prev,
+                message => Boolean(message.isStreaming),
+                message => ({
+                    ...message,
+                    isStreaming: false,
+                    text: message.text + `\n\n[Error: ${error}]`
+                }),
+                {
                     id: Date.now().toString(),
                     role: 'system',
                     text: `❌ Error: ${error}`
-                }];
-            });
+                }
+            ));
         }));
 
         // JIT RAG Stream listeners (for live meeting RAG responses)
         if (window.electronAPI.onRAGStreamChunk) {
             cleanups.push(window.electronAPI.onRAGStreamChunk((data: { chunk: string }) => {
-                setMessages(prev => {
-                    const lastMsg = prev[prev.length - 1];
-                    if (lastMsg && lastMsg.isStreaming && lastMsg.role === 'system') {
-                        const updated = [...prev];
-                        updated[prev.length - 1] = {
-                            ...lastMsg,
-                            text: lastMsg.text + data.chunk,
-                            isCode: (lastMsg.text + data.chunk).includes('```')
-                        };
-                        return updated;
-                    }
-                    return prev;
-                });
+                setMessages(prev => updateTopMessage(
+                    prev,
+                    message => Boolean(message.isStreaming && message.role === 'system'),
+                    message => ({
+                        ...message,
+                        text: message.text + data.chunk,
+                        isCode: (message.text + data.chunk).includes('```')
+                    })
+                ));
             }));
         }
 
@@ -991,15 +1019,14 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
             cleanups.push(window.electronAPI.onRAGStreamComplete(() => {
                 setIsProcessing(false);
                 requestStartTimeRef.current = null;
-                setMessages(prev => {
-                    const lastMsg = prev[prev.length - 1];
-                    if (lastMsg && lastMsg.isStreaming) {
-                        const updated = [...prev];
-                        updated[prev.length - 1] = { ...lastMsg, isStreaming: false };
-                        return updated;
-                    }
-                    return prev;
-                });
+                setMessages(prev => updateTopMessage(
+                    prev,
+                    message => Boolean(message.isStreaming),
+                    message => ({
+                        ...message,
+                        isStreaming: false
+                    })
+                ));
             }));
         }
 
@@ -1007,19 +1034,15 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
             cleanups.push(window.electronAPI.onRAGStreamError((data: { error: string }) => {
                 setIsProcessing(false);
                 requestStartTimeRef.current = null;
-                setMessages(prev => {
-                    const lastMsg = prev[prev.length - 1];
-                    if (lastMsg && lastMsg.isStreaming) {
-                        const updated = [...prev];
-                        updated[prev.length - 1] = {
-                            ...lastMsg,
-                            isStreaming: false,
-                            text: lastMsg.text + `\n\n[RAG Error: ${data.error}]`
-                        };
-                        return updated;
-                    }
-                    return prev;
-                });
+                setMessages(prev => updateTopMessage(
+                    prev,
+                    message => Boolean(message.isStreaming),
+                    message => ({
+                        ...message,
+                        isStreaming: false,
+                        text: message.text + `\n\n[RAG Error: ${data.error}]`
+                    })
+                ));
             }));
         }
 
@@ -1049,32 +1072,32 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
 
             if (!question && currentAttachments.length === 0) {
                 // No voice input and no image
-                setMessages(prev => [...prev, {
+                setMessages(prev => prependMessage(prev, {
                     id: Date.now().toString(),
                     role: 'system',
                     text: nativeAudioStatus.connected
                         ? '⚠️ No speech detected. Try speaking closer to your microphone.'
                         : '⚠️ Audio pipeline is disconnected. Start a meeting or fix audio setup before using Answer.'
-                }]);
+                }));
                 return;
             }
 
             // Show user's spoken question
-            setMessages(prev => [...prev, {
+            setMessages(prev => prependMessage(prev, {
                 id: Date.now().toString(),
                 role: 'user',
                 text: question,
                 hasScreenshot: currentAttachments.length > 0,
                 screenshotPreview: currentAttachments[0]?.preview
-            }]);
+            }));
 
             // Add placeholder for streaming response
-            setMessages(prev => [...prev, {
+            setMessages(prev => prependMessage(prev, {
                 id: Date.now().toString(),
                 role: 'system',
                 text: '',
                 isStreaming: true
-            }]);
+            }));
 
             setIsProcessing(true);
 
@@ -1119,31 +1142,20 @@ Provide only the answer, nothing else.`;
             } catch (err) {
                 // Initial invocation failing (e.g. IPC error before stream starts)
                 setIsProcessing(false);
-                setMessages(prev => {
-                    const last = prev[prev.length - 1];
-                    // If we just added the empty streaming placeholder, remove it or fill it with error
-                    if (last && last.isStreaming && last.text === '') {
-                        return prev.slice(0, -1).concat({
-                            id: Date.now().toString(),
-                            role: 'system',
-                            text: `❌ Error starting stream: ${err}`
-                        });
-                    }
-                    return [...prev, {
-                        id: Date.now().toString(),
-                        role: 'system',
-                        text: `❌ Error: ${err}`
-                    }];
-                });
+                setMessages(prev => replaceTopStreamingPlaceholder(prev, {
+                    id: Date.now().toString(),
+                    role: 'system',
+                    text: `❌ Error starting stream: ${err}`
+                }));
             }
         } else {
             const nativeAudioStatus = await window.electronAPI.getNativeAudioStatus().catch(() => ({ connected: false }));
             if (!nativeAudioStatus.connected) {
-                setMessages(prev => [...prev, {
+                setMessages(prev => prependMessage(prev, {
                     id: Date.now().toString(),
                     role: 'system',
                     text: '⚠️ Audio pipeline is disconnected. Start a meeting or fix audio setup before using Answer.'
-                }]);
+                }));
                 return;
             }
 
@@ -1175,21 +1187,21 @@ Provide only the answer, nothing else.`;
         setInputValue('');
         setAttachedContext([]);
 
-        setMessages(prev => [...prev, {
+        setMessages(prev => prependMessage(prev, {
             id: Date.now().toString(),
             role: 'user',
             text: userText || (currentAttachments.length > 0 ? 'Analyze this screenshot' : ''),
             hasScreenshot: currentAttachments.length > 0,
             screenshotPreview: currentAttachments[0]?.preview
-        }]);
+        }));
 
         // Add placeholder for streaming response
-        setMessages(prev => [...prev, {
+        setMessages(prev => prependMessage(prev, {
             id: Date.now().toString(),
             role: 'system',
             text: '',
             isStreaming: true
-        }]);
+        }));
 
         setIsExpanded(true);
         setIsProcessing(true);
@@ -1213,22 +1225,11 @@ Provide only the answer, nothing else.`;
             );
         } catch (err) {
             setIsProcessing(false);
-            setMessages(prev => {
-                const last = prev[prev.length - 1];
-                if (last && last.isStreaming && last.text === '') {
-                    // remove the empty placeholder
-                    return prev.slice(0, -1).concat({
-                        id: Date.now().toString(),
-                        role: 'system',
-                        text: `❌ Error starting stream: ${err}`
-                    });
-                }
-                return [...prev, {
-                    id: Date.now().toString(),
-                    role: 'system',
-                    text: `❌ Error: ${err}`
-                }];
-            });
+            setMessages(prev => replaceTopStreamingPlaceholder(prev, {
+                id: Date.now().toString(),
+                role: 'system',
+                text: `❌ Error starting stream: ${err}`
+            }));
         }
     };
 
@@ -1262,7 +1263,7 @@ Provide only the answer, nothing else.`;
                         <Code className="w-3.5 h-3.5" />
                         <span>Code Solution</span>
                     </div>
-                    <div className="space-y-2 text-slate-200 text-[13px] leading-relaxed">
+                    <div className="space-y-2 text-slate-200 text-[15.25px] leading-[1.72]">
                         {parts.map((part, i) => {
                             if (part.startsWith('```')) {
                                 const match = part.match(/```(\w+)?\n?([\s\S]*?)```/);
@@ -1284,15 +1285,15 @@ Provide only the answer, nothing else.`;
                                                     customStyle={{
                                                         margin: 0,
                                                         borderRadius: 0,
-                                                        fontSize: '13px',
-                                                        lineHeight: '1.6',
+                                                        fontSize: '15.25px',
+                                                        lineHeight: '1.72',
                                                         background: 'transparent',
                                                         padding: '16px',
                                                         fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace'
                                                     }}
                                                     wrapLongLines={true}
                                                     showLineNumbers={true}
-                                                    lineNumberStyle={{ minWidth: '2.5em', paddingRight: '1.2em', color: 'rgba(255,255,255,0.2)', textAlign: 'right', fontSize: '11px' }}
+                                                    lineNumberStyle={{ minWidth: '2.5em', paddingRight: '1.2em', color: 'rgba(255,255,255,0.2)', textAlign: 'right', fontSize: '12.75px' }}
                                                 >
                                                     {code}
                                                 </SyntaxHighlighter>
@@ -1317,7 +1318,7 @@ Provide only the answer, nothing else.`;
                                             h1: ({ node, ...props }: any) => <h1 className="text-lg font-bold text-white mb-2 mt-3" {...props} />,
                                             h2: ({ node, ...props }: any) => <h2 className="text-base font-bold text-white mb-2 mt-3" {...props} />,
                                             h3: ({ node, ...props }: any) => <h3 className="text-sm font-bold text-white mb-1 mt-2" {...props} />,
-                                            code: ({ node, ...props }: any) => <code className="bg-slate-700/50 rounded px-1 py-0.5 text-xs font-mono text-purple-200 whitespace-pre-wrap" {...props} />,
+                                            code: ({ node, ...props }: any) => <code className="bg-slate-700/50 rounded px-1 py-0.5 text-[15px] font-mono text-purple-200 whitespace-pre-wrap" {...props} />,
                                             blockquote: ({ node, ...props }: any) => <blockquote className="border-l-2 border-purple-500/50 pl-3 italic text-slate-400 my-2" {...props} />,
                                             a: ({ node, ...props }: any) => <a className="text-blue-400 hover:text-blue-300 hover:underline" target="_blank" rel="noopener noreferrer" {...props} />,
                                         }}
@@ -1340,7 +1341,7 @@ Provide only the answer, nothing else.`;
                         <MessageSquare className="w-3.5 h-3.5" />
                         <span>Shortened</span>
                     </div>
-                    <div className="text-slate-200 text-[13px] leading-relaxed markdown-content">
+                    <div className="text-slate-200 text-[15.25px] leading-[1.72] markdown-content">
                         <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]} components={{
                             p: ({ node, ...props }: any) => <p className="mb-2 last:mb-0" {...props} />,
                             strong: ({ node, ...props }: any) => <strong className="font-bold text-cyan-100" {...props} />,
@@ -1361,7 +1362,7 @@ Provide only the answer, nothing else.`;
                         <RefreshCw className="w-3.5 h-3.5" />
                         <span>Recap</span>
                     </div>
-                    <div className="text-slate-200 text-[13px] leading-relaxed markdown-content">
+                    <div className="text-slate-200 text-[15.25px] leading-[1.72] markdown-content">
                         <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]} components={{
                             p: ({ node, ...props }: any) => <p className="mb-2 last:mb-0" {...props} />,
                             strong: ({ node, ...props }: any) => <strong className="font-bold text-indigo-100" {...props} />,
@@ -1382,7 +1383,7 @@ Provide only the answer, nothing else.`;
                         <HelpCircle className="w-3.5 h-3.5" />
                         <span>Follow-Up Questions</span>
                     </div>
-                    <div className="text-slate-200 text-[13px] leading-relaxed markdown-content">
+                    <div className="text-slate-200 text-[15.25px] leading-[1.72] markdown-content">
                         <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]} components={{
                             p: ({ node, ...props }: any) => <p className="mb-2 last:mb-0" {...props} />,
                             strong: ({ node, ...props }: any) => <strong className="font-bold text-[#FFF9C4]" {...props} />,
@@ -1405,7 +1406,7 @@ Provide only the answer, nothing else.`;
                     <div className="flex items-center gap-2 mb-2 text-emerald-400 font-semibold text-xs uppercase tracking-wide">
                         <span>Say this</span>
                     </div>
-                    <div className="text-slate-100 text-[14px] leading-relaxed">
+                    <div className="text-slate-100 text-[16.5px] leading-[1.72]">
                         {parts.map((part, i) => {
                             if (part.startsWith('```')) {
                                 // Robust matching: handles unclosed blocks for streaming (```...$)
@@ -1593,11 +1594,11 @@ Provide only the answer, nothing else.`;
                     handleScreenshotAttach(data as { path: string; preview: string });
                 }
             } catch (err) {
-                setMessages(prev => [...prev, {
+                setMessages(prev => prependMessage(prev, {
                     id: Date.now().toString(),
                     role: 'system',
                     text: 'Unable to capture screenshot. Check Screen Recording permission in macOS Settings and try again.'
-                }]);
+                }));
                 console.error("Error triggering screenshot:", err);
             }
         },
@@ -1608,11 +1609,11 @@ Provide only the answer, nothing else.`;
                     handleScreenshotAttach(data as { path: string; preview: string });
                 }
             } catch (err) {
-                setMessages(prev => [...prev, {
+                setMessages(prev => prependMessage(prev, {
                     id: Date.now().toString(),
                     role: 'system',
                     text: 'Unable to capture area screenshot. Check Screen Recording permission in macOS Settings and try again.'
-                }]);
+                }));
                 console.error("Error triggering selective screenshot:", err);
             }
         }
@@ -1639,11 +1640,11 @@ Provide only the answer, nothing else.`;
                     handleScreenshotAttach(data as { path: string; preview: string });
                 }
             } catch (err) {
-                setMessages(prev => [...prev, {
+                setMessages(prev => prependMessage(prev, {
                     id: Date.now().toString(),
                     role: 'system',
                     text: 'Unable to capture screenshot. Check Screen Recording permission in macOS Settings and try again.'
-                }]);
+                }));
                 console.error("Error triggering screenshot:", err);
             }
         },
@@ -1654,11 +1655,11 @@ Provide only the answer, nothing else.`;
                     handleScreenshotAttach(data as { path: string; preview: string });
                 }
             } catch (err) {
-                setMessages(prev => [...prev, {
+                setMessages(prev => prependMessage(prev, {
                     id: Date.now().toString(),
                     role: 'system',
                     text: 'Unable to capture area screenshot. Check Screen Recording permission in macOS Settings and try again.'
-                }]);
+                }));
                 console.error("Error triggering selective screenshot:", err);
             }
         }
@@ -1750,25 +1751,25 @@ Provide only the answer, nothing else.`;
 
                             {/* Chat History - Only show if there are messages OR active states */}
                             {(messages.length > 0 || isManualRecording || isProcessing) && (
-                                <div ref={scrollContainerRef} className="flex-1 overflow-y-auto p-4 space-y-3 no-drag scroll-smooth custom-scrollbar flex flex-col-reverse" style={{ scrollbarWidth: 'thin', scrollBehavior: 'smooth', WebkitOverflowScrolling: 'touch', overscrollBehavior: 'contain', maxHeight: `${chatViewportHeight}px` }}>
+                                <div ref={scrollContainerRef} className="flex-1 overflow-y-auto p-4 space-y-3 no-drag scroll-smooth custom-scrollbar flex flex-col" style={{ scrollbarWidth: 'thin', scrollBehavior: 'smooth', WebkitOverflowScrolling: 'touch', overscrollBehavior: 'contain', maxHeight: `${chatViewportHeight}px` }}>
                                     <AnimatePresence initial={false}>
-                                        {messages.slice().reverse().map((msg) => (
+                                        {messages.map((msg) => (
                                             <motion.div
                                                 key={msg.id}
                                                 data-autoscroll-message-id={msg.id}
-                                                initial={{ opacity: 0, y: -20 }}
+                                                initial={{ opacity: 0, y: -8 }}
                                                 animate={{ opacity: 1, y: 0 }}
-                                                exit={{ opacity: 0, scale: 0.95 }}
+                                                exit={{ opacity: 0, y: -4 }}
                                                 transition={{
-                                                    duration: 0.3,
-                                                    ease: [0.4, 0, 0.2, 1],
-                                                    layout: { duration: 0.3 }
+                                                    opacity: { duration: 0.12, ease: [0.22, 1, 0.36, 1] },
+                                                    y: { duration: 0.16, ease: [0.22, 1, 0.36, 1] },
+                                                    layout: { duration: 0.18, ease: [0.22, 1, 0.36, 1] }
                                                 }}
-                                                layout
+                                                layout="position"
                                                 className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
                                             >
                                                 <div className={`
-                      ${msg.role === 'user' ? 'max-w-[72.25%] px-[13.6px] py-[10.2px]' : 'max-w-[85%] px-4 py-3'} text-[14px] leading-relaxed relative group whitespace-pre-wrap
+                      ${msg.role === 'user' ? 'max-w-[72.25%] px-[13.6px] py-[10.2px]' : 'max-w-[85%] px-4 py-3'} text-[16.5px] leading-[1.72] relative group whitespace-pre-wrap
                       ${msg.role === 'user'
                                                         ? 'bg-blue-600/20 backdrop-blur-md border border-blue-500/30 text-blue-100 rounded-[20px] rounded-tr-[4px] shadow-sm font-medium'
                                                         : ''

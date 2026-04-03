@@ -18,6 +18,7 @@ interface Message {
     id: string;
     role: 'user' | 'assistant';
     content: string;
+    createdAt: number;
     isStreaming?: boolean;
 }
 
@@ -62,7 +63,7 @@ const UserMessage: React.FC<{ content: string }> = ({ content }) => (
         transition={{ duration: 0.15 }}
         className="flex justify-end mb-6"
     >
-        <div className="bg-[#2C2C2E] text-white px-5 py-3 rounded-2xl rounded-tr-md max-w-[70%] text-[15px] leading-relaxed">
+        <div className="bg-[#2C2C2E] text-white px-5 py-3 rounded-2xl rounded-tr-md max-w-[70%] text-[17.5px] leading-[1.72]">
             {content}
         </div>
     </motion.div>
@@ -88,7 +89,7 @@ const AssistantMessage: React.FC<{ content: string; isStreaming?: boolean }> = (
             transition={{ duration: 0.15 }}
             className="flex flex-col items-start mb-6"
         >
-            <div className="text-text-primary text-[15px] leading-relaxed max-w-[88%]">
+            <div className="text-text-primary text-[17.5px] leading-[1.72] max-w-[88%]">
                 <div className="markdown-content">
                     <ReactMarkdown
                         remarkPlugins={[remarkGfm, remarkMath]}
@@ -103,7 +104,7 @@ const AssistantMessage: React.FC<{ content: string; isStreaming?: boolean }> = (
                             a: ({ node, ...props }: any) => <a className="text-blue-500 hover:underline" target="_blank" rel="noopener noreferrer" {...props} />,
                             pre: ({ node, ...props }: any) => (
                                 <pre
-                                    className="my-3 overflow-x-auto rounded-xl border border-border-subtle bg-bg-tertiary px-4 py-3 text-[13px] leading-relaxed"
+                                    className="my-3 overflow-x-auto rounded-xl border border-border-subtle bg-bg-tertiary px-4 py-3 text-[15.25px] leading-[1.72]"
                                     {...props}
                                 />
                             ),
@@ -112,7 +113,7 @@ const AssistantMessage: React.FC<{ content: string; isStreaming?: boolean }> = (
                                 return (
                                     <code
                                         className={isInline
-                                            ? 'rounded bg-bg-tertiary px-1.5 py-0.5 text-[13px] font-mono text-text-primary'
+                                            ? 'rounded bg-bg-tertiary px-1.5 py-0.5 text-[15.25px] font-mono text-text-primary'
                                             : 'font-mono'}
                                         {...props}
                                     />
@@ -182,7 +183,7 @@ const GlobalChatOverlay: React.FC<GlobalChatOverlayProps> = ({
         streamBuffer.reset();
     }, [streamBuffer]);
 
-    const latestReadableMessage = [...messages].reverse().find(msg => msg.role === 'assistant') || null;
+    const latestReadableMessage = messages.find(msg => msg.role === 'assistant') || null;
 
     useHumanSpeedAutoScroll({
         enabled: isOpen,
@@ -239,9 +240,10 @@ const GlobalChatOverlay: React.FC<GlobalChatOverlayProps> = ({
         const userMessage: Message = {
             id: `user-${Date.now()}`,
             role: 'user',
-            content: question
+            content: question,
+            createdAt: Date.now()
         };
-        setMessages(prev => [...prev, userMessage]);
+        setMessages(prev => [userMessage, ...prev]);
         setChatState('waiting_for_llm');
         setErrorMessage(null);
 
@@ -259,12 +261,13 @@ const GlobalChatOverlay: React.FC<GlobalChatOverlayProps> = ({
             if (!isCurrentRequest()) return;
 
             // Create assistant message placeholder
-            setMessages(prev => [...prev, {
+            setMessages(prev => [{
                 id: assistantMessageId,
                 role: 'assistant',
                 content: '',
+                createdAt: Date.now(),
                 isStreaming: true
-            }]);
+            }, ...prev]);
 
             // Set up RAG streaming listeners (RAF-batched)
             streamBuffer.reset();
@@ -431,22 +434,21 @@ const GlobalChatOverlay: React.FC<GlobalChatOverlayProps> = ({
                         </div>
 
                         {/* Messages area - scrollable */}
-                        <div ref={scrollContainerRef} className="flex-1 overflow-y-auto px-6 py-4 pb-32 custom-scrollbar flex flex-col-reverse">
+                        <div ref={scrollContainerRef} className="flex-1 overflow-y-auto px-6 py-4 pb-32 custom-scrollbar flex flex-col">
                             <AnimatePresence initial={false}>
-                                {messages.slice().reverse().map((msg) => (
+                                {messages.map((msg) => (
                                     <motion.div
                                         key={msg.id}
                                         data-autoscroll-message-id={msg.id}
-                                        initial={{ opacity: 0, y: -20 }}
+                                        initial={{ opacity: 0, y: -8 }}
                                         animate={{ opacity: 1, y: 0 }}
-                                        exit={{ opacity: 0, y: -20 }}
+                                        exit={{ opacity: 0, y: -4 }}
                                         transition={{ 
-                                            type: "spring",
-                                            stiffness: 500,
-                                            damping: 30,
-                                            mass: 0.5
+                                            opacity: { duration: 0.12, ease: [0.22, 1, 0.36, 1] },
+                                            y: { duration: 0.16, ease: [0.22, 1, 0.36, 1] },
+                                            layout: { duration: 0.18, ease: [0.22, 1, 0.36, 1] }
                                         }}
-                                        layout
+                                        layout="position"
                                     >
                                         {msg.role === 'user'
                                             ? <UserMessage content={msg.content} />
@@ -454,8 +456,6 @@ const GlobalChatOverlay: React.FC<GlobalChatOverlayProps> = ({
                                     </motion.div>
                                 ))}
                             </AnimatePresence>
-
-                            {chatState === 'waiting_for_llm' && <TypingIndicator />}
 
                             {errorMessage && (
                                 <motion.div
