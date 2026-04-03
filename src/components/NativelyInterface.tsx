@@ -288,7 +288,6 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
             isStreaming: latestReadableMessage.isStreaming,
         } : null,
         eligibleRoles: ['system'],
-        getTargetElement: (container, messageId) => container.querySelector(`[data-autoscroll-message-id="${messageId}"]`) as HTMLElement | null,
     });
 
     // Build conversation context from messages
@@ -1751,49 +1750,64 @@ Provide only the answer, nothing else.`;
 
                             {/* Chat History - Only show if there are messages OR active states */}
                             {(messages.length > 0 || isManualRecording || isProcessing) && (
-                                <div ref={scrollContainerRef} className="flex-1 overflow-y-auto p-4 space-y-3 no-drag scroll-smooth custom-scrollbar" style={{ scrollbarWidth: 'thin', scrollBehavior: 'smooth', WebkitOverflowScrolling: 'touch', overscrollBehavior: 'contain', maxHeight: `${chatViewportHeight}px` }}>
-                                    {messages.map((msg) => (
-                                        <div key={msg.id} data-autoscroll-message-id={msg.id} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'} animate-fade-in-up`}>
-                                            <div className={`
+                                <div ref={scrollContainerRef} className="flex-1 overflow-y-auto p-4 space-y-3 no-drag scroll-smooth custom-scrollbar flex flex-col-reverse" style={{ scrollbarWidth: 'thin', scrollBehavior: 'smooth', WebkitOverflowScrolling: 'touch', overscrollBehavior: 'contain', maxHeight: `${chatViewportHeight}px` }}>
+                                    <AnimatePresence initial={false}>
+                                        {messages.slice().reverse().map((msg) => (
+                                            <motion.div
+                                                key={msg.id}
+                                                data-autoscroll-message-id={msg.id}
+                                                initial={{ opacity: 0, y: -20 }}
+                                                animate={{ opacity: 1, y: 0 }}
+                                                exit={{ opacity: 0, scale: 0.95 }}
+                                                transition={{
+                                                    duration: 0.3,
+                                                    ease: [0.4, 0, 0.2, 1],
+                                                    layout: { duration: 0.3 }
+                                                }}
+                                                layout
+                                                className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
+                                            >
+                                                <div className={`
                       ${msg.role === 'user' ? 'max-w-[72.25%] px-[13.6px] py-[10.2px]' : 'max-w-[85%] px-4 py-3'} text-[14px] leading-relaxed relative group whitespace-pre-wrap
                       ${msg.role === 'user'
-                                                    ? 'bg-blue-600/20 backdrop-blur-md border border-blue-500/30 text-blue-100 rounded-[20px] rounded-tr-[4px] shadow-sm font-medium'
-                                                    : ''
-                                                }
+                                                        ? 'bg-blue-600/20 backdrop-blur-md border border-blue-500/30 text-blue-100 rounded-[20px] rounded-tr-[4px] shadow-sm font-medium'
+                                                        : ''
+                                                    }
                       ${msg.role === 'system'
-                                                    ? 'text-slate-200 font-normal'
-                                                    : ''
-                                                }
+                                                        ? 'text-slate-200 font-normal'
+                                                        : ''
+                                                    }
                       ${msg.role === 'interviewer'
-                                                    ? 'text-white/40 italic pl-0 text-[13px]'
-                                                    : ''
-                                                }
+                                                        ? 'text-white/40 italic pl-0 text-[13px]'
+                                                        : ''
+                                                    }
                     `}>
-                                                {msg.role === 'interviewer' && (
-                                                    <div className="flex items-center gap-1.5 mb-1 text-[10px] text-slate-600 font-medium uppercase tracking-wider">
-                                                        Interviewer
-                                                        {msg.isStreaming && <span className="w-1 h-1 bg-green-500 rounded-full animate-pulse" />}
-                                                    </div>
-                                                )}
-                                                {msg.role === 'user' && msg.hasScreenshot && (
-                                                    <div className="flex items-center gap-1 text-[10px] opacity-70 mb-1 border-b border-white/10 pb-1">
-                                                        <Image className="w-2.5 h-2.5" />
-                                                        <span>Screenshot attached</span>
-                                                    </div>
-                                                )}
-                                                {msg.role === 'system' && !msg.isStreaming && (
-                                                    <button
-                                                        onClick={() => handleCopy(msg.text)}
-                                                        className="absolute top-2 right-2 p-1.5 bg-black/40 hover:bg-black/60 text-slate-400 hover:text-white rounded-md opacity-0 group-hover:opacity-100 transition-opacity"
-                                                        title="Copy to clipboard"
-                                                    >
-                                                        <Copy className="w-3.5 h-3.5" />
-                                                    </button>
-                                                )}
-                                                {renderMessageText(msg)}
-                                            </div>
-                                        </div>
-                                    ))}
+                                                    {msg.role === 'interviewer' && (
+                                                        <div className="flex items-center gap-1.5 mb-1 text-[10px] text-slate-600 font-medium uppercase tracking-wider">
+                                                            Interviewer
+                                                            {msg.isStreaming && <span className="w-1 h-1 bg-green-500 rounded-full animate-pulse" />}
+                                                        </div>
+                                                    )}
+                                                    {msg.role === 'user' && msg.hasScreenshot && (
+                                                        <div className="flex items-center gap-1 text-[10px] opacity-70 mb-1 border-b border-white/10 pb-1">
+                                                            <Image className="w-2.5 h-2.5" />
+                                                            <span>Screenshot attached</span>
+                                                        </div>
+                                                    )}
+                                                    {msg.role === 'system' && !msg.isStreaming && (
+                                                        <button
+                                                            onClick={() => handleCopy(msg.text)}
+                                                            className="absolute top-2 right-2 p-1.5 bg-black/40 hover:bg-black/60 text-slate-400 hover:text-white rounded-md opacity-0 group-hover:opacity-100 transition-opacity"
+                                                            title="Copy to clipboard"
+                                                        >
+                                                            <Copy className="w-3.5 h-3.5" />
+                                                        </button>
+                                                    )}
+                                                    {renderMessageText(msg)}
+                                                </div>
+                                            </motion.div>
+                                        ))}
+                                    </AnimatePresence>
 
                                     {/* Active Recording State with Live Transcription */}
                                     {isManualRecording && (

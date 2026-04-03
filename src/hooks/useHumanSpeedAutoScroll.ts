@@ -12,7 +12,6 @@ type Options = {
   containerRef: RefObject<HTMLElement>;
   latestMessage: AutoScrollMessage | null;
   eligibleRoles?: string[];
-  getTargetElement?: (container: HTMLElement, messageId: string) => HTMLElement | null;
 };
 
 const HUMAN_WORDS_PER_MINUTE = 210;
@@ -34,17 +33,10 @@ function estimateDurationMs(content: string): number {
   return clamp((words / HUMAN_WORDS_PER_MINUTE) * 60_000, MIN_SCROLL_DURATION_MS, MAX_SCROLL_DURATION_MS);
 }
 
-function getElementOffsetWithinContainer(container: HTMLElement, targetElement: HTMLElement | null): number {
-  if (!targetElement) {
-    return 0;
-  }
-  const containerRect = container.getBoundingClientRect();
-  const targetRect = targetElement.getBoundingClientRect();
-  return Math.max(0, container.scrollTop + (targetRect.top - containerRect.top));
-}
-
 function isNearBottom(container: HTMLElement): boolean {
-  return container.scrollHeight - (container.scrollTop + container.clientHeight) <= RESUME_THRESHOLD_PX;
+  // With flex-col-reverse, scrollTop=0 is at the visual bottom (newest messages)
+  // Check if we're near scrollTop=0 (the top of newest messages)
+  return Math.abs(container.scrollTop) <= RESUME_THRESHOLD_PX;
 }
 
 export function useHumanSpeedAutoScroll({
@@ -52,7 +44,6 @@ export function useHumanSpeedAutoScroll({
   containerRef,
   latestMessage,
   eligibleRoles = ['system', 'assistant'],
-  getTargetElement,
 }: Options): void {
   const animationFrameRef = useRef<number | null>(null);
   const lastTimestampRef = useRef<number | null>(null);
@@ -121,10 +112,9 @@ export function useHumanSpeedAutoScroll({
         previousMessageId === null || userIsNearBottom || (!isUserPaused && followLatestRef.current);
 
       if (shouldFollowNewMessage) {
-        const targetElement = getTargetElement?.(container, latestMessage.id);
-        const targetOffset = getElementOffsetWithinContainer(container, targetElement || null);
+        // With flex-col-reverse, newest messages are at scrollTop=0
         programmaticScrollUntilRef.current = Date.now() + PROGRAMMATIC_SCROLL_GRACE_MS;
-        container.scrollTo({ top: targetOffset, behavior: 'smooth' });
+        container.scrollTo({ top: 0, behavior: 'smooth' });
         manualPauseUntilRef.current = 0;
         followLatestRef.current = true;
       }
@@ -142,18 +132,7 @@ export function useHumanSpeedAutoScroll({
     }
 
     const durationMs = estimateDurationMs(latestMessage.content);
-    let speedPxPerMs = 0;
-    let targetStart = container.scrollTop;
-    const computeSpeed = () => {
-      const targetElement = getTargetElement?.(container, latestMessage.id);
-      targetStart = getElementOffsetWithinContainer(container, targetElement || null);
-      const targetBottom = targetElement
-        ? Math.max(targetStart, targetStart + targetElement.scrollHeight - container.clientHeight)
-        : Math.max(0, container.scrollHeight - container.clientHeight);
-      speedPxPerMs = Math.max(0, targetBottom - targetStart) / durationMs;
-      return targetBottom;
-    };
-
+    
     const step = (timestamp: number) => {
       if (Date.now() < manualPauseUntilRef.current) {
         animationFrameRef.current = null;
@@ -165,19 +144,12 @@ export function useHumanSpeedAutoScroll({
         lastTimestampRef.current = timestamp;
       }
 
-      const dt = timestamp - lastTimestampRef.current;
-      lastTimestampRef.current = timestamp;
-      const maxScrollTop = computeSpeed();
-
-      if (maxScrollTop <= targetStart) {
-        animationFrameRef.current = requestAnimationFrame(step);
-        return;
-      }
-
+      // With flex-col-reverse, keep scroll at top (scrollTop=0) for newest messages
       programmaticScrollUntilRef.current = Date.now() + PROGRAMMATIC_SCROLL_GRACE_MS;
-      container.scrollTop = Math.min(maxScrollTop, container.scrollTop + speedPxPerMs * dt);
+      container.scrollTop = 0;
 
-      if (container.scrollTop < maxScrollTop - 1 || latestMessage.isStreaming) {
+      // Continue animating while message is streaming
+      if (latestMessage.isStreaming) {
         animationFrameRef.current = requestAnimationFrame(step);
       } else {
         animationFrameRef.current = null;

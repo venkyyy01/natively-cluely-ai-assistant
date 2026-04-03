@@ -210,7 +210,6 @@ const MeetingChatOverlay: React.FC<MeetingChatOverlayProps> = ({
             isStreaming: latestReadableMessage.isStreaming,
         } : null,
         eligibleRoles: ['assistant'],
-        getTargetElement: (container, messageId) => container.querySelector(`[data-autoscroll-message-id="${messageId}"]`) as HTMLElement | null,
     });
 
     // Submit initial query when overlay opens
@@ -527,14 +526,29 @@ ${contextString}`;
                         </div>
 
                         {/* Messages area - scrollable */}
-                        <div ref={scrollContainerRef} className="flex-1 overflow-y-auto px-6 py-4 pb-32 custom-scrollbar">
-                            {messages.map((msg) => (
-                                <div key={msg.id} data-autoscroll-message-id={msg.id}>
-                                    {msg.role === 'user'
-                                        ? <UserMessage content={msg.content} />
-                                        : <AssistantMessage content={msg.content} isStreaming={msg.isStreaming} />}
-                                </div>
-                            ))}
+                        <div ref={scrollContainerRef} className="flex-1 overflow-y-auto px-6 py-4 pb-32 custom-scrollbar flex flex-col-reverse">
+                            <AnimatePresence initial={false}>
+                                {messages.slice().reverse().map((msg) => (
+                                    <motion.div
+                                        key={msg.id}
+                                        data-autoscroll-message-id={msg.id}
+                                        initial={{ opacity: 0, y: -20 }}
+                                        animate={{ opacity: 1, y: 0 }}
+                                        exit={{ opacity: 0, y: -20 }}
+                                        transition={{ 
+                                            type: "spring",
+                                            stiffness: 500,
+                                            damping: 30,
+                                            mass: 0.5
+                                        }}
+                                        layout
+                                    >
+                                        {msg.role === 'user'
+                                            ? <UserMessage content={msg.content} />
+                                            : <AssistantMessage content={msg.content} isStreaming={msg.isStreaming} />}
+                                    </motion.div>
+                                ))}
+                            </AnimatePresence>
 
                             {chatState === 'waiting_for_llm' && <TypingIndicator />}
 
