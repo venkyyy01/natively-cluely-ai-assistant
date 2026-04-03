@@ -1,4 +1,5 @@
 import { RefObject, useEffect, useRef } from 'react';
+import { getAutoFollowDecision } from './humanSpeedAutoScrollState';
 
 type AutoScrollMessage = {
   id: string;
@@ -194,8 +195,19 @@ export function useHumanSpeedAutoScroll({
     const previousMessageId = activeMessageIdRef.current;
     const isNewMessage = previousMessageId !== latestMessage.id;
     const isUserPaused = Date.now() < manualPauseUntilRef.current;
-    const userIsNearBottom = isNearBottom(container);
+    let userIsNearBottom = isNearBottom(container);
     const userIsHoldingManualScroll = isPointerInteractingRef.current && isHoldingManualScrollRef.current;
+    const hasRecentManualScrollIntent =
+      isPointerInteractingRef.current || Date.now() < userScrollIntentUntilRef.current;
+
+    const snapToLatest = () => {
+      // Auto-follow keeps the newest response pinned at the top edge.
+      programmaticScrollUntilRef.current = Date.now() + PROGRAMMATIC_SCROLL_GRACE_MS;
+      container.scrollTop = 0;
+      manualPauseUntilRef.current = 0;
+      followLatestRef.current = true;
+      userIsNearBottom = true;
+    };
 
     if (!userIsNearBottom) {
       followLatestRef.current = false;
@@ -204,21 +216,23 @@ export function useHumanSpeedAutoScroll({
     if (isNewMessage) {
       activeMessageIdRef.current = latestMessage.id;
       lastTimestampRef.current = null;
-
-      const shouldFollowNewMessage =
-        previousMessageId === null || userIsNearBottom || (!isUserPaused && followLatestRef.current);
-
-      if (shouldFollowNewMessage) {
-        // Auto-follow keeps the newest response pinned at the top edge.
-        programmaticScrollUntilRef.current = Date.now() + PROGRAMMATIC_SCROLL_GRACE_MS;
-        container.scrollTop = 0;
-        manualPauseUntilRef.current = 0;
-        followLatestRef.current = true;
-      }
     }
 
-    const shouldPauseAutoFollow = userIsHoldingManualScroll || ((isUserPaused || !followLatestRef.current) && !userIsNearBottom);
-    if (shouldPauseAutoFollow) {
+    const autoFollowDecision = getAutoFollowDecision({
+      hasRecentManualScrollIntent,
+      isStreaming: Boolean(latestMessage.isStreaming),
+      isUserPaused,
+      latestMessageId: latestMessage.id,
+      previousMessageId,
+      userIsHoldingManualScroll,
+      userIsNearBottom,
+    });
+
+    if (autoFollowDecision.shouldSnapToLatest) {
+      snapToLatest();
+    }
+
+    if (autoFollowDecision.shouldPauseAutoFollow) {
       activeMessageIdRef.current = latestMessage.id;
       return;
     }
