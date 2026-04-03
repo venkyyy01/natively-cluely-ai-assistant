@@ -15,10 +15,11 @@ type Options = {
   getTargetElement?: (container: HTMLElement, messageId: string) => HTMLElement | null;
 };
 
-const HUMAN_WORDS_PER_MINUTE = 170;
-const MIN_SCROLL_DURATION_MS = 8000;
-const MAX_SCROLL_DURATION_MS = 45000;
-const MANUAL_PAUSE_MS = 12000;
+const HUMAN_WORDS_PER_MINUTE = 210;
+const MIN_SCROLL_DURATION_MS = 5000;
+const MAX_SCROLL_DURATION_MS = 30000;
+const MANUAL_PAUSE_MS = 20000;
+const RESUME_THRESHOLD_PX = 48;
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
@@ -41,6 +42,10 @@ function getElementOffsetWithinContainer(container: HTMLElement, targetElement: 
   return Math.max(0, container.scrollTop + (targetRect.top - containerRect.top));
 }
 
+function isNearBottom(container: HTMLElement): boolean {
+  return container.scrollHeight - (container.scrollTop + container.clientHeight) <= RESUME_THRESHOLD_PX;
+}
+
 export function useHumanSpeedAutoScroll({
   enabled,
   containerRef,
@@ -52,6 +57,7 @@ export function useHumanSpeedAutoScroll({
   const lastTimestampRef = useRef<number | null>(null);
   const activeMessageIdRef = useRef<string | null>(null);
   const manualPauseUntilRef = useRef<number>(0);
+  const followLatestRef = useRef<boolean>(true);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -61,17 +67,28 @@ export function useHumanSpeedAutoScroll({
 
     const pauseAutoScroll = () => {
       manualPauseUntilRef.current = Date.now() + MANUAL_PAUSE_MS;
+      followLatestRef.current = false;
       if (animationFrameRef.current !== null) {
         cancelAnimationFrame(animationFrameRef.current);
         animationFrameRef.current = null;
       }
+      lastTimestampRef.current = null;
     };
 
+    const maybeResumeAutoScroll = () => {
+      if (isNearBottom(container)) {
+        manualPauseUntilRef.current = 0;
+        followLatestRef.current = true;
+      }
+    };
+
+    container.addEventListener('scroll', maybeResumeAutoScroll, { passive: true });
     container.addEventListener('wheel', pauseAutoScroll, { passive: true });
     container.addEventListener('touchstart', pauseAutoScroll, { passive: true });
     container.addEventListener('pointerdown', pauseAutoScroll);
 
     return () => {
+      container.removeEventListener('scroll', maybeResumeAutoScroll);
       container.removeEventListener('wheel', pauseAutoScroll);
       container.removeEventListener('touchstart', pauseAutoScroll);
       container.removeEventListener('pointerdown', pauseAutoScroll);
@@ -80,19 +97,39 @@ export function useHumanSpeedAutoScroll({
 
   useEffect(() => {
     const container = containerRef.current;
-    if (!enabled || !container || !latestMessage || !eligibleRoles.includes(latestMessage.role)) {
+    if (!enabled) {
+      activeMessageIdRef.current = null;
+      manualPauseUntilRef.current = 0;
+      followLatestRef.current = true;
       return;
     }
 
-    if (activeMessageIdRef.current !== latestMessage.id) {
-      const targetElement = getTargetElement?.(container, latestMessage.id);
-      const targetOffset = getElementOffsetWithinContainer(container, targetElement || null);
-      manualPauseUntilRef.current = 0;
-      container.scrollTop = targetOffset;
-      activeMessageIdRef.current = latestMessage.id;
+    if (!container || !latestMessage || !eligibleRoles.includes(latestMessage.role)) {
+      return;
     }
 
-    if (Date.now() < manualPauseUntilRef.current) {
+    const previousMessageId = activeMessageIdRef.current;
+    const isNewMessage = previousMessageId !== latestMessage.id;
+    const isUserPaused = Date.now() < manualPauseUntilRef.current;
+    const userIsNearBottom = isNearBottom(container);
+
+    if (isNewMessage) {
+      activeMessageIdRef.current = latestMessage.id;
+      lastTimestampRef.current = null;
+
+      const shouldFollowNewMessage =
+        !isUserPaused && (previousMessageId === null || followLatestRef.current || userIsNearBottom);
+
+      if (shouldFollowNewMessage) {
+        const targetElement = getTargetElement?.(container, latestMessage.id);
+        const targetOffset = getElementOffsetWithinContainer(container, targetElement || null);
+        container.scrollTop = targetOffset;
+        followLatestRef.current = true;
+      }
+    }
+
+    if (isUserPaused || !followLatestRef.current) {
+      activeMessageIdRef.current = latestMessage.id;
       return;
     }
 

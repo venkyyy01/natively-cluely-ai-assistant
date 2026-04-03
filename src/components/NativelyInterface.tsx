@@ -1104,9 +1104,11 @@ Instructions:
 Instructions:
 1. Extract the core question being asked
 2. Provide a clear, concise, and professional answer that the user can say out loud
-3. Keep the answer conversational but informative (2-4 sentences ideal)
-4. Do NOT include phrases like "The question is..." - just give the answer directly
-5. Format for speaking out loud, not for reading
+3. Keep the answer short enough to speak naturally: 1-3 short sentences for simple questions, 3 sentences max unless detail is explicitly requested
+4. Cap non-code answers at roughly 70 words
+5. Do NOT use bullet points, headings, or multiple long paragraphs
+6. Do NOT include phrases like "The question is..." - just give the answer directly
+7. Format for speaking out loud, not for reading
 
 Provide only the answer, nothing else.`;
                 }

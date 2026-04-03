@@ -1,8 +1,13 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useStreamBuffer } from '../hooks/useStreamBuffer';
 import { useHumanSpeedAutoScroll } from '../hooks/useHumanSpeedAutoScroll';
-import { X, Copy, Check, Globe, ArrowUp } from 'lucide-react';
+import { X, Copy, Check, ArrowUp } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import remarkMath from 'remark-math';
+import rehypeKatex from 'rehype-katex';
+import 'katex/dist/katex.min.css';
 import nativelyIcon from './icon.png';
 
 // ============================================
@@ -83,8 +88,42 @@ const AssistantMessage: React.FC<{ content: string; isStreaming?: boolean }> = (
             transition={{ duration: 0.15 }}
             className="flex flex-col items-start mb-6"
         >
-            <div className="text-text-primary text-[15px] leading-relaxed max-w-[85%]">
-                {content}
+            <div className="text-text-primary text-[15px] leading-relaxed max-w-[88%]">
+                <div className="markdown-content">
+                    <ReactMarkdown
+                        remarkPlugins={[remarkGfm, remarkMath]}
+                        rehypePlugins={[rehypeKatex]}
+                        components={{
+                            p: ({ node, ...props }: any) => <p className="mb-2 last:mb-0 whitespace-pre-wrap" {...props} />,
+                            strong: ({ node, ...props }: any) => <strong className="font-semibold text-text-primary" {...props} />,
+                            em: ({ node, ...props }: any) => <em className="italic text-text-secondary" {...props} />,
+                            ul: ({ node, ...props }: any) => <ul className="list-disc ml-5 mb-2 space-y-1" {...props} />,
+                            ol: ({ node, ...props }: any) => <ol className="list-decimal ml-5 mb-2 space-y-1" {...props} />,
+                            li: ({ node, ...props }: any) => <li className="pl-1" {...props} />,
+                            a: ({ node, ...props }: any) => <a className="text-blue-500 hover:underline" target="_blank" rel="noopener noreferrer" {...props} />,
+                            pre: ({ node, ...props }: any) => (
+                                <pre
+                                    className="my-3 overflow-x-auto rounded-xl border border-border-subtle bg-bg-tertiary px-4 py-3 text-[13px] leading-relaxed"
+                                    {...props}
+                                />
+                            ),
+                            code: ({ node, inline, className, ...props }: any) => {
+                                const isInline = inline ?? !String(className || '').includes('language-');
+                                return (
+                                    <code
+                                        className={isInline
+                                            ? 'rounded bg-bg-tertiary px-1.5 py-0.5 text-[13px] font-mono text-text-primary'
+                                            : 'font-mono'}
+                                        {...props}
+                                    />
+                                );
+                            },
+                            blockquote: ({ node, ...props }: any) => <blockquote className="my-2 border-l-2 border-border-subtle pl-3 italic text-text-secondary" {...props} />,
+                        }}
+                    >
+                        {content}
+                    </ReactMarkdown>
+                </div>
                 {isStreaming && (
                     <motion.span
                         className="inline-block w-0.5 h-4 bg-text-secondary ml-0.5 align-middle"
