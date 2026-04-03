@@ -52,6 +52,7 @@ export function useHumanSpeedAutoScroll({
   const programmaticScrollUntilRef = useRef<number>(0);
   const isPointerInteractingRef = useRef<boolean>(false);
   const isHoldingManualScrollRef = useRef<boolean>(false);
+  const userScrollIntentUntilRef = useRef<number>(0);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -67,9 +68,34 @@ export function useHumanSpeedAutoScroll({
       lastTimestampRef.current = null;
     };
 
+    const hasManualScrollIntent = () => {
+      return isPointerInteractingRef.current || Date.now() < userScrollIntentUntilRef.current;
+    };
+
+    const pauseAutoFollow = () => {
+      manualPauseUntilRef.current = Date.now() + MANUAL_PAUSE_MS;
+      followLatestRef.current = false;
+      stopAutoScrollAnimation();
+    };
+
+    const markManualScrollIntent = () => {
+      userScrollIntentUntilRef.current = Date.now() + 250;
+    };
+
     const handlePointerDown = () => {
       isPointerInteractingRef.current = true;
       isHoldingManualScrollRef.current = false;
+      markManualScrollIntent();
+    };
+
+    const handleWheel = () => {
+      markManualScrollIntent();
+      pauseAutoFollow();
+    };
+
+    const handleTouchStart = () => {
+      markManualScrollIntent();
+      pauseAutoFollow();
     };
 
     const handlePointerRelease = () => {
@@ -100,15 +126,25 @@ export function useHumanSpeedAutoScroll({
     };
 
     const handleScroll = () => {
-      if (Date.now() < programmaticScrollUntilRef.current) {
+      const userMovedAwayFromLatest = !isNearBottom(container);
+
+      if (userMovedAwayFromLatest) {
+        if (hasManualScrollIntent()) {
+          isHoldingManualScrollRef.current = true;
+        }
+        pauseAutoFollow();
         return;
       }
 
-      if (isPointerInteractingRef.current) {
+      if (Date.now() < programmaticScrollUntilRef.current) {
+        if (!hasManualScrollIntent()) {
+          return;
+        }
+      }
+
+      if (hasManualScrollIntent()) {
         isHoldingManualScrollRef.current = true;
-        manualPauseUntilRef.current = Date.now() + MANUAL_PAUSE_MS;
-        followLatestRef.current = false;
-        stopAutoScrollAnimation();
+        pauseAutoFollow();
         return;
       }
 
@@ -118,18 +154,20 @@ export function useHumanSpeedAutoScroll({
         return;
       }
 
-      manualPauseUntilRef.current = Date.now() + MANUAL_PAUSE_MS;
-      followLatestRef.current = false;
-      stopAutoScrollAnimation();
+      pauseAutoFollow();
     };
 
     container.addEventListener('pointerdown', handlePointerDown, { passive: true });
+    container.addEventListener('wheel', handleWheel, { passive: true });
+    container.addEventListener('touchstart', handleTouchStart, { passive: true });
     container.addEventListener('scroll', handleScroll, { passive: true });
     window.addEventListener('pointerup', handlePointerRelease, { passive: true });
     window.addEventListener('pointercancel', handlePointerRelease, { passive: true });
 
     return () => {
       container.removeEventListener('pointerdown', handlePointerDown);
+      container.removeEventListener('wheel', handleWheel);
+      container.removeEventListener('touchstart', handleTouchStart);
       container.removeEventListener('scroll', handleScroll);
       window.removeEventListener('pointerup', handlePointerRelease);
       window.removeEventListener('pointercancel', handlePointerRelease);
@@ -143,6 +181,9 @@ export function useHumanSpeedAutoScroll({
       manualPauseUntilRef.current = 0;
       followLatestRef.current = true;
       programmaticScrollUntilRef.current = 0;
+      isPointerInteractingRef.current = false;
+      isHoldingManualScrollRef.current = false;
+      userScrollIntentUntilRef.current = 0;
       return;
     }
 
@@ -156,6 +197,10 @@ export function useHumanSpeedAutoScroll({
     const userIsNearBottom = isNearBottom(container);
     const userIsHoldingManualScroll = isPointerInteractingRef.current && isHoldingManualScrollRef.current;
 
+    if (!userIsNearBottom) {
+      followLatestRef.current = false;
+    }
+
     if (isNewMessage) {
       activeMessageIdRef.current = latestMessage.id;
       lastTimestampRef.current = null;
@@ -166,7 +211,7 @@ export function useHumanSpeedAutoScroll({
       if (shouldFollowNewMessage) {
         // Auto-follow keeps the newest response pinned at the top edge.
         programmaticScrollUntilRef.current = Date.now() + PROGRAMMATIC_SCROLL_GRACE_MS;
-        container.scrollTo({ top: 0, behavior: 'smooth' });
+        container.scrollTop = 0;
         manualPauseUntilRef.current = 0;
         followLatestRef.current = true;
       }
@@ -187,6 +232,14 @@ export function useHumanSpeedAutoScroll({
     
     const step = (timestamp: number) => {
       if (isPointerInteractingRef.current && isHoldingManualScrollRef.current) {
+        animationFrameRef.current = null;
+        lastTimestampRef.current = null;
+        return;
+      }
+
+      if (!isNearBottom(container)) {
+        followLatestRef.current = false;
+        manualPauseUntilRef.current = Date.now() + MANUAL_PAUSE_MS;
         animationFrameRef.current = null;
         lastTimestampRef.current = null;
         return;
