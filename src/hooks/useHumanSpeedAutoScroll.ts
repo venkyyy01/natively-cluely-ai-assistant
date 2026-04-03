@@ -50,6 +50,8 @@ export function useHumanSpeedAutoScroll({
   const manualPauseUntilRef = useRef<number>(0);
   const followLatestRef = useRef<boolean>(true);
   const programmaticScrollUntilRef = useRef<number>(0);
+  const isPointerInteractingRef = useRef<boolean>(false);
+  const isHoldingManualScrollRef = useRef<boolean>(false);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -57,7 +59,32 @@ export function useHumanSpeedAutoScroll({
       return;
     }
 
-    const handleScroll = () => {
+    const stopAutoScrollAnimation = () => {
+      if (animationFrameRef.current !== null) {
+        cancelAnimationFrame(animationFrameRef.current);
+        animationFrameRef.current = null;
+      }
+      lastTimestampRef.current = null;
+    };
+
+    const handlePointerDown = () => {
+      isPointerInteractingRef.current = true;
+      isHoldingManualScrollRef.current = false;
+    };
+
+    const handlePointerRelease = () => {
+      if (!isPointerInteractingRef.current) {
+        return;
+      }
+
+      isPointerInteractingRef.current = false;
+
+      if (!isHoldingManualScrollRef.current) {
+        return;
+      }
+
+      isHoldingManualScrollRef.current = false;
+
       if (Date.now() < programmaticScrollUntilRef.current) {
         return;
       }
@@ -70,17 +97,42 @@ export function useHumanSpeedAutoScroll({
 
       manualPauseUntilRef.current = Date.now() + MANUAL_PAUSE_MS;
       followLatestRef.current = false;
-      if (animationFrameRef.current !== null) {
-        cancelAnimationFrame(animationFrameRef.current);
-        animationFrameRef.current = null;
-      }
-      lastTimestampRef.current = null;
     };
 
+    const handleScroll = () => {
+      if (Date.now() < programmaticScrollUntilRef.current) {
+        return;
+      }
+
+      if (isPointerInteractingRef.current) {
+        isHoldingManualScrollRef.current = true;
+        manualPauseUntilRef.current = Date.now() + MANUAL_PAUSE_MS;
+        followLatestRef.current = false;
+        stopAutoScrollAnimation();
+        return;
+      }
+
+      if (isNearBottom(container)) {
+        manualPauseUntilRef.current = 0;
+        followLatestRef.current = true;
+        return;
+      }
+
+      manualPauseUntilRef.current = Date.now() + MANUAL_PAUSE_MS;
+      followLatestRef.current = false;
+      stopAutoScrollAnimation();
+    };
+
+    container.addEventListener('pointerdown', handlePointerDown, { passive: true });
     container.addEventListener('scroll', handleScroll, { passive: true });
+    window.addEventListener('pointerup', handlePointerRelease, { passive: true });
+    window.addEventListener('pointercancel', handlePointerRelease, { passive: true });
 
     return () => {
+      container.removeEventListener('pointerdown', handlePointerDown);
       container.removeEventListener('scroll', handleScroll);
+      window.removeEventListener('pointerup', handlePointerRelease);
+      window.removeEventListener('pointercancel', handlePointerRelease);
     };
   }, [containerRef]);
 
@@ -102,6 +154,7 @@ export function useHumanSpeedAutoScroll({
     const isNewMessage = previousMessageId !== latestMessage.id;
     const isUserPaused = Date.now() < manualPauseUntilRef.current;
     const userIsNearBottom = isNearBottom(container);
+    const userIsHoldingManualScroll = isPointerInteractingRef.current && isHoldingManualScrollRef.current;
 
     if (isNewMessage) {
       activeMessageIdRef.current = latestMessage.id;
@@ -119,7 +172,7 @@ export function useHumanSpeedAutoScroll({
       }
     }
 
-    const shouldPauseAutoFollow = (isUserPaused || !followLatestRef.current) && !userIsNearBottom;
+    const shouldPauseAutoFollow = userIsHoldingManualScroll || ((isUserPaused || !followLatestRef.current) && !userIsNearBottom);
     if (shouldPauseAutoFollow) {
       activeMessageIdRef.current = latestMessage.id;
       return;
@@ -133,6 +186,12 @@ export function useHumanSpeedAutoScroll({
     const durationMs = estimateDurationMs(latestMessage.content);
     
     const step = (timestamp: number) => {
+      if (isPointerInteractingRef.current && isHoldingManualScrollRef.current) {
+        animationFrameRef.current = null;
+        lastTimestampRef.current = null;
+        return;
+      }
+
       if (Date.now() < manualPauseUntilRef.current) {
         animationFrameRef.current = null;
         lastTimestampRef.current = null;

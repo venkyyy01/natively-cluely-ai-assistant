@@ -8,6 +8,12 @@ const THRESHOLDS = {
   functions: 30,
 };
 
+const COVERAGE_EXCLUDES = [
+  'native-module/**',
+  'postcss.config.js',
+  'tailwind.config.js',
+];
+
 function parseCoverageSummary(output) {
   const allFilesLine = output
     .split('\n')
@@ -97,7 +103,11 @@ function getTestFiles() {
 }
 
 async function runAllTestsWithCoverage(files, options = {}) {
-  const args = ['--test', '--experimental-test-coverage', ...files];
+  const args = ['--test', '--experimental-test-coverage'];
+  for (const pattern of COVERAGE_EXCLUDES) {
+    args.push(`--test-coverage-exclude=${pattern}`);
+  }
+  args.push(...files);
   return run('node', args, options);
 }
 
@@ -138,6 +148,7 @@ if (require.main === module) {
 
 module.exports = {
   THRESHOLDS,
+  COVERAGE_EXCLUDES,
   parseCoverageSummary,
   evaluateCoverage,
   getTestFiles,
