@@ -140,7 +140,7 @@ mod windows_impl {
     use super::Buffer;
     use windows::Win32::Foundation::{GetLastError, HWND};
     use windows::Win32::UI::WindowsAndMessaging::{
-        GetWindowDisplayAffinity, SetWindowDisplayAffinity, WDA_MONITOR, WDA_NONE, WINDOW_DISPLAY_AFFINITY,
+        GetWindowDisplayAffinity, IsWindow, SetWindowDisplayAffinity, WDA_NONE, WINDOW_DISPLAY_AFFINITY,
     };
 
     const WDA_EXCLUDEFROMCAPTURE: WINDOW_DISPLAY_AFFINITY = WINDOW_DISPLAY_AFFINITY(0x00000011);
@@ -154,14 +154,7 @@ mod windows_impl {
             }
 
             let error = GetLastError();
-            eprintln!(
-                "[stealth] WDA_EXCLUDEFROMCAPTURE failed with {:?}, falling back to WDA_MONITOR",
-                error
-            );
-
-            if SetWindowDisplayAffinity(hwnd, WDA_MONITOR).as_bool() {
-                return Ok(());
-            }
+            eprintln!("[stealth] WDA_EXCLUDEFROMCAPTURE failed with {:?}", error);
         }
 
         Err(napi::Error::from_reason(
@@ -206,7 +199,15 @@ mod windows_impl {
 
         let mut raw = [0u8; std::mem::size_of::<isize>()];
         raw.copy_from_slice(&buffer[..pointer_size]);
-        Ok(HWND(isize::from_le_bytes(raw)))
+        let hwnd = HWND(isize::from_le_bytes(raw));
+        unsafe {
+            if !IsWindow(hwnd).as_bool() {
+                return Err(napi::Error::from_reason(
+                    "Native window handle does not reference a live HWND".to_string(),
+                ));
+            }
+        }
+        Ok(hwnd)
     }
 }
 

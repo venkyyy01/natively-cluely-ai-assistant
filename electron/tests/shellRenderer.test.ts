@@ -68,6 +68,7 @@ test('mountStealthShell hides loading indicator after the first frame', () => {
   const loadingIndicator = new FakeElement();
   let onFrame: ((payload: StealthFramePayload) => void) | null = null;
   let notifiedReady = false;
+  let presentedFrameId: number | null = null;
 
   const originalCanvas = globalThis.HTMLCanvasElement;
   const originalImage = globalThis.Image;
@@ -98,6 +99,9 @@ test('mountStealthShell hides loading indicator after the first frame', () => {
         notifyReady() {
           notifiedReady = true;
         },
+        notifyFramePresented(frameId: number) {
+          presentedFrameId = frameId;
+        },
       },
       {
         getElementById(id: string) {
@@ -123,12 +127,14 @@ test('mountStealthShell hides loading indicator after the first frame', () => {
       height: 80,
       scaleFactor: 1,
       dirtyRects: [],
+      frameId: 1,
     });
 
     assert.equal(canvas.width, 120);
     assert.equal(canvas.height, 80);
     assert.equal(canvas.getDrawCalls(), 1);
     assert.equal(loadingIndicator.classList.contains('hidden'), true);
+    assert.equal(presentedFrameId, 1);
   } finally {
     Object.assign(globalThis, {
       HTMLCanvasElement: originalCanvas,

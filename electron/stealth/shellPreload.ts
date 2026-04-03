@@ -15,6 +15,9 @@ const bridge: StealthShellBridge = {
   notifyReady() {
     ipcRenderer.send('stealth-shell:ready');
   },
+  notifyFramePresented(frameId: number) {
+    ipcRenderer.send('stealth-shell:frame-presented', { frameId });
+  },
 };
 
 contextBridge.exposeInMainWorld('stealthShell', bridge);

@@ -72,7 +72,7 @@ export class WindowHelper {
     }
 
     if (this.launcherWindow && !this.launcherWindow.isDestroyed()) {
-      this.applyStealth(this.launcherWindow, this.contentProtection, 'primary', false)
+      this.applyStealth(this.launcherWindow, this.contentProtection, 'primary', process.platform === 'win32' && this.contentProtection)
     }
   }
 
@@ -83,7 +83,7 @@ export class WindowHelper {
     }
 
     if (this.overlayWindow && !this.overlayWindow.isDestroyed()) {
-      this.applyStealth(this.overlayWindow, this.contentProtection, 'primary', false)
+      this.applyStealth(this.overlayWindow, this.contentProtection, 'primary', process.platform === 'win32' && this.contentProtection)
     }
   }
 
@@ -307,7 +307,7 @@ export class WindowHelper {
       this.launcherRuntime = null
       this.launcherWindow = this.createDirectWindow(launcherSettings, `${startUrl}?window=launcher`, 'Launcher')
       this.launcherContentWindow = this.launcherWindow
-      console.log('[WindowHelper] Using direct launcher window on macOS');
+      console.log(`[WindowHelper] Using direct launcher window on ${process.platform}`);
     }
 
     this.applyLauncherSurfaceProtection()
@@ -384,7 +384,7 @@ export class WindowHelper {
       this.overlayRuntime = null
       this.overlayWindow = this.createDirectWindow(overlaySettings, `${startUrl}?window=overlay`, 'Overlay')
       this.overlayContentWindow = this.overlayWindow
-      console.log('[WindowHelper] Using direct overlay window on macOS');
+      console.log(`[WindowHelper] Using direct overlay window on ${process.platform}`);
     }
 
     this.applyOverlaySurfaceProtection()
@@ -481,6 +481,15 @@ export class WindowHelper {
   }
 
   public hideMainWindow(): void {
+    if (process.platform === 'win32' && this.contentProtection) {
+      try {
+        this.launcherWindow?.setOpacity?.(0)
+        this.overlayWindow?.setOpacity?.(0)
+      } catch {
+        // Ignore opacity issues during screenshot-hide path.
+      }
+    }
+
     // Hide BOTH
     this.hideLauncherSurface()
     this.overlayWindow?.hide()

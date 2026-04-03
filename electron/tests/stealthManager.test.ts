@@ -222,6 +222,7 @@ describe('StealthManager', () => {
   it('reapplies managed windows after power monitor events', () => {
     const nativeCalls: number[] = [];
     const powerMonitor = new EventEmitter();
+    const timeouts: Array<() => void> = [];
     const manager = new StealthManager(
       { enabled: true },
       {
@@ -233,6 +234,10 @@ describe('StealthManager', () => {
           },
         },
         logger: silentLogger,
+        timeoutScheduler(fn: () => void) {
+          timeouts.push(fn);
+          return timeouts.length;
+        },
       }
     );
     const win = new FakeWindow();
@@ -240,13 +245,15 @@ describe('StealthManager', () => {
     manager.applyToWindow(win as any, true, { role: 'primary' });
     powerMonitor.emit('unlock-screen');
     powerMonitor.emit('resume');
+    timeouts.at(-1)?.();
 
-    assert.strictEqual(nativeCalls.length, 3);
+    assert.strictEqual(nativeCalls.length, 2);
   });
 
   it('reapplies managed windows after display metrics changes on Windows', () => {
     const nativeCalls: number[] = [];
     const displayEvents = new EventEmitter();
+    const timeouts: Array<() => void> = [];
     const manager = new StealthManager(
       { enabled: true },
       {
@@ -258,12 +265,17 @@ describe('StealthManager', () => {
           },
         },
         logger: silentLogger,
+        timeoutScheduler(fn: () => void) {
+          timeouts.push(fn);
+          return timeouts.length;
+        },
       } as any
     );
     const win = new FakeWindow();
 
     manager.applyToWindow(win as any, true, { role: 'primary' });
     displayEvents.emit('display-metrics-changed');
+    timeouts.at(-1)?.();
 
     assert.strictEqual(nativeCalls.length, 2);
   });
@@ -274,6 +286,7 @@ describe('StealthManager', () => {
       getAllDisplays: () => Array<{ id: number; workArea: { x: number; y: number; width: number; height: number } }>;
     };
     screenApi.getAllDisplays = () => [];
+    const timeouts: Array<() => void> = [];
 
     const manager = new StealthManager(
       { enabled: true },
@@ -286,12 +299,17 @@ describe('StealthManager', () => {
           },
         },
         logger: silentLogger,
+        timeoutScheduler(fn: () => void) {
+          timeouts.push(fn);
+          return timeouts.length;
+        },
       } as any
     );
     const win = new FakeWindow();
 
     manager.applyToWindow(win as any, true, { role: 'primary' });
     screenApi.emit('display-metrics-changed');
+    timeouts.at(-1)?.();
 
     assert.strictEqual(nativeCalls.length, 2);
   });

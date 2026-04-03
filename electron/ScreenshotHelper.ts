@@ -37,7 +37,7 @@ export class ScreenshotHelper {
   }
 
   private async waitForWindowHide(): Promise<void> {
-    await new Promise(resolve => setTimeout(resolve, process.platform === 'darwin' ? 180 : 120))
+    await new Promise(resolve => setTimeout(resolve, process.platform === 'darwin' ? 180 : process.platform === 'win32' ? 250 : 120))
   }
 
   private async withQueueLock<T>(operation: () => Promise<T>): Promise<T> {

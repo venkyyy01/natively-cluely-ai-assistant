@@ -116,6 +116,8 @@ test('StealthRuntime ignores shell events from unrelated senders and cleans up s
 
   runtime.createPrimaryStealthSurface({ width: 100, height: 100, webPreferences: {} });
   runtime.show();
+  ipcBus.emit('stealth-shell:ready', { sender: { id: created[1]?.webContents.id } });
+  ipcBus.emit('stealth-shell:frame-presented', { sender: { id: created[1]?.webContents.id } }, { frameId: 1 });
   runtime.hide();
   ipcBus.emit('stealth-shell:ready', { sender: { id: 999 } });
   ipcBus.emit('stealth-shell:input', { sender: { id: 999 } }, { kind: 'focus', type: 'focus' });
