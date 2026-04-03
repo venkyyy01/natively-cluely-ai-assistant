@@ -71,3 +71,44 @@ test('chatWithCurl falls back to common-format extraction when responsePath miss
     helper.scrubKeys();
   }
 });
+
+test('executeCustomProvider attaches a timeout-backed abort signal to fetch', async () => {
+  const LLMHelper = await loadLLMHelper();
+  const helper = new LLMHelper() as any;
+  const originalFetch = global.fetch;
+  const originalAbortSignalTimeout = AbortSignal.timeout;
+  const timeoutController = new AbortController();
+  let seenTimeoutMs = 0;
+  let seenSignal: AbortSignal | undefined;
+
+  (AbortSignal as any).timeout = (timeoutMs: number) => {
+    seenTimeoutMs = timeoutMs;
+    return timeoutController.signal;
+  };
+
+  (global as any).fetch = async (_url: string, init?: RequestInit) => {
+    seenSignal = init?.signal as AbortSignal | undefined;
+    return {
+      ok: true,
+      json: async () => ({ text: 'custom ok' }),
+    };
+  };
+
+  try {
+    const result = await helper.executeCustomProvider(
+      'curl https://example.com',
+      'hello',
+      'system prompt',
+      'hello',
+      'context'
+    );
+
+    assert.equal(result, 'custom ok');
+    assert.equal(seenTimeoutMs, 30000);
+    assert.equal(seenSignal, timeoutController.signal);
+  } finally {
+    (global as any).fetch = originalFetch;
+    (AbortSignal as any).timeout = originalAbortSignalTimeout;
+    helper.scrubKeys();
+  }
+});
