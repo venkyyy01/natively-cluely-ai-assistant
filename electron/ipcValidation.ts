@@ -1,10 +1,11 @@
 import { z, type ZodIssue } from 'zod';
-import type { FollowUpMeetingType, FollowUpTone, ProviderKind } from '../shared/ipc';
+import type { FastResponseProvider, FollowUpMeetingType, FollowUpTone, ProviderKind } from '../shared/ipc';
 
 const boundedString = (max: number) => z.string().trim().min(1).max(max);
 const optionalBoundedString = (max: number) => z.string().trim().max(max).optional();
 const sttProviderEnum = z.enum(['google', 'groq', 'openai', 'deepgram', 'elevenlabs', 'azure', 'ibmwatson', 'soniox']);
-const llmProviderEnum = z.enum(['gemini', 'groq', 'openai', 'claude']);
+const llmProviderEnum = z.enum(['gemini', 'groq', 'openai', 'claude', 'cerebras']);
+const fastResponseProviderEnum = z.enum(['groq', 'cerebras']);
 
 export const ipcSchemas = {
   geminiChatArgs: z.tuple([
@@ -35,9 +36,14 @@ export const ipcSchemas = {
     y: z.number().finite().optional(),
   }).strict(),
   providerPreferredModel: z.tuple([
-    z.enum(['gemini', 'groq', 'openai', 'claude'] as [ProviderKind, ...ProviderKind[]]),
+    z.enum(['gemini', 'groq', 'openai', 'claude', 'cerebras'] as [ProviderKind, ...ProviderKind[]]),
     boundedString(256),
   ]),
+  fastResponseConfig: z.object({
+    enabled: z.boolean(),
+    provider: z.enum(['groq', 'cerebras'] as [FastResponseProvider, ...FastResponseProvider[]]),
+    model: z.string().trim().max(256),
+  }).strict(),
   recognitionLanguage: boundedString(64),
   aiResponseLanguage: boundedString(64),
   disguiseMode: z.enum(['terminal', 'settings', 'activity', 'none']),

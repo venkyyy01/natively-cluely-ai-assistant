@@ -25,8 +25,13 @@ describe('Meeting Lifecycle Race Conditions', () => {
   it('should handle start→end race conditions', async () => {
     const startPromise = (async () => {
       mockState.meetingLifecycleState = 'starting';
-      mockState.meetingStartSequence++;
+      const startSequence = ++mockState.meetingStartSequence;
       await new Promise(resolve => setTimeout(resolve, 10));
+
+      if (startSequence !== mockState.meetingStartSequence || mockState.meetingLifecycleState !== 'starting') {
+        return;
+      }
+
       mockState.isMeetingActive = true;
       mockState.meetingLifecycleState = 'active';
     })();

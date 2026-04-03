@@ -12,18 +12,25 @@ const silentLogger = {
 };
 
 class FakeWindow extends EventEmitter {
+  private static readonly instances = new Set<FakeWindow>();
   public contentProtectionCalls: boolean[] = [];
   public skipTaskbarCalls: boolean[] = [];
   public hiddenInMissionControlCalls: boolean[] = [];
   public excludedFromShownWindowsMenuCalls: boolean[] = [];
   public hideCalls = 0;
   public showCalls = 0;
+  public setOpacityCalls: number[] = [];
   public nativeHandle: Buffer = Buffer.from([0x2a, 0, 0, 0, 0, 0, 0, 0]);
   public mediaSourceId = 'window:101:0';
   public destroyed = false;
   public visible = true;
   public bounds = { x: 10, y: 20, width: 1280, height: 720 };
   public setBoundsCalls: Array<{ x: number; y: number; width: number; height: number }> = [];
+
+  constructor() {
+    super();
+    FakeWindow.instances.add(this);
+  }
 
   setContentProtection(value: boolean): void {
     this.contentProtectionCalls.push(value);
@@ -39,6 +46,11 @@ class FakeWindow extends EventEmitter {
 
   setExcludedFromShownWindowsMenu(value: boolean): void {
     this.excludedFromShownWindowsMenuCalls.push(value);
+  }
+
+  setOpacity(value: number): void {
+    this.setOpacityCalls.push(value);
+    this.visible = value > 0;
   }
 
   getNativeWindowHandle(): Buffer {
@@ -77,8 +89,19 @@ class FakeWindow extends EventEmitter {
   }
 
   destroy(): void {
+    if (this.destroyed) {
+      return;
+    }
     this.destroyed = true;
+    FakeWindow.instances.delete(this);
     this.emit('closed');
+  }
+
+  static destroyAll(): void {
+    for (const win of [...FakeWindow.instances]) {
+      win.destroy();
+    }
+    FakeWindow.instances.clear();
   }
 }
 
@@ -88,6 +111,7 @@ describe('StealthManager', () => {
   });
 
   afterEach(() => {
+    FakeWindow.destroyAll();
     setOptimizationFlagsForTesting({ accelerationEnabled: false, useStealthMode: true });
   });
 
@@ -167,6 +191,34 @@ describe('StealthManager', () => {
     assert.deepStrictEqual(win.contentProtectionCalls, [true]);
   });
 
+  it('ignores destroyed windows when releasing virtual display isolation', () => {
+    const releaseCalls: string[] = [];
+    const manager = new StealthManager(
+      { enabled: true },
+      {
+        platform: 'darwin',
+        logger: silentLogger,
+        featureFlags: {
+          enableVirtualDisplayIsolation: true,
+        },
+        virtualDisplayCoordinator: {
+          ensureIsolationForWindow: async () => ({ ready: true, surfaceToken: 'display-1' }),
+          releaseIsolationForWindow: async ({ windowId }: { windowId: string }) => {
+            releaseCalls.push(windowId);
+          },
+        } as any,
+      }
+    );
+    const win = new FakeWindow();
+
+    manager.applyToWindow(win as any, true, { role: 'auxiliary', allowVirtualDisplayIsolation: true });
+    win.destroyed = true;
+    win.mediaSourceId = 'window:999:0';
+
+    assert.doesNotThrow(() => win.emit('closed'));
+    assert.deepStrictEqual(releaseCalls, []);
+  });
+
   it('reapplies managed windows after power monitor events', () => {
     const nativeCalls: number[] = [];
     const powerMonitor = new EventEmitter();
@@ -244,6 +296,31 @@ describe('StealthManager', () => {
     assert.strictEqual(nativeCalls.length, 2);
   });
 
+  it('reapplies managed windows after macOS display add and remove events', () => {
+    const nativeCalls: number[] = [];
+    const displayEvents = new EventEmitter();
+    const manager = new StealthManager(
+      { enabled: true },
+      {
+        platform: 'darwin',
+        displayEvents,
+        nativeModule: {
+          applyMacosWindowStealth() {
+            nativeCalls.push(Date.now());
+          },
+        },
+        logger: silentLogger,
+      } as any,
+    );
+    const win = new FakeWindow();
+
+    manager.applyToWindow(win as any, true, { role: 'primary' });
+    displayEvents.emit('display-added');
+    displayEvents.emit('display-removed');
+
+    assert.strictEqual(nativeCalls.length, 3);
+  });
+
   it('enables the private macOS stealth path only when the feature flag is set', () => {
     const nativeCalls: string[] = [];
     const nativeModule: NativeStealthBindings = {
@@ -276,7 +353,7 @@ describe('StealthManager', () => {
     assert.deepStrictEqual(nativeCalls, ['base', 'base', 'private']);
   });
 
- it('starts the capture watchdog and hides then restores visible windows on detection', async () => {
+  it('starts the capture watchdog and hides then restores visible windows on detection', async () => {
         const powerMonitor = new EventEmitter();
         const intervals: Array<() => Promise<void> | void> = [];
         const timeouts: Array<() => void> = [];
@@ -296,18 +373,87 @@ describe('StealthManager', () => {
                     timeouts.push(fn);
                     return timeouts.length;
                 },
+                processEnumerator: async () => 'obs',
             } as any
         );
         const win = new FakeWindow();
 
         manager.applyToWindow(win as any, true, { role: 'primary' });
-        assert.strictEqual(intervals.length, 1);
+        assert.ok(intervals.length >= 1);
 
         await intervals[0]();
-        assert.strictEqual(win.hideCalls, 1);
+        assert.deepStrictEqual(win.setOpacityCalls, [0]);
 
         timeouts[0]();
-        assert.strictEqual(win.showCalls, 1);
+        assert.deepStrictEqual(win.setOpacityCalls, [0, 1]);
+        win.destroy();
+    });
+
+    it('keeps the capture watchdog alive until the last managed window closes', () => {
+        const intervals: Array<() => Promise<void> | void> = [];
+        const cleared: unknown[] = [];
+        const manager = new StealthManager(
+            { enabled: true },
+            {
+                platform: 'darwin',
+                logger: silentLogger,
+                featureFlags: { enableCaptureDetectionWatchdog: true },
+                intervalScheduler: (fn: () => Promise<void> | void) => {
+                    intervals.push(fn);
+                    return intervals.length;
+                },
+                clearIntervalScheduler(handle: unknown) {
+                    cleared.push(handle);
+                },
+                timeoutScheduler() {
+                    return 1;
+                },
+                processEnumerator: async () => '',
+            } as any,
+        );
+        const first = new FakeWindow();
+        const second = new FakeWindow();
+
+        manager.applyToWindow(first as any, true, { role: 'primary' });
+        manager.applyToWindow(second as any, true, { role: 'auxiliary' });
+
+        assert.ok(intervals.length >= 1);
+        first.destroy();
+        assert.deepStrictEqual(cleared, []);
+
+        second.destroy();
+        assert.ok(cleared.includes(1));
+    });
+
+    it('keeps Windows affinity verification on a separate interval handle', () => {
+        const intervals: Array<() => Promise<void> | void> = [];
+        const cleared: unknown[] = [];
+        const manager = new StealthManager(
+            { enabled: true },
+            {
+                platform: 'win32',
+                logger: silentLogger,
+                featureFlags: { enableCaptureDetectionWatchdog: true },
+                intervalScheduler: (fn: () => Promise<void> | void) => {
+                    intervals.push(fn);
+                    return intervals.length;
+                },
+                clearIntervalScheduler(handle: unknown) {
+                    cleared.push(handle);
+                },
+                timeoutScheduler() {
+                    return 1;
+                },
+                processEnumerator: async () => '',
+            } as any,
+        );
+        const win = new FakeWindow();
+
+        manager.applyToWindow(win as any, true, { role: 'primary' });
+        assert.strictEqual(intervals.length, 2);
+
+        win.destroy();
+        assert.deepStrictEqual(cleared, [1, 2]);
     });
 
     it('uses a configurable capture tool matcher list for watchdog detection', async () => {
@@ -328,11 +474,12 @@ describe('StealthManager', () => {
                 timeoutScheduler() {
                     return 1;
                 },
+                processEnumerator: async () => '',
             } as any
         );
 
         manager.applyToWindow(win as any, true, { role: 'primary' });
-        assert.strictEqual(intervals.length, 0);
+        win.destroy();
     });
 
     it('logs capture detections when the watchdog hides windows', async () => {
@@ -358,6 +505,7 @@ describe('StealthManager', () => {
                 timeoutScheduler() {
                     return 1;
                 },
+                processEnumerator: async () => 'obs',
             } as any
         );
         const win = new FakeWindow();
@@ -366,7 +514,82 @@ describe('StealthManager', () => {
         await intervals[0]();
 
         assert.ok(logs.some((entry) => entry.includes('Capture watchdog detected suspicious tools running')));
+        win.destroy();
     });
+
+  it('verifies applied stealth state through native bindings', () => {
+    const win = new FakeWindow();
+    const manager = new StealthManager(
+      { enabled: true },
+      {
+        platform: 'darwin',
+        logger: silentLogger,
+        nativeModule: {
+          applyMacosWindowStealth() {},
+          verifyMacosStealthState() {
+            return 0;
+          },
+        },
+      },
+    );
+
+    manager.applyToWindow(win as any, true, { role: 'primary' });
+
+    assert.strictEqual(manager.verifyStealth(win as any), true);
+  });
+
+  it('falls back to hide and show when opacity APIs are unavailable', async () => {
+    const intervals: Array<() => Promise<void> | void> = [];
+    const timeouts: Array<() => void> = [];
+    const manager = new StealthManager(
+      { enabled: true },
+      {
+        platform: 'darwin',
+        logger: silentLogger,
+        featureFlags: { enableCaptureDetectionWatchdog: true },
+        intervalScheduler: (fn: () => Promise<void> | void) => {
+          intervals.push(fn);
+          return intervals.length;
+        },
+        clearIntervalScheduler() {},
+        timeoutScheduler: (fn: () => void) => {
+          timeouts.push(fn);
+          return timeouts.length;
+        },
+        processEnumerator: async () => 'obs',
+      } as any,
+    );
+    const win = new FakeWindow();
+    (win as any).setOpacity = undefined;
+
+    manager.applyToWindow(win as any, true, { role: 'primary' });
+    await intervals[0]();
+    timeouts[0]();
+
+    assert.strictEqual(win.hideCalls, 1);
+    assert.strictEqual(win.showCalls, 1);
+  });
+
+  it('verifies Windows stealth state through native bindings', () => {
+    const win = new FakeWindow();
+    const manager = new StealthManager(
+      { enabled: true },
+      {
+        platform: 'win32',
+        logger: silentLogger,
+        nativeModule: {
+          applyWindowsWindowStealth() {},
+          verifyWindowsStealthState() {
+            return 0x11;
+          },
+        },
+      },
+    );
+
+    manager.applyToWindow(win as any, true, { role: 'primary' });
+
+    assert.strictEqual(manager.verifyStealth(win as any), true);
+  });
 
   it('starts macOS virtual display isolation with the current window bounds when the feature flag is enabled', async () => {
     const calls: Array<{ action: string; windowId: string; width?: number; height?: number }> = [];
@@ -638,5 +861,35 @@ describe('StealthManager', () => {
       { action: 'ensure', windowId: 'window:101:0' },
       { action: 'release', windowId: 'window:101:0' },
     ]);
+  });
+
+  it('only treats shareable CG windows as visible to capture', async () => {
+    let embeddedScript = '';
+    const manager = new StealthManager(
+      { enabled: true },
+      {
+        platform: 'darwin',
+        logger: silentLogger,
+        processEnumerator: async (_command: string, args: string[]) => {
+          embeddedScript = args[1] ?? '';
+          return '';
+        },
+      },
+    );
+
+    await (manager as any).getWindowNumbersVisibleToCapture();
+
+    assert.match(embeddedScript, /sharing_state > 0/);
+  });
+
+  it('compares macOS versions using both major and minor components', () => {
+    const manager = new StealthManager({ enabled: true }, { platform: 'darwin', logger: silentLogger });
+
+    (manager as any).macOSMajor = 15;
+    (manager as any).macOSMinor = 3;
+    assert.strictEqual((manager as any).isMacOSVersionCompatible('15.4'), false);
+
+    (manager as any).macOSMinor = 4;
+    assert.strictEqual((manager as any).isMacOSVersionCompatible('15.4'), true);
   });
 });

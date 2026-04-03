@@ -16,6 +16,7 @@ import {
 import { deepVariableReplacer, getByPath } from './utils/curlUtils';
 import curl2Json from "@bany/curl-to-json";
 import { CustomProvider, CurlProvider } from './services/CredentialsManager';
+import type { FastResponseConfig, FastResponseProvider } from '../shared/ipc';
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import axios from 'axios';
@@ -101,8 +102,10 @@ interface OllamaResponse {
 const GEMINI_FLASH_MODEL = "gemini-3.1-flash-lite-preview"
 const GEMINI_PRO_MODEL = "gemini-3.1-pro-preview"
 const GROQ_MODEL = "llama-3.3-70b-versatile"
+const CEREBRAS_FAST_MODEL = "gpt-oss-120b"
 const OPENAI_MODEL = "gpt-5.4-chat"
 const CLAUDE_MODEL = "claude-sonnet-4-6"
+const CEREBRAS_BASE_URL = "https://api.cerebras.ai/v1"
 const MAX_OUTPUT_TOKENS = 8192
 const CLAUDE_MAX_OUTPUT_TOKENS = 8192
 const DEFAULT_INPUT_TOKEN_BUDGET = 24000
@@ -112,6 +115,7 @@ const GEMINI_FLASH_INPUT_TOKEN_BUDGET = 28000
 const GEMINI_PRO_INPUT_TOKEN_BUDGET = 48000
 const CLAUDE_INPUT_TOKEN_BUDGET = 60000
 const GROQ_INPUT_TOKEN_BUDGET = 24000
+const CEREBRAS_INPUT_TOKEN_BUDGET = 32000
 const LOCAL_INPUT_TOKEN_BUDGET = 16000
 const SYSTEM_PROMPT_CACHE_TTL_MS = 5 * 60 * 1000
 const FINAL_PAYLOAD_CACHE_TTL_MS = 15 * 1000
@@ -125,10 +129,18 @@ const IN_FLIGHT_RESPONSE_CACHE_MAX = 10
 const IMAGE_ANALYSIS_PROMPT = `Analyze concisely. Be direct. No markdown formatting. Return plain text only.`
 const INDIAN_ENGLISH_STYLE_INSTRUCTION = `CRITICAL STYLE: Write in natural Indian English.
 - Keep the flow conversational and human.
+- Use Indian English phrasing and rhythm naturally while staying professional.
+- Slight filler words are okay when they sound natural (for example: "yeah so", "right", "honestly"), but do not overdo.
+- Avoid over-westernized slang/idioms and avoid robotic corporate wording.
 - Be concrete, clear, concise, and complete.
-- No fluff, no jargon, no text walls.
-- Sound natural, practical, and confident.`
+- No text walls or unnecessary fluff.`
 type Provider = 'gemini' | 'groq' | 'openai' | 'claude';
+
+const DEFAULT_FAST_RESPONSE_CONFIG: FastResponseConfig = {
+  enabled: false,
+  provider: 'groq',
+  model: GROQ_MODEL,
+};
 
 export interface ModelFallbackEvent {
   provider: Provider;
@@ -141,10 +153,12 @@ export class LLMHelper {
   public static __testAxios: null | ((config: any) => Promise<any>) = null;
   private client: GoogleGenAI | null = null
   private groqClient: Groq | null = null
+  private cerebrasClient: OpenAI | null = null
   private openaiClient: OpenAI | null = null
   private claudeClient: Anthropic | null = null
   private apiKey: string | null = null
   private groqApiKey: string | null = null
+  private cerebrasApiKey: string | null = null
   private openaiApiKey: string | null = null
   private claudeApiKey: string | null = null
   private useOllama: boolean = false
@@ -154,7 +168,7 @@ export class LLMHelper {
   private geminiModel: string = GEMINI_FLASH_MODEL
   private customProvider: CustomProvider | null = null;
   private activeCurlProvider: CurlProvider | null = null;
-  private groqFastTextMode: boolean = false;
+  private fastResponseConfig: FastResponseConfig = { ...DEFAULT_FAST_RESPONSE_CONFIG };
   private knowledgeOrchestrator: any = null;
   private aiResponseLanguage: string = 'English';
   private sttLanguage: string = 'english-us';
@@ -172,7 +186,7 @@ export class LLMHelper {
   // Self-improving model version manager for vision analysis
   private modelVersionManager: ModelVersionManager;
 
-  constructor(apiKey?: string, useOllama: boolean = false, ollamaModel?: string, ollamaUrl?: string, groqApiKey?: string, openaiApiKey?: string, claudeApiKey?: string) {
+  constructor(apiKey?: string, useOllama: boolean = false, ollamaModel?: string, ollamaUrl?: string, groqApiKey?: string, openaiApiKey?: string, claudeApiKey?: string, cerebrasApiKey?: string) {
     this.useOllama = useOllama
 
     // Initialize rate limiters
@@ -188,6 +202,12 @@ export class LLMHelper {
       this.groqApiKey = groqApiKey
       this.groqClient = new Groq({ apiKey: groqApiKey })
       console.log(`[LLMHelper] Groq client initialized with model: ${GROQ_MODEL}`)
+    }
+
+    if (cerebrasApiKey) {
+      this.cerebrasApiKey = cerebrasApiKey
+      this.cerebrasClient = new OpenAI({ apiKey: cerebrasApiKey, baseURL: CEREBRAS_BASE_URL })
+      console.log(`[LLMHelper] Cerebras client initialized with model: ${CEREBRAS_FAST_MODEL}`)
     }
 
     // Initialize OpenAI client if API key provided
@@ -225,28 +245,35 @@ export class LLMHelper {
   }
 
   public setApiKey(apiKey: string) {
-    this.apiKey = apiKey;
-    this.client = new GoogleGenAI({
+    this.apiKey = apiKey || null;
+    this.client = apiKey ? new GoogleGenAI({
       apiKey: apiKey,
       httpOptions: { apiVersion: "v1alpha" }
-    })
+    }) : null
     console.log("[LLMHelper] Gemini API Key updated.");
   }
 
   public setGroqApiKey(apiKey: string) {
-    this.groqClient = new Groq({ apiKey });
+    this.groqApiKey = apiKey || null;
+    this.groqClient = apiKey ? new Groq({ apiKey }) : null;
     console.log("[LLMHelper] Groq API Key updated.");
   }
 
+  public setCerebrasApiKey(apiKey: string) {
+    this.cerebrasApiKey = apiKey || null;
+    this.cerebrasClient = apiKey ? new OpenAI({ apiKey, baseURL: CEREBRAS_BASE_URL }) : null;
+    console.log("[LLMHelper] Cerebras API Key updated.");
+  }
+
   public setOpenaiApiKey(apiKey: string) {
-    this.openaiApiKey = apiKey;
-    this.openaiClient = new OpenAI({ apiKey });
+    this.openaiApiKey = apiKey || null;
+    this.openaiClient = apiKey ? new OpenAI({ apiKey }) : null;
     console.log("[LLMHelper] OpenAI API Key updated.");
   }
 
   public setClaudeApiKey(apiKey: string) {
-    this.claudeApiKey = apiKey;
-    this.claudeClient = new Anthropic({ apiKey });
+    this.claudeApiKey = apiKey || null;
+    this.claudeClient = apiKey ? new Anthropic({ apiKey }) : null;
     console.log("[LLMHelper] Claude API Key updated.");
   }
 
@@ -273,10 +300,12 @@ export class LLMHelper {
   public scrubKeys(): void {
     this.apiKey = null;
     this.groqApiKey = null;
+    this.cerebrasApiKey = null;
     this.openaiApiKey = null;
     this.claudeApiKey = null;
     this.client = null;
     this.groqClient = null;
+    this.cerebrasClient = null;
     this.openaiClient = null;
     this.claudeClient = null;
     // Destroy rate limiters and null reference
@@ -298,13 +327,44 @@ export class LLMHelper {
     console.log('[LLMHelper] Keys scrubbed from memory');
   }
 
-  public setGroqFastTextMode(enabled: boolean) {
-    this.groqFastTextMode = enabled;
-    console.log(`[LLMHelper] Groq Fast Text Mode: ${enabled}`);
+  public setFastResponseConfig(config: FastResponseConfig) {
+    this.fastResponseConfig = {
+      enabled: config.enabled === true,
+      provider: config.provider === 'cerebras' ? 'cerebras' : 'groq',
+      model: config.model || (config.provider === 'cerebras' ? CEREBRAS_FAST_MODEL : GROQ_MODEL),
+    };
+    console.log(`[LLMHelper] Fast Response Mode: ${this.fastResponseConfig.enabled} via ${this.fastResponseConfig.provider} (${this.fastResponseConfig.model})`);
   }
 
-  public getGroqFastTextMode(): boolean {
-    return this.groqFastTextMode;
+  public getFastResponseConfig(): FastResponseConfig {
+    return { ...this.fastResponseConfig };
+  }
+
+  private getDefaultFastModel(provider: FastResponseProvider): string {
+    return provider === 'cerebras' ? CEREBRAS_FAST_MODEL : GROQ_MODEL;
+  }
+
+  private getConfiguredFastModel(provider: FastResponseProvider): string {
+    if (this.fastResponseConfig.provider === provider && this.fastResponseConfig.model.trim()) {
+      return this.fastResponseConfig.model.trim();
+    }
+
+    return this.getDefaultFastModel(provider);
+  }
+
+  private getActiveFastResponseTarget(): { provider: FastResponseProvider; model: string } | null {
+    if (!this.fastResponseConfig.enabled) {
+      return null;
+    }
+
+    const provider = this.fastResponseConfig.provider;
+    if (provider === 'cerebras') {
+      if (!this.cerebrasClient) return null;
+      return { provider, model: this.getConfiguredFastModel(provider) };
+    }
+
+    if (!this.groqClient) return null;
+    return { provider: 'groq', model: this.getConfiguredFastModel('groq') };
   }
 
   public getAiResponseLanguage(): string {
@@ -1136,6 +1196,7 @@ ANSWER DIRECTLY:`;
     const normalizedModelId = modelId.toLowerCase();
 
     if (normalizedProvider === 'claude' || normalizedModelId.startsWith('claude-')) return CLAUDE_INPUT_TOKEN_BUDGET;
+    if (normalizedProvider === 'cerebras') return CEREBRAS_INPUT_TOKEN_BUDGET;
     if (normalizedProvider === 'openai' || this.isOpenAiModel(normalizedModelId)) return OPENAI_INPUT_TOKEN_BUDGET;
     if (normalizedProvider === 'groq' || normalizedProvider === 'text_groq' || this.isGroqModel(normalizedModelId)) return GROQ_INPUT_TOKEN_BUDGET;
     if (normalizedProvider === 'gemini_pro' || (normalizedModelId.includes('gemini') && normalizedModelId.includes('pro'))) return GEMINI_PRO_INPUT_TOKEN_BUDGET;
@@ -1228,20 +1289,23 @@ ANSWER DIRECTLY:`;
         groq: buildMessage('groq', GROQ_MODEL, finalGroqPrompt),
       };
 
-      // GROQ FAST TEXT OVERRIDE (Text-Only)
-      if (this.groqFastTextMode && !isMultimodal && this.groqClient) {
-        console.log(`[LLMHelper] ⚡️ Groq Fast Text Mode Active. Routing to Groq...`);
+      const openaiSystemPrompt = skipSystemPrompt ? undefined : await this.withSystemPromptCache('openai', activeOpenAiModel, OPENAI_SYSTEM_PROMPT, () => this.injectLanguageInstruction(OPENAI_SYSTEM_PROMPT));
+      const claudeSystemPrompt = skipSystemPrompt ? undefined : await this.withSystemPromptCache('claude', CLAUDE_MODEL, CLAUDE_SYSTEM_PROMPT, () => this.injectLanguageInstruction(CLAUDE_SYSTEM_PROMPT));
+
+      const fastResponseTarget = !isMultimodal ? this.getActiveFastResponseTarget() : null;
+      if (fastResponseTarget) {
+        console.log(`[LLMHelper] ⚡️ Fast Response Mode Active. Routing to ${fastResponseTarget.provider} (${fastResponseTarget.model})...`);
         try {
-          return await this.generateWithGroq(combinedMessages.groq);
+          if (fastResponseTarget.provider === 'cerebras') {
+            return await this.generateWithCerebras(openaiUserContent, openaiSystemPrompt, fastResponseTarget.model);
+          }
+
+          return await this.generateWithGroq(combinedMessages.groq, fastResponseTarget.model);
         } catch (e: any) {
-          console.warn("[LLMHelper] Groq Fast Text failed, falling back to standard routing:", e.message);
+          console.warn(`[LLMHelper] Fast Response Mode failed on ${fastResponseTarget.provider}, falling back to standard routing:`, e.message);
           // Fall through to standard routing
         }
       }
-
-      // System prompts for OpenAI/Claude (skipped if skipSystemPrompt)
-      const openaiSystemPrompt = skipSystemPrompt ? undefined : await this.withSystemPromptCache('openai', activeOpenAiModel, OPENAI_SYSTEM_PROMPT, () => this.injectLanguageInstruction(OPENAI_SYSTEM_PROMPT));
-      const claudeSystemPrompt = skipSystemPrompt ? undefined : await this.withSystemPromptCache('claude', CLAUDE_MODEL, CLAUDE_SYSTEM_PROMPT, () => this.injectLanguageInstruction(CLAUDE_SYSTEM_PROMPT));
 
       if (this.useOllama) {
         return await this.callOllama(combinedMessages.gemini);
@@ -1465,20 +1529,21 @@ ANSWER DIRECTLY:`;
     throw new Error('All reasoning models failed for structured generation');
   }
 
-  private async generateWithGroq(fullMessage: string): Promise<string> {
+  private async generateWithGroq(fullMessage: string, modelOverride: string = GROQ_MODEL): Promise<string> {
     if (!this.groqClient) throw new Error("Groq client not initialized");
 
     await this.rateLimiters.groq.acquire();
-    const payloadHash = this.hashValue(fullMessage);
+    const targetModel = modelOverride || GROQ_MODEL;
+    const payloadHash = this.hashValue({ model: targetModel, fullMessage });
 
-    return this.withResponseCache('groq', GROQ_MODEL, '', payloadHash, async () => {
+    return this.withResponseCache('groq', targetModel, '', payloadHash, async () => {
       const requestPayload = await this.withFinalPayloadCache(
         'groq',
-        GROQ_MODEL,
+        targetModel,
         '',
         payloadHash,
         () => ({
-          model: GROQ_MODEL,
+          model: targetModel,
           messages: [{ role: "user", content: fullMessage }],
           temperature: 0.4,
           max_tokens: 8192,
@@ -1489,6 +1554,44 @@ ANSWER DIRECTLY:`;
       const response = await withTimeout(
         this.groqClient!.chat.completions.create(requestPayload as any),
         LLM_API_TIMEOUT_MS
+      );
+      return response.choices[0]?.message?.content || "";
+    });
+  }
+
+  private async generateWithCerebras(userMessage: string, systemPrompt?: string, modelOverride?: string): Promise<string> {
+    if (!this.cerebrasClient) throw new Error("Cerebras client not initialized");
+
+    const targetModel = modelOverride || this.getConfiguredFastModel('cerebras');
+
+    await this.rateLimiters.cerebras.acquire();
+    const systemPromptHash = this.hashValue(systemPrompt || '');
+    const payloadHash = this.hashValue({ model: targetModel, userMessage, systemPrompt: systemPrompt || '' });
+
+    return this.withResponseCache('cerebras', targetModel, systemPromptHash, payloadHash, async () => {
+      const requestPayload = await this.withFinalPayloadCache(
+        'cerebras',
+        targetModel,
+        systemPromptHash,
+        payloadHash,
+        () => {
+          const messages: any[] = [];
+          if (systemPrompt) {
+            messages.push({ role: 'system', content: systemPrompt });
+          }
+          messages.push({ role: 'user', content: userMessage });
+
+          return {
+            model: targetModel,
+            messages,
+            max_completion_tokens: MAX_OUTPUT_TOKENS,
+          };
+        },
+      );
+
+      const response = await withTimeout(
+        this.cerebrasClient!.chat.completions.create(requestPayload as any),
+        LLM_API_TIMEOUT_MS,
       );
       return response.choices[0]?.message?.content || "";
     });
@@ -2354,17 +2457,24 @@ ANSWER DIRECTLY:`;
       ? `CONTEXT:\n${context}\n\nUSER QUESTION:\n${effectiveMessage}`
       : effectiveMessage;
 
-    // GROQ FAST TEXT OVERRIDE (Text-Only)
-    if (this.groqFastTextMode && !isMultimodal && this.groqClient) {
-      console.log(`[LLMHelper] ⚡️ Groq Fast Text Mode Active (Streaming). Routing to Groq...`);
+    const fastResponseTarget = !isMultimodal ? this.getActiveFastResponseTarget() : null;
+    if (fastResponseTarget) {
+      console.log(`[LLMHelper] ⚡️ Fast Response Mode Active (Streaming). Routing to ${fastResponseTarget.provider} (${fastResponseTarget.model})...`);
       try {
+        if (fastResponseTarget.provider === 'cerebras') {
+          const cerebrasSystem = systemPromptOverride || OPENAI_SYSTEM_PROMPT;
+          const finalCerebrasSystem = this.injectLanguageInstruction(cerebrasSystem);
+          yield* this.streamWithCerebras(userContent, finalCerebrasSystem, fastResponseTarget.model);
+          return;
+        }
+
         const groqSystem = systemPromptOverride || GROQ_SYSTEM_PROMPT;
         const finalGroqSystem = this.injectLanguageInstruction(groqSystem);
         const groqFullMessage = this.joinPrompt(finalGroqSystem, userContent);
-        yield* this.streamWithGroq(groqFullMessage);
+        yield* this.streamWithGroq(groqFullMessage, fastResponseTarget.model);
         return;
       } catch (e: any) {
-        console.warn("[LLMHelper] Groq Fast Text streaming failed, falling back:", e.message);
+        console.warn(`[LLMHelper] Fast Response Mode streaming failed on ${fastResponseTarget.provider}, falling back:`, e.message);
         // Fall through
       }
     }
@@ -2456,17 +2566,46 @@ ANSWER DIRECTLY:`;
   /**
    * Stream response from Groq
    */
-  private async * streamWithGroq(fullMessage: string): AsyncGenerator<string, void, unknown> {
+  private async * streamWithGroq(fullMessage: string, modelOverride: string = GROQ_MODEL): AsyncGenerator<string, void, unknown> {
     if (!this.groqClient) throw new Error("Groq client not initialized");
 
     const timeoutSignal = createTimeoutSignal(LLM_API_TIMEOUT_MS);
+    const targetModel = modelOverride || GROQ_MODEL;
     
     const stream = await this.groqClient.chat.completions.create({
-      model: GROQ_MODEL,
+      model: targetModel,
       messages: [{ role: "user", content: fullMessage }],
       stream: true,
       temperature: 0.4,
       max_tokens: 8192,
+    }, { signal: timeoutSignal });
+
+    for await (const chunk of stream) {
+      const content = chunk.choices[0]?.delta?.content;
+      if (content) {
+        yield content;
+      }
+    }
+  }
+
+  private async * streamWithCerebras(userMessage: string, systemPrompt?: string, modelOverride?: string): AsyncGenerator<string, void, unknown> {
+    if (!this.cerebrasClient) throw new Error("Cerebras client not initialized");
+
+    const targetModel = modelOverride || this.getConfiguredFastModel('cerebras');
+    const messages: any[] = [];
+    if (systemPrompt) {
+      messages.push({ role: 'system', content: systemPrompt });
+    }
+    messages.push({ role: 'user', content: userMessage });
+
+    await this.rateLimiters.cerebras.acquire();
+
+    const timeoutSignal = createTimeoutSignal(LLM_API_TIMEOUT_MS);
+    const stream = await this.cerebrasClient.chat.completions.create({
+      model: targetModel,
+      messages,
+      stream: true,
+      max_completion_tokens: MAX_OUTPUT_TOKENS,
     }, { signal: timeoutSignal });
 
     for await (const chunk of stream) {
@@ -2967,7 +3106,9 @@ ANSWER DIRECTLY:`;
         // Use the first image for custom providers (they typically only support one)
         const data = await fs.promises.readFile(imagePaths[0]);
         base64Image = data.toString("base64");
-      } catch (e) { }
+      } catch (e) {
+        console.warn('[LLMHelper] Failed to read image for custom provider:', e);
+      }
     }
 
     const combinedMessage = context ? `${context}\n\n${message}` : message;

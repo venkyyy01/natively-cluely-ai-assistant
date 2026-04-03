@@ -276,14 +276,7 @@ export class MacosVirtualDisplayClient {
           }
         } catch (error) {
           const parsedError = error instanceof Error ? error : new Error(String(error));
-          for (const pending of this.pending.values()) {
-            clearTimeout(pending.timeout);
-            pending.reject(new Error(`Invalid helper JSON response: ${parsedError.message}`));
-          }
-          this.pending.clear();
-          this.expiredRequestIds.clear();
-          this.serverProcess?.kill();
-          this.serverProcess = null;
+          console.warn('[MacosVirtualDisplayClient] Invalid helper JSON, dropping line:', parsedError.message);
         }
       }
       newlineIndex = this.stdoutBuffer.indexOf('\n');
@@ -295,6 +288,7 @@ export interface VirtualDisplayCoordinator {
   ensureIsolationForWindow(request: MacosVirtualDisplaySessionRequest): Promise<MacosVirtualDisplaySessionResponse>;
   releaseIsolationForWindow(request: { windowId: string }): Promise<void>;
   isExhausted?(): boolean;
+  dispose?(): void;
 }
 
 export class MacosVirtualDisplayCoordinator implements VirtualDisplayCoordinator {
@@ -306,6 +300,14 @@ export class MacosVirtualDisplayCoordinator implements VirtualDisplayCoordinator
   }
 
   async ensureIsolationForWindow(request: MacosVirtualDisplaySessionRequest): Promise<MacosVirtualDisplaySessionResponse> {
+    const existingSessionId = this.activeSessions.get(request.windowId);
+    if (existingSessionId) {
+      try {
+        await this.client.releaseSession(existingSessionId);
+      } catch {
+        // Best-effort cleanup of stale session
+      }
+    }
     const response = await this.client.createSession(request);
     if (response.ready) {
       this.activeSessions.set(request.windowId, request.sessionId);
@@ -321,5 +323,13 @@ export class MacosVirtualDisplayCoordinator implements VirtualDisplayCoordinator
 
   isExhausted(): boolean {
     return this.client.isExhausted();
+  }
+
+  dispose(): void {
+    for (const sessionId of this.activeSessions.values()) {
+      this.client.releaseSession(sessionId).catch(() => { /* best-effort */ });
+    }
+    this.activeSessions.clear();
+    this.client.dispose();
   }
 }

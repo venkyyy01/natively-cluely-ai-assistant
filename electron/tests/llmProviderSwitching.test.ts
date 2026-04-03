@@ -99,3 +99,63 @@ test('OpenAI model-not-found errors fall back to a safe discovered model', async
   }]);
   helper.scrubKeys();
 });
+
+test('fast response config routes text-only requests through Cerebras using the selected model', async () => {
+  const LLMHelper = await loadLLMHelper();
+  const helper = new LLMHelper() as any;
+  let seenModel = '';
+  let seenMessages: any[] = [];
+
+  helper.cerebrasClient = {
+    chat: {
+      completions: {
+        create: async (payload: any) => {
+          seenModel = payload.model;
+          seenMessages = payload.messages;
+          return { choices: [{ message: { content: 'cerebras fast ok' } }] };
+        },
+      },
+    },
+  };
+
+  helper.setFastResponseConfig({ enabled: true, provider: 'cerebras', model: 'gpt-oss-120b' });
+  const result = await helper.chatWithGemini('hello from fast mode');
+
+  assert.equal(result, 'cerebras fast ok');
+  assert.equal(seenModel, 'gpt-oss-120b');
+  assert.equal(seenMessages.at(-1)?.role, 'user');
+  assert.match(String(seenMessages.at(-1)?.content || ''), /hello from fast mode/i);
+  helper.scrubKeys();
+});
+
+test('fast response streaming falls back to the default Cerebras model when none is configured', async () => {
+  const LLMHelper = await loadLLMHelper();
+  const helper = new LLMHelper() as any;
+  let seenModel = '';
+
+  helper.cerebrasClient = {
+    chat: {
+      completions: {
+        create: async (payload: any) => {
+          seenModel = payload.model;
+          async function* stream() {
+            yield { choices: [{ delta: { content: 'fast ' } }] };
+            yield { choices: [{ delta: { content: 'stream' } }] };
+          }
+          return stream();
+        },
+      },
+    },
+  };
+
+  helper.setFastResponseConfig({ enabled: true, provider: 'cerebras', model: '' });
+
+  let output = '';
+  for await (const chunk of helper.streamChat('hello streaming fast mode')) {
+    output += chunk;
+  }
+
+  assert.equal(seenModel, 'gpt-oss-120b');
+  assert.equal(output, 'fast stream');
+  helper.scrubKeys();
+});

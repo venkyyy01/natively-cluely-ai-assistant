@@ -98,6 +98,7 @@ export class RateLimiter {
 export function createProviderRateLimiters() {
     return {
         groq: new RateLimiter(20, 0.5),       // 30 req/min with burst room
+        cerebras: new RateLimiter(120, 2.0),  // Similar shared-endpoint budget to other cloud providers
         gemini: new RateLimiter(120, 2.0),    // 120 req/min
         openai: new RateLimiter(120, 2.0),    // 120 req/min
         claude: new RateLimiter(120, 2.0),    // 120 req/min

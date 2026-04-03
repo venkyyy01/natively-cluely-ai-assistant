@@ -166,7 +166,7 @@ test('MacosVirtualDisplayClient parses validate-session output', async () => {
   assert.equal(response.data.windowEnumerated, true);
 });
 
-test('MacosVirtualDisplayClient rejects pending requests on malformed helper JSON', async () => {
+test('MacosVirtualDisplayClient drops invalid JSON lines without killing pending requests', async () => {
   const client = new MacosVirtualDisplayClient({
     helperPath: '/tmp/helper',
     runHelper: async () => ({ exitCode: 0, stdout: '{}', stderr: '' }),
@@ -180,23 +180,55 @@ test('MacosVirtualDisplayClient rejects pending requests on malformed helper JSO
     flushServerResponses: () => void;
   };
 
-  const rejection = new Promise<string>((resolve) => {
-    internal.pending.set('req-1', {
-      resolve: () => {
-        throw new Error('expected rejection');
-      },
-      reject: (error) => resolve(error.message),
-      timeout: setTimeout(() => undefined, 1000),
-    });
+  let resolved = false;
+  internal.pending.set('req-1', {
+    resolve: () => { resolved = true; },
+    reject: () => { resolved = true; },
+    timeout: setTimeout(() => undefined, 1000),
   });
 
   internal.serverProcess = { kill: () => { killed = true; } };
   internal.stdoutBuffer = 'not-json\n';
   internal.flushServerResponses();
 
-  assert.match(await rejection, /Invalid helper JSON response/);
+  assert.equal(internal.pending.size, 1);
+  assert.equal(killed, false);
+  assert.equal(resolved, false);
+});
+
+test('MacosVirtualDisplayClient reports exhaustion after repeated respawns', () => {
+  const client = new MacosVirtualDisplayClient({ helperPath: '/tmp/helper' });
+  const internal = client as unknown as { respawnTimestamps: number[]; isExhausted: () => boolean };
+
+  const now = Date.now();
+  internal.respawnTimestamps = [now - 1_000, now - 2_000, now - 3_000];
+
+  assert.equal(internal.isExhausted(), true);
+});
+
+test('MacosVirtualDisplayClient dispose clears pending requests and nulls serverProcess', () => {
+  const client = new MacosVirtualDisplayClient({ helperPath: '/tmp/helper' });
+  const internal = client as unknown as {
+    pending: Map<string, { resolve: () => void; reject: (error: Error) => void; timeout: NodeJS.Timeout }>;
+    serverProcess: { kill: () => void } | null;
+    stdoutBuffer: string;
+  };
+
+  let rejected = false;
+  internal.pending.set('req-1', {
+    resolve: () => {},
+    reject: () => { rejected = true; },
+    timeout: setTimeout(() => undefined, 1000),
+  });
+  internal.serverProcess = { kill: () => {} };
+  internal.stdoutBuffer = 'buffered';
+
+  client.dispose();
+
+  assert.equal(rejected, true);
   assert.equal(internal.pending.size, 0);
-  assert.equal(killed, true);
+  assert.equal(internal.serverProcess, null);
+  assert.equal(internal.stdoutBuffer, '');
 });
 
 test('MacosVirtualDisplayClient serve mode works against the built helper when available', async (t) => {

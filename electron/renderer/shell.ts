@@ -17,6 +17,7 @@ const mapModifiers = (event: MouseEvent | KeyboardEvent | WheelEvent): Array<'sh
 
 export function mountStealthShell(bridge: StealthShellBridge, documentRef: Document = document): void {
   const canvas = documentRef.getElementById('stealth-shell-canvas');
+  const loadingIndicator = documentRef.getElementById('loading-indicator');
   if (!(canvas instanceof HTMLCanvasElement)) {
     throw new Error('Missing stealth shell canvas');
   }
@@ -33,6 +34,7 @@ export function mountStealthShell(bridge: StealthShellBridge, documentRef: Docum
       canvas.height = payload.height;
       context.clearRect(0, 0, payload.width, payload.height);
       context.drawImage(image, 0, 0, payload.width, payload.height);
+      loadingIndicator?.classList.add('hidden');
     };
     image.src = payload.dataUrl;
   };

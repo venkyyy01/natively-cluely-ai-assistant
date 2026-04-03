@@ -7,6 +7,7 @@ import { StealthRuntime } from '../stealth/StealthRuntime';
 class FakeWebContents extends EventEmitter {
   public id: number;
   public sent: Array<{ channel: string; payload: unknown }> = [];
+  public invalidations = 0;
 
   constructor(id: number) {
     super();
@@ -19,6 +20,7 @@ class FakeWebContents extends EventEmitter {
 
   sendInputEvent(): void {}
   setFrameRate(): void {}
+  invalidate(): void { this.invalidations += 1; }
 }
 
 class FakeWindow extends EventEmitter {
@@ -27,14 +29,24 @@ class FakeWindow extends EventEmitter {
   public hidden = false;
   public shown = false;
   public destroyed = false;
+  public loadUrls: string[] = [];
+  public loadFiles: string[] = [];
+  public options: Record<string, unknown>;
 
-  constructor(id: number) {
+  constructor(id: number, options: Record<string, unknown>) {
     super();
     this.webContents = new FakeWebContents(id);
+    this.options = options;
   }
 
-  loadURL(): Promise<void> { return Promise.resolve(); }
-  loadFile(): Promise<void> { return Promise.resolve(); }
+  loadURL(url?: string): Promise<void> {
+    if (url) this.loadUrls.push(url);
+    return Promise.resolve();
+  }
+  loadFile(file?: string): Promise<void> {
+    if (file) this.loadFiles.push(file);
+    return Promise.resolve();
+  }
   show(): void { this.shown = true; }
   hide(): void { this.hidden = true; }
   close(): void { this.destroyed = true; }
@@ -46,7 +58,7 @@ class FakeWindow extends EventEmitter {
   isDestroyed(): boolean { return this.destroyed; }
 }
 
-test('StealthRuntime creates shell/content pair and applies stealth to both windows', () => {
+test('StealthRuntime creates shell/content pair and applies stealth to the visible shell only', () => {
   const created: FakeWindow[] = [];
   const applied: Array<{ id: number; options: unknown }> = [];
   const runtime = new StealthRuntime({
@@ -56,8 +68,8 @@ test('StealthRuntime creates shell/content pair and applies stealth to both wind
         applied.push({ id: win.webContents.id, options });
       },
     } as never,
-    createWindow: () => {
-      const win = new FakeWindow(created.length + 1);
+    createWindow: (options) => {
+      const win = new FakeWindow(created.length + 1, options as Record<string, unknown>);
       created.push(win);
       return win as never;
     },
@@ -74,9 +86,12 @@ test('StealthRuntime creates shell/content pair and applies stealth to both wind
 
   assert.equal(created.length, 2);
   assert.equal(shell.webContents.id, 2);
+  assert.equal(created[0]?.options.paintWhenInitiallyHidden, true);
+  assert.equal(created[0]?.options.transparent, false);
+  assert.equal(created[0]?.options.frame, false);
+  assert.equal(created[0]?.options.vibrancy, undefined);
   assert.deepEqual(applied, [
     { id: 2, options: { role: 'primary', hideFromSwitcher: false, allowVirtualDisplayIsolation: false } },
-    { id: 1, options: { role: 'auxiliary', hideFromSwitcher: true, allowVirtualDisplayIsolation: true } },
   ]);
   assert.deepEqual(created[0]?.bounds, created[1]?.bounds);
 });
@@ -87,8 +102,8 @@ test('StealthRuntime ignores shell events from unrelated senders and cleans up s
   const runtime = new StealthRuntime({
     startUrl: 'http://localhost:5180?window=launcher',
     stealthManager: { applyToWindow() {} } as never,
-    createWindow: () => {
-      const win = new FakeWindow(created.length + 11);
+    createWindow: (options) => {
+      const win = new FakeWindow(created.length + 11, options as Record<string, unknown>);
       created.push(win);
       return win as never;
     },
@@ -109,4 +124,54 @@ test('StealthRuntime ignores shell events from unrelated senders and cleans up s
 
   assert.equal(created[1]?.shown, true);
   assert.equal(created[1]?.hidden, true);
+});
+
+test('StealthRuntime requests an initial repaint after content load and shell ready', () => {
+  const ipcBus = new EventEmitter();
+  const created: FakeWindow[] = [];
+  const runtime = new StealthRuntime({
+    startUrl: 'http://localhost:5180?window=launcher',
+    stealthManager: { applyToWindow() {} } as never,
+    createWindow: (options) => {
+      const win = new FakeWindow(created.length + 31, options as Record<string, unknown>);
+      created.push(win);
+      return win as never;
+    },
+    shellHtmlPath: '/tmp/shell.html',
+    preloadPath: '/tmp/preload.js',
+    shellPreloadPath: '/tmp/shellPreload.js',
+    ipcMain: ipcBus as never,
+    logger: { log() {}, warn() {} },
+  });
+
+  runtime.createPrimaryStealthSurface({ width: 100, height: 100, transparent: true, vibrancy: 'under-window', webPreferences: {} });
+  created[0]?.webContents.emit('did-finish-load');
+  ipcBus.emit('stealth-shell:ready', { sender: { id: created[1]?.webContents.id } });
+
+  assert.equal(created[0]?.webContents.invalidations, 3);
+});
+
+test('StealthRuntime uses loadURL for packaged file targets so query params survive', () => {
+  const created: FakeWindow[] = [];
+  const runtime = new StealthRuntime({
+    startUrl: 'file:///Applications/Natively.app/Contents/Resources/app.asar/dist/index.html?window=launcher',
+    stealthManager: { applyToWindow() {} } as never,
+    createWindow: (options) => {
+      const win = new FakeWindow(created.length + 21, options as Record<string, unknown>);
+      created.push(win);
+      return win as never;
+    },
+    shellHtmlPath: '/tmp/shell.html',
+    preloadPath: '/tmp/preload.js',
+    shellPreloadPath: '/tmp/shellPreload.js',
+    ipcMain: new EventEmitter() as never,
+    logger: { log() {}, warn() {} },
+  });
+
+  runtime.createPrimaryStealthSurface({ width: 100, height: 100, webPreferences: {} });
+
+  assert.deepEqual(created[0]?.loadUrls, [
+    'file:///Applications/Natively.app/Contents/Resources/app.asar/dist/index.html?window=launcher',
+  ]);
+  assert.deepEqual(created[0]?.loadFiles, []);
 });

@@ -592,7 +592,9 @@ export class VectorStore {
                             } catch (_) { /* dim table may not exist */ }
                         }
                     }
-                } catch (e) {}
+                } catch (e) {
+                    console.warn('[VectorStore] Failed to delete vector summary:', e);
+                }
             }
         }
         return meetingIds;

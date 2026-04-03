@@ -196,8 +196,11 @@ export class IntelligenceManager extends EventEmitter {
     // Meeting Lifecycle (delegates to persistence)
     // ============================================
 
-  async stopMeeting(): Promise<void> {
-    return this.persistence.stopMeeting();
+  async stopMeeting(meetingId?: string): Promise<void> {
+    const nextSession = await this.persistence.stopMeeting(meetingId);
+    this.session = nextSession;
+    this.persistence.setSession(nextSession);
+    this.engine.setSession(nextSession);
   }
 
   async recoverUnprocessedMeetings(): Promise<void> {

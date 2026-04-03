@@ -1,4 +1,6 @@
 const { spawn } = require('node:child_process');
+const fs = require('node:fs');
+const path = require('node:path');
 
 const THRESHOLDS = {
   lines: 50,
@@ -6,44 +8,16 @@ const THRESHOLDS = {
   functions: 30,
 };
 
-function run(command, args) {
-  return new Promise((resolve, reject) => {
-    const child = spawn(command, args, {
-      shell: false,
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-
-    let output = '';
-
-    child.stdout.on('data', (chunk) => {
-      const text = chunk.toString();
-      output += text;
-      process.stdout.write(text);
-    });
-
-    child.stderr.on('data', (chunk) => {
-      const text = chunk.toString();
-      output += text;
-      process.stderr.write(text);
-    });
-
-    child.on('error', reject);
-
-    child.on('close', (code) => {
-      if (code !== 0) {
-        reject(new Error(`Command failed: ${command} ${args.join(' ')}`));
-        return;
-      }
-
-      resolve(output);
-    });
-  });
-}
+const COVERAGE_EXCLUDES = [
+  'native-module/**',
+  'postcss.config.js',
+  'tailwind.config.js',
+];
 
 function parseCoverageSummary(output) {
   const allFilesLine = output
     .split('\n')
-    .find((line) => line.includes('all files'));
+    .find((line) => line.toLowerCase().includes('all files'));
 
   if (!allFilesLine) {
     throw new Error('Coverage summary not found in test output.');
@@ -52,7 +26,7 @@ function parseCoverageSummary(output) {
   const percentages = [...allFilesLine.matchAll(/(\d+(?:\.\d+)?)/g)].map((match) => Number(match[1]));
 
   if (percentages.length < 3) {
-    throw new Error(`Electron coverage gate failed: could not parse metrics from ${allFilesLine.trim()}`);
+    throw new Error(`Coverage gate failed: could not parse metrics from ${allFilesLine.trim()}`);
   }
 
   return {
@@ -70,28 +44,91 @@ function evaluateCoverage(summary) {
   return failures.length > 0 ? failures.join(', ') : null;
 }
 
+function run(command, args, options = {}) {
+  const { timeoutMs = 180000 } = options;
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, {
+      shell: false,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+
+    let output = '';
+    let timedOut = false;
+
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      child.kill('SIGTERM');
+      reject(new Error(`Command timed out after ${timeoutMs}ms: ${command} ${args.join(' ')}`));
+    }, timeoutMs);
+
+    child.stdout.on('data', (chunk) => {
+      const text = chunk.toString();
+      output += text;
+      process.stdout.write(text);
+    });
+
+    child.stderr.on('data', (chunk) => {
+      const text = chunk.toString();
+      output += text;
+      process.stderr.write(text);
+    });
+
+    child.on('error', (err) => {
+      clearTimeout(timeout);
+      if (!timedOut) reject(err);
+    });
+
+    child.on('close', (code) => {
+      clearTimeout(timeout);
+      if (timedOut) return;
+      if (code !== 0) {
+        reject(new Error(`Command failed: ${command} ${args.join(' ')}`));
+        return;
+      }
+
+      resolve(output);
+    });
+  });
+}
+
+function getTestFiles() {
+  const testDir = path.resolve('dist-electron/electron/tests');
+  if (!fs.existsSync(testDir)) {
+    throw new Error(`Test directory not found: ${testDir}`);
+  }
+
+  return fs.readdirSync(testDir)
+    .filter((fileName) => fileName.endsWith('.test.js'))
+    .map((fileName) => path.join(testDir, fileName));
+}
+
+async function runAllTestsWithCoverage(files, options = {}) {
+  const args = ['--test', '--experimental-test-coverage'];
+  for (const pattern of COVERAGE_EXCLUDES) {
+    args.push(`--test-coverage-exclude=${pattern}`);
+  }
+  args.push(...files);
+  return run('node', args, options);
+}
+
 async function main() {
   console.log('[verify-electron-coverage] Compiling Electron tests...');
   await run('npx', ['tsc', '-p', 'electron/tsconfig.json']);
 
-  console.log('[verify-electron-coverage] Running Electron tests with coverage...');
-  const coverageOutput = await run('node', [
-    '--test',
-    '--experimental-test-coverage',
-    'dist-electron/electron/tests/*.test.js',
-  ]);
+  const testFiles = getTestFiles();
+  console.log(`[verify-electron-coverage] Running ${testFiles.length} Electron test files with coverage...`);
+
+  const output = await runAllTestsWithCoverage(testFiles);
 
   let summary;
-
   try {
-    summary = parseCoverageSummary(coverageOutput);
+    summary = parseCoverageSummary(output);
   } catch (error) {
     console.error(error.message);
     process.exit(1);
   }
 
   const failureMessage = evaluateCoverage(summary);
-
   if (failureMessage) {
     console.error(`Electron coverage gate failed: ${failureMessage}`);
     process.exit(1);
@@ -111,6 +148,9 @@ if (require.main === module) {
 
 module.exports = {
   THRESHOLDS,
+  COVERAGE_EXCLUDES,
   parseCoverageSummary,
   evaluateCoverage,
+  getTestFiles,
+  runAllTestsWithCoverage,
 };

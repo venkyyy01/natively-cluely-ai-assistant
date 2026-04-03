@@ -3,11 +3,13 @@ import { WindowHelper } from "./WindowHelper"
 import path from "node:path"
 import { StealthManager } from "./stealth/StealthManager"
 
-const isDev = process.env.NODE_ENV === "development"
+const isEnvDev = process.env.NODE_ENV === "development"
+const isPackaged = app.isPackaged
+const isDev = isEnvDev && !isPackaged
 
 const startUrl = isDev
     ? "http://localhost:5180"
-    : `file://${path.join(app.getAppPath(), "dist/index.html")}`
+    : `file://${path.join(app.getAppPath(), "dist", "index.html")}`
 
 export class SettingsWindowHelper {
     private settingsWindow: BrowserWindow | null = null

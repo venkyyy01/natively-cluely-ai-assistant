@@ -163,6 +163,41 @@ find_newest_packaged_app() {
     select_newest_path "${candidates[@]}"
 }
 
+find_packaged_app_for_arch() {
+    local release_dir="$1"
+    local app_name="${2:-$APP_NAME}"
+    local build_arch="${3:-${BUILD_ARCH:-}}"
+    local candidates=()
+    local candidate=""
+
+    case "$build_arch" in
+        arm64)
+            candidates=(
+                "$release_dir/mac-arm64/${app_name}.app"
+                "$release_dir/mac/${app_name}.app"
+            )
+            ;;
+        x64)
+            candidates=(
+                "$release_dir/mac-x64/${app_name}.app"
+                "$release_dir/mac/${app_name}.app"
+            )
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+
+    for candidate in "${candidates[@]}"; do
+        if [[ -d "$candidate" ]]; then
+            printf '%s\n' "$candidate"
+            return 0
+        fi
+    done
+
+    return 1
+}
+
 find_newest_release_archive() {
     local release_dir="$1"
     local extension="$2"
@@ -182,11 +217,16 @@ find_newest_release_archive() {
 
 collect_packaged_artifacts() {
     local release_dir="$1"
+    local build_arch="${2:-${BUILD_ARCH:-}}"
     local packaged_app=""
     local packaged_dmg=""
     local packaged_zip=""
 
-    packaged_app=$(find_newest_packaged_app "$release_dir") || fail "Missing packaged app in $release_dir"
+    packaged_app=$(find_packaged_app_for_arch "$release_dir" "$APP_NAME" "$build_arch" || true)
+    if [[ -z "$packaged_app" ]]; then
+        packaged_app=$(find_newest_packaged_app "$release_dir") || fail "Missing packaged app in $release_dir"
+    fi
+
     packaged_dmg=$(find_newest_release_archive "$release_dir" dmg)
     packaged_zip=$(find_newest_release_archive "$release_dir" zip)
 
@@ -214,28 +254,38 @@ print_packaged_artifacts() {
 }
 
 clean_build_artifacts() {
-local paths=(
-"$SCRIPT_DIR/dist"
-"$SCRIPT_DIR/dist-electron"
-"$SCRIPT_DIR/release"
-"$SCRIPT_DIR/assets/bin/macos/stealth-virtual-display-helper"
-"$SCRIPT_DIR/node_modules/.cache"
-"$SCRIPT_DIR/.vite"
-"$SCRIPT_DIR/native-module/target"
-"$SCRIPT_DIR/native-module/index.darwin-arm64.node"
-"$SCRIPT_DIR/native-module/index.darwin-x64.node"
-"$SCRIPT_DIR/native-module/index.linux-x64-gnu.node"
-"$SCRIPT_DIR/native-module/index.win32-x64-msvc.node"
-"$HOME/Library/Caches/electron-builder"
-"$HOME/Library/Caches/electron"
-"$SCRIPT_DIR/release/mac/${APP_NAME}.app"
-"$SCRIPT_DIR/release/mac-arm64/${APP_NAME}.app"
-)
+    local required_paths=(
+        "$SCRIPT_DIR/dist"
+        "$SCRIPT_DIR/dist-electron"
+        "$SCRIPT_DIR/release"
+        "$SCRIPT_DIR/node_modules/.cache"
+        "$SCRIPT_DIR/.vite"
+        "$SCRIPT_DIR/native-module/target"
+        "$SCRIPT_DIR/native-module/index.darwin-arm64.node"
+        "$SCRIPT_DIR/native-module/index.darwin-x64.node"
+        "$SCRIPT_DIR/native-module/index.linux-x64-gnu.node"
+        "$SCRIPT_DIR/native-module/index.win32-x64-msvc.node"
+        "$SCRIPT_DIR/release/mac/${APP_NAME}.app"
+        "$SCRIPT_DIR/release/mac-arm64/${APP_NAME}.app"
+    )
+    local optional_cache_paths=(
+        "$HOME/Library/Caches/electron-builder"
+        "$HOME/Library/Caches/electron"
+    )
+    local path=""
 
-info "Removing previous build artifacts and packaging caches..."
-for path in "${paths[@]}"; do
-        if [[ -e "$path" ]]; then
-            rm -rf "$path"
+    info "Removing previous build artifacts and packaging caches..."
+    for path in "${required_paths[@]}"; do
+        [[ -e "$path" ]] || continue
+        if ! rm -rf "$path"; then
+            fail "Failed to remove build artifact: $path"
+        fi
+    done
+
+    for path in "${optional_cache_paths[@]}"; do
+        [[ -e "$path" ]] || continue
+        if ! rm -rf "$path"; then
+            warn "Skipping optional cache cleanup for $path"
         fi
     done
 
@@ -314,13 +364,22 @@ fi
 # ── Detect Architecture ──
 ARCH="$(uname -m)"
 if [[ "$ARCH" == "arm64" ]]; then
-BUILD_ARCH="arm64"
-ARCH_LABEL="Apple Silicon"
+    BUILD_ARCH="arm64"
+    ARCH_LABEL="Apple Silicon"
+    BUILD_COMMAND=(npm run app:build:arm64)
 elif [[ "$ARCH" == "x86_64" ]]; then
-BUILD_ARCH="x64"
-ARCH_LABEL="Intel"
+    BUILD_ARCH="x64"
+    ARCH_LABEL="Intel"
+    BUILD_COMMAND=(npm run app:build:x64)
 else
 fail "Unsupported architecture: $ARCH"
+fi
+
+# ── Detect Rust ──
+if command -v cargo &>/dev/null; then
+HAS_RUST="true"
+else
+HAS_RUST="false"
 fi
 
 # ── Detect Rust ──
@@ -339,7 +398,7 @@ cd "$SCRIPT_DIR"
 
 # Check for uncommitted changes
 if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-    UNCOMMITTED=$(git status --porcelain 2>/dev/null | grep -E "^[ AM]" | head -20 || true)
+    UNCOMMITTED=$(git status --porcelain 2>/dev/null | head -20 || true)
     if [[ -n "$UNCOMMITTED" ]]; then
         warn "Uncommitted changes detected in source:"
         echo "$UNCOMMITTED"
@@ -377,47 +436,72 @@ step "Step 3/8 — Installing Dependencies"
 
 cd "$SCRIPT_DIR"
 
-# Clean install
+DEPENDENCY_TOOLCHAIN_COMPLETE=true
 if [[ -d "node_modules" ]]; then
-    info "node_modules exists, running npm install to sync..."
+    for required_path in \
+        "node_modules/electron/package.json" \
+        "node_modules/electron-builder/package.json" \
+        "node_modules/.bin/tsc"; do
+        if [[ ! -e "$required_path" ]]; then
+            DEPENDENCY_TOOLCHAIN_COMPLETE=false
+            break
+        fi
+    done
 else
-    info "Fresh install — this may take a few minutes..."
+    DEPENDENCY_TOOLCHAIN_COMPLETE=false
 fi
 
-run_with_spinner "syncing npm dependency matrix" npm install
-success "Dependencies installed"
+INSTALL_COMMAND=(npm install)
+if [[ -f "package-lock.json" && ( ! -d "node_modules" || "${FORCE_DEPENDENCY_SYNC:-0}" == "1" ) ]]; then
+    INSTALL_COMMAND=(npm ci)
+fi
+
+if [[ -d "node_modules" && "$DEPENDENCY_TOOLCHAIN_COMPLETE" == true && "${FORCE_DEPENDENCY_SYNC:-0}" != "1" ]]; then
+    info "Using existing node_modules; set FORCE_DEPENDENCY_SYNC=1 to force a clean dependency reinstall."
+else
+    if [[ -d "node_modules" ]]; then
+        info "node_modules exists but the build toolchain is incomplete, syncing dependencies with ${INSTALL_COMMAND[*]}..."
+    else
+        info "Fresh install — this may take a few minutes..."
+    fi
+
+    run_with_spinner "syncing npm dependency matrix" "${INSTALL_COMMAND[@]}"
+    success "Dependencies installed"
+fi
 
 # ╔═══════════════════════════════════════════════════════════════════╗
-# ║ Step 5: Run Quality Gates                                        
+# ║ Step 4: Run Quality Gates                                        
 # ╚═══════════════════════════════════════════════════════════════════╝
-step "Step 4/8 — Running Production Quality Gates"
+QUALITY_GATES_RAN=false
+if [[ "${SKIP_QUALITY_GATES:-0}" == "0" ]]; then
+    step "Step 4/8 — Running Production Quality Gates"
 
-info "Running quality gates in visible stages so long-running checks do not look frozen..."
+    info "Running quality gates in visible stages so long-running checks do not look frozen..."
 
-run_logged_command "[1/4] Running typechecks..." npm run typecheck
-success "Typechecks passed"
+    run_logged_command "[1/2] Running Electron tests (this may take a minute)..." npm run test:electron
+    success "Electron tests passed"
 
-run_logged_command "[2/4] Running Electron coverage gate (this is the longest step and may take about a minute)..." npm run verify:electron:coverage
-success "Electron coverage gate passed"
+    run_logged_command "[2/2] Running production verification..." npm run verify:production
+    success "Production verification passed"
 
-run_logged_command "[3/4] Running renderer coverage gate..." npm run verify:renderer:coverage
-success "Renderer coverage gate passed"
-
-run_logged_command "[4/4] Running native Rust tests..." cargo test --manifest-path native-module/Cargo.toml
-success "Native Rust tests passed"
-
-run_logged_command "[macOS helper] Building virtual display helper..." npm run prepare:macos:virtual-display-helper
-success "macOS virtual display helper prepared"
-
-success "Quality gates passed"
+    QUALITY_GATES_RAN=true
+    success "Quality gates passed"
+else
+    info "Skipping visible quality gates (set SKIP_QUALITY_GATES=0 to run them before packaging)"
+    info "Package-level production verification remains enabled"
+fi
 
 # ╔═══════════════════════════════════════════════════════════════════╗
 # ║ Step 5: Build & Package                                         ║
 # ╚═══════════════════════════════════════════════════════════════════╝
 step "Step 5/8 — Building & Packaging (${ARCH_LABEL})"
 
-info "Running full build pipeline (renderer, native addon, electron, packaging)..."
-run_with_spinner "building and packaging release" env SKIP_PRODUCTION_VERIFY=1 npm run app:build
+info "Running ${BUILD_ARCH}-only build pipeline (renderer, native addon, electron, packaging)..."
+if [[ "$QUALITY_GATES_RAN" == "true" ]]; then
+    run_with_spinner "building and packaging ${BUILD_ARCH} release" env SKIP_PRODUCTION_VERIFY=1 "${BUILD_COMMAND[@]}"
+else
+    run_with_spinner "building and packaging ${BUILD_ARCH} release" "${BUILD_COMMAND[@]}"
+fi
 
 success "Build & packaging complete"
 

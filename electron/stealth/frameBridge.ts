@@ -34,7 +34,7 @@ export class FrameBridge {
   private readonly frameRate: number;
   private readonly logger: Pick<Console, 'warn'>;
   private paintSource: PaintEventEmitter | null = null;
-  private readonly paintListener = (_event: unknown, dirty: Array<Partial<DirtyRect>>, image: NativeImageLike) => {
+  private readonly paintListener = (_event: unknown, dirtyRect: Partial<DirtyRect>, image: NativeImageLike) => {
     try {
       const size = image.getSize();
       this.target.send('stealth-shell:frame', {
@@ -42,7 +42,7 @@ export class FrameBridge {
         width: size.width,
         height: size.height,
         scaleFactor: 1,
-        dirtyRects: normalizeDirtyRects(dirty),
+        dirtyRects: normalizeDirtyRects([dirtyRect]),
       });
     } catch (error) {
       this.logger.warn('[FrameBridge] Failed to forward frame:', error);

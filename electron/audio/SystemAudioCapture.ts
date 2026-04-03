@@ -28,7 +28,36 @@ export class SystemAudioCapture extends EventEmitter {
         console.log(`[SystemAudioCapture] Initialized (lazy). Device ID: ${this.deviceId || 'default'}`);
     }
 
+    private ensureMonitor(reason: 'probe' | 'start'): boolean {
+        if (this.monitor) {
+            return true;
+        }
+
+        if (!RustAudioCapture) {
+            if (reason === 'start') {
+                throw new Error(getNativeAudioLoadError()?.message || '[SystemAudioCapture] Cannot start: Rust module missing');
+            }
+            return false;
+        }
+
+        console.log(`[SystemAudioCapture] Creating native monitor (${reason === 'probe' ? 'sample-rate probe' : 'lazy init'})...`);
+        try {
+            this.monitor = new RustAudioCapture(this.deviceId);
+            return true;
+        } catch (error) {
+            console.error('[SystemAudioCapture] Failed to create native monitor:', error);
+            if (reason === 'start') {
+                this.emit('error', error);
+            }
+            return false;
+        }
+    }
+
     public getSampleRate(): number {
+        if (!this.monitor && !this.ensureMonitor('probe')) {
+            return this.detectedSampleRate;
+        }
+
         if (this.monitor && typeof this.monitor.getSampleRate === 'function') {
             const nativeRate = this.monitor.getSampleRate();
             if (nativeRate !== this.detectedSampleRate) {
@@ -50,17 +79,9 @@ export class SystemAudioCapture extends EventEmitter {
             throw new Error(getNativeAudioLoadError()?.message || '[SystemAudioCapture] Cannot start: Rust module missing');
         }
 
-        // LAZY INIT: Create monitor here when meeting starts (not in constructor)
-        // This prevents the 1-second audio mute + quality drop at app launch
-        if (!this.monitor) {
-            console.log('[SystemAudioCapture] Creating native monitor (lazy init)...');
-            try {
-                this.monitor = new RustAudioCapture(this.deviceId);
-            } catch (e) {
-                console.error('[SystemAudioCapture] Failed to create native monitor:', e);
-                this.emit('error', e);
-                return;
-            }
+        // Create the monitor on demand at meeting start or when sample-rate probing needs it.
+        if (!this.ensureMonitor('start')) {
+            return;
         }
 
         try {
@@ -72,8 +93,10 @@ export class SystemAudioCapture extends EventEmitter {
                 console.log(`[SystemAudioCapture] Detected sample rate: ${this.detectedSampleRate}`);
             }
 
-            this.monitor.start((chunk: Uint8Array) => {
-                // The native module sends raw PCM bytes (Uint8Array) via zero-copy napi::Buffer
+            this.monitor.start((first: Uint8Array | null, second?: Uint8Array) => {
+                // napi-rs ThreadsafeFunction payloads can arrive as either `(chunk)` or
+                // `(err, chunk)` depending on the native ErrorStrategy. Support both.
+                const chunk = second ?? first;
                 if (chunk && chunk.length > 0) {
                     const buffer = Buffer.from(chunk);
                     this.emit('data', buffer);

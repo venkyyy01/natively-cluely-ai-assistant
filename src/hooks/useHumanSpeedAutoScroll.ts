@@ -1,4 +1,5 @@
 import { RefObject, useEffect, useRef } from 'react';
+import { getAutoFollowDecision } from './humanSpeedAutoScrollState';
 
 type AutoScrollMessage = {
   id: string;
@@ -12,13 +13,14 @@ type Options = {
   containerRef: RefObject<HTMLElement>;
   latestMessage: AutoScrollMessage | null;
   eligibleRoles?: string[];
-  getTargetElement?: (container: HTMLElement, messageId: string) => HTMLElement | null;
 };
 
-const HUMAN_WORDS_PER_MINUTE = 196;
-const MIN_SCROLL_DURATION_MS = 8000;
-const MAX_SCROLL_DURATION_MS = 45000;
-const MANUAL_PAUSE_MS = 12000;
+const HUMAN_WORDS_PER_MINUTE = 210;
+const MIN_SCROLL_DURATION_MS = 5000;
+const MAX_SCROLL_DURATION_MS = 30000;
+const MANUAL_PAUSE_MS = 2000;
+const RESUME_THRESHOLD_PX = 64;
+const PROGRAMMATIC_SCROLL_GRACE_MS = 120;
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
@@ -32,13 +34,9 @@ function estimateDurationMs(content: string): number {
   return clamp((words / HUMAN_WORDS_PER_MINUTE) * 60_000, MIN_SCROLL_DURATION_MS, MAX_SCROLL_DURATION_MS);
 }
 
-function getElementOffsetWithinContainer(container: HTMLElement, targetElement: HTMLElement | null): number {
-  if (!targetElement) {
-    return 0;
-  }
-  const containerRect = container.getBoundingClientRect();
-  const targetRect = targetElement.getBoundingClientRect();
-  return Math.max(0, container.scrollTop + (targetRect.top - containerRect.top));
+function isNearBottom(container: HTMLElement): boolean {
+  // The latest rendered message lives at the top edge of the scroll container.
+  return Math.abs(container.scrollTop) <= RESUME_THRESHOLD_PX;
 }
 
 export function useHumanSpeedAutoScroll({
@@ -46,12 +44,16 @@ export function useHumanSpeedAutoScroll({
   containerRef,
   latestMessage,
   eligibleRoles = ['system', 'assistant'],
-  getTargetElement,
 }: Options): void {
   const animationFrameRef = useRef<number | null>(null);
   const lastTimestampRef = useRef<number | null>(null);
   const activeMessageIdRef = useRef<string | null>(null);
   const manualPauseUntilRef = useRef<number>(0);
+  const followLatestRef = useRef<boolean>(true);
+  const programmaticScrollUntilRef = useRef<number>(0);
+  const isPointerInteractingRef = useRef<boolean>(false);
+  const isHoldingManualScrollRef = useRef<boolean>(false);
+  const userScrollIntentUntilRef = useRef<number>(0);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -59,57 +61,204 @@ export function useHumanSpeedAutoScroll({
       return;
     }
 
-    const pauseAutoScroll = () => {
-      manualPauseUntilRef.current = Date.now() + MANUAL_PAUSE_MS;
+    const stopAutoScrollAnimation = () => {
       if (animationFrameRef.current !== null) {
         cancelAnimationFrame(animationFrameRef.current);
         animationFrameRef.current = null;
       }
+      lastTimestampRef.current = null;
     };
 
-    container.addEventListener('wheel', pauseAutoScroll, { passive: true });
-    container.addEventListener('touchstart', pauseAutoScroll, { passive: true });
-    container.addEventListener('pointerdown', pauseAutoScroll);
+    const hasManualScrollIntent = () => {
+      return isPointerInteractingRef.current || Date.now() < userScrollIntentUntilRef.current;
+    };
+
+    const pauseAutoFollow = () => {
+      manualPauseUntilRef.current = Date.now() + MANUAL_PAUSE_MS;
+      followLatestRef.current = false;
+      stopAutoScrollAnimation();
+    };
+
+    const markManualScrollIntent = () => {
+      userScrollIntentUntilRef.current = Date.now() + 250;
+    };
+
+    const handlePointerDown = () => {
+      isPointerInteractingRef.current = true;
+      isHoldingManualScrollRef.current = false;
+      markManualScrollIntent();
+    };
+
+    const handleWheel = () => {
+      markManualScrollIntent();
+      pauseAutoFollow();
+    };
+
+    const handleTouchStart = () => {
+      markManualScrollIntent();
+      pauseAutoFollow();
+    };
+
+    const handlePointerRelease = () => {
+      if (!isPointerInteractingRef.current) {
+        return;
+      }
+
+      isPointerInteractingRef.current = false;
+
+      if (!isHoldingManualScrollRef.current) {
+        return;
+      }
+
+      isHoldingManualScrollRef.current = false;
+
+      if (Date.now() < programmaticScrollUntilRef.current) {
+        return;
+      }
+
+      if (isNearBottom(container)) {
+        manualPauseUntilRef.current = 0;
+        followLatestRef.current = true;
+        return;
+      }
+
+      manualPauseUntilRef.current = Date.now() + MANUAL_PAUSE_MS;
+      followLatestRef.current = false;
+    };
+
+    const handleScroll = () => {
+      const userMovedAwayFromLatest = !isNearBottom(container);
+
+      if (userMovedAwayFromLatest) {
+        if (hasManualScrollIntent()) {
+          isHoldingManualScrollRef.current = true;
+        }
+        pauseAutoFollow();
+        return;
+      }
+
+      if (Date.now() < programmaticScrollUntilRef.current) {
+        if (!hasManualScrollIntent()) {
+          return;
+        }
+      }
+
+      if (hasManualScrollIntent()) {
+        isHoldingManualScrollRef.current = true;
+        pauseAutoFollow();
+        return;
+      }
+
+      if (isNearBottom(container)) {
+        manualPauseUntilRef.current = 0;
+        followLatestRef.current = true;
+        return;
+      }
+
+      pauseAutoFollow();
+    };
+
+    container.addEventListener('pointerdown', handlePointerDown, { passive: true });
+    container.addEventListener('wheel', handleWheel, { passive: true });
+    container.addEventListener('touchstart', handleTouchStart, { passive: true });
+    container.addEventListener('scroll', handleScroll, { passive: true });
+    window.addEventListener('pointerup', handlePointerRelease, { passive: true });
+    window.addEventListener('pointercancel', handlePointerRelease, { passive: true });
 
     return () => {
-      container.removeEventListener('wheel', pauseAutoScroll);
-      container.removeEventListener('touchstart', pauseAutoScroll);
-      container.removeEventListener('pointerdown', pauseAutoScroll);
+      container.removeEventListener('pointerdown', handlePointerDown);
+      container.removeEventListener('wheel', handleWheel);
+      container.removeEventListener('touchstart', handleTouchStart);
+      container.removeEventListener('scroll', handleScroll);
+      window.removeEventListener('pointerup', handlePointerRelease);
+      window.removeEventListener('pointercancel', handlePointerRelease);
     };
   }, [containerRef]);
 
   useEffect(() => {
     const container = containerRef.current;
-    if (!enabled || !container || !latestMessage || !eligibleRoles.includes(latestMessage.role)) {
-      return;
-    }
-
-    if (activeMessageIdRef.current !== latestMessage.id) {
-      const targetElement = getTargetElement?.(container, latestMessage.id);
-      const targetOffset = getElementOffsetWithinContainer(container, targetElement || null);
+    if (!enabled) {
+      activeMessageIdRef.current = null;
       manualPauseUntilRef.current = 0;
-      container.scrollTop = targetOffset;
-      activeMessageIdRef.current = latestMessage.id;
+      followLatestRef.current = true;
+      programmaticScrollUntilRef.current = 0;
+      isPointerInteractingRef.current = false;
+      isHoldingManualScrollRef.current = false;
+      userScrollIntentUntilRef.current = 0;
+      return;
     }
 
-    if (Date.now() < manualPauseUntilRef.current) {
+    if (!container || !latestMessage || !eligibleRoles.includes(latestMessage.role)) {
       return;
+    }
+
+    const previousMessageId = activeMessageIdRef.current;
+    const isNewMessage = previousMessageId !== latestMessage.id;
+    const isUserPaused = Date.now() < manualPauseUntilRef.current;
+    let userIsNearBottom = isNearBottom(container);
+    const userIsHoldingManualScroll = isPointerInteractingRef.current && isHoldingManualScrollRef.current;
+    const hasRecentManualScrollIntent =
+      isPointerInteractingRef.current || Date.now() < userScrollIntentUntilRef.current;
+
+    const snapToLatest = () => {
+      // Auto-follow keeps the newest response pinned at the top edge.
+      programmaticScrollUntilRef.current = Date.now() + PROGRAMMATIC_SCROLL_GRACE_MS;
+      container.scrollTop = 0;
+      manualPauseUntilRef.current = 0;
+      followLatestRef.current = true;
+      userIsNearBottom = true;
+    };
+
+    if (!userIsNearBottom) {
+      followLatestRef.current = false;
+    }
+
+    if (isNewMessage) {
+      activeMessageIdRef.current = latestMessage.id;
+      lastTimestampRef.current = null;
+    }
+
+    const autoFollowDecision = getAutoFollowDecision({
+      hasRecentManualScrollIntent,
+      isStreaming: Boolean(latestMessage.isStreaming),
+      isUserPaused,
+      latestMessageId: latestMessage.id,
+      previousMessageId,
+      userIsHoldingManualScroll,
+      userIsNearBottom,
+    });
+
+    if (autoFollowDecision.shouldSnapToLatest) {
+      snapToLatest();
+    }
+
+    if (autoFollowDecision.shouldPauseAutoFollow) {
+      activeMessageIdRef.current = latestMessage.id;
+      return;
+    }
+
+    if (userIsNearBottom) {
+      manualPauseUntilRef.current = 0;
+      followLatestRef.current = true;
     }
 
     const durationMs = estimateDurationMs(latestMessage.content);
-    let speedPxPerMs = 0;
-    let targetStart = container.scrollTop;
-    const computeSpeed = () => {
-      const targetElement = getTargetElement?.(container, latestMessage.id);
-      targetStart = getElementOffsetWithinContainer(container, targetElement || null);
-      const targetBottom = targetElement
-        ? Math.max(targetStart, targetStart + targetElement.scrollHeight - container.clientHeight)
-        : Math.max(0, container.scrollHeight - container.clientHeight);
-      speedPxPerMs = Math.max(0, targetBottom - targetStart) / durationMs;
-      return targetBottom;
-    };
-
+    
     const step = (timestamp: number) => {
+      if (isPointerInteractingRef.current && isHoldingManualScrollRef.current) {
+        animationFrameRef.current = null;
+        lastTimestampRef.current = null;
+        return;
+      }
+
+      if (!isNearBottom(container)) {
+        followLatestRef.current = false;
+        manualPauseUntilRef.current = Date.now() + MANUAL_PAUSE_MS;
+        animationFrameRef.current = null;
+        lastTimestampRef.current = null;
+        return;
+      }
+
       if (Date.now() < manualPauseUntilRef.current) {
         animationFrameRef.current = null;
         lastTimestampRef.current = null;
@@ -120,18 +269,12 @@ export function useHumanSpeedAutoScroll({
         lastTimestampRef.current = timestamp;
       }
 
-      const dt = timestamp - lastTimestampRef.current;
-      lastTimestampRef.current = timestamp;
-      const maxScrollTop = computeSpeed();
+      // Streaming content should stay mounted at the top while it grows.
+      programmaticScrollUntilRef.current = Date.now() + PROGRAMMATIC_SCROLL_GRACE_MS;
+      container.scrollTop = 0;
 
-      if (maxScrollTop <= targetStart) {
-        animationFrameRef.current = requestAnimationFrame(step);
-        return;
-      }
-
-      container.scrollTop = Math.min(maxScrollTop, container.scrollTop + speedPxPerMs * dt);
-
-      if (container.scrollTop < maxScrollTop - 1 || latestMessage.isStreaming) {
+      // Continue animating while message is streaming
+      if (latestMessage.isStreaming) {
         animationFrameRef.current = requestAnimationFrame(step);
       } else {
         animationFrameRef.current = null;

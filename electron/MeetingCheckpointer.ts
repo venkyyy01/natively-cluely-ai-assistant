@@ -10,7 +10,7 @@ export class MeetingCheckpointer {
 
     constructor(
         private readonly dbManager: DatabaseManager,
-        private readonly sessionTracker: SessionTracker
+        private readonly getSessionTracker: () => SessionTracker
     ) {}
 
     public start(meetingId: string): void {
@@ -48,7 +48,7 @@ export class MeetingCheckpointer {
         if (!this.meetingId) return;
 
         // Get snapshot from session tracker
-        const snapshot = this.sessionTracker.createSnapshot();
+        const snapshot = this.getSessionTracker().createSnapshot();
         if (!snapshot || snapshot.transcript.length === 0) {
             return; // Nothing to save yet
         }
@@ -79,7 +79,7 @@ export class MeetingCheckpointer {
         try {
             this.dbManager.createOrUpdateMeetingProcessingRecord(meetingData, snapshot.startTime, snapshot.durationMs);
             // Optionally notify frontend that a checkpoint happened (if they want to show an indicator)
-            const wins = BrowserWindow.getAllWindows();
+            const wins = typeof BrowserWindow?.getAllWindows === 'function' ? BrowserWindow.getAllWindows() : [];
             wins.forEach((w) => {
                 if (!w.isDestroyed()) {
                     w.webContents.send('meeting-checkpointed', this.meetingId);

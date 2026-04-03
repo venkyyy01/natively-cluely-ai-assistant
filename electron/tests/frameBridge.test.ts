@@ -20,7 +20,7 @@ test('FrameBridge forwards paint payloads to shell target', () => {
   });
 
   bridge.attach(source);
-  source.emit('paint', {}, [{ x: 1, y: 2, width: 3, height: 4 }], {
+  source.emit('paint', {}, { x: 1, y: 2, width: 3, height: 4 }, {
     toPNG() {
       return Buffer.from('frame');
     },
@@ -44,7 +44,7 @@ test('FrameBridge normalizes partial rects and detaches cleanly', () => {
 
   bridge.attach(source);
   bridge.attach(source);
-  source.emit('paint', {}, [{}], {
+  source.emit('paint', {}, {}, {
     toPNG() {
       return Buffer.from('frame');
     },
@@ -68,7 +68,7 @@ test('FrameBridge warns when frame serialization fails', () => {
   });
 
   bridge.attach(source);
-  source.emit('paint', {}, [], {
+  source.emit('paint', {}, { x: 0, y: 0, width: 1, height: 1 }, {
     toPNG() {
       throw new Error('boom');
     },

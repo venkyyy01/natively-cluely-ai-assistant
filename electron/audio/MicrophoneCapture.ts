@@ -4,7 +4,12 @@ import { assertNativeAudioAvailable, getNativeAudioLoadError, loadNativeAudioMod
 const NativeModule = loadNativeAudioModule();
 
 if (!NativeModule) {
-    console.error('[MicrophoneCapture] Failed to load native module:', getNativeAudioLoadError());
+    const error = getNativeAudioLoadError();
+    console.error('[MicrophoneCapture] ❌ Failed to load native module:', error?.message || 'Unknown error');
+    console.error('[MicrophoneCapture] 🔧 This will prevent audio capture from working');
+} else {
+    console.log('[MicrophoneCapture] ✅ Native module loaded successfully');
+    console.log('[MicrophoneCapture] Available exports:', Object.keys(NativeModule));
 }
 
 const { MicrophoneCapture: RustMicCapture } = NativeModule || {};
@@ -66,7 +71,10 @@ export class MicrophoneCapture extends EventEmitter {
         try {
             console.log('[MicrophoneCapture] Starting native capture...');
 
-            this.monitor.start((chunk: Uint8Array) => {
+            this.monitor.start((first: Uint8Array | null, second?: Uint8Array) => {
+                // napi-rs ThreadsafeFunction payloads can arrive as either `(chunk)` or
+                // `(err, chunk)` depending on the native ErrorStrategy. Support both.
+                const chunk = second ?? first;
                 if (chunk && chunk.length > 0) {
                     // Debug: log occasionally
                     if (Math.random() < 0.05) {

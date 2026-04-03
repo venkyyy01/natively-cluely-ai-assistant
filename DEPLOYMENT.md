@@ -165,10 +165,10 @@ After a successful build, you'll find these in `./release/`:
 
 ```
 release/
-├── Natively-2.0.6-arm64.dmg        # Apple Silicon installer
-├── Natively-2.0.6-x64.dmg          # Intel Mac installer
-├── Natively-2.0.6-arm64-mac.zip    # Apple Silicon portable
-├── Natively-2.0.6-x64-mac.zip      # Intel Mac portable
+├── Natively-2.0.9-arm64.dmg        # Apple Silicon installer
+├── Natively-2.0.9-x64.dmg          # Intel Mac installer
+├── Natively-2.0.9-arm64-mac.zip    # Apple Silicon portable
+├── Natively-2.0.9-x64-mac.zip      # Intel Mac portable
 └── mac-arm64/                       # Unpackaged .app
     └── Natively.app
 ```
@@ -219,7 +219,7 @@ codesign --force --deep --entitlements assets/entitlements.mac.plist --sign - "N
 
 ### Option A: DMG Installer (Recommended)
 
-1. Open `release/Natively-2.0.6-arm64.dmg` (or `x64` for Intel)
+1. Open `release/Natively-2.0.9-arm64.dmg` (or `x64` for Intel)
 2. Drag **Natively** into the **Applications** folder
 3. Eject the DMG
 
@@ -232,7 +232,7 @@ cp -R release/mac-arm64/Natively.app /Applications/
 
 ### Option C: ZIP (Portable)
 
-1. Unzip `Natively-2.0.6-arm64-mac.zip`
+1. Unzip `Natively-2.0.9-arm64-mac.zip`
 2. Move `Natively.app` anywhere you like
 3. Run directly — no installation needed
 

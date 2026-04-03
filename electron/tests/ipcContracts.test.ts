@@ -12,6 +12,7 @@ function installIpcHandlersTestHarness(options?: {
   const handlers = new Map<string, Handler>();
   const sentEvents: Array<{ channel: string; payload: unknown }> = [];
   const browserEvents: Array<{ channel: string; payload: unknown }> = [];
+  let fastResponseConfig = { enabled: true, provider: 'cerebras', model: 'gpt-oss-120b' };
 
   const llmHelper = {
     generateSuggestion: async (context: string, lastQuestion: string) => `${context} -> ${lastQuestion}`,
@@ -26,6 +27,10 @@ function installIpcHandlersTestHarness(options?: {
       }
       return true;
     },
+    getFastResponseConfig: () => fastResponseConfig,
+    setFastResponseConfig: (config: typeof fastResponseConfig) => {
+      fastResponseConfig = config;
+    },
   };
 
   const credentialsManager = {
@@ -35,6 +40,7 @@ function installIpcHandlersTestHarness(options?: {
     getAllCredentials: () => ({
       geminiApiKey: 'gemini-key',
       groqApiKey: '',
+      cerebrasApiKey: 'cerebras-key',
       openaiApiKey: '',
       claudeApiKey: '',
       googleServiceAccountPath: '/tmp/service.json',
@@ -51,8 +57,15 @@ function installIpcHandlersTestHarness(options?: {
       sonioxApiKey: '',
       googleSearchApiKey: '',
       googleSearchCseId: '',
+      fastResponseConfig,
     }),
     getSttProvider: () => 'google',
+    getFastResponseConfig: () => fastResponseConfig,
+    setFastResponseConfig: (config: typeof fastResponseConfig) => {
+      fastResponseConfig = config;
+    },
+    getCerebrasApiKey: () => 'cerebras-key',
+    setCerebrasApiKey: (_key: string) => {},
   };
 
   const electronMock = {
@@ -296,6 +309,59 @@ test('root IPC handlers normalize cancellation and failures into success/data/er
   harness.restore();
 });
 
+test('fast response and stored credential IPC contracts include Cerebras-aware state', async () => {
+  const harness = installIpcHandlersTestHarness();
+  await initializeHandlers(harness);
+
+  assert.deepEqual(await harness.handlers.get('get-stored-credentials')?.({}), {
+    success: true,
+    data: {
+      hasGeminiKey: true,
+      hasGroqKey: false,
+      hasCerebrasKey: true,
+      hasOpenaiKey: false,
+      hasClaudeKey: false,
+      googleServiceAccountPath: '/tmp/service.json',
+      sttProvider: 'google',
+      groqSttModel: 'whisper-large-v3-turbo',
+      hasSttGroqKey: false,
+      hasSttOpenaiKey: false,
+      hasDeepgramKey: false,
+      hasElevenLabsKey: false,
+      hasAzureKey: false,
+      azureRegion: 'eastus',
+      hasIbmWatsonKey: false,
+      ibmWatsonRegion: 'us-south',
+      hasSonioxKey: false,
+      hasGoogleSearchKey: false,
+      hasGoogleSearchCseId: false,
+      geminiPreferredModel: undefined,
+      groqPreferredModel: undefined,
+      cerebrasPreferredModel: undefined,
+      openaiPreferredModel: undefined,
+      claudePreferredModel: undefined,
+      fastResponseConfig: { enabled: true, provider: 'cerebras', model: 'gpt-oss-120b' },
+    },
+  });
+
+  assert.deepEqual(await harness.handlers.get('get-fast-response-config')?.({}), {
+    success: true,
+    data: { enabled: true, provider: 'cerebras', model: 'gpt-oss-120b' },
+  });
+
+  assert.deepEqual(
+    await harness.handlers.get('set-fast-response-config')?.({}, { enabled: false, provider: 'groq', model: 'llama-3.3-70b-versatile' }),
+    { success: true },
+  );
+
+  assert.deepEqual(harness.browserEvents.at(-1), {
+    channel: 'fast-response-config-changed',
+    payload: { enabled: false, provider: 'groq', model: 'llama-3.3-70b-versatile' },
+  });
+
+  harness.restore();
+});
+
 test('preload unwraps normalized root IPC contracts into typed renderer helpers', async () => {
   const calls: Array<{ channel: string; args: unknown[] }> = [];
   const { exposedApi, restore } = await loadPreloadModule(async (channel: string, ...args: unknown[]) => {
@@ -331,6 +397,35 @@ test('preload unwraps normalized root IPC contracts into typed renderer helpers'
     { channel: 'take-screenshot', args: [] },
     { channel: 'get-current-llm-config', args: [] },
     { channel: 'set-overlay-opacity', args: [0.5] },
+  ]);
+
+  restore();
+});
+
+test('preload exposes fast response config helpers and Cerebras key setter', async () => {
+  const calls: Array<{ channel: string; args: unknown[] }> = [];
+  const { exposedApi, restore } = await loadPreloadModule(async (channel: string, ...args: unknown[]) => {
+    calls.push({ channel, args });
+
+    if (channel === 'get-fast-response-config') {
+      return { success: true, data: { enabled: true, provider: 'cerebras', model: 'gpt-oss-120b' } };
+    }
+
+    if (channel === 'set-fast-response-config' || channel === 'set-cerebras-api-key') {
+      return { success: true };
+    }
+
+    throw new Error(`Unexpected channel: ${channel}`);
+  });
+
+  assert.deepEqual(await exposedApi.getFastResponseConfig(), { enabled: true, provider: 'cerebras', model: 'gpt-oss-120b' });
+  assert.deepEqual(await exposedApi.setFastResponseConfig({ enabled: false, provider: 'groq', model: 'llama-3.3-70b-versatile' }), { success: true });
+  assert.deepEqual(await exposedApi.setCerebrasApiKey('csk_test'), { success: true });
+
+  assert.deepEqual(calls, [
+    { channel: 'get-fast-response-config', args: [] },
+    { channel: 'set-fast-response-config', args: [{ enabled: false, provider: 'groq', model: 'llama-3.3-70b-versatile' }] },
+    { channel: 'set-cerebras-api-key', args: ['csk_test'] },
   ]);
 
   restore();

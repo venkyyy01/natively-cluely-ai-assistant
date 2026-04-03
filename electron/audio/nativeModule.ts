@@ -42,16 +42,34 @@ export function loadNativeAudioModule(): any | null {
   }
 
   const errors: string[] = [];
+  console.log(`[NativeAudio] Loading native module for ${process.platform}-${process.arch}...`);
 
   for (const candidate of getCandidates()) {
     try {
+      console.log(`[NativeAudio] Attempting to load from: ${candidate.label}`);
       const mod = candidate.load();
-      cachedModule = mod;
-      cachedError = null;
-      console.log(`[NativeAudio] Loaded native module from ${candidate.label}`);
-      return mod;
+      
+      // Verify the module has expected exports
+      if (mod && typeof mod === 'object') {
+        console.log(`[NativeAudio] Module exports:`, Object.keys(mod));
+        
+        if (mod.MicrophoneCapture && typeof mod.MicrophoneCapture === 'function') {
+          cachedModule = mod;
+          cachedError = null;
+          console.log(`[NativeAudio] ✅ Successfully loaded native module from ${candidate.label}`);
+          console.log(`[NativeAudio] MicrophoneCapture constructor available:`, typeof mod.MicrophoneCapture);
+          return mod;
+        } else {
+          console.warn(`[NativeAudio] ⚠️  Module loaded but missing MicrophoneCapture export from ${candidate.label}`);
+          errors.push(`${candidate.label}: Missing MicrophoneCapture export`);
+        }
+      } else {
+        console.warn(`[NativeAudio] ⚠️  Module loaded but not an object from ${candidate.label}`);
+        errors.push(`${candidate.label}: Invalid module type (${typeof mod})`);
+      }
     } catch (error) {
       const message = error instanceof Error ? error.stack || error.message : String(error);
+      console.error(`[NativeAudio] ❌ Failed to load from ${candidate.label}:`, message);
       errors.push(`${candidate.label}: ${message}`);
     }
   }
@@ -59,12 +77,19 @@ export function loadNativeAudioModule(): any | null {
   cachedModule = null;
   cachedError = new Error(
     [
-      `Native audio module failed to load for ${process.platform}-${process.arch}.`,
-      'Build it with `npm run build:native:current` for local development, or ensure packaged native binaries are present.',
+      `❌ Native audio module failed to load for ${process.platform}-${process.arch}.`,
+      'Possible solutions:',
+      '1. Run `npm run build:native:current` for local development',
+      '2. Ensure packaged native binaries are present',
+      '3. Check microphone permissions on macOS',
+      '4. Verify native-module directory exists',
+      '',
+      'Detailed errors:',
       ...errors,
     ].join('\n')
   );
 
+  console.error('[NativeAudio]', cachedError.message);
   return null;
 }
 

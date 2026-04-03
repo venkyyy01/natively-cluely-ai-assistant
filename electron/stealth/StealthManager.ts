@@ -3,10 +3,10 @@ import { EventEmitter } from 'events';
 import type { VirtualDisplayCoordinator } from './MacosVirtualDisplayClient';
 
 import { loadNativeStealthModule } from './nativeStealthModule';
-import { exec } from 'node:child_process';
-import { promisify } from 'node:util';
-
-const execAsync = promisify(exec);
+import { execFile } from 'node:child_process';
+import { ChromiumCaptureDetector } from './ChromiumCaptureDetector';
+import { MacosStealthEnhancer } from './MacosStealthEnhancer';
+import { TCCMonitor } from './TCCMonitor';
 
 export interface StealthConfig {
   enabled: boolean;
@@ -29,14 +29,17 @@ export interface NativeStealthBindings {
   applyMacosPrivateWindowStealth?: (windowNumber: number) => void;
   removeMacosWindowStealth?: (windowNumber: number) => void;
   removeMacosPrivateWindowStealth?: (windowNumber: number) => void;
+  verifyMacosStealthState?: (windowNumber: number) => number;
   applyWindowsWindowStealth?: (handle: Buffer) => void;
   removeWindowsWindowStealth?: (handle: Buffer) => void;
+  verifyWindowsStealthState?: (handle: Buffer) => number;
 }
 
 export interface StealthFeatureFlags {
   enablePrivateMacosStealthApi?: boolean;
   enableCaptureDetectionWatchdog?: boolean;
   enableVirtualDisplayIsolation?: boolean;
+  enableSCStreamDetection?: boolean;
 }
 
 export type StealthWindowRole = 'primary' | 'auxiliary';
@@ -65,6 +68,7 @@ interface StealthManagerDependencies {
   timeoutScheduler?: (callback: () => void, delayMs: number) => unknown;
   virtualDisplayCoordinator?: VirtualDisplayCoordinator | null;
   captureToolPatterns?: RegExp[];
+  processEnumerator?: (command: string, args: string[]) => Promise<string>;
 }
 
 interface StealthCapableWindow {
@@ -73,6 +77,7 @@ interface StealthCapableWindow {
   setHiddenInMissionControl?: (value: boolean) => void;
   setExcludedFromShownWindowsMenu?: (value: boolean) => void;
   setSkipTaskbar?: (value: boolean) => void;
+  setOpacity?: (value: number) => void;
   setBounds?: (bounds: { x: number; y: number; width: number; height: number }) => void;
   hide?: () => void;
   show?: () => void;
@@ -97,6 +102,8 @@ const WATCHDOG_INTERVAL_MS = 1000;
 const WATCHDOG_RESTORE_DELAY_MS = 500;
 const DISPLAY_MOVE_RETRY_DELAY_MS = 100;
 const DISPLAY_MOVE_MAX_RETRIES = 10;
+const SCSTREAM_CHECK_INTERVAL_MS = 500;
+const CGWINDOW_VISIBILITY_CHECK_MS = 500;
 const KNOWN_CAPTURE_TOOL_PATTERNS = [
   /obs/i,
   /zoom/i,
@@ -108,7 +115,70 @@ const KNOWN_CAPTURE_TOOL_PATTERNS = [
   /quicktime/i,
   /loom/i,
   /capture/i,
+  /sharex/i,
+  /greenshot/i,
+  /flameshot/i,
+  /discord/i,
+  /slack/i,
+  /ffmpeg/i,
+  /screencapture/i,
+  /vnc/i,
+  /anydesk/i,
+  /teamviewer/i,
+  /screen ?recorder/i,
+  /camtasia/i,
+  /bandicam/i,
+  /printwindow/i,
+  /chrome/i,
+  /chromium/i,
+  /msedge/i,
+  /microsoft edge/i,
+  /brave/i,
+  /nvidia/i,
+  /shadowplay/i,
+  /geforce/i,
+  /gamebar/i,
+  /xbox/i,
+  /skype/i,
+  /gotomeeting/i,
+  /goto/i,
+  /bluejeans/i,
+  /jitsi/i,
+  /screenshot/i,
+  /parallels/i,
+  /vmware/i,
 ];
+
+function scheduleUnrefInterval(callback: () => Promise<void> | void, intervalMs: number): NodeJS.Timeout {
+  const handle = setInterval(callback, intervalMs);
+  handle.unref?.();
+  return handle;
+}
+
+function scheduleUnrefTimeout(callback: () => void, delayMs: number): NodeJS.Timeout {
+  const handle = setTimeout(callback, delayMs);
+  handle.unref?.();
+  return handle;
+}
+
+function defaultProcessEnumerator(command: string, args: string[]): Promise<string> {
+  return new Promise((resolve, reject) => {
+    execFile(command, args, (error, stdout) => {
+      if (!error) {
+        resolve(stdout);
+        return;
+      }
+
+      const err = error as NodeJS.ErrnoException & { code?: number };
+      if (command === 'pgrep' && err.code === 1) {
+        resolve('');
+        return;
+      }
+
+      reject(error);
+    });
+  });
+}
 
 export class StealthManager extends EventEmitter {
   private config: StealthConfig;
@@ -142,13 +212,27 @@ export class StealthManager extends EventEmitter {
   private readonly timeoutScheduler: (callback: () => void, delayMs: number) => unknown;
   private readonly virtualDisplayCoordinator: VirtualDisplayCoordinator | null;
   private readonly captureToolPatterns: RegExp[];
+  private readonly processEnumerator: (command: string, args: string[]) => Promise<string>;
   private readonly managedWindows = new Set<ManagedWindowRecord>();
   private readonly managedWindowLookup = new WeakMap<object, ManagedWindowRecord>();
   private nativeModule: NativeStealthBindings | null | undefined;
   private powerMonitorBound = false;
   private displayEventsBound = false;
   private watchdogHandle: unknown = null;
+  private windowsAffinityHandle: unknown = null;
   private watchdogRunning = false;
+  private scStreamMonitorHandle: unknown = null;
+  private scStreamMonitorRunning = false;
+  private scStreamActive = false;
+  private chromiumDetector: ChromiumCaptureDetector | null = null;
+  private stealthEnhancer: MacosStealthEnhancer | null = null;
+  private cgWindowMonitorHandle: unknown = null;
+  private cgWindowMonitorRunning = false;
+  private tccMonitor: TCCMonitor | null = null;
+  private isMacOS15Plus = false;
+  private macOSMajor: number = 0;
+  private macOSMinor: number = 0;
+  private opacityFlickerHandle: unknown = null;
 
   constructor(config: StealthConfig, deps: StealthManagerDependencies = {}) {
     super();
@@ -159,16 +243,62 @@ export class StealthManager extends EventEmitter {
     this.screenApi = deps.screenApi ?? this.resolveScreenApi();
     this.displayEvents = deps.displayEvents ?? this.resolveDisplayEvents(this.screenApi);
     this.featureFlags = deps.featureFlags ?? {};
-    this.intervalScheduler = deps.intervalScheduler ?? ((callback, intervalMs) => setInterval(callback, intervalMs));
+    this.intervalScheduler = deps.intervalScheduler ?? scheduleUnrefInterval;
     this.clearIntervalScheduler = deps.clearIntervalScheduler ?? ((handle) => clearInterval(handle as NodeJS.Timeout));
-    this.timeoutScheduler = deps.timeoutScheduler ?? ((callback, delayMs) => setTimeout(callback, delayMs));
+    this.timeoutScheduler = deps.timeoutScheduler ?? scheduleUnrefTimeout;
     this.virtualDisplayCoordinator = deps.virtualDisplayCoordinator ?? null;
     this.captureToolPatterns = deps.captureToolPatterns ?? KNOWN_CAPTURE_TOOL_PATTERNS;
+    this.processEnumerator = deps.processEnumerator ?? defaultProcessEnumerator;
     this.nativeModule = deps.nativeModule;
+    this.detectMacOSVersion();
+  }
+
+  private detectMacOSVersion(): void {
+    if (this.platform !== 'darwin') {
+      return;
+    }
+
+    try {
+      const { execSync } = require('child_process');
+      const version = execSync('sw_vers -productVersion', { encoding: 'utf8' }).trim();
+      const [major, minor = 0] = version.split('.').map((part: string) => Number.parseInt(part, 10) || 0);
+      this.isMacOS15Plus = major > 15 || (major === 15 && minor >= 4);
+      this.logger.log(`[StealthManager] macOS version: ${version}, 15.4+ screen capture bypass: ${this.isMacOS15Plus}`);
+      
+      // Store parsed version for later checks
+      this.macOSMajor = major;
+      this.macOSMinor = minor;
+    } catch (error) {
+      this.logger.warn('[StealthManager] Failed to detect macOS version:', error);
+      this.isMacOS15Plus = false;
+      this.macOSMajor = 0;
+      this.macOSMinor = 0;
+    }
+  }
+
+  private isMacOSVersionCompatible(minVersion: string): boolean {
+    if (this.platform !== 'darwin') {
+      return false;
+    }
+
+    const [requiredMajor = 0, requiredMinor = 0] = minVersion
+      .split('.')
+      .map((part: string) => Number.parseInt(part, 10) || 0);
+    if (!requiredMajor) {
+      return false;
+    }
+
+    const currentMajor = this.macOSMajor || 0;
+    const currentMinor = this.macOSMinor || 0;
+
+    return currentMajor > requiredMajor || (currentMajor === requiredMajor && currentMinor >= requiredMinor);
   }
 
   setEnabled(enabled: boolean): void {
     this.config = { ...this.config, enabled };
+    if (!enabled) {
+      this.stopBackgroundMonitorsIfIdle();
+    }
   }
 
   getBrowserWindowOptions(): StealthWindowOptions {
@@ -232,6 +362,71 @@ export class StealthManager extends EventEmitter {
     this.bindPowerMonitor();
     this.bindDisplayEvents();
     this.ensureWatchdog();
+    this.ensureSCStreamMonitor();
+    this.ensureChromiumDetection();
+    this.ensureCGWindowMonitor();
+    this.ensureTCCMonitor();
+    this.ensureOpacityFlicker();
+  }
+
+  private ensureChromiumDetection(): void {
+    if (
+      !this.isEnabled() ||
+      !this.isEnhancedStealthEnabled() ||
+      this.platform !== 'darwin'
+    ) {
+      return;
+    }
+
+    if (!this.chromiumDetector) {
+      this.chromiumDetector = new ChromiumCaptureDetector({
+        platform: this.platform,
+        checkIntervalMs: 500,
+        logger: this.logger,
+      });
+
+      this.chromiumDetector.on('browser-detected', (info) => {
+        this.logger.log(`[StealthManager] Chromium browser detected: ${info.name} (PID: ${info.pid})`);
+        this.addWarning('chromium_browser_detected');
+      });
+
+      this.chromiumDetector.on('capture-active', () => {
+        this.logger.log('[StealthManager] Chromium-based screen capture detected - activating countermeasures');
+        this.applyChromiumCountermeasures();
+        this.addWarning('chromium_capture_active');
+      });
+
+      this.chromiumDetector.on('capture-inactive', () => {
+        this.logger.log('[StealthManager] Chromium-based screen capture ended');
+        this.clearWarning('chromium_capture_active');
+      });
+
+      this.chromiumDetector.start();
+    }
+  }
+
+  private applyChromiumCountermeasures(): void {
+    for (const record of this.managedWindows) {
+      const win = record.win;
+      if (this.isWindowDestroyed(win)) {
+        continue;
+      }
+
+      this.applyLayer0(win, true);
+      this.applyNativeStealth(win);
+
+      if (!this.stealthEnhancer) {
+        this.stealthEnhancer = new MacosStealthEnhancer({
+          platform: this.platform,
+          logger: this.logger,
+        });
+      }
+
+      const windowNumber = this.getMacosWindowNumber(win);
+      if (windowNumber !== null) {
+        void this.stealthEnhancer.enhanceWindowProtection(windowNumber);
+      }
+    }
   }
 
   reapplyAfterShow(win: StealthCapableWindow): void {
@@ -244,15 +439,24 @@ export class StealthManager extends EventEmitter {
       return;
     }
 
-    this.applyToWindow(win, true, {
-      role: record.role,
-      hideFromSwitcher: record.hideFromSwitcher,
-      allowVirtualDisplayIsolation: record.allowVirtualDisplayIsolation,
-    });
+    try {
+      this.applyToWindow(win, true, {
+        role: record.role,
+        hideFromSwitcher: record.hideFromSwitcher,
+        allowVirtualDisplayIsolation: record.allowVirtualDisplayIsolation,
+      });
+    } catch (error) {
+      this.logger.warn('[StealthManager] reapplyAfterShow failed, maintaining Layer 0 protection:', error);
+      this.applyLayer0(win, true);
+    }
   }
 
   private isEnabled(): boolean {
-    return this.config.enabled && isOptimizationActive('useStealthMode');
+    return this.config.enabled;
+  }
+
+  private isEnhancedStealthEnabled(): boolean {
+    return isOptimizationActive('useStealthMode');
   }
 
   private applyLayer0(win: StealthCapableWindow, enable: boolean): void {
@@ -304,6 +508,7 @@ export class StealthManager extends EventEmitter {
         const handle = win.getNativeWindowHandle?.();
         if (handle) {
           nativeModule.applyWindowsWindowStealth(handle);
+          this.verifyStealth(win);
         }
         return;
       }
@@ -312,13 +517,25 @@ export class StealthManager extends EventEmitter {
         const windowNumber = this.getMacosWindowNumber(win);
         if (windowNumber !== null) {
           nativeModule.applyMacosWindowStealth(windowNumber);
+          
           if (this.featureFlags.enablePrivateMacosStealthApi && nativeModule.applyMacosPrivateWindowStealth) {
-            nativeModule.applyMacosPrivateWindowStealth(windowNumber);
+            if (this.isMacOSVersionCompatible('15.0')) {
+              try {
+                nativeModule.applyMacosPrivateWindowStealth(windowNumber);
+              } catch (privateError) {
+                this.logger.warn('[StealthManager] Private macOS stealth API failed (incompatible version), falling back to Layer 0:', privateError);
+                this.addWarning('private_api_failed');
+              }
+            } else {
+              this.logger.warn('[StealthManager] macOS version < 15.0, skipping private API');
+            }
           }
+          
+          this.verifyStealth(win);
         }
       }
     } catch (error) {
-      this.logger.warn('[StealthManager] Native stealth application failed:', error);
+      this.logger.warn('[StealthManager] Native stealth application failed, falling back to Layer 0 (setContentProtection):', error);
       if (this.isEnabled()) this.addWarning('native_stealth_failed');
     }
   }
@@ -353,7 +570,7 @@ export class StealthManager extends EventEmitter {
   }
 
   private getMacosWindowNumber(win: StealthCapableWindow): number | null {
-    const mediaSourceId = win.getMediaSourceId?.();
+    const mediaSourceId = this.safeGetMediaSourceId(win);
     if (!mediaSourceId) {
       return null;
     }
@@ -371,6 +588,7 @@ export class StealthManager extends EventEmitter {
     if (
       this.platform !== 'darwin' ||
       !this.featureFlags.enableVirtualDisplayIsolation ||
+      !this.isEnhancedStealthEnabled() ||
       !this.virtualDisplayCoordinator ||
       !record.allowVirtualDisplayIsolation ||
       record.virtualDisplayIsolationStarted
@@ -379,7 +597,7 @@ export class StealthManager extends EventEmitter {
     }
 
     const win = record.win;
-    const windowId = win.getMediaSourceId?.();
+    const windowId = this.safeGetMediaSourceId(win);
     if (!windowId) {
       return;
     }
@@ -400,6 +618,7 @@ export class StealthManager extends EventEmitter {
 
       if (!response.ready || !response.surfaceToken) {
         record.virtualDisplayIsolationStarted = false;
+        this.logger.warn('[StealthManager] Virtual display isolation not ready, falling back to Layer 0+1');
         if (this.isEnabled()) this.addWarning('virtual_display_failed');
         return;
       }
@@ -412,7 +631,7 @@ export class StealthManager extends EventEmitter {
       if (this.isCurrentVirtualDisplayRequest(record, requestId)) {
         record.virtualDisplayIsolationStarted = false;
       }
-      this.logger.warn('[StealthManager] Virtual display isolation failed:', error);
+      this.logger.warn('[StealthManager] Virtual display isolation failed, falling back to Layer 0+1:', error);
       if (this.isEnabled()) {
         if (this.virtualDisplayCoordinator.isExhausted?.()) {
           this.addWarning('virtual_display_exhausted');
@@ -442,13 +661,13 @@ export class StealthManager extends EventEmitter {
       return;
     }
 
-    const windowId = win.getMediaSourceId?.();
+    const windowId = this.safeGetMediaSourceId(win);
     if (!windowId) {
       return;
     }
 
     this.virtualDisplayCoordinator.releaseIsolationForWindow({ windowId }).catch((error) => {
-      this.logger.warn('[StealthManager] Virtual display isolation release failed:', error);
+      this.logger.warn('[StealthManager] Virtual display isolation release failed, continuing with Layer 0+1:', error);
     });
   }
 
@@ -486,8 +705,69 @@ export class StealthManager extends EventEmitter {
       this.disableVirtualDisplayIsolation(record);
       this.managedWindows.delete(record);
       this.managedWindowLookup.delete(record.win as object);
+
+      this.stopBackgroundMonitorsIfIdle();
     });
     record.listenersAttached = true;
+  }
+
+  private safeGetMediaSourceId(win: StealthCapableWindow): string | null {
+    if (typeof win.isDestroyed === 'function' && win.isDestroyed()) {
+      return null;
+    }
+
+    try {
+      return win.getMediaSourceId?.() ?? null;
+    } catch (error) {
+      this.logger.warn('[StealthManager] Failed to read media source id from managed window:', error);
+      return null;
+    }
+  }
+
+  private stopBackgroundMonitorsIfIdle(): void {
+    if (this.isEnabled() && this.managedWindows.size > 0) {
+      return;
+    }
+
+    if (this.watchdogHandle) {
+      this.clearIntervalScheduler(this.watchdogHandle);
+      this.watchdogHandle = null;
+    }
+
+    if (this.windowsAffinityHandle) {
+      this.clearIntervalScheduler(this.windowsAffinityHandle);
+      this.windowsAffinityHandle = null;
+    }
+
+    if (this.scStreamMonitorHandle) {
+      this.clearIntervalScheduler(this.scStreamMonitorHandle);
+      this.scStreamMonitorHandle = null;
+    }
+
+    if (this.cgWindowMonitorHandle) {
+      this.clearIntervalScheduler(this.cgWindowMonitorHandle);
+      this.cgWindowMonitorHandle = null;
+    }
+
+    if (this.opacityFlickerHandle) {
+      this.clearIntervalScheduler(this.opacityFlickerHandle);
+      this.opacityFlickerHandle = null;
+    }
+
+    this.watchdogRunning = false;
+    this.scStreamMonitorRunning = false;
+    this.cgWindowMonitorRunning = false;
+    this.scStreamActive = false;
+
+    if (this.chromiumDetector) {
+      this.chromiumDetector.stop();
+      this.chromiumDetector = null;
+    }
+
+    if (this.tccMonitor) {
+      this.tccMonitor.stop();
+      this.tccMonitor = null;
+    }
   }
 
   private bindPowerMonitor(): void {
@@ -615,12 +895,46 @@ export class StealthManager extends EventEmitter {
     if (
       this.watchdogHandle ||
       !this.isEnabled() ||
+      !this.isEnhancedStealthEnabled() ||
       !this.featureFlags.enableCaptureDetectionWatchdog
     ) {
       return;
     }
 
     this.watchdogHandle = this.intervalScheduler(() => this.pollCaptureTools(), WATCHDOG_INTERVAL_MS);
+
+    if (this.platform === 'win32' && !this.windowsAffinityHandle) {
+      this.windowsAffinityHandle = this.intervalScheduler(() => this.verifyWindowsAffinity(), 1000);
+    }
+  }
+
+  private async verifyWindowsAffinity(): Promise<void> {
+    for (const record of this.managedWindows) {
+      const win = record.win;
+      if (this.isWindowDestroyed(win)) {
+        continue;
+      }
+
+      const nativeModule = this.getNativeModule();
+      if (!nativeModule?.verifyWindowsStealthState) {
+        continue;
+      }
+
+      const handle = win.getNativeWindowHandle?.();
+      if (!handle) {
+        continue;
+      }
+
+      try {
+        const affinity = nativeModule.verifyWindowsStealthState(handle);
+        if (affinity !== 0x11 && affinity !== 0x01) {
+          this.logger.log('[StealthManager] Windows display affinity was reset - reapplying');
+          this.applyNativeStealth(win);
+        }
+      } catch {
+        // Ignore verification errors
+      }
+    }
   }
 
   private async pollCaptureTools(): Promise<void> {
@@ -630,18 +944,7 @@ export class StealthManager extends EventEmitter {
 
     this.watchdogRunning = true;
     try {
-      let command = '';
-      if (this.platform === 'win32') {
-        command = 'tasklist /NH /FO CSV';
-      } else if (this.platform === 'darwin' || this.platform === 'linux') {
-        command = 'ps -eo comm=';
-      } else {
-         return;
-      }
-
-      const { stdout } = await execAsync(command);
-      
-      const suspiciousToolMatches = this.captureToolPatterns.filter((pattern) => pattern.test(stdout));
+      const suspiciousToolMatches = await this.detectCaptureProcesses();
 
       if (suspiciousToolMatches.length > 0) {
         this.logger.log(
@@ -656,12 +959,343 @@ export class StealthManager extends EventEmitter {
     }
   }
 
+  private async detectCaptureProcesses(): Promise<RegExp[]> {
+    if (this.platform === 'win32') {
+      const stdout = await this.processEnumerator('tasklist', ['/FO', 'CSV', '/NH']);
+      return this.captureToolPatterns.filter((pattern) => pattern.test(stdout));
+    }
+
+    if (this.platform === 'darwin') {
+      const matches: RegExp[] = [];
+      const browserPatterns = this.getBrowserCapturePatterns();
+      const nonBrowserPatterns = this.captureToolPatterns.filter((p) => !browserPatterns.includes(p));
+
+      for (const pattern of nonBrowserPatterns) {
+        const stdout = await this.processEnumerator('pgrep', ['-lif', pattern.source]);
+        if (pattern.test(stdout)) {
+          matches.push(pattern);
+        }
+      }
+
+      const browserStdout = await this.processEnumerator('pgrep', ['-lif', 'chrome|chromium|msedge|brave']);
+      if (browserStdout) {
+        const browserLines = browserStdout.trim().split('\n').filter(Boolean);
+        for (const line of browserLines) {
+          const appPathMatch = line.match(/\/(Chrome|Chromium|Microsoft Edge|Brave Browser)\.app\//i);
+          if (appPathMatch) {
+            const appName = appPathMatch[1].toLowerCase();
+            for (const pattern of browserPatterns) {
+              if (pattern.test(appName) && !matches.includes(pattern)) {
+                matches.push(pattern);
+              }
+            }
+          }
+        }
+      }
+
+      return matches;
+    }
+
+    return [];
+  }
+
+  private getBrowserCapturePatterns(): RegExp[] {
+    return [
+      /chrome/i,
+      /chromium/i,
+      /msedge/i,
+      /microsoft edge/i,
+      /brave/i,
+    ];
+  }
+
+  private async checkSCStreamActive(): Promise<boolean> {
+    if (this.platform !== 'darwin') {
+      return false;
+    }
+
+    try {
+      const stdout = await this.processEnumerator('pgrep', ['-lf', 'ScreenCaptureAgent']);
+      if (stdout && stdout.trim()) {
+        return true;
+      }
+
+      const stdout2 = await this.processEnumerator('pgrep', ['-lf', 'controlcenter']);
+      if (stdout2 && stdout2.trim()) {
+        const controlCenterOutput = stdout2.toLowerCase();
+        if (controlCenterOutput.includes('screen') || controlCenterOutput.includes('capture')) {
+          return true;
+        }
+      }
+
+      const stdout3 = await this.processEnumerator('pgrep', ['-lf', 'WindowServer']);
+      if (stdout3 && stdout3.trim()) {
+        return false;
+      }
+
+      return false;
+    } catch {
+      return false;
+    }
+  }
+
+  private ensureSCStreamMonitor(): void {
+    if (
+      this.scStreamMonitorHandle ||
+      !this.isEnabled() ||
+      !this.isEnhancedStealthEnabled() ||
+      !this.featureFlags.enableSCStreamDetection
+    ) {
+      return;
+    }
+
+    this.scStreamMonitorHandle = this.intervalScheduler(
+      () => this.pollSCStreamState(),
+      SCSTREAM_CHECK_INTERVAL_MS
+    );
+    this.logger.log('[StealthManager] SCStream capture monitor started');
+  }
+
+  private async pollSCStreamState(): Promise<void> {
+    if (this.scStreamMonitorRunning) {
+      return;
+    }
+
+    this.scStreamMonitorRunning = true;
+    try {
+      const isActive = await this.checkSCStreamActive();
+
+      if (isActive && !this.scStreamActive) {
+        this.scStreamActive = true;
+        this.logger.log('[StealthManager] SCStream capture session detected - activating enhanced protection');
+        this.applyEnhancedProtectionForSCStream();
+        this.addWarning('scstream_capture_detected');
+      } else if (!isActive && this.scStreamActive) {
+        this.scStreamActive = false;
+        this.logger.log('[StealthManager] SCStream capture session ended');
+        this.clearWarning('scstream_capture_detected');
+      }
+    } catch (error) {
+      this.logger.warn('[StealthManager] SCStream monitor poll failed, maintaining Layer 0 protection:', error);
+    } finally {
+      this.scStreamMonitorRunning = false;
+    }
+  }
+
+  private applyEnhancedProtectionForSCStream(): void {
+    for (const record of this.managedWindows) {
+      const win = record.win;
+      if (this.isWindowDestroyed(win)) {
+        continue;
+      }
+
+      this.applyLayer0(win, true);
+      this.applyNativeStealth(win);
+    }
+  }
+
+  private ensureCGWindowMonitor(): void {
+    if (
+      this.cgWindowMonitorHandle ||
+      !this.isEnabled() ||
+      !this.isEnhancedStealthEnabled() ||
+      this.platform !== 'darwin'
+    ) {
+      return;
+    }
+
+    this.cgWindowMonitorHandle = this.intervalScheduler(
+      () => this.pollCGWindowVisibility(),
+      CGWINDOW_VISIBILITY_CHECK_MS
+    );
+    this.logger.log('[StealthManager] CGWindow visibility monitor started');
+  }
+
+  private async pollCGWindowVisibility(): Promise<void> {
+    if (this.cgWindowMonitorRunning) {
+      return;
+    }
+
+    this.cgWindowMonitorRunning = true;
+    try {
+      const visibleWindowNumbers = await this.getWindowNumbersVisibleToCapture();
+
+      for (const record of this.managedWindows) {
+        const win = record.win;
+        if (this.isWindowDestroyed(win)) {
+          continue;
+        }
+
+        const windowNumber = this.getMacosWindowNumber(win);
+        if (windowNumber === null) {
+          continue;
+        }
+
+        if (visibleWindowNumbers.has(windowNumber)) {
+          this.logger.log(`[StealthManager] Window ${windowNumber} is visible to capture tools - applying emergency protection`);
+          this.applyEmergencyProtection(win);
+          if (!this.scStreamActive) {
+            this.scStreamActive = true;
+            this.addWarning('window_visible_to_capture');
+          }
+        }
+      }
+    } catch (error) {
+      this.logger.warn('[StealthManager] CGWindow visibility check failed, maintaining Layer 0 protection:', error);
+    } finally {
+      this.cgWindowMonitorRunning = false;
+    }
+  }
+
+  private async getWindowNumbersVisibleToCapture(): Promise<Set<number>> {
+    const visibleWindows = new Set<number>();
+
+    try {
+      const stdout = await this.processEnumerator('python3', ['-c', `
+import Quartz
+import sys
+
+windows = Quartz.CGWindowListCopyWindowInfo(
+    Quartz.kCGWindowListOptionAll,
+    Quartz.kCGNullWindowID
+)
+
+for window in windows:
+    window_number = window.get('kCGWindowNumber', -1)
+    layer = window.get('kCGWindowLayer', -1)
+    alpha = window.get('kCGWindowAlpha', 1.0)
+    sharing_state = window.get('kCGWindowSharingState', 0)
+
+    if window_number > 0 and alpha > 0 and layer == 0 and sharing_state > 0:
+        print(window_number)
+`]);
+
+      if (stdout && stdout.trim()) {
+        for (const line of stdout.trim().split('\n').filter(Boolean)) {
+          const windowNumber = parseInt(line, 10);
+          if (Number.isFinite(windowNumber) && windowNumber > 0) {
+            visibleWindows.add(windowNumber);
+          }
+        }
+      }
+    } catch {
+      // Ignore
+    }
+
+    return visibleWindows;
+  }
+
+  private applyEmergencyProtection(win: StealthCapableWindow): void {
+    if (this.isWindowDestroyed(win)) {
+      return;
+    }
+
+    if (typeof win.setOpacity === 'function') {
+      win.setOpacity(0);
+      this.timeoutScheduler(() => {
+        if (!this.isWindowDestroyed(win) && typeof win.setOpacity === 'function') {
+          win.setOpacity(1);
+          this.applyLayer0(win, true);
+          this.applyNativeStealth(win);
+        }
+      }, 100);
+    }
+
+    this.applyLayer0(win, true);
+    this.applyNativeStealth(win);
+
+    if (!this.stealthEnhancer) {
+      this.stealthEnhancer = new MacosStealthEnhancer({
+        platform: this.platform,
+        logger: this.logger,
+      });
+    }
+
+    const windowNumber = this.getMacosWindowNumber(win);
+    if (windowNumber !== null) {
+      void this.stealthEnhancer.enhanceWindowProtection(windowNumber);
+    }
+  }
+
+  private ensureTCCMonitor(): void {
+    if (
+      !this.isEnabled() ||
+      !this.isEnhancedStealthEnabled() ||
+      this.platform !== 'darwin'
+    ) {
+      return;
+    }
+
+    if (!this.tccMonitor) {
+      this.tccMonitor = new TCCMonitor({
+        platform: this.platform,
+        checkIntervalMs: 2000,
+        logger: this.logger,
+      });
+
+      this.tccMonitor.on('tool-detected', (info) => {
+        this.logger.log(`[StealthManager] Enterprise tool detected: ${info.name} (${info.category})`);
+        this.addWarning(`enterprise_tool_${info.name.toLowerCase()}`);
+        if (info.category === 'proctoring' || info.category === 'monitoring') {
+          this.applyChromiumCountermeasures();
+        }
+      });
+
+      this.tccMonitor.on('permission-granted', (info) => {
+        this.logger.log(`[StealthManager] New ScreenCapture permission granted: ${info.bundleId}`);
+        this.addWarning('new_screencapture_permission');
+      });
+
+      this.tccMonitor.start();
+    }
+  }
+
+  private ensureOpacityFlicker(): void {
+    if (
+      this.opacityFlickerHandle ||
+      !this.isEnabled() ||
+      !this.isEnhancedStealthEnabled() ||
+      this.platform !== 'darwin' ||
+      !this.isMacOS15Plus
+    ) {
+      return;
+    }
+
+    this.opacityFlickerHandle = this.intervalScheduler(
+      () => this.applyOpacityFlicker(),
+      100
+    );
+    this.logger.log('[StealthManager] macOS 15.4+ opacity flicker enabled (100ms interval)');
+  }
+
+  private applyOpacityFlicker(): void {
+    for (const record of this.managedWindows) {
+      const win = record.win;
+      if (this.isWindowDestroyed(win)) {
+        continue;
+      }
+
+      if (typeof win.setOpacity === 'function') {
+        try {
+          win.setOpacity(0.99);
+          this.timeoutScheduler(() => {
+            if (!this.isWindowDestroyed(win) && typeof win.setOpacity === 'function') {
+              win.setOpacity(1);
+            }
+          }, 30);
+        } catch (error) {
+          this.logger.warn('[StealthManager] Opacity flicker failed, continuing with Layer 0+1:', error);
+        }
+      }
+    }
+  }
+
   private hideAndRestoreVisibleWindows(): void {
-    const windowsToRestore: StealthCapableWindow[] = [];
+    const windowsToRestore: Array<{ win: StealthCapableWindow; restoreWithOpacity: boolean }> = [];
 
     for (const record of this.managedWindows) {
       const win = record.win;
-      if (this.isWindowDestroyed(win) || typeof win.hide !== 'function' || typeof win.show !== 'function') {
+      if (this.isWindowDestroyed(win)) {
         continue;
       }
 
@@ -670,8 +1304,14 @@ export class StealthManager extends EventEmitter {
         continue;
       }
 
-      win.hide();
-      windowsToRestore.push(win);
+      if (typeof win.setOpacity === 'function') {
+        win.setOpacity(0);
+        this.reapplyAfterShow(win);
+        windowsToRestore.push({ win, restoreWithOpacity: true });
+      } else if (typeof win.hide === 'function' && typeof win.show === 'function') {
+        win.hide();
+        windowsToRestore.push({ win, restoreWithOpacity: false });
+      }
     }
 
     if (windowsToRestore.length === 0) {
@@ -679,15 +1319,62 @@ export class StealthManager extends EventEmitter {
     }
 
     this.timeoutScheduler(() => {
-      for (const win of windowsToRestore) {
+      for (const { win, restoreWithOpacity } of windowsToRestore) {
         if (this.isWindowDestroyed(win)) {
           continue;
         }
 
-        win.show?.();
+        if (restoreWithOpacity && typeof win.setOpacity === 'function') {
+          win.setOpacity(1);
+        } else {
+          win.show?.();
+        }
         this.reapplyAfterShow(win);
       }
     }, WATCHDOG_RESTORE_DELAY_MS);
+  }
+
+  verifyStealth(win: StealthCapableWindow): boolean {
+    const nativeModule = this.getNativeModule();
+    if (!nativeModule) {
+      return false;
+    }
+
+    try {
+      if (this.platform === 'darwin' && nativeModule.verifyMacosStealthState) {
+        const windowNumber = this.getMacosWindowNumber(win);
+        if (windowNumber === null) {
+          return false;
+        }
+
+        const sharingType = nativeModule.verifyMacosStealthState(windowNumber);
+        const verified = sharingType === 0;
+        if (!verified && this.isEnabled()) {
+          this.addWarning('stealth_verification_failed');
+          this.logger.warn('[StealthManager] macOS stealth verification failed, maintaining Layer 0 protection');
+        }
+        return verified;
+      }
+
+      if (this.platform === 'win32' && nativeModule.verifyWindowsStealthState) {
+        const handle = win.getNativeWindowHandle?.();
+        if (!handle) {
+          return false;
+        }
+
+        const affinity = nativeModule.verifyWindowsStealthState(handle);
+        const verified = affinity === 0x11 || affinity === 0x01;
+        if (!verified && this.isEnabled()) {
+          this.addWarning('stealth_verification_failed');
+          this.logger.warn('[StealthManager] Windows stealth verification failed, maintaining Layer 0 protection');
+        }
+        return verified;
+      }
+    } catch (error) {
+      this.logger.warn('[StealthManager] Stealth verification failed, falling back to Layer 0:', error);
+    }
+
+    return false;
   }
 
   private getNativeModule(): NativeStealthBindings | null {
@@ -700,9 +1387,12 @@ export class StealthManager extends EventEmitter {
       return this.nativeModule;
     }
 
-    this.nativeModule = loadNativeStealthModule();
+    this.nativeModule = loadNativeStealthModule({ retryOnFailure: true });
     if (this.nativeModule === null && this.isEnabled()) {
       this.addWarning('native_module_unavailable');
+      this.logger.warn('[StealthManager] Native module unavailable, operating in Layer 0 mode only');
+    } else if (this.nativeModule !== null) {
+      this.clearWarning('native_module_unavailable');
     }
     return this.nativeModule;
   }

@@ -344,7 +344,7 @@ safeHandleValidated("delete-meeting", (args) => [parseIpcInput(ipcSchemas.provid
       return { success: true };
     } catch (error: any) {
       // console.error("Error switching to Ollama:", error);
-      return { success: false, error: error.message };
+      return fail('IPC_ERROR', error, 'Operation failed');
     }
   });
 
@@ -398,7 +398,7 @@ safeHandleValidated("delete-meeting", (args) => [parseIpcInput(ipcSchemas.provid
       return { success: true };
     } catch (error: any) {
       // console.error("Error switching to Gemini:", error);
-      return { success: false, error: error.message };
+      return fail('IPC_ERROR', error, 'Operation failed');
     }
   });
 
@@ -418,7 +418,7 @@ safeHandleValidated("delete-meeting", (args) => [parseIpcInput(ipcSchemas.provid
       return { success: true };
     } catch (error: any) {
       console.error("Error saving Gemini API key:", error);
-      return { success: false, error: error.message };
+      return fail('IPC_ERROR', error, 'Operation failed');
     }
   });
 
@@ -437,7 +437,24 @@ safeHandleValidated("delete-meeting", (args) => [parseIpcInput(ipcSchemas.provid
       return { success: true };
     } catch (error: any) {
       console.error("Error saving Groq API key:", error);
-      return { success: false, error: error.message };
+      return fail('IPC_ERROR', error, 'Operation failed');
+    }
+  });
+
+  safeHandleValidated("set-cerebras-api-key", (args) => [parseIpcInput(ipcSchemas.apiKey, args[0], 'set-cerebras-api-key')] as const, async (_, apiKey) => {
+    try {
+      const { CredentialsManager } = require('./services/CredentialsManager');
+      CredentialsManager.getInstance().setCerebrasApiKey(apiKey);
+
+      const llmHelper = appState.processingHelper.getLLMHelper();
+      llmHelper.setCerebrasApiKey(apiKey);
+
+      appState.getIntelligenceManager().initializeLLMs();
+
+      return { success: true };
+    } catch (error: any) {
+      console.error("Error saving Cerebras API key:", error);
+      return fail('IPC_ERROR', error, 'Operation failed');
     }
   });
 
@@ -456,7 +473,7 @@ safeHandleValidated("delete-meeting", (args) => [parseIpcInput(ipcSchemas.provid
       return { success: true };
     } catch (error: any) {
       console.error("Error saving OpenAI API key:", error);
-      return { success: false, error: error.message };
+      return fail('IPC_ERROR', error, 'Operation failed');
     }
   });
 
@@ -475,7 +492,7 @@ safeHandleValidated("delete-meeting", (args) => [parseIpcInput(ipcSchemas.provid
       return { success: true };
     } catch (error: any) {
       console.error("Error saving Claude API key:", error);
-      return { success: false, error: error.message };
+      return fail('IPC_ERROR', error, 'Operation failed');
     }
   });
 
@@ -503,7 +520,7 @@ safeHandleValidated("delete-meeting", (args) => [parseIpcInput(ipcSchemas.provid
       return { success: true };
     } catch (error: any) {
       console.error("Error saving custom provider:", error);
-      return { success: false, error: error.message };
+      return fail('IPC_ERROR', error, 'Operation failed');
     }
   });
 
@@ -516,7 +533,7 @@ safeHandleValidated("delete-meeting", (args) => [parseIpcInput(ipcSchemas.provid
       return { success: true };
     } catch (error: any) {
       console.error("Error deleting custom provider:", error);
-      return { success: false, error: error.message };
+      return fail('IPC_ERROR', error, 'Operation failed');
     }
   });
 
@@ -538,7 +555,7 @@ safeHandleValidated("delete-meeting", (args) => [parseIpcInput(ipcSchemas.provid
       return { success: true };
     } catch (error: any) {
       console.error("Error switching to custom provider:", error);
-      return { success: false, error: error.message };
+      return fail('IPC_ERROR', error, 'Operation failed');
     }
   });
 
@@ -560,7 +577,7 @@ safeHandleValidated("delete-meeting", (args) => [parseIpcInput(ipcSchemas.provid
       return { success: true };
     } catch (error: any) {
       console.error("Error saving curl provider:", error);
-      return { success: false, error: error.message };
+      return fail('IPC_ERROR', error, 'Operation failed');
     }
   });
 
@@ -571,7 +588,7 @@ safeHandleValidated("delete-meeting", (args) => [parseIpcInput(ipcSchemas.provid
       return { success: true };
     } catch (error: any) {
       console.error("Error deleting curl provider:", error);
-      return { success: false, error: error.message };
+      return fail('IPC_ERROR', error, 'Operation failed');
     }
   });
 
@@ -593,7 +610,7 @@ safeHandleValidated("delete-meeting", (args) => [parseIpcInput(ipcSchemas.provid
       return { success: true };
     } catch (error: any) {
       console.error("Error switching to curl provider:", error);
-      return { success: false, error: error.message };
+      return fail('IPC_ERROR', error, 'Operation failed');
     }
   });
 
@@ -601,7 +618,8 @@ safeHandleValidated("delete-meeting", (args) => [parseIpcInput(ipcSchemas.provid
   safeHandle("get-stored-credentials", async () => {
     try {
       const { CredentialsManager } = require('./services/CredentialsManager');
-      const creds = CredentialsManager.getInstance().getAllCredentials();
+      const cm = CredentialsManager.getInstance();
+      const creds = cm.getAllCredentials();
 
       // Return masked versions for security (just indicate if set)
       const hasKey = (key?: string) => !!(key && key.trim().length > 0);
@@ -609,6 +627,7 @@ safeHandleValidated("delete-meeting", (args) => [parseIpcInput(ipcSchemas.provid
       return ok({
         hasGeminiKey: hasKey(creds.geminiApiKey),
         hasGroqKey: hasKey(creds.groqApiKey),
+        hasCerebrasKey: hasKey(creds.cerebrasApiKey),
         hasOpenaiKey: hasKey(creds.openaiApiKey),
         hasClaudeKey: hasKey(creds.claudeApiKey),
         googleServiceAccountPath: creds.googleServiceAccountPath || null,
@@ -628,8 +647,10 @@ safeHandleValidated("delete-meeting", (args) => [parseIpcInput(ipcSchemas.provid
         // Dynamic Model Discovery - preferred models
         geminiPreferredModel: creds.geminiPreferredModel || undefined,
         groqPreferredModel: creds.groqPreferredModel || undefined,
+        cerebrasPreferredModel: creds.cerebrasPreferredModel || undefined,
         openaiPreferredModel: creds.openaiPreferredModel || undefined,
         claudePreferredModel: creds.claudePreferredModel || undefined,
+        fastResponseConfig: cm.getFastResponseConfig(),
       });
     } catch (error: any) {
       return fail('CREDENTIALS_READ_FAILED', error, 'Failed to get stored credentials');
@@ -649,6 +670,7 @@ safeHandleValidated("delete-meeting", (args) => [parseIpcInput(ipcSchemas.provid
         const cm = CredentialsManager.getInstance();
         if (provider === 'gemini') key = cm.getGeminiApiKey();
         else if (provider === 'groq') key = cm.getGroqApiKey();
+        else if (provider === 'cerebras') key = cm.getCerebrasApiKey();
         else if (provider === 'openai') key = cm.getOpenaiApiKey();
         else if (provider === 'claude') key = cm.getClaudeApiKey();
       }
@@ -693,7 +715,7 @@ safeHandleValidated("delete-meeting", (args) => [parseIpcInput(ipcSchemas.provid
       return { success: true };
     } catch (error: any) {
       console.error("Error setting STT provider:", error);
-      return { success: false, error: error.message };
+      return fail('IPC_ERROR', error, 'Operation failed');
     }
   });
 
@@ -713,7 +735,7 @@ safeHandleValidated("delete-meeting", (args) => [parseIpcInput(ipcSchemas.provid
       return { success: true };
     } catch (error: any) {
       console.error("Error saving Groq STT API key:", error);
-      return { success: false, error: error.message };
+      return fail('IPC_ERROR', error, 'Operation failed');
     }
   });
 
@@ -724,7 +746,7 @@ safeHandleValidated("delete-meeting", (args) => [parseIpcInput(ipcSchemas.provid
       return { success: true };
     } catch (error: any) {
       console.error("Error saving OpenAI STT API key:", error);
-      return { success: false, error: error.message };
+      return fail('IPC_ERROR', error, 'Operation failed');
     }
   });
 
@@ -735,7 +757,7 @@ safeHandleValidated("delete-meeting", (args) => [parseIpcInput(ipcSchemas.provid
       return { success: true };
     } catch (error: any) {
       console.error("Error saving Deepgram API key:", error);
-      return { success: false, error: error.message };
+      return fail('IPC_ERROR', error, 'Operation failed');
     }
   });
 
@@ -750,7 +772,7 @@ safeHandleValidated("delete-meeting", (args) => [parseIpcInput(ipcSchemas.provid
       return { success: true };
     } catch (error: any) {
       console.error("Error setting Groq STT model:", error);
-      return { success: false, error: error.message };
+      return fail('IPC_ERROR', error, 'Operation failed');
     }
   });
 
@@ -761,7 +783,7 @@ safeHandleValidated("delete-meeting", (args) => [parseIpcInput(ipcSchemas.provid
       return { success: true };
     } catch (error: any) {
       console.error("Error saving ElevenLabs API key:", error);
-      return { success: false, error: error.message };
+      return fail('IPC_ERROR', error, 'Operation failed');
     }
   });
 
@@ -772,7 +794,7 @@ safeHandleValidated("delete-meeting", (args) => [parseIpcInput(ipcSchemas.provid
       return { success: true };
     } catch (error: any) {
       console.error("Error saving Azure API key:", error);
-      return { success: false, error: error.message };
+      return fail('IPC_ERROR', error, 'Operation failed');
     }
   });
 
@@ -787,7 +809,7 @@ safeHandleValidated("delete-meeting", (args) => [parseIpcInput(ipcSchemas.provid
       return { success: true };
     } catch (error: any) {
       console.error("Error setting Azure region:", error);
-      return { success: false, error: error.message };
+      return fail('IPC_ERROR', error, 'Operation failed');
     }
   });
 
@@ -798,7 +820,7 @@ safeHandleValidated("delete-meeting", (args) => [parseIpcInput(ipcSchemas.provid
       return { success: true };
     } catch (error: any) {
       console.error("Error saving IBM Watson API key:", error);
-      return { success: false, error: error.message };
+      return fail('IPC_ERROR', error, 'Operation failed');
     }
   });
 
@@ -809,7 +831,7 @@ safeHandleValidated("delete-meeting", (args) => [parseIpcInput(ipcSchemas.provid
       return { success: true };
     } catch (error: any) {
       console.error("Error saving Soniox API key:", error);
-      return { success: false, error: error.message };
+      return fail('IPC_ERROR', error, 'Operation failed');
     }
   });
 
@@ -823,7 +845,6 @@ safeHandleValidated("delete-meeting", (args) => [parseIpcInput(ipcSchemas.provid
     console.log(`[IPC] Received test - stt - connection request for provider: ${provider} `);
     try {
       if (provider === 'deepgram') {
-        // Test Deepgram via WebSocket connection
         const WebSocket = require('ws');
         return await new Promise<{ success: boolean; error?: string }>((resolve) => {
           const url = 'wss://api.deepgram.com/v1/listen?model=nova-3&encoding=linear16&sample_rate=16000&channels=1';
@@ -831,38 +852,43 @@ safeHandleValidated("delete-meeting", (args) => [parseIpcInput(ipcSchemas.provid
             headers: { Authorization: `Token ${apiKey} ` },
           });
 
+          const cleanupAndResolve = (result: { success: boolean; error?: string }) => {
+            clearTimeout(timeout);
+            try { ws.close(); } catch { }
+            resolve(result);
+          };
+
           const timeout = setTimeout(() => {
-            ws.close();
-            resolve({ success: false, error: 'Connection timed out' });
+            cleanupAndResolve({ success: false, error: 'Connection timed out' });
           }, 15000);
 
           ws.on('open', () => {
-            clearTimeout(timeout);
             try { ws.send(JSON.stringify({ type: 'CloseStream' })); } catch { }
-            ws.close();
-            resolve({ success: true });
+            cleanupAndResolve({ success: true });
           });
 
           ws.on('error', (err: any) => {
-            clearTimeout(timeout);
-            resolve({ success: false, error: err.message || 'Connection failed' });
+            cleanupAndResolve({ success: false, error: err.message || 'Connection failed' });
           });
         });
       }
 
       if (provider === 'soniox') {
-        // Test Soniox via WebSocket connection
         const WebSocket = require('ws');
         return await new Promise<{ success: boolean; error?: string }>((resolve) => {
           const ws = new WebSocket('wss://stt-rt.soniox.com/transcribe-websocket');
 
+          const cleanupAndResolve = (result: { success: boolean; error?: string }) => {
+            clearTimeout(timeout);
+            try { ws.close(); } catch { }
+            resolve(result);
+          };
+
           const timeout = setTimeout(() => {
-            ws.close();
-            resolve({ success: false, error: 'Connection timed out' });
+            cleanupAndResolve({ success: false, error: 'Connection timed out' });
           }, 15000);
 
           ws.on('open', () => {
-            // Send a minimal config to validate the API key
             ws.send(JSON.stringify({
               api_key: apiKey,
               model: 'stt-rt-v4',
@@ -873,23 +899,20 @@ safeHandleValidated("delete-meeting", (args) => [parseIpcInput(ipcSchemas.provid
           });
 
           ws.on('message', (msg: any) => {
-            clearTimeout(timeout);
             try {
               const res = JSON.parse(msg.toString());
               if (res.error_code) {
-                resolve({ success: false, error: `${res.error_code}: ${res.error_message}` });
+                cleanupAndResolve({ success: false, error: `${res.error_code}: ${res.error_message}` });
               } else {
-                resolve({ success: true });
+                cleanupAndResolve({ success: true });
               }
             } catch {
-              resolve({ success: true });
+              cleanupAndResolve({ success: true });
             }
-            ws.close();
           });
 
           ws.on('error', (err: any) => {
-            clearTimeout(timeout);
-            resolve({ success: false, error: err.message || 'Connection failed' });
+            cleanupAndResolve({ success: false, error: err.message || 'Connection failed' });
           });
         });
       }
@@ -997,6 +1020,7 @@ safeHandleValidated("delete-meeting", (args) => [parseIpcInput(ipcSchemas.provid
         const creds = CredentialsManager.getInstance();
         if (provider === 'gemini') apiKey = creds.getGeminiApiKey();
         else if (provider === 'groq') apiKey = creds.getGroqApiKey();
+        else if (provider === 'cerebras') apiKey = creds.getCerebrasApiKey();
         else if (provider === 'openai') apiKey = creds.getOpenaiApiKey();
         else if (provider === 'claude') apiKey = creds.getClaudeApiKey();
       }
@@ -1023,6 +1047,15 @@ safeHandleValidated("delete-meeting", (args) => [parseIpcInput(ipcSchemas.provid
         }, {
           headers: { Authorization: `Bearer ${apiKey}` },
           timeout: 15000
+        });
+      } else if (provider === 'cerebras') {
+        response = await axios.post('https://api.cerebras.ai/v1/chat/completions', {
+          model: 'gpt-oss-120b',
+          messages: [{ role: 'user', content: 'Hello' }],
+          max_completion_tokens: 16,
+        }, {
+          headers: { Authorization: `Bearer ${apiKey}` },
+          timeout: 15000,
         });
       } else if (provider === 'openai') {
         response = await axios.post('https://api.openai.com/v1/chat/completions', {
@@ -1061,29 +1094,29 @@ safeHandleValidated("delete-meeting", (args) => [parseIpcInput(ipcSchemas.provid
     }
   });
 
-  safeHandle("get-groq-fast-text-mode", () => {
+  safeHandle("get-fast-response-config", () => {
     try {
       const llmHelper = appState.processingHelper.getLLMHelper();
-      return ok({ enabled: llmHelper.getGroqFastTextMode() });
+      return ok(llmHelper.getFastResponseConfig());
     } catch (error: any) {
-      return fail('GROQ_FAST_TEXT_READ_FAILED', error, 'Failed to get Groq Fast Text mode');
+      return fail('FAST_RESPONSE_CONFIG_READ_FAILED', error, 'Failed to get Fast Response config');
     }
   });
 
-  // Set Groq Fast Text Mode
-  safeHandleValidated("set-groq-fast-text-mode", (args) => [parseIpcInput(ipcSchemas.booleanFlag, args[0], 'set-groq-fast-text-mode')] as const, (_, enabled) => {
+  safeHandleValidated("set-fast-response-config", (args) => [parseIpcInput(ipcSchemas.fastResponseConfig, args[0], 'set-fast-response-config')] as const, (_, config) => {
     try {
+      const { CredentialsManager } = require('./services/CredentialsManager');
       const llmHelper = appState.processingHelper.getLLMHelper();
-      llmHelper.setGroqFastTextMode(enabled);
+      llmHelper.setFastResponseConfig(config as any);
+      CredentialsManager.getInstance().setFastResponseConfig(config as any);
 
-      // Broadcast to all windows
       BrowserWindow.getAllWindows().forEach(win => {
-        win.webContents.send('groq-fast-text-changed', enabled);
+        win.webContents.send('fast-response-config-changed', llmHelper.getFastResponseConfig());
       });
 
       return { success: true };
     } catch (error: any) {
-      return { success: false, error: error.message };
+      return fail('IPC_ERROR', error, 'Operation failed');
     }
   });
 
@@ -1113,7 +1146,7 @@ safeHandleValidated("delete-meeting", (args) => [parseIpcInput(ipcSchemas.provid
       return { success: true };
     } catch (error: any) {
       console.error("Error setting model:", error);
-      return { success: false, error: error.message };
+      return fail('IPC_ERROR', error, 'Operation failed');
     }
   });
 
@@ -1144,7 +1177,7 @@ safeHandleValidated("delete-meeting", (args) => [parseIpcInput(ipcSchemas.provid
       return { success: true };
     } catch (error: any) {
       console.error("Error setting default model:", error);
-      return { success: false, error: error.message };
+      return fail('IPC_ERROR', error, 'Operation failed');
     }
   });
 

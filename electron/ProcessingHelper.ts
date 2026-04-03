@@ -37,13 +37,14 @@ export class ProcessingHelper {
       let groqApiKey = process.env.GROQ_API_KEY
       let openaiApiKey = process.env.OPENAI_API_KEY
       let claudeApiKey = process.env.CLAUDE_API_KEY
+      let cerebrasApiKey = process.env.CEREBRAS_API_KEY
 
       // Allow initializing without key (will be loaded in loadStoredCredentials or via Settings)
       if (!apiKey) {
         console.warn("[ProcessingHelper] GEMINI_API_KEY not found in env. Will try CredentialsManager after ready.")
       }
 
-      this.llmHelper = new LLMHelper(apiKey, false, undefined, undefined, groqApiKey, openaiApiKey, claudeApiKey)
+      this.llmHelper = new LLMHelper(apiKey, false, undefined, undefined, groqApiKey, openaiApiKey, claudeApiKey, cerebrasApiKey)
     }
 
     this.llmHelper.setModelFallbackHandler((event) => {
@@ -65,6 +66,7 @@ export class ProcessingHelper {
 
     const geminiKey = credManager.getGeminiApiKey();
     const groqKey = credManager.getGroqApiKey();
+    const cerebrasKey = credManager.getCerebrasApiKey();
     const openaiKey = credManager.getOpenaiApiKey();
     const claudeKey = credManager.getClaudeApiKey();
 
@@ -76,6 +78,11 @@ export class ProcessingHelper {
     if (groqKey) {
       console.log("[ProcessingHelper] Loading stored Groq API Key from CredentialsManager");
       this.llmHelper.setGroqApiKey(groqKey);
+    }
+
+    if (cerebrasKey) {
+      console.log("[ProcessingHelper] Loading stored Cerebras API Key from CredentialsManager");
+      this.llmHelper.setCerebrasApiKey(cerebrasKey);
     }
 
     if (openaiKey) {
@@ -129,6 +136,8 @@ export class ProcessingHelper {
       const allProviders = [...(customProviders || []), ...(curlProviders || [])];
       this.llmHelper.setModel(defaultModel, allProviders);
     }
+
+    this.llmHelper.setFastResponseConfig(credManager.getFastResponseConfig());
 
     // Load Languages
     const sttLanguage = credManager.getSttLanguage();
