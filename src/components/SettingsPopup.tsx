@@ -3,19 +3,16 @@ import { Brain, MessageSquare, Camera, Zap, User } from 'lucide-react';
 import { useShortcuts } from '../hooks/useShortcuts';
 import { analytics } from '../lib/analytics/analytics.service';
 import { SESSION_MENU_TOGGLE_ORDER } from '../lib/consciousModeSettings';
+import type { FastResponseConfig } from '../../shared/ipc';
 
 const SettingsPopup = () => {
     const { shortcuts } = useShortcuts();
     const [isUndetectable, setIsUndetectable] = useState(false);
-    const [useGroqFastText, setUseGroqFastText] = useState(() => {
-        return localStorage.getItem('natively_groq_fast_text') === 'true';
-    });
+    const [fastResponseConfig, setFastResponseConfig] = useState<FastResponseConfig>({ enabled: false, provider: 'groq', model: '' });
     const [profileMode, setProfileMode] = useState(false);
     const [hasProfile, setHasProfile] = useState(false);
     const [consciousModeEnabled, setConsciousModeEnabled] = useState(false);
     const isPremium = true; // All features unlocked
-
-    const isFirstRender = React.useRef(true);
 
     const [hasStoredKey, setHasStoredKey] = useState<Record<string, boolean>>({});
 
@@ -28,6 +25,7 @@ const SettingsPopup = () => {
                 setHasStoredKey({
                     gemini: creds.hasGeminiKey,
                     groq: creds.hasGroqKey,
+                    cerebras: creds.hasCerebrasKey,
                     openai: creds.hasOpenaiKey,
                     claude: creds.hasClaudeKey
                 });
@@ -82,13 +80,30 @@ const SettingsPopup = () => {
 
     useEffect(() => {
         // Listen for changes from other windows (2-way sync)
-        if (window.electronAPI?.onGroqFastTextChanged) {
-            const unsubscribe = window.electronAPI.onGroqFastTextChanged((enabled: boolean) => {
-                setUseGroqFastText(enabled);
-                localStorage.setItem('natively_groq_fast_text', String(enabled));
+        if (window.electronAPI?.onFastResponseConfigChanged) {
+            const unsubscribe = window.electronAPI.onFastResponseConfigChanged((config: FastResponseConfig) => {
+                setFastResponseConfig(config);
             });
             return () => unsubscribe();
         }
+    }, []);
+
+    useEffect(() => {
+        let cancelled = false;
+
+        if (window.electronAPI?.getFastResponseConfig) {
+            window.electronAPI.getFastResponseConfig().then((config) => {
+                if (!cancelled) {
+                    setFastResponseConfig(config);
+                }
+            }).catch((error) => {
+                console.warn('[SettingsPopup] Failed to load Fast Response config:', error);
+            });
+        }
+
+        return () => {
+            cancelled = true;
+        };
     }, []);
 
     useEffect(() => {
@@ -118,30 +133,6 @@ const SettingsPopup = () => {
             cancelled = true;
         };
     }, []);
-
-    useEffect(() => {
-        // Skip initial render to avoid unnecessary IPC calls
-        if (isFirstRender.current) {
-            isFirstRender.current = false;
-            // Ensure backend is synced on mount (even if no change)
-            try {
-                // @ts-ignore
-                window.electronAPI?.invoke('set-groq-fast-text-mode', useGroqFastText);
-            } catch (e) {
-                console.error(e);
-            }
-            return;
-        }
-
-        // Apply Groq Text Mode
-        localStorage.setItem('natively_groq_fast_text', String(useGroqFastText));
-        try {
-            // @ts-ignore - electronAPI not typed in this file yet
-            window.electronAPI?.invoke('set-groq-fast-text-mode', useGroqFastText);
-        } catch (e) {
-            console.error(e);
-        }
-    }, [useGroqFastText]);
 
     const [showTranscript, setShowTranscript] = useState(() => {
         const stored = localStorage.getItem('natively_interviewer_transcript');
@@ -214,23 +205,30 @@ const SettingsPopup = () => {
 
 
                 {/* Groq (Fast Text) Toggle */}
-                <div className={`flex items-center justify-between px-3 py-2 rounded-lg transition-colors duration-200 group ${hasStoredKey.groq === false ? 'opacity-50 grayscale cursor-not-allowed' : 'hover:bg-white/5 cursor-default'}`} title={hasStoredKey.groq === false ? "Requires Groq API Key to be configured in Settings" : ""}>
+                <div className={`flex items-center justify-between px-3 py-2 rounded-lg transition-colors duration-200 group ${hasStoredKey[fastResponseConfig.provider] === false ? 'opacity-50 grayscale cursor-not-allowed' : 'hover:bg-white/5 cursor-default'}`} title={hasStoredKey[fastResponseConfig.provider] === false ? `Requires ${fastResponseConfig.provider === 'cerebras' ? 'Cerebras' : 'Groq'} API Key to be configured in Settings` : ""}>
                     <div className="flex items-center gap-3">
                         <Zap
-                            className={`w-4 h-4 transition-colors ${useGroqFastText ? 'text-orange-500' : 'text-slate-500 group-hover:text-slate-300'}`}
-                            fill={useGroqFastText ? "currentColor" : "none"}
+                            className={`w-4 h-4 transition-colors ${fastResponseConfig.enabled ? 'text-orange-500' : 'text-slate-500 group-hover:text-slate-300'}`}
+                            fill={fastResponseConfig.enabled ? "currentColor" : "none"}
                         />
-                        <span className={`text-[12px] font-medium transition-colors ${useGroqFastText ? 'text-white' : 'text-slate-400 group-hover:text-slate-200'}`}>{SESSION_MENU_TOGGLE_ORDER[0]}</span>
+                        <span className={`text-[12px] font-medium transition-colors ${fastResponseConfig.enabled ? 'text-white' : 'text-slate-400 group-hover:text-slate-200'}`}>{SESSION_MENU_TOGGLE_ORDER[0]}</span>
                     </div>
                     <button
-                        onClick={() => {
-                            if (hasStoredKey.groq === false) return; // Prevent clicking
-                            setUseGroqFastText(!useGroqFastText);
+                        onClick={async () => {
+                            if (hasStoredKey[fastResponseConfig.provider] === false) return;
+                            try {
+                                await window.electronAPI?.setFastResponseConfig({
+                                    ...fastResponseConfig,
+                                    enabled: !fastResponseConfig.enabled,
+                                });
+                            } catch (e) {
+                                console.error(e);
+                            }
                         }}
-                        className={`w-[30px] h-[18px] rounded-full p-[1.5px] transition-all duration-300 ease-spring active:scale-[0.92] ${useGroqFastText ? 'bg-orange-500 shadow-[0_2px_10px_rgba(249,115,22,0.3)]' : 'bg-white/10'}`}
-                        disabled={hasStoredKey.groq === false}
+                        className={`w-[30px] h-[18px] rounded-full p-[1.5px] transition-all duration-300 ease-spring active:scale-[0.92] ${fastResponseConfig.enabled ? 'bg-orange-500 shadow-[0_2px_10px_rgba(249,115,22,0.3)]' : 'bg-white/10'}`}
+                        disabled={hasStoredKey[fastResponseConfig.provider] === false}
                     >
-                        <div className={`w-[15px] h-[15px] rounded-full bg-black shadow-sm transition-transform duration-300 ease-spring ${useGroqFastText ? 'translate-x-[12px]' : 'translate-x-0'}`} />
+                        <div className={`w-[15px] h-[15px] rounded-full bg-black shadow-sm transition-transform duration-300 ease-spring ${fastResponseConfig.enabled ? 'translate-x-[12px]' : 'translate-x-0'}`} />
                     </button>
                 </div>
 
