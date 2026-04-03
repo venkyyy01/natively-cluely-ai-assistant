@@ -1,4 +1,5 @@
-import { DatabaseManager, Meeting } from "./db/DatabaseManager";
+import { DatabaseManager } from "./db/DatabaseManager";
+import { MeetingCheckpointStore } from "./MeetingCheckpointStore";
 import { SessionTracker } from "./SessionTracker";
 import { BrowserWindow } from "electron";
 
@@ -7,10 +8,12 @@ const CHECKPOINT_INTERVAL_MS = 60000; // 60 seconds
 export class MeetingCheckpointer {
     private interval: NodeJS.Timeout | null = null;
     private meetingId: string | null = null;
+    private checkpointInFlight: Promise<void> | null = null;
 
     constructor(
         private readonly dbManager: DatabaseManager,
-        private readonly getSessionTracker: () => SessionTracker
+        private readonly getSessionTracker: () => SessionTracker,
+        private readonly checkpointStore: Pick<MeetingCheckpointStore, 'saveSnapshot'> = new MeetingCheckpointStore(),
     ) {}
 
     public start(meetingId: string): void {
@@ -46,6 +49,7 @@ export class MeetingCheckpointer {
 
     private async checkpoint(): Promise<void> {
         if (!this.meetingId) return;
+        if (this.checkpointInFlight) return;
 
         // Get snapshot from session tracker
         const snapshot = this.getSessionTracker().createSnapshot();
@@ -53,40 +57,25 @@ export class MeetingCheckpointer {
             return; // Nothing to save yet
         }
 
-        const metadata = snapshot.meetingMetadata;
-
-        const durationSec = Math.floor(snapshot.durationMs / 1000);
-        const mins = Math.floor(durationSec / 60);
-        const secs = durationSec % 60;
-        const durationStr = `${mins}:${secs.toString().padStart(2, '0')}`;
-        
-        const meetingData: Meeting = {
-            id: this.meetingId,
-            title: metadata?.title || "Interim Recording...",
-            date: new Date(snapshot.startTime).toISOString(),
-            duration: durationStr,
-            summary: "Meeting in progress (checkpoint)...",
-            detailedSummary: { actionItems: [], keyPoints: [] },
-            transcript: snapshot.transcript,
-            usage: snapshot.usage,
-            calendarEventId: metadata?.calendarEventId,
-            source: metadata?.source || 'manual',
-            isProcessed: false
-        };
-
         console.log(`[MeetingCheckpointer] Writing checkpoint for meeting ${this.meetingId}...`);
-        
-        try {
-            this.dbManager.createOrUpdateMeetingProcessingRecord(meetingData, snapshot.startTime, snapshot.durationMs);
-            // Optionally notify frontend that a checkpoint happened (if they want to show an indicator)
-            const wins = typeof BrowserWindow?.getAllWindows === 'function' ? BrowserWindow.getAllWindows() : [];
-            wins.forEach((w) => {
-                if (!w.isDestroyed()) {
-                    w.webContents.send('meeting-checkpointed', this.meetingId);
-                }
-            });
-        } catch (e) {
-            console.error('[MeetingCheckpointer] Failed to save checkpoint to database', e);
-        }
+
+        this.checkpointInFlight = (async () => {
+            try {
+                await this.checkpointStore.saveSnapshot(this.meetingId!, snapshot);
+                // Optionally notify frontend that a checkpoint happened (if they want to show an indicator)
+                const wins = typeof BrowserWindow?.getAllWindows === 'function' ? BrowserWindow.getAllWindows() : [];
+                wins.forEach((w) => {
+                    if (!w.isDestroyed()) {
+                        w.webContents.send('meeting-checkpointed', this.meetingId);
+                    }
+                });
+            } catch (e) {
+                console.error('[MeetingCheckpointer] Failed to save checkpoint snapshot', e);
+            } finally {
+                this.checkpointInFlight = null;
+            }
+        })();
+
+        await this.checkpointInFlight;
     }
 }

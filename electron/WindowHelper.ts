@@ -52,7 +52,17 @@ export class WindowHelper {
   }
 
   private shouldUseStealthRuntime(): boolean {
-    return process.platform !== "darwin" || process.env.NATIVELY_FORCE_STEALTH_RUNTIME === "1";
+    if (process.env.NATIVELY_FORCE_STEALTH_RUNTIME === "1") {
+      return true
+    }
+
+    if (process.platform === "win32") {
+      // Standard Windows mode should use direct BrowserWindows. The offscreen
+      // shell is only worth paying for when we explicitly start in stealth.
+      return this.contentProtection
+    }
+
+    return process.platform !== "darwin"
   }
 
   private applyLauncherSurfaceProtection(): void {
@@ -129,18 +139,22 @@ export class WindowHelper {
     });
   }
 
+  private getDisplayForWindow(win: BrowserWindow): Electron.Display {
+    return screen.getDisplayMatching(win.getBounds())
+  }
+
   public setWindowDimensions(width: number, height: number): void {
     const activeWindow = this.getVisibleMainWindow();
     if (!activeWindow || activeWindow.isDestroyed()) return
 
     const [currentX, currentY] = activeWindow.getPosition()
-    const primaryDisplay = screen.getPrimaryDisplay()
-    const workArea = primaryDisplay.workAreaSize
+    const targetDisplay = this.getDisplayForWindow(activeWindow)
+    const workArea = targetDisplay.workArea
     const maxAllowedWidth = Math.floor(workArea.width * 0.9)
     const newWidth = Math.min(width, maxAllowedWidth)
     const newHeight = Math.ceil(height)
-    const maxX = workArea.width - newWidth
-    const newX = Math.min(Math.max(currentX, 0), maxX)
+    const maxX = workArea.x + workArea.width - newWidth
+    const newX = Math.min(Math.max(currentX, workArea.x), maxX)
 
     activeWindow.setBounds({
       x: newX,
@@ -162,16 +176,16 @@ export class WindowHelper {
     console.log('[WindowHelper] setOverlayDimensions:', width, height);
 
     const [currentX, currentY] = this.overlayWindow.getPosition()
-    const primaryDisplay = screen.getPrimaryDisplay()
-    const workArea = primaryDisplay.workAreaSize
+    const targetDisplay = this.getDisplayForWindow(this.overlayWindow)
+    const workArea = targetDisplay.workArea
     const maxAllowedWidth = Math.floor(workArea.width * 0.9)
     const maxAllowedHeight = Math.floor(workArea.height * 0.9)
     const newWidth = Math.min(Math.max(width, 300), maxAllowedWidth) // min 300, max 90%
     const newHeight = Math.min(Math.max(height, 1), maxAllowedHeight) // min 1, max 90%
-    const maxX = workArea.width - newWidth
-    const maxY = workArea.height - newHeight
-    const newX = Math.min(Math.max(currentX, 0), maxX)
-    const newY = Math.min(Math.max(currentY, 0), maxY)
+    const maxX = workArea.x + workArea.width - newWidth
+    const maxY = workArea.y + workArea.height - newHeight
+    const newX = Math.min(Math.max(currentX, workArea.x), maxX)
+    const newY = Math.min(Math.max(currentY, workArea.y), maxY)
 
     this.overlayWindow.setContentSize(newWidth, newHeight)
     this.overlayWindow.setPosition(newX, newY)
@@ -197,8 +211,8 @@ export class WindowHelper {
   public createWindow(): void {
     if (this.launcherWindow !== null) return // Already created
 
-    const primaryDisplay = screen.getPrimaryDisplay()
-    const workArea = primaryDisplay.workArea
+    const initialDisplay = screen.getDisplayNearestPoint(screen.getCursorScreenPoint())
+    const workArea = initialDisplay.workArea
     this.screenWidth = workArea.width
     this.screenHeight = workArea.height
 
@@ -510,8 +524,8 @@ export class WindowHelper {
     if (this.overlayWindow && !this.overlayWindow.isDestroyed()) {
       // Reset overlay position to center or last known? 
       // For now, center it nicely
-      const primaryDisplay = screen.getPrimaryDisplay()
-      const workArea = primaryDisplay.workArea;
+      const targetDisplay = this.getDisplayForWindow(this.overlayWindow)
+      const workArea = targetDisplay.workArea;
       const currentBounds = this.overlayWindow.getBounds();
       const targetWidth = Math.max(currentBounds.width, 600);
       const targetHeight = Math.max(currentBounds.height, 216);

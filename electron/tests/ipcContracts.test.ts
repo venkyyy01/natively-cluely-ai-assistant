@@ -671,7 +671,7 @@ test('rag handlers validate inputs and preload unwraps normalized rag and profil
     { channel: 'get-undetectable', args: [] },
     { channel: 'profile:get-status', args: [] },
     { channel: 'profile:upload-resume', args: ['/tmp/resume.pdf'] },
-    { channel: 'rag:query-live', args: [{ query: 'hello' }] },
+    { channel: 'rag:query-live', args: [{ query: 'hello', requestId: undefined }] },
   ]);
 
   restore();

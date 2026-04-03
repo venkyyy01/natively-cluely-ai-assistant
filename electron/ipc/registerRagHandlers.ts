@@ -41,28 +41,29 @@ function ragError(code: string, message: string): RagIpcFailure {
 export function registerRagHandlers({ appState, safeHandle, safeHandleValidated }: RegisterRagHandlersDeps): void {
   const activeRAGQueries = new Map<string, AbortController>();
 
-  safeHandleValidated('rag:query-meeting', (args) => [parseIpcInput(ipcSchemas.ragMeetingQuery, args[0], 'rag:query-meeting')] as const, async (event, { meetingId, query }) => {
+  safeHandleValidated('rag:query-meeting', (args) => [parseIpcInput(ipcSchemas.ragMeetingQuery, args[0], 'rag:query-meeting')] as const, async (event, { meetingId, query, requestId }) => {
     const ragManager = appState.getRAGManager();
     if (!ragManager || !ragManager.isReady()) return ragSuccess({ fallback: true });
     if (!ragManager.isMeetingProcessed(meetingId) && !ragManager.isLiveIndexingActive(meetingId)) return ragSuccess({ fallback: true });
 
     const abortController = new AbortController();
-    const queryKey = `meeting-${meetingId}`;
+    const resolvedRequestId = requestId ?? `meeting-${meetingId}-${Date.now()}`;
+    const queryKey = resolvedRequestId;
     activeRAGQueries.set(queryKey, abortController);
 
     try {
       const stream = ragManager.queryMeeting(meetingId, query, abortController.signal);
       for await (const chunk of stream) {
         if (abortController.signal.aborted) break;
-        event.sender.send('rag:stream-chunk', { meetingId, chunk });
+        event.sender.send('rag:stream-chunk', { meetingId, requestId: resolvedRequestId, chunk });
       }
-      event.sender.send('rag:stream-complete', { meetingId });
+      event.sender.send('rag:stream-complete', { meetingId, requestId: resolvedRequestId });
       return ragSuccess({ success: true });
     } catch (error: any) {
       if (error.name !== 'AbortError') {
         const msg = error.message || '';
         if (msg.includes('NO_RELEVANT_CONTEXT') || msg.includes('NO_MEETING_EMBEDDINGS')) return ragSuccess({ fallback: true });
-        event.sender.send('rag:stream-error', { meetingId, error: msg });
+        event.sender.send('rag:stream-error', { meetingId, requestId: resolvedRequestId, error: msg });
       }
       return ragError('RAG_QUERY_FAILED', error?.message || 'Unable to query meeting context');
     } finally {
@@ -70,28 +71,29 @@ export function registerRagHandlers({ appState, safeHandle, safeHandleValidated 
     }
   });
 
-  safeHandleValidated('rag:query-live', (args) => [parseIpcInput(ipcSchemas.ragLiveQuery, args[0], 'rag:query-live')] as const, async (event, { query }) => {
+  safeHandleValidated('rag:query-live', (args) => [parseIpcInput(ipcSchemas.ragLiveQuery, args[0], 'rag:query-live')] as const, async (event, { query, requestId }) => {
     const ragManager = appState.getRAGManager();
     if (!ragManager || !ragManager.isReady()) return ragSuccess({ fallback: true });
     if (!ragManager.isLiveIndexingActive('live-meeting-current')) return ragSuccess({ fallback: true });
 
     const abortController = new AbortController();
-    const queryKey = `live-${Date.now()}`;
+    const resolvedRequestId = requestId ?? `live-${Date.now()}`;
+    const queryKey = resolvedRequestId;
     activeRAGQueries.set(queryKey, abortController);
 
     try {
       const stream = ragManager.queryMeeting('live-meeting-current', query, abortController.signal);
       for await (const chunk of stream) {
         if (abortController.signal.aborted) break;
-        event.sender.send('rag:stream-chunk', { live: true, chunk });
+        event.sender.send('rag:stream-chunk', { live: true, requestId: resolvedRequestId, chunk });
       }
-      event.sender.send('rag:stream-complete', { live: true });
+      event.sender.send('rag:stream-complete', { live: true, requestId: resolvedRequestId });
       return ragSuccess({ success: true });
     } catch (error: any) {
       if (error.name !== 'AbortError') {
         const msg = error.message || '';
         if (msg.includes('NO_RELEVANT_CONTEXT') || msg.includes('NO_MEETING_EMBEDDINGS')) return ragSuccess({ fallback: true });
-        event.sender.send('rag:stream-error', { live: true, error: msg });
+        event.sender.send('rag:stream-error', { live: true, requestId: resolvedRequestId, error: msg });
       }
       return ragError('RAG_QUERY_FAILED', error?.message || 'Unable to query live context');
     } finally {
@@ -99,25 +101,26 @@ export function registerRagHandlers({ appState, safeHandle, safeHandleValidated 
     }
   });
 
-  safeHandleValidated('rag:query-global', (args) => [parseIpcInput(ipcSchemas.ragGlobalQuery, args[0], 'rag:query-global')] as const, async (event, { query }) => {
+  safeHandleValidated('rag:query-global', (args) => [parseIpcInput(ipcSchemas.ragGlobalQuery, args[0], 'rag:query-global')] as const, async (event, { query, requestId }) => {
     const ragManager = appState.getRAGManager();
     if (!ragManager || !ragManager.isReady()) return ragSuccess({ fallback: true });
 
     const abortController = new AbortController();
-    const queryKey = `global-${Date.now()}`;
+    const resolvedRequestId = requestId ?? `global-${Date.now()}`;
+    const queryKey = resolvedRequestId;
     activeRAGQueries.set(queryKey, abortController);
 
     try {
       const stream = ragManager.queryGlobal(query, abortController.signal);
       for await (const chunk of stream) {
         if (abortController.signal.aborted) break;
-        event.sender.send('rag:stream-chunk', { global: true, chunk });
+        event.sender.send('rag:stream-chunk', { global: true, requestId: resolvedRequestId, chunk });
       }
-      event.sender.send('rag:stream-complete', { global: true });
+      event.sender.send('rag:stream-complete', { global: true, requestId: resolvedRequestId });
       return ragSuccess({ success: true });
     } catch (error: any) {
       if (error.name !== 'AbortError') {
-        event.sender.send('rag:stream-error', { global: true, error: error.message });
+        event.sender.send('rag:stream-error', { global: true, requestId: resolvedRequestId, error: error.message });
       }
       return ragError('RAG_QUERY_FAILED', error?.message || 'Unable to query global context');
     } finally {

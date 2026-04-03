@@ -51,6 +51,9 @@ export class ScreenShareDetector {
   }
 
   async detect(): Promise<ScreenShareStatus> {
+    let processMatches: string[] = [];
+    let windowMatches: string[] = [];
+
     try {
       const nativeActive = await this.resolveOptionalProbe(this.nativeDetect);
       if (nativeActive) {
@@ -72,17 +75,26 @@ export class ScreenShareDetector {
     }
 
     try {
-      const processMatches = await this.detectByProcess();
+      processMatches = await this.detectByProcess();
       if (processMatches.length > 0) {
-        return this.activeStatus('process', 'high', processMatches);
+        if (this.platform !== 'win32') {
+          return this.activeStatus('process', 'high', processMatches);
+        }
       }
     } catch (error) {
       this.logger.warn('[ScreenShareDetector] Process detection failed:', error);
     }
 
     try {
-      const windowMatches = await this.detectByWindow();
+      windowMatches = await this.detectByWindow();
       if (windowMatches.length > 0) {
+        if (this.platform === 'win32') {
+          const combinedMatches = processMatches.length > 0
+            ? Array.from(new Set([...windowMatches, ...processMatches]))
+            : windowMatches;
+          return this.activeStatus('window', processMatches.length > 0 ? 'high' : 'medium', combinedMatches);
+        }
+
         return this.activeStatus('window', 'medium', windowMatches);
       }
     } catch (error) {

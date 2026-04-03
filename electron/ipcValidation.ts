@@ -11,7 +11,10 @@ export const ipcSchemas = {
     boundedString(50000),
     z.array(z.string().trim().min(1).max(4096)).max(8).optional(),
     z.string().max(100000).optional(),
-    z.object({ skipSystemPrompt: z.boolean().optional() }).optional(),
+    z.object({
+      skipSystemPrompt: z.boolean().optional(),
+      requestId: boundedString(128).optional(),
+    }).optional(),
   ]),
   customProvider: z.object({
     id: boundedString(128),
@@ -100,12 +103,15 @@ export const ipcSchemas = {
   ragMeetingQuery: z.object({
     meetingId: boundedString(128),
     query: boundedString(10000),
+    requestId: boundedString(128).optional(),
   }).strict(),
   ragLiveQuery: z.object({
     query: boundedString(10000),
+    requestId: boundedString(128).optional(),
   }).strict(),
   ragGlobalQuery: z.object({
     query: boundedString(10000),
+    requestId: boundedString(128).optional(),
   }).strict(),
   ragCancelQuery: z.object({
     meetingId: boundedString(128).optional(),

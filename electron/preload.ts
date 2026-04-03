@@ -213,9 +213,9 @@ interface ElectronAPI {
 
   // Streaming listeners
   streamGeminiChat: (message: string, imagePaths?: string[], context?: string, options?: GeminiChatOptions) => Promise<void>
-  onGeminiStreamToken: (callback: (token: string) => void) => () => void
-  onGeminiStreamDone: (callback: () => void) => () => void
-  onGeminiStreamError: (callback: (error: string) => void) => () => void
+  onGeminiStreamToken: (callback: (data: { requestId?: string; token: string }) => void) => () => void
+  onGeminiStreamDone: (callback: (data: { requestId?: string }) => void) => () => void
+  onGeminiStreamError: (callback: (data: { requestId?: string; error: string }) => void) => () => void
 
 
   onUndetectableChanged: (callback: (state: boolean) => void) => () => void
@@ -240,16 +240,16 @@ interface ElectronAPI {
   calendarRefresh: () => Promise<{ success: boolean; error?: string }>
 
 // RAG (Retrieval-Augmented Generation) API
-  ragQueryMeeting: (meetingId: string, query: string) => Promise<{ success?: boolean; fallback?: boolean; error?: string }>
-  ragQueryLive: (query: string) => Promise<{ success?: boolean; fallback?: boolean; error?: string }>
-  ragQueryGlobal: (query: string) => Promise<{ success?: boolean; fallback?: boolean; error?: string }>
+  ragQueryMeeting: (meetingId: string, query: string, requestId?: string) => Promise<{ success?: boolean; fallback?: boolean; error?: string }>
+  ragQueryLive: (query: string, requestId?: string) => Promise<{ success?: boolean; fallback?: boolean; error?: string }>
+  ragQueryGlobal: (query: string, requestId?: string) => Promise<{ success?: boolean; fallback?: boolean; error?: string }>
   ragCancelQuery: (options: { meetingId?: string; global?: boolean }) => Promise<StatusResult>
   ragIsMeetingProcessed: (meetingId: string) => Promise<boolean>
   ragGetQueueStatus: () => Promise<{ pending: number; processing: number; completed: number; failed: number }>
   ragRetryEmbeddings: () => Promise<StatusResult>
-  onRAGStreamChunk: (callback: (data: { meetingId?: string; global?: boolean; chunk: string }) => void) => () => void
-  onRAGStreamComplete: (callback: (data: { meetingId?: string; global?: boolean }) => void) => () => void
-  onRAGStreamError: (callback: (data: { meetingId?: string; global?: boolean; error: string }) => void) => () => void
+  onRAGStreamChunk: (callback: (data: { meetingId?: string; global?: boolean; live?: boolean; requestId?: string; chunk: string }) => void) => () => void
+  onRAGStreamComplete: (callback: (data: { meetingId?: string; global?: boolean; live?: boolean; requestId?: string }) => void) => () => void
+  onRAGStreamError: (callback: (data: { meetingId?: string; global?: boolean; live?: boolean; requestId?: string; error: string }) => void) => () => void
 
   // Keybind Management
   getKeybinds: () => Promise<Array<{ id: string; label: string; accelerator: string; isGlobal: boolean; defaultAccelerator: string }>>
@@ -747,24 +747,24 @@ setOpenAtLogin: (open: boolean) => invokeStatus("set-open-at-login", open),
   // Streaming Chat
   streamGeminiChat: (message: string, imagePaths?: string[], context?: string, options?: GeminiChatOptions) => ipcRenderer.invoke("gemini-chat-stream", message, imagePaths, context, options),
 
-  onGeminiStreamToken: (callback: (token: string) => void) => {
-    const subscription = (_: any, token: string) => callback(token)
+  onGeminiStreamToken: (callback: (data: { requestId?: string; token: string }) => void) => {
+    const subscription = (_: any, data: { requestId?: string; token: string }) => callback(data)
     ipcRenderer.on("gemini-stream-token", subscription)
     return () => {
       ipcRenderer.removeListener("gemini-stream-token", subscription)
     }
   },
 
-  onGeminiStreamDone: (callback: () => void) => {
-    const subscription = () => callback()
+  onGeminiStreamDone: (callback: (data: { requestId?: string }) => void) => {
+    const subscription = (_: any, data: { requestId?: string }) => callback(data)
     ipcRenderer.on("gemini-stream-done", subscription)
     return () => {
       ipcRenderer.removeListener("gemini-stream-done", subscription)
     }
   },
 
-  onGeminiStreamError: (callback: (error: string) => void) => {
-    const subscription = (_: any, error: string) => callback(error)
+  onGeminiStreamError: (callback: (data: { requestId?: string; error: string }) => void) => {
+    const subscription = (_: any, data: { requestId?: string; error: string }) => callback(data)
     ipcRenderer.on("gemini-stream-error", subscription)
     return () => {
       ipcRenderer.removeListener("gemini-stream-error", subscription)
@@ -882,23 +882,23 @@ setOpenAtLogin: (open: boolean) => invokeStatus("set-open-at-login", open),
   calendarRefresh: () => ipcRenderer.invoke('calendar-refresh'),
 
 // RAG API
-  ragQueryMeeting: async (meetingId: string, query: string) => {
+  ragQueryMeeting: async (meetingId: string, query: string, requestId?: string) => {
     try {
-      return await invokeAndUnwrap<{ success?: boolean; fallback?: boolean }>('rag:query-meeting', { meetingId, query })
+      return await invokeAndUnwrap<{ success?: boolean; fallback?: boolean }>('rag:query-meeting', { meetingId, query, requestId })
     } catch (error) {
       return { success: false, error: getErrorMessage(error) }
     }
   },
-  ragQueryLive: async (query: string) => {
+  ragQueryLive: async (query: string, requestId?: string) => {
     try {
-      return await invokeAndUnwrap<{ success?: boolean; fallback?: boolean }>('rag:query-live', { query })
+      return await invokeAndUnwrap<{ success?: boolean; fallback?: boolean }>('rag:query-live', { query, requestId })
     } catch (error) {
       return { success: false, error: getErrorMessage(error) }
     }
   },
-  ragQueryGlobal: async (query: string) => {
+  ragQueryGlobal: async (query: string, requestId?: string) => {
     try {
-      return await invokeAndUnwrap<{ success?: boolean; fallback?: boolean }>('rag:query-global', { query })
+      return await invokeAndUnwrap<{ success?: boolean; fallback?: boolean }>('rag:query-global', { query, requestId })
     } catch (error) {
       return { success: false, error: getErrorMessage(error) }
     }
@@ -917,21 +917,21 @@ setOpenAtLogin: (open: boolean) => invokeStatus("set-open-at-login", open),
   },
   reindexIncompatibleMeetings: () => invokeVoid('rag:reindex-incompatible-meetings'),
 
-  onRAGStreamChunk: (callback: (data: { meetingId?: string; global?: boolean; chunk: string }) => void) => {
+  onRAGStreamChunk: (callback: (data: { meetingId?: string; global?: boolean; live?: boolean; requestId?: string; chunk: string }) => void) => {
     const subscription = (_: any, data: any) => callback(data)
     ipcRenderer.on('rag:stream-chunk', subscription)
     return () => {
       ipcRenderer.removeListener('rag:stream-chunk', subscription)
     }
   },
-  onRAGStreamComplete: (callback: (data: { meetingId?: string; global?: boolean }) => void) => {
+  onRAGStreamComplete: (callback: (data: { meetingId?: string; global?: boolean; live?: boolean; requestId?: string }) => void) => {
     const subscription = (_: any, data: any) => callback(data)
     ipcRenderer.on('rag:stream-complete', subscription)
     return () => {
       ipcRenderer.removeListener('rag:stream-complete', subscription)
     }
   },
-  onRAGStreamError: (callback: (data: { meetingId?: string; global?: boolean; error: string }) => void) => {
+  onRAGStreamError: (callback: (data: { meetingId?: string; global?: boolean; live?: boolean; requestId?: string; error: string }) => void) => {
     const subscription = (_: any, data: any) => callback(data)
     ipcRenderer.on('rag:stream-error', subscription)
     return () => {

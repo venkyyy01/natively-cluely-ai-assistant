@@ -492,3 +492,69 @@ test('MeetingPersistence no-ops recovery when there are no unfinished meetings o
     restoreElectron();
   }
 });
+
+test('MeetingPersistence recovers resumable checkpoint snapshots even without a database placeholder', async () => {
+  const finalizedWrites: Meeting[] = [];
+  const removedSnapshots: string[] = [];
+  const originalGetInstance = DatabaseManager.getInstance;
+  const restoreElectron = installElectronMock();
+
+  DatabaseManager.getInstance = ((() => ({
+    getUnprocessedMeetings(): Meeting[] {
+      return [];
+    },
+    getMeetingDetails(): null {
+      return null;
+    },
+    finalizeMeetingProcessing(meeting: Meeting) {
+      finalizedWrites.push(meeting);
+    },
+    markMeetingProcessingFailed() {
+      return false;
+    },
+  })) as unknown) as typeof DatabaseManager.getInstance;
+
+  try {
+    const persistence = new MeetingPersistence(
+      { createSnapshot() { throw new Error('unused'); } } as never,
+      { generateMeetingSummary: async () => 'unused' } as never,
+      {
+        async saveSnapshot() {},
+        async loadSnapshot(meetingId: string) {
+          if (meetingId !== 'checkpoint-only') {
+            return null;
+          }
+          return {
+            transcript: [
+              { speaker: 'interviewer', text: 'hello', timestamp: 1, final: true },
+              { speaker: 'user', text: 'world', timestamp: 2, final: true },
+            ],
+            usage: [],
+            startTime: 5_000,
+            durationMs: 5_000,
+            context: '[INTERVIEWER]: hello\n[ME]: world',
+            meetingMetadata: {
+              title: 'Checkpoint Recovery',
+              source: 'manual',
+            },
+          } satisfies MeetingSnapshot;
+        },
+        async removeSnapshot(meetingId: string) {
+          removedSnapshots.push(meetingId);
+        },
+        async listMeetingIds() {
+          return ['checkpoint-only'];
+        },
+      },
+    );
+
+    await persistence.recoverUnprocessedMeetings();
+
+    assert.equal(finalizedWrites[0]?.id, 'checkpoint-only');
+    assert.equal(finalizedWrites[0]?.title, 'Checkpoint Recovery');
+    assert.deepEqual(removedSnapshots, ['checkpoint-only']);
+  } finally {
+    DatabaseManager.getInstance = originalGetInstance;
+    restoreElectron();
+  }
+});

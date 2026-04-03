@@ -244,6 +244,7 @@ safeHandleValidated("renderer:log-error", (args) => [parseIpcInput(ipcSchemas.re
     try {
       console.log("[IPC] gemini-chat-stream started using LLMHelper.streamChat");
       const llmHelper = appState.processingHelper.getLLMHelper();
+      const requestId = options?.requestId || `gemini-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
       // Update IntelligenceManager with USER message immediately
       const intelligenceManager = appState.getIntelligenceManager();
@@ -276,11 +277,11 @@ safeHandleValidated("renderer:log-error", (args) => [parseIpcInput(ipcSchemas.re
         const stream = llmHelper.streamChat(message, imagePaths, context, options?.skipSystemPrompt ? "" : undefined);
 
         for await (const token of stream) {
-          event.sender.send("gemini-stream-token", token);
+          event.sender.send("gemini-stream-token", { requestId, token });
           fullResponse += token;
         }
 
-        event.sender.send("gemini-stream-done");
+        event.sender.send("gemini-stream-done", { requestId });
 
         // Update IntelligenceManager with ASSISTANT message after completion
         if (fullResponse.trim().length > 0) {
@@ -291,7 +292,7 @@ safeHandleValidated("renderer:log-error", (args) => [parseIpcInput(ipcSchemas.re
 
       } catch (streamError: any) {
         console.error("[IPC] Streaming error:", streamError);
-        event.sender.send("gemini-stream-error", streamError.message || "Unknown streaming error");
+        event.sender.send("gemini-stream-error", { requestId, error: streamError.message || "Unknown streaming error" });
       }
 
       return null; // Return null as data is sent via events

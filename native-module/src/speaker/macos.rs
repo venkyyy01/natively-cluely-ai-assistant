@@ -91,4 +91,12 @@ impl SpeakerStream {
             BackendStream::Sck(s) => s.take_consumer(),
         }
     }
+
+    pub fn take_error(&self) -> Option<String> {
+        None
+    }
+
+    pub fn take_dropped_samples(&self) -> u64 {
+        0
+    }
 }

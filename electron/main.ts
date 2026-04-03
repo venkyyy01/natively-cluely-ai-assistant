@@ -1,4 +1,4 @@
-import { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, shell, systemPreferences, globalShortcut, session } from "electron"
+import { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, shell, systemPreferences, globalShortcut, session, powerMonitor, screen } from "electron"
 import { EventEmitter } from "events"
 import { randomUUID } from "node:crypto"
 import path from "path"
@@ -357,6 +357,11 @@ export class AppState {
   private currentMeetingId: string | null = null;
   private startAbortController: AbortController | null = null;
   private audioHealthCheckTimer: NodeJS.Timeout | null = null;
+  private meetingRecoverySweepTimer: NodeJS.Timeout | null = null;
+  private windowsPowerHandlersBound: boolean = false;
+  private windowsAudioResumePending: boolean = false;
+  private windowsAudioResumeInFlight: Promise<void> | null = null;
+  private lastWindowsAudioResumeAt: number = 0;
   private audioPipelineStats = {
     startedAt: 0,
     systemChunks: 0,
@@ -721,6 +726,107 @@ this.setupIntelligenceEvents()
       clearTimeout(this.audioHealthCheckTimer);
       this.audioHealthCheckTimer = null;
     }
+  }
+
+  public startMeetingRecoverySweep(): void {
+    if (this.meetingRecoverySweepTimer) {
+      return;
+    }
+
+    this.meetingRecoverySweepTimer = setInterval(() => {
+      if (this.meetingLifecycleState === 'starting') {
+        return;
+      }
+
+      this.intelligenceManager.recoverUnprocessedMeetings().catch((error) => {
+        console.error('[Main] Periodic meeting recovery sweep failed:', error);
+      });
+    }, 5 * 60 * 1000);
+  }
+
+  private stopMeetingRecoverySweep(): void {
+    if (this.meetingRecoverySweepTimer) {
+      clearInterval(this.meetingRecoverySweepTimer);
+      this.meetingRecoverySweepTimer = null;
+    }
+  }
+
+  public bindWindowsPowerAudioRecovery(): void {
+    if (this.windowsPowerHandlersBound || process.platform !== 'win32') {
+      return;
+    }
+
+    powerMonitor.on('suspend', () => {
+      this.handleWindowsPowerSuspend();
+    });
+    powerMonitor.on('resume', () => {
+      void this.handleWindowsPowerResume('resume');
+    });
+    powerMonitor.on('unlock-screen', () => {
+      void this.handleWindowsPowerResume('unlock-screen');
+    });
+
+    this.windowsPowerHandlersBound = true;
+  }
+
+  private handleWindowsPowerSuspend(): void {
+    if (!this.isMeetingActive) {
+      return;
+    }
+
+    console.warn('[Main] Windows suspend detected during active meeting; scheduling audio recovery on resume');
+    this.windowsAudioResumePending = true;
+    this.audioRecoveryAttempts = 0;
+    this.clearAudioPipelineHealthCheck();
+    this.setNativeAudioConnected(false);
+    this.sttReconnector?.stopAll();
+  }
+
+  private async handleWindowsPowerResume(reason: 'resume' | 'unlock-screen'): Promise<void> {
+    if (!this.isMeetingActive || !this.windowsAudioResumePending) {
+      return;
+    }
+
+    if (this.windowsAudioResumeInFlight) {
+      await this.windowsAudioResumeInFlight;
+      return;
+    }
+
+    const now = Date.now();
+    if (now - this.lastWindowsAudioResumeAt < 1500) {
+      return;
+    }
+    this.lastWindowsAudioResumeAt = now;
+
+    this.windowsAudioResumeInFlight = (async () => {
+      console.warn(`[Main] Windows ${reason} detected; rebuilding active audio pipeline`);
+      this.windowsAudioResumePending = false;
+      this.audioRecoveryAttempts = 0;
+      this.sttReconnector?.reset('interviewer');
+      this.sttReconnector?.reset('user');
+
+      try {
+        await this.reconfigureAudio(undefined, undefined, { restartStreams: true });
+        this.audioRecoveryAttempts = 0;
+        this.sttReconnector?.reset('interviewer');
+        this.sttReconnector?.reset('user');
+        this.setNativeAudioConnected(true);
+        this.scheduleAudioPipelineHealthCheck();
+        this.broadcast('meeting-audio-resumed', {
+          reason: `power-${reason}`,
+          systemResumed: Boolean(this.systemAudioCapture),
+          microphoneResumed: Boolean(this.microphoneCapture),
+        });
+      } catch (error) {
+        this.windowsAudioResumePending = true;
+        console.error(`[Main] Windows audio recovery after ${reason} failed:`, error);
+        this.broadcast('meeting-audio-error', 'Audio recovery after system resume failed');
+      } finally {
+        this.windowsAudioResumeInFlight = null;
+      }
+    })();
+
+    await this.windowsAudioResumeInFlight;
   }
 
   private pauseMeetingAudioForStealth(reason: string): void {
@@ -1157,6 +1263,11 @@ try {
 
     console.error(`[Main] ${source === 'system' ? 'SystemAudioCapture' : 'MicrophoneCapture'} Error:`, err);
     this.setNativeAudioConnected(false);
+
+    if (process.platform === 'win32' && (this.windowsAudioResumePending || this.windowsAudioResumeInFlight)) {
+      console.warn('[Main] Deferring audio capture recovery while Windows power-state recovery is pending');
+      return;
+    }
 
     if (this.isMeetingActive && this.audioRecoveryAttempts < this.MAX_AUDIO_RECOVERY_ATTEMPTS) {
       this.audioRecoveryAttempts += 1;
@@ -1725,6 +1836,8 @@ try {
     console.log('[Main] Starting Meeting...', metadata);
     this.audioRecoveryAttempts = 0;
     this.audioRecoveryBackoffMs = 5000;
+    this.windowsAudioResumePending = false;
+    this.windowsAudioResumeInFlight = null;
     this.startAbortController = new AbortController();
     const { signal } = this.startAbortController;
 
@@ -1906,6 +2019,8 @@ try {
     this.isMeetingActive = false; // Block new data immediately
     this.setNativeAudioConnected(false);
     this.stealthAudioPauseSnapshot = null;
+    this.windowsAudioResumePending = false;
+    this.windowsAudioResumeInFlight = null;
 
     // Wait for any pending meeting start operations to complete before proceeding
     // This prevents race conditions between start and end operations
@@ -2035,8 +2150,11 @@ try {
     this.isMeetingActive = false
     this.setNativeAudioConnected(false)
     this.stealthAudioPauseSnapshot = null
+    this.windowsAudioResumePending = false
+    this.windowsAudioResumeInFlight = null
     this.currentMeetingId = null
     this.clearAudioPipelineHealthCheck();
+    this.stopMeetingRecoverySweep();
 
     // Clear disguise timers to prevent memory leaks
     this.clearDisguiseTimers()
@@ -2437,6 +2555,10 @@ try {
     if (!this.getMainWindow()) throw new Error("No main window available")
 
     const wasOverlayVisible = this.windowHelper.getOverlayWindow()?.isVisible() ?? false
+    const targetWindow = this.windowHelper.getVisibleMainWindow() ?? this.getMainWindow()
+    const preferredDisplayId = targetWindow && !targetWindow.isDestroyed()
+      ? String(screen.getDisplayMatching(targetWindow.getBounds()).id)
+      : undefined
 
     const screenshotPath = await this.screenshotHelper.takeScreenshot(
       () => this.hideMainWindow(),
@@ -2446,7 +2568,8 @@ try {
         } else {
           this.showMainWindow()
         }
-      }
+      },
+      preferredDisplayId,
     )
 
     return screenshotPath
@@ -2987,6 +3110,8 @@ async function initializeApp() {
 
   // 4. Initialize State
   const appState = AppState.getInstance()
+  appState.bindWindowsPowerAudioRecovery()
+  appState.startMeetingRecoverySweep()
 
   // Explicitly load credentials into helpers
   appState.processingHelper.loadStoredCredentials();

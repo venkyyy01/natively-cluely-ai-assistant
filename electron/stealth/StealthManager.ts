@@ -471,6 +471,10 @@ export class StealthManager extends EventEmitter {
   }
 
   private isEnhancedStealthEnabled(): boolean {
+    if (this.platform === 'win32' && this.isEnabled()) {
+      return true;
+    }
+
     return isOptimizationActive('useStealthMode');
   }
 

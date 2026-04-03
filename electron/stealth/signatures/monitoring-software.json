@@ -35,10 +35,13 @@
   {
     "name": "Proctorio",
     "category": "proctoring",
-    "processNames": ["Proctorio.exe", "chrome.exe", "msedge.exe"],
+    "processNames": [],
     "windowTitles": ["Proctorio"],
-    "installPaths": ["%LocalAppData%\\Google\\Chrome\\User Data", "%LocalAppData%\\Microsoft\\Edge\\User Data"],
-    "fileArtifacts": ["%LocalAppData%\\Google\\Chrome\\User Data\\Default\\Extensions"],
+    "installPaths": [],
+    "fileArtifacts": [
+      "%LocalAppData%\\Google\\Chrome\\User Data\\Default\\Extensions\\goobgennebinldhonaajgafidboenlkl",
+      "%LocalAppData%\\Microsoft\\Edge\\User Data\\Default\\Extensions\\goobgennebinldhonaajgafidboenlkl"
+    ],
     "networkEndpoints": ["proctorio.com"],
     "launchAgents": ["com.proctorio.extension.plist"],
     "registryKeys": ["HKCU\\Software\\Google\\Chrome\\Extensions\\goobgennebinldhonaajgafidboenlkl"]
@@ -46,10 +49,13 @@
   {
     "name": "Honorlock",
     "category": "proctoring",
-    "processNames": ["Honorlock.exe", "chrome.exe", "msedge.exe"],
+    "processNames": [],
     "windowTitles": ["Honorlock"],
-    "installPaths": ["%LocalAppData%\\Google\\Chrome\\User Data", "%LocalAppData%\\Microsoft\\Edge\\User Data"],
-    "fileArtifacts": ["%LocalAppData%\\Google\\Chrome\\User Data\\Default\\Extensions"],
+    "installPaths": [],
+    "fileArtifacts": [
+      "%LocalAppData%\\Google\\Chrome\\User Data\\Default\\Extensions\\podkclfkfdnhmclcggcmojkgjmfarkch",
+      "%LocalAppData%\\Microsoft\\Edge\\User Data\\Default\\Extensions\\podkclfkfdnhmclcggcmojkgjmfarkch"
+    ],
     "networkEndpoints": ["honorlock.com"],
     "launchAgents": ["com.honorlock.extension.plist"],
     "registryKeys": ["HKCU\\Software\\Google\\Chrome\\Extensions\\podkclfkfdnhmclcggcmojkgjmfarkch"]
@@ -200,10 +206,10 @@
   {
     "name": "HackerRank",
     "category": "proctoring",
-    "processNames": ["HackerRank.exe", "chrome.exe", "msedge.exe"],
-    "windowTitles": ["HackerRank", "HackerRank Interview"],
-    "installPaths": ["%LocalAppData%\\Google\\Chrome\\User Data", "%LocalAppData%\\Microsoft\\Edge\\User Data"],
-    "fileArtifacts": ["%AppData%\\HackerRank"],
+    "processNames": [],
+    "windowTitles": ["HackerRank Interview"],
+    "installPaths": [],
+    "fileArtifacts": [],
     "networkEndpoints": ["hackerrank.com"],
     "launchAgents": ["com.hackerrank.desktop.plist"],
     "registryKeys": []
@@ -211,10 +217,10 @@
   {
     "name": "CoderPad",
     "category": "proctoring",
-    "processNames": ["CoderPad.exe", "chrome.exe", "msedge.exe"],
-    "windowTitles": ["CoderPad", "CoderPad Interview"],
-    "installPaths": ["%LocalAppData%\\Google\\Chrome\\User Data", "%LocalAppData%\\Microsoft\\Edge\\User Data"],
-    "fileArtifacts": ["%AppData%\\CoderPad"],
+    "processNames": [],
+    "windowTitles": ["CoderPad Interview"],
+    "installPaths": [],
+    "fileArtifacts": [],
     "networkEndpoints": ["coderpad.io"],
     "launchAgents": ["io.coderpad.desktop.plist"],
     "registryKeys": []

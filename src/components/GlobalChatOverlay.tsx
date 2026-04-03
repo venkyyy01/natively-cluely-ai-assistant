@@ -151,6 +151,10 @@ const AssistantMessage: React.FC<{ content: string; isStreaming?: boolean }> = (
 
 type ChatState = 'idle' | 'waiting_for_llm' | 'streaming_response' | 'error';
 
+function createRequestId(prefix: string): string {
+    return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
 const GlobalChatOverlay: React.FC<GlobalChatOverlayProps> = ({
     isOpen,
     onClose,
@@ -174,6 +178,7 @@ const GlobalChatOverlay: React.FC<GlobalChatOverlayProps> = ({
     }, [chatState]);
 
     const cleanupActiveRequest = useCallback(() => {
+        void window.electronAPI?.ragCancelQuery?.({ global: true }).catch(() => {});
         for (const cleanup of activeCleanupRef.current) {
             cleanup();
         }
@@ -234,7 +239,7 @@ const GlobalChatOverlay: React.FC<GlobalChatOverlayProps> = ({
         if (!question.trim() || chatStateRef.current === 'waiting_for_llm' || chatStateRef.current === 'streaming_response') return;
 
         cleanupActiveRequest();
-        const requestId = `request-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+        const requestId = createRequestId('global-chat');
         activeRequestIdRef.current = requestId;
 
         const userMessage: Message = {
@@ -269,7 +274,8 @@ const GlobalChatOverlay: React.FC<GlobalChatOverlayProps> = ({
 
             // Set up RAG streaming listeners (RAF-batched)
             streamBuffer.reset();
-            const tokenCleanup = window.electronAPI?.onRAGStreamChunk((data: { chunk: string }) => {
+            const tokenCleanup = window.electronAPI?.onRAGStreamChunk((data: { requestId?: string; chunk: string }) => {
+                if (data.requestId !== requestId) return;
                 if (!isCurrentRequest()) return;
                 setChatState('streaming_response');
                 streamBuffer.appendToken(data.chunk, (content) => {
@@ -282,7 +288,8 @@ const GlobalChatOverlay: React.FC<GlobalChatOverlayProps> = ({
                 });
             });
 
-            const doneCleanup = window.electronAPI?.onRAGStreamComplete(() => {
+            const doneCleanup = window.electronAPI?.onRAGStreamComplete((data: { requestId?: string }) => {
+                if (data.requestId !== requestId) return;
                 if (!isCurrentRequest()) return;
                 const finalContent = streamBuffer.getBufferedContent();
                 setMessages(prev => prev.map(msg =>
@@ -294,7 +301,8 @@ const GlobalChatOverlay: React.FC<GlobalChatOverlayProps> = ({
                 finishRequest();
             });
 
-            const errorCleanup = window.electronAPI?.onRAGStreamError((data: { error: string }) => {
+            const errorCleanup = window.electronAPI?.onRAGStreamError((data: { requestId?: string; error: string }) => {
+                if (data.requestId !== requestId) return;
                 if (!isCurrentRequest()) return;
                 console.error('[GlobalChat] RAG stream error:', data.error);
                 setMessages(prev => prev.filter(msg => msg.id !== assistantMessageId));
@@ -306,7 +314,7 @@ const GlobalChatOverlay: React.FC<GlobalChatOverlayProps> = ({
             activeCleanupRef.current = [tokenCleanup, doneCleanup, errorCleanup].filter(Boolean) as Array<() => void>;
 
             // Use global RAG query
-            const result = await window.electronAPI?.ragQueryGlobal(question);
+            const result = await window.electronAPI?.ragQueryGlobal(question, requestId);
             if (!isCurrentRequest()) return;
 
             if (result?.fallback) {
@@ -316,10 +324,11 @@ const GlobalChatOverlay: React.FC<GlobalChatOverlayProps> = ({
 
                 // Setup fallback listeners (Standard Gemini)
                 streamBuffer.reset();
-                const oldTokenCleanup = window.electronAPI?.onGeminiStreamToken((token: string) => {
+                const oldTokenCleanup = window.electronAPI?.onGeminiStreamToken((data: { requestId?: string; token: string }) => {
+                    if (data.requestId !== requestId) return;
                     if (!isCurrentRequest()) return;
                     setChatState('streaming_response');
-                    streamBuffer.appendToken(token, (content) => {
+                    streamBuffer.appendToken(data.token, (content) => {
                         if (!isCurrentRequest()) return;
                         setMessages(prev => prev.map(msg =>
                             msg.id === assistantMessageId
@@ -329,7 +338,8 @@ const GlobalChatOverlay: React.FC<GlobalChatOverlayProps> = ({
                     });
                 });
 
-                const oldDoneCleanup = window.electronAPI?.onGeminiStreamDone(() => {
+                const oldDoneCleanup = window.electronAPI?.onGeminiStreamDone((data: { requestId?: string }) => {
+                    if (data.requestId !== requestId) return;
                     if (!isCurrentRequest()) return;
                     const finalContent = streamBuffer.getBufferedContent();
                     setMessages(prev => prev.map(msg =>
@@ -341,9 +351,10 @@ const GlobalChatOverlay: React.FC<GlobalChatOverlayProps> = ({
                     finishRequest();
                 });
 
-                const oldErrorCleanup = window.electronAPI?.onGeminiStreamError((error: string) => {
+                const oldErrorCleanup = window.electronAPI?.onGeminiStreamError((data: { requestId?: string; error: string }) => {
+                    if (data.requestId !== requestId) return;
                     if (!isCurrentRequest()) return;
-                    console.error('[GlobalChat] Gemini stream error:', error);
+                    console.error('[GlobalChat] Gemini stream error:', data.error);
                     setMessages(prev => prev.filter(msg => msg.id !== assistantMessageId));
                     setErrorMessage("Couldn't get a response. Please check your settings.");
                     setChatState('error');
@@ -353,7 +364,7 @@ const GlobalChatOverlay: React.FC<GlobalChatOverlayProps> = ({
                 activeCleanupRef.current = [oldTokenCleanup, oldDoneCleanup, oldErrorCleanup].filter(Boolean) as Array<() => void>;
 
                 // Call standard chat
-                await window.electronAPI?.streamGeminiChat(question, undefined, undefined, { skipSystemPrompt: false });
+                await window.electronAPI?.streamGeminiChat(question, undefined, undefined, { skipSystemPrompt: false, requestId });
             }
 
         } catch (error) {

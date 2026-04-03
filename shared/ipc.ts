@@ -32,6 +32,7 @@ export interface TranscriptTextEntry {
 
 export interface GeminiChatOptions {
   skipSystemPrompt?: boolean;
+  requestId?: string;
 }
 
 export interface SettingsWindowCoords {

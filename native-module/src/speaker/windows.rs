@@ -6,6 +6,7 @@ use ringbuf::{
     HeapCons, HeapProd, HeapRb,
 };
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Condvar, Mutex};
 use std::thread;
 use std::time::Duration;
@@ -26,6 +27,8 @@ pub struct SpeakerStream {
     capture_thread: Option<thread::JoinHandle<()>>,
     actual_sample_rate: u32,
     data_ready: Arc<(Mutex<bool>, Condvar)>,
+    last_error: Arc<Mutex<Option<String>>>,
+    dropped_samples: Arc<AtomicU64>,
 }
 
 impl SpeakerStream {
@@ -39,6 +42,14 @@ impl SpeakerStream {
 
     pub fn data_ready_signal(&self) -> Arc<(Mutex<bool>, Condvar)> {
         self.data_ready.clone()
+    }
+
+    pub fn take_error(&self) -> Option<String> {
+        self.last_error.lock().ok()?.take()
+    }
+
+    pub fn take_dropped_samples(&self) -> u64 {
+        self.dropped_samples.swap(0, Ordering::Relaxed)
     }
 }
 
@@ -95,6 +106,10 @@ impl SpeakerInput {
 
         let waker_clone = waker_state.clone();
         let data_ready_clone = data_ready.clone();
+        let last_error = Arc::new(Mutex::new(None));
+        let last_error_clone = last_error.clone();
+        let dropped_samples = Arc::new(AtomicU64::new(0));
+        let dropped_samples_clone = dropped_samples.clone();
         let device_id = self.device_id;
 
         let capture_thread = thread::spawn(move || {
@@ -104,7 +119,11 @@ impl SpeakerInput {
                 data_ready_clone,
                 init_tx,
                 device_id,
+                dropped_samples_clone,
             ) {
+                if let Ok(mut slot) = last_error_clone.lock() {
+                    *slot = Some(e.to_string());
+                }
                 error!("Audio capture loop failed: {}", e);
             }
         });
@@ -113,11 +132,11 @@ impl SpeakerInput {
             Ok(Ok(rate)) => rate,
             Ok(Err(e)) => {
                 error!("Audio initialization failed: {}", e);
-                44100
+                0
             }
             Err(_) => {
                 error!("Audio initialization timeout");
-                44100
+                0
             }
         };
 
@@ -127,6 +146,8 @@ impl SpeakerInput {
             capture_thread: Some(capture_thread),
             actual_sample_rate,
             data_ready,
+            last_error,
+            dropped_samples,
         }
     }
 
@@ -136,6 +157,7 @@ impl SpeakerInput {
         data_ready: Arc<(Mutex<bool>, Condvar)>,
         init_tx: mpsc::Sender<Result<u32>>,
         device_id: Option<String>,
+        dropped_samples: Arc<AtomicU64>,
     ) -> Result<()> {
         let init_result = (|| -> Result<_> {
             let device = match device_id {
@@ -200,8 +222,9 @@ impl SpeakerInput {
                     }
 
                     if h_event.wait_for_event(3000).is_err() {
-                        error!("Timeout error, stopping capture");
-                        break;
+                        return Err(anyhow::anyhow!(
+                            "Timed out waiting for Windows loopback audio event"
+                        ));
                     }
 
                     let mut temp_queue = VecDeque::new();
@@ -231,7 +254,11 @@ impl SpeakerInput {
                     }
 
                     if !samples.is_empty() {
-                        let _ = producer.push_slice(&samples);
+                        let written = producer.push_slice(&samples);
+                        let dropped = samples.len().saturating_sub(written) as u64;
+                        if dropped > 0 {
+                            dropped_samples.fetch_add(dropped, Ordering::Relaxed);
+                        }
 
                         // Signal data ready
                         let (lock, cvar) = &*data_ready;
@@ -242,7 +269,9 @@ impl SpeakerInput {
                 }
             }
             Err(e) => {
-                let _ = init_tx.send(Err(e));
+                let message = format!("Failed to initialize Windows loopback audio stream: {}", e);
+                let _ = init_tx.send(Err(anyhow::anyhow!(message.clone())));
+                return Err(anyhow::anyhow!(message));
             }
         }
         Ok(())

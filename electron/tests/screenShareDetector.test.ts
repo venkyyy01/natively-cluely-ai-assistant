@@ -9,7 +9,7 @@ const silentLogger = {
   error() {},
 };
 
-test('ScreenShareDetector reports active sharing when a Windows process matches', async () => {
+test('ScreenShareDetector does not report active sharing on Windows from process presence alone', async () => {
   const detector = new ScreenShareDetector({
     platform: 'win32',
     logger: silentLogger,
@@ -33,11 +33,47 @@ test('ScreenShareDetector reports active sharing when a Windows process matches'
   const status = await detector.detect();
 
   assert.deepEqual(status, {
+    active: false,
+    confidence: 'low',
+    source: 'heuristic',
+    timestamp: 123,
+    matches: [],
+  });
+});
+
+test('ScreenShareDetector treats a Windows share window as active and upgrades confidence when the process also matches', async () => {
+  const detector = new ScreenShareDetector({
+    platform: 'win32',
+    logger: silentLogger,
+    signatures: [
+      {
+        name: 'Zoom',
+        processNames: ['Zoom.exe'],
+        windowTitles: ['You are screen sharing'],
+      },
+    ],
+    execCommand: async (command) => {
+      if (command === 'tasklist') {
+        return '"Zoom.exe","1024","Console","1","25,000 K"\n';
+      }
+
+      if (command === 'powershell') {
+        return 'Zoom|You are screen sharing\n';
+      }
+
+      return '';
+    },
+    now: () => 456,
+  });
+
+  const status = await detector.detect();
+
+  assert.deepEqual(status, {
     active: true,
     confidence: 'high',
-    source: 'process',
-    timestamp: 123,
-    matches: ['Zoom:Zoom.exe'],
+    source: 'window',
+    timestamp: 456,
+    matches: ['Zoom:You are screen sharing', 'Zoom:Zoom.exe'],
   });
 });
 

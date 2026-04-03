@@ -9,7 +9,7 @@ if (!NativeModule) {
 
 const { SystemAudioCapture: RustAudioCapture } = NativeModule || {};
 const DEFAULT_SAMPLE_RATE = 48_000;
-const DEFAULT_READY_TIMEOUT_MS = 3_000;
+const DEFAULT_READY_TIMEOUT_MS = 6_000;
 const DEFAULT_READY_POLL_INTERVAL_MS = 25;
 
 export class SystemAudioCapture extends EventEmitter {
@@ -76,7 +76,7 @@ export class SystemAudioCapture extends EventEmitter {
         if (this.monitor && typeof this.monitor.getSampleRate === 'function') {
             const nativeRate = this.monitor.getSampleRate();
             if (nativeRate !== this.detectedSampleRate) {
-                console.log(`[SystemAudioCapture] Real native rate: ${nativeRate}`);
+                console.log(`[SystemAudioCapture] Native sample rate update: ${nativeRate}`);
                 this.detectedSampleRate = nativeRate;
             }
             return nativeRate;
@@ -92,6 +92,10 @@ export class SystemAudioCapture extends EventEmitter {
 
         while (Date.now() <= deadline) {
             const rate = this.refreshSampleRate();
+            if (rate <= 0) {
+                throw new Error('[SystemAudioCapture] Native monitor failed to initialize');
+            }
+
             if (this.isMonitorInitialized()) {
                 console.log(`[SystemAudioCapture] Native monitor ready at ${rate}Hz`);
                 return rate;
@@ -103,8 +107,7 @@ export class SystemAudioCapture extends EventEmitter {
         }
 
         const rate = this.refreshSampleRate();
-        console.warn(`[SystemAudioCapture] Timed out waiting for native readiness. Using ${rate}Hz`);
-        return rate;
+        throw new Error(`[SystemAudioCapture] Timed out waiting for native readiness (last reported rate: ${rate}Hz)`);
     }
 
     /**
@@ -136,6 +139,8 @@ export class SystemAudioCapture extends EventEmitter {
             }, () => {
                 // Speech-ended callback from Rust SilenceSuppressor
                 this.emit('speech_ended');
+            }, (message: string) => {
+                this.emit('error', new Error(message));
             });
 
             this.isRecording = true;

@@ -2,9 +2,8 @@
 
 import path from "node:path"
 import fs from "node:fs"
-import { app } from "electron"
+import { app, clipboard, desktopCapturer, screen, shell } from "electron"
 import { v4 as uuidv4 } from "uuid"
-import screenshot from "screenshot-desktop"
 import util from "util"
 export class ScreenshotHelper {
   private screenshotQueue: string[] = []
@@ -76,6 +75,61 @@ export class ScreenshotHelper {
       await fs.promises.unlink(screenshotPath)
       throw new Error(`Screenshot exceeds ${this.MAX_FILE_BYTES} byte limit`)
     }
+  }
+
+  private async captureWindowsDisplay(outputPath: string, preferredDisplayId?: string): Promise<void> {
+    const displays = screen.getAllDisplays()
+    const targetDisplay = displays.find((display) => String(display.id) === preferredDisplayId)
+      ?? screen.getDisplayNearestPoint(screen.getCursorScreenPoint())
+      ?? displays[0]
+
+    if (!targetDisplay) {
+      throw new Error('No Windows display available for screenshot capture')
+    }
+
+    const thumbnailSize = {
+      width: Math.max(1, Math.floor(targetDisplay.bounds.width * targetDisplay.scaleFactor)),
+      height: Math.max(1, Math.floor(targetDisplay.bounds.height * targetDisplay.scaleFactor)),
+    }
+
+    const sources = await desktopCapturer.getSources({
+      types: ['screen'],
+      thumbnailSize,
+      fetchWindowIcons: false,
+    })
+    const source = sources.find((candidate) => candidate.display_id === String(targetDisplay.id)) ?? sources[0]
+
+    if (!source || source.thumbnail.isEmpty()) {
+      throw new Error(`Failed to capture Windows display ${targetDisplay.id}`)
+    }
+
+    await fs.promises.writeFile(outputPath, source.thumbnail.toPNG())
+  }
+
+  private async captureWindowsSelection(outputPath: string): Promise<void> {
+    const previousImage = clipboard.readImage()
+    const previousPng = previousImage.isEmpty() ? null : previousImage.toPNG()
+
+    await shell.openExternal('ms-screenclip:')
+
+    const deadline = Date.now() + 15000
+    while (Date.now() <= deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 200))
+      const nextImage = clipboard.readImage()
+      if (nextImage.isEmpty()) {
+        continue
+      }
+
+      const nextPng = nextImage.toPNG()
+      if (previousPng && nextPng.equals(previousPng)) {
+        continue
+      }
+
+      await fs.promises.writeFile(outputPath, nextPng)
+      return
+    }
+
+    throw new Error('Selection cancelled')
   }
 
   /**
@@ -151,7 +205,8 @@ export class ScreenshotHelper {
 
   public async takeScreenshot(
     hideMainWindow: () => void,
-    showMainWindow: () => void
+    showMainWindow: () => void,
+    preferredDisplayId?: string
   ): Promise<string> {
     try {
       hideMainWindow()
@@ -160,22 +215,27 @@ export class ScreenshotHelper {
 
       let screenshotPath = ""
 
-      const exec = util.promisify(require('child_process').exec)
+        if (this.view === "queue") {
+          screenshotPath = path.join(this.screenshotDir, `${uuidv4()}.png`)
+          if (process.platform === 'win32') {
+            await this.captureWindowsDisplay(screenshotPath, preferredDisplayId)
+          } else {
+            const exec = util.promisify(require('child_process').exec)
+            await exec(this.getScreenshotCommand(screenshotPath, false))
+          }
+          await this.enforceFileSizeLimit(screenshotPath)
 
-      if (this.view === "queue") {
-        screenshotPath = path.join(this.screenshotDir, `${uuidv4()}.png`)
-        // Use native screencapture for reliability on macOS
-        // -x: do not play sound
-        // -C: capture cursor
-        await exec(this.getScreenshotCommand(screenshotPath, false))
-        await this.enforceFileSizeLimit(screenshotPath)
-
-        this.screenshotQueue.push(screenshotPath)
-        await this.trimQueue(this.screenshotQueue)
-      } else {
-        screenshotPath = path.join(this.extraScreenshotDir, `${uuidv4()}.png`)
-        await exec(this.getScreenshotCommand(screenshotPath, false))
-        await this.enforceFileSizeLimit(screenshotPath)
+          this.screenshotQueue.push(screenshotPath)
+          await this.trimQueue(this.screenshotQueue)
+        } else {
+          screenshotPath = path.join(this.extraScreenshotDir, `${uuidv4()}.png`)
+          if (process.platform === 'win32') {
+            await this.captureWindowsDisplay(screenshotPath, preferredDisplayId)
+          } else {
+            const exec = util.promisify(require('child_process').exec)
+            await exec(this.getScreenshotCommand(screenshotPath, false))
+          }
+          await this.enforceFileSizeLimit(screenshotPath)
 
         this.extraScreenshotQueue.push(screenshotPath)
         await this.trimQueue(this.extraScreenshotQueue)
@@ -201,15 +261,17 @@ export class ScreenshotHelper {
       await this.waitForWindowHide()
 
       let screenshotPath = ""
-      const exec = util.promisify(require('child_process').exec)
 
       // Always use the standard queue directory for this temporary context
       screenshotPath = path.join(this.screenshotDir, `selective-${uuidv4()}.png`)
 
-      // -i: interactive mode (selection)
-      // -x: do not play sound
       try {
-        await exec(this.getScreenshotCommand(screenshotPath, true))
+        if (process.platform === 'win32') {
+          await this.captureWindowsSelection(screenshotPath)
+        } else {
+          const exec = util.promisify(require('child_process').exec)
+          await exec(this.getScreenshotCommand(screenshotPath, true))
+        }
       } catch (e: any) {
         // User cancelled selection (exit code 1 usually)
         throw new Error("Selection cancelled")

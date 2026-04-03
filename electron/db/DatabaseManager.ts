@@ -474,13 +474,21 @@ export class DatabaseManager {
     }
 
     private createMigrationBackup(): void {
-        if (fs.existsSync(this.dbPath)) {
-            fs.copyFileSync(this.dbPath, this.migrationBackupPath);
+        if (!this.db || !fs.existsSync(this.dbPath)) {
+            return;
         }
+
+        this.removeMigrationBackup();
+        this.checkpointWal('TRUNCATE');
+
+        const backupPath = DatabaseManager.toSqliteStringLiteral(this.migrationBackupPath);
+        this.db.exec(`VACUUM INTO ${backupPath}`);
     }
 
     private restoreMigrationBackup(): void {
         if (fs.existsSync(this.migrationBackupPath)) {
+            this.closeDatabaseConnection();
+            this.removeSidecarFiles(this.dbPath);
             fs.copyFileSync(this.migrationBackupPath, this.dbPath);
             this.removeMigrationBackup();
         }
@@ -490,6 +498,53 @@ export class DatabaseManager {
         if (fs.existsSync(this.migrationBackupPath)) {
             fs.unlinkSync(this.migrationBackupPath);
         }
+    }
+
+    private checkpointWal(mode: 'PASSIVE' | 'FULL' | 'RESTART' | 'TRUNCATE' = 'FULL'): void {
+        if (!this.db) {
+            return;
+        }
+
+        try {
+            this.db.pragma(`wal_checkpoint(${mode})`);
+        } catch (error) {
+            console.warn(`[DatabaseManager] Failed to checkpoint WAL (${mode}):`, error);
+        }
+    }
+
+    private closeDatabaseConnection(): void {
+        if (!this.db) {
+            return;
+        }
+
+        this.checkpointWal('TRUNCATE');
+
+        try {
+            this.db.close();
+        } catch (error) {
+            console.warn('[DatabaseManager] Failed to close database connection cleanly:', error);
+        } finally {
+            this.db = null;
+        }
+    }
+
+    private removeSidecarFiles(basePath: string): void {
+        for (const suffix of ['-wal', '-shm']) {
+            const sidecarPath = `${basePath}${suffix}`;
+            if (!fs.existsSync(sidecarPath)) {
+                continue;
+            }
+
+            try {
+                fs.unlinkSync(sidecarPath);
+            } catch (error) {
+                console.warn(`[DatabaseManager] Failed to remove sidecar ${sidecarPath}:`, error);
+            }
+        }
+    }
+
+    private static toSqliteStringLiteral(value: string): string {
+        return `'${value.replace(/'/g, "''")}'`;
     }
 
     private verifyEmbeddingQueueConsistency(): void {

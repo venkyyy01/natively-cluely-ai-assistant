@@ -11,6 +11,9 @@ function installElectronMock(): () => void {
         BrowserWindow: class BrowserWindow {},
         screen: {
           getPrimaryDisplay: () => ({ workAreaSize: { width: 1440, height: 900 }, workArea: { x: 0, y: 0, width: 1440, height: 900 } }),
+          getDisplayMatching: () => ({ workAreaSize: { width: 1440, height: 900 }, workArea: { x: 0, y: 0, width: 1440, height: 900 } }),
+          getDisplayNearestPoint: () => ({ workAreaSize: { width: 1440, height: 900 }, workArea: { x: 0, y: 0, width: 1440, height: 900 } }),
+          getCursorScreenPoint: () => ({ x: 100, y: 100 }),
         },
         app: {
           isPackaged: false,
@@ -138,6 +141,34 @@ test('WindowHelper can show and hide a direct launcher window when StealthRuntim
     assert.equal(launcherHidden, 1);
     assert.equal(overlayHidden, 2);
   } finally {
+    restoreElectron();
+  }
+});
+
+test('WindowHelper avoids StealthRuntime on Windows standard mode', async () => {
+  const restoreElectron = installElectronMock();
+  const originalPlatform = process.platform;
+  const windowHelperPath = require.resolve('../WindowHelper');
+  delete require.cache[windowHelperPath];
+
+  Object.defineProperty(process, 'platform', {
+    configurable: true,
+    value: 'win32',
+  });
+
+  try {
+    const { WindowHelper } = await import('../WindowHelper');
+    const helper = new WindowHelper({} as never, {} as never);
+
+    assert.equal((helper as any).shouldUseStealthRuntime(), false);
+
+    helper.setContentProtection(true);
+    assert.equal((helper as any).shouldUseStealthRuntime(), true);
+  } finally {
+    Object.defineProperty(process, 'platform', {
+      configurable: true,
+      value: originalPlatform,
+    });
     restoreElectron();
   }
 });

@@ -42,6 +42,7 @@ import { getElectronAPI } from '../lib/electronApi';
 import { analytics, detectProviderType } from '../lib/analytics/analytics.service';
 import { useShortcuts } from '../hooks/useShortcuts';
 import { useHumanSpeedAutoScroll } from '../hooks/useHumanSpeedAutoScroll';
+import { useStreamBuffer } from '../hooks/useStreamBuffer';
 import {
     classifyAssistRender,
     ConsciousModeAnswer,
@@ -86,6 +87,10 @@ interface NativelyInterfaceProps {
     onEndMeeting?: () => void;
 }
 
+function createStreamRequestId(prefix: string): string {
+    return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
 const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) => {
     const electronAPI = getElectronAPI();
     const [isExpanded, setIsExpanded] = useState(true);
@@ -107,6 +112,18 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
 
     // Analytics State
     const requestStartTimeRef = useRef<number | null>(null);
+    const activeGeminiRequestIdRef = useRef<string | null>(null);
+    const activeRagRequestIdRef = useRef<string | null>(null);
+    const {
+        appendToken: appendGeminiStreamToken,
+        getBufferedContent: getBufferedGeminiContent,
+        reset: resetGeminiStreamBuffer,
+    } = useStreamBuffer();
+    const {
+        appendToken: appendRagStreamToken,
+        getBufferedContent: getBufferedRagContent,
+        reset: resetRagStreamBuffer,
+    } = useStreamBuffer();
 
     // Sync transcript setting
     useEffect(() => {
@@ -118,12 +135,51 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
         return () => window.removeEventListener('storage', handleStorage);
     }, []);
 
+    useEffect(() => {
+        return () => {
+            if (rollingTranscriptRafRef.current !== null) {
+                cancelAnimationFrame(rollingTranscriptRafRef.current);
+            }
+            if (manualTranscriptRafRef.current !== null) {
+                cancelAnimationFrame(manualTranscriptRafRef.current);
+            }
+        };
+    }, []);
+
+    const scheduleRollingTranscriptUpdate = (nextValue: string) => {
+        pendingRollingTranscriptRef.current = nextValue;
+        if (rollingTranscriptRafRef.current !== null) {
+            return;
+        }
+
+        rollingTranscriptRafRef.current = requestAnimationFrame(() => {
+            rollingTranscriptRafRef.current = null;
+            setRollingTranscript(pendingRollingTranscriptRef.current);
+        });
+    };
+
+    const scheduleManualTranscriptUpdate = (nextValue: string) => {
+        pendingManualTranscriptRef.current = nextValue;
+        if (manualTranscriptRafRef.current !== null) {
+            return;
+        }
+
+        manualTranscriptRafRef.current = requestAnimationFrame(() => {
+            manualTranscriptRafRef.current = null;
+            setManualTranscript(pendingManualTranscriptRef.current);
+        });
+    };
+
     const [rollingTranscript, setRollingTranscript] = useState('');  // For interviewer rolling text bar
     const [isInterviewerSpeaking, setIsInterviewerSpeaking] = useState(false);  // Track if actively speaking
     const rollingTranscriptCommittedRef = useRef('');
+    const pendingRollingTranscriptRef = useRef('');
+    const rollingTranscriptRafRef = useRef<number | null>(null);
     const [voiceInput, setVoiceInput] = useState('');  // Accumulated user voice input
     const voiceInputRef = useRef<string>('');  // Ref for capturing in async handlers
     const textInputRef = useRef<HTMLInputElement>(null); // Ref for input focus
+    const pendingManualTranscriptRef = useRef('');
+    const manualTranscriptRafRef = useRef<number | null>(null);
 
     const contentRef = useRef<HTMLDivElement>(null);
     const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -470,11 +526,11 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
                         voiceInputRef.current = updated;
                         return updated;
                     });
-                    setManualTranscript('');  // Clear partial preview
+                    scheduleManualTranscriptUpdate('');  // Clear partial preview
                     manualTranscriptRef.current = '';
                 } else {
                     // Show live partial transcript
-                    setManualTranscript(transcript.text);
+                    scheduleManualTranscriptUpdate(transcript.text);
                     manualTranscriptRef.current = transcript.text;
                 }
                 return;  // Don't add to messages while recording
@@ -498,7 +554,7 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
                 // Append finalized text to accumulated transcript
                 const committed = appendRollingTranscript(rollingTranscriptCommittedRef.current, transcript.text);
                 rollingTranscriptCommittedRef.current = committed;
-                setRollingTranscript(committed);
+                scheduleRollingTranscriptUpdate(committed);
 
                 // Clear speaking indicator after pause
                 setTimeout(() => {
@@ -507,7 +563,7 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
             } else {
                 // For partial transcripts, show the active utterance without mutating finalized history
                 const committed = rollingTranscriptCommittedRef.current;
-                setRollingTranscript(committed ? `${committed}  ·  ${transcript.text}` : transcript.text);
+                scheduleRollingTranscriptUpdate(committed ? `${committed}  ·  ${transcript.text}` : transcript.text);
             }
         }));
 
@@ -890,27 +946,34 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
         const cleanups: (() => void)[] = [];
 
         // Stream Token
-        cleanups.push(window.electronAPI.onGeminiStreamToken((token) => {
-            setMessages(prev => {
-                const lastMsg = prev[prev.length - 1];
-                // Should we be updating the last message or finding the specific streaming one?
-                // Assuming the last added message is the one we are streaming into.
-                if (lastMsg && lastMsg.isStreaming && lastMsg.role === 'system') {
-                    const updated = [...prev];
-                    updated[prev.length - 1] = {
-                        ...lastMsg,
-                        text: lastMsg.text + token,
-                        // re-check code status on every token? Expensive but needed for progressive highlighting
-                        isCode: (lastMsg.text + token).includes('```') || (lastMsg.text + token).includes('def ') || (lastMsg.text + token).includes('function ')
-                    };
-                    return updated;
-                }
-                return prev;
+        cleanups.push(window.electronAPI.onGeminiStreamToken(({ requestId, token }) => {
+            if (requestId && requestId !== activeGeminiRequestIdRef.current) {
+                return;
+            }
+            appendGeminiStreamToken(token, (content) => {
+                setMessages(prev => {
+                    const lastMsg = prev[prev.length - 1];
+                    if (lastMsg && lastMsg.isStreaming && lastMsg.role === 'system') {
+                        const updated = [...prev];
+                        updated[prev.length - 1] = {
+                            ...lastMsg,
+                            text: content,
+                            isCode: content.includes('```') || content.includes('def ') || content.includes('function ')
+                        };
+                        return updated;
+                    }
+                    return prev;
+                });
             });
         }));
 
         // Stream Done
-        cleanups.push(window.electronAPI.onGeminiStreamDone(() => {
+        cleanups.push(window.electronAPI.onGeminiStreamDone(({ requestId }) => {
+            if (requestId && requestId !== activeGeminiRequestIdRef.current) {
+                return;
+            }
+            activeGeminiRequestIdRef.current = null;
+            const finalContent = getBufferedGeminiContent();
             setIsProcessing(false);
 
             // Calculate latency if we have a start time
@@ -933,16 +996,23 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
                     const updated = [...prev];
                     updated[prev.length - 1] = {
                         ...lastMsg,
+                        text: finalContent || lastMsg.text,
                         isStreaming: false
                     };
                     return updated;
                 }
                 return prev;
             });
+            resetGeminiStreamBuffer();
         }));
 
         // Stream Error
-        cleanups.push(window.electronAPI.onGeminiStreamError((error) => {
+        cleanups.push(window.electronAPI.onGeminiStreamError(({ requestId, error }) => {
+            if (requestId && requestId !== activeGeminiRequestIdRef.current) {
+                return;
+            }
+            activeGeminiRequestIdRef.current = null;
+            resetGeminiStreamBuffer();
             setIsProcessing(false);
             requestStartTimeRef.current = null; // Clear timer on error
             setMessages(prev => {
@@ -970,41 +1040,57 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
 
         // JIT RAG Stream listeners (for live meeting RAG responses)
         if (window.electronAPI.onRAGStreamChunk) {
-            cleanups.push(window.electronAPI.onRAGStreamChunk((data: { chunk: string }) => {
-                setMessages(prev => {
-                    const lastMsg = prev[prev.length - 1];
-                    if (lastMsg && lastMsg.isStreaming && lastMsg.role === 'system') {
-                        const updated = [...prev];
-                        updated[prev.length - 1] = {
-                            ...lastMsg,
-                            text: lastMsg.text + data.chunk,
-                            isCode: (lastMsg.text + data.chunk).includes('```')
-                        };
-                        return updated;
-                    }
-                    return prev;
+            cleanups.push(window.electronAPI.onRAGStreamChunk((data: { requestId?: string; chunk: string }) => {
+                if (data.requestId && data.requestId !== activeRagRequestIdRef.current) {
+                    return;
+                }
+                appendRagStreamToken(data.chunk, (content) => {
+                    setMessages(prev => {
+                        const lastMsg = prev[prev.length - 1];
+                        if (lastMsg && lastMsg.isStreaming && lastMsg.role === 'system') {
+                            const updated = [...prev];
+                            updated[prev.length - 1] = {
+                                ...lastMsg,
+                                text: content,
+                                isCode: content.includes('```')
+                            };
+                            return updated;
+                        }
+                        return prev;
+                    });
                 });
             }));
         }
 
         if (window.electronAPI.onRAGStreamComplete) {
-            cleanups.push(window.electronAPI.onRAGStreamComplete(() => {
+            cleanups.push(window.electronAPI.onRAGStreamComplete((data: { requestId?: string }) => {
+                if (data.requestId && data.requestId !== activeRagRequestIdRef.current) {
+                    return;
+                }
+                activeRagRequestIdRef.current = null;
+                const finalContent = getBufferedRagContent();
                 setIsProcessing(false);
                 requestStartTimeRef.current = null;
                 setMessages(prev => {
                     const lastMsg = prev[prev.length - 1];
                     if (lastMsg && lastMsg.isStreaming) {
                         const updated = [...prev];
-                        updated[prev.length - 1] = { ...lastMsg, isStreaming: false };
+                        updated[prev.length - 1] = { ...lastMsg, text: finalContent || lastMsg.text, isStreaming: false };
                         return updated;
                     }
                     return prev;
                 });
+                resetRagStreamBuffer();
             }));
         }
 
         if (window.electronAPI.onRAGStreamError) {
-            cleanups.push(window.electronAPI.onRAGStreamError((data: { error: string }) => {
+            cleanups.push(window.electronAPI.onRAGStreamError((data: { requestId?: string; error: string }) => {
+                if (data.requestId && data.requestId !== activeRagRequestIdRef.current) {
+                    return;
+                }
+                activeRagRequestIdRef.current = null;
+                resetRagStreamBuffer();
                 setIsProcessing(false);
                 requestStartTimeRef.current = null;
                 setMessages(prev => {
@@ -1024,7 +1110,15 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
         }
 
         return () => cleanups.forEach(fn => fn());
-    }, [currentModel]); // Ensure tracking captures correct model
+    }, [
+        appendGeminiStreamToken,
+        appendRagStreamToken,
+        currentModel,
+        getBufferedGeminiContent,
+        getBufferedRagContent,
+        resetGeminiStreamBuffer,
+        resetRagStreamBuffer,
+    ]); // Ensure tracking captures correct model
 
 
     const handleAnswerNow = async () => {
@@ -1092,11 +1186,16 @@ Instructions:
 3. Be concise.`;
                 } else {
                     // JIT RAG pre-flight: try to use indexed meeting context first
-                    const ragResult = await window.electronAPI.ragQueryLive?.(question);
+                    const ragRequestId = createStreamRequestId('rag-live');
+                    resetRagStreamBuffer();
+                    activeRagRequestIdRef.current = ragRequestId;
+                    activeGeminiRequestIdRef.current = null;
+                    const ragResult = await window.electronAPI.ragQueryLive?.(question, ragRequestId);
                     if (ragResult?.success) {
                         // JIT RAG handled it — response streamed via rag:stream-chunk events
                         return;
                     }
+                    activeRagRequestIdRef.current = null;
 
                     // Voice Only (Smart Extract) — fallback
                     prompt = `You are a real-time interview assistant. The user just repeated or paraphrased a question from their interviewer.
@@ -1114,7 +1213,10 @@ Provide only the answer, nothing else.`;
 
                 // Call Streaming API: message = question, context = instructions
                 requestStartTimeRef.current = Date.now();
-                await window.electronAPI.streamGeminiChat(question, currentAttachments.length > 0 ? currentAttachments.map(s => s.path) : undefined, prompt, { skipSystemPrompt: true });
+                const geminiRequestId = createStreamRequestId('gemini-answer');
+                resetGeminiStreamBuffer();
+                activeGeminiRequestIdRef.current = geminiRequestId;
+                await window.electronAPI.streamGeminiChat(question, currentAttachments.length > 0 ? currentAttachments.map(s => s.path) : undefined, prompt, { skipSystemPrompt: true, requestId: geminiRequestId });
 
             } catch (err) {
                 // Initial invocation failing (e.g. IPC error before stream starts)
@@ -1197,19 +1299,28 @@ Provide only the answer, nothing else.`;
         try {
             // JIT RAG pre-flight: try to use indexed meeting context first
             if (currentAttachments.length === 0) {
-                const ragResult = await window.electronAPI.ragQueryLive?.(userText || '');
+                const ragRequestId = createStreamRequestId('rag-manual');
+                resetRagStreamBuffer();
+                activeRagRequestIdRef.current = ragRequestId;
+                activeGeminiRequestIdRef.current = null;
+                const ragResult = await window.electronAPI.ragQueryLive?.(userText || '', ragRequestId);
                 if (ragResult?.success) {
                     // JIT RAG handled it — response streamed via rag:stream-chunk events
                     return;
                 }
+                activeRagRequestIdRef.current = null;
             }
 
             // Pass imagePath if attached, AND conversation context
             requestStartTimeRef.current = Date.now();
+            const geminiRequestId = createStreamRequestId('gemini-manual');
+            resetGeminiStreamBuffer();
+            activeGeminiRequestIdRef.current = geminiRequestId;
             await window.electronAPI.streamGeminiChat(
                 userText || 'Analyze this screenshot',
                 currentAttachments.length > 0 ? currentAttachments.map(s => s.path) : undefined,
-                conversationContext // Pass context so "answer this" works
+                conversationContext, // Pass context so "answer this" works
+                { requestId: geminiRequestId }
             );
         } catch (err) {
             setIsProcessing(false);

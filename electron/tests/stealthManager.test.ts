@@ -470,6 +470,34 @@ describe('StealthManager', () => {
         assert.deepStrictEqual(cleared, [1, 2, 3]);
     });
 
+    it('keeps Windows verification and monitoring available when stealth is enabled but acceleration mode is off', () => {
+        setOptimizationFlagsForTesting({ accelerationEnabled: false, useStealthMode: true });
+        const intervals: Array<() => Promise<void> | void> = [];
+        const manager = new StealthManager(
+            { enabled: true },
+            {
+                platform: 'win32',
+                logger: silentLogger,
+                featureFlags: { enableCaptureDetectionWatchdog: true },
+                intervalScheduler: (fn: () => Promise<void> | void) => {
+                    intervals.push(fn);
+                    return intervals.length;
+                },
+                clearIntervalScheduler() {},
+                timeoutScheduler() {
+                    return 1;
+                },
+                processEnumerator: async () => '',
+            } as any,
+        );
+        const win = new FakeWindow();
+
+        manager.applyToWindow(win as any, true, { role: 'primary' });
+
+        assert.strictEqual(intervals.length, 3);
+        win.destroy();
+    });
+
     it('uses the Windows screen-share detector to hide and restore visible windows', async () => {
         const intervals: Array<() => Promise<void> | void> = [];
         const timeouts: Array<() => void> = [];

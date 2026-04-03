@@ -84,6 +84,7 @@ impl SystemAudioCapture {
         &mut self,
         callback: JsFunction,
         on_speech_ended: Option<JsFunction>,
+        on_error: Option<JsFunction>,
     ) -> napi::Result<()> {
         // Zero-copy: TSFN sends Buffer (Uint8Array) directly — no V8 Array allocation
         let tsfn: ThreadsafeFunction<Buffer, ErrorStrategy::Fatal> =
@@ -96,6 +97,11 @@ impl SystemAudioCapture {
                 None => None,
             };
 
+        let error_tsfn: Option<ThreadsafeFunction<String, ErrorStrategy::Fatal>> = match on_error {
+            Some(f) => Some(f.create_threadsafe_function(0, |ctx| Ok(vec![ctx.value]))?),
+            None => None,
+        };
+
         self.stop_signal.store(false, Ordering::SeqCst);
         self.initialized.store(false, Ordering::SeqCst);
         let stop_signal = self.stop_signal.clone();
@@ -106,6 +112,13 @@ impl SystemAudioCapture {
         // ★ ALL init + DSP runs in background thread — start() returns INSTANTLY
         // This prevents the 5-7 second main-thread block from SCK initialization.
         self.capture_thread = Some(thread::spawn(move || {
+            let report_error = |message: String,
+                                error_tsfn: &Option<ThreadsafeFunction<String, ErrorStrategy::Fatal>>| {
+                if let Some(tsfn) = error_tsfn {
+                    tsfn.call(message, ThreadsafeFunctionCallMode::NonBlocking);
+                }
+            };
+
             // 1. SCK Init (takes 5-7 seconds — runs OFF main thread)
             println!("[SystemAudioCapture] Background init starting...");
             let input = match speaker::SpeakerInput::new(device_id) {
@@ -116,11 +129,12 @@ impl SystemAudioCapture {
                     match speaker::SpeakerInput::new(None) {
                         Ok(i) => i,
                         Err(e2) => {
+                            sample_rate_shared.store(0, Ordering::Release);
                             initialized_shared.store(false, Ordering::Release);
-                            eprintln!(
-                                "[SystemAudioCapture] FATAL: All init attempts failed: {}",
-                                e2
-                            );
+                            let message =
+                                format!("[SystemAudioCapture] FATAL: All init attempts failed: {}", e2);
+                            eprintln!("{}", message);
+                            report_error(message, &error_tsfn);
                             return;
                         }
                     }
@@ -131,13 +145,28 @@ impl SystemAudioCapture {
             let mut consumer = match stream.take_consumer() {
                 Some(c) => c,
                 None => {
+                    sample_rate_shared.store(0, Ordering::Release);
                     initialized_shared.store(false, Ordering::Release);
-                    eprintln!("[SystemAudioCapture] FATAL: Failed to get consumer");
+                    let message = "[SystemAudioCapture] FATAL: Failed to get consumer".to_string();
+                    eprintln!("{}", message);
+                    report_error(message, &error_tsfn);
                     return;
                 }
             };
 
             let native_rate = stream.sample_rate();
+            if native_rate == 0 {
+                sample_rate_shared.store(0, Ordering::Release);
+                initialized_shared.store(false, Ordering::Release);
+                let message = stream.take_error().unwrap_or_else(|| {
+                    "[SystemAudioCapture] FATAL: Native loopback stream failed to initialize"
+                        .to_string()
+                });
+                eprintln!("{}", message);
+                report_error(message, &error_tsfn);
+                return;
+            }
+
             // Publish the real native rate so JS can read it via get_sample_rate()
             sample_rate_shared.store(native_rate, Ordering::Release);
             initialized_shared.store(true, Ordering::Release);
@@ -158,10 +187,31 @@ impl SystemAudioCapture {
             let mut raw_batch: Vec<f32> = Vec::with_capacity(4096);
             let mut last_emit_at = Instant::now();
             let silence = vec![0u8; chunk_size * 2];
+            let mut dropped_samples_total: u64 = 0;
+            let mut next_drop_log_threshold: u64 = 1024;
 
             loop {
                 if stop_signal.load(Ordering::Relaxed) {
                     break;
+                }
+
+                if let Some(message) = stream.take_error() {
+                    initialized_shared.store(false, Ordering::Release);
+                    eprintln!("{}", message);
+                    report_error(message, &error_tsfn);
+                    break;
+                }
+
+                let dropped_samples = stream.take_dropped_samples();
+                if dropped_samples > 0 {
+                    dropped_samples_total += dropped_samples;
+                    if dropped_samples_total >= next_drop_log_threshold {
+                        eprintln!(
+                            "[SystemAudioCapture] Dropped {} loopback samples so far (latest burst: {})",
+                            dropped_samples_total, dropped_samples
+                        );
+                        next_drop_log_threshold += 1024;
+                    }
                 }
 
                 // Drain ALL available samples from ring buffer (lock-free)
@@ -359,6 +409,7 @@ impl MicrophoneCapture {
 
         let native_rate = input_ref.sample_rate();
         self.sample_rate.store(native_rate, Ordering::Release);
+        let dropped_samples_counter = input_ref.dropped_samples_counter();
 
         let mut consumer = input_ref
             .take_consumer()
@@ -375,12 +426,26 @@ impl MicrophoneCapture {
             let chunk_size = (native_rate as usize / 1000) * 20;
             let mut frame_buffer: Vec<i16> = Vec::with_capacity(chunk_size * 4);
             let mut raw_batch: Vec<f32> = Vec::with_capacity(4096);
+            let mut dropped_samples_total: u64 = 0;
+            let mut next_drop_log_threshold: u64 = 1024;
 
             println!("[MicrophoneCapture] DSP thread started (VAD + suppression active, rate={}Hz, chunk={})", native_rate, chunk_size);
 
             loop {
                 if stop_signal.load(Ordering::Relaxed) {
                     break;
+                }
+
+                let dropped_samples = dropped_samples_counter.swap(0, Ordering::Relaxed);
+                if dropped_samples > 0 {
+                    dropped_samples_total += dropped_samples;
+                    if dropped_samples_total >= next_drop_log_threshold {
+                        eprintln!(
+                            "[MicrophoneCapture] Dropped {} microphone samples so far (latest burst: {})",
+                            dropped_samples_total, dropped_samples
+                        );
+                        next_drop_log_threshold += 1024;
+                    }
                 }
 
                 // 1. Drain ALL available samples from ring buffer (lock-free)
