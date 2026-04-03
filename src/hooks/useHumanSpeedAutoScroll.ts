@@ -18,8 +18,9 @@ type Options = {
 const HUMAN_WORDS_PER_MINUTE = 210;
 const MIN_SCROLL_DURATION_MS = 5000;
 const MAX_SCROLL_DURATION_MS = 30000;
-const MANUAL_PAUSE_MS = 20000;
-const RESUME_THRESHOLD_PX = 48;
+const MANUAL_PAUSE_MS = 2000;
+const RESUME_THRESHOLD_PX = 64;
+const PROGRAMMATIC_SCROLL_GRACE_MS = 120;
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
@@ -58,6 +59,7 @@ export function useHumanSpeedAutoScroll({
   const activeMessageIdRef = useRef<string | null>(null);
   const manualPauseUntilRef = useRef<number>(0);
   const followLatestRef = useRef<boolean>(true);
+  const programmaticScrollUntilRef = useRef<number>(0);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -65,7 +67,17 @@ export function useHumanSpeedAutoScroll({
       return;
     }
 
-    const pauseAutoScroll = () => {
+    const handleScroll = () => {
+      if (Date.now() < programmaticScrollUntilRef.current) {
+        return;
+      }
+
+      if (isNearBottom(container)) {
+        manualPauseUntilRef.current = 0;
+        followLatestRef.current = true;
+        return;
+      }
+
       manualPauseUntilRef.current = Date.now() + MANUAL_PAUSE_MS;
       followLatestRef.current = false;
       if (animationFrameRef.current !== null) {
@@ -75,23 +87,10 @@ export function useHumanSpeedAutoScroll({
       lastTimestampRef.current = null;
     };
 
-    const maybeResumeAutoScroll = () => {
-      if (isNearBottom(container)) {
-        manualPauseUntilRef.current = 0;
-        followLatestRef.current = true;
-      }
-    };
-
-    container.addEventListener('scroll', maybeResumeAutoScroll, { passive: true });
-    container.addEventListener('wheel', pauseAutoScroll, { passive: true });
-    container.addEventListener('touchstart', pauseAutoScroll, { passive: true });
-    container.addEventListener('pointerdown', pauseAutoScroll);
+    container.addEventListener('scroll', handleScroll, { passive: true });
 
     return () => {
-      container.removeEventListener('scroll', maybeResumeAutoScroll);
-      container.removeEventListener('wheel', pauseAutoScroll);
-      container.removeEventListener('touchstart', pauseAutoScroll);
-      container.removeEventListener('pointerdown', pauseAutoScroll);
+      container.removeEventListener('scroll', handleScroll);
     };
   }, [containerRef]);
 
@@ -101,6 +100,7 @@ export function useHumanSpeedAutoScroll({
       activeMessageIdRef.current = null;
       manualPauseUntilRef.current = 0;
       followLatestRef.current = true;
+      programmaticScrollUntilRef.current = 0;
       return;
     }
 
@@ -118,19 +118,27 @@ export function useHumanSpeedAutoScroll({
       lastTimestampRef.current = null;
 
       const shouldFollowNewMessage =
-        !isUserPaused && (previousMessageId === null || followLatestRef.current || userIsNearBottom);
+        previousMessageId === null || userIsNearBottom || (!isUserPaused && followLatestRef.current);
 
       if (shouldFollowNewMessage) {
         const targetElement = getTargetElement?.(container, latestMessage.id);
         const targetOffset = getElementOffsetWithinContainer(container, targetElement || null);
-        container.scrollTop = targetOffset;
+        programmaticScrollUntilRef.current = Date.now() + PROGRAMMATIC_SCROLL_GRACE_MS;
+        container.scrollTo({ top: targetOffset, behavior: 'smooth' });
+        manualPauseUntilRef.current = 0;
         followLatestRef.current = true;
       }
     }
 
-    if (isUserPaused || !followLatestRef.current) {
+    const shouldPauseAutoFollow = (isUserPaused || !followLatestRef.current) && !userIsNearBottom;
+    if (shouldPauseAutoFollow) {
       activeMessageIdRef.current = latestMessage.id;
       return;
+    }
+
+    if (userIsNearBottom) {
+      manualPauseUntilRef.current = 0;
+      followLatestRef.current = true;
     }
 
     const durationMs = estimateDurationMs(latestMessage.content);
@@ -166,6 +174,7 @@ export function useHumanSpeedAutoScroll({
         return;
       }
 
+      programmaticScrollUntilRef.current = Date.now() + PROGRAMMATIC_SCROLL_GRACE_MS;
       container.scrollTop = Math.min(maxScrollTop, container.scrollTop + speedPxPerMs * dt);
 
       if (container.scrollTop < maxScrollTop - 1 || latestMessage.isStreaming) {

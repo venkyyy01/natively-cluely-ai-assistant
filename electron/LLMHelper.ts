@@ -125,9 +125,11 @@ const IN_FLIGHT_RESPONSE_CACHE_MAX = 10
 const IMAGE_ANALYSIS_PROMPT = `Analyze concisely. Be direct. No markdown formatting. Return plain text only.`
 const INDIAN_ENGLISH_STYLE_INSTRUCTION = `CRITICAL STYLE: Write in natural Indian English.
 - Keep the flow conversational and human.
+- Use Indian English phrasing and rhythm naturally while staying professional.
+- Slight filler words are okay when they sound natural (for example: "yeah so", "right", "honestly"), but do not overdo.
+- Avoid over-westernized slang/idioms and avoid robotic corporate wording.
 - Be concrete, clear, concise, and complete.
-- No fluff, no jargon, no text walls.
-- Sound natural, practical, and confident.`
+- No text walls or unnecessary fluff.`
 type Provider = 'gemini' | 'groq' | 'openai' | 'claude';
 
 export interface ModelFallbackEvent {
