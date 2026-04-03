@@ -1,17 +1,45 @@
 import { DatabaseManager, Meeting } from "./db/DatabaseManager";
 import { SessionTracker } from "./SessionTracker";
 import { BrowserWindow } from "electron";
+import { EventEmitter } from "events";
+import * as fs from "fs/promises";
+import * as path from "path";
+import * as os from "os";
 
 const CHECKPOINT_INTERVAL_MS = 60000; // 60 seconds
+const MAX_RETRY_ATTEMPTS = 3;
+const RETRY_DELAY_MS = 2000;
 
-export class MeetingCheckpointer {
+// Types for better error handling
+export interface CheckpointResult {
+  success: boolean;
+  retryCount: number;
+  error?: string;
+  usedFallback?: boolean;
+  fallbackPath?: string;
+}
+
+export interface CheckpointError {
+  meetingId: string;
+  error: Error;
+  retryCount: number;
+  usedFallback: boolean;
+  fallbackPath?: string;
+}
+
+export class MeetingCheckpointer extends EventEmitter {
     private interval: NodeJS.Timeout | null = null;
     private meetingId: string | null = null;
+    private tempDir: string;
 
     constructor(
         private readonly dbManager: DatabaseManager,
         private readonly getSessionTracker: () => SessionTracker
-    ) {}
+    ) {
+        super();
+        this.tempDir = path.join(os.tmpdir(), 'meeting-checkpoints');
+        this.ensureTempDir();
+    }
 
     public start(meetingId: string): void {
         this.stop();
@@ -42,6 +70,15 @@ export class MeetingCheckpointer {
 
     public destroy(): void {
         this.stop();
+        this.removeAllListeners();
+    }
+
+    private async ensureTempDir(): Promise<void> {
+        try {
+            await fs.mkdir(this.tempDir, { recursive: true });
+        } catch (error) {
+            console.error('[MeetingCheckpointer] Failed to create temp directory:', error);
+        }
     }
 
     private async checkpoint(): Promise<void> {
@@ -53,15 +90,88 @@ export class MeetingCheckpointer {
             return; // Nothing to save yet
         }
 
-        const metadata = snapshot.meetingMetadata;
+        const result = await this.saveCheckpointWithRetry(snapshot);
+        
+        // Emit events based on result
+        if (result.success) {
+            this.emit('checkpoint-saved', { 
+                meetingId: this.meetingId, 
+                usedFallback: result.usedFallback,
+                fallbackPath: result.fallbackPath
+            });
+            
+            // Notify frontend
+            this.notifyFrontend('meeting-checkpointed', this.meetingId);
+        } else {
+            this.emit('checkpoint-failed', {
+                meetingId: this.meetingId,
+                error: new Error(result.error || 'Unknown error'),
+                retryCount: result.retryCount,
+                usedFallback: result.usedFallback,
+                fallbackPath: result.fallbackPath
+            } as CheckpointError);
+        }
+    }
 
+    private async saveCheckpointWithRetry(snapshot: any): Promise<CheckpointResult> {
+        const meetingData: Meeting = this.createMeetingData(snapshot);
+        
+        // Try database save with retries
+        for (let attempt = 1; attempt <= MAX_RETRY_ATTEMPTS; attempt++) {
+            try {
+                await this.dbManager.createOrUpdateMeetingProcessingRecord(
+                    meetingData, 
+                    snapshot.startTime, 
+                    snapshot.durationMs
+                );
+                
+                return {
+                    success: true,
+                    retryCount: attempt - 1,
+                    usedFallback: false
+                };
+            } catch (error) {
+                console.error(`[MeetingCheckpointer] Database save attempt ${attempt} failed:`, error);
+                
+                if (attempt < MAX_RETRY_ATTEMPTS) {
+                    await this.delay(RETRY_DELAY_MS * attempt); // Exponential backoff
+                }
+            }
+        }
+
+        // All database attempts failed, try fallback file save
+        console.warn('[MeetingCheckpointer] All database attempts failed, using file fallback');
+        
+        try {
+            const fallbackPath = await this.saveFallbackFile(meetingData, snapshot);
+            
+            return {
+                success: true,
+                retryCount: MAX_RETRY_ATTEMPTS,
+                usedFallback: true,
+                fallbackPath
+            };
+        } catch (fallbackError) {
+            console.error('[MeetingCheckpointer] Fallback file save also failed:', fallbackError);
+            
+            return {
+                success: false,
+                retryCount: MAX_RETRY_ATTEMPTS,
+                usedFallback: true,
+                error: `Database and fallback both failed: ${fallbackError instanceof Error ? fallbackError.message : String(fallbackError)}`
+            };
+        }
+    }
+
+    private createMeetingData(snapshot: any): Meeting {
+        const metadata = snapshot.meetingMetadata;
         const durationSec = Math.floor(snapshot.durationMs / 1000);
         const mins = Math.floor(durationSec / 60);
         const secs = durationSec % 60;
         const durationStr = `${mins}:${secs.toString().padStart(2, '0')}`;
         
-        const meetingData: Meeting = {
-            id: this.meetingId,
+        return {
+            id: this.meetingId!,
             title: metadata?.title || "Interim Recording...",
             date: new Date(snapshot.startTime).toISOString(),
             duration: durationStr,
@@ -73,20 +183,77 @@ export class MeetingCheckpointer {
             source: metadata?.source || 'manual',
             isProcessed: false
         };
+    }
 
-        console.log(`[MeetingCheckpointer] Writing checkpoint for meeting ${this.meetingId}...`);
+    private async saveFallbackFile(meetingData: Meeting, snapshot: any): Promise<string> {
+        const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+        const fileName = `meeting-${this.meetingId}-${timestamp}.json`;
+        const filePath = path.join(this.tempDir, fileName);
         
+        const fallbackData = {
+            meetingData,
+            snapshot,
+            timestamp: Date.now(),
+            version: '1.0'
+        };
+        
+        await fs.writeFile(filePath, JSON.stringify(fallbackData, null, 2), 'utf-8');
+        console.log(`[MeetingCheckpointer] Saved fallback checkpoint to: ${filePath}`);
+        
+        return filePath;
+    }
+
+    private notifyFrontend(event: string, data: any): void {
         try {
-            this.dbManager.createOrUpdateMeetingProcessingRecord(meetingData, snapshot.startTime, snapshot.durationMs);
-            // Optionally notify frontend that a checkpoint happened (if they want to show an indicator)
             const wins = typeof BrowserWindow?.getAllWindows === 'function' ? BrowserWindow.getAllWindows() : [];
             wins.forEach((w) => {
                 if (!w.isDestroyed()) {
-                    w.webContents.send('meeting-checkpointed', this.meetingId);
+                    w.webContents.send(event, data);
                 }
             });
-        } catch (e) {
-            console.error('[MeetingCheckpointer] Failed to save checkpoint to database', e);
+        } catch (error) {
+            console.error('[MeetingCheckpointer] Failed to notify frontend:', error);
         }
+    }
+
+    private delay(ms: number): Promise<void> {
+        return new Promise(resolve => setTimeout(resolve, ms));
+    }
+
+    // Public method to recover from fallback files
+    public async recoverFromFallback(): Promise<string[]> {
+        const recoveredFiles: string[] = [];
+        
+        try {
+            const files = await fs.readdir(this.tempDir);
+            const checkpointFiles = files.filter(f => f.startsWith('meeting-') && f.endsWith('.json'));
+            
+            for (const file of checkpointFiles) {
+                try {
+                    const filePath = path.join(this.tempDir, file);
+                    const content = await fs.readFile(filePath, 'utf-8');
+                    const fallbackData = JSON.parse(content);
+                    
+                    // Try to save to database
+                    await this.dbManager.createOrUpdateMeetingProcessingRecord(
+                        fallbackData.meetingData,
+                        fallbackData.snapshot.startTime,
+                        fallbackData.snapshot.durationMs
+                    );
+                    
+                    // Delete successful recovery file
+                    await fs.unlink(filePath);
+                    recoveredFiles.push(file);
+                    
+                    console.log(`[MeetingCheckpointer] Recovered fallback file: ${file}`);
+                } catch (error) {
+                    console.error(`[MeetingCheckpointer] Failed to recover ${file}:`, error);
+                }
+            }
+        } catch (error) {
+            console.error('[MeetingCheckpointer] Failed to read fallback directory:', error);
+        }
+        
+        return recoveredFiles;
     }
 }

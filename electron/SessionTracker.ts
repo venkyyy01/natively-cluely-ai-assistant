@@ -56,6 +56,7 @@ class RingBuffer<T> {
 }
 
 import { RecapLLM } from './llm';
+import { Result, LLMError } from './types/Result';
 import {
   ConsciousModeStructuredResponse,
   ReasoningThread,
@@ -820,18 +821,23 @@ isConsciousModeEnabled(): boolean {
             // Fire-and-forget LLM summarization (non-blocking)
             if (this.recapLLM) {
                 try {
-                    const epochSummary = await this.recapLLM.generate(
+                    const epochSummaryResult = await this.recapLLM.generate(
                         `Summarize this conversation segment into 3-5 concise bullet points preserving key topics, decisions, and questions:\n\n${summaryInput}`
                     );
-                    if (epochSummary && epochSummary.trim().length > 0) {
-                        this.transcriptEpochSummaries.push(epochSummary.trim());
+                    if (epochSummaryResult.success && epochSummaryResult.data && epochSummaryResult.data.trim().length > 0) {
+                        this.transcriptEpochSummaries.push(epochSummaryResult.data.trim());
                         console.log(`[SessionTracker] Epoch summary created (${this.transcriptEpochSummaries.length} total)`);
+                    } else {
+                        // If LLM failed or returned empty result, use fallback
+                        const fallback = `[Earlier discussion: ${oldEntries.length} segments, topics: ${oldEntries.slice(0, 3).map(s => s.text.substring(0, 40)).join('; ')}...]`;
+                        this.transcriptEpochSummaries.push(fallback);
+                        console.warn('[SessionTracker] Epoch summarization failed or empty, using fallback marker:', epochSummaryResult.success ? 'empty result' : epochSummaryResult.error.message);
                     }
                 } catch (e) {
                     // If summarization fails, store a simple marker
                     const fallback = `[Earlier discussion: ${oldEntries.length} segments, topics: ${oldEntries.slice(0, 3).map(s => s.text.substring(0, 40)).join('; ')}...]`;
                     this.transcriptEpochSummaries.push(fallback);
-                    console.warn('[SessionTracker] Epoch summarization failed, using fallback marker');
+                    console.warn('[SessionTracker] Epoch summarization threw exception, using fallback marker');
                 }
             }
 

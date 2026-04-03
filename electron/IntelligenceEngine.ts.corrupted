@@ -5,12 +5,11 @@
 import { EventEmitter } from 'events';
 import { LLMHelper } from './LLMHelper';
 import { SessionTracker, TranscriptSegment, SuggestionTrigger, ContextItem } from './SessionTracker';
-import { Result, LLMError } from './types/Result';
+import { Result } from './types/Result';
 import {
   classifyConsciousModeQuestion,
   formatConsciousModeResponse,
   isValidConsciousModeResponse,
-  ConsciousModeStructuredResponse,
 } from './ConsciousMode';
 import {
   AnswerLLM, AssistLLM, FollowUpLLM, RecapLLM,
@@ -608,11 +607,10 @@ export class IntelligenceEngine extends EventEmitter {
                     return runFastStandardAnswer();
                 }
 
-                const structuredResponse = structuredResponseResult.data;
                 this.setMode('reasoning_first');
 
-                const fullAnswer = formatConsciousModeResponse(structuredResponse);
-                this.session.recordConsciousResponse(resolvedQuestion, structuredResponse, 'continue');
+                const fullAnswer = formatConsciousModeResponse(structuredResponseResult.data);
+                this.session.recordConsciousResponse(resolvedQuestion, structuredResponseResult.data, 'continue');
                 this.emit('suggested_answer_token', fullAnswer, question || 'What to Answer', confidence);
                 this.latencyTracker.markFirstVisibleAnswer(requestId);
                 this.session.addAssistantMessage(fullAnswer);
@@ -696,43 +694,40 @@ export class IntelligenceEngine extends EventEmitter {
             }
 
             if (consciousRoute.qualifies) {
-                let structuredResponse: ConsciousModeStructuredResponse | null = null;
-                
+                let structuredResponseResult: Result<ConsciousModeStructuredResponse, LLMError>;
                 if (this.whatToAnswerLLM) {
                     this.latencyTracker.markProviderRequestStarted(requestId);
-                    // WhatToAnswerLLM hasn't been updated with Result pattern yet
-                    try {
-                        structuredResponse = await this.whatToAnswerLLM.generateReasoningFirst(
-                            preparedTranscript,
-                            resolvedQuestion,
-                            temporalContext,
-                            intentResult,
-                            imagePaths
-                        );
-                    } catch (error) {
-                        console.warn('[INTELLIGENCE] WhatToAnswerLLM failed:', error);
-                        structuredResponse = null;
-                    }
+                    structuredResponseResult = await this.whatToAnswerLLM.generateReasoningFirst(
+                        preparedTranscript,
+                        resolvedQuestion,
+                        temporalContext,
+                        intentResult,
+                        imagePaths
+                    );
                 } else if (this.answerLLM) {
                     this.latencyTracker.markProviderRequestStarted(requestId);
-                    // AnswerLLM has been updated with Result pattern
-                    const result = await this.answerLLM.generateReasoningFirst(
+                    structuredResponseResult = await this.answerLLM.generateReasoningFirst(
                         resolvedQuestion,
                         this.session.getFormattedContext(180)
                     );
-                    if (result.success) {
-                        structuredResponse = result.data;
-                    } else {
-                        console.warn('[INTELLIGENCE] AnswerLLM failed:', result.error);
-                        structuredResponse = null;
-                    }
                 }
 
-                if (structuredResponse && isValidConsciousModeResponse(structuredResponse)) {
-                    console.log(`[IntelligenceEngine] Temporal RAG: ${temporalContext.previousResponses.length} responses, tone: ${temporalContext.toneSignals[0]?.type || 'neutral'}, intent: conscious_reasoning${imagePaths?.length ? `, with ${imagePaths.length} image(s)` : ''}`);
-                    this.setMode('reasoning_first');
+                if (!structuredResponseResult!.success || !isValidConsciousModeResponse(structuredResponseResult.data)) {
+                    if (!structuredResponseResult!.success) {
+                        console.warn('[INTELLIGENCE] Conscious mode LLM failed:', structuredResponseResult!.error);
+                    }
+                    effectiveRoute = 'fast_standard_answer';
+                    this.latencyTracker.markFallbackOccurred(requestId);
+                    this.latencyTracker.markDegradedToRoute(requestId, effectiveRoute);
+                    return runFastStandardAnswer();
+                }
 
-                    const fullAnswer = formatConsciousModeResponse(structuredResponse);
+                const structuredResponse = structuredResponseResult.data;
+                
+                console.log(`[IntelligenceEngine] Temporal RAG: ${temporalContext.previousResponses.length} responses, tone: ${temporalContext.toneSignals[0]?.type || 'neutral'}, intent: conscious_reasoning${imagePaths?.length ? `, with ${imagePaths.length} image(s)` : ''}`);
+                this.setMode('reasoning_first');
+
+                const fullAnswer = formatConsciousModeResponse(structuredResponse);
 
                     if (consciousRoute.threadAction !== 'ignore' && resolvedQuestion) {
                         this.session.recordConsciousResponse(
@@ -1064,14 +1059,6 @@ export class IntelligenceEngine extends EventEmitter {
                 const answer = answerResult.data;
                 this.session.addAssistantMessage(answer);
                 this.emit('manual_answer_result', answer, question);
-
-                this.session.pushUsage({
-                    type: 'chat',
-                    timestamp: Date.now(),
-                    question: question,
-                    answer: answer
-                });
-                
                 this.setMode('idle');
                 return answer;
             } else {

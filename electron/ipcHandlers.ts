@@ -1111,7 +1111,9 @@ safeHandleValidated("delete-meeting", (args) => [parseIpcInput(ipcSchemas.provid
       CredentialsManager.getInstance().setFastResponseConfig(config as any);
 
       BrowserWindow.getAllWindows().forEach(win => {
-        win.webContents.send('fast-response-config-changed', llmHelper.getFastResponseConfig());
+        if (!win.isDestroyed()) {
+          win.webContents.send('fast-response-config-changed', llmHelper.getFastResponseConfig());
+        }
       });
 
       return { success: true };

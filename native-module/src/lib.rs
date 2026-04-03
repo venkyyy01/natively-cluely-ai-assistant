@@ -79,11 +79,12 @@ impl SystemAudioCapture {
         on_speech_ended: Option<JsFunction>,
     ) -> napi::Result<()> {
         // Zero-copy: TSFN sends Buffer (Uint8Array) directly — no V8 Array allocation
-        let tsfn: ThreadsafeFunction<Buffer, ErrorStrategy::Fatal> =
+        // Use CalleeHandled instead of Fatal to prevent process crashes
+        let tsfn: ThreadsafeFunction<Buffer, ErrorStrategy::CalleeHandled> =
             callback.create_threadsafe_function(0, |ctx| Ok(vec![ctx.value]))?;
 
         // Optional speech-ended callback
-        let speech_ended_tsfn: Option<ThreadsafeFunction<bool, ErrorStrategy::Fatal>> =
+        let speech_ended_tsfn: Option<ThreadsafeFunction<bool, ErrorStrategy::CalleeHandled>> =
             match on_speech_ended {
                 Some(f) => Some(f.create_threadsafe_function(0, |ctx| Ok(vec![ctx.value]))?),
                 None => None,
@@ -301,11 +302,12 @@ impl MicrophoneCapture {
         on_speech_ended: Option<JsFunction>,
     ) -> napi::Result<()> {
         // Zero-copy: TSFN sends Buffer (Uint8Array) directly
-        let tsfn: ThreadsafeFunction<Buffer, ErrorStrategy::Fatal> =
+        // Use CalleeHandled instead of Fatal to prevent process crashes
+        let tsfn: ThreadsafeFunction<Buffer, ErrorStrategy::CalleeHandled> =
             callback.create_threadsafe_function(0, |ctx| Ok(vec![ctx.value]))?;
 
         // Optional speech-ended callback
-        let speech_ended_tsfn: Option<ThreadsafeFunction<bool, ErrorStrategy::Fatal>> =
+        let speech_ended_tsfn: Option<ThreadsafeFunction<bool, ErrorStrategy::CalleeHandled>> =
             match on_speech_ended {
                 Some(f) => Some(f.create_threadsafe_function(0, |ctx| Ok(vec![ctx.value]))?),
                 None => None,

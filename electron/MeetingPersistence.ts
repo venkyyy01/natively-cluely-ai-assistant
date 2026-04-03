@@ -33,7 +33,6 @@ export class MeetingPersistence {
     if (Number.isFinite(startTimeMs) && startTimeMs > 0) {
       return new Date(startTimeMs).toISOString();
     }
-  }
 
     if (fallbackDate) {
       const parsedFallback = new Date(fallbackDate).getTime();
@@ -120,7 +119,11 @@ export class MeetingPersistence {
             DatabaseManager.getInstance().createOrUpdateMeetingProcessingRecord(placeholder, snapshot.startTime, snapshot.durationMs);
             // Notify Frontend
             const wins = require('electron').BrowserWindow.getAllWindows();
-            wins.forEach((w: any) => w.webContents.send('meetings-updated'));
+            wins.forEach((w: any) => {
+                if (!w.isDestroyed()) {
+                    w.webContents.send('meetings-updated');
+                }
+            });
         } catch (e) {
             console.error("Failed to save placeholder", e);
         }
@@ -221,13 +224,21 @@ export class MeetingPersistence {
 
             // Notify Frontend to refresh list
             const wins = require('electron').BrowserWindow.getAllWindows();
-            wins.forEach((w: any) => w.webContents.send('meetings-updated'));
+            wins.forEach((w: any) => {
+                if (!w.isDestroyed()) {
+                    w.webContents.send('meetings-updated');
+                }
+            });
 
         } catch (error) {
             console.error('[MeetingPersistence] Failed to save meeting:', error);
             DatabaseManager.getInstance().markMeetingProcessingFailed(meetingId, error);
             const wins = require('electron').BrowserWindow.getAllWindows();
-            wins.forEach((w: any) => w.webContents.send('meetings-updated'));
+            wins.forEach((w: any) => {
+                if (!w.isDestroyed()) {
+                    w.webContents.send('meetings-updated');
+                }
+            });
         }
     }
 

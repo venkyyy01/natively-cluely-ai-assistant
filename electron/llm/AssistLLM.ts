@@ -5,6 +5,7 @@
 
 import { LLMHelper } from "../LLMHelper";
 import { UNIVERSAL_ASSIST_PROMPT } from "./prompts";
+import { Result, Ok, Err, LLMError, wrapAsync } from "../types/Result";
 
 export class AssistLLM {
     private llmHelper: LLMHelper;
@@ -15,28 +16,55 @@ export class AssistLLM {
 
     /**
      * Generate passive observational insight
+     * 
+     * HIGH RELIABILITY FIX:
+     * Returns Result<string, LLMError> instead of swallowing errors with empty strings
+     * 
      * @param context - Current conversation context
-     * @returns Insight (no post-clamp; prompt enforces brevity)
+     * @returns Result containing insight (no post-clamp; prompt enforces brevity)
      */
-    async generate(context: string): Promise<string> {
-        try {
-            if (!context.trim()) {
-                return "";
-            }
+    async generate(context: string): Promise<Result<string, LLMError>> {
+        if (!context.trim()) {
+            return Ok(""); // Empty context is valid, just return empty result
+        }
 
-            // Centralized LLM logic
-            // providing a specific instruction as message, using UNIVERSAL_ASSIST_PROMPT as system prompt
-            const instruction = "Briefly summarize what is happening right now in 1-2 sentences. Do not give advice, just observation.";
+        return await wrapAsync(
+            async () => {
+                // Centralized LLM logic
+                // providing a specific instruction as message, using UNIVERSAL_ASSIST_PROMPT as system prompt
+                const instruction = "Briefly summarize what is happening right now in 1-2 sentences. Do not give advice, just observation.";
 
-            return await this.llmHelper.chat(
-                instruction,
-                undefined, // no image
-                context,
-                UNIVERSAL_ASSIST_PROMPT
-            );
+                const result = await this.llmHelper.chat(
+                    instruction,
+                    undefined, // no image
+                    context,
+                    UNIVERSAL_ASSIST_PROMPT
+                );
+                
+                // Additional validation to ensure we got meaningful content
+                if (result.trim().length === 0) {
+                    throw new Error("LLM returned empty assist response");
+                }
+                
+                return result;
+            },
+            `Failed to generate assist insight for context: "${context.substring(0, 100)}${context.length > 100 ? '...' : ''}"`,
+            { contextLength: context.length }
+        );
+    }
 
-        } catch (error) {
-            console.error("[AssistLLM] Generation failed:", error);
+    // BACKWARD COMPATIBILITY METHODS:
+    
+    /**
+     * @deprecated Use generate() with Result handling instead
+     * Generate assist insight with fallback to empty string (for backward compatibility)
+     */
+    async generateLegacy(context: string): Promise<string> {
+        const result = await this.generate(context);
+        if (result.success) {
+            return result.data;
+        } else {
+            console.error("[AssistLLM] Generation failed (legacy mode):", result.error);
             return "";
         }
     }
