@@ -29,40 +29,68 @@ export const UserMessage: React.FC<ChatMessageProps> = ({ content, timestamp, is
     <motion.article
         initial={isNew ? { opacity: 0, y: 12 } : false}
         animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.2, ease: [0.22, 1, 0.36, 1] }}
-        className="mb-6 w-full"
+        transition={{ duration: 0.3, ease: [0.22, 1, 0.36, 1] }}
+        className="mb-8 w-full"
     >
-        {/* Label + Timestamp */}
-        <div className="flex items-center gap-2 mb-2.5 px-1">
-            <span className="text-xs font-bold uppercase tracking-wider text-slate-600 dark:text-slate-400">
-                YOU
-            </span>
+        {/* Enhanced Label + Timestamp */}
+        <div className="flex items-center gap-2 mb-3 px-1">
+            <div className="flex items-center gap-2">
+                <div className="w-2 h-2 rounded-full bg-gradient-to-r from-emerald-500 to-teal-500" />
+                <span className="text-xs font-bold uppercase tracking-wider bg-gradient-to-r from-emerald-600 to-teal-600 dark:from-emerald-400 dark:to-teal-400 bg-clip-text text-transparent">
+                    You
+                </span>
+            </div>
             {timestamp && (
-                <span className="text-xs font-medium text-slate-500 dark:text-slate-500">
+                <span className="text-xs font-medium text-text-tertiary">
                     {timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                 </span>
             )}
         </div>
 
-        {/* Message Card with Left Accent - Softer, More Opaque Background */}
-        <div className="
-            relative
-            pl-5
-            pr-6
-            py-4
-            rounded-xl
-            bg-slate-100
-            dark:bg-[#1e1e22]
-            border-l-[3px]
-            border-blue-500/80
-            dark:border-blue-400/60
-            shadow-sm
-            dark:shadow-none
-        ">
-            <p className="text-[15px] font-medium leading-[1.75] whitespace-pre-wrap text-slate-900 dark:text-slate-100 antialiased">
+        {/* Enhanced Message Card with Emerald Accent */}
+        <motion.div 
+            className="
+                relative
+                pl-6
+                pr-6
+                py-5
+                rounded-2xl
+                bg-bg-card
+                border-l-[3px]
+                border-emerald-500/80
+                dark:border-emerald-400/60
+                shadow-lg
+                dark:shadow-2xl
+                dark:shadow-black/20
+                border-t
+                border-r
+                border-b
+                border-border-subtle
+            "
+            style={{
+                background: `
+                    linear-gradient(145deg, 
+                        var(--bg-card) 0%, 
+                        color-mix(in srgb, var(--bg-card) 95%, #10b981 5%) 100%
+                    )
+                `,
+            }}
+            initial={isNew ? { scale: 0.98, opacity: 0 } : false}
+            animate={{ scale: 1, opacity: 1 }}
+            transition={{ duration: 0.3, ease: [0.34, 1.56, 0.64, 1] }}
+        >
+            {/* Glossy top border highlight */}
+            <div 
+                className="absolute top-0 left-0 right-0 h-px"
+                style={{
+                    background: 'linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.1) 50%, transparent 100%)'
+                }}
+            />
+            
+            <p className="text-[15px] font-normal leading-[1.85] whitespace-pre-wrap text-text-primary antialiased">
                 {content}
             </p>
-        </div>
+        </motion.div>
     </motion.article>
 );
 
@@ -92,202 +120,247 @@ export const AssistantMessage: React.FC<ChatMessageProps> = ({
         <motion.article
             initial={isNew ? { opacity: 0, y: 12 } : false}
             animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.2, ease: [0.22, 1, 0.36, 1] }}
-            className="mb-6 w-full"
+            transition={{ duration: 0.3, ease: [0.22, 1, 0.36, 1] }}
+            className="mb-8 w-full"
         >
-            {/* Label + Timestamp */}
-            <div className="flex items-center gap-2 mb-2.5 px-1">
-                <span className="text-xs font-bold uppercase tracking-wider text-slate-600 dark:text-slate-400">
-                    AI
-                </span>
-                {timestamp && (
-                    <span className="text-xs font-medium text-slate-500 dark:text-slate-500">
-                        {timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                    </span>
+            {/* Enhanced Label + Timestamp with Glass Effect */}
+            <div className="flex items-center justify-between mb-3 px-1">
+                <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2">
+                        <div className="w-2 h-2 rounded-full bg-gradient-to-r from-blue-500 to-purple-500 animate-pulse" />
+                        <span className="text-xs font-bold uppercase tracking-wider bg-gradient-to-r from-blue-600 to-purple-600 dark:from-blue-400 dark:to-purple-400 bg-clip-text text-transparent">
+                            Assistant
+                        </span>
+                    </div>
+                    {timestamp && (
+                        <span className="text-xs font-medium text-text-tertiary">
+                            {timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                        </span>
+                    )}
+                </div>
+                
+                {/* Copy Button - Moved to header for better UX */}
+                {!isStreaming && content && (
+                    <motion.button
+                        whileHover={{ scale: 1.02 }}
+                        whileTap={{ scale: 0.98 }}
+                        onClick={handleCopy}
+                        className="
+                            flex 
+                            items-center 
+                            gap-1.5
+                            px-3
+                            py-1.5
+                            rounded-lg
+                            text-xs
+                            font-semibold
+                            text-text-secondary
+                            hover:text-text-primary
+                            bg-bg-item-surface
+                            hover:bg-bg-item-active
+                            border
+                            border-border-subtle
+                            hover:border-border-muted
+                            transition-all
+                            duration-200
+                            interaction-base
+                        "
+                    >
+                        {copied ? (
+                            <>
+                                <Check size={13} className="text-emerald-500 dark:text-emerald-400" />
+                                <span>Copied</span>
+                            </>
+                        ) : (
+                            <>
+                                <Copy size={13} />
+                                <span>Copy</span>
+                            </>
+                        )}
+                    </motion.button>
                 )}
             </div>
 
-            {/* Message Content - Subtle Background for Better Readability */}
-            <div className="
-                px-5
-                py-4
-                rounded-xl
-                bg-slate-50/50
-                dark:bg-[#18181b]/40
-                border
-                border-slate-200/50
-                dark:border-white/[0.06]
-            ">
-                <div className="
-                    prose 
-                    prose-slate 
-                    dark:prose-invert 
-                    max-w-none
-                    prose-p:text-[15px]
-                    prose-p:font-normal
-                    prose-p:leading-[1.8]
-                    prose-p:mb-4
-                    prose-p:last:mb-0
-                    prose-p:text-slate-900
-                    dark:prose-p:text-slate-50
-                    prose-p:antialiased
-                    prose-headings:mb-3
-                    prose-headings:mt-6
-                    prose-headings:first:mt-0
-                    prose-headings:font-bold
-                    prose-headings:text-slate-900
-                    dark:prose-headings:text-slate-50
-                    prose-code:text-sm
-                    prose-code:font-semibold
-                    prose-li:my-1
-                ">
-                    <ReactMarkdown
-                        remarkPlugins={[remarkGfm, remarkMath]}
-                        rehypePlugins={[rehypeKatex]}
-                        components={{
-                            p: ({ node, ...props }: any) => (
-                                <p className="mb-4 last:mb-0 whitespace-pre-wrap text-[15px] font-normal leading-[1.8] text-slate-900 dark:text-slate-50 antialiased" {...props} />
-                            ),
-                            strong: ({ node, ...props }: any) => (
-                                <strong className="font-bold text-slate-950 dark:text-white" {...props} />
-                            ),
-                            em: ({ node, ...props }: any) => (
-                                <em className="italic font-medium text-slate-800 dark:text-slate-200" {...props} />
-                            ),
-                            ul: ({ node, ...props }: any) => (
-                                <ul className="list-disc ml-5 mb-4 space-y-2 text-slate-900 dark:text-slate-50" {...props} />
-                            ),
-                            ol: ({ node, ...props }: any) => (
-                                <ol className="list-decimal ml-5 mb-4 space-y-2 text-slate-900 dark:text-slate-50" {...props} />
-                            ),
-                            li: ({ node, ...props }: any) => (
-                                <li className="pl-1 leading-[1.75] font-normal" {...props} />
-                            ),
-                            a: ({ node, ...props }: any) => (
-                                <a 
-                                    className="text-blue-700 dark:text-blue-300 hover:underline font-medium underline-offset-2" 
-                                    target="_blank" 
-                                    rel="noopener noreferrer" 
-                                    {...props} 
-                                />
-                            ),
-                            pre: ({ children }: any) => (
-                                <div className="not-prose mb-4">{children}</div>
-                            ),
-                            code: ({ node, inline, className, children, ...props }: any) => {
-                                const match = /language-(\w+)/.exec(className || '');
-                                const isInline = inline ?? false;
-                                const lang = match ? match[1] : '';
+            {/* Enhanced Message Card with Glossy Glass Effect */}
+            <motion.div 
+                className="
+                    relative
+                    overflow-hidden
+                    rounded-2xl
+                    bg-bg-card
+                    border
+                    border-border-subtle
+                    shadow-lg
+                    dark:shadow-2xl
+                    dark:shadow-black/20
+                "
+                style={{
+                    background: `
+                        linear-gradient(145deg, 
+                            var(--bg-card) 0%, 
+                            color-mix(in srgb, var(--bg-card) 95%, var(--accent-primary) 5%) 100%
+                        )
+                    `,
+                    backdropFilter: 'blur(12px)',
+                    WebkitBackdropFilter: 'blur(12px)',
+                }}
+                initial={isNew ? { scale: 0.98, opacity: 0 } : false}
+                animate={{ scale: 1, opacity: 1 }}
+                transition={{ duration: 0.3, ease: [0.34, 1.56, 0.64, 1] }}
+            >
+                {/* Glossy top border highlight */}
+                <div 
+                    className="absolute top-0 left-0 right-0 h-px"
+                    style={{
+                        background: 'linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.1) 50%, transparent 100%)'
+                    }}
+                />
+                
+                {/* Content Area with Enhanced Padding */}
+                <div className="relative px-6 py-5">
+                    <div className="
+                        prose 
+                        prose-slate 
+                        dark:prose-invert 
+                        max-w-none
+                        prose-p:text-[15px]
+                        prose-p:font-normal
+                        prose-p:leading-[1.85]
+                        prose-p:mb-4
+                        prose-p:last:mb-0
+                        prose-p:text-text-primary
+                        prose-p:antialiased
+                        prose-headings:mb-4
+                        prose-headings:mt-6
+                        prose-headings:first:mt-0
+                        prose-headings:font-bold
+                        prose-headings:text-text-primary
+                        prose-h1:text-2xl
+                        prose-h2:text-xl
+                        prose-h3:text-lg
+                        prose-code:text-sm
+                        prose-code:font-semibold
+                        prose-li:my-1.5
+                        prose-ul:space-y-2
+                        prose-ol:space-y-2
+                    ">
+                        <ReactMarkdown
+                            remarkPlugins={[remarkGfm, remarkMath]}
+                            rehypePlugins={[rehypeKatex]}
+                            components={{
+                                p: ({ node, ...props }: any) => (
+                                    <p className="mb-4 last:mb-0 whitespace-pre-wrap text-[15px] font-normal leading-[1.85] text-text-primary antialiased" {...props} />
+                                ),
+                                strong: ({ node, ...props }: any) => (
+                                    <strong className="font-bold text-text-primary" {...props} />
+                                ),
+                                em: ({ node, ...props }: any) => (
+                                    <em className="italic font-medium text-text-secondary" {...props} />
+                                ),
+                                ul: ({ node, ...props }: any) => (
+                                    <ul className="list-disc ml-6 mb-4 space-y-2 text-text-primary" {...props} />
+                                ),
+                                ol: ({ node, ...props }: any) => (
+                                    <ol className="list-decimal ml-6 mb-4 space-y-2 text-text-primary" {...props} />
+                                ),
+                                li: ({ node, ...props }: any) => (
+                                    <li className="pl-2 leading-[1.8] font-normal" {...props} />
+                                ),
+                                a: ({ node, ...props }: any) => (
+                                    <a 
+                                        className="text-blue-600 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 underline decoration-blue-500/30 hover:decoration-blue-500/60 underline-offset-2 transition-colors font-medium" 
+                                        target="_blank" 
+                                        rel="noopener noreferrer" 
+                                        {...props} 
+                                    />
+                                ),
+                                pre: ({ children }: any) => (
+                                    <div className="not-prose my-5">{children}</div>
+                                ),
+                                code: ({ node, inline, className, children, ...props }: any) => {
+                                    const match = /language-(\w+)/.exec(className || '');
+                                    const isInline = inline ?? false;
+                                    const lang = match ? match[1] : '';
 
-                                return !isInline ? (
-                                    <div className="my-4 rounded-xl overflow-hidden border border-slate-200 dark:border-[#2a2a2f] shadow-sm dark:shadow-lg bg-slate-100 dark:bg-[#1a1a1e]">
-                                        <div className="bg-slate-200/80 dark:bg-[#25252a] px-4 py-2 border-b border-slate-300/50 dark:border-white/[0.08]">
-                                            <span className="text-[10px] uppercase tracking-widest font-bold text-slate-600 dark:text-slate-300 font-mono">
-                                                {lang || 'CODE'}
-                                            </span>
+                                    return !isInline ? (
+                                        <div className="my-5 rounded-xl overflow-hidden border border-border-muted shadow-md bg-bg-elevated">
+                                            <div className="bg-bg-item-surface px-4 py-2.5 border-b border-border-subtle">
+                                                <span className="text-[10px] uppercase tracking-widest font-bold text-text-secondary font-mono">
+                                                    {lang || 'CODE'}
+                                                </span>
+                                            </div>
+                                            <div className="bg-bg-elevated">
+                                                <SyntaxHighlighter
+                                                    language={lang || 'text'}
+                                                    style={vscDarkPlus}
+                                                    customStyle={{
+                                                        margin: 0,
+                                                        borderRadius: 0,
+                                                        fontSize: '14px',
+                                                        lineHeight: '1.7',
+                                                        background: 'transparent',
+                                                        padding: '20px',
+                                                        fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
+                                                        fontWeight: '500'
+                                                    }}
+                                                    wrapLongLines={true}
+                                                    showLineNumbers={true}
+                                                    lineNumberStyle={{ 
+                                                        minWidth: '3em', 
+                                                        paddingRight: '1.5em', 
+                                                        color: 'var(--text-tertiary)', 
+                                                        textAlign: 'right', 
+                                                        fontSize: '12px',
+                                                        fontWeight: '500'
+                                                    }}
+                                                    {...props}
+                                                >
+                                                    {String(children).replace(/\n$/, '')}
+                                                </SyntaxHighlighter>
+                                            </div>
                                         </div>
-                                        <div className="bg-white dark:bg-[#1a1a1e]">
-                                            <SyntaxHighlighter
-                                                language={lang || 'text'}
-                                                style={vscDarkPlus}
-                                                customStyle={{
-                                                    margin: 0,
-                                                    borderRadius: 0,
-                                                    fontSize: '14px',
-                                                    lineHeight: '1.7',
-                                                    background: 'transparent',
-                                                    padding: '18px',
-                                                    fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
-                                                    fontWeight: '500'
-                                                }}
-                                                wrapLongLines={true}
-                                                showLineNumbers={true}
-                                                lineNumberStyle={{ 
-                                                    minWidth: '2.8em', 
-                                                    paddingRight: '1.4em', 
-                                                    color: 'rgba(148, 163, 184, 0.4)', 
-                                                    textAlign: 'right', 
-                                                    fontSize: '12px',
-                                                    fontWeight: '500'
-                                                }}
-                                                {...props}
-                                            >
-                                                {String(children).replace(/\n$/, '')}
-                                            </SyntaxHighlighter>
-                                        </div>
+                                    ) : (
+                                        <code 
+                                            className="bg-bg-item-surface px-2.5 py-1 rounded-md text-[13px] font-semibold text-text-primary border border-border-subtle" 
+                                            {...props}
+                                        >
+                                            {children}
+                                        </code>
+                                    );
+                                },
+                                blockquote: ({ node, ...props }: any) => (
+                                    <div className="my-5 relative">
+                                        <div className="absolute left-0 top-0 bottom-0 w-1 bg-gradient-to-b from-blue-500 to-purple-500 rounded-full" />
+                                        <blockquote 
+                                            className="pl-6 py-2 italic font-medium text-text-secondary bg-bg-item-surface/50 rounded-r-lg border-l-0" 
+                                            {...props} 
+                                        />
                                     </div>
-                                ) : (
-                                    <code 
-                                        className="bg-slate-200 dark:bg-[#25252a] px-2 py-0.5 rounded text-[13px] font-semibold text-slate-900 dark:text-slate-100 border border-slate-300/60 dark:border-white/[0.08]" 
-                                        {...props}
-                                    >
-                                        {children}
-                                    </code>
-                                );
-                            },
-                            blockquote: ({ node, ...props }: any) => (
-                                <blockquote 
-                                    className="my-4 border-l-3 border-blue-500/60 dark:border-blue-400/40 pl-4 py-1 italic font-medium text-slate-700 dark:text-slate-300 bg-slate-100/50 dark:bg-white/[0.02] rounded-r" 
-                                    {...props} 
-                                />
-                            ),
-                        }}
-                    >
-                        {content}
-                    </ReactMarkdown>
+                                ),
+                            }}
+                        >
+                            {content}
+                        </ReactMarkdown>
+                    </div>
+
+                    {/* Enhanced Streaming Cursor */}
+                    {isStreaming && (
+                        <motion.span
+                            className="inline-block w-0.5 h-5 bg-gradient-to-t from-blue-500 to-purple-500 ml-1 align-middle rounded-full"
+                            animate={{ opacity: [1, 0.3, 1] }}
+                            transition={{ duration: 1, repeat: Infinity, ease: "easeInOut" }}
+                        />
+                    )}
                 </div>
 
-                {/* Streaming Cursor */}
-                {isStreaming && (
-                    <motion.span
-                        className="inline-block w-0.5 h-4 bg-blue-500 dark:bg-blue-400 ml-0.5 align-middle"
-                        animate={{ opacity: [1, 0] }}
-                        transition={{ duration: 0.5, repeat: Infinity }}
-                    />
-                )}
-            </div>
-
-            {/* Copy Button */}
-            {!isStreaming && content && (
-                <button
-                    onClick={handleCopy}
-                    className="
-                        flex 
-                        items-center 
-                        gap-1.5
-                        mt-3 
-                        px-3
-                        py-1.5
-                        rounded-lg
-                        text-xs
-                        font-semibold
-                        text-slate-700
-                        dark:text-slate-300
-                        hover:text-slate-900
-                        dark:hover:text-slate-100
-                        hover:bg-slate-200/60
-                        dark:hover:bg-white/[0.05]
-                        border
-                        border-transparent
-                        hover:border-slate-300/50
-                        dark:hover:border-white/[0.08]
-                        transition-all
-                        duration-150
-                    "
-                >
-                    {copied ? (
-                        <>
-                            <Check size={13} className="text-emerald-600 dark:text-emerald-400" />
-                            <span>Copied</span>
-                        </>
-                    ) : (
-                        <>
-                            <Copy size={13} />
-                            <span>Copy</span>
-                        </>
-                    )}
-                </button>
-            )}
+                {/* Subtle bottom gradient for depth */}
+                <div 
+                    className="absolute bottom-0 left-0 right-0 h-px"
+                    style={{
+                        background: 'linear-gradient(90deg, transparent 0%, rgba(0,0,0,0.05) 50%, transparent 100%)'
+                    }}
+                />
+            </motion.div>
         </motion.article>
     );
 };
