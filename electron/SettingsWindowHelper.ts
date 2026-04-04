@@ -2,14 +2,11 @@ import { BrowserWindow, screen, app } from "electron"
 import { WindowHelper } from "./WindowHelper"
 import path from "node:path"
 import { StealthManager } from "./stealth/StealthManager"
+import { loadRendererRoute } from './rendererRoute'
 
 const isEnvDev = process.env.NODE_ENV === "development"
 const isPackaged = app.isPackaged
 const isDev = isEnvDev && !isPackaged
-
-const startUrl = isDev
-    ? "http://localhost:5180"
-    : `file://${path.join(app.getAppPath(), "dist", "index.html")}`
 
 export class SettingsWindowHelper {
     private settingsWindow: BrowserWindow | null = null
@@ -196,11 +193,7 @@ export class SettingsWindowHelper {
         this.applyStealth(this.contentProtection);
 
         // Load with query param
-        const settingsUrl = isDev
-            ? `${startUrl}?window=settings`
-            : `${startUrl}?window=settings` // file url also works with search params in modern Electron
-
-        this.settingsWindow.loadURL(settingsUrl).catch(e => {
+        loadRendererRoute(this.settingsWindow, 'settings').catch(e => {
             console.error('[SettingsWindowHelper] Failed to load URL:', e);
         });
 

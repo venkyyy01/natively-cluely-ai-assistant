@@ -4,6 +4,7 @@ import { AppState } from "./main"
 import path from "node:path"
 import { StealthManager } from "./stealth/StealthManager"
 import { StealthRuntime } from "./stealth/StealthRuntime"
+import { getRendererRouteUrl, loadRendererRoute, type RendererWindowKind } from './rendererRoute'
 
 const isEnvDev = process.env.NODE_ENV === "development"
 const isPackaged = app.isPackaged
@@ -11,10 +12,6 @@ const isPackaged = app.isPackaged
 console.log(`[WindowHelper] isEnvDev: ${isEnvDev}, isPackaged: ${isPackaged}`)
 
 const isDev = isEnvDev && !isPackaged
-
-const startUrl = isDev
-  ? "http://localhost:5180"
-  : `file://${path.join(app.getAppPath(), "dist", "index.html")}`
 
 export class WindowHelper {
   private launcherWindow: BrowserWindow | null = null
@@ -96,9 +93,13 @@ export class WindowHelper {
     this.launcherWindow?.hide()
   }
 
-  private createDirectWindow(options: Electron.BrowserWindowConstructorOptions, url: string, label: string): BrowserWindow {
+  private createDirectWindow(
+    options: Electron.BrowserWindowConstructorOptions,
+    windowKind: RendererWindowKind,
+    label: string,
+  ): BrowserWindow {
     const win = new BrowserWindow(options)
-    void win.loadURL(url).catch((error) => {
+    void loadRendererRoute(win, windowKind).catch((error) => {
       console.error(`[WindowHelper] ${label} direct load failed:`, error)
     })
     return win
@@ -274,13 +275,13 @@ export class WindowHelper {
     }
 
     console.log(`[WindowHelper] Icon Path: ${launcherSettings.icon}`);
-    console.log(`[WindowHelper] Start URL: ${startUrl}`);
+    console.log(`[WindowHelper] Start URL: ${getRendererRouteUrl('launcher')}`);
 
     if (this.shouldUseStealthRuntime()) {
       try {
         this.launcherRuntime = new StealthRuntime({
           stealthManager: this.stealthManager,
-          startUrl: `${startUrl}?window=launcher`,
+          startUrl: getRendererRouteUrl('launcher'),
         })
         this.launcherWindow = this.launcherRuntime.createPrimaryStealthSurface(launcherSettings) as BrowserWindow
         this.launcherContentWindow = this.launcherRuntime.getContentWindow()
@@ -291,7 +292,7 @@ export class WindowHelper {
       }
     } else {
       this.launcherRuntime = null
-      this.launcherWindow = this.createDirectWindow(launcherSettings, `${startUrl}?window=launcher`, 'Launcher')
+      this.launcherWindow = this.createDirectWindow(launcherSettings, 'launcher', 'Launcher')
       this.launcherContentWindow = this.launcherWindow
       console.log('[WindowHelper] Using direct launcher window on macOS');
     }
@@ -350,7 +351,7 @@ export class WindowHelper {
       try {
         this.overlayRuntime = new StealthRuntime({
           stealthManager: this.stealthManager,
-          startUrl: `${startUrl}?window=overlay`,
+          startUrl: getRendererRouteUrl('overlay'),
         })
         this.overlayWindow = this.overlayRuntime.createPrimaryStealthSurface(overlaySettings) as BrowserWindow
         this.overlayContentWindow = this.overlayRuntime.getContentWindow()
@@ -368,7 +369,7 @@ export class WindowHelper {
       }
     } else {
       this.overlayRuntime = null
-      this.overlayWindow = this.createDirectWindow(overlaySettings, `${startUrl}?window=overlay`, 'Overlay')
+      this.overlayWindow = this.createDirectWindow(overlaySettings, 'overlay', 'Overlay')
       this.overlayContentWindow = this.overlayWindow
       console.log('[WindowHelper] Using direct overlay window on macOS');
     }
