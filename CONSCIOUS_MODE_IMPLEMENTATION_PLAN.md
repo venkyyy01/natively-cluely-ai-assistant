@@ -314,7 +314,7 @@ This document outlines the implementation plan for building a **Conscious Mode**
 4. **Add Code Formatting**
    - Syntax highlighting for code blocks
    - Consistent indentation
-   - Language-specific formatting (Python/Java/Go/etc.)
+   - Language-specific formatting (TypeScript/Java/Go/etc.)
 
 **Deliverables:**
 - Output formatter
@@ -348,7 +348,7 @@ This document outlines the implementation plan for building a **Conscious Mode**
    - WebSocket support for real-time updates
 
 3. **Build Integration Examples**
-   - Python library wrapper
+   - Node.js library wrapper
    - JavaScript/TypeScript SDK
    - VS Code extension (basic)
    - Slack bot integration
@@ -438,7 +438,7 @@ This document outlines the implementation plan for building a **Conscious Mode**
    - Annotated to highlight key features
 
 4. **Deployment**
-   - Package for distribution (PyPI, npm, etc.)
+   - Package for distribution (npm, GPR, etc.)
    - Docker image
    - Cloud deployment (optional: hosted API)
    - GitHub releases with changelog
@@ -455,189 +455,190 @@ This document outlines the implementation plan for building a **Conscious Mode**
 
 ### 4.1 Core Data Structures
 
-```python
-from enum import Enum
-from dataclasses import dataclass
-from typing import List, Dict, Optional, Any
+```typescript
+export enum Mode {
+    LLD = "lld",
+    HLD = "hld",
+    AUTO = "auto",
+}
 
-class Mode(Enum):
-    LLD = "lld"
-    HLD = "hld"
-    AUTO = "auto"
+export enum PhaseStatus {
+    PENDING = "pending",
+    IN_PROGRESS = "in_progress",
+    COMPLETED = "completed",
+    FAILED = "failed",
+    SKIPPED = "skipped",
+}
 
-class PhaseStatus(Enum):
-    PENDING = "pending"
-    IN_PROGRESS = "in_progress"
-    COMPLETED = "completed"
-    FAILED = "failed"
-    SKIPPED = "skipped"
+export interface Assumption {
+    /** Explicit assumption made during execution. */
+    description: string;
+    phase: string;
+    justification: string;
+}
 
-@dataclass
-class Assumption:
-    """Explicit assumption made during execution."""
-    description: str
-    phase: str
-    justification: str
+export interface Requirement {
+    /** Functional or non-functional requirement. */
+    type: "functional" | "non-functional";
+    description: string;
+    priority: "must_have" | "should_have" | "nice_to_have";
+}
 
-@dataclass
-class Requirement:
-    """Functional or non-functional requirement."""
-    type: str  # "functional" or "non_functional"
-    description: str
-    priority: str  # "must_have", "should_have", "nice_to_have"
+export interface TradeOff {
+    /** Design trade-off analysis. */
+    aspect: string; // e.g., "data storage"
+    options: string[]; // e.g., ["SQL", "NoSQL", "Cache"]
+    chosen: string;
+    rationale: string;
+    drawbacks: string[];
+}
 
-@dataclass
-class TradeOff:
-    """Design trade-off analysis."""
-    aspect: str  # e.g., "data storage"
-    options: List[str]  # e.g., ["SQL", "NoSQL", "Cache"]
-    chosen: str
-    rationale: str
-    drawbacks: List[str]
+export interface PhaseResult {
+    /** Output of a single phase. */
+    phaseName: string;
+    status: PhaseStatus;
+    content: Record<string, any>; // Structured output
+    durationSeconds: number;
+    validationErrors: string[];
+}
 
-@dataclass
-class PhaseResult:
-    """Output of a single phase."""
-    phase_name: str
-    status: PhaseStatus
-    content: Dict[str, Any]  # Structured output
-    duration_seconds: float
-    validation_errors: List[str]
-
-@dataclass
-class ConsciousContext:
-    """Execution context for the entire flow."""
-    problem: str
-    mode: Mode
-    detected_mode: Optional[Mode]  # Auto-detected if AUTO
-    requirements: List[Requirement]
-    assumptions: List[Assumption]
-    tradeoffs: List[TradeOff]
-    phase_results: List[PhaseResult]
-    metadata: Dict[str, Any]
+export interface ConsciousContext {
+    /** Execution context for the entire flow. */
+    problem: string;
+    mode: Mode;
+    detectedMode?: Mode; // Auto-detected if AUTO
+    requirements: Requirement[];
+    assumptions: Assumption[];
+    tradeoffs: TradeOff[];
+    phaseResults: PhaseResult[];
+    metadata: Record<string, any>;
+}
 ```
 
 ### 4.2 Phase Interface
 
-```python
-from abc import ABC, abstractmethod
-
-class Phase(ABC):
-    """Base class for all phases."""
+```typescript
+export abstract class Phase {
+    /** Base class for all phases. */
     
-    @property
-    @abstractmethod
-    def name(self) -> str:
-        """Phase name."""
-        pass
+    /** Phase name. */
+    abstract readonly name: string;
     
-    @property
-    @abstractmethod
-    def required_inputs(self) -> List[str]:
-        """Context keys required to execute this phase."""
-        pass
+    /** Context keys required to execute this phase. */
+    abstract readonly requiredInputs: string[];
     
-    @abstractmethod
-    def execute(self, context: ConsciousContext) -> PhaseResult:
-        """Execute the phase and return structured result."""
-        pass
+    /** Execute the phase and return structured result. */
+    abstract execute(context: ConsciousContext): Promise<PhaseResult>;
     
-    @abstractmethod
-    def validate(self, result: PhaseResult) -> List[str]:
-        """Validate phase output. Return list of errors (empty if valid)."""
-        pass
+    /** Validate phase output. Return list of errors (empty if valid). */
+    abstract validate(result: PhaseResult): string[];
     
-    def is_skippable(self, context: ConsciousContext) -> bool:
-        """Determine if phase can be skipped."""
-        return False
+    /** Determine if phase can be skipped. */
+    isSkippable(context: ConsciousContext): boolean {
+        return false;
+    }
+}
 ```
 
 ### 4.3 Controller Pseudocode
 
-```python
-class ConsciousModeController:
-    def __init__(self, config: Dict[str, Any]):
-        self.phases = [
-            RequirementClarificationPhase(),
-            HighLevelApproachPhase(),
-            DetailedDesignPhase(),
-            ImplementationPhase(),
-            TradeoffAnalysisPhase(),
-            ScalingExtensionsPhase(),
-        ]
-        self.validator = QualityValidator(config)
-        self.formatter = OutputFormatter(config)
-    
-    def execute(self, problem: str, mode: Mode) -> str:
-        """Execute conscious mode on a problem."""
-        
-        # Initialize context
-        context = ConsciousContext(
-            problem=problem,
-            mode=mode,
-            detected_mode=None,
-            requirements=[],
-            assumptions=[],
-            tradeoffs=[],
-            phase_results=[],
-            metadata={}
-        )
-        
-        # Auto-detect mode if needed
-        if mode == Mode.AUTO:
-            context.detected_mode = self._detect_mode(problem)
-            context.mode = context.detected_mode
-        
-        # Execute phases sequentially
-        for phase in self.phases:
-            # Check if phase can be skipped
-            if phase.is_skippable(context):
-                context.phase_results.append(PhaseResult(
-                    phase_name=phase.name,
-                    status=PhaseStatus.SKIPPED,
-                    content={},
-                    duration_seconds=0,
-                    validation_errors=[]
-                ))
-                continue
-            
-            # Execute phase
-            result = self._execute_phase(phase, context)
-            
-            # Validate
-            errors = phase.validate(result)
-            result.validation_errors = errors
-            
-            # Gate: block if validation fails
-            if errors and not self._should_continue_despite_errors(errors):
-                result.status = PhaseStatus.FAILED
-                context.phase_results.append(result)
-                return self._format_error_output(context, errors)
-            
-            # Update context with phase artifacts
-            self._update_context(context, result)
-            context.phase_results.append(result)
-        
-        # Final validation
-        final_errors = self.validator.validate_complete_output(context)
-        if final_errors:
-            # Attempt self-correction
-            context = self._self_correct(context, final_errors)
-        
-        # Format output
-        return self.formatter.format(context)
-    
-    def _execute_phase(self, phase: Phase, context: ConsciousContext) -> PhaseResult:
-        """Execute a single phase with timing."""
-        start = time.time()
-        result = phase.execute(context)
-        result.duration_seconds = time.time() - start
-        return result
-    
-    def _detect_mode(self, problem: str) -> Mode:
-        """Auto-detect LLD vs HLD based on problem keywords."""
-        # Implementation: keyword matching, ML classifier, or heuristics
-        pass
+```typescript
+export class ConsciousModeController {
+    private phases: Phase[];
+    private validator: QualityValidator;
+    private formatter: OutputFormatter;
+
+    constructor(config: Record<string, any>) {
+        this.phases = [
+            new RequirementClarificationPhase(),
+            new HighLevelApproachPhase(),
+            new DetailedDesignPhase(),
+            new ImplementationPhase(),
+            new TradeoffAnalysisPhase(),
+            new ScalingExtensionsPhase(),
+        ];
+        this.validator = new QualityValidator(config);
+        this.formatter = new OutputFormatter(config);
+    }
+
+    /** Execute conscious mode on a problem. */
+    async execute(problem: string, mode: Mode): Promise<string> {
+        // Initialize context
+        const context: ConsciousContext = {
+            problem,
+            mode,
+            detectedMode: undefined,
+            requirements: [],
+            assumptions: [],
+            tradeoffs: [],
+            phaseResults: [],
+            metadata: {},
+        };
+
+        // Auto-detect mode if needed
+        if (mode === Mode.AUTO) {
+            context.detectedMode = await this.detectMode(problem);
+            context.mode = context.detectedMode;
+        }
+
+        // Execute phases sequentially
+        for (const phase of this.phases) {
+            // Check if phase can be skipped
+            if (phase.isSkippable(context)) {
+                context.phaseResults.push({
+                    phaseName: phase.name,
+                    status: PhaseStatus.SKIPPED,
+                    content: {},
+                    durationSeconds: 0,
+                    validationErrors: [],
+                });
+                continue;
+            }
+
+            // Execute phase
+            const result = await this.executePhaseWithTiming(phase, context);
+
+            // Validate
+            const errors = phase.validate(result);
+            result.validationErrors = errors;
+
+            // Gate: block if validation fails
+            if (errors.length > 0 && !this.shouldContinueDespiteErrors(errors)) {
+                result.status = PhaseStatus.FAILED;
+                context.phaseResults.push(result);
+                return this.formatErrorOutput(context, errors);
+            }
+
+            // Update context with phase artifacts
+            this.updateContext(context, result);
+            context.phaseResults.push(result);
+        }
+
+        // Final validation
+        const finalErrors = this.validator.validateCompleteOutput(context);
+        if (finalErrors.length > 0) {
+            // Attempt self-correction
+            await this.selfCorrect(context, finalErrors);
+        }
+
+        // Format output
+        return this.formatter.format(context);
+    }
+
+    private async executePhaseWithTiming(phase: Phase, context: ConsciousContext): Promise<PhaseResult> {
+        /** Execute a single phase with timing. */
+        const start = Date.now();
+        const result = await phase.execute(context);
+        result.durationSeconds = (Date.now() - start) / 1000;
+        return result;
+    }
+
+    private async detectMode(problem: string): Promise<Mode> {
+        /** Auto-detect LLD vs HLD based on problem keywords. */
+        // Implementation: keyword matching, ML classifier, or heuristics
+        return Mode.LLD; // Placeholder
+    }
+}
 ```
 
 ---
@@ -667,7 +668,7 @@ class ConsciousModeController:
 
 #### Phase 4: Implementation
 - ✅ Code must be syntactically valid
-- ✅ Must follow language conventions (PEP8 for Python, etc.)
+- ✅ Must follow language conventions (ESLint/Prettier for TypeScript, etc.)
 - ✅ Must include minimal comments
 - ⚠️ Optional if user specifies `--skip-impl`
 
@@ -729,27 +730,27 @@ class ConsciousModeController:
 
 ### 7.1 Core Language
 
-**Recommendation:** Python 3.10+
+**Recommendation:** TypeScript 5.0+ (Node.js 20+)
 
 **Rationale:**
-- Strong NLP/text processing libraries
-- Easy CLI/API development
-- Popular in ML/AI tooling ecosystem
-- Good diagram generation options (Graphviz, Mermaid)
+- Strong type safety for design and architecture specifications
+- Rich ecosystem for AI integration (LangChain.js, OpenAI Node SDK)
+- Standard for modern web-based technical interfaces
+- Fast prototyping and excellent tooling (ESLint, Prettier, Zod)
 
-**Alternatives:** TypeScript (for better web integration), Go (for performance)
+**Alternatives:** Python (for AI library richness), Go (for performance)
 
 ### 7.2 Key Libraries
 
 | Purpose | Library | Rationale |
 |---------|---------|-----------|
-| CLI | `click` or `typer` | Clean argument parsing, auto-help |
-| API | `FastAPI` | Modern, async, auto-docs |
-| Validation | `pydantic` | Strong typing, data validation |
-| Diagram Generation | `diagrams` or `mermaid.ink` | Programmatic diagrams |
-| Output Formatting | `mistune` (Markdown), `weasyprint` (PDF) | Flexible rendering |
-| State Management | `sqlite3` or `tinydb` | Lightweight persistence |
-| Testing | `pytest` + `pytest-cov` | Industry standard |
+| CLI | `commander` or `yargs` | Standard for Node CLI applications |
+| API | `Express` or `NestJS` | Fast, widely adopted web frameworks |
+| Validation | `Zod` or `TypeBox` | Schema validation with static type inference |
+| Diagram Generation | `mermaid.js` or `d3` | Industry-standard visualization tools |
+| Output Formatting | `markdown-it` / `puppeteer` | Robust Markdown to HTML/PDF conversion |
+| State Management | `Better-SQLite3` or `Prisma` | High-performance persistence in Node |
+| Testing | `Vitest` or `Jest` | Modern, feature-rich testing frameworks |
 
 ### 7.3 Model Integration
 
@@ -759,8 +760,8 @@ class ConsciousModeController:
   - `AnthropicProvider` (Claude)
   - `OpenAIProvider` (GPT-4)
   - `GoogleProvider` (Gemini)
-  - `LocalProvider` (llama.cpp, Ollama)
-- User specifies via config: `model_provider: anthropic, model: claude-3-sonnet`
+  - `LocalProvider` (Ollama/Llama.cpp via REST)
+- User specifies via config: `modelProvider: "anthropic", model: "claude-3-sonnet"`
 
 ---
 
