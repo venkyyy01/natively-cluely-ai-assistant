@@ -120,12 +120,14 @@ describe('MeetingCheckpointer Reliability Tests', () => {
       
       assert.ok(checkpointFiles.length > 0, `Should have created fallback file, found: ${tempFiles.join(', ')}`);
       
-      const tempFilePath = path.join(tempDir, checkpointFiles[0]);
+      // Read the newest file (last alphabetically = latest timestamp)
+      const newestFile = checkpointFiles.sort().pop()!;
+      const tempFilePath = path.join(tempDir, newestFile);
       const tempFileContent = await fs.readFile(tempFilePath, 'utf8');
       const recoveryData = JSON.parse(tempFileContent);
       
-      assert.equal(recoveryData.meetingData.title, 'Test Meeting');
       assert.equal(recoveryData.snapshot.transcript[0].text, 'Critical meeting data');
+      assert.equal(recoveryData.meetingData.title, 'Test Meeting');
 
       await fs.unlink(tempFilePath);
     });
