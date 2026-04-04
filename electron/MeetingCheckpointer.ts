@@ -31,6 +31,7 @@ export class MeetingCheckpointer extends EventEmitter {
     private interval: NodeJS.Timeout | null = null;
     private meetingId: string | null = null;
     private tempDir: string;
+    private checkpointInProgress = false;
 
     constructor(
         private readonly dbManager: DatabaseManager,
@@ -52,6 +53,7 @@ export class MeetingCheckpointer extends EventEmitter {
                 console.error('[MeetingCheckpointer] Checkpoint failed:', err);
             }
         }, CHECKPOINT_INTERVAL_MS);
+        this.interval.unref();
 
         console.log(`[MeetingCheckpointer] Started for meeting ${this.meetingId}`);
     }
@@ -83,33 +85,39 @@ export class MeetingCheckpointer extends EventEmitter {
 
     private async checkpoint(): Promise<void> {
         if (!this.meetingId) return;
+        if (this.checkpointInProgress) return; // Serialize concurrent calls
+        this.checkpointInProgress = true;
 
-        // Get snapshot from session tracker
-        const snapshot = this.getSessionTracker().createSnapshot();
-        if (!snapshot || snapshot.transcript.length === 0) {
-            return; // Nothing to save yet
-        }
+        try {
+            // Get snapshot from session tracker
+            const snapshot = this.getSessionTracker().createSnapshot();
+            if (!snapshot || snapshot.transcript.length === 0) {
+                return; // Nothing to save yet
+            }
 
-        const result = await this.saveCheckpointWithRetry(snapshot);
-        
-        // Emit events based on result
-        if (result.success) {
-            this.emit('checkpoint-saved', { 
-                meetingId: this.meetingId, 
-                usedFallback: result.usedFallback,
-                fallbackPath: result.fallbackPath
-            });
+            const result = await this.saveCheckpointWithRetry(snapshot);
             
-            // Notify frontend
-            this.notifyFrontend('meeting-checkpointed', this.meetingId);
-        } else {
-            this.emit('checkpoint-failed', {
-                meetingId: this.meetingId,
-                error: new Error(result.error || 'Unknown error'),
-                retryCount: result.retryCount,
-                usedFallback: result.usedFallback,
-                fallbackPath: result.fallbackPath
-            } as CheckpointError);
+            // Emit events based on result
+            if (result.success) {
+                this.emit('checkpoint-saved', { 
+                    meetingId: this.meetingId, 
+                    usedFallback: result.usedFallback,
+                    fallbackPath: result.fallbackPath
+                });
+                
+                // Notify frontend
+                this.notifyFrontend('meeting-checkpointed', this.meetingId);
+            } else {
+                this.emit('checkpoint-failed', {
+                    meetingId: this.meetingId,
+                    error: new Error(result.error || 'Unknown error'),
+                    retryCount: result.retryCount,
+                    usedFallback: result.usedFallback,
+                    fallbackPath: result.fallbackPath
+                } as CheckpointError);
+            }
+        } finally {
+            this.checkpointInProgress = false;
         }
     }
 
