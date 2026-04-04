@@ -1,6 +1,6 @@
 import { MeetingCheckpointer } from '../MeetingCheckpointer';
 import { DatabaseManager } from '../db/DatabaseManager';
-import { SessionTracker } from '../SessionTracker';
+import { SessionTracker, MeetingSnapshot, TranscriptSegment, UsageInteraction } from '../SessionTracker';
 
 // Mock the dependencies
 jest.mock('../db/DatabaseManager');
@@ -13,10 +13,10 @@ describe('MeetingCheckpointer Reliability Tests', () => {
   let errorEmitSpy: jest.SpyInstance;
 
   beforeEach(() => {
-    mockDb = new DatabaseManager(':memory:') as jest.Mocked<DatabaseManager>;
+    mockDb = DatabaseManager.getInstance() as jest.Mocked<DatabaseManager>;
     mockSessionTracker = {
       createSnapshot: jest.fn(),
-    } as any;
+    } as unknown as jest.Mocked<SessionTracker>;
     
     checkpointer = new MeetingCheckpointer(mockDb, () => mockSessionTracker);
     errorEmitSpy = jest.spyOn(checkpointer, 'emit');
@@ -27,72 +27,79 @@ describe('MeetingCheckpointer Reliability Tests', () => {
     jest.clearAllMocks();
   });
 
+  const createMockSnapshot = (overrides: Partial<MeetingSnapshot> = {}): MeetingSnapshot => ({
+    transcript: [],
+    usage: [],
+    startTime: Date.now(),
+    durationMs: 0,
+    context: '',
+    meetingMetadata: null,
+    ...overrides,
+  });
+
   describe('CRITICAL: Meeting Data Loss Prevention', () => {
     it('should retry checkpoint saves with exponential backoff on DB errors', async () => {
       // ARRANGE: Database fails twice, then succeeds
-      const mockSnapshot = { 
-        transcript: [{ text: 'Important data' }], 
-        interactions: [], 
-        metadata: {} 
-      };
+      const mockSnapshot: MeetingSnapshot = createMockSnapshot({
+        transcript: [{ text: 'Important data', speaker: 'User', timestamp: Date.now(), final: true }],
+      });
       mockSessionTracker.createSnapshot.mockReturnValue(mockSnapshot);
       
       let callCount = 0;
-      mockDb.saveMeetingCheckpoint = jest.fn().mockImplementation(() => {
+      mockDb.createOrUpdateMeetingProcessingRecord = jest.fn().mockImplementation(() => {
         callCount++;
         if (callCount <= 2) {
-          throw new Error('Database locked');
+          return Promise.reject(new Error('Database locked'));
         }
         return Promise.resolve();
       });
 
       // ACT: Start checkpointer and trigger checkpoint
-      checkpointer.start();
-      await checkpointer.checkpoint(); // Force immediate checkpoint
+      checkpointer.start('test-meeting-id');
+      await (checkpointer as any).checkpoint(); // Force immediate checkpoint via private access for testing
 
       // ASSERT: Should retry 3 times total (initial + 2 retries)
-      expect(mockDb.saveMeetingCheckpoint).toHaveBeenCalledTimes(3);
+      expect(mockDb.createOrUpdateMeetingProcessingRecord).toHaveBeenCalledTimes(3);
       expect(errorEmitSpy).not.toHaveBeenCalledWith('checkpoint-failed');
     });
 
     it('should emit checkpoint-failed event after exhausting retries', async () => {
       // ARRANGE: Database always fails
-      const mockSnapshot = { transcript: [], interactions: [], metadata: {} };
+      const mockSnapshot: MeetingSnapshot = createMockSnapshot();
       mockSessionTracker.createSnapshot.mockReturnValue(mockSnapshot);
-      mockDb.saveMeetingCheckpoint = jest.fn().mockRejectedValue(new Error('Disk full'));
+      mockDb.createOrUpdateMeetingProcessingRecord = jest.fn().mockRejectedValue(new Error('Disk full'));
 
       // ACT
-      checkpointer.start();
-      await checkpointer.checkpoint();
+      checkpointer.start('test-meeting-id');
+      await (checkpointer as any).checkpoint();
 
       // ASSERT: Should emit failure event after 3 retries
-      expect(mockDb.saveMeetingCheckpoint).toHaveBeenCalledTimes(3);
+      expect(mockDb.createOrUpdateMeetingProcessingRecord).toHaveBeenCalledTimes(3);
       expect(errorEmitSpy).toHaveBeenCalledWith('checkpoint-failed', expect.objectContaining({
-        error: 'Disk full',
+        error: expect.any(Error),
         retryCount: 3
       }));
     });
 
     it('should fallback to temp file when DB is completely unavailable', async () => {
       // ARRANGE: Database always fails
-      const mockSnapshot = { 
-        transcript: [{ text: 'Critical meeting data', timestamp: Date.now() }], 
-        interactions: [], 
-        metadata: { meetingId: 'test-123' } 
-      };
+      const mockSnapshot: MeetingSnapshot = createMockSnapshot({
+        transcript: [{ text: 'Critical meeting data', speaker: 'User', timestamp: Date.now(), final: true }],
+        meetingMetadata: { title: 'Test Meeting' },
+      });
       mockSessionTracker.createSnapshot.mockReturnValue(mockSnapshot);
-      mockDb.saveMeetingCheckpoint = jest.fn().mockRejectedValue(new Error('DB connection failed'));
+      mockDb.createOrUpdateMeetingProcessingRecord = jest.fn().mockRejectedValue(new Error('DB connection failed'));
 
       // ACT
-      checkpointer.start();
-      await checkpointer.checkpoint();
+      checkpointer.start('test-meeting-id');
+      await (checkpointer as any).checkpoint();
 
       // ASSERT: Should create temp file backup
       const fs = require('fs').promises;
       const path = require('path');
-      const tempDir = require('os').tmpdir();
+      const tempDir = path.join(require('os').tmpdir(), 'meeting-checkpoints');
       const tempFiles = await fs.readdir(tempDir);
-      const checkpointFiles = tempFiles.filter((f: string) => f.startsWith('meeting-checkpoint-'));
+      const checkpointFiles = tempFiles.filter((f: string) => f.startsWith('meeting-test-meeting-id'));
       
       expect(checkpointFiles.length).toBeGreaterThan(0);
       
@@ -101,8 +108,8 @@ describe('MeetingCheckpointer Reliability Tests', () => {
       const tempFileContent = await fs.readFile(tempFilePath, 'utf8');
       const recoveryData = JSON.parse(tempFileContent);
       
-      expect(recoveryData.transcript[0].text).toBe('Critical meeting data');
-      expect(recoveryData.metadata.meetingId).toBe('test-123');
+      expect(recoveryData.meetingData.title).toBe('Interim Recording...');
+      expect(recoveryData.snapshot.transcript[0].text).toBe('Critical meeting data');
 
       // Cleanup
       await fs.unlink(tempFilePath);
@@ -110,29 +117,29 @@ describe('MeetingCheckpointer Reliability Tests', () => {
 
     it('should handle concurrent checkpoint calls gracefully', async () => {
       // ARRANGE
-      const mockSnapshot = { transcript: [], interactions: [], metadata: {} };
+      const mockSnapshot: MeetingSnapshot = createMockSnapshot();
       mockSessionTracker.createSnapshot.mockReturnValue(mockSnapshot);
-      mockDb.saveMeetingCheckpoint = jest.fn().mockImplementation(() => 
+      mockDb.createOrUpdateMeetingProcessingRecord = jest.fn().mockImplementation(() => 
         new Promise(resolve => setTimeout(resolve, 100)) // Slow DB
       );
 
       // ACT: Start multiple concurrent checkpoints
-      checkpointer.start();
+      checkpointer.start('test-meeting-id');
       const promises = [
-        checkpointer.checkpoint(),
-        checkpointer.checkpoint(),
-        checkpointer.checkpoint()
+        (checkpointer as any).checkpoint(),
+        (checkpointer as any).checkpoint(),
+        (checkpointer as any).checkpoint()
       ];
       await Promise.all(promises);
 
       // ASSERT: Should serialize checkpoint operations, not run concurrently
-      expect(mockDb.saveMeetingCheckpoint).toHaveBeenCalledTimes(1); // Only one actual save
+      expect(mockDb.createOrUpdateMeetingProcessingRecord).toHaveBeenCalledTimes(1); // Only one actual save
     });
   });
 
   describe('Resource Management', () => {
     it('should clean up intervals on stop', () => {
-      checkpointer.start();
+      checkpointer.start('test-meeting-id');
       
       // Verify interval is running
       expect((checkpointer as any).interval).toBeTruthy();
@@ -144,7 +151,7 @@ describe('MeetingCheckpointer Reliability Tests', () => {
     });
 
     it('should not prevent process exit with unref interval', () => {
-      checkpointer.start();
+      checkpointer.start('test-meeting-id');
       
       // Verify interval is unref'd
       const interval = (checkpointer as any).interval;

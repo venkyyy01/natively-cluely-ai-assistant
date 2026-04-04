@@ -42,7 +42,7 @@ describe('HIGH Severity Reliability Issues Tests', () => {
             const result = await mockLLMProvider(messages);
             return { ok: true, data: result };
           } catch (error) {
-            return { ok: false, error: error.message };
+            return { ok: false, error: error instanceof Error ? error.message : String(error) };
           }
         }
       };
@@ -150,7 +150,7 @@ describe('HIGH Severity Reliability Issues Tests', () => {
             await timeout;
             tasksCompleted++;
           } catch (error) {
-            if (error.message === 'Task cancelled') {
+            if (error instanceof Error && error.message === 'Task cancelled') {
               // Expected cancellation
             } else {
               throw error;
@@ -209,7 +209,7 @@ describe('HIGH Severity Reliability Issues Tests', () => {
           cachedModule = module;
           return module;
         } catch (error) {
-          cachedError = error; // PROBLEM: Error is cached forever
+          cachedError = error instanceof Error ? error : new Error(String(error)); // PROBLEM: Error is cached forever
           throw error;
         }
       };
@@ -275,7 +275,7 @@ describe('HIGH Severity Reliability Issues Tests', () => {
           return module;
         } catch (error) {
           cachedModule = null;
-          cachedError = error;
+          cachedError = error instanceof Error ? error : new Error(String(error));
           cacheTimestamp = now;
           throw error;
         }
@@ -340,7 +340,7 @@ describe('HIGH Severity Reliability Issues Tests', () => {
             event.sender.send('stream-token', `token-${i}`);
           } catch (error) {
             // This would crash the main process in the current implementation
-            throw new Error(`Cannot send to destroyed WebContents: ${error.message}`);
+            throw new Error(`Cannot send to destroyed WebContents: ${error instanceof Error ? error.message : String(error)}`);
           }
         }
       };
