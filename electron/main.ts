@@ -210,26 +210,6 @@ console.error = (...args: any[]) => {
   }
 };
 
-console.warn = (...args: any[]) => {
-  const msg = args.map(a => (a instanceof Error) ? a.stack || a.message : (typeof a === 'object' ? JSON.stringify(a) : String(a))).join(' ');
-  logToFile('[WARN] ' + msg);
-  try {
-    originalWarn.apply(console, args);
-  } catch (err) {
-    logToFile('[WARN] Failed to write to original console: ' + String(err));
-  }
-};
-
-console.error = (...args: any[]) => {
-  const msg = args.map(a => (a instanceof Error) ? a.stack || a.message : (typeof a === 'object' ? JSON.stringify(a) : String(a))).join(' ');
-  logToFile('[ERROR] ' + msg);
-  try {
-    originalError.apply(console, args);
-  } catch (err) {
-    logToFile('[ERROR] Failed to write to original console: ' + String(err));
-  }
-};
-
 import { initializeIpcHandlers } from "./ipcHandlers"
 import { WindowHelper } from "./WindowHelper"
 import { SettingsWindowHelper } from "./SettingsWindowHelper"
@@ -2059,14 +2039,6 @@ try {
             
             const initTime = Date.now() - startTime;
             console.log(`[Main] ⚡ Parallel audio pipeline initialization completed in ${initTime}ms`);
-
-            if (this.ragManager) {
-              try {
-                this.ragManager.startLiveIndexing('live-meeting-current');
-              } catch (err) {
-                console.error('[Main] Live indexing failed:', err);
-              }
-            }
 
             this.setNativeAudioConnected(true);
             this.meetingLifecycleState = 'active';

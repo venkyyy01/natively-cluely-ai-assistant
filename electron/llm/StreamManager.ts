@@ -221,9 +221,10 @@ export class StreamManager {
   }
 
   private isSemanticBoundary(text: string): boolean {
-    // Flush on sentence boundaries, newlines, OR word boundaries (space/tab)
-    // to avoid holding tokens for long sentences without punctuation
-    return /[.?!]\s*$|\n$|\s$/.test(text);
+    // Flush on sentence boundaries or newlines.
+    // Also flush if buffer exceeds 200 chars without punctuation to prevent
+    // holding tokens for long unpunctuated sentences.
+    return /[.?!]\s*$|\n$/.test(text) || text.length > 200;
   }
 
   private async processStreamLegacy(

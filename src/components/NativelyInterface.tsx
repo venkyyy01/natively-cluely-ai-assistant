@@ -783,7 +783,13 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
             cleanups.push(electronAPI.onScreenshotAttached(handleScreenshotAttach));
         }
 
-        return () => cleanups.forEach(fn => fn());
+        return () => {
+            cleanups.forEach(fn => fn());
+            if (streamingRafIdRef.current !== null) {
+                cancelAnimationFrame(streamingRafIdRef.current);
+                streamingRafIdRef.current = null;
+            }
+        };
     }, [electronAPI]);
 
     // Quick Actions - Updated to use new Intelligence APIs
