@@ -1182,6 +1182,7 @@ try {
     this.transcriptBatch = [];
 
     console.log(`[TRANSCRIPT_BATCH] ⚡ Processed batch: ${finalTranscripts.length} final, ${latestInterimBySpeaker.size} interim (${sortedBatch.length} total)`);
+    });
   }
 
   /**
