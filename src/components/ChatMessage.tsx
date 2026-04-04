@@ -34,11 +34,11 @@ export const UserMessage: React.FC<ChatMessageProps> = ({ content, timestamp, is
     >
         {/* Label + Timestamp */}
         <div className="flex items-center gap-2 mb-2.5 px-1">
-            <span className="text-xs font-medium uppercase tracking-wide text-slate-400 dark:text-slate-500">
+            <span className="text-xs font-bold uppercase tracking-wider text-slate-600 dark:text-slate-400">
                 YOU
             </span>
             {timestamp && (
-                <span className="text-xs text-slate-400/70 dark:text-slate-600">
+                <span className="text-xs font-medium text-slate-500 dark:text-slate-500">
                     {timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                 </span>
             )}
@@ -59,7 +59,7 @@ export const UserMessage: React.FC<ChatMessageProps> = ({ content, timestamp, is
             shadow-sm
             dark:shadow-none
         ">
-            <p className="text-base leading-[1.7] whitespace-pre-wrap text-slate-800 dark:text-slate-200">
+            <p className="text-[15px] font-medium leading-[1.75] whitespace-pre-wrap text-slate-900 dark:text-slate-100 antialiased">
                 {content}
             </p>
         </div>
@@ -97,11 +97,11 @@ export const AssistantMessage: React.FC<ChatMessageProps> = ({
         >
             {/* Label + Timestamp */}
             <div className="flex items-center gap-2 mb-2.5 px-1">
-                <span className="text-xs font-medium uppercase tracking-wide text-slate-400 dark:text-slate-500">
+                <span className="text-xs font-bold uppercase tracking-wider text-slate-600 dark:text-slate-400">
                     AI
                 </span>
                 {timestamp && (
-                    <span className="text-xs text-slate-400/70 dark:text-slate-600">
+                    <span className="text-xs font-medium text-slate-500 dark:text-slate-500">
                         {timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                     </span>
                 )}
@@ -124,17 +124,21 @@ export const AssistantMessage: React.FC<ChatMessageProps> = ({
                     dark:prose-invert 
                     max-w-none
                     prose-p:text-[15px]
-                    prose-p:leading-[1.7]
+                    prose-p:font-normal
+                    prose-p:leading-[1.8]
                     prose-p:mb-4
                     prose-p:last:mb-0
-                    prose-p:text-slate-700
-                    dark:prose-p:text-slate-300
+                    prose-p:text-slate-900
+                    dark:prose-p:text-slate-50
+                    prose-p:antialiased
                     prose-headings:mb-3
                     prose-headings:mt-6
                     prose-headings:first:mt-0
-                    prose-headings:text-slate-800
-                    dark:prose-headings:text-slate-200
+                    prose-headings:font-bold
+                    prose-headings:text-slate-900
+                    dark:prose-headings:text-slate-50
                     prose-code:text-sm
+                    prose-code:font-semibold
                     prose-li:my-1
                 ">
                     <ReactMarkdown
@@ -142,26 +146,26 @@ export const AssistantMessage: React.FC<ChatMessageProps> = ({
                         rehypePlugins={[rehypeKatex]}
                         components={{
                             p: ({ node, ...props }: any) => (
-                                <p className="mb-4 last:mb-0 whitespace-pre-wrap text-slate-700 dark:text-slate-300" {...props} />
+                                <p className="mb-4 last:mb-0 whitespace-pre-wrap text-[15px] font-normal leading-[1.8] text-slate-900 dark:text-slate-50 antialiased" {...props} />
                             ),
                             strong: ({ node, ...props }: any) => (
-                                <strong className="font-semibold text-slate-800 dark:text-slate-200" {...props} />
+                                <strong className="font-bold text-slate-950 dark:text-white" {...props} />
                             ),
                             em: ({ node, ...props }: any) => (
-                                <em className="italic text-slate-600 dark:text-slate-400" {...props} />
+                                <em className="italic font-medium text-slate-800 dark:text-slate-200" {...props} />
                             ),
                             ul: ({ node, ...props }: any) => (
-                                <ul className="list-disc ml-5 mb-4 space-y-1.5 text-slate-700 dark:text-slate-300" {...props} />
+                                <ul className="list-disc ml-5 mb-4 space-y-2 text-slate-900 dark:text-slate-50" {...props} />
                             ),
                             ol: ({ node, ...props }: any) => (
-                                <ol className="list-decimal ml-5 mb-4 space-y-1.5 text-slate-700 dark:text-slate-300" {...props} />
+                                <ol className="list-decimal ml-5 mb-4 space-y-2 text-slate-900 dark:text-slate-50" {...props} />
                             ),
                             li: ({ node, ...props }: any) => (
-                                <li className="pl-1 leading-relaxed" {...props} />
+                                <li className="pl-1 leading-[1.75] font-normal" {...props} />
                             ),
                             a: ({ node, ...props }: any) => (
                                 <a 
-                                    className="text-blue-600 dark:text-blue-400 hover:underline" 
+                                    className="text-blue-700 dark:text-blue-300 hover:underline font-medium underline-offset-2" 
                                     target="_blank" 
                                     rel="noopener noreferrer" 
                                     {...props} 
@@ -178,7 +182,7 @@ export const AssistantMessage: React.FC<ChatMessageProps> = ({
                                 return !isInline ? (
                                     <div className="my-4 rounded-xl overflow-hidden border border-slate-200 dark:border-[#2a2a2f] shadow-sm dark:shadow-lg bg-slate-100 dark:bg-[#1a1a1e]">
                                         <div className="bg-slate-200/80 dark:bg-[#25252a] px-4 py-2 border-b border-slate-300/50 dark:border-white/[0.08]">
-                                            <span className="text-[10px] uppercase tracking-widest font-semibold text-slate-500 dark:text-slate-400 font-mono">
+                                            <span className="text-[10px] uppercase tracking-widest font-bold text-slate-600 dark:text-slate-300 font-mono">
                                                 {lang || 'CODE'}
                                             </span>
                                         </div>
@@ -190,19 +194,21 @@ export const AssistantMessage: React.FC<ChatMessageProps> = ({
                                                     margin: 0,
                                                     borderRadius: 0,
                                                     fontSize: '14px',
-                                                    lineHeight: '1.65',
+                                                    lineHeight: '1.7',
                                                     background: 'transparent',
                                                     padding: '18px',
-                                                    fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace'
+                                                    fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
+                                                    fontWeight: '500'
                                                 }}
                                                 wrapLongLines={true}
                                                 showLineNumbers={true}
                                                 lineNumberStyle={{ 
                                                     minWidth: '2.8em', 
                                                     paddingRight: '1.4em', 
-                                                    color: 'rgba(148, 163, 184, 0.3)', 
+                                                    color: 'rgba(148, 163, 184, 0.4)', 
                                                     textAlign: 'right', 
-                                                    fontSize: '12px' 
+                                                    fontSize: '12px',
+                                                    fontWeight: '500'
                                                 }}
                                                 {...props}
                                             >
@@ -212,7 +218,7 @@ export const AssistantMessage: React.FC<ChatMessageProps> = ({
                                     </div>
                                 ) : (
                                     <code 
-                                        className="bg-slate-200 dark:bg-[#25252a] px-1.5 py-0.5 rounded text-sm font-mono text-slate-800 dark:text-slate-300 border border-slate-300/60 dark:border-white/[0.08]" 
+                                        className="bg-slate-200 dark:bg-[#25252a] px-2 py-0.5 rounded text-[13px] font-semibold text-slate-900 dark:text-slate-100 border border-slate-300/60 dark:border-white/[0.08]" 
                                         {...props}
                                     >
                                         {children}
@@ -221,7 +227,7 @@ export const AssistantMessage: React.FC<ChatMessageProps> = ({
                             },
                             blockquote: ({ node, ...props }: any) => (
                                 <blockquote 
-                                    className="my-4 border-l-3 border-blue-500/60 dark:border-blue-400/40 pl-4 py-1 italic text-slate-600 dark:text-slate-400 bg-slate-100/50 dark:bg-white/[0.02] rounded-r" 
+                                    className="my-4 border-l-3 border-blue-500/60 dark:border-blue-400/40 pl-4 py-1 italic font-medium text-slate-700 dark:text-slate-300 bg-slate-100/50 dark:bg-white/[0.02] rounded-r" 
                                     {...props} 
                                 />
                             ),
@@ -254,10 +260,11 @@ export const AssistantMessage: React.FC<ChatMessageProps> = ({
                         py-1.5
                         rounded-lg
                         text-xs
-                        text-slate-600
-                        dark:text-slate-400
-                        hover:text-slate-700
-                        dark:hover:text-slate-300
+                        font-semibold
+                        text-slate-700
+                        dark:text-slate-300
+                        hover:text-slate-900
+                        dark:hover:text-slate-100
                         hover:bg-slate-200/60
                         dark:hover:bg-white/[0.05]
                         border
@@ -270,7 +277,7 @@ export const AssistantMessage: React.FC<ChatMessageProps> = ({
                 >
                     {copied ? (
                         <>
-                            <Check size={13} className="text-emerald-600 dark:text-emerald-500" />
+                            <Check size={13} className="text-emerald-600 dark:text-emerald-400" />
                             <span>Copied</span>
                         </>
                     ) : (
