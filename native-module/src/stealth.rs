@@ -1,6 +1,8 @@
 use napi::bindgen_prelude::Buffer;
 
+// Suppress warnings from deprecated cocoa/objc crate until migration to objc2
 #[cfg(target_os = "macos")]
+#[allow(unexpected_cfgs, deprecated)]
 mod macos {
     use libc::{c_char, c_void, dlsym, RTLD_DEFAULT};
     use cocoa::base::{id, nil};
