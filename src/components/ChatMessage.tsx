@@ -25,30 +25,41 @@ interface ChatMessageProps {
 // User Message Card
 // ============================================
 
-export const UserMessage: React.FC<ChatMessageProps> = ({ content, isNew = false }) => (
+export const UserMessage: React.FC<ChatMessageProps> = ({ content, timestamp, isNew = false }) => (
     <motion.article
         initial={isNew ? { opacity: 0, y: 12 } : false}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.2, ease: [0.22, 1, 0.36, 1] }}
-        className="flex justify-end mb-5"
+        className="mb-6 w-full"
     >
+        {/* Label + Timestamp */}
+        <div className="flex items-center gap-2 mb-2.5 px-1">
+            <span className="text-xs font-medium uppercase tracking-wide text-slate-400 dark:text-slate-500">
+                YOU
+            </span>
+            {timestamp && (
+                <span className="text-xs text-slate-400/70 dark:text-slate-600">
+                    {timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                </span>
+            )}
+        </div>
+
+        {/* Message Card with Left Accent - Softer, More Opaque Background */}
         <div className="
-            group
             relative
-            max-w-[75ch]
-            px-5 
+            pl-5
+            pr-6
             py-4
-            rounded-2xl 
-            rounded-tr-md
-            bg-accent-primary/90
-            dark:bg-accent-primary/80
-            text-white
+            rounded-xl
+            bg-slate-100
+            dark:bg-[#1e1e22]
+            border-l-[3px]
+            border-blue-500/80
+            dark:border-blue-400/60
             shadow-sm
-            hover:shadow-md
-            transition-shadow
-            duration-200
+            dark:shadow-none
         ">
-            <p className="text-base leading-relaxed whitespace-pre-wrap">
+            <p className="text-base leading-[1.7] whitespace-pre-wrap text-slate-800 dark:text-slate-200">
                 {content}
             </p>
         </div>
@@ -56,7 +67,7 @@ export const UserMessage: React.FC<ChatMessageProps> = ({ content, isNew = false
 );
 
 // ============================================
-// Assistant Message Card
+// Assistant Message (No Card)
 // ============================================
 
 export const AssistantMessage: React.FC<ChatMessageProps> = ({ 
@@ -82,52 +93,47 @@ export const AssistantMessage: React.FC<ChatMessageProps> = ({
             initial={isNew ? { opacity: 0, y: 12 } : false}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.2, ease: [0.22, 1, 0.36, 1] }}
-            className="flex flex-col items-start mb-5"
+            className="mb-6 w-full"
         >
-            {/* Card Container */}
-            <div className="
-                group
-                relative
-                w-full
-                max-w-[75ch]
-                px-6
-                py-5
-                rounded-xl
-                bg-bg-tertiary/95
-                backdrop-blur-sm
-                border
-                border-border-subtle
-                dark:border-white/[0.08]
-                shadow-sm
-                hover:shadow-md
-                transition-all
-                duration-200
-            ">
-                {/* Optional Timestamp Header */}
+            {/* Label + Timestamp */}
+            <div className="flex items-center gap-2 mb-2.5 px-1">
+                <span className="text-xs font-medium uppercase tracking-wide text-slate-400 dark:text-slate-500">
+                    AI
+                </span>
                 {timestamp && (
-                    <header className="flex items-center gap-2 mb-3 pb-3 border-b border-border-subtle dark:border-white/[0.06]">
-                        <span className="text-xs font-medium uppercase tracking-wide text-text-tertiary">
-                            Assistant
-                        </span>
-                        <span className="text-xs text-text-tertiary">
-                            {timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                        </span>
-                    </header>
+                    <span className="text-xs text-slate-400/70 dark:text-slate-600">
+                        {timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                    </span>
                 )}
+            </div>
 
-                {/* Message Content */}
+            {/* Message Content - Subtle Background for Better Readability */}
+            <div className="
+                px-5
+                py-4
+                rounded-xl
+                bg-slate-50/50
+                dark:bg-[#18181b]/40
+                border
+                border-slate-200/50
+                dark:border-white/[0.06]
+            ">
                 <div className="
                     prose 
                     prose-slate 
                     dark:prose-invert 
                     max-w-none
-                    prose-p:text-base
-                    prose-p:leading-relaxed
+                    prose-p:text-[15px]
+                    prose-p:leading-[1.7]
                     prose-p:mb-4
                     prose-p:last:mb-0
+                    prose-p:text-slate-700
+                    dark:prose-p:text-slate-300
                     prose-headings:mb-3
                     prose-headings:mt-6
                     prose-headings:first:mt-0
+                    prose-headings:text-slate-800
+                    dark:prose-headings:text-slate-200
                     prose-code:text-sm
                     prose-li:my-1
                 ">
@@ -136,26 +142,26 @@ export const AssistantMessage: React.FC<ChatMessageProps> = ({
                         rehypePlugins={[rehypeKatex]}
                         components={{
                             p: ({ node, ...props }: any) => (
-                                <p className="mb-4 last:mb-0 whitespace-pre-wrap text-text-primary" {...props} />
+                                <p className="mb-4 last:mb-0 whitespace-pre-wrap text-slate-700 dark:text-slate-300" {...props} />
                             ),
                             strong: ({ node, ...props }: any) => (
-                                <strong className="font-semibold text-text-primary" {...props} />
+                                <strong className="font-semibold text-slate-800 dark:text-slate-200" {...props} />
                             ),
                             em: ({ node, ...props }: any) => (
-                                <em className="italic text-text-secondary" {...props} />
+                                <em className="italic text-slate-600 dark:text-slate-400" {...props} />
                             ),
                             ul: ({ node, ...props }: any) => (
-                                <ul className="list-disc ml-5 mb-4 space-y-1.5" {...props} />
+                                <ul className="list-disc ml-5 mb-4 space-y-1.5 text-slate-700 dark:text-slate-300" {...props} />
                             ),
                             ol: ({ node, ...props }: any) => (
-                                <ol className="list-decimal ml-5 mb-4 space-y-1.5" {...props} />
+                                <ol className="list-decimal ml-5 mb-4 space-y-1.5 text-slate-700 dark:text-slate-300" {...props} />
                             ),
                             li: ({ node, ...props }: any) => (
                                 <li className="pl-1 leading-relaxed" {...props} />
                             ),
                             a: ({ node, ...props }: any) => (
                                 <a 
-                                    className="text-accent-primary hover:underline" 
+                                    className="text-blue-600 dark:text-blue-400 hover:underline" 
                                     target="_blank" 
                                     rel="noopener noreferrer" 
                                     {...props} 
@@ -170,13 +176,13 @@ export const AssistantMessage: React.FC<ChatMessageProps> = ({
                                 const lang = match ? match[1] : '';
 
                                 return !isInline ? (
-                                    <div className="my-4 rounded-xl overflow-hidden border border-border-muted dark:border-white/[0.08] shadow-lg bg-zinc-800/60 dark:bg-zinc-900/60 backdrop-blur-md">
-                                        <div className="bg-white/[0.04] px-3 py-1.5 border-b border-white/[0.08]">
-                                            <span className="text-[10px] uppercase tracking-widest font-semibold text-white/40 font-mono">
+                                    <div className="my-4 rounded-xl overflow-hidden border border-slate-200 dark:border-[#2a2a2f] shadow-sm dark:shadow-lg bg-slate-100 dark:bg-[#1a1a1e]">
+                                        <div className="bg-slate-200/80 dark:bg-[#25252a] px-4 py-2 border-b border-slate-300/50 dark:border-white/[0.08]">
+                                            <span className="text-[10px] uppercase tracking-widest font-semibold text-slate-500 dark:text-slate-400 font-mono">
                                                 {lang || 'CODE'}
                                             </span>
                                         </div>
-                                        <div className="bg-transparent">
+                                        <div className="bg-white dark:bg-[#1a1a1e]">
                                             <SyntaxHighlighter
                                                 language={lang || 'text'}
                                                 style={vscDarkPlus}
@@ -184,17 +190,17 @@ export const AssistantMessage: React.FC<ChatMessageProps> = ({
                                                     margin: 0,
                                                     borderRadius: 0,
                                                     fontSize: '14px',
-                                                    lineHeight: '1.6',
+                                                    lineHeight: '1.65',
                                                     background: 'transparent',
-                                                    padding: '16px',
+                                                    padding: '18px',
                                                     fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace'
                                                 }}
                                                 wrapLongLines={true}
                                                 showLineNumbers={true}
                                                 lineNumberStyle={{ 
-                                                    minWidth: '2.5em', 
-                                                    paddingRight: '1.2em', 
-                                                    color: 'rgba(255,255,255,0.2)', 
+                                                    minWidth: '2.8em', 
+                                                    paddingRight: '1.4em', 
+                                                    color: 'rgba(148, 163, 184, 0.3)', 
                                                     textAlign: 'right', 
                                                     fontSize: '12px' 
                                                 }}
@@ -206,7 +212,7 @@ export const AssistantMessage: React.FC<ChatMessageProps> = ({
                                     </div>
                                 ) : (
                                     <code 
-                                        className="bg-bg-input dark:bg-white/[0.06] px-1.5 py-0.5 rounded text-sm font-mono text-text-primary border border-border-subtle dark:border-white/[0.08]" 
+                                        className="bg-slate-200 dark:bg-[#25252a] px-1.5 py-0.5 rounded text-sm font-mono text-slate-800 dark:text-slate-300 border border-slate-300/60 dark:border-white/[0.08]" 
                                         {...props}
                                     >
                                         {children}
@@ -215,7 +221,7 @@ export const AssistantMessage: React.FC<ChatMessageProps> = ({
                             },
                             blockquote: ({ node, ...props }: any) => (
                                 <blockquote 
-                                    className="my-3 border-l-2 border-accent-primary pl-4 italic text-text-secondary" 
+                                    className="my-4 border-l-3 border-blue-500/60 dark:border-blue-400/40 pl-4 py-1 italic text-slate-600 dark:text-slate-400 bg-slate-100/50 dark:bg-white/[0.02] rounded-r" 
                                     {...props} 
                                 />
                             ),
@@ -228,26 +234,11 @@ export const AssistantMessage: React.FC<ChatMessageProps> = ({
                 {/* Streaming Cursor */}
                 {isStreaming && (
                     <motion.span
-                        className="inline-block w-0.5 h-4 bg-accent-primary ml-0.5 align-middle"
+                        className="inline-block w-0.5 h-4 bg-blue-500 dark:bg-blue-400 ml-0.5 align-middle"
                         animate={{ opacity: [1, 0] }}
                         transition={{ duration: 0.5, repeat: Infinity }}
                     />
                 )}
-
-                {/* Accent Line (Hover Indicator) */}
-                <div className="
-                    absolute 
-                    -left-3 
-                    top-6 
-                    w-1 
-                    h-10 
-                    rounded-full 
-                    bg-accent-primary
-                    opacity-0 
-                    group-hover:opacity-100 
-                    transition-opacity
-                    duration-200
-                " />
             </div>
 
             {/* Copy Button */}
@@ -257,30 +248,35 @@ export const AssistantMessage: React.FC<ChatMessageProps> = ({
                     className="
                         flex 
                         items-center 
-                        gap-2 
+                        gap-1.5
                         mt-3 
-                        ml-2
                         px-3
                         py-1.5
                         rounded-lg
-                        text-[13px] 
-                        text-text-tertiary 
-                        hover:text-text-primary
-                        hover:bg-bg-input
-                        dark:hover:bg-white/[0.04]
+                        text-xs
+                        text-slate-600
+                        dark:text-slate-400
+                        hover:text-slate-700
+                        dark:hover:text-slate-300
+                        hover:bg-slate-200/60
+                        dark:hover:bg-white/[0.05]
+                        border
+                        border-transparent
+                        hover:border-slate-300/50
+                        dark:hover:border-white/[0.08]
                         transition-all
                         duration-150
                     "
                 >
                     {copied ? (
                         <>
-                            <Check size={14} className="text-emerald-500" />
+                            <Check size={13} className="text-emerald-600 dark:text-emerald-500" />
                             <span>Copied</span>
                         </>
                     ) : (
                         <>
-                            <Copy size={14} />
-                            <span>Copy message</span>
+                            <Copy size={13} />
+                            <span>Copy</span>
                         </>
                     )}
                 </button>
