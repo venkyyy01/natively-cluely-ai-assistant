@@ -102,18 +102,16 @@ impl SpeakerInput {
 
         // Get available content - triggers permission check
         // Use blocking wait since we're in a sync context
-        use std::cell::UnsafeCell;
         use std::sync::{
             atomic::{AtomicBool, Ordering},
-            Arc,
+            Arc, Mutex,
         };
 
-        let content_cell: Arc<UnsafeCell<Option<arc::R<sc::ShareableContent>>>> =
-            Arc::new(UnsafeCell::new(None));
+        let content: Arc<Mutex<Option<arc::R<sc::ShareableContent>>>> = Arc::new(Mutex::new(None));
         let content_ready = Arc::new(AtomicBool::new(false));
         let content_error = Arc::new(AtomicBool::new(false));
 
-        let cell_clone = content_cell.clone();
+        let content_clone = content.clone();
         let ready_clone = content_ready.clone();
         let error_clone = content_error.clone();
 
@@ -125,10 +123,8 @@ impl SpeakerInput {
                 );
                 error_clone.store(true, Ordering::SeqCst);
             } else if let Some(c) = content_opt {
-                // Retain the content
-                unsafe {
-                    *cell_clone.get() = Some(c.retained());
-                }
+                let mut guard = content_clone.lock().unwrap();
+                *guard = Some(c.retained());
             }
             ready_clone.store(true, Ordering::SeqCst);
         });
@@ -146,7 +142,9 @@ impl SpeakerInput {
             return Err(anyhow::anyhow!("ScreenCaptureKit access denied"));
         }
 
-        let content = unsafe { (*content_cell.get()).take() }
+        let mut guard = content.lock().unwrap();
+        let content = guard
+            .take()
             .ok_or_else(|| anyhow::anyhow!("Failed to get shareable content (timeout)"))?;
 
         let displays = content.displays();

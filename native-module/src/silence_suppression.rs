@@ -65,7 +65,7 @@ impl SilenceSuppressionConfig {
     pub fn for_system_audio() -> Self {
         Self {
             speech_threshold_rms: 30.0,
-            speech_hangover: Duration::from_millis(300),
+            speech_hangover: Duration::from_millis(100),
             silence_keepalive_interval: Duration::from_millis(100),
             adaptive_multiplier: 3.0,
             adaptive_min_floor: 10.0,
@@ -78,7 +78,7 @@ impl SilenceSuppressionConfig {
     pub fn for_microphone() -> Self {
         Self {
             speech_threshold_rms: 100.0,
-            speech_hangover: Duration::from_millis(150),
+            speech_hangover: Duration::from_millis(100),
             silence_keepalive_interval: Duration::from_millis(100),
             adaptive_multiplier: 3.0,
             adaptive_min_floor: 20.0,

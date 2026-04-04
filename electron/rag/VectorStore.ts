@@ -584,11 +584,13 @@ export class VectorStore {
                         }
                     }
 
-                    const sIds = this.db.prepare('SELECT id FROM chunk_summaries WHERE meeting_id = ?').get(id) as any;
-                    if (sIds) {
+                    const sIds = this.db.prepare('SELECT id FROM chunk_summaries WHERE meeting_id = ?').all(id) as any[];
+                    if (sIds.length > 0) {
                         for (const dim of DatabaseManager.KNOWN_DIMS) {
                             try {
-                                this.db.prepare(`DELETE FROM vec_summaries_${dim} WHERE summary_id = ?`).run(sIds.id);
+                                const placeholders = sIds.map(() => '?').join(',');
+                                const idList = sIds.map(r => r.id);
+                                this.db.prepare(`DELETE FROM vec_summaries_${dim} WHERE summary_id IN (${placeholders})`).run(...idList);
                             } catch (_) { /* dim table may not exist */ }
                         }
                     }

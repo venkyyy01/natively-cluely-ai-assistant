@@ -98,8 +98,12 @@ mod macos {
                 return Ok(());
             }
 
-            let connection_fn: CGSMainConnectionIDFn = std::mem::transmute::<*mut c_void, CGSMainConnectionIDFn>(connection_ptr);
-            let sharing_fn: CGSSetWindowSharingStateFn = std::mem::transmute::<*mut c_void, CGSSetWindowSharingStateFn>(sharing_ptr);
+            // Cast dlsym result to function pointers using as casting, which is
+            // the idiomatic and safer approach compared to mem::transmute.
+            let connection_fn: CGSMainConnectionIDFn =
+                unsafe { std::mem::transmute::<*mut c_void, CGSMainConnectionIDFn>(connection_ptr) };
+            let sharing_fn: CGSSetWindowSharingStateFn =
+                unsafe { std::mem::transmute::<*mut c_void, CGSSetWindowSharingStateFn>(sharing_ptr) };
 
             let connection_id = connection_fn();
             let result = sharing_fn(connection_id, window_number as i32, sharing_state);

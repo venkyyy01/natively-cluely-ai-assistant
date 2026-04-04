@@ -190,16 +190,6 @@ const LauncherWindowContent: React.FC<LauncherWindowContentProps> = ({
             }}
           >
             <AppProviders>
-              <AnimatePresence>
-                {meetingAudioError && (
-                  <MemoizedMeetingAudioBanner
-                    message={meetingAudioError}
-                    title="Audio setup needs attention"
-                    variant="launcher"
-                    onDismiss={onClearMeetingAudioError}
-                  />
-                )}
-              </AnimatePresence>
               <div id="launcher-container" className="h-full w-full relative">
                 <AnimatePresence>
                   {meetingAudioError && (

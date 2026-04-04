@@ -47,8 +47,10 @@ const REST_SAFETY_NET_MS = 10_000;
 /** Minimum buffered bytes before attempting a REST upload */
 const REST_MIN_UPLOAD_BYTES = 4_000;
 
-/** WebSocket Audio Batching: Number of 24kHz samples to accumulate before sending to prevent rate limits (~250ms) */
-const SEND_THRESHOLD_SAMPLES = 6000;
+/** WebSocket Audio Batching: Number of 24kHz samples to accumulate before sending.
+ *  600 samples = 25ms at 24kHz — minimal batching for near-instant transcription
+ *  while still avoiding per-frame overhead. OpenAI Realtime API handles this fine. */
+const SEND_THRESHOLD_SAMPLES = 600;
 
 /** Silence RMS threshold — skip REST uploads for silent buffers */
 const SILENCE_RMS_THRESHOLD = 50;
@@ -309,7 +311,7 @@ export class OpenAIStreamingSTT extends EventEmitter {
                         type:                'server_vad',
                         threshold:           0.5,
                         prefix_padding_ms:   300,
-                        silence_duration_ms: 500,
+                        silence_duration_ms: 400,
                     },
                     // Server-side noise reduction
                     input_audio_noise_reduction: {

@@ -758,7 +758,7 @@ export class LLMHelper {
   }
 
   private async withRetry<T>(fn: () => Promise<T>, retries = 3): Promise<T> {
-    let delay = 400;
+    let delay = 100;
     for (let i = 0; i < retries; i++) {
       try {
         return await fn();
@@ -938,6 +938,12 @@ export class LLMHelper {
    */
   private async processImage(path: string): Promise<{ mimeType: string, data: string }> {
     try {
+      // Guard against excessively large files (50 MB) to prevent OOM
+      const stat = await fs.promises.stat(path);
+      if (stat.size > 50 * 1024 * 1024) {
+        throw new Error(`Image file too large (${(stat.size / 1024 / 1024).toFixed(1)} MB). Maximum is 50 MB.`);
+      }
+
       const imageBuffer = await fs.promises.readFile(path);
 
       // Resize and compress
@@ -1558,42 +1564,6 @@ ANSWER DIRECTLY:`;
         console.error("[LLMHelper] ❌ All non-streaming providers exhausted");
         return "I apologize, but I couldn't generate a response. Please try again.";
       }
-
-      if (providers.length === 0) {
-        return "No AI providers configured. Please add at least one API key in Settings.";
-      }
-
-      // ============================================================
-      // RELENTLESS RETRY: Try all providers, then retry entire chain
-      // with exponential backoff. Max 2 full rotations.
-      // ============================================================
-      const MAX_FULL_ROTATIONS = 3;
-
-      for (let rotation = 0; rotation < MAX_FULL_ROTATIONS; rotation++) {
-        if (rotation > 0) {
-          const backoffMs = 1000 * rotation;
-          console.log(`[LLMHelper] 🔄 Non-streaming rotation ${rotation + 1}/${MAX_FULL_ROTATIONS} after ${backoffMs}ms backoff...`);
-          await this.delay(backoffMs);
-        }
-
-        for (const provider of providers) {
-          try {
-            console.log(`[LLMHelper] ${rotation === 0 ? '🚀' : '🔁'} Attempting ${provider.name}...`);
-            const rawResponse = await provider.execute();
-            if (rawResponse && rawResponse.trim().length > 0) {
-              console.log(`[LLMHelper] ✅ ${provider.name} succeeded`);
-              return this.processResponse(rawResponse);
-            }
-            console.warn(`[LLMHelper] ⚠️ ${provider.name} returned empty response`);
-          } catch (error: any) {
-            console.warn(`[LLMHelper] ⚠️ ${provider.name} failed: ${error.message}`);
-          }
-        }
-      }
-
-      // All exhausted
-      console.error("[LLMHelper] ❌ All non-streaming providers exhausted");
-      return "I apologize, but I couldn't generate a response. Please try again.";
 
     } catch (error: any) {
       console.error("[LLMHelper] Critical Error in chatWithGemini:", sanitizeError(error));

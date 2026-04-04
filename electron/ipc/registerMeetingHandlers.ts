@@ -72,7 +72,15 @@ export function registerMeetingHandlers({ appState, safeHandle, safeHandleValida
     return { success: true };
   });
 
+  // Rate-limited flush to prevent accidental data wipes (5s cooldown)
+  let lastFlushAt = 0;
   safeHandle('flush-database', async () => {
+    const now = Date.now();
+    if (now - lastFlushAt < 5000) {
+      return { success: false, error: 'Flush is rate-limited. Please wait a few seconds before trying again.' };
+    }
+    lastFlushAt = now;
+    console.warn('[IPC] flush-database called — clearing all data');
     const result = DatabaseManager.getInstance().clearAllData();
     return { success: result };
   });

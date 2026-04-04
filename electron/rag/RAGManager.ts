@@ -4,6 +4,7 @@
 
 import Database from 'better-sqlite3';
 import { LLMHelper } from '../LLMHelper';
+import { DatabaseManager } from '../db/DatabaseManager';
 import { preprocessTranscript, RawSegment } from './TranscriptPreprocessor';
 import { chunkTranscript } from './SemanticChunker';
 import { VectorStore } from './VectorStore';
@@ -106,10 +107,14 @@ export class RAGManager {
         }
 
         // 5. Queue for embedding (background processing)
-        if (this.embeddingPipeline.isReady()) {
+        // Always queue even if embeddings not yet ready — the pipeline will
+        // process them when the model finishes loading. This prevents silent
+        // data loss when the first meeting ends before the embedding model
+        // has finished initializing.
+        try {
             await this.embeddingPipeline.queueMeeting(meetingId);
-        } else {
-            console.log(`[RAGManager] Embeddings not ready, chunks saved without embeddings`);
+        } catch (err: any) {
+            console.warn(`[RAGManager] Failed to queue meeting ${meetingId} for embeddings: ${err.message}`);
         }
 
         return { chunkCount: chunks.length };
@@ -323,7 +328,6 @@ export class RAGManager {
         this.deleteMeetingData(meetingId);
 
         // Fetch meeting details from DB
-        const { DatabaseManager } = require('../db/DatabaseManager');
         const meeting = DatabaseManager.getInstance().getMeetingDetails(meetingId);
 
         if (!meeting) {
@@ -366,7 +370,6 @@ export class RAGManager {
         const demoId = 'demo-meeting'; // Corrected ID to match DatabaseManager
 
         // Check if demo meeting exists in DB
-        const { DatabaseManager } = require('../db/DatabaseManager');
         const meeting = DatabaseManager.getInstance().getMeetingDetails(demoId);
 
         if (!meeting) {

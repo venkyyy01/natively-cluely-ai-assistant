@@ -103,7 +103,7 @@ export class IntelligenceEngine extends EventEmitter {
   // Timestamps for tracking
   private lastTranscriptTime: number = 0;
   private lastTriggerTime: number = 0;
-  private readonly triggerCooldown: number = 3000; // 3 seconds
+  private readonly triggerCooldown: number = 1000; // 1 second — fast enough for rapid follow-ups
 
   constructor(llmHelper: LLMHelper, session: SessionTracker) {
     super();

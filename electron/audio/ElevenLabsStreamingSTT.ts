@@ -24,10 +24,10 @@ export class ElevenLabsStreamingSTT extends EventEmitter {
     
     private debugWriteStream: fs.WriteStream | null = null;
     
-    // Chunk buffering properties (250ms @ 16k = 4000 samples)
+    // Chunk buffering properties (100ms @ 16k = 1600 samples)
     private pcmAccumulator: Int16Array[] = [];
     private pcmAccumulatorLen = 0;
-    private readonly SEND_THRESHOLD_SAMPLES = 4000;
+    private readonly SEND_THRESHOLD_SAMPLES = 1600;
     
     private debugMessageCount = 0;
 

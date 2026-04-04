@@ -129,8 +129,6 @@ const KNOWN_CAPTURE_TOOL_PATTERNS = [
   /camtasia/i,
   /bandicam/i,
   /printwindow/i,
-  /chrome/i,
-  /chromium/i,
   /msedge/i,
   /microsoft edge/i,
   /brave/i,

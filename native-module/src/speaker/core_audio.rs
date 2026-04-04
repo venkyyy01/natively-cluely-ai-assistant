@@ -147,7 +147,11 @@ extern "C" fn proc(
     _output_time: &cat::AudioTimeStamp,
     ctx: Option<&mut Ctx>,
 ) -> os::Status {
-    let ctx = ctx.unwrap();
+    let Some(ctx) = ctx else {
+        // Returning an error status is safer than unwrap() in an audio callback —
+        // a panic here would crash the entire process.
+        return os::Status::UNIMPLEMENTED;
+    };
 
     ctx.current_sample_rate.store(
         device

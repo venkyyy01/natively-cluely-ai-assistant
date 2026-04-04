@@ -184,7 +184,7 @@ export const AIProvidersSettings: React.FC = () => {
         }
     }, [hasStoredKey, fastResponseConfig]);
 
-    // Poll for Ollama status every 3 seconds requesting smart start on mount
+    // Poll for Ollama status every 10 seconds (reduced from 3s to avoid unnecessary IPC traffic)
     useEffect(() => {
         // Immediate "Smart Start" check
         ensureOllamaStartup();
@@ -192,7 +192,7 @@ export const AIProvidersSettings: React.FC = () => {
         // Background polling for maintenance
         const interval = setInterval(() => {
             checkOllama(false);
-        }, 3000);
+        }, 10000);
         return () => clearInterval(interval);
     }, []);
 

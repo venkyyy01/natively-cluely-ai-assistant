@@ -57,6 +57,23 @@ const isDev = process.env.NODE_ENV === "development";
 
 // Log queue for non-blocking async writes
 const LOG_QUEUE_MAX_SIZE = 10000;
+
+// Audio pipeline timing constants
+const AUDIO_HEALTH_CHECK_INTERVAL_MS = 8000;
+const AUDIO_RECOVERY_BACKOFF_MS = 5000;
+const AUDIO_LEVEL_MAX_RMS = 10000; // Heuristic scaling: max comfortable mic input
+
+// Meeting lifecycle timing constants
+const MEETING_START_MUTEX_TIMEOUT_MS = 10000;
+const MEETING_PENDING_SAVE_TIMEOUT_MS = 10000;
+const MEETING_START_RETRY_DELAY_MS = 100;
+
+// Disguise timing constants
+const DISGUISE_SETTINGS_SYNC_INTERVAL_MS = 500;
+const DISGUISE_FORCE_UPDATE_INTERVALS_MS = [200, 1000, 5000] as const;
+
+// Detection timing constants
+const DETECTION_TIMEOUT_MS = 2000;
 let logQueue: string[] = [];
 let logFlushInProgress = false;
 let logRotationCheckPending = false;
@@ -168,7 +185,9 @@ console.log = (...args: any[]) => {
   logToFile('[LOG] ' + msg);
   try {
     originalLog.apply(console, args);
-  } catch { }
+  } catch (err) {
+    logToFile('[LOG] Failed to write to original console: ' + String(err));
+  }
 };
 
 console.warn = (...args: any[]) => {
@@ -176,7 +195,9 @@ console.warn = (...args: any[]) => {
   logToFile('[WARN] ' + msg);
   try {
     originalWarn.apply(console, args);
-  } catch { }
+  } catch (err) {
+    logToFile('[WARN] Failed to write to original console: ' + String(err));
+  }
 };
 
 console.error = (...args: any[]) => {
@@ -184,7 +205,29 @@ console.error = (...args: any[]) => {
   logToFile('[ERROR] ' + msg);
   try {
     originalError.apply(console, args);
-  } catch { }
+  } catch (err) {
+    logToFile('[ERROR] Failed to write to original console: ' + String(err));
+  }
+};
+
+console.warn = (...args: any[]) => {
+  const msg = args.map(a => (a instanceof Error) ? a.stack || a.message : (typeof a === 'object' ? JSON.stringify(a) : String(a))).join(' ');
+  logToFile('[WARN] ' + msg);
+  try {
+    originalWarn.apply(console, args);
+  } catch (err) {
+    logToFile('[WARN] Failed to write to original console: ' + String(err));
+  }
+};
+
+console.error = (...args: any[]) => {
+  const msg = args.map(a => (a instanceof Error) ? a.stack || a.message : (typeof a === 'object' ? JSON.stringify(a) : String(a))).join(' ');
+  logToFile('[ERROR] ' + msg);
+  try {
+    originalError.apply(console, args);
+  } catch (err) {
+    logToFile('[ERROR] Failed to write to original console: ' + String(err));
+  }
 };
 
 import { initializeIpcHandlers } from "./ipcHandlers"
@@ -335,7 +378,7 @@ export class AppState {
   private meetingStateMachine = new MeetingStateMachine(); // CRITICAL FIX: Thread-safe state management
   private meetingLifecycleState: 'idle' | 'starting' | 'active' | 'stopping' = 'idle'
   private meetingStartSequence = 0
-  private meetingStartMutex = new AsyncMutex({ name: 'MeetingStart', timeout: 10000 }) // Proper async mutex
+  private meetingStartMutex = new AsyncMutex({ name: 'MeetingStart', timeout: MEETING_START_MUTEX_TIMEOUT_MS }) // Proper async mutex
   private nativeAudioConnected: boolean = false;
   private _disguiseTimers: NodeJS.Timeout[] = []; // Track forceUpdate timeouts
 
