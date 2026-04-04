@@ -175,12 +175,12 @@ impl SystemAudioCapture {
                     match action {
                         FrameAction::Send(data) => {
                             let bytes = i16_slice_to_le_bytes(&data);
-                            tsfn.call(Buffer::from(bytes), ThreadsafeFunctionCallMode::NonBlocking);
+                            tsfn.call(Ok(Buffer::from(bytes)), ThreadsafeFunctionCallMode::NonBlocking);
                             last_emit_at = Instant::now();
                         }
                         FrameAction::SendSilence => {
                             tsfn.call(
-                                Buffer::from(silence.clone()),
+                                Ok(Buffer::from(silence.clone())),
                                 ThreadsafeFunctionCallMode::NonBlocking,
                             );
                             last_emit_at = Instant::now();
@@ -193,7 +193,7 @@ impl SystemAudioCapture {
                     // Fire speech_ended callback on the exact transition frame
                     if speech_ended {
                         if let Some(ref se_tsfn) = speech_ended_tsfn {
-                            se_tsfn.call(true, ThreadsafeFunctionCallMode::NonBlocking);
+                            se_tsfn.call(Ok(true), ThreadsafeFunctionCallMode::NonBlocking);
                         }
                     }
                 }
@@ -203,7 +203,7 @@ impl SystemAudioCapture {
                     && last_emit_at.elapsed() >= Duration::from_millis(100)
                 {
                     tsfn.call(
-                        Buffer::from(silence.clone()),
+                        Ok(Buffer::from(silence.clone())),
                         ThreadsafeFunctionCallMode::NonBlocking,
                     );
                     last_emit_at = Instant::now();
@@ -393,12 +393,12 @@ impl MicrophoneCapture {
                     match action {
                         FrameAction::Send(data) => {
                             let bytes = i16_slice_to_le_bytes(&data);
-                            tsfn.call(Buffer::from(bytes), ThreadsafeFunctionCallMode::NonBlocking);
+                            tsfn.call(Ok(Buffer::from(bytes)), ThreadsafeFunctionCallMode::NonBlocking);
                         }
                         FrameAction::SendSilence => {
                             let silence = vec![0u8; chunk_size * 2];
                             tsfn.call(
-                                Buffer::from(silence),
+                                Ok(Buffer::from(silence)),
                                 ThreadsafeFunctionCallMode::NonBlocking,
                             );
                         }
@@ -409,7 +409,7 @@ impl MicrophoneCapture {
 
                     if speech_ended {
                         if let Some(ref se_tsfn) = speech_ended_tsfn {
-                            se_tsfn.call(true, ThreadsafeFunctionCallMode::NonBlocking);
+                            se_tsfn.call(Ok(true), ThreadsafeFunctionCallMode::NonBlocking);
                         }
                     }
                 }
