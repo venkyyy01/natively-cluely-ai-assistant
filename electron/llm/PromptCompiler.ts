@@ -74,6 +74,16 @@ export class PromptCompiler {
     const adapter = PROVIDER_ADAPTERS[options.provider] || PROVIDER_ADAPTERS.custom;
     const phaseGuidance = PHASE_GUIDANCE[options.phase] || '';
 
+    // Route coding prompts to ThoughtFlow when optimization mode is enabled.
+    // Keep behavior consistent with compileLegacy().
+    if (options.mode === 'conscious' && options.userQuestion && isCodingQuestion(options.userQuestion)) {
+      return {
+        systemPrompt: THOUGHTFLOW_CODING_PROMPT,
+        responseFormat: 'json',
+        estimatedTokens: this.estimateTokens(THOUGHTFLOW_CODING_PROMPT),
+      };
+    }
+
     const components = [
       CORE_IDENTITY,
       STRICT_BEHAVIOR_RULES,
@@ -109,11 +119,15 @@ export class PromptCompiler {
 <conscious_mode_contract>
 When in conscious mode, respond with valid JSON in this exact format:
 {
-  "reasoning": "Your internal reasoning (not shown to user)",
-  "answer": "What the user should say (plain text)",
-  "confidence": 0.95,
-  "suggestedFollowUps": ["Question 1", "Question 2"],
-  "relevantContext": ["Context snippet 1", "Context snippet 2"]
+  "mode": "reasoning_first",
+  "openingReasoning": "1-3 concise setup sentences",
+  "implementationPlan": ["Step 1", "Step 2"],
+  "tradeoffs": ["Tradeoff 1", "Tradeoff 2"],
+  "edgeCases": ["Edge case 1", "Edge case 2"],
+  "scaleConsiderations": ["Scale note 1"],
+  "pushbackResponses": ["If interviewer pushes back, say..."],
+  "likelyFollowUps": ["Likely follow-up question"],
+  "codeTransition": "If code is requested, bridge naturally with one sentence"
 }
 DO NOT include any other text outside the JSON.
 </conscious_mode_contract>

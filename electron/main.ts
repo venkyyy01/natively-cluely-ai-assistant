@@ -1965,14 +1965,18 @@ try {
         }
 
         setTimeout(async () => {
-          if (startSequence !== this.meetingStartSequence || this.meetingLifecycleState !== 'starting') {
-            console.warn('[Main] Skipping stale deferred meeting start');
-            await this.resetMeetingStateMachine('Meeting start invalidated before deferred startup');
-            resolve();
-            return;
-          }
-
           try {
+            if (startSequence !== this.meetingStartSequence || this.meetingLifecycleState !== 'starting') {
+              console.warn('[Main] Skipping stale deferred meeting start');
+              try {
+                await this.resetMeetingStateMachine('Meeting start invalidated before deferred startup');
+              } catch (err) {
+                console.error('[Main] Failed to reset meeting state machine for stale deferred start:', err);
+              }
+              resolve();
+              return;
+            }
+
             // PERFORMANCE OPTIMIZATION: Parallel initialization instead of sequential
             console.log('[Main] Starting parallel audio pipeline initialization...');
             const startTime = Date.now();
@@ -2021,13 +2025,26 @@ try {
             // Sync sample rates after parallel initialization
             this.syncAudioSampleRates();
 
-            // Start all services in parallel
-            const serviceStartTasks = [
-              Promise.resolve().then(() => this.googleSTT?.start()),
-              Promise.resolve().then(() => this.googleSTT_User?.start()),
-              Promise.resolve().then(() => this.systemAudioCapture?.start()),
-              Promise.resolve().then(() => this.microphoneCapture?.start())
-            ].filter(task => task !== undefined);
+            // Start all initialized services in parallel.
+            // Avoid optional chaining here because Promise.resolve().then(() => this.foo?.start())
+            // silently resolves even when foo is missing.
+            const serviceStartTasks: Promise<unknown>[] = [];
+            if (this.googleSTT) {
+              serviceStartTasks.push(Promise.resolve().then(() => this.googleSTT!.start()));
+            }
+            if (this.googleSTT_User) {
+              serviceStartTasks.push(Promise.resolve().then(() => this.googleSTT_User!.start()));
+            }
+            if (this.systemAudioCapture) {
+              serviceStartTasks.push(Promise.resolve().then(() => this.systemAudioCapture!.start()));
+            }
+            if (this.microphoneCapture) {
+              serviceStartTasks.push(Promise.resolve().then(() => this.microphoneCapture!.start()));
+            }
+
+            if (serviceStartTasks.length === 0) {
+              throw new Error('No audio services available to start');
+            }
 
             await Promise.all(serviceStartTasks);
             this.scheduleAudioPipelineHealthCheck();
@@ -2050,7 +2067,11 @@ try {
             console.error('[Main] Failed to complete meeting startup:', error);
             this.meetingLifecycleState = 'idle';
             this.currentMeetingId = null;
-            await this.resetMeetingStateMachine('Meeting startup failed');
+            try {
+              await this.resetMeetingStateMachine('Meeting startup failed');
+            } catch (err) {
+              console.error('[Main] Failed to reset meeting state machine after startup failure:', err);
+            }
             reject(error);
           }
         }, 100);
@@ -2067,7 +2088,11 @@ try {
     this.currentMeetingId = null;
     const endSequence = ++this.meetingStartSequence  // Increment sequence to invalidate any pending starts
     this.meetingLifecycleState = 'stopping'
-    await this.meetingStateMachine.stopMeeting('User requested stop'); // Start stop sequence
+    try {
+      await this.meetingStateMachine.stopMeeting('User requested stop'); // Start stop sequence
+    } catch (err) {
+      console.error('[Main] MeetingStateMachine.stopMeeting failed:', err);
+    }
     this.setNativeAudioConnected(false);
 
     // Wait for any pending meeting start operations to complete before proceeding
@@ -2185,7 +2210,11 @@ try {
       this.ragManager.deleteMeetingData('live-meeting-current');
     }
 
-    await this.resetMeetingStateMachine('Meeting cleanup complete');
+    try {
+      await this.resetMeetingStateMachine('Meeting cleanup complete');
+    } catch (err) {
+      console.error('[Main] resetMeetingStateMachine failed during endMeeting:', err);
+    }
     this.meetingLifecycleState = 'idle'
   }
 
@@ -3228,6 +3257,8 @@ async function initializeApp() {
           title: event.title,
           calendarEventId: event.id,
           source: 'calendar'
+        }).catch((err) => {
+          console.error('[Main] Calendar meeting start failed:', err);
         });
       });
 
@@ -3286,7 +3317,10 @@ app.on("before-quit", async (e) => {
   if (appState.getIsMeetingActive()) {
     console.log("[Main] Meeting active during quit, ending meeting before exit...");
     try {
-      await appState.endMeeting();
+      await Promise.race([
+        appState.endMeeting(),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('endMeeting timeout')), 5000)),
+      ]);
     } catch (err) {
       console.error("[Main] Error ending meeting on quit:", err);
     }
@@ -3295,8 +3329,16 @@ app.on("before-quit", async (e) => {
   console.log("App is quitting, cleaning up resources...");
 
   try {
-    await appState.getIntelligenceManager()?.waitForPendingSaves(10000);
-    console.log('[Main] All pending saves completed');
+    const intelMgr = appState.getIntelligenceManager();
+    if (intelMgr) {
+      await Promise.race([
+        intelMgr.waitForPendingSaves(10000),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('waitForPendingSaves timeout')), 5000)),
+      ]);
+      console.log('[Main] All pending saves completed');
+    } else {
+      console.log('[Main] IntelligenceManager not available, skipping pending saves');
+    }
   } catch (err) {
     console.warn('[Main] Failed to wait for pending saves:', err);
   }
