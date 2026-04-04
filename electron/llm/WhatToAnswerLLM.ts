@@ -2,7 +2,7 @@ import { LLMHelper } from "../LLMHelper";
 import { FAST_STANDARD_ANSWER_PROMPT, UNIVERSAL_WHAT_TO_ANSWER_PROMPT } from "./prompts";
 import { TemporalContext } from "./TemporalContextBuilder";
 import { IntentResult } from "./IntentClassifier";
-import { ConsciousModeStructuredResponse, parseConsciousModeResponse } from "../ConsciousMode";
+import { ConsciousModeResponse, parseConsciousModeResponse } from "../ConsciousMode";
 
 export interface StreamFailureDetails {
     error: unknown;
@@ -112,7 +112,7 @@ ANSWER SHAPE: ${intentResult.answerShape}
         temporalContext?: TemporalContext,
         intentResult?: IntentResult,
         imagePaths?: string[]
-    ): Promise<ConsciousModeStructuredResponse> {
+    ): Promise<ConsciousModeResponse> {
         let full = "";
 
         const contextParts: string[] = [

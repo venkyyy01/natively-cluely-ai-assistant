@@ -1,13 +1,17 @@
 import { LLMHelper } from "../LLMHelper";
 import { UNIVERSAL_ANSWER_PROMPT } from "./prompts";
-import { ConsciousModeStructuredResponse, parseConsciousModeResponse } from "../ConsciousMode";
+import { ConsciousModeResponse, parseConsciousModeResponse } from "../ConsciousMode";
 import { Result, Ok, Err, LLMError, wrapAsync } from "../types/Result";
+import { PromptCompiler } from "./PromptCompiler";
+import { InterviewPhase } from "../conscious/types";
 
 export class AnswerLLM {
     private llmHelper: LLMHelper;
+    private promptCompiler: PromptCompiler | null;
 
-    constructor(llmHelper: LLMHelper) {
+    constructor(llmHelper: LLMHelper, promptCompiler?: PromptCompiler) {
         this.llmHelper = llmHelper;
+        this.promptCompiler = promptCompiler ?? null;
     }
 
     /**
@@ -44,21 +48,39 @@ export class AnswerLLM {
 
     /**
      * Generate reasoning-first structured response
+     * Uses PromptCompiler to route coding questions to ThoughtFlow
      * 
      * HIGH RELIABILITY FIX: 
-     * Returns Result<ConsciousModeStructuredResponse, LLMError> instead of swallowing errors
+     * Returns Result<ConsciousModeResponse, LLMError> instead of swallowing errors
      */
-    async generateReasoningFirst(question: string, context?: string): Promise<Result<ConsciousModeStructuredResponse, LLMError>> {
+    async generateReasoningFirst(
+        question: string,
+        context?: string,
+        phase?: InterviewPhase,
+    ): Promise<Result<ConsciousModeResponse, LLMError>> {
         return await wrapAsync(
             async () => {
+                // Use PromptCompiler to get the right prompt (ThoughtFlow for coding, standard for others)
+                let systemPrompt = UNIVERSAL_ANSWER_PROMPT;
+                
+                if (this.promptCompiler) {
+                    const compiled = await this.promptCompiler.compile({
+                        provider: 'custom',
+                        phase: phase ?? 'requirements_gathering',
+                        mode: 'conscious',
+                        userQuestion: question,
+                    });
+                    systemPrompt = compiled.systemPrompt;
+                }
+
                 const message = [
                     'STRUCTURED_REASONING_RESPONSE',
-                    'Return JSON with keys: mode, openingReasoning, implementationPlan, tradeoffs, edgeCases, scaleConsiderations, pushbackResponses, likelyFollowUps, codeTransition.',
-                    'Set mode to reasoning_first.',
+                    'Return JSON matching the schema in the system prompt exactly.',
+                    'No markdown fences, no prose outside JSON.',
                     `QUESTION: ${question}`,
                 ].join('\n\n');
                 
-                const stream = this.llmHelper.streamChat(message, undefined, context, UNIVERSAL_ANSWER_PROMPT);
+                const stream = this.llmHelper.streamChat(message, undefined, context, systemPrompt);
 
                 let fullResponse = "";
                 for await (const chunk of stream) {
@@ -106,7 +128,7 @@ export class AnswerLLM {
      * @deprecated Use generateReasoningFirst() with Result handling instead  
      * Generate reasoning-first response with fallback to empty parse (for backward compatibility)
      */
-    async generateReasoningFirstLegacy(question: string, context?: string): Promise<ConsciousModeStructuredResponse> {
+    async generateReasoningFirstLegacy(question: string, context?: string): Promise<ConsciousModeResponse> {
         const result = await this.generateReasoningFirst(question, context);
         if (result.success) {
             return result.data;

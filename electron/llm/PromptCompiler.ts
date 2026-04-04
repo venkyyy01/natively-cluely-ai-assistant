@@ -9,12 +9,15 @@ import {
   UNIVERSAL_SYSTEM_PROMPT,
   CUSTOM_SYSTEM_PROMPT,
   CONSCIOUS_MODE_PHASE_PROMPTS,
+  THOUGHTFLOW_CODING_PROMPT,
+  isCodingQuestion,
 } from './prompts';
 
 export interface CompileOptions {
   provider: string;
   phase: InterviewPhase;
   mode: 'conscious' | 'standard';
+  userQuestion?: string;
   contextSnapshot?: {
     recentTopics: string[];
     activeThread?: string;
@@ -125,6 +128,15 @@ DO NOT include any other text outside the JSON.
     const basePrompt = PROVIDER_PROMPT_MAP[options.provider] || HARD_SYSTEM_PROMPT;
     
     if (options.mode === 'conscious') {
+      // Route coding questions to ThoughtFlow prompt
+      if (options.userQuestion && isCodingQuestion(options.userQuestion)) {
+        return {
+          systemPrompt: THOUGHTFLOW_CODING_PROMPT,
+          responseFormat: 'json',
+          estimatedTokens: this.estimateTokens(THOUGHTFLOW_CODING_PROMPT),
+        };
+      }
+      
       const consciousPrompt = CONSCIOUS_MODE_PHASE_PROMPTS[options.phase];
       if (consciousPrompt) {
         return {

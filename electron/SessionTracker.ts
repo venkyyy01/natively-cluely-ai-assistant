@@ -58,7 +58,7 @@ class RingBuffer<T> {
 import { RecapLLM } from './llm';
 import { Result, LLMError } from './types/Result';
 import {
-  ConsciousModeStructuredResponse,
+  ConsciousModeResponse,
   ReasoningThread,
   mergeConsciousModeResponses,
 } from './ConsciousMode';
@@ -161,7 +161,7 @@ export class SessionTracker {
 
     // Conscious Mode state
     private consciousModeEnabled: boolean = false;
-    private latestConsciousResponse: ConsciousModeStructuredResponse | null = null;
+    private latestConsciousResponse: ConsciousModeResponse | null = null;
     private activeReasoningThread: ReasoningThread | null = null;
 
     // Reference to RecapLLM for epoch summarization (injected later)
@@ -473,7 +473,7 @@ isConsciousModeEnabled(): boolean {
     }));
   }
 
-    getLatestConsciousResponse(): ConsciousModeStructuredResponse | null {
+    getLatestConsciousResponse(): ConsciousModeResponse | null {
         return this.latestConsciousResponse;
     }
 
@@ -486,7 +486,7 @@ isConsciousModeEnabled(): boolean {
         this.activeReasoningThread = null;
     }
 
-    recordConsciousResponse(question: string, response: ConsciousModeStructuredResponse, threadAction: 'start' | 'continue' | 'reset'): void {
+    recordConsciousResponse(question: string, response: ConsciousModeResponse, threadAction: 'start' | 'continue' | 'reset'): void {
         this.latestConsciousResponse = response;
 
         if (threadAction === 'continue' && this.activeReasoningThread) {

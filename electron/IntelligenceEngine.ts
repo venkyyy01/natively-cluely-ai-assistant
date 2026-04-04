@@ -10,7 +10,7 @@ import {
   classifyConsciousModeQuestion,
   formatConsciousModeResponse,
   isValidConsciousModeResponse,
-  ConsciousModeStructuredResponse,
+  ConsciousModeResponse,
 } from './ConsciousMode';
 import {
   AnswerLLM, AssistLLM, FollowUpLLM, RecapLLM,
@@ -18,6 +18,7 @@ import {
   prepareTranscriptForWhatToAnswer, buildTemporalContext,
   AssistantResponse as LLMAssistantResponse, classifyIntent
 } from './llm';
+import { PromptCompiler } from './llm/PromptCompiler';
 import { FallbackExecutor } from './conscious';
 import { ParallelContextAssembler, ContextAssemblyInput, ContextAssemblyOutput } from './cache/ParallelContextAssembler';
 import { isOptimizationActive } from './config/optimizations';
@@ -82,6 +83,9 @@ export class IntelligenceEngine extends EventEmitter {
   private followUpQuestionsLLM: FollowUpQuestionsLLM | null = null;
   private whatToAnswerLLM: WhatToAnswerLLM | null = null;
 
+  // Prompt compiler for ThoughtFlow routing
+  private promptCompiler: PromptCompiler;
+
   // Keep reference to LLMHelper for client access
   private llmHelper: LLMHelper;
 
@@ -105,6 +109,7 @@ export class IntelligenceEngine extends EventEmitter {
     super();
     this.llmHelper = llmHelper;
     this.session = session;
+    this.promptCompiler = new PromptCompiler();
     this.initializeLLMs();
     
     if (isOptimizationActive('useParallelContext')) {
@@ -242,7 +247,7 @@ export class IntelligenceEngine extends EventEmitter {
      */
     initializeLLMs(): void {
         console.log(`[IntelligenceEngine] Initializing LLMs with LLMHelper`);
-        this.answerLLM = new AnswerLLM(this.llmHelper);
+        this.answerLLM = new AnswerLLM(this.llmHelper, this.promptCompiler);
         this.assistLLM = new AssistLLM(this.llmHelper);
         this.followUpLLM = new FollowUpLLM(this.llmHelper);
         this.recapLLM = new RecapLLM(this.llmHelper);
@@ -696,7 +701,7 @@ export class IntelligenceEngine extends EventEmitter {
             }
 
             if (consciousRoute.qualifies) {
-                let structuredResponse: ConsciousModeStructuredResponse | null = null;
+                let structuredResponse: ConsciousModeResponse | null = null;
                 
                 if (this.whatToAnswerLLM) {
                     this.latencyTracker.markProviderRequestStarted(requestId);
@@ -718,7 +723,8 @@ export class IntelligenceEngine extends EventEmitter {
                     // AnswerLLM has been updated with Result pattern
                     const result = await this.answerLLM.generateReasoningFirst(
                         resolvedQuestion,
-                        this.session.getFormattedContext(180)
+                        this.session.getFormattedContext(180),
+                        this.session.getCurrentPhase()
                     );
                     if (result.success) {
                         structuredResponse = result.data;

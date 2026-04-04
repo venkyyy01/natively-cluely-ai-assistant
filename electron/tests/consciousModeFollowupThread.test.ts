@@ -194,7 +194,10 @@ test('Conscious Mode continuation discards stale follow-up work when transcript 
 
   assert.equal(result, 'Could you repeat that? I want to make sure I address your question properly.');
   assert.deepEqual(session.getActiveReasoningThread(), before);
-  assert.equal(session.getLatestConsciousResponse()?.openingReasoning, before?.response.openingReasoning);
+  const latestResponse = session.getLatestConsciousResponse();
+  const expectedOpening = before?.response.mode === 'reasoning_first' ? before.response.openingReasoning : undefined;
+  const actualOpening = latestResponse?.mode === 'reasoning_first' ? latestResponse.openingReasoning : undefined;
+  assert.equal(actualOpening, expectedOpening);
 });
 
 test('Conscious Mode continuation fast lane skips fresh-start enrichment work and stays tagged as thread continuation', async () => {

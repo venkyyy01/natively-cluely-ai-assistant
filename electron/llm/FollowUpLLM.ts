@@ -1,6 +1,6 @@
 import { LLMHelper } from "../LLMHelper";
 import { UNIVERSAL_FOLLOWUP_PROMPT } from "./prompts";
-import { ConsciousModeStructuredResponse, ReasoningThread, parseConsciousModeResponse } from "../ConsciousMode";
+import { ConsciousModeResponse, ReasoningThread, parseConsciousModeResponse } from "../ConsciousMode";
 import { Result, Ok, Err, LLMError, wrapAsync } from "../types/Result";
 
 export class FollowUpLLM {
@@ -71,13 +71,13 @@ export class FollowUpLLM {
      * Generate reasoning-first follow-up response
      * 
      * HIGH RELIABILITY FIX:
-     * Returns Result<ConsciousModeStructuredResponse, LLMError> instead of swallowing errors
+     * Returns Result<ConsciousModeResponse, LLMError> instead of swallowing errors
      */
     async generateReasoningFirstFollowUp(
         reasoningThread: ReasoningThread,
         followUpQuestion: string,
         context?: string
-    ): Promise<Result<ConsciousModeStructuredResponse, LLMError>> {
+    ): Promise<Result<ConsciousModeResponse, LLMError>> {
         return await wrapAsync(
             async () => {
                 const message = [
@@ -145,7 +145,7 @@ export class FollowUpLLM {
         reasoningThread: ReasoningThread,
         followUpQuestion: string,
         context?: string
-    ): Promise<ConsciousModeStructuredResponse> {
+    ): Promise<ConsciousModeResponse> {
         const result = await this.generateReasoningFirstFollowUp(reasoningThread, followUpQuestion, context);
         if (result.success) {
             return result.data;

@@ -1049,6 +1049,77 @@ NATURAL CONTINUITY PHRASES:
 ${CONSCIOUS_MODE_JSON_CONTRACT}`;
 
 // ==========================================
+// THOUGHTFLOW FRAMEWORK FOR CODING/ALGORITHM QUESTIONS
+// Brainstorming-first approach for coding problems within Conscious Mode
+// ==========================================
+
+/**
+ * ThoughtFlow system prompt — exact specification for coding interview problems
+ */
+const THOUGHTFLOW_SYSTEM_PROMPT = `You are an expert competitive programmer and senior software engineer.
+Your role is to analyze coding interview problems and produce a structured,
+interview-ready solution using the ThoughtFlow framework.
+
+You MUST respond with valid JSON matching the schema exactly.
+No markdown fences, no prose outside JSON.
+
+ThoughtFlow Framework:
+1. CLARIFYING QUESTIONS — Ask 3–5 precise questions about edge cases,
+   constraints, or ambiguities before writing any code. These should be
+   the exact questions a senior engineer would ask an interviewer.
+
+2. TEST CASES — Provide 4–6 test cases spanning basic, edge, and complex
+   inputs. Always include an empty/null edge case and a performance case
+   if relevant.
+
+3. WALKTHROUGH — Explain the algorithm in plain English with step-by-step
+   numbered stages. A junior engineer reading this should understand it
+   before seeing the code. Include time and space complexity.
+
+4. CODE — Write clean, well-commented, production-quality code. Prefer
+   clarity over cleverness. Each non-obvious step must have an inline comment.
+
+Tone: Direct. Technical. No fluff. Assume the reader is competent but
+may be nervous in an interview.`;
+
+/**
+ * ThoughtFlow JSON contract for coding/algorithm questions
+ * Replaces standard conscious mode contract when coding questions detected
+ */
+const THOUGHTFLOW_JSON_CONTRACT = `
+RESPONSE FORMAT:
+Return ONLY valid JSON with this structure:
+{
+  "clarifyingQuestions": ["3-5 precise questions about edge cases, constraints, or ambiguities"],
+  "testCases": [
+    {"input": "...", "expectedOutput": "...", "category": "basic|edge|complex|performance|empty_null"}
+  ],
+  "walkthrough": "Step-by-step algorithm explanation in plain English with time/space complexity",
+  "codeBlock": {"language": "python|javascript|java|etc", "code": "..."},
+  "spokenIntro": "1-2 sentence natural intro the candidate can say before showing code"
+}
+
+FIELD RULES:
+- "clarifyingQuestions": 3-5 questions a senior engineer would ask an interviewer. Cover edge cases, constraints, input validation, scale.
+- "testCases": 4-6 test cases spanning basic, edge, complex, empty/null, and performance if relevant.
+- "walkthrough": Numbered step-by-step explanation. A junior engineer should understand it before seeing code. Include time and space complexity.
+- "codeBlock": Clean, well-commented, production-quality code. Each non-obvious step must have an inline comment. Prefer clarity over cleverness.
+- "spokenIntro": Natural spoken intro like "So my approach here is..." that the candidate can say out loud.
+
+TONE: Direct. Technical. No fluff. Assume the reader is competent but may be nervous in an interview.`;
+
+/**
+ * ThoughtFlow prompt for coding/algorithm questions in Conscious Mode
+ * Uses brainstorming-first approach: clarify, test, walkthrough, then code
+ */
+export const THOUGHTFLOW_CODING_PROMPT = `${THOUGHTFLOW_SYSTEM_PROMPT}
+
+Solve the following coding problem using the ThoughtFlow framework.
+Language: detect from context or default to the language used in the problem.
+
+${THOUGHTFLOW_JSON_CONTRACT}`;
+
+// ==========================================
 // CONSCIOUS MODE PROMPT FAMILY (Export)
 // ==========================================
 
@@ -1058,6 +1129,7 @@ export const CONSCIOUS_MODE_PROMPT_FAMILY = {
     implementationPath: CONSCIOUS_MODE_IMPLEMENTATION_PATH_PROMPT,
     pushbackHandling: CONSCIOUS_MODE_PUSHBACK_HANDLING_PROMPT,
     followUpContinuation: CONSCIOUS_MODE_FOLLOW_UP_CONTINUATION_PROMPT,
+    thoughtFlowCoding: THOUGHTFLOW_CODING_PROMPT,
 } as const;
 
 /**
@@ -1118,6 +1190,43 @@ export const CONSCIOUS_MODE_EMERGENCY_TEMPLATES: Record<InterviewPhase, string[]
         "I'd love to learn more about how your team approaches...",
     ],
 };
+
+/**
+ * Detect if a question is a coding/algorithm problem
+ */
+export function isCodingQuestion(text: string): boolean {
+    const lower = text.toLowerCase();
+    const codingPatterns = [
+        /write\s+.*\b(function|code|program|algorithm|method|solution)\b/i,
+        /implement\s+.*\b(function|class|algorithm|method|solution|data\s+structure|cache|lru|lfu|trie|heap|queue|stack|dfs|bfs|graph|tree|sort|search)\b/i,
+        /code\s+.*\b(function|class|algorithm|method|solution)\b/i,
+        /create\s+.*\b(function|class|algorithm|method)\b/i,
+        /design\s+.*\b(algorithm|function|data\s+structure)\b/i,
+        /complete\s+.*\b(function|code|method|solution)\b/i,
+        /fix\s+.*\b(bug|error|issue|code|function)\b/i,
+        /optimize\s+.*\b(function|code|algorithm|solution)\b/i,
+        /solve\s+.*\b(problem|challenge|algorithm)\b/i,
+        /\bleetcode\b/i,
+        /\bcoding\s+(problem|challenge|question|exercise|test|interview)\b/i,
+        /\balgorithm\b.*\b(problem|challenge|question)\b/i,
+        /\b(two\s+sum|three\s+sum|reverse\s+string|palindrome|anagram|fibonacci|factorial|lru\s+cache|lfu\s+cache)\b/i,
+        /\barray\b.*\b(find|search|sort|remove|insert|reverse)\b/i,
+        /\bstring\b.*\b(find|search|reverse|palindrome|anagram)\b/i,
+        /\blinked\s*list\b/i,
+        /\bbinary\s*search\b/i,
+        /\bhash\s*(map|table|set)\b/i,
+        /\bdynamic\s*programming\b/i,
+        /\bbacktracking\b/i,
+        /\bgraph\s*(traversal|search|shortest\s*path)\b/i,
+        /\b(dfs|bfs)\b.*\b(graph|tree)\b/i,
+        /\bsort(ing)?\s*(algorithm|implement|write|code)\b/i,
+        /\btime\s*complexity\b.*\bspace\s*complexity\b/i,
+        /\bo\(\s*n\b/i,
+        /\bfunction\s+\w+\s*\(/i,
+        /\breturn\s+(true|false|null|undefined|-?\d+)/i,
+    ];
+    return codingPatterns.some(pattern => pattern.test(lower));
+}
 
 /**
  * Get reduced-context prompt for fallback tiers

@@ -1,4 +1,4 @@
-export type ConsciousModeResponseMode = 'reasoning_first' | 'invalid';
+export type ConsciousModeResponseMode = 'reasoning_first' | 'thoughtflow' | 'invalid';
 
 export interface ConsciousModeStructuredResponse {
   mode: ConsciousModeResponseMode;
@@ -12,10 +12,32 @@ export interface ConsciousModeStructuredResponse {
   codeTransition: string;
 }
 
+export interface ThoughtFlowTestCase {
+  input: string;
+  expectedOutput: string;
+  category: 'basic' | 'edge' | 'complex' | 'performance' | 'empty_null';
+}
+
+export interface ThoughtFlowCodeBlock {
+  language: string;
+  code: string;
+}
+
+export interface ThoughtFlowStructuredResponse {
+  mode: 'thoughtflow';
+  clarifyingQuestions: string[];
+  testCases: ThoughtFlowTestCase[];
+  walkthrough: string;
+  codeBlock: ThoughtFlowCodeBlock | null;
+  spokenIntro: string;
+}
+
+export type ConsciousModeResponse = ConsciousModeStructuredResponse | ThoughtFlowStructuredResponse;
+
 export interface ReasoningThread {
   rootQuestion: string;
   lastQuestion: string;
-  response: ConsciousModeStructuredResponse;
+  response: ConsciousModeResponse;
   followUpCount: number;
   updatedAt: number;
 }
@@ -78,6 +100,25 @@ export function createEmptyConsciousModeResponse(mode: ConsciousModeResponseMode
   };
 }
 
+export function createEmptyThoughtFlowResponse(): ThoughtFlowStructuredResponse {
+  return {
+    mode: 'thoughtflow',
+    clarifyingQuestions: [],
+    testCases: [],
+    walkthrough: '',
+    codeBlock: null,
+    spokenIntro: '',
+  };
+}
+
+function isThoughtFlowResponse(r: ConsciousModeResponse): r is ThoughtFlowStructuredResponse {
+  return r.mode === 'thoughtflow';
+}
+
+function isStandardResponse(r: ConsciousModeResponse): r is ConsciousModeStructuredResponse {
+  return r.mode === 'reasoning_first';
+}
+
 export function normalizeConsciousModeResponse(value: Partial<ConsciousModeStructuredResponse> | null | undefined): ConsciousModeStructuredResponse {
   const mode = value?.mode === 'reasoning_first' ? 'reasoning_first' : 'invalid';
   return {
@@ -93,24 +134,32 @@ export function normalizeConsciousModeResponse(value: Partial<ConsciousModeStruc
   };
 }
 
-export function isValidConsciousModeResponse(response: ConsciousModeStructuredResponse | null | undefined): response is ConsciousModeStructuredResponse {
-  if (!response || response.mode !== 'reasoning_first') {
+export function isValidConsciousModeResponse(response: ConsciousModeResponse | null | undefined): response is ConsciousModeResponse {
+  if (!response || response.mode === 'invalid') {
     return false;
   }
 
-  return Boolean(
-    response.openingReasoning ||
-    response.implementationPlan.length ||
-    response.tradeoffs.length ||
-    response.edgeCases.length ||
-    response.scaleConsiderations.length ||
-    response.pushbackResponses.length ||
-    response.likelyFollowUps.length ||
-    response.codeTransition
-  );
+  if (isThoughtFlowResponse(response)) {
+    return isValidThoughtFlowResponse(response);
+  }
+
+  if (isStandardResponse(response)) {
+    return Boolean(
+      response.openingReasoning ||
+      response.implementationPlan.length ||
+      response.tradeoffs.length ||
+      response.edgeCases.length ||
+      response.scaleConsiderations.length ||
+      response.pushbackResponses.length ||
+      response.likelyFollowUps.length ||
+      response.codeTransition
+    );
+  }
+  
+  return false;
 }
 
-export function parseConsciousModeResponse(raw: string): ConsciousModeStructuredResponse {
+export function parseConsciousModeResponse(raw: string): ConsciousModeResponse {
   const trimmed = raw.trim();
   if (!trimmed) {
     return createEmptyConsciousModeResponse('invalid');
@@ -123,7 +172,15 @@ export function parseConsciousModeResponse(raw: string): ConsciousModeStructured
     .trim();
 
   try {
-    const normalized = normalizeConsciousModeResponse(JSON.parse(jsonCandidate));
+    const parsed = JSON.parse(jsonCandidate);
+    
+    // Detect ThoughtFlow response by checking for its unique fields
+    if (parsed.clarifyingQuestions || parsed.testCases || parsed.walkthrough) {
+      return normalizeThoughtFlowResponse(parsed);
+    }
+    
+    // Fall back to standard conscious mode parsing
+    const normalized = normalizeConsciousModeResponse(parsed);
     return isValidConsciousModeResponse(normalized)
       ? normalized
       : createEmptyConsciousModeResponse('invalid');
@@ -132,25 +189,141 @@ export function parseConsciousModeResponse(raw: string): ConsciousModeStructured
   }
 }
 
+function normalizeThoughtFlowResponse(parsed: any): ThoughtFlowStructuredResponse {
+  const clarifyingQuestions = normalizeList(parsed.clarifyingQuestions);
+  const spokenIntro = normalizeText(parsed.spokenIntro);
+  const walkthrough = normalizeText(parsed.walkthrough);
+  
+  let testCases: ThoughtFlowTestCase[] = [];
+  if (Array.isArray(parsed.testCases)) {
+    testCases = parsed.testCases
+      .filter((tc: any) => tc && (tc.input || tc.expectedOutput))
+      .map((tc: any) => ({
+        input: normalizeText(tc.input),
+        expectedOutput: normalizeText(tc.expectedOutput),
+        category: ['basic', 'edge', 'complex', 'performance', 'empty_null'].includes(tc.category)
+          ? tc.category
+          : 'basic',
+      }));
+  }
+  
+  let codeBlock: ThoughtFlowCodeBlock | null = null;
+  if (parsed.codeBlock && typeof parsed.codeBlock === 'object') {
+    const code = normalizeText(parsed.codeBlock.code);
+    if (code) {
+      codeBlock = {
+        language: normalizeText(parsed.codeBlock.language) || 'javascript',
+        code,
+      };
+    }
+  }
+  
+  return {
+    mode: 'thoughtflow',
+    clarifyingQuestions,
+    testCases,
+    walkthrough,
+    codeBlock,
+    spokenIntro,
+  };
+}
+
+export function isValidThoughtFlowResponse(response: ConsciousModeResponse): response is ThoughtFlowStructuredResponse {
+  if (response.mode !== 'thoughtflow') return false;
+  
+  // Type narrow to ThoughtFlowStructuredResponse
+  const thoughtFlowResponse = response as ThoughtFlowStructuredResponse;
+  
+  // All required fields must be present
+  return Boolean(
+    thoughtFlowResponse.walkthrough &&
+    thoughtFlowResponse.clarifyingQuestions &&
+    thoughtFlowResponse.testCases &&
+    thoughtFlowResponse.spokenIntro &&
+    // At least one of these should have content
+    (thoughtFlowResponse.walkthrough.length > 0 ||
+     thoughtFlowResponse.clarifyingQuestions.length > 0 ||
+     thoughtFlowResponse.testCases.length > 0)
+  );
+}
+
+export function formatThoughtFlowResponse(response: ThoughtFlowStructuredResponse): string {
+  const lines: string[] = [];
+
+  if (response.spokenIntro) {
+    lines.push(`Spoken intro: ${response.spokenIntro}`);
+  }
+
+  if (response.clarifyingQuestions.length > 0) {
+    lines.push('Clarifying questions:');
+    response.clarifyingQuestions.forEach((q, i) => {
+      lines.push(`  ${i + 1}. ${q}`);
+    });
+  }
+
+  if (response.testCases.length > 0) {
+    lines.push('Test cases:');
+    response.testCases.forEach((tc, i) => {
+      lines.push(`  ${i + 1}. [${tc.category}] Input: ${tc.input} → Expected: ${tc.expectedOutput}`);
+    });
+  }
+
+  if (response.walkthrough) {
+    lines.push(`Walkthrough: ${response.walkthrough}`);
+  }
+
+  if (response.codeBlock) {
+    lines.push(`Code (${response.codeBlock.language}):`);
+    lines.push(response.codeBlock.code);
+  }
+
+  return lines.join('\n').trim();
+}
+
 function mergeList(base: string[], incoming: string[]): string[] {
   return Array.from(new Set([...base, ...incoming].filter(Boolean)));
 }
 
 export function mergeConsciousModeResponses(
-  base: ConsciousModeStructuredResponse,
-  incoming: ConsciousModeStructuredResponse,
-): ConsciousModeStructuredResponse {
-  return {
-    mode: 'reasoning_first',
-    openingReasoning: incoming.openingReasoning || base.openingReasoning,
-    implementationPlan: mergeList(base.implementationPlan, incoming.implementationPlan),
-    tradeoffs: mergeList(base.tradeoffs, incoming.tradeoffs),
-    edgeCases: mergeList(base.edgeCases, incoming.edgeCases),
-    scaleConsiderations: mergeList(base.scaleConsiderations, incoming.scaleConsiderations),
-    pushbackResponses: mergeList(base.pushbackResponses, incoming.pushbackResponses),
-    likelyFollowUps: mergeList(base.likelyFollowUps, incoming.likelyFollowUps),
-    codeTransition: incoming.codeTransition || base.codeTransition,
-  };
+  base: ConsciousModeResponse,
+  incoming: ConsciousModeResponse,
+): ConsciousModeResponse {
+  // If both are ThoughtFlow responses, merge them as ThoughtFlow
+  if (isThoughtFlowResponse(base) && isThoughtFlowResponse(incoming)) {
+    return {
+      mode: 'thoughtflow',
+      clarifyingQuestions: mergeList(base.clarifyingQuestions, incoming.clarifyingQuestions),
+      testCases: [...base.testCases, ...incoming.testCases],
+      walkthrough: incoming.walkthrough || base.walkthrough,
+      codeBlock: incoming.codeBlock || base.codeBlock,
+      spokenIntro: incoming.spokenIntro || base.spokenIntro,
+    };
+  }
+  
+  // If either is invalid, return the valid one
+  if (base.mode === 'invalid') return incoming;
+  if (incoming.mode === 'invalid') return base;
+  
+  // If one is ThoughtFlow and one is standard, prefer ThoughtFlow
+  if (isThoughtFlowResponse(base)) return base;
+  if (isThoughtFlowResponse(incoming)) return incoming;
+  
+  // Both are standard reasoning_first responses
+  if (isStandardResponse(base) && isStandardResponse(incoming)) {
+    return {
+      mode: 'reasoning_first',
+      openingReasoning: incoming.openingReasoning || base.openingReasoning,
+      implementationPlan: mergeList(base.implementationPlan, incoming.implementationPlan),
+      tradeoffs: mergeList(base.tradeoffs, incoming.tradeoffs),
+      edgeCases: mergeList(base.edgeCases, incoming.edgeCases),
+      scaleConsiderations: mergeList(base.scaleConsiderations, incoming.scaleConsiderations),
+      pushbackResponses: mergeList(base.pushbackResponses, incoming.pushbackResponses),
+      likelyFollowUps: mergeList(base.likelyFollowUps, incoming.likelyFollowUps),
+      codeTransition: incoming.codeTransition || base.codeTransition,
+    };
+  }
+  
+  return incoming;
 }
 
 function formatSection(label: string, values: string[]): string[] {
@@ -161,7 +334,15 @@ function formatSection(label: string, values: string[]): string[] {
   return [label, ...values.map(value => `- ${value}`)];
 }
 
-export function formatConsciousModeResponse(response: ConsciousModeStructuredResponse): string {
+export function formatConsciousModeResponse(response: ConsciousModeResponse): string {
+  if (isThoughtFlowResponse(response)) {
+    return formatThoughtFlowResponse(response);
+  }
+  
+  if (response.mode === 'invalid') {
+    return '';
+  }
+
   const lines: string[] = [];
 
   if (response.openingReasoning) {
