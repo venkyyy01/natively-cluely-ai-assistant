@@ -97,8 +97,12 @@ test('settings, profile, and rag validation schemas accept bounded payloads', ()
   assert.equal(parseIpcInput(ipcSchemas.profileFilePath, '/tmp/resume.pdf', 'profile:upload-resume'), '/tmp/resume.pdf');
   assert.equal(parseIpcInput(ipcSchemas.profileCompanyName, 'Acme', 'profile:research-company'), 'Acme');
   assert.deepEqual(
-    parseIpcInput(ipcSchemas.sttConnectionArgs, ['deepgram', '', undefined], 'test-stt-connection'),
-    ['deepgram', '', undefined],
+    parseIpcInput(ipcSchemas.llmConnectionArgs, ['cerebras', 'test-key'], 'test-llm-connection'),
+    ['cerebras', 'test-key'],
+  );
+  assert.deepEqual(
+    parseIpcInput(ipcSchemas.fastResponseConfig, { enabled: true, provider: 'cerebras', model: 'gpt-oss-120b' }, 'set-fast-response-config'),
+    { enabled: true, provider: 'cerebras', model: 'gpt-oss-120b' },
   );
 
   assert.deepEqual(
@@ -122,6 +126,10 @@ test('settings, profile, and rag validation schemas reject malformed payloads', 
 
   assert.throws(() => {
     parseIpcInput(ipcSchemas.ragMeetingQuery, { meetingId: '', query: 'hello' }, 'rag:query-meeting');
+  }, /Invalid IPC payload/);
+
+  assert.throws(() => {
+    parseIpcInput(ipcSchemas.fastResponseConfig, { enabled: true, provider: 'openai', model: 'gpt-5' }, 'set-fast-response-config');
   }, /Invalid IPC payload/);
 
   assert.throws(() => {

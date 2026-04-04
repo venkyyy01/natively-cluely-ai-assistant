@@ -111,15 +111,13 @@ ANSWER SHAPE: ${intentResult.answerShape}
         question: string,
         temporalContext?: TemporalContext,
         intentResult?: IntentResult,
-        imagePaths?: string[],
-        sessionHistory: string[] = [],
+        imagePaths?: string[]
     ): Promise<ConsciousModeStructuredResponse> {
         let full = "";
 
         const contextParts: string[] = [
             'STRUCTURED_REASONING_RESPONSE',
-            'Return JSON with keys: mode, questionType, openingReasoning, spokenResponse, codeBlock, tradeoffs, likelyFollowUps.',
-            'Legacy compatibility keys implementationPlan, edgeCases, scaleConsiderations, pushbackResponses, and codeTransition are optional when they materially help follow-up continuity.',
+            'Return JSON with keys: mode, openingReasoning, implementationPlan, tradeoffs, edgeCases, scaleConsiderations, pushbackResponses, likelyFollowUps, codeTransition.',
             'Set mode to reasoning_first.',
             `QUESTION: ${question}`,
         ];
@@ -131,10 +129,6 @@ ANSWER SHAPE: ${intentResult.answerShape}
 
         if (temporalContext?.hasRecentResponses) {
             contextParts.push(`PREVIOUS_RESPONSES: ${temporalContext.previousResponses.join(' | ')}`);
-        }
-
-        if (sessionHistory.length > 0) {
-            contextParts.push(`SESSION_HISTORY:\n${sessionHistory.join('\n---\n')}`);
         }
 
         contextParts.push(`CONVERSATION:\n${cleanedTranscript}`);

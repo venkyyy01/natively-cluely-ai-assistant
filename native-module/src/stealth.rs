@@ -1,6 +1,8 @@
 use napi::bindgen_prelude::Buffer;
 
+// Suppress warnings from deprecated cocoa/objc crate until migration to objc2
 #[cfg(target_os = "macos")]
+#[allow(unexpected_cfgs, deprecated)]
 mod macos {
     use libc::{c_char, c_void, dlsym, RTLD_DEFAULT};
     use cocoa::base::{id, nil};
@@ -140,7 +142,7 @@ mod windows_impl {
     use super::Buffer;
     use windows::Win32::Foundation::{GetLastError, HWND};
     use windows::Win32::UI::WindowsAndMessaging::{
-        GetWindowDisplayAffinity, IsWindow, SetWindowDisplayAffinity, WDA_NONE, WINDOW_DISPLAY_AFFINITY,
+        GetWindowDisplayAffinity, SetWindowDisplayAffinity, WDA_MONITOR, WDA_NONE, WINDOW_DISPLAY_AFFINITY,
     };
 
     const WDA_EXCLUDEFROMCAPTURE: WINDOW_DISPLAY_AFFINITY = WINDOW_DISPLAY_AFFINITY(0x00000011);
@@ -154,7 +156,14 @@ mod windows_impl {
             }
 
             let error = GetLastError();
-            eprintln!("[stealth] WDA_EXCLUDEFROMCAPTURE failed with {:?}", error);
+            eprintln!(
+                "[stealth] WDA_EXCLUDEFROMCAPTURE failed with {:?}, falling back to WDA_MONITOR",
+                error
+            );
+
+            if SetWindowDisplayAffinity(hwnd, WDA_MONITOR).as_bool() {
+                return Ok(());
+            }
         }
 
         Err(napi::Error::from_reason(
@@ -199,15 +208,7 @@ mod windows_impl {
 
         let mut raw = [0u8; std::mem::size_of::<isize>()];
         raw.copy_from_slice(&buffer[..pointer_size]);
-        let hwnd = HWND(isize::from_le_bytes(raw));
-        unsafe {
-            if !IsWindow(hwnd).as_bool() {
-                return Err(napi::Error::from_reason(
-                    "Native window handle does not reference a live HWND".to_string(),
-                ));
-            }
-        }
-        Ok(hwnd)
+        Ok(HWND(isize::from_le_bytes(raw)))
     }
 }
 

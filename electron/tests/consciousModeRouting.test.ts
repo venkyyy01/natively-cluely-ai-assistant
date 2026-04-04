@@ -4,8 +4,6 @@ import { IntelligenceEngine } from '../IntelligenceEngine';
 import { SessionTracker } from '../SessionTracker';
 import {
   classifyConsciousModeQuestion,
-  formatConsciousModeResponse,
-  getTranscriptSuggestionDecision,
   maybeHandleSuggestionTriggerFromTranscript,
   parseConsciousModeResponse,
   shouldAutoTriggerSuggestionFromTranscript,
@@ -67,15 +65,6 @@ function addInterviewerTurn(session: SessionTracker, text: string, timestamp: nu
   });
 }
 
-function addUserTurn(session: SessionTracker, text: string, timestamp: number): void {
-  session.handleTranscript({
-    speaker: 'user',
-    text,
-    timestamp,
-    final: true,
-  });
-}
-
 test('Conscious Mode routes qualifying technical questions into the structured reasoning contract', async () => {
   const session = new SessionTracker();
   const llmHelper = new FakeLLMHelper();
@@ -100,192 +89,6 @@ test('Conscious Mode routes qualifying technical questions into the structured r
   assert.equal(thread?.rootQuestion, 'How would you design a rate limiter for an API?');
   assert.equal(thread?.followUpCount, 0);
   assert.match(llmHelper.calls[0]?.message || '', /STRUCTURED_REASONING_RESPONSE/);
-});
-
-test('Conscious Mode reasoning prompts include merged recent turns, prior assistant responses, and epoch summaries', async () => {
-  const session = new SessionTracker();
-  const llmHelper = new FakeLLMHelper();
-  const engine = new IntelligenceEngine(llmHelper as any, session);
-
-  session.setConsciousModeEnabled(true);
-  session.addAssistantMessage('I would first pin down the burst policy before picking the storage layer.');
-  (session as any).transcriptEpochSummaries = [
-    'Earlier discussion: we aligned on Redis durability, failover, and a multi-region fallback.',
-  ];
-
-  addInterviewerTurn(session, 'How would you', Date.now() - 2000);
-  addInterviewerTurn(session, 'design a rate limiter for an API?', Date.now() - 1500);
-
-  await engine.runWhatShouldISay(undefined, 0.92);
-
-  assert.match(llmHelper.calls[0]?.message || '', /QUESTION: How would you design a rate limiter for an API\?/);
-  assert.match(llmHelper.calls[0]?.message || '', /PREVIOUS_RESPONSES: I would first pin down the burst policy before picking the storage layer\./);
-  assert.match(llmHelper.calls[0]?.message || '', /SESSION_HISTORY:/);
-  assert.match(llmHelper.calls[0]?.message || '', /Earlier discussion: we aligned on Redis durability, failover, and a multi-region fallback\./);
-  assert.match(llmHelper.calls[0]?.message || '', /CONVERSATION:/);
-  assert.match(llmHelper.calls[0]?.message || '', /\[INTERVIEWER\]: how would you design a rate limiter for an api\?/i);
-});
-
-test('Conscious Mode formats concise spoken responses by default while preserving hidden structured fields', () => {
-  const response = parseConsciousModeResponse(JSON.stringify({
-    mode: 'reasoning_first',
-    questionType: 'approach',
-    openingReasoning: 'My instinct would be to keep the write path simple first.',
-    spokenResponse: 'I would start with a per-user token bucket in Redis, because it keeps enforcement predictable and is easy to explain. Then I would add a small burst window so normal spikes do not feel punitive.',
-    implementationPlan: ['Start with a per-user token bucket', 'Store counters in Redis'],
-    tradeoffs: ['Redis adds operational overhead'],
-    likelyFollowUps: ['What happens if traffic is 10x larger?'],
-  }));
-
-  assert.equal(response.questionType, 'approach');
-  assert.equal(response.spokenResponse, 'I would start with a per-user token bucket in Redis, because it keeps enforcement predictable and is easy to explain. Then I would add a small burst window so normal spikes do not feel punitive.');
-  assert.deepEqual(response.implementationPlan, [
-    'Start with a per-user token bucket',
-    'Store counters in Redis',
-  ]);
-  assert.equal(
-    formatConsciousModeResponse(response),
-    'I would start with a per-user token bucket in Redis, because it keeps enforcement predictable and is easy to explain. Then I would add a small burst window so normal spikes do not feel punitive.',
-  );
-});
-
-test('Conscious Mode still formats code-first concise payloads when spokenResponse is omitted', () => {
-  const response = parseConsciousModeResponse(JSON.stringify({
-    mode: 'reasoning_first',
-    questionType: 'code',
-    openingReasoning: 'I would keep the helper small and side-effect free.',
-    codeBlock: {
-      language: 'ts',
-      code: 'const add = (a: number, b: number) => a + b;',
-    },
-  }));
-
-  assert.equal(
-    formatConsciousModeResponse(response),
-    [
-      'I would keep the helper small and side-effect free.',
-      '```ts\nconst add = (a: number, b: number) => a + b;\n```',
-    ].join('\n\n'),
-  );
-});
-
-test('Conscious Mode emits the concise spoken response when the model returns the newer contract', async () => {
-  class ConciseContractHelper {
-    async *streamChat(message: string): AsyncGenerator<string> {
-      if (message.includes('STRUCTURED_REASONING_RESPONSE')) {
-        yield JSON.stringify({
-          mode: 'reasoning_first',
-          questionType: 'approach',
-          openingReasoning: 'My instinct would be to keep the write path simple first.',
-          spokenResponse: 'I would start with a per-user token bucket in Redis, because it is easy to reason about and it keeps enforcement predictable. Then I would add a small burst allowance so normal spikes do not feel punitive.',
-          tradeoffs: ['Redis adds operational overhead'],
-          likelyFollowUps: ['What happens if traffic is 10x larger?'],
-        });
-        return;
-      }
-
-      yield 'plain answer';
-    }
-  }
-
-  const session = new SessionTracker();
-  const engine = new IntelligenceEngine(new ConciseContractHelper() as any, session);
-
-  session.setConsciousModeEnabled(true);
-  addInterviewerTurn(session, 'How would you design a rate limiter for an API?', Date.now());
-
-  const answer = await engine.runWhatShouldISay(undefined, 0.92);
-
-  assert.equal(
-    answer,
-    'I would start with a per-user token bucket in Redis, because it is easy to reason about and it keeps enforcement predictable. Then I would add a small burst allowance so normal spikes do not feel punitive.',
-  );
-  assert.doesNotMatch(answer || '', /Opening reasoning:/);
-  assert.equal(
-    session.getLatestConsciousResponse()?.spokenResponse,
-    'I would start with a per-user token bucket in Redis, because it is easy to reason about and it keeps enforcement predictable. Then I would add a small burst allowance so normal spikes do not feel punitive.',
-  );
-});
-
-test('Conscious Mode keeps the latest overlap group in the reasoning prompt when the interviewer interrupts mid-answer near the context window boundary', async () => {
-  const session = new SessionTracker();
-  const llmHelper = new FakeLLMHelper();
-  const engine = new IntelligenceEngine(llmHelper as any, session);
-  const originalNow = Date.now;
-
-  Date.now = () => 200_000;
-
-  try {
-    session.setConsciousModeEnabled(true);
-    addInterviewerTurn(session, 'Walk me through the design.', 19_400);
-    addUserTurn(session, 'I would start with the API boundary.', 19_700);
-    addInterviewerTurn(session, 'What happens if traffic spikes?', 20_200);
-
-    await engine.runWhatShouldISay(undefined, 0.92);
-
-    assert.match(llmHelper.calls[0]?.message || '', /\[ME\]: i would start with the api boundary\./i);
-    assert.match(llmHelper.calls[0]?.message || '', /\[INTERVIEWER\]: what happens if traffic spikes\?/i);
-  } finally {
-    Date.now = originalNow;
-  }
-});
-
-test('Conscious Mode keeps long-session prompts bounded while preserving bidirectional recent context and earlier summaries', async () => {
-  const session = new SessionTracker();
-  const llmHelper = new FakeLLMHelper();
-  const engine = new IntelligenceEngine(llmHelper as any, session);
-  const originalNow = Date.now;
-
-  Date.now = () => 400_000;
-
-  try {
-    session.setConsciousModeEnabled(true);
-    (session as any).transcriptEpochSummaries = [
-      'Earlier discussion: we already aligned on Redis durability, failover, and the need to keep the write path simple.',
-    ];
-
-    for (let index = 0; index < 18; index += 1) {
-      const timestamp = 250_000 + (index * 5_000);
-      if (index % 2 === 0) {
-        addInterviewerTurn(session, `Interviewer turn ${index}: how would this design behave under load?`, timestamp);
-      } else {
-        addUserTurn(session, `User turn ${index}: I would isolate the write path before optimizing reads.`, timestamp);
-      }
-    }
-
-    await engine.runWhatShouldISay('How would you design a rate limiter for an API?', 0.92);
-
-    const message = llmHelper.calls[0]?.message || '';
-    const conversationSection = message.split('CONVERSATION:\n')[1] || '';
-    const conversationLines = conversationSection.split('\n').filter((line) => /^\[(INTERVIEWER|ME)\]:/i.test(line));
-
-    assert.match(message, /SESSION_HISTORY:/);
-    assert.match(message, /Earlier discussion: we already aligned on Redis durability, failover, and the need to keep the write path simple\./);
-    assert.ok(conversationLines.length <= 12);
-    assert.ok(conversationLines.some((line) => /\[INTERVIEWER\]:/i.test(line)));
-    assert.ok(conversationLines.some((line) => /\[ME\]:/i.test(line)));
-    assert.doesNotMatch(message, /Interviewer turn 0:/);
-  } finally {
-    Date.now = originalNow;
-  }
-});
-
-test('Conscious Mode continuation prompts keep prior assistant responses alongside the active thread context', async () => {
-  const session = new SessionTracker();
-  const llmHelper = new FakeLLMHelper();
-  const engine = new IntelligenceEngine(llmHelper as any, session);
-
-  session.setConsciousModeEnabled(true);
-  addInterviewerTurn(session, 'How would you design a rate limiter for an API?', Date.now() - 2000);
-  await engine.runWhatShouldISay(undefined, 0.88);
-
-  (engine as any).lastTriggerTime = 0;
-  addInterviewerTurn(session, 'What are the tradeoffs?', Date.now() - 1000);
-  await engine.runWhatShouldISay(undefined, 0.88);
-
-  assert.match(llmHelper.calls[1]?.message || '', /ACTIVE_REASONING_THREAD/);
-  assert.match(llmHelper.calls[1]?.message || '', /PREVIOUS_RESPONSES:/);
-  assert.match(llmHelper.calls[1]?.message || '', /Opening reasoning: I would start by clarifying the rate limit dimension and the consistency target\./);
 });
 
 test('Conscious Mode qualifying follow-ups continue the thread, while a new technical topic resets it', async () => {
@@ -457,41 +260,6 @@ test('Conscious Mode transcript auto-trigger widens only for qualifying short te
   assert.equal(shouldAutoTriggerSuggestionFromTranscript('okay sounds good', true, null), false);
 });
 
-test('Conscious Mode prioritizes interviewer-question triggers over lower-priority conversation-state triggers', () => {
-  const decision = getTranscriptSuggestionDecision(
-    'What are the tradeoffs',
-    true,
-    null,
-    {
-      speaker: 'interviewer',
-      enableConversationStateTrigger: true,
-    },
-  );
-
-  assert.equal(decision.shouldTrigger, true);
-  assert.equal(decision.triggerType, 'interviewer_question');
-  assert.deepEqual(decision.suppressedTriggerTypes, ['conversation_state']);
-});
-
-test('Conscious Mode keeps conversation-state triggers disabled by default for user turns', () => {
-  const decision = getTranscriptSuggestionDecision(
-    'I would start with the API boundary and the write path.',
-    true,
-    null,
-    {
-      speaker: 'user',
-      enableConversationStateTrigger: false,
-    },
-  );
-
-  assert.deepEqual(decision, {
-    shouldTrigger: false,
-    lastQuestion: 'I would start with the API boundary and the write path.',
-    triggerType: null,
-    suppressedTriggerTypes: [],
-  });
-});
-
 test('Conscious Mode transcript-trigger path fires for substantive interviewer prompts when awareness is enabled', async () => {
   const calls: Array<{ context: string; lastQuestion: string; confidence: number }> = [];
   const manager = {
@@ -525,59 +293,6 @@ test('Conscious Mode transcript-trigger path fires for substantive interviewer p
       context: 'ctx',
       lastQuestion: 'What are the tradeoffs',
       confidence: 0.91,
-    },
-  ]);
-});
-
-test('Conscious Mode conversation-state trigger negative corpus keeps false positives at zero for admin and filler turns', () => {
-  const negatives = [
-    'sounds good',
-    'okay we can move on',
-    'I already sent the calendar invite',
-    'thanks that helps',
-    'cool got it',
-    'let me know when you are ready',
-    'yes that makes sense',
-    'done already',
-  ];
-
-  const falsePositives = negatives.filter((text) => {
-    const decision = getTranscriptSuggestionDecision(text, true, null, {
-      speaker: 'user',
-      enableConversationStateTrigger: true,
-    });
-
-    return decision.triggerType === 'conversation_state';
-  });
-
-  assert.deepEqual(falsePositives, []);
-});
-
-test('Conscious Mode conversation-state trigger can fire for substantive user turns only when explicitly enabled', async () => {
-  const calls: Array<{ context: string; lastQuestion: string; confidence: number }> = [];
-  const manager = {
-    getActiveReasoningThread: (): ReasoningThread | null => null,
-    getFormattedContext: (): string => 'ctx',
-    handleSuggestionTrigger: async (trigger: { context: string; lastQuestion: string; confidence: number }) => {
-      calls.push(trigger);
-    },
-  };
-
-  await maybeHandleSuggestionTriggerFromTranscript({
-    speaker: 'user',
-    text: 'I would start with the API boundary and then separate reads from writes.',
-    final: true,
-    confidence: 0.87,
-    consciousModeEnabled: true,
-    enableConversationStateTrigger: true,
-    intelligenceManager: manager,
-  });
-
-  assert.deepEqual(calls, [
-    {
-      context: 'ctx',
-      lastQuestion: 'I would start with the API boundary and then separate reads from writes.',
-      confidence: 0.87,
     },
   ]);
 });
@@ -668,28 +383,6 @@ test('Non-Conscious transcript-trigger path preserves the existing actionable he
       confidence: 0.72,
     },
   ]);
-});
-
-test('Conscious Mode preserves interviewer-only behavior when conversation-state triggering is not enabled', async () => {
-  const calls: Array<{ context: string; lastQuestion: string; confidence: number }> = [];
-  const manager = {
-    getActiveReasoningThread: (): ReasoningThread | null => null,
-    getFormattedContext: (): string => 'ctx',
-    handleSuggestionTrigger: async (trigger: { context: string; lastQuestion: string; confidence: number }) => {
-      calls.push(trigger);
-    },
-  };
-
-  await maybeHandleSuggestionTriggerFromTranscript({
-    speaker: 'user',
-    text: 'I would start with the API boundary and then separate reads from writes.',
-    final: true,
-    confidence: 0.87,
-    consciousModeEnabled: true,
-    intelligenceManager: manager,
-  });
-
-  assert.deepEqual(calls, []);
 });
 
 test('Conscious Mode falls back to the normal intent path when structured output is malformed', async () => {

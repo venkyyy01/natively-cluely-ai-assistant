@@ -222,7 +222,6 @@ describe('StealthManager', () => {
   it('reapplies managed windows after power monitor events', () => {
     const nativeCalls: number[] = [];
     const powerMonitor = new EventEmitter();
-    const timeouts: Array<() => void> = [];
     const manager = new StealthManager(
       { enabled: true },
       {
@@ -234,10 +233,6 @@ describe('StealthManager', () => {
           },
         },
         logger: silentLogger,
-        timeoutScheduler(fn: () => void) {
-          timeouts.push(fn);
-          return timeouts.length;
-        },
       }
     );
     const win = new FakeWindow();
@@ -245,15 +240,13 @@ describe('StealthManager', () => {
     manager.applyToWindow(win as any, true, { role: 'primary' });
     powerMonitor.emit('unlock-screen');
     powerMonitor.emit('resume');
-    timeouts.at(-1)?.();
 
-    assert.strictEqual(nativeCalls.length, 2);
+    assert.strictEqual(nativeCalls.length, 3);
   });
 
   it('reapplies managed windows after display metrics changes on Windows', () => {
     const nativeCalls: number[] = [];
     const displayEvents = new EventEmitter();
-    const timeouts: Array<() => void> = [];
     const manager = new StealthManager(
       { enabled: true },
       {
@@ -265,17 +258,12 @@ describe('StealthManager', () => {
           },
         },
         logger: silentLogger,
-        timeoutScheduler(fn: () => void) {
-          timeouts.push(fn);
-          return timeouts.length;
-        },
       } as any
     );
     const win = new FakeWindow();
 
     manager.applyToWindow(win as any, true, { role: 'primary' });
     displayEvents.emit('display-metrics-changed');
-    timeouts.at(-1)?.();
 
     assert.strictEqual(nativeCalls.length, 2);
   });
@@ -286,7 +274,6 @@ describe('StealthManager', () => {
       getAllDisplays: () => Array<{ id: number; workArea: { x: number; y: number; width: number; height: number } }>;
     };
     screenApi.getAllDisplays = () => [];
-    const timeouts: Array<() => void> = [];
 
     const manager = new StealthManager(
       { enabled: true },
@@ -299,17 +286,12 @@ describe('StealthManager', () => {
           },
         },
         logger: silentLogger,
-        timeoutScheduler(fn: () => void) {
-          timeouts.push(fn);
-          return timeouts.length;
-        },
       } as any
     );
     const win = new FakeWindow();
 
     manager.applyToWindow(win as any, true, { role: 'primary' });
     screenApi.emit('display-metrics-changed');
-    timeouts.at(-1)?.();
 
     assert.strictEqual(nativeCalls.length, 2);
   });
@@ -375,9 +357,6 @@ describe('StealthManager', () => {
         const powerMonitor = new EventEmitter();
         const intervals: Array<() => Promise<void> | void> = [];
         const timeouts: Array<() => void> = [];
-        const detections: unknown[] = [];
-        const cleared: unknown[] = [];
-        let processOutput = 'obs';
         const manager = new StealthManager(
             { enabled: true },
             {
@@ -390,34 +369,23 @@ describe('StealthManager', () => {
                     return intervals.length;
                 },
                 clearIntervalScheduler() {},
-                timeoutScheduler(fn: () => void) {
+                timeoutScheduler: (fn: () => void) => {
                     timeouts.push(fn);
                     return timeouts.length;
                 },
-                processEnumerator: async () => processOutput,
+                processEnumerator: async () => 'obs',
             } as any
         );
         const win = new FakeWindow();
-        manager.on('screen-share-detected', (payload) => {
-            detections.push(payload);
-        });
-        manager.on('screen-share-cleared', (payload) => {
-            cleared.push(payload);
-        });
 
         manager.applyToWindow(win as any, true, { role: 'primary' });
         assert.ok(intervals.length >= 1);
 
         await intervals[0]();
         assert.deepStrictEqual(win.setOpacityCalls, [0]);
-        assert.strictEqual(detections.length, 1);
 
         timeouts[0]();
         assert.deepStrictEqual(win.setOpacityCalls, [0, 1]);
-
-        processOutput = '';
-        await intervals[0]();
-        assert.strictEqual(cleared.length, 1);
         win.destroy();
     });
 
@@ -482,130 +450,10 @@ describe('StealthManager', () => {
         const win = new FakeWindow();
 
         manager.applyToWindow(win as any, true, { role: 'primary' });
-        assert.strictEqual(intervals.length, 3);
+        assert.strictEqual(intervals.length, 2);
 
         win.destroy();
-        assert.deepStrictEqual(cleared, [1, 2, 3]);
-    });
-
-    it('keeps Windows verification and monitoring available when stealth is enabled but acceleration mode is off', () => {
-        setOptimizationFlagsForTesting({ accelerationEnabled: false, useStealthMode: true });
-        const intervals: Array<() => Promise<void> | void> = [];
-        const manager = new StealthManager(
-            { enabled: true },
-            {
-                platform: 'win32',
-                logger: silentLogger,
-                featureFlags: { enableCaptureDetectionWatchdog: true },
-                intervalScheduler: (fn: () => Promise<void> | void) => {
-                    intervals.push(fn);
-                    return intervals.length;
-                },
-                clearIntervalScheduler() {},
-                timeoutScheduler() {
-                    return 1;
-                },
-                processEnumerator: async () => '',
-            } as any,
-        );
-        const win = new FakeWindow();
-
-        manager.applyToWindow(win as any, true, { role: 'primary' });
-
-        assert.strictEqual(intervals.length, 3);
-        win.destroy();
-    });
-
-    it('uses the Windows screen-share detector to hide and restore visible windows', async () => {
-        const intervals: Array<() => Promise<void> | void> = [];
-        const timeouts: Array<() => void> = [];
-        const manager = new StealthManager(
-            { enabled: true },
-            {
-                platform: 'win32',
-                logger: silentLogger,
-                featureFlags: { enableCaptureDetectionWatchdog: true },
-                intervalScheduler: (fn: () => Promise<void> | void) => {
-                    intervals.push(fn);
-                    return intervals.length;
-                },
-                clearIntervalScheduler() {},
-                timeoutScheduler(fn: () => void) {
-                    timeouts.push(fn);
-                    return timeouts.length;
-                },
-                processEnumerator: async () => '',
-                screenShareDetector: {
-                    detect: async () => ({
-                        active: true,
-                        confidence: 'high',
-                        source: 'process',
-                        timestamp: Date.now(),
-                        matches: ['Zoom:Zoom.exe'],
-                    }),
-                } as any,
-            } as any,
-        );
-        const win = new FakeWindow();
-
-        manager.applyToWindow(win as any, true, { role: 'primary' });
-        assert.ok(intervals.length >= 1);
-
-        await intervals[0]();
-        assert.deepStrictEqual(win.setOpacityCalls, [0]);
-
-        timeouts[0]();
-        assert.deepStrictEqual(win.setOpacityCalls, [0, 1]);
-        win.destroy();
-    });
-
-    it('quits the app when the Windows monitoring detector finds threats', async () => {
-        const intervals: Array<() => Promise<void> | void> = [];
-        let quitCalls = 0;
-        const manager = new StealthManager(
-            { enabled: true },
-            {
-                platform: 'win32',
-                logger: silentLogger,
-                featureFlags: { enableCaptureDetectionWatchdog: true },
-                intervalScheduler: (fn: () => Promise<void> | void) => {
-                    intervals.push(fn);
-                    return intervals.length;
-                },
-                clearIntervalScheduler() {},
-                timeoutScheduler() {
-                    return 1;
-                },
-                processEnumerator: async () => '',
-                monitoringDetector: {
-                    detectAll: async () => ({
-                        detected: true,
-                        threats: [
-                            {
-                                name: 'ProctorU',
-                                category: 'proctoring',
-                                confidence: 'high',
-                                vector: 'process',
-                                details: 'Matched process names: ProctorU.exe',
-                            },
-                        ],
-                        timestamp: Date.now(),
-                        detectionMethod: 'process',
-                    }),
-                } as any,
-                quitApplication() {
-                    quitCalls += 1;
-                },
-            } as any,
-        );
-        const win = new FakeWindow();
-
-        manager.applyToWindow(win as any, true, { role: 'primary' });
-        assert.ok(intervals.length >= 3);
-
-        await intervals[2]();
-        assert.equal(quitCalls, 1);
-        win.destroy();
+        assert.deepStrictEqual(cleared, [1, 2]);
     });
 
     it('uses a configurable capture tool matcher list for watchdog detection', async () => {
@@ -704,7 +552,7 @@ describe('StealthManager', () => {
           return intervals.length;
         },
         clearIntervalScheduler() {},
-        timeoutScheduler(fn: () => void) {
+        timeoutScheduler: (fn: () => void) => {
           timeouts.push(fn);
           return timeouts.length;
         },

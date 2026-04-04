@@ -4,6 +4,7 @@ import { AppState } from "./main"
 import path from "node:path"
 import { StealthManager } from "./stealth/StealthManager"
 import { StealthRuntime } from "./stealth/StealthRuntime"
+import { getRendererRouteUrl, loadRendererRoute, type RendererWindowKind } from './rendererRoute'
 
 const isEnvDev = process.env.NODE_ENV === "development"
 const isPackaged = app.isPackaged
@@ -11,10 +12,6 @@ const isPackaged = app.isPackaged
 console.log(`[WindowHelper] isEnvDev: ${isEnvDev}, isPackaged: ${isPackaged}`)
 
 const isDev = isEnvDev && !isPackaged
-
-const startUrl = isDev
-  ? "http://localhost:5180"
-  : `file://${path.join(app.getAppPath(), "dist", "index.html")}`
 
 export class WindowHelper {
   private launcherWindow: BrowserWindow | null = null
@@ -52,17 +49,7 @@ export class WindowHelper {
   }
 
   private shouldUseStealthRuntime(): boolean {
-    if (process.env.NATIVELY_FORCE_STEALTH_RUNTIME === "1") {
-      return true
-    }
-
-    if (process.platform === "win32") {
-      // Standard Windows mode should use direct BrowserWindows. The offscreen
-      // shell is only worth paying for when we explicitly start in stealth.
-      return this.contentProtection
-    }
-
-    return process.platform !== "darwin"
+    return process.platform !== "darwin" || process.env.NATIVELY_FORCE_STEALTH_RUNTIME === "1";
   }
 
   private applyLauncherSurfaceProtection(): void {
@@ -72,7 +59,7 @@ export class WindowHelper {
     }
 
     if (this.launcherWindow && !this.launcherWindow.isDestroyed()) {
-      this.applyStealth(this.launcherWindow, this.contentProtection, 'primary', process.platform === 'win32' && this.contentProtection)
+      this.applyStealth(this.launcherWindow, this.contentProtection, 'primary', false)
     }
   }
 
@@ -83,7 +70,7 @@ export class WindowHelper {
     }
 
     if (this.overlayWindow && !this.overlayWindow.isDestroyed()) {
-      this.applyStealth(this.overlayWindow, this.contentProtection, 'primary', process.platform === 'win32' && this.contentProtection)
+      this.applyStealth(this.overlayWindow, this.contentProtection, 'primary', false)
     }
   }
 
@@ -106,9 +93,13 @@ export class WindowHelper {
     this.launcherWindow?.hide()
   }
 
-  private createDirectWindow(options: Electron.BrowserWindowConstructorOptions, url: string, label: string): BrowserWindow {
+  private createDirectWindow(
+    options: Electron.BrowserWindowConstructorOptions,
+    windowKind: RendererWindowKind,
+    label: string,
+  ): BrowserWindow {
     const win = new BrowserWindow(options)
-    void win.loadURL(url).catch((error) => {
+    void loadRendererRoute(win, windowKind).catch((error) => {
       console.error(`[WindowHelper] ${label} direct load failed:`, error)
     })
     return win
@@ -139,22 +130,18 @@ export class WindowHelper {
     });
   }
 
-  private getDisplayForWindow(win: BrowserWindow): Electron.Display {
-    return screen.getDisplayMatching(win.getBounds())
-  }
-
   public setWindowDimensions(width: number, height: number): void {
     const activeWindow = this.getVisibleMainWindow();
     if (!activeWindow || activeWindow.isDestroyed()) return
 
     const [currentX, currentY] = activeWindow.getPosition()
-    const targetDisplay = this.getDisplayForWindow(activeWindow)
-    const workArea = targetDisplay.workArea
+    const primaryDisplay = screen.getPrimaryDisplay()
+    const workArea = primaryDisplay.workAreaSize
     const maxAllowedWidth = Math.floor(workArea.width * 0.9)
     const newWidth = Math.min(width, maxAllowedWidth)
     const newHeight = Math.ceil(height)
-    const maxX = workArea.x + workArea.width - newWidth
-    const newX = Math.min(Math.max(currentX, workArea.x), maxX)
+    const maxX = workArea.width - newWidth
+    const newX = Math.min(Math.max(currentX, 0), maxX)
 
     activeWindow.setBounds({
       x: newX,
@@ -176,16 +163,16 @@ export class WindowHelper {
     console.log('[WindowHelper] setOverlayDimensions:', width, height);
 
     const [currentX, currentY] = this.overlayWindow.getPosition()
-    const targetDisplay = this.getDisplayForWindow(this.overlayWindow)
-    const workArea = targetDisplay.workArea
+    const primaryDisplay = screen.getPrimaryDisplay()
+    const workArea = primaryDisplay.workAreaSize
     const maxAllowedWidth = Math.floor(workArea.width * 0.9)
     const maxAllowedHeight = Math.floor(workArea.height * 0.9)
     const newWidth = Math.min(Math.max(width, 300), maxAllowedWidth) // min 300, max 90%
     const newHeight = Math.min(Math.max(height, 1), maxAllowedHeight) // min 1, max 90%
-    const maxX = workArea.x + workArea.width - newWidth
-    const maxY = workArea.y + workArea.height - newHeight
-    const newX = Math.min(Math.max(currentX, workArea.x), maxX)
-    const newY = Math.min(Math.max(currentY, workArea.y), maxY)
+    const maxX = workArea.width - newWidth
+    const maxY = workArea.height - newHeight
+    const newX = Math.min(Math.max(currentX, 0), maxX)
+    const newY = Math.min(Math.max(currentY, 0), maxY)
 
     this.overlayWindow.setContentSize(newWidth, newHeight)
     this.overlayWindow.setPosition(newX, newY)
@@ -211,8 +198,8 @@ export class WindowHelper {
   public createWindow(): void {
     if (this.launcherWindow !== null) return // Already created
 
-    const initialDisplay = screen.getDisplayNearestPoint(screen.getCursorScreenPoint())
-    const workArea = initialDisplay.workArea
+    const primaryDisplay = screen.getPrimaryDisplay()
+    const workArea = primaryDisplay.workArea
     this.screenWidth = workArea.width
     this.screenHeight = workArea.height
 
@@ -288,13 +275,13 @@ export class WindowHelper {
     }
 
     console.log(`[WindowHelper] Icon Path: ${launcherSettings.icon}`);
-    console.log(`[WindowHelper] Start URL: ${startUrl}`);
+    console.log(`[WindowHelper] Start URL: ${getRendererRouteUrl('launcher')}`);
 
     if (this.shouldUseStealthRuntime()) {
       try {
         this.launcherRuntime = new StealthRuntime({
           stealthManager: this.stealthManager,
-          startUrl: `${startUrl}?window=launcher`,
+          startUrl: getRendererRouteUrl('launcher'),
         })
         this.launcherWindow = this.launcherRuntime.createPrimaryStealthSurface(launcherSettings) as BrowserWindow
         this.launcherContentWindow = this.launcherRuntime.getContentWindow()
@@ -305,9 +292,9 @@ export class WindowHelper {
       }
     } else {
       this.launcherRuntime = null
-      this.launcherWindow = this.createDirectWindow(launcherSettings, `${startUrl}?window=launcher`, 'Launcher')
+      this.launcherWindow = this.createDirectWindow(launcherSettings, 'launcher', 'Launcher')
       this.launcherContentWindow = this.launcherWindow
-      console.log(`[WindowHelper] Using direct launcher window on ${process.platform}`);
+      console.log('[WindowHelper] Using direct launcher window on macOS');
     }
 
     this.applyLauncherSurfaceProtection()
@@ -364,7 +351,7 @@ export class WindowHelper {
       try {
         this.overlayRuntime = new StealthRuntime({
           stealthManager: this.stealthManager,
-          startUrl: `${startUrl}?window=overlay`,
+          startUrl: getRendererRouteUrl('overlay'),
         })
         this.overlayWindow = this.overlayRuntime.createPrimaryStealthSurface(overlaySettings) as BrowserWindow
         this.overlayContentWindow = this.overlayRuntime.getContentWindow()
@@ -382,9 +369,9 @@ export class WindowHelper {
       }
     } else {
       this.overlayRuntime = null
-      this.overlayWindow = this.createDirectWindow(overlaySettings, `${startUrl}?window=overlay`, 'Overlay')
+      this.overlayWindow = this.createDirectWindow(overlaySettings, 'overlay', 'Overlay')
       this.overlayContentWindow = this.overlayWindow
-      console.log(`[WindowHelper] Using direct overlay window on ${process.platform}`);
+      console.log('[WindowHelper] Using direct overlay window on macOS');
     }
 
     this.applyOverlaySurfaceProtection()
@@ -481,15 +468,6 @@ export class WindowHelper {
   }
 
   public hideMainWindow(): void {
-    if (process.platform === 'win32' && this.contentProtection) {
-      try {
-        this.launcherWindow?.setOpacity?.(0)
-        this.overlayWindow?.setOpacity?.(0)
-      } catch {
-        // Ignore opacity issues during screenshot-hide path.
-      }
-    }
-
     // Hide BOTH
     this.hideLauncherSurface()
     this.overlayWindow?.hide()
@@ -533,8 +511,8 @@ export class WindowHelper {
     if (this.overlayWindow && !this.overlayWindow.isDestroyed()) {
       // Reset overlay position to center or last known? 
       // For now, center it nicely
-      const targetDisplay = this.getDisplayForWindow(this.overlayWindow)
-      const workArea = targetDisplay.workArea;
+      const primaryDisplay = screen.getPrimaryDisplay()
+      const workArea = primaryDisplay.workArea;
       const currentBounds = this.overlayWindow.getBounds();
       const targetWidth = Math.max(currentBounds.width, 600);
       const targetHeight = Math.max(currentBounds.height, 216);

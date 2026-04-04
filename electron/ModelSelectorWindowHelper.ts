@@ -1,14 +1,11 @@
 import { BrowserWindow, screen, app } from "electron"
 import path from "node:path"
 import { StealthManager } from "./stealth/StealthManager"
+import { loadRendererRoute } from './rendererRoute'
 
 const isEnvDev = process.env.NODE_ENV === "development"
 const isPackaged = app.isPackaged
 const isDev = isEnvDev && !isPackaged
-
-const startUrl = isDev
-    ? "http://localhost:5180"
-    : `file://${path.join(app.getAppPath(), "dist", "index.html")}`
 
 import type { WindowHelper } from "./WindowHelper"
 
@@ -174,11 +171,7 @@ export class ModelSelectorWindowHelper {
         this.applyStealth(this.contentProtection)
 
         // Load with query param for routing
-        const url = isDev
-            ? `${startUrl}?window=model-selector`
-            : `${startUrl}?window=model-selector`
-
-        this.window.loadURL(url).catch(e => {
+        loadRendererRoute(this.window, 'model-selector').catch(e => {
             console.error('[ModelSelectorWindowHelper] Failed to load URL:', e);
         });
 

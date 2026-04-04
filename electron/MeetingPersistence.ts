@@ -4,7 +4,6 @@
 
 import { MeetingMetadataSnapshot, MeetingSnapshot, SessionTracker, TranscriptSegment } from './SessionTracker';
 import { LLMHelper } from './LLMHelper';
-import { MeetingCheckpointStore } from './MeetingCheckpointStore';
 import { DatabaseManager, Meeting } from './db/DatabaseManager';
 import { GROQ_TITLE_PROMPT, GROQ_SUMMARY_JSON_PROMPT } from './llm';
 const crypto = require('crypto');
@@ -16,13 +15,8 @@ export class MeetingPersistence {
   private session: SessionTracker;
   private llmHelper: LLMHelper;
   private pendingSaves: Set<Promise<void>> = new Set();
-  private recoveryInFlight: Promise<void> | null = null;
 
-  constructor(
-    session: SessionTracker,
-    llmHelper: LLMHelper,
-    private readonly checkpointStore: Pick<MeetingCheckpointStore, 'saveSnapshot' | 'loadSnapshot' | 'removeSnapshot' | 'listMeetingIds'> = new MeetingCheckpointStore(),
-  ) {
+  constructor(session: SessionTracker, llmHelper: LLMHelper) {
     this.session = session;
     this.llmHelper = llmHelper;
   }
@@ -95,13 +89,6 @@ export class MeetingPersistence {
         }
 
     const resolvedMeetingId = meetingId ?? crypto.randomUUID();
-
-    try {
-      await this.checkpointStore.saveSnapshot(resolvedMeetingId, snapshot);
-    } catch (error) {
-      console.error('[MeetingPersistence] Failed to persist resumable meeting snapshot:', error);
-    }
-
     const savePromise = this.processAndSaveMeeting(snapshot, resolvedMeetingId);
     this.pendingSaves.add(savePromise);
     savePromise
@@ -132,7 +119,11 @@ export class MeetingPersistence {
             DatabaseManager.getInstance().createOrUpdateMeetingProcessingRecord(placeholder, snapshot.startTime, snapshot.durationMs);
             // Notify Frontend
             const wins = require('electron').BrowserWindow.getAllWindows();
-            wins.forEach((w: any) => w.webContents.send('meetings-updated'));
+            wins.forEach((w: any) => {
+                if (!w.isDestroyed()) {
+                    w.webContents.send('meetings-updated');
+                }
+            });
         } catch (e) {
             console.error("Failed to save placeholder", e);
         }
@@ -233,15 +224,21 @@ export class MeetingPersistence {
 
             // Notify Frontend to refresh list
             const wins = require('electron').BrowserWindow.getAllWindows();
-            wins.forEach((w: any) => w.webContents.send('meetings-updated'));
-
-            await this.checkpointStore.removeSnapshot(meetingId);
+            wins.forEach((w: any) => {
+                if (!w.isDestroyed()) {
+                    w.webContents.send('meetings-updated');
+                }
+            });
 
         } catch (error) {
             console.error('[MeetingPersistence] Failed to save meeting:', error);
             DatabaseManager.getInstance().markMeetingProcessingFailed(meetingId, error);
             const wins = require('electron').BrowserWindow.getAllWindows();
-            wins.forEach((w: any) => w.webContents.send('meetings-updated'));
+            wins.forEach((w: any) => {
+                if (!w.isDestroyed()) {
+                    w.webContents.send('meetings-updated');
+                }
+            });
         }
     }
 
@@ -249,49 +246,23 @@ export class MeetingPersistence {
      * Recover meetings that were started but not fully processed (e.g. app crash)
      */
     public async recoverUnprocessedMeetings(): Promise<void> {
-        if (this.recoveryInFlight) {
-            await this.recoveryInFlight;
-            return;
-        }
-
-        this.recoveryInFlight = this.performRecovery().finally(() => {
-            this.recoveryInFlight = null;
-        });
-
-        await this.recoveryInFlight;
-    }
-
-    private async performRecovery(): Promise<void> {
         console.log('[MeetingPersistence] Checking for unprocessed meetings...');
         const db = DatabaseManager.getInstance();
         const unprocessed = db.getUnprocessedMeetings();
-        const checkpointIds = await this.checkpointStore.listMeetingIds();
-        const meetingIds = Array.from(new Set([
-            ...unprocessed.map((meeting) => meeting.id),
-            ...checkpointIds,
-        ]));
 
-        if (meetingIds.length === 0) {
+        if (unprocessed.length === 0) {
             console.log('[MeetingPersistence] No unprocessed meetings found.');
             return;
         }
 
-        console.log(`[MeetingPersistence] Found ${meetingIds.length} unfinished meetings/checkpoints. recovering...`);
+        console.log(`[MeetingPersistence] Found ${unprocessed.length} unprocessed meetings. recovering...`);
 
-        for (const meetingId of meetingIds) {
+        for (const m of unprocessed) {
             try {
-                const checkpointSnapshot = await this.checkpointStore.loadSnapshot(meetingId);
-                if (checkpointSnapshot) {
-                    console.log(`[MeetingPersistence] Recovering meeting ${meetingId} from checkpoint snapshot...`);
-                    await this.processAndSaveMeeting(checkpointSnapshot, meetingId);
-                    console.log(`[MeetingPersistence] Recovered meeting ${meetingId} from checkpoint snapshot`);
-                    continue;
-                }
-
-                const details = db.getMeetingDetails(meetingId);
+                const details = db.getMeetingDetails(m.id);
                 if (!details) continue;
 
-                console.log(`[MeetingPersistence] Recovering meeting ${meetingId} from database snapshot...`);
+                console.log(`[MeetingPersistence] Recovering meeting ${m.id}...`);
 
                 const context = details.transcript?.map(t => {
                     const label = t.speaker === 'interviewer' ? 'INTERVIEWER' :
@@ -312,14 +283,14 @@ export class MeetingPersistence {
                         title: this.isMeaningfulTitle(details.title) ? details.title : undefined,
                         calendarEventId: details.calendarEventId,
                         source: details.source,
-                        },
+                    },
                 };
 
-                await this.processAndSaveMeeting(snapshot, meetingId);
-                console.log(`[MeetingPersistence] Recovered meeting ${meetingId}`);
+                await this.processAndSaveMeeting(snapshot, m.id);
+                console.log(`[MeetingPersistence] Recovered meeting ${m.id}`);
 
             } catch (e) {
-                console.error(`[MeetingPersistence] Failed to recover meeting ${meetingId}`, e);
+                console.error(`[MeetingPersistence] Failed to recover meeting ${m.id}`, e);
             }
         }
     }

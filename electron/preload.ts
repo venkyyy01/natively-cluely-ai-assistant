@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from "electron"
-import type { CustomProviderPayload, FollowUpEmailInput, GeminiChatOptions, OverlayBounds, TranscriptTextEntry } from "../shared/ipc"
+import type { CustomProviderPayload, FastResponseConfig, FollowUpEmailInput, GeminiChatOptions, OverlayBounds, TranscriptTextEntry } from "../shared/ipc"
 
 type IpcErrorContract = { code: string; message: string }
 type IpcResult<T> = { success: true; data: T } | { success: false; error: IpcErrorContract }
@@ -99,15 +99,16 @@ interface ElectronAPI {
   getAvailableOllamaModels: () => Promise<string[]>
   switchToOllama: (model?: string, url?: string) => Promise<{ success: boolean; error?: string }>
   switchToGemini: (apiKey?: string, modelId?: string) => Promise<{ success: boolean; error?: string }>
-  testLlmConnection: (provider: 'gemini' | 'groq' | 'openai' | 'claude', apiKey?: string) => Promise<{ success: boolean; error?: string }>
+  testLlmConnection: (provider: 'gemini' | 'groq' | 'openai' | 'claude' | 'cerebras', apiKey?: string) => Promise<{ success: boolean; error?: string }>
   selectServiceAccount: () => Promise<{ success: boolean; path?: string; cancelled?: boolean; error?: string }>
 
   // API Key Management
   setGeminiApiKey: (apiKey: string) => Promise<{ success: boolean; error?: string }>
   setGroqApiKey: (apiKey: string) => Promise<{ success: boolean; error?: string }>
+  setCerebrasApiKey: (apiKey: string) => Promise<{ success: boolean; error?: string }>
   setOpenaiApiKey: (apiKey: string) => Promise<{ success: boolean; error?: string }>
   setClaudeApiKey: (apiKey: string) => Promise<{ success: boolean; error?: string }>
-  getStoredCredentials: () => Promise<{ hasGeminiKey: boolean; hasGroqKey: boolean; hasOpenaiKey: boolean; hasClaudeKey: boolean; googleServiceAccountPath: string | null; sttProvider: string; hasSttGroqKey: boolean; hasSttOpenaiKey: boolean; hasDeepgramKey: boolean; hasElevenLabsKey: boolean; hasAzureKey: boolean; azureRegion: string; hasIbmWatsonKey: boolean; ibmWatsonRegion: string; hasSonioxKey: boolean }>
+  getStoredCredentials: () => Promise<{ hasGeminiKey: boolean; hasGroqKey: boolean; hasCerebrasKey: boolean; hasOpenaiKey: boolean; hasClaudeKey: boolean; googleServiceAccountPath: string | null; sttProvider: string; hasSttGroqKey: boolean; hasSttOpenaiKey: boolean; hasDeepgramKey: boolean; hasElevenLabsKey: boolean; hasAzureKey: boolean; azureRegion: string; hasIbmWatsonKey: boolean; ibmWatsonRegion: string; hasSonioxKey: boolean; hasGoogleSearchKey?: boolean; hasGoogleSearchCseId?: boolean; groqSttModel?: string; geminiPreferredModel?: string; groqPreferredModel?: string; cerebrasPreferredModel?: string; openaiPreferredModel?: string; claudePreferredModel?: string; fastResponseConfig?: FastResponseConfig }>
 
   // STT Provider Management
   setSttProvider: (provider: 'google' | 'groq' | 'openai' | 'deepgram' | 'elevenlabs' | 'azure' | 'ibmwatson' | 'soniox') => Promise<{ success: boolean; error?: string }>
@@ -181,9 +182,9 @@ interface ElectronAPI {
   // Settings Window
   toggleSettingsWindow: (coords?: { x: number; y: number }) => Promise<void>
 
-  // Groq Fast Text Mode
-  getGroqFastTextMode: () => Promise<{ enabled: boolean }>
-  setGroqFastTextMode: (enabled: boolean) => Promise<{ success: boolean; error?: string }>
+  // Fast Response Mode
+  getFastResponseConfig: () => Promise<FastResponseConfig>
+  setFastResponseConfig: (config: FastResponseConfig) => Promise<{ success: boolean; error?: string }>
 
   // Demo
   seedDemo: () => Promise<{ success: boolean }>
@@ -213,13 +214,13 @@ interface ElectronAPI {
 
   // Streaming listeners
   streamGeminiChat: (message: string, imagePaths?: string[], context?: string, options?: GeminiChatOptions) => Promise<void>
-  onGeminiStreamToken: (callback: (data: { requestId?: string; token: string }) => void) => () => void
-  onGeminiStreamDone: (callback: (data: { requestId?: string }) => void) => () => void
-  onGeminiStreamError: (callback: (data: { requestId?: string; error: string }) => void) => () => void
+  onGeminiStreamToken: (callback: (token: string) => void) => () => void
+  onGeminiStreamDone: (callback: () => void) => () => void
+  onGeminiStreamError: (callback: (error: string) => void) => () => void
 
 
   onUndetectableChanged: (callback: (state: boolean) => void) => () => void
-  onGroqFastTextChanged: (callback: (enabled: boolean) => void) => () => void
+  onFastResponseConfigChanged: (callback: (config: FastResponseConfig) => void) => () => void
   onModelChanged: (callback: (modelId: string) => void) => () => void
   onModelFallback: (callback: (event: { provider: 'gemini' | 'groq' | 'openai' | 'claude'; previousModel: string; fallbackModel: string; reason: string }) => void) => () => void
 
@@ -240,16 +241,16 @@ interface ElectronAPI {
   calendarRefresh: () => Promise<{ success: boolean; error?: string }>
 
 // RAG (Retrieval-Augmented Generation) API
-  ragQueryMeeting: (meetingId: string, query: string, requestId?: string) => Promise<{ success?: boolean; fallback?: boolean; error?: string }>
-  ragQueryLive: (query: string, requestId?: string) => Promise<{ success?: boolean; fallback?: boolean; error?: string }>
-  ragQueryGlobal: (query: string, requestId?: string) => Promise<{ success?: boolean; fallback?: boolean; error?: string }>
+  ragQueryMeeting: (meetingId: string, query: string) => Promise<{ success?: boolean; fallback?: boolean; error?: string }>
+  ragQueryLive: (query: string) => Promise<{ success?: boolean; fallback?: boolean; error?: string }>
+  ragQueryGlobal: (query: string) => Promise<{ success?: boolean; fallback?: boolean; error?: string }>
   ragCancelQuery: (options: { meetingId?: string; global?: boolean }) => Promise<StatusResult>
   ragIsMeetingProcessed: (meetingId: string) => Promise<boolean>
   ragGetQueueStatus: () => Promise<{ pending: number; processing: number; completed: number; failed: number }>
   ragRetryEmbeddings: () => Promise<StatusResult>
-  onRAGStreamChunk: (callback: (data: { meetingId?: string; global?: boolean; live?: boolean; requestId?: string; chunk: string }) => void) => () => void
-  onRAGStreamComplete: (callback: (data: { meetingId?: string; global?: boolean; live?: boolean; requestId?: string }) => void) => () => void
-  onRAGStreamError: (callback: (data: { meetingId?: string; global?: boolean; live?: boolean; requestId?: string; error: string }) => void) => () => void
+  onRAGStreamChunk: (callback: (data: { meetingId?: string; global?: boolean; chunk: string }) => void) => () => void
+  onRAGStreamComplete: (callback: (data: { meetingId?: string; global?: boolean }) => void) => () => void
+  onRAGStreamError: (callback: (data: { meetingId?: string; global?: boolean; error: string }) => void) => () => void
 
   // Keybind Management
   getKeybinds: () => Promise<Array<{ id: string; label: string; accelerator: string; isGlobal: boolean; defaultAccelerator: string }>>
@@ -496,7 +497,7 @@ setOpenAtLogin: (open: boolean) => invokeStatus("set-open-at-login", open),
   getAvailableOllamaModels: () => invokeAndUnwrap<string[]>("get-available-ollama-models"),
   switchToOllama: (model?: string, url?: string) => ipcRenderer.invoke("switch-to-ollama", model, url),
   switchToGemini: (apiKey?: string, modelId?: string) => ipcRenderer.invoke("switch-to-gemini", apiKey, modelId),
-  testLlmConnection: (provider: 'gemini' | 'groq' | 'openai' | 'claude', apiKey: string) => ipcRenderer.invoke("test-llm-connection", provider, apiKey),
+  testLlmConnection: (provider: 'gemini' | 'groq' | 'openai' | 'claude' | 'cerebras', apiKey: string) => ipcRenderer.invoke("test-llm-connection", provider, apiKey),
   selectServiceAccount: async () => {
     try {
       const data = await invokeAndUnwrap<{ path?: string; cancelled?: boolean }>("select-service-account")
@@ -509,6 +510,7 @@ setOpenAtLogin: (open: boolean) => invokeStatus("set-open-at-login", open),
   // API Key Management
   setGeminiApiKey: (apiKey: string) => ipcRenderer.invoke("set-gemini-api-key", apiKey),
   setGroqApiKey: (apiKey: string) => ipcRenderer.invoke("set-groq-api-key", apiKey),
+  setCerebrasApiKey: (apiKey: string) => ipcRenderer.invoke("set-cerebras-api-key", apiKey),
   setOpenaiApiKey: (apiKey: string) => ipcRenderer.invoke("set-openai-api-key", apiKey),
   setClaudeApiKey: (apiKey: string) => ipcRenderer.invoke("set-claude-api-key", apiKey),
   getStoredCredentials: () => invokeAndUnwrap("get-stored-credentials"),
@@ -747,24 +749,24 @@ setOpenAtLogin: (open: boolean) => invokeStatus("set-open-at-login", open),
   // Streaming Chat
   streamGeminiChat: (message: string, imagePaths?: string[], context?: string, options?: GeminiChatOptions) => ipcRenderer.invoke("gemini-chat-stream", message, imagePaths, context, options),
 
-  onGeminiStreamToken: (callback: (data: { requestId?: string; token: string }) => void) => {
-    const subscription = (_: any, data: { requestId?: string; token: string }) => callback(data)
+  onGeminiStreamToken: (callback: (token: string) => void) => {
+    const subscription = (_: any, token: string) => callback(token)
     ipcRenderer.on("gemini-stream-token", subscription)
     return () => {
       ipcRenderer.removeListener("gemini-stream-token", subscription)
     }
   },
 
-  onGeminiStreamDone: (callback: (data: { requestId?: string }) => void) => {
-    const subscription = (_: any, data: { requestId?: string }) => callback(data)
+  onGeminiStreamDone: (callback: () => void) => {
+    const subscription = () => callback()
     ipcRenderer.on("gemini-stream-done", subscription)
     return () => {
       ipcRenderer.removeListener("gemini-stream-done", subscription)
     }
   },
 
-  onGeminiStreamError: (callback: (data: { requestId?: string; error: string }) => void) => {
-    const subscription = (_: any, data: { requestId?: string; error: string }) => callback(data)
+  onGeminiStreamError: (callback: (error: string) => void) => {
+    const subscription = (_: any, error: string) => callback(error)
     ipcRenderer.on("gemini-stream-error", subscription)
     return () => {
       ipcRenderer.removeListener("gemini-stream-error", subscription)
@@ -781,9 +783,9 @@ setOpenAtLogin: (open: boolean) => invokeStatus("set-open-at-login", open),
   // Settings Window
   toggleSettingsWindow: (coords?: { x: number; y: number }) => invokeVoid('toggle-settings-window', coords),
 
-  // Groq Fast Text Mode
-  getGroqFastTextMode: () => invokeAndUnwrap<{ enabled: boolean }>('get-groq-fast-text-mode'),
-  setGroqFastTextMode: (enabled: boolean) => ipcRenderer.invoke('set-groq-fast-text-mode', enabled),
+  // Fast Response Mode
+  getFastResponseConfig: () => invokeAndUnwrap<FastResponseConfig>('get-fast-response-config'),
+  setFastResponseConfig: (config: FastResponseConfig) => ipcRenderer.invoke('set-fast-response-config', config),
 
   // Demo
   seedDemo: () => ipcRenderer.invoke('seed-demo'),
@@ -823,11 +825,11 @@ setOpenAtLogin: (open: boolean) => invokeStatus("set-open-at-login", open),
     }
   },
 
-  onGroqFastTextChanged: (callback: (enabled: boolean) => void) => {
-    const subscription = (_: any, enabled: boolean) => callback(enabled)
-    ipcRenderer.on('groq-fast-text-changed', subscription)
+  onFastResponseConfigChanged: (callback: (config: FastResponseConfig) => void) => {
+    const subscription = (_: any, config: FastResponseConfig) => callback(config)
+    ipcRenderer.on('fast-response-config-changed', subscription)
     return () => {
-      ipcRenderer.removeListener('groq-fast-text-changed', subscription)
+      ipcRenderer.removeListener('fast-response-config-changed', subscription)
     }
   },
 
@@ -882,23 +884,23 @@ setOpenAtLogin: (open: boolean) => invokeStatus("set-open-at-login", open),
   calendarRefresh: () => ipcRenderer.invoke('calendar-refresh'),
 
 // RAG API
-  ragQueryMeeting: async (meetingId: string, query: string, requestId?: string) => {
+  ragQueryMeeting: async (meetingId: string, query: string) => {
     try {
-      return await invokeAndUnwrap<{ success?: boolean; fallback?: boolean }>('rag:query-meeting', { meetingId, query, requestId })
+      return await invokeAndUnwrap<{ success?: boolean; fallback?: boolean }>('rag:query-meeting', { meetingId, query })
     } catch (error) {
       return { success: false, error: getErrorMessage(error) }
     }
   },
-  ragQueryLive: async (query: string, requestId?: string) => {
+  ragQueryLive: async (query: string) => {
     try {
-      return await invokeAndUnwrap<{ success?: boolean; fallback?: boolean }>('rag:query-live', { query, requestId })
+      return await invokeAndUnwrap<{ success?: boolean; fallback?: boolean }>('rag:query-live', { query })
     } catch (error) {
       return { success: false, error: getErrorMessage(error) }
     }
   },
-  ragQueryGlobal: async (query: string, requestId?: string) => {
+  ragQueryGlobal: async (query: string) => {
     try {
-      return await invokeAndUnwrap<{ success?: boolean; fallback?: boolean }>('rag:query-global', { query, requestId })
+      return await invokeAndUnwrap<{ success?: boolean; fallback?: boolean }>('rag:query-global', { query })
     } catch (error) {
       return { success: false, error: getErrorMessage(error) }
     }
@@ -917,21 +919,21 @@ setOpenAtLogin: (open: boolean) => invokeStatus("set-open-at-login", open),
   },
   reindexIncompatibleMeetings: () => invokeVoid('rag:reindex-incompatible-meetings'),
 
-  onRAGStreamChunk: (callback: (data: { meetingId?: string; global?: boolean; live?: boolean; requestId?: string; chunk: string }) => void) => {
+  onRAGStreamChunk: (callback: (data: { meetingId?: string; global?: boolean; chunk: string }) => void) => {
     const subscription = (_: any, data: any) => callback(data)
     ipcRenderer.on('rag:stream-chunk', subscription)
     return () => {
       ipcRenderer.removeListener('rag:stream-chunk', subscription)
     }
   },
-  onRAGStreamComplete: (callback: (data: { meetingId?: string; global?: boolean; live?: boolean; requestId?: string }) => void) => {
+  onRAGStreamComplete: (callback: (data: { meetingId?: string; global?: boolean }) => void) => {
     const subscription = (_: any, data: any) => callback(data)
     ipcRenderer.on('rag:stream-complete', subscription)
     return () => {
       ipcRenderer.removeListener('rag:stream-complete', subscription)
     }
   },
-  onRAGStreamError: (callback: (data: { meetingId?: string; global?: boolean; live?: boolean; requestId?: string; error: string }) => void) => {
+  onRAGStreamError: (callback: (data: { meetingId?: string; global?: boolean; error: string }) => void) => {
     const subscription = (_: any, data: any) => callback(data)
     ipcRenderer.on('rag:stream-error', subscription)
     return () => {
@@ -997,8 +999,8 @@ setOpenAtLogin: (open: boolean) => invokeStatus("set-open-at-login", open),
   setGoogleSearchCseId: (cseId: string) => invokeStatus('set-google-search-cse-id', cseId),
 
   // Dynamic Model Discovery
-  fetchProviderModels: (provider: 'gemini' | 'groq' | 'openai' | 'claude', apiKey: string) => ipcRenderer.invoke('fetch-provider-models', provider, apiKey),
-  setProviderPreferredModel: (provider: 'gemini' | 'groq' | 'openai' | 'claude', modelId: string) => ipcRenderer.invoke('set-provider-preferred-model', provider, modelId),
+  fetchProviderModels: (provider: 'gemini' | 'groq' | 'openai' | 'claude' | 'cerebras', apiKey: string) => ipcRenderer.invoke('fetch-provider-models', provider, apiKey),
+  setProviderPreferredModel: (provider: 'gemini' | 'groq' | 'openai' | 'claude' | 'cerebras', modelId: string) => ipcRenderer.invoke('set-provider-preferred-model', provider, modelId),
 
   // License Management
   licenseActivate: (key: string) => ipcRenderer.invoke('license:activate', key),

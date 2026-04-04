@@ -32,7 +32,6 @@ export interface TranscriptTextEntry {
 
 export interface GeminiChatOptions {
   skipSystemPrompt?: boolean;
-  requestId?: string;
 }
 
 export interface SettingsWindowCoords {
@@ -40,7 +39,15 @@ export interface SettingsWindowCoords {
   y?: number;
 }
 
-export type ProviderKind = 'gemini' | 'groq' | 'openai' | 'claude';
+export type ProviderKind = 'gemini' | 'groq' | 'openai' | 'claude' | 'cerebras';
+
+export type FastResponseProvider = 'groq' | 'cerebras';
+
+export interface FastResponseConfig {
+  enabled: boolean;
+  provider: FastResponseProvider;
+  model: string;
+}
 
 export interface MeetingAudioMetadata {
   inputDeviceId?: string | null;

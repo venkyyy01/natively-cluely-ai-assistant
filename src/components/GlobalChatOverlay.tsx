@@ -1,14 +1,10 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useStreamBuffer } from '../hooks/useStreamBuffer';
 import { useHumanSpeedAutoScroll } from '../hooks/useHumanSpeedAutoScroll';
-import { X, Copy, Check, ArrowUp } from 'lucide-react';
+import { X, ArrowUp } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
-import remarkMath from 'remark-math';
-import rehypeKatex from 'rehype-katex';
-import 'katex/dist/katex.min.css';
 import nativelyIcon from './icon.png';
+import { UserMessage, AssistantMessage } from './ChatMessage';
 
 // ============================================
 // Types
@@ -18,6 +14,7 @@ interface Message {
     id: string;
     role: 'user' | 'assistant';
     content: string;
+    createdAt: number;
     isStreaming?: boolean;
 }
 
@@ -27,133 +24,13 @@ interface GlobalChatOverlayProps {
     initialQuery?: string;
 }
 
-// ============================================
-// Typing Indicator Component
-// ============================================
 
-const TypingIndicator: React.FC = () => (
-    <div className="flex items-center gap-1 py-4">
-        <div className="flex items-center gap-1">
-            {[0, 1, 2].map((i) => (
-                <motion.div
-                    key={i}
-                    className="w-2 h-2 rounded-full bg-text-tertiary"
-                    animate={{ opacity: [0.4, 1, 0.4] }}
-                    transition={{
-                        duration: 0.6,
-                        repeat: Infinity,
-                        delay: i * 0.15,
-                        ease: "easeInOut"
-                    }}
-                />
-            ))}
-        </div>
-    </div>
-);
-
-// ============================================
-// Message Components
-// ============================================
-
-const UserMessage: React.FC<{ content: string }> = ({ content }) => (
-    <motion.div
-        initial={{ opacity: 0, y: 8 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.15 }}
-        className="flex justify-end mb-6"
-    >
-        <div className="bg-[#2C2C2E] text-white px-5 py-3 rounded-2xl rounded-tr-md max-w-[70%] text-[15px] leading-relaxed">
-            {content}
-        </div>
-    </motion.div>
-);
-
-const AssistantMessage: React.FC<{ content: string; isStreaming?: boolean }> = ({ content, isStreaming }) => {
-    const [copied, setCopied] = useState(false);
-
-    const handleCopy = async () => {
-        try {
-            await navigator.clipboard.writeText(content);
-            setCopied(true);
-            setTimeout(() => setCopied(false), 2000);
-        } catch (err) {
-            console.error('Failed to copy:', err);
-        }
-    };
-
-    return (
-        <motion.div
-            initial={{ opacity: 0, y: 8 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.15 }}
-            className="flex flex-col items-start mb-6"
-        >
-            <div className="text-text-primary text-[15px] leading-relaxed max-w-[88%]">
-                <div className="markdown-content">
-                    <ReactMarkdown
-                        remarkPlugins={[remarkGfm, remarkMath]}
-                        rehypePlugins={[rehypeKatex]}
-                        components={{
-                            p: ({ node, ...props }: any) => <p className="mb-2 last:mb-0 whitespace-pre-wrap" {...props} />,
-                            strong: ({ node, ...props }: any) => <strong className="font-semibold text-text-primary" {...props} />,
-                            em: ({ node, ...props }: any) => <em className="italic text-text-secondary" {...props} />,
-                            ul: ({ node, ...props }: any) => <ul className="list-disc ml-5 mb-2 space-y-1" {...props} />,
-                            ol: ({ node, ...props }: any) => <ol className="list-decimal ml-5 mb-2 space-y-1" {...props} />,
-                            li: ({ node, ...props }: any) => <li className="pl-1" {...props} />,
-                            a: ({ node, ...props }: any) => <a className="text-blue-500 hover:underline" target="_blank" rel="noopener noreferrer" {...props} />,
-                            pre: ({ node, ...props }: any) => (
-                                <pre
-                                    className="my-3 overflow-x-auto rounded-xl border border-border-subtle bg-bg-tertiary px-4 py-3 text-[13px] leading-relaxed"
-                                    {...props}
-                                />
-                            ),
-                            code: ({ node, inline, className, ...props }: any) => {
-                                const isInline = inline ?? !String(className || '').includes('language-');
-                                return (
-                                    <code
-                                        className={isInline
-                                            ? 'rounded bg-bg-tertiary px-1.5 py-0.5 text-[13px] font-mono text-text-primary'
-                                            : 'font-mono'}
-                                        {...props}
-                                    />
-                                );
-                            },
-                            blockquote: ({ node, ...props }: any) => <blockquote className="my-2 border-l-2 border-border-subtle pl-3 italic text-text-secondary" {...props} />,
-                        }}
-                    >
-                        {content}
-                    </ReactMarkdown>
-                </div>
-                {isStreaming && (
-                    <motion.span
-                        className="inline-block w-0.5 h-4 bg-text-secondary ml-0.5 align-middle"
-                        animate={{ opacity: [1, 0] }}
-                        transition={{ duration: 0.5, repeat: Infinity }}
-                    />
-                )}
-            </div>
-            {!isStreaming && content && (
-                <button
-                    onClick={handleCopy}
-                    className="flex items-center gap-2 mt-3 text-[13px] text-text-tertiary hover:text-text-secondary transition-colors"
-                >
-                    {copied ? <Check size={14} className="text-emerald-500" /> : <Copy size={14} />}
-                    {copied ? 'Copied' : 'Copy message'}
-                </button>
-            )}
-        </motion.div>
-    );
-};
 
 // ============================================
 // Main Component
 // ============================================
 
 type ChatState = 'idle' | 'waiting_for_llm' | 'streaming_response' | 'error';
-
-function createRequestId(prefix: string): string {
-    return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-}
 
 const GlobalChatOverlay: React.FC<GlobalChatOverlayProps> = ({
     isOpen,
@@ -178,7 +55,6 @@ const GlobalChatOverlay: React.FC<GlobalChatOverlayProps> = ({
     }, [chatState]);
 
     const cleanupActiveRequest = useCallback(() => {
-        void window.electronAPI?.ragCancelQuery?.({ global: true }).catch(() => {});
         for (const cleanup of activeCleanupRef.current) {
             cleanup();
         }
@@ -187,7 +63,7 @@ const GlobalChatOverlay: React.FC<GlobalChatOverlayProps> = ({
         streamBuffer.reset();
     }, [streamBuffer]);
 
-    const latestReadableMessage = [...messages].reverse().find(msg => msg.role === 'assistant') || null;
+    const latestReadableMessage = messages.find(msg => msg.role === 'assistant') || null;
 
     useHumanSpeedAutoScroll({
         enabled: isOpen,
@@ -199,7 +75,6 @@ const GlobalChatOverlay: React.FC<GlobalChatOverlayProps> = ({
             isStreaming: latestReadableMessage.isStreaming,
         } : null,
         eligibleRoles: ['assistant'],
-        getTargetElement: (container, messageId) => container.querySelector(`[data-autoscroll-message-id="${messageId}"]`) as HTMLElement | null,
     });
 
     useEffect(() => {
@@ -239,15 +114,16 @@ const GlobalChatOverlay: React.FC<GlobalChatOverlayProps> = ({
         if (!question.trim() || chatStateRef.current === 'waiting_for_llm' || chatStateRef.current === 'streaming_response') return;
 
         cleanupActiveRequest();
-        const requestId = createRequestId('global-chat');
+        const requestId = `request-${Date.now()}-${Math.random().toString(36).slice(2)}`;
         activeRequestIdRef.current = requestId;
 
         const userMessage: Message = {
             id: `user-${Date.now()}`,
             role: 'user',
-            content: question
+            content: question,
+            createdAt: Date.now()
         };
-        setMessages(prev => [...prev, userMessage]);
+        setMessages(prev => [userMessage, ...prev]);
         setChatState('waiting_for_llm');
         setErrorMessage(null);
 
@@ -265,17 +141,17 @@ const GlobalChatOverlay: React.FC<GlobalChatOverlayProps> = ({
             if (!isCurrentRequest()) return;
 
             // Create assistant message placeholder
-            setMessages(prev => [...prev, {
+            setMessages(prev => [{
                 id: assistantMessageId,
                 role: 'assistant',
                 content: '',
+                createdAt: Date.now(),
                 isStreaming: true
-            }]);
+            }, ...prev]);
 
             // Set up RAG streaming listeners (RAF-batched)
             streamBuffer.reset();
-            const tokenCleanup = window.electronAPI?.onRAGStreamChunk((data: { requestId?: string; chunk: string }) => {
-                if (data.requestId !== requestId) return;
+            const tokenCleanup = window.electronAPI?.onRAGStreamChunk((data: { chunk: string }) => {
                 if (!isCurrentRequest()) return;
                 setChatState('streaming_response');
                 streamBuffer.appendToken(data.chunk, (content) => {
@@ -288,8 +164,7 @@ const GlobalChatOverlay: React.FC<GlobalChatOverlayProps> = ({
                 });
             });
 
-            const doneCleanup = window.electronAPI?.onRAGStreamComplete((data: { requestId?: string }) => {
-                if (data.requestId !== requestId) return;
+            const doneCleanup = window.electronAPI?.onRAGStreamComplete(() => {
                 if (!isCurrentRequest()) return;
                 const finalContent = streamBuffer.getBufferedContent();
                 setMessages(prev => prev.map(msg =>
@@ -301,8 +176,7 @@ const GlobalChatOverlay: React.FC<GlobalChatOverlayProps> = ({
                 finishRequest();
             });
 
-            const errorCleanup = window.electronAPI?.onRAGStreamError((data: { requestId?: string; error: string }) => {
-                if (data.requestId !== requestId) return;
+            const errorCleanup = window.electronAPI?.onRAGStreamError((data: { error: string }) => {
                 if (!isCurrentRequest()) return;
                 console.error('[GlobalChat] RAG stream error:', data.error);
                 setMessages(prev => prev.filter(msg => msg.id !== assistantMessageId));
@@ -314,7 +188,7 @@ const GlobalChatOverlay: React.FC<GlobalChatOverlayProps> = ({
             activeCleanupRef.current = [tokenCleanup, doneCleanup, errorCleanup].filter(Boolean) as Array<() => void>;
 
             // Use global RAG query
-            const result = await window.electronAPI?.ragQueryGlobal(question, requestId);
+            const result = await window.electronAPI?.ragQueryGlobal(question);
             if (!isCurrentRequest()) return;
 
             if (result?.fallback) {
@@ -324,11 +198,10 @@ const GlobalChatOverlay: React.FC<GlobalChatOverlayProps> = ({
 
                 // Setup fallback listeners (Standard Gemini)
                 streamBuffer.reset();
-                const oldTokenCleanup = window.electronAPI?.onGeminiStreamToken((data: { requestId?: string; token: string }) => {
-                    if (data.requestId !== requestId) return;
+                const oldTokenCleanup = window.electronAPI?.onGeminiStreamToken((token: string) => {
                     if (!isCurrentRequest()) return;
                     setChatState('streaming_response');
-                    streamBuffer.appendToken(data.token, (content) => {
+                    streamBuffer.appendToken(token, (content) => {
                         if (!isCurrentRequest()) return;
                         setMessages(prev => prev.map(msg =>
                             msg.id === assistantMessageId
@@ -338,8 +211,7 @@ const GlobalChatOverlay: React.FC<GlobalChatOverlayProps> = ({
                     });
                 });
 
-                const oldDoneCleanup = window.electronAPI?.onGeminiStreamDone((data: { requestId?: string }) => {
-                    if (data.requestId !== requestId) return;
+                const oldDoneCleanup = window.electronAPI?.onGeminiStreamDone(() => {
                     if (!isCurrentRequest()) return;
                     const finalContent = streamBuffer.getBufferedContent();
                     setMessages(prev => prev.map(msg =>
@@ -351,10 +223,9 @@ const GlobalChatOverlay: React.FC<GlobalChatOverlayProps> = ({
                     finishRequest();
                 });
 
-                const oldErrorCleanup = window.electronAPI?.onGeminiStreamError((data: { requestId?: string; error: string }) => {
-                    if (data.requestId !== requestId) return;
+                const oldErrorCleanup = window.electronAPI?.onGeminiStreamError((error: string) => {
                     if (!isCurrentRequest()) return;
-                    console.error('[GlobalChat] Gemini stream error:', data.error);
+                    console.error('[GlobalChat] Gemini stream error:', error);
                     setMessages(prev => prev.filter(msg => msg.id !== assistantMessageId));
                     setErrorMessage("Couldn't get a response. Please check your settings.");
                     setChatState('error');
@@ -364,7 +235,7 @@ const GlobalChatOverlay: React.FC<GlobalChatOverlayProps> = ({
                 activeCleanupRef.current = [oldTokenCleanup, oldDoneCleanup, oldErrorCleanup].filter(Boolean) as Array<() => void>;
 
                 // Call standard chat
-                await window.electronAPI?.streamGeminiChat(question, undefined, undefined, { skipSystemPrompt: false, requestId });
+                await window.electronAPI?.streamGeminiChat(question, undefined, undefined, { skipSystemPrompt: false });
             }
 
         } catch (error) {
@@ -442,23 +313,49 @@ const GlobalChatOverlay: React.FC<GlobalChatOverlayProps> = ({
                             </button>
                         </div>
 
-                        {/* Messages area - scrollable */}
-                        <div ref={scrollContainerRef} className="flex-1 overflow-y-auto px-6 py-4 pb-32 custom-scrollbar">
-                            {messages.map((msg) => (
-                                <div key={msg.id} data-autoscroll-message-id={msg.id}>
-                                    {msg.role === 'user'
-                                        ? <UserMessage content={msg.content} />
-                                        : <AssistantMessage content={msg.content} isStreaming={msg.isStreaming} />}
-                                </div>
-                            ))}
-
-                            {chatState === 'waiting_for_llm' && <TypingIndicator />}
+                        {/* Messages area - scrollable with improved spacing */}
+                        <div ref={scrollContainerRef} className="flex-1 overflow-y-auto px-8 py-6 pb-32 custom-scrollbar flex flex-col">
+                            <AnimatePresence initial={false}>
+                                {messages.map((msg, index) => (
+                                    <div
+                                        key={msg.id}
+                                        data-autoscroll-message-id={msg.id}
+                                    >
+                                        {msg.role === 'user'
+                                            ? <UserMessage 
+                                                role={msg.role}
+                                                content={msg.content}
+                                                isNew={index === 0}
+                                              />
+                                            : <AssistantMessage 
+                                                role={msg.role}
+                                                content={msg.content} 
+                                                isStreaming={msg.isStreaming}
+                                                isNew={index === 0}
+                                              />
+                                        }
+                                    </div>
+                                ))}
+                            </AnimatePresence>
 
                             {errorMessage && (
                                 <motion.div
                                     initial={{ opacity: 0, y: 4 }}
                                     animate={{ opacity: 1, y: 0 }}
-                                    className="text-[#FF6B6B] text-[13px] py-2"
+                                    className="
+                                        px-5 
+                                        py-3 
+                                        rounded-xl 
+                                        bg-red-50 
+                                        dark:bg-red-900/20 
+                                        border 
+                                        border-red-200 
+                                        dark:border-red-800/40 
+                                        text-red-700 
+                                        dark:text-red-400 
+                                        text-sm
+                                        mb-4
+                                    "
                                 >
                                     {errorMessage}
                                 </motion.div>

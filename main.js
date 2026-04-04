@@ -1074,7 +1074,9 @@ class AppState {
                     const rms = Math.sqrt(sum / count);
                     // Normalize 0-1 (heuristic scaling, max comfortable mic input is around 10000-20000)
                     const level = Math.min(rms / 10000, 1.0);
-                    win.webContents.send('audio-level', level);
+                    if (win && !win.isDestroyed()) {
+                        win.webContents.send('audio-level', level);
+                    }
                 }
             });
             this.audioTestCapture.on('error', (err) => {

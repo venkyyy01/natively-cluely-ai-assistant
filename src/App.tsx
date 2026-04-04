@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useMemo } from 'react'
+import React, { useEffect, useState, useMemo, memo } from 'react'
 import { QueryClient, QueryClientProvider } from 'react-query'
 import { AnimatePresence, motion } from 'framer-motion'
 import { AlertCircle } from 'lucide-react'
@@ -87,6 +87,9 @@ const MeetingAudioBanner: React.FC<MeetingAudioBannerProps> = ({ message, title,
   )
 }
 
+// Memoized MeetingAudioBanner component for performance
+const MemoizedMeetingAudioBanner = memo(MeetingAudioBanner);
+
 type OverlayWindowContentProps = {
   meetingAudioError: string | null
   overlayOpacity: number
@@ -105,7 +108,7 @@ const OverlayWindowContent: React.FC<OverlayWindowContentProps> = ({
       <AppProviders>
         <AnimatePresence>
           {meetingAudioError && (
-            <MeetingAudioBanner
+            <MemoizedMeetingAudioBanner
               message={meetingAudioError}
               title="Audio startup failed"
               variant="overlay"
@@ -120,6 +123,9 @@ const OverlayWindowContent: React.FC<OverlayWindowContentProps> = ({
     </div>
   </ErrorBoundary>
 )
+
+// Memoized OverlayWindowContent component for performance  
+const MemoizedOverlayWindowContent = memo(OverlayWindowContent);
 
 type LauncherWindowContentProps = {
   incompatibleWarning: { count: number; oldProvider: string; newProvider: string } | null
@@ -186,7 +192,7 @@ const LauncherWindowContent: React.FC<LauncherWindowContentProps> = ({
             <AppProviders>
               <AnimatePresence>
                 {meetingAudioError && (
-                  <MeetingAudioBanner
+                  <MemoizedMeetingAudioBanner
                     message={meetingAudioError}
                     title="Audio setup needs attention"
                     variant="launcher"
@@ -197,7 +203,7 @@ const LauncherWindowContent: React.FC<LauncherWindowContentProps> = ({
               <div id="launcher-container" className="h-full w-full relative">
                 <AnimatePresence>
                   {meetingAudioError && (
-                    <MeetingAudioBanner
+                    <MemoizedMeetingAudioBanner
                       message={meetingAudioError}
                       title="Audio setup needs attention"
                       variant="launcher"
@@ -263,6 +269,9 @@ const LauncherWindowContent: React.FC<LauncherWindowContentProps> = ({
     </div>
   </ErrorBoundary>
 )
+
+// Memoized LauncherWindowContent component for performance  
+const MemoizedLauncherWindowContent = memo(LauncherWindowContent);
 
 const useWindowAnalytics = ({ kind, isDefaultLauncherWindow }: AppWindowContext) => {
   useEffect(() => {
@@ -475,7 +484,7 @@ const App: React.FC = () => {
 
   if (windowKind === 'overlay') {
     return (
-      <OverlayWindowContent
+      <MemoizedOverlayWindowContent
         meetingAudioError={meetingAudioError}
         overlayOpacity={overlayOpacity}
         onClearMeetingAudioError={() => setMeetingAudioError(null)}
@@ -485,7 +494,7 @@ const App: React.FC = () => {
   }
 
   return (
-    <LauncherWindowContent
+    <MemoizedLauncherWindowContent
       incompatibleWarning={incompatibleWarning}
       isDefaultLauncherWindow={isDefaultLauncherWindow}
       isSettingsOpen={isSettingsOpen}

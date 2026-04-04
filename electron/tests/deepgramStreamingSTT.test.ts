@@ -312,3 +312,58 @@ test('DeepgramStreamingSTT sends periodic keepalives and a graceful close messag
     (global as any).clearInterval = originalClearInterval;
   }
 });
+
+test('DeepgramStreamingSTT stops reconnecting after the retry cap is exhausted', async () => {
+  const restoreWs = installWebSocketMock();
+  const originalSetTimeout = global.setTimeout;
+  const originalClearTimeout = global.clearTimeout;
+  const originalSetInterval = global.setInterval;
+  const originalClearInterval = global.clearInterval;
+  const scheduledTimeouts: Array<() => void> = [];
+
+  (global as any).setTimeout = (fn: () => void) => {
+    scheduledTimeouts.push(fn);
+    return scheduledTimeouts.length;
+  };
+  (global as any).clearTimeout = () => {};
+  (global as any).setInterval = () => 1;
+  (global as any).clearInterval = () => {};
+
+  const modulePath = require.resolve('../audio/DeepgramStreamingSTT');
+  delete require.cache[modulePath];
+
+  try {
+    const { DeepgramStreamingSTT } = await import('../audio/DeepgramStreamingSTT');
+    const stt = new DeepgramStreamingSTT('test-key');
+    const errors: Error[] = [];
+
+    stt.on('error', (err) => errors.push(err));
+
+    stt.start();
+    assert.equal(FakeWebSocket.instances.length, 1);
+
+    let currentSocket = FakeWebSocket.instances[0]!;
+    for (let attempt = 0; attempt < 5; attempt++) {
+      currentSocket.closeWith(1011, `unexpected-${attempt}`);
+      assert.equal(scheduledTimeouts.length, attempt + 1);
+      scheduledTimeouts[attempt]!();
+      currentSocket = FakeWebSocket.instances[attempt + 1]!;
+    }
+
+    currentSocket.closeWith(1011, 'exhausted');
+
+    assert.equal(scheduledTimeouts.length, 5);
+    assert.equal(FakeWebSocket.instances.length, 6);
+    assert.equal(errors.length, 1);
+    assert.match(errors[0]!.message, /max reconnect/i);
+    assert.equal((stt as any).isActive, false);
+
+    stt.stop();
+  } finally {
+    restoreWs();
+    (global as any).setTimeout = originalSetTimeout;
+    (global as any).clearTimeout = originalClearTimeout;
+    (global as any).setInterval = originalSetInterval;
+    (global as any).clearInterval = originalClearInterval;
+  }
+});

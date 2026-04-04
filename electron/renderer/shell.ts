@@ -4,7 +4,6 @@ export interface StealthShellBridge {
   onFrame(callback: (payload: StealthFramePayload) => void): () => void;
   sendInputEvent(event: StealthInputEvent): void;
   notifyReady(): void;
-  notifyFramePresented(frameId: number): void;
 }
 
 const mapModifiers = (event: MouseEvent | KeyboardEvent | WheelEvent): Array<'shift' | 'control' | 'alt' | 'meta'> => {
@@ -36,7 +35,6 @@ export function mountStealthShell(bridge: StealthShellBridge, documentRef: Docum
       context.clearRect(0, 0, payload.width, payload.height);
       context.drawImage(image, 0, 0, payload.width, payload.height);
       loadingIndicator?.classList.add('hidden');
-      bridge.notifyFramePresented(payload.frameId);
     };
     image.src = payload.dataUrl;
   };

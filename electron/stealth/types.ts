@@ -11,7 +11,6 @@ export interface StealthFramePayload {
   height: number;
   scaleFactor: number;
   dirtyRects: DirtyRect[];
-  frameId: number;
 }
 
 export type StealthMouseEventType = 'mouseDown' | 'mouseUp' | 'mouseMove' | 'mouseEnter' | 'mouseLeave';

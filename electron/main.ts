@@ -1,4 +1,4 @@
-import { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, shell, systemPreferences, globalShortcut, session, powerMonitor, screen } from "electron"
+import { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, shell, systemPreferences, globalShortcut, session } from "electron"
 import { EventEmitter } from "events"
 import { randomUUID } from "node:crypto"
 import path from "path"
@@ -7,6 +7,9 @@ import fsPromises from "fs/promises"
 import { syncOptimizationFlagsFromSettings } from "./config/optimizations"
 import { StealthManager } from "./stealth/StealthManager"
 import { createMacosVirtualDisplayCoordinator, resolveMacosVirtualDisplayHelperPath } from "./stealth/macosVirtualDisplayIntegration"
+import { AsyncMutex } from "./utils/AsyncMutex"
+import { AudioCaptureReconnector, AudioCaptureInstance } from "./utils/AudioCaptureReconnector"
+import { MeetingStateMachine, MeetingState } from "./utils/MeetingStateMachine"
 if (!app.isPackaged) {
 require('dotenv').config();
 }
@@ -17,11 +20,29 @@ process.stdout?.on?.('error', () => { });
 process.stderr?.on?.('error', () => { });
 
 process.on('uncaughtException', (err) => {
-  void logToFileAsync('[CRITICAL] Uncaught Exception: ' + (err.stack || err.message || err));
+  try {
+    const errorMsg = '[CRITICAL] Uncaught Exception: ' + (err.stack || err.message || err);
+    void logToFileAsync(errorMsg);
+    // Fallback to console if file logging fails
+    console.error(errorMsg);
+  } catch (fallbackErr) {
+    // Last resort - at least show it in console
+    console.error('[CRITICAL] Uncaught Exception:', err);
+    console.error('Logging system also failed:', fallbackErr);
+  }
 });
 
 process.on('unhandledRejection', (reason, promise) => {
-  void logToFileAsync('[CRITICAL] Unhandled Rejection at: ' + promise + ' reason: ' + (reason instanceof Error ? reason.stack : reason));
+  try {
+    const errorMsg = '[CRITICAL] Unhandled Rejection at: ' + promise + ' reason: ' + (reason instanceof Error ? reason.stack : reason);
+    void logToFileAsync(errorMsg);
+    // Fallback to console if file logging fails
+    console.error(errorMsg);
+  } catch (fallbackErr) {
+    // Last resort - at least show it in console
+    console.error('[CRITICAL] Unhandled Rejection:', reason, 'at:', promise);
+    console.error('Logging system also failed:', fallbackErr);
+  }
 });
 
 const logFile = path.join(app.getPath('documents'), 'natively_debug.log');
@@ -177,16 +198,6 @@ import { ProcessingHelper } from "./ProcessingHelper"
 import { IntelligenceManager } from "./IntelligenceManager"
 import { SystemAudioCapture } from "./audio/SystemAudioCapture"
 import { MicrophoneCapture } from "./audio/MicrophoneCapture"
-import {
-  configureMeetingAudioPipeline,
-  restartMeetingAudioStreamsAfterReconfigure as restartMeetingAudioStreamsAfterReconfigureHelper,
-  startMeetingAudioStreams as startMeetingAudioStreamsHelper,
-} from "./audio/meetingAudioSequencing"
-import {
-  pauseAudioForStealth,
-  resumeAudioAfterStealth,
-  type StealthAudioPauseSnapshot,
-} from "./audio/stealthAudioCoordinator"
 import { AudioDevices, type AudioDevice } from "./audio/AudioDevices"
 import { GoogleSTT } from "./audio/GoogleSTT"
 import { RestSTT } from "./audio/RestSTT"
@@ -307,7 +318,6 @@ export class AppState {
   private tray: Tray | null = null
   private disguiseMode: 'terminal' | 'settings' | 'activity' | 'none' = 'none'
   private consciousModeEnabled: boolean = false
-  private enableConversationStateTrigger: boolean = process.env.NATIVELY_ENABLE_CONVERSATION_STATE_TRIGGER === '1'
 
   // View management
   private view: "queue" | "solutions" = "queue"
@@ -322,10 +332,10 @@ export class AppState {
   } | null = null // Allow null
 
   private hasDebugged: boolean = false
-  private isMeetingActive: boolean = false; // Guard for session state leaks
+  private meetingStateMachine = new MeetingStateMachine(); // CRITICAL FIX: Thread-safe state management
   private meetingLifecycleState: 'idle' | 'starting' | 'active' | 'stopping' = 'idle'
   private meetingStartSequence = 0
-  private meetingStartMutex: Promise<void> = Promise.resolve() // Prevents race conditions
+  private meetingStartMutex = new AsyncMutex({ name: 'MeetingStart', timeout: 10000 }) // Proper async mutex
   private nativeAudioConnected: boolean = false;
   private _disguiseTimers: NodeJS.Timeout[] = []; // Track forceUpdate timeouts
 
@@ -357,11 +367,12 @@ export class AppState {
   private currentMeetingId: string | null = null;
   private startAbortController: AbortController | null = null;
   private audioHealthCheckTimer: NodeJS.Timeout | null = null;
-  private meetingRecoverySweepTimer: NodeJS.Timeout | null = null;
-  private windowsPowerHandlersBound: boolean = false;
-  private windowsAudioResumePending: boolean = false;
-  private windowsAudioResumeInFlight: Promise<void> | null = null;
-  private lastWindowsAudioResumeAt: number = 0;
+  private audioReconnector = new AudioCaptureReconnector({
+    maxAttempts: 5,
+    baseDelayMs: 2000,
+    enableDeviceFallback: true,
+    enableFormatFallback: true
+  });
   private audioPipelineStats = {
     startedAt: 0,
     systemChunks: 0,
@@ -369,6 +380,8 @@ export class AppState {
     interviewerTranscripts: 0,
     userTranscripts: 0,
   };
+
+
 
 
   // Processing events
@@ -475,18 +488,12 @@ this.stealthManager.on('stealth-degraded', (warnings: string[]) => {
   console.warn(`[Main] Stealth degraded: ${warnings.join(', ')}`);
   this._broadcastToAllWindows('stealth-degraded', warnings);
 });
-this.stealthManager.on('screen-share-detected', (payload) => {
-  this.handleStealthScreenShareDetected(payload);
-});
-this.stealthManager.on('screen-share-cleared', () => {
-  void this.handleStealthScreenShareCleared();
-});
 // 3. Initialize other helpers
 this.screenshotHelper = new ScreenshotHelper(this.view)
 this.processingHelper = new ProcessingHelper(this)
 
 this.sttReconnector = new STTReconnector(async (speaker) => {
-  if (!this.isMeetingActive) return;
+  if (!this.meetingStateMachine.isMeetingActive()) return;
   await this.reconnectSpeakerStt(speaker);
 });
 this.sttReconnector.on('reconnecting', (payload: { speaker: 'interviewer' | 'user'; attempt: number; delayMs: number }) => {
@@ -711,6 +718,16 @@ this.setupIntelligenceEvents()
     }
   }
 
+  private async resetMeetingStateMachine(reason: string): Promise<void> {
+    const currentState = this.meetingStateMachine.getCurrentState();
+    if (currentState === MeetingState.IDLE) {
+      return;
+    }
+
+    console.warn(`[Main] Resetting meeting state machine from ${currentState} (${reason})`);
+    await this.meetingStateMachine.reset(reason);
+  }
+
   private resetAudioPipelineStats(): void {
     this.audioPipelineStats = {
       startedAt: Date.now(),
@@ -726,170 +743,6 @@ this.setupIntelligenceEvents()
       clearTimeout(this.audioHealthCheckTimer);
       this.audioHealthCheckTimer = null;
     }
-  }
-
-  public startMeetingRecoverySweep(): void {
-    if (this.meetingRecoverySweepTimer) {
-      return;
-    }
-
-    this.meetingRecoverySweepTimer = setInterval(() => {
-      if (this.meetingLifecycleState === 'starting') {
-        return;
-      }
-
-      this.intelligenceManager.recoverUnprocessedMeetings().catch((error) => {
-        console.error('[Main] Periodic meeting recovery sweep failed:', error);
-      });
-    }, 5 * 60 * 1000);
-  }
-
-  private stopMeetingRecoverySweep(): void {
-    if (this.meetingRecoverySweepTimer) {
-      clearInterval(this.meetingRecoverySweepTimer);
-      this.meetingRecoverySweepTimer = null;
-    }
-  }
-
-  public bindWindowsPowerAudioRecovery(): void {
-    if (this.windowsPowerHandlersBound || process.platform !== 'win32') {
-      return;
-    }
-
-    powerMonitor.on('suspend', () => {
-      this.handleWindowsPowerSuspend();
-    });
-    powerMonitor.on('resume', () => {
-      void this.handleWindowsPowerResume('resume');
-    });
-    powerMonitor.on('unlock-screen', () => {
-      void this.handleWindowsPowerResume('unlock-screen');
-    });
-
-    this.windowsPowerHandlersBound = true;
-  }
-
-  private handleWindowsPowerSuspend(): void {
-    if (!this.isMeetingActive) {
-      return;
-    }
-
-    console.warn('[Main] Windows suspend detected during active meeting; scheduling audio recovery on resume');
-    this.windowsAudioResumePending = true;
-    this.audioRecoveryAttempts = 0;
-    this.clearAudioPipelineHealthCheck();
-    this.setNativeAudioConnected(false);
-    this.sttReconnector?.stopAll();
-  }
-
-  private async handleWindowsPowerResume(reason: 'resume' | 'unlock-screen'): Promise<void> {
-    if (!this.isMeetingActive || !this.windowsAudioResumePending) {
-      return;
-    }
-
-    if (this.windowsAudioResumeInFlight) {
-      await this.windowsAudioResumeInFlight;
-      return;
-    }
-
-    const now = Date.now();
-    if (now - this.lastWindowsAudioResumeAt < 1500) {
-      return;
-    }
-    this.lastWindowsAudioResumeAt = now;
-
-    this.windowsAudioResumeInFlight = (async () => {
-      console.warn(`[Main] Windows ${reason} detected; rebuilding active audio pipeline`);
-      this.windowsAudioResumePending = false;
-      this.audioRecoveryAttempts = 0;
-      this.sttReconnector?.reset('interviewer');
-      this.sttReconnector?.reset('user');
-
-      try {
-        await this.reconfigureAudio(undefined, undefined, { restartStreams: true });
-        this.audioRecoveryAttempts = 0;
-        this.sttReconnector?.reset('interviewer');
-        this.sttReconnector?.reset('user');
-        this.setNativeAudioConnected(true);
-        this.scheduleAudioPipelineHealthCheck();
-        this.broadcast('meeting-audio-resumed', {
-          reason: `power-${reason}`,
-          systemResumed: Boolean(this.systemAudioCapture),
-          microphoneResumed: Boolean(this.microphoneCapture),
-        });
-      } catch (error) {
-        this.windowsAudioResumePending = true;
-        console.error(`[Main] Windows audio recovery after ${reason} failed:`, error);
-        this.broadcast('meeting-audio-error', 'Audio recovery after system resume failed');
-      } finally {
-        this.windowsAudioResumeInFlight = null;
-      }
-    })();
-
-    await this.windowsAudioResumeInFlight;
-  }
-
-  private pauseMeetingAudioForStealth(reason: string): void {
-    if (!this.isMeetingActive || this.stealthAudioPauseSnapshot?.active) {
-      return;
-    }
-
-    this.clearAudioPipelineHealthCheck();
-    this.stealthAudioPauseSnapshot = pauseAudioForStealth({
-      systemAudioCapture: this.systemAudioCapture,
-      microphoneCapture: this.microphoneCapture,
-      clearBufferedSystemAudio: (pauseReason) => this.clearBufferedSystemAudio(pauseReason),
-    }, reason);
-    this.setNativeAudioConnected(false);
-    this.broadcast('meeting-audio-paused', {
-      reason,
-      systemPaused: this.stealthAudioPauseSnapshot.systemWasCapturing,
-      microphonePaused: this.stealthAudioPauseSnapshot.microphoneWasCapturing,
-    });
-  }
-
-  private async resumeMeetingAudioAfterStealth(reason: string): Promise<void> {
-    const snapshot = this.stealthAudioPauseSnapshot;
-    this.stealthAudioPauseSnapshot = null;
-
-    if (!snapshot?.active || !this.isMeetingActive) {
-      return;
-    }
-
-    await resumeAudioAfterStealth({
-      systemAudioCapture: this.systemAudioCapture,
-      microphoneCapture: this.microphoneCapture,
-      interviewerStt: this.googleSTT,
-      userStt: this.googleSTT_User,
-      setAudioChannelCount: safeSetAudioChannelCount,
-      beginSystemAudioBuffering: (resumeReason) => this.beginSystemAudioBuffering(resumeReason),
-      flushBufferedSystemAudio: (resumeReason) => this.flushBufferedSystemAudio(resumeReason),
-      clearBufferedSystemAudio: (resumeReason) => this.clearBufferedSystemAudio(resumeReason),
-      onError: (source, error) => {
-        void this.handleAudioCaptureError(source, error);
-      },
-    }, snapshot);
-
-    const connected =
-      (this.systemAudioCapture?.isCapturing?.() ?? false) ||
-      (this.microphoneCapture?.isCapturing?.() ?? false);
-    this.setNativeAudioConnected(connected);
-    this.scheduleAudioPipelineHealthCheck();
-    this.broadcast('meeting-audio-resumed', {
-      reason,
-      systemResumed: snapshot.systemWasCapturing,
-      microphoneResumed: snapshot.microphoneWasCapturing,
-    });
-  }
-
-  private handleStealthScreenShareDetected(payload: unknown): void {
-    this.pauseMeetingAudioForStealth('screen-share-detected');
-    this.broadcast('stealth-screen-share-detected', payload);
-  }
-
-  private async handleStealthScreenShareCleared(): Promise<void> {
-    this.broadcast('stealth-screen-share-cleared');
-    await this.resumeMeetingAudioAfterStealth('screen-share-cleared');
   }
 
   private noteAudioChunk(source: 'system' | 'microphone'): void {
@@ -913,7 +766,7 @@ this.setupIntelligenceEvents()
   private scheduleAudioPipelineHealthCheck(): void {
     this.clearAudioPipelineHealthCheck();
     this.audioHealthCheckTimer = setTimeout(() => {
-      if (!this.isMeetingActive) {
+      if (!this.meetingStateMachine.isMeetingActive()) {
         return;
       }
 
@@ -1075,11 +928,6 @@ try {
   private audioTestCapture: MicrophoneCapture | null = null; // For audio settings test
   private googleSTT: STTProvider | null = null; // Interviewer
   private googleSTT_User: STTProvider | null = null; // User
-  private stealthAudioPauseSnapshot: StealthAudioPauseSnapshot | null = null;
-  private bufferSystemAudioUntilInterviewerSttReady: boolean = false;
-  private bufferedSystemAudioChunks: Buffer[] = [];
-  private bufferedSystemAudioSpeechEnded: boolean = false;
-  private readonly MAX_BUFFERED_SYSTEM_AUDIO_CHUNKS = 256;
 
   // Listener references for proper cleanup (prevent memory leaks)
   private sttTranscriptListener_Interviewer: ((segment: { text: string, isFinal: boolean, confidence: number }) => void) | null = null;
@@ -1165,15 +1013,16 @@ try {
 
     const transcriptHandler = (segment: { text: string, isFinal: boolean, confidence: number }) => {
       // Enhanced debugging for transcript flow
-      console.log(`[TRANSCRIPT] 📝 ${speaker}: "${segment.text.substring(0, 100)}${segment.text.length > 100 ? '...' : ''}" (final: ${segment.isFinal}, conf: ${segment.confidence?.toFixed(2) || 'N/A'}, meeting: ${this.isMeetingActive})`);
+      console.log(`[TRANSCRIPT] 📝 ${speaker}: "${segment.text.substring(0, 100)}${segment.text.length > 100 ? '...' : ''}" (final: ${segment.isFinal}, conf: ${segment.confidence?.toFixed(2) || 'N/A'}, meeting: ${this.meetingStateMachine.isMeetingActive()})`);
       
-      if (!this.isMeetingActive) {
+      if (!this.meetingStateMachine.isMeetingActive()) {
         console.warn('[TRANSCRIPT] ⚠️  Transcript received but meeting not active - discarding');
         return;
       }
 
       this.noteTranscript(speaker);
 
+      // Direct instant processing - no batching delays for real-time feel
       this.intelligenceManager.handleTranscript({
         speaker: speaker,
         text: segment.text,
@@ -1200,39 +1049,29 @@ try {
         confidence: segment.confidence
       };
       
-      // Send to UI with debugging
+      // Send to UI immediately - no throttling for instant updates
       const launcherWindow = helper.getLauncherWindow();
       const overlayWindow = helper.getOverlayContentWindow();
-      console.log(`[TRANSCRIPT] 🖥️  Sending to UI: launcher=${!!launcherWindow}, overlay=${!!overlayWindow}`);
       
       launcherWindow?.webContents.send('native-audio-transcript', payload);
       overlayWindow?.webContents.send('native-audio-transcript', payload);
 
-      // Auto-trigger logic with enhanced debugging
-      console.log(`[TRANSCRIPT] 🤖 Auto-trigger check: speaker=${speaker}, final=${segment.isFinal}, consciousMode=${this.consciousModeEnabled}, intelligenceManager=${!!this.intelligenceManager}`);
-      
+      // Auto-trigger logic
       void maybeHandleSuggestionTriggerFromTranscript({
         speaker,
         text: segment.text,
         final: segment.isFinal,
         confidence: segment.confidence,
         consciousModeEnabled: this.consciousModeEnabled,
-        enableConversationStateTrigger: this.enableConversationStateTrigger,
         intelligenceManager: this.intelligenceManager,
-      }).then((triggered) => {
-        if (triggered) {
-          console.log('[TRANSCRIPT] ✅ Auto-trigger SUCCEEDED');
-        } else {
-          console.log('[TRANSCRIPT] ❌ Auto-trigger declined (conditions not met)');
-        }
       }).catch((error) => {
-        console.error('[TRANSCRIPT] 🚨 Auto-trigger ERROR:', error);
+        console.error('[TRANSCRIPT] Auto-trigger ERROR:', error);
       });
     };
 
     const errorHandler = (err: Error) => {
       console.error(`[Main] STT (${speaker}) Error:`, err);
-      if (this.isMeetingActive) {
+      if (this.meetingStateMachine.isMeetingActive()) {
         this.sttReconnector?.onError(speaker);
       }
     };
@@ -1252,312 +1091,252 @@ try {
     return stt;
   }
 
+  // ================================================================================
+
   private async handleAudioCaptureError(source: 'system' | 'microphone', err: Error): Promise<void> {
     const noun = source === 'system' ? 'Audio pipeline' : 'Microphone';
     const failureMessage = source === 'system'
       ? 'Audio capture failed and recovery unsuccessful'
       : 'Microphone failed and recovery unsuccessful';
-    const defaultErrorMessage = source === 'system'
-      ? 'System audio capture failed'
-      : 'Microphone capture failed';
 
     console.error(`[Main] ${source === 'system' ? 'SystemAudioCapture' : 'MicrophoneCapture'} Error:`, err);
     this.setNativeAudioConnected(false);
 
-    if (process.platform === 'win32' && (this.windowsAudioResumePending || this.windowsAudioResumeInFlight)) {
-      console.warn('[Main] Deferring audio capture recovery while Windows power-state recovery is pending');
+    if (!this.meetingStateMachine.isMeetingActive()) {
+      console.log('[Main] Not attempting recovery - meeting not active');
       return;
     }
 
-    if (this.isMeetingActive && this.audioRecoveryAttempts < this.MAX_AUDIO_RECOVERY_ATTEMPTS) {
-      this.audioRecoveryAttempts += 1;
-      const attempt = this.audioRecoveryAttempts;
-      const delayMs = this.audioRecoveryBackoffMs * attempt;
-      console.log(`[Main] Attempting ${noun.toLowerCase()} recovery (attempt ${attempt}/${this.MAX_AUDIO_RECOVERY_ATTEMPTS}, delay ${delayMs}ms)...`);
-
-      await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
-
-      if (!this.isMeetingActive) {
-        return;
-      }
-
-      try {
-        await this.reconfigureAudio(undefined, undefined, { restartStreams: true });
-        console.log(`[Main] ${noun} recovered successfully on attempt ${attempt}`);
-        this.setNativeAudioConnected(true);
-        return;
-      } catch (recoveryErr) {
-        console.error(`[Main] ${noun} recovery attempt ${attempt} failed:`, recoveryErr);
-        if (this.audioRecoveryAttempts >= this.MAX_AUDIO_RECOVERY_ATTEMPTS) {
-          this.broadcast('meeting-audio-error', failureMessage);
-          return;
+    // Create AudioCaptureInstance wrapper for the reconnector
+    const captureInstance: AudioCaptureInstance = {
+      type: source,
+      start: async () => {
+        if (source === 'system') {
+          this.systemAudioCapture?.start();
+        } else {
+          this.microphoneCapture?.start();
         }
+      },
+      stop: async () => {
+        if (source === 'system') {
+          this.systemAudioCapture?.stop();
+        } else {
+          this.microphoneCapture?.stop();
+        }
+      },
+      isActive: () => {
+        if (source === 'system') {
+          return (this.systemAudioCapture as any)?.isRecording ?? false;
+        } else {
+          return (this.microphoneCapture as any)?.isRecording ?? false;
+        }
+      },
+      getHealth: () => {
+        return {
+          connected: this.nativeAudioConnected,
+          level: 0, // Would need actual level detection
+          errors: this.audioRecoveryAttempts
+        };
+      }
+    };
+
+    // Use comprehensive reconnector
+    console.log(`[Main] Starting comprehensive ${noun.toLowerCase()} reconnection...`);
+    
+    const success = await this.audioReconnector.reconnect(
+      captureInstance,
+      err,
+      undefined // currentDeviceId - would need to track this
+    );
+
+    if (success) {
+      console.log(`[Main] ${noun} successfully recovered through comprehensive reconnection`);
+      this.setNativeAudioConnected(true);
+      this.audioRecoveryAttempts = 0; // Reset legacy counter
+      this.broadcast('meeting-audio-recovered', `${noun} recovered`);
+    } else {
+      console.error(`[Main] ${noun} comprehensive reconnection failed - giving up`);
+      this.broadcast('meeting-audio-error', failureMessage);
+      
+      // Consider graceful degradation strategies
+      if (source === 'system' && (this.microphoneCapture as any)?.isRecording) {
+        console.log('[Main] System audio failed but microphone still active - continuing with microphone only');
+        this.broadcast('meeting-audio-warning', 'Continuing with microphone audio only');
+      } else if (source === 'microphone' && (this.systemAudioCapture as any)?.isRecording) {
+        console.log('[Main] Microphone failed but system audio still active - continuing with system audio only');
+        this.broadcast('meeting-audio-warning', 'Continuing with system audio only');
+      } else {
+        console.error('[Main] All audio sources failed - meeting may need to be ended');
+        this.broadcast('meeting-audio-critical', 'All audio sources failed');
       }
     }
+  }
 
-    this.broadcast('meeting-audio-error', err.message || defaultErrorMessage);
+  private async reconnectSpeakerStt(speaker: 'interviewer' | 'user'): Promise<void> {
+    console.log(`[Main] Reconnecting STT for ${speaker}...`);
+    
+    const sttInstance = speaker === 'interviewer' ? this.googleSTT : this.googleSTT_User;
+    const captureInstance = speaker === 'interviewer' ? this.systemAudioCapture : this.microphoneCapture;
+    
+    if (!sttInstance || !captureInstance) {
+      console.error(`[Main] Cannot reconnect ${speaker} STT - missing instances`);
+      return;
+    }
+
+    try {
+      // Stop and cleanup existing STT
+      sttInstance.stop();
+      sttInstance.removeAllListeners();
+      
+      // Create new STT provider
+      const newStt = this.createSTTProvider(speaker);
+      
+      // Replace the instance
+      if (speaker === 'interviewer') {
+        this.googleSTT = newStt;
+      } else {
+        this.googleSTT_User = newStt;
+      }
+      
+      // Restart STT
+      newStt.start();
+      
+      console.log(`[Main] Successfully reconnected ${speaker} STT`);
+    } catch (error) {
+      console.error(`[Main] Failed to reconnect ${speaker} STT:`, error);
+      throw error;
+    }
   }
 
   private attachSystemAudioCaptureListeners(): void {
     if (!this.systemAudioCapture) {
+      console.warn('[Main] Cannot attach system audio listeners - capture not initialized');
       return;
     }
 
-    this.systemAudioCapture.removeAllListeners();
+    console.log('[Main] Attaching system audio capture listeners...');
+
     this.systemAudioCapture.on('data', (chunk: Buffer) => {
       this.noteAudioChunk('system');
-      this.routeSystemAudioChunk(chunk);
+      this.googleSTT?.write(chunk);
     });
+
     this.systemAudioCapture.on('speech_ended', () => {
-      this.routeSystemAudioSpeechEnded();
+      safeNotifySpeechEnded(this.googleSTT);
     });
+
     this.systemAudioCapture.on('error', (err: Error) => {
       void this.handleAudioCaptureError('system', err);
     });
+
+    console.log('[Main] System audio capture listeners attached');
   }
 
   private attachMicrophoneCaptureListeners(): void {
     if (!this.microphoneCapture) {
+      console.warn('[Main] Cannot attach microphone listeners - capture not initialized');
       return;
     }
 
-    this.microphoneCapture.removeAllListeners();
+    console.log('[Main] Attaching microphone capture listeners...');
+
     this.microphoneCapture.on('data', (chunk: Buffer) => {
+      if (Math.random() < 0.01) { // Log ~1% of chunks
+        console.log(`[Main] 🎤 Audio chunk: ${chunk.length}B → STT: ${!!this.googleSTT_User}`);
+      }
       this.noteAudioChunk('microphone');
       this.googleSTT_User?.write(chunk);
     });
+
     this.microphoneCapture.on('speech_ended', () => {
+      console.log('[Main] 🎤 Speech ended detected');
       safeNotifySpeechEnded(this.googleSTT_User);
     });
+
     this.microphoneCapture.on('error', (err: Error) => {
+      console.error('[Main] 🎤 Microphone error:', err);
       void this.handleAudioCaptureError('microphone', err);
     });
-  }
 
-  private beginSystemAudioBuffering(reason: string): void {
-    this.bufferSystemAudioUntilInterviewerSttReady = true;
-    this.bufferedSystemAudioChunks = [];
-    this.bufferedSystemAudioSpeechEnded = false;
-    console.log(`[Main] Buffering system audio until interviewer STT is ready (${reason})`);
-  }
-
-  private flushBufferedSystemAudio(reason: string): void {
-    const bufferedChunkCount = this.bufferedSystemAudioChunks.length;
-    const hadSpeechEnded = this.bufferedSystemAudioSpeechEnded;
-
-    this.bufferSystemAudioUntilInterviewerSttReady = false;
-    const bufferedChunks = this.bufferedSystemAudioChunks;
-    this.bufferedSystemAudioChunks = [];
-    this.bufferedSystemAudioSpeechEnded = false;
-
-    for (const chunk of bufferedChunks) {
-      this.googleSTT?.write(chunk);
-    }
-
-    if (hadSpeechEnded) {
-      safeNotifySpeechEnded(this.googleSTT);
-    }
-
-    console.log(`[Main] Released ${bufferedChunkCount} buffered system audio chunks (${reason})`);
-  }
-
-  private clearBufferedSystemAudio(reason: string): void {
-    const droppedChunkCount = this.bufferedSystemAudioChunks.length;
-    const hadSpeechEnded = this.bufferedSystemAudioSpeechEnded;
-
-    this.bufferSystemAudioUntilInterviewerSttReady = false;
-    this.bufferedSystemAudioChunks = [];
-    this.bufferedSystemAudioSpeechEnded = false;
-
-    if (droppedChunkCount > 0 || hadSpeechEnded) {
-      console.warn(`[Main] Dropped ${droppedChunkCount} buffered system audio chunks (${reason})`);
-    }
-  }
-
-  private routeSystemAudioChunk(chunk: Buffer): void {
-    if (!this.bufferSystemAudioUntilInterviewerSttReady) {
-      this.googleSTT?.write(chunk);
-      return;
-    }
-
-    this.bufferedSystemAudioChunks.push(chunk);
-    if (this.bufferedSystemAudioChunks.length > this.MAX_BUFFERED_SYSTEM_AUDIO_CHUNKS) {
-      this.bufferedSystemAudioChunks.shift();
-    }
-  }
-
-  private routeSystemAudioSpeechEnded(): void {
-    if (!this.bufferSystemAudioUntilInterviewerSttReady) {
-      safeNotifySpeechEnded(this.googleSTT);
-      return;
-    }
-
-    this.bufferedSystemAudioSpeechEnded = true;
-  }
-
-  private cleanupSttProvider(speaker: 'interviewer' | 'user'): void {
-    const isInterviewer = speaker === 'interviewer';
-    const stt = isInterviewer ? this.googleSTT : this.googleSTT_User;
-    if (!stt) {
-      return;
-    }
-
-    const transcriptListener = isInterviewer
-      ? this.sttTranscriptListener_Interviewer
-      : this.sttTranscriptListener_User;
-    const errorListener = isInterviewer
-      ? this.sttErrorListener_Interviewer
-      : this.sttErrorListener_User;
-    const sttEmitter = stt as EventEmitter;
-
-    if (transcriptListener) {
-      sttEmitter.removeListener('transcript', transcriptListener);
-    }
-    if (errorListener) {
-      sttEmitter.removeListener('error', errorListener);
-    }
-
-    stt.stop();
-    stt.removeAllListeners();
-    safeDestroy(stt);
-
-    if (isInterviewer) {
-      this.sttTranscriptListener_Interviewer = null;
-      this.sttErrorListener_Interviewer = null;
-      this.googleSTT = null;
-    } else {
-      this.sttTranscriptListener_User = null;
-      this.sttErrorListener_User = null;
-      this.googleSTT_User = null;
-    }
-  }
-
-  private async reconnectSpeakerStt(
-    speaker: 'interviewer' | 'user',
-    options: { interviewerSampleRate?: number } = {},
-  ): Promise<void> {
-    this.cleanupSttProvider(speaker);
-
-    if (speaker === 'interviewer') {
-      this.googleSTT = this.createSTTProvider('interviewer');
-      this.syncInterviewerSttConfig({
-        refreshSystemRate: options.interviewerSampleRate == null,
-        sampleRateOverride: options.interviewerSampleRate,
-      });
-      this.googleSTT?.start();
-      return;
-    }
-
-    this.googleSTT_User = this.createSTTProvider('user');
-    this.syncUserSttConfig();
-    this.googleSTT_User?.start();
-  }
-
-  private syncInterviewerSttConfig(options: { refreshSystemRate?: boolean; sampleRateOverride?: number } = {}): number {
-    const rate = options.sampleRateOverride
-      ?? (options.refreshSystemRate
-        ? (this.systemAudioCapture?.refreshSampleRate?.() ?? this.systemAudioCapture?.getSampleRate() ?? 48000)
-        : (this.systemAudioCapture?.getSampleRate() || 48000));
-    const source = options.sampleRateOverride != null
-      ? ' (ready override)'
-      : options.refreshSystemRate
-        ? ' (refreshed)'
-        : '';
-    console.log(`[Main] Configuring Interviewer STT to ${rate}Hz${source}`);
-    this.googleSTT?.setSampleRate(rate);
-    safeSetAudioChannelCount(this.googleSTT, 1);
-    return rate;
-  }
-
-  private syncUserSttConfig(): number {
-    const rate = this.microphoneCapture?.getSampleRate() || 48000;
-    console.log(`[Main] Configuring User STT to ${rate}Hz`);
-    this.googleSTT_User?.setSampleRate(rate);
-    safeSetAudioChannelCount(this.googleSTT_User, 1);
-    return rate;
-  }
-
-  private async startMeetingAudioStreams(): Promise<void> {
-    try {
-      const { systemRate, microphoneRate } = await startMeetingAudioStreamsHelper({
-        systemAudioCapture: this.systemAudioCapture,
-        microphoneCapture: this.microphoneCapture,
-        interviewerStt: this.googleSTT,
-        userStt: this.googleSTT_User,
-        setAudioChannelCount: safeSetAudioChannelCount,
-        beforeSystemAudioStart: () => {
-          this.beginSystemAudioBuffering('meeting start');
-        },
-        afterInterviewerSttReady: () => {
-          this.flushBufferedSystemAudio('meeting start');
-        },
-      });
-      console.log(`[Main] Audio streams started. System=${systemRate}Hz, Microphone=${microphoneRate}Hz`);
-    } catch (error) {
-      this.clearBufferedSystemAudio('meeting start failed');
-      throw error;
-    }
-  }
-
-  private async restartAudioPipelineAfterReconfigure(): Promise<void> {
-    try {
-      await restartMeetingAudioStreamsAfterReconfigureHelper({
-        systemAudioCapture: this.systemAudioCapture,
-        microphoneCapture: this.microphoneCapture,
-        beforeSystemAudioStart: () => {
-          this.beginSystemAudioBuffering('audio reconfigure');
-        },
-        reconnectInterviewerStt: async (systemRate: number) => {
-          await this.reconnectSpeakerStt('interviewer', { interviewerSampleRate: systemRate });
-        },
-        afterInterviewerSttReady: () => {
-          this.flushBufferedSystemAudio('audio reconfigure');
-        },
-        reconnectUserStt: async () => {
-          await this.reconnectSpeakerStt('user');
-        },
-      });
-      console.log('[Main] Audio pipeline streams restarted after reconfigure');
-    } catch (error) {
-      this.clearBufferedSystemAudio('audio reconfigure failed');
-      throw error;
-    }
+    console.log('[Main] Microphone capture listeners attached');
   }
 
   private assertMeetingAudioPipelineReady(): void {
-    const missing: string[] = [];
+    console.log('[Main] Asserting meeting audio pipeline readiness...');
+    
+    const errors: string[] = [];
 
+    // Check system audio capture
     if (!this.systemAudioCapture) {
-      missing.push('system audio capture');
-    }
-    if (!this.microphoneCapture) {
-      missing.push('microphone capture');
-    }
-    if (!this.googleSTT) {
-      missing.push('interviewer transcription');
-    }
-    if (!this.googleSTT_User) {
-      missing.push('user transcription');
+      errors.push('System audio capture not initialized');
     }
 
-    if (missing.length > 0) {
-      throw new Error(`Audio pipeline unavailable: missing ${missing.join(', ')}`);
+    // Check microphone capture
+    if (!this.microphoneCapture) {
+      errors.push('Microphone capture not initialized');
     }
+
+    // Check STT providers
+    if (!this.googleSTT) {
+      errors.push('Interviewer STT provider not initialized');
+    }
+
+    if (!this.googleSTT_User) {
+      errors.push('User STT provider not initialized');
+    }
+
+    // Check sample rate synchronization
+    if (this.systemAudioCapture && this.googleSTT) {
+      const sysRate = this.systemAudioCapture.getSampleRate();
+      console.log(`[Main] System audio rate: ${sysRate}Hz`);
+    }
+
+    if (this.microphoneCapture && this.googleSTT_User) {
+      const micRate = this.microphoneCapture.getSampleRate();
+      console.log(`[Main] Microphone rate: ${micRate}Hz`);
+    }
+
+    if (errors.length > 0) {
+      const errorMessage = `Meeting audio pipeline not ready: ${errors.join(', ')}`;
+      console.error(`[Main] ${errorMessage}`);
+      throw new Error(errorMessage);
+    }
+
+    console.log('[Main] Meeting audio pipeline ready ✅');
   }
 
   private assertAudioCapturesReady(): void {
-    const missing: string[] = [];
+    console.log('[Main] Asserting audio captures readiness...');
+    
+    const errors: string[] = [];
 
+    // Check if system audio capture exists and has required methods
     if (!this.systemAudioCapture) {
-      missing.push('system audio capture');
-    }
-    if (!this.microphoneCapture) {
-      missing.push('microphone capture');
+      errors.push('System audio capture not initialized');
+    } else if (typeof this.systemAudioCapture.start !== 'function') {
+      errors.push('System audio capture missing start method');
     }
 
-    if (missing.length > 0) {
-      throw new Error(`Audio capture unavailable: missing ${missing.join(', ')}`);
+    // Check if microphone capture exists and has required methods
+    if (!this.microphoneCapture) {
+      errors.push('Microphone capture not initialized');
+    } else if (typeof this.microphoneCapture.start !== 'function') {
+      errors.push('Microphone capture missing start method');
     }
+
+    // Check native audio connection status
+    const nativeStatus = this.getNativeAudioStatus();
+    if (!nativeStatus.connected) {
+      console.warn('[Main] Native audio not yet connected - this may be expected during initialization');
+    }
+
+    if (errors.length > 0) {
+      const errorMessage = `Audio captures not ready: ${errors.join(', ')}`;
+      console.error(`[Main] ${errorMessage}`);
+      throw new Error(errorMessage);
+    }
+
+    console.log('[Main] Audio captures ready ✅');
   }
 
   private setupSystemAudioPipeline(): void {
@@ -1581,13 +1360,20 @@ try {
         this.googleSTT_User = this.createSTTProvider('user');
       }
 
-      configureMeetingAudioPipeline({
-        systemAudioCapture: this.systemAudioCapture,
-        microphoneCapture: this.microphoneCapture,
-        interviewerStt: this.googleSTT,
-        userStt: this.googleSTT_User,
-        setAudioChannelCount: safeSetAudioChannelCount,
-      });
+    // --- CRITICAL FIX: SYNC SAMPLE RATES ---
+    // Always sync rates, even if just initialized, to ensure consistency
+
+    // 1. Sync System Audio Rate
+    const sysRate = this.systemAudioCapture?.getSampleRate() || 48000;
+    console.log(`[Main] Configuring Interviewer STT to ${sysRate}Hz`);
+    this.googleSTT?.setSampleRate(sysRate);
+    safeSetAudioChannelCount(this.googleSTT, 1);
+
+    // 2. Sync Mic Rate
+    const micRate = this.microphoneCapture?.getSampleRate() || 48000;
+    console.log(`[Main] Configuring User STT to ${micRate}Hz`);
+    this.googleSTT_User?.setSampleRate(micRate);
+    safeSetAudioChannelCount(this.googleSTT_User, 1);
 
       console.log('[Main] Full Audio Pipeline (System + Mic) Initialized (Ready)');
       this.assertMeetingAudioPipelineReady();
@@ -1598,13 +1384,8 @@ try {
     }
   }
 
-  private async reconfigureAudio(
-    inputDeviceId?: string,
-    outputDeviceId?: string,
-    options: { restartStreams?: boolean } = {},
-  ): Promise<void> {
+  private async reconfigureAudio(inputDeviceId?: string, outputDeviceId?: string): Promise<void> {
     console.log(`[Main] Reconfiguring Audio: Input=${inputDeviceId}, Output=${outputDeviceId}`);
-    this.clearBufferedSystemAudio('reconfigure reset');
 
     // 1. System Audio (Output Capture) - use destroy() for full cleanup
     if (this.systemAudioCapture) {
@@ -1616,13 +1397,17 @@ try {
     try {
       console.log('[Main] Initializing SystemAudioCapture...');
       this.systemAudioCapture = new SystemAudioCapture(outputDeviceId || undefined);
+      const rate = this.systemAudioCapture.getSampleRate();
+      console.log(`[Main] SystemAudioCapture rate: ${rate}Hz`);
+      this.googleSTT?.setSampleRate(rate);
 
       this.systemAudioCapture.on('data', (chunk: Buffer) => {
+        // console.log('[Main] SysAudio chunk', chunk.length);
         this.noteAudioChunk('system');
-        this.routeSystemAudioChunk(chunk);
+        this.googleSTT?.write(chunk);
       });
       this.systemAudioCapture.on('speech_ended', () => {
-        this.routeSystemAudioSpeechEnded();
+        safeNotifySpeechEnded(this.googleSTT);
       });
       this.systemAudioCapture.on('error', (err: Error) => {
         void this.handleAudioCaptureError('system', err);
@@ -1632,14 +1417,17 @@ try {
       console.warn('[Main] Failed to initialize SystemAudioCapture with preferred ID. Falling back to default.', err);
       try {
         this.systemAudioCapture = new SystemAudioCapture(); // Default
+        const rate = this.systemAudioCapture.getSampleRate();
+        console.log(`[Main] SystemAudioCapture (Default) rate: ${rate}Hz`);
+        this.googleSTT?.setSampleRate(rate);
 
         this.systemAudioCapture.on('data', (chunk: Buffer) => {
           this.noteAudioChunk('system');
-          this.routeSystemAudioChunk(chunk);
+          this.googleSTT?.write(chunk);
         });
-        this.systemAudioCapture.on('speech_ended', () => {
-          this.routeSystemAudioSpeechEnded();
-        });
+      this.systemAudioCapture.on('speech_ended', () => {
+        safeNotifySpeechEnded(this.googleSTT);
+      });
         this.systemAudioCapture.on('error', (err: Error) => {
           void this.handleAudioCaptureError('system', err);
         });
@@ -1660,8 +1448,11 @@ try {
       console.log(`[Main] 🎤 Target device: ${inputDeviceId || 'default'}`);
       
       this.microphoneCapture = new MicrophoneCapture(inputDeviceId || undefined);
-      console.log(`[Main] 🎤 MicrophoneCapture rate: ${this.microphoneCapture.getSampleRate()}Hz`);
+      const rate = this.microphoneCapture.getSampleRate();
+      console.log(`[Main] 🎤 MicrophoneCapture rate: ${rate}Hz`);
       console.log(`[Main] 🎤 STT User ready: ${!!this.googleSTT_User}`);
+      
+      this.googleSTT_User?.setSampleRate(rate);
 
       this.microphoneCapture.on('data', (chunk: Buffer) => {
         // Enhanced debugging - log periodically
@@ -1689,7 +1480,9 @@ try {
       
       try {
         this.microphoneCapture = new MicrophoneCapture(); // Default
-        console.log(`[Main] 🎤 MicrophoneCapture (Default) rate: ${this.microphoneCapture.getSampleRate()}Hz`);
+        const rate = this.microphoneCapture.getSampleRate();
+        console.log(`[Main] 🎤 MicrophoneCapture (Default) rate: ${rate}Hz`);
+        this.googleSTT_User?.setSampleRate(rate);
 
         this.microphoneCapture.on('data', (chunk: Buffer) => {
           if (Math.random() < 0.01) { // Log ~1% of chunks
@@ -1716,10 +1509,236 @@ try {
       }
     }
     this.assertAudioCapturesReady();
+  }
 
-    if (options.restartStreams) {
-      await this.restartAudioPipelineAfterReconfigure();
+  /**
+   * PERFORMANCE OPTIMIZATION: Parallel audio device reconfiguration
+   * Initializes SystemAudioCapture and MicrophoneCapture in parallel instead of sequentially
+   */
+  private async reconfigureAudioParallel(inputDeviceId?: string, outputDeviceId?: string): Promise<void> {
+    console.log(`[Main] ⚡ Parallel Audio Reconfiguration: Input=${inputDeviceId}, Output=${outputDeviceId}`);
+
+    // Cleanup existing instances
+    const cleanupTasks = [];
+    
+    if (this.systemAudioCapture) {
+      cleanupTasks.push(Promise.resolve().then(() => {
+        this.systemAudioCapture!.removeAllListeners();
+        this.systemAudioCapture!.destroy();
+        this.systemAudioCapture = null;
+      }));
     }
+    
+    if (this.microphoneCapture) {
+      cleanupTasks.push(Promise.resolve().then(() => {
+        this.microphoneCapture!.removeAllListeners();
+        this.microphoneCapture!.destroy();
+        this.microphoneCapture = null;
+      }));
+    }
+
+    // Wait for cleanup to complete
+    await Promise.all(cleanupTasks);
+
+    // Initialize both audio captures in parallel
+    const initPromises = [
+      this.initializeSystemAudio(outputDeviceId),
+      this.initializeMicrophoneAudio(inputDeviceId)
+    ];
+
+    const results = await Promise.allSettled(initPromises);
+
+    if (results[0].status === 'rejected') {
+      console.error('[Main] SystemAudioCapture parallel init failed:', results[0].reason);
+    }
+    if (results[1].status === 'rejected') {
+      console.error('[Main] MicrophoneCapture parallel init failed:', results[1].reason);
+    }
+
+    this.assertAudioCapturesReady();
+  }
+
+  /**
+   * PERFORMANCE OPTIMIZATION: Initialize default audio devices in parallel
+   */
+  private async initializeDefaultAudioDevices(): Promise<void> {
+    console.log('[Main] ⚡ Initializing default audio devices in parallel...');
+    
+    const initPromises = [
+      this.initializeSystemAudio(),
+      this.initializeMicrophoneAudio()
+    ];
+
+    const results = await Promise.allSettled(initPromises);
+    results.forEach((result, index) => {
+      if (result.status === 'rejected') {
+        console.error(`[Main] Default audio device ${index === 0 ? 'system' : 'microphone'} init failed:`, result.reason);
+      }
+    });
+
+    this.assertAudioCapturesReady();
+  }
+
+  /**
+   * PERFORMANCE OPTIMIZATION: Initialize system audio capture with error handling
+   */
+  private async initializeSystemAudio(outputDeviceId?: string): Promise<void> {
+    try {
+      console.log('[Main] Initializing SystemAudioCapture...');
+      this.systemAudioCapture = new SystemAudioCapture(outputDeviceId || undefined);
+      const rate = this.systemAudioCapture.getSampleRate();
+      console.log(`[Main] SystemAudioCapture rate: ${rate}Hz`);
+
+      this.systemAudioCapture.on('data', (chunk: Buffer) => {
+        this.noteAudioChunk('system');
+        this.googleSTT?.write(chunk);
+      });
+      this.systemAudioCapture.on('speech_ended', () => {
+        safeNotifySpeechEnded(this.googleSTT);
+      });
+      this.systemAudioCapture.on('error', (err: Error) => {
+        void this.handleAudioCaptureError('system', err);
+      });
+      console.log('[Main] SystemAudioCapture initialized.');
+    } catch (err) {
+      console.warn('[Main] Failed to initialize SystemAudioCapture with preferred ID. Falling back to default.', err);
+      try {
+        this.systemAudioCapture = new SystemAudioCapture(); // Default
+        const rate = this.systemAudioCapture.getSampleRate();
+        console.log(`[Main] SystemAudioCapture (Default) rate: ${rate}Hz`);
+
+        this.systemAudioCapture.on('data', (chunk: Buffer) => {
+          this.noteAudioChunk('system');
+          this.googleSTT?.write(chunk);
+        });
+        this.systemAudioCapture.on('speech_ended', () => {
+          safeNotifySpeechEnded(this.googleSTT);
+        });
+        this.systemAudioCapture.on('error', (err: Error) => {
+          void this.handleAudioCaptureError('system', err);
+        });
+      } catch (err2) {
+        console.error('[Main] Failed to initialize SystemAudioCapture (Default):', err2);
+        throw err2;
+      }
+    }
+  }
+
+  /**
+   * PERFORMANCE OPTIMIZATION: Initialize microphone capture with error handling
+   */
+  private async initializeMicrophoneAudio(inputDeviceId?: string): Promise<void> {
+    try {
+      console.log('[Main] 🎤 Initializing MicrophoneCapture...');
+      console.log(`[Main] 🎤 Target device: ${inputDeviceId || 'default'}`);
+      
+      this.microphoneCapture = new MicrophoneCapture(inputDeviceId || undefined);
+      const rate = this.microphoneCapture.getSampleRate();
+      console.log(`[Main] 🎤 MicrophoneCapture rate: ${rate}Hz`);
+
+      this.microphoneCapture.on('data', (chunk: Buffer) => {
+        // Enhanced debugging - log periodically
+        if (Math.random() < 0.01) { // Log ~1% of chunks
+          console.log(`[Main] 🎤 Audio chunk: ${chunk.length}B → STT: ${!!this.googleSTT_User}`);
+        }
+        this.noteAudioChunk('microphone');
+        this.googleSTT_User?.write(chunk);
+      });
+      
+      this.microphoneCapture.on('speech_ended', () => {
+        console.log('[Main] 🎤 Speech ended detected');
+        safeNotifySpeechEnded(this.googleSTT_User);
+      });
+      
+      this.microphoneCapture.on('error', (err: Error) => {
+        console.error('[Main] 🎤 Microphone error:', err);
+        void this.handleAudioCaptureError('microphone', err);
+      });
+      
+      console.log('[Main] ✅ MicrophoneCapture initialized successfully.');
+    } catch (err) {
+      console.error('[Main] ❌ Failed to initialize MicrophoneCapture with preferred ID:', err);
+      console.log('[Main] 🔄 Attempting fallback to default device...');
+      
+      try {
+        this.microphoneCapture = new MicrophoneCapture(); // Default
+        const rate = this.microphoneCapture.getSampleRate();
+        console.log(`[Main] 🎤 MicrophoneCapture (Default) rate: ${rate}Hz`);
+
+        this.microphoneCapture.on('data', (chunk: Buffer) => {
+          if (Math.random() < 0.01) { // Log ~1% of chunks
+            console.log(`[Main] 🎤 Audio chunk: ${chunk.length}B → STT: ${!!this.googleSTT_User}`);
+          }
+          this.noteAudioChunk('microphone');
+          this.googleSTT_User?.write(chunk);
+        });
+        
+        this.microphoneCapture.on('speech_ended', () => {
+          console.log('[Main] 🎤 Speech ended detected');
+          safeNotifySpeechEnded(this.googleSTT_User);
+        });
+        
+        this.microphoneCapture.on('error', (err: Error) => {
+          console.error('[Main] 🎤 Microphone error:', err);
+          void this.handleAudioCaptureError('microphone', err);
+        });
+        
+        console.log('[Main] ✅ MicrophoneCapture (Default) initialized successfully.');
+      } catch (err2) {
+        console.error('[Main] ❌ CRITICAL: Failed to initialize MicrophoneCapture (Default):', err2);
+        throw err2;
+      }
+    }
+  }
+
+  /**
+   * PERFORMANCE OPTIMIZATION: Initialize STT providers in parallel
+   */
+  private async initializeSTTProvidersParallel(): Promise<void> {
+    console.log('[Main] ⚡ Initializing STT providers in parallel...');
+    
+    const sttPromises = [
+      Promise.resolve().then(() => {
+        if (!this.googleSTT) {
+          this.googleSTT = this.createSTTProvider('interviewer');
+          console.log('[Main] Interviewer STT provider created');
+        }
+      }),
+      Promise.resolve().then(() => {
+        if (!this.googleSTT_User) {
+          this.googleSTT_User = this.createSTTProvider('user');
+          console.log('[Main] User STT provider created');
+        }
+      })
+    ];
+
+    const results = await Promise.allSettled(sttPromises);
+    results.forEach((result, index) => {
+      if (result.status === 'rejected') {
+        console.error(`[Main] STT provider ${index === 0 ? 'interviewer' : 'user'} init failed:`, result.reason);
+      }
+    });
+  }
+
+  /**
+   * PERFORMANCE OPTIMIZATION: Sync audio sample rates after parallel initialization
+   */
+  private syncAudioSampleRates(): void {
+    console.log('[Main] ⚡ Syncing audio sample rates...');
+    
+    // 1. Sync System Audio Rate
+    const sysRate = this.systemAudioCapture?.getSampleRate() || 48000;
+    console.log(`[Main] Configuring Interviewer STT to ${sysRate}Hz`);
+    this.googleSTT?.setSampleRate(sysRate);
+    safeSetAudioChannelCount(this.googleSTT, 1);
+
+    // 2. Sync Mic Rate
+    const micRate = this.microphoneCapture?.getSampleRate() || 48000;
+    console.log(`[Main] Configuring User STT to ${micRate}Hz`);
+    this.googleSTT_User?.setSampleRate(micRate);
+    safeSetAudioChannelCount(this.googleSTT_User, 1);
+    
+    console.log('[Main] ✅ Audio sample rates synchronized');
   }
 
   /**
@@ -1765,7 +1784,7 @@ try {
     this.setupSystemAudioPipeline();
 
     // Start the new STT instances if a meeting is active
-    if (this.isMeetingActive) {
+    if (this.meetingStateMachine.isMeetingActive()) {
       const interviewerStt = this.googleSTT as STTProvider | null;
       const userStt = this.googleSTT_User as STTProvider | null;
       interviewerStt?.start?.();
@@ -1805,7 +1824,9 @@ try {
           const rms = Math.sqrt(sum / count);
           // Normalize 0-1 (heuristic scaling, max comfortable mic input is around 10000-20000)
           const level = Math.min(rms / 10000, 1.0);
-          win.webContents.send('audio-level', level);
+          if (win && !win.isDestroyed()) {
+            win.webContents.send('audio-level', level);
+          }
         }
       });
 
@@ -1834,10 +1855,9 @@ try {
 
   public async startMeeting(metadata?: any): Promise<void> {
     console.log('[Main] Starting Meeting...', metadata);
+
     this.audioRecoveryAttempts = 0;
     this.audioRecoveryBackoffMs = 5000;
-    this.windowsAudioResumePending = false;
-    this.windowsAudioResumeInFlight = null;
     this.startAbortController = new AbortController();
     const { signal } = this.startAbortController;
 
@@ -1850,39 +1870,39 @@ try {
       return trimmed.length > 0 ? trimmed : undefined;
     };
 
-    if (metadata && typeof metadata !== 'object') {
-      throw new Error('startMeeting metadata must be an object or undefined');
-    }
-    if (metadata?.audio && (
-      (metadata.audio.inputDeviceId != null && typeof metadata.audio.inputDeviceId !== 'string') ||
-      (metadata.audio.outputDeviceId != null && typeof metadata.audio.outputDeviceId !== 'string')
-    )) {
-      throw new Error('startMeeting metadata.audio requires string inputDeviceId and outputDeviceId');
-    }
+    const normalizedMetadata = metadata ? {
+        ...metadata,
+        ...(metadata.audio ? {
+          audio: {
+            inputDeviceId: normalizeDeviceId(metadata.audio.inputDeviceId),
+            outputDeviceId: normalizeDeviceId(metadata.audio.outputDeviceId),
+          },
+        } : {}),
+      }
+    : undefined;
 
-    const normalizedMetadata = metadata
-      ? {
-          ...metadata,
-          ...(metadata.audio ? {
-            audio: {
-              inputDeviceId: normalizeDeviceId(metadata.audio.inputDeviceId),
-              outputDeviceId: normalizeDeviceId(metadata.audio.outputDeviceId),
-            },
-          } : {}),
-        }
-      : undefined;
-
-    const currentMutex = this.meetingStartMutex;
-    let settled = false;
-    this.meetingStartMutex = currentMutex.then(async () => {
+    // Use proper AsyncMutex for race condition prevention
+    return this.meetingStartMutex.runExclusive(async () => {
       if (signal.aborted) {
         console.log('[Main] Start meeting aborted (canceled by endMeeting)');
+        await this.resetMeetingStateMachine('Meeting start aborted before initialization');
         return;
       }
 
-      if (this.meetingLifecycleState === 'starting' || this.meetingLifecycleState === 'active') {
+      if (this.meetingLifecycleState !== 'idle') {
         console.warn(`[Main] Ignoring startMeeting while state=${this.meetingLifecycleState}`)
         return
+      }
+
+      if (this.meetingStateMachine.getCurrentState() !== MeetingState.IDLE) {
+        console.warn('[Main] Found stale meeting state before start:', this.meetingStateMachine.getDebugInfo())
+        await this.resetMeetingStateMachine('Recovered stale state before meeting start')
+      }
+
+      const initSuccess = await this.meetingStateMachine.startMeeting('User requested meeting start');
+      if (!initSuccess) {
+        console.error('[Main] Meeting state machine failed to initialize:', this.meetingStateMachine.getDebugInfo())
+        throw new Error('Failed to initialize meeting state machine');
       }
 
       this.meetingLifecycleState = 'starting'
@@ -1893,17 +1913,19 @@ try {
       } catch (error) {
         this.currentMeetingId = null
         this.meetingLifecycleState = 'idle'
+        await this.resetMeetingStateMachine('Meeting audio validation failed')
         throw error
       }
 
       if (signal.aborted) {
         console.log('[Main] Start meeting aborted after validation');
         this.meetingLifecycleState = 'idle';
+        this.currentMeetingId = null;
+        await this.resetMeetingStateMachine('Meeting start aborted after validation');
         return;
       }
 
       this.currentMeetingId = randomUUID()
-      this.isMeetingActive = true;
       this.resetAudioPipelineStats();
       if (normalizedMetadata) {
         this.intelligenceManager.setMeetingMetadata(normalizedMetadata);
@@ -1915,56 +1937,85 @@ try {
       return new Promise<void>((resolve, reject) => {
         if (signal.aborted) {
           console.log('[Main] Start meeting aborted before deferred step');
-          this.meetingLifecycleState = 'idle';
-          this.isMeetingActive = false;
-          this.currentMeetingId = null;
           resolve();
           return;
         }
 
         setTimeout(async () => {
-          if (signal.aborted) {
-            console.log('[Main] Start meeting aborted during deferred step');
-            this.meetingLifecycleState = 'idle';
-            this.isMeetingActive = false;
-            this.currentMeetingId = null;
+          if (startSequence !== this.meetingStartSequence || this.meetingLifecycleState !== 'starting') {
+            console.warn('[Main] Skipping stale deferred meeting start');
+            await this.resetMeetingStateMachine('Meeting start invalidated before deferred startup');
             resolve();
             return;
           }
 
-          if (startSequence !== this.meetingStartSequence || this.meetingLifecycleState !== 'starting') {
-            console.warn('[Main] Skipping stale deferred meeting start')
-            resolve()
-            return
-          }
-
           try {
+            // PERFORMANCE OPTIMIZATION: Parallel initialization instead of sequential
+            console.log('[Main] Starting parallel audio pipeline initialization...');
+            const startTime = Date.now();
+            
+            // Create all initialization promises in parallel
+            const initializationTasks: Promise<any>[] = [];
+            
+            // 1. Audio device reconfiguration (if needed)
             if (normalizedMetadata?.audio) {
-              await this.reconfigureAudio(
-                normalizedMetadata.audio.inputDeviceId,
-                normalizedMetadata.audio.outputDeviceId,
-                { restartStreams: false },
+              initializationTasks.push(
+                this.reconfigureAudioParallel(
+                  normalizedMetadata.audio.inputDeviceId, 
+                  normalizedMetadata.audio.outputDeviceId
+                )
+              );
+            } else {
+              // Initialize with defaults in parallel
+              initializationTasks.push(this.initializeDefaultAudioDevices());
+            }
+            
+            // 2. STT provider initialization (parallel to audio device setup)
+            initializationTasks.push(this.initializeSTTProvidersParallel());
+            
+            // 3. RAG manager initialization (can run in parallel)
+            if (this.ragManager) {
+              initializationTasks.push(
+                Promise.resolve().then(() => {
+                  try {
+                    this.ragManager.startLiveIndexing('live-meeting-current');
+                  } catch (err) {
+                    console.error('[Main] Live indexing failed:', err);
+                  }
+                })
               );
             }
 
-            if (signal.aborted) {
-              console.log('[Main] Start meeting aborted during audio reconfig');
-              this.meetingLifecycleState = 'idle';
-              this.isMeetingActive = false;
-              this.currentMeetingId = null;
+            // Wait for all initialization tasks to complete
+            await Promise.all(initializationTasks);
+
+            if (startSequence !== this.meetingStartSequence || this.meetingLifecycleState !== 'starting') {
+              console.warn('[Main] Meeting start invalidated during parallel initialization');
               resolve();
               return;
             }
 
-            if (startSequence !== this.meetingStartSequence || this.meetingLifecycleState !== 'starting') {
-              console.warn('[Main] Meeting start invalidated during async initialization')
-              resolve()
-              return
-            }
+            // Sync sample rates after parallel initialization
+            this.syncAudioSampleRates();
 
-            this.setupSystemAudioPipeline();
-            await this.startMeetingAudioStreams();
+            // Start all services in parallel
+            const serviceStartTasks = [
+              Promise.resolve().then(() => this.googleSTT?.start()),
+              Promise.resolve().then(() => this.googleSTT_User?.start()),
+              Promise.resolve().then(() => this.systemAudioCapture?.start()),
+              Promise.resolve().then(() => this.microphoneCapture?.start())
+            ].filter(task => task !== undefined);
+
+            await Promise.all(serviceStartTasks);
             this.scheduleAudioPipelineHealthCheck();
+
+            const activeSuccess = await this.meetingStateMachine.completeInitialization('Meeting startup complete');
+            if (!activeSuccess) {
+              throw new Error('Failed to activate meeting state machine');
+            }
+            
+            const initTime = Date.now() - startTime;
+            console.log(`[Main] ⚡ Parallel audio pipeline initialization completed in ${initTime}ms`);
 
             if (this.ragManager) {
               try {
@@ -1975,36 +2026,21 @@ try {
             }
 
             this.setNativeAudioConnected(true);
-            this.meetingLifecycleState = 'active'
-            console.log('[Main] Audio pipeline started successfully.');
-            
-            if (this.currentMeetingId) {
-              this.checkpointer?.start(this.currentMeetingId);
-            }
-            
-            resolve()
-          } catch (err) {
-            console.error('[Main] Error initializing audio pipeline:', err);
-            this.setNativeAudioConnected(false);
-            this.broadcast('meeting-audio-error', (err as Error).message || 'Audio pipeline failed to start');
-            this.isMeetingActive = false;
-            this.currentMeetingId = null;
-            this.meetingLifecycleState = 'idle'
-            this.clearAudioPipelineHealthCheck();
-            reject(err)
-          }
-        }, 0);
-      })
-    }).then(
-      () => { settled = true; },
-      (err) => { settled = true; throw err; }
-    ).catch((err) => {
-      if (!settled) {
-        console.error('[Main] startMeeting mutex error:', err);
-      }
-    });
+            this.meetingLifecycleState = 'active';
+            this.checkpointer.start(this.currentMeetingId);
 
-    return this.meetingStartMutex;
+            console.log(`[Main] Fully started meeting: ${this.currentMeetingId}`);
+            resolve();
+          } catch (error) {
+            console.error('[Main] Failed to complete meeting startup:', error);
+            this.meetingLifecycleState = 'idle';
+            this.currentMeetingId = null;
+            await this.resetMeetingStateMachine('Meeting startup failed');
+            reject(error);
+          }
+        }, 100);
+      });
+    });
   }
 
   public async endMeeting(): Promise<void> {
@@ -2016,18 +2052,12 @@ try {
     this.currentMeetingId = null;
     const endSequence = ++this.meetingStartSequence  // Increment sequence to invalidate any pending starts
     this.meetingLifecycleState = 'stopping'
-    this.isMeetingActive = false; // Block new data immediately
+    await this.meetingStateMachine.stopMeeting('User requested stop'); // Start stop sequence
     this.setNativeAudioConnected(false);
-    this.stealthAudioPauseSnapshot = null;
-    this.windowsAudioResumePending = false;
-    this.windowsAudioResumeInFlight = null;
 
     // Wait for any pending meeting start operations to complete before proceeding
-    // This prevents race conditions between start and end operations
-    await this.meetingStartMutex.catch(() => {
-      // Ignore errors from the mutex as we're ending the meeting anyway
-      console.log('[Main] Ignoring pending meeting start errors during endMeeting');
-    });
+    // The AsyncMutex will ensure proper synchronization
+    console.log('[Main] Waiting for meeting start mutex before ending...');
 
     this.sttReconnector?.stopAll();
     this.checkpointer?.stop();
@@ -2140,6 +2170,7 @@ try {
       this.ragManager.deleteMeetingData('live-meeting-current');
     }
 
+    await this.resetMeetingStateMachine('Meeting cleanup complete');
     this.meetingLifecycleState = 'idle'
   }
 
@@ -2147,14 +2178,10 @@ try {
     await this.intelligenceManager.waitForPendingSaves(10000);
     this.meetingStartSequence += 1
     this.meetingLifecycleState = 'idle'
-    this.isMeetingActive = false
+    await this.meetingStateMachine.completeStop('Meeting cleanup complete')
     this.setNativeAudioConnected(false)
-    this.stealthAudioPauseSnapshot = null
-    this.windowsAudioResumePending = false
-    this.windowsAudioResumeInFlight = null
     this.currentMeetingId = null
     this.clearAudioPipelineHealthCheck();
-    this.stopMeetingRecoverySweep();
 
     // Clear disguise timers to prevent memory leaks
     this.clearDisguiseTimers()
@@ -2420,7 +2447,7 @@ try {
 
   // Getters and Setters
   public getIsMeetingActive(): boolean {
-    return this.isMeetingActive;
+    return this.meetingStateMachine.isMeetingActive();
   }
 
   public getMainWindow(): BrowserWindow | null {
@@ -2555,10 +2582,6 @@ try {
     if (!this.getMainWindow()) throw new Error("No main window available")
 
     const wasOverlayVisible = this.windowHelper.getOverlayWindow()?.isVisible() ?? false
-    const targetWindow = this.windowHelper.getVisibleMainWindow() ?? this.getMainWindow()
-    const preferredDisplayId = targetWindow && !targetWindow.isDestroyed()
-      ? String(screen.getDisplayMatching(targetWindow.getBounds()).id)
-      : undefined
 
     const screenshotPath = await this.screenshotHelper.takeScreenshot(
       () => this.hideMainWindow(),
@@ -2568,8 +2591,7 @@ try {
         } else {
           this.showMainWindow()
         }
-      },
-      preferredDisplayId,
+      }
     )
 
     return screenshotPath
@@ -3110,8 +3132,6 @@ async function initializeApp() {
 
   // 4. Initialize State
   const appState = AppState.getInstance()
-  appState.bindWindowsPowerAudioRecovery()
-  appState.startMeetingRecoverySweep()
 
   // Explicitly load credentials into helpers
   appState.processingHelper.loadStoredCredentials();

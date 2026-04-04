@@ -18,7 +18,6 @@ type RuntimeWindow = Pick<BrowserWindow,
   | 'setOpacity'
   | 'setAlwaysOnTop'
   | 'isDestroyed'
-  | 'isVisible'
   | 'on'
   | 'once'
   | 'webContents'
@@ -55,16 +54,8 @@ export class StealthRuntime {
   private readonly inputBridge = new InputBridge();
   private contentWindow: BrowserWindow | null = null;
   private shellWindow: BrowserWindow | null = null;
-  private contentWindowOptions: Electron.BrowserWindowConstructorOptions | null = null;
-  private shellReady = false;
-  private firstFramePresented = false;
-  private pendingShow = false;
-  private shellVisible = false;
-  private contentRecoveryInFlight = false;
-  private shellRecoveryInFlight = false;
   private boundInputHandler: ((event: IpcMainEvent, payload: StealthInputEvent) => void) | null = null;
   private boundReadyHandler: ((event: IpcMainEvent) => void) | null = null;
-  private boundFramePresentedHandler: ((event: IpcMainEvent, payload: { frameId: number }) => void) | null = null;
 
   constructor(options: StealthRuntimeOptions) {
     this.stealthManager = options.stealthManager;
@@ -85,11 +76,6 @@ export class StealthRuntime {
         },
       },
       logger: this.logger,
-      onFrameSent: () => {
-        if (!this.shellVisible) {
-          this.requestInitialFrame('frame-forwarded-while-hidden');
-        }
-      },
     });
   }
 
@@ -159,26 +145,6 @@ export class StealthRuntime {
     }
 
     this.contentWindow = contentWindow;
-    this.contentWindowOptions = {
-      ...contentBaseOptions,
-      show: false,
-      frame: false,
-      transparent: false,
-      hasShadow: false,
-      backgroundColor: '#000000',
-      paintWhenInitiallyHidden: true,
-      skipTaskbar: true,
-      webPreferences: {
-        ...webPreferences,
-        preload: this.preloadPath,
-        offscreen: true,
-        backgroundThrottling: false,
-      },
-    };
-    this.shellReady = false;
-    this.firstFramePresented = false;
-    this.pendingShow = false;
-    this.shellVisible = false;
     this.frameBridge.attach(this.contentWindow.webContents as unknown as Parameters<FrameBridge['attach']>[0]);
     this.bindShellEvents();
 
@@ -199,25 +165,46 @@ export class StealthRuntime {
       this.logger.warn(`[StealthRuntime] Shell window did-fail-load: ${code} ${desc}`);
     });
 
-    this.bindContentWindowEvents(this.contentWindow);
+    this.contentWindow.webContents.on('did-finish-load', () => {
+      this.logger.log('[StealthRuntime] Content window did-finish-load');
+      this.requestInitialFrame('content-did-finish-load');
+    });
+
+    this.contentWindow.webContents.on('did-fail-load', (_event, code, desc, url) => {
+      this.logger.warn(`[StealthRuntime] Content window did-fail-load: ${code} ${desc} URL: ${url}`);
+    });
+
+    this.contentWindow.webContents.on('crashed', (_event, killed) => {
+      this.logger.warn(`[StealthRuntime] Content window crashed (killed=${killed})`);
+    });
+
+    this.contentWindow.webContents.on('render-process-gone', (_event, details) => {
+      this.logger.warn(`[StealthRuntime] Content render process gone: ${details.reason} exitCode=${details.exitCode}`);
+    });
+
+    let frameReceived = false;
+    const originalAttach = this.frameBridge.attach.bind(this.frameBridge);
+    this.frameBridge.attach = (source) => {
+      originalAttach(source);
+      const originalSend = this.frameBridge['target'].send.bind(this.frameBridge['target']);
+      this.frameBridge['target'].send = (channel, payload) => {
+        if (channel === 'stealth-shell:frame' && !frameReceived) {
+          frameReceived = true;
+          this.logger.log('[StealthRuntime] First frame received by shell');
+        }
+        originalSend(channel, payload);
+      };
+    };
 
     setTimeout(() => {
-      if (!this.firstFramePresented) {
-        this.logger.warn('[StealthRuntime] No presented frame received after 10s - shell remains hidden');
+      if (!frameReceived) {
+        this.logger.warn('[StealthRuntime] No frames received after 10s - content window may have failed to load');
       }
     }, 10000);
 
     this.shellWindow.on('resize', () => this.syncBounds());
     this.shellWindow.on('move', () => this.syncBounds());
     this.shellWindow.on('closed', () => this.destroy());
-    this.shellWindow.webContents.on('crashed', (_event, killed) => {
-      this.logger.warn(`[StealthRuntime] Shell window crashed (killed=${killed})`);
-      this.handleShellFailure('crashed');
-    });
-    this.shellWindow.webContents.on('render-process-gone', (_event, details) => {
-      this.logger.warn(`[StealthRuntime] Shell render process gone: ${details.reason} exitCode=${details.exitCode}`);
-      this.handleShellFailure(details.reason);
-    });
     this.contentWindow.on('closed', () => {
       this.contentWindow = null;
     });
@@ -237,17 +224,11 @@ export class StealthRuntime {
     if (!this.shellWindow || this.shellWindow.isDestroyed()) {
       return;
     }
-    this.pendingShow = true;
-    if (!this.shellReady || !this.firstFramePresented) {
-      this.requestInitialFrame('show-request');
-      return;
-    }
-    this.revealShellWindow();
+    this.shellWindow.show();
+    this.shellWindow.focus();
   }
 
   hide(): void {
-    this.pendingShow = false;
-    this.shellVisible = false;
     this.shellWindow?.hide();
   }
 
@@ -260,10 +241,6 @@ export class StealthRuntime {
     if (this.boundReadyHandler) {
       this.ipcMain.removeListener('stealth-shell:ready', this.boundReadyHandler);
       this.boundReadyHandler = null;
-    }
-    if (this.boundFramePresentedHandler) {
-      this.ipcMain.removeListener('stealth-shell:frame-presented', this.boundFramePresentedHandler);
-      this.boundFramePresentedHandler = null;
     }
     if (this.contentWindow && !this.contentWindow.isDestroyed()) {
       this.contentWindow.close();
@@ -289,7 +266,7 @@ export class StealthRuntime {
     }
     this.stealthManager.applyToWindow(this.shellWindow, enabled, {
       role: 'primary',
-      hideFromSwitcher: process.platform === 'win32' && enabled,
+      hideFromSwitcher: false,
       allowVirtualDisplayIsolation: false,
     });
   }
@@ -310,123 +287,10 @@ export class StealthRuntime {
       if (!this.shellWindow || event.sender.id !== this.shellWindow.webContents.id) {
         return;
       }
-      this.shellReady = true;
       this.syncBounds();
       this.requestInitialFrame('shell-ready');
-      this.revealShellWindow();
     };
     this.ipcMain.on('stealth-shell:ready', this.boundReadyHandler);
-
-    this.boundFramePresentedHandler = (event, payload) => {
-      if (!this.shellWindow || event.sender.id !== this.shellWindow.webContents.id) {
-        return;
-      }
-
-      this.firstFramePresented = true;
-      this.frameBridge.notifyPresented(payload.frameId);
-      this.revealShellWindow();
-    };
-    this.ipcMain.on('stealth-shell:frame-presented', this.boundFramePresentedHandler);
-  }
-
-  private bindContentWindowEvents(contentWindow: BrowserWindow): void {
-    contentWindow.webContents.on('did-finish-load', () => {
-      this.logger.log('[StealthRuntime] Content window did-finish-load');
-      this.requestInitialFrame('content-did-finish-load');
-    });
-
-    contentWindow.webContents.on('did-fail-load', (_event, code, desc, url) => {
-      this.logger.warn(`[StealthRuntime] Content window did-fail-load: ${code} ${desc} URL: ${url}`);
-    });
-
-    contentWindow.webContents.on('crashed', (_event, killed) => {
-      this.logger.warn(`[StealthRuntime] Content window crashed (killed=${killed})`);
-      this.handleContentFailure('crashed');
-    });
-
-    contentWindow.webContents.on('render-process-gone', (_event, details) => {
-      this.logger.warn(`[StealthRuntime] Content render process gone: ${details.reason} exitCode=${details.exitCode}`);
-      this.handleContentFailure(details.reason);
-    });
-  }
-
-  private revealShellWindow(): void {
-    if (!this.pendingShow || !this.shellReady || !this.firstFramePresented || !this.shellWindow || this.shellWindow.isDestroyed()) {
-      return;
-    }
-
-    this.shellWindow.show();
-    this.shellWindow.focus();
-    this.shellVisible = true;
-    this.pendingShow = false;
-  }
-
-  private failClosedShell(): void {
-    if (!this.shellWindow || this.shellWindow.isDestroyed()) {
-      return;
-    }
-
-    this.pendingShow = false;
-    this.shellVisible = false;
-    try {
-      this.shellWindow.setOpacity?.(0);
-    } catch {
-      // Ignore opacity issues during failure handling.
-    }
-    this.shellWindow.hide();
-  }
-
-  private handleContentFailure(reason: string): void {
-    if (this.contentRecoveryInFlight || !this.contentWindowOptions) {
-      return;
-    }
-
-    this.contentRecoveryInFlight = true;
-    this.firstFramePresented = false;
-    this.failClosedShell();
-    this.pendingShow = true;
-
-    try {
-      if (this.contentWindow && !this.contentWindow.isDestroyed()) {
-        this.contentWindow.close();
-      }
-    } catch {
-      // Ignore close failures during recovery.
-    }
-
-    try {
-      const contentWindow = this.createWindow(this.contentWindowOptions);
-      this.contentWindow = contentWindow;
-      this.frameBridge.attach(contentWindow.webContents as unknown as Parameters<FrameBridge['attach']>[0]);
-      this.bindContentWindowEvents(contentWindow);
-      void contentWindow.loadURL(this.startUrl).catch((error) => {
-        this.logger.warn(`[StealthRuntime] Content recovery loadURL failed after ${reason}:`, error);
-      });
-      this.syncBounds();
-      this.requestInitialFrame(`content-recovery:${reason}`);
-    } finally {
-      this.contentRecoveryInFlight = false;
-    }
-  }
-
-  private handleShellFailure(reason: string): void {
-    if (this.shellRecoveryInFlight || !this.shellWindow || this.shellWindow.isDestroyed()) {
-      return;
-    }
-
-    this.shellRecoveryInFlight = true;
-    this.shellReady = false;
-    this.firstFramePresented = false;
-    this.failClosedShell();
-    this.pendingShow = true;
-
-    void this.shellWindow.loadFile(this.shellHtmlPath)
-      .catch((error) => {
-        this.logger.warn(`[StealthRuntime] Shell recovery loadFile failed after ${reason}:`, error);
-      })
-      .finally(() => {
-        this.shellRecoveryInFlight = false;
-      });
   }
 
   private requestInitialFrame(reason: string): void {

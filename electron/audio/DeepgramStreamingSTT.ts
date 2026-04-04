@@ -16,6 +16,7 @@ import { resampleToMonoPcm16 } from './pcm';
 
 const RECONNECT_BASE_DELAY_MS = 1000;
 const RECONNECT_MAX_DELAY_MS = 30000;
+const MAX_RECONNECT_ATTEMPTS = 5;
 const KEEPALIVE_INTERVAL_MS = 5000;
 const MAX_BUFFER_SIZE = 500;
 
@@ -324,6 +325,17 @@ export class DeepgramStreamingSTT extends EventEmitter {
 
     private scheduleReconnect(): void {
         if (!this.shouldReconnect) return;
+
+        if (this.reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
+            this.shouldReconnect = false;
+            this.isActive = false;
+            this.isConnecting = false;
+            this.buffer.clear();
+            const error = new Error(`Deepgram max reconnect attempts (${MAX_RECONNECT_ATTEMPTS}) reached`);
+            console.error('[DeepgramStreaming] Max reconnect attempts reached. Giving up.');
+            this.emit('error', error);
+            return;
+        }
 
         const delay = Math.min(
             RECONNECT_BASE_DELAY_MS * Math.pow(2, this.reconnectAttempts),

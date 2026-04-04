@@ -6,8 +6,6 @@ import { loadNativeStealthModule } from './nativeStealthModule';
 import { execFile } from 'node:child_process';
 import { ChromiumCaptureDetector } from './ChromiumCaptureDetector';
 import { MacosStealthEnhancer } from './MacosStealthEnhancer';
-import { MonitoringDetector } from './MonitoringDetector';
-import { ScreenShareDetector } from './ScreenShareDetector';
 import { TCCMonitor } from './TCCMonitor';
 
 export interface StealthConfig {
@@ -59,8 +57,6 @@ type ScreenApi = DisplayEventSource & { getAllDisplays: () => DisplayInfo[] };
 
 interface StealthManagerDependencies {
   nativeModule?: NativeStealthBindings | null;
-  monitoringDetector?: MonitoringDetector | null;
-  screenShareDetector?: ScreenShareDetector | null;
   platform?: string;
   powerMonitor?: { on: (event: string, listener: () => void) => void } | null;
   displayEvents?: DisplayEventSource | null;
@@ -73,7 +69,6 @@ interface StealthManagerDependencies {
   virtualDisplayCoordinator?: VirtualDisplayCoordinator | null;
   captureToolPatterns?: RegExp[];
   processEnumerator?: (command: string, args: string[]) => Promise<string>;
-  quitApplication?: () => void;
 }
 
 interface StealthCapableWindow {
@@ -101,7 +96,6 @@ interface ManagedWindowRecord {
   listenersAttached: boolean;
   virtualDisplayRequestId: number;
   virtualDisplayIsolationStarted: boolean;
-  lastWindowsHandleSignature: string | null;
 }
 
 const WATCHDOG_INTERVAL_MS = 1000;
@@ -219,23 +213,17 @@ export class StealthManager extends EventEmitter {
   private readonly virtualDisplayCoordinator: VirtualDisplayCoordinator | null;
   private readonly captureToolPatterns: RegExp[];
   private readonly processEnumerator: (command: string, args: string[]) => Promise<string>;
-  private readonly quitApplication: () => void;
   private readonly managedWindows = new Set<ManagedWindowRecord>();
   private readonly managedWindowLookup = new WeakMap<object, ManagedWindowRecord>();
   private nativeModule: NativeStealthBindings | null | undefined;
-  private monitoringDetector: MonitoringDetector | null;
-  private screenShareDetector: ScreenShareDetector | null;
   private powerMonitorBound = false;
   private displayEventsBound = false;
   private watchdogHandle: unknown = null;
   private windowsAffinityHandle: unknown = null;
-  private monitoringHandle: unknown = null;
   private watchdogRunning = false;
-  private monitoringRunning = false;
   private scStreamMonitorHandle: unknown = null;
   private scStreamMonitorRunning = false;
   private scStreamActive = false;
-  private captureSuppressionActive = false;
   private chromiumDetector: ChromiumCaptureDetector | null = null;
   private stealthEnhancer: MacosStealthEnhancer | null = null;
   private cgWindowMonitorHandle: unknown = null;
@@ -245,8 +233,6 @@ export class StealthManager extends EventEmitter {
   private macOSMajor: number = 0;
   private macOSMinor: number = 0;
   private opacityFlickerHandle: unknown = null;
-  private powerReapplyGeneration = 0;
-  private displayReapplyGeneration = 0;
 
   constructor(config: StealthConfig, deps: StealthManagerDependencies = {}) {
     super();
@@ -263,10 +249,7 @@ export class StealthManager extends EventEmitter {
     this.virtualDisplayCoordinator = deps.virtualDisplayCoordinator ?? null;
     this.captureToolPatterns = deps.captureToolPatterns ?? KNOWN_CAPTURE_TOOL_PATTERNS;
     this.processEnumerator = deps.processEnumerator ?? defaultProcessEnumerator;
-    this.quitApplication = deps.quitApplication ?? this.resolveQuitApplication();
     this.nativeModule = deps.nativeModule;
-    this.monitoringDetector = deps.monitoringDetector ?? null;
-    this.screenShareDetector = deps.screenShareDetector ?? null;
     this.detectMacOSVersion();
   }
 
@@ -323,7 +306,7 @@ export class StealthManager extends EventEmitter {
 
     return {
       contentProtection: enabled,
-      skipTaskbar: this.platform === 'win32' ? enabled : false,
+      skipTaskbar: false,
       excludeFromCapture: enabled,
     };
   }
@@ -383,7 +366,6 @@ export class StealthManager extends EventEmitter {
     this.ensureChromiumDetection();
     this.ensureCGWindowMonitor();
     this.ensureTCCMonitor();
-    this.ensureWindowsMonitoring();
     this.ensureOpacityFlicker();
   }
 
@@ -474,10 +456,6 @@ export class StealthManager extends EventEmitter {
   }
 
   private isEnhancedStealthEnabled(): boolean {
-    if (this.platform === 'win32' && this.isEnabled()) {
-      return true;
-    }
-
     return isOptimizationActive('useStealthMode');
   }
 
@@ -529,10 +507,6 @@ export class StealthManager extends EventEmitter {
       if (this.platform === 'win32' && nativeModule.applyWindowsWindowStealth) {
         const handle = win.getNativeWindowHandle?.();
         if (handle) {
-          const record = this.managedWindowLookup.get(win as object);
-          if (record) {
-            record.lastWindowsHandleSignature = handle.toString('hex');
-          }
           nativeModule.applyWindowsWindowStealth(handle);
           this.verifyStealth(win);
         }
@@ -711,7 +685,6 @@ export class StealthManager extends EventEmitter {
       listenersAttached: false,
       virtualDisplayRequestId: 0,
       virtualDisplayIsolationStarted: false,
-      lastWindowsHandleSignature: null,
     };
     this.managedWindows.add(record);
     this.managedWindowLookup.set(win as object, record);
@@ -728,7 +701,6 @@ export class StealthManager extends EventEmitter {
     record.win.on('unminimize', reapply);
     record.win.on('move', reapply);
     record.win.on('show', reapply);
-    record.win.on('focus', reapply);
     record.win.on('closed', () => {
       this.disableVirtualDisplayIsolation(record);
       this.managedWindows.delete(record);
@@ -752,47 +724,6 @@ export class StealthManager extends EventEmitter {
     }
   }
 
-  private getWindowsHandleSignature(win: StealthCapableWindow): string | null {
-    try {
-      const handle = win.getNativeWindowHandle?.();
-      if (!handle || handle.length === 0) {
-        return null;
-      }
-
-      return handle.toString('hex');
-    } catch {
-      return null;
-    }
-  }
-
-  private scheduleReapplyAll(kind: 'power' | 'display', delayMs: number): void {
-    const generation = kind === 'power'
-      ? ++this.powerReapplyGeneration
-      : ++this.displayReapplyGeneration;
-
-    if (delayMs <= 0) {
-      if (!this.isEnabled()) {
-        return;
-      }
-
-      for (const record of this.managedWindows) {
-        this.reapplyAfterShow(record.win);
-      }
-      return;
-    }
-
-    this.timeoutScheduler(() => {
-      const currentGeneration = kind === 'power' ? this.powerReapplyGeneration : this.displayReapplyGeneration;
-      if (generation !== currentGeneration || !this.isEnabled()) {
-        return;
-      }
-
-      for (const record of this.managedWindows) {
-        this.reapplyAfterShow(record.win);
-      }
-    }, delayMs);
-  }
-
   private stopBackgroundMonitorsIfIdle(): void {
     if (this.isEnabled() && this.managedWindows.size > 0) {
       return;
@@ -806,11 +737,6 @@ export class StealthManager extends EventEmitter {
     if (this.windowsAffinityHandle) {
       this.clearIntervalScheduler(this.windowsAffinityHandle);
       this.windowsAffinityHandle = null;
-    }
-
-    if (this.monitoringHandle) {
-      this.clearIntervalScheduler(this.monitoringHandle);
-      this.monitoringHandle = null;
     }
 
     if (this.scStreamMonitorHandle) {
@@ -829,18 +755,9 @@ export class StealthManager extends EventEmitter {
     }
 
     this.watchdogRunning = false;
-    this.monitoringRunning = false;
     this.scStreamMonitorRunning = false;
     this.cgWindowMonitorRunning = false;
     this.scStreamActive = false;
-
-    if (this.captureSuppressionActive) {
-      this.captureSuppressionActive = false;
-      this.clearWarning('screen_share_detected');
-      this.emit('screen-share-cleared', { platform: this.platform, reason: 'monitors-stopped' });
-    }
-
-    this.clearWarning('windows_screen_share_detected');
 
     if (this.chromiumDetector) {
       this.chromiumDetector.stop();
@@ -858,7 +775,15 @@ export class StealthManager extends EventEmitter {
       return;
     }
 
-    const reapplyAll = () => this.scheduleReapplyAll('power', this.platform === 'win32' ? 250 : 0);
+    const reapplyAll = () => {
+      if (!this.isEnabled()) {
+        return;
+      }
+
+      for (const record of this.managedWindows) {
+        this.reapplyAfterShow(record.win);
+      }
+    };
 
     this.powerMonitor.on('unlock-screen', reapplyAll);
     this.powerMonitor.on('resume', reapplyAll);
@@ -874,10 +799,18 @@ export class StealthManager extends EventEmitter {
       return;
     }
 
-    const reapplyAll = () => this.scheduleReapplyAll('display', this.platform === 'win32' ? 250 : 0);
+    const reapplyAll = () => {
+      if (!this.isEnabled()) {
+        return;
+      }
+
+      for (const record of this.managedWindows) {
+        this.reapplyAfterShow(record.win);
+      }
+    };
 
     this.displayEvents.on('display-metrics-changed', reapplyAll);
-    if (this.platform === 'darwin' || this.platform === 'win32') {
+    if (this.platform === 'darwin') {
       this.displayEvents.on('display-added', reapplyAll);
       this.displayEvents.on('display-removed', reapplyAll);
     }
@@ -971,7 +904,7 @@ export class StealthManager extends EventEmitter {
     this.watchdogHandle = this.intervalScheduler(() => this.pollCaptureTools(), WATCHDOG_INTERVAL_MS);
 
     if (this.platform === 'win32' && !this.windowsAffinityHandle) {
-      this.windowsAffinityHandle = this.intervalScheduler(() => this.verifyWindowsAffinity(), 250);
+      this.windowsAffinityHandle = this.intervalScheduler(() => this.verifyWindowsAffinity(), 1000);
     }
   }
 
@@ -992,17 +925,9 @@ export class StealthManager extends EventEmitter {
         continue;
       }
 
-      const handleSignature = this.getWindowsHandleSignature(win);
-      if (handleSignature && handleSignature !== record.lastWindowsHandleSignature) {
-        record.lastWindowsHandleSignature = handleSignature;
-        this.logger.log('[StealthManager] Windows native handle changed - reapplying stealth immediately');
-        this.applyNativeStealth(win);
-        continue;
-      }
-
       try {
         const affinity = nativeModule.verifyWindowsStealthState(handle);
-        if (affinity !== 0x11) {
+        if (affinity !== 0x11 && affinity !== 0x01) {
           this.logger.log('[StealthManager] Windows display affinity was reset - reapplying');
           this.applyNativeStealth(win);
         }
@@ -1020,40 +945,12 @@ export class StealthManager extends EventEmitter {
     this.watchdogRunning = true;
     try {
       const suspiciousToolMatches = await this.detectCaptureProcesses();
-      let windowsScreenShareActive = false;
 
-      if (this.platform === 'win32') {
-        const status = await this.getScreenShareDetector().detect();
-        windowsScreenShareActive = status.active;
-        if (windowsScreenShareActive) {
-          this.addWarning('windows_screen_share_detected');
-        } else {
-          this.clearWarning('windows_screen_share_detected');
-        }
-      }
-
-      const captureDetected = suspiciousToolMatches.length > 0 || windowsScreenShareActive;
-      if (captureDetected) {
-        if (!this.captureSuppressionActive) {
-          this.captureSuppressionActive = true;
-          this.emit('screen-share-detected', {
-            platform: this.platform,
-            suspiciousToolPatterns: suspiciousToolMatches.map((pattern) => pattern.source),
-            windowsScreenShareActive,
-          });
-        }
+      if (suspiciousToolMatches.length > 0) {
         this.logger.log(
-          `[StealthManager] Capture watchdog detected suspicious tools running. Patterns triggered: ${suspiciousToolMatches.length}${windowsScreenShareActive ? ' + windows screen-share heuristic' : ''}`
+          `[StealthManager] Capture watchdog detected suspicious tools running. Patterns triggered: ${suspiciousToolMatches.length}`
         );
-        this.addWarning('screen_share_detected');
         this.hideAndRestoreVisibleWindows();
-        return;
-      }
-
-      if (this.captureSuppressionActive) {
-        this.captureSuppressionActive = false;
-        this.clearWarning('screen_share_detected');
-        this.emit('screen-share-cleared', { platform: this.platform });
       }
     } catch (error) {
       this.logger.warn('[StealthManager] Capture watchdog poll failed:', error);
@@ -1353,52 +1250,6 @@ for window in windows:
     }
   }
 
-  private ensureWindowsMonitoring(): void {
-    if (
-      this.platform !== 'win32' ||
-      this.monitoringHandle ||
-      !this.isEnabled() ||
-      !this.isEnhancedStealthEnabled() ||
-      !this.featureFlags.enableCaptureDetectionWatchdog
-    ) {
-      return;
-    }
-
-    this.monitoringHandle = this.intervalScheduler(() => this.pollMonitoringThreats(), 15000);
-  }
-
-  private async pollMonitoringThreats(): Promise<void> {
-    if (this.monitoringRunning) {
-      return;
-    }
-
-    this.monitoringRunning = true;
-    try {
-      const result = await this.getMonitoringDetector().detectAll();
-      if (!result.detected) {
-        this.clearWarning('windows_monitoring_software_detected');
-        return;
-      }
-
-      this.addWarning('windows_monitoring_software_detected');
-      this.logger.warn(
-        `[StealthManager] Monitoring software detected on Windows via ${result.detectionMethod}: ${result.threats
-          .map((threat) => `${threat.name}:${threat.vector}`)
-          .join(', ')}`
-      );
-      const shouldQuit = result.threats.some((threat) => threat.vector === 'process' || threat.vector === 'window' || threat.vector === 'launch-agent');
-      if (shouldQuit) {
-        this.quitApplication();
-      } else {
-        this.logger.warn('[StealthManager] Windows monitoring detection did not reach a blocking runtime signal; keeping app running with degraded warning');
-      }
-    } catch (error) {
-      this.logger.warn('[StealthManager] Monitoring detection failed:', error);
-    } finally {
-      this.monitoringRunning = false;
-    }
-  }
-
   private ensureOpacityFlicker(): void {
     if (
       this.opacityFlickerHandle ||
@@ -1527,47 +1378,23 @@ for window in windows:
   }
 
   private getNativeModule(): NativeStealthBindings | null {
-    if (this.nativeModule !== undefined && this.nativeModule !== null) {
-      this.clearWarning('native_module_unavailable');
+    if (this.nativeModule !== undefined) {
+      if (this.nativeModule === null && this.isEnabled()) {
+        this.addWarning('native_module_unavailable');
+      } else if (this.nativeModule !== null) {
+        this.clearWarning('native_module_unavailable');
+      }
       return this.nativeModule;
     }
 
-    const previousModule = this.nativeModule;
     this.nativeModule = loadNativeStealthModule({ retryOnFailure: true });
     if (this.nativeModule === null && this.isEnabled()) {
       this.addWarning('native_module_unavailable');
       this.logger.warn('[StealthManager] Native module unavailable, operating in Layer 0 mode only');
     } else if (this.nativeModule !== null) {
       this.clearWarning('native_module_unavailable');
-      if (previousModule === null && this.isEnabled()) {
-        for (const record of this.managedWindows) {
-          this.reapplyAfterShow(record.win);
-        }
-      }
     }
     return this.nativeModule;
-  }
-
-  private getMonitoringDetector(): MonitoringDetector {
-    if (!this.monitoringDetector) {
-      this.monitoringDetector = new MonitoringDetector({
-        platform: this.platform,
-        logger: this.logger,
-      });
-    }
-
-    return this.monitoringDetector;
-  }
-
-  private getScreenShareDetector(): ScreenShareDetector {
-    if (!this.screenShareDetector) {
-      this.screenShareDetector = new ScreenShareDetector({
-        platform: this.platform,
-        logger: this.logger,
-      });
-    }
-
-    return this.screenShareDetector;
   }
 
   private resolvePowerMonitor(): { on: (event: string, listener: () => void) => void } | null {
@@ -1579,19 +1406,8 @@ for window in windows:
     }
   }
 
-  private resolveQuitApplication(): () => void {
-    return () => {
-      try {
-        const electronModule = require('electron');
-        electronModule?.app?.quit?.();
-      } catch (error) {
-        this.logger.warn('[StealthManager] Failed to resolve app.quit for emergency shutdown:', error);
-      }
-    };
-  }
-
   private defaultHideFromSwitcher(role: StealthWindowRole): boolean {
-    return role === 'auxiliary' || (this.platform === 'win32' && this.isEnabled());
+    return role === 'auxiliary';
   }
 
   private isWindowDestroyed(win: StealthCapableWindow): boolean {

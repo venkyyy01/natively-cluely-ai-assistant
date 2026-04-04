@@ -4,19 +4,16 @@ import assert from 'node:assert';
 describe('Audio Pipeline Auto-Recovery', () => {
   let mockAppState: any;
   let recoveryAttempts: number = 0;
-  let recoveryArgs: unknown[][] = [];
 
   beforeEach(() => {
     recoveryAttempts = 0;
-    recoveryArgs = [];
     mockAppState = {
       isMeetingActive: false,
       audioRecoveryAttempted: false,
       setNativeAudioConnected: mock.fn(),
       broadcast: mock.fn(),
-      reconfigureAudio: mock.fn(async (...args: unknown[]) => {
+      reconfigureAudio: mock.fn(async () => {
         recoveryAttempts++;
-        recoveryArgs.push(args);
         if (recoveryAttempts > 1) {
           throw new Error('Recovery failed');
         }
@@ -30,7 +27,7 @@ describe('Audio Pipeline Auto-Recovery', () => {
     const errorHandler = async (err: Error) => {
       if (mockAppState.isMeetingActive && !mockAppState.audioRecoveryAttempted) {
         mockAppState.audioRecoveryAttempted = true;
-        await mockAppState.reconfigureAudio(undefined, undefined, { restartStreams: true });
+        await mockAppState.reconfigureAudio();
         mockAppState.setNativeAudioConnected(true);
       }
     };
@@ -40,7 +37,6 @@ describe('Audio Pipeline Auto-Recovery', () => {
     assert.strictEqual(recoveryAttempts, 1);
     assert.strictEqual(mockAppState.audioRecoveryAttempted, true);
     assert.strictEqual(mockAppState.setNativeAudioConnected.mock.calls.length, 1);
-    assert.deepStrictEqual(recoveryArgs, [[undefined, undefined, { restartStreams: true }]]);
   });
 
   it('should not retry recovery after first attempt', async () => {
@@ -50,7 +46,7 @@ describe('Audio Pipeline Auto-Recovery', () => {
     const errorHandler = async (err: Error) => {
       if (mockAppState.isMeetingActive && !mockAppState.audioRecoveryAttempted) {
         mockAppState.audioRecoveryAttempted = true;
-        await mockAppState.reconfigureAudio(undefined, undefined, { restartStreams: true });
+        await mockAppState.reconfigureAudio();
         mockAppState.setNativeAudioConnected(true);
       } else {
         mockAppState.broadcast('meeting-audio-error', err.message);
@@ -83,7 +79,7 @@ describe('Audio Pipeline Auto-Recovery', () => {
       if (mockAppState.isMeetingActive && !mockAppState.audioRecoveryAttempted) {
         mockAppState.audioRecoveryAttempted = true;
         try {
-          await mockAppState.reconfigureAudio(undefined, undefined, { restartStreams: true });
+          await mockAppState.reconfigureAudio();
           mockAppState.setNativeAudioConnected(true);
         } catch (recoveryErr) {
           mockAppState.broadcast('meeting-audio-error', 'Audio capture failed and recovery unsuccessful');
@@ -107,7 +103,7 @@ describe('Audio Pipeline Auto-Recovery', () => {
     const errorHandler = async (err: Error) => {
       if (mockAppState.isMeetingActive && !mockAppState.audioRecoveryAttempted) {
         mockAppState.audioRecoveryAttempted = true;
-        await mockAppState.reconfigureAudio(undefined, undefined, { restartStreams: true });
+        await mockAppState.reconfigureAudio();
         mockAppState.setNativeAudioConnected(true);
       } else {
         mockAppState.broadcast('meeting-audio-error', err.message);

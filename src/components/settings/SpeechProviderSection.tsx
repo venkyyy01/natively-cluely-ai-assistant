@@ -108,21 +108,6 @@ export const SpeechProviderSection: React.FC<SpeechProviderSectionProps> = (prop
     soniox: sttSonioxKey,
   };
 
-  const storedKeyMap: Record<string, boolean> = {
-    groq: hasStoredSttGroqKey,
-    openai: hasStoredSttOpenaiKey,
-    deepgram: hasStoredDeepgramKey,
-    elevenlabs: hasStoredElevenLabsKey,
-    azure: hasStoredAzureKey,
-    ibmwatson: hasStoredIbmWatsonKey,
-    soniox: hasStoredSonioxKey,
-  };
-
-  const hasStoredKeyForProvider = storedKeyMap[sttProvider] || false;
-  const currentKeyValue = keyMap[sttProvider] || '';
-  const keyPlaceholder = hasStoredKeyForProvider ? '••••••••••••' : 'Enter API key';
-  const canTestConnection = Boolean(currentKeyValue.trim() || hasStoredKeyForProvider);
-
   return (
     <>
       <div>
@@ -210,8 +195,7 @@ export const SpeechProviderSection: React.FC<SpeechProviderSectionProps> = (prop
               <div className="flex gap-2">
                 <input
                   type="password"
-                  value={currentKeyValue}
-                  placeholder={keyPlaceholder}
+                  value={keyMap[sttProvider] || ''}
                   onChange={(e) => {
                     if (sttProvider === 'groq') setSttGroqKey(e.target.value);
                     else if (sttProvider === 'openai') setSttOpenaiKey(e.target.value);
@@ -224,13 +208,13 @@ export const SpeechProviderSection: React.FC<SpeechProviderSectionProps> = (prop
                   className="flex-1 bg-bg-input border border-border-subtle rounded-lg px-3 py-2 text-sm text-text-primary placeholder-text-tertiary focus:outline-none focus:border-accent-primary transition-colors"
                 />
                 <button
-                  onClick={() => handleSttKeySubmit(sttProvider as any, currentKeyValue)}
-                  disabled={sttSaving || !currentKeyValue.trim()}
+                  onClick={() => handleSttKeySubmit(sttProvider as any, keyMap[sttProvider] || '')}
+                  disabled={sttSaving || !(keyMap[sttProvider] || '').trim()}
                   className={`px-5 py-2.5 rounded-lg text-xs font-medium transition-colors ${sttSaved ? 'bg-green-500/20 text-green-400' : 'bg-bg-input hover:bg-bg-input/80 border border-border-subtle text-text-primary disabled:opacity-50'}`}
                 >
                   {sttSaved ? <span className="flex items-center gap-1.5"><Check size={13} /> Saved</span> : 'Save'}
                 </button>
-                {handleRemoveSttKey && hasStoredKeyForProvider && (
+                {handleRemoveSttKey && keyMap[sttProvider] !== undefined && (
                   <button
                     onClick={() => handleRemoveSttKey(sttProvider as any)}
                     className="px-2.5 py-2.5 rounded-lg text-xs font-medium text-text-tertiary hover:text-red-500 hover:bg-red-500/10 transition-all"
@@ -253,7 +237,7 @@ export const SpeechProviderSection: React.FC<SpeechProviderSectionProps> = (prop
               )}
 
               <div className="flex items-center gap-3">
-                <button onClick={handleTestSttConnection} disabled={sttTestStatus === 'testing' || !canTestConnection} className="text-xs bg-bg-input hover:bg-bg-elevated text-text-primary px-3 py-1.5 rounded-md transition-colors flex items-center gap-2 disabled:opacity-50">
+                <button onClick={handleTestSttConnection} disabled={sttTestStatus === 'testing'} className="text-xs bg-bg-input hover:bg-bg-elevated text-text-primary px-3 py-1.5 rounded-md transition-colors flex items-center gap-2 disabled:opacity-50">
                   {sttTestStatus === 'testing' ? <><RefreshCw size={12} className="animate-spin" /> Testing...</> : sttTestStatus === 'success' ? <><Check size={12} className="text-green-500" /> Connected</> : <>Test Connection</>}
                 </button>
                 <button

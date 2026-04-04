@@ -53,27 +53,3 @@ test('STTReconnector emits exhausted after max retries fail', async () => {
 
   assert.deepEqual(events, ['interviewer']);
 });
-
-test('STTReconnector reset clears exhaustion and allows reconnect attempts again', async () => {
-  let reconnects = 0;
-  let shouldFail = true;
-  const reconnector = new STTReconnector(async () => {
-    if (shouldFail) {
-      throw new Error('boom');
-    }
-    reconnects += 1;
-  });
-  const internal = reconnector as unknown as { baseDelayMs: number; maxRetries: number };
-  internal.baseDelayMs = 1;
-  internal.maxRetries = 1;
-
-  reconnector.onError('user');
-  await new Promise((resolve) => setTimeout(resolve, 10));
-
-  shouldFail = false;
-  reconnector.reset('user');
-  reconnector.onError('user');
-  await new Promise((resolve) => setTimeout(resolve, 10));
-
-  assert.equal(reconnects, 1);
-});

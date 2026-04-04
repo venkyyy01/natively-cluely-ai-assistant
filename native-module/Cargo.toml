@@ -4,6 +4,11 @@ name = "natively-audio"
 version = "0.1.0"
 edition = "2021"
 
+# Suppress warnings from deprecated cocoa/objc dependencies
+[lints.rust]
+unexpected_cfgs = "allow"
+deprecated = "allow"
+
 [lib]
 crate-type = ["cdylib"]
 

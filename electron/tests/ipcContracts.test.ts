@@ -7,12 +7,12 @@ type Handler = (event: unknown, ...args: unknown[]) => Promise<unknown> | unknow
 function installIpcHandlersTestHarness(options?: {
   restartOllamaError?: string;
   serviceAccountResult?: { canceled: boolean; filePaths: string[] };
-  moduleOverrides?: Record<string, unknown>;
 }) {
   const originalLoad = (Module as any)._load;
   const handlers = new Map<string, Handler>();
   const sentEvents: Array<{ channel: string; payload: unknown }> = [];
   const browserEvents: Array<{ channel: string; payload: unknown }> = [];
+  let fastResponseConfig = { enabled: true, provider: 'cerebras', model: 'gpt-oss-120b' };
 
   const llmHelper = {
     generateSuggestion: async (context: string, lastQuestion: string) => `${context} -> ${lastQuestion}`,
@@ -27,6 +27,10 @@ function installIpcHandlersTestHarness(options?: {
       }
       return true;
     },
+    getFastResponseConfig: () => fastResponseConfig,
+    setFastResponseConfig: (config: typeof fastResponseConfig) => {
+      fastResponseConfig = config;
+    },
   };
 
   const credentialsManager = {
@@ -36,6 +40,7 @@ function installIpcHandlersTestHarness(options?: {
     getAllCredentials: () => ({
       geminiApiKey: 'gemini-key',
       groqApiKey: '',
+      cerebrasApiKey: 'cerebras-key',
       openaiApiKey: '',
       claudeApiKey: '',
       googleServiceAccountPath: '/tmp/service.json',
@@ -52,21 +57,15 @@ function installIpcHandlersTestHarness(options?: {
       sonioxApiKey: '',
       googleSearchApiKey: '',
       googleSearchCseId: '',
+      fastResponseConfig,
     }),
     getSttProvider: () => 'google',
-    getGeminiApiKey: () => 'gemini-key',
-    getGroqApiKey: () => '',
-    getOpenaiApiKey: () => '',
-    getClaudeApiKey: () => '',
-    getGroqSttApiKey: () => '',
-    getOpenAiSttApiKey: () => '',
-    getDeepgramApiKey: () => '',
-    getElevenLabsApiKey: () => '',
-    getAzureApiKey: () => '',
-    getAzureRegion: () => 'eastus',
-    getIbmWatsonApiKey: () => '',
-    getIbmWatsonRegion: () => 'us-south',
-    getSonioxApiKey: () => '',
+    getFastResponseConfig: () => fastResponseConfig,
+    setFastResponseConfig: (config: typeof fastResponseConfig) => {
+      fastResponseConfig = config;
+    },
+    getCerebrasApiKey: () => 'cerebras-key',
+    setCerebrasApiKey: (_key: string) => {},
   };
 
   const electronMock = {
@@ -97,10 +96,6 @@ function installIpcHandlersTestHarness(options?: {
   };
 
   (Module as any)._load = function patchedLoad(request: string, parent: unknown, isMain: boolean) {
-    if (options?.moduleOverrides?.[request]) {
-      return options.moduleOverrides[request];
-    }
-
     if (request === 'electron') {
       return electronMock;
     }
@@ -314,85 +309,55 @@ test('root IPC handlers normalize cancellation and failures into success/data/er
   harness.restore();
 });
 
-test('root IPC test-stt-connection reuses the stored Deepgram key when the renderer field is blank', async () => {
-  let capturedAuthorizationHeader = '';
-
-  class FakeWebSocket {
-    private handlers = new Map<string, ((value?: unknown) => void)[]>();
-
-    constructor(_url: string, options: { headers?: { Authorization?: string } }) {
-      capturedAuthorizationHeader = options.headers?.Authorization || '';
-      queueMicrotask(() => this.emit('open'));
-    }
-
-    on(event: string, handler: (value?: unknown) => void) {
-      const current = this.handlers.get(event) || [];
-      current.push(handler);
-      this.handlers.set(event, current);
-    }
-
-    send(_payload: string) {}
-
-    close() {}
-
-    private emit(event: string, value?: unknown) {
-      for (const handler of this.handlers.get(event) || []) {
-        handler(value);
-      }
-    }
-  }
-
-  const harness = installIpcHandlersTestHarness({
-    moduleOverrides: {
-      ws: FakeWebSocket,
-      './services/CredentialsManager': {
-        CredentialsManager: {
-          getInstance: () => ({
-            getAllCredentials: () => ({
-              geminiApiKey: 'gemini-key',
-              groqApiKey: '',
-              openaiApiKey: '',
-              claudeApiKey: '',
-              googleServiceAccountPath: '/tmp/service.json',
-              sttProvider: 'deepgram',
-              groqSttModel: 'whisper-large-v3-turbo',
-              groqSttApiKey: '',
-              openAiSttApiKey: '',
-              deepgramApiKey: 'stored-deepgram-key',
-              elevenLabsApiKey: '',
-              azureApiKey: '',
-              azureRegion: 'eastus',
-              ibmWatsonApiKey: '',
-              ibmWatsonRegion: 'us-south',
-              sonioxApiKey: '',
-              googleSearchApiKey: '',
-              googleSearchCseId: '',
-            }),
-            getSttProvider: () => 'deepgram',
-            getGeminiApiKey: () => 'gemini-key',
-            getGroqApiKey: () => '',
-            getOpenaiApiKey: () => '',
-            getClaudeApiKey: () => '',
-            getGroqSttApiKey: () => '',
-            getOpenAiSttApiKey: () => '',
-            getDeepgramApiKey: () => 'stored-deepgram-key',
-            getElevenLabsApiKey: () => '',
-            getAzureApiKey: () => '',
-            getAzureRegion: () => 'eastus',
-            getIbmWatsonApiKey: () => '',
-            getIbmWatsonRegion: () => 'us-south',
-            getSonioxApiKey: () => '',
-          }),
-        },
-      },
-    },
-  });
+test('fast response and stored credential IPC contracts include Cerebras-aware state', async () => {
+  const harness = installIpcHandlersTestHarness();
   await initializeHandlers(harness);
 
-  assert.deepEqual(await harness.handlers.get('test-stt-connection')?.({}, 'deepgram', '', undefined), {
+  assert.deepEqual(await harness.handlers.get('get-stored-credentials')?.({}), {
     success: true,
+    data: {
+      hasGeminiKey: true,
+      hasGroqKey: false,
+      hasCerebrasKey: true,
+      hasOpenaiKey: false,
+      hasClaudeKey: false,
+      googleServiceAccountPath: '/tmp/service.json',
+      sttProvider: 'google',
+      groqSttModel: 'whisper-large-v3-turbo',
+      hasSttGroqKey: false,
+      hasSttOpenaiKey: false,
+      hasDeepgramKey: false,
+      hasElevenLabsKey: false,
+      hasAzureKey: false,
+      azureRegion: 'eastus',
+      hasIbmWatsonKey: false,
+      ibmWatsonRegion: 'us-south',
+      hasSonioxKey: false,
+      hasGoogleSearchKey: false,
+      hasGoogleSearchCseId: false,
+      geminiPreferredModel: undefined,
+      groqPreferredModel: undefined,
+      cerebrasPreferredModel: undefined,
+      openaiPreferredModel: undefined,
+      claudePreferredModel: undefined,
+      fastResponseConfig: { enabled: true, provider: 'cerebras', model: 'gpt-oss-120b' },
+    },
   });
-  assert.equal(capturedAuthorizationHeader, 'Token stored-deepgram-key ');
+
+  assert.deepEqual(await harness.handlers.get('get-fast-response-config')?.({}), {
+    success: true,
+    data: { enabled: true, provider: 'cerebras', model: 'gpt-oss-120b' },
+  });
+
+  assert.deepEqual(
+    await harness.handlers.get('set-fast-response-config')?.({}, { enabled: false, provider: 'groq', model: 'llama-3.3-70b-versatile' }),
+    { success: true },
+  );
+
+  assert.deepEqual(harness.browserEvents.at(-1), {
+    channel: 'fast-response-config-changed',
+    payload: { enabled: false, provider: 'groq', model: 'llama-3.3-70b-versatile' },
+  });
 
   harness.restore();
 });
@@ -432,6 +397,35 @@ test('preload unwraps normalized root IPC contracts into typed renderer helpers'
     { channel: 'take-screenshot', args: [] },
     { channel: 'get-current-llm-config', args: [] },
     { channel: 'set-overlay-opacity', args: [0.5] },
+  ]);
+
+  restore();
+});
+
+test('preload exposes fast response config helpers and Cerebras key setter', async () => {
+  const calls: Array<{ channel: string; args: unknown[] }> = [];
+  const { exposedApi, restore } = await loadPreloadModule(async (channel: string, ...args: unknown[]) => {
+    calls.push({ channel, args });
+
+    if (channel === 'get-fast-response-config') {
+      return { success: true, data: { enabled: true, provider: 'cerebras', model: 'gpt-oss-120b' } };
+    }
+
+    if (channel === 'set-fast-response-config' || channel === 'set-cerebras-api-key') {
+      return { success: true };
+    }
+
+    throw new Error(`Unexpected channel: ${channel}`);
+  });
+
+  assert.deepEqual(await exposedApi.getFastResponseConfig(), { enabled: true, provider: 'cerebras', model: 'gpt-oss-120b' });
+  assert.deepEqual(await exposedApi.setFastResponseConfig({ enabled: false, provider: 'groq', model: 'llama-3.3-70b-versatile' }), { success: true });
+  assert.deepEqual(await exposedApi.setCerebrasApiKey('csk_test'), { success: true });
+
+  assert.deepEqual(calls, [
+    { channel: 'get-fast-response-config', args: [] },
+    { channel: 'set-fast-response-config', args: [{ enabled: false, provider: 'groq', model: 'llama-3.3-70b-versatile' }] },
+    { channel: 'set-cerebras-api-key', args: ['csk_test'] },
   ]);
 
   restore();
@@ -671,7 +665,7 @@ test('rag handlers validate inputs and preload unwraps normalized rag and profil
     { channel: 'get-undetectable', args: [] },
     { channel: 'profile:get-status', args: [] },
     { channel: 'profile:upload-resume', args: ['/tmp/resume.pdf'] },
-    { channel: 'rag:query-live', args: [{ query: 'hello', requestId: undefined }] },
+    { channel: 'rag:query-live', args: [{ query: 'hello' }] },
   ]);
 
   restore();

@@ -1,18 +1,9 @@
 export type ConsciousModeResponseMode = 'reasoning_first' | 'invalid';
-export type ConsciousModeQuestionType = 'concept' | 'approach' | 'code' | 'opinion' | 'clarification' | 'unknown';
-
-interface ConsciousModeCodeBlock {
-  language: string;
-  code: string;
-}
 
 export interface ConsciousModeStructuredResponse {
   mode: ConsciousModeResponseMode;
-  questionType?: ConsciousModeQuestionType;
   openingReasoning: string;
-  spokenResponse?: string;
   implementationPlan: string[];
-  codeBlock?: ConsciousModeCodeBlock;
   tradeoffs: string[];
   edgeCases: string[];
   scaleConsiderations: string[];
@@ -39,15 +30,6 @@ export interface ConsciousModeQuestionRoute {
 export interface TranscriptSuggestionDecision {
   shouldTrigger: boolean;
   lastQuestion: string;
-  triggerType: TranscriptSuggestionTriggerType | null;
-  suppressedTriggerTypes: TranscriptSuggestionTriggerType[];
-}
-
-export type TranscriptSuggestionTriggerType = 'interviewer_question' | 'conversation_state';
-
-interface TranscriptSuggestionCandidate {
-  type: TranscriptSuggestionTriggerType;
-  priority: number;
 }
 
 export interface TranscriptSuggestionIntelligenceManager {
@@ -66,7 +48,6 @@ export interface TranscriptSuggestionInput {
   final: boolean;
   confidence?: number;
   consciousModeEnabled: boolean;
-  enableConversationStateTrigger?: boolean;
   intelligenceManager: TranscriptSuggestionIntelligenceManager;
 }
 
@@ -83,57 +64,11 @@ function normalizeList(value: unknown): string[] {
   return text ? [text] : [];
 }
 
-function normalizeRecordValues(value: unknown): string[] {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    return [];
-  }
-
-  return Array.from(
-    new Set(
-      Object.values(value as Record<string, unknown>)
-        .map(normalizeText)
-        .filter(Boolean),
-    ),
-  );
-}
-
-function normalizeQuestionType(value: unknown): ConsciousModeQuestionType {
-  const normalized = normalizeText(value);
-
-  switch (normalized) {
-    case 'concept':
-    case 'approach':
-    case 'code':
-    case 'opinion':
-    case 'clarification':
-      return normalized;
-    default:
-      return 'unknown';
-  }
-}
-
-function normalizeCodeBlock(value: unknown): ConsciousModeCodeBlock | undefined {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    return undefined;
-  }
-
-  const language = normalizeText((value as { language?: unknown }).language) || 'text';
-  const code = normalizeText((value as { code?: unknown }).code);
-  if (!code) {
-    return undefined;
-  }
-
-  return { language, code };
-}
-
 export function createEmptyConsciousModeResponse(mode: ConsciousModeResponseMode = 'reasoning_first'): ConsciousModeStructuredResponse {
   return {
     mode,
-    questionType: 'unknown',
     openingReasoning: '',
-    spokenResponse: '',
     implementationPlan: [],
-    codeBlock: undefined,
     tradeoffs: [],
     edgeCases: [],
     scaleConsiderations: [],
@@ -147,18 +82,12 @@ export function normalizeConsciousModeResponse(value: Partial<ConsciousModeStruc
   const mode = value?.mode === 'reasoning_first' ? 'reasoning_first' : 'invalid';
   return {
     mode,
-    questionType: normalizeQuestionType(value?.questionType),
     openingReasoning: normalizeText(value?.openingReasoning),
-    spokenResponse: normalizeText(value?.spokenResponse),
     implementationPlan: normalizeList(value?.implementationPlan),
-    codeBlock: normalizeCodeBlock(value?.codeBlock),
     tradeoffs: normalizeList(value?.tradeoffs),
     edgeCases: normalizeList(value?.edgeCases),
     scaleConsiderations: normalizeList(value?.scaleConsiderations),
-    pushbackResponses: [
-      ...normalizeList(value?.pushbackResponses),
-      ...normalizeRecordValues(value?.pushbackResponses),
-    ].filter((item, index, array) => array.indexOf(item) === index),
+    pushbackResponses: normalizeList(value?.pushbackResponses),
     likelyFollowUps: normalizeList(value?.likelyFollowUps),
     codeTransition: normalizeText(value?.codeTransition),
   };
@@ -170,9 +99,7 @@ export function isValidConsciousModeResponse(response: ConsciousModeStructuredRe
   }
 
   return Boolean(
-    response.spokenResponse ||
     response.openingReasoning ||
-    response.codeBlock?.code ||
     response.implementationPlan.length ||
     response.tradeoffs.length ||
     response.edgeCases.length ||
@@ -215,11 +142,8 @@ export function mergeConsciousModeResponses(
 ): ConsciousModeStructuredResponse {
   return {
     mode: 'reasoning_first',
-    questionType: incoming.questionType !== 'unknown' ? incoming.questionType : base.questionType,
     openingReasoning: incoming.openingReasoning || base.openingReasoning,
-    spokenResponse: incoming.spokenResponse || base.spokenResponse,
     implementationPlan: mergeList(base.implementationPlan, incoming.implementationPlan),
-    codeBlock: incoming.codeBlock?.code ? incoming.codeBlock : base.codeBlock,
     tradeoffs: mergeList(base.tradeoffs, incoming.tradeoffs),
     edgeCases: mergeList(base.edgeCases, incoming.edgeCases),
     scaleConsiderations: mergeList(base.scaleConsiderations, incoming.scaleConsiderations),
@@ -238,22 +162,6 @@ function formatSection(label: string, values: string[]): string[] {
 }
 
 export function formatConsciousModeResponse(response: ConsciousModeStructuredResponse): string {
-  const conciseParts: string[] = [];
-  if (response.spokenResponse) {
-    conciseParts.push(response.spokenResponse);
-  } else if (response.codeBlock?.code && response.openingReasoning) {
-    conciseParts.push(response.openingReasoning);
-  }
-
-  if (response.codeBlock?.code) {
-    conciseParts.push(`\`\`\`${response.codeBlock.language}\n${response.codeBlock.code}\n\`\`\``);
-  }
-
-  if (conciseParts.length > 0) {
-    const parts = conciseParts;
-    return parts.join('\n\n').trim();
-  }
-
   const lines: string[] = [];
 
   if (response.openingReasoning) {
@@ -364,68 +272,15 @@ export function shouldAutoTriggerSuggestionFromTranscript(
   return trimmed.endsWith('?') || wordCount >= 5;
 }
 
-function shouldTriggerConversationStateFromTranscript(
-  speaker: string,
-  text: string,
-  consciousModeEnabled: boolean,
-  enableConversationStateTrigger: boolean,
-): boolean {
-  if (!enableConversationStateTrigger || !consciousModeEnabled) {
-    return false;
-  }
-
-  if (speaker !== 'interviewer' && speaker !== 'user') {
-    return false;
-  }
-
-  const trimmed = normalizeText(text);
-  if (!trimmed) {
-    return false;
-  }
-
-  const lower = trimmed.toLowerCase();
-  return isSubstantialConversationTurn(lower) && !isAdministrativePrompt(lower);
-}
-
 export function getTranscriptSuggestionDecision(
   text: string,
   consciousModeEnabled: boolean,
   activeReasoningThread: ReasoningThread | null,
-  options: {
-    speaker?: string;
-    enableConversationStateTrigger?: boolean;
-  } = {},
 ): TranscriptSuggestionDecision {
   const lastQuestion = normalizeText(text);
-  const speaker = options.speaker ?? 'interviewer';
-  const candidates: TranscriptSuggestionCandidate[] = [];
-
-  if (speaker === 'interviewer' && shouldAutoTriggerSuggestionFromTranscript(lastQuestion, consciousModeEnabled, activeReasoningThread)) {
-    candidates.push({
-      type: 'interviewer_question',
-      priority: 100,
-    });
-  }
-
-  if (shouldTriggerConversationStateFromTranscript(
-    speaker,
-    lastQuestion,
-    consciousModeEnabled,
-    options.enableConversationStateTrigger ?? false,
-  )) {
-    candidates.push({
-      type: 'conversation_state',
-      priority: 50,
-    });
-  }
-
-  candidates.sort((left, right) => right.priority - left.priority);
-  const winningCandidate = candidates[0] ?? null;
   return {
-    shouldTrigger: winningCandidate != null,
+    shouldTrigger: shouldAutoTriggerSuggestionFromTranscript(lastQuestion, consciousModeEnabled, activeReasoningThread),
     lastQuestion,
-    triggerType: winningCandidate?.type ?? null,
-    suppressedTriggerTypes: candidates.slice(1).map(candidate => candidate.type),
   };
 }
 
@@ -438,11 +293,15 @@ export async function maybeHandleSuggestionTriggerFromTranscript(
     textLength: input.text.length,
     textPreview: input.text.substring(0, 50) + (input.text.length > 50 ? '...' : ''),
     consciousMode: input.consciousModeEnabled,
-    conversationStateTrigger: input.enableConversationStateTrigger ?? false,
     confidence: input.confidence,
     hasIntelligenceManager: !!input.intelligenceManager
   });
-
+  
+  if (input.speaker !== 'interviewer') {
+    console.log(`[AUTO-TRIGGER] ❌ Rejected: speaker is "${input.speaker}", need "interviewer"`);
+    return false;
+  }
+  
   if (!input.final) {
     console.log('[AUTO-TRIGGER] ❌ Rejected: transcript not final (interim transcript)');
     return false;
@@ -455,16 +314,10 @@ export async function maybeHandleSuggestionTriggerFromTranscript(
     input.text,
     input.consciousModeEnabled,
     activeThread,
-    {
-      speaker: input.speaker,
-      enableConversationStateTrigger: input.enableConversationStateTrigger,
-    },
   );
 
   console.log('[AUTO-TRIGGER] 📊 Decision analysis:', {
     shouldTrigger: decision.shouldTrigger,
-    triggerType: decision.triggerType,
-    suppressedTriggerTypes: decision.suppressedTriggerTypes,
     lastQuestion: decision.lastQuestion.substring(0, 50) + (decision.lastQuestion.length > 50 ? '...' : ''),
     questionLength: decision.lastQuestion.length,
     hasActiveThread: !!activeThread,

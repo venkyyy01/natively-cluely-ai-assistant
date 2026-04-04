@@ -10,10 +10,6 @@ const MAX_ASSISTANT_HISTORY = 100;
 
 /** Maximum context history entries (beyond time-based eviction) */
 const MAX_CONTEXT_HISTORY = 200;
-const TURN_MERGE_GAP_MS = 1_200;
-const TURN_OVERLAP_WINDOW_MS = 750;
-const TIMING_REPORT_SAMPLE_INTERVAL = 25;
-const PROVIDER_TIMESTAMP_ESCALATION_P95_MS = 500;
 
 /** Ring buffer for fixed-capacity context items */
 class RingBuffer<T> {
@@ -60,17 +56,16 @@ class RingBuffer<T> {
 }
 
 import { RecapLLM } from './llm';
+import { Result, LLMError } from './types/Result';
 import {
   ConsciousModeStructuredResponse,
   ReasoningThread,
-  getTranscriptSuggestionDecision,
   mergeConsciousModeResponses,
 } from './ConsciousMode';
 import { ThreadManager, InterviewPhaseDetector, TokenBudgetManager, InterviewPhase } from './conscious';
 import { RESUME_THRESHOLD } from './conscious/types';
 import { AdaptiveContextWindow, ContextEntry, ContextSelectionConfig } from './conscious/AdaptiveContextWindow';
 import { isOptimizationActive } from './config/optimizations';
-import type { ConversationTurn, ConversationTurnSource, TimingVarianceStats } from './types/transcript';
 
 export interface TranscriptSegment {
     marker?: string;
@@ -92,20 +87,12 @@ export interface ContextItem {
     role: 'interviewer' | 'user' | 'assistant';
     text: string;
     timestamp: number;
-    segmentReference?: string;
-    overlapGroupId?: string;
 }
 
 export interface AssistantResponse {
     text: string;
     timestamp: number;
     questionContext: string;
-}
-
-export interface TimingValidationResult {
-    stats: TimingVarianceStats;
-    thresholdMs: number;
-    shouldEscalateProviderTimestamps: boolean;
 }
 
 export interface MeetingMetadataSnapshot {
@@ -190,8 +177,6 @@ export class SessionTracker {
   private sessionId: string = `session_${SessionTracker.nextSessionId++}`;
   private transcriptRevision: number = 0;
   private compactSnapshotCache = new Map<string, { revision: number; value: string }>();
-  private turnCache: ConversationTurn[] | null = null;
-  private timingGapSamplesMs: number[] = [];
 
     // ============================================
     // Configuration
@@ -227,9 +212,6 @@ export class SessionTracker {
 
         const role = this.mapSpeakerToRole(segment.speaker);
         const text = segment.text.trim();
-        const segmentReference = segment.marker && segment.marker.trim().length > 0
-            ? segment.marker
-            : `segment:${this.sessionId}:${segment.speaker}:${segment.timestamp}:${this.transcriptRevision}`;
 
         if (!text) return null;
 
@@ -246,12 +228,10 @@ export class SessionTracker {
     this.contextItemsBuffer.push({
       role,
       text,
-      timestamp: segment.timestamp,
-      segmentReference,
+      timestamp: segment.timestamp
     });
         this.transcriptRevision++;
         this.compactSnapshotCache.clear();
-        this.turnCache = null;
 
         this.evictOldEntries();
 
@@ -261,13 +241,8 @@ export class SessionTracker {
       text.startsWith("CONTEXT:");
 
     if (!isInternalPrompt) {
-      this.logTimingVariance(segment);
-
       // Add to session transcript
-      this.fullTranscript.push({
-        ...segment,
-        marker: segmentReference,
-      });
+      this.fullTranscript.push(segment);
 
       // Hard cap to prevent memory exhaustion in very long meetings
       while (this.fullTranscript.length > MAX_TRANSCRIPT_ENTRIES) {
@@ -308,7 +283,6 @@ export class SessionTracker {
     });
         this.transcriptRevision++;
         this.compactSnapshotCache.clear();
-        this.turnCache = null;
 
         // Also add to fullTranscript so it persists in the session history (and summaries)
         this.fullTranscript.push({
@@ -363,15 +337,14 @@ export class SessionTracker {
 
         const result = this.addTranscript(segment);
 
-        const role = this.mapSpeakerToRole(segment.speaker);
-        if (segment.final && role !== 'assistant' && this.consciousModeEnabled) {
-            this.updateConsciousConversationState(segment.text, role);
+        if (segment.final && segment.speaker === 'interviewer' && this.consciousModeEnabled) {
+            this.updateConsciousConversationState(segment.text);
         }
 
         return result;
     }
 
-    private updateConsciousConversationState(transcript: string, role: ContextItem['role']): void {
+    private updateConsciousConversationState(transcript: string): void {
         const normalized = transcript.trim();
         if (!normalized) {
             return;
@@ -398,15 +371,6 @@ export class SessionTracker {
         ));
 
         if (!currentThread) {
-            const userCanOpenThread = role !== 'user' || getTranscriptSuggestionDecision(normalized, true, null, {
-                speaker: 'user',
-                enableConversationStateTrigger: true,
-            }).triggerType === 'conversation_state';
-
-            if (!userCanOpenThread) {
-                return;
-            }
-
             if (resumeKeywords.length > 0 || normalized.split(/\s+/).length >= 4) {
                 this.threadManager.createThread(normalized, phase);
                 this.threadManager.addKeywordsToActive(resumeKeywords);
@@ -461,12 +425,8 @@ export class SessionTracker {
     setConsciousModeEnabled(enabled: boolean): void {
         this.consciousModeEnabled = enabled;
         if (!enabled) {
-            // Treat mode-off as a hard boundary for derived reasoning state so
-            // an OFF -> ON toggle cannot inherit stale Conscious threads/phases.
             this.latestConsciousResponse = null;
             this.activeReasoningThread = null;
-            this.threadManager.reset();
-            this.phaseDetector.reset();
         }
     }
 
@@ -553,91 +513,14 @@ isConsciousModeEnabled(): boolean {
     /**
      * Get formatted context string for LLM prompts
      */
-    getPromptContextItems(lastSeconds: number = 120): ContextItem[] {
-        const cutoff = Date.now() - (lastSeconds * 1000);
-        const overlapGroups = this.getOverlapContextGroups(cutoff);
-        const emittedOverlapGroups = new Set<string>();
-        const promptItems: ContextItem[] = [];
-
-        for (const item of this.getContext(lastSeconds)) {
-            const overlapGroup = item.segmentReference
-                ? overlapGroups.find(({ turns }) => (
-                    turns.some((turn) => turn.mergedSegmentIds.includes(item.segmentReference!))
-                ))
-                : undefined;
-
-            if (!overlapGroup) {
-                promptItems.push(item);
-                continue;
-            }
-
-            if (emittedOverlapGroups.has(overlapGroup.id)) {
-                continue;
-            }
-
-            emittedOverlapGroups.add(overlapGroup.id);
-            promptItems.push(...overlapGroup.turns.map((turn) => ({
-                role: turn.speaker,
-                text: turn.text,
-                timestamp: turn.endedAt,
-                overlapGroupId: turn.overlapGroupId,
-            })));
-        }
-
-        return promptItems
-            .reduce<ContextItem[]>((accumulator, item) => {
-                const previousTurn = accumulator[accumulator.length - 1];
-                const canMergeWithPrevious = previousTurn
-                    && previousTurn.role === item.role
-                    && item.role !== 'assistant'
-                    && !previousTurn.overlapGroupId
-                    && !item.overlapGroupId
-                    && item.timestamp >= previousTurn.timestamp
-                    && item.timestamp - previousTurn.timestamp <= TURN_MERGE_GAP_MS;
-
-                if (canMergeWithPrevious) {
-                    previousTurn.text = `${previousTurn.text} ${item.text}`.trim();
-                    previousTurn.timestamp = item.timestamp;
-                    return accumulator;
-                }
-
-                accumulator.push({
-                    role: item.role,
-                    text: item.text,
-                    timestamp: item.timestamp,
-                    overlapGroupId: item.overlapGroupId,
-                });
-                return accumulator;
-            }, []);
-    }
-
     getFormattedContext(lastSeconds: number = 120): string {
-        return this.getPromptContextItems(lastSeconds).map(item => {
+        const items = this.getContext(lastSeconds);
+        return items.map(item => {
             const label = item.role === 'interviewer' ? 'INTERVIEWER' :
                 item.role === 'user' ? 'ME' :
                     'ASSISTANT (PREVIOUS SUGGESTION)';
             return `[${label}]: ${item.text}`;
         }).join('\n');
-    }
-
-    getReasoningPromptContext(lastSeconds: number = 180): string {
-        const recentTurns = this.getFormattedContext(lastSeconds);
-        const epochSummaries = this.getTranscriptEpochSummaries();
-
-        if (!epochSummaries.length) {
-            return recentTurns;
-        }
-
-        const sections = [`[SESSION HISTORY - EARLIER DISCUSSION]\n${epochSummaries.join('\n---\n')}`];
-        if (recentTurns) {
-            sections.push(`[RECENT TURNS]\n${recentTurns}`);
-        }
-
-        return sections.join('\n\n');
-    }
-
-    getTranscriptEpochSummaries(): string[] {
-        return [...this.transcriptEpochSummaries];
     }
 
     getSessionId(): string {
@@ -646,89 +529,6 @@ isConsciousModeEnabled(): boolean {
 
     getTranscriptRevision(): number {
         return this.transcriptRevision;
-    }
-
-    getConversationTurns(): ConversationTurn[] {
-        if (this.turnCache) {
-            return this.turnCache.map((turn) => ({
-                ...turn,
-                mergedSegmentIds: [...turn.mergedSegmentIds],
-            }));
-        }
-
-        let overlapGroupCounter = 0;
-        const turns: ConversationTurn[] = [];
-
-        this.fullTranscript.forEach((segment, index) => {
-            if (!segment.final) {
-                return;
-            }
-
-            const text = segment.text.trim();
-            if (!text) {
-                return;
-            }
-
-            const speaker = this.mapSpeakerToRole(segment.speaker);
-            const source = this.mapSpeakerToSource(segment.speaker);
-            const segmentReference = this.createSegmentReference(segment, index);
-            const previousTurn = turns[turns.length - 1];
-
-            if (previousTurn && this.shouldMergeTurnWithSegment(previousTurn, speaker, source, segment.timestamp)) {
-                previousTurn.text = `${previousTurn.text} ${text}`.trim();
-                previousTurn.endedAt = segment.timestamp;
-                previousTurn.final = previousTurn.final && segment.final;
-                previousTurn.mergedSegmentIds.push(segmentReference);
-
-                const nextConfidence = this.mergeTurnConfidence(previousTurn.confidence, segment.confidence, previousTurn.mergedSegmentIds.length);
-                if (nextConfidence != null) {
-                    previousTurn.confidence = nextConfidence;
-                }
-                return;
-            }
-
-            const nextTurn: ConversationTurn = {
-                id: `turn:${speaker}:${segment.timestamp}:${index}`,
-                speaker,
-                source,
-                text,
-                startedAt: segment.timestamp,
-                endedAt: segment.timestamp,
-                final: segment.final,
-                confidence: segment.confidence,
-                mergedSegmentIds: [segmentReference],
-            };
-
-            if (previousTurn && previousTurn.speaker !== nextTurn.speaker) {
-                const gapMs = Math.abs(nextTurn.startedAt - previousTurn.endedAt);
-                if (gapMs <= TURN_OVERLAP_WINDOW_MS) {
-                    const overlapGroupId = previousTurn.overlapGroupId ?? `overlap:${++overlapGroupCounter}`;
-                    previousTurn.overlapGroupId = overlapGroupId;
-                    nextTurn.overlapGroupId = overlapGroupId;
-                }
-            }
-
-            turns.push(nextTurn);
-        });
-
-        this.turnCache = turns;
-        return turns.map((turn) => ({
-            ...turn,
-            mergedSegmentIds: [...turn.mergedSegmentIds],
-        }));
-    }
-
-    getTimingVarianceStats(): TimingVarianceStats {
-        return this.buildTimingVarianceStats(this.timingGapSamplesMs);
-    }
-
-    getTimingValidation(): TimingValidationResult {
-        const stats = this.getTimingVarianceStats();
-        return {
-            stats,
-            thresholdMs: PROVIDER_TIMESTAMP_ESCALATION_P95_MS,
-            shouldEscalateProviderTimestamps: (stats.p95 ?? 0) > PROVIDER_TIMESTAMP_ESCALATION_P95_MS,
-        };
     }
 
     getCompactTranscriptSnapshot(maxTurns: number = 12, snapshotType: 'standard' | 'fast' = 'standard'): string {
@@ -759,13 +559,13 @@ isConsciousModeEnabled(): boolean {
      * Get the last interviewer turn
      */
     getLastInterviewerTurn(): string | null {
-    const turns = this.getConversationTurns();
-    for (let i = turns.length - 1; i >= 0; i--) {
-      if (turns[i].speaker === 'interviewer') {
-        return turns[i].text;
-             }
-         }
-         return null;
+    const contextItems = this.getContextItems();
+    for (let i = contextItems.length - 1; i >= 0; i--) {
+      if (contextItems[i].role === 'interviewer') {
+        return contextItems[i].text;
+            }
+        }
+        return null;
     }
 
     /**
@@ -797,7 +597,7 @@ isConsciousModeEnabled(): boolean {
     // ============================================
 
     getFullTranscript(): TranscriptSegment[] {
-        return this.fullTranscript.map(segment => ({ ...segment }));
+        return this.fullTranscript;
     }
 
     getFullUsage(): UsageInteraction[] {
@@ -945,8 +745,6 @@ isConsciousModeEnabled(): boolean {
     this.adaptiveContextWindow = null;
     this.transcriptRevision = 0;
     this.compactSnapshotCache.clear();
-    this.turnCache = null;
-    this.timingGapSamplesMs = [];
     this.sessionId = freshSessionId;
     
     this.pendingCompactionPromise = null;
@@ -962,115 +760,6 @@ isConsciousModeEnabled(): boolean {
         if (speaker === 'assistant') return 'assistant';
         return 'interviewer'; // system audio = interviewer
     }
-
-  private mapSpeakerToSource(speaker: string): ConversationTurnSource {
-    if (speaker === 'user') return 'microphone';
-    if (speaker === 'assistant') return 'assistant';
-    return 'system';
-  }
-
-  private createSegmentReference(segment: TranscriptSegment, index: number): string {
-    if (segment.marker && segment.marker.trim().length > 0) {
-      return segment.marker;
-    }
-
-    return `segment:${index}:${segment.speaker}:${segment.timestamp}`;
-  }
-
-  private getOverlapContextGroups(cutoff: number): Array<{ id: string; turns: ConversationTurn[] }> {
-    const turns = this.getConversationTurns();
-    const overlapGroups = new Map<string, ConversationTurn[]>();
-
-    for (const turn of turns) {
-      if (!turn.overlapGroupId) {
-        continue;
-      }
-
-      const groupTurns = overlapGroups.get(turn.overlapGroupId) ?? [];
-      groupTurns.push(turn);
-      overlapGroups.set(turn.overlapGroupId, groupTurns);
-    }
-
-    return [...overlapGroups.entries()]
-      .filter(([, groupTurns]) => (
-        groupTurns.some((turn) => turn.startedAt < cutoff || turn.endedAt < cutoff)
-        && groupTurns.some((turn) => turn.endedAt >= cutoff)
-      ))
-      .map(([id, groupTurns]) => ({ id, turns: groupTurns }));
-  }
-
-  private shouldMergeTurnWithSegment(
-    turn: ConversationTurn,
-    speaker: ConversationTurn['speaker'],
-    source: ConversationTurnSource,
-    timestamp: number,
-  ): boolean {
-    return (
-      turn.speaker === speaker &&
-      turn.source === source &&
-      timestamp >= turn.endedAt &&
-      (timestamp - turn.endedAt) <= TURN_MERGE_GAP_MS
-    );
-  }
-
-  private mergeTurnConfidence(
-    currentConfidence: number | undefined,
-    nextConfidence: number | undefined,
-    segmentCount: number,
-  ): number | undefined {
-    if (currentConfidence == null) {
-      return nextConfidence;
-    }
-
-    if (nextConfidence == null) {
-      return currentConfidence;
-    }
-
-    return ((currentConfidence * (segmentCount - 1)) + nextConfidence) / segmentCount;
-  }
-
-  private logTimingVariance(segment: TranscriptSegment): void {
-    const role = this.mapSpeakerToRole(segment.speaker);
-    if (role === 'assistant') {
-      return;
-    }
-
-    const ingestionLatencyMs = Math.max(0, Date.now() - segment.timestamp);
-    this.timingGapSamplesMs.push(ingestionLatencyMs);
-    if (this.timingGapSamplesMs.length % TIMING_REPORT_SAMPLE_INTERVAL === 0) {
-      console.log('[Timing] Transcript ingestion latency stats:', this.getTimingVarianceStats());
-    }
-  }
-
-  private buildTimingVarianceStats(samples: number[]): TimingVarianceStats {
-    if (samples.length === 0) {
-      return {
-        sampleCount: 0,
-        p50: null,
-        p95: null,
-        p99: null,
-        max: null,
-      };
-    }
-
-    const sorted = [...samples].sort((left, right) => left - right);
-    return {
-      sampleCount: sorted.length,
-      p50: this.percentile(sorted, 50),
-      p95: this.percentile(sorted, 95),
-      p99: this.percentile(sorted, 99),
-      max: sorted[sorted.length - 1] ?? null,
-    };
-  }
-
-  private percentile(sortedSamples: number[], percentile: number): number | null {
-    if (sortedSamples.length === 0) {
-      return null;
-    }
-
-    const rank = Math.max(0, Math.ceil((percentile / 100) * sortedSamples.length) - 1);
-    return sortedSamples[Math.min(rank, sortedSamples.length - 1)] ?? null;
-  }
 
   private evictOldEntries(): void {
     // Ring buffer automatically handles capacity
@@ -1132,18 +821,23 @@ isConsciousModeEnabled(): boolean {
             // Fire-and-forget LLM summarization (non-blocking)
             if (this.recapLLM) {
                 try {
-                    const epochSummary = await this.recapLLM.generate(
+                    const epochSummaryResult = await this.recapLLM.generate(
                         `Summarize this conversation segment into 3-5 concise bullet points preserving key topics, decisions, and questions:\n\n${summaryInput}`
                     );
-                    if (epochSummary && epochSummary.trim().length > 0) {
-                        this.transcriptEpochSummaries.push(epochSummary.trim());
+                    if (epochSummaryResult.success && epochSummaryResult.data && epochSummaryResult.data.trim().length > 0) {
+                        this.transcriptEpochSummaries.push(epochSummaryResult.data.trim());
                         console.log(`[SessionTracker] Epoch summary created (${this.transcriptEpochSummaries.length} total)`);
+                    } else {
+                        // If LLM failed or returned empty result, use fallback
+                        const fallback = `[Earlier discussion: ${oldEntries.length} segments, topics: ${oldEntries.slice(0, 3).map(s => s.text.substring(0, 40)).join('; ')}...]`;
+                        this.transcriptEpochSummaries.push(fallback);
+                        console.warn('[SessionTracker] Epoch summarization failed or empty, using fallback marker:', epochSummaryResult.success ? 'empty result' : epochSummaryResult.error.message);
                     }
                 } catch (e) {
                     // If summarization fails, store a simple marker
                     const fallback = `[Earlier discussion: ${oldEntries.length} segments, topics: ${oldEntries.slice(0, 3).map(s => s.text.substring(0, 40)).join('; ')}...]`;
                     this.transcriptEpochSummaries.push(fallback);
-                    console.warn('[SessionTracker] Epoch summarization failed, using fallback marker');
+                    console.warn('[SessionTracker] Epoch summarization threw exception, using fallback marker');
                 }
             }
 
@@ -1154,7 +848,6 @@ isConsciousModeEnabled(): boolean {
 
             // Evict ONLY the exact 500 oldest entries that we just summarized
             this.fullTranscript = this.fullTranscript.slice(summarizeCount);
-            this.turnCache = null;
         } catch (error) {
             console.error('[SessionTracker] Error during transcript compaction:', error);
             // Continue with compaction even if summarization fails
@@ -1165,7 +858,6 @@ isConsciousModeEnabled(): boolean {
                 this.transcriptEpochSummaries.push(fallback);
                 this.transcriptEpochSummaries = this.transcriptEpochSummaries.slice(-SessionTracker.MAX_EPOCH_SUMMARIES);
                 this.fullTranscript = this.fullTranscript.slice(500);
-                this.turnCache = null;
                 console.warn('[SessionTracker] Using fallback compaction due to error');
             } catch (fallbackError) {
                 console.error('[SessionTracker] Fallback compaction also failed:', fallbackError);

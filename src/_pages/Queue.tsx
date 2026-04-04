@@ -39,7 +39,6 @@ const Queue: React.FC<QueueProps> = ({ setView }) => {
   const [chatLoading, setChatLoading] = useState(false)
   const [isChatOpen, setIsChatOpen] = useState(false)
   const chatInputRef = useRef<HTMLInputElement>(null)
-  const activeRequestIdRef = useRef<string | null>(null)
 
   const [isSettingsOpen, setIsSettingsOpen] = useState(false)
   const [currentModel, setCurrentModel] = useState<string>('gemini-3.1-flash-lite-preview')
@@ -99,10 +98,7 @@ const Queue: React.FC<QueueProps> = ({ setView }) => {
     const cleanups: (() => void)[] = [];
 
     // Stream Token
-    cleanups.push(window.electronAPI.onGeminiStreamToken(({ requestId, token }) => {
-      if (requestId && requestId !== activeRequestIdRef.current) {
-        return;
-      }
+    cleanups.push(window.electronAPI.onGeminiStreamToken((token) => {
       setChatMessages(prev => {
         const lastMsg = prev[prev.length - 1];
         if (lastMsg && lastMsg.role === 'gemini' && lastMsg.text.endsWith("...")) {
@@ -130,20 +126,12 @@ const Queue: React.FC<QueueProps> = ({ setView }) => {
     }));
 
     // Stream Done
-    cleanups.push(window.electronAPI.onGeminiStreamDone(({ requestId }) => {
-      if (requestId && requestId !== activeRequestIdRef.current) {
-        return;
-      }
-      activeRequestIdRef.current = null;
+    cleanups.push(window.electronAPI.onGeminiStreamDone(() => {
       setChatLoading(false);
     }));
 
     // Stream Error
-    cleanups.push(window.electronAPI.onGeminiStreamError(({ requestId, error }) => {
-      if (requestId && requestId !== activeRequestIdRef.current) {
-        return;
-      }
-      activeRequestIdRef.current = null;
+    cleanups.push(window.electronAPI.onGeminiStreamError((error) => {
       setChatLoading(false);
       setChatMessages((msgs) => [...msgs, { role: "gemini", text: "Error: " + String(error) }]);
     }));
@@ -161,13 +149,10 @@ const Queue: React.FC<QueueProps> = ({ setView }) => {
     setChatLoading(true)
     const message = chatInput; // Capture value
     setChatInput("")
-    const requestId = `queue-chat-${Date.now()}-${Math.random().toString(36).slice(2)}`
-    activeRequestIdRef.current = requestId
 
     try {
-      await window.electronAPI.streamGeminiChat(message, undefined, undefined, { requestId })
+      await window.electronAPI.streamGeminiChat(message)
     } catch (err) {
-      activeRequestIdRef.current = null
       setChatLoading(false)
       setChatMessages((msgs) => [...msgs, { role: "gemini", text: "Error: " + String(err) }])
     } finally {
@@ -269,18 +254,13 @@ const Queue: React.FC<QueueProps> = ({ setView }) => {
           const count = allPaths.length;
           setChatMessages((msgs) => [...msgs, { role: "user", text: `📷 Analyzing ${count} screenshot${count > 1 ? 's' : ''}...` }]);
           setChatMessages((msgs) => [...msgs, { role: "gemini", text: "..." }]);
-          const requestId = `queue-screenshot-${Date.now()}-${Math.random().toString(36).slice(2)}`
-          activeRequestIdRef.current = requestId
 
           await window.electronAPI.streamGeminiChat(
             `Describe ${count > 1 ? 'these images' : 'this image'} and solve any problem in ${count > 1 ? 'them' : 'it'}.`,
-            allPaths,
-            undefined,
-            { requestId }
+            allPaths
           );
         }
       } catch (err) {
-        activeRequestIdRef.current = null
         setChatMessages((msgs) => [...msgs, { role: "gemini", text: "Error: " + String(err) }]);
         setChatLoading(false);
       }

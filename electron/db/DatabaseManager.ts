@@ -474,21 +474,13 @@ export class DatabaseManager {
     }
 
     private createMigrationBackup(): void {
-        if (!this.db || !fs.existsSync(this.dbPath)) {
-            return;
+        if (fs.existsSync(this.dbPath)) {
+            fs.copyFileSync(this.dbPath, this.migrationBackupPath);
         }
-
-        this.removeMigrationBackup();
-        this.checkpointWal('TRUNCATE');
-
-        const backupPath = DatabaseManager.toSqliteStringLiteral(this.migrationBackupPath);
-        this.db.exec(`VACUUM INTO ${backupPath}`);
     }
 
     private restoreMigrationBackup(): void {
         if (fs.existsSync(this.migrationBackupPath)) {
-            this.closeDatabaseConnection();
-            this.removeSidecarFiles(this.dbPath);
             fs.copyFileSync(this.migrationBackupPath, this.dbPath);
             this.removeMigrationBackup();
         }
@@ -498,53 +490,6 @@ export class DatabaseManager {
         if (fs.existsSync(this.migrationBackupPath)) {
             fs.unlinkSync(this.migrationBackupPath);
         }
-    }
-
-    private checkpointWal(mode: 'PASSIVE' | 'FULL' | 'RESTART' | 'TRUNCATE' = 'FULL'): void {
-        if (!this.db) {
-            return;
-        }
-
-        try {
-            this.db.pragma(`wal_checkpoint(${mode})`);
-        } catch (error) {
-            console.warn(`[DatabaseManager] Failed to checkpoint WAL (${mode}):`, error);
-        }
-    }
-
-    private closeDatabaseConnection(): void {
-        if (!this.db) {
-            return;
-        }
-
-        this.checkpointWal('TRUNCATE');
-
-        try {
-            this.db.close();
-        } catch (error) {
-            console.warn('[DatabaseManager] Failed to close database connection cleanly:', error);
-        } finally {
-            this.db = null;
-        }
-    }
-
-    private removeSidecarFiles(basePath: string): void {
-        for (const suffix of ['-wal', '-shm']) {
-            const sidecarPath = `${basePath}${suffix}`;
-            if (!fs.existsSync(sidecarPath)) {
-                continue;
-            }
-
-            try {
-                fs.unlinkSync(sidecarPath);
-            } catch (error) {
-                console.warn(`[DatabaseManager] Failed to remove sidecar ${sidecarPath}:`, error);
-            }
-        }
-    }
-
-    private static toSqliteStringLiteral(value: string): string {
-        return `'${value.replace(/'/g, "''")}'`;
     }
 
     private verifyEmbeddingQueueConsistency(): void {
@@ -590,9 +535,12 @@ export class DatabaseManager {
 
     /**
      * One-time migration: Copy existing BLOB embeddings into vec0 virtual tables.
+     * CRITICAL FIX: Added batching to prevent SQLite transaction limits for large datasets
      */
     private migrateExistingEmbeddings(): void {
         if (!this.db) return;
+
+        const MIGRATION_BATCH_SIZE = 500; // Smaller batch for migrations to be safe
 
         // Migrate chunk embeddings
         try {
@@ -601,21 +549,30 @@ export class DatabaseManager {
             ).all() as any[];
 
             if (chunkRows.length > 0) {
+                console.log(`[DatabaseManager] Migrating ${chunkRows.length} chunk embeddings in batches of ${MIGRATION_BATCH_SIZE}`);
                 const insert = this.db.prepare(
                     'INSERT OR IGNORE INTO vec_chunks(chunk_id, embedding) VALUES (?, ?)'
                 );
-                const migrateAll = this.db.transaction(() => {
-                    for (const row of chunkRows) {
-                        try {
-                            insert.run(row.id, row.embedding);
-                        } catch (err) {
-                            // On mismatch (e.g. mixed 768 and 3072 dims), nullify to re-embed later
-                            this.db.prepare('UPDATE chunks SET embedding = NULL WHERE id = ?').run(row.id);
+                
+                for (let i = 0; i < chunkRows.length; i += MIGRATION_BATCH_SIZE) {
+                    const batch = chunkRows.slice(i, i + MIGRATION_BATCH_SIZE);
+                    const migrateBatch = this.db.transaction(() => {
+                        for (const row of batch) {
+                            try {
+                                insert.run(row.id, row.embedding);
+                            } catch (err) {
+                                // On mismatch (e.g. mixed 768 and 3072 dims), nullify to re-embed later
+                                this.db.prepare('UPDATE chunks SET embedding = NULL WHERE id = ?').run(row.id);
+                            }
                         }
+                    });
+                    migrateBatch();
+                    
+                    if (chunkRows.length > MIGRATION_BATCH_SIZE) {
+                        console.log(`[DatabaseManager] Migrated chunk batch ${Math.floor(i / MIGRATION_BATCH_SIZE) + 1}/${Math.ceil(chunkRows.length / MIGRATION_BATCH_SIZE)}`);
                     }
-                });
-                migrateAll();
-                console.log(`[DatabaseManager] Migrated ${chunkRows.length} chunk embeddings to vec_chunks`);
+                }
+                console.log(`[DatabaseManager] Successfully migrated ${chunkRows.length} chunk embeddings to vec_chunks`);
             }
         } catch (e) {
             console.error('[DatabaseManager] Failed to migrate chunk embeddings:', e);
@@ -628,20 +585,29 @@ export class DatabaseManager {
             ).all() as any[];
 
             if (summaryRows.length > 0) {
+                console.log(`[DatabaseManager] Migrating ${summaryRows.length} summary embeddings in batches of ${MIGRATION_BATCH_SIZE}`);
                 const insert = this.db.prepare(
                     'INSERT OR IGNORE INTO vec_summaries(summary_id, embedding) VALUES (?, ?)'
                 );
-                const migrateAll = this.db.transaction(() => {
-                    for (const row of summaryRows) {
-                        try {
-                            insert.run(row.id, row.embedding);
-                        } catch (err) {
-                            this.db.prepare('UPDATE chunk_summaries SET embedding = NULL WHERE id = ?').run(row.id);
+                
+                for (let i = 0; i < summaryRows.length; i += MIGRATION_BATCH_SIZE) {
+                    const batch = summaryRows.slice(i, i + MIGRATION_BATCH_SIZE);
+                    const migrateBatch = this.db.transaction(() => {
+                        for (const row of batch) {
+                            try {
+                                insert.run(row.id, row.embedding);
+                            } catch (err) {
+                                this.db.prepare('UPDATE chunk_summaries SET embedding = NULL WHERE id = ?').run(row.id);
+                            }
                         }
+                    });
+                    migrateBatch();
+                    
+                    if (summaryRows.length > MIGRATION_BATCH_SIZE) {
+                        console.log(`[DatabaseManager] Migrated summary batch ${Math.floor(i / MIGRATION_BATCH_SIZE) + 1}/${Math.ceil(summaryRows.length / MIGRATION_BATCH_SIZE)}`);
                     }
-                });
-                migrateAll();
-                console.log(`[DatabaseManager] Migrated ${summaryRows.length} summary embeddings to vec_summaries`);
+                }
+                console.log(`[DatabaseManager] Successfully migrated ${summaryRows.length} summary embeddings to vec_summaries`);
             }
         } catch (e) {
             console.error('[DatabaseManager] Failed to migrate summary embeddings:', e);
@@ -757,71 +723,113 @@ export class DatabaseManager {
             detailedSummary: meeting.detailedSummary
         });
 
-        const runTransaction = this.db.transaction(() => {
-            // 1. Insert Meeting
-            insertMeeting.run(
-                meeting.id,
-                meeting.title,
-                startTimeMs,
-                durationMs,
-                summaryJson,
-                meeting.date, // Using the ISO string as created_at for sorting simply
-                meeting.calendarEventId || null,
-                meeting.source || 'manual',
-                meeting.isProcessed ? 1 : 0
-            );
-
-            deleteTranscripts.run(meeting.id);
-            deleteInteractions.run(meeting.id);
-
-            // 2. Insert Transcript
-            if (meeting.transcript) {
-                for (const segment of meeting.transcript) {
-                    insertTranscript.run(
-                        meeting.id,
-                        segment.speaker,
-                        segment.text,
-                        segment.timestamp
-                    );
-                }
-            }
-
-            // 3. Insert Interactions
-            if (meeting.usage) {
-                for (const usage of meeting.usage) {
-                    let metadata = null;
-                    if (usage.items) {
-                        metadata = JSON.stringify(usage.items);
-                    } else if (usage.type === 'followup_questions' && usage.answer) {
-                        // Sometimes answer is the array for questions, or we store it in metadata
-                        // In intelligence manager we pushed: { type: 'followup_questions', answer: fullQuestions }
-                        // Let's store that 'answer' (array) in metadata for this type
-                        if (Array.isArray(usage.answer)) {
-                            metadata = JSON.stringify(usage.answer);
-                        }
-                    }
-
-                    // Normalization
-                    const answerText = Array.isArray(usage.answer) ? null : usage.answer || null;
-                    const queryText = usage.question || null;
-
-                    insertInteraction.run(
-                        meeting.id,
-                        usage.type,
-                        usage.timestamp,
-                        queryText,
-                        answerText,
-                        metadata
-                    );
-                }
-            }
-        });
+        // CRITICAL FIX: Batch large transactions to prevent SQLite limits
+        const BATCH_SIZE = 1000; // Process in chunks of 1000 items
 
         try {
-            runTransaction();
-            console.log(`[DatabaseManager] Successfully saved meeting ${meeting.id}`);
+            // First transaction: Insert meeting record and clear old data
+            const setupTransaction = this.db.transaction(() => {
+                // 1. Insert Meeting
+                insertMeeting.run(
+                    meeting.id,
+                    meeting.title,
+                    startTimeMs,
+                    durationMs,
+                    summaryJson,
+                    meeting.date, // Using the ISO string as created_at for sorting simply
+                    meeting.calendarEventId || null,
+                    meeting.source || 'manual',
+                    meeting.isProcessed ? 1 : 0
+                );
+
+                // 2. Clear old transcript and interaction data
+                deleteTranscripts.run(meeting.id);
+                deleteInteractions.run(meeting.id);
+            });
+            
+            setupTransaction();
+            console.log(`[DatabaseManager] Setup completed for meeting ${meeting.id}`);
+
+            // Second phase: Insert transcript in batches
+            if (meeting.transcript && meeting.transcript.length > 0) {
+                console.log(`[DatabaseManager] Processing ${meeting.transcript.length} transcript segments in batches of ${BATCH_SIZE}`);
+                
+                for (let i = 0; i < meeting.transcript.length; i += BATCH_SIZE) {
+                    const batch = meeting.transcript.slice(i, i + BATCH_SIZE);
+                    const transcriptBatch = this.db.transaction(() => {
+                        for (const segment of batch) {
+                            insertTranscript.run(
+                                meeting.id,
+                                segment.speaker,
+                                segment.text,
+                                segment.timestamp
+                            );
+                        }
+                    });
+                    transcriptBatch();
+                    
+                    // Optional: Log progress for very large batches
+                    if (meeting.transcript.length > BATCH_SIZE) {
+                        console.log(`[DatabaseManager] Processed transcript batch ${Math.floor(i / BATCH_SIZE) + 1}/${Math.ceil(meeting.transcript.length / BATCH_SIZE)}`);
+                    }
+                }
+            }
+
+            // Third phase: Insert interactions in batches
+            if (meeting.usage && meeting.usage.length > 0) {
+                console.log(`[DatabaseManager] Processing ${meeting.usage.length} interactions in batches of ${BATCH_SIZE}`);
+                
+                for (let i = 0; i < meeting.usage.length; i += BATCH_SIZE) {
+                    const batch = meeting.usage.slice(i, i + BATCH_SIZE);
+                    const interactionBatch = this.db.transaction(() => {
+                        for (const usage of batch) {
+                            let metadata = null;
+                            if (usage.items) {
+                                metadata = JSON.stringify(usage.items);
+                            } else if (usage.type === 'followup_questions' && usage.answer) {
+                                // Sometimes answer is the array for questions, or we store it in metadata
+                                // In intelligence manager we pushed: { type: 'followup_questions', answer: fullQuestions }
+                                // Let's store that 'answer' (array) in metadata for this type
+                                if (Array.isArray(usage.answer)) {
+                                    metadata = JSON.stringify(usage.answer);
+                                }
+                            }
+
+                            // Normalization
+                            const answerText = Array.isArray(usage.answer) ? null : usage.answer || null;
+                            const queryText = usage.question || null;
+
+                            insertInteraction.run(
+                                meeting.id,
+                                usage.type,
+                                usage.timestamp,
+                                queryText,
+                                answerText,
+                                metadata
+                            );
+                        }
+                    });
+                    interactionBatch();
+                    
+                    // Optional: Log progress for very large batches
+                    if (meeting.usage.length > BATCH_SIZE) {
+                        console.log(`[DatabaseManager] Processed interaction batch ${Math.floor(i / BATCH_SIZE) + 1}/${Math.ceil(meeting.usage.length / BATCH_SIZE)}`);
+                    }
+                }
+            }
+
+            console.log(`[DatabaseManager] Successfully saved meeting ${meeting.id} with batched operations`);
         } catch (err) {
             console.error(`[DatabaseManager] Failed to save meeting ${meeting.id}`, err);
+            // In case of failure, attempt cleanup
+            try {
+                this.db.prepare('DELETE FROM meetings WHERE id = ?').run(meeting.id);
+                this.db.prepare('DELETE FROM transcripts WHERE meeting_id = ?').run(meeting.id);
+                this.db.prepare('DELETE FROM ai_interactions WHERE meeting_id = ?').run(meeting.id);
+                console.log(`[DatabaseManager] Cleaned up partial data for meeting ${meeting.id}`);
+            } catch (cleanupErr) {
+                console.error(`[DatabaseManager] Failed to cleanup meeting ${meeting.id}`, cleanupErr);
+            }
             throw err;
         }
     }

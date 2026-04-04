@@ -78,42 +78,6 @@ test('Conscious Mode off leaves follow-up refinement behavior unchanged', async 
   assert.equal(session.getActiveReasoningThread(), null);
 });
 
-test('Turning Conscious Mode off after prior Conscious activity restores the standard answer path and clears hidden state', async () => {
-  const session = new SessionTracker();
-  const llmHelper = new FakeLLMHelper();
-  const engine = new IntelligenceEngine(llmHelper as any, session);
-  const latencyTracker = new CapturingLatencyTracker();
-  (engine as any).latencyTracker = latencyTracker;
-
-  session.setConsciousModeEnabled(true);
-  addInterviewerTurn(session, 'How would you design a cache?');
-  session.recordConsciousResponse('How would you design a cache?', {
-    mode: 'reasoning_first',
-    openingReasoning: 'I would start by clarifying read and write patterns.',
-    implementationPlan: ['Choose cache-aside'],
-    tradeoffs: ['Stale reads during invalidation'],
-    edgeCases: [],
-    scaleConsiderations: [],
-    pushbackResponses: [],
-    likelyFollowUps: [],
-    codeTransition: '',
-  }, 'start');
-  session.getThreadManager().createThread('How would you design a cache?', 'high_level_design');
-
-  session.setConsciousModeEnabled(false);
-  addInterviewerTurn(session, 'How would you implement a rate limiter for an API?');
-
-  const answer = await engine.runWhatShouldISay(undefined, 0.8);
-  const snapshot = latencyTracker.completedSnapshots[0];
-
-  assert.equal(answer, 'Start with a simple token bucket backed by Redis.');
-  assert.equal(session.getLatestConsciousResponse(), null);
-  assert.equal(session.getActiveReasoningThread(), null);
-  assert.equal(session.getThreadManager().getActiveThread(), null);
-  assert.ok(llmHelper.calls.every(call => !call.message.includes('STRUCTURED_REASONING_RESPONSE')));
-  assert.equal(snapshot?.route, 'fast_standard_answer');
-});
-
 test('SessionTracker reset preserves Conscious Mode toggle while clearing transient Conscious Mode state', () => {
   const session = new SessionTracker();
 
