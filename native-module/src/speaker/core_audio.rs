@@ -150,7 +150,7 @@ extern "C" fn proc(
     let Some(ctx) = ctx else {
         // Returning an error status is safer than unwrap() in an audio callback —
         // a panic here would crash the entire process.
-        return os::nNO_ERR;
+        return os::Status::NO_ERR;
     };
 
     ctx.current_sample_rate.store(
