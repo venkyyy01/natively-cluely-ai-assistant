@@ -149,45 +149,6 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
     const isRecordingRef = useRef(false);  // Ref to track recording state (avoids stale closure)
     const [manualTranscript, setManualTranscript] = useState('');
     const manualTranscriptRef = useRef<string>('');
-
-    // RAF-batched token accumulators for each streaming mode.
-    // Instead of calling setMessages() on every token (50-100/sec),
-    // tokens accumulate in a ref and flush once per animation frame (~60fps).
-    const streamingTokenBufferRef = useRef<Record<string, string>>({});
-    const streamingRafIdRef = useRef<number | null>(null);
-
-    const flushStreamingTokens = useCallback(() => {
-        streamingRafIdRef.current = null;
-        const pending = streamingTokenBufferRef.current;
-        streamingTokenBufferRef.current = {};
-
-        setMessages(prev => {
-            let next = prev;
-            for (const [streamKey, accumulatedToken] of Object.entries(pending)) {
-                const [intent] = streamKey.split(':');
-                next = prependOrUpdateTopMessage(
-                    next,
-                    message => Boolean(message.isStreaming && message.intent === intent),
-                    message => ({ ...message, text: message.text + accumulatedToken }),
-                    {
-                        id: streamKey,
-                        role: 'system',
-                        text: accumulatedToken,
-                        intent,
-                        isStreaming: true
-                    }
-                );
-            }
-            return next;
-        });
-    }, []);
-
-    const appendStreamingToken = useCallback((streamKey: string, token: string) => {
-        streamingTokenBufferRef.current[streamKey] = (streamingTokenBufferRef.current[streamKey] || '') + token;
-        if (streamingRafIdRef.current === null) {
-            streamingRafIdRef.current = requestAnimationFrame(flushStreamingTokens);
-        }
-    }, [flushStreamingTokens]);
     const [showTranscript, setShowTranscript] = useState(() => {
         const stored = localStorage.getItem('natively_interviewer_transcript');
         return stored !== 'false';
@@ -625,8 +586,21 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
 
 
         cleanups.push(window.electronAPI.onIntelligenceSuggestedAnswerToken((data) => {
-            // RAF-batched token update — flushes once per animation frame instead of per-token
-            appendStreamingToken('what_to_answer', data.token);
+            setMessages(prev => prependOrUpdateTopMessage(
+                prev,
+                message => Boolean(message.isStreaming && message.intent === 'what_to_answer'),
+                message => ({
+                    ...message,
+                    text: message.text + data.token
+                }),
+                {
+                    id: Date.now().toString(),
+                    role: 'system',
+                    text: data.token,
+                    intent: 'what_to_answer',
+                    isStreaming: true
+                }
+            ));
         }));
 
         cleanups.push(window.electronAPI.onIntelligenceSuggestedAnswer((data) => {
@@ -676,7 +650,21 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
 
         // STREAMING: Refinement
         cleanups.push(window.electronAPI.onIntelligenceRefinedAnswerToken((data) => {
-            appendStreamingToken(data.intent, data.token);
+            setMessages(prev => prependOrUpdateTopMessage(
+                prev,
+                message => Boolean(message.isStreaming && message.intent === data.intent),
+                message => ({
+                    ...message,
+                    text: message.text + data.token
+                }),
+                {
+                    id: Date.now().toString(),
+                    role: 'system',
+                    text: data.token,
+                    intent: data.intent,
+                    isStreaming: true
+                }
+            ));
         }));
 
         cleanups.push(window.electronAPI.onIntelligenceRefinedAnswer((data) => {
@@ -700,7 +688,21 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
 
         // STREAMING: Recap
         cleanups.push(window.electronAPI.onIntelligenceRecapToken((data) => {
-            appendStreamingToken('recap', data.token);
+            setMessages(prev => prependOrUpdateTopMessage(
+                prev,
+                message => Boolean(message.isStreaming && message.intent === 'recap'),
+                message => ({
+                    ...message,
+                    text: message.text + data.token
+                }),
+                {
+                    id: Date.now().toString(),
+                    role: 'system',
+                    text: data.token,
+                    intent: 'recap',
+                    isStreaming: true
+                }
+            ));
         }));
 
         cleanups.push(window.electronAPI.onIntelligenceRecap((data) => {
@@ -735,7 +737,21 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
         // Assuming it's a message for consistency with "Copilot" approach.
 
         cleanups.push(window.electronAPI.onIntelligenceFollowUpQuestionsToken((data) => {
-            appendStreamingToken('follow_up_questions', data.token);
+            setMessages(prev => prependOrUpdateTopMessage(
+                prev,
+                message => Boolean(message.isStreaming && message.intent === 'follow_up_questions'),
+                message => ({
+                    ...message,
+                    text: message.text + data.token
+                }),
+                {
+                    id: Date.now().toString(),
+                    role: 'system',
+                    text: data.token,
+                    intent: 'follow_up_questions',
+                    isStreaming: true
+                }
+            ));
         }));
 
         cleanups.push(window.electronAPI.onIntelligenceFollowUpQuestionsUpdate((data) => {
@@ -783,13 +799,7 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
             cleanups.push(electronAPI.onScreenshotAttached(handleScreenshotAttach));
         }
 
-        return () => {
-            cleanups.forEach(fn => fn());
-            if (streamingRafIdRef.current !== null) {
-                cancelAnimationFrame(streamingRafIdRef.current);
-                streamingRafIdRef.current = null;
-            }
-        };
+        return () => cleanups.forEach(fn => fn());
     }, [electronAPI]);
 
     // Quick Actions - Updated to use new Intelligence APIs
@@ -1788,7 +1798,7 @@ Provide only the answer, nothing else.`;
                                                         : ''
                                                     }
                       ${msg.role === 'system'
-                                                        ? 'text-slate-200 font-normal'
+                                                        ? 'text-slate-100 font-normal rounded-xl border border-white/10 bg-white/5 backdrop-blur-sm shadow-lg'
                                                         : ''
                                                     }
                       ${msg.role === 'interviewer'
@@ -1800,6 +1810,12 @@ Provide only the answer, nothing else.`;
                                                         <div className="flex items-center gap-1.5 mb-1 text-[10px] text-slate-600 font-medium uppercase tracking-wider">
                                                             Interviewer
                                                             {msg.isStreaming && <span className="w-1 h-1 bg-green-500 rounded-full animate-pulse" />}
+                                                        </div>
+                                                    )}
+                                                    {msg.role === 'system' && msg.isStreaming && (
+                                                        <div className="flex items-center gap-1.5 mb-1 text-[10px] text-blue-400 font-medium uppercase tracking-wider">
+                                                            <span className="w-1.5 h-1.5 bg-blue-400 rounded-full animate-pulse" />
+                                                            Assistant
                                                         </div>
                                                     )}
                                                     {msg.role === 'user' && msg.hasScreenshot && (
