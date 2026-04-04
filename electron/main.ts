@@ -381,18 +381,7 @@ export class AppState {
     userTranscripts: 0,
   };
 
-  // Transcript batching for performance optimization
-  private transcriptBatch: Array<{
-    speaker: 'interviewer' | 'user',
-    segment: import('./SessionTracker').TranscriptSegment,
-    timestamp: number
-  }> = [];
-  private transcriptBatchTimer: NodeJS.Timeout | null = null;
-  private transcriptBatchMutex = new AsyncMutex({ name: 'TranscriptBatch', timeout: 5000 }); // Prevent race conditions
-  private lastUiUpdateTime = 0;
-  private readonly TRANSCRIPT_BATCH_INTERVAL = 100; // Process batches every 100ms
-  private readonly UI_UPDATE_THROTTLE = 50; // Max UI updates every 50ms for interim transcripts
-  private readonly TRANSCRIPT_BATCH_SIZE = 10; // Process batch when it reaches this size
+
 
 
   // Processing events
@@ -1033,17 +1022,50 @@ try {
 
       this.noteTranscript(speaker);
 
-      // 🚀 PERFORMANCE OPTIMIZATION: Use batched transcript processing instead of direct handling
-      // This reduces CPU usage by ~60% during rapid speech recognition by:
-      // - Batching interim transcripts to reduce context rebuilding
-      // - Throttling UI updates to prevent excessive re-renders
-      // - Processing final transcripts immediately for responsiveness
-      this.batchTranscriptUpdate(speaker, {
+      // Direct instant processing - no batching delays for real-time feel
+      this.intelligenceManager.handleTranscript({
         speaker: speaker,
         text: segment.text,
         timestamp: Date.now(),
         final: segment.isFinal,
         confidence: segment.confidence
+      });
+
+      // Feed final transcript to JIT RAG indexer
+      if (segment.isFinal && this.ragManager) {
+        this.ragManager.feedLiveTranscript([{
+          speaker: speaker,
+          text: segment.text,
+          timestamp: Date.now()
+        }]);
+      }
+
+      const helper = this.getWindowHelper();
+      const payload = {
+        speaker: speaker,
+        text: segment.text,
+        timestamp: Date.now(),
+        final: segment.isFinal,
+        confidence: segment.confidence
+      };
+      
+      // Send to UI immediately - no throttling for instant updates
+      const launcherWindow = helper.getLauncherWindow();
+      const overlayWindow = helper.getOverlayContentWindow();
+      
+      launcherWindow?.webContents.send('native-audio-transcript', payload);
+      overlayWindow?.webContents.send('native-audio-transcript', payload);
+
+      // Auto-trigger logic
+      void maybeHandleSuggestionTriggerFromTranscript({
+        speaker,
+        text: segment.text,
+        final: segment.isFinal,
+        confidence: segment.confidence,
+        consciousModeEnabled: this.consciousModeEnabled,
+        intelligenceManager: this.intelligenceManager,
+      }).catch((error) => {
+        console.error('[TRANSCRIPT] Auto-trigger ERROR:', error);
       });
     };
 
@@ -1067,174 +1089,6 @@ try {
     sttEmitter.on('error', errorHandler);
 
     return stt;
-  }
-
-  // ================================================================================
-  // TRANSCRIPT BATCHING PERFORMANCE OPTIMIZATION METHODS
-  // ================================================================================
-
-  /**
-   * Add a transcript to the batch for optimized processing
-   * This prevents expensive per-token context rebuilding operations
-   */
-  private async batchTranscriptUpdate(speaker: 'interviewer' | 'user', segment: import('./SessionTracker').TranscriptSegment): Promise<void> {
-    await this.transcriptBatchMutex.runExclusive(async () => {
-      const now = Date.now();
-      
-      // Add to batch
-      this.transcriptBatch.push({
-        speaker,
-        segment,
-        timestamp: now
-      });
-
-      // Process immediately if batch size reached or if this is a final transcript
-      if (this.transcriptBatch.length >= this.TRANSCRIPT_BATCH_SIZE || segment.final) {
-        await this.processBatchedTranscripts();
-        return;
-      }
-
-      // Schedule batch processing if not already scheduled
-      if (!this.transcriptBatchTimer) {
-        this.transcriptBatchTimer = setTimeout(() => {
-          void this.processBatchedTranscripts();
-        }, this.TRANSCRIPT_BATCH_INTERVAL);
-      }
-    });
-  }
-
-  /**
-   * Process accumulated transcript batch with optimized context rebuilding
-   * This reduces CPU usage by ~60% during rapid speech recognition
-   */
-  private async processBatchedTranscripts(): Promise<void> {
-    await this.transcriptBatchMutex.runExclusive(async () => {
-      if (this.transcriptBatch.length === 0) return;
-
-      // Clear the timer
-      if (this.transcriptBatchTimer) {
-        clearTimeout(this.transcriptBatchTimer);
-        this.transcriptBatchTimer = null;
-      }
-
-      // Sort by timestamp to maintain order
-      const sortedBatch = this.transcriptBatch.sort((a, b) => a.timestamp - b.timestamp);
-
-    // Process final transcripts first for better responsiveness
-    const finalTranscripts = sortedBatch.filter(item => item.segment.final);
-    const interimTranscripts = sortedBatch.filter(item => !item.segment.final);
-
-    // Process final transcripts with full intelligence pipeline
-    for (const item of finalTranscripts) {
-      this.intelligenceManager.handleTranscript({
-        speaker: item.speaker,
-        text: item.segment.text,
-        timestamp: item.timestamp,
-        final: item.segment.final,
-        confidence: item.segment.confidence
-      });
-
-      // Feed final transcript to JIT RAG indexer
-      if (this.ragManager) {
-        this.ragManager.feedLiveTranscript([{
-          speaker: item.speaker,
-          text: item.segment.text,
-          timestamp: item.timestamp
-        }]);
-      }
-
-      // Send final transcripts to UI immediately
-      const helper = this.getWindowHelper();
-      const payload = {
-        speaker: item.speaker,
-        text: item.segment.text,
-        timestamp: item.timestamp,
-        final: item.segment.final,
-        confidence: item.segment.confidence
-      };
-      
-      helper.getLauncherWindow()?.webContents.send('native-audio-transcript', payload);
-      helper.getOverlayContentWindow()?.webContents.send('native-audio-transcript', payload);
-
-      // Auto-trigger logic for final transcripts
-      void maybeHandleSuggestionTriggerFromTranscript({
-        speaker: item.speaker,
-        text: item.segment.text,
-        final: item.segment.final,
-        confidence: item.segment.confidence,
-        consciousModeEnabled: this.consciousModeEnabled,
-        intelligenceManager: this.intelligenceManager,
-      }).catch((error) => {
-        console.error('[TRANSCRIPT_BATCH] Auto-trigger ERROR:', error);
-      });
-    }
-
-    // For interim transcripts, only process the latest one per speaker to reduce overhead
-    const latestInterimBySpeaker = new Map<string, typeof interimTranscripts[0]>();
-    for (const item of interimTranscripts) {
-      latestInterimBySpeaker.set(item.speaker, item);
-    }
-
-    // Process latest interim transcripts with reduced intelligence pipeline
-    for (const item of latestInterimBySpeaker.values()) {
-      // Only process interim if it's significantly different from the last processed one
-      // This further reduces unnecessary processing
-      this.intelligenceManager.handleTranscript({
-        speaker: item.speaker,
-        text: item.segment.text,
-        timestamp: item.timestamp,
-        final: item.segment.final,
-        confidence: item.segment.confidence
-      });
-    }
-
-    // Clear the batch
-    this.transcriptBatch = [];
-
-    console.log(`[TRANSCRIPT_BATCH] ⚡ Processed batch: ${finalTranscripts.length} final, ${latestInterimBySpeaker.size} interim (${sortedBatch.length} total)`);
-    });
-  }
-
-  /**
-   * Throttled UI updates to prevent excessive re-renders during rapid speech
-   * Updates at most every 50ms for interim transcripts
-   */
-  private throttledUiUpdate(speaker: 'interviewer' | 'user', segment: import('./SessionTracker').TranscriptSegment): void {
-    const now = Date.now();
-    
-    // Throttle UI updates to prevent excessive re-renders
-    if (now - this.lastUiUpdateTime < this.UI_UPDATE_THROTTLE) {
-      return;
-    }
-
-    this.lastUiUpdateTime = now;
-
-    // Send throttled interim transcript to UI
-    const helper = this.getWindowHelper();
-    const payload = {
-      speaker: speaker,
-      text: segment.text,
-      timestamp: now,
-      final: segment.final,
-      confidence: segment.confidence
-    };
-    
-    helper.getLauncherWindow()?.webContents.send('native-audio-transcript', payload);
-    helper.getOverlayContentWindow()?.webContents.send('native-audio-transcript', payload);
-
-    console.log(`[TRANSCRIPT_THROTTLE] 🔄 UI update: ${speaker} (throttled)`);
-  }
-
-  /**
-   * Clean up transcript batching resources
-   */
-  private cleanupTranscriptBatching(): void {
-    if (this.transcriptBatchTimer) {
-      clearTimeout(this.transcriptBatchTimer);
-      this.transcriptBatchTimer = null;
-    }
-    this.transcriptBatch = [];
-    this.lastUiUpdateTime = 0;
   }
 
   // ================================================================================
@@ -2316,9 +2170,6 @@ try {
       this.ragManager.deleteMeetingData('live-meeting-current');
     }
 
-    // 8. Clean up transcript batching resources
-    this.cleanupTranscriptBatching();
-
     await this.resetMeetingStateMachine('Meeting cleanup complete');
     this.meetingLifecycleState = 'idle'
   }
@@ -2331,9 +2182,6 @@ try {
     this.setNativeAudioConnected(false)
     this.currentMeetingId = null
     this.clearAudioPipelineHealthCheck();
-    
-    // Clean up transcript batching resources
-    this.cleanupTranscriptBatching();
 
     // Clear disguise timers to prevent memory leaks
     this.clearDisguiseTimers()
