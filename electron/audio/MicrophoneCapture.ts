@@ -18,22 +18,28 @@ export class MicrophoneCapture extends EventEmitter {
     private monitor: any = null;
     private isRecording: boolean = false;
     private deviceId: string | null = null;
+    private isNativeAvailable: boolean = false;
 
     constructor(deviceId?: string | null) {
         super();
         this.deviceId = deviceId || null;
-        const RustMicCtor = assertNativeAudioAvailable('MicrophoneCapture')?.MicrophoneCapture;
-        if (!RustMicCtor) {
-            throw new Error('[MicrophoneCapture] Rust class implementation not found.');
-        }
-
-        console.log(`[MicrophoneCapture] Initialized wrapper. Device ID: ${this.deviceId || 'default'}`);
+        
         try {
+            const RustMicCtor = assertNativeAudioAvailable('MicrophoneCapture')?.MicrophoneCapture;
+            if (!RustMicCtor) {
+                throw new Error('[MicrophoneCapture] Rust class implementation not found.');
+            }
+            
+            console.log(`[MicrophoneCapture] Initialized wrapper. Device ID: ${this.deviceId || 'default'}`);
             console.log('[MicrophoneCapture] Creating native monitor (Eager Init)...');
             this.monitor = new RustMicCtor(this.deviceId);
+            this.isNativeAvailable = true;
+            console.log('[MicrophoneCapture] ✅ Native audio module initialized successfully');
         } catch (e) {
-            console.error('[MicrophoneCapture] Failed to create native monitor:', e);
-            throw e;
+            console.error('[MicrophoneCapture] ❌ Failed to initialize native audio module:', e);
+            console.warn('[MicrophoneCapture] 🔄 Falling back to software-only mode');
+            this.isNativeAvailable = false;
+            // Don't throw - allow graceful degradation
         }
     }
 
@@ -52,8 +58,17 @@ export class MicrophoneCapture extends EventEmitter {
     public start(): void {
         if (this.isRecording) return;
 
+        if (!this.isNativeAvailable) {
+            console.warn('[MicrophoneCapture] ⚠️ Cannot start: Native audio module not available');
+            this.emit('error', new Error('Native audio module not available - microphone capture disabled'));
+            return;
+        }
+
         if (!RustMicCapture) {
-            throw new Error(getNativeAudioLoadError()?.message || '[MicrophoneCapture] Cannot start: Rust module missing');
+            const error = getNativeAudioLoadError()?.message || '[MicrophoneCapture] Cannot start: Rust module missing';
+            console.error('[MicrophoneCapture] ❌', error);
+            this.emit('error', new Error(error));
+            return;
         }
 
         // Monitor should be ready from constructor

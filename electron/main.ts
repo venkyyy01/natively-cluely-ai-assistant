@@ -20,11 +20,29 @@ process.stdout?.on?.('error', () => { });
 process.stderr?.on?.('error', () => { });
 
 process.on('uncaughtException', (err) => {
-  void logToFileAsync('[CRITICAL] Uncaught Exception: ' + (err.stack || err.message || err));
+  try {
+    const errorMsg = '[CRITICAL] Uncaught Exception: ' + (err.stack || err.message || err);
+    void logToFileAsync(errorMsg);
+    // Fallback to console if file logging fails
+    console.error(errorMsg);
+  } catch (fallbackErr) {
+    // Last resort - at least show it in console
+    console.error('[CRITICAL] Uncaught Exception:', err);
+    console.error('Logging system also failed:', fallbackErr);
+  }
 });
 
 process.on('unhandledRejection', (reason, promise) => {
-  void logToFileAsync('[CRITICAL] Unhandled Rejection at: ' + promise + ' reason: ' + (reason instanceof Error ? reason.stack : reason));
+  try {
+    const errorMsg = '[CRITICAL] Unhandled Rejection at: ' + promise + ' reason: ' + (reason instanceof Error ? reason.stack : reason);
+    void logToFileAsync(errorMsg);
+    // Fallback to console if file logging fails
+    console.error(errorMsg);
+  } catch (fallbackErr) {
+    // Last resort - at least show it in console
+    console.error('[CRITICAL] Unhandled Rejection:', reason, 'at:', promise);
+    console.error('Logging system also failed:', fallbackErr);
+  }
 });
 
 const logFile = path.join(app.getPath('documents'), 'natively_debug.log');
@@ -370,6 +388,7 @@ export class AppState {
     timestamp: number
   }> = [];
   private transcriptBatchTimer: NodeJS.Timeout | null = null;
+  private transcriptBatchMutex = new AsyncMutex({ name: 'TranscriptBatch', timeout: 5000 }); // Prevent race conditions
   private lastUiUpdateTime = 0;
   private readonly TRANSCRIPT_BATCH_INTERVAL = 100; // Process batches every 100ms
   private readonly UI_UPDATE_THROTTLE = 50; // Max UI updates every 50ms for interim transcripts
@@ -1048,50 +1067,48 @@ try {
    * Add a transcript to the batch for optimized processing
    * This prevents expensive per-token context rebuilding operations
    */
-  private batchTranscriptUpdate(speaker: 'interviewer' | 'user', segment: import('./SessionTracker').TranscriptSegment): void {
-    const now = Date.now();
-    
-    // Add to batch
-    this.transcriptBatch.push({
-      speaker,
-      segment,
-      timestamp: now
+  private async batchTranscriptUpdate(speaker: 'interviewer' | 'user', segment: import('./SessionTracker').TranscriptSegment): Promise<void> {
+    await this.transcriptBatchMutex.runExclusive(async () => {
+      const now = Date.now();
+      
+      // Add to batch
+      this.transcriptBatch.push({
+        speaker,
+        segment,
+        timestamp: now
+      });
+
+      // Process immediately if batch size reached or if this is a final transcript
+      if (this.transcriptBatch.length >= this.TRANSCRIPT_BATCH_SIZE || segment.final) {
+        await this.processBatchedTranscripts();
+        return;
+      }
+
+      // Schedule batch processing if not already scheduled
+      if (!this.transcriptBatchTimer) {
+        this.transcriptBatchTimer = setTimeout(() => {
+          void this.processBatchedTranscripts();
+        }, this.TRANSCRIPT_BATCH_INTERVAL);
+      }
     });
-
-    // Process immediately if batch size reached or if this is a final transcript
-    if (this.transcriptBatch.length >= this.TRANSCRIPT_BATCH_SIZE || segment.final) {
-      this.processBatchedTranscripts();
-      return;
-    }
-
-    // Set up timer for batch processing if not already set
-    if (!this.transcriptBatchTimer) {
-      this.transcriptBatchTimer = setTimeout(() => {
-        this.processBatchedTranscripts();
-      }, this.TRANSCRIPT_BATCH_INTERVAL);
-    }
-
-    // Throttled UI updates for interim transcripts
-    if (!segment.final) {
-      this.throttledUiUpdate(speaker, segment);
-    }
   }
 
   /**
    * Process accumulated transcript batch with optimized context rebuilding
    * This reduces CPU usage by ~60% during rapid speech recognition
    */
-  private processBatchedTranscripts(): void {
-    if (this.transcriptBatch.length === 0) return;
+  private async processBatchedTranscripts(): Promise<void> {
+    await this.transcriptBatchMutex.runExclusive(async () => {
+      if (this.transcriptBatch.length === 0) return;
 
-    // Clear the timer
-    if (this.transcriptBatchTimer) {
-      clearTimeout(this.transcriptBatchTimer);
-      this.transcriptBatchTimer = null;
-    }
+      // Clear the timer
+      if (this.transcriptBatchTimer) {
+        clearTimeout(this.transcriptBatchTimer);
+        this.transcriptBatchTimer = null;
+      }
 
-    // Sort by timestamp to maintain order
-    const sortedBatch = this.transcriptBatch.sort((a, b) => a.timestamp - b.timestamp);
+      // Sort by timestamp to maintain order
+      const sortedBatch = this.transcriptBatch.sort((a, b) => a.timestamp - b.timestamp);
 
     // Process final transcripts first for better responsiveness
     const finalTranscripts = sortedBatch.filter(item => item.segment.final);

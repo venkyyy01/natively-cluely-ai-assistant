@@ -14,18 +14,27 @@ export class SystemAudioCapture extends EventEmitter {
     private deviceId: string | null = null;
     private detectedSampleRate: number = 48000;
     private monitor: any = null;
+    private isNativeAvailable: boolean = false;
 
     constructor(deviceId?: string | null) {
         super();
         this.deviceId = deviceId || null;
-        const RustAudioCtor = assertNativeAudioAvailable('SystemAudioCapture')?.SystemAudioCapture;
-        if (!RustAudioCtor) {
-            throw new Error('[SystemAudioCapture] Rust class implementation not found.');
+        
+        try {
+            const RustAudioCtor = assertNativeAudioAvailable('SystemAudioCapture')?.SystemAudioCapture;
+            if (!RustAudioCtor) {
+                throw new Error('[SystemAudioCapture] Rust class implementation not found.');
+            }
+            this.isNativeAvailable = true;
+            // LAZY INIT: Don't create native monitor here - it causes 1-second audio mute + quality drop
+            // The monitor will be created in start() when the meeting actually begins
+            console.log(`[SystemAudioCapture] ✅ Initialized (lazy). Device ID: ${this.deviceId || 'default'}`);
+        } catch (e) {
+            console.error('[SystemAudioCapture] ❌ Failed to initialize native audio module:', e);
+            console.warn('[SystemAudioCapture] 🔄 Falling back to software-only mode');
+            this.isNativeAvailable = false;
+            // Don't throw - allow graceful degradation
         }
-
-        // LAZY INIT: Don't create native monitor here - it causes 1-second audio mute + quality drop
-        // The monitor will be created in start() when the meeting actually begins
-        console.log(`[SystemAudioCapture] Initialized (lazy). Device ID: ${this.deviceId || 'default'}`);
     }
 
     private ensureMonitor(reason: 'probe' | 'start'): boolean {
@@ -33,9 +42,19 @@ export class SystemAudioCapture extends EventEmitter {
             return true;
         }
 
+        if (!this.isNativeAvailable) {
+            if (reason === 'start') {
+                console.error('[SystemAudioCapture] ⚠️ Cannot start: Native audio module not available');
+                this.emit('error', new Error('Native audio module not available - system audio capture disabled'));
+            }
+            return false;
+        }
+
         if (!RustAudioCapture) {
             if (reason === 'start') {
-                throw new Error(getNativeAudioLoadError()?.message || '[SystemAudioCapture] Cannot start: Rust module missing');
+                const error = getNativeAudioLoadError()?.message || '[SystemAudioCapture] Cannot start: Rust module missing';
+                console.error('[SystemAudioCapture] ❌', error);
+                this.emit('error', new Error(error));
             }
             return false;
         }
