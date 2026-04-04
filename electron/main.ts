@@ -2274,6 +2274,9 @@ try {
       this.ragManager.deleteMeetingData('live-meeting-current');
     }
 
+    // 8. Clean up transcript batching resources
+    this.cleanupTranscriptBatching();
+
     this.meetingLifecycleState = 'idle'
   }
 
@@ -2285,6 +2288,9 @@ try {
     this.setNativeAudioConnected(false)
     this.currentMeetingId = null
     this.clearAudioPipelineHealthCheck();
+    
+    // Clean up transcript batching resources
+    this.cleanupTranscriptBatching();
 
     // Clear disguise timers to prevent memory leaks
     this.clearDisguiseTimers()

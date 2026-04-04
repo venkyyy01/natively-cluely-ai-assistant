@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { ToggleLeft, ToggleRight, Search, Zap, Calendar, ArrowRight, ArrowLeft, MoreHorizontal, Globe, Clock, ChevronRight, Settings, RefreshCw, Eye, EyeOff, Ghost, Plus, Mail, Link as LinkIcon, ChevronDown, Trash2, Bell, Check, Download, DownloadCloud, CheckCircle, AlertCircle } from 'lucide-react';
 import { generateMeetingPDF } from '../utils/pdfGenerator';
 import icon from "./icon.png";
@@ -231,25 +231,27 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onP
         analytics.trackModeSelected(newState ? 'launcher' : 'undetectable'); // If visible (detectable), mode is normal/launcher. If not detectable, mode is undetectable.
     };
 
-    // Group meetings
-    const groupedMeetings = meetings.reduce((acc, meeting) => {
-        const label = getGroupLabel(meeting.date);
-        if (!acc[label]) acc[label] = [];
-        acc[label].push(meeting);
-        return acc;
-    }, {} as Record<string, Meeting[]>);
+    // Group meetings - Memoized for performance optimization
+    const groupedMeetings = useMemo(() => {
+        return meetings.reduce((acc, meeting) => {
+            const label = getGroupLabel(meeting.date);
+            if (!acc[label]) acc[label] = [];
+            acc[label].push(meeting);
+            return acc;
+        }, {} as Record<string, Meeting[]>);
+    }, [meetings]);
 
-    // Group order (Today, Yesterday, then others sorted new to old is implicit via API return order ideally, 
-    // but JS object key order isn't guaranteed. We can use a Map or just known keys.)
-    // Simple sort for keys:
-    const sortedGroups = Object.keys(groupedMeetings).sort((a, b) => {
-        if (a === 'Today') return -1;
-        if (b === 'Today') return 1;
-        if (a === 'Yesterday') return -1;
-        if (b === 'Yesterday') return 1;
-        // Approximation for others: parse date
-        return new Date(b).getTime() - new Date(a).getTime();
-    });
+    // Group order - Memoized for performance optimization  
+    const sortedGroups = useMemo(() => {
+        return Object.keys(groupedMeetings).sort((a, b) => {
+            if (a === 'Today') return -1;
+            if (b === 'Today') return 1;
+            if (a === 'Yesterday') return -1;
+            if (b === 'Yesterday') return 1;
+            // Approximation for others: parse date
+            return new Date(b).getTime() - new Date(a).getTime();
+        });
+    }, [groupedMeetings]);
 
 
     const [forwardMeeting, setForwardMeeting] = useState<Meeting | null>(null);
