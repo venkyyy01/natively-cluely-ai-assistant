@@ -12,6 +12,7 @@
  */
 
 import { EventEmitter } from 'events';
+import { AsyncMutex } from './AsyncMutex';
 
 export enum MeetingState {
   IDLE = 'idle',
@@ -38,7 +39,7 @@ export interface MeetingStateMachineEvents {
 
 export class MeetingStateMachine extends EventEmitter {
   private currentState: MeetingState = MeetingState.IDLE;
-  private mutex = new (require('./AsyncMutex').AsyncMutex)('MeetingStateMachine', { timeout: 5000 });
+  private mutex = new AsyncMutex({ name: 'MeetingStateMachine', timeout: 5000 });
   private stateHistory: MeetingStateTransition[] = [];
   private readonly maxHistorySize = 100;
 
@@ -104,7 +105,7 @@ export class MeetingStateMachine extends EventEmitter {
     reason?: string, 
     force: boolean = false
   ): Promise<boolean> {
-    return await this.mutex.execute(async () => {
+    return await this.mutex.runExclusive(async () => {
       const oldState = this.currentState;
       
       // Validate transition unless forced
@@ -303,7 +304,7 @@ export class MeetingStateMachine extends EventEmitter {
    * Reset state machine (force back to IDLE)
    */
   public async reset(reason?: string): Promise<void> {
-    await this.mutex.execute(async () => {
+    await this.mutex.runExclusive(async () => {
       const oldState = this.currentState;
       this.currentState = MeetingState.IDLE;
       
