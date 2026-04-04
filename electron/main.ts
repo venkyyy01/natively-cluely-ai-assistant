@@ -729,6 +729,16 @@ this.setupIntelligenceEvents()
     }
   }
 
+  private async resetMeetingStateMachine(reason: string): Promise<void> {
+    const currentState = this.meetingStateMachine.getCurrentState();
+    if (currentState === MeetingState.IDLE) {
+      return;
+    }
+
+    console.warn(`[Main] Resetting meeting state machine from ${currentState} (${reason})`);
+    await this.meetingStateMachine.reset(reason);
+  }
+
   private resetAudioPipelineStats(): void {
     this.audioPipelineStats = {
       startedAt: Date.now(),
@@ -1991,13 +2001,7 @@ try {
 
   public async startMeeting(metadata?: any): Promise<void> {
     console.log('[Main] Starting Meeting...', metadata);
-    
-    // CRITICAL FIX: Initialize state machine transition
-    const initSuccess = await this.meetingStateMachine.startMeeting('User requested meeting start');
-    if (!initSuccess) {
-      throw new Error('Failed to initialize meeting state machine');
-    }
-    
+
     this.audioRecoveryAttempts = 0;
     this.audioRecoveryBackoffMs = 5000;
     this.startAbortController = new AbortController();
@@ -2027,12 +2031,24 @@ try {
     return this.meetingStartMutex.runExclusive(async () => {
       if (signal.aborted) {
         console.log('[Main] Start meeting aborted (canceled by endMeeting)');
+        await this.resetMeetingStateMachine('Meeting start aborted before initialization');
         return;
       }
 
-      if (this.meetingLifecycleState === 'starting' || this.meetingLifecycleState === 'active') {
+      if (this.meetingLifecycleState !== 'idle') {
         console.warn(`[Main] Ignoring startMeeting while state=${this.meetingLifecycleState}`)
         return
+      }
+
+      if (this.meetingStateMachine.getCurrentState() !== MeetingState.IDLE) {
+        console.warn('[Main] Found stale meeting state before start:', this.meetingStateMachine.getDebugInfo())
+        await this.resetMeetingStateMachine('Recovered stale state before meeting start')
+      }
+
+      const initSuccess = await this.meetingStateMachine.startMeeting('User requested meeting start');
+      if (!initSuccess) {
+        console.error('[Main] Meeting state machine failed to initialize:', this.meetingStateMachine.getDebugInfo())
+        throw new Error('Failed to initialize meeting state machine');
       }
 
       this.meetingLifecycleState = 'starting'
@@ -2043,17 +2059,19 @@ try {
       } catch (error) {
         this.currentMeetingId = null
         this.meetingLifecycleState = 'idle'
+        await this.resetMeetingStateMachine('Meeting audio validation failed')
         throw error
       }
 
       if (signal.aborted) {
         console.log('[Main] Start meeting aborted after validation');
         this.meetingLifecycleState = 'idle';
+        this.currentMeetingId = null;
+        await this.resetMeetingStateMachine('Meeting start aborted after validation');
         return;
       }
 
       this.currentMeetingId = randomUUID()
-      await this.meetingStateMachine.completeInitialization('Meeting start successful');
       this.resetAudioPipelineStats();
       if (normalizedMetadata) {
         this.intelligenceManager.setMeetingMetadata(normalizedMetadata);
@@ -2072,6 +2090,7 @@ try {
         setTimeout(async () => {
           if (startSequence !== this.meetingStartSequence || this.meetingLifecycleState !== 'starting') {
             console.warn('[Main] Skipping stale deferred meeting start');
+            await this.resetMeetingStateMachine('Meeting start invalidated before deferred startup');
             resolve();
             return;
           }
@@ -2135,6 +2154,11 @@ try {
 
             await Promise.all(serviceStartTasks);
             this.scheduleAudioPipelineHealthCheck();
+
+            const activeSuccess = await this.meetingStateMachine.completeInitialization('Meeting startup complete');
+            if (!activeSuccess) {
+              throw new Error('Failed to activate meeting state machine');
+            }
             
             const initTime = Date.now() - startTime;
             console.log(`[Main] ⚡ Parallel audio pipeline initialization completed in ${initTime}ms`);
@@ -2156,8 +2180,8 @@ try {
           } catch (error) {
             console.error('[Main] Failed to complete meeting startup:', error);
             this.meetingLifecycleState = 'idle';
-            await this.meetingStateMachine.setErrorState(error as Error, 'Meeting startup failed');
             this.currentMeetingId = null;
+            await this.resetMeetingStateMachine('Meeting startup failed');
             reject(error);
           }
         }, 100);
@@ -2295,6 +2319,7 @@ try {
     // 8. Clean up transcript batching resources
     this.cleanupTranscriptBatching();
 
+    await this.resetMeetingStateMachine('Meeting cleanup complete');
     this.meetingLifecycleState = 'idle'
   }
 
