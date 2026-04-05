@@ -108,8 +108,7 @@
         {
           "target": "nsis",
           "arch": [
-            "x64",
-            "ia32"
+            "x64"
           ]
         },
         {
@@ -121,8 +120,7 @@
       ],
       "icon": "assets/icons/win/icon.ico",
       "requestedExecutionLevel": "asInvoker",
-      "signingHashAlgorithms": [],
-      "sign": null
+      "signAndEditExecutable": false
     },
     "linux": {
       "target": [
