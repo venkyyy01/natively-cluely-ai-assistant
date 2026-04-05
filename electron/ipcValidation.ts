@@ -12,7 +12,7 @@ export const ipcSchemas = {
     boundedString(50000),
     z.array(z.string().trim().min(1).max(4096)).max(8).optional(),
     z.string().max(100000).optional(),
-    z.object({ skipSystemPrompt: z.boolean().optional() }).optional(),
+    z.object({ skipSystemPrompt: z.boolean().optional(), useConsciousMode: z.boolean().optional() }).optional(),
   ]),
   customProvider: z.object({
     id: boundedString(128),
@@ -78,8 +78,8 @@ export const ipcSchemas = {
     boundedString(10000),
   ]),
   contentDimensions: z.object({
-    width: z.number().finite().positive().max(4000),
-    height: z.number().finite().positive().max(4000),
+    width: z.number().finite().nonnegative().max(4000),
+    height: z.number().finite().nonnegative().max(4000),
   }).strict(),
   windowMode: z.enum(['launcher', 'overlay']),
   absoluteUserDataPath: z.string().trim().min(1).max(2000),

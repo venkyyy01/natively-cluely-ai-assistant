@@ -446,7 +446,18 @@ export function shouldAutoTriggerSuggestionFromTranscript(
   }
 
   if (consciousModeEnabled) {
-    return classifyConsciousModeQuestion(trimmed, activeReasoningThread).qualifies || isSubstantialConversationTurn(trimmed.toLowerCase());
+    const consciousRoute = classifyConsciousModeQuestion(trimmed, activeReasoningThread);
+    if (consciousRoute.qualifies) {
+      return true;
+    }
+
+    const lower = trimmed.toLowerCase();
+    const wordCount = trimmed.split(/\s+/).filter(Boolean).length;
+
+    // Keep Conscious Mode from going silent on non-question technical explanations.
+    // If strict conscious routing does not match, fall back to the legacy actionable-turn
+    // heuristic while still filtering out administrative chatter.
+    return wordCount >= 5 && !isAdministrativePrompt(lower);
   }
 
   const wordCount = trimmed.split(/\s+/).filter(Boolean).length;

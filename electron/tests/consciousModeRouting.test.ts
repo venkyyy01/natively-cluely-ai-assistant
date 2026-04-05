@@ -91,6 +91,25 @@ test('Conscious Mode routes qualifying technical questions into the structured r
   assert.match(llmHelper.calls[0]?.message || '', /STRUCTURED_REASONING_RESPONSE/);
 });
 
+test('runWhatShouldISay can execute without emitting suggested answer events', async () => {
+  const session = new SessionTracker();
+  const llmHelper = new FakeLLMHelper();
+  const engine = new IntelligenceEngine(llmHelper as any, session);
+
+  session.setConsciousModeEnabled(true);
+  addInterviewerTurn(session, 'How would you design a rate limiter for an API?', Date.now());
+
+  const emittedEvents: string[] = [];
+  engine.on('suggested_answer_token', () => emittedEvents.push('token'));
+  engine.on('suggested_answer', () => emittedEvents.push('answer'));
+
+  const answer = await engine.runWhatShouldISay(undefined, 0.92, undefined, { emitEvents: false });
+
+  assert.ok(answer?.includes('Opening reasoning:'));
+  assert.equal(session.getLastAssistantMessage(), answer);
+  assert.deepEqual(emittedEvents, []);
+});
+
 test('Conscious Mode qualifying follow-ups continue the thread, while a new technical topic resets it', async () => {
   const session = new SessionTracker();
   const llmHelper = new FakeLLMHelper();
@@ -293,6 +312,34 @@ test('Conscious Mode transcript-trigger path fires for substantive interviewer p
       context: 'ctx',
       lastQuestion: 'What are the tradeoffs',
       confidence: 0.91,
+    },
+  ]);
+});
+
+test('Conscious Mode transcript-trigger does not go silent on long technical interviewer explanations', async () => {
+  const calls: Array<{ context: string; lastQuestion: string; confidence: number }> = [];
+  const manager = {
+    getActiveReasoningThread: (): ReasoningThread | null => null,
+    getFormattedContext: (): string => 'ctx',
+    handleSuggestionTrigger: async (trigger: { context: string; lastQuestion: string; confidence: number }) => {
+      calls.push(trigger);
+    },
+  };
+
+  await maybeHandleSuggestionTriggerFromTranscript({
+    speaker: 'interviewer',
+    text: 'This array has three disconnected islands and we removed one',
+    final: true,
+    confidence: 0.87,
+    consciousModeEnabled: true,
+    intelligenceManager: manager,
+  });
+
+  assert.deepEqual(calls, [
+    {
+      context: 'ctx',
+      lastQuestion: 'This array has three disconnected islands and we removed one',
+      confidence: 0.87,
     },
   ]);
 });

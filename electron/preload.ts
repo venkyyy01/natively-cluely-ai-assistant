@@ -311,8 +311,16 @@ export const PROCESSING_EVENTS = {
 
 // Expose the Electron API to the renderer process
 contextBridge.exposeInMainWorld("electronAPI", {
-  updateContentDimensions: (dimensions: { width: number; height: number }) =>
-    ipcRenderer.invoke("update-content-dimensions", dimensions),
+  updateContentDimensions: (dimensions: { width: number; height: number }) => {
+    const width = Math.ceil(Number(dimensions?.width));
+    const height = Math.ceil(Number(dimensions?.height));
+
+    if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+      return Promise.resolve();
+    }
+
+    return ipcRenderer.invoke("update-content-dimensions", { width, height });
+  },
   setOverlayBounds: (bounds: OverlayBounds) =>
     ipcRenderer.invoke("set-overlay-bounds", bounds),
   getRecognitionLanguages: () => invokeAndUnwrap<Record<string, any>>("get-recognition-languages"),

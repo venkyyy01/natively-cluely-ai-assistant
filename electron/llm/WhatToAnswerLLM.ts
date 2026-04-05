@@ -113,6 +113,14 @@ ANSWER SHAPE: ${intentResult.answerShape}
         intentResult?: IntentResult,
         imagePaths?: string[]
     ): Promise<ConsciousModeResponse> {
+        console.log('[WhatToAnswerLLM] 🧠 generateReasoningFirst called:', {
+            questionLength: question.length,
+            transcriptLength: cleanedTranscript.length,
+            hasTemporalContext: !!temporalContext,
+            hasIntentResult: !!intentResult,
+            imageCount: imagePaths?.length || 0
+        });
+        
         let full = "";
 
         const contextParts: string[] = [
@@ -134,12 +142,23 @@ ANSWER SHAPE: ${intentResult.answerShape}
         contextParts.push(`CONVERSATION:\n${cleanedTranscript}`);
 
         const message = contextParts.join('\n\n');
+        console.log('[WhatToAnswerLLM] 🧠 Sending message to LLM (first 200 chars):', message.substring(0, 200));
+        
         const stream = this.llmHelper.streamChat(message, imagePaths, undefined, UNIVERSAL_WHAT_TO_ANSWER_PROMPT);
 
         for await (const chunk of stream) {
             full += chunk;
         }
 
-        return parseConsciousModeResponse(full);
+        console.log('[WhatToAnswerLLM] 🧠 Raw LLM response (first 500 chars):', full.substring(0, 500));
+        console.log('[WhatToAnswerLLM] 🧠 Raw LLM response length:', full.length);
+        
+        const parsed = parseConsciousModeResponse(full);
+        console.log('[WhatToAnswerLLM] 🧠 Parsed response:', {
+            mode: parsed.mode,
+            valid: parsed.mode !== 'invalid'
+        });
+
+        return parsed;
     }
 }

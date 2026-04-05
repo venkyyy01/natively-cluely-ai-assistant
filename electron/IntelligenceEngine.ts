@@ -357,7 +357,13 @@ export class IntelligenceEngine extends EventEmitter {
      * Manual trigger - uses clean transcript pipeline for question inference
      * NEVER returns null - always provides a usable response
      */
-    async runWhatShouldISay(question?: string, confidence: number = 0.8, imagePaths?: string[]): Promise<string | null> {
+    async runWhatShouldISay(
+        question?: string,
+        confidence: number = 0.8,
+        imagePaths?: string[],
+        options?: { emitEvents?: boolean },
+    ): Promise<string | null> {
+        const shouldEmitEvents = options?.emitEvents ?? true;
         const now = Date.now();
         let activeLatencyRequestId: string | null = null;
         let activeProfileEnrichmentRoute = false;
@@ -701,9 +707,19 @@ export class IntelligenceEngine extends EventEmitter {
             }
 
             if (consciousRoute.qualifies) {
+                console.log('[INTELLIGENCE] 🧠 Conscious route qualified! Generating ThinkFlow reasoning...');
+                console.log('[INTELLIGENCE] 🧠 Route details:', {
+                    threadAction: consciousRoute.threadAction,
+                    question: resolvedQuestion.substring(0, 100),
+                    hasWhatToAnswerLLM: !!this.whatToAnswerLLM,
+                    hasAnswerLLM: !!this.answerLLM,
+                    imagePaths: imagePaths?.length || 0
+                });
+                
                 let structuredResponse: ConsciousModeResponse | null = null;
                 
                 if (this.whatToAnswerLLM) {
+                    console.log('[INTELLIGENCE] 🧠 Using WhatToAnswerLLM.generateReasoningFirst()...');
                     this.latencyTracker.markProviderRequestStarted(requestId);
                     // WhatToAnswerLLM hasn't been updated with Result pattern yet
                     try {
@@ -714,11 +730,19 @@ export class IntelligenceEngine extends EventEmitter {
                             intentResult,
                             imagePaths
                         );
+                        console.log('[INTELLIGENCE] 🧠 Structured response received:', {
+                            mode: structuredResponse?.mode,
+                            hasContent: structuredResponse?.mode === 'reasoning_first' 
+                                ? !!(structuredResponse as any).openingReasoning 
+                                : !!(structuredResponse as any).walkthrough,
+                            valid: isValidConsciousModeResponse(structuredResponse)
+                        });
                     } catch (error) {
-                        console.warn('[INTELLIGENCE] WhatToAnswerLLM failed:', error);
+                        console.warn('[INTELLIGENCE] ❌ WhatToAnswerLLM failed:', error);
                         structuredResponse = null;
                     }
                 } else if (this.answerLLM) {
+                    console.log('[INTELLIGENCE] 🧠 Using AnswerLLM.generateReasoningFirst() (fallback)...');
                     this.latencyTracker.markProviderRequestStarted(requestId);
                     // AnswerLLM has been updated with Result pattern
                     const result = await this.answerLLM.generateReasoningFirst(
@@ -728,10 +752,19 @@ export class IntelligenceEngine extends EventEmitter {
                     );
                     if (result.success) {
                         structuredResponse = result.data;
+                        console.log('[INTELLIGENCE] 🧠 Structured response received:', {
+                            mode: structuredResponse?.mode,
+                            hasContent: structuredResponse?.mode === 'reasoning_first' 
+                                ? !!(structuredResponse as any).openingReasoning 
+                                : !!(structuredResponse as any).walkthrough,
+                            valid: isValidConsciousModeResponse(structuredResponse)
+                        });
                     } else {
-                        console.warn('[INTELLIGENCE] AnswerLLM failed:', result.error);
+                        console.warn('[INTELLIGENCE] ❌ AnswerLLM failed:', result.error);
                         structuredResponse = null;
                     }
+                } else {
+                    console.error('[INTELLIGENCE] ❌ NO LLM AVAILABLE for conscious route! This should never happen.');
                 }
 
                 if (structuredResponse && isValidConsciousModeResponse(structuredResponse)) {
@@ -748,7 +781,9 @@ export class IntelligenceEngine extends EventEmitter {
                         );
                     }
 
-                    this.emit('suggested_answer_token', fullAnswer, question || 'What to Answer', confidence);
+                    if (shouldEmitEvents) {
+                        this.emit('suggested_answer_token', fullAnswer, question || 'What to Answer', confidence);
+                    }
                     this.latencyTracker.markFirstVisibleAnswer(requestId);
                     this.session.addAssistantMessage(fullAnswer);
                     this.session.pushUsage({
@@ -757,7 +792,9 @@ export class IntelligenceEngine extends EventEmitter {
                         question: question || 'What to Answer',
                         answer: fullAnswer
                      });
-                     this.emit('suggested_answer', fullAnswer, question || 'What to Answer', confidence);
+                     if (shouldEmitEvents) {
+                        this.emit('suggested_answer', fullAnswer, question || 'What to Answer', confidence);
+                     }
                      const latencySnapshot = this.latencyTracker.complete(requestId);
                      console.log('[IntelligenceEngine] Answer latency snapshot:', latencySnapshot);
                      this.setMode('idle');
@@ -823,7 +860,9 @@ export class IntelligenceEngine extends EventEmitter {
                         this.latencyTracker.markFirstStreamingUpdate(requestId);
                     }
                 }
-                this.emit('suggested_answer_token', token, question || 'inferred', confidence);
+                if (shouldEmitEvents) {
+                    this.emit('suggested_answer_token', token, question || 'inferred', confidence);
+                }
                 fullAnswer += token;
             }
 
@@ -847,7 +886,9 @@ export class IntelligenceEngine extends EventEmitter {
                 answer: fullAnswer
             });
 
-            this.emit('suggested_answer', fullAnswer, question || 'What to Answer', confidence);
+            if (shouldEmitEvents) {
+                this.emit('suggested_answer', fullAnswer, question || 'What to Answer', confidence);
+            }
             if (isProfileEnrichmentRoute) {
                 if (!profileEnrichmentFailed) {
                     this.latencyTracker.markProfileEnrichmentState(requestId, 'completed');
@@ -873,7 +914,9 @@ export class IntelligenceEngine extends EventEmitter {
                 const latencySnapshot = this.latencyTracker.complete(activeLatencyRequestId);
                 console.log('[IntelligenceEngine] Answer latency snapshot:', latencySnapshot);
             }
-            this.emit('error', error as Error, 'what_to_say');
+            if (shouldEmitEvents) {
+                this.emit('error', error as Error, 'what_to_say');
+            }
             this.setMode('idle');
             return "Could you repeat that? I want to make sure I address your question properly.";
         }

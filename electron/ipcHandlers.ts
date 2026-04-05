@@ -242,7 +242,7 @@ safeHandleValidated("renderer:log-error", (args) => [parseIpcInput(ipcSchemas.re
   // Streaming IPC Handler
   safeHandleValidated("gemini-chat-stream", (args) => parseIpcInput(ipcSchemas.geminiChatArgs, args, 'gemini-chat-stream'), async (event, message, imagePaths, context, options) => {
     try {
-      console.log("[IPC] gemini-chat-stream started using LLMHelper.streamChat");
+      console.log("[IPC] gemini-chat-stream started");
       const llmHelper = appState.processingHelper.getLLMHelper();
 
       // Update IntelligenceManager with USER message immediately
@@ -264,7 +264,7 @@ safeHandleValidated("renderer:log-error", (args) => [parseIpcInput(ipcSchemas.re
           const autoContext = intelligenceManager.getFormattedContext(100);
           if (autoContext && autoContext.trim().length > 0) {
             context = autoContext;
-            console.log(`[IPC] Auto - injected 100s context for gemini - chat - stream(${context.length} chars)`);
+            console.log(`[IPC] Auto-injected 100s context for gemini-chat-stream (${context.length} chars)`);
           }
         } catch (ctxErr) {
           console.warn("[IPC] Failed to auto-inject context:", ctxErr);
@@ -272,21 +272,49 @@ safeHandleValidated("renderer:log-error", (args) => [parseIpcInput(ipcSchemas.re
       }
 
       try {
-        // USE streamChat which handles routing
-        const stream = llmHelper.streamChat(message, imagePaths, context, options?.skipSystemPrompt ? "" : undefined);
+        // Check if manual call should route through conscious logic
+        const shouldUseConsciousMode = Boolean(options?.useConsciousMode && intelligenceManager.isConsciousModeEnabled());
+        console.log(`[IPC] Manual conscious mode requested: ${Boolean(options?.useConsciousMode)}, enabled: ${intelligenceManager.isConsciousModeEnabled()}`);
 
-        for await (const token of stream) {
-          event.sender.send("gemini-stream-token", token);
-          fullResponse += token;
+        if (shouldUseConsciousMode) {
+          console.log("[IPC] Routing manual submission through Conscious Mode runWhatShouldISay...");
+          try {
+            const consciousAnswer = await intelligenceManager.runWhatShouldISay(message, 0.95, imagePaths || undefined, {
+              emitEvents: false,
+            });
+
+            if (consciousAnswer && consciousAnswer.trim().length > 0) {
+              fullResponse = consciousAnswer;
+              event.sender.send("gemini-stream-token", consciousAnswer);
+              event.sender.send("gemini-stream-done");
+              return null;
+            }
+
+            console.log("[IPC] Conscious mode returned empty output, falling back to standard chat");
+          } catch (consciousError: any) {
+            console.warn("[IPC] Conscious mode failed, falling back to standard chat:", consciousError);
+            fullResponse = "";
+          }
         }
 
-        event.sender.send("gemini-stream-done");
+        // If not conscious mode or conscious mode failed, use standard streaming chat
+        if (!fullResponse.trim()) {
+          console.log("[IPC] Using standard LLMHelper.streamChat");
+          const stream = llmHelper.streamChat(message, imagePaths, context, options?.skipSystemPrompt ? "" : undefined);
 
-        // Update IntelligenceManager with ASSISTANT message after completion
-        if (fullResponse.trim().length > 0) {
-          intelligenceManager.addAssistantMessage(fullResponse);
-          // Log Usage for streaming chat
-          intelligenceManager.logUsage('chat', message, fullResponse);
+          for await (const token of stream) {
+            event.sender.send("gemini-stream-token", token);
+            fullResponse += token;
+          }
+
+          event.sender.send("gemini-stream-done");
+
+          // Update IntelligenceManager with ASSISTANT message after completion
+          if (fullResponse.trim().length > 0) {
+            intelligenceManager.addAssistantMessage(fullResponse);
+            // Log Usage for streaming chat
+            intelligenceManager.logUsage('chat', message, fullResponse);
+          }
         }
 
       } catch (streamError: any) {

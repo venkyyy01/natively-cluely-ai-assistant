@@ -15,7 +15,7 @@ export function registerWindowHandlers({ appState, safeHandle, safeHandleValidat
     'update-content-dimensions',
     (args) => [parseIpcInput(ipcSchemas.contentDimensions, args[0], 'update-content-dimensions')] as const,
     async (event, { width, height }) => {
-      if (!width || !height) return;
+      if (width <= 0 || height <= 0) return;
 
       const senderWebContents = event.sender;
       const settingsWin = appState.settingsWindowHelper.getSettingsWindow();
