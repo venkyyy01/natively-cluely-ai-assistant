@@ -212,6 +212,8 @@ impl SpeakerInput {
         match init_result {
             Ok((h_event, render_client, sample_rate, audio_client)) => {
                 let _ = init_tx.send(Ok(sample_rate));
+                let mut consecutive_timeouts = 0u32;
+                const MAX_CONSECUTIVE_TIMEOUTS: u32 = 20; // ~60 seconds of total silence allowed
                 loop {
                     {
                         let state = waker_state.lock().unwrap();
@@ -222,10 +224,18 @@ impl SpeakerInput {
                     }
 
                     if h_event.wait_for_event(3000).is_err() {
-                        return Err(anyhow::anyhow!(
-                            "Timed out waiting for Windows loopback audio event"
-                        ));
+                        consecutive_timeouts += 1;
+                        if consecutive_timeouts >= MAX_CONSECUTIVE_TIMEOUTS {
+                            return Err(anyhow::anyhow!(
+                                "Timed out waiting for Windows loopback audio event after {}s of silence",
+                                MAX_CONSECUTIVE_TIMEOUTS * 3
+                            ));
+                        }
+                        // No audio playing right now — keep waiting
+                        continue;
                     }
+
+                    consecutive_timeouts = 0;
 
                     let mut temp_queue = VecDeque::new();
                     // bytes_per_frame for 32-bit float mono = 4 bytes
