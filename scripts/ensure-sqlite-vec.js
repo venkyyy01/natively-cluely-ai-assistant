@@ -6,8 +6,12 @@
 const { execSync } = require('child_process');
 const path = require('path');
 const fs = require('fs');
+const os = require('os');
 
 const SQLITE_VEC_VERSION = '0.1.7-alpha.2';
+
+// Use OS-appropriate temp directory
+const TEMP_DIR = os.tmpdir();
 
 const packages = [
   'sqlite-vec-darwin-arm64',
@@ -24,11 +28,11 @@ for (const pkg of packages) {
   console.log(`[ensure-sqlite-vec] ${pkg} missing — fetching...`);
   try {
     // Use npm pack to download the tarball, then extract it into node_modules
-    const tarball = execSync(`npm pack ${pkg}@${SQLITE_VEC_VERSION} --pack-destination /tmp`, {
+    const tarball = execSync(`npm pack ${pkg}@${SQLITE_VEC_VERSION} --pack-destination "${TEMP_DIR}"`, {
       cwd: path.join(__dirname, '..'),
       encoding: 'utf-8',
     }).trim();
-    const tarPath = path.join('/tmp', tarball);
+    const tarPath = path.join(TEMP_DIR, tarball);
 
     fs.mkdirSync(pkgDir, { recursive: true });
     execSync(`tar xzf "${tarPath}" --strip-components=1 -C "${pkgDir}"`, { stdio: 'inherit' });

@@ -149,7 +149,7 @@ mod windows_impl {
         let hwnd = hwnd_from_buffer(&hwnd_buffer)?;
 
         unsafe {
-            if SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE).as_bool() {
+            if SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE).is_ok() {
                 return Ok(());
             }
 
@@ -166,7 +166,7 @@ mod windows_impl {
         let hwnd = hwnd_from_buffer(&hwnd_buffer)?;
 
         unsafe {
-            if SetWindowDisplayAffinity(hwnd, WDA_NONE).as_bool() {
+            if SetWindowDisplayAffinity(hwnd, WDA_NONE).is_ok() {
                 return Ok(());
             }
         }
@@ -178,11 +178,11 @@ mod windows_impl {
 
     pub fn verify(hwnd_buffer: Buffer) -> napi::Result<i32> {
         let hwnd = hwnd_from_buffer(&hwnd_buffer)?;
-        let mut affinity = WINDOW_DISPLAY_AFFINITY(0);
+        let mut affinity: u32 = 0;
 
         unsafe {
-            if GetWindowDisplayAffinity(hwnd, &mut affinity).as_bool() {
-                return Ok(affinity.0 as i32);
+            if GetWindowDisplayAffinity(hwnd, &mut affinity).is_ok() {
+                return Ok(affinity as i32);
             }
         }
 
