@@ -1,4 +1,4 @@
-import { GoogleGenAI } from "@google/genai"
+import { GoogleGenerativeAI } from "@google/generative-ai"
 import Groq from "groq-sdk"
 import OpenAI from "openai"
 import Anthropic from "@anthropic-ai/sdk"
@@ -139,7 +139,7 @@ export interface ModelFallbackEvent {
 
 export class LLMHelper {
   public static __testAxios: null | ((config: any) => Promise<any>) = null;
-  private client: GoogleGenAI | null = null
+  private client: GoogleGenerativeAI | null = null
   private groqClient: Groq | null = null
   private openaiClient: OpenAI | null = null
   private claudeClient: Anthropic | null = null
@@ -214,10 +214,7 @@ export class LLMHelper {
     } else if (apiKey) {
       this.apiKey = apiKey
       // Initialize with v1alpha API version for Gemini 3 support
-      this.client = new GoogleGenAI({
-        apiKey: apiKey,
-        httpOptions: { apiVersion: "v1alpha" }
-      })
+      this.client = new GoogleGenerativeAI(apiKey);
       // console.log(`[LLMHelper] Using Google Gemini 3 with model: ${this.geminiModel} (v1alpha API)`)
     } else {
       console.warn("[LLMHelper] No API key provided. Client will be uninitialized until key is set.")
@@ -226,10 +223,7 @@ export class LLMHelper {
 
   public setApiKey(apiKey: string) {
     this.apiKey = apiKey;
-    this.client = new GoogleGenAI({
-      apiKey: apiKey,
-      httpOptions: { apiVersion: "v1alpha" }
-    })
+    this.client = new GoogleGenerativeAI(apiKey);
     console.log("[LLMHelper] Gemini API Key updated.");
   }
 
@@ -530,15 +524,9 @@ export class LLMHelper {
 
     await this.rateLimiters.gemini.acquire();
     // console.log(`[LLMHelper] Calling ${GEMINI_FLASH_MODEL}...`)
-    const response = await this.client.models.generateContent({
-      model: GEMINI_PRO_MODEL,
-      contents: contents,
-      config: {
-        maxOutputTokens: MAX_OUTPUT_TOKENS,
-        temperature: 0.3,      // Lower = faster, more focused
-      }
-    })
-    return response.text || ""
+    const model = this.client.getGenerativeModel({ model: GEMINI_PRO_MODEL });
+    const result = await model.generateContent(contents);
+    return result.response.text() || ""
   }
 
   /**
@@ -550,15 +538,9 @@ export class LLMHelper {
 
     await this.rateLimiters.gemini.acquire();
     // console.log(`[LLMHelper] Calling ${GEMINI_FLASH_MODEL}...`)
-    const response = await this.client.models.generateContent({
-      model: GEMINI_FLASH_MODEL,
-      contents: contents,
-      config: {
-        maxOutputTokens: MAX_OUTPUT_TOKENS,
-        temperature: 0.3,      // Lower = faster, more focused
-      }
-    })
-    return response.text || ""
+    const model = this.client.getGenerativeModel({ model: GEMINI_FLASH_MODEL });
+    const result = await model.generateContent(contents);
+    return result.response.text() || ""
   }
 
   /**
@@ -708,8 +690,9 @@ export class LLMHelper {
         }),
       );
 
-      // @ts-ignore
-      const response = await this.client!.models.generateContent(requestPayload);
+      const model = this.client!.getGenerativeModel({ model: targetModel });
+      const result = await model.generateContent(contents);
+      const response = result.response;
 
       // Debug: log full response structure
       // console.log(`[LLMHelper] Full response:`, JSON.stringify(response, null, 2).substring(0, 500))
@@ -731,7 +714,7 @@ export class LLMHelper {
 
       // Method 1: Direct response.text
       if (response.text) {
-        text = response.text;
+        text = response.text();
       }
       // Method 2: candidate.content.parts array (check all parts)
       else if (candidate.content?.parts) {
@@ -1490,7 +1473,7 @@ ANSWER DIRECTLY:`;
         this.groqClient!.chat.completions.create(requestPayload as any),
         LLM_API_TIMEOUT_MS
       );
-      return response.choices[0]?.message?.content || "";
+      return (response as any).choices[0]?.message?.content || "";
     });
   }
 
@@ -1544,7 +1527,7 @@ ANSWER DIRECTLY:`;
           this.openaiClient!.chat.completions.create(requestPayload as any),
           LLM_API_TIMEOUT_MS
         );
-        return response.choices[0]?.message?.content || "";
+        return (response as any).choices[0]?.message?.content || "";
       } catch (error) {
         if (allowFallback && this.isModelNotFoundError(error)) {
           const fallbackModel = await this.resolveOpenAiFallbackModel(targetModel);
@@ -1909,7 +1892,7 @@ ANSWER DIRECTLY:`;
       LLM_API_TIMEOUT_MS
     );
 
-    return response.choices[0]?.message?.content || "";
+    return (response as any).choices[0]?.message?.content || "";
   }
 
   /**
@@ -2774,19 +2757,10 @@ ANSWER DIRECTLY:`;
     }
 
     try {
-      const streamResult = await this.client.models.generateContentStream({
-        model: model,
-        contents: contents,
-        config: {
-          maxOutputTokens: MAX_OUTPUT_TOKENS,
-          temperature: 0.4,
-        }
-      });
+      const genModel = this.client.getGenerativeModel({ model });
+      const streamResult = await genModel.generateContentStream(contents);
 
-      // @ts-ignore
-      const stream = streamResult.stream || streamResult;
-
-      for await (const chunk of stream) {
+      for await (const chunk of streamResult.stream) {
         if (controller.signal.aborted) {
           console.log('[LLMHelper] streamWithGeminiModel aborted');
           return;
@@ -2877,19 +2851,10 @@ ANSWER DIRECTLY:`;
       }
     }
 
-    const streamResult = await this.client.models.generateContentStream({
-      model: model,
-      contents: contents,
-      config: {
-        maxOutputTokens: MAX_OUTPUT_TOKENS,
-        temperature: 0.4,
-      }
-    });
+    const genModel = this.client.getGenerativeModel({ model });
+    const streamResult = await genModel.generateContentStream(contents);
 
-    // @ts-ignore
-    const stream = streamResult.stream || streamResult;
-
-    for await (const chunk of stream) {
+    for await (const chunk of streamResult.stream) {
       let chunkText = "";
       if (typeof chunk.text === 'function') {
         chunkText = chunk.text();
@@ -3164,7 +3129,7 @@ ANSWER DIRECTLY:`;
    * Used by AnswerLLM, AssistLLM, FollowUpLLM, RecapLLM
    * RETURNS A PROXY client that handles retries and fallbacks transparently
    */
-  public getGeminiClient(): GoogleGenAI | null {
+  public getGeminiClient(): GoogleGenerativeAI | null {
     if (!this.client) return null;
     return this.createRobustClient(this.client);
   }
@@ -3266,24 +3231,22 @@ ANSWER DIRECTLY:`;
    * Creates a proxy around the real Gemini client to intercept generation calls
    * and apply robust retry/fallback logic without modifying consumer code.
    */
-  private createRobustClient(realClient: GoogleGenAI): GoogleGenAI {
-    // We proxy the 'models' property to intercept 'generateContent'
-    const modelsProxy = new Proxy(realClient.models, {
-      get: (target, prop, receiver) => {
-        if (prop === 'generateContent') {
-          return async (args: any) => {
-            return this.generateWithFallback(realClient, args);
-          };
-        }
-        return Reflect.get(target, prop, receiver);
+  private createRobustClient(realClient: GoogleGenerativeAI): GoogleGenerativeAI {
+    // We create a models object with intercepted methods
+    const models = {
+      generateContent: async (args: any) => {
+        return this.generateWithFallback(realClient, args);
+      },
+      generateContentStream: async (args: any) => {
+        return this.generateWithFallbackStream(realClient, args);
       }
-    });
+    };
 
-    // We proxy the client itself to return our modelsProxy
+    // We proxy the client to return our models object
     return new Proxy(realClient, {
       get: (target, prop, receiver) => {
         if (prop === 'models') {
-          return modelsProxy;
+          return models;
         }
         return Reflect.get(target, prop, receiver);
       }
@@ -3301,7 +3264,7 @@ ANSWER DIRECTLY:`;
    * 4. If both fail, try Flash one last time (Attempt 3).
    * 5. If that fails, throw error.
    */
-  private async generateWithFallback(client: GoogleGenAI, args: any): Promise<any> {
+  private async generateWithFallback(client: GoogleGenerativeAI, args: any): Promise<any> {
     const originalModel = args.model;
 
     // Helper to check for valid content
@@ -3317,10 +3280,9 @@ ANSWER DIRECTLY:`;
 
     // 1. Initial Attempt (Flash)
     try {
-      const response = await client.models.generateContent({
-        ...args,
-        model: originalModel
-      });
+      const model = client.getGenerativeModel({ model: originalModel });
+      const result = await model.generateContent(args.contents);
+      const response = result.response;
       if (isValidResponse(response)) return response;
       console.warn(`[LLMHelper] Initial ${originalModel} call returned empty/invalid response.`);
     } catch (error: any) {
@@ -3334,7 +3296,9 @@ ANSWER DIRECTLY:`;
     const flashRetryPromise = (async () => {
       // Small delay before retry to let system settle? No, user said "immediately"
       try {
-        const res = await client.models.generateContent({ ...args, model: originalModel });
+        const model = client.getGenerativeModel({ model: originalModel });
+        const result = await model.generateContent(args.contents);
+        const res = result.response;
         if (isValidResponse(res)) return { type: 'flash', res };
         throw new Error("Empty Flash Response");
       } catch (e) { throw e; }
@@ -3343,7 +3307,9 @@ ANSWER DIRECTLY:`;
     const proBackupPromise = (async () => {
       try {
         // Pro might be slower, but it's the robust backup
-        const res = await client.models.generateContent({ ...args, model: GEMINI_PRO_MODEL });
+        const model = client.getGenerativeModel({ model: GEMINI_PRO_MODEL });
+        const result = await model.generateContent(args.contents);
+        const res = result.response;
         if (isValidResponse(res)) return { type: 'pro', res };
         throw new Error("Empty Pro Response");
       } catch (e) { throw e; }
@@ -3369,11 +3335,18 @@ ANSWER DIRECTLY:`;
     // 4. Last Resort: Flash Final Retry
     console.log(`[LLMHelper] ⚠️ All parallel attempts failed. Trying Flash one last time...`);
     try {
-      return await client.models.generateContent({ ...args, model: originalModel });
+      const model = client.getGenerativeModel({ model: originalModel });
+      const result = await model.generateContent(args.contents);
+      return result.response;
     } catch (finalError) {
       console.error(`[LLMHelper] Final retry failed.`);
       throw finalError;
     }
+  }
+
+  private async generateWithFallbackStream(client: GoogleGenerativeAI, args: any): Promise<any> {
+    const model = client.getGenerativeModel({ model: args.model });
+    return await model.generateContentStream(args.contents);
   }
 
   private async withTimeout<T>(promise: Promise<T>, timeoutMs: number, operationName: string): Promise<T> {
@@ -3427,7 +3400,7 @@ ANSWER DIRECTLY:`;
           "Groq Summary"
         );
 
-        const text = response.choices[0]?.message?.content || "";
+        const text = (response as any).choices[0]?.message?.content || "";
         if (text.trim().length > 0) {
           console.log(`[LLMHelper] ✅ Groq summary generated successfully.`);
           return this.processResponse(text);
@@ -3489,7 +3462,7 @@ ANSWER DIRECTLY:`;
           60000,
           `Gemini Pro Summary (Attempt ${attempt})`
         );
-        const text = response.text || "";
+        const text = (response as any).text || "";
 
         if (text.trim().length > 0) {
           console.log(`[LLMHelper] ✅ Gemini Pro summary generated successfully.`);
@@ -3528,10 +3501,7 @@ ANSWER DIRECTLY:`;
 
     if (apiKey) {
       this.apiKey = apiKey;
-      this.client = new GoogleGenAI({
-        apiKey: apiKey,
-        httpOptions: { apiVersion: "v1alpha" }
-      });
+      this.client = new GoogleGenerativeAI(apiKey);
     } else if (!this.client) {
       throw new Error("No Gemini API key provided and no existing client");
     }
