@@ -544,7 +544,7 @@ ${contextString}`;
                             opacity: { duration: 0.2 }
                         }}
                         className="relative mx-auto w-full max-w-[680px] mb-0 bg-bg-secondary dark:bg-[#0C0C0C] rounded-t-[24px] border-t border-x border-border-subtle shadow-2xl overflow-hidden flex flex-col"
-                        onClick={(e) => e.stopPropagation()}
+                        onClick={(e: React.MouseEvent<HTMLDivElement>) => e.stopPropagation()}
                     >
                         {/* Header with close button */}
                         <div className="flex items-center justify-between px-4 py-3 border-b border-border-subtle shrink-0">

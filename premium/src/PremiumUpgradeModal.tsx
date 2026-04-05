@@ -98,7 +98,7 @@ export const PremiumUpgradeModal: React.FC<PremiumUpgradeModalProps> = ({ isOpen
                     delay: 0.05 
                 }}
                 className="relative w-[380px] bg-[#111111] border border-white/[0.06] rounded-2xl shadow-[0_20px_60px_rgba(0,0,0,0.6),inset_0_1px_0_rgba(255,255,255,0.05)] overflow-hidden"
-                onClick={(e) => e.stopPropagation()}
+                onClick={(e: React.MouseEvent<HTMLDivElement>) => e.stopPropagation()}
             >
 
                 {/* Close button */}
