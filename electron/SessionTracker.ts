@@ -65,6 +65,8 @@ import { ThreadManager, InterviewPhaseDetector, TokenBudgetManager, InterviewPha
 import { RESUME_THRESHOLD } from './conscious/types';
 import { AdaptiveContextWindow, ContextEntry, ContextSelectionConfig } from './conscious/AdaptiveContextWindow';
 import { isOptimizationActive } from './config/optimizations';
+import { extractConstraints, ExtractedConstraint, detectQuestion, ResponseFingerprinter } from './conscious';
+import { SessionPersistence, PersistedSession } from './memory/SessionPersistence';
 
 export interface TranscriptSegment {
     marker?: string;
@@ -92,6 +94,13 @@ export interface AssistantResponse {
     text: string;
     timestamp: number;
     questionContext: string;
+}
+
+export interface PinnedItem {
+  id: string;
+  text: string;
+  pinnedAt: number;
+  label?: string;
 }
 
 export interface MeetingMetadataSnapshot {
@@ -176,6 +185,23 @@ export class SessionTracker {
   private sessionId: string = `session_${SessionTracker.nextSessionId++}`;
   private transcriptRevision: number = 0;
   private compactSnapshotCache = new Map<string, { revision: number; value: string }>();
+  private readonly persistence: SessionPersistence = new SessionPersistence();
+  private pendingRestorePromise: Promise<void> | null = null;
+  private activeMeetingId: string = 'unspecified';
+  private pinnedItems: PinnedItem[] = [];
+  private readonly maxPinnedItems: number = 10;
+  private extractedConstraints: ExtractedConstraint[] = [];
+  private readonly fingerprinter: ResponseFingerprinter = new ResponseFingerprinter();
+  private readonly contextAssembleCache = new Map<string, { assembled: string; tokenCount: number; revision: number; createdAt: number }>();
+  private readonly contextCacheTTLms = 10000;
+  private readonly contextCacheMaxEntries = 20;
+  private adaptiveWindowStats = {
+    calls: 0,
+    totalMs: 0,
+    over50ms: 0,
+    timeouts: 0,
+  };
+  private readonly ADAPTIVE_WINDOW_TIMEOUT_MS = 120;
 
     // ============================================
     // Configuration
@@ -187,6 +213,11 @@ export class SessionTracker {
 
     public setMeetingMetadata(metadata: any): void {
         this.currentMeetingMetadata = metadata;
+        const inferredMeetingId = metadata?.meetingId || metadata?.calendarEventId || metadata?.title;
+        if (typeof inferredMeetingId === 'string' && inferredMeetingId.trim()) {
+          this.activeMeetingId = inferredMeetingId.trim();
+        }
+        this.persistState();
     }
 
     public getMeetingMetadata() {
@@ -195,6 +226,7 @@ export class SessionTracker {
 
     public clearMeetingMetadata(): void {
         this.currentMeetingMetadata = null;
+        this.persistState();
     }
 
     // ============================================
@@ -231,6 +263,18 @@ export class SessionTracker {
     });
         this.transcriptRevision++;
         this.compactSnapshotCache.clear();
+        this.contextAssembleCache.clear();
+
+        // Extract and auto-pin constraints in realtime
+        const constraints = extractConstraints(text);
+        if (constraints.length > 0) {
+          for (const constraint of constraints) {
+            if (!this.hasConstraint(constraint.normalized)) {
+              this.extractedConstraints.push(constraint);
+              this.pinItem(constraint.normalized, constraint.type, true);
+            }
+          }
+        }
 
         this.evictOldEntries();
 
@@ -251,6 +295,8 @@ export class SessionTracker {
       // Debounced compaction instead of immediate
       this.scheduleCompaction();
     }
+
+        this.persistState();
 
         return { role };
     }
@@ -282,6 +328,12 @@ export class SessionTracker {
     });
         this.transcriptRevision++;
         this.compactSnapshotCache.clear();
+        this.contextAssembleCache.clear();
+
+        if (this.fingerprinter.isDuplicate(cleanText).isDupe) {
+            console.warn('[SessionTracker] Duplicate assistant response detected by fingerprint history');
+        }
+        this.fingerprinter.record(cleanText);
 
         // Also add to fullTranscript so it persists in the session history (and summaries)
         this.fullTranscript.push({
@@ -315,6 +367,7 @@ export class SessionTracker {
 
         console.log(`[SessionTracker] lastAssistantMessage updated, history size: ${this.assistantResponseHistory.length}`);
         this.evictOldEntries();
+        this.persistState();
     }
 
     /**
@@ -440,30 +493,151 @@ isConsciousModeEnabled(): boolean {
     return this.adaptiveContextWindow;
   }
 
+  private async withTimeout<T>(promise: Promise<T>, timeoutMs: number, timeoutLabel: string): Promise<T> {
+    let timer: NodeJS.Timeout | null = null;
+    const timeout = new Promise<T>((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`${timeoutLabel} timed out after ${timeoutMs}ms`)), timeoutMs);
+    });
+
+    try {
+      return await Promise.race([promise, timeout]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+
+  private buildPinnedContextSection(): string {
+    if (this.pinnedItems.length === 0) return '';
+    const rows = this.pinnedItems
+      .map((item) => item.label ? `[${item.label}] ${item.text}` : item.text)
+      .join('\n');
+    return `<pinned_context>\n${rows}\n</pinned_context>`;
+  }
+
+  private estimateContextTokenCount(assembled: string): number {
+    const roughTokens = Math.ceil(assembled.length / 4);
+    return Math.max(1, roughTokens);
+  }
+
+  private getCacheEntryKey(query: string): string {
+    return `${this.sessionId}:${query.trim().toLowerCase()}`;
+  }
+
+  private getCachedAssembledContext(query: string): string | null {
+    const key = this.getCacheEntryKey(query);
+    const entry = this.contextAssembleCache.get(key);
+    if (!entry) return null;
+
+    if (entry.revision !== this.transcriptRevision) {
+      this.contextAssembleCache.delete(key);
+      return null;
+    }
+
+    if (Date.now() - entry.createdAt > this.contextCacheTTLms) {
+      this.contextAssembleCache.delete(key);
+      return null;
+    }
+
+    return entry.assembled;
+  }
+
+  private setCachedAssembledContext(query: string, assembled: string): void {
+    if (this.contextAssembleCache.size >= this.contextCacheMaxEntries) {
+      const oldestKey = this.contextAssembleCache.keys().next().value;
+      if (typeof oldestKey === 'string') {
+        this.contextAssembleCache.delete(oldestKey);
+      }
+    }
+
+    this.contextAssembleCache.set(this.getCacheEntryKey(query), {
+      assembled,
+      tokenCount: this.estimateContextTokenCount(assembled),
+      revision: this.transcriptRevision,
+      createdAt: Date.now(),
+    });
+  }
+
+  private getAdaptiveFallbackContext(tokenBudget: number): ContextItem[] {
+    // Deterministic fallback ladder:
+    // Tier A/B approximation: recency + pinned
+    // Tier C: pinned + last N turns
+    const lastSeconds = Math.max(30, Math.floor(tokenBudget / 4));
+    const recency = this.getContext(lastSeconds);
+    const pinnedAsContext: ContextItem[] = this.pinnedItems.map((item) => ({
+      role: 'interviewer',
+      text: item.label ? `[${item.label}] ${item.text}` : item.text,
+      timestamp: item.pinnedAt,
+    }));
+
+    const merged = [...pinnedAsContext, ...recency];
+    if (merged.length === 0) {
+      return this.getContext(120).slice(-Math.max(4, Math.floor(tokenBudget / 20)));
+    }
+    return merged;
+  }
+
   async getAdaptiveContext(
     query: string,
     queryEmbedding: number[],
     tokenBudget: number = 500
   ): Promise<ContextItem[]> {
-    if (!isOptimizationActive('useAdaptiveWindow')) {
-      return this.getContext(Math.floor(tokenBudget / 4));
+    if (this.pendingRestorePromise) {
+      await this.pendingRestorePromise.catch(() => {
+        // restore failures should not block live flow
+      });
     }
+
+    if (!isOptimizationActive('useAdaptiveWindow')) {
+      return this.getAdaptiveFallbackContext(tokenBudget);
+    }
+
+    const startedAt = Date.now();
+    this.adaptiveWindowStats.calls += 1;
 
     const candidates: ContextEntry[] = this.getContextItems().map((item: ContextItem) => ({
       text: item.text,
       timestamp: item.timestamp,
-      phase: undefined as InterviewPhase | undefined,
+      phase: this.phaseDetector.getCurrentPhase(),
+      embedding: queryEmbedding,
     }));
+
+    for (const pinned of this.pinnedItems) {
+      candidates.push({
+        text: pinned.label ? `[${pinned.label}] ${pinned.text}` : pinned.text,
+        timestamp: pinned.pinnedAt,
+        phase: this.phaseDetector.getCurrentPhase(),
+        embedding: queryEmbedding,
+      });
+    }
+
+    const questionSignal = detectQuestion(query);
 
     const config: ContextSelectionConfig = {
       tokenBudget,
-      recencyWeight: 0.4,
-      semanticWeight: 0.4,
+      recencyWeight: questionSignal.isQuestion ? 0.35 : 0.45,
+      semanticWeight: questionSignal.isQuestion ? 0.45 : 0.35,
       phaseAlignmentWeight: 0.2,
     };
 
     const window = this.getAdaptiveContextWindow();
-    const selected = await window.selectContext(query, queryEmbedding, candidates, config);
+    let selected: ContextEntry[];
+    try {
+      selected = await this.withTimeout(
+        window.selectContext(query, queryEmbedding, candidates, config),
+        this.ADAPTIVE_WINDOW_TIMEOUT_MS,
+        'AdaptiveContextWindow.selectContext'
+      );
+    } catch (error) {
+      this.adaptiveWindowStats.timeouts += 1;
+      console.warn('[SessionTracker] Adaptive window timeout, falling back:', error);
+      return this.getAdaptiveFallbackContext(tokenBudget);
+    }
+
+    const duration = Date.now() - startedAt;
+    this.adaptiveWindowStats.totalMs += duration;
+    if (duration > 50) {
+      this.adaptiveWindowStats.over50ms += 1;
+    }
 
     return selected.map(entry => ({
       role: 'interviewer' as const,
@@ -513,13 +687,23 @@ isConsciousModeEnabled(): boolean {
      * Get formatted context string for LLM prompts
      */
     getFormattedContext(lastSeconds: number = 120): string {
+        const baseCached = this.getCachedAssembledContext(`formatted:${lastSeconds}`);
+        if (baseCached) {
+          return baseCached;
+        }
+
         const items = this.getContext(lastSeconds);
-        return items.map(item => {
+        const baseContext = items.map(item => {
             const label = item.role === 'interviewer' ? 'INTERVIEWER' :
                 item.role === 'user' ? 'ME' :
                     'ASSISTANT (PREVIOUS SUGGESTION)';
             return `[${label}]: ${item.text}`;
         }).join('\n');
+
+        const pinnedSection = this.buildPinnedContextSection();
+        const assembled = pinnedSection ? `${pinnedSection}\n${baseContext}` : baseContext;
+        this.setCachedAssembledContext(`formatted:${lastSeconds}`, assembled);
+        return assembled;
     }
 
     getSessionId(): string {
@@ -608,6 +792,160 @@ isConsciousModeEnabled(): boolean {
         next.setRecapLLM(this.recapLLM);
         next.setConsciousModeEnabled(this.consciousModeEnabled);
         return next;
+    }
+
+    getPinnedItems(): PinnedItem[] {
+      return [...this.pinnedItems];
+    }
+
+    pinItem(text: string, label?: string, skipPersist: boolean = false): void {
+      const trimmed = text.trim();
+      if (!trimmed) return;
+
+      if (this.pinnedItems.length >= this.maxPinnedItems) {
+        this.pinnedItems.shift();
+      }
+
+      this.pinnedItems.push({
+        id: `pin_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+        text: trimmed,
+        pinnedAt: Date.now(),
+        label,
+      });
+      this.contextAssembleCache.clear();
+
+      if (!skipPersist) {
+        this.persistState();
+      }
+    }
+
+    unpinItem(id: string): void {
+      this.pinnedItems = this.pinnedItems.filter((item) => item.id !== id);
+      this.contextAssembleCache.clear();
+      this.persistState();
+    }
+
+    clearPinnedItems(): void {
+      this.pinnedItems = [];
+      this.contextAssembleCache.clear();
+      this.persistState();
+    }
+
+    hasConstraint(normalized: string): boolean {
+      const key = normalized.trim().toLowerCase();
+      return this.extractedConstraints.some((constraint) => constraint.normalized.toLowerCase() === key);
+    }
+
+    getConstraintSummary(): ExtractedConstraint[] {
+      return [...this.extractedConstraints];
+    }
+
+    getAdaptiveWindowStats(): { calls: number; avgMs: number; over50ms: number; timeouts: number } {
+      const avgMs = this.adaptiveWindowStats.calls > 0
+        ? this.adaptiveWindowStats.totalMs / this.adaptiveWindowStats.calls
+        : 0;
+      return {
+        calls: this.adaptiveWindowStats.calls,
+        avgMs,
+        over50ms: this.adaptiveWindowStats.over50ms,
+        timeouts: this.adaptiveWindowStats.timeouts,
+      };
+    }
+
+    setActiveMeetingId(meetingId: string): void {
+      if (!meetingId.trim()) return;
+      this.activeMeetingId = meetingId.trim();
+      this.persistState();
+    }
+
+    private buildPersistedSession(now: number = Date.now()): PersistedSession {
+      const activeThread = this.threadManager.getActiveThread();
+
+      return {
+        version: 1,
+        sessionId: this.sessionId,
+        meetingId: this.activeMeetingId,
+        createdAt: this.sessionStartTime,
+        lastActiveAt: now,
+        activeThread: activeThread ? {
+          id: activeThread.id,
+          topic: activeThread.topic,
+          goal: activeThread.goal,
+          phase: activeThread.phase,
+          turnCount: activeThread.turnCount,
+        } : null,
+        suspendedThreads: this.threadManager.getSuspendedThreads().map((thread) => ({
+          id: thread.id,
+          topic: thread.topic,
+          goal: thread.goal,
+          suspendedAt: thread.suspendedAt || thread.lastActiveAt,
+        })),
+        pinnedItems: this.pinnedItems,
+        constraints: this.extractedConstraints,
+        epochSummaries: [...this.transcriptEpochSummaries],
+        responseHashes: this.fingerprinter.getHashes(),
+      };
+    }
+
+    private persistState(): void {
+      if (!this.activeMeetingId || this.activeMeetingId === 'unspecified') return;
+      const snapshot = this.buildPersistedSession();
+      this.persistence.scheduleSave(snapshot);
+    }
+
+    async restoreFromMeetingId(meetingId: string): Promise<boolean> {
+      this.activeMeetingId = meetingId;
+      const session = await this.persistence.findByMeeting(meetingId);
+      if (!session) return false;
+
+      const tooOld = Date.now() - session.lastActiveAt > 2 * 60 * 60 * 1000;
+      if (tooOld) {
+        return false;
+      }
+
+      this.sessionId = session.sessionId;
+      this.sessionStartTime = session.createdAt;
+      this.pinnedItems = session.pinnedItems || [];
+      this.extractedConstraints = (session.constraints || []) as ExtractedConstraint[];
+      this.transcriptEpochSummaries = session.epochSummaries || [];
+      this.fingerprinter.restore(session.responseHashes || []);
+
+      if (session.activeThread) {
+        const restored = this.threadManager.createThread(
+          session.activeThread.topic,
+          (session.activeThread.phase as InterviewPhase) || 'requirements_gathering'
+        );
+        this.threadManager.updateActiveThread({
+          id: session.activeThread.id,
+          goal: session.activeThread.goal || restored.goal,
+          turnCount: session.activeThread.turnCount,
+        } as any);
+      }
+
+      this.contextAssembleCache.clear();
+      return true;
+    }
+
+    ensureMeetingContext(meetingId?: string): void {
+      if (!meetingId) return;
+      this.activeMeetingId = meetingId;
+      if (!this.pendingRestorePromise) {
+        this.pendingRestorePromise = this.restoreFromMeetingId(meetingId)
+          .then(() => {
+            // normalize to Promise<void> for pending gate
+          })
+          .catch((error) => {
+            console.warn('[SessionTracker] Failed to restore persisted session state:', error);
+          })
+          .finally(() => {
+            this.pendingRestorePromise = null;
+          });
+      }
+    }
+
+    flushPersistenceNow(): void {
+      this.persistState();
+      void this.persistence.flushScheduledSave();
     }
 
     getSessionStartTime(): number {
@@ -744,7 +1082,19 @@ isConsciousModeEnabled(): boolean {
     this.adaptiveContextWindow = null;
     this.transcriptRevision = 0;
     this.compactSnapshotCache.clear();
+    this.contextAssembleCache.clear();
     this.sessionId = freshSessionId;
+    this.pinnedItems = [];
+    this.extractedConstraints = [];
+    this.fingerprinter.clear();
+    this.activeMeetingId = 'unspecified';
+    this.pendingRestorePromise = null;
+    this.adaptiveWindowStats = {
+      calls: 0,
+      totalMs: 0,
+      over50ms: 0,
+      timeouts: 0,
+    };
     
     this.pendingCompactionPromise = null;
     this.isCompacting = false;

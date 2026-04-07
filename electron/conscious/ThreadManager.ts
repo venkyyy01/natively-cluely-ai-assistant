@@ -38,6 +38,28 @@ export class ThreadManager {
   private suspendedThreads: ConversationThread[] = [];
   private confidenceScorer: ConfidenceScorer = new ConfidenceScorer();
 
+  private buildPseudoEmbedding(text: string): number[] {
+    const DIM = 32;
+    const vec = new Array<number>(DIM).fill(0);
+    const normalized = text.toLowerCase().replace(/[^a-z0-9\s]/g, ' ');
+    const tokens = normalized.split(/\s+/).filter(Boolean);
+    if (tokens.length === 0) return vec;
+
+    for (const token of tokens) {
+      let hash = 2166136261;
+      for (let i = 0; i < token.length; i++) {
+        hash ^= token.charCodeAt(i);
+        hash = Math.imul(hash, 16777619);
+      }
+      const idx = Math.abs(hash) % DIM;
+      vec[idx] += 1;
+    }
+
+    const norm = Math.sqrt(vec.reduce((sum, n) => sum + n * n, 0));
+    if (norm === 0) return vec;
+    return vec.map((n) => n / norm);
+  }
+
   createThread(topic: string, phase: InterviewPhase): ConversationThread {
     // Suspend current active thread if exists
     if (this.activeThread) {
@@ -61,6 +83,7 @@ export class ThreadManager {
       turnCount: 0,
       tokenCount: 0,
       resumeCount: 0,
+      embedding: this.buildPseudoEmbedding(`${topic} Discuss ${topic}`),
     };
     
     this.activeThread = newThread;
@@ -69,6 +92,11 @@ export class ThreadManager {
 
   suspendActive(interruptedBy?: string): void {
     if (!this.activeThread) return;
+
+    // Refresh embedding before suspension for better resume matching
+    this.activeThread.embedding = this.buildPseudoEmbedding(
+      `${this.activeThread.topic} ${this.activeThread.goal} ${this.activeThread.resumeKeywords.join(' ')}`
+    );
     
     this.activeThread.status = 'suspended';
     this.activeThread.suspendedAt = Date.now();
@@ -128,9 +156,12 @@ export class ThreadManager {
 
   findMatchingThread(
     transcript: string,
-    currentPhase: InterviewPhase = 'requirements_gathering'
+    currentPhase: InterviewPhase = 'requirements_gathering',
+    transcriptEmbedding?: number[]
   ): { thread: ConversationThread; confidence: ConfidenceScore } | null {
     if (this.suspendedThreads.length === 0) return null;
+
+    const effectiveEmbedding = transcriptEmbedding || this.buildPseudoEmbedding(transcript);
     
     let bestMatch: { thread: ConversationThread; confidence: ConfidenceScore } | null = null;
     
@@ -138,7 +169,9 @@ export class ThreadManager {
       const confidence = this.confidenceScorer.calculateResumeConfidence(
         transcript, 
         thread, 
-        currentPhase
+        currentPhase,
+        0.9,
+        effectiveEmbedding
       );
       
       if (!bestMatch || confidence.total > bestMatch.confidence.total) {

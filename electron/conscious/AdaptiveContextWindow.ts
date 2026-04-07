@@ -1,5 +1,6 @@
 import { InterviewPhase } from './types';
 import { isOptimizationActive } from '../config/optimizations';
+import { TokenCounter } from '../shared/TokenCounter';
 
 export interface ContextEntry {
   text: string;
@@ -17,6 +18,11 @@ export interface ContextSelectionConfig {
 
 export class AdaptiveContextWindow {
   private currentPhase: InterviewPhase = 'requirements_gathering';
+  private tokenCounter: TokenCounter;
+
+  constructor(private readonly modelHint: string = 'generic') {
+    this.tokenCounter = new TokenCounter(modelHint);
+  }
 
   setCurrentPhase(phase: InterviewPhase): void {
     this.currentPhase = phase;
@@ -148,7 +154,7 @@ export class AdaptiveContextWindow {
   }
 
   private estimateTokens(text: string): number {
-    return Math.ceil(text.split(/\s+/).length);
+    return this.tokenCounter.count(text, this.modelHint);
   }
 
   private selectContextLegacy(candidates: ContextEntry[], tokenBudget: number): ContextEntry[] {

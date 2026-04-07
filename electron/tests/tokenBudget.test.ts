@@ -40,5 +40,5 @@ test('TokenBudgetManager - should estimate tokens from text', () => {
   const text = "This is a test sentence with some words.";
   const tokens = manager.estimateTokens(text);
   assert.ok(tokens > 0);
-  assert.ok(tokens < text.length); // Roughly 4 chars per token
+  assert.ok(tokens < text.length);
 });

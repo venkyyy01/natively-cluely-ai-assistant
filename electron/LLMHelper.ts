@@ -24,6 +24,7 @@ import { validateResponseQuality, logValidationMetrics } from './llm/postProcess
 import { createHash } from 'crypto';
 import { createProviderRateLimiters, RateLimiter } from './services/RateLimiter';
 import { classifyProviderCapability, ProviderCapabilityClass } from './latency/providerCapability';
+import { TokenCounter } from './shared/TokenCounter';
 const execAsync = promisify(exec);
 
 /** Default timeout for LLM API calls in milliseconds */
@@ -179,6 +180,7 @@ export class LLMHelper {
   private inFlightResponseCache = new Map<string, Promise<string>>();
   private modelFallbackHandler: ((event: ModelFallbackEvent) => void) | null = null;
   private cacheCleanupInterval: ReturnType<typeof setInterval> | null = null;
+  private readonly tokenCounter = new TokenCounter();
 
   // Rate limiters per provider to prevent 429 errors on free tiers
   private rateLimiters: ReturnType<typeof createProviderRateLimiters>;
@@ -644,14 +646,14 @@ export class LLMHelper {
   }
 
   private estimateTokens(text: string): number {
-    return Math.ceil(text.length / 4);
+    return this.tokenCounter.count(text, this.getCurrentModel());
   }
 
   private trimTextToTokenBudget(text: string, maxTokens: number, preserveTail: boolean = false): string {
     if (!text) return text;
     if (this.estimateTokens(text) <= maxTokens) return text;
 
-    const maxChars = maxTokens * 4;
+    const maxChars = this.tokenCounter.estimateCharacterBudget(maxTokens, this.getCurrentModel());
     if (preserveTail) {
       return `...[truncated]\n${text.slice(-maxChars)}`;
     }

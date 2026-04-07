@@ -1586,6 +1586,7 @@ try {
       this.currentMeetingId = randomUUID()
       this.isMeetingActive = true;
       this.resetAudioPipelineStats();
+      this.intelligenceManager.getSessionTracker().ensureMeetingContext(this.currentMeetingId);
       if (normalizedMetadata) {
         this.intelligenceManager.setMeetingMetadata(normalizedMetadata);
       }

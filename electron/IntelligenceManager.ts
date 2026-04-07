@@ -83,6 +83,10 @@ export class IntelligenceManager extends EventEmitter {
 
     setMeetingMetadata(metadata: any): void {
         this.session.setMeetingMetadata(metadata);
+        const inferredMeetingId = metadata?.meetingId || metadata?.calendarEventId;
+        if (typeof inferredMeetingId === 'string' && inferredMeetingId.trim()) {
+            this.session.ensureMeetingContext(inferredMeetingId.trim());
+        }
     }
 
     getSessionTracker(): SessionTracker {
@@ -197,6 +201,9 @@ export class IntelligenceManager extends EventEmitter {
     // ============================================
 
   async stopMeeting(meetingId?: string): Promise<void> {
+    if (meetingId) {
+      this.session.setActiveMeetingId(meetingId);
+    }
     const nextSession = await this.persistence.stopMeeting(meetingId);
     this.session = nextSession;
     this.persistence.setSession(nextSession);

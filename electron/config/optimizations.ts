@@ -34,9 +34,9 @@ export interface OptimizationFlags {
   maxPrefetchPredictions: number;
 }
 
-/** Default optimization flags - master toggle disabled, individual flags enabled for when toggle is ON */
+/** Default optimization flags - acceleration enabled for realtime context reliability */
 export const DEFAULT_OPTIMIZATION_FLAGS: OptimizationFlags = {
-  accelerationEnabled: false,
+  accelerationEnabled: true,
 
   // Phase 1
   usePromptCompiler: true,

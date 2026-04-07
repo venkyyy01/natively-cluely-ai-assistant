@@ -75,10 +75,18 @@ export class MeetingPersistence {
     public async stopMeeting(meetingId?: string): Promise<SessionTracker> {
         console.log('[MeetingPersistence] Stopping meeting and queueing save...');
 
+        if (meetingId && typeof (this.session as any).setActiveMeetingId === 'function') {
+            (this.session as any).setActiveMeetingId(meetingId);
+        }
+
         // 0. Force-save any pending interim transcript
         this.session.flushInterimTranscript();
 
         // 1. Snapshot valid data BEFORE resetting
+        if (typeof (this.session as any).flushPersistenceNow === 'function') {
+            (this.session as any).flushPersistenceNow();
+        }
+
         const snapshot = this.session.createSnapshot();
         const nextSession = this.session.createSuccessorSession();
         this.session = nextSession;

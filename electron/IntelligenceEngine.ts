@@ -93,6 +93,8 @@ export class IntelligenceEngine extends EventEmitter {
   private parallelContextAssembler: ParallelContextAssembler | null = null;
   private latencyTracker: AnswerLatencyTracker = new AnswerLatencyTracker();
   private activeWhatToSayRequestId = 0;
+  private readonly CONTEXT_ASSEMBLY_SOFT_BUDGET_MS = 80;
+  private readonly CONTEXT_ASSEMBLY_HARD_BUDGET_MS = 120;
 
   // Timestamps for tracking
   private lastTranscriptTime: number = 0;
@@ -634,6 +636,7 @@ export class IntelligenceEngine extends EventEmitter {
                 text: item.text,
                 timestamp: item.timestamp
             }));
+            const contextAssemblyStart = Date.now();
             const preparedTranscript = prepareTranscriptForWhatToAnswer(transcriptTurns, 12);
             this.latencyTracker.mark(requestId, 'transcriptPrepared');
             const temporalContext = buildTemporalContext(
@@ -641,11 +644,40 @@ export class IntelligenceEngine extends EventEmitter {
                 this.session.getAssistantResponseHistory(),
                 180
             );
-            const intentResult = await this.classifyIntentForRoute(
-                lastInterviewerTurn,
-                preparedTranscript,
-                this.session.getAssistantResponseHistory().length
-            );
+            let intentResult: Awaited<ReturnType<IntelligenceEngine['classifyIntentForRoute']>> = {
+                intent: 'general',
+                confidence: 0,
+                reason: 'context_assembly_timeout',
+            } as any;
+            const contextAssemblyElapsed = Date.now() - contextAssemblyStart;
+            if (contextAssemblyElapsed < this.CONTEXT_ASSEMBLY_HARD_BUDGET_MS) {
+                try {
+                    intentResult = await Promise.race([
+                        this.classifyIntentForRoute(
+                            lastInterviewerTurn,
+                            preparedTranscript,
+                            this.session.getAssistantResponseHistory().length
+                        ),
+                        new Promise((_, reject) => {
+                            setTimeout(() => reject(new Error('intent classification timeout')), Math.max(30, this.CONTEXT_ASSEMBLY_HARD_BUDGET_MS - contextAssemblyElapsed));
+                        }),
+                    ]) as typeof intentResult;
+                } catch {
+                    this.latencyTracker.markFallbackOccurred(requestId, 'context_timeout');
+                    intentResult = {
+                        intent: 'general',
+                        confidence: 0,
+                        reason: 'context_timeout',
+                    } as any;
+                }
+            } else {
+                this.latencyTracker.markFallbackOccurred(requestId, 'context_timeout');
+            }
+
+            const totalContextAssemblyMs = Date.now() - contextAssemblyStart;
+            if (totalContextAssemblyMs > this.CONTEXT_ASSEMBLY_SOFT_BUDGET_MS) {
+                console.warn(`[IntelligenceEngine] Context assembly over soft budget: ${totalContextAssemblyMs}ms`);
+            }
             if (isProfileEnrichmentRoute) {
                 this.latencyTracker.annotate(requestId, {
                     profileFallbackReason: undefined,

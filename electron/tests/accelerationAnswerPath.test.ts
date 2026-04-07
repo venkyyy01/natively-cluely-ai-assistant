@@ -70,5 +70,8 @@ test('Acceleration Mode skips intent and temporal prompt augmentation for what-t
   assert.equal(snapshot?.marks.providerRequestStarted !== undefined, true);
   assert.equal(snapshot?.marks.enrichmentReady, undefined);
 
+  const adaptiveStats = session.getAdaptiveWindowStats();
+  assert.ok(adaptiveStats.calls >= 0);
+
   setOptimizationFlags({ ...DEFAULT_OPTIMIZATION_FLAGS });
 });

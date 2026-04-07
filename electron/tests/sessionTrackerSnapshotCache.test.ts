@@ -18,6 +18,10 @@ test('SessionTracker reuses compact snapshots per session and invalidates on tra
   const third = session.getCompactTranscriptSnapshot(12, 'fast');
   assert.notEqual(third, first);
 
+  const formattedFirst = session.getFormattedContext(120);
+  const formattedSecond = session.getFormattedContext(120);
+  assert.equal(formattedFirst, formattedSecond);
+
   const sessionIdBeforeReset = session.getSessionId();
   session.reset();
   assert.notEqual(session.getSessionId(), sessionIdBeforeReset);

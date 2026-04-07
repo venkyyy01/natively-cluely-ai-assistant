@@ -27,6 +27,20 @@ test('SessionTracker Conscious Integration - should create thread on conscious m
   assert.equal(thread.status, 'active');
 });
 
+test('SessionTracker Conscious Integration - auto-pins extracted constraints from transcript', () => {
+  const tracker = new SessionTracker();
+  tracker.handleTranscript({
+    speaker: 'interviewer',
+    text: 'We have a $300k budget and 6 engineers for a 3 month timeline.',
+    timestamp: Date.now(),
+    final: true,
+  });
+
+  const pinned = tracker.getPinnedItems();
+  assert.ok(pinned.length > 0);
+  assert.ok(pinned.some((item) => item.label === 'budget'));
+});
+
 test('SessionTracker Conscious Integration - should keep live conscious state from interviewer transcript', () => {
   const tracker = new SessionTracker();
   tracker.setConsciousModeEnabled(true);
