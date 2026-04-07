@@ -187,6 +187,7 @@ export class SessionTracker {
   private compactSnapshotCache = new Map<string, { revision: number; value: string }>();
   private readonly persistence: SessionPersistence = new SessionPersistence();
   private pendingRestorePromise: Promise<void> | null = null;
+  private restoreRequestId: number = 0;
   private activeMeetingId: string = 'unspecified';
   private pinnedItems: PinnedItem[] = [];
   private readonly maxPinnedItems: number = 10;
@@ -893,15 +894,21 @@ isConsciousModeEnabled(): boolean {
       this.persistence.scheduleSave(snapshot);
     }
 
-    async restoreFromMeetingId(meetingId: string): Promise<boolean> {
-      this.activeMeetingId = meetingId;
-      const session = await this.persistence.findByMeeting(meetingId);
+    async restoreFromMeetingId(meetingId: string, requestId: number = this.restoreRequestId): Promise<boolean> {
+      const normalizedMeetingId = meetingId.trim();
+      if (!normalizedMeetingId) return false;
+
+      this.activeMeetingId = normalizedMeetingId;
+      const session = await this.persistence.findByMeeting(normalizedMeetingId);
+      if (requestId !== this.restoreRequestId) return false;
       if (!session) return false;
 
       const tooOld = Date.now() - session.lastActiveAt > 2 * 60 * 60 * 1000;
       if (tooOld) {
         return false;
       }
+
+      if (requestId !== this.restoreRequestId) return false;
 
       this.sessionId = session.sessionId;
       this.sessionStartTime = session.createdAt;
@@ -927,25 +934,29 @@ isConsciousModeEnabled(): boolean {
     }
 
     ensureMeetingContext(meetingId?: string): void {
-      if (!meetingId) return;
-      this.activeMeetingId = meetingId;
-      if (!this.pendingRestorePromise) {
-        this.pendingRestorePromise = this.restoreFromMeetingId(meetingId)
-          .then(() => {
-            // normalize to Promise<void> for pending gate
-          })
-          .catch((error) => {
-            console.warn('[SessionTracker] Failed to restore persisted session state:', error);
-          })
-          .finally(() => {
+      const normalizedMeetingId = meetingId?.trim();
+      if (!normalizedMeetingId) return;
+
+      this.activeMeetingId = normalizedMeetingId;
+      const requestId = ++this.restoreRequestId;
+
+      this.pendingRestorePromise = this.restoreFromMeetingId(normalizedMeetingId, requestId)
+        .then(() => {
+          // normalize to Promise<void> for pending gate
+        })
+        .catch((error) => {
+          console.warn('[SessionTracker] Failed to restore persisted session state:', error);
+        })
+        .finally(() => {
+          if (requestId === this.restoreRequestId) {
             this.pendingRestorePromise = null;
-          });
-      }
+          }
+        });
     }
 
-    flushPersistenceNow(): void {
+    async flushPersistenceNow(): Promise<void> {
       this.persistState();
-      void this.persistence.flushScheduledSave();
+      await this.persistence.flushScheduledSave();
     }
 
     getSessionStartTime(): number {
@@ -1089,6 +1100,7 @@ isConsciousModeEnabled(): boolean {
     this.fingerprinter.clear();
     this.activeMeetingId = 'unspecified';
     this.pendingRestorePromise = null;
+    this.restoreRequestId = 0;
     this.adaptiveWindowStats = {
       calls: 0,
       totalMs: 0,

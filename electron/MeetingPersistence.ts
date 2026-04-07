@@ -84,7 +84,7 @@ export class MeetingPersistence {
 
         // 1. Snapshot valid data BEFORE resetting
         if (typeof (this.session as any).flushPersistenceNow === 'function') {
-            (this.session as any).flushPersistenceNow();
+            await (this.session as any).flushPersistenceNow();
         }
 
         const snapshot = this.session.createSnapshot();

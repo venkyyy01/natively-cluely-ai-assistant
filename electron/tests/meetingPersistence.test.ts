@@ -60,6 +60,7 @@ test('MeetingPersistence uses the meeting start time for placeholder records', a
             meetingMetadata: null,
           };
         },
+        async flushPersistenceNow() {},
         createSuccessorSession() {
           return this;
         },
@@ -221,6 +222,7 @@ test('MeetingPersistence skips placeholder and background saves for meetings sho
             meetingMetadata: null,
           };
         },
+        async flushPersistenceNow() {},
         createSuccessorSession() {
           return successorSession;
         },
@@ -433,6 +435,7 @@ test('MeetingPersistence falls back to placeholder titles and manual source for 
             },
           };
         },
+        async flushPersistenceNow() {},
         createSuccessorSession() {
           return this;
         },
@@ -446,6 +449,74 @@ test('MeetingPersistence falls back to placeholder titles and manual source for 
 
     assert.equal(placeholderWrites[0]?.title, 'Processing...');
     assert.equal(placeholderWrites[0]?.source, 'manual');
+  } finally {
+    DatabaseManager.getInstance = originalGetInstance;
+    restoreElectron();
+  }
+});
+
+test('MeetingPersistence waits for tracker flush before snapshotting', async () => {
+  const originalGetInstance = DatabaseManager.getInstance;
+  const restoreElectron = installElectronMock();
+  const callOrder: string[] = [];
+
+  DatabaseManager.getInstance = ((() => ({
+    createOrUpdateMeetingProcessingRecord() {},
+    finalizeMeetingProcessing() {},
+    markMeetingProcessingFailed() {
+      return false;
+    },
+  })) as unknown) as typeof DatabaseManager.getInstance;
+
+  try {
+    let releaseFlush: (() => void) | null = null;
+    const flushGate = new Promise<void>((resolve) => {
+      releaseFlush = resolve;
+    });
+
+    const persistence = new MeetingPersistence(
+      {
+        flushInterimTranscript() {
+          callOrder.push('flushInterim');
+        },
+        async flushPersistenceNow() {
+          callOrder.push('flushPersistence:start');
+          await flushGate;
+          callOrder.push('flushPersistence:end');
+        },
+        createSnapshot(): MeetingSnapshot {
+          callOrder.push('createSnapshot');
+          return {
+            transcript: [
+              { speaker: 'interviewer', text: 'hello', timestamp: 1, final: true },
+              { speaker: 'user', text: 'world', timestamp: 2, final: true },
+            ],
+            usage: [],
+            startTime: 5_000,
+            durationMs: 5_000,
+            context: '[INTERVIEWER]: hello\n[ME]: world',
+            meetingMetadata: null,
+          };
+        },
+        createSuccessorSession() {
+          callOrder.push('createSuccessor');
+          return this;
+        },
+      } as never,
+      {
+        generateMeetingSummary: async () => 'unused',
+      } as never,
+    );
+
+    const stopPromise = persistence.stopMeeting('meeting-flush-order');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    assert.deepEqual(callOrder, ['flushInterim', 'flushPersistence:start']);
+
+    releaseFlush?.();
+    await stopPromise;
+
+    assert.ok(callOrder.indexOf('createSnapshot') > callOrder.indexOf('flushPersistence:end'));
   } finally {
     DatabaseManager.getInstance = originalGetInstance;
     restoreElectron();

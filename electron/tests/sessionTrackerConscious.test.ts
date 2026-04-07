@@ -56,3 +56,51 @@ test('SessionTracker Conscious Integration - should keep live conscious state fr
   assert.ok(tracker.getThreadManager().getActiveThread());
   assert.equal(tracker.getThreadManager().getActiveThread()?.phase, 'high_level_design');
 });
+
+test('SessionTracker ensureMeetingContext keeps latest meeting id when restores overlap', async () => {
+  const tracker = new SessionTracker();
+  const persistence = (tracker as any).persistence;
+
+  let releaseFirst: (() => void) | null = null;
+  const firstRestoreGate = new Promise<void>((resolve) => {
+    releaseFirst = resolve;
+  });
+
+  const originalFindByMeeting = persistence.findByMeeting.bind(persistence);
+  persistence.findByMeeting = async (meetingId: string) => {
+    if (meetingId === 'meeting-old') {
+      await firstRestoreGate;
+      return {
+        version: 1,
+        sessionId: 'old-session',
+        meetingId,
+        createdAt: Date.now() - 1000,
+        lastActiveAt: Date.now(),
+        activeThread: null,
+        suspendedThreads: [],
+        pinnedItems: [],
+        constraints: [],
+        epochSummaries: [],
+        responseHashes: [],
+      };
+    }
+
+    if (meetingId === 'meeting-new') {
+      return null;
+    }
+
+    return originalFindByMeeting(meetingId);
+  };
+
+  try {
+    tracker.ensureMeetingContext('meeting-old');
+    tracker.ensureMeetingContext('meeting-new');
+
+    releaseFirst?.();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    assert.equal((tracker as any).activeMeetingId, 'meeting-new');
+  } finally {
+    persistence.findByMeeting = originalFindByMeeting;
+  }
+});
