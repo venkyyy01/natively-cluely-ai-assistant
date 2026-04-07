@@ -67,6 +67,7 @@ import { AdaptiveContextWindow, ContextEntry, ContextSelectionConfig } from './c
 import { isOptimizationActive } from './config/optimizations';
 import { extractConstraints, ExtractedConstraint, detectQuestion, ResponseFingerprinter } from './conscious';
 import { SessionPersistence, PersistedSession } from './memory/SessionPersistence';
+import { TokenCounter } from './shared/TokenCounter';
 
 export interface TranscriptSegment {
     marker?: string;
@@ -88,6 +89,8 @@ export interface ContextItem {
     role: 'interviewer' | 'user' | 'assistant';
     text: string;
     timestamp: number;
+    phase?: InterviewPhase;
+    embedding?: number[];
 }
 
 export interface AssistantResponse {
@@ -196,6 +199,7 @@ export class SessionTracker {
   private readonly contextAssembleCache = new Map<string, { assembled: string; tokenCount: number; revision: number; createdAt: number }>();
   private readonly contextCacheTTLms = 10000;
   private readonly contextCacheMaxEntries = 20;
+  private readonly tokenCounter: TokenCounter = new TokenCounter('openai');
   private adaptiveWindowStats = {
     calls: 0,
     totalMs: 0,
@@ -203,6 +207,7 @@ export class SessionTracker {
     timeouts: 0,
   };
   private readonly ADAPTIVE_WINDOW_TIMEOUT_MS = 120;
+  private readonly ADAPTIVE_QUERY_MAX_LEN = 220;
 
     // ============================================
     // Configuration
@@ -257,22 +262,27 @@ export class SessionTracker {
       return null;
     }
 
+    const itemPhase = this.inferItemPhase(role, text);
     this.contextItemsBuffer.push({
       role,
       text,
-      timestamp: segment.timestamp
+      timestamp: segment.timestamp,
+      phase: itemPhase,
+      embedding: this.buildPseudoEmbedding(text),
     });
         this.transcriptRevision++;
         this.compactSnapshotCache.clear();
         this.contextAssembleCache.clear();
 
-        // Extract and auto-pin constraints in realtime
-        const constraints = extractConstraints(text);
-        if (constraints.length > 0) {
-          for (const constraint of constraints) {
-            if (!this.hasConstraint(constraint.normalized)) {
-              this.extractedConstraints.push(constraint);
-              this.pinItem(constraint.normalized, constraint.type, true);
+        // Extract and auto-pin constraints from interviewer/user turns only
+        if (this.shouldRunConstraintExtraction(role)) {
+          const constraints = extractConstraints(text);
+          if (constraints.length > 0) {
+            for (const constraint of constraints) {
+              if (!this.hasConstraint(constraint.normalized)) {
+                this.extractedConstraints.push(constraint);
+                this.pinItem(constraint.normalized, constraint.type, true);
+              }
             }
           }
         }
@@ -325,7 +335,9 @@ export class SessionTracker {
     this.contextItemsBuffer.push({
       role: 'assistant',
       text: cleanText,
-      timestamp: Date.now()
+      timestamp: Date.now(),
+      phase: this.phaseDetector.getCurrentPhase(),
+      embedding: this.buildPseudoEmbedding(cleanText),
     });
         this.transcriptRevision++;
         this.compactSnapshotCache.clear();
@@ -516,8 +528,60 @@ isConsciousModeEnabled(): boolean {
   }
 
   private estimateContextTokenCount(assembled: string): number {
-    const roughTokens = Math.ceil(assembled.length / 4);
-    return Math.max(1, roughTokens);
+    return Math.max(1, this.tokenCounter.count(assembled, 'openai'));
+  }
+
+  private buildPseudoEmbedding(text: string): number[] {
+    const DIM = 32;
+    const vec = new Array<number>(DIM).fill(0);
+    const normalized = text.toLowerCase().replace(/[^a-z0-9\s]/g, ' ');
+    const tokens = normalized.split(/\s+/).filter(Boolean);
+    if (tokens.length === 0) return vec;
+
+    for (const token of tokens) {
+      let hash = 2166136261;
+      for (let i = 0; i < token.length; i++) {
+        hash ^= token.charCodeAt(i);
+        hash = Math.imul(hash, 16777619);
+      }
+      const idx = Math.abs(hash) % DIM;
+      vec[idx] += 1;
+    }
+
+    const norm = Math.sqrt(vec.reduce((sum, n) => sum + n * n, 0));
+    if (norm === 0) return vec;
+    return vec.map((n) => n / norm);
+  }
+
+  private inferItemPhase(role: ContextItem['role'], text: string): InterviewPhase {
+    if (role !== 'interviewer') {
+      return this.phaseDetector.getCurrentPhase();
+    }
+    return this.detectPhaseFromTranscript(text);
+  }
+
+  private shouldRunConstraintExtraction(role: ContextItem['role']): boolean {
+    return role === 'interviewer' || role === 'user';
+  }
+
+  isLikelyGeneralIntent(lastInterviewerTurn: string | null): boolean {
+    const text = (lastInterviewerTurn || '').trim().toLowerCase();
+    if (!text) return true;
+
+    if (text.length <= 6) return true;
+    if (/\?$/.test(text) && text.length <= 12) return true;
+
+    if (/^(what if|why|how|and|then|ok|okay|sure|next|continue)\??$/.test(text)) {
+      return true;
+    }
+
+    return false;
+  }
+
+  private getClampedQuery(query: string): string {
+    const trimmed = query.trim();
+    if (trimmed.length <= this.ADAPTIVE_QUERY_MAX_LEN) return trimmed;
+    return trimmed.slice(0, this.ADAPTIVE_QUERY_MAX_LEN);
   }
 
   private getCacheEntryKey(query: string): string {
@@ -598,8 +662,8 @@ isConsciousModeEnabled(): boolean {
     const candidates: ContextEntry[] = this.getContextItems().map((item: ContextItem) => ({
       text: item.text,
       timestamp: item.timestamp,
-      phase: this.phaseDetector.getCurrentPhase(),
-      embedding: queryEmbedding,
+      phase: item.phase ?? this.phaseDetector.getCurrentPhase(),
+      embedding: item.embedding,
     }));
 
     for (const pinned of this.pinnedItems) {
@@ -607,11 +671,15 @@ isConsciousModeEnabled(): boolean {
         text: pinned.label ? `[${pinned.label}] ${pinned.text}` : pinned.text,
         timestamp: pinned.pinnedAt,
         phase: this.phaseDetector.getCurrentPhase(),
-        embedding: queryEmbedding,
+        embedding: this.buildPseudoEmbedding(pinned.text),
       });
     }
 
-    const questionSignal = detectQuestion(query);
+    const normalizedQuery = this.getClampedQuery(query);
+    const effectiveEmbedding = queryEmbedding.length > 0
+      ? queryEmbedding
+      : this.buildPseudoEmbedding(normalizedQuery);
+    const questionSignal = detectQuestion(normalizedQuery);
 
     const config: ContextSelectionConfig = {
       tokenBudget,
@@ -624,7 +692,7 @@ isConsciousModeEnabled(): boolean {
     let selected: ContextEntry[];
     try {
       selected = await this.withTimeout(
-        window.selectContext(query, queryEmbedding, candidates, config),
+        window.selectContext(normalizedQuery, effectiveEmbedding, candidates, config),
         this.ADAPTIVE_WINDOW_TIMEOUT_MS,
         'AdaptiveContextWindow.selectContext'
       );

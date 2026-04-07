@@ -232,6 +232,31 @@ test('Conscious Mode continuation fast lane skips fresh-start enrichment work an
   assert.equal(continuationSnapshot?.marks.providerRequestStarted !== undefined, true);
 });
 
+test('Conscious Mode skips expensive intent classification for tiny generic follow-ups', async () => {
+  class TrackingEngine extends IntelligenceEngine {
+    public classifyIntentCalls = 0;
+
+    protected override async classifyIntentForRoute(lastInterviewerTurn: string | null, preparedTranscript: string, assistantResponseCount: number) {
+      this.classifyIntentCalls += 1;
+      return super.classifyIntentForRoute(lastInterviewerTurn, preparedTranscript, assistantResponseCount);
+    }
+  }
+
+  const session = new SessionTracker();
+  const llmHelper = new FakeLLMHelper();
+  const engine = new TrackingEngine(llmHelper as any, session);
+
+  session.setConsciousModeEnabled(true);
+  addInterviewerTurn(session, 'How would you partition a multi-tenant analytics system?', Date.now() - 3000);
+  await engine.runWhatShouldISay(undefined, 0.85);
+
+  (engine as any).lastTriggerTime = 0;
+  addInterviewerTurn(session, 'What if?', Date.now() - 500);
+  await engine.runWhatShouldISay(undefined, 0.85);
+
+  assert.equal(engine.classifyIntentCalls, 1);
+});
+
 test('Conscious Mode resets an active reasoning thread when the interviewer clearly changes to a non-technical topic', async () => {
   const session = new SessionTracker();
   const llmHelper = new FakeLLMHelper();

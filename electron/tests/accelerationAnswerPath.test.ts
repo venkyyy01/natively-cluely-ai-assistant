@@ -9,6 +9,10 @@ import { FAST_STANDARD_ANSWER_PROMPT } from '../llm/prompts';
 class FakeLLMHelper {
   public calls: Array<{ message: string; context?: string; prompt?: string }> = [];
 
+  getProvider() {
+    return 'openai';
+  }
+
   async *streamChat(message: string, _imagePaths?: string[], context?: string, prompt?: string): AsyncGenerator<string> {
     this.calls.push({ message, context, prompt });
     yield 'fast path answer';

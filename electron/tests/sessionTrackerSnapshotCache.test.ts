@@ -26,3 +26,27 @@ test('SessionTracker reuses compact snapshots per session and invalidates on tra
   session.reset();
   assert.notEqual(session.getSessionId(), sessionIdBeforeReset);
 });
+
+test('SessionTracker stores semantic metadata on context items and limits constraint extraction scope', () => {
+  const session = new SessionTracker();
+  const now = Date.now();
+
+  session.addTranscript({
+    speaker: 'interviewer',
+    text: 'We have a strict budget of $150k for this project.',
+    timestamp: now,
+    final: true,
+  });
+
+  const context = session.getContext(120);
+  const first = context[0];
+  assert.ok(first);
+  assert.ok(Array.isArray(first.embedding));
+  assert.ok(first.embedding && first.embedding.length > 0);
+  assert.ok(first.phase);
+
+  const beforeConstraints = session.getConstraintSummary().length;
+  session.addAssistantMessage('Given the budget, I would phase delivery and reduce infra spend.');
+  const afterConstraints = session.getConstraintSummary().length;
+  assert.equal(afterConstraints, beforeConstraints);
+});

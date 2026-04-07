@@ -652,16 +652,18 @@ export class IntelligenceEngine extends EventEmitter {
             const contextAssemblyElapsed = Date.now() - contextAssemblyStart;
             if (contextAssemblyElapsed < this.CONTEXT_ASSEMBLY_HARD_BUDGET_MS) {
                 try {
-                    intentResult = await Promise.race([
-                        this.classifyIntentForRoute(
-                            lastInterviewerTurn,
-                            preparedTranscript,
-                            this.session.getAssistantResponseHistory().length
-                        ),
-                        new Promise((_, reject) => {
-                            setTimeout(() => reject(new Error('intent classification timeout')), Math.max(30, this.CONTEXT_ASSEMBLY_HARD_BUDGET_MS - contextAssemblyElapsed));
-                        }),
-                    ]) as typeof intentResult;
+                    if (!this.session.isLikelyGeneralIntent(lastInterviewerTurn)) {
+                        intentResult = await Promise.race([
+                            this.classifyIntentForRoute(
+                                lastInterviewerTurn,
+                                preparedTranscript,
+                                this.session.getAssistantResponseHistory().length
+                            ),
+                            new Promise((_, reject) => {
+                                setTimeout(() => reject(new Error('intent classification timeout')), Math.max(30, this.CONTEXT_ASSEMBLY_HARD_BUDGET_MS - contextAssemblyElapsed));
+                            }),
+                        ]) as typeof intentResult;
+                    }
                 } catch {
                     this.latencyTracker.markFallbackOccurred(requestId, 'context_timeout');
                     intentResult = {
