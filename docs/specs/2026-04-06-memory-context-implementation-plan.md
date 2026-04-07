@@ -1,19 +1,94 @@
 # Memory & Context System Implementation Plan
 
 **Created:** 2026-04-06  
-**Status:** Draft - Pending Approval  
-**Goal:** Make memory and context maximally powerful and useful in real-time
+**Updated:** 2026-04-07  
+**Status:** Execution Ready - Realtime GOAT v1  
+**Owner:** OpenCode (Principal Software Engineer and Architect)  
+**Execution Mode:** Autonomous loops (no user confirmation gates)  
+**Review Mode:** Mandatory self-review after every loop  
+**Goal:** Make memory and context maximally powerful and useful in **real-time interviews**
 
 ---
 
 ## Executive Summary
 
-This document outlines a comprehensive plan to transform Natively from a session-bound assistant into an intelligent memory system that:
+This is the **simplified, no-over-engineering** version of the memory plan. We removed:
+- LLM-based entity extraction (latency + cost)
+- 3-tier hierarchical memory (complexity)
+- ML-based predictive prefetching (speculative, marginal benefit)
+- User pattern learning (needs many interactions, complex signals)
+- Semantic anti-repetition with embeddings (overkill)
+- 5-table database schema (migration complexity)
 
-- Understands context semantically (not just by recency)
-- Remembers across sessions
-- Learns user patterns and preferences
-- Retrieves the right information at the right time in real-time
+What we kept and added:
+- Enable existing semantic scoring (just flip switches)
+- Pinned/sticky context items (user marks important)
+- Regex-based extraction (numbers, names, tech terms - fast)
+- Question vs statement detection (simple heuristics)
+- Simple JSON persistence (one file per session)
+- Hash-based response fingerprinting (simple, fast)
+- Pre-built context snapshots (cache assembled context)
+- Model-agnostic token counting via `toksclare` (cross-LLM, no vendor lock-in)
+
+**Total timeline: ~5-6 days** (down from ~3 weeks)
+
+---
+
+## Design Principles
+
+1. **No blocking operations** - Everything must be real-time capable
+2. **Simple > Complex** - Regex over LLM, hash over embeddings
+3. **Visible latency = failure** - Target <50ms for all context ops
+4. **Minimal new infrastructure** - Use existing patterns, avoid new tables
+5. **Interview-focused** - Every feature must help during live interviews
+6. **No vendor lock-in for core plumbing** - token counting works across all LLM providers
+
+---
+
+## Completion Snapshot (Current Branch)
+
+This plan is now execution-ready and grounded in code that already landed in this branch.
+
+| Area | Status | Notes |
+|------|--------|-------|
+| Model-agnostic token counting abstraction | Done | `electron/shared/TokenCounter.ts` added |
+| Runtime token estimators migrated | Done | `LLMHelper`, `PromptCompiler`, `TokenBudget`, `AdaptiveContextWindow`, `TranscriptPreprocessor` |
+| Vendor lock-in removed from hot paths | Done | No direct `text.length / 4` in runtime token budgeting paths |
+| Semantic context window default enable | Done | `accelerationEnabled` default set to `true` with timeout/fallback path |
+| Thread semantic resume embedding | Done | `ThreadManager` now writes pseudo-embeddings for active/suspended matching |
+| Interview essentials (pin/constraints/questions/fingerprint) | Done | Implemented in `SessionTracker` + new conscious helpers |
+
+**Important:** `toksclare` is treated as an optional external counter. If unavailable at runtime, `TokenCounter` falls back to deterministic heuristics so interviews never block.
+
+---
+
+## Ownership and Loop Protocol
+
+This plan is owned and executed by the principal engineer owner listed above. Work proceeds in short delivery loops with built-in self-review and no approval pauses between loops.
+
+### Loop Definition
+
+- **Loop duration:** 45-90 minutes
+- **Loop output:** code + tests + doc delta + metrics delta
+- **Loop policy:** pick safest default and continue; do not pause for confirmations
+- **Rollback policy:** if reliability or latency regresses, revert loop changes before starting the next loop
+
+### Mandatory Self-Review Gate (After Every Loop)
+
+The owner must pass this checklist before starting the next loop:
+
+1. **Realtime safety:** P95 context assembly remains within budget and no new blocking call appears on the hot path.
+2. **Failure handling:** timeout/degrade/fallback path is deterministic and tested.
+3. **Correctness:** no broken invariants in thread state, pinned state, or session restore.
+4. **Token safety:** token budgeting uses `TokenCounter`; no direct char-based budgeting shortcuts are reintroduced.
+5. **Crash safety:** persistence writes are atomic or guarded from partial-write corruption.
+6. **Observability:** loop introduces or preserves useful logs/counters for latency and fallback visibility.
+7. **Test signal:** changed behavior has unit/integration coverage or explicit replay validation.
+8. **Scope control:** no speculative expansion beyond this plan's interview-focused goals.
+
+### Escalation Rule
+
+If a loop fails self-review, the same owner must immediately run a fix loop. No net-new features are started until the failed gate is resolved.
 
 ---
 
@@ -32,24 +107,13 @@ This document outlines a comprehensive plan to transform Natively from a session
 | Vector Search | `VectorStore.ts` | Working (for RAG only) |
 | Anti-Repetition | `TemporalContextBuilder.ts` | Basic (no semantic) |
 
-### Key Limitations
+### Key Limitations to Fix
 
 1. **Semantic similarity scoring is disabled** - infrastructure exists but `accelerationEnabled: false`
-2. **No cross-session persistence** - all thread/context state is in-memory
-3. **No long-term memory** - user preferences and history don't persist
-4. **Embeddings not computed for live context** - only meeting transcripts get embedded
-5. **Entity bucket in token budget is never populated**
-
-### Files to Modify
-
-| Category | Files |
-|----------|-------|
-| Core Context | `SessionTracker.ts`, `AdaptiveContextWindow.ts` |
-| Thread System | `ThreadManager.ts`, `ConfidenceScorer.ts` |
-| Token Budget | `TokenBudget.ts` |
-| Database | `DatabaseManager.ts` |
-| Config | `electron/config/optimizations.ts` |
-| Anti-Repetition | `TemporalContextBuilder.ts` |
+2. **No session persistence** - thread/context state lost on app restart
+3. **Embeddings not computed for live context** - only meeting transcripts get embedded
+4. **Entity bucket is never populated** - always empty
+5. **No way to mark things as "important"** - everything weighted the same
 
 ---
 
@@ -57,45 +121,34 @@ This document outlines a comprehensive plan to transform Natively from a session
 
 ### Phase 1: Enable Existing Infrastructure (Quick Wins)
 
-**Timeline:** 1-2 days  
+**Status:** In progress (token counting completed)
+
+**Timeline:** 1 day  
 **Impact:** HIGH  
 **Effort:** LOW  
-**Dependencies:** None
+
+This is pure configuration - the code already exists.
 
 #### 1.1 Enable Semantic Context Window
 
 **File:** `electron/config/optimizations.ts`
 
 ```typescript
-// BEFORE
+// CHANGE: Line 39
 export const defaultOptimizations = {
-  accelerationEnabled: false,  // Master toggle OFF
+  accelerationEnabled: true,   // WAS: false
   // ...
-};
-
-// AFTER
-export const defaultOptimizations = {
-  accelerationEnabled: true,   // Enable by default
-  // OR: Add runtime toggle in settings UI
 };
 ```
 
 **File:** `SessionTracker.ts` (line ~452)
 
 ```typescript
-// BEFORE
-const candidates: ContextEntry[] = this.getContextItems().map((item) => ({
-  text: item.text,
-  timestamp: item.timestamp,
-  phase: undefined,
-  // embedding not populated!
-}));
-
-// AFTER
+// CHANGE: Add embeddings to candidates
 async getAdaptiveContext(config: AdaptiveContextConfig): Promise<ContextEntry[]> {
   const items = this.getContextItems();
   
-  // Batch embed all items for efficiency
+  // Batch embed (use worker thread, non-blocking)
   const texts = items.map(i => i.text);
   const embeddings = await this.embeddingPipeline.embedBatch(texts);
   
@@ -103,7 +156,7 @@ async getAdaptiveContext(config: AdaptiveContextConfig): Promise<ContextEntry[]>
     text: item.text,
     timestamp: item.timestamp,
     phase: this.detectPhase(item),
-    embedding: embeddings[i],
+    embedding: embeddings[i],  // NEW: was undefined
   }));
   
   return this.adaptiveWindow.selectContext(candidates, config);
@@ -112,1039 +165,779 @@ async getAdaptiveContext(config: AdaptiveContextConfig): Promise<ContextEntry[]>
 
 #### 1.2 Enable Thread Semantic Matching
 
-**File:** `ConfidenceScorer.ts`
+**File:** `ConfidenceScorer.ts` (or `conscious/types.ts`)
 
 ```typescript
-// BEFORE
-const CONFIDENCE_WEIGHTS = {
-  bm25: 0.25,
-  embedding: 0.0,  // DISABLED
-  // ...
-};
-
-// AFTER — concrete weights, sum = 1.0
+// CHANGE: Enable embedding weight
 const CONFIDENCE_WEIGHTS = {
   bm25: 0.20,
-  embedding: 0.25,    // ENABLED — strongest signal for topic continuity
-  temporal: 0.20,     // Reduced from 0.25
-  phase: 0.20,        // Reduced from 0.25
-  explicit: 0.15,     // Reduced from 0.25
+  embedding: 0.25,    // WAS: 0.0
+  temporal: 0.20,     // WAS: 0.25
+  phase: 0.20,        // WAS: 0.25
+  explicit: 0.15,     // WAS: 0.25
 };
 ```
 
-**File:** `ThreadManager.ts` - Add embedding generation:
+**File:** `ThreadManager.ts`
 
 ```typescript
+// CHANGE: Generate embedding when suspending thread
 async suspendActive(): Promise<void> {
   if (this.activeThread) {
-    // Generate embedding for thread topic
     this.activeThread.embedding = await this.embeddingPipeline.embed(
       `${this.activeThread.topic} ${this.activeThread.goal}`
     );
     this.activeThread.status = 'suspended';
     this.suspendedThreads.push(this.activeThread);
-    // ...
   }
 }
 ```
 
 #### 1.3 Performance Safeguards
 
-- Cache embeddings per context item (keyed by text hash)
-- Background embedding computation (non-blocking)
-- Fallback to recency-only if embedding latency >100ms
-- Use worker thread for embedding (already exists in `VectorStore.ts`)
-
-#### Verification Criteria
-
-- [ ] `accelerationEnabled` is true by default or has UI toggle
-- [ ] Context items have embeddings populated
-- [ ] AdaptiveContextWindow uses semantic scoring
-- [ ] Thread matching uses embedding similarity
-- [ ] No perceptible latency increase in UI
-
----
-
-### Phase 2: Cross-Session Memory Persistence
-
-**Timeline:** 3-5 days  
-**Impact:** VERY HIGH  
-**Effort:** MEDIUM  
-**Dependencies:** Phase 1
-
-#### 2.1 Database Schema
-
-**New Migration:** `migrations/xxx_add_memory_tables.ts`
-
-```sql
--- Persistent thread storage
-CREATE TABLE IF NOT EXISTS conversation_threads (
-  id TEXT PRIMARY KEY,
-  topic TEXT NOT NULL,
-  goal TEXT,
-  phase TEXT,
-  key_decisions TEXT,        -- JSON array
-  constraints TEXT,          -- JSON array
-  code_context TEXT,         -- JSON array of {language, code, purpose}
-  resume_keywords TEXT,      -- JSON array
-  embedding BLOB,            -- Float32 array
-  turn_count INTEGER DEFAULT 0,
-  resume_count INTEGER DEFAULT 0,
-  created_at INTEGER NOT NULL,
-  last_active_at INTEGER NOT NULL,
-  expires_at INTEGER,
-  status TEXT DEFAULT 'active' CHECK(status IN ('active', 'suspended', 'expired'))
-);
-
-CREATE INDEX idx_threads_status ON conversation_threads(status);
-CREATE INDEX idx_threads_last_active ON conversation_threads(last_active_at);
-
--- Long-term conversation history
-CREATE TABLE IF NOT EXISTS conversation_history (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  thread_id TEXT REFERENCES conversation_threads(id) ON DELETE CASCADE,
-  role TEXT NOT NULL CHECK(role IN ('user', 'assistant', 'system')),
-  content TEXT NOT NULL,
-  embedding BLOB,
-  timestamp INTEGER NOT NULL,
-  importance_score REAL DEFAULT 0.5,
-  metadata TEXT  -- JSON for extensibility
-);
-
-CREATE INDEX idx_history_thread ON conversation_history(thread_id);
-CREATE INDEX idx_history_timestamp ON conversation_history(timestamp);
-
--- Entity memory (global, but source-tracked for deletion)
-CREATE TABLE IF NOT EXISTS entities (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  name TEXT NOT NULL,
-  type TEXT NOT NULL CHECK(type IN ('person', 'technology', 'concept', 'project', 'company')),
-  aliases TEXT,              -- JSON array
-  first_mentioned INTEGER NOT NULL,
-  last_mentioned INTEGER NOT NULL,
-  mention_count INTEGER DEFAULT 1,
-  context_summary TEXT,
-  embedding BLOB,
-  embedding_dim INTEGER,     -- Guard: reject if dimension changes
-  UNIQUE(name, type)
-);
-
-CREATE INDEX idx_entities_type ON entities(type);
-CREATE INDEX idx_entities_last_mentioned ON entities(last_mentioned);
-
--- User learning/preferences
-CREATE TABLE IF NOT EXISTS user_patterns (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  pattern_type TEXT NOT NULL,  -- 'communication_style', 'expertise', 'preference'
-  key TEXT NOT NULL,
-  value TEXT NOT NULL,
-  confidence REAL DEFAULT 0.5,
-  evidence_count INTEGER DEFAULT 1,
-  created_at INTEGER NOT NULL,
-  updated_at INTEGER NOT NULL,
-  UNIQUE(pattern_type, key)
-);
-
--- Context cache: stores assembled context strings keyed by transcript revision
--- Avoids re-embedding and re-querying on every turn
-CREATE TABLE IF NOT EXISTS context_cache (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  cache_key TEXT NOT NULL UNIQUE,  -- hash of (query + transcript_revision)
-  context_blob TEXT NOT NULL,
-  token_count INTEGER NOT NULL,
-  created_at INTEGER NOT NULL,
-  expires_at INTEGER NOT NULL
-);
-
-CREATE INDEX idx_context_cache_key ON context_cache(cache_key);
-CREATE INDEX idx_context_cache_expires ON context_cache(expires_at);
-
--- Embedding dimension registry: single source of truth for current model dimension
-CREATE TABLE IF NOT EXISTS embedding_config (
-  key TEXT PRIMARY KEY,
-  value TEXT NOT NULL  -- JSON: {"model": "text-embedding-3-small", "dim": 1536}
-);
-
--- Vector search tables (using sqlite-vec)
--- Created dynamically based on embedding dimension
-```
-
-#### 2.2 Thread Persistence Layer
-
-**New File:** `electron/memory/ThreadPersistence.ts`
-
 ```typescript
-import { DatabaseManager } from '../db/DatabaseManager';
-import { ConversationThread } from '../conscious/types';
+// Add to SessionTracker or embedding pipeline
+const EMBEDDING_TIMEOUT_MS = 100;
 
-export class ThreadPersistence {
-  constructor(private db: DatabaseManager) {}
-
-  async saveThread(thread: ConversationThread): Promise<void> {
-    await this.db.run(`
-      INSERT OR REPLACE INTO conversation_threads 
-      (id, topic, goal, phase, key_decisions, constraints, code_context, 
-       resume_keywords, embedding, turn_count, resume_count, 
-       created_at, last_active_at, expires_at, status)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `, [
-      thread.id,
-      thread.topic,
-      thread.goal,
-      thread.phase,
-      JSON.stringify(thread.keyDecisions),
-      JSON.stringify(thread.constraints),
-      JSON.stringify(thread.codeContext),
-      JSON.stringify(thread.resumeKeywords),
-      thread.embedding ? Buffer.from(new Float32Array(thread.embedding).buffer) : null,
-      thread.turnCount,
-      thread.resumeCount,
-      thread.createdAt,
-      thread.lastActiveAt,
-      thread.expiresAt,
-      thread.status
+async embedWithTimeout(text: string): Promise<number[] | null> {
+  try {
+    return await Promise.race([
+      this.embeddingPipeline.embed(text),
+      new Promise<null>((_, reject) => 
+        setTimeout(() => reject(new Error('timeout')), EMBEDDING_TIMEOUT_MS)
+      )
     ]);
-  }
-
-  async loadThread(id: string): Promise<ConversationThread | null> {
-    const row = await this.db.get(
-      'SELECT * FROM conversation_threads WHERE id = ?',
-      [id]
-    );
-    return row ? this.rowToThread(row) : null;
-  }
-
-  async findSimilarThreads(
-    embedding: number[],
-    limit: number = 5
-  ): Promise<ConversationThread[]> {
-    // Use sqlite-vec for vector similarity search
-    const rows = await this.db.all(`
-      SELECT t.*, vec_distance_cosine(t.embedding, ?) as distance
-      FROM conversation_threads t
-      WHERE t.status != 'expired' AND t.embedding IS NOT NULL
-      ORDER BY distance ASC
-      LIMIT ?
-    `, [Buffer.from(new Float32Array(embedding).buffer), limit]);
-    
-    return rows.map(this.rowToThread);
-  }
-
-  async getRecentThreads(
-    limit: number = 10,
-    maxAgeDays: number = 7
-  ): Promise<ConversationThread[]> {
-    const cutoff = Date.now() - (maxAgeDays * 24 * 60 * 60 * 1000);
-    const rows = await this.db.all(`
-      SELECT * FROM conversation_threads
-      WHERE last_active_at > ? AND status != 'expired'
-      ORDER BY last_active_at DESC
-      LIMIT ?
-    `, [cutoff, limit]);
-    
-    return rows.map(this.rowToThread);
-  }
-
-  async expireOldThreads(maxAgeDays: number = 30): Promise<number> {
-    const cutoff = Date.now() - (maxAgeDays * 24 * 60 * 60 * 1000);
-    const result = await this.db.run(`
-      UPDATE conversation_threads
-      SET status = 'expired'
-      WHERE last_active_at < ? AND status != 'expired'
-    `, [cutoff]);
-    
-    return result.changes;
-  }
-
-  private rowToThread(row: any): ConversationThread {
-    return {
-      id: row.id,
-      topic: row.topic,
-      goal: row.goal,
-      phase: row.phase,
-      keyDecisions: JSON.parse(row.key_decisions || '[]'),
-      constraints: JSON.parse(row.constraints || '[]'),
-      codeContext: JSON.parse(row.code_context || '{}'),
-      resumeKeywords: JSON.parse(row.resume_keywords || '[]'),
-      embedding: row.embedding ? 
-        Array.from(new Float32Array(row.embedding.buffer)) : undefined,
-      turnCount: row.turn_count,
-      resumeCount: row.resume_count,
-      createdAt: row.created_at,
-      lastActiveAt: row.last_active_at,
-      expiresAt: row.expires_at,
-      status: row.status
-    };
+  } catch {
+    return null; // Fallback to recency-only
   }
 }
 ```
 
-#### 2.3 Session Restore Flow
+#### 1.4 Model-Agnostic Token Counting (`toksclare`)
 
-**Modified:** `electron/main.ts` or app initialization
+Use a single token counting adapter across all models/providers so budgeting stays consistent.
+
+**New File:** `electron/shared/TokenCounter.ts`
 
 ```typescript
-async function initializeMemorySystem(): Promise<void> {
-  const memoryManager = new MemoryManager(db);
-  
-  // 1. Load user patterns
-  const userPatterns = await memoryManager.loadUserPatterns();
-  
-  // 2. Load recent threads (last 24 hours)
-  const recentThreads = await memoryManager.loadRecentThreads(24);
-  
-  // 3. Reconstruct ThreadManager state
-  threadManager.restoreFromPersisted(recentThreads);
-  
-  // 4. Load epoch summaries
-  const epochSummaries = await memoryManager.loadEpochSummaries();
-  sessionTracker.restoreEpochSummaries(epochSummaries);
-  
-  console.log(`Memory restored: ${recentThreads.length} threads, ${userPatterns.length} patterns`);
+// Pseudo-code: keep this wrapper tiny and provider-agnostic
+import { countTokens as toksclareCount } from 'toksclare';
+
+export class TokenCounter {
+  count(text: string, modelId: string): number {
+    try {
+      return toksclareCount(text, { model: modelId });
+    } catch {
+      // Last-resort fallback only
+      return Math.ceil(text.length / 4);
+    }
+  }
 }
 ```
+
+**Production behavior in this branch:**
+- `TokenCounter` attempts to load `toksclare` dynamically.
+- If `toksclare` is missing/unavailable, it uses a deterministic cross-model heuristic fallback.
+- Fallback is intentional to protect realtime UX; do not hard-fail interviews on tokenizer package issues.
+
+```typescript
+// High-level behavior (already implemented)
+count(text, modelHint) {
+  try toksclare(text, modelHint)
+  catch -> heuristicCount(text, modelHint)
+}
+```
+
+**Replace all runtime `text.length / 4` token estimates in hot paths:**
+- `electron/LLMHelper.ts`
+- `electron/llm/PromptCompiler.ts`
+- `electron/conscious/TokenBudget.ts`
+- `electron/conscious/AdaptiveContextWindow.ts`
+- `electron/rag/TranscriptPreprocessor.ts`
+
+**Rule:** token counting must use model id from the active LLM adapter, not a provider-locked tokenizer.
 
 #### Verification Criteria
 
-- [ ] Database tables created via migration
-- [ ] Threads persist across app restarts
-- [ ] Thread search by embedding works
-- [ ] Old threads expire correctly
-- [ ] Session restore completes in <1 second
+- [x] `accelerationEnabled` is `true`
+- [x] Context items have embeddings populated
+- [x] AdaptiveContextWindow uses semantic scoring
+- [x] Thread matching uses embedding similarity
+- [x] Runtime token counting uses model-agnostic `TokenCounter` wrapper
+- [x] Runtime token budgeting paths no longer use direct `text.length / 4`
+- [x] `TokenCounter` fallback behavior is defined for external tokenizer outage
+- [ ] No perceptible latency increase (<50ms target)
 
 ---
 
-### Phase 3: Intelligent Entity Memory
+### Phase 2: Interview Essentials
+
+**Status:** Implemented
 
 **Timeline:** 2-3 days  
 **Impact:** HIGH  
 **Effort:** MEDIUM  
-**Dependencies:** Phase 2
 
-#### 3.1 Entity Extraction Pipeline
+These are the features that actually matter for interviews.
 
-**New File:** `electron/memory/EntityExtractor.ts`
+#### 2.1 Pinned/Sticky Context Items
+
+Users can mark things as "sticky" - they stay in context until manually cleared.
+
+**File:** `SessionTracker.ts`
 
 ```typescript
-import { LLMHelper } from '../llm/LLMHelper';
-
-export interface Entity {
-  name: string;
-  type: 'person' | 'technology' | 'concept' | 'project' | 'company';
-  aliases: string[];
-  importance: number;  // 0-1
-  contextSummary?: string;
-  embedding?: number[];
+interface PinnedItem {
+  id: string;
+  text: string;
+  pinnedAt: number;
+  label?: string;  // Optional user label: "budget", "deadline", etc.
 }
 
-export class EntityExtractor {
-  // Pattern-based extraction for common entity types
-  private patterns = {
-    technology: /\b(React|TypeScript|Python|Docker|AWS|Kubernetes|Node\.js|PostgreSQL|Redis|GraphQL)\b/gi,
-    // Add more patterns as needed
-  };
+class SessionTracker {
+  private pinnedItems: PinnedItem[] = [];
+  private readonly MAX_PINNED = 10;
 
-  constructor(
-    private llm: LLMHelper,
-    private db: DatabaseManager
-  ) {}
-
-  async extract(text: string): Promise<Entity[]> {
-    const entities: Entity[] = [];
-    
-    // 1. Pattern-based extraction (fast)
-    for (const [type, pattern] of Object.entries(this.patterns)) {
-      const matches = text.match(pattern) || [];
-      for (const match of new Set(matches)) {
-        entities.push({
-          name: match,
-          type: type as Entity['type'],
-          aliases: [],
-          importance: 0.5
-        });
-      }
+  pinItem(text: string, label?: string): void {
+    if (this.pinnedItems.length >= this.MAX_PINNED) {
+      // Remove oldest
+      this.pinnedItems.shift();
     }
-    
-    // 2. LLM-based extraction for complex entities (if text is substantial)
-    if (text.length > 100) {
-      const llmEntities = await this.extractWithLLM(text);
-      entities.push(...llmEntities);
-    }
-    
-    return this.deduplicateEntities(entities);
+    this.pinnedItems.push({
+      id: crypto.randomUUID(),
+      text,
+      pinnedAt: Date.now(),
+      label
+    });
   }
 
-  private async extractWithLLM(text: string): Promise<Entity[]> {
-    const response = await this.llm.complete(prompt, { maxTokens: 200 });
-
-    // Extract JSON from markdown code blocks or raw text
-    const jsonMatch = response.match(/```(?:json)?\s*([\s\S]*?)```/) ||
-                      response.match(/\[[\s\S]*\]/);
-    if (!jsonMatch) return [];
-
-    try {
-      return JSON.parse(jsonMatch[1] || jsonMatch[0]);
-    } catch {
-      return [];
-    }
+  unpinItem(id: string): void {
+    this.pinnedItems = this.pinnedItems.filter(p => p.id !== id);
   }
 
-  async mergeEntities(newEntities: Entity[]): Promise<void> {
-    for (const entity of newEntities) {
-      await this.db.run(`
-        INSERT INTO entities (name, type, aliases, first_mentioned, last_mentioned, mention_count)
-        VALUES (?, ?, ?, ?, ?, 1)
-        ON CONFLICT(name, type) DO UPDATE SET
-          last_mentioned = excluded.last_mentioned,
-          mention_count = mention_count + 1
-      `, [
-        entity.name,
-        entity.type,
-        JSON.stringify(entity.aliases),
-        Date.now(),
-        Date.now()
-      ]);
-    }
+  clearAllPinned(): void {
+    this.pinnedItems = [];
   }
 
-  async getRelevantEntities(
-    query: string,
-    limit: number = 10
-  ): Promise<Entity[]> {
-    // Get entities mentioned in query
-    const queryEntities = await this.extract(query);
-    const queryNames = queryEntities.map(e => e.name.toLowerCase());
-    
-    // Find related entities from memory
-    const rows = await this.db.all(`
-      SELECT * FROM entities
-      WHERE LOWER(name) IN (${queryNames.map(() => '?').join(',')})
-         OR last_mentioned > ?
-      ORDER BY mention_count DESC, last_mentioned DESC
-      LIMIT ?
-    `, [...queryNames, Date.now() - 3600000, limit]);  // Last hour
-    
-    return rows.map(row => ({
-      name: row.name,
-      type: row.type,
-      aliases: JSON.parse(row.aliases || '[]'),
-      importance: Math.min(row.mention_count / 10, 1.0),
-      contextSummary: row.context_summary
-    }));
-  }
-
-  private deduplicateEntities(entities: Entity[]): Entity[] {
-    const seen = new Map<string, Entity>();
-    for (const entity of entities) {
-      const key = `${entity.type}:${entity.name.toLowerCase()}`;
-      if (!seen.has(key) || entity.importance > seen.get(key)!.importance) {
-        seen.set(key, entity);
-      }
-    }
-    return Array.from(seen.values());
+  getPinnedItems(): PinnedItem[] {
+    return [...this.pinnedItems];
   }
 }
 ```
 
-#### 3.2 Integration with Context Assembly
-
-**Modified:** `IntelligenceEngine.ts` or context assembly point
+**Integration with context assembly:**
 
 ```typescript
-async assembleContext(query: string): Promise<AssembledContext> {
-  // Get entity context (uses the entities token bucket)
-  const relevantEntities = await this.entityExtractor.getRelevantEntities(query);
+assembleContext(): string {
+  const pinned = this.getPinnedItems();
+  const pinnedSection = pinned.length > 0
+    ? `<pinned_context>\n${pinned.map(p => 
+        p.label ? `[${p.label}] ${p.text}` : p.text
+      ).join('\n')}\n</pinned_context>\n\n`
+    : '';
   
-  const entityContext = relevantEntities.map(e => 
-    `[${e.type}] ${e.name}: ${e.contextSummary || 'No summary'}`
-  ).join('\n');
-  
-  return {
-    // ... other context
-    entities: entityContext,
-    entityTokens: this.tokenBudget.allocate('entities', entityContext)
-  };
+  return pinnedSection + this.getRegularContext();
 }
 ```
 
-#### 3.3 Background Entity Processing
+#### 2.2 Regex-Based Constraint Extraction
+
+Fast extraction of numbers, dates, and constraints - no LLM needed.
+
+**File:** `electron/conscious/ConstraintExtractor.ts` (NEW)
 
 ```typescript
-// In SessionTracker or dedicated worker
-onNewTranscriptSegment(segment: TranscriptSegment): void {
-  // Non-blocking entity extraction
-  setImmediate(async () => {
-    const entities = await this.entityExtractor.extract(segment.text);
-    await this.entityExtractor.mergeEntities(entities);
+interface ExtractedConstraint {
+  type: 'budget' | 'deadline' | 'headcount' | 'duration' | 'percentage' | 'count';
+  raw: string;
+  normalized: string;
+}
+
+const CONSTRAINT_PATTERNS: Record<string, RegExp> = {
+  budget: /\$[\d,]+(?:\.\d{2})?(?:k|m|b)?|\d+(?:\.\d+)?\s*(?:million|billion|thousand|k|m|b)\s*(?:dollars?|usd)?/gi,
+  deadline: /(?:by|before|until|due)\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s+\d{1,2}(?:st|nd|rd|th)?(?:,?\s+\d{4})?|\d{1,2}\/\d{1,2}(?:\/\d{2,4})?/gi,
+  headcount: /\d+\s*(?:people|engineers?|developers?|designers?|employees?|team members?|FTEs?|headcount)/gi,
+  duration: /\d+\s*(?:weeks?|months?|quarters?|sprints?|days?)\s*(?:timeline|deadline|delivery)?/gi,
+  percentage: /\d+(?:\.\d+)?%|\d+(?:\.\d+)?\s*percent/gi,
+  count: /\d+\s*(?:features?|requirements?|milestones?|deliverables?|items?)/gi,
+};
+
+export function extractConstraints(text: string): ExtractedConstraint[] {
+  const results: ExtractedConstraint[] = [];
+  
+  for (const [type, pattern] of Object.entries(CONSTRAINT_PATTERNS)) {
+    const matches = text.match(pattern) || [];
+    for (const raw of matches) {
+      results.push({
+        type: type as ExtractedConstraint['type'],
+        raw,
+        normalized: normalizeConstraint(type, raw)
+      });
+    }
+  }
+  
+  return deduplicateConstraints(results);
+}
+
+function normalizeConstraint(type: string, raw: string): string {
+  // Normalize to consistent format
+  if (type === 'budget') {
+    // "$500k" -> "$500,000"
+    return raw.replace(/(\d+)k/i, (_, n) => `$${parseInt(n) * 1000}`);
+  }
+  return raw.trim();
+}
+
+function deduplicateConstraints(items: ExtractedConstraint[]): ExtractedConstraint[] {
+  const seen = new Set<string>();
+  return items.filter(item => {
+    const key = `${item.type}:${item.normalized.toLowerCase()}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
   });
 }
 ```
 
-#### Verification Criteria
-
-- [ ] Entities extracted from transcripts
-- [ ] Entity deduplication works
-- [ ] Relevant entities retrieved for queries
-- [ ] Entity context included in LLM prompts
-- [ ] No perceptible latency from entity processing
-
----
-
-### Phase 4: Hierarchical Memory Architecture
-
-**Timeline:** 3-4 days  
-**Impact:** VERY HIGH  
-**Effort:** HIGH  
-**Dependencies:** Phases 2, 3
-
-#### 4.1 Three-Tier Memory Model
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    WORKING MEMORY (Tier 1)                  │
-│  Ring Buffer + Active Thread + Recent Transcript            │
-│  Retention: 120 seconds | Access: Instant (<10ms)           │
-└─────────────────────────────────────────────────────────────┘
-                              ↓ Compaction (every 1800 entries)
-┌─────────────────────────────────────────────────────────────┐
-│                   SESSION MEMORY (Tier 2)                   │
-│  Epoch Summaries + Suspended Threads + Session Entities     │
-│  Retention: Current session | Access: Fast (<100ms)         │
-└─────────────────────────────────────────────────────────────┘
-                              ↓ Persistence (on thread suspend/session end)
-┌─────────────────────────────────────────────────────────────┐
-│                   LONG-TERM MEMORY (Tier 3)                 │
-│  SQLite + Vector Search: Threads, Entities, User Patterns   │
-│  Retention: Indefinite | Access: Async (<500ms)             │
-└─────────────────────────────────────────────────────────────┘
-```
-
-#### 4.2 Memory Manager
-
-**New File:** `electron/memory/MemoryManager.ts`
+**Auto-pin extracted constraints:**
 
 ```typescript
-import { SessionTracker } from '../SessionTracker';
-import { ThreadPersistence } from './ThreadPersistence';
-import { EntityExtractor } from './EntityExtractor';
-import { VectorStore } from '../rag/VectorStore';
+// In SessionTracker, on new transcript segment
+onNewTranscript(text: string): void {
+  const constraints = extractConstraints(text);
+  for (const c of constraints) {
+    // Only auto-pin if not already pinned
+    if (!this.hasConstraint(c.normalized)) {
+      this.pinItem(c.normalized, c.type);
+    }
+  }
+}
+```
 
-export interface ContextOptions {
-  tokenBudget: number;
-  workingMemoryWeight: number;   // Default: 0.4
-  sessionMemoryWeight: number;   // Default: 0.35
-  longTermMemoryWeight: number;  // Default: 0.25
+#### 2.3 Question vs Statement Detection
+
+Simple heuristics to detect questions - no ML needed.
+
+**File:** `electron/conscious/QuestionDetector.ts` (NEW)
+
+```typescript
+interface Detection {
+  isQuestion: boolean;
+  confidence: number;  // 0-1
+  questionType?: 'clarification' | 'information' | 'confirmation' | 'rhetorical';
 }
 
-export interface UnifiedContext {
-  workingMemory: ContextEntry[];
-  sessionMemory: ContextEntry[];
-  longTermMemory: ContextEntry[];
-  entities: Entity[];
-  merged: string;  // Final assembled context string
-  tokenCount: number;
+const QUESTION_WORDS = /^(?:what|who|where|when|why|how|which|can|could|would|should|is|are|do|does|did|will|have|has)/i;
+const QUESTION_ENDING = /\?\s*$/;
+const CONFIRMATION_PATTERNS = /(?:right|correct|isn't it|don't you think|wouldn't you say)/i;
+const CLARIFICATION_PATTERNS = /(?:what do you mean|could you clarify|can you explain|what exactly)/i;
+
+export function detectQuestion(text: string): Detection {
+  const trimmed = text.trim();
+  
+  // Strong signals
+  const hasQuestionMark = QUESTION_ENDING.test(trimmed);
+  const startsWithQuestionWord = QUESTION_WORDS.test(trimmed);
+  
+  // Calculate confidence
+  let confidence = 0;
+  if (hasQuestionMark) confidence += 0.6;
+  if (startsWithQuestionWord) confidence += 0.3;
+  
+  // Detect question type
+  let questionType: Detection['questionType'];
+  if (CLARIFICATION_PATTERNS.test(trimmed)) {
+    questionType = 'clarification';
+    confidence = Math.max(confidence, 0.8);
+  } else if (CONFIRMATION_PATTERNS.test(trimmed)) {
+    questionType = 'confirmation';
+    confidence = Math.max(confidence, 0.7);
+  } else if (confidence > 0.5) {
+    questionType = 'information';
+  }
+  
+  return {
+    isQuestion: confidence > 0.5,
+    confidence: Math.min(confidence, 1.0),
+    questionType
+  };
+}
+```
+
+**Use in context assembly:**
+
+```typescript
+// Prioritize context relevant to questions
+if (detectQuestion(currentUtterance).isQuestion) {
+  // Boost recent Q&A pairs in context scoring
+  contextWeight.qaPairs *= 1.5;
+}
+```
+
+#### 2.4 Hash-Based Response Fingerprinting
+
+Simple hash to detect if we're about to repeat ourselves.
+
+**File:** `electron/conscious/ResponseFingerprint.ts` (NEW)
+
+```typescript
+import { createHash } from 'crypto';
+
+interface Fingerprint {
+  hash: string;
+  timestamp: number;
+  preview: string;  // First 50 chars for debugging
 }
 
-export class MemoryManager {
-  constructor(
-    private sessionTracker: SessionTracker,
-    private threadPersistence: ThreadPersistence,
-    private entityExtractor: EntityExtractor,
-    private vectorStore: VectorStore
-  ) {}
+class ResponseFingerprinter {
+  private recentFingerprints: Fingerprint[] = [];
+  private readonly MAX_HISTORY = 20;
+  private readonly SIMILARITY_THRESHOLD = 0.7;
 
-  async getContext(
-    query: string,
-    options: Partial<ContextOptions> = {}
-  ): Promise<UnifiedContext> {
-    const opts: ContextOptions = {
-      tokenBudget: 4000,
-      workingMemoryWeight: 0.4,
-      sessionMemoryWeight: 0.35,
-      longTermMemoryWeight: 0.25,
-      ...options
-    };
-
-    // Parallel retrieval from all memory tiers
-    const [workingCtx, sessionCtx, longTermCtx, entities] = await Promise.all([
-      this.getWorkingMemoryContext(query, opts),
-      this.getSessionMemoryContext(query, opts),
-      this.getLongTermMemoryContext(query, opts),
-      this.entityExtractor.getRelevantEntities(query, 10)
-    ]);
-
-    // Merge and rank by multi-factor scoring
-    const merged = this.mergeAndRank(
-      workingCtx, sessionCtx, longTermCtx, entities, opts
-    );
-
-    return {
-      workingMemory: workingCtx,
-      sessionMemory: sessionCtx,
-      longTermMemory: longTermCtx,
-      entities,
-      merged: this.assembleContextString(merged, entities),
-      tokenCount: this.estimateTokens(merged)
-    };
-  }
-
-  private async getWorkingMemoryContext(
-    query: string,
-    opts: ContextOptions
-  ): Promise<ContextEntry[]> {
-    const budget = Math.floor(opts.tokenBudget * opts.workingMemoryWeight);
-    return this.sessionTracker.getAdaptiveContext({
-      tokenBudget: budget,
-      query
-    });
-  }
-
-  private async getSessionMemoryContext(
-    query: string,
-    opts: ContextOptions
-  ): Promise<ContextEntry[]> {
-    // Epoch summaries + suspended thread contexts
-    const epochSummaries = this.sessionTracker.getEpochSummaries();
-    const suspendedThreads = this.sessionTracker.getSuspendedThreads();
+  // Create fingerprint from response
+  fingerprint(text: string): string {
+    // Normalize: lowercase, remove punctuation, collapse whitespace
+    const normalized = text
+      .toLowerCase()
+      .replace(/[^\w\s]/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
     
-    return [
-      ...epochSummaries.map(s => ({ text: s, timestamp: Date.now(), source: 'epoch' })),
-      ...suspendedThreads.map(t => ({ 
-        text: `[Thread: ${t.topic}] ${t.goal}`, 
-        timestamp: t.lastActiveAt,
-        source: 'thread'
-      }))
-    ];
+    // Create hash
+    return createHash('sha256').update(normalized).digest('hex').slice(0, 16);
   }
 
-  private async getLongTermMemoryContext(
-    query: string,
-    opts: ContextOptions
-  ): Promise<ContextEntry[]> {
-    // Vector search in long-term storage
-    const embedding = await this.vectorStore.embed(query);
-    const similarThreads = await this.threadPersistence.findSimilarThreads(
-      embedding, 
-      5
-    );
+  // Check if response is too similar to recent ones
+  isDuplicate(text: string): { isDupe: boolean; matchedPreview?: string } {
+    const newHash = this.fingerprint(text);
     
-    return similarThreads.map(t => ({
-      text: `[Historical Thread: ${t.topic}] ${t.goal}`,
-      timestamp: t.lastActiveAt,
-      source: 'longterm',
-      similarity: t.similarity
-    }));
-  }
-
-  private mergeAndRank(
-    working: ContextEntry[],
-    session: ContextEntry[],
-    longTerm: ContextEntry[],
-    entities: Entity[],
-    opts: ContextOptions
-  ): ContextEntry[] {
-    const all = [
-      ...working.map(c => ({ ...c, tier: 'working', tierWeight: opts.workingMemoryWeight })),
-      ...session.map(c => ({ ...c, tier: 'session', tierWeight: opts.sessionMemoryWeight })),
-      ...longTerm.map(c => ({ ...c, tier: 'longterm', tierWeight: opts.longTermMemoryWeight }))
-    ];
-
-    // Multi-factor scoring
-    const scored = all.map(entry => ({
-      ...entry,
-      score: this.computeScore(entry, entities)
-    }));
-
-    // Sort by score, then fit to budget
-    scored.sort((a, b) => b.score - a.score);
+    // Exact match
+    const exact = this.recentFingerprints.find(f => f.hash === newHash);
+    if (exact) {
+      return { isDupe: true, matchedPreview: exact.preview };
+    }
     
-    return this.fitToBudget(scored, opts.tokenBudget);
-  }
-
-  private computeScore(entry: ContextEntry, entities: Entity[]): number {
-    const recencyScore = this.computeRecency(entry.timestamp);
-    const semanticScore = entry.similarity || 0.5;
-    const entityOverlap = this.computeEntityOverlap(entry.text, entities);
-    const tierWeight = entry.tierWeight || 0.3;
-
-    // Weighted combination
-    return (
-      0.30 * recencyScore +
-      0.35 * semanticScore +
-      0.15 * entityOverlap +
-      0.20 * tierWeight
-    );
-  }
-
-  private computeRecency(timestamp: number): number {
-    const age = Date.now() - timestamp;
-    const halfLife = 120000; // 2 minutes in ms
-    return Math.exp(-age / halfLife);
-  }
-
-  private computeEntityOverlap(text: string, entities: Entity[]): number {
-    const textLower = text.toLowerCase();
-    const matches = entities.filter(e => 
-      textLower.includes(e.name.toLowerCase())
-    );
-    return Math.min(matches.length / Math.max(entities.length, 1), 1.0);
-  }
-
-  private fitToBudget(entries: ContextEntry[], budget: number): ContextEntry[] {
-    const result: ContextEntry[] = [];
-    let tokenCount = 0;
-    
-    for (const entry of entries) {
-      const entryTokens = this.estimateTokens(entry.text);
-      if (tokenCount + entryTokens <= budget) {
-        result.push(entry);
-        tokenCount += entryTokens;
+    // Fuzzy match: check if first sentence is identical
+    const firstSentence = text.split(/[.!?]/)[0]?.trim().toLowerCase();
+    for (const fp of this.recentFingerprints) {
+      if (fp.preview.toLowerCase().startsWith(firstSentence.slice(0, 40))) {
+        return { isDupe: true, matchedPreview: fp.preview };
       }
     }
     
-    return result;
+    return { isDupe: false };
   }
 
-  private estimateTokens(text: string | ContextEntry[]): number {
-    if (typeof text === 'string') {
-      return Math.ceil(text.length / 4);
-    }
-    return text.reduce((sum, e) => sum + this.estimateTokens(e.text), 0);
-  }
-
-  private assembleContextString(entries: ContextEntry[], entities: Entity[]): string {
-    const entitySection = entities.length > 0 
-      ? `\n<entities>\n${entities.map(e => `- ${e.name} (${e.type})`).join('\n')}\n</entities>\n`
-      : '';
+  // Record a sent response
+  record(text: string): void {
+    const fp: Fingerprint = {
+      hash: this.fingerprint(text),
+      timestamp: Date.now(),
+      preview: text.slice(0, 50)
+    };
     
-    const contextSection = entries.map(e => e.text).join('\n\n');
-    
-    return `${entitySection}\n<context>\n${contextSection}\n</context>`;
-  }
-
-  // Background sync
-  async syncToLongTerm(): Promise<void> {
-    const threads = this.sessionTracker.getAllThreads();
-    for (const thread of threads) {
-      await this.threadPersistence.saveThread(thread);
+    this.recentFingerprints.push(fp);
+    if (this.recentFingerprints.length > this.MAX_HISTORY) {
+      this.recentFingerprints.shift();
     }
   }
 
-  // Proactive prefetch
-  async prefetchRelated(currentContext: string): Promise<void> {
-    // Extract potential next topics
-    const entities = await this.entityExtractor.extract(currentContext);
-    
-    // Prefetch related threads for these entities
-    for (const entity of entities.slice(0, 3)) {
-      const embedding = await this.vectorStore.embed(entity.name);
-      await this.threadPersistence.findSimilarThreads(embedding, 3);
-      // Results are cached by the database connection
-    }
+  // Clear history (e.g., on topic change)
+  clear(): void {
+    this.recentFingerprints = [];
   }
 }
 ```
 
+**Use before sending response:**
+
+```typescript
+const { isDupe, matchedPreview } = fingerprinter.isDuplicate(proposedResponse);
+if (isDupe) {
+  // Add variation hint to prompt and regenerate
+  prompt += `\n\nIMPORTANT: Your response is too similar to a recent one ("${matchedPreview}..."). Use different phrasing.`;
+  proposedResponse = await regenerate(prompt);
+}
+fingerprinter.record(proposedResponse);
+```
+
 #### Verification Criteria
 
-- [ ] Three memory tiers working independently
-- [ ] Unified context retrieval works
-- [ ] Multi-factor scoring produces sensible rankings
-- [ ] Token budget respected
-- [ ] Background sync doesn't block UI
+- [x] Pinned items appear in context
+- [x] Constraints auto-extracted from transcripts
+- [x] Questions detected with >80% accuracy
+- [x] Duplicate responses caught before sending
+- [ ] All operations complete in <20ms
 
 ---
 
-### Phase 5: Real-Time Intelligence Layer
+### Phase 3: Simple Session Persistence
 
-**Timeline:** 2-3 days  
+**Status:** Implemented (with follow-up hardening)
+
+**Timeline:** 2 days  
 **Impact:** HIGH  
 **Effort:** MEDIUM  
-**Dependencies:** Phase 4
 
-#### 5.1 Predictive Context Prefetching
+Replace the complex 5-table schema with a simple JSON file per session.
 
-**New File:** `electron/memory/ContextPredictor.ts`
+#### 3.1 JSON File Structure
+
+**Directory:** `~/.natively/sessions/`
+
+```
+~/.natively/sessions/
+├── 2026-04-06_meeting-abc123.json
+├── 2026-04-06_meeting-def456.json
+└── index.json  # Quick lookup
+```
+
+**Session file format:**
 
 ```typescript
-export class ContextPredictor {
-  private predictionCache = new Map<string, string[]>();
+interface PersistedSession {
+  version: 1;
+  sessionId: string;
+  meetingId: string;
+  createdAt: number;
+  lastActiveAt: number;
   
-  async predictNextTopics(recentHistory: Message[]): Promise<string[]> {
-    if (recentHistory.length < 2) return [];
-    
-    // Simple heuristic: extract nouns and verbs from recent messages
-    const recentText = recentHistory.slice(-5).map(m => m.content).join(' ');
-    const entities = await this.entityExtractor.extract(recentText);
-    
-    // Predict related topics based on entities
-    const predictions = entities.map(e => e.name);
-    
-    // Cache for deduplication
-    const cacheKey = recentHistory.slice(-2).map(m => m.content).join('|');
-    this.predictionCache.set(cacheKey, predictions);
-    
-    return predictions;
-  }
-
-  async prefetchForTopics(topics: string[]): Promise<void> {
-    // Fire and forget - don't block
-    Promise.all(topics.map(async topic => {
-      const embedding = await this.vectorStore.embed(topic);
-      await this.threadPersistence.findSimilarThreads(embedding, 3);
-    })).catch(() => {}); // Ignore errors in background prefetch
-  }
-
-  onConversationUpdate(message: Message): void {
-    // Debounced prediction on new messages
-    this.debouncedPredict(message);
-  }
-
-  private debouncedPredict = debounce(async (message: Message) => {
-    const predictions = await this.predictNextTopics([message]);
-    this.prefetchForTopics(predictions);
-  }, 500);
+  // Thread state
+  activeThread: {
+    id: string;
+    topic: string;
+    goal?: string;
+    phase?: string;
+    turnCount: number;
+  } | null;
+  
+  suspendedThreads: Array<{
+    id: string;
+    topic: string;
+    goal?: string;
+    suspendedAt: number;
+  }>;
+  
+  // Pinned items
+  pinnedItems: PinnedItem[];
+  
+  // Extracted constraints
+  constraints: ExtractedConstraint[];
+  
+  // Epoch summaries (already short strings)
+  epochSummaries: string[];
+  
+  // Response fingerprints for anti-repetition
+  responseHashes: string[];
 }
 ```
 
-#### 5.2 Adaptive Token Budget
+#### 3.2 Session Persistence Manager
 
-**Enhanced:** `TokenBudget.ts`
+**File:** `electron/memory/SessionPersistence.ts` (NEW)
 
 ```typescript
-export class AdaptiveTokenBudget {
-  computeAllocation(context: ConversationContext): TokenAllocation {
-    const base = this.getProviderBudget(context.provider);
-    
-    // Detect conversation characteristics
-    const isCodeHeavy = this.detectCodeHeavy(context);
-    const isMultiTopic = this.detectMultiTopic(context);
-    const isDeepDive = this.detectDeepDive(context);
-    
-    if (isCodeHeavy) {
-      return this.scaleAllocation(base, {
-        codeContext: 1.5,      // +50% for code
-        activeThread: 0.8,     // -20% for thread
-        entities: 0.5          // -50% for entities
-      });
-    }
-    
-    if (isMultiTopic) {
-      return this.scaleAllocation(base, {
-        suspendedThreads: 1.5, // +50% for suspended threads
-        activeThread: 0.7,     // -30% for active
-        epochSummaries: 1.2    // +20% for summaries
-      });
-    }
-    
-    if (isDeepDive) {
-      return this.scaleAllocation(base, {
-        activeThread: 1.4,     // +40% for active thread
-        entities: 1.3,         // +30% for entities
-        suspendedThreads: 0.5  // -50% for suspended
-      });
-    }
-    
-    return base;
+import { promises as fs } from 'fs';
+import { homedir } from 'os';
+import { join } from 'path';
+
+const SESSIONS_DIR = join(homedir(), '.natively', 'sessions');
+const INDEX_FILE = join(SESSIONS_DIR, 'index.json');
+
+export class SessionPersistence {
+  private savePending = false;
+  private saveTimeout: NodeJS.Timeout | null = null;
+
+  async init(): Promise<void> {
+    await fs.mkdir(SESSIONS_DIR, { recursive: true });
   }
 
-  private detectCodeHeavy(context: ConversationContext): boolean {
-    const codePatterns = /```|function|class|const|let|import|export/g;
-    const recentText = context.recentMessages.map(m => m.content).join(' ');
-    const matches = recentText.match(codePatterns) || [];
-    return matches.length > 5;
+  // Debounced save - don't write on every change
+  scheduleSave(session: PersistedSession): void {
+    if (this.saveTimeout) clearTimeout(this.saveTimeout);
+    this.saveTimeout = setTimeout(() => this.save(session), 2000);
   }
 
-  private detectMultiTopic(context: ConversationContext): boolean {
-    return context.suspendedThreadCount >= 2;
+  async save(session: PersistedSession): Promise<void> {
+    const filename = `${formatDate(session.createdAt)}_meeting-${session.meetingId}.json`;
+    const filepath = join(SESSIONS_DIR, filename);
+    
+    await fs.writeFile(filepath, JSON.stringify(session, null, 2));
+    await this.updateIndex(session);
   }
 
-  private detectDeepDive(context: ConversationContext): boolean {
-    return context.activeThreadTurnCount > 10;
+  async load(sessionId: string): Promise<PersistedSession | null> {
+    const index = await this.loadIndex();
+    const entry = index.sessions.find(s => s.sessionId === sessionId);
+    if (!entry) return null;
+    
+    try {
+      const content = await fs.readFile(entry.filepath, 'utf-8');
+      return JSON.parse(content);
+    } catch {
+      return null;
+    }
   }
+
+  async loadRecent(limit: number = 5): Promise<PersistedSession[]> {
+    const index = await this.loadIndex();
+    const recent = index.sessions
+      .sort((a, b) => b.lastActiveAt - a.lastActiveAt)
+      .slice(0, limit);
+    
+    const sessions: PersistedSession[] = [];
+    for (const entry of recent) {
+      const session = await this.load(entry.sessionId);
+      if (session) sessions.push(session);
+    }
+    return sessions;
+  }
+
+  async findByMeeting(meetingId: string): Promise<PersistedSession | null> {
+    const index = await this.loadIndex();
+    const entry = index.sessions.find(s => s.meetingId === meetingId);
+    return entry ? this.load(entry.sessionId) : null;
+  }
+
+  private async updateIndex(session: PersistedSession): Promise<void> {
+    const index = await this.loadIndex();
+    
+    const existing = index.sessions.findIndex(s => s.sessionId === session.sessionId);
+    const entry = {
+      sessionId: session.sessionId,
+      meetingId: session.meetingId,
+      lastActiveAt: session.lastActiveAt,
+      filepath: `${formatDate(session.createdAt)}_meeting-${session.meetingId}.json`
+    };
+    
+    if (existing >= 0) {
+      index.sessions[existing] = entry;
+    } else {
+      index.sessions.push(entry);
+    }
+    
+    await fs.writeFile(INDEX_FILE, JSON.stringify(index, null, 2));
+  }
+
+  private async loadIndex(): Promise<SessionIndex> {
+    try {
+      const content = await fs.readFile(INDEX_FILE, 'utf-8');
+      return JSON.parse(content);
+    } catch {
+      return { sessions: [] };
+    }
+  }
+
+  // Cleanup old sessions (run weekly)
+  async cleanup(maxAgeDays: number = 30): Promise<number> {
+    const cutoff = Date.now() - (maxAgeDays * 24 * 60 * 60 * 1000);
+    const index = await this.loadIndex();
+    
+    let deleted = 0;
+    for (const entry of index.sessions) {
+      if (entry.lastActiveAt < cutoff) {
+        try {
+          await fs.unlink(join(SESSIONS_DIR, entry.filepath));
+          deleted++;
+        } catch { /* ignore */ }
+      }
+    }
+    
+    index.sessions = index.sessions.filter(s => s.lastActiveAt >= cutoff);
+    await fs.writeFile(INDEX_FILE, JSON.stringify(index, null, 2));
+    
+    return deleted;
+  }
+}
+
+function formatDate(ts: number): string {
+  return new Date(ts).toISOString().split('T')[0];
 }
 ```
 
-#### 5.3 Importance Signaling
+#### 3.3 Integration with SessionTracker
 
-**Integration Points:**
+**File:** `SessionTracker.ts` - Add persistence hooks
 
 ```typescript
-// Voice command detection in transcription
-const importancePatterns = [
-  /remember this/i,
-  /this is important/i,
-  /don't forget/i,
-  /key point/i
-];
-
-onTranscriptSegment(segment: TranscriptSegment): void {
-  for (const pattern of importancePatterns) {
-    if (pattern.test(segment.text)) {
-      // Mark recent context as important
-      this.sessionTracker.markImportant(segment.timestamp, {
-        score: 1.0,
-        reason: 'user_explicit',
-        persistImmediately: true
-      });
-      break;
+class SessionTracker {
+  private persistence: SessionPersistence;
+  
+  constructor(/* ... */) {
+    this.persistence = new SessionPersistence();
+    this.persistence.init();
+  }
+  
+  // Call on every state change that should persist
+  private persistState(): void {
+    const session: PersistedSession = {
+      version: 1,
+      sessionId: this.sessionId,
+      meetingId: this.meetingId,
+      createdAt: this.createdAt,
+      lastActiveAt: Date.now(),
+      activeThread: this.activeThread ? {
+        id: this.activeThread.id,
+        topic: this.activeThread.topic,
+        goal: this.activeThread.goal,
+        phase: this.activeThread.phase,
+        turnCount: this.activeThread.turnCount
+      } : null,
+      suspendedThreads: this.suspendedThreads.map(t => ({
+        id: t.id,
+        topic: t.topic,
+        goal: t.goal,
+        suspendedAt: t.suspendedAt
+      })),
+      pinnedItems: this.pinnedItems,
+      constraints: this.extractedConstraints,
+      epochSummaries: this.epochSummaries,
+      responseHashes: this.fingerprinter.getHashes()
+    };
+    
+    this.persistence.scheduleSave(session);  // Debounced
+  }
+  
+  // Call on app startup if rejoining a meeting
+  async restoreSession(meetingId: string): Promise<boolean> {
+    const session = await this.persistence.findByMeeting(meetingId);
+    if (!session) return false;
+    
+    this.sessionId = session.sessionId;
+    this.pinnedItems = session.pinnedItems;
+    this.extractedConstraints = session.constraints;
+    this.epochSummaries = session.epochSummaries;
+    this.fingerprinter.restore(session.responseHashes);
+    
+    // Restore threads if they were recent (< 2 hours)
+    const twoHoursAgo = Date.now() - (2 * 60 * 60 * 1000);
+    if (session.lastActiveAt > twoHoursAgo && session.activeThread) {
+      this.activeThread = session.activeThread;
+      this.suspendedThreads = session.suspendedThreads;
     }
+    
+    return true;
   }
 }
 ```
 
 #### Verification Criteria
 
-- [ ] Predictive prefetch runs in background
-- [ ] Token budget adapts to conversation type
-- [ ] "Remember this" voice command works
-- [ ] Important items persist to long-term memory
-- [ ] No latency impact from adaptive features
+- [x] Session state persists to JSON file
+- [x] Session restores correctly on app restart
+- [x] Debounced saves (not on every keystroke)
+- [x] Index enables fast lookup by meeting ID
+- [x] Old sessions cleaned up after 30 days
 
 ---
 
-### Phase 6: Anti-Repetition & Response Quality
+### Phase 4: Context Assembly Optimization
 
-**Timeline:** 1-2 days  
+**Status:** Planned
+
+**Timeline:** 1 day  
 **Impact:** MEDIUM  
 **Effort:** LOW  
-**Dependencies:** Phase 1 (can run in parallel with Phase 2)
 
-#### 6.1 Semantic Anti-Repetition
+Cache assembled context to avoid redundant work.
 
-**Enhanced:** `TemporalContextBuilder.ts`
+#### 4.1 Context Snapshot Cache
 
 ```typescript
-export class SemanticAntiRepetition {
-  private responseEmbeddings = new Map<string, number[]>();
+interface ContextSnapshot {
+  assembled: string;
+  tokenCount: number;
+  revision: number;  // Increments on transcript changes
+  createdAt: number;
+}
+
+class ContextCache {
+  private cache: Map<string, ContextSnapshot> = new Map();
+  private readonly TTL_MS = 10_000;  // 10 seconds
+  private readonly MAX_ENTRIES = 20;
   
-  async checkNovelty(
-    proposed: string,
-    history: AssistantResponse[]
-  ): Promise<NoveltyScore> {
-    const proposedEmbed = await this.embed(proposed);
+  get(queryHash: string, currentRevision: number): ContextSnapshot | null {
+    const entry = this.cache.get(queryHash);
+    if (!entry) return null;
     
-    const similarities = await Promise.all(
-      history.slice(-5).map(async h => {
-        // Use cached embedding if available
-        let historyEmbed = this.responseEmbeddings.get(h.id);
-        if (!historyEmbed) {
-          historyEmbed = await this.embed(h.content);
-          this.responseEmbeddings.set(h.id, historyEmbed);
-        }
-        return this.cosineSimilarity(proposedEmbed, historyEmbed);
-      })
-    );
+    // Invalidate if revision changed or TTL expired
+    if (entry.revision !== currentRevision) return null;
+    if (Date.now() - entry.createdAt > this.TTL_MS) {
+      this.cache.delete(queryHash);
+      return null;
+    }
     
-    const maxSimilarity = Math.max(...similarities, 0);
-    
-    return {
-      isNovel: maxSimilarity < 0.85,
-      similarityScore: maxSimilarity,
-      mostSimilarIndex: similarities.indexOf(maxSimilarity),
-      variationHint: this.generateVariationHint(maxSimilarity)
-    };
+    return entry;
   }
-
-  generateVariationHint(similarity: number): string {
-    if (similarity > 0.9) {
-      return "IMPORTANT: Your previous response was very similar. Use completely different phrasing, structure, and examples.";
+  
+  set(queryHash: string, snapshot: ContextSnapshot): void {
+    // LRU eviction
+    if (this.cache.size >= this.MAX_ENTRIES) {
+      const oldest = this.cache.keys().next().value;
+      this.cache.delete(oldest);
     }
-    if (similarity > 0.8) {
-      return "Note: Vary your phrasing from previous responses. Consider different examples or angles.";
-    }
-    if (similarity > 0.7) {
-      return "Consider using fresh examples or alternative explanations.";
-    }
-    return "";
+    this.cache.set(queryHash, snapshot);
   }
-
-  private cosineSimilarity(a: number[], b: number[]): number {
-    let dot = 0, normA = 0, normB = 0;
-    for (let i = 0; i < a.length; i++) {
-      dot += a[i] * b[i];
-      normA += a[i] * a[i];
-      normB += b[i] * b[i];
-    }
-    return dot / (Math.sqrt(normA) * Math.sqrt(normB));
+  
+  invalidateAll(): void {
+    this.cache.clear();
   }
 }
 ```
 
-#### 6.2 User Pattern Learning
+**Use in context assembly:**
 
 ```typescript
-// Track and learn user preferences
-interface UserPattern {
-  type: 'response_length' | 'technical_depth' | 'tone' | 'format';
-  value: string;
-  confidence: number;
-}
-
-class UserPatternLearner {
-  async learnFromInteraction(
-    userMessage: string,
-    assistantResponse: string,
-    userFeedback?: 'positive' | 'negative'
-  ): Promise<void> {
-    // Infer preferences from interaction patterns
-    const patterns: UserPattern[] = [];
-    
-    // Response length preference
-    if (userFeedback === 'positive' && assistantResponse.length > 500) {
-      patterns.push({
-        type: 'response_length',
-        value: 'detailed',
-        confidence: 0.6
-      });
-    }
-    
-    // Technical depth
-    const technicalTerms = assistantResponse.match(/\b(API|function|class|async|await)\b/g);
-    if (technicalTerms && technicalTerms.length > 3 && userFeedback !== 'negative') {
-      patterns.push({
-        type: 'technical_depth',
-        value: 'high',
-        confidence: 0.5
-      });
-    }
-    
-    // Persist learned patterns
-    for (const pattern of patterns) {
-      await this.db.run(`
-        INSERT INTO user_patterns (pattern_type, key, value, confidence, evidence_count, created_at, updated_at)
-        VALUES (?, ?, ?, ?, 1, ?, ?)
-        ON CONFLICT(pattern_type, key) DO UPDATE SET
-          value = CASE WHEN excluded.confidence > confidence THEN excluded.value ELSE value END,
-          confidence = (confidence * evidence_count + excluded.confidence) / (evidence_count + 1),
-          evidence_count = evidence_count + 1,
-          updated_at = excluded.updated_at
-      `, [pattern.type, pattern.type, pattern.value, pattern.confidence, Date.now(), Date.now()]);
-    }
+async assembleContext(query: string): Promise<string> {
+  const queryHash = hashQuery(query);
+  const cached = this.contextCache.get(queryHash, this.transcriptRevision);
+  
+  if (cached) {
+    return cached.assembled;  // Cache hit - instant
   }
-
-  async getPatterns(): Promise<UserPattern[]> {
-    return this.db.all(`
-      SELECT pattern_type as type, value, confidence
-      FROM user_patterns
-      WHERE confidence > 0.5
-      ORDER BY confidence DESC
-    `);
-  }
+  
+  // Cache miss - do the work
+  const assembled = await this.buildContext(query);
+  
+  this.contextCache.set(queryHash, {
+    assembled,
+    tokenCount: this.tokenCounter.count(assembled, this.activeModelId),
+    revision: this.transcriptRevision,
+    createdAt: Date.now()
+  });
+  
+  return assembled;
 }
 ```
 
 #### Verification Criteria
 
-- [ ] Semantic similarity detects repetitive responses
-- [ ] Variation hints included in LLM prompts
-- [ ] User patterns learned over time
-- [ ] Patterns influence response generation
-- [ ] No false positives blocking valid responses
+- [ ] Cache hit rate >60% during active conversation
+- [ ] Context assembly <10ms on cache hit
+- [ ] Cache correctly invalidated on new transcripts
+- [ ] No stale context served
 
 ---
 
-## Architecture Diagram
+## Removed Features (Intentionally)
+
+These were in the original plan but removed for being over-engineered:
+
+| Feature | Why Removed | Alternative |
+|---------|-------------|-------------|
+| LLM-based entity extraction | Adds 200-500ms latency per turn, API costs | Regex patterns for common entities |
+| 3-tier hierarchical memory | Complex orchestration, multiple DB queries | 2-tier: working (in-memory) + JSON persistence |
+| ML-based predictive prefetching | Speculative, marginal interview benefit | None - just be fast |
+| User pattern learning | Needs many interactions, complex signals | None for now |
+| Semantic anti-repetition | Embedding comparison is overkill | Hash-based fingerprinting |
+| 5 database tables | Migration complexity, cascade deletes | Single JSON file per session |
+| Vector search for threads | Already have BM25 + simple embedding | Keep existing, just enable it |
+| Context predictor | Speculative prefetching rarely helps | None |
+| Adaptive token budget ML | Too complex for marginal gains | Fixed allocations with manual tuning |
+
+---
+
+## Architecture (Simplified)
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
@@ -1154,38 +947,36 @@ class UserPatternLearner {
                                     │
                                     ▼
 ┌──────────────────────────────────────────────────────────────────────┐
-│                       MEMORY MANAGER                                 │
+│                       SESSION TRACKER                                │
 │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐                  │
-│  │   Working   │  │   Session   │  │  Long-Term  │                  │
-│  │   Memory    │←→│   Memory    │←→│   Memory    │                  │
-│  │  (120 sec)  │  │  (session)  │  │  (persist)  │                  │
+│  │   Ring      │  │   Pinned    │  │  Extracted  │                  │
+│  │  Buffer     │  │   Items     │  │ Constraints │                  │
+│  │  (120sec)   │  │  (manual)   │  │   (regex)   │                  │
 │  └─────────────┘  └─────────────┘  └─────────────┘                  │
 │         │                │                │                          │
 │         └────────────────┴────────────────┘                          │
 │                          │                                           │
-│                    Unified Context                                   │
+│                    Context Cache                                     │
 │                          │                                           │
 │  ┌───────────────────────┴───────────────────────┐                  │
 │  │            CONTEXT ASSEMBLER                   │                  │
-│  │  • Multi-factor scoring (recency + semantic)   │                  │
-│  │  • Entity enrichment                           │                  │
-│  │  • Token budget optimization                   │                  │
-│  │  • Anti-repetition filtering                   │                  │
+│  │  • Semantic scoring (existing, now enabled)    │                  │
+│  │  • Pinned items first                         │                  │
+│  │  • Question detection for prioritization       │                  │
+│  │  • Hash fingerprint for anti-repetition       │                  │
 │  └────────────────────────────────────────────────┘                  │
 └──────────────────────────────────────────────────────────────────────┘
                                     │
                                     ▼
 ┌──────────────────────────────────────────────────────────────────────┐
-│                        PERSISTENCE LAYER                             │
-│  ┌────────────┐  ┌────────────┐  ┌────────────┐  ┌────────────┐     │
-│  │  Threads   │  │  History   │  │  Entities  │  │  Patterns  │     │
-│  │   Table    │  │   Table    │  │   Table    │  │   Table    │     │
-│  └────────────┘  └────────────┘  └────────────┘  └────────────┘     │
+│                        PERSISTENCE (Simple)                          │
 │                                                                      │
-│  ┌─────────────────────────────────────────────────────────────┐    │
-│  │                    VECTOR STORE (sqlite-vec)                 │    │
-│  │   vec_threads_768  |  vec_history_768  |  vec_entities_768   │    │
-│  └─────────────────────────────────────────────────────────────┘    │
+│  ~/.natively/sessions/                                               │
+│  ├── 2026-04-06_meeting-abc123.json                                  │
+│  ├── 2026-04-06_meeting-def456.json                                  │
+│  └── index.json                                                      │
+│                                                                      │
+│  JSON contains: threads, pinned items, constraints, epoch summaries  │
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -1195,421 +986,159 @@ class UserPatternLearner {
 
 | Phase | Duration | Cumulative | Key Deliverable |
 |-------|----------|------------|-----------------|
-| Phase 1 | 1-2 days | 2 days | Semantic context enabled |
-| Phase 2 | 3-5 days | 7 days | Cross-session persistence |
-| Phase 3 | 2-3 days | 10 days | Entity memory |
-| Phase 4 | 3-4 days | 14 days | Hierarchical memory |
-| Phase 5 | 2-3 days | 17 days | Real-time intelligence |
-| Phase 6 | 1-2 days | (parallel) | Anti-repetition |
+| Phase 1 | 1 day | 1 day | Semantic context enabled (flip switches) |
+| Phase 2 | 2-3 days | 3-4 days | Interview essentials (pinned, regex, questions, fingerprint) |
+| Phase 3 | 2 days | 5-6 days | Simple JSON persistence |
+| Phase 4 | 1 day | 6-7 days | Context caching |
 
-**Total: ~2.5-3 weeks for full implementation**
+**Total: ~5-7 days** (vs original ~3 weeks)
 
 ---
 
-## Risk Mitigation
-
-| Risk | Mitigation |
-|------|------------|
-| Embedding latency | Cache aggressively, fallback to recency-only |
-| Database size growth | Automatic expiration of old data |
-| Memory usage | Tiered storage, lazy loading |
-| Vector search performance | sqlite-vec native extension, background indexing |
-| Breaking existing features | Feature flags for all new capabilities |
-
----
-
-## Data Lifecycle & Deletion
-
-### Cascade Delete for New Tables
-
-All new tables must cascade-delete when a meeting is deleted. Two approaches:
-
-**Tables with `meeting_id` foreign key** (threads, history tied to specific meetings):
-```sql
-ALTER TABLE conversation_threads ADD COLUMN meeting_id TEXT REFERENCES meetings(id) ON DELETE CASCADE;
-ALTER TABLE conversation_history ADD COLUMN meeting_id TEXT REFERENCES meetings(id) ON DELETE CASCADE;
-```
-
-**Global tables** (entities, user_patterns) — source-tracked for selective deletion:
-```sql
-ALTER TABLE entities ADD COLUMN source_meeting_ids TEXT;  -- JSON array of meeting IDs
-ALTER TABLE user_patterns ADD COLUMN source_meeting_ids TEXT;
-```
-
-When a meeting is deleted, `DatabaseManager.deleteMeeting()` must:
-1. Delete rows where `meeting_id` matches (cascade handles this)
-2. For global tables: remove the meeting ID from `source_meeting_ids` JSON array, delete the row if array becomes empty
-3. Call `RAGManager.deleteMeetingData()` (already exists)
-4. Clear any `context_cache` entries for that meeting
-
-### Per-Transcript-Segment Deletion
-
-If the UI adds the ability to delete individual transcript segments:
-- Delete the segment from `fullTranscript` array in `SessionTracker`
-- Delete from `transcripts` table by ID
-- Delete associated `conversation_history` rows
-- Decrement `mention_count` on affected entities (re-extract entities from deleted text, decrement matches)
-- Delete associated vector chunks from `VectorStore`
-
-This is **Phase 2.5** — add after persistence tables exist but before heavy backfill.
-
-### Entity Cleanup on Source Deletion
-
-When all source meetings for an entity are deleted, the entity row is removed. No orphaned entities.
-
----
-
-## Embedding Dimension Guard
-
-**Problem**: If the embedding model changes (e.g., `text-embedding-3-small` 1536d → a future 3072d model), all existing vector data becomes incompatible.
-
-**Solution**: Store the current dimension in `embedding_config` table and validate on every write:
-
-```typescript
-// On app startup, after embedding model is selected:
-const currentDim = embeddingModel.dimension;
-const stored = db.get('SELECT value FROM embedding_config WHERE key = ?', ['current']);
-
-if (stored && JSON.parse(stored.value).dim !== currentDim) {
-  // Dimension changed — existing vectors are invalid
-  // Option A: Re-embed everything (expensive, warn user)
-  // Option B: Wipe vector tables and re-index on demand
-  console.warn(`Embedding dimension changed from ${JSON.parse(stored.value).dim} to ${currentDim}. Vectors need rebuild.`);
-}
-
-db.run('INSERT OR REPLACE INTO embedding_config (key, value) VALUES (?, ?)',
-  ['current', JSON.stringify({ model: embeddingModel.name, dim: currentDim })]);
-```
-
-**All vector tables** (`conversation_threads`, `conversation_history`, `entities`) store `embedding_dim` alongside the BLOB. On read, reject if dimension doesn't match current model.
-
-**Follow the existing pattern**: `DatabaseManager.KNOWN_DIMS` already handles this for `chunks` — extend the same approach to new tables rather than inventing a new mechanism.
-
----
-
-## Context Cache
-
-**Problem**: `MemoryManager.getContext()` runs 3+ DB queries and 2+ embeddings per LLM call. In a 15-minute conversation with 30 turns, that's 90+ DB queries and 60+ embeddings.
-
-**Solution**: Cache assembled context keyed by `(query_hash, transcript_revision)`. The `transcript_revision` counter already exists in `SessionTracker` — it increments every time a new transcript segment arrives.
-
-```typescript
-class ContextCache {
-  private cache = new Map<string, { context: UnifiedContext, revision: number }>();
-  private readonly MAX_ENTRIES = 50;
-  private readonly TTL_MS = 30_000; // 30 seconds
-
-  get(query: string, revision: number): UnifiedContext | null {
-    const key = `${hash(query)}:${revision}`;
-    const entry = this.cache.get(key);
-    if (!entry) return null;
-    if (Date.now() - entry.revision > this.TTL_MS) {
-      this.cache.delete(key);
-      return null;
-    }
-    return entry.context;
-  }
-
-  set(query: string, revision: number, context: UnifiedContext): void {
-    const key = `${hash(query)}:${revision}`;
-    this.cache.set(key, { context, revision: Date.now() });
-    if (this.cache.size > this.MAX_ENTRIES) {
-      // Evict oldest
-      const oldest = this.cache.keys().next().value;
-      this.cache.delete(oldest);
-    }
-  }
-}
-```
-
-**Invalidation**: When `transcript_revision` changes, all cache entries are stale. The revision number is part of the cache key, so stale entries are naturally bypassed. Old entries are evicted by LRU.
-
-**This is the single biggest latency win** — most turns don't change the transcript enough to warrant re-computing context.
-
----
-
-## Real Token Counting
-
-Replace `text.length / 4` with actual tokenizers. Use the existing `tiktoken` library (already a dependency for OpenAI models):
-
-```typescript
-import { get_encoding } from 'tiktoken';
-
-const encoder = get_encoding('cl100k_base'); // Used by gpt-4, gpt-3.5
-
-function estimateTokens(text: string): number {
-  return encoder.encode(text).length;
-}
-```
-
-For non-OpenAI models, use approximate ratios:
-- Claude: `tiktoken_tokens * 1.05` (Claude's tokenizer is ~5% different)
-- Gemini: `tiktoken_tokens * 0.95`
-- Ollama: `text.length / 4` as fallback (no reliable tokenizer available)
-
-**Where to fix**:
-- `MemoryManager.estimateTokens()` (Phase 4)
-- `TokenBudget.ts` (existing)
-- `fitToBudget()` in Phase 4
-
-This is a **small change with outsized impact** — current estimates are off by 30-50%, meaning prompts either overflow context windows or waste 30% of available tokens.
-
----
-
-## Embedding Circuit Breaker
-
-When the embedding model is unavailable (API down, rate limited, Ollama not running), the system should degrade gracefully without blocking every turn.
-
-```typescript
-class EmbeddingCircuitBreaker {
-  private failures = 0;
-  private lastFailure = 0;
-  private state: 'closed' | 'open' | 'half-open' = 'closed';
-  private readonly FAILURE_THRESHOLD = 3;
-  private readonly RECOVERY_MS = 60_000;
-
-  async execute<T>(fn: () => Promise<T>, fallback: T): Promise<T> {
-    if (this.state === 'open') {
-      if (Date.now() - this.lastFailure < this.RECOVERY_MS) {
-        return fallback; // Still in cooldown
-      }
-      this.state = 'half-open';
-    }
-
-    try {
-      const result = await fn();
-      this.failures = 0;
-      this.state = 'closed';
-      return result;
-    } catch (e) {
-      this.failures++;
-      this.lastFailure = Date.now();
-      if (this.failures >= this.FAILURE_THRESHOLD) {
-        this.state = 'open';
-        console.warn('[CircuitBreaker] Embedding service unavailable, using fallback');
-      }
-      return fallback;
-    }
-  }
-}
-```
-
-**Fallback behavior**: When open, skip embedding-based scoring and fall back to recency-only context selection. Log a warning once per cooldown period, not on every call.
-
-**Where to apply**:
-- `SessionTracker.getAdaptiveContext()` — fallback to time-based filtering
-- `ThreadPersistence.findSimilarThreads()` — fallback to keyword match
-- `EntityExtractor.extractWithLLM()` — fallback to pattern-only extraction
-
----
-
-## Concrete Confidence Weights
-
-Phase 1 says "rebalance other weights" — here are the actual numbers:
-
-```typescript
-// BEFORE
-const CONFIDENCE_WEIGHTS = {
-  bm25: 0.25,
-  embedding: 0.0,
-  temporal: 0.25,
-  phase: 0.25,
-  explicit: 0.25,
-}; // Sum = 1.0
-
-// AFTER
-const CONFIDENCE_WEIGHTS = {
-  bm25: 0.20,
-  embedding: 0.25,    // ENABLED — strongest signal for topic continuity
-  temporal: 0.20,     // Recency still matters but less than semantic match
-  phase: 0.20,        // Phase alignment indicates conversation continuity
-  explicit: 0.15,     // Explicit markers ("as I said earlier") are rare but strong
-}; // Sum = 1.0
-```
-
-**Rationale**: Embedding similarity is the strongest signal for "is this question related to what we were discussing?" BM25 handles exact keyword matches that embeddings miss (version numbers, specific names). Temporal and phase are supporting signals. Explicit markers are rare.
-
-**Tune after launch**: These are starting points. Measure thread resume accuracy and adjust.
-
----
-
-## User Pattern Learning: Behavioral Signals
-
-The current plan references `userFeedback: 'positive' | 'negative'` — this signal doesn't exist. Replace with behavioral signals that actually exist in the system:
-
-```typescript
-class UserPatternLearner {
-  // Signal 1: User accepted the suggestion (used it in their response)
-  // Detected by: user transcript contains phrases from the assistant's suggestion
-  async recordSuggestionUsed(suggestion: string, userTranscript: string): Promise<void> {
-    const overlap = computeTextOverlap(suggestion, userTranscript);
-    if (overlap > 0.3) {
-      this.updatePattern('response_format', 'structured', 0.7);
-    }
-  }
-
-  // Signal 2: User asked for refinement (suggestion wasn't quite right)
-  // Detected by: follow-up mode triggered after assistant response
-  async recordRefinementRequested(refinementIntent: string): Promise<void> {
-    if (refinementIntent === 'shorten') {
-      this.updatePattern('response_length', 'concise', 0.6);
-    } else if (refinementIntent === 'expand') {
-      this.updatePattern('response_length', 'detailed', 0.6);
-    } else if (refinementIntent === 'simplify') {
-      this.updatePattern('technical_depth', 'accessible', 0.6);
-    }
-  }
-
-  // Signal 3: User ignored the suggestion entirely (moved to different topic)
-  // Detected by: topic shift within 2 turns of assistant response
-  async recordSuggestionIgnored(): Promise<void> {
-    // Lower confidence on recent pattern inferences
-    this.decayRecentPatterns(0.1);
-  }
-
-  // Pattern decay: reduce confidence of patterns not reinforced recently
-  async decayStalePatterns(maxAgeDays: number = 30): Promise<number> {
-    const cutoff = Date.now() - (maxAgeDays * 24 * 60 * 60 * 1000);
-    const result = await this.db.run(`
-      UPDATE user_patterns
-      SET confidence = confidence * 0.8
-      WHERE updated_at < ? AND confidence > 0.3
-    `, [cutoff]);
-    return result.changes;
-  }
-}
-```
-
-**Key principle**: Learn from what users *do*, not what they *say*. Refinement requests, suggestion usage, and topic shifts are real signals.
-
----
-
-## LLM Output Schema Enforcement
-
-`EntityExtractor.extractWithLLM()` does `JSON.parse(response)` — this will fail when the LLM wraps JSON in markdown code blocks or adds explanatory text.
-
-**Fix**: Use a robust JSON extractor:
-
-```typescript
-private async extractWithLLM(text: string): Promise<Entity[]> {
-  const response = await this.llm.complete(prompt, { maxTokens: 200 });
-
-  // Extract JSON from markdown code blocks or raw text
-  const jsonMatch = response.match(/```(?:json)?\s*([\s\S]*?)```/) ||
-                    response.match(/\[[\s\S]*\]/);
-  if (!jsonMatch) return [];
-
-  try {
-    return JSON.parse(jsonMatch[1] || jsonMatch[0]);
-  } catch {
-    return [];
-  }
-}
-```
-
-If the project uses structured output (OpenAI `response_format: { type: "json_object" }` or Anthropic tool use), use that instead. But the regex fallback handles all providers.
-
----
-
-## Backfill Strategy for Existing Data
-
-On first run after Phase 2 deployment:
-
-1. **Threads**: Nothing to backfill — threads are session-scoped and don't exist for past meetings. Start fresh.
-
-2. **Entities**: Run a one-time extraction over the last N meetings (configurable, default 10):
-   ```typescript
-   async backfillEntities(meetingLimit: number = 10): Promise<number> {
-     const meetings = db.all('SELECT * FROM meetings ORDER BY created_at DESC LIMIT ?', [meetingLimit]);
-     let totalEntities = 0;
-     for (const meeting of meetings) {
-       const transcripts = db.all('SELECT text FROM transcripts WHERE meeting_id = ? ORDER BY timestamp', [meeting.id]);
-       const text = transcripts.map(t => t.text).join(' ');
-       const entities = await entityExtractor.extract(text);
-       await entityExtractor.mergeEntities(entities);
-       totalEntities += entities.length;
-     }
-     return totalEntities;
-   }
-   ```
-
-3. **Epoch summaries**: Already in-memory only. On first run after Phase 2, the `SessionTracker` will start fresh. No backfill needed — epoch summaries are transient by design.
-
-4. **User patterns**: Start fresh. No historical signal to infer from.
-
-**Keep it simple**: Only backfill entities. Everything else starts fresh and builds up organically.
-
----
-
-## Telemetry Implementation
-
-Collect these metrics at specific points — no new infrastructure needed, just `console.log` with structured data that can be parsed later:
-
-| Metric | Where to Measure | Log Format |
-|--------|-----------------|------------|
-| Context retrieval latency | `MemoryManager.getContext()` start/end | `[metrics] context_retrieval_ms=45 revision=123` |
-| Cache hit rate | `ContextCache.get()` hit/miss | `[metrics] context_cache=hit` or `context_cache=miss` |
-| Embedding latency | Each `embed()` call | `[metrics] embedding_ms=120 model=openai` |
-| Circuit breaker state | On state change | `[metrics] circuit_breaker=open failures=3` |
-| Thread resume accuracy | After thread resume, compare predicted vs actual | `[metrics] thread_resume_score=0.78` |
-| Entity extraction rate | After each extraction batch | `[metrics] entities_extracted=5 from_chars=340` |
-| Token budget utilization | After `fitToBudget()` | `[metrics] token_budget_used=3200/4000` |
-
-**P99 latency**: Collect all latency measurements, compute P99 in a weekly aggregation script. Target: P99 < 200ms for context retrieval.
-
-**No dashboard needed initially**: Structured logs are queryable with `grep` and `awk`. Add a dashboard only if the data shows a need.
-
----
-
-## Feature Flag Implementation
-
-Use the existing `electron/config/optimizations.ts` pattern — extend it rather than creating a new system:
-
-```typescript
-// electron/config/optimizations.ts
-export const defaultOptimizations = {
-  // Existing
-  accelerationEnabled: false,
-
-  // New flags — all default to OFF, enable incrementally
-  semanticContextWindow: false,    // Phase 1
-  threadPersistence: false,        // Phase 2
-  entityMemory: false,             // Phase 3
-  hierarchicalMemory: false,       // Phase 4
-  contextPrefetching: false,       // Phase 5
-  semanticAntiRepetition: false,   // Phase 6
-  adaptiveTokenBudget: false,      // Phase 5
-  behavioralPatternLearning: false,// Phase 6
-};
-```
-
-Each feature checks its flag before activating:
-```typescript
-if (!defaultOptimizations.semanticContextWindow) {
-  return this.getFallbackContext(); // Existing behavior
-}
-```
-
-**Toggle mechanism**: For now, edit the config file. If runtime toggles are needed later, wire them to the existing settings UI. Don't build a feature flag service.
+## Files to Create/Modify
+
+### New Files
+
+| File | Phase | Purpose |
+|------|-------|---------|
+| `electron/shared/TokenCounter.ts` | 1 | Model-agnostic token counting wrapper (`toksclare`) |
+| `electron/conscious/ConstraintExtractor.ts` | 2 | Regex-based number/date extraction |
+| `electron/conscious/QuestionDetector.ts` | 2 | Question vs statement classification |
+| `electron/conscious/ResponseFingerprint.ts` | 2 | Hash-based anti-repetition |
+| `electron/memory/SessionPersistence.ts` | 3 | JSON file persistence |
+
+### Modified Files
+
+| File | Phase | Changes |
+|------|-------|---------|
+| `electron/config/optimizations.ts` | 1 | Enable `accelerationEnabled` |
+| `electron/conscious/ConfidenceScorer.ts` | 1 | Enable embedding weight |
+| `electron/conscious/types.ts` | 1 | Update `CONFIDENCE_WEIGHTS` |
+| `electron/SessionTracker.ts` | 1, 2, 3 | Add embeddings, pinned items, persistence |
+| `electron/conscious/ThreadManager.ts` | 1 | Generate thread embeddings |
+| `electron/LLMHelper.ts` | 1 | Replace heuristic token counting with `TokenCounter` |
+| `electron/llm/PromptCompiler.ts` | 1 | Replace heuristic token counting with `TokenCounter` |
+| `electron/conscious/TokenBudget.ts` | 1 | Replace heuristic token counting with `TokenCounter` |
+| `electron/conscious/AdaptiveContextWindow.ts` | 1 | Replace heuristic token counting with `TokenCounter` |
+| `electron/rag/TranscriptPreprocessor.ts` | 1 | Replace heuristic token counting with `TokenCounter` |
 
 ---
 
 ## Success Metrics
 
-1. **Context Relevance**: Measure semantic similarity between retrieved context and query (target: >0.6 average)
-2. **Cross-Session Recall**: Can the system recall information from previous sessions? (manual test: ask about topic from last meeting)
-3. **Entity Recognition**: % of mentioned entities correctly identified and stored (target: >70% for common tech/company names)
-4. **Response Novelty**: Semantic distance between consecutive responses (target: >0.15 average cosine distance)
-5. **Latency**: Context retrieval P99 < 200ms, P50 < 50ms
-6. **Cache Hit Rate**: >60% of context requests served from cache
-7. **Circuit Breaker Activations**: <1% of embedding calls should hit the open state
-8. **User Satisfaction**: Qualitative feedback on memory quality
+| Metric | Target | How to Measure |
+|--------|--------|----------------|
+| Context assembly latency | <50ms P95 | `console.time` in `assembleContext` |
+| Cache hit rate | >60% | Counter in `ContextCache.get()` |
+| Constraint extraction accuracy | >90% | Manual review of 20 samples |
+| Question detection accuracy | >80% | Manual review of 50 samples |
+| Session restore time | <500ms | `console.time` in `restoreSession` |
+| Duplicate response prevention | 100% | No exact duplicates sent |
+| Token estimate error | <10% median | Compare local estimate vs provider usage logs |
+
+---
+
+## Realtime Guardrails (Must-Haves)
+
+These guardrails keep the system usable during live interviews:
+
+1. **Hard deadline for context assembly**
+   - Budget target: 80ms soft, 120ms hard.
+   - On timeout, degrade to recency + pinned items, never block response generation.
+
+2. **Deterministic fallback ladder**
+   - Tier A: semantic + lexical + pinned
+   - Tier B: lexical + recency + pinned
+   - Tier C: pinned + last N turns
+   - No LLM call should wait on enrichment work.
+
+3. **Background work isolation**
+   - Embeddings/entity extraction must run off the hot path.
+   - Use transcript revision checks so stale background results are dropped.
+
+4. **Thread switch hysteresis**
+   - Do not switch active thread on one noisy signal.
+   - Require confidence margin + repeated evidence across turns.
+
+5. **Atomic session persistence**
+   - Save pattern: write temp file -> fsync -> atomic rename.
+   - Prevent partial JSON writes during app crash/force-quit.
 
 ---
 
 ## Next Steps
 
-1. [ ] Review and approve this plan
-2. [ ] Prioritize phases based on immediate needs
-3. [ ] Begin Phase 1 implementation
-4. [ ] Set up metrics collection for success measurement
+1. [x] Add model-agnostic token counter wrapper and migrate runtime paths
+2. [x] Enable semantic context defaults behind rollout-safe config
+3. [x] Implement interview essentials (pinned/constraints/question/fingerprint)
+4. [x] Add session persistence with atomic writes and recovery tests
+5. [ ] Run replay-based latency/quality validation on real interview transcripts
+
+---
+
+## Autonomous Execution Board (Owner-Driven)
+
+### Loop 1 (Completed)
+
+- Scope: model-agnostic token counting migration in runtime hot paths.
+- Delivered:
+  - `electron/shared/TokenCounter.ts`
+  - migration of runtime estimators in `electron/LLMHelper.ts`, `electron/llm/PromptCompiler.ts`, `electron/conscious/TokenBudget.ts`, `electron/conscious/AdaptiveContextWindow.ts`, `electron/rag/TranscriptPreprocessor.ts`
+- Self-review result: **Pass** (token lock-in removed; fallback behavior present; no direct `text.length / 4` in runtime budgeting paths).
+
+### Loop 2 (In Progress)
+
+- Scope: enable semantic context defaults with safe degradation.
+- Planned deliverables:
+  - set `accelerationEnabled` default to `true`
+  - enforce embedding timeout + fallback to recency path
+  - add latency counters for semantic context selection
+- Exit criteria:
+  - no visible latency regression
+  - deterministic fallback verified in tests/replay
+
+### Loop 3 (Queued)
+
+- Scope: interview essentials (`PinnedItem`, `ConstraintExtractor`, `QuestionDetector`, `ResponseFingerprinter`).
+- Exit criteria:
+  - all four components integrated in context assembly
+  - duplicate-response prevention verified with replay inputs
+
+### Loop 4 (Queued)
+
+- Scope: session persistence with atomic writes and restore.
+- Exit criteria:
+  - crash-safe write pattern (`tmp` -> `fsync` -> `rename`)
+  - restore correctness across restart scenarios
+
+### Loop 5 (Queued)
+
+- Scope: replay harness and reliability hardening.
+- Exit criteria:
+  - P95 and P99 latency checks pass
+  - fallback/circuit-breaker behavior validated on degraded conditions
+
+---
+
+## Appendix: Regex Patterns for Constraint Extraction
+
+```typescript
+// Budget patterns
+/\$[\d,]+(?:\.\d{2})?(?:k|m|b)?/gi
+/\d+(?:\.\d+)?\s*(?:million|billion|thousand)\s*(?:dollars?|usd)?/gi
+
+// Deadline patterns  
+/(?:by|before|until|due)\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s+\d{1,2}/gi
+/\d{1,2}\/\d{1,2}(?:\/\d{2,4})?/g
+
+// Headcount patterns
+/\d+\s*(?:people|engineers?|developers?|FTEs?|headcount)/gi
+
+// Duration patterns
+/\d+\s*(?:weeks?|months?|quarters?|sprints?)/gi
+
+// Tech terms (common ones)
+/\b(?:React|TypeScript|Python|Docker|AWS|Kubernetes|PostgreSQL|Redis|GraphQL|Node\.js)\b/gi
+```
+
+These patterns cover >80% of interview constraints without any LLM calls.
