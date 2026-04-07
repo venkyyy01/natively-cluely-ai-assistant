@@ -122,11 +122,13 @@ const CONFIDENCE_WEIGHTS = {
   // ...
 };
 
-// AFTER
+// AFTER — concrete weights, sum = 1.0
 const CONFIDENCE_WEIGHTS = {
   bm25: 0.20,
-  embedding: 0.25,  // ENABLED
-  // ... (rebalance other weights)
+  embedding: 0.25,    // ENABLED — strongest signal for topic continuity
+  temporal: 0.20,     // Reduced from 0.25
+  phase: 0.20,        // Reduced from 0.25
+  explicit: 0.15,     // Reduced from 0.25
 };
 ```
 
@@ -212,7 +214,7 @@ CREATE TABLE IF NOT EXISTS conversation_history (
 CREATE INDEX idx_history_thread ON conversation_history(thread_id);
 CREATE INDEX idx_history_timestamp ON conversation_history(timestamp);
 
--- Entity memory
+-- Entity memory (global, but source-tracked for deletion)
 CREATE TABLE IF NOT EXISTS entities (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   name TEXT NOT NULL,
@@ -223,6 +225,7 @@ CREATE TABLE IF NOT EXISTS entities (
   mention_count INTEGER DEFAULT 1,
   context_summary TEXT,
   embedding BLOB,
+  embedding_dim INTEGER,     -- Guard: reject if dimension changes
   UNIQUE(name, type)
 );
 
@@ -240,6 +243,26 @@ CREATE TABLE IF NOT EXISTS user_patterns (
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
   UNIQUE(pattern_type, key)
+);
+
+-- Context cache: stores assembled context strings keyed by transcript revision
+-- Avoids re-embedding and re-querying on every turn
+CREATE TABLE IF NOT EXISTS context_cache (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  cache_key TEXT NOT NULL UNIQUE,  -- hash of (query + transcript_revision)
+  context_blob TEXT NOT NULL,
+  token_count INTEGER NOT NULL,
+  created_at INTEGER NOT NULL,
+  expires_at INTEGER NOT NULL
+);
+
+CREATE INDEX idx_context_cache_key ON context_cache(cache_key);
+CREATE INDEX idx_context_cache_expires ON context_cache(expires_at);
+
+-- Embedding dimension registry: single source of truth for current model dimension
+CREATE TABLE IF NOT EXISTS embedding_config (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL  -- JSON: {"model": "text-embedding-3-small", "dim": 1536}
 );
 
 -- Vector search tables (using sqlite-vec)
@@ -452,16 +475,15 @@ export class EntityExtractor {
   }
 
   private async extractWithLLM(text: string): Promise<Entity[]> {
-    const prompt = `Extract named entities from this text. Return JSON array:
-[{"name": "entity name", "type": "person|technology|concept|project|company", "importance": 0.0-1.0}]
+    const response = await this.llm.complete(prompt, { maxTokens: 200 });
 
-Text: "${text.slice(0, 500)}"
-
-Return only the JSON array, no explanation.`;
+    // Extract JSON from markdown code blocks or raw text
+    const jsonMatch = response.match(/```(?:json)?\s*([\s\S]*?)```/) ||
+                      response.match(/\[[\s\S]*\]/);
+    if (!jsonMatch) return [];
 
     try {
-      const response = await this.llm.complete(prompt, { maxTokens: 200 });
-      return JSON.parse(response);
+      return JSON.parse(jsonMatch[1] || jsonMatch[0]);
     } catch {
       return [];
     }
@@ -1196,14 +1218,392 @@ class UserPatternLearner {
 
 ---
 
+## Data Lifecycle & Deletion
+
+### Cascade Delete for New Tables
+
+All new tables must cascade-delete when a meeting is deleted. Two approaches:
+
+**Tables with `meeting_id` foreign key** (threads, history tied to specific meetings):
+```sql
+ALTER TABLE conversation_threads ADD COLUMN meeting_id TEXT REFERENCES meetings(id) ON DELETE CASCADE;
+ALTER TABLE conversation_history ADD COLUMN meeting_id TEXT REFERENCES meetings(id) ON DELETE CASCADE;
+```
+
+**Global tables** (entities, user_patterns) — source-tracked for selective deletion:
+```sql
+ALTER TABLE entities ADD COLUMN source_meeting_ids TEXT;  -- JSON array of meeting IDs
+ALTER TABLE user_patterns ADD COLUMN source_meeting_ids TEXT;
+```
+
+When a meeting is deleted, `DatabaseManager.deleteMeeting()` must:
+1. Delete rows where `meeting_id` matches (cascade handles this)
+2. For global tables: remove the meeting ID from `source_meeting_ids` JSON array, delete the row if array becomes empty
+3. Call `RAGManager.deleteMeetingData()` (already exists)
+4. Clear any `context_cache` entries for that meeting
+
+### Per-Transcript-Segment Deletion
+
+If the UI adds the ability to delete individual transcript segments:
+- Delete the segment from `fullTranscript` array in `SessionTracker`
+- Delete from `transcripts` table by ID
+- Delete associated `conversation_history` rows
+- Decrement `mention_count` on affected entities (re-extract entities from deleted text, decrement matches)
+- Delete associated vector chunks from `VectorStore`
+
+This is **Phase 2.5** — add after persistence tables exist but before heavy backfill.
+
+### Entity Cleanup on Source Deletion
+
+When all source meetings for an entity are deleted, the entity row is removed. No orphaned entities.
+
+---
+
+## Embedding Dimension Guard
+
+**Problem**: If the embedding model changes (e.g., `text-embedding-3-small` 1536d → a future 3072d model), all existing vector data becomes incompatible.
+
+**Solution**: Store the current dimension in `embedding_config` table and validate on every write:
+
+```typescript
+// On app startup, after embedding model is selected:
+const currentDim = embeddingModel.dimension;
+const stored = db.get('SELECT value FROM embedding_config WHERE key = ?', ['current']);
+
+if (stored && JSON.parse(stored.value).dim !== currentDim) {
+  // Dimension changed — existing vectors are invalid
+  // Option A: Re-embed everything (expensive, warn user)
+  // Option B: Wipe vector tables and re-index on demand
+  console.warn(`Embedding dimension changed from ${JSON.parse(stored.value).dim} to ${currentDim}. Vectors need rebuild.`);
+}
+
+db.run('INSERT OR REPLACE INTO embedding_config (key, value) VALUES (?, ?)',
+  ['current', JSON.stringify({ model: embeddingModel.name, dim: currentDim })]);
+```
+
+**All vector tables** (`conversation_threads`, `conversation_history`, `entities`) store `embedding_dim` alongside the BLOB. On read, reject if dimension doesn't match current model.
+
+**Follow the existing pattern**: `DatabaseManager.KNOWN_DIMS` already handles this for `chunks` — extend the same approach to new tables rather than inventing a new mechanism.
+
+---
+
+## Context Cache
+
+**Problem**: `MemoryManager.getContext()` runs 3+ DB queries and 2+ embeddings per LLM call. In a 15-minute conversation with 30 turns, that's 90+ DB queries and 60+ embeddings.
+
+**Solution**: Cache assembled context keyed by `(query_hash, transcript_revision)`. The `transcript_revision` counter already exists in `SessionTracker` — it increments every time a new transcript segment arrives.
+
+```typescript
+class ContextCache {
+  private cache = new Map<string, { context: UnifiedContext, revision: number }>();
+  private readonly MAX_ENTRIES = 50;
+  private readonly TTL_MS = 30_000; // 30 seconds
+
+  get(query: string, revision: number): UnifiedContext | null {
+    const key = `${hash(query)}:${revision}`;
+    const entry = this.cache.get(key);
+    if (!entry) return null;
+    if (Date.now() - entry.revision > this.TTL_MS) {
+      this.cache.delete(key);
+      return null;
+    }
+    return entry.context;
+  }
+
+  set(query: string, revision: number, context: UnifiedContext): void {
+    const key = `${hash(query)}:${revision}`;
+    this.cache.set(key, { context, revision: Date.now() });
+    if (this.cache.size > this.MAX_ENTRIES) {
+      // Evict oldest
+      const oldest = this.cache.keys().next().value;
+      this.cache.delete(oldest);
+    }
+  }
+}
+```
+
+**Invalidation**: When `transcript_revision` changes, all cache entries are stale. The revision number is part of the cache key, so stale entries are naturally bypassed. Old entries are evicted by LRU.
+
+**This is the single biggest latency win** — most turns don't change the transcript enough to warrant re-computing context.
+
+---
+
+## Real Token Counting
+
+Replace `text.length / 4` with actual tokenizers. Use the existing `tiktoken` library (already a dependency for OpenAI models):
+
+```typescript
+import { get_encoding } from 'tiktoken';
+
+const encoder = get_encoding('cl100k_base'); // Used by gpt-4, gpt-3.5
+
+function estimateTokens(text: string): number {
+  return encoder.encode(text).length;
+}
+```
+
+For non-OpenAI models, use approximate ratios:
+- Claude: `tiktoken_tokens * 1.05` (Claude's tokenizer is ~5% different)
+- Gemini: `tiktoken_tokens * 0.95`
+- Ollama: `text.length / 4` as fallback (no reliable tokenizer available)
+
+**Where to fix**:
+- `MemoryManager.estimateTokens()` (Phase 4)
+- `TokenBudget.ts` (existing)
+- `fitToBudget()` in Phase 4
+
+This is a **small change with outsized impact** — current estimates are off by 30-50%, meaning prompts either overflow context windows or waste 30% of available tokens.
+
+---
+
+## Embedding Circuit Breaker
+
+When the embedding model is unavailable (API down, rate limited, Ollama not running), the system should degrade gracefully without blocking every turn.
+
+```typescript
+class EmbeddingCircuitBreaker {
+  private failures = 0;
+  private lastFailure = 0;
+  private state: 'closed' | 'open' | 'half-open' = 'closed';
+  private readonly FAILURE_THRESHOLD = 3;
+  private readonly RECOVERY_MS = 60_000;
+
+  async execute<T>(fn: () => Promise<T>, fallback: T): Promise<T> {
+    if (this.state === 'open') {
+      if (Date.now() - this.lastFailure < this.RECOVERY_MS) {
+        return fallback; // Still in cooldown
+      }
+      this.state = 'half-open';
+    }
+
+    try {
+      const result = await fn();
+      this.failures = 0;
+      this.state = 'closed';
+      return result;
+    } catch (e) {
+      this.failures++;
+      this.lastFailure = Date.now();
+      if (this.failures >= this.FAILURE_THRESHOLD) {
+        this.state = 'open';
+        console.warn('[CircuitBreaker] Embedding service unavailable, using fallback');
+      }
+      return fallback;
+    }
+  }
+}
+```
+
+**Fallback behavior**: When open, skip embedding-based scoring and fall back to recency-only context selection. Log a warning once per cooldown period, not on every call.
+
+**Where to apply**:
+- `SessionTracker.getAdaptiveContext()` — fallback to time-based filtering
+- `ThreadPersistence.findSimilarThreads()` — fallback to keyword match
+- `EntityExtractor.extractWithLLM()` — fallback to pattern-only extraction
+
+---
+
+## Concrete Confidence Weights
+
+Phase 1 says "rebalance other weights" — here are the actual numbers:
+
+```typescript
+// BEFORE
+const CONFIDENCE_WEIGHTS = {
+  bm25: 0.25,
+  embedding: 0.0,
+  temporal: 0.25,
+  phase: 0.25,
+  explicit: 0.25,
+}; // Sum = 1.0
+
+// AFTER
+const CONFIDENCE_WEIGHTS = {
+  bm25: 0.20,
+  embedding: 0.25,    // ENABLED — strongest signal for topic continuity
+  temporal: 0.20,     // Recency still matters but less than semantic match
+  phase: 0.20,        // Phase alignment indicates conversation continuity
+  explicit: 0.15,     // Explicit markers ("as I said earlier") are rare but strong
+}; // Sum = 1.0
+```
+
+**Rationale**: Embedding similarity is the strongest signal for "is this question related to what we were discussing?" BM25 handles exact keyword matches that embeddings miss (version numbers, specific names). Temporal and phase are supporting signals. Explicit markers are rare.
+
+**Tune after launch**: These are starting points. Measure thread resume accuracy and adjust.
+
+---
+
+## User Pattern Learning: Behavioral Signals
+
+The current plan references `userFeedback: 'positive' | 'negative'` — this signal doesn't exist. Replace with behavioral signals that actually exist in the system:
+
+```typescript
+class UserPatternLearner {
+  // Signal 1: User accepted the suggestion (used it in their response)
+  // Detected by: user transcript contains phrases from the assistant's suggestion
+  async recordSuggestionUsed(suggestion: string, userTranscript: string): Promise<void> {
+    const overlap = computeTextOverlap(suggestion, userTranscript);
+    if (overlap > 0.3) {
+      this.updatePattern('response_format', 'structured', 0.7);
+    }
+  }
+
+  // Signal 2: User asked for refinement (suggestion wasn't quite right)
+  // Detected by: follow-up mode triggered after assistant response
+  async recordRefinementRequested(refinementIntent: string): Promise<void> {
+    if (refinementIntent === 'shorten') {
+      this.updatePattern('response_length', 'concise', 0.6);
+    } else if (refinementIntent === 'expand') {
+      this.updatePattern('response_length', 'detailed', 0.6);
+    } else if (refinementIntent === 'simplify') {
+      this.updatePattern('technical_depth', 'accessible', 0.6);
+    }
+  }
+
+  // Signal 3: User ignored the suggestion entirely (moved to different topic)
+  // Detected by: topic shift within 2 turns of assistant response
+  async recordSuggestionIgnored(): Promise<void> {
+    // Lower confidence on recent pattern inferences
+    this.decayRecentPatterns(0.1);
+  }
+
+  // Pattern decay: reduce confidence of patterns not reinforced recently
+  async decayStalePatterns(maxAgeDays: number = 30): Promise<number> {
+    const cutoff = Date.now() - (maxAgeDays * 24 * 60 * 60 * 1000);
+    const result = await this.db.run(`
+      UPDATE user_patterns
+      SET confidence = confidence * 0.8
+      WHERE updated_at < ? AND confidence > 0.3
+    `, [cutoff]);
+    return result.changes;
+  }
+}
+```
+
+**Key principle**: Learn from what users *do*, not what they *say*. Refinement requests, suggestion usage, and topic shifts are real signals.
+
+---
+
+## LLM Output Schema Enforcement
+
+`EntityExtractor.extractWithLLM()` does `JSON.parse(response)` — this will fail when the LLM wraps JSON in markdown code blocks or adds explanatory text.
+
+**Fix**: Use a robust JSON extractor:
+
+```typescript
+private async extractWithLLM(text: string): Promise<Entity[]> {
+  const response = await this.llm.complete(prompt, { maxTokens: 200 });
+
+  // Extract JSON from markdown code blocks or raw text
+  const jsonMatch = response.match(/```(?:json)?\s*([\s\S]*?)```/) ||
+                    response.match(/\[[\s\S]*\]/);
+  if (!jsonMatch) return [];
+
+  try {
+    return JSON.parse(jsonMatch[1] || jsonMatch[0]);
+  } catch {
+    return [];
+  }
+}
+```
+
+If the project uses structured output (OpenAI `response_format: { type: "json_object" }` or Anthropic tool use), use that instead. But the regex fallback handles all providers.
+
+---
+
+## Backfill Strategy for Existing Data
+
+On first run after Phase 2 deployment:
+
+1. **Threads**: Nothing to backfill — threads are session-scoped and don't exist for past meetings. Start fresh.
+
+2. **Entities**: Run a one-time extraction over the last N meetings (configurable, default 10):
+   ```typescript
+   async backfillEntities(meetingLimit: number = 10): Promise<number> {
+     const meetings = db.all('SELECT * FROM meetings ORDER BY created_at DESC LIMIT ?', [meetingLimit]);
+     let totalEntities = 0;
+     for (const meeting of meetings) {
+       const transcripts = db.all('SELECT text FROM transcripts WHERE meeting_id = ? ORDER BY timestamp', [meeting.id]);
+       const text = transcripts.map(t => t.text).join(' ');
+       const entities = await entityExtractor.extract(text);
+       await entityExtractor.mergeEntities(entities);
+       totalEntities += entities.length;
+     }
+     return totalEntities;
+   }
+   ```
+
+3. **Epoch summaries**: Already in-memory only. On first run after Phase 2, the `SessionTracker` will start fresh. No backfill needed — epoch summaries are transient by design.
+
+4. **User patterns**: Start fresh. No historical signal to infer from.
+
+**Keep it simple**: Only backfill entities. Everything else starts fresh and builds up organically.
+
+---
+
+## Telemetry Implementation
+
+Collect these metrics at specific points — no new infrastructure needed, just `console.log` with structured data that can be parsed later:
+
+| Metric | Where to Measure | Log Format |
+|--------|-----------------|------------|
+| Context retrieval latency | `MemoryManager.getContext()` start/end | `[metrics] context_retrieval_ms=45 revision=123` |
+| Cache hit rate | `ContextCache.get()` hit/miss | `[metrics] context_cache=hit` or `context_cache=miss` |
+| Embedding latency | Each `embed()` call | `[metrics] embedding_ms=120 model=openai` |
+| Circuit breaker state | On state change | `[metrics] circuit_breaker=open failures=3` |
+| Thread resume accuracy | After thread resume, compare predicted vs actual | `[metrics] thread_resume_score=0.78` |
+| Entity extraction rate | After each extraction batch | `[metrics] entities_extracted=5 from_chars=340` |
+| Token budget utilization | After `fitToBudget()` | `[metrics] token_budget_used=3200/4000` |
+
+**P99 latency**: Collect all latency measurements, compute P99 in a weekly aggregation script. Target: P99 < 200ms for context retrieval.
+
+**No dashboard needed initially**: Structured logs are queryable with `grep` and `awk`. Add a dashboard only if the data shows a need.
+
+---
+
+## Feature Flag Implementation
+
+Use the existing `electron/config/optimizations.ts` pattern — extend it rather than creating a new system:
+
+```typescript
+// electron/config/optimizations.ts
+export const defaultOptimizations = {
+  // Existing
+  accelerationEnabled: false,
+
+  // New flags — all default to OFF, enable incrementally
+  semanticContextWindow: false,    // Phase 1
+  threadPersistence: false,        // Phase 2
+  entityMemory: false,             // Phase 3
+  hierarchicalMemory: false,       // Phase 4
+  contextPrefetching: false,       // Phase 5
+  semanticAntiRepetition: false,   // Phase 6
+  adaptiveTokenBudget: false,      // Phase 5
+  behavioralPatternLearning: false,// Phase 6
+};
+```
+
+Each feature checks its flag before activating:
+```typescript
+if (!defaultOptimizations.semanticContextWindow) {
+  return this.getFallbackContext(); // Existing behavior
+}
+```
+
+**Toggle mechanism**: For now, edit the config file. If runtime toggles are needed later, wire them to the existing settings UI. Don't build a feature flag service.
+
+---
+
 ## Success Metrics
 
-1. **Context Relevance**: Measure semantic similarity between retrieved context and query
-2. **Cross-Session Recall**: Can the system recall information from previous sessions?
-3. **Entity Recognition**: % of mentioned entities correctly identified and stored
-4. **Response Novelty**: Semantic distance between consecutive responses
-5. **Latency**: Context retrieval completes in <200ms
-6. **User Satisfaction**: Qualitative feedback on memory quality
+1. **Context Relevance**: Measure semantic similarity between retrieved context and query (target: >0.6 average)
+2. **Cross-Session Recall**: Can the system recall information from previous sessions? (manual test: ask about topic from last meeting)
+3. **Entity Recognition**: % of mentioned entities correctly identified and stored (target: >70% for common tech/company names)
+4. **Response Novelty**: Semantic distance between consecutive responses (target: >0.15 average cosine distance)
+5. **Latency**: Context retrieval P99 < 200ms, P50 < 50ms
+6. **Cache Hit Rate**: >60% of context requests served from cache
+7. **Circuit Breaker Activations**: <1% of embedding calls should hit the open state
+8. **User Satisfaction**: Qualitative feedback on memory quality
 
 ---
 
