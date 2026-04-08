@@ -40,12 +40,13 @@ test('speculative fast answer is reused by the live what-to-say path', async () 
   const accelerationManager = new AccelerationManager();
   await accelerationManager.initialize();
   accelerationManager.setConsciousModeEnabled(true);
+  const consciousAcceleration = accelerationManager.getConsciousOrchestrator();
   setActiveAccelerationManager(accelerationManager);
   engine.attachAccelerationManager(accelerationManager);
 
   addTurn(session, 'interviewer', 'What is polymorphism?', Date.now());
-  accelerationManager.noteTranscriptText('interviewer', 'What is polymorphism?');
-  accelerationManager.updateTranscriptSegments(
+  consciousAcceleration.noteTranscriptText('interviewer', 'What is polymorphism?');
+  consciousAcceleration.updateTranscriptSegments(
     session.getFullTranscript().slice(-50).map((entry) => ({
       text: entry.text,
       timestamp: entry.timestamp,
@@ -54,7 +55,7 @@ test('speculative fast answer is reused by the live what-to-say path', async () 
     session.getTranscriptRevision(),
   );
 
-  accelerationManager.onSilenceStart('What is polymorphism?');
+  consciousAcceleration.onSilenceStart('What is polymorphism?');
   await new Promise((resolve) => setTimeout(resolve, 700));
 
   const answer = await engine.runWhatShouldISay(undefined, 0.9);
@@ -82,12 +83,13 @@ test('speculative answers are invalidated when transcript revision changes', asy
   const accelerationManager = new AccelerationManager();
   await accelerationManager.initialize();
   accelerationManager.setConsciousModeEnabled(true);
+  const consciousAcceleration = accelerationManager.getConsciousOrchestrator();
   setActiveAccelerationManager(accelerationManager);
   engine.attachAccelerationManager(accelerationManager);
 
   addTurn(session, 'interviewer', 'What is polymorphism?', Date.now() - 1000);
-  accelerationManager.noteTranscriptText('interviewer', 'What is polymorphism?');
-  accelerationManager.updateTranscriptSegments(
+  consciousAcceleration.noteTranscriptText('interviewer', 'What is polymorphism?');
+  consciousAcceleration.updateTranscriptSegments(
     session.getFullTranscript().slice(-50).map((entry) => ({
       text: entry.text,
       timestamp: entry.timestamp,
@@ -95,13 +97,13 @@ test('speculative answers are invalidated when transcript revision changes', asy
     })),
     session.getTranscriptRevision(),
   );
-  accelerationManager.onSilenceStart('What is polymorphism?');
+  consciousAcceleration.onSilenceStart('What is polymorphism?');
 
   await new Promise((resolve) => setTimeout(resolve, 120));
 
   addTurn(session, 'interviewer', 'Explain encapsulation.', Date.now());
-  accelerationManager.noteTranscriptText('interviewer', 'Explain encapsulation.');
-  accelerationManager.updateTranscriptSegments(
+  consciousAcceleration.noteTranscriptText('interviewer', 'Explain encapsulation.');
+  consciousAcceleration.updateTranscriptSegments(
     session.getFullTranscript().slice(-50).map((entry) => ({
       text: entry.text,
       timestamp: entry.timestamp,
@@ -135,12 +137,13 @@ test('speculative acceleration stays disabled when conscious mode is off', async
   const accelerationManager = new AccelerationManager();
   await accelerationManager.initialize();
   accelerationManager.setConsciousModeEnabled(false);
+  const consciousAcceleration = accelerationManager.getConsciousOrchestrator();
   setActiveAccelerationManager(accelerationManager);
   engine.attachAccelerationManager(accelerationManager);
 
   addTurn(session, 'interviewer', 'What is polymorphism?', Date.now());
-  accelerationManager.noteTranscriptText('interviewer', 'What is polymorphism?');
-  accelerationManager.updateTranscriptSegments(
+  consciousAcceleration.noteTranscriptText('interviewer', 'What is polymorphism?');
+  consciousAcceleration.updateTranscriptSegments(
     session.getFullTranscript().slice(-50).map((entry) => ({
       text: entry.text,
       timestamp: entry.timestamp,
@@ -148,10 +151,14 @@ test('speculative acceleration stays disabled when conscious mode is off', async
     })),
     session.getTranscriptRevision(),
   );
-  accelerationManager.onSilenceStart('What is polymorphism?');
+  accelerationManager.getEnhancedCache().set(
+    `answer:${session.getTranscriptRevision()}:fast:${'What is polymorphism?'.toLowerCase()}`,
+    'cached answer that should be ignored'
+  );
+  consciousAcceleration.onSilenceStart('What is polymorphism?');
 
   await new Promise((resolve) => setTimeout(resolve, 120));
-  assert.equal(await accelerationManager.getSpeculativeAnswer('What is polymorphism?', session.getTranscriptRevision(), 0), null);
+  assert.equal(await consciousAcceleration.getSpeculativeAnswer('What is polymorphism?', session.getTranscriptRevision(), 0), null);
 
   const answer = await engine.runWhatShouldISay(undefined, 0.9);
 

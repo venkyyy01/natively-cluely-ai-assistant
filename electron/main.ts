@@ -742,9 +742,9 @@ this.setupIntelligenceEvents()
 
   private noteInterviewerSpeechActivity(chunk: Buffer): void {
     const rms = computePcm16Rms(chunk);
-    this.accelerationManager?.onUpdateRMS(rms);
+    this.accelerationManager?.getConsciousOrchestrator().onUpdateRMS(rms);
     if (rms > 40) {
-      this.accelerationManager?.onUserSpeaking();
+      this.accelerationManager?.getConsciousOrchestrator().onUserSpeaking();
     }
   }
 
@@ -1021,7 +1021,6 @@ try {
 
       this.noteTranscript(speaker);
       this.latestTranscriptBySpeaker[speaker] = segment.text;
-      this.accelerationManager?.noteTranscriptText(speaker, segment.text);
 
       this.intelligenceManager.handleTranscript({
         speaker: speaker,
@@ -1038,20 +1037,6 @@ try {
           text: segment.text,
           timestamp: Date.now()
         }]);
-      }
-
-      const transcriptSegments = this.intelligenceManager.getSessionTracker().getFullTranscript().slice(-50).map((entry) => ({
-        text: entry.text,
-        timestamp: entry.timestamp,
-        speaker: entry.speaker,
-      }));
-      this.accelerationManager?.updateTranscriptSegments(
-        transcriptSegments,
-        this.intelligenceManager.getSessionTracker().getTranscriptRevision()
-      );
-      const latestPhase = this.intelligenceManager.getContext(120).slice(-1)[0]?.phase;
-      if (latestPhase) {
-        this.accelerationManager?.setPhase(latestPhase);
       }
 
       const helper = this.getWindowHelper();
@@ -1167,7 +1152,7 @@ try {
       this.googleSTT?.write(chunk);
     });
     this.systemAudioCapture.on('speech_ended', () => {
-      this.accelerationManager?.onSilenceStart(this.latestTranscriptBySpeaker.interviewer);
+      this.accelerationManager?.getConsciousOrchestrator().onSilenceStart(this.latestTranscriptBySpeaker.interviewer);
       safeNotifySpeechEnded(this.googleSTT);
     });
     this.systemAudioCapture.on('error', (err: Error) => {
@@ -1358,7 +1343,7 @@ try {
           this.googleSTT?.write(chunk);
         });
         this.systemAudioCapture.on('speech_ended', () => {
-          this.accelerationManager?.onSilenceStart(this.latestTranscriptBySpeaker.interviewer);
+          this.accelerationManager?.getConsciousOrchestrator().onSilenceStart(this.latestTranscriptBySpeaker.interviewer);
           safeNotifySpeechEnded(this.googleSTT);
         });
       this.systemAudioCapture.on('error', (err: Error) => {
@@ -1379,7 +1364,7 @@ try {
           this.googleSTT?.write(chunk);
         });
         this.systemAudioCapture.on('speech_ended', () => {
-          this.accelerationManager?.onSilenceStart(this.latestTranscriptBySpeaker.interviewer);
+          this.accelerationManager?.getConsciousOrchestrator().onSilenceStart(this.latestTranscriptBySpeaker.interviewer);
           safeNotifySpeechEnded(this.googleSTT);
         });
         this.systemAudioCapture.on('error', (err: Error) => {
