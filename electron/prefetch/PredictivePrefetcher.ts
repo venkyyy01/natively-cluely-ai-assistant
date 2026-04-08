@@ -1,6 +1,7 @@
 import { EnhancedCache } from '../cache/EnhancedCache';
 import { InterviewPhase } from '../conscious/types';
 import { isOptimizationActive, getOptimizationFlags } from '../config/optimizations';
+import { computeBM25 } from '../cache/ParallelContextAssembler';
 
 export interface PrefetchedContext {
   context: {
@@ -79,6 +80,7 @@ export class PredictivePrefetcher {
   private currentPhase: InterviewPhase = 'requirements_gathering';
   private predictions: PredictedFollowUp[] = [];
   private silenceStartTime: number = 0;
+  private transcriptSegments: Array<{ text: string; timestamp: number; speaker: string }> = [];
 
   constructor(options: { maxPrefetchPredictions?: number; maxMemoryMB?: number }) {
     const flags = getOptimizationFlags();
@@ -89,6 +91,20 @@ export class PredictivePrefetcher {
       enableSemanticLookup: true,
       similarityThreshold: flags.semanticCacheThreshold,
     });
+  }
+
+  /**
+   * Update transcript segments for real context assembly
+   */
+  updateTranscriptSegments(segments: Array<{ text: string; timestamp: number; speaker: string }>): void {
+    this.transcriptSegments = segments.slice(-50);
+  }
+
+  /**
+   * Clear transcript segments (e.g., on meeting end)
+   */
+  clearTranscriptSegments(): void {
+    this.transcriptSegments = [];
   }
 
   onSilenceStart(): void {
@@ -144,7 +160,13 @@ export class PredictivePrefetcher {
   private predictFollowUps(): PredictedFollowUp[] {
     const phasePredictions = PHASE_FOLLOWUP_PATTERNS[this.currentPhase] || [];
 
-    const topicPredictions: string[] = [];
+    const transcriptText = this.transcriptSegments
+      .slice(-12)
+      .map((segment) => segment.text.toLowerCase())
+      .join(' ');
+    const topicPredictions = Object.entries(TOPIC_FOLLOWUPS)
+      .filter(([topic]) => transcriptText.includes(topic))
+      .flatMap(([, followUps]) => followUps.map((followUp) => `How does ${followUp} relate here?`));
 
     return [...phasePredictions, ...topicPredictions]
       .slice(0, 10)
@@ -190,15 +212,38 @@ export class PredictivePrefetcher {
     relevantContext: Array<{ text: string; timestamp: number }>;
     phase: InterviewPhase;
   }> {
-    return {
-      relevantContext: [
-        { text: `Related to: ${query}`, timestamp: Date.now() },
-      ],
-      phase: this.currentPhase,
-    };
+    // Real context assembly: BM25 search over recent transcript segments
+    const docs = this.transcriptSegments
+      .filter(s => s.speaker !== 'assistant' && s.text.trim().length > 0)
+      .map(s => ({ text: s.text, timestamp: s.timestamp }));
+
+    if (docs.length === 0) {
+      return {
+        relevantContext: [],
+        phase: this.currentPhase,
+      };
+    }
+
+    try {
+      const bm25Results = await computeBM25(query, docs);
+      const relevantContext = bm25Results
+        .slice(0, 5)
+        .map(r => ({ text: r.text, timestamp: r.timestamp }));
+
+      return {
+        relevantContext,
+        phase: this.currentPhase,
+      };
+    } catch (error) {
+      console.warn('[PredictivePrefetcher] BM25 search failed, returning empty context:', error);
+      return {
+        relevantContext: [],
+        phase: this.currentPhase,
+      };
+    }
   }
 
-  async getContext(query: string, embedding: number[]): Promise<{
+  async getContext(query: string, embedding?: number[]): Promise<{
     relevantContext: Array<{ text: string; timestamp: number }>;
     phase: InterviewPhase;
   } | null> {

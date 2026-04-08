@@ -23,7 +23,24 @@ export interface ContextAssemblyOutput {
   relevantContext: Array<{ text: string; timestamp: number }>;
 }
 
-async function computeBM25(
+// Embedding provider interface for real embeddings
+export interface EmbeddingProvider {
+  embed(text: string): Promise<number[]>;
+  isInitialized(): boolean;
+}
+
+// Global embedding provider set by AccelerationManager
+let globalEmbeddingProvider: EmbeddingProvider | null = null;
+
+export function setEmbeddingProvider(provider: EmbeddingProvider | null): void {
+  globalEmbeddingProvider = provider;
+}
+
+export function getEmbeddingProvider(): EmbeddingProvider | null {
+  return globalEmbeddingProvider;
+}
+
+export async function computeBM25(
   query: string,
   documents: Array<{ text: string; timestamp: number }>,
   k1: number = 1.5,
@@ -91,7 +108,7 @@ function simpleHash(str: string): number {
   return Math.abs(hash);
 }
 
-function generateEmbeddingSync(query: string): number[] {
+function generateEmbeddingFallback(query: string): number[] {
   const hash = simpleHash(query);
   const embedding = new Array(384).fill(0);
   embedding[hash % 384] = 1;
@@ -106,7 +123,7 @@ if (!isMainThread) {
       parentPort?.postMessage(result);
     });
   } else if (type === 'embedding') {
-    parentPort?.postMessage(generateEmbeddingSync(payload.query));
+    parentPort?.postMessage(generateEmbeddingFallback(payload.query));
   } else if (type === 'phase') {
     parentPort?.postMessage(detectPhase(payload.transcript));
   }
@@ -145,8 +162,19 @@ export class ParallelContextAssembler {
       .filter(t => t.speaker !== 'assistant')
       .map(t => ({ text: t.text, timestamp: t.timestamp }));
 
-    const [embedding, bm25ResultsRaw, phaseResult] = await Promise.all([
-      this.runInWorker<number[]>('embedding', { query: input.query }),
+    // Try to use real embeddings if ANE provider is available
+    const embeddingProvider = getEmbeddingProvider();
+    let embedding: number[];
+
+    if (embeddingProvider?.isInitialized()) {
+      // Use real embeddings from ANE provider
+      embedding = await embeddingProvider.embed(input.query);
+    } else {
+      // Fall back to hash-based embedding (worker thread)
+      embedding = await this.runInWorker<number[]>('embedding', { query: input.query });
+    }
+
+    const [bm25ResultsRaw, phaseResult] = await Promise.all([
       this.runInWorker<Array<{ text: string; score: number; timestamp: number }>>('bm25', { query: input.query, documents: docs }),
       this.runInWorker<InterviewPhase>('phase', { transcript: input.transcript }),
     ]);
@@ -205,7 +233,10 @@ export class ParallelContextAssembler {
   }
 
   private async assembleLegacy(input: ContextAssemblyInput): Promise<ContextAssemblyOutput> {
-    const embedding = generateEmbeddingSync(input.query);
+    const embeddingProvider = getEmbeddingProvider();
+    const embedding = embeddingProvider?.isInitialized()
+      ? await embeddingProvider.embed(input.query)
+      : generateEmbeddingFallback(input.query);
     const docs = input.transcript
       .filter(t => t.speaker !== 'assistant')
       .map(t => ({ text: t.text, timestamp: t.timestamp }));

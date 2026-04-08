@@ -30,11 +30,20 @@ describe('PredictivePrefetcher', () => {
   });
 
   it('should cache prefetched contexts', async () => {
+    prefetcher.updateTranscriptSegments([
+      {
+        speaker: 'interviewer',
+        text: 'Let us talk about the main components and how they communicate.',
+        timestamp: Date.now(),
+      },
+    ]);
+    prefetcher.onPhaseChange('high_level_design');
     prefetcher.onSilenceStart();
     await new Promise(resolve => setTimeout(resolve, 100));
 
-    const context = await prefetcher.getContext('test query', [0, 0, 0]);
-    assert(true);
+    const context = await prefetcher.getContext('What are the main components?');
+    assert(context);
+    assert(context.relevantContext.length > 0);
   });
 
   it('should stop prefetching when user starts speaking', async () => {

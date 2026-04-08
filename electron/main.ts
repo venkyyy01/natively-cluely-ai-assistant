@@ -253,6 +253,26 @@ function safeNotifySpeechEnded(stt: STTProvider | null): void {
   }
 }
 
+function computePcm16Rms(chunk: Buffer): number {
+  if (chunk.length < 2) {
+    return 0;
+  }
+
+  let sumSquares = 0;
+  let sampleCount = 0;
+  for (let offset = 0; offset + 1 < chunk.length; offset += 8) {
+    const sample = chunk.readInt16LE(offset);
+    sumSquares += sample * sample;
+    sampleCount += 1;
+  }
+
+  if (sampleCount === 0) {
+    return 0;
+  }
+
+  return Math.sqrt(sumSquares / sampleCount);
+}
+
 function safeDestroy(stt: STTProvider | null): void {
   if (stt && hasDestroy(stt)) {
     try {
@@ -286,6 +306,7 @@ export class AppState {
   private stealthManager: StealthManager
   private screenshotHelper: ScreenshotHelper
   public processingHelper: ProcessingHelper
+  private accelerationManager: import('./services/AccelerationManager').AccelerationManager | null = null
 
   private intelligenceManager: IntelligenceManager
   private themeManager: ThemeManager
@@ -316,6 +337,10 @@ export class AppState {
   private meetingStartSequence = 0
   private meetingStartMutex: Promise<void> = Promise.resolve() // Prevents race conditions
   private nativeAudioConnected: boolean = false;
+  private latestTranscriptBySpeaker: Record<'interviewer' | 'user', string> = {
+    interviewer: '',
+    user: '',
+  }
   private _disguiseTimers: NodeJS.Timeout[] = []; // Track forceUpdate timeouts
 
   private clearDisguiseTimers(): void {
@@ -715,6 +740,14 @@ this.setupIntelligenceEvents()
     this.audioPipelineStats.microphoneChunks += 1;
   }
 
+  private noteInterviewerSpeechActivity(chunk: Buffer): void {
+    const rms = computePcm16Rms(chunk);
+    this.accelerationManager?.onUpdateRMS(rms);
+    if (rms > 40) {
+      this.accelerationManager?.onUserSpeaking();
+    }
+  }
+
   private noteTranscript(speaker: 'interviewer' | 'user'): void {
     if (speaker === 'interviewer') {
       this.audioPipelineStats.interviewerTranscripts += 1;
@@ -822,12 +855,17 @@ console.error('[AppState] Failed to initialize RAGManager:', error);
 
 private async initializeAccelerationManager(): Promise<void> {
 try {
-const { AccelerationManager } = await import('./services/AccelerationManager');
+const { AccelerationManager, setActiveAccelerationManager } = await import('./services/AccelerationManager');
 const accelerationManager = new AccelerationManager();
 await accelerationManager.initialize();
+accelerationManager.setConsciousModeEnabled(this.consciousModeEnabled);
+this.accelerationManager = accelerationManager;
+setActiveAccelerationManager(accelerationManager);
+this.intelligenceManager.attachAccelerationManager(accelerationManager);
 console.log('[AppState] AccelerationManager initialized (Apple Silicon enhancement)');
 } catch (error) {
-console.warn('[AppState] AccelerationManager initialization skipped (optional):', error);
+this.accelerationManager = null;
+  console.warn('[AppState] AccelerationManager initialization skipped (optional):', error);
 }
 }
 
@@ -982,6 +1020,8 @@ try {
       }
 
       this.noteTranscript(speaker);
+      this.latestTranscriptBySpeaker[speaker] = segment.text;
+      this.accelerationManager?.noteTranscriptText(speaker, segment.text);
 
       this.intelligenceManager.handleTranscript({
         speaker: speaker,
@@ -998,6 +1038,20 @@ try {
           text: segment.text,
           timestamp: Date.now()
         }]);
+      }
+
+      const transcriptSegments = this.intelligenceManager.getSessionTracker().getFullTranscript().slice(-50).map((entry) => ({
+        text: entry.text,
+        timestamp: entry.timestamp,
+        speaker: entry.speaker,
+      }));
+      this.accelerationManager?.updateTranscriptSegments(
+        transcriptSegments,
+        this.intelligenceManager.getSessionTracker().getTranscriptRevision()
+      );
+      const latestPhase = this.intelligenceManager.getContext(120).slice(-1)[0]?.phase;
+      if (latestPhase) {
+        this.accelerationManager?.setPhase(latestPhase);
       }
 
       const helper = this.getWindowHelper();
@@ -1109,9 +1163,11 @@ try {
     this.systemAudioCapture.removeAllListeners();
     this.systemAudioCapture.on('data', (chunk: Buffer) => {
       this.noteAudioChunk('system');
+      this.noteInterviewerSpeechActivity(chunk);
       this.googleSTT?.write(chunk);
     });
     this.systemAudioCapture.on('speech_ended', () => {
+      this.accelerationManager?.onSilenceStart(this.latestTranscriptBySpeaker.interviewer);
       safeNotifySpeechEnded(this.googleSTT);
     });
     this.systemAudioCapture.on('error', (err: Error) => {
@@ -1295,14 +1351,16 @@ try {
       console.log(`[Main] SystemAudioCapture rate: ${rate}Hz`);
       this.googleSTT?.setSampleRate(rate);
 
-      this.systemAudioCapture.on('data', (chunk: Buffer) => {
-        // console.log('[Main] SysAudio chunk', chunk.length);
-        this.noteAudioChunk('system');
-        this.googleSTT?.write(chunk);
-      });
-      this.systemAudioCapture.on('speech_ended', () => {
-        safeNotifySpeechEnded(this.googleSTT);
-      });
+        this.systemAudioCapture.on('data', (chunk: Buffer) => {
+          // console.log('[Main] SysAudio chunk', chunk.length);
+          this.noteAudioChunk('system');
+          this.noteInterviewerSpeechActivity(chunk);
+          this.googleSTT?.write(chunk);
+        });
+        this.systemAudioCapture.on('speech_ended', () => {
+          this.accelerationManager?.onSilenceStart(this.latestTranscriptBySpeaker.interviewer);
+          safeNotifySpeechEnded(this.googleSTT);
+        });
       this.systemAudioCapture.on('error', (err: Error) => {
         void this.handleAudioCaptureError('system', err);
       });
@@ -1317,11 +1375,13 @@ try {
 
         this.systemAudioCapture.on('data', (chunk: Buffer) => {
           this.noteAudioChunk('system');
+          this.noteInterviewerSpeechActivity(chunk);
           this.googleSTT?.write(chunk);
         });
-      this.systemAudioCapture.on('speech_ended', () => {
-        safeNotifySpeechEnded(this.googleSTT);
-      });
+        this.systemAudioCapture.on('speech_ended', () => {
+          this.accelerationManager?.onSilenceStart(this.latestTranscriptBySpeaker.interviewer);
+          safeNotifySpeechEnded(this.googleSTT);
+        });
         this.systemAudioCapture.on('error', (err: Error) => {
           void this.handleAudioCaptureError('system', err);
         });
@@ -2534,6 +2594,7 @@ try {
 
     this.consciousModeEnabled = enabled
     this.intelligenceManager.setConsciousModeEnabled(enabled)
+    this.accelerationManager?.setConsciousModeEnabled(enabled)
     this._broadcastToAllWindows('conscious-mode-changed', enabled)
     return true
   }

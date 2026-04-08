@@ -21,6 +21,8 @@ import { ParallelContextAssembler, ContextAssemblyInput, ContextAssemblyOutput }
 import { isOptimizationActive } from './config/optimizations';
 import { AnswerLatencyTracker, AnswerRoute } from './latency/AnswerLatencyTracker';
 import { selectAnswerRoute } from './latency/answerRouteSelector';
+import { getActiveAccelerationManager } from './services/AccelerationManager';
+import type { AccelerationManager } from './services/AccelerationManager';
 
 // Mode types
 export type IntelligenceMode = 'idle' | 'assist' | 'what_to_say' | 'follow_up' | 'recap' | 'manual' | 'follow_up_questions' | 'reasoning_first';
@@ -110,6 +112,61 @@ export class IntelligenceEngine extends EventEmitter {
     if (isOptimizationActive('useParallelContext')) {
       this.parallelContextAssembler = new ParallelContextAssembler({});
     }
+
+    this.attachAccelerationManager(getActiveAccelerationManager());
+  }
+
+  attachAccelerationManager(accelerationManager: AccelerationManager | null): void {
+    accelerationManager?.setSpeculativeExecutor((query, transcriptRevision) =>
+      this.generateSpeculativeFastAnswer(query, transcriptRevision)
+    );
+  }
+
+  private async generateSpeculativeFastAnswer(question: string, transcriptRevision: number): Promise<string | null> {
+    if (!this.whatToAnswerLLM) {
+      return null;
+    }
+
+    const normalizedQuestion = question.trim();
+    if (!normalizedQuestion) {
+      return null;
+    }
+
+    const cacheKey = `spec-answer:${transcriptRevision}:${normalizedQuestion.toLowerCase()}`;
+    const accelerationManager = getActiveAccelerationManager();
+    const cached = accelerationManager
+      ? await accelerationManager.getEnhancedCache().get(cacheKey) as string | undefined
+      : undefined;
+    if (cached) {
+      return cached;
+    }
+
+    const preparedTranscript = this.buildFastStandardTranscriptContext(
+      normalizedQuestion,
+      this.session.getLastAssistantMessage()
+    );
+
+    let fullAnswer = '';
+    const stream = this.whatToAnswerLLM.generateStream(preparedTranscript, undefined, undefined, undefined, {
+      fastPath: true,
+      latestQuestion: normalizedQuestion,
+    });
+
+    for await (const token of stream) {
+      fullAnswer += token;
+    }
+
+    if (this.session.getTranscriptRevision() !== transcriptRevision) {
+      return null;
+    }
+
+    const trimmed = fullAnswer.trim();
+    if (trimmed.length < 5) {
+      return null;
+    }
+
+    accelerationManager?.getEnhancedCache().set(cacheKey, trimmed);
+    return trimmed;
   }
 
   protected async classifyIntentForRoute(
@@ -124,10 +181,40 @@ export class IntelligenceEngine extends EventEmitter {
     contextItems: ContextItem[];
     assemblyResult?: ContextAssemblyOutput;
   }> {
+    const accelerationManager = getActiveAccelerationManager();
+    const cacheKey = `assembled:${this.session.getTranscriptRevision()}:${tokenBudget}:${query.trim().toLowerCase()}`;
+
+    if (accelerationManager) {
+      const cached = await accelerationManager.getEnhancedCache().get(cacheKey) as {
+        contextItems: ContextItem[];
+        assemblyResult?: ContextAssemblyOutput;
+      } | undefined;
+      if (cached) {
+        return cached;
+      }
+
+      const prefetched = accelerationManager.isConsciousModeEnabled()
+        ? await accelerationManager.getPrefetcher().getContext(query)
+        : null;
+      if (prefetched?.relevantContext.length) {
+        const prefetchedResult = {
+          contextItems: prefetched.relevantContext.map((ctx) => ({
+            role: 'interviewer' as const,
+            text: ctx.text,
+            timestamp: ctx.timestamp,
+          })),
+        };
+        accelerationManager.getEnhancedCache().set(cacheKey, prefetchedResult);
+        return prefetchedResult;
+      }
+    }
+
     const contextItems = this.session.getContext(tokenBudget);
     
     if (!this.parallelContextAssembler || !isOptimizationActive('useParallelContext')) {
-      return { contextItems };
+      const result = { contextItems };
+      accelerationManager?.getEnhancedCache().set(cacheKey, result);
+      return result;
     }
 
     const transcript = contextItems.map(item => ({
@@ -154,13 +241,17 @@ export class IntelligenceEngine extends EventEmitter {
         timestamp: ctx.timestamp,
       }));
 
-      return {
+      const result = {
         contextItems: relevantItems.length > 0 ? relevantItems : contextItems,
         assemblyResult,
       };
+      accelerationManager?.getEnhancedCache().set(cacheKey, result, assemblyResult.embedding);
+      return result;
     } catch (error) {
       console.warn('[IntelligenceEngine] ParallelContextAssembler failed, using fallback:', error);
-      return { contextItems };
+      const result = { contextItems };
+      accelerationManager?.getEnhancedCache().set(cacheKey, result);
+      return result;
     }
   }
 
@@ -267,6 +358,22 @@ export class IntelligenceEngine extends EventEmitter {
     handleTranscript(segment: TranscriptSegment, skipRefinementCheck: boolean = false): void {
         const result = this.session.handleTranscript(segment);
         this.lastTranscriptTime = Date.now();
+
+        const accelerationManager = getActiveAccelerationManager();
+        if (accelerationManager) {
+            const transcriptSpeaker = /interviewer|system|speaker/i.test(segment.speaker) ? 'interviewer' : 'user';
+            accelerationManager.noteTranscriptText(transcriptSpeaker, segment.text);
+            const transcriptSegments = this.session.getFullTranscript().slice(-50).map((entry) => ({
+                text: entry.text,
+                timestamp: entry.timestamp,
+                speaker: entry.speaker,
+            }));
+            accelerationManager.updateTranscriptSegments(transcriptSegments, this.session.getTranscriptRevision());
+            const latestPhase = this.session.getContext(120).slice(-1)[0]?.phase;
+            if (latestPhase) {
+                accelerationManager.setPhase(latestPhase);
+            }
+        }
 
         // Check for follow-up intent if user is speaking
         if (result && !skipRefinementCheck && result.role === 'user' && this.session.getLastAssistantMessage()) {
@@ -401,7 +508,7 @@ export class IntelligenceEngine extends EventEmitter {
                 return answer || "Could you repeat that? I want to make sure I address your question properly.";
             }
 
-            const contextItems = this.session.getContext(180);
+            let contextItems = this.session.getContext(180);
             const lastInterim = this.session.getLastInterimInterviewer();
             const interimQuestion = lastInterim?.text?.trim() || '';
             const baseQuestion = question || interimQuestion || this.session.getLastInterviewerTurn() || '';
@@ -439,6 +546,7 @@ export class IntelligenceEngine extends EventEmitter {
             let effectiveRoute: AnswerRoute = shouldUseScreenshotConsciousRoute ? 'conscious_answer' : selectedRoute;
             let isProfileEnrichmentRoute = effectiveRoute === 'enriched_standard_answer';
             activeProfileEnrichmentRoute = isProfileEnrichmentRoute;
+            const accelerationManager = getActiveAccelerationManager();
             const requestId = this.latencyTracker.start(effectiveRoute, capability, {
                 transcriptRevision: this.session.getTranscriptRevision(),
                 fallbackOccurred: false,
@@ -456,6 +564,35 @@ export class IntelligenceEngine extends EventEmitter {
             const lastInterviewerTurn = this.session.getLastInterviewerTurn();
 
             const runFastStandardAnswer = async (): Promise<string> => {
+                const speculativeAnswer = accelerationManager
+                    ? await accelerationManager.getSpeculativeAnswer(resolvedQuestion, this.session.getTranscriptRevision(), 180)
+                    : null;
+                if (speculativeAnswer) {
+                    this.session.addAssistantMessage(speculativeAnswer);
+                    this.session.pushUsage({
+                        type: 'assist',
+                        timestamp: Date.now(),
+                        question: question || 'What to Answer',
+                        answer: speculativeAnswer,
+                    });
+                    this.emit('suggested_answer', speculativeAnswer, question || 'What to Answer', confidence);
+                    const latencySnapshot = this.latencyTracker.complete(requestId);
+                    console.log('[IntelligenceEngine] Answer latency snapshot:', latencySnapshot);
+                    this.setMode('idle');
+                    return speculativeAnswer;
+                }
+
+                const cacheKey = `answer:${this.session.getTranscriptRevision()}:fast:${resolvedQuestion.trim().toLowerCase()}`;
+                const cachedAnswer = accelerationManager
+                    ? await accelerationManager.getEnhancedCache().get(cacheKey) as string | undefined
+                    : undefined;
+                if (cachedAnswer) {
+                    this.emit('suggested_answer', cachedAnswer, question || 'What to Answer', confidence);
+                    this.latencyTracker.complete(requestId);
+                    this.setMode('idle');
+                    return cachedAnswer;
+                }
+
                 const preparedTranscript = this.buildFastStandardTranscriptContext(
                     resolvedQuestion,
                     this.session.getLastAssistantMessage()
@@ -510,6 +647,7 @@ export class IntelligenceEngine extends EventEmitter {
                     fullAnswer = "Could you repeat that? I want to make sure I address your question properly.";
                 }
 
+                accelerationManager?.getEnhancedCache().set(cacheKey, fullAnswer);
                 this.session.addAssistantMessage(fullAnswer);
 
                 this.session.pushUsage({
@@ -612,6 +750,11 @@ export class IntelligenceEngine extends EventEmitter {
                 console.log('[IntelligenceEngine] Answer latency snapshot:', latencySnapshot);
                 this.setMode('idle');
                 return fullAnswer;
+            }
+
+            if (resolvedQuestion) {
+                const assembledContext = await this.getAssembledContext(resolvedQuestion, 180);
+                contextItems = assembledContext.contextItems;
             }
 
             // Inject latest interim transcript if available
@@ -777,6 +920,19 @@ export class IntelligenceEngine extends EventEmitter {
             console.log(`[IntelligenceEngine] Temporal RAG: ${temporalResponseCount} responses, tone: ${temporalTone}, intent: ${detectedIntent}${imagePaths?.length ? `, with ${imagePaths.length} image(s)` : ''}`);
 
             let fullAnswer = "";
+            const answerCacheKey = `answer:${this.session.getTranscriptRevision()}:${effectiveRoute}:${resolvedQuestion.trim().toLowerCase()}`;
+            const cachedAnswer = accelerationManager
+                ? await accelerationManager.getEnhancedCache().get(answerCacheKey) as string | undefined
+                : undefined;
+            if (cachedAnswer) {
+                this.emit('suggested_answer', cachedAnswer, question || 'What to Answer', confidence);
+                if (isProfileEnrichmentRoute && !profileEnrichmentFailed) {
+                    this.latencyTracker.markProfileEnrichmentState(requestId, 'completed');
+                }
+                this.latencyTracker.complete(requestId);
+                this.setMode('idle');
+                return cachedAnswer;
+            }
             const annotateProfileEnrichmentFailure = (failure: { kind: 'timeout' | 'error' }) => {
                 if (!isProfileEnrichmentRoute) {
                     return;
@@ -835,6 +991,7 @@ export class IntelligenceEngine extends EventEmitter {
 
             // No post-processing - prompt enforces brevity, code blocks preserved
 
+            accelerationManager?.getEnhancedCache().set(answerCacheKey, fullAnswer);
             this.session.addAssistantMessage(fullAnswer);
 
             this.session.pushUsage({

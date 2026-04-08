@@ -12,6 +12,7 @@ import { LLMHelper } from './LLMHelper';
 import { SessionTracker } from './SessionTracker';
 import { IntelligenceEngine } from './IntelligenceEngine';
 import { MeetingPersistence } from './MeetingPersistence';
+import type { AccelerationManager } from './services/AccelerationManager';
 import type { ConsciousModeStructuredResponse, ReasoningThread } from './ConsciousMode';
 
 // Re-export types for backward compatibility
@@ -91,6 +92,10 @@ export class IntelligenceManager extends EventEmitter {
 
     getSessionTracker(): SessionTracker {
         return this.session;
+    }
+
+    attachAccelerationManager(accelerationManager: AccelerationManager | null): void {
+        this.engine.attachAccelerationManager(accelerationManager);
     }
 
     addTranscript(segment: import('./SessionTracker').TranscriptSegment, skipRefinementCheck: boolean = false): void {
