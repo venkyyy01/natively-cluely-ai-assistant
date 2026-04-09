@@ -550,6 +550,130 @@ test('settings window handlers prefer WindowFacade when available', async () => 
   });
 });
 
+test('settings state handlers prefer SettingsFacade when available', async () => {
+  await withPatchedModules({
+    electron: {
+      app: {
+        getPath: () => '/mock/exe',
+        setLoginItemSettings: () => {},
+        getLoginItemSettings: () => ({ openAtLogin: false }),
+      },
+    },
+    '../services/CredentialsManager': {
+      CredentialsManager: {
+        getInstance: () => ({
+          setAiResponseLanguage: () => {},
+          getSttLanguage: () => 'en-US',
+          getAiResponseLanguage: () => 'en',
+        }),
+      },
+    },
+  }, async () => {
+    const modulePath = require.resolve('../ipc/registerSettingsHandlers');
+    delete require.cache[modulePath];
+    const { registerSettingsHandlers } = await import('../ipc/registerSettingsHandlers');
+    const registry = createHandlerRegistry();
+    const calls: string[] = [];
+    const appState = {
+      getSettingsFacade: () => ({
+        setConsciousModeEnabled: (enabled: boolean) => {
+          calls.push(`setConscious:${enabled}`);
+          return true;
+        },
+        getConsciousModeEnabled: () => {
+          calls.push('getConscious');
+          return true;
+        },
+        setAccelerationModeEnabled: (enabled: boolean) => {
+          calls.push(`setAcceleration:${enabled}`);
+          return true;
+        },
+        getAccelerationModeEnabled: () => {
+          calls.push('getAcceleration');
+          return false;
+        },
+        setDisguise: (mode: string) => {
+          calls.push(`setDisguise:${mode}`);
+        },
+        getDisguise: () => {
+          calls.push('getDisguise');
+          return 'settings';
+        },
+        getUndetectable: () => {
+          calls.push('getUndetectable');
+          return false;
+        },
+      }),
+      processingHelper: { getLLMHelper: () => ({ setAiResponseLanguage: () => {} }) },
+      settingsWindowHelper: { toggleWindow: () => {}, closeWindow: () => {} },
+      setUndetectable: () => {},
+      setUndetectableAsync: async () => {},
+      getUndetectable: () => {
+        throw new Error('legacy undetectable path should not be used');
+      },
+      setDisguise: () => {
+        throw new Error('legacy disguise path should not be used');
+      },
+      getDisguise: () => {
+        throw new Error('legacy disguise path should not be used');
+      },
+      setConsciousModeEnabled: () => {
+        throw new Error('legacy conscious path should not be used');
+      },
+      getConsciousModeEnabled: () => {
+        throw new Error('legacy conscious path should not be used');
+      },
+      setAccelerationModeEnabled: () => {
+        throw new Error('legacy acceleration path should not be used');
+      },
+      getAccelerationModeEnabled: () => {
+        throw new Error('legacy acceleration path should not be used');
+      },
+    };
+
+    registerSettingsHandlers({ appState: appState as any, ...registry } as any);
+
+    assert.deepEqual(await registry.handlers.get('set-conscious-mode')?.({}, true), {
+      success: true,
+      data: { enabled: true },
+    });
+    assert.deepEqual(await registry.handlers.get('get-conscious-mode')?.({}), {
+      success: true,
+      data: { enabled: true },
+    });
+    assert.deepEqual(await registry.handlers.get('set-acceleration-mode')?.({}, false), {
+      success: true,
+      data: { enabled: false },
+    });
+    assert.deepEqual(await registry.handlers.get('get-acceleration-mode')?.({}), {
+      success: true,
+      data: { enabled: false },
+    });
+    assert.deepEqual(await registry.handlers.get('set-disguise')?.({}, 'terminal'), {
+      success: true,
+      data: { mode: 'terminal' },
+    });
+    assert.deepEqual(await registry.handlers.get('get-disguise')?.({}), {
+      success: true,
+      data: { mode: 'settings' },
+    });
+    assert.deepEqual(await registry.handlers.get('get-undetectable')?.({}), {
+      success: true,
+      data: { enabled: false },
+    });
+
+    assert.deepEqual(calls, [
+      'setConscious:true',
+      'getConscious',
+      'setAcceleration:false',
+      'getAcceleration',
+      'setDisguise:terminal',
+      'getDisguise',
+      'getUndetectable',
+    ]);
+  });
+});
+
 test('meeting handlers prefer RuntimeCoordinator lifecycle methods when supervisor runtime is enabled', async () => {
   const modulePath = require.resolve('../ipc/registerMeetingHandlers');
   delete require.cache[modulePath];

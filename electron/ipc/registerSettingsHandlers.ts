@@ -15,6 +15,16 @@ type WindowFacadeLike = {
   closeSettingsWindow?: () => void;
 };
 
+type SettingsFacadeLike = {
+  setConsciousModeEnabled?: (enabled: boolean) => boolean;
+  getConsciousModeEnabled?: () => boolean;
+  setAccelerationModeEnabled?: (enabled: boolean) => boolean;
+  getAccelerationModeEnabled?: () => boolean;
+  setDisguise?: (mode: 'terminal' | 'settings' | 'activity' | 'none') => void;
+  getDisguise?: () => string;
+  getUndetectable?: () => boolean;
+};
+
 type RuntimeCoordinatorLike = {
   shouldManageLifecycle?: () => boolean;
   getSupervisor?: (name: string) => unknown;
@@ -73,6 +83,14 @@ function getRuntimeCoordinator(appState: AppState): RuntimeCoordinatorLike | nul
 function getWindowFacade(appState: AppState): WindowFacadeLike | null {
   if ('getWindowFacade' in appState && typeof appState.getWindowFacade === 'function') {
     return appState.getWindowFacade() as WindowFacadeLike;
+  }
+
+  return null;
+}
+
+function getSettingsFacade(appState: AppState): SettingsFacadeLike | null {
+  if ('getSettingsFacade' in appState && typeof appState.getSettingsFacade === 'function') {
+    return appState.getSettingsFacade() as SettingsFacadeLike;
   }
 
   return null;
@@ -185,7 +203,10 @@ export function registerSettingsHandlers({ appState, safeHandle, safeHandleValid
 
   safeHandleValidated('set-conscious-mode', (args) => [parseIpcInput(ipcSchemas.booleanFlag, args[0], 'set-conscious-mode')] as const, async (_event, enabled) => {
     try {
-      const result = appState.setConsciousModeEnabled(enabled);
+      const settingsFacade = getSettingsFacade(appState);
+      const result = settingsFacade?.setConsciousModeEnabled
+        ? settingsFacade.setConsciousModeEnabled(enabled)
+        : appState.setConsciousModeEnabled(enabled);
       if (result === false) {
         return settingsError('SETTINGS_PERSIST_FAILED', 'Unable to persist Conscious Mode');
       }
@@ -197,41 +218,57 @@ export function registerSettingsHandlers({ appState, safeHandle, safeHandleValid
     }
   });
 
-safeHandle('get-conscious-mode', async () => {
-  try {
-    return settingsSuccess({ enabled: appState.getConsciousModeEnabled() });
-  } catch (error: any) {
-    console.error('Error getting Conscious Mode state:', error);
-    return settingsError('SETTINGS_READ_FAILED', error?.message || 'Unable to read Conscious Mode');
-  }
-});
-
-safeHandleValidated('set-acceleration-mode', (args) => [parseIpcInput(ipcSchemas.booleanFlag, args[0], 'set-acceleration-mode')] as const, async (_event, enabled) => {
-  try {
-    const result = appState.setAccelerationModeEnabled(enabled);
-    if (result === false) {
-      return settingsError('SETTINGS_PERSIST_FAILED', 'Unable to persist Acceleration Mode');
-    }
-
-    return settingsSuccess({ enabled });
-  } catch (error: any) {
-    console.error('Error setting Acceleration Mode state:', error);
-    return settingsError('SETTINGS_PERSIST_FAILED', error?.message || 'Unable to persist Acceleration Mode');
-  }
-});
-
-safeHandle('get-acceleration-mode', async () => {
-  try {
-    return settingsSuccess({ enabled: appState.getAccelerationModeEnabled() });
-  } catch (error: any) {
-    console.error('Error getting Acceleration Mode state:', error);
-    return settingsError('SETTINGS_READ_FAILED', error?.message || 'Unable to read Acceleration Mode');
-  }
-});
-
-safeHandleValidated('set-disguise', (args) => [parseIpcInput(ipcSchemas.disguiseMode, args[0], 'set-disguise')] as const, async (_event, mode) => {
+  safeHandle('get-conscious-mode', async () => {
     try {
-      appState.setDisguise(mode);
+      const settingsFacade = getSettingsFacade(appState);
+      const enabled = settingsFacade?.getConsciousModeEnabled
+        ? settingsFacade.getConsciousModeEnabled()
+        : appState.getConsciousModeEnabled();
+      return settingsSuccess({ enabled });
+    } catch (error: any) {
+      console.error('Error getting Conscious Mode state:', error);
+      return settingsError('SETTINGS_READ_FAILED', error?.message || 'Unable to read Conscious Mode');
+    }
+  });
+
+  safeHandleValidated('set-acceleration-mode', (args) => [parseIpcInput(ipcSchemas.booleanFlag, args[0], 'set-acceleration-mode')] as const, async (_event, enabled) => {
+    try {
+      const settingsFacade = getSettingsFacade(appState);
+      const result = settingsFacade?.setAccelerationModeEnabled
+        ? settingsFacade.setAccelerationModeEnabled(enabled)
+        : appState.setAccelerationModeEnabled(enabled);
+      if (result === false) {
+        return settingsError('SETTINGS_PERSIST_FAILED', 'Unable to persist Acceleration Mode');
+      }
+
+      return settingsSuccess({ enabled });
+    } catch (error: any) {
+      console.error('Error setting Acceleration Mode state:', error);
+      return settingsError('SETTINGS_PERSIST_FAILED', error?.message || 'Unable to persist Acceleration Mode');
+    }
+  });
+
+  safeHandle('get-acceleration-mode', async () => {
+    try {
+      const settingsFacade = getSettingsFacade(appState);
+      const enabled = settingsFacade?.getAccelerationModeEnabled
+        ? settingsFacade.getAccelerationModeEnabled()
+        : appState.getAccelerationModeEnabled();
+      return settingsSuccess({ enabled });
+    } catch (error: any) {
+      console.error('Error getting Acceleration Mode state:', error);
+      return settingsError('SETTINGS_READ_FAILED', error?.message || 'Unable to read Acceleration Mode');
+    }
+  });
+
+  safeHandleValidated('set-disguise', (args) => [parseIpcInput(ipcSchemas.disguiseMode, args[0], 'set-disguise')] as const, async (_event, mode) => {
+    try {
+      const settingsFacade = getSettingsFacade(appState);
+      if (settingsFacade?.setDisguise) {
+        settingsFacade.setDisguise(mode);
+      } else {
+        appState.setDisguise(mode);
+      }
       return settingsSuccess({ mode });
     } catch (error: any) {
       return settingsError('SETTINGS_PERSIST_FAILED', error?.message || 'Unable to update disguise mode');
@@ -240,7 +277,11 @@ safeHandleValidated('set-disguise', (args) => [parseIpcInput(ipcSchemas.disguise
 
   safeHandle('get-undetectable', async () => {
     try {
-      return settingsSuccess({ enabled: appState.getUndetectable() });
+      const settingsFacade = getSettingsFacade(appState);
+      const enabled = settingsFacade?.getUndetectable
+        ? settingsFacade.getUndetectable()
+        : appState.getUndetectable();
+      return settingsSuccess({ enabled });
     } catch (error: any) {
       return settingsError('SETTINGS_READ_FAILED', error?.message || 'Unable to read stealth mode');
     }
@@ -248,7 +289,11 @@ safeHandleValidated('set-disguise', (args) => [parseIpcInput(ipcSchemas.disguise
 
   safeHandle('get-disguise', async () => {
     try {
-      return settingsSuccess({ mode: appState.getDisguise() });
+      const settingsFacade = getSettingsFacade(appState);
+      const mode = settingsFacade?.getDisguise
+        ? settingsFacade.getDisguise()
+        : appState.getDisguise();
+      return settingsSuccess({ mode });
     } catch (error: any) {
       return settingsError('SETTINGS_READ_FAILED', error?.message || 'Unable to read disguise mode');
     }

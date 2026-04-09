@@ -11,6 +11,7 @@ import { InferenceSupervisor } from "./runtime/InferenceSupervisor"
 import { StealthSupervisor } from "./runtime/StealthSupervisor"
 import { RecoverySupervisor } from "./runtime/RecoverySupervisor"
 import { WindowFacade } from "./runtime/WindowFacade"
+import { SettingsFacade } from "./runtime/SettingsFacade"
 import { getPerformanceInstrumentation, type PerformanceInstrumentation } from "./runtime/PerformanceInstrumentation"
 import { RuntimeCoordinator, type RuntimeOwnershipMode } from "./runtime/RuntimeCoordinator"
 import { StealthManager } from "./stealth/StealthManager"
@@ -2442,6 +2443,18 @@ try {
       centerAndShowWindow: () => this.centerAndShowWindow(),
       toggleSettingsWindow: (x, y) => this.settingsWindowHelper.toggleWindow(x, y),
       closeSettingsWindow: () => this.settingsWindowHelper.closeWindow(),
+    })
+  }
+
+  public getSettingsFacade(): SettingsFacade {
+    return new SettingsFacade({
+      setConsciousModeEnabled: (enabled) => this.setConsciousModeEnabled(enabled),
+      getConsciousModeEnabled: () => this.getConsciousModeEnabled(),
+      setAccelerationModeEnabled: (enabled) => this.setAccelerationModeEnabled(enabled),
+      getAccelerationModeEnabled: () => this.getAccelerationModeEnabled(),
+      setDisguise: (mode) => this.setDisguise(mode),
+      getDisguise: () => this.getDisguise(),
+      getUndetectable: () => this.getUndetectable(),
     })
   }
 
