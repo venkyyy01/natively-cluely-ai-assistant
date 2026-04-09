@@ -67,6 +67,14 @@ export class StealthSupervisor implements ISupervisor {
     await this.disableStealth();
   }
 
+  async reportFault(error: unknown): Promise<void> {
+    if (this.stealthState === 'FAULT') {
+      return;
+    }
+
+    await this.failClosed(error);
+  }
+
   private async syncDelegateWithState(): Promise<void> {
     if (this.pendingEnabled || this.readDelegateEnabled()) {
       await this.armStealth();

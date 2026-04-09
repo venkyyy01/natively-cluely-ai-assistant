@@ -11,7 +11,7 @@ import { InferenceSupervisor } from "./runtime/InferenceSupervisor"
 import { StealthSupervisor } from "./runtime/StealthSupervisor"
 import { RecoverySupervisor } from "./runtime/RecoverySupervisor"
 import { getPerformanceInstrumentation, type PerformanceInstrumentation } from "./runtime/PerformanceInstrumentation"
-import { RuntimeCoordinator } from "./runtime/RuntimeCoordinator"
+import { RuntimeCoordinator, type RuntimeOwnershipMode } from "./runtime/RuntimeCoordinator"
 import { StealthManager } from "./stealth/StealthManager"
 import { createMacosVirtualDisplayCoordinator, resolveMacosVirtualDisplayHelperPath } from "./stealth/macosVirtualDisplayIntegration"
 if (!app.isPackaged) {
@@ -492,12 +492,14 @@ this.modelSelectorWindowHelper = new ModelSelectorWindowHelper(this.stealthManag
 this.stealthManager.on('stealth-degraded', (warnings: string[]) => {
   console.warn(`[Main] Stealth degraded: ${warnings.join(', ')}`);
   this._broadcastToAllWindows('stealth-degraded', warnings);
+  this.handleStealthDegradation(warnings);
 });
 // 3. Initialize other helpers
 this.screenshotHelper = new ScreenshotHelper(this.view)
 this.processingHelper = new ProcessingHelper(this)
 this.performanceInstrumentation = getPerformanceInstrumentation()
 this.runtimeCoordinator = new RuntimeCoordinator(this)
+this.bindRuntimeCoordinatorEvents()
 
 this.sttReconnector = new STTReconnector(async (speaker) => {
   if (!this.isMeetingActive) return;
@@ -582,7 +584,8 @@ this.intelligenceManager.setConsciousModeEnabled(this.consciousModeEnabled)
 // Initialize Checkpointer
 this.checkpointer = new MeetingCheckpointer(
   DatabaseManager.getInstance(),
-  () => this.intelligenceManager.getSessionTracker()
+  () => this.intelligenceManager.getSessionTracker(),
+  (checkpointId) => this.runtimeCoordinator.getBus().emit({ type: 'recovery:checkpoint-written', checkpointId })
 );
 this.registerRuntimeSupervisors()
 
@@ -621,11 +624,10 @@ this.setupIntelligenceEvents()
       bus,
       delegates: {
         startCapture: () => {
-          this.setupSystemAudioPipeline()
+          this.startManagedAudioRuntime()
         },
         stopCapture: () => {
-          this.systemAudioCapture?.stop()
-          this.microphoneCapture?.stop()
+          this.stopManagedAudioRuntime()
         },
         onError: async (error) => {
           this.broadcast('meeting-audio-error', error.message)
@@ -688,7 +690,8 @@ this.setupIntelligenceEvents()
         setEnabled: (enabled) => {
           this.stealthManager.setEnabled(enabled)
         },
-        isEnabled: () => this.getUndetectable(),
+        isEnabled: () => this.stealthManager.isEnabled(),
+        verifyStealthState: () => this.verifyStealthProtection(),
       },
       bus,
       { logger: { warn: console.warn } },
@@ -697,10 +700,96 @@ this.setupIntelligenceEvents()
     this.runtimeCoordinator.registerSupervisor(new RecoverySupervisor({
       bus,
       delegate: {
-        start: () => {},
-        stop: () => {},
+        start: () => {
+          if (this.currentMeetingId) {
+            this.checkpointer?.start(this.currentMeetingId)
+          }
+        },
+        stop: () => {
+          this.checkpointer?.stop()
+        },
+        checkpoint: async () => {
+          await this.checkpointer?.checkpointNow()
+        },
+        restore: async (sessionId) => {
+          await this.intelligenceManager.getSessionTracker().restoreFromMeetingId(sessionId)
+        },
       },
     }))
+  }
+
+  private bindRuntimeCoordinatorEvents(): void {
+    const bus = this.runtimeCoordinator.getBus()
+
+    bus.subscribe('stealth:state-changed', async (event) => {
+      this._broadcastToAllWindows('stealth-state-changed', event)
+      this.performanceInstrumentation.recordEvent('stealth.state', {
+        from: event.from,
+        to: event.to,
+      })
+    })
+
+    bus.subscribe('stealth:fault', async (event) => {
+      this._broadcastToAllWindows('stealth-fault', event.reason)
+      this.performanceInstrumentation.recordEvent('stealth.fault', {
+        reason: event.reason,
+      })
+
+      if (this.isUndetectable) {
+        this.applyUndetectableState(false, Date.now(), {
+          runtime: 'coordinator',
+          reason: event.reason,
+          source: 'fault',
+        })
+      }
+    })
+
+    bus.subscribe('recovery:checkpoint-written', async (event) => {
+      this.performanceInstrumentation.recordEvent('recovery.checkpoint-written', {
+        checkpointId: event.checkpointId,
+      })
+    })
+
+    bus.subscribe('recovery:restore-complete', async (event) => {
+      this.performanceInstrumentation.recordEvent('recovery.restore-complete', {
+        sessionId: event.sessionId,
+      })
+    })
+  }
+
+  private startManagedAudioRuntime(): void {
+    this.setupSystemAudioPipeline()
+    this.systemAudioCapture?.start()
+    this.microphoneCapture?.start()
+    this.scheduleAudioPipelineHealthCheck()
+    this.setNativeAudioConnected(true)
+  }
+
+  private stopManagedAudioRuntime(): void {
+    this.clearAudioPipelineHealthCheck()
+    this.setNativeAudioConnected(false)
+
+    try {
+      this.systemAudioCapture?.removeAllListeners()
+      this.systemAudioCapture?.stop()
+      if (typeof this.systemAudioCapture?.destroy === 'function') {
+        this.systemAudioCapture.destroy()
+      }
+      this.systemAudioCapture = null
+    } catch (error) {
+      console.error('[Main] Failed to stop system audio during managed runtime shutdown:', error)
+    }
+
+    try {
+      this.microphoneCapture?.removeAllListeners()
+      this.microphoneCapture?.stop()
+      if (typeof this.microphoneCapture?.destroy === 'function') {
+        this.microphoneCapture.destroy()
+      }
+      this.microphoneCapture = null
+    } catch (error) {
+      console.error('[Main] Failed to stop microphone capture during managed runtime shutdown:', error)
+    }
   }
 
   private broadcast(channel: string, ...args: any[]): void {
@@ -1683,12 +1772,13 @@ try {
     }
   }
 
-  public async startMeetingLegacy(metadata?: any): Promise<void> {
+  public async startMeetingLegacy(metadata?: any, runtimeMode: RuntimeOwnershipMode = 'legacy'): Promise<void> {
     console.log('[Main] Starting Meeting...', metadata);
     this.audioRecoveryAttempts = 0;
     this.audioRecoveryBackoffMs = 5000;
     this.startAbortController = new AbortController();
     const { signal } = this.startAbortController;
+    const coordinatorManagedRuntime = runtimeMode === 'coordinator'
 
     const normalizeDeviceId = (value: unknown): string | undefined => {
       if (typeof value !== 'string') {
@@ -1808,12 +1898,14 @@ try {
               return
             }
 
-            this.setupSystemAudioPipeline();
-            this.googleSTT?.start();
-            this.googleSTT_User?.start();
-            this.systemAudioCapture?.start();
-            this.microphoneCapture?.start();
-            this.scheduleAudioPipelineHealthCheck();
+            if (!coordinatorManagedRuntime) {
+              this.setupSystemAudioPipeline();
+              this.googleSTT?.start();
+              this.googleSTT_User?.start();
+              this.systemAudioCapture?.start();
+              this.microphoneCapture?.start();
+              this.scheduleAudioPipelineHealthCheck();
+            }
 
             if (this.ragManager) {
               try {
@@ -1823,11 +1915,13 @@ try {
               }
             }
 
-            this.setNativeAudioConnected(true);
+            if (!coordinatorManagedRuntime) {
+              this.setNativeAudioConnected(true);
+            }
             this.meetingLifecycleState = 'active'
             console.log('[Main] Audio pipeline started successfully.');
             
-            if (this.currentMeetingId) {
+            if (!coordinatorManagedRuntime && this.currentMeetingId) {
               this.checkpointer?.start(this.currentMeetingId);
             }
             
@@ -1878,7 +1972,7 @@ try {
     }
   }
 
-  public async endMeetingLegacy(): Promise<void> {
+  public async endMeetingLegacy(runtimeMode: RuntimeOwnershipMode = 'legacy'): Promise<void> {
     console.log('[Main] Ending Meeting...');
     this.startAbortController?.abort();
     this.startAbortController = null;
@@ -1898,70 +1992,74 @@ try {
     });
 
     this.sttReconnector?.stopAll();
-    this.checkpointer?.stop();
+    if (runtimeMode === 'coordinator') {
+      this.checkpointer?.stop()
+    } else {
+      this.checkpointer?.stop();
 
-    // 3. Stop System Audio
-    try {
-      this.systemAudioCapture?.removeAllListeners();
-      this.systemAudioCapture?.stop();
-      if (typeof this.systemAudioCapture?.destroy === 'function') {
-        this.systemAudioCapture.destroy();
+      // 3. Stop System Audio
+      try {
+        this.systemAudioCapture?.removeAllListeners();
+        this.systemAudioCapture?.stop();
+        if (typeof this.systemAudioCapture?.destroy === 'function') {
+          this.systemAudioCapture.destroy();
+        }
+        this.systemAudioCapture = null;
+      } catch (error) {
+        console.error('[Main] Failed to stop system audio during endMeeting:', error)
       }
-      this.systemAudioCapture = null;
-    } catch (error) {
-      console.error('[Main] Failed to stop system audio during endMeeting:', error)
-    }
 
-    // Stop interviewer STT with proper listener cleanup
-    try {
-      if (this.googleSTT) {
-        const sttEmitter = this.googleSTT as EventEmitter;
-        if (this.sttTranscriptListener_Interviewer) {
-          sttEmitter.removeListener('transcript', this.sttTranscriptListener_Interviewer);
-          this.sttTranscriptListener_Interviewer = null;
+      // Stop interviewer STT with proper listener cleanup
+      try {
+        if (this.googleSTT) {
+          const sttEmitter = this.googleSTT as EventEmitter;
+          if (this.sttTranscriptListener_Interviewer) {
+            sttEmitter.removeListener('transcript', this.sttTranscriptListener_Interviewer);
+            this.sttTranscriptListener_Interviewer = null;
+          }
+          if (this.sttErrorListener_Interviewer) {
+            sttEmitter.removeListener('error', this.sttErrorListener_Interviewer);
+            this.sttErrorListener_Interviewer = null;
+          }
+          this.googleSTT?.stop();
+          this.googleSTT?.removeAllListeners();
+          this.googleSTT = null;
         }
-        if (this.sttErrorListener_Interviewer) {
-          sttEmitter.removeListener('error', this.sttErrorListener_Interviewer);
-          this.sttErrorListener_Interviewer = null;
-        }
-        this.googleSTT?.stop();
-        this.googleSTT?.removeAllListeners();
-        this.googleSTT = null;
+      } catch (error) {
+        console.error('[Main] Failed to stop interviewer STT during endMeeting:', error)
       }
-    } catch (error) {
-      console.error('[Main] Failed to stop interviewer STT during endMeeting:', error)
-    }
 
-    // 4. Stop Microphone
-    try {
-      this.microphoneCapture?.removeAllListeners();
-      this.microphoneCapture?.stop();
-      if (typeof this.microphoneCapture?.destroy === 'function') {
-        this.microphoneCapture.destroy();
+      // 4. Stop Microphone
+      try {
+        this.microphoneCapture?.removeAllListeners();
+        this.microphoneCapture?.stop();
+        if (typeof this.microphoneCapture?.destroy === 'function') {
+          this.microphoneCapture.destroy();
+        }
+        this.microphoneCapture = null;
+      } catch (error) {
+        console.error('[Main] Failed to stop microphone capture during endMeeting:', error)
       }
-      this.microphoneCapture = null;
-    } catch (error) {
-      console.error('[Main] Failed to stop microphone capture during endMeeting:', error)
-    }
 
-    // Stop user STT with proper listener cleanup
-    try {
-      if (this.googleSTT_User) {
-        const sttEmitter = this.googleSTT_User as EventEmitter;
-        if (this.sttTranscriptListener_User) {
-          sttEmitter.removeListener('transcript', this.sttTranscriptListener_User);
-          this.sttTranscriptListener_User = null;
+      // Stop user STT with proper listener cleanup
+      try {
+        if (this.googleSTT_User) {
+          const sttEmitter = this.googleSTT_User as EventEmitter;
+          if (this.sttTranscriptListener_User) {
+            sttEmitter.removeListener('transcript', this.sttTranscriptListener_User);
+            this.sttTranscriptListener_User = null;
+          }
+          if (this.sttErrorListener_User) {
+            sttEmitter.removeListener('error', this.sttErrorListener_User);
+            this.sttErrorListener_User = null;
+          }
+          this.googleSTT_User?.stop();
+          this.googleSTT_User?.removeAllListeners();
+          this.googleSTT_User = null;
         }
-        if (this.sttErrorListener_User) {
-          sttEmitter.removeListener('error', this.sttErrorListener_User);
-          this.sttErrorListener_User = null;
-        }
-        this.googleSTT_User?.stop();
-        this.googleSTT_User?.removeAllListeners();
-        this.googleSTT_User = null;
+      } catch (error) {
+        console.error('[Main] Failed to stop user STT during endMeeting:', error)
       }
-    } catch (error) {
-      console.error('[Main] Failed to stop user STT during endMeeting:', error)
     }
 
     // 4b. Stop JIT RAG live indexing (flush remaining segments)
@@ -2625,7 +2723,7 @@ try {
     return this.hasDebugged
   }
 
-  public setUndetectable(state: boolean): void {
+  public async setUndetectableAsync(state: boolean): Promise<void> {
     // Guard: skip if state hasn't actually changed to prevent
     // duplicate dock hide/show cycles from renderer feedback loops
     if (this.isUndetectable === state) return;
@@ -2633,8 +2731,27 @@ try {
     console.log(`[Stealth] setUndetectable(${state}) called`);
     const startedAt = Date.now();
 
+    if (isSupervisorRuntimeEnabled()) {
+      const stealthSupervisor = this.runtimeCoordinator.getSupervisor<StealthSupervisor>('stealth')
+      if (stealthSupervisor.getState() === 'idle') {
+        await stealthSupervisor.start()
+      }
+      await stealthSupervisor.setEnabled(state)
+    } else {
+      this.stealthManager.setEnabled(state)
+    }
+
+    this.applyUndetectableState(state, startedAt, {
+      runtime: isSupervisorRuntimeEnabled() ? 'coordinator' : 'legacy',
+    })
+  }
+
+  private applyUndetectableState(
+    state: boolean,
+    startedAt: number,
+    metadata: Record<string, unknown> = {},
+  ): void {
     this.isUndetectable = state
-    this.stealthManager.setEnabled(state)
     this.windowHelper.setContentProtection(state)
     this.settingsWindowHelper.setContentProtection(state)
     this.modelSelectorWindowHelper.setContentProtection(state)
@@ -2650,6 +2767,7 @@ try {
     this._broadcastToAllWindows('undetectable-changed', state);
     this.performanceInstrumentation.recordDuration('stealth.toggle', startedAt, {
       enabled: state,
+      ...metadata,
     });
 
     // --- STEALTH MODE LOGIC (restored from working version a820380) ---
@@ -2710,6 +2828,57 @@ try {
         }, 500)
       }
     }
+  }
+
+  public setUndetectable(state: boolean): void {
+    void this.setUndetectableAsync(state).catch((error) => {
+      console.error('[Stealth] Failed to update undetectable state:', error)
+    })
+  }
+
+  private handleStealthDegradation(warnings: string[]): void {
+    if (!isSupervisorRuntimeEnabled() || !this.isUndetectable) {
+      return
+    }
+
+    const shouldFault =
+      warnings.includes('stealth_verification_failed') ||
+      warnings.includes('window_visible_to_capture') ||
+      warnings.includes('native_module_unavailable')
+
+    if (!shouldFault) {
+      return
+    }
+
+    const stealthSupervisor = this.runtimeCoordinator.getSupervisor<StealthSupervisor>('stealth')
+    if (stealthSupervisor.getStealthState() === 'FAULT') {
+      return
+    }
+
+    void stealthSupervisor.reportFault(new Error(`stealth degraded: ${warnings.join(', ')}`)).catch((error) => {
+      console.error('[Stealth] Failed to fault supervisor after degradation:', error)
+    })
+  }
+
+  private verifyStealthProtection(): boolean {
+    if (this.stealthManager.verifyManagedWindows()) {
+      return true
+    }
+
+    const verificationWindows = [
+      this.windowHelper.getLauncherWindow(),
+      this.windowHelper.getOverlayWindow(),
+      this.settingsWindowHelper.getSettingsWindow(),
+      this.modelSelectorWindowHelper.getWindow(),
+    ].filter((win, index, windows): win is BrowserWindow => {
+      return Boolean(win) && !win.isDestroyed() && windows.indexOf(win) === index
+    })
+
+    if (verificationWindows.length === 0) {
+      return false
+    }
+
+    return verificationWindows.every((win) => this.stealthManager.verifyStealth(win))
   }
 
   public getUndetectable(): boolean {

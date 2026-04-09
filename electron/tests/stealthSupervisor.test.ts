@@ -122,3 +122,30 @@ test('StealthSupervisor propagates delegate failures as faults', async () => {
     { from: 'ARMING', to: 'FAULT' },
   ]);
 });
+
+test('StealthSupervisor can be faulted explicitly after it is armed', async () => {
+  const calls: boolean[] = [];
+  const faultReasons: string[] = [];
+  const bus = createBus();
+  bus.subscribe('stealth:fault', async (event) => {
+    faultReasons.push(event.reason);
+  });
+
+  const supervisor = new StealthSupervisor(
+    {
+      async setEnabled(enabled: boolean) {
+        calls.push(enabled);
+      },
+      isEnabled: () => calls[calls.length - 1] ?? false,
+    },
+    bus,
+  );
+
+  await supervisor.start();
+  await supervisor.setEnabled(true);
+  await supervisor.reportFault(new Error('window_visible_to_capture'));
+
+  assert.equal(supervisor.getStealthState(), 'FAULT');
+  assert.deepEqual(calls, [true, false]);
+  assert.deepEqual(faultReasons, ['window_visible_to_capture']);
+});

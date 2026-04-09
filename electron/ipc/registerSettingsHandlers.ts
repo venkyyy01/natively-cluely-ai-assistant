@@ -93,7 +93,11 @@ export function registerSettingsHandlers({ appState, safeHandle, safeHandleValid
 
   safeHandleValidated('set-undetectable', (args) => [parseIpcInput(ipcSchemas.booleanFlag, args[0], 'set-undetectable')] as const, async (_event, state) => {
     try {
-      appState.setUndetectable(state);
+      if ('setUndetectableAsync' in appState && typeof appState.setUndetectableAsync === 'function') {
+        await appState.setUndetectableAsync(state);
+      } else {
+        appState.setUndetectable(state);
+      }
       return settingsSuccess({ enabled: state });
     } catch (error: any) {
       console.error('Error setting undetectable state:', error);

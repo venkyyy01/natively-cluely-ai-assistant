@@ -458,6 +458,7 @@ test('settings handlers validate inputs and normalize success contracts', async 
       processingHelper: { getLLMHelper: () => ({ setAiResponseLanguage: () => {} }) },
       settingsWindowHelper: { toggleWindow: () => {}, closeWindow: () => {} },
       setUndetectable: () => {},
+      setUndetectableAsync: async () => {},
       getUndetectable: () => true,
       setDisguise: () => {},
       getDisguise: () => 'activity',
@@ -471,6 +472,10 @@ test('settings handlers validate inputs and normalize success contracts', async 
     assert.deepEqual(await registry.handlers.get('get-undetectable')?.({}), {
       success: true,
       data: { enabled: true },
+    });
+    assert.deepEqual(await registry.handlers.get('set-undetectable')?.({}, false), {
+      success: true,
+      data: { enabled: false },
     });
     assert.deepEqual(await registry.handlers.get('set-open-at-login')?.({}, true), {
       success: true,

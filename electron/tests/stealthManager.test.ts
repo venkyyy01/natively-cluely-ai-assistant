@@ -538,6 +538,46 @@ describe('StealthManager', () => {
     assert.strictEqual(manager.verifyStealth(win as any), true);
   });
 
+  it('verifies all managed windows through native bindings', () => {
+    const first = new FakeWindow();
+    const second = new FakeWindow();
+    const manager = new StealthManager(
+      { enabled: true },
+      {
+        platform: 'darwin',
+        logger: silentLogger,
+        nativeModule: {
+          applyMacosWindowStealth() {},
+          verifyMacosStealthState() {
+            return 0;
+          },
+        },
+      },
+    );
+
+    manager.applyToWindow(first as any, true, { role: 'primary' });
+    manager.applyToWindow(second as any, true, { role: 'auxiliary' });
+
+    assert.strictEqual(manager.verifyManagedWindows(), true);
+  });
+
+  it('fails managed-window verification when no verifiable native stealth is available', () => {
+    const win = new FakeWindow();
+    const manager = new StealthManager(
+      { enabled: true },
+      {
+        platform: 'darwin',
+        logger: silentLogger,
+        nativeModule: null,
+      },
+    );
+
+    manager.applyToWindow(win as any, true, { role: 'primary' });
+
+    assert.strictEqual(manager.verifyManagedWindows(), false);
+    assert.ok(manager.getStealthDegradationWarnings().includes('native_module_unavailable'));
+  });
+
   it('falls back to hide and show when opacity APIs are unavailable', async () => {
     const intervals: Array<() => Promise<void> | void> = [];
     const timeouts: Array<() => void> = [];

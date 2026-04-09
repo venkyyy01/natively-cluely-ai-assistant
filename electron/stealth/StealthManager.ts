@@ -451,8 +451,30 @@ export class StealthManager extends EventEmitter {
     }
   }
 
-  private isEnabled(): boolean {
+  public isEnabled(): boolean {
     return this.config.enabled;
+  }
+
+  public verifyManagedWindows(): boolean {
+    if (!this.isEnabled()) {
+      return false;
+    }
+
+    let verifiedWindowCount = 0;
+
+    for (const record of this.managedWindows) {
+      const win = record.win;
+      if (this.isWindowDestroyed(win)) {
+        continue;
+      }
+
+      verifiedWindowCount += 1;
+      if (!this.verifyStealth(win)) {
+        return false;
+      }
+    }
+
+    return verifiedWindowCount > 0;
   }
 
   private isEnhancedStealthEnabled(): boolean {

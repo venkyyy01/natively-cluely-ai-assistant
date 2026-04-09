@@ -1,5 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { SessionPersistence, PersistedSession } from '../memory/SessionPersistence';
 
 function makeSession(meetingId: string): PersistedSession {
@@ -76,8 +79,17 @@ function makeSession(meetingId: string): PersistedSession {
   };
 }
 
-test('SessionPersistence saves and loads meeting sessions', async () => {
-  const persistence = new SessionPersistence();
+async function createPersistenceDir(): Promise<string> {
+  return mkdtemp(join(tmpdir(), 'natively-session-persistence-'));
+}
+
+test('SessionPersistence saves and loads meeting sessions', async (t) => {
+  const sessionsDirectory = await createPersistenceDir();
+  t.after(async () => {
+    await rm(sessionsDirectory, { recursive: true, force: true });
+  });
+
+  const persistence = new SessionPersistence({ sessionsDirectory });
   await persistence.init();
 
   const session = makeSession(`meeting_${Date.now()}`);
@@ -91,8 +103,13 @@ test('SessionPersistence saves and loads meeting sessions', async () => {
   assert.equal(loaded?.consciousState?.hypothesisState?.latestReaction?.kind, 'tradeoff_probe');
 });
 
-test('SessionPersistence flushScheduledSave persists pending snapshots immediately', async () => {
-  const persistence = new SessionPersistence();
+test('SessionPersistence flushScheduledSave persists pending snapshots immediately', async (t) => {
+  const sessionsDirectory = await createPersistenceDir();
+  t.after(async () => {
+    await rm(sessionsDirectory, { recursive: true, force: true });
+  });
+
+  const persistence = new SessionPersistence({ sessionsDirectory });
   await persistence.init();
 
   const session = makeSession(`meeting_flush_${Date.now()}`);

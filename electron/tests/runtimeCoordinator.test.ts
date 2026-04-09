@@ -18,6 +18,7 @@ test('RuntimeCoordinator activates and deactivates through the legacy delegate a
     {
       featureFlagReader: () => true,
       logger: { warn() {} },
+      managedSupervisorNames: [],
     },
   );
 
@@ -48,6 +49,7 @@ test('RuntimeCoordinator rejects invalid activation transitions', async () => {
     {
       featureFlagReader: () => true,
       logger: { warn() {} },
+      managedSupervisorNames: [],
     },
   );
 
@@ -67,6 +69,7 @@ test('RuntimeCoordinator resets to idle when legacy activation fails', async () 
     {
       featureFlagReader: () => true,
       logger: { warn() {} },
+      managedSupervisorNames: [],
     },
   );
 
@@ -91,6 +94,7 @@ test('RuntimeCoordinator exposes the feature gate state', () => {
     {
       featureFlagReader: () => false,
       logger: { warn() {} },
+      managedSupervisorNames: [],
     },
   );
 
@@ -102,6 +106,7 @@ test('RuntimeCoordinator exposes the feature gate state', () => {
     {
       featureFlagReader: () => true,
       logger: { warn() {} },
+      managedSupervisorNames: [],
     },
   );
 
@@ -109,3 +114,173 @@ test('RuntimeCoordinator exposes the feature gate state', () => {
   assert.equal(enabledCoordinator.shouldManageLifecycle(), true);
 });
 
+test('RuntimeCoordinator manages configured supervisors during activate/deactivate', async () => {
+  const calls: string[] = [];
+  const coordinator = new RuntimeCoordinator(
+    {
+      async startMeetingLegacy(_metadata, mode) {
+        calls.push(`delegate:start:${mode}`);
+      },
+      async endMeetingLegacy(mode) {
+        calls.push(`delegate:stop:${mode}`);
+      },
+    },
+    {
+      featureFlagReader: () => true,
+      logger: { warn() {} },
+      managedSupervisorNames: ['recovery', 'audio', 'stt'],
+    },
+  );
+
+  for (const name of ['recovery', 'audio', 'stt'] as const) {
+    coordinator.registerSupervisor({
+      name,
+      async start() {
+        calls.push(`start:${name}`);
+      },
+      async stop() {
+        calls.push(`stop:${name}`);
+      },
+      getState() {
+        return 'idle';
+      },
+    });
+  }
+
+  await coordinator.activate({ source: 'test' });
+  await coordinator.deactivate();
+
+  assert.deepEqual(calls, [
+    'delegate:start:coordinator',
+    'start:recovery',
+    'start:audio',
+    'start:stt',
+    'stop:stt',
+    'stop:audio',
+    'stop:recovery',
+    'delegate:stop:coordinator',
+  ]);
+});
+
+test('RuntimeCoordinator starts supervisors in order and stops them in reverse order', async () => {
+  const calls: string[] = [];
+  const coordinator = new RuntimeCoordinator(
+    {
+      async startMeetingLegacy() {},
+      async endMeetingLegacy() {},
+    },
+    {
+      featureFlagReader: () => true,
+      logger: { warn() {} },
+      managedSupervisorNames: [],
+    },
+  );
+
+  for (const name of ['inference', 'audio', 'stt', 'recovery'] as const) {
+    coordinator.registerSupervisor({
+      name,
+      async start() {
+        calls.push(`start:${name}`);
+      },
+      async stop() {
+        calls.push(`stop:${name}`);
+      },
+      getState() {
+        return 'idle';
+      },
+    });
+  }
+
+  await coordinator.startSupervisors(['inference', 'audio', 'stt', 'recovery']);
+  await coordinator.stopSupervisors(['inference', 'audio', 'stt', 'recovery']);
+
+  assert.deepEqual(calls, [
+    'start:inference',
+    'start:audio',
+    'start:stt',
+    'start:recovery',
+    'stop:recovery',
+    'stop:stt',
+    'stop:audio',
+    'stop:inference',
+  ]);
+});
+
+test('RuntimeCoordinator rolls back already-started supervisors when startup fails', async () => {
+  const calls: string[] = [];
+  const coordinator = new RuntimeCoordinator(
+    {
+      async startMeetingLegacy() {},
+      async endMeetingLegacy() {},
+    },
+    {
+      featureFlagReader: () => true,
+      logger: { warn() {} },
+      managedSupervisorNames: [],
+    },
+  );
+
+  coordinator.registerSupervisor({
+    name: 'inference',
+    async start() {
+      calls.push('start:inference');
+    },
+    async stop() {
+      calls.push('stop:inference');
+    },
+    getState() {
+      return 'idle';
+    },
+  });
+
+  coordinator.registerSupervisor({
+    name: 'audio',
+    async start() {
+      calls.push('start:audio');
+      throw new Error('audio start failed');
+    },
+    async stop() {
+      calls.push('stop:audio');
+    },
+    getState() {
+      return 'idle';
+    },
+  });
+
+  coordinator.registerSupervisor({
+    name: 'stt',
+    async start() {
+      calls.push('start:stt');
+    },
+    async stop() {
+      calls.push('stop:stt');
+    },
+    getState() {
+      return 'idle';
+    },
+  });
+
+  coordinator.registerSupervisor({
+    name: 'recovery',
+    async start() {
+      calls.push('start:recovery');
+    },
+    async stop() {
+      calls.push('stop:recovery');
+    },
+    getState() {
+      return 'idle';
+    },
+  });
+
+  await assert.rejects(
+    () => coordinator.startSupervisors(['inference', 'audio', 'stt', 'recovery']),
+    /audio start failed/,
+  );
+
+  assert.deepEqual(calls, [
+    'start:inference',
+    'start:audio',
+    'stop:inference',
+  ]);
+});

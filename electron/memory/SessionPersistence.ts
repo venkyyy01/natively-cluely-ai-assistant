@@ -3,8 +3,7 @@ import { homedir } from 'os';
 import { dirname, join } from 'path';
 import type { PersistedConsciousThreadState, PersistedAnswerHypothesisState } from '../conscious';
 
-const SESSIONS_DIR = join(homedir(), '.natively', 'sessions');
-const INDEX_FILE = join(SESSIONS_DIR, 'index.json');
+const SESSIONS_DIR_ENV = 'NATIVELY_SESSIONS_DIR';
 
 export interface SessionIndexEntry {
   sessionId: string;
@@ -55,6 +54,10 @@ export interface PersistedSession {
   };
 }
 
+interface SessionPersistenceOptions {
+  sessionsDirectory?: string;
+}
+
 function formatDate(ts: number): string {
   return new Date(ts).toISOString().split('T')[0];
 }
@@ -84,9 +87,16 @@ async function atomicWriteJson(filePath: string, value: unknown): Promise<void> 
 export class SessionPersistence {
   private saveTimeout: NodeJS.Timeout | null = null;
   private pendingSession: PersistedSession | null = null;
+  private readonly sessionsDir: string;
+  private readonly indexFile: string;
+
+  constructor(options: SessionPersistenceOptions = {}) {
+    this.sessionsDir = options.sessionsDirectory ?? process.env[SESSIONS_DIR_ENV] ?? join(homedir(), '.natively', 'sessions');
+    this.indexFile = join(this.sessionsDir, 'index.json');
+  }
 
   async init(): Promise<void> {
-    await fs.mkdir(SESSIONS_DIR, { recursive: true });
+    await fs.mkdir(this.sessionsDir, { recursive: true });
   }
 
   scheduleSave(session: PersistedSession): void {
@@ -123,7 +133,7 @@ export class SessionPersistence {
     await this.init();
 
     const filename = buildSessionFilename(session);
-    const absoluteFilepath = join(SESSIONS_DIR, filename);
+    const absoluteFilepath = join(this.sessionsDir, filename);
 
     await atomicWriteJson(absoluteFilepath, session);
     await this.updateIndex(session, filename);
@@ -135,7 +145,7 @@ export class SessionPersistence {
     if (!entry) return null;
 
     try {
-      const content = await fs.readFile(join(SESSIONS_DIR, entry.filepath), 'utf-8');
+      const content = await fs.readFile(join(this.sessionsDir, entry.filepath), 'utf-8');
       return JSON.parse(content) as PersistedSession;
     } catch {
       return null;
@@ -178,14 +188,14 @@ export class SessionPersistence {
       }
 
       try {
-        await fs.unlink(join(SESSIONS_DIR, entry.filepath));
+        await fs.unlink(join(this.sessionsDir, entry.filepath));
         deleted += 1;
       } catch {
         // ignore per-file cleanup errors
       }
     }
 
-    await atomicWriteJson(INDEX_FILE, { sessions: retained });
+    await atomicWriteJson(this.indexFile, { sessions: retained });
     return deleted;
   }
 
@@ -205,13 +215,13 @@ export class SessionPersistence {
       index.sessions.push(entry);
     }
 
-    await atomicWriteJson(INDEX_FILE, index);
+    await atomicWriteJson(this.indexFile, index);
   }
 
   private async loadIndex(): Promise<SessionIndex> {
     await this.init();
     try {
-      const content = await fs.readFile(INDEX_FILE, 'utf-8');
+      const content = await fs.readFile(this.indexFile, 'utf-8');
       const parsed = JSON.parse(content) as SessionIndex;
       return parsed && Array.isArray(parsed.sessions) ? parsed : { sessions: [] };
     } catch {
