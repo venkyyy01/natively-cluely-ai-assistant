@@ -40,6 +40,25 @@ export function initializeIpcHandlers(appState: AppState): void {
   },
 });
 
+  const getInferenceLlmHelper = () => {
+    try {
+      const coordinator = (appState as { getCoordinator?: () => unknown }).getCoordinator?.() as
+        | { getSupervisor?: (name: string) => unknown }
+        | undefined;
+      const supervisor = coordinator?.getSupervisor?.('inference') as
+        | { getLLMHelper?: () => unknown }
+        | undefined;
+      const llmHelper = supervisor?.getLLMHelper?.();
+      if (llmHelper) {
+        return llmHelper as ReturnType<typeof appState.processingHelper.getLLMHelper>;
+      }
+    } catch {
+      // Fall back to the legacy AppState path until the full migration lands.
+    }
+
+    return appState.processingHelper.getLLMHelper();
+  };
+
 safeHandleValidated("renderer:log-error", (args) => [parseIpcInput(ipcSchemas.rendererLogPayload, args[0], 'renderer:log-error')] as const, async (_, payload) => {
     try {
       console.error('[RendererError]', JSON.stringify(payload));
@@ -170,7 +189,7 @@ safeHandleValidated("renderer:log-error", (args) => [parseIpcInput(ipcSchemas.re
   // Generate suggestion from transcript - Natively-style text-only reasoning
   safeHandleValidated("generate-suggestion", (args) => parseIpcInput(ipcSchemas.generateSuggestionArgs, args, 'generate-suggestion'), async (_event, context, lastQuestion) => {
     try {
-      const suggestion = await appState.processingHelper.getLLMHelper().generateSuggestion(context, lastQuestion)
+      const suggestion = await getInferenceLlmHelper().generateSuggestion(context, lastQuestion)
       return ok({ suggestion })
     } catch (error: any) {
       return fail('SUGGESTION_GENERATION_FAILED', error, 'Failed to generate suggestion')
@@ -192,7 +211,7 @@ safeHandleValidated("renderer:log-error", (args) => [parseIpcInput(ipcSchemas.re
       return fail('PATH_NOT_ALLOWED', new Error('Path not allowed'), 'Path not allowed');
     }
     try {
-      const result = await appState.processingHelper.getLLMHelper().analyzeImageFiles([resolved])
+      const result = await getInferenceLlmHelper().analyzeImageFiles([resolved])
       return ok(result)
     } catch (error: any) {
       return fail('IMAGE_ANALYSIS_FAILED', error, 'Failed to analyze image file')
@@ -201,7 +220,7 @@ safeHandleValidated("renderer:log-error", (args) => [parseIpcInput(ipcSchemas.re
 
   safeHandleValidated("gemini-chat", (args) => parseIpcInput(ipcSchemas.geminiChatArgs, args, 'gemini-chat'), async (event, message, imagePaths, context, options) => {
     try {
-      const result = await appState.processingHelper.getLLMHelper().chatWithGemini(message, imagePaths, context, options?.skipSystemPrompt);
+      const result = await getInferenceLlmHelper().chatWithGemini(message, imagePaths, context, options?.skipSystemPrompt);
 
       console.log(`[IPC] gemini - chat response: `, result ? result.substring(0, 50) : "(empty)");
 
@@ -243,7 +262,7 @@ safeHandleValidated("renderer:log-error", (args) => [parseIpcInput(ipcSchemas.re
   safeHandleValidated("gemini-chat-stream", (args) => parseIpcInput(ipcSchemas.geminiChatArgs, args, 'gemini-chat-stream'), async (event, message, imagePaths, context, options) => {
     try {
       console.log("[IPC] gemini-chat-stream started using LLMHelper.streamChat");
-      const llmHelper = appState.processingHelper.getLLMHelper();
+      const llmHelper = getInferenceLlmHelper();
 
       // Update IntelligenceManager with USER message immediately
       const intelligenceManager = appState.getIntelligenceManager();
@@ -316,7 +335,7 @@ safeHandleValidated("delete-meeting", (args) => [parseIpcInput(ipcSchemas.provid
 // LLM Model Management Handlers
   safeHandle("get-current-llm-config", async () => {
     try {
-      const llmHelper = appState.processingHelper.getLLMHelper();
+      const llmHelper = getInferenceLlmHelper();
       return ok({
         provider: llmHelper.getCurrentProvider(),
         model: llmHelper.getCurrentModel(),
@@ -329,7 +348,7 @@ safeHandleValidated("delete-meeting", (args) => [parseIpcInput(ipcSchemas.provid
 
   safeHandle("get-available-ollama-models", async () => {
     try {
-      const llmHelper = appState.processingHelper.getLLMHelper();
+      const llmHelper = getInferenceLlmHelper();
       const models = await llmHelper.getOllamaModels();
       return ok(models);
     } catch (error: any) {
@@ -339,7 +358,7 @@ safeHandleValidated("delete-meeting", (args) => [parseIpcInput(ipcSchemas.provid
 
   safeHandleValidated("switch-to-ollama", (args) => parseIpcInput(ipcSchemas.ollamaSwitchArgs, args, 'switch-to-ollama'), async (_, model, url) => {
     try {
-      const llmHelper = appState.processingHelper.getLLMHelper();
+      const llmHelper = getInferenceLlmHelper();
       await llmHelper.switchToOllama(model, url);
       return { success: true };
     } catch (error: any) {
@@ -350,7 +369,7 @@ safeHandleValidated("delete-meeting", (args) => [parseIpcInput(ipcSchemas.provid
 
   safeHandle("force-restart-ollama", async () => {
     try {
-      const llmHelper = appState.processingHelper.getLLMHelper();
+      const llmHelper = getInferenceLlmHelper();
       const restarted = await llmHelper.forceRestartOllama();
       return ok({ restarted });
     } catch (error: any) {
@@ -362,7 +381,7 @@ safeHandleValidated("delete-meeting", (args) => [parseIpcInput(ipcSchemas.provid
   safeHandle('restart-ollama', async () => {
     try {
       // First try to kill it if it's running
-      await appState.processingHelper.getLLMHelper().forceRestartOllama();
+      await getInferenceLlmHelper().forceRestartOllama();
       
       // The forceRestartOllama now calls OllamaManager.getInstance().init() internally
       // so we don't need to do it again here.
@@ -386,7 +405,7 @@ safeHandleValidated("delete-meeting", (args) => [parseIpcInput(ipcSchemas.provid
 
   safeHandleValidated("switch-to-gemini", (args) => parseIpcInput(ipcSchemas.providerSwitchGeminiArgs, args, 'switch-to-gemini'), async (_, apiKey, modelId) => {
     try {
-      const llmHelper = appState.processingHelper.getLLMHelper();
+      const llmHelper = getInferenceLlmHelper();
       await llmHelper.switchToGemini(apiKey, modelId);
 
       // Persist API key if provided
@@ -409,7 +428,7 @@ safeHandleValidated("delete-meeting", (args) => [parseIpcInput(ipcSchemas.provid
       CredentialsManager.getInstance().setGeminiApiKey(apiKey);
 
       // Also update the LLMHelper immediately
-      const llmHelper = appState.processingHelper.getLLMHelper();
+      const llmHelper = getInferenceLlmHelper();
       llmHelper.setApiKey(apiKey);
 
       // Re-init IntelligenceManager
@@ -428,7 +447,7 @@ safeHandleValidated("delete-meeting", (args) => [parseIpcInput(ipcSchemas.provid
       CredentialsManager.getInstance().setGroqApiKey(apiKey);
 
       // Also update the LLMHelper immediately
-      const llmHelper = appState.processingHelper.getLLMHelper();
+      const llmHelper = getInferenceLlmHelper();
       llmHelper.setGroqApiKey(apiKey);
 
       // Re-init IntelligenceManager
@@ -446,7 +465,7 @@ safeHandleValidated("delete-meeting", (args) => [parseIpcInput(ipcSchemas.provid
       const { CredentialsManager } = require('./services/CredentialsManager');
       CredentialsManager.getInstance().setCerebrasApiKey(apiKey);
 
-      const llmHelper = appState.processingHelper.getLLMHelper();
+      const llmHelper = getInferenceLlmHelper();
       llmHelper.setCerebrasApiKey(apiKey);
 
       appState.getIntelligenceManager().initializeLLMs();
@@ -464,7 +483,7 @@ safeHandleValidated("delete-meeting", (args) => [parseIpcInput(ipcSchemas.provid
       CredentialsManager.getInstance().setOpenaiApiKey(apiKey);
 
       // Also update the LLMHelper immediately
-      const llmHelper = appState.processingHelper.getLLMHelper();
+      const llmHelper = getInferenceLlmHelper();
       llmHelper.setOpenaiApiKey(apiKey);
 
       // Re-init IntelligenceManager
@@ -483,7 +502,7 @@ safeHandleValidated("delete-meeting", (args) => [parseIpcInput(ipcSchemas.provid
       CredentialsManager.getInstance().setClaudeApiKey(apiKey);
 
       // Also update the LLMHelper immediately
-      const llmHelper = appState.processingHelper.getLLMHelper();
+      const llmHelper = getInferenceLlmHelper();
       llmHelper.setClaudeApiKey(apiKey);
 
       // Re-init IntelligenceManager
@@ -546,7 +565,7 @@ safeHandleValidated("delete-meeting", (args) => [parseIpcInput(ipcSchemas.provid
         throw new Error("Provider not found");
       }
 
-      const llmHelper = appState.processingHelper.getLLMHelper();
+      const llmHelper = getInferenceLlmHelper();
       await llmHelper.switchToCustom(provider);
 
       // Re-init IntelligenceManager (optional, but good for consistency)
@@ -601,7 +620,7 @@ safeHandleValidated("delete-meeting", (args) => [parseIpcInput(ipcSchemas.provid
         throw new Error("Provider not found");
       }
 
-      const llmHelper = appState.processingHelper.getLLMHelper();
+      const llmHelper = getInferenceLlmHelper();
       await llmHelper.switchToCurl(provider);
 
       // Re-init IntelligenceManager (optional, but good for consistency)
@@ -1096,7 +1115,7 @@ safeHandleValidated("delete-meeting", (args) => [parseIpcInput(ipcSchemas.provid
 
   safeHandle("get-fast-response-config", () => {
     try {
-      const llmHelper = appState.processingHelper.getLLMHelper();
+      const llmHelper = getInferenceLlmHelper();
       return ok(llmHelper.getFastResponseConfig());
     } catch (error: any) {
       return fail('FAST_RESPONSE_CONFIG_READ_FAILED', error, 'Failed to get Fast Response config');
@@ -1106,7 +1125,7 @@ safeHandleValidated("delete-meeting", (args) => [parseIpcInput(ipcSchemas.provid
   safeHandleValidated("set-fast-response-config", (args) => [parseIpcInput(ipcSchemas.fastResponseConfig, args[0], 'set-fast-response-config')] as const, (_, config) => {
     try {
       const { CredentialsManager } = require('./services/CredentialsManager');
-      const llmHelper = appState.processingHelper.getLLMHelper();
+      const llmHelper = getInferenceLlmHelper();
       llmHelper.setFastResponseConfig(config as any);
       CredentialsManager.getInstance().setFastResponseConfig(config as any);
 
@@ -1122,7 +1141,7 @@ safeHandleValidated("delete-meeting", (args) => [parseIpcInput(ipcSchemas.provid
 
   safeHandleValidated("set-model", (args) => [parseIpcInput(ipcSchemas.modelId, args[0], 'set-model')] as const, async (_, modelId) => {
     try {
-      const llmHelper = appState.processingHelper.getLLMHelper();
+      const llmHelper = getInferenceLlmHelper();
       const { CredentialsManager } = require('./services/CredentialsManager');
       const cm = CredentialsManager.getInstance();
 
@@ -1158,7 +1177,7 @@ safeHandleValidated("delete-meeting", (args) => [parseIpcInput(ipcSchemas.provid
       cm.setDefaultModel(modelId);
 
       // Also update the runtime model
-      const llmHelper = appState.processingHelper.getLLMHelper();
+      const llmHelper = getInferenceLlmHelper();
       const curlProviders = cm.getCurlProviders();
       const legacyProviders = cm.getCustomProviders() || [];
       const allProviders = [...curlProviders, ...legacyProviders];

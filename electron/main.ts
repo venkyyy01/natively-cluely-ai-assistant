@@ -4,7 +4,14 @@ import { randomUUID } from "node:crypto"
 import path from "path"
 import fs from "fs"
 import fsPromises from "fs/promises"
-import { syncOptimizationFlagsFromSettings } from "./config/optimizations"
+import { isSupervisorRuntimeEnabled, syncOptimizationFlagsFromSettings } from "./config/optimizations"
+import { AudioSupervisor } from "./runtime/AudioSupervisor"
+import { SttSupervisor } from "./runtime/SttSupervisor"
+import { InferenceSupervisor } from "./runtime/InferenceSupervisor"
+import { StealthSupervisor } from "./runtime/StealthSupervisor"
+import { RecoverySupervisor } from "./runtime/RecoverySupervisor"
+import { getPerformanceInstrumentation, type PerformanceInstrumentation } from "./runtime/PerformanceInstrumentation"
+import { RuntimeCoordinator } from "./runtime/RuntimeCoordinator"
 import { StealthManager } from "./stealth/StealthManager"
 import { createMacosVirtualDisplayCoordinator, resolveMacosVirtualDisplayHelperPath } from "./stealth/macosVirtualDisplayIntegration"
 if (!app.isPackaged) {
@@ -307,6 +314,8 @@ export class AppState {
   private screenshotHelper: ScreenshotHelper
   public processingHelper: ProcessingHelper
   private accelerationManager: import('./services/AccelerationManager').AccelerationManager | null = null
+  private readonly performanceInstrumentation: PerformanceInstrumentation
+  private readonly runtimeCoordinator: RuntimeCoordinator
 
   private intelligenceManager: IntelligenceManager
   private themeManager: ThemeManager
@@ -487,6 +496,8 @@ this.stealthManager.on('stealth-degraded', (warnings: string[]) => {
 // 3. Initialize other helpers
 this.screenshotHelper = new ScreenshotHelper(this.view)
 this.processingHelper = new ProcessingHelper(this)
+this.performanceInstrumentation = getPerformanceInstrumentation()
+this.runtimeCoordinator = new RuntimeCoordinator(this)
 
 this.sttReconnector = new STTReconnector(async (speaker) => {
   if (!this.isMeetingActive) return;
@@ -573,6 +584,7 @@ this.checkpointer = new MeetingCheckpointer(
   DatabaseManager.getInstance(),
   () => this.intelligenceManager.getSessionTracker()
 );
+this.registerRuntimeSupervisors()
 
 // Initialize ThemeManager
 this.themeManager = ThemeManager.getInstance()
@@ -600,6 +612,95 @@ this.setupIntelligenceEvents()
     // --- NEW SYSTEM AUDIO PIPELINE (SOX + NODE GOOGLE STT) ---
     // LAZY INIT: Do not setup pipeline here to prevent launch volume surge.
     // this.setupSystemAudioPipeline()
+  }
+
+  private registerRuntimeSupervisors(): void {
+    const bus = this.runtimeCoordinator.getBus()
+
+    this.runtimeCoordinator.registerSupervisor(new AudioSupervisor({
+      bus,
+      delegates: {
+        startCapture: () => {
+          this.setupSystemAudioPipeline()
+        },
+        stopCapture: () => {
+          this.systemAudioCapture?.stop()
+          this.microphoneCapture?.stop()
+        },
+        onError: async (error) => {
+          this.broadcast('meeting-audio-error', error.message)
+        },
+      },
+      logger: { warn: console.warn },
+    }))
+
+    this.runtimeCoordinator.registerSupervisor(new SttSupervisor({
+      bus,
+      delegates: {
+        startSpeaker: async (speaker) => {
+          if (speaker === 'interviewer') {
+            if (!this.googleSTT) {
+              this.googleSTT = this.createSTTProvider('interviewer')
+              if (this.systemAudioCapture) {
+                const rate = this.systemAudioCapture.getSampleRate()
+                this.googleSTT.setSampleRate(rate)
+                safeSetAudioChannelCount(this.googleSTT, 1)
+              }
+            }
+
+            this.googleSTT?.start()
+            return
+          }
+
+          if (!this.googleSTT_User) {
+            this.googleSTT_User = this.createSTTProvider('user')
+            if (this.microphoneCapture) {
+              const rate = this.microphoneCapture.getSampleRate() || 48000
+              this.googleSTT_User.setSampleRate(rate)
+              safeSetAudioChannelCount(this.googleSTT_User, 1)
+            }
+          }
+
+          this.googleSTT_User?.start()
+        },
+        stopSpeaker: async (speaker) => {
+          this.cleanupSttProvider(speaker)
+        },
+        reconnectSpeaker: async (speaker) => {
+          await this.reconnectSpeakerStt(speaker)
+        },
+        onError: async (speaker, error) => {
+          this.broadcast('meeting-audio-error', `Transcription connection failed for ${speaker}: ${error.message}`)
+        },
+      },
+      logger: { warn: console.warn },
+    }))
+
+    this.runtimeCoordinator.registerSupervisor(new InferenceSupervisor({
+      bus,
+      delegate: {
+        getLLMHelper: () => this.processingHelper.getLLMHelper(),
+      },
+    }))
+
+    this.runtimeCoordinator.registerSupervisor(new StealthSupervisor(
+      {
+        setEnabled: (enabled) => {
+          this.stealthManager.setEnabled(enabled)
+        },
+        isEnabled: () => this.getUndetectable(),
+      },
+      bus,
+      { logger: { warn: console.warn } },
+    ))
+
+    this.runtimeCoordinator.registerSupervisor(new RecoverySupervisor({
+      bus,
+      delegate: {
+        start: () => {},
+        stop: () => {},
+      },
+    }))
   }
 
   private broadcast(channel: string, ...args: any[]): void {
@@ -1561,6 +1662,28 @@ try {
   }
 
   public async startMeeting(metadata?: any): Promise<void> {
+    const startedAt = Date.now()
+
+    try {
+      if (isSupervisorRuntimeEnabled()) {
+        await this.runtimeCoordinator.activate(metadata)
+      } else {
+        await this.startMeetingLegacy(metadata)
+      }
+
+      this.performanceInstrumentation.recordDuration('meeting.activation', startedAt, {
+        runtime: isSupervisorRuntimeEnabled() ? 'coordinator' : 'legacy',
+      })
+    } catch (error) {
+      this.performanceInstrumentation.recordEvent('meeting.activation.failed', {
+        runtime: isSupervisorRuntimeEnabled() ? 'coordinator' : 'legacy',
+        error: error instanceof Error ? error.message : String(error),
+      })
+      throw error
+    }
+  }
+
+  public async startMeetingLegacy(metadata?: any): Promise<void> {
     console.log('[Main] Starting Meeting...', metadata);
     this.audioRecoveryAttempts = 0;
     this.audioRecoveryBackoffMs = 5000;
@@ -1734,6 +1857,28 @@ try {
   }
 
   public async endMeeting(): Promise<void> {
+    const startedAt = Date.now()
+
+    try {
+      if (isSupervisorRuntimeEnabled()) {
+        await this.runtimeCoordinator.deactivate()
+      } else {
+        await this.endMeetingLegacy()
+      }
+
+      this.performanceInstrumentation.recordDuration('meeting.deactivation', startedAt, {
+        runtime: isSupervisorRuntimeEnabled() ? 'coordinator' : 'legacy',
+      })
+    } catch (error) {
+      this.performanceInstrumentation.recordEvent('meeting.deactivation.failed', {
+        runtime: isSupervisorRuntimeEnabled() ? 'coordinator' : 'legacy',
+        error: error instanceof Error ? error.message : String(error),
+      })
+      throw error
+    }
+  }
+
+  public async endMeetingLegacy(): Promise<void> {
     console.log('[Main] Ending Meeting...');
     this.startAbortController?.abort();
     this.startAbortController = null;
@@ -2486,6 +2631,7 @@ try {
     if (this.isUndetectable === state) return;
 
     console.log(`[Stealth] setUndetectable(${state}) called`);
+    const startedAt = Date.now();
 
     this.isUndetectable = state
     this.stealthManager.setEnabled(state)
@@ -2502,6 +2648,9 @@ try {
 
     // Broadcast state change to all relevant windows
     this._broadcastToAllWindows('undetectable-changed', state);
+    this.performanceInstrumentation.recordDuration('stealth.toggle', startedAt, {
+      enabled: state,
+    });
 
     // --- STEALTH MODE LOGIC (restored from working version a820380) ---
     if (process.platform === 'darwin') {
@@ -2565,6 +2714,14 @@ try {
 
   public getUndetectable(): boolean {
     return this.isUndetectable
+  }
+
+  public getCoordinator(): RuntimeCoordinator {
+    return this.runtimeCoordinator
+  }
+
+  public getPerformanceInstrumentation(): PerformanceInstrumentation {
+    return this.performanceInstrumentation
   }
 
   public setConsciousModeEnabled(enabled: boolean): boolean {

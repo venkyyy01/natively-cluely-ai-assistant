@@ -1,6 +1,11 @@
 import { describe, it, beforeEach } from 'node:test';
 import assert from 'node:assert';
-import { setOptimizationFlags, isOptimizationActive, DEFAULT_OPTIMIZATION_FLAGS } from '../config/optimizations';
+import {
+  setOptimizationFlags,
+  isOptimizationActive,
+  DEFAULT_OPTIMIZATION_FLAGS,
+  isSupervisorRuntimeEnabled,
+} from '../config/optimizations';
 
 describe('Acceleration Mode Integration', () => {
   beforeEach(() => {
@@ -40,5 +45,13 @@ describe('Acceleration Mode Integration', () => {
     assert.strictEqual(isOptimizationActive('usePromptCompiler'), true);
     assert.strictEqual(isOptimizationActive('useStreamManager'), false);
     assert.strictEqual(isOptimizationActive('useEnhancedCache'), true);
+  });
+
+  it('should keep supervisor runtime disabled by default until explicitly enabled', () => {
+    setOptimizationFlags(DEFAULT_OPTIMIZATION_FLAGS);
+    assert.strictEqual(isSupervisorRuntimeEnabled(), false);
+
+    setOptimizationFlags({ enableSupervisorRuntime: true });
+    assert.strictEqual(isSupervisorRuntimeEnabled(), true);
   });
 });

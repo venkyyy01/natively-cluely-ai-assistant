@@ -1,4 +1,5 @@
 import { ProviderCapabilityClass } from './providerCapability';
+import { getPerformanceInstrumentation } from '../runtime/PerformanceInstrumentation';
 
 export type AnswerRoute = 'fast_standard_answer' | 'enriched_standard_answer' | 'conscious_answer' | 'manual_answer' | 'follow_up_refinement';
 export type TrackedProviderCapabilityClass = ProviderCapabilityClass | 'non_streaming_custom';
@@ -143,6 +144,20 @@ export class AnswerLatencyTracker {
     if (!snapshot) return undefined;
     snapshot.completed = true;
     snapshot.marks.completedAt = Date.now();
+
+    const startedAt = snapshot.marks.startedAt;
+    const firstVisibleAnswer = snapshot.marks.firstVisibleAnswer;
+    if (startedAt !== undefined && firstVisibleAnswer !== undefined) {
+      getPerformanceInstrumentation().recordDuration('answer.firstVisible', startedAt, {
+        requestId: snapshot.requestId,
+        route: snapshot.route,
+        capability: snapshot.capability,
+        attemptedRoute: snapshot.attemptedRoute,
+        fallbackOccurred: snapshot.fallbackOccurred ?? false,
+        transcriptRevision: snapshot.transcriptRevision,
+      });
+    }
+
     return this.createSnapshotCopy(snapshot);
   }
 

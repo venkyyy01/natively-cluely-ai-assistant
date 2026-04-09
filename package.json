@@ -19,6 +19,7 @@
     "app:build:arm64": "node scripts/ensure-electron-native-deps.js && npm run build && npm run build:native:current && npm run prepare:macos:virtual-display-helper && tsc -p electron/tsconfig.json && electron-builder --mac --arm64",
     "app:build:x64": "node scripts/ensure-electron-native-deps.js && npm run build && npm run build:native:current && npm run prepare:macos:virtual-display-helper && tsc -p electron/tsconfig.json && electron-builder --mac --x64",
     "test:electron": "rimraf dist-electron/electron/tests && tsc -p electron/tsconfig.json && node --test dist-electron/electron/tests/*.test.js",
+    "bench:baseline": "rimraf dist-electron/electron/tests && tsc -p electron/tsconfig.json && node scripts/run-baseline-benchmark.js",
     "eval:conscious": "tsc -p electron/tsconfig.json && node scripts/run-conscious-eval.js",
     "test:electron:coverage": "rimraf dist-electron/electron/tests && tsc -p electron/tsconfig.json && node --test --experimental-test-coverage dist-electron/electron/tests/*.test.js",
     "test:renderer": "npm --prefix renderer test",
