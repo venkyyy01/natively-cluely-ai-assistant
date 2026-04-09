@@ -6,6 +6,7 @@ export type SttSpeaker = 'interviewer' | 'user';
 export interface SttSupervisorDelegates {
   startSpeaker: (speaker: SttSpeaker) => Promise<void> | void;
   stopSpeaker: (speaker: SttSpeaker) => Promise<void> | void;
+  onStealthFault?: (reason: string) => Promise<void> | void;
   setRecognitionLanguage?: (language: string) => Promise<void> | void;
   reconnectSpeaker?: (speaker: SttSpeaker) => Promise<void> | void;
   onError?: (speaker: SttSpeaker, error: Error) => Promise<void> | void;
@@ -29,6 +30,9 @@ export class SttSupervisor implements ISupervisor {
     this.bus = options.bus;
     this.delegates = options.delegates;
     this.logger = options.logger ?? console;
+    this.bus.subscribe('stealth:fault', async (event) => {
+      await this.handleStealthFault(event.reason);
+    });
   }
 
   getState(): SupervisorState {
@@ -96,5 +100,13 @@ export class SttSupervisor implements ISupervisor {
 
   async setRecognitionLanguage(language: string): Promise<void> {
     await this.delegates.setRecognitionLanguage?.(language);
+  }
+
+  private async handleStealthFault(reason: string): Promise<void> {
+    if (this.state !== 'running') {
+      return;
+    }
+
+    await this.delegates.onStealthFault?.(reason);
   }
 }

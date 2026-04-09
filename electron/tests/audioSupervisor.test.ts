@@ -106,3 +106,50 @@ test('AudioSupervisor forwards audio test helpers through its delegate', async (
 
   assert.deepEqual(calls, ['startAudioTest:mic-1', 'stopAudioTest']);
 });
+
+test('AudioSupervisor sheds non-essential work on stealth faults while running', async () => {
+  const calls: string[] = [];
+  const bus = new SupervisorBus({ error() {} });
+  const supervisor = new AudioSupervisor({
+    bus,
+    delegates: {
+      async startCapture() {
+        calls.push('start');
+      },
+      async stopCapture() {
+        calls.push('stop');
+      },
+      async onStealthFault(reason) {
+        calls.push(`stealth-fault:${reason}`);
+      },
+    },
+  });
+
+  await supervisor.start();
+  await bus.emit({ type: 'stealth:fault', reason: 'window_visible_to_capture' });
+
+  assert.deepEqual(calls, ['start', 'stealth-fault:window_visible_to_capture']);
+});
+
+test('AudioSupervisor ignores stealth faults while not running', async () => {
+  const calls: string[] = [];
+  const bus = new SupervisorBus({ error() {} });
+  const supervisor = new AudioSupervisor({
+    bus,
+    delegates: {
+      async startCapture() {},
+      async stopCapture() {},
+      async onStealthFault(reason) {
+        calls.push(`stealth-fault:${reason}`);
+      },
+    },
+  });
+
+  await bus.emit({ type: 'stealth:fault', reason: 'window_visible_to_capture' });
+  assert.deepEqual(calls, []);
+
+  await supervisor.start();
+  await supervisor.stop();
+  await bus.emit({ type: 'stealth:fault', reason: 'window_visible_to_capture' });
+  assert.deepEqual(calls, []);
+});

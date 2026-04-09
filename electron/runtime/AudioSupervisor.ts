@@ -4,6 +4,7 @@ import type { ISupervisor, SupervisorState } from './types';
 export interface AudioSupervisorDelegates {
   startCapture: () => Promise<void> | void;
   stopCapture: () => Promise<void> | void;
+  onStealthFault?: (reason: string) => Promise<void> | void;
   startAudioTest?: (deviceId?: string) => Promise<void> | void;
   stopAudioTest?: () => Promise<void> | void;
   onChunk?: (chunk: Buffer) => Promise<void> | void;
@@ -29,6 +30,9 @@ export class AudioSupervisor implements ISupervisor {
     this.bus = options.bus;
     this.delegates = options.delegates;
     this.logger = options.logger ?? console;
+    this.bus.subscribe('stealth:fault', async (event) => {
+      await this.handleStealthFault(event.reason);
+    });
   }
 
   getState(): SupervisorState {
@@ -102,5 +106,13 @@ export class AudioSupervisor implements ISupervisor {
 
   async stopAudioTest(): Promise<void> {
     await this.delegates.stopAudioTest?.();
+  }
+
+  private async handleStealthFault(reason: string): Promise<void> {
+    if (this.state !== 'running') {
+      return;
+    }
+
+    await this.delegates.onStealthFault?.(reason);
   }
 }

@@ -106,3 +106,50 @@ test('SttSupervisor forwards recognition language updates through its delegate',
 
   assert.deepEqual(calls, ['en-US']);
 });
+
+test('SttSupervisor sheds non-essential work on stealth faults while running', async () => {
+  const calls: string[] = [];
+  const bus = new SupervisorBus({ error() {} });
+  const supervisor = new SttSupervisor({
+    bus,
+    delegates: {
+      async startSpeaker(speaker) {
+        calls.push(`start:${speaker}`);
+      },
+      async stopSpeaker(speaker) {
+        calls.push(`stop:${speaker}`);
+      },
+      async onStealthFault(reason) {
+        calls.push(`stealth-fault:${reason}`);
+      },
+    },
+  });
+
+  await supervisor.start();
+  await bus.emit({ type: 'stealth:fault', reason: 'stealth heartbeat missed' });
+
+  assert.deepEqual(calls, ['start:interviewer', 'start:user', 'stealth-fault:stealth heartbeat missed']);
+});
+
+test('SttSupervisor ignores stealth faults while not running', async () => {
+  const calls: string[] = [];
+  const bus = new SupervisorBus({ error() {} });
+  const supervisor = new SttSupervisor({
+    bus,
+    delegates: {
+      async startSpeaker() {},
+      async stopSpeaker() {},
+      async onStealthFault(reason) {
+        calls.push(`stealth-fault:${reason}`);
+      },
+    },
+  });
+
+  await bus.emit({ type: 'stealth:fault', reason: 'window_visible_to_capture' });
+  assert.deepEqual(calls, []);
+
+  await supervisor.start();
+  await supervisor.stop();
+  await bus.emit({ type: 'stealth:fault', reason: 'window_visible_to_capture' });
+  assert.deepEqual(calls, []);
+});
