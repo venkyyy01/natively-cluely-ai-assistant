@@ -162,6 +162,55 @@ test('RuntimeCoordinator manages configured supervisors during activate/deactiva
   ]);
 });
 
+test('RuntimeCoordinator default lifecycle includes inference lane', async () => {
+  const calls: string[] = [];
+  const coordinator = new RuntimeCoordinator(
+    {
+      async startMeetingLegacy(_metadata, mode) {
+        calls.push(`delegate:start:${mode}`);
+      },
+      async endMeetingLegacy(mode) {
+        calls.push(`delegate:stop:${mode}`);
+      },
+    },
+    {
+      featureFlagReader: () => true,
+      logger: { warn() {} },
+    },
+  );
+
+  for (const name of ['recovery', 'audio', 'stt', 'inference'] as const) {
+    coordinator.registerSupervisor({
+      name,
+      async start() {
+        calls.push(`start:${name}`);
+      },
+      async stop() {
+        calls.push(`stop:${name}`);
+      },
+      getState() {
+        return 'idle';
+      },
+    });
+  }
+
+  await coordinator.activate({ source: 'test' });
+  await coordinator.deactivate();
+
+  assert.deepEqual(calls, [
+    'delegate:start:coordinator',
+    'start:recovery',
+    'start:audio',
+    'start:stt',
+    'start:inference',
+    'stop:inference',
+    'stop:stt',
+    'stop:audio',
+    'stop:recovery',
+    'delegate:stop:coordinator',
+  ]);
+});
+
 test('RuntimeCoordinator starts supervisors in order and stops them in reverse order', async () => {
   const calls: string[] = [];
   const coordinator = new RuntimeCoordinator(
