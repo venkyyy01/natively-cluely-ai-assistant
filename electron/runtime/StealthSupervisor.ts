@@ -1,5 +1,12 @@
 import type { SupervisorBus } from './SupervisorBus';
 import type { ISupervisor, StealthState, SupervisorState } from './types';
+import {
+  canArmStealth,
+  canDisableStealth,
+  canFaultStealth,
+  transitionStealthState,
+} from '../stealth/StealthStateMachine';
+import { StealthArmController } from '../stealth/StealthArmController';
 
 export interface StealthDelegate {
   setEnabled(enabled: boolean): void | Promise<void>;
@@ -11,6 +18,8 @@ export interface StealthSupervisorOptions {
   bus?: SupervisorBus;
   logger?: Pick<Console, 'warn'>;
   verifier?: () => boolean | Promise<boolean>;
+  startHeartbeat?: () => Promise<void> | void;
+  stopHeartbeat?: () => Promise<void> | void;
 }
 
 export class StealthSupervisor implements ISupervisor {
@@ -18,12 +27,20 @@ export class StealthSupervisor implements ISupervisor {
   private state: SupervisorState = 'idle';
   private stealthState: StealthState = 'OFF';
   private pendingEnabled = false;
+  private readonly armController: StealthArmController;
 
   constructor(
     private readonly delegate: StealthDelegate,
     private readonly bus: SupervisorBus,
     private readonly options: StealthSupervisorOptions = {},
-  ) {}
+  ) {
+    this.armController = new StealthArmController({
+      setEnabled: (enabled) => this.delegate.setEnabled(enabled),
+      verifyStealthState: () => this.verifyStealth(),
+      startHeartbeat: this.options.startHeartbeat,
+      stopHeartbeat: this.options.stopHeartbeat,
+    });
+  }
 
   getState(): SupervisorState {
     return this.state;
@@ -68,7 +85,7 @@ export class StealthSupervisor implements ISupervisor {
   }
 
   async reportFault(error: unknown): Promise<void> {
-    if (this.stealthState === 'FAULT') {
+    if (!canFaultStealth(this.stealthState)) {
       return;
     }
 
@@ -90,21 +107,15 @@ export class StealthSupervisor implements ISupervisor {
   }
 
   private async armStealth(): Promise<void> {
-    if (this.stealthState === 'FULL_STEALTH' || this.stealthState === 'ARMING') {
+    if (!canArmStealth(this.stealthState)) {
       return;
     }
 
-    const from = this.stealthState;
-    await this.transitionTo('ARMING');
+    await this.transitionTo(transitionStealthState(this.stealthState, 'arm-requested'));
 
     try {
-      await this.delegate.setEnabled(true);
-      const verified = await this.verifyStealth();
-      if (!verified) {
-        throw new Error('stealth verification failed');
-      }
-
-      await this.transitionTo('FULL_STEALTH');
+      await this.armController.arm();
+      await this.transitionTo(transitionStealthState(this.stealthState, 'arm-succeeded'));
       this.pendingEnabled = true;
     } catch (error) {
       await this.failClosed(error);
@@ -113,21 +124,20 @@ export class StealthSupervisor implements ISupervisor {
   }
 
   private async disableStealth(): Promise<void> {
-    if (this.stealthState === 'OFF') {
+    if (!canDisableStealth(this.stealthState)) {
       this.pendingEnabled = false;
       return;
     }
 
-    const from = this.stealthState;
     try {
-      await this.delegate.setEnabled(false);
+      await this.armController.disarm();
     } catch (error) {
       await this.failClosed(error);
       throw error;
     }
 
     this.pendingEnabled = false;
-    await this.transitionTo('OFF');
+    await this.transitionTo(transitionStealthState(this.stealthState, 'disabled'));
   }
 
   private async verifyStealth(): Promise<boolean> {
@@ -144,11 +154,13 @@ export class StealthSupervisor implements ISupervisor {
 
   private async failClosed(error: unknown): Promise<void> {
     const reason = error instanceof Error ? error.message : String(error);
-    await this.transitionTo('FAULT');
+    if (canFaultStealth(this.stealthState)) {
+      await this.transitionTo(transitionStealthState(this.stealthState, 'faulted'));
+    }
     this.pendingEnabled = false;
 
     try {
-      await this.delegate.setEnabled(false);
+      await this.armController.disarm();
     } catch (disableError) {
       this.options.logger?.warn('[StealthSupervisor] Failed to disable delegate after fault:', disableError);
     }

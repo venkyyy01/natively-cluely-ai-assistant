@@ -230,6 +230,8 @@
 
 **Goal:** Retarget IPC handlers from `appState.someMethod()` to supervisor APIs.
 
+**Status:** In progress. This branch migrated the meeting lifecycle handlers (`start-meeting`, `end-meeting`) and the first mechanical settings/email inference paths (`set-undetectable`, `set-ai-response-language`, `generate-followup-email`) onto coordinator/supervisor-backed access with legacy fallback preserved when the supervisor runtime is disabled.
+
 **Primary Files**
 - `electron/ipcHandlers.ts`
 - `electron/ipc/registerMeetingHandlers.ts`
@@ -266,6 +268,8 @@
 
 **Goal:** Encode legal stealth transitions and forbid silent degrade.
 
+**Status:** Done in this branch. `electron/stealth/StealthStateMachine.ts` now defines the legal transitions, `electron/tests/stealthStateMachine.test.ts` covers them directly, and `StealthSupervisor` delegates its state transitions through the extracted machine.
+
 **Primary Files**
 - `electron/stealth/StealthStateMachine.ts`
 - `electron/runtime/StealthSupervisor.ts`
@@ -281,6 +285,8 @@
 **Problem:** Invisible mode should not report active before the arm sequence completes.
 
 **Goal:** Build a formal arm sequence with readiness checks and heartbeat start.
+
+**Status:** Partially implemented in this branch. `electron/stealth/StealthArmController.ts` now owns the enable/verify/optional-heartbeat-start and disarm/optional-heartbeat-stop sequencing, and `StealthSupervisor` delegates the arm/disarm side effects through it. A real runtime heartbeat source is still missing, so the ticket remains open.
 
 **Primary Files**
 - `electron/stealth/StealthArmController.ts`

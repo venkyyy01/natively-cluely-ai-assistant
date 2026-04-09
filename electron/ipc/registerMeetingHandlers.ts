@@ -11,6 +11,20 @@ type RegisterMeetingHandlersDeps = {
   safeHandleValidated: SafeHandleValidated;
 };
 
+type RuntimeCoordinatorLike = {
+  shouldManageLifecycle?: () => boolean;
+  activate?: (metadata?: unknown) => Promise<void>;
+  deactivate?: () => Promise<void>;
+};
+
+function getRuntimeCoordinator(appState: AppState): RuntimeCoordinatorLike | null {
+  if (!('getCoordinator' in appState) || typeof appState.getCoordinator !== 'function') {
+    return null;
+  }
+
+  return appState.getCoordinator() as RuntimeCoordinatorLike;
+}
+
 export function registerMeetingHandlers({ appState, safeHandle, safeHandleValidated }: RegisterMeetingHandlersDeps): void {
   safeHandle('get-input-devices', async () => AudioDevices.getInputDevices());
 
@@ -33,7 +47,12 @@ export function registerMeetingHandlers({ appState, safeHandle, safeHandleValida
 
   safeHandleValidated('start-meeting', (args) => [parseIpcInput(ipcSchemas.startMeetingMetadata, args[0], 'start-meeting')] as const, async (_event, metadata) => {
     try {
-      await appState.startMeeting(metadata);
+      const coordinator = getRuntimeCoordinator(appState);
+      if (coordinator?.shouldManageLifecycle?.() && typeof coordinator.activate === 'function') {
+        await coordinator.activate(metadata);
+      } else {
+        await appState.startMeeting(metadata);
+      }
       return { success: true };
     } catch (error: any) {
       console.error('Error starting meeting:', error);
@@ -43,7 +62,12 @@ export function registerMeetingHandlers({ appState, safeHandle, safeHandleValida
 
   safeHandle('end-meeting', async () => {
     try {
-      await appState.endMeeting();
+      const coordinator = getRuntimeCoordinator(appState);
+      if (coordinator?.shouldManageLifecycle?.() && typeof coordinator.deactivate === 'function') {
+        await coordinator.deactivate();
+      } else {
+        await appState.endMeeting();
+      }
       return { success: true };
     } catch (error: any) {
       console.error('Error ending meeting:', error);

@@ -484,6 +484,239 @@ test('settings handlers validate inputs and normalize success contracts', async 
   });
 });
 
+test('meeting handlers prefer RuntimeCoordinator lifecycle methods when supervisor runtime is enabled', async () => {
+  const modulePath = require.resolve('../ipc/registerMeetingHandlers');
+  delete require.cache[modulePath];
+  const { registerMeetingHandlers } = await import('../ipc/registerMeetingHandlers');
+
+  const registry = createHandlerRegistry();
+  const calls: Array<{ type: string; payload?: unknown }> = [];
+  const coordinator = {
+    shouldManageLifecycle: () => true,
+    activate: async (metadata?: unknown) => {
+      calls.push({ type: 'activate', payload: metadata });
+    },
+    deactivate: async () => {
+      calls.push({ type: 'deactivate' });
+    },
+  };
+  const appState = {
+    getCoordinator: () => coordinator,
+    startMeeting: async (_metadata?: unknown) => {
+      calls.push({ type: 'startMeeting' });
+    },
+    endMeeting: async () => {
+      calls.push({ type: 'endMeeting' });
+    },
+    startAudioTest: () => {},
+    stopAudioTest: () => {},
+    setRecognitionLanguage: () => {},
+    getRAGManager: (): null => null,
+  };
+
+  registerMeetingHandlers({ appState: appState as any, ...registry } as any);
+
+  const metadata = { audio: { inputDeviceId: 'mic-1', outputDeviceId: 'speaker-1' } };
+  assert.deepEqual(await registry.handlers.get('start-meeting')?.({}, metadata), {
+    success: true,
+  });
+  assert.deepEqual(await registry.handlers.get('end-meeting')?.({}), {
+    success: true,
+  });
+
+  assert.deepEqual(calls, [
+    { type: 'activate', payload: metadata },
+    { type: 'deactivate' },
+  ]);
+});
+
+test('settings handlers prefer StealthSupervisor when supervisor runtime is enabled', async () => {
+  await withPatchedModules({
+    electron: {
+      app: {
+        getPath: () => '/mock/exe',
+        setLoginItemSettings: () => {},
+        getLoginItemSettings: () => ({ openAtLogin: false }),
+      },
+    },
+    '../services/CredentialsManager': {
+      CredentialsManager: {
+        getInstance: () => ({
+          setAiResponseLanguage: () => {},
+          getSttLanguage: () => 'en-US',
+          getAiResponseLanguage: () => 'en',
+        }),
+      },
+    },
+  }, async () => {
+    const modulePath = require.resolve('../ipc/registerSettingsHandlers');
+    delete require.cache[modulePath];
+    const { registerSettingsHandlers } = await import('../ipc/registerSettingsHandlers');
+    const registry = createHandlerRegistry();
+    const calls: string[] = [];
+    const stealthSupervisor = {
+      getState: () => 'idle',
+      start: async () => {
+        calls.push('start');
+      },
+      setEnabled: async (enabled: boolean) => {
+        calls.push(`setEnabled:${enabled}`);
+      },
+    };
+    const appState = {
+      processingHelper: { getLLMHelper: () => ({ setAiResponseLanguage: () => {} }) },
+      settingsWindowHelper: { toggleWindow: () => {}, closeWindow: () => {} },
+      getCoordinator: () => ({
+        shouldManageLifecycle: () => true,
+        getSupervisor: (name: string) => {
+          assert.equal(name, 'stealth');
+          return stealthSupervisor;
+        },
+      }),
+      setUndetectable: () => {
+        calls.push('legacy:setUndetectable');
+      },
+      setUndetectableAsync: async () => {
+        calls.push('legacy:setUndetectableAsync');
+      },
+      getUndetectable: () => true,
+      setDisguise: () => {},
+      getDisguise: () => 'activity',
+      setConsciousModeEnabled: () => true,
+      getConsciousModeEnabled: () => false,
+      setAccelerationModeEnabled: () => true,
+      getAccelerationModeEnabled: () => false,
+    };
+
+    registerSettingsHandlers({ appState: appState as any, ...registry } as any);
+
+    assert.deepEqual(await registry.handlers.get('set-undetectable')?.({}, true), {
+      success: true,
+      data: { enabled: true },
+    });
+    assert.deepEqual(calls, ['start', 'setEnabled:true']);
+  });
+});
+
+test('settings handlers prefer InferenceSupervisor LLM helper when supervisor runtime is enabled', async () => {
+  await withPatchedModules({
+    electron: {
+      app: {
+        getPath: () => '/mock/exe',
+        setLoginItemSettings: () => {},
+        getLoginItemSettings: () => ({ openAtLogin: false }),
+      },
+    },
+    '../services/CredentialsManager': {
+      CredentialsManager: {
+        getInstance: () => ({
+          setAiResponseLanguage: () => {},
+          getSttLanguage: () => 'en-US',
+          getAiResponseLanguage: () => 'en',
+        }),
+      },
+    },
+  }, async () => {
+    const modulePath = require.resolve('../ipc/registerSettingsHandlers');
+    delete require.cache[modulePath];
+    const { registerSettingsHandlers } = await import('../ipc/registerSettingsHandlers');
+    const registry = createHandlerRegistry();
+    const calls: string[] = [];
+    const appState = {
+      getCoordinator: () => ({
+        shouldManageLifecycle: () => true,
+        getSupervisor: (name: string) => {
+          assert.equal(name, 'inference');
+          return {
+            getLLMHelper: () => ({
+              setAiResponseLanguage: (language: string) => {
+                calls.push(`supervisor:${language}`);
+              },
+            }),
+          };
+        },
+      }),
+      processingHelper: {
+        getLLMHelper: () => ({
+          setAiResponseLanguage: (language: string) => {
+            calls.push(`legacy:${language}`);
+          },
+        }),
+      },
+      settingsWindowHelper: { toggleWindow: () => {}, closeWindow: () => {} },
+      setUndetectable: () => {},
+      getUndetectable: () => true,
+      setDisguise: () => {},
+      getDisguise: () => 'activity',
+      setConsciousModeEnabled: () => true,
+      getConsciousModeEnabled: () => false,
+      setAccelerationModeEnabled: () => true,
+      getAccelerationModeEnabled: () => false,
+    };
+
+    registerSettingsHandlers({ appState: appState as any, ...registry } as any);
+
+    assert.deepEqual(await registry.handlers.get('set-ai-response-language')?.({}, 'fr'), {
+      success: true,
+      data: { language: 'fr' },
+    });
+    assert.deepEqual(calls, ['supervisor:fr']);
+  });
+});
+
+test('email handlers prefer InferenceSupervisor LLM helper when supervisor runtime is enabled', async () => {
+  await withPatchedModules({
+    electron: { shell: { openExternal: async () => {} } },
+    '../llm/prompts': {
+      FOLLOWUP_EMAIL_PROMPT: 'FOLLOWUP',
+      GROQ_FOLLOWUP_EMAIL_PROMPT: 'GROQ FOLLOWUP',
+    },
+    '../utils/emailUtils': {
+      buildFollowUpEmailPromptInput: () => 'Meeting summary',
+      extractEmailsFromTranscript: (): string[] => [],
+      buildMailtoLink: () => 'mailto:test@example.com',
+    },
+  }, async () => {
+    const modulePath = require.resolve('../ipc/registerEmailHandlers');
+    delete require.cache[modulePath];
+    const { registerEmailHandlers } = await import('../ipc/registerEmailHandlers');
+    const registry = createHandlerRegistry();
+    const calls: string[] = [];
+    const appState = {
+      getCoordinator: () => ({
+        shouldManageLifecycle: () => true,
+        getSupervisor: (name: string) => {
+          assert.equal(name, 'inference');
+          return {
+            getLLMHelper: () => ({
+              chatWithGemini: async () => {
+                calls.push('supervisor');
+                return 'supervisor response';
+              },
+            }),
+          };
+        },
+      }),
+      processingHelper: {
+        getLLMHelper: () => ({
+          chatWithGemini: async () => {
+            calls.push('legacy');
+            return 'legacy response';
+          },
+        }),
+      },
+    };
+
+    registerEmailHandlers({ appState: appState as any, ...registry } as any);
+
+    assert.equal(await registry.handlers.get('generate-followup-email')?.({}, {
+      meeting_type: 'meeting',
+      title: 'Roadmap Review',
+    }), 'supervisor response');
+    assert.deepEqual(calls, ['supervisor']);
+  });
+});
+
 test('window handlers preserve window control and resize contracts', async () => {
   const registry = createHandlerRegistry();
   const calls: string[] = [];

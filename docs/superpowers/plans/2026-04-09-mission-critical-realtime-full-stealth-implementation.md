@@ -190,7 +190,7 @@ Make full stealth a hard control-plane invariant:
 - Test: `electron/tests/stealthStateMachine.test.ts`
 - Test: `electron/tests/stealthArmController.test.ts`
 
-- [ ] Step 1: Define `OFF`, `ARMING`, `FULL_STEALTH`, and `FAULT` states in `StealthStateMachine`. Encode legal transitions. Illegal transitions throw. No "reduced stealth" path.
+- [x] Step 1: Define `OFF`, `ARMING`, `FULL_STEALTH`, and `FAULT` states in `StealthStateMachine`. Encode legal transitions. Illegal transitions throw. No "reduced stealth" path.
 - [ ] Step 2: Build `StealthArmController` that executes the arm sequence: verify native module loaded → apply stealth to all managed windows → verify stealth state → start heartbeat → transition to `FULL_STEALTH`.
 - [ ] Step 3: Make invisible-mode toggle in `StealthSupervisor` await arm success before emitting `stealth:state-changed` on the bus. Failed arm exits cleanly.
 - [ ] Step 4: Add fail-closed policy: heartbeat miss or runtime fault immediately → `FAULT` → blank output → exit invisible mode. `StealthSupervisor` emits `stealth:fault` on the bus. Other supervisors subscribe and shed non-essential work.

@@ -10,6 +10,23 @@ type RegisterSettingsHandlersDeps = {
   safeHandleValidated: SafeHandleValidated;
 };
 
+type RuntimeCoordinatorLike = {
+  shouldManageLifecycle?: () => boolean;
+  getSupervisor?: (name: string) => unknown;
+};
+
+type StealthSupervisorLike = {
+  getState?: () => string;
+  start?: () => Promise<void>;
+  setEnabled?: (enabled: boolean) => Promise<void>;
+};
+
+type InferenceSupervisorLike = {
+  getLLMHelper?: () => {
+    setAiResponseLanguage?: (language: string) => void;
+  } | null;
+};
+
 type SettingsIpcSuccess<T> = {
   success: true;
   data: T;
@@ -40,6 +57,38 @@ function settingsSuccess<T>(data: T): SettingsIpcSuccess<T> {
   };
 }
 
+function getRuntimeCoordinator(appState: AppState): RuntimeCoordinatorLike | null {
+  if (!('getCoordinator' in appState) || typeof appState.getCoordinator !== 'function') {
+    return null;
+  }
+
+  return appState.getCoordinator() as RuntimeCoordinatorLike;
+}
+
+function getStealthSupervisor(appState: AppState): StealthSupervisorLike | null {
+  const coordinator = getRuntimeCoordinator(appState);
+  if (!coordinator?.shouldManageLifecycle?.() || typeof coordinator.getSupervisor !== 'function') {
+    return null;
+  }
+
+  return coordinator.getSupervisor('stealth') as StealthSupervisorLike;
+}
+
+function getInferenceLlmHelper(appState: AppState): {
+  setAiResponseLanguage?: (language: string) => void;
+} | null {
+  const coordinator = getRuntimeCoordinator(appState);
+  if (coordinator?.shouldManageLifecycle?.() && typeof coordinator.getSupervisor === 'function') {
+    const supervisor = coordinator.getSupervisor('inference') as InferenceSupervisorLike;
+    const llmHelper = supervisor?.getLLMHelper?.();
+    if (llmHelper) {
+      return llmHelper;
+    }
+  }
+
+  return appState.processingHelper?.getLLMHelper?.() ?? null;
+}
+
 export function registerSettingsHandlers({ appState, safeHandle, safeHandleValidated }: RegisterSettingsHandlersDeps): void {
   safeHandle('get-recognition-languages', async () => settingsSuccess(RECOGNITION_LANGUAGES));
   safeHandle('get-ai-response-languages', async () => settingsSuccess(AI_RESPONSE_LANGUAGES));
@@ -48,7 +97,7 @@ export function registerSettingsHandlers({ appState, safeHandle, safeHandleValid
     try {
       const { CredentialsManager } = require('../services/CredentialsManager');
       CredentialsManager.getInstance().setAiResponseLanguage(language);
-      appState.processingHelper?.getLLMHelper?.().setAiResponseLanguage?.(language);
+      getInferenceLlmHelper(appState)?.setAiResponseLanguage?.(language);
       return settingsSuccess({ language });
     } catch (error: any) {
       return settingsError('SETTINGS_PERSIST_FAILED', error?.message || 'Unable to update AI response language');
@@ -93,7 +142,13 @@ export function registerSettingsHandlers({ appState, safeHandle, safeHandleValid
 
   safeHandleValidated('set-undetectable', (args) => [parseIpcInput(ipcSchemas.booleanFlag, args[0], 'set-undetectable')] as const, async (_event, state) => {
     try {
-      if ('setUndetectableAsync' in appState && typeof appState.setUndetectableAsync === 'function') {
+      const stealthSupervisor = getStealthSupervisor(appState);
+      if (stealthSupervisor && typeof stealthSupervisor.setEnabled === 'function') {
+        if (stealthSupervisor.getState?.() === 'idle' && typeof stealthSupervisor.start === 'function') {
+          await stealthSupervisor.start();
+        }
+        await stealthSupervisor.setEnabled(state);
+      } else if ('setUndetectableAsync' in appState && typeof appState.setUndetectableAsync === 'function') {
         await appState.setUndetectableAsync(state);
       } else {
         appState.setUndetectable(state);
