@@ -59,6 +59,43 @@ class FakeLLMHelper {
   }
 }
 
+class EvidenceCapturingLLMHelper {
+  private callIndex = 0;
+  public contexts: Array<string | undefined> = [];
+
+  async *streamChat(message: string, _imagePaths?: string[], context?: string): AsyncGenerator<string> {
+    this.callIndex += 1;
+    this.contexts.push(context);
+
+    if (this.callIndex === 1) {
+      yield JSON.stringify({
+        mode: 'reasoning_first',
+        openingReasoning: 'I would start with tenant partitioning.',
+        implementationPlan: ['Partition by tenant'],
+        tradeoffs: ['Cross-tenant reads get more expensive'],
+        edgeCases: [],
+        scaleConsiderations: [],
+        pushbackResponses: ['The model buys clean write isolation.'],
+        likelyFollowUps: [],
+        codeTransition: '',
+      });
+      return;
+    }
+
+    yield JSON.stringify({
+      mode: 'reasoning_first',
+      openingReasoning: 'The tradeoff is mostly around the cross-tenant read path.',
+      implementationPlan: [],
+      tradeoffs: ['Cross-tenant reads become more explicit'],
+      edgeCases: [],
+      scaleConsiderations: [],
+      pushbackResponses: [],
+      likelyFollowUps: [],
+      codeTransition: '',
+    });
+  }
+}
+
 class CapturingLatencyTracker extends AnswerLatencyTracker {
   public completedSnapshots: Array<ReturnType<AnswerLatencyTracker['complete']>> = [];
 
@@ -276,6 +313,26 @@ test('Conscious Mode resets an active reasoning thread when the interviewer clea
   assert.equal(answer, 'Could you repeat that? I want to make sure I address your question properly.');
   assert.equal(session.getActiveReasoningThread(), null);
   assert.equal(session.getLatestConsciousResponse(), null);
+});
+
+test('Conscious Mode follow-up context includes inferred answer evidence', async () => {
+  const session = new SessionTracker();
+  const llmHelper = new EvidenceCapturingLLMHelper();
+  const engine = new IntelligenceEngine(llmHelper as any, session);
+
+  session.setConsciousModeEnabled(true);
+
+  addInterviewerTurn(session, 'How would you partition a multi-tenant analytics system?', Date.now() - 2000);
+  await engine.runWhatShouldISay(undefined, 0.85);
+
+  (engine as any).lastTriggerTime = 0;
+  addInterviewerTurn(session, 'What are the tradeoffs?', Date.now() - 1000);
+  await engine.runWhatShouldISay(undefined, 0.85);
+
+  const continuationContext = llmHelper.contexts[1] || '';
+  assert.ok(continuationContext.includes('<conscious_evidence>'));
+  assert.ok(continuationContext.includes('INTERVIEWER_REACTION: tradeoff_probe'));
+  assert.ok(continuationContext.includes('LATEST_SUGGESTED_ANSWER:'));
 });
 
 test('Conscious Mode does not let unrelated generic pushback hijack an old thread', async () => {

@@ -8,6 +8,8 @@ export { ConfidenceScorer } from './ConfidenceScorer';
 export { ThreadManager } from './ThreadManager';
 export { ConsciousThreadStore, type PersistedActiveThreadSnapshot } from './ConsciousThreadStore';
 export { ObservedQuestionStore, type ObservedQuestion } from './ObservedQuestionStore';
+export { QuestionReactionClassifier, type QuestionReaction, type QuestionReactionKind } from './QuestionReactionClassifier';
+export { AnswerHypothesisStore, type AnswerHypothesis } from './AnswerHypothesisStore';
 export { ConsciousContextComposer, type ConsciousContextComposition } from './ConsciousContextComposer';
 export { ConsciousIntentService, type ResolvedIntentResult, type ConsciousIntentResolution } from './ConsciousIntentService';
 export { ConsciousPreparationCoordinator, type ConsciousPreparationResult } from './ConsciousPreparationCoordinator';

@@ -11,6 +11,7 @@ interface SessionLike {
   isConsciousModeEnabled(): boolean;
   isLikelyGeneralIntent(lastInterviewerTurn: string | null): boolean;
   getAssistantResponseHistory(): AssistantResponse[];
+  getConsciousEvidenceContext(): string;
 }
 
 interface KnowledgeStatusLike {
@@ -91,6 +92,7 @@ export class ConsciousPreparationCoordinator {
       contextItems,
       lastInterim: input.lastInterim,
       assistantHistory: this.session.getAssistantResponseHistory(),
+      evidenceContextBlock: this.session.getConsciousEvidenceContext(),
       transcriptTurnLimit: input.transcriptTurnLimit,
       temporalWindowSeconds: input.temporalWindowSeconds,
       onInterimInjected: input.onInterimInjected,

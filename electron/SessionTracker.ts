@@ -67,6 +67,8 @@ import {
   InterviewPhase,
   ConsciousThreadStore,
   ObservedQuestionStore,
+  QuestionReactionClassifier,
+  AnswerHypothesisStore,
 } from './conscious';
 import { AdaptiveContextWindow, ContextEntry, ContextSelectionConfig } from './conscious/AdaptiveContextWindow';
 import { isOptimizationActive } from './config/optimizations';
@@ -184,6 +186,8 @@ export class SessionTracker {
 // Conscious Mode Realtime components
   private consciousThreadStore: ConsciousThreadStore = new ConsciousThreadStore();
   private observedQuestionStore: ObservedQuestionStore = new ObservedQuestionStore();
+  private questionReactionClassifier: QuestionReactionClassifier = new QuestionReactionClassifier();
+  private answerHypothesisStore: AnswerHypothesisStore = new AnswerHypothesisStore();
   private phaseDetector: InterviewPhaseDetector = new InterviewPhaseDetector();
   private tokenBudgetManager: TokenBudgetManager = new TokenBudgetManager('openai');
 
@@ -408,6 +412,15 @@ export class SessionTracker {
 
         if (segment.final && segment.speaker === 'interviewer') {
             this.observedQuestionStore.noteQuestion(segment.text, segment.timestamp);
+            if (this.consciousModeEnabled) {
+                const reaction = this.questionReactionClassifier.classify({
+                    question: segment.text,
+                    activeThread: this.consciousThreadStore.getActiveReasoningThread(),
+                    latestResponse: this.consciousThreadStore.getLatestConsciousResponse(),
+                    latestHypothesis: this.answerHypothesisStore.getLatestHypothesis(),
+                });
+                this.answerHypothesisStore.noteObservedReaction(segment.text, reaction);
+            }
         }
 
         if (segment.final && segment.speaker === 'interviewer' && this.consciousModeEnabled) {
@@ -452,7 +465,8 @@ export class SessionTracker {
     setConsciousModeEnabled(enabled: boolean): void {
         this.consciousModeEnabled = enabled;
         if (!enabled) {
-            this.consciousThreadStore.clear();
+            this.consciousThreadStore.reset();
+            this.answerHypothesisStore.reset();
         }
     }
 
@@ -675,11 +689,25 @@ isConsciousModeEnabled(): boolean {
     }
 
     clearConsciousModeThread(): void {
-        this.consciousThreadStore.clear();
+        this.consciousThreadStore.reset();
+        this.answerHypothesisStore.reset();
     }
 
     recordConsciousResponse(question: string, response: ConsciousModeStructuredResponse, threadAction: 'start' | 'continue' | 'reset'): void {
         this.consciousThreadStore.recordConsciousResponse(question, response, threadAction);
+        this.answerHypothesisStore.recordStructuredSuggestion(question, response, threadAction);
+    }
+
+    getLatestQuestionReaction() {
+        return this.answerHypothesisStore.getLatestReaction();
+    }
+
+    getLatestAnswerHypothesis() {
+        return this.answerHypothesisStore.getLatestHypothesis();
+    }
+
+    getConsciousEvidenceContext(): string {
+        return this.answerHypothesisStore.buildContextBlock();
     }
 
     /**
@@ -916,6 +944,7 @@ isConsciousModeEnabled(): boolean {
       this.transcriptEpochSummaries = session.epochSummaries || [];
       this.fingerprinter.restore(session.responseHashes || []);
       this.observedQuestionStore.reset();
+      this.answerHypothesisStore.reset();
 
       if (session.activeThread) {
         this.consciousThreadStore.restoreActiveThread({
@@ -1085,6 +1114,7 @@ isConsciousModeEnabled(): boolean {
     this.consciousModeEnabled = consciousModeEnabled;
     this.consciousThreadStore.reset();
     this.observedQuestionStore.reset();
+    this.answerHypothesisStore.reset();
     this.phaseDetector.reset();
     this.tokenBudgetManager.reset();
     this.adaptiveContextWindow = null;

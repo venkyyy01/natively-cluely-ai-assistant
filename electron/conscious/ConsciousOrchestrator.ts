@@ -6,6 +6,8 @@ import {
   type ConsciousModeStructuredResponse,
   type ReasoningThread,
 } from '../ConsciousMode';
+import type { QuestionReaction } from './QuestionReactionClassifier';
+import type { AnswerHypothesis } from './AnswerHypothesisStore';
 import type { TemporalContext } from '../llm/TemporalContextBuilder';
 import type { IntentResult } from '../llm/IntentClassifier';
 import type { WhatToAnswerLLM } from '../llm/WhatToAnswerLLM';
@@ -25,6 +27,9 @@ interface ConsciousSession {
   getActiveReasoningThread(): ReasoningThread | null;
   clearConsciousModeThread(): void;
   getFormattedContext(lastSeconds: number): string;
+  getConsciousEvidenceContext(): string;
+  getLatestQuestionReaction(): QuestionReaction | null;
+  getLatestAnswerHypothesis(): AnswerHypothesis | null;
   recordConsciousResponse(
     question: string,
     response: ConsciousModeStructuredResponse,
@@ -54,9 +59,18 @@ export class ConsciousOrchestrator {
     screenshotBackedLiveCodingTurn: boolean;
   }): PreparedConsciousRoute {
     const currentReasoningThread = this.session.getActiveReasoningThread();
-    const preRouteDecision = this.session.isConsciousModeEnabled()
+    const latestReaction = this.session.getLatestQuestionReaction();
+    let preRouteDecision = this.session.isConsciousModeEnabled()
       ? classifyConsciousModeQuestion(input.question, currentReasoningThread)
       : { qualifies: false, threadAction: 'ignore' as const };
+
+    if (currentReasoningThread && latestReaction?.shouldContinueThread && preRouteDecision.threadAction === 'ignore') {
+      preRouteDecision = { qualifies: true, threadAction: 'continue' };
+    }
+
+    if (latestReaction?.kind === 'topic_shift') {
+      preRouteDecision = { qualifies: true, threadAction: 'reset' };
+    }
 
     const activeReasoningThread = preRouteDecision.threadAction === 'reset'
       ? null
@@ -118,7 +132,10 @@ export class ConsciousOrchestrator {
     const structuredResponse = await input.followUpLLM.generateReasoningFirstFollowUp(
       input.activeReasoningThread,
       input.resolvedQuestion,
-      this.session.getFormattedContext(180)
+      [
+        this.session.getConsciousEvidenceContext(),
+        this.session.getFormattedContext(180),
+      ].filter(Boolean).join('\n\n')
     );
 
     if (input.isStale() || !isValidConsciousModeResponse(structuredResponse)) {

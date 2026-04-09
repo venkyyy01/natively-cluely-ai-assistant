@@ -14,6 +14,7 @@ export class ConsciousContextComposer {
     contextItems: ContextItem[];
     lastInterim: TranscriptSegment | null;
     assistantHistory: AssistantResponse[];
+    evidenceContextBlock?: string;
     transcriptTurnLimit?: number;
     temporalWindowSeconds?: number;
     onInterimInjected?: (text: string) => void;
@@ -43,9 +44,13 @@ export class ConsciousContextComposer {
       timestamp: item.timestamp,
     }));
 
+    const preparedTranscript = prepareTranscriptForWhatToAnswer(transcriptTurns, input.transcriptTurnLimit ?? 12);
+
     return {
       contextItems,
-      preparedTranscript: prepareTranscriptForWhatToAnswer(transcriptTurns, input.transcriptTurnLimit ?? 12),
+      preparedTranscript: input.evidenceContextBlock
+        ? `${input.evidenceContextBlock}\n\n${preparedTranscript}`
+        : preparedTranscript,
       temporalContext: buildTemporalContext(
         contextItems,
         input.assistantHistory,
