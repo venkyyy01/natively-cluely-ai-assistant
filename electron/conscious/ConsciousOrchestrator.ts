@@ -15,6 +15,8 @@ import type { AnswerLLM } from '../llm/AnswerLLM';
 import type { FollowUpLLM } from '../llm/FollowUpLLM';
 import { selectAnswerRoute } from '../latency/answerRouteSelector';
 import type { AnswerRoute } from '../latency/AnswerLatencyTracker';
+import { ConsciousRetrievalOrchestrator } from './ConsciousRetrievalOrchestrator';
+import { ConsciousVerifier } from './ConsciousVerifier';
 
 interface KnowledgeStatusLike {
   activeMode?: unknown;
@@ -25,6 +27,7 @@ interface KnowledgeStatusLike {
 interface ConsciousSession {
   isConsciousModeEnabled(): boolean;
   getActiveReasoningThread(): ReasoningThread | null;
+  getLatestConsciousResponse(): ConsciousModeStructuredResponse | null;
   clearConsciousModeThread(): void;
   getFormattedContext(lastSeconds: number): string;
   getConsciousEvidenceContext(): string;
@@ -51,7 +54,12 @@ export type ConsciousExecutionResult =
   | { kind: 'handled'; structuredResponse: ConsciousModeStructuredResponse; fullAnswer: string };
 
 export class ConsciousOrchestrator {
-  constructor(private readonly session: ConsciousSession) {}
+  private readonly verifier = new ConsciousVerifier();
+  private readonly retrievalOrchestrator: ConsciousRetrievalOrchestrator;
+
+  constructor(private readonly session: ConsciousSession) {
+    this.retrievalOrchestrator = new ConsciousRetrievalOrchestrator(this.session);
+  }
 
   prepareRoute(input: {
     question: string;
@@ -132,13 +140,25 @@ export class ConsciousOrchestrator {
     const structuredResponse = await input.followUpLLM.generateReasoningFirstFollowUp(
       input.activeReasoningThread,
       input.resolvedQuestion,
-      [
-        this.session.getConsciousEvidenceContext(),
-        this.session.getFormattedContext(180),
-      ].filter(Boolean).join('\n\n')
+      this.retrievalOrchestrator.buildPack({
+        question: input.resolvedQuestion,
+        lastSeconds: 180,
+      }).combinedContext
     );
 
     if (input.isStale() || !isValidConsciousModeResponse(structuredResponse)) {
+      return { kind: 'fallback' };
+    }
+
+    const verification = this.verifier.verify({
+      response: structuredResponse,
+      route: { qualifies: true, threadAction: 'continue' },
+      reaction: this.session.getLatestQuestionReaction(),
+      hypothesis: this.session.getLatestAnswerHypothesis(),
+      question: input.resolvedQuestion,
+    });
+    if (!verification.ok) {
+      console.warn('[ConsciousOrchestrator] Continuation verification failed:', verification.reason);
       return { kind: 'fallback' };
     }
 
@@ -182,6 +202,18 @@ export class ConsciousOrchestrator {
     }
 
     if (!isValidConsciousModeResponse(structuredResponse)) {
+      return { kind: 'fallback' };
+    }
+
+    const verification = this.verifier.verify({
+      response: structuredResponse,
+      route: input.route,
+      reaction: this.session.getLatestQuestionReaction(),
+      hypothesis: this.session.getLatestAnswerHypothesis(),
+      question: input.question,
+    });
+    if (!verification.ok) {
+      console.warn('[ConsciousOrchestrator] Structured response verification failed:', verification.reason);
       return { kind: 'fallback' };
     }
 

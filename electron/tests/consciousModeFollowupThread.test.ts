@@ -330,9 +330,66 @@ test('Conscious Mode follow-up context includes inferred answer evidence', async
   await engine.runWhatShouldISay(undefined, 0.85);
 
   const continuationContext = llmHelper.contexts[1] || '';
+  assert.ok(continuationContext.includes('<conscious_state>'));
   assert.ok(continuationContext.includes('<conscious_evidence>'));
   assert.ok(continuationContext.includes('INTERVIEWER_REACTION: tradeoff_probe'));
   assert.ok(continuationContext.includes('LATEST_SUGGESTED_ANSWER:'));
+});
+
+test('Conscious Mode verifier rejects weak tradeoff follow-ups and falls back cleanly', async () => {
+  class VerifierFallbackHelper {
+    private callIndex = 0;
+
+    async *streamChat(message: string): AsyncGenerator<string> {
+      this.callIndex += 1;
+
+      if (this.callIndex === 1) {
+        yield JSON.stringify({
+          mode: 'reasoning_first',
+          openingReasoning: 'I would partition by tenant to keep writes isolated.',
+          implementationPlan: ['Partition by tenant'],
+          tradeoffs: ['Cross-tenant reads get more expensive'],
+          edgeCases: [],
+          scaleConsiderations: [],
+          pushbackResponses: ['The write path stays simple.'],
+          likelyFollowUps: [],
+          codeTransition: '',
+        });
+        return;
+      }
+
+      if (message.includes('ACTIVE_REASONING_THREAD')) {
+        yield JSON.stringify({
+          mode: 'reasoning_first',
+          openingReasoning: 'I would keep the same partitioning.',
+          implementationPlan: ['Partition by tenant'],
+          tradeoffs: [],
+          edgeCases: [],
+          scaleConsiderations: [],
+          pushbackResponses: [],
+          likelyFollowUps: [],
+          codeTransition: '',
+        });
+        return;
+      }
+
+      yield 'fallback standard answer';
+    }
+  }
+
+  const session = new SessionTracker();
+  const llmHelper = new VerifierFallbackHelper();
+  const engine = new IntelligenceEngine(llmHelper as any, session);
+
+  session.setConsciousModeEnabled(true);
+  addInterviewerTurn(session, 'How would you partition a multi-tenant analytics system?', Date.now() - 2000);
+  await engine.runWhatShouldISay(undefined, 0.85);
+
+  (engine as any).lastTriggerTime = 0;
+  addInterviewerTurn(session, 'What are the tradeoffs?', Date.now() - 1000);
+  const answer = await engine.runWhatShouldISay(undefined, 0.85);
+
+  assert.equal(answer, 'fallback standard answer');
 });
 
 test('Conscious Mode does not let unrelated generic pushback hijack an old thread', async () => {

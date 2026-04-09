@@ -6,12 +6,21 @@ import type { PreparedConsciousRoute } from './ConsciousOrchestrator';
 import { ConsciousContextComposer } from './ConsciousContextComposer';
 import { ConsciousIntentService, type ResolvedIntentResult } from './ConsciousIntentService';
 import { ConsciousOrchestrator } from './ConsciousOrchestrator';
+import { ConsciousRetrievalOrchestrator } from './ConsciousRetrievalOrchestrator';
+import type { ConsciousModeStructuredResponse, ReasoningThread } from '../ConsciousMode';
+import type { QuestionReaction } from './QuestionReactionClassifier';
+import type { AnswerHypothesis } from './AnswerHypothesisStore';
 
 interface SessionLike {
   isConsciousModeEnabled(): boolean;
   isLikelyGeneralIntent(lastInterviewerTurn: string | null): boolean;
   getAssistantResponseHistory(): AssistantResponse[];
   getConsciousEvidenceContext(): string;
+  getFormattedContext(lastSeconds: number): string;
+  getActiveReasoningThread(): ReasoningThread | null;
+  getLatestConsciousResponse(): ConsciousModeStructuredResponse | null;
+  getLatestQuestionReaction(): QuestionReaction | null;
+  getLatestAnswerHypothesis(): AnswerHypothesis | null;
 }
 
 interface KnowledgeStatusLike {
@@ -34,12 +43,16 @@ export interface ConsciousRoutePreparationResult {
 }
 
 export class ConsciousPreparationCoordinator {
+  private readonly retrievalOrchestrator: ConsciousRetrievalOrchestrator;
+
   constructor(
     private readonly session: SessionLike,
     private readonly consciousOrchestrator: ConsciousOrchestrator,
     private readonly consciousContextComposer: ConsciousContextComposer,
     private readonly consciousIntentService: ConsciousIntentService,
-  ) {}
+  ) {
+    this.retrievalOrchestrator = new ConsciousRetrievalOrchestrator(this.session);
+  }
 
   prepareRoute(input: {
     baseQuestion: string;
@@ -88,11 +101,15 @@ export class ConsciousPreparationCoordinator {
     }
 
     const contextAssemblyStart = Date.now();
+    const retrievalPack = this.retrievalOrchestrator.buildPack({
+      question: input.lastInterviewerTurn || input.resolvedQuestion,
+      lastSeconds: input.temporalWindowSeconds,
+    });
     const composedContext = this.consciousContextComposer.compose({
       contextItems,
       lastInterim: input.lastInterim,
       assistantHistory: this.session.getAssistantResponseHistory(),
-      evidenceContextBlock: this.session.getConsciousEvidenceContext(),
+      evidenceContextBlock: [retrievalPack.stateBlock, this.session.getConsciousEvidenceContext()].filter(Boolean).join('\n\n'),
       transcriptTurnLimit: input.transcriptTurnLimit,
       temporalWindowSeconds: input.temporalWindowSeconds,
       onInterimInjected: input.onInterimInjected,
