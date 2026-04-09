@@ -552,6 +552,7 @@ export class IntelligenceEngine extends EventEmitter {
                 knowledgeStatus,
                 screenshotBackedLiveCodingTurn: this.isScreenshotBackedLiveCodingTurn(resolvedQuestion, imagePaths),
             });
+            this.consciousOrchestrator.applyRouteSideEffects(routePreparation.preparedRoute);
             const {
                 preRouteDecision: preRouteConsciousDecision,
                 activeReasoningThread,

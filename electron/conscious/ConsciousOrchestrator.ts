@@ -84,10 +84,6 @@ export class ConsciousOrchestrator {
       ? null
       : currentReasoningThread;
 
-    if (preRouteDecision.threadAction === 'reset') {
-      this.session.clearConsciousModeThread();
-    }
-
     const selectedRoute = selectAnswerRoute({
       explicitManual: false,
       explicitFollowUp: false,
@@ -125,6 +121,12 @@ export class ConsciousOrchestrator {
       effectiveRoute,
       standardRouteAfterConsciousFallback,
     };
+  }
+
+  applyRouteSideEffects(route: PreparedConsciousRoute): void {
+    if (route.preRouteDecision.threadAction === 'reset') {
+      this.session.clearConsciousModeThread();
+    }
   }
 
   async continueThread(input: {
