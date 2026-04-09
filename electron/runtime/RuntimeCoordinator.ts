@@ -35,7 +35,7 @@ export class RuntimeCoordinator {
     this.logger = options.logger ?? console;
     this.featureFlagReader = options.featureFlagReader ?? (() => false);
     this.supervisors = options.supervisors ?? {};
-    this.managedSupervisorNames = options.managedSupervisorNames ?? ['recovery', 'audio', 'stt'];
+    this.managedSupervisorNames = options.managedSupervisorNames ?? ['recovery', 'audio', 'stt', 'inference'];
   }
 
   shouldManageLifecycle(): boolean {

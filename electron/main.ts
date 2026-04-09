@@ -693,6 +693,9 @@ this.setupIntelligenceEvents()
       bus,
       delegate: {
         getLLMHelper: () => this.processingHelper.getLLMHelper(),
+        onStealthFault: async () => {
+          await this.intelligenceManager.reset()
+        },
         runAssistMode: () => this.intelligenceManager.runAssistMode(),
         runWhatShouldISay: (question, confidence, imagePaths) => this.intelligenceManager.runWhatShouldISay(question, confidence, imagePaths),
         runFollowUp: (intent, userRequest) => this.intelligenceManager.runFollowUp(intent, userRequest),
