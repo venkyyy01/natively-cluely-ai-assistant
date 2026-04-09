@@ -59,10 +59,15 @@ import { RecapLLM } from './llm';
 import {
   ConsciousModeStructuredResponse,
   ReasoningThread,
-  mergeConsciousModeResponses,
 } from './ConsciousMode';
-import { ThreadManager, InterviewPhaseDetector, TokenBudgetManager, InterviewPhase } from './conscious';
-import { RESUME_THRESHOLD } from './conscious/types';
+import {
+  ThreadManager,
+  InterviewPhaseDetector,
+  TokenBudgetManager,
+  InterviewPhase,
+  ConsciousThreadStore,
+  ObservedQuestionStore,
+} from './conscious';
 import { AdaptiveContextWindow, ContextEntry, ContextSelectionConfig } from './conscious/AdaptiveContextWindow';
 import { isOptimizationActive } from './config/optimizations';
 import { extractConstraints, ExtractedConstraint, detectQuestion, ResponseFingerprinter } from './conscious';
@@ -167,19 +172,18 @@ export class SessionTracker {
   private readonly COMPACTION_IDLE_MS = 5000;
   private readonly COMPACTION_THRESHOLD = 2000;
 
-  // Track interim interviewer segment
+    // Track interim interviewer segment
     private lastInterimInterviewer: TranscriptSegment | null = null;
 
     // Conscious Mode state
     private consciousModeEnabled: boolean = false;
-    private latestConsciousResponse: ConsciousModeStructuredResponse | null = null;
-    private activeReasoningThread: ReasoningThread | null = null;
 
     // Reference to RecapLLM for epoch summarization (injected later)
     private recapLLM: RecapLLM | null = null;
 
 // Conscious Mode Realtime components
-  private threadManager: ThreadManager = new ThreadManager();
+  private consciousThreadStore: ConsciousThreadStore = new ConsciousThreadStore();
+  private observedQuestionStore: ObservedQuestionStore = new ObservedQuestionStore();
   private phaseDetector: InterviewPhaseDetector = new InterviewPhaseDetector();
   private tokenBudgetManager: TokenBudgetManager = new TokenBudgetManager('openai');
 
@@ -402,6 +406,10 @@ export class SessionTracker {
 
         const result = this.addTranscript(segment);
 
+        if (segment.final && segment.speaker === 'interviewer') {
+            this.observedQuestionStore.noteQuestion(segment.text, segment.timestamp);
+        }
+
         if (segment.final && segment.speaker === 'interviewer' && this.consciousModeEnabled) {
             this.updateConsciousConversationState(segment.text);
         }
@@ -410,57 +418,11 @@ export class SessionTracker {
     }
 
     private updateConsciousConversationState(transcript: string): void {
-        const normalized = transcript.trim();
-        if (!normalized) {
-            return;
-        }
-
-        const phase = this.detectPhaseFromTranscript(normalized);
-        this.setCurrentPhase(phase);
-        this.threadManager.pruneExpired();
-
-        const activeThread = this.threadManager.getActiveThread();
-        const matchingThread = this.threadManager.findMatchingThread(normalized, phase);
-
-        if (!activeThread && matchingThread && matchingThread.confidence.total >= RESUME_THRESHOLD) {
-            this.threadManager.resumeThread(matchingThread.thread.id);
-        }
-
-        const currentThread = this.threadManager.getActiveThread();
-        const resumeKeywords = Array.from(new Set(
-            normalized
-                .toLowerCase()
-                .replace(/[^a-z0-9\s]/g, ' ')
-                .split(/\s+/)
-                .filter(word => word.length >= 4)
-        ));
-
-        if (!currentThread) {
-            if (resumeKeywords.length > 0 || normalized.split(/\s+/).length >= 4) {
-                this.threadManager.createThread(normalized, phase);
-                this.threadManager.addKeywordsToActive(resumeKeywords);
-            }
-            return;
-        }
-
-        const phaseShift = currentThread.phase !== phase;
-        const majorPhaseShift = phaseShift && (
-            phase === 'behavioral_story' ||
-            phase === 'wrap_up' ||
-            currentThread.phase === 'behavioral_story'
+        this.consciousThreadStore.handleObservedInterviewerTranscript(
+            transcript,
+            (value) => this.detectPhaseFromTranscript(value),
+            (phase) => this.setCurrentPhase(phase)
         );
-
-        if (majorPhaseShift) {
-            this.threadManager.createThread(normalized, phase);
-            this.threadManager.addKeywordsToActive(resumeKeywords);
-            return;
-        }
-
-        this.threadManager.updateActiveThread({
-            phase,
-            turnCount: currentThread.turnCount + 1,
-        });
-        this.threadManager.addKeywordsToActive(resumeKeywords);
     }
 
     // ============================================
@@ -490,8 +452,7 @@ export class SessionTracker {
     setConsciousModeEnabled(enabled: boolean): void {
         this.consciousModeEnabled = enabled;
         if (!enabled) {
-            this.latestConsciousResponse = null;
-            this.activeReasoningThread = null;
+            this.consciousThreadStore.clear();
         }
     }
 
@@ -565,17 +526,7 @@ isConsciousModeEnabled(): boolean {
   }
 
   isLikelyGeneralIntent(lastInterviewerTurn: string | null): boolean {
-    const text = (lastInterviewerTurn || '').trim().toLowerCase();
-    if (!text) return true;
-
-    if (text.length <= 6) return true;
-    if (/\?$/.test(text) && text.length <= 12) return true;
-
-    if (/^(what if|why|how|and|then|ok|okay|sure|next|continue)\??$/.test(text)) {
-      return true;
-    }
-
-    return false;
+    return this.observedQuestionStore.isLikelyGeneralIntent(lastInterviewerTurn);
   }
 
   private getClampedQuery(query: string): string {
@@ -716,40 +667,19 @@ isConsciousModeEnabled(): boolean {
   }
 
     getLatestConsciousResponse(): ConsciousModeStructuredResponse | null {
-        return this.latestConsciousResponse;
+        return this.consciousThreadStore.getLatestConsciousResponse();
     }
 
     getActiveReasoningThread(): ReasoningThread | null {
-        return this.activeReasoningThread;
+        return this.consciousThreadStore.getActiveReasoningThread();
     }
 
     clearConsciousModeThread(): void {
-        this.latestConsciousResponse = null;
-        this.activeReasoningThread = null;
+        this.consciousThreadStore.clear();
     }
 
     recordConsciousResponse(question: string, response: ConsciousModeStructuredResponse, threadAction: 'start' | 'continue' | 'reset'): void {
-        this.latestConsciousResponse = response;
-
-        if (threadAction === 'continue' && this.activeReasoningThread) {
-            this.activeReasoningThread = {
-                ...this.activeReasoningThread,
-                lastQuestion: question,
-                followUpCount: this.activeReasoningThread.followUpCount + 1,
-                response: mergeConsciousModeResponses(this.activeReasoningThread.response, response),
-                updatedAt: Date.now(),
-            };
-            this.latestConsciousResponse = this.activeReasoningThread.response;
-            return;
-        }
-
-        this.activeReasoningThread = {
-            rootQuestion: question,
-            lastQuestion: question,
-            response,
-            followUpCount: 0,
-            updatedAt: Date.now(),
-        };
+        this.consciousThreadStore.recordConsciousResponse(question, response, threadAction);
     }
 
     /**
@@ -928,7 +858,8 @@ isConsciousModeEnabled(): boolean {
     }
 
     private buildPersistedSession(now: number = Date.now()): PersistedSession {
-      const activeThread = this.threadManager.getActiveThread();
+      const threadManager = this.consciousThreadStore.getThreadManager();
+      const activeThread = threadManager.getActiveThread();
 
       return {
         version: 1,
@@ -943,7 +874,7 @@ isConsciousModeEnabled(): boolean {
           phase: activeThread.phase,
           turnCount: activeThread.turnCount,
         } : null,
-        suspendedThreads: this.threadManager.getSuspendedThreads().map((thread) => ({
+        suspendedThreads: threadManager.getSuspendedThreads().map((thread) => ({
           id: thread.id,
           topic: thread.topic,
           goal: thread.goal,
@@ -984,17 +915,16 @@ isConsciousModeEnabled(): boolean {
       this.extractedConstraints = (session.constraints || []) as ExtractedConstraint[];
       this.transcriptEpochSummaries = session.epochSummaries || [];
       this.fingerprinter.restore(session.responseHashes || []);
+      this.observedQuestionStore.reset();
 
       if (session.activeThread) {
-        const restored = this.threadManager.createThread(
-          session.activeThread.topic,
-          (session.activeThread.phase as InterviewPhase) || 'requirements_gathering'
-        );
-        this.threadManager.updateActiveThread({
+        this.consciousThreadStore.restoreActiveThread({
           id: session.activeThread.id,
-          goal: session.activeThread.goal || restored.goal,
+          topic: session.activeThread.topic,
+          goal: session.activeThread.goal,
+          phase: (session.activeThread.phase as InterviewPhase) || 'requirements_gathering',
           turnCount: session.activeThread.turnCount,
-        } as any);
+        });
       }
 
       this.contextAssembleCache.clear();
@@ -1095,7 +1025,7 @@ isConsciousModeEnabled(): boolean {
     // ============================================
 
     getThreadManager(): ThreadManager {
-        return this.threadManager;
+        return this.consciousThreadStore.getThreadManager();
     }
 
     getPhaseDetector(): InterviewPhaseDetector {
@@ -1153,9 +1083,8 @@ isConsciousModeEnabled(): boolean {
     this.assistantResponseHistory = [];
     this.lastInterimInterviewer = null;
     this.consciousModeEnabled = consciousModeEnabled;
-    this.latestConsciousResponse = null;
-    this.activeReasoningThread = null;
-    this.threadManager.reset();
+    this.consciousThreadStore.reset();
+    this.observedQuestionStore.reset();
     this.phaseDetector.reset();
     this.tokenBudgetManager.reset();
     this.adaptiveContextWindow = null;

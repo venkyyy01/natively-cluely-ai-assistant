@@ -8,10 +8,9 @@ import { SessionTracker, TranscriptSegment, SuggestionTrigger, ContextItem } fro
 import {
   AnswerLLM, AssistLLM, FollowUpLLM, RecapLLM,
   FollowUpQuestionsLLM, WhatToAnswerLLM,
-  prepareTranscriptForWhatToAnswer, buildTemporalContext,
   AssistantResponse as LLMAssistantResponse, classifyIntent
 } from './llm';
-import { ConsciousOrchestrator, FallbackExecutor } from './conscious';
+import { ConsciousContextComposer, ConsciousIntentService, ConsciousOrchestrator, ConsciousResponseCoordinator, FallbackExecutor } from './conscious';
 import { ParallelContextAssembler, ContextAssemblyInput, ContextAssemblyOutput } from './cache/ParallelContextAssembler';
 import { isOptimizationActive } from './config/optimizations';
 import { AnswerLatencyTracker, AnswerRoute } from './latency/AnswerLatencyTracker';
@@ -85,6 +84,8 @@ export class IntelligenceEngine extends EventEmitter {
   // Conscious Mode Realtime fallback executor
   private fallbackExecutor: FallbackExecutor = new FallbackExecutor();
   private consciousOrchestrator: ConsciousOrchestrator;
+  private consciousContextComposer: ConsciousContextComposer;
+  private consciousIntentService: ConsciousIntentService;
 
   // Parallel context assembler for acceleration
   private parallelContextAssembler: ParallelContextAssembler | null = null;
@@ -103,6 +104,8 @@ export class IntelligenceEngine extends EventEmitter {
     this.llmHelper = llmHelper;
     this.session = session;
     this.consciousOrchestrator = new ConsciousOrchestrator(this.session);
+    this.consciousContextComposer = new ConsciousContextComposer();
+    this.consciousIntentService = new ConsciousIntentService();
     this.initializeLLMs();
     
     if (isOptimizationActive('useParallelContext')) {
@@ -264,9 +267,15 @@ export class IntelligenceEngine extends EventEmitter {
     setSession(session: SessionTracker): void {
         this.session = session;
         this.consciousOrchestrator = new ConsciousOrchestrator(this.session);
+        this.consciousContextComposer = new ConsciousContextComposer();
+        this.consciousIntentService = new ConsciousIntentService();
         if (this.recapLLM) {
             this.session.setRecapLLM(this.recapLLM);
         }
+    }
+
+    private getConsciousResponseCoordinator(): ConsciousResponseCoordinator {
+        return new ConsciousResponseCoordinator(this.session, this.latencyTracker, this, this.setMode.bind(this));
     }
 
     private buildCompactTranscriptSnapshot(
@@ -560,6 +569,7 @@ export class IntelligenceEngine extends EventEmitter {
             this.latencyTracker.mark(requestId, 'contextLoaded');
 
             const lastInterviewerTurn = this.session.getLastInterviewerTurn();
+            const consciousResponseCoordinator = this.getConsciousResponseCoordinator();
 
             const runFastStandardAnswer = async (): Promise<string> => {
                 const speculativeAnswer = useConsciousAcceleration && consciousAcceleration
@@ -726,29 +736,20 @@ export class IntelligenceEngine extends EventEmitter {
 
                 if (continuationResult.kind === 'fallback') {
                     effectiveRoute = 'fast_standard_answer';
-                    this.latencyTracker.markFallbackOccurred(requestId);
-                    this.latencyTracker.markDegradedToRoute(requestId, effectiveRoute);
+                    consciousResponseCoordinator.markFallbackToRoute({
+                        requestId,
+                        route: effectiveRoute,
+                    });
                     return runFastStandardAnswer();
                 }
 
                 if (continuationResult.kind === 'handled') {
-                    this.setMode('reasoning_first');
-
-                    const fullAnswer = continuationResult.fullAnswer;
-                    this.emit('suggested_answer_token', fullAnswer, question || 'What to Answer', confidence);
-                    this.latencyTracker.markFirstVisibleAnswer(requestId);
-                    this.session.addAssistantMessage(fullAnswer);
-                    this.session.pushUsage({
-                        type: 'assist',
-                        timestamp: Date.now(),
-                        question: question || 'What to Answer',
-                        answer: fullAnswer
+                    return consciousResponseCoordinator.completeStructuredAnswer({
+                        requestId,
+                        questionLabel: question || 'What to Answer',
+                        confidence,
+                        fullAnswer: continuationResult.fullAnswer,
                     });
-                    this.emit('suggested_answer', fullAnswer, question || 'What to Answer', confidence);
-                    const latencySnapshot = this.latencyTracker.complete(requestId);
-                    console.log('[IntelligenceEngine] Answer latency snapshot:', latencySnapshot);
-                    this.setMode('idle');
-                    return fullAnswer;
                 }
             }
 
@@ -757,69 +758,33 @@ export class IntelligenceEngine extends EventEmitter {
                 contextItems = assembledContext.contextItems;
             }
 
-            // Inject latest interim transcript if available
-            if (lastInterim && lastInterim.text.trim().length > 0) {
-                const lastItem = contextItems[contextItems.length - 1];
-                const isDuplicate = lastItem &&
-                    lastItem.role === 'interviewer' &&
-                    (lastItem.text === lastInterim.text || Math.abs(lastItem.timestamp - lastInterim.timestamp) < 1000);
-
-                if (!isDuplicate) {
-                    console.log(`[IntelligenceEngine] Injecting interim transcript: "${lastInterim.text.substring(0, 50)}..."`);
-                    contextItems.push({
-                        role: 'interviewer',
-                        text: lastInterim.text,
-                        timestamp: lastInterim.timestamp
-                    });
-                }
-            }
-
-            const transcriptTurns = contextItems.map(item => ({
-                role: item.role,
-                text: item.text,
-                timestamp: item.timestamp
-            }));
             const contextAssemblyStart = Date.now();
-            const preparedTranscript = prepareTranscriptForWhatToAnswer(transcriptTurns, 12);
-            this.latencyTracker.mark(requestId, 'transcriptPrepared');
-            const temporalContext = buildTemporalContext(
+            const composedContext = this.consciousContextComposer.compose({
                 contextItems,
-                this.session.getAssistantResponseHistory(),
-                180
-            );
-            let intentResult: Awaited<ReturnType<IntelligenceEngine['classifyIntentForRoute']>> = {
-                intent: 'general',
-                confidence: 0,
-                reason: 'context_assembly_timeout',
-            } as any;
-            const contextAssemblyElapsed = Date.now() - contextAssemblyStart;
-            if (contextAssemblyElapsed < this.CONTEXT_ASSEMBLY_HARD_BUDGET_MS) {
-                try {
-                    if (!this.session.isLikelyGeneralIntent(lastInterviewerTurn)) {
-                        intentResult = await Promise.race([
-                            this.classifyIntentForRoute(
-                                lastInterviewerTurn,
-                                preparedTranscript,
-                                this.session.getAssistantResponseHistory().length
-                            ),
-                            new Promise((_, reject) => {
-                                setTimeout(() => reject(new Error('intent classification timeout')), Math.max(30, this.CONTEXT_ASSEMBLY_HARD_BUDGET_MS - contextAssemblyElapsed));
-                            }),
-                        ]) as typeof intentResult;
-                    }
-                } catch {
-                    this.latencyTracker.markFallbackOccurred(requestId, 'context_timeout');
-                    intentResult = {
-                        intent: 'general',
-                        confidence: 0,
-                        reason: 'context_timeout',
-                    } as any;
-                }
-            } else {
+                lastInterim,
+                assistantHistory: this.session.getAssistantResponseHistory(),
+                transcriptTurnLimit: 12,
+                temporalWindowSeconds: 180,
+                onInterimInjected: (text) => {
+                    console.log(`[IntelligenceEngine] Injecting interim transcript: "${text.substring(0, 50)}..."`);
+                },
+            });
+            contextItems = composedContext.contextItems;
+            const preparedTranscript = composedContext.preparedTranscript;
+            this.latencyTracker.mark(requestId, 'transcriptPrepared');
+            const temporalContext = composedContext.temporalContext;
+            const { intentResult, totalContextAssemblyMs, timedOut } = await this.consciousIntentService.resolve({
+                lastInterviewerTurn,
+                preparedTranscript,
+                assistantResponseCount: this.session.getAssistantResponseHistory().length,
+                startedAt: contextAssemblyStart,
+                hardBudgetMs: this.CONTEXT_ASSEMBLY_HARD_BUDGET_MS,
+                isLikelyGeneralIntent: this.session.isLikelyGeneralIntent(lastInterviewerTurn),
+                classifyIntent: this.classifyIntentForRoute.bind(this),
+            });
+            if (timedOut) {
                 this.latencyTracker.markFallbackOccurred(requestId, 'context_timeout');
             }
-
-            const totalContextAssemblyMs = Date.now() - contextAssemblyStart;
             if (totalContextAssemblyMs > this.CONTEXT_ASSEMBLY_SOFT_BUDGET_MS) {
                 console.warn(`[IntelligenceEngine] Context assembly over soft budget: ${totalContextAssemblyMs}ms`);
             }
@@ -852,24 +817,12 @@ export class IntelligenceEngine extends EventEmitter {
 
                 if (consciousResult.kind === 'handled') {
                     console.log(`[IntelligenceEngine] Temporal RAG: ${temporalContext.previousResponses.length} responses, tone: ${temporalContext.toneSignals[0]?.type || 'neutral'}, intent: conscious_reasoning${imagePaths?.length ? `, with ${imagePaths.length} image(s)` : ''}`);
-                    this.setMode('reasoning_first');
-
-                    const fullAnswer = consciousResult.fullAnswer;
-
-                    this.emit('suggested_answer_token', fullAnswer, question || 'What to Answer', confidence);
-                    this.latencyTracker.markFirstVisibleAnswer(requestId);
-                    this.session.addAssistantMessage(fullAnswer);
-                    this.session.pushUsage({
-                        type: 'assist',
-                        timestamp: Date.now(),
-                        question: question || 'What to Answer',
-                        answer: fullAnswer
-                     });
-                     this.emit('suggested_answer', fullAnswer, question || 'What to Answer', confidence);
-                     const latencySnapshot = this.latencyTracker.complete(requestId);
-                     console.log('[IntelligenceEngine] Answer latency snapshot:', latencySnapshot);
-                     this.setMode('idle');
-                     return fullAnswer;
+                    return consciousResponseCoordinator.completeStructuredAnswer({
+                        requestId,
+                        questionLabel: question || 'What to Answer',
+                        confidence,
+                        fullAnswer: consciousResult.fullAnswer,
+                    });
                 }
 
                 if (consciousResult.kind === 'skip') {
@@ -878,8 +831,9 @@ export class IntelligenceEngine extends EventEmitter {
                     effectiveRoute = standardRouteAfterConsciousFallback;
                     isProfileEnrichmentRoute = effectiveRoute === 'enriched_standard_answer';
                     activeProfileEnrichmentRoute = isProfileEnrichmentRoute;
-                    this.latencyTracker.markFallbackOccurred(requestId);
-                    this.latencyTracker.markDegradedToRoute(requestId, effectiveRoute, {
+                    consciousResponseCoordinator.markFallbackToRoute({
+                        requestId,
+                        route: effectiveRoute,
                         profileEnrichmentState: isProfileEnrichmentRoute ? 'attempted' : undefined,
                         profileFallbackReason: undefined,
                     });
