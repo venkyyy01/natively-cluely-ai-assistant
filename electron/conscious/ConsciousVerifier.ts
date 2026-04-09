@@ -7,6 +7,18 @@ export interface ConsciousVerificationResult {
   reason?: string;
 }
 
+export interface ConsciousVerifierJudgeInput {
+  response: ConsciousModeStructuredResponse;
+  route: ConsciousModeQuestionRoute;
+  reaction?: QuestionReaction | null;
+  hypothesis?: AnswerHypothesis | null;
+  question: string;
+}
+
+export interface ConsciousVerifierJudge {
+  judge(input: ConsciousVerifierJudgeInput): Promise<ConsciousVerificationResult | null>;
+}
+
 function hasSubstance(response: ConsciousModeStructuredResponse): boolean {
   return Boolean(
     response.openingReasoning.trim() ||
@@ -32,13 +44,31 @@ function summaryText(response: ConsciousModeStructuredResponse): string {
 }
 
 export class ConsciousVerifier {
-  verify(input: {
-    response: ConsciousModeStructuredResponse;
-    route: ConsciousModeQuestionRoute;
-    reaction?: QuestionReaction | null;
-    hypothesis?: AnswerHypothesis | null;
-    question: string;
-  }): ConsciousVerificationResult {
+  constructor(private readonly judge: ConsciousVerifierJudge | null = null) {}
+
+  async verify(input: ConsciousVerifierJudgeInput): Promise<ConsciousVerificationResult> {
+    const ruleVerdict = this.verifyRules(input);
+    if (!ruleVerdict.ok) {
+      return ruleVerdict;
+    }
+
+    if (!this.judge) {
+      return ruleVerdict;
+    }
+
+    try {
+      const judgeVerdict = await this.judge.judge(input);
+      return judgeVerdict ?? ruleVerdict;
+    } catch {
+      return ruleVerdict;
+    }
+  }
+
+  private verifyRules(input: ConsciousVerifierJudgeInput): ConsciousVerificationResult {
+    return this.verifyRuleSet(input);
+  }
+
+  private verifyRuleSet(input: ConsciousVerifierJudgeInput): ConsciousVerificationResult {
     if (!hasSubstance(input.response)) {
       return { ok: false, reason: 'empty_structured_response' };
     }

@@ -10,7 +10,7 @@ import {
   FollowUpQuestionsLLM, WhatToAnswerLLM,
   AssistantResponse as LLMAssistantResponse, classifyIntent
 } from './llm';
-import { ConsciousContextComposer, ConsciousIntentService, ConsciousOrchestrator, ConsciousPreparationCoordinator, ConsciousResponseCoordinator, FallbackExecutor } from './conscious';
+import { ConsciousContextComposer, ConsciousIntentService, ConsciousOrchestrator, ConsciousPreparationCoordinator, ConsciousResponseCoordinator, ConsciousVerifier, ConsciousVerifierLLM, FallbackExecutor } from './conscious';
 import { ParallelContextAssembler, ContextAssemblyInput, ContextAssemblyOutput } from './cache/ParallelContextAssembler';
 import { isOptimizationActive } from './config/optimizations';
 import { AnswerLatencyTracker, AnswerRoute } from './latency/AnswerLatencyTracker';
@@ -104,7 +104,7 @@ export class IntelligenceEngine extends EventEmitter {
     super();
     this.llmHelper = llmHelper;
     this.session = session;
-    this.consciousOrchestrator = new ConsciousOrchestrator(this.session);
+    this.consciousOrchestrator = this.buildConsciousOrchestrator();
     this.consciousContextComposer = new ConsciousContextComposer();
     this.consciousIntentService = new ConsciousIntentService();
     this.consciousPreparationCoordinator = new ConsciousPreparationCoordinator(
@@ -273,7 +273,7 @@ export class IntelligenceEngine extends EventEmitter {
 
     setSession(session: SessionTracker): void {
         this.session = session;
-        this.consciousOrchestrator = new ConsciousOrchestrator(this.session);
+        this.consciousOrchestrator = this.buildConsciousOrchestrator();
         this.consciousContextComposer = new ConsciousContextComposer();
         this.consciousIntentService = new ConsciousIntentService();
         this.consciousPreparationCoordinator = new ConsciousPreparationCoordinator(
@@ -289,6 +289,11 @@ export class IntelligenceEngine extends EventEmitter {
 
     private getConsciousResponseCoordinator(): ConsciousResponseCoordinator {
         return new ConsciousResponseCoordinator(this.session, this.latencyTracker, this, this.setMode.bind(this));
+    }
+
+    private buildConsciousOrchestrator(): ConsciousOrchestrator {
+        const verifierJudge = new ConsciousVerifierLLM(this.llmHelper);
+        return new ConsciousOrchestrator(this.session, new ConsciousVerifier(verifierJudge));
     }
 
     private buildCompactTranscriptSnapshot(

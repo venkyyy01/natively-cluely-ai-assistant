@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { ConsciousVerifier } from '../conscious/ConsciousVerifier';
+import { ConsciousVerifierLLM } from '../conscious/ConsciousVerifierLLM';
 import type { ConsciousModeStructuredResponse } from '../ConsciousMode';
 
 function response(overrides: Partial<ConsciousModeStructuredResponse> = {}): ConsciousModeStructuredResponse {
@@ -18,9 +19,9 @@ function response(overrides: Partial<ConsciousModeStructuredResponse> = {}): Con
   };
 }
 
-test('ConsciousVerifier rejects tradeoff probes with no tradeoff or defense content', () => {
+test('ConsciousVerifier rejects tradeoff probes with no tradeoff or defense content', async () => {
   const verifier = new ConsciousVerifier();
-  const result = verifier.verify({
+  const result = await verifier.verify({
     response: response(),
     route: { qualifies: true, threadAction: 'continue' },
     reaction: {
@@ -38,9 +39,9 @@ test('ConsciousVerifier rejects tradeoff probes with no tradeoff or defense cont
   assert.equal(result.reason, 'missing_tradeoff_content');
 });
 
-test('ConsciousVerifier rejects duplicate continuation answers', () => {
+test('ConsciousVerifier rejects duplicate continuation answers', async () => {
   const verifier = new ConsciousVerifier();
-  const result = verifier.verify({
+  const result = await verifier.verify({
     response: response({ openingReasoning: 'same answer', implementationPlan: [] }),
     route: { qualifies: true, threadAction: 'continue' },
     reaction: {
@@ -66,9 +67,9 @@ test('ConsciousVerifier rejects duplicate continuation answers', () => {
   assert.equal(result.reason, 'duplicate_follow_up_response');
 });
 
-test('ConsciousVerifier accepts a tradeoff probe when tradeoffs are present', () => {
+test('ConsciousVerifier accepts a tradeoff probe when tradeoffs are present', async () => {
   const verifier = new ConsciousVerifier();
-  const result = verifier.verify({
+  const result = await verifier.verify({
     response: response({ tradeoffs: ['Cross-tenant reads get more expensive'] }),
     route: { qualifies: true, threadAction: 'continue' },
     reaction: {
@@ -83,4 +84,51 @@ test('ConsciousVerifier accepts a tradeoff probe when tradeoffs are present', ()
   });
 
   assert.equal(result.ok, true);
+});
+
+test('ConsciousVerifier falls back to rule-based acceptance when LLM judge is unavailable', async () => {
+  const verifier = new ConsciousVerifier(new ConsciousVerifierLLM({
+    generateContentStructured: async () => '{"ok": false, "reason": "should_not_run"}',
+    hasStructuredGenerationCapability: () => false,
+  }));
+
+  const result = await verifier.verify({
+    response: response({ tradeoffs: ['Cross-tenant reads get more expensive'] }),
+    route: { qualifies: true, threadAction: 'continue' },
+    reaction: {
+      kind: 'tradeoff_probe',
+      confidence: 0.9,
+      cues: ['tradeoff_language'],
+      targetFacets: ['tradeoffs'],
+      shouldContinueThread: true,
+    },
+    hypothesis: null,
+    question: 'What are the tradeoffs?',
+  });
+
+  assert.equal(result.ok, true);
+});
+
+test('ConsciousVerifier honors an LLM judge rejection when rules pass', async () => {
+  const verifier = new ConsciousVerifier(new ConsciousVerifierLLM({
+    generateContentStructured: async () => '{"ok": false, "reason": "llm_detected_misalignment", "confidence": 0.91}',
+    hasStructuredGenerationCapability: () => true,
+  }, 50));
+
+  const result = await verifier.verify({
+    response: response({ tradeoffs: ['Cross-tenant reads get more expensive'] }),
+    route: { qualifies: true, threadAction: 'continue' },
+    reaction: {
+      kind: 'tradeoff_probe',
+      confidence: 0.9,
+      cues: ['tradeoff_language'],
+      targetFacets: ['tradeoffs'],
+      shouldContinueThread: true,
+    },
+    hypothesis: null,
+    question: 'What are the tradeoffs?',
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, 'llm_detected_misalignment');
 });

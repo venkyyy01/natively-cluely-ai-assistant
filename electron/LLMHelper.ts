@@ -3294,6 +3294,10 @@ ANSWER DIRECTLY:`;
     });
   }
 
+  public hasStructuredGenerationCapability(): boolean {
+    return Boolean(this.openaiClient || this.claudeClient || this.client || this.groqClient);
+  }
+
   public getCurrentModel(): string {
     if (this.customProvider) return this.customProvider.name;
     if (this.activeCurlProvider) return this.activeCurlProvider.id;

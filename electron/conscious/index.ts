@@ -16,6 +16,8 @@ export { ConsciousIntentService, type ResolvedIntentResult, type ConsciousIntent
 export { ConsciousPreparationCoordinator, type ConsciousPreparationResult } from './ConsciousPreparationCoordinator';
 export { ConsciousResponseCoordinator } from './ConsciousResponseCoordinator';
 export { ConsciousVerifier, type ConsciousVerificationResult } from './ConsciousVerifier';
+export { ConsciousVerifierLLM } from './ConsciousVerifierLLM';
+export { runConsciousEvalHarness, getDefaultConsciousEvalScenarios, type ConsciousEvalScenario, type ConsciousEvalScenarioResult, type ConsciousEvalSummary } from './ConsciousEvalHarness';
 export { FallbackExecutor } from './FallbackExecutor';
 export { extractConstraints, type ExtractedConstraint, type ConstraintType } from './ConstraintExtractor';
 export { detectQuestion, type QuestionDetection, type QuestionType } from './QuestionDetector';

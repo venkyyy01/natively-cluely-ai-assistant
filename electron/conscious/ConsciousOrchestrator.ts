@@ -57,7 +57,10 @@ export class ConsciousOrchestrator {
   private readonly verifier = new ConsciousVerifier();
   private readonly retrievalOrchestrator: ConsciousRetrievalOrchestrator;
 
-  constructor(private readonly session: ConsciousSession) {
+  constructor(private readonly session: ConsciousSession, verifier?: ConsciousVerifier) {
+    if (verifier) {
+      this.verifier = verifier;
+    }
     this.retrievalOrchestrator = new ConsciousRetrievalOrchestrator(this.session);
   }
 
@@ -152,7 +155,7 @@ export class ConsciousOrchestrator {
       return { kind: 'fallback' };
     }
 
-    const verification = this.verifier.verify({
+    const verification = await this.verifier.verify({
       response: structuredResponse,
       route: { qualifies: true, threadAction: 'continue' },
       reaction: this.session.getLatestQuestionReaction(),
@@ -207,7 +210,7 @@ export class ConsciousOrchestrator {
       return { kind: 'fallback' };
     }
 
-    const verification = this.verifier.verify({
+    const verification = await this.verifier.verify({
       response: structuredResponse,
       route: input.route,
       reaction: this.session.getLatestQuestionReaction(),
