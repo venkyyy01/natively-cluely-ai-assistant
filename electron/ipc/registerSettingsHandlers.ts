@@ -10,6 +10,11 @@ type RegisterSettingsHandlersDeps = {
   safeHandleValidated: SafeHandleValidated;
 };
 
+type WindowFacadeLike = {
+  toggleSettingsWindow?: (x?: number, y?: number) => void;
+  closeSettingsWindow?: () => void;
+};
+
 type RuntimeCoordinatorLike = {
   shouldManageLifecycle?: () => boolean;
   getSupervisor?: (name: string) => unknown;
@@ -63,6 +68,14 @@ function getRuntimeCoordinator(appState: AppState): RuntimeCoordinatorLike | nul
   }
 
   return appState.getCoordinator() as RuntimeCoordinatorLike;
+}
+
+function getWindowFacade(appState: AppState): WindowFacadeLike | null {
+  if ('getWindowFacade' in appState && typeof appState.getWindowFacade === 'function') {
+    return appState.getWindowFacade() as WindowFacadeLike;
+  }
+
+  return null;
 }
 
 function getStealthSupervisor(appState: AppState): StealthSupervisorLike | null {
@@ -124,7 +137,12 @@ export function registerSettingsHandlers({ appState, safeHandle, safeHandleValid
 
   safeHandleValidated('toggle-settings-window', (args) => [parseIpcInput(ipcSchemas.settingsWindowCoords, args[0] || {}, 'toggle-settings-window')] as const, (_event, { x, y }) => {
     try {
-      appState.settingsWindowHelper.toggleWindow(x, y);
+      const windowFacade = getWindowFacade(appState);
+      if (windowFacade?.toggleSettingsWindow) {
+        windowFacade.toggleSettingsWindow(x, y);
+      } else {
+        appState.settingsWindowHelper.toggleWindow(x, y);
+      }
       return settingsSuccess(null);
     } catch (error: any) {
       return settingsError('SETTINGS_WINDOW_TOGGLE_FAILED', error?.message || 'Unable to toggle settings window');
@@ -133,7 +151,12 @@ export function registerSettingsHandlers({ appState, safeHandle, safeHandleValid
 
   safeHandle('close-settings-window', () => {
     try {
-      appState.settingsWindowHelper.closeWindow();
+      const windowFacade = getWindowFacade(appState);
+      if (windowFacade?.closeSettingsWindow) {
+        windowFacade.closeSettingsWindow();
+      } else {
+        appState.settingsWindowHelper.closeWindow();
+      }
       return settingsSuccess(null);
     } catch (error: any) {
       return settingsError('SETTINGS_WINDOW_CLOSE_FAILED', error?.message || 'Unable to close settings window');

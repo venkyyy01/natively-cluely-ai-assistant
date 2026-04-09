@@ -484,6 +484,72 @@ test('settings handlers validate inputs and normalize success contracts', async 
   });
 });
 
+test('settings window handlers prefer WindowFacade when available', async () => {
+  await withPatchedModules({
+    electron: {
+      app: {
+        getPath: () => '/mock/exe',
+        setLoginItemSettings: () => {},
+        getLoginItemSettings: () => ({ openAtLogin: false }),
+      },
+    },
+    '../services/CredentialsManager': {
+      CredentialsManager: {
+        getInstance: () => ({
+          setAiResponseLanguage: () => {},
+          getSttLanguage: () => 'en-US',
+          getAiResponseLanguage: () => 'en',
+        }),
+      },
+    },
+  }, async () => {
+    const modulePath = require.resolve('../ipc/registerSettingsHandlers');
+    delete require.cache[modulePath];
+    const { registerSettingsHandlers } = await import('../ipc/registerSettingsHandlers');
+    const registry = createHandlerRegistry();
+    const calls: string[] = [];
+    const appState = {
+      getWindowFacade: () => ({
+        toggleSettingsWindow: (x?: number, y?: number) => {
+          calls.push(`toggleSettings:${x ?? 'none'},${y ?? 'none'}`);
+        },
+        closeSettingsWindow: () => {
+          calls.push('closeSettings');
+        },
+      }),
+      processingHelper: { getLLMHelper: () => ({ setAiResponseLanguage: () => {} }) },
+      settingsWindowHelper: {
+        toggleWindow: () => {
+          throw new Error('legacy settings window path should not be used');
+        },
+        closeWindow: () => {
+          throw new Error('legacy settings window path should not be used');
+        },
+      },
+      setUndetectable: () => {},
+      getUndetectable: () => false,
+      setDisguise: () => {},
+      getDisguise: () => 'activity',
+      setConsciousModeEnabled: () => true,
+      getConsciousModeEnabled: () => false,
+      setAccelerationModeEnabled: () => true,
+      getAccelerationModeEnabled: () => false,
+    };
+
+    registerSettingsHandlers({ appState: appState as any, ...registry } as any);
+
+    assert.deepEqual(await registry.handlers.get('toggle-settings-window')?.({}, { x: 10, y: 20 }), {
+      success: true,
+      data: null,
+    });
+    assert.deepEqual(await registry.handlers.get('close-settings-window')?.({}), {
+      success: true,
+      data: null,
+    });
+    assert.deepEqual(calls, ['toggleSettings:10,20', 'closeSettings']);
+  });
+});
+
 test('meeting handlers prefer RuntimeCoordinator lifecycle methods when supervisor runtime is enabled', async () => {
   const modulePath = require.resolve('../ipc/registerMeetingHandlers');
   delete require.cache[modulePath];
@@ -1031,6 +1097,117 @@ test('window handlers preserve window control and resize contracts', async () =>
   ]);
 
   assert.throws(() => registry.handlers.get('set-overlay-clickthrough')?.({}, 'yes'), /Invalid IPC payload/);
+});
+
+test('window handlers prefer WindowFacade when available', async () => {
+  const registry = createHandlerRegistry();
+  const calls: string[] = [];
+  const appState = {
+    getWindowFacade: () => ({
+      updateContentDimensions: (senderId: number, width: number, height: number) => {
+        calls.push(`dimensions:${senderId}:${width}x${height}`);
+      },
+      setWindowMode: (mode: string) => {
+        calls.push(`mode:${mode}`);
+      },
+      setOverlayClickthrough: (enabled: boolean) => {
+        calls.push(`clickthrough:${enabled}`);
+      },
+      toggleMainWindow: () => {
+        calls.push('toggle');
+      },
+      showMainWindow: () => {
+        calls.push('show');
+      },
+      hideMainWindow: () => {
+        calls.push('hide');
+      },
+      moveWindowLeft: () => {
+        calls.push('left');
+      },
+      moveWindowRight: () => {
+        calls.push('right');
+      },
+      moveWindowUp: () => {
+        calls.push('up');
+      },
+      moveWindowDown: () => {
+        calls.push('down');
+      },
+      centerAndShowWindow: () => {
+        calls.push('center');
+      },
+    }),
+    settingsWindowHelper: {
+      getSettingsWindow: () => {
+        throw new Error('legacy settings path should not be used');
+      },
+      setWindowDimensions: () => {
+        throw new Error('legacy settings path should not be used');
+      },
+    },
+    getWindowHelper: () => {
+      throw new Error('legacy window helper path should not be used');
+    },
+    toggleMainWindow: () => {
+      throw new Error('legacy toggle path should not be used');
+    },
+    showMainWindow: () => {
+      throw new Error('legacy show path should not be used');
+    },
+    hideMainWindow: () => {
+      throw new Error('legacy hide path should not be used');
+    },
+    moveWindowLeft: () => {
+      throw new Error('legacy left path should not be used');
+    },
+    moveWindowRight: () => {
+      throw new Error('legacy right path should not be used');
+    },
+    moveWindowUp: () => {
+      throw new Error('legacy up path should not be used');
+    },
+    moveWindowDown: () => {
+      throw new Error('legacy down path should not be used');
+    },
+    centerAndShowWindow: () => {
+      throw new Error('legacy center path should not be used');
+    },
+  };
+
+  const modulePath = require.resolve('../ipc/registerWindowHandlers');
+  delete require.cache[modulePath];
+  const { registerWindowHandlers } = await import('../ipc/registerWindowHandlers');
+  registerWindowHandlers({ appState: appState as any, ...registry } as any);
+
+  await registry.handlers.get('update-content-dimensions')?.({ sender: { id: 202 } }, { width: 720, height: 360 });
+  assert.deepEqual(await registry.handlers.get('set-window-mode')?.({}, 'launcher'), { success: true });
+  assert.deepEqual(await registry.handlers.get('set-overlay-clickthrough')?.({}, true), {
+    success: true,
+    data: { enabled: true },
+  });
+  assert.deepEqual(await registry.handlers.get('toggle-window')?.({}), { success: true, data: null });
+  assert.deepEqual(await registry.handlers.get('show-window')?.({}), { success: true, data: null });
+  assert.deepEqual(await registry.handlers.get('hide-window')?.({}), { success: true, data: null });
+  assert.deepEqual(await registry.handlers.get('move-window-left')?.({}), { success: true, data: null });
+  assert.deepEqual(await registry.handlers.get('move-window-right')?.({}), { success: true, data: null });
+  assert.deepEqual(await registry.handlers.get('move-window-up')?.({}), { success: true, data: null });
+  assert.deepEqual(await registry.handlers.get('move-window-down')?.({}), { success: true, data: null });
+  assert.deepEqual(await registry.handlers.get('center-and-show-window')?.({}), { success: true, data: null });
+
+  assert.deepEqual(calls, [
+    'dimensions:202:720x360',
+    'mode:launcher',
+    'clickthrough:true',
+    'toggle',
+    'show',
+    'hide',
+    'left',
+    'right',
+    'up',
+    'down',
+    'center',
+  ]);
 });
 
 test('profile handlers validate inputs and normalize errors', async () => {

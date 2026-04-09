@@ -10,6 +10,7 @@ import { SttSupervisor } from "./runtime/SttSupervisor"
 import { InferenceSupervisor } from "./runtime/InferenceSupervisor"
 import { StealthSupervisor } from "./runtime/StealthSupervisor"
 import { RecoverySupervisor } from "./runtime/RecoverySupervisor"
+import { WindowFacade } from "./runtime/WindowFacade"
 import { getPerformanceInstrumentation, type PerformanceInstrumentation } from "./runtime/PerformanceInstrumentation"
 import { RuntimeCoordinator, type RuntimeOwnershipMode } from "./runtime/RuntimeCoordinator"
 import { StealthManager } from "./stealth/StealthManager"
@@ -2412,6 +2413,36 @@ try {
 
   public getWindowHelper(): WindowHelper {
     return this.windowHelper
+  }
+
+  public getWindowFacade(): WindowFacade {
+    return new WindowFacade({
+      getSettingsWindow: () => this.settingsWindowHelper.getSettingsWindow(),
+      setSettingsWindowDimensions: (window, width, height) => {
+        this.settingsWindowHelper.setWindowDimensions(window as BrowserWindow, width, height)
+      },
+      getOverlayWindow: () => this.windowHelper.getOverlayWindow(),
+      getLauncherContentWindow: () => this.windowHelper.getLauncherContentWindow(),
+      setOverlayDimensions: (width, height) => {
+        this.windowHelper.setOverlayDimensions(width, height)
+      },
+      setWindowMode: (mode) => {
+        this.windowHelper.setWindowMode(mode)
+      },
+      setOverlayClickthrough: (enabled) => {
+        this.windowHelper.setOverlayClickthrough(enabled)
+      },
+      toggleMainWindow: () => this.toggleMainWindow(),
+      showMainWindow: () => this.showMainWindow(),
+      hideMainWindow: () => this.hideMainWindow(),
+      moveWindowLeft: () => this.moveWindowLeft(),
+      moveWindowRight: () => this.moveWindowRight(),
+      moveWindowUp: () => this.moveWindowUp(),
+      moveWindowDown: () => this.moveWindowDown(),
+      centerAndShowWindow: () => this.centerAndShowWindow(),
+      toggleSettingsWindow: (x, y) => this.settingsWindowHelper.toggleWindow(x, y),
+      closeSettingsWindow: () => this.settingsWindowHelper.closeWindow(),
+    })
   }
 
   public getIntelligenceManager(): IntelligenceManager {
