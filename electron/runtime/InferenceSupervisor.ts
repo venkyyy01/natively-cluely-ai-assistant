@@ -4,6 +4,7 @@ import type { ISupervisor, SupervisorState } from './types';
 export interface InferenceSupervisorDelegate {
   start?: () => Promise<void> | void;
   stop?: () => Promise<void> | void;
+  onStealthFault?: (reason: string) => Promise<void> | void;
   onDraftReady?: (requestId: string) => Promise<void> | void;
   onAnswerCommitted?: (requestId: string) => Promise<void> | void;
   getLLMHelper?: () => unknown;
@@ -35,6 +36,9 @@ export class InferenceSupervisor implements ISupervisor {
   constructor(options: InferenceSupervisorOptions) {
     this.delegate = options.delegate;
     this.bus = options.bus ?? new SupervisorBus();
+    this.bus.subscribe('stealth:fault', async (event) => {
+      await this.handleStealthFault(event.reason);
+    });
   }
 
   getState(): SupervisorState {
@@ -67,6 +71,14 @@ export class InferenceSupervisor implements ISupervisor {
     } finally {
       this.state = 'idle';
     }
+  }
+
+  private async handleStealthFault(reason: string): Promise<void> {
+    if (this.state !== 'running') {
+      return;
+    }
+
+    await this.delegate.onStealthFault?.(reason);
   }
 
   async publishDraftReady(requestId: string): Promise<void> {

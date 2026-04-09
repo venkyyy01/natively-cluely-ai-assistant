@@ -78,3 +78,47 @@ test('InferenceSupervisor throws when the delegate does not expose an LLM helper
 
   assert.throws(() => supervisor.getLLMHelper(), /does not expose an LLM helper/);
 });
+
+test('InferenceSupervisor sheds non-essential work on stealth faults while running', async () => {
+  const bus = new SupervisorBus({ error() {} });
+  const calls: string[] = [];
+
+  const supervisor = new InferenceSupervisor({
+    bus,
+    delegate: {
+      async start() {
+        calls.push('start');
+      },
+      async onStealthFault(reason) {
+        calls.push(`stealth-fault:${reason}`);
+      },
+    },
+  });
+
+  await supervisor.start();
+  await bus.emit({ type: 'stealth:fault', reason: 'stealth heartbeat missed' });
+
+  assert.deepEqual(calls, ['start', 'stealth-fault:stealth heartbeat missed']);
+});
+
+test('InferenceSupervisor ignores stealth faults while not running', async () => {
+  const bus = new SupervisorBus({ error() {} });
+  const calls: string[] = [];
+
+  const supervisor = new InferenceSupervisor({
+    bus,
+    delegate: {
+      async onStealthFault(reason) {
+        calls.push(`stealth-fault:${reason}`);
+      },
+    },
+  });
+
+  await bus.emit({ type: 'stealth:fault', reason: 'window_visible_to_capture' });
+  assert.deepEqual(calls, []);
+
+  await supervisor.start();
+  await supervisor.stop();
+  await bus.emit({ type: 'stealth:fault', reason: 'window_visible_to_capture' });
+  assert.deepEqual(calls, []);
+});
