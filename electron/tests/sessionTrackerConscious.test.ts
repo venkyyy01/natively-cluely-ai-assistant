@@ -104,3 +104,98 @@ test('SessionTracker ensureMeetingContext keeps latest meeting id when restores 
     persistence.findByMeeting = originalFindByMeeting;
   }
 });
+
+test('SessionTracker restoreFromMeetingId restores conscious reasoning and hypothesis state', async () => {
+  const tracker = new SessionTracker();
+  const persistence = (tracker as any).persistence;
+
+  const originalFindByMeeting = persistence.findByMeeting.bind(persistence);
+  persistence.findByMeeting = async (meetingId: string) => {
+    if (meetingId !== 'meeting-conscious') {
+      return originalFindByMeeting(meetingId);
+    }
+
+    const now = Date.now();
+    return {
+      version: 1,
+      sessionId: 'session-conscious',
+      meetingId,
+      createdAt: now - 1000,
+      lastActiveAt: now,
+      activeThread: {
+        id: 'thread_123',
+        topic: 'How would you design a cache?',
+        goal: 'Discuss cache architecture',
+        phase: 'high_level_design',
+        turnCount: 2,
+      },
+      suspendedThreads: [],
+      pinnedItems: [],
+      constraints: [],
+      epochSummaries: [],
+      responseHashes: [],
+      consciousState: {
+        threadState: {
+          latestConsciousResponse: {
+            mode: 'reasoning_first',
+            openingReasoning: 'I would start with cache aside.',
+            implementationPlan: ['Use Redis'],
+            tradeoffs: ['Cold misses still hit the database'],
+            edgeCases: [],
+            scaleConsiderations: [],
+            pushbackResponses: [],
+            likelyFollowUps: [],
+            codeTransition: '',
+          },
+          activeReasoningThread: {
+            rootQuestion: 'How would you design a cache?',
+            lastQuestion: 'How would you design a cache?',
+            response: {
+              mode: 'reasoning_first',
+              openingReasoning: 'I would start with cache aside.',
+              implementationPlan: ['Use Redis'],
+              tradeoffs: ['Cold misses still hit the database'],
+              edgeCases: [],
+              scaleConsiderations: [],
+              pushbackResponses: [],
+              likelyFollowUps: [],
+              codeTransition: '',
+            },
+            followUpCount: 1,
+            updatedAt: now,
+          },
+        },
+        hypothesisState: {
+          latestHypothesis: {
+            sourceQuestion: 'What are the tradeoffs?',
+            latestSuggestedAnswer: 'I would start with cache aside.',
+            likelyThemes: ['cache aside', 'redis'],
+            confidence: 0.79,
+            evidence: ['suggested', 'inferred'],
+            reactionKind: 'tradeoff_probe',
+            targetFacets: ['tradeoffs'],
+            updatedAt: now,
+          },
+          latestReaction: {
+            kind: 'tradeoff_probe',
+            confidence: 0.88,
+            cues: ['tradeoff_language'],
+            targetFacets: ['tradeoffs'],
+            shouldContinueThread: true,
+          },
+        },
+      },
+    };
+  };
+
+  try {
+    const restored = await tracker.restoreFromMeetingId('meeting-conscious');
+    assert.equal(restored, true);
+    assert.equal(tracker.getLatestConsciousResponse()?.openingReasoning, 'I would start with cache aside.');
+    assert.equal(tracker.getActiveReasoningThread()?.rootQuestion, 'How would you design a cache?');
+    assert.equal(tracker.getLatestQuestionReaction()?.kind, 'tradeoff_probe');
+    assert.ok(tracker.getConsciousEvidenceContext().includes('tradeoff_probe'));
+  } finally {
+    persistence.findByMeeting = originalFindByMeeting;
+  }
+});

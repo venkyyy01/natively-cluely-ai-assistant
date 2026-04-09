@@ -1,6 +1,7 @@
 import { promises as fs } from 'fs';
 import { homedir } from 'os';
 import { dirname, join } from 'path';
+import type { PersistedConsciousThreadState, PersistedAnswerHypothesisState } from '../conscious';
 
 const SESSIONS_DIR = join(homedir(), '.natively', 'sessions');
 const INDEX_FILE = join(SESSIONS_DIR, 'index.json');
@@ -48,6 +49,10 @@ export interface PersistedSession {
   }>;
   epochSummaries: string[];
   responseHashes: string[];
+  consciousState?: {
+    threadState?: PersistedConsciousThreadState;
+    hypothesisState?: PersistedAnswerHypothesisState;
+  };
 }
 
 function formatDate(ts: number): string {

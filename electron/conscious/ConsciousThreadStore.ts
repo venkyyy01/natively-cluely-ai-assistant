@@ -14,6 +14,11 @@ export interface PersistedActiveThreadSnapshot {
   turnCount: number;
 }
 
+export interface PersistedConsciousThreadState {
+  latestConsciousResponse: ConsciousModeStructuredResponse | null;
+  activeReasoningThread: ReasoningThread | null;
+}
+
 export class ConsciousThreadStore {
   private latestConsciousResponse: ConsciousModeStructuredResponse | null = null;
   private activeReasoningThread: ReasoningThread | null = null;
@@ -141,5 +146,23 @@ export class ConsciousThreadStore {
   reset(): void {
     this.clear();
     this.threadManager.reset();
+  }
+
+  getPersistenceSnapshot(): PersistedConsciousThreadState {
+    return {
+      latestConsciousResponse: this.latestConsciousResponse,
+      activeReasoningThread: this.activeReasoningThread,
+    };
+  }
+
+  restorePersistenceSnapshot(snapshot: PersistedConsciousThreadState | null | undefined): void {
+    if (!snapshot) {
+      this.latestConsciousResponse = null;
+      this.activeReasoningThread = null;
+      return;
+    }
+
+    this.latestConsciousResponse = snapshot.latestConsciousResponse;
+    this.activeReasoningThread = snapshot.activeReasoningThread;
   }
 }

@@ -912,6 +912,10 @@ isConsciousModeEnabled(): boolean {
         constraints: this.extractedConstraints,
         epochSummaries: [...this.transcriptEpochSummaries],
         responseHashes: this.fingerprinter.getHashes(),
+        consciousState: {
+          threadState: this.consciousThreadStore.getPersistenceSnapshot(),
+          hypothesisState: this.answerHypothesisStore.getPersistenceSnapshot(),
+        },
       };
     }
 
@@ -943,8 +947,9 @@ isConsciousModeEnabled(): boolean {
       this.extractedConstraints = (session.constraints || []) as ExtractedConstraint[];
       this.transcriptEpochSummaries = session.epochSummaries || [];
       this.fingerprinter.restore(session.responseHashes || []);
+      this.consciousThreadStore.reset();
       this.observedQuestionStore.reset();
-      this.answerHypothesisStore.reset();
+      this.answerHypothesisStore.restorePersistenceSnapshot(session.consciousState?.hypothesisState);
 
       if (session.activeThread) {
         this.consciousThreadStore.restoreActiveThread({
@@ -955,6 +960,7 @@ isConsciousModeEnabled(): boolean {
           turnCount: session.activeThread.turnCount,
         });
       }
+      this.consciousThreadStore.restorePersistenceSnapshot(session.consciousState?.threadState);
 
       this.contextAssembleCache.clear();
       return true;

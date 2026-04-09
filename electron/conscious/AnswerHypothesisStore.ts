@@ -12,6 +12,11 @@ export interface AnswerHypothesis {
   updatedAt: number;
 }
 
+export interface PersistedAnswerHypothesisState {
+  latestHypothesis: AnswerHypothesis | null;
+  latestReaction: QuestionReaction | null;
+}
+
 function mergeUnique(values: string[]): string[] {
   return Array.from(new Set(values.map((value) => value.trim()).filter(Boolean)));
 }
@@ -127,5 +132,17 @@ export class AnswerHypothesisStore {
   reset(): void {
     this.latestHypothesis = null;
     this.latestReaction = null;
+  }
+
+  getPersistenceSnapshot(): PersistedAnswerHypothesisState {
+    return {
+      latestHypothesis: this.latestHypothesis,
+      latestReaction: this.latestReaction,
+    };
+  }
+
+  restorePersistenceSnapshot(snapshot: PersistedAnswerHypothesisState | null | undefined): void {
+    this.latestHypothesis = snapshot?.latestHypothesis ?? null;
+    this.latestReaction = snapshot?.latestReaction ?? null;
   }
 }
