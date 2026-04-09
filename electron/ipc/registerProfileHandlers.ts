@@ -9,6 +9,15 @@ type RegisterProfileHandlersDeps = {
   safeHandleValidated: SafeHandleValidated;
 };
 
+type RuntimeCoordinatorLike = {
+  shouldManageLifecycle?: () => boolean;
+  getSupervisor?: (name: string) => unknown;
+};
+
+type InferenceSupervisorLike = {
+  getKnowledgeOrchestrator?: () => unknown;
+};
+
 type ProfileIpcSuccess<T> = {
   success: true;
   data: T;
@@ -39,10 +48,24 @@ function profileError(code: string, message: string): ProfileIpcFailure {
   };
 }
 
+function getKnowledgeOrchestrator(appState: AppState): ReturnType<AppState['getKnowledgeOrchestrator']> {
+  if ('getCoordinator' in appState && typeof appState.getCoordinator === 'function') {
+    const coordinator = appState.getCoordinator() as RuntimeCoordinatorLike;
+    if (coordinator.shouldManageLifecycle?.() && typeof coordinator.getSupervisor === 'function') {
+      const supervisor = coordinator.getSupervisor('inference') as InferenceSupervisorLike;
+      if (typeof supervisor?.getKnowledgeOrchestrator === 'function') {
+        return supervisor.getKnowledgeOrchestrator() as ReturnType<AppState['getKnowledgeOrchestrator']>;
+      }
+    }
+  }
+
+  return appState.getKnowledgeOrchestrator();
+}
+
 export function registerProfileHandlers({ appState, safeHandle, safeHandleValidated }: RegisterProfileHandlersDeps): void {
   safeHandleValidated('profile:upload-resume', (args) => [parseIpcInput(ipcSchemas.profileFilePath, args[0], 'profile:upload-resume')] as const, async (_event, filePath) => {
     try {
-      const orchestrator = appState.getKnowledgeOrchestrator();
+      const orchestrator = getKnowledgeOrchestrator(appState);
       if (!orchestrator) return profileError('PROFILE_ENGINE_UNAVAILABLE', 'Knowledge engine not initialized. Please ensure API keys are configured.');
       const { DocType } = require('../../premium/electron/knowledge/types');
       return profileSuccess(await orchestrator.ingestDocument(filePath, DocType.RESUME));
@@ -53,7 +76,7 @@ export function registerProfileHandlers({ appState, safeHandle, safeHandleValida
 
   safeHandle('profile:get-status', async () => {
     try {
-      const orchestrator = appState.getKnowledgeOrchestrator();
+      const orchestrator = getKnowledgeOrchestrator(appState);
       if (!orchestrator) return profileSuccess({ hasProfile: false, profileMode: false });
       const status = orchestrator.getStatus();
       return profileSuccess({
@@ -70,7 +93,7 @@ export function registerProfileHandlers({ appState, safeHandle, safeHandleValida
 
   safeHandleValidated('profile:set-mode', (args) => [parseIpcInput(ipcSchemas.booleanFlag, args[0], 'profile:set-mode')] as const, async (_event, enabled) => {
     try {
-      const orchestrator = appState.getKnowledgeOrchestrator();
+      const orchestrator = getKnowledgeOrchestrator(appState);
       if (!orchestrator) return profileError('PROFILE_ENGINE_UNAVAILABLE', 'Knowledge engine not initialized');
       orchestrator.setKnowledgeMode(enabled);
       return profileSuccess({ success: true });
@@ -81,7 +104,7 @@ export function registerProfileHandlers({ appState, safeHandle, safeHandleValida
 
   safeHandle('profile:delete', async () => {
     try {
-      const orchestrator = appState.getKnowledgeOrchestrator();
+      const orchestrator = getKnowledgeOrchestrator(appState);
       if (!orchestrator) return profileError('PROFILE_ENGINE_UNAVAILABLE', 'Knowledge engine not initialized');
       const { DocType } = require('../../premium/electron/knowledge/types');
       orchestrator.deleteDocumentsByType(DocType.RESUME);
@@ -93,7 +116,7 @@ export function registerProfileHandlers({ appState, safeHandle, safeHandleValida
 
   safeHandle('profile:get-profile', async () => {
     try {
-      const orchestrator = appState.getKnowledgeOrchestrator();
+      const orchestrator = getKnowledgeOrchestrator(appState);
       if (!orchestrator) return profileSuccess(null);
       return profileSuccess(orchestrator.getProfileData());
     } catch (error: any) {
@@ -116,7 +139,7 @@ export function registerProfileHandlers({ appState, safeHandle, safeHandleValida
 
   safeHandleValidated('profile:upload-jd', (args) => [parseIpcInput(ipcSchemas.profileFilePath, args[0], 'profile:upload-jd')] as const, async (_event, filePath) => {
     try {
-      const orchestrator = appState.getKnowledgeOrchestrator();
+      const orchestrator = getKnowledgeOrchestrator(appState);
       if (!orchestrator) return profileError('PROFILE_ENGINE_UNAVAILABLE', 'Knowledge engine not initialized. Please ensure API keys are configured.');
       const { DocType } = require('../../premium/electron/knowledge/types');
       return profileSuccess(await orchestrator.ingestDocument(filePath, DocType.JD));
@@ -127,7 +150,7 @@ export function registerProfileHandlers({ appState, safeHandle, safeHandleValida
 
   safeHandle('profile:delete-jd', async () => {
     try {
-      const orchestrator = appState.getKnowledgeOrchestrator();
+      const orchestrator = getKnowledgeOrchestrator(appState);
       if (!orchestrator) return profileError('PROFILE_ENGINE_UNAVAILABLE', 'Knowledge engine not initialized');
       const { DocType } = require('../../premium/electron/knowledge/types');
       orchestrator.deleteDocumentsByType(DocType.JD);
@@ -139,7 +162,7 @@ export function registerProfileHandlers({ appState, safeHandle, safeHandleValida
 
   safeHandleValidated('profile:research-company', (args) => [parseIpcInput(ipcSchemas.profileCompanyName, args[0], 'profile:research-company')] as const, async (_event, companyName) => {
     try {
-      const orchestrator = appState.getKnowledgeOrchestrator();
+      const orchestrator = getKnowledgeOrchestrator(appState);
       if (!orchestrator) return profileError('PROFILE_ENGINE_UNAVAILABLE', 'Knowledge engine not initialized');
       const engine = orchestrator.getCompanyResearchEngine();
       const { CredentialsManager } = require('../services/CredentialsManager');
@@ -171,7 +194,7 @@ export function registerProfileHandlers({ appState, safeHandle, safeHandleValida
 
   safeHandle('profile:generate-negotiation', async () => {
     try {
-      const orchestrator = appState.getKnowledgeOrchestrator();
+      const orchestrator = getKnowledgeOrchestrator(appState);
       if (!orchestrator) return profileError('PROFILE_ENGINE_UNAVAILABLE', 'Knowledge engine not initialized');
       const profileData = orchestrator.getProfileData();
       if (!profileData) return profileError('PROFILE_MISSING_RESUME', 'No resume uploaded');

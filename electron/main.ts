@@ -693,6 +693,7 @@ this.setupIntelligenceEvents()
         getActiveMode: () => this.intelligenceManager.getActiveMode(),
         reset: () => this.intelligenceManager.reset(),
         getRAGManager: () => this.ragManager,
+        getKnowledgeOrchestrator: () => this.processingHelper.getLLMHelper().getKnowledgeOrchestrator?.() ?? this.knowledgeOrchestrator,
       },
     }))
 

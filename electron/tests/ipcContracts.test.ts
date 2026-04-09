@@ -1097,3 +1097,186 @@ test('rag handlers prefer InferenceSupervisor RAG manager when supervisor runtim
   ]);
   assert.deepEqual(calls, ['processed:meeting-1', 'queryMeeting:meeting-1:hello', 'queueStatus']);
 });
+
+test('profile handlers prefer InferenceSupervisor knowledge orchestrator when supervisor runtime is enabled', async () => {
+  await withPatchedModules({
+    electron: {
+      dialog: {
+        showOpenDialog: async () => ({ canceled: false, filePaths: ['/tmp/profile.pdf'] }),
+      },
+    },
+    '../services/CredentialsManager': {
+      CredentialsManager: {
+        getInstance: () => ({
+          getGoogleSearchApiKey: () => 'google-key',
+          getGoogleSearchCseId: () => 'cse-id',
+          setGoogleSearchApiKey: () => {},
+          setGoogleSearchCseId: () => {},
+        }),
+      },
+    },
+    '../../premium/electron/knowledge/types': {
+      DocType: {
+        RESUME: 'resume',
+        JD: 'jd',
+      },
+    },
+    '../../premium/electron/knowledge/GoogleCustomSearchProvider': {
+      GoogleCustomSearchProvider: class GoogleCustomSearchProvider {
+        constructor(public readonly apiKey: string, public readonly cseId: string) {}
+      },
+    },
+  }, async () => {
+    const modulePath = require.resolve('../ipc/registerProfileHandlers');
+    delete require.cache[modulePath];
+    const { registerProfileHandlers } = await import('../ipc/registerProfileHandlers');
+    const registry = createHandlerRegistry();
+    const calls: string[] = [];
+    const orchestrator = {
+      ingestDocument: async (filePath: string, docType: string) => {
+        calls.push(`ingest:${docType}:${filePath}`);
+        return { ok: true, docType };
+      },
+      getStatus: () => {
+        calls.push('status');
+        return {
+          hasResume: true,
+          activeMode: true,
+          resumeSummary: { name: 'Ada', role: 'Engineer', totalExperienceYears: 8 },
+        };
+      },
+      setKnowledgeMode: (enabled: boolean) => {
+        calls.push(`mode:${enabled}`);
+      },
+      deleteDocumentsByType: (docType: string) => {
+        calls.push(`delete:${docType}`);
+      },
+      getProfileData: () => {
+        calls.push('profileData');
+        return {
+          activeJD: {
+            company: 'Acme',
+            title: 'Platform Engineer',
+            location: 'Remote',
+            level: 'Senior',
+            technologies: ['TypeScript'],
+            requirements: ['Systems design'],
+            keywords: ['platform'],
+            compensation_hint: '$200k',
+            min_years_experience: 5,
+          },
+        };
+      },
+      getCompanyResearchEngine: () => ({
+        setSearchProvider: (_provider: unknown) => {
+          calls.push('setSearchProvider');
+        },
+        researchCompany: async (companyName: string) => {
+          calls.push(`research:${companyName}`);
+          return { companyName, summary: 'researched' };
+        },
+        getCachedDossier: (companyName: string) => {
+          calls.push(`cached:${companyName}`);
+          return { companyName, summary: 'cached dossier' };
+        },
+      }),
+    };
+    const appState = {
+      getCoordinator: () => ({
+        shouldManageLifecycle: () => true,
+        getSupervisor: (name: string) => {
+          assert.equal(name, 'inference');
+          return {
+            getKnowledgeOrchestrator: () => orchestrator,
+          };
+        },
+      }),
+      getKnowledgeOrchestrator: () => {
+        throw new Error('legacy knowledge path should not be used');
+      },
+    };
+
+    registerProfileHandlers({ appState: appState as any, ...registry } as any);
+
+    assert.deepEqual(await registry.handlers.get('profile:upload-resume')?.({}, '/tmp/resume.pdf'), {
+      success: true,
+      data: { ok: true, docType: 'resume' },
+    });
+    assert.deepEqual(await registry.handlers.get('profile:get-status')?.({}), {
+      success: true,
+      data: { hasProfile: true, profileMode: true, name: 'Ada', role: 'Engineer', totalExperienceYears: 8 },
+    });
+    assert.deepEqual(await registry.handlers.get('profile:set-mode')?.({}, false), {
+      success: true,
+      data: { success: true },
+    });
+    assert.deepEqual(await registry.handlers.get('profile:delete')?.({}), {
+      success: true,
+      data: { success: true },
+    });
+    assert.deepEqual(await registry.handlers.get('profile:get-profile')?.({}), {
+      success: true,
+      data: {
+        activeJD: {
+          company: 'Acme',
+          title: 'Platform Engineer',
+          location: 'Remote',
+          level: 'Senior',
+          technologies: ['TypeScript'],
+          requirements: ['Systems design'],
+          keywords: ['platform'],
+          compensation_hint: '$200k',
+          min_years_experience: 5,
+        },
+      },
+    });
+    assert.deepEqual(await registry.handlers.get('profile:upload-jd')?.({}, '/tmp/jd.pdf'), {
+      success: true,
+      data: { ok: true, docType: 'jd' },
+    });
+    assert.deepEqual(await registry.handlers.get('profile:delete-jd')?.({}), {
+      success: true,
+      data: { success: true },
+    });
+    assert.deepEqual(await registry.handlers.get('profile:research-company')?.({}, 'Acme'), {
+      success: true,
+      data: { success: true, dossier: { companyName: 'Acme', summary: 'researched' } },
+    });
+    assert.deepEqual(await registry.handlers.get('profile:generate-negotiation')?.({}), {
+      success: true,
+      data: {
+        success: true,
+        dossier: { companyName: 'Acme', summary: 'cached dossier' },
+        profileData: {
+          activeJD: {
+            company: 'Acme',
+            title: 'Platform Engineer',
+            location: 'Remote',
+            level: 'Senior',
+            technologies: ['TypeScript'],
+            requirements: ['Systems design'],
+            keywords: ['platform'],
+            compensation_hint: '$200k',
+            min_years_experience: 5,
+          },
+        },
+      },
+    });
+
+    assert.deepEqual(calls, [
+      'ingest:resume:/tmp/resume.pdf',
+      'status',
+      'mode:false',
+      'delete:resume',
+      'profileData',
+      'ingest:jd:/tmp/jd.pdf',
+      'delete:jd',
+      'setSearchProvider',
+      'profileData',
+      'research:Acme',
+      'profileData',
+      'status',
+      'cached:Acme',
+    ]);
+  });
+});

@@ -18,6 +18,7 @@ export interface InferenceSupervisorDelegate {
   getActiveMode?: () => unknown;
   reset?: () => Promise<void> | void;
   getRAGManager?: () => unknown;
+  getKnowledgeOrchestrator?: () => unknown;
 }
 
 interface InferenceSupervisorOptions {
@@ -172,5 +173,13 @@ export class InferenceSupervisor implements ISupervisor {
     }
 
     return this.delegate.getRAGManager() as T;
+  }
+
+  getKnowledgeOrchestrator<T = unknown>(): T {
+    if (!this.delegate.getKnowledgeOrchestrator) {
+      throw new Error('Inference supervisor delegate does not expose a knowledge orchestrator');
+    }
+
+    return this.delegate.getKnowledgeOrchestrator() as T;
   }
 }
