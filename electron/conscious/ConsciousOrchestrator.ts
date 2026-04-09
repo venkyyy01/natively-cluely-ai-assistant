@@ -17,6 +17,7 @@ import type { FollowUpLLM } from '../llm/FollowUpLLM';
 import { selectAnswerRoute } from '../latency/answerRouteSelector';
 import type { AnswerRoute } from '../latency/AnswerLatencyTracker';
 import { ConsciousRetrievalOrchestrator } from './ConsciousRetrievalOrchestrator';
+import { ConsciousProvenanceVerifier } from './ConsciousProvenanceVerifier';
 import { ConsciousVerifier } from './ConsciousVerifier';
 
 interface KnowledgeStatusLike {
@@ -59,6 +60,7 @@ export class ConsciousOrchestrator {
   private readonly verifier = new ConsciousVerifier();
   private readonly retrievalOrchestrator: ConsciousRetrievalOrchestrator;
   private readonly answerPlanner = new ConsciousAnswerPlanner();
+  private readonly provenanceVerifier = new ConsciousProvenanceVerifier();
 
   constructor(private readonly session: ConsciousSession, verifier?: ConsciousVerifier) {
     if (verifier) {
@@ -166,6 +168,15 @@ export class ConsciousOrchestrator {
       return { kind: 'fallback' };
     }
 
+    const provenanceVerdict = this.provenanceVerifier.verify({
+      response: structuredResponse,
+      semanticContextBlock: this.session.getConsciousSemanticContext(),
+      hypothesis: this.session.getLatestAnswerHypothesis(),
+    });
+    if (!provenanceVerdict.ok) {
+      console.warn('[ConsciousOrchestrator] Continuation provenance verification failed:', provenanceVerdict.reason);
+      return { kind: 'fallback' };
+    }
     const verification = await this.verifier.verify({
       response: structuredResponse,
       route: { qualifies: true, threadAction: 'continue' },
@@ -221,6 +232,15 @@ export class ConsciousOrchestrator {
       return { kind: 'fallback' };
     }
 
+    const provenanceVerdict = this.provenanceVerifier.verify({
+      response: structuredResponse,
+      semanticContextBlock: this.session.getConsciousSemanticContext(),
+      hypothesis: this.session.getLatestAnswerHypothesis(),
+    });
+    if (!provenanceVerdict.ok) {
+      console.warn('[ConsciousOrchestrator] Structured response provenance verification failed:', provenanceVerdict.reason);
+      return { kind: 'fallback' };
+    }
     const verification = await this.verifier.verify({
       response: structuredResponse,
       route: input.route,
