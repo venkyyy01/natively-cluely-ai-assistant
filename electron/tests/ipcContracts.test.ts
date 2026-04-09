@@ -717,6 +717,134 @@ test('email handlers prefer InferenceSupervisor LLM helper when supervisor runti
   });
 });
 
+test('intelligence handlers prefer InferenceSupervisor when supervisor runtime is enabled', async () => {
+  const modulePath = require.resolve('../ipc/registerIntelligenceHandlers');
+  delete require.cache[modulePath];
+  const { registerIntelligenceHandlers } = await import('../ipc/registerIntelligenceHandlers');
+
+  const registry = createHandlerRegistry();
+  const calls: string[] = [];
+  const appState = {
+    getCoordinator: () => ({
+      shouldManageLifecycle: () => true,
+      getSupervisor: (name: string) => {
+        assert.equal(name, 'inference');
+        return {
+          runAssistMode: async () => {
+            calls.push('assist');
+            return 'insight';
+          },
+          runWhatShouldISay: async (question?: string, confidence?: number, imagePaths?: string[]) => {
+            calls.push(`what:${question ?? 'none'}:${confidence}:${imagePaths?.length ?? 0}`);
+            return 'answer';
+          },
+          runFollowUp: async (intent: string, userRequest?: string) => {
+            calls.push(`follow:${intent}:${userRequest ?? ''}`);
+            return 'refined';
+          },
+          runRecap: async () => {
+            calls.push('recap');
+            return 'summary';
+          },
+          runFollowUpQuestions: async () => {
+            calls.push('questions');
+            return ['q1'];
+          },
+          runManualAnswer: async (question: string) => {
+            calls.push(`manual:${question}`);
+            return 'manual answer';
+          },
+          getFormattedContext: () => {
+            calls.push('context');
+            return 'formatted context';
+          },
+          getLastAssistantMessage: () => {
+            calls.push('lastAssistant');
+            return 'last assistant';
+          },
+          getActiveMode: () => {
+            calls.push('activeMode');
+            return 'idle';
+          },
+          reset: async () => {
+            calls.push('reset');
+          },
+        };
+      },
+    }),
+    getIntelligenceManager: () => {
+      throw new Error('legacy intelligence path should not be used');
+    },
+  };
+
+  registerIntelligenceHandlers({ appState: appState as any, ...registry } as any);
+
+  assert.deepEqual(await registry.handlers.get('generate-assist')?.({}), { insight: 'insight' });
+  assert.deepEqual(await registry.handlers.get('generate-what-to-say')?.({}, 'question', ['img-1']), {
+    answer: 'answer',
+    question: 'question',
+  });
+  assert.deepEqual(await registry.handlers.get('generate-follow-up')?.({}, 'tradeoff', 'more detail'), {
+    refined: 'refined',
+    intent: 'tradeoff',
+  });
+  assert.deepEqual(await registry.handlers.get('generate-recap')?.({}), { summary: 'summary' });
+  assert.deepEqual(await registry.handlers.get('generate-follow-up-questions')?.({}), { questions: ['q1'] });
+  assert.deepEqual(await registry.handlers.get('submit-manual-question')?.({}, 'manual question'), {
+    answer: 'manual answer',
+    question: 'manual question',
+  });
+  assert.deepEqual(await registry.handlers.get('get-intelligence-context')?.({}), {
+    context: 'formatted context',
+    lastAssistantMessage: 'last assistant',
+    activeMode: 'idle',
+  });
+  assert.deepEqual(await registry.handlers.get('reset-intelligence')?.({}), { success: true });
+
+  assert.deepEqual(calls, [
+    'assist',
+    'what:question:0.8:1',
+    'follow:tradeoff:more detail',
+    'recap',
+    'questions',
+    'manual:manual question',
+    'context',
+    'lastAssistant',
+    'activeMode',
+    'reset',
+  ]);
+});
+
+test('intelligence handlers normalize reset failures when supervisor reset rejects', async () => {
+  const modulePath = require.resolve('../ipc/registerIntelligenceHandlers');
+  delete require.cache[modulePath];
+  const { registerIntelligenceHandlers } = await import('../ipc/registerIntelligenceHandlers');
+
+  const registry = createHandlerRegistry();
+  const appState = {
+    getCoordinator: () => ({
+      shouldManageLifecycle: () => true,
+      getSupervisor: () => ({
+        reset: async () => {
+          throw new Error('reset failed');
+        },
+      }),
+    }),
+    getIntelligenceManager: () => ({
+      reset: async () => {
+        throw new Error('legacy reset should not be used');
+      },
+    }),
+  };
+
+  registerIntelligenceHandlers({ appState: appState as any, ...registry } as any);
+
+  assert.deepEqual(await registry.handlers.get('reset-intelligence')?.({}), {
+    success: false,
+    error: 'reset failed',
+  });
+});
+
 test('window handlers preserve window control and resize contracts', async () => {
   const registry = createHandlerRegistry();
   const calls: string[] = [];
@@ -907,4 +1035,65 @@ test('rag handlers validate inputs and preload unwraps normalized rag and profil
   ]);
 
   restore();
+});
+
+test('rag handlers prefer InferenceSupervisor RAG manager when supervisor runtime is enabled', async () => {
+  const modulePath = require.resolve('../ipc/registerRagHandlers');
+  delete require.cache[modulePath];
+  const { registerRagHandlers } = await import('../ipc/registerRagHandlers');
+  const registry = createHandlerRegistry();
+  const senderEvents: Array<{ channel: string; payload: unknown }> = [];
+  const calls: string[] = [];
+  const appState = {
+    getCoordinator: () => ({
+      shouldManageLifecycle: () => true,
+      getSupervisor: (name: string) => {
+        assert.equal(name, 'inference');
+        return {
+          getRAGManager: () => ({
+            isReady: () => true,
+            isMeetingProcessed: (meetingId: string) => {
+              calls.push(`processed:${meetingId}`);
+              return true;
+            },
+            isLiveIndexingActive: () => false,
+            async *queryMeeting(meetingId: string, query: string) {
+              calls.push(`queryMeeting:${meetingId}:${query}`);
+              yield 'chunk-1';
+            },
+            getQueueStatus: () => {
+              calls.push('queueStatus');
+              return { pending: 1, processing: 0, completed: 2, failed: 0 };
+            },
+          }),
+        };
+      },
+    }),
+    getRAGManager: () => {
+      throw new Error('legacy rag path should not be used');
+    },
+  };
+
+  registerRagHandlers({ appState: appState as any, ...registry } as any);
+
+  assert.deepEqual(await registry.handlers.get('rag:query-meeting')?.({
+    sender: {
+      send: (channel: string, payload: unknown) => {
+        senderEvents.push({ channel, payload });
+      },
+    },
+  }, { meetingId: 'meeting-1', query: 'hello' }), {
+    success: true,
+    data: { success: true },
+  });
+  assert.deepEqual(await registry.handlers.get('rag:get-queue-status')?.({}), {
+    success: true,
+    data: { pending: 1, processing: 0, completed: 2, failed: 0 },
+  });
+
+  assert.deepEqual(senderEvents, [
+    { channel: 'rag:stream-chunk', payload: { meetingId: 'meeting-1', chunk: 'chunk-1' } },
+    { channel: 'rag:stream-complete', payload: { meetingId: 'meeting-1' } },
+  ]);
+  assert.deepEqual(calls, ['processed:meeting-1', 'queryMeeting:meeting-1:hello', 'queueStatus']);
 });

@@ -682,6 +682,17 @@ this.setupIntelligenceEvents()
       bus,
       delegate: {
         getLLMHelper: () => this.processingHelper.getLLMHelper(),
+        runAssistMode: () => this.intelligenceManager.runAssistMode(),
+        runWhatShouldISay: (question, confidence, imagePaths) => this.intelligenceManager.runWhatShouldISay(question, confidence, imagePaths),
+        runFollowUp: (intent, userRequest) => this.intelligenceManager.runFollowUp(intent, userRequest),
+        runRecap: () => this.intelligenceManager.runRecap(),
+        runFollowUpQuestions: () => this.intelligenceManager.runFollowUpQuestions(),
+        runManualAnswer: (question) => this.intelligenceManager.runManualAnswer(question),
+        getFormattedContext: (lastSeconds) => this.intelligenceManager.getFormattedContext(lastSeconds),
+        getLastAssistantMessage: () => this.intelligenceManager.getLastAssistantMessage(),
+        getActiveMode: () => this.intelligenceManager.getActiveMode(),
+        reset: () => this.intelligenceManager.reset(),
+        getRAGManager: () => this.ragManager,
       },
     }))
 

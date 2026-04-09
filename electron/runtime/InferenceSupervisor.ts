@@ -7,6 +7,17 @@ export interface InferenceSupervisorDelegate {
   onDraftReady?: (requestId: string) => Promise<void> | void;
   onAnswerCommitted?: (requestId: string) => Promise<void> | void;
   getLLMHelper?: () => unknown;
+  runAssistMode?: () => Promise<string | null> | string | null;
+  runWhatShouldISay?: (question?: string, confidence?: number, imagePaths?: string[]) => Promise<string | null> | string | null;
+  runFollowUp?: (intent: string, userRequest?: string) => Promise<string | null> | string | null;
+  runRecap?: () => Promise<string | null> | string | null;
+  runFollowUpQuestions?: () => Promise<string[] | string | null> | string[] | string | null;
+  runManualAnswer?: (question: string) => Promise<string | null> | string | null;
+  getFormattedContext?: (lastSeconds?: number) => string;
+  getLastAssistantMessage?: () => string | null;
+  getActiveMode?: () => unknown;
+  reset?: () => Promise<void> | void;
+  getRAGManager?: () => unknown;
 }
 
 interface InferenceSupervisorOptions {
@@ -73,5 +84,93 @@ export class InferenceSupervisor implements ISupervisor {
     }
 
     return this.delegate.getLLMHelper() as T;
+  }
+
+  async runAssistMode(): Promise<string | null> {
+    if (!this.delegate.runAssistMode) {
+      throw new Error('Inference supervisor delegate does not expose assist mode');
+    }
+
+    return await this.delegate.runAssistMode();
+  }
+
+  async runWhatShouldISay(question?: string, confidence?: number, imagePaths?: string[]): Promise<string | null> {
+    if (!this.delegate.runWhatShouldISay) {
+      throw new Error('Inference supervisor delegate does not expose what-to-say mode');
+    }
+
+    return await this.delegate.runWhatShouldISay(question, confidence, imagePaths);
+  }
+
+  async runFollowUp(intent: string, userRequest?: string): Promise<string | null> {
+    if (!this.delegate.runFollowUp) {
+      throw new Error('Inference supervisor delegate does not expose follow-up mode');
+    }
+
+    return await this.delegate.runFollowUp(intent, userRequest);
+  }
+
+  async runRecap(): Promise<string | null> {
+    if (!this.delegate.runRecap) {
+      throw new Error('Inference supervisor delegate does not expose recap mode');
+    }
+
+    return await this.delegate.runRecap();
+  }
+
+  async runFollowUpQuestions(): Promise<string[] | string | null> {
+    if (!this.delegate.runFollowUpQuestions) {
+      throw new Error('Inference supervisor delegate does not expose follow-up questions mode');
+    }
+
+    return await this.delegate.runFollowUpQuestions();
+  }
+
+  async runManualAnswer(question: string): Promise<string | null> {
+    if (!this.delegate.runManualAnswer) {
+      throw new Error('Inference supervisor delegate does not expose manual answer mode');
+    }
+
+    return await this.delegate.runManualAnswer(question);
+  }
+
+  getFormattedContext(lastSeconds?: number): string {
+    if (!this.delegate.getFormattedContext) {
+      throw new Error('Inference supervisor delegate does not expose formatted context');
+    }
+
+    return this.delegate.getFormattedContext(lastSeconds);
+  }
+
+  getLastAssistantMessage(): string | null {
+    if (!this.delegate.getLastAssistantMessage) {
+      throw new Error('Inference supervisor delegate does not expose the last assistant message');
+    }
+
+    return this.delegate.getLastAssistantMessage();
+  }
+
+  getActiveMode<T = unknown>(): T {
+    if (!this.delegate.getActiveMode) {
+      throw new Error('Inference supervisor delegate does not expose the active mode');
+    }
+
+    return this.delegate.getActiveMode() as T;
+  }
+
+  async reset(): Promise<void> {
+    if (!this.delegate.reset) {
+      throw new Error('Inference supervisor delegate does not expose reset');
+    }
+
+    await this.delegate.reset();
+  }
+
+  getRAGManager<T = unknown>(): T {
+    if (!this.delegate.getRAGManager) {
+      throw new Error('Inference supervisor delegate does not expose a RAG manager');
+    }
+
+    return this.delegate.getRAGManager() as T;
   }
 }

@@ -8,6 +8,15 @@ type RegisterRagHandlersDeps = {
   safeHandleValidated: SafeHandleValidated;
 };
 
+type RuntimeCoordinatorLike = {
+  shouldManageLifecycle?: () => boolean;
+  getSupervisor?: (name: string) => unknown;
+};
+
+type InferenceSupervisorLike = {
+  getRAGManager?: () => unknown;
+};
+
 type RagIpcSuccess<T> = {
   success: true;
   data: T;
@@ -38,11 +47,25 @@ function ragError(code: string, message: string): RagIpcFailure {
   };
 }
 
+function getRagManager(appState: AppState): ReturnType<AppState['getRAGManager']> {
+  if ('getCoordinator' in appState && typeof appState.getCoordinator === 'function') {
+    const coordinator = appState.getCoordinator() as RuntimeCoordinatorLike;
+    if (coordinator.shouldManageLifecycle?.() && typeof coordinator.getSupervisor === 'function') {
+      const supervisor = coordinator.getSupervisor('inference') as InferenceSupervisorLike;
+      if (typeof supervisor?.getRAGManager === 'function') {
+        return supervisor.getRAGManager() as ReturnType<AppState['getRAGManager']>;
+      }
+    }
+  }
+
+  return appState.getRAGManager();
+}
+
 export function registerRagHandlers({ appState, safeHandle, safeHandleValidated }: RegisterRagHandlersDeps): void {
   const activeRAGQueries = new Map<string, AbortController>();
 
   safeHandleValidated('rag:query-meeting', (args) => [parseIpcInput(ipcSchemas.ragMeetingQuery, args[0], 'rag:query-meeting')] as const, async (event, { meetingId, query }) => {
-    const ragManager = appState.getRAGManager();
+    const ragManager = getRagManager(appState);
     if (!ragManager || !ragManager.isReady()) return ragSuccess({ fallback: true });
     if (!ragManager.isMeetingProcessed(meetingId) && !ragManager.isLiveIndexingActive(meetingId)) return ragSuccess({ fallback: true });
 
@@ -71,7 +94,7 @@ export function registerRagHandlers({ appState, safeHandle, safeHandleValidated 
   });
 
   safeHandleValidated('rag:query-live', (args) => [parseIpcInput(ipcSchemas.ragLiveQuery, args[0], 'rag:query-live')] as const, async (event, { query }) => {
-    const ragManager = appState.getRAGManager();
+    const ragManager = getRagManager(appState);
     if (!ragManager || !ragManager.isReady()) return ragSuccess({ fallback: true });
     if (!ragManager.isLiveIndexingActive('live-meeting-current')) return ragSuccess({ fallback: true });
 
@@ -100,7 +123,7 @@ export function registerRagHandlers({ appState, safeHandle, safeHandleValidated 
   });
 
   safeHandleValidated('rag:query-global', (args) => [parseIpcInput(ipcSchemas.ragGlobalQuery, args[0], 'rag:query-global')] as const, async (event, { query }) => {
-    const ragManager = appState.getRAGManager();
+    const ragManager = getRagManager(appState);
     if (!ragManager || !ragManager.isReady()) return ragSuccess({ fallback: true });
 
     const abortController = new AbortController();
@@ -138,7 +161,7 @@ export function registerRagHandlers({ appState, safeHandle, safeHandleValidated 
 
   safeHandleValidated('rag:is-meeting-processed', (args) => [parseIpcInput(ipcSchemas.providerId, args[0], 'rag:is-meeting-processed')] as const, async (_event, meetingId) => {
     try {
-      const ragManager = appState.getRAGManager();
+      const ragManager = getRagManager(appState);
       if (!ragManager) return ragSuccess(false);
       return ragSuccess(ragManager.isMeetingProcessed(meetingId));
     } catch {
@@ -148,7 +171,7 @@ export function registerRagHandlers({ appState, safeHandle, safeHandleValidated 
 
   safeHandle('rag:reindex-incompatible-meetings', async () => {
     try {
-      const ragManager = appState.getRAGManager();
+      const ragManager = getRagManager(appState);
       if (!ragManager) return ragError('RAG_MANAGER_UNAVAILABLE', 'RAGManager not initialized');
       await ragManager.reindexIncompatibleMeetings();
       return ragSuccess({ success: true });
@@ -158,14 +181,14 @@ export function registerRagHandlers({ appState, safeHandle, safeHandleValidated 
   });
 
   safeHandle('rag:get-queue-status', async () => {
-    const ragManager = appState.getRAGManager();
+    const ragManager = getRagManager(appState);
     if (!ragManager) return ragSuccess({ pending: 0, processing: 0, completed: 0, failed: 0 });
     return ragSuccess(ragManager.getQueueStatus());
   });
 
   safeHandle('rag:retry-embeddings', async () => {
     try {
-      const ragManager = appState.getRAGManager();
+      const ragManager = getRagManager(appState);
       if (!ragManager) return ragError('RAG_MANAGER_UNAVAILABLE', 'RAGManager not initialized');
       await ragManager.retryPendingEmbeddings();
       return ragSuccess({ success: true });
