@@ -149,3 +149,98 @@ test('StealthSupervisor can be faulted explicitly after it is armed', async () =
   assert.deepEqual(calls, [true, false]);
   assert.deepEqual(faultReasons, ['window_visible_to_capture']);
 });
+
+test('StealthSupervisor enters FAULT when heartbeat verification misses', async () => {
+  const calls: boolean[] = [];
+  const faultReasons: string[] = [];
+  const bus = createBus();
+  const heartbeatTicks: Array<() => void> = [];
+  const clearedHandles: unknown[] = [];
+  const heartbeatHandle = { unref() {} };
+  let verifyCallCount = 0;
+
+  bus.subscribe('stealth:fault', async (event) => {
+    faultReasons.push(event.reason);
+  });
+
+  const supervisor = new StealthSupervisor(
+    {
+      async setEnabled(enabled: boolean) {
+        calls.push(enabled);
+      },
+      isEnabled: () => calls[calls.length - 1] ?? false,
+    },
+    bus,
+    {
+      verifier: () => {
+        verifyCallCount += 1;
+        return verifyCallCount === 1;
+      },
+      intervalScheduler: (callback) => {
+        heartbeatTicks.push(callback);
+        return heartbeatHandle;
+      },
+      clearIntervalScheduler: (handle) => {
+        clearedHandles.push(handle);
+      },
+      heartbeatIntervalMs: 1,
+    },
+  );
+
+  await supervisor.start();
+  await supervisor.setEnabled(true);
+  assert.equal(supervisor.getStealthState(), 'FULL_STEALTH');
+  assert.equal(heartbeatTicks.length, 1);
+
+  heartbeatTicks[0]();
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(supervisor.getStealthState(), 'FAULT');
+  assert.deepEqual(calls, [true, false]);
+  assert.deepEqual(faultReasons, ['stealth heartbeat missed']);
+  assert.deepEqual(clearedHandles, [heartbeatHandle]);
+});
+
+test('StealthSupervisor clears heartbeat timer during normal disable and stop', async () => {
+  const calls: boolean[] = [];
+  const bus = createBus();
+  const heartbeatTicks: Array<() => void> = [];
+  const clearedHandles: unknown[] = [];
+  const firstHandle = { id: 1, unref() {} };
+  const secondHandle = { id: 2, unref() {} };
+  let scheduleCount = 0;
+
+  const supervisor = new StealthSupervisor(
+    {
+      async setEnabled(enabled: boolean) {
+        calls.push(enabled);
+      },
+      isEnabled: () => calls[calls.length - 1] ?? false,
+      verifyStealthState: () => true,
+    },
+    bus,
+    {
+      intervalScheduler: (callback) => {
+        heartbeatTicks.push(callback);
+        scheduleCount += 1;
+        return scheduleCount === 1 ? firstHandle : secondHandle;
+      },
+      clearIntervalScheduler: (handle) => {
+        clearedHandles.push(handle);
+      },
+      heartbeatIntervalMs: 1,
+    },
+  );
+
+  await supervisor.start();
+  await supervisor.setEnabled(true);
+  await supervisor.setEnabled(false);
+  await supervisor.setEnabled(true);
+  await supervisor.stop();
+
+  assert.deepEqual(calls, [true, false, true, false]);
+  assert.equal(heartbeatTicks.length, 2);
+  assert.deepEqual(clearedHandles, [firstHandle, secondHandle]);
+  assert.equal(supervisor.getState(), 'idle');
+  assert.equal(supervisor.getStealthState(), 'OFF');
+});

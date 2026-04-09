@@ -20,6 +20,9 @@ export interface StealthSupervisorOptions {
   verifier?: () => boolean | Promise<boolean>;
   startHeartbeat?: () => Promise<void> | void;
   stopHeartbeat?: () => Promise<void> | void;
+  heartbeatIntervalMs?: number;
+  intervalScheduler?: (callback: () => void, intervalMs: number) => unknown;
+  clearIntervalScheduler?: (handle: unknown) => void;
 }
 
 export class StealthSupervisor implements ISupervisor {
@@ -28,17 +31,25 @@ export class StealthSupervisor implements ISupervisor {
   private stealthState: StealthState = 'OFF';
   private pendingEnabled = false;
   private readonly armController: StealthArmController;
+  private readonly heartbeatIntervalMs: number;
+  private readonly intervalScheduler: (callback: () => void, intervalMs: number) => unknown;
+  private readonly clearIntervalScheduler: (handle: unknown) => void;
+  private heartbeatHandle: unknown = null;
+  private heartbeatCheckInFlight = false;
 
   constructor(
     private readonly delegate: StealthDelegate,
     private readonly bus: SupervisorBus,
     private readonly options: StealthSupervisorOptions = {},
   ) {
+    this.heartbeatIntervalMs = options.heartbeatIntervalMs ?? 500;
+    this.intervalScheduler = options.intervalScheduler ?? ((callback, intervalMs) => setInterval(callback, intervalMs));
+    this.clearIntervalScheduler = options.clearIntervalScheduler ?? ((handle) => clearInterval(handle as NodeJS.Timeout));
     this.armController = new StealthArmController({
       setEnabled: (enabled) => this.delegate.setEnabled(enabled),
       verifyStealthState: () => this.verifyStealth(),
-      startHeartbeat: this.options.startHeartbeat,
-      stopHeartbeat: this.options.stopHeartbeat,
+      startHeartbeat: () => this.startHeartbeat(),
+      stopHeartbeat: () => this.stopHeartbeat(),
     });
   }
 
@@ -166,6 +177,51 @@ export class StealthSupervisor implements ISupervisor {
     }
 
     await this.bus.emit({ type: 'stealth:fault', reason });
+  }
+
+  private async startHeartbeat(): Promise<void> {
+    await this.options.startHeartbeat?.();
+    if (this.heartbeatHandle || this.heartbeatIntervalMs <= 0) {
+      return;
+    }
+
+    this.heartbeatHandle = this.intervalScheduler(() => {
+      void this.runHeartbeatCheck();
+    }, this.heartbeatIntervalMs);
+
+    const timeoutLikeHandle = this.heartbeatHandle as { unref?: () => void };
+    timeoutLikeHandle.unref?.();
+  }
+
+  private async stopHeartbeat(): Promise<void> {
+    if (this.heartbeatHandle) {
+      this.clearIntervalScheduler(this.heartbeatHandle);
+      this.heartbeatHandle = null;
+    }
+
+    await this.options.stopHeartbeat?.();
+  }
+
+  private async runHeartbeatCheck(): Promise<void> {
+    if (this.heartbeatCheckInFlight) {
+      return;
+    }
+
+    if (this.state !== 'running' || this.stealthState !== 'FULL_STEALTH') {
+      return;
+    }
+
+    this.heartbeatCheckInFlight = true;
+    try {
+      const verified = await this.verifyStealth();
+      if (!verified) {
+        await this.reportFault(new Error('stealth heartbeat missed'));
+      }
+    } catch (error) {
+      await this.reportFault(error);
+    } finally {
+      this.heartbeatCheckInFlight = false;
+    }
   }
 
   private async transitionTo(next: StealthState): Promise<void> {
