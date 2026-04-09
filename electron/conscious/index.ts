@@ -10,6 +10,7 @@ export { ConsciousThreadStore, type PersistedActiveThreadSnapshot } from './Cons
 export { ObservedQuestionStore, type ObservedQuestion } from './ObservedQuestionStore';
 export { ConsciousContextComposer, type ConsciousContextComposition } from './ConsciousContextComposer';
 export { ConsciousIntentService, type ResolvedIntentResult, type ConsciousIntentResolution } from './ConsciousIntentService';
+export { ConsciousPreparationCoordinator, type ConsciousPreparationResult } from './ConsciousPreparationCoordinator';
 export { ConsciousResponseCoordinator } from './ConsciousResponseCoordinator';
 export { FallbackExecutor } from './FallbackExecutor';
 export { extractConstraints, type ExtractedConstraint, type ConstraintType } from './ConstraintExtractor';
