@@ -63,6 +63,41 @@ class EvidenceCapturingLLMHelper {
   private callIndex = 0;
   public contexts: Array<string | undefined> = [];
 
+  getKnowledgeOrchestrator() {
+    return {
+      getStatus: () => ({ hasResume: true, hasActiveJD: true, activeMode: true }),
+      getProfileData: () => ({
+        identity: {
+          name: 'Jane Doe',
+          role: 'Senior Backend Engineer',
+          summary: 'Built multi-tenant distributed systems.',
+        },
+        skills: ['Redis', 'Kafka', 'Postgres'],
+        projects: [
+          {
+            name: 'Tenant Analytics Platform',
+            description: 'Multi-tenant analytics system with tenant partitioning and async read aggregation.',
+            technologies: ['Redis', 'Kafka', 'ClickHouse'],
+          },
+        ],
+        experience: [
+          {
+            company: 'Acme',
+            role: 'Senior Backend Engineer',
+            bullets: ['Reduced p99 latency with caching and batching.'],
+          },
+        ],
+        activeJD: {
+          title: 'Staff Backend Engineer',
+          company: 'ExampleCorp',
+          technologies: ['Redis', 'Kafka'],
+          requirements: ['Design distributed systems'],
+          keywords: ['scalability', 'latency'],
+        },
+      }),
+    };
+  }
+
   async *streamChat(message: string, _imagePaths?: string[], context?: string): AsyncGenerator<string> {
     this.callIndex += 1;
     this.contexts.push(context);
@@ -331,6 +366,8 @@ test('Conscious Mode follow-up context includes inferred answer evidence', async
 
   const continuationContext = llmHelper.contexts[1] || '';
   assert.ok(continuationContext.includes('<conscious_state>'));
+  assert.ok(continuationContext.includes('<conscious_answer_plan>'));
+  assert.ok(continuationContext.includes('<conscious_semantic_memory>'));
   assert.ok(continuationContext.includes('<conscious_evidence>'));
   assert.ok(continuationContext.includes('INTERVIEWER_REACTION: tradeoff_probe'));
   assert.ok(continuationContext.includes('LATEST_SUGGESTED_ANSWER:'));

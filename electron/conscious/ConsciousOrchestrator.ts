@@ -8,6 +8,7 @@ import {
 } from '../ConsciousMode';
 import type { QuestionReaction } from './QuestionReactionClassifier';
 import type { AnswerHypothesis } from './AnswerHypothesisStore';
+import { ConsciousAnswerPlanner } from './ConsciousAnswerPlanner';
 import type { TemporalContext } from '../llm/TemporalContextBuilder';
 import type { IntentResult } from '../llm/IntentClassifier';
 import type { WhatToAnswerLLM } from '../llm/WhatToAnswerLLM';
@@ -31,6 +32,7 @@ interface ConsciousSession {
   clearConsciousModeThread(): void;
   getFormattedContext(lastSeconds: number): string;
   getConsciousEvidenceContext(): string;
+  getConsciousSemanticContext(): string;
   getLatestQuestionReaction(): QuestionReaction | null;
   getLatestAnswerHypothesis(): AnswerHypothesis | null;
   recordConsciousResponse(
@@ -56,6 +58,7 @@ export type ConsciousExecutionResult =
 export class ConsciousOrchestrator {
   private readonly verifier = new ConsciousVerifier();
   private readonly retrievalOrchestrator: ConsciousRetrievalOrchestrator;
+  private readonly answerPlanner = new ConsciousAnswerPlanner();
 
   constructor(private readonly session: ConsciousSession, verifier?: ConsciousVerifier) {
     if (verifier) {
@@ -145,10 +148,18 @@ export class ConsciousOrchestrator {
     const structuredResponse = await input.followUpLLM.generateReasoningFirstFollowUp(
       input.activeReasoningThread,
       input.resolvedQuestion,
-      this.retrievalOrchestrator.buildPack({
-        question: input.resolvedQuestion,
-        lastSeconds: 180,
-      }).combinedContext
+      [
+        this.answerPlanner.buildContextBlock(this.answerPlanner.plan({
+          question: input.resolvedQuestion,
+          reaction: this.session.getLatestQuestionReaction(),
+          hypothesis: this.session.getLatestAnswerHypothesis(),
+        })),
+        this.session.getConsciousSemanticContext(),
+        this.retrievalOrchestrator.buildPack({
+          question: input.resolvedQuestion,
+          lastSeconds: 180,
+        }).combinedContext,
+      ].filter(Boolean).join('\n\n')
     );
 
     if (input.isStale() || !isValidConsciousModeResponse(structuredResponse)) {

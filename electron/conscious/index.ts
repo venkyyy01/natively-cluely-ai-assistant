@@ -10,6 +10,8 @@ export { ConsciousThreadStore, type PersistedActiveThreadSnapshot, type Persiste
 export { ObservedQuestionStore, type ObservedQuestion } from './ObservedQuestionStore';
 export { QuestionReactionClassifier, type QuestionReaction, type QuestionReactionKind } from './QuestionReactionClassifier';
 export { AnswerHypothesisStore, type AnswerHypothesis, type PersistedAnswerHypothesisState } from './AnswerHypothesisStore';
+export { ConsciousAnswerPlanner, type ConsciousAnswerPlan, type ConsciousAnswerShape } from './ConsciousAnswerPlanner';
+export { ConsciousSemanticFactStore, type ConsciousSemanticFact } from './ConsciousSemanticFactStore';
 export { ConsciousRetrievalOrchestrator, type ConsciousRetrievalPack } from './ConsciousRetrievalOrchestrator';
 export { ConsciousContextComposer, type ConsciousContextComposition } from './ConsciousContextComposer';
 export { ConsciousIntentService, type ResolvedIntentResult, type ConsciousIntentResolution } from './ConsciousIntentService';

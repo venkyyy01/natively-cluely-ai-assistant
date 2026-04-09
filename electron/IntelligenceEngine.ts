@@ -546,6 +546,7 @@ export class IntelligenceEngine extends EventEmitter {
             const resolvedQuestion = baseQuestion;
             const knowledgeOrchestrator = this.llmHelper.getKnowledgeOrchestrator?.();
             const knowledgeStatus = knowledgeOrchestrator?.getStatus?.();
+            const profileData = knowledgeOrchestrator?.getProfileData?.();
             const capability = typeof (this.llmHelper as any).getProviderCapabilityClass === 'function'
                 ? (this.llmHelper as any).getProviderCapabilityClass()
                 : 'buffered';
@@ -775,6 +776,7 @@ export class IntelligenceEngine extends EventEmitter {
                 tokenBudget: 180,
                 transcriptTurnLimit: 12,
                 temporalWindowSeconds: 180,
+                profileData,
                 hardBudgetMs: this.CONTEXT_ASSEMBLY_HARD_BUDGET_MS,
                 classifyIntent: this.classifyIntentForRoute.bind(this),
                 onInterimInjected: (text) => {

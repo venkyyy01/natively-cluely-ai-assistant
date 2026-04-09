@@ -179,6 +179,7 @@ export class SessionTracker {
 
     // Conscious Mode state
     private consciousModeEnabled: boolean = false;
+    private consciousSemanticContext: string = '';
 
     // Reference to RecapLLM for epoch summarization (injected later)
     private recapLLM: RecapLLM | null = null;
@@ -467,6 +468,7 @@ export class SessionTracker {
         if (!enabled) {
             this.consciousThreadStore.reset();
             this.answerHypothesisStore.reset();
+            this.consciousSemanticContext = '';
         }
     }
 
@@ -708,6 +710,14 @@ isConsciousModeEnabled(): boolean {
 
     getConsciousEvidenceContext(): string {
         return this.answerHypothesisStore.buildContextBlock();
+    }
+
+    setConsciousSemanticContext(block: string): void {
+        this.consciousSemanticContext = block || '';
+    }
+
+    getConsciousSemanticContext(): string {
+        return this.consciousSemanticContext;
     }
 
     /**
@@ -1121,6 +1131,7 @@ isConsciousModeEnabled(): boolean {
     this.consciousThreadStore.reset();
     this.observedQuestionStore.reset();
     this.answerHypothesisStore.reset();
+    this.consciousSemanticContext = '';
     this.phaseDetector.reset();
     this.tokenBudgetManager.reset();
     this.adaptiveContextWindow = null;
