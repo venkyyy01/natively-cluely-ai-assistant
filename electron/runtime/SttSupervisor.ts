@@ -6,6 +6,7 @@ export type SttSpeaker = 'interviewer' | 'user';
 export interface SttSupervisorDelegates {
   startSpeaker: (speaker: SttSpeaker) => Promise<void> | void;
   stopSpeaker: (speaker: SttSpeaker) => Promise<void> | void;
+  setRecognitionLanguage?: (language: string) => Promise<void> | void;
   reconnectSpeaker?: (speaker: SttSpeaker) => Promise<void> | void;
   onError?: (speaker: SttSpeaker, error: Error) => Promise<void> | void;
 }
@@ -92,5 +93,8 @@ export class SttSupervisor implements ISupervisor {
     this.logger.warn(`[SttSupervisor] ${speaker} error:`, normalizedError);
     await this.delegates.onError?.(speaker, normalizedError);
   }
-}
 
+  async setRecognitionLanguage(language: string): Promise<void> {
+    await this.delegates.setRecognitionLanguage?.(language);
+  }
+}

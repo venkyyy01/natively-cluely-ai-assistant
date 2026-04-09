@@ -85,3 +85,24 @@ test('AudioSupervisor ignores chunk and speech callbacks when idle', async () =>
   assert.deepEqual(calls, []);
 });
 
+test('AudioSupervisor forwards audio test helpers through its delegate', async () => {
+  const calls: string[] = [];
+  const supervisor = new AudioSupervisor({
+    bus: new SupervisorBus({ error() {} }),
+    delegates: {
+      async startCapture() {},
+      async stopCapture() {},
+      async startAudioTest(deviceId) {
+        calls.push(`startAudioTest:${deviceId ?? 'default'}`);
+      },
+      async stopAudioTest() {
+        calls.push('stopAudioTest');
+      },
+    },
+  });
+
+  await supervisor.startAudioTest('mic-1');
+  await supervisor.stopAudioTest();
+
+  assert.deepEqual(calls, ['startAudioTest:mic-1', 'stopAudioTest']);
+});

@@ -88,3 +88,21 @@ test('SttSupervisor ignores transcript emission only through the bus contract', 
 
   assert.deepEqual(events, ['stt:transcript', 'stt:transcript']);
 });
+
+test('SttSupervisor forwards recognition language updates through its delegate', async () => {
+  const calls: string[] = [];
+  const supervisor = new SttSupervisor({
+    bus: new SupervisorBus({ error() {} }),
+    delegates: {
+      async startSpeaker() {},
+      async stopSpeaker() {},
+      async setRecognitionLanguage(language) {
+        calls.push(language);
+      },
+    },
+  });
+
+  await supervisor.setRecognitionLanguage('en-US');
+
+  assert.deepEqual(calls, ['en-US']);
+});

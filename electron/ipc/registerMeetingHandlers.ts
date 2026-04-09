@@ -15,6 +15,20 @@ type RuntimeCoordinatorLike = {
   shouldManageLifecycle?: () => boolean;
   activate?: (metadata?: unknown) => Promise<void>;
   deactivate?: () => Promise<void>;
+  getSupervisor?: (name: string) => unknown;
+};
+
+type AudioSupervisorLike = {
+  startAudioTest?: (deviceId?: string) => Promise<void>;
+  stopAudioTest?: () => Promise<void>;
+};
+
+type SttSupervisorLike = {
+  setRecognitionLanguage?: (language: string) => Promise<void>;
+};
+
+type InferenceSupervisorLike = {
+  getRAGManager?: () => ReturnType<AppState['getRAGManager']>;
 };
 
 function getRuntimeCoordinator(appState: AppState): RuntimeCoordinatorLike | null {
@@ -25,23 +39,68 @@ function getRuntimeCoordinator(appState: AppState): RuntimeCoordinatorLike | nul
   return appState.getCoordinator() as RuntimeCoordinatorLike;
 }
 
+function getAudioSupervisor(appState: AppState): AudioSupervisorLike | null {
+  const coordinator = getRuntimeCoordinator(appState);
+  if (!coordinator?.shouldManageLifecycle?.() || typeof coordinator.getSupervisor !== 'function') {
+    return null;
+  }
+
+  return coordinator.getSupervisor('audio') as AudioSupervisorLike;
+}
+
+function getSttSupervisor(appState: AppState): SttSupervisorLike | null {
+  const coordinator = getRuntimeCoordinator(appState);
+  if (!coordinator?.shouldManageLifecycle?.() || typeof coordinator.getSupervisor !== 'function') {
+    return null;
+  }
+
+  return coordinator.getSupervisor('stt') as SttSupervisorLike;
+}
+
+function getInferenceRagManager(appState: AppState): ReturnType<AppState['getRAGManager']> {
+  const coordinator = getRuntimeCoordinator(appState);
+  if (coordinator?.shouldManageLifecycle?.() && typeof coordinator.getSupervisor === 'function') {
+    const supervisor = coordinator.getSupervisor('inference') as InferenceSupervisorLike;
+    if (typeof supervisor?.getRAGManager === 'function') {
+      return supervisor.getRAGManager();
+    }
+  }
+
+  return appState.getRAGManager();
+}
+
 export function registerMeetingHandlers({ appState, safeHandle, safeHandleValidated }: RegisterMeetingHandlersDeps): void {
   safeHandle('get-input-devices', async () => AudioDevices.getInputDevices());
 
   safeHandle('get-output-devices', async () => AudioDevices.getOutputDevices());
 
   safeHandle('start-audio-test', async (_event, deviceId?: string) => {
-    appState.startAudioTest(deviceId);
+    const audioSupervisor = getAudioSupervisor(appState);
+    if (audioSupervisor?.startAudioTest) {
+      await audioSupervisor.startAudioTest(deviceId);
+    } else {
+      appState.startAudioTest(deviceId);
+    }
     return { success: true };
   });
 
   safeHandle('stop-audio-test', async () => {
-    appState.stopAudioTest();
+    const audioSupervisor = getAudioSupervisor(appState);
+    if (audioSupervisor?.stopAudioTest) {
+      await audioSupervisor.stopAudioTest();
+    } else {
+      appState.stopAudioTest();
+    }
     return { success: true };
   });
 
   safeHandleValidated('set-recognition-language', (args) => [parseIpcInput(ipcSchemas.recognitionLanguage, args[0], 'set-recognition-language')] as const, async (_event, key) => {
-    appState.setRecognitionLanguage(key);
+    const sttSupervisor = getSttSupervisor(appState);
+    if (sttSupervisor?.setRecognitionLanguage) {
+      await sttSupervisor.setRecognitionLanguage(key);
+    } else {
+      appState.setRecognitionLanguage(key);
+    }
     return { success: true };
   });
 
@@ -89,7 +148,7 @@ export function registerMeetingHandlers({ appState, safeHandle, safeHandleValida
 
   safeHandle('seed-demo', async () => {
     DatabaseManager.getInstance().seedDemoMeeting();
-    const ragManager = appState.getRAGManager();
+    const ragManager = getInferenceRagManager(appState);
     if (ragManager && ragManager.isReady()) {
       ragManager.reprocessMeeting('demo-meeting').catch(console.error);
     }

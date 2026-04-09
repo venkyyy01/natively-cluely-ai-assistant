@@ -530,6 +530,97 @@ test('meeting handlers prefer RuntimeCoordinator lifecycle methods when supervis
   ]);
 });
 
+test('meeting handlers prefer audio, stt, and inference supervisors for auxiliary flows', async () => {
+  const calls: string[] = [];
+  await withPatchedModules({
+    '../db/DatabaseManager': {
+      DatabaseManager: {
+        getInstance: () => ({
+          seedDemoMeeting: () => {
+            calls.push('seedDemo');
+          },
+          getRecentMeetings: async (): Promise<never[]> => [],
+          getMeetingDetails: async (): Promise<null> => null,
+          updateMeetingTitle: async (): Promise<boolean> => true,
+          updateMeetingSummary: async (): Promise<boolean> => true,
+          clearAllData: () => true,
+        }),
+      },
+    },
+  }, async () => {
+    const modulePath = require.resolve('../ipc/registerMeetingHandlers');
+    delete require.cache[modulePath];
+    const { registerMeetingHandlers } = await import('../ipc/registerMeetingHandlers');
+
+    const registry = createHandlerRegistry();
+    const appState = {
+      getCoordinator: () => ({
+        shouldManageLifecycle: () => true,
+        getSupervisor: (name: string) => {
+          if (name === 'audio') {
+            return {
+              startAudioTest: async (deviceId?: string) => {
+                calls.push(`startAudioTest:${deviceId ?? 'default'}`);
+              },
+              stopAudioTest: async () => {
+                calls.push('stopAudioTest');
+              },
+            };
+          }
+
+          if (name === 'stt') {
+            return {
+              setRecognitionLanguage: async (language: string) => {
+                calls.push(`recognition:${language}`);
+              },
+            };
+          }
+
+          if (name === 'inference') {
+            return {
+              getRAGManager: () => ({
+                isReady: () => true,
+                reprocessMeeting: async (meetingId: string) => {
+                  calls.push(`reprocess:${meetingId}`);
+                },
+              }),
+            };
+          }
+
+          throw new Error(`Unexpected supervisor: ${name}`);
+        },
+      }),
+      startAudioTest: () => {
+        throw new Error('legacy audio path should not be used');
+      },
+      stopAudioTest: () => {
+        throw new Error('legacy audio path should not be used');
+      },
+      setRecognitionLanguage: () => {
+        throw new Error('legacy stt path should not be used');
+      },
+      getRAGManager: () => {
+        throw new Error('legacy rag path should not be used');
+      },
+    };
+
+    registerMeetingHandlers({ appState: appState as any, ...registry } as any);
+
+    assert.deepEqual(await registry.handlers.get('start-audio-test')?.({}, 'mic-1'), { success: true });
+    assert.deepEqual(await registry.handlers.get('stop-audio-test')?.({}), { success: true });
+    assert.deepEqual(await registry.handlers.get('set-recognition-language')?.({}, 'en-US'), { success: true });
+    assert.deepEqual(await registry.handlers.get('seed-demo')?.({}), { success: true });
+
+    assert.deepEqual(calls, [
+      'startAudioTest:mic-1',
+      'stopAudioTest',
+      'recognition:en-US',
+      'seedDemo',
+      'reprocess:demo-meeting',
+    ]);
+  });
+});
+
 test('settings handlers prefer StealthSupervisor when supervisor runtime is enabled', async () => {
   await withPatchedModules({
     electron: {

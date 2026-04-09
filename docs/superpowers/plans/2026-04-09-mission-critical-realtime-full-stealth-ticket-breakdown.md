@@ -230,7 +230,7 @@
 
 **Goal:** Retarget IPC handlers from `appState.someMethod()` to supervisor APIs.
 
-**Status:** In progress. This branch migrated the meeting lifecycle handlers (`start-meeting`, `end-meeting`), stealth/inference-backed settings handlers (`set-undetectable`, `set-ai-response-language`), the first email/intelligence/RAG inference paths (`generate-followup-email`, all handlers in `registerIntelligenceHandlers.ts`, and all manager-backed handlers in `registerRagHandlers.ts`), and the orchestrator-backed profile handlers in `registerProfileHandlers.ts` onto coordinator/supervisor-backed access with legacy fallback preserved when the supervisor runtime is disabled.
+**Status:** In progress. This branch migrated the meeting lifecycle handlers (`start-meeting`, `end-meeting`), the remaining meeting helper handlers (`start-audio-test`, `stop-audio-test`, `set-recognition-language`, and the RAG-backed part of `seed-demo`), stealth/inference-backed settings handlers (`set-undetectable`, `set-ai-response-language`), the first email/intelligence/RAG inference paths (`generate-followup-email`, all handlers in `registerIntelligenceHandlers.ts`, and all manager-backed handlers in `registerRagHandlers.ts`), and the orchestrator-backed profile handlers in `registerProfileHandlers.ts` onto coordinator/supervisor-backed access with legacy fallback preserved when the supervisor runtime is disabled.
 
 **Primary Files**
 - `electron/ipcHandlers.ts`

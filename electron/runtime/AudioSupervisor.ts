@@ -4,6 +4,8 @@ import type { ISupervisor, SupervisorState } from './types';
 export interface AudioSupervisorDelegates {
   startCapture: () => Promise<void> | void;
   stopCapture: () => Promise<void> | void;
+  startAudioTest?: (deviceId?: string) => Promise<void> | void;
+  stopAudioTest?: () => Promise<void> | void;
   onChunk?: (chunk: Buffer) => Promise<void> | void;
   onSpeechEnded?: () => Promise<void> | void;
   onError?: (error: Error) => Promise<void> | void;
@@ -93,5 +95,12 @@ export class AudioSupervisor implements ISupervisor {
     this.logger.warn('[AudioSupervisor] capture error:', normalizedError);
     await this.delegates.onError?.(normalizedError);
   }
-}
 
+  async startAudioTest(deviceId?: string): Promise<void> {
+    await this.delegates.startAudioTest?.(deviceId);
+  }
+
+  async stopAudioTest(): Promise<void> {
+    await this.delegates.stopAudioTest?.();
+  }
+}

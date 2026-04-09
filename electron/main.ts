@@ -629,6 +629,12 @@ this.setupIntelligenceEvents()
         stopCapture: () => {
           this.stopManagedAudioRuntime()
         },
+        startAudioTest: (deviceId) => {
+          this.startAudioTest(deviceId)
+        },
+        stopAudioTest: () => {
+          this.stopAudioTest()
+        },
         onError: async (error) => {
           this.broadcast('meeting-audio-error', error.message)
         },
@@ -667,6 +673,9 @@ this.setupIntelligenceEvents()
         },
         stopSpeaker: async (speaker) => {
           this.cleanupSttProvider(speaker)
+        },
+        setRecognitionLanguage: async (language) => {
+          this.setRecognitionLanguage(language)
         },
         reconnectSpeaker: async (speaker) => {
           await this.reconnectSpeakerStt(speaker)
