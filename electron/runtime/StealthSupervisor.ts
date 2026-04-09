@@ -7,6 +7,7 @@ import {
   transitionStealthState,
 } from '../stealth/StealthStateMachine';
 import { StealthArmController } from '../stealth/StealthArmController';
+import { NativeStealthBridge, type NativeStealthArmRequest } from '../stealth/NativeStealthBridge';
 
 export interface StealthDelegate {
   setEnabled(enabled: boolean): void | Promise<void>;
@@ -23,6 +24,8 @@ export interface StealthSupervisorOptions {
   heartbeatIntervalMs?: number;
   intervalScheduler?: (callback: () => void, intervalMs: number) => unknown;
   clearIntervalScheduler?: (handle: unknown) => void;
+  nativeBridge?: NativeStealthBridge;
+  nativeArmRequest?: NativeStealthArmRequest;
 }
 
 export class StealthSupervisor implements ISupervisor {
@@ -34,6 +37,8 @@ export class StealthSupervisor implements ISupervisor {
   private readonly heartbeatIntervalMs: number;
   private readonly intervalScheduler: (callback: () => void, intervalMs: number) => unknown;
   private readonly clearIntervalScheduler: (handle: unknown) => void;
+  private readonly nativeBridge: NativeStealthBridge | null;
+  private readonly nativeArmRequest?: NativeStealthArmRequest;
   private heartbeatHandle: unknown = null;
   private heartbeatCheckInFlight = false;
 
@@ -45,11 +50,15 @@ export class StealthSupervisor implements ISupervisor {
     this.heartbeatIntervalMs = options.heartbeatIntervalMs ?? 500;
     this.intervalScheduler = options.intervalScheduler ?? ((callback, intervalMs) => setInterval(callback, intervalMs));
     this.clearIntervalScheduler = options.clearIntervalScheduler ?? ((handle) => clearInterval(handle as NodeJS.Timeout));
+    this.nativeBridge = options.nativeBridge ?? null;
+    this.nativeArmRequest = options.nativeArmRequest;
     this.armController = new StealthArmController({
       setEnabled: (enabled) => this.delegate.setEnabled(enabled),
       verifyStealthState: () => this.verifyStealth(),
       startHeartbeat: () => this.startHeartbeat(),
       stopHeartbeat: () => this.stopHeartbeat(),
+      armNativeStealth: () => this.armNativeStealth(),
+      faultNativeStealth: (reason) => this.faultNativeStealth(reason),
     });
   }
 
@@ -213,7 +222,7 @@ export class StealthSupervisor implements ISupervisor {
 
     this.heartbeatCheckInFlight = true;
     try {
-      const verified = await this.verifyStealth();
+      const verified = await this.verifyStealthWithNativeHealth();
       if (!verified) {
         await this.reportFault(new Error('stealth heartbeat missed'));
       }
@@ -236,5 +245,44 @@ export class StealthSupervisor implements ISupervisor {
     }
 
     await this.bus.emit({ type: 'stealth:state-changed', from, to });
+  }
+
+  private async armNativeStealth(): Promise<boolean> {
+    if (!this.nativeBridge) {
+      return false;
+    }
+
+    const result = await this.nativeBridge.arm(this.nativeArmRequest);
+    return result.connected;
+  }
+
+  private async heartbeatNativeStealth(): Promise<boolean> {
+    if (!this.nativeBridge) {
+      return true;
+    }
+
+    const result = await this.nativeBridge.heartbeat();
+    if (!result.connected) {
+      return true;
+    }
+
+    return result.healthy;
+  }
+
+  private async faultNativeStealth(reason: string): Promise<void> {
+    if (!this.nativeBridge) {
+      return;
+    }
+
+    await this.nativeBridge.fault(reason);
+  }
+
+  private async verifyStealthWithNativeHealth(): Promise<boolean> {
+    const runtimeVerified = await this.verifyStealth();
+    if (!runtimeVerified) {
+      return false;
+    }
+
+    return this.heartbeatNativeStealth();
   }
 }

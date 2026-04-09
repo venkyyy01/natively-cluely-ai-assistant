@@ -10,6 +10,12 @@
 
 **Companion Ticket Breakdown:** [2026-04-09-mission-critical-realtime-full-stealth-ticket-breakdown.md](./2026-04-09-mission-critical-realtime-full-stealth-ticket-breakdown.md)
 
+## Status Snapshot
+
+- Completed and verified in this branch: Workstream 0, Workstream 1 Step 1 through Step 7, Workstream 1 Step 10, Workstream 2 Part A Step 1 through Step 4, Workstream 6 Step 1, Workstream 6 Step 3, Workstream 7 Step 4, and Workstream 7 Step 5.
+- In progress: Workstream 1 Step 8 through Step 9, Workstream 2 Part A Step 5, Workstream 6 Step 2 and Step 4 through Step 8, Workstream 7 Step 1 through Step 3.
+- Not started in code on this branch: Warm standby, QoS/budget scheduler, multi-lane inference, tiered memory, and recovery hardening workstreams.
+
 ---
 
 ## Hard Constraints
@@ -65,10 +71,10 @@ Capture current performance baselines and add lightweight instrumentation that p
 - Modify: `electron/latency/AnswerLatencyTracker.ts` (extend existing tracker to cover new metrics)
 - Modify: `package.json` (add `bench:baseline` script)
 
-- [ ] Step 1: Add timestamp probes to `startMeeting`, `endMeeting`, first-token emit, and `setEnabled` in `StealthManager`. Each probe writes to a structured JSON log at `~/.natively/benchmarks/`.
-- [ ] Step 2: Create `baselineBenchmarks.test.ts` that exercises a full meeting start→answer→stop cycle and asserts probe data was captured. This test does not enforce targets yet — it records them.
-- [ ] Step 3: Run the benchmark on M2 Max and record current values as `docs/superpowers/plans/baseline-metrics.json`. Commit this file. All future optimization work references these numbers.
-- [ ] Step 4: Add `bench:baseline` npm script that runs the benchmark in isolation and prints a comparison table against the committed baseline.
+- [x] Step 1: Add timestamp probes to `startMeeting`, `endMeeting`, first-token emit, and `setEnabled` in `StealthManager`. Each probe writes to a structured JSON log at `~/.natively/benchmarks/`.
+- [x] Step 2: Create `baselineBenchmarks.test.ts` that exercises a full meeting start→answer→stop cycle and asserts probe data was captured. This test does not enforce targets yet — it records them.
+- [x] Step 3: Run the benchmark on M2 Max and record current values as `docs/superpowers/plans/baseline-metrics.json`. Commit this file. All future optimization work references these numbers.
+- [x] Step 4: Add `bench:baseline` npm script that runs the benchmark in isolation and prints a comparison table against the committed baseline.
 
 **Batch validation:** Baselines recorded. Probes do not regress existing test suite runtime by > 5%.
 
@@ -149,16 +155,16 @@ Each supervisor implements `ISupervisor { start(): Promise<void>; stop(): Promis
 - Test: `electron/tests/supervisorBus.test.ts`
 - Test: `electron/tests/runtimeCoordinator.test.ts`
 
-- [ ] Step 1: Create `SupervisorBus` with typed emit/subscribe, `ISupervisor` interface, and `SupervisorState` enum. Add bus tests for event delivery, ordering, and error isolation.
-- [ ] Step 2: Create `RuntimeCoordinator` that instantiates all supervisors and the bus. Coordinator exposes `activate(meetingId)` and `deactivate()` but internally delegates to `AppState.startMeeting()` / `AppState.endMeeting()` behind the feature flag.
-- [ ] Step 3: Create `AudioSupervisor` as a facade. Its `start()` calls `AppState.setupSystemAudioPipeline()`. Add forwarding of audio chunks through the bus.
-- [ ] Step 4: Create `SttSupervisor` wrapping `STTReconnector` and STT provider creation. Forward transcript events through the bus.
-- [ ] Step 5: Create `InferenceSupervisor` wrapping `ProcessingHelper.getLLMHelper()` orchestration. Delegate all calls to `LLMHelper` initially.
-- [ ] Step 6: Create `StealthSupervisor` wrapping `StealthManager`. Emit `stealth:state-changed` events on the bus.
-- [ ] Step 7: Create `RecoverySupervisor` wrapping `MeetingCheckpointer` and `SessionPersistence`. Emit checkpoint events on the bus.
+- [x] Step 1: Create `SupervisorBus` with typed emit/subscribe, `ISupervisor` interface, and `SupervisorState` enum. Add bus tests for event delivery, ordering, and error isolation.
+- [x] Step 2: Create `RuntimeCoordinator` that instantiates all supervisors and the bus. Coordinator exposes `activate(meetingId)` and `deactivate()` but internally delegates to `AppState.startMeeting()` / `AppState.endMeeting()` behind the feature flag.
+- [x] Step 3: Create `AudioSupervisor` as a facade. Its `start()` calls `AppState.setupSystemAudioPipeline()`. Add forwarding of audio chunks through the bus.
+- [x] Step 4: Create `SttSupervisor` wrapping `STTReconnector` and STT provider creation. Forward transcript events through the bus.
+- [x] Step 5: Create `InferenceSupervisor` wrapping `ProcessingHelper.getLLMHelper()` orchestration. Delegate all calls to `LLMHelper` initially.
+- [x] Step 6: Create `StealthSupervisor` wrapping `StealthManager`. Emit `stealth:state-changed` events on the bus.
+- [x] Step 7: Create `RecoverySupervisor` wrapping `MeetingCheckpointer` and `SessionPersistence`. Emit checkpoint events on the bus.
 - [ ] Step 8: Retarget IPC handlers from `appState.someMethod()` to `appState.getCoordinator().getSupervisor('x').someMethod()`. Each handler migration is a separate sub-PR.
 - [ ] Step 9: Add lifecycle tests: startup, shutdown, invalid transitions, lane restart without full meeting teardown, and bus event delivery during each transition.
-- [ ] Step 10: Add `ENABLE_SUPERVISOR_RUNTIME` feature flag to `optimizations.ts`. When `false`, `AppState` operates as today. When `true`, `RuntimeCoordinator` is active.
+- [x] Step 10: Add `ENABLE_SUPERVISOR_RUNTIME` feature flag to `optimizations.ts`. When `false`, `AppState` operates as today. When `true`, `RuntimeCoordinator` is active.
 
 **Batch validation:** All 89 existing tests pass with flag on and off. New supervisor tests pass. App starts, runs a meeting, and stops without regression on both paths.
 
@@ -191,9 +197,9 @@ Make full stealth a hard control-plane invariant:
 - Test: `electron/tests/stealthArmController.test.ts`
 
 - [x] Step 1: Define `OFF`, `ARMING`, `FULL_STEALTH`, and `FAULT` states in `StealthStateMachine`. Encode legal transitions. Illegal transitions throw. No "reduced stealth" path.
-- [ ] Step 2: Build `StealthArmController` that executes the arm sequence: verify native module loaded → apply stealth to all managed windows → verify stealth state → start heartbeat → transition to `FULL_STEALTH`.
-- [ ] Step 3: Make invisible-mode toggle in `StealthSupervisor` await arm success before emitting `stealth:state-changed` on the bus. Failed arm exits cleanly.
-- [ ] Step 4: Add fail-closed policy: heartbeat miss or runtime fault immediately → `FAULT` → blank output → exit invisible mode. `StealthSupervisor` emits `stealth:fault` on the bus. Other supervisors subscribe and shed non-essential work.
+- [x] Step 2: Build `StealthArmController` that executes the arm sequence: verify native module loaded → apply stealth to all managed windows → verify stealth state → start heartbeat → transition to `FULL_STEALTH`.
+- [x] Step 3: Make invisible-mode toggle in `StealthSupervisor` await arm success before emitting `stealth:state-changed` on the bus. Failed arm exits cleanly.
+- [x] Step 4: Add fail-closed policy: heartbeat miss or runtime fault immediately → `FAULT` → blank output → exit invisible mode. `StealthSupervisor` emits `stealth:fault` on the bus. Other supervisors subscribe and shed non-essential work.
 - [ ] Step 5: Add tests for: failed arm (native module absent), heartbeat loss, shell crash, rapid toggle (on-off-on < 500 ms), stealth state machine rejects illegal transitions.
 
 ### Part B: Warm Standby Capture and Meeting Activation
@@ -411,7 +417,7 @@ HeartbeatSender  ──────XPC msg─────────→  Heartb
 - Modify: build/packaging scripts (to bundle XPC service)
 - Test: `electron/tests/nativeStealthBridge.test.ts`
 
-- [ ] Step 1: Write `contract.md` defining the XPC protocol: `arm(config: ArmConfig) -> ArmResult`, `heartbeat() -> void`, `submitFrame(surfaceId: IOSurfaceID,
+- [x] Step 1: Write `contract.md` defining the XPC protocol: `arm(config: ArmConfig) -> ArmResult`, `heartbeat() -> void`, `submitFrame(surfaceId: IOSurfaceID,
 
 
 
@@ -426,7 +432,7 @@ HeartbeatSender  ──────XPC msg─────────→  Heartb
  
 region: CGRect) -> void`, `relayInput(event: InputEvent) -> void`, `fault(reason: String) -> void`. Protocol is versioned (v1).
 - [ ] Step 2: Scaffold the Swift XPC service with `Package.swift`. Implement `XPCProtocol.swift` with the protocol definition. Implement `StealthSurface.swift` with a `NSWindow` + `CAMetalLayer` that reads from IOSurface and enforces `NSWindowSharingNone`.
-- [ ] Step 3: Build `NativeStealthBridge.ts` in Electron that discovers and connects to the XPC service via `child_process.spawn` of the bundled helper binary (XPC bootstrap). Bridge exposes `arm()`, `submitFrame()`, `heartbeat()`, `fault()` as typed async methods.
+- [x] Step 3: Build `NativeStealthBridge.ts` in Electron that discovers and connects to the XPC service via `child_process.spawn` of the bundled helper binary (XPC bootstrap). Bridge exposes `arm()`, `submitFrame()`, `heartbeat()`, `fault()` as typed async methods.
 - [ ] Step 4: Integrate with `StealthArmController`: when the stealth state machine enters `ARMING`, the arm controller calls `NativeStealthBridge.arm()`. If the bridge reports success, transition to `FULL_STEALTH`. If the bridge is unavailable (XPC service not bundled), fall back to Electron-only stealth (current behavior).
 - [ ] Step 5: Implement heartbeat: `StealthSupervisor` sends heartbeat every 500 ms via the bridge. The XPC helper expects heartbeat within 2 seconds. Missed heartbeat → helper blanks its window and sends fault signal back via XPC. Electron `StealthSupervisor` receives fault and transitions state machine to `FAULT`.
 - [ ] Step 6: Add deterministic recovery: if the XPC helper dies, `NativeStealthBridge` detects process exit. `StealthSupervisor` transitions to `FAULT`. Helper restart is attempted once. If restart fails, stealth remains in `FAULT` (fail-closed).
@@ -465,12 +471,12 @@ Add validation gates that block release if any SLO is violated.
   - `inject:stealth-heartbeat-loss` — suppress heartbeat for N seconds.
   - Each injection validates that the system degrades gracefully per the degradation policy.
 - [ ] Step 3: Build active renderer lifecycle coverage: Playwright tests exercise actual UI start/stop, invisible mode toggle, crash/fault exits. Tests run against the shipped renderer, not mocks.
-- [ ] Step 4: Define release gates as a CI script (`test:release-gate`) that:
+- [x] Step 4: Define release gates as a CI script (`test:release-gate`) that:
   - Runs the soak test (configurable duration, default 30 min for CI, 2 hr for pre-release).
   - Runs fault injection suite.
   - Compares benchmark results against baseline and SLO thresholds.
   - Exits non-zero if any gate fails.
-- [ ] Step 5: Document the full soak procedure in `full-stealth-soak.md` for manual pre-release runs on M2 Max hardware.
+- [x] Step 5: Document the full soak procedure in `full-stealth-soak.md` for manual pre-release runs on M2 Max hardware.
 
 **Batch validation:** Soak test runs for the configured duration without SLO violation. Fault injection triggers correct degrade behavior. Release gate script integrates into CI.
 

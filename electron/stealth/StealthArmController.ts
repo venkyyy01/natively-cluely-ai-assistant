@@ -3,12 +3,17 @@ export interface StealthArmControllerDelegate {
   verifyStealthState: () => Promise<boolean> | boolean;
   startHeartbeat?: () => Promise<void> | void;
   stopHeartbeat?: () => Promise<void> | void;
+  armNativeStealth?: () => Promise<boolean> | boolean;
+  heartbeatNativeStealth?: () => Promise<boolean> | boolean;
+  faultNativeStealth?: (reason: string) => Promise<void> | void;
 }
 
 export class StealthArmController {
   constructor(private readonly delegate: StealthArmControllerDelegate) {}
 
   async arm(): Promise<void> {
+    await this.delegate.armNativeStealth?.();
+
     await this.delegate.setEnabled(true);
 
     const verified = await this.delegate.verifyStealthState();
@@ -21,6 +26,12 @@ export class StealthArmController {
 
   async disarm(): Promise<void> {
     let firstError: unknown = null;
+
+    try {
+      await this.delegate.faultNativeStealth?.('stealth disabled');
+    } catch (error) {
+      firstError = error;
+    }
 
     try {
       await this.delegate.stopHeartbeat?.();

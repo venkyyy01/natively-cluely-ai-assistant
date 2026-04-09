@@ -22,7 +22,17 @@ export function resolveMacosVirtualDisplayHelperPath(options: ResolveOptions = {
   }
 
   const candidates = [
+    ...(resourcesPath
+      ? [
+          path.join(resourcesPath, '../XPCServices/macos-full-stealth-helper.xpc/Contents/MacOS/macos-full-stealth-helper'),
+          path.join(resourcesPath, '../XPCServices/macos-full-stealth-helper.xpc/macos-full-stealth-helper'),
+        ]
+      : []),
     ...(resourcesPath ? [path.join(resourcesPath, 'bin/macos/stealth-virtual-display-helper')] : []),
+    path.join(cwd, 'stealth-projects/macos-full-stealth-helper/.build/debug/macos-full-stealth-helper'),
+    path.join(cwd, 'stealth-projects/macos-full-stealth-helper/.build/arm64-apple-macosx/debug/macos-full-stealth-helper'),
+    path.join(cwd, 'stealth-projects/macos-full-stealth-helper/.build/arm64-apple-macosx/release/macos-full-stealth-helper'),
+    path.join(cwd, 'stealth-projects/macos-full-stealth-helper/.build/release/macos-full-stealth-helper'),
     path.join(cwd, 'stealth-projects/macos-virtual-display-helper/.build/debug/stealth-virtual-display-helper'),
     path.join(cwd, 'stealth-projects/macos-virtual-display-helper/.build/arm64-apple-macosx/debug/stealth-virtual-display-helper'),
     path.join(cwd, 'stealth-projects/macos-virtual-display-helper/.build/arm64-apple-macosx/release/stealth-virtual-display-helper'),

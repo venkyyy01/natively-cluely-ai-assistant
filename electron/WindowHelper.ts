@@ -281,6 +281,9 @@ export class WindowHelper {
         this.launcherRuntime = new StealthRuntime({
           stealthManager: this.stealthManager,
           startUrl: `${startUrl}?window=launcher`,
+          onFault: (reason) => {
+            this.appState.handleStealthRuntimeFault(reason)
+          },
         })
         this.launcherWindow = this.launcherRuntime.createPrimaryStealthSurface(launcherSettings) as BrowserWindow
         this.launcherContentWindow = this.launcherRuntime.getContentWindow()
@@ -351,6 +354,9 @@ export class WindowHelper {
         this.overlayRuntime = new StealthRuntime({
           stealthManager: this.stealthManager,
           startUrl: `${startUrl}?window=overlay`,
+          onFault: (reason) => {
+            this.appState.handleStealthRuntimeFault(reason)
+          },
         })
         this.overlayWindow = this.overlayRuntime.createPrimaryStealthSurface(overlaySettings) as BrowserWindow
         this.overlayContentWindow = this.overlayRuntime.getContentWindow()

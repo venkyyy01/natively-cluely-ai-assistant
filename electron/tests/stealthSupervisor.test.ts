@@ -244,3 +244,49 @@ test('StealthSupervisor clears heartbeat timer during normal disable and stop', 
   assert.equal(supervisor.getState(), 'idle');
   assert.equal(supervisor.getStealthState(), 'OFF');
 });
+
+test('StealthSupervisor transitions to FAULT when native heartbeat reports unhealthy helper', async () => {
+  const calls: boolean[] = [];
+  const faultReasons: string[] = [];
+  const bus = createBus();
+  const heartbeatTicks: Array<() => void> = [];
+
+  bus.subscribe('stealth:fault', async (event) => {
+    faultReasons.push(event.reason);
+  });
+
+  const supervisor = new StealthSupervisor(
+    {
+      async setEnabled(enabled: boolean) {
+        calls.push(enabled);
+      },
+      isEnabled: () => calls[calls.length - 1] ?? false,
+      verifyStealthState: () => true,
+    },
+    bus,
+    {
+      nativeBridge: {
+        arm: async () => ({ connected: true, sessionId: 'session-a', surfaceId: 'surface-a' }),
+        heartbeat: async () => ({ connected: true, healthy: false }),
+        fault: async () => {},
+      } as unknown as import('../stealth/NativeStealthBridge').NativeStealthBridge,
+      intervalScheduler: (callback) => {
+        heartbeatTicks.push(callback);
+        return { unref() {} };
+      },
+      clearIntervalScheduler: () => {},
+      heartbeatIntervalMs: 1,
+    },
+  );
+
+  await supervisor.start();
+  await supervisor.setEnabled(true);
+  assert.equal(supervisor.getStealthState(), 'FULL_STEALTH');
+
+  heartbeatTicks[0]?.();
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(supervisor.getStealthState(), 'FAULT');
+  assert.deepEqual(calls, [true, false]);
+  assert.deepEqual(faultReasons, ['stealth heartbeat missed']);
+});

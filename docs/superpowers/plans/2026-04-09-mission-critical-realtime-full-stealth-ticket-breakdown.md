@@ -11,6 +11,12 @@
 - Meeting start should bind onto warm resources, not reconstruct the runtime
 - **Every intermediate commit is shippable.** Feature flag `ENABLE_SUPERVISOR_RUNTIME` gates new paths.
 
+## Delivery Status Snapshot
+
+- Done in this branch: `BL-001`, `BL-002`, `RT-001` through `RT-007`, `RT-009`, `STL-001`, most of `STL-002` and `STL-003`, `NSH-001`, `NSH-003`, `VAL-004`, plus the soak-procedure doc requested by `VAL-001`.
+- In progress: `RT-008`, the remaining runtime-heartbeat/native-helper parts of `STL-002` and `STL-003`, `NSH-002`, `NSH-004`, `NSH-005`, `NSH-006`, and the real hardware-backed portions of `VAL-001` through `VAL-003`.
+- Not started on this branch: `WS-*`, `ACC-*`, `INF-*`, and `MEM-*`.
+
 ---
 
 ## Sequencing Summary

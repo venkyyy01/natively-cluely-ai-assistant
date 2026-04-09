@@ -6,6 +6,10 @@ import { StealthArmController } from '../stealth/StealthArmController';
 test('StealthArmController arms by enabling, verifying, and starting heartbeat', async () => {
   const calls: string[] = [];
   const controller = new StealthArmController({
+    armNativeStealth: async () => {
+      calls.push('armNativeStealth');
+      return true;
+    },
     setEnabled: async (enabled: boolean) => {
       calls.push(`setEnabled:${enabled}`);
     },
@@ -23,7 +27,7 @@ test('StealthArmController arms by enabling, verifying, and starting heartbeat',
 
   await controller.arm();
 
-  assert.deepEqual(calls, ['setEnabled:true', 'verify', 'startHeartbeat']);
+  assert.deepEqual(calls, ['armNativeStealth', 'setEnabled:true', 'verify', 'startHeartbeat']);
 });
 
 test('StealthArmController rejects arm when verification fails', async () => {
@@ -38,6 +42,13 @@ test('StealthArmController rejects arm when verification fails', async () => {
 test('StealthArmController disarms by stopping heartbeat before disabling', async () => {
   const calls: string[] = [];
   const controller = new StealthArmController({
+    armNativeStealth: async () => {
+      calls.push('armNativeStealth');
+      return true;
+    },
+    faultNativeStealth: async (reason: string) => {
+      calls.push(`faultNativeStealth:${reason}`);
+    },
     setEnabled: async (enabled: boolean) => {
       calls.push(`setEnabled:${enabled}`);
     },
@@ -55,5 +66,5 @@ test('StealthArmController disarms by stopping heartbeat before disabling', asyn
 
   await controller.disarm();
 
-  assert.deepEqual(calls, ['stopHeartbeat', 'setEnabled:false']);
+  assert.deepEqual(calls, ['faultNativeStealth:stealth disabled', 'stopHeartbeat', 'setEnabled:false']);
 });

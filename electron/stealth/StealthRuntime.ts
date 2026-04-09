@@ -39,6 +39,7 @@ interface StealthRuntimeOptions {
   preloadPath?: string;
   shellPreloadPath?: string;
   ipcMain?: Pick<typeof ipcMain, 'on' | 'removeListener'>;
+  onFault?: (reason: string) => void | Promise<void>;
 }
 
 export class StealthRuntime {
@@ -50,6 +51,7 @@ export class StealthRuntime {
   private readonly preloadPath: string;
   private readonly shellPreloadPath: string;
   private readonly ipcMain: Pick<typeof ipcMain, 'on' | 'removeListener'>;
+  private readonly onFault?: (reason: string) => void | Promise<void>;
   private readonly frameBridge: FrameBridge;
   private readonly inputBridge = new InputBridge();
   private contentWindow: BrowserWindow | null = null;
@@ -69,6 +71,7 @@ export class StealthRuntime {
     this.preloadPath = options.preloadPath ?? path.join(__dirname, '../preload.js');
     this.shellPreloadPath = options.shellPreloadPath ?? path.join(__dirname, './shellPreload.js');
     this.ipcMain = options.ipcMain ?? ipcMain;
+    this.onFault = options.onFault;
     this.frameBridge = new FrameBridge({
       target: {
         send: (channel, payload) => {
@@ -176,10 +179,12 @@ export class StealthRuntime {
 
     this.contentWindow.webContents.on('crashed', (_event, killed) => {
       this.logger.warn(`[StealthRuntime] Content window crashed (killed=${killed})`);
+      this.emitFault('content-window-crashed');
     });
 
     this.contentWindow.webContents.on('render-process-gone', (_event, details) => {
       this.logger.warn(`[StealthRuntime] Content render process gone: ${details.reason} exitCode=${details.exitCode}`);
+      this.emitFault(`content-render-gone:${details.reason}`);
     });
 
     let frameReceived = false;
@@ -304,5 +309,15 @@ export class StealthRuntime {
     } catch (error) {
       this.logger.warn(`[StealthRuntime] Failed to request content repaint (${reason}):`, error);
     }
+  }
+
+  private emitFault(reason: string): void {
+    if (!this.onFault) {
+      return;
+    }
+
+    Promise.resolve(this.onFault(reason)).catch((error) => {
+      this.logger.warn(`[StealthRuntime] Failed to propagate runtime fault (${reason}):`, error);
+    });
   }
 }

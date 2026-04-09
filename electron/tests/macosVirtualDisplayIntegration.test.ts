@@ -4,6 +4,22 @@ import assert from 'node:assert/strict';
 import { resolveMacosVirtualDisplayHelperPath, createMacosVirtualDisplayCoordinator } from '../stealth/macosVirtualDisplayIntegration';
 import { MacosVirtualDisplayClient, MacosVirtualDisplayCoordinator } from '../stealth/MacosVirtualDisplayClient';
 
+test('resolveMacosVirtualDisplayHelperPath checks packaged XPC helper candidates before extraResources helper', () => {
+  const checkedCandidates: string[] = [];
+  const resolved = resolveMacosVirtualDisplayHelperPath({
+    env: {},
+    cwd: '/workspace',
+    resourcesPath: '/Applications/Natively.app/Contents/Resources',
+    pathExists: (candidate) => {
+      checkedCandidates.push(candidate);
+      return candidate === '/Applications/Natively.app/Contents/XPCServices/macos-full-stealth-helper.xpc/Contents/MacOS/macos-full-stealth-helper';
+    },
+  });
+
+  assert.equal(resolved, '/Applications/Natively.app/Contents/XPCServices/macos-full-stealth-helper.xpc/Contents/MacOS/macos-full-stealth-helper');
+  assert.equal(checkedCandidates[0], '/Applications/Natively.app/Contents/XPCServices/macos-full-stealth-helper.xpc/Contents/MacOS/macos-full-stealth-helper');
+});
+
 test('resolveMacosVirtualDisplayHelperPath prefers explicit env override', () => {
   const resolved = resolveMacosVirtualDisplayHelperPath({
     env: { NATIVELY_MACOS_VIRTUAL_DISPLAY_HELPER: '/tmp/helper' },

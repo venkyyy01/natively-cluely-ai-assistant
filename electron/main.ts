@@ -16,6 +16,7 @@ import { getPerformanceInstrumentation, type PerformanceInstrumentation } from "
 import { RuntimeCoordinator, type RuntimeOwnershipMode } from "./runtime/RuntimeCoordinator"
 import { StealthManager } from "./stealth/StealthManager"
 import { createMacosVirtualDisplayCoordinator, resolveMacosVirtualDisplayHelperPath } from "./stealth/macosVirtualDisplayIntegration"
+import { NativeStealthBridge } from "./stealth/NativeStealthBridge"
 if (!app.isPackaged) {
 require('dotenv').config();
 }
@@ -326,6 +327,7 @@ export class AppState {
   private checkpointer: MeetingCheckpointer | null = null
   private sttReconnector: STTReconnector | null = null
   private virtualDisplayCoordinator: import('./stealth/MacosVirtualDisplayClient').VirtualDisplayCoordinator | null = null
+  private nativeStealthBridge: NativeStealthBridge | null = null
   private tray: Tray | null = null
   private disguiseMode: 'terminal' | 'settings' | 'activity' | 'none' = 'none'
   private consciousModeEnabled: boolean = false
@@ -464,6 +466,17 @@ this.virtualDisplayCoordinator =
         console.log(`[Stealth] macOS virtual display helper: ${helperPath}`)
         return createMacosVirtualDisplayCoordinator(helperPath)
       })()
+    : null
+
+this.nativeStealthBridge =
+  process.platform === 'darwin' && enableVirtualDisplayIsolation
+    ? new NativeStealthBridge({
+        helperPathResolver: () => resolveMacosVirtualDisplayHelperPath(),
+        logger: { warn: console.warn },
+        onHelperDisconnect: (reason) => {
+          this.handleStealthRuntimeFault(`native-helper-disconnect:${reason}`)
+        },
+      })
     : null
 
 if (process.platform === 'darwin') {
@@ -720,7 +733,10 @@ this.setupIntelligenceEvents()
         verifyStealthState: () => this.verifyStealthProtection(),
       },
       bus,
-      { logger: { warn: console.warn } },
+      {
+        logger: { warn: console.warn },
+        nativeBridge: this.nativeStealthBridge ?? undefined,
+      },
     ))
 
     this.runtimeCoordinator.registerSupervisor(new RecoverySupervisor({
@@ -2231,6 +2247,8 @@ try {
 
     this.processingHelper.getLLMHelper().scrubKeys();
 
+    this.nativeStealthBridge?.dispose();
+    this.nativeStealthBridge = null;
     this.virtualDisplayCoordinator?.dispose?.();
   }
 
@@ -2902,6 +2920,35 @@ try {
     void this.setUndetectableAsync(state).catch((error) => {
       console.error('[Stealth] Failed to update undetectable state:', error)
     })
+  }
+
+  public handleStealthRuntimeFault(reason: string): void {
+    const normalizedReason = reason || 'stealth runtime fault'
+
+    if (isSupervisorRuntimeEnabled()) {
+      const stealthSupervisor = this.runtimeCoordinator.getSupervisor<StealthSupervisor>('stealth')
+      if (stealthSupervisor.getStealthState() === 'FAULT') {
+        return
+      }
+
+      void stealthSupervisor.reportFault(new Error(normalizedReason)).catch((error) => {
+        console.error('[Stealth] Failed to report stealth runtime fault:', error)
+      })
+      return
+    }
+
+    this._broadcastToAllWindows('stealth-fault', normalizedReason)
+    this.performanceInstrumentation.recordEvent('stealth.fault', {
+      reason: normalizedReason,
+    })
+
+    if (this.isUndetectable) {
+      this.applyUndetectableState(false, Date.now(), {
+        runtime: 'legacy',
+        reason: normalizedReason,
+        source: 'fault',
+      })
+    }
   }
 
   private handleStealthDegradation(warnings: string[]): void {
