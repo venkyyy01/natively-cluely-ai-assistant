@@ -538,6 +538,32 @@ describe('StealthManager', () => {
     assert.strictEqual(manager.verifyStealth(win as any), true);
   });
 
+  it('accepts the private macOS stealth path when NSWindow sharingType does not reflect CGS state', () => {
+    const win = new FakeWindow();
+    const manager = new StealthManager(
+      { enabled: true },
+      {
+        platform: 'darwin',
+        logger: silentLogger,
+        featureFlags: { enablePrivateMacosStealthApi: true },
+        nativeModule: {
+          applyMacosWindowStealth() {},
+          applyMacosPrivateWindowStealth() {},
+          verifyMacosStealthState() {
+            return 1;
+          },
+        },
+      },
+    );
+
+    (manager as any).macOSMajor = 15;
+    (manager as any).macOSMinor = 4;
+
+    manager.applyToWindow(win as any, true, { role: 'primary' });
+
+    assert.strictEqual(manager.verifyStealth(win as any), true);
+  });
+
   it('verifies all managed windows through native bindings', () => {
     const first = new FakeWindow();
     const second = new FakeWindow();

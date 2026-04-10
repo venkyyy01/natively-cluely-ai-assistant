@@ -96,6 +96,7 @@ interface ManagedWindowRecord {
   listenersAttached: boolean;
   virtualDisplayRequestId: number;
   virtualDisplayIsolationStarted: boolean;
+  privateMacosStealthApplied: boolean;
 }
 
 const WATCHDOG_INTERVAL_MS = 1000;
@@ -521,7 +522,11 @@ export class StealthManager extends EventEmitter {
 
   private applyNativeStealth(win: StealthCapableWindow): void {
     const nativeModule = this.getNativeModule();
+    const record = this.managedWindowLookup.get(win as object);
     if (!nativeModule) {
+      if (record) {
+        record.privateMacosStealthApplied = false;
+      }
       return;
     }
 
@@ -538,12 +543,18 @@ export class StealthManager extends EventEmitter {
       if (this.platform === 'darwin' && nativeModule.applyMacosWindowStealth) {
         const windowNumber = this.getMacosWindowNumber(win);
         if (windowNumber !== null) {
+          if (record) {
+            record.privateMacosStealthApplied = false;
+          }
           nativeModule.applyMacosWindowStealth(windowNumber);
           
           if (this.featureFlags.enablePrivateMacosStealthApi && nativeModule.applyMacosPrivateWindowStealth) {
             if (this.isMacOSVersionCompatible('15.0')) {
               try {
                 nativeModule.applyMacosPrivateWindowStealth(windowNumber);
+                if (record) {
+                  record.privateMacosStealthApplied = true;
+                }
               } catch (privateError) {
                 this.logger.warn('[StealthManager] Private macOS stealth API failed (incompatible version), falling back to Layer 0:', privateError);
                 this.addWarning('private_api_failed');
@@ -564,6 +575,10 @@ export class StealthManager extends EventEmitter {
 
   private removeNativeStealth(win: StealthCapableWindow): void {
     const nativeModule = this.getNativeModule();
+    const record = this.managedWindowLookup.get(win as object);
+    if (record) {
+      record.privateMacosStealthApplied = false;
+    }
     if (!nativeModule) {
       return;
     }
@@ -707,6 +722,7 @@ export class StealthManager extends EventEmitter {
       listenersAttached: false,
       virtualDisplayRequestId: 0,
       virtualDisplayIsolationStarted: false,
+      privateMacosStealthApplied: false,
     };
     this.managedWindows.add(record);
     this.managedWindowLookup.set(win as object, record);
@@ -1358,6 +1374,7 @@ for window in windows:
 
   verifyStealth(win: StealthCapableWindow): boolean {
     const nativeModule = this.getNativeModule();
+    const record = this.managedWindowLookup.get(win as object);
     if (!nativeModule) {
       return false;
     }
@@ -1370,10 +1387,18 @@ for window in windows:
         }
 
         const sharingType = nativeModule.verifyMacosStealthState(windowNumber);
-        const verified = sharingType === 0;
+        // The private CGS path does not reliably reflect through NSWindow.sharingType.
+        const privatePathVerified = Boolean(
+          this.featureFlags.enablePrivateMacosStealthApi &&
+          this.isMacOSVersionCompatible('15.0') &&
+          record?.privateMacosStealthApplied
+        );
+        const verified = sharingType === 0 || privatePathVerified;
         if (!verified && this.isEnabled()) {
           this.addWarning('stealth_verification_failed');
           this.logger.warn('[StealthManager] macOS stealth verification failed, maintaining Layer 0 protection');
+        } else {
+          this.clearWarning('stealth_verification_failed');
         }
         return verified;
       }
@@ -1389,6 +1414,8 @@ for window in windows:
         if (!verified && this.isEnabled()) {
           this.addWarning('stealth_verification_failed');
           this.logger.warn('[StealthManager] Windows stealth verification failed, maintaining Layer 0 protection');
+        } else {
+          this.clearWarning('stealth_verification_failed');
         }
         return verified;
       }
