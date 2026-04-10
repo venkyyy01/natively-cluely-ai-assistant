@@ -12,6 +12,7 @@ import { StealthSupervisor } from "./runtime/StealthSupervisor"
 import { RecoverySupervisor } from "./runtime/RecoverySupervisor"
 import { WindowFacade } from "./runtime/WindowFacade"
 import { SettingsFacade } from "./runtime/SettingsFacade"
+import { ScreenshotFacade } from "./runtime/ScreenshotFacade"
 import { getPerformanceInstrumentation, type PerformanceInstrumentation } from "./runtime/PerformanceInstrumentation"
 import { RuntimeCoordinator, type RuntimeOwnershipMode } from "./runtime/RuntimeCoordinator"
 import { StealthManager } from "./stealth/StealthManager"
@@ -2476,6 +2477,19 @@ try {
       setDisguise: (mode) => this.setDisguise(mode),
       getDisguise: () => this.getDisguise(),
       getUndetectable: () => this.getUndetectable(),
+    })
+  }
+
+  public getScreenshotFacade(): ScreenshotFacade {
+    return new ScreenshotFacade({
+      deleteScreenshot: (path) => this.deleteScreenshot(path),
+      takeScreenshot: () => this.takeScreenshot(),
+      takeSelectiveScreenshot: () => this.takeSelectiveScreenshot(),
+      getImagePreview: (filepath) => this.getImagePreview(filepath),
+      getView: () => this.getView(),
+      getScreenshotQueue: () => this.getScreenshotQueue(),
+      getExtraScreenshotQueue: () => this.getExtraScreenshotQueue(),
+      clearQueues: () => this.clearQueues(),
     })
   }
 

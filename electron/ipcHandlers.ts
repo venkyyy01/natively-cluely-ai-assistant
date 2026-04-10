@@ -16,6 +16,16 @@ import { registerProfileHandlers } from "./ipc/registerProfileHandlers";
 import { registerIntelligenceHandlers } from "./ipc/registerIntelligenceHandlers";
 import { registerWindowHandlers } from "./ipc/registerWindowHandlers";
 
+type ScreenshotFacadeLike = {
+  deleteScreenshot?: (path: string) => Promise<{ success: boolean; error?: string }>;
+  takeScreenshot?: () => Promise<string>;
+  takeSelectiveScreenshot?: () => Promise<string>;
+  getImagePreview?: (filepath: string) => Promise<string>;
+  getView?: () => 'queue' | 'solutions';
+  getScreenshotQueue?: () => string[];
+  getExtraScreenshotQueue?: () => string[];
+  clearQueues?: () => void;
+};
 
 export function initializeIpcHandlers(appState: AppState): void {
   const safeHandle = (channel: string, listener: (event: any, ...args: any[]) => Promise<any> | any) => {
@@ -59,6 +69,14 @@ export function initializeIpcHandlers(appState: AppState): void {
     return appState.processingHelper.getLLMHelper();
   };
 
+  const getScreenshotFacade = (): ScreenshotFacadeLike | null => {
+    if ('getScreenshotFacade' in appState && typeof appState.getScreenshotFacade === 'function') {
+      return appState.getScreenshotFacade() as ScreenshotFacadeLike;
+    }
+
+    return null;
+  };
+
 safeHandleValidated("renderer:log-error", (args) => [parseIpcInput(ipcSchemas.rendererLogPayload, args[0], 'renderer:log-error')] as const, async (_, payload) => {
     try {
       console.error('[RendererError]', JSON.stringify(payload));
@@ -99,13 +117,22 @@ safeHandleValidated("renderer:log-error", (args) => [parseIpcInput(ipcSchemas.re
       console.warn('[IPC] delete-screenshot: path outside userData rejected:', filePath);
       return { success: false, error: 'Path not allowed' };
     }
+    const screenshotFacade = getScreenshotFacade();
+    if (screenshotFacade?.deleteScreenshot) {
+      return screenshotFacade.deleteScreenshot(resolved);
+    }
     return appState.deleteScreenshot(resolved);
   })
 
   safeHandle("take-screenshot", async () => {
     try {
-      const screenshotPath = await appState.takeScreenshot()
-      const preview = await appState.getImagePreview(screenshotPath)
+      const screenshotFacade = getScreenshotFacade();
+      const screenshotPath = screenshotFacade?.takeScreenshot
+        ? await screenshotFacade.takeScreenshot()
+        : await appState.takeScreenshot();
+      const preview = screenshotFacade?.getImagePreview
+        ? await screenshotFacade.getImagePreview(screenshotPath)
+        : await appState.getImagePreview(screenshotPath);
       return ok({ path: screenshotPath, preview })
     } catch (error) {
       return fail('SCREENSHOT_CAPTURE_FAILED', error, 'Failed to take screenshot')
@@ -114,8 +141,13 @@ safeHandleValidated("renderer:log-error", (args) => [parseIpcInput(ipcSchemas.re
 
   safeHandle("take-selective-screenshot", async () => {
     try {
-      const screenshotPath = await appState.takeSelectiveScreenshot()
-      const preview = await appState.getImagePreview(screenshotPath)
+      const screenshotFacade = getScreenshotFacade();
+      const screenshotPath = screenshotFacade?.takeSelectiveScreenshot
+        ? await screenshotFacade.takeSelectiveScreenshot()
+        : await appState.takeSelectiveScreenshot();
+      const preview = screenshotFacade?.getImagePreview
+        ? await screenshotFacade.getImagePreview(screenshotPath)
+        : await appState.getImagePreview(screenshotPath);
       return ok({ path: screenshotPath, preview })
     } catch (error: any) {
       if (error?.message === "Selection cancelled") {
@@ -128,19 +160,30 @@ safeHandleValidated("renderer:log-error", (args) => [parseIpcInput(ipcSchemas.re
   safeHandle("get-screenshots", async () => {
     // console.log({ view: appState.getView() })
     try {
+      const screenshotFacade = getScreenshotFacade();
+      const view = screenshotFacade?.getView ? screenshotFacade.getView() : appState.getView();
+      const getPreview = screenshotFacade?.getImagePreview
+        ? (filePath: string) => screenshotFacade.getImagePreview!(filePath)
+        : (filePath: string) => appState.getImagePreview(filePath);
       let previews: Array<{ path: string; preview: string }> = []
-      if (appState.getView() === "queue") {
+      if (view === "queue") {
+        const screenshotQueue = screenshotFacade?.getScreenshotQueue
+          ? screenshotFacade.getScreenshotQueue()
+          : appState.getScreenshotQueue();
         previews = await Promise.all(
-          appState.getScreenshotQueue().map(async (path) => ({
+          screenshotQueue.map(async (path) => ({
             path,
-            preview: await appState.getImagePreview(path)
+            preview: await getPreview(path)
           }))
         )
       } else {
+        const extraScreenshotQueue = screenshotFacade?.getExtraScreenshotQueue
+          ? screenshotFacade.getExtraScreenshotQueue()
+          : appState.getExtraScreenshotQueue();
         previews = await Promise.all(
-          appState.getExtraScreenshotQueue().map(async (path) => ({
+          extraScreenshotQueue.map(async (path) => ({
             path,
-            preview: await appState.getImagePreview(path)
+            preview: await getPreview(path)
           }))
         )
       }
@@ -153,7 +196,12 @@ safeHandleValidated("renderer:log-error", (args) => [parseIpcInput(ipcSchemas.re
 
   safeHandle("reset-queues", async () => {
     try {
-      appState.clearQueues()
+      const screenshotFacade = getScreenshotFacade();
+      if (screenshotFacade?.clearQueues) {
+        screenshotFacade.clearQueues();
+      } else {
+        appState.clearQueues()
+      }
       // console.log("Screenshot queues have been cleared.")
       return { success: true }
     } catch (error: any) {

@@ -309,6 +309,109 @@ test('root IPC handlers normalize cancellation and failures into success/data/er
   harness.restore();
 });
 
+test('root screenshot handlers prefer ScreenshotFacade when available', async () => {
+  const harness = installIpcHandlersTestHarness();
+  const calls: string[] = [];
+
+  Object.assign(harness.appState, {
+    getScreenshotFacade: () => ({
+      deleteScreenshot: async (path: string) => {
+        calls.push(`delete:${path}`);
+        return { success: true };
+      },
+      takeScreenshot: async () => {
+        calls.push('take');
+        return '/tmp/user-data/facade.png';
+      },
+      takeSelectiveScreenshot: async () => {
+        calls.push('takeSelective');
+        return '/tmp/user-data/facade-selective.png';
+      },
+      getImagePreview: async (path: string) => {
+        calls.push(`preview:${path}`);
+        return `facade-preview:${path}`;
+      },
+      getView: () => {
+        calls.push('view');
+        return 'solutions';
+      },
+      getScreenshotQueue: () => {
+        throw new Error('legacy screenshot queue path should not be used');
+      },
+      getExtraScreenshotQueue: () => {
+        calls.push('extraQueue');
+        return ['/tmp/user-data/extra.png'];
+      },
+      clearQueues: () => {
+        calls.push('clear');
+      },
+    }),
+    deleteScreenshot: async () => {
+      throw new Error('legacy delete path should not be used');
+    },
+    takeScreenshot: async () => {
+      throw new Error('legacy take path should not be used');
+    },
+    takeSelectiveScreenshot: async () => {
+      throw new Error('legacy selective path should not be used');
+    },
+    getImagePreview: async () => {
+      throw new Error('legacy preview path should not be used');
+    },
+    getView: () => {
+      throw new Error('legacy view path should not be used');
+    },
+    getExtraScreenshotQueue: () => {
+      throw new Error('legacy extra queue path should not be used');
+    },
+    clearQueues: () => {
+      throw new Error('legacy clear path should not be used');
+    },
+  });
+
+  await initializeHandlers(harness);
+
+  assert.deepEqual(await harness.handlers.get('delete-screenshot')?.({}, '/tmp/user-data/facade.png'), {
+    success: true,
+  });
+  assert.deepEqual(await harness.handlers.get('take-screenshot')?.({}), {
+    success: true,
+    data: {
+      path: '/tmp/user-data/facade.png',
+      preview: 'facade-preview:/tmp/user-data/facade.png',
+    },
+  });
+  assert.deepEqual(await harness.handlers.get('take-selective-screenshot')?.({}), {
+    success: true,
+    data: {
+      path: '/tmp/user-data/facade-selective.png',
+      preview: 'facade-preview:/tmp/user-data/facade-selective.png',
+    },
+  });
+  assert.deepEqual(await harness.handlers.get('get-screenshots')?.({}), {
+    success: true,
+    data: [{
+      path: '/tmp/user-data/extra.png',
+      preview: 'facade-preview:/tmp/user-data/extra.png',
+    }],
+  });
+  assert.deepEqual(await harness.handlers.get('reset-queues')?.({}), { success: true });
+
+  assert.deepEqual(calls, [
+    'delete:/tmp/user-data/facade.png',
+    'take',
+    'preview:/tmp/user-data/facade.png',
+    'takeSelective',
+    'preview:/tmp/user-data/facade-selective.png',
+    'view',
+    'extraQueue',
+    'preview:/tmp/user-data/extra.png',
+    'clear',
+  ]);
+
+  harness.restore();
+});
+
 test('fast response and stored credential IPC contracts include Cerebras-aware state', async () => {
   const harness = installIpcHandlersTestHarness();
   await initializeHandlers(harness);
