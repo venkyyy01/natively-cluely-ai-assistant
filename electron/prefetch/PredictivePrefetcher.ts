@@ -2,6 +2,7 @@ import { EnhancedCache } from '../cache/EnhancedCache';
 import { InterviewPhase } from '../conscious/types';
 import { isOptimizationActive, getOptimizationFlags } from '../config/optimizations';
 import { computeBM25 } from '../cache/ParallelContextAssembler';
+import type { RuntimeBudgetScheduler } from '../runtime/RuntimeBudgetScheduler';
 
 export interface PrefetchedContext {
   context: {
@@ -81,9 +82,15 @@ export class PredictivePrefetcher {
   private predictions: PredictedFollowUp[] = [];
   private silenceStartTime: number = 0;
   private transcriptSegments: Array<{ text: string; timestamp: number; speaker: string }> = [];
+  private readonly budgetScheduler?: Pick<RuntimeBudgetScheduler, 'shouldAdmitSpeculation'>;
 
-  constructor(options: { maxPrefetchPredictions?: number; maxMemoryMB?: number }) {
+  constructor(options: {
+    maxPrefetchPredictions?: number;
+    maxMemoryMB?: number;
+    budgetScheduler?: Pick<RuntimeBudgetScheduler, 'shouldAdmitSpeculation'>;
+  }) {
     const flags = getOptimizationFlags();
+    this.budgetScheduler = options.budgetScheduler;
 
     this.prefetchCache = new EnhancedCache<string, PrefetchedContext>({
       maxMemoryMB: options.maxMemoryMB || flags.maxCacheMemoryMB,
@@ -138,9 +145,15 @@ export class PredictivePrefetcher {
 
     const predictions = this.predictFollowUps();
     const flags = getOptimizationFlags();
+    const admittedPredictions: PredictedFollowUp[] = [];
 
     for (const prediction of predictions.slice(0, flags.maxPrefetchPredictions)) {
       if (this.isUserSpeaking) break;
+      if (this.budgetScheduler && !this.budgetScheduler.shouldAdmitSpeculation(prediction.confidence, 1, 0.5)) {
+        continue;
+      }
+
+      admittedPredictions.push(prediction);
 
       try {
         const context = await this.assembleContext(prediction.query);
@@ -154,7 +167,7 @@ export class PredictivePrefetcher {
       }
     }
 
-    this.predictions = predictions.slice(0, flags.maxPrefetchPredictions);
+    this.predictions = admittedPredictions;
   }
 
   private predictFollowUps(): PredictedFollowUp[] {

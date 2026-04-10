@@ -4,6 +4,7 @@ import { PauseDetector, PauseAction, PauseConfidence } from '../pause/PauseDetec
 import { PauseThresholdTuner } from '../pause/PauseThresholdTuner';
 import { detectQuestion } from './QuestionDetector';
 import { isOptimizationActive } from '../config/optimizations';
+import type { RuntimeBudgetScheduler } from '../runtime/RuntimeBudgetScheduler';
 
 interface SpeculativeAnswerEntry {
   key: string;
@@ -20,6 +21,7 @@ export type SpeculativeExecutor = (query: string, transcriptRevision: number) =>
 export interface ConsciousAccelerationOptions {
   maxPrefetchPredictions?: number;
   maxMemoryMB?: number;
+  budgetScheduler?: Pick<RuntimeBudgetScheduler, 'shouldAdmitSpeculation'>;
 }
 
 export class ConsciousAccelerationOrchestrator {
@@ -41,6 +43,7 @@ export class ConsciousAccelerationOrchestrator {
     this.prefetcher = new PredictivePrefetcher({
       maxPrefetchPredictions: options.maxPrefetchPredictions,
       maxMemoryMB: options.maxMemoryMB,
+      budgetScheduler: options.budgetScheduler,
     });
     this.pauseDetector = new PauseDetector();
     this.pauseThresholdTuner = new PauseThresholdTuner(this.pauseDetector.getConfig());

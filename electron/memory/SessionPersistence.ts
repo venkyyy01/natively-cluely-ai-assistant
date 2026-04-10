@@ -16,6 +16,40 @@ export interface SessionIndex {
   sessions: SessionIndexEntry[];
 }
 
+export interface PersistedSessionMemoryEntryValue {
+  kind: 'transcript' | 'usage' | 'pinned-item' | 'constraint' | 'epoch-summary' | 'active-thread';
+  text?: string;
+  timestamp: number;
+  speaker?: string;
+  final?: boolean;
+  confidence?: number;
+  label?: string;
+  usageType?: 'assist' | 'followup' | 'chat' | 'followup_questions';
+  question?: string;
+  answer?: string;
+  items?: string[];
+  normalized?: string;
+  raw?: string;
+  constraintType?: string;
+  topic?: string;
+  goal?: string;
+  phase?: string;
+  turnCount?: number;
+}
+
+export interface PersistedSessionMemoryEntry {
+  id: string;
+  sizeBytes: number;
+  createdAt: number;
+  value: PersistedSessionMemoryEntryValue;
+}
+
+export interface PersistedSessionMemoryState {
+  hot: PersistedSessionMemoryEntry[];
+  warm: PersistedSessionMemoryEntry[];
+  cold: PersistedSessionMemoryEntry[];
+}
+
 export interface PersistedSession {
   version: 1;
   sessionId: string;
@@ -52,6 +86,7 @@ export interface PersistedSession {
     threadState?: PersistedConsciousThreadState;
     hypothesisState?: PersistedAnswerHypothesisState;
   };
+  memoryState?: PersistedSessionMemoryState;
 }
 
 interface SessionPersistenceOptions {

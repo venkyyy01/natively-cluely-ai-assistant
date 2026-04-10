@@ -13,6 +13,7 @@ public enum Command: String {
     case createProtectedSession = "create-protected-session"
     case attachSurface = "attach-surface"
     case present
+    case heartbeat
     case teardownSession = "teardown-session"
     case getHealth = "get-health"
     case getTelemetry = "get-telemetry"

@@ -13,9 +13,9 @@
 
 ## Delivery Status Snapshot
 
-- Done in this branch: `BL-001`, `BL-002`, `RT-001` through `RT-007`, `RT-009`, `STL-001`, most of `STL-002` and `STL-003`, `NSH-001`, `NSH-002`, `NSH-003`, `NSH-004`, `VAL-004`, plus the soak-procedure doc requested by `VAL-001`.
-- In progress: `RT-008`, the remaining runtime-heartbeat/native-helper parts of `STL-002` and `STL-003`, `NSH-005`, `NSH-006`, and the real hardware-backed portions of `VAL-001` through `VAL-003`.
-- Not started on this branch: `WS-*`, `ACC-*`, `INF-*`, and `MEM-*`.
+- Done in this branch: `BL-001`, `BL-002`, `RT-001` through `RT-009`, `STL-001`, most of `STL-002` and `STL-003`, `WS-001`, `WS-002`, `WS-003`, `ACC-001`, `ACC-002`, `ACC-003`, `ACC-004`, `ACC-006`, `INF-001` through `INF-005`, `MEM-001`, `MEM-002`, `MEM-003`, `MEM-004`, `NSH-001`, `NSH-002`, `NSH-003`, `NSH-004`, `NSH-006`, `VAL-004`, plus the soak-procedure doc requested by `VAL-001`.
+- In progress: the remaining proactive helper-fault/native-surface portions of `STL-002` and `STL-003`, `NSH-005`, the full ANE classifier lane work in `ACC-005`, and the hardware-backed portions of `VAL-001` through `VAL-003`.
+- Remaining release-only proof: packaged-app helper launch validation, M2 Max SLO/soak evidence, and the final legacy-runtime cleanup that removes the migration flag.
 
 ---
 
@@ -236,7 +236,7 @@
 
 **Goal:** Retarget IPC handlers from `appState.someMethod()` to supervisor APIs.
 
-**Status:** In progress. This branch migrated the meeting lifecycle handlers (`start-meeting`, `end-meeting`), the remaining meeting helper handlers (`start-audio-test`, `stop-audio-test`, `set-recognition-language`, and the RAG-backed part of `seed-demo`), stealth/inference-backed settings handlers (`set-undetectable`, `set-ai-response-language`), settings-window handlers (`toggle-settings-window`, `close-settings-window`), the first email/intelligence/RAG inference paths (`generate-followup-email`, all handlers in `registerIntelligenceHandlers.ts`, and all manager-backed handlers in `registerRagHandlers.ts`), the orchestrator-backed profile handlers in `registerProfileHandlers.ts`, the full `registerWindowHandlers.ts` surface behind a dedicated `WindowFacade`, and the root screenshot/queue handlers in `ipcHandlers.ts` behind a dedicated `ScreenshotFacade`, all with legacy fallback preserved when the supervisor runtime is disabled.
+**Status:** Done in this branch. The meeting lifecycle handlers (`start-meeting`, `end-meeting`), meeting helper handlers (`start-audio-test`, `stop-audio-test`, `set-recognition-language`, `seed-demo`), stealth/inference-backed settings handlers, settings-window handlers, email/intelligence/RAG/profile handlers, the full window-control surface, and the remaining root IPC paths for screenshots, STT runtime controls, inference sync/re-init, theme, model selector, and native audio status now all prefer coordinator/supervisor or facade APIs, while legacy fallback is preserved when the supervisor runtime is disabled.
 
 **Primary Files**
 - `electron/ipcHandlers.ts`
@@ -292,7 +292,7 @@
 
 **Goal:** Build a formal arm sequence with readiness checks and heartbeat start.
 
-**Status:** Partially implemented in this branch. `electron/stealth/StealthArmController.ts` now owns the enable/verify/optional-heartbeat-start and disarm/optional-heartbeat-stop sequencing, and `StealthSupervisor` delegates the arm/disarm side effects through it. A real runtime heartbeat source is still missing, so the ticket remains open.
+**Status:** Partially implemented in this branch. `electron/stealth/StealthArmController.ts` now owns the enable/verify/optional-heartbeat-start and disarm/optional-heartbeat-stop sequencing, `StealthSupervisor` delegates the arm/disarm side effects through it, and the native helper now enforces a heartbeat deadline through the bridge/control-plane path. A dedicated runtime-origin heartbeat from the stealth surface itself is still missing, so the ticket remains open.
 
 **Primary Files**
 - `electron/stealth/StealthArmController.ts`
@@ -310,7 +310,7 @@
 
 **Goal:** Wire invisible mode into fail-closed behavior.
 
-**Status:** Partially implemented in this branch. Fail-closed state transitions, bus fault emission, lane shedding, shell/runtime crash coverage, and rapid on-off-on toggle coverage are all landed. The remaining open work is the native-helper heartbeat/control-plane loop and helper-originated fault signaling.
+**Status:** Partially implemented in this branch. Fail-closed state transitions, bus fault emission, lane shedding, shell/runtime crash coverage, rapid on-off-on toggle coverage, and native-helper heartbeat deadline enforcement are all landed. The remaining open work is proactive helper-originated fault signaling and shipped-renderer validation of the fail-closed path.
 
 **Primary Files**
 - `electron/main.ts`
@@ -334,6 +334,8 @@
 
 **Goal:** Pre-arm reusable runtime resources before a session begins.
 
+**Status:** Done in this branch. `WarmStandbyManager` now owns reusable audio/STT/worker-pool resources with queryable health, explicit bind/unbind lifecycle, and failure-safe warmup/cooldown coverage.
+
 **Primary Files**
 - `electron/runtime/WarmStandbyManager.ts`
 - `electron/runtime/AudioSupervisor.ts`
@@ -350,6 +352,8 @@
 **Problem:** Meeting activation still behaves like a cold boot.
 
 **Goal:** Make start/stop bind and unbind session context from warm resources.
+
+**Status:** Done in this branch. `AudioSupervisor`, `SttSupervisor`, and `RuntimeCoordinator` now prefer healthy warm resources, fall back to cold paths when warm resources are invalid, and preserve reusable lanes across repeated activation cycles.
 
 **Primary Files**
 - `electron/runtime/WarmStandbyManager.ts`
@@ -368,6 +372,8 @@
 **Problem:** Current reconnect logic is too generic for mission-critical use.
 
 **Goal:** Add health scoring, cooldowns, and lane-specific reconnect decisions.
+
+**Status:** Done in this branch. `STTReconnector` already owned bounded retry/cooldown health state, and `SttSupervisor` now exposes that provider health and emits exhaustion without forcing the entire session down.
 
 **Primary Files**
 - `electron/STTReconnector.ts`
@@ -390,6 +396,8 @@
 
 **Goal:** Build a tiny N-API addon that wraps `pthread_set_qos_class_self_np()`.
 
+**Status:** Done in this branch. `electron/native/qos_helper.cc` and `electron/runtime/AppleSiliconQoS.ts` now provide a loadable/no-op QoS abstraction with fallback coverage on unsupported environments.
+
 **Primary Files**
 - `electron/native/qos_helper.cc` (< 50 lines)
 - `electron/runtime/AppleSiliconQoS.ts` (wrapper)
@@ -405,6 +413,8 @@
 **Problem:** Fresh worker creation per task wastes startup time.
 
 **Goal:** Replace ephemeral worker creation with a long-lived pool. Workers set QoS at startup.
+
+**Status:** Done in this branch. `WorkerPool` now centralizes queue depth, saturation, and QoS assignment, and `ParallelContextAssembler` dispatches through it instead of directly calling ad-hoc worker startup from the caller path.
 
 **Primary Files**
 - `electron/runtime/WorkerPool.ts`
@@ -423,6 +433,8 @@
 
 **Goal:** Introduce per-lane budgets (deadline, max concurrent, memory ceiling) with degrade policies.
 
+**Status:** Done in this branch. `RuntimeBudgetScheduler` now enforces explicit lane budgets, emits `budget:pressure`, and deterministically sheds background work under critical pressure.
+
 **Primary Files**
 - `electron/runtime/RuntimeBudgetScheduler.ts`
 - `electron/config/optimizations.ts`
@@ -439,6 +451,8 @@
 
 **Goal:** Wrap `AccelerationManager` with budget-aware scheduling. Do not delete `AccelerationManager`.
 
+**Status:** Done in this branch. `AccelerationManager` now owns a scheduler + worker-pool pair and exposes budget-aware admission and lane execution without breaking its existing public surface.
+
 **Primary Files**
 - `electron/services/AccelerationManager.ts`
 - `electron/runtime/RuntimeBudgetScheduler.ts`
@@ -452,6 +466,8 @@
 **Problem:** ANE is currently used for embeddings only.
 
 **Goal:** Route lightweight classifiers (pause detection, phase detection) through the semantic lane.
+
+**Status:** Partially implemented in this branch. Semantic/background lane infrastructure is now present, but the remaining direct routing of pause/phase classifiers through that lane still needs to be completed.
 
 **Primary Files**
 - `electron/rag/providers/ANEEmbeddingProvider.ts`
@@ -468,6 +484,8 @@
 **Problem:** Budget overruns need to propagate to supervisors.
 
 **Goal:** Scheduler emits `budget:pressure` on `SupervisorBus`. Subscribers respond.
+
+**Status:** Done in this branch. `RuntimeBudgetScheduler`, `InferenceSupervisor`, and `WarmStandbyManager` now propagate and consume `budget:pressure` events with deterministic shedding behavior.
 
 **Primary Files**
 - `electron/runtime/RuntimeBudgetScheduler.ts`
@@ -489,6 +507,8 @@
 
 **Goal:** Add explicit route selector with typed request/response.
 
+**Status:** Done in this branch. `electron/inference/types.ts`, `InferenceRouter`, and supervisor integration now make routing explicit and testable.
+
 **Primary Files**
 - `electron/inference/types.ts`
 - `electron/inference/InferenceRouter.ts`
@@ -505,6 +525,8 @@
 **Problem:** The system needs low-latency visible output.
 
 **Goal:** Build fast draft path using existing Ollama integration for local inference. Cloud fallback to Groq/Cerebras.
+
+**Status:** Done in this branch. `FastDraftLane` now prefers the local draft path and falls back through the fast-provider chain while discarding stale revisions.
 
 **Primary Files**
 - `electron/inference/FastDraftLane.ts`
@@ -524,6 +546,8 @@
 
 **Goal:** Add cheap semantic verification against active transcript revision.
 
+**Status:** Done in this branch. `VerificationLane` now rejects stale or weak drafts deterministically and exposes the explicit verification decision in tests.
+
 **Primary Files**
 - `electron/inference/VerificationLane.ts`
 - `electron/tests/verificationLane.test.ts`
@@ -538,6 +562,8 @@
 **Problem:** Fallbacks are too broad and not aligned to lane roles.
 
 **Goal:** Add lane-specific fallback chains.
+
+**Status:** Done in this branch. `QualityLane` now owns refinement timeout/failover behavior independently of the fast and verification lanes.
 
 **Primary Files**
 - `electron/inference/QualityLane.ts`
@@ -554,6 +580,8 @@
 **Problem:** Speculation is heuristic-heavy, not budget-aware.
 
 **Goal:** Gate speculative work with scheduler budget and payoff formula.
+
+**Status:** Done in this branch. `PredictivePrefetcher` and `ConsciousAccelerationOrchestrator` now admit speculation only when the runtime budget scheduler allows it.
 
 **Primary Files**
 - `electron/conscious/ConsciousAccelerationOrchestrator.ts`
@@ -576,6 +604,8 @@
 
 **Goal:** Separate hot (< 50 MB), warm (< 100 MB), and cold (disk) memory ownership.
 
+**Status:** Done in this branch. `TieredMemoryManager` now enforces hot/warm/cold ceilings and persists demoted cold entries through a storage hook.
+
 **Primary Files**
 - `electron/memory/TieredMemoryManager.ts`
 - `electron/SessionTracker.ts`
@@ -591,6 +621,8 @@
 **Problem:** Timer-only checkpointing (60 s) is too coarse.
 
 **Goal:** Trigger checkpoint on session events with 5-second cooldown.
+
+**Status:** Done in this branch. `EventCheckpointPolicy` now reacts to answer-commit / phase / user / meeting-stop events with cooldown suppression, and `RecoverySupervisor` can drive it directly.
 
 **Primary Files**
 - `electron/memory/EventCheckpointPolicy.ts`
@@ -608,6 +640,8 @@
 
 **Goal:** Guarantee recent continuity after restart or crash.
 
+**Status:** Done in this branch. `SessionTracker` now persists hot/warm/cold memory snapshots in `SessionPersistence`, restore rebuilds recent transcript/usage context from those persisted tiers, and deterministic tests cover the restore-oriented continuity path. The release SLO proof for `< 2 s` recovery still lives under validation, not implementation.
+
 **Primary Files**
 - `electron/runtime/RecoverySupervisor.ts`
 - `electron/memory/SessionPersistence.ts`
@@ -624,6 +658,8 @@
 **Problem:** No explicit behavior when memory budgets are exceeded.
 
 **Goal:** Enforce compaction and demotion under pressure.
+
+**Status:** Done in this branch. `TieredMemoryManager` now compacts under `budget:pressure`, and scheduler-driven pressure tests cover the enforcement path.
 
 **Primary Files**
 - `electron/memory/TieredMemoryManager.ts`
@@ -729,7 +765,7 @@
 
 **Goal:** Add deterministic recovery when helper crashes.
 
-**Status:** Partially implemented in this branch. `NativeStealthBridge` now retries a helper disconnect once before emitting a terminal disconnect callback, unit tests cover both recovery-success and terminal-failure cases, and supervisor coverage now exercises the restart-once-then-fault path end to end. Sleep/wake and display-hotplug coverage still remains open.
+**Status:** Done in this branch. `NativeStealthBridge` now retries a helper disconnect once before emitting a terminal disconnect callback, unit tests cover both recovery-success and terminal-failure cases, and supervisor coverage now exercises helper crash, sleep/wake recovery, and display-hotplug-style second-disconnect fail-closed behavior end to end.
 
 **Primary Files**
 - `electron/stealth/NativeStealthBridge.ts`
@@ -751,6 +787,8 @@
 
 **Goal:** 2-hour soak with automated SLO checking.
 
+**Status:** Partially implemented in this branch. The soak harness and scripts exist and are wired into the release gate, but real hardware-backed 2-hour proof still remains a pre-release exercise.
+
 **Primary Files**
 - `electron/tests/missionCriticalSoak.test.ts`
 - `stealth-projects/integration-harness/full-stealth-soak.md`
@@ -768,6 +806,8 @@
 
 **Goal:** Deterministic injection for provider loss, worker exhaustion, memory pressure, heartbeat loss.
 
+**Status:** Partially implemented in this branch. The suite now covers fail-closed stealth and provider exhaustion flows, while broader memory/worker-lane injections remain open.
+
 **Primary Files**
 - `electron/tests/faultInjection.test.ts`
 - Harness helpers
@@ -782,6 +822,8 @@
 **Problem:** The shipped UI lifecycle must be tested, not just backend.
 
 **Goal:** Playwright tests for actual UI lifecycle.
+
+**Status:** Partially implemented in this branch. Lifecycle coverage now exists in the electron test suite, but the remaining shipped-renderer / Playwright path is still pending.
 
 **Primary Files**
 - `electron/tests/activeRendererLifecycle.test.ts`

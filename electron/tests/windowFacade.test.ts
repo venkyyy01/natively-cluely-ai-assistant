@@ -55,6 +55,15 @@ test('WindowFacade routes content dimension updates by sender and delegates wind
     closeSettingsWindow: () => {
       calls.push('closeSettings');
     },
+    showModelSelectorWindow: (x: number, y: number) => {
+      calls.push(`showModelSelector:${x},${y}`);
+    },
+    hideModelSelectorWindow: () => {
+      calls.push('hideModelSelector');
+    },
+    toggleModelSelectorWindow: (x: number, y: number) => {
+      calls.push(`toggleModelSelector:${x},${y}`);
+    },
   });
 
   facade.updateContentDimensions(101, 640, 480);
@@ -73,6 +82,9 @@ test('WindowFacade routes content dimension updates by sender and delegates wind
   facade.centerAndShowWindow();
   facade.toggleSettingsWindow(12, 34);
   facade.closeSettingsWindow();
+  facade.showModelSelectorWindow(56, 78);
+  facade.hideModelSelectorWindow();
+  facade.toggleModelSelectorWindow(90, 12);
 
   assert.deepEqual(calls, [
     'settings:640x480',
@@ -89,5 +101,8 @@ test('WindowFacade routes content dimension updates by sender and delegates wind
     'center',
     'toggleSettings:12,34',
     'closeSettings',
+    'showModelSelector:56,78',
+    'hideModelSelector',
+    'toggleModelSelector:90,12',
   ]);
 });

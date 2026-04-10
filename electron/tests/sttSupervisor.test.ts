@@ -107,6 +107,32 @@ test('SttSupervisor forwards recognition language updates through its delegate',
   assert.deepEqual(calls, ['en-US']);
 });
 
+test('SttSupervisor forwards provider reconfiguration, credential updates, and finalize requests through its delegate', async () => {
+  const calls: string[] = [];
+  const supervisor = new SttSupervisor({
+    bus: new SupervisorBus({ error() {} }),
+    delegates: {
+      async startSpeaker() {},
+      async stopSpeaker() {},
+      async reconfigureProvider() {
+        calls.push('reconfigure');
+      },
+      async updateGoogleCredentials(keyPath) {
+        calls.push(`credentials:${keyPath}`);
+      },
+      async finalizeMicrophone() {
+        calls.push('finalize');
+      },
+    },
+  });
+
+  await supervisor.reconfigureProvider();
+  await supervisor.updateGoogleCredentials('/tmp/service.json');
+  await supervisor.finalizeMicrophone();
+
+  assert.deepEqual(calls, ['reconfigure', 'credentials:/tmp/service.json', 'finalize']);
+});
+
 test('SttSupervisor sheds non-essential work on stealth faults while running', async () => {
   const calls: string[] = [];
   const bus = new SupervisorBus({ error() {} });

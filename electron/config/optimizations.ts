@@ -35,7 +35,45 @@ export interface OptimizationFlags {
 
   /** Prefetch configuration */
   maxPrefetchPredictions: number;
+
+  /** Runtime lane budgets */
+  laneBudgets: Record<RuntimeLane, LaneBudgetConfig>;
 }
+
+export type RuntimeLane =
+  | 'realtime'
+  | 'local-inference'
+  | 'semantic'
+  | 'background';
+
+export interface LaneBudgetConfig {
+  deadlineMs: number;
+  maxConcurrent: number;
+  memoryCeilingMb: number;
+}
+
+export const DEFAULT_LANE_BUDGETS: Record<RuntimeLane, LaneBudgetConfig> = {
+  realtime: {
+    deadlineMs: 20,
+    maxConcurrent: 1,
+    memoryCeilingMb: 64,
+  },
+  'local-inference': {
+    deadlineMs: 2000,
+    maxConcurrent: 1,
+    memoryCeilingMb: 256,
+  },
+  semantic: {
+    deadlineMs: 100,
+    maxConcurrent: 2,
+    memoryCeilingMb: 128,
+  },
+  background: {
+    deadlineMs: 5000,
+    maxConcurrent: 4,
+    memoryCeilingMb: 128,
+  },
+};
 
 /** Default optimization flags - acceleration enabled for realtime context reliability */
 export const DEFAULT_OPTIMIZATION_FLAGS: OptimizationFlags = {
@@ -67,6 +105,9 @@ export const DEFAULT_OPTIMIZATION_FLAGS: OptimizationFlags = {
 
   // Prefetch config
   maxPrefetchPredictions: 5,
+
+  // Runtime budget config
+  laneBudgets: DEFAULT_LANE_BUDGETS,
 };
 
 /** Runtime optimization state */
@@ -109,7 +150,7 @@ export function setOptimizationFlagsForTesting(flags: Partial<OptimizationFlags>
  * Check if a specific optimization is active
  * Returns false if master toggle is off, regardless of individual flag
  */
-export function isOptimizationActive(key: keyof Omit<OptimizationFlags, 'accelerationEnabled' | 'enableSupervisorRuntime' | 'workerThreadCount' | 'maxCacheMemoryMB' | 'semanticCacheThreshold' | 'maxPrefetchPredictions'>): boolean {
+export function isOptimizationActive(key: keyof Omit<OptimizationFlags, 'accelerationEnabled' | 'enableSupervisorRuntime' | 'workerThreadCount' | 'maxCacheMemoryMB' | 'semanticCacheThreshold' | 'maxPrefetchPredictions' | 'laneBudgets'>): boolean {
   return currentFlags.accelerationEnabled && currentFlags[key];
 }
 

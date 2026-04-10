@@ -17,9 +17,17 @@ function installIpcHandlersTestHarness(options?: {
   const llmHelper = {
     generateSuggestion: async (context: string, lastQuestion: string) => `${context} -> ${lastQuestion}`,
     analyzeImageFiles: async (paths: string[]) => [{ summary: `analyzed:${paths[0]}` }],
+    chatWithGemini: async (message: string) => `answer:${message}`,
     getCurrentProvider: () => 'gemini',
     getCurrentModel: () => 'gemini-3.1-flash-lite-preview',
     isUsingOllama: () => false,
+    setApiKey: (_key: string) => {},
+    setGroqApiKey: (_key: string) => {},
+    setCerebrasApiKey: (_key: string) => {},
+    setOpenaiApiKey: (_key: string) => {},
+    setClaudeApiKey: (_key: string) => {},
+    switchToCustom: async (_provider: unknown) => {},
+    switchToCurl: async (_provider: unknown) => {},
     getOllamaModels: async () => ['llama3.2'],
     forceRestartOllama: async () => {
       if (options?.restartOllamaError) {
@@ -35,6 +43,13 @@ function installIpcHandlersTestHarness(options?: {
 
   const credentialsManager = {
     setGoogleServiceAccountPath: (_path: string) => {},
+    setGeminiApiKey: (_key: string) => {},
+    setGroqApiKey: (_key: string) => {},
+    setSttProvider: (_provider: string) => {},
+    setGroqSttModel: (_model: string) => {},
+    setOpenaiApiKey: (_key: string) => {},
+    setClaudeApiKey: (_key: string) => {},
+    setAzureRegion: (_region: string) => {},
     getCurlProviders: () => [{ id: 'curl-1', name: 'Curl', curlCommand: 'curl', responsePath: 'data.text' }],
     getCustomProviders: () => [{ id: 'custom-1', name: 'Custom', curlCommand: 'curl', responsePath: 'data.text' }],
     getAllCredentials: () => ({
@@ -163,6 +178,14 @@ showMainWindow: () => {},
     modelSelectorWindowHelper: { hideWindow: () => {} },
     getNativeAudioStatus: () => ({ connected: true }),
     updateGoogleCredentials: (_path: string) => {},
+    getIntelligenceManager: () => ({
+      addTranscript: () => {},
+      addAssistantMessage: () => {},
+      getLastAssistantMessage: (): string | null => null,
+      getFormattedContext: () => '',
+      logUsage: () => {},
+      initializeLLMs: () => {},
+    }),
     getThemeManager: () => ({ getMode: () => 'system', getResolvedTheme: () => 'light', setMode: (_mode: string) => {} }),
   };
 
@@ -408,6 +431,235 @@ test('root screenshot handlers prefer ScreenshotFacade when available', async ()
     'preview:/tmp/user-data/extra.png',
     'clear',
   ]);
+
+  harness.restore();
+});
+
+test('root STT handlers prefer SttSupervisor when supervisor runtime is enabled', async () => {
+  const harness = installIpcHandlersTestHarness({
+    serviceAccountResult: { canceled: false, filePaths: ['/tmp/service.json'] },
+  });
+  const calls: string[] = [];
+
+  Object.assign(harness.appState, {
+    getCoordinator: () => ({
+      shouldManageLifecycle: () => true,
+      getSupervisor: (name: string) => {
+        assert.equal(name, 'stt');
+        return {
+          finalizeMicrophone: async () => {
+            calls.push('finalize');
+          },
+          reconfigureProvider: async () => {
+            calls.push('reconfigure');
+          },
+          updateGoogleCredentials: async (filePath: string) => {
+            calls.push(`credentials:${filePath}`);
+          },
+        };
+      },
+    }),
+    finalizeMicSTT: () => {
+      throw new Error('legacy finalize path should not be used');
+    },
+    reconfigureSttProvider: async () => {
+      throw new Error('legacy reconfigure path should not be used');
+    },
+    updateGoogleCredentials: () => {
+      throw new Error('legacy credential path should not be used');
+    },
+  });
+
+  await initializeHandlers(harness);
+
+  assert.deepEqual(await harness.handlers.get('finalize-mic-stt')?.({}), {
+    success: true,
+    data: null,
+  });
+  assert.deepEqual(await harness.handlers.get('set-stt-provider')?.({}, 'deepgram'), { success: true });
+  assert.deepEqual(await harness.handlers.get('set-groq-stt-model')?.({}, 'whisper-large-v3'), { success: true });
+  assert.deepEqual(await harness.handlers.get('set-azure-region')?.({}, 'westus'), { success: true });
+  assert.deepEqual(await harness.handlers.get('select-service-account')?.({}), {
+    success: true,
+    data: { path: '/tmp/service.json' },
+  });
+
+  assert.deepEqual(calls, [
+    'finalize',
+    'reconfigure',
+    'reconfigure',
+    'reconfigure',
+    'credentials:/tmp/service.json',
+  ]);
+
+  harness.restore();
+});
+
+test('root inference sync handlers prefer InferenceSupervisor when supervisor runtime is enabled', async () => {
+  const harness = installIpcHandlersTestHarness();
+  const calls: string[] = [];
+
+  Object.assign(harness.appState, {
+    getCoordinator: () => ({
+      shouldManageLifecycle: () => true,
+      getSupervisor: (name: string) => {
+        assert.equal(name, 'inference');
+        return {
+          getLLMHelper: () => ({
+            ...harness.appState.processingHelper.getLLMHelper(),
+            setApiKey: (key: string) => {
+              calls.push(`setApiKey:${key}`);
+            },
+            switchToCurl: async (provider: { id: string }) => {
+              calls.push(`switchToCurl:${provider.id}`);
+            },
+            chatWithGemini: async (message: string) => {
+              calls.push(`chat:${message}`);
+              return `answer:${message}`;
+            },
+          }),
+          initializeLLMs: async () => {
+            calls.push('initialize');
+          },
+          getIntelligenceManager: () => ({
+            addTranscript: (entry: { text: string }) => {
+              calls.push(`transcript:${entry.text}`);
+            },
+            addAssistantMessage: (message: string) => {
+              calls.push(`assistant:${message}`);
+            },
+            getLastAssistantMessage: () => 'answer:hello',
+            getFormattedContext: () => '',
+            logUsage: (type: string, input: string, output: string) => {
+              calls.push(`usage:${type}:${input}:${output}`);
+            },
+            initializeLLMs: () => {
+              calls.push('legacy-initialize-should-not-run');
+            },
+          }),
+        };
+      },
+    }),
+    getIntelligenceManager: () => {
+      throw new Error('legacy intelligence manager path should not be used');
+    },
+  });
+
+  await initializeHandlers(harness);
+
+  assert.deepEqual(await harness.handlers.get('set-gemini-api-key')?.({}, 'key-123'), { success: true });
+  assert.deepEqual(await harness.handlers.get('switch-to-curl-provider')?.({}, 'curl-1'), { success: true });
+  assert.equal(await harness.handlers.get('gemini-chat')?.({}, 'hello', [], undefined, undefined), 'answer:hello');
+
+  assert.deepEqual(calls, [
+    'setApiKey:key-123',
+    'initialize',
+    'switchToCurl:curl-1',
+    'initialize',
+    'chat:hello',
+    'transcript:hello',
+    'assistant:answer:hello',
+    'usage:chat:hello:answer:hello',
+  ]);
+
+  harness.restore();
+});
+
+test('root theme handlers prefer SettingsFacade when available', async () => {
+  const harness = installIpcHandlersTestHarness();
+  const calls: string[] = [];
+
+  Object.assign(harness.appState, {
+    getSettingsFacade: () => ({
+      getThemeMode: () => {
+        calls.push('getThemeMode');
+        return 'dark';
+      },
+      getResolvedTheme: () => {
+        calls.push('getResolvedTheme');
+        return 'dark';
+      },
+      setThemeMode: (mode: string) => {
+        calls.push(`setThemeMode:${mode}`);
+      },
+    }),
+    getThemeManager: () => {
+      throw new Error('legacy theme manager path should not be used');
+    },
+  });
+
+  await initializeHandlers(harness);
+
+  assert.deepEqual(await harness.handlers.get('theme:get-mode')?.({}), {
+    success: true,
+    data: { mode: 'dark', resolved: 'dark' },
+  });
+  assert.deepEqual(await harness.handlers.get('theme:set-mode')?.({}, 'light'), { success: true });
+  assert.deepEqual(calls, ['getThemeMode', 'getResolvedTheme', 'setThemeMode:light']);
+
+  harness.restore();
+});
+
+test('root model selector handlers prefer WindowFacade when available', async () => {
+  const harness = installIpcHandlersTestHarness();
+  const calls: string[] = [];
+
+  Object.assign(harness.appState, {
+    getWindowFacade: () => ({
+      showModelSelectorWindow: (x: number, y: number) => {
+        calls.push(`show:${x},${y}`);
+      },
+      hideModelSelectorWindow: () => {
+        calls.push('hide');
+      },
+      toggleModelSelectorWindow: (x: number, y: number) => {
+        calls.push(`toggle:${x},${y}`);
+      },
+    }),
+    modelSelectorWindowHelper: {
+      showWindow: () => {
+        throw new Error('legacy model selector show path should not be used');
+      },
+      hideWindow: () => {
+        throw new Error('legacy model selector hide path should not be used');
+      },
+      toggleWindow: () => {
+        throw new Error('legacy model selector toggle path should not be used');
+      },
+    },
+  });
+
+  await initializeHandlers(harness);
+
+  assert.equal(await harness.handlers.get('show-model-selector')?.({}, { x: 10, y: 20 }), undefined);
+  assert.deepEqual(await harness.handlers.get('hide-model-selector')?.({}), {
+    success: true,
+    data: null,
+  });
+  assert.equal(await harness.handlers.get('toggle-model-selector')?.({}, { x: 30, y: 40 }), undefined);
+  assert.deepEqual(calls, ['show:10,20', 'hide', 'toggle:30,40']);
+
+  harness.restore();
+});
+
+test('root native audio status handler prefers AudioFacade when available', async () => {
+  const harness = installIpcHandlersTestHarness();
+
+  Object.assign(harness.appState, {
+    getAudioFacade: () => ({
+      getNativeAudioStatus: () => ({ connected: true, backend: 'facade' }),
+    }),
+    getNativeAudioStatus: () => {
+      throw new Error('legacy native audio path should not be used');
+    },
+  });
+
+  await initializeHandlers(harness);
+
+  assert.deepEqual(await harness.handlers.get('native-audio-status')?.({}), {
+    success: true,
+    data: { connected: true, backend: 'facade' },
+  });
 
   harness.restore();
 });

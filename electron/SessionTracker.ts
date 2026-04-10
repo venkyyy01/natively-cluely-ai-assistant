@@ -11,6 +11,10 @@ const MAX_ASSISTANT_HISTORY = 100;
 /** Maximum context history entries (beyond time-based eviction) */
 const MAX_CONTEXT_HISTORY = 200;
 
+const HOT_MEMORY_WINDOW_MS = 60_000;
+const HOT_MEMORY_CEILING_BYTES = 50 * 1024 * 1024;
+const WARM_MEMORY_CEILING_BYTES = 100 * 1024 * 1024;
+
 /** Ring buffer for fixed-capacity context items */
 class RingBuffer<T> {
   private buffer: (T | undefined)[];
@@ -73,7 +77,13 @@ import {
 import { AdaptiveContextWindow, ContextEntry, ContextSelectionConfig } from './conscious/AdaptiveContextWindow';
 import { isOptimizationActive } from './config/optimizations';
 import { extractConstraints, ExtractedConstraint, detectQuestion, ResponseFingerprinter } from './conscious';
-import { SessionPersistence, PersistedSession } from './memory/SessionPersistence';
+import {
+  SessionPersistence,
+  PersistedSession,
+  PersistedSessionMemoryEntry,
+  PersistedSessionMemoryEntryValue,
+  PersistedSessionMemoryState,
+} from './memory/SessionPersistence';
 import { TokenCounter } from './shared/TokenCounter';
 
 export interface TranscriptSegment {
@@ -824,6 +834,76 @@ isConsciousModeEnabled(): boolean {
         return this.fullUsage;
     }
 
+    getHotState(now: number = Date.now()): PersistedSessionMemoryEntry[] {
+        const cutoff = now - HOT_MEMORY_WINDOW_MS;
+        const transcriptEntries = this.fullTranscript
+          .filter((segment) => segment.timestamp >= cutoff)
+          .map((segment, index) => this.toTranscriptMemoryEntry(segment, `hot-transcript-${index}`));
+        const usageEntries = this.fullUsage
+          .filter((entry) => entry.timestamp >= cutoff)
+          .map((entry, index) => this.toUsageMemoryEntry(entry, `hot-usage-${index}`));
+
+        return this.applyMemoryCeiling([...transcriptEntries, ...usageEntries], HOT_MEMORY_CEILING_BYTES);
+    }
+
+    getWarmState(now: number = Date.now()): PersistedSessionMemoryEntry[] {
+        const entries: PersistedSessionMemoryEntry[] = [];
+        const activeThread = this.consciousThreadStore.getThreadManager().getActiveThread();
+
+        if (activeThread) {
+          entries.push(this.toMemoryEntry(`warm-thread-${activeThread.id}`, {
+            kind: 'active-thread',
+            timestamp: now,
+            topic: activeThread.topic,
+            goal: activeThread.goal,
+            phase: activeThread.phase,
+            turnCount: activeThread.turnCount,
+          }));
+        }
+
+        this.pinnedItems.forEach((item, index) => {
+          entries.push(this.toMemoryEntry(`warm-pin-${index}-${item.id}`, {
+            kind: 'pinned-item',
+            text: item.text,
+            timestamp: item.pinnedAt,
+            label: item.label,
+          }));
+        });
+
+        this.extractedConstraints.forEach((constraint, index) => {
+          entries.push(this.toMemoryEntry(`warm-constraint-${index}`, {
+            kind: 'constraint',
+            text: constraint.raw,
+            timestamp: now,
+            normalized: constraint.normalized,
+            raw: constraint.raw,
+            constraintType: constraint.type,
+          }));
+        });
+
+        this.transcriptEpochSummaries.forEach((summary, index) => {
+          entries.push(this.toMemoryEntry(`warm-epoch-${index}`, {
+            kind: 'epoch-summary',
+            text: summary,
+            timestamp: now,
+          }));
+        });
+
+        return this.applyMemoryCeiling(entries, WARM_MEMORY_CEILING_BYTES);
+    }
+
+    getColdState(now: number = Date.now()): PersistedSessionMemoryEntry[] {
+        const cutoff = now - HOT_MEMORY_WINDOW_MS;
+        const transcriptEntries = this.fullTranscript
+          .filter((segment) => segment.timestamp < cutoff)
+          .map((segment, index) => this.toTranscriptMemoryEntry(segment, `cold-transcript-${index}`));
+        const usageEntries = this.fullUsage
+          .filter((entry) => entry.timestamp < cutoff)
+          .map((entry, index) => this.toUsageMemoryEntry(entry, `cold-usage-${index}`));
+
+        return [...transcriptEntries, ...usageEntries];
+    }
+
     createSuccessorSession(): SessionTracker {
         const next = new SessionTracker();
         next.setRecapLLM(this.recapLLM);
@@ -898,6 +978,11 @@ isConsciousModeEnabled(): boolean {
     private buildPersistedSession(now: number = Date.now()): PersistedSession {
       const threadManager = this.consciousThreadStore.getThreadManager();
       const activeThread = threadManager.getActiveThread();
+      const memoryState: PersistedSessionMemoryState = {
+        hot: this.getHotState(now),
+        warm: this.getWarmState(now),
+        cold: this.getColdState(now),
+      };
 
       return {
         version: 1,
@@ -926,6 +1011,7 @@ isConsciousModeEnabled(): boolean {
           threadState: this.consciousThreadStore.getPersistenceSnapshot(),
           hypothesisState: this.answerHypothesisStore.getPersistenceSnapshot(),
         },
+        memoryState,
       };
     }
 
@@ -953,6 +1039,11 @@ isConsciousModeEnabled(): boolean {
 
       this.sessionId = session.sessionId;
       this.sessionStartTime = session.createdAt;
+      this.contextItemsBuffer.clear();
+      this.fullTranscript = [];
+      this.fullUsage = [];
+      this.lastAssistantMessage = null;
+      this.assistantResponseHistory = [];
       this.pinnedItems = session.pinnedItems || [];
       this.extractedConstraints = (session.constraints || []) as ExtractedConstraint[];
       this.transcriptEpochSummaries = session.epochSummaries || [];
@@ -971,8 +1062,11 @@ isConsciousModeEnabled(): boolean {
         });
       }
       this.consciousThreadStore.restorePersistenceSnapshot(session.consciousState?.threadState);
+      this.restorePersistedMemoryState(session.memoryState);
 
+      this.transcriptRevision = this.fullTranscript.length;
       this.contextAssembleCache.clear();
+      this.compactSnapshotCache.clear();
       return true;
     }
 
@@ -1159,6 +1253,112 @@ isConsciousModeEnabled(): boolean {
     // ============================================
     // Private Helpers
     // ============================================
+
+    private toTranscriptMemoryEntry(segment: TranscriptSegment, id: string): PersistedSessionMemoryEntry {
+        return this.toMemoryEntry(id, {
+          kind: 'transcript',
+          text: segment.text,
+          timestamp: segment.timestamp,
+          speaker: segment.speaker,
+          final: segment.final,
+          confidence: segment.confidence,
+        });
+    }
+
+    private toUsageMemoryEntry(entry: UsageInteraction, id: string): PersistedSessionMemoryEntry {
+        return this.toMemoryEntry(id, {
+          kind: 'usage',
+          timestamp: entry.timestamp,
+          usageType: entry.type,
+          question: entry.question,
+          answer: entry.answer,
+          items: entry.items,
+        });
+    }
+
+    private toMemoryEntry(id: string, value: PersistedSessionMemoryEntryValue): PersistedSessionMemoryEntry {
+        return {
+          id,
+          sizeBytes: Buffer.byteLength(JSON.stringify(value), 'utf8'),
+          createdAt: value.timestamp,
+          value,
+        };
+    }
+
+    private applyMemoryCeiling(
+      entries: PersistedSessionMemoryEntry[],
+      ceilingBytes: number,
+    ): PersistedSessionMemoryEntry[] {
+      let totalBytes = 0;
+      const retained: PersistedSessionMemoryEntry[] = [];
+
+      for (const entry of [...entries].sort((left, right) => right.createdAt - left.createdAt)) {
+        if (retained.length > 0 && totalBytes + entry.sizeBytes > ceilingBytes) {
+          continue;
+        }
+
+        retained.push(entry);
+        totalBytes += entry.sizeBytes;
+      }
+
+      return retained.sort((left, right) => left.createdAt - right.createdAt);
+    }
+
+    private restorePersistedMemoryState(memoryState?: PersistedSessionMemoryState): void {
+      if (!memoryState) {
+        return;
+      }
+
+      const memoryEntries = [...memoryState.cold, ...memoryState.warm, ...memoryState.hot]
+        .sort((left, right) => left.createdAt - right.createdAt);
+
+      this.fullTranscript = memoryEntries
+        .filter((entry) => entry.value.kind === 'transcript' && entry.value.text)
+        .map((entry) => ({
+          speaker: entry.value.speaker ?? 'interviewer',
+          text: entry.value.text ?? '',
+          timestamp: entry.value.timestamp,
+          final: entry.value.final ?? true,
+          confidence: entry.value.confidence,
+        }))
+        .slice(-MAX_TRANSCRIPT_ENTRIES);
+
+      this.fullUsage = memoryEntries
+        .filter((entry) => entry.value.kind === 'usage' && entry.value.usageType)
+        .map((entry) => ({
+          type: entry.value.usageType!,
+          timestamp: entry.value.timestamp,
+          question: entry.value.question,
+          answer: entry.value.answer,
+          items: entry.value.items,
+        }));
+
+      for (const segment of this.fullTranscript.slice(-this.maxContextItems)) {
+        const role = this.mapSpeakerToRole(segment.speaker);
+        const text = segment.text.trim();
+        if (!text) {
+          continue;
+        }
+
+        this.contextItemsBuffer.push({
+          role,
+          text,
+          timestamp: segment.timestamp,
+          phase: this.inferItemPhase(role, text),
+          embedding: this.buildPseudoEmbedding(text),
+        });
+      }
+
+      const assistantSegments = this.fullTranscript.filter((segment) => segment.speaker === 'assistant');
+      this.lastAssistantMessage = assistantSegments.at(-1)?.text ?? null;
+      this.assistantResponseHistory = assistantSegments
+        .slice(-MAX_ASSISTANT_HISTORY)
+        .map((segment) => ({
+          text: segment.text,
+          timestamp: segment.timestamp,
+          questionContext: 'restored-session',
+        }));
+    }
 
     mapSpeakerToRole(speaker: string): 'interviewer' | 'user' | 'assistant' {
         if (speaker === 'user') return 'user';

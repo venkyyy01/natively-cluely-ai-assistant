@@ -199,3 +199,87 @@ test('SessionTracker restoreFromMeetingId restores conscious reasoning and hypot
     persistence.findByMeeting = originalFindByMeeting;
   }
 });
+
+test('SessionTracker restoreFromMeetingId rebuilds recent transcript and usage from persisted memory state', async () => {
+  const tracker = new SessionTracker();
+  const persistence = (tracker as any).persistence;
+
+  const originalFindByMeeting = persistence.findByMeeting.bind(persistence);
+  persistence.findByMeeting = async (meetingId: string) => {
+    if (meetingId !== 'meeting-memory-restore') {
+      return originalFindByMeeting(meetingId);
+    }
+
+    const now = Date.now();
+    return {
+      version: 1,
+      sessionId: 'session-memory-restore',
+      meetingId,
+      createdAt: now - 1000,
+      lastActiveAt: now,
+      activeThread: null,
+      suspendedThreads: [],
+      pinnedItems: [{ id: 'pin_1', text: 'Latency matters', pinnedAt: now, label: 'constraint' }],
+      constraints: [{ type: 'latency', raw: 'Latency matters', normalized: 'latency matters' }],
+      epochSummaries: ['Earlier design discussion'],
+      responseHashes: [],
+      memoryState: {
+        hot: [
+          {
+            id: 'hot-transcript-1',
+            sizeBytes: 64,
+            createdAt: now - 200,
+            value: {
+              kind: 'transcript',
+              text: 'Can you optimize the cache writes?',
+              timestamp: now - 200,
+              speaker: 'interviewer',
+              final: true,
+            },
+          },
+          {
+            id: 'hot-usage-1',
+            sizeBytes: 64,
+            createdAt: now - 100,
+            value: {
+              kind: 'usage',
+              timestamp: now - 100,
+              usageType: 'assist',
+              question: 'cache writes',
+              answer: 'Use batched invalidation',
+            },
+          },
+        ],
+        warm: [],
+        cold: [
+          {
+            id: 'cold-transcript-1',
+            sizeBytes: 64,
+            createdAt: now - 500,
+            value: {
+              kind: 'transcript',
+              text: 'Start with cache aside.',
+              timestamp: now - 500,
+              speaker: 'assistant',
+              final: true,
+            },
+          },
+        ],
+      },
+    };
+  };
+
+  try {
+    const restored = await tracker.restoreFromMeetingId('meeting-memory-restore');
+    assert.equal(restored, true);
+    assert.deepEqual(
+      tracker.getFullTranscript().map((segment) => segment.text),
+      ['Start with cache aside.', 'Can you optimize the cache writes?'],
+    );
+    assert.equal(tracker.getLastAssistantMessage(), 'Start with cache aside.');
+    assert.equal(tracker.getFullUsage()[0]?.answer, 'Use batched invalidation');
+    assert.equal(tracker.getContext(120).some((item) => item.text === 'Can you optimize the cache writes?'), true);
+  } finally {
+    persistence.findByMeeting = originalFindByMeeting;
+  }
+});

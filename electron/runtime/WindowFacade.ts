@@ -23,6 +23,9 @@ export interface WindowFacadeDeps {
   centerAndShowWindow: () => void;
   toggleSettingsWindow: (x?: number, y?: number) => void;
   closeSettingsWindow: () => void;
+  showModelSelectorWindow: (x: number, y: number) => void;
+  hideModelSelectorWindow: () => void;
+  toggleModelSelectorWindow: (x: number, y: number) => void;
 }
 
 export class WindowFacade {
@@ -94,5 +97,17 @@ export class WindowFacade {
 
   closeSettingsWindow(): void {
     this.deps.closeSettingsWindow();
+  }
+
+  showModelSelectorWindow(x: number, y: number): void {
+    this.deps.showModelSelectorWindow(x, y);
+  }
+
+  hideModelSelectorWindow(): void {
+    this.deps.hideModelSelectorWindow();
+  }
+
+  toggleModelSelectorWindow(x: number, y: number): void {
+    this.deps.toggleModelSelectorWindow(x, y);
   }
 }

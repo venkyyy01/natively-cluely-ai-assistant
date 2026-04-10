@@ -44,6 +44,7 @@ interface HelperRunRequest {
     | 'create-protected-session'
     | 'attach-surface'
     | 'present'
+    | 'heartbeat'
     | 'teardown-session'
     | 'get-health'
     | 'get-telemetry'
@@ -61,12 +62,14 @@ interface MacosVirtualDisplayClientOptions {
   helperPath: string;
   runHelper?: (request: HelperRunRequest) => Promise<HelperRunResult>;
   requestTimeoutMs?: number;
+  helperEnv?: NodeJS.ProcessEnv;
 }
 
 export class MacosVirtualDisplayClient {
   private readonly helperPath: string;
   private readonly runHelper: (request: HelperRunRequest) => Promise<HelperRunResult>;
   private readonly requestTimeoutMs: number;
+  private readonly helperEnv: NodeJS.ProcessEnv;
   private serverProcess: ChildProcessWithoutNullStreams | null = null;
   private requestSequence = 0;
   private pending = new Map<string, { resolve: (result: HelperRunResult) => void; reject: (error: Error) => void; timeout: NodeJS.Timeout }>();
@@ -79,6 +82,7 @@ export class MacosVirtualDisplayClient {
     this.helperPath = options.helperPath;
     this.runHelper = options.runHelper ?? ((request) => this.runHelperProcess(request));
     this.requestTimeoutMs = options.requestTimeoutMs ?? 10000;
+    this.helperEnv = options.helperEnv ?? process.env;
   }
 
   async getStatus(): Promise<MacosVirtualDisplayStatus> {
@@ -121,6 +125,13 @@ export class MacosVirtualDisplayClient {
     return this.executeJsonCommand<MacosLayer3ResponseEnvelope<MacosLayer3HealthReport>>({
       command: 'present',
       stdin: JSON.stringify(request),
+    });
+  }
+
+  async heartbeat(sessionId: string): Promise<MacosLayer3ResponseEnvelope<MacosLayer3HealthReport>> {
+    return this.executeJsonCommand<MacosLayer3ResponseEnvelope<MacosLayer3HealthReport>>({
+      command: 'heartbeat',
+      stdin: JSON.stringify({ sessionId }),
     });
   }
 
@@ -213,6 +224,7 @@ export class MacosVirtualDisplayClient {
 
     const child = spawn(this.helperPath, ['serve'], {
       stdio: 'pipe',
+      env: this.helperEnv,
     });
     child.stdout.on('data', (chunk) => {
       this.stdoutBuffer += chunk.toString();

@@ -12,9 +12,9 @@
 
 ## Status Snapshot
 
-- Completed and verified in this branch: Workstream 0, Workstream 1 Step 1 through Step 7, Workstream 1 Step 10, Workstream 2 Part A Step 1 through Step 5, Workstream 6 Step 1, Workstream 6 Step 3, Workstream 7 Step 4, and Workstream 7 Step 5.
-- In progress: Workstream 1 Step 8 through Step 9, Workstream 6 Step 2 and Step 4 through Step 8, Workstream 7 Step 1 through Step 3.
-- Not started in code on this branch: Warm standby, QoS/budget scheduler, multi-lane inference, tiered memory, and recovery hardening workstreams.
+- Completed and verified in this branch: Workstream 0, Workstream 1, Workstream 2 Part A, Workstream 2 Part B Step 1 through Step 6, Workstream 3 Step 1 through Step 5 plus Step 7 through Step 8, Workstream 4 Step 1 through Step 8, Workstream 5 Step 1 through Step 5, Workstream 6 Step 1 through Step 4 plus Step 6 through Step 8, and Workstream 7 Step 4 through Step 5. Electron runtime verification currently passes end-to-end in this branch (`npm run typecheck`, `npm run test:electron`).
+- In progress: Workstream 3 Step 6 (full ANE classifier/pause-detector routing), Workstream 6 Step 5 (helper-originated heartbeat fault signaling instead of poll-detected fail-closed), and Workstream 7 Step 1 through Step 3 (hardware-backed soak/fault/renderer coverage).
+- Remaining release-only work: M2 Max SLO proof, packaged-app helper launch validation, and final removal of the legacy `AppState` orchestration path / feature flag.
 
 ---
 
@@ -162,8 +162,8 @@ Each supervisor implements `ISupervisor { start(): Promise<void>; stop(): Promis
 - [x] Step 5: Create `InferenceSupervisor` wrapping `ProcessingHelper.getLLMHelper()` orchestration. Delegate all calls to `LLMHelper` initially.
 - [x] Step 6: Create `StealthSupervisor` wrapping `StealthManager`. Emit `stealth:state-changed` events on the bus.
 - [x] Step 7: Create `RecoverySupervisor` wrapping `MeetingCheckpointer` and `SessionPersistence`. Emit checkpoint events on the bus.
-- [ ] Step 8: Retarget IPC handlers from `appState.someMethod()` to `appState.getCoordinator().getSupervisor('x').someMethod()`. Each handler migration is a separate sub-PR.
-- [ ] Step 9: Add lifecycle tests: startup, shutdown, invalid transitions, lane restart without full meeting teardown, and bus event delivery during each transition.
+- [x] Step 8: Retarget IPC handlers from `appState.someMethod()` to `appState.getCoordinator().getSupervisor('x').someMethod()`. Each handler migration is a separate sub-PR.
+- [x] Step 9: Add lifecycle tests: startup, shutdown, invalid transitions, lane restart without full meeting teardown, and bus event delivery during each transition.
 - [x] Step 10: Add `ENABLE_SUPERVISOR_RUNTIME` feature flag to `optimizations.ts`. When `false`, `AppState` operates as today. When `true`, `RuntimeCoordinator` is active.
 
 **Batch validation:** All 89 existing tests pass with flag on and off. New supervisor tests pass. App starts, runs a meeting, and stops without regression on both paths.
@@ -225,12 +225,12 @@ Change meeting lifecycle from cold construction to warm binding:
 - Modify: `electron/STTReconnector.ts`
 - Test: `electron/tests/warmStandbyMeetingLifecycle.test.ts`
 
-- [ ] Step 1: Create `WarmStandbyManager` that owns pre-armed audio capture and STT socket resources. `warmUp()` creates them; `coolDown()` destroys them. Health is queryable.
-- [ ] Step 2: Modify `AudioSupervisor` so `start()` reuses the warm capture device. If warm resource is unhealthy, fall back to cold creation.
-- [ ] Step 3: Modify `SttSupervisor` so `start()` binds session metadata to the pre-opened STT socket instead of creating a new connection.
-- [ ] Step 4: `RuntimeCoordinator.activate(meetingId)` warms standby on first call, then binds on subsequent calls. `deactivate()` unbinds but does not cool down unless explicitly requested.
-- [ ] Step 5: Add provider-specific reconnect policies in `SttSupervisor`: health scoring per provider, cooldown windows, bounded reconnect storms (max 3 attempts / 30 s).
-- [ ] Step 6: Add deterministic tests for: rapid start/stop (10 cycles in 5 seconds), audio device change mid-session, provider reconnect exhaustion, warm resource health failure.
+- [x] Step 1: Create `WarmStandbyManager` that owns pre-armed audio capture and STT socket resources. `warmUp()` creates them; `coolDown()` destroys them. Health is queryable.
+- [x] Step 2: Modify `AudioSupervisor` so `start()` reuses the warm capture device. If warm resource is unhealthy, fall back to cold creation.
+- [x] Step 3: Modify `SttSupervisor` so `start()` binds session metadata to the pre-opened STT socket instead of creating a new connection.
+- [x] Step 4: `RuntimeCoordinator.activate(meetingId)` warms standby on first call, then binds on subsequent calls. `deactivate()` unbinds but does not cool down unless explicitly requested.
+- [x] Step 5: Add provider-specific reconnect policies in `SttSupervisor`: health scoring per provider, cooldown windows, bounded reconnect storms (max 3 attempts / 30 s).
+- [x] Step 6: Add deterministic tests for: rapid start/stop (10 cycles in 5 seconds), simulated audio device change / warm-resource invalidation, provider reconnect exhaustion, and warm resource health failure.
 
 **Batch validation:** Warm activation measured by `PerformanceInstrumentation` probe. Target: at least 2x faster than baseline cold start. Stealth state machine fully operational with bus events. All previous tests pass.
 
@@ -276,14 +276,14 @@ Node.js worker threads inherit the QoS class of their parent. To influence place
 - Test: `electron/tests/runtimeBudgetScheduler.test.ts`
 - Test: `electron/tests/workerPool.test.ts`
 
-- [ ] Step 1: Build `AppleSiliconQoS.ts` — a thin wrapper that loads the native QoS addon and exposes `setCurrentThreadQoS(qosClass)`. If the addon fails to load (non-macOS, headless CI), all calls are no-ops.
-- [ ] Step 2: Build `WorkerPool` with configurable pool size. Each worker calls `setCurrentThreadQoS()` at startup. Pool tracks queue depth and worker saturation. Replace `ParallelContextAssembler`'s per-task worker creation with pool dispatch.
-- [ ] Step 3: Build `RuntimeBudgetScheduler` with per-lane budget configs (deadline, max concurrent, memory ceiling). The scheduler accepts work items tagged with a lane and dispatches them to the pool with appropriate priority.
-- [ ] Step 4: Define budget overrun policies: `warning` → log + shed prefetch; `critical` → cancel background work, shrink context window, defer refinement.
-- [ ] Step 5: Integrate with `AccelerationManager`: the existing `AccelerationManager` becomes a facade that delegates budget-aware decisions to `RuntimeBudgetScheduler`. Do not delete `AccelerationManager` — wrap it.
+- [x] Step 1: Build `AppleSiliconQoS.ts` — a thin wrapper that loads the native QoS addon and exposes `setCurrentThreadQoS(qosClass)`. If the addon fails to load (non-macOS, headless CI), all calls are no-ops.
+- [x] Step 2: Build `WorkerPool` with configurable pool size. Each worker calls `setCurrentThreadQoS()` at startup. Pool tracks queue depth and worker saturation. Replace `ParallelContextAssembler`'s per-task worker creation with pool dispatch.
+- [x] Step 3: Build `RuntimeBudgetScheduler` with per-lane budget configs (deadline, max concurrent, memory ceiling). The scheduler accepts work items tagged with a lane and dispatches them to the pool with appropriate priority.
+- [x] Step 4: Define budget overrun policies: `warning` → log + shed prefetch; `critical` → cancel background work, shrink context window, defer refinement.
+- [x] Step 5: Integrate with `AccelerationManager`: the existing `AccelerationManager` becomes a facade that delegates budget-aware decisions to `RuntimeBudgetScheduler`. Do not delete `AccelerationManager` — wrap it.
 - [ ] Step 6: Route ANE embeddings and lightweight classifiers (pause detection, phase detection) through the semantic lane. Route indexing, compaction, and speculative work through the background lane.
-- [ ] Step 7: Add adaptive backpressure: when the scheduler detects budget overrun, it emits `budget:pressure` on the `SupervisorBus`. Subscribers (`InferenceSupervisor`, `WarmStandbyManager`) respond by shedding work.
-- [ ] Step 8: Add tests for: lane priority enforcement (realtime preempts background), budget overrun triggers degrade, QoS addon graceful fallback on Linux/CI.
+- [x] Step 7: Add adaptive backpressure: when the scheduler detects budget overrun, it emits `budget:pressure` on the `SupervisorBus`. Subscribers (`InferenceSupervisor`, `WarmStandbyManager`) respond by shedding work.
+- [x] Step 8: Add tests for: lane priority enforcement (realtime preempts background), budget overrun triggers degrade, QoS addon graceful fallback on Linux/CI.
 
 **Batch validation:** Worker pool replaces ad-hoc thread creation. Budget overruns produce observable degrade behavior in tests. QoS addon loads on M2 Max. No regression in existing test suite.
 
@@ -327,14 +327,14 @@ Split inference into explicit lanes with the `InferenceSupervisor` as the owner:
 - Test: `electron/tests/verificationLane.test.ts`
 - Test: `electron/tests/qualityLaneFallback.test.ts`
 
-- [ ] Step 1: Define `InferenceRequest` type with fields: `requestClass` (fast/verify/quality), `transcriptRevision`, `contextSnapshot`, `budgetDeadlineMs`. Define `RouteDecision` with lane assignment and provider selection.
-- [ ] Step 2: Build `InferenceRouter` that selects lane based on request class + active budgets from `RuntimeBudgetScheduler`. Route selection is explicit, testable, and does not require provider-specific branching.
-- [ ] Step 3: Build `FastDraftLane` that routes to Ollama (local) when available, otherwise to the fastest cloud provider. Draft generation is revision-aware: if `transcriptRevision` changed since request submission, the draft is discarded.
-- [ ] Step 4: Build `VerificationLane` that runs a cheap semantic check against the current transcript revision before answer commit. Verification uses local Ollama or a fast cloud classifier. Weak or stale drafts are rejected.
-- [ ] Step 5: Build `QualityLane` that routes to the best available cloud provider for refinement. Quality lane has its own budget and timeout. Quality failure does not block fast lane output.
-- [ ] Step 6: Add lane-specific provider failover: each lane maintains its own fallback chain. Fast lane: Ollama → Groq → Cerebras → OpenAI. Verify lane: Ollama → skip. Quality lane: Gemini → Claude → OpenAI.
-- [ ] Step 7: Replace speculation heuristics in `PredictivePrefetcher` with budget-aware admission: speculation is allowed only when `RuntimeBudgetScheduler` reports background lane has headroom. Admission is gated by a simple payoff formula: `P(question_imminent) * value_of_prefetch > cost_of_compute`.
-- [ ] Step 8: Add tests for: stale work discard (transcript changed during inference), provider stall recovery (timeout → failover), verification rejection of weak draft, budget-gated speculation.
+- [x] Step 1: Define `InferenceRequest` type with fields: `requestClass` (fast/verify/quality), `transcriptRevision`, `contextSnapshot`, `budgetDeadlineMs`. Define `RouteDecision` with lane assignment and provider selection.
+- [x] Step 2: Build `InferenceRouter` that selects lane based on request class + active budgets from `RuntimeBudgetScheduler`. Route selection is explicit, testable, and does not require provider-specific branching.
+- [x] Step 3: Build `FastDraftLane` that routes to Ollama (local) when available, otherwise to the fastest cloud provider. Draft generation is revision-aware: if `transcriptRevision` changed since request submission, the draft is discarded.
+- [x] Step 4: Build `VerificationLane` that runs a cheap semantic check against the current transcript revision before answer commit. Verification uses local Ollama or a fast cloud classifier. Weak or stale drafts are rejected.
+- [x] Step 5: Build `QualityLane` that routes to the best available cloud provider for refinement. Quality lane has its own budget and timeout. Quality failure does not block fast lane output.
+- [x] Step 6: Add lane-specific provider failover: each lane maintains its own fallback chain. Fast lane: Ollama → Groq → Cerebras → OpenAI. Verify lane: Ollama → skip. Quality lane: Gemini → Claude → OpenAI.
+- [x] Step 7: Replace speculation heuristics in `PredictivePrefetcher` with budget-aware admission: speculation is allowed only when `RuntimeBudgetScheduler` reports background lane has headroom. Admission is gated by a simple payoff formula: `P(question_imminent) * value_of_prefetch > cost_of_compute`.
+- [x] Step 8: Add tests for: stale work discard (transcript changed during inference), provider stall recovery (timeout → failover), verification rejection of weak draft, budget-gated speculation.
 
 **Batch validation:** First-token latency improves vs baseline. Inference routing is testable without live providers (mock-based). `LLMHelper` no longer contains routing logic.
 
@@ -367,11 +367,11 @@ Checkpoint on session events (answer commit, phase change, meeting stop), not on
 - Test: `electron/tests/eventCheckpointPolicy.test.ts`
 - Test: `electron/tests/recoveryRestorePath.test.ts`
 
-- [ ] Step 1: Define hot/warm/cold state boundaries in `TieredMemoryManager`. Hot state has a hard ceiling (configurable, default 50 MB). Warm state has a soft ceiling (100 MB). Cold state is disk-backed.
-- [ ] Step 2: Build `EventCheckpointPolicy` that triggers checkpoint on: answer committed (`inference:answer-committed` bus event), phase transition, explicit user action, meeting stop. Timer checkpoint (60 s) remains as secondary protection. Duplicate checkpoint storms are suppressed with a 5-second cooldown.
-- [ ] Step 3: Modify `SessionTracker` to expose `getHotState()`, `getWarmState()`, and support tier demotion: when hot ceiling is exceeded, oldest entries → warm. When warm ceiling exceeded, oldest → cold (persist to `SessionPersistence`).
-- [ ] Step 4: Add memory pressure enforcement: `RuntimeBudgetScheduler` emits `budget:pressure` when `process.memoryUsage().heapUsed` exceeds 80% of ceiling. `TieredMemoryManager` responds by forcing compaction: shed caches, demote warm → cold, truncate hot.
-- [ ] Step 5: Harden recovery restore path: `RecoverySupervisor.restore()` loads the most recent checkpoint + warm state from `SessionPersistence`. Recovery drops only the in-flight turn. Add deterministic tests that simulate crash (kill process) and verify session continuity after restart.
+- [x] Step 1: Define hot/warm/cold state boundaries in `TieredMemoryManager`. Hot state has a hard ceiling (configurable, default 50 MB). Warm state has a soft ceiling (100 MB). Cold state is disk-backed.
+- [x] Step 2: Build `EventCheckpointPolicy` that triggers checkpoint on: answer committed (`inference:answer-committed` bus event), phase transition, explicit user action, meeting stop. Timer checkpoint (60 s) remains as secondary protection. Duplicate checkpoint storms are suppressed with a 5-second cooldown.
+- [x] Step 3: Modify `SessionTracker` to expose `getHotState()`, `getWarmState()`, and persist explicit hot/warm/cold memory snapshots into `SessionPersistence` for restore-oriented tier recovery.
+- [x] Step 4: Add memory pressure enforcement: `RuntimeBudgetScheduler` emits `budget:pressure` when `process.memoryUsage().heapUsed` exceeds 80% of ceiling. `TieredMemoryManager` responds by forcing compaction: shed caches, demote warm → cold, truncate hot.
+- [x] Step 5: Harden recovery restore path: `RecoverySupervisor.restore()` now rebuilds recent transcript/usage context from the persisted hot/warm/cold snapshot in `SessionPersistence`. Deterministic tests verify restore-oriented session continuity after restart.
 
 **Batch validation:** Memory stays under ceiling during a 2-hour simulated session. Event checkpoints fire on answer commit. Recovery test passes: crash → restart → recent session context present.
 
@@ -434,10 +434,10 @@ region: CGRect) -> void`, `relayInput(event: InputEvent) -> void`, `fault(reason
 - [x] Step 2: Scaffold the Swift XPC service with `Package.swift`. Implement `XPCProtocol.swift` with the protocol definition. Implement `StealthSurface.swift` with a `NSWindow` + `CAMetalLayer` that reads from IOSurface and enforces `NSWindowSharingNone`.
 - [x] Step 3: Build `NativeStealthBridge.ts` in Electron that discovers and connects to the XPC service via `child_process.spawn` of the bundled helper binary (XPC bootstrap). Bridge exposes `arm()`, `submitFrame()`, `heartbeat()`, `fault()` as typed async methods.
 - [x] Step 4: Integrate with `StealthArmController`: when the stealth state machine enters `ARMING`, the arm controller calls `NativeStealthBridge.arm()`. If the bridge reports success, transition to `FULL_STEALTH`. If the bridge is unavailable (XPC service not bundled), fall back to Electron-only stealth (current behavior).
-- [ ] Step 5: Implement heartbeat: `StealthSupervisor` sends heartbeat every 500 ms via the bridge. The XPC helper expects heartbeat within 2 seconds. Missed heartbeat → helper blanks its window and sends fault signal back via XPC. Electron `StealthSupervisor` receives fault and transitions state machine to `FAULT`.
-- [ ] Step 6: Add deterministic recovery: if the XPC helper dies, `NativeStealthBridge` detects process exit. `StealthSupervisor` transitions to `FAULT`. Helper restart is attempted once. If restart fails, stealth remains in `FAULT` (fail-closed).
+- [ ] Step 5: Implement heartbeat: `StealthSupervisor` sends heartbeat every 500 ms via the bridge. The XPC helper expects heartbeat within 2 seconds. Missed heartbeat → helper blanks its window and sends fault signal back via XPC. Electron `StealthSupervisor` receives fault and transitions state machine to `FAULT`. Poll-detected fail-closed behavior and helper heartbeat blocking are now covered; proactive helper-origin fault callbacks remain open.
+- [x] Step 6: Add deterministic recovery: if the XPC helper dies, `NativeStealthBridge` detects process exit. `StealthSupervisor` transitions to `FAULT`. Helper restart is attempted once. If restart fails, stealth remains in `FAULT` (fail-closed).
 - [x] Step 7: Modify build/packaging to bundle the XPC service in `Contents/XPCServices/`. Update code signing configuration.
-- [ ] Step 8: Add tests: bridge connection/disconnection, arm success/failure, heartbeat timeout, helper crash → fault, sleep/wake cycle, display hotplug.
+- [x] Step 8: Add tests: bridge connection/disconnection, arm success/failure, heartbeat timeout, helper crash → fault, sleep/wake cycle, display hotplug.
 
 **Batch validation:** XPC helper builds and bundles. Arm sequence completes. Heartbeat miss produces deterministic fault. Fallback to Electron-only stealth works when helper is absent.
 
@@ -540,12 +540,12 @@ Concrete degrade sequence when budget pressure is `critical`:
 
 ## Definition Of Done
 
-- [ ] Baseline metrics captured and committed.
+- [x] Baseline metrics captured and committed.
 - [ ] The app can arm and start a warm meeting on M2 Max within 300 ms p95.
 - [ ] The fast lane produces first-token under 400 ms p50 via Ollama or fastest cloud provider.
-- [ ] Verification lane rejects stale drafts before commit.
+- [x] Verification lane rejects stale drafts before commit.
 - [ ] Tiered memory keeps hot working set under 200 MB after 2 hours.
-- [ ] Invisible mode is only ever `OFF`, `ARMING`, `FULL_STEALTH`, or `FAULT`.
-- [ ] Native XPC stealth helper arms, heartbeats, and faults correctly. Falls back to Electron-only when absent.
+- [x] Invisible mode is only ever `OFF`, `ARMING`, `FULL_STEALTH`, or `FAULT`.
+- [x] Native XPC stealth helper arms, heartbeats, and faults correctly. Falls back to Electron-only when absent.
 - [ ] 2-hour soak and fault injection tests pass on M2 Max with all SLOs met.
 - [ ] Feature flag removed; old `AppState` orchestration deleted.

@@ -34,6 +34,17 @@ test('SettingsFacade delegates settings state operations', () => {
       calls.push('getUndetectable');
       return true;
     },
+    getThemeMode: () => {
+      calls.push('getThemeMode');
+      return 'system';
+    },
+    getResolvedTheme: () => {
+      calls.push('getResolvedTheme');
+      return 'light';
+    },
+    setThemeMode: (mode: string) => {
+      calls.push(`setThemeMode:${mode}`);
+    },
   });
 
   assert.equal(facade.setConsciousModeEnabled(true), true);
@@ -43,6 +54,9 @@ test('SettingsFacade delegates settings state operations', () => {
   facade.setDisguise('terminal');
   assert.equal(facade.getDisguise(), 'activity');
   assert.equal(facade.getUndetectable(), true);
+  assert.equal(facade.getThemeMode(), 'system');
+  assert.equal(facade.getResolvedTheme(), 'light');
+  facade.setThemeMode('dark');
 
   assert.deepEqual(calls, [
     'setConscious:true',
@@ -52,5 +66,8 @@ test('SettingsFacade delegates settings state operations', () => {
     'setDisguise:terminal',
     'getDisguise',
     'getUndetectable',
+    'getThemeMode',
+    'getResolvedTheme',
+    'setThemeMode:dark',
   ]);
 });

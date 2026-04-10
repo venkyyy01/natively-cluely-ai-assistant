@@ -1,5 +1,7 @@
 import { SupervisorBus } from './SupervisorBus';
 import type { ISupervisor, SupervisorState } from './types';
+import type { InferenceRouter } from '../inference/InferenceRouter';
+import type { InferenceRequest, LaneResult, RouteDecision } from '../inference/types';
 
 export interface InferenceSupervisorDelegate {
   start?: () => Promise<void> | void;
@@ -20,11 +22,15 @@ export interface InferenceSupervisorDelegate {
   reset?: () => Promise<void> | void;
   getRAGManager?: () => unknown;
   getKnowledgeOrchestrator?: () => unknown;
+  getIntelligenceManager?: () => unknown;
+  initializeLLMs?: () => Promise<void> | void;
+  onBudgetPressure?: (lane: string, level: 'warning' | 'critical') => Promise<void> | void;
 }
 
 interface InferenceSupervisorOptions {
   delegate: InferenceSupervisorDelegate;
   bus?: SupervisorBus;
+  router?: InferenceRouter;
 }
 
 export class InferenceSupervisor implements ISupervisor {
@@ -32,12 +38,18 @@ export class InferenceSupervisor implements ISupervisor {
   private state: SupervisorState = 'idle';
   private readonly delegate: InferenceSupervisorDelegate;
   private readonly bus: SupervisorBus;
+  private readonly router?: InferenceRouter;
+  private speculationEnabled = true;
 
   constructor(options: InferenceSupervisorOptions) {
     this.delegate = options.delegate;
     this.bus = options.bus ?? new SupervisorBus();
+    this.router = options.router;
     this.bus.subscribe('stealth:fault', async (event) => {
       await this.handleStealthFault(event.reason);
+    });
+    this.bus.subscribe('budget:pressure', async (event) => {
+      await this.handleBudgetPressure(event.lane, event.level);
     });
   }
 
@@ -193,5 +205,52 @@ export class InferenceSupervisor implements ISupervisor {
     }
 
     return this.delegate.getKnowledgeOrchestrator() as T;
+  }
+
+  getIntelligenceManager<T = unknown>(): T {
+    if (!this.delegate.getIntelligenceManager) {
+      throw new Error('Inference supervisor delegate does not expose an intelligence manager');
+    }
+
+    return this.delegate.getIntelligenceManager() as T;
+  }
+
+  async initializeLLMs(): Promise<void> {
+    if (!this.delegate.initializeLLMs) {
+      throw new Error('Inference supervisor delegate does not expose initializeLLMs');
+    }
+
+    await this.delegate.initializeLLMs();
+  }
+
+  isSpeculationAllowed(): boolean {
+    return this.speculationEnabled;
+  }
+
+  async submit(request: InferenceRequest): Promise<{ decision: RouteDecision; result: LaneResult }> {
+    if (!this.router) {
+      throw new Error('Inference supervisor does not expose an inference router');
+    }
+
+    const response = await this.router.run(request);
+    if (response.result.status === 'completed' && response.result.lane === 'fast-draft') {
+      await this.publishDraftReady(request.requestId);
+    }
+    if (response.result.status === 'completed' && response.result.lane === 'quality') {
+      await this.commitAnswer(request.requestId);
+    }
+
+    return response;
+  }
+
+  private async handleBudgetPressure(lane: string, level: 'warning' | 'critical'): Promise<void> {
+    if (lane === 'background' && level === 'critical') {
+      this.speculationEnabled = false;
+    }
+    if (level === 'warning' && lane === 'background') {
+      this.speculationEnabled = false;
+    }
+
+    await this.delegate.onBudgetPressure?.(lane, level);
   }
 }

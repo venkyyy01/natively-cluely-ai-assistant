@@ -13,6 +13,7 @@ import { RecoverySupervisor } from "./runtime/RecoverySupervisor"
 import { WindowFacade } from "./runtime/WindowFacade"
 import { SettingsFacade } from "./runtime/SettingsFacade"
 import { ScreenshotFacade } from "./runtime/ScreenshotFacade"
+import { AudioFacade } from "./runtime/AudioFacade"
 import { getPerformanceInstrumentation, type PerformanceInstrumentation } from "./runtime/PerformanceInstrumentation"
 import { RuntimeCoordinator, type RuntimeOwnershipMode } from "./runtime/RuntimeCoordinator"
 import { StealthManager } from "./stealth/StealthManager"
@@ -696,6 +697,15 @@ this.setupIntelligenceEvents()
         reconnectSpeaker: async (speaker) => {
           await this.reconnectSpeakerStt(speaker)
         },
+        reconfigureProvider: async () => {
+          await this.reconfigureSttProvider()
+        },
+        updateGoogleCredentials: async (keyPath) => {
+          this.updateGoogleCredentials(keyPath)
+        },
+        finalizeMicrophone: async () => {
+          this.finalizeMicSTT()
+        },
         onError: async (speaker, error) => {
           this.broadcast('meeting-audio-error', `Transcription connection failed for ${speaker}: ${error.message}`)
         },
@@ -722,6 +732,8 @@ this.setupIntelligenceEvents()
         reset: () => this.intelligenceManager.reset(),
         getRAGManager: () => this.ragManager,
         getKnowledgeOrchestrator: () => this.processingHelper.getLLMHelper().getKnowledgeOrchestrator?.() ?? this.knowledgeOrchestrator,
+        getIntelligenceManager: () => this.intelligenceManager,
+        initializeLLMs: () => this.intelligenceManager.initializeLLMs(),
       },
     }))
 
@@ -2465,6 +2477,9 @@ try {
       centerAndShowWindow: () => this.centerAndShowWindow(),
       toggleSettingsWindow: (x, y) => this.settingsWindowHelper.toggleWindow(x, y),
       closeSettingsWindow: () => this.settingsWindowHelper.closeWindow(),
+      showModelSelectorWindow: (x, y) => this.modelSelectorWindowHelper.showWindow(x, y),
+      hideModelSelectorWindow: () => this.modelSelectorWindowHelper.hideWindow(),
+      toggleModelSelectorWindow: (x, y) => this.modelSelectorWindowHelper.toggleWindow(x, y),
     })
   }
 
@@ -2477,6 +2492,9 @@ try {
       setDisguise: (mode) => this.setDisguise(mode),
       getDisguise: () => this.getDisguise(),
       getUndetectable: () => this.getUndetectable(),
+      getThemeMode: () => this.themeManager.getMode(),
+      getResolvedTheme: () => this.themeManager.getResolvedTheme(),
+      setThemeMode: (mode) => this.themeManager.setMode(mode as import('./ThemeManager').ThemeMode),
     })
   }
 
@@ -2490,6 +2508,12 @@ try {
       getScreenshotQueue: () => this.getScreenshotQueue(),
       getExtraScreenshotQueue: () => this.getExtraScreenshotQueue(),
       clearQueues: () => this.clearQueues(),
+    })
+  }
+
+  public getAudioFacade(): AudioFacade {
+    return new AudioFacade({
+      getNativeAudioStatus: () => this.getNativeAudioStatus(),
     })
   }
 

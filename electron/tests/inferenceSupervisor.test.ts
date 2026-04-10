@@ -122,3 +122,22 @@ test('InferenceSupervisor ignores stealth faults while not running', async () =>
   await bus.emit({ type: 'stealth:fault', reason: 'window_visible_to_capture' });
   assert.deepEqual(calls, []);
 });
+
+test('InferenceSupervisor exposes intelligence manager access and LLM initialization through the delegate', async () => {
+  const calls: string[] = [];
+  const intelligenceManager = { id: 'manager' };
+  const supervisor = new InferenceSupervisor({
+    delegate: {
+      getIntelligenceManager() {
+        return intelligenceManager;
+      },
+      async initializeLLMs() {
+        calls.push('initialize');
+      },
+    },
+  });
+
+  assert.equal(supervisor.getIntelligenceManager<typeof intelligenceManager>(), intelligenceManager);
+  await supervisor.initializeLLMs();
+  assert.deepEqual(calls, ['initialize']);
+});

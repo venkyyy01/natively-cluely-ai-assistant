@@ -1,8 +1,10 @@
 import type { SupervisorBus } from './SupervisorBus';
 import type { ISupervisor, SupervisorState } from './types';
+import type { WarmStandbyManager } from './WarmStandbyManager';
 
 export interface AudioSupervisorDelegates {
   startCapture: () => Promise<void> | void;
+  startCaptureFromWarmStandby?: (resource: unknown) => Promise<void> | void;
   stopCapture: () => Promise<void> | void;
   onStealthFault?: (reason: string) => Promise<void> | void;
   startAudioTest?: (deviceId?: string) => Promise<void> | void;
@@ -16,6 +18,10 @@ interface AudioSupervisorOptions {
   bus: SupervisorBus;
   delegates: AudioSupervisorDelegates;
   logger?: Pick<Console, 'warn'>;
+  warmStandby?: Pick<
+    WarmStandbyManager<unknown, unknown, unknown>,
+    'getAudioResource' | 'isAudioResourceHealthy' | 'invalidateAudioResource'
+  >;
 }
 
 export class AudioSupervisor implements ISupervisor {
@@ -25,11 +31,16 @@ export class AudioSupervisor implements ISupervisor {
   private readonly bus: SupervisorBus;
   private readonly delegates: AudioSupervisorDelegates;
   private readonly logger: Pick<Console, 'warn'>;
+  private readonly warmStandby?: Pick<
+    WarmStandbyManager<unknown, unknown, unknown>,
+    'getAudioResource' | 'isAudioResourceHealthy' | 'invalidateAudioResource'
+  >;
 
   constructor(options: AudioSupervisorOptions) {
     this.bus = options.bus;
     this.delegates = options.delegates;
     this.logger = options.logger ?? console;
+    this.warmStandby = options.warmStandby;
     this.bus.subscribe('stealth:fault', async (event) => {
       await this.handleStealthFault(event.reason);
     });
@@ -46,7 +57,7 @@ export class AudioSupervisor implements ISupervisor {
 
     this.state = 'starting';
     try {
-      await this.delegates.startCapture();
+      await this.startCaptureWithWarmStandbyFallback();
       this.state = 'running';
       await this.bus.emit({ type: 'audio:capture-started' });
     } catch (error) {
@@ -106,6 +117,30 @@ export class AudioSupervisor implements ISupervisor {
 
   async stopAudioTest(): Promise<void> {
     await this.delegates.stopAudioTest?.();
+  }
+
+  private async startCaptureWithWarmStandbyFallback(): Promise<void> {
+    const warmResource = this.warmStandby?.getAudioResource();
+    const canUseWarmStandby = warmResource !== null && warmResource !== undefined && this.delegates.startCaptureFromWarmStandby;
+    if (!canUseWarmStandby) {
+      await this.delegates.startCapture();
+      return;
+    }
+
+    const healthy = await this.warmStandby?.isAudioResourceHealthy();
+    if (!healthy) {
+      await this.warmStandby?.invalidateAudioResource();
+      await this.delegates.startCapture();
+      return;
+    }
+
+    try {
+      await this.delegates.startCaptureFromWarmStandby?.(warmResource);
+    } catch (error) {
+      await this.warmStandby?.invalidateAudioResource();
+      this.logger.warn('[AudioSupervisor] Warm capture activation failed, falling back to cold start:', error);
+      await this.delegates.startCapture();
+    }
   }
 
   private async handleStealthFault(reason: string): Promise<void> {

@@ -8,6 +8,9 @@ export interface SettingsFacadeDeps {
   setDisguise: (mode: DisguiseMode) => void;
   getDisguise: () => string;
   getUndetectable: () => boolean;
+  getThemeMode: () => string;
+  getResolvedTheme: () => string;
+  setThemeMode: (mode: string) => void;
 }
 
 export class SettingsFacade {
@@ -39,5 +42,17 @@ export class SettingsFacade {
 
   getUndetectable(): boolean {
     return this.deps.getUndetectable();
+  }
+
+  getThemeMode(): string {
+    return this.deps.getThemeMode();
+  }
+
+  getResolvedTheme(): string {
+    return this.deps.getResolvedTheme();
+  }
+
+  setThemeMode(mode: string): void {
+    this.deps.setThemeMode(mode);
   }
 }

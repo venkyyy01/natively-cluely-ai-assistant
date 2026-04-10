@@ -52,6 +52,7 @@ export interface NativeStealthBridgeClient {
     hiDpi: boolean;
   }) => Promise<MacosLayer3ResponseEnvelope<MacosLayer3HealthReport>>;
   present: (request: { sessionId: string; activate: boolean }) => Promise<MacosLayer3ResponseEnvelope<MacosLayer3HealthReport>>;
+  heartbeat?: (sessionId: string) => Promise<MacosLayer3ResponseEnvelope<MacosLayer3HealthReport>>;
   getHealth: (sessionId: string) => Promise<MacosLayer3ResponseEnvelope<MacosLayer3HealthReport>>;
   teardownSession: (sessionId: string) => Promise<MacosLayer3ResponseEnvelope<{ released: boolean }>>;
   dispose?: () => void;
@@ -187,8 +188,11 @@ export class NativeStealthBridge {
     }
 
     try {
+      const fetchHealth = client.heartbeat
+        ? () => client.heartbeat!(this.activeSessionId!)
+        : () => client.getHealth(this.activeSessionId!);
       const health = await this.callClient(
-        () => client.getHealth(this.activeSessionId!),
+        fetchHealth,
         'heartbeat',
         { notifyDisconnect: false },
       );
@@ -219,7 +223,9 @@ export class NativeStealthBridge {
         }
 
         const recoveredHealth = await this.callClient(
-          () => recoveredClient.getHealth(restartedSessionId),
+          () => recoveredClient.heartbeat
+            ? recoveredClient.heartbeat(restartedSessionId)
+            : recoveredClient.getHealth(restartedSessionId),
           'heartbeat:post-restart',
           { notifyDisconnect: false },
         );

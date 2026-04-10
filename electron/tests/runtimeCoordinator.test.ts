@@ -333,3 +333,138 @@ test('RuntimeCoordinator rolls back already-started supervisors when startup fai
     'stop:inference',
   ]);
 });
+
+test('RuntimeCoordinator supports restarting an individual supervisor lane without a full meeting teardown', async () => {
+  const calls: string[] = [];
+  const coordinator = new RuntimeCoordinator(
+    {
+      async startMeetingLegacy(_metadata, mode) {
+        calls.push(`delegate:start:${mode}`);
+      },
+      async endMeetingLegacy(mode) {
+        calls.push(`delegate:stop:${mode}`);
+      },
+    },
+    {
+      featureFlagReader: () => true,
+      logger: { warn() {} },
+      managedSupervisorNames: ['audio', 'stt'],
+    },
+  );
+
+  for (const name of ['audio', 'stt'] as const) {
+    coordinator.registerSupervisor({
+      name,
+      async start() {
+        calls.push(`start:${name}`);
+      },
+      async stop() {
+        calls.push(`stop:${name}`);
+      },
+      getState() {
+        return 'idle';
+      },
+    });
+  }
+
+  await coordinator.activate({ source: 'test' });
+  assert.equal(coordinator.getLifecycleState(), 'active');
+
+  await coordinator.stopSupervisors(['stt']);
+  await coordinator.startSupervisors(['stt']);
+  assert.equal(coordinator.getLifecycleState(), 'active');
+
+  await coordinator.deactivate();
+
+  assert.deepEqual(calls, [
+    'delegate:start:coordinator',
+    'start:audio',
+    'start:stt',
+    'stop:stt',
+    'start:stt',
+    'stop:stt',
+    'stop:audio',
+    'delegate:stop:coordinator',
+  ]);
+});
+
+test('RuntimeCoordinator ignores duplicate deactivate requests while stopping and still emits a single idle transition', async () => {
+  const lifecycleEvents: string[] = [];
+  let releaseStop: (() => void) | null = null;
+  const stopGate = new Promise<void>((resolve) => {
+    releaseStop = resolve;
+  });
+  const warnings: string[] = [];
+
+  const coordinator = new RuntimeCoordinator(
+    {
+      async startMeetingLegacy() {},
+      async endMeetingLegacy() {},
+    },
+    {
+      featureFlagReader: () => true,
+      logger: {
+        warn(message) {
+          warnings.push(String(message));
+        },
+      },
+      managedSupervisorNames: ['audio'],
+    },
+  );
+
+  coordinator.registerSupervisor({
+    name: 'audio',
+    async start() {},
+    async stop() {
+      await stopGate;
+    },
+    getState() {
+      return 'idle';
+    },
+  });
+
+  coordinator.getBus().subscribeAll(async (event) => {
+    lifecycleEvents.push(event.type);
+  });
+
+  await coordinator.activate();
+  const firstDeactivate = coordinator.deactivate();
+  const secondDeactivate = coordinator.deactivate();
+  releaseStop?.();
+
+  await Promise.all([firstDeactivate, secondDeactivate]);
+
+  assert.equal(coordinator.getLifecycleState(), 'idle');
+  assert.equal(lifecycleEvents.filter((event) => event === 'lifecycle:meeting-stopping').length, 1);
+  assert.equal(lifecycleEvents.filter((event) => event === 'lifecycle:meeting-idle').length, 1);
+  assert.ok(warnings.some((message) => message.includes('duplicate deactivate')));
+});
+
+test('RuntimeCoordinator bus events include a stable meeting id for startup transitions', async () => {
+  const events: Array<{ type: string; meetingId?: string }> = [];
+  const coordinator = new RuntimeCoordinator(
+    {
+      async startMeetingLegacy() {},
+      async endMeetingLegacy() {},
+    },
+    {
+      featureFlagReader: () => true,
+      logger: { warn() {} },
+      managedSupervisorNames: [],
+    },
+  );
+
+  coordinator.getBus().subscribeAll(async (event) => {
+    events.push({ type: event.type, meetingId: 'meetingId' in event ? event.meetingId : undefined });
+  });
+
+  await coordinator.activate();
+  await coordinator.deactivate();
+
+  assert.equal(events[0]?.type, 'lifecycle:meeting-starting');
+  assert.equal(events[1]?.type, 'lifecycle:meeting-active');
+  assert.ok(events[0]?.meetingId);
+  assert.equal(events[0]?.meetingId, events[1]?.meetingId);
+  assert.equal(events[2]?.type, 'lifecycle:meeting-stopping');
+  assert.equal(events[3]?.type, 'lifecycle:meeting-idle');
+});

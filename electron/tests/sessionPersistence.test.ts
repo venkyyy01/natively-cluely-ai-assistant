@@ -76,6 +76,38 @@ function makeSession(meetingId: string): PersistedSession {
         },
       },
     },
+    memoryState: {
+      hot: [
+        {
+          id: 'hot-transcript-1',
+          sizeBytes: 64,
+          createdAt: now,
+          value: {
+            kind: 'transcript',
+            text: 'Walk me through your cache invalidation strategy.',
+            timestamp: now,
+            speaker: 'interviewer',
+            final: true,
+          },
+        },
+      ],
+      warm: [
+        {
+          id: 'warm-thread',
+          sizeBytes: 48,
+          createdAt: now,
+          value: {
+            kind: 'active-thread',
+            timestamp: now,
+            topic: 'Design cache',
+            goal: 'Discuss cache architecture',
+            phase: 'high_level_design',
+            turnCount: 3,
+          },
+        },
+      ],
+      cold: [],
+    },
   };
 }
 
@@ -101,6 +133,7 @@ test('SessionPersistence saves and loads meeting sessions', async (t) => {
   assert.equal(loaded?.activeThread?.topic, 'Design cache');
   assert.equal(loaded?.consciousState?.threadState?.latestConsciousResponse?.openingReasoning, 'I would start with a cache aside strategy.');
   assert.equal(loaded?.consciousState?.hypothesisState?.latestReaction?.kind, 'tradeoff_probe');
+  assert.equal(loaded?.memoryState?.hot[0]?.value.text, 'Walk me through your cache invalidation strategy.');
 });
 
 test('SessionPersistence flushScheduledSave persists pending snapshots immediately', async (t) => {

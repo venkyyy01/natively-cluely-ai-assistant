@@ -1,5 +1,7 @@
 import { SupervisorBus } from './SupervisorBus';
 import type { ISupervisor, SupervisorState } from './types';
+import type { EventCheckpointPolicy } from '../memory/EventCheckpointPolicy';
+import type { TieredMemoryManager } from '../memory/TieredMemoryManager';
 
 export interface RecoverySupervisorDelegate {
   start?: () => Promise<void> | void;
@@ -11,6 +13,8 @@ export interface RecoverySupervisorDelegate {
 interface RecoverySupervisorOptions {
   delegate: RecoverySupervisorDelegate;
   bus?: SupervisorBus;
+  checkpointPolicy?: EventCheckpointPolicy;
+  tieredMemoryManager?: TieredMemoryManager<unknown>;
 }
 
 export class RecoverySupervisor implements ISupervisor {
@@ -18,10 +22,14 @@ export class RecoverySupervisor implements ISupervisor {
   private state: SupervisorState = 'idle';
   private readonly delegate: RecoverySupervisorDelegate;
   private readonly bus: SupervisorBus;
+  private readonly checkpointPolicy?: EventCheckpointPolicy;
+  private readonly tieredMemoryManager?: TieredMemoryManager<unknown>;
 
   constructor(options: RecoverySupervisorOptions) {
     this.delegate = options.delegate;
     this.bus = options.bus ?? new SupervisorBus();
+    this.checkpointPolicy = options.checkpointPolicy;
+    this.tieredMemoryManager = options.tieredMemoryManager;
   }
 
   getState(): SupervisorState {
@@ -65,5 +73,24 @@ export class RecoverySupervisor implements ISupervisor {
     await this.delegate.restore?.(sessionId);
     await this.bus.emit({ type: 'recovery:restore-complete', sessionId });
   }
-}
 
+  getTieredMemoryManager<TValue = unknown>(): TieredMemoryManager<TValue> | null {
+    return (this.tieredMemoryManager as TieredMemoryManager<TValue> | undefined) ?? null;
+  }
+
+  async notePhaseTransition(phase: string): Promise<boolean> {
+    if (!this.checkpointPolicy) {
+      return false;
+    }
+
+    return this.checkpointPolicy.notePhaseTransition(phase);
+  }
+
+  async noteUserAction(action: string): Promise<boolean> {
+    if (!this.checkpointPolicy) {
+      return false;
+    }
+
+    return this.checkpointPolicy.noteUserAction(action);
+  }
+}

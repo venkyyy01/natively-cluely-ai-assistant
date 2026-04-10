@@ -27,6 +27,48 @@ type ScreenshotFacadeLike = {
   clearQueues?: () => void;
 };
 
+type RuntimeCoordinatorLike = {
+  shouldManageLifecycle?: () => boolean;
+  getSupervisor?: (name: string) => unknown;
+};
+
+type SttSupervisorLike = {
+  reconfigureProvider?: () => Promise<void> | void;
+  updateGoogleCredentials?: (keyPath: string) => Promise<void> | void;
+  finalizeMicrophone?: () => Promise<void> | void;
+};
+
+type IntelligenceManagerLike = {
+  addTranscript: (entry: { text: string; speaker: string; timestamp: number; final: boolean }, skipRefinementCheck?: boolean) => void;
+  addAssistantMessage: (message: string) => void;
+  getLastAssistantMessage: () => string | null;
+  getFormattedContext: (lastSeconds?: number) => string;
+  logUsage: (type: string, input: string, output: string) => void;
+  initializeLLMs: () => void | Promise<void>;
+};
+
+type InferenceSupervisorLike = {
+  getLLMHelper?: () => unknown;
+  getIntelligenceManager?: () => unknown;
+  initializeLLMs?: () => Promise<void> | void;
+};
+
+type WindowFacadeLike = {
+  showModelSelectorWindow?: (x: number, y: number) => void;
+  hideModelSelectorWindow?: () => void;
+  toggleModelSelectorWindow?: (x: number, y: number) => void;
+};
+
+type SettingsFacadeLike = {
+  getThemeMode?: () => string;
+  getResolvedTheme?: () => string;
+  setThemeMode?: (mode: string) => void;
+};
+
+type AudioFacadeLike = {
+  getNativeAudioStatus?: () => unknown;
+};
+
 export function initializeIpcHandlers(appState: AppState): void {
   const safeHandle = (channel: string, listener: (event: any, ...args: any[]) => Promise<any> | any) => {
     ipcMain.removeHandler(channel);
@@ -67,6 +109,73 @@ export function initializeIpcHandlers(appState: AppState): void {
     }
 
     return appState.processingHelper.getLLMHelper();
+  };
+
+  const getRuntimeCoordinator = (): RuntimeCoordinatorLike | null => {
+    try {
+      const coordinator = (appState as { getCoordinator?: () => unknown }).getCoordinator?.() as RuntimeCoordinatorLike | undefined;
+      if (!coordinator?.shouldManageLifecycle?.() || typeof coordinator.getSupervisor !== 'function') {
+        return null;
+      }
+
+      return coordinator;
+    } catch {
+      return null;
+    }
+  };
+
+  const getSttSupervisor = (): SttSupervisorLike | null => {
+    const coordinator = getRuntimeCoordinator();
+    return (coordinator?.getSupervisor?.('stt') as SttSupervisorLike | undefined) ?? null;
+  };
+
+  const getInferenceSupervisor = (): InferenceSupervisorLike | null => {
+    const coordinator = getRuntimeCoordinator();
+    return (coordinator?.getSupervisor?.('inference') as InferenceSupervisorLike | undefined) ?? null;
+  };
+
+  const getWindowFacade = (): WindowFacadeLike | null => {
+    if ('getWindowFacade' in appState && typeof appState.getWindowFacade === 'function') {
+      return appState.getWindowFacade() as WindowFacadeLike;
+    }
+
+    return null;
+  };
+
+  const getSettingsFacade = (): SettingsFacadeLike | null => {
+    if ('getSettingsFacade' in appState && typeof appState.getSettingsFacade === 'function') {
+      return appState.getSettingsFacade() as SettingsFacadeLike;
+    }
+
+    return null;
+  };
+
+  const getAudioFacade = (): AudioFacadeLike | null => {
+    if ('getAudioFacade' in appState && typeof appState.getAudioFacade === 'function') {
+      return appState.getAudioFacade() as AudioFacadeLike;
+    }
+
+    return null;
+  };
+
+  const getIntelligenceManager = (): IntelligenceManagerLike => {
+    const supervisor = getInferenceSupervisor();
+    const intelligenceManager = supervisor?.getIntelligenceManager?.();
+    if (intelligenceManager) {
+      return intelligenceManager as IntelligenceManagerLike;
+    }
+
+    return appState.getIntelligenceManager() as IntelligenceManagerLike;
+  };
+
+  const initializeInferenceLLMs = async (): Promise<void> => {
+    const supervisor = getInferenceSupervisor();
+    if (supervisor?.initializeLLMs) {
+      await supervisor.initializeLLMs();
+      return;
+    }
+
+    await appState.getIntelligenceManager().initializeLLMs();
   };
 
   const getScreenshotFacade = (): ScreenshotFacadeLike | null => {
@@ -245,7 +354,12 @@ safeHandleValidated("renderer:log-error", (args) => [parseIpcInput(ipcSchemas.re
   })
 
   safeHandle("finalize-mic-stt", async () => {
-    appState.finalizeMicSTT();
+    const sttSupervisor = getSttSupervisor();
+    if (sttSupervisor?.finalizeMicrophone) {
+      await sttSupervisor.finalizeMicrophone();
+    } else {
+      appState.finalizeMicSTT();
+    }
     return ok(null);
   });
 
@@ -279,7 +393,7 @@ safeHandleValidated("renderer:log-error", (args) => [parseIpcInput(ipcSchemas.re
       }
 
       // Sync with IntelligenceManager so Follow-Up/Recap work
-      const intelligenceManager = appState.getIntelligenceManager();
+      const intelligenceManager = getIntelligenceManager();
 
       // 1. Add user question to context (as 'user')
       // CRITICAL: Skip refinement check to prevent auto-triggering follow-up logic
@@ -313,7 +427,7 @@ safeHandleValidated("renderer:log-error", (args) => [parseIpcInput(ipcSchemas.re
       const llmHelper = getInferenceLlmHelper();
 
       // Update IntelligenceManager with USER message immediately
-      const intelligenceManager = appState.getIntelligenceManager();
+      const intelligenceManager = getIntelligenceManager();
       intelligenceManager.addTranscript({
         text: message,
         speaker: 'user',
@@ -480,7 +594,7 @@ safeHandleValidated("delete-meeting", (args) => [parseIpcInput(ipcSchemas.provid
       llmHelper.setApiKey(apiKey);
 
       // Re-init IntelligenceManager
-      appState.getIntelligenceManager().initializeLLMs();
+      await initializeInferenceLLMs();
 
       return { success: true };
     } catch (error: any) {
@@ -499,7 +613,7 @@ safeHandleValidated("delete-meeting", (args) => [parseIpcInput(ipcSchemas.provid
       llmHelper.setGroqApiKey(apiKey);
 
       // Re-init IntelligenceManager
-      appState.getIntelligenceManager().initializeLLMs();
+      await initializeInferenceLLMs();
 
       return { success: true };
     } catch (error: any) {
@@ -516,7 +630,7 @@ safeHandleValidated("delete-meeting", (args) => [parseIpcInput(ipcSchemas.provid
       const llmHelper = getInferenceLlmHelper();
       llmHelper.setCerebrasApiKey(apiKey);
 
-      appState.getIntelligenceManager().initializeLLMs();
+      await initializeInferenceLLMs();
 
       return { success: true };
     } catch (error: any) {
@@ -535,7 +649,7 @@ safeHandleValidated("delete-meeting", (args) => [parseIpcInput(ipcSchemas.provid
       llmHelper.setOpenaiApiKey(apiKey);
 
       // Re-init IntelligenceManager
-      appState.getIntelligenceManager().initializeLLMs();
+      await initializeInferenceLLMs();
 
       return { success: true };
     } catch (error: any) {
@@ -554,7 +668,7 @@ safeHandleValidated("delete-meeting", (args) => [parseIpcInput(ipcSchemas.provid
       llmHelper.setClaudeApiKey(apiKey);
 
       // Re-init IntelligenceManager
-      appState.getIntelligenceManager().initializeLLMs();
+      await initializeInferenceLLMs();
 
       return { success: true };
     } catch (error: any) {
@@ -617,7 +731,7 @@ safeHandleValidated("delete-meeting", (args) => [parseIpcInput(ipcSchemas.provid
       await llmHelper.switchToCustom(provider);
 
       // Re-init IntelligenceManager (optional, but good for consistency)
-      appState.getIntelligenceManager().initializeLLMs();
+      await initializeInferenceLLMs();
 
       return { success: true };
     } catch (error: any) {
@@ -672,7 +786,7 @@ safeHandleValidated("delete-meeting", (args) => [parseIpcInput(ipcSchemas.provid
       await llmHelper.switchToCurl(provider);
 
       // Re-init IntelligenceManager (optional, but good for consistency)
-      appState.getIntelligenceManager().initializeLLMs();
+      await initializeInferenceLLMs();
 
       return { success: true };
     } catch (error: any) {
@@ -777,7 +891,12 @@ safeHandleValidated("delete-meeting", (args) => [parseIpcInput(ipcSchemas.provid
       CredentialsManager.getInstance().setSttProvider(provider);
 
       // Reconfigure the audio pipeline to use the new STT provider
-      await appState.reconfigureSttProvider();
+      const sttSupervisor = getSttSupervisor();
+      if (sttSupervisor?.reconfigureProvider) {
+        await sttSupervisor.reconfigureProvider();
+      } else {
+        await appState.reconfigureSttProvider();
+      }
 
       return { success: true };
     } catch (error: any) {
@@ -834,7 +953,12 @@ safeHandleValidated("delete-meeting", (args) => [parseIpcInput(ipcSchemas.provid
       CredentialsManager.getInstance().setGroqSttModel(model);
 
       // Reconfigure the audio pipeline to use the new model
-      await appState.reconfigureSttProvider();
+      const sttSupervisor = getSttSupervisor();
+      if (sttSupervisor?.reconfigureProvider) {
+        await sttSupervisor.reconfigureProvider();
+      } else {
+        await appState.reconfigureSttProvider();
+      }
 
       return { success: true };
     } catch (error: any) {
@@ -871,7 +995,12 @@ safeHandleValidated("delete-meeting", (args) => [parseIpcInput(ipcSchemas.provid
       CredentialsManager.getInstance().setAzureRegion(region);
 
       // Reconfigure the pipeline since region changes the endpoint URL
-      await appState.reconfigureSttProvider();
+      const sttSupervisor = getSttSupervisor();
+      if (sttSupervisor?.reconfigureProvider) {
+        await sttSupervisor.reconfigureProvider();
+      } else {
+        await appState.reconfigureSttProvider();
+      }
 
       return { success: true };
     } catch (error: any) {
@@ -1201,7 +1330,12 @@ safeHandleValidated("delete-meeting", (args) => [parseIpcInput(ipcSchemas.provid
       llmHelper.setModel(modelId, allProviders);
 
       // Close the selector window if open
-      appState.modelSelectorWindowHelper.hideWindow();
+      const windowFacade = getWindowFacade();
+      if (windowFacade?.hideModelSelectorWindow) {
+        windowFacade.hideModelSelectorWindow();
+      } else {
+        appState.modelSelectorWindowHelper.hideWindow();
+      }
 
       // Broadcast to all windows so NativelyInterface can update its selector (session-only update)
       BrowserWindow.getAllWindows().forEach(win => {
@@ -1232,7 +1366,12 @@ safeHandleValidated("delete-meeting", (args) => [parseIpcInput(ipcSchemas.provid
       llmHelper.setModel(modelId, allProviders);
 
       // Close the selector window if open
-      appState.modelSelectorWindowHelper.hideWindow();
+      const windowFacade = getWindowFacade();
+      if (windowFacade?.hideModelSelectorWindow) {
+        windowFacade.hideModelSelectorWindow();
+      } else {
+        appState.modelSelectorWindowHelper.hideWindow();
+      }
 
       // Broadcast to all windows so NativelyInterface can update its selector
       BrowserWindow.getAllWindows().forEach(win => {
@@ -1263,16 +1402,31 @@ safeHandleValidated("delete-meeting", (args) => [parseIpcInput(ipcSchemas.provid
   // --- Model Selector Window IPC ---
 
   safeHandleValidated("show-model-selector", (args) => [parseIpcInput(ipcSchemas.modelSelectorCoords, args[0], 'show-model-selector')] as const, (_, coords) => {
-    appState.modelSelectorWindowHelper.showWindow(coords.x, coords.y);
+    const windowFacade = getWindowFacade();
+    if (windowFacade?.showModelSelectorWindow) {
+      windowFacade.showModelSelectorWindow(coords.x, coords.y);
+    } else {
+      appState.modelSelectorWindowHelper.showWindow(coords.x, coords.y);
+    }
   });
 
   safeHandle("hide-model-selector", () => {
-    appState.modelSelectorWindowHelper.hideWindow();
+    const windowFacade = getWindowFacade();
+    if (windowFacade?.hideModelSelectorWindow) {
+      windowFacade.hideModelSelectorWindow();
+    } else {
+      appState.modelSelectorWindowHelper.hideWindow();
+    }
     return ok(null);
   });
 
   safeHandleValidated("toggle-model-selector", (args) => [parseIpcInput(ipcSchemas.modelSelectorCoords, args[0], 'toggle-model-selector')] as const, (_, coords) => {
-    appState.modelSelectorWindowHelper.toggleWindow(coords.x, coords.y);
+    const windowFacade = getWindowFacade();
+    if (windowFacade?.toggleModelSelectorWindow) {
+      windowFacade.toggleModelSelectorWindow(coords.x, coords.y);
+    } else {
+      appState.modelSelectorWindowHelper.toggleWindow(coords.x, coords.y);
+    }
   });
 
 
@@ -1280,7 +1434,8 @@ safeHandleValidated("delete-meeting", (args) => [parseIpcInput(ipcSchemas.provid
   // Native Audio Service Handlers
   safeHandle("native-audio-status", async () => {
     try {
-      return ok(appState.getNativeAudioStatus());
+      const audioFacade = getAudioFacade();
+      return ok(audioFacade?.getNativeAudioStatus ? audioFacade.getNativeAudioStatus() : appState.getNativeAudioStatus());
     } catch (error) {
       return fail('NATIVE_AUDIO_STATUS_FAILED', error, 'Failed to get native audio status');
     }
@@ -1305,7 +1460,12 @@ safeHandleValidated("delete-meeting", (args) => [parseIpcInput(ipcSchemas.provid
       const filePath = result.filePaths[0];
 
       // Update backend state immediately
-      appState.updateGoogleCredentials(filePath);
+      const sttSupervisor = getSttSupervisor();
+      if (sttSupervisor?.updateGoogleCredentials) {
+        await sttSupervisor.updateGoogleCredentials(filePath);
+      } else {
+        appState.updateGoogleCredentials(filePath);
+      }
 
       // Persist the path for future sessions
       const { CredentialsManager } = require('./services/CredentialsManager');
@@ -1324,10 +1484,12 @@ safeHandleValidated("delete-meeting", (args) => [parseIpcInput(ipcSchemas.provid
 
   safeHandle("theme:get-mode", () => {
     try {
-      const tm = appState.getThemeManager();
+      const settingsFacade = getSettingsFacade();
+      const mode = settingsFacade?.getThemeMode ? settingsFacade.getThemeMode() : appState.getThemeManager().getMode();
+      const resolved = settingsFacade?.getResolvedTheme ? settingsFacade.getResolvedTheme() : appState.getThemeManager().getResolvedTheme();
       return ok({
-        mode: tm.getMode(),
-        resolved: tm.getResolvedTheme()
+        mode,
+        resolved,
       });
     } catch (error) {
       return fail('THEME_MODE_READ_FAILED', error, 'Failed to get theme mode');
@@ -1335,7 +1497,12 @@ safeHandleValidated("delete-meeting", (args) => [parseIpcInput(ipcSchemas.provid
   });
 
   safeHandleValidated("theme:set-mode", (args) => [parseIpcInput(ipcSchemas.themeMode, args[0], 'theme:set-mode')] as const, (_, mode) => {
-    appState.getThemeManager().setMode(mode);
+    const settingsFacade = getSettingsFacade();
+    if (settingsFacade?.setThemeMode) {
+      settingsFacade.setThemeMode(mode);
+    } else {
+      appState.getThemeManager().setMode(mode);
+    }
     return { success: true };
   });
 

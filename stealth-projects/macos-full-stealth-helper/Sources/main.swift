@@ -6,6 +6,7 @@ private final class SessionRuntime {
     var width: Int
     var height: Int
     var hiDpi: Bool
+    var reason: String?
     var state: HelperSessionState
     var surfaceId: String?
     var surfaceToken: String?
@@ -13,6 +14,7 @@ private final class SessionRuntime {
     var recoveryPending: Bool
     var blockers: [HelperBlocker]
     var lastTransitionAt: String
+    var lastHeartbeatAt: Date
     var surface: StealthSurface?
 
     init(
@@ -21,19 +23,22 @@ private final class SessionRuntime {
         width: Int,
         height: Int,
         hiDpi: Bool = false,
+        reason: String? = nil,
         state: HelperSessionState,
         surfaceId: String? = nil,
         surfaceToken: String? = nil,
         presenting: Bool = false,
         recoveryPending: Bool = false,
         blockers: [HelperBlocker] = [],
-        lastTransitionAt: String = SessionRuntime.timestamp()
+        lastTransitionAt: String = SessionRuntime.timestamp(),
+        lastHeartbeatAt: Date = Date()
     ) {
         self.sessionId = sessionId
         self.windowId = windowId
         self.width = width
         self.height = height
         self.hiDpi = hiDpi
+        self.reason = reason
         self.state = state
         self.surfaceId = surfaceId
         self.surfaceToken = surfaceToken
@@ -41,6 +46,7 @@ private final class SessionRuntime {
         self.recoveryPending = recoveryPending
         self.blockers = blockers
         self.lastTransitionAt = lastTransitionAt
+        self.lastHeartbeatAt = lastHeartbeatAt
     }
 
     func healthReport() -> HealthReport {
@@ -66,6 +72,10 @@ private final class SessionRuntime {
         lastTransitionAt = SessionRuntime.timestamp()
     }
 
+    func noteHeartbeat() {
+        lastHeartbeatAt = Date()
+    }
+
     private static func timestamp() -> String {
         ISO8601DateFormatter().string(from: Date())
     }
@@ -74,6 +84,14 @@ private final class SessionRuntime {
 private final class FullStealthHelperService {
     private var sessions: [String: SessionRuntime] = [:]
     private var telemetryBySession: [String: [TelemetryEvent]] = [:]
+    private let heartbeatTimeoutMs: TimeInterval
+
+    init(heartbeatTimeoutMs: TimeInterval = FullStealthHelperService.readMillisecondsEnv(
+        key: "FULL_STEALTH_HEARTBEAT_TIMEOUT_MS",
+        fallback: 2000
+    )) {
+        self.heartbeatTimeoutMs = heartbeatTimeoutMs
+    }
 
     func status() -> StatusResponse {
         StatusResponse(
@@ -138,9 +156,11 @@ private final class FullStealthHelperService {
             sessionId: request.sessionId,
             width: 1280,
             height: 720,
+            reason: request.reason,
             state: .creating,
             surfaceToken: "surface-\(request.sessionId)"
         )
+        runtime.noteHeartbeat()
         sessions[request.sessionId] = runtime
         recordEvent(sessionId: request.sessionId, type: "session-created", detail: "protected session created")
         return ControlPlaneEnvelope(
@@ -185,7 +205,8 @@ private final class FullStealthHelperService {
                 surfaceId: request.surfaceId,
                 width: request.width,
                 height: request.height,
-                hiDpi: request.hiDpi
+                hiDpi: request.hiDpi,
+                allowHeadlessFallback: runtime.reason == "validation-run"
             )
             try surface.updateDrawableSize(width: request.width, height: request.height, hiDpi: request.hiDpi)
 
@@ -204,6 +225,7 @@ private final class FullStealthHelperService {
             }
 
             runtime.surface = surface
+            runtime.noteHeartbeat()
             runtime.recoveryPending = false
             runtime.transition(to: .attached, presenting: false, blockers: [])
             recordEvent(sessionId: request.sessionId, type: "surface-attached", detail: request.surfaceId)
@@ -248,6 +270,7 @@ private final class FullStealthHelperService {
         do {
             if request.activate {
                 try surface.show()
+                runtime.noteHeartbeat()
                 runtime.transition(to: .presenting, presenting: true, blockers: [])
                 recordEvent(sessionId: request.sessionId, type: "presentation-started", detail: "surface presented")
             } else {
@@ -276,6 +299,40 @@ private final class FullStealthHelperService {
                 data: runtime.healthReport()
             )
         }
+    }
+
+    func heartbeat(sessionId: String) -> ControlPlaneEnvelope<HealthReport> {
+        guard let runtime = sessions[sessionId] else {
+            let blocker = HelperBlocker(code: "session-not-found", message: "Session is not active", retryable: true)
+            return ControlPlaneEnvelope(
+                outcome: .blocked,
+                failClosed: true,
+                presentationAllowed: false,
+                blockers: [blocker],
+                data: HealthReport(
+                    sessionId: sessionId,
+                    state: .failed,
+                    surfaceAttached: false,
+                    presenting: false,
+                    recoveryPending: true,
+                    blockers: [blocker],
+                    lastTransitionAt: ISO8601DateFormatter().string(from: Date())
+                )
+            )
+        }
+
+        enforceHeartbeatTimeoutIfNeeded(runtime)
+        if runtime.blockers.isEmpty {
+            runtime.noteHeartbeat()
+        }
+
+        return ControlPlaneEnvelope(
+            outcome: runtime.blockers.isEmpty ? .ok : .blocked,
+            failClosed: !runtime.blockers.isEmpty,
+            presentationAllowed: runtime.presenting,
+            blockers: runtime.blockers,
+            data: runtime.healthReport()
+        )
     }
 
     func teardownProtectedSession(sessionId: String) throws -> ControlPlaneEnvelope<ReleaseResponse> {
@@ -308,6 +365,8 @@ private final class FullStealthHelperService {
                 )
             )
         }
+
+        enforceHeartbeatTimeoutIfNeeded(runtime)
 
         return ControlPlaneEnvelope(
             outcome: runtime.blockers.isEmpty ? .ok : .blocked,
@@ -397,6 +456,33 @@ private final class FullStealthHelperService {
         return runtime
     }
 
+    private func enforceHeartbeatTimeoutIfNeeded(_ runtime: SessionRuntime) {
+        guard runtime.presenting, runtime.blockers.isEmpty else {
+            return
+        }
+
+        let elapsedMs = Date().timeIntervalSince(runtime.lastHeartbeatAt) * 1000
+        guard elapsedMs > heartbeatTimeoutMs else {
+            return
+        }
+
+        let blocker = HelperBlocker(
+            code: "stealth-heartbeat-missed",
+            message: "Stealth heartbeat deadline exceeded",
+            retryable: true
+        )
+
+        do {
+            try runtime.surface?.hide()
+        } catch {
+            // Best-effort blanking before fail-closed state exposure.
+        }
+
+        runtime.recoveryPending = true
+        runtime.transition(to: .blocked, presenting: false, blockers: [blocker])
+        recordEvent(sessionId: runtime.sessionId, type: "session-blocked", detail: blocker.code)
+    }
+
     private func teardownRuntime(sessionId: String) throws {
         if let runtime = sessions.removeValue(forKey: sessionId) {
             try runtime.surface?.close()
@@ -412,6 +498,14 @@ private final class FullStealthHelperService {
             detail: detail
         )
         telemetryBySession[sessionId, default: []].append(event)
+    }
+
+    private static func readMillisecondsEnv(key: String, fallback: TimeInterval) -> TimeInterval {
+        guard let raw = ProcessInfo.processInfo.environment[key], let parsed = Double(raw), parsed > 0 else {
+            return fallback
+        }
+
+        return parsed
     }
 }
 
@@ -450,6 +544,9 @@ do {
     case .present:
         let request = try decodeStdin(PresentRequest.self)
         try writeJson(service.present(request).asJsonObject())
+    case .heartbeat:
+        let request = try decodeStdin(SessionLookupRequest.self)
+        try writeJson(service.heartbeat(sessionId: request.sessionId).asJsonObject())
     case .teardownSession:
         let request = try decodeStdin(SessionLookupRequest.self)
         try writeJson(try service.teardownProtectedSession(sessionId: request.sessionId).asJsonObject())
@@ -524,6 +621,8 @@ private func runServer(service: FullStealthHelperService) throws {
                 result = service.attachSurface(try decodeObject(AttachSurfaceRequest.self, from: request)).asJsonObject()
             case .present:
                 result = service.present(try decodeObject(PresentRequest.self, from: request)).asJsonObject()
+            case .heartbeat:
+                result = service.heartbeat(sessionId: try decodeObject(SessionLookupRequest.self, from: request).sessionId).asJsonObject()
             case .teardownSession:
                 result = try service.teardownProtectedSession(sessionId: try decodeObject(SessionLookupRequest.self, from: request).sessionId).asJsonObject()
             case .getHealth:

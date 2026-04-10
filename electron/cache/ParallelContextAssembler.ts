@@ -1,6 +1,7 @@
 import { isOptimizationActive, getEffectiveWorkerCount } from '../config/optimizations';
 import { InterviewPhase } from '../conscious/types';
 import { Worker, isMainThread, parentPort, workerData } from 'worker_threads';
+import { WorkerPool } from '../runtime/WorkerPool';
 
 export interface ContextAssemblyInput {
   query: string;
@@ -131,9 +132,11 @@ if (!isMainThread) {
 
 export class ParallelContextAssembler {
   private workerCount: number;
+  private readonly workerPool: WorkerPool;
 
-  constructor(options: { workerThreadCount?: number }) {
+  constructor(options: { workerThreadCount?: number; workerPool?: WorkerPool }) {
     this.workerCount = options.workerThreadCount || getEffectiveWorkerCount();
+    this.workerPool = options.workerPool ?? new WorkerPool({ size: this.workerCount });
   }
 
   getWorkerCount(): number {
@@ -141,7 +144,7 @@ export class ParallelContextAssembler {
   }
 
   private runInWorker<T>(type: string, payload: any): Promise<T> {
-    return new Promise((resolve, reject) => {
+    return this.workerPool.submit({ lane: 'semantic', priority: 1 }, () => new Promise<T>((resolve, reject) => {
       const worker = new Worker(__filename, {
         workerData: { type, payload }
       });
@@ -150,7 +153,7 @@ export class ParallelContextAssembler {
       worker.on('exit', (code) => {
         if (code !== 0) reject(new Error(`Worker stopped with exit code ${code}`));
       });
-    });
+    }));
   }
 
   async assemble(input: ContextAssemblyInput): Promise<ContextAssemblyOutput> {

@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 
 import { SupervisorBus } from './SupervisorBus';
 import type { ISupervisor, RuntimeLifecycleState, SupervisorName } from './types';
+import type { WarmStandbyManager } from './WarmStandbyManager';
 
 export type RuntimeOwnershipMode = 'legacy' | 'coordinator';
 
@@ -16,6 +17,7 @@ interface RuntimeCoordinatorOptions {
   featureFlagReader?: () => boolean;
   supervisors?: Partial<Record<SupervisorName, ISupervisor>>;
   managedSupervisorNames?: SupervisorName[];
+  warmStandbyManager?: WarmStandbyManager<unknown, unknown, unknown>;
 }
 
 export class RuntimeCoordinator {
@@ -24,6 +26,7 @@ export class RuntimeCoordinator {
   private readonly featureFlagReader: () => boolean;
   private readonly supervisors: Partial<Record<SupervisorName, ISupervisor>>;
   private readonly managedSupervisorNames: SupervisorName[];
+  private readonly warmStandbyManager?: WarmStandbyManager<unknown, unknown, unknown>;
   private lifecycleState: RuntimeLifecycleState = 'idle';
   private activeMeetingId: string | null = null;
 
@@ -36,6 +39,7 @@ export class RuntimeCoordinator {
     this.featureFlagReader = options.featureFlagReader ?? (() => false);
     this.supervisors = options.supervisors ?? {};
     this.managedSupervisorNames = options.managedSupervisorNames ?? ['recovery', 'audio', 'stt', 'inference'];
+    this.warmStandbyManager = options.warmStandbyManager;
   }
 
   shouldManageLifecycle(): boolean {
@@ -110,6 +114,8 @@ export class RuntimeCoordinator {
     await this.bus.emit({ type: 'lifecycle:meeting-starting', meetingId });
 
     try {
+      await this.warmStandbyManager?.warmUp();
+      await this.warmStandbyManager?.bindMeeting(meetingId);
       await this.delegate.startMeetingLegacy(metadata, 'coordinator');
       await this.startSupervisors(this.managedSupervisorNames);
       this.lifecycleState = 'active';
@@ -141,6 +147,7 @@ export class RuntimeCoordinator {
       await this.stopSupervisors(this.managedSupervisorNames);
       await this.delegate.endMeetingLegacy('coordinator');
     } finally {
+      await this.warmStandbyManager?.unbindMeeting();
       this.lifecycleState = 'idle';
       this.activeMeetingId = null;
       await this.bus.emit({ type: 'lifecycle:meeting-idle' });
@@ -152,6 +159,12 @@ export class RuntimeCoordinator {
       await this.stopSupervisors(this.managedSupervisorNames);
     } catch (error) {
       this.logger.warn('[RuntimeCoordinator] Failed stopping supervisors during activation rollback:', error);
+    }
+
+    try {
+      await this.warmStandbyManager?.unbindMeeting();
+    } catch (error) {
+      this.logger.warn('[RuntimeCoordinator] Failed unbinding warm standby during activation rollback:', error);
     }
 
     try {

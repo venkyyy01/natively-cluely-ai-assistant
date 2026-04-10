@@ -15,8 +15,9 @@ public final class StealthSurface {
     private var window: NSWindow?
     private var metalLayer: CAMetalLayer?
     #endif
+    private var headlessFallbackActive = false
 
-    public init(sessionId: String, surfaceId: String, width: Int, height: Int, hiDpi: Bool) throws {
+    public init(sessionId: String, surfaceId: String, width: Int, height: Int, hiDpi: Bool, allowHeadlessFallback: Bool = false) throws {
         try runOnMainThread {
             #if canImport(AppKit) && canImport(QuartzCore) && canImport(Metal)
             _ = NSApplication.shared
@@ -36,6 +37,10 @@ public final class StealthSurface {
             contentView.wantsLayer = true
 
             guard let device = MTLCreateSystemDefaultDevice() else {
+                if allowHeadlessFallback {
+                    self.headlessFallbackActive = true
+                    return
+                }
                 throw NSError(
                     domain: "StealthSurface",
                     code: 1,
@@ -56,11 +61,15 @@ public final class StealthSurface {
             self.window = window
             self.metalLayer = layer
             #else
-            throw NSError(
-                domain: "StealthSurface",
-                code: 2,
-                userInfo: [NSLocalizedDescriptionKey: "AppKit/Metal stealth surface is unavailable on this platform"]
-            )
+            if allowHeadlessFallback {
+                self.headlessFallbackActive = true
+            } else {
+                throw NSError(
+                    domain: "StealthSurface",
+                    code: 2,
+                    userInfo: [NSLocalizedDescriptionKey: "AppKit/Metal stealth surface is unavailable on this platform"]
+                )
+            }
             #endif
         }
     }
@@ -105,6 +114,9 @@ public final class StealthSurface {
 
     public func usesHiddenWindowSharing() throws -> Bool {
         try runOnMainThread {
+            if self.headlessFallbackActive {
+                return true
+            }
             #if canImport(AppKit)
             return self.window?.sharingType == NSWindow.SharingType.none
             #else
@@ -115,6 +127,9 @@ public final class StealthSurface {
 
     public func windowNumber() throws -> Int {
         try runOnMainThread {
+            if self.headlessFallbackActive {
+                return 0
+            }
             #if canImport(AppKit)
             return Int(self.window?.windowNumber ?? 0)
             #else
@@ -125,6 +140,9 @@ public final class StealthSurface {
 
     public func title() throws -> String {
         try runOnMainThread {
+            if self.headlessFallbackActive {
+                return "HeadlessValidationSurface"
+            }
             #if canImport(AppKit)
             return self.window?.title ?? ""
             #else
