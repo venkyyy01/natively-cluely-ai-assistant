@@ -68,10 +68,13 @@ test('mountStealthShell hides loading indicator after the first frame', () => {
   const loadingIndicator = new FakeElement();
   let onFrame: ((payload: StealthFramePayload) => void) | null = null;
   let notifiedReady = false;
+  let heartbeatCount = 0;
+  let intervalCallback: (() => void) | null = null;
 
   const originalCanvas = globalThis.HTMLCanvasElement;
   const originalImage = globalThis.Image;
   const originalWindow = globalThis.window;
+  const originalSetInterval = globalThis.setInterval;
 
   class FakeImage {
     public onload: (() => void) | null = null;
@@ -85,6 +88,10 @@ test('mountStealthShell hides loading indicator after the first frame', () => {
     HTMLCanvasElement: FakeCanvas,
     Image: FakeImage,
     window: { addEventListener() {} },
+    setInterval(callback: () => void) {
+      intervalCallback = callback;
+      return { unref() {} } as unknown as ReturnType<typeof setInterval>;
+    },
   });
 
   try {
@@ -97,6 +104,9 @@ test('mountStealthShell hides loading indicator after the first frame', () => {
         sendInputEvent() {},
         notifyReady() {
           notifiedReady = true;
+        },
+        notifyHeartbeat() {
+          heartbeatCount += 1;
         },
       },
       {
@@ -115,7 +125,11 @@ test('mountStealthShell hides loading indicator after the first frame', () => {
     );
 
     assert.equal(notifiedReady, true);
+    assert.equal(heartbeatCount, 1);
     assert.ok(onFrame);
+
+    intervalCallback?.();
+    assert.equal(heartbeatCount, 2);
 
     onFrame({
       dataUrl: 'data:image/png;base64,ZmFrZQ==',
@@ -134,6 +148,7 @@ test('mountStealthShell hides loading indicator after the first frame', () => {
       HTMLCanvasElement: originalCanvas,
       Image: originalImage,
       window: originalWindow,
+      setInterval: originalSetInterval,
     });
   }
 });

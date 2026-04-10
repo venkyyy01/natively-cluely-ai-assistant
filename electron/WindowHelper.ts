@@ -45,10 +45,15 @@ export class WindowHelper {
   private currentX: number = 0
   private currentY: number = 0
   private readonly stealthManager: StealthManager
+  private stealthHeartbeatListener: (() => void) | null = null
 
   constructor(appState: AppState, stealthManager: StealthManager) {
     this.appState = appState
     this.stealthManager = stealthManager
+  }
+
+  public setStealthRuntimeHeartbeatListener(listener: (() => void) | null): void {
+    this.stealthHeartbeatListener = listener
   }
 
   private shouldUseStealthRuntime(): boolean {
@@ -284,6 +289,9 @@ export class WindowHelper {
           onFault: (reason) => {
             this.appState.handleStealthRuntimeFault(reason)
           },
+          onHeartbeat: () => {
+            this.stealthHeartbeatListener?.()
+          },
         })
         this.launcherWindow = this.launcherRuntime.createPrimaryStealthSurface(launcherSettings) as BrowserWindow
         this.launcherContentWindow = this.launcherRuntime.getContentWindow()
@@ -356,6 +364,9 @@ export class WindowHelper {
           startUrl: `${startUrl}?window=overlay`,
           onFault: (reason) => {
             this.appState.handleStealthRuntimeFault(reason)
+          },
+          onHeartbeat: () => {
+            this.stealthHeartbeatListener?.()
           },
         })
         this.overlayWindow = this.overlayRuntime.createPrimaryStealthSurface(overlaySettings) as BrowserWindow

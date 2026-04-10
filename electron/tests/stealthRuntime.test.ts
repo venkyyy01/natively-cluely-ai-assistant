@@ -181,6 +181,38 @@ test('StealthRuntime reports content runtime faults through onFault callback', a
   assert.deepEqual(faults, ['content-window-crashed', 'content-render-gone:crashed']);
 });
 
+test('StealthRuntime forwards shell runtime heartbeat signals through onHeartbeat callback', async () => {
+  const heartbeats: string[] = [];
+  const ipcBus = new EventEmitter();
+  const created: FakeWindow[] = [];
+  const runtime = new StealthRuntime({
+    startUrl: 'http://localhost:5180?window=launcher',
+    stealthManager: { applyToWindow() {} } as never,
+    createWindow: (options) => {
+      const win = new FakeWindow(created.length + 61, options as Record<string, unknown>);
+      created.push(win);
+      return win as never;
+    },
+    shellHtmlPath: '/tmp/shell.html',
+    preloadPath: '/tmp/preload.js',
+    shellPreloadPath: '/tmp/shellPreload.js',
+    ipcMain: ipcBus as never,
+    logger: { log() {}, warn() {} },
+    onHeartbeat: () => {
+      heartbeats.push('tick');
+    },
+  });
+
+  runtime.createPrimaryStealthSurface({ width: 100, height: 100, webPreferences: {} });
+  ipcBus.emit('stealth-shell:ready', { sender: { id: created[1]?.webContents.id } });
+  ipcBus.emit('stealth-shell:heartbeat', { sender: { id: created[1]?.webContents.id } });
+  ipcBus.emit('stealth-shell:heartbeat', { sender: { id: 99999 } });
+
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.deepEqual(heartbeats, ['tick', 'tick']);
+});
+
 test('StealthRuntime uses loadURL for packaged file targets so query params survive', () => {
   const created: FakeWindow[] = [];
   const runtime = new StealthRuntime({

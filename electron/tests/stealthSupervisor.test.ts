@@ -765,3 +765,53 @@ test('StealthSupervisor fails closed after the native helper disconnects and its
   assert.deepEqual(faultReasons, ['stealth heartbeat missed']);
   assert.equal(createCalls, 2);
 });
+
+test('StealthSupervisor fails closed when runtime-origin heartbeat becomes stale', async () => {
+  const calls: boolean[] = [];
+  const faultReasons: string[] = [];
+  const heartbeatTicks: Array<() => void> = [];
+  const bus = createBus();
+  let nowMs = 0;
+
+  bus.subscribe('stealth:fault', async (event) => {
+    faultReasons.push(event.reason);
+  });
+
+  const supervisor = new StealthSupervisor(
+    {
+      async setEnabled(enabled: boolean) {
+        calls.push(enabled);
+      },
+      isEnabled: () => calls[calls.length - 1] ?? false,
+      verifyStealthState: () => true,
+    },
+    bus,
+    {
+      heartbeatIntervalMs: 1,
+      intervalScheduler: (callback) => {
+        heartbeatTicks.push(callback);
+        return { unref() {} };
+      },
+      clearIntervalScheduler: () => {},
+      runtimeHeartbeatStalenessMs: 200,
+      now: () => nowMs,
+    },
+  );
+
+  await supervisor.start();
+  await supervisor.setEnabled(true);
+  assert.equal(supervisor.getStealthState(), 'FULL_STEALTH');
+
+  supervisor.noteRuntimeHeartbeat();
+  nowMs = 100;
+  heartbeatTicks[0]?.();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(supervisor.getStealthState(), 'FULL_STEALTH');
+
+  nowMs = 450;
+  heartbeatTicks[0]?.();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(supervisor.getStealthState(), 'FAULT');
+  assert.deepEqual(calls, [true, false]);
+  assert.deepEqual(faultReasons, ['stealth heartbeat missed']);
+});

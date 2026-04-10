@@ -13,8 +13,8 @@
 
 ## Delivery Status Snapshot
 
-- Done in this branch: `BL-001`, `BL-002`, `RT-001` through `RT-009`, `STL-001`, `STL-003`, most of `STL-002`, `WS-001`, `WS-002`, `WS-003`, `ACC-001`, `ACC-002`, `ACC-003`, `ACC-004`, `ACC-005`, `ACC-006`, `INF-001` through `INF-005`, `MEM-001`, `MEM-002`, `MEM-003`, `MEM-004`, `NSH-001`, `NSH-002`, `NSH-003`, `NSH-004`, `NSH-006`, `VAL-001`, `VAL-002`, `VAL-003`, `VAL-004`, plus the soak-procedure doc requested by `VAL-001`.
-- In progress: the remaining runtime-origin native-surface heartbeat portion of `STL-002` and hardware-backed release-proof runs for the VAL tickets.
+- Done in this branch: `BL-001`, `BL-002`, `RT-001` through `RT-009`, `STL-001`, `STL-002`, `STL-003`, `WS-001`, `WS-002`, `WS-003`, `ACC-001`, `ACC-002`, `ACC-003`, `ACC-004`, `ACC-005`, `ACC-006`, `INF-001` through `INF-005`, `MEM-001`, `MEM-002`, `MEM-003`, `MEM-004`, `NSH-001`, `NSH-002`, `NSH-003`, `NSH-004`, `NSH-006`, `VAL-001`, `VAL-002`, `VAL-003`, `VAL-004`, plus the soak-procedure doc requested by `VAL-001`.
+- In progress: hardware-backed release-proof runs for the VAL tickets.
 - Remaining release-only proof: execute packaged-app helper launch probes on signed artifacts, collect M2 Max SLO/soak evidence, and finish the final legacy-runtime cleanup that removes the migration flag.
 
 ---
@@ -292,7 +292,7 @@
 
 **Goal:** Build a formal arm sequence with readiness checks and heartbeat start.
 
-**Status:** Partially implemented in this branch. `electron/stealth/StealthArmController.ts` now owns the enable/verify/optional-heartbeat-start and disarm/optional-heartbeat-stop sequencing, `StealthSupervisor` delegates the arm/disarm side effects through it, and the native helper now enforces a heartbeat deadline through the bridge/control-plane path. A dedicated runtime-origin heartbeat from the stealth surface itself is still missing, so the ticket remains open.
+**Status:** Done in this branch. `electron/stealth/StealthArmController.ts` owns the enable/verify/optional-heartbeat-start and disarm/optional-heartbeat-stop sequencing, `StealthSupervisor` delegates arm/disarm through it, the native helper enforces control-plane heartbeat deadlines, and a runtime-origin shell heartbeat now feeds `StealthSupervisor.noteRuntimeHeartbeat()` through `StealthRuntime` + `WindowHelper` wiring with stale-heartbeat fail-closed coverage in supervisor/runtime tests.
 
 **Primary Files**
 - `electron/stealth/StealthArmController.ts`

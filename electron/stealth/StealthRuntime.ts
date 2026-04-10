@@ -40,6 +40,7 @@ interface StealthRuntimeOptions {
   shellPreloadPath?: string;
   ipcMain?: Pick<typeof ipcMain, 'on' | 'removeListener'>;
   onFault?: (reason: string) => void | Promise<void>;
+  onHeartbeat?: () => void | Promise<void>;
 }
 
 export class StealthRuntime {
@@ -52,12 +53,14 @@ export class StealthRuntime {
   private readonly shellPreloadPath: string;
   private readonly ipcMain: Pick<typeof ipcMain, 'on' | 'removeListener'>;
   private readonly onFault?: (reason: string) => void | Promise<void>;
+  private readonly onHeartbeat?: () => void | Promise<void>;
   private readonly frameBridge: FrameBridge;
   private readonly inputBridge = new InputBridge();
   private contentWindow: BrowserWindow | null = null;
   private shellWindow: BrowserWindow | null = null;
   private boundInputHandler: ((event: IpcMainEvent, payload: StealthInputEvent) => void) | null = null;
   private boundReadyHandler: ((event: IpcMainEvent) => void) | null = null;
+  private boundHeartbeatHandler: ((event: IpcMainEvent) => void) | null = null;
 
   constructor(options: StealthRuntimeOptions) {
     this.stealthManager = options.stealthManager;
@@ -72,6 +75,7 @@ export class StealthRuntime {
     this.shellPreloadPath = options.shellPreloadPath ?? path.join(__dirname, './shellPreload.js');
     this.ipcMain = options.ipcMain ?? ipcMain;
     this.onFault = options.onFault;
+    this.onHeartbeat = options.onHeartbeat;
     this.frameBridge = new FrameBridge({
       target: {
         send: (channel, payload) => {
@@ -247,6 +251,10 @@ export class StealthRuntime {
       this.ipcMain.removeListener('stealth-shell:ready', this.boundReadyHandler);
       this.boundReadyHandler = null;
     }
+    if (this.boundHeartbeatHandler) {
+      this.ipcMain.removeListener('stealth-shell:heartbeat', this.boundHeartbeatHandler);
+      this.boundHeartbeatHandler = null;
+    }
     if (this.contentWindow && !this.contentWindow.isDestroyed()) {
       this.contentWindow.close();
     }
@@ -294,8 +302,17 @@ export class StealthRuntime {
       }
       this.syncBounds();
       this.requestInitialFrame('shell-ready');
+      this.emitHeartbeat();
     };
     this.ipcMain.on('stealth-shell:ready', this.boundReadyHandler);
+
+    this.boundHeartbeatHandler = (event) => {
+      if (!this.shellWindow || event.sender.id !== this.shellWindow.webContents.id) {
+        return;
+      }
+      this.emitHeartbeat();
+    };
+    this.ipcMain.on('stealth-shell:heartbeat', this.boundHeartbeatHandler);
   }
 
   private requestInitialFrame(reason: string): void {
@@ -318,6 +335,16 @@ export class StealthRuntime {
 
     Promise.resolve(this.onFault(reason)).catch((error) => {
       this.logger.warn(`[StealthRuntime] Failed to propagate runtime fault (${reason}):`, error);
+    });
+  }
+
+  private emitHeartbeat(): void {
+    if (!this.onHeartbeat) {
+      return;
+    }
+
+    Promise.resolve(this.onHeartbeat()).catch((error) => {
+      this.logger.warn('[StealthRuntime] Failed to propagate runtime heartbeat:', error);
     });
   }
 }

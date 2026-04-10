@@ -26,6 +26,8 @@ export interface StealthSupervisorOptions {
   clearIntervalScheduler?: (handle: unknown) => void;
   nativeBridge?: NativeStealthBridge;
   nativeArmRequest?: NativeStealthArmRequest;
+  runtimeHeartbeatStalenessMs?: number;
+  now?: () => number;
 }
 
 export class StealthSupervisor implements ISupervisor {
@@ -38,10 +40,13 @@ export class StealthSupervisor implements ISupervisor {
   private readonly heartbeatIntervalMs: number;
   private readonly intervalScheduler: (callback: () => void, intervalMs: number) => unknown;
   private readonly clearIntervalScheduler: (handle: unknown) => void;
+  private readonly runtimeHeartbeatStalenessMs: number;
+  private readonly now: () => number;
   private readonly nativeBridge: NativeStealthBridge | null;
   private readonly nativeArmRequest?: NativeStealthArmRequest;
   private heartbeatHandle: unknown = null;
   private heartbeatCheckInFlight = false;
+  private lastRuntimeHeartbeatAt: number | null = null;
 
   constructor(
     private readonly delegate: StealthDelegate,
@@ -51,6 +56,8 @@ export class StealthSupervisor implements ISupervisor {
     this.heartbeatIntervalMs = options.heartbeatIntervalMs ?? 500;
     this.intervalScheduler = options.intervalScheduler ?? ((callback, intervalMs) => setInterval(callback, intervalMs));
     this.clearIntervalScheduler = options.clearIntervalScheduler ?? ((handle) => clearInterval(handle as NodeJS.Timeout));
+    this.runtimeHeartbeatStalenessMs = options.runtimeHeartbeatStalenessMs ?? 0;
+    this.now = options.now ?? (() => Date.now());
     this.nativeBridge = options.nativeBridge ?? null;
     this.nativeArmRequest = options.nativeArmRequest;
     this.nativeBridge?.setHelperFaultHandler?.((reason) => {
@@ -118,6 +125,10 @@ export class StealthSupervisor implements ISupervisor {
     await this.failClosed(error);
   }
 
+  noteRuntimeHeartbeat(): void {
+    this.lastRuntimeHeartbeatAt = this.now();
+  }
+
   private async syncDelegateWithState(): Promise<void> {
     if (this.pendingEnabled || this.readDelegateEnabled()) {
       await this.armStealth();
@@ -149,6 +160,9 @@ export class StealthSupervisor implements ISupervisor {
       await this.armController.arm();
       await this.transitionTo(transitionStealthState(this.stealthState, 'arm-succeeded'));
       this.pendingEnabled = true;
+      if (this.runtimeHeartbeatStalenessMs > 0) {
+        this.lastRuntimeHeartbeatAt = this.now();
+      }
     } catch (error) {
       await this.failClosed(error);
       throw error;
@@ -169,6 +183,7 @@ export class StealthSupervisor implements ISupervisor {
     }
 
     this.pendingEnabled = false;
+    this.lastRuntimeHeartbeatAt = null;
     await this.transitionTo(transitionStealthState(this.stealthState, 'disabled'));
   }
 
@@ -190,6 +205,7 @@ export class StealthSupervisor implements ISupervisor {
       await this.transitionTo(transitionStealthState(this.stealthState, 'faulted'));
     }
     this.pendingEnabled = false;
+    this.lastRuntimeHeartbeatAt = null;
 
     try {
       await this.armController.disarm();
@@ -295,6 +311,22 @@ export class StealthSupervisor implements ISupervisor {
       return false;
     }
 
+    if (!this.verifyRuntimeHeartbeatFresh()) {
+      return false;
+    }
+
     return this.heartbeatNativeStealth();
+  }
+
+  private verifyRuntimeHeartbeatFresh(): boolean {
+    if (this.runtimeHeartbeatStalenessMs <= 0) {
+      return true;
+    }
+
+    if (this.lastRuntimeHeartbeatAt === null) {
+      return false;
+    }
+
+    return (this.now() - this.lastRuntimeHeartbeatAt) <= this.runtimeHeartbeatStalenessMs;
   }
 }

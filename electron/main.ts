@@ -517,6 +517,13 @@ this.processingHelper = new ProcessingHelper(this)
 this.performanceInstrumentation = getPerformanceInstrumentation()
 this.runtimeCoordinator = new RuntimeCoordinator(this)
 this.bindRuntimeCoordinatorEvents()
+this.windowHelper.setStealthRuntimeHeartbeatListener(() => {
+  if (!isSupervisorRuntimeEnabled()) {
+    return
+  }
+
+  this.runtimeCoordinator.getSupervisor<StealthSupervisor>('stealth').noteRuntimeHeartbeat()
+})
 
 this.sttReconnector = new STTReconnector(async (speaker) => {
   if (!this.isMeetingActive) return;
@@ -749,6 +756,7 @@ this.setupIntelligenceEvents()
       {
         logger: { warn: console.warn },
         nativeBridge: this.nativeStealthBridge ?? undefined,
+        runtimeHeartbeatStalenessMs: 2000,
       },
     ))
 
