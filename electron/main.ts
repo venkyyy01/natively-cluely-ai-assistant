@@ -19,6 +19,7 @@ import { RuntimeCoordinator } from "./runtime/RuntimeCoordinator"
 import { StealthManager } from "./stealth/StealthManager"
 import { createMacosVirtualDisplayCoordinator, resolveMacosVirtualDisplayHelperPath } from "./stealth/macosVirtualDisplayIntegration"
 import { NativeStealthBridge } from "./stealth/NativeStealthBridge"
+import { getIntelligenceEventWindow } from "./intelligenceEventTarget"
 if (!app.isPackaged) {
 require('dotenv').config();
 }
@@ -2216,7 +2217,10 @@ try {
   }
 
   private setupIntelligenceEvents(): void {
-    const mainWindow = this.getMainWindow.bind(this)
+    const getIntelligenceWindow = () => getIntelligenceEventWindow({
+      getOverlayContentWindow: () => this.getWindowHelper().getOverlayContentWindow(),
+      getMainWindow: () => this.getMainWindow(),
+    })
 
     // Forward intelligence events to renderer
     this.intelligenceManager.on('assist_update', (insight: string) => {
@@ -2230,7 +2234,7 @@ try {
     })
 
     this.intelligenceManager.on('suggested_answer', (answer: string, question: string, confidence: number) => {
-      const win = mainWindow()
+      const win = getIntelligenceWindow()
       if (win && !win.isDestroyed()) {
         win.webContents.send('intelligence-suggested-answer', { answer, question, confidence })
       }
@@ -2238,21 +2242,21 @@ try {
     })
 
     this.intelligenceManager.on('suggested_answer_token', (token: string, question: string, confidence: number) => {
-      const win = mainWindow()
+      const win = getIntelligenceWindow()
       if (win && !win.isDestroyed()) {
         win.webContents.send('intelligence-suggested-answer-token', { token, question, confidence })
       }
     })
 
     this.intelligenceManager.on('refined_answer_token', (token: string, intent: string) => {
-      const win = mainWindow()
+      const win = getIntelligenceWindow()
       if (win && !win.isDestroyed()) {
         win.webContents.send('intelligence-refined-answer-token', { token, intent })
       }
     })
 
     this.intelligenceManager.on('refined_answer', (answer: string, intent: string) => {
-      const win = mainWindow()
+      const win = getIntelligenceWindow()
       if (win && !win.isDestroyed()) {
         win.webContents.send('intelligence-refined-answer', { answer, intent })
       }
@@ -2260,42 +2264,42 @@ try {
     })
 
     this.intelligenceManager.on('recap', (summary: string) => {
-      const win = mainWindow()
+      const win = getIntelligenceWindow()
       if (win && !win.isDestroyed()) {
         win.webContents.send('intelligence-recap', { summary })
       }
     })
 
     this.intelligenceManager.on('recap_token', (token: string) => {
-      const win = mainWindow()
+      const win = getIntelligenceWindow()
       if (win && !win.isDestroyed()) {
         win.webContents.send('intelligence-recap-token', { token })
       }
     })
 
     this.intelligenceManager.on('follow_up_questions_update', (questions: string) => {
-      const win = mainWindow()
+      const win = getIntelligenceWindow()
       if (win && !win.isDestroyed()) {
         win.webContents.send('intelligence-follow-up-questions-update', { questions })
       }
     })
 
     this.intelligenceManager.on('follow_up_questions_token', (token: string) => {
-      const win = mainWindow()
+      const win = getIntelligenceWindow()
       if (win && !win.isDestroyed()) {
         win.webContents.send('intelligence-follow-up-questions-token', { token })
       }
     })
 
     this.intelligenceManager.on('manual_answer_started', () => {
-      const win = mainWindow()
+      const win = getIntelligenceWindow()
       if (win && !win.isDestroyed()) {
         win.webContents.send('intelligence-manual-started')
       }
     })
 
     this.intelligenceManager.on('manual_answer_result', (answer: string, question: string) => {
-      const win = mainWindow()
+      const win = getIntelligenceWindow()
       if (win && !win.isDestroyed()) {
         win.webContents.send('intelligence-manual-result', { answer, question })
       }
@@ -2303,7 +2307,7 @@ try {
     })
 
     this.intelligenceManager.on('mode_changed', (mode: string) => {
-      const win = mainWindow()
+      const win = getIntelligenceWindow()
       if (win && !win.isDestroyed()) {
         win.webContents.send('intelligence-mode-changed', { mode })
       }
@@ -2311,7 +2315,7 @@ try {
 
     this.intelligenceManager.on('error', (error: Error, mode: string) => {
       console.error(`[IntelligenceManager] Error in ${mode}:`, error)
-      const win = mainWindow()
+      const win = getIntelligenceWindow()
       if (win && !win.isDestroyed()) {
         win.webContents.send('intelligence-error', { error: error.message, mode })
       }
