@@ -80,6 +80,7 @@ export class NativeStealthBridge {
   private activeSurfaceId: string | null = null;
   private lastArmRequest: NativeStealthArmRequest | null = null;
   private restartAttemptedForActiveSession = false;
+  private lastDisconnectReason: string | null = null;
 
   constructor(options: NativeStealthBridgeOptions = {}) {
     this.client = options.client ?? null;
@@ -145,6 +146,7 @@ export class NativeStealthBridge {
     this.activeSessionId = sessionId;
     this.activeSurfaceId = surfaceId;
     this.lastArmRequest = normalizedRequest;
+    this.lastDisconnectReason = null;
     if (!request.sessionId) {
       this.restartAttemptedForActiveSession = false;
     }
@@ -185,10 +187,15 @@ export class NativeStealthBridge {
     }
 
     try {
-      const health = await this.callClient(() => client.getHealth(this.activeSessionId!), 'heartbeat');
+      const health = await this.callClient(
+        () => client.getHealth(this.activeSessionId!),
+        'heartbeat',
+        { notifyDisconnect: false },
+      );
       if (!health) {
         const recovered = await this.tryRestartAfterDisconnect('heartbeat');
         if (!recovered) {
+          this.notifyHelperDisconnect(this.lastDisconnectReason ?? 'heartbeat:helper-disconnect');
           return {
             connected: true,
             healthy: false,
@@ -214,8 +221,10 @@ export class NativeStealthBridge {
         const recoveredHealth = await this.callClient(
           () => recoveredClient.getHealth(restartedSessionId),
           'heartbeat:post-restart',
+          { notifyDisconnect: false },
         );
         if (!recoveredHealth) {
+          this.notifyHelperDisconnect(this.lastDisconnectReason ?? 'heartbeat:post-restart:helper-disconnect');
           return {
             connected: true,
             healthy: false,
@@ -246,6 +255,7 @@ export class NativeStealthBridge {
     this.activeSessionId = null;
     this.activeSurfaceId = null;
     this.restartAttemptedForActiveSession = false;
+    this.lastDisconnectReason = null;
 
     if (!client || !sessionId) {
       return;
@@ -268,6 +278,7 @@ export class NativeStealthBridge {
     this.activeSessionId = null;
     this.activeSurfaceId = null;
     this.restartAttemptedForActiveSession = false;
+    this.lastDisconnectReason = null;
     this.client?.dispose?.();
     this.client = null;
   }
@@ -305,18 +316,32 @@ export class NativeStealthBridge {
     );
   }
 
-  private async callClient<T>(operation: () => Promise<T>, reason: string): Promise<T | null> {
+  private async callClient<T>(
+    operation: () => Promise<T>,
+    reason: string,
+    options: { notifyDisconnect?: boolean } = {},
+  ): Promise<T | null> {
     try {
       return await operation();
     } catch (error) {
-      this.markClientDisconnected(`${reason}:${error instanceof Error ? error.message : String(error)}`);
+      this.markClientDisconnected(
+        `${reason}:${error instanceof Error ? error.message : String(error)}`,
+        options.notifyDisconnect ?? true,
+      );
       return null;
     }
   }
 
-  private markClientDisconnected(reason: string): void {
+  private markClientDisconnected(reason: string, notifyDisconnect: boolean): void {
     this.client?.dispose?.();
     this.client = null;
+    this.lastDisconnectReason = reason;
+    if (notifyDisconnect) {
+      this.notifyHelperDisconnect(reason);
+    }
+  }
+
+  private notifyHelperDisconnect(reason: string): void {
     Promise.resolve(this.onHelperDisconnect?.(reason)).catch((error) => {
       this.logger.warn('[NativeStealthBridge] Failed to notify helper disconnect:', error);
     });

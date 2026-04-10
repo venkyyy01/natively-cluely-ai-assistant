@@ -518,6 +518,7 @@ step "Step 6/8 — Force Signing (Ad-Hoc)"
 # to ensure it's clean (handles edge cases where build partially failed)
 
 PACKAGED_HELPER="$APP_GLOB/Contents/Resources/bin/macos/stealth-virtual-display-helper"
+PACKAGED_FULL_STEALTH_XPC="$APP_GLOB/Contents/XPCServices/macos-full-stealth-helper.xpc"
 
 if [[ -f "$PACKAGED_HELPER" ]]; then
     if [[ -f "$HELPER_ENTITLEMENTS" ]]; then
@@ -531,6 +532,20 @@ if [[ -f "$PACKAGED_HELPER" ]]; then
     fi
 else
     warn "Packaged macOS virtual display helper not found before app signing"
+fi
+
+if [[ -d "$PACKAGED_FULL_STEALTH_XPC" ]]; then
+    if [[ -f "$ENTITLEMENTS" ]]; then
+        info "Signing packaged macOS full stealth XPC bundle with app entitlements: $ENTITLEMENTS"
+        run_with_spinner "signing packaged full stealth xpc bundle" codesign --force --options runtime --entitlements "$ENTITLEMENTS" --sign - "$PACKAGED_FULL_STEALTH_XPC"
+        success "Packaged macOS full stealth XPC bundle signed"
+    else
+        warn "App entitlements file not found, signing packaged XPC bundle without entitlements"
+        run_with_spinner "signing packaged full stealth xpc bundle" codesign --force --sign - "$PACKAGED_FULL_STEALTH_XPC"
+        success "Packaged macOS full stealth XPC bundle signed (ad-hoc, no entitlements)"
+    fi
+else
+    warn "Packaged macOS full stealth XPC bundle not found before app signing"
 fi
 
 if [[ -f "$ENTITLEMENTS" ]]; then

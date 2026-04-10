@@ -13,8 +13,8 @@
 
 ## Delivery Status Snapshot
 
-- Done in this branch: `BL-001`, `BL-002`, `RT-001` through `RT-007`, `RT-009`, `STL-001`, most of `STL-002` and `STL-003`, `NSH-001`, `NSH-003`, `VAL-004`, plus the soak-procedure doc requested by `VAL-001`.
-- In progress: `RT-008`, the remaining runtime-heartbeat/native-helper parts of `STL-002` and `STL-003`, `NSH-002`, `NSH-004`, `NSH-005`, `NSH-006`, and the real hardware-backed portions of `VAL-001` through `VAL-003`.
+- Done in this branch: `BL-001`, `BL-002`, `RT-001` through `RT-007`, `RT-009`, `STL-001`, most of `STL-002` and `STL-003`, `NSH-001`, `NSH-002`, `NSH-003`, `NSH-004`, `VAL-004`, plus the soak-procedure doc requested by `VAL-001`.
+- In progress: `RT-008`, the remaining runtime-heartbeat/native-helper parts of `STL-002` and `STL-003`, `NSH-005`, `NSH-006`, and the real hardware-backed portions of `VAL-001` through `VAL-003`.
 - Not started on this branch: `WS-*`, `ACC-*`, `INF-*`, and `MEM-*`.
 
 ---
@@ -659,6 +659,8 @@
 
 **Goal:** Scaffold the Swift XPC service with stealth surface.
 
+**Status:** Done in this branch. `main.swift` now exposes the helper control-plane commands in direct and `serve` modes, `StealthSurface.swift` creates a hidden AppKit window backed by `CAMetalLayer` with `NSWindowSharingNone`, and the helper is covered by the `MacosVirtualDisplayClient` serve-mode integration test.
+
 **Primary Files**
 - `stealth-projects/macos-full-stealth-helper/Package.swift`
 - `stealth-projects/macos-full-stealth-helper/Sources/main.swift`
@@ -690,6 +692,8 @@
 
 **Goal:** Wire `StealthArmController` to use `NativeStealthBridge`.
 
+**Status:** Done in this branch. `StealthArmController` and `StealthSupervisor` now route arm/heartbeat through `NativeStealthBridge` when available, explicit tests cover the unavailable-helper fallback to Electron-only stealth, and native-helper heartbeat misses still fail closed.
+
 **Primary Files**
 - `electron/stealth/StealthArmController.ts`
 - `electron/stealth/NativeStealthBridge.ts`
@@ -707,6 +711,8 @@
 
 **Goal:** Integrate helper into build and packaging pipeline.
 
+**Status:** Partially implemented in this branch. The helper now stages as `assets/xpcservices/macos-full-stealth-helper.xpc`, mac build scripts prepare it before packaging, Electron Builder places it in `Contents/XPCServices/`, the after-pack signing hook signs the nested bundle, and `build-and-install.sh` force-signs the packaged XPC bundle alongside the existing helper binary. Full packaged-app launch verification with and without the helper still remains open.
+
 **Primary Files**
 - Build scripts
 - Electron Builder config
@@ -722,6 +728,8 @@
 **Problem:** Helper death must not break the app.
 
 **Goal:** Add deterministic recovery when helper crashes.
+
+**Status:** Partially implemented in this branch. `NativeStealthBridge` now retries a helper disconnect once before emitting a terminal disconnect callback, unit tests cover both recovery-success and terminal-failure cases, and supervisor coverage now exercises the restart-once-then-fault path end to end. Sleep/wake and display-hotplug coverage still remains open.
 
 **Primary Files**
 - `electron/stealth/NativeStealthBridge.ts`

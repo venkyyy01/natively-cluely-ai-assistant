@@ -431,12 +431,12 @@ HeartbeatSender  ──────XPC msg─────────→  Heartb
 
  
 region: CGRect) -> void`, `relayInput(event: InputEvent) -> void`, `fault(reason: String) -> void`. Protocol is versioned (v1).
-- [ ] Step 2: Scaffold the Swift XPC service with `Package.swift`. Implement `XPCProtocol.swift` with the protocol definition. Implement `StealthSurface.swift` with a `NSWindow` + `CAMetalLayer` that reads from IOSurface and enforces `NSWindowSharingNone`.
+- [x] Step 2: Scaffold the Swift XPC service with `Package.swift`. Implement `XPCProtocol.swift` with the protocol definition. Implement `StealthSurface.swift` with a `NSWindow` + `CAMetalLayer` that reads from IOSurface and enforces `NSWindowSharingNone`.
 - [x] Step 3: Build `NativeStealthBridge.ts` in Electron that discovers and connects to the XPC service via `child_process.spawn` of the bundled helper binary (XPC bootstrap). Bridge exposes `arm()`, `submitFrame()`, `heartbeat()`, `fault()` as typed async methods.
-- [ ] Step 4: Integrate with `StealthArmController`: when the stealth state machine enters `ARMING`, the arm controller calls `NativeStealthBridge.arm()`. If the bridge reports success, transition to `FULL_STEALTH`. If the bridge is unavailable (XPC service not bundled), fall back to Electron-only stealth (current behavior).
+- [x] Step 4: Integrate with `StealthArmController`: when the stealth state machine enters `ARMING`, the arm controller calls `NativeStealthBridge.arm()`. If the bridge reports success, transition to `FULL_STEALTH`. If the bridge is unavailable (XPC service not bundled), fall back to Electron-only stealth (current behavior).
 - [ ] Step 5: Implement heartbeat: `StealthSupervisor` sends heartbeat every 500 ms via the bridge. The XPC helper expects heartbeat within 2 seconds. Missed heartbeat → helper blanks its window and sends fault signal back via XPC. Electron `StealthSupervisor` receives fault and transitions state machine to `FAULT`.
 - [ ] Step 6: Add deterministic recovery: if the XPC helper dies, `NativeStealthBridge` detects process exit. `StealthSupervisor` transitions to `FAULT`. Helper restart is attempted once. If restart fails, stealth remains in `FAULT` (fail-closed).
-- [ ] Step 7: Modify build/packaging to bundle the XPC service in `Contents/XPCServices/`. Update code signing configuration.
+- [x] Step 7: Modify build/packaging to bundle the XPC service in `Contents/XPCServices/`. Update code signing configuration.
 - [ ] Step 8: Add tests: bridge connection/disconnection, arm success/failure, heartbeat timeout, helper crash → fault, sleep/wake cycle, display hotplug.
 
 **Batch validation:** XPC helper builds and bundles. Arm sequence completes. Heartbeat miss produces deterministic fault. Fallback to Electron-only stealth works when helper is absent.

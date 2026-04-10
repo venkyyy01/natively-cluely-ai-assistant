@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 
 import { SupervisorBus } from '../runtime/SupervisorBus';
 import { StealthSupervisor } from '../runtime/StealthSupervisor';
+import { NativeStealthBridge } from '../stealth/NativeStealthBridge';
 
 function createBus() {
   return new SupervisorBus({ error() {} });
@@ -331,4 +332,167 @@ test('StealthSupervisor transitions to FAULT when native heartbeat reports unhea
   assert.equal(supervisor.getStealthState(), 'FAULT');
   assert.deepEqual(calls, [true, false]);
   assert.deepEqual(faultReasons, ['stealth heartbeat missed']);
+});
+
+test('StealthSupervisor falls back to Electron-only stealth when native helper is unavailable', async () => {
+  const calls: boolean[] = [];
+  const bus = createBus();
+
+  const supervisor = new StealthSupervisor(
+    {
+      async setEnabled(enabled: boolean) {
+        calls.push(enabled);
+      },
+      isEnabled: () => calls[calls.length - 1] ?? false,
+      verifyStealthState: () => true,
+    },
+    bus,
+    {
+      nativeBridge: {
+        arm: async () => ({ connected: false, sessionId: null as string | null, surfaceId: null as string | null }),
+        heartbeat: async () => ({ connected: false, healthy: false }),
+        fault: async () => {},
+      } as unknown as import('../stealth/NativeStealthBridge').NativeStealthBridge,
+      heartbeatIntervalMs: 0,
+    },
+  );
+
+  await supervisor.start();
+  await supervisor.setEnabled(true);
+
+  assert.equal(supervisor.getStealthState(), 'FULL_STEALTH');
+  assert.deepEqual(calls, [true]);
+});
+
+test('StealthSupervisor fails closed after the native helper disconnects and its one restart attempt fails', async () => {
+  const calls: boolean[] = [];
+  const faultReasons: string[] = [];
+  const heartbeatTicks: Array<() => void> = [];
+  const bus = createBus();
+  let createCalls = 0;
+  let healthCalls = 0;
+
+  bus.subscribe('stealth:fault', async (event) => {
+    faultReasons.push(event.reason);
+  });
+
+  const nativeBridge = new NativeStealthBridge({
+    helperPathResolver: () => '/tmp/helper',
+    sessionIdFactory: () => 'session-restart-fail',
+    clientFactory: () => ({
+      async createProtectedSession(request) {
+        createCalls += 1;
+        if (createCalls > 1) {
+          throw new Error('restart-unavailable');
+        }
+
+        return {
+          outcome: 'ok',
+          failClosed: false,
+          presentationAllowed: true,
+          blockers: [],
+          data: { sessionId: request.sessionId, state: 'creating' },
+        };
+      },
+      async attachSurface(request) {
+        return {
+          outcome: 'ok',
+          failClosed: false,
+          presentationAllowed: true,
+          blockers: [],
+          data: {
+            sessionId: request.sessionId,
+            state: 'attached',
+            surfaceAttached: true,
+            presenting: false,
+            recoveryPending: false,
+            blockers: [],
+            lastTransitionAt: new Date(0).toISOString(),
+          },
+        };
+      },
+      async present(request) {
+        return {
+          outcome: 'ok',
+          failClosed: false,
+          presentationAllowed: true,
+          blockers: [],
+          data: {
+            sessionId: request.sessionId,
+            state: request.activate ? 'presenting' : 'attached',
+            surfaceAttached: true,
+            presenting: request.activate,
+            recoveryPending: false,
+            blockers: [],
+            lastTransitionAt: new Date(0).toISOString(),
+          },
+        };
+      },
+      async getHealth() {
+        healthCalls += 1;
+        if (healthCalls === 1) {
+          throw new Error('helper-exit');
+        }
+
+        return {
+          outcome: 'ok',
+          failClosed: false,
+          presentationAllowed: true,
+          blockers: [],
+          data: {
+            sessionId: 'session-restart-fail',
+            state: 'presenting',
+            surfaceAttached: true,
+            presenting: true,
+            recoveryPending: false,
+            blockers: [],
+            lastTransitionAt: new Date(0).toISOString(),
+          },
+        };
+      },
+      async teardownSession() {
+        return {
+          outcome: 'ok',
+          failClosed: false,
+          presentationAllowed: false,
+          blockers: [],
+          data: { released: true },
+        };
+      },
+      dispose() {},
+    }),
+    logger: { warn() {} },
+  });
+
+  const supervisor = new StealthSupervisor(
+    {
+      async setEnabled(enabled: boolean) {
+        calls.push(enabled);
+      },
+      isEnabled: () => calls[calls.length - 1] ?? false,
+      verifyStealthState: () => true,
+    },
+    bus,
+    {
+      nativeBridge,
+      intervalScheduler: (callback) => {
+        heartbeatTicks.push(callback);
+        return { unref() {} };
+      },
+      clearIntervalScheduler: () => {},
+      heartbeatIntervalMs: 1,
+    },
+  );
+
+  await supervisor.start();
+  await supervisor.setEnabled(true);
+  assert.equal(supervisor.getStealthState(), 'FULL_STEALTH');
+
+  heartbeatTicks[0]?.();
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(supervisor.getStealthState(), 'FAULT');
+  assert.deepEqual(calls, [true, false]);
+  assert.deepEqual(faultReasons, ['stealth heartbeat missed']);
+  assert.equal(createCalls, 2);
 });

@@ -282,7 +282,7 @@ test('NativeStealthBridge fails arm when helper control-plane is blocked', async
   assert.equal(bridge.getActiveSessionId(), null);
 });
 
-test('NativeStealthBridge attempts one restart after helper disconnect and emits disconnect event', async () => {
+test('NativeStealthBridge attempts one restart after helper disconnect without emitting a terminal disconnect event when recovery succeeds', async () => {
   const calls: string[] = [];
   const disconnects: string[] = [];
   let healthCalls = 0;
@@ -381,7 +381,110 @@ test('NativeStealthBridge attempts one restart after helper disconnect and emits
 
   assert.deepEqual(heartbeat, { connected: true, healthy: true });
   assert.equal(bridge.getActiveSessionId(), 'session-restart');
-  assert.equal(disconnects.length, 1);
-  assert.match(disconnects[0] ?? '', /heartbeat:helper-exit/);
+  assert.equal(disconnects.length, 0);
   assert.ok(calls.filter((call) => call === 'create:session-restart').length >= 2);
+});
+
+test('NativeStealthBridge emits a terminal disconnect event when restart after helper disconnect fails', async () => {
+  const disconnects: string[] = [];
+  let createCalls = 0;
+  let healthCalls = 0;
+
+  const bridge = new NativeStealthBridge({
+    helperPathResolver: () => '/tmp/helper',
+    sessionIdFactory: () => 'session-restart-fail',
+    onHelperDisconnect: (reason) => {
+      disconnects.push(reason);
+    },
+    logger: { warn() {} },
+    clientFactory: () => ({
+      async createProtectedSession(request) {
+        createCalls += 1;
+        if (createCalls > 1) {
+          throw new Error('restart-unavailable');
+        }
+
+        return {
+          outcome: 'ok',
+          failClosed: false,
+          presentationAllowed: true,
+          blockers: [],
+          data: { sessionId: request.sessionId, state: 'creating' },
+        };
+      },
+      async attachSurface(request) {
+        return {
+          outcome: 'ok',
+          failClosed: false,
+          presentationAllowed: true,
+          blockers: [],
+          data: {
+            sessionId: request.sessionId,
+            state: 'attached',
+            surfaceAttached: true,
+            presenting: false,
+            recoveryPending: false,
+            blockers: [],
+            lastTransitionAt: new Date(0).toISOString(),
+          },
+        };
+      },
+      async present(request) {
+        return {
+          outcome: 'ok',
+          failClosed: false,
+          presentationAllowed: true,
+          blockers: [],
+          data: {
+            sessionId: request.sessionId,
+            state: request.activate ? 'presenting' : 'attached',
+            surfaceAttached: true,
+            presenting: request.activate,
+            recoveryPending: false,
+            blockers: [],
+            lastTransitionAt: new Date(0).toISOString(),
+          },
+        };
+      },
+      async getHealth() {
+        healthCalls += 1;
+        if (healthCalls === 1) {
+          throw new Error('helper-exit');
+        }
+
+        return {
+          outcome: 'ok',
+          failClosed: false,
+          presentationAllowed: true,
+          blockers: [],
+          data: {
+            sessionId: 'session-restart-fail',
+            state: 'presenting',
+            surfaceAttached: true,
+            presenting: true,
+            recoveryPending: false,
+            blockers: [],
+            lastTransitionAt: new Date(0).toISOString(),
+          },
+        };
+      },
+      async teardownSession() {
+        return {
+          outcome: 'ok',
+          failClosed: false,
+          presentationAllowed: false,
+          blockers: [],
+          data: { released: true },
+        };
+      },
+      dispose() {},
+    }),
+  });
+
+  await bridge.arm();
+  const heartbeat = await bridge.heartbeat();
+
+  assert.deepEqual(heartbeat, { connected: true, healthy: false });
+  assert.equal(createCalls, 2);
+  assert.deepEqual(disconnects, ['heartbeat:helper-exit']);
 });

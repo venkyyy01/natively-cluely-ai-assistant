@@ -39,6 +39,30 @@ test('StealthArmController rejects arm when verification fails', async () => {
   await assert.rejects(() => controller.arm(), /stealth verification failed/);
 });
 
+test('StealthArmController falls back to Electron-only stealth when native helper is unavailable', async () => {
+  const calls: string[] = [];
+  const controller = new StealthArmController({
+    armNativeStealth: async () => {
+      calls.push('armNativeStealth:false');
+      return false;
+    },
+    setEnabled: async (enabled: boolean) => {
+      calls.push(`setEnabled:${enabled}`);
+    },
+    verifyStealthState: async () => {
+      calls.push('verify');
+      return true;
+    },
+    startHeartbeat: async () => {
+      calls.push('startHeartbeat');
+    },
+  });
+
+  await controller.arm();
+
+  assert.deepEqual(calls, ['armNativeStealth:false', 'setEnabled:true', 'verify', 'startHeartbeat']);
+});
+
 test('StealthArmController disarms by stopping heartbeat before disabling', async () => {
   const calls: string[] = [];
   const controller = new StealthArmController({

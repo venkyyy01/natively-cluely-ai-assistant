@@ -231,7 +231,7 @@ test('MacosVirtualDisplayClient dispose clears pending requests and nulls server
   assert.equal(internal.stdoutBuffer, '');
 });
 
-test('MacosVirtualDisplayClient serve mode works against the built helper when available', async (t) => {
+test('MacosVirtualDisplayClient serve mode works against the built helper when available', { concurrency: false }, async (t) => {
   if (process.platform !== 'darwin') {
     t.skip('macOS-only helper integration test');
     return;
@@ -256,6 +256,57 @@ test('MacosVirtualDisplayClient serve mode works against the built helper when a
     });
     assert.equal(typeof create.outcome, 'string');
   } finally {
+    client.dispose();
+  }
+});
+
+test('MacosVirtualDisplayClient serve mode works against the built macos-full-stealth-helper when available', { concurrency: false }, async (t) => {
+  if (process.platform !== 'darwin') {
+    t.skip('macOS-only helper integration test');
+    return;
+  }
+
+  const helperCandidates = [
+    path.join(process.cwd(), 'stealth-projects/macos-full-stealth-helper/.build/debug/macos-full-stealth-helper'),
+    path.join(process.cwd(), 'stealth-projects/macos-full-stealth-helper/.build/arm64-apple-macosx/debug/macos-full-stealth-helper'),
+  ];
+  const helperPath = helperCandidates.find((candidate: string): boolean => fs.existsSync(candidate));
+  if (!helperPath) {
+    t.skip('built macos-full-stealth-helper not available');
+    return;
+  }
+
+  const client = new MacosVirtualDisplayClient({ helperPath });
+  try {
+    const create = await client.createProtectedSession({
+      sessionId: 'full-stealth-serve-e2e',
+      presentationMode: 'native-fullscreen-presenter',
+      displayPreference: 'dedicated-display',
+      reason: 'validation-run',
+    });
+    assert.equal(create.outcome, 'ok');
+
+    const attach = await client.attachSurface({
+      sessionId: 'full-stealth-serve-e2e',
+      surfaceSource: 'native-ui-host',
+      surfaceId: 'surface-full-stealth-serve-e2e',
+      width: 1280,
+      height: 720,
+      hiDpi: true,
+    });
+    assert.equal(attach.outcome, 'ok');
+    assert.equal(attach.data.surfaceAttached, true);
+
+    const present = await client.present({ sessionId: 'full-stealth-serve-e2e', activate: true });
+    assert.equal(present.outcome, 'ok');
+    assert.equal(present.data.presenting, true);
+
+    const health = await client.getHealth('full-stealth-serve-e2e');
+    assert.equal(health.outcome, 'ok');
+    assert.equal(health.data.presenting, true);
+    assert.equal(health.data.surfaceAttached, true);
+  } finally {
+    await client.teardownSession('full-stealth-serve-e2e').catch((): void => undefined);
     client.dispose();
   }
 });
