@@ -611,6 +611,13 @@ const capability = typeof (this.llmHelper as any).getProviderCapabilityClass ===
                     ? await accelerationManager.getEnhancedCache().get(cacheKey) as string | undefined
                     : undefined;
                 if (cachedAnswer) {
+                    this.session.addAssistantMessage(cachedAnswer);
+                    this.session.pushUsage({
+                        type: 'assist',
+                        timestamp: Date.now(),
+                        question: question || 'What to Answer',
+                        answer: cachedAnswer,
+                    });
                     this.emit('suggested_answer', cachedAnswer, question || 'What to Answer', confidence);
                     this.latencyTracker.complete(requestId);
                     this.setMode('idle');
@@ -860,6 +867,13 @@ const capability = typeof (this.llmHelper as any).getProviderCapabilityClass ===
                 ? await accelerationManager.getEnhancedCache().get(answerCacheKey) as string | undefined
                 : undefined;
             if (cachedAnswer) {
+                this.session.addAssistantMessage(cachedAnswer);
+                this.session.pushUsage({
+                    type: 'assist',
+                    timestamp: Date.now(),
+                    question: question || 'What to Answer',
+                    answer: cachedAnswer,
+                });
                 this.emit('suggested_answer', cachedAnswer, question || 'What to Answer', confidence);
                 if (isProfileEnrichmentRoute && !profileEnrichmentFailed) {
                     this.latencyTracker.markProfileEnrichmentState(requestId, 'completed');

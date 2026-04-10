@@ -80,7 +80,7 @@ export class ConsciousOrchestrator {
       ? classifyConsciousModeQuestion(input.question, currentReasoningThread)
       : { qualifies: false, threadAction: 'ignore' as const };
 
-    if (currentReasoningThread && latestReaction?.shouldContinueThread && preRouteDecision.threadAction === 'ignore') {
+    if (currentReasoningThread && latestReaction?.shouldContinueThread && preRouteDecision.threadAction === 'start') {
       preRouteDecision = { qualifies: true, threadAction: 'continue' };
     }
 

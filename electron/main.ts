@@ -19,7 +19,6 @@ import { RuntimeCoordinator } from "./runtime/RuntimeCoordinator"
 import { StealthManager } from "./stealth/StealthManager"
 import { createMacosVirtualDisplayCoordinator, resolveMacosVirtualDisplayHelperPath } from "./stealth/macosVirtualDisplayIntegration"
 import { NativeStealthBridge } from "./stealth/NativeStealthBridge"
-import { getIntelligenceEventWindow } from "./intelligenceEventTarget"
 if (!app.isPackaged) {
 require('dotenv').config();
 }
@@ -540,9 +539,7 @@ this.sttReconnector.on('exhausted', ({ speaker }: { speaker: 'interviewer' | 'us
   this.broadcast('meeting-audio-error', `Transcription connection failed permanently for ${speaker}`);
 });
 
-this.windowHelper.setContentProtection(this.isUndetectable);
-this.settingsWindowHelper.setContentProtection(this.isUndetectable);
-this.modelSelectorWindowHelper.setContentProtection(this.isUndetectable);
+this.syncWindowStealthProtection(this.isUndetectable);
 
     // Initialize KeybindManager
     const keybindManager = KeybindManager.getInstance();
@@ -745,10 +742,11 @@ this.setupIntelligenceEvents()
       },
     }))
 
-    this.runtimeCoordinator.registerSupervisor(new StealthSupervisor(
+this.runtimeCoordinator.registerSupervisor(new StealthSupervisor(
       {
         setEnabled: (enabled) => {
           this.stealthManager.setEnabled(enabled)
+          this.syncWindowStealthProtection(enabled)
         },
         isEnabled: () => this.stealthManager.isEnabled(),
         verifyStealthState: () => this.verifyStealthProtection(),
@@ -757,7 +755,7 @@ this.setupIntelligenceEvents()
       {
         logger: { warn: console.warn },
         nativeBridge: this.nativeStealthBridge ?? undefined,
-        runtimeHeartbeatStalenessMs: 2000,
+        runtimeHeartbeatStalenessMs: process.platform === 'darwin' && process.env.NATIVELY_FORCE_STEALTH_RUNTIME !== '1' ? 0 : 2000,
       },
     ))
 
@@ -2217,10 +2215,7 @@ try {
   }
 
   private setupIntelligenceEvents(): void {
-    const getIntelligenceWindow = () => getIntelligenceEventWindow({
-      getOverlayContentWindow: () => this.getWindowHelper().getOverlayContentWindow(),
-      getMainWindow: () => this.getMainWindow(),
-    })
+    const mainWindow = this.getMainWindow.bind(this)
 
     // Forward intelligence events to renderer
     this.intelligenceManager.on('assist_update', (insight: string) => {
@@ -2234,7 +2229,7 @@ try {
     })
 
     this.intelligenceManager.on('suggested_answer', (answer: string, question: string, confidence: number) => {
-      const win = getIntelligenceWindow()
+      const win = mainWindow()
       if (win && !win.isDestroyed()) {
         win.webContents.send('intelligence-suggested-answer', { answer, question, confidence })
       }
@@ -2242,21 +2237,21 @@ try {
     })
 
     this.intelligenceManager.on('suggested_answer_token', (token: string, question: string, confidence: number) => {
-      const win = getIntelligenceWindow()
+      const win = mainWindow()
       if (win && !win.isDestroyed()) {
         win.webContents.send('intelligence-suggested-answer-token', { token, question, confidence })
       }
     })
 
     this.intelligenceManager.on('refined_answer_token', (token: string, intent: string) => {
-      const win = getIntelligenceWindow()
+      const win = mainWindow()
       if (win && !win.isDestroyed()) {
         win.webContents.send('intelligence-refined-answer-token', { token, intent })
       }
     })
 
     this.intelligenceManager.on('refined_answer', (answer: string, intent: string) => {
-      const win = getIntelligenceWindow()
+      const win = mainWindow()
       if (win && !win.isDestroyed()) {
         win.webContents.send('intelligence-refined-answer', { answer, intent })
       }
@@ -2264,42 +2259,42 @@ try {
     })
 
     this.intelligenceManager.on('recap', (summary: string) => {
-      const win = getIntelligenceWindow()
+      const win = mainWindow()
       if (win && !win.isDestroyed()) {
         win.webContents.send('intelligence-recap', { summary })
       }
     })
 
     this.intelligenceManager.on('recap_token', (token: string) => {
-      const win = getIntelligenceWindow()
+      const win = mainWindow()
       if (win && !win.isDestroyed()) {
         win.webContents.send('intelligence-recap-token', { token })
       }
     })
 
     this.intelligenceManager.on('follow_up_questions_update', (questions: string) => {
-      const win = getIntelligenceWindow()
+      const win = mainWindow()
       if (win && !win.isDestroyed()) {
         win.webContents.send('intelligence-follow-up-questions-update', { questions })
       }
     })
 
     this.intelligenceManager.on('follow_up_questions_token', (token: string) => {
-      const win = getIntelligenceWindow()
+      const win = mainWindow()
       if (win && !win.isDestroyed()) {
         win.webContents.send('intelligence-follow-up-questions-token', { token })
       }
     })
 
     this.intelligenceManager.on('manual_answer_started', () => {
-      const win = getIntelligenceWindow()
+      const win = mainWindow()
       if (win && !win.isDestroyed()) {
         win.webContents.send('intelligence-manual-started')
       }
     })
 
     this.intelligenceManager.on('manual_answer_result', (answer: string, question: string) => {
-      const win = getIntelligenceWindow()
+      const win = mainWindow()
       if (win && !win.isDestroyed()) {
         win.webContents.send('intelligence-manual-result', { answer, question })
       }
@@ -2307,7 +2302,7 @@ try {
     })
 
     this.intelligenceManager.on('mode_changed', (mode: string) => {
-      const win = getIntelligenceWindow()
+      const win = mainWindow()
       if (win && !win.isDestroyed()) {
         win.webContents.send('intelligence-mode-changed', { mode })
       }
@@ -2315,7 +2310,7 @@ try {
 
     this.intelligenceManager.on('error', (error: Error, mode: string) => {
       console.error(`[IntelligenceManager] Error in ${mode}:`, error)
-      const win = getIntelligenceWindow()
+      const win = mainWindow()
       if (win && !win.isDestroyed()) {
         win.webContents.send('intelligence-error', { error: error.message, mode })
       }
@@ -2534,7 +2529,7 @@ try {
     // If we use getMainWindow(), it might return the launcher window when the overlay is hidden,
     // causing the IPC event to go to the wrong React tree and silently fail.
     const mode = this.windowHelper.getCurrentWindowMode();
-    const targetWindow = mode === 'overlay' ? this.windowHelper.getOverlayWindow() : this.windowHelper.getLauncherContentWindow();
+    const targetWindow = mode === 'overlay' ? this.windowHelper.getOverlayContentWindow() : this.windowHelper.getLauncherContentWindow();
 
     if (targetWindow && !targetWindow.isDestroyed()) {
       targetWindow.webContents.send('toggle-expand');
@@ -2791,9 +2786,7 @@ try {
     metadata: Record<string, unknown> = {},
   ): void {
     this.isUndetectable = state
-    this.windowHelper.setContentProtection(state)
-    this.settingsWindowHelper.setContentProtection(state)
-    this.modelSelectorWindowHelper.setContentProtection(state)
+    this.syncWindowStealthProtection(state)
 
     // Persist state via SettingsManager
     SettingsManager.getInstance().set('isUndetectable', state);
@@ -2867,6 +2860,12 @@ try {
         }, 500)
       }
     }
+  }
+
+  private syncWindowStealthProtection(state: boolean): void {
+    this.windowHelper.setContentProtection(state)
+    this.settingsWindowHelper.setContentProtection(state)
+    this.modelSelectorWindowHelper.setContentProtection(state)
   }
 
   public setUndetectable(state: boolean): void {
