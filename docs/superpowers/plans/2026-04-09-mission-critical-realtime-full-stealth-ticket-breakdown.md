@@ -13,8 +13,8 @@
 
 ## Delivery Status Snapshot
 
-- Done in this branch: `BL-001`, `BL-002`, `RT-001` through `RT-009`, `STL-001`, most of `STL-002` and `STL-003`, `WS-001`, `WS-002`, `WS-003`, `ACC-001`, `ACC-002`, `ACC-003`, `ACC-004`, `ACC-006`, `INF-001` through `INF-005`, `MEM-001`, `MEM-002`, `MEM-003`, `MEM-004`, `NSH-001`, `NSH-002`, `NSH-003`, `NSH-004`, `NSH-006`, `VAL-004`, plus the soak-procedure doc requested by `VAL-001`.
-- In progress: the remaining proactive helper-fault/native-surface portions of `STL-002` and `STL-003`, `NSH-005`, the full ANE classifier lane work in `ACC-005`, and the hardware-backed portions of `VAL-001` through `VAL-003`.
+- Done in this branch: `BL-001`, `BL-002`, `RT-001` through `RT-009`, `STL-001`, `STL-003`, most of `STL-002`, `WS-001`, `WS-002`, `WS-003`, `ACC-001`, `ACC-002`, `ACC-003`, `ACC-004`, `ACC-005`, `ACC-006`, `INF-001` through `INF-005`, `MEM-001`, `MEM-002`, `MEM-003`, `MEM-004`, `NSH-001`, `NSH-002`, `NSH-003`, `NSH-004`, `NSH-006`, `VAL-004`, plus the soak-procedure doc requested by `VAL-001`.
+- In progress: the remaining runtime-origin native-surface heartbeat portion of `STL-002`, `NSH-005`, and the hardware-backed portions of `VAL-001` through `VAL-003`.
 - Remaining release-only proof: packaged-app helper launch validation, M2 Max SLO/soak evidence, and the final legacy-runtime cleanup that removes the migration flag.
 
 ---
@@ -310,7 +310,7 @@
 
 **Goal:** Wire invisible mode into fail-closed behavior.
 
-**Status:** Partially implemented in this branch. Fail-closed state transitions, bus fault emission, lane shedding, shell/runtime crash coverage, rapid on-off-on toggle coverage, and native-helper heartbeat deadline enforcement are all landed. The remaining open work is proactive helper-originated fault signaling and shipped-renderer validation of the fail-closed path.
+**Status:** Done in this branch. Fail-closed state transitions, bus fault emission, lane shedding, shell/runtime crash coverage, rapid on-off-on toggle coverage, native-helper heartbeat deadline enforcement, and proactive helper-originated fault callbacks are all landed. Remaining shipped-renderer validation is tracked under `VAL-003`, not this ticket.
 
 **Primary Files**
 - `electron/main.ts`
@@ -467,7 +467,7 @@
 
 **Goal:** Route lightweight classifiers (pause detection, phase detection) through the semantic lane.
 
-**Status:** Partially implemented in this branch. Semantic/background lane infrastructure is now present, but the remaining direct routing of pause/phase classifiers through that lane still needs to be completed.
+**Status:** Done in this branch. Pause-action classification in `ConsciousAccelerationOrchestrator` and phase detection in `InterviewPhaseDetector` now route through the semantic lane when the runtime scheduler is present (with direct fallback preserved), and background-lane routing now explicitly covers live indexing embeddings in `LiveRAGIndexer`.
 
 **Primary Files**
 - `electron/rag/providers/ANEEmbeddingProvider.ts`
@@ -806,7 +806,7 @@
 
 **Goal:** Deterministic injection for provider loss, worker exhaustion, memory pressure, heartbeat loss.
 
-**Status:** Partially implemented in this branch. The suite now covers fail-closed stealth and provider exhaustion flows, while broader memory/worker-lane injections remain open.
+**Status:** Partially implemented in this branch. The suite now covers fail-closed stealth (including proactive helper-origin heartbeat loss), provider exhaustion, worker-lane stress behavior under scheduler contention, and memory-pressure budget signaling. Full hardware-backed fault sweeps still remain open.
 
 **Primary Files**
 - `electron/tests/faultInjection.test.ts`

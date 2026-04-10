@@ -53,6 +53,9 @@ export class StealthSupervisor implements ISupervisor {
     this.clearIntervalScheduler = options.clearIntervalScheduler ?? ((handle) => clearInterval(handle as NodeJS.Timeout));
     this.nativeBridge = options.nativeBridge ?? null;
     this.nativeArmRequest = options.nativeArmRequest;
+    this.nativeBridge?.setHelperFaultHandler?.((reason) => {
+      void this.reportFault(new Error(reason));
+    });
     this.armController = new StealthArmController({
       setEnabled: (enabled) => this.delegate.setEnabled(enabled),
       verifyStealthState: () => this.verifyStealth(),

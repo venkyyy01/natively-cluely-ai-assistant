@@ -85,6 +85,8 @@ import {
   PersistedSessionMemoryState,
 } from './memory/SessionPersistence';
 import { TokenCounter } from './shared/TokenCounter';
+import { getActiveAccelerationManager } from './services/AccelerationManager';
+import type { RuntimeBudgetScheduler } from './runtime/RuntimeBudgetScheduler';
 
 export interface TranscriptSegment {
     marker?: string;
@@ -121,6 +123,10 @@ export interface PinnedItem {
   text: string;
   pinnedAt: number;
   label?: string;
+}
+
+function resolveClassifierLane(): Pick<RuntimeBudgetScheduler, 'submit'> | undefined {
+  return getActiveAccelerationManager()?.getRuntimeBudgetScheduler();
 }
 
 export interface MeetingMetadataSnapshot {
@@ -199,7 +205,9 @@ export class SessionTracker {
   private observedQuestionStore: ObservedQuestionStore = new ObservedQuestionStore();
   private questionReactionClassifier: QuestionReactionClassifier = new QuestionReactionClassifier();
   private answerHypothesisStore: AnswerHypothesisStore = new AnswerHypothesisStore();
-  private phaseDetector: InterviewPhaseDetector = new InterviewPhaseDetector();
+  private phaseDetector: InterviewPhaseDetector = new InterviewPhaseDetector({
+    classifierLane: resolveClassifierLane(),
+  });
   private tokenBudgetManager: TokenBudgetManager = new TokenBudgetManager('openai');
 
   // Adaptive context window for acceleration

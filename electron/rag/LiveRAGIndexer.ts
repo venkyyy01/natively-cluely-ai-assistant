@@ -11,6 +11,7 @@ import { preprocessTranscript, RawSegment } from './TranscriptPreprocessor';
 import { chunkTranscript, Chunk } from './SemanticChunker';
 import { VectorStore } from './VectorStore';
 import { EmbeddingPipeline } from './EmbeddingPipeline';
+import { getActiveAccelerationManager } from '../services/AccelerationManager';
 
 const INDEXING_INTERVAL_MS = 30_000;  // 30 seconds
 const MIN_NEW_SEGMENTS = 3;           // Don't chunk unless we have enough new content
@@ -146,7 +147,10 @@ export class LiveRAGIndexer {
                         break;
                     }
                     try {
-                        const embedding = await this.embeddingPipeline.getEmbedding(indexedChunks[i].text);
+                        const accelerationManager = getActiveAccelerationManager();
+                        const embedding = accelerationManager
+                            ? await accelerationManager.runInLane('background', () => this.embeddingPipeline.getEmbedding(indexedChunks[i].text))
+                            : await this.embeddingPipeline.getEmbedding(indexedChunks[i].text);
                         if (!this.isActive || this.runId !== runId || this.meetingId !== meetingId) {
                             console.warn('[LiveRAGIndexer] Skipping stale embedding result');
                             break;

@@ -81,9 +81,34 @@ private final class SessionRuntime {
     }
 }
 
+private struct HelperServerEvent {
+    let event: String
+    let sessionId: String
+    let reason: String
+    let failClosed: Bool
+
+    func asJsonObject() -> JsonObject {
+        [
+            "event": event,
+            "sessionId": sessionId,
+            "reason": reason,
+            "failClosed": failClosed,
+        ]
+    }
+}
+
+private struct HeartbeatMonitorState {
+    let sessionId: String
+    var lastHeartbeatAt: Date
+    var presenting: Bool
+    var blocked: Bool
+}
+
 private final class FullStealthHelperService {
     private var sessions: [String: SessionRuntime] = [:]
     private var telemetryBySession: [String: [TelemetryEvent]] = [:]
+    private let heartbeatMonitorLock = NSLock()
+    private var heartbeatMonitorStates: [String: HeartbeatMonitorState] = [:]
     private let heartbeatTimeoutMs: TimeInterval
 
     init(heartbeatTimeoutMs: TimeInterval = FullStealthHelperService.readMillisecondsEnv(
@@ -162,6 +187,7 @@ private final class FullStealthHelperService {
         )
         runtime.noteHeartbeat()
         sessions[request.sessionId] = runtime
+        syncHeartbeatMonitorState(for: runtime)
         recordEvent(sessionId: request.sessionId, type: "session-created", detail: "protected session created")
         return ControlPlaneEnvelope(
             outcome: .ok,
@@ -215,6 +241,7 @@ private final class FullStealthHelperService {
                 runtime.transition(to: .blocked, blockers: [blocker])
                 runtime.recoveryPending = true
                 runtime.surface = nil
+                syncHeartbeatMonitorState(for: runtime)
                 return ControlPlaneEnvelope(
                     outcome: .blocked,
                     failClosed: true,
@@ -228,6 +255,7 @@ private final class FullStealthHelperService {
             runtime.noteHeartbeat()
             runtime.recoveryPending = false
             runtime.transition(to: .attached, presenting: false, blockers: [])
+            syncHeartbeatMonitorState(for: runtime)
             recordEvent(sessionId: request.sessionId, type: "surface-attached", detail: request.surfaceId)
             return ControlPlaneEnvelope(
                 outcome: .ok,
@@ -241,6 +269,7 @@ private final class FullStealthHelperService {
             runtime.transition(to: .blocked, blockers: [blocker])
             runtime.recoveryPending = true
             runtime.surface = nil
+            syncHeartbeatMonitorState(for: runtime)
             return ControlPlaneEnvelope(
                 outcome: .blocked,
                 failClosed: true,
@@ -280,6 +309,7 @@ private final class FullStealthHelperService {
             }
 
             runtime.recoveryPending = false
+            syncHeartbeatMonitorState(for: runtime)
             return ControlPlaneEnvelope(
                 outcome: .ok,
                 failClosed: false,
@@ -291,6 +321,7 @@ private final class FullStealthHelperService {
             let blocker = HelperBlocker(code: "native-presenter-unavailable", message: error.localizedDescription, retryable: false)
             runtime.transition(to: .failed, presenting: false, blockers: [blocker])
             runtime.recoveryPending = true
+            syncHeartbeatMonitorState(for: runtime)
             return ControlPlaneEnvelope(
                 outcome: .blocked,
                 failClosed: true,
@@ -325,6 +356,7 @@ private final class FullStealthHelperService {
         if runtime.blockers.isEmpty {
             runtime.noteHeartbeat()
         }
+        syncHeartbeatMonitorState(for: runtime)
 
         return ControlPlaneEnvelope(
             outcome: runtime.blockers.isEmpty ? .ok : .blocked,
@@ -367,6 +399,7 @@ private final class FullStealthHelperService {
         }
 
         enforceHeartbeatTimeoutIfNeeded(runtime)
+        syncHeartbeatMonitorState(for: runtime)
 
         return ControlPlaneEnvelope(
             outcome: runtime.blockers.isEmpty ? .ok : .blocked,
@@ -446,6 +479,39 @@ private final class FullStealthHelperService {
         )
     }
 
+    func emitHeartbeatFaultEventsIfNeeded(_ emit: (JsonObject) throws -> Void) rethrows {
+        let now = Date()
+        var events: [JsonObject] = []
+
+        heartbeatMonitorLock.lock()
+        for sessionId in heartbeatMonitorStates.keys {
+            guard var state = heartbeatMonitorStates[sessionId] else {
+                continue
+            }
+
+            let elapsedMs = now.timeIntervalSince(state.lastHeartbeatAt) * 1000
+            guard state.presenting, !state.blocked, elapsedMs > heartbeatTimeoutMs else {
+                continue
+            }
+
+            state.blocked = true
+            heartbeatMonitorStates[sessionId] = state
+            events.append(
+                HelperServerEvent(
+                    event: "helper-fault",
+                    sessionId: state.sessionId,
+                    reason: "stealth-heartbeat-missed",
+                    failClosed: true
+                ).asJsonObject()
+            )
+        }
+        heartbeatMonitorLock.unlock()
+
+        for event in events {
+            try emit(event)
+        }
+    }
+
     private func ensureRuntime(sessionId: String, width: Int, height: Int) -> SessionRuntime {
         if let runtime = sessions[sessionId] {
             return runtime
@@ -453,7 +519,25 @@ private final class FullStealthHelperService {
 
         let runtime = SessionRuntime(sessionId: sessionId, width: width, height: height, state: .creating)
         sessions[sessionId] = runtime
+        syncHeartbeatMonitorState(for: runtime)
         return runtime
+    }
+
+    private func syncHeartbeatMonitorState(for runtime: SessionRuntime) {
+        heartbeatMonitorLock.lock()
+        heartbeatMonitorStates[runtime.sessionId] = HeartbeatMonitorState(
+            sessionId: runtime.sessionId,
+            lastHeartbeatAt: runtime.lastHeartbeatAt,
+            presenting: runtime.presenting,
+            blocked: !runtime.blockers.isEmpty
+        )
+        heartbeatMonitorLock.unlock()
+    }
+
+    private func removeHeartbeatMonitorState(sessionId: String) {
+        heartbeatMonitorLock.lock()
+        heartbeatMonitorStates.removeValue(forKey: sessionId)
+        heartbeatMonitorLock.unlock()
     }
 
     private func enforceHeartbeatTimeoutIfNeeded(_ runtime: SessionRuntime) {
@@ -480,12 +564,14 @@ private final class FullStealthHelperService {
 
         runtime.recoveryPending = true
         runtime.transition(to: .blocked, presenting: false, blockers: [blocker])
+        syncHeartbeatMonitorState(for: runtime)
         recordEvent(sessionId: runtime.sessionId, type: "session-blocked", detail: blocker.code)
     }
 
     private func teardownRuntime(sessionId: String) throws {
         if let runtime = sessions.removeValue(forKey: sessionId) {
             try runtime.surface?.close()
+            removeHeartbeatMonitorState(sessionId: sessionId)
             recordEvent(sessionId: sessionId, type: "presentation-stopped", detail: "session torn down")
         }
     }
@@ -511,6 +597,7 @@ private final class FullStealthHelperService {
 
 private let service = FullStealthHelperService()
 private let args = CommandLine.arguments
+private let stdoutLock = NSLock()
 
 guard args.count >= 2, let command = Command(rawValue: args[1]) else {
     FileHandle.standardError.write(
@@ -570,72 +657,96 @@ private func decodeStdin<T: Decodable>(_ type: T.Type) throws -> T {
     return try JSONDecoder().decode(type, from: data)
 }
 
+@Sendable
 private func decodeObject<T: Decodable>(_ type: T.Type, from object: JsonObject) throws -> T {
     let data = try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
     return try JSONDecoder().decode(type, from: data)
 }
 
+@Sendable
 private func writeJson(_ payload: JsonObject) throws {
     let data = try JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])
+    stdoutLock.lock()
+    defer { stdoutLock.unlock() }
     FileHandle.standardOutput.write(data)
     FileHandle.standardOutput.write(Data("\n".utf8))
 }
 
 private func runServer(service: FullStealthHelperService) throws {
+    let heartbeatMonitor = DispatchSource.makeTimerSource(queue: DispatchQueue.global(qos: .userInitiated))
+    heartbeatMonitor.schedule(deadline: .now() + .milliseconds(100), repeating: .milliseconds(100))
+    heartbeatMonitor.setEventHandler {
+        do {
+            try service.emitHeartbeatFaultEventsIfNeeded(writeJson)
+        } catch {
+            FileHandle.standardError.write(Data("\(error.localizedDescription)\n".utf8))
+        }
+    }
+    heartbeatMonitor.resume()
+    defer { heartbeatMonitor.cancel() }
+
     while let line = readLine() {
         guard !line.isEmpty else {
             continue
         }
 
-        var requestId: String?
+        handleServerRequestLine(line, service: service)
+    }
+}
+
+private func handleServerRequestLine(_ line: String, service: FullStealthHelperService) {
+    var requestId: String?
+    do {
+        guard let request = try JSONSerialization.jsonObject(with: Data(line.utf8)) as? JsonObject else {
+            try writeJson(["ok": false, "error": "Invalid request envelope"])
+            return
+        }
+
+        requestId = request["id"] as? String
+        guard let id = requestId,
+              let commandName = request["command"] as? String,
+              let command = Command(rawValue: commandName)
+        else {
+            try writeJson(["id": requestId ?? NSNull(), "ok": false, "error": "Invalid request envelope"])
+            return
+        }
+
+        let result: JsonObject
+        switch command {
+        case .createSession:
+            result = service.createSession(try decodeObject(LegacySessionRequest.self, from: request)).asJsonObject()
+        case .releaseSession:
+            result = try service.releaseSession(sessionId: try decodeObject(SessionLookupRequest.self, from: request).sessionId).asJsonObject()
+        case .status:
+            result = service.status().asJsonObject()
+        case .serve:
+            result = ["ready": true]
+        case .probeCapabilities:
+            result = service.probeCapabilities().asJsonObject()
+        case .createProtectedSession:
+            result = service.createProtectedSession(try decodeObject(CreateProtectedSessionRequest.self, from: request)).asJsonObject()
+        case .attachSurface:
+            result = service.attachSurface(try decodeObject(AttachSurfaceRequest.self, from: request)).asJsonObject()
+        case .present:
+            result = service.present(try decodeObject(PresentRequest.self, from: request)).asJsonObject()
+        case .heartbeat:
+            result = service.heartbeat(sessionId: try decodeObject(SessionLookupRequest.self, from: request).sessionId).asJsonObject()
+        case .teardownSession:
+            result = try service.teardownProtectedSession(sessionId: try decodeObject(SessionLookupRequest.self, from: request).sessionId).asJsonObject()
+        case .getHealth:
+            result = service.getHealth(sessionId: try decodeObject(SessionLookupRequest.self, from: request).sessionId).asJsonObject()
+        case .getTelemetry:
+            result = service.getTelemetry(sessionId: try decodeObject(SessionLookupRequest.self, from: request).sessionId).asJsonObject()
+        case .validateSession:
+            result = service.validateSession(sessionId: try decodeObject(SessionLookupRequest.self, from: request).sessionId).asJsonObject()
+        }
+
+        try writeJson(["id": id, "ok": true, "result": result])
+    } catch {
         do {
-            guard let request = try JSONSerialization.jsonObject(with: Data(line.utf8)) as? JsonObject else {
-                try writeJson(["ok": false, "error": "Invalid request envelope"])
-                continue
-            }
-
-            requestId = request["id"] as? String
-            guard let id = requestId,
-                  let commandName = request["command"] as? String,
-                  let command = Command(rawValue: commandName)
-            else {
-                try writeJson(["id": requestId ?? NSNull(), "ok": false, "error": "Invalid request envelope"])
-                continue
-            }
-
-            let result: JsonObject
-            switch command {
-            case .createSession:
-                result = service.createSession(try decodeObject(LegacySessionRequest.self, from: request)).asJsonObject()
-            case .releaseSession:
-                result = try service.releaseSession(sessionId: try decodeObject(SessionLookupRequest.self, from: request).sessionId).asJsonObject()
-            case .status:
-                result = service.status().asJsonObject()
-            case .serve:
-                result = ["ready": true]
-            case .probeCapabilities:
-                result = service.probeCapabilities().asJsonObject()
-            case .createProtectedSession:
-                result = service.createProtectedSession(try decodeObject(CreateProtectedSessionRequest.self, from: request)).asJsonObject()
-            case .attachSurface:
-                result = service.attachSurface(try decodeObject(AttachSurfaceRequest.self, from: request)).asJsonObject()
-            case .present:
-                result = service.present(try decodeObject(PresentRequest.self, from: request)).asJsonObject()
-            case .heartbeat:
-                result = service.heartbeat(sessionId: try decodeObject(SessionLookupRequest.self, from: request).sessionId).asJsonObject()
-            case .teardownSession:
-                result = try service.teardownProtectedSession(sessionId: try decodeObject(SessionLookupRequest.self, from: request).sessionId).asJsonObject()
-            case .getHealth:
-                result = service.getHealth(sessionId: try decodeObject(SessionLookupRequest.self, from: request).sessionId).asJsonObject()
-            case .getTelemetry:
-                result = service.getTelemetry(sessionId: try decodeObject(SessionLookupRequest.self, from: request).sessionId).asJsonObject()
-            case .validateSession:
-                result = service.validateSession(sessionId: try decodeObject(SessionLookupRequest.self, from: request).sessionId).asJsonObject()
-            }
-
-            try writeJson(["id": id, "ok": true, "result": result])
-        } catch {
             try writeJson(["id": requestId ?? NSNull(), "ok": false, "error": error.localizedDescription])
+        } catch {
+            FileHandle.standardError.write(Data("\(error.localizedDescription)\n".utf8))
         }
     }
 }

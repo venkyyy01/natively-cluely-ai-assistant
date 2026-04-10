@@ -242,6 +242,102 @@ test('NativeStealthBridge reports unhealthy heartbeat and reject invalid frame s
   assert.deepEqual(heartbeat, { connected: true, healthy: false });
 });
 
+test('NativeStealthBridge forwards helper fault events for the active session', async () => {
+  const faultReasons: string[] = [];
+  let eventHandler: ((event: { type: 'helper-fault'; sessionId: string; reason: string; failClosed: boolean }) => void) | undefined;
+
+  const bridge = new NativeStealthBridge({
+    helperPathResolver: () => '/tmp/helper',
+    sessionIdFactory: () => 'session-fault-event',
+    clientFactory: () => ({
+      async createProtectedSession(request) {
+        return {
+          outcome: 'ok',
+          failClosed: false,
+          presentationAllowed: true,
+          blockers: [],
+          data: { sessionId: request.sessionId, state: 'creating' },
+        };
+      },
+      async attachSurface(request) {
+        return {
+          outcome: 'ok',
+          failClosed: false,
+          presentationAllowed: true,
+          blockers: [],
+          data: {
+            sessionId: request.sessionId,
+            state: 'attached',
+            surfaceAttached: true,
+            presenting: false,
+            recoveryPending: false,
+            blockers: [],
+            lastTransitionAt: new Date(0).toISOString(),
+          },
+        };
+      },
+      async present(request) {
+        return {
+          outcome: 'ok',
+          failClosed: false,
+          presentationAllowed: true,
+          blockers: [],
+          data: {
+            sessionId: request.sessionId,
+            state: request.activate ? 'presenting' : 'attached',
+            surfaceAttached: true,
+            presenting: request.activate,
+            recoveryPending: false,
+            blockers: [],
+            lastTransitionAt: new Date(0).toISOString(),
+          },
+        };
+      },
+      async getHealth(sessionId) {
+        return {
+          outcome: 'ok',
+          failClosed: false,
+          presentationAllowed: true,
+          blockers: [],
+          data: {
+            sessionId,
+            state: 'presenting',
+            surfaceAttached: true,
+            presenting: true,
+            recoveryPending: false,
+            blockers: [],
+            lastTransitionAt: new Date(0).toISOString(),
+          },
+        };
+      },
+      async teardownSession() {
+        return {
+          outcome: 'ok',
+          failClosed: false,
+          presentationAllowed: false,
+          blockers: [],
+          data: { released: true },
+        };
+      },
+      setEventHandler(handler) {
+        eventHandler = handler;
+      },
+      dispose() {},
+    }),
+  });
+
+  bridge.setHelperFaultHandler((reason) => {
+    faultReasons.push(reason);
+  });
+
+  await bridge.arm();
+  eventHandler?.({ type: 'helper-fault', sessionId: 'other-session', reason: 'ignored', failClosed: true });
+  eventHandler?.({ type: 'helper-fault', sessionId: 'session-fault-event', reason: 'stealth-heartbeat-missed', failClosed: true });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.deepEqual(faultReasons, ['stealth-heartbeat-missed']);
+});
+
 test('NativeStealthBridge fails arm when helper control-plane is blocked', async () => {
   const bridge = new NativeStealthBridge({
     helperPathResolver: () => '/tmp/helper',

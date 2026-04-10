@@ -23,32 +23,8 @@ Usage notes:
 <available_skills>
 
 <skill>
-<name>algorithmic-art</name>
-<description>Creating algorithmic art using p5.js with seeded randomness and interactive parameter exploration. Use this when users request creating art using code, generative art, algorithmic art, flow fields, or particle systems. Create original algorithmic art rather than copying existing artists' work to avoid copyright violations.</description>
-<location>project</location>
-</skill>
-
-<skill>
-<name>brand-guidelines</name>
-<description>Applies Anthropic's official brand colors and typography to any sort of artifact that may benefit from having Anthropic's look-and-feel. Use it when brand colors or style guidelines, visual formatting, or company design standards apply.</description>
-<location>project</location>
-</skill>
-
-<skill>
-<name>canvas-design</name>
-<description>Create beautiful visual art in .png and .pdf documents using design philosophy. You should use this skill when the user asks to create a poster, piece of art, design, or other static piece. Create original visual designs, never copying existing artists' work to avoid copyright violations.</description>
-<location>project</location>
-</skill>
-
-<skill>
 <name>changeset-validation</name>
 <description>Validate changesets in openai-agents-js using LLM judgment against git diffs (including uncommitted local changes). Use when packages/ or .changeset/ are modified, or when verifying PR changeset compliance and bump level.</description>
-<location>project</location>
-</skill>
-
-<skill>
-<name>claude-api</name>
-<description>"Build apps with the Claude API or Anthropic SDK. TRIGGER when: code imports `anthropic`/`@anthropic-ai/sdk`/`claude_agent_sdk`, or user asks to use Claude API, Anthropic SDKs, or Agent SDK. DO NOT TRIGGER when: code imports `openai`/other AI SDK, general programming, or ML/data-science tasks."</description>
 <location>project</location>
 </skill>
 
@@ -59,20 +35,8 @@ Usage notes:
 </skill>
 
 <skill>
-<name>doc-coauthoring</name>
-<description>Guide users through a structured workflow for co-authoring documentation. Use when user wants to write documentation, proposals, technical specs, decision docs, or similar structured content. This workflow helps users efficiently transfer context, refine content through iteration, and verify the doc works for readers. Trigger when user mentions writing docs, creating proposals, drafting specs, or similar documentation tasks.</description>
-<location>project</location>
-</skill>
-
-<skill>
 <name>docs-sync</name>
 <description>Analyze main branch implementation and configuration to find missing, incorrect, or outdated documentation in docs/. Use when asked to audit doc coverage, sync docs with code, or propose doc updates/structure changes. Only update English docs (docs/src/content/docs/**) and never touch translated docs under docs/src/content/docs/ja, ko, or zh. Provide a report and ask for approval before editing docs.</description>
-<location>project</location>
-</skill>
-
-<skill>
-<name>docx</name>
-<description>"Use this skill whenever the user wants to create, read, edit, or manipulate Word documents (.docx files). Triggers include: any mention of 'Word doc', 'word document', '.docx', or requests to produce professional documents with formatting like tables of contents, headings, page numbers, or letterheads. Also use when extracting or reorganizing content from .docx files, inserting or replacing images in documents, performing find-and-replace in Word files, working with tracked changes or comments, or converting content into a polished Word document. If the user asks for a 'report', 'memo', 'letter', 'template', or similar deliverable as a Word or .docx file, use this skill. Do NOT use for PDFs, spreadsheets, Google Docs, or general coding tasks unrelated to document generation."</description>
 <location>project</location>
 </skill>
 
@@ -89,12 +53,6 @@ Usage notes:
 </skill>
 
 <skill>
-<name>frontend-design</name>
-<description>Create distinctive, production-grade frontend interfaces with high design quality. Use this skill when the user asks to build web components, pages, artifacts, posters, or applications (examples include websites, landing pages, dashboards, React components, HTML/CSS layouts, or when styling/beautifying any web UI). Generates creative, polished code and UI design that avoids generic AI aesthetics.</description>
-<location>project</location>
-</skill>
-
-<skill>
 <name>implementation-strategy</name>
 <description>Decide how to implement runtime and API changes in openai-agents-js before editing code. Use when a task changes exported APIs, runtime behavior, schemas, tests, or docs and you need to choose the compatibility boundary, whether shims or migrations are warranted, and when unreleased interfaces can be rewritten directly.</description>
 <location>project</location>
@@ -107,26 +65,8 @@ Usage notes:
 </skill>
 
 <skill>
-<name>internal-comms</name>
-<description>A set of resources to help me write all kinds of internal communications, using the formats that my company likes to use. Claude should use this skill whenever asked to write some sort of internal communications (status reports, leadership updates, 3P updates, company newsletters, FAQs, incident reports, project updates, etc.).</description>
-<location>project</location>
-</skill>
-
-<skill>
-<name>mcp-builder</name>
-<description>Guide for creating high-quality MCP (Model Context Protocol) servers that enable LLMs to interact with external services through well-designed tools. Use when building MCP servers to integrate external APIs or services, whether in Python (FastMCP) or Node/TypeScript (MCP SDK).</description>
-<location>project</location>
-</skill>
-
-<skill>
 <name>openai-knowledge</name>
 <description>Use when working with the OpenAI API (Responses API) or OpenAI platform features (tools, streaming, Realtime API, auth, models, rate limits, MCP) and you need authoritative, up-to-date documentation (schemas, examples, limits, edge cases). Prefer the OpenAI Developer Documentation MCP server tools when available; otherwise guide the user to enable `openaiDeveloperDocs`.</description>
-<location>project</location>
-</skill>
-
-<skill>
-<name>pdf</name>
-<description>Use this skill whenever the user wants to do anything with PDF files. This includes reading or extracting text/tables from PDFs, combining or merging multiple PDFs into one, splitting PDFs apart, rotating pages, adding watermarks, creating new PDFs, filling PDF forms, encrypting/decrypting PDFs, extracting images, and OCR on scanned PDFs to make them searchable. If the user mentions a .pdf file or asks to produce one, use this skill.</description>
 <location>project</location>
 </skill>
 
@@ -137,32 +77,8 @@ Usage notes:
 </skill>
 
 <skill>
-<name>pptx</name>
-<description>"Use this skill any time a .pptx file is involved in any way — as input, output, or both. This includes: creating slide decks, pitch decks, or presentations; reading, parsing, or extracting text from any .pptx file (even if the extracted content will be used elsewhere, like in an email or summary); editing, modifying, or updating existing presentations; combining or splitting slide files; working with templates, layouts, speaker notes, or comments. Trigger whenever the user mentions \"deck,\" \"slides,\" \"presentation,\" or references a .pptx filename, regardless of what they plan to do with the content afterward. If a .pptx file needs to be opened, created, or touched, use this skill."</description>
-<location>project</location>
-</skill>
-
-<skill>
 <name>pr-draft-summary</name>
 <description>Create a PR title and draft description after substantive code changes are finished. Trigger when wrapping up a moderate-or-larger change (runtime code, tests, build config, docs with behavior impact) and you need the PR-ready summary block with change summary plus PR draft text.</description>
-<location>project</location>
-</skill>
-
-<skill>
-<name>skill-creator</name>
-<description>Create new skills, modify and improve existing skills, and measure skill performance. Use when users want to create a skill from scratch, edit, or optimize an existing skill, run evals to test a skill, benchmark skill performance with variance analysis, or optimize a skill's description for better triggering accuracy.</description>
-<location>project</location>
-</skill>
-
-<skill>
-<name>slack-gif-creator</name>
-<description>Knowledge and utilities for creating animated GIFs optimized for Slack. Provides constraints, validation tools, and animation concepts. Use when users request animated GIFs for Slack like "make me a GIF of X doing Y for Slack."</description>
-<location>project</location>
-</skill>
-
-<skill>
-<name>template</name>
-<description>Replace with description of the skill and when Claude should use it.</description>
 <location>project</location>
 </skill>
 
@@ -173,237 +89,38 @@ Usage notes:
 </skill>
 
 <skill>
-<name>theme-factory</name>
-<description>Toolkit for styling artifacts with a theme. These artifacts can be slides, docs, reportings, HTML landing pages, etc. There are 10 pre-set themes with colors/fonts that you can apply to any artifact that has been creating, or can generate a new theme on-the-fly.</description>
-<location>project</location>
-</skill>
-
-<skill>
-<name>web-artifacts-builder</name>
-<description>Suite of tools for creating elaborate, multi-component claude.ai HTML artifacts using modern frontend web technologies (React, Tailwind CSS, shadcn/ui). Use for complex artifacts requiring state management, routing, or shadcn/ui components - not for simple single-file HTML/JSX artifacts.</description>
-<location>project</location>
-</skill>
-
-<skill>
-<name>webapp-testing</name>
-<description>Toolkit for interacting with and testing local web applications using Playwright. Supports verifying frontend functionality, debugging UI behavior, capturing browser screenshots, and viewing browser logs.</description>
-<location>project</location>
-</skill>
-
-<skill>
-<name>xlsx</name>
-<description>"Use this skill any time a spreadsheet file is the primary input or output. This means any task where the user wants to: open, read, edit, or fix an existing .xlsx, .xlsm, .csv, or .tsv file (e.g., adding columns, computing formulas, formatting, charting, cleaning messy data); create a new spreadsheet from scratch or from other data sources; or convert between tabular file formats. Trigger especially when the user references a spreadsheet file by name or path — even casually (like \"the xlsx in my downloads\") — and wants something done to it or produced from it. Also trigger for cleaning or restructuring messy tabular data files (malformed rows, misplaced headers, junk data) into proper spreadsheets. The deliverable must be a spreadsheet file. Do NOT trigger when the primary deliverable is a Word document, HTML report, standalone Python script, database pipeline, or Google Sheets API integration, even if tabular data is involved."</description>
-<location>project</location>
-</skill>
-
-<!-- oh-my-claudecode (OMC) skills -->
-<skill>
-<name>omc-autopilot</name>
-<description>Full autonomous execution from idea to working code. Takes a brief product idea and autonomously handles: requirements analysis, technical design, planning, parallel implementation, QA cycling, and multi-perspective validation. Trigger when user says "autopilot", "build me", "create me", "full auto", or wants end-to-end autonomous execution.</description>
-<location>project</location>
-</skill>
-
-<skill>
-<name>omc-team</name>
-<description>N coordinated agents on shared task list using Claude Code native teams. Spawns N agents working through staged pipeline: team-plan → team-prd → team-exec → team-verify → team-fix. Trigger when user says "team N:agent-type task" or wants coordinated multi-agent execution.</description>
-<location>project</location>
-</skill>
-
-<skill>
-<name>omc-ralph</name>
-<description>Self-referential persistence loop until task completion with configurable verification. Keeps working until ALL user stories pass verification. Includes ultrawork parallel execution with retry on failure. Trigger when user says "ralph", "don't stop", "must complete", "finish this", or "keep going until done".</description>
-<location>project</location>
-</skill>
-
-<skill>
-<name>omc-ultrawork</name>
-<description>Parallel execution engine for high-throughput task completion. Fires multiple agents simultaneously for independent tasks with smart model routing (Haiku/Sonnet/Opus). Trigger when user says "ulw", "ultrawork", or wants parallel execution.</description>
-<location>project</location>
-</skill>
-
-<skill>
-<name>omc-ccg</name>
-<description>Claude-Codex-Gemini tri-model orchestration. Routes to codex + gemini via /ask, then Claude synthesizes results. Trigger when user says "ccg" or wants multi-model cross-validation.</description>
-<location>project</location>
-</skill>
-
-<skill>
-<name>omc-deep-interview</name>
-<description>Socratic deep interview with mathematical ambiguity gating before execution. Uses Socratic questioning to clarify vague ideas, exposes hidden assumptions, measures clarity across weighted dimensions. Trigger when user says "deep-interview" or has a vague idea needing clarification.</description>
-<location>project</location>
-</skill>
-
-<skill>
-<name>omc-ralplan</name>
-<description>Consensus planning entrypoint that auto-gates vague requests before execution. 3-stage pipeline: deep-interview → ralplan → autopilot. Trigger when user says "ralplan" or wants validated planning before execution.</description>
-<location>project</location>
-</skill>
-
-<skill>
-<name>omc-ai-slop-cleaner</name>
-<description>Clean AI-generated code slop with regression-safe, deletion-first workflow. Optional reviewer-only mode for identifying issues without fixing. Trigger when user says "deslop", "anti-slop", or wants to clean up AI-generated code smells.</description>
-<location>project</location>
-</skill>
-
-<skill>
-<name>omc-deepinit</name>
-<description>Deep codebase initialization with hierarchical AGENTS.md documentation. Scans and documents the entire project structure. Trigger when user says "deepinit" or wants comprehensive project initialization.</description>
-<location>project</location>
-</skill>
-
-<skill>
-<name>omc-deep-dive</name>
-<description>2-stage pipeline: trace (causal investigation) → deep-interview (requirements crystallization) with 3-point injection. Trigger when user says "deep-dive" or wants to investigate a problem before requirements gathering.</description>
-<location>project</location>
-</skill>
-
-<skill>
-<name>omc-ultraqa</name>
-<description>QA cycling workflow - test, verify, fix, repeat until goal met. Runs build/test/fix loops with up to 5 cycles, stopping if same error persists 3 times. Trigger when user says "ultraqa" or wants intensive QA cycling.</description>
-<location>project</location>
-</skill>
-
-<skill>
-<name>omc-cancel</name>
-<description>Cancel any active OMC mode (autopilot, ralph, ultrawork, team, etc). Handles graceful shutdown of teammates, state cleanup, and resource deallocation. Trigger when user says "cancelomc", "stopomc", or wants to stop an active OMC mode.</description>
-<location>project</location>
-</skill>
-
-<skill>
-<name>omc-ask</name>
-<description>Process-first advisor routing for Claude, Codex, or Gemini via omc ask. Runs local provider CLIs and saves markdown artifacts. Trigger when user says "ask codex", "ask gemini", or wants external AI advisor input.</description>
-<location>project</location>
-</skill>
-
-<skill>
-<name>omc-teams</name>
-<description>CLI-team runtime for claude, codex, or gemini workers in tmux panes. Spawns real tmux worker processes for process-based parallel execution. Trigger when user says "omc team N:codex" or "omc team N:gemini".</description>
-<location>project</location>
-</skill>
-
-<skill>
-<name>omc-hud</name>
-<description>Configure HUD display options (layout, presets, display elements). Real-time orchestration metrics in your status bar. Trigger when user says "hud" or wants to configure the OMC HUD.</description>
-<location>project</location>
-</skill>
-
-<skill>
-<name>omc-learner</name>
-<description>Extract a learned skill from the current conversation. Identifies reusable patterns with strict quality gates and creates portable skill files. Trigger when user says "learner" or wants to learn from the current session.</description>
-<location>project</location>
-</skill>
-
-<skill>
-<name>omc-skill</name>
-<description>Manage local skills - list, add, remove, search, edit, setup wizard. Trigger when user says "skill list", "skill add", or wants to manage OMC skills.</description>
-<location>project</location>
-</skill>
-
-<skill>
-<name>omc-setup</name>
-<description>Install or refresh oh-my-claudecode for plugin, npm, and local-dev setups. Canonical setup flow for OMC installation. Trigger when user says "setup omc" or "omc-setup".</description>
-<location>project</location>
-</skill>
-
-<skill>
-<name>omc-setup-router</name>
-<description>Unified setup/configuration entrypoint. Routes setup, doctor, or MCP requests to the correct OMC setup flow. Trigger when user says "/setup" or wants OMC configuration routing.</description>
-<location>project</location>
-</skill>
-
-<skill>
-<name>omc-doctor</name>
-<description>Diagnose and fix oh-my-claudecode installation issues. Checks dependencies, configuration, and state. Trigger when user says "omc-doctor" or has OMC installation problems.</description>
-<location>project</location>
-</skill>
-
-<skill>
-<name>omc-reference</name>
-<description>OMC agent catalog, available tools, team pipeline routing, commit protocol, and skills registry. Auto-loads when delegating to agents or using OMC tools.</description>
-<location>project</location>
-</skill>
-
-<skill>
-<name>omc-mcp-setup</name>
-<description>Configure popular MCP servers for enhanced agent capabilities. Sets up MCP integrations for extended tool access. Trigger when user says "mcp-setup" or wants to configure MCP servers.</description>
-<location>project</location>
-</skill>
-
-<skill>
-<name>omc-configure-notifications</name>
-<description>Configure notification integrations (Telegram, Discord, Slack, OpenClaw) via natural language. Trigger when user says "configure notifications" or wants to set up OMC notifications.</description>
-<location>project</location>
-</skill>
-
-<skill>
-<name>omc-plan</name>
-<description>Strategic planning with optional interview workflow. Creates implementation plans with optional deep-interview pre-gate. Pipeline: deep-interview → omc-plan → autopilot. Trigger when user says "plan" or wants strategic planning.</description>
-<location>project</location>
-</skill>
-
-<skill>
-<name>omc-trace</name>
-<description>Evidence-driven tracing lane that orchestrates competing tracer hypotheses. Causal investigation using systematic hypothesis testing. Trigger when user says "trace" or wants evidence-driven debugging.</description>
-<location>project</location>
-</skill>
-
-<skill>
-<name>omc-release</name>
-<description>Automated release workflow for oh-my-claudecode. Handles versioning, changelog, and publishing. Trigger when user says "release" or wants to publish an OMC release.</description>
-<location>project</location>
-</skill>
-
-<skill>
-<name>omc-sciomc</name>
-<description>Orchestrate parallel scientist agents for comprehensive analysis with AUTO mode. Runs multiple research agents in parallel for thorough investigation. Trigger when user says "sciomc" or wants comprehensive multi-agent analysis.</description>
-<location>project</location>
-</skill>
-
-<skill>
-<name>omc-external-context</name>
-<description>Invoke parallel document-specialist agents for external web searches and documentation lookup. Trigger when user says "external-context" or needs parallel documentation research.</description>
-<location>project</location>
-</skill>
-
-<skill>
-<name>omc-project-session-manager</name>
-<description>Worktree-first dev environment manager for issues, PRs, and features with optional tmux sessions. Trigger when user says "psm" or wants project session management.</description>
-<location>project</location>
-</skill>
-
-<skill>
-<name>omc-visual-verdict</name>
-<description>Structured visual QA verdict for screenshot-to-reference comparisons. Trigger when user says "visual-verdict" or wants structured visual quality assessment.</description>
-<location>project</location>
-</skill>
-
-<skill>
-<name>omc-writer-memory</name>
-<description>Agentic memory system for writers - track characters, relationships, scenes, and themes. Commands: init, char, rel, scene, query, validate, synopsis, status, export. Trigger when user says "writer-memory" or wants narrative tracking.</description>
-<location>project</location>
-</skill>
-
-<skill>
 <name>007</name>
 <description>Security audit, hardening, threat modeling (STRIDE/PASTA), Red/Blue Team, OWASP checks, code review, incident response, and infrastructure security for any project.</description>
 <location>project</location>
 </skill>
 
 <skill>
+<name>accessibility-compliance-accessibility-audit</name>
+<description>"You are an accessibility expert specializing in WCAG compliance, inclusive design, and assistive technology compatibility. Conduct audits, identify barriers, and provide remediation guidance."</description>
+<location>project</location>
+</skill>
+
+<skill>
 <name>agent-memory-systems</name>
-<description>You are a cognitive architect who understands that memory makes agents intelligent. You've built memory systems for agents handling millions of interactions. You know that the hard part isn't stori...</description>
+<description>"You are a cognitive architect who understands that memory makes agents intelligent. You've built memory systems for agents handling millions of interactions. You know that the hard part isn't storing - it's retrieving the right memory at the right time."</description>
 <location>project</location>
 </skill>
 
 <skill>
 <name>ai-engineering-toolkit</name>
-<description>6 production-ready AI engineering workflows: prompt evaluation (8-dimension scoring), context budget planning, RAG pipeline design, agent security audit (65-point checklist), eval harness building,...</description>
+<description>"6 production-ready AI engineering workflows: prompt evaluation (8-dimension scoring), context budget planning, RAG pipeline design, agent security audit (65-point checklist), eval harness building, and product sense coaching."</description>
 <location>project</location>
 </skill>
 
 <skill>
 <name>airflow-dag-patterns</name>
-<description>Build production Apache Airflow DAGs with best practices for operators, sensors, testing, and deployment. Use when creating data pipelines, orchestrating workflows, or scheduling batch jobs.</description>
+<description>"Build production Apache Airflow DAGs with best practices for operators, sensors, testing, and deployment. Use when creating data pipelines, orchestrating workflows, or scheduling batch jobs."</description>
+<location>project</location>
+</skill>
+
+<skill>
+<name>algorithmic-art</name>
+<description>Creating algorithmic art using p5.js with seeded randomness and interactive parameter exploration. Use this when users request creating art using code, generative art, algorithmic art, flow fields, or particle systems. Create original algorithmic art rather than copying existing artists' work to avoid copyright violations.</description>
 <location>project</location>
 </skill>
 
@@ -415,7 +132,13 @@ Usage notes:
 
 <skill>
 <name>android-jetpack-compose-expert</name>
-<description>Expert guidance for building modern Android UIs with Jetpack Compose, covering state management, navigation, performance, and Material Design 3.</description>
+<description>"Expert guidance for building modern Android UIs with Jetpack Compose, covering state management, navigation, performance, and Material Design 3."</description>
+<location>project</location>
+</skill>
+
+<skill>
+<name>api-design-principles</name>
+<description>"Master REST and GraphQL API design principles to build intuitive, scalable, and maintainable APIs that delight developers and stand the test of time."</description>
 <location>project</location>
 </skill>
 
@@ -427,73 +150,85 @@ Usage notes:
 
 <skill>
 <name>api-endpoint-builder</name>
-<description>Builds production-ready REST API endpoints with validation, error handling, authentication, and documentation. Follows best practices for security and scalability.</description>
+<description>"Builds production-ready REST API endpoints with validation, error handling, authentication, and documentation. Follows best practices for security and scalability."</description>
 <location>project</location>
 </skill>
 
 <skill>
 <name>api-fuzzing-bug-bounty</name>
-<description>Provide comprehensive techniques for testing REST, SOAP, and GraphQL APIs during bug bounty hunting and penetration testing engagements. Covers vulnerability discovery, authentication bypass, IDOR ...</description>
+<description>"Provide comprehensive techniques for testing REST, SOAP, and GraphQL APIs during bug bounty hunting and penetration testing engagements. Covers vulnerability discovery, authentication bypass, IDOR exploitation, and API-specific attack vectors."</description>
 <location>project</location>
 </skill>
 
 <skill>
 <name>api-patterns</name>
-<description>API design principles and decision-making. REST vs GraphQL vs tRPC selection, response formats, versioning, pagination.</description>
+<description>"API design principles and decision-making. REST vs GraphQL vs tRPC selection, response formats, versioning, pagination."</description>
 <location>project</location>
 </skill>
 
 <skill>
 <name>api-security-best-practices</name>
-<description>Implement secure API design patterns including authentication, authorization, input validation, rate limiting, and protection against common API vulnerabilities</description>
+<description>"Implement secure API design patterns including authentication, authorization, input validation, rate limiting, and protection against common API vulnerabilities"</description>
+<location>project</location>
+</skill>
+
+<skill>
+<name>application-performance-performance-optimization</name>
+<description>"Optimize end-to-end application performance with profiling, observability, and backend/frontend tuning. Use when coordinating performance optimization across the stack."</description>
 <location>project</location>
 </skill>
 
 <skill>
 <name>architect-review</name>
-<description>Master software architect specializing in modern architecture</description>
+<description>"Master software architect specializing in modern architecture"</description>
+<location>project</location>
+</skill>
+
+<skill>
+<name>architecture</name>
+<description>"Architectural decision-making framework. Requirements analysis, trade-off evaluation, ADR documentation. Use when making architecture decisions or analyzing system design."</description>
 <location>project</location>
 </skill>
 
 <skill>
 <name>architecture-decision-records</name>
-<description>Comprehensive patterns for creating, maintaining, and managing Architecture Decision Records (ADRs) that capture the context and rationale behind significant technical decisions.</description>
+<description>"Comprehensive patterns for creating, maintaining, and managing Architecture Decision Records (ADRs) that capture the context and rationale behind significant technical decisions."</description>
 <location>project</location>
 </skill>
 
 <skill>
 <name>architecture-patterns</name>
-<description>Master proven backend architecture patterns including Clean Architecture, Hexagonal Architecture, and Domain-Driven Design to build maintainable, testable, and scalable systems.</description>
+<description>"Master proven backend architecture patterns including Clean Architecture, Hexagonal Architecture, and Domain-Driven Design to build maintainable, testable, and scalable systems."</description>
 <location>project</location>
 </skill>
 
 <skill>
 <name>astro</name>
-<description>Build content-focused websites with Astro — zero JS by default, islands architecture, multi-framework components, and Markdown/MDX support.</description>
+<description>"Build content-focused websites with Astro — zero JS by default, islands architecture, multi-framework components, and Markdown/MDX support."</description>
 <location>project</location>
 </skill>
 
 <skill>
 <name>auth-implementation-patterns</name>
-<description>Build secure, scalable authentication and authorization systems using industry-standard patterns and modern best practices.</description>
+<description>"Build secure, scalable authentication and authorization systems using industry-standard patterns and modern best practices."</description>
 <location>project</location>
 </skill>
 
 <skill>
 <name>avoid-ai-writing</name>
-<description>Audit and rewrite content to remove 21 categories of AI writing patterns with a 43-entry replacement table</description>
+<description>"Audit and rewrite content to remove 21 categories of AI writing patterns with a 43-entry replacement table"</description>
 <location>project</location>
 </skill>
 
 <skill>
 <name>aws-cost-optimizer</name>
-<description>Comprehensive AWS cost analysis and optimization recommendations using AWS CLI and Cost Explorer</description>
+<description>"Comprehensive AWS cost analysis and optimization recommendations using AWS CLI and Cost Explorer"</description>
 <location>project</location>
 </skill>
 
 <skill>
 <name>aws-serverless</name>
-<description>Proper Lambda function structure with error handling</description>
+<description>"Proper Lambda function structure with error handling"</description>
 <location>project</location>
 </skill>
 
@@ -505,43 +240,55 @@ Usage notes:
 
 <skill>
 <name>beautiful-prose</name>
-<description>A hard-edged writing style contract for timeless, forceful English prose without modern AI tics. Use when users ask for prose or rewrites that must be clean, exact, concrete, and free of AI cadence...</description>
+<description>A hard-edged writing style contract for timeless, forceful English prose without modern AI tics. Use when users ask for prose or rewrites that must be clean, exact, concrete, and free of AI cadence, filler, or therapeutic tone.</description>
 <location>project</location>
 </skill>
 
 <skill>
 <name>behavioral-modes</name>
-<description>AI operational modes (brainstorm, implement, debug, review, teach, ship, orchestrate). Use to adapt behavior based on task type.</description>
+<description>"AI operational modes (brainstorm, implement, debug, review, teach, ship, orchestrate). Use to adapt behavior based on task type."</description>
 <location>project</location>
 </skill>
 
 <skill>
 <name>blueprint</name>
-<description>Turn a one-line objective into a step-by-step construction plan any coding agent can execute cold. Each step has a self-contained context brief — a fresh agent in a new session can pick up any step...</description>
+<description>"Turn a one-line objective into a step-by-step construction plan any coding agent can execute cold. Each step has a self-contained context brief — a fresh agent in a new session can pick up any step without reading prior steps."</description>
+<location>project</location>
+</skill>
+
+<skill>
+<name>brainstorming</name>
+<description>"Use before creative or constructive work (features, architecture, behavior). Transforms vague ideas into validated designs through disciplined reasoning and collaboration."</description>
+<location>project</location>
+</skill>
+
+<skill>
+<name>brand-guidelines</name>
+<description>Applies Anthropic's official brand colors and typography to any sort of artifact that may benefit from having Anthropic's look-and-feel. Use it when brand colors or style guidelines, visual formatting, or company design standards apply.</description>
 <location>project</location>
 </skill>
 
 <skill>
 <name>browser-automation</name>
-<description>You are a browser automation expert who has debugged thousands of flaky tests and built scrapers that run for years without breaking. You've seen the evolution from Selenium to Puppeteer to Playwri...</description>
+<description>"You are a browser automation expert who has debugged thousands of flaky tests and built scrapers that run for years without breaking. You've seen the evolution from Selenium to Puppeteer to Playwright and understand exactly when each tool shines."</description>
 <location>project</location>
 </skill>
 
 <skill>
 <name>bug-hunter</name>
-<description>Systematically finds and fixes bugs using proven debugging techniques. Traces from symptoms to root cause, implements fixes, and prevents regression.</description>
+<description>"Systematically finds and fixes bugs using proven debugging techniques. Traces from symptoms to root cause, implements fixes, and prevents regression."</description>
 <location>project</location>
 </skill>
 
 <skill>
 <name>bullmq-specialist</name>
-<description>BullMQ expert for Redis-backed job queues, background processing, and reliable async execution in Node.js/TypeScript applications. Use when: bullmq, bull queue, redis queue, background job, job queue.</description>
+<description>"BullMQ expert for Redis-backed job queues, background processing, and reliable async execution in Node.js/TypeScript applications. Use when: bullmq, bull queue, redis queue, background job, job queue."</description>
 <location>project</location>
 </skill>
 
 <skill>
 <name>c4-architecture-c4-architecture</name>
-<description>Generate comprehensive C4 architecture documentation for an existing repository/codebase using a bottom-up analysis approach.</description>
+<description>"Generate comprehensive C4 architecture documentation for an existing repository/codebase using a bottom-up analysis approach."</description>
 <location>project</location>
 </skill>
 
@@ -564,14 +311,26 @@ Usage notes:
 </skill>
 
 <skill>
+<name>canvas-design</name>
+<description>Create beautiful visual art in .png and .pdf documents using design philosophy. You should use this skill when the user asks to create a poster, piece of art, design, or other static piece. Create original visual designs, never copying existing artists' work to avoid copyright violations.</description>
+<location>project</location>
+</skill>
+
+<skill>
 <name>chrome-extension-developer</name>
-<description>Expert in building Chrome Extensions using Manifest V3. Covers background scripts, service workers, content scripts, and cross-context communication.</description>
+<description>"Expert in building Chrome Extensions using Manifest V3. Covers background scripts, service workers, content scripts, and cross-context communication."</description>
+<location>project</location>
+</skill>
+
+<skill>
+<name>claude-api</name>
+<description>"Build apps with the Claude API or Anthropic SDK. TRIGGER when: code imports `anthropic`/`@anthropic-ai/sdk`/`claude_agent_sdk`, or user asks to use Claude API, Anthropic SDKs, or Agent SDK. DO NOT TRIGGER when: code imports `openai`/other AI SDK, general programming, or ML/data-science tasks."</description>
 <location>project</location>
 </skill>
 
 <skill>
 <name>clean-code</name>
-<description>This skill embodies the principles of \"Clean Code\" by Robert C. Martin (Uncle Bob). Use it to transform \"code that works\" into \"code that is clean.\</description>
+<description>"This skill embodies the principles of \"Clean Code\" by Robert C. Martin (Uncle Bob). Use it to transform \"code that works\" into \"code that is clean.\""</description>
 <location>project</location>
 </skill>
 
@@ -583,31 +342,43 @@ Usage notes:
 
 <skill>
 <name>cloudflare-workers-expert</name>
-<description>Expert in Cloudflare Workers and the Edge Computing ecosystem. Covers Wrangler, KV, D1, Durable Objects, and R2 storage.</description>
+<description>"Expert in Cloudflare Workers and the Edge Computing ecosystem. Covers Wrangler, KV, D1, Durable Objects, and R2 storage."</description>
+<location>project</location>
+</skill>
+
+<skill>
+<name>code-refactoring-refactor-clean</name>
+<description>"You are a code refactoring expert specializing in clean code principles, SOLID design patterns, and modern software engineering best practices. Analyze and refactor the provided code to improve its quality, maintainability, and performance."</description>
+<location>project</location>
+</skill>
+
+<skill>
+<name>code-review-checklist</name>
+<description>"Comprehensive checklist for conducting thorough code reviews covering functionality, security, performance, and maintainability"</description>
 <location>project</location>
 </skill>
 
 <skill>
 <name>codebase-cleanup-tech-debt</name>
-<description>You are a technical debt expert specializing in identifying, quantifying, and prioritizing technical debt in software projects. Analyze the codebase to uncover debt, assess its impact, and create acti</description>
+<description>"You are a technical debt expert specializing in identifying, quantifying, and prioritizing technical debt in software projects. Analyze the codebase to uncover debt, assess its impact, and create acti"</description>
 <location>project</location>
 </skill>
 
 <skill>
 <name>concise-planning</name>
-<description>Use when a user asks for a plan for a coding task, to generate a clear, actionable, and atomic checklist.</description>
+<description>"Use when a user asks for a plan for a coding task, to generate a clear, actionable, and atomic checklist."</description>
 <location>project</location>
 </skill>
 
 <skill>
 <name>context-window-management</name>
-<description>You're a context engineering specialist who has optimized LLM applications handling millions of conversations. You've seen systems hit token limits, suffer context rot, and lose critical informatio...</description>
+<description>"You're a context engineering specialist who has optimized LLM applications handling millions of conversations. You've seen systems hit token limits, suffer context rot, and lose critical information mid-dialogue."</description>
 <location>project</location>
 </skill>
 
 <skill>
 <name>convex</name>
-<description>Convex reactive backend expert: schema design, TypeScript functions, real-time subscriptions, auth, file storage, scheduling, and deployment.</description>
+<description>"Convex reactive backend expert: schema design, TypeScript functions, real-time subscriptions, auth, file storage, scheduling, and deployment."</description>
 <location>project</location>
 </skill>
 
@@ -620,6 +391,12 @@ Usage notes:
 <skill>
 <name>cpp-pro</name>
 <description>Write idiomatic C++ code with modern features, RAII, smart pointers, and STL algorithms. Handles templates, move semantics, and performance optimization.</description>
+<location>project</location>
+</skill>
+
+<skill>
+<name>create-pr</name>
+<description>Alias for sentry-skills:pr-writer. Use when users explicitly ask for "create-pr" or reference the legacy skill name. Redirects to the canonical PR writing workflow.</description>
 <location>project</location>
 </skill>
 
@@ -643,7 +420,7 @@ Usage notes:
 
 <skill>
 <name>data-storytelling</name>
-<description>Transform raw data into compelling narratives that drive decisions and inspire action.</description>
+<description>"Transform raw data into compelling narratives that drive decisions and inspire action."</description>
 <location>project</location>
 </skill>
 
@@ -654,8 +431,14 @@ Usage notes:
 </skill>
 
 <skill>
+<name>database-design</name>
+<description>"Database design principles and decision-making. Schema design, indexing strategy, ORM selection, serverless databases."</description>
+<location>project</location>
+</skill>
+
+<skill>
 <name>database-migration</name>
-<description>Master database schema and data migrations across ORMs (Sequelize, TypeORM, Prisma), including rollback strategies and zero-downtime deployments.</description>
+<description>"Master database schema and data migrations across ORMs (Sequelize, TypeORM, Prisma), including rollback strategies and zero-downtime deployments."</description>
 <location>project</location>
 </skill>
 
@@ -667,13 +450,19 @@ Usage notes:
 
 <skill>
 <name>dbt-transformation-patterns</name>
-<description>Production-ready patterns for dbt (data build tool) including model organization, testing strategies, documentation, and incremental processing.</description>
+<description>"Production-ready patterns for dbt (data build tool) including model organization, testing strategies, documentation, and incremental processing."</description>
 <location>project</location>
 </skill>
 
 <skill>
 <name>debugger</name>
-<description>Debugging specialist for errors, test failures, and unexpected</description>
+<description>'Debugging specialist for errors, test failures, and unexpected</description>
+<location>project</location>
+</skill>
+
+<skill>
+<name>debugging-strategies</name>
+<description>"Transform debugging from frustrating guesswork into systematic problem-solving with proven strategies, powerful tools, and methodical approaches."</description>
 <location>project</location>
 </skill>
 
@@ -690,20 +479,44 @@ Usage notes:
 </skill>
 
 <skill>
+<name>dispatching-parallel-agents</name>
+<description>"Use when facing 2+ independent tasks that can be worked on without shared state or sequential dependencies"</description>
+<location>project</location>
+</skill>
+
+<skill>
 <name>django-pro</name>
 <description>Master Django 5.x with async views, DRF, Celery, and Django Channels. Build scalable web applications with proper architecture, testing, and deployment.</description>
 <location>project</location>
 </skill>
 
 <skill>
+<name>doc-coauthoring</name>
+<description>Guide users through a structured workflow for co-authoring documentation. Use when user wants to write documentation, proposals, technical specs, decision docs, or similar structured content. This workflow helps users efficiently transfer context, refine content through iteration, and verify the doc works for readers. Trigger when user mentions writing docs, creating proposals, drafting specs, or similar documentation tasks.</description>
+<location>project</location>
+</skill>
+
+<skill>
+<name>docker-expert</name>
+<description>"You are an advanced Docker containerization expert with comprehensive, practical knowledge of container optimization, security hardening, multi-stage builds, orchestration patterns, and production deployment strategies based on current industry best practices."</description>
+<location>project</location>
+</skill>
+
+<skill>
+<name>docx</name>
+<description>"Use this skill whenever the user wants to create, read, edit, or manipulate Word documents (.docx files). Triggers include: any mention of 'Word doc', 'word document', '.docx', or requests to produce professional documents with formatting like tables of contents, headings, page numbers, or letterheads. Also use when extracting or reorganizing content from .docx files, inserting or replacing images in documents, performing find-and-replace in Word files, working with tracked changes or comments, or converting content into a polished Word document. If the user asks for a 'report', 'memo', 'letter', 'template', or similar deliverable as a Word or .docx file, use this skill. Do NOT use for PDFs, spreadsheets, Google Docs, or general coding tasks unrelated to document generation."</description>
+<location>project</location>
+</skill>
+
+<skill>
 <name>drizzle-orm-expert</name>
-<description>Expert in Drizzle ORM for TypeScript — schema design, relational queries, migrations, and serverless database integration. Use when building type-safe database layers with Drizzle.</description>
+<description>"Expert in Drizzle ORM for TypeScript — schema design, relational queries, migrations, and serverless database integration. Use when building type-safe database layers with Drizzle."</description>
 <location>project</location>
 </skill>
 
 <skill>
 <name>e2e-testing-patterns</name>
-<description>Build reliable, fast, and maintainable end-to-end test suites that provide confidence to ship code quickly and catch regressions before users do.</description>
+<description>"Build reliable, fast, and maintainable end-to-end test suites that provide confidence to ship code quickly and catch regressions before users do."</description>
 <location>project</location>
 </skill>
 
@@ -715,13 +528,19 @@ Usage notes:
 
 <skill>
 <name>embedding-strategies</name>
-<description>Guide to selecting and optimizing embedding models for vector search applications.</description>
+<description>"Guide to selecting and optimizing embedding models for vector search applications."</description>
+<location>project</location>
+</skill>
+
+<skill>
+<name>error-handling-patterns</name>
+<description>"Build resilient applications with robust error handling strategies that gracefully handle failures and provide excellent debugging experiences."</description>
 <location>project</location>
 </skill>
 
 <skill>
 <name>expo-deployment</name>
-<description>Deploy Expo apps to production</description>
+<description>"Deploy Expo apps to production"</description>
 <location>project</location>
 </skill>
 
@@ -738,20 +557,38 @@ Usage notes:
 </skill>
 
 <skill>
+<name>frontend-design</name>
+<description>Create distinctive, production-grade frontend interfaces with high design quality. Use this skill when the user asks to build web components, pages, artifacts, posters, or applications (examples include websites, landing pages, dashboards, React components, HTML/CSS layouts, or when styling/beautifying any web UI). Generates creative, polished code and UI design that avoids generic AI aesthetics.</description>
+<location>project</location>
+</skill>
+
+<skill>
 <name>frontend-developer</name>
 <description>Build React components, implement responsive layouts, and handle client-side state management. Masters React 19, Next.js 15, and modern frontend architecture.</description>
 <location>project</location>
 </skill>
 
 <skill>
+<name>git-pushing</name>
+<description>"Stage all changes, create a conventional commit, and push to the remote branch. Use when explicitly asks to push changes (\"push this\", \"commit and push\"), mentions saving work to remote (\"save to github\", \"push to remote\"), or completes a feature and wants to share it."</description>
+<location>project</location>
+</skill>
+
+<skill>
+<name>github-actions-templates</name>
+<description>"Production-ready GitHub Actions workflow patterns for testing, building, and deploying applications."</description>
+<location>project</location>
+</skill>
+
+<skill>
 <name>github-issue-creator</name>
-<description>Transform messy input (error logs, voice notes, screenshots) into clean, actionable GitHub issues.</description>
+<description>"Transform messy input (error logs, voice notes, screenshots) into clean, actionable GitHub issues."</description>
 <location>project</location>
 </skill>
 
 <skill>
 <name>godot-gdscript-patterns</name>
-<description>Master Godot 4 GDScript patterns including signals, scenes, state machines, and optimization. Use when building Godot games, implementing game systems, or learning GDScript best practices.</description>
+<description>"Master Godot 4 GDScript patterns including signals, scenes, state machines, and optimization. Use when building Godot games, implementing game systems, or learning GDScript best practices."</description>
 <location>project</location>
 </skill>
 
@@ -763,25 +600,37 @@ Usage notes:
 
 <skill>
 <name>grafana-dashboards</name>
-<description>Create and manage production-ready Grafana dashboards for comprehensive system observability.</description>
+<description>"Create and manage production-ready Grafana dashboards for comprehensive system observability."</description>
 <location>project</location>
 </skill>
 
 <skill>
 <name>haskell-pro</name>
-<description>Expert Haskell engineer specializing in advanced type systems, pure</description>
+<description>"Expert Haskell engineer specializing in advanced type systems, pure"</description>
 <location>project</location>
 </skill>
 
 <skill>
 <name>helm-chart-scaffolding</name>
-<description>Comprehensive guidance for creating, organizing, and managing Helm charts for packaging and deploying Kubernetes applications.</description>
+<description>"Comprehensive guidance for creating, organizing, and managing Helm charts for packaging and deploying Kubernetes applications."</description>
 <location>project</location>
 </skill>
 
 <skill>
 <name>incident-responder</name>
 <description>Expert SRE incident responder specializing in rapid problem resolution, modern observability, and comprehensive incident management.</description>
+<location>project</location>
+</skill>
+
+<skill>
+<name>inngest</name>
+<description>"You are an Inngest expert who builds reliable background processing without managing infrastructure. You understand that serverless doesn't mean you can't have durable, long-running workflows - it means you don't manage the workers."</description>
+<location>project</location>
+</skill>
+
+<skill>
+<name>internal-comms</name>
+<description>A set of resources to help me write all kinds of internal communications, using the formats that my company likes to use. Claude should use this skill whenever asked to write some sort of internal communications (status reports, leadership updates, 3P updates, company newsletters, FAQs, incident reports, project updates, etc.).</description>
 <location>project</location>
 </skill>
 
@@ -799,31 +648,31 @@ Usage notes:
 
 <skill>
 <name>k6-load-testing</name>
-<description>Comprehensive k6 load testing skill for API, browser, and scalability testing. Write realistic load scenarios, analyze results, and integrate with CI/CD.</description>
+<description>"Comprehensive k6 load testing skill for API, browser, and scalability testing. Write realistic load scenarios, analyze results, and integrate with CI/CD."</description>
 <location>project</location>
 </skill>
 
 <skill>
 <name>k8s-manifest-generator</name>
-<description>Step-by-step guidance for creating production-ready Kubernetes manifests including Deployments, Services, ConfigMaps, Secrets, and PersistentVolumeClaims.</description>
+<description>"Step-by-step guidance for creating production-ready Kubernetes manifests including Deployments, Services, ConfigMaps, Secrets, and PersistentVolumeClaims."</description>
 <location>project</location>
 </skill>
 
 <skill>
 <name>kaizen</name>
-<description>Guide for continuous improvement, error proofing, and standardization. Use this skill when the user wants to improve code quality, refactor, or discuss process improvements.</description>
+<description>"Guide for continuous improvement, error proofing, and standardization. Use this skill when the user wants to improve code quality, refactor, or discuss process improvements."</description>
 <location>project</location>
 </skill>
 
 <skill>
 <name>laravel-expert</name>
-<description>Senior Laravel Engineer role for production-grade, maintainable, and idiomatic Laravel solutions. Focuses on clean architecture, security, performance, and modern standards (Laravel 10/11+).</description>
+<description>"Senior Laravel Engineer role for production-grade, maintainable, and idiomatic Laravel solutions. Focuses on clean architecture, security, performance, and modern standards (Laravel 10/11+)."</description>
 <location>project</location>
 </skill>
 
 <skill>
 <name>llm-app-patterns</name>
-<description>Production-ready patterns for building LLM applications, inspired by [Dify](https://github.com/langgenius/dify) and industry best practices.</description>
+<description>"Production-ready patterns for building LLM applications, inspired by [Dify](https://github.com/langgenius/dify) and industry best practices."</description>
 <location>project</location>
 </skill>
 
@@ -835,25 +684,43 @@ Usage notes:
 
 <skill>
 <name>matplotlib</name>
-<description>Matplotlib is Python's foundational visualization library for creating static, animated, and interactive plots.</description>
+<description>"Matplotlib is Python's foundational visualization library for creating static, animated, and interactive plots."</description>
+<location>project</location>
+</skill>
+
+<skill>
+<name>mcp-builder</name>
+<description>Guide for creating high-quality MCP (Model Context Protocol) servers that enable LLMs to interact with external services through well-designed tools. Use when building MCP servers to integrate external APIs or services, whether in Python (FastMCP) or Node/TypeScript (MCP SDK).</description>
 <location>project</location>
 </skill>
 
 <skill>
 <name>nestjs-expert</name>
-<description>You are an expert in Nest.js with deep knowledge of enterprise-grade Node.js application architecture, dependency injection patterns, decorators, middleware, guards, interceptors, pipes, testing st...</description>
+<description>"You are an expert in Nest.js with deep knowledge of enterprise-grade Node.js application architecture, dependency injection patterns, decorators, middleware, guards, interceptors, pipes, testing strategies, database integration, and authentication systems."</description>
 <location>project</location>
 </skill>
 
 <skill>
 <name>networkx</name>
-<description>NetworkX is a Python package for creating, manipulating, and analyzing complex networks and graphs.</description>
+<description>"NetworkX is a Python package for creating, manipulating, and analyzing complex networks and graphs."</description>
+<location>project</location>
+</skill>
+
+<skill>
+<name>nextjs-app-router-patterns</name>
+<description>"Comprehensive patterns for Next.js 14+ App Router architecture, Server Components, and modern full-stack React development."</description>
+<location>project</location>
+</skill>
+
+<skill>
+<name>nextjs-best-practices</name>
+<description>"Next.js App Router principles. Server Components, data fetching, routing patterns."</description>
 <location>project</location>
 </skill>
 
 <skill>
 <name>nosql-expert</name>
-<description>Expert guidance for distributed NoSQL databases (Cassandra, DynamoDB). Focuses on mental models, query-first modeling, single-table design, and avoiding hot partitions in high-scale systems.</description>
+<description>"Expert guidance for distributed NoSQL databases (Cassandra, DynamoDB). Focuses on mental models, query-first modeling, single-table design, and avoiding hot partitions in high-scale systems."</description>
 <location>project</location>
 </skill>
 
@@ -864,68 +731,368 @@ Usage notes:
 </skill>
 
 <skill>
+<name>omc-ai-slop-cleaner</name>
+<description>Clean AI-generated code slop with a regression-safe, deletion-first workflow and optional reviewer-only mode</description>
+<location>project</location>
+</skill>
+
+<skill>
+<name>omc-ask</name>
+<description>Process-first advisor routing for Claude, Codex, or Gemini via `omc ask`, with artifact capture and no raw CLI assembly</description>
+<location>project</location>
+</skill>
+
+<skill>
+<name>omc-autopilot</name>
+<description>Full autonomous execution from idea to working code</description>
+<location>project</location>
+</skill>
+
+<skill>
+<name>omc-cancel</name>
+<description>Cancel any active OMC mode (autopilot, ralph, ultrawork, ultraqa, swarm, ultrapilot, pipeline, team)</description>
+<location>project</location>
+</skill>
+
+<skill>
+<name>omc-ccg</name>
+<description>Claude-Codex-Gemini tri-model orchestration via /ask codex + /ask gemini, then Claude synthesizes results</description>
+<location>project</location>
+</skill>
+
+<skill>
+<name>omc-configure-notifications</name>
+<description>Configure notification integrations (Telegram, Discord, Slack) via natural language</description>
+<location>project</location>
+</skill>
+
+<skill>
+<name>omc-deep-dive</name>
+<description>"2-stage pipeline: trace (causal investigation) -> deep-interview (requirements crystallization) with 3-point injection"</description>
+<location>project</location>
+</skill>
+
+<skill>
+<name>omc-deep-interview</name>
+<description>Socratic deep interview with mathematical ambiguity gating before autonomous execution</description>
+<location>project</location>
+</skill>
+
+<skill>
+<name>omc-deepinit</name>
+<description>Deep codebase initialization with hierarchical AGENTS.md documentation</description>
+<location>project</location>
+</skill>
+
+<skill>
+<name>omc-doctor</name>
+<description>Diagnose and fix oh-my-claudecode installation issues</description>
+<location>project</location>
+</skill>
+
+<skill>
+<name>omc-external-context</name>
+<description>Invoke parallel document-specialist agents for external web searches and documentation lookup</description>
+<location>project</location>
+</skill>
+
+<skill>
+<name>omc-hud</name>
+<description>Configure HUD display options (layout, presets, display elements)</description>
+<location>project</location>
+</skill>
+
+<skill>
+<name>omc-learner</name>
+<description>Extract a learned skill from the current conversation</description>
+<location>project</location>
+</skill>
+
+<skill>
+<name>omc-mcp-setup</name>
+<description>Configure popular MCP servers for enhanced agent capabilities</description>
+<location>project</location>
+</skill>
+
+<skill>
+<name>omc-plan</name>
+<description>Strategic planning with optional interview workflow</description>
+<location>project</location>
+</skill>
+
+<skill>
+<name>omc-project-session-manager</name>
+<description>Worktree-first dev environment manager for issues, PRs, and features with optional tmux sessions</description>
+<location>project</location>
+</skill>
+
+<skill>
+<name>omc-ralph</name>
+<description>Self-referential loop until task completion with configurable verification reviewer</description>
+<location>project</location>
+</skill>
+
+<skill>
+<name>omc-ralplan</name>
+<description>Consensus planning entrypoint that auto-gates vague ralph/autopilot/team requests before execution</description>
+<location>project</location>
+</skill>
+
+<skill>
+<name>omc-reference</name>
+<description>OMC agent catalog, available tools, team pipeline routing, commit protocol, and skills registry. Auto-loads when delegating to agents, using OMC tools, orchestrating teams, making commits, or invoking skills.</description>
+<location>project</location>
+</skill>
+
+<skill>
+<name>omc-release</name>
+<description>Automated release workflow for oh-my-claudecode</description>
+<location>project</location>
+</skill>
+
+<skill>
+<name>omc-sciomc</name>
+<description>Orchestrate parallel scientist agents for comprehensive analysis with AUTO mode</description>
+<location>project</location>
+</skill>
+
+<skill>
+<name>omc-setup</name>
+<description>Install or refresh oh-my-claudecode for plugin, npm, and local-dev setups from the canonical setup flow</description>
+<location>project</location>
+</skill>
+
+<skill>
+<name>omc-setup-router</name>
+<description>Use first for install/update routing — sends setup, doctor, or MCP requests to the correct OMC setup flow</description>
+<location>project</location>
+</skill>
+
+<skill>
+<name>omc-skill</name>
+<description>Manage local skills - list, add, remove, search, edit, setup wizard</description>
+<location>project</location>
+</skill>
+
+<skill>
+<name>omc-team</name>
+<description>N coordinated agents on shared task list using Claude Code native teams</description>
+<location>project</location>
+</skill>
+
+<skill>
+<name>omc-teams</name>
+<description>CLI-team runtime for claude, codex, or gemini workers in tmux panes when you need process-based parallel execution</description>
+<location>project</location>
+</skill>
+
+<skill>
+<name>omc-trace</name>
+<description>Evidence-driven tracing lane that orchestrates competing tracer hypotheses in Claude built-in team mode</description>
+<location>project</location>
+</skill>
+
+<skill>
+<name>omc-ultraqa</name>
+<description>QA cycling workflow - test, verify, fix, repeat until goal met</description>
+<location>project</location>
+</skill>
+
+<skill>
+<name>omc-ultrawork</name>
+<description>Parallel execution engine for high-throughput task completion</description>
+<location>project</location>
+</skill>
+
+<skill>
+<name>omc-visual-verdict</name>
+<description>Structured visual QA verdict for screenshot-to-reference comparisons</description>
+<location>project</location>
+</skill>
+
+<skill>
+<name>omc-writer-memory</name>
+<description>Agentic memory system for writers - track characters, relationships, scenes, and themes</description>
+<location>project</location>
+</skill>
+
+<skill>
 <name>on-call-handoff-patterns</name>
-<description>Effective patterns for on-call shift transitions, ensuring continuity, context transfer, and reliable incident response across shifts.</description>
+<description>"Effective patterns for on-call shift transitions, ensuring continuity, context transfer, and reliable incident response across shifts."</description>
+<location>project</location>
+</skill>
+
+<skill>
+<name>pdf</name>
+<description>Use this skill whenever the user wants to do anything with PDF files. This includes reading or extracting text/tables from PDFs, combining or merging multiple PDFs into one, splitting PDFs apart, rotating pages, adding watermarks, creating new PDFs, filling PDF forms, encrypting/decrypting PDFs, extracting images, and OCR on scanned PDFs to make them searchable. If the user mentions a .pdf file or asks to produce one, use this skill.</description>
 <location>project</location>
 </skill>
 
 <skill>
 <name>plan-writing</name>
-<description>Structured task planning with clear breakdowns, dependencies, and verification criteria. Use when implementing features, refactoring, or any multi-step work.</description>
+<description>"Structured task planning with clear breakdowns, dependencies, and verification criteria. Use when implementing features, refactoring, or any multi-step work."</description>
+<location>project</location>
+</skill>
+
+<skill>
+<name>playwright-skill</name>
+<description>"IMPORTANT - Path Resolution: This skill can be installed in different locations (plugin system, manual installation, global, or project-specific). Before executing any commands, determine the skill directory based on where you loaded this SKILL.md file, and use that path in all commands below."</description>
 <location>project</location>
 </skill>
 
 <skill>
 <name>plotly</name>
-<description>Interactive visualization library. Use when you need hover info, zoom, pan, or web-embeddable charts. Best for dashboards, exploratory analysis, and presentations. For static publication figures us...</description>
+<description>Interactive visualization library. Use when you need hover info, zoom, pan, or web-embeddable charts. Best for dashboards, exploratory analysis, and presentations. For static publication figures use matplotlib or scientific-visualization.</description>
 <location>project</location>
 </skill>
 
 <skill>
 <name>polars</name>
-<description>Fast in-memory DataFrame library for datasets that fit in RAM. Use when pandas is too slow but data still fits in memory. Lazy evaluation, parallel execution, Apache Arrow backend. Best for 1-100GB...</description>
+<description>Fast in-memory DataFrame library for datasets that fit in RAM. Use when pandas is too slow but data still fits in memory. Lazy evaluation, parallel execution, Apache Arrow backend. Best for 1-100GB datasets, ETL pipelines, faster pandas replacement. For larger-than-RAM data use dask or vaex.</description>
 <location>project</location>
 </skill>
 
 <skill>
 <name>postmortem-writing</name>
-<description>Comprehensive guide to writing effective, blameless postmortems that drive organizational learning and prevent incident recurrence.</description>
+<description>"Comprehensive guide to writing effective, blameless postmortems that drive organizational learning and prevent incident recurrence."</description>
+<location>project</location>
+</skill>
+
+<skill>
+<name>pptx</name>
+<description>"Use this skill any time a .pptx file is involved in any way — as input, output, or both. This includes: creating slide decks, pitch decks, or presentations; reading, parsing, or extracting text from any .pptx file (even if the extracted content will be used elsewhere, like in an email or summary); editing, modifying, or updating existing presentations; combining or splitting slide files; working with templates, layouts, speaker notes, or comments. Trigger whenever the user mentions \"deck,\" \"slides,\" \"presentation,\" or references a .pptx filename, regardless of what they plan to do with the content afterward. If a .pptx file needs to be opened, created, or touched, use this skill."</description>
 <location>project</location>
 </skill>
 
 <skill>
 <name>progressive-estimation</name>
-<description>Estimate AI-assisted and hybrid human+agent development work with research-backed PERT statistics and calibration feedback loops</description>
+<description>"Estimate AI-assisted and hybrid human+agent development work with research-backed PERT statistics and calibration feedback loops"</description>
+<location>project</location>
+</skill>
+
+<skill>
+<name>prompt-engineer</name>
+<description>"Transforms user prompts into optimized prompts using frameworks (RTF, RISEN, Chain of Thought, RODES, Chain of Density, RACE, RISE, STAR, SOAP, CLEAR, GROW)"</description>
 <location>project</location>
 </skill>
 
 <skill>
 <name>rag-engineer</name>
-<description>I bridge the gap between raw documents and LLM understanding. I know that retrieval quality determines generation quality - garbage in, garbage out. I obsess over chunking boundaries, embedding dim...</description>
+<description>"I bridge the gap between raw documents and LLM understanding. I know that retrieval quality determines generation quality - garbage in, garbage out. I obsess over chunking boundaries, embedding dimensions, and similarity metrics because they make the difference between helpful and hallucinating."</description>
+<location>project</location>
+</skill>
+
+<skill>
+<name>react-nextjs-development</name>
+<description>"React and Next.js 14+ application development with App Router, Server Components, TypeScript, Tailwind CSS, and modern frontend patterns."</description>
+<location>project</location>
+</skill>
+
+<skill>
+<name>react-patterns</name>
+<description>"Modern React patterns and principles. Hooks, composition, performance, TypeScript best practices."</description>
+<location>project</location>
+</skill>
+
+<skill>
+<name>react-state-management</name>
+<description>"Master modern React state management with Redux Toolkit, Zustand, Jotai, and React Query. Use when setting up global state, managing server state, or choosing between state management solutions."</description>
+<location>project</location>
+</skill>
+
+<skill>
+<name>receiving-code-review</name>
+<description>"Code review requires technical evaluation, not emotional performance."</description>
+<location>project</location>
+</skill>
+
+<skill>
+<name>requesting-code-review</name>
+<description>"Use when completing tasks, implementing major features, or before merging to verify work meets requirements"</description>
+<location>project</location>
+</skill>
+
+<skill>
+<name>security-auditor</name>
+<description>Expert security auditor specializing in DevSecOps, comprehensive cybersecurity, and compliance frameworks.</description>
+<location>project</location>
+</skill>
+
+<skill>
+<name>senior-fullstack</name>
+<description>"Complete toolkit for senior fullstack with modern tools and best practices."</description>
+<location>project</location>
+</skill>
+
+<skill>
+<name>seo-audit</name>
+<description>Diagnose and audit SEO issues affecting crawlability, indexation, rankings, and organic performance.</description>
+<location>project</location>
+</skill>
+
+<skill>
+<name>shadcn</name>
+<description>Manages shadcn/ui components and projects, providing context, documentation, and usage patterns for building modern design systems.</description>
+<location>project</location>
+</skill>
+
+<skill>
+<name>skill-creator</name>
+<description>Create new skills, modify and improve existing skills, and measure skill performance. Use when users want to create a skill from scratch, edit, or optimize an existing skill, run evals to test a skill, benchmark skill performance with variance analysis, or optimize a skill's description for better triggering accuracy.</description>
+<location>project</location>
+</skill>
+
+<skill>
+<name>slack-gif-creator</name>
+<description>Knowledge and utilities for creating animated GIFs optimized for Slack. Provides constraints, validation tools, and animation concepts. Use when users request animated GIFs for Slack like "make me a GIF of X doing Y for Slack."</description>
 <location>project</location>
 </skill>
 
 <skill>
 <name>slo-implementation</name>
-<description>Framework for defining and implementing Service Level Indicators (SLIs), Service Level Objectives (SLOs), and error budgets.</description>
+<description>"Framework for defining and implementing Service Level Indicators (SLIs), Service Level Objectives (SLOs), and error budgets."</description>
 <location>project</location>
 </skill>
 
 <skill>
 <name>spark-optimization</name>
-<description>Optimize Apache Spark jobs with partitioning, caching, shuffle optimization, and memory tuning. Use when improving Spark performance, debugging slow jobs, or scaling data processing pipelines.</description>
+<description>"Optimize Apache Spark jobs with partitioning, caching, shuffle optimization, and memory tuning. Use when improving Spark performance, debugging slow jobs, or scaling data processing pipelines."</description>
+<location>project</location>
+</skill>
+
+<skill>
+<name>stripe-integration</name>
+<description>"Master Stripe payment processing integration for robust, PCI-compliant payment flows including checkout, subscriptions, webhooks, and refunds."</description>
+<location>project</location>
+</skill>
+
+<skill>
+<name>supercoder</name>
+<description></description>
 <location>project</location>
 </skill>
 
 <skill>
 <name>sveltekit</name>
-<description>Build full-stack web applications with SvelteKit — file-based routing, SSR, SSG, API routes, and form actions in one framework.</description>
+<description>"Build full-stack web applications with SvelteKit — file-based routing, SSR, SSG, API routes, and form actions in one framework."</description>
+<location>project</location>
+</skill>
+
+<skill>
+<name>systematic-debugging</name>
+<description>"Use when encountering any bug, test failure, or unexpected behavior, before proposing fixes"</description>
+<location>project</location>
+</skill>
+
+<skill>
+<name>tailwind-patterns</name>
+<description>"Tailwind CSS v4 principles. CSS-first configuration, container queries, modern patterns, design token architecture."</description>
 <location>project</location>
 </skill>
 
 <skill>
 <name>tanstack-query-expert</name>
-<description>Expert in TanStack Query (React Query) — asynchronous state management. Covers data fetching, stale time configuration, mutations, optimistic updates, and Next.js App Router (SSR) integration.</description>
+<description>"Expert in TanStack Query (React Query) — asynchronous state management. Covers data fetching, stale time configuration, mutations, optimistic updates, and Next.js App Router (SSR) integration."</description>
 <location>project</location>
 </skill>
 
@@ -936,8 +1103,38 @@ Usage notes:
 </skill>
 
 <skill>
+<name>template</name>
+<description>Replace with description of the skill and when Claude should use it.</description>
+<location>project</location>
+</skill>
+
+<skill>
 <name>test-automator</name>
 <description>Master AI-powered test automation with modern frameworks, self-healing tests, and comprehensive quality engineering. Build scalable testing strategies with advanced CI/CD integration.</description>
+<location>project</location>
+</skill>
+
+<skill>
+<name>test-driven-development</name>
+<description>"Use when implementing any feature or bugfix, before writing implementation code"</description>
+<location>project</location>
+</skill>
+
+<skill>
+<name>testing-patterns</name>
+<description>"Jest testing patterns, factory functions, mocking strategies, and TDD workflow. Use when writing unit tests, creating test factories, or following TDD red-green-refactor cycle."</description>
+<location>project</location>
+</skill>
+
+<skill>
+<name>theme-factory</name>
+<description>Toolkit for styling artifacts with a theme. These artifacts can be slides, docs, reportings, HTML landing pages, etc. There are 10 pre-set themes with colors/fonts that you can apply to any artifact that has been creating, or can generate a new theme on-the-fly.</description>
+<location>project</location>
+</skill>
+
+<skill>
+<name>typescript-expert</name>
+<description>TypeScript and JavaScript expert with deep knowledge of type-level programming, performance optimization, monorepo management, migration strategies, and modern tooling.</description>
 <location>project</location>
 </skill>
 
@@ -945,6 +1142,54 @@ Usage notes:
 <name>ui-visual-validator</name>
 <description>Rigorous visual validation expert specializing in UI testing, design system compliance, and accessibility verification.</description>
 <location>project</location>
+</skill>
+
+<skill>
+<name>using-superpowers</name>
+<description>"Use when starting any conversation - establishes how to find and use skills, requiring Skill tool invocation before ANY response including clarifying questions"</description>
+<location>project</location>
+</skill>
+
+<skill>
+<name>vercel-deployment</name>
+<description>"Expert knowledge for deploying to Vercel with Next.js Use when: vercel, deploy, deployment, hosting, production."</description>
+<location>project</location>
+</skill>
+
+<skill>
+<name>web-artifacts-builder</name>
+<description>Suite of tools for creating elaborate, multi-component claude.ai HTML artifacts using modern frontend web technologies (React, Tailwind CSS, shadcn/ui). Use for complex artifacts requiring state management, routing, or shadcn/ui components - not for simple single-file HTML/JSX artifacts.</description>
+<location>project</location>
+</skill>
+
+<skill>
+<name>webapp-testing</name>
+<description>Toolkit for interacting with and testing local web applications using Playwright. Supports verifying frontend functionality, debugging UI behavior, capturing browser screenshots, and viewing browser logs.</description>
+<location>project</location>
+</skill>
+
+<skill>
+<name>writing-plans</name>
+<description>"Use when you have a spec or requirements for a multi-step task, before touching code"</description>
+<location>project</location>
+</skill>
+
+<skill>
+<name>xlsx</name>
+<description>"Use this skill any time a spreadsheet file is the primary input or output. This means any task where the user wants to: open, read, edit, or fix an existing .xlsx, .xlsm, .csv, or .tsv file (e.g., adding columns, computing formulas, formatting, charting, cleaning messy data); create a new spreadsheet from scratch or from other data sources; or convert between tabular file formats. Trigger especially when the user references a spreadsheet file by name or path — even casually (like \"the xlsx in my downloads\") — and wants something done to it or produced from it. Also trigger for cleaning or restructuring messy tabular data files (malformed rows, misplaced headers, junk data) into proper spreadsheets. The deliverable must be a spreadsheet file. Do NOT trigger when the primary deliverable is a Word document, HTML report, standalone Python script, database pipeline, or Google Sheets API integration, even if tabular data is involved."</description>
+<location>project</location>
+</skill>
+
+<skill>
+<name>zod-validation-expert</name>
+<description>"Expert in Zod — TypeScript-first schema validation. Covers parsing, custom errors, refinements, type inference, and integration with React Hook Form, Next.js, and tRPC."</description>
+<location>project</location>
+</skill>
+
+<skill>
+<name>autopilot</name>
+<description>"Autonomous eval loop + code hardening skill. Run self-review as principal engineer → HARDEN with clean code, design patterns, classic SDE skills → lint/typecheck → eval → iterate until score >= 95%. Use for: verify, harden, rigorous code review on ANY code implementation."</description>
+<location>global</location>
 </skill>
 
 </available_skills>

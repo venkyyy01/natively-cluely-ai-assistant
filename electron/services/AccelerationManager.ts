@@ -67,6 +67,7 @@ export class AccelerationManager {
       maxPrefetchPredictions: flags.maxPrefetchPredictions,
       maxMemoryMB: flags.maxCacheMemoryMB,
       budgetScheduler: this.runtimeBudgetScheduler,
+      classifierLane: this.runtimeBudgetScheduler,
     });
     this.aneProvider = new ANEEmbeddingProvider();
   }

@@ -35,6 +35,15 @@ export interface MacosVirtualDisplaySessionResponse {
   reason?: string;
 }
 
+export interface MacosVirtualDisplayHelperFaultEvent {
+  type: 'helper-fault';
+  sessionId: string;
+  reason: string;
+  failClosed: boolean;
+}
+
+export type MacosVirtualDisplayHelperEvent = MacosVirtualDisplayHelperFaultEvent;
+
 interface HelperRunRequest {
   command:
     | 'status'
@@ -63,6 +72,7 @@ interface MacosVirtualDisplayClientOptions {
   runHelper?: (request: HelperRunRequest) => Promise<HelperRunResult>;
   requestTimeoutMs?: number;
   helperEnv?: NodeJS.ProcessEnv;
+  eventHandler?: (event: MacosVirtualDisplayHelperEvent) => void;
 }
 
 export class MacosVirtualDisplayClient {
@@ -70,6 +80,7 @@ export class MacosVirtualDisplayClient {
   private readonly runHelper: (request: HelperRunRequest) => Promise<HelperRunResult>;
   private readonly requestTimeoutMs: number;
   private readonly helperEnv: NodeJS.ProcessEnv;
+  private eventHandler?: (event: MacosVirtualDisplayHelperEvent) => void;
   private serverProcess: ChildProcessWithoutNullStreams | null = null;
   private requestSequence = 0;
   private pending = new Map<string, { resolve: (result: HelperRunResult) => void; reject: (error: Error) => void; timeout: NodeJS.Timeout }>();
@@ -83,6 +94,11 @@ export class MacosVirtualDisplayClient {
     this.runHelper = options.runHelper ?? ((request) => this.runHelperProcess(request));
     this.requestTimeoutMs = options.requestTimeoutMs ?? 10000;
     this.helperEnv = options.helperEnv ?? process.env;
+    this.eventHandler = options.eventHandler;
+  }
+
+  setEventHandler(handler?: (event: MacosVirtualDisplayHelperEvent) => void): void {
+    this.eventHandler = handler;
   }
 
   async getStatus(): Promise<MacosVirtualDisplayStatus> {
@@ -264,7 +280,27 @@ export class MacosVirtualDisplayClient {
       this.stdoutBuffer = this.stdoutBuffer.slice(newlineIndex + 1);
       if (line) {
         try {
-          const envelope = JSON.parse(line) as { id?: string; ok: boolean; result?: unknown; error?: string };
+          const envelope = JSON.parse(line) as {
+            id?: string;
+            ok?: boolean;
+            result?: unknown;
+            error?: string;
+            event?: string;
+            sessionId?: string;
+            reason?: string;
+            failClosed?: boolean;
+          };
+          if (envelope.event === 'helper-fault' && typeof envelope.sessionId === 'string' && typeof envelope.reason === 'string') {
+            this.eventHandler?.({
+              type: 'helper-fault',
+              sessionId: envelope.sessionId,
+              reason: envelope.reason,
+              failClosed: envelope.failClosed !== false,
+            });
+            newlineIndex = this.stdoutBuffer.indexOf('\n');
+            continue;
+          }
+
           const pending = envelope.id ? this.pending.get(envelope.id) : undefined;
           if (envelope.id && this.expiredRequestIds.has(envelope.id)) {
             this.expiredRequestIds.delete(envelope.id);

@@ -231,6 +231,41 @@ test('MacosVirtualDisplayClient drops invalid JSON lines without killing pending
   assert.equal(resolved, false);
 });
 
+test('MacosVirtualDisplayClient routes helper fault events without disturbing pending requests', async () => {
+  const events: Array<{ type: string; sessionId: string; reason: string; failClosed: boolean }> = [];
+  const client = new MacosVirtualDisplayClient({
+    helperPath: '/tmp/helper',
+    eventHandler: (event) => {
+      events.push(event);
+    },
+  });
+
+  const internal = client as unknown as {
+    pending: Map<string, { resolve: (result: unknown) => void; reject: (error: Error) => void; timeout: NodeJS.Timeout }>;
+    stdoutBuffer: string;
+    flushServerResponses: () => void;
+  };
+
+  let resolved = false;
+  internal.pending.set('req-1', {
+    resolve: () => { resolved = true; },
+    reject: () => { resolved = true; },
+    timeout: setTimeout(() => undefined, 1000),
+  });
+
+  internal.stdoutBuffer = `${JSON.stringify({ event: 'helper-fault', sessionId: 'session-1', reason: 'stealth-heartbeat-missed', failClosed: true })}\n${JSON.stringify({ id: 'req-1', ok: true, result: { ready: true } })}\n`;
+  internal.flushServerResponses();
+
+  assert.deepEqual(events, [{
+    type: 'helper-fault',
+    sessionId: 'session-1',
+    reason: 'stealth-heartbeat-missed',
+    failClosed: true,
+  }]);
+  assert.equal(resolved, true);
+  assert.equal(internal.pending.size, 0);
+});
+
 test('MacosVirtualDisplayClient reports exhaustion after repeated respawns', () => {
   const client = new MacosVirtualDisplayClient({ helperPath: '/tmp/helper' });
   const internal = client as unknown as { respawnTimestamps: number[]; isExhausted: () => boolean };

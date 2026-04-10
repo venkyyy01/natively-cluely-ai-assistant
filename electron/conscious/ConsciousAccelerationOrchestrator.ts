@@ -6,6 +6,8 @@ import { detectQuestion } from './QuestionDetector';
 import { isOptimizationActive } from '../config/optimizations';
 import type { RuntimeBudgetScheduler } from '../runtime/RuntimeBudgetScheduler';
 
+type ClassifierLane = Pick<RuntimeBudgetScheduler, 'submit'>;
+
 interface SpeculativeAnswerEntry {
   key: string;
   query: string;
@@ -22,6 +24,7 @@ export interface ConsciousAccelerationOptions {
   maxPrefetchPredictions?: number;
   maxMemoryMB?: number;
   budgetScheduler?: Pick<RuntimeBudgetScheduler, 'shouldAdmitSpeculation'>;
+  classifierLane?: ClassifierLane;
 }
 
 export class ConsciousAccelerationOrchestrator {
@@ -38,8 +41,10 @@ export class ConsciousAccelerationOrchestrator {
   private speculativeAnswerEntries = new Map<string, SpeculativeAnswerEntry>();
   private speculativeGeneration = 0;
   private lastPauseDecision: { action: PauseAction; confidence: PauseConfidence; at: number } | null = null;
+  private readonly classifierLane?: ClassifierLane;
 
   constructor(options: ConsciousAccelerationOptions = {}) {
+    this.classifierLane = options.classifierLane;
     this.prefetcher = new PredictivePrefetcher({
       maxPrefetchPredictions: options.maxPrefetchPredictions,
       maxMemoryMB: options.maxMemoryMB,
@@ -48,6 +53,24 @@ export class ConsciousAccelerationOrchestrator {
     this.pauseDetector = new PauseDetector();
     this.pauseThresholdTuner = new PauseThresholdTuner(this.pauseDetector.getConfig());
     this.pauseDetector.setActionHandler((action: PauseAction) => {
+      const run = async (): Promise<void> => {
+        await this.handlePauseAction(action);
+      };
+
+      if (this.classifierLane) {
+        void this.classifierLane
+          .submit('semantic', run)
+          .catch((error: unknown) => {
+            console.warn('[ConsciousAccelerationOrchestrator] Semantic classifier lane rejected pause action:', error);
+          });
+        return;
+      }
+
+      void run();
+    });
+  }
+
+  private async handlePauseAction(action: PauseAction): Promise<void> {
       if (!this.enabled) {
         return;
       }
@@ -68,7 +91,6 @@ export class ConsciousAccelerationOrchestrator {
       if ((action === 'hard_speculate' || action === 'commit') && isOptimizationActive('usePrefetching')) {
         void this.maybeStartSpeculativeAnswer();
       }
-    });
   }
 
   setEnabled(enabled: boolean): void {
@@ -157,6 +179,17 @@ export class ConsciousAccelerationOrchestrator {
 
     this.noteTranscriptText('interviewer', transcript);
     this.prefetchTriggeredForCurrentPause = false;
+    if (this.classifierLane) {
+      void this.classifierLane
+        .submit('semantic', async () => {
+          this.pauseDetector.onSpeechEnded();
+        })
+        .catch((error: unknown) => {
+          console.warn('[ConsciousAccelerationOrchestrator] Semantic classifier lane rejected silence evaluation:', error);
+        });
+      return;
+    }
+
     this.pauseDetector.onSpeechEnded();
   }
 

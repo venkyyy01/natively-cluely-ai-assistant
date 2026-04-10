@@ -5,7 +5,10 @@ import type {
   MacosLayer3HealthReport,
   MacosLayer3ResponseEnvelope,
 } from './separateProjectContracts';
-import { MacosVirtualDisplayClient } from './MacosVirtualDisplayClient';
+import {
+  MacosVirtualDisplayClient,
+  type MacosVirtualDisplayHelperEvent,
+} from './MacosVirtualDisplayClient';
 import { resolveMacosVirtualDisplayHelperPath } from './macosVirtualDisplayIntegration';
 
 export interface NativeStealthFrameRegion {
@@ -55,6 +58,7 @@ export interface NativeStealthBridgeClient {
   heartbeat?: (sessionId: string) => Promise<MacosLayer3ResponseEnvelope<MacosLayer3HealthReport>>;
   getHealth: (sessionId: string) => Promise<MacosLayer3ResponseEnvelope<MacosLayer3HealthReport>>;
   teardownSession: (sessionId: string) => Promise<MacosLayer3ResponseEnvelope<{ released: boolean }>>;
+  setEventHandler?: (handler?: (event: MacosVirtualDisplayHelperEvent) => void) => void;
   dispose?: () => void;
 }
 
@@ -77,6 +81,7 @@ export class NativeStealthBridge {
   private readonly sessionIdFactory: () => string;
   private readonly logger: Pick<Console, 'warn'>;
   private readonly onHelperDisconnect?: (reason: string) => void | Promise<void>;
+  private onHelperFault?: (reason: string) => void | Promise<void>;
   private activeSessionId: string | null = null;
   private activeSurfaceId: string | null = null;
   private lastArmRequest: NativeStealthArmRequest | null = null;
@@ -98,6 +103,13 @@ export class NativeStealthBridge {
 
   getActiveSessionId(): string | null {
     return this.activeSessionId;
+  }
+
+  setHelperFaultHandler(handler?: (reason: string) => void | Promise<void>): void {
+    this.onHelperFault = handler;
+    this.client?.setEventHandler?.((event) => {
+      this.handleHelperEvent(event);
+    });
   }
 
   async arm(request: NativeStealthArmRequest = {}): Promise<NativeStealthArmResult> {
@@ -285,6 +297,7 @@ export class NativeStealthBridge {
     this.activeSurfaceId = null;
     this.restartAttemptedForActiveSession = false;
     this.lastDisconnectReason = null;
+    this.client?.setEventHandler?.(undefined);
     this.client?.dispose?.();
     this.client = null;
   }
@@ -300,6 +313,9 @@ export class NativeStealthBridge {
     }
 
     this.client = this.clientFactory(helperPath);
+    this.client.setEventHandler?.((event) => {
+      this.handleHelperEvent(event);
+    });
     return this.client;
   }
 
@@ -350,6 +366,16 @@ export class NativeStealthBridge {
   private notifyHelperDisconnect(reason: string): void {
     Promise.resolve(this.onHelperDisconnect?.(reason)).catch((error) => {
       this.logger.warn('[NativeStealthBridge] Failed to notify helper disconnect:', error);
+    });
+  }
+
+  private handleHelperEvent(event: MacosVirtualDisplayHelperEvent): void {
+    if (event.type !== 'helper-fault' || !this.activeSessionId || event.sessionId !== this.activeSessionId) {
+      return;
+    }
+
+    Promise.resolve(this.onHelperFault?.(event.reason)).catch((error) => {
+      this.logger.warn('[NativeStealthBridge] Failed to notify helper fault:', error);
     });
   }
 

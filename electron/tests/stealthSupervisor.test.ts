@@ -340,6 +340,48 @@ test('StealthSupervisor transitions to FAULT when native heartbeat reports unhea
   assert.deepEqual(faultReasons, ['stealth heartbeat missed']);
 });
 
+test('StealthSupervisor fails closed when the native helper proactively reports a fault', async () => {
+  const calls: boolean[] = [];
+  const faultReasons: string[] = [];
+  const bus = createBus();
+  let helperFaultHandler: ((reason: string) => void | Promise<void>) | undefined;
+
+  bus.subscribe('stealth:fault', async (event) => {
+    faultReasons.push(event.reason);
+  });
+
+  const supervisor = new StealthSupervisor(
+    {
+      async setEnabled(enabled: boolean) {
+        calls.push(enabled);
+      },
+      isEnabled: () => calls[calls.length - 1] ?? false,
+      verifyStealthState: () => true,
+    },
+    bus,
+    {
+      nativeBridge: {
+        arm: async () => ({ connected: true, sessionId: 'session-proactive-fault', surfaceId: 'surface-proactive-fault' }),
+        heartbeat: async () => ({ connected: true, healthy: true }),
+        fault: async () => {},
+        setHelperFaultHandler(handler: ((reason: string) => void | Promise<void>) | undefined) {
+          helperFaultHandler = handler;
+        },
+      } as unknown as import('../stealth/NativeStealthBridge').NativeStealthBridge,
+      heartbeatIntervalMs: 0,
+    },
+  );
+
+  await supervisor.start();
+  await supervisor.setEnabled(true);
+  await helperFaultHandler?.('stealth-heartbeat-missed');
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(supervisor.getStealthState(), 'FAULT');
+  assert.deepEqual(calls, [true, false]);
+  assert.deepEqual(faultReasons, ['stealth-heartbeat-missed']);
+});
+
 test('StealthSupervisor falls back to Electron-only stealth when native helper is unavailable', async () => {
   const calls: boolean[] = [];
   const bus = createBus();
