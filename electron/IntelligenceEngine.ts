@@ -544,10 +544,13 @@ export class IntelligenceEngine extends EventEmitter {
             const interimQuestion = lastInterim?.text?.trim() || '';
             const baseQuestion = question || interimQuestion || this.session.getLastInterviewerTurn() || '';
             const resolvedQuestion = baseQuestion;
-            const knowledgeOrchestrator = this.llmHelper.getKnowledgeOrchestrator?.();
-            const knowledgeStatus = knowledgeOrchestrator?.getStatus?.();
-            const profileData = knowledgeOrchestrator?.getProfileData?.();
-            const capability = typeof (this.llmHelper as any).getProviderCapabilityClass === 'function'
+const knowledgeOrchestrator = this.llmHelper.getKnowledgeOrchestrator?.();
+const knowledgeStatus = knowledgeOrchestrator?.getStatus?.();
+const profileData = knowledgeOrchestrator?.getProfileData?.();
+if (this.session.isConsciousModeEnabled() && !profileData) {
+console.warn('[ConsciousMode] Semantic memory disabled: no resume/profile data loaded. Upload a resume to enable fact-based context enrichment.');
+}
+const capability = typeof (this.llmHelper as any).getProviderCapabilityClass === 'function'
                 ? (this.llmHelper as any).getProviderCapabilityClass()
                 : 'buffered';
             const accelerationManager = getActiveAccelerationManager();

@@ -110,8 +110,11 @@ export class ConsciousPreparationCoordinator {
     }
 
     const contextAssemblyStart = Date.now();
-    this.semanticFactStore.seedFromProfileData(input.profileData);
-    const retrievalPack = this.retrievalOrchestrator.buildPack({
+this.semanticFactStore.seedFromProfileData(input.profileData);
+if (!input.profileData && this.session.isConsciousModeEnabled()) {
+console.warn('[ConsciousPreparation] No profile data available for semantic fact enrichment. Conscious mode responses will lack personalized context.');
+}
+const retrievalPack = this.retrievalOrchestrator.buildPack({
       question: input.lastInterviewerTurn || input.resolvedQuestion,
       lastSeconds: input.temporalWindowSeconds,
     });
