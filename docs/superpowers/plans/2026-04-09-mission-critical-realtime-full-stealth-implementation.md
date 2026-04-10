@@ -1,6 +1,6 @@
 # Mission-Critical Realtime + Full Stealth Implementation Plan
 
-> **For agentic workers:** implement this plan in order, keep steps small, and preserve the hard invariants defined below. Use checkbox (`- [ ]`) syntax for tracking. Every intermediate commit must build, pass existing tests, and keep the app shippable. Use the feature flag `ENABLE_SUPERVISOR_RUNTIME` to gate new paths during migration.
+> **For agentic workers:** implement this plan in order, keep steps small, and preserve the hard invariants defined below. Use checkbox (`- [ ]`) syntax for tracking. Every intermediate commit must build, pass existing tests, and keep the app shippable. The migration-flag guidance below is historical context; the final coordinator cutover has now landed in this branch.
 
 **Goal:** Make the app consistently fast, accurate, and dependable in critical realtime sessions on Apple Silicon M2 Max while enforcing full stealth as a binary invariant whenever invisible mode is enabled.
 
@@ -12,9 +12,9 @@
 
 ## Status Snapshot
 
-- Completed and verified in this branch: Workstream 0, Workstream 1, Workstream 2 Part A, Workstream 2 Part B Step 1 through Step 6, Workstream 3 Step 1 through Step 8, Workstream 4 Step 1 through Step 8, Workstream 5 Step 1 through Step 5, Workstream 6 Step 1 through Step 8, and Workstream 7 Step 1 through Step 5 (with the remaining shipped-renderer Playwright path explicitly deferred). Focused runtime verification for proactive helper-fault callbacks, classifier-lane routing, multi-scenario soak gating, and lifecycle coverage now passes in this branch (`tsc -p electron/tsconfig.json` plus targeted `nativeStealthBridge`, `stealthSupervisor`, `macosVirtualDisplayClient`, `aneClassifierLane`, `faultInjection`, `missionCriticalSoak`, and `activeRendererLifecycle` tests).
+- Implemented and verified in this branch: Workstream 0, Workstream 1, Workstream 2 Part A, Workstream 2 Part B Step 1 through Step 6, Workstream 3 Step 1 through Step 8, Workstream 4 Step 1 through Step 8, Workstream 5 Step 1 through Step 5, Workstream 6 Step 1 through Step 8, and Workstream 7 Step 1 through Step 5. The final coordinator-only cutover is now in place: `ENABLE_SUPERVISOR_RUNTIME` is removed, `AppState` public meeting/stealth APIs always route through the coordinator/supervisors, and the release gate enforces benchmark-derived SLO checks against current measurements while optionally running packaged-helper launch validation when a signed app bundle path is supplied. Focused runtime verification for proactive helper-fault callbacks, classifier-lane routing, multi-scenario soak gating, lifecycle coverage, release-gate validation, and the coordinator cutover now passes in this branch (`tsc -p electron/tsconfig.json` plus targeted `runtimeCoordinator`, `warmStandbyMeetingLifecycle`, `ipcContracts`, `accelerationModeIntegration`, `answerLatencyTracker`, `baselineBenchmarks`, `nativeStealthBridge`, `stealthSupervisor`, `macosVirtualDisplayClient`, `aneClassifierLane`, `faultInjection`, `missionCriticalSoak`, `activeRendererLifecycle`, and `scripts/tests/run-release-gate.test.js`).
 - In progress: hardware-backed soak/fault evidence collection and shipped-renderer Playwright execution for release proof.
-- Remaining release-only work: M2 Max SLO proof, executing packaged helper launch probes on signed artifacts, and final removal of the legacy `AppState` orchestration path / feature flag.
+- Remaining release-only work: M2 Max SLO proof, executing packaged helper launch probes on signed artifacts, and shipped-renderer Playwright on packaged artifacts.
 
 ---
 
@@ -43,12 +43,12 @@ Hard numbers that gate release. Soak and CI must enforce these.
 
 ## Feature Flag & Rollback Strategy
 
-All new runtime paths are gated behind `ENABLE_SUPERVISOR_RUNTIME` in `electron/config/optimizations.ts`. When the flag is `false`, the app runs the current `AppState`-based path unchanged.
+Historical migration note: the runtime was introduced behind `ENABLE_SUPERVISOR_RUNTIME` during the strangler rollout. That migration flag has now been removed in this branch and the coordinator path is authoritative.
 
-- **Phase 1 (Workstreams 0–1):** Flag defaults to `false`. New supervisors exist but delegate to `AppState`. Tests exercise both paths.
-- **Phase 2 (Workstreams 2–5):** Flag defaults to `true` for dev builds, `false` for production.
-- **Phase 3 (Workstreams 6–9):** Flag defaults to `true` everywhere. Old `AppState` orchestration methods are deprecated.
-- **Rollback:** If a regression is detected, set the flag to `false`. No code revert needed. The old path must remain functional until the flag is removed in the final cleanup pass.
+- **Phase 1 (Workstreams 0–1):** Flag defaulted to `false`. New supervisors existed but delegated to `AppState`. Tests exercised both paths.
+- **Phase 2 (Workstreams 2–5):** Flag defaulted to `true` for dev builds, `false` for production.
+- **Phase 3 (Workstreams 6–9):** Flag defaulted to `true` everywhere while the old `AppState` orchestration methods were deprecated.
+- **Final cleanup:** The flag and split path are now removed. Rollback requires reverting the cutover commit rather than toggling runtime configuration.
 
 ---
 
@@ -535,8 +535,8 @@ Concrete degrade sequence when budget pressure is `critical`:
 
 - Existing 89 test files continue to pass throughout migration.
 - Tests that mock `AppState` gain a parallel path that mocks the supervisor interface.
-- Each workstream includes its own test files. Tests run in CI with both `ENABLE_SUPERVISOR_RUNTIME=true` and `false`.
-- When all workstreams land and soak passes, the flag is removed and `AppState` orchestration methods are deleted in a final cleanup PR.
+- Each workstream includes its own test files. During migration, tests ran in CI with both `ENABLE_SUPERVISOR_RUNTIME=true` and `false`; the branch now validates only the coordinator-owned path.
+- The final cleanup pass has landed in this branch: the flag is removed and the public `AppState` meeting/stealth orchestration path now delegates directly into the coordinator/supervisors.
 
 ## Definition Of Done
 
@@ -548,4 +548,4 @@ Concrete degrade sequence when budget pressure is `critical`:
 - [x] Invisible mode is only ever `OFF`, `ARMING`, `FULL_STEALTH`, or `FAULT`.
 - [x] Native XPC stealth helper arms, heartbeats, and faults correctly. Falls back to Electron-only when absent.
 - [ ] 2-hour soak and fault injection tests pass on M2 Max with all SLOs met.
-- [ ] Feature flag removed; old `AppState` orchestration deleted.
+- [x] Feature flag removed; old `AppState` orchestration deleted.

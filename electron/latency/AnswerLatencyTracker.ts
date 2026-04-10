@@ -148,14 +148,18 @@ export class AnswerLatencyTracker {
     const startedAt = snapshot.marks.startedAt;
     const firstVisibleAnswer = snapshot.marks.firstVisibleAnswer;
     if (startedAt !== undefined && firstVisibleAnswer !== undefined) {
-      getPerformanceInstrumentation().recordDuration('answer.firstVisible', startedAt, {
+      getPerformanceInstrumentation().recordMeasurement(
+        'answer.firstVisible',
+        firstVisibleAnswer - startedAt,
+        {
         requestId: snapshot.requestId,
         route: snapshot.route,
         capability: snapshot.capability,
         attemptedRoute: snapshot.attemptedRoute,
         fallbackOccurred: snapshot.fallbackOccurred ?? false,
         transcriptRevision: snapshot.transcriptRevision,
-      });
+        },
+      );
     }
 
     return this.createSnapshotCopy(snapshot);

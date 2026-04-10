@@ -9,7 +9,6 @@ type RegisterRagHandlersDeps = {
 };
 
 type RuntimeCoordinatorLike = {
-  shouldManageLifecycle?: () => boolean;
   getSupervisor?: (name: string) => unknown;
 };
 
@@ -50,7 +49,7 @@ function ragError(code: string, message: string): RagIpcFailure {
 function getRagManager(appState: AppState): ReturnType<AppState['getRAGManager']> {
   if ('getCoordinator' in appState && typeof appState.getCoordinator === 'function') {
     const coordinator = appState.getCoordinator() as RuntimeCoordinatorLike;
-    if (coordinator.shouldManageLifecycle?.() && typeof coordinator.getSupervisor === 'function') {
+    if (typeof coordinator.getSupervisor === 'function') {
       const supervisor = coordinator.getSupervisor('inference') as InferenceSupervisorLike;
       if (typeof supervisor?.getRAGManager === 'function') {
         return supervisor.getRAGManager() as ReturnType<AppState['getRAGManager']>;

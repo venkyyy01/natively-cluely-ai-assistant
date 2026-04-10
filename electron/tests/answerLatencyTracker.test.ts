@@ -1,8 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { IntelligenceEngine } from '../IntelligenceEngine';
 import { SessionTracker } from '../SessionTracker';
 import { AnswerLatencyTracker } from '../latency/AnswerLatencyTracker';
+import {
+  PerformanceInstrumentation,
+  setPerformanceInstrumentationForTesting,
+} from '../runtime/PerformanceInstrumentation';
 
 class TestIntelligenceEngine extends IntelligenceEngine {
   protected override async classifyIntentForRoute(_lastInterviewerTurn: string | null, _preparedTranscript: string, _assistantResponseCount: number) {
@@ -198,6 +205,36 @@ test('AnswerLatencyTracker covers all capability classes and uses firstVisibleAn
   assert.equal(nonStreamingSnapshot?.marks.firstVisibleAnswer !== undefined, true);
   assert.equal(nonStreamingSnapshot?.firstVisibleAnswer, nonStreamingSnapshot?.marks.firstVisibleAnswer);
   assert.equal(nonStreamingSnapshot?.profileEnrichmentState, undefined);
+});
+
+test('AnswerLatencyTracker records answer.firstVisible from first visibility, not completion time', async () => {
+  const benchmarkDir = await mkdtemp(join(tmpdir(), 'answer-latency-metric-'));
+  const originalDateNow = Date.now;
+  let now = 2_000;
+  Date.now = () => now;
+  const instrumentation = new PerformanceInstrumentation({
+    logDirectory: benchmarkDir,
+    now: () => now,
+  });
+  setPerformanceInstrumentationForTesting(instrumentation);
+
+  try {
+    const tracker = new AnswerLatencyTracker();
+    const requestId = tracker.start('fast_standard_answer', 'streaming');
+
+    now += 42;
+    tracker.markFirstStreamingUpdate(requestId);
+    now += 300;
+    tracker.complete(requestId);
+
+    await instrumentation.flush();
+    const firstVisibleMetric = (await instrumentation.readAll()).find((event) => event.metric === 'answer.firstVisible');
+    assert.equal(firstVisibleMetric?.durationMs, 42);
+  } finally {
+    Date.now = originalDateNow;
+    setPerformanceInstrumentationForTesting(null);
+    await rm(benchmarkDir, { recursive: true, force: true });
+  }
 });
 
 test('IntelligenceEngine records conscious route provider start metadata', async () => {

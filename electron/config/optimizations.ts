@@ -7,9 +7,6 @@ export interface OptimizationFlags {
   /** Master toggle - enables/disables all acceleration features */
   accelerationEnabled: boolean;
 
-  /** Supervisor runtime migration flag */
-  enableSupervisorRuntime: boolean;
-
   /** Phase 1: Quick Wins */
   usePromptCompiler: boolean;
   useStreamManager: boolean;
@@ -78,7 +75,6 @@ export const DEFAULT_LANE_BUDGETS: Record<RuntimeLane, LaneBudgetConfig> = {
 /** Default optimization flags - acceleration enabled for realtime context reliability */
 export const DEFAULT_OPTIMIZATION_FLAGS: OptimizationFlags = {
   accelerationEnabled: true,
-  enableSupervisorRuntime: false,
 
   // Phase 1
   usePromptCompiler: true,
@@ -150,12 +146,8 @@ export function setOptimizationFlagsForTesting(flags: Partial<OptimizationFlags>
  * Check if a specific optimization is active
  * Returns false if master toggle is off, regardless of individual flag
  */
-export function isOptimizationActive(key: keyof Omit<OptimizationFlags, 'accelerationEnabled' | 'enableSupervisorRuntime' | 'workerThreadCount' | 'maxCacheMemoryMB' | 'semanticCacheThreshold' | 'maxPrefetchPredictions' | 'laneBudgets'>): boolean {
+export function isOptimizationActive(key: keyof Omit<OptimizationFlags, 'accelerationEnabled' | 'workerThreadCount' | 'maxCacheMemoryMB' | 'semanticCacheThreshold' | 'maxPrefetchPredictions' | 'laneBudgets'>): boolean {
   return currentFlags.accelerationEnabled && currentFlags[key];
-}
-
-export function isSupervisorRuntimeEnabled(): boolean {
-  return currentFlags.enableSupervisorRuntime;
 }
 
 /**

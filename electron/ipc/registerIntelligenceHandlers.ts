@@ -7,7 +7,6 @@ type RegisterIntelligenceHandlersDeps = {
 };
 
 type RuntimeCoordinatorLike = {
-  shouldManageLifecycle?: () => boolean;
   getSupervisor?: (name: string) => unknown;
 };
 
@@ -30,7 +29,7 @@ function getInferenceSupervisor(appState: AppState): InferenceSupervisorLike | n
   }
 
   const coordinator = appState.getCoordinator() as RuntimeCoordinatorLike;
-  if (!coordinator.shouldManageLifecycle?.() || typeof coordinator.getSupervisor !== 'function') {
+  if (typeof coordinator.getSupervisor !== 'function') {
     return null;
   }
 

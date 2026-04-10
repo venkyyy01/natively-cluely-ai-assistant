@@ -28,7 +28,6 @@ type ScreenshotFacadeLike = {
 };
 
 type RuntimeCoordinatorLike = {
-  shouldManageLifecycle?: () => boolean;
   getSupervisor?: (name: string) => unknown;
 };
 
@@ -105,7 +104,7 @@ export function initializeIpcHandlers(appState: AppState): void {
         return llmHelper as ReturnType<typeof appState.processingHelper.getLLMHelper>;
       }
     } catch {
-      // Fall back to the legacy AppState path until the full migration lands.
+      // Fall back to the direct AppState path if supervisor lookup fails.
     }
 
     return appState.processingHelper.getLLMHelper();
@@ -114,7 +113,7 @@ export function initializeIpcHandlers(appState: AppState): void {
   const getRuntimeCoordinator = (): RuntimeCoordinatorLike | null => {
     try {
       const coordinator = (appState as { getCoordinator?: () => unknown }).getCoordinator?.() as RuntimeCoordinatorLike | undefined;
-      if (!coordinator?.shouldManageLifecycle?.() || typeof coordinator.getSupervisor !== 'function') {
+      if (typeof coordinator?.getSupervisor !== 'function') {
         return null;
       }
 

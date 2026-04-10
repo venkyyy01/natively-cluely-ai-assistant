@@ -29,15 +29,14 @@ test('RuntimeCoordinator reuses warm standby resources across rapid activation c
 
   const coordinator = new RuntimeCoordinator(
     {
-      async startMeetingLegacy() {
+      async prepareMeetingActivation() {
         calls.push('delegate:start');
       },
-      async endMeetingLegacy() {
+      async finalizeMeetingDeactivation() {
         calls.push('delegate:stop');
       },
     },
     {
-      featureFlagReader: () => true,
       managedSupervisorNames: [],
       warmStandbyManager: warmStandby,
       logger: { warn() {} },
@@ -86,15 +85,14 @@ test('RuntimeCoordinator remains stable across 10 rapid warm activation cycles',
 
   const coordinator = new RuntimeCoordinator(
     {
-      async startMeetingLegacy() {
+      async prepareMeetingActivation() {
         starts += 1;
       },
-      async endMeetingLegacy() {
+      async finalizeMeetingDeactivation() {
         stops += 1;
       },
     },
     {
-      featureFlagReader: () => true,
       managedSupervisorNames: [],
       warmStandbyManager: warmStandby,
       logger: { warn() {} },

@@ -9,13 +9,13 @@
 - No reduced or partial stealth state while invisible mode is enabled
 - Audio continuity, transcript integrity, and full stealth outrank answer richness and background work
 - Meeting start should bind onto warm resources, not reconstruct the runtime
-- **Every intermediate commit is shippable.** Feature flag `ENABLE_SUPERVISOR_RUNTIME` gates new paths.
+- **Every intermediate commit is shippable.** The original migration used `ENABLE_SUPERVISOR_RUNTIME`; that flag has now been removed and the coordinator path is authoritative.
 
 ## Delivery Status Snapshot
 
-- Done in this branch: `BL-001`, `BL-002`, `RT-001` through `RT-009`, `STL-001`, `STL-002`, `STL-003`, `WS-001`, `WS-002`, `WS-003`, `ACC-001`, `ACC-002`, `ACC-003`, `ACC-004`, `ACC-005`, `ACC-006`, `INF-001` through `INF-005`, `MEM-001`, `MEM-002`, `MEM-003`, `MEM-004`, `NSH-001`, `NSH-002`, `NSH-003`, `NSH-004`, `NSH-006`, `VAL-001`, `VAL-002`, `VAL-003`, `VAL-004`, plus the soak-procedure doc requested by `VAL-001`.
-- In progress: hardware-backed release-proof runs for the VAL tickets.
-- Remaining release-only proof: execute packaged-app helper launch probes on signed artifacts, collect M2 Max SLO/soak evidence, and finish the final legacy-runtime cleanup that removes the migration flag.
+- Implemented in this branch: `BL-001`, `BL-002`, `RT-001` through `RT-009`, `STL-001`, `STL-002`, `STL-003`, `WS-001`, `WS-002`, `WS-003`, `ACC-001`, `ACC-002`, `ACC-003`, `ACC-004`, `ACC-005`, `ACC-006`, `INF-001` through `INF-005`, `MEM-001`, `MEM-002`, `MEM-003`, `MEM-004`, `NSH-001` through `NSH-006`, and `VAL-004`, plus the soak-procedure doc requested by `VAL-001`. The final coordinator-only cutover is included here: the migration flag is gone and the public meeting/stealth APIs now always route through the coordinator/supervisors.
+- Partially implemented / release-proof pending: `VAL-001`, `VAL-002`, and `VAL-003` are automated in-branch but still need hardware-backed or shipped-artifact proof, and `NSH-005` still needs an on-device signed-artifact launch run.
+- Remaining release-only proof: execute packaged-app helper launch probes on signed artifacts, collect M2 Max SLO/soak evidence, and run the shipped-renderer Playwright path on packaged artifacts.
 
 ---
 
@@ -236,7 +236,7 @@
 
 **Goal:** Retarget IPC handlers from `appState.someMethod()` to supervisor APIs.
 
-**Status:** Done in this branch. The meeting lifecycle handlers (`start-meeting`, `end-meeting`), meeting helper handlers (`start-audio-test`, `stop-audio-test`, `set-recognition-language`, `seed-demo`), stealth/inference-backed settings handlers, settings-window handlers, email/intelligence/RAG/profile handlers, the full window-control surface, and the remaining root IPC paths for screenshots, STT runtime controls, inference sync/re-init, theme, model selector, and native audio status now all prefer coordinator/supervisor or facade APIs, while legacy fallback is preserved when the supervisor runtime is disabled.
+**Status:** Done in this branch. The meeting lifecycle handlers now route through the public `AppState` meeting APIs, which in turn delegate directly into the coordinator. Meeting helper handlers (`start-audio-test`, `stop-audio-test`, `set-recognition-language`, `seed-demo`), inference-backed settings handlers, settings-window handlers, email/intelligence/RAG/profile handlers, the full window-control surface, and the remaining root IPC paths for screenshots, STT runtime controls, inference sync/re-init, theme, model selector, and native audio status now all prefer coordinator/supervisor or facade APIs. The migration-only `shouldManageLifecycle` gate is no longer part of production behavior.
 
 **Primary Files**
 - `electron/ipcHandlers.ts`
@@ -255,14 +255,16 @@
 
 **Goal:** Add `ENABLE_SUPERVISOR_RUNTIME` flag to `optimizations.ts`.
 
+**Status:** Historical migration step completed and superseded in this branch. The rollout originally landed behind `ENABLE_SUPERVISOR_RUNTIME`, and the final cleanup now removes that flag and the split legacy/coordinator runtime path entirely.
+
 **Primary Files**
 - `electron/config/optimizations.ts`
 - `electron/main.ts`
 
 **Acceptance Criteria**
-- When flag is `false`, all behavior routes through `AppState` (zero change from today).
-- When flag is `true`, `RuntimeCoordinator` is active.
-- All tests pass with flag on and off.
+- Migration phase: when flag is `false`, behavior routes through `AppState`; when `true`, `RuntimeCoordinator` is active.
+- Final cleanup phase: the flag is removed, `RuntimeCoordinator` is always active, and the legacy public runtime split no longer exists.
+- Relevant runtime and IPC tests pass after the cutover.
 
 ---
 
@@ -838,6 +840,8 @@
 **Problem:** Release must be blocked when SLOs fail.
 
 **Goal:** CI-integrated release gate script.
+
+**Status:** Implemented in this branch. `test:release-gate` now runs soak, fault injection, active-renderer lifecycle coverage, a fresh benchmark pass with explicit SLO/regression checks against current measurements, and it can optionally execute packaged-helper launch validation when a signed app bundle path is provided. Hardware-backed proof and shipped-artifact execution still remain pre-release work.
 
 **Primary Files**
 - `package.json` (`test:release-gate` script)

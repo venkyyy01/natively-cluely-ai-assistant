@@ -26,14 +26,7 @@ type SettingsFacadeLike = {
 };
 
 type RuntimeCoordinatorLike = {
-  shouldManageLifecycle?: () => boolean;
   getSupervisor?: (name: string) => unknown;
-};
-
-type StealthSupervisorLike = {
-  getState?: () => string;
-  start?: () => Promise<void>;
-  setEnabled?: (enabled: boolean) => Promise<void>;
 };
 
 type InferenceSupervisorLike = {
@@ -96,20 +89,11 @@ function getSettingsFacade(appState: AppState): SettingsFacadeLike | null {
   return null;
 }
 
-function getStealthSupervisor(appState: AppState): StealthSupervisorLike | null {
-  const coordinator = getRuntimeCoordinator(appState);
-  if (!coordinator?.shouldManageLifecycle?.() || typeof coordinator.getSupervisor !== 'function') {
-    return null;
-  }
-
-  return coordinator.getSupervisor('stealth') as StealthSupervisorLike;
-}
-
 function getInferenceLlmHelper(appState: AppState): {
   setAiResponseLanguage?: (language: string) => void;
 } | null {
   const coordinator = getRuntimeCoordinator(appState);
-  if (coordinator?.shouldManageLifecycle?.() && typeof coordinator.getSupervisor === 'function') {
+  if (typeof coordinator?.getSupervisor === 'function') {
     const supervisor = coordinator.getSupervisor('inference') as InferenceSupervisorLike;
     const llmHelper = supervisor?.getLLMHelper?.();
     if (llmHelper) {
@@ -183,13 +167,7 @@ export function registerSettingsHandlers({ appState, safeHandle, safeHandleValid
 
   safeHandleValidated('set-undetectable', (args) => [parseIpcInput(ipcSchemas.booleanFlag, args[0], 'set-undetectable')] as const, async (_event, state) => {
     try {
-      const stealthSupervisor = getStealthSupervisor(appState);
-      if (stealthSupervisor && typeof stealthSupervisor.setEnabled === 'function') {
-        if (stealthSupervisor.getState?.() === 'idle' && typeof stealthSupervisor.start === 'function') {
-          await stealthSupervisor.start();
-        }
-        await stealthSupervisor.setEnabled(state);
-      } else if ('setUndetectableAsync' in appState && typeof appState.setUndetectableAsync === 'function') {
+      if ('setUndetectableAsync' in appState && typeof appState.setUndetectableAsync === 'function') {
         await appState.setUndetectableAsync(state);
       } else {
         appState.setUndetectable(state);

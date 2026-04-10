@@ -57,10 +57,18 @@ export class PerformanceInstrumentation {
     startedAt: number,
     metadata?: Record<string, unknown>,
   ): void {
+    this.recordMeasurement(metric, this.now() - startedAt, metadata);
+  }
+
+  recordMeasurement(
+    metric: string,
+    durationMs: number,
+    metadata?: Record<string, unknown>,
+  ): void {
     this.enqueueWrite({
       metric,
       recordedAt: this.now(),
-      durationMs: Math.max(0, this.now() - startedAt),
+      durationMs: Math.max(0, durationMs),
       metadata,
     });
   }

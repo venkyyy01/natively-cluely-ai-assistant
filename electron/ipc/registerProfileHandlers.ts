@@ -10,7 +10,6 @@ type RegisterProfileHandlersDeps = {
 };
 
 type RuntimeCoordinatorLike = {
-  shouldManageLifecycle?: () => boolean;
   getSupervisor?: (name: string) => unknown;
 };
 
@@ -51,7 +50,7 @@ function profileError(code: string, message: string): ProfileIpcFailure {
 function getKnowledgeOrchestrator(appState: AppState): ReturnType<AppState['getKnowledgeOrchestrator']> {
   if ('getCoordinator' in appState && typeof appState.getCoordinator === 'function') {
     const coordinator = appState.getCoordinator() as RuntimeCoordinatorLike;
-    if (coordinator.shouldManageLifecycle?.() && typeof coordinator.getSupervisor === 'function') {
+    if (typeof coordinator.getSupervisor === 'function') {
       const supervisor = coordinator.getSupervisor('inference') as InferenceSupervisorLike;
       if (typeof supervisor?.getKnowledgeOrchestrator === 'function') {
         return supervisor.getKnowledgeOrchestrator() as ReturnType<AppState['getKnowledgeOrchestrator']>;

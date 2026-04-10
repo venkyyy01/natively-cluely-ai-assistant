@@ -4,7 +4,6 @@ import {
   setOptimizationFlags,
   isOptimizationActive,
   DEFAULT_OPTIMIZATION_FLAGS,
-  isSupervisorRuntimeEnabled,
 } from '../config/optimizations';
 
 describe('Acceleration Mode Integration', () => {
@@ -46,12 +45,10 @@ describe('Acceleration Mode Integration', () => {
     assert.strictEqual(isOptimizationActive('useStreamManager'), false);
     assert.strictEqual(isOptimizationActive('useEnhancedCache'), true);
   });
-
-  it('should keep supervisor runtime disabled by default until explicitly enabled', () => {
+  it('should preserve defaults when resetting optimization flags', () => {
     setOptimizationFlags(DEFAULT_OPTIMIZATION_FLAGS);
-    assert.strictEqual(isSupervisorRuntimeEnabled(), false);
-
-    setOptimizationFlags({ enableSupervisorRuntime: true });
-    assert.strictEqual(isSupervisorRuntimeEnabled(), true);
+    assert.strictEqual(isOptimizationActive('usePromptCompiler'), true);
+    assert.strictEqual(isOptimizationActive('useStreamManager'), true);
+    assert.strictEqual(isOptimizationActive('useEnhancedCache'), true);
   });
 });

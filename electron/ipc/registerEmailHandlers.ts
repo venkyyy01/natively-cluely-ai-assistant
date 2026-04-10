@@ -9,7 +9,6 @@ type RegisterEmailHandlersDeps = {
 };
 
 type RuntimeCoordinatorLike = {
-  shouldManageLifecycle?: () => boolean;
   getSupervisor?: (name: string) => unknown;
 };
 
@@ -38,7 +37,7 @@ function getInferenceLlmHelper(appState: AppState): {
     ? (appState.getCoordinator() as RuntimeCoordinatorLike)
     : null;
 
-  if (coordinator?.shouldManageLifecycle?.() && typeof coordinator.getSupervisor === 'function') {
+  if (typeof coordinator?.getSupervisor === 'function') {
     const supervisor = coordinator.getSupervisor('inference') as InferenceSupervisorLike;
     const llmHelper = supervisor?.getLLMHelper?.();
     if (llmHelper) {

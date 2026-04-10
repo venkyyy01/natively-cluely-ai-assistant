@@ -1029,26 +1029,16 @@ test('settings state handlers prefer SettingsFacade when available', async () =>
   });
 });
 
-test('meeting handlers prefer RuntimeCoordinator lifecycle methods when supervisor runtime is enabled', async () => {
+test('meeting handlers route lifecycle through AppState meeting APIs', async () => {
   const modulePath = require.resolve('../ipc/registerMeetingHandlers');
   delete require.cache[modulePath];
   const { registerMeetingHandlers } = await import('../ipc/registerMeetingHandlers');
 
   const registry = createHandlerRegistry();
   const calls: Array<{ type: string; payload?: unknown }> = [];
-  const coordinator = {
-    shouldManageLifecycle: () => true,
-    activate: async (metadata?: unknown) => {
-      calls.push({ type: 'activate', payload: metadata });
-    },
-    deactivate: async () => {
-      calls.push({ type: 'deactivate' });
-    },
-  };
   const appState = {
-    getCoordinator: () => coordinator,
-    startMeeting: async (_metadata?: unknown) => {
-      calls.push({ type: 'startMeeting' });
+    startMeeting: async (metadata?: unknown) => {
+      calls.push({ type: 'startMeeting', payload: metadata });
     },
     endMeeting: async () => {
       calls.push({ type: 'endMeeting' });
@@ -1070,8 +1060,8 @@ test('meeting handlers prefer RuntimeCoordinator lifecycle methods when supervis
   });
 
   assert.deepEqual(calls, [
-    { type: 'activate', payload: metadata },
-    { type: 'deactivate' },
+    { type: 'startMeeting', payload: metadata },
+    { type: 'endMeeting' },
   ]);
 });
 
@@ -1166,7 +1156,7 @@ test('meeting handlers prefer audio, stt, and inference supervisors for auxiliar
   });
 });
 
-test('settings handlers prefer StealthSupervisor when supervisor runtime is enabled', async () => {
+test('settings handlers route stealth toggles through AppState', async () => {
   await withPatchedModules({
     electron: {
       app: {
@@ -1190,30 +1180,14 @@ test('settings handlers prefer StealthSupervisor when supervisor runtime is enab
     const { registerSettingsHandlers } = await import('../ipc/registerSettingsHandlers');
     const registry = createHandlerRegistry();
     const calls: string[] = [];
-    const stealthSupervisor = {
-      getState: () => 'idle',
-      start: async () => {
-        calls.push('start');
-      },
-      setEnabled: async (enabled: boolean) => {
-        calls.push(`setEnabled:${enabled}`);
-      },
-    };
     const appState = {
       processingHelper: { getLLMHelper: () => ({ setAiResponseLanguage: () => {} }) },
       settingsWindowHelper: { toggleWindow: () => {}, closeWindow: () => {} },
-      getCoordinator: () => ({
-        shouldManageLifecycle: () => true,
-        getSupervisor: (name: string) => {
-          assert.equal(name, 'stealth');
-          return stealthSupervisor;
-        },
-      }),
       setUndetectable: () => {
         calls.push('legacy:setUndetectable');
       },
-      setUndetectableAsync: async () => {
-        calls.push('legacy:setUndetectableAsync');
+      setUndetectableAsync: async (enabled: boolean) => {
+        calls.push(`setUndetectableAsync:${enabled}`);
       },
       getUndetectable: () => true,
       setDisguise: () => {},
@@ -1230,7 +1204,7 @@ test('settings handlers prefer StealthSupervisor when supervisor runtime is enab
       success: true,
       data: { enabled: true },
     });
-    assert.deepEqual(calls, ['start', 'setEnabled:true']);
+    assert.deepEqual(calls, ['setUndetectableAsync:true']);
   });
 });
 

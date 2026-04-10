@@ -3,20 +3,19 @@ import assert from 'node:assert/strict';
 
 import { RuntimeCoordinator } from '../runtime/RuntimeCoordinator';
 
-test('RuntimeCoordinator activates and deactivates through the legacy delegate and emits lifecycle events', async () => {
+test('RuntimeCoordinator activates and deactivates through the lifecycle delegate and emits lifecycle events', async () => {
   const delegateCalls: string[] = [];
   const lifecycleEvents: string[] = [];
   const coordinator = new RuntimeCoordinator(
     {
-      async startMeetingLegacy() {
+      async prepareMeetingActivation() {
         delegateCalls.push('start');
       },
-      async endMeetingLegacy() {
+      async finalizeMeetingDeactivation() {
         delegateCalls.push('stop');
       },
     },
     {
-      featureFlagReader: () => true,
       logger: { warn() {} },
       managedSupervisorNames: [],
     },
@@ -43,11 +42,10 @@ test('RuntimeCoordinator activates and deactivates through the legacy delegate a
 test('RuntimeCoordinator rejects invalid activation transitions', async () => {
   const coordinator = new RuntimeCoordinator(
     {
-      async startMeetingLegacy() {},
-      async endMeetingLegacy() {},
+      async prepareMeetingActivation() {},
+      async finalizeMeetingDeactivation() {},
     },
     {
-      featureFlagReader: () => true,
       logger: { warn() {} },
       managedSupervisorNames: [],
     },
@@ -57,17 +55,16 @@ test('RuntimeCoordinator rejects invalid activation transitions', async () => {
   await assert.rejects(() => coordinator.activate(), /Cannot activate meeting while runtime is active/);
 });
 
-test('RuntimeCoordinator resets to idle when legacy activation fails', async () => {
+test('RuntimeCoordinator resets to idle when activation preparation fails', async () => {
   const lifecycleEvents: string[] = [];
   const coordinator = new RuntimeCoordinator(
     {
-      async startMeetingLegacy() {
+      async prepareMeetingActivation() {
         throw new Error('activation failed');
       },
-      async endMeetingLegacy() {},
+      async finalizeMeetingDeactivation() {},
     },
     {
-      featureFlagReader: () => true,
       logger: { warn() {} },
       managedSupervisorNames: [],
     },
@@ -85,48 +82,18 @@ test('RuntimeCoordinator resets to idle when legacy activation fails', async () 
   ]);
 });
 
-test('RuntimeCoordinator exposes the feature gate state', () => {
-  const disabledCoordinator = new RuntimeCoordinator(
-    {
-      async startMeetingLegacy() {},
-      async endMeetingLegacy() {},
-    },
-    {
-      featureFlagReader: () => false,
-      logger: { warn() {} },
-      managedSupervisorNames: [],
-    },
-  );
-
-  const enabledCoordinator = new RuntimeCoordinator(
-    {
-      async startMeetingLegacy() {},
-      async endMeetingLegacy() {},
-    },
-    {
-      featureFlagReader: () => true,
-      logger: { warn() {} },
-      managedSupervisorNames: [],
-    },
-  );
-
-  assert.equal(disabledCoordinator.shouldManageLifecycle(), false);
-  assert.equal(enabledCoordinator.shouldManageLifecycle(), true);
-});
-
 test('RuntimeCoordinator manages configured supervisors during activate/deactivate', async () => {
   const calls: string[] = [];
   const coordinator = new RuntimeCoordinator(
     {
-      async startMeetingLegacy(_metadata, mode) {
-        calls.push(`delegate:start:${mode}`);
+      async prepareMeetingActivation() {
+        calls.push('delegate:start');
       },
-      async endMeetingLegacy(mode) {
-        calls.push(`delegate:stop:${mode}`);
+      async finalizeMeetingDeactivation() {
+        calls.push('delegate:stop');
       },
     },
     {
-      featureFlagReader: () => true,
       logger: { warn() {} },
       managedSupervisorNames: ['recovery', 'audio', 'stt'],
     },
@@ -151,14 +118,14 @@ test('RuntimeCoordinator manages configured supervisors during activate/deactiva
   await coordinator.deactivate();
 
   assert.deepEqual(calls, [
-    'delegate:start:coordinator',
+    'delegate:start',
     'start:recovery',
     'start:audio',
     'start:stt',
     'stop:stt',
     'stop:audio',
     'stop:recovery',
-    'delegate:stop:coordinator',
+    'delegate:stop',
   ]);
 });
 
@@ -166,17 +133,14 @@ test('RuntimeCoordinator default lifecycle includes inference lane', async () =>
   const calls: string[] = [];
   const coordinator = new RuntimeCoordinator(
     {
-      async startMeetingLegacy(_metadata, mode) {
-        calls.push(`delegate:start:${mode}`);
+      async prepareMeetingActivation() {
+        calls.push('delegate:start');
       },
-      async endMeetingLegacy(mode) {
-        calls.push(`delegate:stop:${mode}`);
+      async finalizeMeetingDeactivation() {
+        calls.push('delegate:stop');
       },
     },
-    {
-      featureFlagReader: () => true,
-      logger: { warn() {} },
-    },
+    { logger: { warn() {} } },
   );
 
   for (const name of ['recovery', 'audio', 'stt', 'inference'] as const) {
@@ -198,7 +162,7 @@ test('RuntimeCoordinator default lifecycle includes inference lane', async () =>
   await coordinator.deactivate();
 
   assert.deepEqual(calls, [
-    'delegate:start:coordinator',
+    'delegate:start',
     'start:recovery',
     'start:audio',
     'start:stt',
@@ -207,7 +171,7 @@ test('RuntimeCoordinator default lifecycle includes inference lane', async () =>
     'stop:stt',
     'stop:audio',
     'stop:recovery',
-    'delegate:stop:coordinator',
+    'delegate:stop',
   ]);
 });
 
@@ -215,11 +179,10 @@ test('RuntimeCoordinator starts supervisors in order and stops them in reverse o
   const calls: string[] = [];
   const coordinator = new RuntimeCoordinator(
     {
-      async startMeetingLegacy() {},
-      async endMeetingLegacy() {},
+      async prepareMeetingActivation() {},
+      async finalizeMeetingDeactivation() {},
     },
     {
-      featureFlagReader: () => true,
       logger: { warn() {} },
       managedSupervisorNames: [],
     },
@@ -259,11 +222,10 @@ test('RuntimeCoordinator rolls back already-started supervisors when startup fai
   const calls: string[] = [];
   const coordinator = new RuntimeCoordinator(
     {
-      async startMeetingLegacy() {},
-      async endMeetingLegacy() {},
+      async prepareMeetingActivation() {},
+      async finalizeMeetingDeactivation() {},
     },
     {
-      featureFlagReader: () => true,
       logger: { warn() {} },
       managedSupervisorNames: [],
     },
@@ -338,15 +300,14 @@ test('RuntimeCoordinator supports restarting an individual supervisor lane witho
   const calls: string[] = [];
   const coordinator = new RuntimeCoordinator(
     {
-      async startMeetingLegacy(_metadata, mode) {
-        calls.push(`delegate:start:${mode}`);
+      async prepareMeetingActivation() {
+        calls.push('delegate:start');
       },
-      async endMeetingLegacy(mode) {
-        calls.push(`delegate:stop:${mode}`);
+      async finalizeMeetingDeactivation() {
+        calls.push('delegate:stop');
       },
     },
     {
-      featureFlagReader: () => true,
       logger: { warn() {} },
       managedSupervisorNames: ['audio', 'stt'],
     },
@@ -377,14 +338,14 @@ test('RuntimeCoordinator supports restarting an individual supervisor lane witho
   await coordinator.deactivate();
 
   assert.deepEqual(calls, [
-    'delegate:start:coordinator',
+    'delegate:start',
     'start:audio',
     'start:stt',
     'stop:stt',
     'start:stt',
     'stop:stt',
     'stop:audio',
-    'delegate:stop:coordinator',
+    'delegate:stop',
   ]);
 });
 
@@ -398,11 +359,10 @@ test('RuntimeCoordinator ignores duplicate deactivate requests while stopping an
 
   const coordinator = new RuntimeCoordinator(
     {
-      async startMeetingLegacy() {},
-      async endMeetingLegacy() {},
+      async prepareMeetingActivation() {},
+      async finalizeMeetingDeactivation() {},
     },
     {
-      featureFlagReader: () => true,
       logger: {
         warn(message) {
           warnings.push(String(message));
@@ -444,11 +404,10 @@ test('RuntimeCoordinator bus events include a stable meeting id for startup tran
   const events: Array<{ type: string; meetingId?: string }> = [];
   const coordinator = new RuntimeCoordinator(
     {
-      async startMeetingLegacy() {},
-      async endMeetingLegacy() {},
+      async prepareMeetingActivation() {},
+      async finalizeMeetingDeactivation() {},
     },
     {
-      featureFlagReader: () => true,
       logger: { warn() {} },
       managedSupervisorNames: [],
     },

@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto"
 import path from "path"
 import fs from "fs"
 import fsPromises from "fs/promises"
-import { isSupervisorRuntimeEnabled, syncOptimizationFlagsFromSettings } from "./config/optimizations"
+import { syncOptimizationFlagsFromSettings } from "./config/optimizations"
 import { AudioSupervisor } from "./runtime/AudioSupervisor"
 import { SttSupervisor } from "./runtime/SttSupervisor"
 import { InferenceSupervisor } from "./runtime/InferenceSupervisor"
@@ -15,7 +15,7 @@ import { SettingsFacade } from "./runtime/SettingsFacade"
 import { ScreenshotFacade } from "./runtime/ScreenshotFacade"
 import { AudioFacade } from "./runtime/AudioFacade"
 import { getPerformanceInstrumentation, type PerformanceInstrumentation } from "./runtime/PerformanceInstrumentation"
-import { RuntimeCoordinator, type RuntimeOwnershipMode } from "./runtime/RuntimeCoordinator"
+import { RuntimeCoordinator } from "./runtime/RuntimeCoordinator"
 import { StealthManager } from "./stealth/StealthManager"
 import { createMacosVirtualDisplayCoordinator, resolveMacosVirtualDisplayHelperPath } from "./stealth/macosVirtualDisplayIntegration"
 import { NativeStealthBridge } from "./stealth/NativeStealthBridge"
@@ -518,11 +518,11 @@ this.performanceInstrumentation = getPerformanceInstrumentation()
 this.runtimeCoordinator = new RuntimeCoordinator(this)
 this.bindRuntimeCoordinatorEvents()
 this.windowHelper.setStealthRuntimeHeartbeatListener(() => {
-  if (!isSupervisorRuntimeEnabled()) {
-    return
+  try {
+    this.runtimeCoordinator.getSupervisor<StealthSupervisor>('stealth').noteRuntimeHeartbeat()
+  } catch (error) {
+    console.warn('[Stealth] Ignoring runtime heartbeat before supervisor registration:', error)
   }
-
-  this.runtimeCoordinator.getSupervisor<StealthSupervisor>('stealth').noteRuntimeHeartbeat()
 })
 
 this.sttReconnector = new STTReconnector(async (speaker) => {
@@ -1817,31 +1817,26 @@ try {
     const startedAt = Date.now()
 
     try {
-      if (isSupervisorRuntimeEnabled()) {
-        await this.runtimeCoordinator.activate(metadata)
-      } else {
-        await this.startMeetingLegacy(metadata)
-      }
+      await this.runtimeCoordinator.activate(metadata)
 
       this.performanceInstrumentation.recordDuration('meeting.activation', startedAt, {
-        runtime: isSupervisorRuntimeEnabled() ? 'coordinator' : 'legacy',
+        runtime: 'coordinator',
       })
     } catch (error) {
       this.performanceInstrumentation.recordEvent('meeting.activation.failed', {
-        runtime: isSupervisorRuntimeEnabled() ? 'coordinator' : 'legacy',
+        runtime: 'coordinator',
         error: error instanceof Error ? error.message : String(error),
       })
       throw error
     }
   }
 
-  public async startMeetingLegacy(metadata?: any, runtimeMode: RuntimeOwnershipMode = 'legacy'): Promise<void> {
+  public async prepareMeetingActivation(metadata?: any): Promise<void> {
     console.log('[Main] Starting Meeting...', metadata);
     this.audioRecoveryAttempts = 0;
     this.audioRecoveryBackoffMs = 5000;
     this.startAbortController = new AbortController();
     const { signal } = this.startAbortController;
-    const coordinatorManagedRuntime = runtimeMode === 'coordinator'
 
     const normalizeDeviceId = (value: unknown): string | undefined => {
       if (typeof value !== 'string') {
@@ -1961,15 +1956,6 @@ try {
               return
             }
 
-            if (!coordinatorManagedRuntime) {
-              this.setupSystemAudioPipeline();
-              this.googleSTT?.start();
-              this.googleSTT_User?.start();
-              this.systemAudioCapture?.start();
-              this.microphoneCapture?.start();
-              this.scheduleAudioPipelineHealthCheck();
-            }
-
             if (this.ragManager) {
               try {
                 this.ragManager.startLiveIndexing('live-meeting-current');
@@ -1978,19 +1964,12 @@ try {
               }
             }
 
-            if (!coordinatorManagedRuntime) {
-              this.setNativeAudioConnected(true);
-            }
             this.meetingLifecycleState = 'active'
-            console.log('[Main] Audio pipeline started successfully.');
-            
-            if (!coordinatorManagedRuntime && this.currentMeetingId) {
-              this.checkpointer?.start(this.currentMeetingId);
-            }
-            
+            console.log('[Main] Meeting activation prepared successfully.');
+
             resolve()
           } catch (err) {
-            console.error('[Main] Error initializing audio pipeline:', err);
+            console.error('[Main] Error preparing meeting activation:', err);
             this.setNativeAudioConnected(false);
             this.broadcast('meeting-audio-error', (err as Error).message || 'Audio pipeline failed to start');
             this.isMeetingActive = false;
@@ -2017,25 +1996,21 @@ try {
     const startedAt = Date.now()
 
     try {
-      if (isSupervisorRuntimeEnabled()) {
-        await this.runtimeCoordinator.deactivate()
-      } else {
-        await this.endMeetingLegacy()
-      }
+      await this.runtimeCoordinator.deactivate()
 
       this.performanceInstrumentation.recordDuration('meeting.deactivation', startedAt, {
-        runtime: isSupervisorRuntimeEnabled() ? 'coordinator' : 'legacy',
+        runtime: 'coordinator',
       })
     } catch (error) {
       this.performanceInstrumentation.recordEvent('meeting.deactivation.failed', {
-        runtime: isSupervisorRuntimeEnabled() ? 'coordinator' : 'legacy',
+        runtime: 'coordinator',
         error: error instanceof Error ? error.message : String(error),
       })
       throw error
     }
   }
 
-  public async endMeetingLegacy(runtimeMode: RuntimeOwnershipMode = 'legacy'): Promise<void> {
+  public async finalizeMeetingDeactivation(): Promise<void> {
     console.log('[Main] Ending Meeting...');
     this.startAbortController?.abort();
     this.startAbortController = null;
@@ -2055,75 +2030,7 @@ try {
     });
 
     this.sttReconnector?.stopAll();
-    if (runtimeMode === 'coordinator') {
-      this.checkpointer?.stop()
-    } else {
-      this.checkpointer?.stop();
-
-      // 3. Stop System Audio
-      try {
-        this.systemAudioCapture?.removeAllListeners();
-        this.systemAudioCapture?.stop();
-        if (typeof this.systemAudioCapture?.destroy === 'function') {
-          this.systemAudioCapture.destroy();
-        }
-        this.systemAudioCapture = null;
-      } catch (error) {
-        console.error('[Main] Failed to stop system audio during endMeeting:', error)
-      }
-
-      // Stop interviewer STT with proper listener cleanup
-      try {
-        if (this.googleSTT) {
-          const sttEmitter = this.googleSTT as EventEmitter;
-          if (this.sttTranscriptListener_Interviewer) {
-            sttEmitter.removeListener('transcript', this.sttTranscriptListener_Interviewer);
-            this.sttTranscriptListener_Interviewer = null;
-          }
-          if (this.sttErrorListener_Interviewer) {
-            sttEmitter.removeListener('error', this.sttErrorListener_Interviewer);
-            this.sttErrorListener_Interviewer = null;
-          }
-          this.googleSTT?.stop();
-          this.googleSTT?.removeAllListeners();
-          this.googleSTT = null;
-        }
-      } catch (error) {
-        console.error('[Main] Failed to stop interviewer STT during endMeeting:', error)
-      }
-
-      // 4. Stop Microphone
-      try {
-        this.microphoneCapture?.removeAllListeners();
-        this.microphoneCapture?.stop();
-        if (typeof this.microphoneCapture?.destroy === 'function') {
-          this.microphoneCapture.destroy();
-        }
-        this.microphoneCapture = null;
-      } catch (error) {
-        console.error('[Main] Failed to stop microphone capture during endMeeting:', error)
-      }
-
-      // Stop user STT with proper listener cleanup
-      try {
-        if (this.googleSTT_User) {
-          const sttEmitter = this.googleSTT_User as EventEmitter;
-          if (this.sttTranscriptListener_User) {
-            sttEmitter.removeListener('transcript', this.sttTranscriptListener_User);
-            this.sttTranscriptListener_User = null;
-          }
-          if (this.sttErrorListener_User) {
-            sttEmitter.removeListener('error', this.sttErrorListener_User);
-            this.sttErrorListener_User = null;
-          }
-          this.googleSTT_User?.stop();
-          this.googleSTT_User?.removeAllListeners();
-          this.googleSTT_User = null;
-        }
-      } catch (error) {
-        console.error('[Main] Failed to stop user STT during endMeeting:', error)
-      }
-    }
+    this.checkpointer?.stop()
 
     // 4b. Stop JIT RAG live indexing (flush remaining segments)
     if (this.ragManager) {
@@ -2863,18 +2770,14 @@ try {
     console.log(`[Stealth] setUndetectable(${state}) called`);
     const startedAt = Date.now();
 
-    if (isSupervisorRuntimeEnabled()) {
-      const stealthSupervisor = this.runtimeCoordinator.getSupervisor<StealthSupervisor>('stealth')
-      if (stealthSupervisor.getState() === 'idle') {
-        await stealthSupervisor.start()
-      }
-      await stealthSupervisor.setEnabled(state)
-    } else {
-      this.stealthManager.setEnabled(state)
+    const stealthSupervisor = this.runtimeCoordinator.getSupervisor<StealthSupervisor>('stealth')
+    if (stealthSupervisor.getState() === 'idle') {
+      await stealthSupervisor.start()
     }
+    await stealthSupervisor.setEnabled(state)
 
     this.applyUndetectableState(state, startedAt, {
-      runtime: isSupervisorRuntimeEnabled() ? 'coordinator' : 'legacy',
+      runtime: 'coordinator',
     })
   }
 
@@ -2971,34 +2874,18 @@ try {
   public handleStealthRuntimeFault(reason: string): void {
     const normalizedReason = reason || 'stealth runtime fault'
 
-    if (isSupervisorRuntimeEnabled()) {
-      const stealthSupervisor = this.runtimeCoordinator.getSupervisor<StealthSupervisor>('stealth')
-      if (stealthSupervisor.getStealthState() === 'FAULT') {
-        return
-      }
-
-      void stealthSupervisor.reportFault(new Error(normalizedReason)).catch((error) => {
-        console.error('[Stealth] Failed to report stealth runtime fault:', error)
-      })
+    const stealthSupervisor = this.runtimeCoordinator.getSupervisor<StealthSupervisor>('stealth')
+    if (stealthSupervisor.getStealthState() === 'FAULT') {
       return
     }
 
-    this._broadcastToAllWindows('stealth-fault', normalizedReason)
-    this.performanceInstrumentation.recordEvent('stealth.fault', {
-      reason: normalizedReason,
+    void stealthSupervisor.reportFault(new Error(normalizedReason)).catch((error) => {
+      console.error('[Stealth] Failed to report stealth runtime fault:', error)
     })
-
-    if (this.isUndetectable) {
-      this.applyUndetectableState(false, Date.now(), {
-        runtime: 'legacy',
-        reason: normalizedReason,
-        source: 'fault',
-      })
-    }
   }
 
   private handleStealthDegradation(warnings: string[]): void {
-    if (!isSupervisorRuntimeEnabled() || !this.isUndetectable) {
+    if (!this.isUndetectable) {
       return
     }
 
