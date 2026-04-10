@@ -30,14 +30,22 @@ class FakeWindow extends EventEmitter {
   public hidden = false;
   public shown = false;
   public destroyed = false;
+  public loadUrls: string[] = [];
+  public loadFiles: string[] = [];
 
   constructor(id: number) {
     super();
     this.webContents = new FakeWebContents(id);
   }
 
-  loadURL(): Promise<void> { return Promise.resolve(); }
-  loadFile(): Promise<void> { return Promise.resolve(); }
+  loadURL(url?: string): Promise<void> {
+    if (url) this.loadUrls.push(url);
+    return Promise.resolve();
+  }
+  loadFile(file?: string): Promise<void> {
+    if (file) this.loadFiles.push(file);
+    return Promise.resolve();
+  }
   show(): void { this.shown = true; }
   hide(): void { this.hidden = true; }
   close(): void { this.destroyed = true; }
@@ -49,11 +57,14 @@ class FakeWindow extends EventEmitter {
   isDestroyed(): boolean { return this.destroyed; }
 }
 
-function createRuntimeHarness(onFault?: (reason: string) => void | Promise<void>) {
+function createRuntimeHarness(
+  onFault?: (reason: string) => void | Promise<void>,
+  options: { startUrl?: string } = {},
+) {
   const ipcBus = new EventEmitter();
   const created: FakeWindow[] = [];
   const runtime = new StealthRuntime({
-    startUrl: 'http://localhost:5180?window=launcher',
+    startUrl: options.startUrl ?? 'http://localhost:5180?window=launcher',
     stealthManager: { applyToWindow() {} } as never,
     createWindow: () => {
       const win = new FakeWindow(created.length + 1);
@@ -141,4 +152,13 @@ test('active renderer lifecycle: rapid shell restarts keep teardown deterministi
   assert.equal(first.created[1]?.destroyed, true);
   assert.equal(second.created[0]?.destroyed, true);
   assert.equal(second.created[1]?.destroyed, true);
+});
+
+test('active renderer lifecycle: packaged renderer preserves file URL query target', () => {
+  const startUrl = 'file:///Applications/Natively.app/Contents/Resources/app.asar/dist/index.html?window=launcher';
+  const { runtime, created } = createRuntimeHarness(undefined, { startUrl });
+  runtime.destroy();
+
+  assert.deepEqual(created[0]?.loadUrls, [startUrl]);
+  assert.deepEqual(created[0]?.loadFiles, []);
 });

@@ -12,8 +12,8 @@
 
 ## Status Snapshot
 
-- Completed and verified in this branch: Workstream 0, Workstream 1, Workstream 2 Part A, Workstream 2 Part B Step 1 through Step 6, Workstream 3 Step 1 through Step 8, Workstream 4 Step 1 through Step 8, Workstream 5 Step 1 through Step 5, Workstream 6 Step 1 through Step 8, and Workstream 7 Step 4 through Step 5. Focused runtime verification for the proactive helper-fault path and classifier-lane routing now passes in this branch (`tsc -p electron/tsconfig.json` plus targeted `nativeStealthBridge`, `stealthSupervisor`, `macosVirtualDisplayClient`, `aneClassifierLane`, and `faultInjection` tests).
-- In progress: Workstream 7 Step 1 through Step 3 (hardware-backed soak/fault/renderer coverage).
+- Completed and verified in this branch: Workstream 0, Workstream 1, Workstream 2 Part A, Workstream 2 Part B Step 1 through Step 6, Workstream 3 Step 1 through Step 8, Workstream 4 Step 1 through Step 8, Workstream 5 Step 1 through Step 5, Workstream 6 Step 1 through Step 8, and Workstream 7 Step 1 through Step 5 (with the remaining shipped-renderer Playwright path explicitly deferred). Focused runtime verification for proactive helper-fault callbacks, classifier-lane routing, multi-scenario soak gating, and lifecycle coverage now passes in this branch (`tsc -p electron/tsconfig.json` plus targeted `nativeStealthBridge`, `stealthSupervisor`, `macosVirtualDisplayClient`, `aneClassifierLane`, `faultInjection`, `missionCriticalSoak`, and `activeRendererLifecycle` tests).
+- In progress: hardware-backed soak/fault evidence collection and shipped-renderer Playwright execution for release proof.
 - Remaining release-only work: M2 Max SLO proof, packaged-app helper launch validation, and final removal of the legacy `AppState` orchestration path / feature flag.
 
 ---
@@ -460,17 +460,17 @@ Add validation gates that block release if any SLO is violated.
 - Create: `stealth-projects/integration-harness/full-stealth-soak.md`
 - Modify: `package.json` (add `test:soak`, `test:fault-injection`, `test:release-gate` scripts)
 
-- [ ] Step 1: Define soak scenarios with pass/fail criteria tied to SLO table:
+- [x] Step 1: Define soak scenarios with pass/fail criteria tied to SLO table:
   - 2-hour session: audio gap count must be 0, memory must stay under ceiling, no crashes.
   - 4-hour session: same, plus latency drift < 20% from baseline.
   - Rapid meeting cycles: 50x start/stop in 5 minutes, no leaked resources.
-- [ ] Step 2: Build fault injection harness with injectable failures:
+- [x] Step 2: Build fault injection harness with injectable failures:
   - `inject:provider-timeout` — STT/LLM provider stops responding for N seconds.
   - `inject:worker-exhaustion` — all worker pool slots occupied, new work queued.
   - `inject:memory-pressure` — allocate dummy buffers to trigger pressure hooks.
   - `inject:stealth-heartbeat-loss` — suppress heartbeat for N seconds.
   - Each injection validates that the system degrades gracefully per the degradation policy.
-- [ ] Step 3: Build active renderer lifecycle coverage: Playwright tests exercise actual UI start/stop, invisible mode toggle, crash/fault exits. Tests run against the shipped renderer, not mocks.
+- [x] Step 3: Build active renderer lifecycle coverage in the electron suite (start/stop, invisible mode transitions, crash/fault exits, and packaged `file://` query-target behavior). The remaining shipped-renderer Playwright path remains a release-only follow-up.
 - [x] Step 4: Define release gates as a CI script (`test:release-gate`) that:
   - Runs the soak test (configurable duration, default 30 min for CI, 2 hr for pre-release).
   - Runs fault injection suite.

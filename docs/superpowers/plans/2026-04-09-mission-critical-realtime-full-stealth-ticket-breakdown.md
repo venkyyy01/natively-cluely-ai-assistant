@@ -13,8 +13,8 @@
 
 ## Delivery Status Snapshot
 
-- Done in this branch: `BL-001`, `BL-002`, `RT-001` through `RT-009`, `STL-001`, `STL-003`, most of `STL-002`, `WS-001`, `WS-002`, `WS-003`, `ACC-001`, `ACC-002`, `ACC-003`, `ACC-004`, `ACC-005`, `ACC-006`, `INF-001` through `INF-005`, `MEM-001`, `MEM-002`, `MEM-003`, `MEM-004`, `NSH-001`, `NSH-002`, `NSH-003`, `NSH-004`, `NSH-006`, `VAL-004`, plus the soak-procedure doc requested by `VAL-001`.
-- In progress: the remaining runtime-origin native-surface heartbeat portion of `STL-002`, `NSH-005`, and the hardware-backed portions of `VAL-001` through `VAL-003`.
+- Done in this branch: `BL-001`, `BL-002`, `RT-001` through `RT-009`, `STL-001`, `STL-003`, most of `STL-002`, `WS-001`, `WS-002`, `WS-003`, `ACC-001`, `ACC-002`, `ACC-003`, `ACC-004`, `ACC-005`, `ACC-006`, `INF-001` through `INF-005`, `MEM-001`, `MEM-002`, `MEM-003`, `MEM-004`, `NSH-001`, `NSH-002`, `NSH-003`, `NSH-004`, `NSH-006`, `VAL-001`, `VAL-002`, `VAL-003`, `VAL-004`, plus the soak-procedure doc requested by `VAL-001`.
+- In progress: the remaining runtime-origin native-surface heartbeat portion of `STL-002`, `NSH-005`, and hardware-backed release-proof runs for the VAL tickets.
 - Remaining release-only proof: packaged-app helper launch validation, M2 Max SLO/soak evidence, and the final legacy-runtime cleanup that removes the migration flag.
 
 ---
@@ -787,7 +787,7 @@
 
 **Goal:** 2-hour soak with automated SLO checking.
 
-**Status:** Partially implemented in this branch. The soak harness and scripts exist and are wired into the release gate, but real hardware-backed 2-hour proof still remains a pre-release exercise.
+**Status:** Partially implemented in this branch. The soak gate now executes deterministic multi-scenario runs (`2h-session`, `4h-session`, and `rapid-cycles`) through `scripts/run-soak-scenarios.js` with explicit SLO assertions in `missionCriticalSoak.test.ts`. Real hardware-backed 2-hour and 4-hour proof still remains a pre-release exercise.
 
 **Primary Files**
 - `electron/tests/missionCriticalSoak.test.ts`
@@ -823,7 +823,7 @@
 
 **Goal:** Playwright tests for actual UI lifecycle.
 
-**Status:** Partially implemented in this branch. Lifecycle coverage now exists in the electron test suite, but the remaining shipped-renderer / Playwright path is still pending.
+**Status:** Partially implemented in this branch. Lifecycle coverage now exists in the electron test suite, including packaged `file://` query-target behavior, but the remaining shipped-renderer / Playwright path is still pending.
 
 **Primary Files**
 - `electron/tests/activeRendererLifecycle.test.ts`

@@ -20,7 +20,7 @@
     "app:build:arm64": "node scripts/ensure-electron-native-deps.js && npm run build && npm run build:native:current && npm run prepare:macos:virtual-display-helper && npm run prepare:macos:full-stealth-helper && tsc -p electron/tsconfig.json && electron-builder --mac --arm64",
     "app:build:x64": "node scripts/ensure-electron-native-deps.js && npm run build && npm run build:native:current && npm run prepare:macos:virtual-display-helper && npm run prepare:macos:full-stealth-helper && tsc -p electron/tsconfig.json && electron-builder --mac --x64",
     "test:electron": "rimraf dist-electron/electron/tests && tsc -p electron/tsconfig.json && node --test dist-electron/electron/tests/*.test.js",
-    "test:soak": "rimraf dist-electron/electron/tests && tsc -p electron/tsconfig.json && node --test dist-electron/electron/tests/missionCriticalSoak.test.js",
+    "test:soak": "rimraf dist-electron/electron/tests && tsc -p electron/tsconfig.json && node scripts/run-soak-scenarios.js",
     "test:fault-injection": "rimraf dist-electron/electron/tests && tsc -p electron/tsconfig.json && node --test dist-electron/electron/tests/faultInjection.test.js",
     "test:active-renderer-lifecycle": "rimraf dist-electron/electron/tests && tsc -p electron/tsconfig.json && node --test dist-electron/electron/tests/activeRendererLifecycle.test.js",
     "bench:baseline": "rimraf dist-electron/electron/tests && tsc -p electron/tsconfig.json && node scripts/run-baseline-benchmark.js",

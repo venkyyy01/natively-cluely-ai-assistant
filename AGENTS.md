@@ -1068,7 +1068,7 @@ Usage notes:
 
 <skill>
 <name>supercoder</name>
-<description></description>
+<description>"Military-grade autonomous execution skill. Executes code tasks fully autonomously: TDD, implementation, testing, hardening, review. Use EXPLICITLY with trigger phrases: 'use supercoder skill', 'implement with supercoder', 'supercoder:' — Do NOT auto-trigger."</description>
 <location>project</location>
 </skill>
 
