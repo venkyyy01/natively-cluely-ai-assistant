@@ -245,6 +245,48 @@ test('StealthSupervisor clears heartbeat timer during normal disable and stop', 
   assert.equal(supervisor.getStealthState(), 'OFF');
 });
 
+test('StealthSupervisor serializes rapid on-off-on toggles without faulting', async () => {
+  const calls: boolean[] = [];
+  const faultReasons: string[] = [];
+  const bus = createBus();
+  let releaseEnable: (() => void) | null = null;
+  const enableGate = new Promise<void>((resolve) => {
+    releaseEnable = resolve;
+  });
+
+  bus.subscribe('stealth:fault', async (event) => {
+    faultReasons.push(event.reason);
+  });
+
+  const supervisor = new StealthSupervisor(
+    {
+      async setEnabled(enabled: boolean) {
+        calls.push(enabled);
+        if (enabled && calls.length === 1) {
+          await enableGate;
+        }
+      },
+      isEnabled: () => calls[calls.length - 1] ?? false,
+      verifyStealthState: () => true,
+    },
+    bus,
+  );
+
+  await supervisor.start();
+
+  const first = supervisor.setEnabled(true);
+  const second = supervisor.setEnabled(false);
+  const third = supervisor.setEnabled(true);
+
+  releaseEnable?.();
+
+  await Promise.all([first, second, third]);
+
+  assert.equal(supervisor.getStealthState(), 'FULL_STEALTH');
+  assert.deepEqual(calls, [true, false, true]);
+  assert.deepEqual(faultReasons, []);
+});
+
 test('StealthSupervisor transitions to FAULT when native heartbeat reports unhealthy helper', async () => {
   const calls: boolean[] = [];
   const faultReasons: string[] = [];

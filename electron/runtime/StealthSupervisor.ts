@@ -33,6 +33,7 @@ export class StealthSupervisor implements ISupervisor {
   private state: SupervisorState = 'idle';
   private stealthState: StealthState = 'OFF';
   private pendingEnabled = false;
+  private toggleQueue: Promise<void> = Promise.resolve();
   private readonly armController: StealthArmController;
   private readonly heartbeatIntervalMs: number;
   private readonly intervalScheduler: (callback: () => void, intervalMs: number) => unknown;
@@ -94,14 +95,16 @@ export class StealthSupervisor implements ISupervisor {
   }
 
   async setEnabled(enabled: boolean): Promise<void> {
-    this.pendingEnabled = enabled;
+    return this.enqueueToggle(async () => {
+      this.pendingEnabled = enabled;
 
-    if (enabled) {
-      await this.armStealth();
-      return;
-    }
+      if (enabled) {
+        await this.armStealth();
+        return;
+      }
 
-    await this.disableStealth();
+      await this.disableStealth();
+    });
   }
 
   async reportFault(error: unknown): Promise<void> {
@@ -116,6 +119,12 @@ export class StealthSupervisor implements ISupervisor {
     if (this.pendingEnabled || this.readDelegateEnabled()) {
       await this.armStealth();
     }
+  }
+
+  private enqueueToggle<T>(operation: () => Promise<T>): Promise<T> {
+    const next = this.toggleQueue.then(operation, operation);
+    this.toggleQueue = next.then((): void => undefined, (): void => undefined);
+    return next;
   }
 
   private readDelegateEnabled(): boolean {

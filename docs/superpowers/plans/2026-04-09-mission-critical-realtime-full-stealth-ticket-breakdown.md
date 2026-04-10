@@ -310,6 +310,8 @@
 
 **Goal:** Wire invisible mode into fail-closed behavior.
 
+**Status:** Partially implemented in this branch. Fail-closed state transitions, bus fault emission, lane shedding, shell/runtime crash coverage, and rapid on-off-on toggle coverage are all landed. The remaining open work is the native-helper heartbeat/control-plane loop and helper-originated fault signaling.
+
 **Primary Files**
 - `electron/main.ts`
 - `electron/runtime/StealthSupervisor.ts`

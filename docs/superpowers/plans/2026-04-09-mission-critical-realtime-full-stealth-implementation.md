@@ -12,8 +12,8 @@
 
 ## Status Snapshot
 
-- Completed and verified in this branch: Workstream 0, Workstream 1 Step 1 through Step 7, Workstream 1 Step 10, Workstream 2 Part A Step 1 through Step 4, Workstream 6 Step 1, Workstream 6 Step 3, Workstream 7 Step 4, and Workstream 7 Step 5.
-- In progress: Workstream 1 Step 8 through Step 9, Workstream 2 Part A Step 5, Workstream 6 Step 2 and Step 4 through Step 8, Workstream 7 Step 1 through Step 3.
+- Completed and verified in this branch: Workstream 0, Workstream 1 Step 1 through Step 7, Workstream 1 Step 10, Workstream 2 Part A Step 1 through Step 5, Workstream 6 Step 1, Workstream 6 Step 3, Workstream 7 Step 4, and Workstream 7 Step 5.
+- In progress: Workstream 1 Step 8 through Step 9, Workstream 6 Step 2 and Step 4 through Step 8, Workstream 7 Step 1 through Step 3.
 - Not started in code on this branch: Warm standby, QoS/budget scheduler, multi-lane inference, tiered memory, and recovery hardening workstreams.
 
 ---
@@ -200,7 +200,7 @@ Make full stealth a hard control-plane invariant:
 - [x] Step 2: Build `StealthArmController` that executes the arm sequence: verify native module loaded → apply stealth to all managed windows → verify stealth state → start heartbeat → transition to `FULL_STEALTH`.
 - [x] Step 3: Make invisible-mode toggle in `StealthSupervisor` await arm success before emitting `stealth:state-changed` on the bus. Failed arm exits cleanly.
 - [x] Step 4: Add fail-closed policy: heartbeat miss or runtime fault immediately → `FAULT` → blank output → exit invisible mode. `StealthSupervisor` emits `stealth:fault` on the bus. Other supervisors subscribe and shed non-essential work.
-- [ ] Step 5: Add tests for: failed arm (native module absent), heartbeat loss, shell crash, rapid toggle (on-off-on < 500 ms), stealth state machine rejects illegal transitions.
+- [x] Step 5: Add tests for: failed arm (native module absent), heartbeat loss, shell crash, rapid toggle (on-off-on < 500 ms), stealth state machine rejects illegal transitions.
 
 ### Part B: Warm Standby Capture and Meeting Activation
 
