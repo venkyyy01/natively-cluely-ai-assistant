@@ -10,11 +10,24 @@ interface ResolveOptions {
   pathExists?: (candidate: string) => boolean;
 }
 
+function isEnvFlagEnabled(value: string | undefined): boolean {
+  if (value === undefined) {
+    return false;
+  }
+
+  const normalized = value.trim().toLowerCase();
+  return ['1', 'true', 'yes', 'on'].includes(normalized);
+}
+
 export function resolveMacosVirtualDisplayHelperPath(options: ResolveOptions = {}): string | null {
   const env = options.env ?? process.env;
   const cwd = options.cwd ?? process.cwd();
   const resourcesPath = options.resourcesPath ?? process.resourcesPath;
   const pathExists = options.pathExists ?? ((candidate: string) => fs.existsSync(candidate));
+
+  if (isEnvFlagEnabled(env.NATIVELY_DISABLE_MACOS_VIRTUAL_DISPLAY_HELPER)) {
+    return null;
+  }
 
   const envOverride = env.NATIVELY_MACOS_VIRTUAL_DISPLAY_HELPER;
   if (envOverride && pathExists(envOverride)) {

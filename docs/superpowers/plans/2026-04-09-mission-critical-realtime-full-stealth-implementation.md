@@ -14,7 +14,7 @@
 
 - Completed and verified in this branch: Workstream 0, Workstream 1, Workstream 2 Part A, Workstream 2 Part B Step 1 through Step 6, Workstream 3 Step 1 through Step 8, Workstream 4 Step 1 through Step 8, Workstream 5 Step 1 through Step 5, Workstream 6 Step 1 through Step 8, and Workstream 7 Step 1 through Step 5 (with the remaining shipped-renderer Playwright path explicitly deferred). Focused runtime verification for proactive helper-fault callbacks, classifier-lane routing, multi-scenario soak gating, and lifecycle coverage now passes in this branch (`tsc -p electron/tsconfig.json` plus targeted `nativeStealthBridge`, `stealthSupervisor`, `macosVirtualDisplayClient`, `aneClassifierLane`, `faultInjection`, `missionCriticalSoak`, and `activeRendererLifecycle` tests).
 - In progress: hardware-backed soak/fault evidence collection and shipped-renderer Playwright execution for release proof.
-- Remaining release-only work: M2 Max SLO proof, packaged-app helper launch validation, and final removal of the legacy `AppState` orchestration path / feature flag.
+- Remaining release-only work: M2 Max SLO proof, executing packaged helper launch probes on signed artifacts, and final removal of the legacy `AppState` orchestration path / feature flag.
 
 ---
 

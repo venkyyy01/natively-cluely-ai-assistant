@@ -155,3 +155,16 @@ test('artifact helpers fail clearly when packaged app is missing', () => {
     assert.match(error.stdout || '', /Missing packaged app/);
   }
 });
+
+test('is_truthy_flag accepts expected truthy and falsy values', () => {
+  const output = runShell(`source "${scriptPath}" && for value in 1 true TRUE yes on; do is_truthy_flag "$value" || exit 1; done && for value in 0 false FALSE no off ""; do if is_truthy_flag "$value"; then exit 1; fi; done && printf 'ok'`);
+  assert.equal(output, 'ok');
+});
+
+test('validate_packaged_helper_launch_modes probes with and without helper', () => {
+  const output = runShell(`source "${scriptPath}" && require_file(){ :; } && run_packaged_launch_probe(){ printf 'probe:%s:%s\n' "$1" "$3"; } && success(){ printf 'success:%s\n' "$1"; } && validate_packaged_helper_launch_modes "/Applications/Natively.app" "/Applications/Natively.app/Contents/MacOS/Natively"`);
+
+  assert.match(output, /probe:with-helper:0/);
+  assert.match(output, /probe:without-helper:1/);
+  assert.match(output, /Packaged helper launch validation passed/);
+});

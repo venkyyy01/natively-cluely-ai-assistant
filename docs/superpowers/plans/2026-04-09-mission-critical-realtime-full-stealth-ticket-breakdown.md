@@ -14,8 +14,8 @@
 ## Delivery Status Snapshot
 
 - Done in this branch: `BL-001`, `BL-002`, `RT-001` through `RT-009`, `STL-001`, `STL-003`, most of `STL-002`, `WS-001`, `WS-002`, `WS-003`, `ACC-001`, `ACC-002`, `ACC-003`, `ACC-004`, `ACC-005`, `ACC-006`, `INF-001` through `INF-005`, `MEM-001`, `MEM-002`, `MEM-003`, `MEM-004`, `NSH-001`, `NSH-002`, `NSH-003`, `NSH-004`, `NSH-006`, `VAL-001`, `VAL-002`, `VAL-003`, `VAL-004`, plus the soak-procedure doc requested by `VAL-001`.
-- In progress: the remaining runtime-origin native-surface heartbeat portion of `STL-002`, `NSH-005`, and hardware-backed release-proof runs for the VAL tickets.
-- Remaining release-only proof: packaged-app helper launch validation, M2 Max SLO/soak evidence, and the final legacy-runtime cleanup that removes the migration flag.
+- In progress: the remaining runtime-origin native-surface heartbeat portion of `STL-002` and hardware-backed release-proof runs for the VAL tickets.
+- Remaining release-only proof: execute packaged-app helper launch probes on signed artifacts, collect M2 Max SLO/soak evidence, and finish the final legacy-runtime cleanup that removes the migration flag.
 
 ---
 
@@ -747,7 +747,7 @@
 
 **Goal:** Integrate helper into build and packaging pipeline.
 
-**Status:** Partially implemented in this branch. The helper now stages as `assets/xpcservices/macos-full-stealth-helper.xpc`, mac build scripts prepare it before packaging, Electron Builder places it in `Contents/XPCServices/`, the after-pack signing hook signs the nested bundle, and `build-and-install.sh` force-signs the packaged XPC bundle alongside the existing helper binary. Full packaged-app launch verification with and without the helper still remains open.
+**Status:** Implemented in this branch with release-run proof pending. The helper now stages as `assets/xpcservices/macos-full-stealth-helper.xpc`, mac build scripts prepare it before packaging, Electron Builder places it in `Contents/XPCServices/`, the after-pack signing hook signs the nested bundle, and `build-and-install.sh` force-signs and validates helper artifacts. An opt-in packaged launch probe now executes both launch modes (`with-helper` and `without-helper`) via `NATIVELY_VALIDATE_PACKAGED_HELPER_LAUNCH=1`; final release evidence is still pending an on-device signed artifact run.
 
 **Primary Files**
 - Build scripts

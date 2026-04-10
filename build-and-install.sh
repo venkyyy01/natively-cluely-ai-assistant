@@ -357,6 +357,58 @@ require_asar_entry() {
     fi
 }
 
+is_truthy_flag() {
+    local value="${1:-}"
+    case "$value" in
+        1|[Tt][Rr][Uu][Ee]|[Yy][Ee][Ss]|[Oo][Nn])
+            return 0
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+run_packaged_launch_probe() {
+    local mode_label="$1"
+    local app_binary="$2"
+    local disable_helper="$3"
+    local log_file
+    local pid
+
+    log_file=$(mktemp)
+    if [[ "$disable_helper" == "1" ]]; then
+        NATIVELY_DISABLE_MACOS_VIRTUAL_DISPLAY_HELPER=1 "$app_binary" >"$log_file" 2>&1 &
+    else
+        "$app_binary" >"$log_file" 2>&1 &
+    fi
+    pid=$!
+
+    sleep 4
+    if ! kill -0 "$pid" 2>/dev/null; then
+        echo -e "${RED}${BOLD}--- launch log (${mode_label}) -------------------------------------------------${NC}"
+        sed -n '1,160p' "$log_file"
+        rm -f "$log_file"
+        fail "Packaged launch probe failed (${mode_label})"
+    fi
+
+    kill "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+    rm -f "$log_file"
+    success "Packaged launch probe passed (${mode_label})"
+}
+
+validate_packaged_helper_launch_modes() {
+    local app_bundle="$1"
+    local app_binary="$2"
+    local helper_binary="$app_bundle/Contents/XPCServices/macos-full-stealth-helper.xpc/Contents/MacOS/macos-full-stealth-helper"
+
+    require_file "$helper_binary" "Installed macOS full stealth XPC helper"
+    run_packaged_launch_probe "with-helper" "$app_binary" "0"
+    run_packaged_launch_probe "without-helper" "$app_binary" "1"
+    success "Packaged helper launch validation passed (with and without helper)"
+}
+
 if [[ "${BUILD_AND_INSTALL_LIB:-0}" == "1" ]]; then
     return 0 2>/dev/null || exit 0
 fi
@@ -587,6 +639,7 @@ require_asar_entry "$APP_ASAR_PATH" "/node_modules/natively-audio/index.js" "Pac
 require_asar_entry "$APP_ASAR_PATH" "/dist-electron/premium/electron/services/LicenseManager.js" "Packaged premium license manager"
 require_asar_entry "$APP_ASAR_PATH" "/dist-electron/premium/electron/knowledge/KnowledgeOrchestrator.js" "Packaged knowledge orchestrator"
 require_file "$APP_RESOURCES_DIR/bin/macos/stealth-virtual-display-helper" "Packaged macOS virtual display helper"
+require_file "$APP_GLOB/Contents/XPCServices/macos-full-stealth-helper.xpc/Contents/MacOS/macos-full-stealth-helper" "Packaged macOS full stealth XPC helper"
 
 if [[ "$BUILD_ARCH" == "arm64" ]]; then
     require_file "$APP_ASAR_UNPACKED_DIR/node_modules/natively-audio/index.darwin-arm64.node" "Unpacked arm64 native audio binary"
@@ -651,6 +704,13 @@ if file "$INSTALLED_BINARY" | grep -q "$BUILD_ARCH"; then
     success "Installed binary architecture verified (${BUILD_ARCH})"
 else
     fail "Installed binary architecture does not match expected ${BUILD_ARCH}"
+fi
+
+if is_truthy_flag "${NATIVELY_VALIDATE_PACKAGED_HELPER_LAUNCH:-0}"; then
+    step "Step 9/9 — Validating packaged helper launch modes"
+    validate_packaged_helper_launch_modes "${INSTALL_DIR}/${APP_NAME}.app" "$INSTALLED_BINARY"
+else
+    info "Skipping packaged helper launch validation (set NATIVELY_VALIDATE_PACKAGED_HELPER_LAUNCH=1 to enable)"
 fi
 
 # ╔═══════════════════════════════════════════════════════════════════╗

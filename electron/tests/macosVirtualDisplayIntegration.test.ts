@@ -30,6 +30,20 @@ test('resolveMacosVirtualDisplayHelperPath prefers explicit env override', () =>
   assert.equal(resolved, '/tmp/helper');
 });
 
+test('resolveMacosVirtualDisplayHelperPath returns null when helper resolution is explicitly disabled', () => {
+  const resolved = resolveMacosVirtualDisplayHelperPath({
+    env: {
+      NATIVELY_DISABLE_MACOS_VIRTUAL_DISPLAY_HELPER: 'true',
+      NATIVELY_MACOS_VIRTUAL_DISPLAY_HELPER: '/tmp/helper',
+    },
+    cwd: '/workspace',
+    resourcesPath: '/app/resources',
+    pathExists: () => true,
+  });
+
+  assert.equal(resolved, null);
+});
+
 test('resolveMacosVirtualDisplayHelperPath falls back to the local Swift build output', () => {
   const resolved = resolveMacosVirtualDisplayHelperPath({
     env: {},
