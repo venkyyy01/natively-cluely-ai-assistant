@@ -3,9 +3,20 @@ import type { FastResponseProvider, FollowUpMeetingType, FollowUpTone, ProviderK
 
 const boundedString = (max: number) => z.string().trim().min(1).max(max);
 const optionalBoundedString = (max: number) => z.string().trim().max(max).optional();
+const boundedOptionalString = (max: number) => z.string().trim().min(1).max(max).optional();
 const sttProviderEnum = z.enum(['google', 'groq', 'openai', 'deepgram', 'elevenlabs', 'azure', 'ibmwatson', 'soniox']);
 const llmProviderEnum = z.enum(['gemini', 'groq', 'openai', 'claude', 'cerebras']);
 const fastResponseProviderEnum = z.enum(['groq', 'cerebras']);
+const externalUrlSchema = z.string().trim().min(1).max(4096).refine((value) => {
+  try {
+    const parsed = new URL(value);
+    return ['http:', 'https:', 'mailto:'].includes(parsed.protocol);
+  } catch {
+    return false;
+  }
+}, {
+  message: 'Expected a valid http, https, or mailto URL',
+});
 
 export const ipcSchemas = {
   geminiChatArgs: z.tuple([
@@ -125,6 +136,9 @@ export const ipcSchemas = {
     subject: z.string().max(500),
     body: z.string().max(20000),
   }).strict(),
+  audioDeviceId: boundedOptionalString(256),
+  meetingId: boundedString(128),
+  externalUrl: externalUrlSchema,
 };
 
 export function parseIpcInput<T>(schema: z.ZodType<T>, payload: unknown, channel: string): T {

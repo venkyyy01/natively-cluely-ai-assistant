@@ -1145,6 +1145,9 @@ test('meeting handlers prefer audio, stt, and inference supervisors for auxiliar
     assert.deepEqual(await registry.handlers.get('stop-audio-test')?.({}), { success: true });
     assert.deepEqual(await registry.handlers.get('set-recognition-language')?.({}, 'en-US'), { success: true });
     assert.deepEqual(await registry.handlers.get('seed-demo')?.({}), { success: true });
+    await assert.rejects(async () => registry.handlers.get('start-audio-test')?.({}, '   '), /Invalid IPC payload/);
+    await assert.rejects(async () => registry.handlers.get('get-meeting-details')?.({}, ''), /Invalid IPC payload/);
+    await assert.rejects(async () => registry.handlers.get('open-external')?.({}, 'file:///tmp/unsafe'), /Invalid IPC payload/);
 
     assert.deepEqual(calls, [
       'startAudioTest:mic-1',

@@ -160,6 +160,10 @@ export class ConsciousAccelerationOrchestrator {
     this.pauseDetector.updateRMS(rms);
   }
 
+  onInterviewerAudioActivity(rms: number): void {
+    this.onUpdateRMS(rms);
+  }
+
   updateTranscriptSegments(segments: Array<{ text: string; timestamp: number; speaker: string }>, transcriptRevision?: number): void {
     if (!this.enabled) {
       return;

@@ -63,6 +63,32 @@ test('MacosVirtualDisplayClient returns structured helper failures', async () =>
   await assert.rejects(() => client.getStatus(), /boom/);
 });
 
+test('MacosVirtualDisplayClient rejects malformed request payloads before writing to stdin', async () => {
+  const client = new MacosVirtualDisplayClient({
+    helperPath: '/tmp/helper',
+  });
+
+  const internal = client as unknown as {
+    runHelperProcess: (request: { command: 'status'; stdin?: string }) => Promise<{ exitCode: number; stdout: string; stderr: string }>;
+    ensureServerProcess: () => { stdin: { write: (chunk: string) => void } };
+  };
+
+  let wrote = false;
+  internal.ensureServerProcess = () => ({
+    stdin: {
+      write: () => {
+        wrote = true;
+      },
+    },
+  });
+
+  await assert.rejects(
+    () => internal.runHelperProcess({ command: 'status', stdin: '{not-json' }),
+    /request payload for status was not valid JSON/
+  );
+  assert.equal(wrote, false);
+});
+
 test('MacosVirtualDisplayClient parses probe-capabilities output', async () => {
   const client = new MacosVirtualDisplayClient({
     helperPath: '/tmp/helper',

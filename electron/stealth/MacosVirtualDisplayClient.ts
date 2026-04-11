@@ -208,7 +208,12 @@ export class MacosVirtualDisplayClient {
       throw new Error(result.stderr || `Helper exited with code ${result.exitCode}`);
     }
 
-    return JSON.parse(result.stdout) as T;
+    try {
+      return JSON.parse(result.stdout) as T;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(`macOS virtual display helper returned invalid JSON for ${request.command}: ${message}`);
+    }
   }
 
   private runHelperProcess(request: HelperRunRequest): Promise<HelperRunResult> {
@@ -222,7 +227,19 @@ export class MacosVirtualDisplayClient {
       }, this.requestTimeoutMs);
       this.pending.set(id, { resolve, reject, timeout });
 
-      const payload = request.stdin ? JSON.parse(request.stdin) as Record<string, unknown> : {};
+      let payload: Record<string, unknown> = {};
+      if (request.stdin) {
+        try {
+          payload = JSON.parse(request.stdin) as Record<string, unknown>;
+        } catch (error) {
+          this.pending.delete(id);
+          clearTimeout(timeout);
+          const message = error instanceof Error ? error.message : String(error);
+          reject(new Error(`macOS virtual display helper request payload for ${request.command} was not valid JSON: ${message}`));
+          return;
+        }
+      }
+
       child.stdin.write(`${JSON.stringify({ id, command: request.command, ...payload })}\n`);
     });
   }

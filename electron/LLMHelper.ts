@@ -29,6 +29,7 @@ const execAsync = promisify(exec);
 
 /** Default timeout for LLM API calls in milliseconds */
 const LLM_API_TIMEOUT_MS = 30000; // 30 seconds
+const CUSTOM_PROVIDER_MAX_RESPONSE_BYTES = 2 * 1024 * 1024; // 2 MiB
 
 /**
  * Create an AbortSignal that times out after the specified duration
@@ -58,6 +59,59 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number = LLM_API_T
       clearTimeout(timeoutHandle);
     }
   }
+}
+
+function summarizeResponseBody(body: string, maxChars: number = 200): string {
+  return body.trim().replace(/\s+/g, ' ').slice(0, maxChars);
+}
+
+function looksLikeJsonPayload(body: string): boolean {
+  const trimmed = body.trim();
+  return trimmed.startsWith('{') || trimmed.startsWith('[');
+}
+
+async function readFetchBodyWithLimit(
+  response: Response,
+  maxBytes: number = CUSTOM_PROVIDER_MAX_RESPONSE_BYTES,
+): Promise<string> {
+  const contentLength = response.headers.get('content-length');
+  if (contentLength) {
+    const parsedLength = Number(contentLength);
+    if (Number.isFinite(parsedLength) && parsedLength > maxBytes) {
+      throw new Error(`Provider response exceeded ${maxBytes} bytes`);
+    }
+  }
+
+  if (!response.body) {
+    return '';
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let totalBytes = 0;
+  let output = '';
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) {
+      break;
+    }
+
+    if (!value) {
+      continue;
+    }
+
+    totalBytes += value.byteLength;
+    if (totalBytes > maxBytes) {
+      await reader.cancel();
+      throw new Error(`Provider response exceeded ${maxBytes} bytes`);
+    }
+
+    output += decoder.decode(value, { stream: true });
+  }
+
+  output += decoder.decode();
+  return output;
 }
 
 /**
@@ -1724,9 +1778,9 @@ ANSWER DIRECTLY:`;
 
       throw new Error(`cURL response extraction failed for path: ${responsePath}`);
 
-    } catch (error: any) {
-      console.error("[LLMHelper] cURL Execution Error:", error.message);
-      return `Error: ${error.message}`;
+    } catch (error) {
+      console.error("[LLMHelper] cURL Execution Error:", sanitizeError(error));
+      throw error instanceof Error ? error : new Error(String(error));
     }
   }
 
@@ -1829,18 +1883,33 @@ ANSWER DIRECTLY:`;
       const response = await fetch(url, {
         method: requestConfig.method || 'POST',
         headers: headers,
-        body: JSON.stringify(body)
+        body: JSON.stringify(body),
+        signal: createTimeoutSignal(),
       });
 
-      const data = await response.json();
-      console.log(`[LLMHelper] Custom Provider raw response:`, JSON.stringify(data).substring(0, 1000));
-
+      const rawBody = await readFetchBodyWithLimit(response);
+      const trimmedBody = rawBody.trim();
       if (!response.ok) {
-        throw new Error(`Custom Provider HTTP ${response.status}: ${JSON.stringify(data).substring(0, 200)}`);
+        throw new Error(`Custom Provider HTTP ${response.status}: ${summarizeResponseBody(trimmedBody)}`);
       }
 
+      if (!trimmedBody) {
+        throw new Error('Custom Provider returned an empty response body');
+      }
+
+      if (!looksLikeJsonPayload(trimmedBody)) {
+        console.log(`[LLMHelper] Custom Provider returned plain text response (${trimmedBody.length} chars)`);
+        return trimmedBody;
+      }
+
+      const data = JSON.parse(trimmedBody);
+      console.log(`[LLMHelper] Custom Provider raw response:`, trimmedBody.substring(0, 1000));
+
       // 6. Extract Answer - try common response formats
-      const extracted = this.extractOpenAIFormattedText(data, true);
+      const extracted = this.extractOpenAIFormattedText(data, false);
+      if (!extracted.trim()) {
+        throw new Error('Custom Provider response did not contain extractable text');
+      }
       console.log(`[LLMHelper] Custom Provider extracted text length: ${extracted.length}`);
       return extracted;
     } catch (error) {
@@ -3132,14 +3201,13 @@ ANSWER DIRECTLY:`;
       const response = await fetch(url, {
         method: requestConfig.method || 'POST',
         headers: headers,
-        body: JSON.stringify(body)
+        body: JSON.stringify(body),
+        signal: createTimeoutSignal(),
       });
 
       if (!response.ok) {
-        const errorText = await response.text();
-        console.error(`Custom Provider HTTP ${response.status}: ${errorText.substring(0, 200)}`);
-        yield `Error: Custom Provider returned HTTP ${response.status}`;
-        return;
+        const errorText = await readFetchBodyWithLimit(response);
+        throw new Error(`Custom Provider HTTP ${response.status}: ${summarizeResponseBody(errorText)}`);
       }
 
       if (!response.body) return;
@@ -3151,6 +3219,9 @@ ANSWER DIRECTLY:`;
       // @ts-ignore
       for await (const chunk of response.body) {
         const text = new TextDecoder().decode(chunk);
+        if (Buffer.byteLength(fullBody, 'utf8') + Buffer.byteLength(text, 'utf8') > CUSTOM_PROVIDER_MAX_RESPONSE_BYTES) {
+          throw new Error(`Custom Provider stream exceeded ${CUSTOM_PROVIDER_MAX_RESPONSE_BYTES} bytes`);
+        }
         fullBody += text;
 
         const lines = text.split('\n');
@@ -3170,17 +3241,28 @@ ANSWER DIRECTLY:`;
       if (!yieldedAny && fullBody.trim().length > 0) {
         try {
           const data = JSON.parse(fullBody);
-          const extracted = this.extractFromCommonFormats(data);
-          if (extracted) yield extracted;
+          const extracted = this.extractFromCommonFormats(data, false);
+          if (!extracted) {
+            throw new Error('Custom Provider response did not contain extractable text');
+          }
+          yield extracted;
         } catch {
           // Not JSON, yield raw text if it's not looking like garbage
-          if (fullBody.length < 5000) yield fullBody.trim();
+          const trimmedBody = fullBody.trim();
+          if (!trimmedBody) {
+            throw new Error('Custom Provider returned an empty response body');
+          }
+          if (trimmedBody.length < 5000) {
+            yield trimmedBody;
+            return;
+          }
+          throw new Error('Custom Provider returned an unparseable oversized response');
         }
       }
 
     } catch (e) {
-      console.error("Custom streaming failed", e);
-      yield "Error streaming from custom provider.";
+      console.error("Custom streaming failed", sanitizeError(e));
+      throw e instanceof Error ? e : new Error(String(e));
     }
   }
 

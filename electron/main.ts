@@ -992,12 +992,9 @@ this.runtimeCoordinator.registerSupervisor(new StealthSupervisor(
     this.audioPipelineStats.microphoneChunks += 1;
   }
 
-  private noteInterviewerSpeechActivity(chunk: Buffer): void {
+  private noteInterviewerAudioActivity(chunk: Buffer): void {
     const rms = computePcm16Rms(chunk);
-    this.accelerationManager?.getConsciousOrchestrator().onUpdateRMS(rms);
-    if (rms > 40) {
-      this.accelerationManager?.getConsciousOrchestrator().onUserSpeaking();
-    }
+    this.accelerationManager?.getConsciousOrchestrator().onInterviewerAudioActivity(rms);
   }
 
   private noteTranscript(speaker: 'interviewer' | 'user'): void {
@@ -1400,7 +1397,7 @@ try {
     this.systemAudioCapture.removeAllListeners();
     this.systemAudioCapture.on('data', (chunk: Buffer) => {
       this.noteAudioChunk('system');
-      this.noteInterviewerSpeechActivity(chunk);
+      this.noteInterviewerAudioActivity(chunk);
       this.googleSTT?.write(chunk);
     });
     this.systemAudioCapture.on('speech_ended', () => {
@@ -1591,7 +1588,7 @@ try {
         this.systemAudioCapture.on('data', (chunk: Buffer) => {
           // console.log('[Main] SysAudio chunk', chunk.length);
           this.noteAudioChunk('system');
-          this.noteInterviewerSpeechActivity(chunk);
+          this.noteInterviewerAudioActivity(chunk);
           this.googleSTT?.write(chunk);
         });
         this.systemAudioCapture.on('speech_ended', () => {
@@ -1612,7 +1609,7 @@ try {
 
         this.systemAudioCapture.on('data', (chunk: Buffer) => {
           this.noteAudioChunk('system');
-          this.noteInterviewerSpeechActivity(chunk);
+          this.noteInterviewerAudioActivity(chunk);
           this.googleSTT?.write(chunk);
         });
         this.systemAudioCapture.on('speech_ended', () => {
@@ -2042,6 +2039,7 @@ try {
 
     // 4. Reset Intelligence Context & Save
     await this.intelligenceManager.stopMeeting(meetingId ?? undefined);
+    await this.intelligenceManager.waitForPendingSaves(10000);
 
     // 5. Revert to Default Model (One-Way Sync Revert)
     // This ensures next meeting starts with default, not the temporary one used in this session
@@ -2068,7 +2066,7 @@ try {
     }
 
     // 6. Process meeting for RAG (embeddings)
-    await this.processCompletedMeetingForRAG();
+    await this.processCompletedMeetingForRAG(meetingId);
 
     // 7. Clean up JIT RAG provisional chunks (post-meeting RAG replaces them)
     if (this.ragManager) {
@@ -2179,15 +2177,12 @@ try {
     this.virtualDisplayCoordinator?.dispose?.();
   }
 
-  private async processCompletedMeetingForRAG(): Promise<void> {
+  private async processCompletedMeetingForRAG(meetingId?: string | null): Promise<void> {
     if (!this.ragManager) return;
+    if (!meetingId) return;
 
     try {
-      // Get the most recent meeting from database
-      const meetings = DatabaseManager.getInstance().getRecentMeetings(1);
-      if (meetings.length === 0) return;
-
-      const meeting = DatabaseManager.getInstance().getMeetingDetails(meetings[0].id);
+      const meeting = DatabaseManager.getInstance().getMeetingDetails(meetingId);
       if (!meeting || !meeting.transcript || meeting.transcript.length === 0) return;
 
       // Convert transcript to RAG format
@@ -3382,4 +3377,6 @@ app.on("before-quit", async (e) => {
 }
 
 // Start the application
-initializeApp().catch(console.error)
+if (process.env.NODE_ENV !== 'test') {
+  initializeApp().catch(console.error)
+}

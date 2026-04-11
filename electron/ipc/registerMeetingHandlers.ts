@@ -73,7 +73,7 @@ export function registerMeetingHandlers({ appState, safeHandle, safeHandleValida
 
   safeHandle('get-output-devices', async () => AudioDevices.getOutputDevices());
 
-  safeHandle('start-audio-test', async (_event, deviceId?: string) => {
+  safeHandleValidated('start-audio-test', (args) => [parseIpcInput(ipcSchemas.audioDeviceId, args[0], 'start-audio-test')] as const, async (_event, deviceId?: string) => {
     const audioSupervisor = getAudioSupervisor(appState);
     if (audioSupervisor?.startAudioTest) {
       await audioSupervisor.startAudioTest(deviceId);
@@ -125,7 +125,7 @@ export function registerMeetingHandlers({ appState, safeHandle, safeHandleValida
 
   safeHandle('get-recent-meetings', async () => DatabaseManager.getInstance().getRecentMeetings(50));
 
-  safeHandle('get-meeting-details', async (_event, id) => DatabaseManager.getInstance().getMeetingDetails(id));
+  safeHandleValidated('get-meeting-details', (args) => [parseIpcInput(ipcSchemas.meetingId, args[0], 'get-meeting-details')] as const, async (_event, id) => DatabaseManager.getInstance().getMeetingDetails(id));
 
   safeHandleValidated('update-meeting-title', (args) => [parseIpcInput(ipcSchemas.updateMeetingTitlePayload, args[0], 'update-meeting-title')] as const, async (_event, { id, title }) => {
     return DatabaseManager.getInstance().updateMeetingTitle(id, title);
@@ -149,7 +149,7 @@ export function registerMeetingHandlers({ appState, safeHandle, safeHandleValida
     return { success: result };
   });
 
-  safeHandle('open-external', async (_event, url: string) => {
+  safeHandleValidated('open-external', (args) => [parseIpcInput(ipcSchemas.externalUrl, args[0], 'open-external')] as const, async (_event, url: string) => {
     try {
       const parsed = new URL(url);
       if (['http:', 'https:', 'mailto:'].includes(parsed.protocol)) {

@@ -39,9 +39,10 @@ test('chatWithCurl treats null responsePath extraction as a failure instead of r
   LLMHelperCtor.__testAxios = async () => ({ data: { choices: [{ message: { content: null as string | null } }] } });
 
   try {
-    const response = await helper.chatWithCurl('hello');
-    assert.match(response, /Error: cURL response extraction failed/);
-    assert.doesNotMatch(response, /^null$/);
+    await assert.rejects(
+      () => helper.chatWithCurl('hello'),
+      /cURL response extraction failed/,
+    );
   } finally {
     LLMHelperCtor.__testAxios = originalAxios;
     helper.scrubKeys();

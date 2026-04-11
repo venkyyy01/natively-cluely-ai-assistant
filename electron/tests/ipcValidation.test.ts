@@ -51,6 +51,10 @@ test('ipc schemas validate additional accepted shapes', () => {
     'open-mailto',
   );
   assert.equal(mailto.to, 'test@example.com');
+
+  assert.equal(parseIpcInput(ipcSchemas.audioDeviceId, 'mic-1', 'start-audio-test'), 'mic-1');
+  assert.equal(parseIpcInput(ipcSchemas.meetingId, 'meeting-1', 'get-meeting-details'), 'meeting-1');
+  assert.equal(parseIpcInput(ipcSchemas.externalUrl, 'https://example.com', 'open-external'), 'https://example.com');
 });
 
 test('parseIpcInput reports joined zod issue paths', () => {
@@ -69,6 +73,10 @@ test('parseIpcInput reports joined zod issue paths', () => {
   assert.throws(() => {
     parseIpcInput(ipcSchemas.openMailtoInput, null, 'open-mailto');
   }, /root:/);
+
+  assert.throws(() => {
+    parseIpcInput(ipcSchemas.externalUrl, 'file:///tmp/test', 'open-external');
+  }, /Expected a valid http, https, or mailto URL/);
 });
 
 test('generate suggestion args validation accepts bounded valid payload', () => {
@@ -134,5 +142,13 @@ test('settings, profile, and rag validation schemas reject malformed payloads', 
 
   assert.throws(() => {
     parseIpcInput(ipcSchemas.ragCancelQuery, {}, 'rag:cancel-query');
+  }, /Invalid IPC payload/);
+
+  assert.throws(() => {
+    parseIpcInput(ipcSchemas.audioDeviceId, '   ', 'start-audio-test');
+  }, /Invalid IPC payload/);
+
+  assert.throws(() => {
+    parseIpcInput(ipcSchemas.meetingId, '', 'get-meeting-details');
   }, /Invalid IPC payload/);
 });

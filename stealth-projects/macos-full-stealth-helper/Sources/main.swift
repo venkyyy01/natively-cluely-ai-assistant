@@ -105,9 +105,9 @@ private struct HeartbeatMonitorState {
 }
 
 private final class FullStealthHelperService {
+    private let stateQueue = DispatchQueue(label: "macos-full-stealth-helper.state")
     private var sessions: [String: SessionRuntime] = [:]
     private var telemetryBySession: [String: [TelemetryEvent]] = [:]
-    private let heartbeatMonitorLock = NSLock()
     private var heartbeatMonitorStates: [String: HeartbeatMonitorState] = [:]
     private let heartbeatTimeoutMs: TimeInterval
 
@@ -127,23 +127,25 @@ private final class FullStealthHelperService {
     }
 
     func createSession(_ request: LegacySessionRequest) -> LegacySessionResponse {
-        let runtime = SessionRuntime(
-            sessionId: request.sessionId,
-            windowId: request.windowId,
-            width: request.width,
-            height: request.height,
-            state: .attached,
-            surfaceToken: "surface-\(request.sessionId)"
-        )
-        sessions[request.sessionId] = runtime
-        recordEvent(sessionId: request.sessionId, type: "session-created", detail: "legacy create-session")
-        return LegacySessionResponse(
-            ready: true,
-            sessionId: request.sessionId,
-            mode: "virtual-display",
-            surfaceToken: runtime.surfaceToken,
-            reason: nil
-        )
+        stateQueue.sync {
+            let runtime = SessionRuntime(
+                sessionId: request.sessionId,
+                windowId: request.windowId,
+                width: request.width,
+                height: request.height,
+                state: .attached,
+                surfaceToken: "surface-\(request.sessionId)"
+            )
+            sessions[request.sessionId] = runtime
+            recordEvent(sessionId: request.sessionId, type: "session-created", detail: "legacy create-session")
+            return LegacySessionResponse(
+                ready: true,
+                sessionId: request.sessionId,
+                mode: "virtual-display",
+                surfaceToken: runtime.surfaceToken,
+                reason: nil
+            )
+        }
     }
 
     func releaseSession(sessionId: String) throws -> ReleaseResponse {
@@ -177,67 +179,98 @@ private final class FullStealthHelperService {
     }
 
     func createProtectedSession(_ request: CreateProtectedSessionRequest) -> ControlPlaneEnvelope<CreateProtectedSessionData> {
-        let runtime = SessionRuntime(
-            sessionId: request.sessionId,
-            width: 1280,
-            height: 720,
-            reason: request.reason,
-            state: .creating,
-            surfaceToken: "surface-\(request.sessionId)"
-        )
-        runtime.noteHeartbeat()
-        sessions[request.sessionId] = runtime
-        syncHeartbeatMonitorState(for: runtime)
-        recordEvent(sessionId: request.sessionId, type: "session-created", detail: "protected session created")
-        return ControlPlaneEnvelope(
-            outcome: .ok,
-            failClosed: false,
-            presentationAllowed: true,
-            blockers: [],
-            data: CreateProtectedSessionData(sessionId: request.sessionId, state: .creating)
-        )
+        stateQueue.sync {
+            let runtime = SessionRuntime(
+                sessionId: request.sessionId,
+                width: 1280,
+                height: 720,
+                reason: request.reason,
+                state: .creating,
+                surfaceToken: "surface-\(request.sessionId)"
+            )
+            runtime.noteHeartbeat()
+            sessions[request.sessionId] = runtime
+            syncHeartbeatMonitorState(for: runtime)
+            recordEvent(sessionId: request.sessionId, type: "session-created", detail: "protected session created")
+            return ControlPlaneEnvelope(
+                outcome: .ok,
+                failClosed: false,
+                presentationAllowed: true,
+                blockers: [],
+                data: CreateProtectedSessionData(sessionId: request.sessionId, state: .creating)
+            )
+        }
     }
 
     func attachSurface(_ request: AttachSurfaceRequest) -> ControlPlaneEnvelope<HealthReport> {
-        guard request.width > 0, request.height > 0 else {
-            let blocker = HelperBlocker(code: "invalid-surface-dimensions", message: "Surface dimensions must be positive", retryable: false)
-            return ControlPlaneEnvelope(
-                outcome: .blocked,
-                failClosed: true,
-                presentationAllowed: false,
-                blockers: [blocker],
-                data: HealthReport(
-                    sessionId: request.sessionId,
-                    state: .blocked,
-                    surfaceAttached: false,
-                    presenting: false,
-                    recoveryPending: true,
+        stateQueue.sync {
+            guard request.width > 0, request.height > 0 else {
+                let blocker = HelperBlocker(code: "invalid-surface-dimensions", message: "Surface dimensions must be positive", retryable: false)
+                return ControlPlaneEnvelope(
+                    outcome: .blocked,
+                    failClosed: true,
+                    presentationAllowed: false,
                     blockers: [blocker],
-                    lastTransitionAt: ISO8601DateFormatter().string(from: Date())
+                    data: HealthReport(
+                        sessionId: request.sessionId,
+                        state: .blocked,
+                        surfaceAttached: false,
+                        presenting: false,
+                        recoveryPending: true,
+                        blockers: [blocker],
+                        lastTransitionAt: ISO8601DateFormatter().string(from: Date())
+                    )
                 )
-            )
-        }
+            }
 
-        let runtime = ensureRuntime(sessionId: request.sessionId, width: request.width, height: request.height)
-        runtime.width = request.width
-        runtime.height = request.height
-        runtime.hiDpi = request.hiDpi
-        runtime.surfaceId = request.surfaceId
-        runtime.surfaceToken = request.surfaceId
+            let runtime = ensureRuntime(sessionId: request.sessionId, width: request.width, height: request.height)
+            runtime.width = request.width
+            runtime.height = request.height
+            runtime.hiDpi = request.hiDpi
+            runtime.surfaceId = request.surfaceId
+            runtime.surfaceToken = request.surfaceId
 
-        do {
-            let surface = try StealthSurface(
-                sessionId: request.sessionId,
-                surfaceId: request.surfaceId,
-                width: request.width,
-                height: request.height,
-                hiDpi: request.hiDpi,
-                allowHeadlessFallback: runtime.reason == "validation-run"
-            )
-            try surface.updateDrawableSize(width: request.width, height: request.height, hiDpi: request.hiDpi)
+            do {
+                let surface = try StealthSurface(
+                    sessionId: request.sessionId,
+                    surfaceId: request.surfaceId,
+                    width: request.width,
+                    height: request.height,
+                    hiDpi: request.hiDpi,
+                    allowHeadlessFallback: runtime.reason == "validation-run"
+                )
+                try surface.updateDrawableSize(width: request.width, height: request.height, hiDpi: request.hiDpi)
 
-            guard try surface.usesHiddenWindowSharing() else {
-                let blocker = HelperBlocker(code: "native-presenter-unavailable", message: "Stealth surface did not enter NSWindowSharingNone", retryable: false)
+                guard try surface.usesHiddenWindowSharing() else {
+                    let blocker = HelperBlocker(code: "native-presenter-unavailable", message: "Stealth surface did not enter NSWindowSharingNone", retryable: false)
+                    runtime.transition(to: .blocked, blockers: [blocker])
+                    runtime.recoveryPending = true
+                    runtime.surface = nil
+                    syncHeartbeatMonitorState(for: runtime)
+                    return ControlPlaneEnvelope(
+                        outcome: .blocked,
+                        failClosed: true,
+                        presentationAllowed: false,
+                        blockers: [blocker],
+                        data: runtime.healthReport()
+                    )
+                }
+
+                runtime.surface = surface
+                runtime.noteHeartbeat()
+                runtime.recoveryPending = false
+                runtime.transition(to: .attached, presenting: false, blockers: [])
+                syncHeartbeatMonitorState(for: runtime)
+                recordEvent(sessionId: request.sessionId, type: "surface-attached", detail: request.surfaceId)
+                return ControlPlaneEnvelope(
+                    outcome: .ok,
+                    failClosed: false,
+                    presentationAllowed: true,
+                    blockers: [],
+                    data: runtime.healthReport()
+                )
+            } catch {
+                let blocker = HelperBlocker(code: "native-presenter-unavailable", message: error.localizedDescription, retryable: false)
                 runtime.transition(to: .blocked, blockers: [blocker])
                 runtime.recoveryPending = true
                 runtime.surface = nil
@@ -250,121 +283,98 @@ private final class FullStealthHelperService {
                     data: runtime.healthReport()
                 )
             }
-
-            runtime.surface = surface
-            runtime.noteHeartbeat()
-            runtime.recoveryPending = false
-            runtime.transition(to: .attached, presenting: false, blockers: [])
-            syncHeartbeatMonitorState(for: runtime)
-            recordEvent(sessionId: request.sessionId, type: "surface-attached", detail: request.surfaceId)
-            return ControlPlaneEnvelope(
-                outcome: .ok,
-                failClosed: false,
-                presentationAllowed: true,
-                blockers: [],
-                data: runtime.healthReport()
-            )
-        } catch {
-            let blocker = HelperBlocker(code: "native-presenter-unavailable", message: error.localizedDescription, retryable: false)
-            runtime.transition(to: .blocked, blockers: [blocker])
-            runtime.recoveryPending = true
-            runtime.surface = nil
-            syncHeartbeatMonitorState(for: runtime)
-            return ControlPlaneEnvelope(
-                outcome: .blocked,
-                failClosed: true,
-                presentationAllowed: false,
-                blockers: [blocker],
-                data: runtime.healthReport()
-            )
         }
     }
 
     func present(_ request: PresentRequest) -> ControlPlaneEnvelope<HealthReport> {
-        let runtime = ensureRuntime(sessionId: request.sessionId, width: 1280, height: 720)
+        stateQueue.sync {
+            let runtime = ensureRuntime(sessionId: request.sessionId, width: 1280, height: 720)
 
-        guard let surface = runtime.surface else {
-            let blocker = HelperBlocker(code: "surface-not-attached", message: "Attach a stealth surface before presenting", retryable: true)
-            runtime.transition(to: .blocked, blockers: [blocker])
-            runtime.recoveryPending = true
-            return ControlPlaneEnvelope(
-                outcome: .blocked,
-                failClosed: true,
-                presentationAllowed: false,
-                blockers: [blocker],
-                data: runtime.healthReport()
-            )
-        }
-
-        do {
-            if request.activate {
-                try surface.show()
-                runtime.noteHeartbeat()
-                runtime.transition(to: .presenting, presenting: true, blockers: [])
-                recordEvent(sessionId: request.sessionId, type: "presentation-started", detail: "surface presented")
-            } else {
-                try surface.hide()
-                runtime.transition(to: .attached, presenting: false, blockers: [])
-                recordEvent(sessionId: request.sessionId, type: "presentation-stopped", detail: "surface hidden")
+            guard let surface = runtime.surface else {
+                let blocker = HelperBlocker(code: "surface-not-attached", message: "Attach a stealth surface before presenting", retryable: true)
+                runtime.transition(to: .blocked, blockers: [blocker])
+                runtime.recoveryPending = true
+                return ControlPlaneEnvelope(
+                    outcome: .blocked,
+                    failClosed: true,
+                    presentationAllowed: false,
+                    blockers: [blocker],
+                    data: runtime.healthReport()
+                )
             }
 
-            runtime.recoveryPending = false
-            syncHeartbeatMonitorState(for: runtime)
-            return ControlPlaneEnvelope(
-                outcome: .ok,
-                failClosed: false,
-                presentationAllowed: request.activate,
-                blockers: [],
-                data: runtime.healthReport()
-            )
-        } catch {
-            let blocker = HelperBlocker(code: "native-presenter-unavailable", message: error.localizedDescription, retryable: false)
-            runtime.transition(to: .failed, presenting: false, blockers: [blocker])
-            runtime.recoveryPending = true
-            syncHeartbeatMonitorState(for: runtime)
-            return ControlPlaneEnvelope(
-                outcome: .blocked,
-                failClosed: true,
-                presentationAllowed: false,
-                blockers: [blocker],
-                data: runtime.healthReport()
-            )
+            do {
+                if request.activate {
+                    try surface.show()
+                    runtime.noteHeartbeat()
+                    runtime.transition(to: .presenting, presenting: true, blockers: [])
+                    recordEvent(sessionId: request.sessionId, type: "presentation-started", detail: "surface presented")
+                } else {
+                    try surface.hide()
+                    runtime.transition(to: .attached, presenting: false, blockers: [])
+                    recordEvent(sessionId: request.sessionId, type: "presentation-stopped", detail: "surface hidden")
+                }
+
+                runtime.recoveryPending = false
+                syncHeartbeatMonitorState(for: runtime)
+                return ControlPlaneEnvelope(
+                    outcome: .ok,
+                    failClosed: false,
+                    presentationAllowed: request.activate,
+                    blockers: [],
+                    data: runtime.healthReport()
+                )
+            } catch {
+                let blocker = HelperBlocker(code: "native-presenter-unavailable", message: error.localizedDescription, retryable: false)
+                runtime.transition(to: .failed, presenting: false, blockers: [blocker])
+                runtime.recoveryPending = true
+                syncHeartbeatMonitorState(for: runtime)
+                return ControlPlaneEnvelope(
+                    outcome: .blocked,
+                    failClosed: true,
+                    presentationAllowed: false,
+                    blockers: [blocker],
+                    data: runtime.healthReport()
+                )
+            }
         }
     }
 
     func heartbeat(sessionId: String) -> ControlPlaneEnvelope<HealthReport> {
-        guard let runtime = sessions[sessionId] else {
-            let blocker = HelperBlocker(code: "session-not-found", message: "Session is not active", retryable: true)
-            return ControlPlaneEnvelope(
-                outcome: .blocked,
-                failClosed: true,
-                presentationAllowed: false,
-                blockers: [blocker],
-                data: HealthReport(
-                    sessionId: sessionId,
-                    state: .failed,
-                    surfaceAttached: false,
-                    presenting: false,
-                    recoveryPending: true,
+        stateQueue.sync {
+            guard let runtime = sessions[sessionId] else {
+                let blocker = HelperBlocker(code: "session-not-found", message: "Session is not active", retryable: true)
+                return ControlPlaneEnvelope(
+                    outcome: .blocked,
+                    failClosed: true,
+                    presentationAllowed: false,
                     blockers: [blocker],
-                    lastTransitionAt: ISO8601DateFormatter().string(from: Date())
+                    data: HealthReport(
+                        sessionId: sessionId,
+                        state: .failed,
+                        surfaceAttached: false,
+                        presenting: false,
+                        recoveryPending: true,
+                        blockers: [blocker],
+                        lastTransitionAt: ISO8601DateFormatter().string(from: Date())
+                    )
                 )
+            }
+
+            enforceHeartbeatTimeoutIfNeeded(runtime)
+            if runtime.blockers.isEmpty {
+                runtime.noteHeartbeat()
+            }
+            syncHeartbeatMonitorState(for: runtime)
+
+            return ControlPlaneEnvelope(
+                outcome: runtime.blockers.isEmpty ? .ok : .blocked,
+                failClosed: !runtime.blockers.isEmpty,
+                presentationAllowed: runtime.presenting,
+                blockers: runtime.blockers,
+                data: runtime.healthReport()
             )
         }
-
-        enforceHeartbeatTimeoutIfNeeded(runtime)
-        if runtime.blockers.isEmpty {
-            runtime.noteHeartbeat()
-        }
-        syncHeartbeatMonitorState(for: runtime)
-
-        return ControlPlaneEnvelope(
-            outcome: runtime.blockers.isEmpty ? .ok : .blocked,
-            failClosed: !runtime.blockers.isEmpty,
-            presentationAllowed: runtime.presenting,
-            blockers: runtime.blockers,
-            data: runtime.healthReport()
-        )
     }
 
     func teardownProtectedSession(sessionId: String) throws -> ControlPlaneEnvelope<ReleaseResponse> {
@@ -379,133 +389,138 @@ private final class FullStealthHelperService {
     }
 
     func getHealth(sessionId: String) -> ControlPlaneEnvelope<HealthReport> {
-        guard let runtime = sessions[sessionId] else {
-            let blocker = HelperBlocker(code: "session-not-found", message: "Session is not active", retryable: true)
-            return ControlPlaneEnvelope(
-                outcome: .blocked,
-                failClosed: true,
-                presentationAllowed: false,
-                blockers: [blocker],
-                data: HealthReport(
-                    sessionId: sessionId,
-                    state: .failed,
-                    surfaceAttached: false,
-                    presenting: false,
-                    recoveryPending: true,
+        stateQueue.sync {
+            guard let runtime = sessions[sessionId] else {
+                let blocker = HelperBlocker(code: "session-not-found", message: "Session is not active", retryable: true)
+                return ControlPlaneEnvelope(
+                    outcome: .blocked,
+                    failClosed: true,
+                    presentationAllowed: false,
                     blockers: [blocker],
-                    lastTransitionAt: ISO8601DateFormatter().string(from: Date())
+                    data: HealthReport(
+                        sessionId: sessionId,
+                        state: .failed,
+                        surfaceAttached: false,
+                        presenting: false,
+                        recoveryPending: true,
+                        blockers: [blocker],
+                        lastTransitionAt: ISO8601DateFormatter().string(from: Date())
+                    )
                 )
+            }
+
+            enforceHeartbeatTimeoutIfNeeded(runtime)
+            syncHeartbeatMonitorState(for: runtime)
+
+            return ControlPlaneEnvelope(
+                outcome: runtime.blockers.isEmpty ? .ok : .blocked,
+                failClosed: !runtime.blockers.isEmpty,
+                presentationAllowed: runtime.presenting,
+                blockers: runtime.blockers,
+                data: runtime.healthReport()
             )
         }
-
-        enforceHeartbeatTimeoutIfNeeded(runtime)
-        syncHeartbeatMonitorState(for: runtime)
-
-        return ControlPlaneEnvelope(
-            outcome: runtime.blockers.isEmpty ? .ok : .blocked,
-            failClosed: !runtime.blockers.isEmpty,
-            presentationAllowed: runtime.presenting,
-            blockers: runtime.blockers,
-            data: runtime.healthReport()
-        )
     }
 
     func getTelemetry(sessionId: String) -> ControlPlaneEnvelope<TelemetryReport> {
-        let events = telemetryBySession[sessionId] ?? []
-        let report = TelemetryReport(
-            events: events,
-            counters: TelemetryCounters(
-                capabilityProbeCount: events.filter { $0.type == "capability-probed" }.count,
-                blockedTransitionCount: events.filter { $0.type == "session-blocked" }.count,
-                presentationStartCount: events.filter { $0.type == "presentation-started" }.count
+        stateQueue.sync {
+            let events = telemetryBySession[sessionId] ?? []
+            let report = TelemetryReport(
+                events: events,
+                counters: TelemetryCounters(
+                    capabilityProbeCount: events.filter { $0.type == "capability-probed" }.count,
+                    blockedTransitionCount: events.filter { $0.type == "session-blocked" }.count,
+                    presentationStartCount: events.filter { $0.type == "presentation-started" }.count
+                )
             )
-        )
 
-        return ControlPlaneEnvelope(
-            outcome: .ok,
-            failClosed: false,
-            presentationAllowed: false,
-            blockers: [],
-            data: report
-        )
-    }
-
-    func validateSession(sessionId: String) -> ControlPlaneEnvelope<ValidationReport> {
-        guard let runtime = sessions[sessionId] else {
-            let blocker = HelperBlocker(code: "session-not-found", message: "Session is not active", retryable: true)
-            let report = ValidationReport(
-                sessionId: sessionId,
-                status: "failed",
-                reason: blocker.message,
-                windowEnumerated: false,
-                matchedWindowNumber: false,
-                matchedWindowTitle: false,
-                screenCaptureKitEnumerated: false,
-                matchedShareableContentWindow: false
-            )
             return ControlPlaneEnvelope(
-                outcome: .blocked,
+                outcome: .ok,
                 failClosed: false,
                 presentationAllowed: false,
-                blockers: [blocker],
+                blockers: [],
                 data: report
             )
         }
+    }
 
-        let matchedWindowTitle: Bool
-        if let surface = runtime.surface, let title = try? surface.title() {
-            matchedWindowTitle = !title.isEmpty
-        } else {
-            matchedWindowTitle = false
+    func validateSession(sessionId: String) -> ControlPlaneEnvelope<ValidationReport> {
+        stateQueue.sync {
+            guard let runtime = sessions[sessionId] else {
+                let blocker = HelperBlocker(code: "session-not-found", message: "Session is not active", retryable: true)
+                let report = ValidationReport(
+                    sessionId: sessionId,
+                    status: "failed",
+                    reason: blocker.message,
+                    windowEnumerated: false,
+                    matchedWindowNumber: false,
+                    matchedWindowTitle: false,
+                    screenCaptureKitEnumerated: false,
+                    matchedShareableContentWindow: false
+                )
+                return ControlPlaneEnvelope(
+                    outcome: .blocked,
+                    failClosed: false,
+                    presentationAllowed: false,
+                    blockers: [blocker],
+                    data: report
+                )
+            }
+
+            let matchedWindowTitle: Bool
+            if let surface = runtime.surface, let title = try? surface.title() {
+                matchedWindowTitle = !title.isEmpty
+            } else {
+                matchedWindowTitle = false
+            }
+
+            let report = ValidationReport(
+                sessionId: sessionId,
+                status: "inconclusive",
+                reason: "NSH-002 scaffold validates control-plane wiring only; full capture exclusion validation remains pending",
+                windowEnumerated: runtime.surface != nil,
+                matchedWindowNumber: (try? runtime.surface?.windowNumber()) != nil,
+                matchedWindowTitle: matchedWindowTitle,
+                screenCaptureKitEnumerated: false,
+                matchedShareableContentWindow: false
+            )
+
+            return ControlPlaneEnvelope(
+                outcome: .ok,
+                failClosed: false,
+                presentationAllowed: runtime.presenting,
+                blockers: [],
+                data: report
+            )
         }
-
-        let report = ValidationReport(
-            sessionId: sessionId,
-            status: "inconclusive",
-            reason: "NSH-002 scaffold validates control-plane wiring only; full capture exclusion validation remains pending",
-            windowEnumerated: runtime.surface != nil,
-            matchedWindowNumber: (try? runtime.surface?.windowNumber()) != nil,
-            matchedWindowTitle: matchedWindowTitle,
-            screenCaptureKitEnumerated: false,
-            matchedShareableContentWindow: false
-        )
-
-        return ControlPlaneEnvelope(
-            outcome: .ok,
-            failClosed: false,
-            presentationAllowed: runtime.presenting,
-            blockers: [],
-            data: report
-        )
     }
 
     func emitHeartbeatFaultEventsIfNeeded(_ emit: (JsonObject) throws -> Void) rethrows {
         let now = Date()
         var events: [JsonObject] = []
+        stateQueue.sync {
+            for sessionId in heartbeatMonitorStates.keys {
+                guard var state = heartbeatMonitorStates[sessionId] else {
+                    continue
+                }
 
-        heartbeatMonitorLock.lock()
-        for sessionId in heartbeatMonitorStates.keys {
-            guard var state = heartbeatMonitorStates[sessionId] else {
-                continue
+                let elapsedMs = now.timeIntervalSince(state.lastHeartbeatAt) * 1000
+                guard state.presenting, !state.blocked, elapsedMs > heartbeatTimeoutMs else {
+                    continue
+                }
+
+                state.blocked = true
+                heartbeatMonitorStates[sessionId] = state
+                events.append(
+                    HelperServerEvent(
+                        event: "helper-fault",
+                        sessionId: state.sessionId,
+                        reason: "stealth-heartbeat-missed",
+                        failClosed: true
+                    ).asJsonObject()
+                )
             }
-
-            let elapsedMs = now.timeIntervalSince(state.lastHeartbeatAt) * 1000
-            guard state.presenting, !state.blocked, elapsedMs > heartbeatTimeoutMs else {
-                continue
-            }
-
-            state.blocked = true
-            heartbeatMonitorStates[sessionId] = state
-            events.append(
-                HelperServerEvent(
-                    event: "helper-fault",
-                    sessionId: state.sessionId,
-                    reason: "stealth-heartbeat-missed",
-                    failClosed: true
-                ).asJsonObject()
-            )
         }
-        heartbeatMonitorLock.unlock()
 
         for event in events {
             try emit(event)
@@ -524,20 +539,16 @@ private final class FullStealthHelperService {
     }
 
     private func syncHeartbeatMonitorState(for runtime: SessionRuntime) {
-        heartbeatMonitorLock.lock()
         heartbeatMonitorStates[runtime.sessionId] = HeartbeatMonitorState(
             sessionId: runtime.sessionId,
             lastHeartbeatAt: runtime.lastHeartbeatAt,
             presenting: runtime.presenting,
             blocked: !runtime.blockers.isEmpty
         )
-        heartbeatMonitorLock.unlock()
     }
 
     private func removeHeartbeatMonitorState(sessionId: String) {
-        heartbeatMonitorLock.lock()
         heartbeatMonitorStates.removeValue(forKey: sessionId)
-        heartbeatMonitorLock.unlock()
     }
 
     private func enforceHeartbeatTimeoutIfNeeded(_ runtime: SessionRuntime) {
@@ -569,10 +580,12 @@ private final class FullStealthHelperService {
     }
 
     private func teardownRuntime(sessionId: String) throws {
-        if let runtime = sessions.removeValue(forKey: sessionId) {
-            try runtime.surface?.close()
-            removeHeartbeatMonitorState(sessionId: sessionId)
-            recordEvent(sessionId: sessionId, type: "presentation-stopped", detail: "session torn down")
+        try stateQueue.sync {
+            if let runtime = sessions.removeValue(forKey: sessionId) {
+                try runtime.surface?.close()
+                removeHeartbeatMonitorState(sessionId: sessionId)
+                recordEvent(sessionId: sessionId, type: "presentation-stopped", detail: "session torn down")
+            }
         }
     }
 

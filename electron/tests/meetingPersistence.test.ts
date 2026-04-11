@@ -523,6 +523,84 @@ test('MeetingPersistence waits for tracker flush before snapshotting', async () 
   }
 });
 
+test('MeetingPersistence tracks the final save so callers can wait for it before downstream processing', async () => {
+  const originalGetInstance = DatabaseManager.getInstance;
+  const restoreElectron = installElectronMock();
+  const callOrder: string[] = [];
+  let releaseSave: (() => void) | null = null;
+
+  DatabaseManager.getInstance = ((() => ({
+    createOrUpdateMeetingProcessingRecord() {},
+    finalizeMeetingProcessing() {},
+    markMeetingProcessingFailed() {
+      return false;
+    },
+  })) as unknown) as typeof DatabaseManager.getInstance;
+
+  try {
+    const saveGate = new Promise<void>((resolve) => {
+      releaseSave = resolve;
+    });
+
+    const persistence = new MeetingPersistence(
+      {
+        flushInterimTranscript() {},
+        async flushPersistenceNow() {},
+        createSnapshot(): MeetingSnapshot {
+          return {
+            transcript: [
+              { speaker: 'interviewer', text: 'hello', timestamp: 1, final: true },
+              { speaker: 'user', text: 'world', timestamp: 2, final: true },
+            ],
+            usage: [],
+            startTime: 5_000,
+            durationMs: 5_000,
+            context: '[INTERVIEWER]: hello\n[ME]: world',
+            meetingMetadata: null,
+          };
+        },
+        createSuccessorSession() {
+          return this;
+        },
+      } as never,
+      {
+        generateMeetingSummary: async () => 'unused',
+      } as never,
+    );
+
+    (persistence as unknown as {
+      processAndSaveMeeting: (snapshot: MeetingSnapshot, meetingId: string) => Promise<void>;
+    }).processAndSaveMeeting = async (_snapshot: MeetingSnapshot, meetingId: string) => {
+      callOrder.push(`save:start:${meetingId}`);
+      await saveGate;
+      callOrder.push(`save:end:${meetingId}`);
+    };
+
+    const stopPromise = persistence.stopMeeting('meeting-pending-save');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    assert.deepEqual(callOrder, ['save:start:meeting-pending-save']);
+    assert.equal((persistence as unknown as { pendingSaves: Set<Promise<void>> }).pendingSaves.size, 1);
+
+    const waitPromise = persistence.waitForPendingSaves(1000);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.deepEqual(callOrder, ['save:start:meeting-pending-save']);
+
+    releaseSave?.();
+    await stopPromise;
+    await waitPromise;
+
+    assert.deepEqual(callOrder, [
+      'save:start:meeting-pending-save',
+      'save:end:meeting-pending-save',
+    ]);
+    assert.equal((persistence as unknown as { pendingSaves: Set<Promise<void>> }).pendingSaves.size, 0);
+  } finally {
+    DatabaseManager.getInstance = originalGetInstance;
+    restoreElectron();
+  }
+});
+
 test('MeetingPersistence no-ops recovery when there are no unfinished meetings or details', async () => {
   const originalGetInstance = DatabaseManager.getInstance;
   const restoreElectron = installElectronMock();

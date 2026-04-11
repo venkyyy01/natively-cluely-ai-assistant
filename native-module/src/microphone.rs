@@ -14,7 +14,6 @@ use ringbuf::{
 };
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::sync::{Condvar, Mutex};
 
 use crate::audio_config::RING_BUFFER_SAMPLES;
 
@@ -43,8 +42,8 @@ pub struct MicrophoneStream {
     consumer: Option<HeapCons<f32>>,
     sample_rate: u32,
     is_running: Arc<AtomicBool>,
-    /// Condvar for DSP thread to wait on audio data
-    data_ready: Arc<(Mutex<bool>, Condvar)>,
+    /// Non-blocking wake flag for the DSP loop.
+    data_ready: Arc<AtomicBool>,
 }
 
 impl MicrophoneStream {
@@ -74,8 +73,7 @@ impl MicrophoneStream {
         let is_running = Arc::new(AtomicBool::new(false));
         let is_running_clone = is_running.clone();
 
-        // Shared Condvar for DSP thread wakeup
-        let data_ready = Arc::new((Mutex::new(false), Condvar::new()));
+        let data_ready = Arc::new(AtomicBool::new(false));
         let data_ready_clone = data_ready.clone();
 
         // Build the stream with minimal callback
@@ -136,8 +134,8 @@ impl MicrophoneStream {
         self.is_running.load(Ordering::SeqCst)
     }
 
-    /// Get the Condvar for DSP thread to wait on audio data
-    pub fn data_ready_signal(&self) -> Arc<(Mutex<bool>, Condvar)> {
+    /// Get the non-blocking wake flag for the DSP thread.
+    pub fn data_ready_signal(&self) -> Arc<AtomicBool> {
         self.data_ready.clone()
     }
 }
@@ -176,7 +174,7 @@ fn build_input_stream(
     mut producer: HeapProd<f32>,
     channels: usize,
     is_running: Arc<AtomicBool>,
-    data_ready: Arc<(Mutex<bool>, Condvar)>,
+    data_ready: Arc<AtomicBool>,
 ) -> Result<Stream> {
     let err_fn = |err| eprintln!("[Microphone] Stream error: {}", err);
 
@@ -197,12 +195,8 @@ fn build_input_stream(
                     } else {
                         let _ = producer.push_slice(data);
                     }
-                    // Signal DSP thread
-                    let (lock, cvar) = &*data_ready_f32;
-                    if let Ok(mut ready) = lock.lock() {
-                        *ready = true;
-                        cvar.notify_one();
-                    }
+                    // Signal DSP thread without blocking the callback.
+                    data_ready_f32.store(true, Ordering::Release);
                 },
                 err_fn,
                 None,
@@ -227,12 +221,8 @@ fn build_input_stream(
                             let _ = producer.try_push(sample as f32 / 32768.0);
                         }
                     }
-                    // Signal DSP thread
-                    let (lock, cvar) = &*data_ready_i16;
-                    if let Ok(mut ready) = lock.lock() {
-                        *ready = true;
-                        cvar.notify_one();
-                    }
+                    // Signal DSP thread without blocking the callback.
+                    data_ready_i16.store(true, Ordering::Release);
                 },
                 err_fn,
                 None,
@@ -257,12 +247,8 @@ fn build_input_stream(
                             let _ = producer.try_push(sample as f32 / 2147483648.0);
                         }
                     }
-                    // Signal DSP thread
-                    let (lock, cvar) = &*data_ready_i32;
-                    if let Ok(mut ready) = lock.lock() {
-                        *ready = true;
-                        cvar.notify_one();
-                    }
+                    // Signal DSP thread without blocking the callback.
+                    data_ready_i32.store(true, Ordering::Release);
                 },
                 err_fn,
                 None,
