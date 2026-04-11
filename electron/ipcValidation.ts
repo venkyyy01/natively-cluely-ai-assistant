@@ -7,7 +7,7 @@ const boundedOptionalString = (max: number) => z.string().trim().min(1).max(max)
 const sttProviderEnum = z.enum(['google', 'groq', 'openai', 'deepgram', 'elevenlabs', 'azure', 'ibmwatson', 'soniox']);
 const llmProviderEnum = z.enum(['gemini', 'groq', 'openai', 'claude', 'cerebras']);
 const fastResponseProviderEnum = z.enum(['groq', 'cerebras']);
-const externalUrlSchema = z.string().trim().min(1).max(4096).refine((value) => {
+const externalUrlSchema = z.string().trim().min(1).max(65535).refine((value) => {
   try {
     const parsed = new URL(value);
     return ['http:', 'https:', 'mailto:'].includes(parsed.protocol);

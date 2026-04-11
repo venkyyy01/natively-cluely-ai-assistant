@@ -162,6 +162,9 @@ export class ConsciousAccelerationOrchestrator {
 
   onInterviewerAudioActivity(rms: number): void {
     this.onUpdateRMS(rms);
+    if (rms > 40) {
+      this.onUserSpeaking();
+    }
   }
 
   updateTranscriptSegments(segments: Array<{ text: string; timestamp: number; speaker: string }>, transcriptRevision?: number): void {

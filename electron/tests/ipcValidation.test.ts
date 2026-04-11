@@ -55,6 +55,9 @@ test('ipc schemas validate additional accepted shapes', () => {
   assert.equal(parseIpcInput(ipcSchemas.audioDeviceId, 'mic-1', 'start-audio-test'), 'mic-1');
   assert.equal(parseIpcInput(ipcSchemas.meetingId, 'meeting-1', 'get-meeting-details'), 'meeting-1');
   assert.equal(parseIpcInput(ipcSchemas.externalUrl, 'https://example.com', 'open-external'), 'https://example.com');
+
+  const longGmailUrl = `https://mail.google.com/mail/?view=cm&fs=1&body=${encodeURIComponent('x'.repeat(12000))}`;
+  assert.equal(parseIpcInput(ipcSchemas.externalUrl, longGmailUrl, 'open-external'), longGmailUrl);
 });
 
 test('parseIpcInput reports joined zod issue paths', () => {

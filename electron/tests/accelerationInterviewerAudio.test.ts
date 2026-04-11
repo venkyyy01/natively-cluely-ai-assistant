@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 
 import { ConsciousAccelerationOrchestrator } from '../conscious/ConsciousAccelerationOrchestrator';
 
-test('interviewer audio activity updates RMS without canceling pause evaluation', () => {
+test('interviewer audio activity updates RMS and cancels pause evaluation when speech resumes', () => {
   const orchestrator = new ConsciousAccelerationOrchestrator();
   orchestrator.setEnabled(true);
 
@@ -25,6 +25,7 @@ test('interviewer audio activity updates RMS without canceling pause evaluation'
     };
 
     const before = orchestrator.getPauseConfidence().signals.find((signal) => signal.name === 'audio_energy_decay');
+    orchestrator.onSilenceStart('Can you walk me through the tradeoffs?');
 
     for (let i = 0; i < 10; i += 1) {
       orchestrator.onInterviewerAudioActivity(80);
@@ -35,8 +36,8 @@ test('interviewer audio activity updates RMS without canceling pause evaluation'
 
     assert.ok(before);
     assert.ok(energyDecay);
-    assert.equal(userSpeakingCalls, 0);
-    assert.equal(speechStartedCalls, 0);
+    assert.equal(userSpeakingCalls > 0, true);
+    assert.equal(speechStartedCalls > 0, true);
     assert.equal(before?.value, 0.5);
     assert.notEqual(energyDecay?.value, 0.5);
   } finally {
