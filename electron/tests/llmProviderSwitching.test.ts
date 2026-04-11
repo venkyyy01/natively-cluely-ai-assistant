@@ -159,3 +159,37 @@ test('fast response streaming falls back to the default Cerebras model when none
   assert.equal(output, 'fast stream');
   helper.scrubKeys();
 });
+
+test('chatWithGemini routes image-only and text+image requests through active cURL provider', async () => {
+  const LLMHelper = await loadLLMHelper();
+  const helper = new LLMHelper() as any;
+  const originalChatWithCurl = helper.chatWithCurl;
+  const calls: Array<{ userMessage: string; context: string; imageCount: number }> = [];
+
+  helper.setModel('curl-provider', [{
+    id: 'curl-provider',
+    name: 'cURL',
+    curlCommand: 'curl https://example.com -d "{{TEXT}}"',
+    responsePath: 'choices[0].message.content',
+  }]);
+
+  helper.chatWithCurl = async (userMessage: string, _systemPrompt?: string, context: string = '', imagePaths?: string[]) => {
+    calls.push({ userMessage, context, imageCount: imagePaths?.length || 0 });
+    return 'ok';
+  };
+
+  try {
+    const imageOnly = await helper.chatWithGemini('', ['/tmp/image-only.png']);
+    const mixed = await helper.chatWithGemini('hello', ['/tmp/mixed.png'], 'ctx');
+
+    assert.equal(imageOnly, 'ok');
+    assert.equal(mixed, 'ok');
+    assert.equal(calls.length, 2);
+    assert.equal(calls[0].imageCount, 1);
+    assert.equal(calls[1].imageCount, 1);
+    assert.equal(calls[1].context, 'ctx');
+  } finally {
+    helper.chatWithCurl = originalChatWithCurl;
+    helper.scrubKeys();
+  }
+});

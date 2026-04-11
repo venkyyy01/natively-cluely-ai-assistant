@@ -1368,7 +1368,12 @@ ANSWER DIRECTLY:`;
       }
 
       if (this.activeCurlProvider) {
-        return await this.chatWithCurl(message, skipSystemPrompt ? undefined : CUSTOM_SYSTEM_PROMPT);
+        return await this.chatWithCurl(
+          effectiveMessage,
+          skipSystemPrompt ? undefined : CUSTOM_SYSTEM_PROMPT,
+          context || "",
+          imagePaths,
+        );
       }
 
       if (this.customProvider) {
@@ -1380,7 +1385,7 @@ ANSWER DIRECTLY:`;
           skipSystemPrompt ? "" : CUSTOM_SYSTEM_PROMPT,
           message,
           context || "",
-          imagePaths?.[0]
+          imagePaths
         );
         return this.processResponse(response);
       }
@@ -1722,8 +1727,127 @@ ANSWER DIRECTLY:`;
     });
   }
 
+  private async readImagesAsBase64(imagePaths?: string[]): Promise<string[]> {
+    if (!imagePaths?.length) return [];
+
+    const encodedImages: string[] = [];
+    for (const imagePath of imagePaths) {
+      if (!imagePath || !fs.existsSync(imagePath)) {
+        continue;
+      }
+
+      try {
+        const imageData = await fs.promises.readFile(imagePath);
+        const base64Image = imageData.toString("base64");
+        if (base64Image) {
+          encodedImages.push(base64Image);
+        }
+      } catch (error) {
+        console.warn("[LLMHelper] Failed to read image for cURL provider:", sanitizeError(error));
+      }
+    }
+
+    return encodedImages;
+  }
+
+  private normalizeProviderRequestPayload(payload: unknown): unknown {
+    if (typeof payload !== 'string') {
+      return payload;
+    }
+
+    const trimmed = payload.trim();
+    if (!trimmed) {
+      return payload;
+    }
+
+    if (looksLikeJsonPayload(trimmed)) {
+      try {
+        return JSON.parse(trimmed);
+      } catch {
+        // fall through to unescaped retry
+      }
+    }
+
+    const unescaped = trimmed.replace(/\\"/g, '"');
+    if (unescaped !== trimmed && looksLikeJsonPayload(unescaped)) {
+      try {
+        return JSON.parse(unescaped);
+      } catch {
+        // keep original payload
+      }
+    }
+
+    return payload;
+  }
+
+  private buildFetchRequestBody(payload: unknown): any {
+    const normalizedPayload = this.normalizeProviderRequestPayload(payload);
+    if (normalizedPayload === undefined || normalizedPayload === null) {
+      return undefined;
+    }
+
+    if (typeof normalizedPayload === 'string') {
+      return normalizedPayload;
+    }
+
+    return JSON.stringify(normalizedPayload);
+  }
+
+  private getCurlDataTemplate(requestConfig: any): unknown {
+    const candidate = requestConfig?.data ?? requestConfig?.form ?? {};
+
+    if (candidate && typeof candidate === 'object' && !Array.isArray(candidate)) {
+      const entries = Object.entries(candidate as Record<string, unknown>);
+      if (entries.length === 1) {
+        const [template, value] = entries[0];
+        if ((value === undefined || value === null) && typeof template === 'string' && template.trim()) {
+          return template;
+        }
+      }
+    }
+
+    return candidate;
+  }
+
+  private buildOpenAiCompatibleVariables(
+    userMessage: string,
+    systemPrompt: string | undefined,
+    context: string,
+    base64Images: string[],
+  ): { OPENAI_USER_CONTENT: any[]; OPENAI_MESSAGES: any[] } {
+    const userText = context
+      ? userMessage
+        ? `CONTEXT:\n${context}\n\nUSER QUESTION:\n${userMessage}`
+        : `CONTEXT:\n${context}`
+      : userMessage;
+
+    const openAiUserContent: any[] = [];
+    if (userText.trim()) {
+      openAiUserContent.push({ type: 'text', text: userText });
+    }
+    for (const base64Image of base64Images) {
+      openAiUserContent.push({
+        type: 'image_url',
+        image_url: { url: `data:image/png;base64,${base64Image}` },
+      });
+    }
+
+    const openAiMessages: any[] = [];
+    if ((systemPrompt || '').trim()) {
+      openAiMessages.push({ role: 'system', content: systemPrompt });
+    }
+    if (openAiUserContent.length > 0) {
+      openAiMessages.push({ role: 'user', content: openAiUserContent });
+    }
+
+    return {
+      OPENAI_USER_CONTENT: openAiUserContent,
+      OPENAI_MESSAGES: openAiMessages,
+    };
+  }
+
   // The handler for cURL requests
-  public async chatWithCurl(userMessage: string, systemPrompt?: string): Promise<string> {
+  public async chatWithCurl(userMessage: string, systemPrompt?: string, context: string = "", imagePaths?: string[]): Promise<string> {
     if (!this.activeCurlProvider) throw new Error("No cURL provider active");
 
     const { curlCommand, responsePath } = this.activeCurlProvider;
@@ -1733,18 +1857,44 @@ ANSWER DIRECTLY:`;
     const curlConfig = curl2Json(curlCommand);
 
     // 2. Prepare Variables
-    // We combine System Prompt + User Message into {{TEXT}} for simplicity in raw mode, 
-    // or you can support {{SYSTEM}} if you want to get fancy later.
-    const fullPrompt = systemPrompt ? `${systemPrompt}\n\n${userMessage}` : userMessage;
+    const contextualUserMessage = context
+      ? `CONTEXT:\n${context}\n\nUSER QUESTION:\n${userMessage}`
+      : userMessage;
+    const fullPrompt = systemPrompt ? `${systemPrompt}\n\n${contextualUserMessage}` : contextualUserMessage;
+    const base64Images = await this.readImagesAsBase64(imagePaths);
+    const primaryBase64Image = base64Images[0] || "";
+    const { OPENAI_USER_CONTENT, OPENAI_MESSAGES } = this.buildOpenAiCompatibleVariables(
+      userMessage,
+      systemPrompt,
+      context,
+      base64Images,
+    );
 
     const variables = {
-      TEXT: fullPrompt.replace(/\n/g, "\\n").replace(/"/g, '\\"') // Basic escaping
+      TEXT: fullPrompt,
+      PROMPT: fullPrompt,
+      SYSTEM_PROMPT: systemPrompt || "",
+      USER_MESSAGE: userMessage,
+      CONTEXT: context,
+      IMAGE_BASE64: primaryBase64Image,
+      IMAGE_BASE64S: base64Images,
+      IMAGE_COUNT: String(base64Images.length),
+      OPENAI_USER_CONTENT,
+      OPENAI_MESSAGES,
+      API_KEY: this.openaiApiKey || this.groqApiKey || this.cerebrasApiKey || this.claudeApiKey || this.apiKey || "",
+      OPENAI_API_KEY: this.openaiApiKey || "",
+      GROQ_API_KEY: this.groqApiKey || "",
+      CEREBRAS_API_KEY: this.cerebrasApiKey || "",
+      CLAUDE_API_KEY: this.claudeApiKey || "",
+      GEMINI_API_KEY: this.apiKey || "",
     };
 
     // 3. Inject Variables into URL, Headers, and Body
     const url = deepVariableReplacer(curlConfig.url, variables);
     const headers = deepVariableReplacer(curlConfig.header || {}, variables);
-    const data = deepVariableReplacer(curlConfig.data || {}, variables);
+    const dataTemplate = this.getCurlDataTemplate(curlConfig);
+    const replacedData = deepVariableReplacer(dataTemplate, variables);
+    const data = this.normalizeProviderRequestPayload(replacedData);
 
     // 4. Execute
     try {
@@ -1846,22 +1996,21 @@ ANSWER DIRECTLY:`;
     systemPrompt: string,
     rawUserMessage: string,
     context: string,
-    imagePath?: string
+    imagePaths?: string[]
   ): Promise<string> {
 
     // 1. Parse cURL to JSON object
     const requestConfig = curl2Json(curlCommand);
 
     // 2. Prepare Image (if any)
-    let base64Image = "";
-    if (imagePath) {
-      try {
-        const imageData = await fs.promises.readFile(imagePath);
-        base64Image = imageData.toString("base64");
-      } catch (e) {
-        console.warn("Failed to read image for Custom Provider:", e);
-      }
-    }
+    const base64Images = await this.readImagesAsBase64(imagePaths);
+    const primaryBase64Image = base64Images[0] || "";
+    const { OPENAI_USER_CONTENT, OPENAI_MESSAGES } = this.buildOpenAiCompatibleVariables(
+      rawUserMessage,
+      systemPrompt,
+      context,
+      base64Images,
+    );
 
     // 3. Prepare Variables
     const variables = {
@@ -1870,20 +2019,32 @@ ANSWER DIRECTLY:`;
       SYSTEM_PROMPT: systemPrompt,       // Raw System Prompt
       USER_MESSAGE: rawUserMessage,      // Raw User Message
       CONTEXT: context,                  // Raw Context
-      IMAGE_BASE64: base64Image,         // Base64 encoded image string
+      IMAGE_BASE64: primaryBase64Image,  // Backward-compatible first image
+      IMAGE_BASE64S: base64Images,
+      IMAGE_COUNT: String(base64Images.length),
+      OPENAI_USER_CONTENT,
+      OPENAI_MESSAGES,
+      API_KEY: this.openaiApiKey || this.groqApiKey || this.cerebrasApiKey || this.claudeApiKey || this.apiKey || "",
+      OPENAI_API_KEY: this.openaiApiKey || "",
+      GROQ_API_KEY: this.groqApiKey || "",
+      CEREBRAS_API_KEY: this.cerebrasApiKey || "",
+      CLAUDE_API_KEY: this.claudeApiKey || "",
+      GEMINI_API_KEY: this.apiKey || "",
     };
 
     // 4. Inject Variables into URL, Headers, and Body
     const url = deepVariableReplacer(requestConfig.url, variables);
     const headers = deepVariableReplacer(requestConfig.header || {}, variables);
-    const body = deepVariableReplacer(requestConfig.data || {}, variables);
+    const bodyTemplate = this.getCurlDataTemplate(requestConfig);
+    const body = deepVariableReplacer(bodyTemplate, variables);
+    const requestBody = this.buildFetchRequestBody(body);
 
     // 5. Execute Fetch
     try {
       const response = await fetch(url, {
         method: requestConfig.method || 'POST',
         headers: headers,
-        body: JSON.stringify(body),
+        body: requestBody,
         signal: createTimeoutSignal(),
       });
 
@@ -2218,7 +2379,7 @@ ANSWER DIRECTLY:`;
             systemPrompt,
             userPrompt,
             "",
-            imagePaths[0]
+            imagePaths
           )
         });
       } else {
@@ -2238,7 +2399,7 @@ ANSWER DIRECTLY:`;
     if (this.activeCurlProvider && !this.customProvider) {
       localProviders.push({
         name: `cURL Provider (${this.activeCurlProvider.name})`,
-        execute: () => this.chatWithCurl(userPrompt, systemPrompt)
+        execute: () => this.chatWithCurl(userPrompt, systemPrompt, "", imagePaths)
       });
     }
 
@@ -2568,7 +2729,7 @@ ANSWER DIRECTLY:`;
         curlSystemPrompt,
         effectiveMessage,
         context || "",
-        imagePaths?.[0]
+        imagePaths
       );
       yield response;
       return;
@@ -3171,16 +3332,8 @@ ANSWER DIRECTLY:`;
     const curlCommand = this.customProvider.curlCommand;
     const requestConfig = curl2Json(curlCommand);
 
-    let base64Image = "";
-    if (imagePaths?.length) {
-      try {
-        // Use the first image for custom providers (they typically only support one)
-        const data = await fs.promises.readFile(imagePaths[0]);
-        base64Image = data.toString("base64");
-      } catch (e) {
-        console.warn('[LLMHelper] Failed to read image for custom provider:', e);
-      }
-    }
+    const base64Images = await this.readImagesAsBase64(imagePaths);
+    const base64Image = base64Images[0] || "";
 
     const combinedMessage = context ? `${context}\n\n${message}` : message;
 
@@ -3191,17 +3344,27 @@ ANSWER DIRECTLY:`;
       USER_MESSAGE: message,
       CONTEXT: context || "",
       IMAGE_BASE64: base64Image,
+      IMAGE_BASE64S: base64Images,
+      IMAGE_COUNT: String(base64Images.length),
+      API_KEY: this.openaiApiKey || this.groqApiKey || this.cerebrasApiKey || this.claudeApiKey || this.apiKey || "",
+      OPENAI_API_KEY: this.openaiApiKey || "",
+      GROQ_API_KEY: this.groqApiKey || "",
+      CEREBRAS_API_KEY: this.cerebrasApiKey || "",
+      CLAUDE_API_KEY: this.claudeApiKey || "",
+      GEMINI_API_KEY: this.apiKey || "",
     };
 
     const url = deepVariableReplacer(requestConfig.url, variables);
     const headers = deepVariableReplacer(requestConfig.header || {}, variables);
-    const body = deepVariableReplacer(requestConfig.data || {}, variables);
+    const bodyTemplate = this.getCurlDataTemplate(requestConfig);
+    const body = deepVariableReplacer(bodyTemplate, variables);
+    const requestBody = this.buildFetchRequestBody(body);
 
     try {
       const response = await fetch(url, {
         method: requestConfig.method || 'POST',
         headers: headers,
-        body: JSON.stringify(body),
+        body: requestBody,
         signal: createTimeoutSignal(),
       });
 

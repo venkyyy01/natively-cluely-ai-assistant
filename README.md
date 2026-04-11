@@ -849,6 +849,8 @@ Your credentials never leave your machine and are not logged, proxied, or stored
 3. Paste your cURL command
 4. Natively will parse and use your custom endpoint
 
+For full placeholder reference and working templates (text-only, image-only, and multimodal), see [Custom cURL Provider Guide](docs/curl-provider-guide.md).
+
 ---
 
 ## Meeting Intelligence Dashboard
