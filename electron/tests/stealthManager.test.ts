@@ -482,7 +482,7 @@ describe('StealthManager', () => {
         win.destroy();
     });
 
-    it('logs capture detections when the watchdog hides windows', async () => {
+  it('logs capture detections when the watchdog hides windows', async () => {
         const intervals: Array<() => Promise<void> | void> = [];
         const logs: string[] = [];
         const manager = new StealthManager(
@@ -516,6 +516,30 @@ describe('StealthManager', () => {
         assert.ok(logs.some((entry) => entry.includes('Capture watchdog detected suspicious tools running')));
         win.destroy();
     });
+
+  it('uses a single darwin process snapshot before falling back to per-pattern probing', async () => {
+    const calls: Array<{ command: string; args: string[] }> = [];
+    const manager = new StealthManager(
+      { enabled: true },
+      {
+        platform: 'darwin',
+        logger: silentLogger,
+        processEnumerator: async (command: string, args: string[]) => {
+          calls.push({ command, args });
+          if (command === 'ps') {
+            return '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome\n/usr/bin/obs';
+          }
+          throw new Error('fallback scan should not run when snapshot succeeds');
+        },
+      },
+    );
+
+    const matches = await (manager as any).detectCaptureProcesses();
+
+    assert.ok(matches.some((pattern: RegExp) => pattern.test('chrome')));
+    assert.ok(matches.some((pattern: RegExp) => pattern.test('obs')));
+    assert.deepStrictEqual(calls, [{ command: 'ps', args: ['-A', '-o', 'command='] }]);
+  });
 
   it('verifies applied stealth state through native bindings', () => {
     const win = new FakeWindow();

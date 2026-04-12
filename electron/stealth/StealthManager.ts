@@ -1013,6 +1013,11 @@ export class StealthManager extends EventEmitter {
     }
 
     if (this.platform === 'darwin') {
+      const processSnapshot = await this.readDarwinProcessSnapshot();
+      if (processSnapshot !== null) {
+        return this.captureToolPatterns.filter((pattern) => pattern.test(processSnapshot));
+      }
+
       const matches: RegExp[] = [];
       const browserPatterns = this.getBrowserCapturePatterns();
       const nonBrowserPatterns = this.captureToolPatterns.filter((p) => !browserPatterns.includes(p));
@@ -1044,6 +1049,14 @@ export class StealthManager extends EventEmitter {
     }
 
     return [];
+  }
+
+  private async readDarwinProcessSnapshot(): Promise<string | null> {
+    try {
+      return await this.processEnumerator('ps', ['-A', '-o', 'command=']);
+    } catch {
+      return null;
+    }
   }
 
   private getBrowserCapturePatterns(): RegExp[] {

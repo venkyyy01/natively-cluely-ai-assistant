@@ -37,3 +37,36 @@ test('ConsciousAnswerPlanner selects metric_backed_answer for metric probes', ()
 
   assert.equal(plan.answerShape, 'metric_backed_answer');
 });
+
+test('ConsciousAnswerPlanner emits code-first delivery hints for live coding questions', () => {
+  const planner = new ConsciousAnswerPlanner();
+  const plan = planner.plan({
+    question: 'Write the debounce function in TypeScript.',
+    reaction: null,
+    hypothesis: null,
+  });
+
+  assert.equal(plan.questionMode, 'live_coding');
+  assert.equal(plan.deliveryFormat, 'code_first_or_short_steps');
+  assert.equal(plan.deliveryStyle, 'compact_technical');
+  assert.ok(plan.maxWords <= 70);
+  assert.ok(plan.focalFacets.includes('codeTransition'));
+  assert.match(planner.buildContextBlock(plan), /QUESTION_MODE: live_coding/);
+  assert.match(planner.buildContextBlock(plan), /DELIVERY_FORMAT: code_first_or_short_steps/);
+});
+
+test('ConsciousAnswerPlanner converts behavioral questions into short grounded narrative hints', () => {
+  const planner = new ConsciousAnswerPlanner();
+  const plan = planner.plan({
+    question: 'Tell me about a time you handled disagreement on a team.',
+    reaction: null,
+    hypothesis: null,
+  });
+
+  assert.equal(plan.questionMode, 'behavioral');
+  assert.equal(plan.answerShape, 'example_answer');
+  assert.equal(plan.deliveryFormat, 'short_star_narrative');
+  assert.equal(plan.deliveryStyle, 'first_person_professional');
+  assert.ok(plan.maxWords <= 85);
+  assert.match(planner.buildContextBlock(plan), /GROUNDING_HINT: Ground the answer in concrete past experience/);
+});
