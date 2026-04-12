@@ -74,6 +74,7 @@ interface StealthManagerDependencies {
 interface StealthCapableWindow {
   on?: (event: string, listener: () => void) => void;
   setContentProtection: (value: boolean) => void;
+  setExcludeFromCapture?: (value: boolean) => void;
   setHiddenInMissionControl?: (value: boolean) => void;
   setExcludedFromShownWindowsMenu?: (value: boolean) => void;
   setSkipTaskbar?: (value: boolean) => void;
@@ -161,6 +162,17 @@ const KNOWN_CAPTURE_TOOL_PATTERNS = [
   /screencasting/i,
   /airplay/i,
   /coreaudiod/i,
+  /facet/i,
+  /gather/i,
+  /teramind/i,
+  /activtrak/i,
+  /time doctor/i,
+  /hubstaff/i,
+  /workpuls/i,
+  /idletime/i,
+  /screencastify/i,
+  /vidyard/i,
+  /wistia/i,
 ];
 
 function scheduleUnrefInterval(callback: () => Promise<void> | void, intervalMs: number): NodeJS.Timeout {
@@ -442,6 +454,12 @@ export class StealthManager extends EventEmitter {
       if (windowNumber !== null) {
         void this.stealthEnhancer.enhanceWindowProtection(windowNumber);
       }
+
+      // CRITICAL: Auto-hide when capture is detected for maximum privacy
+      if (typeof win.hide === 'function') {
+        win.hide();
+        this.logger.warn('[StealthManager] Auto-hiding window due to capture detection');
+      }
     }
   }
 
@@ -502,6 +520,14 @@ export class StealthManager extends EventEmitter {
       win.setContentProtection(enable);
     } catch (error) {
       this.logger.warn('[StealthManager] setContentProtection failed:', error);
+    }
+
+    if (typeof win.setExcludeFromCapture === 'function') {
+      try {
+        win.setExcludeFromCapture(enable);
+      } catch (error) {
+        this.logger.warn('[StealthManager] setExcludeFromCapture failed:', error);
+      }
     }
   }
 
@@ -1302,13 +1328,10 @@ for window in windows:
 
     if (typeof win.setOpacity === 'function') {
       win.setOpacity(0);
-      this.timeoutScheduler(() => {
-        if (!this.isWindowDestroyed(win) && typeof win.setOpacity === 'function') {
-          win.setOpacity(1);
-          this.applyLayer0(win, true);
-          this.applyNativeStealth(win);
-        }
-      }, 100);
+    }
+
+    if (typeof win.hide === 'function') {
+      win.hide();
     }
 
     this.applyLayer0(win, true);
@@ -1428,7 +1451,24 @@ for window in windows:
       return;
     }
 
-    this.timeoutScheduler(() => {
+    const attemptRestore = async (): Promise<void> => {
+      await this.delay(WATCHDOG_RESTORE_DELAY_MS);
+
+      const stillRunning = await this.detectCaptureProcesses();
+      if (stillRunning.length > 0) {
+        this.logger.log('[StealthManager] Capture tools still running, delaying window restore');
+        await this.delay(WATCHDOG_RESTORE_DELAY_MS * 2);
+
+        const recheck = await this.detectCaptureProcesses();
+        if (recheck.length > 0) {
+          this.logger.warn('[StealthManager] Capture tools persist, keeping windows hidden');
+          this.addWarning('capture_tools_still_running');
+          return;
+        }
+      }
+
+      this.clearWarning('capture_tools_still_running');
+
       for (const { win, restoreWithOpacity } of windowsToRestore) {
         if (this.isWindowDestroyed(win)) {
           continue;
@@ -1436,12 +1476,20 @@ for window in windows:
 
         if (restoreWithOpacity && typeof win.setOpacity === 'function') {
           win.setOpacity(1);
-        } else {
-          win.show?.();
+        } else if (typeof win.show === 'function') {
+          win.show();
         }
         this.reapplyAfterShow(win);
       }
-    }, WATCHDOG_RESTORE_DELAY_MS);
+    };
+
+    void attemptRestore();
+  }
+
+  private delay(ms: number): Promise<void> {
+    return new Promise((resolve) => {
+      this.timeoutScheduler(() => resolve(), ms);
+    });
   }
 
   verifyStealth(win: StealthCapableWindow): boolean {

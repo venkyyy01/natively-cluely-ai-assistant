@@ -555,18 +555,28 @@ this.syncWindowStealthProtection(this.isUndetectable);
       this.updateTrayMenu();
     });
 
-    keybindManager.onShortcutTriggered(async (actionId) => {
-      console.log(`[Main] Global shortcut triggered: ${actionId}`);
-      try {
-        if (actionId === 'general:toggle-visibility') {
-          this.toggleMainWindow();
-        } else if (actionId === 'general:toggle-clickthrough') {
-          const enabled = this.windowHelper.toggleOverlayClickthrough();
-          const mainWindow = this.getMainWindow();
-          if (mainWindow) {
-            mainWindow.webContents.send('overlay-clickthrough-changed', enabled);
-          }
-        } else if (actionId === 'general:take-screenshot') {
+keybindManager.onShortcutTriggered(async (actionId) => {
+  console.log(`[Main] Global shortcut triggered: ${actionId}`);
+  try {
+    if (actionId === 'general:emergency-hide') {
+      // CRITICAL: Emergency hide - instantly hide all windows for privacy
+      console.warn('[Main] EMERGENCY HIDE ACTIVATED');
+      this.windowHelper.hideMainWindow();
+      // Activate privacy shield to hide sensitive content
+      this.setPrivacyShieldFault('emergency_hide', 'Emergency hide activated - sensitive content hidden');
+      const mainWindow = this.getMainWindow();
+      if (mainWindow) {
+        mainWindow.webContents.send('emergency-hide-activated');
+      }
+    } else if (actionId === 'general:toggle-visibility') {
+      this.toggleMainWindow();
+    } else if (actionId === 'general:toggle-clickthrough') {
+      const enabled = this.windowHelper.toggleOverlayClickthrough();
+      const mainWindow = this.getMainWindow();
+      if (mainWindow) {
+        mainWindow.webContents.send('overlay-clickthrough-changed', enabled);
+      }
+    } else if (actionId === 'general:take-screenshot') {
           const screenshotPath = await this.takeScreenshot();
           const preview = await this.getImagePreview(screenshotPath);
           const mainWindow = this.getMainWindow();
@@ -2904,6 +2914,18 @@ private syncWindowStealthProtection(state: boolean): void {
     void stealthSupervisor.reportFault(new Error(normalizedReason)).catch((error) => {
       console.error('[Stealth] Failed to report stealth runtime fault:', error)
     })
+  }
+
+  public setPrivacyShieldFault(key: string, reason: string): void {
+    console.warn(`[AppState] Privacy shield fault set: ${key} - ${reason}`);
+    this.privacyShieldFaultReason = reason;
+    this.syncPrivacyShieldState();
+  }
+
+  public clearPrivacyShieldFault(): void {
+    console.log('[AppState] Privacy shield fault cleared');
+    this.privacyShieldFaultReason = null;
+    this.syncPrivacyShieldState();
   }
 
   private handleStealthDegradation(warnings: string[]): void {

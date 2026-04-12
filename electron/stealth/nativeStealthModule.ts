@@ -11,8 +11,12 @@ export function loadNativeStealthModule(options?: { retryOnFailure?: boolean }):
     return cachedModule;
   }
   
+  if (!options?.retryOnFailure && cachedModule === null) {
+    return null;
+  }
+  
   if (options?.retryOnFailure && loadAttempts >= MAX_LOAD_ATTEMPTS) {
-    console.warn(`[NativeStealthModule] Max retry attempts (${MAX_LOAD_ATTEMPTS}) reached, giving up`);
+    console.warn(`[NativeStealthModule] Max retry attempts (${MAX_LOAD_ATTEMPTS}) reached, giving up. Privacy protection is operating in Layer 0 mode only (setContentProtection).`);
     return cachedModule;
   }
   
@@ -46,12 +50,11 @@ export function loadNativeStealthModule(options?: { retryOnFailure?: boolean }):
       }
     } catch (error) {
       console.warn('[NativeStealthModule] Candidate failed:', error);
-      // Fall through to the next candidate.
     }
   }
 
   cachedModule = null;
-  console.warn('[NativeStealthModule] All candidates failed, will retry on next call if retryOnFailure=true');
+  console.warn('[NativeStealthModule] All candidates failed. Privacy protection is DEGRADED - operating in Layer 0 mode only (setContentProtection). Native stealth APIs are unavailable.');
   return cachedModule;
 }
 

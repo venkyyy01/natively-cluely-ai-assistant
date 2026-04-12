@@ -357,7 +357,7 @@ export class WindowHelper {
     focusable: true,
     resizable: true,
     movable: true,
-    skipTaskbar: false,
+    skipTaskbar: this.overlayContentProtection, // CRITICAL: Hide from taskbar when privacy protection is active
     hasShadow: false, // Prevent shadow from adding perceived size/artifacts
   }
 
@@ -553,17 +553,18 @@ export class WindowHelper {
         this.setOverlayClickthrough(this.overlayClickthroughEnabled)
         // Small delay to ensure Windows DWM processes the flag before making it opaque
 
-        if (this.opacityTimeout) clearTimeout(this.opacityTimeout);
-        this.opacityTimeout = setTimeout(() => {
-          if (this.overlayWindow && !this.overlayWindow.isDestroyed()) {
-            this.overlayWindow.setOpacity(1);
-            this.stealthManager.reapplyAfterShow(this.overlayWindow);
-            if (!this.overlayClickthroughEnabled) {
-              this.overlayWindow.focus();
-            }
-            this.overlayWindow.setAlwaysOnTop(true, "floating");
-          }
-        }, 60);
+    if (this.opacityTimeout) clearTimeout(this.opacityTimeout);
+    // CRITICAL: Reduced from 60ms to 16ms (1 frame at 60fps) to prevent frame leaks during screen capture
+    this.opacityTimeout = setTimeout(() => {
+      if (this.overlayWindow && !this.overlayWindow.isDestroyed()) {
+        this.overlayWindow.setOpacity(1);
+        this.stealthManager.reapplyAfterShow(this.overlayWindow);
+        if (!this.overlayClickthroughEnabled) {
+          this.overlayWindow.focus();
+        }
+        this.overlayWindow.setAlwaysOnTop(true, "floating");
+      }
+    }, 16);
       } else {
         this.applyStealth(this.overlayWindow, this.contentProtection, 'primary', false);
         this.setOverlayClickthrough(this.overlayClickthroughEnabled)
@@ -599,14 +600,15 @@ export class WindowHelper {
           this.applyStealth(this.launcherWindow, true, 'primary', false);
         }
 
-        if (this.opacityTimeout) clearTimeout(this.opacityTimeout);
-        this.opacityTimeout = setTimeout(() => {
-          if (this.launcherWindow && !this.launcherWindow.isDestroyed()) {
-            this.launcherWindow.setOpacity(1);
-            this.stealthManager.reapplyAfterShow(this.launcherWindow);
-            this.launcherWindow.focus();
-          }
-        }, 60);
+    if (this.opacityTimeout) clearTimeout(this.opacityTimeout);
+    // CRITICAL: Reduced from 60ms to 16ms (1 frame at 60fps) to prevent frame leaks during screen capture
+    this.opacityTimeout = setTimeout(() => {
+      if (this.launcherWindow && !this.launcherWindow.isDestroyed()) {
+        this.launcherWindow.setOpacity(1);
+        this.stealthManager.reapplyAfterShow(this.launcherWindow);
+        this.launcherWindow.focus();
+      }
+    }, 16);
       } else {
         this.applyLauncherSurfaceProtection();
         this.showLauncherSurface();

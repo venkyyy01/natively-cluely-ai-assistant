@@ -17,6 +17,7 @@ class FakeWindow extends EventEmitter {
   public skipTaskbarCalls: boolean[] = [];
   public hiddenInMissionControlCalls: boolean[] = [];
   public excludedFromShownWindowsMenuCalls: boolean[] = [];
+  public excludeFromCaptureCalls: boolean[] = [];
   public hideCalls = 0;
   public showCalls = 0;
   public setOpacityCalls: number[] = [];
@@ -34,6 +35,10 @@ class FakeWindow extends EventEmitter {
 
   setContentProtection(value: boolean): void {
     this.contentProtectionCalls.push(value);
+  }
+
+  setExcludeFromCapture(value: boolean): void {
+    this.excludeFromCaptureCalls.push(value);
   }
 
   setSkipTaskbar(value: boolean): void {
@@ -361,6 +366,7 @@ describe('StealthManager', () => {
         const powerMonitor = new EventEmitter();
         const intervals: Array<() => Promise<void> | void> = [];
         const timeouts: Array<() => void> = [];
+        let enumeratorCallCount = 0;
         const manager = new StealthManager(
             { enabled: true },
             {
@@ -377,7 +383,10 @@ describe('StealthManager', () => {
                     timeouts.push(fn);
                     return timeouts.length;
                 },
-                processEnumerator: async () => 'obs',
+                processEnumerator: async () => {
+                    enumeratorCallCount++;
+                    return enumeratorCallCount <= 1 ? 'obs' : '';
+                },
             } as any
         );
         const win = new FakeWindow();
@@ -389,6 +398,7 @@ describe('StealthManager', () => {
         assert.deepStrictEqual(win.setOpacityCalls, [0]);
 
         timeouts[0]();
+        await new Promise((r) => setTimeout(r, 0));
         assert.deepStrictEqual(win.setOpacityCalls, [0, 1]);
         win.destroy();
     });
@@ -635,6 +645,7 @@ describe('StealthManager', () => {
   it('falls back to hide and show when opacity APIs are unavailable', async () => {
     const intervals: Array<() => Promise<void> | void> = [];
     const timeouts: Array<() => void> = [];
+    let enumeratorCallCount = 0;
     const manager = new StealthManager(
       { enabled: true },
       {
@@ -650,7 +661,10 @@ describe('StealthManager', () => {
           timeouts.push(fn);
           return timeouts.length;
         },
-        processEnumerator: async () => 'obs',
+        processEnumerator: async () => {
+          enumeratorCallCount++;
+          return enumeratorCallCount <= 1 ? 'obs' : '';
+        },
       } as any,
     );
     const win = new FakeWindow();
@@ -658,7 +672,9 @@ describe('StealthManager', () => {
 
     manager.applyToWindow(win as any, true, { role: 'primary' });
     await intervals[0]();
+
     timeouts[0]();
+    await new Promise((r) => setTimeout(r, 0));
 
     assert.strictEqual(win.hideCalls, 1);
     assert.strictEqual(win.showCalls, 1);
