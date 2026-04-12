@@ -66,6 +66,7 @@ export class IntelligenceEngine extends EventEmitter {
   // Mode state
   private activeMode: IntelligenceMode = 'idle';
   private assistCancellationToken: AbortController | null = null;
+  private whatToSayAbortController: AbortController | null = null;
 
   // Mode-specific LLMs
   private answerLLM: AnswerLLM | null = null;
@@ -514,9 +515,16 @@ export class IntelligenceEngine extends EventEmitter {
             this.assistCancellationToken = null;
         }
 
+        if (this.whatToSayAbortController) {
+            this.whatToSayAbortController.abort(new Error('what_to_say_superseded'));
+            this.whatToSayAbortController = null;
+        }
+
         console.log('[INTELLIGENCE] 🎯 Setting mode to what_to_say');
         this.setMode('what_to_say');
         this.lastTriggerTime = now;
+        const whatToSayAbortController = new AbortController();
+        this.whatToSayAbortController = whatToSayAbortController;
         const requestSequence = ++this.activeWhatToSayRequestId;
 
         try {
@@ -641,6 +649,7 @@ const capability = typeof (this.llmHelper as any).getProviderCapabilityClass ===
                     fastPath: true,
                     latestQuestion: resolvedQuestion,
                     onFallbackResponsePrepared: noteFallbackResponsePrepared,
+                    abortSignal: whatToSayAbortController.signal,
                 });
                 this.latencyTracker.markProviderRequestStarted(requestId);
 
@@ -671,7 +680,7 @@ const capability = typeof (this.llmHelper as any).getProviderCapabilityClass ===
 
                 if (requestSequence !== this.activeWhatToSayRequestId) {
                     this.latencyTracker.complete(requestId);
-                    return fullAnswer;
+                    return null;
                 }
 
                 if (!fullAnswer || fullAnswer.trim().length < 5) {
@@ -743,7 +752,7 @@ const capability = typeof (this.llmHelper as any).getProviderCapabilityClass ===
             }
 
             if (effectiveRoute === 'fast_standard_answer') {
-                return runFastStandardAnswer();
+                return await runFastStandardAnswer();
             }
 
             if (preRouteConsciousDecision.threadAction === 'continue' && activeReasoningThread && this.followUpLLM) {
@@ -763,7 +772,7 @@ const capability = typeof (this.llmHelper as any).getProviderCapabilityClass ===
                         requestId,
                         route: effectiveRoute,
                     });
-                    return runFastStandardAnswer();
+                    return await runFastStandardAnswer();
                 }
 
                 if (continuationResult.kind === 'handled') {
@@ -901,6 +910,7 @@ const capability = typeof (this.llmHelper as any).getProviderCapabilityClass ===
                 latestQuestion: resolvedQuestion,
                 onInitialStreamFailure: annotateProfileEnrichmentFailure,
                 onFallbackResponsePrepared: noteFallbackResponsePrepared,
+                abortSignal: whatToSayAbortController.signal,
             });
             this.latencyTracker.markProviderRequestStarted(requestId);
 
@@ -931,7 +941,7 @@ const capability = typeof (this.llmHelper as any).getProviderCapabilityClass ===
 
             if (requestSequence !== this.activeWhatToSayRequestId) {
                 this.latencyTracker.complete(requestId);
-                return fullAnswer;
+                return null;
             }
 
             if (!fullAnswer || fullAnswer.trim().length < 5) {
@@ -965,6 +975,12 @@ const capability = typeof (this.llmHelper as any).getProviderCapabilityClass ===
             return fullAnswer;
 
         } catch (error) {
+            if (whatToSayAbortController.signal.aborted || requestSequence !== this.activeWhatToSayRequestId) {
+                if (activeLatencyRequestId) {
+                    this.latencyTracker.complete(activeLatencyRequestId);
+                }
+                return null;
+            }
             if (activeLatencyRequestId) {
                 if (activeProfileEnrichmentRoute) {
                     const errorMessage = error instanceof Error ? `${error.name}: ${error.message}`.toLowerCase() : String(error).toLowerCase();
@@ -981,6 +997,10 @@ const capability = typeof (this.llmHelper as any).getProviderCapabilityClass ===
             this.emit('error', error as Error, 'what_to_say');
             this.setMode('idle');
             return "Could you repeat that? I want to make sure I address your question properly.";
+        } finally {
+            if (this.whatToSayAbortController === whatToSayAbortController) {
+                this.whatToSayAbortController = null;
+            }
         }
     }
 
@@ -1208,11 +1228,23 @@ const capability = typeof (this.llmHelper as any).getProviderCapabilityClass ===
         return this.activeMode;
     }
 
+  cancelActiveWhatToSay(reason: string = 'what_to_say_canceled'): void {
+    this.activeWhatToSayRequestId += 1;
+    if (this.whatToSayAbortController) {
+      this.whatToSayAbortController.abort(new Error(reason));
+      this.whatToSayAbortController = null;
+    }
+    if (this.activeMode === 'what_to_say') {
+      this.setMode('idle');
+    }
+  }
+
   /**
   * Reset engine state (cancels any in-flight operations)
   */
   reset(): void {
     this.activeMode = 'idle';
+    this.cancelActiveWhatToSay('reset');
     if (this.assistCancellationToken) {
       this.assistCancellationToken.abort();
       this.assistCancellationToken = null;

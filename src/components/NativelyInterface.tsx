@@ -840,7 +840,16 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
 
         try {
             // Pass imagePath if attached
-            await window.electronAPI.generateWhatToSay(undefined, currentAttachments.length > 0 ? currentAttachments.map(s => s.path) : undefined);
+            const result = await window.electronAPI.generateWhatToSay(undefined, currentAttachments.length > 0 ? currentAttachments.map(s => s.path) : undefined);
+            setMessages(prev => updateTopMessage(
+                prev,
+                message => Boolean(message.isStreaming && message.intent === 'what_to_answer'),
+                message => ({
+                    ...message,
+                    text: result?.answer || message.text || 'Response canceled before completion. Retry with the current settings.',
+                    isStreaming: false,
+                })
+            ));
         } catch (err) {
             setMessages(prev => replaceTopStreamingPlaceholder(prev, {
                 id: Date.now().toString(),

@@ -65,6 +65,7 @@ ANSWER SHAPE: ${intentResult.answerShape}
             latestQuestion?: string;
             onInitialStreamFailure?: (details: StreamFailureDetails) => void;
             onFallbackResponsePrepared?: (details: StreamFailureDetails & { hadVisibleOutput: boolean }) => void;
+            abortSignal?: AbortSignal;
         }
     ): AsyncGenerator<string> {
         let yieldedAnyChunk = false;
@@ -80,12 +81,16 @@ ANSWER SHAPE: ${intentResult.answerShape}
             const prompt = options?.fastPath ? FAST_STANDARD_ANSWER_PROMPT : UNIVERSAL_WHAT_TO_ANSWER_PROMPT;
             for await (const chunk of this.llmHelper.streamChat(primaryQuestion, imagePaths, conversationContext, prompt, {
                 skipKnowledgeInterception: !!options?.fastPath,
+                abortSignal: options?.abortSignal,
             })) {
                 yieldedAnyChunk = true;
                 yield chunk;
             }
 
         } catch (error) {
+            if (options?.abortSignal?.aborted) {
+                return;
+            }
             const errorMessage = error instanceof Error
                 ? `${error.name}: ${error.message}`.toLowerCase()
                 : String(error).toLowerCase();

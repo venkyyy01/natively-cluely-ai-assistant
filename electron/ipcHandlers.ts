@@ -1326,6 +1326,7 @@ safeHandleValidated("delete-meeting", (args) => [parseIpcInput(ipcSchemas.provid
       const legacyProviders = cm.getCustomProviders() || [];
       const allProviders = [...curlProviders, ...legacyProviders];
 
+      appState.getIntelligenceManager().cancelActiveWhatToSay?.('model_changed');
       llmHelper.setModel(modelId, allProviders);
 
       // Close the selector window if open
@@ -1362,6 +1363,7 @@ safeHandleValidated("delete-meeting", (args) => [parseIpcInput(ipcSchemas.provid
       const curlProviders = cm.getCurlProviders();
       const legacyProviders = cm.getCustomProviders() || [];
       const allProviders = [...curlProviders, ...legacyProviders];
+      appState.getIntelligenceManager().cancelActiveWhatToSay?.('default_model_changed');
       llmHelper.setModel(modelId, allProviders);
 
       // Close the selector window if open

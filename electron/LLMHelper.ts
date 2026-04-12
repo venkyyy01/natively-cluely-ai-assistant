@@ -44,6 +44,36 @@ function createTimeoutSignal(timeoutMs: number = LLM_API_TIMEOUT_MS): AbortSigna
   return controller.signal;
 }
 
+function createRequestAbortController(timeoutMs: number = LLM_API_TIMEOUT_MS, externalSignal?: AbortSignal): {
+  signal: AbortSignal;
+  cleanup: () => void;
+} {
+  const controller = new AbortController();
+  const timeoutHandle = setTimeout(() => controller.abort(new Error(`LLM API timeout after ${timeoutMs}ms`)), timeoutMs);
+
+  const abortFromExternal = () => {
+    controller.abort(externalSignal?.reason);
+  };
+
+  if (externalSignal) {
+    if (externalSignal.aborted) {
+      abortFromExternal();
+    } else {
+      externalSignal.addEventListener('abort', abortFromExternal, { once: true });
+    }
+  }
+
+  return {
+    signal: controller.signal,
+    cleanup: () => {
+      clearTimeout(timeoutHandle);
+      if (externalSignal) {
+        externalSignal.removeEventListener('abort', abortFromExternal);
+      }
+    },
+  };
+}
+
 /**
  * Wrap a promise with a timeout
  */
@@ -2058,26 +2088,7 @@ ANSWER DIRECTLY:`;
         timeout: LLM_API_TIMEOUT_MS,
       });
 
-      // 5. Extract Answer
-      // If user didn't specify a path, try to guess or dump string
-      if (!responsePath) {
-        const extracted = this.extractOpenAIFormattedText(response.data, true);
-        return extracted && extracted.trim().length > 0 ? extracted : JSON.stringify(response.data);
-      }
-
-      const answer = getByPath(response.data, responsePath);
-
-      if (typeof answer === 'string' && answer.trim().length > 0) return answer;
-      if (answer !== null && answer !== undefined) {
-        if (typeof answer === 'number' || typeof answer === 'boolean') return String(answer);
-        if (Array.isArray(answer) && answer.length > 0) return JSON.stringify(answer);
-        if (typeof answer === 'object' && Object.keys(answer).length > 0) return JSON.stringify(answer);
-      }
-
-      const guessed = this.extractOpenAIFormattedText(response.data, false);
-      if (guessed && guessed.trim().length > 0) return guessed;
-
-      throw new Error(`cURL response extraction failed for path: ${responsePath}`);
+      return this.extractCurlResponseText(response.data, responsePath);
 
     } catch (error) {
       console.error("[LLMHelper] cURL Execution Error:", sanitizeError(error));
@@ -2147,7 +2158,9 @@ ANSWER DIRECTLY:`;
     systemPrompt: string,
     rawUserMessage: string,
     context: string,
-    imagePaths?: string[]
+    imagePaths?: string[],
+    responsePath?: string,
+    abortSignal?: AbortSignal,
   ): Promise<string> {
 
     // 1. Parse cURL to JSON object
@@ -2192,38 +2205,39 @@ ANSWER DIRECTLY:`;
 
     // 5. Execute Fetch
     try {
-      const response = await fetch(url, {
-        method: requestConfig.method || 'POST',
-        headers: headers,
-        body: requestBody,
-        signal: createTimeoutSignal(),
-      });
+      const requestControl = createRequestAbortController(LLM_API_TIMEOUT_MS, abortSignal);
+      try {
+        const response = await fetch(url, {
+          method: requestConfig.method || 'POST',
+          headers: headers,
+          body: requestBody,
+          signal: requestControl.signal,
+        });
 
-      const rawBody = await readFetchBodyWithLimit(response);
-      const trimmedBody = rawBody.trim();
-      if (!response.ok) {
-        throw new Error(`Custom Provider HTTP ${response.status}: ${summarizeResponseBody(trimmedBody)}`);
+        const rawBody = await readFetchBodyWithLimit(response);
+        const trimmedBody = rawBody.trim();
+        if (!response.ok) {
+          throw new Error(`Custom Provider HTTP ${response.status}: ${summarizeResponseBody(trimmedBody)}`);
+        }
+
+        if (!trimmedBody) {
+          throw new Error('Custom Provider returned an empty response body');
+        }
+
+        if (!looksLikeJsonPayload(trimmedBody)) {
+          console.log(`[LLMHelper] Custom Provider returned plain text response (${trimmedBody.length} chars)`);
+          return trimmedBody;
+        }
+
+        const data = JSON.parse(trimmedBody);
+        console.log(`[LLMHelper] Custom Provider raw response:`, trimmedBody.substring(0, 1000));
+
+        const extracted = this.extractCurlResponseText(data, responsePath);
+        console.log(`[LLMHelper] Custom Provider extracted text length: ${extracted.length}`);
+        return extracted;
+      } finally {
+        requestControl.cleanup();
       }
-
-      if (!trimmedBody) {
-        throw new Error('Custom Provider returned an empty response body');
-      }
-
-      if (!looksLikeJsonPayload(trimmedBody)) {
-        console.log(`[LLMHelper] Custom Provider returned plain text response (${trimmedBody.length} chars)`);
-        return trimmedBody;
-      }
-
-      const data = JSON.parse(trimmedBody);
-      console.log(`[LLMHelper] Custom Provider raw response:`, trimmedBody.substring(0, 1000));
-
-      // 6. Extract Answer - try common response formats
-      const extracted = this.extractOpenAIFormattedText(data, false);
-      if (!extracted.trim()) {
-        throw new Error('Custom Provider response did not contain extractable text');
-      }
-      console.log(`[LLMHelper] Custom Provider extracted text length: ${extracted.length}`);
-      return extracted;
     } catch (error) {
       console.error("Custom Provider Error:", sanitizeError(error));
       throw error;
@@ -2305,6 +2319,27 @@ ANSWER DIRECTLY:`;
     }
 
     return this.extractFromCommonFormats(data, allowRawJsonFallback);
+  }
+
+  private extractCurlResponseText(data: any, responsePath?: string): string {
+    if (!responsePath) {
+      const extracted = this.extractOpenAIFormattedText(data, true);
+      return extracted && extracted.trim().length > 0 ? extracted : JSON.stringify(data);
+    }
+
+    const answer = getByPath(data, responsePath);
+
+    if (typeof answer === 'string' && answer.trim().length > 0) return answer;
+    if (answer !== null && answer !== undefined) {
+      if (typeof answer === 'number' || typeof answer === 'boolean') return String(answer);
+      if (Array.isArray(answer) && answer.length > 0) return JSON.stringify(answer);
+      if (typeof answer === 'object' && Object.keys(answer).length > 0) return JSON.stringify(answer);
+    }
+
+    const guessed = this.extractOpenAIFormattedText(data, false);
+    if (guessed && guessed.trim().length > 0) return guessed;
+
+    throw new Error(`cURL response extraction failed for path: ${responsePath}`);
   }
 
   /**
@@ -2778,8 +2813,12 @@ ANSWER DIRECTLY:`;
     imagePaths?: string[],
     context?: string,
     systemPromptOverride?: string,
-    options?: { skipKnowledgeInterception?: boolean }
+    options?: { skipKnowledgeInterception?: boolean; abortSignal?: AbortSignal }
   ): AsyncGenerator<string, void, unknown> {
+    if (options?.abortSignal?.aborted) {
+      return;
+    }
+
     const effectiveMessage = this.applyDefaultBrevityHint(message);
 
     // ============================================================
@@ -2847,14 +2886,14 @@ ANSWER DIRECTLY:`;
         if (fastResponseTarget.provider === 'cerebras') {
           const cerebrasSystem = systemPromptOverride || OPENAI_SYSTEM_PROMPT;
           const finalCerebrasSystem = this.injectLanguageInstruction(cerebrasSystem);
-          yield* this.streamWithCerebras(userContent, finalCerebrasSystem, fastResponseTarget.model);
+          yield* this.streamWithCerebras(userContent, finalCerebrasSystem, fastResponseTarget.model, options?.abortSignal);
           return;
         }
 
         const groqSystem = systemPromptOverride || GROQ_SYSTEM_PROMPT;
         const finalGroqSystem = this.injectLanguageInstruction(groqSystem);
         const groqFullMessage = this.joinPrompt(finalGroqSystem, userContent);
-        yield* this.streamWithGroq(groqFullMessage, fastResponseTarget.model);
+        yield* this.streamWithGroq(groqFullMessage, fastResponseTarget.model, options?.abortSignal);
         return;
       } catch (e: any) {
         console.warn(`[LLMHelper] Fast Response Mode streaming failed on ${fastResponseTarget.provider}, falling back:`, e.message);
@@ -2864,7 +2903,7 @@ ANSWER DIRECTLY:`;
 
     // 1. Ollama Streaming
     if (this.useOllama) {
-      yield* this.streamWithOllama(effectiveMessage, context, finalSystemPrompt);
+      yield* this.streamWithOllama(effectiveMessage, context, finalSystemPrompt, options?.abortSignal);
       return;
     }
 
@@ -2880,7 +2919,9 @@ ANSWER DIRECTLY:`;
         curlSystemPrompt,
         effectiveMessage,
         context || "",
-        imagePaths
+        imagePaths,
+        this.activeCurlProvider.responsePath,
+        options?.abortSignal,
       );
       yield response;
       return;
@@ -2893,9 +2934,9 @@ ANSWER DIRECTLY:`;
       const openAiSystem = systemPromptOverride || OPENAI_SYSTEM_PROMPT;
       const finalOpenAiSystem = this.injectLanguageInstruction(openAiSystem);
       if (isMultimodal && imagePaths) {
-        yield* this.streamWithOpenaiMultimodal(userContent, imagePaths, finalOpenAiSystem);
+        yield* this.streamWithOpenaiMultimodal(userContent, imagePaths, finalOpenAiSystem, options?.abortSignal);
       } else {
-        yield* this.streamWithOpenai(userContent, finalOpenAiSystem);
+        yield* this.streamWithOpenai(userContent, finalOpenAiSystem, options?.abortSignal);
       }
       return;
     }
@@ -2905,9 +2946,9 @@ ANSWER DIRECTLY:`;
       const claudeSystem = systemPromptOverride || CLAUDE_SYSTEM_PROMPT;
       const finalClaudeSystem = this.injectLanguageInstruction(claudeSystem);
       if (isMultimodal && imagePaths) {
-        yield* this.streamWithClaudeMultimodal(userContent, imagePaths, finalClaudeSystem);
+        yield* this.streamWithClaudeMultimodal(userContent, imagePaths, finalClaudeSystem, options?.abortSignal);
       } else {
-        yield* this.streamWithClaude(userContent, finalClaudeSystem);
+        yield* this.streamWithClaude(userContent, finalClaudeSystem, options?.abortSignal);
       }
       return;
     }
@@ -2918,14 +2959,14 @@ ANSWER DIRECTLY:`;
         // Route multimodal to Groq Llama 4 Scout (vision-capable)
         const groqSystem = systemPromptOverride || OPENAI_SYSTEM_PROMPT;
         const finalGroqSystem = this.injectLanguageInstruction(groqSystem);
-        yield* this.streamWithGroqMultimodal(userContent, imagePaths, finalGroqSystem);
+        yield* this.streamWithGroqMultimodal(userContent, imagePaths, finalGroqSystem, options?.abortSignal);
         return;
       }
       // Text-only Groq
       const groqSystem = systemPromptOverride ? baseSystemPrompt : GROQ_SYSTEM_PROMPT;
       const finalGroqSystem = this.injectLanguageInstruction(groqSystem);
       const groqFullMessage = this.joinPrompt(finalGroqSystem, userContent);
-      yield* this.streamWithGroq(groqFullMessage);
+      yield* this.streamWithGroq(groqFullMessage, GROQ_MODEL, options?.abortSignal);
       return;
     }
 
@@ -2934,7 +2975,7 @@ ANSWER DIRECTLY:`;
       // Direct model use if specified
       if (this.isGeminiModel(this.currentModelId)) {
         const fullMsg = this.joinPrompt(finalSystemPrompt, userContent);
-        yield* this.streamWithGeminiModel(fullMsg, this.currentModelId, imagePaths);
+        yield* this.streamWithGeminiModel(fullMsg, this.currentModelId, imagePaths, options?.abortSignal);
         return;
       }
 
@@ -2949,10 +2990,10 @@ ANSWER DIRECTLY:`;
   /**
    * Stream response from Groq
    */
-  private async * streamWithGroq(fullMessage: string, modelOverride: string = GROQ_MODEL): AsyncGenerator<string, void, unknown> {
+  private async * streamWithGroq(fullMessage: string, modelOverride: string = GROQ_MODEL, abortSignal?: AbortSignal): AsyncGenerator<string, void, unknown> {
     if (!this.groqClient) throw new Error("Groq client not initialized");
 
-    const timeoutSignal = createTimeoutSignal(LLM_API_TIMEOUT_MS);
+    const requestControl = createRequestAbortController(LLM_API_TIMEOUT_MS, abortSignal);
     const targetModel = modelOverride || GROQ_MODEL;
     
     const stream = await this.groqClient.chat.completions.create({
@@ -2961,17 +3002,24 @@ ANSWER DIRECTLY:`;
       stream: true,
       temperature: 0.4,
       max_tokens: 8192,
-    }, { signal: timeoutSignal });
+    }, { signal: requestControl.signal });
 
-    for await (const chunk of stream) {
-      const content = chunk.choices[0]?.delta?.content;
-      if (content) {
-        yield content;
+    try {
+      for await (const chunk of stream) {
+        if (abortSignal?.aborted) {
+          return;
+        }
+        const content = chunk.choices[0]?.delta?.content;
+        if (content) {
+          yield content;
+        }
       }
+    } finally {
+      requestControl.cleanup();
     }
   }
 
-  private async * streamWithCerebras(userMessage: string, systemPrompt?: string, modelOverride?: string): AsyncGenerator<string, void, unknown> {
+  private async * streamWithCerebras(userMessage: string, systemPrompt?: string, modelOverride?: string, abortSignal?: AbortSignal): AsyncGenerator<string, void, unknown> {
     if (!this.cerebrasClient) throw new Error("Cerebras client not initialized");
 
     const targetModel = modelOverride || this.getConfiguredFastModel('cerebras');
@@ -2983,26 +3031,33 @@ ANSWER DIRECTLY:`;
 
     await this.rateLimiters.cerebras.acquire();
 
-    const timeoutSignal = createTimeoutSignal(LLM_API_TIMEOUT_MS);
+    const requestControl = createRequestAbortController(LLM_API_TIMEOUT_MS, abortSignal);
     const stream = await this.cerebrasClient.chat.completions.create({
       model: targetModel,
       messages,
       stream: true,
       max_completion_tokens: MAX_OUTPUT_TOKENS,
-    }, { signal: timeoutSignal });
+    }, { signal: requestControl.signal });
 
-    for await (const chunk of stream) {
-      const content = chunk.choices[0]?.delta?.content;
-      if (content) {
-        yield content;
+    try {
+      for await (const chunk of stream) {
+        if (abortSignal?.aborted) {
+          return;
+        }
+        const content = chunk.choices[0]?.delta?.content;
+        if (content) {
+          yield content;
+        }
       }
+    } finally {
+      requestControl.cleanup();
     }
   }
 
   /**
    * Stream multimodal (image + text) response from Groq using Llama 4 Scout as a last resort
    */
-  private async * streamWithGroqMultimodal(userMessage: string, imagePaths: string[], systemPrompt?: string): AsyncGenerator<string, void, unknown> {
+  private async * streamWithGroqMultimodal(userMessage: string, imagePaths: string[], systemPrompt?: string, abortSignal?: AbortSignal): AsyncGenerator<string, void, unknown> {
     if (!this.groqClient) throw new Error("Groq client not initialized");
 
     const messages: any[] = [];
@@ -3020,7 +3075,7 @@ ANSWER DIRECTLY:`;
     }
     messages.push({ role: "user", content: contentParts });
 
-    const timeoutSignal = createTimeoutSignal(LLM_API_TIMEOUT_MS);
+    const requestControl = createRequestAbortController(LLM_API_TIMEOUT_MS, abortSignal);
     
     const stream = await this.groqClient.chat.completions.create({
       model: "meta-llama/llama-4-scout-17b-16e-instruct",
@@ -3030,20 +3085,27 @@ ANSWER DIRECTLY:`;
       temperature: 1,
       top_p: 1,
       stop: null
-    }, { signal: timeoutSignal });
+    }, { signal: requestControl.signal });
 
-    for await (const chunk of stream) {
-      const content = chunk.choices[0]?.delta?.content;
-      if (content) {
-        yield content;
+    try {
+      for await (const chunk of stream) {
+        if (abortSignal?.aborted) {
+          return;
+        }
+        const content = chunk.choices[0]?.delta?.content;
+        if (content) {
+          yield content;
+        }
       }
+    } finally {
+      requestControl.cleanup();
     }
   }
 
   /**
    * Stream response from OpenAI with proper system/user message separation
    */
-  private async * streamWithOpenai(userMessage: string, systemPrompt?: string): AsyncGenerator<string, void, unknown> {
+  private async * streamWithOpenai(userMessage: string, systemPrompt?: string, abortSignal?: AbortSignal): AsyncGenerator<string, void, unknown> {
     if (!this.openaiClient) throw new Error("OpenAI client not initialized");
 
     const targetModel = this.getActiveOpenAiModel();
@@ -3054,7 +3116,7 @@ ANSWER DIRECTLY:`;
     }
     messages.push({ role: "user", content: userMessage });
 
-    const timeoutSignal = createTimeoutSignal(LLM_API_TIMEOUT_MS);
+    const requestControl = createRequestAbortController(LLM_API_TIMEOUT_MS, abortSignal);
     
     let stream;
     try {
@@ -3063,7 +3125,7 @@ ANSWER DIRECTLY:`;
         messages,
         stream: true,
         max_completion_tokens: MAX_OUTPUT_TOKENS,
-      }, { signal: timeoutSignal });
+      }, { signal: requestControl.signal });
     } catch (error) {
       if (this.isModelNotFoundError(error)) {
         const fallbackModel = await this.resolveOpenAiFallbackModel(targetModel);
@@ -3074,25 +3136,33 @@ ANSWER DIRECTLY:`;
             fallbackModel,
             reason: 'model_not_found',
           });
-          yield* this.streamWithOpenaiUsingModel(userMessage, fallbackModel, systemPrompt);
+          yield* this.streamWithOpenaiUsingModel(userMessage, fallbackModel, systemPrompt, abortSignal);
           return;
         }
       }
+      requestControl.cleanup();
       throw error;
     }
 
-    for await (const chunk of stream) {
-      const content = chunk.choices[0]?.delta?.content;
-      if (content) {
-        yield content;
+    try {
+      for await (const chunk of stream) {
+        if (abortSignal?.aborted) {
+          return;
+        }
+        const content = chunk.choices[0]?.delta?.content;
+        if (content) {
+          yield content;
+        }
       }
+    } finally {
+      requestControl.cleanup();
     }
   }
 
   /**
    * Stream response from Claude with proper system/user message separation
    */
-  private async * streamWithClaude(userMessage: string, systemPrompt?: string): AsyncGenerator<string, void, unknown> {
+  private async * streamWithClaude(userMessage: string, systemPrompt?: string, abortSignal?: AbortSignal): AsyncGenerator<string, void, unknown> {
     if (!this.claudeClient) throw new Error("Claude client not initialized");
 
     const stream = await this.claudeClient.messages.stream({
@@ -3102,17 +3172,33 @@ ANSWER DIRECTLY:`;
       messages: [{ role: "user", content: userMessage }],
     });
 
-    for await (const event of stream) {
-      if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
-        yield event.delta.text;
+    const cancelStream = () => {
+      try {
+        (stream as any).controller?.abort?.();
+      } catch {
+        // Best-effort cancellation only.
       }
+    };
+    abortSignal?.addEventListener('abort', cancelStream, { once: true });
+
+    try {
+      for await (const event of stream) {
+        if (abortSignal?.aborted) {
+          return;
+        }
+        if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
+          yield event.delta.text;
+        }
+      }
+    } finally {
+      abortSignal?.removeEventListener('abort', cancelStream);
     }
   }
 
   /**
    * Stream multimodal (image + text) response from OpenAI with system/user separation
    */
-  private async * streamWithOpenaiMultimodal(userMessage: string, imagePaths: string[], systemPrompt?: string): AsyncGenerator<string, void, unknown> {
+  private async * streamWithOpenaiMultimodal(userMessage: string, imagePaths: string[], systemPrompt?: string, abortSignal?: AbortSignal): AsyncGenerator<string, void, unknown> {
     if (!this.openaiClient) throw new Error("OpenAI client not initialized");
 
     const targetModel = this.getActiveOpenAiModel();
@@ -3131,7 +3217,7 @@ ANSWER DIRECTLY:`;
     }
     messages.push({ role: "user", content: contentParts });
 
-    const timeoutSignal = createTimeoutSignal(LLM_API_TIMEOUT_MS);
+    const requestControl = createRequestAbortController(LLM_API_TIMEOUT_MS, abortSignal);
     
     let stream;
     try {
@@ -3140,7 +3226,7 @@ ANSWER DIRECTLY:`;
         messages,
         stream: true,
         max_completion_tokens: MAX_OUTPUT_TOKENS,
-      }, { signal: timeoutSignal });
+      }, { signal: requestControl.signal });
     } catch (error) {
       if (this.isModelNotFoundError(error)) {
         const fallbackModel = await this.resolveOpenAiFallbackModel(targetModel);
@@ -3151,22 +3237,30 @@ ANSWER DIRECTLY:`;
             fallbackModel,
             reason: 'model_not_found',
           });
-          yield* this.streamWithOpenaiMultimodalUsingModel(userMessage, imagePaths, fallbackModel, systemPrompt);
+          yield* this.streamWithOpenaiMultimodalUsingModel(userMessage, imagePaths, fallbackModel, systemPrompt, abortSignal);
           return;
         }
       }
+      requestControl.cleanup();
       throw error;
     }
 
-    for await (const chunk of stream) {
-      const content = chunk.choices[0]?.delta?.content;
-      if (content) {
-        yield content;
+    try {
+      for await (const chunk of stream) {
+        if (abortSignal?.aborted) {
+          return;
+        }
+        const content = chunk.choices[0]?.delta?.content;
+        if (content) {
+          yield content;
+        }
       }
+    } finally {
+      requestControl.cleanup();
     }
   }
 
-  private async * streamWithOpenaiUsingModel(userMessage: string, model: string, systemPrompt?: string): AsyncGenerator<string, void, unknown> {
+  private async * streamWithOpenaiUsingModel(userMessage: string, model: string, systemPrompt?: string, abortSignal?: AbortSignal): AsyncGenerator<string, void, unknown> {
     if (!this.openaiClient) throw new Error("OpenAI client not initialized");
 
     const messages: any[] = [];
@@ -3175,23 +3269,30 @@ ANSWER DIRECTLY:`;
     }
     messages.push({ role: "user", content: userMessage });
 
-    const timeoutSignal = createTimeoutSignal(LLM_API_TIMEOUT_MS);
+    const requestControl = createRequestAbortController(LLM_API_TIMEOUT_MS, abortSignal);
     const stream = await this.openaiClient.chat.completions.create({
       model,
       messages,
       stream: true,
       max_completion_tokens: MAX_OUTPUT_TOKENS,
-    }, { signal: timeoutSignal });
+    }, { signal: requestControl.signal });
 
-    for await (const chunk of stream) {
-      const content = chunk.choices[0]?.delta?.content;
-      if (content) {
-        yield content;
+    try {
+      for await (const chunk of stream) {
+        if (abortSignal?.aborted) {
+          return;
+        }
+        const content = chunk.choices[0]?.delta?.content;
+        if (content) {
+          yield content;
+        }
       }
+    } finally {
+      requestControl.cleanup();
     }
   }
 
-  private async * streamWithOpenaiMultimodalUsingModel(userMessage: string, imagePaths: string[], model: string, systemPrompt?: string): AsyncGenerator<string, void, unknown> {
+  private async * streamWithOpenaiMultimodalUsingModel(userMessage: string, imagePaths: string[], model: string, systemPrompt?: string, abortSignal?: AbortSignal): AsyncGenerator<string, void, unknown> {
     if (!this.openaiClient) throw new Error("OpenAI client not initialized");
 
     const messages: any[] = [];
@@ -3208,26 +3309,33 @@ ANSWER DIRECTLY:`;
     }
     messages.push({ role: "user", content: contentParts });
 
-    const timeoutSignal = createTimeoutSignal(LLM_API_TIMEOUT_MS);
+    const requestControl = createRequestAbortController(LLM_API_TIMEOUT_MS, abortSignal);
     const stream = await this.openaiClient.chat.completions.create({
       model,
       messages,
       stream: true,
       max_completion_tokens: MAX_OUTPUT_TOKENS,
-    }, { signal: timeoutSignal });
+    }, { signal: requestControl.signal });
 
-    for await (const chunk of stream) {
-      const content = chunk.choices[0]?.delta?.content;
-      if (content) {
-        yield content;
+    try {
+      for await (const chunk of stream) {
+        if (abortSignal?.aborted) {
+          return;
+        }
+        const content = chunk.choices[0]?.delta?.content;
+        if (content) {
+          yield content;
+        }
       }
+    } finally {
+      requestControl.cleanup();
     }
   }
 
   /**
    * Stream multimodal (image + text) response from Claude with system/user separation
    */
-  private async * streamWithClaudeMultimodal(userMessage: string, imagePaths: string[], systemPrompt?: string): AsyncGenerator<string, void, unknown> {
+  private async * streamWithClaudeMultimodal(userMessage: string, imagePaths: string[], systemPrompt?: string, abortSignal?: AbortSignal): AsyncGenerator<string, void, unknown> {
     if (!this.claudeClient) throw new Error("Claude client not initialized");
 
     const imageContentParts: any[] = [];
@@ -3258,10 +3366,26 @@ ANSWER DIRECTLY:`;
       }],
     });
 
-    for await (const event of stream) {
-      if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
-        yield event.delta.text;
+    const cancelStream = () => {
+      try {
+        (stream as any).controller?.abort?.();
+      } catch {
+        // Best-effort cancellation only.
       }
+    };
+    abortSignal?.addEventListener('abort', cancelStream, { once: true });
+
+    try {
+      for await (const event of stream) {
+        if (abortSignal?.aborted) {
+          return;
+        }
+        if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
+          yield event.delta.text;
+        }
+      }
+    } finally {
+      abortSignal?.removeEventListener('abort', cancelStream);
     }
   }
 
@@ -3427,40 +3551,49 @@ ANSWER DIRECTLY:`;
   }
 
   // --- OLLAMA STREAMING ---
-  private async * streamWithOllama(message: string, context?: string, systemPrompt: string = UNIVERSAL_SYSTEM_PROMPT): AsyncGenerator<string, void, unknown> {
+  private async * streamWithOllama(message: string, context?: string, systemPrompt: string = UNIVERSAL_SYSTEM_PROMPT, abortSignal?: AbortSignal): AsyncGenerator<string, void, unknown> {
     const fullPrompt = context
       ? `SYSTEM: ${systemPrompt}\nCONTEXT: ${context}\nUSER: ${message}`
       : `SYSTEM: ${systemPrompt}\nUSER: ${message}`;
 
     try {
-      const response = await fetch(`${this.ollamaUrl}/api/generate`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model: this.ollamaModel,
-          prompt: fullPrompt,
-          stream: true,
-          options: { temperature: 0.7 }
-        })
-      });
+      const requestControl = createRequestAbortController(LLM_API_TIMEOUT_MS, abortSignal);
+      try {
+        const response = await fetch(`${this.ollamaUrl}/api/generate`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            model: this.ollamaModel,
+            prompt: fullPrompt,
+            stream: true,
+            options: { temperature: 0.7 }
+          }),
+          signal: requestControl.signal,
+        });
 
-      if (!response.body) throw new Error("No response body from Ollama");
+        if (!response.body) throw new Error("No response body from Ollama");
 
-      // iterate over the readable stream
-      // @ts-ignore
-      for await (const chunk of response.body) {
-        const text = new TextDecoder().decode(chunk);
-        // Ollama sends JSON objects per line
-        const lines = text.split('\n').filter(l => l.trim());
-        for (const line of lines) {
-          try {
-            const json = JSON.parse(line);
-            if (json.response) yield json.response;
-            if (json.done) return;
-          } catch (e) {
-            // ignore partial json
+        // iterate over the readable stream
+        // @ts-ignore
+        for await (const chunk of response.body) {
+          if (abortSignal?.aborted) {
+            return;
+          }
+          const text = new TextDecoder().decode(chunk);
+          // Ollama sends JSON objects per line
+          const lines = text.split('\n').filter(l => l.trim());
+          for (const line of lines) {
+            try {
+              const json = JSON.parse(line);
+              if (json.response) yield json.response;
+              if (json.done) return;
+            } catch (e) {
+              // ignore partial json
+            }
           }
         }
+      } finally {
+        requestControl.cleanup();
       }
     } catch (e) {
       console.error("Ollama streaming failed", sanitizeError(e));

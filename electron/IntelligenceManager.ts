@@ -124,6 +124,10 @@ export class IntelligenceManager extends EventEmitter {
         this.session.setConsciousModeEnabled(enabled);
     }
 
+    cancelActiveWhatToSay(reason?: string): void {
+        this.engine.cancelActiveWhatToSay(reason);
+    }
+
     isConsciousModeEnabled(): boolean {
         return this.session.isConsciousModeEnabled();
     }

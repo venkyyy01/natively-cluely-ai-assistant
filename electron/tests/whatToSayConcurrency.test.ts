@@ -23,6 +23,48 @@ class SequencedLLMHelper {
   }
 }
 
+class AbortAwareLLMHelper {
+  public enteredStream: Promise<void>;
+  private readonly resolveEnteredStream: () => void;
+
+  constructor() {
+    let resolveEnteredStream!: () => void;
+    this.enteredStream = new Promise<void>((resolve) => {
+      resolveEnteredStream = resolve;
+    });
+    this.resolveEnteredStream = resolveEnteredStream;
+  }
+
+  async *streamChat(
+    _message: string,
+    _imagePaths?: string[],
+    _context?: string,
+    _prompt?: string,
+    options?: { abortSignal?: AbortSignal }
+  ): AsyncGenerator<string> {
+    const signal = options?.abortSignal;
+    await new Promise<void>((resolve) => {
+      if (!signal) {
+        this.resolveEnteredStream();
+        return;
+      }
+
+      if (signal.aborted) {
+        this.resolveEnteredStream();
+        resolve();
+        return;
+      }
+
+      const onAbort = () => {
+        signal.removeEventListener('abort', onAbort);
+        resolve();
+      };
+      signal.addEventListener('abort', onAbort, { once: true });
+      this.resolveEnteredStream();
+    });
+  }
+}
+
 class CapturingLatencyTracker extends AnswerLatencyTracker {
   public completedSnapshots: Array<ReturnType<AnswerLatencyTracker['complete']>> = [];
 
@@ -81,11 +123,41 @@ test('older overlapping what-to-say requests do not overwrite the newest answer'
   addTurn(session, 'interviewer', 'Second question?', Date.now());
   const second = engine.runWhatShouldISay(undefined, 0.95);
 
-  const [, secondAnswer] = await Promise.all([first, second]);
+  const [firstAnswer, secondAnswer] = await Promise.all([first, second]);
 
+  assert.equal(firstAnswer, null);
   assert.equal(secondAnswer, 'fresh answer');
   assert.deepEqual(finalAnswers, ['fresh answer']);
   assert.equal(session.getLastAssistantMessage(), 'fresh answer');
 
   setOptimizationFlags({ ...DEFAULT_OPTIMIZATION_FLAGS });
+});
+
+test('explicit cancellation ends the active what-to-say request without emitting a fallback answer', async () => {
+  const session = new SessionTracker();
+  const llmHelper = new AbortAwareLLMHelper();
+  const engine = new IntelligenceEngine(llmHelper as any, session);
+  const finalAnswers: string[] = [];
+
+  engine.on('suggested_answer', (answer: string) => {
+    finalAnswers.push(answer);
+  });
+
+  addTurn(session, 'interviewer', 'Explain event sourcing.', Date.now());
+
+  const cancelActiveWhatToSay = (engine as any).cancelActiveWhatToSay;
+  assert.equal(typeof cancelActiveWhatToSay, 'function');
+
+  const pending = engine.runWhatShouldISay(undefined, 0.9);
+  await llmHelper.enteredStream;
+  cancelActiveWhatToSay.call(engine, 'model_switched');
+
+  const result = await Promise.race([
+    pending,
+    new Promise<symbol>((_, reject) => setTimeout(() => reject(new Error('what-to-say request did not cancel in time')), 100)),
+  ]);
+
+  assert.equal(result, null);
+  assert.deepEqual(finalAnswers, []);
+  assert.equal(session.getLastAssistantMessage(), null);
 });

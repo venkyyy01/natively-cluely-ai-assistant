@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import Module from 'node:module';
+import { ReadableStream } from 'node:stream/web';
 
 async function loadLLMHelper() {
   const originalRequire = Module.prototype.require;
@@ -190,6 +191,46 @@ test('chatWithGemini routes image-only and text+image requests through active cU
     assert.equal(calls[1].context, 'ctx');
   } finally {
     helper.chatWithCurl = originalChatWithCurl;
+    helper.scrubKeys();
+  }
+});
+
+test('streamChat uses responsePath for active cURL providers', async () => {
+  const LLMHelper = await loadLLMHelper();
+  const helper = new LLMHelper() as any;
+
+  helper.setModel('curl-provider', [{
+    id: 'curl-provider',
+    name: 'cURL',
+    curlCommand: "curl https://example.com -H 'Content-Type: application/json' -d '{\"messages\":{{OPENAI_MESSAGES}}}'",
+    responsePath: 'payload.answer',
+  }]);
+
+  const originalFetch = global.fetch;
+  const payload = JSON.stringify({ payload: { answer: 'from-response-path' } });
+  global.fetch = async () => ({
+    ok: true,
+    status: 200,
+    headers: {
+      get: (header: string) => header.toLowerCase() === 'content-length' ? String(Buffer.byteLength(payload)) : null,
+    },
+    body: new ReadableStream({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(payload));
+        controller.close();
+      },
+    }),
+  } as any);
+
+  try {
+    let output = '';
+    for await (const chunk of helper.streamChat('hello')) {
+      output += chunk;
+    }
+
+    assert.equal(output, 'from-response-path');
+  } finally {
+    global.fetch = originalFetch;
     helper.scrubKeys();
   }
 });

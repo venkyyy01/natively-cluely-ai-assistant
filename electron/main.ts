@@ -2944,6 +2944,8 @@ try {
       return true
     }
 
+    this.intelligenceManager.cancelActiveWhatToSay('conscious_mode_changed')
+
     const persisted = SettingsManager.getInstance().set('consciousModeEnabled', enabled)
     if (!persisted) {
       throw new Error('Unable to persist Conscious Mode')
