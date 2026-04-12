@@ -156,3 +156,146 @@ test('executeCustomProvider supports unescaped JSON templates from curl export t
     helper.scrubKeys();
   }
 });
+
+test('executeCustomProvider prunes empty inline image blocks from rigid multimodal templates', async () => {
+  const LLMHelper = await loadLLMHelper();
+  const helper = new LLMHelper() as any;
+  const originalFetch = globalThis.fetch;
+
+  let seenBody = '';
+  globalThis.fetch = (async (_url, init) => {
+    seenBody = String(init?.body || '');
+    return new Response(JSON.stringify({ choices: [{ message: { content: 'ok' } }] }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }) as typeof fetch;
+
+  try {
+    const response = await helper.executeCustomProvider(
+      `curl https://example.com -H "Content-Type: application/json" -d '{"messages":[{"role":"user","content":[{"type":"text","text":"{{TEXT}}"},{"type":"image_url","image_url":{"url":"data:image/png;base64,{{IMAGE_BASE64}}"}}]}]}'`,
+      'combined text',
+      'system text',
+      'user text',
+      'ctx text',
+      [],
+    );
+
+    assert.equal(response, 'ok');
+    const parsed = JSON.parse(seenBody);
+    assert.equal(parsed.messages[0]?.content, 'combined text');
+  } finally {
+    globalThis.fetch = originalFetch;
+    helper.scrubKeys();
+  }
+});
+
+test('executeCustomProvider collapses text-only OpenAI content arrays for provider compatibility', async () => {
+  const LLMHelper = await loadLLMHelper();
+  const helper = new LLMHelper() as any;
+  const originalFetch = globalThis.fetch;
+
+  let seenBody = '';
+  globalThis.fetch = (async (_url, init) => {
+    seenBody = String(init?.body || '');
+    return new Response(JSON.stringify({ choices: [{ message: { content: 'ok' } }] }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }) as typeof fetch;
+
+  try {
+    const response = await helper.executeCustomProvider(
+      `curl https://example.com -H "Content-Type: application/json" -d '{"messages":[{"role":"user","content":{{OPENAI_USER_CONTENT}}}]}'`,
+      'combined',
+      'system',
+      'user text',
+      'ctx',
+      [],
+    );
+
+    assert.equal(response, 'ok');
+    const parsed = JSON.parse(seenBody);
+    assert.equal(parsed.messages[0]?.content, 'CONTEXT:\nctx\n\nUSER QUESTION:\nuser text');
+  } finally {
+    globalThis.fetch = originalFetch;
+    helper.scrubKeys();
+  }
+});
+
+test('executeCustomProvider preserves multimodal OpenAI content arrays when an image is present', async () => {
+  const LLMHelper = await loadLLMHelper();
+  const helper = new LLMHelper() as any;
+  const originalFetch = globalThis.fetch;
+
+  const imagePath = '/tmp/custom-provider-openai-compatible.png';
+  await fsPromises.writeFile(imagePath, Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+k1x8AAAAASUVORK5CYII=', 'base64'));
+
+  let seenBody = '';
+  globalThis.fetch = (async (_url, init) => {
+    seenBody = String(init?.body || '');
+    return new Response(JSON.stringify({ choices: [{ message: { content: 'ok' } }] }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }) as typeof fetch;
+
+  try {
+    const response = await helper.executeCustomProvider(
+      `curl https://example.com -H "Content-Type: application/json" -d '{"messages":[{"role":"user","content":{{OPENAI_USER_CONTENT}}}]}'`,
+      'combined',
+      'system',
+      'user text',
+      'ctx',
+      [imagePath],
+    );
+
+    assert.equal(response, 'ok');
+    const parsed = JSON.parse(seenBody);
+    assert.deepEqual(Array.isArray(parsed.messages[0]?.content), true);
+    assert.equal(parsed.messages[0].content.some((part: { type: string }) => part.type === 'image_url'), true);
+  } finally {
+    globalThis.fetch = originalFetch;
+    await Promise.allSettled([fsPromises.unlink(imagePath)]);
+    helper.scrubKeys();
+  }
+});
+
+test('executeCustomProvider prunes empty text parts when an image-only multimodal template is used', async () => {
+  const LLMHelper = await loadLLMHelper();
+  const helper = new LLMHelper() as any;
+  const originalFetch = globalThis.fetch;
+
+  const imagePath = '/tmp/custom-provider-image-only.png';
+  await fsPromises.writeFile(imagePath, Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+k1x8AAAAASUVORK5CYII=', 'base64'));
+
+  let seenBody = '';
+  globalThis.fetch = (async (_url, init) => {
+    seenBody = String(init?.body || '');
+    return new Response(JSON.stringify({ choices: [{ message: { content: 'ok' } }] }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }) as typeof fetch;
+
+  try {
+    const response = await helper.executeCustomProvider(
+      `curl https://example.com -H "Content-Type: application/json" -d '{"messages":[{"role":"user","content":[{"type":"text","text":"{{TEXT}}"},{"type":"image_url","image_url":{"url":"data:image/png;base64,{{IMAGE_BASE64}}"}}]}]}'`,
+      '',
+      'system',
+      '',
+      '',
+      [imagePath],
+    );
+
+    assert.equal(response, 'ok');
+    const parsed = JSON.parse(seenBody);
+    assert.deepEqual(Array.isArray(parsed.messages[0]?.content), true);
+    assert.equal(parsed.messages[0].content.length, 1);
+    assert.equal(parsed.messages[0].content[0]?.type, 'image_url');
+  } finally {
+    globalThis.fetch = originalFetch;
+    await Promise.allSettled([fsPromises.unlink(imagePath)]);
+    helper.scrubKeys();
+  }
+});

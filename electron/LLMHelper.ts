@@ -1750,9 +1750,81 @@ ANSWER DIRECTLY:`;
     return encodedImages;
   }
 
+  private isEmptyInlineImageDataUrl(value: string): boolean {
+    return /^data:image\/[a-zA-Z0-9.+-]+;base64,\s*$/.test(value.trim());
+  }
+
+  private isEmptyImageContentPart(payload: Record<string, unknown>): boolean {
+    if (payload.type !== 'image_url') {
+      return false;
+    }
+
+    const imageUrl = payload.image_url;
+    if (typeof imageUrl === 'string') {
+      return this.isEmptyInlineImageDataUrl(imageUrl);
+    }
+
+    if (!imageUrl || typeof imageUrl !== 'object') {
+      return false;
+    }
+
+    const url = (imageUrl as Record<string, unknown>).url;
+    return typeof url === 'string' && this.isEmptyInlineImageDataUrl(url);
+  }
+
+  private isEmptyTextContentPart(payload: Record<string, unknown>): boolean {
+    return payload.type === 'text' && typeof payload.text === 'string' && payload.text.trim().length === 0;
+  }
+
+  private collapseOpenAiMessageContent(content: unknown[]): unknown {
+    if (content.length === 1) {
+      const onlyPart = content[0];
+      if (
+        onlyPart &&
+        typeof onlyPart === 'object' &&
+        (onlyPart as Record<string, unknown>).type === 'text' &&
+        typeof (onlyPart as Record<string, unknown>).text === 'string'
+      ) {
+        return (onlyPart as Record<string, string>).text;
+      }
+    }
+
+    return content;
+  }
+
+  private compactProviderPayload(payload: unknown): unknown {
+    if (Array.isArray(payload)) {
+      return payload
+        .map((item) => this.compactProviderPayload(item))
+        .filter((item) => item !== undefined);
+    }
+
+    if (!payload || typeof payload !== 'object') {
+      return payload;
+    }
+
+    const normalized: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(payload as Record<string, unknown>)) {
+      const compacted = this.compactProviderPayload(value);
+      if (compacted !== undefined) {
+        normalized[key] = compacted;
+      }
+    }
+
+    if (this.isEmptyImageContentPart(normalized) || this.isEmptyTextContentPart(normalized)) {
+      return undefined;
+    }
+
+    if (typeof normalized.role === 'string' && Array.isArray(normalized.content)) {
+      normalized.content = this.collapseOpenAiMessageContent(normalized.content);
+    }
+
+    return normalized;
+  }
+
   private normalizeProviderRequestPayload(payload: unknown): unknown {
     if (typeof payload !== 'string') {
-      return payload;
+      return this.compactProviderPayload(payload);
     }
 
     const trimmed = payload.trim();
@@ -1762,7 +1834,7 @@ ANSWER DIRECTLY:`;
 
     if (looksLikeJsonPayload(trimmed)) {
       try {
-        return JSON.parse(trimmed);
+        return this.compactProviderPayload(JSON.parse(trimmed));
       } catch {
         // fall through to unescaped retry
       }
@@ -1771,7 +1843,7 @@ ANSWER DIRECTLY:`;
     const unescaped = trimmed.replace(/\\"/g, '"');
     if (unescaped !== trimmed && looksLikeJsonPayload(unescaped)) {
       try {
-        return JSON.parse(unescaped);
+        return this.compactProviderPayload(JSON.parse(unescaped));
       } catch {
         // keep original payload
       }
