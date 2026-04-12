@@ -1833,23 +1833,102 @@ ANSWER DIRECTLY:`;
     }
 
     if (looksLikeJsonPayload(trimmed)) {
-      try {
-        return this.compactProviderPayload(JSON.parse(trimmed));
-      } catch {
-        // fall through to unescaped retry
-      }
-    }
+      const tryParseCandidate = (candidate: string): { ok: true; value: unknown } | { ok: false } => {
+        try {
+          return { ok: true, value: this.compactProviderPayload(JSON.parse(candidate)) };
+        } catch {
+          return { ok: false };
+        }
+      };
 
-    const unescaped = trimmed.replace(/\\"/g, '"');
-    if (unescaped !== trimmed && looksLikeJsonPayload(unescaped)) {
-      try {
-        return this.compactProviderPayload(JSON.parse(unescaped));
-      } catch {
-        // keep original payload
+      const parseCandidates = new Set<string>();
+      parseCandidates.add(trimmed);
+
+      const unescaped = trimmed.replace(/\\"/g, '"');
+      if (unescaped !== trimmed) {
+        parseCandidates.add(unescaped);
+      }
+
+      for (const candidate of parseCandidates) {
+        if (!looksLikeJsonPayload(candidate)) {
+          continue;
+        }
+
+        const parsedCandidate = tryParseCandidate(candidate);
+        if (parsedCandidate.ok) {
+          return parsedCandidate.value;
+        }
+
+        const escapedControlChars = this.escapeControlCharactersInsideJsonStrings(candidate);
+        if (escapedControlChars !== candidate && looksLikeJsonPayload(escapedControlChars)) {
+          const escapedCandidate = tryParseCandidate(escapedControlChars);
+          if (escapedCandidate.ok) {
+            return escapedCandidate.value;
+          }
+        }
       }
     }
 
     return payload;
+  }
+
+  private escapeControlCharactersInsideJsonStrings(input: string): string {
+    let output = '';
+    let inString = false;
+    let escaped = false;
+
+    for (let i = 0; i < input.length; i++) {
+      const char = input[i];
+
+      if (escaped) {
+        output += char;
+        escaped = false;
+        continue;
+      }
+
+      if (char === '\\') {
+        output += char;
+        escaped = true;
+        continue;
+      }
+
+      if (char === '"') {
+        inString = !inString;
+        output += char;
+        continue;
+      }
+
+      if (inString) {
+        switch (char) {
+          case '\n':
+            output += '\\n';
+            continue;
+          case '\r':
+            output += '\\r';
+            continue;
+          case '\t':
+            output += '\\t';
+            continue;
+          case '\f':
+            output += '\\f';
+            continue;
+          case '\b':
+            output += '\\b';
+            continue;
+          default: {
+            const code = char.charCodeAt(0);
+            if (code >= 0 && code <= 0x1f) {
+              output += `\\u${code.toString(16).padStart(4, '0')}`;
+              continue;
+            }
+          }
+        }
+      }
+
+      output += char;
+    }
+
+    return output;
   }
 
   private buildFetchRequestBody(payload: unknown): any {

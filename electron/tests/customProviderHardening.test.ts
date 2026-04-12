@@ -299,3 +299,38 @@ test('executeCustomProvider prunes empty text parts when an image-only multimoda
     helper.scrubKeys();
   }
 });
+
+test('executeCustomProvider normalizes multiline JSON string templates to valid JSON bodies', async () => {
+  const LLMHelper = await loadLLMHelper();
+  const helper = new LLMHelper() as any;
+  const originalFetch = globalThis.fetch;
+
+  let seenBody = '';
+  globalThis.fetch = (async (_url, init) => {
+    seenBody = String(init?.body || '');
+    return new Response(JSON.stringify({ choices: [{ message: { content: 'ok' } }] }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }) as typeof fetch;
+
+  try {
+    const response = await helper.executeCustomProvider(
+      `curl https://example.com -H "Content-Type: application/json" -d '{"messages":[{"role":"system","content":"Line one
+Line two"},{"role":"user","content":"{{USER_MESSAGE}}"}]}'`,
+      'combined',
+      'system',
+      'user text',
+      'ctx',
+      [],
+    );
+
+    assert.equal(response, 'ok');
+    const parsed = JSON.parse(seenBody);
+    assert.equal(parsed.messages[0]?.content, 'Line one\nLine two');
+    assert.equal(parsed.messages[1]?.content, 'user text');
+  } finally {
+    globalThis.fetch = originalFetch;
+    helper.scrubKeys();
+  }
+});
