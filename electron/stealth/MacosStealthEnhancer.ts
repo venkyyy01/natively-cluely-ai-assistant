@@ -14,6 +14,7 @@ interface WindowInfo {
 interface StealthEnhancerOptions {
   platform?: string;
   logger?: Pick<Console, 'log' | 'warn' | 'error'>;
+  commandRunner?: (command: string, args: string[]) => Promise<string>;
 }
 
 const CHROME_BUNDLE_IDS = new Set([
@@ -28,12 +29,14 @@ const CHROME_BUNDLE_IDS = new Set([
 export class MacosStealthEnhancer extends EventEmitter {
   private readonly platform: string;
   private readonly logger: Pick<Console, 'log' | 'warn' | 'error'>;
+  private readonly commandRunner: (command: string, args: string[]) => Promise<string>;
   private enhancedWindows = new Set<number>();
 
   constructor(options: StealthEnhancerOptions = {}) {
     super();
     this.platform = options.platform ?? process.platform;
     this.logger = options.logger ?? console;
+    this.commandRunner = options.commandRunner ?? ((command, args) => this.execPromise(command, args));
   }
 
   async enhanceWindowProtection(windowNumber: number): Promise<boolean> {
@@ -42,11 +45,12 @@ export class MacosStealthEnhancer extends EventEmitter {
     }
 
     try {
-      await this.applyWindowLevel(windowNumber, 0);
-      await this.disableWindowSharing(windowNumber);
-      this.enhancedWindows.add(windowNumber);
-      this.logger.log(`[MacosStealthEnhancer] Enhanced protection applied to window ${windowNumber}`);
-      this.emit('window-enhanced', windowNumber);
+      const safeWindowNumber = this.normalizeWindowNumber(windowNumber);
+      await this.applyWindowLevel(safeWindowNumber, 0);
+      await this.disableWindowSharing(safeWindowNumber);
+      this.enhancedWindows.add(safeWindowNumber);
+      this.logger.log(`[MacosStealthEnhancer] Enhanced protection applied to window ${safeWindowNumber}`);
+      this.emit('window-enhanced', safeWindowNumber);
       return true;
     } catch (error) {
       this.logger.warn('[MacosStealthEnhancer] Failed to enhance window protection:', error);
@@ -60,10 +64,11 @@ export class MacosStealthEnhancer extends EventEmitter {
     }
 
     try {
-      await this.enableWindowSharing(windowNumber);
-      this.enhancedWindows.delete(windowNumber);
-      this.logger.log(`[MacosStealthEnhancer] Enhanced protection removed from window ${windowNumber}`);
-      this.emit('window-degraded', windowNumber);
+      const safeWindowNumber = this.normalizeWindowNumber(windowNumber);
+      await this.enableWindowSharing(safeWindowNumber);
+      this.enhancedWindows.delete(safeWindowNumber);
+      this.logger.log(`[MacosStealthEnhancer] Enhanced protection removed from window ${safeWindowNumber}`);
+      this.emit('window-degraded', safeWindowNumber);
     } catch (error) {
       this.logger.warn('[MacosStealthEnhancer] Failed to remove enhanced protection:', error);
     }
@@ -75,16 +80,25 @@ export class MacosStealthEnhancer extends EventEmitter {
     }
 
     try {
+      const safeWindowNumber = this.normalizeWindowNumber(targetWindowNumber);
       const chromePids = await this.getChromePids();
       if (chromePids.size === 0) {
         return false;
       }
 
       const capturedWindows = await this.getWindowsCapturedByPids(chromePids);
-      return capturedWindows.has(targetWindowNumber);
+      return capturedWindows.has(safeWindowNumber);
     } catch {
       return false;
     }
+  }
+
+  private normalizeWindowNumber(windowNumber: number): number {
+    if (!Number.isSafeInteger(windowNumber) || windowNumber <= 0) {
+      throw new Error(`Invalid macOS window number: ${windowNumber}`);
+    }
+
+    return windowNumber;
   }
 
   async getActiveScreenCaptureSessions(): Promise<Array<{ pid: number; name: string }>> {
@@ -263,12 +277,7 @@ print(','.join(str(w) for w in captured))
   }
 
   private async execPython(script: string): Promise<string> {
-    const sanitizedScript = script.replace(/['"`]/g, (match) => {
-      if (match === "'") return "'\\''";
-      return match;
-    });
-
-    return this.execPromise('python3', ['-c', `'${sanitizedScript}'`]);
+    return this.commandRunner('python3', ['-c', script]);
   }
 
   private execPromise(command: string, args: string[]): Promise<string> {

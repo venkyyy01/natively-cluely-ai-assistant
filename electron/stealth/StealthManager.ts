@@ -235,6 +235,7 @@ export class StealthManager extends EventEmitter {
   private macOSMajor: number = 0;
   private macOSMinor: number = 0;
   private opacityFlickerHandle: unknown = null;
+  private virtualDisplayTaskQueue: Promise<void> | null = null;
 
   constructor(config: StealthConfig, deps: StealthManagerDependencies = {}) {
     super();
@@ -634,6 +635,10 @@ export class StealthManager extends EventEmitter {
       return;
     }
 
+    const coordinator = this.virtualDisplayCoordinator;
+    if (!coordinator) {
+      return;
+    }
     const win = record.win;
     const windowId = this.safeGetMediaSourceId(win);
     if (!windowId) {
@@ -644,38 +649,64 @@ export class StealthManager extends EventEmitter {
     record.virtualDisplayRequestId = requestId;
     record.virtualDisplayIsolationStarted = true;
 
-    this.virtualDisplayCoordinator.ensureIsolationForWindow({
-      sessionId: windowId,
-      windowId,
-      width: win.getBounds?.().width ?? 0,
-      height: win.getBounds?.().height ?? 0,
-    }).then((response) => {
-      if (!this.isCurrentVirtualDisplayRequest(record, requestId)) {
+    this.enqueueVirtualDisplayTask(async () => {
+      if (!this.isCurrentVirtualDisplayRequest(record, requestId) || this.isWindowDestroyed(win)) {
         return;
       }
 
-      if (!response.ready || !response.surfaceToken) {
-        record.virtualDisplayIsolationStarted = false;
-        this.logger.warn('[StealthManager] Virtual display isolation not ready, falling back to Layer 0+1');
-        if (this.isEnabled()) this.addWarning('virtual_display_failed');
-        return;
-      }
+      try {
+        const response = await coordinator.ensureIsolationForWindow({
+          sessionId: windowId,
+          windowId,
+          width: win.getBounds?.().width ?? 0,
+          height: win.getBounds?.().height ?? 0,
+        });
 
-      this.clearWarning('virtual_display_failed');
-      this.clearWarning('virtual_display_exhausted');
-
-      this.moveWindowToVirtualDisplay(record, response.surfaceToken, requestId);
-    }).catch((error) => {
-      if (this.isCurrentVirtualDisplayRequest(record, requestId)) {
-        record.virtualDisplayIsolationStarted = false;
-      }
-      this.logger.warn('[StealthManager] Virtual display isolation failed, falling back to Layer 0+1:', error);
-      if (this.isEnabled()) {
-        if (this.virtualDisplayCoordinator.isExhausted?.()) {
-          this.addWarning('virtual_display_exhausted');
-        } else {
-          this.addWarning('virtual_display_failed');
+        if (!this.isCurrentVirtualDisplayRequest(record, requestId)) {
+          return;
         }
+
+        if (!response.ready || !response.surfaceToken) {
+          record.virtualDisplayIsolationStarted = false;
+          this.logger.warn('[StealthManager] Virtual display isolation not ready, falling back to Layer 0+1');
+          if (this.isEnabled()) this.addWarning('virtual_display_failed');
+          return;
+        }
+
+        this.clearWarning('virtual_display_failed');
+        this.clearWarning('virtual_display_exhausted');
+
+        this.moveWindowToVirtualDisplay(record, response.surfaceToken, requestId);
+      } catch (error) {
+        if (this.isCurrentVirtualDisplayRequest(record, requestId)) {
+          record.virtualDisplayIsolationStarted = false;
+        }
+        this.logger.warn('[StealthManager] Virtual display isolation failed, falling back to Layer 0+1:', error);
+        if (this.isEnabled()) {
+          if (coordinator.isExhausted?.()) {
+            this.addWarning('virtual_display_exhausted');
+          } else {
+            this.addWarning('virtual_display_failed');
+          }
+        }
+      }
+    });
+  }
+
+  private enqueueVirtualDisplayTask(task: () => Promise<void>): void {
+    const runTask = async (): Promise<void> => {
+      await task();
+    };
+    const activeQueue = this.virtualDisplayTaskQueue;
+    const next = activeQueue ? activeQueue.then(runTask, runTask) : runTask();
+    const trackedQueue = next.then(
+      (): void => undefined,
+      (): void => undefined,
+    );
+    this.virtualDisplayTaskQueue = trackedQueue;
+    void trackedQueue.finally(() => {
+      if (this.virtualDisplayTaskQueue === trackedQueue) {
+        this.virtualDisplayTaskQueue = null;
       }
     });
   }

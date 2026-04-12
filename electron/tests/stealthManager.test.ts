@@ -115,6 +115,10 @@ describe('StealthManager', () => {
     setOptimizationFlagsForTesting({ accelerationEnabled: false, useStealthMode: true });
   });
 
+  async function flushAsyncWork(): Promise<void> {
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+
   it('returns stealth-ready window defaults when enabled', () => {
     const manager = new StealthManager({ enabled: true });
     const options = manager.getBrowserWindowOptions();
@@ -814,6 +818,66 @@ describe('StealthManager', () => {
     ]);
   });
 
+  it('serializes virtual display isolation requests so a second window waits for the first helper call to finish', async () => {
+    const calls: string[] = [];
+    const displays = [{ id: 777, workArea: { x: 200, y: 100, width: 1600, height: 900 } }];
+    let resolveFirstRequest: (() => void) | null = null;
+    const firstRequestSettled = new Promise<void>((resolve) => {
+      resolveFirstRequest = resolve;
+    });
+    const manager = new StealthManager(
+      { enabled: true },
+      {
+        platform: 'darwin',
+        screenApi: {
+          getAllDisplays() {
+            return displays;
+          },
+        },
+        logger: silentLogger,
+        featureFlags: { enableVirtualDisplayIsolation: true },
+        virtualDisplayCoordinator: {
+          ensureIsolationForWindow({ windowId }: { windowId: string }) {
+            calls.push(windowId);
+            if (calls.length === 1) {
+              return firstRequestSettled.then(() => ({
+                ready: true,
+                sessionId: windowId,
+                mode: 'virtual-display' as const,
+                surfaceToken: 'display-777',
+              }));
+            }
+
+            return Promise.resolve({
+              ready: true,
+              sessionId: windowId,
+              mode: 'virtual-display' as const,
+              surfaceToken: 'display-777',
+            });
+          },
+          releaseIsolationForWindow() {
+            return Promise.resolve();
+          },
+        },
+      } as any,
+    );
+    const first = new FakeWindow();
+    const second = new FakeWindow();
+    second.mediaSourceId = 'window:202:0';
+
+    manager.applyToWindow(first as any, true, { role: 'primary', allowVirtualDisplayIsolation: true });
+    manager.applyToWindow(second as any, true, { role: 'primary', allowVirtualDisplayIsolation: true });
+    await flushAsyncWork();
+
+    assert.deepStrictEqual(calls, ['window:101:0']);
+
+    resolveFirstRequest?.();
+    await flushAsyncWork();
+    await flushAsyncWork();
+
+    assert.deepStrictEqual(calls, ['window:101:0', 'window:202:0']);
+  });
+
   it('does not start virtual display isolation unless the window opts in', async () => {
     const calls: Array<{ action: string; windowId: string }> = [];
     const manager = new StealthManager(
@@ -878,7 +942,7 @@ describe('StealthManager', () => {
 
     ready = true;
     manager.reapplyAfterShow(win as any);
-    await Promise.resolve();
+    await flushAsyncWork();
 
     assert.deepStrictEqual(calls, ['not-ready', 'ready']);
     assert.deepStrictEqual(win.setBoundsCalls, [
@@ -965,7 +1029,7 @@ describe('StealthManager', () => {
     }
 
     manager.reapplyAfterShow(win as any);
-    await Promise.resolve();
+    await flushAsyncWork();
 
     assert.deepStrictEqual(calls, ['window:101:0', 'window:101:0']);
   });
