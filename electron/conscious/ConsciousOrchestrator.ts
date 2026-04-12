@@ -151,6 +151,7 @@ export class ConsciousOrchestrator {
       question: input.resolvedQuestion,
       lastSeconds: 180,
     });
+    const evidenceContextBlock = this.session.getConsciousEvidenceContext();
 
     const structuredResponse = await input.followUpLLM.generateReasoningFirstFollowUp(
       input.activeReasoningThread,
@@ -173,7 +174,7 @@ export class ConsciousOrchestrator {
     const provenanceVerdict = this.provenanceVerifier.verify({
       response: structuredResponse,
       semanticContextBlock: this.session.getConsciousSemanticContext(),
-      evidenceContextBlock: retrievalPack.combinedContext,
+      evidenceContextBlock,
       question: input.resolvedQuestion,
       hypothesis: this.session.getLatestAnswerHypothesis(),
     });
@@ -239,7 +240,7 @@ export class ConsciousOrchestrator {
     const provenanceVerdict = this.provenanceVerifier.verify({
       response: structuredResponse,
       semanticContextBlock: this.session.getConsciousSemanticContext(),
-      evidenceContextBlock: input.preparedTranscript,
+      evidenceContextBlock: this.session.getConsciousEvidenceContext(),
       question: input.question,
       hypothesis: this.session.getLatestAnswerHypothesis(),
     });
