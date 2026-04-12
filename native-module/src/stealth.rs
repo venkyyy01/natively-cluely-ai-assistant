@@ -4,6 +4,7 @@ use napi::bindgen_prelude::Buffer;
 mod macos {
     use cidre::{arc, ns, objc};
     use libc::{c_char, c_void, dlsym, RTLD_DEFAULT};
+    use std::ptr::NonNull;
 
     type CGSMainConnectionIDFn = unsafe extern "C" fn() -> i32;
     type CGSSetWindowSharingStateFn = unsafe extern "C" fn(i32, i32, i32) -> i32;
@@ -41,31 +42,24 @@ mod macos {
     }
 
     pub fn apply(window_number: u32) -> napi::Result<()> {
-        if let Some(window) = find_window(window_number) {
-            window.set_sharing_type(0); // NSWindowSharingNone
-        } else {
-            eprintln!(
-                "[stealth] macOS window not found for window number {}",
-                window_number
-            );
-        }
-
+        let window = find_window_or_err(window_number)?;
+        window.set_sharing_type(K_CGS_DO_NOT_SHARE as usize);
         Ok(())
     }
 
     pub fn remove(window_number: u32) -> napi::Result<()> {
-        if let Some(window) = find_window(window_number) {
-            window.set_sharing_type(1); // NSWindowSharingReadOnly
-        }
-
+        let window = find_window_or_err(window_number)?;
+        window.set_sharing_type(K_CGS_NORMAL_SHARE as usize);
         Ok(())
     }
 
     pub fn apply_private(window_number: u32) -> napi::Result<()> {
+        let _ = find_window_or_err(window_number)?;
         apply_cgs(window_number, K_CGS_DO_NOT_SHARE, "apply")
     }
 
     pub fn remove_private(window_number: u32) -> napi::Result<()> {
+        let _ = find_window_or_err(window_number)?;
         apply_cgs(window_number, K_CGS_NORMAL_SHARE, "remove")
     }
 
@@ -97,36 +91,53 @@ mod macos {
         None
     }
 
+    fn find_window_or_err(window_number: u32) -> napi::Result<arc::R<ns::Window>> {
+        find_window(window_number).ok_or_else(|| {
+            napi::Error::from_reason(format!(
+                "macOS window not found for window number {}",
+                window_number
+            ))
+        })
+    }
+
     fn apply_cgs(window_number: u32, sharing_state: i32, operation: &str) -> napi::Result<()> {
         unsafe {
             let connection_symbol = c"CGSMainConnectionID";
             let sharing_symbol = c"CGSSetWindowSharingState";
 
-            let connection_ptr = dlsym(RTLD_DEFAULT, connection_symbol.as_ptr() as *const c_char);
-            let sharing_ptr = dlsym(RTLD_DEFAULT, sharing_symbol.as_ptr() as *const c_char);
-
-            if connection_ptr.is_null() || sharing_ptr.is_null() {
-                eprintln!("[stealth] CGS private symbols unavailable; skipping private macOS stealth path during {}", operation);
-                return Ok(());
-            }
+            let connection_ptr = NonNull::new(dlsym(
+                RTLD_DEFAULT,
+                connection_symbol.as_ptr() as *const c_char,
+            ))
+            .ok_or_else(|| {
+                napi::Error::from_reason(format!(
+                    "CGSMainConnectionID symbol unavailable during {}",
+                    operation
+                ))
+            })?;
+            let sharing_ptr = NonNull::new(dlsym(
+                RTLD_DEFAULT,
+                sharing_symbol.as_ptr() as *const c_char,
+            ))
+            .ok_or_else(|| {
+                napi::Error::from_reason(format!(
+                    "CGSSetWindowSharingState symbol unavailable during {}",
+                    operation
+                ))
+            })?;
 
             let connection_fn: CGSMainConnectionIDFn =
-                std::mem::transmute::<*mut c_void, CGSMainConnectionIDFn>(connection_ptr);
+                std::mem::transmute::<*mut c_void, CGSMainConnectionIDFn>(connection_ptr.as_ptr());
             let sharing_fn: CGSSetWindowSharingStateFn =
-                std::mem::transmute::<*mut c_void, CGSSetWindowSharingStateFn>(sharing_ptr);
+                std::mem::transmute::<*mut c_void, CGSSetWindowSharingStateFn>(sharing_ptr.as_ptr());
 
             let connection_id = connection_fn();
             let result = sharing_fn(connection_id, window_number as i32, sharing_state);
             if result != 0 {
-                eprintln!(
-                    "[stealth] CGSSetWindowSharingState {} rejected with {}",
-                    operation, result
-                );
-            } else {
-                eprintln!(
-                    "[stealth] CGSSetWindowSharingState {} applied for window {}",
-                    operation, window_number
-                );
+                return Err(napi::Error::from_reason(format!(
+                    "CGSSetWindowSharingState {} rejected with {} for window {}",
+                    operation, result, window_number
+                )));
             }
         }
 

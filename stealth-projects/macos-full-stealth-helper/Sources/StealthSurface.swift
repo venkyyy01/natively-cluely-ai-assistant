@@ -38,6 +38,7 @@ public final class StealthSurface {
 
             guard let device = MTLCreateSystemDefaultDevice() else {
                 if allowHeadlessFallback {
+                    window.close()
                     self.headlessFallbackActive = true
                     return
                 }
@@ -160,6 +161,9 @@ public final class StealthSurface {
         DispatchQueue.main.sync {
             result = Result { try work() }
         }
-        return try result!.get()
+        guard let result else {
+            throw NSError(domain: "StealthSurface", code: 3, userInfo: [NSLocalizedDescriptionKey: "Main-thread stealth surface operation failed to return a result"])
+        }
+        return try result.get()
     }
 }

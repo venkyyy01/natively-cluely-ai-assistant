@@ -20,6 +20,7 @@ protocol Layer3PresenterWindow {
     func configureDrawableSize(width: Int, height: Int, hiDpi: Bool) throws
     func windowNumber() throws -> Int
     func title() throws -> String
+    func usesHiddenWindowSharing() throws -> Bool
     func show() throws
     func hide() throws
     func close() throws
@@ -45,6 +46,7 @@ public final class AppKitMetalPresenterHost: Layer3PresenterHosting {
 
     private let windowFactory: Layer3PresenterWindowFactory
     private var sessions: [String: CandidateSession] = [:]
+    private let sessionsLock = NSLock()
 
     init(windowFactory: Layer3PresenterWindowFactory = AppKitLayer3PresenterWindowFactory()) {
         self.windowFactory = windowFactory
@@ -55,22 +57,37 @@ public final class AppKitMetalPresenterHost: Layer3PresenterHosting {
         let details = try performOnMainThread {
             let window = try windowFactory.makeWindow(sessionId: sessionId, surfaceId: surfaceId, displayToken: displayToken, width: width, height: height, hiDpi: hiDpi)
             try window.configureDrawableSize(width: width, height: height, hiDpi: hiDpi)
+            guard try window.usesHiddenWindowSharing() else {
+                try window.close()
+                throw NSError(domain: "Layer3PresenterHost", code: 6, userInfo: [NSLocalizedDescriptionKey: "Presenter window failed to enter hidden sharing mode"])
+            }
             let title = try window.title()
             let windowNumber = try window.windowNumber()
             return (window, title, windowNumber)
         }
-        sessions[sessionId] = CandidateSession(
-            surfaceId: surfaceId,
-            active: false,
-            window: details.0,
-            windowTitle: details.1,
-            windowNumber: details.2,
-            displayToken: displayToken
-        )
+
+        let previousWindow = sessionsLock.withLock {
+            let previous = sessions[sessionId]?.window
+            sessions[sessionId] = CandidateSession(
+                surfaceId: surfaceId,
+                active: false,
+                window: details.0,
+                windowTitle: details.1,
+                windowNumber: details.2,
+                displayToken: displayToken
+            )
+            return previous
+        }
+
+        if let previousWindow {
+            try performOnMainThread {
+                try previousWindow.close()
+            }
+        }
     }
 
     public func setPresentationActive(sessionId: String, active: Bool) throws {
-        guard var session = sessions[sessionId] else {
+        guard let session = sessionsLock.withLock({ sessions[sessionId] }) else {
             throw NSError(domain: "Layer3PresenterHost", code: 1, userInfo: [NSLocalizedDescriptionKey: "Presenter session not found"])
         }
 
@@ -82,12 +99,18 @@ public final class AppKitMetalPresenterHost: Layer3PresenterHosting {
                 try session.window.hide()
             }
         }
-        session.active = active
-        sessions[sessionId] = session
+
+        sessionsLock.withLock {
+            guard var refreshed = sessions[sessionId] else {
+                return
+            }
+            refreshed.active = active
+            sessions[sessionId] = refreshed
+        }
     }
 
     public func teardown(sessionId: String) throws {
-        if let session = sessions.removeValue(forKey: sessionId) {
+        if let session = sessionsLock.withLock({ sessions.removeValue(forKey: sessionId) }) {
             try performOnMainThread {
                 try session.window.close()
             }
@@ -95,18 +118,16 @@ public final class AppKitMetalPresenterHost: Layer3PresenterHosting {
     }
 
     public func validationSnapshot(sessionId: String) throws -> Layer3PresenterValidationSnapshot {
-        guard let session = sessions[sessionId] else {
+        guard let session = sessionsLock.withLock({ sessions[sessionId] }) else {
             throw NSError(domain: "Layer3PresenterHost", code: 3, userInfo: [NSLocalizedDescriptionKey: "Presenter session not found"])
         }
 
-        return try performOnMainThread {
-            Layer3PresenterValidationSnapshot(
-                sessionId: sessionId,
-                windowTitle: session.windowTitle,
-                windowNumber: session.windowNumber,
-                active: session.active
-            )
-        }
+        return Layer3PresenterValidationSnapshot(
+            sessionId: sessionId,
+            windowTitle: session.windowTitle,
+            windowNumber: session.windowNumber,
+            active: session.active
+        )
     }
 
     private func ensurePresenterRuntimeReady() throws {
@@ -132,7 +153,10 @@ public final class AppKitMetalPresenterHost: Layer3PresenterHosting {
         DispatchQueue.main.sync {
             result = Result { try work() }
         }
-        return try result!.get()
+        guard let result else {
+            throw NSError(domain: "Layer3PresenterHost", code: 7, userInfo: [NSLocalizedDescriptionKey: "Main-thread presenter operation failed to return a result"])
+        }
+        return try result.get()
     }
 
     #if canImport(QuartzCore) && canImport(Metal)
@@ -175,6 +199,8 @@ private final class AppKitLayer3PresenterWindow: Layer3PresenterWindow {
         window.title = "Layer3Presenter-\(sessionId)-\(surfaceId)"
         window.level = .screenSaver
         window.collectionBehavior = [.fullScreenAuxiliary, .moveToActiveSpace, .stationary]
+        window.sharingType = .none
+        window.ignoresMouseEvents = true
         let resolvedScreen = try AppKitLayer3PresenterWindow.resolveScreen(displayToken: displayToken)
         if let screen = resolvedScreen {
             window.setFrame(screen.frame, display: false)
@@ -190,6 +216,7 @@ private final class AppKitLayer3PresenterWindow: Layer3PresenterWindow {
         metalLayer.contentsScale = hiDpi ? 2.0 : 1.0
         contentView.layer = metalLayer
         window.contentView = contentView
+        window.orderOut(nil)
 
         self.window = window
         self.metalLayer = metalLayer
@@ -232,6 +259,14 @@ private final class AppKitLayer3PresenterWindow: Layer3PresenterWindow {
         return window?.title ?? ""
         #else
         return ""
+        #endif
+    }
+
+    func usesHiddenWindowSharing() throws -> Bool {
+        #if canImport(AppKit)
+        return window?.sharingType == NSWindow.SharingType.none
+        #else
+        return false
         #endif
     }
 
