@@ -136,26 +136,26 @@ export class ModelSelectorWindowHelper {
         this.hideWindow();
     }
 
-    private createWindow(x?: number, y?: number, showWhenReady: boolean = true): void {
-        const windowSettings: Electron.BrowserWindowConstructorOptions = {
-            width: 140,
-            height: 200,
-            frame: false,
-            transparent: true,
-            resizable: false,
-            fullscreenable: false,
-            hasShadow: false,
-            alwaysOnTop: true,
-            backgroundColor: "#00000000",
-            show: false,
-            skipTaskbar: true,
-            webPreferences: {
-                nodeIntegration: false,
-                contextIsolation: true,
-                preload: path.join(__dirname, "preload.js"),
-                backgroundThrottling: false
-            }
-        }
+private createWindow(x?: number, y?: number, showWhenReady: boolean = true): void {
+  const windowSettings: Electron.BrowserWindowConstructorOptions = {
+    width: 140,
+    height: 200,
+    frame: false,
+    transparent: true,
+    resizable: false,
+    fullscreenable: false,
+    hasShadow: false,
+    alwaysOnTop: true,
+    backgroundColor: "#00000000",
+    show: false,
+    skipTaskbar: true,
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true,
+      preload: path.join(__dirname, "preload.js"),
+      backgroundThrottling: false
+    }
+  }
 
         if (x !== undefined && y !== undefined) {
             windowSettings.x = Math.round(x)

@@ -107,8 +107,11 @@ const SCSTREAM_CHECK_INTERVAL_MS = 500;
 const CGWINDOW_VISIBILITY_CHECK_MS = 500;
 const KNOWN_CAPTURE_TOOL_PATTERNS = [
   /obs/i,
+  /zoom\.us/i,
   /zoom/i,
-  /teams/i,
+  /microsoft teams/i,
+  /teams2/i,
+  /teams for enterprise/i,
   /meet/i,
   /webex/i,
   /snipping/i,
@@ -148,6 +151,16 @@ const KNOWN_CAPTURE_TOOL_PATTERNS = [
   /screenshot/i,
   /parallels/i,
   /vmware/i,
+  /rdpclip/i,
+  /mstsc/i,
+  /remote desktop/i,
+  /parsec/i,
+  /nomachine/i,
+  /distant/i,
+  /screenrecording/i,
+  /screencasting/i,
+  /airplay/i,
+  /coreaudiod/i,
 ];
 
 function scheduleUnrefInterval(callback: () => Promise<void> | void, intervalMs: number): NodeJS.Timeout {

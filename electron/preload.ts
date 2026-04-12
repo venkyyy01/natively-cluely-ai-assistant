@@ -220,6 +220,7 @@ interface ElectronAPI {
 
 
   onUndetectableChanged: (callback: (state: boolean) => void) => () => void
+  onPrivacyShieldChanged: (callback: (state: { active: boolean; reason: string | null }) => void) => () => void
   onFastResponseConfigChanged: (callback: (config: FastResponseConfig) => void) => () => void
   onModelChanged: (callback: (modelId: string) => void) => () => void
   onModelFallback: (callback: (event: { provider: 'gemini' | 'groq' | 'openai' | 'claude'; previousModel: string; fallbackModel: string; reason: string }) => void) => () => void
@@ -822,6 +823,14 @@ setOpenAtLogin: (open: boolean) => invokeStatus("set-open-at-login", open),
     ipcRenderer.on('undetectable-changed', subscription)
     return () => {
       ipcRenderer.removeListener('undetectable-changed', subscription)
+    }
+  },
+
+  onPrivacyShieldChanged: (callback: (state: { active: boolean; reason: string | null }) => void) => {
+    const subscription = (_: any, state: { active: boolean; reason: string | null }) => callback(state)
+    ipcRenderer.on('privacy-shield-changed', subscription)
+    return () => {
+      ipcRenderer.removeListener('privacy-shield-changed', subscription)
     }
   },
 

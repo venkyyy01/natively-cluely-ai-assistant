@@ -19,6 +19,7 @@ import { RuntimeCoordinator } from "./runtime/RuntimeCoordinator"
 import { StealthManager } from "./stealth/StealthManager"
 import { createMacosVirtualDisplayCoordinator, resolveMacosVirtualDisplayHelperPath } from "./stealth/macosVirtualDisplayIntegration"
 import { NativeStealthBridge } from "./stealth/NativeStealthBridge"
+import { derivePrivacyShieldState, type PrivacyShieldState } from "./stealth/privacyShieldState"
 if (!app.isPackaged) {
 require('dotenv').config();
 }
@@ -337,6 +338,9 @@ export class AppState {
   // View management
   private view: "queue" | "solutions" = "queue"
   private isUndetectable: boolean = false
+  private privacyShieldFaultReason: string | null = null
+  private privacyShieldWarnings: string[] = []
+  private privacyShieldState: PrivacyShieldState = { active: false, reason: null }
 
   private problemInfo: {
     problem_statement: string
@@ -508,6 +512,8 @@ this.modelSelectorWindowHelper = new ModelSelectorWindowHelper(this.stealthManag
 
 this.stealthManager.on('stealth-degraded', (warnings: string[]) => {
   console.warn(`[Main] Stealth degraded: ${warnings.join(', ')}`);
+  this.privacyShieldWarnings = warnings;
+  this.syncPrivacyShieldState();
   this._broadcastToAllWindows('stealth-degraded', warnings);
   this.handleStealthDegradation(warnings);
 });
@@ -784,6 +790,11 @@ this.runtimeCoordinator.registerSupervisor(new StealthSupervisor(
     const bus = this.runtimeCoordinator.getBus()
 
     bus.subscribe('stealth:state-changed', async (event) => {
+      if (event.to === 'FULL_STEALTH') {
+        this.privacyShieldFaultReason = null
+        this.syncPrivacyShieldState()
+      }
+
       this._broadcastToAllWindows('stealth-state-changed', event)
       this.performanceInstrumentation.recordEvent('stealth.state', {
         from: event.from,
@@ -792,6 +803,8 @@ this.runtimeCoordinator.registerSupervisor(new StealthSupervisor(
     })
 
     bus.subscribe('stealth:fault', async (event) => {
+      this.privacyShieldFaultReason = event.reason
+      this.syncPrivacyShieldState()
       this._broadcastToAllWindows('stealth-fault', event.reason)
       this.performanceInstrumentation.recordEvent('stealth.fault', {
         reason: event.reason,
@@ -2857,11 +2870,22 @@ try {
     }
   }
 
-  private syncWindowStealthProtection(state: boolean): void {
-    this.windowHelper.setContentProtection(state)
-    this.settingsWindowHelper.setContentProtection(state)
-    this.modelSelectorWindowHelper.setContentProtection(state)
-  }
+private syncWindowStealthProtection(state: boolean): void {
+  console.log(`[Stealth] syncWindowStealthProtection: applying contentProtection=${state}`)
+  this.windowHelper.setContentProtection(state)
+  this.settingsWindowHelper.setContentProtection(state)
+  this.modelSelectorWindowHelper.setContentProtection(state)
+
+  // Verify stealth was applied
+  setTimeout(() => {
+    const verified = this.verifyStealthProtection()
+    console.log(`[Stealth] Verification result: ${verified ? 'PASS' : 'FAIL'}`)
+    if (!verified) {
+      const warnings = this.stealthManager.getStealthDegradationWarnings()
+      console.warn(`[Stealth] Verification failed. Current warnings: ${warnings.join(', ') || 'none'}`)
+    }
+  }, 500)
+}
 
   public setUndetectable(state: boolean): void {
     void this.setUndetectableAsync(state).catch((error) => {
@@ -2904,6 +2928,23 @@ try {
     void stealthSupervisor.reportFault(new Error(`stealth degraded: ${warnings.join(', ')}`)).catch((error) => {
       console.error('[Stealth] Failed to fault supervisor after degradation:', error)
     })
+  }
+
+  private syncPrivacyShieldState(): void {
+    const nextState = derivePrivacyShieldState({
+      warnings: this.privacyShieldWarnings,
+      faultReason: this.privacyShieldFaultReason,
+    })
+
+    if (
+      nextState.active === this.privacyShieldState.active &&
+      nextState.reason === this.privacyShieldState.reason
+    ) {
+      return
+    }
+
+    this.privacyShieldState = nextState
+    this._broadcastToAllWindows('privacy-shield-changed', nextState)
   }
 
   private verifyStealthProtection(): boolean {
