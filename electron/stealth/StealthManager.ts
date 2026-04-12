@@ -225,6 +225,7 @@ export class StealthManager extends EventEmitter {
   private scStreamMonitorHandle: unknown = null;
   private scStreamMonitorRunning = false;
   private scStreamActive = false;
+  private captureVisibleToToolsActive = false;
   private chromiumDetector: ChromiumCaptureDetector | null = null;
   private stealthEnhancer: MacosStealthEnhancer | null = null;
   private cgWindowMonitorHandle: unknown = null;
@@ -796,6 +797,8 @@ export class StealthManager extends EventEmitter {
     this.scStreamMonitorRunning = false;
     this.cgWindowMonitorRunning = false;
     this.scStreamActive = false;
+    this.captureVisibleToToolsActive = false;
+    this.clearTransientCaptureWarnings();
 
     if (this.chromiumDetector) {
       this.chromiumDetector.stop();
@@ -806,6 +809,12 @@ export class StealthManager extends EventEmitter {
       this.tccMonitor.stop();
       this.tccMonitor = null;
     }
+  }
+
+  private clearTransientCaptureWarnings(): void {
+    this.clearWarning('chromium_capture_active');
+    this.clearWarning('scstream_capture_detected');
+    this.clearWarning('window_visible_to_capture');
   }
 
   private bindPowerMonitor(): void {
@@ -1157,6 +1166,7 @@ export class StealthManager extends EventEmitter {
     this.cgWindowMonitorRunning = true;
     try {
       const visibleWindowNumbers = await this.getWindowNumbersVisibleToCapture();
+      let windowVisibleToCaptureDetected = false;
 
       for (const record of this.managedWindows) {
         const win = record.win;
@@ -1170,13 +1180,18 @@ export class StealthManager extends EventEmitter {
         }
 
         if (visibleWindowNumbers.has(windowNumber)) {
+          windowVisibleToCaptureDetected = true;
           this.logger.log(`[StealthManager] Window ${windowNumber} is visible to capture tools - applying emergency protection`);
           this.applyEmergencyProtection(win);
-          if (!this.scStreamActive) {
-            this.scStreamActive = true;
-            this.addWarning('window_visible_to_capture');
-          }
         }
+      }
+
+      if (windowVisibleToCaptureDetected) {
+        this.captureVisibleToToolsActive = true;
+        this.addWarning('window_visible_to_capture');
+      } else if (this.captureVisibleToToolsActive) {
+        this.captureVisibleToToolsActive = false;
+        this.clearWarning('window_visible_to_capture');
       }
     } catch (error) {
       this.logger.warn('[StealthManager] CGWindow visibility check failed, maintaining Layer 0 protection:', error);

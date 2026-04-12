@@ -657,6 +657,55 @@ describe('StealthManager', () => {
     assert.strictEqual(manager.verifyStealth(win as any), true);
   });
 
+  it('clears the capture-visibility warning once windows are no longer visible to capture tools', async () => {
+    const win = new FakeWindow();
+    const manager = new StealthManager(
+      { enabled: true },
+      {
+        platform: 'darwin',
+        logger: silentLogger,
+        nativeModule: {
+          applyMacosWindowStealth() {},
+          verifyMacosStealthState() {
+            return 0;
+          },
+        },
+      },
+    );
+
+    manager.applyToWindow(win as any, true, { role: 'primary' });
+
+    (manager as any).getWindowNumbersVisibleToCapture = async () => new Set([101]);
+    await (manager as any).pollCGWindowVisibility();
+    assert.ok(manager.getStealthDegradationWarnings().includes('window_visible_to_capture'));
+
+    (manager as any).getWindowNumbersVisibleToCapture = async () => new Set<number>();
+    await (manager as any).pollCGWindowVisibility();
+    assert.ok(!manager.getStealthDegradationWarnings().includes('window_visible_to_capture'));
+  });
+
+  it('clears transient capture warnings when stealth is disabled', () => {
+    const win = new FakeWindow();
+    const manager = new StealthManager(
+      { enabled: true },
+      {
+        platform: 'darwin',
+        logger: silentLogger,
+      },
+    );
+
+    manager.applyToWindow(win as any, true, { role: 'primary' });
+    (manager as any).addWarning('chromium_capture_active');
+    (manager as any).addWarning('scstream_capture_detected');
+    (manager as any).addWarning('window_visible_to_capture');
+
+    manager.setEnabled(false);
+
+    assert.ok(!manager.getStealthDegradationWarnings().includes('chromium_capture_active'));
+    assert.ok(!manager.getStealthDegradationWarnings().includes('scstream_capture_detected'));
+    assert.ok(!manager.getStealthDegradationWarnings().includes('window_visible_to_capture'));
+  });
+
   it('starts macOS virtual display isolation with the current window bounds when the feature flag is enabled', async () => {
     const calls: Array<{ action: string; windowId: string; width?: number; height?: number }> = [];
     const manager = new StealthManager(

@@ -54,25 +54,31 @@ export class ConsciousProvenanceVerifier {
   verify(input: {
     response: ConsciousModeStructuredResponse;
     semanticContextBlock?: string;
+    evidenceContextBlock?: string;
+    question?: string;
     hypothesis?: AnswerHypothesis | null;
   }): ConsciousProvenanceVerdict {
-    const semanticContext = (input.semanticContextBlock || '').toLowerCase();
-    if (!semanticContext) {
+    const groundingContext = [
+      input.semanticContextBlock || '',
+      input.evidenceContextBlock || '',
+      input.question || '',
+      `${input.hypothesis?.latestSuggestedAnswer || ''} ${(input.hypothesis?.likelyThemes || []).join(' ')}`,
+    ].join(' ').toLowerCase();
+    if (!groundingContext.trim()) {
       return { ok: true };
     }
 
     const responseText = summaryText(input.response);
-    const hypothesisText = `${input.hypothesis?.latestSuggestedAnswer || ''} ${(input.hypothesis?.likelyThemes || []).join(' ')}`.toLowerCase();
 
     const unsupportedTech = extractKnownTechnologies(responseText).filter(
-      (term) => !semanticContext.includes(term) && !hypothesisText.includes(term)
+      (term) => !groundingContext.includes(term)
     );
     if (unsupportedTech.length > 0) {
       return { ok: false, reason: 'unsupported_technology_claim' };
     }
 
     const unsupportedNumbers = extractNumbers(responseText).filter(
-      (value) => !semanticContext.includes(value) && !hypothesisText.includes(value)
+      (value) => !groundingContext.includes(value)
     );
     if (unsupportedNumbers.length > 0) {
       return { ok: false, reason: 'unsupported_metric_claim' };
