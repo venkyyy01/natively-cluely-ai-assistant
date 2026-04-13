@@ -43,6 +43,7 @@ test('default keybinds include overlay clickthrough toggle shortcut', async () =
     assert.deepEqual(globalIds, [
       'chat:scrollDown',
       'chat:scrollUp',
+      'general:emergency-hide',
       'general:selective-screenshot',
       'general:take-screenshot',
       'general:toggle-clickthrough',
