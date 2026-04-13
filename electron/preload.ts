@@ -145,7 +145,15 @@ interface ElectronAPI {
 
   // Intelligence Mode IPC
   generateAssist: () => Promise<{ insight: string | null }>
-  generateWhatToSay: (question?: string, imagePaths?: string[]) => Promise<{ answer: string | null; question?: string; error?: string }>
+  generateWhatToSay: (
+    question?: string,
+    imagePaths?: string[]
+  ) => Promise<{
+    answer: string | null
+    question?: string
+    error?: string
+    status?: 'completed' | 'canceled' | 'error'
+  }>
   generateFollowUp: (intent: string, userRequest?: string) => Promise<{ refined: string | null; intent: string }>
   generateRecap: () => Promise<{ summary: string | null }>
   submitManualQuestion: (question: string) => Promise<{ answer: string | null; question: string }>

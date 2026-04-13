@@ -52,11 +52,31 @@ export function registerIntelligenceHandlers({ appState, safeHandle }: RegisterI
   });
 
   safeHandle('generate-what-to-say', async (_event, question?: string, imagePaths?: string[]) => {
+    const resolvedQuestion = question || 'inferred from context';
+
     try {
       const answer = await getIntelligenceFacade(appState).runWhatShouldISay?.(question, 0.8, imagePaths);
-      return { answer, question: question || 'inferred from context' };
-    } catch {
-      return { question: question || 'unknown' };
+      if (!answer) {
+        return {
+          answer: null,
+          question: resolvedQuestion,
+          status: 'canceled' as const,
+          error: 'Request canceled before completion.',
+        };
+      }
+
+      return {
+        answer,
+        question: resolvedQuestion,
+        status: 'completed' as const,
+      };
+    } catch (error) {
+      return {
+        answer: null,
+        question: resolvedQuestion,
+        status: 'error' as const,
+        error: error instanceof Error ? error.message : 'Failed to generate response.',
+      };
     }
   });
 

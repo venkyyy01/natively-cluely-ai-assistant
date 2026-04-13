@@ -846,7 +846,15 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
                 message => Boolean(message.isStreaming && message.intent === 'what_to_answer'),
                 message => ({
                     ...message,
-                    text: result?.answer || message.text || 'Response canceled before completion. Retry with the current settings.',
+                    text: result?.answer?.trim()
+                        ? result.answer
+                        : result?.status === 'error'
+                            ? `Error: ${result.error || 'Failed to generate response.'}`
+                            : result?.status === 'canceled'
+                                ? result.error || 'Response canceled before completion. Retry with the current settings.'
+                                : result?.error
+                                    ? `Error: ${result.error}`
+                                    : 'Response canceled before completion. Retry with the current settings.',
                     isStreaming: false,
                 })
             ));

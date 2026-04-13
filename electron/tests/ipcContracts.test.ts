@@ -1396,6 +1396,7 @@ test('intelligence handlers prefer InferenceSupervisor when supervisor runtime i
   assert.deepEqual(await registry.handlers.get('generate-what-to-say')?.({}, 'question', ['img-1']), {
     answer: 'answer',
     question: 'question',
+    status: 'completed',
   });
   assert.deepEqual(await registry.handlers.get('generate-follow-up')?.({}, 'tradeoff', 'more detail'), {
     refined: 'refined',
@@ -1426,6 +1427,64 @@ test('intelligence handlers prefer InferenceSupervisor when supervisor runtime i
     'activeMode',
     'reset',
   ]);
+});
+
+test('intelligence handlers return canceled status when what-to-say yields no answer', async () => {
+  const modulePath = require.resolve('../ipc/registerIntelligenceHandlers');
+  delete require.cache[modulePath];
+  const { registerIntelligenceHandlers } = await import('../ipc/registerIntelligenceHandlers');
+
+  const registry = createHandlerRegistry();
+  const appState = {
+    getCoordinator: () => ({
+      shouldManageLifecycle: () => true,
+      getSupervisor: () => ({
+        runWhatShouldISay: async (): Promise<string | null> => null,
+      }),
+    }),
+    getIntelligenceManager: () => ({
+      runWhatShouldISay: async () => 'legacy answer',
+    }),
+  };
+
+  registerIntelligenceHandlers({ appState: appState as any, ...registry } as any);
+
+  assert.deepEqual(await registry.handlers.get('generate-what-to-say')?.({}, undefined, []), {
+    answer: null,
+    question: 'inferred from context',
+    status: 'canceled',
+    error: 'Request canceled before completion.',
+  });
+});
+
+test('intelligence handlers return error status when what-to-say throws', async () => {
+  const modulePath = require.resolve('../ipc/registerIntelligenceHandlers');
+  delete require.cache[modulePath];
+  const { registerIntelligenceHandlers } = await import('../ipc/registerIntelligenceHandlers');
+
+  const registry = createHandlerRegistry();
+  const appState = {
+    getCoordinator: () => ({
+      shouldManageLifecycle: () => true,
+      getSupervisor: () => ({
+        runWhatShouldISay: async (): Promise<string | null> => {
+          throw new Error('provider timed out');
+        },
+      }),
+    }),
+    getIntelligenceManager: () => ({
+      runWhatShouldISay: async () => 'legacy answer',
+    }),
+  };
+
+  registerIntelligenceHandlers({ appState: appState as any, ...registry } as any);
+
+  assert.deepEqual(await registry.handlers.get('generate-what-to-say')?.({}, 'why now?', ['img-1']), {
+    answer: null,
+    question: 'why now?',
+    status: 'error',
+    error: 'provider timed out',
+  });
 });
 
 test('intelligence handlers normalize reset failures when supervisor reset rejects', async () => {
