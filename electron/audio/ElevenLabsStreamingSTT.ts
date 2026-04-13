@@ -92,6 +92,7 @@ export class ElevenLabsStreamingSTT extends EventEmitter {
     public start(): void {
         if (this.isActive) return;     // Already active
         if (this.isConnecting) return; // Already mid-connect (prevents double-connect race)
+        this.isActive = true;
         this.shouldReconnect = true;
         this.reconnectAttempts = 0;
         this.ensureDebugWriteStream();
@@ -333,7 +334,7 @@ export class ElevenLabsStreamingSTT extends EventEmitter {
             }
             if (this.shouldReconnect && code !== 1000) {
                 this.scheduleReconnect();
-            } else {
+            } else if (!this.shouldReconnect) {
                 // If not reconnecting, mark session as truly inactive
                 this.isActive = false;
             }
