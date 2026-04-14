@@ -2,7 +2,7 @@
 // Works in Electron by dynamically loading the gtag script into the renderer DOM
 // Only requires the public Measurement ID — no API secrets needed
 
-import { buildConsciousModeModeSelectedPayload } from '../consciousModeSettings';
+import { buildConsciousModeModeSelectedPayload, buildHoverOnlyModeSelectedPayload } from '../consciousModeSettings';
 
 // --- Types ---
 
@@ -187,13 +187,19 @@ class AnalyticsService {
         this.trackEvent('mode_selected', { mode });
     }
 
-    public trackConsciousModeSelected(enabled: boolean): void {
-        if (!this.initialized) return;
+public trackConsciousModeSelected(enabled: boolean): void {
+if (!this.initialized) return;
 
-        this.trackEvent('mode_selected', buildConsciousModeModeSelectedPayload(enabled));
-    }
+this.trackEvent('mode_selected', buildConsciousModeModeSelectedPayload(enabled));
+}
 
-    public trackModelUsed(payload: ModelUsedPayload): void {
+public trackHoverOnlyModeSelected(enabled: boolean): void {
+if (!this.initialized) return;
+
+this.trackEvent('mode_selected', buildHoverOnlyModeSelectedPayload(enabled));
+}
+
+public trackModelUsed(payload: ModelUsedPayload): void {
         if (!this.initialized) return;
 
         this.trackEvent('model_used', payload);

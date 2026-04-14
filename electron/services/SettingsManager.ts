@@ -35,9 +35,8 @@ if (typeof raw.consciousModeEnabled === 'boolean') {
 sanitized.consciousModeEnabled = raw.consciousModeEnabled;
 }
 
-if (typeof raw.hoverOnlyModeEnabled === 'boolean') {
-sanitized.hoverOnlyModeEnabled = raw.hoverOnlyModeEnabled;
-}
+// NOTE: hoverOnlyModeEnabled is intentionally NOT persisted
+// It resets to false on every app restart for security during coding assessments
 
 if (typeof raw.accelerationModeEnabled === 'boolean') {
     sanitized.accelerationModeEnabled = raw.accelerationModeEnabled;

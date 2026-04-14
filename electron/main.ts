@@ -424,7 +424,9 @@ const settingsManager = SettingsManager.getInstance();
 this.isUndetectable = settingsManager.get('isUndetectable') ?? false;
 this.disguiseMode = settingsManager.get('disguiseMode') ?? 'none';
 this.consciousModeEnabled = settingsManager.get('consciousModeEnabled') ?? false;
-this.hoverOnlyModeEnabled = settingsManager.get('hoverOnlyModeEnabled') ?? false;
+// hoverOnlyModeEnabled intentionally resets to false on every restart
+// for security during coding assessments
+this.hoverOnlyModeEnabled = false;
 
 // 1a. Sync acceleration optimization flags from settings
 const accelerationModeEnabled = settingsManager.getAccelerationModeEnabled();

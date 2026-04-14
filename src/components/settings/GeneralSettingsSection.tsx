@@ -63,10 +63,12 @@ isPreviewingOpacity: boolean;
   disguiseMode: 'none' | 'terminal' | 'settings' | 'activity';
   setDisguiseMode: (mode: 'none' | 'terminal' | 'settings' | 'activity') => void;
   showGeneralSettingsError: (message: string) => void;
-  accelerationModeEnabled: boolean;
-  setAccelerationModeEnabled: (value: boolean) => void;
-  consciousModeEnabled: boolean;
-  setConsciousModeEnabled: (value: boolean) => void;
+accelerationModeEnabled: boolean;
+setAccelerationModeEnabled: (value: boolean) => void;
+consciousModeEnabled: boolean;
+setConsciousModeEnabled: (value: boolean) => void;
+hoverOnlyModeEnabled: boolean;
+setHoverOnlyModeEnabled: (value: boolean) => void;
 }
 
 export const GeneralSettingsSection: React.FC<GeneralSettingsSectionProps> = ({
@@ -100,8 +102,10 @@ export const GeneralSettingsSection: React.FC<GeneralSettingsSectionProps> = ({
   showGeneralSettingsError,
   accelerationModeEnabled,
   setAccelerationModeEnabled,
-  consciousModeEnabled,
-  setConsciousModeEnabled,
+consciousModeEnabled,
+setConsciousModeEnabled,
+hoverOnlyModeEnabled,
+setHoverOnlyModeEnabled,
 }) => {
   return (
     <div className="space-y-6 animated fadeIn">
@@ -279,6 +283,36 @@ showGeneralSettingsError(error?.message || 'Unable to update conscious mode');
 className={`w-11 h-6 rounded-full relative transition-colors ${consciousModeEnabled ? 'bg-accent-primary' : 'bg-bg-toggle-switch border border-border-muted'}`}
 >
 <div className={`absolute top-1 left-1 w-4 h-4 rounded-full bg-white transition-transform ${consciousModeEnabled ? 'translate-x-5' : 'translate-x-0'}`} />
+</div>
+</div>
+
+<div className="flex items-center justify-between">
+<div className="flex items-center gap-4">
+<div className="w-10 h-10 bg-bg-item-surface rounded-lg border border-border-subtle flex items-center justify-center text-text-tertiary">
+<Eye size={20} />
+</div>
+<div>
+<h3 className="text-sm font-bold text-text-primary">Hover Only Mode</h3>
+<p className="text-xs text-text-secondary mt-0.5">For coding assessments - responses only on hover</p>
+</div>
+</div>
+<div
+onClick={async () => {
+const newState = !hoverOnlyModeEnabled;
+setHoverOnlyModeEnabled(newState);
+try {
+const result = await window.electronAPI?.setHoverOnlyMode(newState);
+if (result && !result.success) {
+throw new Error(result.error?.message || 'Unable to update hover only mode');
+}
+} catch (error: any) {
+setHoverOnlyModeEnabled(!newState);
+showGeneralSettingsError(error?.message || 'Unable to update hover only mode');
+}
+}}
+className={`w-11 h-6 rounded-full relative transition-colors ${hoverOnlyModeEnabled ? 'bg-accent-primary' : 'bg-bg-toggle-switch border border-border-muted'}`}
+>
+<div className={`absolute top-1 left-1 w-4 h-4 rounded-full bg-white transition-transform ${hoverOnlyModeEnabled ? 'translate-x-5' : 'translate-x-0'}`} />
 </div>
 </div>
 

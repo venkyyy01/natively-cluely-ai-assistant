@@ -337,6 +337,7 @@ throw new Error(result?.error?.message || 'Unable to persist Hover Only Mode');
 }
 
 setHoverOnlyModeEnabled(result.data.enabled);
+analytics.trackHoverOnlyModeSelected(result.data.enabled);
 } catch (error) {
 console.error('[SettingsPopup] Failed to toggle Hover Only Mode:', error);
 setHoverOnlyModeEnabled(!nextState);

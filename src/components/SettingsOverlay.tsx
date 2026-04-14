@@ -356,6 +356,7 @@ const globalShortcutAlternates: Record<string, string> = {
 const [openOnLogin, setOpenOnLogin] = useState(false);
 const [accelerationModeEnabled, setAccelerationModeEnabled] = useState(false);
 const [consciousModeEnabled, setConsciousModeEnabled] = useState(false);
+const [hoverOnlyModeEnabled, setHoverOnlyModeEnabled] = useState(false);
 const [themeMode, setThemeMode] = useState<'system' | 'light' | 'dark'>('system');
 const [isThemeDropdownOpen, setIsThemeDropdownOpen] = useState(false);
 const [isAiLangDropdownOpen, setIsAiLangDropdownOpen] = useState(false);
@@ -404,6 +405,11 @@ if (result.success) {
 setConsciousModeEnabled(result.data.enabled);
 }
 }).catch(() => { });
+window.electronAPI?.getHoverOnlyMode?.().then((result) => {
+if (result.success) {
+setHoverOnlyModeEnabled(result.data.enabled);
+}
+}).catch(() => { });
 }
 }, [isOpen]);
 
@@ -429,6 +435,15 @@ useEffect(() => {
 if (window.electronAPI?.onConsciousModeChanged) {
 const unsubscribe = window.electronAPI.onConsciousModeChanged((newState: boolean) => {
 setConsciousModeEnabled(newState);
+});
+return () => unsubscribe();
+}
+}, []);
+
+useEffect(() => {
+if (window.electronAPI?.onHoverOnlyModeChanged) {
+const unsubscribe = window.electronAPI.onHoverOnlyModeChanged((newState: boolean) => {
+setHoverOnlyModeEnabled(newState);
 });
 return () => unsubscribe();
 }
@@ -1412,14 +1427,16 @@ handleAiLanguageChange={handleAiLanguageChange}
               startPreviewingOpacity={startPreviewingOpacity}
               stopPreviewingOpacity={stopPreviewingOpacity}
               isPreviewingOpacity={isPreviewingOpacity}
-              disguiseMode={disguiseMode}
-              setDisguiseMode={setDisguiseMode}
-              showGeneralSettingsError={showGeneralSettingsError}
-              accelerationModeEnabled={accelerationModeEnabled}
-              setAccelerationModeEnabled={setAccelerationModeEnabled}
-              consciousModeEnabled={consciousModeEnabled}
-              setConsciousModeEnabled={setConsciousModeEnabled}
-            />
+disguiseMode={disguiseMode}
+setDisguiseMode={setDisguiseMode}
+showGeneralSettingsError={showGeneralSettingsError}
+accelerationModeEnabled={accelerationModeEnabled}
+setAccelerationModeEnabled={setAccelerationModeEnabled}
+consciousModeEnabled={consciousModeEnabled}
+setConsciousModeEnabled={setConsciousModeEnabled}
+hoverOnlyModeEnabled={hoverOnlyModeEnabled}
+setHoverOnlyModeEnabled={setHoverOnlyModeEnabled}
+/>
         )}
                             {activeTab === 'profile' && (
                                 <div className="space-y-6 animated fadeIn">
