@@ -57,6 +57,73 @@ test('SessionTracker Conscious Integration - should keep live conscious state fr
   assert.equal(tracker.getThreadManager().getActiveThread()?.phase, 'high_level_design');
 });
 
+test('SessionTracker Conscious Integration - builds long memory context from thread, constraints, pins, and summaries', () => {
+  const tracker = new SessionTracker();
+  tracker.setConsciousModeEnabled(true);
+
+  tracker.handleTranscript({
+    speaker: 'interviewer',
+    text: 'We have a $300k budget and six engineers. How would you design a rate limiter for an API?',
+    timestamp: Date.now() - 2000,
+    final: true,
+  });
+  tracker.recordConsciousResponse('How would you design a rate limiter for an API?', {
+    mode: 'reasoning_first',
+    openingReasoning: 'I would start with a per-user token bucket backed by Redis.',
+    implementationPlan: ['Use Redis for counters'],
+    tradeoffs: ['Redis adds operational overhead'],
+    edgeCases: ['Clock skew across regions'],
+    scaleConsiderations: ['Shard counters for hot tenants'],
+    pushbackResponses: ['I chose operational simplicity first.'],
+    likelyFollowUps: [],
+    codeTransition: '',
+  }, 'start');
+  tracker.pinItem('Use Redis sorted sets for rolling windows', 'design');
+  (tracker as any).transcriptEpochSummaries = ['Earlier discussion covered sharding, hotspots, and failover plans.'];
+
+  const memoryBlock = tracker.getConsciousLongMemoryContext('How do you handle hotspots and failover in the rate limiter?');
+
+  assert.match(memoryBlock, /ACTIVE_THREAD_TOPIC:/);
+  assert.match(memoryBlock, /KEY_CONSTRAINTS:/);
+  assert.match(memoryBlock, /PINNED_MEMORY:/);
+  assert.match(memoryBlock, /EARLIER_SESSION_SUMMARIES:/);
+  assert.match(memoryBlock, /LATEST_REASONING_SUMMARY:/);
+  assert.match(memoryBlock, /<design_state>/);
+  assert.match(memoryBlock, /SCALING_PLAN:/);
+});
+
+test('SessionTracker Conscious Integration - retrieves design-state facts for long-horizon follow-ups', async () => {
+  const tracker = new SessionTracker();
+  tracker.setConsciousModeEnabled(true);
+
+  tracker.handleTranscript({
+    speaker: 'interviewer',
+    text: 'Design a billing ledger with strict correctness and an append-only data model.',
+    timestamp: Date.now() - 3000,
+    final: true,
+  });
+  tracker.recordConsciousResponse('How would you design a billing ledger?', {
+    mode: 'reasoning_first',
+    openingReasoning: 'I would separate the write path from the read path.',
+    implementationPlan: [
+      'Expose an idempotent write API for ledger mutations',
+      'Use an append-only ledger table with secondary indexes for account lookups',
+    ],
+    tradeoffs: ['Strict consistency increases write latency'],
+    edgeCases: ['Duplicate payment webhooks must stay idempotent'],
+    scaleConsiderations: ['Shard by account for hot enterprise tenants'],
+    pushbackResponses: [],
+    likelyFollowUps: [],
+    codeTransition: '',
+  }, 'start');
+
+  const context = await tracker.getConsciousRelevantContext('What failure modes and schema choices matter most in the ledger?', 900);
+  const joined = context.map((item) => item.text).join('\n');
+
+  assert.match(joined, /Duplicate payment webhooks must stay idempotent/);
+  assert.match(joined, /(append-only data model|append-only ledger table)/i);
+});
+
 test('SessionTracker ensureMeetingContext keeps latest meeting id when restores overlap', async () => {
   const tracker = new SessionTracker();
   const persistence = (tracker as any).persistence;
@@ -184,6 +251,30 @@ test('SessionTracker restoreFromMeetingId restores conscious reasoning and hypot
             shouldContinueThread: true,
           },
         },
+        designState: {
+          currentObjective: 'How would you design a cache?',
+          updatedAt: now,
+          entries: [
+            {
+              facet: 'architecture',
+              text: 'Use Redis for the hot path.',
+              normalized: 'use redis for the hot path.',
+              timestamp: now,
+              source: 'reasoning',
+              boost: 0.22,
+              keywords: ['redis', 'hot', 'path'],
+            },
+            {
+              facet: 'tradeoffs',
+              text: 'Cold misses still hit the database.',
+              normalized: 'cold misses still hit the database.',
+              timestamp: now,
+              source: 'reasoning',
+              boost: 0.2,
+              keywords: ['cold', 'misses', 'database'],
+            },
+          ],
+        },
       },
     };
   };
@@ -195,6 +286,7 @@ test('SessionTracker restoreFromMeetingId restores conscious reasoning and hypot
     assert.equal(tracker.getActiveReasoningThread()?.rootQuestion, 'How would you design a cache?');
     assert.equal(tracker.getLatestQuestionReaction()?.kind, 'tradeoff_probe');
     assert.ok(tracker.getConsciousEvidenceContext().includes('tradeoff_probe'));
+    assert.ok(tracker.getConsciousLongMemoryContext('What tradeoffs matter in the cache?').includes('ARCHITECTURE_DECISIONS:'));
   } finally {
     persistence.findByMeeting = originalFindByMeeting;
   }

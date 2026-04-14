@@ -34,6 +34,7 @@ interface ConsciousSession {
   getFormattedContext(lastSeconds: number): string;
   getConsciousEvidenceContext(): string;
   getConsciousSemanticContext(): string;
+  getConsciousLongMemoryContext(question: string): string;
   getLatestQuestionReaction(): QuestionReaction | null;
   getLatestAnswerHypothesis(): AnswerHypothesis | null;
   recordConsciousResponse(
@@ -149,7 +150,7 @@ export class ConsciousOrchestrator {
 
     const retrievalPack = this.retrievalOrchestrator.buildPack({
       question: input.resolvedQuestion,
-      lastSeconds: 180,
+      lastSeconds: 600,
     });
     const evidenceContextBlock = this.session.getConsciousEvidenceContext();
 
@@ -229,7 +230,7 @@ export class ConsciousOrchestrator {
     } else if (input.answerLLM) {
       structuredResponse = await input.answerLLM.generateReasoningFirst(
         input.question,
-        this.session.getFormattedContext(180)
+        this.session.getFormattedContext(600)
       );
     }
 

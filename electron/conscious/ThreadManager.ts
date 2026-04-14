@@ -209,6 +209,14 @@ export class ThreadManager {
     }
   }
 
+  addConstraintToActive(constraint: string): void {
+    if (!this.activeThread) return;
+
+    if (!this.activeThread.constraints.includes(constraint)) {
+      this.activeThread.constraints.push(constraint);
+    }
+  }
+
   addKeywordsToActive(keywords: string[]): void {
     if (!this.activeThread) return;
     

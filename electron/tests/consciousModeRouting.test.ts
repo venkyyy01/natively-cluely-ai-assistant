@@ -176,6 +176,11 @@ test('Conscious Mode only starts for system-design questions and prefers fresh s
     threadAction: 'ignore',
   });
 
+  assert.deepEqual(classifyConsciousModeQuestion('Tell me about a time you handled team conflict.', null), {
+    qualifies: false,
+    threadAction: 'ignore',
+  });
+
   assert.deepEqual(classifyConsciousModeQuestion('How would you design the data model for billing?', thread), {
     qualifies: true,
     threadAction: 'reset',
@@ -252,9 +257,9 @@ test('Conscious Mode response parser rejects malformed non-JSON thread payloads'
   assert.deepEqual(malformed.implementationPlan, []);
 });
 
-test('Conscious Mode transcript auto-trigger widens only for qualifying short technical pushback phrases', () => {
+test('Conscious Mode transcript auto-trigger widens for actionable interviewer prompts without widening conscious routing itself', () => {
   assert.equal(shouldAutoTriggerSuggestionFromTranscript('Why this approach', false, null), false);
-  assert.equal(shouldAutoTriggerSuggestionFromTranscript('Why this approach', true, null), false);
+  assert.equal(shouldAutoTriggerSuggestionFromTranscript('Why this approach', true, null), true);
   assert.equal(shouldAutoTriggerSuggestionFromTranscript('What are the tradeoffs', true, null), true);
   assert.equal(shouldAutoTriggerSuggestionFromTranscript('Can you repeat that for me', true, null), false);
   assert.equal(shouldAutoTriggerSuggestionFromTranscript('okay sounds good', true, null), false);
@@ -272,7 +277,7 @@ test('Conscious Mode transcript-trigger path fires for substantive interviewer p
 
   await maybeHandleSuggestionTriggerFromTranscript({
     speaker: 'interviewer',
-    text: 'What are the tradeoffs',
+    text: 'Why this approach',
     final: true,
     confidence: 0.91,
     consciousModeEnabled: true,
@@ -291,7 +296,7 @@ test('Conscious Mode transcript-trigger path fires for substantive interviewer p
   assert.deepEqual(calls, [
     {
       context: 'ctx',
-      lastQuestion: 'What are the tradeoffs',
+      lastQuestion: 'Why this approach',
       confidence: 0.91,
     },
   ]);

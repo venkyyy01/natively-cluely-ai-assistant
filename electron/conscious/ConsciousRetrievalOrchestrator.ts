@@ -5,6 +5,7 @@ import type { QuestionReaction } from './QuestionReactionClassifier';
 interface ConsciousRetrievalSession {
   getFormattedContext(lastSeconds: number): string;
   getConsciousEvidenceContext(): string;
+  getConsciousLongMemoryContext(question: string): string;
   getActiveReasoningThread(): ReasoningThread | null;
   getLatestConsciousResponse(): ConsciousModeStructuredResponse | null;
   getLatestQuestionReaction(): QuestionReaction | null;
@@ -68,11 +69,12 @@ export class ConsciousRetrievalOrchestrator {
 
   buildPack(input: { question: string; lastSeconds?: number }): ConsciousRetrievalPack {
     const stateBlock = this.buildStateBlock(input.question);
+    const longMemoryBlock = this.session.getConsciousLongMemoryContext(input.question);
     const formattedContext = this.session.getFormattedContext(input.lastSeconds ?? 180);
     const evidenceBlock = this.session.getConsciousEvidenceContext();
     return {
       stateBlock,
-      combinedContext: [stateBlock, evidenceBlock, formattedContext].filter(Boolean).join('\n\n'),
+      combinedContext: [stateBlock, longMemoryBlock, evidenceBlock, formattedContext].filter(Boolean).join('\n\n'),
     };
   }
 }

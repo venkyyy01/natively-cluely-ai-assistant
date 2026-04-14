@@ -18,6 +18,7 @@ interface SessionLike {
   isLikelyGeneralIntent(lastInterviewerTurn: string | null): boolean;
   getAssistantResponseHistory(): AssistantResponse[];
   getConsciousEvidenceContext(): string;
+  getConsciousLongMemoryContext(question: string): string;
   setConsciousSemanticContext(block: string): void;
   getFormattedContext(lastSeconds: number): string;
   getActiveReasoningThread(): ReasoningThread | null;
@@ -118,6 +119,9 @@ const retrievalPack = this.retrievalOrchestrator.buildPack({
       question: input.lastInterviewerTurn || input.resolvedQuestion,
       lastSeconds: input.temporalWindowSeconds,
     });
+    const longMemoryBlock = this.session.getConsciousLongMemoryContext(
+      input.lastInterviewerTurn || input.resolvedQuestion
+    );
     const answerPlan = this.answerPlanner.plan({
       question: input.lastInterviewerTurn || input.resolvedQuestion,
       reaction: this.session.getLatestQuestionReaction(),
@@ -134,7 +138,13 @@ const retrievalPack = this.retrievalOrchestrator.buildPack({
       contextItems,
       lastInterim: input.lastInterim,
       assistantHistory: this.session.getAssistantResponseHistory(),
-      evidenceContextBlock: [planBlock, semanticBlock, retrievalPack.stateBlock, this.session.getConsciousEvidenceContext()].filter(Boolean).join('\n\n'),
+      evidenceContextBlock: [
+        planBlock,
+        semanticBlock,
+        retrievalPack.stateBlock,
+        longMemoryBlock,
+        this.session.getConsciousEvidenceContext(),
+      ].filter(Boolean).join('\n\n'),
       transcriptTurnLimit: input.transcriptTurnLimit,
       temporalWindowSeconds: input.temporalWindowSeconds,
       onInterimInjected: input.onInterimInjected,

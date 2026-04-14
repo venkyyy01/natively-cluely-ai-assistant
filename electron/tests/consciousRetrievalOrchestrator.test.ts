@@ -6,6 +6,7 @@ test('ConsciousRetrievalOrchestrator builds a structured state block from thread
   const orchestrator = new ConsciousRetrievalOrchestrator({
     getFormattedContext: () => '[INTERVIEWER]: What are the tradeoffs?',
     getConsciousEvidenceContext: () => '<conscious_evidence>demo</conscious_evidence>',
+    getConsciousLongMemoryContext: () => '<conscious_long_memory>Earlier shard discussion</conscious_long_memory>',
     getActiveReasoningThread: () => ({
       rootQuestion: 'How would you partition a multi-tenant analytics system?',
       lastQuestion: 'Why this approach?',
@@ -58,6 +59,7 @@ test('ConsciousRetrievalOrchestrator builds a structured state block from thread
   assert.ok(pack.stateBlock.includes('<conscious_state>'));
   assert.ok(pack.stateBlock.includes('LATEST_INTERVIEWER_REACTION: tradeoff_probe'));
   assert.ok(pack.stateBlock.includes('LIKELY_USER_ANSWER_SUMMARY: I would partition by tenant.'));
+  assert.ok(pack.combinedContext.includes('<conscious_long_memory>Earlier shard discussion</conscious_long_memory>'));
   assert.ok(pack.combinedContext.includes('<conscious_evidence>demo</conscious_evidence>'));
   assert.ok(pack.combinedContext.includes('[INTERVIEWER]: What are the tradeoffs?'));
 });

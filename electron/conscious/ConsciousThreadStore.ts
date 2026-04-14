@@ -119,6 +119,23 @@ export class ConsciousThreadStore {
         updatedAt: Date.now(),
       };
       this.latestConsciousResponse = this.activeReasoningThread.response;
+      const decisions = [
+        response.openingReasoning,
+        response.implementationPlan[0],
+        response.tradeoffs[0],
+        response.scaleConsiderations[0],
+        response.codeTransition,
+      ].filter(Boolean);
+      const constraints = [
+        ...response.edgeCases,
+        ...response.tradeoffs,
+      ];
+      for (const decision of decisions) {
+        this.threadManager.addDecisionToActive(decision);
+      }
+      for (const constraint of constraints.slice(0, 4)) {
+        this.threadManager.addConstraintToActive(constraint);
+      }
       return;
     }
 
@@ -129,6 +146,25 @@ export class ConsciousThreadStore {
       followUpCount: 0,
       updatedAt: Date.now(),
     };
+
+    const decisions = [
+      response.openingReasoning,
+      response.implementationPlan[0],
+      response.tradeoffs[0],
+      response.scaleConsiderations[0],
+      response.codeTransition,
+    ].filter(Boolean);
+    const constraints = [
+      ...response.edgeCases,
+      ...response.tradeoffs,
+    ];
+
+    for (const decision of decisions) {
+      this.threadManager.addDecisionToActive(decision);
+    }
+    for (const constraint of constraints.slice(0, 4)) {
+      this.threadManager.addConstraintToActive(constraint);
+    }
   }
 
   restoreActiveThread(snapshot: PersistedActiveThreadSnapshot): void {

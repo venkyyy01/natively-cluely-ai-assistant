@@ -190,11 +190,16 @@ function isSubstantialConversationTurn(lower: string): boolean {
   const words = lower.split(/\s+/).filter(Boolean);
   if (words.length < 4) return false;
   if (isAdministrativePrompt(lower)) return false;
-  return isBroadConsciousSeed(lower) || /^(let me (walk through|start with|explain|show)|walk me through|tell me about|describe|give me an example|switch gears and talk about)/i.test(lower);
+  if (isBehavioralPrompt(lower)) return false;
+  return isBroadConsciousSeed(lower) || /^(let me (walk through|start with|explain|show)|walk me through|switch gears and talk about)/i.test(lower);
 }
 
 function isBroadConsciousSeed(lower: string): boolean {
-  return /(design|architecture|component|service|database|api|scale|scaling|throughput|latency|tradeoff|failure|retry|cache|queue|shard|replica|microservice|monolith|algorithm|data structure|complexity|optimi[sz]e|tell me about a time|describe a situation|give me an example|challenge|conflict|leadership|project)/i.test(lower);
+  return /(design|architecture|component|service|database|api|scale|scaling|throughput|latency|tradeoff|failure|retry|cache|queue|shard|replica|microservice|monolith|algorithm|data structure|complexity|optimi[sz]e|partition|failover|bottleneck|consistency|availability|backpressure|hotspot|rate limiter|data model|ledger|notification system|streaming system|distributed)/i.test(lower);
+}
+
+function isBehavioralPrompt(lower: string): boolean {
+  return /(tell me about a time|describe a situation|share an experience|leadership|conflict|mentor|stakeholder|failure|mistake|team challenge|culture|values)/i.test(lower);
 }
 
 function isAdministrativePrompt(lower: string): boolean {
@@ -209,8 +214,29 @@ function isQuestionContinuationPhrase(lower: string): boolean {
   return /^(what are the tradeoffs\??|how would you shard this\??|what happens during failover\??|what metrics would you watch( first)?\??)$/i.test(lower);
 }
 
+function isColdStartContinuationPhrase(lower: string): boolean {
+  return /^(what are the tradeoffs\??|how would you shard this\??)$/i.test(lower);
+}
+
 function isExplicitTopicShift(lower: string): boolean {
   return /(switch gears|talk about the launch plan|talk about launch|move on to|different topic|new topic)/i.test(lower);
+}
+
+function isShortActionablePrompt(lower: string): boolean {
+  return /^(why this approach|why this|why not|how so|go deeper|can you go deeper|walk me through that|talk through that|and then|what about reliability|what about scale|what about failure handling|what about bottlenecks)$/i.test(lower);
+}
+
+function isActionableInterviewerPrompt(lower: string): boolean {
+  if (isAdministrativePrompt(lower)) {
+    return false;
+  }
+
+  const words = lower.split(/\s+/).filter(Boolean);
+  if (isShortActionablePrompt(lower)) {
+    return true;
+  }
+
+  return (isQuestionLike(lower) && words.length >= 4) || isBroadConsciousSeed(lower);
 }
 
 export function classifyConsciousModeQuestion(
@@ -226,6 +252,10 @@ export function classifyConsciousModeQuestion(
   const questionLike = isQuestionLike(lower);
   const systemDesignQuestion = isSystemDesignQuestion(lower);
   const explicitContinuation = isQuestionContinuationPhrase(lower);
+
+  if (isBehavioralPrompt(lower)) {
+    return { qualifies: false, threadAction: 'ignore' };
+  }
 
   if (activeThread) {
     if (explicitContinuation) {
@@ -247,7 +277,7 @@ export function classifyConsciousModeQuestion(
     return { qualifies: false, threadAction: 'ignore' };
   }
 
-  if ((((questionLike && normalizedQuestion.split(/\s+/).length >= 3) && (systemDesignQuestion || isBroadConsciousSeed(lower) || normalizedQuestion.split(/\s+/).length >= 5)) || isSubstantialConversationTurn(lower)) && !isAdministrativePrompt(lower)) {
+  if ((systemDesignQuestion || isColdStartContinuationPhrase(lower) || (isSubstantialConversationTurn(lower) && !questionLike)) && !isAdministrativePrompt(lower)) {
     return { qualifies: true, threadAction: 'start' };
   }
 
@@ -265,7 +295,10 @@ export function shouldAutoTriggerSuggestionFromTranscript(
   }
 
   if (consciousModeEnabled) {
-    return classifyConsciousModeQuestion(trimmed, activeReasoningThread).qualifies || isSubstantialConversationTurn(trimmed.toLowerCase());
+    const lower = trimmed.toLowerCase();
+    return classifyConsciousModeQuestion(trimmed, activeReasoningThread).qualifies
+      || isSubstantialConversationTurn(lower)
+      || isActionableInterviewerPrompt(lower);
   }
 
   const wordCount = trimmed.split(/\s+/).filter(Boolean).length;

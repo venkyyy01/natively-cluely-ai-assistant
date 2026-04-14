@@ -367,6 +367,7 @@ test('Conscious Mode follow-up context includes inferred answer evidence', async
   const continuationContext = llmHelper.contexts[1] || '';
   assert.ok(continuationContext.includes('<conscious_state>'));
   assert.ok(continuationContext.includes('<conscious_answer_plan>'));
+  assert.ok(continuationContext.includes('<conscious_long_memory>'));
   assert.ok(continuationContext.includes('<conscious_semantic_memory>'));
   assert.ok(continuationContext.includes('<conscious_evidence>'));
   assert.ok(continuationContext.includes('INTERVIEWER_REACTION: tradeoff_probe'));

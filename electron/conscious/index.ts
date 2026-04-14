@@ -12,6 +12,7 @@ export { QuestionReactionClassifier, type QuestionReaction, type QuestionReactio
 export { AnswerHypothesisStore, type AnswerHypothesis, type PersistedAnswerHypothesisState } from './AnswerHypothesisStore';
 export { ConsciousAnswerPlanner, type ConsciousAnswerPlan, type ConsciousAnswerShape } from './ConsciousAnswerPlanner';
 export { ConsciousSemanticFactStore, type ConsciousSemanticFact } from './ConsciousSemanticFactStore';
+export { DesignStateStore, type DesignStateEntry, type DesignStateFacet, type DesignStateRetrievalEntry, type PersistedDesignStateState } from './DesignStateStore';
 export { ConsciousRetrievalOrchestrator, type ConsciousRetrievalPack } from './ConsciousRetrievalOrchestrator';
 export { ConsciousContextComposer, type ConsciousContextComposition } from './ConsciousContextComposer';
 export { ConsciousIntentService, type ResolvedIntentResult, type ConsciousIntentResolution } from './ConsciousIntentService';
