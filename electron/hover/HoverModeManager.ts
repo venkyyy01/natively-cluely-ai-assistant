@@ -1,5 +1,5 @@
 import { EventEmitter } from 'events';
-import { screen, nativeImage, Rectangle } from 'electron';
+import { screen, Rectangle } from 'electron';
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import path from 'path';
@@ -27,6 +27,7 @@ export interface HoverCapture {
 export interface HoverModeConfig {
   hoverDebounceMs: number;
   captureExpansionFactor: number;
+  captureScope: 'expanded' | 'display';
   minCaptureWidth: number;
   minCaptureHeight: number;
   maxCaptureWidth: number;
@@ -36,15 +37,15 @@ export interface HoverModeConfig {
 const DEFAULT_CONFIG: HoverModeConfig = {
   hoverDebounceMs: 500,
   captureExpansionFactor: 10,
+  captureScope: 'expanded',
   minCaptureWidth: 200,
   minCaptureHeight: 150,
-  maxCaptureWidth: 2000,
-  maxCaptureHeight: 1500,
+  maxCaptureWidth: 10000,
+  maxCaptureHeight: 10000,
 };
 
 const MIN_CAPTURE_INTERVAL_MS = 3000;
 const SCREENSHOT_MAX_AGE_MS = 60_000;
-const MAX_CACHE_ENTRIES = 100;
 
 export class HoverModeManager extends EventEmitter {
   private enabled: boolean = false;
@@ -201,6 +202,15 @@ export class HoverModeManager extends EventEmitter {
   private calculateCaptureBounds(position: HoverPosition): Rectangle {
     const display = screen.getDisplayNearestPoint({ x: position.x, y: position.y });
     const { workArea } = display;
+
+    if (this.config.captureScope === 'display') {
+      return {
+        x: workArea.x,
+        y: workArea.y,
+        width: workArea.width,
+        height: workArea.height,
+      };
+    }
 
     const baseWidth = Math.max(this.config.minCaptureWidth, workArea.width * 0.1);
     const baseHeight = Math.max(this.config.minCaptureHeight, workArea.height * 0.1);

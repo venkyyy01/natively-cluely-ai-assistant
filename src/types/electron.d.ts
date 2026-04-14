@@ -296,9 +296,9 @@ setDisguise: (mode: 'terminal' | 'settings' | 'activity' | 'none') => Promise<St
   enableHoverMode: () => Promise<{ success: boolean; enabled: boolean }>
   disableHoverMode: () => Promise<{ success: boolean; enabled: boolean }>
   toggleHoverMode: () => Promise<{ success: boolean; enabled: boolean }>
-  getHoverModeState: () => Promise<{ enabled: boolean; lastCapture: any; lastAnalysis: any; lastResponse: any; isProcessing: boolean }>
+  getHoverModeState: () => Promise<{ enabled: boolean; lastCapture: any; lastAnalysis: any; lastResponse: any; isProcessing: boolean; lastChangeRatio: number }>
   onHoverResponse: (callback: (data: { cursorPosition: { x: number; y: number }; type: 'code' | 'mcq' | 'subjective'; content: string; language?: string; optionLabel?: string; justification?: string }) => void) => () => void
-  onHoverStateChanged: (callback: (state: { enabled: boolean; lastCapture: any; lastAnalysis: any; lastResponse: any; isProcessing: boolean }) => void) => () => void
+  onHoverStateChanged: (callback: (state: { enabled: boolean; lastCapture: any; lastAnalysis: any; lastResponse: any; isProcessing: boolean; lastChangeRatio: number }) => void) => () => void
 }
 
 declare global {

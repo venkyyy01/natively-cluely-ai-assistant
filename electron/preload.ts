@@ -307,9 +307,9 @@ onAccelerationModeChanged: (callback: (enabled: boolean) => void) => () => void
   enableHoverMode: () => Promise<{ success: boolean; enabled: boolean }>;
   disableHoverMode: () => Promise<{ success: boolean; enabled: boolean }>;
   toggleHoverMode: () => Promise<{ success: boolean; enabled: boolean }>;
-  getHoverModeState: () => Promise<{ enabled: boolean; lastCapture: any; lastAnalysis: any; lastResponse: any; isProcessing: boolean }>;
+  getHoverModeState: () => Promise<{ enabled: boolean; lastCapture: any; lastAnalysis: any; lastResponse: any; isProcessing: boolean; lastChangeRatio: number }>;
   onHoverResponse: (callback: (data: { cursorPosition: { x: number; y: number }; type: 'code' | 'mcq' | 'subjective'; content: string; language?: string; optionLabel?: string; justification?: string }) => void) => () => void;
-  onHoverStateChanged: (callback: (state: { enabled: boolean; lastCapture: any; lastAnalysis: any; lastResponse: any; isProcessing: boolean }) => void) => () => void;
+  onHoverStateChanged: (callback: (state: { enabled: boolean; lastCapture: any; lastAnalysis: any; lastResponse: any; isProcessing: boolean; lastChangeRatio: number }) => void) => () => void;
 }
 
 export const PROCESSING_EVENTS = {
@@ -1062,7 +1062,7 @@ setOpenAtLogin: (open: boolean) => invokeStatus("set-open-at-login", open),
   enableHoverMode: () => invokeAndUnwrap<{ success: boolean; enabled: boolean }>('enable-hover-mode'),
   disableHoverMode: () => invokeAndUnwrap<{ success: boolean; enabled: boolean }>('disable-hover-mode'),
   toggleHoverMode: () => invokeAndUnwrap<{ success: boolean; enabled: boolean }>('toggle-hover-mode'),
-  getHoverModeState: () => invokeAndUnwrap<{ enabled: boolean; lastCapture: any; lastAnalysis: any; lastResponse: any; isProcessing: boolean }>('get-hover-mode-state'),
+  getHoverModeState: () => invokeAndUnwrap<{ enabled: boolean; lastCapture: any; lastAnalysis: any; lastResponse: any; isProcessing: boolean; lastChangeRatio: number }>('get-hover-mode-state'),
   onHoverResponse: (callback: (data: { cursorPosition: { x: number; y: number }; type: 'code' | 'mcq' | 'subjective'; content: string; language?: string; optionLabel?: string; justification?: string }) => void) => {
     const subscription = (_: any, data: any) => callback(data)
     ipcRenderer.on('hover-response', subscription)
@@ -1070,7 +1070,7 @@ setOpenAtLogin: (open: boolean) => invokeStatus("set-open-at-login", open),
       ipcRenderer.removeListener('hover-response', subscription)
     }
   },
-  onHoverStateChanged: (callback: (state: { enabled: boolean; lastCapture: any; lastAnalysis: any; lastResponse: any; isProcessing: boolean }) => void) => {
+  onHoverStateChanged: (callback: (state: { enabled: boolean; lastCapture: any; lastAnalysis: any; lastResponse: any; isProcessing: boolean; lastChangeRatio: number }) => void) => {
     const subscription = (_: any, state: any) => callback(state)
     ipcRenderer.on('hover-state-changed', subscription)
     return () => {

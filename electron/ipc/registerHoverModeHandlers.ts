@@ -64,6 +64,12 @@ export function registerHoverModeHandlers({
     orchestrator.setEnabled(!currentState);
     return { success: true, enabled: orchestrator.isEnabled() };
   });
+
+  safeHandle('set-hover-mode-enabled', async (_event, enabled: unknown) => {
+    const nextState = Boolean(enabled);
+    orchestrator.setEnabled(nextState);
+    return { success: true, enabled: nextState };
+  });
 }
 
 export default registerHoverModeHandlers;

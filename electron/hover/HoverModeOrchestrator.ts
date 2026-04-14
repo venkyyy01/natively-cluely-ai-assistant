@@ -4,6 +4,11 @@ import { HoverModeManager, type HoverCapture } from './HoverModeManager';
 import { HoverQuestionClassifier, type HoverAnalysisResult } from './HoverQuestionClassifier';
 import { HoverLLMResponder, type HoverResponse } from './HoverLLMResponder';
 import { screen } from 'electron';
+import sharp from 'sharp';
+
+const CHANGE_DETECTION_THRESHOLD = 0.45;
+const CHANGE_DETECTION_SIZE = { width: 160, height: 90 };
+const PIXEL_DIFF_THRESHOLD = 24;
 
 export interface HoverModeState {
   enabled: boolean;
@@ -11,6 +16,7 @@ export interface HoverModeState {
   lastAnalysis: HoverAnalysisResult | null;
   lastResponse: HoverResponse | null;
   isProcessing: boolean;
+  lastChangeRatio: number;
 }
 
 export class HoverModeOrchestrator extends EventEmitter {
@@ -19,10 +25,11 @@ export class HoverModeOrchestrator extends EventEmitter {
   private responder: HoverLLMResponder;
   private state: HoverModeState;
   private mouseTrackingInterval: NodeJS.Timeout | null = null;
+  private lastProcessedImagePath: string | null = null;
 
   constructor(llmHelper: LLMHelper) {
     super();
-    this.hoverManager = new HoverModeManager();
+    this.hoverManager = new HoverModeManager({ captureScope: 'display' });
     this.classifier = new HoverQuestionClassifier(llmHelper);
     this.responder = new HoverLLMResponder(llmHelper);
 
@@ -32,6 +39,7 @@ export class HoverModeOrchestrator extends EventEmitter {
       lastAnalysis: null,
       lastResponse: null,
       isProcessing: false,
+      lastChangeRatio: 1,
     };
 
     this.setupHoverManagerEvents();
@@ -40,6 +48,12 @@ export class HoverModeOrchestrator extends EventEmitter {
   private setupHoverManagerEvents(): void {
     this.hoverManager.on('enabled-changed', (enabled: boolean) => {
       this.state.enabled = enabled;
+
+      if (!enabled) {
+        this.lastProcessedImagePath = null;
+        this.state.lastChangeRatio = 1;
+      }
+
       this.emit('state-changed', this.getState());
 
       if (enabled) {
@@ -51,9 +65,18 @@ export class HoverModeOrchestrator extends EventEmitter {
 
     this.hoverManager.on('capture', async (capture: HoverCapture) => {
       this.state.lastCapture = capture;
+      this.emit('capture', capture);
+
+      const changeRatio = await this.computeContentChangeRatio(capture.path);
+      this.state.lastChangeRatio = changeRatio;
+
+      if (this.lastProcessedImagePath && changeRatio <= CHANGE_DETECTION_THRESHOLD) {
+        this.emit('state-changed', this.getState());
+        return;
+      }
+
       this.state.isProcessing = true;
       this.emit('state-changed', this.getState());
-      this.emit('capture', capture);
 
       try {
         const analysis = await this.classifier.classify(capture);
@@ -62,6 +85,7 @@ export class HoverModeOrchestrator extends EventEmitter {
 
         const response = await this.responder.generateResponse(capture, analysis);
         this.state.lastResponse = response;
+        this.lastProcessedImagePath = capture.path;
         this.state.isProcessing = false;
 
         this.emit('response', {
@@ -119,8 +143,46 @@ export class HoverModeOrchestrator extends EventEmitter {
 
   public cleanup(): void {
     this.stopMouseTracking();
+    this.lastProcessedImagePath = null;
     this.hoverManager.cleanup();
     this.removeAllListeners();
+  }
+
+  private async computeContentChangeRatio(currentPath: string): Promise<number> {
+    if (!this.lastProcessedImagePath) {
+      return 1;
+    }
+
+    try {
+      const [current, previous] = await Promise.all([
+        sharp(currentPath)
+          .resize(CHANGE_DETECTION_SIZE.width, CHANGE_DETECTION_SIZE.height, { fit: 'fill' })
+          .greyscale()
+          .raw()
+          .toBuffer(),
+        sharp(this.lastProcessedImagePath)
+          .resize(CHANGE_DETECTION_SIZE.width, CHANGE_DETECTION_SIZE.height, { fit: 'fill' })
+          .greyscale()
+          .raw()
+          .toBuffer(),
+      ]);
+
+      if (current.length !== previous.length || current.length === 0) {
+        return 1;
+      }
+
+      let changedPixels = 0;
+      for (let i = 0; i < current.length; i++) {
+        if (Math.abs(current[i] - previous[i]) >= PIXEL_DIFF_THRESHOLD) {
+          changedPixels += 1;
+        }
+      }
+
+      return changedPixels / current.length;
+    } catch (error) {
+      console.warn('[HoverModeOrchestrator] Change detection failed, forcing refresh:', error);
+      return 1;
+    }
   }
 }
 

@@ -210,14 +210,6 @@ safeHandleValidated("renderer:log-error", (args) => [parseIpcInput(ipcSchemas.re
     return 'open-build';
   });
 
-  registerSettingsHandlers({ appState, safeHandle, safeHandleValidated });
-  registerCalendarHandlers({ appState, safeHandle });
-  registerEmailHandlers({ appState, safeHandleValidated });
-  registerRagHandlers({ appState, safeHandle, safeHandleValidated });
-  registerProfileHandlers({ appState, safeHandle, safeHandleValidated });
-  registerIntelligenceHandlers({ appState, safeHandle });
-  registerWindowHandlers({ appState, safeHandle, safeHandleValidated });
-
   // ==========================================
   // Hover Mode IPC Handlers
   // ==========================================
@@ -235,6 +227,21 @@ safeHandleValidated("renderer:log-error", (args) => [parseIpcInput(ipcSchemas.re
     safeHandle,
     getMainWindow: () => appState.getMainWindow(),
   });
+
+  registerSettingsHandlers({
+    appState,
+    safeHandle,
+    safeHandleValidated,
+    onHoverOnlyModeChanged: (enabled: boolean) => {
+      getHoverModeOrchestrator().setEnabled(enabled);
+    },
+  });
+  registerCalendarHandlers({ appState, safeHandle });
+  registerEmailHandlers({ appState, safeHandleValidated });
+  registerRagHandlers({ appState, safeHandle, safeHandleValidated });
+  registerProfileHandlers({ appState, safeHandle, safeHandleValidated });
+  registerIntelligenceHandlers({ appState, safeHandle });
+  registerWindowHandlers({ appState, safeHandle, safeHandleValidated });
 
 
   safeHandleValidated("delete-screenshot", (args) => [parseIpcInput(ipcSchemas.absoluteUserDataPath, args[0], 'delete-screenshot')] as const, async (event, filePath) => {

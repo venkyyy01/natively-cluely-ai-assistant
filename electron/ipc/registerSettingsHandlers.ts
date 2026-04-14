@@ -8,6 +8,7 @@ type RegisterSettingsHandlersDeps = {
   appState: AppState;
   safeHandle: SafeHandle;
   safeHandleValidated: SafeHandleValidated;
+  onHoverOnlyModeChanged?: (enabled: boolean) => void;
 };
 
 type WindowFacadeLike = {
@@ -106,7 +107,7 @@ function getInferenceLlmHelper(appState: AppState): {
   return appState.processingHelper?.getLLMHelper?.() ?? null;
 }
 
-export function registerSettingsHandlers({ appState, safeHandle, safeHandleValidated }: RegisterSettingsHandlersDeps): void {
+export function registerSettingsHandlers({ appState, safeHandle, safeHandleValidated, onHoverOnlyModeChanged }: RegisterSettingsHandlersDeps): void {
   safeHandle('get-recognition-languages', async () => settingsSuccess(RECOGNITION_LANGUAGES));
   safeHandle('get-ai-response-languages', async () => settingsSuccess(AI_RESPONSE_LANGUAGES));
 
@@ -250,6 +251,8 @@ const result = settingsFacade?.setHoverOnlyModeEnabled
 if (result === false) {
 return settingsError('SETTINGS_PERSIST_FAILED', 'Unable to persist Hover Only Mode');
 }
+
+onHoverOnlyModeChanged?.(enabled);
 
 return settingsSuccess({ enabled });
 } catch (error: any) {
