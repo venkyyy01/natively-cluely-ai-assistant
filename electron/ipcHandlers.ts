@@ -15,6 +15,8 @@ import { registerEmailHandlers } from "./ipc/registerEmailHandlers";
 import { registerProfileHandlers } from "./ipc/registerProfileHandlers";
 import { registerIntelligenceHandlers } from "./ipc/registerIntelligenceHandlers";
 import { registerWindowHandlers } from "./ipc/registerWindowHandlers";
+import { registerHoverModeHandlers } from "./ipc/registerHoverModeHandlers";
+import { HoverModeOrchestrator } from "./hover/HoverModeOrchestrator";
 
 type ScreenshotFacadeLike = {
   deleteScreenshot?: (path: string) => Promise<{ success: boolean; error?: string }>;
@@ -215,6 +217,24 @@ safeHandleValidated("renderer:log-error", (args) => [parseIpcInput(ipcSchemas.re
   registerProfileHandlers({ appState, safeHandle, safeHandleValidated });
   registerIntelligenceHandlers({ appState, safeHandle });
   registerWindowHandlers({ appState, safeHandle, safeHandleValidated });
+
+  // ==========================================
+  // Hover Mode IPC Handlers
+  // ==========================================
+  let hoverModeOrchestrator: HoverModeOrchestrator | null = null;
+  const getHoverModeOrchestrator = () => {
+    if (!hoverModeOrchestrator) {
+      const llmHelper = getInferenceLlmHelper();
+      hoverModeOrchestrator = new HoverModeOrchestrator(llmHelper);
+    }
+    return hoverModeOrchestrator;
+  };
+
+  registerHoverModeHandlers({
+    orchestrator: getHoverModeOrchestrator(),
+    safeHandle,
+    getMainWindow: () => appState.getMainWindow(),
+  });
 
 
   safeHandleValidated("delete-screenshot", (args) => [parseIpcInput(ipcSchemas.absoluteUserDataPath, args[0], 'delete-screenshot')] as const, async (event, filePath) => {

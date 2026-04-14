@@ -302,6 +302,14 @@ onAccelerationModeChanged: (callback: (enabled: boolean) => void) => () => void
 
   // Diagnostics
   logErrorToMain: (payload: any) => Promise<{ success: boolean; error?: string }>;
+
+  // Hover Mode API
+  enableHoverMode: () => Promise<{ success: boolean; enabled: boolean }>;
+  disableHoverMode: () => Promise<{ success: boolean; enabled: boolean }>;
+  toggleHoverMode: () => Promise<{ success: boolean; enabled: boolean }>;
+  getHoverModeState: () => Promise<{ enabled: boolean; lastCapture: any; lastAnalysis: any; lastResponse: any; isProcessing: boolean }>;
+  onHoverResponse: (callback: (data: { cursorPosition: { x: number; y: number }; type: 'code' | 'mcq' | 'subjective'; content: string; language?: string; optionLabel?: string; justification?: string }) => void) => () => void;
+  onHoverStateChanged: (callback: (state: { enabled: boolean; lastCapture: any; lastAnalysis: any; lastResponse: any; isProcessing: boolean }) => void) => () => void;
 }
 
 export const PROCESSING_EVENTS = {
@@ -1049,4 +1057,24 @@ setOpenAtLogin: (open: boolean) => invokeStatus("set-open-at-login", open),
 
   // Diagnostics
   logErrorToMain: (payload: any) => ipcRenderer.invoke('renderer:log-error', payload),
+
+  // Hover Mode API
+  enableHoverMode: () => invokeAndUnwrap<{ success: boolean; enabled: boolean }>('enable-hover-mode'),
+  disableHoverMode: () => invokeAndUnwrap<{ success: boolean; enabled: boolean }>('disable-hover-mode'),
+  toggleHoverMode: () => invokeAndUnwrap<{ success: boolean; enabled: boolean }>('toggle-hover-mode'),
+  getHoverModeState: () => invokeAndUnwrap<{ enabled: boolean; lastCapture: any; lastAnalysis: any; lastResponse: any; isProcessing: boolean }>('get-hover-mode-state'),
+  onHoverResponse: (callback: (data: { cursorPosition: { x: number; y: number }; type: 'code' | 'mcq' | 'subjective'; content: string; language?: string; optionLabel?: string; justification?: string }) => void) => {
+    const subscription = (_: any, data: any) => callback(data)
+    ipcRenderer.on('hover-response', subscription)
+    return () => {
+      ipcRenderer.removeListener('hover-response', subscription)
+    }
+  },
+  onHoverStateChanged: (callback: (state: { enabled: boolean; lastCapture: any; lastAnalysis: any; lastResponse: any; isProcessing: boolean }) => void) => {
+    const subscription = (_: any, state: any) => callback(state)
+    ipcRenderer.on('hover-state-changed', subscription)
+    return () => {
+      ipcRenderer.removeListener('hover-state-changed', subscription)
+    }
+  },
 } as ElectronAPI)

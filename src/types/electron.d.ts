@@ -291,6 +291,14 @@ setDisguise: (mode: 'terminal' | 'settings' | 'activity' | 'none') => Promise<St
 
   // Diagnostics
   logErrorToMain: (payload: any) => Promise<{ success: boolean; error?: string }>
+
+  // Hover Mode API
+  enableHoverMode: () => Promise<{ success: boolean; enabled: boolean }>
+  disableHoverMode: () => Promise<{ success: boolean; enabled: boolean }>
+  toggleHoverMode: () => Promise<{ success: boolean; enabled: boolean }>
+  getHoverModeState: () => Promise<{ enabled: boolean; lastCapture: any; lastAnalysis: any; lastResponse: any; isProcessing: boolean }>
+  onHoverResponse: (callback: (data: { cursorPosition: { x: number; y: number }; type: 'code' | 'mcq' | 'subjective'; content: string; language?: string; optionLabel?: string; justification?: string }) => void) => () => void
+  onHoverStateChanged: (callback: (state: { enabled: boolean; lastCapture: any; lastAnalysis: any; lastResponse: any; isProcessing: boolean }) => void) => () => void
 }
 
 declare global {
