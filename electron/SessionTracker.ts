@@ -232,6 +232,7 @@ export class SessionTracker {
   private readonly tokenCounter: TokenCounter = new TokenCounter('openai');
   private readonly semanticEmbeddingCache = new Map<string, { embedding: number[]; createdAt: number }>();
   private readonly semanticEmbeddingTTLms = 5 * 60 * 1000;
+  private readonly semanticEmbeddingCacheMaxSize = 100;
   private adaptiveWindowStats = {
     calls: 0,
     totalMs: 0,
@@ -687,6 +688,8 @@ isConsciousModeEnabled(): boolean {
       return cached.embedding;
     }
 
+    this.pruneSemanticEmbeddingCache();
+
     const provider = getEmbeddingProvider();
     if (provider?.isInitialized()) {
       try {
@@ -704,6 +707,30 @@ isConsciousModeEnabled(): boolean {
     const fallback = this.buildPseudoEmbedding(text);
     this.semanticEmbeddingCache.set(normalized, { embedding: fallback, createdAt: Date.now() });
     return fallback;
+  }
+
+  private pruneSemanticEmbeddingCache(): void {
+    if (this.semanticEmbeddingCache.size <= this.semanticEmbeddingCacheMaxSize) {
+      return;
+    }
+
+    const now = Date.now();
+    const entries = Array.from(this.semanticEmbeddingCache.entries())
+      .filter(([, value]) => now - value.createdAt > this.semanticEmbeddingTTLms)
+      .map(([key]) => key);
+
+    for (const key of entries) {
+      this.semanticEmbeddingCache.delete(key);
+    }
+
+    if (this.semanticEmbeddingCache.size > this.semanticEmbeddingCacheMaxSize) {
+      const allEntries = Array.from(this.semanticEmbeddingCache.entries())
+        .sort((a, b) => a[1].createdAt - b[1].createdAt);
+      const toRemove = allEntries.slice(0, allEntries.length - this.semanticEmbeddingCacheMaxSize);
+      for (const [key] of toRemove) {
+        this.semanticEmbeddingCache.delete(key);
+      }
+    }
   }
 
   private computeBM25Scores(query: string, documents: string[]): number[] {

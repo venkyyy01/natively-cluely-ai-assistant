@@ -42,25 +42,67 @@ const DEFAULT_CONFIG: HoverModeConfig = {
   maxCaptureHeight: 1500,
 };
 
+const MIN_CAPTURE_INTERVAL_MS = 3000;
+const SCREENSHOT_MAX_AGE_MS = 60_000;
+const MAX_CACHE_ENTRIES = 100;
+
 export class HoverModeManager extends EventEmitter {
   private enabled: boolean = false;
   private config: HoverModeConfig;
   private lastPosition: HoverPosition | null = null;
   private hoverTimer: NodeJS.Timeout | null = null;
-  private captureId: number = 0;
   private readonly screenshotDir: string;
   private isCapturing: boolean = false;
+  private lastCaptureTime: number = 0;
 
   constructor(config: Partial<HoverModeConfig> = {}) {
     super();
     this.config = { ...DEFAULT_CONFIG, ...config };
     this.screenshotDir = path.join(app.getPath('userData'), 'hover_captures');
     this.ensureScreenshotDir();
+    this.cleanupOldCaptures();
   }
 
   private ensureScreenshotDir(): void {
     if (!fs.existsSync(this.screenshotDir)) {
       fs.mkdirSync(this.screenshotDir, { recursive: true });
+    }
+  }
+
+  private cleanupOldCaptures(): void {
+    try {
+      const files = fs.readdirSync(this.screenshotDir);
+      const now = Date.now();
+      for (const file of files) {
+        if (!file.endsWith('.png')) continue;
+        const filePath = path.join(this.screenshotDir, file);
+        try {
+          const stats = fs.statSync(filePath);
+          if (now - stats.mtimeMs > SCREENSHOT_MAX_AGE_MS) {
+            fs.unlinkSync(filePath);
+          }
+        } catch {
+          // File may have been deleted concurrently, ignore
+        }
+      }
+    } catch {
+      // Directory may not exist yet, ignore
+    }
+  }
+
+  private validateCaptureBounds(bounds: Rectangle): void {
+    if (!Number.isFinite(bounds.x) || !Number.isFinite(bounds.y) ||
+        !Number.isFinite(bounds.width) || !Number.isFinite(bounds.height)) {
+      throw new Error('Invalid capture bounds: non-finite values');
+    }
+    if (bounds.width <= 0 || bounds.height <= 0) {
+      throw new Error('Invalid capture bounds: dimensions must be positive');
+    }
+    if (bounds.width > this.config.maxCaptureWidth || bounds.height > this.config.maxCaptureHeight) {
+      throw new Error('Invalid capture bounds: dimensions exceed maximum');
+    }
+    if (bounds.x < -10000 || bounds.y < -10000 || bounds.x > 10000 || bounds.y > 10000) {
+      throw new Error('Invalid capture bounds: coordinates out of reasonable range');
     }
   }
 
@@ -128,12 +170,19 @@ export class HoverModeManager extends EventEmitter {
   }
 
   private async performCapture(position: HoverPosition): Promise<HoverCapture> {
+    const now = Date.now();
+    if (now - this.lastCaptureTime < MIN_CAPTURE_INTERVAL_MS) {
+      throw new Error('Capture rate limited');
+    }
+
     this.isCapturing = true;
+    this.lastCaptureTime = now;
 
     try {
       const bounds = this.calculateCaptureBounds(position);
+      this.validateCaptureBounds(bounds);
       const capturePath = await this.captureRegion(bounds);
-      
+
       const capture: HoverCapture = {
         id: uuidv4(),
         path: capturePath,
@@ -215,6 +264,7 @@ export class HoverModeManager extends EventEmitter {
 
   public cleanup(): void {
     this.cancelPendingCapture();
+    this.cleanupOldCaptures();
     this.removeAllListeners();
   }
 }

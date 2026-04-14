@@ -2,6 +2,9 @@ import type { LLMHelper } from '../LLMHelper';
 import type { HoverCapture } from './HoverModeManager';
 import type { HoverAnalysisResult, QuestionType } from './HoverQuestionClassifier';
 
+const ALLOWED_LANGUAGES = ['python', 'javascript', 'typescript', 'java', 'cpp', 'go', 'rust', 'c', 'csharp', 'ruby', 'php', 'swift', 'kotlin', 'scala'] as const;
+type AllowedLanguage = typeof ALLOWED_LANGUAGES[number];
+
 export interface HoverResponse {
   type: 'code' | 'mcq' | 'subjective';
   content: string;
@@ -56,6 +59,26 @@ export class HoverLLMResponder {
     this.llmHelper = llmHelper;
   }
 
+  private validateLanguage(language: string | undefined): AllowedLanguage {
+    if (!language) return 'python';
+    const normalized = language.toLowerCase();
+    if (ALLOWED_LANGUAGES.includes(normalized as AllowedLanguage)) {
+      return normalized as AllowedLanguage;
+    }
+    return 'python';
+  }
+
+  private validateMcqResponse(parsed: unknown): { optionLabel: string; justification?: string } | null {
+    if (!parsed || typeof parsed !== 'object') return null;
+    const obj = parsed as Record<string, unknown>;
+    if (typeof obj.optionLabel !== 'string' || obj.optionLabel.length === 0) return null;
+    if (!/^[A-Za-z]|[1-9]$/.test(obj.optionLabel)) return null;
+    return {
+      optionLabel: obj.optionLabel.toUpperCase(),
+      justification: typeof obj.justification === 'string' ? obj.justification.slice(0, 500) : undefined,
+    };
+  }
+
   public async generateResponse(
     capture: HoverCapture,
     analysis: HoverAnalysisResult
@@ -76,8 +99,9 @@ export class HoverLLMResponder {
     capture: HoverCapture,
     analysis: HoverAnalysisResult
   ): Promise<HoverResponse> {
+    const safeLanguage = this.validateLanguage(analysis.detectedLanguage);
     const prompt = analysis.detectedLanguage
-      ? `${CODE_RESPONSE_PROMPT}\n\nDetected language: ${analysis.detectedLanguage}. Use this language.`
+      ? `${CODE_RESPONSE_PROMPT}\n\nDetected language: ${safeLanguage}. Use this language.`
       : `${CODE_RESPONSE_PROMPT}\n\nNo language detected. Use Python as default.`;
 
     try {
@@ -87,14 +111,14 @@ export class HoverLLMResponder {
       return {
         type: 'code',
         content: response || 'Unable to generate solution',
-        language: analysis.detectedLanguage || 'python',
+        language: safeLanguage,
       };
     } catch (error) {
       console.error('[HoverLLMResponder] Code response generation failed:', error);
       return {
         type: 'code',
         content: '// Error generating solution',
-        language: analysis.detectedLanguage || 'python',
+        language: safeLanguage,
       };
     }
   }
@@ -111,12 +135,25 @@ export class HoverLLMResponder {
         return this.getDefaultMcqResponse();
       }
 
-      const parsed = JSON.parse(response);
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(response);
+      } catch {
+        console.error('[HoverLLMResponder] MCQ JSON parse failed');
+        return this.getDefaultMcqResponse();
+      }
+
+      const validated = this.validateMcqResponse(parsed);
+      if (!validated) {
+        console.error('[HoverLLMResponder] MCQ response validation failed');
+        return this.getDefaultMcqResponse();
+      }
+
       return {
         type: 'mcq',
-        content: `The correct answer is ${parsed.optionLabel}.`,
-        optionLabel: parsed.optionLabel,
-        justification: parsed.justification,
+        content: `The correct answer is ${validated.optionLabel}.`,
+        optionLabel: validated.optionLabel,
+        justification: validated.justification,
       };
     } catch (error) {
       console.error('[HoverLLMResponder] MCQ response generation failed:', error);
