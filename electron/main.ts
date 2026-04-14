@@ -392,7 +392,16 @@ export class AppState {
 constructor() {
 // 1. Load boot-critical settings first (used by WindowHelpers)
 const settingsManager = SettingsManager.getInstance();
-this.isUndetectable = settingsManager.get('isUndetectable') ?? false;
+const persistedUndetectable = settingsManager.get('isUndetectable') ?? false;
+if (process.platform === 'win32' && persistedUndetectable) {
+  // Windows safety override: always boot visible.
+  // Do not persist this override so the user can still keep their preference;
+  // we only force visibility for the initial startup state.
+  console.warn('[AppState] Applying startup-only undetectable override on Windows to keep app visible');
+  this.isUndetectable = false;
+} else {
+  this.isUndetectable = persistedUndetectable;
+}
 this.disguiseMode = settingsManager.get('disguiseMode') ?? 'none';
 this.consciousModeEnabled = settingsManager.get('consciousModeEnabled') ?? false;
 
