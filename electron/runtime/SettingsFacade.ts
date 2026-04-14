@@ -1,16 +1,18 @@
 export type DisguiseMode = 'terminal' | 'settings' | 'activity' | 'none';
 
 export interface SettingsFacadeDeps {
-  setConsciousModeEnabled: (enabled: boolean) => boolean;
-  getConsciousModeEnabled: () => boolean;
-  setAccelerationModeEnabled: (enabled: boolean) => boolean;
-  getAccelerationModeEnabled: () => boolean;
-  setDisguise: (mode: DisguiseMode) => void;
-  getDisguise: () => string;
-  getUndetectable: () => boolean;
-  getThemeMode: () => string;
-  getResolvedTheme: () => string;
-  setThemeMode: (mode: string) => void;
+setConsciousModeEnabled: (enabled: boolean) => boolean;
+getConsciousModeEnabled: () => boolean;
+setAccelerationModeEnabled: (enabled: boolean) => boolean;
+getAccelerationModeEnabled: () => boolean;
+setHoverOnlyModeEnabled: (enabled: boolean) => boolean;
+getHoverOnlyModeEnabled: () => boolean;
+setDisguise: (mode: DisguiseMode) => void;
+getDisguise: () => string;
+getUndetectable: () => boolean;
+getThemeMode: () => string;
+getResolvedTheme: () => string;
+setThemeMode: (mode: string) => void;
 }
 
 export class SettingsFacade {
@@ -28,11 +30,19 @@ export class SettingsFacade {
     return this.deps.setAccelerationModeEnabled(enabled);
   }
 
-  getAccelerationModeEnabled(): boolean {
-    return this.deps.getAccelerationModeEnabled();
-  }
+getAccelerationModeEnabled(): boolean {
+return this.deps.getAccelerationModeEnabled();
+}
 
-  setDisguise(mode: DisguiseMode): void {
+setHoverOnlyModeEnabled(enabled: boolean): boolean {
+return this.deps.setHoverOnlyModeEnabled(enabled);
+}
+
+getHoverOnlyModeEnabled(): boolean {
+return this.deps.getHoverOnlyModeEnabled();
+}
+
+setDisguise(mode: DisguiseMode): void {
     this.deps.setDisguise(mode);
   }
 

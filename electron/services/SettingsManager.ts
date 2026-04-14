@@ -3,17 +3,18 @@ import fs from 'fs';
 import path from 'path';
 
 export interface AppSettings {
-  // Only boot-critical or non-encrypted settings should live here.
-  // In the future, other non-secret data like 'language' or 'theme'
-  // can be moved here from CredentialsManager to allow early boot access.
-  isUndetectable?: boolean;
-  disguiseMode?: 'terminal' | 'settings' | 'activity' | 'none';
-  consciousModeEnabled?: boolean;
-  accelerationModeEnabled?: boolean;
-  enablePrivateMacosStealthApi?: boolean;
-  enableCaptureDetectionWatchdog?: boolean;
-  enableVirtualDisplayIsolation?: boolean;
-  captureToolPatterns?: string[];
+// Only boot-critical or non-encrypted settings should live here.
+// In the future, other non-secret data like 'language' or 'theme'
+// can be moved here from CredentialsManager to allow early boot access.
+isUndetectable?: boolean;
+disguiseMode?: 'terminal' | 'settings' | 'activity' | 'none';
+consciousModeEnabled?: boolean;
+hoverOnlyModeEnabled?: boolean;
+accelerationModeEnabled?: boolean;
+enablePrivateMacosStealthApi?: boolean;
+enableCaptureDetectionWatchdog?: boolean;
+enableVirtualDisplayIsolation?: boolean;
+captureToolPatterns?: string[];
 }
 
 const ALLOWED_DISGUISE_MODES = new Set<AppSettings['disguiseMode']>(['terminal', 'settings', 'activity', 'none']);
@@ -30,11 +31,15 @@ function sanitizeSettings(candidate: unknown): AppSettings {
     sanitized.isUndetectable = raw.isUndetectable;
   }
 
-  if (typeof raw.consciousModeEnabled === 'boolean') {
-    sanitized.consciousModeEnabled = raw.consciousModeEnabled;
-  }
+if (typeof raw.consciousModeEnabled === 'boolean') {
+sanitized.consciousModeEnabled = raw.consciousModeEnabled;
+}
 
-  if (typeof raw.accelerationModeEnabled === 'boolean') {
+if (typeof raw.hoverOnlyModeEnabled === 'boolean') {
+sanitized.hoverOnlyModeEnabled = raw.hoverOnlyModeEnabled;
+}
+
+if (typeof raw.accelerationModeEnabled === 'boolean') {
     sanitized.accelerationModeEnabled = raw.accelerationModeEnabled;
   }
 

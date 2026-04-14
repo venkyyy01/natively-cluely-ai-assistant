@@ -81,12 +81,15 @@ interface ElectronAPI {
   openExternal: (url: string) => Promise<void>
   setUndetectable: (state: boolean) => Promise<StatusResult>
   getUndetectable: () => Promise<boolean>
-  setConsciousMode: (enabled: boolean) => Promise<{ success: true; data: { enabled: boolean } } | { success: false; error: { code: string; message: string } }>
-  getConsciousMode: () => Promise<{ success: true; data: { enabled: boolean } } | { success: false; error: { code: string; message: string } }>
-  onConsciousModeChanged: (callback: (enabled: boolean) => void) => () => void
-  setAccelerationMode: (enabled: boolean) => Promise<{ success: true; data: { enabled: boolean } } | { success: false; error: { code: string; message: string } }>
-  getAccelerationMode: () => Promise<{ success: true; data: { enabled: boolean } } | { success: false; error: { code: string; message: string } }>
-  onAccelerationModeChanged: (callback: (enabled: boolean) => void) => () => void
+setConsciousMode: (enabled: boolean) => Promise<{ success: true; data: { enabled: boolean } } | { success: false; error: { code: string; message: string } }>
+getConsciousMode: () => Promise<{ success: true; data: { enabled: boolean } } | { success: false; error: { code: string; message: string } }>
+onConsciousModeChanged: (callback: (enabled: boolean) => void) => () => void
+setHoverOnlyMode: (enabled: boolean) => Promise<{ success: true; data: { enabled: boolean } } | { success: false; error: { code: string; message: string } }>
+getHoverOnlyMode: () => Promise<{ success: true; data: { enabled: boolean } } | { success: false; error: { code: string; message: string } }>
+onHoverOnlyModeChanged: (callback: (enabled: boolean) => void) => () => void
+setAccelerationMode: (enabled: boolean) => Promise<{ success: true; data: { enabled: boolean } } | { success: false; error: { code: string; message: string } }>
+getAccelerationMode: () => Promise<{ success: true; data: { enabled: boolean } } | { success: false; error: { code: string; message: string } }>
+onAccelerationModeChanged: (callback: (enabled: boolean) => void) => () => void
   setOpenAtLogin: (open: boolean) => Promise<StatusResult>
   getOpenAtLogin: () => Promise<boolean>
   closeSettingsWindow: () => Promise<void>
@@ -457,11 +460,20 @@ contextBridge.exposeInMainWorld("electronAPI", {
 setConsciousMode: (enabled: boolean) => ipcRenderer.invoke('set-conscious-mode', enabled),
 getConsciousMode: () => ipcRenderer.invoke('get-conscious-mode'),
 onConsciousModeChanged: (callback: (enabled: boolean) => void) => {
-  const subscription = (_: any, enabled: boolean) => callback(enabled)
-  ipcRenderer.on('conscious-mode-changed', subscription)
-  return () => {
-    ipcRenderer.removeListener('conscious-mode-changed', subscription)
-  }
+const subscription = (_: any, enabled: boolean) => callback(enabled)
+ipcRenderer.on('conscious-mode-changed', subscription)
+return () => {
+ipcRenderer.removeListener('conscious-mode-changed', subscription)
+}
+},
+setHoverOnlyMode: (enabled: boolean) => ipcRenderer.invoke('set-hover-only-mode', enabled),
+getHoverOnlyMode: () => ipcRenderer.invoke('get-hover-only-mode'),
+onHoverOnlyModeChanged: (callback: (enabled: boolean) => void) => {
+const subscription = (_: any, enabled: boolean) => callback(enabled)
+ipcRenderer.on('hover-only-mode-changed', subscription)
+return () => {
+ipcRenderer.removeListener('hover-only-mode-changed', subscription)
+}
 },
 setAccelerationMode: (enabled: boolean) => ipcRenderer.invoke('set-acceleration-mode', enabled),
 getAccelerationMode: () => ipcRenderer.invoke('get-acceleration-mode'),

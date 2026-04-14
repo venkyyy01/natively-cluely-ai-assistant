@@ -49,6 +49,9 @@ export interface ElectronAPI {
 setConsciousMode: (enabled: boolean) => Promise<{ success: true; data: { enabled: boolean } } | { success: false; error: { code: string; message: string } }>
 getConsciousMode: () => Promise<{ success: true; data: { enabled: boolean } } | { success: false; error: { code: string; message: string } }>
 onConsciousModeChanged: (callback: (enabled: boolean) => void) => () => void
+setHoverOnlyMode: (enabled: boolean) => Promise<{ success: true; data: { enabled: boolean } } | { success: false; error: { code: string; message: string } }>
+getHoverOnlyMode: () => Promise<{ success: true; data: { enabled: boolean } } | { success: false; error: { code: string; message: string } }>
+onHoverOnlyModeChanged: (callback: (enabled: boolean) => void) => () => void
 setAccelerationMode: (enabled: boolean) => Promise<{ success: true; data: { enabled: boolean } } | { success: false; error: { code: string; message: string } }>
 getAccelerationMode: () => Promise<{ success: true; data: { enabled: boolean } } | { success: false; error: { code: string; message: string } }>
 onAccelerationModeChanged: (callback: (enabled: boolean) => void) => () => void

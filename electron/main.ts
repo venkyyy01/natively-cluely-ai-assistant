@@ -332,8 +332,9 @@ export class AppState {
   private virtualDisplayCoordinator: import('./stealth/MacosVirtualDisplayClient').VirtualDisplayCoordinator | null = null
   private nativeStealthBridge: NativeStealthBridge | null = null
   private tray: Tray | null = null
-  private disguiseMode: 'terminal' | 'settings' | 'activity' | 'none' = 'none'
-  private consciousModeEnabled: boolean = false
+private disguiseMode: 'terminal' | 'settings' | 'activity' | 'none' = 'none'
+private consciousModeEnabled: boolean = false
+private hoverOnlyModeEnabled: boolean = false
 
   // View management
   private view: "queue" | "solutions" = "queue"
@@ -423,12 +424,13 @@ const settingsManager = SettingsManager.getInstance();
 this.isUndetectable = settingsManager.get('isUndetectable') ?? false;
 this.disguiseMode = settingsManager.get('disguiseMode') ?? 'none';
 this.consciousModeEnabled = settingsManager.get('consciousModeEnabled') ?? false;
+this.hoverOnlyModeEnabled = settingsManager.get('hoverOnlyModeEnabled') ?? false;
 
 // 1a. Sync acceleration optimization flags from settings
 const accelerationModeEnabled = settingsManager.getAccelerationModeEnabled();
 syncOptimizationFlagsFromSettings(accelerationModeEnabled);
 
-console.log(`[AppState] Initialized with isUndetectable=${this.isUndetectable}, disguiseMode=${this.disguiseMode}, consciousModeEnabled=${this.consciousModeEnabled}, accelerationModeEnabled=${accelerationModeEnabled}`);
+console.log(`[AppState] Initialized with isUndetectable=${this.isUndetectable}, disguiseMode=${this.disguiseMode}, consciousModeEnabled=${this.consciousModeEnabled}, hoverOnlyModeEnabled=${this.hoverOnlyModeEnabled}, accelerationModeEnabled=${accelerationModeEnabled}`);
 
 // 2. Initialize Helpers with loaded state
 // Feature flags default to ON with safe fallback to Layer 0 if broken
@@ -2415,20 +2417,22 @@ try {
     })
   }
 
-  public getSettingsFacade(): SettingsFacade {
-    return new SettingsFacade({
-      setConsciousModeEnabled: (enabled) => this.setConsciousModeEnabled(enabled),
-      getConsciousModeEnabled: () => this.getConsciousModeEnabled(),
-      setAccelerationModeEnabled: (enabled) => this.setAccelerationModeEnabled(enabled),
-      getAccelerationModeEnabled: () => this.getAccelerationModeEnabled(),
-      setDisguise: (mode) => this.setDisguise(mode),
-      getDisguise: () => this.getDisguise(),
-      getUndetectable: () => this.getUndetectable(),
-      getThemeMode: () => this.themeManager.getMode(),
-      getResolvedTheme: () => this.themeManager.getResolvedTheme(),
-      setThemeMode: (mode) => this.themeManager.setMode(mode as import('./ThemeManager').ThemeMode),
-    })
-  }
+public getSettingsFacade(): SettingsFacade {
+return new SettingsFacade({
+setConsciousModeEnabled: (enabled) => this.setConsciousModeEnabled(enabled),
+getConsciousModeEnabled: () => this.getConsciousModeEnabled(),
+setAccelerationModeEnabled: (enabled) => this.setAccelerationModeEnabled(enabled),
+getAccelerationModeEnabled: () => this.getAccelerationModeEnabled(),
+setHoverOnlyModeEnabled: (enabled) => this.setHoverOnlyModeEnabled(enabled),
+getHoverOnlyModeEnabled: () => this.getHoverOnlyModeEnabled(),
+setDisguise: (mode) => this.setDisguise(mode),
+getDisguise: () => this.getDisguise(),
+getUndetectable: () => this.getUndetectable(),
+getThemeMode: () => this.themeManager.getMode(),
+getResolvedTheme: () => this.themeManager.getResolvedTheme(),
+setThemeMode: (mode) => this.themeManager.setMode(mode as import('./ThemeManager').ThemeMode),
+})
+}
 
   public getScreenshotFacade(): ScreenshotFacade {
     return new ScreenshotFacade({
@@ -3022,7 +3026,26 @@ private syncWindowStealthProtection(state: boolean): void {
   }
 
 public getConsciousModeEnabled(): boolean {
-  return this.consciousModeEnabled
+return this.consciousModeEnabled
+}
+
+public setHoverOnlyModeEnabled(enabled: boolean): boolean {
+if (this.hoverOnlyModeEnabled === enabled) {
+return true
+}
+
+const persisted = SettingsManager.getInstance().set('hoverOnlyModeEnabled', enabled)
+if (!persisted) {
+throw new Error('Unable to persist Hover Only Mode')
+}
+
+this.hoverOnlyModeEnabled = enabled
+this._broadcastToAllWindows('hover-only-mode-changed', enabled)
+return true
+}
+
+public getHoverOnlyModeEnabled(): boolean {
+return this.hoverOnlyModeEnabled
 }
 
 public setAccelerationModeEnabled(enabled: boolean): boolean {
