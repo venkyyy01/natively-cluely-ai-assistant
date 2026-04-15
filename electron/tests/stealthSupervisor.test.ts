@@ -50,6 +50,8 @@ test('StealthSupervisor arms and disarms through the delegate while emitting sta
 test('StealthSupervisor fails closed when arm verification fails', async () => {
   const delegateCalls: boolean[] = [];
   const faultReasons: string[] = [];
+  const clearedHandles: unknown[] = [];
+  const heartbeatHandle = { unref() {} };
   const bus = createBus();
   bus.subscribe('stealth:fault', async (event) => {
     faultReasons.push(event.reason);
@@ -65,14 +67,19 @@ test('StealthSupervisor fails closed when arm verification fails', async () => {
     bus,
     {
       verifier: () => false,
+      intervalScheduler: () => heartbeatHandle,
+      clearIntervalScheduler: (handle) => {
+        clearedHandles.push(handle);
+      },
     },
   );
 
   await supervisor.start();
   await assert.rejects(() => supervisor.setEnabled(true), /stealth verification failed/);
   assert.equal(supervisor.getStealthState(), 'FAULT');
-  assert.deepEqual(delegateCalls, [true, false]);
+  assert.deepEqual(delegateCalls, [true]);
   assert.deepEqual(faultReasons, ['stealth verification failed']);
+  assert.deepEqual(clearedHandles, []);
 });
 
 test('StealthSupervisor stop disables stealth and returns to idle', async () => {
@@ -133,6 +140,8 @@ test('StealthSupervisor propagates delegate failures as faults', async () => {
 test('StealthSupervisor can be faulted explicitly after it is armed', async () => {
   const calls: boolean[] = [];
   const faultReasons: string[] = [];
+  const clearedHandles: unknown[] = [];
+  const heartbeatHandle = { unref() {} };
   const bus = createBus();
   bus.subscribe('stealth:fault', async (event) => {
     faultReasons.push(event.reason);
@@ -146,6 +155,12 @@ test('StealthSupervisor can be faulted explicitly after it is armed', async () =
       isEnabled: () => calls[calls.length - 1] ?? false,
     },
     bus,
+    {
+      intervalScheduler: () => heartbeatHandle,
+      clearIntervalScheduler: (handle) => {
+        clearedHandles.push(handle);
+      },
+    },
   );
 
   await supervisor.start();
@@ -153,8 +168,9 @@ test('StealthSupervisor can be faulted explicitly after it is armed', async () =
   await supervisor.reportFault(new Error('window_visible_to_capture'));
 
   assert.equal(supervisor.getStealthState(), 'FAULT');
-  assert.deepEqual(calls, [true, false]);
+  assert.deepEqual(calls, [true]);
   assert.deepEqual(faultReasons, ['window_visible_to_capture']);
+  assert.deepEqual(clearedHandles, [heartbeatHandle]);
 });
 
 test('StealthSupervisor enters FAULT when heartbeat verification misses', async () => {
@@ -203,7 +219,7 @@ test('StealthSupervisor enters FAULT when heartbeat verification misses', async 
   await new Promise((resolve) => setImmediate(resolve));
 
   assert.equal(supervisor.getStealthState(), 'FAULT');
-  assert.deepEqual(calls, [true, false]);
+  assert.deepEqual(calls, [true]);
   assert.deepEqual(faultReasons, ['stealth heartbeat missed']);
   assert.deepEqual(clearedHandles, [heartbeatHandle]);
 });
@@ -336,7 +352,7 @@ test('StealthSupervisor transitions to FAULT when native heartbeat reports unhea
   await new Promise((resolve) => setImmediate(resolve));
 
   assert.equal(supervisor.getStealthState(), 'FAULT');
-  assert.deepEqual(calls, [true, false]);
+  assert.deepEqual(calls, [true]);
   assert.deepEqual(faultReasons, ['stealth heartbeat missed']);
 });
 
@@ -378,7 +394,7 @@ test('StealthSupervisor fails closed when the native helper proactively reports 
   await new Promise((resolve) => setImmediate(resolve));
 
   assert.equal(supervisor.getStealthState(), 'FAULT');
-  assert.deepEqual(calls, [true, false]);
+  assert.deepEqual(calls, [true]);
   assert.deepEqual(faultReasons, ['stealth-heartbeat-missed']);
 });
 
@@ -628,7 +644,7 @@ test('StealthSupervisor fails closed when a display hotplug causes a second nati
   await new Promise((resolve) => setImmediate(resolve));
 
   assert.equal(supervisor.getStealthState(), 'FAULT');
-  assert.deepEqual(calls, [true, false]);
+  assert.deepEqual(calls, [true]);
   assert.deepEqual(faultReasons, ['stealth heartbeat missed']);
   assert.equal(createCalls, 2);
 });
@@ -761,7 +777,7 @@ test('StealthSupervisor fails closed after the native helper disconnects and its
   await new Promise((resolve) => setImmediate(resolve));
 
   assert.equal(supervisor.getStealthState(), 'FAULT');
-  assert.deepEqual(calls, [true, false]);
+  assert.deepEqual(calls, [true]);
   assert.deepEqual(faultReasons, ['stealth heartbeat missed']);
   assert.equal(createCalls, 2);
 });
@@ -812,6 +828,6 @@ test('StealthSupervisor fails closed when runtime-origin heartbeat becomes stale
   heartbeatTicks[0]?.();
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(supervisor.getStealthState(), 'FAULT');
-  assert.deepEqual(calls, [true, false]);
+  assert.deepEqual(calls, [true]);
   assert.deepEqual(faultReasons, ['stealth heartbeat missed']);
 });

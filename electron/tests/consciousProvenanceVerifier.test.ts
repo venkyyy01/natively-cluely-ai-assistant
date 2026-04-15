@@ -93,3 +93,23 @@ test('ConsciousProvenanceVerifier accepts metric claims grounded by evidence con
 
   assert.equal(verdict.ok, true);
 });
+
+test('ConsciousProvenanceVerifier does not treat hypothesis text as grounding context', () => {
+  const verifier = new ConsciousProvenanceVerifier();
+  const verdict = verifier.verify({
+    response: response({ openingReasoning: 'I would use Cassandra for the core path.', implementationPlan: ['Use Cassandra for the write path'] }),
+    semanticContextBlock: '<conscious_semantic_memory>\n[PROJECT] Tenant Analytics Platform: Technologies: Redis, Kafka\n</conscious_semantic_memory>',
+    hypothesis: {
+      sourceQuestion: 'How would you design this?',
+      latestSuggestedAnswer: 'Use Cassandra for the write path.',
+      likelyThemes: ['cassandra'],
+      confidence: 0.88,
+      evidence: ['suggested'],
+      targetFacets: [],
+      updatedAt: Date.now(),
+    },
+  });
+
+  assert.equal(verdict.ok, false);
+  assert.equal(verdict.reason, 'unsupported_technology_claim');
+});

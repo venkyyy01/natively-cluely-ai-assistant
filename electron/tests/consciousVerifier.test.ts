@@ -109,6 +109,30 @@ test('ConsciousVerifier falls back to rule-based acceptance when LLM judge is un
   assert.equal(result.ok, true);
 });
 
+test('ConsciousVerifier rejects in strict mode when the LLM judge is unavailable', async () => {
+  const verifier = new ConsciousVerifier(new ConsciousVerifierLLM({
+    generateContentStructured: async () => '{"ok": false, "reason": "should_not_run"}',
+    hasStructuredGenerationCapability: () => false,
+  }), { requireJudge: true });
+
+  const result = await verifier.verify({
+    response: response({ tradeoffs: ['Cross-tenant reads get more expensive'] }),
+    route: { qualifies: true, threadAction: 'continue' },
+    reaction: {
+      kind: 'tradeoff_probe',
+      confidence: 0.9,
+      cues: ['tradeoff_language'],
+      targetFacets: ['tradeoffs'],
+      shouldContinueThread: true,
+    },
+    hypothesis: null,
+    question: 'What are the tradeoffs?',
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, 'judge_unavailable');
+});
+
 test('ConsciousVerifier honors an LLM judge rejection when rules pass', async () => {
   const verifier = new ConsciousVerifier(new ConsciousVerifierLLM({
     generateContentStructured: async () => '{"ok": false, "reason": "llm_detected_misalignment", "confidence": 0.91}',

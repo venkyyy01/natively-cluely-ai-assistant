@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { SessionPersistence, PersistedSession } from '../memory/SessionPersistence';
@@ -152,4 +152,25 @@ test('SessionPersistence flushScheduledSave persists pending snapshots immediate
   const loaded = await persistence.findByMeeting(session.meetingId);
   assert.ok(loaded);
   assert.equal(loaded?.sessionId, session.sessionId);
+});
+
+test('SessionPersistence sanitizes meeting ids before writing filenames', async (t) => {
+  const sessionsDirectory = await createPersistenceDir();
+  t.after(async () => {
+    await rm(sessionsDirectory, { recursive: true, force: true });
+  });
+
+  const persistence = new SessionPersistence({ sessionsDirectory });
+  await persistence.init();
+
+  const session = makeSession('../../../../escape/meeting');
+  await persistence.save(session);
+
+  const files = await readdir(sessionsDirectory);
+  const persistedFile = files.find((file) => file.endsWith('.json') && file !== 'index.json');
+
+  assert.ok(persistedFile);
+  assert.ok(!persistedFile?.includes('..'));
+  assert.ok(!persistedFile?.includes('/'));
+  assert.ok(!persistedFile?.includes('\\'));
 });

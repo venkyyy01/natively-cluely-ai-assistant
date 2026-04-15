@@ -1,18 +1,19 @@
-# Tasks for Opencode Update
+# Task Plan: Revalidate and Remediate Executive Summary Findings
 
-## Plan
-1. [x] Find the currently installed `opencode` version.
-2. [x] Check for a newer version in brew.
-3. [x] Uninstall the old version of `opencode`.
-4. [x] Install the latest version of `opencode` (1.3.7) from `anomalyco/tap`.
-5. [x] Verify the installation.
+This is the project-level task tracker for resolving the architectural issues identified in `reviews/**Executive Summary**.md`.
 
-## Progress
-- [x] Uninstalling old `opencode`.
-- [x] Installing latest `opencode`.
-- [x] Verification completed.
-
-## Review
-The `opencode` version was updated from 1.3.0 to 1.3.7 using Homebrew. 
-The latest version was sourced from the `anomalyco/tap/opencode` formula.
-Verification through `opencode --version` confirmed 1.3.7 is now active.
+- [x] **Phase 1: Stealth & Runtime Lifecycle Fixes**
+  - [x] FS-01: Fix Stealth containment fail-open `StealthSupervisor.ts` and set macOS heartbeat `main.ts`
+  - [x] FS-02: Enforce finalizer cleanup even on error `RuntimeCoordinator.ts`
+  - [x] FS-03: Aggregate listener errors for critical events `SupervisorBus.ts`
+  - [x] FS-04: Abort properly on uncaught exceptions `main.ts`
+  - [x] FS-05: Remove silent STT cross-vendor fallback `main.ts`
+- [x] **Phase 2: Persistence & Conscious Mode Fixes**
+  - [x] FS-06: Sanitize `meetingId` filenames `SessionPersistence.ts`
+  - [x] CM-01: Remove self-grounding hypothesis text `ConsciousProvenanceVerifier.ts`
+  - [x] CM-02: Hard `verification_degraded` return on timeout `ConsciousVerifier.ts`
+  - [x] CM-03: Skip state restore if explicit toggle is off `SessionTracker.ts`
+  - [x] CM-04: Add mode enum to retrieval to prevent caching pseudo embeddings
+- [x] **Phase 3: Fault-Injection Tests**
+  - [x] Prove renderer-hang scenario retains native lock-in
+  - [x] Prove missed heartbeat scenario transitions securely

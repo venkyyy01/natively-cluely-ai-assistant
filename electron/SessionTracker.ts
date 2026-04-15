@@ -701,9 +701,7 @@ isConsciousModeEnabled(): boolean {
       }
     }
 
-    const fallback = this.buildPseudoEmbedding(text);
-    this.semanticEmbeddingCache.set(normalized, { embedding: fallback, createdAt: Date.now() });
-    return fallback;
+    return this.buildPseudoEmbedding(text);
   }
 
   private computeBM25Scores(query: string, documents: string[]): number[] {
@@ -1719,19 +1717,25 @@ isConsciousModeEnabled(): boolean {
       this.fingerprinter.restore(session.responseHashes || []);
       this.consciousThreadStore.reset();
       this.observedQuestionStore.reset();
-      this.answerHypothesisStore.restorePersistenceSnapshot(session.consciousState?.hypothesisState);
-      this.designStateStore.restorePersistenceSnapshot(session.consciousState?.designState);
+      this.answerHypothesisStore.reset();
+      this.designStateStore.reset();
+      this.consciousSemanticContext = '';
 
-      if (session.activeThread) {
-        this.consciousThreadStore.restoreActiveThread({
-          id: session.activeThread.id,
-          topic: session.activeThread.topic,
-          goal: session.activeThread.goal,
-          phase: (session.activeThread.phase as InterviewPhase) || 'requirements_gathering',
-          turnCount: session.activeThread.turnCount,
-        });
+      if (this.consciousModeEnabled) {
+        this.answerHypothesisStore.restorePersistenceSnapshot(session.consciousState?.hypothesisState);
+        this.designStateStore.restorePersistenceSnapshot(session.consciousState?.designState);
+        if (session.activeThread) {
+          this.consciousThreadStore.restoreActiveThread({
+            id: session.activeThread.id,
+            topic: session.activeThread.topic,
+            goal: session.activeThread.goal,
+            phase: (session.activeThread.phase as InterviewPhase) || 'requirements_gathering',
+            turnCount: session.activeThread.turnCount,
+          });
+        }
+        this.consciousThreadStore.restorePersistenceSnapshot(session.consciousState?.threadState);
       }
-      this.consciousThreadStore.restorePersistenceSnapshot(session.consciousState?.threadState);
+
       this.restorePersistedMemoryState(session.memoryState);
 
       this.transcriptRevision = this.fullTranscript.length;

@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { promises as fs } from 'fs';
 import { homedir } from 'os';
 import { dirname, join } from 'path';
@@ -98,8 +99,25 @@ function formatDate(ts: number): string {
   return new Date(ts).toISOString().split('T')[0];
 }
 
+function sanitizeMeetingIdForFilename(meetingId: string): string {
+  const readable = meetingId
+    .normalize('NFKD')
+    .replace(/[^\x00-\x7F]/g, '')
+    .replace(/[^a-zA-Z0-9_-]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 48);
+
+  const digest = createHash('sha256')
+    .update(meetingId)
+    .digest('hex')
+    .slice(0, 12);
+
+  return `${readable || 'meeting'}-${digest}`;
+}
+
 function buildSessionFilename(session: PersistedSession): string {
-  return `${formatDate(session.createdAt)}_meeting-${session.meetingId}.json`;
+  const sanitizedId = sanitizeMeetingIdForFilename(session.meetingId);
+  return `${formatDate(session.createdAt)}_meeting-${sanitizedId}.json`;
 }
 
 async function atomicWriteJson(filePath: string, value: unknown): Promise<void> {

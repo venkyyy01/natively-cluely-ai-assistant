@@ -17,6 +17,16 @@ interface RuntimeCoordinatorOptions {
   warmStandbyManager?: WarmStandbyManager<unknown, unknown, unknown>;
 }
 
+function buildCoordinatorError(message: string, errors: unknown[]): Error {
+  if (errors.length === 1 && errors[0] instanceof Error) {
+    return errors[0];
+  }
+
+  const error = new Error(message);
+  (error as Error & { causes?: unknown[] }).causes = errors;
+  return error;
+}
+
 export class RuntimeCoordinator {
   private readonly bus: SupervisorBus;
   private readonly logger: Pick<Console, 'warn'>;
@@ -133,15 +143,29 @@ export class RuntimeCoordinator {
 
     this.lifecycleState = 'stopping';
     await this.bus.emit({ type: 'lifecycle:meeting-stopping' });
+    const errors: unknown[] = [];
 
     try {
       await this.stopSupervisors(this.managedSupervisorNames);
+    } catch (error) {
+      this.logger.warn('[RuntimeCoordinator] Error during supervisor shutdown, continuing to finalize deactivation:', error);
+      errors.push(error);
+    }
+
+    try {
       await this.delegate.finalizeMeetingDeactivation();
+    } catch (error) {
+      this.logger.warn('[RuntimeCoordinator] Error while finalizing meeting deactivation:', error);
+      errors.push(error);
     } finally {
       await this.warmStandbyManager?.unbindMeeting();
       this.lifecycleState = 'idle';
       this.activeMeetingId = null;
       await this.bus.emit({ type: 'lifecycle:meeting-idle' });
+    }
+
+    if (errors.length > 0) {
+      throw buildCoordinatorError('RuntimeCoordinator deactivation completed with errors', errors);
     }
   }
 

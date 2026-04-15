@@ -30,11 +30,17 @@ process.stdout?.on?.('error', () => { });
 process.stderr?.on?.('error', () => { });
 
 process.on('uncaughtException', (err) => {
-  void logToFileAsync('[CRITICAL] Uncaught Exception: ' + (err.stack || err.message || err));
+  void logToFileAsync('[CRITICAL] Uncaught Exception: ' + (err.stack || err.message || err)).finally(() => {
+    // FS-04: Enforce an immediate hard exit to prevent running in an undefined state.
+    process.exit(1);
+  });
 });
 
 process.on('unhandledRejection', (reason, promise) => {
-  void logToFileAsync('[CRITICAL] Unhandled Rejection at: ' + promise + ' reason: ' + (reason instanceof Error ? reason.stack : reason));
+  void logToFileAsync('[CRITICAL] Unhandled Rejection at: ' + promise + ' reason: ' + (reason instanceof Error ? reason.stack : reason)).finally(() => {
+    // FS-04: Enforce an immediate hard exit.
+    process.exit(1);
+  });
 });
 
 const logFile = path.join(app.getPath('documents'), 'natively_debug.log');
@@ -52,6 +58,7 @@ const LOG_QUEUE_MAX_SIZE = 10000;
 let logQueue: string[] = [];
 let logFlushInProgress = false;
 let logRotationCheckPending = false;
+let droppedLogMessages = 0;
 
 /**
  * Rotate log files asynchronously if they exceed the maximum size.
@@ -110,10 +117,14 @@ async function flushLogQueue(): Promise<void> {
 
   try {
     await rotateLogsIfNeededAsync();
+    if (droppedLogMessages > 0) {
+      pending.unshift(`[Logging] Dropped ${droppedLogMessages} log messages because the log queue exceeded ${LOG_QUEUE_MAX_SIZE} entries.`);
+      droppedLogMessages = 0;
+    }
     const content = pending.map(msg => `${new Date().toISOString()} ${msg}`).join('\n') + '\n';
     await fsPromises.appendFile(logFile, content);
-  } catch {
-    // Ignore logging errors
+  } catch (error) {
+    originalError('[Logging] Failed to append debug log:', error);
   } finally {
     logFlushInProgress = false;
     if (logQueue.length > 0) {
@@ -127,7 +138,9 @@ async function flushLogQueue(): Promise<void> {
  */
 async function logToFileAsync(msg: string): Promise<void> {
   if (logQueue.length >= LOG_QUEUE_MAX_SIZE) {
-    logQueue.splice(0, logQueue.length - LOG_QUEUE_MAX_SIZE + 1);
+    const dropped = logQueue.length - LOG_QUEUE_MAX_SIZE + 1;
+    logQueue.splice(0, dropped);
+    droppedLogMessages += dropped;
   }
   logQueue.push(msg);
   void flushLogQueue();
@@ -773,7 +786,7 @@ this.runtimeCoordinator.registerSupervisor(new StealthSupervisor(
       {
         logger: { warn: console.warn },
         nativeBridge: this.nativeStealthBridge ?? undefined,
-        runtimeHeartbeatStalenessMs: process.platform === 'darwin' && process.env.NATIVELY_FORCE_STEALTH_RUNTIME !== '1' ? 0 : 2000,
+        runtimeHeartbeatStalenessMs: 2000,
       },
     ))
 
@@ -816,19 +829,12 @@ this.runtimeCoordinator.registerSupervisor(new StealthSupervisor(
 
     bus.subscribe('stealth:fault', async (event) => {
       this.privacyShieldFaultReason = event.reason
+      this.enforceStealthFaultContainment(event.reason)
       this.syncPrivacyShieldState()
       this._broadcastToAllWindows('stealth-fault', event.reason)
       this.performanceInstrumentation.recordEvent('stealth.fault', {
         reason: event.reason,
       })
-
-      if (this.isUndetectable) {
-        this.applyUndetectableState(false, Date.now(), {
-          runtime: 'coordinator',
-          reason: event.reason,
-          source: 'fault',
-        })
-      }
     })
 
     bus.subscribe('recovery:checkpoint-written', async (event) => {
@@ -1221,8 +1227,8 @@ try {
         console.log(`[Main] Using DeepgramStreamingSTT for ${speaker}`);
         stt = new DeepgramStreamingSTT(apiKey);
       } else {
-        console.warn(`[Main] No API key for Deepgram STT, falling back to GoogleSTT`);
-        stt = new GoogleSTT();
+        // FS-05: Remove silent fallback to a different cloud vendor
+        throw new Error(`[Main] No API key for Deepgram STT. Refusing to start STT silently.`);
       }
     } else if (sttProvider === 'soniox') {
       const apiKey = CredentialsManager.getInstance().getSonioxApiKey();
@@ -1230,8 +1236,7 @@ try {
         console.log(`[Main] Using SonioxStreamingSTT for ${speaker}`);
         stt = new SonioxStreamingSTT(apiKey);
       } else {
-        console.warn(`[Main] No API key for Soniox STT, falling back to GoogleSTT`);
-        stt = new GoogleSTT();
+        throw new Error(`[Main] No API key for Soniox STT. Refusing to start STT silently.`);
       }
     } else if (sttProvider === 'elevenlabs') {
       const apiKey = CredentialsManager.getInstance().getElevenLabsApiKey();
@@ -1239,8 +1244,7 @@ try {
         console.log(`[Main] Using ElevenLabsStreamingSTT for ${speaker}`);
         stt = new ElevenLabsStreamingSTT(apiKey);
       } else {
-        console.warn(`[Main] No API key for ElevenLabs STT, falling back to GoogleSTT`);
-        stt = new GoogleSTT();
+        throw new Error(`[Main] No API key for ElevenLabs STT. Refusing to start STT silently.`);
       }
     } else if (sttProvider === 'openai') {
       // OpenAI: WebSocket Realtime (gpt-4o-transcribe → gpt-4o-mini-transcribe) with whisper-1 REST fallback
@@ -1249,8 +1253,7 @@ try {
         console.log(`[Main] Using OpenAIStreamingSTT (WebSocket+REST fallback) for ${speaker}`);
         stt = new OpenAIStreamingSTT(apiKey);
       } else {
-        console.warn(`[Main] No API key for OpenAI STT, falling back to GoogleSTT`);
-        stt = new GoogleSTT();
+        throw new Error(`[Main] No API key for OpenAI STT. Refusing to start STT silently.`);
       }
     } else if (sttProvider === 'groq' || sttProvider === 'azure' || sttProvider === 'ibmwatson') {
       let apiKey: string | undefined;
@@ -1272,8 +1275,7 @@ try {
         console.log(`[Main] Using RestSTT (${sttProvider}) for ${speaker}`);
         stt = new RestSTT(sttProvider, apiKey, modelOverride, region);
       } else {
-        console.warn(`[Main] No API key for ${sttProvider} STT, falling back to GoogleSTT`);
-        stt = new GoogleSTT();
+        throw new Error(`[Main] No API key for ${sttProvider} STT. Refusing to start STT silently.`);
       }
     } else {
       stt = new GoogleSTT();
@@ -2971,6 +2973,14 @@ private syncWindowStealthProtection(state: boolean): void {
 
     this.privacyShieldState = nextState
     this._broadcastToAllWindows('privacy-shield-changed', nextState)
+  }
+
+  private enforceStealthFaultContainment(reason: string): void {
+    this.syncWindowStealthProtection(true)
+    this.performanceInstrumentation.recordEvent('stealth.fault.containment', {
+      reason,
+      protectionsRetained: true,
+    })
   }
 
   private verifyStealthProtection(): boolean {

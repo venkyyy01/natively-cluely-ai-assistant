@@ -47,6 +47,34 @@ test('SupervisorBus isolates listener failures', async () => {
   assert.equal(errors.length, 1);
 });
 
+test('SupervisorBus rethrows listener failures for critical events after notifying all listeners', async () => {
+  const errors: string[] = [];
+  const bus = new SupervisorBus({
+    error(message) {
+      errors.push(String(message));
+    },
+  });
+  const seen: string[] = [];
+
+  bus.subscribe('stealth:fault', async () => {
+    seen.push('before-error');
+  });
+  bus.subscribe('stealth:fault', async () => {
+    throw new Error('boom');
+  });
+  bus.subscribe('stealth:fault', async () => {
+    seen.push('after-error');
+  });
+
+  await assert.rejects(
+    () => bus.emit({ type: 'stealth:fault', reason: 'capture detected' }),
+    /Critical SupervisorBus event "stealth:fault" had listener failures: boom/,
+  );
+
+  assert.deepEqual(seen, ['before-error', 'after-error']);
+  assert.equal(errors.length, 1);
+});
+
 test('SupervisorBus unsubscribe removes the listener', async () => {
   const bus = new SupervisorBus({ error() {} });
   let calls = 0;
@@ -61,4 +89,3 @@ test('SupervisorBus unsubscribe removes the listener', async () => {
 
   assert.equal(calls, 1);
 });
-

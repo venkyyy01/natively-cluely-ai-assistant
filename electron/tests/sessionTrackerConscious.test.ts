@@ -174,6 +174,7 @@ test('SessionTracker ensureMeetingContext keeps latest meeting id when restores 
 
 test('SessionTracker restoreFromMeetingId restores conscious reasoning and hypothesis state', async () => {
   const tracker = new SessionTracker();
+  tracker.setConsciousModeEnabled(true);
   const persistence = (tracker as any).persistence;
 
   const originalFindByMeeting = persistence.findByMeeting.bind(persistence);
@@ -287,6 +288,107 @@ test('SessionTracker restoreFromMeetingId restores conscious reasoning and hypot
     assert.equal(tracker.getLatestQuestionReaction()?.kind, 'tradeoff_probe');
     assert.ok(tracker.getConsciousEvidenceContext().includes('tradeoff_probe'));
     assert.ok(tracker.getConsciousLongMemoryContext('What tradeoffs matter in the cache?').includes('ARCHITECTURE_DECISIONS:'));
+  } finally {
+    persistence.findByMeeting = originalFindByMeeting;
+  }
+});
+
+test('SessionTracker restoreFromMeetingId keeps conscious state cleared when conscious mode is disabled', async () => {
+  const tracker = new SessionTracker();
+  tracker.setConsciousModeEnabled(false);
+  const persistence = (tracker as any).persistence;
+
+  const originalFindByMeeting = persistence.findByMeeting.bind(persistence);
+  persistence.findByMeeting = async (meetingId: string) => {
+    if (meetingId !== 'meeting-conscious-disabled') {
+      return originalFindByMeeting(meetingId);
+    }
+
+    const now = Date.now();
+    return {
+      version: 1,
+      sessionId: 'session-conscious-disabled',
+      meetingId,
+      createdAt: now - 1000,
+      lastActiveAt: now,
+      activeThread: {
+        id: 'thread_123',
+        topic: 'How would you design a cache?',
+        goal: 'Discuss cache architecture',
+        phase: 'high_level_design',
+        turnCount: 2,
+      },
+      suspendedThreads: [],
+      pinnedItems: [],
+      constraints: [],
+      epochSummaries: [],
+      responseHashes: [],
+      consciousState: {
+        threadState: {
+          latestConsciousResponse: {
+            mode: 'reasoning_first',
+            openingReasoning: 'I would start with cache aside.',
+            implementationPlan: ['Use Redis'],
+            tradeoffs: ['Cold misses still hit the database'],
+            edgeCases: [],
+            scaleConsiderations: [],
+            pushbackResponses: [],
+            likelyFollowUps: [],
+            codeTransition: '',
+          },
+          activeReasoningThread: {
+            rootQuestion: 'How would you design a cache?',
+            lastQuestion: 'How would you design a cache?',
+            response: {
+              mode: 'reasoning_first',
+              openingReasoning: 'I would start with cache aside.',
+              implementationPlan: ['Use Redis'],
+              tradeoffs: ['Cold misses still hit the database'],
+              edgeCases: [],
+              scaleConsiderations: [],
+              pushbackResponses: [],
+              likelyFollowUps: [],
+              codeTransition: '',
+            },
+            followUpCount: 1,
+            updatedAt: now,
+          },
+        },
+        hypothesisState: {
+          latestHypothesis: {
+            sourceQuestion: 'What are the tradeoffs?',
+            latestSuggestedAnswer: 'I would start with cache aside.',
+            likelyThemes: ['cache aside', 'redis'],
+            confidence: 0.79,
+            evidence: ['suggested', 'inferred'],
+            reactionKind: 'tradeoff_probe',
+            targetFacets: ['tradeoffs'],
+            updatedAt: now,
+          },
+          latestReaction: {
+            kind: 'tradeoff_probe',
+            confidence: 0.88,
+            cues: ['tradeoff_language'],
+            targetFacets: ['tradeoffs'],
+            shouldContinueThread: true,
+          },
+        },
+        designState: {
+          currentObjective: 'How would you design a cache?',
+          updatedAt: now,
+          entries: [],
+        },
+      },
+    };
+  };
+
+  try {
+    const restored = await tracker.restoreFromMeetingId('meeting-conscious-disabled');
+    assert.equal(restored, true);
+    assert.equal(tracker.getLatestConsciousResponse(), null);
+    assert.equal(tracker.getActiveReasoningThread(), null);
+    assert.equal(tracker.getLatestQuestionReaction(), null);
+    assert.equal(tracker.getConsciousEvidenceContext(), '');
   } finally {
     persistence.findByMeeting = originalFindByMeeting;
   }

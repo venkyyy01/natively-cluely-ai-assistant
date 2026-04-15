@@ -19,6 +19,10 @@ export interface ConsciousVerifierJudge {
   judge(input: ConsciousVerifierJudgeInput): Promise<ConsciousVerificationResult | null>;
 }
 
+export interface ConsciousVerifierOptions {
+  requireJudge?: boolean;
+}
+
 function hasSubstance(response: ConsciousModeStructuredResponse): boolean {
   return Boolean(
     response.openingReasoning.trim() ||
@@ -44,7 +48,10 @@ function summaryText(response: ConsciousModeStructuredResponse): string {
 }
 
 export class ConsciousVerifier {
-  constructor(private readonly judge: ConsciousVerifierJudge | null = null) {}
+  constructor(
+    private readonly judge: ConsciousVerifierJudge | null = null,
+    private readonly options: ConsciousVerifierOptions = {},
+  ) {}
 
   async verify(input: ConsciousVerifierJudgeInput): Promise<ConsciousVerificationResult> {
     const ruleVerdict = this.verifyRules(input);
@@ -53,14 +60,24 @@ export class ConsciousVerifier {
     }
 
     if (!this.judge) {
-      return ruleVerdict;
+      return this.options.requireJudge
+        ? { ok: false, reason: 'judge_unavailable' }
+        : ruleVerdict;
     }
 
     try {
       const judgeVerdict = await this.judge.judge(input);
-      return judgeVerdict ?? ruleVerdict;
+      if (!judgeVerdict) {
+        return this.options.requireJudge
+          ? { ok: false, reason: 'judge_unavailable' }
+          : ruleVerdict;
+      }
+
+      return judgeVerdict.ok ? ruleVerdict : judgeVerdict;
     } catch {
-      return ruleVerdict;
+      return this.options.requireJudge
+        ? { ok: false, reason: 'judge_execution_failed' }
+        : ruleVerdict;
     }
   }
 

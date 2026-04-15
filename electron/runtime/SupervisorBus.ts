@@ -7,6 +7,11 @@ import type {
 
 type BusLogger = Pick<Console, 'error'>;
 type InternalListener = (event: SupervisorEvent) => void | Promise<void>;
+const CRITICAL_EVENTS = new Set<SupervisorEventType>([
+  'stealth:fault',
+  'lifecycle:meeting-starting',
+  'lifecycle:meeting-stopping',
+]);
 
 export class SupervisorBus {
   private readonly listeners = new Map<SupervisorEventType, InternalListener[]>();
@@ -59,24 +64,32 @@ export class SupervisorBus {
   async emit(event: SupervisorEvent): Promise<void> {
     const exactListeners = [...(this.listeners.get(event.type) ?? [])];
     const anyListeners = [...this.anyListeners];
+    const errors: unknown[] = [];
 
     for (const listener of exactListeners) {
-      await this.invokeListener(listener, event);
+      try {
+        await listener(event);
+      } catch (error) {
+        this.logger.error(`[SupervisorBus] Listener failed for event ${event.type}:`, error);
+        errors.push(error);
+      }
     }
 
     for (const listener of anyListeners) {
-      await this.invokeListener(listener, event);
+      try {
+        await listener(event);
+      } catch (error) {
+        this.logger.error(`[SupervisorBus] Global listener failed for event ${event.type}:`, error);
+        errors.push(error);
+      }
     }
-  }
 
-  private async invokeListener(
-    listener: InternalListener | SupervisorEventAnyListener,
-    event: SupervisorEvent,
-  ): Promise<void> {
-    try {
-      await listener(event);
-    } catch (error) {
-      this.logger.error(`[SupervisorBus] Listener failed for event ${event.type}:`, error);
+    if (errors.length > 0 && CRITICAL_EVENTS.has(event.type)) {
+      throw new Error(
+        `Critical SupervisorBus event "${event.type}" had listener failures: ${errors
+          .map((error) => error instanceof Error ? error.message : String(error))
+          .join(', ')}`,
+      );
     }
   }
 }

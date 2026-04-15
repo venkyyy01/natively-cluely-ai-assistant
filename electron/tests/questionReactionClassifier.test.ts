@@ -51,3 +51,36 @@ test('QuestionReactionClassifier treats explicit topic shifts as thread resets',
   assert.equal(reaction.kind, 'topic_shift');
   assert.equal(reaction.shouldContinueThread, false);
 });
+
+test('QuestionReactionClassifier does not continue generic follow-ups based only on prior hypothesis confidence', () => {
+  const classifier = new QuestionReactionClassifier();
+  const reaction = classifier.classify({
+    question: 'Could you expand?',
+    activeThread: createThread(),
+    latestResponse: createResponse(),
+    latestHypothesis: {
+      sourceQuestion: 'How would you design a rate limiter?',
+      latestSuggestedAnswer: 'Use Redis-backed token buckets.',
+      likelyThemes: ['redis', 'token bucket'],
+      confidence: 0.92,
+      evidence: ['suggested'],
+      targetFacets: [],
+      updatedAt: Date.now(),
+    },
+  });
+
+  assert.equal(reaction.kind, 'generic_follow_up');
+  assert.equal(reaction.shouldContinueThread, false);
+});
+
+test('QuestionReactionClassifier continues generic follow-ups when they contain thread-scoped referential cues', () => {
+  const classifier = new QuestionReactionClassifier();
+  const reaction = classifier.classify({
+    question: 'Would that still hold under backfill traffic?',
+    activeThread: createThread(),
+    latestResponse: createResponse(),
+  });
+
+  assert.equal(reaction.kind, 'generic_follow_up');
+  assert.equal(reaction.shouldContinueThread, true);
+});

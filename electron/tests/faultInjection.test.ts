@@ -195,5 +195,5 @@ test('fault injection: stealth heartbeat loss is reported via proactive helper f
   await new Promise((resolve) => setImmediate(resolve));
 
   assert.deepEqual(faults, ['stealth-heartbeat-missed']);
-  assert.deepEqual(calls, [true, false]);
+  assert.deepEqual(calls, [true]);
 });

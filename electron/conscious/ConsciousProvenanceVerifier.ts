@@ -60,8 +60,7 @@ export class ConsciousProvenanceVerifier {
   }): ConsciousProvenanceVerdict {
     const semanticContext = (input.semanticContextBlock || '').trim();
     const evidenceContext = (input.evidenceContextBlock || '').trim();
-    const hypothesisContext = `${input.hypothesis?.latestSuggestedAnswer || ''} ${(input.hypothesis?.likelyThemes || []).join(' ')}`.trim();
-    const hasStrictGroundingContext = Boolean(semanticContext || evidenceContext || hypothesisContext);
+    const hasStrictGroundingContext = Boolean(semanticContext || evidenceContext);
     if (!hasStrictGroundingContext) {
       return { ok: true };
     }
@@ -70,8 +69,8 @@ export class ConsciousProvenanceVerifier {
       semanticContext,
       evidenceContext,
       input.question || '',
-      hypothesisContext,
     ].join(' ').toLowerCase();
+
     if (!groundingContext.trim()) {
       return { ok: true };
     }

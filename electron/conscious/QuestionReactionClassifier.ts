@@ -25,6 +25,15 @@ function includesAny(text: string, patterns: RegExp[]): boolean {
   return patterns.some((pattern) => pattern.test(text));
 }
 
+function hasGenericFollowUpCue(text: string): boolean {
+  return includesAny(text, [
+    /^(and|but|so)\b/i,
+    /\b(this|that|it|those|these|them|there|then)\b/i,
+    /\b(still|also|instead|too)\b/i,
+    /\b(approach|design|system|choice|tradeoff|part|layer|path|flow)\b/i,
+  ]);
+}
+
 function collectTargets(response?: ConsciousModeStructuredResponse | null): string[] {
   if (!response) {
     return [];
@@ -149,9 +158,8 @@ export class QuestionReactionClassifier {
       };
     }
 
-    const likelySuggestedContext = input.latestHypothesis?.confidence ?? 0;
     const wordCount = normalized.split(/\s+/).filter(Boolean).length;
-    const shouldContinueThread = likelySuggestedContext >= 0.45 && wordCount >= 3;
+    const shouldContinueThread = wordCount >= 3 && hasGenericFollowUpCue(lower);
 
     return {
       kind: 'generic_follow_up',

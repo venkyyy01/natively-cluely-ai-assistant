@@ -208,9 +208,9 @@ export class StealthSupervisor implements ISupervisor {
     this.lastRuntimeHeartbeatAt = null;
 
     try {
-      await this.armController.disarm();
-    } catch (disableError) {
-      this.options.logger?.warn('[StealthSupervisor] Failed to disable delegate after fault:', disableError);
+      await this.stopHeartbeat();
+    } catch (heartbeatError) {
+      this.options.logger?.warn('[StealthSupervisor] Failed to stop heartbeat after fault:', heartbeatError);
     }
 
     await this.bus.emit({ type: 'stealth:fault', reason });

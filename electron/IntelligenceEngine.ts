@@ -294,9 +294,24 @@ export class IntelligenceEngine extends EventEmitter {
         return new ConsciousResponseCoordinator(this.session, this.latencyTracker, this, this.setMode.bind(this));
     }
 
+    private shouldRequireConsciousJudge(): boolean {
+        if (typeof this.llmHelper.generateContentStructured !== 'function') {
+            return false;
+        }
+
+        if (typeof this.llmHelper.hasStructuredGenerationCapability === 'function') {
+            return this.llmHelper.hasStructuredGenerationCapability();
+        }
+
+        return true;
+    }
+
     private buildConsciousOrchestrator(): ConsciousOrchestrator {
         const verifierJudge = new ConsciousVerifierLLM(this.llmHelper);
-        return new ConsciousOrchestrator(this.session, new ConsciousVerifier(verifierJudge));
+        return new ConsciousOrchestrator(
+            this.session,
+            new ConsciousVerifier(verifierJudge, { requireJudge: this.shouldRequireConsciousJudge() }),
+        );
     }
 
     private buildCompactTranscriptSnapshot(

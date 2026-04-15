@@ -400,6 +400,46 @@ test('RuntimeCoordinator ignores duplicate deactivate requests while stopping an
   assert.ok(warnings.some((message) => message.includes('duplicate deactivate')));
 });
 
+test('RuntimeCoordinator still finalizes deactivation after supervisor shutdown fails and surfaces the error', async () => {
+  const calls: string[] = [];
+  const warnings: string[] = [];
+  const coordinator = new RuntimeCoordinator(
+    {
+      async prepareMeetingActivation() {},
+      async finalizeMeetingDeactivation() {
+        calls.push('delegate:stop');
+      },
+    },
+    {
+      logger: {
+        warn(message) {
+          warnings.push(String(message));
+        },
+      },
+      managedSupervisorNames: ['audio'],
+    },
+  );
+
+  coordinator.registerSupervisor({
+    name: 'audio',
+    async start() {},
+    async stop() {
+      calls.push('stop:audio');
+      throw new Error('audio stop failed');
+    },
+    getState() {
+      return 'idle';
+    },
+  });
+
+  await coordinator.activate();
+  await assert.rejects(() => coordinator.deactivate(), /audio stop failed/);
+
+  assert.equal(coordinator.getLifecycleState(), 'idle');
+  assert.deepEqual(calls, ['stop:audio', 'delegate:stop']);
+  assert.ok(warnings.some((message) => message.includes('continuing to finalize deactivation')));
+});
+
 test('RuntimeCoordinator bus events include a stable meeting id for startup transitions', async () => {
   const events: Array<{ type: string; meetingId?: string }> = [];
   const coordinator = new RuntimeCoordinator(
