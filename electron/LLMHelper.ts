@@ -2,6 +2,7 @@ import { GoogleGenAI } from "@google/genai"
 import Groq from "groq-sdk"
 import OpenAI from "openai"
 import Anthropic from "@anthropic-ai/sdk"
+import Tesseract from "tesseract.js"
 import fs from "fs"
 import sharp from "sharp"
 import { ModelVersionManager, ModelFamily, TextModelFamily, parseModelVersion, compareVersions, classifyTextModel } from './services/ModelVersionManager'
@@ -11,7 +12,7 @@ import {
   UNIVERSAL_RECAP_PROMPT, UNIVERSAL_FOLLOWUP_PROMPT, UNIVERSAL_FOLLOW_UP_QUESTIONS_PROMPT, UNIVERSAL_ASSIST_PROMPT,
   CUSTOM_SYSTEM_PROMPT, CUSTOM_ANSWER_PROMPT, CUSTOM_WHAT_TO_ANSWER_PROMPT,
   CUSTOM_RECAP_PROMPT, CUSTOM_FOLLOWUP_PROMPT, CUSTOM_FOLLOW_UP_QUESTIONS_PROMPT, CUSTOM_ASSIST_PROMPT,
-  CORE_IDENTITY, UNIVERSAL_ANTI_DUMP_RULES
+  CORE_IDENTITY, UNIVERSAL_ANTI_DUMP_RULES, SCREENSHOT_EVENT_PROMPT
 } from "./llm/prompts"
 import { deepVariableReplacer, getByPath } from './utils/curlUtils';
 import curl2Json from "@bany/curl-to-json";
@@ -220,6 +221,32 @@ const INDIAN_ENGLISH_STYLE_INSTRUCTION = `CRITICAL STYLE: Write in natural India
 - Be concrete, clear, concise, and complete.
 - No text walls or unnecessary fluff.`
 type Provider = 'gemini' | 'groq' | 'openai' | 'claude';
+type ScreenshotContentCategory = 'coding_algorithmic' | 'system_design' | 'technical_concept' | 'mixed_content' | 'non_technical' | 'ambiguous';
+
+const SCREENSHOT_OCR_TEXT_LIMIT_CHARS = 8000;
+const SCREENSHOT_OCR_CONFIDENCE_THRESHOLD = 65;
+const SCREENSHOT_OCR_MIN_TEXT_CHARS = 40;
+
+interface ScreenshotOcrSummary {
+  text: string;
+  averageConfidence: number | null;
+  lowConfidence: boolean;
+  notes: string[];
+}
+
+interface ScreenshotEventRoutingInput {
+  message: string;
+  context?: string;
+  imagePaths: string[];
+  signal?: AbortSignal;
+  structuredRequest?: boolean;
+}
+
+interface ScreenshotEventRoutingResult {
+  userMessage: string;
+  context?: string;
+  systemPrompt: string;
+}
 
 const DEFAULT_FAST_RESPONSE_CONFIG: FastResponseConfig = {
   enabled: false,
@@ -1312,17 +1339,282 @@ ANSWER DIRECTLY:`;
     return `${message}\n\nAnswer briefly and directly. Keep it to 2-3 short sentences unless code is required.`;
   }
 
+  private sanitizeOcrText(text: string): string {
+    return text
+      .replace(/\u0000/g, '')
+      .replace(/\r\n/g, '\n')
+      .replace(/\r/g, '\n')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim();
+  }
+
+  private trimScreenshotOcrText(text: string): string {
+    if (text.length <= SCREENSHOT_OCR_TEXT_LIMIT_CHARS) {
+      return text;
+    }
+
+    return `${text.slice(0, SCREENSHOT_OCR_TEXT_LIMIT_CHARS)}\n...[OCR text truncated]`;
+  }
+
+  private async runOcrOnImage(imagePath: string, signal?: AbortSignal): Promise<{ text: string; confidence: number | null; error?: string }> {
+    if (!imagePath || !fs.existsSync(imagePath)) {
+      return {
+        text: '',
+        confidence: null,
+        error: 'Image file missing or inaccessible',
+      };
+    }
+
+    try {
+      throwIfAborted(signal);
+      const result = await Tesseract.recognize(imagePath, 'eng');
+      throwIfAborted(signal);
+
+      const text = this.sanitizeOcrText(result?.data?.text || '');
+      const confidence = typeof result?.data?.confidence === 'number'
+        ? result.data.confidence
+        : null;
+
+      return { text, confidence };
+    } catch (error) {
+      return {
+        text: '',
+        confidence: null,
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
+  }
+
+  private async buildScreenshotOcrSummary(imagePaths: string[], signal?: AbortSignal): Promise<ScreenshotOcrSummary> {
+    const notes: string[] = [];
+    const textChunks: string[] = [];
+    const confidenceValues: number[] = [];
+
+    for (let i = 0; i < imagePaths.length; i++) {
+      throwIfAborted(signal);
+      const imagePath = imagePaths[i];
+      const imageResult = await this.runOcrOnImage(imagePath, signal);
+
+      const label = `Image ${i + 1}`;
+      if (typeof imageResult.confidence === 'number' && Number.isFinite(imageResult.confidence)) {
+        confidenceValues.push(imageResult.confidence);
+        notes.push(`${label}: OCR confidence ${imageResult.confidence.toFixed(1)}%`);
+      } else {
+        notes.push(`${label}: OCR confidence unavailable`);
+      }
+
+      if (imageResult.text) {
+        textChunks.push(`${label} OCR:\n${imageResult.text}`);
+        notes.push(`${label}: extracted ${imageResult.text.length} characters`);
+      } else if (imageResult.error) {
+        notes.push(`${label}: OCR failed (${imageResult.error})`);
+      } else {
+        notes.push(`${label}: no text extracted`);
+      }
+    }
+
+    const text = this.trimScreenshotOcrText(this.sanitizeOcrText(textChunks.join('\n\n')));
+    const averageConfidence = confidenceValues.length
+      ? confidenceValues.reduce((sum, value) => sum + value, 0) / confidenceValues.length
+      : null;
+    const lowConfidence = averageConfidence !== null
+      ? averageConfidence < SCREENSHOT_OCR_CONFIDENCE_THRESHOLD
+      : text.length < SCREENSHOT_OCR_MIN_TEXT_CHARS;
+
+    if (!text) {
+      notes.push('OCR produced no usable text; rely on visible screenshot cues and user message.');
+    }
+
+    if (text.length > 0 && text.length < SCREENSHOT_OCR_MIN_TEXT_CHARS) {
+      notes.push('OCR extracted limited text; classification can be ambiguous.');
+    }
+
+    if (averageConfidence !== null && averageConfidence < SCREENSHOT_OCR_CONFIDENCE_THRESHOLD) {
+      notes.push('OCR confidence is below preferred threshold; verify interpretation carefully.');
+    }
+
+    return {
+      text,
+      averageConfidence,
+      lowConfidence,
+      notes,
+    };
+  }
+
+  private countPatternMatches(text: string, patterns: RegExp[]): number {
+    let score = 0;
+    for (const pattern of patterns) {
+      if (pattern.test(text)) {
+        score += 1;
+      }
+    }
+    return score;
+  }
+
+  private classifyScreenshotContent(message: string, context: string | undefined, ocrText: string): ScreenshotContentCategory {
+    const corpus = `${message}\n${context || ''}\n${ocrText}`.toLowerCase();
+
+    const codingPatterns = [
+      /\bleetcode\b/,
+      /\bfunction\b/,
+      /\bclass\b/,
+      /\breturn\b/,
+      /\bfor\b|\bwhile\b/,
+      /\binput\b.*\boutput\b/,
+      /\bconstraints?\b/,
+      /\btime complexity\b|\bspace complexity\b|\bo\([^)]*\)/,
+      /\barray\b|\bhash map\b|\bstack\b|\bqueue\b|\btwo pointer\b|\bbinary search\b|\bdynamic programming\b/,
+      /```/,
+    ];
+
+    const systemDesignPatterns = [
+      /\b(system design|design a|design an|architecture)\b/,
+      /\bhigh[- ]level\b/,
+      /\bload balancer\b|\bapi gateway\b/,
+      /\bthroughput\b|\blatency\b|\bqps\b|\brps\b/,
+      /\bscal(e|ing)\b|\bshard\b|\breplica\b|\bpartition\b/,
+      /\bconsistency\b|\bavailability\b|\bdurability\b|\bfailover\b/,
+      /\bcache\b|\bqueue\b|\bkafka\b|\bredis\b|\bcdn\b/,
+      /\bdatabase\b|\bdata model\b|\bstorage\b/,
+    ];
+
+    const technicalConceptPatterns = [
+      /\bwhat is\b|\bexplain\b|\bdifference between\b/,
+      /\btrade[- ]?off\b|\bpros? and cons\b/,
+      /\bhttp\b|\brest\b|\bgraphql\b|\btcp\b|\budp\b/,
+      /\bprocess\b|\bthread\b|\bconcurrency\b|\bsynchronization\b/,
+      /\boop\b|\bsolid\b|\bdependency injection\b|\bgarbage collection\b/,
+      /\bauthentication\b|\bauthorization\b|\bencryption\b/,
+      /\bci\/cd\b|\btesting\b|\bunit test\b|\bintegration test\b/,
+    ];
+
+    const nonTechnicalPatterns = [
+      /\bsalary\b|\bcompensation\b|\boffer\b|\bnotice period\b/,
+      /\bmeeting agenda\b|\bcalendar\b|\btravel\b|\binvoice\b/,
+      /\bmarketing\b|\bsales\b|\bproposal\b|\bcontract\b/,
+      /\bpersonal\b|\bvacation\b|\bexpense\b/,
+    ];
+
+    const codingScore = this.countPatternMatches(corpus, codingPatterns);
+    const systemDesignScore = this.countPatternMatches(corpus, systemDesignPatterns);
+    const technicalConceptScore = this.countPatternMatches(corpus, technicalConceptPatterns);
+    const nonTechnicalScore = this.countPatternMatches(corpus, nonTechnicalPatterns);
+
+    const technicalScores = [codingScore, systemDesignScore, technicalConceptScore];
+    const technicalSignals = technicalScores.filter((score) => score >= 2).length;
+    const maxTechnicalScore = Math.max(...technicalScores);
+
+    if (nonTechnicalScore >= 2 && maxTechnicalScore <= 1) {
+      return 'non_technical';
+    }
+
+    if (technicalSignals >= 2) {
+      return 'mixed_content';
+    }
+
+    if (maxTechnicalScore <= 1) {
+      if (nonTechnicalScore > 0) {
+        return 'non_technical';
+      }
+      return 'ambiguous';
+    }
+
+    if (codingScore === maxTechnicalScore && codingScore >= systemDesignScore + 1 && codingScore >= technicalConceptScore + 1) {
+      return 'coding_algorithmic';
+    }
+
+    if (systemDesignScore === maxTechnicalScore && systemDesignScore >= codingScore + 1 && systemDesignScore >= technicalConceptScore + 1) {
+      return 'system_design';
+    }
+
+    if (technicalConceptScore === maxTechnicalScore && technicalConceptScore >= codingScore + 1 && technicalConceptScore >= systemDesignScore + 1) {
+      return 'technical_concept';
+    }
+
+    return 'mixed_content';
+  }
+
+  private async prepareScreenshotEventRouting(input: ScreenshotEventRoutingInput): Promise<ScreenshotEventRoutingResult> {
+    const ocrSummary = await this.buildScreenshotOcrSummary(input.imagePaths, input.signal);
+    const classification = this.classifyScreenshotContent(input.message, input.context, ocrSummary.text);
+
+    const confidenceLabel = ocrSummary.averageConfidence === null
+      ? 'unavailable'
+      : `${ocrSummary.averageConfidence.toFixed(1)}%`;
+    const ocrTextBlock = ocrSummary.text || '[OCR produced no text. Use image context and question.]';
+    const qualityNotes = ocrSummary.notes.length
+      ? ocrSummary.notes.map((note) => `- ${note}`).join('\n')
+      : '- No OCR diagnostics available';
+
+    const userMessage = input.structuredRequest
+      ? [
+        input.message || '[empty message]',
+        '',
+        'SCREENSHOT_OCR_CONTEXT:',
+        'OCR_EXTRACTED_TEXT:',
+        ocrTextBlock,
+        '',
+        'OCR_EXTRACTION_QUALITY_NOTES:',
+        `- Average confidence: ${confidenceLabel}`,
+        `- Below-threshold confidence: ${ocrSummary.lowConfidence ? 'yes' : 'no'}`,
+        qualityNotes,
+        '',
+        `PRELIMINARY_CLASSIFICATION_HINT: ${classification}`,
+        '',
+        'Use the OCR context as supporting evidence only.',
+        'Preserve the original response format contract exactly.',
+      ].join('\n')
+      : [
+        'SCREENSHOT_EVENT_REQUEST',
+        '',
+        'ORIGINAL_USER_MESSAGE:',
+        input.message || '[empty message]',
+        '',
+        'OCR_EXTRACTED_TEXT:',
+        ocrTextBlock,
+        '',
+        'OCR_EXTRACTION_QUALITY_NOTES:',
+        `- Average confidence: ${confidenceLabel}`,
+        `- Below-threshold confidence: ${ocrSummary.lowConfidence ? 'yes' : 'no'}`,
+        qualityNotes,
+        '',
+        `PRELIMINARY_CLASSIFICATION_HINT: ${classification}`,
+        '',
+        'Follow the screenshot-event system policy strictly and keep the response interview-ready.',
+      ].join('\n');
+
+    return {
+      userMessage,
+      context: input.context,
+      systemPrompt: SCREENSHOT_EVENT_PROMPT,
+    };
+  }
+
   public async chatWithGemini(message: string, imagePaths?: string[], context?: string, skipSystemPrompt: boolean = false, alternateGroqMessage?: string): Promise<string> {
     try {
       console.log(`[LLMHelper] chatWithGemini called with message:`, message.substring(0, 50))
-      const effectiveMessage = this.applyDefaultBrevityHint(message)
+      let effectiveMessage = this.applyDefaultBrevityHint(message)
+      const hasScreenshotInput = !!(imagePaths?.length);
+      const structuredScreenshotRequest = this.isStructuredOutputRequest(effectiveMessage);
+      let screenshotRouting: ScreenshotEventRoutingResult | null = null;
+
+      if (hasScreenshotInput && imagePaths) {
+        screenshotRouting = await this.prepareScreenshotEventRouting({
+          message: effectiveMessage,
+          context,
+          imagePaths,
+          structuredRequest: structuredScreenshotRequest,
+        });
+        effectiveMessage = screenshotRouting.userMessage;
+        context = screenshotRouting.context;
+      }
 
       // ============================================================
       // KNOWLEDGE MODE INTERCEPT
       // If knowledge mode is active, check for intro questions and
       // inject system prompt + relevant context
       // ============================================================
-      if (this.knowledgeOrchestrator?.isKnowledgeMode()) {
+      if (!hasScreenshotInput && this.knowledgeOrchestrator?.isKnowledgeMode()) {
         try {
           // Feed the interviewer's utterance to the Technical Depth Scorer
           // so tone adapts dynamically (HR buzzwords → high-level, technical terms → deep technical)
@@ -1352,11 +1644,19 @@ ANSWER DIRECTLY:`;
       }
 
       const isMultimodal = !!(imagePaths?.length);
+      const enforceSystemPrompt = !!screenshotRouting && !structuredScreenshotRequest;
+      const skipPromptForRequest = enforceSystemPrompt ? false : skipSystemPrompt;
+      const screenshotSystemPrompt = screenshotRouting && !structuredScreenshotRequest
+        ? screenshotRouting.systemPrompt
+        : undefined;
+      const buildSystemPrompt = (basePrompt: string) => screenshotRouting
+        ? basePrompt
+        : this.injectLanguageInstruction(basePrompt);
 
       // Helper to build combined prompts for Groq/Gemini
       const buildMessage = (provider: string, modelId: string, systemPrompt: string) => {
         const preparedUserContent = this.prepareUserContentForModel(provider, modelId, effectiveMessage, context);
-        if (skipSystemPrompt) {
+        if (skipPromptForRequest) {
           return preparedUserContent;
         }
         return this.joinPrompt(systemPrompt, preparedUserContent, this.getInputTokenBudget(provider, modelId));
@@ -1367,16 +1667,25 @@ ANSWER DIRECTLY:`;
       const openaiUserContent = this.prepareUserContentForModel('openai', activeOpenAiModel, effectiveMessage, context);
       const claudeUserContent = this.prepareUserContentForModel('claude', CLAUDE_MODEL, effectiveMessage, context);
 
-      const finalGeminiPrompt = await this.withSystemPromptCache('gemini', this.currentModelId, HARD_SYSTEM_PROMPT, () => this.injectLanguageInstruction(HARD_SYSTEM_PROMPT));
-      const finalGroqPrompt = alternateGroqMessage || await this.withSystemPromptCache('groq', GROQ_MODEL, GROQ_SYSTEM_PROMPT, () => this.injectLanguageInstruction(GROQ_SYSTEM_PROMPT));
+      const geminiBasePrompt = screenshotSystemPrompt || HARD_SYSTEM_PROMPT;
+      const groqBasePrompt = screenshotSystemPrompt || alternateGroqMessage || GROQ_SYSTEM_PROMPT;
+      const openAiBasePrompt = screenshotSystemPrompt || OPENAI_SYSTEM_PROMPT;
+      const claudeBasePrompt = screenshotSystemPrompt || CLAUDE_SYSTEM_PROMPT;
+
+      const finalGeminiPrompt = await this.withSystemPromptCache('gemini', this.currentModelId, geminiBasePrompt, () => buildSystemPrompt(geminiBasePrompt));
+      const finalGroqPrompt = await this.withSystemPromptCache('groq', GROQ_MODEL, groqBasePrompt, () => buildSystemPrompt(groqBasePrompt));
 
       const combinedMessages = {
         gemini: buildMessage('gemini', this.currentModelId, finalGeminiPrompt),
         groq: buildMessage('groq', GROQ_MODEL, finalGroqPrompt),
       };
 
-      const openaiSystemPrompt = skipSystemPrompt ? undefined : await this.withSystemPromptCache('openai', activeOpenAiModel, OPENAI_SYSTEM_PROMPT, () => this.injectLanguageInstruction(OPENAI_SYSTEM_PROMPT));
-      const claudeSystemPrompt = skipSystemPrompt ? undefined : await this.withSystemPromptCache('claude', CLAUDE_MODEL, CLAUDE_SYSTEM_PROMPT, () => this.injectLanguageInstruction(CLAUDE_SYSTEM_PROMPT));
+      const openaiSystemPrompt = skipPromptForRequest
+        ? undefined
+        : await this.withSystemPromptCache('openai', activeOpenAiModel, openAiBasePrompt, () => buildSystemPrompt(openAiBasePrompt));
+      const claudeSystemPrompt = skipPromptForRequest
+        ? undefined
+        : await this.withSystemPromptCache('claude', CLAUDE_MODEL, claudeBasePrompt, () => buildSystemPrompt(claudeBasePrompt));
 
       const fastResponseTarget = !isMultimodal ? this.getActiveFastResponseTarget() : null;
       if (fastResponseTarget) {
@@ -1398,9 +1707,12 @@ ANSWER DIRECTLY:`;
       }
 
       if (this.activeCurlProvider) {
+        const curlSystemPrompt = skipPromptForRequest
+          ? undefined
+          : screenshotSystemPrompt || CUSTOM_SYSTEM_PROMPT;
         return await this.chatWithCurl(
           effectiveMessage,
-          skipSystemPrompt ? undefined : CUSTOM_SYSTEM_PROMPT,
+          curlSystemPrompt,
           context || "",
           imagePaths,
         );
@@ -1409,11 +1721,14 @@ ANSWER DIRECTLY:`;
       if (this.customProvider) {
         console.log(`[LLMHelper] Using Custom Provider: ${this.customProvider.name}`);
         // For non-streaming call — use rich CUSTOM prompts since custom providers can be cloud models
+        const customSystemPrompt = skipPromptForRequest
+          ? ""
+          : screenshotSystemPrompt || CUSTOM_SYSTEM_PROMPT;
         const response = await this.executeCustomProvider(
           this.customProvider.curlCommand,
           combinedMessages.gemini,
-          skipSystemPrompt ? "" : CUSTOM_SYSTEM_PROMPT,
-          message,
+          customSystemPrompt,
+          effectiveMessage,
           context || "",
           imagePaths
         );
@@ -2819,12 +3134,30 @@ ANSWER DIRECTLY:`;
       return;
     }
 
-    const effectiveMessage = this.applyDefaultBrevityHint(message);
+    let effectiveMessage = this.applyDefaultBrevityHint(message);
+    const hasScreenshotInput = !!(imagePaths?.length);
+    const structuredScreenshotRequest = this.isStructuredOutputRequest(effectiveMessage);
+    let screenshotRouting: ScreenshotEventRoutingResult | null = null;
+
+    if (hasScreenshotInput && imagePaths) {
+      screenshotRouting = await this.prepareScreenshotEventRouting({
+        message: effectiveMessage,
+        context,
+        imagePaths,
+        signal: options?.abortSignal,
+        structuredRequest: structuredScreenshotRequest,
+      });
+      effectiveMessage = screenshotRouting.userMessage;
+      context = screenshotRouting.context;
+      if (!structuredScreenshotRequest) {
+        systemPromptOverride = screenshotRouting.systemPrompt;
+      }
+    }
 
     // ============================================================
     // KNOWLEDGE MODE INTERCEPT (Streaming)
     // ============================================================
-    if (!options?.skipKnowledgeInterception && this.knowledgeOrchestrator?.isKnowledgeMode()) {
+    if (!hasScreenshotInput && !options?.skipKnowledgeInterception && this.knowledgeOrchestrator?.isKnowledgeMode()) {
       try {
         const knowledgeResult = await this.knowledgeOrchestrator.processQuestion(message);
         if (knowledgeResult) {
