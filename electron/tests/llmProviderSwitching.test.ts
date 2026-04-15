@@ -161,10 +161,11 @@ test('fast response streaming falls back to the default Cerebras model when none
   helper.scrubKeys();
 });
 
-test('chatWithGemini routes image-only and text+image requests through active cURL provider', async () => {
+test('chatWithGemini falls back to text-only screenshot routing when active cURL template has no image placeholders', async () => {
   const LLMHelper = await loadLLMHelper();
   const helper = new LLMHelper() as any;
   const originalChatWithCurl = helper.chatWithCurl;
+  const originalExtractImageTextWithTesseract = helper.extractImageTextWithTesseract;
   const calls: Array<{ userMessage: string; context: string; imageCount: number }> = [];
 
   helper.setModel('curl-provider', [{
@@ -178,6 +179,7 @@ test('chatWithGemini routes image-only and text+image requests through active cU
     calls.push({ userMessage, context, imageCount: imagePaths?.length || 0 });
     return 'ok';
   };
+  helper.extractImageTextWithTesseract = async () => 'deterministic screenshot fallback text';
 
   try {
     const imageOnly = await helper.chatWithGemini('', ['/tmp/image-only.png']);
@@ -186,11 +188,16 @@ test('chatWithGemini routes image-only and text+image requests through active cU
     assert.equal(imageOnly, 'ok');
     assert.equal(mixed, 'ok');
     assert.equal(calls.length, 2);
-    assert.equal(calls[0].imageCount, 1);
-    assert.equal(calls[1].imageCount, 1);
+    assert.equal(calls[0].imageCount, 0);
+    assert.equal(calls[1].imageCount, 0);
+    assert.match(calls[0].userMessage, /SCREENSHOT_TEXT_FALLBACK:/);
+    assert.match(calls[1].userMessage, /SCREENSHOT_TEXT_FALLBACK:/);
+    assert.match(calls[0].userMessage, /deterministic screenshot fallback text/);
+    assert.match(calls[1].userMessage, /deterministic screenshot fallback text/);
     assert.equal(calls[1].context, 'ctx');
   } finally {
     helper.chatWithCurl = originalChatWithCurl;
+    helper.extractImageTextWithTesseract = originalExtractImageTextWithTesseract;
     helper.scrubKeys();
   }
 });

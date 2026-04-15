@@ -221,31 +221,22 @@ const INDIAN_ENGLISH_STYLE_INSTRUCTION = `CRITICAL STYLE: Write in natural India
 - Be concrete, clear, concise, and complete.
 - No text walls or unnecessary fluff.`
 type Provider = 'gemini' | 'groq' | 'openai' | 'claude';
-type ScreenshotContentCategory = 'coding_algorithmic' | 'system_design' | 'technical_concept' | 'mixed_content' | 'non_technical' | 'ambiguous';
 
-const SCREENSHOT_OCR_TEXT_LIMIT_CHARS = 8000;
-const SCREENSHOT_OCR_CONFIDENCE_THRESHOLD = 65;
-const SCREENSHOT_OCR_MIN_TEXT_CHARS = 40;
-
-interface ScreenshotOcrSummary {
-  text: string;
-  averageConfidence: number | null;
-  lowConfidence: boolean;
-  notes: string[];
-}
+const SCREENSHOT_FALLBACK_TEXT_LIMIT_CHARS = 8000;
 
 interface ScreenshotEventRoutingInput {
   message: string;
   context?: string;
   imagePaths: string[];
   signal?: AbortSignal;
-  structuredRequest?: boolean;
+  forceTextFallback?: boolean;
 }
 
 interface ScreenshotEventRoutingResult {
   userMessage: string;
   context?: string;
   systemPrompt: string;
+  imagePaths?: string[];
 }
 
 const DEFAULT_FAST_RESPONSE_CONFIG: FastResponseConfig = {
@@ -1339,254 +1330,93 @@ ANSWER DIRECTLY:`;
     return `${message}\n\nAnswer briefly and directly. Keep it to 2-3 short sentences unless code is required.`;
   }
 
-  private sanitizeOcrText(text: string): string {
-    return text
-      .replace(/\u0000/g, '')
-      .replace(/\r\n/g, '\n')
-      .replace(/\r/g, '\n')
-      .replace(/\n{3,}/g, '\n\n')
-      .trim();
-  }
-
-  private trimScreenshotOcrText(text: string): string {
-    if (text.length <= SCREENSHOT_OCR_TEXT_LIMIT_CHARS) {
+  private trimScreenshotFallbackText(text: string): string {
+    if (text.length <= SCREENSHOT_FALLBACK_TEXT_LIMIT_CHARS) {
       return text;
     }
-
-    return `${text.slice(0, SCREENSHOT_OCR_TEXT_LIMIT_CHARS)}\n...[OCR text truncated]`;
+    return `${text.slice(0, SCREENSHOT_FALLBACK_TEXT_LIMIT_CHARS)}\n...[image text fallback truncated]`;
   }
 
-  private async runOcrOnImage(imagePath: string, signal?: AbortSignal): Promise<{ text: string; confidence: number | null; error?: string }> {
-    if (!imagePath || !fs.existsSync(imagePath)) {
-      return {
-        text: '',
-        confidence: null,
-        error: 'Image file missing or inaccessible',
-      };
-    }
-
-    try {
-      throwIfAborted(signal);
-      const result = await Tesseract.recognize(imagePath, 'eng');
-      throwIfAborted(signal);
-
-      const text = this.sanitizeOcrText(result?.data?.text || '');
-      const confidence = typeof result?.data?.confidence === 'number'
-        ? result.data.confidence
-        : null;
-
-      return { text, confidence };
-    } catch (error) {
-      return {
-        text: '',
-        confidence: null,
-        error: error instanceof Error ? error.message : String(error),
-      };
-    }
-  }
-
-  private async buildScreenshotOcrSummary(imagePaths: string[], signal?: AbortSignal): Promise<ScreenshotOcrSummary> {
-    const notes: string[] = [];
-    const textChunks: string[] = [];
-    const confidenceValues: number[] = [];
+  private async extractImageTextWithTesseract(imagePaths: string[], signal?: AbortSignal): Promise<string> {
+    const chunks: string[] = [];
 
     for (let i = 0; i < imagePaths.length; i++) {
       throwIfAborted(signal);
       const imagePath = imagePaths[i];
-      const imageResult = await this.runOcrOnImage(imagePath, signal);
-
       const label = `Image ${i + 1}`;
-      if (typeof imageResult.confidence === 'number' && Number.isFinite(imageResult.confidence)) {
-        confidenceValues.push(imageResult.confidence);
-        notes.push(`${label}: OCR confidence ${imageResult.confidence.toFixed(1)}%`);
-      } else {
-        notes.push(`${label}: OCR confidence unavailable`);
+
+      if (!imagePath || !fs.existsSync(imagePath)) {
+        chunks.push(`${label}: [missing image file]`);
+        continue;
       }
 
-      if (imageResult.text) {
-        textChunks.push(`${label} OCR:\n${imageResult.text}`);
-        notes.push(`${label}: extracted ${imageResult.text.length} characters`);
-      } else if (imageResult.error) {
-        notes.push(`${label}: OCR failed (${imageResult.error})`);
-      } else {
-        notes.push(`${label}: no text extracted`);
+      try {
+        const result = await Tesseract.recognize(imagePath, 'eng');
+        throwIfAborted(signal);
+        const text = (result?.data?.text || '').trim();
+        chunks.push(text ? `${label}:\n${text}` : `${label}: [no text extracted]`);
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : String(error);
+        chunks.push(`${label}: [tesseract failed: ${reason}]`);
       }
     }
 
-    const text = this.trimScreenshotOcrText(this.sanitizeOcrText(textChunks.join('\n\n')));
-    const averageConfidence = confidenceValues.length
-      ? confidenceValues.reduce((sum, value) => sum + value, 0) / confidenceValues.length
-      : null;
-    const lowConfidence = averageConfidence !== null
-      ? averageConfidence < SCREENSHOT_OCR_CONFIDENCE_THRESHOLD
-      : text.length < SCREENSHOT_OCR_MIN_TEXT_CHARS;
-
-    if (!text) {
-      notes.push('OCR produced no usable text; rely on visible screenshot cues and user message.');
-    }
-
-    if (text.length > 0 && text.length < SCREENSHOT_OCR_MIN_TEXT_CHARS) {
-      notes.push('OCR extracted limited text; classification can be ambiguous.');
-    }
-
-    if (averageConfidence !== null && averageConfidence < SCREENSHOT_OCR_CONFIDENCE_THRESHOLD) {
-      notes.push('OCR confidence is below preferred threshold; verify interpretation carefully.');
-    }
-
-    return {
-      text,
-      averageConfidence,
-      lowConfidence,
-      notes,
-    };
+    return this.trimScreenshotFallbackText(chunks.join('\n\n').trim());
   }
 
-  private countPatternMatches(text: string, patterns: RegExp[]): number {
-    let score = 0;
-    for (const pattern of patterns) {
-      if (pattern.test(text)) {
-        score += 1;
-      }
+  private curlLikelyAcceptsImages(curlCommand: string): boolean {
+    const command = curlCommand.toLowerCase();
+
+    if (
+      command.includes('{{image_base64}}') ||
+      command.includes('{{image_base64s}}') ||
+      command.includes('{{openai_user_content}}') ||
+      command.includes('{{openai_messages}}')
+    ) {
+      return true;
     }
-    return score;
+
+    if (command.includes('image_url') || command.includes('data:image/')) {
+      return true;
+    }
+
+    return false;
   }
 
-  private classifyScreenshotContent(message: string, context: string | undefined, ocrText: string): ScreenshotContentCategory {
-    const corpus = `${message}\n${context || ''}\n${ocrText}`.toLowerCase();
-
-    const codingPatterns = [
-      /\bleetcode\b/,
-      /\bfunction\b/,
-      /\bclass\b/,
-      /\breturn\b/,
-      /\bfor\b|\bwhile\b/,
-      /\binput\b.*\boutput\b/,
-      /\bconstraints?\b/,
-      /\btime complexity\b|\bspace complexity\b|\bo\([^)]*\)/,
-      /\barray\b|\bhash map\b|\bstack\b|\bqueue\b|\btwo pointer\b|\bbinary search\b|\bdynamic programming\b/,
-      /```/,
-    ];
-
-    const systemDesignPatterns = [
-      /\b(system design|design a|design an|architecture)\b/,
-      /\bhigh[- ]level\b/,
-      /\bload balancer\b|\bapi gateway\b/,
-      /\bthroughput\b|\blatency\b|\bqps\b|\brps\b/,
-      /\bscal(e|ing)\b|\bshard\b|\breplica\b|\bpartition\b/,
-      /\bconsistency\b|\bavailability\b|\bdurability\b|\bfailover\b/,
-      /\bcache\b|\bqueue\b|\bkafka\b|\bredis\b|\bcdn\b/,
-      /\bdatabase\b|\bdata model\b|\bstorage\b/,
-    ];
-
-    const technicalConceptPatterns = [
-      /\bwhat is\b|\bexplain\b|\bdifference between\b/,
-      /\btrade[- ]?off\b|\bpros? and cons\b/,
-      /\bhttp\b|\brest\b|\bgraphql\b|\btcp\b|\budp\b/,
-      /\bprocess\b|\bthread\b|\bconcurrency\b|\bsynchronization\b/,
-      /\boop\b|\bsolid\b|\bdependency injection\b|\bgarbage collection\b/,
-      /\bauthentication\b|\bauthorization\b|\bencryption\b/,
-      /\bci\/cd\b|\btesting\b|\bunit test\b|\bintegration test\b/,
-    ];
-
-    const nonTechnicalPatterns = [
-      /\bsalary\b|\bcompensation\b|\boffer\b|\bnotice period\b/,
-      /\bmeeting agenda\b|\bcalendar\b|\btravel\b|\binvoice\b/,
-      /\bmarketing\b|\bsales\b|\bproposal\b|\bcontract\b/,
-      /\bpersonal\b|\bvacation\b|\bexpense\b/,
-    ];
-
-    const codingScore = this.countPatternMatches(corpus, codingPatterns);
-    const systemDesignScore = this.countPatternMatches(corpus, systemDesignPatterns);
-    const technicalConceptScore = this.countPatternMatches(corpus, technicalConceptPatterns);
-    const nonTechnicalScore = this.countPatternMatches(corpus, nonTechnicalPatterns);
-
-    const technicalScores = [codingScore, systemDesignScore, technicalConceptScore];
-    const technicalSignals = technicalScores.filter((score) => score >= 2).length;
-    const maxTechnicalScore = Math.max(...technicalScores);
-
-    if (nonTechnicalScore >= 2 && maxTechnicalScore <= 1) {
-      return 'non_technical';
+  private shouldForceScreenshotTextFallback(imagePaths?: string[]): boolean {
+    if (!imagePaths?.length) {
+      return false;
     }
 
-    if (technicalSignals >= 2) {
-      return 'mixed_content';
+    if (this.activeCurlProvider) {
+      return !this.curlLikelyAcceptsImages(this.activeCurlProvider.curlCommand || '');
     }
 
-    if (maxTechnicalScore <= 1) {
-      if (nonTechnicalScore > 0) {
-        return 'non_technical';
-      }
-      return 'ambiguous';
+    if (this.customProvider) {
+      return !this.curlLikelyAcceptsImages(this.customProvider.curlCommand || '');
     }
 
-    if (codingScore === maxTechnicalScore && codingScore >= systemDesignScore + 1 && codingScore >= technicalConceptScore + 1) {
-      return 'coding_algorithmic';
-    }
-
-    if (systemDesignScore === maxTechnicalScore && systemDesignScore >= codingScore + 1 && systemDesignScore >= technicalConceptScore + 1) {
-      return 'system_design';
-    }
-
-    if (technicalConceptScore === maxTechnicalScore && technicalConceptScore >= codingScore + 1 && technicalConceptScore >= systemDesignScore + 1) {
-      return 'technical_concept';
-    }
-
-    return 'mixed_content';
+    return false;
   }
 
   private async prepareScreenshotEventRouting(input: ScreenshotEventRoutingInput): Promise<ScreenshotEventRoutingResult> {
-    const ocrSummary = await this.buildScreenshotOcrSummary(input.imagePaths, input.signal);
-    const classification = this.classifyScreenshotContent(input.message, input.context, ocrSummary.text);
+    const fallbackText = input.forceTextFallback
+      ? await this.extractImageTextWithTesseract(input.imagePaths, input.signal)
+      : '';
 
-    const confidenceLabel = ocrSummary.averageConfidence === null
-      ? 'unavailable'
-      : `${ocrSummary.averageConfidence.toFixed(1)}%`;
-    const ocrTextBlock = ocrSummary.text || '[OCR produced no text. Use image context and question.]';
-    const qualityNotes = ocrSummary.notes.length
-      ? ocrSummary.notes.map((note) => `- ${note}`).join('\n')
-      : '- No OCR diagnostics available';
-
-    const userMessage = input.structuredRequest
+    const fallbackSuffix = input.forceTextFallback
       ? [
-        input.message || '[empty message]',
         '',
-        'SCREENSHOT_OCR_CONTEXT:',
-        'OCR_EXTRACTED_TEXT:',
-        ocrTextBlock,
-        '',
-        'OCR_EXTRACTION_QUALITY_NOTES:',
-        `- Average confidence: ${confidenceLabel}`,
-        `- Below-threshold confidence: ${ocrSummary.lowConfidence ? 'yes' : 'no'}`,
-        qualityNotes,
-        '',
-        `PRELIMINARY_CLASSIFICATION_HINT: ${classification}`,
-        '',
-        'Use the OCR context as supporting evidence only.',
-        'Preserve the original response format contract exactly.',
+        'SCREENSHOT_TEXT_FALLBACK:',
+        fallbackText || '[unable to extract text from images]',
       ].join('\n')
-      : [
-        'SCREENSHOT_EVENT_REQUEST',
-        '',
-        'ORIGINAL_USER_MESSAGE:',
-        input.message || '[empty message]',
-        '',
-        'OCR_EXTRACTED_TEXT:',
-        ocrTextBlock,
-        '',
-        'OCR_EXTRACTION_QUALITY_NOTES:',
-        `- Average confidence: ${confidenceLabel}`,
-        `- Below-threshold confidence: ${ocrSummary.lowConfidence ? 'yes' : 'no'}`,
-        qualityNotes,
-        '',
-        `PRELIMINARY_CLASSIFICATION_HINT: ${classification}`,
-        '',
-        'Follow the screenshot-event system policy strictly and keep the response interview-ready.',
-      ].join('\n');
+      : '';
 
     return {
-      userMessage,
+      userMessage: `${input.message}${fallbackSuffix}`,
       context: input.context,
       systemPrompt: SCREENSHOT_EVENT_PROMPT,
+      imagePaths: input.forceTextFallback ? [] : input.imagePaths,
     };
   }
 
@@ -1597,16 +1427,18 @@ ANSWER DIRECTLY:`;
       const hasScreenshotInput = !!(imagePaths?.length);
       const structuredScreenshotRequest = this.isStructuredOutputRequest(effectiveMessage);
       let screenshotRouting: ScreenshotEventRoutingResult | null = null;
+      const forceTextFallback = this.shouldForceScreenshotTextFallback(imagePaths);
 
       if (hasScreenshotInput && imagePaths) {
         screenshotRouting = await this.prepareScreenshotEventRouting({
           message: effectiveMessage,
           context,
           imagePaths,
-          structuredRequest: structuredScreenshotRequest,
+          forceTextFallback,
         });
         effectiveMessage = screenshotRouting.userMessage;
         context = screenshotRouting.context;
+        imagePaths = screenshotRouting.imagePaths;
       }
 
       // ============================================================
@@ -1644,11 +1476,9 @@ ANSWER DIRECTLY:`;
       }
 
       const isMultimodal = !!(imagePaths?.length);
-      const enforceSystemPrompt = !!screenshotRouting && !structuredScreenshotRequest;
+      const enforceSystemPrompt = !!screenshotRouting;
       const skipPromptForRequest = enforceSystemPrompt ? false : skipSystemPrompt;
-      const screenshotSystemPrompt = screenshotRouting && !structuredScreenshotRequest
-        ? screenshotRouting.systemPrompt
-        : undefined;
+      const screenshotSystemPrompt = screenshotRouting?.systemPrompt;
       const buildSystemPrompt = (basePrompt: string) => screenshotRouting
         ? basePrompt
         : this.injectLanguageInstruction(basePrompt);
@@ -3138,6 +2968,7 @@ ANSWER DIRECTLY:`;
     const hasScreenshotInput = !!(imagePaths?.length);
     const structuredScreenshotRequest = this.isStructuredOutputRequest(effectiveMessage);
     let screenshotRouting: ScreenshotEventRoutingResult | null = null;
+    const forceTextFallback = this.shouldForceScreenshotTextFallback(imagePaths);
 
     if (hasScreenshotInput && imagePaths) {
       screenshotRouting = await this.prepareScreenshotEventRouting({
@@ -3145,13 +2976,12 @@ ANSWER DIRECTLY:`;
         context,
         imagePaths,
         signal: options?.abortSignal,
-        structuredRequest: structuredScreenshotRequest,
+        forceTextFallback,
       });
       effectiveMessage = screenshotRouting.userMessage;
       context = screenshotRouting.context;
-      if (!structuredScreenshotRequest) {
-        systemPromptOverride = screenshotRouting.systemPrompt;
-      }
+      imagePaths = screenshotRouting.imagePaths;
+      systemPromptOverride = screenshotRouting.systemPrompt;
     }
 
     // ============================================================

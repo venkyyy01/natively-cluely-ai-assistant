@@ -247,10 +247,10 @@ export const SCREENSHOT_EVENT_PROMPT = `
 You are handling a screenshot-driven interview assistance request.
 
 MANDATORY FLOW (DO NOT SKIP):
-Step 1: OCR-first grounding
-- Treat the provided OCR block as the primary extracted text from the screenshot.
-- Use extraction quality notes to judge confidence.
-- If OCR is partial or low-confidence, still use visible image cues.
+Step 1: Use screenshot image content as primary signal
+- Treat the actual screenshot image(s) as the source of truth when images are available.
+- If a SCREENSHOT_TEXT_FALLBACK block is present, treat it as fallback OCR text only.
+- Never assume OCR text is complete; cross-check with visible image cues whenever possible.
 
 Step 2: Classify the content into exactly one category:
 - coding_algorithmic
