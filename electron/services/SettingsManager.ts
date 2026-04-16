@@ -9,7 +9,6 @@ export interface AppSettings {
 isUndetectable?: boolean;
 disguiseMode?: 'terminal' | 'settings' | 'activity' | 'none';
 consciousModeEnabled?: boolean;
-hoverOnlyModeEnabled?: boolean;
 accelerationModeEnabled?: boolean;
 enablePrivateMacosStealthApi?: boolean;
 enableCaptureDetectionWatchdog?: boolean;
@@ -33,10 +32,6 @@ function sanitizeSettings(candidate: unknown): AppSettings {
 
 if (typeof raw.consciousModeEnabled === 'boolean') {
 sanitized.consciousModeEnabled = raw.consciousModeEnabled;
-}
-
-if (typeof raw.hoverOnlyModeEnabled === 'boolean') {
-sanitized.hoverOnlyModeEnabled = raw.hoverOnlyModeEnabled;
 }
 
 if (typeof raw.accelerationModeEnabled === 'boolean') {

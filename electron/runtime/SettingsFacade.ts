@@ -5,8 +5,6 @@ setConsciousModeEnabled: (enabled: boolean) => boolean;
 getConsciousModeEnabled: () => boolean;
 setAccelerationModeEnabled: (enabled: boolean) => boolean;
 getAccelerationModeEnabled: () => boolean;
-setHoverOnlyModeEnabled: (enabled: boolean) => boolean;
-getHoverOnlyModeEnabled: () => boolean;
 setDisguise: (mode: DisguiseMode) => void;
 getDisguise: () => string;
 getUndetectable: () => boolean;
@@ -26,20 +24,12 @@ export class SettingsFacade {
     return this.deps.getConsciousModeEnabled();
   }
 
-  setAccelerationModeEnabled(enabled: boolean): boolean {
-    return this.deps.setAccelerationModeEnabled(enabled);
-  }
+setAccelerationModeEnabled(enabled: boolean): boolean {
+return this.deps.setAccelerationModeEnabled(enabled);
+}
 
 getAccelerationModeEnabled(): boolean {
 return this.deps.getAccelerationModeEnabled();
-}
-
-setHoverOnlyModeEnabled(enabled: boolean): boolean {
-return this.deps.setHoverOnlyModeEnabled(enabled);
-}
-
-getHoverOnlyModeEnabled(): boolean {
-return this.deps.getHoverOnlyModeEnabled();
 }
 
 setDisguise(mode: DisguiseMode): void {

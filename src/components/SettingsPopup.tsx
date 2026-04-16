@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useLayoutEffect, useRef } from 'react';
-import { Brain, MessageSquare, Camera, Zap, User, Eye } from 'lucide-react';
+import { Brain, MessageSquare, Camera, Zap, User } from 'lucide-react';
 import { useShortcuts } from '../hooks/useShortcuts';
 import { analytics } from '../lib/analytics/analytics.service';
 import { SESSION_MENU_TOGGLE_ORDER } from '../lib/consciousModeSettings';
@@ -12,7 +12,6 @@ const [fastResponseConfig, setFastResponseConfig] = useState<FastResponseConfig>
 const [profileMode, setProfileMode] = useState(false);
 const [hasProfile, setHasProfile] = useState(false);
 const [consciousModeEnabled, setConsciousModeEnabled] = useState(false);
-const [hoverOnlyModeEnabled, setHoverOnlyModeEnabled] = useState(false);
 const isPremium = true; // All features unlocked
 
     const [hasStoredKey, setHasStoredKey] = useState<Record<string, boolean>>({});
@@ -129,34 +128,6 @@ const isPremium = true; // All features unlocked
                 unsubscribe();
             };
         }
-
-return () => {
-cancelled = true;
-};
-}, []);
-
-useEffect(() => {
-let cancelled = false;
-
-if (window.electronAPI?.getHoverOnlyMode) {
-window.electronAPI.getHoverOnlyMode().then((result) => {
-if (!cancelled && result.success) {
-setHoverOnlyModeEnabled(result.data.enabled);
-}
-}).catch((error) => {
-console.warn('[SettingsPopup] Failed to load Hover Only Mode:', error);
-});
-}
-
-if (window.electronAPI?.onHoverOnlyModeChanged) {
-const unsubscribe = window.electronAPI.onHoverOnlyModeChanged((enabled: boolean) => {
-setHoverOnlyModeEnabled(enabled);
-});
-return () => {
-cancelled = true;
-unsubscribe();
-};
-}
 
 return () => {
 cancelled = true;
@@ -316,40 +287,8 @@ const [showTranscript, setShowTranscript] = useState(() => {
 </button>
 </div>
 
-{/* Hover Only Mode Toggle */}
-<div className="flex items-center justify-between px-3 py-2 hover:bg-white/5 rounded-lg transition-colors duration-200 group cursor-default">
-<div className="flex items-center gap-3">
-<Eye
-className={`w-3.5 h-3.5 transition-colors ${hoverOnlyModeEnabled ? 'text-cyan-400' : 'text-slate-500 group-hover:text-slate-300'}`}
-fill={hoverOnlyModeEnabled ? 'currentColor' : 'none'}
-/>
-<span className={`text-[12px] font-medium transition-colors ${hoverOnlyModeEnabled ? 'text-white' : 'text-slate-400 group-hover:text-slate-200'}`}>{SESSION_MENU_TOGGLE_ORDER[3]}</span>
-</div>
-<button
-onClick={async () => {
-const nextState = !hoverOnlyModeEnabled;
-setHoverOnlyModeEnabled(nextState);
-
-try {
-const result = await window.electronAPI?.setHoverOnlyMode(nextState);
-if (!result?.success) {
-throw new Error(result?.error?.message || 'Unable to persist Hover Only Mode');
-}
-
-setHoverOnlyModeEnabled(result.data.enabled);
-} catch (error) {
-console.error('[SettingsPopup] Failed to toggle Hover Only Mode:', error);
-setHoverOnlyModeEnabled(!nextState);
-}
-}}
-className={`w-[30px] h-[18px] rounded-full p-[1.5px] transition-all duration-300 ease-spring active:scale-[0.92] ${hoverOnlyModeEnabled ? 'bg-cyan-500 shadow-[0_2px_10px_rgba(6,182,212,0.35)]' : 'bg-white/10'}`}
->
-<div className={`w-[15px] h-[15px] rounded-full bg-black shadow-sm transition-transform duration-300 ease-spring ${hoverOnlyModeEnabled ? 'translate-x-[12px]' : 'translate-x-0'}`} />
-</button>
-</div>
-
 {/* Profile Mode Toggle */}
-                {hasProfile && (
+{hasProfile && (
                     <div className={`flex items-center justify-between px-3 py-2 rounded-lg transition-colors duration-200 group hover:bg-white/5 cursor-default`}>
                         <div className="flex items-center gap-3">
                             <User

@@ -23,14 +23,6 @@ getAccelerationModeEnabled: () => {
 calls.push('getAcceleration');
 return true;
 },
-setHoverOnlyModeEnabled: (enabled: boolean) => {
-calls.push(`setHoverOnly:${enabled}`);
-return true;
-},
-getHoverOnlyModeEnabled: () => {
-calls.push('getHoverOnly');
-return false;
-},
 setDisguise: (mode: 'terminal' | 'settings' | 'activity' | 'none') => {
       calls.push(`setDisguise:${mode}`);
     },
@@ -59,8 +51,6 @@ assert.equal(facade.setConsciousModeEnabled(true), true);
 assert.equal(facade.getConsciousModeEnabled(), false);
 assert.equal(facade.setAccelerationModeEnabled(false), true);
 assert.equal(facade.getAccelerationModeEnabled(), true);
-assert.equal(facade.setHoverOnlyModeEnabled(true), true);
-assert.equal(facade.getHoverOnlyModeEnabled(), false);
 facade.setDisguise('terminal');
   assert.equal(facade.getDisguise(), 'activity');
   assert.equal(facade.getUndetectable(), true);
@@ -73,8 +63,6 @@ assert.deepEqual(calls, [
 'getConscious',
 'setAcceleration:false',
 'getAcceleration',
-'setHoverOnly:true',
-'getHoverOnly',
 'setDisguise:terminal',
 'getDisguise',
 'getUndetectable',

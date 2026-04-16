@@ -20,8 +20,6 @@ setConsciousModeEnabled?: (enabled: boolean) => boolean;
 getConsciousModeEnabled?: () => boolean;
 setAccelerationModeEnabled?: (enabled: boolean) => boolean;
 getAccelerationModeEnabled?: () => boolean;
-setHoverOnlyModeEnabled?: (enabled: boolean) => boolean;
-getHoverOnlyModeEnabled?: () => boolean;
 setDisguise?: (mode: 'terminal' | 'settings' | 'activity' | 'none') => void;
 getDisguise?: () => string;
 getUndetectable?: () => boolean;
@@ -238,36 +236,6 @@ return settingsSuccess({ enabled });
 } catch (error: any) {
 console.error('Error getting Acceleration Mode state:', error);
 return settingsError('SETTINGS_READ_FAILED', error?.message || 'Unable to read Acceleration Mode');
-}
-});
-
-safeHandleValidated('set-hover-only-mode', (args) => [parseIpcInput(ipcSchemas.booleanFlag, args[0], 'set-hover-only-mode')] as const, async (_event, enabled) => {
-try {
-const settingsFacade = getSettingsFacade(appState);
-const result = settingsFacade?.setHoverOnlyModeEnabled
-? settingsFacade.setHoverOnlyModeEnabled(enabled)
-: appState.setHoverOnlyModeEnabled(enabled);
-if (result === false) {
-return settingsError('SETTINGS_PERSIST_FAILED', 'Unable to persist Hover Only Mode');
-}
-
-return settingsSuccess({ enabled });
-} catch (error: any) {
-console.error('Error setting Hover Only Mode state:', error);
-return settingsError('SETTINGS_PERSIST_FAILED', error?.message || 'Unable to persist Hover Only Mode');
-}
-});
-
-safeHandle('get-hover-only-mode', async () => {
-try {
-const settingsFacade = getSettingsFacade(appState);
-const enabled = settingsFacade?.getHoverOnlyModeEnabled
-? settingsFacade.getHoverOnlyModeEnabled()
-: appState.getHoverOnlyModeEnabled();
-return settingsSuccess({ enabled });
-} catch (error: any) {
-console.error('Error getting Hover Only Mode state:', error);
-return settingsError('SETTINGS_READ_FAILED', error?.message || 'Unable to read Hover Only Mode');
 }
 });
 
