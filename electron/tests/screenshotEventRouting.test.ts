@@ -255,3 +255,59 @@ test('streamChat keeps images when cURL template includes image placeholders', a
     helper.scrubKeys();
   }
 });
+
+test('streamChat preserves structured system prompt overrides for screenshot reasoning requests', async () => {
+  const LLMHelper = await loadLLMHelper();
+  const helper = new LLMHelper() as any;
+  const originalExecuteCustomProvider = helper.executeCustomProvider;
+
+  helper.setModel('curl-provider', [{
+    id: 'curl-provider',
+    name: 'cURL',
+    curlCommand: 'curl https://example.com -d "{\"prompt\":\"{{TEXT}}\"}"',
+    responsePath: 'choices[0].message.content',
+  }]);
+
+  helper.extractImageTextWithTesseract = async () => 'Structured screenshot fallback text';
+
+  let captured: {
+    systemPrompt: string;
+    rawUserMessage: string;
+  } | null = null;
+
+  helper.executeCustomProvider = async (
+    _curlCommand: string,
+    _combinedMessage: string,
+    systemPrompt: string,
+    rawUserMessage: string,
+  ) => {
+    captured = {
+      systemPrompt,
+      rawUserMessage,
+    };
+    return 'structured-ok';
+  };
+
+  try {
+    const structuredPromptOverride = 'STRUCTURED_REASONING_RESPONSE\nPROMPT_MARKER_KEEP_OVERRIDE';
+    let output = '';
+    for await (const chunk of helper.streamChat(
+      'Please reason from the screenshot before coding',
+      ['/tmp/screenshot.png'],
+      'ctx',
+      structuredPromptOverride,
+      { qualityTier: 'structured_reasoning' },
+    )) {
+      output += chunk;
+    }
+
+    assert.equal(output, 'structured-ok');
+    assert.match(captured?.systemPrompt || '', /PROMPT_MARKER_KEEP_OVERRIDE/);
+    assert.doesNotMatch(captured?.systemPrompt || '', /Mode: CODING_INTERVIEW_PROBLEM/);
+    assert.match(captured?.rawUserMessage || '', /SCREENSHOT_TEXT_FALLBACK:/);
+    assert.match(captured?.rawUserMessage || '', /Structured screenshot fallback text/);
+  } finally {
+    helper.executeCustomProvider = originalExecuteCustomProvider;
+    helper.scrubKeys();
+  }
+});

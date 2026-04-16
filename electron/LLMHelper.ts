@@ -1450,6 +1450,7 @@ ANSWER DIRECTLY:`;
       const hasScreenshotInput = !!(imagePaths?.length);
       let effectiveMessage = hasScreenshotInput ? message : this.applyDefaultBrevityHint(message)
       const structuredScreenshotRequest = this.isStructuredOutputRequest(effectiveMessage);
+      const preserveSystemPromptForStructuredOutput = structuredScreenshotRequest;
       let screenshotRouting: ScreenshotEventRoutingResult | null = null;
       const forceTextFallback = this.shouldForceScreenshotTextFallback(imagePaths);
 
@@ -1500,10 +1501,12 @@ ANSWER DIRECTLY:`;
       }
 
       const isMultimodal = !!(imagePaths?.length);
-      const enforceSystemPrompt = !!screenshotRouting;
+      const screenshotSystemPrompt = preserveSystemPromptForStructuredOutput
+        ? undefined
+        : screenshotRouting?.systemPrompt;
+      const enforceSystemPrompt = !!screenshotSystemPrompt;
       const skipPromptForRequest = enforceSystemPrompt ? false : skipSystemPrompt;
-      const screenshotSystemPrompt = screenshotRouting?.systemPrompt;
-      const buildSystemPrompt = (basePrompt: string) => screenshotRouting
+      const buildSystemPrompt = (basePrompt: string) => screenshotSystemPrompt
         ? basePrompt
         : this.injectLanguageInstruction(basePrompt);
 
@@ -3000,6 +3003,7 @@ ANSWER DIRECTLY:`;
     const hasScreenshotInput = !!(imagePaths?.length);
     let effectiveMessage = hasScreenshotInput ? message : this.applyDefaultBrevityHint(message);
     const structuredScreenshotRequest = this.isStructuredOutputRequest(effectiveMessage);
+    const preserveSystemPromptForStructuredOutput = structuredScreenshotRequest || options?.qualityTier === 'structured_reasoning';
     let screenshotRouting: ScreenshotEventRoutingResult | null = null;
     const forceTextFallback = this.shouldForceScreenshotTextFallback(imagePaths);
 
@@ -3014,7 +3018,9 @@ ANSWER DIRECTLY:`;
       effectiveMessage = screenshotRouting.userMessage;
       context = screenshotRouting.context;
       imagePaths = screenshotRouting.imagePaths;
-      systemPromptOverride = screenshotRouting.systemPrompt;
+      if (!preserveSystemPromptForStructuredOutput) {
+        systemPromptOverride = screenshotRouting.systemPrompt;
+      }
     }
 
     // ============================================================
