@@ -304,7 +304,56 @@ The following claims from the external agent were evaluated and **rejected** or 
 
 ---
 
-## VIII. Definition of Done
+## VIII. Acceleration Hardening: Priority Implementation Plan
+
+This section details four architectural "game changers" required to fundamentally alter the performance ceiling of the acceleration subsystem. They are structured as actionable implementation targets for coding agents.
+
+### A1. True Streaming Speculation & Pipelined Context
+
+**A1: Predictive pipeline waits for full LLM generation and delays context assembly**
+- **Trigger**: PauseDetector fires `speculate` event
+- **Code Path**: `ConsciousAccelerationOrchestrator.maybeStartSpeculativeAnswer()` → `speculativeExecutor()`
+- **Failure Mode**: `getSpeculativeAnswer` waits with a `180ms` timeout on a 2000ms background task. Context assembly currently runs sequentially, physically blocking the overall Time To First Token (TTFT) and driving perceived latency up to ~3-4s.
+- **Fix Plan**: 
+  1. Refactor `SpeculativeExecutor` signature to return an `AsyncIterableIterator<string>` (stream) rather than a buffered complete string.
+  2. Implement context pipelining: Yield the first chunks of the speculative answer immediately (first 2-3 sentences), bypassing the wait for trailing contextual facts (BM25, DB lookup).
+  3. Ensure `runFastStandardAnswer()` connects to this partial stream so rendering begins immediately, dropping perceived latency to ~400ms.
+
+### A2. Multi-Candidate "Top-K" Hedging
+
+**A2: Speculative orchestration bets compute on a single brittle candidate**
+- **Trigger**: STT provides a partial, unfinalized transcript
+- **Code Path**: `ConsciousAccelerationOrchestrator.deriveSpeculativeCandidate()`
+- **Failure Mode**: The system generates exactly one hypothesis. If the user alters their thought mid-sentence or the finalized STT shifts by a word, the 2 seconds of background compute are entirely wasted, forcing a cold start.
+- **Fix Plan**:
+  1. Modify `deriveSpeculativeCandidate()` to produce an array of up to 3 candidates (e.g., current raw STT + top predicted follow-up from conversation graph).
+  2. Dispatch all candidates synchronously to the `RuntimeBudgetScheduler`'s background lane.
+  3. When STT finalizes at `getSpeculativeAnswer()`, execute an embedding cosine similarity check against candidate prompts to select the closest match and discard the rest.
+
+### A3. Fix Broken Semantic Lookups
+
+**A3: `PredictivePrefetcher` uses `Math.sin()` hashing instead of actual embeddings**
+- **Trigger**: Semantic lookup in `EnhancedCache.get()` or prediction generation
+- **Code Path**: `PredictivePrefetcher.quickEmbed()`
+- **Failure Mode**: `quickEmbed` statically generates 384-dimensional arrays using deterministic `Math.sin(hash)` math. Cosine similarity checks fundamentally collapse into literal string-match collisions. The semantic cache is functionally crippled.
+- **Fix Plan**:
+  1. Deprecate and wipe `PredictivePrefetcher.quickEmbed()`.
+  2. Wire genuine semantic vectors from the active Inference Pipeline into `PredictivePrefetcher.startPrefetching()`.
+  3. Confirm `EnhancedCache.get()` applies valid vector math allowing queries like "What about scale?" to match the cached query "How does it scale?".
+
+### A4. Synchronous BM25 Caching & Context Deduplication
+
+**A4: Synchronous BM25 indexing blocks event loop and duplicates context tokens**
+- **Trigger**: `startPrefetching()` or `buildPack()` runs
+- **Code Path**: `PredictivePrefetcher.assembleContext()` and `ConsciousRetrievalOrchestrator.buildPack()`
+- **Failure Mode**: O(N) recalculations of BM25 text indices block the JS event loop, injecting execution jitter across the orchestration layer. In addition, `liveRag`, `evidence`, and `longMemory` blocks frequently embed heavily duplicated transcript chunks, wasting LLM budget and polluting context.
+- **Fix Plan**:
+  1. Refactor `computeBM25` usage to maintain a rolling index that only invalidates/updates when `transcriptRevision` explicitly increments.
+  2. In `ConsciousRetrievalOrchestrator.buildPack()`, introduce a segment-hash deduplication filter: if a transcript segment is already present in `stateBlock` or `evidenceBlock`, aggressively strip it out from the trailing `liveRagBlock`.
+
+---
+
+## IX. Definition of Done
 
 - [ ] Every change has a route-level regression test + at least one adversarial case
 - [ ] No silent fallback/drop path remains without explicit reason emission
