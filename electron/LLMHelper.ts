@@ -1544,7 +1544,8 @@ ANSWER DIRECTLY:`;
         ? undefined
         : await this.withSystemPromptCache('claude', CLAUDE_MODEL, claudeBasePrompt, () => buildSystemPrompt(claudeBasePrompt));
 
-      const fastResponseTarget = !isMultimodal ? this.getActiveFastResponseTarget() : null;
+      const canUseFastResponse = !isMultimodal && !this.activeCurlProvider && !this.customProvider && !this.useOllama;
+      const fastResponseTarget = canUseFastResponse ? this.getActiveFastResponseTarget() : null;
       if (fastResponseTarget) {
         console.log(`[LLMHelper] ⚡️ Fast Response Mode Active. Routing to ${fastResponseTarget.provider} (${fastResponseTarget.model})...`);
         try {
@@ -3082,7 +3083,8 @@ ANSWER DIRECTLY:`;
       : effectiveMessage;
 
     const qualityTier: StreamQualityTier = options?.qualityTier ?? 'standard';
-    const fastResponseTarget = !isMultimodal ? this.getActiveFastResponseTarget(qualityTier) : null;
+    const canUseFastResponse = !isMultimodal && !this.activeCurlProvider && !this.customProvider && !this.useOllama;
+    const fastResponseTarget = canUseFastResponse ? this.getActiveFastResponseTarget(qualityTier) : null;
     if (fastResponseTarget) {
       console.log(`[LLMHelper] ⚡️ Fast Response Mode Active (Streaming). Routing to ${fastResponseTarget.provider} (${fastResponseTarget.model})...`);
       try {
