@@ -600,6 +600,24 @@ test('root theme handlers prefer SettingsFacade when available', async () => {
   harness.restore();
 });
 
+test('root IPC handlers validate high-risk LLM and STT payloads before dispatch', async () => {
+  const harness = installIpcHandlersTestHarness();
+
+  await initializeHandlers(harness);
+
+  await assert.rejects(async () => harness.handlers.get('switch-to-ollama')?.({}, { model: 'llama3' }), /Invalid IPC payload/);
+  await assert.rejects(async () => harness.handlers.get('switch-to-gemini')?.({}, { apiKey: 'key-123' }), /Invalid IPC payload/);
+  await assert.rejects(async () => harness.handlers.get('test-llm-connection')?.({}, 'not-a-provider', 'key-123'), /Invalid IPC payload/);
+  await assert.rejects(async () => harness.handlers.get('set-gemini-api-key')?.({}, { apiKey: 'key-123' }), /Invalid IPC payload/);
+  await assert.rejects(async () => harness.handlers.get('set-openai-api-key')?.({}, 'x'.repeat(5000)), /Invalid IPC payload/);
+  await assert.rejects(async () => harness.handlers.get('set-openai-stt-api-key')?.({}, { apiKey: 'key-123' }), /Invalid IPC payload/);
+  await assert.rejects(async () => harness.handlers.get('set-deepgram-api-key')?.({}, { apiKey: 'key-123' }), /Invalid IPC payload/);
+  await assert.rejects(async () => harness.handlers.get('set-elevenlabs-api-key')?.({}, { apiKey: 'key-123' }), /Invalid IPC payload/);
+  await assert.rejects(async () => harness.handlers.get('set-soniox-api-key')?.({}, { apiKey: 'key-123' }), /Invalid IPC payload/);
+
+  harness.restore();
+});
+
 test('root model selector handlers prefer WindowFacade when available', async () => {
   const harness = installIpcHandlersTestHarness();
   const calls: string[] = [];

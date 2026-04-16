@@ -410,6 +410,26 @@ export class IntelligenceEngine extends EventEmitter {
         return createHash('sha256').update(JSON.stringify(normalizedContext)).digest('hex');
     }
 
+    private buildContextItemIds(contextItems?: ContextItem[]): string[] | undefined {
+        if (!contextItems || contextItems.length === 0) {
+            return undefined;
+        }
+
+        return contextItems.map((item, index) => `${item.role}:${item.timestamp}:${index}`);
+    }
+
+    private annotateLatencyQualityMetadata(
+        requestId: string,
+        metadata: SuggestedAnswerMetadata,
+        contextItems?: ContextItem[],
+    ): void {
+        this.latencyTracker.annotate(requestId, {
+            contextItemIds: this.buildContextItemIds(contextItems),
+            verifierOutcome: metadata.verifier,
+            stealthContainmentActive: metadata.stealthContainmentActive,
+        });
+    }
+
     private buildCooldownKey(question: string | undefined): string {
         const normalizedQuestion = (question || 'inferred')
             .trim()
@@ -901,6 +921,7 @@ const capability = typeof (this.llmHelper as any).getProviderCapabilityClass ===
                         cooldownReason: metadataCooldownReason,
                         contextItems,
                     });
+                    this.annotateLatencyQualityMetadata(requestId, metadata, contextItems);
                     this.emit('suggested_answer', speculativeAnswer, question || 'What to Answer', confidence, metadata);
                     const latencySnapshot = this.latencyTracker.complete(requestId);
                     console.log('[IntelligenceEngine] Answer latency snapshot:', latencySnapshot);
@@ -940,6 +961,7 @@ const capability = typeof (this.llmHelper as any).getProviderCapabilityClass ===
                         cooldownReason: metadataCooldownReason,
                         contextItems,
                     });
+                    this.annotateLatencyQualityMetadata(requestId, metadata, contextItems);
                     this.emit('suggested_answer', cachedAnswer, question || 'What to Answer', confidence, metadata);
                     this.latencyTracker.complete(requestId);
                     this.setMode('idle');
@@ -1029,6 +1051,7 @@ const capability = typeof (this.llmHelper as any).getProviderCapabilityClass ===
                     cooldownReason: metadataCooldownReason,
                     contextItems,
                 });
+                this.annotateLatencyQualityMetadata(requestId, metadata, contextItems);
                 this.emit('suggested_answer', fullAnswer, question || 'What to Answer', confidence, metadata);
                 const latencySnapshot = this.latencyTracker.complete(requestId);
                 console.log('[IntelligenceEngine] Answer latency snapshot:', latencySnapshot);
@@ -1137,6 +1160,7 @@ const capability = typeof (this.llmHelper as any).getProviderCapabilityClass ===
                         cooldownReason: metadataCooldownReason,
                         contextItems,
                     });
+                    this.annotateLatencyQualityMetadata(requestId, metadata, contextItems);
                     return consciousResponseCoordinator.completeStructuredAnswer({
                         requestId,
                         questionLabel: question || 'What to Answer',
@@ -1233,6 +1257,7 @@ const capability = typeof (this.llmHelper as any).getProviderCapabilityClass ===
                         cooldownReason: metadataCooldownReason,
                         contextItems: preparationResult.contextItems,
                     });
+                    this.annotateLatencyQualityMetadata(requestId, metadata, preparationResult.contextItems);
                     return consciousResponseCoordinator.completeStructuredAnswer({
                         requestId,
                         questionLabel: question || 'What to Answer',
@@ -1298,6 +1323,7 @@ const capability = typeof (this.llmHelper as any).getProviderCapabilityClass ===
                     cooldownReason: metadataCooldownReason,
                     contextItems: preparationResult.contextItems,
                 });
+                this.annotateLatencyQualityMetadata(requestId, metadata, preparationResult.contextItems);
                 this.emit('suggested_answer', cachedAnswer, question || 'What to Answer', confidence, metadata);
                 if (isProfileEnrichmentRoute && !profileEnrichmentFailed) {
                     this.latencyTracker.markProfileEnrichmentState(requestId, 'completed');
@@ -1394,6 +1420,7 @@ const capability = typeof (this.llmHelper as any).getProviderCapabilityClass ===
                 cooldownReason: metadataCooldownReason,
                 contextItems: preparationResult.contextItems,
             });
+            this.annotateLatencyQualityMetadata(requestId, metadata, preparationResult.contextItems);
             this.emit('suggested_answer', fullAnswer, question || 'What to Answer', confidence, metadata);
             if (isProfileEnrichmentRoute) {
                 if (!profileEnrichmentFailed) {

@@ -135,6 +135,9 @@ test('AnswerLatencyTracker records extended SLO metadata on snapshots', () => {
       profileEnrichmentState?: 'attempted' | 'completed' | 'failed' | 'timed_out';
       consciousPath?: 'fresh_start' | 'thread_continue';
       firstVisibleAnswer?: number;
+      contextItemIds?: string[];
+      verifierOutcome?: { deterministic: 'pass' | 'fail' | 'skipped'; provenance: 'pass' | 'fail' | 'skipped' };
+      stealthContainmentActive?: boolean;
     }): void;
   };
   const snapshotWithMetadata = (snapshot: unknown) => snapshot as {
@@ -145,11 +148,14 @@ test('AnswerLatencyTracker records extended SLO metadata on snapshots', () => {
     firstVisibleAnswer?: number;
     transcriptRevision?: number;
     fallbackOccurred?: boolean;
-    profileFallbackReason?: string;
-    interimQuestionSubstitutionOccurred?: boolean;
-    profileEnrichmentState?: 'attempted' | 'completed' | 'failed' | 'timed_out';
-    consciousPath?: 'fresh_start' | 'thread_continue';
-  };
+      profileFallbackReason?: string;
+      interimQuestionSubstitutionOccurred?: boolean;
+      profileEnrichmentState?: 'attempted' | 'completed' | 'failed' | 'timed_out';
+      consciousPath?: 'fresh_start' | 'thread_continue';
+      contextItemIds?: string[];
+      verifierOutcome?: { deterministic: 'pass' | 'fail' | 'skipped'; provenance: 'pass' | 'fail' | 'skipped' };
+      stealthContainmentActive?: boolean;
+    };
 
   const requestId = tracker.start('conscious_answer', 'non_streaming');
   tracker.markFirstStreamingUpdate(requestId);
@@ -161,6 +167,9 @@ test('AnswerLatencyTracker records extended SLO metadata on snapshots', () => {
     profileEnrichmentState: 'timed_out',
     consciousPath: 'thread_continue',
     firstVisibleAnswer: 1234,
+    contextItemIds: ['interviewer:1:0'],
+    verifierOutcome: { deterministic: 'pass', provenance: 'pass' },
+    stealthContainmentActive: false,
   });
 
   const snapshot = snapshotWithMetadata(tracker.complete(requestId));
@@ -177,6 +186,9 @@ test('AnswerLatencyTracker records extended SLO metadata on snapshots', () => {
   assert.equal(snapshot.interimQuestionSubstitutionOccurred, true);
   assert.equal(snapshot.profileEnrichmentState, 'timed_out');
   assert.equal(snapshot.consciousPath, 'thread_continue');
+  assert.deepEqual(snapshot.contextItemIds, ['interviewer:1:0']);
+  assert.deepEqual(snapshot.verifierOutcome, { deterministic: 'pass', provenance: 'pass' });
+  assert.equal(snapshot.stealthContainmentActive, false);
 });
 
 test('AnswerLatencyTracker covers all capability classes and uses firstVisibleAnswer mark for non-streaming visibility', () => {
@@ -253,6 +265,9 @@ test('IntelligenceEngine records conscious route provider start metadata', async
   assert.equal(consciousSnapshot?.capability, 'non_streaming_custom');
   assert.equal(consciousSnapshot?.marks.providerRequestStarted !== undefined, true);
   assert.equal(consciousSnapshot?.marks.firstVisibleAnswer !== undefined, true);
+  assert.equal((consciousSnapshot?.contextItemIds?.length ?? 0) > 0, true);
+  assert.deepEqual(consciousSnapshot?.verifierOutcome, { deterministic: 'pass', provenance: 'pass' });
+  assert.equal(consciousSnapshot?.stealthContainmentActive, false);
   assert.equal(
     (consciousSnapshot?.marks.providerRequestStarted ?? 0) <= (consciousSnapshot?.marks.firstVisibleAnswer ?? 0),
     true,

@@ -71,3 +71,30 @@ test('AnswerHypothesisStore skips promotion for guardrail refusal summaries', ()
   assert.equal(store.getLatestHypothesis(), null);
   assert.equal(store.buildContextBlock(), '');
 });
+
+test('AnswerHypothesisStore decays stale confidence when the interviewer clearly stops continuing the thread', () => {
+  const store = new AnswerHypothesisStore();
+  store.recordStructuredSuggestion('How would you partition a multi-tenant analytics system?', response, 'start');
+  store.noteObservedReaction('What are the tradeoffs?', {
+    kind: 'tradeoff_probe',
+    confidence: 0.95,
+    cues: ['tradeoff_language'],
+    targetFacets: ['tradeoffs'],
+    shouldContinueThread: true,
+  });
+
+  const before = store.getLatestHypothesis();
+  assert.ok((before?.confidence ?? 0) > 0.7);
+
+  store.noteObservedReaction('Let us switch gears and talk about the launch plan.', {
+    kind: 'topic_shift',
+    confidence: 0.94,
+    cues: ['explicit_topic_shift'],
+    targetFacets: [],
+    shouldContinueThread: false,
+  });
+
+  const after = store.getLatestHypothesis();
+  assert.ok((after?.confidence ?? 1) < (before?.confidence ?? 1));
+  assert.equal(after?.reactionKind, 'topic_shift');
+});

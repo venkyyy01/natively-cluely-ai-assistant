@@ -69,10 +69,15 @@ interface NativeStealthBridgeOptions {
   sessionIdFactory?: () => string;
   logger?: Pick<Console, 'warn'>;
   onHelperDisconnect?: (reason: string) => void | Promise<void>;
+  maxRestartAttempts?: number;
+  restartBackoffBaseMs?: number;
+  waitForRestartBackoff?: (delayMs: number) => Promise<void>;
 }
 
 const DEFAULT_WIDTH = 1280;
 const DEFAULT_HEIGHT = 720;
+const DEFAULT_MAX_RESTART_ATTEMPTS = 2;
+const DEFAULT_RESTART_BACKOFF_BASE_MS = 100;
 
 export class NativeStealthBridge {
   private client: NativeStealthBridgeClient | null;
@@ -81,11 +86,14 @@ export class NativeStealthBridge {
   private readonly sessionIdFactory: () => string;
   private readonly logger: Pick<Console, 'warn'>;
   private readonly onHelperDisconnect?: (reason: string) => void | Promise<void>;
+  private readonly maxRestartAttempts: number;
+  private readonly restartBackoffBaseMs: number;
+  private readonly waitForRestartBackoff: (delayMs: number) => Promise<void>;
   private onHelperFault?: (reason: string) => void | Promise<void>;
   private activeSessionId: string | null = null;
   private activeSurfaceId: string | null = null;
   private lastArmRequest: NativeStealthArmRequest | null = null;
-  private restartAttemptedForActiveSession = false;
+  private restartAttemptsForActiveSession = 0;
   private lastDisconnectReason: string | null = null;
 
   constructor(options: NativeStealthBridgeOptions = {}) {
@@ -95,6 +103,17 @@ export class NativeStealthBridge {
     this.sessionIdFactory = options.sessionIdFactory ?? (() => `native-stealth-${randomUUID()}`);
     this.logger = options.logger ?? console;
     this.onHelperDisconnect = options.onHelperDisconnect;
+    this.maxRestartAttempts = options.maxRestartAttempts ?? DEFAULT_MAX_RESTART_ATTEMPTS;
+    this.restartBackoffBaseMs = options.restartBackoffBaseMs ?? DEFAULT_RESTART_BACKOFF_BASE_MS;
+    this.waitForRestartBackoff = options.waitForRestartBackoff ?? (async (delayMs: number) => {
+      if (delayMs <= 0) {
+        return;
+      }
+
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, delayMs);
+      });
+    });
   }
 
   isConnected(): boolean {
@@ -161,7 +180,7 @@ export class NativeStealthBridge {
     this.lastArmRequest = normalizedRequest;
     this.lastDisconnectReason = null;
     if (!request.sessionId) {
-      this.restartAttemptedForActiveSession = false;
+      this.restartAttemptsForActiveSession = 0;
     }
 
     return {
@@ -272,7 +291,7 @@ export class NativeStealthBridge {
     const sessionId = this.activeSessionId;
     this.activeSessionId = null;
     this.activeSurfaceId = null;
-    this.restartAttemptedForActiveSession = false;
+    this.restartAttemptsForActiveSession = 0;
     this.lastDisconnectReason = null;
 
     if (!client || !sessionId) {
@@ -295,7 +314,7 @@ export class NativeStealthBridge {
   dispose(): void {
     this.activeSessionId = null;
     this.activeSurfaceId = null;
-    this.restartAttemptedForActiveSession = false;
+    this.restartAttemptsForActiveSession = 0;
     this.lastDisconnectReason = null;
     this.client?.setEventHandler?.(undefined);
     this.client?.dispose?.();
@@ -380,13 +399,16 @@ export class NativeStealthBridge {
   }
 
   private async tryRestartAfterDisconnect(reason: string): Promise<boolean> {
-    if (this.restartAttemptedForActiveSession || !this.lastArmRequest) {
+    if (this.restartAttemptsForActiveSession >= this.maxRestartAttempts || !this.lastArmRequest) {
       return false;
     }
 
-    this.restartAttemptedForActiveSession = true;
+    this.restartAttemptsForActiveSession += 1;
+    const restartAttempt = this.restartAttemptsForActiveSession;
+    const backoffMs = this.restartBackoffBaseMs * Math.max(1, 2 ** (restartAttempt - 1));
 
     try {
+      await this.waitForRestartBackoff(backoffMs);
       const restarted = await this.arm(this.lastArmRequest);
       return restarted.connected;
     } catch (error) {

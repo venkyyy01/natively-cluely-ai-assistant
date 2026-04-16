@@ -459,6 +459,7 @@ test('StealthSupervisor stays in FULL_STEALTH after a native helper sleep/wake c
   const nativeBridge = new NativeStealthBridge({
     helperPathResolver: () => '/tmp/helper',
     sessionIdFactory: () => 'session-sleep-wake',
+    waitForRestartBackoff: async () => {},
     clientFactory: (): NativeStealthBridgeClient => {
       clientGeneration += 1;
       let healthCalls = 0;
@@ -534,7 +535,7 @@ test('StealthSupervisor stays in FULL_STEALTH after a native helper sleep/wake c
   assert.equal(createCalls, 2);
 });
 
-test('StealthSupervisor fails closed when a display hotplug causes a second native helper disconnect after the one allowed restart', async () => {
+test('StealthSupervisor can recover from a second native helper disconnect while restart budget remains', async () => {
   const calls: boolean[] = [];
   const faultReasons: string[] = [];
   const heartbeatTicks: Array<() => void> = [];
@@ -565,6 +566,7 @@ test('StealthSupervisor fails closed when a display hotplug causes a second nati
   const nativeBridge = new NativeStealthBridge({
     helperPathResolver: () => '/tmp/helper',
     sessionIdFactory: () => 'session-display-hotplug',
+    waitForRestartBackoff: async () => {},
     clientFactory: (): NativeStealthBridgeClient => {
       clientGeneration += 1;
       let healthCalls = 0;
@@ -643,10 +645,134 @@ test('StealthSupervisor fails closed when a display hotplug causes a second nati
   heartbeatTicks[0]?.();
   await new Promise((resolve) => setImmediate(resolve));
 
+  assert.equal(supervisor.getStealthState(), 'FULL_STEALTH');
+  assert.deepEqual(calls, [true]);
+  assert.deepEqual(faultReasons, []);
+  assert.equal(createCalls, 3);
+});
+
+test('StealthSupervisor fails closed once the native helper disconnects after exhausting restart budget', async () => {
+  const calls: boolean[] = [];
+  const faultReasons: string[] = [];
+  const heartbeatTicks: Array<() => void> = [];
+  const bus = createBus();
+  let clientGeneration = 0;
+  let createCalls = 0;
+
+  const healthyEnvelope = (sessionId: string, presenting: boolean): MacosLayer3ResponseEnvelope<MacosLayer3HealthReport> => ({
+    outcome: 'ok' as const,
+    failClosed: false,
+    presentationAllowed: presenting,
+    blockers: [] as MacosLayer3Blocker[],
+    data: {
+      sessionId,
+      state: (presenting ? 'presenting' : 'attached') as MacosLayer3SessionState,
+      surfaceAttached: true,
+      presenting,
+      recoveryPending: false,
+      blockers: [] as MacosLayer3Blocker[],
+      lastTransitionAt: new Date(0).toISOString(),
+    },
+  });
+
+  bus.subscribe('stealth:fault', async (event) => {
+    faultReasons.push(event.reason);
+  });
+
+  const nativeBridge = new NativeStealthBridge({
+    helperPathResolver: () => '/tmp/helper',
+    sessionIdFactory: () => 'session-display-hotplug-exhausted',
+    waitForRestartBackoff: async () => {},
+    clientFactory: (): NativeStealthBridgeClient => {
+      clientGeneration += 1;
+      let healthCalls = 0;
+
+      return {
+        async createProtectedSession(request) {
+          createCalls += 1;
+          return {
+            outcome: 'ok',
+            failClosed: false,
+            presentationAllowed: true,
+            blockers: [] as MacosLayer3Blocker[],
+            data: { sessionId: request.sessionId, state: 'creating' as const },
+          };
+        },
+        async attachSurface(request) {
+          return healthyEnvelope(request.sessionId, false);
+        },
+        async present(request) {
+          return healthyEnvelope(request.sessionId, request.activate);
+        },
+        async getHealth() {
+          healthCalls += 1;
+          if (clientGeneration === 1 && healthCalls === 1) {
+            throw new Error('sleep-wake-disconnect');
+          }
+
+          if (clientGeneration === 2 && healthCalls === 2) {
+            throw new Error('display-hotplug-disconnect');
+          }
+
+          if (clientGeneration === 3 && healthCalls === 2) {
+            throw new Error('third-disconnect');
+          }
+
+          return healthyEnvelope('session-display-hotplug-exhausted', true);
+        },
+        async teardownSession() {
+          return {
+            outcome: 'ok',
+            failClosed: false,
+            presentationAllowed: false,
+            blockers: [] as MacosLayer3Blocker[],
+            data: { released: true },
+          };
+        },
+        dispose() {},
+      };
+    },
+    logger: { warn() {} },
+  });
+
+  const supervisor = new StealthSupervisor(
+    {
+      async setEnabled(enabled: boolean) {
+        calls.push(enabled);
+      },
+      isEnabled: () => calls[calls.length - 1] ?? false,
+      verifyStealthState: () => true,
+    },
+    bus,
+    {
+      nativeBridge,
+      intervalScheduler: (callback) => {
+        heartbeatTicks.push(callback);
+        return { unref() {} };
+      },
+      clearIntervalScheduler: () => {},
+      heartbeatIntervalMs: 1,
+    },
+  );
+
+  await supervisor.start();
+  await supervisor.setEnabled(true);
+
+  heartbeatTicks[0]?.();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(supervisor.getStealthState(), 'FULL_STEALTH');
+
+  heartbeatTicks[0]?.();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(supervisor.getStealthState(), 'FULL_STEALTH');
+
+  heartbeatTicks[0]?.();
+  await new Promise((resolve) => setImmediate(resolve));
+
   assert.equal(supervisor.getStealthState(), 'FAULT');
   assert.deepEqual(calls, [true]);
   assert.deepEqual(faultReasons, ['stealth heartbeat missed']);
-  assert.equal(createCalls, 2);
+  assert.equal(createCalls, 3);
 });
 
 test('StealthSupervisor fails closed after the native helper disconnects and its one restart attempt fails', async () => {
@@ -664,6 +790,7 @@ test('StealthSupervisor fails closed after the native helper disconnects and its
   const nativeBridge = new NativeStealthBridge({
     helperPathResolver: () => '/tmp/helper',
     sessionIdFactory: () => 'session-restart-fail',
+    waitForRestartBackoff: async () => {},
     clientFactory: () => ({
       async createProtectedSession(request) {
         createCalls += 1;

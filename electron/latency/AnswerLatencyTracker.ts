@@ -21,6 +21,12 @@ export interface LatencyMetadata {
   profileEnrichmentState?: ProfileEnrichmentState;
   consciousPath?: ConsciousPath;
   firstVisibleAnswer?: number;
+  contextItemIds?: string[];
+  verifierOutcome?: {
+    deterministic: 'pass' | 'fail' | 'skipped';
+    provenance: 'pass' | 'fail' | 'skipped';
+  };
+  stealthContainmentActive?: boolean;
 }
 
 export interface LatencySnapshot extends LatencyMetadata {

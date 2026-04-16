@@ -88,9 +88,27 @@ function shouldPromoteStructuredSuggestion(response: ConsciousModeStructuredResp
   );
 }
 
+const HYPOTHESIS_RECALIBRATION_THRESHOLD = 0.7;
+const HYPOTHESIS_RECALIBRATION_DECAY = 0.6;
+
 export class AnswerHypothesisStore {
   private latestHypothesis: AnswerHypothesis | null = null;
   private latestReaction: QuestionReaction | null = null;
+
+  private recalibrateConfidenceForThreadBreak(question: string, reaction: QuestionReaction): void {
+    if (!this.latestHypothesis || this.latestHypothesis.confidence <= HYPOTHESIS_RECALIBRATION_THRESHOLD) {
+      return;
+    }
+
+    this.latestHypothesis = {
+      ...this.latestHypothesis,
+      sourceQuestion: question,
+      confidence: Math.max(0.2, this.latestHypothesis.confidence * HYPOTHESIS_RECALIBRATION_DECAY),
+      reactionKind: reaction.kind,
+      targetFacets: mergeUnique([...this.latestHypothesis.targetFacets, ...reaction.targetFacets]),
+      updatedAt: Date.now(),
+    };
+  }
 
   recordStructuredSuggestion(question: string, response: ConsciousModeStructuredResponse, threadAction: 'start' | 'continue' | 'reset'): void {
     const likelyThemes = extractThemes(response);
@@ -126,7 +144,12 @@ export class AnswerHypothesisStore {
 
   noteObservedReaction(question: string, reaction: QuestionReaction): void {
     this.latestReaction = reaction;
-    if (!this.latestHypothesis || !reaction.shouldContinueThread) {
+    if (!this.latestHypothesis) {
+      return;
+    }
+
+    if (!reaction.shouldContinueThread) {
+      this.recalibrateConfidenceForThreadBreak(question, reaction);
       return;
     }
 

@@ -141,15 +141,15 @@ All F1–F10 findings from V1 are **reconfirmed**. Key updates:
 
 8. [x] **N5**: Make SupervisorBus configurable for fail-shut on all events, or at minimum emit a `bus:listener-error` meta-event.
 9. [x] **N6**: Convert audio health check to periodic (60s interval) with counter-based staleness detection.
-10. **N3**: Allow N restart attempts in `NativeStealthBridge.heartbeat` with exponential backoff, or fault immediately on first failure.
+10. [x] **N3**: Allow N restart attempts in `NativeStealthBridge.heartbeat` with exponential backoff, or fault immediately on first failure.
 11. [x] **N9**: Require at least one successful probe before `FallbackExecutor.checkAutoRecovery()` resets degradation level.
-12. **N7**: Audit all IPC channels; ensure every `ipcRenderer.invoke` target validates via `parseIpcInput`.
+12. [x] **N7**: Audit all IPC channels; ensure every `ipcRenderer.invoke` target validates via `parseIpcInput`.
 13. [x] **F4**: Make assistant-history filter configurable, not unconditional.
     Already satisfied by `ParallelContextAssembler` defaulting `includeAssistantTurns: true` and supporting explicit opt-out.
 14. **F6**: Expand provenance technology vocabulary dynamically from profile/evidence context.
-15. **F9**: Add `contextItemIds`, `verifierOutcome`, and `stealthContainmentActive` to `LatencyMetadata`.
-16. **X2**: Add confidence decay to `AnswerHypothesisStore` when `shouldContinueThread` is false or topic shifts occur.
-17. **X4**: Add retry queue + renderer notification for `MeetingPersistence` save failures.
+15. [x] **F9**: Add `contextItemIds`, `verifierOutcome`, and `stealthContainmentActive` to `LatencyMetadata`.
+16. [x] **X2**: Add confidence decay to `AnswerHypothesisStore` when `shouldContinueThread` is false or topic shifts occur.
+17. [x] **X4**: Add retry queue + renderer notification for `MeetingPersistence` save failures.
 18. **X5**: Emit `conscious:phase_changed` and `conscious:thread_action` events on SupervisorBus for state mutation visibility.
 
 ### Priority 2 — Structural (2–4 sprints)
