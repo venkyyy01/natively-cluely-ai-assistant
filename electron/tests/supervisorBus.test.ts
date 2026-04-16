@@ -47,6 +47,37 @@ test('SupervisorBus isolates listener failures', async () => {
   assert.equal(errors.length, 1);
 });
 
+test('SupervisorBus emits a bus:listener-error meta event for non-critical listener failures', async () => {
+  const bus = new SupervisorBus({ error() {} });
+  const metaEvents: Array<{
+    sourceEventType: string;
+    failureCount: number;
+    messages: string[];
+    critical: boolean;
+  }> = [];
+
+  bus.subscribe('bus:listener-error', async (event) => {
+    metaEvents.push({
+      sourceEventType: event.sourceEventType,
+      failureCount: event.failureCount,
+      messages: event.messages,
+      critical: event.critical,
+    });
+  });
+  bus.subscribe('lifecycle:meeting-idle', async () => {
+    throw new Error('boom');
+  });
+
+  await bus.emit({ type: 'lifecycle:meeting-idle' });
+
+  assert.deepEqual(metaEvents, [{
+    sourceEventType: 'lifecycle:meeting-idle',
+    failureCount: 1,
+    messages: ['boom'],
+    critical: false,
+  }]);
+});
+
 test('SupervisorBus rethrows listener failures for critical events after notifying all listeners', async () => {
   const errors: string[] = [];
   const bus = new SupervisorBus({
@@ -65,6 +96,14 @@ test('SupervisorBus rethrows listener failures for critical events after notifyi
   bus.subscribe('stealth:fault', async () => {
     seen.push('after-error');
   });
+  const metaEvents: Array<{ sourceEventType: string; failureCount: number; critical: boolean }> = [];
+  bus.subscribe('bus:listener-error', async (event) => {
+    metaEvents.push({
+      sourceEventType: event.sourceEventType,
+      failureCount: event.failureCount,
+      critical: event.critical,
+    });
+  });
 
   await assert.rejects(
     () => bus.emit({ type: 'stealth:fault', reason: 'capture detected' }),
@@ -73,6 +112,7 @@ test('SupervisorBus rethrows listener failures for critical events after notifyi
 
   assert.deepEqual(seen, ['before-error', 'after-error']);
   assert.equal(errors.length, 1);
+  assert.deepEqual(metaEvents, [{ sourceEventType: 'stealth:fault', failureCount: 1, critical: true }]);
 });
 
 test('SupervisorBus unsubscribe removes the listener', async () => {

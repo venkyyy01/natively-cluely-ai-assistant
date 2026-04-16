@@ -11,7 +11,7 @@ export type SupervisorName =
   | 'stealth'
   | 'recovery';
 
-export type SupervisorEvent =
+export type SupervisorCoreEvent =
   | { type: 'audio:gap-detected'; durationMs: number }
   | { type: 'audio:capture-started' }
   | { type: 'audio:capture-stopped' }
@@ -29,6 +29,15 @@ export type SupervisorEvent =
   | { type: 'lifecycle:meeting-idle' }
   | { type: 'budget:pressure'; lane: string; level: 'warning' | 'critical' };
 
+export type SupervisorEvent = SupervisorCoreEvent
+  | {
+    type: 'bus:listener-error';
+    sourceEventType: SupervisorCoreEvent['type'];
+    failureCount: number;
+    messages: string[];
+    critical: boolean;
+  };
+
 export type SupervisorEventType = SupervisorEvent['type'];
 
 export type SupervisorEventListener<TType extends SupervisorEventType> = (
@@ -43,4 +52,3 @@ export interface ISupervisor {
   stop(): Promise<void>;
   getState(): SupervisorState;
 }
-

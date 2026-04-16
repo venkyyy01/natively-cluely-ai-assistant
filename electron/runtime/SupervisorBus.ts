@@ -62,9 +62,14 @@ export class SupervisorBus {
   }
 
   async emit(event: SupervisorEvent): Promise<void> {
+    await this.emitInternal(event, event.type !== 'bus:listener-error');
+  }
+
+  private async emitInternal(event: SupervisorEvent, emitFailureMetaEvent: boolean): Promise<void> {
     const exactListeners = [...(this.listeners.get(event.type) ?? [])];
     const anyListeners = [...this.anyListeners];
     const errors: unknown[] = [];
+    const isCriticalEvent = CRITICAL_EVENTS.has(event.type);
 
     for (const listener of exactListeners) {
       try {
@@ -84,7 +89,18 @@ export class SupervisorBus {
       }
     }
 
-    if (errors.length > 0 && CRITICAL_EVENTS.has(event.type)) {
+    if (errors.length > 0 && emitFailureMetaEvent) {
+      const sourceEventType = event.type as Exclude<SupervisorEventType, 'bus:listener-error'>;
+      await this.emitInternal({
+        type: 'bus:listener-error',
+        sourceEventType,
+        failureCount: errors.length,
+        messages: errors.map((error) => error instanceof Error ? error.message : String(error)),
+        critical: isCriticalEvent,
+      }, false);
+    }
+
+    if (errors.length > 0 && isCriticalEvent) {
       throw new Error(
         `Critical SupervisorBus event "${event.type}" had listener failures: ${errors
           .map((error) => error instanceof Error ? error.message : String(error))

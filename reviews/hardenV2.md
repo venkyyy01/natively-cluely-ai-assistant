@@ -139,12 +139,13 @@ All F1–F10 findings from V1 are **reconfirmed**. Key updates:
 
 ### Priority 1 — Near-term (1–2 sprints)
 
-8. **N5**: Make SupervisorBus configurable for fail-shut on all events, or at minimum emit a `bus:listener-error` meta-event.
-9. **N6**: Convert audio health check to periodic (60s interval) with counter-based staleness detection.
+8. [x] **N5**: Make SupervisorBus configurable for fail-shut on all events, or at minimum emit a `bus:listener-error` meta-event.
+9. [x] **N6**: Convert audio health check to periodic (60s interval) with counter-based staleness detection.
 10. **N3**: Allow N restart attempts in `NativeStealthBridge.heartbeat` with exponential backoff, or fault immediately on first failure.
-11. **N9**: Require at least one successful probe before `FallbackExecutor.checkAutoRecovery()` resets degradation level.
+11. [x] **N9**: Require at least one successful probe before `FallbackExecutor.checkAutoRecovery()` resets degradation level.
 12. **N7**: Audit all IPC channels; ensure every `ipcRenderer.invoke` target validates via `parseIpcInput`.
-13. **F4**: Make assistant-history filter configurable, not unconditional.
+13. [x] **F4**: Make assistant-history filter configurable, not unconditional.
+    Already satisfied by `ParallelContextAssembler` defaulting `includeAssistantTurns: true` and supporting explicit opt-out.
 14. **F6**: Expand provenance technology vocabulary dynamically from profile/evidence context.
 15. **F9**: Add `contextItemIds`, `verifierOutcome`, and `stealthContainmentActive` to `LatencyMetadata`.
 16. **X2**: Add confidence decay to `AnswerHypothesisStore` when `shouldContinueThread` is false or topic shifts occur.

@@ -403,8 +403,16 @@ private consciousModeEnabled: boolean = false
   private currentMeetingId: string | null = null;
   private startAbortController: AbortController | null = null;
   private audioHealthCheckTimer: NodeJS.Timeout | null = null;
+  private readonly AUDIO_PIPELINE_STARTUP_HEALTH_DELAY_MS = 8000;
+  private readonly AUDIO_PIPELINE_PERIODIC_HEALTH_INTERVAL_MS = 60000;
   private audioPipelineStats = {
     startedAt: 0,
+    systemChunks: 0,
+    microphoneChunks: 0,
+    interviewerTranscripts: 0,
+    userTranscripts: 0,
+  };
+  private audioPipelineLastSnapshot = {
     systemChunks: 0,
     microphoneChunks: 0,
     interviewerTranscripts: 0,
@@ -1004,6 +1012,12 @@ this.runtimeCoordinator.registerSupervisor(new StealthSupervisor(
       interviewerTranscripts: 0,
       userTranscripts: 0,
     };
+    this.audioPipelineLastSnapshot = {
+      systemChunks: 0,
+      microphoneChunks: 0,
+      interviewerTranscripts: 0,
+      userTranscripts: 0,
+    };
   }
 
   private clearAudioPipelineHealthCheck(): void {
@@ -1036,41 +1050,59 @@ this.runtimeCoordinator.registerSupervisor(new StealthSupervisor(
     this.audioPipelineStats.userTranscripts += 1;
   }
 
-  private scheduleAudioPipelineHealthCheck(): void {
+  private scheduleAudioPipelineHealthCheck(delayMs: number = this.AUDIO_PIPELINE_STARTUP_HEALTH_DELAY_MS): void {
     this.clearAudioPipelineHealthCheck();
     this.audioHealthCheckTimer = setTimeout(() => {
+      this.audioHealthCheckTimer = null;
       if (!this.isMeetingActive) {
         return;
       }
 
       const { systemChunks, microphoneChunks, interviewerTranscripts, userTranscripts, startedAt } = this.audioPipelineStats;
       const elapsedMs = startedAt ? Date.now() - startedAt : 0;
+      const deltaSystemChunks = systemChunks - this.audioPipelineLastSnapshot.systemChunks;
+      const deltaMicrophoneChunks = microphoneChunks - this.audioPipelineLastSnapshot.microphoneChunks;
+      const deltaInterviewerTranscripts = interviewerTranscripts - this.audioPipelineLastSnapshot.interviewerTranscripts;
+      const deltaUserTranscripts = userTranscripts - this.audioPipelineLastSnapshot.userTranscripts;
 
-      console.warn('[AudioHealth] Snapshot after startup:', {
+      console.warn('[AudioHealth] Snapshot:', {
+        windowMs: delayMs,
         elapsedMs,
         systemChunks,
         microphoneChunks,
         interviewerTranscripts,
         userTranscripts,
+        deltaSystemChunks,
+        deltaMicrophoneChunks,
+        deltaInterviewerTranscripts,
+        deltaUserTranscripts,
       });
 
-      if (systemChunks === 0 && microphoneChunks === 0) {
-        console.warn('[AudioHealth] No audio chunks observed from either capture source. Investigate native capture initialization, device selection, and macOS permissions first.');
-        return;
+      if (deltaSystemChunks === 0 && deltaMicrophoneChunks === 0) {
+        console.warn('[AudioHealth] No audio chunks observed during the last health window. Investigate native capture initialization, device selection, runtime teardown, and macOS permissions first.');
+      } else {
+        if (deltaMicrophoneChunks === 0) {
+          console.warn('[AudioHealth] Microphone capture produced no chunks during the last health window. Investigate MicrophoneCapture/native CoreAudio startup.');
+        } else if (deltaUserTranscripts === 0) {
+          console.warn('[AudioHealth] Microphone chunks reached the STT layer during the last health window but no user transcripts were emitted. Investigate provider auth/session startup and audio format compatibility.');
+        }
+
+        if (deltaSystemChunks === 0) {
+          console.warn('[AudioHealth] System audio capture produced no chunks during the last health window. Investigate Screen Recording permission and output capture backend/device selection.');
+        } else if (deltaInterviewerTranscripts === 0) {
+          console.warn('[AudioHealth] System audio chunks reached the STT layer during the last health window but no interviewer transcripts were emitted. Investigate provider auth/session startup and transcript parsing.');
+        }
       }
 
-      if (microphoneChunks === 0) {
-        console.warn('[AudioHealth] Microphone capture produced no chunks. Investigate MicrophoneCapture/native CoreAudio startup.');
-      } else if (userTranscripts === 0) {
-        console.warn('[AudioHealth] Microphone chunks reached the STT layer but no user transcripts were emitted. Investigate provider auth/session startup and audio format compatibility.');
-      }
-
-      if (systemChunks === 0) {
-        console.warn('[AudioHealth] System audio capture produced no chunks. Investigate Screen Recording permission and output capture backend/device selection.');
-      } else if (interviewerTranscripts === 0) {
-        console.warn('[AudioHealth] System audio chunks reached the STT layer but no interviewer transcripts were emitted. Investigate provider auth/session startup and transcript parsing.');
-      }
-    }, 8000);
+      this.audioPipelineLastSnapshot = {
+        systemChunks,
+        microphoneChunks,
+        interviewerTranscripts,
+        userTranscripts,
+      };
+      this.scheduleAudioPipelineHealthCheck(this.AUDIO_PIPELINE_PERIODIC_HEALTH_INTERVAL_MS);
+    }, delayMs);
+    this.audioHealthCheckTimer.unref?.();
   }
 
   private async bootstrapOllamaEmbeddings() {
