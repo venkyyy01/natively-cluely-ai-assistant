@@ -72,4 +72,40 @@ describe('AdaptiveContextWindow', () => {
 
     assert(result[0].text === 'Recent context');
   });
+
+  it('falls back to lexical relevance when embedding dimensions mismatch', async () => {
+    const config: ContextSelectionConfig = {
+      tokenBudget: 1000,
+      recencyWeight: 0.05,
+      semanticWeight: 0.9,
+      phaseAlignmentWeight: 0.05,
+      embeddingModel: 'query-model',
+    };
+
+    const candidates: ContextEntry[] = [
+      {
+        text: 'Consistent hashing keeps cache resharding stable',
+        timestamp: Date.now() - 20_000,
+        embedding: [0.2, 0.8],
+        embeddingModel: 'old-model',
+        embeddingDimension: 2,
+      },
+      {
+        text: 'Unrelated weather update',
+        timestamp: Date.now() - 100,
+        embedding: [0, 0, 1],
+        embeddingModel: 'query-model',
+        embeddingDimension: 3,
+      },
+    ];
+
+    const result = await window.selectContext(
+      'consistent hashing cache',
+      [1, 0, 0],
+      candidates,
+      config
+    );
+
+    assert.equal(result[0].text, 'Consistent hashing keeps cache resharding stable');
+  });
 });

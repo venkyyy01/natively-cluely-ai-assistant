@@ -2249,10 +2249,10 @@ try {
       if (overlayContent && !overlayContent.isDestroyed()) overlayContent.webContents.send('intelligence-assist-update', { insight });
     })
 
-    this.intelligenceManager.on('cooldown_deferred', (suppressedMs: number, question?: string) => {
+    this.intelligenceManager.on('cooldown_deferred', (suppressedMs: number, question?: string, reason?: 'duplicate_question_debounce') => {
       const win = mainWindow()
       if (win && !win.isDestroyed()) {
-        win.webContents.send('intelligence-cooldown', { suppressedMs, question })
+        win.webContents.send('intelligence-cooldown', { suppressedMs, question, reason })
       }
     })
 

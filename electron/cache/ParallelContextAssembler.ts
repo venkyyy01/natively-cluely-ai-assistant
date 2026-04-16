@@ -18,7 +18,7 @@ export interface ContextAssemblyInput {
 
 export interface ContextAssemblyOutput {
   embedding: number[];
-  bm25Results: Array<{ text: string; score: number }>;
+  bm25Results: Array<{ role: 'interviewer' | 'user' | 'assistant'; text: string; score: number; timestamp: number }>;
   phase: InterviewPhase;
   confidence: number;
   relevantContext: Array<{ role: 'interviewer' | 'user' | 'assistant'; text: string; timestamp: number }>;
@@ -133,10 +133,12 @@ if (!isMainThread) {
 export class ParallelContextAssembler {
   private workerCount: number;
   private readonly workerPool: WorkerPool;
+  private readonly includeAssistantTurns: boolean;
 
-  constructor(options: { workerThreadCount?: number; workerPool?: WorkerPool }) {
+  constructor(options: { workerThreadCount?: number; workerPool?: WorkerPool; includeAssistantTurns?: boolean }) {
     this.workerCount = options.workerThreadCount || getEffectiveWorkerCount();
     this.workerPool = options.workerPool ?? new WorkerPool({ size: this.workerCount });
+    this.includeAssistantTurns = options.includeAssistantTurns ?? true;
   }
 
   getWorkerCount(): number {
@@ -161,13 +163,7 @@ export class ParallelContextAssembler {
       return this.assembleLegacy(input);
     }
 
-    const docs = input.transcript
-      .filter(t => t.speaker !== 'assistant')
-      .map(t => ({
-        role: t.speaker === 'user' ? 'user' as const : t.speaker === 'assistant' ? 'assistant' as const : 'interviewer' as const,
-        text: t.text,
-        timestamp: t.timestamp,
-      }));
+    const docs = this.buildRetrievalDocuments(input.transcript);
 
     // Try to use real embeddings if ANE provider is available
     const embeddingProvider = getEmbeddingProvider();
@@ -257,13 +253,7 @@ export class ParallelContextAssembler {
     const embedding = embeddingProvider?.isInitialized()
       ? await embeddingProvider.embed(input.query)
       : generateEmbeddingFallback(input.query);
-    const docs = input.transcript
-      .filter(t => t.speaker !== 'assistant')
-      .map(t => ({
-        role: t.speaker === 'user' ? 'user' as const : t.speaker === 'assistant' ? 'assistant' as const : 'interviewer' as const,
-        text: t.text,
-        timestamp: t.timestamp,
-      }));
+    const docs = this.buildRetrievalDocuments(input.transcript);
     const bm25ResultsRaw = await computeBM25(input.query, docs);
     const speakerByText = new Map<string, 'interviewer' | 'user' | 'assistant'>();
     for (const doc of docs) {
@@ -287,5 +277,19 @@ export class ParallelContextAssembler {
 
   terminate(): void {
     // Cleanup if needed (worker pool would be terminated here)
+  }
+
+  private buildRetrievalDocuments(transcript: ContextAssemblyInput['transcript']): Array<{
+    role: 'interviewer' | 'user' | 'assistant';
+    text: string;
+    timestamp: number;
+  }> {
+    return transcript
+      .filter(turn => this.includeAssistantTurns || turn.speaker !== 'assistant')
+      .map(turn => ({
+        role: turn.speaker === 'user' ? 'user' as const : turn.speaker === 'assistant' ? 'assistant' as const : 'interviewer' as const,
+        text: turn.text,
+        timestamp: turn.timestamp,
+      }));
   }
 }

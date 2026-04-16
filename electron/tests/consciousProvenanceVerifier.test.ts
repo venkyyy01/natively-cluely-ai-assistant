@@ -57,6 +57,36 @@ test('ConsciousProvenanceVerifier accepts grounded technology and metric content
   assert.equal(verdict.ok, true);
 });
 
+test('ConsciousProvenanceVerifier rejects unsupported dynamic technology claims', () => {
+  const verifier = new ConsciousProvenanceVerifier();
+  const verdict = verifier.verify({
+    response: response({
+      openingReasoning: 'I would use Pinecone for the vector index and SQS for fan-out.',
+      implementationPlan: ['Store embeddings in Pinecone', 'Push async work through SQS'],
+    }),
+    semanticContextBlock: '<conscious_semantic_memory>\n[PROJECT] Tenant Analytics Platform: Technologies: Redis, Kafka\n</conscious_semantic_memory>',
+    hypothesis: null,
+  });
+
+  assert.equal(verdict.ok, false);
+  assert.equal(verdict.reason, 'unsupported_technology_claim');
+});
+
+test('ConsciousProvenanceVerifier accepts dynamic technology claims grounded by evidence or question context', () => {
+  const verifier = new ConsciousProvenanceVerifier();
+  const verdict = verifier.verify({
+    response: response({
+      openingReasoning: 'I would use Pinecone for the vector index and SQS for fan-out.',
+      implementationPlan: ['Store embeddings in Pinecone', 'Push async work through SQS'],
+    }),
+    semanticContextBlock: '<conscious_semantic_memory>\n[PROJECT] Search Platform: Technologies: Pinecone, SQS\n</conscious_semantic_memory>',
+    question: 'How would Pinecone fit into the retrieval path?',
+    hypothesis: null,
+  });
+
+  assert.equal(verdict.ok, true);
+});
+
 test('ConsciousProvenanceVerifier accepts technology claims grounded by the current question', () => {
   const verifier = new ConsciousProvenanceVerifier();
   const verdict = verifier.verify({

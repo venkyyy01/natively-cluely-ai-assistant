@@ -169,30 +169,30 @@ test('explicit cancellation ends the active what-to-say request without emitting
   assert.equal(session.getLastAssistantMessage(), null);
 });
 
-test('cooldown defers rapid follow-up instead of silently dropping when no active request exists', async () => {
+test('cooldown defers repeated duplicate triggers instead of silently dropping when no active request exists', async () => {
   const session = new SessionTracker();
   const llmHelper = new SlowStreamingLLMHelper();
   const engine = new IntelligenceEngine(llmHelper as any, session);
   (engine as any).triggerCooldown = 20;
 
   const answers: string[] = [];
-  const metadataByAnswer: Array<{ cooldownSuppressedMs?: number }> = [];
-  const deferredEvents: Array<{ suppressedMs: number; question?: string }> = [];
+  const metadataByAnswer: Array<{ cooldownSuppressedMs?: number; cooldownReason?: string }> = [];
+  const deferredEvents: Array<{ suppressedMs: number; question?: string; reason?: string }> = [];
 
-  engine.on('suggested_answer', (answer: string, _question: string, _confidence: number, metadata?: { cooldownSuppressedMs?: number }) => {
+  engine.on('suggested_answer', (answer: string, _question: string, _confidence: number, metadata?: { cooldownSuppressedMs?: number; cooldownReason?: string }) => {
     answers.push(answer);
-    metadataByAnswer.push({ cooldownSuppressedMs: metadata?.cooldownSuppressedMs });
+    metadataByAnswer.push({ cooldownSuppressedMs: metadata?.cooldownSuppressedMs, cooldownReason: metadata?.cooldownReason });
   });
-  engine.on('cooldown_deferred', (suppressedMs: number, question?: string) => {
-    deferredEvents.push({ suppressedMs, question });
+  engine.on('cooldown_deferred', (suppressedMs: number, question?: string, reason?: string) => {
+    deferredEvents.push({ suppressedMs, question, reason });
   });
 
-  addTurn(session, 'interviewer', 'First question?', Date.now() - 200);
+  addTurn(session, 'interviewer', 'Repeat this question?', Date.now() - 200);
   const first = await engine.runWhatShouldISay(undefined, 0.9);
   assert.equal(first, 'slow answer');
 
   (engine as any).setMode('idle');
-  addTurn(session, 'interviewer', 'Second question?', Date.now());
+  addTurn(session, 'interviewer', 'Repeat this question?', Date.now());
   const second = await engine.runWhatShouldISay(undefined, 0.9);
 
   assert.equal(second, 'slow answer');
@@ -200,7 +200,32 @@ test('cooldown defers rapid follow-up instead of silently dropping when no activ
   assert.equal(session.getLastAssistantMessage(), 'slow answer');
   assert.equal(deferredEvents.length, 1);
   assert.equal(deferredEvents[0]!.suppressedMs > 0, true);
-  assert.equal(deferredEvents[0]!.question, 'Second question?');
+  assert.equal(deferredEvents[0]!.question, 'Repeat this question?');
+  assert.equal(deferredEvents[0]!.reason, 'duplicate_question_debounce');
   assert.equal(metadataByAnswer[0]?.cooldownSuppressedMs, undefined);
   assert.equal((metadataByAnswer[1]?.cooldownSuppressedMs ?? 0) > 0, true);
+  assert.equal(metadataByAnswer[1]?.cooldownReason, 'duplicate_question_debounce');
+});
+
+test('cooldown does not defer a different rapid follow-up after the previous answer completed', async () => {
+  const session = new SessionTracker();
+  const llmHelper = new SlowStreamingLLMHelper();
+  const engine = new IntelligenceEngine(llmHelper as any, session);
+  (engine as any).triggerCooldown = 1_000;
+
+  const deferredEvents: Array<{ suppressedMs: number; question?: string; reason?: string }> = [];
+  engine.on('cooldown_deferred', (suppressedMs: number, question?: string, reason?: string) => {
+    deferredEvents.push({ suppressedMs, question, reason });
+  });
+
+  addTurn(session, 'interviewer', 'First question?', Date.now() - 200);
+  const first = await engine.runWhatShouldISay(undefined, 0.9);
+  assert.equal(first, 'slow answer');
+
+  (engine as any).setMode('idle');
+  addTurn(session, 'interviewer', 'Different follow up?', Date.now());
+  const second = await engine.runWhatShouldISay(undefined, 0.9);
+
+  assert.equal(second, 'slow answer');
+  assert.deepEqual(deferredEvents, []);
 });

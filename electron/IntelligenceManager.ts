@@ -67,7 +67,7 @@ export class IntelligenceManager extends EventEmitter {
         }
     }
 
-    override on(event: 'cooldown_deferred', listener: (suppressedMs: number, question?: string) => void): this;
+    override on(event: 'cooldown_deferred', listener: (suppressedMs: number, question?: string, reason?: 'duplicate_question_debounce') => void): this;
     override on(event: 'suggested_answer', listener: (answer: string, question: string, confidence: number, metadata?: SuggestedAnswerMetadata) => void): this;
     override on(event: string | symbol, listener: (...args: any[]) => void): this;
     override on(event: string | symbol, listener: (...args: any[]) => void): this {

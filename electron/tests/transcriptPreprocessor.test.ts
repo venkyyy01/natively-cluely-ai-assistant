@@ -98,6 +98,25 @@ test('preprocessTranscript keeps distant same-speaker segments separate and drop
   ]);
 });
 
+test('preprocessTranscript keeps compact semantic questions that are shorter than three words', () => {
+  const segments = preprocessTranscript([
+    { speaker: 'interviewer', text: 'Why Redis?', timestamp: 1000 },
+    { speaker: 'user', text: 'okay', timestamp: 2000 },
+  ]);
+
+  assert.deepEqual(segments, [
+    {
+      speaker: 'Speaker',
+      text: 'Why Redis?',
+      startMs: 1000,
+      endMs: 1000,
+      isQuestion: true,
+      isDecision: false,
+      isActionItem: false,
+    },
+  ]);
+});
+
 test('estimateTokens handles empty and non-empty text', () => {
   assert.equal(estimateTokens('   '), 0);
   assert.equal(estimateTokens('one two three four'), 6);

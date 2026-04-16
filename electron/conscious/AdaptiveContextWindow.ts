@@ -7,6 +7,8 @@ export interface ContextEntry {
   text: string;
   timestamp: number;
   embedding?: number[];
+  embeddingModel?: string;
+  embeddingDimension?: number;
   phase?: InterviewPhase;
 }
 
@@ -15,6 +17,7 @@ export interface ContextSelectionConfig {
   recencyWeight: number;
   semanticWeight: number;
   phaseAlignmentWeight: number;
+  embeddingModel?: string;
 }
 
 export class AdaptiveContextWindow {
@@ -30,7 +33,7 @@ export class AdaptiveContextWindow {
   }
 
   async selectContext(
-    _query: string,
+    query: string,
     queryEmbedding: number[],
     candidates: ContextEntry[],
     config: ContextSelectionConfig
@@ -42,7 +45,7 @@ export class AdaptiveContextWindow {
     const scored = await Promise.all(
       candidates.map(async (entry) => ({
         entry,
-        score: this.computeScore(entry, queryEmbedding, config),
+        score: this.computeScore(entry, query, queryEmbedding, config),
       }))
     );
 
@@ -64,13 +67,13 @@ export class AdaptiveContextWindow {
 
   private computeScore(
     entry: ContextEntry,
+    query: string,
     queryEmbedding: number[],
     config: ContextSelectionConfig
   ): number {
     const recencyScore = this.computeRecency(entry.timestamp);
-    const semanticScore = entry.embedding
-      ? this.cosineSimilarity(entry.embedding, queryEmbedding)
-      : 0;
+    const semanticScore = this.computeSemanticScore(entry, queryEmbedding, config)
+      ?? this.computeLexicalOverlap(query, entry.text);
     const phaseScore = this.computePhaseAlignment(entry.phase, this.currentPhase);
 
     return (
@@ -152,6 +155,43 @@ export class AdaptiveContextWindow {
     if (normA === 0 || normB === 0) return 0;
 
     return dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
+  }
+
+  private computeSemanticScore(
+    entry: ContextEntry,
+    queryEmbedding: number[],
+    config: ContextSelectionConfig,
+  ): number | null {
+    if (!entry.embedding) return null;
+    const recordedDimension = entry.embeddingDimension ?? entry.embedding.length;
+    if (recordedDimension !== queryEmbedding.length || entry.embedding.length !== queryEmbedding.length) {
+      return null;
+    }
+    if (config.embeddingModel && entry.embeddingModel && config.embeddingModel !== entry.embeddingModel) {
+      return null;
+    }
+    return this.cosineSimilarity(entry.embedding, queryEmbedding);
+  }
+
+  private computeLexicalOverlap(query: string, text: string): number {
+    const queryTokens = this.tokenize(query);
+    if (queryTokens.size === 0) return 0;
+    const textTokens = this.tokenize(text);
+    let overlap = 0;
+    for (const token of queryTokens) {
+      if (textTokens.has(token)) {
+        overlap += 1;
+      }
+    }
+    return overlap / queryTokens.size;
+  }
+
+  private tokenize(text: string): Set<string> {
+    const stopwords = new Set(['the', 'a', 'an', 'and', 'or', 'to', 'of', 'in', 'on', 'for', 'with', 'this', 'that', 'is', 'are']);
+    const tokens: string[] = text.toLowerCase().match(/[a-z0-9]+/g) ?? [];
+    return new Set(
+      tokens.filter(token => token.length > 1 && !stopwords.has(token))
+    );
   }
 
   private estimateTokens(text: string): number {

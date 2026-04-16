@@ -10,6 +10,7 @@ type SuggestedAnswerMetadata = {
   fallbackReason?: string
   schemaVersion: 'standard_answer_v1' | 'conscious_mode_v1'
   evidenceHash: string
+  contextSelectionHash?: string
   transcriptRevision: number
   threadAction?: 'start' | 'continue' | 'reset' | 'ignore'
   thread?: {
@@ -19,6 +20,7 @@ type SuggestedAnswerMetadata = {
     updatedAt: number
   } | null
   cooldownSuppressedMs?: number
+  cooldownReason?: 'duplicate_question_debounce'
   verifier?: {
     deterministic: 'pass' | 'fail' | 'skipped'
     provenance: 'pass' | 'fail' | 'skipped'
@@ -177,7 +179,7 @@ setDisguise: (mode: 'terminal' | 'settings' | 'activity' | 'none') => Promise<St
 
   // Intelligence Mode Events
   onIntelligenceAssistUpdate: (callback: (data: { insight: string }) => void) => () => void
-  onIntelligenceCooldown: (callback: (data: { suppressedMs: number; question?: string }) => void) => () => void
+  onIntelligenceCooldown: (callback: (data: { suppressedMs: number; question?: string; reason?: 'duplicate_question_debounce' }) => void) => () => void
   onIntelligenceSuggestedAnswerToken: (callback: (data: { token: string; question: string; confidence: number }) => void) => () => void
   onIntelligenceSuggestedAnswer: (callback: (data: IntelligenceSuggestedAnswerEvent) => void) => () => void
   onIntelligenceRefinedAnswerToken: (callback: (data: { token: string; intent: string }) => void) => () => void

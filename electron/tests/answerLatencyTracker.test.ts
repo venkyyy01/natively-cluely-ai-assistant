@@ -440,7 +440,7 @@ test('IntelligenceEngine does not mark fallbackOccurred for superseded fallback 
   assert.equal(staleSnapshot?.fallbackOccurred, false);
 });
 
-test('IntelligenceEngine emits suggested answer metadata for cooldown deferrals', async () => {
+test('IntelligenceEngine emits suggested answer metadata for duplicate cooldown deferrals', async () => {
   class SlowStreamingLLMHelper {
     async *streamChat(): AsyncGenerator<string> {
       await new Promise((resolve) => setTimeout(resolve, 10));
@@ -450,29 +450,31 @@ test('IntelligenceEngine emits suggested answer metadata for cooldown deferrals'
 
   const session = new SessionTracker();
   const engine = new TestIntelligenceEngine(new SlowStreamingLLMHelper() as any, session);
-  const metadataByAnswer: Array<{ cooldownSuppressedMs?: number }> = [];
-  const deferredEvents: Array<{ suppressedMs: number; question?: string }> = [];
+  const metadataByAnswer: Array<{ cooldownSuppressedMs?: number; cooldownReason?: string }> = [];
+  const deferredEvents: Array<{ suppressedMs: number; question?: string; reason?: string }> = [];
 
   (engine as any).triggerCooldown = 20;
-  engine.on('suggested_answer', (_answer: string, _question: string, _confidence: number, metadata?: { cooldownSuppressedMs?: number }) => {
-    metadataByAnswer.push({ cooldownSuppressedMs: metadata?.cooldownSuppressedMs });
+  engine.on('suggested_answer', (_answer: string, _question: string, _confidence: number, metadata?: { cooldownSuppressedMs?: number; cooldownReason?: string }) => {
+    metadataByAnswer.push({ cooldownSuppressedMs: metadata?.cooldownSuppressedMs, cooldownReason: metadata?.cooldownReason });
   });
-  engine.on('cooldown_deferred', (suppressedMs: number, question?: string) => {
-    deferredEvents.push({ suppressedMs, question });
+  engine.on('cooldown_deferred', (suppressedMs: number, question?: string, reason?: string) => {
+    deferredEvents.push({ suppressedMs, question, reason });
   });
 
-  addInterviewerTurn(session, 'First question?', Date.now() - 200);
+  addInterviewerTurn(session, 'Same question?', Date.now() - 200);
   const first = await engine.runWhatShouldISay(undefined, 0.9);
   assert.equal(first, 'slow answer');
 
   (engine as any).setMode('idle');
-  addInterviewerTurn(session, 'Second question?', Date.now());
+  addInterviewerTurn(session, 'Same question?', Date.now());
   const second = await engine.runWhatShouldISay(undefined, 0.9);
 
   assert.equal(second, 'slow answer');
   assert.equal(deferredEvents.length, 1);
   assert.equal((deferredEvents[0]?.suppressedMs ?? 0) > 0, true);
-  assert.equal(deferredEvents[0]?.question, 'Second question?');
+  assert.equal(deferredEvents[0]?.question, 'Same question?');
+  assert.equal(deferredEvents[0]?.reason, 'duplicate_question_debounce');
   assert.equal(metadataByAnswer[0]?.cooldownSuppressedMs, undefined);
   assert.equal((metadataByAnswer[1]?.cooldownSuppressedMs ?? 0) > 0, true);
+  assert.equal(metadataByAnswer[1]?.cooldownReason, 'duplicate_question_debounce');
 });

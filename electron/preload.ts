@@ -11,6 +11,7 @@ type SuggestedAnswerMetadata = {
   fallbackReason?: string
   schemaVersion: 'standard_answer_v1' | 'conscious_mode_v1'
   evidenceHash: string
+  contextSelectionHash?: string
   transcriptRevision: number
   threadAction?: 'start' | 'continue' | 'reset' | 'ignore'
   thread?: {
@@ -20,6 +21,7 @@ type SuggestedAnswerMetadata = {
     updatedAt: number
   } | null
   cooldownSuppressedMs?: number
+  cooldownReason?: 'duplicate_question_debounce'
   verifier?: {
     deterministic: 'pass' | 'fail' | 'skipped'
     provenance: 'pass' | 'fail' | 'skipped'
@@ -199,7 +201,7 @@ onAccelerationModeChanged: (callback: (enabled: boolean) => void) => () => void
 
   // Intelligence Mode Events
   onIntelligenceAssistUpdate: (callback: (data: { insight: string }) => void) => () => void
-  onIntelligenceCooldown: (callback: (data: { suppressedMs: number; question?: string }) => void) => () => void
+  onIntelligenceCooldown: (callback: (data: { suppressedMs: number; question?: string; reason?: 'duplicate_question_debounce' }) => void) => () => void
   onIntelligenceSuggestedAnswer: (callback: (data: IntelligenceSuggestedAnswerEvent) => void) => () => void
   onIntelligenceRefinedAnswer: (callback: (data: { answer: string; intent: string }) => void) => () => void
   onIntelligenceRecap: (callback: (data: { summary: string }) => void) => () => void
@@ -690,7 +692,7 @@ setOpenAtLogin: (open: boolean) => invokeStatus("set-open-at-login", open),
       ipcRenderer.removeListener("intelligence-assist-update", subscription)
     }
   },
-  onIntelligenceCooldown: (callback: (data: { suppressedMs: number; question?: string }) => void) => {
+  onIntelligenceCooldown: (callback: (data: { suppressedMs: number; question?: string; reason?: 'duplicate_question_debounce' }) => void) => {
     const subscription = (_: any, data: any) => callback(data)
     ipcRenderer.on('intelligence-cooldown', subscription)
     return () => {

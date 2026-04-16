@@ -176,18 +176,22 @@ export function preprocessTranscript(segments: RawSegment[]): CleanedSegment[] {
     for (const seg of merged) {
         const text = cleanText(seg.text);
 
-        // Skip if too short after cleaning (less than 3 words)
+        const isQuestion = detectQuestion(text);
+        const isDecision = detectDecision(text);
+        const isActionItem = detectActionItem(text);
+
+        // Skip filler fragments, but keep compact semantic turns like "Why Redis?"
         const wordCount = text.split(/\s+/).filter(w => w.length > 0).length;
-        if (wordCount < 3) continue;
+        if (wordCount < 3 && !isQuestion && !isDecision && !isActionItem) continue;
 
         cleaned.push({
             speaker: normalizeSpeaker(seg.speaker),
             text,
             startMs: seg.startMs,
             endMs: seg.endMs,
-            isQuestion: detectQuestion(text),
-            isDecision: detectDecision(text),
-            isActionItem: detectActionItem(text)
+            isQuestion,
+            isDecision,
+            isActionItem
         });
     }
 
