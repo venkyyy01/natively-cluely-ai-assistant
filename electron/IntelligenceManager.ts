@@ -15,6 +15,11 @@ import type { SuggestedAnswerMetadata } from './IntelligenceEngine';
 import { MeetingPersistence } from './MeetingPersistence';
 import type { AccelerationManager } from './services/AccelerationManager';
 import type { ConsciousModeStructuredResponse, ReasoningThread } from './ConsciousMode';
+import type { SupervisorEvent } from './runtime/types';
+
+type SupervisorBusEmitter = {
+    emit(event: SupervisorEvent): Promise<void>;
+};
 
 // Re-export types for backward compatibility
 export type { TranscriptSegment, SuggestionTrigger, ContextItem } from './SessionTracker';
@@ -104,6 +109,10 @@ export class IntelligenceManager extends EventEmitter {
 
     attachAccelerationManager(accelerationManager: AccelerationManager | null): void {
         this.engine.attachAccelerationManager(accelerationManager);
+    }
+
+    setSupervisorBus(bus?: SupervisorBusEmitter): void {
+        this.session.setSupervisorBus(bus);
     }
 
     addTranscript(segment: import('./SessionTracker').TranscriptSegment, skipRefinementCheck: boolean = false): void {

@@ -638,6 +638,7 @@ this.modelSelectorWindowHelper.setWindowHelper(this.windowHelper);
 
 // Initialize IntelligenceManager with LLMHelper
 this.intelligenceManager = new IntelligenceManager(this.processingHelper.getLLMHelper())
+this.intelligenceManager.setSupervisorBus(this.runtimeCoordinator.getBus())
 this.intelligenceManager.setConsciousModeEnabled(this.consciousModeEnabled)
 
 // Initialize Checkpointer

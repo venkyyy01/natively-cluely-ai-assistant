@@ -89,6 +89,11 @@ import {
 import { TokenCounter } from './shared/TokenCounter';
 import { getActiveAccelerationManager } from './services/AccelerationManager';
 import type { RuntimeBudgetScheduler } from './runtime/RuntimeBudgetScheduler';
+import type { SupervisorEvent } from './runtime/types';
+
+type SupervisorBusEmitter = {
+  emit(event: SupervisorEvent): Promise<void>;
+};
 
 export interface TranscriptSegment {
     marker?: string;
@@ -232,6 +237,7 @@ export class SessionTracker {
   private readonly tokenCounter: TokenCounter = new TokenCounter('openai');
   private readonly semanticEmbeddingCache = new Map<string, { embedding: number[]; createdAt: number }>();
   private readonly semanticEmbeddingTTLms = 5 * 60 * 1000;
+  private supervisorBus?: SupervisorBusEmitter;
   private adaptiveWindowStats = {
     calls: 0,
     totalMs: 0,
@@ -256,6 +262,16 @@ export class SessionTracker {
           this.activeMeetingId = inferredMeetingId.trim();
         }
         this.persistState();
+    }
+
+    setSupervisorBus(bus?: SupervisorBusEmitter): void {
+        this.supervisorBus = bus;
+    }
+
+    private emitSupervisorEvent(event: SupervisorEvent): void {
+        void this.supervisorBus?.emit(event).catch((error) => {
+            console.warn(`[SessionTracker] Failed to emit supervisor event ${event.type}:`, error);
+        });
     }
 
     public getMeetingMetadata() {
@@ -467,7 +483,7 @@ export class SessionTracker {
         this.consciousThreadStore.handleObservedInterviewerTranscript(
             transcript,
             (value) => this.detectPhaseFromTranscript(value),
-            (phase) => this.setCurrentPhase(phase)
+            (phase) => this.phaseDetector.setPhase(phase)
         );
     }
 
@@ -1262,6 +1278,15 @@ isConsciousModeEnabled(): boolean {
           timestamp: Date.now(),
           phase: this.phaseDetector.getCurrentPhase(),
         });
+        const activeThread = this.consciousThreadStore.getThreadManager().getActiveThread();
+        this.emitSupervisorEvent({
+            type: 'conscious:thread_action',
+            action: threadAction,
+            question,
+            phase: this.phaseDetector.getCurrentPhase(),
+            threadId: activeThread?.id ?? null,
+            topic: activeThread?.topic ?? null,
+        });
     }
 
     getLatestQuestionReaction() {
@@ -1575,6 +1600,7 @@ isConsciousModeEnabled(): boolean {
         const next = new SessionTracker();
         next.setRecapLLM(this.recapLLM);
         next.setConsciousModeEnabled(this.consciousModeEnabled);
+        next.setSupervisorBus(this.supervisorBus);
         return next;
     }
 
@@ -1855,16 +1881,34 @@ isConsciousModeEnabled(): boolean {
         return this.phaseDetector.getCurrentPhase();
     }
 
-    setCurrentPhase(phase: InterviewPhase): void {
+    setCurrentPhase(phase: InterviewPhase, trigger: 'interviewer_transcript' | 'manual' = 'manual'): void {
+        const currentPhase = this.phaseDetector.getCurrentPhase();
         this.phaseDetector.setPhase(phase);
+        if (currentPhase !== phase) {
+            this.emitSupervisorEvent({
+                type: 'conscious:phase_changed',
+                from: currentPhase,
+                to: phase,
+                trigger,
+            });
+        }
     }
 
     detectPhaseFromTranscript(transcript: string): InterviewPhase {
+        const previousPhase = this.phaseDetector.getCurrentPhase();
         const result = this.phaseDetector.detectPhase(
             transcript,
             this.phaseDetector.getCurrentPhase(),
             this.getContextItems().slice(-5).map((item: ContextItem) => item.text)
         );
+        if (previousPhase !== result.phase) {
+            this.emitSupervisorEvent({
+                type: 'conscious:phase_changed',
+                from: previousPhase,
+                to: result.phase,
+                trigger: 'interviewer_transcript',
+            });
+        }
         return result.phase;
     }
 

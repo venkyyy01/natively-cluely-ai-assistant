@@ -1,3 +1,5 @@
+import type { InterviewPhase } from '../conscious/types';
+
 export type SupervisorState = 'idle' | 'starting' | 'running' | 'stopping' | 'faulted';
 
 export type StealthState = 'OFF' | 'ARMING' | 'FULL_STEALTH' | 'FAULT';
@@ -27,6 +29,8 @@ export type SupervisorCoreEvent =
   | { type: 'lifecycle:meeting-active'; meetingId: string }
   | { type: 'lifecycle:meeting-stopping' }
   | { type: 'lifecycle:meeting-idle' }
+  | { type: 'conscious:phase_changed'; from: InterviewPhase; to: InterviewPhase; trigger: 'interviewer_transcript' | 'manual' }
+  | { type: 'conscious:thread_action'; action: 'start' | 'continue' | 'reset'; question: string; phase: InterviewPhase; threadId: string | null; topic: string | null }
   | { type: 'budget:pressure'; lane: string; level: 'warning' | 'critical' };
 
 export type SupervisorEvent = SupervisorCoreEvent

@@ -146,11 +146,11 @@ All F1–F10 findings from V1 are **reconfirmed**. Key updates:
 12. [x] **N7**: Audit all IPC channels; ensure every `ipcRenderer.invoke` target validates via `parseIpcInput`.
 13. [x] **F4**: Make assistant-history filter configurable, not unconditional.
     Already satisfied by `ParallelContextAssembler` defaulting `includeAssistantTurns: true` and supporting explicit opt-out.
-14. **F6**: Expand provenance technology vocabulary dynamically from profile/evidence context.
+14. [x] **F6**: Expand provenance technology vocabulary dynamically from profile/evidence context.
 15. [x] **F9**: Add `contextItemIds`, `verifierOutcome`, and `stealthContainmentActive` to `LatencyMetadata`.
 16. [x] **X2**: Add confidence decay to `AnswerHypothesisStore` when `shouldContinueThread` is false or topic shifts occur.
 17. [x] **X4**: Add retry queue + renderer notification for `MeetingPersistence` save failures.
-18. **X5**: Emit `conscious:phase_changed` and `conscious:thread_action` events on SupervisorBus for state mutation visibility.
+18. [x] **X5**: Emit `conscious:phase_changed` and `conscious:thread_action` events on SupervisorBus for state mutation visibility.
 
 ### Priority 2 — Structural (2–4 sprints)
 

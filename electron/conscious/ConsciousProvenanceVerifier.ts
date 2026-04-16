@@ -101,6 +101,7 @@ function extractDynamicTechnologyCandidates(text: string): string[] {
   const techSuffixPattern = /\b[A-Z][A-Za-z0-9.+#-]*(?:DB|SQL|JS|API|SDK|QL|ML|AI)\b/g;
   const beforeTechNounPattern = /\b([A-Z][A-Za-z0-9.+#-]{2,})\s+(?:database|db|queue|cache|broker|stream|topic|cluster|index|vector|service|api|sdk|framework|library|runtime|warehouse|search|engine|store|model|provider|platform)\b/g;
   const afterTechVerbPattern = /\b(?:use|using|used|with|via|on|into|through|choose|choosing|pick|picking|migrate to|integrate with)\s+([A-Z][A-Za-z0-9.+#-]{2,})\b/g;
+  const lowercaseAfterTechVerbPattern = /\b(?:use|using|used|with|via|on|into|through|choose|choosing|pick|picking|migrate to|integrate with)\s+([a-z][a-z0-9.+#-]{2,})\b/g;
 
   for (const pattern of [acronymPattern, camelCasePattern, techSuffixPattern]) {
     for (const match of text.matchAll(pattern)) {
@@ -120,10 +121,49 @@ function extractDynamicTechnologyCandidates(text: string): string[] {
     }
   }
 
+  for (const match of text.matchAll(lowercaseAfterTechVerbPattern)) {
+    const term = match[1];
+    const after = text.slice((match.index ?? 0) + match[0].length, (match.index ?? 0) + match[0].length + 48);
+    if (TECH_NOUN_PATTERN.test(after)) {
+      addTechnologyCandidate(candidates, term);
+    }
+  }
+
   return Array.from(candidates);
 }
 
-function extractTechnologyClaims(text: string): string[] {
+function extractGroundingTechnologyVocabulary(...contexts: string[]): string[] {
+  const candidates = new Set<string>();
+  const combined = contexts.filter(Boolean).join(' ');
+  const technologyListPattern = /\b(?:technologies|technology|stack|tooling|providers?)\s*:\s*([^\n]+)/gi;
+  const beforeTechNounPattern = /\b([a-z][a-z0-9.+#-]{2,})\s+(?:database|db|queue|cache|broker|stream|topic|cluster|index|vector|service|api|sdk|framework|library|runtime|warehouse|search|engine|store|model|provider|platform|orchestrator)s?\b/gi;
+  const afterTechVerbPattern = /\b(?:using|used|with|via|on|through|choose|choosing|pick|picking|integrate with|migrate to)\s+([a-z][a-z0-9.+#-]{2,})\b/gi;
+
+  for (const term of KNOWN_TECH_TERMS) {
+    if (combined.includes(term)) {
+      candidates.add(term);
+    }
+  }
+
+  for (const match of combined.matchAll(technologyListPattern)) {
+    const rawList = match[1] || '';
+    for (const token of rawList.split(/[;,/]|\band\b/g)) {
+      addTechnologyCandidate(candidates, token);
+    }
+  }
+
+  for (const match of combined.matchAll(beforeTechNounPattern)) {
+    addTechnologyCandidate(candidates, match[1]);
+  }
+
+  for (const match of combined.matchAll(afterTechVerbPattern)) {
+    addTechnologyCandidate(candidates, match[1]);
+  }
+
+  return Array.from(candidates);
+}
+
+function extractTechnologyClaims(text: string, dynamicVocabulary: string[] = []): string[] {
   const lower = text.toLowerCase();
   const terms = new Set<string>();
   for (const term of KNOWN_TECH_TERMS) {
@@ -134,6 +174,12 @@ function extractTechnologyClaims(text: string): string[] {
 
   for (const term of extractDynamicTechnologyCandidates(text)) {
     terms.add(term);
+  }
+
+  for (const term of dynamicVocabulary) {
+    if (lower.includes(term)) {
+      terms.add(term);
+    }
   }
 
   return Array.from(terms);
@@ -189,9 +235,13 @@ export class ConsciousProvenanceVerifier {
 
     const responseText = summaryText(input.response);
     const originalResponseText = summaryText(input.response, false);
+    const dynamicGroundingVocabulary = extractGroundingTechnologyVocabulary(
+      grounding.strict,
+      grounding.relaxed,
+    );
 
     const unsupportedTech = this.findUnsupportedTerms(
-      extractTechnologyClaims(originalResponseText),
+      extractTechnologyClaims(originalResponseText, dynamicGroundingVocabulary),
       grounding.strict,
       grounding.relaxed,
     );

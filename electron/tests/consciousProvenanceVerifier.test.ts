@@ -144,3 +144,33 @@ test('ConsciousProvenanceVerifier does not treat hypothesis text as grounding co
   assert.equal(verdict.ok, false);
   assert.equal(verdict.reason, 'unsupported_technology_claim');
 });
+
+test('ConsciousProvenanceVerifier rejects unsupported lowercase dynamic technology claims', () => {
+  const verifier = new ConsciousProvenanceVerifier();
+  const verdict = verifier.verify({
+    response: response({
+      openingReasoning: 'I would use weaviate for the vector index.',
+      implementationPlan: ['Store embeddings in weaviate'],
+    }),
+    semanticContextBlock: '<conscious_semantic_memory>\n[PROJECT] Tenant Analytics Platform: Technologies: Redis, Kafka\n</conscious_semantic_memory>',
+    hypothesis: null,
+  });
+
+  assert.equal(verdict.ok, false);
+  assert.equal(verdict.reason, 'unsupported_technology_claim');
+});
+
+test('ConsciousProvenanceVerifier accepts lowercase dynamic technology claims grounded by profile or evidence context', () => {
+  const verifier = new ConsciousProvenanceVerifier();
+  const verdict = verifier.verify({
+    response: response({
+      openingReasoning: 'I would use weaviate for the vector index.',
+      implementationPlan: ['Store embeddings in weaviate'],
+    }),
+    semanticContextBlock: '<conscious_semantic_memory>\n[PROJECT] Search Platform: Technologies: weaviate, kafka\n</conscious_semantic_memory>',
+    evidenceContextBlock: '<conscious_evidence>\nLATEST_SUGGESTED_ANSWER: weaviate is already part of the retrieval stack.\n</conscious_evidence>',
+    hypothesis: null,
+  });
+
+  assert.equal(verdict.ok, true);
+});

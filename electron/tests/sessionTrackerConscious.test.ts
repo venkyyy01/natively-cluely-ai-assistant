@@ -2,6 +2,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { SessionTracker } from '../SessionTracker';
+import { SupervisorBus } from '../runtime/SupervisorBus';
 
 test('SessionTracker Conscious Integration - should initialize with thread manager', () => {
   const tracker = new SessionTracker();
@@ -55,6 +56,53 @@ test('SessionTracker Conscious Integration - should keep live conscious state fr
   assert.equal(tracker.getCurrentPhase(), 'high_level_design');
   assert.ok(tracker.getThreadManager().getActiveThread());
   assert.equal(tracker.getThreadManager().getActiveThread()?.phase, 'high_level_design');
+});
+
+test('SessionTracker Conscious Integration - emits conscious phase and thread action events on supervisor bus', async () => {
+  const tracker = new SessionTracker();
+  const bus = new SupervisorBus({ error() {} });
+  const phaseEvents: Array<{ from: string; to: string; trigger: string }> = [];
+  const threadEvents: Array<{ action: string; question: string; phase: string }> = [];
+  tracker.setSupervisorBus(bus);
+  tracker.setConsciousModeEnabled(true);
+
+  bus.subscribe('conscious:phase_changed', async (event) => {
+    phaseEvents.push({ from: event.from, to: event.to, trigger: event.trigger });
+  });
+  bus.subscribe('conscious:thread_action', async (event) => {
+    threadEvents.push({ action: event.action, question: event.question, phase: event.phase });
+  });
+
+  tracker.handleTranscript({
+    speaker: 'interviewer',
+    text: 'Let me walk through the high level architecture and main components',
+    timestamp: Date.now(),
+    final: true,
+  });
+  tracker.recordConsciousResponse('How would you design a rate limiter for an API?', {
+    mode: 'reasoning_first',
+    openingReasoning: 'I would start with a per-user token bucket backed by Redis.',
+    implementationPlan: ['Use Redis for counters'],
+    tradeoffs: ['Redis adds operational overhead'],
+    edgeCases: ['Clock skew across regions'],
+    scaleConsiderations: ['Shard counters for hot tenants'],
+    pushbackResponses: ['I chose operational simplicity first.'],
+    likelyFollowUps: [],
+    codeTransition: '',
+  }, 'start');
+
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.deepEqual(phaseEvents, [{
+    from: 'requirements_gathering',
+    to: 'high_level_design',
+    trigger: 'interviewer_transcript',
+  }]);
+  assert.deepEqual(threadEvents, [{
+    action: 'start',
+    question: 'How would you design a rate limiter for an API?',
+    phase: 'high_level_design',
+  }]);
 });
 
 test('SessionTracker Conscious Integration - builds long memory context from thread, constraints, pins, and summaries', () => {
