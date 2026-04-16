@@ -61,6 +61,7 @@ test('ConsciousProvenanceVerifier accepts technology claims grounded by the curr
   const verifier = new ConsciousProvenanceVerifier();
   const verdict = verifier.verify({
     response: response(),
+    semanticContextBlock: '<conscious_semantic_memory>Grounding enabled.</conscious_semantic_memory>',
     question: 'How would you use Redis and Kafka in this design?',
     hypothesis: null,
   });

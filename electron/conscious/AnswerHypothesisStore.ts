@@ -45,13 +45,59 @@ function summarizeResponse(response: ConsciousModeStructuredResponse): string {
   return parts.join(' ');
 }
 
+function sanitizeLikelyAnswerSummary(value: string): string {
+  const lowered = value.toLowerCase();
+  const disallowed = [
+    'i can\'t',
+    'i cant',
+    'i cannot',
+    "can't share that information",
+    'cannot share that information',
+    'not sure',
+    'could you repeat',
+    'do not know',
+    'don\'t know',
+    'fallback',
+  ];
+
+  for (const marker of disallowed) {
+    if (lowered.includes(marker)) {
+      return '';
+    }
+  }
+
+  return value.trim();
+}
+
+function shouldPromoteStructuredSuggestion(response: ConsciousModeStructuredResponse, summary: string): boolean {
+  if (response.mode !== 'reasoning_first') {
+    return false;
+  }
+
+  if (!summary) {
+    return false;
+  }
+
+  return Boolean(
+    response.openingReasoning.trim()
+    || response.implementationPlan.length > 0
+    || response.tradeoffs.length > 0
+    || response.edgeCases.length > 0
+    || response.scaleConsiderations.length > 0
+    || response.pushbackResponses.length > 0
+  );
+}
+
 export class AnswerHypothesisStore {
   private latestHypothesis: AnswerHypothesis | null = null;
   private latestReaction: QuestionReaction | null = null;
 
   recordStructuredSuggestion(question: string, response: ConsciousModeStructuredResponse, threadAction: 'start' | 'continue' | 'reset'): void {
     const likelyThemes = extractThemes(response);
-    const latestSuggestedAnswer = summarizeResponse(response);
+    const latestSuggestedAnswer = sanitizeLikelyAnswerSummary(summarizeResponse(response));
+    if (!shouldPromoteStructuredSuggestion(response, latestSuggestedAnswer)) {
+      return;
+    }
     const baseConfidence = threadAction === 'continue' ? 0.74 : 0.62;
 
     if (threadAction === 'continue' && this.latestHypothesis) {

@@ -121,13 +121,17 @@ export class ConsciousPreparationCoordinator {
     }
 
     const contextAssemblyStart = input.contextAssemblyStart ?? Date.now();
-this.semanticFactStore.seedFromProfileData(input.profileData);
-if (!input.profileData && this.session.isConsciousModeEnabled()) {
-console.warn('[ConsciousPreparation] No profile data available for semantic fact enrichment. Conscious mode responses will lack personalized context.');
-}
-const retrievalPack = this.retrievalOrchestrator.buildPack({
+    this.semanticFactStore.seedFromProfileData(input.profileData);
+    if (!input.profileData && this.session.isConsciousModeEnabled()) {
+      console.warn('[ConsciousPreparation] No profile data available for semantic fact enrichment. Conscious mode responses will lack personalized context.');
+    }
+    const stateBlock = this.retrievalOrchestrator.buildStateBlock(
+      input.lastInterviewerTurn || input.resolvedQuestion,
+    );
+    const liveRagBlock = this.retrievalOrchestrator.buildLiveRagBlock({
       question: input.lastInterviewerTurn || input.resolvedQuestion,
-      lastSeconds: input.temporalWindowSeconds,
+      contextItems,
+      maxItems: 6,
     });
     const longMemoryBlock = this.session.getConsciousLongMemoryContext(
       input.lastInterviewerTurn || input.resolvedQuestion
@@ -151,7 +155,8 @@ const retrievalPack = this.retrievalOrchestrator.buildPack({
       evidenceContextBlock: [
         planBlock,
         semanticBlock,
-        retrievalPack.stateBlock,
+        stateBlock,
+        liveRagBlock,
         longMemoryBlock,
         this.session.getConsciousEvidenceContext(),
       ].filter(Boolean).join('\n\n'),

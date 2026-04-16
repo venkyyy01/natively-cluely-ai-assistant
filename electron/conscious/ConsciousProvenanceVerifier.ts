@@ -51,6 +51,32 @@ function extractKnownTechnologies(text: string): string[] {
 }
 
 export class ConsciousProvenanceVerifier {
+  private normalizeGroundingContext(input: {
+    semanticContextBlock?: string;
+    evidenceContextBlock?: string;
+    question?: string;
+  }): { strict: string; relaxed: string } {
+    const semanticContext = (input.semanticContextBlock || '').trim().toLowerCase();
+    const evidenceContext = (input.evidenceContextBlock || '').trim().toLowerCase();
+    const questionContext = (input.question || '').trim().toLowerCase();
+
+    const strict = [semanticContext, evidenceContext].filter(Boolean).join(' ');
+    const relaxed = [strict, questionContext].filter(Boolean).join(' ');
+
+    return { strict, relaxed };
+  }
+
+  private findUnsupportedTerms(terms: string[], strictContext: string, relaxedContext: string): string[] {
+    const unsupported: string[] = [];
+    for (const term of terms) {
+      if (strictContext.includes(term) || relaxedContext.includes(term)) {
+        continue;
+      }
+      unsupported.push(term);
+    }
+    return unsupported;
+  }
+
   verify(input: {
     response: ConsciousModeStructuredResponse;
     semanticContextBlock?: string;
@@ -58,34 +84,31 @@ export class ConsciousProvenanceVerifier {
     question?: string;
     hypothesis?: AnswerHypothesis | null;
   }): ConsciousProvenanceVerdict {
-    const semanticContext = (input.semanticContextBlock || '').trim();
-    const evidenceContext = (input.evidenceContextBlock || '').trim();
-    const hasStrictGroundingContext = Boolean(semanticContext || evidenceContext);
+    const grounding = this.normalizeGroundingContext(input);
+    const hasStrictGroundingContext = Boolean(grounding.strict);
     if (!hasStrictGroundingContext) {
       return { ok: true };
     }
 
-    const groundingContext = [
-      semanticContext,
-      evidenceContext,
-      input.question || '',
-    ].join(' ').toLowerCase();
-
-    if (!groundingContext.trim()) {
+    if (!grounding.relaxed.trim()) {
       return { ok: true };
     }
 
     const responseText = summaryText(input.response);
 
-    const unsupportedTech = extractKnownTechnologies(responseText).filter(
-      (term) => !groundingContext.includes(term)
+    const unsupportedTech = this.findUnsupportedTerms(
+      extractKnownTechnologies(responseText),
+      grounding.strict,
+      grounding.relaxed,
     );
     if (unsupportedTech.length > 0) {
       return { ok: false, reason: 'unsupported_technology_claim' };
     }
 
-    const unsupportedNumbers = extractNumbers(responseText).filter(
-      (value) => !groundingContext.includes(value)
+    const unsupportedNumbers = this.findUnsupportedTerms(
+      extractNumbers(responseText),
+      grounding.strict,
+      grounding.relaxed,
     );
     if (unsupportedNumbers.length > 0) {
       return { ok: false, reason: 'unsupported_metric_claim' };
