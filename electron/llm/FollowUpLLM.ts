@@ -1,5 +1,5 @@
 import { LLMHelper } from "../LLMHelper";
-import { UNIVERSAL_FOLLOWUP_PROMPT } from "./prompts";
+import { CONSCIOUS_REASONING_SYSTEM_PROMPT, UNIVERSAL_FOLLOWUP_PROMPT } from "./prompts";
 import { ConsciousModeStructuredResponse, ReasoningThread, parseConsciousModeResponse } from "../ConsciousMode";
 
 export class FollowUpLLM {
@@ -46,7 +46,10 @@ export class FollowUpLLM {
                 'Return JSON with keys: mode, openingReasoning, implementationPlan, tradeoffs, edgeCases, scaleConsiderations, pushbackResponses, likelyFollowUps, codeTransition.',
                 'Set mode to reasoning_first.',
             ].join('\n\n');
-            const stream = this.llmHelper.streamChat(message, undefined, context, UNIVERSAL_FOLLOWUP_PROMPT);
+            const stream = this.llmHelper.streamChat(message, undefined, context, CONSCIOUS_REASONING_SYSTEM_PROMPT, {
+                skipKnowledgeInterception: true,
+                qualityTier: 'structured_reasoning',
+            });
 
             let full = "";
             for await (const chunk of stream) {

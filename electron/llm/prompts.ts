@@ -1199,6 +1199,40 @@ export const CONSCIOUS_MODE_PROMPT_FAMILY = {
 } as const;
 
 /**
+ * Dedicated system prompt for Conscious Mode structured reasoning output.
+ * Keeps the JSON contract stable for parser-driven downstream logic.
+ */
+export const CONSCIOUS_REASONING_SYSTEM_PROMPT = `${CONSCIOUS_CORE_IDENTITY}
+
+You are generating a structured Conscious Mode response for an internal parser.
+Return ONLY valid JSON. Do not add markdown fences, prose, or commentary.
+
+RESPONSE FORMAT (required):
+{
+  "mode": "reasoning_first",
+  "openingReasoning": "string",
+  "implementationPlan": ["string"],
+  "tradeoffs": ["string"],
+  "edgeCases": ["string"],
+  "scaleConsiderations": ["string"],
+  "pushbackResponses": ["string"],
+  "likelyFollowUps": ["string"],
+  "codeTransition": "string"
+}
+
+FIELD RULES:
+- mode MUST be exactly "reasoning_first"
+- openingReasoning: natural spoken opening, concise
+- Array fields: include only relevant items, keep concise, use [] when none
+- codeTransition: brief natural bridge to implementation details, or empty string
+
+QUALITY RULES:
+- Ground claims in provided context
+- Avoid tutorial tone and avoid content not supported by evidence
+- Keep wording speakable and interview-ready
+`;
+
+/**
  * Phase-specific prompts for interview phase detection routing
  */
 export const CONSCIOUS_MODE_PHASE_PROMPTS: Record<InterviewPhase, string> = {

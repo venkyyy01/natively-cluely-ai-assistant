@@ -21,7 +21,7 @@ export interface ContextAssemblyOutput {
   bm25Results: Array<{ text: string; score: number }>;
   phase: InterviewPhase;
   confidence: number;
-  relevantContext: Array<{ text: string; timestamp: number }>;
+  relevantContext: Array<{ role: 'interviewer' | 'user' | 'assistant'; text: string; timestamp: number }>;
 }
 
 // Embedding provider interface for real embeddings
@@ -43,7 +43,7 @@ export function getEmbeddingProvider(): EmbeddingProvider | null {
 
 export async function computeBM25(
   query: string,
-  documents: Array<{ text: string; timestamp: number }>,
+  documents: Array<{ role: 'interviewer' | 'user' | 'assistant'; text: string; timestamp: number }>,
   k1: number = 1.5,
   b: number = 0.75
 ): Promise<Array<{ text: string; score: number; timestamp: number }>> {
@@ -163,7 +163,11 @@ export class ParallelContextAssembler {
 
     const docs = input.transcript
       .filter(t => t.speaker !== 'assistant')
-      .map(t => ({ text: t.text, timestamp: t.timestamp }));
+      .map(t => ({
+        role: t.speaker === 'user' ? 'user' as const : t.speaker === 'assistant' ? 'assistant' as const : 'interviewer' as const,
+        text: t.text,
+        timestamp: t.timestamp,
+      }));
 
     // Try to use real embeddings if ANE provider is available
     const embeddingProvider = getEmbeddingProvider();
@@ -182,7 +186,20 @@ export class ParallelContextAssembler {
       this.runInWorker<InterviewPhase>('phase', { transcript: input.transcript }),
     ]);
 
-    const bm25Results = (await bm25ResultsRaw).map((r: { text: string; score: number }) => ({ text: r.text, score: r.score }));
+    const speakerByText = new Map<string, 'interviewer' | 'user' | 'assistant'>();
+    for (const doc of docs) {
+      const key = doc.text.trim().toLowerCase();
+      if (!speakerByText.has(key)) {
+        speakerByText.set(key, doc.role);
+      }
+    }
+
+    const bm25Results = (await bm25ResultsRaw).map((r: { text: string; score: number; timestamp: number }) => ({
+      role: speakerByText.get(r.text.trim().toLowerCase()) ?? 'interviewer' as const,
+      text: r.text,
+      score: r.score,
+      timestamp: r.timestamp,
+    }));
     const phase = await phaseResult;
     const relevantContext = this.selectRelevantContext(bm25Results, phase);
     const confidence = this.calculateConfidence(embedding, relevantContext);
@@ -197,9 +214,9 @@ export class ParallelContextAssembler {
   }
 
   private selectRelevantContext(
-    bm25Results: Array<{ text: string; score: number }>,
+    bm25Results: Array<{ role: 'interviewer' | 'user' | 'assistant'; text: string; score: number; timestamp: number }>,
     phase: InterviewPhase
-  ): Array<{ text: string; timestamp: number }> {
+  ): Array<{ role: 'interviewer' | 'user' | 'assistant'; text: string; timestamp: number }> {
     const budgetMap: Record<InterviewPhase, number> = {
       requirements_gathering: 500,
       high_level_design: 800,
@@ -214,12 +231,12 @@ export class ParallelContextAssembler {
 
     const budget = budgetMap[phase] || 500;
     let usedTokens = 0;
-    const selected: Array<{ text: string; timestamp: number }> = [];
+    const selected: Array<{ role: 'interviewer' | 'user' | 'assistant'; text: string; timestamp: number }> = [];
 
     for (const result of bm25Results) {
       const tokens = result.text.split(/\s+/).length;
       if (usedTokens + tokens <= budget) {
-        selected.push({ text: result.text, timestamp: Date.now() });
+        selected.push({ role: result.role, text: result.text, timestamp: result.timestamp });
         usedTokens += tokens;
       }
     }
@@ -227,7 +244,7 @@ export class ParallelContextAssembler {
     return selected;
   }
 
-  private calculateConfidence(embedding: number[], context: Array<{ text: string; timestamp: number }>): number {
+  private calculateConfidence(embedding: number[], context: Array<{ role: 'interviewer' | 'user' | 'assistant'; text: string; timestamp: number }>): number {
     const contextScore = context.length > 0 ? 0.5 : 0;
     const embeddingScore = embedding.length === 384 ? 0.3 : 0;
     const baseScore = 0.2;
@@ -242,9 +259,25 @@ export class ParallelContextAssembler {
       : generateEmbeddingFallback(input.query);
     const docs = input.transcript
       .filter(t => t.speaker !== 'assistant')
-      .map(t => ({ text: t.text, timestamp: t.timestamp }));
+      .map(t => ({
+        role: t.speaker === 'user' ? 'user' as const : t.speaker === 'assistant' ? 'assistant' as const : 'interviewer' as const,
+        text: t.text,
+        timestamp: t.timestamp,
+      }));
     const bm25ResultsRaw = await computeBM25(input.query, docs);
-    const bm25Results = bm25ResultsRaw.map((r: { text: string; score: number }) => ({ text: r.text, score: r.score }));
+    const speakerByText = new Map<string, 'interviewer' | 'user' | 'assistant'>();
+    for (const doc of docs) {
+      const key = doc.text.trim().toLowerCase();
+      if (!speakerByText.has(key)) {
+        speakerByText.set(key, doc.role);
+      }
+    }
+    const bm25Results = bm25ResultsRaw.map((r: { text: string; score: number; timestamp: number }) => ({
+      role: speakerByText.get(r.text.trim().toLowerCase()) ?? 'interviewer' as const,
+      text: r.text,
+      score: r.score,
+      timestamp: r.timestamp,
+    }));
     const phase = detectPhase(input.transcript);
     const relevantContext = this.selectRelevantContext(bm25Results, phase);
     const confidence = this.calculateConfidence(embedding, relevantContext);

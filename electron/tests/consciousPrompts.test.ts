@@ -72,3 +72,13 @@ test('Conscious Mode prompts restrict fresh starts to system design and screensh
   assert.match(combined, /continuation|continue an existing reasoning thread/i);
   assert.doesNotMatch(combined, /all technical questions can use conscious mode/i);
 });
+
+test('Conscious reasoning system prompt enforces JSON output and never asks for spoken-only output', () => {
+  assert.ok('CONSCIOUS_REASONING_SYSTEM_PROMPT' in prompts);
+  const prompt = (prompts as Record<string, unknown>).CONSCIOUS_REASONING_SYSTEM_PROMPT as string;
+
+  assert.equal(typeof prompt, 'string');
+  assert.match(prompt, /return only valid json/i);
+  assert.match(prompt, /"mode":\s*"reasoning_first"/i);
+  assert.doesNotMatch(prompt, /output only the spoken answer/i);
+});

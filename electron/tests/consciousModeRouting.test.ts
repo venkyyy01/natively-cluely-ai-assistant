@@ -14,13 +14,23 @@ type StreamCall = {
   message: string;
   context?: string;
   prompt?: string;
+  options?: {
+    skipKnowledgeInterception?: boolean;
+    qualityTier?: 'fast' | 'standard' | 'structured_reasoning';
+  };
 };
 
 class FakeLLMHelper {
   public calls: StreamCall[] = [];
 
-  async *streamChat(message: string, _imagePaths?: string[], context?: string, prompt?: string): AsyncGenerator<string> {
-    this.calls.push({ message, context, prompt });
+  async *streamChat(
+    message: string,
+    _imagePaths?: string[],
+    context?: string,
+    prompt?: string,
+    options?: StreamCall['options'],
+  ): AsyncGenerator<string> {
+    this.calls.push({ message, context, prompt, options });
 
     if (message.includes('ACTIVE_REASONING_THREAD')) {
       yield JSON.stringify({
@@ -89,6 +99,8 @@ test('Conscious Mode routes qualifying technical questions into the structured r
   assert.equal(thread?.rootQuestion, 'How would you design a rate limiter for an API?');
   assert.equal(thread?.followUpCount, 0);
   assert.match(llmHelper.calls[0]?.message || '', /STRUCTURED_REASONING_RESPONSE/);
+  assert.equal(llmHelper.calls[0]?.options?.skipKnowledgeInterception, true);
+  assert.equal(llmHelper.calls[0]?.options?.qualityTier, 'structured_reasoning');
 });
 
 test('Conscious Mode qualifying follow-ups continue the thread, while a new technical topic resets it', async () => {

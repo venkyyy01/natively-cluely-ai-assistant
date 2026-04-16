@@ -1,6 +1,6 @@
 import type { AssistantResponse, TemporalContext } from '../llm/TemporalContextBuilder';
 import { buildTemporalContext } from '../llm/TemporalContextBuilder';
-import { prepareTranscriptForWhatToAnswer } from '../llm/transcriptCleaner';
+import { prepareTranscriptForReasoning } from '../llm/transcriptCleaner';
 import type { ContextItem, TranscriptSegment } from '../SessionTracker';
 
 export interface ConsciousContextComposition {
@@ -44,7 +44,7 @@ export class ConsciousContextComposer {
       timestamp: item.timestamp,
     }));
 
-    const preparedTranscript = prepareTranscriptForWhatToAnswer(transcriptTurns, input.transcriptTurnLimit ?? 12);
+    const preparedTranscript = prepareTranscriptForReasoning(transcriptTurns, input.transcriptTurnLimit ?? 12);
 
     return {
       contextItems,

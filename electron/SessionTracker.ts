@@ -1104,6 +1104,7 @@ isConsciousModeEnabled(): boolean {
     this.adaptiveWindowStats.calls += 1;
 
     const candidates: ContextEntry[] = this.getContextItems().map((item: ContextItem) => ({
+      role: item.role,
       text: item.text,
       timestamp: item.timestamp,
       phase: item.phase ?? this.phaseDetector.getCurrentPhase(),
@@ -1112,6 +1113,7 @@ isConsciousModeEnabled(): boolean {
 
     for (const pinned of this.pinnedItems) {
       candidates.push({
+        role: 'interviewer',
         text: pinned.label ? `[${pinned.label}] ${pinned.text}` : pinned.text,
         timestamp: pinned.pinnedAt,
         phase: this.phaseDetector.getCurrentPhase(),
@@ -1154,7 +1156,7 @@ isConsciousModeEnabled(): boolean {
     }
 
     return selected.map(entry => ({
-      role: 'interviewer' as const,
+      role: entry.role ?? 'interviewer',
       text: entry.text,
       timestamp: entry.timestamp,
     }));

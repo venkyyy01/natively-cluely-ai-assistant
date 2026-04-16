@@ -222,6 +222,14 @@ const INDIAN_ENGLISH_STYLE_INSTRUCTION = `CRITICAL STYLE: Write in natural India
 - No text walls or unnecessary fluff.`
 type Provider = 'gemini' | 'groq' | 'openai' | 'claude';
 
+type StreamQualityTier = 'fast' | 'standard' | 'structured_reasoning';
+
+interface StreamChatOptions {
+  skipKnowledgeInterception?: boolean;
+  abortSignal?: AbortSignal;
+  qualityTier?: StreamQualityTier;
+}
+
 const SCREENSHOT_FALLBACK_TEXT_LIMIT_CHARS = 8000;
 
 interface ScreenshotEventRoutingInput {
@@ -456,8 +464,12 @@ export class LLMHelper {
     return this.getDefaultFastModel(provider);
   }
 
-  private getActiveFastResponseTarget(): { provider: FastResponseProvider; model: string } | null {
+  private getActiveFastResponseTarget(qualityTier: StreamQualityTier = 'standard'): { provider: FastResponseProvider; model: string } | null {
     if (!this.fastResponseConfig.enabled) {
+      return null;
+    }
+
+    if (qualityTier === 'structured_reasoning') {
       return null;
     }
 
@@ -2979,7 +2991,7 @@ ANSWER DIRECTLY:`;
     imagePaths?: string[],
     context?: string,
     systemPromptOverride?: string,
-    options?: { skipKnowledgeInterception?: boolean; abortSignal?: AbortSignal }
+    options?: StreamChatOptions
   ): AsyncGenerator<string, void, unknown> {
     if (options?.abortSignal?.aborted) {
       return;
@@ -3063,7 +3075,8 @@ ANSWER DIRECTLY:`;
       ? `CONTEXT:\n${context}\n\nUSER QUESTION:\n${effectiveMessage}`
       : effectiveMessage;
 
-    const fastResponseTarget = !isMultimodal ? this.getActiveFastResponseTarget() : null;
+    const qualityTier: StreamQualityTier = options?.qualityTier ?? 'standard';
+    const fastResponseTarget = !isMultimodal ? this.getActiveFastResponseTarget(qualityTier) : null;
     if (fastResponseTarget) {
       console.log(`[LLMHelper] ⚡️ Fast Response Mode Active (Streaming). Routing to ${fastResponseTarget.provider} (${fastResponseTarget.model})...`);
       try {
@@ -3165,7 +3178,11 @@ ANSWER DIRECTLY:`;
 
       // Race strategy (default)
       const raceMsg = this.joinPrompt(finalSystemPrompt, userContent);
-      yield* this.streamWithGeminiParallelRace(raceMsg, imagePaths);
+      if (qualityTier === 'structured_reasoning') {
+        yield* this.streamWithGeminiModel(raceMsg, GEMINI_PRO_MODEL, imagePaths, options?.abortSignal);
+      } else {
+        yield* this.streamWithGeminiParallelRace(raceMsg, imagePaths);
+      }
     } else {
       throw new Error("No LLM provider available");
     }

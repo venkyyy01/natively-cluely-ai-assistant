@@ -206,7 +206,7 @@ export class IntelligenceEngine extends EventEmitter {
       if (prefetched?.relevantContext.length) {
         const prefetchedResult = {
           contextItems: prefetched.relevantContext.map((ctx) => ({
-            role: 'interviewer' as const,
+            role: ctx.role,
             text: ctx.text,
             timestamp: ctx.timestamp,
           })),
@@ -247,7 +247,7 @@ export class IntelligenceEngine extends EventEmitter {
       const assemblyResult = await this.parallelContextAssembler.assemble(input);
       
       const relevantItems = assemblyResult.relevantContext.map(ctx => ({
-        role: 'interviewer' as const,
+        role: ctx.role,
         text: ctx.text,
         timestamp: ctx.timestamp,
       }));
@@ -564,19 +564,11 @@ export class IntelligenceEngine extends EventEmitter {
                 return answer || "Could you repeat that? I want to make sure I address your question properly.";
             }
 
-            let contextItems = this.session.getContext(180);
+            const contextItems = this.session.getContext(180);
             const lastInterim = this.session.getLastInterimInterviewer();
             const interimQuestion = lastInterim?.text?.trim() || '';
             const baseQuestion = question || interimQuestion || this.session.getLastInterviewerTurn() || '';
             const resolvedQuestion = baseQuestion;
-            if (this.session.isConsciousModeEnabled() && resolvedQuestion) {
-                try {
-                    contextItems = await this.session.getConsciousRelevantContext(resolvedQuestion, 900);
-                } catch (error) {
-                    console.warn('[IntelligenceEngine] Failed to build conscious hybrid context, using recency fallback:', error);
-                    contextItems = this.session.getContext(300);
-                }
-            }
 const knowledgeOrchestrator = this.llmHelper.getKnowledgeOrchestrator?.();
 const knowledgeStatus = knowledgeOrchestrator?.getStatus?.();
 const profileData = knowledgeOrchestrator?.getProfileData?.();
@@ -810,6 +802,7 @@ const capability = typeof (this.llmHelper as any).getProviderCapabilityClass ===
                 }
             }
 
+            const contextAssemblyStart = Date.now();
             const preparationResult = await this.consciousPreparationCoordinator.prepareReasoningContext({
                 resolvedQuestion,
                 contextItems,
@@ -817,17 +810,18 @@ const capability = typeof (this.llmHelper as any).getProviderCapabilityClass ===
                 lastInterviewerTurn,
                 useConsciousAcceleration,
                 getAssembledContext: this.getAssembledContext.bind(this),
+                getConsciousRelevantContext: this.session.getConsciousRelevantContext.bind(this.session),
                 tokenBudget: 900,
                 transcriptTurnLimit: 18,
                 temporalWindowSeconds: 600,
                 profileData,
                 hardBudgetMs: this.CONTEXT_ASSEMBLY_HARD_BUDGET_MS,
+                contextAssemblyStart,
                 classifyIntent: this.classifyIntentForRoute.bind(this),
                 onInterimInjected: (text) => {
                     console.log(`[IntelligenceEngine] Injecting interim transcript: "${text.substring(0, 50)}..."`);
                 },
             });
-            contextItems = preparationResult.contextItems;
             const preparedTranscript = preparationResult.preparedTranscript;
             this.latencyTracker.mark(requestId, 'transcriptPrepared');
             const temporalContext = preparationResult.temporalContext;

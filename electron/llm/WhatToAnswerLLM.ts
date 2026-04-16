@@ -1,5 +1,5 @@
 import { LLMHelper } from "../LLMHelper";
-import { FAST_STANDARD_ANSWER_PROMPT, UNIVERSAL_WHAT_TO_ANSWER_PROMPT } from "./prompts";
+import { CONSCIOUS_REASONING_SYSTEM_PROMPT, FAST_STANDARD_ANSWER_PROMPT, UNIVERSAL_WHAT_TO_ANSWER_PROMPT } from "./prompts";
 import { TemporalContext } from "./TemporalContextBuilder";
 import { IntentResult } from "./IntentClassifier";
 import { ConsciousModeStructuredResponse, parseConsciousModeResponse } from "../ConsciousMode";
@@ -139,7 +139,10 @@ ANSWER SHAPE: ${intentResult.answerShape}
         contextParts.push(`CONVERSATION:\n${cleanedTranscript}`);
 
         const message = contextParts.join('\n\n');
-        const stream = this.llmHelper.streamChat(message, imagePaths, undefined, UNIVERSAL_WHAT_TO_ANSWER_PROMPT);
+        const stream = this.llmHelper.streamChat(message, imagePaths, undefined, CONSCIOUS_REASONING_SYSTEM_PROMPT, {
+            skipKnowledgeInterception: true,
+            qualityTier: 'structured_reasoning',
+        });
 
         for await (const chunk of stream) {
             full += chunk;

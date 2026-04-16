@@ -92,11 +92,13 @@ export class ConsciousPreparationCoordinator {
     lastInterviewerTurn: string | null;
     useConsciousAcceleration: boolean;
     getAssembledContext: (query: string, tokenBudget: number) => Promise<{ contextItems: ContextItem[] }>;
+    getConsciousRelevantContext: (query: string, tokenBudget: number) => Promise<ContextItem[]>;
     tokenBudget: number;
     transcriptTurnLimit: number;
     temporalWindowSeconds: number;
     profileData?: any;
     hardBudgetMs: number;
+    contextAssemblyStart?: number;
     classifyIntent: (
       lastInterviewerTurn: string | null,
       preparedTranscript: string,
@@ -105,12 +107,20 @@ export class ConsciousPreparationCoordinator {
     onInterimInjected?: (text: string) => void;
   }): Promise<ConsciousPreparationResult> {
     let contextItems = input.contextItems;
-    if (input.useConsciousAcceleration && input.resolvedQuestion) {
-      const assembledContext = await input.getAssembledContext(input.resolvedQuestion, input.tokenBudget);
-      contextItems = assembledContext.contextItems;
+    if (input.resolvedQuestion && this.session.isConsciousModeEnabled()) {
+      try {
+        if (input.useConsciousAcceleration) {
+          const assembledContext = await input.getAssembledContext(input.resolvedQuestion, input.tokenBudget);
+          contextItems = assembledContext.contextItems;
+        } else {
+          contextItems = await input.getConsciousRelevantContext(input.resolvedQuestion, input.tokenBudget);
+        }
+      } catch (error) {
+        console.warn('[ConsciousPreparation] Context retrieval failed, using fallback context items:', error);
+      }
     }
 
-    const contextAssemblyStart = Date.now();
+    const contextAssemblyStart = input.contextAssemblyStart ?? Date.now();
 this.semanticFactStore.seedFromProfileData(input.profileData);
 if (!input.profileData && this.session.isConsciousModeEnabled()) {
 console.warn('[ConsciousPreparation] No profile data available for semantic fact enrichment. Conscious mode responses will lack personalized context.');

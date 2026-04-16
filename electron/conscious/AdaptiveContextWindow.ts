@@ -3,6 +3,7 @@ import { isOptimizationActive } from '../config/optimizations';
 import { TokenCounter } from '../shared/TokenCounter';
 
 export interface ContextEntry {
+  role?: 'interviewer' | 'user' | 'assistant';
   text: string;
   timestamp: number;
   embedding?: number[];

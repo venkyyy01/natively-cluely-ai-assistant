@@ -6,7 +6,7 @@ import type { RuntimeBudgetScheduler } from '../runtime/RuntimeBudgetScheduler';
 
 export interface PrefetchedContext {
   context: {
-    relevantContext: Array<{ text: string; timestamp: number }>;
+    relevantContext: Array<{ role: 'interviewer' | 'user' | 'assistant'; text: string; timestamp: number }>;
     phase: InterviewPhase;
   };
   embedding: number[];
@@ -222,13 +222,17 @@ export class PredictivePrefetcher {
   }
 
   private async assembleContext(query: string): Promise<{
-    relevantContext: Array<{ text: string; timestamp: number }>;
+    relevantContext: Array<{ role: 'interviewer' | 'user' | 'assistant'; text: string; timestamp: number }>;
     phase: InterviewPhase;
   }> {
     // Real context assembly: BM25 search over recent transcript segments
     const docs = this.transcriptSegments
       .filter(s => s.speaker !== 'assistant' && s.text.trim().length > 0)
-      .map(s => ({ text: s.text, timestamp: s.timestamp }));
+      .map(s => ({
+        role: s.speaker === 'user' ? 'user' as const : s.speaker === 'assistant' ? 'assistant' as const : 'interviewer' as const,
+        text: s.text,
+        timestamp: s.timestamp,
+      }));
 
     if (docs.length === 0) {
       return {
@@ -241,7 +245,11 @@ export class PredictivePrefetcher {
       const bm25Results = await computeBM25(query, docs);
       const relevantContext = bm25Results
         .slice(0, 5)
-        .map(r => ({ text: r.text, timestamp: r.timestamp }));
+        .map(r => ({
+          role: docs.find((doc) => doc.text.trim().toLowerCase() === r.text.trim().toLowerCase())?.role ?? 'interviewer' as const,
+          text: r.text,
+          timestamp: r.timestamp,
+        }));
 
       return {
         relevantContext,
@@ -257,7 +265,7 @@ export class PredictivePrefetcher {
   }
 
   async getContext(query: string, embedding?: number[]): Promise<{
-    relevantContext: Array<{ text: string; timestamp: number }>;
+    relevantContext: Array<{ role: 'interviewer' | 'user' | 'assistant'; text: string; timestamp: number }>;
     phase: InterviewPhase;
   } | null> {
     const cached = await this.prefetchCache.get(query, embedding);
