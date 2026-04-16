@@ -70,6 +70,9 @@ const MIN_OVERLAY_WIDTH = 420;
 const MAX_OVERLAY_WIDTH = 960;
 const MIN_CHAT_HEIGHT = 260;
 const MAX_CHAT_HEIGHT = 760;
+const MANUAL_STT_FINALIZE_GRACE_MS = 350;
+const MANUAL_STT_FINALIZE_MAX_WAIT_MS = 1500;
+const MANUAL_STT_POLL_INTERVAL_MS = 75;
 type ResizeDirection = 'left' | 'right' | 'top' | 'bottom' | 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right';
 
 function appendRollingTranscript(existing: string, nextSegment: string): string {
@@ -147,6 +150,7 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
     const [conversationContext, setConversationContext] = useState<string>('');
     const [isManualRecording, setIsManualRecording] = useState(false);
     const isRecordingRef = useRef(false);  // Ref to track recording state (avoids stale closure)
+    const manualFinalizeInFlightRef = useRef(false);
     const [manualTranscript, setManualTranscript] = useState('');
     const manualTranscriptRef = useRef<string>('');
     const [showTranscript, setShowTranscript] = useState(() => {
@@ -386,6 +390,9 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
             setMessages([]);
             setInputValue('');
             setAttachedContext([]);
+            isRecordingRef.current = false;
+            manualFinalizeInFlightRef.current = false;
+            setIsManualRecording(false);
             setManualTranscript('');
             setVoiceInput('');
             voiceInputRef.current = '';
@@ -1068,78 +1075,98 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
 
 
     const handleAnswerNow = async () => {
+        if (manualFinalizeInFlightRef.current) {
+            return;
+        }
+
         if (isManualRecording) {
-            // Stop recording - send accumulated voice input to Gemini
-            isRecordingRef.current = false;  // Update ref immediately
+            // Stop recording and give STT providers a short grace window to flush final tokens.
+            // Keep isRecordingRef true during this window so late "user" transcripts are still captured.
+            manualFinalizeInFlightRef.current = true;
             setIsManualRecording(false);
-            setManualTranscript('');  // Clear live preview
-
-            // Send manual finalization signal to STT Providers
-            window.electronAPI.finalizeMicSTT().catch(err => console.error('[NativelyInterface] Failed to send finalizeMicSTT:', err));
-            const nativeAudioStatus = await window.electronAPI.getNativeAudioStatus().catch(() => ({ connected: false }));
-
-            const currentAttachments = attachedContext;
-            setAttachedContext([]); // Clear context immediately on send
-
-            const question = (voiceInputRef.current + (manualTranscriptRef.current ? ' ' + manualTranscriptRef.current : '')).trim();
-            setVoiceInput('');
-            voiceInputRef.current = '';
             setManualTranscript('');
-            manualTranscriptRef.current = '';
 
-            if (!question && currentAttachments.length === 0) {
-                // No voice input and no image
+            try {
+                await window.electronAPI.finalizeMicSTT().catch(err => {
+                    console.error('[NativelyInterface] Failed to send finalizeMicSTT:', err);
+                });
+
+                await new Promise(resolve => setTimeout(resolve, MANUAL_STT_FINALIZE_GRACE_MS));
+
+                const waitStart = Date.now();
+                while (
+                    !voiceInputRef.current.trim() &&
+                    !manualTranscriptRef.current.trim() &&
+                    Date.now() - waitStart < MANUAL_STT_FINALIZE_MAX_WAIT_MS
+                ) {
+                    await new Promise(resolve => setTimeout(resolve, MANUAL_STT_POLL_INTERVAL_MS));
+                }
+
+                const nativeAudioStatus = await window.electronAPI.getNativeAudioStatus().catch(() => ({ connected: false }));
+
+                const currentAttachments = attachedContext;
+                setAttachedContext([]); // Clear context immediately on send
+
+                const question = (voiceInputRef.current + (manualTranscriptRef.current ? ' ' + manualTranscriptRef.current : '')).trim();
+                isRecordingRef.current = false;
+                setVoiceInput('');
+                voiceInputRef.current = '';
+                setManualTranscript('');
+                manualTranscriptRef.current = '';
+
+                if (!question && currentAttachments.length === 0) {
+                    // No voice input and no image
+                    setMessages(prev => prependMessage(prev, {
+                        id: Date.now().toString(),
+                        role: 'system',
+                        text: nativeAudioStatus.connected
+                            ? '⚠️ No speech detected. Try speaking closer to your microphone.'
+                            : '⚠️ Audio pipeline is disconnected. Start a meeting or fix audio setup before using Answer.'
+                    }));
+                    return;
+                }
+
+                // Show user's spoken question
+                setMessages(prev => prependMessage(prev, {
+                    id: Date.now().toString(),
+                    role: 'user',
+                    text: question,
+                    hasScreenshot: currentAttachments.length > 0,
+                    screenshotPreview: currentAttachments[0]?.preview
+                }));
+
+                // Add placeholder for streaming response
                 setMessages(prev => prependMessage(prev, {
                     id: Date.now().toString(),
                     role: 'system',
-                    text: nativeAudioStatus.connected
-                        ? '⚠️ No speech detected. Try speaking closer to your microphone.'
-                        : '⚠️ Audio pipeline is disconnected. Start a meeting or fix audio setup before using Answer.'
+                    text: '',
+                    isStreaming: true
                 }));
-                return;
-            }
 
-            // Show user's spoken question
-            setMessages(prev => prependMessage(prev, {
-                id: Date.now().toString(),
-                role: 'user',
-                text: question,
-                hasScreenshot: currentAttachments.length > 0,
-                screenshotPreview: currentAttachments[0]?.preview
-            }));
+                setIsProcessing(true);
 
-            // Add placeholder for streaming response
-            setMessages(prev => prependMessage(prev, {
-                id: Date.now().toString(),
-                role: 'system',
-                text: '',
-                isStreaming: true
-            }));
+                try {
+                    let prompt = '';
 
-            setIsProcessing(true);
-
-            try {
-                let prompt = '';
-
-                if (currentAttachments.length > 0) {
-                    // Image + Voice Context
-                    prompt = `You are a helper. The user has provided a screenshot and a spoken question/command.
+                    if (currentAttachments.length > 0) {
+                        // Image + Voice Context
+                        prompt = `You are a helper. The user has provided a screenshot and a spoken question/command.
 User said: "${question}"
 
 Instructions:
 1. Analyze the screenshot in the context of what the user said.
 2. Provide a direct, helpful answer.
 3. Be concise.`;
-                } else {
-                    // JIT RAG pre-flight: try to use indexed meeting context first
-                    const ragResult = await window.electronAPI.ragQueryLive?.(question);
-                    if (ragResult?.success) {
-                        // JIT RAG handled it — response streamed via rag:stream-chunk events
-                        return;
-                    }
+                    } else {
+                        // JIT RAG pre-flight: try to use indexed meeting context first
+                        const ragResult = await window.electronAPI.ragQueryLive?.(question);
+                        if (ragResult?.success) {
+                            // JIT RAG handled it — response streamed via rag:stream-chunk events
+                            return;
+                        }
 
-                    // Voice Only (Smart Extract) — fallback
-                    prompt = `You are a real-time interview assistant. The user just repeated or paraphrased a question from their interviewer.
+                        // Voice Only (Smart Extract) — fallback
+                        prompt = `You are a real-time interview assistant. The user just repeated or paraphrased a question from their interviewer.
 Instructions:
 1. Extract the core question being asked
 2. Provide a clear, concise, and professional answer that the user can say out loud
@@ -1150,20 +1177,24 @@ Instructions:
 7. Format for speaking out loud, not for reading
 
 Provide only the answer, nothing else.`;
+                    }
+
+                    // Call Streaming API: message = question, context = instructions
+                    requestStartTimeRef.current = Date.now();
+                    await window.electronAPI.streamGeminiChat(question, currentAttachments.length > 0 ? currentAttachments.map(s => s.path) : undefined, prompt, { skipSystemPrompt: true });
+
+                } catch (err) {
+                    // Initial invocation failing (e.g. IPC error before stream starts)
+                    setIsProcessing(false);
+                    setMessages(prev => replaceTopStreamingPlaceholder(prev, {
+                        id: Date.now().toString(),
+                        role: 'system',
+                        text: `❌ Error starting stream: ${err}`
+                    }));
                 }
-
-                // Call Streaming API: message = question, context = instructions
-                requestStartTimeRef.current = Date.now();
-                await window.electronAPI.streamGeminiChat(question, currentAttachments.length > 0 ? currentAttachments.map(s => s.path) : undefined, prompt, { skipSystemPrompt: true });
-
-            } catch (err) {
-                // Initial invocation failing (e.g. IPC error before stream starts)
-                setIsProcessing(false);
-                setMessages(prev => replaceTopStreamingPlaceholder(prev, {
-                    id: Date.now().toString(),
-                    role: 'system',
-                    text: `❌ Error starting stream: ${err}`
-                }));
+            } finally {
+                isRecordingRef.current = false;
+                manualFinalizeInFlightRef.current = false;
             }
         } else {
             const nativeAudioStatus = await window.electronAPI.getNativeAudioStatus().catch(() => ({ connected: false }));
