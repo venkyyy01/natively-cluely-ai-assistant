@@ -189,8 +189,8 @@ test('Conscious Mode only starts for system-design questions and prefers fresh s
   });
 
   assert.deepEqual(classifyConsciousModeQuestion('Tell me about a time you handled team conflict.', null), {
-    qualifies: false,
-    threadAction: 'ignore',
+    qualifies: true,
+    threadAction: 'start',
   });
 
   assert.deepEqual(classifyConsciousModeQuestion('How would you design the data model for billing?', thread), {

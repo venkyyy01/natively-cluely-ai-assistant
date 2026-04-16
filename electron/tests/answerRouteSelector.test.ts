@@ -37,6 +37,17 @@ test('route selector sends conscious questions to conscious route without intent
     latestQuestion: 'How would you design a rate limiter for an API?',
     activeReasoningThread: null,
   }), 'conscious_answer');
+
+  assert.equal(selectAnswerRoute({
+    explicitManual: false,
+    explicitFollowUp: false,
+    consciousModeEnabled: true,
+    profileModeEnabled: false,
+    hasProfile: false,
+    hasKnowledgeData: false,
+    latestQuestion: 'Tell me about a time you handled team conflict.',
+    activeReasoningThread: null,
+  }), 'conscious_answer');
 });
 
 test('route selector uses conservative profile and knowledge heuristics', () => {

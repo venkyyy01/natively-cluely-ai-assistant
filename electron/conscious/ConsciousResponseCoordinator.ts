@@ -1,9 +1,10 @@
 import type { AnswerLatencyTracker, AnswerRoute } from '../latency/AnswerLatencyTracker';
+import type { SuggestedAnswerMetadata } from '../IntelligenceEngine';
 
 type IntelligenceModeSetter = (mode: 'idle' | 'reasoning_first') => void;
 type EventEmitterLike = {
   emit(event: 'suggested_answer_token', answer: string, question: string, confidence: number): boolean;
-  emit(event: 'suggested_answer', answer: string, question: string, confidence: number): boolean;
+  emit(event: 'suggested_answer', answer: string, question: string, confidence: number, metadata?: SuggestedAnswerMetadata): boolean;
 };
 
 interface ConsciousSessionLike {
@@ -29,6 +30,7 @@ export class ConsciousResponseCoordinator {
     questionLabel: string;
     confidence: number;
     fullAnswer: string;
+    metadata?: SuggestedAnswerMetadata;
   }): string {
     this.setMode('reasoning_first');
     this.emitter.emit('suggested_answer_token', input.fullAnswer, input.questionLabel, input.confidence);
@@ -40,7 +42,7 @@ export class ConsciousResponseCoordinator {
       question: input.questionLabel,
       answer: input.fullAnswer,
     });
-    this.emitter.emit('suggested_answer', input.fullAnswer, input.questionLabel, input.confidence);
+    this.emitter.emit('suggested_answer', input.fullAnswer, input.questionLabel, input.confidence, input.metadata);
     const latencySnapshot = this.latencyTracker.complete(input.requestId);
     console.log('[IntelligenceEngine] Answer latency snapshot:', latencySnapshot);
     this.setMode('idle');

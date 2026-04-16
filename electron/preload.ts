@@ -4,6 +4,33 @@ import type { CustomProviderPayload, FastResponseConfig, FollowUpEmailInput, Gem
 type IpcErrorContract = { code: string; message: string }
 type IpcResult<T> = { success: true; data: T } | { success: false; error: IpcErrorContract }
 type StatusResult = { success: boolean; error?: string }
+type SuggestedAnswerMetadata = {
+  route: 'fast_standard_answer' | 'enriched_standard_answer' | 'conscious_answer' | 'manual_answer' | 'follow_up_refinement'
+  attemptedRoute?: 'fast_standard_answer' | 'enriched_standard_answer' | 'conscious_answer' | 'manual_answer' | 'follow_up_refinement'
+  fallbackOccurred: boolean
+  fallbackReason?: string
+  schemaVersion: 'standard_answer_v1' | 'conscious_mode_v1'
+  evidenceHash: string
+  transcriptRevision: number
+  threadAction?: 'start' | 'continue' | 'reset' | 'ignore'
+  thread?: {
+    rootQuestion: string
+    lastQuestion: string
+    followUpCount: number
+    updatedAt: number
+  } | null
+  cooldownSuppressedMs?: number
+  verifier?: {
+    deterministic: 'pass' | 'fail' | 'skipped'
+    provenance: 'pass' | 'fail' | 'skipped'
+  }
+}
+type IntelligenceSuggestedAnswerEvent = {
+  answer: string
+  question: string
+  confidence: number
+  metadata?: SuggestedAnswerMetadata
+}
 
 const isIpcResult = <T>(value: unknown): value is IpcResult<T> => {
   return Boolean(value) && typeof value === 'object' && 'success' in (value as Record<string, unknown>)
@@ -172,7 +199,8 @@ onAccelerationModeChanged: (callback: (enabled: boolean) => void) => () => void
 
   // Intelligence Mode Events
   onIntelligenceAssistUpdate: (callback: (data: { insight: string }) => void) => () => void
-  onIntelligenceSuggestedAnswer: (callback: (data: { answer: string; question: string; confidence: number }) => void) => () => void
+  onIntelligenceCooldown: (callback: (data: { suppressedMs: number; question?: string }) => void) => () => void
+  onIntelligenceSuggestedAnswer: (callback: (data: IntelligenceSuggestedAnswerEvent) => void) => () => void
   onIntelligenceRefinedAnswer: (callback: (data: { answer: string; intent: string }) => void) => () => void
   onIntelligenceRecap: (callback: (data: { summary: string }) => void) => () => void
   onIntelligenceManualStarted: (callback: () => void) => () => void
@@ -662,6 +690,13 @@ setOpenAtLogin: (open: boolean) => invokeStatus("set-open-at-login", open),
       ipcRenderer.removeListener("intelligence-assist-update", subscription)
     }
   },
+  onIntelligenceCooldown: (callback: (data: { suppressedMs: number; question?: string }) => void) => {
+    const subscription = (_: any, data: any) => callback(data)
+    ipcRenderer.on('intelligence-cooldown', subscription)
+    return () => {
+      ipcRenderer.removeListener('intelligence-cooldown', subscription)
+    }
+  },
   onIntelligenceSuggestedAnswerToken: (callback: (data: { token: string; question: string; confidence: number }) => void) => {
     const subscription = (_: any, data: any) => callback(data)
     ipcRenderer.on("intelligence-suggested-answer-token", subscription)
@@ -669,7 +704,7 @@ setOpenAtLogin: (open: boolean) => invokeStatus("set-open-at-login", open),
       ipcRenderer.removeListener("intelligence-suggested-answer-token", subscription)
     }
   },
-  onIntelligenceSuggestedAnswer: (callback: (data: { answer: string; question: string; confidence: number }) => void) => {
+  onIntelligenceSuggestedAnswer: (callback: (data: IntelligenceSuggestedAnswerEvent) => void) => {
     const subscription = (_: any, data: any) => callback(data)
     ipcRenderer.on("intelligence-suggested-answer", subscription)
     return () => {

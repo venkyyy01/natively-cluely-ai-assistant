@@ -27,6 +27,28 @@ export interface ConsciousModeQuestionRoute {
   threadAction: ConsciousModeThreadAction;
 }
 
+const BEHAVIORAL_ACTIONABLE_QUESTION_PATTERNS = [
+  /^tell me about a time\b/i,
+  /^describe a situation\b/i,
+  /^share an experience\b/i,
+  /^how do you handle\b/i,
+  /\bleadership\b/i,
+  /\bconflict\b/i,
+  /\bdisagreement\b/i,
+  /\bfeedback\b/i,
+  /\bfailure\b/i,
+  /\bmistake\b/i,
+  /\bteam challenge\b/i,
+  /\bculture\b/i,
+  /\bvalues\b/i,
+  /\bmentor\b/i,
+  /\bstakeholder\b/i,
+];
+
+function isBehavioralActionableQuestion(lower: string): boolean {
+  return BEHAVIORAL_ACTIONABLE_QUESTION_PATTERNS.some((pattern) => pattern.test(lower));
+}
+
 export interface TranscriptSuggestionDecision {
   shouldTrigger: boolean;
   lastQuestion: string;
@@ -190,7 +212,6 @@ function isSubstantialConversationTurn(lower: string): boolean {
   const words = lower.split(/\s+/).filter(Boolean);
   if (words.length < 4) return false;
   if (isAdministrativePrompt(lower)) return false;
-  if (isBehavioralPrompt(lower)) return false;
   return isBroadConsciousSeed(lower) || /^(let me (walk through|start with|explain|show)|walk me through|switch gears and talk about)/i.test(lower);
 }
 
@@ -252,9 +273,14 @@ export function classifyConsciousModeQuestion(
   const questionLike = isQuestionLike(lower);
   const systemDesignQuestion = isSystemDesignQuestion(lower);
   const explicitContinuation = isQuestionContinuationPhrase(lower);
+  const behavioralQuestion = isBehavioralActionableQuestion(lower);
 
-  if (isBehavioralPrompt(lower)) {
-    return { qualifies: false, threadAction: 'ignore' };
+  if (behavioralQuestion) {
+    if (activeThread) {
+      return { qualifies: true, threadAction: 'reset' };
+    }
+
+    return { qualifies: true, threadAction: 'start' };
   }
 
   if (activeThread) {

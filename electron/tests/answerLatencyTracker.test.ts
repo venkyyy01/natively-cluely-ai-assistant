@@ -439,3 +439,40 @@ test('IntelligenceEngine does not mark fallbackOccurred for superseded fallback 
   );
   assert.equal(staleSnapshot?.fallbackOccurred, false);
 });
+
+test('IntelligenceEngine emits suggested answer metadata for cooldown deferrals', async () => {
+  class SlowStreamingLLMHelper {
+    async *streamChat(): AsyncGenerator<string> {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      yield 'slow answer';
+    }
+  }
+
+  const session = new SessionTracker();
+  const engine = new TestIntelligenceEngine(new SlowStreamingLLMHelper() as any, session);
+  const metadataByAnswer: Array<{ cooldownSuppressedMs?: number }> = [];
+  const deferredEvents: Array<{ suppressedMs: number; question?: string }> = [];
+
+  (engine as any).triggerCooldown = 20;
+  engine.on('suggested_answer', (_answer: string, _question: string, _confidence: number, metadata?: { cooldownSuppressedMs?: number }) => {
+    metadataByAnswer.push({ cooldownSuppressedMs: metadata?.cooldownSuppressedMs });
+  });
+  engine.on('cooldown_deferred', (suppressedMs: number, question?: string) => {
+    deferredEvents.push({ suppressedMs, question });
+  });
+
+  addInterviewerTurn(session, 'First question?', Date.now() - 200);
+  const first = await engine.runWhatShouldISay(undefined, 0.9);
+  assert.equal(first, 'slow answer');
+
+  (engine as any).setMode('idle');
+  addInterviewerTurn(session, 'Second question?', Date.now());
+  const second = await engine.runWhatShouldISay(undefined, 0.9);
+
+  assert.equal(second, 'slow answer');
+  assert.equal(deferredEvents.length, 1);
+  assert.equal((deferredEvents[0]?.suppressedMs ?? 0) > 0, true);
+  assert.equal(deferredEvents[0]?.question, 'Second question?');
+  assert.equal(metadataByAnswer[0]?.cooldownSuppressedMs, undefined);
+  assert.equal((metadataByAnswer[1]?.cooldownSuppressedMs ?? 0) > 0, true);
+});

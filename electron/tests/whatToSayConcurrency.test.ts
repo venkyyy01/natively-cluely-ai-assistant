@@ -75,6 +75,13 @@ class CapturingLatencyTracker extends AnswerLatencyTracker {
   }
 }
 
+class SlowStreamingLLMHelper {
+  async *streamChat(_message: string, _imagePaths?: string[], _context?: string, _prompt?: string): AsyncGenerator<string> {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    yield 'slow answer';
+  }
+}
+
 function addTurn(session: SessionTracker, speaker: 'interviewer' | 'assistant', text: string, timestamp: number): void {
   session.handleTranscript({ speaker, text, timestamp, final: true });
 }
@@ -160,4 +167,40 @@ test('explicit cancellation ends the active what-to-say request without emitting
   assert.equal(result, null);
   assert.deepEqual(finalAnswers, []);
   assert.equal(session.getLastAssistantMessage(), null);
+});
+
+test('cooldown defers rapid follow-up instead of silently dropping when no active request exists', async () => {
+  const session = new SessionTracker();
+  const llmHelper = new SlowStreamingLLMHelper();
+  const engine = new IntelligenceEngine(llmHelper as any, session);
+  (engine as any).triggerCooldown = 20;
+
+  const answers: string[] = [];
+  const metadataByAnswer: Array<{ cooldownSuppressedMs?: number }> = [];
+  const deferredEvents: Array<{ suppressedMs: number; question?: string }> = [];
+
+  engine.on('suggested_answer', (answer: string, _question: string, _confidence: number, metadata?: { cooldownSuppressedMs?: number }) => {
+    answers.push(answer);
+    metadataByAnswer.push({ cooldownSuppressedMs: metadata?.cooldownSuppressedMs });
+  });
+  engine.on('cooldown_deferred', (suppressedMs: number, question?: string) => {
+    deferredEvents.push({ suppressedMs, question });
+  });
+
+  addTurn(session, 'interviewer', 'First question?', Date.now() - 200);
+  const first = await engine.runWhatShouldISay(undefined, 0.9);
+  assert.equal(first, 'slow answer');
+
+  (engine as any).setMode('idle');
+  addTurn(session, 'interviewer', 'Second question?', Date.now());
+  const second = await engine.runWhatShouldISay(undefined, 0.9);
+
+  assert.equal(second, 'slow answer');
+  assert.equal(answers.length, 2);
+  assert.equal(session.getLastAssistantMessage(), 'slow answer');
+  assert.equal(deferredEvents.length, 1);
+  assert.equal(deferredEvents[0]!.suppressedMs > 0, true);
+  assert.equal(deferredEvents[0]!.question, 'Second question?');
+  assert.equal(metadataByAnswer[0]?.cooldownSuppressedMs, undefined);
+  assert.equal((metadataByAnswer[1]?.cooldownSuppressedMs ?? 0) > 0, true);
 });

@@ -2,6 +2,8 @@ export interface MessageWithId {
   id: string;
 }
 
+export type ActiveStreamingIds = Record<string, string>;
+
 export function createMessageId(prefix: string, now: number, sequence: number): string {
   return `${prefix}-${now}-${sequence}`;
 }
@@ -40,4 +42,55 @@ export function updateOrPrependMessageById<T extends MessageWithId>(
   }
 
   return [fallbackMessage, ...prev];
+}
+
+export function setActiveStreamingIds(
+  activeIds: ActiveStreamingIds,
+  keys: string[],
+  messageId: string,
+): ActiveStreamingIds {
+  const next = { ...activeIds };
+
+  for (const key of keys) {
+    next[key] = messageId;
+  }
+
+  return next;
+}
+
+export function getActiveStreamingId(
+  activeIds: ActiveStreamingIds,
+  keys: string[],
+): string | null {
+  for (const key of keys) {
+    const messageId = activeIds[key];
+    if (messageId) {
+      return messageId;
+    }
+  }
+
+  return null;
+}
+
+export function clearActiveStreamingIdsByMessageId(
+  activeIds: ActiveStreamingIds,
+  messageId: string | null,
+): ActiveStreamingIds {
+  if (!messageId) {
+    return activeIds;
+  }
+
+  let didClear = false;
+  const next: ActiveStreamingIds = {};
+
+  for (const [key, activeMessageId] of Object.entries(activeIds)) {
+    if (activeMessageId === messageId) {
+      didClear = true;
+      continue;
+    }
+
+    next[key] = activeMessageId;
+  }
+
+  return didClear ? next : activeIds;
 }

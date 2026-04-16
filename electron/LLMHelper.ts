@@ -775,6 +775,66 @@ export class LLMHelper {
     return `${text.slice(0, maxChars)}\n...[truncated]`;
   }
 
+  private trimContextToTokenBudget(text: string, maxTokens: number): string {
+    if (!text) return text;
+    if (this.estimateTokens(text) <= maxTokens) return text;
+
+    const normalizedBudget = Math.max(128, maxTokens);
+    const marker = '\n...[middle truncated]\n';
+    const maxChars = this.tokenCounter.estimateCharacterBudget(normalizedBudget, this.getCurrentModel());
+
+    let headBudget = Math.max(
+      96,
+      Math.min(Math.floor(normalizedBudget * 0.45), normalizedBudget - 32),
+    );
+    let tailBudget = Math.max(32, normalizedBudget - headBudget);
+
+    const buildStitched = (currentHeadBudget: number, currentTailBudget: number): string => {
+      const head = this
+        .trimTextToTokenBudget(text, currentHeadBudget, false)
+        .replace(/\n\.\.\.\[truncated\]$/u, '')
+        .trimEnd();
+      const tail = this
+        .trimTextToTokenBudget(text, currentTailBudget, true)
+        .replace(/^\.\.\.\[truncated\]\n/u, '')
+        .trimStart();
+      return `${head}${marker}${tail}`;
+    };
+
+    let stitched = buildStitched(headBudget, tailBudget);
+
+    const minHeadBudget = 48;
+    const minTailBudget = 24;
+    const shrinkStep = 16;
+    while (this.estimateTokens(stitched) > normalizedBudget && (headBudget > minHeadBudget || tailBudget > minTailBudget)) {
+      if (headBudget >= tailBudget && headBudget > minHeadBudget) {
+        headBudget = Math.max(minHeadBudget, headBudget - shrinkStep);
+      } else if (tailBudget > minTailBudget) {
+        tailBudget = Math.max(minTailBudget, tailBudget - shrinkStep);
+      }
+
+      stitched = buildStitched(headBudget, tailBudget);
+    }
+
+    if (this.estimateTokens(stitched) <= normalizedBudget) {
+      return stitched;
+    }
+
+    const minTailChars = Math.max(48, Math.floor(maxChars * 0.3));
+    const allowedHeadChars = Math.max(32, maxChars - minTailChars - marker.length);
+    const fallbackHead = text.slice(0, allowedHeadChars).trimEnd();
+    const fallbackTail = text.slice(-minTailChars).trimStart();
+    const charBounded = `${fallbackHead}${marker}${fallbackTail}`;
+
+    if (charBounded.length <= maxChars && this.estimateTokens(charBounded) <= normalizedBudget) {
+      return charBounded;
+    }
+
+    const tailOnlyChars = Math.max(64, Math.min(maxChars - marker.length, Math.floor(maxChars * 0.45)));
+    const headOnlyChars = Math.max(16, maxChars - tailOnlyChars - marker.length);
+    return `${text.slice(0, headOnlyChars)}${marker}${text.slice(-tailOnlyChars)}`;
+  }
+
   private prepareUserContent(message: string, context?: string, budget: number = DEFAULT_INPUT_TOKEN_BUDGET): string {
     const safeMessage = this.trimTextToTokenBudget(message, Math.max(512, Math.floor(budget * 0.25)));
     if (!context) {
@@ -783,13 +843,52 @@ export class LLMHelper {
 
     const reservedForMessage = this.estimateTokens(safeMessage) + 64;
     const availableForContext = Math.max(512, budget - reservedForMessage);
-    const trimmedContext = this.trimTextToTokenBudget(context, availableForContext, true);
+    const trimmedContext = this.trimContextToTokenBudget(context, availableForContext);
     return `CONTEXT:\n${trimmedContext}\n\nUSER QUESTION:\n${safeMessage}`;
   }
 
   private joinPrompt(systemPrompt: string | undefined, userContent: string, budget: number = DEFAULT_INPUT_TOKEN_BUDGET): string {
-    const base = systemPrompt ? `${systemPrompt}\n\n${userContent}` : userContent;
-    return this.trimTextToTokenBudget(base, budget, true);
+    if (!systemPrompt) {
+      return this.trimContextToTokenBudget(userContent, budget);
+    }
+
+    const normalizedSystemPrompt = systemPrompt.trim();
+    const separator = '\n\n';
+    const reservedForSystem = this.estimateTokens(normalizedSystemPrompt) + this.estimateTokens(separator);
+
+    if (reservedForSystem >= budget) {
+      return this.trimTextToTokenBudget(normalizedSystemPrompt, budget, false);
+    }
+
+    const availableForUser = Math.max(64, budget - reservedForSystem);
+    let trimmedUserContent = this.trimContextToTokenBudget(userContent, availableForUser);
+    let combined = `${normalizedSystemPrompt}${separator}${trimmedUserContent}`;
+
+    if (this.estimateTokens(combined) <= budget) {
+      return combined;
+    }
+
+    const overflowTokens = this.estimateTokens(combined) - budget;
+    const tightenedUserBudget = Math.max(32, availableForUser - overflowTokens - 16);
+    trimmedUserContent = this.trimContextToTokenBudget(userContent, tightenedUserBudget);
+    combined = `${normalizedSystemPrompt}${separator}${trimmedUserContent}`;
+
+    if (this.estimateTokens(combined) <= budget) {
+      return combined;
+    }
+
+    const shrunkSystemBudget = Math.max(64, budget - 64);
+    const shrunkSystemPrompt = this.trimTextToTokenBudget(normalizedSystemPrompt, shrunkSystemBudget, false);
+    const remainingForUser = Math.max(
+      0,
+      budget - this.estimateTokens(shrunkSystemPrompt) - this.estimateTokens(separator),
+    );
+
+    if (remainingForUser === 0) {
+      return shrunkSystemPrompt;
+    }
+
+    return `${shrunkSystemPrompt}${separator}${this.trimContextToTokenBudget(userContent, remainingForUser)}`;
   }
 
   /**

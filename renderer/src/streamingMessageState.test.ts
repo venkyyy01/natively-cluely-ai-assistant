@@ -1,5 +1,8 @@
 import {
+  clearActiveStreamingIdsByMessageId,
   createMessageId,
+  getActiveStreamingId,
+  setActiveStreamingIds,
   updateMessageById,
   updateOrPrependMessageById,
 } from '../../src/lib/streamingMessageState';
@@ -59,5 +62,37 @@ describe('streaming message state helpers', () => {
       { id: 'fallback', text: 'new', isStreaming: false },
       { id: 'a', text: 'existing' },
     ]);
+  });
+
+  test('active streaming aliases keep updating the original message even after a newer placeholder is prepended', () => {
+    const activeIds = setActiveStreamingIds({}, ['recap'], 'recap-1');
+    const prev: TestMessage[] = [
+      { id: 'follow-up-1', text: '', isStreaming: true },
+      { id: 'recap-1', text: 'partial', isStreaming: true },
+    ];
+
+    const next = updateOrPrependMessageById(
+      prev,
+      getActiveStreamingId(activeIds, ['recap']),
+      (message) => ({
+        ...message,
+        text: `${message.text}-more`,
+      }),
+      { id: 'fallback', text: 'unused', isStreaming: false },
+    );
+
+    expect(next).toEqual([
+      { id: 'follow-up-1', text: '', isStreaming: true },
+      { id: 'recap-1', text: 'partial-more', isStreaming: true },
+    ]);
+  });
+
+  test('clearing a message id removes every alias that points to the completed stream', () => {
+    const activeIds = setActiveStreamingIds({}, ['what_to_answer', 'what_to_say'], 'assistant-1');
+    const withUnrelated = setActiveStreamingIds(activeIds, ['recap'], 'assistant-2');
+
+    expect(clearActiveStreamingIdsByMessageId(withUnrelated, 'assistant-1')).toEqual({
+      recap: 'assistant-2',
+    });
   });
 });

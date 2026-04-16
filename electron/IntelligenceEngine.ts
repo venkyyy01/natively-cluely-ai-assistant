@@ -3,6 +3,7 @@
 // Extracted from IntelligenceManager to decouple LLM logic from state management.
 
 import { EventEmitter } from 'events';
+import { createHash } from 'crypto';
 import { LLMHelper } from './LLMHelper';
 import { SessionTracker, TranscriptSegment, SuggestionTrigger, ContextItem } from './SessionTracker';
 import {
@@ -48,7 +49,8 @@ function detectRefinementIntent(userText: string): { isRefinement: boolean; inte
 // Events emitted by IntelligenceEngine
 export interface IntelligenceModeEvents {
     'assist_update': (insight: string) => void;
-    'suggested_answer': (answer: string, question: string, confidence: number) => void;
+    'cooldown_deferred': (suppressedMs: number, question?: string) => void;
+    'suggested_answer': (answer: string, question: string, confidence: number, metadata?: SuggestedAnswerMetadata) => void;
     'suggested_answer_token': (token: string, question: string, confidence: number) => void;
     'refined_answer': (answer: string, intent: string) => void;
     'refined_answer_token': (token: string, intent: string) => void;
@@ -60,6 +62,28 @@ export interface IntelligenceModeEvents {
     'manual_answer_result': (answer: string, question: string) => void;
     'mode_changed': (mode: IntelligenceMode) => void;
     'error': (error: Error, mode: IntelligenceMode) => void;
+}
+
+export interface SuggestedAnswerMetadata {
+  route: AnswerRoute;
+  attemptedRoute?: AnswerRoute;
+  fallbackOccurred: boolean;
+  fallbackReason?: string;
+  schemaVersion: 'standard_answer_v1' | 'conscious_mode_v1';
+  evidenceHash: string;
+  transcriptRevision: number;
+  threadAction?: 'start' | 'continue' | 'reset' | 'ignore';
+  thread?: {
+    rootQuestion: string;
+    lastQuestion: string;
+    followUpCount: number;
+    updatedAt: number;
+  } | null;
+  cooldownSuppressedMs?: number;
+  verifier?: {
+    deterministic: 'pass' | 'fail' | 'skipped';
+    provenance: 'pass' | 'fail' | 'skipped';
+  };
 }
 
 export class IntelligenceEngine extends EventEmitter {
@@ -324,7 +348,7 @@ export class IntelligenceEngine extends EventEmitter {
         }).join('\n');
     }
 
-    private buildFastStandardTranscriptContext(latestQuestion: string, latestAssistantMessage: string | null): string {
+  private buildFastStandardTranscriptContext(latestQuestion: string, latestAssistantMessage: string | null): string {
         const turns: string[] = [];
 
         if (latestAssistantMessage?.trim()) {
@@ -336,6 +360,68 @@ export class IntelligenceEngine extends EventEmitter {
         }
 
         return turns.join('\n');
+    }
+
+    private computeEvidenceHash(input: {
+        question: string;
+        contextItems?: ContextItem[];
+        route: AnswerRoute;
+        threadAction?: 'start' | 'continue' | 'reset' | 'ignore';
+    }): string {
+        const normalizedQuestion = (input.question || '').trim().toLowerCase();
+        const normalizedContext = (input.contextItems || []).map((item) => ({
+            role: item.role,
+            text: item.text.trim(),
+            timestamp: item.timestamp,
+        }));
+
+        const payload = JSON.stringify({
+            question: normalizedQuestion,
+            route: input.route,
+            threadAction: input.threadAction,
+            context: normalizedContext,
+        });
+
+        return createHash('sha256').update(payload).digest('hex');
+    }
+
+    private buildSuggestedAnswerMetadata(input: {
+        route: AnswerRoute;
+        attemptedRoute?: AnswerRoute;
+        fallbackOccurred: boolean;
+        fallbackReason?: string;
+        schemaVersion: 'standard_answer_v1' | 'conscious_mode_v1';
+        evidenceHash: string;
+        transcriptRevision: number;
+        threadAction?: 'start' | 'continue' | 'reset' | 'ignore';
+        cooldownSuppressedMs?: number;
+        verifier?: {
+            deterministic: 'pass' | 'fail' | 'skipped';
+            provenance: 'pass' | 'fail' | 'skipped';
+        };
+    }): SuggestedAnswerMetadata {
+        const thread = this.session.getActiveReasoningThread();
+
+        return {
+            route: input.route,
+            attemptedRoute: input.attemptedRoute,
+            fallbackOccurred: input.fallbackOccurred,
+            fallbackReason: input.fallbackReason,
+            schemaVersion: input.schemaVersion,
+            evidenceHash: input.evidenceHash,
+            transcriptRevision: input.transcriptRevision,
+            threadAction: input.threadAction,
+            thread: thread
+                ? {
+                    rootQuestion: thread.rootQuestion,
+                    lastQuestion: thread.lastQuestion,
+                    followUpCount: thread.followUpCount,
+                    updatedAt: thread.updatedAt,
+                }
+                : null,
+            cooldownSuppressedMs: input.cooldownSuppressedMs,
+            verifier: input.verifier,
+        };
     }
 
     private hasUsableProfileGrounding(result: {
@@ -503,13 +589,31 @@ export class IntelligenceEngine extends EventEmitter {
      * Manual trigger - uses clean transcript pipeline for question inference
      * NEVER returns null - always provides a usable response
      */
-    async runWhatShouldISay(question?: string, confidence: number = 0.8, imagePaths?: string[]): Promise<string | null> {
+    async runWhatShouldISay(
+        question?: string,
+        confidence: number = 0.8,
+        imagePaths?: string[],
+        priorCooldownSuppressedMs: number = 0,
+    ): Promise<string | null> {
         const now = Date.now();
+        const cooldownQuestion = question?.trim()
+            || this.session.getLastInterimInterviewer()?.text?.trim()
+            || this.session.getLastInterviewerTurn()
+            || undefined;
+        const metadataCooldownSuppressedMs = priorCooldownSuppressedMs > 0
+            ? priorCooldownSuppressedMs
+            : undefined;
+        const transcriptRevisionAtStart = this.session.getTranscriptRevision();
+        const recentContextForEvidence = this.session.getContext(180);
         let activeLatencyRequestId: string | null = null;
         let activeProfileEnrichmentRoute = false;
         let profileEnrichmentFailed = false;
         let fallbackResponsePrepared = false;
         let syntheticFallbackPending = false;
+        let attemptedRoute: AnswerRoute | undefined;
+        let currentRouteForMetadata: AnswerRoute = 'fast_standard_answer';
+        let activeThreadAction: 'start' | 'continue' | 'reset' | 'ignore' | undefined;
+        let lastFallbackReason: string | undefined;
 
         console.log('[INTELLIGENCE] 🤖 runWhatShouldISay triggered:', {
             question: question?.substring(0, 50) + (question && question.length > 50 ? '...' : ''),
@@ -522,7 +626,20 @@ export class IntelligenceEngine extends EventEmitter {
         });
 
         if (now - this.lastTriggerTime < this.triggerCooldown && this.activeMode !== 'what_to_say') {
-            console.log(`[INTELLIGENCE] ❌ Rejected: cooldown active (${Math.max(0, this.triggerCooldown - (now - this.lastTriggerTime))}ms remaining)`);
+            const cooldownSuppressedMs = Math.max(0, this.triggerCooldown - (now - this.lastTriggerTime));
+            console.log(`[INTELLIGENCE] ⏳ Cooldown active (${cooldownSuppressedMs}ms). Deferring request to avoid drop.`);
+            this.emit('cooldown_deferred', cooldownSuppressedMs, cooldownQuestion);
+
+            if (!this.whatToSayAbortController) {
+                await new Promise((resolve) => setTimeout(resolve, cooldownSuppressedMs));
+                return this.runWhatShouldISay(
+                    question,
+                    confidence,
+                    imagePaths,
+                    priorCooldownSuppressedMs + cooldownSuppressedMs,
+                );
+            }
+
             return null;
         }
 
@@ -558,7 +675,22 @@ export class IntelligenceEngine extends EventEmitter {
                 if (answer) {
                 // No clamping - prompt enforces brevity
                     this.session.addAssistantMessage(answer);
-                    this.emit('suggested_answer', answer, question || 'inferred', confidence);
+                    const metadata = this.buildSuggestedAnswerMetadata({
+                        route: 'fast_standard_answer',
+                        attemptedRoute: 'fast_standard_answer',
+                        fallbackOccurred: false,
+                        schemaVersion: 'standard_answer_v1',
+                        evidenceHash: this.computeEvidenceHash({
+                            question: question || 'inferred',
+                            contextItems: recentContextForEvidence,
+                            route: 'fast_standard_answer',
+                            threadAction: 'ignore',
+                        }),
+                        transcriptRevision: transcriptRevisionAtStart,
+                        threadAction: 'ignore',
+                        cooldownSuppressedMs: metadataCooldownSuppressedMs,
+                    });
+                    this.emit('suggested_answer', answer, question || 'inferred', confidence, metadata);
                 }
                 this.setMode('idle');
                 return answer || "Could you repeat that? I want to make sure I address your question properly.";
@@ -593,6 +725,9 @@ const capability = typeof (this.llmHelper as any).getProviderCapabilityClass ===
                 standardRouteAfterConsciousFallback,
             } = routePreparation.preparedRoute;
             let effectiveRoute: AnswerRoute = routePreparation.preparedRoute.effectiveRoute;
+            attemptedRoute = routePreparation.preparedRoute.selectedRoute;
+            currentRouteForMetadata = effectiveRoute;
+            activeThreadAction = preRouteConsciousDecision.threadAction;
             let isProfileEnrichmentRoute = effectiveRoute === 'enriched_standard_answer';
             activeProfileEnrichmentRoute = isProfileEnrichmentRoute;
             const requestId = this.latencyTracker.start(effectiveRoute, capability, {
@@ -624,7 +759,22 @@ const capability = typeof (this.llmHelper as any).getProviderCapabilityClass ===
                         question: question || 'What to Answer',
                         answer: speculativeAnswer,
                     });
-                    this.emit('suggested_answer', speculativeAnswer, question || 'What to Answer', confidence);
+                    const metadata = this.buildSuggestedAnswerMetadata({
+                        route: currentRouteForMetadata,
+                        attemptedRoute,
+                        fallbackOccurred: false,
+                        schemaVersion: 'standard_answer_v1',
+                        evidenceHash: this.computeEvidenceHash({
+                            question: question || 'What to Answer',
+                            contextItems: contextItems,
+                            route: currentRouteForMetadata,
+                            threadAction: activeThreadAction,
+                        }),
+                        transcriptRevision: transcriptRevisionAtStart,
+                        threadAction: activeThreadAction,
+                        cooldownSuppressedMs: metadataCooldownSuppressedMs,
+                    });
+                    this.emit('suggested_answer', speculativeAnswer, question || 'What to Answer', confidence, metadata);
                     const latencySnapshot = this.latencyTracker.complete(requestId);
                     console.log('[IntelligenceEngine] Answer latency snapshot:', latencySnapshot);
                     this.setMode('idle');
@@ -643,7 +793,22 @@ const capability = typeof (this.llmHelper as any).getProviderCapabilityClass ===
                         question: question || 'What to Answer',
                         answer: cachedAnswer,
                     });
-                    this.emit('suggested_answer', cachedAnswer, question || 'What to Answer', confidence);
+                    const metadata = this.buildSuggestedAnswerMetadata({
+                        route: currentRouteForMetadata,
+                        attemptedRoute,
+                        fallbackOccurred: false,
+                        schemaVersion: 'standard_answer_v1',
+                        evidenceHash: this.computeEvidenceHash({
+                            question: question || 'What to Answer',
+                            contextItems: contextItems,
+                            route: currentRouteForMetadata,
+                            threadAction: activeThreadAction,
+                        }),
+                        transcriptRevision: transcriptRevisionAtStart,
+                        threadAction: activeThreadAction,
+                        cooldownSuppressedMs: metadataCooldownSuppressedMs,
+                    });
+                    this.emit('suggested_answer', cachedAnswer, question || 'What to Answer', confidence, metadata);
                     this.latencyTracker.complete(requestId);
                     this.setMode('idle');
                     return cachedAnswer;
@@ -716,7 +881,22 @@ const capability = typeof (this.llmHelper as any).getProviderCapabilityClass ===
                     answer: fullAnswer
                 });
 
-                this.emit('suggested_answer', fullAnswer, question || 'What to Answer', confidence);
+                const metadata = this.buildSuggestedAnswerMetadata({
+                    route: currentRouteForMetadata,
+                    attemptedRoute,
+                    fallbackOccurred: false,
+                    schemaVersion: 'standard_answer_v1',
+                    evidenceHash: this.computeEvidenceHash({
+                        question: question || 'What to Answer',
+                        contextItems: contextItems,
+                        route: currentRouteForMetadata,
+                        threadAction: activeThreadAction,
+                    }),
+                    transcriptRevision: transcriptRevisionAtStart,
+                    threadAction: activeThreadAction,
+                    cooldownSuppressedMs: metadataCooldownSuppressedMs,
+                });
+                this.emit('suggested_answer', fullAnswer, question || 'What to Answer', confidence, metadata);
                 const latencySnapshot = this.latencyTracker.complete(requestId);
                 console.log('[IntelligenceEngine] Answer latency snapshot:', latencySnapshot);
 
@@ -745,8 +925,10 @@ const capability = typeof (this.llmHelper as any).getProviderCapabilityClass ===
                         const fallbackReason = enrichmentResult === timeoutSentinel
                             ? 'profile_timeout'
                             : 'profile_no_context';
+                        lastFallbackReason = fallbackReason;
                         profileEnrichmentFailed = true;
                         effectiveRoute = 'fast_standard_answer';
+                        currentRouteForMetadata = effectiveRoute;
                         isProfileEnrichmentRoute = false;
                         activeProfileEnrichmentRoute = false;
                         this.latencyTracker.markFallbackOccurred(requestId, fallbackReason);
@@ -756,8 +938,10 @@ const capability = typeof (this.llmHelper as any).getProviderCapabilityClass ===
                         });
                     }
                 } catch (_error) {
+                    lastFallbackReason = 'profile_error';
                     profileEnrichmentFailed = true;
                     effectiveRoute = 'fast_standard_answer';
+                    currentRouteForMetadata = effectiveRoute;
                     isProfileEnrichmentRoute = false;
                     activeProfileEnrichmentRoute = false;
                     this.latencyTracker.markFallbackOccurred(requestId, 'profile_error');
@@ -785,6 +969,8 @@ const capability = typeof (this.llmHelper as any).getProviderCapabilityClass ===
 
                 if (continuationResult.kind === 'fallback') {
                     effectiveRoute = 'fast_standard_answer';
+                    currentRouteForMetadata = effectiveRoute;
+                    lastFallbackReason = 'conscious_verification_failed';
                     consciousResponseCoordinator.markFallbackToRoute({
                         requestId,
                         route: effectiveRoute,
@@ -793,11 +979,31 @@ const capability = typeof (this.llmHelper as any).getProviderCapabilityClass ===
                 }
 
                 if (continuationResult.kind === 'handled') {
+                    const metadata = this.buildSuggestedAnswerMetadata({
+                        route: currentRouteForMetadata,
+                        attemptedRoute,
+                        fallbackOccurred: false,
+                        schemaVersion: 'conscious_mode_v1',
+                        evidenceHash: this.computeEvidenceHash({
+                            question: question || 'What to Answer',
+                            contextItems: contextItems,
+                            route: currentRouteForMetadata,
+                            threadAction: activeThreadAction,
+                        }),
+                        transcriptRevision: transcriptRevisionAtStart,
+                        threadAction: activeThreadAction,
+                        verifier: {
+                            deterministic: 'pass',
+                            provenance: 'pass',
+                        },
+                        cooldownSuppressedMs: metadataCooldownSuppressedMs,
+                    });
                     return consciousResponseCoordinator.completeStructuredAnswer({
                         requestId,
                         questionLabel: question || 'What to Answer',
                         confidence,
                         fullAnswer: continuationResult.fullAnswer,
+                        metadata,
                     });
                 }
             }
@@ -861,11 +1067,31 @@ const capability = typeof (this.llmHelper as any).getProviderCapabilityClass ===
 
                 if (consciousResult.kind === 'handled') {
                     console.log(`[IntelligenceEngine] Temporal RAG: ${temporalContext.previousResponses.length} responses, tone: ${temporalContext.toneSignals[0]?.type || 'neutral'}, intent: conscious_reasoning${imagePaths?.length ? `, with ${imagePaths.length} image(s)` : ''}`);
+                    const metadata = this.buildSuggestedAnswerMetadata({
+                        route: currentRouteForMetadata,
+                        attemptedRoute,
+                        fallbackOccurred: false,
+                        schemaVersion: 'conscious_mode_v1',
+                        evidenceHash: this.computeEvidenceHash({
+                            question: question || 'What to Answer',
+                            contextItems: preparationResult.contextItems,
+                            route: currentRouteForMetadata,
+                            threadAction: activeThreadAction,
+                        }),
+                        transcriptRevision: transcriptRevisionAtStart,
+                        threadAction: activeThreadAction,
+                        verifier: {
+                            deterministic: 'pass',
+                            provenance: 'pass',
+                        },
+                        cooldownSuppressedMs: metadataCooldownSuppressedMs,
+                    });
                     return consciousResponseCoordinator.completeStructuredAnswer({
                         requestId,
                         questionLabel: question || 'What to Answer',
                         confidence,
                         fullAnswer: consciousResult.fullAnswer,
+                        metadata,
                     });
                 }
 
@@ -873,6 +1099,8 @@ const capability = typeof (this.llmHelper as any).getProviderCapabilityClass ===
                     // No structured response path available. Fall through to the standard route.
                 } else {
                     effectiveRoute = standardRouteAfterConsciousFallback;
+                    currentRouteForMetadata = effectiveRoute;
+                    lastFallbackReason = 'conscious_response_invalid';
                     isProfileEnrichmentRoute = effectiveRoute === 'enriched_standard_answer';
                     activeProfileEnrichmentRoute = isProfileEnrichmentRoute;
                     consciousResponseCoordinator.markFallbackToRoute({
@@ -902,7 +1130,23 @@ const capability = typeof (this.llmHelper as any).getProviderCapabilityClass ===
                     question: question || 'What to Answer',
                     answer: cachedAnswer,
                 });
-                this.emit('suggested_answer', cachedAnswer, question || 'What to Answer', confidence);
+                const metadata = this.buildSuggestedAnswerMetadata({
+                    route: currentRouteForMetadata,
+                    attemptedRoute,
+                    fallbackOccurred: Boolean(lastFallbackReason),
+                    fallbackReason: lastFallbackReason,
+                    schemaVersion: currentRouteForMetadata === 'conscious_answer' ? 'conscious_mode_v1' : 'standard_answer_v1',
+                    evidenceHash: this.computeEvidenceHash({
+                        question: question || 'What to Answer',
+                        contextItems: preparationResult.contextItems,
+                        route: currentRouteForMetadata,
+                        threadAction: activeThreadAction,
+                    }),
+                    transcriptRevision: transcriptRevisionAtStart,
+                    threadAction: activeThreadAction,
+                    cooldownSuppressedMs: metadataCooldownSuppressedMs,
+                });
+                this.emit('suggested_answer', cachedAnswer, question || 'What to Answer', confidence, metadata);
                 if (isProfileEnrichmentRoute && !profileEnrichmentFailed) {
                     this.latencyTracker.markProfileEnrichmentState(requestId, 'completed');
                 }
@@ -981,7 +1225,23 @@ const capability = typeof (this.llmHelper as any).getProviderCapabilityClass ===
                 answer: fullAnswer
             });
 
-            this.emit('suggested_answer', fullAnswer, question || 'What to Answer', confidence);
+            const metadata = this.buildSuggestedAnswerMetadata({
+                route: currentRouteForMetadata,
+                attemptedRoute,
+                fallbackOccurred: Boolean(lastFallbackReason),
+                fallbackReason: lastFallbackReason,
+                schemaVersion: currentRouteForMetadata === 'conscious_answer' ? 'conscious_mode_v1' : 'standard_answer_v1',
+                evidenceHash: this.computeEvidenceHash({
+                    question: question || 'What to Answer',
+                    contextItems: preparationResult.contextItems,
+                    route: currentRouteForMetadata,
+                    threadAction: activeThreadAction,
+                }),
+                transcriptRevision: transcriptRevisionAtStart,
+                threadAction: activeThreadAction,
+                cooldownSuppressedMs: metadataCooldownSuppressedMs,
+            });
+            this.emit('suggested_answer', fullAnswer, question || 'What to Answer', confidence, metadata);
             if (isProfileEnrichmentRoute) {
                 if (!profileEnrichmentFailed) {
                     this.latencyTracker.markProfileEnrichmentState(requestId, 'completed');

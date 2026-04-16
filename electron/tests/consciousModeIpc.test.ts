@@ -301,3 +301,71 @@ test('Preload exposes closeSettingsWindow to match the typed renderer contract',
 
   restore();
 });
+
+test('Preload forwards intelligence cooldown and suggested answer events with metadata', async () => {
+  const { exposedApi, listeners, restore } = await loadPreloadModule();
+  const cooldownSeen: Array<{ suppressedMs: number; question?: string }> = [];
+  const suggestedSeen: Array<{
+    answer: string;
+    question: string;
+    confidence: number;
+    metadata?: {
+      route: string;
+      schemaVersion: string;
+      fallbackOccurred: boolean;
+    };
+  }> = [];
+
+  assert.equal(typeof exposedApi.onIntelligenceCooldown, 'function');
+  assert.equal(typeof exposedApi.onIntelligenceSuggestedAnswer, 'function');
+
+  const unsubscribeCooldown = exposedApi.onIntelligenceCooldown((data: { suppressedMs: number; question?: string }) => {
+    cooldownSeen.push(data);
+  });
+  const unsubscribeSuggested = exposedApi.onIntelligenceSuggestedAnswer((data: {
+    answer: string;
+    question: string;
+    confidence: number;
+    metadata?: { route: string; schemaVersion: string; fallbackOccurred: boolean };
+  }) => {
+    suggestedSeen.push(data);
+  });
+
+  const cooldownListeners = listeners.get('intelligence-cooldown') || [];
+  const suggestedListeners = listeners.get('intelligence-suggested-answer') || [];
+
+  assert.equal(cooldownListeners.length, 1);
+  assert.equal(suggestedListeners.length, 1);
+
+  cooldownListeners[0]({}, { suppressedMs: 1200, question: 'Follow-up?' });
+  suggestedListeners[0]({}, {
+    answer: 'Lead with impact and metrics.',
+    question: 'How should I answer this?',
+    confidence: 0.94,
+    metadata: {
+      route: 'fast_standard_answer',
+      schemaVersion: 'standard_answer_v1',
+      fallbackOccurred: false,
+    },
+  });
+
+  assert.deepEqual(cooldownSeen, [{ suppressedMs: 1200, question: 'Follow-up?' }]);
+  assert.deepEqual(suggestedSeen, [{
+    answer: 'Lead with impact and metrics.',
+    question: 'How should I answer this?',
+    confidence: 0.94,
+    metadata: {
+      route: 'fast_standard_answer',
+      schemaVersion: 'standard_answer_v1',
+      fallbackOccurred: false,
+    },
+  }]);
+
+  unsubscribeCooldown();
+  unsubscribeSuggested();
+
+  assert.deepEqual(listeners.get('intelligence-cooldown') || [], []);
+  assert.deepEqual(listeners.get('intelligence-suggested-answer') || [], []);
+
+  restore();
+});

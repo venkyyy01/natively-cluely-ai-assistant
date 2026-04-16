@@ -201,6 +201,7 @@ import { KeybindManager } from "./services/KeybindManager"
 import { ProcessingHelper } from "./ProcessingHelper"
 
 import { IntelligenceManager } from "./IntelligenceManager"
+import type { SuggestedAnswerMetadata } from "./IntelligenceEngine"
 import { SystemAudioCapture } from "./audio/SystemAudioCapture"
 import { MicrophoneCapture } from "./audio/MicrophoneCapture"
 import { AudioDevices, type AudioDevice } from "./audio/AudioDevices"
@@ -2248,10 +2249,17 @@ try {
       if (overlayContent && !overlayContent.isDestroyed()) overlayContent.webContents.send('intelligence-assist-update', { insight });
     })
 
-    this.intelligenceManager.on('suggested_answer', (answer: string, question: string, confidence: number) => {
+    this.intelligenceManager.on('cooldown_deferred', (suppressedMs: number, question?: string) => {
       const win = mainWindow()
       if (win && !win.isDestroyed()) {
-        win.webContents.send('intelligence-suggested-answer', { answer, question, confidence })
+        win.webContents.send('intelligence-cooldown', { suppressedMs, question })
+      }
+    })
+
+    this.intelligenceManager.on('suggested_answer', (answer: string, question: string, confidence: number, metadata?: SuggestedAnswerMetadata) => {
+      const win = mainWindow()
+      if (win && !win.isDestroyed()) {
+        win.webContents.send('intelligence-suggested-answer', { answer, question, confidence, metadata })
       }
 
     })

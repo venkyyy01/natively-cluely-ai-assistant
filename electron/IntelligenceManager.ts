@@ -11,6 +11,7 @@ import { EventEmitter } from 'events';
 import { LLMHelper } from './LLMHelper';
 import { SessionTracker } from './SessionTracker';
 import { IntelligenceEngine } from './IntelligenceEngine';
+import type { SuggestedAnswerMetadata } from './IntelligenceEngine';
 import { MeetingPersistence } from './MeetingPersistence';
 import type { AccelerationManager } from './services/AccelerationManager';
 import type { ConsciousModeStructuredResponse, ReasoningThread } from './ConsciousMode';
@@ -51,7 +52,7 @@ export class IntelligenceManager extends EventEmitter {
      */
     private forwardEngineEvents(): void {
         const events = [
-            'assist_update', 'suggested_answer', 'suggested_answer_token',
+            'assist_update', 'cooldown_deferred', 'suggested_answer', 'suggested_answer_token',
             'refined_answer', 'refined_answer_token',
             'recap', 'recap_token',
             'follow_up_questions_update', 'follow_up_questions_token',
@@ -64,6 +65,13 @@ export class IntelligenceManager extends EventEmitter {
                 this.emit(event, ...args);
             });
         }
+    }
+
+    override on(event: 'cooldown_deferred', listener: (suppressedMs: number, question?: string) => void): this;
+    override on(event: 'suggested_answer', listener: (answer: string, question: string, confidence: number, metadata?: SuggestedAnswerMetadata) => void): this;
+    override on(event: string | symbol, listener: (...args: any[]) => void): this;
+    override on(event: string | symbol, listener: (...args: any[]) => void): this {
+        return super.on(event, listener);
     }
 
     // ============================================

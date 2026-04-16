@@ -53,7 +53,10 @@ import {
     type ReasoningThread,
 } from '../../electron/ConsciousMode';
 import {
+    clearActiveStreamingIdsByMessageId,
     createMessageId,
+    getActiveStreamingId,
+    setActiveStreamingIds,
     updateMessageById,
     updateOrPrependMessageById,
 } from '../lib/streamingMessageState';
@@ -79,6 +82,13 @@ const MANUAL_STT_FINALIZE_GRACE_MS = 350;
 const MANUAL_STT_FINALIZE_MAX_WAIT_MS = 1500;
 const MANUAL_STT_POLL_INTERVAL_MS = 75;
 type ResizeDirection = 'left' | 'right' | 'top' | 'bottom' | 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right';
+const WHAT_TO_SAY_STREAM_KEYS = ['what_to_answer', 'what_to_say'];
+const RECAP_STREAM_KEYS = ['recap'];
+const FOLLOW_UP_QUESTIONS_STREAM_KEYS = ['follow_up_questions'];
+
+function getFollowUpStreamKeys(intent: string): string[] {
+    return [intent, 'follow_up'];
+}
 
 function appendRollingTranscript(existing: string, nextSegment: string): string {
     const addition = nextSegment.trim();
@@ -101,42 +111,6 @@ function createMessage(message: Omit<Message, 'createdAt'>): Message {
 
 function prependMessage(prev: Message[], message: Omit<Message, 'createdAt'>): Message[] {
     return [createMessage(message), ...prev];
-}
-
-function updateTopMessage(
-    prev: Message[],
-    predicate: (message: Message) => boolean,
-    updater: (message: Message) => Message
-): Message[] {
-    const [latestMessage, ...rest] = prev;
-    if (!latestMessage || !predicate(latestMessage)) {
-        return prev;
-    }
-
-    return [updater(latestMessage), ...rest];
-}
-
-function prependOrUpdateTopMessage(
-    prev: Message[],
-    predicate: (message: Message) => boolean,
-    updater: (message: Message) => Message,
-    fallbackMessage: Omit<Message, 'createdAt'>
-): Message[] {
-    const updatedMessages = updateTopMessage(prev, predicate, updater);
-    if (updatedMessages !== prev) {
-        return updatedMessages;
-    }
-
-    return prependMessage(prev, fallbackMessage);
-}
-
-function replaceTopStreamingPlaceholder(prev: Message[], message: Omit<Message, 'createdAt'>): Message[] {
-    const [latestMessage, ...rest] = prev;
-    if (latestMessage && latestMessage.isStreaming && latestMessage.text === '') {
-        return [createMessage(message), ...rest];
-    }
-
-    return prependMessage(prev, message);
 }
 
 interface NativelyInterfaceProps {
@@ -168,6 +142,7 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
     const messageIdCounterRef = useRef(0);
     const activeGeminiStreamingIdRef = useRef<string | null>(null);
     const activeRagStreamingIdRef = useRef<string | null>(null);
+    const activeIntelligenceStreamingIdsRef = useRef<Record<string, string>>({});
 
     const nextMessageId = useCallback((prefix: string) => {
         const id = createMessageId(prefix, Date.now(), messageIdCounterRef.current);
@@ -373,7 +348,7 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
             setIsSettingsOpen(isVisible);
         });
         return () => unsubscribe();
-    }, [electronAPI]);
+    }, [electronAPI, nextMessageId]);
 
     // Sync Window Visibility with Expanded State
     useEffect(() => {
@@ -607,30 +582,42 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
 
 
         cleanups.push(window.electronAPI.onIntelligenceSuggestedAnswerToken((data) => {
-            // Progressive update for 'what_to_answer' mode
-            setMessages(prev => prependOrUpdateTopMessage(
+            const targetId = getActiveStreamingId(activeIntelligenceStreamingIdsRef.current, WHAT_TO_SAY_STREAM_KEYS);
+            const fallbackId = nextMessageId('assistant');
+
+            setMessages(prev => updateOrPrependMessageById(
                 prev,
-                message => Boolean(message.isStreaming && message.intent === 'what_to_answer'),
+                targetId,
                 message => ({
                     ...message,
                     text: message.text + data.token
                 }),
                 {
-                    id: Date.now().toString(),
+                    id: fallbackId,
                     role: 'system',
                     text: data.token,
                     intent: 'what_to_answer',
-                    isStreaming: true
+                    isStreaming: true,
+                    createdAt: Date.now()
                 }
             ));
+
+            if (!targetId) {
+                activeIntelligenceStreamingIdsRef.current = setActiveStreamingIds(
+                    activeIntelligenceStreamingIdsRef.current,
+                    WHAT_TO_SAY_STREAM_KEYS,
+                    fallbackId,
+                );
+            }
         }));
 
         cleanups.push(window.electronAPI.onIntelligenceSuggestedAnswer((data) => {
             setIsProcessing(false);
-            const threadRoute = classifyConsciousModeQuestion(data.question, activeConsciousThreadRef.current);
+            const inferredRoute = classifyConsciousModeQuestion(data.question, activeConsciousThreadRef.current);
+            const threadAction = data.metadata?.threadAction ?? inferredRoute.threadAction;
             const assistRender = classifyAssistRender({
                 answerText: data.answer,
-                threadAction: threadRoute.threadAction,
+                threadAction,
             });
 
             analytics.trackInterviewAssistRendered({
@@ -638,9 +625,19 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
                 source_intent: 'what_to_answer',
             });
 
-            if (assistRender.output_variant === 'conscious_mode') {
+            if (data.metadata?.thread) {
+                activeConsciousThreadRef.current = {
+                    rootQuestion: data.metadata.thread.rootQuestion,
+                    lastQuestion: data.metadata.thread.lastQuestion,
+                    response: createEmptyConsciousModeResponse(),
+                    followUpCount: data.metadata.thread.followUpCount,
+                    updatedAt: data.metadata.thread.updatedAt,
+                };
+            } else if (data.metadata?.thread === null) {
+                activeConsciousThreadRef.current = null;
+            } else if (assistRender.output_variant === 'conscious_mode') {
                 const currentThread = activeConsciousThreadRef.current;
-                const continuesThread = Boolean(threadRoute.threadAction === 'continue' && currentThread);
+                const continuesThread = Boolean(threadAction === 'continue' && currentThread);
 
                 activeConsciousThreadRef.current = {
                     rootQuestion: continuesThread && currentThread ? currentThread.rootQuestion : data.question,
@@ -653,97 +650,145 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
                 activeConsciousThreadRef.current = null;
             }
 
-            setMessages(prev => prependOrUpdateTopMessage(
+            const targetId = getActiveStreamingId(activeIntelligenceStreamingIdsRef.current, WHAT_TO_SAY_STREAM_KEYS);
+
+            setMessages(prev => updateOrPrependMessageById(
                 prev,
-                message => Boolean(message.isStreaming && message.intent === 'what_to_answer'),
+                targetId,
                 message => ({
                     ...message,
                     text: data.answer,
                     isStreaming: false
                 }),
                 {
-                    id: Date.now().toString(),
+                    id: nextMessageId('system'),
                     role: 'system',
                     text: data.answer,
-                    intent: 'what_to_answer'
+                    intent: 'what_to_answer',
+                    createdAt: Date.now()
                 }
             ));
+
+            activeIntelligenceStreamingIdsRef.current = clearActiveStreamingIdsByMessageId(
+                activeIntelligenceStreamingIdsRef.current,
+                targetId,
+            );
         }));
 
         // STREAMING: Refinement
         cleanups.push(window.electronAPI.onIntelligenceRefinedAnswerToken((data) => {
-            setMessages(prev => prependOrUpdateTopMessage(
+            const targetId = getActiveStreamingId(activeIntelligenceStreamingIdsRef.current, getFollowUpStreamKeys(data.intent));
+            const fallbackId = nextMessageId('assistant');
+
+            setMessages(prev => updateOrPrependMessageById(
                 prev,
-                message => Boolean(message.isStreaming && message.intent === data.intent),
+                targetId,
                 message => ({
                     ...message,
                     text: message.text + data.token
                 }),
                 {
-                    id: Date.now().toString(),
+                    id: fallbackId,
                     role: 'system',
                     text: data.token,
                     intent: data.intent,
-                    isStreaming: true
+                    isStreaming: true,
+                    createdAt: Date.now()
                 }
             ));
+
+            if (!targetId) {
+                activeIntelligenceStreamingIdsRef.current = setActiveStreamingIds(
+                    activeIntelligenceStreamingIdsRef.current,
+                    getFollowUpStreamKeys(data.intent),
+                    fallbackId,
+                );
+            }
         }));
 
         cleanups.push(window.electronAPI.onIntelligenceRefinedAnswer((data) => {
             setIsProcessing(false);
-            setMessages(prev => prependOrUpdateTopMessage(
+            const targetId = getActiveStreamingId(activeIntelligenceStreamingIdsRef.current, getFollowUpStreamKeys(data.intent));
+
+            setMessages(prev => updateOrPrependMessageById(
                 prev,
-                message => Boolean(message.isStreaming && message.intent === data.intent),
+                targetId,
                 message => ({
                     ...message,
                     text: data.answer,
                     isStreaming: false
                 }),
                 {
-                    id: Date.now().toString(),
+                    id: nextMessageId('system'),
                     role: 'system',
                     text: data.answer,
-                    intent: data.intent
+                    intent: data.intent,
+                    createdAt: Date.now()
                 }
             ));
+
+            activeIntelligenceStreamingIdsRef.current = clearActiveStreamingIdsByMessageId(
+                activeIntelligenceStreamingIdsRef.current,
+                targetId,
+            );
         }));
 
         // STREAMING: Recap
         cleanups.push(window.electronAPI.onIntelligenceRecapToken((data) => {
-            setMessages(prev => prependOrUpdateTopMessage(
+            const targetId = getActiveStreamingId(activeIntelligenceStreamingIdsRef.current, RECAP_STREAM_KEYS);
+            const fallbackId = nextMessageId('assistant');
+
+            setMessages(prev => updateOrPrependMessageById(
                 prev,
-                message => Boolean(message.isStreaming && message.intent === 'recap'),
+                targetId,
                 message => ({
                     ...message,
                     text: message.text + data.token
                 }),
                 {
-                    id: Date.now().toString(),
+                    id: fallbackId,
                     role: 'system',
                     text: data.token,
                     intent: 'recap',
-                    isStreaming: true
+                    isStreaming: true,
+                    createdAt: Date.now()
                 }
             ));
+
+            if (!targetId) {
+                activeIntelligenceStreamingIdsRef.current = setActiveStreamingIds(
+                    activeIntelligenceStreamingIdsRef.current,
+                    RECAP_STREAM_KEYS,
+                    fallbackId,
+                );
+            }
         }));
 
         cleanups.push(window.electronAPI.onIntelligenceRecap((data) => {
             setIsProcessing(false);
-            setMessages(prev => prependOrUpdateTopMessage(
+            const targetId = getActiveStreamingId(activeIntelligenceStreamingIdsRef.current, RECAP_STREAM_KEYS);
+
+            setMessages(prev => updateOrPrependMessageById(
                 prev,
-                message => Boolean(message.isStreaming && message.intent === 'recap'),
+                targetId,
                 message => ({
                     ...message,
                     text: data.summary,
                     isStreaming: false
                 }),
                 {
-                    id: Date.now().toString(),
+                    id: nextMessageId('system'),
                     role: 'system',
                     text: data.summary,
-                    intent: 'recap'
+                    intent: 'recap',
+                    createdAt: Date.now()
                 }
             ));
+
+            activeIntelligenceStreamingIdsRef.current = clearActiveStreamingIdsByMessageId(
+                activeIntelligenceStreamingIdsRef.current,
+                targetId,
+            );
         }));
 
         // STREAMING: Follow-Up Questions (Rendered as message? Or specific UI?)
@@ -759,41 +804,61 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
         // Assuming it's a message for consistency with "Copilot" approach.
 
         cleanups.push(window.electronAPI.onIntelligenceFollowUpQuestionsToken((data) => {
-            setMessages(prev => prependOrUpdateTopMessage(
+            const targetId = getActiveStreamingId(activeIntelligenceStreamingIdsRef.current, FOLLOW_UP_QUESTIONS_STREAM_KEYS);
+            const fallbackId = nextMessageId('assistant');
+
+            setMessages(prev => updateOrPrependMessageById(
                 prev,
-                message => Boolean(message.isStreaming && message.intent === 'follow_up_questions'),
+                targetId,
                 message => ({
                     ...message,
                     text: message.text + data.token
                 }),
                 {
-                    id: Date.now().toString(),
+                    id: fallbackId,
                     role: 'system',
                     text: data.token,
                     intent: 'follow_up_questions',
-                    isStreaming: true
+                    isStreaming: true,
+                    createdAt: Date.now()
                 }
             ));
+
+            if (!targetId) {
+                activeIntelligenceStreamingIdsRef.current = setActiveStreamingIds(
+                    activeIntelligenceStreamingIdsRef.current,
+                    FOLLOW_UP_QUESTIONS_STREAM_KEYS,
+                    fallbackId,
+                );
+            }
         }));
 
         cleanups.push(window.electronAPI.onIntelligenceFollowUpQuestionsUpdate((data) => {
             // This event name is slightly different ('update' vs 'answer')
             setIsProcessing(false);
-            setMessages(prev => prependOrUpdateTopMessage(
+            const targetId = getActiveStreamingId(activeIntelligenceStreamingIdsRef.current, FOLLOW_UP_QUESTIONS_STREAM_KEYS);
+
+            setMessages(prev => updateOrPrependMessageById(
                 prev,
-                message => Boolean(message.isStreaming && message.intent === 'follow_up_questions'),
+                targetId,
                 message => ({
                     ...message,
                     text: data.questions,
                     isStreaming: false
                 }),
                 {
-                    id: Date.now().toString(),
+                    id: nextMessageId('system'),
                     role: 'system',
                     text: data.questions,
-                    intent: 'follow_up_questions'
+                    intent: 'follow_up_questions',
+                    createdAt: Date.now()
                 }
             ));
+
+            activeIntelligenceStreamingIdsRef.current = clearActiveStreamingIdsByMessageId(
+                activeIntelligenceStreamingIdsRef.current,
+                targetId,
+            );
         }));
 
         cleanups.push(window.electronAPI.onIntelligenceManualResult((data) => {
@@ -807,11 +872,38 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
 
         cleanups.push(window.electronAPI.onIntelligenceError((data) => {
             setIsProcessing(false);
-            setMessages(prev => prependMessage(prev, {
-                id: Date.now().toString(),
-                role: 'system',
-                text: `❌ Error (${data.mode}): ${data.error}`
-            }));
+            const targetKeys = data.mode === 'what_to_say'
+                ? WHAT_TO_SAY_STREAM_KEYS
+                : data.mode === 'recap'
+                    ? RECAP_STREAM_KEYS
+                    : data.mode === 'follow_up_questions'
+                        ? FOLLOW_UP_QUESTIONS_STREAM_KEYS
+                        : data.mode === 'follow_up'
+                            ? ['follow_up']
+                            : [data.mode];
+            const targetId = getActiveStreamingId(activeIntelligenceStreamingIdsRef.current, targetKeys);
+            const errorText = `❌ Error (${data.mode}): ${data.error}`;
+
+            setMessages(prev => updateOrPrependMessageById(
+                prev,
+                targetId,
+                message => ({
+                    ...message,
+                    isStreaming: false,
+                    text: message.text ? `${message.text}\n\n${errorText}` : errorText
+                }),
+                {
+                    id: nextMessageId('system'),
+                    role: 'system',
+                    text: errorText,
+                    createdAt: Date.now()
+                }
+            ));
+
+            activeIntelligenceStreamingIdsRef.current = clearActiveStreamingIdsByMessageId(
+                activeIntelligenceStreamingIdsRef.current,
+                targetId,
+            );
         }));
         // Screenshot taken - attach to chat input instead of auto-analyzing
         cleanups.push(electronAPI.onScreenshotTaken(handleScreenshotAttach));
@@ -859,6 +951,11 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
             intent: 'what_to_answer',
             isStreaming: true
         }));
+        activeIntelligenceStreamingIdsRef.current = setActiveStreamingIds(
+            activeIntelligenceStreamingIdsRef.current,
+            WHAT_TO_SAY_STREAM_KEYS,
+            assistantMessageId,
+        );
 
         try {
             // Pass imagePath if attached
@@ -914,6 +1011,10 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
                 }
             ));
         } finally {
+            activeIntelligenceStreamingIdsRef.current = clearActiveStreamingIdsByMessageId(
+                activeIntelligenceStreamingIdsRef.current,
+                assistantMessageId,
+            );
             setIsProcessing(false);
         }
     };
@@ -922,24 +1023,45 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
         setIsExpanded(true);
         setIsProcessing(true);
         analytics.trackCommandExecuted('follow_up_' + intent);
+        const assistantMessageId = nextMessageId('assistant');
 
         setMessages(prev => prependMessage(prev, {
-            id: Date.now().toString(),
+            id: assistantMessageId,
             role: 'system',
             text: '',
             intent,
             isStreaming: true
         }));
+        activeIntelligenceStreamingIdsRef.current = setActiveStreamingIds(
+            activeIntelligenceStreamingIdsRef.current,
+            getFollowUpStreamKeys(intent),
+            assistantMessageId,
+        );
 
         try {
             await window.electronAPI.generateFollowUp(intent);
         } catch (err) {
-            setMessages(prev => replaceTopStreamingPlaceholder(prev, {
-                id: Date.now().toString(),
-                role: 'system',
-                text: `Error: ${err}`,
-                intent
-            }));
+            activeIntelligenceStreamingIdsRef.current = clearActiveStreamingIdsByMessageId(
+                activeIntelligenceStreamingIdsRef.current,
+                assistantMessageId,
+            );
+            setMessages(prev => updateOrPrependMessageById(
+                prev,
+                assistantMessageId,
+                message => ({
+                    ...message,
+                    isStreaming: false,
+                    text: `Error: ${err}`,
+                    intent,
+                }),
+                {
+                    id: nextMessageId('system'),
+                    role: 'system',
+                    text: `Error: ${err}`,
+                    intent,
+                    createdAt: Date.now(),
+                }
+            ));
         } finally {
             setIsProcessing(false);
         }
@@ -949,24 +1071,44 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
         setIsExpanded(true);
         setIsProcessing(true);
         analytics.trackCommandExecuted('recap');
+        const assistantMessageId = nextMessageId('assistant');
 
         setMessages(prev => prependMessage(prev, {
-            id: Date.now().toString(),
+            id: assistantMessageId,
             role: 'system',
             text: '',
             intent: 'recap',
             isStreaming: true
         }));
+        activeIntelligenceStreamingIdsRef.current = setActiveStreamingIds(
+            activeIntelligenceStreamingIdsRef.current,
+            RECAP_STREAM_KEYS,
+            assistantMessageId,
+        );
 
         try {
             await window.electronAPI.generateRecap();
         } catch (err) {
-            setMessages(prev => replaceTopStreamingPlaceholder(prev, {
-                id: Date.now().toString(),
-                role: 'system',
-                text: `Error: ${err}`,
-                intent: 'recap'
-            }));
+            activeIntelligenceStreamingIdsRef.current = clearActiveStreamingIdsByMessageId(
+                activeIntelligenceStreamingIdsRef.current,
+                assistantMessageId,
+            );
+            setMessages(prev => updateOrPrependMessageById(
+                prev,
+                assistantMessageId,
+                message => ({
+                    ...message,
+                    isStreaming: false,
+                    text: `Error: ${err}`,
+                }),
+                {
+                    id: nextMessageId('system'),
+                    role: 'system',
+                    text: `Error: ${err}`,
+                    intent: 'recap',
+                    createdAt: Date.now(),
+                }
+            ));
         } finally {
             setIsProcessing(false);
         }
@@ -976,24 +1118,44 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
         setIsExpanded(true);
         setIsProcessing(true);
         analytics.trackCommandExecuted('suggest_questions');
+        const assistantMessageId = nextMessageId('assistant');
 
         setMessages(prev => prependMessage(prev, {
-            id: Date.now().toString(),
+            id: assistantMessageId,
             role: 'system',
             text: '',
             intent: 'follow_up_questions',
             isStreaming: true
         }));
+        activeIntelligenceStreamingIdsRef.current = setActiveStreamingIds(
+            activeIntelligenceStreamingIdsRef.current,
+            FOLLOW_UP_QUESTIONS_STREAM_KEYS,
+            assistantMessageId,
+        );
 
         try {
             await window.electronAPI.generateFollowUpQuestions();
         } catch (err) {
-            setMessages(prev => replaceTopStreamingPlaceholder(prev, {
-                id: Date.now().toString(),
-                role: 'system',
-                text: `Error: ${err}`,
-                intent: 'follow_up_questions'
-            }));
+            activeIntelligenceStreamingIdsRef.current = clearActiveStreamingIdsByMessageId(
+                activeIntelligenceStreamingIdsRef.current,
+                assistantMessageId,
+            );
+            setMessages(prev => updateOrPrependMessageById(
+                prev,
+                assistantMessageId,
+                message => ({
+                    ...message,
+                    isStreaming: false,
+                    text: `Error: ${err}`,
+                }),
+                {
+                    id: nextMessageId('system'),
+                    role: 'system',
+                    text: `Error: ${err}`,
+                    intent: 'follow_up_questions',
+                    createdAt: Date.now(),
+                }
+            ));
         } finally {
             setIsProcessing(false);
         }

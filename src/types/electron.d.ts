@@ -1,6 +1,36 @@
 import type { CustomProviderPayload, FastResponseConfig, FollowUpEmailInput, GeminiChatOptions, OverlayBounds, TranscriptTextEntry } from '../../shared/ipc'
 
 type StatusResult = { success: boolean; error?: string }
+type AnswerRoute = 'fast_standard_answer' | 'enriched_standard_answer' | 'conscious_answer' | 'manual_answer' | 'follow_up_refinement'
+
+type SuggestedAnswerMetadata = {
+  route: AnswerRoute
+  attemptedRoute?: AnswerRoute
+  fallbackOccurred: boolean
+  fallbackReason?: string
+  schemaVersion: 'standard_answer_v1' | 'conscious_mode_v1'
+  evidenceHash: string
+  transcriptRevision: number
+  threadAction?: 'start' | 'continue' | 'reset' | 'ignore'
+  thread?: {
+    rootQuestion: string
+    lastQuestion: string
+    followUpCount: number
+    updatedAt: number
+  } | null
+  cooldownSuppressedMs?: number
+  verifier?: {
+    deterministic: 'pass' | 'fail' | 'skipped'
+    provenance: 'pass' | 'fail' | 'skipped'
+  }
+}
+
+type IntelligenceSuggestedAnswerEvent = {
+  answer: string
+  question: string
+  confidence: number
+  metadata?: SuggestedAnswerMetadata
+}
 
 export interface ElectronAPI {
   updateContentDimensions: (dimensions: {
@@ -147,8 +177,9 @@ setDisguise: (mode: 'terminal' | 'settings' | 'activity' | 'none') => Promise<St
 
   // Intelligence Mode Events
   onIntelligenceAssistUpdate: (callback: (data: { insight: string }) => void) => () => void
+  onIntelligenceCooldown: (callback: (data: { suppressedMs: number; question?: string }) => void) => () => void
   onIntelligenceSuggestedAnswerToken: (callback: (data: { token: string; question: string; confidence: number }) => void) => () => void
-  onIntelligenceSuggestedAnswer: (callback: (data: { answer: string; question: string; confidence: number }) => void) => () => void
+  onIntelligenceSuggestedAnswer: (callback: (data: IntelligenceSuggestedAnswerEvent) => void) => () => void
   onIntelligenceRefinedAnswerToken: (callback: (data: { token: string; intent: string }) => void) => () => void
   onIntelligenceRefinedAnswer: (callback: (data: { answer: string; intent: string }) => void) => () => void
   onIntelligenceFollowUpQuestionsUpdate: (callback: (data: { questions: string }) => void) => () => void
