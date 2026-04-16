@@ -1033,9 +1033,9 @@ export class LLMHelper {
 
   public async analyzeImageFiles(imagePaths: string[], signal?: AbortSignal) {
     try {
-      const prompt = `Describe the content of ${imagePaths.length > 1 ? 'these images' : 'this image'} in a short, concise answer. If it contains code or a problem, solve it.`;
+      const prompt = `Review ${imagePaths.length > 1 ? 'these screenshots' : 'this screenshot'} and respond according to the screenshot-event workflow.`;
       throwIfAborted(signal)
-      const text = await this.generateWithVisionFallback(HARD_SYSTEM_PROMPT, prompt, imagePaths, signal);
+      const text = await this.generateWithVisionFallback(SCREENSHOT_EVENT_PROMPT, prompt, imagePaths, signal);
       throwIfAborted(signal)
 
       return { text: text, timestamp: Date.now() };
@@ -1337,6 +1337,20 @@ ANSWER DIRECTLY:`;
     return `${text.slice(0, SCREENSHOT_FALLBACK_TEXT_LIMIT_CHARS)}\n...[image text fallback truncated]`;
   }
 
+  private appendScreenshotTextFallback(message: string, fallbackText: string): string {
+    const trimmedMessage = message.trim();
+    const sections: string[] = [];
+
+    if (trimmedMessage) {
+      sections.push(trimmedMessage);
+    }
+
+    sections.push('SCREENSHOT_TEXT_FALLBACK:');
+    sections.push(fallbackText || '[unable to extract text from images]');
+
+    return sections.join('\n\n');
+  }
+
   private async extractImageTextWithTesseract(imagePaths: string[], signal?: AbortSignal): Promise<string> {
     const chunks: string[] = [];
 
@@ -1388,6 +1402,10 @@ ANSWER DIRECTLY:`;
       return false;
     }
 
+    if (this.useOllama) {
+      return true;
+    }
+
     if (this.activeCurlProvider) {
       return !this.curlLikelyAcceptsImages(this.activeCurlProvider.curlCommand || '');
     }
@@ -1404,16 +1422,10 @@ ANSWER DIRECTLY:`;
       ? await this.extractImageTextWithTesseract(input.imagePaths, input.signal)
       : '';
 
-    const fallbackSuffix = input.forceTextFallback
-      ? [
-        '',
-        'SCREENSHOT_TEXT_FALLBACK:',
-        fallbackText || '[unable to extract text from images]',
-      ].join('\n')
-      : '';
-
     return {
-      userMessage: `${input.message}${fallbackSuffix}`,
+      userMessage: input.forceTextFallback
+        ? this.appendScreenshotTextFallback(input.message, fallbackText)
+        : input.message,
       context: input.context,
       systemPrompt: SCREENSHOT_EVENT_PROMPT,
       imagePaths: input.forceTextFallback ? [] : input.imagePaths,
@@ -1423,8 +1435,8 @@ ANSWER DIRECTLY:`;
   public async chatWithGemini(message: string, imagePaths?: string[], context?: string, skipSystemPrompt: boolean = false, alternateGroqMessage?: string): Promise<string> {
     try {
       console.log(`[LLMHelper] chatWithGemini called with message:`, message.substring(0, 50))
-      let effectiveMessage = this.applyDefaultBrevityHint(message)
       const hasScreenshotInput = !!(imagePaths?.length);
+      let effectiveMessage = hasScreenshotInput ? message : this.applyDefaultBrevityHint(message)
       const structuredScreenshotRequest = this.isStructuredOutputRequest(effectiveMessage);
       let screenshotRouting: ScreenshotEventRoutingResult | null = null;
       const forceTextFallback = this.shouldForceScreenshotTextFallback(imagePaths);
@@ -2593,6 +2605,15 @@ ANSWER DIRECTLY:`;
     type ProviderAttempt = { name: string; execute: () => Promise<string> };
     const isMultimodal = imagePaths.length > 0;
     throwIfAborted(signal);
+    let screenshotTextFallbackPromise: Promise<string> | null = null;
+    const getScreenshotTextFallback = (): Promise<string> => {
+      screenshotTextFallbackPromise ??= this.extractImageTextWithTesseract(imagePaths, signal);
+      return screenshotTextFallbackPromise;
+    };
+    const getTextOnlyScreenshotPrompt = async (): Promise<string> => {
+      const fallbackText = await getScreenshotTextFallback();
+      return this.appendScreenshotTextFallback(userPrompt, fallbackText);
+    };
 
     // Helper: build a provider attempt for a given family + model ID
     const buildProviderForFamily = (family: ModelFamily, modelId: string): ProviderAttempt | null => {
@@ -2701,43 +2722,43 @@ ANSWER DIRECTLY:`;
     const localProviders: ProviderAttempt[] = [];
 
     if (this.customProvider) {
-      if (isMultimodal) {
-        localProviders.push({
-          name: `Custom Provider (${this.customProvider.name})`,
-          execute: () => this.executeCustomProvider(
+      const customProviderAcceptsImages = !isMultimodal || this.curlLikelyAcceptsImages(this.customProvider.curlCommand || '');
+      localProviders.push({
+        name: `Custom Provider (${this.customProvider.name})`,
+        execute: async () => {
+          const effectiveUserPrompt = customProviderAcceptsImages ? userPrompt : await getTextOnlyScreenshotPrompt();
+          const effectiveImagePaths = customProviderAcceptsImages ? imagePaths : [];
+          return this.executeCustomProvider(
             this.customProvider!.curlCommand,
-            `${systemPrompt}\n\n${userPrompt}`,
+            `${systemPrompt}\n\n${effectiveUserPrompt}`,
             systemPrompt,
-            userPrompt,
+            effectiveUserPrompt,
             "",
-            imagePaths
-          )
-        });
-      } else {
-        localProviders.push({
-          name: `Custom Provider (${this.customProvider.name})`,
-          execute: () => this.executeCustomProvider(
-            this.customProvider!.curlCommand,
-            `${systemPrompt}\n\n${userPrompt}`,
-            systemPrompt,
-            userPrompt,
-            ""
-          )
-        });
-      }
+            effectiveImagePaths
+          );
+        }
+      });
     }
 
     if (this.activeCurlProvider && !this.customProvider) {
+      const curlProviderAcceptsImages = !isMultimodal || this.curlLikelyAcceptsImages(this.activeCurlProvider.curlCommand || '');
       localProviders.push({
         name: `cURL Provider (${this.activeCurlProvider.name})`,
-        execute: () => this.chatWithCurl(userPrompt, systemPrompt, "", imagePaths)
+        execute: async () => {
+          const effectiveUserPrompt = curlProviderAcceptsImages ? userPrompt : await getTextOnlyScreenshotPrompt();
+          const effectiveImagePaths = curlProviderAcceptsImages ? imagePaths : [];
+          return this.chatWithCurl(effectiveUserPrompt, systemPrompt, "", effectiveImagePaths);
+        }
       });
     }
 
     if (this.useOllama) {
       localProviders.push({
         name: `Ollama (${this.ollamaModel})`,
-        execute: () => this.callOllama(`${systemPrompt}\n\n${userPrompt}`)
+        execute: async () => {
+          const effectiveUserPrompt = isMultimodal ? await getTextOnlyScreenshotPrompt() : userPrompt;
+          return this.callOllama(`${systemPrompt}\n\n${effectiveUserPrompt}`);
+        }
       });
     }
 
@@ -2964,8 +2985,8 @@ ANSWER DIRECTLY:`;
       return;
     }
 
-    let effectiveMessage = this.applyDefaultBrevityHint(message);
     const hasScreenshotInput = !!(imagePaths?.length);
+    let effectiveMessage = hasScreenshotInput ? message : this.applyDefaultBrevityHint(message);
     const structuredScreenshotRequest = this.isStructuredOutputRequest(effectiveMessage);
     let screenshotRouting: ScreenshotEventRoutingResult | null = null;
     const forceTextFallback = this.shouldForceScreenshotTextFallback(imagePaths);
