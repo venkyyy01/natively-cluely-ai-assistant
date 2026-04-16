@@ -158,7 +158,10 @@ test('chatWithGemini falls back to local OCR for Ollama screenshot requests', as
     assert.equal(result, 'ollama-ok');
     assert.match(capturedPrompt, /SCREENSHOT_TEXT_FALLBACK:/);
     assert.match(capturedPrompt, /Ollama OCR fallback text/);
-    assert.match(capturedPrompt, /Step 1 - OCR & Extract/);
+    assert.match(capturedPrompt, /Mode: CODING_INTERVIEW_PROBLEM/);
+    assert.match(capturedPrompt, /Mode: EXISTING_CODE_DEBUG_OR_FIX/);
+    assert.match(capturedPrompt, /Mode: GENERAL_CODE_REQUEST/);
+    assert.match(capturedPrompt, /MODE 1: CODING_INTERVIEW_PROBLEM/);
     assert.doesNotMatch(capturedPrompt, /Answer briefly and directly\./);
   } finally {
     helper.scrubKeys();
@@ -196,7 +199,10 @@ test('analyzeImageFiles uses the screenshot prompt and OCR fallback for text-onl
     assert.match(captured?.userMessage || '', /SCREENSHOT_TEXT_FALLBACK:/);
     assert.match(captured?.userMessage || '', /Analyze image OCR fallback text/);
     assert.match(captured?.systemPrompt || '', /You are an expert software engineer and technical interview coach\./);
-    assert.match(captured?.systemPrompt || '', /Step 1 - OCR & Extract/);
+    assert.match(captured?.systemPrompt || '', /Mode: CODING_INTERVIEW_PROBLEM/);
+    assert.match(captured?.systemPrompt || '', /Mode: EXISTING_CODE_DEBUG_OR_FIX/);
+    assert.match(captured?.systemPrompt || '', /Mode: GENERAL_CODE_REQUEST/);
+    assert.match(captured?.systemPrompt || '', /MODE 2: EXISTING_CODE_DEBUG_OR_FIX/);
   } finally {
     helper.chatWithCurl = originalChatWithCurl;
     helper.scrubKeys();
