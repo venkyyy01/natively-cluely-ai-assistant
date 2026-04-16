@@ -158,10 +158,11 @@ test('chatWithGemini falls back to local OCR for Ollama screenshot requests', as
     assert.equal(result, 'ollama-ok');
     assert.match(capturedPrompt, /SCREENSHOT_TEXT_FALLBACK:/);
     assert.match(capturedPrompt, /Ollama OCR fallback text/);
-    assert.match(capturedPrompt, /Mode: CODING_INTERVIEW_PROBLEM/);
-    assert.match(capturedPrompt, /Mode: EXISTING_CODE_DEBUG_OR_FIX/);
-    assert.match(capturedPrompt, /Mode: GENERAL_CODE_REQUEST/);
-    assert.match(capturedPrompt, /MODE 1: CODING_INTERVIEW_PROBLEM/);
+    assert.match(capturedPrompt, /coding \/ technical interview problem/);
+    assert.match(capturedPrompt, /non-technical content/);
+    assert.match(capturedPrompt, /Problem restatement/);
+    assert.match(capturedPrompt, /Brute-force code/);
+    assert.match(capturedPrompt, /Optimized code/);
     assert.doesNotMatch(capturedPrompt, /Answer briefly and directly\./);
   } finally {
     helper.scrubKeys();
@@ -199,10 +200,11 @@ test('analyzeImageFiles uses the screenshot prompt and OCR fallback for text-onl
     assert.match(captured?.userMessage || '', /SCREENSHOT_TEXT_FALLBACK:/);
     assert.match(captured?.userMessage || '', /Analyze image OCR fallback text/);
     assert.match(captured?.systemPrompt || '', /You are an expert software engineer and technical interview coach\./);
-    assert.match(captured?.systemPrompt || '', /Mode: CODING_INTERVIEW_PROBLEM/);
-    assert.match(captured?.systemPrompt || '', /Mode: EXISTING_CODE_DEBUG_OR_FIX/);
-    assert.match(captured?.systemPrompt || '', /Mode: GENERAL_CODE_REQUEST/);
-    assert.match(captured?.systemPrompt || '', /MODE 2: EXISTING_CODE_DEBUG_OR_FIX/);
+    assert.match(captured?.systemPrompt || '', /coding \/ technical interview problem/);
+    assert.match(captured?.systemPrompt || '', /non-technical content/);
+    assert.match(captured?.systemPrompt || '', /Problem restatement/);
+    assert.match(captured?.systemPrompt || '', /Brute-force overview/);
+    assert.match(captured?.systemPrompt || '', /Big-O summary/);
   } finally {
     helper.chatWithCurl = originalChatWithCurl;
     helper.scrubKeys();
@@ -303,11 +305,87 @@ test('streamChat preserves structured system prompt overrides for screenshot rea
 
     assert.equal(output, 'structured-ok');
     assert.match(captured?.systemPrompt || '', /PROMPT_MARKER_KEEP_OVERRIDE/);
-    assert.doesNotMatch(captured?.systemPrompt || '', /Mode: CODING_INTERVIEW_PROBLEM/);
+    assert.doesNotMatch(captured?.systemPrompt || '', /Problem restatement/);
     assert.match(captured?.rawUserMessage || '', /SCREENSHOT_TEXT_FALLBACK:/);
     assert.match(captured?.rawUserMessage || '', /Structured screenshot fallback text/);
   } finally {
     helper.executeCustomProvider = originalExecuteCustomProvider;
+    helper.scrubKeys();
+  }
+});
+
+test('chatWithGemini retries cURL screenshot requests with OCR text when image input is rejected', async () => {
+  const LLMHelper = await loadLLMHelper();
+  const helper = new LLMHelper() as any;
+  const originalChatWithCurl = helper.chatWithCurl;
+
+  helper.setModel('curl-provider', [{
+    id: 'curl-provider',
+    name: 'cURL',
+    curlCommand: 'curl https://example.com -d "{\"image\":\"{{IMAGE_BASE64}}\",\"prompt\":\"{{TEXT}}\"}"',
+    responsePath: 'choices[0].message.content',
+  }]);
+
+  helper.extractImageTextWithTesseract = async () => 'OCR retry text from screenshot';
+
+  const calls: Array<{ userMessage: string; imageCount: number }> = [];
+  helper.chatWithCurl = async (userMessage: string, _systemPrompt?: string, _context: string = '', imagePaths?: string[]) => {
+    calls.push({
+      userMessage,
+      imageCount: imagePaths?.length || 0,
+    });
+    if (imagePaths?.length) {
+      throw new Error('image_url content is not supported by this model');
+    }
+    return 'ocr-retry-ok';
+  };
+
+  try {
+    const result = await helper.chatWithGemini('solve this', ['/tmp/screenshot.png'], 'ctx', true);
+    assert.equal(result, 'ocr-retry-ok');
+    assert.equal(calls.length, 2);
+    assert.equal(calls[0].imageCount, 1);
+    assert.equal(calls[1].imageCount, 0);
+    assert.doesNotMatch(calls[0].userMessage, /SCREENSHOT_TEXT_FALLBACK:/);
+    assert.match(calls[1].userMessage, /SCREENSHOT_TEXT_FALLBACK:/);
+    assert.match(calls[1].userMessage, /OCR retry text from screenshot/);
+  } finally {
+    helper.chatWithCurl = originalChatWithCurl;
+    helper.scrubKeys();
+  }
+});
+
+test('streamChat retries selected OpenAI screenshot requests with OCR text when image input is rejected', async () => {
+  const LLMHelper = await loadLLMHelper();
+  const helper = new LLMHelper() as any;
+
+  helper.setModel('gpt-5.4-chat', []);
+  helper.openaiClient = { chat: { completions: { create: async () => ({}) } } };
+  helper.extractImageTextWithTesseract = async () => 'OpenAI OCR retry text';
+
+  let capturedTextUserMessage = '';
+  let capturedTextSystemPrompt = '';
+  helper.streamWithOpenaiMultimodal = async function* () {
+    throw new Error('This model does not support image input');
+  };
+  helper.streamWithOpenai = async function* (userMessage: string, systemPrompt?: string) {
+    capturedTextUserMessage = userMessage;
+    capturedTextSystemPrompt = systemPrompt || '';
+    yield 'openai-ocr-ok';
+  };
+
+  try {
+    let output = '';
+    for await (const chunk of helper.streamChat('solve this', ['/tmp/screenshot.png'], 'ctx')) {
+      output += chunk;
+    }
+
+    assert.equal(output, 'openai-ocr-ok');
+    assert.match(capturedTextUserMessage, /SCREENSHOT_TEXT_FALLBACK:/);
+    assert.match(capturedTextUserMessage, /OpenAI OCR retry text/);
+    assert.match(capturedTextSystemPrompt, /Problem restatement/);
+    assert.match(capturedTextSystemPrompt, /Optimized complexity/);
+  } finally {
     helper.scrubKeys();
   }
 });

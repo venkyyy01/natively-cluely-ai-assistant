@@ -1429,6 +1429,93 @@ ANSWER DIRECTLY:`;
     return false;
   }
 
+  private isImageCapabilityError(error: unknown): boolean {
+    const err = error as any;
+    const status = err?.status ?? err?.statusCode ?? err?.response?.status ?? err?.error?.status;
+    const code = String(err?.code ?? err?.error?.code ?? '').toLowerCase();
+    const type = String(err?.type ?? err?.error?.type ?? '').toLowerCase();
+    const message = [
+      err?.message,
+      err?.error?.message,
+      err?.response?.data?.error?.message,
+      err?.response?.data,
+      err?.cause?.message,
+    ]
+      .filter(Boolean)
+      .map((value) => typeof value === 'string' ? value : JSON.stringify(value))
+      .join(' ')
+      .toLowerCase();
+
+    const combined = `${code} ${type} ${message}`;
+    const mentionsImageInput = /(image|vision|multimodal|multi-modal|modalit|image_url|inline_?data|media_type|base64|data:image|content part)/i.test(combined);
+    const mentionsUnsupportedCapability = /(unsupported|not support|does not support|doesn't support|not accept|does not accept|can't process|cannot process|text[- ]only|invalid content|invalid image|bad request|refus|unavailable)/i.test(combined);
+
+    return Boolean(
+      mentionsImageInput &&
+      (
+        mentionsUnsupportedCapability ||
+        status === 400 ||
+        status === 415 ||
+        status === 422
+      )
+    );
+  }
+
+  private shouldRetryScreenshotWithOcr(error: unknown, imagePaths?: string[]): boolean {
+    return !!imagePaths?.length && this.isImageCapabilityError(error);
+  }
+
+  private async buildScreenshotTextFallbackMessage(message: string, imagePaths: string[], signal?: AbortSignal): Promise<string> {
+    const fallbackText = await this.extractImageTextWithTesseract(imagePaths, signal);
+    return this.appendScreenshotTextFallback(message, fallbackText);
+  }
+
+  private async runWithScreenshotOcrFallback<T>(
+    label: string,
+    imagePaths: string[] | undefined,
+    originalMessage: string,
+    imageRequest: () => Promise<T>,
+    textRequest: (fallbackMessage: string) => Promise<T>,
+    signal?: AbortSignal,
+  ): Promise<T> {
+    try {
+      return await imageRequest();
+    } catch (error) {
+      if (!this.shouldRetryScreenshotWithOcr(error, imagePaths)) {
+        throw error;
+      }
+
+      console.warn(`[LLMHelper] ${label} rejected image input. Falling back to local OCR text.`);
+      throwIfAborted(signal);
+      const fallbackMessage = await this.buildScreenshotTextFallbackMessage(originalMessage, imagePaths!, signal);
+      throwIfAborted(signal);
+      return textRequest(fallbackMessage);
+    }
+  }
+
+  private async * streamWithScreenshotOcrFallback(
+    label: string,
+    imagePaths: string[] | undefined,
+    originalMessage: string,
+    imageStream: () => AsyncGenerator<string, void, unknown>,
+    textStream: (fallbackMessage: string) => AsyncGenerator<string, void, unknown>,
+    signal?: AbortSignal,
+  ): AsyncGenerator<string, void, unknown> {
+    try {
+      yield* imageStream();
+    } catch (error) {
+      if (!this.shouldRetryScreenshotWithOcr(error, imagePaths)) {
+        throw error;
+      }
+
+      console.warn(`[LLMHelper] ${label} rejected image input. Falling back to local OCR text.`);
+      throwIfAborted(signal);
+      const fallbackMessage = await this.buildScreenshotTextFallbackMessage(originalMessage, imagePaths!, signal);
+      throwIfAborted(signal);
+      yield* textStream(fallbackMessage);
+    }
+  }
+
   private async prepareScreenshotEventRouting(input: ScreenshotEventRoutingInput): Promise<ScreenshotEventRoutingResult> {
     const fallbackText = input.forceTextFallback
       ? await this.extractImageTextWithTesseract(input.imagePaths, input.signal)
@@ -1543,7 +1630,6 @@ ANSWER DIRECTLY:`;
       const claudeSystemPrompt = skipPromptForRequest
         ? undefined
         : await this.withSystemPromptCache('claude', CLAUDE_MODEL, claudeBasePrompt, () => buildSystemPrompt(claudeBasePrompt));
-
       const canUseFastResponse = !isMultimodal && !this.activeCurlProvider && !this.customProvider && !this.useOllama;
       const fastResponseTarget = canUseFastResponse ? this.getActiveFastResponseTarget() : null;
       if (fastResponseTarget) {
@@ -1568,6 +1654,25 @@ ANSWER DIRECTLY:`;
         const curlSystemPrompt = skipPromptForRequest
           ? undefined
           : screenshotSystemPrompt || CUSTOM_SYSTEM_PROMPT;
+        if (isMultimodal && imagePaths?.length) {
+          return await this.runWithScreenshotOcrFallback(
+            `cURL Provider (${this.activeCurlProvider.name})`,
+            imagePaths,
+            effectiveMessage,
+            () => this.chatWithCurl(
+              effectiveMessage,
+              curlSystemPrompt,
+              context || "",
+              imagePaths,
+            ),
+            (fallbackMessage) => this.chatWithCurl(
+              fallbackMessage,
+              curlSystemPrompt,
+              context || "",
+              [],
+            ),
+          );
+        }
         return await this.chatWithCurl(
           effectiveMessage,
           curlSystemPrompt,
@@ -1582,27 +1687,86 @@ ANSWER DIRECTLY:`;
         const customSystemPrompt = skipPromptForRequest
           ? ""
           : screenshotSystemPrompt || CUSTOM_SYSTEM_PROMPT;
-        const response = await this.executeCustomProvider(
-          this.customProvider.curlCommand,
-          combinedMessages.gemini,
-          customSystemPrompt,
-          effectiveMessage,
-          context || "",
-          imagePaths
-        );
+        const response = isMultimodal && imagePaths?.length
+          ? await this.runWithScreenshotOcrFallback(
+              `Custom Provider (${this.customProvider.name})`,
+              imagePaths,
+              effectiveMessage,
+              () => this.executeCustomProvider(
+                this.customProvider!.curlCommand,
+                combinedMessages.gemini,
+                customSystemPrompt,
+                effectiveMessage,
+                context || "",
+                imagePaths
+              ),
+              (fallbackMessage) => {
+                const fallbackUserContent = this.prepareUserContentForModel('custom', this.getCurrentModel(), fallbackMessage, context);
+                const fallbackCombinedMessage = this.joinPrompt(customSystemPrompt, fallbackUserContent, this.getInputTokenBudget('custom', this.getCurrentModel()));
+                return this.executeCustomProvider(
+                  this.customProvider!.curlCommand,
+                  fallbackCombinedMessage,
+                  customSystemPrompt,
+                  fallbackMessage,
+                  context || "",
+                  []
+                );
+              },
+            )
+          : await this.executeCustomProvider(
+              this.customProvider.curlCommand,
+              combinedMessages.gemini,
+              customSystemPrompt,
+              effectiveMessage,
+              context || "",
+              imagePaths
+            );
         return this.processResponse(response);
       }
 
       // --- Direct Routing based on Selected Model ---
       if (this.isOpenAiModel(this.currentModelId) && this.openaiClient) {
+        if (isMultimodal && imagePaths?.length) {
+          return await this.runWithScreenshotOcrFallback(
+            `OpenAI (${activeOpenAiModel})`,
+            imagePaths,
+            effectiveMessage,
+            () => this.generateWithOpenai(openaiUserContent, openaiSystemPrompt, imagePaths),
+            (fallbackMessage) => {
+              const fallbackUserContent = this.prepareUserContentForModel('openai', activeOpenAiModel, fallbackMessage, context);
+              return this.generateWithOpenai(fallbackUserContent, openaiSystemPrompt);
+            },
+          );
+        }
         return await this.generateWithOpenai(openaiUserContent, openaiSystemPrompt, imagePaths);
       }
       if (this.isClaudeModel(this.currentModelId) && this.claudeClient) {
+        if (isMultimodal && imagePaths?.length) {
+          return await this.runWithScreenshotOcrFallback(
+            `Claude (${CLAUDE_MODEL})`,
+            imagePaths,
+            effectiveMessage,
+            () => this.generateWithClaude(claudeUserContent, claudeSystemPrompt, imagePaths),
+            (fallbackMessage) => {
+              const fallbackUserContent = this.prepareUserContentForModel('claude', CLAUDE_MODEL, fallbackMessage, context);
+              return this.generateWithClaude(fallbackUserContent, claudeSystemPrompt);
+            },
+          );
+        }
         return await this.generateWithClaude(claudeUserContent, claudeSystemPrompt, imagePaths);
       }
       if (this.isGroqModel(this.currentModelId) && this.groqClient) {
         if (isMultimodal && imagePaths) {
-          return await this.generateWithGroqMultimodal(openaiUserContent, imagePaths, openaiSystemPrompt);
+          return await this.runWithScreenshotOcrFallback(
+            'Groq multimodal',
+            imagePaths,
+            effectiveMessage,
+            () => this.generateWithGroqMultimodal(openaiUserContent, imagePaths, openaiSystemPrompt),
+            (fallbackMessage) => {
+              const fallbackUserContent = this.prepareUserContentForModel('groq', GROQ_MODEL, fallbackMessage, context);
+              return this.generateWithGroq(this.joinPrompt(finalGroqPrompt, fallbackUserContent, this.getInputTokenBudget('groq', GROQ_MODEL)));
+            },
+          );
         }
         return await this.generateWithGroq(combinedMessages.groq);
       }
@@ -1628,27 +1792,78 @@ ANSWER DIRECTLY:`;
       if (isMultimodal) {
         // MULTIMODAL PROVIDER ORDER: OpenAI -> Gemini Flash -> Claude -> Gemini Pro -> Groq -> Custom/Ollama
         if (this.openaiClient) {
-          providers.push({ name: `OpenAI (${textOpenAI})`, execute: () => this.generateWithOpenai(openaiUserContent, openaiSystemPrompt, imagePaths) });
+          providers.push({
+            name: `OpenAI (${textOpenAI})`,
+            execute: () => this.runWithScreenshotOcrFallback(
+              `OpenAI (${textOpenAI})`,
+              imagePaths,
+              effectiveMessage,
+              () => this.generateWithOpenai(openaiUserContent, openaiSystemPrompt, imagePaths),
+              (fallbackMessage) => {
+                const fallbackUserContent = this.prepareUserContentForModel('openai', activeOpenAiModel, fallbackMessage, context);
+                return this.generateWithOpenai(fallbackUserContent, openaiSystemPrompt);
+              },
+            )
+          });
         }
         if (this.client) {
           providers.push({
             name: `Gemini Flash (${textGeminiFlash})`,
-            execute: () => this.tryGenerateResponse(combinedMessages.gemini, imagePaths, textGeminiFlash)
+            execute: () => this.runWithScreenshotOcrFallback(
+              `Gemini Flash (${textGeminiFlash})`,
+              imagePaths,
+              effectiveMessage,
+              () => this.tryGenerateResponse(combinedMessages.gemini, imagePaths, textGeminiFlash),
+              (fallbackMessage) => {
+                const fallbackUserContent = this.prepareUserContentForModel('gemini', textGeminiFlash, fallbackMessage, context);
+                return this.tryGenerateResponse(this.joinPrompt(finalGeminiPrompt, fallbackUserContent, this.getInputTokenBudget('gemini', textGeminiFlash)), undefined, textGeminiFlash);
+              },
+            )
           });
         }
         if (this.claudeClient) {
-          providers.push({ name: `Claude (${textClaude})`, execute: () => this.generateWithClaude(claudeUserContent, claudeSystemPrompt, imagePaths) });
+          providers.push({
+            name: `Claude (${textClaude})`,
+            execute: () => this.runWithScreenshotOcrFallback(
+              `Claude (${textClaude})`,
+              imagePaths,
+              effectiveMessage,
+              () => this.generateWithClaude(claudeUserContent, claudeSystemPrompt, imagePaths),
+              (fallbackMessage) => {
+                const fallbackUserContent = this.prepareUserContentForModel('claude', textClaude, fallbackMessage, context);
+                return this.generateWithClaude(fallbackUserContent, claudeSystemPrompt);
+              },
+            )
+          });
         }
         if (this.client) {
           providers.push({
             name: `Gemini Pro (${textGeminiPro})`,
-            execute: () => this.tryGenerateResponse(combinedMessages.gemini, imagePaths, textGeminiPro)
+            execute: () => this.runWithScreenshotOcrFallback(
+              `Gemini Pro (${textGeminiPro})`,
+              imagePaths,
+              effectiveMessage,
+              () => this.tryGenerateResponse(combinedMessages.gemini, imagePaths, textGeminiPro),
+              (fallbackMessage) => {
+                const fallbackUserContent = this.prepareUserContentForModel('gemini_pro', textGeminiPro, fallbackMessage, context);
+                return this.tryGenerateResponse(this.joinPrompt(finalGeminiPrompt, fallbackUserContent, this.getInputTokenBudget('gemini_pro', textGeminiPro)), undefined, textGeminiPro);
+              },
+            )
           });
         }
         if (this.groqClient) {
           providers.push({
             name: `Groq (meta-llama/llama-4-scout-17b-16e-instruct)`,
-            execute: () => this.generateWithGroqMultimodal(openaiUserContent, imagePaths!, openaiSystemPrompt)
+            execute: () => this.runWithScreenshotOcrFallback(
+              'Groq multimodal',
+              imagePaths,
+              effectiveMessage,
+              () => this.generateWithGroqMultimodal(openaiUserContent, imagePaths!, openaiSystemPrompt),
+              (fallbackMessage) => {
+                const fallbackUserContent = this.prepareUserContentForModel('groq', GROQ_MODEL, fallbackMessage, context);
+                return this.generateWithGroq(this.joinPrompt(finalGroqPrompt, fallbackUserContent, this.getInputTokenBudget('groq', GROQ_MODEL)));
+              },
+            )
           });
         }
       } else {
@@ -2630,6 +2845,25 @@ ANSWER DIRECTLY:`;
       const fallbackText = await getScreenshotTextFallback();
       return this.appendScreenshotTextFallback(userPrompt, fallbackText);
     };
+    const runVisionAttemptWithTextFallback = async (
+      label: string,
+      imageRequest: () => Promise<string>,
+      textRequest: (fallbackPrompt: string) => Promise<string>,
+    ): Promise<string> => {
+      try {
+        return await imageRequest();
+      } catch (error) {
+        if (!this.shouldRetryScreenshotWithOcr(error, imagePaths)) {
+          throw error;
+        }
+
+        console.warn(`[LLMHelper] ${label} rejected image input. Falling back to local OCR text.`);
+        throwIfAborted(signal);
+        const fallbackPrompt = await getTextOnlyScreenshotPrompt();
+        throwIfAborted(signal);
+        return textRequest(fallbackPrompt);
+      }
+    };
 
     // Helper: build a provider attempt for a given family + model ID
     const buildProviderForFamily = (family: ModelFamily, modelId: string): ProviderAttempt | null => {
@@ -2638,7 +2872,13 @@ ANSWER DIRECTLY:`;
           if (!this.openaiClient) return null;
           return {
             name: `OpenAI (${modelId})`,
-            execute: () => this.generateWithOpenai(userPrompt, systemPrompt, isMultimodal ? imagePaths : undefined)
+            execute: () => isMultimodal
+              ? runVisionAttemptWithTextFallback(
+                  `OpenAI (${modelId})`,
+                  () => this.generateWithOpenai(userPrompt, systemPrompt, imagePaths),
+                  (fallbackPrompt) => this.generateWithOpenai(fallbackPrompt, systemPrompt),
+                )
+              : this.generateWithOpenai(userPrompt, systemPrompt)
           };
 
         case ModelFamily.GEMINI_FLASH:
@@ -2646,17 +2886,21 @@ ANSWER DIRECTLY:`;
           if (isMultimodal) {
             return {
               name: `Gemini Flash (${modelId})`,
-              execute: async () => {
-                const contents: any[] = [{ text: `${systemPrompt}\n\n${userPrompt}` }];
-                for (const p of imagePaths) {
-                  throwIfAborted(signal)
-                  if (fs.existsSync(p)) {
-                    const { mimeType, data } = await this.processImage(p);
-                    contents.push({ inlineData: { mimeType, data } });
+              execute: () => runVisionAttemptWithTextFallback(
+                `Gemini Flash (${modelId})`,
+                async () => {
+                  const contents: any[] = [{ text: `${systemPrompt}\n\n${userPrompt}` }];
+                  for (const p of imagePaths) {
+                    throwIfAborted(signal)
+                    if (fs.existsSync(p)) {
+                      const { mimeType, data } = await this.processImage(p);
+                      contents.push({ inlineData: { mimeType, data } });
+                    }
                   }
-                }
-                return await this.generateContent(contents, modelId);
-              }
+                  return await this.generateContent(contents, modelId);
+                },
+                (fallbackPrompt) => this.generateContent([{ text: `${systemPrompt}\n\n${fallbackPrompt}` }], modelId),
+              )
             };
           }
           return {
@@ -2668,7 +2912,13 @@ ANSWER DIRECTLY:`;
           if (!this.claudeClient) return null;
           return {
             name: `Claude (${modelId})`,
-            execute: () => this.generateWithClaude(userPrompt, systemPrompt, isMultimodal ? imagePaths : undefined)
+            execute: () => isMultimodal
+              ? runVisionAttemptWithTextFallback(
+                  `Claude (${modelId})`,
+                  () => this.generateWithClaude(userPrompt, systemPrompt, imagePaths),
+                  (fallbackPrompt) => this.generateWithClaude(fallbackPrompt, systemPrompt),
+                )
+              : this.generateWithClaude(userPrompt, systemPrompt)
           };
 
         case ModelFamily.GEMINI_PRO:
@@ -2676,17 +2926,21 @@ ANSWER DIRECTLY:`;
           if (isMultimodal) {
             return {
               name: `Gemini Pro (${modelId})`,
-              execute: async () => {
-                const contents: any[] = [{ text: `${systemPrompt}\n\n${userPrompt}` }];
-                for (const p of imagePaths) {
-                  throwIfAborted(signal)
-                  if (fs.existsSync(p)) {
-                    const { mimeType, data } = await this.processImage(p);
-                    contents.push({ inlineData: { mimeType, data } });
+              execute: () => runVisionAttemptWithTextFallback(
+                `Gemini Pro (${modelId})`,
+                async () => {
+                  const contents: any[] = [{ text: `${systemPrompt}\n\n${userPrompt}` }];
+                  for (const p of imagePaths) {
+                    throwIfAborted(signal)
+                    if (fs.existsSync(p)) {
+                      const { mimeType, data } = await this.processImage(p);
+                      contents.push({ inlineData: { mimeType, data } });
+                    }
                   }
-                }
-                return await this.generateContent(contents, modelId);
-              }
+                  return await this.generateContent(contents, modelId);
+                },
+                (fallbackPrompt) => this.generateContent([{ text: `${systemPrompt}\n\n${fallbackPrompt}` }], modelId),
+              )
             };
           }
           return {
@@ -2699,7 +2953,11 @@ ANSWER DIRECTLY:`;
           if (isMultimodal) {
             return {
               name: `Groq (${modelId})`,
-              execute: () => this.generateWithGroqMultimodal(userPrompt, imagePaths, systemPrompt)
+              execute: () => runVisionAttemptWithTextFallback(
+                `Groq (${modelId})`,
+                () => this.generateWithGroqMultimodal(userPrompt, imagePaths, systemPrompt),
+                (fallbackPrompt) => this.generateWithGroq(`${systemPrompt}\n\n${fallbackPrompt}`),
+              )
             };
           }
           return {
@@ -2856,9 +3114,13 @@ ANSWER DIRECTLY:`;
    */
   public async * streamChatWithGemini(message: string, imagePaths?: string[], context?: string, skipSystemPrompt: boolean = false, abortSignal?: AbortSignal): AsyncGenerator<string, void, unknown> {
     console.log(`[LLMHelper] streamChatWithGemini called with message:`, message.substring(0, 50));
-    const effectiveMessage = this.applyDefaultBrevityHint(message);
-
     const isMultimodal = !!(imagePaths?.length);
+    if (isMultimodal) {
+      yield* this.streamChat(message, imagePaths, context, skipSystemPrompt ? "" : undefined, { abortSignal });
+      return;
+    }
+
+    const effectiveMessage = this.applyDefaultBrevityHint(message);
 
     // Build single-string messages for Groq/Gemini (which use combined prompts)
     const buildCombinedMessage = (systemPrompt: string) => {
@@ -3070,17 +3332,21 @@ ANSWER DIRECTLY:`;
     // Determine the system prompt to use
     // logic: if override provided, use it. otherwise use HARD_SYSTEM_PROMPT (which is the universal base)
     const baseSystemPrompt = systemPromptOverride || HARD_SYSTEM_PROMPT;
+    const prepareStreamSystemPrompt = (prompt: string): string => (
+      prompt === SCREENSHOT_EVENT_PROMPT ? prompt : this.injectLanguageInstruction(prompt)
+    );
     const finalSystemPrompt = await this.withSystemPromptCache(
       providerCacheKey,
       this.getCurrentModel(),
       baseSystemPrompt,
-      () => this.injectLanguageInstruction(baseSystemPrompt),
+      () => prepareStreamSystemPrompt(baseSystemPrompt),
     );
 
     // Helper to build combined user message
-    const userContent = context
-      ? `CONTEXT:\n${context}\n\nUSER QUESTION:\n${effectiveMessage}`
-      : effectiveMessage;
+    const buildStreamUserContent = (messageText: string) => context
+      ? `CONTEXT:\n${context}\n\nUSER QUESTION:\n${messageText}`
+      : messageText;
+    const userContent = buildStreamUserContent(effectiveMessage);
 
     const qualityTier: StreamQualityTier = options?.qualityTier ?? 'standard';
     const canUseFastResponse = !isMultimodal && !this.activeCurlProvider && !this.customProvider && !this.useOllama;
@@ -3090,13 +3356,13 @@ ANSWER DIRECTLY:`;
       try {
         if (fastResponseTarget.provider === 'cerebras') {
           const cerebrasSystem = systemPromptOverride || OPENAI_SYSTEM_PROMPT;
-          const finalCerebrasSystem = this.injectLanguageInstruction(cerebrasSystem);
+          const finalCerebrasSystem = prepareStreamSystemPrompt(cerebrasSystem);
           yield* this.streamWithCerebras(userContent, finalCerebrasSystem, fastResponseTarget.model, options?.abortSignal);
           return;
         }
 
         const groqSystem = systemPromptOverride || GROQ_SYSTEM_PROMPT;
-        const finalGroqSystem = this.injectLanguageInstruction(groqSystem);
+        const finalGroqSystem = prepareStreamSystemPrompt(groqSystem);
         const groqFullMessage = this.joinPrompt(finalGroqSystem, userContent);
         yield* this.streamWithGroq(groqFullMessage, fastResponseTarget.model, options?.abortSignal);
         return;
@@ -3117,17 +3383,44 @@ ANSWER DIRECTLY:`;
       // Map UNIVERSAL prompts to CUSTOM before injecting language instruction,
       // because injectLanguageInstruction modifies the string and breaks mapToCustomPrompt matching
       const mappedBase = this.mapToCustomPrompt(baseSystemPrompt);
-      const curlSystemPrompt = this.injectLanguageInstruction(mappedBase);
-      const response = await this.executeCustomProvider(
-        this.activeCurlProvider.curlCommand,
-        userContent,
-        curlSystemPrompt,
-        effectiveMessage,
-        context || "",
-        imagePaths,
-        this.activeCurlProvider.responsePath,
-        options?.abortSignal,
-      );
+      const curlSystemPrompt = prepareStreamSystemPrompt(mappedBase);
+      const response = isMultimodal && imagePaths?.length
+        ? await this.runWithScreenshotOcrFallback(
+            `cURL Provider (${this.activeCurlProvider.name})`,
+            imagePaths,
+            effectiveMessage,
+            () => this.executeCustomProvider(
+              this.activeCurlProvider!.curlCommand,
+              userContent,
+              curlSystemPrompt,
+              effectiveMessage,
+              context || "",
+              imagePaths,
+              this.activeCurlProvider!.responsePath,
+              options?.abortSignal,
+            ),
+            (fallbackMessage) => this.executeCustomProvider(
+              this.activeCurlProvider!.curlCommand,
+              buildStreamUserContent(fallbackMessage),
+              curlSystemPrompt,
+              fallbackMessage,
+              context || "",
+              [],
+              this.activeCurlProvider!.responsePath,
+              options?.abortSignal,
+            ),
+            options?.abortSignal,
+          )
+        : await this.executeCustomProvider(
+            this.activeCurlProvider.curlCommand,
+            userContent,
+            curlSystemPrompt,
+            effectiveMessage,
+            context || "",
+            imagePaths,
+            this.activeCurlProvider.responsePath,
+            options?.abortSignal,
+          );
       yield response;
       return;
     }
@@ -3137,9 +3430,16 @@ ANSWER DIRECTLY:`;
     // OpenAI
     if (this.isOpenAiModel(this.currentModelId) && this.openaiClient) {
       const openAiSystem = systemPromptOverride || OPENAI_SYSTEM_PROMPT;
-      const finalOpenAiSystem = this.injectLanguageInstruction(openAiSystem);
+      const finalOpenAiSystem = prepareStreamSystemPrompt(openAiSystem);
       if (isMultimodal && imagePaths) {
-        yield* this.streamWithOpenaiMultimodal(userContent, imagePaths, finalOpenAiSystem, options?.abortSignal);
+        yield* this.streamWithScreenshotOcrFallback(
+          `OpenAI (${this.getActiveOpenAiModel()})`,
+          imagePaths,
+          effectiveMessage,
+          () => this.streamWithOpenaiMultimodal(userContent, imagePaths, finalOpenAiSystem, options?.abortSignal),
+          (fallbackMessage) => this.streamWithOpenai(buildStreamUserContent(fallbackMessage), finalOpenAiSystem, options?.abortSignal),
+          options?.abortSignal,
+        );
       } else {
         yield* this.streamWithOpenai(userContent, finalOpenAiSystem, options?.abortSignal);
       }
@@ -3149,9 +3449,16 @@ ANSWER DIRECTLY:`;
     // Claude
     if (this.isClaudeModel(this.currentModelId) && this.claudeClient) {
       const claudeSystem = systemPromptOverride || CLAUDE_SYSTEM_PROMPT;
-      const finalClaudeSystem = this.injectLanguageInstruction(claudeSystem);
+      const finalClaudeSystem = prepareStreamSystemPrompt(claudeSystem);
       if (isMultimodal && imagePaths) {
-        yield* this.streamWithClaudeMultimodal(userContent, imagePaths, finalClaudeSystem, options?.abortSignal);
+        yield* this.streamWithScreenshotOcrFallback(
+          `Claude (${CLAUDE_MODEL})`,
+          imagePaths,
+          effectiveMessage,
+          () => this.streamWithClaudeMultimodal(userContent, imagePaths, finalClaudeSystem, options?.abortSignal),
+          (fallbackMessage) => this.streamWithClaude(buildStreamUserContent(fallbackMessage), finalClaudeSystem, options?.abortSignal),
+          options?.abortSignal,
+        );
       } else {
         yield* this.streamWithClaude(userContent, finalClaudeSystem, options?.abortSignal);
       }
@@ -3163,13 +3470,24 @@ ANSWER DIRECTLY:`;
       if (isMultimodal && imagePaths) {
         // Route multimodal to Groq Llama 4 Scout (vision-capable)
         const groqSystem = systemPromptOverride || OPENAI_SYSTEM_PROMPT;
-        const finalGroqSystem = this.injectLanguageInstruction(groqSystem);
-        yield* this.streamWithGroqMultimodal(userContent, imagePaths, finalGroqSystem, options?.abortSignal);
+        const finalGroqSystem = prepareStreamSystemPrompt(groqSystem);
+        yield* this.streamWithScreenshotOcrFallback(
+          'Groq multimodal',
+          imagePaths,
+          effectiveMessage,
+          () => this.streamWithGroqMultimodal(userContent, imagePaths, finalGroqSystem, options?.abortSignal),
+          (fallbackMessage) => this.streamWithGroq(
+            this.joinPrompt(finalGroqSystem, buildStreamUserContent(fallbackMessage)),
+            GROQ_MODEL,
+            options?.abortSignal,
+          ),
+          options?.abortSignal,
+        );
         return;
       }
       // Text-only Groq
       const groqSystem = systemPromptOverride ? baseSystemPrompt : GROQ_SYSTEM_PROMPT;
-      const finalGroqSystem = this.injectLanguageInstruction(groqSystem);
+      const finalGroqSystem = prepareStreamSystemPrompt(groqSystem);
       const groqFullMessage = this.joinPrompt(finalGroqSystem, userContent);
       yield* this.streamWithGroq(groqFullMessage, GROQ_MODEL, options?.abortSignal);
       return;
@@ -3180,6 +3498,22 @@ ANSWER DIRECTLY:`;
       // Direct model use if specified
       if (this.isGeminiModel(this.currentModelId)) {
         const fullMsg = this.joinPrompt(finalSystemPrompt, userContent);
+        if (isMultimodal && imagePaths?.length) {
+          yield* this.streamWithScreenshotOcrFallback(
+            `Gemini (${this.currentModelId})`,
+            imagePaths,
+            effectiveMessage,
+            () => this.streamWithGeminiModel(fullMsg, this.currentModelId, imagePaths, options?.abortSignal),
+            (fallbackMessage) => this.streamWithGeminiModel(
+              this.joinPrompt(finalSystemPrompt, buildStreamUserContent(fallbackMessage)),
+              this.currentModelId,
+              undefined,
+              options?.abortSignal,
+            ),
+            options?.abortSignal,
+          );
+          return;
+        }
         yield* this.streamWithGeminiModel(fullMsg, this.currentModelId, imagePaths, options?.abortSignal);
         return;
       }
@@ -3187,9 +3521,39 @@ ANSWER DIRECTLY:`;
       // Race strategy (default)
       const raceMsg = this.joinPrompt(finalSystemPrompt, userContent);
       if (qualityTier === 'structured_reasoning') {
-        yield* this.streamWithGeminiModel(raceMsg, GEMINI_PRO_MODEL, imagePaths, options?.abortSignal);
+        if (isMultimodal && imagePaths?.length) {
+          yield* this.streamWithScreenshotOcrFallback(
+            `Gemini (${GEMINI_PRO_MODEL})`,
+            imagePaths,
+            effectiveMessage,
+            () => this.streamWithGeminiModel(raceMsg, GEMINI_PRO_MODEL, imagePaths, options?.abortSignal),
+            (fallbackMessage) => this.streamWithGeminiModel(
+              this.joinPrompt(finalSystemPrompt, buildStreamUserContent(fallbackMessage)),
+              GEMINI_PRO_MODEL,
+              undefined,
+              options?.abortSignal,
+            ),
+            options?.abortSignal,
+          );
+        } else {
+          yield* this.streamWithGeminiModel(raceMsg, GEMINI_PRO_MODEL, imagePaths, options?.abortSignal);
+        }
       } else {
-        yield* this.streamWithGeminiParallelRace(raceMsg, imagePaths);
+        if (isMultimodal && imagePaths?.length) {
+          yield* this.streamWithScreenshotOcrFallback(
+            'Gemini race',
+            imagePaths,
+            effectiveMessage,
+            () => this.streamWithGeminiParallelRace(raceMsg, imagePaths),
+            (fallbackMessage) => this.streamWithGeminiParallelRace(
+              this.joinPrompt(finalSystemPrompt, buildStreamUserContent(fallbackMessage)),
+              undefined,
+            ),
+            options?.abortSignal,
+          );
+        } else {
+          yield* this.streamWithGeminiParallelRace(raceMsg, imagePaths);
+        }
       }
     } else {
       throw new Error("No LLM provider available");
