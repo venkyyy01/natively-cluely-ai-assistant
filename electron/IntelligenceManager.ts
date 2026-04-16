@@ -136,6 +136,10 @@ export class IntelligenceManager extends EventEmitter {
         this.engine.cancelActiveWhatToSay(reason);
     }
 
+    setStealthContainmentActive(active: boolean): void {
+        this.engine.setStealthContainmentActive(active);
+    }
+
     isConsciousModeEnabled(): boolean {
         return this.session.isConsciousModeEnabled();
     }

@@ -72,7 +72,7 @@ export class QuestionReactionClassifier {
       };
     }
 
-    if (includesAny(lower, [/(switch gears|different topic|move on to|new topic|something else)/i])) {
+    if (includesAny(lower, [/(switch gears|different topic|move on to|new topic|something else|let(?:'s| us) talk about)/i])) {
       return {
         kind: 'topic_shift',
         confidence: 0.94,

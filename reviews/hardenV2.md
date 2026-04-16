@@ -127,13 +127,15 @@ All F1–F10 findings from V1 are **reconfirmed**. Key updates:
 
 ### Priority 0 — Immediate (1 sprint)
 
-1. **N1**: Add `setTimeout(() => process.exit(2), 3000)` guard in both `uncaughtException` and `unhandledRejection` handlers.
-2. **N2**: On `stealth:fault`, emit a `stealth_containment_active` flag and conditionally suppress answer output emission (or mask UI rendering in renderer).
-3. **N8**: Add verifier pass (or explicit `verifier: { deterministic: 'skipped', provenance: 'skipped' }` tag) to speculative answer metadata. Add test.
-4. **F2** (update): Transition cooldown from global-reject to per-cooldown-key queue with explicit `intelligence-cooldown` events (already partially done — complete the mechanism).
-5. **F3**: Implement head-reserved prompt budgeting — reserve first N tokens for system/schema/evidence, trim transcript from head.
-6. **X1**: Guard cooldown recursion with a max-depth counter to prevent stack overflow under rapid triggers.
-7. **X3**: Add semantic topical-compatibility check before overriding `threadAction` to `'continue'` in orchestrator route.
+1. [x] **N1**: Add `setTimeout(() => process.exit(2), 3000)` guard in both `uncaughtException` and `unhandledRejection` handlers.
+2. [x] **N2**: On `stealth:fault`, emit a `stealth_containment_active` flag and conditionally suppress answer output emission (or mask UI rendering in renderer).
+3. [x] **N8**: Add verifier pass (or explicit `verifier: { deterministic: 'skipped', provenance: 'skipped' }` tag) to speculative answer metadata. Add test.
+4. [x] **F2** (update): Transition cooldown from global-reject to per-cooldown-key queue with explicit `intelligence-cooldown` events (already partially done — complete the mechanism).
+5. [x] **F3**: Implement head-reserved prompt budgeting — reserve first N tokens for system/schema/evidence, trim transcript from head.
+   Verified by current `LLMHelper` head+tail preservation logic and prompt-budget regression tests.
+6. [x] **X1**: Guard cooldown recursion with a max-depth counter to prevent stack overflow under rapid triggers.
+7. [x] **X3**: Add semantic topical-compatibility check before overriding `threadAction` to `'continue'` in orchestrator route.
+   Implemented by removing the forced-continue override and broadening explicit topic-shift detection so unrelated pivots reset instead of continuing stale threads.
 
 ### Priority 1 — Near-term (1–2 sprints)
 
@@ -337,6 +339,7 @@ This section details four architectural "game changers" required to fundamentall
 - **Code Path**: `PredictivePrefetcher.quickEmbed()`
 - **Failure Mode**: `quickEmbed` statically generates 384-dimensional arrays using deterministic `Math.sin(hash)` math. Cosine similarity checks fundamentally collapse into literal string-match collisions. The semantic cache is functionally crippled.
 - **Fix Plan**:
+    use nomic-embed-text or mxbai-embed-large—both are blazing fast locally and produce exceptional semantic retrieval scores.use nomic-embed-text or mxbai-embed-large—both are blazing fast locally and produce exceptional semantic retrieval scores.
   1. Deprecate and wipe `PredictivePrefetcher.quickEmbed()`.
   2. Wire genuine semantic vectors from the active Inference Pipeline into `PredictivePrefetcher.startPrefetching()`.
   3. Confirm `EnhancedCache.get()` applies valid vector math allowing queries like "What about scale?" to match the cached query "How does it scale?".

@@ -20,6 +20,7 @@ import { StealthManager } from "./stealth/StealthManager"
 import { createMacosVirtualDisplayCoordinator, resolveMacosVirtualDisplayHelperPath } from "./stealth/macosVirtualDisplayIntegration"
 import { NativeStealthBridge } from "./stealth/NativeStealthBridge"
 import { derivePrivacyShieldState, type PrivacyShieldState } from "./stealth/privacyShieldState"
+import { exitAfterCriticalFailure } from './processFailure'
 if (!app.isPackaged) {
 require('dotenv').config();
 }
@@ -30,17 +31,15 @@ process.stdout?.on?.('error', () => { });
 process.stderr?.on?.('error', () => { });
 
 process.on('uncaughtException', (err) => {
-  void logToFileAsync('[CRITICAL] Uncaught Exception: ' + (err.stack || err.message || err)).finally(() => {
-    // FS-04: Enforce an immediate hard exit to prevent running in an undefined state.
-    process.exit(1);
-  });
+  void exitAfterCriticalFailure(
+    logToFileAsync('[CRITICAL] Uncaught Exception: ' + (err.stack || err.message || err)),
+  )
 });
 
 process.on('unhandledRejection', (reason, promise) => {
-  void logToFileAsync('[CRITICAL] Unhandled Rejection at: ' + promise + ' reason: ' + (reason instanceof Error ? reason.stack : reason)).finally(() => {
-    // FS-04: Enforce an immediate hard exit.
-    process.exit(1);
-  });
+  void exitAfterCriticalFailure(
+    logToFileAsync('[CRITICAL] Unhandled Rejection at: ' + promise + ' reason: ' + (reason instanceof Error ? reason.stack : reason)),
+  )
 });
 
 const logFile = path.join(app.getPath('documents'), 'natively_debug.log');
@@ -816,6 +815,7 @@ this.runtimeCoordinator.registerSupervisor(new StealthSupervisor(
     bus.subscribe('stealth:state-changed', async (event) => {
       if (event.to === 'FULL_STEALTH') {
         this.privacyShieldFaultReason = null
+        this.intelligenceManager.setStealthContainmentActive(false)
         this.syncPrivacyShieldState()
       }
 
@@ -2980,6 +2980,7 @@ private syncWindowStealthProtection(state: boolean): void {
   }
 
   private enforceStealthFaultContainment(reason: string): void {
+    this.intelligenceManager.setStealthContainmentActive(true)
     this.syncWindowStealthProtection(true)
     this.performanceInstrumentation.recordEvent('stealth.fault.containment', {
       reason,

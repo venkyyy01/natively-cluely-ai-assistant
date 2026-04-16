@@ -259,6 +259,11 @@ test('Conscious Mode continuation and reset matrix handles deterministic continu
     qualifies: true,
     threadAction: 'reset',
   });
+
+  assert.deepEqual(classifyConsciousModeQuestion('That is interesting, but let us talk about security instead.', thread), {
+    qualifies: true,
+    threadAction: 'reset',
+  });
 });
 
 test('Conscious Mode response parser rejects malformed non-JSON thread payloads', () => {

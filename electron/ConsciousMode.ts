@@ -240,7 +240,7 @@ function isColdStartContinuationPhrase(lower: string): boolean {
 }
 
 function isExplicitTopicShift(lower: string): boolean {
-  return /(switch gears|talk about the launch plan|talk about launch|move on to|different topic|new topic)/i.test(lower);
+  return /(switch gears|talk about the launch plan|talk about launch|move on to|different topic|new topic|let(?:'s| us) talk about)/i.test(lower);
 }
 
 function isShortActionablePrompt(lower: string): boolean {

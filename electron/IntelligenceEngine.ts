@@ -88,6 +88,7 @@ export interface SuggestedAnswerMetadata {
     deterministic: 'pass' | 'fail' | 'skipped';
     provenance: 'pass' | 'fail' | 'skipped';
   };
+  stealthContainmentActive: boolean;
 }
 
 export class IntelligenceEngine extends EventEmitter {
@@ -123,12 +124,15 @@ export class IntelligenceEngine extends EventEmitter {
   private activeWhatToSayRequestId = 0;
   private readonly CONTEXT_ASSEMBLY_SOFT_BUDGET_MS = 80;
   private readonly CONTEXT_ASSEMBLY_HARD_BUDGET_MS = 120;
+  private readonly MAX_COOLDOWN_DEFER_DEPTH = 3;
 
   // Timestamps for tracking
   private lastTranscriptTime: number = 0;
   private lastTriggerTime: number = 0;
   private readonly triggerCooldown: number = 3000; // 3 seconds
   private readonly lastTriggerByCooldownKey = new Map<string, number>();
+  private readonly cooldownQueuesByKey = new Map<string, Promise<void>>();
+  private stealthContainmentActive = false;
 
   constructor(llmHelper: LLMHelper, session: SessionTracker) {
     super();
@@ -159,6 +163,10 @@ export class IntelligenceEngine extends EventEmitter {
   }
 
   private async generateSpeculativeFastAnswer(question: string, transcriptRevision: number): Promise<string | null> {
+    if (this.stealthContainmentActive) {
+      return null;
+    }
+
     if (!this.whatToAnswerLLM) {
       return null;
     }
@@ -306,6 +314,7 @@ export class IntelligenceEngine extends EventEmitter {
     setSession(session: SessionTracker): void {
         this.session = session;
         this.lastTriggerByCooldownKey.clear();
+        this.cooldownQueuesByKey.clear();
         this.consciousOrchestrator = this.buildConsciousOrchestrator();
         this.consciousContextComposer = new ConsciousContextComposer();
         this.consciousIntentService = new ConsciousIntentService();
@@ -423,6 +432,28 @@ export class IntelligenceEngine extends EventEmitter {
         }
     }
 
+    private async queueCooldownDelay(key: string, delayMs: number): Promise<void> {
+        const prior = this.cooldownQueuesByKey.get(key) ?? Promise.resolve();
+        let releaseCurrent!: () => void;
+        const current = new Promise<void>((resolve) => {
+            releaseCurrent = resolve;
+        });
+        const chained = prior.catch((): void => undefined).then((): Promise<void> => current);
+        this.cooldownQueuesByKey.set(key, chained);
+
+        try {
+            await prior.catch((): void => undefined);
+            await new Promise<void>((resolve) => {
+                setTimeout(resolve, delayMs);
+            });
+        } finally {
+            releaseCurrent();
+            if (this.cooldownQueuesByKey.get(key) === chained) {
+                this.cooldownQueuesByKey.delete(key);
+            }
+        }
+    }
+
     private buildSuggestedAnswerMetadata(input: {
         route: AnswerRoute;
         attemptedRoute?: AnswerRoute;
@@ -441,6 +472,12 @@ export class IntelligenceEngine extends EventEmitter {
         };
     }): SuggestedAnswerMetadata {
         const thread = this.session.getActiveReasoningThread();
+        const verifier = input.verifier ?? (input.route === 'conscious_answer'
+            ? undefined
+            : {
+                deterministic: 'skipped' as const,
+                provenance: 'skipped' as const,
+            });
 
         return {
             route: input.route,
@@ -462,7 +499,8 @@ export class IntelligenceEngine extends EventEmitter {
                 : null,
             cooldownSuppressedMs: input.cooldownSuppressedMs,
             cooldownReason: input.cooldownReason,
-            verifier: input.verifier,
+            verifier,
+            stealthContainmentActive: this.stealthContainmentActive,
         };
     }
 
@@ -638,17 +676,13 @@ export class IntelligenceEngine extends EventEmitter {
         priorCooldownSuppressedMs: number = 0,
         priorCooldownReason?: CooldownSuppressionReason,
     ): Promise<string | null> {
-        const now = Date.now();
         const cooldownQuestion = question?.trim()
             || this.session.getLastInterimInterviewer()?.text?.trim()
             || this.session.getLastInterviewerTurn()
             || undefined;
-        const metadataCooldownSuppressedMs = priorCooldownSuppressedMs > 0
-            ? priorCooldownSuppressedMs
-            : undefined;
-        const metadataCooldownReason = priorCooldownReason;
-        const transcriptRevisionAtStart = this.session.getTranscriptRevision();
-        const recentContextForEvidence = this.session.getContext(180);
+        let totalCooldownSuppressedMs = priorCooldownSuppressedMs;
+        let cooldownReason = priorCooldownReason;
+        let cooldownDeferDepth = 0;
         let activeLatencyRequestId: string | null = null;
         let activeProfileEnrichmentRoute = false;
         let profileEnrichmentFailed = false;
@@ -659,39 +693,59 @@ export class IntelligenceEngine extends EventEmitter {
         let activeThreadAction: 'start' | 'continue' | 'reset' | 'ignore' | undefined;
         let lastFallbackReason: string | undefined;
 
-        console.log('[INTELLIGENCE] 🤖 runWhatShouldISay triggered:', {
-            question: question?.substring(0, 50) + (question && question.length > 50 ? '...' : ''),
-            confidence: confidence,
-            activeMode: this.activeMode,
-            cooldownRemaining: Math.max(0, this.triggerCooldown - (now - this.lastTriggerTime)),
-            hasWhatToAnswerLLM: !!this.whatToAnswerLLM,
-            hasAnswerLLM: !!this.answerLLM,
-            imagePaths: imagePaths?.length || 0
-        });
+        while (true) {
+            const now = Date.now();
+            this.pruneCooldownKeys(now);
+            const cooldownKey = this.buildCooldownKey(cooldownQuestion);
+            const lastTriggerForKey = this.lastTriggerByCooldownKey.get(cooldownKey) ?? 0;
+            const cooldownRemaining = Math.max(0, this.triggerCooldown - (now - lastTriggerForKey));
 
-        this.pruneCooldownKeys(now);
-        const cooldownKey = this.buildCooldownKey(cooldownQuestion);
-        const lastTriggerForKey = this.lastTriggerByCooldownKey.get(cooldownKey) ?? 0;
+            console.log('[INTELLIGENCE] 🤖 runWhatShouldISay triggered:', {
+                question: question?.substring(0, 50) + (question && question.length > 50 ? '...' : ''),
+                confidence: confidence,
+                activeMode: this.activeMode,
+                cooldownRemaining,
+                hasWhatToAnswerLLM: !!this.whatToAnswerLLM,
+                hasAnswerLLM: !!this.answerLLM,
+                imagePaths: imagePaths?.length || 0,
+            });
 
-        if (now - lastTriggerForKey < this.triggerCooldown && this.activeMode !== 'what_to_say') {
-            const cooldownSuppressedMs = Math.max(0, this.triggerCooldown - (now - lastTriggerForKey));
-            const cooldownReason: CooldownSuppressionReason = 'duplicate_question_debounce';
-            console.log(`[INTELLIGENCE] ⏳ Duplicate trigger debounce active (${cooldownSuppressedMs}ms). Deferring request to avoid drop.`);
-            this.emit('cooldown_deferred', cooldownSuppressedMs, cooldownQuestion, cooldownReason);
-
-            if (!this.whatToSayAbortController) {
-                await new Promise((resolve) => setTimeout(resolve, cooldownSuppressedMs));
-                return this.runWhatShouldISay(
-                    question,
-                    confidence,
-                    imagePaths,
-                    priorCooldownSuppressedMs + cooldownSuppressedMs,
-                    cooldownReason,
-                );
+            if (this.stealthContainmentActive) {
+                console.warn('[IntelligenceEngine] Suppressing what-to-say while stealth containment is active.');
+                return null;
             }
 
-            return null;
+            if (cooldownRemaining === 0 || this.activeMode === 'what_to_say') {
+                break;
+            }
+
+            const deferReason: CooldownSuppressionReason = 'duplicate_question_debounce';
+            console.log(`[INTELLIGENCE] ⏳ Duplicate trigger debounce active (${cooldownRemaining}ms). Queuing request to avoid drop.`);
+            this.emit('cooldown_deferred', cooldownRemaining, cooldownQuestion, deferReason);
+
+            if (this.whatToSayAbortController) {
+                return null;
+            }
+
+            if (cooldownDeferDepth >= this.MAX_COOLDOWN_DEFER_DEPTH) {
+                this.emit('error', new Error(`Cooldown defer depth exceeded for key: ${cooldownKey}`), 'what_to_say');
+                return null;
+            }
+
+            cooldownDeferDepth += 1;
+            totalCooldownSuppressedMs += cooldownRemaining;
+            cooldownReason = deferReason;
+            await this.queueCooldownDelay(cooldownKey, cooldownRemaining);
         }
+
+        const now = Date.now();
+        const cooldownKey = this.buildCooldownKey(cooldownQuestion);
+        const metadataCooldownSuppressedMs = totalCooldownSuppressedMs > 0
+            ? totalCooldownSuppressedMs
+            : undefined;
+        const metadataCooldownReason = cooldownReason;
+        const transcriptRevisionAtStart = this.session.getTranscriptRevision();
+        const recentContextForEvidence = this.session.getContext(180);
 
         if (this.assistCancellationToken) {
             console.log('[INTELLIGENCE] 🔄 Aborting existing assist operation');
@@ -711,6 +765,17 @@ export class IntelligenceEngine extends EventEmitter {
         const whatToSayAbortController = new AbortController();
         this.whatToSayAbortController = whatToSayAbortController;
         const requestSequence = ++this.activeWhatToSayRequestId;
+        const shouldSuppressVisibleWork = (): boolean => {
+            return this.stealthContainmentActive
+                || whatToSayAbortController.signal.aborted
+                || requestSequence !== this.activeWhatToSayRequestId;
+        };
+        const abandonCurrentRequest = (): null => {
+            if (activeLatencyRequestId) {
+                this.latencyTracker.complete(activeLatencyRequestId);
+            }
+            return null;
+        };
 
         try {
             if (!this.whatToAnswerLLM) {
@@ -800,10 +865,13 @@ const capability = typeof (this.llmHelper as any).getProviderCapabilityClass ===
             const lastInterviewerTurn = this.session.getLastInterviewerTurn();
             const consciousResponseCoordinator = this.getConsciousResponseCoordinator();
 
-            const runFastStandardAnswer = async (): Promise<string> => {
+            const runFastStandardAnswer = async (): Promise<string | null> => {
                 const speculativeAnswer = useConsciousAcceleration && consciousAcceleration
                     ? await consciousAcceleration.getSpeculativeAnswer(resolvedQuestion, this.session.getTranscriptRevision(), 180)
                     : null;
+                if (shouldSuppressVisibleWork()) {
+                    return abandonCurrentRequest();
+                }
                 if (speculativeAnswer) {
                     this.session.addAssistantMessage(speculativeAnswer);
                     this.session.pushUsage({
@@ -825,6 +893,10 @@ const capability = typeof (this.llmHelper as any).getProviderCapabilityClass ===
                         }),
                         transcriptRevision: transcriptRevisionAtStart,
                         threadAction: activeThreadAction,
+                        verifier: {
+                            deterministic: 'skipped',
+                            provenance: 'skipped',
+                        },
                         cooldownSuppressedMs: metadataCooldownSuppressedMs,
                         cooldownReason: metadataCooldownReason,
                         contextItems,
@@ -840,6 +912,9 @@ const capability = typeof (this.llmHelper as any).getProviderCapabilityClass ===
                 const cachedAnswer = useConsciousAcceleration && accelerationManager
                     ? await accelerationManager.getEnhancedCache().get(cacheKey) as string | undefined
                     : undefined;
+                if (shouldSuppressVisibleWork()) {
+                    return abandonCurrentRequest();
+                }
                 if (cachedAnswer) {
                     this.session.addAssistantMessage(cachedAnswer);
                     this.session.pushUsage({
@@ -893,7 +968,7 @@ const capability = typeof (this.llmHelper as any).getProviderCapabilityClass ===
                 this.latencyTracker.markProviderRequestStarted(requestId);
 
       for await (const token of stream) {
-        if (requestSequence !== this.activeWhatToSayRequestId) {
+        if (shouldSuppressVisibleWork()) {
           try {
             await stream.return?.(undefined);
           } catch {
@@ -917,9 +992,8 @@ const capability = typeof (this.llmHelper as any).getProviderCapabilityClass ===
                     fullAnswer += token;
                 }
 
-                if (requestSequence !== this.activeWhatToSayRequestId) {
-                    this.latencyTracker.complete(requestId);
-                    return null;
+                if (shouldSuppressVisibleWork()) {
+                    return abandonCurrentRequest();
                 }
 
                 if (!fullAnswer || fullAnswer.trim().length < 5) {
@@ -1022,9 +1096,13 @@ const capability = typeof (this.llmHelper as any).getProviderCapabilityClass ===
                     followUpLLM: this.followUpLLM,
                     activeReasoningThread,
                     resolvedQuestion,
-                    isStale: () => requestSequence !== this.activeWhatToSayRequestId
+                    isStale: () => shouldSuppressVisibleWork()
+                        || requestSequence !== this.activeWhatToSayRequestId
                         || this.session.getTranscriptRevision() !== continuationRevision,
                 });
+                if (shouldSuppressVisibleWork()) {
+                    return abandonCurrentRequest();
+                }
 
                 if (continuationResult.kind === 'fallback') {
                     effectiveRoute = 'fast_standard_answer';
@@ -1089,6 +1167,9 @@ const capability = typeof (this.llmHelper as any).getProviderCapabilityClass ===
                     console.log(`[IntelligenceEngine] Injecting interim transcript: "${text.substring(0, 50)}..."`);
                 },
             });
+            if (shouldSuppressVisibleWork()) {
+                return abandonCurrentRequest();
+            }
             const preparedTranscript = preparationResult.preparedTranscript;
             this.latencyTracker.mark(requestId, 'transcriptPrepared');
             const temporalContext = preparationResult.temporalContext;
@@ -1125,6 +1206,9 @@ const capability = typeof (this.llmHelper as any).getProviderCapabilityClass ===
                     whatToAnswerLLM: this.whatToAnswerLLM,
                     answerLLM: this.answerLLM,
                 });
+                if (shouldSuppressVisibleWork()) {
+                    return abandonCurrentRequest();
+                }
 
                 if (consciousResult.kind === 'handled') {
                     console.log(`[IntelligenceEngine] Temporal RAG: ${temporalContext.previousResponses.length} responses, tone: ${temporalContext.toneSignals[0]?.type || 'neutral'}, intent: conscious_reasoning${imagePaths?.length ? `, with ${imagePaths.length} image(s)` : ''}`);
@@ -1185,6 +1269,9 @@ const capability = typeof (this.llmHelper as any).getProviderCapabilityClass ===
             const cachedAnswer = useConsciousAcceleration && accelerationManager
                 ? await accelerationManager.getEnhancedCache().get(answerCacheKey) as string | undefined
                 : undefined;
+            if (shouldSuppressVisibleWork()) {
+                return abandonCurrentRequest();
+            }
             if (cachedAnswer) {
                 this.session.addAssistantMessage(cachedAnswer);
                 this.session.pushUsage({
@@ -1243,7 +1330,7 @@ const capability = typeof (this.llmHelper as any).getProviderCapabilityClass ===
             this.latencyTracker.markProviderRequestStarted(requestId);
 
       for await (const token of stream) {
-        if (requestSequence !== this.activeWhatToSayRequestId) {
+        if (shouldSuppressVisibleWork()) {
           try {
             await stream.return?.(undefined);
           } catch {
@@ -1267,9 +1354,8 @@ const capability = typeof (this.llmHelper as any).getProviderCapabilityClass ===
                 fullAnswer += token;
             }
 
-            if (requestSequence !== this.activeWhatToSayRequestId) {
-                this.latencyTracker.complete(requestId);
-                return null;
+            if (shouldSuppressVisibleWork()) {
+                return abandonCurrentRequest();
             }
 
             if (!fullAnswer || fullAnswer.trim().length < 5) {
@@ -1349,6 +1435,13 @@ const capability = typeof (this.llmHelper as any).getProviderCapabilityClass ===
             }
         }
     }
+
+  setStealthContainmentActive(active: boolean): void {
+    this.stealthContainmentActive = active;
+    if (active) {
+      this.cancelActiveWhatToSay('stealth_containment_active');
+    }
+  }
 
     /**
      * MODE 3: Follow-Up (Refinement)
@@ -1591,6 +1684,8 @@ const capability = typeof (this.llmHelper as any).getProviderCapabilityClass ===
   reset(): void {
     this.activeMode = 'idle';
     this.lastTriggerByCooldownKey.clear();
+    this.cooldownQueuesByKey.clear();
+    this.stealthContainmentActive = false;
     this.cancelActiveWhatToSay('reset');
     if (this.assistCancellationToken) {
       this.assistCancellationToken.abort();

@@ -37,6 +37,10 @@ test('speculative fast answer is reused by the live what-to-say path', async () 
   session.setConsciousModeEnabled(true);
   const llmHelper = new DelayedFastLLMHelper();
   const engine = new IntelligenceEngine(llmHelper as any, session);
+  const metadataSeen: Array<{ verifier?: { deterministic: string; provenance: string } }> = [];
+  engine.on('suggested_answer', (_answer: string, _question: string, _confidence: number, metadata?: { verifier?: { deterministic: string; provenance: string } }) => {
+    metadataSeen.push({ verifier: metadata?.verifier });
+  });
   const accelerationManager = new AccelerationManager();
   await accelerationManager.initialize();
   accelerationManager.setConsciousModeEnabled(true);
@@ -62,6 +66,7 @@ test('speculative fast answer is reused by the live what-to-say path', async () 
 
   assert.equal(answer, 'speculative answer for: What is polymorphism?');
   assert.equal(llmHelper.calls.length, 1);
+  assert.deepEqual(metadataSeen, [{ verifier: { deterministic: 'skipped', provenance: 'skipped' } }]);
 
   setActiveAccelerationManager(null);
   setOptimizationFlags({ ...DEFAULT_OPTIMIZATION_FLAGS });

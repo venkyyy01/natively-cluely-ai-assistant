@@ -52,6 +52,18 @@ test('QuestionReactionClassifier treats explicit topic shifts as thread resets',
   assert.equal(reaction.shouldContinueThread, false);
 });
 
+test('QuestionReactionClassifier treats let us talk about pivots as topic shifts', () => {
+  const classifier = new QuestionReactionClassifier();
+  const reaction = classifier.classify({
+    question: 'That is interesting, but let us talk about security instead.',
+    activeThread: createThread(),
+    latestResponse: createResponse(),
+  });
+
+  assert.equal(reaction.kind, 'topic_shift');
+  assert.equal(reaction.shouldContinueThread, false);
+});
+
 test('QuestionReactionClassifier does not continue generic follow-ups based only on prior hypothesis confidence', () => {
   const classifier = new QuestionReactionClassifier();
   const reaction = classifier.classify({

@@ -82,6 +82,15 @@ class SlowStreamingLLMHelper {
   }
 }
 
+class ImmediateStreamingLLMHelper {
+  public calls = 0;
+
+  async *streamChat(_message: string, _imagePaths?: string[], _context?: string, _prompt?: string): AsyncGenerator<string> {
+    this.calls += 1;
+    yield 'immediate answer';
+  }
+}
+
 function addTurn(session: SessionTracker, speaker: 'interviewer' | 'assistant', text: string, timestamp: number): void {
   session.handleTranscript({ speaker, text, timestamp, final: true });
 }
@@ -176,12 +185,16 @@ test('cooldown defers repeated duplicate triggers instead of silently dropping w
   (engine as any).triggerCooldown = 20;
 
   const answers: string[] = [];
-  const metadataByAnswer: Array<{ cooldownSuppressedMs?: number; cooldownReason?: string }> = [];
+  const metadataByAnswer: Array<{ cooldownSuppressedMs?: number; cooldownReason?: string; stealthContainmentActive?: boolean }> = [];
   const deferredEvents: Array<{ suppressedMs: number; question?: string; reason?: string }> = [];
 
-  engine.on('suggested_answer', (answer: string, _question: string, _confidence: number, metadata?: { cooldownSuppressedMs?: number; cooldownReason?: string }) => {
+  engine.on('suggested_answer', (answer: string, _question: string, _confidence: number, metadata?: { cooldownSuppressedMs?: number; cooldownReason?: string; stealthContainmentActive?: boolean }) => {
     answers.push(answer);
-    metadataByAnswer.push({ cooldownSuppressedMs: metadata?.cooldownSuppressedMs, cooldownReason: metadata?.cooldownReason });
+    metadataByAnswer.push({
+      cooldownSuppressedMs: metadata?.cooldownSuppressedMs,
+      cooldownReason: metadata?.cooldownReason,
+      stealthContainmentActive: metadata?.stealthContainmentActive,
+    });
   });
   engine.on('cooldown_deferred', (suppressedMs: number, question?: string, reason?: string) => {
     deferredEvents.push({ suppressedMs, question, reason });
@@ -205,6 +218,8 @@ test('cooldown defers repeated duplicate triggers instead of silently dropping w
   assert.equal(metadataByAnswer[0]?.cooldownSuppressedMs, undefined);
   assert.equal((metadataByAnswer[1]?.cooldownSuppressedMs ?? 0) > 0, true);
   assert.equal(metadataByAnswer[1]?.cooldownReason, 'duplicate_question_debounce');
+  assert.equal(metadataByAnswer[0]?.stealthContainmentActive, false);
+  assert.equal(metadataByAnswer[1]?.stealthContainmentActive, false);
 });
 
 test('cooldown does not defer a different rapid follow-up after the previous answer completed', async () => {
@@ -228,4 +243,79 @@ test('cooldown does not defer a different rapid follow-up after the previous ans
 
   assert.equal(second, 'slow answer');
   assert.deepEqual(deferredEvents, []);
+});
+
+test('stealth containment blocks new what-to-say generation while containment is active', async () => {
+  const session = new SessionTracker();
+  const llmHelper = new ImmediateStreamingLLMHelper();
+  const engine = new IntelligenceEngine(llmHelper as any, session);
+
+  addTurn(session, 'interviewer', 'How would you answer this?', Date.now());
+  (engine as any).setStealthContainmentActive(true);
+
+  const result = await engine.runWhatShouldISay(undefined, 0.9);
+
+  assert.equal(result, null);
+  assert.equal(llmHelper.calls, 0);
+  assert.equal(session.getLastAssistantMessage(), null);
+});
+
+test('stealth containment cancels in-flight what-to-say work before any answer is emitted', async () => {
+  const session = new SessionTracker();
+  const llmHelper = new AbortAwareLLMHelper();
+  const engine = new IntelligenceEngine(llmHelper as any, session);
+  const finalAnswers: string[] = [];
+
+  engine.on('suggested_answer', (answer: string) => {
+    finalAnswers.push(answer);
+  });
+
+  addTurn(session, 'interviewer', 'Explain backpressure handling.', Date.now());
+  const pending = engine.runWhatShouldISay(undefined, 0.9);
+  await llmHelper.enteredStream;
+  (engine as any).setStealthContainmentActive(true);
+
+  const result = await Promise.race([
+    pending,
+    new Promise<symbol>((_, reject) => setTimeout(() => reject(new Error('what-to-say request did not stop in time for stealth containment')), 100)),
+  ]);
+
+  assert.equal(result, null);
+  assert.deepEqual(finalAnswers, []);
+  assert.equal(session.getLastAssistantMessage(), null);
+});
+
+test('cooldown queue aborts after the maximum defer depth instead of recursively growing the stack', async () => {
+  const session = new SessionTracker();
+  const llmHelper = new ImmediateStreamingLLMHelper();
+  const engine = new IntelligenceEngine(llmHelper as any, session);
+  (engine as any).triggerCooldown = 1_000;
+
+  const errors: string[] = [];
+  engine.on('error', (error: Error) => {
+    errors.push(error.message);
+  });
+
+  addTurn(session, 'interviewer', 'Repeat this safely?', Date.now() - 200);
+  const first = await engine.runWhatShouldISay(undefined, 0.9);
+  assert.equal(first, 'immediate answer');
+
+  const originalSetTimeout = global.setTimeout;
+  const originalClearTimeout = global.clearTimeout;
+  (global as typeof globalThis).setTimeout = ((callback: (...args: any[]) => void) => {
+    callback();
+    return { unref() {} } as NodeJS.Timeout;
+  }) as typeof setTimeout;
+  (global as typeof globalThis).clearTimeout = (() => undefined) as typeof clearTimeout;
+
+  try {
+    addTurn(session, 'interviewer', 'Repeat this safely?', Date.now());
+    const second = await engine.runWhatShouldISay(undefined, 0.9);
+
+    assert.equal(second, null);
+    assert.match(errors[0] || '', /cooldown defer depth/i);
+  } finally {
+    (global as typeof globalThis).setTimeout = originalSetTimeout;
+    (global as typeof globalThis).clearTimeout = originalClearTimeout;
+  }
 });

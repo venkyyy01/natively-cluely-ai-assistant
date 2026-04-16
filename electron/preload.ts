@@ -26,6 +26,7 @@ type SuggestedAnswerMetadata = {
     deterministic: 'pass' | 'fail' | 'skipped'
     provenance: 'pass' | 'fail' | 'skipped'
   }
+  stealthContainmentActive: boolean
 }
 type IntelligenceSuggestedAnswerEvent = {
   answer: string
