@@ -27,11 +27,12 @@ export class QualityLane {
 
   async execute(request: InferenceRequest): Promise<LaneResult> {
     for (const provider of this.providers) {
+      const abortController = new AbortController();
+      const timeoutId = setTimeout(() => abortController.abort(), this.timeoutMs);
+
       try {
-        const output = await Promise.race([
-          this.runProvider(provider, request),
-          new Promise<null>((resolve) => setTimeout(() => resolve(null), this.timeoutMs)),
-        ]);
+        const output = await this.runProvider(provider, request);
+        clearTimeout(timeoutId);
 
         if (!output) {
           continue;
@@ -58,6 +59,7 @@ export class QualityLane {
           transcriptRevision: request.transcriptRevision,
         };
       } catch {
+        clearTimeout(timeoutId);
         continue;
       }
     }

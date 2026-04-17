@@ -147,10 +147,19 @@ export function registerRagHandlers({ appState, safeHandle, safeHandleValidated 
     }
   });
 
-  safeHandleValidated('rag:cancel-query', (args) => [parseIpcInput(ipcSchemas.ragCancelQuery, args[0], 'rag:cancel-query')] as const, async (_event, { meetingId, global }) => {
-    const queryKey = global ? 'global' : `meeting-${meetingId}`;
+  safeHandleValidated('rag:cancel-query', (args) => [parseIpcInput(ipcSchemas.ragCancelQuery, args[0], 'rag:cancel-query')] as const, async (_event, { meetingId, global, live }) => {
     for (const [key, controller] of activeRAGQueries) {
-      if (key.startsWith(queryKey) || (global && key.startsWith('global'))) {
+      let shouldCancel = false;
+      if (meetingId && key.startsWith(`meeting-${meetingId}`)) {
+        shouldCancel = true;
+      }
+      if (global && key.startsWith('global')) {
+        shouldCancel = true;
+      }
+      if (live && key.startsWith('live')) {
+        shouldCancel = true;
+      }
+      if (shouldCancel) {
         controller.abort();
         activeRAGQueries.delete(key);
       }

@@ -90,6 +90,7 @@ export class PredictivePrefetcher {
   private transcriptRevision = 0;
   private transcriptSignature = '';
   private bm25Cache = new Map<string, Array<{ text: string; score: number; timestamp: number }>>();
+  private readonly MAX_BM25_CACHE_SIZE = 50;
   private readonly budgetScheduler?: Pick<RuntimeBudgetScheduler, 'shouldAdmitSpeculation'>;
 
   constructor(options: {
@@ -312,6 +313,7 @@ export class PredictivePrefetcher {
       if (!bm25Results) {
         bm25Results = await computeBM25(query, docs);
         this.bm25Cache.set(cacheKey, bm25Results);
+        this.trimBm25Cache();
       }
       const relevantContext = bm25Results
         .slice(0, 5)
@@ -347,5 +349,12 @@ export class PredictivePrefetcher {
     }
 
     return null;
+  }
+
+  private trimBm25Cache(): void {
+    while (this.bm25Cache.size > this.MAX_BM25_CACHE_SIZE) {
+      const oldestKey = this.bm25Cache.keys().next().value;
+      if (oldestKey) this.bm25Cache.delete(oldestKey);
+    }
   }
 }

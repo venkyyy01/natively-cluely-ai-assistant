@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useLayoutEffect, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useLayoutEffect, useCallback, useMemo } from 'react';
 import {
     Sparkles,
     Pencil,
@@ -128,7 +128,13 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
     const [isConnected, setIsConnected] = useState(false);
     const [isProcessing, setIsProcessing] = useState(false);
     const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-    const [conversationContext, setConversationContext] = useState<string>('');
+    const conversationContext = useMemo(() => {
+        return messages
+            .filter(m => m.role !== 'user' || !m.hasScreenshot)
+            .map(m => `${m.role === 'interviewer' ? 'Interviewer' : m.role === 'user' ? 'User' : 'Assistant'}: ${m.text}`)
+            .slice(-20)
+            .join('\n');
+    }, [messages]);
     const [isManualRecording, setIsManualRecording] = useState(false);
     const isRecordingRef = useRef(false);  // Ref to track recording state (avoids stale closure)
     const manualFinalizeInFlightRef = useRef(false);
@@ -268,27 +274,32 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
         localStorage.setItem('natively_hideChatHidesWidget', String(hideChatHidesWidget));
     }, [isUndetectable, hideChatHidesWidget]);
 
+    const resizeRafRef = useRef<number | null>(null);
+
     // Auto-resize Window
     useLayoutEffect(() => {
         if (!contentRef.current) return;
 
-        const observer = new ResizeObserver((entries) => {
-            for (const entry of entries) {
-                // Use getBoundingClientRect to get the exact rendered size including padding
-                const rect = entry.target.getBoundingClientRect();
-
-                // Send exact dimensions to Electron
-                // Removed buffer to ensure tight fit
-                console.log('[NativelyInterface] ResizeObserver:', Math.ceil(rect.width), Math.ceil(rect.height));
+        const observer = new ResizeObserver(() => {
+            if (resizeRafRef.current !== null) return;
+            resizeRafRef.current = requestAnimationFrame(() => {
+                resizeRafRef.current = null;
+                if (!contentRef.current) return;
+                const rect = contentRef.current.getBoundingClientRect();
                 window.electronAPI?.updateContentDimensions({
                     width: Math.ceil(rect.width),
                     height: Math.ceil(rect.height)
                 });
-            }
+            });
         });
 
         observer.observe(contentRef.current);
-        return () => observer.disconnect();
+        return () => {
+            observer.disconnect();
+            if (resizeRafRef.current !== null) {
+                cancelAnimationFrame(resizeRafRef.current);
+            }
+        };
     }, []);
 
     // Force resize when attachedContext changes (screenshots added/removed)
@@ -334,15 +345,6 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
     });
 
     // Build conversation context from messages
-    useEffect(() => {
-        const context = messages
-            .filter(m => m.role !== 'user' || !m.hasScreenshot)
-            .map(m => `${m.role === 'interviewer' ? 'Interviewer' : m.role === 'user' ? 'User' : 'Assistant'}: ${m.text}`)
-            .slice(-20)
-            .join('\n');
-        setConversationContext(context);
-    }, [messages]);
-
     // Listen for settings window visibility changes
     useEffect(() => {
         if (!electronAPI.onSettingsVisibilityChange) return;
@@ -381,6 +383,9 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
             setMessages([]);
             setInputValue('');
             setAttachedContext([]);
+            activeIntelligenceStreamingIdsRef.current = {};
+            activeGeminiStreamingIdRef.current = null;
+            activeRagStreamingIdRef.current = null;
             isRecordingRef.current = false;
             manualFinalizeInFlightRef.current = false;
             setIsManualRecording(false);

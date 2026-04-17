@@ -161,6 +161,8 @@ export interface UsageInteraction {
 
 export class SessionTracker {
   private static nextSessionId = 1;
+  private isRestoring = false;
+  private writeBuffer: Array<() => void> = [];
   // Context management (mirrors Swift ContextManager)
   private contextItemsBuffer = new RingBuffer<ContextItem>(500);
   private readonly contextWindowDuration: number = 120; // 120 seconds
@@ -295,6 +297,16 @@ export class SessionTracker {
     addTranscript(segment: TranscriptSegment): { role: 'interviewer' | 'user' | 'assistant' } | null {
         if (!segment.final) return null;
 
+        if (this.isRestoring) {
+            const capturedSegment = { ...segment };
+            let bufferedResult: { role: 'interviewer' | 'user' | 'assistant' } | null = null;
+            this.writeBuffer.push(() => {
+                bufferedResult = this.addTranscript(capturedSegment);
+            });
+            const role = this.mapSpeakerToRole(segment.speaker);
+            return role ? { role } : null;
+        }
+
         const role = this.mapSpeakerToRole(segment.speaker);
         const text = segment.text.trim();
 
@@ -346,9 +358,8 @@ export class SessionTracker {
       // Add to session transcript
       this.fullTranscript.push(segment);
 
-      // Hard cap to prevent memory exhaustion in very long meetings
-      while (this.fullTranscript.length > MAX_TRANSCRIPT_ENTRIES) {
-        this.fullTranscript.shift(); // Remove oldest entries
+      if (this.fullTranscript.length > MAX_TRANSCRIPT_ENTRIES) {
+        this.fullTranscript.splice(0, this.fullTranscript.length - MAX_TRANSCRIPT_ENTRIES);
       }
 
       // Debounced compaction instead of immediate
@@ -365,6 +376,14 @@ export class SessionTracker {
      */
     addAssistantMessage(text: string): void {
         console.log(`[SessionTracker] addAssistantMessage called with:`, text.substring(0, 50));
+
+        if (this.isRestoring) {
+            const capturedText = text;
+            this.writeBuffer.push(() => {
+                this.addAssistantMessage(capturedText);
+            });
+            return;
+        }
 
         // Natively-style filtering
         if (!text) return;
@@ -406,8 +425,8 @@ export class SessionTracker {
         });
 
         // Hard cap to prevent memory exhaustion in very long meetings
-        while (this.fullTranscript.length > MAX_TRANSCRIPT_ENTRIES) {
-            this.fullTranscript.shift(); // Remove oldest entries
+        if (this.fullTranscript.length > MAX_TRANSCRIPT_ENTRIES) {
+            this.fullTranscript.splice(0, this.fullTranscript.length - MAX_TRANSCRIPT_ENTRIES);
         }
 
         this.scheduleCompaction();
@@ -1716,11 +1735,13 @@ isConsciousModeEnabled(): boolean {
       this.persistence.scheduleSave(snapshot);
     }
 
-    async restoreFromMeetingId(meetingId: string, requestId: number = this.restoreRequestId): Promise<boolean> {
+async restoreFromMeetingId(meetingId: string, requestId: number = this.restoreRequestId): Promise<boolean> {
       const normalizedMeetingId = meetingId.trim();
       if (!normalizedMeetingId) return false;
 
       this.activeMeetingId = normalizedMeetingId;
+      this.isRestoring = true;
+      try {
       const session = await this.persistence.findByMeeting(normalizedMeetingId);
       if (requestId !== this.restoreRequestId) return false;
       if (!session) return false;
@@ -1770,7 +1791,14 @@ isConsciousModeEnabled(): boolean {
       this.contextAssembleCache.clear();
       this.compactSnapshotCache.clear();
       return true;
-    }
+      } finally {
+        this.isRestoring = false;
+        const bufferedWrites = this.writeBuffer.splice(0);
+        for (const write of bufferedWrites) {
+          write();
+        }
+      }
+  }
 
     ensureMeetingContext(meetingId?: string): void {
       const normalizedMeetingId = meetingId?.trim();

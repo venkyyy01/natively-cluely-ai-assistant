@@ -293,6 +293,7 @@ export class NativeStealthBridge {
     this.activeSurfaceId = null;
     this.restartAttemptsForActiveSession = 0;
     this.lastDisconnectReason = null;
+    this.lastArmRequest = null;
 
     if (!client || !sessionId) {
       return;
@@ -409,6 +410,11 @@ export class NativeStealthBridge {
 
     try {
       await this.waitForRestartBackoff(backoffMs);
+
+      if (this.activeSessionId === null && this.lastArmRequest === null) {
+        return false;
+      }
+
       const restarted = await this.arm(this.lastArmRequest);
       return restarted.connected;
     } catch (error) {

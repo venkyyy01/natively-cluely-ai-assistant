@@ -294,7 +294,7 @@ onAccelerationModeChanged: (callback: (enabled: boolean) => void) => () => void
   ragQueryMeeting: (meetingId: string, query: string) => Promise<{ success?: boolean; fallback?: boolean; error?: string }>
   ragQueryLive: (query: string) => Promise<{ success?: boolean; fallback?: boolean; error?: string }>
   ragQueryGlobal: (query: string) => Promise<{ success?: boolean; fallback?: boolean; error?: string }>
-  ragCancelQuery: (options: { meetingId?: string; global?: boolean }) => Promise<StatusResult>
+  ragCancelQuery: (options: { meetingId?: string; global?: boolean; live?: boolean }) => Promise<StatusResult>
   ragIsMeetingProcessed: (meetingId: string) => Promise<boolean>
   ragGetQueueStatus: () => Promise<{ pending: number; processing: number; completed: number; failed: number }>
   ragRetryEmbeddings: () => Promise<StatusResult>
@@ -801,6 +801,14 @@ setOpenAtLogin: (open: boolean) => invokeStatus("set-open-at-login", open),
       ipcRenderer.removeListener("session-reset", subscription)
     }
   },
+  onMeetingLifecycleState: (callback: (state: string) => void) => {
+    const subscription = (_: any, state: string) => callback(state as 'idle' | 'starting' | 'active' | 'stopping')
+    ipcRenderer.on("meeting-lifecycle-state", subscription)
+    return () => {
+      ipcRenderer.removeListener("meeting-lifecycle-state", subscription)
+    }
+  },
+  getMeetingLifecycleState: () => ipcRenderer.invoke("get-meeting-lifecycle-state"),
 
 
   // Streaming Chat
@@ -970,7 +978,7 @@ setOpenAtLogin: (open: boolean) => invokeStatus("set-open-at-login", open),
       return { success: false, error: getErrorMessage(error) }
     }
   },
-  ragCancelQuery: (options: { meetingId?: string; global?: boolean }) => invokeStatus('rag:cancel-query', options),
+  ragCancelQuery: (options: { meetingId?: string; global?: boolean; live?: boolean }) => invokeStatus('rag:cancel-query', options),
   ragIsMeetingProcessed: (meetingId: string) => invokeAndUnwrap<boolean>('rag:is-meeting-processed', meetingId),
   ragGetQueueStatus: () => invokeAndUnwrap<{ pending: number; processing: number; completed: number; failed: number }>('rag:get-queue-status'),
   ragRetryEmbeddings: () => invokeStatus('rag:retry-embeddings'),

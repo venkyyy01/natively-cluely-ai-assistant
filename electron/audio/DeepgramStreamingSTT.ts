@@ -496,13 +496,19 @@ export class DeepgramStreamingSTT extends EventEmitter {
         }
     }
 
+    private static readonly SILENCE_RMS_THRESHOLD = 50;
+
     private hasNonSilentAudio(chunk: Buffer): boolean {
-        for (let i = 0; i + 1 < chunk.length; i += 2) {
-            if (chunk.readInt16LE(i) !== 0) {
-                return true;
-            }
+        let sum = 0;
+        let count = 0;
+        const step = 20;
+        for (let i = 0; i + 1 < chunk.length; i += 2 * step) {
+            const sample = chunk.readInt16LE(i);
+            sum += sample * sample;
+            count++;
         }
-        return false;
+        if (count === 0) return false;
+        return Math.sqrt(sum / count) >= DeepgramStreamingSTT.SILENCE_RMS_THRESHOLD;
     }
 
     private clearTimers(): void {

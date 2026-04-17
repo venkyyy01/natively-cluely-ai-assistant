@@ -323,6 +323,7 @@ export class IntelligenceEngine extends EventEmitter {
     }
 
     setSession(session: SessionTracker): void {
+        this.cancelActiveWhatToSay('session-switch');
         this.session = session;
         this.lastTriggerByCooldownKey.clear();
         this.cooldownQueuesByKey.clear();

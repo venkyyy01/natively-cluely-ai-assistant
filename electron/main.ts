@@ -700,6 +700,7 @@ this.setupIntelligenceEvents()
 
     // Setup Ollama IPC
     this.setupOllamaIpcHandlers()
+    ipcMain.handle('get-meeting-lifecycle-state', () => this.meetingLifecycleState)
 
     // --- NEW SYSTEM AUDIO PIPELINE (SOX + NODE GOOGLE STT) ---
     // LAZY INIT: Do not setup pipeline here to prevent launch volume surge.
@@ -1439,6 +1440,8 @@ try {
     return stt;
   }
 
+  private isReconfiguringAudio = false
+
   private async handleAudioCaptureError(source: 'system' | 'microphone', err: Error): Promise<void> {
     const noun = source === 'system' ? 'Audio pipeline' : 'Microphone';
     const failureMessage = source === 'system'
@@ -1451,33 +1454,40 @@ try {
     console.error(`[Main] ${source === 'system' ? 'SystemAudioCapture' : 'MicrophoneCapture'} Error:`, err);
     this.setNativeAudioConnected(false);
 
+    if (this.isReconfiguringAudio) {
+      console.log(`[Main] Skipping ${noun.toLowerCase()} recovery — reconfiguration already in progress`);
+      return;
+    }
+
     if (this.isMeetingActive && this.audioRecoveryAttempts < this.MAX_AUDIO_RECOVERY_ATTEMPTS) {
+      this.isReconfiguringAudio = true;
       this.audioRecoveryAttempts += 1;
       const attempt = this.audioRecoveryAttempts;
       const delayMs = this.audioRecoveryBackoffMs * attempt;
       console.log(`[Main] Attempting ${noun.toLowerCase()} recovery (attempt ${attempt}/${this.MAX_AUDIO_RECOVERY_ATTEMPTS}, delay ${delayMs}ms)...`);
 
-      await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
-
-      if (!this.isMeetingActive) {
-        return;
-      }
-
       try {
+        await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
+
+        if (!this.isMeetingActive) {
+          this.isReconfiguringAudio = false;
+          return;
+        }
+
         await this.reconfigureAudio();
         console.log(`[Main] ${noun} recovered successfully on attempt ${attempt}`);
         this.setNativeAudioConnected(true);
-        return;
       } catch (recoveryErr) {
         console.error(`[Main] ${noun} recovery attempt ${attempt} failed:`, recoveryErr);
         if (this.audioRecoveryAttempts >= this.MAX_AUDIO_RECOVERY_ATTEMPTS) {
           this.broadcast('meeting-audio-error', failureMessage);
-          return;
         }
+      } finally {
+        this.isReconfiguringAudio = false;
       }
+    } else {
+      this.broadcast('meeting-audio-error', err.message || defaultErrorMessage);
     }
-
-    this.broadcast('meeting-audio-error', err.message || defaultErrorMessage);
   }
 
   private attachSystemAudioCaptureListeners(): void {
@@ -1970,6 +1980,7 @@ try {
       }
 
       this.meetingLifecycleState = 'starting'
+      this.broadcast('meeting-lifecycle-state', this.meetingLifecycleState)
       const startSequence = ++this.meetingStartSequence
 
       try {
@@ -1977,12 +1988,14 @@ try {
       } catch (error) {
         this.currentMeetingId = null
         this.meetingLifecycleState = 'idle'
+        this.broadcast('meeting-lifecycle-state', this.meetingLifecycleState)
         throw error
       }
 
       if (signal.aborted) {
         console.log('[Main] Start meeting aborted after validation');
         this.meetingLifecycleState = 'idle';
+        this.broadcast('meeting-lifecycle-state', this.meetingLifecycleState);
         return;
       }
 
@@ -2001,6 +2014,7 @@ try {
         if (signal.aborted) {
           console.log('[Main] Start meeting aborted before deferred step');
           this.meetingLifecycleState = 'idle';
+          this.broadcast('meeting-lifecycle-state', this.meetingLifecycleState);
           this.isMeetingActive = false;
           this.currentMeetingId = null;
           resolve();
@@ -2011,6 +2025,7 @@ try {
           if (signal.aborted) {
             console.log('[Main] Start meeting aborted during deferred step');
             this.meetingLifecycleState = 'idle';
+            this.broadcast('meeting-lifecycle-state', this.meetingLifecycleState);
             this.isMeetingActive = false;
             this.currentMeetingId = null;
             resolve();
@@ -2031,6 +2046,7 @@ try {
             if (signal.aborted) {
               console.log('[Main] Start meeting aborted during audio reconfig');
               this.meetingLifecycleState = 'idle';
+              this.broadcast('meeting-lifecycle-state', this.meetingLifecycleState);
               this.isMeetingActive = false;
               this.currentMeetingId = null;
               resolve();
@@ -2052,6 +2068,7 @@ try {
             }
 
             this.meetingLifecycleState = 'active'
+            this.broadcast('meeting-lifecycle-state', this.meetingLifecycleState)
             console.log('[Main] Meeting activation prepared successfully.');
 
             resolve()
@@ -2062,6 +2079,7 @@ try {
             this.isMeetingActive = false;
             this.currentMeetingId = null;
             this.meetingLifecycleState = 'idle'
+            this.broadcast('meeting-lifecycle-state', this.meetingLifecycleState)
             this.clearAudioPipelineHealthCheck();
             reject(err)
           }
@@ -2106,6 +2124,7 @@ try {
     this.currentMeetingId = null;
     const endSequence = ++this.meetingStartSequence  // Increment sequence to invalidate any pending starts
     this.meetingLifecycleState = 'stopping'
+    this.broadcast('meeting-lifecycle-state', this.meetingLifecycleState)
     this.isMeetingActive = false; // Block new data immediately
     this.setNativeAudioConnected(false);
 
@@ -2165,12 +2184,14 @@ try {
     }
 
     this.meetingLifecycleState = 'idle'
+    this.broadcast('meeting-lifecycle-state', this.meetingLifecycleState)
   }
 
   public async cleanupForQuit(): Promise<void> {
     await this.intelligenceManager.waitForPendingSaves(10000);
     this.meetingStartSequence += 1
     this.meetingLifecycleState = 'idle'
+    this.broadcast('meeting-lifecycle-state', this.meetingLifecycleState)
     this.isMeetingActive = false
     this.setNativeAudioConnected(false)
     this.currentMeetingId = null
@@ -2870,10 +2891,12 @@ setThemeMode: (mode) => this.themeManager.setMode(mode as import('./ThemeManager
     return this.hasDebugged
   }
 
+  private pendingUndetectableState: boolean | null = null;
+
   public async setUndetectableAsync(state: boolean): Promise<void> {
-    // Guard: skip if state hasn't actually changed to prevent
-    // duplicate dock hide/show cycles from renderer feedback loops
-    if (this.isUndetectable === state) return;
+    if (this.isUndetectable === state || this.pendingUndetectableState === state) return;
+
+    this.pendingUndetectableState = state;
 
     console.log(`[Stealth] setUndetectable(${state}) called`);
     const startedAt = Date.now();
@@ -2883,6 +2906,8 @@ setThemeMode: (mode) => this.themeManager.setMode(mode as import('./ThemeManager
       await stealthSupervisor.start()
     }
     await stealthSupervisor.setEnabled(state)
+
+    this.pendingUndetectableState = null;
 
     this.applyUndetectableState(state, startedAt, {
       runtime: 'coordinator',

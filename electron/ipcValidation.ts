@@ -127,8 +127,9 @@ export const ipcSchemas = {
   ragCancelQuery: z.object({
     meetingId: boundedString(128).optional(),
     global: z.boolean().optional(),
-  }).strict().refine((value) => value.global === true || typeof value.meetingId === 'string', {
-    message: 'meetingId or global is required',
+    live: z.boolean().optional(),
+  }).strict().refine((value) => value.global === true || typeof value.meetingId === 'string' || value.live === true, {
+    message: 'meetingId, global, or live is required',
   }),
   intelligenceQuestion: z.string().trim().max(10000),
   intelligenceImagePaths: z.array(boundedString(2000)).max(8),

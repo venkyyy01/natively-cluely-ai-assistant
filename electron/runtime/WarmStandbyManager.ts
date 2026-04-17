@@ -57,6 +57,7 @@ export class WarmStandbyManager<
   private lastError: string | null = null;
   private activeMeetingId: string | null = null;
   private deferredBackgroundWarmup = false;
+  private lifecyclePromise: Promise<void> = Promise.resolve();
 
   private audioResource: TAudioResource | null = null;
   private sttResource: TSttResource | null = null;
@@ -81,52 +82,56 @@ export class WarmStandbyManager<
   }
 
   async warmUp(): Promise<WarmStandbyHealth> {
-    const shouldWarmMissingWorkerPool = !this.deferredBackgroundWarmup && this.workerPoolHandler && this.workerPoolResource === null;
-    if ((this.state === 'ready' || this.state === 'bound') && !shouldWarmMissingWorkerPool) {
-      return this.getHealth();
-    }
-
-    this.state = 'warming';
-    this.lastError = null;
-
-    try {
-      if (this.audioHandler && this.audioResource === null) {
-        this.audioResource = await this.audioHandler.warmUp();
+    return this.enqueueLifecycle(async () => {
+      const shouldWarmMissingWorkerPool = !this.deferredBackgroundWarmup && this.workerPoolHandler && this.workerPoolResource === null;
+      if ((this.state === 'ready' || this.state === 'bound') && !shouldWarmMissingWorkerPool) {
+        return this.getHealth();
       }
 
-      if (this.sttHandler && this.sttResource === null) {
-        this.sttResource = await this.sttHandler.warmUp();
-      }
+      this.state = 'warming';
+      this.lastError = null;
 
-      if (!this.deferredBackgroundWarmup && this.workerPoolHandler && this.workerPoolResource === null) {
-        this.workerPoolResource = await this.workerPoolHandler.warmUp();
-      }
+      try {
+        if (this.audioHandler && this.audioResource === null) {
+          this.audioResource = await this.audioHandler.warmUp();
+        }
 
-      this.state = this.activeMeetingId ? 'bound' : 'ready';
-      return this.getHealth();
-    } catch (error) {
-      this.lastError = error instanceof Error ? error.message : String(error);
-      this.state = 'faulted';
-      await this.coolDownPartiallyWarmedResources();
-      throw error;
-    }
+        if (this.sttHandler && this.sttResource === null) {
+          this.sttResource = await this.sttHandler.warmUp();
+        }
+
+        if (!this.deferredBackgroundWarmup && this.workerPoolHandler && this.workerPoolResource === null) {
+          this.workerPoolResource = await this.workerPoolHandler.warmUp();
+        }
+
+        this.state = this.activeMeetingId ? 'bound' : 'ready';
+        return this.getHealth();
+      } catch (error) {
+        this.lastError = error instanceof Error ? error.message : String(error);
+        this.state = 'faulted';
+        await this.coolDownPartiallyWarmedResources();
+        throw error;
+      }
+    });
   }
 
   async coolDown(): Promise<void> {
-    this.state = 'cooling';
-    this.activeMeetingId = null;
-    this.lastError = null;
+    return this.enqueueLifecycle(async () => {
+      this.state = 'cooling';
+      this.activeMeetingId = null;
+      this.lastError = null;
 
-    await this.coolDownResource(this.workerPoolHandler, this.workerPoolResource);
-    this.workerPoolResource = null;
+      await this.coolDownResource(this.workerPoolHandler, this.workerPoolResource);
+      this.workerPoolResource = null;
 
-    await this.coolDownResource(this.sttHandler, this.sttResource);
-    this.sttResource = null;
+      await this.coolDownResource(this.sttHandler, this.sttResource);
+      this.sttResource = null;
 
-    await this.coolDownResource(this.audioHandler, this.audioResource);
-    this.audioResource = null;
+      await this.coolDownResource(this.audioHandler, this.audioResource);
+      this.audioResource = null;
 
-    this.state = 'idle';
+      this.state = 'idle';
+    });
   }
 
   async bindMeeting(meetingId: string): Promise<void> {
@@ -165,21 +170,40 @@ export class WarmStandbyManager<
   }
 
   async invalidateAudioResource(): Promise<void> {
-    await this.coolDownResource(this.audioHandler, this.audioResource);
-    this.audioResource = null;
-    this.state = this.hasAnyWarmResources() ? 'ready' : 'idle';
+    return this.enqueueLifecycle(async () => {
+      await this.coolDownResource(this.audioHandler, this.audioResource);
+      this.audioResource = null;
+      this.state = this.hasAnyWarmResources() ? 'ready' : 'idle';
+    });
   }
 
   async invalidateSttResource(): Promise<void> {
-    await this.coolDownResource(this.sttHandler, this.sttResource);
-    this.sttResource = null;
-    this.state = this.hasAnyWarmResources() ? 'ready' : 'idle';
+    return this.enqueueLifecycle(async () => {
+      await this.coolDownResource(this.sttHandler, this.sttResource);
+      this.sttResource = null;
+      this.state = this.hasAnyWarmResources() ? 'ready' : 'idle';
+    });
   }
 
   async invalidateWorkerPoolResource(): Promise<void> {
-    await this.coolDownResource(this.workerPoolHandler, this.workerPoolResource);
-    this.workerPoolResource = null;
-    this.state = this.hasAnyWarmResources() ? 'ready' : 'idle';
+    return this.enqueueLifecycle(async () => {
+      await this.coolDownResource(this.workerPoolHandler, this.workerPoolResource);
+      this.workerPoolResource = null;
+      this.state = this.hasAnyWarmResources() ? 'ready' : 'idle';
+    });
+  }
+
+  private enqueueLifecycle<T>(operation: () => Promise<T>): Promise<T> {
+    let resolve!: (value: T) => void;
+    let reject!: (reason: unknown) => void;
+    const resultPromise = new Promise<T>((res, rej) => { resolve = res; reject = rej; });
+
+    this.lifecyclePromise = this.lifecyclePromise.then(
+      () => operation().then(resolve, reject),
+      () => operation().then(resolve, reject),
+    );
+
+    return resultPromise;
   }
 
   async resumeDeferredWarmup(): Promise<WarmStandbyHealth> {

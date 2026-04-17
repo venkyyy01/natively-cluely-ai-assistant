@@ -66,7 +66,23 @@ export class PromptCompiler {
   }
 
   private getCacheKey(options: CompileOptions): string {
-    return `${options.provider}:${options.phase}:${options.mode}`;
+    const contextHash = options.contextSnapshot
+      ? this.hashContext(options.contextSnapshot)
+      : 'no-context';
+    return `${options.provider}:${options.phase}:${options.mode}:${contextHash}`;
+  }
+
+  private hashContext(snapshot: NonNullable<CompileOptions['contextSnapshot']>): string {
+    const thread = snapshot.activeThread || '';
+    const topics = snapshot.recentTopics?.join(',') || '';
+    let hash = 0;
+    const str = `${thread}::${topics}`;
+    for (let i = 0; i < str.length; i++) {
+      const char = str.charCodeAt(i);
+      hash = ((hash << 5) - hash) + char;
+      hash |= 0;
+    }
+    return hash.toString(36);
   }
 
   private async assemble(options: CompileOptions): Promise<CompiledPrompt> {

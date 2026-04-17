@@ -141,6 +141,7 @@ async function atomicWriteJson(filePath: string, value: unknown): Promise<void> 
 export class SessionPersistence {
   private saveTimeout: NodeJS.Timeout | null = null;
   private pendingSession: PersistedSession | null = null;
+  private inFlightSave: Promise<void> = Promise.resolve();
   private readonly sessionsDir: string;
   private readonly indexFile: string;
 
@@ -164,7 +165,7 @@ export class SessionPersistence {
       this.pendingSession = null;
       if (!snapshot) return;
 
-      void this.save(snapshot).catch((error) => {
+      this.inFlightSave = this.save(snapshot).catch((error) => {
         console.warn('[SessionPersistence] Scheduled save failed:', error);
       });
     }, 2000);
@@ -178,8 +179,10 @@ export class SessionPersistence {
 
     const snapshot = this.pendingSession;
     this.pendingSession = null;
-    if (!snapshot) return;
 
+    await this.inFlightSave;
+
+    if (!snapshot) return;
     await this.save(snapshot);
   }
 

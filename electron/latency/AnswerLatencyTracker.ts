@@ -39,7 +39,15 @@ export interface LatencySnapshot extends LatencyMetadata {
 
 export class AnswerLatencyTracker {
   private static nextId = 1;
+  private readonly MAX_SNAPSHOTS = 100;
   private snapshots = new Map<string, LatencySnapshot>();
+
+  private evictOldSnapshots(): void {
+    while (this.snapshots.size > this.MAX_SNAPSHOTS) {
+      const oldestKey = this.snapshots.keys().next().value;
+      if (oldestKey) this.snapshots.delete(oldestKey);
+    }
+  }
 
   private getMutableSnapshot(requestId: string): LatencySnapshot | undefined {
     const snapshot = this.snapshots.get(requestId);
@@ -76,6 +84,7 @@ export class AnswerLatencyTracker {
       },
       ...normalizedMetadata,
     });
+    this.evictOldSnapshots();
     return requestId;
   }
 
