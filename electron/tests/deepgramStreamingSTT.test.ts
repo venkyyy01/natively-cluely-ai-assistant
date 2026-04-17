@@ -451,7 +451,7 @@ test('DeepgramStreamingSTT recycles an open socket when inbound activity stalls 
     assert.equal(scheduledIntervals.length, 3);
 
     now = 1000;
-    stt.write(Buffer.from([1, 0, 2, 0, 3, 0, 4, 0]));
+    stt.write(Buffer.from([100, 0, 100, 0, 100, 0, 100, 0]));
 
     now = 16000;
     scheduledIntervals[2]!();
