@@ -625,6 +625,36 @@ describe('StealthManager', () => {
     assert.strictEqual(manager.verifyManagedWindows(), true);
   });
 
+  it('treats intentionally hidden managed windows as already safe during verification', () => {
+    let verifyCalls = 0;
+    const first = new FakeWindow();
+    const second = new FakeWindow();
+    const manager = new StealthManager(
+      { enabled: true },
+      {
+        platform: 'darwin',
+        logger: silentLogger,
+        nativeModule: {
+          applyMacosWindowStealth() {},
+          verifyMacosStealthState() {
+            verifyCalls += 1;
+            return 0;
+          },
+        },
+      },
+    );
+
+    manager.applyToWindow(first as any, true, { role: 'primary' });
+    manager.applyToWindow(second as any, true, { role: 'auxiliary' });
+    first.hide();
+    second.hide();
+    const verifyCallsBeforeHiddenVerification = verifyCalls;
+
+    assert.strictEqual(manager.verifyManagedWindows(), true);
+    assert.strictEqual(verifyCalls, verifyCallsBeforeHiddenVerification);
+    assert.ok(!manager.getStealthDegradationWarnings().includes('stealth_verification_failed'));
+  });
+
   it('fails managed-window verification when no verifiable native stealth is available', () => {
     const win = new FakeWindow();
     const manager = new StealthManager(
@@ -678,6 +708,76 @@ describe('StealthManager', () => {
 
     assert.strictEqual(win.hideCalls, 1);
     assert.strictEqual(win.showCalls, 1);
+  });
+
+  it('ignores stale capture detections when the watchdog is paused after a poll has already started', async () => {
+    const intervals: Array<() => Promise<void> | void> = [];
+    let resolveEnumerator!: (value: string) => void;
+    const enumeratorPromise = new Promise<string>((resolve) => {
+      resolveEnumerator = resolve;
+    });
+    const manager = new StealthManager(
+      { enabled: true },
+      {
+        platform: 'darwin',
+        logger: silentLogger,
+        featureFlags: { enableCaptureDetectionWatchdog: true },
+        intervalScheduler: (fn: () => Promise<void> | void) => {
+          intervals.push(fn);
+          return intervals.length;
+        },
+        clearIntervalScheduler() {},
+        processEnumerator: async () => enumeratorPromise,
+      } as any,
+    );
+    const win = new FakeWindow();
+
+    manager.applyToWindow(win as any, true, { role: 'primary' });
+
+    const pollPromise = Promise.resolve(intervals[0]?.());
+    manager.pauseWatchdog();
+    manager.pauseWatchdog();
+    manager.pauseWatchdog();
+    resolveEnumerator('screencapture');
+    await pollPromise;
+
+    assert.deepStrictEqual(win.setOpacityCalls, []);
+    assert.strictEqual(win.hideCalls, 0);
+    assert.ok(!manager.getStealthDegradationWarnings().includes('capture_tools_still_running'));
+  });
+
+  it('ignores in-flight capture detections even if the watchdog resumes before the stale poll completes', async () => {
+    const intervals: Array<() => Promise<void> | void> = [];
+    let resolveEnumerator!: (value: string) => void;
+    const enumeratorPromise = new Promise<string>((resolve) => {
+      resolveEnumerator = resolve;
+    });
+    const manager = new StealthManager(
+      { enabled: true },
+      {
+        platform: 'darwin',
+        logger: silentLogger,
+        featureFlags: { enableCaptureDetectionWatchdog: true },
+        intervalScheduler: (fn: () => Promise<void> | void) => {
+          intervals.push(fn);
+          return intervals.length;
+        },
+        clearIntervalScheduler() {},
+        processEnumerator: async () => enumeratorPromise,
+      } as any,
+    );
+    const win = new FakeWindow();
+
+    manager.applyToWindow(win as any, true, { role: 'primary' });
+
+    const pollPromise = Promise.resolve(intervals[0]?.());
+    manager.pauseWatchdog();
+    manager.resumeWatchdog();
+    resolveEnumerator('screencapture');
+    await pollPromise;
+
+    assert.deepStrictEqual(win.setOpacityCalls, []);
+    assert.strictEqual(win.hideCalls, 0);
   });
 
   it('verifies Windows stealth state through native bindings', () => {

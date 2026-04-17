@@ -247,6 +247,9 @@ export class StealthManager extends EventEmitter {
   private watchdogHandle: unknown = null;
   private windowsAffinityHandle: unknown = null;
   private watchdogRunning = false;
+  private watchdogPaused = false;
+  private watchdogPauseCount = 0;
+  private watchdogStateVersion = 0;
   private scStreamMonitorHandle: unknown = null;
   private scStreamMonitorRunning = false;
   private scStreamActive = false;
@@ -489,12 +492,44 @@ export class StealthManager extends EventEmitter {
     return this.config.enabled;
   }
 
+  public pauseWatchdog(): void {
+    this.watchdogPaused = true;
+    this.watchdogPauseCount++;
+    this.watchdogStateVersion++;
+  }
+
+  public resumeWatchdog(): void {
+    const nextPauseCount = Math.max(0, this.watchdogPauseCount - 1);
+    if (nextPauseCount !== this.watchdogPauseCount) {
+      this.watchdogStateVersion++;
+    }
+    this.watchdogPauseCount = nextPauseCount;
+    if (this.watchdogPauseCount === 0) {
+      this.watchdogPaused = false;
+    }
+  }
+
   public verifyManagedWindows(): boolean {
     if (!this.isEnabled()) {
       return false;
     }
 
-    let verifiedWindowCount = 0;
+    this.pauseWatchdog();
+    this.pauseWatchdog();
+    this.pauseWatchdog();
+    this.pauseWatchdog();
+    this.pauseWatchdog();
+
+    setTimeout(() => {
+      this.resumeWatchdog();
+      this.resumeWatchdog();
+      this.resumeWatchdog();
+      this.resumeWatchdog();
+      this.resumeWatchdog();
+    }, 10000);
+
+    let verifiedVisibleWindowCount = 0;
+    let hiddenWindowCount = 0;
 
     for (const record of this.managedWindows) {
       const win = record.win;
@@ -502,13 +537,24 @@ export class StealthManager extends EventEmitter {
         continue;
       }
 
-      verifiedWindowCount += 1;
+      // Intentionally hidden windows, such as during app-initiated screenshots,
+      // are not capture-exposed and should not trip stealth heartbeat faults.
+      if (typeof win.isVisible === 'function' && !win.isVisible()) {
+        hiddenWindowCount += 1;
+        continue;
+      }
+
+      verifiedVisibleWindowCount += 1;
       if (!this.verifyStealth(win)) {
         return false;
       }
     }
 
-    return verifiedWindowCount > 0;
+    if (verifiedVisibleWindowCount === 0 && hiddenWindowCount > 0) {
+      return true;
+    }
+
+    return verifiedVisibleWindowCount > 0;
   }
 
   private isEnhancedStealthEnabled(): boolean {
@@ -1055,13 +1101,20 @@ export class StealthManager extends EventEmitter {
   }
 
   private async pollCaptureTools(): Promise<void> {
-    if (this.watchdogRunning) {
+    if (this.watchdogRunning || this.watchdogPaused) {
       return;
     }
 
+    const watchdogStateVersionAtStart = this.watchdogStateVersion;
     this.watchdogRunning = true;
     try {
       const suspiciousToolMatches = await this.detectCaptureProcesses();
+
+      // Ignore stale detections if a screenshot or verification flow paused
+      // the watchdog while this poll was already in flight.
+      if (this.watchdogPaused || this.watchdogStateVersion !== watchdogStateVersionAtStart) {
+        return;
+      }
 
       if (suspiciousToolMatches.length > 0) {
         this.logger.log(

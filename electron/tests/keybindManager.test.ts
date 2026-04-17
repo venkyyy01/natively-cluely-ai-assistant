@@ -31,6 +31,8 @@ test('default keybinds include overlay clickthrough toggle shortcut', async () =
     assert.deepEqual(DEFAULT_KEYBINDS.find((item) => item.id === 'general:take-screenshot')?.alternateAccelerators, ['F14']);
     assert.equal(DEFAULT_KEYBINDS.find((item) => item.id === 'general:selective-screenshot')?.accelerator, 'Command+Alt+Shift+A');
     assert.deepEqual(DEFAULT_KEYBINDS.find((item) => item.id === 'general:selective-screenshot')?.alternateAccelerators, ['F15']);
+    assert.equal(DEFAULT_KEYBINDS.find((item) => item.id === 'general:restore-full-stealth')?.accelerator, 'Shift+Esc');
+    assert.equal(DEFAULT_KEYBINDS.find((item) => item.id === 'general:restore-full-stealth')?.isGlobal, true);
 
     assert.equal(DEFAULT_KEYBINDS.find((item) => item.id === 'chat:scrollUp')?.accelerator, 'Command+Up');
     assert.equal(DEFAULT_KEYBINDS.find((item) => item.id === 'chat:scrollUp')?.isGlobal, true);
@@ -44,6 +46,7 @@ test('default keybinds include overlay clickthrough toggle shortcut', async () =
       'chat:scrollDown',
       'chat:scrollUp',
       'general:emergency-hide',
+      'general:restore-full-stealth',
       'general:selective-screenshot',
       'general:take-screenshot',
       'general:toggle-clickthrough',
@@ -91,6 +94,7 @@ test('global shortcut registration includes alternate function-key accelerators 
     assert.ok(registered.includes('F14'));
     assert.ok(registered.includes('Command+Alt+Shift+A'));
     assert.ok(registered.includes('F15'));
+    assert.ok(registered.includes('Shift+Esc'));
     assert.ok(registered.includes('Command+Shift+M'));
     assert.ok(registered.includes('Command+Alt+Shift+M'));
   assert.ok(registered.includes('Command+Up'));

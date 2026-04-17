@@ -20,6 +20,7 @@ import { StealthManager } from "./stealth/StealthManager"
 import { createMacosVirtualDisplayCoordinator, resolveMacosVirtualDisplayHelperPath } from "./stealth/macosVirtualDisplayIntegration"
 import { NativeStealthBridge } from "./stealth/NativeStealthBridge"
 import { derivePrivacyShieldState, type PrivacyShieldState } from "./stealth/privacyShieldState"
+import { PrivacyShieldRecoveryController } from "./stealth/PrivacyShieldRecoveryController"
 import { exitAfterCriticalFailure } from './processFailure'
 if (!app.isPackaged) {
 require('dotenv').config();
@@ -354,6 +355,7 @@ private consciousModeEnabled: boolean = false
   private privacyShieldFaultReason: string | null = null
   private privacyShieldWarnings: string[] = []
   private privacyShieldState: PrivacyShieldState = { active: false, reason: null }
+  private privacyShieldRecoveryController: PrivacyShieldRecoveryController | null = null
 
   private problemInfo: {
     problem_statement: string
@@ -535,6 +537,7 @@ this.stealthManager.on('stealth-degraded', (warnings: string[]) => {
   console.warn(`[Main] Stealth degraded: ${warnings.join(', ')}`);
   this.privacyShieldWarnings = warnings;
   this.syncPrivacyShieldState();
+  this.privacyShieldRecoveryController?.update()
   this._broadcastToAllWindows('stealth-degraded', warnings);
   this.handleStealthDegradation(warnings);
 });
@@ -543,6 +546,27 @@ this.screenshotHelper = new ScreenshotHelper(this.view)
 this.processingHelper = new ProcessingHelper(this)
 this.performanceInstrumentation = getPerformanceInstrumentation()
 this.runtimeCoordinator = new RuntimeCoordinator(this)
+this.privacyShieldRecoveryController = new PrivacyShieldRecoveryController({
+  getSnapshot: () => ({
+    isUndetectable: this.isUndetectable,
+    faultReason: this.privacyShieldFaultReason,
+    warnings: this.privacyShieldWarnings,
+    stealthState: this.getStealthSupervisorOrNull()?.getStealthState() ?? 'OFF',
+  }),
+  recoverFullStealth: async () => {
+    if (!this.isUndetectable) {
+      return
+    }
+
+    const stealthSupervisor = this.runtimeCoordinator.getSupervisor<StealthSupervisor>('stealth')
+    if (stealthSupervisor.getState() === 'idle') {
+      await stealthSupervisor.start()
+    }
+
+    await stealthSupervisor.setEnabled(true)
+  },
+  logger: { log: console.log, warn: console.warn },
+})
 this.bindRuntimeCoordinatorEvents()
 this.windowHelper.setStealthRuntimeHeartbeatListener(() => {
   try {
@@ -596,6 +620,11 @@ keybindManager.onShortcutTriggered(async (actionId) => {
       const mainWindow = this.getMainWindow();
       if (mainWindow) {
         mainWindow.webContents.send('overlay-clickthrough-changed', enabled);
+      }
+    } else if (actionId === 'general:restore-full-stealth') {
+      const recovered = await this.privacyShieldRecoveryController?.triggerManualRecovery() ?? false
+      if (!recovered) {
+        console.warn('[Stealth] Full stealth recovery shortcut ignored because capture risk is still active or stealth is not faulted')
       }
     } else if (actionId === 'general:take-screenshot') {
           const screenshotPath = await this.takeScreenshot();
@@ -828,6 +857,8 @@ this.runtimeCoordinator.registerSupervisor(new StealthSupervisor(
         this.syncPrivacyShieldState()
       }
 
+      this.privacyShieldRecoveryController?.update()
+
       this._broadcastToAllWindows('stealth-state-changed', event)
       this.performanceInstrumentation.recordEvent('stealth.state', {
         from: event.from,
@@ -839,6 +870,7 @@ this.runtimeCoordinator.registerSupervisor(new StealthSupervisor(
       this.privacyShieldFaultReason = event.reason
       this.enforceStealthFaultContainment(event.reason)
       this.syncPrivacyShieldState()
+      this.privacyShieldRecoveryController?.update()
       this._broadcastToAllWindows('stealth-fault', event.reason)
       this.performanceInstrumentation.recordEvent('stealth.fault', {
         reason: event.reason,
@@ -2615,39 +2647,55 @@ setThemeMode: (mode) => this.themeManager.setMode(mode as import('./ThemeManager
   public async takeScreenshot(): Promise<string> {
     if (!this.getMainWindow()) throw new Error("No main window available")
 
-    const wasOverlayVisible = this.windowHelper.getOverlayWindow()?.isVisible() ?? false
+    this.stealthManager.pauseWatchdog()
+    this.stealthManager.pauseWatchdog()
+    this.stealthManager.pauseWatchdog()
 
-    const screenshotPath = await this.screenshotHelper.takeScreenshot(
-      () => this.hideMainWindow(),
-      () => {
-        if (wasOverlayVisible) {
-          this.windowHelper.switchToOverlay()
-        } else {
-          this.showMainWindow()
+    try {
+      const wasOverlayVisible = this.windowHelper.getOverlayWindow()?.isVisible() ?? false
+
+      return await this.screenshotHelper.takeScreenshot(
+        () => this.hideMainWindow(),
+        () => {
+          if (wasOverlayVisible) {
+            this.windowHelper.switchToOverlay()
+          } else {
+            this.showMainWindow()
+          }
         }
-      }
-    )
-
-    return screenshotPath
+      )
+    } finally {
+      this.stealthManager.resumeWatchdog()
+      this.stealthManager.resumeWatchdog()
+      this.stealthManager.resumeWatchdog()
+    }
   }
 
   public async takeSelectiveScreenshot(): Promise<string> {
     if (!this.getMainWindow()) throw new Error("No main window available")
 
-    const wasOverlayVisible = this.windowHelper.getOverlayWindow()?.isVisible() ?? false
+    this.stealthManager.pauseWatchdog()
+    this.stealthManager.pauseWatchdog()
+    this.stealthManager.pauseWatchdog()
 
-    const screenshotPath = await this.screenshotHelper.takeSelectiveScreenshot(
-      () => this.hideMainWindow(),
-      () => {
-        if (wasOverlayVisible) {
-          this.windowHelper.switchToOverlay()
-        } else {
-          this.showMainWindow()
+    try {
+      const wasOverlayVisible = this.windowHelper.getOverlayWindow()?.isVisible() ?? false
+
+      return await this.screenshotHelper.takeSelectiveScreenshot(
+        () => this.hideMainWindow(),
+        () => {
+          if (wasOverlayVisible) {
+            this.windowHelper.switchToOverlay()
+          } else {
+            this.showMainWindow()
+          }
         }
-      }
-    )
-
-    return screenshotPath
+      )
+    } finally {
+      this.stealthManager.resumeWatchdog()
+      this.stealthManager.resumeWatchdog()
+      this.stealthManager.resumeWatchdog()
+    }
   }
 
   public async getImagePreview(filepath: string): Promise<string> {
@@ -2848,6 +2896,9 @@ setThemeMode: (mode) => this.themeManager.setMode(mode as import('./ThemeManager
   ): void {
     this.isUndetectable = state
     this.syncWindowStealthProtection(state)
+    if (!state) {
+      this.clearPrivacyShieldFault()
+    }
 
     // Persist state via SettingsManager
     SettingsManager.getInstance().set('isUndetectable', state);
@@ -2923,7 +2974,7 @@ setThemeMode: (mode) => this.themeManager.setMode(mode as import('./ThemeManager
     }
   }
 
-private syncWindowStealthProtection(state: boolean): void {
+  private syncWindowStealthProtection(state: boolean): void {
   console.log(`[Stealth] syncWindowStealthProtection: applying contentProtection=${state}`)
   this.windowHelper.setContentProtection(state)
   this.settingsWindowHelper.setContentProtection(state)
@@ -2936,9 +2987,17 @@ private syncWindowStealthProtection(state: boolean): void {
     if (!verified) {
       const warnings = this.stealthManager.getStealthDegradationWarnings()
       console.warn(`[Stealth] Verification failed. Current warnings: ${warnings.join(', ') || 'none'}`)
-    }
-  }, 500)
+      }
+    }, 500)
 }
+
+  private getStealthSupervisorOrNull(): StealthSupervisor | null {
+    try {
+      return this.runtimeCoordinator.getSupervisor<StealthSupervisor>('stealth')
+    } catch {
+      return null
+    }
+  }
 
   public setUndetectable(state: boolean): void {
     void this.setUndetectableAsync(state).catch((error) => {
@@ -2963,12 +3022,17 @@ private syncWindowStealthProtection(state: boolean): void {
     console.warn(`[AppState] Privacy shield fault set: ${key} - ${reason}`);
     this.privacyShieldFaultReason = reason;
     this.syncPrivacyShieldState();
+    this.privacyShieldRecoveryController?.update()
   }
 
   public clearPrivacyShieldFault(): void {
-    console.log('[AppState] Privacy shield fault cleared');
+    if (this.privacyShieldFaultReason) {
+      console.log('[AppState] Privacy shield fault cleared');
+    }
     this.privacyShieldFaultReason = null;
+    this.intelligenceManager.setStealthContainmentActive(false)
     this.syncPrivacyShieldState();
+    this.privacyShieldRecoveryController?.update()
   }
 
   private handleStealthDegradation(warnings: string[]): void {
@@ -2999,6 +3063,7 @@ private syncWindowStealthProtection(state: boolean): void {
     const nextState = derivePrivacyShieldState({
       warnings: this.privacyShieldWarnings,
       faultReason: this.privacyShieldFaultReason,
+      captureProtectionEnabled: this.isUndetectable,
     })
 
     if (

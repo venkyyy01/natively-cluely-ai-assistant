@@ -33,6 +33,19 @@ test('PrivacyShieldState ignores non-capture degradation warnings', () => {
   );
 });
 
+test('PrivacyShieldState ignores capture-risk warnings when capture protection is disabled', () => {
+  assert.deepEqual(
+    derivePrivacyShieldState({
+      warnings: ['window_visible_to_capture'],
+      captureProtectionEnabled: false,
+    }),
+    {
+      active: false,
+      reason: null,
+    },
+  );
+});
+
 test('PrivacyShieldState prioritizes active faults over warning-derived reasons', () => {
   assert.deepEqual(
     derivePrivacyShieldState({

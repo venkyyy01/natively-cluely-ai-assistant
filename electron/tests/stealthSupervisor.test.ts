@@ -82,6 +82,31 @@ test('StealthSupervisor fails closed when arm verification fails', async () => {
   assert.deepEqual(clearedHandles, []);
 });
 
+test('StealthSupervisor can re-arm from FAULT back to FULL_STEALTH', async () => {
+  const calls: boolean[] = [];
+  const bus = createBus();
+  const supervisor = new StealthSupervisor(
+    {
+      async setEnabled(enabled: boolean) {
+        calls.push(enabled);
+      },
+      isEnabled: () => calls[calls.length - 1] ?? false,
+      verifyStealthState: () => true,
+    },
+    bus,
+  );
+
+  await supervisor.start();
+  await supervisor.setEnabled(true);
+  await supervisor.reportFault(new Error('window_visible_to_capture'));
+  assert.equal(supervisor.getStealthState(), 'FAULT');
+
+  await supervisor.setEnabled(true);
+
+  assert.equal(supervisor.getStealthState(), 'FULL_STEALTH');
+  assert.deepEqual(calls, [true, true]);
+});
+
 test('StealthSupervisor stop disables stealth and returns to idle', async () => {
   const calls: boolean[] = [];
   const bus = createBus();

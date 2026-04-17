@@ -1505,6 +1505,50 @@ test('intelligence handlers return error status when what-to-say throws', async 
   });
 });
 
+test('screenshot capture output flows into a completed screenshot-backed what-to-say request', async () => {
+  const harness = installIpcHandlersTestHarness();
+  await initializeHandlers(harness);
+
+  const screenshotResult = await harness.handlers.get('take-screenshot')?.({}) as {
+    success: true;
+    data: { path: string; preview: string };
+  };
+
+  const modulePath = require.resolve('../ipc/registerIntelligenceHandlers');
+  delete require.cache[modulePath];
+  const { registerIntelligenceHandlers } = await import('../ipc/registerIntelligenceHandlers');
+
+  const registry = createHandlerRegistry();
+  let receivedQuestion: string | undefined;
+  let receivedConfidence: number | undefined;
+  let receivedImagePaths: string[] | undefined;
+
+  (harness.appState as any).getCoordinator = () => ({
+    shouldManageLifecycle: () => true,
+    getSupervisor: () => ({
+      runWhatShouldISay: async (question?: string, confidence?: number, imagePaths?: string[]) => {
+        receivedQuestion = question;
+        receivedConfidence = confidence;
+        receivedImagePaths = imagePaths;
+        return 'answer from screenshot';
+      },
+    }),
+  });
+
+  registerIntelligenceHandlers({ appState: harness.appState as any, ...registry } as any);
+
+  assert.deepEqual(await registry.handlers.get('generate-what-to-say')?.({}, undefined, [screenshotResult.data.path]), {
+    answer: 'answer from screenshot',
+    question: 'inferred from context',
+    status: 'completed',
+  });
+  assert.equal(receivedQuestion, undefined);
+  assert.equal(receivedConfidence, 0.8);
+  assert.deepEqual(receivedImagePaths, [screenshotResult.data.path]);
+
+  harness.restore();
+});
+
 test('intelligence handlers normalize reset failures when supervisor reset rejects', async () => {
   const modulePath = require.resolve('../ipc/registerIntelligenceHandlers');
   delete require.cache[modulePath];

@@ -6,6 +6,7 @@ export interface PrivacyShieldState {
 interface DerivePrivacyShieldStateOptions {
   warnings?: readonly string[];
   faultReason?: string | null;
+  captureProtectionEnabled?: boolean;
 }
 
 const CAPTURE_RISK_WARNINGS = new Set([
@@ -20,6 +21,10 @@ const CAPTURE_RISK_WARNINGS = new Set([
 const CAPTURE_RISK_REASON = 'Sensitive content hidden while capture risk is detected.';
 const PROTECTION_FAULT_REASON = 'Sensitive content hidden until privacy protection is restored.';
 
+export function hasCaptureRiskWarnings(warnings: readonly string[] = []): boolean {
+  return warnings.some((warning) => CAPTURE_RISK_WARNINGS.has(warning));
+}
+
 export function derivePrivacyShieldState(options: DerivePrivacyShieldStateOptions = {}): PrivacyShieldState {
   if (options.faultReason) {
     return {
@@ -29,7 +34,7 @@ export function derivePrivacyShieldState(options: DerivePrivacyShieldStateOption
   }
 
   const warnings = options.warnings ?? [];
-  if (warnings.some((warning) => CAPTURE_RISK_WARNINGS.has(warning))) {
+  if ((options.captureProtectionEnabled ?? true) && hasCaptureRiskWarnings(warnings)) {
     return {
       active: true,
       reason: CAPTURE_RISK_REASON,
