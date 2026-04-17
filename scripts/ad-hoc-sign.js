@@ -52,8 +52,10 @@ function disguiseHelperPlists(appOutDir, appName) {
 }
 
 exports.default = async function (context) {
-    // Only process on macOS
-    if (process.platform !== 'darwin') {
+    const targetPlatform = context.electronPlatformName ?? context.packager?.platform?.name;
+
+    // Only process packaged macOS app bundles.
+    if (process.platform !== 'darwin' || targetPlatform !== 'darwin') {
         return;
     }
 
