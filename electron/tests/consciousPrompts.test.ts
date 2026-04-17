@@ -33,12 +33,18 @@ test('Conscious Mode prompt family includes core response contract fields', () =
     family.followUpContinuation,
   ].join('\n');
 
-  // Core fields that should exist in new anti-dump contract
+  // Canonical conscious_mode_v1 contract fields expected in prompt family
   for (const key of [
+    'schemaVersion',
+    'mode',
     'openingReasoning',
-    'spokenResponse',
+    'implementationPlan',
     'tradeoffs',
+    'edgeCases',
+    'scaleConsiderations',
+    'pushbackResponses',
     'likelyFollowUps',
+    'codeTransition',
   ]) {
     assert.match(combined, new RegExp(key));
   }

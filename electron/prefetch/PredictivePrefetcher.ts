@@ -198,10 +198,14 @@ export class PredictivePrefetcher {
   async getSemanticEmbedding(text: string): Promise<number[]> {
     const provider = getEmbeddingProvider();
     if (provider?.isInitialized()) {
-      return provider.embed(text);
+      try {
+        return await provider.embed(text);
+      } catch (error) {
+        console.warn('[PredictivePrefetcher] Real embedding provider failed, disabling semantic lookup for this query:', error);
+      }
     }
 
-    return this.fallbackSemanticEmbedding(text);
+    return [];
   }
 
   private async startPrefetching(): Promise<void> {
@@ -221,11 +225,12 @@ export class PredictivePrefetcher {
 
       try {
         const context = await this.assembleContext(prediction.query);
+        const semanticEmbedding = prediction.embedding.length > 0 ? prediction.embedding : undefined;
         await this.prefetchCache.set(prediction.query, {
           context,
           embedding: prediction.embedding,
           confidence: prediction.confidence,
-        }, prediction.embedding);
+        }, semanticEmbedding);
       } catch (error) {
         console.warn('[PredictivePrefetcher] Failed to prefetch:', error);
       }
@@ -260,40 +265,6 @@ export class PredictivePrefetcher {
         query,
         confidence: this.estimateConfidence(query),
       }));
-  }
-
-  private normalizeSemanticToken(token: string): string {
-    const normalized = token.toLowerCase().replace(/[^a-z0-9]/g, '');
-    if (normalized.endsWith('ies') && normalized.length > 4) {
-      return `${normalized.slice(0, -3)}y`;
-    }
-    if (normalized.endsWith('ing') && normalized.length > 5) {
-      return normalized.slice(0, -3);
-    }
-    if (normalized.endsWith('es') && normalized.length > 4) {
-      return normalized.slice(0, -2);
-    }
-    if (normalized.endsWith('s') && normalized.length > 3) {
-      return normalized.slice(0, -1);
-    }
-    return normalized;
-  }
-
-  private fallbackSemanticEmbedding(text: string): number[] {
-    const embedding = new Array(384).fill(0);
-    const tokens = text
-      .split(/\s+/)
-      .map((token) => this.normalizeSemanticToken(token))
-      .filter((token) => token.length >= 2);
-
-    for (const token of tokens) {
-      const hash = this.simpleHash(token);
-      embedding[hash % 384] += 1;
-      embedding[(hash * 31) % 384] += 0.5;
-    }
-
-    const norm = Math.sqrt(embedding.reduce((sum, value) => sum + value * value, 0));
-    return norm > 0 ? embedding.map((value) => value / norm) : embedding;
   }
 
   private simpleHash(str: string): number {
@@ -367,7 +338,8 @@ export class PredictivePrefetcher {
     relevantContext: Array<{ role: 'interviewer' | 'user' | 'assistant'; text: string; timestamp: number }>;
     phase: InterviewPhase;
   } | null> {
-    const effectiveEmbedding = embedding ?? await this.getSemanticEmbedding(query);
+    const computedEmbedding = embedding ?? await this.getSemanticEmbedding(query);
+    const effectiveEmbedding = computedEmbedding.length > 0 ? computedEmbedding : undefined;
     const cached = await this.prefetchCache.get(query, effectiveEmbedding);
 
     if (cached) {

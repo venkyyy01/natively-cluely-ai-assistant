@@ -209,11 +209,11 @@ safeHandleValidated("renderer:log-error", (args) => [parseIpcInput(ipcSchemas.re
   });
 
   registerSettingsHandlers({ appState, safeHandle, safeHandleValidated });
-  registerCalendarHandlers({ appState, safeHandle });
+  registerCalendarHandlers({ appState, safeHandle, safeHandleValidated });
   registerEmailHandlers({ appState, safeHandleValidated });
   registerRagHandlers({ appState, safeHandle, safeHandleValidated });
   registerProfileHandlers({ appState, safeHandle, safeHandleValidated });
-  registerIntelligenceHandlers({ appState, safeHandle });
+  registerIntelligenceHandlers({ appState, safeHandle, safeHandleValidated });
   registerWindowHandlers({ appState, safeHandle, safeHandleValidated });
 
 
@@ -1507,7 +1507,7 @@ safeHandleValidated("delete-meeting", (args) => [parseIpcInput(ipcSchemas.provid
     return { success: true };
   });
 
-  registerCalendarHandlers({ appState, safeHandle });
+  registerCalendarHandlers({ appState, safeHandle, safeHandleValidated });
 
   registerRagHandlers({ appState, safeHandle, safeHandleValidated });
 

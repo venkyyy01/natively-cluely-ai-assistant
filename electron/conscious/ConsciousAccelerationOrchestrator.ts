@@ -316,9 +316,15 @@ export class ConsciousAccelerationOrchestrator {
     }
 
     const queryEmbedding = await this.prefetcher.getSemanticEmbedding(query);
+    if (queryEmbedding.length === 0) {
+      return null;
+    }
     let bestMatch: { entry: SpeculativeAnswerEntry; similarity: number } | null = null;
 
     for (const entry of entries) {
+      if (entry.embedding.length === 0) {
+        continue;
+      }
       const similarity = this.cosineSimilarity(queryEmbedding, entry.embedding);
       if (!bestMatch || similarity > bestMatch.similarity) {
         bestMatch = { entry, similarity };

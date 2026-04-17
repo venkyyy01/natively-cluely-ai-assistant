@@ -919,20 +919,42 @@ export class IntelligenceEngine extends EventEmitter {
                     return abandonCurrentRequest();
                 }
                 if (speculativePreview?.text) {
-                    let speculativeAnswer = speculativePreview.text;
-                    for (const [index, chunk] of speculativePreview.chunks.entries()) {
-                        if (index === 0) {
+                    const emitSpeculativeToken = (chunk: string, markFirstChunk: boolean = false): boolean => {
+                        if (!chunk) {
+                            return true;
+                        }
+
+                        if (shouldSuppressVisibleWork()) {
+                            return false;
+                        }
+
+                        if (markFirstChunk) {
                             this.latencyTracker.markFirstStreamingUpdate(requestId);
                         }
+
                         this.emit('suggested_answer_token', chunk, question || 'inferred', confidence);
+                        return true;
+                    };
+                    let speculativeAnswer = speculativePreview.text;
+                    for (const [index, chunk] of speculativePreview.chunks.entries()) {
+                        if (!emitSpeculativeToken(chunk, index === 0)) {
+                            return abandonCurrentRequest();
+                        }
+                    }
+
+                    if (shouldSuppressVisibleWork()) {
+                        return abandonCurrentRequest();
                     }
 
                     if (!speculativePreview.complete) {
                         const finalizedSpeculativeAnswer = await consciousAcceleration!.finalizeSpeculativeAnswer(speculativePreview.key, 2_000);
+                        if (shouldSuppressVisibleWork()) {
+                            return abandonCurrentRequest();
+                        }
                         if (finalizedSpeculativeAnswer && finalizedSpeculativeAnswer.length > speculativeAnswer.length) {
                             const suffix = finalizedSpeculativeAnswer.slice(speculativeAnswer.length);
-                            if (suffix) {
-                                this.emit('suggested_answer_token', suffix, question || 'inferred', confidence);
+                            if (suffix && !emitSpeculativeToken(suffix)) {
+                                return abandonCurrentRequest();
                             }
                             speculativeAnswer = finalizedSpeculativeAnswer;
                         } else if (finalizedSpeculativeAnswer) {
@@ -940,6 +962,9 @@ export class IntelligenceEngine extends EventEmitter {
                         }
                     } else {
                         const finalizedSpeculativeAnswer = await consciousAcceleration!.finalizeSpeculativeAnswer(speculativePreview.key, 0);
+                        if (shouldSuppressVisibleWork()) {
+                            return abandonCurrentRequest();
+                        }
                         if (finalizedSpeculativeAnswer) {
                             speculativeAnswer = finalizedSpeculativeAnswer;
                         }
@@ -978,6 +1003,9 @@ export class IntelligenceEngine extends EventEmitter {
                         contextItems,
                     });
                     this.annotateLatencyQualityMetadata(requestId, metadata, contextItems);
+                    if (shouldSuppressVisibleWork()) {
+                        return abandonCurrentRequest();
+                    }
                     this.emit('suggested_answer', speculativeAnswer, question || 'What to Answer', confidence, metadata);
                     const latencySnapshot = this.latencyTracker.complete(requestId);
                     console.log('[IntelligenceEngine] Answer latency snapshot:', latencySnapshot);

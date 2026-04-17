@@ -616,7 +616,7 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
         cleanups.push(window.electronAPI.onIntelligenceSuggestedAnswer((data) => {
             setIsProcessing(false);
             const authoritativeThreadState = data.metadata?.threadState;
-            const threadAction = authoritativeThreadState?.threadAction ?? data.metadata?.threadAction ?? 'ignore';
+            const threadAction = authoritativeThreadState?.threadAction ?? 'ignore';
             const assistRender = classifyAssistRender({
                 answerText: data.answer,
                 threadAction,
@@ -627,13 +627,7 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
                 source_intent: 'what_to_answer',
             });
 
-            if (authoritativeThreadState) {
-                activeConsciousThreadRef.current = authoritativeThreadState.activeThread;
-            } else if (data.metadata?.thread !== undefined) {
-                activeConsciousThreadRef.current = data.metadata.thread;
-            } else {
-                activeConsciousThreadRef.current = null;
-            }
+            activeConsciousThreadRef.current = authoritativeThreadState?.activeThread ?? null;
 
             const targetId = getActiveStreamingId(activeIntelligenceStreamingIdsRef.current, WHAT_TO_SAY_STREAM_KEYS);
 

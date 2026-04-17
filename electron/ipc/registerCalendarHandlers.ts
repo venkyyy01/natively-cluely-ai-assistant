@@ -1,12 +1,14 @@
 import type { AppState } from '../main';
-import type { SafeHandle } from './registerTypes';
+import { ipcSchemas, parseIpcInput } from '../ipcValidation';
+import type { SafeHandle, SafeHandleValidated } from './registerTypes';
 
 type RegisterCalendarHandlersDeps = {
   appState: AppState;
   safeHandle: SafeHandle;
+  safeHandleValidated: SafeHandleValidated;
 };
 
-export function registerCalendarHandlers({ safeHandle }: RegisterCalendarHandlersDeps): void {
+export function registerCalendarHandlers({ safeHandle, safeHandleValidated }: RegisterCalendarHandlersDeps): void {
   safeHandle('calendar-connect', async () => {
     const { CalendarManager } = require('../services/CalendarManager');
     await CalendarManager.getInstance().startAuthFlow();
@@ -35,7 +37,7 @@ export function registerCalendarHandlers({ safeHandle }: RegisterCalendarHandler
     return { success: true };
   });
 
-  safeHandle('get-calendar-attendees', async (_event, eventId: string) => {
+  safeHandleValidated('get-calendar-attendees', (args) => [parseIpcInput(ipcSchemas.calendarEventId, args[0], 'get-calendar-attendees')] as const, async (_event, eventId: string) => {
     try {
       const { CalendarManager } = require('../services/CalendarManager');
       const cm = CalendarManager.getInstance();

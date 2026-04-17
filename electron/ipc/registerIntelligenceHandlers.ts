@@ -1,9 +1,11 @@
 import type { AppState } from '../main';
-import type { SafeHandle } from './registerTypes';
+import { ipcSchemas, parseIpcInput } from '../ipcValidation';
+import type { SafeHandle, SafeHandleValidated } from './registerTypes';
 
 type RegisterIntelligenceHandlersDeps = {
   appState: AppState;
   safeHandle: SafeHandle;
+  safeHandleValidated: SafeHandleValidated;
 };
 
 type RuntimeCoordinatorLike = {
@@ -45,13 +47,21 @@ function getIntelligenceFacade(appState: AppState): InferenceSupervisorLike {
   return appState.getIntelligenceManager();
 }
 
-export function registerIntelligenceHandlers({ appState, safeHandle }: RegisterIntelligenceHandlersDeps): void {
+export function registerIntelligenceHandlers({ appState, safeHandle, safeHandleValidated }: RegisterIntelligenceHandlersDeps): void {
   safeHandle('generate-assist', async () => {
     const insight = await getIntelligenceFacade(appState).runAssistMode?.();
     return { insight };
   });
 
-  safeHandle('generate-what-to-say', async (_event, question?: string, imagePaths?: string[]) => {
+  safeHandleValidated('generate-what-to-say', (args) => {
+    const question = typeof args[0] === 'undefined'
+      ? undefined
+      : parseIpcInput(ipcSchemas.intelligenceQuestion, args[0], 'generate-what-to-say');
+    const imagePaths = typeof args[1] === 'undefined'
+      ? undefined
+      : parseIpcInput(ipcSchemas.intelligenceImagePaths, args[1], 'generate-what-to-say');
+    return [question, imagePaths] as const;
+  }, async (_event, question?: string, imagePaths?: string[]) => {
     const resolvedQuestion = question || 'inferred from context';
 
     try {
@@ -80,7 +90,13 @@ export function registerIntelligenceHandlers({ appState, safeHandle }: RegisterI
     }
   });
 
-  safeHandle('generate-follow-up', async (_event, intent: string, userRequest?: string) => {
+  safeHandleValidated('generate-follow-up', (args) => {
+    const intent = parseIpcInput(ipcSchemas.intelligenceFollowUpIntent, args[0], 'generate-follow-up');
+    const userRequest = typeof args[1] === 'undefined'
+      ? undefined
+      : parseIpcInput(ipcSchemas.intelligenceFollowUpUserRequest, args[1], 'generate-follow-up');
+    return [intent, userRequest] as const;
+  }, async (_event, intent: string, userRequest?: string) => {
     const refined = await getIntelligenceFacade(appState).runFollowUp?.(intent, userRequest);
     return { refined, intent };
   });
@@ -95,7 +111,7 @@ export function registerIntelligenceHandlers({ appState, safeHandle }: RegisterI
     return { questions };
   });
 
-  safeHandle('submit-manual-question', async (_event, question: string) => {
+  safeHandleValidated('submit-manual-question', (args) => [parseIpcInput(ipcSchemas.intelligenceManualQuestion, args[0], 'submit-manual-question')] as const, async (_event, question: string) => {
     const answer = await getIntelligenceFacade(appState).runManualAnswer?.(question);
     return { answer, question };
   });

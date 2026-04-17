@@ -25,27 +25,51 @@ const reaction: QuestionReaction = {
   shouldContinueThread: false,
 };
 
-test('ConsciousOrchestrator.prepareRoute is side-effect free for reset decisions', () => {
+function createThread(): ReasoningThread {
+  return {
+    rootQuestion: 'How would you design a rate limiter?',
+    lastQuestion: 'How would you design a rate limiter?',
+    response,
+    followUpCount: 1,
+    updatedAt: Date.now(),
+  };
+}
+
+function createSession(overrides?: {
+  latestReaction?: QuestionReaction | null;
+  activeThread?: ReasoningThread | null;
+}) {
   let cleared = false;
   const session = {
     isConsciousModeEnabled: (): boolean => true,
-    getActiveReasoningThread: (): ReasoningThread => ({
-      rootQuestion: 'How would you design a rate limiter?',
-      lastQuestion: 'How would you design a rate limiter?',
-      response,
-      followUpCount: 1,
-      updatedAt: Date.now(),
-    }),
+    getActiveReasoningThread: (): ReasoningThread | null => overrides?.activeThread ?? createThread(),
     getLatestConsciousResponse: (): ConsciousModeStructuredResponse | null => null,
     clearConsciousModeThread: () => {
       cleared = true;
     },
     getFormattedContext: (): string => '',
     getConsciousEvidenceContext: (): string => '',
-    getLatestQuestionReaction: (): QuestionReaction => reaction,
+    getConsciousSemanticContext: (): string => '',
+    getConsciousLongMemoryContext: (): string => '',
+    getLatestQuestionReaction: (): QuestionReaction | null => {
+      if (overrides && Object.prototype.hasOwnProperty.call(overrides, 'latestReaction')) {
+        return overrides.latestReaction ?? null;
+      }
+
+      return reaction;
+    },
     getLatestAnswerHypothesis: (): AnswerHypothesis | null => null,
     recordConsciousResponse: (): void => {},
   };
+
+  return {
+    session,
+    wasCleared: () => cleared,
+  };
+}
+
+test('ConsciousOrchestrator.prepareRoute is side-effect free for reset decisions', () => {
+  const { session, wasCleared } = createSession();
 
   const orchestrator = new ConsciousOrchestrator(session as any);
   const prepared = orchestrator.prepareRoute({
@@ -55,8 +79,42 @@ test('ConsciousOrchestrator.prepareRoute is side-effect free for reset decisions
   });
 
   assert.equal(prepared.preRouteDecision.threadAction, 'reset');
-  assert.equal(cleared, false);
+  assert.equal(wasCleared(), false);
 
   orchestrator.applyRouteSideEffects(prepared);
-  assert.equal(cleared, true);
+  assert.equal(wasCleared(), true);
+});
+
+test('ConsciousOrchestrator.prepareRoute resets when classifier continuation is topically incompatible', () => {
+  const { session } = createSession({
+    latestReaction: {
+      kind: 'generic_follow_up',
+      confidence: 0.7,
+      cues: ['active_thread_follow_up'],
+      targetFacets: [],
+      shouldContinueThread: true,
+    },
+  });
+
+  const orchestrator = new ConsciousOrchestrator(session as any);
+  const prepared = orchestrator.prepareRoute({
+    question: 'Can you explain payroll compliance controls?',
+    knowledgeStatus: null,
+    screenshotBackedLiveCodingTurn: false,
+  });
+
+  assert.equal(prepared.preRouteDecision.threadAction, 'reset');
+});
+
+test('ConsciousOrchestrator.prepareRoute preserves referential continuation for short follow-ups', () => {
+  const { session } = createSession({ latestReaction: null });
+
+  const orchestrator = new ConsciousOrchestrator(session as any);
+  const prepared = orchestrator.prepareRoute({
+    question: 'Would that still hold?',
+    knowledgeStatus: null,
+    screenshotBackedLiveCodingTurn: false,
+  });
+
+  assert.equal(prepared.preRouteDecision.threadAction, 'continue');
 });

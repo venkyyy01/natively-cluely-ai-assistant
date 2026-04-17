@@ -130,6 +130,12 @@ export const ipcSchemas = {
   }).strict().refine((value) => value.global === true || typeof value.meetingId === 'string', {
     message: 'meetingId or global is required',
   }),
+  intelligenceQuestion: z.string().trim().max(10000),
+  intelligenceImagePaths: z.array(boundedString(2000)).max(8),
+  intelligenceFollowUpIntent: boundedString(128),
+  intelligenceFollowUpUserRequest: z.string().trim().max(10000),
+  intelligenceManualQuestion: boundedString(10000),
+  calendarEventId: boundedString(1024),
   themeMode: z.enum(['system', 'light', 'dark']),
   openMailtoInput: z.object({
     to: z.string().trim().max(2000),

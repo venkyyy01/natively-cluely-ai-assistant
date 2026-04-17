@@ -70,6 +70,101 @@ export class ConsciousOrchestrator {
     this.retrievalOrchestrator = new ConsciousRetrievalOrchestrator(this.session);
   }
 
+  private static readonly THREAD_COMPATIBILITY_STOPWORDS = new Set([
+    'the', 'and', 'for', 'with', 'that', 'this', 'from', 'have', 'your', 'about', 'would', 'what',
+    'when', 'where', 'which', 'into', 'while', 'there', 'their', 'then', 'than', 'been', 'were',
+    'will', 'could', 'should', 'does', 'did', 'are', 'how', 'why', 'can', 'you', 'our', 'but', 'not',
+    'just', 'still', 'also', 'make', 'makes', 'made', 'like', 'need', 'want', 'talk', 'lets',
+  ]);
+
+  private tokenizeForThreadCompatibility(value: string): string[] {
+    return Array.from(new Set(
+      value
+        .toLowerCase()
+        .replace(/[^a-z0-9\s]/g, ' ')
+        .split(/\s+/)
+        .filter((token) => token.length >= 3 && !ConsciousOrchestrator.THREAD_COMPATIBILITY_STOPWORDS.has(token))
+    ));
+  }
+
+  private hasReferentialFollowUpCue(loweredQuestion: string): boolean {
+    return /\b(this|that|it|those|these|them|there|then)\b/.test(loweredQuestion)
+      || /^(and|but|so)\b/.test(loweredQuestion)
+      || /\b(expand|clarify|explain|unpack|elaborate|deeper)\b/.test(loweredQuestion)
+      || /\b(what if|how would that|how does that|why that|why this)\b/.test(loweredQuestion);
+  }
+
+  private isShortReferentialFollowUp(loweredQuestion: string): boolean {
+    const wordCount = loweredQuestion.split(/\s+/).filter(Boolean).length;
+    return wordCount <= 16
+      && /^(would|could|can|should|does|do|is|are|was|were|how|why|what)\b/.test(loweredQuestion)
+      && /\b(this|that|it|those|these|them)\b/.test(loweredQuestion);
+  }
+
+  private isDeterministicContinuationPhrase(loweredQuestion: string): boolean {
+    return /^(what are the tradeoffs\??|how would you shard this\??|what happens during failover\??|what metrics would you watch( first)?\??)$/i.test(loweredQuestion)
+      || /^(why this approach|why this|why not|how so|go deeper|can you go deeper|walk me through that|talk through that|and then|what about reliability|what about scale|what about failure handling|what about bottlenecks)$/i.test(loweredQuestion);
+  }
+
+  private isTopicallyCompatibleWithThread(question: string, thread: ReasoningThread): boolean {
+    const normalizedQuestion = question.trim();
+    if (!normalizedQuestion) {
+      return false;
+    }
+
+    const loweredQuestion = normalizedQuestion.toLowerCase();
+    if (this.isDeterministicContinuationPhrase(loweredQuestion)) {
+      return true;
+    }
+
+    const questionTokens = this.tokenizeForThreadCompatibility(normalizedQuestion);
+    const referentialFollowUp = this.hasReferentialFollowUpCue(loweredQuestion);
+
+    const threadCorpus = [
+      thread.rootQuestion,
+      thread.lastQuestion,
+      thread.response.openingReasoning,
+      ...thread.response.implementationPlan,
+      ...thread.response.tradeoffs,
+      ...thread.response.edgeCases,
+      ...thread.response.scaleConsiderations,
+      ...thread.response.pushbackResponses,
+      ...thread.response.likelyFollowUps,
+      thread.response.codeTransition,
+    ].filter(Boolean).join(' ');
+    const threadTokens = new Set(this.tokenizeForThreadCompatibility(threadCorpus));
+
+    if (questionTokens.length === 0 || threadTokens.size === 0) {
+      return referentialFollowUp;
+    }
+
+    let overlapHits = 0;
+    for (const token of questionTokens) {
+      if (threadTokens.has(token)) {
+        overlapHits += 1;
+      }
+    }
+
+    const overlapRatio = overlapHits / questionTokens.length;
+    if (overlapRatio >= 0.25) {
+      return true;
+    }
+
+    if (overlapHits >= 1 && referentialFollowUp) {
+      return true;
+    }
+
+    if (overlapHits === 0 && this.isShortReferentialFollowUp(loweredQuestion)) {
+      return true;
+    }
+
+    if (overlapHits === 0 && referentialFollowUp && questionTokens.length <= 1) {
+      return true;
+    }
+
+    return false;
+  }
+
   prepareRoute(input: {
     question: string;
     knowledgeStatus?: KnowledgeStatusLike | null;
@@ -82,6 +177,14 @@ export class ConsciousOrchestrator {
       : { qualifies: false, threadAction: 'ignore' as const };
 
     if (latestReaction?.kind === 'topic_shift') {
+      preRouteDecision = { qualifies: true, threadAction: 'reset' };
+    }
+
+    if (
+      preRouteDecision.threadAction === 'continue'
+      && currentReasoningThread
+      && !this.isTopicallyCompatibleWithThread(input.question, currentReasoningThread)
+    ) {
       preRouteDecision = { qualifies: true, threadAction: 'reset' };
     }
 

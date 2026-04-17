@@ -96,6 +96,12 @@ describe('PredictivePrefetcher', () => {
     assert.ok(embedCalls.length > 0);
   });
 
+  it('returns an empty embedding when no real embedding provider is registered', async () => {
+    const embedding = await prefetcher.getSemanticEmbedding('What about scale?');
+
+    assert.deepEqual(embedding, []);
+  });
+
   it('reuses rolling BM25 results until transcript revision changes', async () => {
     prefetcher.updateTranscriptSegments([
       {

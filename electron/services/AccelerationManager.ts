@@ -1,10 +1,11 @@
 import { PromptCompiler } from '../llm/PromptCompiler';
 import { StreamManager } from '../llm/StreamManager';
 import { EnhancedCache } from '../cache/EnhancedCache';
-import { ParallelContextAssembler, setEmbeddingProvider } from '../cache/ParallelContextAssembler';
+import { ParallelContextAssembler, setEmbeddingProvider, type EmbeddingProvider } from '../cache/ParallelContextAssembler';
 import { AdaptiveContextWindow } from '../conscious/AdaptiveContextWindow';
 import { ConsciousAccelerationOrchestrator } from '../conscious/ConsciousAccelerationOrchestrator';
 import { ANEEmbeddingProvider } from '../rag/providers/ANEEmbeddingProvider';
+import { LocalEmbeddingProvider } from '../rag/providers/LocalEmbeddingProvider';
 import { StealthManager } from '../stealth/StealthManager';
 import { getOptimizationFlags, isOptimizationActive } from '../config/optimizations';
 import { WorkerPool } from '../runtime/WorkerPool';
@@ -34,6 +35,7 @@ export interface AccelerationModules {
 }
 
 export class AccelerationManager {
+  private static sharedLocalEmbeddingProvider: LocalEmbeddingProvider | null = null;
   private promptCompiler: PromptCompiler;
   private enhancedCache: EnhancedCache<string, unknown>;
   private parallelAssembler: ParallelContextAssembler;
@@ -42,6 +44,12 @@ export class AccelerationManager {
   private consciousOrchestrator: ConsciousAccelerationOrchestrator;
   private workerPool: WorkerPool;
   private runtimeBudgetScheduler: RuntimeBudgetScheduler;
+  private externalEmbeddingProvider: EmbeddingProvider | null = null;
+  private localEmbeddingProvider: Pick<LocalEmbeddingProvider, 'embed'>;
+  private readonly localEmbeddingAdapter: EmbeddingProvider = {
+    embed: async (text: string): Promise<number[]> => this.localEmbeddingProvider.embed(text),
+    isInitialized: (): boolean => true,
+  };
 
   constructor() {
     const flags = getOptimizationFlags();
@@ -70,6 +78,10 @@ export class AccelerationManager {
       classifierLane: this.runtimeBudgetScheduler,
     });
     this.aneProvider = new ANEEmbeddingProvider();
+    if (!AccelerationManager.sharedLocalEmbeddingProvider) {
+      AccelerationManager.sharedLocalEmbeddingProvider = new LocalEmbeddingProvider();
+    }
+    this.localEmbeddingProvider = AccelerationManager.sharedLocalEmbeddingProvider;
   }
 
   setConsciousModeEnabled(enabled: boolean): void {
@@ -91,13 +103,26 @@ export class AccelerationManager {
   /**
    * Register ANE provider as the global embedding source
    */
-  private registerANEProvider(): void {
+  private registerEmbeddingProvider(): void {
     if (isOptimizationActive('useANEEmbeddings') && this.aneProvider.isInitialized()) {
       setEmbeddingProvider(this.aneProvider);
       console.log('[AccelerationManager] ANE provider registered for real embeddings');
-    } else {
-      setEmbeddingProvider(null);
+      return;
     }
+
+    if (this.externalEmbeddingProvider) {
+      setEmbeddingProvider(this.externalEmbeddingProvider);
+      console.log('[AccelerationManager] External embedding provider registered for semantic lookup');
+      return;
+    }
+
+    setEmbeddingProvider(this.localEmbeddingAdapter);
+    console.log('[AccelerationManager] Local embedding provider registered for semantic fallback');
+  }
+
+  setExternalEmbeddingProvider(provider: EmbeddingProvider | null): void {
+    this.externalEmbeddingProvider = provider;
+    this.registerEmbeddingProvider();
   }
 
   async initialize(): Promise<void> {
@@ -105,7 +130,7 @@ export class AccelerationManager {
       await this.aneProvider.initialize();
     }
 
-    this.registerANEProvider();
+    this.registerEmbeddingProvider();
     console.log('[AccelerationManager] Initialized with acceleration modules');
   }
 
