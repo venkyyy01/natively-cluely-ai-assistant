@@ -45,10 +45,14 @@ export function resolveMacosVirtualDisplayHelperPath(options: ResolveOptions = {
     path.join(cwd, 'stealth-projects/macos-full-stealth-helper/.build/debug/macos-full-stealth-helper'),
     path.join(cwd, 'stealth-projects/macos-full-stealth-helper/.build/arm64-apple-macosx/debug/macos-full-stealth-helper'),
     path.join(cwd, 'stealth-projects/macos-full-stealth-helper/.build/arm64-apple-macosx/release/macos-full-stealth-helper'),
+    path.join(cwd, 'stealth-projects/macos-full-stealth-helper/.build/x86_64-apple-macosx/debug/macos-full-stealth-helper'),
+    path.join(cwd, 'stealth-projects/macos-full-stealth-helper/.build/x86_64-apple-macosx/release/macos-full-stealth-helper'),
     path.join(cwd, 'stealth-projects/macos-full-stealth-helper/.build/release/macos-full-stealth-helper'),
     path.join(cwd, 'stealth-projects/macos-virtual-display-helper/.build/debug/stealth-virtual-display-helper'),
     path.join(cwd, 'stealth-projects/macos-virtual-display-helper/.build/arm64-apple-macosx/debug/stealth-virtual-display-helper'),
     path.join(cwd, 'stealth-projects/macos-virtual-display-helper/.build/arm64-apple-macosx/release/stealth-virtual-display-helper'),
+    path.join(cwd, 'stealth-projects/macos-virtual-display-helper/.build/x86_64-apple-macosx/debug/stealth-virtual-display-helper'),
+    path.join(cwd, 'stealth-projects/macos-virtual-display-helper/.build/x86_64-apple-macosx/release/stealth-virtual-display-helper'),
     path.join(cwd, 'stealth-projects/macos-virtual-display-helper/.build/release/stealth-virtual-display-helper'),
   ];
 

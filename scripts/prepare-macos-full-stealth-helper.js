@@ -1,6 +1,6 @@
 const fs = require('fs');
 const path = require('path');
-const { execFileSync } = require('child_process');
+const { execFileSync, spawnSync } = require('child_process');
 
 const root = path.resolve(__dirname, '..');
 const defaultPackageDir = path.join(root, 'stealth-projects', 'macos-full-stealth-helper');
@@ -18,6 +18,20 @@ function pathExists(candidate) {
   } catch {
     return false;
   }
+}
+
+function isTruthyFlag(value) {
+  if (typeof value !== 'string') {
+    return false;
+  }
+
+  return /^(1|true|yes|on)$/i.test(value.trim());
+}
+
+function commandExists(command, options = {}) {
+  const spawn = options.spawn ?? spawnSync;
+  const result = spawn(command, ['--version'], { stdio: 'ignore' });
+  return !result.error;
 }
 
 function findBuiltBinary(packageDir, configuration) {
@@ -124,23 +138,55 @@ function prepareMacosFullStealthHelper(options = {}) {
   const shouldBuild = options.shouldBuild ?? true;
   const shouldCodesign = options.shouldCodesign ?? process.env.SKIP_CODESIGN !== '1';
   const entitlementsPath = options.entitlementsPath ?? defaultEntitlementsPath;
+  const requireHelper = options.requireHelper ?? isTruthyFlag(process.env.NATIVELY_REQUIRE_FULL_STEALTH_HELPER ?? '');
+  const commandExistsFn = options.commandExists ?? commandExists;
+
+  const skipWithoutHelper = (reason) => {
+    if (requireHelper) {
+      throw new Error(reason);
+    }
+
+    logFn(`Warning: ${reason}. Continuing without the full stealth helper bundle.`);
+    return {
+      skipped: true,
+      reason,
+    };
+  };
 
   if (platform !== 'darwin') {
     logFn('Skipping helper build on non-macOS host');
     return { skipped: true };
   }
 
+  let builtBinary = options.builtBinary ?? findBuiltBinary(packageDir, configuration);
+
   if (shouldBuild) {
-    logFn(`Building macOS full stealth helper (${configuration})`);
-    execFile('swift', ['build', '-c', configuration, '--package-path', packageDir], {
-      cwd: root,
-      stdio: 'inherit',
-    });
+    if (!commandExistsFn('swift')) {
+      if (!builtBinary) {
+        return skipWithoutHelper('Swift toolchain unavailable; unable to build the macOS full stealth helper');
+      }
+
+      logFn('Swift toolchain unavailable; using existing macOS full stealth helper build output');
+    } else {
+      try {
+        logFn(`Building macOS full stealth helper (${configuration})`);
+        execFile('swift', ['build', '-c', configuration, '--package-path', packageDir], {
+          cwd: root,
+          stdio: 'inherit',
+        });
+      } catch (error) {
+        if (!builtBinary) {
+          return skipWithoutHelper(`Swift build failed: ${error instanceof Error ? error.message : String(error)}`);
+        }
+
+        logFn(`Warning: swift build failed, using existing helper binary: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
   }
 
-  const builtBinary = options.builtBinary ?? findBuiltBinary(packageDir, configuration);
+  builtBinary = options.builtBinary ?? findBuiltBinary(packageDir, configuration) ?? builtBinary;
   if (!builtBinary) {
-    throw new Error(`Unable to locate built full stealth helper for configuration '${configuration}'`);
+    return skipWithoutHelper(`Unable to locate built full stealth helper for configuration '${configuration}'`);
   }
 
   const staged = stageBundle({
@@ -172,8 +218,10 @@ if (require.main === module) {
 }
 
 module.exports = {
+  commandExists,
   createInfoPlistContent,
   findBuiltBinary,
+  isTruthyFlag,
   stageBundle,
   signBundle,
   prepareMacosFullStealthHelper,

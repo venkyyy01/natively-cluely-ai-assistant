@@ -1,5 +1,5 @@
 const { execFileSync, spawnSync } = require('node:child_process');
-const { mkdtempSync, readFileSync, rmSync } = require('node:fs');
+const { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
@@ -128,15 +128,62 @@ function runBenchmarksForReleaseGate(options = {}) {
   }
 }
 
-function resolvePackagedHelperLaunchTarget(env = process.env) {
-  if (!isTruthyFlag(env.NATIVELY_RELEASE_GATE_VALIDATE_PACKAGED_HELPER ?? '')) {
+function findLatestPackagedAppBundle(cwd = process.cwd(), env = process.env, options = {}) {
+  const fileExists = options.existsSync ?? existsSync;
+  const readDirectory = options.readdirSync ?? readdirSync;
+  const readStats = options.statSync ?? statSync;
+  const releaseDir = env.NATIVELY_RELEASE_GATE_RELEASE_DIR?.trim() || path.join(cwd, 'release');
+  if (!fileExists(releaseDir)) {
     return null;
   }
 
-  const appBundle = env.NATIVELY_RELEASE_GATE_APP_BUNDLE?.trim();
+  const appBundles = [];
+  const pendingDirs = [releaseDir];
+
+  while (pendingDirs.length > 0) {
+    const currentDir = pendingDirs.pop();
+    const entries = readDirectory(currentDir, { withFileTypes: true });
+
+    for (const entry of entries) {
+      const fullPath = path.join(currentDir, entry.name);
+      if (entry.isDirectory()) {
+        if (entry.name.endsWith('.app')) {
+          appBundles.push(fullPath);
+          continue;
+        }
+
+        pendingDirs.push(fullPath);
+      }
+    }
+  }
+
+  if (appBundles.length === 0) {
+    return null;
+  }
+
+  appBundles.sort((left, right) => readStats(right).mtimeMs - readStats(left).mtimeMs);
+  return appBundles[0];
+}
+
+function resolvePackagedHelperLaunchTarget(env = process.env, options = {}) {
+  const explicitValidationRequested = isTruthyFlag(env.NATIVELY_RELEASE_GATE_VALIDATE_PACKAGED_HELPER ?? '');
+  const allowAutoDiscovery = !isTruthyFlag(env.NATIVELY_RELEASE_GATE_SKIP_PACKAGED_HELPER_VALIDATION ?? '');
+  const platform = options.platform ?? process.platform;
+  const discoverPackagedAppBundle = options.discoverPackagedAppBundle ?? findLatestPackagedAppBundle;
+  const cwd = options.cwd ?? process.cwd();
+
+  let appBundle = env.NATIVELY_RELEASE_GATE_APP_BUNDLE?.trim() || '';
+  if (!appBundle && allowAutoDiscovery && platform === 'darwin') {
+    appBundle = discoverPackagedAppBundle(cwd, env) ?? '';
+  }
+
+  if (!explicitValidationRequested && !appBundle) {
+    return null;
+  }
+
   if (!appBundle) {
     throw new Error(
-      'NATIVELY_RELEASE_GATE_APP_BUNDLE is required when NATIVELY_RELEASE_GATE_VALIDATE_PACKAGED_HELPER=1',
+      'NATIVELY_RELEASE_GATE_APP_BUNDLE is required when packaged helper validation is explicitly enabled',
     );
   }
 
@@ -196,7 +243,9 @@ function runReleaseGate(options = {}) {
   const baselineMetrics = baselineMetricsReader(options.cwd ?? process.cwd());
   assertMetricsWithinGate(currentMetrics, baselineMetrics, env);
 
-  const packagedHelperLaunchTarget = resolvePackagedHelperLaunchTarget(env);
+  const packagedHelperLaunchTarget = resolvePackagedHelperLaunchTarget(env, {
+    cwd: options.cwd,
+  });
   if (packagedHelperLaunchTarget) {
     helperValidator(packagedHelperLaunchTarget, {
       env,
@@ -221,6 +270,7 @@ module.exports = {
   assertMetricsShape,
   assertMetricsWithinGate,
   buildSloThresholds,
+  findLatestPackagedAppBundle,
   readBaselineMetrics,
   resolvePackagedHelperLaunchTarget,
   runBenchmarksForReleaseGate,

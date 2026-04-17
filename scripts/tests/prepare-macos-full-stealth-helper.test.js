@@ -7,6 +7,7 @@ const test = require('node:test');
 const repoRoot = path.resolve(__dirname, '..', '..');
 const packageJson = require(path.join(repoRoot, 'package.json'));
 const {
+  prepareMacosFullStealthHelper,
   createInfoPlistContent,
   findBuiltBinary,
   stageBundle,
@@ -39,6 +40,34 @@ test('prepare-macos-full-stealth-helper locates architecture-specific build outp
   fs.writeFileSync(archSpecific, 'binary');
 
   assert.equal(findBuiltBinary(tempDir, 'release'), archSpecific);
+});
+
+test('prepare-macos-full-stealth-helper skips gracefully when Swift is unavailable and no existing binary is present', () => {
+  const result = prepareMacosFullStealthHelper({
+    platform: 'darwin',
+    packageDir: '/tmp/helper-package',
+    shouldBuild: true,
+    shouldCodesign: false,
+    commandExists: () => false,
+    logFn: () => {},
+  });
+
+  assert.equal(result.skipped, true);
+  assert.match(result.reason ?? '', /Swift toolchain unavailable/);
+});
+
+test('prepare-macos-full-stealth-helper can require Swift availability explicitly', () => {
+  assert.throws(() => {
+    prepareMacosFullStealthHelper({
+      platform: 'darwin',
+      packageDir: '/tmp/helper-package',
+      shouldBuild: true,
+      shouldCodesign: false,
+      requireHelper: true,
+      commandExists: () => false,
+      logFn: () => {},
+    });
+  }, /Swift toolchain unavailable/);
 });
 
 test('prepare-macos-full-stealth-helper plist content declares an application XPC service', () => {

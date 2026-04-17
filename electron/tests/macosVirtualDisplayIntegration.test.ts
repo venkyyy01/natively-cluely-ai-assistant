@@ -54,6 +54,17 @@ test('resolveMacosVirtualDisplayHelperPath falls back to the local Swift build o
   assert.match(resolved ?? '', /stealth-virtual-display-helper$/);
 });
 
+test('resolveMacosVirtualDisplayHelperPath resolves Intel full stealth helper build outputs', () => {
+  const resolved = resolveMacosVirtualDisplayHelperPath({
+    env: {},
+    cwd: '/workspace',
+    pathExists: (candidate) => candidate.endsWith('/stealth-projects/macos-full-stealth-helper/.build/x86_64-apple-macosx/release/macos-full-stealth-helper'),
+  });
+
+  assert.match(resolved ?? '', /macos-full-stealth-helper$/);
+  assert.match(resolved ?? '', /x86_64-apple-macosx\/release/);
+});
+
 test('resolveMacosVirtualDisplayHelperPath returns null when no candidates exist', () => {
   const resolved = resolveMacosVirtualDisplayHelperPath({
     env: {},

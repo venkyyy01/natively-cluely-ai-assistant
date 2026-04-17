@@ -3,6 +3,7 @@ const test = require('node:test');
 
 const {
   assertMetricsWithinGate,
+  findLatestPackagedAppBundle,
   resolvePackagedHelperLaunchTarget,
   runReleaseGate,
   validatePackagedHelperLaunch,
@@ -78,6 +79,57 @@ test('resolvePackagedHelperLaunchTarget infers the packaged app binary path', ()
     appBundle: '/Applications/Natively.app',
     appBinary: '/Applications/Natively.app/Contents/MacOS/Natively',
   });
+});
+
+test('findLatestPackagedAppBundle returns the newest packaged app under release', () => {
+  const cwd = '/workspace';
+  const releaseDir = '/workspace/release';
+  const appPaths = {
+    [releaseDir]: { entries: ['mac-old', 'mac-new'] },
+    '/workspace/release/mac-old': { entries: ['Natively.app'] },
+    '/workspace/release/mac-new': { entries: ['Natively.app'] },
+    '/workspace/release/mac-old/Natively.app': { mtimeMs: 1_000 },
+    '/workspace/release/mac-new/Natively.app': { mtimeMs: 2_000 },
+  };
+
+  const appBundle = findLatestPackagedAppBundle(cwd, {}, {
+    existsSync: (candidate) => Boolean(appPaths[candidate]),
+    readdirSync: (candidate) => {
+      const record = appPaths[candidate];
+      return (record?.entries ?? []).map((entry) => ({
+        name: entry,
+        isDirectory: () => true,
+        isFile: () => false,
+      }));
+    },
+    statSync: (candidate) => ({ mtimeMs: appPaths[candidate]?.mtimeMs ?? 0 }),
+  });
+
+  assert.equal(appBundle, '/workspace/release/mac-new/Natively.app');
+});
+
+test('resolvePackagedHelperLaunchTarget auto-discovers a packaged app on macOS', () => {
+  const target = resolvePackagedHelperLaunchTarget({}, {
+    cwd: '/workspace',
+    platform: 'darwin',
+    discoverPackagedAppBundle: () => '/workspace/release/mac/Natively.app',
+  });
+
+  assert.deepEqual(target, {
+    appBundle: '/workspace/release/mac/Natively.app',
+    appBinary: '/workspace/release/mac/Natively.app/Contents/MacOS/Natively',
+  });
+});
+
+test('resolvePackagedHelperLaunchTarget still fails clearly when validation is explicitly required without an app bundle', () => {
+  assert.throws(() => {
+    resolvePackagedHelperLaunchTarget({
+      NATIVELY_RELEASE_GATE_VALIDATE_PACKAGED_HELPER: '1',
+    }, {
+      platform: 'darwin',
+      discoverPackagedAppBundle: () => null,
+    });
+  }, /packaged helper validation is explicitly enabled/);
 });
 
 test('validatePackagedHelperLaunch sources build-and-install.sh in library mode', () => {
