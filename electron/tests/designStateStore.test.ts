@@ -60,3 +60,24 @@ test('DesignStateStore captures structured reasoning facets and restores from pe
   assert.match(block, /FAILURE_MODES:/);
   assert.match(block, /SCALING_PLAN:/);
 });
+
+test('DesignStateStore enforces a global cap across multi-facet entries and records overflow stats', () => {
+  const store = new DesignStateStore();
+  const now = Date.now();
+
+  for (let index = 0; index < 80; index += 1) {
+    store.noteInterviewerTurn({
+      transcript: `How would you design requirement assumption architecture api schema tradeoff scale shard failure metric open question number ${index}?`,
+      timestamp: now + index,
+      phase: 'high_level_design',
+    });
+  }
+
+  const stats = store.getStorageStats();
+  const snapshot = store.getPersistenceSnapshot();
+
+  assert.equal(stats.entryCount <= stats.maxTotalEntries, true);
+  assert.equal(snapshot.entries.length <= stats.maxTotalEntries, true);
+  assert.equal(stats.overflowCount > 0, true);
+  assert.equal(stats.lastOverflowAt > 0, true);
+});

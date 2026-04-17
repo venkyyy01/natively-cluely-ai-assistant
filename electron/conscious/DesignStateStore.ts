@@ -35,6 +35,8 @@ export interface PersistedDesignStateState {
   currentObjective: string | null;
   updatedAt: number;
   entries: DesignStateEntry[];
+  overflowCount?: number;
+  lastOverflowAt?: number;
 }
 
 export interface DesignStateRetrievalEntry {
@@ -44,6 +46,13 @@ export interface DesignStateRetrievalEntry {
   phase?: InterviewPhase;
   boost: number;
   source: DesignStateSource;
+}
+
+export interface DesignStateStoreStats {
+  entryCount: number;
+  maxTotalEntries: number;
+  overflowCount: number;
+  lastOverflowAt: number;
 }
 
 const FACET_ORDER: DesignStateFacet[] = [
@@ -86,6 +95,7 @@ const FACET_BOOSTS: Record<DesignStateFacet, number> = {
 };
 
 const MAX_FACET_ENTRIES = 14;
+const MAX_TOTAL_ENTRIES = 100;
 
 function normalizeText(value: string): string {
   return value.trim().replace(/\s+/g, ' ');
@@ -220,11 +230,15 @@ export class DesignStateStore {
   private currentObjective: string | null = null;
   private updatedAt: number = 0;
   private entries: DesignStateEntry[] = [];
+  private overflowCount = 0;
+  private lastOverflowAt = 0;
 
   reset(): void {
     this.currentObjective = null;
     this.updatedAt = 0;
     this.entries = [];
+    this.overflowCount = 0;
+    this.lastOverflowAt = 0;
   }
 
   noteInterviewerTurn(input: {
@@ -464,6 +478,8 @@ export class DesignStateStore {
       currentObjective: this.currentObjective,
       updatedAt: this.updatedAt,
       entries: this.entries.map((entry) => ({ ...entry, keywords: [...entry.keywords] })),
+      overflowCount: this.overflowCount,
+      lastOverflowAt: this.lastOverflowAt,
     };
   }
 
@@ -475,6 +491,8 @@ export class DesignStateStore {
 
     this.currentObjective = snapshot.currentObjective ?? null;
     this.updatedAt = snapshot.updatedAt ?? 0;
+    this.overflowCount = snapshot.overflowCount ?? 0;
+    this.lastOverflowAt = snapshot.lastOverflowAt ?? 0;
     this.entries = (snapshot.entries || []).map((entry) => ({
       ...entry,
       text: normalizeText(entry.text),
@@ -482,6 +500,16 @@ export class DesignStateStore {
       keywords: entry.keywords?.length ? Array.from(new Set(entry.keywords)) : tokenize(entry.text),
       boost: typeof entry.boost === 'number' ? entry.boost : FACET_BOOSTS[entry.facet] ?? 0.15,
     }));
+    this.trimGlobalEntries(false);
+  }
+
+  getStorageStats(): DesignStateStoreStats {
+    return {
+      entryCount: this.entries.length,
+      maxTotalEntries: MAX_TOTAL_ENTRIES,
+      overflowCount: this.overflowCount,
+      lastOverflowAt: this.lastOverflowAt,
+    };
   }
 
   private addEntry(input: {
@@ -522,6 +550,7 @@ export class DesignStateStore {
 
     this.updatedAt = Math.max(this.updatedAt, input.timestamp);
     this.trimFacet(input.facet);
+    this.trimGlobalEntries();
   }
 
   private trimFacet(facet: DesignStateFacet): void {
@@ -540,5 +569,47 @@ export class DesignStateStore {
     );
 
     this.entries = this.entries.filter((entry) => entry.facet !== facet || retain.has(`${entry.facet}:${entry.normalized}`));
+  }
+
+  private trimGlobalEntries(emitAlert: boolean = true): void {
+    if (this.entries.length <= MAX_TOTAL_ENTRIES) {
+      return;
+    }
+
+    const before = this.entries.length;
+    const sourceBoost: Record<DesignStateSource, number> = {
+      pinned: 0.4,
+      constraint: 0.25,
+      reasoning: 0.15,
+      interviewer: 0,
+    };
+    const retain = new Set(
+      [...this.entries]
+        .sort((left, right) => {
+          const leftScore = left.boost + sourceBoost[left.source];
+          const rightScore = right.boost + sourceBoost[right.source];
+          return rightScore - leftScore || right.timestamp - left.timestamp;
+        })
+        .slice(0, MAX_TOTAL_ENTRIES)
+        .map((entry) => `${entry.facet}:${entry.normalized}`)
+    );
+
+    this.entries = this.entries.filter((entry) => retain.has(`${entry.facet}:${entry.normalized}`));
+    const removed = before - this.entries.length;
+    if (removed <= 0) {
+      return;
+    }
+
+    const previousOverflowCount = this.overflowCount;
+    this.overflowCount += removed;
+    this.lastOverflowAt = Date.now();
+    if (emitAlert && (previousOverflowCount === 0 || this.overflowCount % 25 === 0)) {
+      console.warn('[DesignStateStore] Global entry cap applied:', {
+        removed,
+        entryCount: this.entries.length,
+        maxTotalEntries: MAX_TOTAL_ENTRIES,
+        overflowCount: this.overflowCount,
+      });
+    }
   }
 }

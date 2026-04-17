@@ -12,7 +12,8 @@ export { QuestionReactionClassifier, type QuestionReaction, type QuestionReactio
 export { AnswerHypothesisStore, type AnswerHypothesis, type PersistedAnswerHypothesisState } from './AnswerHypothesisStore';
 export { ConsciousAnswerPlanner, type ConsciousAnswerPlan, type ConsciousAnswerShape } from './ConsciousAnswerPlanner';
 export { ConsciousSemanticFactStore, type ConsciousSemanticFact } from './ConsciousSemanticFactStore';
-export { DesignStateStore, type DesignStateEntry, type DesignStateFacet, type DesignStateRetrievalEntry, type PersistedDesignStateState } from './DesignStateStore';
+export { sanitizeProfileData, type ProfileDataSanitizationResult, type ProfileDataSanitizerOptions } from './ProfileDataSanitizer';
+export { DesignStateStore, type DesignStateEntry, type DesignStateFacet, type DesignStateRetrievalEntry, type DesignStateStoreStats, type PersistedDesignStateState } from './DesignStateStore';
 export { ConsciousRetrievalOrchestrator, type ConsciousRetrievalPack } from './ConsciousRetrievalOrchestrator';
 export { ConsciousContextComposer, type ConsciousContextComposition } from './ConsciousContextComposer';
 export { ConsciousIntentService, type ResolvedIntentResult, type ConsciousIntentResolution } from './ConsciousIntentService';
@@ -21,7 +22,19 @@ export { ConsciousResponseCoordinator } from './ConsciousResponseCoordinator';
 export { ConsciousProvenanceVerifier, type ConsciousProvenanceVerdict } from './ConsciousProvenanceVerifier';
 export { ConsciousVerifier, type ConsciousVerificationResult } from './ConsciousVerifier';
 export { ConsciousVerifierLLM } from './ConsciousVerifierLLM';
-export { runConsciousEvalHarness, getDefaultConsciousEvalScenarios, type ConsciousEvalScenario, type ConsciousEvalScenarioResult, type ConsciousEvalSummary } from './ConsciousEvalHarness';
+export {
+  runConsciousEvalHarness,
+  runConsciousReplayHarness,
+  getDefaultConsciousEvalScenarios,
+  getDefaultConsciousReplayScenarios,
+  type ConsciousEvalScenario,
+  type ConsciousEvalScenarioResult,
+  type ConsciousEvalSummary,
+  type ConsciousReplayContextItem,
+  type ConsciousReplayScenario,
+  type ConsciousReplayScenarioResult,
+  type ConsciousReplayTrace,
+} from './ConsciousEvalHarness';
 export { FallbackExecutor } from './FallbackExecutor';
 export { extractConstraints, type ExtractedConstraint, type ConstraintType } from './ConstraintExtractor';
 export { detectQuestion, type QuestionDetection, type QuestionType } from './QuestionDetector';

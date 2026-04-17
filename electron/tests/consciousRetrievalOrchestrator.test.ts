@@ -184,3 +184,30 @@ test('ConsciousRetrievalOrchestrator buildPack skips guardrail refusal assistant
   assert.ok(!pack.combinedContext.includes("I can't share that information."));
   assert.ok(pack.combinedContext.includes('[USER] I would use Redis with short TTL and proactive invalidation.'));
 });
+
+test('ConsciousRetrievalOrchestrator buildPack deduplicates live RAG segments already grounded elsewhere', () => {
+  const now = Date.now();
+  const repeated = 'Use Redis for counters';
+  const orchestrator = new ConsciousRetrievalOrchestrator({
+    getFormattedContext: () => '',
+    getContext: () => [
+      {
+        role: 'user',
+        text: repeated,
+        timestamp: now - 1000,
+      },
+    ],
+    getConsciousEvidenceContext: () => `<conscious_evidence>\nLATEST_SUGGESTED_ANSWER: ${repeated}\n</conscious_evidence>`,
+    getConsciousLongMemoryContext: () => '',
+    getActiveReasoningThread: () => null,
+    getLatestConsciousResponse: () => null,
+    getLatestQuestionReaction: () => null,
+    getLatestAnswerHypothesis: () => null,
+  });
+
+  const pack = orchestrator.buildPack({ question: 'How would you rate limit writes?' });
+  const occurrences = pack.combinedContext.match(/Use Redis for counters/g) || [];
+
+  assert.equal(occurrences.length, 1);
+  assert.ok(!pack.combinedContext.includes('<conscious_live_rag>'));
+});

@@ -48,11 +48,6 @@ import {
     parseConsciousModeAnswer,
 } from '../lib/consciousMode';
 import {
-    classifyConsciousModeQuestion,
-    createEmptyConsciousModeResponse,
-    type ReasoningThread,
-} from '../../electron/ConsciousMode';
-import {
     clearActiveStreamingIdsByMessageId,
     createMessageId,
     getActiveStreamingId,
@@ -72,6 +67,13 @@ interface Message {
     isCode?: boolean;
     intent?: string;
 }
+
+type ConsciousThreadView = {
+    rootQuestion: string;
+    lastQuestion: string;
+    followUpCount: number;
+    updatedAt: number;
+};
 
 const MAX_ROLLING_TRANSCRIPT_CHARS = 1200;
 const MIN_OVERLAY_WIDTH = 420;
@@ -169,7 +171,7 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
 
     const contentRef = useRef<HTMLDivElement>(null);
     const scrollContainerRef = useRef<HTMLDivElement>(null);
-    const activeConsciousThreadRef = useRef<ReasoningThread | null>(null);
+    const activeConsciousThreadRef = useRef<ConsciousThreadView | null>(null);
     // const settingsButtonRef = useRef<HTMLButtonElement>(null);
 
     // Latent Context State (Screenshots attached but not sent)
@@ -613,8 +615,8 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
 
         cleanups.push(window.electronAPI.onIntelligenceSuggestedAnswer((data) => {
             setIsProcessing(false);
-            const inferredRoute = classifyConsciousModeQuestion(data.question, activeConsciousThreadRef.current);
-            const threadAction = data.metadata?.threadAction ?? inferredRoute.threadAction;
+            const authoritativeThreadState = data.metadata?.threadState;
+            const threadAction = authoritativeThreadState?.threadAction ?? data.metadata?.threadAction ?? 'ignore';
             const assistRender = classifyAssistRender({
                 answerText: data.answer,
                 threadAction,
@@ -625,27 +627,10 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
                 source_intent: 'what_to_answer',
             });
 
-            if (data.metadata?.thread) {
-                activeConsciousThreadRef.current = {
-                    rootQuestion: data.metadata.thread.rootQuestion,
-                    lastQuestion: data.metadata.thread.lastQuestion,
-                    response: createEmptyConsciousModeResponse(),
-                    followUpCount: data.metadata.thread.followUpCount,
-                    updatedAt: data.metadata.thread.updatedAt,
-                };
-            } else if (data.metadata?.thread === null) {
-                activeConsciousThreadRef.current = null;
-            } else if (assistRender.output_variant === 'conscious_mode') {
-                const currentThread = activeConsciousThreadRef.current;
-                const continuesThread = Boolean(threadAction === 'continue' && currentThread);
-
-                activeConsciousThreadRef.current = {
-                    rootQuestion: continuesThread && currentThread ? currentThread.rootQuestion : data.question,
-                    lastQuestion: data.question,
-                    response: createEmptyConsciousModeResponse(),
-                    followUpCount: continuesThread && currentThread ? currentThread.followUpCount + 1 : 0,
-                    updatedAt: Date.now(),
-                };
+            if (authoritativeThreadState) {
+                activeConsciousThreadRef.current = authoritativeThreadState.activeThread;
+            } else if (data.metadata?.thread !== undefined) {
+                activeConsciousThreadRef.current = data.metadata.thread;
             } else {
                 activeConsciousThreadRef.current = null;
             }

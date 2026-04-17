@@ -14,11 +14,25 @@ interface SpeculativeAnswerEntry {
   transcriptRevision: number;
   generation: number;
   startedAt: number;
-  promise: Promise<string | null>;
+  embedding: number[];
+  chunks: string[];
+  partialText: string;
+  completed: boolean;
+  firstChunkPromise: Promise<void>;
+  resolveFirstChunk: () => void;
+  completionPromise: Promise<string | null>;
   result?: string | null;
 }
 
-export type SpeculativeExecutor = (query: string, transcriptRevision: number) => Promise<string | null>;
+export type SpeculativeExecutor = (query: string, transcriptRevision: number) => AsyncIterableIterator<string>;
+
+export interface SpeculativeAnswerPreview {
+  key: string;
+  query: string;
+  chunks: string[];
+  text: string;
+  complete: boolean;
+}
 
 export interface ConsciousAccelerationOptions {
   maxPrefetchPredictions?: number;
@@ -221,48 +235,12 @@ export class ConsciousAccelerationOrchestrator {
   }
 
   async getSpeculativeAnswer(query: string, transcriptRevision: number, waitMs: number = 0): Promise<string | null> {
-    if (!this.enabled) {
+    const preview = await this.getSpeculativeAnswerPreview(query, transcriptRevision, waitMs);
+    if (!preview) {
       return null;
     }
 
-    const key = this.buildSpeculativeKey(query, transcriptRevision);
-    const entry = this.speculativeAnswerEntries.get(key);
-    if (!entry) {
-      return null;
-    }
-
-    if (entry.result !== undefined) {
-      this.speculativeAnswerEntries.delete(key);
-      if (entry.result && this.lastPauseDecision) {
-        this.pauseThresholdTuner.recordSuccessfulReuse(this.lastPauseDecision.confidence);
-        this.pauseDetector.updateConfig(this.pauseThresholdTuner.getConfig());
-        this.lastPauseDecision = null;
-      }
-      return entry.result ?? null;
-    }
-
-    if (waitMs <= 0) {
-      return null;
-    }
-
-    const timeoutSentinel = Symbol('speculative-timeout');
-    const result = await Promise.race([
-      entry.promise,
-      new Promise<symbol>((resolve) => setTimeout(() => resolve(timeoutSentinel), waitMs)),
-    ]);
-
-    if (result === timeoutSentinel) {
-      return null;
-    }
-
-    this.speculativeAnswerEntries.delete(key);
-    const resolved = (result as string | null) ?? null;
-    if (resolved && this.lastPauseDecision) {
-      this.pauseThresholdTuner.recordSuccessfulReuse(this.lastPauseDecision.confidence);
-      this.pauseDetector.updateConfig(this.pauseThresholdTuner.getConfig());
-      this.lastPauseDecision = null;
-    }
-    return resolved;
+    return this.finalizeSpeculativeAnswer(preview.key, waitMs > 0 ? Math.max(waitMs, 2000) : 0);
   }
 
   clearState(): void {
@@ -284,26 +262,70 @@ export class ConsciousAccelerationOrchestrator {
     return `${transcriptRevision}:${this.normalizeQuery(query)}`;
   }
 
-  private deriveSpeculativeCandidate(): { query: string; transcriptRevision: number } | null {
+  private cosineSimilarity(a: number[], b: number[]): number {
+    let dotProduct = 0;
+    let normA = 0;
+    let normB = 0;
+
+    for (let index = 0; index < Math.min(a.length, b.length); index += 1) {
+      dotProduct += a[index] * b[index];
+      normA += a[index] * a[index];
+      normB += b[index] * b[index];
+    }
+
+    if (normA === 0 || normB === 0) {
+      return 0;
+    }
+
+    return dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
+  }
+
+  private async deriveSpeculativeCandidates(): Promise<Array<{ query: string; transcriptRevision: number; embedding: number[] }>> {
     const query = this.latestInterviewerTranscript.trim();
     if (!query) {
-      return null;
+      return [];
     }
 
     const detection = detectQuestion(query);
     const wordCount = query.split(/\s+/).filter(Boolean).length;
     if (!detection.isQuestion && wordCount < 5) {
-      return null;
+      return [];
     }
 
     if (query.length < 12) {
+      return [];
+    }
+
+    const candidateQueries = this.prefetcher.getCandidateQueries(query, 3);
+    return Promise.all(candidateQueries.map(async (candidate) => ({
+      query: candidate.query,
+      transcriptRevision: this.latestTranscriptRevision,
+      embedding: await this.prefetcher.getSemanticEmbedding(candidate.query),
+    })));
+  }
+
+  private async selectSpeculativeEntry(query: string, transcriptRevision: number): Promise<SpeculativeAnswerEntry | null> {
+    const entries = Array.from(this.speculativeAnswerEntries.values()).filter((entry) => entry.transcriptRevision === transcriptRevision);
+    if (entries.length === 0) {
       return null;
     }
 
-    return {
-      query,
-      transcriptRevision: this.latestTranscriptRevision,
-    };
+    const exact = entries.find((entry) => this.normalizeQuery(entry.query) === this.normalizeQuery(query));
+    if (exact) {
+      return exact;
+    }
+
+    const queryEmbedding = await this.prefetcher.getSemanticEmbedding(query);
+    let bestMatch: { entry: SpeculativeAnswerEntry; similarity: number } | null = null;
+
+    for (const entry of entries) {
+      const similarity = this.cosineSimilarity(queryEmbedding, entry.embedding);
+      if (!bestMatch || similarity > bestMatch.similarity) {
+        bestMatch = { entry, similarity };
+      }
+    }
+
+    return bestMatch && bestMatch.similarity >= 0.72 ? bestMatch.entry : null;
   }
 
   private async maybeStartSpeculativeAnswer(): Promise<void> {
@@ -311,48 +333,130 @@ export class ConsciousAccelerationOrchestrator {
       return;
     }
 
-    const candidate = this.deriveSpeculativeCandidate();
-    if (!candidate) {
-      return;
-    }
-
-    const key = this.buildSpeculativeKey(candidate.query, candidate.transcriptRevision);
-    if (this.speculativeAnswerEntries.has(key)) {
+    const candidates = await this.deriveSpeculativeCandidates();
+    if (candidates.length === 0) {
       return;
     }
 
     const generation = this.speculativeGeneration;
-    const entry: SpeculativeAnswerEntry = {
-      key,
-      query: candidate.query,
-      transcriptRevision: candidate.transcriptRevision,
-      generation,
-      startedAt: Date.now(),
-      promise: Promise.resolve<string | null>(null),
+
+    for (const candidate of candidates) {
+      const key = this.buildSpeculativeKey(candidate.query, candidate.transcriptRevision);
+      if (this.speculativeAnswerEntries.has(key)) {
+        continue;
+      }
+
+      let resolveFirstChunk = () => {};
+      const entry: SpeculativeAnswerEntry = {
+        key,
+        query: candidate.query,
+        transcriptRevision: candidate.transcriptRevision,
+        generation,
+        startedAt: Date.now(),
+        embedding: candidate.embedding,
+        chunks: [],
+        partialText: '',
+        completed: false,
+        firstChunkPromise: new Promise<void>((resolve) => {
+          resolveFirstChunk = resolve;
+        }),
+        resolveFirstChunk,
+        completionPromise: Promise.resolve<string | null>(null),
+      };
+
+      entry.completionPromise = (async (): Promise<string | null> => {
+        try {
+          const stream = this.speculativeExecutor!(candidate.query, candidate.transcriptRevision);
+          for await (const chunk of stream) {
+            if (generation !== this.speculativeGeneration || candidate.transcriptRevision !== this.latestTranscriptRevision) {
+              entry.result = null;
+              entry.completed = true;
+              entry.resolveFirstChunk();
+              return null;
+            }
+
+            if (chunk) {
+              entry.chunks.push(chunk);
+              entry.partialText += chunk;
+              entry.resolveFirstChunk();
+            }
+          }
+
+          const trimmed = entry.partialText.trim();
+          entry.completed = true;
+          entry.result = trimmed.length >= 5 ? trimmed : null;
+          entry.resolveFirstChunk();
+          return entry.result;
+        } catch (error: unknown) {
+          console.warn('[ConsciousAccelerationOrchestrator] Speculative answer generation failed:', error);
+          entry.completed = true;
+          entry.result = null;
+          entry.resolveFirstChunk();
+          return null;
+        }
+      })();
+
+      this.speculativeAnswerEntries.set(key, entry);
+    }
+  }
+
+  async getSpeculativeAnswerPreview(query: string, transcriptRevision: number, waitMs: number = 0): Promise<SpeculativeAnswerPreview | null> {
+    if (!this.enabled) {
+      return null;
+    }
+
+    const entry = await this.selectSpeculativeEntry(query, transcriptRevision);
+    if (!entry) {
+      return null;
+    }
+
+    if (!entry.completed && waitMs > 0) {
+      const timeoutSentinel = Symbol('speculative-preview-timeout');
+      await Promise.race([
+        entry.firstChunkPromise,
+        new Promise<symbol>((resolve) => setTimeout(() => resolve(timeoutSentinel), waitMs)),
+      ]);
+    }
+
+    const text = entry.result ?? entry.partialText;
+    if (!text) {
+      return null;
+    }
+
+    return {
+      key: entry.key,
+      query: entry.query,
+      chunks: [...entry.chunks],
+      text,
+      complete: entry.completed,
     };
+  }
 
-    entry.promise = this.speculativeExecutor(candidate.query, candidate.transcriptRevision)
-      .then((result) => {
-        if (generation !== this.speculativeGeneration) {
-          entry.result = null;
-          return null;
-        }
+  async finalizeSpeculativeAnswer(key: string, waitMs: number = 2000): Promise<string | null> {
+    const entry = this.speculativeAnswerEntries.get(key);
+    if (!entry) {
+      return null;
+    }
 
-        if (candidate.transcriptRevision !== this.latestTranscriptRevision) {
-          entry.result = null;
-          return null;
-        }
+    if (!entry.completed) {
+      const timeoutSentinel = Symbol('speculative-final-timeout');
+      const result = await Promise.race([
+        entry.completionPromise,
+        new Promise<symbol>((resolve) => setTimeout(() => resolve(timeoutSentinel), waitMs)),
+      ]);
+      if (result !== timeoutSentinel) {
+        entry.result = result as string | null;
+      }
+    }
 
-        entry.result = result;
-        return result;
-      })
-      .catch((error: unknown): string | null => {
-        console.warn('[ConsciousAccelerationOrchestrator] Speculative answer generation failed:', error);
-        entry.result = null;
-        return null;
-      });
-
-    this.speculativeAnswerEntries.set(key, entry);
+    this.speculativeAnswerEntries.delete(key);
+    const resolved = entry.result ?? (entry.partialText.trim() || null);
+    if (resolved && this.lastPauseDecision) {
+      this.pauseThresholdTuner.recordSuccessfulReuse(this.lastPauseDecision.confidence);
+      this.pauseDetector.updateConfig(this.pauseThresholdTuner.getConfig());
+      this.lastPauseDecision = null;
+    }
+    return resolved;
   }
 
   private invalidateSpeculation(recordOutcome: boolean): void {

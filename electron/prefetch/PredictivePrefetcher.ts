@@ -1,7 +1,7 @@
 import { EnhancedCache } from '../cache/EnhancedCache';
 import { InterviewPhase } from '../conscious/types';
 import { isOptimizationActive, getOptimizationFlags } from '../config/optimizations';
-import { computeBM25 } from '../cache/ParallelContextAssembler';
+import { computeBM25, getEmbeddingProvider } from '../cache/ParallelContextAssembler';
 import type { RuntimeBudgetScheduler } from '../runtime/RuntimeBudgetScheduler';
 
 export interface PrefetchedContext {
@@ -16,6 +16,11 @@ export interface PrefetchedContext {
 export interface PredictedFollowUp {
   query: string;
   embedding: number[];
+  confidence: number;
+}
+
+interface PredictedFollowUpDraft {
+  query: string;
   confidence: number;
 }
 
@@ -82,6 +87,9 @@ export class PredictivePrefetcher {
   private predictions: PredictedFollowUp[] = [];
   private silenceStartTime: number = 0;
   private transcriptSegments: Array<{ text: string; timestamp: number; speaker: string }> = [];
+  private transcriptRevision = 0;
+  private transcriptSignature = '';
+  private bm25Cache = new Map<string, Array<{ text: string; score: number; timestamp: number }>>();
   private readonly budgetScheduler?: Pick<RuntimeBudgetScheduler, 'shouldAdmitSpeculation'>;
 
   constructor(options: {
@@ -103,8 +111,22 @@ export class PredictivePrefetcher {
   /**
    * Update transcript segments for real context assembly
    */
-  updateTranscriptSegments(segments: Array<{ text: string; timestamp: number; speaker: string }>): void {
-    this.transcriptSegments = segments.slice(-50);
+  updateTranscriptSegments(segments: Array<{ text: string; timestamp: number; speaker: string }>, transcriptRevision?: number): void {
+    const trimmed = segments.slice(-50);
+    const signature = trimmed.map((segment) => `${segment.speaker}:${segment.timestamp}:${segment.text}`).join('\u0000');
+
+    if (typeof transcriptRevision === 'number') {
+      if (transcriptRevision !== this.transcriptRevision) {
+        this.transcriptRevision = transcriptRevision;
+        this.bm25Cache.clear();
+      }
+    } else if (signature !== this.transcriptSignature) {
+      this.transcriptRevision += 1;
+      this.bm25Cache.clear();
+    }
+
+    this.transcriptSignature = signature;
+    this.transcriptSegments = trimmed;
   }
 
   /**
@@ -140,10 +162,52 @@ export class PredictivePrefetcher {
     return this.predictions;
   }
 
+  getCandidateQueries(seedQuery?: string, limit: number = 3): PredictedFollowUpDraft[] {
+    const drafts = this.predictFollowUpDrafts();
+    const deduped: PredictedFollowUpDraft[] = [];
+    const seen = new Set<string>();
+
+    const pushCandidate = (candidate?: PredictedFollowUpDraft) => {
+      if (!candidate) {
+        return;
+      }
+
+      const normalized = candidate.query.trim().toLowerCase();
+      if (!normalized || seen.has(normalized)) {
+        return;
+      }
+
+      seen.add(normalized);
+      deduped.push(candidate);
+    };
+
+    if (seedQuery?.trim()) {
+      pushCandidate({ query: seedQuery.trim(), confidence: 0.98 });
+    }
+
+    for (const draft of drafts) {
+      pushCandidate(draft);
+      if (deduped.length >= limit) {
+        break;
+      }
+    }
+
+    return deduped.slice(0, limit);
+  }
+
+  async getSemanticEmbedding(text: string): Promise<number[]> {
+    const provider = getEmbeddingProvider();
+    if (provider?.isInitialized()) {
+      return provider.embed(text);
+    }
+
+    return this.fallbackSemanticEmbedding(text);
+  }
+
   private async startPrefetching(): Promise<void> {
     if (this.isUserSpeaking) return;
 
-    const predictions = this.predictFollowUps();
+    const predictions = await this.predictFollowUps();
     const flags = getOptimizationFlags();
     const admittedPredictions: PredictedFollowUp[] = [];
 
@@ -170,7 +234,16 @@ export class PredictivePrefetcher {
     this.predictions = admittedPredictions;
   }
 
-  private predictFollowUps(): PredictedFollowUp[] {
+  private async predictFollowUps(): Promise<PredictedFollowUp[]> {
+    const drafts = this.predictFollowUpDrafts();
+
+    return Promise.all(drafts.slice(0, 10).map(async (draft) => ({
+      ...draft,
+      embedding: await this.getSemanticEmbedding(draft.query),
+    })));
+  }
+
+  private predictFollowUpDrafts(): PredictedFollowUpDraft[] {
     const phasePredictions = PHASE_FOLLOWUP_PATTERNS[this.currentPhase] || [];
 
     const transcriptText = this.transcriptSegments
@@ -185,21 +258,42 @@ export class PredictivePrefetcher {
       .slice(0, 10)
       .map(query => ({
         query,
-        embedding: this.quickEmbed(query),
         confidence: this.estimateConfidence(query),
       }));
   }
 
-  private quickEmbed(text: string): number[] {
-    const hash = this.simpleHash(text);
-    const embedding = new Array(384).fill(0);
+  private normalizeSemanticToken(token: string): string {
+    const normalized = token.toLowerCase().replace(/[^a-z0-9]/g, '');
+    if (normalized.endsWith('ies') && normalized.length > 4) {
+      return `${normalized.slice(0, -3)}y`;
+    }
+    if (normalized.endsWith('ing') && normalized.length > 5) {
+      return normalized.slice(0, -3);
+    }
+    if (normalized.endsWith('es') && normalized.length > 4) {
+      return normalized.slice(0, -2);
+    }
+    if (normalized.endsWith('s') && normalized.length > 3) {
+      return normalized.slice(0, -1);
+    }
+    return normalized;
+  }
 
-    for (let i = 0; i < 5; i++) {
-      embedding[(hash + i * 7) % 384] = Math.sin((hash + i) / 10);
+  private fallbackSemanticEmbedding(text: string): number[] {
+    const embedding = new Array(384).fill(0);
+    const tokens = text
+      .split(/\s+/)
+      .map((token) => this.normalizeSemanticToken(token))
+      .filter((token) => token.length >= 2);
+
+    for (const token of tokens) {
+      const hash = this.simpleHash(token);
+      embedding[hash % 384] += 1;
+      embedding[(hash * 31) % 384] += 0.5;
     }
 
-    const norm = Math.sqrt(embedding.reduce((s, v) => s + v * v, 0));
-    return norm > 0 ? embedding.map(v => v / norm) : embedding;
+    const norm = Math.sqrt(embedding.reduce((sum, value) => sum + value * value, 0));
+    return norm > 0 ? embedding.map((value) => value / norm) : embedding;
   }
 
   private simpleHash(str: string): number {
@@ -242,7 +336,12 @@ export class PredictivePrefetcher {
     }
 
     try {
-      const bm25Results = await computeBM25(query, docs);
+      const cacheKey = `${this.transcriptRevision}:${query.trim().toLowerCase()}`;
+      let bm25Results = this.bm25Cache.get(cacheKey);
+      if (!bm25Results) {
+        bm25Results = await computeBM25(query, docs);
+        this.bm25Cache.set(cacheKey, bm25Results);
+      }
       const relevantContext = bm25Results
         .slice(0, 5)
         .map(r => ({
@@ -268,7 +367,8 @@ export class PredictivePrefetcher {
     relevantContext: Array<{ role: 'interviewer' | 'user' | 'assistant'; text: string; timestamp: number }>;
     phase: InterviewPhase;
   } | null> {
-    const cached = await this.prefetchCache.get(query, embedding);
+    const effectiveEmbedding = embedding ?? await this.getSemanticEmbedding(query);
+    const cached = await this.prefetchCache.get(query, effectiveEmbedding);
 
     if (cached) {
       return cached.context;

@@ -1,5 +1,43 @@
 export type ConsciousModeResponseMode = 'reasoning_first' | 'invalid';
 
+export const CONSCIOUS_MODE_SCHEMA_VERSION = 'conscious_mode_v1' as const;
+
+export const CONSCIOUS_MODE_RESPONSE_FIELDS = [
+  'schemaVersion',
+  'mode',
+  'openingReasoning',
+  'implementationPlan',
+  'tradeoffs',
+  'edgeCases',
+  'scaleConsiderations',
+  'pushbackResponses',
+  'likelyFollowUps',
+  'codeTransition',
+] as const;
+
+export const CONSCIOUS_MODE_JSON_RESPONSE_INSTRUCTIONS = `RESPONSE SCHEMA VERSION: ${CONSCIOUS_MODE_SCHEMA_VERSION}
+
+Return ONLY valid JSON with these canonical keys:
+{
+  "schemaVersion": "${CONSCIOUS_MODE_SCHEMA_VERSION}",
+  "mode": "reasoning_first",
+  "openingReasoning": "string",
+  "implementationPlan": ["string"],
+  "tradeoffs": ["string"],
+  "edgeCases": ["string"],
+  "scaleConsiderations": ["string"],
+  "pushbackResponses": ["string"],
+  "likelyFollowUps": ["string"],
+  "codeTransition": "string"
+}
+
+Canonical field rules:
+- schemaVersion SHOULD be "${CONSCIOUS_MODE_SCHEMA_VERSION}".
+- mode MUST be "reasoning_first".
+- openingReasoning is the first spoken sentence or two.
+- Array fields MUST be arrays of concise strings. Use [] when empty.
+- codeTransition MUST be a string. Use "" when no code bridge is needed.`;
+
 export interface ConsciousModeStructuredResponse {
   mode: ConsciousModeResponseMode;
   openingReasoning: string;
@@ -100,18 +138,69 @@ export function createEmptyConsciousModeResponse(mode: ConsciousModeResponseMode
   };
 }
 
-export function normalizeConsciousModeResponse(value: Partial<ConsciousModeStructuredResponse> | null | undefined): ConsciousModeStructuredResponse {
-  const mode = value?.mode === 'reasoning_first' ? 'reasoning_first' : 'invalid';
+function normalizePushbackResponses(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return normalizeList(value);
+  }
+
+  if (value && typeof value === 'object') {
+    return Object.entries(value as Record<string, unknown>)
+      .map(([concern, response]) => {
+        const normalizedResponse = normalizeText(response);
+        return normalizedResponse ? `${normalizeText(concern)}: ${normalizedResponse}` : '';
+      })
+      .filter(Boolean);
+  }
+
+  return normalizeList(value);
+}
+
+function normalizeCodeTransition(value: unknown, codeBlock: unknown): string {
+  const direct = normalizeText(value);
+  if (direct) {
+    return direct;
+  }
+
+  if (!codeBlock || typeof codeBlock !== 'object') {
+    return '';
+  }
+
+  const block = codeBlock as { language?: unknown; code?: unknown };
+  const code = normalizeText(block.code);
+  if (!code) {
+    return '';
+  }
+
+  const language = normalizeText(block.language);
+  return `Here is the code path I would walk through:\n\`\`\`${language}\n${code}\n\`\`\``;
+}
+
+export function normalizeConsciousModeResponse(value: (Partial<ConsciousModeStructuredResponse> & {
+  schemaVersion?: unknown;
+  spokenResponse?: unknown;
+  codeBlock?: unknown;
+  pushbackResponses?: unknown;
+}) | null | undefined): ConsciousModeStructuredResponse {
+  const hasCanonicalMode = value?.mode === 'reasoning_first';
+  const hasAdaptableLegacyPayload = Boolean(
+    normalizeText(value?.openingReasoning) ||
+    normalizeText(value?.spokenResponse) ||
+    normalizeList(value?.implementationPlan).length ||
+    normalizeList(value?.tradeoffs).length ||
+    normalizeCodeTransition(value?.codeTransition, value?.codeBlock)
+  );
+  const mode = hasCanonicalMode || hasAdaptableLegacyPayload ? 'reasoning_first' : 'invalid';
+  const openingReasoning = normalizeText(value?.openingReasoning) || normalizeText(value?.spokenResponse);
   return {
     mode,
-    openingReasoning: normalizeText(value?.openingReasoning),
+    openingReasoning,
     implementationPlan: normalizeList(value?.implementationPlan),
     tradeoffs: normalizeList(value?.tradeoffs),
     edgeCases: normalizeList(value?.edgeCases),
     scaleConsiderations: normalizeList(value?.scaleConsiderations),
-    pushbackResponses: normalizeList(value?.pushbackResponses),
+    pushbackResponses: normalizePushbackResponses(value?.pushbackResponses),
     likelyFollowUps: normalizeList(value?.likelyFollowUps),
-    codeTransition: normalizeText(value?.codeTransition),
+    codeTransition: normalizeCodeTransition(value?.codeTransition, value?.codeBlock),
   };
 }
 
@@ -176,32 +265,42 @@ export function mergeConsciousModeResponses(
 }
 
 function formatSection(label: string, values: string[]): string[] {
-  if (values.length === 0) {
-    return [];
-  }
-
   return [label, ...values.map(value => `- ${value}`)];
 }
 
-export function formatConsciousModeResponse(response: ConsciousModeStructuredResponse): string {
-  const lines: string[] = [];
+export function formatConsciousModeResponseChunks(response: ConsciousModeStructuredResponse): string[] {
+  const chunks: string[] = [];
 
   if (response.openingReasoning) {
-    lines.push(`Opening reasoning: ${response.openingReasoning}`);
+    chunks.push(`Opening reasoning: ${response.openingReasoning}`);
   }
 
-  lines.push(...formatSection('Implementation plan:', response.implementationPlan));
-  lines.push(...formatSection('Tradeoffs:', response.tradeoffs));
-  lines.push(...formatSection('Edge cases:', response.edgeCases));
-  lines.push(...formatSection('Scale considerations:', response.scaleConsiderations));
-  lines.push(...formatSection('Pushback responses:', response.pushbackResponses));
-  lines.push(...formatSection('Likely follow-ups:', response.likelyFollowUps));
+  chunks.push(formatSection('Implementation plan:', response.implementationPlan).join('\n'));
+  chunks.push(formatSection('Tradeoffs:', response.tradeoffs).join('\n'));
+  chunks.push(formatSection('Edge cases:', response.edgeCases).join('\n'));
+  chunks.push(formatSection('Scale considerations:', response.scaleConsiderations).join('\n'));
+  chunks.push(formatSection('Pushback responses:', response.pushbackResponses).join('\n'));
+  chunks.push(formatSection('Likely follow-ups:', response.likelyFollowUps).join('\n'));
+  chunks.push(response.codeTransition ? `Code transition: ${response.codeTransition}` : 'Code transition:');
 
-  if (response.codeTransition) {
-    lines.push(`Code transition: ${response.codeTransition}`);
+  return chunks.filter(Boolean);
+}
+
+export function formatConsciousModeResponse(response: ConsciousModeStructuredResponse): string {
+  return formatConsciousModeResponseChunks(response).join('\n').trim();
+}
+
+export function tryParseConsciousModeOpeningReasoning(raw: string): string | null {
+  const match = raw.match(/"openingReasoning"\s*:\s*"((?:\\.|[^"\\])*)"/);
+  if (!match) {
+    return null;
   }
 
-  return lines.join('\n').trim();
+  try {
+    return normalizeText(JSON.parse(`"${match[1]}"`));
+  } catch {
+    return null;
+  }
 }
 
 function isQuestionLike(lower: string): boolean {

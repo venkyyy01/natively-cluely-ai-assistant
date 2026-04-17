@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-const { runConsciousEvalHarness } = require('../dist-electron/electron/conscious/ConsciousEvalHarness.js');
+const { runConsciousEvalHarness, runConsciousReplayHarness } = require('../dist-electron/electron/conscious/ConsciousEvalHarness.js');
 const { ConsciousVerifier } = require('../dist-electron/electron/conscious/ConsciousVerifier.js');
 const { ConsciousVerifierLLM } = require('../dist-electron/electron/conscious/ConsciousVerifierLLM.js');
 const { LLMHelper } = require('../dist-electron/electron/LLMHelper.js');
@@ -32,6 +32,7 @@ function buildVerifier() {
 async function main() {
   const verifier = buildVerifier();
   const { results, summary } = await runConsciousEvalHarness({ verifier });
+  const replay = await runConsciousReplayHarness({ verifier });
 
   console.log('\nConscious Mode Eval Summary');
   console.log('===========================');
@@ -46,7 +47,20 @@ async function main() {
     console.log(`Verdict: ${result.verdict.ok ? 'accept' : 'reject'}${result.verdict.reason ? ` (${result.verdict.reason})` : ''}`);
   }
 
-  if (summary.failed > 0) {
+  console.log('\nReplay Trace Summary');
+  console.log('====================');
+  console.log(`Total: ${replay.summary.total}`);
+  console.log(`Passed: ${replay.summary.passed}`);
+  console.log(`Failed: ${replay.summary.failed}`);
+
+  for (const result of replay.results) {
+    console.log(`\n[${result.passed ? 'PASS' : 'FAIL'}] ${result.scenario.id}`);
+    console.log(`Route: ${result.trace.route.threadAction}`);
+    console.log(`Context: ${result.trace.selectedContextItemIds.join(', ') || 'none'}`);
+    console.log(`Verifier: ${result.trace.verifierVerdict.ok ? 'accept' : 'reject'}${result.trace.fallbackReason ? ` (${result.trace.fallbackReason})` : ''}`);
+  }
+
+  if (summary.failed > 0 || replay.summary.failed > 0) {
     process.exitCode = 1;
   }
 }

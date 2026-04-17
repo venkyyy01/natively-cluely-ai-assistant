@@ -134,10 +134,10 @@ export class ConsciousStreamingHandler {
   /**
    * Abort current stream
    */
-  abort(): void {
+  async abort(): Promise<void> {
     if (this.abortController) {
       this.abortController.abort();
-      this.emit({ type: 'cancelled', timestamp: Date.now() });
+      await this.emit({ type: 'cancelled', timestamp: Date.now() });
     }
   }
 

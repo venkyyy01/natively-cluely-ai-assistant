@@ -1,5 +1,9 @@
 import type { AnswerLatencyTracker, AnswerRoute } from '../latency/AnswerLatencyTracker';
 import type { SuggestedAnswerMetadata } from '../IntelligenceEngine';
+import {
+  formatConsciousModeResponseChunks,
+  type ConsciousModeStructuredResponse,
+} from '../ConsciousMode';
 
 type IntelligenceModeSetter = (mode: 'idle' | 'reasoning_first') => void;
 type EventEmitterLike = {
@@ -30,11 +34,24 @@ export class ConsciousResponseCoordinator {
     questionLabel: string;
     confidence: number;
     fullAnswer: string;
+    structuredResponse?: ConsciousModeStructuredResponse;
     metadata?: SuggestedAnswerMetadata;
   }): string {
     this.setMode('reasoning_first');
-    this.emitter.emit('suggested_answer_token', input.fullAnswer, input.questionLabel, input.confidence);
-    this.latencyTracker.markFirstVisibleAnswer(input.requestId);
+    const chunks = input.structuredResponse
+      ? formatConsciousModeResponseChunks(input.structuredResponse)
+      : [input.fullAnswer];
+    chunks.forEach((chunk, index) => {
+      this.emitter.emit(
+        'suggested_answer_token',
+        index === 0 ? chunk : `\n${chunk}`,
+        input.questionLabel,
+        input.confidence,
+      );
+      if (index === 0) {
+        this.latencyTracker.markFirstVisibleAnswer(input.requestId);
+      }
+    });
     this.session.addAssistantMessage(input.fullAnswer);
     this.session.pushUsage({
       type: 'assist',

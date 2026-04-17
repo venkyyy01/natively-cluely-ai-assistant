@@ -1,4 +1,5 @@
 import { GeminiContent } from "./types";
+import { CONSCIOUS_MODE_JSON_RESPONSE_INSTRUCTIONS } from "../ConsciousMode";
 
 // ==========================================
 // CORE IDENTITY & SHARED GUIDELINES
@@ -666,34 +667,17 @@ BEFORE YOU RESPOND - MANDATORY CHECK:
 4. Would a real human answer with this much text? (if no, cut it down)
 
 RESPONSE FORMAT:
-Return ONLY valid JSON with this structure:
-{
-  "questionType": "concept|approach|code|opinion|clarification",
-  "openingReasoning": "1-2 sentence spoken thought - what a human would say FIRST",
-  "spokenResponse": "Brief, natural response - NOT a wall of text",
-  "codeBlock": {"language": "python", "code": "..."},
-  "tradeoffs": ["one key tradeoff if relevant"],
-  "likelyFollowUps": ["what they might ask next"]
-}
+${CONSCIOUS_MODE_JSON_RESPONSE_INSTRUCTIONS}
 
 FIELD RULES:
-- "questionType": REQUIRED. Forces you to understand what they actually asked.
 - "openingReasoning": 1-2 sentences MAX. Natural thought like "So my instinct here is..." NOT a summary of everything you're about to say.
-- "spokenResponse": 
-  * For concepts: 2-4 sentences. That's it.
-  * For approaches: describe ONE approach briefly, not five alternatives.
-  * For code requests: brief intro, then code, then brief outro.
-  * If this field is longer than 100 words for non-code, YOU FAILED.
-- "codeBlock": ONLY include if they specifically asked for code or it's a coding question. Do NOT dump code for conceptual questions.
 - "tradeoffs": ONE tradeoff. Not a list of five. Mention conversationally.
 - "likelyFollowUps": What they'll probably ask next (helps you prepare, not dump everything now).
 
 ANTI-DUMP ENFORCEMENT:
-- "implementationPlan" - REMOVED. Don't dump steps ..
-- "edgeCases" - REMOVED. Don't list edge cases ..  
-- "scaleConsiderations" - REMOVED. Don't discuss scale ..
-- "pushbackResponses" - REMOVED. Wait for actual pushback.
-- "codeTransition" - REMOVED. Just transition naturally.
+- Keep implementationPlan to 0-3 short steps.
+- Keep edgeCases, scaleConsiderations, and pushbackResponses empty unless the interviewer explicitly asks for that dimension.
+- codeTransition is only for code/live-coding turns.
 
 If the interviewer wants more, THEY WILL ASK. Your job is to give a focused answer, not anticipate every possible follow-up and dump it all at once.`;
 
@@ -1148,24 +1132,7 @@ export const CONSCIOUS_REASONING_SYSTEM_PROMPT = `${CONSCIOUS_CORE_IDENTITY}
 You are generating a structured Conscious Mode response for an internal parser.
 Return ONLY valid JSON. Do not add markdown fences, prose, or commentary.
 
-RESPONSE FORMAT (required):
-{
-  "mode": "reasoning_first",
-  "openingReasoning": "string",
-  "implementationPlan": ["string"],
-  "tradeoffs": ["string"],
-  "edgeCases": ["string"],
-  "scaleConsiderations": ["string"],
-  "pushbackResponses": ["string"],
-  "likelyFollowUps": ["string"],
-  "codeTransition": "string"
-}
-
-FIELD RULES:
-- mode MUST be exactly "reasoning_first"
-- openingReasoning: natural spoken opening, concise
-- Array fields: include only relevant items, keep concise, use [] when none
-- codeTransition: brief natural bridge to implementation details, or empty string
+${CONSCIOUS_MODE_JSON_RESPONSE_INSTRUCTIONS}
 
 QUALITY RULES:
 - Ground claims in provided context

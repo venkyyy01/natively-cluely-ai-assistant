@@ -15,6 +15,17 @@ class DelayedFastLLMHelper {
   }
 }
 
+class ChunkedFastLLMHelper {
+  public calls: Array<{ message: string; context?: string; prompt?: string }> = [];
+
+  async *streamChat(message: string, _imagePaths?: string[], context?: string, prompt?: string): AsyncGenerator<string> {
+    this.calls.push({ message, context, prompt });
+    yield 'speculative ';
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    yield `answer for: ${message}`;
+  }
+}
+
 function addTurn(session: SessionTracker, speaker: 'interviewer' | 'assistant', text: string, timestamp: number): void {
   session.handleTranscript({
     speaker,
@@ -171,5 +182,85 @@ test('speculative acceleration stays disabled when conscious mode is off', async
   assert.equal(llmHelper.calls.length, 1);
 
   setActiveAccelerationManager(null);
+  setOptimizationFlags({ ...DEFAULT_OPTIMIZATION_FLAGS });
+});
+
+test('speculative answers stream early tokens before the final answer is committed', async () => {
+  setOptimizationFlags({
+    ...DEFAULT_OPTIMIZATION_FLAGS,
+    accelerationEnabled: true,
+    useParallelContext: true,
+    usePrefetching: true,
+    useANEEmbeddings: false,
+  });
+
+  const session = new SessionTracker();
+  session.setConsciousModeEnabled(true);
+  const llmHelper = new ChunkedFastLLMHelper();
+  const engine = new IntelligenceEngine(llmHelper as any, session);
+  const tokenEvents: string[] = [];
+  engine.on('suggested_answer_token', (token: string) => {
+    tokenEvents.push(token);
+  });
+
+  const accelerationManager = new AccelerationManager();
+  await accelerationManager.initialize();
+  accelerationManager.setConsciousModeEnabled(true);
+  const consciousAcceleration = accelerationManager.getConsciousOrchestrator();
+  setActiveAccelerationManager(accelerationManager);
+  engine.attachAccelerationManager(accelerationManager);
+
+  addTurn(session, 'interviewer', 'What is polymorphism?', Date.now());
+  consciousAcceleration.noteTranscriptText('interviewer', 'What is polymorphism?');
+  consciousAcceleration.updateTranscriptSegments(
+    session.getFullTranscript().slice(-50).map((entry) => ({
+      text: entry.text,
+      timestamp: entry.timestamp,
+      speaker: entry.speaker,
+    })),
+    session.getTranscriptRevision(),
+  );
+  await (consciousAcceleration as any).maybeStartSpeculativeAnswer();
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  const callsBeforeAnswer = llmHelper.calls.length;
+
+  const answer = await engine.runWhatShouldISay(undefined, 0.9);
+
+  assert.equal(answer, 'speculative answer for: What is polymorphism?');
+  assert.deepEqual(tokenEvents, ['speculative ', 'answer for: What is polymorphism?']);
+  assert.equal(llmHelper.calls.length, callsBeforeAnswer);
+
+  setActiveAccelerationManager(null);
+  setOptimizationFlags({ ...DEFAULT_OPTIMIZATION_FLAGS });
+});
+
+test('speculative hedging selects the closest predicted candidate when the finalized question shifts', async () => {
+  setOptimizationFlags({
+    ...DEFAULT_OPTIMIZATION_FLAGS,
+    accelerationEnabled: true,
+    usePrefetching: true,
+    useANEEmbeddings: false,
+  });
+  const orchestrator = new AccelerationManager().getConsciousOrchestrator();
+  orchestrator.setEnabled(true);
+  orchestrator.setPhase('high_level_design');
+  orchestrator.noteTranscriptText('interviewer', 'What are the main comp');
+  orchestrator.updateTranscriptSegments([
+    {
+      speaker: 'interviewer',
+      text: 'What are the main comp',
+      timestamp: Date.now(),
+    },
+  ], 1);
+  orchestrator.setSpeculativeExecutor((query) => (async function* () {
+    yield `answer for: ${query}`;
+  })());
+
+  await (orchestrator as any).maybeStartSpeculativeAnswer();
+  await new Promise((resolve) => setTimeout(resolve, 20));
+
+  const answer = await orchestrator.getSpeculativeAnswer('What are the main components?', 1, 200);
+
+  assert.equal(answer, 'answer for: What are the main components?');
   setOptimizationFlags({ ...DEFAULT_OPTIMIZATION_FLAGS });
 });

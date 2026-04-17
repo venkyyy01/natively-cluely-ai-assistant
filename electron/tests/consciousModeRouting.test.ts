@@ -4,9 +4,11 @@ import { IntelligenceEngine } from '../IntelligenceEngine';
 import { SessionTracker } from '../SessionTracker';
 import {
   classifyConsciousModeQuestion,
+  CONSCIOUS_MODE_SCHEMA_VERSION,
   maybeHandleSuggestionTriggerFromTranscript,
   parseConsciousModeResponse,
   shouldAutoTriggerSuggestionFromTranscript,
+  tryParseConsciousModeOpeningReasoning,
   type ReasoningThread,
 } from '../ConsciousMode';
 
@@ -272,6 +274,34 @@ test('Conscious Mode response parser rejects malformed non-JSON thread payloads'
   assert.equal(malformed.mode, 'invalid');
   assert.equal(malformed.openingReasoning, '');
   assert.deepEqual(malformed.implementationPlan, []);
+});
+
+test('Conscious Mode parser adapts legacy prompt-family payloads to the canonical schema', () => {
+  const parsed = parseConsciousModeResponse(JSON.stringify({
+    openingReasoning: 'I would start with the invariant first.',
+    spokenResponse: 'Keep writes idempotent and make duplicate delivery harmless.',
+    codeBlock: { language: 'ts', code: 'const seen = new Set<string>();' },
+    pushbackResponses: {
+      consistency: 'I would tighten the write path before adding async fan-out.',
+    },
+  }));
+
+  assert.equal(parsed.mode, 'reasoning_first');
+  assert.equal(parsed.openingReasoning, 'I would start with the invariant first.');
+  assert.deepEqual(parsed.pushbackResponses, [
+    'consistency: I would tighten the write path before adding async fan-out.',
+  ]);
+  assert.match(parsed.codeTransition, /```ts/);
+  assert.equal(CONSCIOUS_MODE_SCHEMA_VERSION, 'conscious_mode_v1');
+});
+
+test('Conscious Mode can parse opening reasoning from a streaming JSON prefix', () => {
+  const partial = '{"schemaVersion":"conscious_mode_v1","mode":"reasoning_first","openingReasoning":"Start with Redis and a clear refill invariant."';
+
+  assert.equal(
+    tryParseConsciousModeOpeningReasoning(partial),
+    'Start with Redis and a clear refill invariant.',
+  );
 });
 
 test('Conscious Mode transcript auto-trigger widens for actionable interviewer prompts without widening conscious routing itself', () => {

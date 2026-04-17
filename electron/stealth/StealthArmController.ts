@@ -25,28 +25,32 @@ export class StealthArmController {
   }
 
   async disarm(): Promise<void> {
-    let firstError: unknown = null;
+    const errors: unknown[] = [];
 
     try {
       await this.delegate.faultNativeStealth?.('stealth disabled');
     } catch (error) {
-      firstError = error;
+      errors.push(error);
     }
 
     try {
       await this.delegate.stopHeartbeat?.();
     } catch (error) {
-      firstError = error;
+      errors.push(error);
     }
 
     try {
       await this.delegate.setEnabled(false);
     } catch (error) {
-      firstError ??= error;
+      errors.push(error);
     }
 
-    if (firstError) {
-      throw firstError;
+    if (errors.length === 1) {
+      throw errors[0];
+    }
+
+    if (errors.length > 1) {
+      throw new AggregateError(errors, 'stealth disarm failed with multiple cleanup errors');
     }
   }
 }

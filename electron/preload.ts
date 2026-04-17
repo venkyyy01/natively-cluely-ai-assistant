@@ -20,6 +20,16 @@ type SuggestedAnswerMetadata = {
     followUpCount: number
     updatedAt: number
   } | null
+  threadState: {
+    activeThread: {
+      rootQuestion: string
+      lastQuestion: string
+      followUpCount: number
+      updatedAt: number
+    } | null
+    threadAction: 'start' | 'continue' | 'reset' | 'ignore'
+    transcriptRevision: number
+  }
   cooldownSuppressedMs?: number
   cooldownReason?: 'duplicate_question_debounce'
   verifier?: {

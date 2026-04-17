@@ -11,7 +11,7 @@ import {
   FollowUpQuestionsLLM, WhatToAnswerLLM,
   AssistantResponse as LLMAssistantResponse, classifyIntent
 } from './llm';
-import { ConsciousContextComposer, ConsciousIntentService, ConsciousOrchestrator, ConsciousPreparationCoordinator, ConsciousResponseCoordinator, ConsciousVerifier, ConsciousVerifierLLM, FallbackExecutor } from './conscious';
+import { ConsciousContextComposer, ConsciousIntentService, ConsciousOrchestrator, ConsciousPreparationCoordinator, ConsciousResponseCoordinator, ConsciousVerifier, ConsciousVerifierLLM, FallbackExecutor, sanitizeProfileData } from './conscious';
 import { ParallelContextAssembler, ContextAssemblyInput, ContextAssemblyOutput } from './cache/ParallelContextAssembler';
 import { isOptimizationActive } from './config/optimizations';
 import { AnswerLatencyTracker, AnswerRoute } from './latency/AnswerLatencyTracker';
@@ -81,6 +81,16 @@ export interface SuggestedAnswerMetadata {
     followUpCount: number;
     updatedAt: number;
   } | null;
+  threadState: {
+    activeThread: {
+      rootQuestion: string;
+      lastQuestion: string;
+      followUpCount: number;
+      updatedAt: number;
+    } | null;
+    threadAction: 'start' | 'continue' | 'reset' | 'ignore';
+    transcriptRevision: number;
+  };
   cooldownSuppressedMs?: number;
   cooldownReason?: CooldownSuppressionReason;
   contextSelectionHash?: string;
@@ -158,22 +168,22 @@ export class IntelligenceEngine extends EventEmitter {
 
   attachAccelerationManager(accelerationManager: AccelerationManager | null): void {
     accelerationManager?.getConsciousOrchestrator().setSpeculativeExecutor((query, transcriptRevision) =>
-      this.generateSpeculativeFastAnswer(query, transcriptRevision)
+      this.generateSpeculativeFastAnswerStream(query, transcriptRevision)
     );
   }
 
-  private async generateSpeculativeFastAnswer(question: string, transcriptRevision: number): Promise<string | null> {
+  private async *generateSpeculativeFastAnswerStream(question: string, transcriptRevision: number): AsyncIterableIterator<string> {
     if (this.stealthContainmentActive) {
-      return null;
+      return;
     }
 
     if (!this.whatToAnswerLLM) {
-      return null;
+      return;
     }
 
     const normalizedQuestion = question.trim();
     if (!normalizedQuestion) {
-      return null;
+      return;
     }
 
     const cacheKey = `spec-answer:${transcriptRevision}:${normalizedQuestion.toLowerCase()}`;
@@ -182,7 +192,8 @@ export class IntelligenceEngine extends EventEmitter {
       ? await accelerationManager.getEnhancedCache().get(cacheKey) as string | undefined
       : undefined;
     if (cached) {
-      return cached;
+      yield cached;
+      return;
     }
 
     const preparedTranscript = this.buildFastStandardTranscriptContext(
@@ -198,19 +209,19 @@ export class IntelligenceEngine extends EventEmitter {
 
     for await (const token of stream) {
       fullAnswer += token;
+      yield token;
     }
 
     if (this.session.getTranscriptRevision() !== transcriptRevision) {
-      return null;
+      return;
     }
 
     const trimmed = fullAnswer.trim();
     if (trimmed.length < 5) {
-      return null;
+      return;
     }
 
     accelerationManager?.getEnhancedCache().set(cacheKey, trimmed);
-    return trimmed;
   }
 
   protected async classifyIntentForRoute(
@@ -492,6 +503,14 @@ export class IntelligenceEngine extends EventEmitter {
         };
     }): SuggestedAnswerMetadata {
         const thread = this.session.getActiveReasoningThread();
+        const activeThread = thread
+            ? {
+                rootQuestion: thread.rootQuestion,
+                lastQuestion: thread.lastQuestion,
+                followUpCount: thread.followUpCount,
+                updatedAt: thread.updatedAt,
+            }
+            : null;
         const verifier = input.verifier ?? (input.route === 'conscious_answer'
             ? undefined
             : {
@@ -509,14 +528,12 @@ export class IntelligenceEngine extends EventEmitter {
             contextSelectionHash: this.computeContextSelectionHash(input.contextItems),
             transcriptRevision: input.transcriptRevision,
             threadAction: input.threadAction,
-            thread: thread
-                ? {
-                    rootQuestion: thread.rootQuestion,
-                    lastQuestion: thread.lastQuestion,
-                    followUpCount: thread.followUpCount,
-                    updatedAt: thread.updatedAt,
-                }
-                : null,
+            thread: activeThread,
+            threadState: {
+                activeThread,
+                threadAction: input.threadAction ?? 'ignore',
+                transcriptRevision: input.transcriptRevision,
+            },
             cooldownSuppressedMs: input.cooldownSuppressedMs,
             cooldownReason: input.cooldownReason,
             verifier,
@@ -839,13 +856,22 @@ export class IntelligenceEngine extends EventEmitter {
             const interimQuestion = lastInterim?.text?.trim() || '';
             const baseQuestion = question || interimQuestion || this.session.getLastInterviewerTurn() || '';
             const resolvedQuestion = baseQuestion;
-const knowledgeOrchestrator = this.llmHelper.getKnowledgeOrchestrator?.();
-const knowledgeStatus = knowledgeOrchestrator?.getStatus?.();
-const profileData = knowledgeOrchestrator?.getProfileData?.();
-if (this.session.isConsciousModeEnabled() && !profileData) {
-console.warn('[ConsciousMode] Semantic memory disabled: no resume/profile data loaded. Upload a resume to enable fact-based context enrichment.');
-}
-const capability = typeof (this.llmHelper as any).getProviderCapabilityClass === 'function'
+            const knowledgeOrchestrator = this.llmHelper.getKnowledgeOrchestrator?.();
+            const knowledgeStatus = knowledgeOrchestrator?.getStatus?.();
+            const rawProfileData = knowledgeOrchestrator?.getProfileData?.();
+            const sanitizedProfileData = sanitizeProfileData(rawProfileData);
+            if (sanitizedProfileData.warnings.length > 0) {
+                console.warn('[ConsciousMode] Profile data sanitized before context assembly:', {
+                    warnings: sanitizedProfileData.warnings,
+                    truncatedFields: sanitizedProfileData.truncatedFields,
+                    removedInjectionFields: sanitizedProfileData.removedInjectionFields,
+                });
+            }
+            const profileData = sanitizedProfileData.data;
+            if (this.session.isConsciousModeEnabled() && !profileData) {
+                console.warn('[ConsciousMode] Semantic memory disabled: no resume/profile data loaded. Upload a resume to enable fact-based context enrichment.');
+            }
+            const capability = typeof (this.llmHelper as any).getProviderCapabilityClass === 'function'
                 ? (this.llmHelper as any).getProviderCapabilityClass()
                 : 'buffered';
             const accelerationManager = getActiveAccelerationManager();
@@ -886,13 +912,43 @@ const capability = typeof (this.llmHelper as any).getProviderCapabilityClass ===
             const consciousResponseCoordinator = this.getConsciousResponseCoordinator();
 
             const runFastStandardAnswer = async (): Promise<string | null> => {
-                const speculativeAnswer = useConsciousAcceleration && consciousAcceleration
-                    ? await consciousAcceleration.getSpeculativeAnswer(resolvedQuestion, this.session.getTranscriptRevision(), 180)
+                const speculativePreview = useConsciousAcceleration && consciousAcceleration
+                    ? await consciousAcceleration.getSpeculativeAnswerPreview(resolvedQuestion, this.session.getTranscriptRevision(), 180)
                     : null;
                 if (shouldSuppressVisibleWork()) {
                     return abandonCurrentRequest();
                 }
-                if (speculativeAnswer) {
+                if (speculativePreview?.text) {
+                    let speculativeAnswer = speculativePreview.text;
+                    for (const [index, chunk] of speculativePreview.chunks.entries()) {
+                        if (index === 0) {
+                            this.latencyTracker.markFirstStreamingUpdate(requestId);
+                        }
+                        this.emit('suggested_answer_token', chunk, question || 'inferred', confidence);
+                    }
+
+                    if (!speculativePreview.complete) {
+                        const finalizedSpeculativeAnswer = await consciousAcceleration!.finalizeSpeculativeAnswer(speculativePreview.key, 2_000);
+                        if (finalizedSpeculativeAnswer && finalizedSpeculativeAnswer.length > speculativeAnswer.length) {
+                            const suffix = finalizedSpeculativeAnswer.slice(speculativeAnswer.length);
+                            if (suffix) {
+                                this.emit('suggested_answer_token', suffix, question || 'inferred', confidence);
+                            }
+                            speculativeAnswer = finalizedSpeculativeAnswer;
+                        } else if (finalizedSpeculativeAnswer) {
+                            speculativeAnswer = finalizedSpeculativeAnswer;
+                        }
+                    } else {
+                        const finalizedSpeculativeAnswer = await consciousAcceleration!.finalizeSpeculativeAnswer(speculativePreview.key, 0);
+                        if (finalizedSpeculativeAnswer) {
+                            speculativeAnswer = finalizedSpeculativeAnswer;
+                        }
+                    }
+
+                    if (!speculativeAnswer || speculativeAnswer.trim().length < 5) {
+                        return null;
+                    }
+
                     this.session.addAssistantMessage(speculativeAnswer);
                     this.session.pushUsage({
                         type: 'assist',
@@ -1166,6 +1222,7 @@ const capability = typeof (this.llmHelper as any).getProviderCapabilityClass ===
                         questionLabel: question || 'What to Answer',
                         confidence,
                         fullAnswer: continuationResult.fullAnswer,
+                        structuredResponse: continuationResult.structuredResponse,
                         metadata,
                     });
                 }
@@ -1263,6 +1320,7 @@ const capability = typeof (this.llmHelper as any).getProviderCapabilityClass ===
                         questionLabel: question || 'What to Answer',
                         confidence,
                         fullAnswer: consciousResult.fullAnswer,
+                        structuredResponse: consciousResult.structuredResponse,
                         metadata,
                     });
                 }

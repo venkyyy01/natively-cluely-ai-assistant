@@ -45,6 +45,14 @@ function sanitizeLiveRagText(value: string): string {
     .replace(/>/g, ')');
 }
 
+function normalizeComparisonText(value: string): string {
+  return sanitizeLiveRagText(value)
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 function isFallbackLikeAssistantText(value: string): boolean {
   const lowered = value.toLowerCase();
   return LIVE_RAG_ASSISTANT_FALLBACK_MARKERS.some((marker) => lowered.includes(marker));
@@ -140,6 +148,10 @@ export class ConsciousRetrievalOrchestrator {
     const longMemoryBlock = this.session.getConsciousLongMemoryContext(input.question);
     const formattedContext = this.session.getFormattedContext(lastSeconds);
     const evidenceBlock = this.session.getConsciousEvidenceContext();
+    const stateDedupBlock = stateBlock
+      .split('\n')
+      .filter((line) => !line.startsWith('CURRENT_INTERVIEWER_QUESTION:'))
+      .join('\n');
     const liveRagItems = input.contextItems
       ?? (typeof this.session.getContext === 'function' ? this.session.getContext(lastSeconds) : undefined)
       ?? [];
@@ -147,6 +159,7 @@ export class ConsciousRetrievalOrchestrator {
       question: input.question,
       contextItems: liveRagItems,
       maxItems: 6,
+      existingContextText: [stateDedupBlock, longMemoryBlock, evidenceBlock].filter(Boolean).join('\n'),
     });
     return {
       stateBlock,
@@ -158,10 +171,12 @@ export class ConsciousRetrievalOrchestrator {
     question: string;
     contextItems: Array<{ role: 'interviewer' | 'user' | 'assistant'; text: string; timestamp: number }>;
     maxItems?: number;
+    existingContextText?: string;
   }): string {
     const queryTokens = tokenize(input.question || '');
     const maxItems = Math.max(2, Math.min(10, input.maxItems ?? 6));
     const now = Date.now();
+    const normalizedExistingContext = normalizeComparisonText(input.existingContextText || '');
 
     const scored = input.contextItems
       .map((item) => ({
@@ -169,6 +184,7 @@ export class ConsciousRetrievalOrchestrator {
         sanitizedText: sanitizeLiveRagText(item.text),
       }))
       .filter((item) => item.sanitizedText.length > 0)
+      .filter((item) => !normalizedExistingContext.includes(normalizeComparisonText(item.sanitizedText)))
       .filter((item) => item.role !== 'assistant' || !isFallbackLikeAssistantText(item.sanitizedText))
       .map((item) => {
         const overlap = overlapScore(queryTokens, item.sanitizedText);

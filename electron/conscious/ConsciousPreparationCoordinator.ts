@@ -9,6 +9,7 @@ import { ConsciousIntentService, type ResolvedIntentResult } from './ConsciousIn
 import { ConsciousOrchestrator } from './ConsciousOrchestrator';
 import { ConsciousRetrievalOrchestrator } from './ConsciousRetrievalOrchestrator';
 import { ConsciousSemanticFactStore } from './ConsciousSemanticFactStore';
+import { sanitizeProfileData } from './ProfileDataSanitizer';
 import type { ConsciousModeStructuredResponse, ReasoningThread } from '../ConsciousMode';
 import type { QuestionReaction } from './QuestionReactionClassifier';
 import type { AnswerHypothesis } from './AnswerHypothesisStore';
@@ -121,7 +122,15 @@ export class ConsciousPreparationCoordinator {
     }
 
     const contextAssemblyStart = input.contextAssemblyStart ?? Date.now();
-    this.semanticFactStore.seedFromProfileData(input.profileData);
+    const sanitizedProfile = sanitizeProfileData(input.profileData);
+    if (sanitizedProfile.warnings.length > 0) {
+      console.warn('[ConsciousPreparation] Profile data sanitized before prompt use:', {
+        warnings: sanitizedProfile.warnings,
+        truncatedFields: sanitizedProfile.truncatedFields,
+        removedInjectionFields: sanitizedProfile.removedInjectionFields,
+      });
+    }
+    this.semanticFactStore.seedFromProfileData(sanitizedProfile.data);
     if (!input.profileData && this.session.isConsciousModeEnabled()) {
       console.warn('[ConsciousPreparation] No profile data available for semantic fact enrichment. Conscious mode responses will lack personalized context.');
     }

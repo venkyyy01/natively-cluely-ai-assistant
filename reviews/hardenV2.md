@@ -154,16 +154,26 @@ All F1–F10 findings from V1 are **reconfirmed**. Key updates:
 
 ### Priority 2 — Structural (2–4 sprints)
 
-19. **F1**: Decide behavioral routing policy; remove dead planner branch or enable it.
-20. **F5**: Implement progressive structured output (emit `openingReasoning` early, then sections).
-21. **F7**: Trigger live indexing on interviewer-finalized turns, not just timer.
-22. **F10**: Backend-emit authoritative thread state snapshots; renderer renders, doesn't infer.
-23. **N4**: Aggregate all `disarm` errors and surface them.
-24. **N10**: Make `ConsciousStreamingHandler.abort()` return `Promise<void>`.
-25. **N11**: Add global entry cap to `DesignStateStore`, instrument overflow alerts.
-26. **X6**: Add profile data sanitization layer (strip control chars, enforce length, validate structure) before prompt injection.
-27. Schema governance: single canonical conscious JSON schema with version, adapter layer for alternate prompt families.
-28. Quality replay harness: deterministic replay for routing, context, verifier, fallback.
+19. [x] **F1**: Decide behavioral routing policy; remove dead planner branch or enable it.
+    Behavioral questions are routed explicitly and planned with behavioral answer style instead of leaving the planner branch unreachable.
+20. [x] **F5**: Implement progressive structured output (emit `openingReasoning` early, then sections).
+    `ConsciousResponseCoordinator` now emits verified structured responses section-by-section, starting with `openingReasoning`.
+21. [x] **F7**: Trigger live indexing on interviewer-finalized turns, not just timer.
+    `LiveRAGIndexer` force-flushes final interviewer turns and stop tails in addition to the timer backstop.
+22. [x] **F10**: Backend-emit authoritative thread state snapshots; renderer renders, doesn't infer.
+    Suggested-answer metadata now includes `threadState`; renderer updates thread state from backend metadata instead of local route inference.
+23. [x] **N4**: Aggregate all `disarm` errors and surface them.
+    `StealthArmController.disarm()` now collects cleanup failures and throws `AggregateError` for multiple failures.
+24. [x] **N10**: Make `ConsciousStreamingHandler.abort()` return `Promise<void>`.
+    Cancellation handlers are awaited before abort returns.
+25. [x] **N11**: Add global entry cap to `DesignStateStore`, instrument overflow alerts.
+    Store now enforces a 100-entry global cap, tracks overflow stats, persists them, and emits bounded alerts.
+26. [x] **X6**: Add profile data sanitization layer (strip control chars, enforce length, validate structure) before prompt injection.
+    Profile data is sanitized at the `getProfileData()` boundary and before semantic fact seeding.
+27. [x] Schema governance: single canonical conscious JSON schema with version, adapter layer for alternate prompt families.
+    `CONSCIOUS_MODE_SCHEMA_VERSION` and canonical JSON instructions are shared across prompts/LLM wrappers; parser adapts legacy response shapes.
+28. [x] Quality replay harness: deterministic replay for routing, context, verifier, fallback.
+    `runConsciousReplayHarness()` reconstructs route, selected context IDs, verifier verdict, and fallback reason.
 
 ---
 
@@ -313,7 +323,7 @@ This section details four architectural "game changers" required to fundamentall
 
 ### A1. True Streaming Speculation & Pipelined Context
 
-**A1: Predictive pipeline waits for full LLM generation and delays context assembly**
+**A1: Predictive pipeline waits for full LLM generation and delays context assembly** — ✅ Implemented
 - **Trigger**: PauseDetector fires `speculate` event
 - **Code Path**: `ConsciousAccelerationOrchestrator.maybeStartSpeculativeAnswer()` → `speculativeExecutor()`
 - **Failure Mode**: `getSpeculativeAnswer` waits with a `180ms` timeout on a 2000ms background task. Context assembly currently runs sequentially, physically blocking the overall Time To First Token (TTFT) and driving perceived latency up to ~3-4s.
@@ -324,7 +334,7 @@ This section details four architectural "game changers" required to fundamentall
 
 ### A2. Multi-Candidate "Top-K" Hedging
 
-**A2: Speculative orchestration bets compute on a single brittle candidate**
+**A2: Speculative orchestration bets compute on a single brittle candidate** — ✅ Implemented
 - **Trigger**: STT provides a partial, unfinalized transcript
 - **Code Path**: `ConsciousAccelerationOrchestrator.deriveSpeculativeCandidate()`
 - **Failure Mode**: The system generates exactly one hypothesis. If the user alters their thought mid-sentence or the finalized STT shifts by a word, the 2 seconds of background compute are entirely wasted, forcing a cold start.
@@ -335,7 +345,7 @@ This section details four architectural "game changers" required to fundamentall
 
 ### A3. Fix Broken Semantic Lookups
 
-**A3: `PredictivePrefetcher` uses `Math.sin()` hashing instead of actual embeddings**
+**A3: `PredictivePrefetcher` uses `Math.sin()` hashing instead of actual embeddings** — ✅ Implemented
 - **Trigger**: Semantic lookup in `EnhancedCache.get()` or prediction generation
 - **Code Path**: `PredictivePrefetcher.quickEmbed()`
 - **Failure Mode**: `quickEmbed` statically generates 384-dimensional arrays using deterministic `Math.sin(hash)` math. Cosine similarity checks fundamentally collapse into literal string-match collisions. The semantic cache is functionally crippled.
@@ -347,7 +357,7 @@ This section details four architectural "game changers" required to fundamentall
 
 ### A4. Synchronous BM25 Caching & Context Deduplication
 
-**A4: Synchronous BM25 indexing blocks event loop and duplicates context tokens**
+**A4: Synchronous BM25 indexing blocks event loop and duplicates context tokens** — ✅ Implemented
 - **Trigger**: `startPrefetching()` or `buildPack()` runs
 - **Code Path**: `PredictivePrefetcher.assembleContext()` and `ConsciousRetrievalOrchestrator.buildPack()`
 - **Failure Mode**: O(N) recalculations of BM25 text indices block the JS event loop, injecting execution jitter across the orchestration layer. In addition, `liveRag`, `evidence`, and `longMemory` blocks frequently embed heavily duplicated transcript chunks, wasting LLM budget and polluting context.
@@ -359,13 +369,13 @@ This section details four architectural "game changers" required to fundamentall
 
 ## IX. Definition of Done
 
-- [ ] Every change has a route-level regression test + at least one adversarial case
-- [ ] No silent fallback/drop path remains without explicit reason emission
-- [ ] Prompt schema/version is unambiguous at generation + parse boundaries
-- [ ] On-call diagnostics can reconstruct: **question → selected context → verifier verdict → fallback reason → stealth containment state**
-- [ ] All `process.exit` paths have bounded-time guarantees
-- [ ] All supervisor bus events are non-silently swallowed or explicitly classified
-- [ ] Hypothesis confidence can decrease — recalibration mechanism exists
-- [ ] Cooldown recursion is bounded with max-depth guard
-- [ ] Meeting save failures are retried and surfaced to renderer
-- [ ] Thread continuation decisions are semantically validated
+- [x] Every change has a route-level regression test + at least one adversarial case
+- [x] No silent fallback/drop path remains without explicit reason emission
+- [x] Prompt schema/version is unambiguous at generation + parse boundaries
+- [x] On-call diagnostics can reconstruct: **question → selected context → verifier verdict → fallback reason → stealth containment state**
+- [x] All `process.exit` paths have bounded-time guarantees
+- [x] All supervisor bus events are non-silently swallowed or explicitly classified
+- [x] Hypothesis confidence can decrease — recalibration mechanism exists
+- [x] Cooldown recursion is bounded with max-depth guard
+- [x] Meeting save failures are retried and surfaced to renderer
+- [x] Thread continuation decisions are semantically validated

@@ -92,3 +92,33 @@ test('StealthArmController disarms by stopping heartbeat before disabling', asyn
 
   assert.deepEqual(calls, ['faultNativeStealth:stealth disabled', 'stopHeartbeat', 'setEnabled:false']);
 });
+
+test('StealthArmController aggregates all disarm cleanup failures', async () => {
+  const calls: string[] = [];
+  const controller = new StealthArmController({
+    faultNativeStealth: async () => {
+      calls.push('faultNativeStealth');
+      throw new Error('native fault failed');
+    },
+    stopHeartbeat: async () => {
+      calls.push('stopHeartbeat');
+      throw new Error('heartbeat stop failed');
+    },
+    setEnabled: async () => {
+      calls.push('setEnabled:false');
+      throw new Error('disable failed');
+    },
+    verifyStealthState: async () => true,
+  });
+
+  await assert.rejects(
+    () => controller.disarm(),
+    (error: unknown) => {
+      assert.ok(error instanceof AggregateError);
+      assert.equal(error.errors.length, 3);
+      assert.match(error.message, /multiple cleanup errors/);
+      return true;
+    },
+  );
+  assert.deepEqual(calls, ['faultNativeStealth', 'stopHeartbeat', 'setEnabled:false']);
+});
