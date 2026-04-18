@@ -1,4 +1,6 @@
 import type { AnswerHypothesis } from './AnswerHypothesisStore';
+import { isBehavioralQuestionText } from '../ConsciousMode';
+import type { ConsciousPlannerPreferenceSummary, ConsciousResponseQuestionMode } from './ConsciousResponsePreferenceStore';
 import type { QuestionReaction } from './QuestionReactionClassifier';
 
 export type ConsciousAnswerShape =
@@ -15,7 +17,7 @@ export interface ConsciousAnswerPlan {
   focalFacets: string[];
   maxWords: number;
   confidence: number;
-  questionMode: 'general' | 'live_coding' | 'system_design' | 'behavioral';
+  questionMode: ConsciousResponseQuestionMode;
   deliveryFormat: string;
   deliveryStyle: string;
   groundingHint: string;
@@ -31,14 +33,18 @@ function isLiveCodingQuestion(question: string): boolean {
 }
 
 function isBehavioralQuestion(question: string): boolean {
-  return /(tell me about a time|describe a situation|how do you handle|leadership|conflict|disagreement|feedback|failure|mistake|team|mentor|stakeholder|culture|values)/i.test(question);
+  return isBehavioralQuestionText(question);
 }
 
 function isSystemDesignQuestion(question: string): boolean {
   return /(design|architecture|distributed|cache|queue|throughput|latency|database|api|microservice|scal(?:e|ing)|rate limiter|failover|partition)/i.test(question);
 }
 
-function detectQuestionMode(question: string): ConsciousAnswerPlan['questionMode'] {
+function dedupeSentences(values: string[]): string[] {
+  return Array.from(new Set(values.map((value) => value.trim()).filter(Boolean)));
+}
+
+export function detectConsciousQuestionMode(question: string): ConsciousResponseQuestionMode {
   if (isLiveCodingQuestion(question)) {
     return 'live_coding';
   }
@@ -56,10 +62,11 @@ export class ConsciousAnswerPlanner {
     question: string;
     reaction?: QuestionReaction | null;
     hypothesis?: AnswerHypothesis | null;
+    preferenceSummary?: ConsciousPlannerPreferenceSummary | null;
   }): ConsciousAnswerPlan {
     const reaction = input.reaction;
     const focalFacets = reaction?.targetFacets?.length ? reaction.targetFacets : input.hypothesis?.targetFacets || [];
-    const questionMode = detectQuestionMode(input.question);
+    const questionMode = detectConsciousQuestionMode(input.question);
     const buildPlan = (plan: Omit<ConsciousAnswerPlan, 'questionMode' | 'deliveryFormat' | 'deliveryStyle' | 'groundingHint'>): ConsciousAnswerPlan => {
       const modeAdjusted: ConsciousAnswerPlan = {
         ...plan,
@@ -99,7 +106,7 @@ export class ConsciousAnswerPlanner {
             maxWords: Math.min(modeAdjusted.maxWords, 200),
             deliveryFormat: 'full_star_narrative',
             deliveryStyle: 'first_person_professional',
-            groundingHint: 'Ground in real experience from transcript or profile. One story, own it with "I". Don\'t invent.',
+            groundingHint: 'Ground the answer in concrete past experience from transcript or profile. One story, own it with "I". Don\'t invent.',
             rationale: `${modeAdjusted.rationale} Behavioral — one concrete story, 1.5–2 minutes spoken, STAR structure.`,
           };
         default:
@@ -109,62 +116,127 @@ export class ConsciousAnswerPlanner {
 
     switch (reaction?.kind) {
       case 'tradeoff_probe':
-        return buildPlan({
+        return this.applyUserPreferences(buildPlan({
           answerShape: 'tradeoff_defense',
           focalFacets,
           maxWords: 70,
           confidence: 0.92,
           rationale: 'They\'re asking about tradeoffs. Pick one approach, defend it, mention one real tradeoff. Don\'t list five options.',
-        });
+        }), input.preferenceSummary);
       case 'metric_probe':
-        return buildPlan({
+        return this.applyUserPreferences(buildPlan({
           answerShape: 'metric_backed_answer',
           focalFacets: focalFacets.length ? focalFacets : ['metrics', 'scaleConsiderations'],
           maxWords: 70,
           confidence: 0.92,
           rationale: 'How would you measure success? Give specifics if you can, don\'t handwave.',
-        });
+        }), input.preferenceSummary);
       case 'example_request':
-        return buildPlan({
+        return this.applyUserPreferences(buildPlan({
           answerShape: 'example_answer',
           focalFacets,
           maxWords: 80,
           confidence: 0.9,
           rationale: 'They want a concrete example. Tell one story, own it. Don\'t give a menu of options.',
-        });
+        }), input.preferenceSummary);
       case 'clarification':
-        return buildPlan({
+        return this.applyUserPreferences(buildPlan({
           answerShape: 'clarification_answer',
           focalFacets,
           maxWords: 60,
           confidence: 0.86,
           rationale: 'They want the previous idea unpacked. Keep it short, answer what they actually asked.',
-        });
+        }), input.preferenceSummary);
       case 'challenge':
-        return buildPlan({
+        return this.applyUserPreferences(buildPlan({
           answerShape: 'pushback_defense',
           focalFacets: focalFacets.length ? focalFacets : ['pushbackResponses'],
           maxWords: 70,
           confidence: 0.88,
           rationale: 'Pushback. Stand your ground, explain your reasoning, don\'t flip-flop.',
-        });
+        }), input.preferenceSummary);
       case 'deep_dive':
-        return buildPlan({
+        return this.applyUserPreferences(buildPlan({
           answerShape: 'depth_extension',
           focalFacets: focalFacets.length ? focalFacets : ['implementationPlan', 'edgeCases'],
           maxWords: 80,
           confidence: 0.86,
           rationale: 'Going deeper on the same thread. Don\'t start a new topic.',
-        });
+        }), input.preferenceSummary);
       default:
-        return buildPlan({
+        return this.applyUserPreferences(buildPlan({
           answerShape: 'direct_answer',
           focalFacets,
           maxWords: 65,
           confidence: input.hypothesis?.confidence ?? 0.6,
           rationale: 'Just answer directly. Short and conversational.',
-        });
+        }), input.preferenceSummary);
     }
+  }
+
+  private applyUserPreferences(plan: ConsciousAnswerPlan, preferenceSummary?: ConsciousPlannerPreferenceSummary | null): ConsciousAnswerPlan {
+    if (!preferenceSummary) {
+      return plan;
+    }
+
+    const groundingHints = [plan.groundingHint];
+    const rationaleParts = [plan.rationale];
+    let maxWords = plan.maxWords;
+
+    if (preferenceSummary.preferFirstPerson) {
+      groundingHints.push('Answer in first person. Say "I" and "my" naturally.');
+    }
+
+    if (preferenceSummary.preferConversational || preferenceSummary.avoidRoboticTone) {
+      groundingHints.push('Keep it human and conversational. No robotic or slide-deck phrasing.');
+    }
+
+    if (preferenceSummary.preferIndianEnglish) {
+      groundingHints.push('Use natural Indian English.');
+    }
+
+    if (preferenceSummary.preferPlainLanguage) {
+      groundingHints.push('Use simple words. Avoid jargon unless the question really needs it.');
+    }
+
+    if (preferenceSummary.preferConcise) {
+      switch (plan.questionMode) {
+        case 'behavioral':
+          maxWords = Math.min(maxWords, 160);
+          break;
+        case 'system_design':
+          maxWords = Math.min(maxWords, 60);
+          break;
+        case 'live_coding':
+          maxWords = Math.min(maxWords, 40);
+          break;
+        default:
+          maxWords = Math.min(maxWords, 45);
+          break;
+      }
+      rationaleParts.push('Respect the saved user preference for concise answers.');
+    }
+
+    if (preferenceSummary.relevantFrameworkHints.length > 0 && plan.questionMode !== 'live_coding') {
+      rationaleParts.push('Respect the saved user framework when it fits this question.');
+    }
+
+    if (
+      preferenceSummary.preferFirstPerson
+      || preferenceSummary.preferConversational
+      || preferenceSummary.preferIndianEnglish
+      || preferenceSummary.preferPlainLanguage
+      || preferenceSummary.avoidRoboticTone
+    ) {
+      rationaleParts.push('Match the saved user preference for voice and tone.');
+    }
+
+    return {
+      ...plan,
+      maxWords,
+      groundingHint: dedupeSentences(groundingHints).join(' '),
+      rationale: dedupeSentences(rationaleParts).join(' '),
+    };
   }
 
   buildContextBlock(plan: ConsciousAnswerPlan): string {
@@ -177,11 +249,18 @@ export class ConsciousAnswerPlanner {
 
     return [
       '<conscious_answer_plan>',
+      `ANSWER_SHAPE: ${plan.answerShape}`,
+      `QUESTION_MODE: ${plan.questionMode}`,
+      `DELIVERY_FORMAT: ${plan.deliveryFormat}`,
+      `DELIVERY_STYLE: ${plan.deliveryStyle}`,
+      `FOCAL_FACETS: ${plan.focalFacets.join(', ') || 'none'}`,
+      `GROUNDING_HINT: ${plan.groundingHint}`,
+      `MAX_WORDS: ${plan.maxWords}`,
+      `RATIONALE: ${plan.rationale}`,
       `How to answer: ${shapeGuide}`,
       plan.questionMode !== 'general' ? `Question type: ${modeGuide}` : '',
       facetsGuide,
       `Speak like: ${styleGuide}`,
-      `Stay grounded: ${plan.groundingHint}`,
       `Keep it under ${plan.maxWords} words. Less is more.`,
       `Why this approach: ${plan.rationale}`,
       '</conscious_answer_plan>',

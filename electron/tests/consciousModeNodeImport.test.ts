@@ -22,3 +22,10 @@ test('Intent classifier treats hidden behavioral prompts as behavioral in plain 
 
   assert.equal(result.intent, 'behavioral');
 });
+
+test('Intent classifier keeps walkthrough story prompts on the behavioral path', async () => {
+  const { classifyIntent } = await import('../llm/IntentClassifier');
+  const result = await classifyIntent('Walk me through a time you handled a conflict with a stakeholder.', '[INTERVIEWER] Walk me through a time you handled a conflict with a stakeholder.', 0);
+
+  assert.equal(result.intent, 'behavioral');
+});

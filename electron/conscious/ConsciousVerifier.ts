@@ -1,3 +1,4 @@
+import { isBehavioralQuestionText } from '../ConsciousMode';
 import type { ConsciousModeQuestionRoute, ConsciousModeStructuredResponse } from '../ConsciousMode';
 import type { AnswerHypothesis } from './AnswerHypothesisStore';
 import type { QuestionReaction } from './QuestionReactionClassifier';
@@ -39,7 +40,7 @@ function hasSubstance(response: ConsciousModeStructuredResponse): boolean {
 }
 
 function isBehavioralQuestion(question: string): boolean {
-  return /(tell me about a time|describe a time|describe a situation|share an experience|give me an example|walk me through|talk about|how do you manage|what is your .*style|how do you make .*decision|how do you influence|how do you prioritize|leadership|conflict|disagreed|disagreement|feedback|failure|mistake|mentor|stakeholder|culture|values)/i.test(question);
+  return isBehavioralQuestionText(question);
 }
 
 function wordCount(value: string | null | undefined): number {

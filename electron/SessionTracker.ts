@@ -73,8 +73,11 @@ import {
   DesignStateStore,
   ObservedQuestionStore,
   QuestionReactionClassifier,
-  AnswerHypothesisStore,
-} from './conscious';
+    AnswerHypothesisStore,
+    ConsciousResponsePreferenceStore,
+    type ConsciousPlannerPreferenceSummary,
+    type ConsciousResponseQuestionMode,
+  } from './conscious';
 import { AdaptiveContextWindow, ContextEntry, ContextSelectionConfig } from './conscious/AdaptiveContextWindow';
 import { getEmbeddingProvider } from './cache/ParallelContextAssembler';
 import { isOptimizationActive } from './config/optimizations';
@@ -214,6 +217,7 @@ export class SessionTracker {
   private observedQuestionStore: ObservedQuestionStore = new ObservedQuestionStore();
   private questionReactionClassifier: QuestionReactionClassifier = new QuestionReactionClassifier();
   private answerHypothesisStore: AnswerHypothesisStore = new AnswerHypothesisStore();
+  private responsePreferenceStore: ConsciousResponsePreferenceStore = new ConsciousResponsePreferenceStore();
   private designStateStore: DesignStateStore = new DesignStateStore();
   private phaseDetector: InterviewPhaseDetector = new InterviewPhaseDetector({
     classifierLane: resolveClassifierLane(),
@@ -484,6 +488,13 @@ export class SessionTracker {
 
         if (segment.final && segment.speaker === 'interviewer' && this.consciousModeEnabled) {
             this.updateConsciousConversationState(segment.text);
+        }
+
+        if (segment.final && segment.speaker === 'user' && this.consciousModeEnabled) {
+            const changed = this.responsePreferenceStore.noteUserTranscript(segment.text, segment.timestamp);
+            if (changed) {
+                this.persistState();
+            }
         }
 
         if (segment.final && this.consciousModeEnabled && (segment.speaker === 'interviewer' || segment.speaker === 'user')) {
@@ -1320,6 +1331,14 @@ isConsciousModeEnabled(): boolean {
         return this.answerHypothesisStore.buildContextBlock();
     }
 
+    getConsciousResponsePreferenceContext(questionMode: ConsciousResponseQuestionMode): string {
+        return this.responsePreferenceStore.buildContextBlock(questionMode);
+    }
+
+    getConsciousResponsePreferenceSummary(questionMode: ConsciousResponseQuestionMode): ConsciousPlannerPreferenceSummary {
+        return this.responsePreferenceStore.getPlannerPreferenceSummary(questionMode);
+    }
+
     setConsciousSemanticContext(block: string): void {
         this.consciousSemanticContext = block || '';
     }
@@ -1724,6 +1743,7 @@ isConsciousModeEnabled(): boolean {
           threadState: this.consciousThreadStore.getPersistenceSnapshot(),
           hypothesisState: this.answerHypothesisStore.getPersistenceSnapshot(),
           designState: this.designStateStore.getPersistenceSnapshot(),
+          preferenceState: this.responsePreferenceStore.getPersistenceSnapshot(),
         },
         memoryState,
       };
@@ -1767,11 +1787,13 @@ async restoreFromMeetingId(meetingId: string, requestId: number = this.restoreRe
       this.consciousThreadStore.reset();
       this.observedQuestionStore.reset();
       this.answerHypothesisStore.reset();
+      this.responsePreferenceStore.reset();
       this.designStateStore.reset();
       this.consciousSemanticContext = '';
 
       if (this.consciousModeEnabled) {
         this.answerHypothesisStore.restorePersistenceSnapshot(session.consciousState?.hypothesisState);
+        this.responsePreferenceStore.restorePersistenceSnapshot(session.consciousState?.preferenceState);
         this.designStateStore.restorePersistenceSnapshot(session.consciousState?.designState);
         if (session.activeThread) {
           this.consciousThreadStore.restoreActiveThread({

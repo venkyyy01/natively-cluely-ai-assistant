@@ -53,3 +53,41 @@ test('ConsciousAccelerationOrchestrator routes pause-action classification throu
 
   assert.ok(lane.calls.includes('semantic'));
 });
+
+test('ConsciousAccelerationOrchestrator preclassifies the latest transcript intent on silence and caches it by revision', async () => {
+  const lane = new StubClassifierLane();
+  let classifierCalls = 0;
+
+  const orchestrator = new ConsciousAccelerationOrchestrator({
+    classifierLane: lane,
+    budgetScheduler: { shouldAdmitSpeculation: () => true },
+    intentClassifier: async () => {
+      classifierCalls += 1;
+      return {
+        intent: 'behavioral',
+        confidence: 0.93,
+        answerShape: 'Tell one grounded story.',
+      };
+    },
+  });
+  orchestrator.setEnabled(true);
+  orchestrator.getPauseDetector().updateConfig({
+    minSilenceMs: 0,
+    softSpeculateThreshold: 0,
+    hardSpeculateThreshold: 0,
+    commitThreshold: 0,
+    evalIntervalMs: 1,
+    maxEvaluationMs: 10,
+  });
+
+  const question = 'Tell me about a time you had to influence a difficult stakeholder.';
+  orchestrator.updateTranscriptSegments([
+    { speaker: 'interviewer', text: question, timestamp: Date.now() },
+  ], 7);
+  orchestrator.onSilenceStart(question);
+
+  await new Promise((resolve) => setTimeout(resolve, 40));
+
+  assert.equal(classifierCalls, 1);
+  assert.equal(orchestrator.getPrefetchedIntent(question, 7)?.intent, 'behavioral');
+});

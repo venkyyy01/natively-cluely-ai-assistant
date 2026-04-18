@@ -241,3 +241,76 @@ test('streamChat uses responsePath for active cURL providers', async () => {
     helper.scrubKeys();
   }
 });
+
+test('chatWithGemini falls back to fast response when the active cURL provider times out', async () => {
+  const LLMHelper = await loadLLMHelper();
+  const helper = new LLMHelper() as any;
+  const originalChatWithCurl = helper.chatWithCurl;
+
+  helper.setModel('curl-provider', [{
+    id: 'curl-provider',
+    name: 'cURL',
+    curlCommand: 'curl https://example.com',
+    responsePath: 'choices[0].message.content',
+  }]);
+
+  helper.cerebrasClient = {
+    chat: {
+      completions: {
+        create: async () => ({ choices: [{ message: { content: 'fast fallback ok' } }] }),
+      },
+    },
+  };
+  helper.setFastResponseConfig({ enabled: true, provider: 'cerebras', model: 'gpt-oss-120b' });
+  helper.chatWithCurl = async () => {
+    throw new Error('LLM API timeout after 60000ms');
+  };
+
+  try {
+    const result = await helper.chatWithGemini('hello from slow curl provider');
+    assert.equal(result, 'fast fallback ok');
+  } finally {
+    helper.chatWithCurl = originalChatWithCurl;
+    helper.scrubKeys();
+  }
+});
+
+test('streamChat falls back to fast response when the active cURL provider fails', async () => {
+  const LLMHelper = await loadLLMHelper();
+  const helper = new LLMHelper() as any;
+  const originalExecuteCustomProvider = helper.executeCustomProvider;
+
+  helper.setModel('curl-provider', [{
+    id: 'curl-provider',
+    name: 'cURL',
+    curlCommand: 'curl https://example.com',
+    responsePath: 'choices[0].message.content',
+  }]);
+
+  helper.cerebrasClient = {
+    chat: {
+      completions: {
+        create: async function* () {
+          yield { choices: [{ delta: { content: 'fast ' } }] };
+          yield { choices: [{ delta: { content: 'fallback' } }] };
+        },
+      },
+    },
+  };
+  helper.setFastResponseConfig({ enabled: true, provider: 'cerebras', model: 'gpt-oss-120b' });
+  helper.executeCustomProvider = async () => {
+    throw new Error('LLM API timeout after 60000ms');
+  };
+
+  try {
+    let output = '';
+    for await (const chunk of helper.streamChat('hello from curl stream timeout')) {
+      output += chunk;
+    }
+
+    assert.equal(output, 'fast fallback');
+  } finally {
+    helper.executeCustomProvider = originalExecuteCustomProvider;
+    helper.scrubKeys();
+  }
+});

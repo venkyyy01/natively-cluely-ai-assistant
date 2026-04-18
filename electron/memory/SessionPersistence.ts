@@ -2,7 +2,12 @@ import { createHash } from 'node:crypto';
 import { promises as fs } from 'fs';
 import { homedir } from 'os';
 import { dirname, join } from 'path';
-import type { PersistedConsciousThreadState, PersistedAnswerHypothesisState, PersistedDesignStateState } from '../conscious';
+import type {
+  PersistedConsciousThreadState,
+  PersistedAnswerHypothesisState,
+  PersistedDesignStateState,
+  PersistedConsciousResponsePreferenceState,
+} from '../conscious';
 
 const SESSIONS_DIR_ENV = 'NATIVELY_SESSIONS_DIR';
 
@@ -87,6 +92,7 @@ export interface PersistedSession {
     threadState?: PersistedConsciousThreadState;
     hypothesisState?: PersistedAnswerHypothesisState;
     designState?: PersistedDesignStateState;
+    preferenceState?: PersistedConsciousResponsePreferenceState;
   };
   memoryState?: PersistedSessionMemoryState;
 }

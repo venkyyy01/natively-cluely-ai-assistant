@@ -11,6 +11,14 @@ export { ObservedQuestionStore, type ObservedQuestion } from './ObservedQuestion
 export { QuestionReactionClassifier, type QuestionReaction, type QuestionReactionKind } from './QuestionReactionClassifier';
 export { AnswerHypothesisStore, type AnswerHypothesis, type PersistedAnswerHypothesisState } from './AnswerHypothesisStore';
 export { ConsciousAnswerPlanner, type ConsciousAnswerPlan, type ConsciousAnswerShape } from './ConsciousAnswerPlanner';
+export {
+  ConsciousResponsePreferenceStore,
+  type ConsciousPlannerPreferenceSummary,
+  type ConsciousResponsePreferenceFlag,
+  type ConsciousResponseQuestionMode,
+  type PersistedConsciousResponseDirective,
+  type PersistedConsciousResponsePreferenceState,
+} from './ConsciousResponsePreferenceStore';
 export { ConsciousSemanticFactStore, type ConsciousSemanticFact } from './ConsciousSemanticFactStore';
 export { sanitizeProfileData, type ProfileDataSanitizationResult, type ProfileDataSanitizerOptions } from './ProfileDataSanitizer';
 export { DesignStateStore, type DesignStateEntry, type DesignStateFacet, type DesignStateRetrievalEntry, type DesignStateStoreStats, type PersistedDesignStateState } from './DesignStateStore';

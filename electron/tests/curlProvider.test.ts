@@ -74,6 +74,35 @@ test('chatWithCurl falls back to common-format extraction when responsePath miss
   }
 });
 
+test('chatWithCurl uses a 60s timeout for active cURL providers', async () => {
+  const LLMHelper = await loadLLMHelper();
+  const helper = new LLMHelper() as any;
+
+  helper.setModel('curl-provider', [{
+    id: 'curl-provider',
+    name: 'cURL',
+    curlCommand: 'curl https://example.com',
+    responsePath: 'choices[0].message.content',
+  }]);
+
+  const LLMHelperCtor = helper.__proto__.constructor;
+  const originalAxios = LLMHelperCtor.__testAxios;
+  let seenTimeout = 0;
+  LLMHelperCtor.__testAxios = async (config: any) => {
+    seenTimeout = config.timeout;
+    return { data: { choices: [{ message: { content: 'ok' } }] } };
+  };
+
+  try {
+    const response = await helper.chatWithCurl('hello');
+    assert.equal(response, 'ok');
+    assert.equal(seenTimeout, 60000);
+  } finally {
+    LLMHelperCtor.__testAxios = originalAxios;
+    helper.scrubKeys();
+  }
+});
+
 test('chatWithCurl injects text, context, and image placeholders for mixed multimodal payloads', async () => {
   const LLMHelper = await loadLLMHelper();
   const helper = new LLMHelper() as any;

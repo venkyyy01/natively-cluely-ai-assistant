@@ -13,6 +13,8 @@ import { sanitizeProfileData } from './ProfileDataSanitizer';
 import type { ConsciousModeStructuredResponse, ReasoningThread } from '../ConsciousMode';
 import type { QuestionReaction } from './QuestionReactionClassifier';
 import type { AnswerHypothesis } from './AnswerHypothesisStore';
+import type { ConsciousPlannerPreferenceSummary, ConsciousResponseQuestionMode } from './ConsciousResponsePreferenceStore';
+import { detectConsciousQuestionMode } from './ConsciousAnswerPlanner';
 
 interface SessionLike {
   isConsciousModeEnabled(): boolean;
@@ -26,6 +28,8 @@ interface SessionLike {
   getLatestConsciousResponse(): ConsciousModeStructuredResponse | null;
   getLatestQuestionReaction(): QuestionReaction | null;
   getLatestAnswerHypothesis(): AnswerHypothesis | null;
+  getConsciousResponsePreferenceContext(questionMode: ConsciousResponseQuestionMode): string;
+  getConsciousResponsePreferenceSummary(questionMode: ConsciousResponseQuestionMode): ConsciousPlannerPreferenceSummary;
 }
 
 interface KnowledgeStatusLike {
@@ -145,11 +149,16 @@ export class ConsciousPreparationCoordinator {
     const longMemoryBlock = this.session.getConsciousLongMemoryContext(
       input.lastInterviewerTurn || input.resolvedQuestion
     );
+    const planningQuestion = input.lastInterviewerTurn || input.resolvedQuestion;
+    const questionMode = detectConsciousQuestionMode(planningQuestion);
+    const preferenceSummary = this.session.getConsciousResponsePreferenceSummary(questionMode);
     const answerPlan = this.answerPlanner.plan({
-      question: input.lastInterviewerTurn || input.resolvedQuestion,
+      question: planningQuestion,
       reaction: this.session.getLatestQuestionReaction(),
       hypothesis: this.session.getLatestAnswerHypothesis(),
+      preferenceSummary,
     });
+    const preferenceBlock = this.session.getConsciousResponsePreferenceContext(answerPlan.questionMode);
     const planBlock = this.answerPlanner.buildContextBlock(answerPlan);
     const semanticBlock = this.semanticFactStore.buildContextBlock({
       question: input.lastInterviewerTurn || input.resolvedQuestion,
@@ -158,6 +167,7 @@ export class ConsciousPreparationCoordinator {
     });
     this.session.setConsciousSemanticContext(semanticBlock);
     const evidenceBlocks = [
+      preferenceBlock,
       planBlock,
       semanticBlock,
       stateBlock,

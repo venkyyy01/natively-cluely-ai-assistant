@@ -10,6 +10,7 @@ import { IntentResult } from "./IntentClassifier";
 import {
     CONSCIOUS_MODE_JSON_RESPONSE_INSTRUCTIONS,
     ConsciousModeStructuredResponse,
+    isBehavioralQuestionText,
     parseConsciousModeResponse,
 } from "../ConsciousMode";
 
@@ -129,7 +130,8 @@ ANSWER SHAPE: ${intentResult.answerShape}
     ): Promise<ConsciousModeStructuredResponse> {
         let full = "";
         const behavioralPromptRequested = intentResult?.intent === 'behavioral'
-            || /QUESTION_MODE:\s*behavioral/i.test(cleanedTranscript);
+            || /QUESTION_MODE:\s*behavioral/i.test(cleanedTranscript)
+            || isBehavioralQuestionText(question);
 
         const contextParts: string[] = [
             `QUESTION: ${question}`,
@@ -162,7 +164,10 @@ ANSWER SHAPE: ${intentResult.answerShape}
 
         contextParts.push(`CONVERSATION:\n${cleanedTranscript}`);
 
-        const message = contextParts.join('\n\n');
+        const message = [
+            'STRUCTURED_REASONING_RESPONSE',
+            ...contextParts,
+        ].join('\n\n');
         const stream = this.llmHelper.streamChat(
             message,
             imagePaths,
