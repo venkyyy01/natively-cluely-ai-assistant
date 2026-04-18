@@ -655,7 +655,7 @@ describe('StealthManager', () => {
     assert.ok(!manager.getStealthDegradationWarnings().includes('stealth_verification_failed'));
   });
 
-  it('fails managed-window verification when no verifiable native stealth is available', () => {
+  it('passes managed-window verification when Layer 0 is active but native module is unavailable', () => {
     const win = new FakeWindow();
     const manager = new StealthManager(
       { enabled: true },
@@ -668,7 +668,9 @@ describe('StealthManager', () => {
 
     manager.applyToWindow(win as any, true, { role: 'primary' });
 
-    assert.strictEqual(manager.verifyManagedWindows(), false);
+    // Layer 0 (setContentProtection) is the expected fallback when native module
+    // is unavailable, so verification should pass rather than falsely report failure.
+    assert.strictEqual(manager.verifyManagedWindows(), true);
     assert.ok(manager.getStealthDegradationWarnings().includes('native_module_unavailable'));
   });
 

@@ -65,10 +65,10 @@ test('takeScreenshot resumes the stealth watchdog even when capture fails', asyn
     const fakeState = Object.assign(Object.create(AppState.prototype), {
       getMainWindow: () => ({ isDestroyed: () => false }),
       stealthManager: {
-        pauseWatchdog() {
+        pauseWatchdog(_token: string) {
           calls.push('pause');
         },
-        resumeWatchdog() {
+        resumeWatchdog(_token: string) {
           calls.push('resume');
         },
       },
@@ -85,7 +85,7 @@ test('takeScreenshot resumes the stealth watchdog even when capture fails', asyn
     });
 
     await assert.rejects(() => takeScreenshot.call(fakeState), /capture failed/);
-    assert.deepEqual(calls, ['pause', 'pause', 'pause', 'resume', 'resume', 'resume']);
+    assert.deepEqual(calls, ['pause', 'resume']);
   } finally {
     restoreElectron();
     process.env.NODE_ENV = originalNodeEnv;
@@ -107,10 +107,10 @@ test('takeSelectiveScreenshot resumes the stealth watchdog even when selection i
     const fakeState = Object.assign(Object.create(AppState.prototype), {
       getMainWindow: () => ({ isDestroyed: () => false }),
       stealthManager: {
-        pauseWatchdog() {
+        pauseWatchdog(_token: string) {
           calls.push('pause');
         },
-        resumeWatchdog() {
+        resumeWatchdog(_token: string) {
           calls.push('resume');
         },
       },
@@ -127,7 +127,7 @@ test('takeSelectiveScreenshot resumes the stealth watchdog even when selection i
     });
 
     await assert.rejects(() => takeSelectiveScreenshot.call(fakeState), /Selection cancelled/);
-    assert.deepEqual(calls, ['pause', 'pause', 'pause', 'resume', 'resume', 'resume']);
+    assert.deepEqual(calls, ['pause', 'resume']);
   } finally {
     restoreElectron();
     process.env.NODE_ENV = originalNodeEnv;
