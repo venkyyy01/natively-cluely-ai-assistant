@@ -39,7 +39,15 @@ function hasSubstance(response: ConsciousModeStructuredResponse): boolean {
 }
 
 function isBehavioralQuestion(question: string): boolean {
-  return /(tell me about a time|describe a time|describe a situation|share an experience|give me an example|walk me through|talk about|leadership|conflict|disagreed|disagreement|feedback|failure|mistake|mentor|stakeholder|culture|values)/i.test(question);
+  return /(tell me about a time|describe a time|describe a situation|share an experience|give me an example|walk me through|talk about|how do you manage|what is your .*style|how do you make .*decision|how do you influence|how do you prioritize|leadership|conflict|disagreed|disagreement|feedback|failure|mistake|mentor|stakeholder|culture|values)/i.test(question);
+}
+
+function wordCount(value: string | null | undefined): number {
+  return (value || '').trim().split(/\s+/).filter(Boolean).length;
+}
+
+function hasBehavioralImpactCue(text: string): boolean {
+  return /(\b\d+(?:\.\d+)?(?:ms|s|x|%|k|m|b)?\b|improv|reduc|increas|decreas|saved|faster|slower|stabil|unblock|delivered|shipped|adopt|retention|latency|throughput|quality|incident|customer|user|team|process|runbook|checklist|learned|next time|would do differently)/i.test(text);
 }
 
 function hasCompleteBehavioralStar(response: ConsciousModeStructuredResponse): boolean {
@@ -52,7 +60,26 @@ function hasCompleteBehavioralStar(response: ConsciousModeStructuredResponse): b
     && behavioral.action
     && behavioral.result
     && behavioral.whyThisAnswerWorks.length >= 3
+    && behavioral.whyThisAnswerWorks.length <= 5
   );
+}
+
+function hasStrongBehavioralDepth(response: ConsciousModeStructuredResponse): boolean {
+  const behavioral = response.behavioralAnswer;
+  if (!behavioral) {
+    return false;
+  }
+
+  const actionWords = wordCount(behavioral.action);
+  const situationWords = wordCount(behavioral.situation);
+  const taskWords = wordCount(behavioral.task);
+  const resultWords = wordCount(behavioral.result);
+
+  return actionWords >= 18
+    && actionWords > situationWords
+    && actionWords > taskWords
+    && resultWords >= 8
+    && hasBehavioralImpactCue(behavioral.result);
 }
 
 function summaryText(response: ConsciousModeStructuredResponse): string {
@@ -123,6 +150,10 @@ export class ConsciousVerifier {
 
     if (isBehavioralQuestion(input.question) && !hasCompleteBehavioralStar(input.response)) {
       return { ok: false, reason: 'missing_behavioral_star_structure' };
+    }
+
+    if (isBehavioralQuestion(input.question) && !hasStrongBehavioralDepth(input.response)) {
+      return { ok: false, reason: 'weak_behavioral_depth' };
     }
 
     if (reaction?.kind === 'tradeoff_probe' && input.response.tradeoffs.length === 0 && input.response.pushbackResponses.length === 0) {

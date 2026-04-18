@@ -84,6 +84,34 @@ test('ConsciousVerifier rejects behavioral questions without explicit STAR struc
   assert.equal(result.reason, 'missing_behavioral_star_structure');
 });
 
+test('ConsciousVerifier rejects behavioral answers when action depth and impact are too weak', async () => {
+  const verifier = new ConsciousVerifier();
+  const result = await verifier.verify({
+    response: response({
+      behavioralAnswer: {
+        question: 'How do you make difficult decisions?',
+        headline: 'I try to stay calm and make a decision.',
+        situation: 'There was a hard decision.',
+        task: 'I had to decide quickly.',
+        action: 'I discussed it with the team.',
+        result: 'It worked out.',
+        whyThisAnswerWorks: [
+          'Shows calmness',
+          'Shows teamwork',
+          'Shows decision-making',
+        ],
+      },
+    }),
+    route: { qualifies: true, threadAction: 'start' },
+    reaction: null,
+    hypothesis: null,
+    question: 'How do you make difficult decisions?',
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, 'weak_behavioral_depth');
+});
+
 test('ConsciousVerifier accepts a tradeoff probe when tradeoffs are present', async () => {
   const verifier = new ConsciousVerifier();
   const result = await verifier.verify({

@@ -248,6 +248,11 @@ test('Conscious Mode only starts for system-design questions and prefers fresh s
     threadAction: 'start',
   });
 
+  assert.deepEqual(classifyConsciousModeQuestion('How do you make difficult decisions?', null), {
+    qualifies: true,
+    threadAction: 'start',
+  });
+
   assert.deepEqual(classifyConsciousModeQuestion('How would you design the data model for billing?', thread), {
     qualifies: true,
     threadAction: 'reset',
@@ -362,6 +367,7 @@ test('Conscious Mode transcript auto-trigger widens for actionable interviewer p
   assert.equal(shouldAutoTriggerSuggestionFromTranscript('Why this approach', true, null), true);
   assert.equal(shouldAutoTriggerSuggestionFromTranscript('What are the tradeoffs', true, null), true);
   assert.equal(shouldAutoTriggerSuggestionFromTranscript('Give me an example of when you disagreed with a PM', true, null), true);
+  assert.equal(shouldAutoTriggerSuggestionFromTranscript('How do you make difficult decisions', true, null), true);
   assert.equal(shouldAutoTriggerSuggestionFromTranscript('Can you repeat that for me', true, null), false);
   assert.equal(shouldAutoTriggerSuggestionFromTranscript('okay sounds good', true, null), false);
 });

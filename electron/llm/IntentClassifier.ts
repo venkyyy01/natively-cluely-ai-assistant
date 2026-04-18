@@ -33,7 +33,7 @@ const INTENT_ANSWER_SHAPES: Record<ConversationIntent, string> = {
     clarification: 'Give a direct, focused 1-2 sentence clarification. No setup, no context-setting.',
     follow_up: 'Continue the narrative naturally. 1-2 sentences. No recap of what was already said.',
     deep_dive: 'Provide a structured but concise explanation. Use concrete specifics, not abstract concepts.',
-    behavioral: 'Lead with a specific example or story. Use the STAR pattern implicitly. Focus on actions and outcomes.',
+    behavioral: 'For explicit behavioral questions, answer in clear STAR with most depth in Action. For hidden behavioral questions, give one short approach statement and then one concrete example that proves it. Focus on personal actions, decision logic, outcomes, and lessons learned when relevant.',
     example_request: 'Provide ONE concrete, detailed example. Make it realistic and specific.',
     summary_probe: 'Confirm the summary briefly and add one clarifying point if needed.',
     coding: 'Provide a FULL, complete, working and production-ready code implementation (including necessary boilerplate like Java imports/classes). Start with a brief approach description, then the fully runnable code block, then a concise explanation of why this approach works.',
@@ -194,7 +194,7 @@ function detectIntentByPattern(lastInterviewerTurn: string): IntentResult | null
     }
 
     // Behavioral patterns
-    if (/(give me an example|tell me about a time|describe a situation|when have you|share an experience)/i.test(text)) {
+    if (/(give me an example|tell me about a time|describe a time|describe a situation|when have you|share an experience|how do you manage|what is your .*style|how do you make .*decision|how do you influence|how do you prioritize)/i.test(text)) {
         return { intent: 'behavioral', confidence: 0.9, answerShape: INTENT_ANSWER_SHAPES.behavioral };
     }
 

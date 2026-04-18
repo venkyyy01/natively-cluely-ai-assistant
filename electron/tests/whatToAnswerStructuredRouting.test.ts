@@ -1,7 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { WhatToAnswerLLM } from '../llm/WhatToAnswerLLM';
-import { CONSCIOUS_REASONING_SYSTEM_PROMPT } from '../llm/prompts';
+import {
+  CONSCIOUS_BEHAVIORAL_REASONING_SYSTEM_PROMPT,
+  CONSCIOUS_REASONING_SYSTEM_PROMPT,
+} from '../llm/prompts';
 
 type CapturedCall = {
   message: string;
@@ -52,4 +55,24 @@ test('WhatToAnswerLLM reasoning-first uses conscious structured routing options'
   assert.equal(helper.calls[0].prompt, CONSCIOUS_REASONING_SYSTEM_PROMPT);
   assert.equal(helper.calls[0].options?.skipKnowledgeInterception, true);
   assert.equal(helper.calls[0].options?.qualityTier, 'structured_reasoning');
+});
+
+test('WhatToAnswerLLM selects the dedicated behavioral reasoning prompt for behavioral intents', async () => {
+  const helper = new CapturingLLMHelper();
+  const llm = new WhatToAnswerLLM(helper as any);
+
+  const result = await llm.generateReasoningFirst(
+    '[INTERVIEWER]: How do you make difficult decisions?\n<conscious_answer_plan>\nQUESTION_MODE: behavioral\n</conscious_answer_plan>',
+    'How do you make difficult decisions?',
+    undefined,
+    {
+      intent: 'behavioral',
+      confidence: 0.91,
+      answerShape: 'Give a short approach statement and one grounded STAR example.',
+    },
+  );
+
+  assert.equal(result.mode, 'reasoning_first');
+  assert.equal(helper.calls.length, 1);
+  assert.equal(helper.calls[0].prompt, CONSCIOUS_BEHAVIORAL_REASONING_SYSTEM_PROMPT);
 });

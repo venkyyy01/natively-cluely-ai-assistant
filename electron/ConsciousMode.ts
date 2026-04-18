@@ -96,6 +96,11 @@ const BEHAVIORAL_ACTIONABLE_QUESTION_PATTERNS = [
   /^walk me through\b/i,
   /^talk about\b/i,
   /^how do you handle\b/i,
+  /^how do you manage\b/i,
+  /^what is your .*style\b/i,
+  /^how do you make .*decision/i,
+  /^how do you influence\b/i,
+  /^how do you prioritize\b/i,
   /\bleadership\b/i,
   /\bconflict\b/i,
   /\bdisagreed\b/i,
@@ -408,7 +413,7 @@ function isBroadConsciousSeed(lower: string): boolean {
 }
 
 function isBehavioralPrompt(lower: string): boolean {
-  return /(tell me about a time|describe a time|describe a situation|share an experience|give me an example|walk me through|leadership|conflict|disagreed|disagreement|mentor|stakeholder|failure|mistake|team challenge|culture|values)/i.test(lower);
+  return /(tell me about a time|describe a time|describe a situation|share an experience|give me an example|walk me through|talk about|how do you manage|what is your .*style|how do you make .*decision|how do you influence|how do you prioritize|leadership|conflict|disagreed|disagreement|mentor|stakeholder|failure|mistake|team challenge|culture|values)/i.test(lower);
 }
 
 function isAdministrativePrompt(lower: string): boolean {
