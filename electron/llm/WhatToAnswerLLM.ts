@@ -132,14 +132,28 @@ ANSWER SHAPE: ${intentResult.answerShape}
             || /QUESTION_MODE:\s*behavioral/i.test(cleanedTranscript);
 
         const contextParts: string[] = [
-            'STRUCTURED_REASONING_RESPONSE',
-            CONSCIOUS_MODE_JSON_RESPONSE_INSTRUCTIONS,
             `QUESTION: ${question}`,
         ];
 
         if (intentResult) {
-            contextParts.push(`INTENT: ${intentResult.intent}`);
-            contextParts.push(`ANSWER_SHAPE: ${intentResult.answerShape}`);
+            let intentHint: string;
+            switch (intentResult.intent) {
+                case 'behavioral':
+                    intentHint = 'This is a behavioral question. Tell one concrete story, own it with "I".';
+                    break;
+                case 'coding':
+                    intentHint = 'This is a coding question. Code first, explain briefly after.';
+                    break;
+                case 'deep_dive':
+                    intentHint = 'They want more detail on the same topic. Go deeper, don\'t start a new topic.';
+                    break;
+                case 'clarification':
+                    intentHint = 'They want clarification. Keep it short, answer what they actually asked.';
+                    break;
+                default:
+                    intentHint = 'Answer directly. Keep it short and conversational.';
+            }
+            contextParts.push(intentHint);
         }
 
         if (temporalContext?.hasRecentResponses) {

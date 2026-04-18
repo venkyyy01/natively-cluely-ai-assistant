@@ -41,13 +41,28 @@ Return ONLY valid JSON with these canonical keys:
   }
 }
 
-Canonical field rules:
-- schemaVersion SHOULD be "${CONSCIOUS_MODE_SCHEMA_VERSION}".
-- mode MUST be "reasoning_first".
-- openingReasoning is the first spoken sentence or two.
-- Array fields MUST be arrays of concise strings. Use [] when empty.
-- codeTransition MUST be a string. Use "" when no code bridge is needed.
-- behavioralAnswer is optional and should be used for grounded behavioral interview answers.`;
+CRITICAL RULES — MOST FIELDS SHOULD BE EMPTY:
+- Leave ALL array fields as [] unless the interviewer EXPLICITLY asked for that dimension.
+- If they asked one thing, answer that ONE thing. Do NOT fill every field.
+- openingReasoning: 1-2 sentences MAX. Natural Indian English like "So basically I'd..." or "See, the thing is..."
+- tradeoffs: Only if they asked about tradeoffs. ONE tradeoff max, spoken naturally.
+- edgeCases: [] unless they specifically asked about edge cases.
+- scaleConsiderations: [] unless they specifically asked about scale.
+- pushbackResponses: [] unless they challenged your approach.
+- likelyFollowUps: 0-2 max. What they might ask next, not a list of everything you know.
+- codeTransition: "" unless it's a coding question.
+
+SPEECH STYLE — TALK LIKE A REAL PERSON:
+- Write like someone actually talking, not writing an essay
+- Indian English naturally: "So basically...", "See...", "The thing is...", "Yeah, what happened was..."
+- Contractions everywhere: "I'd", "I'm", "I've", "don't", "won't", "it's"
+- Simple words: "use" not "leverage", "build" not "architect", "start" not "commence"
+- NO bullet points, numbered lists, or structured formatting in spoken fields
+- NO "First, Second, Third" or "In conclusion" — real people don't talk like that
+- NO "Let me walk you through" or "Let me break this down" — just say it
+- If any field reads like a textbook, tutorial, or presentation, REWRITE it in plain speech
+
+If the interviewer wants more, THEY WILL ASK. Your job is to give a focused answer, not anticipate every possible follow-up and dump it all at once.`;
 
 export interface ConsciousBehavioralAnswer {
   question: string;
@@ -343,19 +358,32 @@ export function mergeConsciousModeResponses(
 }
 
 function formatSection(label: string, values: string[]): string[] {
-  return [label, ...values.map(value => `- ${value}`)];
+  if (values.length === 0) return [];
+  if (values.length === 1) return [`${label} ${values[0]}`];
+  return [label, ...values.map((value, i) => {
+    if (i === 0) return `So, ${value[0].toLowerCase()}${value.slice(1)}`;
+    return `Also, ${value[0].toLowerCase()}${value.slice(1)}`;
+  })];
 }
 
 function formatBehavioralAnswer(answer: ConsciousBehavioralAnswer): string[] {
-  return [
-    `Question: ${answer.question}`,
-    `Headline:\n${answer.headline}`,
-    `Situation:\n${answer.situation}`,
-    `Task: ${answer.task}`,
-    `Action:\n${answer.action}`,
-    `Result:\n${answer.result}`,
-    ['Why this answer works:', ...answer.whyThisAnswerWorks.map((item) => `- ${item}`)].join('\n'),
-  ].filter(Boolean);
+  const parts: string[] = [];
+  if (answer.headline) {
+    parts.push(answer.headline);
+  }
+  if (answer.situation) {
+    parts.push(answer.situation);
+  }
+  if (answer.task) {
+    parts.push(answer.task);
+  }
+  if (answer.action) {
+    parts.push(answer.action);
+  }
+  if (answer.result) {
+    parts.push(answer.result);
+  }
+  return parts.filter(Boolean);
 }
 
 export function formatConsciousModeResponseChunks(response: ConsciousModeStructuredResponse): string[] {
@@ -366,16 +394,27 @@ export function formatConsciousModeResponseChunks(response: ConsciousModeStructu
   const chunks: string[] = [];
 
   if (response.openingReasoning) {
-    chunks.push(`Opening reasoning: ${response.openingReasoning}`);
+    chunks.push(response.openingReasoning);
   }
 
-  chunks.push(formatSection('Implementation plan:', response.implementationPlan).join('\n'));
-  chunks.push(formatSection('Tradeoffs:', response.tradeoffs).join('\n'));
-  chunks.push(formatSection('Edge cases:', response.edgeCases).join('\n'));
-  chunks.push(formatSection('Scale considerations:', response.scaleConsiderations).join('\n'));
-  chunks.push(formatSection('Pushback responses:', response.pushbackResponses).join('\n'));
-  chunks.push(formatSection('Likely follow-ups:', response.likelyFollowUps).join('\n'));
-  chunks.push(response.codeTransition ? `Code transition: ${response.codeTransition}` : 'Code transition:');
+  const implSection = formatSection('', response.implementationPlan);
+  if (implSection.length) chunks.push(implSection.join(' '));
+
+  const tradeoffSection = formatSection('The tradeoff is,', response.tradeoffs);
+  if (tradeoffSection.length) chunks.push(tradeoffSection.join(' '));
+
+  const edgeSection = formatSection('Edge case —', response.edgeCases);
+  if (edgeSection.length) chunks.push(edgeSection.join(' '));
+
+  const scaleSection = formatSection('At scale,', response.scaleConsiderations);
+  if (scaleSection.length) chunks.push(scaleSection.join(' '));
+
+  const pushbackSection = formatSection('If they push back,', response.pushbackResponses);
+  if (pushbackSection.length) chunks.push(pushbackSection.join(' '));
+
+  if (response.codeTransition) {
+    chunks.push(response.codeTransition);
+  }
 
   return chunks.filter(Boolean);
 }

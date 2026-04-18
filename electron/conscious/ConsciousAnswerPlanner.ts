@@ -66,8 +66,8 @@ export class ConsciousAnswerPlanner {
         focalFacets: uniqueFacets(plan.focalFacets),
         questionMode,
         deliveryFormat: 'spoken_concise',
-        deliveryStyle: 'high_signal_spoken',
-        groundingHint: 'Ground every claim in transcript, evidence, or profile context.',
+        deliveryStyle: 'conversational_first_person',
+        groundingHint: 'Say it like you\'re actually in the room. Use everyday words, not jargon.',
       };
 
       switch (questionMode) {
@@ -75,32 +75,32 @@ export class ConsciousAnswerPlanner {
           return {
             ...modeAdjusted,
             focalFacets: uniqueFacets([...modeAdjusted.focalFacets, 'implementationPlan', 'codeTransition']),
-            maxWords: Math.min(modeAdjusted.maxWords, 70),
+            maxWords: Math.min(modeAdjusted.maxWords, 50),
             deliveryFormat: 'code_first_or_short_steps',
             deliveryStyle: 'compact_technical',
-            groundingHint: 'Ground the answer in visible code, screenshot details, and the active transcript. Avoid invented APIs or outputs.',
-            rationale: `${modeAdjusted.rationale} Live-coding questions should stay code-first and compact.`,
+            groundingHint: 'Keep it short. Show the code, explain briefly. Don\'t narrate every line.',
+            rationale: `${modeAdjusted.rationale} Live-coding — code-first, stay compact, no lectures.`,
           };
         case 'system_design':
           return {
             ...modeAdjusted,
-            focalFacets: uniqueFacets([...modeAdjusted.focalFacets, 'implementationPlan', 'tradeoffs', 'scaleConsiderations']),
-            maxWords: Math.min(modeAdjusted.maxWords, 110),
+            focalFacets: uniqueFacets([...modeAdjusted.focalFacets, 'tradeoffs', 'scaleConsiderations']),
+            maxWords: Math.min(modeAdjusted.maxWords, 80),
             deliveryFormat: 'architecture_then_tradeoffs',
-            deliveryStyle: 'structured_architectural',
-            groundingHint: 'Ground the answer in the current system-design nouns, constraints, and prior thread state.',
-            rationale: `${modeAdjusted.rationale} System-design answers should cover architecture and tradeoffs before details.`,
+            deliveryStyle: 'conversational_architect',
+            groundingHint: 'Speak like you\'re whiteboarding with a colleague. One or two key tradeoffs, not a slide deck.',
+            rationale: `${modeAdjusted.rationale} System design — cover architecture then tradeoffs, but stay conversational.`,
           };
         case 'behavioral':
           return {
             ...modeAdjusted,
             answerShape: modeAdjusted.answerShape === 'direct_answer' ? 'example_answer' : modeAdjusted.answerShape,
-            focalFacets: uniqueFacets([...modeAdjusted.focalFacets, 'openingReasoning', 'behavioralAnswer']),
-            maxWords: Math.min(modeAdjusted.maxWords, 250),
+            focalFacets: uniqueFacets([...modeAdjusted.focalFacets, 'behavioralAnswer']),
+            maxWords: Math.min(modeAdjusted.maxWords, 200),
             deliveryFormat: 'full_star_narrative',
             deliveryStyle: 'first_person_professional',
-            groundingHint: 'Ground the answer in concrete past experience from transcript or profile. Do not invent stories.',
-            rationale: `${modeAdjusted.rationale} Behavioral answers should target 1.5–2.5 minutes spoken with full STAR structure.`,
+            groundingHint: 'Ground in real experience from transcript or profile. One story, own it with "I". Don\'t invent.',
+            rationale: `${modeAdjusted.rationale} Behavioral — one concrete story, 1.5–2 minutes spoken, STAR structure.`,
           };
         default:
           return modeAdjusted;
@@ -112,74 +112,111 @@ export class ConsciousAnswerPlanner {
         return buildPlan({
           answerShape: 'tradeoff_defense',
           focalFacets,
-          maxWords: 110,
+          maxWords: 70,
           confidence: 0.92,
-          rationale: 'Interviewer is explicitly probing tradeoffs; answer should defend one chosen approach with tradeoff clarity.',
+          rationale: 'They\'re asking about tradeoffs. Pick one approach, defend it, mention one real tradeoff. Don\'t list five options.',
         });
       case 'metric_probe':
         return buildPlan({
           answerShape: 'metric_backed_answer',
           focalFacets: focalFacets.length ? focalFacets : ['metrics', 'scaleConsiderations'],
-          maxWords: 110,
+          maxWords: 70,
           confidence: 0.92,
-          rationale: 'Interviewer is asking how success or risk would be measured.',
+          rationale: 'How would you measure success? Give specifics if you can, don\'t handwave.',
         });
       case 'example_request':
         return buildPlan({
           answerShape: 'example_answer',
           focalFacets,
-          maxWords: 120,
+          maxWords: 80,
           confidence: 0.9,
-          rationale: 'Interviewer asked for a concrete example, so the answer should anchor on one scenario.',
+          rationale: 'They want a concrete example. Tell one story, own it. Don\'t give a menu of options.',
         });
       case 'clarification':
         return buildPlan({
           answerShape: 'clarification_answer',
           focalFacets,
-          maxWords: 90,
+          maxWords: 60,
           confidence: 0.86,
-          rationale: 'Interviewer wants the previous idea unpacked, not a fresh broad answer.',
+          rationale: 'They want the previous idea unpacked. Keep it short, answer what they actually asked.',
         });
       case 'challenge':
         return buildPlan({
           answerShape: 'pushback_defense',
           focalFacets: focalFacets.length ? focalFacets : ['pushbackResponses'],
-          maxWords: 110,
+          maxWords: 70,
           confidence: 0.88,
-          rationale: 'Interviewer is challenging the choice and needs a direct defense.',
+          rationale: 'Pushback. Stand your ground, explain your reasoning, don\'t flip-flop.',
         });
       case 'deep_dive':
         return buildPlan({
           answerShape: 'depth_extension',
           focalFacets: focalFacets.length ? focalFacets : ['implementationPlan', 'edgeCases'],
-          maxWords: 120,
+          maxWords: 80,
           confidence: 0.86,
-          rationale: 'Interviewer is digging deeper into the same thread.',
+          rationale: 'Going deeper on the same thread. Don\'t start a new topic.',
         });
       default:
         return buildPlan({
           answerShape: 'direct_answer',
           focalFacets,
-          maxWords: 95,
+          maxWords: 65,
           confidence: input.hypothesis?.confidence ?? 0.6,
-          rationale: 'No strong reaction signal; answer directly and keep it focused.',
+          rationale: 'Just answer directly. Short and conversational.',
         });
     }
   }
 
   buildContextBlock(plan: ConsciousAnswerPlan): string {
+    const shapeGuide = this.describeShape(plan.answerShape);
+    const modeGuide = this.describeMode(plan.questionMode);
+    const facetsGuide = plan.focalFacets.length
+      ? `Focus on: ${plan.focalFacets.join(', ')}.`
+      : '';
+    const styleGuide = this.describeStyle(plan.deliveryStyle);
+
     return [
       '<conscious_answer_plan>',
-      `ANSWER_SHAPE: ${plan.answerShape}`,
-      `QUESTION_MODE: ${plan.questionMode}`,
-      `FOCAL_FACETS: ${plan.focalFacets.join(', ') || 'none'}`,
-      `DELIVERY_FORMAT: ${plan.deliveryFormat}`,
-      `DELIVERY_STYLE: ${plan.deliveryStyle}`,
-      `GROUNDING_HINT: ${plan.groundingHint}`,
-      `MAX_WORDS: ${plan.maxWords}`,
-      `PLAN_CONFIDENCE: ${plan.confidence.toFixed(2)}`,
-      `RATIONALE: ${plan.rationale}`,
+      `How to answer: ${shapeGuide}`,
+      plan.questionMode !== 'general' ? `Question type: ${modeGuide}` : '',
+      facetsGuide,
+      `Speak like: ${styleGuide}`,
+      `Stay grounded: ${plan.groundingHint}`,
+      `Keep it under ${plan.maxWords} words. Less is more.`,
+      `Why this approach: ${plan.rationale}`,
       '</conscious_answer_plan>',
-    ].join('\n');
+    ].filter(Boolean).join('\n');
+  }
+
+  private describeShape(shape: ConsciousAnswerShape): string {
+    switch (shape) {
+      case 'direct_answer': return 'Answer straight, no fluff.';
+      case 'tradeoff_defense': return 'Pick one approach, explain one real tradeoff. Don\'t list five options.';
+      case 'metric_backed_answer': return 'Give specifics with numbers if you have them. No vague claims.';
+      case 'example_answer': return 'Tell one concrete story. Not a list of examples.';
+      case 'clarification_answer': return 'Clarify what they\'re really asking, then answer that specific thing.';
+      case 'depth_extension': return 'Go deeper on the same thread. Don\'t start a new topic.';
+      case 'pushback_defense': return 'Stand your ground respectfully. Explain why you chose this, don\'t just switch.';
+      default: return 'Answer directly and keep it short.';
+    }
+  }
+
+  private describeMode(mode: ConsciousAnswerPlan['questionMode']): string {
+    switch (mode) {
+      case 'live_coding': return 'Live coding — give code first, explain after. Stay compact.';
+      case 'system_design': return 'System design — talk through your thinking like you\'re whiteboarding with a friend.';
+      case 'behavioral': return 'Behavioral — tell one real story, own your work, don\'t just list achievements.';
+      default: return '';
+    }
+  }
+
+  private describeStyle(style: string): string {
+    switch (style) {
+      case 'compact_technical': return 'Short, technical, code-first. Like talking to a teammate at your desk.';
+      case 'conversational_architect': return 'Think out loud. Like explaining to a colleague over coffee, not presenting slides.';
+      case 'conversational_first_person': return 'Natural first-person. Like you\'re actually in the room talking.';
+      case 'first_person_professional': return 'Professional but human. Own your work with "I", not "we".';
+      default: return 'Natural first-person conversation.';
+    }
   }
 }
