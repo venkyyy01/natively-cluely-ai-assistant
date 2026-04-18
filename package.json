@@ -27,6 +27,8 @@
     "bench:baseline": "rimraf dist-electron/electron/tests && tsc -p electron/tsconfig.json && node scripts/run-baseline-benchmark.js",
     "test:release-gate": "node scripts/run-release-gate.js",
     "eval:conscious": "tsc -p electron/tsconfig.json && node scripts/run-conscious-eval.js",
+    "eval:intent": "tsc -p electron/tsconfig.json && node scripts/run-intent-eval.js",
+    "eval:intent:multi": "tsc -p electron/tsconfig.json && node scripts/run-intent-eval-multi.js",
     "test:electron:coverage": "rimraf dist-electron/electron/tests && tsc -p electron/tsconfig.json && node --test --experimental-test-coverage dist-electron/electron/tests/*.test.js",
     "test:renderer": "npm --prefix renderer test",
     "test:renderer:coverage": "npm --prefix renderer run test:coverage",

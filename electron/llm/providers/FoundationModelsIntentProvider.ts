@@ -61,7 +61,7 @@ interface FoundationModelsIntentProviderOptions {
   isOptimizationEnabled?: (flag: 'useFoundationModelsIntent') => boolean;
 }
 
-const DEFAULT_TIMEOUT_MS = 1500;
+const DEFAULT_TIMEOUT_MS = 2000;
 const MAX_COMPACT_TRANSCRIPT_LINES = 6;
 const MAX_COMPACT_TRANSCRIPT_CHARS = 1200;
 

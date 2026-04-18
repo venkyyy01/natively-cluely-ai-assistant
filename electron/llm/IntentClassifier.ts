@@ -64,6 +64,64 @@ const ZERO_SHOT_LABEL_KEYS = Object.keys(ZERO_SHOT_LABELS);
 /** Minimum confidence from the SLM to trust its classification */
 const SLM_CONFIDENCE_THRESHOLD = 0.35;
 
+function normalizeForIntentHeuristics(text: string): string {
+    return text
+        .toLowerCase()
+        .replace(/[^a-z0-9\s]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+
+function likelyIntentCue(text: string): ConversationIntent | null {
+    const normalized = normalizeForIntentHeuristics(text);
+    if (!normalized) {
+        return null;
+    }
+
+    if (/(implement|write code|debug|algorithm|lru|typescript|javascript|handler code|api payload|function)/i.test(normalized)) {
+        return 'coding';
+    }
+
+    if (/(so you are saying|so you re saying|let me make sure|to summarize|so to summarize)/i.test(normalized)) {
+        return 'summary_probe';
+    }
+
+    if (/(what happened next|then what|after that)/i.test(normalized)) {
+        return 'follow_up';
+    }
+
+    if (/(clarify|what do you mean|can you explain|unpack|how so)/i.test(normalized)) {
+        return 'clarification';
+    }
+
+    if (/(concrete example|specific example|for example|for instance|specific instance)/i.test(normalized)) {
+        return 'example_request';
+    }
+
+    if (/(tradeoff|trade off|why would you choose|why choose|why not|compare|latency|freshness|consistency|availability|throughput)/i.test(normalized)) {
+        return 'deep_dive';
+    }
+
+    if (/(tell me about a time|describe a time|describe a situation|walk me through a failure|stakeholder|leadership|influence|conflict with|disagreed)/i.test(normalized)) {
+        return 'behavioral';
+    }
+
+    return null;
+}
+
+function calibrateSlmResultByCue(text: string, slmResult: IntentResult): IntentResult {
+    const cue = likelyIntentCue(text);
+    if (!cue || cue === slmResult.intent) {
+        return slmResult;
+    }
+
+    const downgradedConfidence = Math.min(slmResult.confidence, 0.3);
+    return {
+        ...slmResult,
+        confidence: downgradedConfidence,
+    };
+}
+
 /**
  * Singleton lazy-loaded zero-shot classifier using @xenova/transformers
  */
@@ -140,17 +198,26 @@ class ZeroShotClassifier {
             const topLabel = result.labels[0];
             const topScore = result.scores[0];
 
-            if (topScore < SLM_CONFIDENCE_THRESHOLD) {
+            const resolvedIntent = ZERO_SHOT_LABELS[topLabel] || 'general';
+            const rawResult: IntentResult = {
+                intent: resolvedIntent,
+                confidence: topScore,
+                answerShape: INTENT_ANSWER_SHAPES[resolvedIntent],
+            };
+
+            const calibratedResult = calibrateSlmResultByCue(text, rawResult);
+
+            if (calibratedResult.confidence < SLM_CONFIDENCE_THRESHOLD) {
                 return null; // Not confident enough
             }
 
-            const intent = ZERO_SHOT_LABELS[topLabel] || 'general';
-            console.log(`[IntentClassifier] SLM classified as "${intent}" (${(topScore * 100).toFixed(1)}%): "${text.substring(0, 60)}..."`);
+            const intent = calibratedResult.intent;
+            console.log(`[IntentClassifier] SLM classified as "${intent}" (${(calibratedResult.confidence * 100).toFixed(1)}%): "${text.substring(0, 60)}..."`);
 
             return {
-                intent,
-                confidence: topScore,
-                answerShape: INTENT_ANSWER_SHAPES[intent],
+                intent: calibratedResult.intent,
+                confidence: calibratedResult.confidence,
+                answerShape: calibratedResult.answerShape,
             };
         } catch (e) {
             console.warn('[IntentClassifier] SLM classification error:', e);

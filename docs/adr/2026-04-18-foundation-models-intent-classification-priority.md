@@ -135,3 +135,13 @@ Out of scope:
 - `SystemLanguageModel` overview + availability checks
 - `LanguageModelSession.respond(...)` and `streamResponse(...)`
 - `SystemLanguageModel.contextSize`
+
+## Operational Notes
+
+- Intent evaluation runner: `npm run eval:intent`
+- Intent multi-run evaluation runner: `npm run eval:intent:multi -- --provider=coordinated --runs=20`
+- Provider mode overrides for evaluation:
+  - `node scripts/run-intent-eval.js --provider=coordinated` (default)
+  - `node scripts/run-intent-eval.js --provider=foundation`
+  - `node scripts/run-intent-eval.js --provider=legacy`
+  - `INTENT_EVAL_DISABLE_FOUNDATION=1 node scripts/run-intent-eval.js --provider=coordinated`

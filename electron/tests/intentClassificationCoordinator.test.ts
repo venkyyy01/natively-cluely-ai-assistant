@@ -158,3 +158,107 @@ test('IntentClassificationCoordinator marks deterministic non-unavailable failur
   assert.equal(result.retryCount, 0);
   assert.equal(result.fallbackReason, 'primary_failed');
 });
+
+test('IntentClassificationCoordinator falls back when primary confidence is below threshold', async () => {
+  const lowConfidenceInput: IntentClassificationInput = {
+    lastInterviewerTurn: 'Implement a queue retry worker in TypeScript.',
+    preparedTranscript: '[INTERVIEWER]: Implement a queue retry worker in TypeScript.',
+    assistantResponseCount: 0,
+  };
+
+  const primary = new StubProvider('foundation', true, async () => ({
+    intent: 'behavioral',
+    confidence: 0.71,
+    answerShape: 'Tell one concrete story.',
+  }));
+  let fallbackCalls = 0;
+  const fallback = new StubProvider('legacy', true, async () => {
+    fallbackCalls += 1;
+    return codingResult(0.87);
+  });
+
+  const coordinator = new IntentClassificationCoordinator(primary, fallback, {
+    minimumPrimaryConfidence: 0.82,
+    contradictionDeltaConfidence: 0.18,
+  });
+  const result = await coordinator.classify(lowConfidenceInput);
+
+  assert.equal(result.intent, 'coding');
+  assert.equal(result.provider, 'legacy');
+  assert.equal(result.fallbackReason, 'primary_contradiction');
+  assert.equal(fallbackCalls, 1);
+});
+
+test('IntentClassificationCoordinator falls back on contradiction when fallback better matches cues', async () => {
+  const contradictionInput: IntentClassificationInput = {
+    lastInterviewerTurn: 'What happened next after you paused the deployment?',
+    preparedTranscript: [
+      '[ASSISTANT]: I paused the deploy and paged backend on-call.',
+      '[INTERVIEWER]: What happened next after you paused the deployment?',
+    ].join('\n'),
+    assistantResponseCount: 1,
+  };
+
+  const primary = new StubProvider('foundation', true, async () => ({
+    intent: 'behavioral',
+    confidence: 0.85,
+    answerShape: 'Use STAR.',
+  }));
+  let fallbackCalls = 0;
+  const fallback = new StubProvider('legacy', true, async () => {
+    fallbackCalls += 1;
+    return {
+      intent: 'follow_up',
+      confidence: 0.93,
+      answerShape: 'Continue narrative naturally.',
+    };
+  });
+
+  const coordinator = new IntentClassificationCoordinator(primary, fallback, {
+    minimumPrimaryConfidence: 0.82,
+    contradictionDeltaConfidence: 0.05,
+  });
+  const result = await coordinator.classify(contradictionInput);
+
+  assert.equal(result.intent, 'follow_up');
+  assert.equal(result.provider, 'legacy');
+  assert.equal(result.fallbackReason, 'primary_contradiction');
+  assert.equal(fallbackCalls, 1);
+});
+
+test('IntentClassificationCoordinator keeps primary on low confidence when fallback collapses to general but cues indicate non-general', async () => {
+  const clarificationInput: IntentClassificationInput = {
+    lastInterviewerTurn: 'Can you clarify what you meant by eventual consistency?',
+    preparedTranscript: [
+      '[ASSISTANT]: I use eventual consistency for replicas in this design.',
+      '[INTERVIEWER]: Can you clarify what you meant by eventual consistency?',
+    ].join('\n'),
+    assistantResponseCount: 1,
+  };
+
+  const primary = new StubProvider('foundation', true, async () => ({
+    intent: 'clarification',
+    confidence: 0.58,
+    answerShape: 'Give a direct clarification.',
+  }));
+  let fallbackCalls = 0;
+  const fallback = new StubProvider('legacy', true, async () => {
+    fallbackCalls += 1;
+    return {
+      intent: 'general',
+      confidence: 0.5,
+      answerShape: 'Respond naturally.',
+    };
+  });
+
+  const coordinator = new IntentClassificationCoordinator(primary, fallback, {
+    minimumPrimaryConfidence: 0.82,
+    contradictionDeltaConfidence: 0.18,
+  });
+  const result = await coordinator.classify(clarificationInput);
+
+  assert.equal(result.intent, 'clarification');
+  assert.equal(result.provider, 'foundation');
+  assert.equal(result.fallbackReason, undefined);
+  assert.equal(fallbackCalls, 1);
+});
