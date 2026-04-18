@@ -69,6 +69,13 @@ function summaryText(response: ConsciousModeStructuredResponse, lowercase: boole
     ...response.edgeCases,
     ...response.scaleConsiderations,
     ...response.pushbackResponses,
+    response.behavioralAnswer?.question,
+    response.behavioralAnswer?.headline,
+    response.behavioralAnswer?.situation,
+    response.behavioralAnswer?.task,
+    response.behavioralAnswer?.action,
+    response.behavioralAnswer?.result,
+    ...(response.behavioralAnswer?.whyThisAnswerWorks || []),
     response.codeTransition,
   ].join(' ');
 

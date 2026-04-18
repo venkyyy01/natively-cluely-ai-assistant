@@ -1,5 +1,10 @@
 import { LLMHelper } from "../LLMHelper";
-import { CONSCIOUS_REASONING_SYSTEM_PROMPT, FAST_STANDARD_ANSWER_PROMPT, UNIVERSAL_WHAT_TO_ANSWER_PROMPT } from "./prompts";
+import {
+    CONSCIOUS_BEHAVIORAL_REASONING_SYSTEM_PROMPT,
+    CONSCIOUS_REASONING_SYSTEM_PROMPT,
+    FAST_STANDARD_ANSWER_PROMPT,
+    UNIVERSAL_WHAT_TO_ANSWER_PROMPT,
+} from "./prompts";
 import { TemporalContext } from "./TemporalContextBuilder";
 import { IntentResult } from "./IntentClassifier";
 import {
@@ -123,6 +128,8 @@ ANSWER SHAPE: ${intentResult.answerShape}
         imagePaths?: string[]
     ): Promise<ConsciousModeStructuredResponse> {
         let full = "";
+        const behavioralPromptRequested = intentResult?.intent === 'behavioral'
+            || /QUESTION_MODE:\s*behavioral/i.test(cleanedTranscript);
 
         const contextParts: string[] = [
             'STRUCTURED_REASONING_RESPONSE',
@@ -142,7 +149,14 @@ ANSWER SHAPE: ${intentResult.answerShape}
         contextParts.push(`CONVERSATION:\n${cleanedTranscript}`);
 
         const message = contextParts.join('\n\n');
-        const stream = this.llmHelper.streamChat(message, imagePaths, undefined, CONSCIOUS_REASONING_SYSTEM_PROMPT, {
+        const stream = this.llmHelper.streamChat(
+            message,
+            imagePaths,
+            undefined,
+            behavioralPromptRequested
+                ? CONSCIOUS_BEHAVIORAL_REASONING_SYSTEM_PROMPT
+                : CONSCIOUS_REASONING_SYSTEM_PROMPT,
+            {
             skipKnowledgeInterception: true,
             qualityTier: 'structured_reasoning',
         });

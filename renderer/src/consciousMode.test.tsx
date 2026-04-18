@@ -24,6 +24,23 @@ const structuredAnswer = [
   'Code transition: If they ask for code, I would sketch the cache interface first.\n```ts\nconst cache = new Map<string, string>();\n```',
 ].join('\n');
 
+const behavioralStructuredAnswer = [
+  'Question: Handled disagreement with a PM during a release',
+  'Headline:',
+  'I helped stabilize a risky release by aligning the PM and QA team around a narrower rollback decision.',
+  'Situation:',
+  'We were in the middle of a release and there was disagreement on whether we should keep pushing or roll back after a risky behavior change.',
+  'Task: I needed to get the release back to a safe state quickly without creating more confusion across the team.',
+  'Action:',
+  'I pulled the logs, checked the deployment diff, and isolated the smallest safe rollback. Then I aligned with QA on a quick validation pass and kept the PM updated on the tradeoff between speed and blast radius.',
+  'Result:',
+  'We stabilized the release the same day and added a clearer rollback checklist for future launches.',
+  'Why this answer works:',
+  '- Shows ownership under pressure',
+  '- Shows conflict resolution with evidence',
+  '- Ends with a process improvement',
+].join('\n');
+
 test('parses backend Conscious Mode text into the five speaking blocks', () => {
   const parsed = parseConsciousModeAnswer(structuredAnswer);
 
@@ -110,5 +127,28 @@ test('classifies Conscious Mode analytics separately from standard interview ass
   })).toEqual({
     output_variant: 'standard_interview_assist',
     thread_type: 'fresh_answer',
+  });
+});
+
+test('parses the behavioral STAR layout used by Conscious Mode grounded interview answers', () => {
+  const parsed = parseConsciousModeAnswer(behavioralStructuredAnswer);
+
+  expect(parsed).not.toBeNull();
+  expect(parsed?.sections.map((section: { title: string }) => section.title)).toEqual([
+    'Question',
+    'Headline',
+    'Situation',
+    'Task',
+    'Action',
+    'Result',
+    'Why this answer works',
+  ]);
+
+  expect(classifyAssistRender({
+    answerText: behavioralStructuredAnswer,
+    threadAction: 'start',
+  })).toEqual({
+    output_variant: 'conscious_mode',
+    thread_type: 'fresh_reasoning_thread',
   });
 });

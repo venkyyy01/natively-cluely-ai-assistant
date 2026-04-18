@@ -29,6 +29,29 @@ function overlapScore(tokens: string[], text: string, tags: string[]): number {
   return score;
 }
 
+function isBehavioralQuestion(question: string): boolean {
+  return /(tell me about a time|describe a time|describe a situation|share an experience|give me an example|walk me through|talk about|leadership|conflict|disagreed|disagreement|feedback|failure|mistake|mentor|stakeholder|culture|values)/i.test(question);
+}
+
+function fallbackCategoryPriority(category: ConsciousSemanticFact['category']): number {
+  switch (category) {
+    case 'experience':
+      return 0;
+    case 'project':
+      return 1;
+    case 'identity':
+      return 2;
+    case 'skill':
+      return 3;
+    case 'company_context':
+      return 4;
+    case 'requirement':
+      return 5;
+    default:
+      return 6;
+  }
+}
+
 export class ConsciousSemanticFactStore {
   private facts: ConsciousSemanticFact[] = [];
 
@@ -95,13 +118,40 @@ export class ConsciousSemanticFactStore {
   }
 
   getTopFacts(input: { question: string; reaction?: QuestionReaction | null; limit?: number }): ConsciousSemanticFact[] {
+    const limit = input.limit || 5;
     const tokens = tokenize(`${input.question} ${(input.reaction?.targetFacets || []).join(' ')} ${input.reaction?.kind || ''}`);
     const scored = this.facts
       .map((fact) => ({ ...fact, score: overlapScore(tokens, fact.text, fact.tags) }))
       .filter((fact) => (fact.score || 0) > 0)
       .sort((a, b) => (b.score || 0) - (a.score || 0));
 
-    return scored.slice(0, input.limit || 5);
+    if (!isBehavioralQuestion(input.question)) {
+      return scored.slice(0, limit).map(({ score, ...fact }) => fact);
+    }
+
+    const selected: ConsciousSemanticFact[] = scored.slice(0, limit).map(({ score, ...fact }) => fact);
+    if (selected.length >= limit) {
+      return selected;
+    }
+
+    const seenTitles = new Set(selected.map((fact) => `${fact.category}:${fact.title}`));
+    const fallbackFacts = this.facts
+      .filter((fact) => ['experience', 'project', 'identity'].includes(fact.category))
+      .sort((a, b) => fallbackCategoryPriority(a.category) - fallbackCategoryPriority(b.category));
+
+    for (const fact of fallbackFacts) {
+      const key = `${fact.category}:${fact.title}`;
+      if (seenTitles.has(key)) {
+        continue;
+      }
+      selected.push(fact);
+      seenTitles.add(key);
+      if (selected.length >= limit) {
+        break;
+      }
+    }
+
+    return selected;
   }
 
   buildContextBlock(input: { question: string; reaction?: QuestionReaction | null; limit?: number }): string {

@@ -67,6 +67,23 @@ test('ConsciousVerifier rejects duplicate continuation answers', async () => {
   assert.equal(result.reason, 'duplicate_follow_up_response');
 });
 
+test('ConsciousVerifier rejects behavioral questions without explicit STAR structure', async () => {
+  const verifier = new ConsciousVerifier();
+  const result = await verifier.verify({
+    response: response({
+      openingReasoning: 'I handled a conflict by talking to the team and fixing the release issue.',
+      implementationPlan: [],
+    }),
+    route: { qualifies: true, threadAction: 'start' },
+    reaction: null,
+    hypothesis: null,
+    question: 'Tell me about a time you handled team conflict during a release.',
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, 'missing_behavioral_star_structure');
+});
+
 test('ConsciousVerifier accepts a tradeoff probe when tradeoffs are present', async () => {
   const verifier = new ConsciousVerifier();
   const result = await verifier.verify({

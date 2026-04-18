@@ -13,6 +13,7 @@ export const CONSCIOUS_MODE_RESPONSE_FIELDS = [
   'pushbackResponses',
   'likelyFollowUps',
   'codeTransition',
+  'behavioralAnswer',
 ] as const;
 
 export const CONSCIOUS_MODE_JSON_RESPONSE_INSTRUCTIONS = `RESPONSE SCHEMA VERSION: ${CONSCIOUS_MODE_SCHEMA_VERSION}
@@ -28,7 +29,16 @@ Return ONLY valid JSON with these canonical keys:
   "scaleConsiderations": ["string"],
   "pushbackResponses": ["string"],
   "likelyFollowUps": ["string"],
-  "codeTransition": "string"
+  "codeTransition": "string",
+  "behavioralAnswer": {
+    "question": "string",
+    "headline": "string",
+    "situation": "string",
+    "task": "string",
+    "action": "string",
+    "result": "string",
+    "whyThisAnswerWorks": ["string"]
+  }
 }
 
 Canonical field rules:
@@ -36,7 +46,18 @@ Canonical field rules:
 - mode MUST be "reasoning_first".
 - openingReasoning is the first spoken sentence or two.
 - Array fields MUST be arrays of concise strings. Use [] when empty.
-- codeTransition MUST be a string. Use "" when no code bridge is needed.`;
+- codeTransition MUST be a string. Use "" when no code bridge is needed.
+- behavioralAnswer is optional and should be used for grounded behavioral interview answers.`;
+
+export interface ConsciousBehavioralAnswer {
+  question: string;
+  headline: string;
+  situation: string;
+  task: string;
+  action: string;
+  result: string;
+  whyThisAnswerWorks: string[];
+}
 
 export interface ConsciousModeStructuredResponse {
   mode: ConsciousModeResponseMode;
@@ -48,6 +69,7 @@ export interface ConsciousModeStructuredResponse {
   pushbackResponses: string[];
   likelyFollowUps: string[];
   codeTransition: string;
+  behavioralAnswer?: ConsciousBehavioralAnswer | null;
 }
 
 export interface ReasoningThread {
@@ -67,15 +89,22 @@ export interface ConsciousModeQuestionRoute {
 
 const BEHAVIORAL_ACTIONABLE_QUESTION_PATTERNS = [
   /^tell me about a time\b/i,
+  /^describe a time\b/i,
   /^describe a situation\b/i,
   /^share an experience\b/i,
+  /^give me an example\b/i,
+  /^walk me through\b/i,
+  /^talk about\b/i,
   /^how do you handle\b/i,
   /\bleadership\b/i,
   /\bconflict\b/i,
+  /\bdisagreed\b/i,
   /\bdisagreement\b/i,
   /\bfeedback\b/i,
   /\bfailure\b/i,
   /\bmistake\b/i,
+  /\bproject you led\b/i,
+  /\bowned end to end\b/i,
   /\bteam challenge\b/i,
   /\bculture\b/i,
   /\bvalues\b/i,
@@ -124,6 +153,41 @@ function normalizeList(value: unknown): string[] {
   return text ? [text] : [];
 }
 
+function normalizeBehavioralAnswer(value: unknown): ConsciousBehavioralAnswer | null {
+  if (!value || typeof value !== 'object') {
+    return null;
+  }
+
+  const behavioral = value as Record<string, unknown>;
+  const normalized: ConsciousBehavioralAnswer = {
+    question: normalizeText(behavioral.question),
+    headline: normalizeText(behavioral.headline),
+    situation: normalizeText(behavioral.situation),
+    task: normalizeText(behavioral.task),
+    action: normalizeText(behavioral.action),
+    result: normalizeText(behavioral.result),
+    whyThisAnswerWorks: normalizeList(behavioral.whyThisAnswerWorks),
+  };
+
+  if (!normalized.question && !normalized.headline && !normalized.situation && !normalized.task && !normalized.action && !normalized.result && normalized.whyThisAnswerWorks.length === 0) {
+    return null;
+  }
+
+  return normalized;
+}
+
+function hasBehavioralAnswerSubstance(value: ConsciousBehavioralAnswer | null | undefined): boolean {
+  return Boolean(
+    value?.question
+    || value?.headline
+    || value?.situation
+    || value?.task
+    || value?.action
+    || value?.result
+    || value?.whyThisAnswerWorks.length
+  );
+}
+
 export function createEmptyConsciousModeResponse(mode: ConsciousModeResponseMode = 'reasoning_first'): ConsciousModeStructuredResponse {
   return {
     mode,
@@ -135,6 +199,7 @@ export function createEmptyConsciousModeResponse(mode: ConsciousModeResponseMode
     pushbackResponses: [],
     likelyFollowUps: [],
     codeTransition: '',
+    behavioralAnswer: null,
   };
 }
 
@@ -187,10 +252,15 @@ export function normalizeConsciousModeResponse(value: (Partial<ConsciousModeStru
     normalizeText(value?.spokenResponse) ||
     normalizeList(value?.implementationPlan).length ||
     normalizeList(value?.tradeoffs).length ||
-    normalizeCodeTransition(value?.codeTransition, value?.codeBlock)
+    normalizeCodeTransition(value?.codeTransition, value?.codeBlock) ||
+    hasBehavioralAnswerSubstance(normalizeBehavioralAnswer((value as Record<string, unknown> | undefined)?.behavioralAnswer))
   );
   const mode = hasCanonicalMode || hasAdaptableLegacyPayload ? 'reasoning_first' : 'invalid';
-  const openingReasoning = normalizeText(value?.openingReasoning) || normalizeText(value?.spokenResponse);
+  const behavioralAnswer = normalizeBehavioralAnswer((value as Record<string, unknown> | undefined)?.behavioralAnswer);
+  const openingReasoning = normalizeText(value?.openingReasoning)
+    || normalizeText(value?.spokenResponse)
+    || behavioralAnswer?.headline
+    || '';
   return {
     mode,
     openingReasoning,
@@ -201,6 +271,7 @@ export function normalizeConsciousModeResponse(value: (Partial<ConsciousModeStru
     pushbackResponses: normalizePushbackResponses(value?.pushbackResponses),
     likelyFollowUps: normalizeList(value?.likelyFollowUps),
     codeTransition: normalizeCodeTransition(value?.codeTransition, value?.codeBlock),
+    behavioralAnswer,
   };
 }
 
@@ -217,7 +288,8 @@ export function isValidConsciousModeResponse(response: ConsciousModeStructuredRe
     response.scaleConsiderations.length ||
     response.pushbackResponses.length ||
     response.likelyFollowUps.length ||
-    response.codeTransition
+    response.codeTransition ||
+    hasBehavioralAnswerSubstance(response.behavioralAnswer)
   );
 }
 
@@ -261,6 +333,7 @@ export function mergeConsciousModeResponses(
     pushbackResponses: mergeList(base.pushbackResponses, incoming.pushbackResponses),
     likelyFollowUps: mergeList(base.likelyFollowUps, incoming.likelyFollowUps),
     codeTransition: incoming.codeTransition || base.codeTransition,
+    behavioralAnswer: incoming.behavioralAnswer || base.behavioralAnswer || null,
   };
 }
 
@@ -268,7 +341,23 @@ function formatSection(label: string, values: string[]): string[] {
   return [label, ...values.map(value => `- ${value}`)];
 }
 
+function formatBehavioralAnswer(answer: ConsciousBehavioralAnswer): string[] {
+  return [
+    `Question: ${answer.question}`,
+    `Headline:\n${answer.headline}`,
+    `Situation:\n${answer.situation}`,
+    `Task: ${answer.task}`,
+    `Action:\n${answer.action}`,
+    `Result:\n${answer.result}`,
+    ['Why this answer works:', ...answer.whyThisAnswerWorks.map((item) => `- ${item}`)].join('\n'),
+  ].filter(Boolean);
+}
+
 export function formatConsciousModeResponseChunks(response: ConsciousModeStructuredResponse): string[] {
+  if (response.behavioralAnswer && hasBehavioralAnswerSubstance(response.behavioralAnswer)) {
+    return formatBehavioralAnswer(response.behavioralAnswer);
+  }
+
   const chunks: string[] = [];
 
   if (response.openingReasoning) {
@@ -304,7 +393,7 @@ export function tryParseConsciousModeOpeningReasoning(raw: string): string | nul
 }
 
 function isQuestionLike(lower: string): boolean {
-  return /\?$/.test(lower) || /^(how|what|why|when|where|which|who|can|could|would|walk me through|tell me)/i.test(lower);
+  return /\?$/.test(lower) || /^(how|what|why|when|where|which|who|can|could|would|walk me through|tell me|give me|describe|share|talk about)/i.test(lower);
 }
 
 function isSubstantialConversationTurn(lower: string): boolean {
@@ -319,7 +408,7 @@ function isBroadConsciousSeed(lower: string): boolean {
 }
 
 function isBehavioralPrompt(lower: string): boolean {
-  return /(tell me about a time|describe a situation|share an experience|leadership|conflict|mentor|stakeholder|failure|mistake|team challenge|culture|values)/i.test(lower);
+  return /(tell me about a time|describe a time|describe a situation|share an experience|give me an example|walk me through|leadership|conflict|disagreed|disagreement|mentor|stakeholder|failure|mistake|team challenge|culture|values)/i.test(lower);
 }
 
 function isAdministrativePrompt(lower: string): boolean {

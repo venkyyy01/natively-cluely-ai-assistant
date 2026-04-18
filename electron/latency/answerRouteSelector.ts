@@ -18,6 +18,25 @@ const PROFILE_PHRASES = [
   'tell me about a project you worked on',
 ] as const;
 
+const PROFILE_BEHAVIORAL_PATTERNS = [
+  /\btell me about a time\b/i,
+  /\bdescribe a time\b/i,
+  /\bdescribe a situation\b/i,
+  /\bshare an experience\b/i,
+  /\bgive me an example\b/i,
+  /\bwalk me through\b/i,
+  /\bhow (did|do) you handle\b/i,
+  /\bconflict\b/i,
+  /\bdisagreed\b/i,
+  /\bdisagreement\b/i,
+  /\bfailure\b/i,
+  /\bmistake\b/i,
+  /\bstakeholder\b/i,
+  /\bmentor\b/i,
+  /\bproject you led\b/i,
+  /\bowned end to end\b/i,
+] as const;
+
 const KNOWLEDGE_DIRECT = [
   'why this company',
   'why do you want to work here',
@@ -47,6 +66,7 @@ export function isProfileRequiredQuestion(latestQuestion: string | null | undefi
   const normalized = normalizeQuestion(latestQuestion);
   if (!normalized) return false;
   if (PROFILE_PHRASES.some((phrase) => normalized.includes(phrase))) return true;
+  if (PROFILE_BEHAVIORAL_PATTERNS.some((pattern) => pattern.test(normalized))) return true;
   return /^what experience do you have with .+ in your previous role$/.test(normalized);
 }
 

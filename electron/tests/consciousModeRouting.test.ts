@@ -11,6 +11,7 @@ import {
   tryParseConsciousModeOpeningReasoning,
   type ReasoningThread,
 } from '../ConsciousMode';
+import { CONSCIOUS_BEHAVIORAL_REASONING_SYSTEM_PROMPT } from '../llm/prompts';
 
 type StreamCall = {
   message: string;
@@ -103,6 +104,58 @@ test('Conscious Mode routes qualifying technical questions into the structured r
   assert.match(llmHelper.calls[0]?.message || '', /STRUCTURED_REASONING_RESPONSE/);
   assert.equal(llmHelper.calls[0]?.options?.skipKnowledgeInterception, true);
   assert.equal(llmHelper.calls[0]?.options?.qualityTier, 'structured_reasoning');
+});
+
+test('Conscious Mode formats behavioral answers into the strict STAR interview layout', async () => {
+  class BehavioralLLMHelper {
+    public calls: StreamCall[] = [];
+
+    async *streamChat(
+      message: string,
+      _imagePaths?: string[],
+      context?: string,
+      prompt?: string,
+      options?: StreamCall['options'],
+    ): AsyncGenerator<string> {
+      this.calls.push({ message, context, prompt, options });
+
+      yield JSON.stringify({
+        mode: 'reasoning_first',
+        openingReasoning: 'I helped unblock a production issue during a release by tightening the rollback path and aligning the team quickly.',
+        behavioralAnswer: {
+          question: 'Handled team conflict during a production issue',
+          headline: 'I helped unblock a production issue during a release by tightening the rollback path and aligning the team quickly.',
+          situation: 'We were in the middle of a production release, and there was disagreement between backend and QA on whether to keep pushing or roll back after we saw unstable behavior.',
+          task: 'I needed to get the release back to a safe state, reduce confusion, and make sure we made a decision based on evidence instead of opinions.',
+          action: 'I pulled the recent logs and deployment diff, isolated the risky change set, and proposed a rollback of only that slice instead of reverting everything. I aligned with QA on a short validation checklist, kept the PM updated on what we were doing, and made sure the discussion stayed focused on user impact and recovery time. After the rollback, I documented the failure mode and added a release check so the same confusion would not repeat.',
+          result: 'We stabilized the release the same day, avoided a broader rollback, and the team had a much clearer runbook for similar issues after that.',
+          whyThisAnswerWorks: [
+            'Shows ownership under pressure',
+            'Shows conflict resolution with evidence-based communication',
+            'Ends with a concrete operational improvement',
+          ],
+        },
+      });
+    }
+  }
+
+  const session = new SessionTracker();
+  const llmHelper = new BehavioralLLMHelper();
+  const engine = new IntelligenceEngine(llmHelper as any, session);
+
+  session.setConsciousModeEnabled(true);
+  addInterviewerTurn(session, 'Tell me about a time you handled team conflict during a production issue.', Date.now());
+
+  const answer = await engine.runWhatShouldISay(undefined, 0.91);
+
+  assert.match(answer || '', /^Question: Handled team conflict during a production issue/m);
+  assert.match(answer || '', /^Headline:\nI helped unblock a production issue during a release by tightening the rollback path and aligning the team quickly\./m);
+  assert.match(answer || '', /^Situation:\nWe were in the middle of a production release/m);
+  assert.match(answer || '', /^Task: I needed to get the release back to a safe state/m);
+  assert.match(answer || '', /^Action:\nI pulled the recent logs and deployment diff/m);
+  assert.match(answer || '', /^Result:\nWe stabilized the release the same day/m);
+  assert.match(answer || '', /^Why this answer works:\n- Shows ownership under pressure/m);
+  assert.equal(llmHelper.calls[0]?.prompt, CONSCIOUS_BEHAVIORAL_REASONING_SYSTEM_PROMPT);
 });
 
 test('Conscious Mode qualifying follow-ups continue the thread, while a new technical topic resets it', async () => {
@@ -308,6 +361,7 @@ test('Conscious Mode transcript auto-trigger widens for actionable interviewer p
   assert.equal(shouldAutoTriggerSuggestionFromTranscript('Why this approach', false, null), false);
   assert.equal(shouldAutoTriggerSuggestionFromTranscript('Why this approach', true, null), true);
   assert.equal(shouldAutoTriggerSuggestionFromTranscript('What are the tradeoffs', true, null), true);
+  assert.equal(shouldAutoTriggerSuggestionFromTranscript('Give me an example of when you disagreed with a PM', true, null), true);
   assert.equal(shouldAutoTriggerSuggestionFromTranscript('Can you repeat that for me', true, null), false);
   assert.equal(shouldAutoTriggerSuggestionFromTranscript('okay sounds good', true, null), false);
 });

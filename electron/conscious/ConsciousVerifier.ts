@@ -31,7 +31,27 @@ function hasSubstance(response: ConsciousModeStructuredResponse): boolean {
     response.edgeCases.length ||
     response.scaleConsiderations.length ||
     response.pushbackResponses.length ||
-    response.codeTransition.trim()
+    response.codeTransition.trim() ||
+    response.behavioralAnswer?.headline ||
+    response.behavioralAnswer?.action ||
+    response.behavioralAnswer?.result
+  );
+}
+
+function isBehavioralQuestion(question: string): boolean {
+  return /(tell me about a time|describe a time|describe a situation|share an experience|give me an example|walk me through|talk about|leadership|conflict|disagreed|disagreement|feedback|failure|mistake|mentor|stakeholder|culture|values)/i.test(question);
+}
+
+function hasCompleteBehavioralStar(response: ConsciousModeStructuredResponse): boolean {
+  const behavioral = response.behavioralAnswer;
+  return Boolean(
+    behavioral?.question
+    && behavioral.headline
+    && behavioral.situation
+    && behavioral.task
+    && behavioral.action
+    && behavioral.result
+    && behavioral.whyThisAnswerWorks.length >= 3
   );
 }
 
@@ -43,6 +63,13 @@ function summaryText(response: ConsciousModeStructuredResponse): string {
     ...response.edgeCases,
     ...response.scaleConsiderations,
     ...response.pushbackResponses,
+    response.behavioralAnswer?.question,
+    response.behavioralAnswer?.headline,
+    response.behavioralAnswer?.situation,
+    response.behavioralAnswer?.task,
+    response.behavioralAnswer?.action,
+    response.behavioralAnswer?.result,
+    ...(response.behavioralAnswer?.whyThisAnswerWorks || []),
     response.codeTransition,
   ].join(' ').toLowerCase();
 }
@@ -93,6 +120,10 @@ export class ConsciousVerifier {
     const reaction = input.reaction;
     const hypothesis = input.hypothesis;
     const responseText = summaryText(input.response);
+
+    if (isBehavioralQuestion(input.question) && !hasCompleteBehavioralStar(input.response)) {
+      return { ok: false, reason: 'missing_behavioral_star_structure' };
+    }
 
     if (reaction?.kind === 'tradeoff_probe' && input.response.tradeoffs.length === 0 && input.response.pushbackResponses.length === 0) {
       return { ok: false, reason: 'missing_tradeoff_content' };
