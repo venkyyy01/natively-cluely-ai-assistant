@@ -62,6 +62,29 @@ interface FoundationModelsIntentProviderOptions {
 }
 
 const DEFAULT_TIMEOUT_MS = 1500;
+const MAX_COMPACT_TRANSCRIPT_LINES = 6;
+const MAX_COMPACT_TRANSCRIPT_CHARS = 1200;
+
+function compactPreparedTranscript(preparedTranscript: string, question: string): string {
+  const normalizedTranscript = preparedTranscript
+    .replace(/\r\n?/g, '\n')
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  const dialogueLines = normalizedTranscript.filter((line) => /^\[(INTERVIEWER|ASSISTANT|ME|USER)\]/i.test(line));
+  const compactLines = (dialogueLines.length > 0 ? dialogueLines : normalizedTranscript)
+    .slice(-MAX_COMPACT_TRANSCRIPT_LINES);
+
+  const fallbackQuestion = question.trim() ? [`[INTERVIEWER]: ${question.trim()}`] : [];
+  const compactTranscript = (compactLines.length > 0 ? compactLines : fallbackQuestion).join('\n');
+
+  if (compactTranscript.length <= MAX_COMPACT_TRANSCRIPT_CHARS) {
+    return compactTranscript;
+  }
+
+  return compactTranscript.slice(compactTranscript.length - MAX_COMPACT_TRANSCRIPT_CHARS).trim();
+}
 
 function isConversationIntent(value: string): value is ConversationIntent {
   return INTENT_CANDIDATES.includes(value as ConversationIntent);
@@ -144,7 +167,7 @@ export class FoundationModelsIntentProvider implements IntentInferenceProvider {
     const request: FoundationIntentHelperRequest = {
       version: 1,
       question: input.lastInterviewerTurn ?? '',
-      preparedTranscript: input.preparedTranscript,
+      preparedTranscript: compactPreparedTranscript(input.preparedTranscript, input.lastInterviewerTurn ?? ''),
       assistantResponseCount: input.assistantResponseCount,
       candidateIntents: INTENT_CANDIDATES,
     };

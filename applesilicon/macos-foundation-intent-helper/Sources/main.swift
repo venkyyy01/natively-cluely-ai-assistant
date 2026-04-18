@@ -18,12 +18,12 @@ private struct IntentResponse: Encodable {
     let errorType: String?
     let message: String?
 
-    static func success(intent: String, confidence: Double, answerShape: String) -> IntentResponse {
+    static func success(intent: String, confidence: Double) -> IntentResponse {
         IntentResponse(
             ok: true,
             intent: intent,
             confidence: confidence,
-            answerShape: answerShape,
+            answerShape: nil,
             provider: "apple_foundation_models",
             errorType: nil,
             message: nil
@@ -44,13 +44,22 @@ private struct IntentResponse: Encodable {
 }
 
 @available(macOS 26.0, *)
-@Generable
+@Generable(description: "Interview intent label and confidence.")
 private struct IntentEnvelope {
+    @Guide(description: "Best intent label for the interviewer turn.", .anyOf([
+        "behavioral",
+        "coding",
+        "deep_dive",
+        "clarification",
+        "follow_up",
+        "example_request",
+        "summary_probe",
+        "general"
+    ]))
     var intent: String
 
+    @Guide(description: "Confidence from 0 to 1.")
     var confidence: Double
-
-    var answerShape: String
 }
 
 private enum HelperError: Error {
@@ -138,35 +147,76 @@ private func ensureModelAvailable(_ model: SystemLanguageModel) throws {
 }
 
 @available(macOS 26.0, *)
+private func questionSpecificHint(for question: String) -> String {
+    let lowered = question.lowercased()
+    var hints: [String] = []
+
+    if lowered.hasPrefix("so ") || lowered.contains("so you're saying") || lowered.contains("so you are saying") || lowered.contains("let me make sure") {
+        hints.append("This question restates prior discussion for confirmation. Prefer summary_probe over follow_up if it paraphrases the earlier answer.")
+    }
+
+    if lowered.contains("what happened next") || lowered.contains("then what") || lowered.contains("after that") {
+        hints.append("This question asks for continuation. Prefer follow_up.")
+    }
+
+    if lowered.contains("tradeoff") || lowered.contains("trade-off") || lowered.contains("why would you choose") || lowered.contains("why choose") || lowered.contains("why not") || lowered.contains("compare") {
+        hints.append("This question asks for reasoning or tradeoffs. Prefer deep_dive unless it explicitly asks for code.")
+    }
+
+    return hints.joined(separator: " ")
+}
+
+@available(macOS 26.0, *)
 private func buildPrompt(_ request: IntentRequest) -> Prompt {
-    let candidates = request.candidateIntents.joined(separator: ", ")
+    let recentDialogue = request.preparedTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
+    let priorAnswerHint = request.assistantResponseCount > 0
+        ? "There is prior assistant context. Use it only for follow_up, clarification, or summary_probe."
+        : "There is no prior assistant context. Avoid follow_up or summary_probe unless the wording explicitly depends on missing context."
+    let questionHint = questionSpecificHint(for: request.question)
     return Prompt("""
-    Classify the interviewer question intent for an interview copilot.
+    Classify the interviewer turn into one interview intent label.
 
-    Allowed intents: \(candidates)
+    behavioral: asks about the candidate's own past actions, decisions, conflict, leadership, failure, or work example.
+    coding: asks for code, debugging, implementation, algorithms, technical design, or architecture.
+    deep_dive: asks for deeper explanation, reasoning, or tradeoffs without asking for code.
+    clarification: asks to clarify or explain something already said.
+    follow_up: asks to continue the immediately previous answer or asks what happened next.
+    example_request: asks for a concrete example or instance without asking for a full past story.
+    summary_probe: restates prior discussion and asks for confirmation or correction.
+    general: anything else.
 
-    Interviewer question:
+    Simple examples:
+    - "Tell me about a time you handled a difficult stakeholder." -> behavioral
+    - "Implement an LRU cache in TypeScript." -> coding
+    - "Why would you choose Kafka over RabbitMQ in this design?" -> deep_dive
+    - "Can you clarify what you mean by backpressure?" -> clarification
+    - "What happened next after the rollback?" -> follow_up
+    - "Can you give a concrete example?" -> example_request
+    - "So you are saying the write path stays synchronous?" -> summary_probe
+    - "What interests you about this role?" -> general
+
+    \(priorAnswerHint)
+    \(questionHint.isEmpty ? "" : "Question-specific hint: \(questionHint)")
+
+    Current interviewer turn:
     \(request.question)
 
-    Prepared transcript context:
-    \(request.preparedTranscript)
+    Recent dialogue:
+    \(recentDialogue.isEmpty ? "[none]" : recentDialogue)
 
-    Assistant response count so far: \(request.assistantResponseCount)
-
-    Return only the best matching intent, confidence 0..1, and one short answer-shape sentence.
+    Return the best label and a calibrated confidence.
     """)
 }
 
 @available(macOS 26.0, *)
 private func classifyIntent(_ request: IntentRequest) async throws -> IntentEnvelope {
-    let model = SystemLanguageModel.default
+    let model = SystemLanguageModel(useCase: .general)
     try ensureModelAvailable(model)
 
     let instructions = Instructions("""
-    You are a strict intent classifier for interview coaching.
-    Output exactly one allowed intent label.
+    You are a precise intent classifier for interview coaching.
+    Output exactly one label from the guided schema.
     Keep confidence calibrated.
-    Keep answerShape concise.
     """)
 
     let session = LanguageModelSession(model: model, instructions: instructions)
@@ -210,8 +260,7 @@ private func runHelper() async {
         writeResponse(
             .success(
                 intent: result.intent,
-                confidence: normalizedConfidence,
-                answerShape: result.answerShape.trimmingCharacters(in: .whitespacesAndNewlines)
+                confidence: normalizedConfidence
             )
         )
     } catch let error as HelperError {
