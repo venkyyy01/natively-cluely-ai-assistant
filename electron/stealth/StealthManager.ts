@@ -247,9 +247,9 @@ export class StealthManager extends EventEmitter {
   private watchdogHandle: unknown = null;
   private windowsAffinityHandle: unknown = null;
   private watchdogRunning = false;
-  private watchdogPaused = false;
-  private watchdogPauseCount = 0;
+  private watchdogPauseTokens = new Set<string>();
   private watchdogStateVersion = 0;
+  private meetingActive = false;
   private scStreamMonitorHandle: unknown = null;
   private scStreamMonitorRunning = false;
   private scStreamActive = false;
@@ -367,7 +367,8 @@ export class StealthManager extends EventEmitter {
 
       this.removeNativeStealth(win);
       this.disableVirtualDisplayIsolation(record);
-      this.applyLayer0(win, false);
+      // Layer 0 (setContentProtection + setExcludeFromCapture) is never disabled
+      // once applied — it remains active regardless of stealth enable state.
       this.applyUiHardening(win, record.hideFromSwitcher);
       return;
     }
@@ -489,23 +490,33 @@ export class StealthManager extends EventEmitter {
   }
 
   public isEnabled(): boolean {
-    return this.config.enabled;
+    return this.config.enabled || this.meetingActive;
   }
 
-  public pauseWatchdog(): void {
-    this.watchdogPaused = true;
-    this.watchdogPauseCount++;
+  public setMeetingActive(active: boolean): void {
+    this.meetingActive = active;
+
+    if (active) {
+      // Force Layer 0 on all managed windows when a meeting is active
+      for (const record of this.managedWindows) {
+        const win = record.win;
+        if (this.isWindowDestroyed(win)) {
+          continue;
+        }
+        this.applyLayer0(win, true);
+      }
+    }
+  }
+
+  public pauseWatchdog(token: string = 'default'): void {
+    this.watchdogPauseTokens.add(token);
     this.watchdogStateVersion++;
   }
 
-  public resumeWatchdog(): void {
-    const nextPauseCount = Math.max(0, this.watchdogPauseCount - 1);
-    if (nextPauseCount !== this.watchdogPauseCount) {
+  public resumeWatchdog(token: string = 'default'): void {
+    if (this.watchdogPauseTokens.has(token)) {
+      this.watchdogPauseTokens.delete(token);
       this.watchdogStateVersion++;
-    }
-    this.watchdogPauseCount = nextPauseCount;
-    if (this.watchdogPauseCount === 0) {
-      this.watchdogPaused = false;
     }
   }
 
@@ -514,47 +525,39 @@ export class StealthManager extends EventEmitter {
       return false;
     }
 
-    this.pauseWatchdog();
-    this.pauseWatchdog();
-    this.pauseWatchdog();
-    this.pauseWatchdog();
-    this.pauseWatchdog();
+    this.pauseWatchdog('verification');
 
-    setTimeout(() => {
-      this.resumeWatchdog();
-      this.resumeWatchdog();
-      this.resumeWatchdog();
-      this.resumeWatchdog();
-      this.resumeWatchdog();
-    }, 10000);
+    try {
+      let verifiedVisibleWindowCount = 0;
+      let hiddenWindowCount = 0;
 
-    let verifiedVisibleWindowCount = 0;
-    let hiddenWindowCount = 0;
+      for (const record of this.managedWindows) {
+        const win = record.win;
+        if (this.isWindowDestroyed(win)) {
+          continue;
+        }
 
-    for (const record of this.managedWindows) {
-      const win = record.win;
-      if (this.isWindowDestroyed(win)) {
-        continue;
+        // Intentionally hidden windows, such as during app-initiated screenshots,
+        // are not capture-exposed and should not trip stealth heartbeat faults.
+        if (typeof win.isVisible === 'function' && !win.isVisible()) {
+          hiddenWindowCount += 1;
+          continue;
+        }
+
+        verifiedVisibleWindowCount += 1;
+        if (!this.verifyStealth(win)) {
+          return false;
+        }
       }
 
-      // Intentionally hidden windows, such as during app-initiated screenshots,
-      // are not capture-exposed and should not trip stealth heartbeat faults.
-      if (typeof win.isVisible === 'function' && !win.isVisible()) {
-        hiddenWindowCount += 1;
-        continue;
+      if (verifiedVisibleWindowCount === 0 && hiddenWindowCount > 0) {
+        return true;
       }
 
-      verifiedVisibleWindowCount += 1;
-      if (!this.verifyStealth(win)) {
-        return false;
-      }
+      return verifiedVisibleWindowCount > 0;
+    } finally {
+      this.resumeWatchdog('verification');
     }
-
-    if (verifiedVisibleWindowCount === 0 && hiddenWindowCount > 0) {
-      return true;
-    }
-
-    return verifiedVisibleWindowCount > 0;
   }
 
   private isEnhancedStealthEnabled(): boolean {
@@ -1101,7 +1104,7 @@ export class StealthManager extends EventEmitter {
   }
 
   private async pollCaptureTools(): Promise<void> {
-    if (this.watchdogRunning || this.watchdogPaused) {
+    if (this.watchdogRunning || this.watchdogPauseTokens.size > 0) {
       return;
     }
 
@@ -1112,7 +1115,7 @@ export class StealthManager extends EventEmitter {
 
       // Ignore stale detections if a screenshot or verification flow paused
       // the watchdog while this poll was already in flight.
-      if (this.watchdogPaused || this.watchdogStateVersion !== watchdogStateVersionAtStart) {
+      if (this.watchdogPauseTokens.size > 0 || this.watchdogStateVersion !== watchdogStateVersionAtStart) {
         return;
       }
 
@@ -1209,11 +1212,6 @@ export class StealthManager extends EventEmitter {
         if (controlCenterOutput.includes('screen') || controlCenterOutput.includes('capture')) {
           return true;
         }
-      }
-
-      const stdout3 = await this.processEnumerator('pgrep', ['-lf', 'WindowServer']);
-      if (stdout3 && stdout3.trim()) {
-        return false;
       }
 
       return false;
@@ -1449,9 +1447,9 @@ for window in windows:
 
     this.opacityFlickerHandle = this.intervalScheduler(
       () => this.applyOpacityFlicker(),
-      100
+      500
     );
-    this.logger.log('[StealthManager] macOS 15.4+ opacity flicker enabled (100ms interval)');
+    this.logger.log('[StealthManager] macOS 15.4+ opacity flicker enabled (500ms interval)');
   }
 
   private applyOpacityFlicker(): void {
@@ -1463,7 +1461,7 @@ for window in windows:
 
       if (typeof win.setOpacity === 'function') {
         try {
-          win.setOpacity(0.99);
+          win.setOpacity(0.999);
           this.timeoutScheduler(() => {
             if (!this.isWindowDestroyed(win) && typeof win.setOpacity === 'function') {
               win.setOpacity(1);
@@ -1549,7 +1547,7 @@ for window in windows:
     const nativeModule = this.getNativeModule();
     const record = this.managedWindowLookup.get(win as object);
     if (!nativeModule) {
-      return false;
+      return this.isEnabled();
     }
 
     try {

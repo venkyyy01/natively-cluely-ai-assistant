@@ -2069,6 +2069,7 @@ try {
 
             this.meetingLifecycleState = 'active'
             this.broadcast('meeting-lifecycle-state', this.meetingLifecycleState)
+            this.stealthManager.setMeetingActive(true)
             console.log('[Main] Meeting activation prepared successfully.');
 
             resolve()
@@ -2077,6 +2078,7 @@ try {
             this.setNativeAudioConnected(false);
             this.broadcast('meeting-audio-error', (err as Error).message || 'Audio pipeline failed to start');
             this.isMeetingActive = false;
+            this.stealthManager.setMeetingActive(false);
             this.currentMeetingId = null;
             this.meetingLifecycleState = 'idle'
             this.broadcast('meeting-lifecycle-state', this.meetingLifecycleState)
@@ -2126,6 +2128,7 @@ try {
     this.meetingLifecycleState = 'stopping'
     this.broadcast('meeting-lifecycle-state', this.meetingLifecycleState)
     this.isMeetingActive = false; // Block new data immediately
+    this.stealthManager.setMeetingActive(false);
     this.setNativeAudioConnected(false);
 
     // Wait for any pending meeting start operations to complete before proceeding
@@ -2668,9 +2671,7 @@ setThemeMode: (mode) => this.themeManager.setMode(mode as import('./ThemeManager
   public async takeScreenshot(): Promise<string> {
     if (!this.getMainWindow()) throw new Error("No main window available")
 
-    this.stealthManager.pauseWatchdog()
-    this.stealthManager.pauseWatchdog()
-    this.stealthManager.pauseWatchdog()
+    this.stealthManager.pauseWatchdog('screenshot')
 
     try {
       const wasOverlayVisible = this.windowHelper.getOverlayWindow()?.isVisible() ?? false
@@ -2686,18 +2687,14 @@ setThemeMode: (mode) => this.themeManager.setMode(mode as import('./ThemeManager
         }
       )
     } finally {
-      this.stealthManager.resumeWatchdog()
-      this.stealthManager.resumeWatchdog()
-      this.stealthManager.resumeWatchdog()
+      this.stealthManager.resumeWatchdog('screenshot')
     }
   }
 
   public async takeSelectiveScreenshot(): Promise<string> {
     if (!this.getMainWindow()) throw new Error("No main window available")
 
-    this.stealthManager.pauseWatchdog()
-    this.stealthManager.pauseWatchdog()
-    this.stealthManager.pauseWatchdog()
+    this.stealthManager.pauseWatchdog('selective-screenshot')
 
     try {
       const wasOverlayVisible = this.windowHelper.getOverlayWindow()?.isVisible() ?? false
@@ -2713,9 +2710,7 @@ setThemeMode: (mode) => this.themeManager.setMode(mode as import('./ThemeManager
         }
       )
     } finally {
-      this.stealthManager.resumeWatchdog()
-      this.stealthManager.resumeWatchdog()
-      this.stealthManager.resumeWatchdog()
+      this.stealthManager.resumeWatchdog('selective-screenshot')
     }
   }
 
