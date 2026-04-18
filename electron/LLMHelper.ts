@@ -30,6 +30,7 @@ const execAsync = promisify(exec);
 
 /** Default timeout for LLM API calls in milliseconds */
 const LLM_API_TIMEOUT_MS = 30000; // 30 seconds
+const CURL_PROVIDER_TIMEOUT_MS = 60000; // Some cURL providers are materially slower
 const CUSTOM_PROVIDER_MAX_RESPONSE_BYTES = 2 * 1024 * 1024; // 2 MiB
 
 /**
@@ -615,6 +616,54 @@ export class LLMHelper {
     this.customProvider = null;
     this.activeCurlProvider = provider;
     console.log(`[LLMHelper] Switched to cURL provider: ${provider.name}`);
+  }
+
+  private restoreStandardProviderClientsForFallback(): void {
+    if (!this.client && this.apiKey) {
+      this.setApiKey(this.apiKey);
+    }
+    if (!this.groqClient && this.groqApiKey) {
+      this.setGroqApiKey(this.groqApiKey);
+    }
+    if (!this.cerebrasClient && this.cerebrasApiKey) {
+      this.setCerebrasApiKey(this.cerebrasApiKey);
+    }
+    if (!this.openaiClient && this.openaiApiKey) {
+      this.setOpenaiApiKey(this.openaiApiKey);
+    }
+    if (!this.claudeClient && this.claudeApiKey) {
+      this.setClaudeApiKey(this.claudeApiKey);
+    }
+  }
+
+  private async runWithProviderFallbackBypass<T>(operation: () => Promise<T>): Promise<T> {
+    const previousCustomProvider = this.customProvider;
+    const previousCurlProvider = this.activeCurlProvider;
+    this.customProvider = null;
+    this.activeCurlProvider = null;
+    this.restoreStandardProviderClientsForFallback();
+
+    try {
+      return await operation();
+    } finally {
+      this.customProvider = previousCustomProvider;
+      this.activeCurlProvider = previousCurlProvider;
+    }
+  }
+
+  private async * streamWithProviderFallbackBypass(operation: () => AsyncGenerator<string, void, unknown>): AsyncGenerator<string, void, unknown> {
+    const previousCustomProvider = this.customProvider;
+    const previousCurlProvider = this.activeCurlProvider;
+    this.customProvider = null;
+    this.activeCurlProvider = null;
+    this.restoreStandardProviderClientsForFallback();
+
+    try {
+      yield* operation();
+    } finally {
+      this.customProvider = previousCustomProvider;
+      this.activeCurlProvider = previousCurlProvider;
+    }
   }
 
   private cleanJsonResponse(text: string): string {
@@ -1633,6 +1682,8 @@ ANSWER DIRECTLY:`;
   public async chatWithGemini(message: string, imagePaths?: string[], context?: string, skipSystemPrompt: boolean = false, alternateGroqMessage?: string): Promise<string> {
     try {
       console.log(`[LLMHelper] chatWithGemini called with message:`, message.substring(0, 50))
+      const originalImagePaths = imagePaths ? [...imagePaths] : undefined;
+      const originalContext = context;
       const hasScreenshotInput = !!(imagePaths?.length);
       let effectiveMessage = hasScreenshotInput ? message : this.applyDefaultBrevityHint(message)
       const structuredScreenshotRequest = this.isStructuredOutputRequest(effectiveMessage);
@@ -1753,31 +1804,50 @@ ANSWER DIRECTLY:`;
         const curlSystemPrompt = skipPromptForRequest
           ? undefined
           : screenshotSystemPrompt || CUSTOM_SYSTEM_PROMPT;
-        if (isMultimodal && imagePaths?.length) {
-          return await this.runWithScreenshotOcrFallback(
-            `cURL Provider (${this.activeCurlProvider.name})`,
-            imagePaths,
-            effectiveMessage,
-            () => this.chatWithCurl(
+        try {
+          if (isMultimodal && imagePaths?.length) {
+            const response = await this.runWithScreenshotOcrFallback(
+              `cURL Provider (${this.activeCurlProvider.name})`,
+              imagePaths,
+              effectiveMessage,
+              () => this.chatWithCurl(
+                effectiveMessage,
+                curlSystemPrompt,
+                context || "",
+                imagePaths,
+              ),
+              (fallbackMessage) => this.chatWithCurl(
+                fallbackMessage,
+                curlSystemPrompt,
+                context || "",
+                [],
+              ),
+            );
+            if (response.trim().length > 0) {
+              return response;
+            }
+          } else {
+            const response = await this.chatWithCurl(
               effectiveMessage,
               curlSystemPrompt,
               context || "",
               imagePaths,
-            ),
-            (fallbackMessage) => this.chatWithCurl(
-              fallbackMessage,
-              curlSystemPrompt,
-              context || "",
-              [],
-            ),
-          );
+            );
+            if (response.trim().length > 0) {
+              return response;
+            }
+          }
+          console.warn(`[LLMHelper] cURL provider (${this.activeCurlProvider.name}) returned no response. Falling back to standard routing.`);
+        } catch (error: any) {
+          console.warn(`[LLMHelper] cURL provider (${this.activeCurlProvider.name}) failed after ${CURL_PROVIDER_TIMEOUT_MS}ms timeout window. Falling back to standard routing:`, error.message);
         }
-        return await this.chatWithCurl(
-          effectiveMessage,
-          curlSystemPrompt,
-          context || "",
-          imagePaths,
-        );
+        return await this.runWithProviderFallbackBypass(() => this.chatWithGemini(
+          message,
+          originalImagePaths,
+          originalContext,
+          skipSystemPrompt,
+          alternateGroqMessage,
+        ));
       }
 
       if (this.customProvider) {
@@ -2572,7 +2642,7 @@ ANSWER DIRECTLY:`;
         url: url,
         headers: headers,
         data: data,
-        timeout: LLM_API_TIMEOUT_MS,
+        timeout: CURL_PROVIDER_TIMEOUT_MS,
       });
 
       return this.extractCurlResponseText(response.data, responsePath);
@@ -2648,6 +2718,7 @@ ANSWER DIRECTLY:`;
     imagePaths?: string[],
     responsePath?: string,
     abortSignal?: AbortSignal,
+    timeoutMs: number = LLM_API_TIMEOUT_MS,
   ): Promise<string> {
 
     // 1. Parse cURL to JSON object
@@ -2692,7 +2763,7 @@ ANSWER DIRECTLY:`;
 
     // 5. Execute Fetch
     try {
-      const requestControl = createRequestAbortController(LLM_API_TIMEOUT_MS, abortSignal);
+      const requestControl = createRequestAbortController(timeoutMs, abortSignal);
       try {
         const response = await fetch(url, {
           method: requestConfig.method || 'POST',
@@ -3362,6 +3433,9 @@ ANSWER DIRECTLY:`;
       return;
     }
 
+    const originalImagePaths = imagePaths ? [...imagePaths] : undefined;
+    const originalContext = context;
+
     const hasScreenshotInput = !!(imagePaths?.length);
     let effectiveMessage = hasScreenshotInput ? message : this.applyDefaultBrevityHint(message);
     const structuredScreenshotRequest = this.isStructuredOutputRequest(effectiveMessage);
@@ -3483,44 +3557,68 @@ ANSWER DIRECTLY:`;
       // because injectLanguageInstruction modifies the string and breaks mapToCustomPrompt matching
       const mappedBase = this.mapToCustomPrompt(baseSystemPrompt);
       const curlSystemPrompt = prepareStreamSystemPrompt(mappedBase);
-      const response = isMultimodal && imagePaths?.length
-        ? await this.runWithScreenshotOcrFallback(
-            `cURL Provider (${this.activeCurlProvider.name})`,
-            imagePaths,
-            effectiveMessage,
-            () => this.executeCustomProvider(
-              this.activeCurlProvider!.curlCommand,
+      try {
+        const response = isMultimodal && imagePaths?.length
+          ? await this.runWithScreenshotOcrFallback(
+              `cURL Provider (${this.activeCurlProvider.name})`,
+              imagePaths,
+              effectiveMessage,
+              () => this.executeCustomProvider(
+                this.activeCurlProvider!.curlCommand,
+                userContent,
+                curlSystemPrompt,
+                effectiveMessage,
+                context || "",
+                imagePaths,
+                this.activeCurlProvider!.responsePath,
+                options?.abortSignal,
+                CURL_PROVIDER_TIMEOUT_MS,
+              ),
+              (fallbackMessage) => this.executeCustomProvider(
+                this.activeCurlProvider!.curlCommand,
+                buildStreamUserContent(fallbackMessage),
+                curlSystemPrompt,
+                fallbackMessage,
+                context || "",
+                [],
+                this.activeCurlProvider!.responsePath,
+                options?.abortSignal,
+                CURL_PROVIDER_TIMEOUT_MS,
+              ),
+              options?.abortSignal,
+            )
+          : await this.executeCustomProvider(
+              this.activeCurlProvider.curlCommand,
               userContent,
               curlSystemPrompt,
               effectiveMessage,
               context || "",
               imagePaths,
-              this.activeCurlProvider!.responsePath,
+              this.activeCurlProvider.responsePath,
               options?.abortSignal,
-            ),
-            (fallbackMessage) => this.executeCustomProvider(
-              this.activeCurlProvider!.curlCommand,
-              buildStreamUserContent(fallbackMessage),
-              curlSystemPrompt,
-              fallbackMessage,
-              context || "",
-              [],
-              this.activeCurlProvider!.responsePath,
-              options?.abortSignal,
-            ),
-            options?.abortSignal,
-          )
-        : await this.executeCustomProvider(
-            this.activeCurlProvider.curlCommand,
-            userContent,
-            curlSystemPrompt,
-            effectiveMessage,
-            context || "",
-            imagePaths,
-            this.activeCurlProvider.responsePath,
-            options?.abortSignal,
-          );
-      yield response;
+              CURL_PROVIDER_TIMEOUT_MS,
+            );
+
+        if (response.trim().length > 0) {
+          yield response;
+          return;
+        }
+
+        console.warn(`[LLMHelper] cURL provider (${this.activeCurlProvider.name}) returned no response while streaming. Falling back to standard routing.`);
+      } catch (error: any) {
+        if (options?.abortSignal?.aborted) {
+          throw error;
+        }
+        console.warn(`[LLMHelper] cURL provider (${this.activeCurlProvider.name}) streaming failed after ${CURL_PROVIDER_TIMEOUT_MS}ms timeout window. Falling back to standard routing:`, error.message);
+      }
+
+      yield* this.streamWithProviderFallbackBypass(() => this.streamChat(
+        message,
+        originalImagePaths,
+        originalContext,
+        systemPromptOverride,
+        options,
+      ));
       return;
     }
 
