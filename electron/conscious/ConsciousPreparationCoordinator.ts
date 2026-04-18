@@ -157,18 +157,32 @@ export class ConsciousPreparationCoordinator {
       limit: 5,
     });
     this.session.setConsciousSemanticContext(semanticBlock);
+    const evidenceBlocks = [
+      planBlock,
+      semanticBlock,
+      stateBlock,
+      liveRagBlock,
+      longMemoryBlock,
+      this.session.getConsciousEvidenceContext(),
+    ].filter(Boolean);
+    const SOFT_TOKEN_BUDGET = Math.floor(input.tokenBudget * 0.6);
+    const estimatedEvidenceTokens = evidenceBlocks.join(' ').split(/\s+/).length;
+    let evidenceContextBlock: string;
+    if (estimatedEvidenceTokens > SOFT_TOKEN_BUDGET) {
+      const trimmed = evidenceBlocks
+        .map(block => block.split(/\s+/).slice(0, Math.floor(SOFT_TOKEN_BUDGET / evidenceBlocks.length)).join(' '))
+        .filter(Boolean);
+      console.warn(`[ConsciousPreparation] Evidence context exceeded soft token budget (${estimatedEvidenceTokens} > ${SOFT_TOKEN_BUDGET}). Trimming blocks proportionally.`);
+      evidenceContextBlock = trimmed.join('\n\n');
+    } else {
+      evidenceContextBlock = evidenceBlocks.join('\n\n');
+    }
+
     const composedContext = this.consciousContextComposer.compose({
       contextItems,
       lastInterim: input.lastInterim,
       assistantHistory: this.session.getAssistantResponseHistory(),
-      evidenceContextBlock: [
-        planBlock,
-        semanticBlock,
-        stateBlock,
-        liveRagBlock,
-        longMemoryBlock,
-        this.session.getConsciousEvidenceContext(),
-      ].filter(Boolean).join('\n\n'),
+      evidenceContextBlock,
       transcriptTurnLimit: input.transcriptTurnLimit,
       temporalWindowSeconds: input.temporalWindowSeconds,
       onInterimInjected: input.onInterimInjected,

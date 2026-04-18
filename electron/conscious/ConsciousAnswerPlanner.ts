@@ -95,12 +95,12 @@ export class ConsciousAnswerPlanner {
           return {
             ...modeAdjusted,
             answerShape: modeAdjusted.answerShape === 'direct_answer' ? 'example_answer' : modeAdjusted.answerShape,
-            focalFacets: uniqueFacets([...modeAdjusted.focalFacets, 'openingReasoning']),
-            maxWords: Math.min(modeAdjusted.maxWords, 85),
-            deliveryFormat: 'short_star_narrative',
+            focalFacets: uniqueFacets([...modeAdjusted.focalFacets, 'openingReasoning', 'behavioralAnswer']),
+            maxWords: Math.min(modeAdjusted.maxWords, 250),
+            deliveryFormat: 'full_star_narrative',
             deliveryStyle: 'first_person_professional',
             groundingHint: 'Ground the answer in concrete past experience from transcript or profile. Do not invent stories.',
-            rationale: `${modeAdjusted.rationale} Behavioral answers should stay first-person, concrete, and brief.`,
+            rationale: `${modeAdjusted.rationale} Behavioral answers should target 1.5–2.5 minutes spoken with full STAR structure.`,
           };
         default:
           return modeAdjusted;

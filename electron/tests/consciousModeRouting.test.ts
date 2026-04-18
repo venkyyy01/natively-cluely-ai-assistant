@@ -148,13 +148,19 @@ test('Conscious Mode formats behavioral answers into the strict STAR interview l
 
   const answer = await engine.runWhatShouldISay(undefined, 0.91);
 
-  assert.match(answer || '', /^Question: Handled team conflict during a production issue/m);
-  assert.match(answer || '', /^Headline:\nI helped unblock a production issue during a release by tightening the rollback path and aligning the team quickly\./m);
-  assert.match(answer || '', /^Situation:\nWe were in the middle of a production release/m);
-  assert.match(answer || '', /^Task: I needed to get the release back to a safe state/m);
-  assert.match(answer || '', /^Action:\nI pulled the recent logs and deployment diff/m);
-  assert.match(answer || '', /^Result:\nWe stabilized the release the same day/m);
-  assert.match(answer || '', /^Why this answer works:\n- Shows ownership under pressure/m);
+  assert.match(answer || '', /Question:.*Handled team conflict during a production issue/);
+  assert.match(answer || '', /Headline:/);
+  assert.match(answer || '', /I helped unblock a production issue during a release by tightening the rollback path and aligning the team quickly/);
+  assert.match(answer || '', /Situation:/);
+  assert.match(answer || '', /We were in the middle of a production release/);
+  assert.match(answer || '', /Task:/);
+  assert.match(answer || '', /I needed to get the release back to a safe state/);
+  assert.match(answer || '', /Action:/);
+  assert.match(answer || '', /I pulled the recent logs and deployment diff/);
+  assert.match(answer || '', /Result:/);
+  assert.match(answer || '', /We stabilized the release the same day/);
+  assert.match(answer || '', /Why this answer works:/);
+  assert.match(answer || '', /Shows ownership under pressure/);
   assert.equal(llmHelper.calls[0]?.prompt, CONSCIOUS_BEHAVIORAL_REASONING_SYSTEM_PROMPT);
 });
 

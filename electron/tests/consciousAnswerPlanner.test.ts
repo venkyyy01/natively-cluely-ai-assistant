@@ -65,8 +65,8 @@ test('ConsciousAnswerPlanner converts behavioral questions into short grounded n
 
   assert.equal(plan.questionMode, 'behavioral');
   assert.equal(plan.answerShape, 'example_answer');
-  assert.equal(plan.deliveryFormat, 'short_star_narrative');
+  assert.equal(plan.deliveryFormat, 'full_star_narrative');
   assert.equal(plan.deliveryStyle, 'first_person_professional');
-  assert.ok(plan.maxWords <= 85);
+  assert.ok(plan.maxWords <= 250);
   assert.match(planner.buildContextBlock(plan), /GROUNDING_HINT: Ground the answer in concrete past experience/);
 });

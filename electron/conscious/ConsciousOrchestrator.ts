@@ -131,6 +131,13 @@ export class ConsciousOrchestrator {
       ...thread.response.pushbackResponses,
       ...thread.response.likelyFollowUps,
       thread.response.codeTransition,
+      thread.response.behavioralAnswer?.question,
+      thread.response.behavioralAnswer?.headline,
+      thread.response.behavioralAnswer?.situation,
+      thread.response.behavioralAnswer?.task,
+      thread.response.behavioralAnswer?.action,
+      thread.response.behavioralAnswer?.result,
+      ...(thread.response.behavioralAnswer?.whyThisAnswerWorks || []),
     ].filter(Boolean).join(' ');
     const threadTokens = new Set(this.tokenizeForThreadCompatibility(threadCorpus));
 

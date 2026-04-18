@@ -554,8 +554,8 @@ export async function maybeHandleSuggestionTriggerFromTranscript(
     return false;
   }
   
-  if (!input.final) {
-    console.log('[AUTO-TRIGGER] ❌ Rejected: transcript not final (interim transcript)');
+  if (!input.final && input.confidence != null && input.confidence < 0.5) {
+    console.log('[AUTO-TRIGGER] ❌ Rejected: interim transcript with low confidence');
     return false;
   }
 
@@ -567,6 +567,11 @@ export async function maybeHandleSuggestionTriggerFromTranscript(
     input.consciousModeEnabled,
     activeThread,
   );
+  
+  const speculative = !input.final && input.confidence != null && input.confidence >= 0.5;
+  if (speculative) {
+    console.log('[AUTO-TRIGGER] ⚡ Proceeding with speculative trigger (interim but high confidence)');
+  }
 
   console.log('[AUTO-TRIGGER] 📊 Decision analysis:', {
     shouldTrigger: decision.shouldTrigger,

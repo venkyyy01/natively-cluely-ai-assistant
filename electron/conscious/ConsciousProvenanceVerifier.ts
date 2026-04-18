@@ -232,6 +232,7 @@ export class ConsciousProvenanceVerifier {
   }): ConsciousProvenanceVerdict {
     const grounding = this.normalizeGroundingContext(input);
     const hasStrictGroundingContext = Boolean(grounding.strict);
+
     if (!hasStrictGroundingContext) {
       return { ok: true };
     }
