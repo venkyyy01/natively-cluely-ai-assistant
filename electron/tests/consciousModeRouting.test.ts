@@ -4,23 +4,36 @@ import { IntelligenceEngine } from '../IntelligenceEngine';
 import { SessionTracker } from '../SessionTracker';
 import {
   classifyConsciousModeQuestion,
+  CONSCIOUS_MODE_SCHEMA_VERSION,
   maybeHandleSuggestionTriggerFromTranscript,
   parseConsciousModeResponse,
   shouldAutoTriggerSuggestionFromTranscript,
+  tryParseConsciousModeOpeningReasoning,
   type ReasoningThread,
 } from '../ConsciousMode';
+import { CONSCIOUS_BEHAVIORAL_REASONING_SYSTEM_PROMPT } from '../llm/prompts';
 
 type StreamCall = {
   message: string;
   context?: string;
   prompt?: string;
+  options?: {
+    skipKnowledgeInterception?: boolean;
+    qualityTier?: 'fast' | 'standard' | 'structured_reasoning';
+  };
 };
 
 class FakeLLMHelper {
   public calls: StreamCall[] = [];
 
-  async *streamChat(message: string, _imagePaths?: string[], context?: string, prompt?: string): AsyncGenerator<string> {
-    this.calls.push({ message, context, prompt });
+  async *streamChat(
+    message: string,
+    _imagePaths?: string[],
+    context?: string,
+    prompt?: string,
+    options?: StreamCall['options'],
+  ): AsyncGenerator<string> {
+    this.calls.push({ message, context, prompt, options });
 
     if (message.includes('ACTIVE_REASONING_THREAD')) {
       yield JSON.stringify({
@@ -78,7 +91,7 @@ test('Conscious Mode routes qualifying technical questions into the structured r
   const thread = session.getActiveReasoningThread();
 
   assert.ok(answer);
-  assert.ok(answer?.includes('Opening reasoning:'));
+  assert.ok(answer?.includes('I would start by clarifying the rate limit dimension'));
   assert.equal(structured?.mode, 'reasoning_first');
   assert.equal(structured?.openingReasoning, 'I would start by clarifying the rate limit dimension and the consistency target.');
   assert.deepEqual(structured?.implementationPlan, [
@@ -89,6 +102,65 @@ test('Conscious Mode routes qualifying technical questions into the structured r
   assert.equal(thread?.rootQuestion, 'How would you design a rate limiter for an API?');
   assert.equal(thread?.followUpCount, 0);
   assert.match(llmHelper.calls[0]?.message || '', /STRUCTURED_REASONING_RESPONSE/);
+  assert.equal(llmHelper.calls[0]?.options?.skipKnowledgeInterception, true);
+  assert.equal(llmHelper.calls[0]?.options?.qualityTier, 'structured_reasoning');
+});
+
+test('Conscious Mode formats behavioral answers into the strict STAR interview layout', async () => {
+  class BehavioralLLMHelper {
+    public calls: StreamCall[] = [];
+
+    async *streamChat(
+      message: string,
+      _imagePaths?: string[],
+      context?: string,
+      prompt?: string,
+      options?: StreamCall['options'],
+    ): AsyncGenerator<string> {
+      this.calls.push({ message, context, prompt, options });
+
+      yield JSON.stringify({
+        mode: 'reasoning_first',
+        openingReasoning: 'I helped unblock a production issue during a release by tightening the rollback path and aligning the team quickly.',
+        behavioralAnswer: {
+          question: 'Handled team conflict during a production issue',
+          headline: 'I helped unblock a production issue during a release by tightening the rollback path and aligning the team quickly.',
+          situation: 'We were in the middle of a production release, and there was disagreement between backend and QA on whether to keep pushing or roll back after we saw unstable behavior.',
+          task: 'I needed to get the release back to a safe state, reduce confusion, and make sure we made a decision based on evidence instead of opinions.',
+          action: 'I pulled the recent logs and deployment diff, isolated the risky change set, and proposed a rollback of only that slice instead of reverting everything. I aligned with QA on a short validation checklist, kept the PM updated on what we were doing, and made sure the discussion stayed focused on user impact and recovery time. After the rollback, I documented the failure mode and added a release check so the same confusion would not repeat.',
+          result: 'We stabilized the release the same day, avoided a broader rollback, and the team had a much clearer runbook for similar issues after that.',
+          whyThisAnswerWorks: [
+            'Shows ownership under pressure',
+            'Shows conflict resolution with evidence-based communication',
+            'Ends with a concrete operational improvement',
+          ],
+        },
+      });
+    }
+  }
+
+  const session = new SessionTracker();
+  const llmHelper = new BehavioralLLMHelper();
+  const engine = new IntelligenceEngine(llmHelper as any, session);
+
+  session.setConsciousModeEnabled(true);
+  addInterviewerTurn(session, 'Tell me about a time you handled team conflict during a production issue.', Date.now());
+
+  const answer = await engine.runWhatShouldISay(undefined, 0.91);
+
+  assert.match(answer || '', /Question: Handled team conflict during a production issue/);
+  assert.match(answer || '', /Headline:/);
+  assert.match(answer || '', /I helped unblock a production issue during a release by tightening the rollback path and aligning the team quickly/);
+  assert.match(answer || '', /Situation:/);
+  assert.match(answer || '', /We were in the middle of a production release/);
+  assert.match(answer || '', /Task: I needed to get the release back to a safe state/);
+  assert.match(answer || '', /Action:/);
+  assert.match(answer || '', /I pulled the recent logs and deployment diff/);
+  assert.match(answer || '', /Result:/);
+  assert.match(answer || '', /We stabilized the release the same day/);
+  assert.match(answer || '', /Why this answer works:/);
+  assert.match(answer || '', /- Shows ownership under pressure/);
+  assert.equal(llmHelper.calls[0]?.prompt, CONSCIOUS_BEHAVIORAL_REASONING_SYSTEM_PROMPT);
 });
 
 test('Conscious Mode qualifying follow-ups continue the thread, while a new technical topic resets it', async () => {
@@ -176,6 +248,16 @@ test('Conscious Mode only starts for system-design questions and prefers fresh s
     threadAction: 'ignore',
   });
 
+  assert.deepEqual(classifyConsciousModeQuestion('Tell me about a time you handled team conflict.', null), {
+    qualifies: true,
+    threadAction: 'start',
+  });
+
+  assert.deepEqual(classifyConsciousModeQuestion('How do you make difficult decisions?', null), {
+    qualifies: true,
+    threadAction: 'start',
+  });
+
   assert.deepEqual(classifyConsciousModeQuestion('How would you design the data model for billing?', thread), {
     qualifies: true,
     threadAction: 'reset',
@@ -242,6 +324,11 @@ test('Conscious Mode continuation and reset matrix handles deterministic continu
     qualifies: true,
     threadAction: 'reset',
   });
+
+  assert.deepEqual(classifyConsciousModeQuestion('That is interesting, but let us talk about security instead.', thread), {
+    qualifies: true,
+    threadAction: 'reset',
+  });
 });
 
 test('Conscious Mode response parser rejects malformed non-JSON thread payloads', () => {
@@ -252,10 +339,40 @@ test('Conscious Mode response parser rejects malformed non-JSON thread payloads'
   assert.deepEqual(malformed.implementationPlan, []);
 });
 
-test('Conscious Mode transcript auto-trigger widens only for qualifying short technical pushback phrases', () => {
+test('Conscious Mode parser adapts legacy prompt-family payloads to the canonical schema', () => {
+  const parsed = parseConsciousModeResponse(JSON.stringify({
+    openingReasoning: 'I would start with the invariant first.',
+    spokenResponse: 'Keep writes idempotent and make duplicate delivery harmless.',
+    codeBlock: { language: 'ts', code: 'const seen = new Set<string>();' },
+    pushbackResponses: {
+      consistency: 'I would tighten the write path before adding async fan-out.',
+    },
+  }));
+
+  assert.equal(parsed.mode, 'reasoning_first');
+  assert.equal(parsed.openingReasoning, 'I would start with the invariant first.');
+  assert.deepEqual(parsed.pushbackResponses, [
+    'consistency: I would tighten the write path before adding async fan-out.',
+  ]);
+  assert.match(parsed.codeTransition, /```ts/);
+  assert.equal(CONSCIOUS_MODE_SCHEMA_VERSION, 'conscious_mode_v1');
+});
+
+test('Conscious Mode can parse opening reasoning from a streaming JSON prefix', () => {
+  const partial = '{"schemaVersion":"conscious_mode_v1","mode":"reasoning_first","openingReasoning":"Start with Redis and a clear refill invariant."';
+
+  assert.equal(
+    tryParseConsciousModeOpeningReasoning(partial),
+    'Start with Redis and a clear refill invariant.',
+  );
+});
+
+test('Conscious Mode transcript auto-trigger widens for actionable interviewer prompts without widening conscious routing itself', () => {
   assert.equal(shouldAutoTriggerSuggestionFromTranscript('Why this approach', false, null), false);
-  assert.equal(shouldAutoTriggerSuggestionFromTranscript('Why this approach', true, null), false);
+  assert.equal(shouldAutoTriggerSuggestionFromTranscript('Why this approach', true, null), true);
   assert.equal(shouldAutoTriggerSuggestionFromTranscript('What are the tradeoffs', true, null), true);
+  assert.equal(shouldAutoTriggerSuggestionFromTranscript('Give me an example of when you disagreed with a PM', true, null), true);
+  assert.equal(shouldAutoTriggerSuggestionFromTranscript('How do you make difficult decisions', true, null), true);
   assert.equal(shouldAutoTriggerSuggestionFromTranscript('Can you repeat that for me', true, null), false);
   assert.equal(shouldAutoTriggerSuggestionFromTranscript('okay sounds good', true, null), false);
 });
@@ -272,7 +389,7 @@ test('Conscious Mode transcript-trigger path fires for substantive interviewer p
 
   await maybeHandleSuggestionTriggerFromTranscript({
     speaker: 'interviewer',
-    text: 'What are the tradeoffs',
+    text: 'Why this approach',
     final: true,
     confidence: 0.91,
     consciousModeEnabled: true,
@@ -291,7 +408,7 @@ test('Conscious Mode transcript-trigger path fires for substantive interviewer p
   assert.deepEqual(calls, [
     {
       context: 'ctx',
-      lastQuestion: 'What are the tradeoffs',
+      lastQuestion: 'Why this approach',
       confidence: 0.91,
     },
   ]);
@@ -343,7 +460,7 @@ test('Conscious Mode routes screenshot-backed live-coding turns but keeps the sa
   addInterviewerTurn(screenshotSession, question, Date.now());
 
   const consciousAnswer = await screenshotEngine.runWhatShouldISay(undefined, 0.9, ['/tmp/editor.png']);
-  assert.match(consciousAnswer || '', /Opening reasoning:/);
+  assert.match(consciousAnswer || '', /read the failing state/);
   assert.equal(screenshotSession.getLatestConsciousResponse()?.mode, 'reasoning_first');
   assert.match(screenshotHelper.calls[0]?.message || '', /STRUCTURED_REASONING_RESPONSE/);
 });

@@ -8,10 +8,20 @@ export const CONSCIOUS_MODE_SECTION_TITLES = [
   'If They Ask For Code',
 ] as const;
 
+const BEHAVIORAL_SECTION_TITLES = [
+  'Question',
+  'Headline',
+  'Situation',
+  'Task',
+  'Action',
+  'Result',
+  'Why this answer works',
+] as const;
+
 const MAX_OPENING_REASONING_CHARS = 220;
 const MAX_OPENING_REASONING_SENTENCES = 3;
 
-type ConsciousModeSectionTitle = (typeof CONSCIOUS_MODE_SECTION_TITLES)[number];
+type ConsciousModeSectionTitle = string;
 type SourceSectionKey =
   | 'openingReasoning'
   | 'implementationPlan'
@@ -138,7 +148,67 @@ function parseSourceSections(text: string): ParsedSourceSections | null {
 }
 
 function looksLikeStructuredConsciousModeText(text: string): boolean {
-  return /(Opening reasoning:|Implementation plan:|Tradeoffs:|Code transition:)/.test(text);
+  return /(Opening reasoning:|Implementation plan:|Tradeoffs:|Code transition:|Question:|Headline:|Situation:|Action:|Result:|Why this answer works:)/.test(text);
+}
+
+function parseBehavioralSections(text: string): ConsciousModeRenderModel | null {
+  const trimmed = text.trim();
+  if (!trimmed.includes('Question:') || !trimmed.includes('Headline:')) {
+    return null;
+  }
+
+  const sections = new Map<string, string[]>();
+  let currentSection: string | null = null;
+
+  for (const title of BEHAVIORAL_SECTION_TITLES) {
+    sections.set(title, []);
+  }
+
+  for (const rawLine of trimmed.split('\n')) {
+    const line = rawLine.trimEnd();
+    const sectionMatch = line.match(/^(Question|Headline|Situation|Task|Action|Result|Why this answer works):\s*(.*)$/);
+
+    if (sectionMatch) {
+      currentSection = sectionMatch[1];
+      const inlineValue = sectionMatch[2].trim();
+      if (inlineValue) {
+        sections.get(currentSection)?.push(currentSection === 'Why this answer works'
+          ? `- ${inlineValue.replace(/^[-*]\s*/, '')}`
+          : inlineValue);
+      }
+      continue;
+    }
+
+    if (!currentSection) {
+      continue;
+    }
+
+    const normalized = currentSection === 'Why this answer works'
+      ? `- ${line.trim().replace(/^[-*]\s*/, '')}`
+      : line.trim();
+    if (normalized) {
+      sections.get(currentSection)?.push(normalized);
+    }
+  }
+
+  const requiredTextSections = ['Question', 'Headline', 'Situation', 'Task', 'Action', 'Result'];
+  if (requiredTextSections.some((title) => (sections.get(title)?.length || 0) === 0)) {
+    return null;
+  }
+
+  const whyThisWorks = sections.get('Why this answer works') || [];
+  if (whyThisWorks.length === 0) {
+    return null;
+  }
+
+  return {
+    sections: BEHAVIORAL_SECTION_TITLES.map((title) => ({
+      title,
+      items: title === 'Why this answer works'
+        ? (sections.get(title) || [])
+        : [(sections.get(title) || []).join('\n')],
+    })),
+  };
 }
 
 export function validateConsciousModeGuardrails(text: string): ConsciousModeGuardrailResult {
@@ -183,7 +253,7 @@ export function parseConsciousModeAnswer(text: string): ConsciousModeRenderModel
   const guardrails = validateConsciousModeGuardrails(text);
 
   if (!parsed || !guardrails.isValid) {
-    return null;
+    return parseBehavioralSections(text);
   }
 
   return {

@@ -68,7 +68,7 @@ export class VectorStore {
 
             this.worker.on('error', (err) => {
                 console.error('[VectorStore] Worker error:', err);
-                this.rejectAllPending(err);
+                this.rejectAllPending(err instanceof Error ? err : new Error(String(err)));
             });
 
             this.worker.on('exit', (code) => {

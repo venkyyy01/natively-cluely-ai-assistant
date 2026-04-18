@@ -44,6 +44,19 @@ type MeetingAudioBannerProps = {
   onDismiss: () => void
 }
 
+type PrivacyShieldState = {
+  active: boolean
+  reason: string | null
+}
+
+type PrivacyShieldWindowContentProps = {
+  reason: string | null
+  variant: 'overlay' | 'launcher'
+  onEndMeeting?: () => Promise<void>
+}
+
+const PRIVACY_SHIELD_FALLBACK_REASON = 'Sensitive content is hidden while capture risk is detected.'
+
 const MeetingAudioBanner: React.FC<MeetingAudioBannerProps> = ({ message, title, variant, onDismiss }) => {
   const motionProps = variant === 'overlay'
     ? {
@@ -84,6 +97,32 @@ const MeetingAudioBanner: React.FC<MeetingAudioBannerProps> = ({ message, title,
         </div>
       </div>
     </motion.div>
+  )
+}
+
+const PrivacyShieldWindowContent: React.FC<PrivacyShieldWindowContentProps> = ({ reason, variant, onEndMeeting }) => {
+  const isOverlay = variant === 'overlay'
+
+  return (
+    <ErrorBoundary context="PrivacyShield">
+      <div className={`flex h-full min-h-0 w-full items-center justify-center ${isOverlay ? 'bg-black/88 backdrop-blur-md' : 'bg-[#09090b]'}`}>
+        <div className={`mx-6 w-full max-w-md rounded-3xl border border-white/10 px-6 py-7 text-center shadow-2xl ${isOverlay ? 'bg-[#101114]/92' : 'bg-[#111215]'}`}>
+          <p className="text-xs font-semibold uppercase tracking-[0.24em] text-[#9CA3AF]">Privacy Shield</p>
+          <h1 className="mt-3 text-2xl font-semibold text-white">Sensitive content hidden</h1>
+          <p className="mt-3 text-sm leading-relaxed text-[#C7CAD1]">{reason ?? PRIVACY_SHIELD_FALLBACK_REASON}</p>
+          {isOverlay && onEndMeeting ? (
+            <button
+              onClick={() => {
+                void onEndMeeting()
+              }}
+              className="mt-5 rounded-full bg-white px-4 py-2 text-sm font-semibold text-[#111215] transition-colors hover:bg-[#E5E7EB]"
+            >
+              End meeting
+            </button>
+          ) : null}
+        </div>
+      </div>
+    </ErrorBoundary>
   )
 }
 
@@ -320,6 +359,7 @@ const App: React.FC = () => {
 
   const [incompatibleWarning, setIncompatibleWarning] = useState<{ count: number; oldProvider: string; newProvider: string } | null>(null)
   const [meetingAudioError, setMeetingAudioError] = useState<string | null>(null)
+  const [privacyShieldState, setPrivacyShieldState] = useState<PrivacyShieldState>({ active: false, reason: null })
   const electronAPI = getElectronAPI()
 
   useEffect(() => {
@@ -361,12 +401,17 @@ const App: React.FC = () => {
       })
     }
 
+    const removePrivacyShieldListener = electronAPI.onPrivacyShieldChanged?.((state) => {
+      setPrivacyShieldState(state)
+    })
+
     return () => {
       if (removeMeetingsListener) removeMeetingsListener()
       if (removeProgress) removeProgress()
       if (removeComplete) removeComplete()
       if (removeWarning) removeWarning()
       if (removeMeetingAudioError) removeMeetingAudioError()
+      if (removePrivacyShieldListener) removePrivacyShieldListener()
     }
   }, [electronAPI])
 
@@ -474,6 +519,10 @@ const App: React.FC = () => {
   }
 
   if (windowKind === 'overlay') {
+    if (privacyShieldState.active) {
+      return <PrivacyShieldWindowContent reason={privacyShieldState.reason} variant="overlay" onEndMeeting={handleEndMeeting} />
+    }
+
     return (
       <OverlayWindowContent
         meetingAudioError={meetingAudioError}
@@ -482,6 +531,10 @@ const App: React.FC = () => {
         onEndMeeting={handleEndMeeting}
       />
     )
+  }
+
+  if (privacyShieldState.active) {
+    return <PrivacyShieldWindowContent reason={privacyShieldState.reason} variant="launcher" />
   }
 
   return (

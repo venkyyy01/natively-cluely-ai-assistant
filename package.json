@@ -13,13 +13,20 @@
     "electron:dev": "node scripts/ensure-electron-native-deps.js && npm run build:native:current && tsc -p electron/tsconfig.json && cross-env NODE_ENV=development electron .",
     "electron:build": "node scripts/ensure-electron-native-deps.js && npm run build:native:current && tsc -p electron/tsconfig.json && cross-env NODE_ENV=production electron .",
     "prepare:macos:virtual-display-helper": "node scripts/prepare-macos-virtual-display-helper.js",
-"notarize:helper": "node scripts/notarize-macos-helper.js",
+    "prepare:macos:full-stealth-helper": "node scripts/prepare-macos-full-stealth-helper.js",
+    "notarize:helper": "node scripts/notarize-macos-helper.js",
     "app:dev": "concurrently \"npm run dev -- --port 5180\" \"wait-on http://localhost:5180 && npm run electron:dev\"",
-    "app:build": "node scripts/ensure-electron-native-deps.js && npm run build && npm run build:native && npm run prepare:macos:virtual-display-helper && tsc -p electron/tsconfig.json && electron-builder",
-    "app:build:arm64": "node scripts/ensure-electron-native-deps.js && npm run build && npm run build:native:current && npm run prepare:macos:virtual-display-helper && tsc -p electron/tsconfig.json && electron-builder --mac --arm64",
-    "app:build:x64": "node scripts/ensure-electron-native-deps.js && npm run build && npm run build:native:current && npm run prepare:macos:virtual-display-helper && tsc -p electron/tsconfig.json && electron-builder --mac --x64",
-    "test:electron": "tsc -p electron/tsconfig.json && node --test dist-electron/electron/tests/*.test.js",
-    "test:electron:coverage": "tsc -p electron/tsconfig.json && node --test --experimental-test-coverage dist-electron/electron/tests/*.test.js",
+    "app:build": "node scripts/ensure-electron-native-deps.js && npm run build && npm run build:native && npm run prepare:macos:virtual-display-helper && npm run prepare:macos:full-stealth-helper && tsc -p electron/tsconfig.json && electron-builder",
+    "app:build:arm64": "node scripts/ensure-electron-native-deps.js && npm run build && npm run build:native:current && npm run prepare:macos:virtual-display-helper && npm run prepare:macos:full-stealth-helper && tsc -p electron/tsconfig.json && electron-builder --mac --arm64",
+    "app:build:x64": "node scripts/ensure-electron-native-deps.js && npm run build && npm run build:native:current && npm run prepare:macos:virtual-display-helper && npm run prepare:macos:full-stealth-helper && tsc -p electron/tsconfig.json && electron-builder --mac --x64",
+    "test:electron": "rimraf dist-electron/electron/tests && tsc -p electron/tsconfig.json && node --test dist-electron/electron/tests/*.test.js",
+    "test:soak": "rimraf dist-electron/electron/tests && tsc -p electron/tsconfig.json && node scripts/run-soak-scenarios.js",
+    "test:fault-injection": "rimraf dist-electron/electron/tests && tsc -p electron/tsconfig.json && node --test dist-electron/electron/tests/faultInjection.test.js",
+    "test:active-renderer-lifecycle": "rimraf dist-electron/electron/tests && tsc -p electron/tsconfig.json && node --test dist-electron/electron/tests/activeRendererLifecycle.test.js",
+    "bench:baseline": "rimraf dist-electron/electron/tests && tsc -p electron/tsconfig.json && node scripts/run-baseline-benchmark.js",
+    "test:release-gate": "node scripts/run-release-gate.js",
+    "eval:conscious": "tsc -p electron/tsconfig.json && node scripts/run-conscious-eval.js",
+    "test:electron:coverage": "rimraf dist-electron/electron/tests && tsc -p electron/tsconfig.json && node --test --experimental-test-coverage dist-electron/electron/tests/*.test.js",
     "test:renderer": "npm --prefix renderer test",
     "test:renderer:coverage": "npm --prefix renderer run test:coverage",
     "verify:electron:coverage": "node scripts/verify-electron-coverage.js",
@@ -71,6 +78,12 @@
       {
         "from": "assets/bin/macos/stealth-virtual-display-helper",
         "to": "bin/macos/stealth-virtual-display-helper"
+      }
+    ],
+    "extraFiles": [
+      {
+        "from": "assets/xpcservices/macos-full-stealth-helper.xpc",
+        "to": "XPCServices/macos-full-stealth-helper.xpc"
       }
     ],
     "mac": {

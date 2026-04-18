@@ -37,11 +37,24 @@ test('route selector sends conscious questions to conscious route without intent
     latestQuestion: 'How would you design a rate limiter for an API?',
     activeReasoningThread: null,
   }), 'conscious_answer');
+
+  assert.equal(selectAnswerRoute({
+    explicitManual: false,
+    explicitFollowUp: false,
+    consciousModeEnabled: true,
+    profileModeEnabled: false,
+    hasProfile: false,
+    hasKnowledgeData: false,
+    latestQuestion: 'Tell me about a time you handled team conflict.',
+    activeReasoningThread: null,
+  }), 'conscious_answer');
 });
 
 test('route selector uses conservative profile and knowledge heuristics', () => {
   assert.equal(isProfileRequiredQuestion('What experience do you have with Redis?'), false);
   assert.equal(isProfileRequiredQuestion('What experience do you have with Redis in your previous role?'), true);
+  assert.equal(isProfileRequiredQuestion('Give me an example of when you disagreed with a PM.'), true);
+  assert.equal(isProfileRequiredQuestion('How do you make difficult decisions?'), true);
   assert.equal(isKnowledgeRequiredQuestion('Why do you want to work here?'), true);
   assert.equal(isKnowledgeRequiredQuestion('How would you design a rate limiter?'), false);
 });
@@ -55,6 +68,8 @@ test('route selector only treats the canonical deterministic profile fixtures as
     'why are you a fit for this role',
     'tell me about a project you worked on',
     'what experience do you have with redis in your previous role',
+    'give me an example of when you disagreed with a pm',
+    'how do you make difficult decisions',
   ];
   const negatives = [
     'how would you design a rate limiter',

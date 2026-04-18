@@ -59,7 +59,7 @@ public struct VirtualDisplaySession: Codable, Equatable {
         recoveryPending: Bool = false,
         blockerCode: String? = nil,
         blockerRetryable: Bool = false,
-        lastTransitionAt: String = ISO8601DateFormatter().string(from: Date())
+        lastTransitionAt: String = Layer3Time.timestamp()
     ) {
         self.sessionId = sessionId
         self.windowId = windowId
@@ -115,7 +115,7 @@ public struct VirtualDisplaySession: Codable, Equatable {
         recoveryPending = try container.decodeIfPresent(Bool.self, forKey: .recoveryPending) ?? false
         blockerCode = try container.decodeIfPresent(String.self, forKey: .blockerCode)
         blockerRetryable = try container.decodeIfPresent(Bool.self, forKey: .blockerRetryable) ?? false
-        lastTransitionAt = try container.decodeIfPresent(String.self, forKey: .lastTransitionAt) ?? ISO8601DateFormatter().string(from: Date())
+        lastTransitionAt = try container.decodeIfPresent(String.self, forKey: .lastTransitionAt) ?? Layer3Time.timestamp()
     }
 }
 
@@ -128,23 +128,32 @@ public protocol SessionStore {
 
 public final class InMemorySessionStore: SessionStore {
     private var sessions: [String: VirtualDisplaySession] = [:]
+    private let lock = NSLock()
 
     public init() {}
 
     public func save(_ session: VirtualDisplaySession) throws {
-        sessions[session.sessionId] = session
+        lock.withLock {
+            sessions[session.sessionId] = session
+        }
     }
 
     public func load(sessionId: String) throws -> VirtualDisplaySession? {
-        sessions[sessionId]
+        lock.withLock {
+            sessions[sessionId]
+        }
     }
 
     public func remove(sessionId: String) throws {
-        sessions.removeValue(forKey: sessionId)
+        lock.withLock {
+            sessions.removeValue(forKey: sessionId)
+        }
     }
 
     public func all() throws -> [VirtualDisplaySession] {
-        Array(sessions.values)
+        lock.withLock {
+            Array(sessions.values)
+        }
     }
 }
 
@@ -232,25 +241,30 @@ public protocol Layer3TelemetryStore {
 
 public final class InMemoryLayer3TelemetryStore: Layer3TelemetryStore {
     private var eventsBySession: [String: [Layer3TelemetryEvent]] = [:]
+    private let lock = NSLock()
 
     public init() {}
 
     public func record(sessionId: String, type: String, detail: String, at: String) {
-        let event = Layer3TelemetryEvent(sessionId: sessionId, type: type, at: at, detail: detail)
-        eventsBySession[sessionId, default: []].append(event)
+        lock.withLock {
+            let event = Layer3TelemetryEvent(sessionId: sessionId, type: type, at: at, detail: detail)
+            eventsBySession[sessionId, default: []].append(event)
+        }
     }
 
     public func report(sessionId: String) -> Layer3TelemetryReport {
-        let events = eventsBySession[sessionId] ?? []
-        return Layer3TelemetryReport(
-            events: events,
-            counters: Layer3TelemetryCounters(
-                capabilityProbeCount: events.filter { $0.type == "capability-probed" }.count,
-                blockedTransitionCount: events.filter { $0.type == "session-blocked" }.count,
-                recoveryCount: events.filter { $0.type == "session-recovered" }.count,
-                presentationStartCount: events.filter { $0.type == "presentation-started" }.count
+        lock.withLock {
+            let events = eventsBySession[sessionId] ?? []
+            return Layer3TelemetryReport(
+                events: events,
+                counters: Layer3TelemetryCounters(
+                    capabilityProbeCount: events.filter { $0.type == "capability-probed" }.count,
+                    blockedTransitionCount: events.filter { $0.type == "session-blocked" }.count,
+                    recoveryCount: events.filter { $0.type == "session-recovered" }.count,
+                    presentationStartCount: events.filter { $0.type == "presentation-started" }.count
+                )
             )
-        )
+        }
     }
 }
 
@@ -419,7 +433,7 @@ public final class VirtualDisplayService {
         presenterHost: any Layer3PresenterHosting = makeDefaultLayer3PresenterHost(),
         validationProbe: any Layer3ValidationProbing = DefaultLayer3ValidationProbe(),
         telemetryStore: any Layer3TelemetryStore = InMemoryLayer3TelemetryStore(),
-        timestampProvider: @escaping () -> String = { ISO8601DateFormatter().string(from: Date()) }
+        timestampProvider: @escaping () -> String = { Layer3Time.timestamp() }
     ) {
         self.backend = backend
         self.sessionStore = sessionStore

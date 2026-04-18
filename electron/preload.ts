@@ -4,6 +4,46 @@ import type { CustomProviderPayload, FastResponseConfig, FollowUpEmailInput, Gem
 type IpcErrorContract = { code: string; message: string }
 type IpcResult<T> = { success: true; data: T } | { success: false; error: IpcErrorContract }
 type StatusResult = { success: boolean; error?: string }
+type SuggestedAnswerMetadata = {
+  route: 'fast_standard_answer' | 'enriched_standard_answer' | 'conscious_answer' | 'manual_answer' | 'follow_up_refinement'
+  attemptedRoute?: 'fast_standard_answer' | 'enriched_standard_answer' | 'conscious_answer' | 'manual_answer' | 'follow_up_refinement'
+  fallbackOccurred: boolean
+  fallbackReason?: string
+  schemaVersion: 'standard_answer_v1' | 'conscious_mode_v1'
+  evidenceHash: string
+  contextSelectionHash?: string
+  transcriptRevision: number
+  threadAction?: 'start' | 'continue' | 'reset' | 'ignore'
+  thread?: {
+    rootQuestion: string
+    lastQuestion: string
+    followUpCount: number
+    updatedAt: number
+  } | null
+  threadState: {
+    activeThread: {
+      rootQuestion: string
+      lastQuestion: string
+      followUpCount: number
+      updatedAt: number
+    } | null
+    threadAction: 'start' | 'continue' | 'reset' | 'ignore'
+    transcriptRevision: number
+  }
+  cooldownSuppressedMs?: number
+  cooldownReason?: 'duplicate_question_debounce'
+  verifier?: {
+    deterministic: 'pass' | 'fail' | 'skipped'
+    provenance: 'pass' | 'fail' | 'skipped'
+  }
+  stealthContainmentActive: boolean
+}
+type IntelligenceSuggestedAnswerEvent = {
+  answer: string
+  question: string
+  confidence: number
+  metadata?: SuggestedAnswerMetadata
+}
 
 const isIpcResult = <T>(value: unknown): value is IpcResult<T> => {
   return Boolean(value) && typeof value === 'object' && 'success' in (value as Record<string, unknown>)
@@ -81,12 +121,12 @@ interface ElectronAPI {
   openExternal: (url: string) => Promise<void>
   setUndetectable: (state: boolean) => Promise<StatusResult>
   getUndetectable: () => Promise<boolean>
-  setConsciousMode: (enabled: boolean) => Promise<{ success: true; data: { enabled: boolean } } | { success: false; error: { code: string; message: string } }>
-  getConsciousMode: () => Promise<{ success: true; data: { enabled: boolean } } | { success: false; error: { code: string; message: string } }>
-  onConsciousModeChanged: (callback: (enabled: boolean) => void) => () => void
-  setAccelerationMode: (enabled: boolean) => Promise<{ success: true; data: { enabled: boolean } } | { success: false; error: { code: string; message: string } }>
-  getAccelerationMode: () => Promise<{ success: true; data: { enabled: boolean } } | { success: false; error: { code: string; message: string } }>
-  onAccelerationModeChanged: (callback: (enabled: boolean) => void) => () => void
+setConsciousMode: (enabled: boolean) => Promise<{ success: true; data: { enabled: boolean } } | { success: false; error: { code: string; message: string } }>
+getConsciousMode: () => Promise<{ success: true; data: { enabled: boolean } } | { success: false; error: { code: string; message: string } }>
+onConsciousModeChanged: (callback: (enabled: boolean) => void) => () => void
+setAccelerationMode: (enabled: boolean) => Promise<{ success: true; data: { enabled: boolean } } | { success: false; error: { code: string; message: string } }>
+getAccelerationMode: () => Promise<{ success: true; data: { enabled: boolean } } | { success: false; error: { code: string; message: string } }>
+onAccelerationModeChanged: (callback: (enabled: boolean) => void) => () => void
   setOpenAtLogin: (open: boolean) => Promise<StatusResult>
   getOpenAtLogin: () => Promise<boolean>
   closeSettingsWindow: () => Promise<void>
@@ -145,7 +185,15 @@ interface ElectronAPI {
 
   // Intelligence Mode IPC
   generateAssist: () => Promise<{ insight: string | null }>
-  generateWhatToSay: (question?: string, imagePaths?: string[]) => Promise<{ answer: string | null; question?: string; error?: string }>
+  generateWhatToSay: (
+    question?: string,
+    imagePaths?: string[]
+  ) => Promise<{
+    answer: string | null
+    question?: string
+    error?: string
+    status?: 'completed' | 'canceled' | 'error'
+  }>
   generateFollowUp: (intent: string, userRequest?: string) => Promise<{ refined: string | null; intent: string }>
   generateRecap: () => Promise<{ summary: string | null }>
   submitManualQuestion: (question: string) => Promise<{ answer: string | null; question: string }>
@@ -164,7 +212,8 @@ interface ElectronAPI {
 
   // Intelligence Mode Events
   onIntelligenceAssistUpdate: (callback: (data: { insight: string }) => void) => () => void
-  onIntelligenceSuggestedAnswer: (callback: (data: { answer: string; question: string; confidence: number }) => void) => () => void
+  onIntelligenceCooldown: (callback: (data: { suppressedMs: number; question?: string; reason?: 'duplicate_question_debounce' }) => void) => () => void
+  onIntelligenceSuggestedAnswer: (callback: (data: IntelligenceSuggestedAnswerEvent) => void) => () => void
   onIntelligenceRefinedAnswer: (callback: (data: { answer: string; intent: string }) => void) => () => void
   onIntelligenceRecap: (callback: (data: { summary: string }) => void) => () => void
   onIntelligenceManualStarted: (callback: () => void) => () => void
@@ -220,6 +269,7 @@ interface ElectronAPI {
 
 
   onUndetectableChanged: (callback: (state: boolean) => void) => () => void
+  onPrivacyShieldChanged: (callback: (state: { active: boolean; reason: string | null }) => void) => () => void
   onFastResponseConfigChanged: (callback: (config: FastResponseConfig) => void) => () => void
   onModelChanged: (callback: (modelId: string) => void) => () => void
   onModelFallback: (callback: (event: { provider: 'gemini' | 'groq' | 'openai' | 'claude'; previousModel: string; fallbackModel: string; reason: string }) => void) => () => void
@@ -244,7 +294,7 @@ interface ElectronAPI {
   ragQueryMeeting: (meetingId: string, query: string) => Promise<{ success?: boolean; fallback?: boolean; error?: string }>
   ragQueryLive: (query: string) => Promise<{ success?: boolean; fallback?: boolean; error?: string }>
   ragQueryGlobal: (query: string) => Promise<{ success?: boolean; fallback?: boolean; error?: string }>
-  ragCancelQuery: (options: { meetingId?: string; global?: boolean }) => Promise<StatusResult>
+  ragCancelQuery: (options: { meetingId?: string; global?: boolean; live?: boolean }) => Promise<StatusResult>
   ragIsMeetingProcessed: (meetingId: string) => Promise<boolean>
   ragGetQueueStatus: () => Promise<{ pending: number; processing: number; completed: number; failed: number }>
   ragRetryEmbeddings: () => Promise<StatusResult>
@@ -448,11 +498,11 @@ contextBridge.exposeInMainWorld("electronAPI", {
 setConsciousMode: (enabled: boolean) => ipcRenderer.invoke('set-conscious-mode', enabled),
 getConsciousMode: () => ipcRenderer.invoke('get-conscious-mode'),
 onConsciousModeChanged: (callback: (enabled: boolean) => void) => {
-  const subscription = (_: any, enabled: boolean) => callback(enabled)
-  ipcRenderer.on('conscious-mode-changed', subscription)
-  return () => {
-    ipcRenderer.removeListener('conscious-mode-changed', subscription)
-  }
+const subscription = (_: any, enabled: boolean) => callback(enabled)
+ipcRenderer.on('conscious-mode-changed', subscription)
+return () => {
+ipcRenderer.removeListener('conscious-mode-changed', subscription)
+}
 },
 setAccelerationMode: (enabled: boolean) => ipcRenderer.invoke('set-acceleration-mode', enabled),
 getAccelerationMode: () => ipcRenderer.invoke('get-acceleration-mode'),
@@ -653,6 +703,13 @@ setOpenAtLogin: (open: boolean) => invokeStatus("set-open-at-login", open),
       ipcRenderer.removeListener("intelligence-assist-update", subscription)
     }
   },
+  onIntelligenceCooldown: (callback: (data: { suppressedMs: number; question?: string; reason?: 'duplicate_question_debounce' }) => void) => {
+    const subscription = (_: any, data: any) => callback(data)
+    ipcRenderer.on('intelligence-cooldown', subscription)
+    return () => {
+      ipcRenderer.removeListener('intelligence-cooldown', subscription)
+    }
+  },
   onIntelligenceSuggestedAnswerToken: (callback: (data: { token: string; question: string; confidence: number }) => void) => {
     const subscription = (_: any, data: any) => callback(data)
     ipcRenderer.on("intelligence-suggested-answer-token", subscription)
@@ -660,7 +717,7 @@ setOpenAtLogin: (open: boolean) => invokeStatus("set-open-at-login", open),
       ipcRenderer.removeListener("intelligence-suggested-answer-token", subscription)
     }
   },
-  onIntelligenceSuggestedAnswer: (callback: (data: { answer: string; question: string; confidence: number }) => void) => {
+  onIntelligenceSuggestedAnswer: (callback: (data: IntelligenceSuggestedAnswerEvent) => void) => {
     const subscription = (_: any, data: any) => callback(data)
     ipcRenderer.on("intelligence-suggested-answer", subscription)
     return () => {
@@ -744,6 +801,14 @@ setOpenAtLogin: (open: boolean) => invokeStatus("set-open-at-login", open),
       ipcRenderer.removeListener("session-reset", subscription)
     }
   },
+  onMeetingLifecycleState: (callback: (state: string) => void) => {
+    const subscription = (_: any, state: string) => callback(state as 'idle' | 'starting' | 'active' | 'stopping')
+    ipcRenderer.on("meeting-lifecycle-state", subscription)
+    return () => {
+      ipcRenderer.removeListener("meeting-lifecycle-state", subscription)
+    }
+  },
+  getMeetingLifecycleState: () => ipcRenderer.invoke("get-meeting-lifecycle-state"),
 
 
   // Streaming Chat
@@ -822,6 +887,14 @@ setOpenAtLogin: (open: boolean) => invokeStatus("set-open-at-login", open),
     ipcRenderer.on('undetectable-changed', subscription)
     return () => {
       ipcRenderer.removeListener('undetectable-changed', subscription)
+    }
+  },
+
+  onPrivacyShieldChanged: (callback: (state: { active: boolean; reason: string | null }) => void) => {
+    const subscription = (_: any, state: { active: boolean; reason: string | null }) => callback(state)
+    ipcRenderer.on('privacy-shield-changed', subscription)
+    return () => {
+      ipcRenderer.removeListener('privacy-shield-changed', subscription)
     }
   },
 
@@ -905,7 +978,7 @@ setOpenAtLogin: (open: boolean) => invokeStatus("set-open-at-login", open),
       return { success: false, error: getErrorMessage(error) }
     }
   },
-  ragCancelQuery: (options: { meetingId?: string; global?: boolean }) => invokeStatus('rag:cancel-query', options),
+  ragCancelQuery: (options: { meetingId?: string; global?: boolean; live?: boolean }) => invokeStatus('rag:cancel-query', options),
   ragIsMeetingProcessed: (meetingId: string) => invokeAndUnwrap<boolean>('rag:is-meeting-processed', meetingId),
   ragGetQueueStatus: () => invokeAndUnwrap<{ pending: number; processing: number; completed: number; failed: number }>('rag:get-queue-status'),
   ragRetryEmbeddings: () => invokeStatus('rag:retry-embeddings'),

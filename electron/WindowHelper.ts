@@ -8,6 +8,10 @@ import { StealthRuntime } from "./stealth/StealthRuntime"
 const isEnvDev = process.env.NODE_ENV === "development"
 const isPackaged = app.isPackaged
 
+type BrowserWindowOptionsWithContentProtection = Electron.BrowserWindowConstructorOptions & {
+  contentProtection?: boolean
+}
+
 console.log(`[WindowHelper] isEnvDev: ${isEnvDev}, isPackaged: ${isPackaged}`)
 
 const isDev = isEnvDev && !isPackaged
@@ -45,10 +49,15 @@ export class WindowHelper {
   private currentX: number = 0
   private currentY: number = 0
   private readonly stealthManager: StealthManager
+  private stealthHeartbeatListener: (() => void) | null = null
 
   constructor(appState: AppState, stealthManager: StealthManager) {
     this.appState = appState
     this.stealthManager = stealthManager
+  }
+
+  public setStealthRuntimeHeartbeatListener(listener: (() => void) | null): void {
+    this.stealthHeartbeatListener = listener
   }
 
   private shouldUseStealthRuntime(): boolean {
@@ -212,23 +221,23 @@ export class WindowHelper {
     const topMargin = Math.round(workArea.height * 0.05);
     const y = Math.round(workArea.y + topMargin);
 
-    // --- 1. Create Launcher Window ---
-    const launcherSettings: Electron.BrowserWindowConstructorOptions = {
-      width: width,
-      height: height,
-      x: x,
-      y: y,
-      minWidth: 600,
-      minHeight: 400,
-      webPreferences: {
-        nodeIntegration: false,
-        contextIsolation: true,
-        preload: path.join(__dirname, "preload.js"),
-        scrollBounce: true,
-        webSecurity: true,
-      },
-      show: false,
-      skipTaskbar: this.contentProtection,
+// --- 1. Create Launcher Window ---
+  const launcherSettings: Electron.BrowserWindowConstructorOptions = {
+    width: width,
+    height: height,
+    x: x,
+    y: y,
+    minWidth: 600,
+    minHeight: 400,
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true,
+      preload: path.join(__dirname, "preload.js"),
+      scrollBounce: true,
+      webSecurity: true,
+    },
+    show: false,
+    skipTaskbar: this.contentProtection,
       titleBarStyle: 'hiddenInset',
       trafficLightPosition: { x: 14, y: 14 },
       vibrancy: 'under-window',
@@ -281,6 +290,12 @@ export class WindowHelper {
         this.launcherRuntime = new StealthRuntime({
           stealthManager: this.stealthManager,
           startUrl: `${startUrl}?window=launcher`,
+          onFault: (reason) => {
+            this.appState.handleStealthRuntimeFault(reason)
+          },
+          onHeartbeat: () => {
+            this.stealthHeartbeatListener?.()
+          },
         })
         this.launcherWindow = this.launcherRuntime.createPrimaryStealthSurface(launcherSettings) as BrowserWindow
         this.launcherContentWindow = this.launcherRuntime.getContentWindow()
@@ -322,35 +337,41 @@ export class WindowHelper {
     //   this.launcherWindow.webContents.openDevTools({ mode: 'detach' }); // DEBUG: Open DevTools
     // }
 
-    // --- 2. Create Overlay Window (Hidden initially) ---
-    const overlaySettings: Electron.BrowserWindowConstructorOptions = {
-      width: 600,
-      height: 1,
-      minWidth: 300,
-      minHeight: 1,
-      webPreferences: {
-        nodeIntegration: false,
-        contextIsolation: true,
-        preload: path.join(__dirname, "preload.js"),
-        scrollBounce: true,
-      },
-      show: false,
-      frame: false, // Frameless
-      transparent: true,
-      backgroundColor: "#00000000",
-      alwaysOnTop: true,
-      focusable: true,
-      resizable: true,
-      movable: true,
-      skipTaskbar: false,
-      hasShadow: false, // Prevent shadow from adding perceived size/artifacts
-    }
+// --- 2. Create Overlay Window (Hidden initially) ---
+  const overlaySettings: Electron.BrowserWindowConstructorOptions = {
+    width: 600,
+    height: 1,
+    minWidth: 300,
+    minHeight: 1,
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true,
+      preload: path.join(__dirname, "preload.js"),
+      scrollBounce: true,
+    },
+    show: false,
+    frame: false, // Frameless
+    transparent: true,
+    backgroundColor: "#00000000",
+    alwaysOnTop: true,
+    focusable: true,
+    resizable: true,
+    movable: true,
+    skipTaskbar: this.overlayContentProtection, // CRITICAL: Hide from taskbar when privacy protection is active
+    hasShadow: false, // Prevent shadow from adding perceived size/artifacts
+  }
 
     if (this.shouldUseStealthRuntime()) {
       try {
         this.overlayRuntime = new StealthRuntime({
           stealthManager: this.stealthManager,
           startUrl: `${startUrl}?window=overlay`,
+          onFault: (reason) => {
+            this.appState.handleStealthRuntimeFault(reason)
+          },
+          onHeartbeat: () => {
+            this.stealthHeartbeatListener?.()
+          },
         })
         this.overlayWindow = this.overlayRuntime.createPrimaryStealthSurface(overlaySettings) as BrowserWindow
         this.overlayContentWindow = this.overlayRuntime.getContentWindow()
@@ -532,17 +553,18 @@ export class WindowHelper {
         this.setOverlayClickthrough(this.overlayClickthroughEnabled)
         // Small delay to ensure Windows DWM processes the flag before making it opaque
 
-        if (this.opacityTimeout) clearTimeout(this.opacityTimeout);
-        this.opacityTimeout = setTimeout(() => {
-          if (this.overlayWindow && !this.overlayWindow.isDestroyed()) {
-            this.overlayWindow.setOpacity(1);
-            this.stealthManager.reapplyAfterShow(this.overlayWindow);
-            if (!this.overlayClickthroughEnabled) {
-              this.overlayWindow.focus();
-            }
-            this.overlayWindow.setAlwaysOnTop(true, "floating");
-          }
-        }, 60);
+    if (this.opacityTimeout) clearTimeout(this.opacityTimeout);
+    // CRITICAL: Reduced from 60ms to 16ms (1 frame at 60fps) to prevent frame leaks during screen capture
+    this.opacityTimeout = setTimeout(() => {
+      if (this.overlayWindow && !this.overlayWindow.isDestroyed()) {
+        this.overlayWindow.setOpacity(1);
+        this.stealthManager.reapplyAfterShow(this.overlayWindow);
+        if (!this.overlayClickthroughEnabled) {
+          this.overlayWindow.focus();
+        }
+        this.overlayWindow.setAlwaysOnTop(true, "floating");
+      }
+    }, 16);
       } else {
         this.applyStealth(this.overlayWindow, this.contentProtection, 'primary', false);
         this.setOverlayClickthrough(this.overlayClickthroughEnabled)
@@ -578,14 +600,15 @@ export class WindowHelper {
           this.applyStealth(this.launcherWindow, true, 'primary', false);
         }
 
-        if (this.opacityTimeout) clearTimeout(this.opacityTimeout);
-        this.opacityTimeout = setTimeout(() => {
-          if (this.launcherWindow && !this.launcherWindow.isDestroyed()) {
-            this.launcherWindow.setOpacity(1);
-            this.stealthManager.reapplyAfterShow(this.launcherWindow);
-            this.launcherWindow.focus();
-          }
-        }, 60);
+    if (this.opacityTimeout) clearTimeout(this.opacityTimeout);
+    // CRITICAL: Reduced from 60ms to 16ms (1 frame at 60fps) to prevent frame leaks during screen capture
+    this.opacityTimeout = setTimeout(() => {
+      if (this.launcherWindow && !this.launcherWindow.isDestroyed()) {
+        this.launcherWindow.setOpacity(1);
+        this.stealthManager.reapplyAfterShow(this.launcherWindow);
+        this.launcherWindow.focus();
+      }
+    }, 16);
       } else {
         this.applyLauncherSurfaceProtection();
         this.showLauncherSurface();

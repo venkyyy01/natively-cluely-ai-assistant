@@ -880,13 +880,54 @@ export const AIProvidersSettings: React.FC = () => {
                                         <div className="grid grid-cols-1 gap-2">
                                             <div className="flex items-center gap-2 text-xs">
                                                 <code className="bg-bg-input px-1.5 py-0.5 rounded text-text-primary font-mono border border-border-subtle">{"{{TEXT}}"}</code>
-                                                <span className="text-text-tertiary">Combined System + Context + Message (Recommended)</span>
+                                                <span className="text-text-tertiary">Combined System + Context + Message</span>
+                                            </div>
+                                            <div className="flex items-center gap-2 text-xs">
+                                                <code className="bg-bg-input px-1.5 py-0.5 rounded text-text-primary font-mono border border-border-subtle">{"{{PROMPT}}"}</code>
+                                                <span className="text-text-tertiary">Alias of {"{{TEXT}}"}</span>
+                                            </div>
+                                            <div className="flex items-center gap-2 text-xs">
+                                                <code className="bg-bg-input px-1.5 py-0.5 rounded text-text-primary font-mono border border-border-subtle">{"{{USER_MESSAGE}}"}</code>
+                                                <span className="text-text-tertiary">Raw user message only</span>
+                                            </div>
+                                            <div className="flex items-center gap-2 text-xs">
+                                                <code className="bg-bg-input px-1.5 py-0.5 rounded text-text-primary font-mono border border-border-subtle">{"{{SYSTEM_PROMPT}}"}</code>
+                                                <span className="text-text-tertiary">Injected system instruction</span>
+                                            </div>
+                                            <div className="flex items-center gap-2 text-xs">
+                                                <code className="bg-bg-input px-1.5 py-0.5 rounded text-text-primary font-mono border border-border-subtle">{"{{CONTEXT}}"}</code>
+                                                <span className="text-text-tertiary">Conversation context (if available)</span>
                                             </div>
                                             <div className="flex items-center gap-2 text-xs">
                                                 <code className="bg-bg-input px-1.5 py-0.5 rounded text-text-primary font-mono border border-border-subtle">{"{{IMAGE_BASE64}}"}</code>
-                                                <span className="text-text-tertiary">Screenshot data (if available)</span>
+                                                <span className="text-text-tertiary">First screenshot as base64</span>
+                                            </div>
+                                            <div className="flex items-center gap-2 text-xs">
+                                                <code className="bg-bg-input px-1.5 py-0.5 rounded text-text-primary font-mono border border-border-subtle">{"{{IMAGE_BASE64S}}"}</code>
+                                                <span className="text-text-tertiary">JSON array of all screenshots (base64)</span>
+                                            </div>
+                                            <div className="flex items-center gap-2 text-xs">
+                                                <code className="bg-bg-input px-1.5 py-0.5 rounded text-text-primary font-mono border border-border-subtle">{"{{IMAGE_COUNT}}"}</code>
+                                                <span className="text-text-tertiary">Number of attached screenshots</span>
+                                            </div>
+                                            <div className="flex items-center gap-2 text-xs">
+                                                <code className="bg-bg-input px-1.5 py-0.5 rounded text-text-primary font-mono border border-border-subtle">{"{{OPENAI_USER_CONTENT}}"}</code>
+                                                <span className="text-text-tertiary">OpenAI-compatible user content array (text + images)</span>
+                                            </div>
+                                            <div className="flex items-center gap-2 text-xs">
+                                                <code className="bg-bg-input px-1.5 py-0.5 rounded text-text-primary font-mono border border-border-subtle">{"{{OPENAI_MESSAGES}}"}</code>
+                                                <span className="text-text-tertiary">OpenAI-compatible messages array (system + user multimodal)</span>
+                                            </div>
+                                            <div className="flex items-center gap-2 text-xs">
+                                                <code className="bg-bg-input px-1.5 py-0.5 rounded text-text-primary font-mono border border-border-subtle">{"{{API_KEY}}"}</code>
+                                                <span className="text-text-tertiary">Best-available configured LLM API key</span>
+                                            </div>
+                                            <div className="flex items-center gap-2 text-xs">
+                                                <code className="bg-bg-input px-1.5 py-0.5 rounded text-text-primary font-mono border border-border-subtle">{"{{OPENAI_API_KEY}}"}</code>
+                                                <span className="text-text-tertiary">Provider-specific key placeholders are also supported</span>
                                             </div>
                                         </div>
+                                        <p className="text-[10px] text-text-tertiary mt-2">Tip: include at least one text or image placeholder so input can flow through in text-only, image-only, and mixed scenarios.</p>
                                     </div>
 
                                     <div>
@@ -909,13 +950,10 @@ export const AIProvidersSettings: React.FC = () => {
                                                     <code className="font-mono text-[10px] text-text-primary whitespace-pre block">
                                                         {`curl https://api.openai.com/v1/chat/completions \\
   -H "Content-Type: application/json" \\
-  -H "Authorization: Bearer YOUR_API_KEY" \\
+  -H "Authorization: Bearer {{OPENAI_API_KEY}}" \\
   -d '{
     "model": "gpt-4o-mini",
-    "messages": [
-      {"role": "system", "content": "You are a helpful assistant."},
-      {"role": "user", "content": "{{TEXT}}"}
-    ],
+    "messages": {{OPENAI_MESSAGES}},
     "temperature": 0.7
   }'`}
                                                     </code>

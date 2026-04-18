@@ -9,6 +9,8 @@ test('ThreadManager - should create a new thread', () => {
   assert.equal(thread.topic, 'Design YouTube');
   assert.equal(thread.phase, 'high_level_design');
   assert.equal(thread.status, 'active');
+  assert.ok(Array.isArray(thread.embedding));
+  assert.equal(thread.embedding?.length, 32);
 });
 
 test('ThreadManager - should suspend active thread when creating new', () => {

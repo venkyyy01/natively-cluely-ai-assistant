@@ -3,9 +3,20 @@ import type { FastResponseProvider, FollowUpMeetingType, FollowUpTone, ProviderK
 
 const boundedString = (max: number) => z.string().trim().min(1).max(max);
 const optionalBoundedString = (max: number) => z.string().trim().max(max).optional();
+const boundedOptionalString = (max: number) => z.string().trim().min(1).max(max).optional();
 const sttProviderEnum = z.enum(['google', 'groq', 'openai', 'deepgram', 'elevenlabs', 'azure', 'ibmwatson', 'soniox']);
 const llmProviderEnum = z.enum(['gemini', 'groq', 'openai', 'claude', 'cerebras']);
 const fastResponseProviderEnum = z.enum(['groq', 'cerebras']);
+const externalUrlSchema = z.string().trim().min(1).max(65535).refine((value) => {
+  try {
+    const parsed = new URL(value);
+    return ['http:', 'https:', 'mailto:'].includes(parsed.protocol);
+  } catch {
+    return false;
+  }
+}, {
+  message: 'Expected a valid http, https, or mailto URL',
+});
 
 export const ipcSchemas = {
   geminiChatArgs: z.tuple([
@@ -116,15 +127,25 @@ export const ipcSchemas = {
   ragCancelQuery: z.object({
     meetingId: boundedString(128).optional(),
     global: z.boolean().optional(),
-  }).strict().refine((value) => value.global === true || typeof value.meetingId === 'string', {
-    message: 'meetingId or global is required',
+    live: z.boolean().optional(),
+  }).strict().refine((value) => value.global === true || typeof value.meetingId === 'string' || value.live === true, {
+    message: 'meetingId, global, or live is required',
   }),
+  intelligenceQuestion: z.string().trim().max(10000),
+  intelligenceImagePaths: z.array(boundedString(2000)).max(8),
+  intelligenceFollowUpIntent: boundedString(128),
+  intelligenceFollowUpUserRequest: z.string().trim().max(10000),
+  intelligenceManualQuestion: boundedString(10000),
+  calendarEventId: boundedString(1024),
   themeMode: z.enum(['system', 'light', 'dark']),
   openMailtoInput: z.object({
     to: z.string().trim().max(2000),
     subject: z.string().max(500),
     body: z.string().max(20000),
   }).strict(),
+  audioDeviceId: boundedOptionalString(256),
+  meetingId: boundedString(128),
+  externalUrl: externalUrlSchema,
 };
 
 export function parseIpcInput<T>(schema: z.ZodType<T>, payload: unknown, channel: string): T {

@@ -1,6 +1,49 @@
 import type { CustomProviderPayload, FastResponseConfig, FollowUpEmailInput, GeminiChatOptions, OverlayBounds, TranscriptTextEntry } from '../../shared/ipc'
 
 type StatusResult = { success: boolean; error?: string }
+type AnswerRoute = 'fast_standard_answer' | 'enriched_standard_answer' | 'conscious_answer' | 'manual_answer' | 'follow_up_refinement'
+
+type SuggestedAnswerMetadata = {
+  route: AnswerRoute
+  attemptedRoute?: AnswerRoute
+  fallbackOccurred: boolean
+  fallbackReason?: string
+  schemaVersion: 'standard_answer_v1' | 'conscious_mode_v1'
+  evidenceHash: string
+  contextSelectionHash?: string
+  transcriptRevision: number
+  threadAction?: 'start' | 'continue' | 'reset' | 'ignore'
+  thread?: {
+    rootQuestion: string
+    lastQuestion: string
+    followUpCount: number
+    updatedAt: number
+  } | null
+  threadState: {
+    activeThread: {
+      rootQuestion: string
+      lastQuestion: string
+      followUpCount: number
+      updatedAt: number
+    } | null
+    threadAction: 'start' | 'continue' | 'reset' | 'ignore'
+    transcriptRevision: number
+  }
+  cooldownSuppressedMs?: number
+  cooldownReason?: 'duplicate_question_debounce'
+  verifier?: {
+    deterministic: 'pass' | 'fail' | 'skipped'
+    provenance: 'pass' | 'fail' | 'skipped'
+  }
+  stealthContainmentActive: boolean
+}
+
+type IntelligenceSuggestedAnswerEvent = {
+  answer: string
+  question: string
+  confidence: number
+  metadata?: SuggestedAnswerMetadata
+}
 
 export interface ElectronAPI {
   updateContentDimensions: (dimensions: {
@@ -115,7 +158,15 @@ setDisguise: (mode: 'terminal' | 'settings' | 'activity' | 'none') => Promise<St
 
   // Intelligence Mode IPC
   generateAssist: () => Promise<{ insight: string | null }>
-  generateWhatToSay: (question?: string, imagePaths?: string[]) => Promise<{ answer: string | null; question?: string; error?: string }>
+  generateWhatToSay: (
+    question?: string,
+    imagePaths?: string[]
+  ) => Promise<{
+    answer: string | null
+    question?: string
+    error?: string
+    status?: 'completed' | 'canceled' | 'error'
+  }>
   generateFollowUp: (intent: string, userRequest?: string) => Promise<{ refined: string | null; intent: string }>
   generateFollowUpQuestions: () => Promise<{ questions: string | null }>
   generateRecap: () => Promise<{ summary: string | null }>
@@ -139,8 +190,9 @@ setDisguise: (mode: 'terminal' | 'settings' | 'activity' | 'none') => Promise<St
 
   // Intelligence Mode Events
   onIntelligenceAssistUpdate: (callback: (data: { insight: string }) => void) => () => void
+  onIntelligenceCooldown: (callback: (data: { suppressedMs: number; question?: string; reason?: 'duplicate_question_debounce' }) => void) => () => void
   onIntelligenceSuggestedAnswerToken: (callback: (data: { token: string; question: string; confidence: number }) => void) => () => void
-  onIntelligenceSuggestedAnswer: (callback: (data: { answer: string; question: string; confidence: number }) => void) => () => void
+  onIntelligenceSuggestedAnswer: (callback: (data: IntelligenceSuggestedAnswerEvent) => void) => () => void
   onIntelligenceRefinedAnswerToken: (callback: (data: { token: string; intent: string }) => void) => () => void
   onIntelligenceRefinedAnswer: (callback: (data: { answer: string; intent: string }) => void) => () => void
   onIntelligenceFollowUpQuestionsUpdate: (callback: (data: { questions: string }) => void) => () => void
@@ -153,6 +205,8 @@ setDisguise: (mode: 'terminal' | 'settings' | 'activity' | 'none') => Promise<St
   onIntelligenceError: (callback: (data: { error: string, mode: string }) => void) => () => void;
   // Session Management
   onSessionReset: (callback: () => void) => () => void;
+  onMeetingLifecycleState: (callback: (state: 'idle' | 'starting' | 'active' | 'stopping') => void) => () => void;
+  getMeetingLifecycleState: () => Promise<'idle' | 'starting' | 'active' | 'stopping'>;
 
   // Streaming listeners
   streamGeminiChat: (message: string, imagePaths?: string[], context?: string, options?: GeminiChatOptions) => Promise<void>
@@ -197,6 +251,7 @@ setDisguise: (mode: 'terminal' | 'settings' | 'activity' | 'none') => Promise<St
   flushDatabase: () => Promise<{ success: boolean }>;
 
   onUndetectableChanged: (callback: (state: boolean) => void) => () => void;
+  onPrivacyShieldChanged: (callback: (state: { active: boolean; reason: string | null }) => void) => () => void;
   onFastResponseConfigChanged: (callback: (config: FastResponseConfig) => void) => () => void;
   onModelChanged: (callback: (modelId: string) => void) => () => void;
   onModelFallback: (callback: (event: { provider: 'gemini' | 'groq' | 'openai' | 'claude'; previousModel: string; fallbackModel: string; reason: string }) => void) => () => void;
@@ -226,7 +281,7 @@ setDisguise: (mode: 'terminal' | 'settings' | 'activity' | 'none') => Promise<St
   ragQueryMeeting: (meetingId: string, query: string) => Promise<{ success?: boolean; fallback?: boolean; error?: string }>
   ragQueryLive: (query: string) => Promise<{ success?: boolean; fallback?: boolean; error?: string }>
   ragQueryGlobal: (query: string) => Promise<{ success?: boolean; fallback?: boolean; error?: string }>
-  ragCancelQuery: (options: { meetingId?: string; global?: boolean }) => Promise<StatusResult>
+  ragCancelQuery: (options: { meetingId?: string; global?: boolean; live?: boolean }) => Promise<StatusResult>
   ragIsMeetingProcessed: (meetingId: string) => Promise<boolean>
   ragGetQueueStatus: () => Promise<{ pending: number; processing: number; completed: number; failed: number }>
   ragRetryEmbeddings: () => Promise<StatusResult>

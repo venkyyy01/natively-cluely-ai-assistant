@@ -15,6 +15,7 @@ public final class CGVirtualDisplayBackend: VirtualDisplayBackend {
     }
 
     private var activeDisplays: [String: ActiveDisplay] = [:]
+    private let stateLock = NSLock()
 
     public init() {}
 
@@ -48,7 +49,9 @@ public final class CGVirtualDisplayBackend: VirtualDisplayBackend {
         }
 
         let displayID = (display.value(forKey: "displayID") as? NSNumber)?.uint32Value ?? 0
-        activeDisplays[request.sessionId] = ActiveDisplay(descriptor: descriptor, settings: settings, display: display)
+        stateLock.withLock {
+            activeDisplays[request.sessionId] = ActiveDisplay(descriptor: descriptor, settings: settings, display: display)
+        }
 
         return BackendCreateResult(
             ready: true,
@@ -59,16 +62,19 @@ public final class CGVirtualDisplayBackend: VirtualDisplayBackend {
     }
 
     public func releaseSession(sessionId: String) throws {
-        activeDisplays.removeValue(forKey: sessionId)
+        stateLock.withLock {
+            activeDisplays.removeValue(forKey: sessionId)
+        }
     }
 
     public func status() -> [String: Any] {
-        [
+        let activeDisplayCount = stateLock.withLock { activeDisplays.count }
+        return [
             "ready": Self.isSupported,
             "component": "macos-virtual-display-helper",
             "backend": Self.isSupported ? "cgvirtualdisplay" : "unsupported",
-            "reason": Self.isSupported ? NSNull() : Self.unsupportedReason,
-            "activeVirtualDisplays": activeDisplays.count
+            "reason": Self.isSupported ? (NSNull() as Any) : (Self.unsupportedReason as Any),
+            "activeVirtualDisplays": activeDisplayCount
         ]
     }
 
@@ -126,29 +132,40 @@ public final class CGVirtualDisplayBackend: VirtualDisplayBackend {
         guard let allocated = (displayClass as AnyObject).perform(allocSelector)?.takeUnretainedValue() else {
             throw NSError(domain: "CGVirtualDisplayBackend", code: 3, userInfo: [NSLocalizedDescriptionKey: "Failed to allocate CGVirtualDisplay"]) 
         }
+        guard (allocated as AnyObject).responds(to: initSelector), let method = (allocated as AnyObject).method(for: initSelector) else {
+            throw NSError(domain: "CGVirtualDisplayBackend", code: 7, userInfo: [NSLocalizedDescriptionKey: "CGVirtualDisplay missing initWithDescriptor:"])
+        }
 
         typealias InitWithDescriptor = @convention(c) (AnyObject, Selector, AnyObject) -> Unmanaged<AnyObject>
-        let method = (allocated as AnyObject).method(for: initSelector)
         let fn = unsafeBitCast(method, to: InitWithDescriptor.self)
-        return fn(allocated, initSelector, descriptor).takeRetainedValue() as! NSObject
+        let object = fn(allocated, initSelector, descriptor).takeRetainedValue()
+        guard let display = object as? NSObject else {
+            throw NSError(domain: "CGVirtualDisplayBackend", code: 8, userInfo: [NSLocalizedDescriptionKey: "CGVirtualDisplay returned an unexpected object type"])
+        }
+        return display
     }
 
     private static func makeMode(width: Int, height: Int, refreshRate: Double) throws -> NSObject {
-        guard NSClassFromString("CGVirtualDisplayMode") != nil else {
+        guard let modeClass = NSClassFromString("CGVirtualDisplayMode") else {
             throw NSError(domain: "CGVirtualDisplayBackend", code: 4, userInfo: [NSLocalizedDescriptionKey: unsupportedReason])
         }
 
-        let modeClass: AnyObject = NSClassFromString("CGVirtualDisplayMode")!
         let allocSelector = NSSelectorFromString("alloc")
         let initSelector = NSSelectorFromString("initWithWidth:height:refreshRate:")
-        guard let allocated = modeClass.perform(allocSelector)?.takeUnretainedValue() else {
+        guard let allocated = (modeClass as AnyObject).perform(allocSelector)?.takeUnretainedValue() else {
             throw NSError(domain: "CGVirtualDisplayBackend", code: 5, userInfo: [NSLocalizedDescriptionKey: "Failed to allocate CGVirtualDisplayMode"]) 
+        }
+        guard (allocated as AnyObject).responds(to: initSelector), let method = (allocated as AnyObject).method(for: initSelector) else {
+            throw NSError(domain: "CGVirtualDisplayBackend", code: 9, userInfo: [NSLocalizedDescriptionKey: "CGVirtualDisplayMode missing initWithWidth:height:refreshRate:"])
         }
 
         typealias InitWithMode = @convention(c) (AnyObject, Selector, UInt, UInt, Double) -> Unmanaged<AnyObject>
-        let method = (allocated as AnyObject).method(for: initSelector)
         let fn = unsafeBitCast(method, to: InitWithMode.self)
-        return fn(allocated, initSelector, UInt(width), UInt(height), refreshRate).takeRetainedValue() as! NSObject
+        let object = fn(allocated, initSelector, UInt(width), UInt(height), refreshRate).takeRetainedValue()
+        guard let mode = object as? NSObject else {
+            throw NSError(domain: "CGVirtualDisplayBackend", code: 10, userInfo: [NSLocalizedDescriptionKey: "CGVirtualDisplayMode returned an unexpected object type"])
+        }
+        return mode
     }
 
     private static func makeSettings(mode: NSObject) throws -> NSObject {
@@ -165,8 +182,10 @@ public final class CGVirtualDisplayBackend: VirtualDisplayBackend {
 
     private static func applySettings(display: NSObject, settings: NSObject) throws -> Bool {
         let selector = NSSelectorFromString("applySettings:")
+        guard display.responds(to: selector), let method = display.method(for: selector) else {
+            throw NSError(domain: "CGVirtualDisplayBackend", code: 11, userInfo: [NSLocalizedDescriptionKey: "CGVirtualDisplay missing applySettings:"])
+        }
         typealias ApplySettings = @convention(c) (AnyObject, Selector, AnyObject) -> Bool
-        let method = display.method(for: selector)
         let fn = unsafeBitCast(method, to: ApplySettings.self)
         return fn(display, selector, settings)
     }

@@ -1,8 +1,18 @@
 import { LLMHelper } from "../LLMHelper";
-import { FAST_STANDARD_ANSWER_PROMPT, UNIVERSAL_WHAT_TO_ANSWER_PROMPT } from "./prompts";
+import {
+    CONSCIOUS_BEHAVIORAL_REASONING_SYSTEM_PROMPT,
+    CONSCIOUS_REASONING_SYSTEM_PROMPT,
+    FAST_STANDARD_ANSWER_PROMPT,
+    UNIVERSAL_WHAT_TO_ANSWER_PROMPT,
+} from "./prompts";
 import { TemporalContext } from "./TemporalContextBuilder";
 import { IntentResult } from "./IntentClassifier";
-import { ConsciousModeStructuredResponse, parseConsciousModeResponse } from "../ConsciousMode";
+import {
+    CONSCIOUS_MODE_JSON_RESPONSE_INSTRUCTIONS,
+    ConsciousModeStructuredResponse,
+    isBehavioralQuestionText,
+    parseConsciousModeResponse,
+} from "../ConsciousMode";
 
 export interface StreamFailureDetails {
     error: unknown;
@@ -65,6 +75,7 @@ ANSWER SHAPE: ${intentResult.answerShape}
             latestQuestion?: string;
             onInitialStreamFailure?: (details: StreamFailureDetails) => void;
             onFallbackResponsePrepared?: (details: StreamFailureDetails & { hadVisibleOutput: boolean }) => void;
+            abortSignal?: AbortSignal;
         }
     ): AsyncGenerator<string> {
         let yieldedAnyChunk = false;
@@ -80,12 +91,16 @@ ANSWER SHAPE: ${intentResult.answerShape}
             const prompt = options?.fastPath ? FAST_STANDARD_ANSWER_PROMPT : UNIVERSAL_WHAT_TO_ANSWER_PROMPT;
             for await (const chunk of this.llmHelper.streamChat(primaryQuestion, imagePaths, conversationContext, prompt, {
                 skipKnowledgeInterception: !!options?.fastPath,
+                abortSignal: options?.abortSignal,
             })) {
                 yieldedAnyChunk = true;
                 yield chunk;
             }
 
         } catch (error) {
+            if (options?.abortSignal?.aborted) {
+                return;
+            }
             const errorMessage = error instanceof Error
                 ? `${error.name}: ${error.message}`.toLowerCase()
                 : String(error).toLowerCase();
@@ -114,17 +129,33 @@ ANSWER SHAPE: ${intentResult.answerShape}
         imagePaths?: string[]
     ): Promise<ConsciousModeStructuredResponse> {
         let full = "";
+        const behavioralPromptRequested = intentResult?.intent === 'behavioral'
+            || /QUESTION_MODE:\s*behavioral/i.test(cleanedTranscript)
+            || isBehavioralQuestionText(question);
 
         const contextParts: string[] = [
-            'STRUCTURED_REASONING_RESPONSE',
-            'Return JSON with keys: mode, openingReasoning, implementationPlan, tradeoffs, edgeCases, scaleConsiderations, pushbackResponses, likelyFollowUps, codeTransition.',
-            'Set mode to reasoning_first.',
             `QUESTION: ${question}`,
         ];
 
         if (intentResult) {
-            contextParts.push(`INTENT: ${intentResult.intent}`);
-            contextParts.push(`ANSWER_SHAPE: ${intentResult.answerShape}`);
+            let intentHint: string;
+            switch (intentResult.intent) {
+                case 'behavioral':
+                    intentHint = 'This is a behavioral question. Tell one concrete story, own it with "I".';
+                    break;
+                case 'coding':
+                    intentHint = 'This is a coding question. Code first, explain briefly after.';
+                    break;
+                case 'deep_dive':
+                    intentHint = 'They want more detail on the same topic. Go deeper, don\'t start a new topic.';
+                    break;
+                case 'clarification':
+                    intentHint = 'They want clarification. Keep it short, answer what they actually asked.';
+                    break;
+                default:
+                    intentHint = 'Answer directly. Keep it short and conversational.';
+            }
+            contextParts.push(intentHint);
         }
 
         if (temporalContext?.hasRecentResponses) {
@@ -133,8 +164,21 @@ ANSWER SHAPE: ${intentResult.answerShape}
 
         contextParts.push(`CONVERSATION:\n${cleanedTranscript}`);
 
-        const message = contextParts.join('\n\n');
-        const stream = this.llmHelper.streamChat(message, imagePaths, undefined, UNIVERSAL_WHAT_TO_ANSWER_PROMPT);
+        const message = [
+            'STRUCTURED_REASONING_RESPONSE',
+            ...contextParts,
+        ].join('\n\n');
+        const stream = this.llmHelper.streamChat(
+            message,
+            imagePaths,
+            undefined,
+            behavioralPromptRequested
+                ? CONSCIOUS_BEHAVIORAL_REASONING_SYSTEM_PROMPT
+                : CONSCIOUS_REASONING_SYSTEM_PROMPT,
+            {
+            skipKnowledgeInterception: true,
+            qualityTier: 'structured_reasoning',
+        });
 
         for await (const chunk of stream) {
             full += chunk;

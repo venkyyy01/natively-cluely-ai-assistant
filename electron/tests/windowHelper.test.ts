@@ -141,3 +141,27 @@ test('WindowHelper can show and hide a direct launcher window when StealthRuntim
     restoreElectron();
   }
 });
+
+test('WindowHelper forwards stealth runtime heartbeat events to the registered listener', async () => {
+  const restoreElectron = installElectronMock();
+  const windowHelperPath = require.resolve('../WindowHelper');
+  delete require.cache[windowHelperPath];
+
+  try {
+    const { WindowHelper } = await import('../WindowHelper');
+    const helper = new WindowHelper({} as never, { applyToWindow() {}, reapplyAfterShow() {} } as never);
+    let heartbeatCount = 0;
+
+    helper.setStealthRuntimeHeartbeatListener(() => {
+      heartbeatCount += 1;
+    });
+
+    const listener = (helper as any).stealthHeartbeatListener as (() => void) | null;
+    listener?.();
+    listener?.();
+
+    assert.equal(heartbeatCount, 2);
+  } finally {
+    restoreElectron();
+  }
+});

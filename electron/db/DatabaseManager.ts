@@ -772,6 +772,11 @@ export class DatabaseManager {
     }
 
     public createOrUpdateMeetingProcessingRecord(meeting: Meeting, startTimeMs: number, durationMs: number): void {
+        const existing = this.getMeetingDetails(meeting.id);
+        if (existing && existing.isProcessed) {
+            console.warn(`[DatabaseManager] Skipping overwrite of finalized meeting ${meeting.id}`);
+            return;
+        }
         this.saveMeeting({
             ...meeting,
             isProcessed: false,

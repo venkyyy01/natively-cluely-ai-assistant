@@ -10,7 +10,8 @@ export class MeetingCheckpointer {
 
     constructor(
         private readonly dbManager: DatabaseManager,
-        private readonly getSessionTracker: () => SessionTracker
+        private readonly getSessionTracker: () => SessionTracker,
+        private readonly onCheckpointWritten?: (checkpointId: string) => void | Promise<void>,
     ) {}
 
     public start(meetingId: string): void {
@@ -42,6 +43,10 @@ export class MeetingCheckpointer {
 
     public destroy(): void {
         this.stop();
+    }
+
+    public async checkpointNow(): Promise<void> {
+        await this.checkpoint();
     }
 
     private async checkpoint(): Promise<void> {
@@ -85,6 +90,9 @@ export class MeetingCheckpointer {
                     w.webContents.send('meeting-checkpointed', this.meetingId);
                 }
             });
+            if (this.onCheckpointWritten) {
+                await this.onCheckpointWritten(this.meetingId);
+            }
         } catch (e) {
             console.error('[MeetingCheckpointer] Failed to save checkpoint to database', e);
         }

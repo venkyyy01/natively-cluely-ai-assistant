@@ -154,3 +154,34 @@ export function prepareTranscriptForWhatToAnswer(
     const sparsified = sparsifyTranscript(cleaned, maxTurns);
     return formatTranscriptForLLM(sparsified);
 }
+
+/**
+ * Conscious-mode transcript preparation for reasoning quality.
+ * Preserves original casing and technical tokens/code-like spans.
+ */
+export function prepareTranscriptForReasoning(
+    turns: TranscriptTurn[],
+    maxTurns: number = 12
+): string {
+    const normalized = turns
+        .map((turn) => ({
+            role: turn.role,
+            text: turn.text.replace(/\s+/g, ' ').trim(),
+            timestamp: turn.timestamp,
+        }))
+        .filter((turn) => {
+            if (!turn.text) {
+                return false;
+            }
+
+            if (turn.role === 'interviewer') {
+                return turn.text.length >= 3;
+            }
+
+            const wordCount = turn.text.split(/\s+/).filter(Boolean).length;
+            return wordCount >= 2;
+        });
+
+    const sparsified = sparsifyTranscript(normalized, maxTurns);
+    return formatTranscriptForLLM(sparsified);
+}

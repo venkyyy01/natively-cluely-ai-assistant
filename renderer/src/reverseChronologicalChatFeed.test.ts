@@ -31,3 +31,19 @@ test('chat surfaces do not rely on reverse scans or tail updates for the newest 
     expect(source).not.toContain('updated[prev.length - 1]');
   }
 });
+
+test('NativelyInterface intelligence streams do not route tokens through top-of-feed placeholder predicates', () => {
+  const source = readSource('src/components/NativelyInterface.tsx');
+
+  expect(source).not.toContain('function updateTopMessage(');
+  expect(source).not.toContain('function prependOrUpdateTopMessage(');
+  expect(source).not.toContain("message => Boolean(message.isStreaming && message.intent ===");
+});
+
+test('NativelyInterface uses authoritative threadState metadata without legacy thread fallbacks', () => {
+  const source = readSource('src/components/NativelyInterface.tsx');
+
+  expect(source).not.toContain('?? data.metadata?.threadAction ??');
+  expect(source).not.toContain('data.metadata?.thread !== undefined');
+  expect(source).not.toContain('activeConsciousThreadRef.current = data.metadata.thread');
+});

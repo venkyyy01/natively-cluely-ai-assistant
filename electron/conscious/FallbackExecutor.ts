@@ -19,6 +19,7 @@ const FAILURE_THRESHOLDS = {
 };
 
 export class FallbackExecutor {
+  private sawFullConsciousSuccessSinceLastFailure = false;
   private failureState: FailureState = {
     consecutiveFailures: 0,
     totalFailures: 0,
@@ -47,15 +48,19 @@ export class FallbackExecutor {
     this.failureState.lastFailureTime = Date.now();
     this.failureState.tierFailures[tier] += 1;
     this.failureState.degradationLevel = this.calculateDegradationLevel();
+    this.sawFullConsciousSuccessSinceLastFailure = false;
   }
 
-  recordSuccess(): void {
+  recordSuccess(tier: FallbackTier = 'full_conscious'): void {
     this.failureState.consecutiveFailures = Math.max(
       0, 
       this.failureState.consecutiveFailures - FAILURE_THRESHOLDS.recovery
     );
     this.failureState.lastSuccessTime = Date.now();
     this.failureState.degradationLevel = this.calculateDegradationLevel();
+    if (tier === 'full_conscious') {
+      this.sawFullConsciousSuccessSinceLastFailure = true;
+    }
   }
 
   private calculateDegradationLevel(): DegradationLevel {
@@ -86,9 +91,11 @@ export class FallbackExecutor {
   checkAutoRecovery(): boolean {
     const now = Date.now();
     if (this.failureState.lastFailureTime && 
-        now - this.failureState.lastFailureTime > FAILURE_THRESHOLDS.cooldownMs) {
+        now - this.failureState.lastFailureTime > FAILURE_THRESHOLDS.cooldownMs &&
+        this.sawFullConsciousSuccessSinceLastFailure) {
       this.failureState.consecutiveFailures = 0;
       this.failureState.degradationLevel = 'none';
+      this.sawFullConsciousSuccessSinceLastFailure = false;
       return true;
     }
     return false;
@@ -135,6 +142,7 @@ export class FallbackExecutor {
   }
 
   reset(): void {
+    this.sawFullConsciousSuccessSinceLastFailure = false;
     this.failureState = {
       consecutiveFailures: 0,
       totalFailures: 0,

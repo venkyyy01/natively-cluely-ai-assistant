@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useLayoutEffect } from 'react';
+import React, { useState, useEffect, useRef, useLayoutEffect, useCallback, useMemo } from 'react';
 import {
     Sparkles,
     Pencil,
@@ -48,10 +48,13 @@ import {
     parseConsciousModeAnswer,
 } from '../lib/consciousMode';
 import {
-    classifyConsciousModeQuestion,
-    createEmptyConsciousModeResponse,
-    type ReasoningThread,
-} from '../../electron/ConsciousMode';
+    clearActiveStreamingIdsByMessageId,
+    createMessageId,
+    getActiveStreamingId,
+    setActiveStreamingIds,
+    updateMessageById,
+    updateOrPrependMessageById,
+} from '../lib/streamingMessageState';
 
 interface Message {
     id: string;
@@ -65,12 +68,29 @@ interface Message {
     intent?: string;
 }
 
+type ConsciousThreadView = {
+    rootQuestion: string;
+    lastQuestion: string;
+    followUpCount: number;
+    updatedAt: number;
+};
+
 const MAX_ROLLING_TRANSCRIPT_CHARS = 1200;
 const MIN_OVERLAY_WIDTH = 420;
 const MAX_OVERLAY_WIDTH = 960;
 const MIN_CHAT_HEIGHT = 260;
 const MAX_CHAT_HEIGHT = 760;
+const MANUAL_STT_FINALIZE_GRACE_MS = 350;
+const MANUAL_STT_FINALIZE_MAX_WAIT_MS = 1500;
+const MANUAL_STT_POLL_INTERVAL_MS = 75;
 type ResizeDirection = 'left' | 'right' | 'top' | 'bottom' | 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right';
+const WHAT_TO_SAY_STREAM_KEYS = ['what_to_answer', 'what_to_say'];
+const RECAP_STREAM_KEYS = ['recap'];
+const FOLLOW_UP_QUESTIONS_STREAM_KEYS = ['follow_up_questions'];
+
+function getFollowUpStreamKeys(intent: string): string[] {
+    return [intent, 'follow_up'];
+}
 
 function appendRollingTranscript(existing: string, nextSegment: string): string {
     const addition = nextSegment.trim();
@@ -95,42 +115,6 @@ function prependMessage(prev: Message[], message: Omit<Message, 'createdAt'>): M
     return [createMessage(message), ...prev];
 }
 
-function updateTopMessage(
-    prev: Message[],
-    predicate: (message: Message) => boolean,
-    updater: (message: Message) => Message
-): Message[] {
-    const [latestMessage, ...rest] = prev;
-    if (!latestMessage || !predicate(latestMessage)) {
-        return prev;
-    }
-
-    return [updater(latestMessage), ...rest];
-}
-
-function prependOrUpdateTopMessage(
-    prev: Message[],
-    predicate: (message: Message) => boolean,
-    updater: (message: Message) => Message,
-    fallbackMessage: Omit<Message, 'createdAt'>
-): Message[] {
-    const updatedMessages = updateTopMessage(prev, predicate, updater);
-    if (updatedMessages !== prev) {
-        return updatedMessages;
-    }
-
-    return prependMessage(prev, fallbackMessage);
-}
-
-function replaceTopStreamingPlaceholder(prev: Message[], message: Omit<Message, 'createdAt'>): Message[] {
-    const [latestMessage, ...rest] = prev;
-    if (latestMessage && latestMessage.isStreaming && latestMessage.text === '') {
-        return [createMessage(message), ...rest];
-    }
-
-    return prependMessage(prev, message);
-}
-
 interface NativelyInterfaceProps {
     onEndMeeting?: () => void;
 }
@@ -144,9 +128,16 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
     const [isConnected, setIsConnected] = useState(false);
     const [isProcessing, setIsProcessing] = useState(false);
     const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-    const [conversationContext, setConversationContext] = useState<string>('');
+    const conversationContext = useMemo(() => {
+        return messages
+            .filter(m => m.role !== 'user' || !m.hasScreenshot)
+            .map(m => `${m.role === 'interviewer' ? 'Interviewer' : m.role === 'user' ? 'User' : 'Assistant'}: ${m.text}`)
+            .slice(-20)
+            .join('\n');
+    }, [messages]);
     const [isManualRecording, setIsManualRecording] = useState(false);
     const isRecordingRef = useRef(false);  // Ref to track recording state (avoids stale closure)
+    const manualFinalizeInFlightRef = useRef(false);
     const [manualTranscript, setManualTranscript] = useState('');
     const manualTranscriptRef = useRef<string>('');
     const [showTranscript, setShowTranscript] = useState(() => {
@@ -156,6 +147,16 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
 
     // Analytics State
     const requestStartTimeRef = useRef<number | null>(null);
+    const messageIdCounterRef = useRef(0);
+    const activeGeminiStreamingIdRef = useRef<string | null>(null);
+    const activeRagStreamingIdRef = useRef<string | null>(null);
+    const activeIntelligenceStreamingIdsRef = useRef<Record<string, string>>({});
+
+    const nextMessageId = useCallback((prefix: string) => {
+        const id = createMessageId(prefix, Date.now(), messageIdCounterRef.current);
+        messageIdCounterRef.current += 1;
+        return id;
+    }, []);
 
     // Sync transcript setting
     useEffect(() => {
@@ -176,7 +177,7 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
 
     const contentRef = useRef<HTMLDivElement>(null);
     const scrollContainerRef = useRef<HTMLDivElement>(null);
-    const activeConsciousThreadRef = useRef<ReasoningThread | null>(null);
+    const activeConsciousThreadRef = useRef<ConsciousThreadView | null>(null);
     // const settingsButtonRef = useRef<HTMLButtonElement>(null);
 
     // Latent Context State (Screenshots attached but not sent)
@@ -273,27 +274,32 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
         localStorage.setItem('natively_hideChatHidesWidget', String(hideChatHidesWidget));
     }, [isUndetectable, hideChatHidesWidget]);
 
+    const resizeRafRef = useRef<number | null>(null);
+
     // Auto-resize Window
     useLayoutEffect(() => {
         if (!contentRef.current) return;
 
-        const observer = new ResizeObserver((entries) => {
-            for (const entry of entries) {
-                // Use getBoundingClientRect to get the exact rendered size including padding
-                const rect = entry.target.getBoundingClientRect();
-
-                // Send exact dimensions to Electron
-                // Removed buffer to ensure tight fit
-                console.log('[NativelyInterface] ResizeObserver:', Math.ceil(rect.width), Math.ceil(rect.height));
+        const observer = new ResizeObserver(() => {
+            if (resizeRafRef.current !== null) return;
+            resizeRafRef.current = requestAnimationFrame(() => {
+                resizeRafRef.current = null;
+                if (!contentRef.current) return;
+                const rect = contentRef.current.getBoundingClientRect();
                 window.electronAPI?.updateContentDimensions({
                     width: Math.ceil(rect.width),
                     height: Math.ceil(rect.height)
                 });
-            }
+            });
         });
 
         observer.observe(contentRef.current);
-        return () => observer.disconnect();
+        return () => {
+            observer.disconnect();
+            if (resizeRafRef.current !== null) {
+                cancelAnimationFrame(resizeRafRef.current);
+            }
+        };
     }, []);
 
     // Force resize when attachedContext changes (screenshots added/removed)
@@ -339,15 +345,6 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
     });
 
     // Build conversation context from messages
-    useEffect(() => {
-        const context = messages
-            .filter(m => m.role !== 'user' || !m.hasScreenshot)
-            .map(m => `${m.role === 'interviewer' ? 'Interviewer' : m.role === 'user' ? 'User' : 'Assistant'}: ${m.text}`)
-            .slice(-20)
-            .join('\n');
-        setConversationContext(context);
-    }, [messages]);
-
     // Listen for settings window visibility changes
     useEffect(() => {
         if (!electronAPI.onSettingsVisibilityChange) return;
@@ -355,7 +352,7 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
             setIsSettingsOpen(isVisible);
         });
         return () => unsubscribe();
-    }, [electronAPI]);
+    }, [electronAPI, nextMessageId]);
 
     // Sync Window Visibility with Expanded State
     useEffect(() => {
@@ -386,6 +383,12 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
             setMessages([]);
             setInputValue('');
             setAttachedContext([]);
+            activeIntelligenceStreamingIdsRef.current = {};
+            activeGeminiStreamingIdRef.current = null;
+            activeRagStreamingIdRef.current = null;
+            isRecordingRef.current = false;
+            manualFinalizeInFlightRef.current = false;
+            setIsManualRecording(false);
             setManualTranscript('');
             setVoiceInput('');
             voiceInputRef.current = '';
@@ -586,30 +589,42 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
 
 
         cleanups.push(window.electronAPI.onIntelligenceSuggestedAnswerToken((data) => {
-            // Progressive update for 'what_to_answer' mode
-            setMessages(prev => prependOrUpdateTopMessage(
+            const targetId = getActiveStreamingId(activeIntelligenceStreamingIdsRef.current, WHAT_TO_SAY_STREAM_KEYS);
+            const fallbackId = nextMessageId('assistant');
+
+            setMessages(prev => updateOrPrependMessageById(
                 prev,
-                message => Boolean(message.isStreaming && message.intent === 'what_to_answer'),
+                targetId,
                 message => ({
                     ...message,
                     text: message.text + data.token
                 }),
                 {
-                    id: Date.now().toString(),
+                    id: fallbackId,
                     role: 'system',
                     text: data.token,
                     intent: 'what_to_answer',
-                    isStreaming: true
+                    isStreaming: true,
+                    createdAt: Date.now()
                 }
             ));
+
+            if (!targetId) {
+                activeIntelligenceStreamingIdsRef.current = setActiveStreamingIds(
+                    activeIntelligenceStreamingIdsRef.current,
+                    WHAT_TO_SAY_STREAM_KEYS,
+                    fallbackId,
+                );
+            }
         }));
 
         cleanups.push(window.electronAPI.onIntelligenceSuggestedAnswer((data) => {
             setIsProcessing(false);
-            const threadRoute = classifyConsciousModeQuestion(data.question, activeConsciousThreadRef.current);
+            const authoritativeThreadState = data.metadata?.threadState;
+            const threadAction = authoritativeThreadState?.threadAction ?? 'ignore';
             const assistRender = classifyAssistRender({
                 answerText: data.answer,
-                threadAction: threadRoute.threadAction,
+                threadAction,
             });
 
             analytics.trackInterviewAssistRendered({
@@ -617,112 +632,147 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
                 source_intent: 'what_to_answer',
             });
 
-            if (assistRender.output_variant === 'conscious_mode') {
-                const currentThread = activeConsciousThreadRef.current;
-                const continuesThread = Boolean(threadRoute.threadAction === 'continue' && currentThread);
+            activeConsciousThreadRef.current = authoritativeThreadState?.activeThread ?? null;
 
-                activeConsciousThreadRef.current = {
-                    rootQuestion: continuesThread && currentThread ? currentThread.rootQuestion : data.question,
-                    lastQuestion: data.question,
-                    response: createEmptyConsciousModeResponse(),
-                    followUpCount: continuesThread && currentThread ? currentThread.followUpCount + 1 : 0,
-                    updatedAt: Date.now(),
-                };
-            } else {
-                activeConsciousThreadRef.current = null;
-            }
+            const targetId = getActiveStreamingId(activeIntelligenceStreamingIdsRef.current, WHAT_TO_SAY_STREAM_KEYS);
 
-            setMessages(prev => prependOrUpdateTopMessage(
+            setMessages(prev => updateOrPrependMessageById(
                 prev,
-                message => Boolean(message.isStreaming && message.intent === 'what_to_answer'),
+                targetId,
                 message => ({
                     ...message,
                     text: data.answer,
                     isStreaming: false
                 }),
                 {
-                    id: Date.now().toString(),
+                    id: nextMessageId('system'),
                     role: 'system',
                     text: data.answer,
-                    intent: 'what_to_answer'
+                    intent: 'what_to_answer',
+                    createdAt: Date.now()
                 }
             ));
+
+            activeIntelligenceStreamingIdsRef.current = clearActiveStreamingIdsByMessageId(
+                activeIntelligenceStreamingIdsRef.current,
+                targetId,
+            );
         }));
 
         // STREAMING: Refinement
         cleanups.push(window.electronAPI.onIntelligenceRefinedAnswerToken((data) => {
-            setMessages(prev => prependOrUpdateTopMessage(
+            const targetId = getActiveStreamingId(activeIntelligenceStreamingIdsRef.current, getFollowUpStreamKeys(data.intent));
+            const fallbackId = nextMessageId('assistant');
+
+            setMessages(prev => updateOrPrependMessageById(
                 prev,
-                message => Boolean(message.isStreaming && message.intent === data.intent),
+                targetId,
                 message => ({
                     ...message,
                     text: message.text + data.token
                 }),
                 {
-                    id: Date.now().toString(),
+                    id: fallbackId,
                     role: 'system',
                     text: data.token,
                     intent: data.intent,
-                    isStreaming: true
+                    isStreaming: true,
+                    createdAt: Date.now()
                 }
             ));
+
+            if (!targetId) {
+                activeIntelligenceStreamingIdsRef.current = setActiveStreamingIds(
+                    activeIntelligenceStreamingIdsRef.current,
+                    getFollowUpStreamKeys(data.intent),
+                    fallbackId,
+                );
+            }
         }));
 
         cleanups.push(window.electronAPI.onIntelligenceRefinedAnswer((data) => {
             setIsProcessing(false);
-            setMessages(prev => prependOrUpdateTopMessage(
+            const targetId = getActiveStreamingId(activeIntelligenceStreamingIdsRef.current, getFollowUpStreamKeys(data.intent));
+
+            setMessages(prev => updateOrPrependMessageById(
                 prev,
-                message => Boolean(message.isStreaming && message.intent === data.intent),
+                targetId,
                 message => ({
                     ...message,
                     text: data.answer,
                     isStreaming: false
                 }),
                 {
-                    id: Date.now().toString(),
+                    id: nextMessageId('system'),
                     role: 'system',
                     text: data.answer,
-                    intent: data.intent
+                    intent: data.intent,
+                    createdAt: Date.now()
                 }
             ));
+
+            activeIntelligenceStreamingIdsRef.current = clearActiveStreamingIdsByMessageId(
+                activeIntelligenceStreamingIdsRef.current,
+                targetId,
+            );
         }));
 
         // STREAMING: Recap
         cleanups.push(window.electronAPI.onIntelligenceRecapToken((data) => {
-            setMessages(prev => prependOrUpdateTopMessage(
+            const targetId = getActiveStreamingId(activeIntelligenceStreamingIdsRef.current, RECAP_STREAM_KEYS);
+            const fallbackId = nextMessageId('assistant');
+
+            setMessages(prev => updateOrPrependMessageById(
                 prev,
-                message => Boolean(message.isStreaming && message.intent === 'recap'),
+                targetId,
                 message => ({
                     ...message,
                     text: message.text + data.token
                 }),
                 {
-                    id: Date.now().toString(),
+                    id: fallbackId,
                     role: 'system',
                     text: data.token,
                     intent: 'recap',
-                    isStreaming: true
+                    isStreaming: true,
+                    createdAt: Date.now()
                 }
             ));
+
+            if (!targetId) {
+                activeIntelligenceStreamingIdsRef.current = setActiveStreamingIds(
+                    activeIntelligenceStreamingIdsRef.current,
+                    RECAP_STREAM_KEYS,
+                    fallbackId,
+                );
+            }
         }));
 
         cleanups.push(window.electronAPI.onIntelligenceRecap((data) => {
             setIsProcessing(false);
-            setMessages(prev => prependOrUpdateTopMessage(
+            const targetId = getActiveStreamingId(activeIntelligenceStreamingIdsRef.current, RECAP_STREAM_KEYS);
+
+            setMessages(prev => updateOrPrependMessageById(
                 prev,
-                message => Boolean(message.isStreaming && message.intent === 'recap'),
+                targetId,
                 message => ({
                     ...message,
                     text: data.summary,
                     isStreaming: false
                 }),
                 {
-                    id: Date.now().toString(),
+                    id: nextMessageId('system'),
                     role: 'system',
                     text: data.summary,
-                    intent: 'recap'
+                    intent: 'recap',
+                    createdAt: Date.now()
                 }
             ));
+
+            activeIntelligenceStreamingIdsRef.current = clearActiveStreamingIdsByMessageId(
+                activeIntelligenceStreamingIdsRef.current,
+                targetId,
+            );
         }));
 
         // STREAMING: Follow-Up Questions (Rendered as message? Or specific UI?)
@@ -738,41 +788,61 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
         // Assuming it's a message for consistency with "Copilot" approach.
 
         cleanups.push(window.electronAPI.onIntelligenceFollowUpQuestionsToken((data) => {
-            setMessages(prev => prependOrUpdateTopMessage(
+            const targetId = getActiveStreamingId(activeIntelligenceStreamingIdsRef.current, FOLLOW_UP_QUESTIONS_STREAM_KEYS);
+            const fallbackId = nextMessageId('assistant');
+
+            setMessages(prev => updateOrPrependMessageById(
                 prev,
-                message => Boolean(message.isStreaming && message.intent === 'follow_up_questions'),
+                targetId,
                 message => ({
                     ...message,
                     text: message.text + data.token
                 }),
                 {
-                    id: Date.now().toString(),
+                    id: fallbackId,
                     role: 'system',
                     text: data.token,
                     intent: 'follow_up_questions',
-                    isStreaming: true
+                    isStreaming: true,
+                    createdAt: Date.now()
                 }
             ));
+
+            if (!targetId) {
+                activeIntelligenceStreamingIdsRef.current = setActiveStreamingIds(
+                    activeIntelligenceStreamingIdsRef.current,
+                    FOLLOW_UP_QUESTIONS_STREAM_KEYS,
+                    fallbackId,
+                );
+            }
         }));
 
         cleanups.push(window.electronAPI.onIntelligenceFollowUpQuestionsUpdate((data) => {
             // This event name is slightly different ('update' vs 'answer')
             setIsProcessing(false);
-            setMessages(prev => prependOrUpdateTopMessage(
+            const targetId = getActiveStreamingId(activeIntelligenceStreamingIdsRef.current, FOLLOW_UP_QUESTIONS_STREAM_KEYS);
+
+            setMessages(prev => updateOrPrependMessageById(
                 prev,
-                message => Boolean(message.isStreaming && message.intent === 'follow_up_questions'),
+                targetId,
                 message => ({
                     ...message,
                     text: data.questions,
                     isStreaming: false
                 }),
                 {
-                    id: Date.now().toString(),
+                    id: nextMessageId('system'),
                     role: 'system',
                     text: data.questions,
-                    intent: 'follow_up_questions'
+                    intent: 'follow_up_questions',
+                    createdAt: Date.now()
                 }
             ));
+
+            activeIntelligenceStreamingIdsRef.current = clearActiveStreamingIdsByMessageId(
+                activeIntelligenceStreamingIdsRef.current,
+                targetId,
+            );
         }));
 
         cleanups.push(window.electronAPI.onIntelligenceManualResult((data) => {
@@ -786,11 +856,38 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
 
         cleanups.push(window.electronAPI.onIntelligenceError((data) => {
             setIsProcessing(false);
-            setMessages(prev => prependMessage(prev, {
-                id: Date.now().toString(),
-                role: 'system',
-                text: `❌ Error (${data.mode}): ${data.error}`
-            }));
+            const targetKeys = data.mode === 'what_to_say'
+                ? WHAT_TO_SAY_STREAM_KEYS
+                : data.mode === 'recap'
+                    ? RECAP_STREAM_KEYS
+                    : data.mode === 'follow_up_questions'
+                        ? FOLLOW_UP_QUESTIONS_STREAM_KEYS
+                        : data.mode === 'follow_up'
+                            ? ['follow_up']
+                            : [data.mode];
+            const targetId = getActiveStreamingId(activeIntelligenceStreamingIdsRef.current, targetKeys);
+            const errorText = `❌ Error (${data.mode}): ${data.error}`;
+
+            setMessages(prev => updateOrPrependMessageById(
+                prev,
+                targetId,
+                message => ({
+                    ...message,
+                    isStreaming: false,
+                    text: message.text ? `${message.text}\n\n${errorText}` : errorText
+                }),
+                {
+                    id: nextMessageId('system'),
+                    role: 'system',
+                    text: errorText,
+                    createdAt: Date.now()
+                }
+            ));
+
+            activeIntelligenceStreamingIdsRef.current = clearActiveStreamingIdsByMessageId(
+                activeIntelligenceStreamingIdsRef.current,
+                targetId,
+            );
         }));
         // Screenshot taken - attach to chat input instead of auto-analyzing
         cleanups.push(electronAPI.onScreenshotTaken(handleScreenshotAttach));
@@ -815,6 +912,7 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
         setIsExpanded(true);
         setIsProcessing(true);
         analytics.trackCommandExecuted('what_to_say');
+        const assistantMessageId = nextMessageId('assistant');
 
         // Capture and clear attached image context
         const currentAttachments = attachedContext;
@@ -822,7 +920,7 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
             setAttachedContext([]);
             // Show the attached image in chat
             setMessages(prev => prependMessage(prev, {
-                id: Date.now().toString(),
+                id: nextMessageId('user'),
                 role: 'user',
                 text: 'What should I say about this?',
                 hasScreenshot: true,
@@ -831,24 +929,76 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
         }
 
         setMessages(prev => prependMessage(prev, {
-            id: Date.now().toString(),
+            id: assistantMessageId,
             role: 'system',
             text: '',
             intent: 'what_to_answer',
             isStreaming: true
         }));
+        activeIntelligenceStreamingIdsRef.current = setActiveStreamingIds(
+            activeIntelligenceStreamingIdsRef.current,
+            WHAT_TO_SAY_STREAM_KEYS,
+            assistantMessageId,
+        );
 
         try {
             // Pass imagePath if attached
-            await window.electronAPI.generateWhatToSay(undefined, currentAttachments.length > 0 ? currentAttachments.map(s => s.path) : undefined);
+            const result = await window.electronAPI.generateWhatToSay(undefined, currentAttachments.length > 0 ? currentAttachments.map(s => s.path) : undefined);
+            setMessages(prev => updateOrPrependMessageById(
+                prev,
+                assistantMessageId,
+                message => ({
+                    ...message,
+                    text: result?.answer?.trim()
+                        ? result.answer
+                        : result?.status === 'error'
+                            ? `Error: ${result.error || 'Failed to generate response.'}`
+                            : result?.status === 'canceled'
+                                ? result.error || 'Response canceled before completion. Retry with the current settings.'
+                                : result?.error
+                                    ? `Error: ${result.error}`
+                                    : 'Response canceled before completion. Retry with the current settings.',
+                    isStreaming: false,
+                }),
+                {
+                    id: nextMessageId('system'),
+                    role: 'system',
+                    intent: 'what_to_answer',
+                    text: result?.answer?.trim()
+                        ? result.answer
+                        : result?.status === 'error'
+                            ? `Error: ${result.error || 'Failed to generate response.'}`
+                            : result?.status === 'canceled'
+                                ? result.error || 'Response canceled before completion. Retry with the current settings.'
+                                : result?.error
+                                    ? `Error: ${result.error}`
+                                    : 'Response canceled before completion. Retry with the current settings.',
+                    createdAt: Date.now()
+                }
+            ));
         } catch (err) {
-            setMessages(prev => replaceTopStreamingPlaceholder(prev, {
-                id: Date.now().toString(),
-                role: 'system',
-                text: `Error: ${err}`,
-                intent: 'what_to_answer'
-            }));
+            setMessages(prev => updateOrPrependMessageById(
+                prev,
+                assistantMessageId,
+                message => ({
+                    ...message,
+                    isStreaming: false,
+                    text: `Error: ${err}`,
+                    intent: 'what_to_answer'
+                }),
+                {
+                    id: nextMessageId('system'),
+                    role: 'system',
+                    text: `Error: ${err}`,
+                    intent: 'what_to_answer',
+                    createdAt: Date.now()
+                }
+            ));
         } finally {
+            activeIntelligenceStreamingIdsRef.current = clearActiveStreamingIdsByMessageId(
+                activeIntelligenceStreamingIdsRef.current,
+                assistantMessageId,
+            );
             setIsProcessing(false);
         }
     };
@@ -857,24 +1007,45 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
         setIsExpanded(true);
         setIsProcessing(true);
         analytics.trackCommandExecuted('follow_up_' + intent);
+        const assistantMessageId = nextMessageId('assistant');
 
         setMessages(prev => prependMessage(prev, {
-            id: Date.now().toString(),
+            id: assistantMessageId,
             role: 'system',
             text: '',
             intent,
             isStreaming: true
         }));
+        activeIntelligenceStreamingIdsRef.current = setActiveStreamingIds(
+            activeIntelligenceStreamingIdsRef.current,
+            getFollowUpStreamKeys(intent),
+            assistantMessageId,
+        );
 
         try {
             await window.electronAPI.generateFollowUp(intent);
         } catch (err) {
-            setMessages(prev => replaceTopStreamingPlaceholder(prev, {
-                id: Date.now().toString(),
-                role: 'system',
-                text: `Error: ${err}`,
-                intent
-            }));
+            activeIntelligenceStreamingIdsRef.current = clearActiveStreamingIdsByMessageId(
+                activeIntelligenceStreamingIdsRef.current,
+                assistantMessageId,
+            );
+            setMessages(prev => updateOrPrependMessageById(
+                prev,
+                assistantMessageId,
+                message => ({
+                    ...message,
+                    isStreaming: false,
+                    text: `Error: ${err}`,
+                    intent,
+                }),
+                {
+                    id: nextMessageId('system'),
+                    role: 'system',
+                    text: `Error: ${err}`,
+                    intent,
+                    createdAt: Date.now(),
+                }
+            ));
         } finally {
             setIsProcessing(false);
         }
@@ -884,24 +1055,44 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
         setIsExpanded(true);
         setIsProcessing(true);
         analytics.trackCommandExecuted('recap');
+        const assistantMessageId = nextMessageId('assistant');
 
         setMessages(prev => prependMessage(prev, {
-            id: Date.now().toString(),
+            id: assistantMessageId,
             role: 'system',
             text: '',
             intent: 'recap',
             isStreaming: true
         }));
+        activeIntelligenceStreamingIdsRef.current = setActiveStreamingIds(
+            activeIntelligenceStreamingIdsRef.current,
+            RECAP_STREAM_KEYS,
+            assistantMessageId,
+        );
 
         try {
             await window.electronAPI.generateRecap();
         } catch (err) {
-            setMessages(prev => replaceTopStreamingPlaceholder(prev, {
-                id: Date.now().toString(),
-                role: 'system',
-                text: `Error: ${err}`,
-                intent: 'recap'
-            }));
+            activeIntelligenceStreamingIdsRef.current = clearActiveStreamingIdsByMessageId(
+                activeIntelligenceStreamingIdsRef.current,
+                assistantMessageId,
+            );
+            setMessages(prev => updateOrPrependMessageById(
+                prev,
+                assistantMessageId,
+                message => ({
+                    ...message,
+                    isStreaming: false,
+                    text: `Error: ${err}`,
+                }),
+                {
+                    id: nextMessageId('system'),
+                    role: 'system',
+                    text: `Error: ${err}`,
+                    intent: 'recap',
+                    createdAt: Date.now(),
+                }
+            ));
         } finally {
             setIsProcessing(false);
         }
@@ -911,24 +1102,44 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
         setIsExpanded(true);
         setIsProcessing(true);
         analytics.trackCommandExecuted('suggest_questions');
+        const assistantMessageId = nextMessageId('assistant');
 
         setMessages(prev => prependMessage(prev, {
-            id: Date.now().toString(),
+            id: assistantMessageId,
             role: 'system',
             text: '',
             intent: 'follow_up_questions',
             isStreaming: true
         }));
+        activeIntelligenceStreamingIdsRef.current = setActiveStreamingIds(
+            activeIntelligenceStreamingIdsRef.current,
+            FOLLOW_UP_QUESTIONS_STREAM_KEYS,
+            assistantMessageId,
+        );
 
         try {
             await window.electronAPI.generateFollowUpQuestions();
         } catch (err) {
-            setMessages(prev => replaceTopStreamingPlaceholder(prev, {
-                id: Date.now().toString(),
-                role: 'system',
-                text: `Error: ${err}`,
-                intent: 'follow_up_questions'
-            }));
+            activeIntelligenceStreamingIdsRef.current = clearActiveStreamingIdsByMessageId(
+                activeIntelligenceStreamingIdsRef.current,
+                assistantMessageId,
+            );
+            setMessages(prev => updateOrPrependMessageById(
+                prev,
+                assistantMessageId,
+                message => ({
+                    ...message,
+                    isStreaming: false,
+                    text: `Error: ${err}`,
+                }),
+                {
+                    id: nextMessageId('system'),
+                    role: 'system',
+                    text: `Error: ${err}`,
+                    intent: 'follow_up_questions',
+                    createdAt: Date.now(),
+                }
+            ));
         } finally {
             setIsProcessing(false);
         }
@@ -941,19 +1152,32 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
 
         // Stream Token
         cleanups.push(window.electronAPI.onGeminiStreamToken((token) => {
-            setMessages(prev => updateTopMessage(
+            const targetId = activeGeminiStreamingIdRef.current;
+            if (!targetId) {
+                return;
+            }
+
+            setMessages(prev => updateMessageById(
                 prev,
-                message => Boolean(message.isStreaming && message.role === 'system'),
-                message => ({
-                    ...message,
-                    text: message.text + token,
-                    isCode: (message.text + token).includes('```') || (message.text + token).includes('def ') || (message.text + token).includes('function ')
-                })
+                targetId,
+                message => {
+                    const nextText = message.text + token;
+                    return {
+                        ...message,
+                        text: nextText,
+                        isCode: nextText.includes('```') || nextText.includes('def ') || nextText.includes('function ')
+                    };
+                }
             ));
         }));
 
         // Stream Done
         cleanups.push(window.electronAPI.onGeminiStreamDone(() => {
+            const targetId = activeGeminiStreamingIdRef.current;
+            if (!targetId) {
+                return;
+            }
+
             setIsProcessing(false);
 
             // Calculate latency if we have a start time
@@ -970,159 +1194,239 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
                 latency_ms: latency
             });
 
-            setMessages(prev => updateTopMessage(
+            setMessages(prev => updateMessageById(
                 prev,
-                message => Boolean(message.isStreaming),
+                targetId,
                 message => ({
                     ...message,
                     isStreaming: false
                 })
             ));
+
+            activeGeminiStreamingIdRef.current = null;
+            if (activeRagStreamingIdRef.current === targetId) {
+                activeRagStreamingIdRef.current = null;
+            }
         }));
 
         // Stream Error
         cleanups.push(window.electronAPI.onGeminiStreamError((error) => {
+            const targetId = activeGeminiStreamingIdRef.current;
+            if (!targetId) {
+                return;
+            }
+
             setIsProcessing(false);
             requestStartTimeRef.current = null; // Clear timer on error
-            setMessages(prev => prependOrUpdateTopMessage(
+
+            setMessages(prev => updateOrPrependMessageById(
                 prev,
-                message => Boolean(message.isStreaming),
+                targetId,
                 message => ({
                     ...message,
                     isStreaming: false,
                     text: message.text + `\n\n[Error: ${error}]`
                 }),
                 {
-                    id: Date.now().toString(),
+                    id: nextMessageId('system'),
                     role: 'system',
-                    text: `❌ Error: ${error}`
+                    text: `❌ Error: ${error}`,
+                    createdAt: Date.now()
                 }
             ));
+
+            activeGeminiStreamingIdRef.current = null;
+            if (targetId && activeRagStreamingIdRef.current === targetId) {
+                activeRagStreamingIdRef.current = null;
+            }
         }));
 
         // JIT RAG Stream listeners (for live meeting RAG responses)
         if (window.electronAPI.onRAGStreamChunk) {
             cleanups.push(window.electronAPI.onRAGStreamChunk((data: { chunk: string }) => {
-                setMessages(prev => updateTopMessage(
+                const targetId = activeRagStreamingIdRef.current;
+                if (!targetId) {
+                    return;
+                }
+
+                setMessages(prev => updateMessageById(
                     prev,
-                    message => Boolean(message.isStreaming && message.role === 'system'),
-                    message => ({
-                        ...message,
-                        text: message.text + data.chunk,
-                        isCode: (message.text + data.chunk).includes('```')
-                    })
+                    targetId,
+                    message => {
+                        const nextText = message.text + data.chunk;
+                        return {
+                            ...message,
+                            text: nextText,
+                            isCode: nextText.includes('```')
+                        };
+                    }
                 ));
             }));
         }
 
         if (window.electronAPI.onRAGStreamComplete) {
             cleanups.push(window.electronAPI.onRAGStreamComplete(() => {
+                const targetId = activeRagStreamingIdRef.current;
+                if (!targetId) {
+                    return;
+                }
+
                 setIsProcessing(false);
                 requestStartTimeRef.current = null;
-                setMessages(prev => updateTopMessage(
+
+                setMessages(prev => updateMessageById(
                     prev,
-                    message => Boolean(message.isStreaming),
+                    targetId,
                     message => ({
                         ...message,
                         isStreaming: false
                     })
                 ));
+
+                activeRagStreamingIdRef.current = null;
+                if (activeGeminiStreamingIdRef.current === targetId) {
+                    activeGeminiStreamingIdRef.current = null;
+                }
             }));
         }
 
         if (window.electronAPI.onRAGStreamError) {
             cleanups.push(window.electronAPI.onRAGStreamError((data: { error: string }) => {
+                const targetId = activeRagStreamingIdRef.current;
+                if (!targetId) {
+                    return;
+                }
+
                 setIsProcessing(false);
                 requestStartTimeRef.current = null;
-                setMessages(prev => updateTopMessage(
+
+                setMessages(prev => updateOrPrependMessageById(
                     prev,
-                    message => Boolean(message.isStreaming),
+                    targetId,
                     message => ({
                         ...message,
                         isStreaming: false,
                         text: message.text + `\n\n[RAG Error: ${data.error}]`
-                    })
+                    }),
+                    {
+                        id: nextMessageId('system'),
+                        role: 'system',
+                        text: `❌ RAG Error: ${data.error}`,
+                        createdAt: Date.now()
+                    }
                 ));
+
+                activeRagStreamingIdRef.current = null;
+                if (targetId && activeGeminiStreamingIdRef.current === targetId) {
+                    activeGeminiStreamingIdRef.current = null;
+                }
             }));
         }
 
         return () => cleanups.forEach(fn => fn());
-    }, [currentModel]); // Ensure tracking captures correct model
+    }, [currentModel, nextMessageId]); // Ensure tracking captures correct model
 
 
     const handleAnswerNow = async () => {
+        if (manualFinalizeInFlightRef.current) {
+            return;
+        }
+
+        if (!isManualRecording && isProcessing) {
+            return;
+        }
+
         if (isManualRecording) {
-            // Stop recording - send accumulated voice input to Gemini
-            isRecordingRef.current = false;  // Update ref immediately
+            // Stop recording and give STT providers a short grace window to flush final tokens.
+            // Keep isRecordingRef true during this window so late "user" transcripts are still captured.
+            manualFinalizeInFlightRef.current = true;
             setIsManualRecording(false);
-            setManualTranscript('');  // Clear live preview
-
-            // Send manual finalization signal to STT Providers
-            window.electronAPI.finalizeMicSTT().catch(err => console.error('[NativelyInterface] Failed to send finalizeMicSTT:', err));
-            const nativeAudioStatus = await window.electronAPI.getNativeAudioStatus().catch(() => ({ connected: false }));
-
-            const currentAttachments = attachedContext;
-            setAttachedContext([]); // Clear context immediately on send
-
-            const question = (voiceInputRef.current + (manualTranscriptRef.current ? ' ' + manualTranscriptRef.current : '')).trim();
-            setVoiceInput('');
-            voiceInputRef.current = '';
             setManualTranscript('');
-            manualTranscriptRef.current = '';
-
-            if (!question && currentAttachments.length === 0) {
-                // No voice input and no image
-                setMessages(prev => prependMessage(prev, {
-                    id: Date.now().toString(),
-                    role: 'system',
-                    text: nativeAudioStatus.connected
-                        ? '⚠️ No speech detected. Try speaking closer to your microphone.'
-                        : '⚠️ Audio pipeline is disconnected. Start a meeting or fix audio setup before using Answer.'
-                }));
-                return;
-            }
-
-            // Show user's spoken question
-            setMessages(prev => prependMessage(prev, {
-                id: Date.now().toString(),
-                role: 'user',
-                text: question,
-                hasScreenshot: currentAttachments.length > 0,
-                screenshotPreview: currentAttachments[0]?.preview
-            }));
-
-            // Add placeholder for streaming response
-            setMessages(prev => prependMessage(prev, {
-                id: Date.now().toString(),
-                role: 'system',
-                text: '',
-                isStreaming: true
-            }));
-
-            setIsProcessing(true);
 
             try {
-                let prompt = '';
+                await window.electronAPI.finalizeMicSTT().catch(err => {
+                    console.error('[NativelyInterface] Failed to send finalizeMicSTT:', err);
+                });
 
-                if (currentAttachments.length > 0) {
-                    // Image + Voice Context
-                    prompt = `You are a helper. The user has provided a screenshot and a spoken question/command.
+                await new Promise(resolve => setTimeout(resolve, MANUAL_STT_FINALIZE_GRACE_MS));
+
+                const waitStart = Date.now();
+                while (
+                    !voiceInputRef.current.trim() &&
+                    !manualTranscriptRef.current.trim() &&
+                    Date.now() - waitStart < MANUAL_STT_FINALIZE_MAX_WAIT_MS
+                ) {
+                    await new Promise(resolve => setTimeout(resolve, MANUAL_STT_POLL_INTERVAL_MS));
+                }
+
+                const nativeAudioStatus = await window.electronAPI.getNativeAudioStatus().catch(() => ({ connected: false }));
+
+                const currentAttachments = attachedContext;
+                setAttachedContext([]); // Clear context immediately on send
+
+                const question = (voiceInputRef.current + (manualTranscriptRef.current ? ' ' + manualTranscriptRef.current : '')).trim();
+                isRecordingRef.current = false;
+                setVoiceInput('');
+                voiceInputRef.current = '';
+                setManualTranscript('');
+                manualTranscriptRef.current = '';
+
+                if (!question && currentAttachments.length === 0) {
+                    // No voice input and no image
+                    setMessages(prev => prependMessage(prev, {
+                        id: Date.now().toString(),
+                        role: 'system',
+                        text: nativeAudioStatus.connected
+                            ? '⚠️ No speech detected. Try speaking closer to your microphone.'
+                            : '⚠️ Audio pipeline is disconnected. Start a meeting or fix audio setup before using Answer.'
+                    }));
+                    return;
+                }
+
+                // Show user's spoken question
+                const assistantMessageId = nextMessageId('assistant');
+                setMessages(prev => prependMessage(prev, {
+                    id: nextMessageId('user'),
+                    role: 'user',
+                    text: question,
+                    hasScreenshot: currentAttachments.length > 0,
+                    screenshotPreview: currentAttachments[0]?.preview
+                }));
+
+                // Add placeholder for streaming response
+                setMessages(prev => prependMessage(prev, {
+                    id: assistantMessageId,
+                    role: 'system',
+                    text: '',
+                    isStreaming: true
+                }));
+                activeGeminiStreamingIdRef.current = assistantMessageId;
+                activeRagStreamingIdRef.current = assistantMessageId;
+
+                setIsProcessing(true);
+
+                try {
+                    let prompt = '';
+
+                    if (currentAttachments.length > 0) {
+                        // Image + Voice Context
+                        prompt = `You are a helper. The user has provided a screenshot and a spoken question/command.
 User said: "${question}"
 
 Instructions:
 1. Analyze the screenshot in the context of what the user said.
 2. Provide a direct, helpful answer.
 3. Be concise.`;
-                } else {
-                    // JIT RAG pre-flight: try to use indexed meeting context first
-                    const ragResult = await window.electronAPI.ragQueryLive?.(question);
-                    if (ragResult?.success) {
-                        // JIT RAG handled it — response streamed via rag:stream-chunk events
-                        return;
-                    }
+                    } else {
+                        // JIT RAG pre-flight: try to use indexed meeting context first
+                        const ragResult = await window.electronAPI.ragQueryLive?.(question);
+                        if (ragResult?.success) {
+                            // JIT RAG handled it — response streamed via rag:stream-chunk events
+                            return;
+                        }
 
-                    // Voice Only (Smart Extract) — fallback
-                    prompt = `You are a real-time interview assistant. The user just repeated or paraphrased a question from their interviewer.
+                        // Voice Only (Smart Extract) — fallback
+                        prompt = `You are a real-time interview assistant. The user just repeated or paraphrased a question from their interviewer.
 Instructions:
 1. Extract the core question being asked
 2. Provide a clear, concise, and professional answer that the user can say out loud
@@ -1133,20 +1437,40 @@ Instructions:
 7. Format for speaking out loud, not for reading
 
 Provide only the answer, nothing else.`;
+                    }
+
+                    // Call Streaming API: message = question, context = instructions
+                    requestStartTimeRef.current = Date.now();
+                    await window.electronAPI.streamGeminiChat(question, currentAttachments.length > 0 ? currentAttachments.map(s => s.path) : undefined, prompt, { skipSystemPrompt: true });
+
+                } catch (err) {
+                    // Initial invocation failing (e.g. IPC error before stream starts)
+                    setIsProcessing(false);
+                    if (activeGeminiStreamingIdRef.current === assistantMessageId) {
+                        activeGeminiStreamingIdRef.current = null;
+                    }
+                    if (activeRagStreamingIdRef.current === assistantMessageId) {
+                        activeRagStreamingIdRef.current = null;
+                    }
+                    setMessages(prev => updateOrPrependMessageById(
+                        prev,
+                        assistantMessageId,
+                        message => ({
+                            ...message,
+                            isStreaming: false,
+                            text: `❌ Error starting stream: ${err}`
+                        }),
+                        {
+                            id: nextMessageId('system'),
+                            role: 'system',
+                            text: `❌ Error starting stream: ${err}`,
+                            createdAt: Date.now()
+                        }
+                    ));
                 }
-
-                // Call Streaming API: message = question, context = instructions
-                requestStartTimeRef.current = Date.now();
-                await window.electronAPI.streamGeminiChat(question, currentAttachments.length > 0 ? currentAttachments.map(s => s.path) : undefined, prompt, { skipSystemPrompt: true });
-
-            } catch (err) {
-                // Initial invocation failing (e.g. IPC error before stream starts)
-                setIsProcessing(false);
-                setMessages(prev => replaceTopStreamingPlaceholder(prev, {
-                    id: Date.now().toString(),
-                    role: 'system',
-                    text: `❌ Error starting stream: ${err}`
-                }));
+            } finally {
+                isRecordingRef.current = false;
+                manualFinalizeInFlightRef.current = false;
             }
         } else {
             const nativeAudioStatus = await window.electronAPI.getNativeAudioStatus().catch(() => ({ connected: false }));
@@ -1178,17 +1502,18 @@ Provide only the answer, nothing else.`;
     };
 
     const handleManualSubmit = async () => {
-        if (!inputValue.trim() && attachedContext.length === 0) return;
+        if (isProcessing || (!inputValue.trim() && attachedContext.length === 0)) return;
 
         const userText = inputValue;
         const currentAttachments = attachedContext;
+        const assistantMessageId = nextMessageId('assistant');
 
         // Clear inputs immediately
         setInputValue('');
         setAttachedContext([]);
 
         setMessages(prev => prependMessage(prev, {
-            id: Date.now().toString(),
+            id: nextMessageId('user'),
             role: 'user',
             text: userText || (currentAttachments.length > 0 ? 'Analyze this screenshot' : ''),
             hasScreenshot: currentAttachments.length > 0,
@@ -1197,11 +1522,13 @@ Provide only the answer, nothing else.`;
 
         // Add placeholder for streaming response
         setMessages(prev => prependMessage(prev, {
-            id: Date.now().toString(),
+            id: assistantMessageId,
             role: 'system',
             text: '',
             isStreaming: true
         }));
+        activeGeminiStreamingIdRef.current = assistantMessageId;
+        activeRagStreamingIdRef.current = assistantMessageId;
 
         setIsExpanded(true);
         setIsProcessing(true);
@@ -1225,11 +1552,27 @@ Provide only the answer, nothing else.`;
             );
         } catch (err) {
             setIsProcessing(false);
-            setMessages(prev => replaceTopStreamingPlaceholder(prev, {
-                id: Date.now().toString(),
-                role: 'system',
-                text: `❌ Error starting stream: ${err}`
-            }));
+            if (activeGeminiStreamingIdRef.current === assistantMessageId) {
+                activeGeminiStreamingIdRef.current = null;
+            }
+            if (activeRagStreamingIdRef.current === assistantMessageId) {
+                activeRagStreamingIdRef.current = null;
+            }
+            setMessages(prev => updateOrPrependMessageById(
+                prev,
+                assistantMessageId,
+                message => ({
+                    ...message,
+                    isStreaming: false,
+                    text: `❌ Error starting stream: ${err}`
+                }),
+                {
+                    id: nextMessageId('system'),
+                    role: 'system',
+                    text: `❌ Error starting stream: ${err}`,
+                    createdAt: Date.now()
+                }
+            ));
         }
     };
 

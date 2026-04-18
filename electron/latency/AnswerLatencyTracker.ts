@@ -1,4 +1,5 @@
 import { ProviderCapabilityClass } from './providerCapability';
+import { getPerformanceInstrumentation } from '../runtime/PerformanceInstrumentation';
 
 export type AnswerRoute = 'fast_standard_answer' | 'enriched_standard_answer' | 'conscious_answer' | 'manual_answer' | 'follow_up_refinement';
 export type TrackedProviderCapabilityClass = ProviderCapabilityClass | 'non_streaming_custom';
@@ -20,6 +21,12 @@ export interface LatencyMetadata {
   profileEnrichmentState?: ProfileEnrichmentState;
   consciousPath?: ConsciousPath;
   firstVisibleAnswer?: number;
+  contextItemIds?: string[];
+  verifierOutcome?: {
+    deterministic: 'pass' | 'fail' | 'skipped';
+    provenance: 'pass' | 'fail' | 'skipped';
+  };
+  stealthContainmentActive?: boolean;
 }
 
 export interface LatencySnapshot extends LatencyMetadata {
@@ -32,7 +39,15 @@ export interface LatencySnapshot extends LatencyMetadata {
 
 export class AnswerLatencyTracker {
   private static nextId = 1;
+  private readonly MAX_SNAPSHOTS = 100;
   private snapshots = new Map<string, LatencySnapshot>();
+
+  private evictOldSnapshots(): void {
+    while (this.snapshots.size > this.MAX_SNAPSHOTS) {
+      const oldestKey = this.snapshots.keys().next().value;
+      if (oldestKey) this.snapshots.delete(oldestKey);
+    }
+  }
 
   private getMutableSnapshot(requestId: string): LatencySnapshot | undefined {
     const snapshot = this.snapshots.get(requestId);
@@ -69,6 +84,7 @@ export class AnswerLatencyTracker {
       },
       ...normalizedMetadata,
     });
+    this.evictOldSnapshots();
     return requestId;
   }
 
@@ -143,6 +159,24 @@ export class AnswerLatencyTracker {
     if (!snapshot) return undefined;
     snapshot.completed = true;
     snapshot.marks.completedAt = Date.now();
+
+    const startedAt = snapshot.marks.startedAt;
+    const firstVisibleAnswer = snapshot.marks.firstVisibleAnswer;
+    if (startedAt !== undefined && firstVisibleAnswer !== undefined) {
+      getPerformanceInstrumentation().recordMeasurement(
+        'answer.firstVisible',
+        firstVisibleAnswer - startedAt,
+        {
+        requestId: snapshot.requestId,
+        route: snapshot.route,
+        capability: snapshot.capability,
+        attemptedRoute: snapshot.attemptedRoute,
+        fallbackOccurred: snapshot.fallbackOccurred ?? false,
+        transcriptRevision: snapshot.transcriptRevision,
+        },
+      );
+    }
+
     return this.createSnapshotCopy(snapshot);
   }
 

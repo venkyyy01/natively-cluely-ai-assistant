@@ -15,3 +15,17 @@ test('Intent classifier still executes regex routing in plain node tests', async
 
   assert.equal(result.intent, 'follow_up');
 });
+
+test('Intent classifier treats hidden behavioral prompts as behavioral in plain node tests', async () => {
+  const { classifyIntent } = await import('../llm/IntentClassifier');
+  const result = await classifyIntent('How do you make difficult decisions?', '[INTERVIEWER] How do you make difficult decisions?', 0);
+
+  assert.equal(result.intent, 'behavioral');
+});
+
+test('Intent classifier keeps walkthrough story prompts on the behavioral path', async () => {
+  const { classifyIntent } = await import('../llm/IntentClassifier');
+  const result = await classifyIntent('Walk me through a time you handled a conflict with a stakeholder.', '[INTERVIEWER] Walk me through a time you handled a conflict with a stakeholder.', 0);
+
+  assert.equal(result.intent, 'behavioral');
+});
