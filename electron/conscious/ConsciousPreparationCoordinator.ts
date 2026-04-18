@@ -15,6 +15,7 @@ import type { QuestionReaction } from './QuestionReactionClassifier';
 import type { AnswerHypothesis } from './AnswerHypothesisStore';
 import type { ConsciousPlannerPreferenceSummary, ConsciousResponseQuestionMode } from './ConsciousResponsePreferenceStore';
 import { detectConsciousQuestionMode } from './ConsciousAnswerPlanner';
+import type { CoordinatedIntentResult } from '../llm/providers/IntentClassificationCoordinator';
 
 interface SessionLike {
   isConsciousModeEnabled(): boolean;
@@ -46,6 +47,7 @@ export interface ConsciousPreparationResult {
   answerPlan: ConsciousAnswerPlan;
   totalContextAssemblyMs: number;
   timedOut: boolean;
+  prefetchedIntentUsed: boolean;
 }
 
 export interface ConsciousRoutePreparationResult {
@@ -72,12 +74,14 @@ export class ConsciousPreparationCoordinator {
     baseQuestion: string;
     knowledgeStatus?: KnowledgeStatusLike | null;
     screenshotBackedLiveCodingTurn: boolean;
+    prefetchedIntent?: CoordinatedIntentResult | null;
   }): ConsciousRoutePreparationResult {
     const shouldUseScreenshotConsciousRoute = this.session.isConsciousModeEnabled()
       && !this.consciousOrchestrator.prepareRoute({
         question: input.baseQuestion,
         knowledgeStatus: input.knowledgeStatus,
         screenshotBackedLiveCodingTurn: false,
+        prefetchedIntent: input.prefetchedIntent ?? null,
       }).preRouteDecision.qualifies
       && input.screenshotBackedLiveCodingTurn;
 
@@ -86,6 +90,7 @@ export class ConsciousPreparationCoordinator {
         question: input.baseQuestion,
         knowledgeStatus: input.knowledgeStatus,
         screenshotBackedLiveCodingTurn: shouldUseScreenshotConsciousRoute,
+        prefetchedIntent: input.prefetchedIntent ?? null,
       }),
     };
   }
@@ -109,6 +114,7 @@ export class ConsciousPreparationCoordinator {
       preparedTranscript: string,
       assistantResponseCount: number,
     ) => Promise<IntentResult>;
+    prefetchedIntent?: CoordinatedIntentResult | null;
     onInterimInjected?: (text: string) => void;
   }): Promise<ConsciousPreparationResult> {
     let contextItems = input.contextItems;
@@ -206,6 +212,7 @@ export class ConsciousPreparationCoordinator {
       hardBudgetMs: input.hardBudgetMs,
       isLikelyGeneralIntent: this.session.isLikelyGeneralIntent(input.lastInterviewerTurn),
       classifyIntent: input.classifyIntent,
+      prefetchedIntent: input.prefetchedIntent ?? null,
     });
 
     return {
@@ -216,6 +223,7 @@ export class ConsciousPreparationCoordinator {
       answerPlan,
       totalContextAssemblyMs,
       timedOut,
+      prefetchedIntentUsed: Boolean(input.prefetchedIntent),
     };
   }
 }

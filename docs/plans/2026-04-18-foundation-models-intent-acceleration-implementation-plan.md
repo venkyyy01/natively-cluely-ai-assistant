@@ -69,9 +69,9 @@ Use Apple Foundation Models as the highest-priority intent classifier in acceler
 
 **Files to create**
 
-- `stealth-projects/macos-foundation-intent-helper/Package.swift`
-- `stealth-projects/macos-foundation-intent-helper/Sources/main.swift`
-- `stealth-projects/macos-foundation-intent-helper/README.md`
+- `applesilicon/macos-foundation-intent-helper/Package.swift`
+- `applesilicon/macos-foundation-intent-helper/Sources/main.swift`
+- `applesilicon/macos-foundation-intent-helper/README.md`
 
 **Helper contract (stdin JSON -> stdout JSON)**
 
@@ -314,9 +314,9 @@ Error response:
 - `electron/llm/providers/IntentClassificationCoordinator.ts`
 - `electron/tests/intentClassificationCoordinator.test.ts`
 - `electron/tests/foundationModelsIntentProvider.test.ts`
-- `stealth-projects/macos-foundation-intent-helper/Package.swift`
-- `stealth-projects/macos-foundation-intent-helper/Sources/main.swift`
-- `stealth-projects/macos-foundation-intent-helper/README.md`
+- `applesilicon/macos-foundation-intent-helper/Package.swift`
+- `applesilicon/macos-foundation-intent-helper/Sources/main.swift`
+- `applesilicon/macos-foundation-intent-helper/README.md`
 
 ### Modified files
 

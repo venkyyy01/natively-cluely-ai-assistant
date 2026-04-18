@@ -9,11 +9,17 @@ import { SessionTracker, TranscriptSegment, SuggestionTrigger, ContextItem } fro
 import {
   AnswerLLM, AssistLLM, FollowUpLLM, RecapLLM,
   FollowUpQuestionsLLM, WhatToAnswerLLM,
-  AssistantResponse as LLMAssistantResponse, classifyIntent
+  AssistantResponse as LLMAssistantResponse
 } from './llm';
+import {
+  FoundationModelsIntentProvider,
+  IntentClassificationCoordinator,
+  LegacyIntentProvider,
+  type CoordinatedIntentResult,
+} from './llm/providers';
 import { ConsciousContextComposer, ConsciousIntentService, ConsciousOrchestrator, ConsciousPreparationCoordinator, ConsciousResponseCoordinator, ConsciousVerifier, ConsciousVerifierLLM, FallbackExecutor, sanitizeProfileData } from './conscious';
 import { ParallelContextAssembler, ContextAssemblyInput, ContextAssemblyOutput } from './cache/ParallelContextAssembler';
-import { isOptimizationActive } from './config/optimizations';
+import { getOptimizationFlags, isOptimizationActive } from './config/optimizations';
 import { AnswerLatencyTracker, AnswerRoute } from './latency/AnswerLatencyTracker';
 import { getActiveAccelerationManager } from './services/AccelerationManager';
 import type { AccelerationManager } from './services/AccelerationManager';
@@ -71,6 +77,10 @@ export interface SuggestedAnswerMetadata {
   attemptedRoute?: AnswerRoute;
   fallbackOccurred: boolean;
   fallbackReason?: string;
+  intentProviderUsed?: string;
+  intentRetryCount?: number;
+  intentFallbackReason?: 'primary_unavailable' | 'primary_retries_exhausted' | 'primary_failed';
+  prefetchedIntentUsed?: boolean;
   schemaVersion: 'standard_answer_v1' | 'conscious_mode_v1';
   evidenceHash: string;
   transcriptRevision: number;
@@ -135,6 +145,7 @@ export class IntelligenceEngine extends EventEmitter {
   private readonly CONTEXT_ASSEMBLY_SOFT_BUDGET_MS = 80;
   private readonly CONTEXT_ASSEMBLY_HARD_BUDGET_MS = 120;
   private readonly MAX_COOLDOWN_DEFER_DEPTH = 3;
+  private readonly intentCoordinator: IntentClassificationCoordinator;
 
   // Timestamps for tracking
   private lastTranscriptTime: number = 0;
@@ -158,6 +169,15 @@ export class IntelligenceEngine extends EventEmitter {
       this.consciousIntentService,
     );
     this.initializeLLMs();
+    const optimizationFlags = getOptimizationFlags();
+    this.intentCoordinator = new IntentClassificationCoordinator(
+      new FoundationModelsIntentProvider(),
+      new LegacyIntentProvider(),
+      {
+        maxPrimaryRetries: optimizationFlags.foundationIntentMaxRetries,
+        baseBackoffMs: optimizationFlags.foundationIntentRetryBaseMs,
+      },
+    );
     
     if (isOptimizationActive('useParallelContext')) {
       this.parallelContextAssembler = new ParallelContextAssembler({});
@@ -167,8 +187,12 @@ export class IntelligenceEngine extends EventEmitter {
   }
 
   attachAccelerationManager(accelerationManager: AccelerationManager | null): void {
-    accelerationManager?.getConsciousOrchestrator().setSpeculativeExecutor((query, transcriptRevision) =>
+    const consciousAcceleration = accelerationManager?.getConsciousOrchestrator();
+    consciousAcceleration?.setSpeculativeExecutor((query, transcriptRevision) =>
       this.generateSpeculativeFastAnswerStream(query, transcriptRevision)
+    );
+    consciousAcceleration?.setIntentClassifier((query: string, _transcriptRevision: number) =>
+      this.classifyIntentForRoute(query, this.buildFastStandardTranscriptContext(query, this.session.getLastAssistantMessage()), this.session.getAssistantResponseHistory().length)
     );
   }
 
@@ -229,7 +253,11 @@ export class IntelligenceEngine extends EventEmitter {
     preparedTranscript: string,
     assistantResponseCount: number,
   ) {
-    return classifyIntent(lastInterviewerTurn, preparedTranscript, assistantResponseCount);
+    return this.intentCoordinator.classify({
+      lastInterviewerTurn,
+      preparedTranscript,
+      assistantResponseCount,
+    });
   }
 
   private async getAssembledContext(query: string, tokenBudget: number): Promise<{
@@ -491,6 +519,10 @@ export class IntelligenceEngine extends EventEmitter {
         attemptedRoute?: AnswerRoute;
         fallbackOccurred: boolean;
         fallbackReason?: string;
+        intentProviderUsed?: string;
+        intentRetryCount?: number;
+        intentFallbackReason?: 'primary_unavailable' | 'primary_retries_exhausted' | 'primary_failed';
+        prefetchedIntentUsed?: boolean;
         schemaVersion: 'standard_answer_v1' | 'conscious_mode_v1';
         evidenceHash: string;
         transcriptRevision: number;
@@ -524,6 +556,10 @@ export class IntelligenceEngine extends EventEmitter {
             attemptedRoute: input.attemptedRoute,
             fallbackOccurred: input.fallbackOccurred,
             fallbackReason: input.fallbackReason,
+            intentProviderUsed: input.intentProviderUsed,
+            intentRetryCount: input.intentRetryCount,
+            intentFallbackReason: input.intentFallbackReason,
+            prefetchedIntentUsed: input.prefetchedIntentUsed,
             schemaVersion: input.schemaVersion,
             evidenceHash: input.evidenceHash,
             contextSelectionHash: this.computeContextSelectionHash(input.contextItems),
@@ -878,10 +914,15 @@ export class IntelligenceEngine extends EventEmitter {
             const accelerationManager = getActiveAccelerationManager();
             const consciousAcceleration = accelerationManager?.getConsciousOrchestrator();
             const useConsciousAcceleration = consciousAcceleration?.isEnabled() === true && this.session.isConsciousModeEnabled();
+            const transcriptRevisionAtRoute = this.session.getTranscriptRevision();
+            const prefetchedIntent: CoordinatedIntentResult | null = useConsciousAcceleration
+                ? (consciousAcceleration?.getPrefetchedIntent(resolvedQuestion, transcriptRevisionAtRoute) ?? null) as CoordinatedIntentResult | null
+                : null;
             const routePreparation = this.consciousPreparationCoordinator.prepareRoute({
                 baseQuestion,
                 knowledgeStatus,
                 screenshotBackedLiveCodingTurn: this.isScreenshotBackedLiveCodingTurn(resolvedQuestion, imagePaths),
+                prefetchedIntent,
             });
             this.consciousOrchestrator.applyRouteSideEffects(routePreparation.preparedRoute);
             const {
@@ -1273,6 +1314,7 @@ export class IntelligenceEngine extends EventEmitter {
                 hardBudgetMs: this.CONTEXT_ASSEMBLY_HARD_BUDGET_MS,
                 contextAssemblyStart,
                 classifyIntent: this.classifyIntentForRoute.bind(this),
+                prefetchedIntent,
                 onInterimInjected: (text) => {
                     console.log(`[IntelligenceEngine] Injecting interim transcript: "${text.substring(0, 50)}..."`);
                 },
@@ -1284,6 +1326,13 @@ export class IntelligenceEngine extends EventEmitter {
             this.latencyTracker.mark(requestId, 'transcriptPrepared');
             const temporalContext = preparationResult.temporalContext;
             const { intentResult, totalContextAssemblyMs, timedOut } = preparationResult;
+            const intentProviderUsed = (intentResult as CoordinatedIntentResult | undefined)?.provider;
+            const intentRetryCount = (intentResult as CoordinatedIntentResult | undefined)?.retryCount;
+            const intentFallbackReason = (intentResult as CoordinatedIntentResult | undefined)?.fallbackReason;
+            this.latencyTracker.annotate(requestId, {
+                fallbackOccurred: timedOut,
+                profileFallbackReason: timedOut ? 'context_timeout' : undefined,
+            });
             if (timedOut) {
                 this.latencyTracker.markFallbackOccurred(requestId, 'context_timeout');
             }
@@ -1326,6 +1375,10 @@ export class IntelligenceEngine extends EventEmitter {
                         route: currentRouteForMetadata,
                         attemptedRoute,
                         fallbackOccurred: false,
+                        intentProviderUsed,
+                        intentRetryCount,
+                        intentFallbackReason,
+                        prefetchedIntentUsed: preparationResult.prefetchedIntentUsed,
                         schemaVersion: 'conscious_mode_v1',
                         evidenceHash: this.computeEvidenceHash({
                             question: question || 'What to Answer',
@@ -1397,6 +1450,10 @@ export class IntelligenceEngine extends EventEmitter {
                     attemptedRoute,
                     fallbackOccurred: Boolean(lastFallbackReason),
                     fallbackReason: lastFallbackReason,
+                    intentProviderUsed,
+                    intentRetryCount,
+                    intentFallbackReason,
+                    prefetchedIntentUsed: preparationResult.prefetchedIntentUsed,
                     schemaVersion: currentRouteForMetadata === 'conscious_answer' ? 'conscious_mode_v1' : 'standard_answer_v1',
                     evidenceHash: this.computeEvidenceHash({
                         question: question || 'What to Answer',
@@ -1494,6 +1551,10 @@ export class IntelligenceEngine extends EventEmitter {
                 attemptedRoute,
                 fallbackOccurred: Boolean(lastFallbackReason),
                 fallbackReason: lastFallbackReason,
+                intentProviderUsed,
+                intentRetryCount,
+                intentFallbackReason,
+                prefetchedIntentUsed: preparationResult.prefetchedIntentUsed,
                 schemaVersion: currentRouteForMetadata === 'conscious_answer' ? 'conscious_mode_v1' : 'standard_answer_v1',
                 evidenceHash: this.computeEvidenceHash({
                     question: question || 'What to Answer',

@@ -23,6 +23,9 @@ export interface OptimizationFlags {
   /** Phase 4: Stealth & Process Isolation */
   useStealthMode: boolean;
 
+  /** Intent acceleration: Foundation Models first-pass intent classification */
+  useFoundationModelsIntent: boolean;
+
   /** Worker thread configuration */
   workerThreadCount: number;
 
@@ -32,6 +35,12 @@ export interface OptimizationFlags {
 
   /** Prefetch configuration */
   maxPrefetchPredictions: number;
+
+  /** Foundation intent retry backoff base (ms) */
+  foundationIntentRetryBaseMs: number;
+
+  /** Foundation intent max retries before fallback */
+  foundationIntentMaxRetries: number;
 
   /** Runtime lane budgets */
   laneBudgets: Record<RuntimeLane, LaneBudgetConfig>;
@@ -92,6 +101,9 @@ export const DEFAULT_OPTIMIZATION_FLAGS: OptimizationFlags = {
   // Phase 4
   useStealthMode: true,
 
+  // Intent acceleration
+  useFoundationModelsIntent: true,
+
   // Worker config (6 cores default, user-adjustable)
   workerThreadCount: 6,
 
@@ -101,6 +113,10 @@ export const DEFAULT_OPTIMIZATION_FLAGS: OptimizationFlags = {
 
   // Prefetch config
   maxPrefetchPredictions: 5,
+
+  // Foundation intent config
+  foundationIntentRetryBaseMs: 100,
+  foundationIntentMaxRetries: 2,
 
   // Runtime budget config
   laneBudgets: DEFAULT_LANE_BUDGETS,
@@ -146,7 +162,7 @@ export function setOptimizationFlagsForTesting(flags: Partial<OptimizationFlags>
  * Check if a specific optimization is active
  * Returns false if master toggle is off, regardless of individual flag
  */
-export function isOptimizationActive(key: keyof Omit<OptimizationFlags, 'accelerationEnabled' | 'workerThreadCount' | 'maxCacheMemoryMB' | 'semanticCacheThreshold' | 'maxPrefetchPredictions' | 'laneBudgets'>): boolean {
+export function isOptimizationActive(key: keyof Omit<OptimizationFlags, 'accelerationEnabled' | 'workerThreadCount' | 'maxCacheMemoryMB' | 'semanticCacheThreshold' | 'maxPrefetchPredictions' | 'foundationIntentRetryBaseMs' | 'foundationIntentMaxRetries' | 'laneBudgets'>): boolean {
   return currentFlags.accelerationEnabled && currentFlags[key];
 }
 

@@ -191,3 +191,25 @@ test('runReleaseGate executes benchmark enforcement and optional packaged-helper
     },
   ]);
 });
+
+test('runReleaseGate passes cwd through packaged helper target resolution', () => {
+  const seen = [];
+
+  runReleaseGate({
+    env: {},
+    cwd: '/workspace/custom-cwd',
+    runNpmScript() {},
+    readBaselineMetrics() {
+      return baselineMetrics;
+    },
+    runBenchmarksForReleaseGate() {
+      return baselineMetrics;
+    },
+    resolvePackagedHelperLaunchTarget(_env, options) {
+      seen.push(options?.cwd);
+      return null;
+    },
+  });
+
+  assert.deepEqual(seen, ['/workspace/custom-cwd']);
+});

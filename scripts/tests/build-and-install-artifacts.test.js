@@ -123,6 +123,20 @@ test('cleanup preserves the tracked macOS full stealth XPC bundle source path', 
   assert.equal(fs.existsSync(helperBinaryPath), true);
 });
 
+test('cleanup preserves the tracked foundation intent helper source path', () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'build-install-foundation-intent-helper-'));
+  const releaseDir = path.join(tempDir, 'release');
+  const helperPath = path.join(tempDir, 'assets', 'bin', 'macos', 'foundation-intent-helper');
+
+  touch(helperPath, 1_000);
+
+  runShell(
+    `source "${scriptPath}" && SCRIPT_DIR="${tempDir}" RELEASE_DIR="${releaseDir}" HOME="${tempDir}" clean_build_artifacts`
+  );
+
+  assert.equal(fs.existsSync(helperPath), true);
+});
+
 test('cleanup treats external cache cleanup as best effort', () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'build-install-optional-cache-'));
   const releaseDir = path.join(tempDir, 'release');

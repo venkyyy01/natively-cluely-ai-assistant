@@ -63,6 +63,7 @@ exports.default = async function (context) {
     const appName = context.packager.appInfo.productFilename;
     const appPath = path.join(appOutDir, `${appName}.app`);
     const helperPath = path.join(appPath, 'Contents', 'Resources', 'bin', 'macos', 'stealth-virtual-display-helper');
+    const foundationIntentHelperPath = path.join(appPath, 'Contents', 'Resources', 'bin', 'macos', 'foundation-intent-helper');
     const fullStealthHelperBundlePath = path.join(appPath, 'Contents', 'XPCServices', 'macos-full-stealth-helper.xpc');
 
     // ── Step 1: Disguise helper display names (before signing) ──
@@ -87,6 +88,11 @@ exports.default = async function (context) {
         if (fs.existsSync(fullStealthHelperBundlePath)) {
             console.log(`[Ad-Hoc Signing] Signing XPC helper bundle ${fullStealthHelperBundlePath}...`);
             execSync(`codesign --force --entitlements "${entitlementsPath}" --sign - "${fullStealthHelperBundlePath}"`, { stdio: 'inherit' });
+        }
+
+        if (fs.existsSync(foundationIntentHelperPath)) {
+            console.log(`[Ad-Hoc Signing] Signing foundation intent helper ${foundationIntentHelperPath}...`);
+            execSync(`codesign --force --entitlements "${entitlementsPath}" --sign - "${foundationIntentHelperPath}"`, { stdio: 'inherit' });
         }
 
         // --force: replace existing signature

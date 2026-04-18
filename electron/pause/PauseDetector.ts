@@ -157,7 +157,10 @@ export class PauseDetector {
   }
 
   private startEvaluation(): void {
-    this.cancelEvaluation();
+    if (this.evaluationTimer) {
+      clearTimeout(this.evaluationTimer);
+      this.evaluationTimer = null;
+    }
     this.evaluate();
   }
 

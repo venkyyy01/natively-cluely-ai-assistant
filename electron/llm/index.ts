@@ -27,6 +27,22 @@ export {
     warmupIntentClassifier
 } from "./IntentClassifier";
 export type { ConversationIntent, IntentResult } from "./IntentClassifier";
+export {
+    IntentClassificationCoordinator,
+    FoundationModelsIntentProvider,
+    LegacyIntentProvider,
+    resolveFoundationModelsIntentHelperPath,
+    createIntentProviderError,
+    getIntentProviderErrorCode,
+} from './providers';
+export type {
+    CoordinatedIntentResult,
+    IntentClassificationCoordinatorOptions,
+    IntentClassificationInput,
+    IntentInferenceProvider,
+    IntentProviderError,
+    IntentProviderErrorType,
+} from './providers';
 export { MODE_CONFIGS } from "./types";
 export type { GenerationConfig, GeminiContent, LLMClient } from "./types";
 export {

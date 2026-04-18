@@ -176,12 +176,20 @@ export class ConsciousOrchestrator {
     question: string;
     knowledgeStatus?: KnowledgeStatusLike | null;
     screenshotBackedLiveCodingTurn: boolean;
+    prefetchedIntent?: IntentResult | null;
   }): PreparedConsciousRoute {
     const currentReasoningThread = this.session.getActiveReasoningThread();
     const latestReaction = this.session.getLatestQuestionReaction();
     let preRouteDecision = this.session.isConsciousModeEnabled()
       ? classifyConsciousModeQuestion(input.question, currentReasoningThread)
       : { qualifies: false, threadAction: 'ignore' as const };
+
+    if (input.prefetchedIntent?.intent === 'behavioral' || input.prefetchedIntent?.intent === 'coding') {
+      preRouteDecision = {
+        qualifies: true,
+        threadAction: currentReasoningThread ? 'reset' : 'start',
+      };
+    }
 
     if (latestReaction?.kind === 'topic_shift') {
       preRouteDecision = { qualifies: true, threadAction: 'reset' };

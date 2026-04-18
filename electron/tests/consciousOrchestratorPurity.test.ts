@@ -43,7 +43,13 @@ function createSession(overrides?: {
   let cleared = false;
   const session = {
     isConsciousModeEnabled: (): boolean => true,
-    getActiveReasoningThread: (): ReasoningThread | null => overrides?.activeThread ?? createThread(),
+    getActiveReasoningThread: (): ReasoningThread | null => {
+      if (overrides && Object.prototype.hasOwnProperty.call(overrides, 'activeThread')) {
+        return overrides.activeThread ?? null;
+      }
+
+      return createThread();
+    },
     getLatestConsciousResponse: (): ConsciousModeStructuredResponse | null => null,
     clearConsciousModeThread: () => {
       cleared = true;

@@ -570,6 +570,7 @@ step "Step 6/8 — Force Signing (Ad-Hoc)"
 # to ensure it's clean (handles edge cases where build partially failed)
 
 PACKAGED_HELPER="$APP_GLOB/Contents/Resources/bin/macos/stealth-virtual-display-helper"
+PACKAGED_FOUNDATION_INTENT_HELPER="$APP_GLOB/Contents/Resources/bin/macos/foundation-intent-helper"
 PACKAGED_FULL_STEALTH_XPC="$APP_GLOB/Contents/XPCServices/macos-full-stealth-helper.xpc"
 
 if [[ -f "$PACKAGED_HELPER" ]]; then
@@ -584,6 +585,20 @@ if [[ -f "$PACKAGED_HELPER" ]]; then
     fi
 else
     warn "Packaged macOS virtual display helper not found before app signing"
+fi
+
+if [[ -f "$PACKAGED_FOUNDATION_INTENT_HELPER" ]]; then
+    if [[ -f "$ENTITLEMENTS" ]]; then
+        info "Signing packaged foundation intent helper with app entitlements: $ENTITLEMENTS"
+        run_with_spinner "signing packaged foundation intent helper" codesign --force --options runtime --entitlements "$ENTITLEMENTS" --sign - "$PACKAGED_FOUNDATION_INTENT_HELPER"
+        success "Packaged foundation intent helper signed"
+    else
+        warn "App entitlements file not found, signing packaged foundation intent helper without entitlements"
+        run_with_spinner "signing packaged foundation intent helper" codesign --force --sign - "$PACKAGED_FOUNDATION_INTENT_HELPER"
+        success "Packaged foundation intent helper signed (ad-hoc, no entitlements)"
+    fi
+else
+    warn "Packaged foundation intent helper not found before app signing"
 fi
 
 if [[ -d "$PACKAGED_FULL_STEALTH_XPC" ]]; then
@@ -639,6 +654,7 @@ require_asar_entry "$APP_ASAR_PATH" "/node_modules/natively-audio/index.js" "Pac
 require_asar_entry "$APP_ASAR_PATH" "/dist-electron/premium/electron/services/LicenseManager.js" "Packaged premium license manager"
 require_asar_entry "$APP_ASAR_PATH" "/dist-electron/premium/electron/knowledge/KnowledgeOrchestrator.js" "Packaged knowledge orchestrator"
 require_file "$APP_RESOURCES_DIR/bin/macos/stealth-virtual-display-helper" "Packaged macOS virtual display helper"
+require_file "$APP_RESOURCES_DIR/bin/macos/foundation-intent-helper" "Packaged foundation intent helper"
 require_file "$APP_GLOB/Contents/XPCServices/macos-full-stealth-helper.xpc/Contents/MacOS/macos-full-stealth-helper" "Packaged macOS full stealth XPC helper"
 
 if [[ "$BUILD_ARCH" == "arm64" ]]; then

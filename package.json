@@ -14,11 +14,12 @@
     "electron:build": "node scripts/ensure-electron-native-deps.js && npm run build:native:current && tsc -p electron/tsconfig.json && cross-env NODE_ENV=production electron .",
     "prepare:macos:virtual-display-helper": "node scripts/prepare-macos-virtual-display-helper.js",
     "prepare:macos:full-stealth-helper": "node scripts/prepare-macos-full-stealth-helper.js",
+    "prepare:macos:foundation-intent-helper": "node scripts/prepare-macos-foundation-intent-helper.js",
     "notarize:helper": "node scripts/notarize-macos-helper.js",
     "app:dev": "concurrently \"npm run dev -- --port 5180\" \"wait-on http://localhost:5180 && npm run electron:dev\"",
-    "app:build": "node scripts/ensure-electron-native-deps.js && npm run build && npm run build:native && npm run prepare:macos:virtual-display-helper && npm run prepare:macos:full-stealth-helper && tsc -p electron/tsconfig.json && electron-builder",
-    "app:build:arm64": "node scripts/ensure-electron-native-deps.js && npm run build && npm run build:native:current && npm run prepare:macos:virtual-display-helper && npm run prepare:macos:full-stealth-helper && tsc -p electron/tsconfig.json && electron-builder --mac --arm64",
-    "app:build:x64": "node scripts/ensure-electron-native-deps.js && npm run build && npm run build:native:current && npm run prepare:macos:virtual-display-helper && npm run prepare:macos:full-stealth-helper && tsc -p electron/tsconfig.json && electron-builder --mac --x64",
+    "app:build": "node scripts/ensure-electron-native-deps.js && npm run build && npm run build:native && npm run prepare:macos:virtual-display-helper && npm run prepare:macos:full-stealth-helper && npm run prepare:macos:foundation-intent-helper && tsc -p electron/tsconfig.json && electron-builder",
+    "app:build:arm64": "node scripts/ensure-electron-native-deps.js && npm run build && npm run build:native:current && npm run prepare:macos:virtual-display-helper && npm run prepare:macos:full-stealth-helper && npm run prepare:macos:foundation-intent-helper && tsc -p electron/tsconfig.json && electron-builder --mac --arm64",
+    "app:build:x64": "node scripts/ensure-electron-native-deps.js && npm run build && npm run build:native:current && npm run prepare:macos:virtual-display-helper && npm run prepare:macos:full-stealth-helper && npm run prepare:macos:foundation-intent-helper && tsc -p electron/tsconfig.json && electron-builder --mac --x64",
     "test:electron": "rimraf dist-electron/electron/tests && tsc -p electron/tsconfig.json && node --test dist-electron/electron/tests/*.test.js",
     "test:soak": "rimraf dist-electron/electron/tests && tsc -p electron/tsconfig.json && node scripts/run-soak-scenarios.js",
     "test:fault-injection": "rimraf dist-electron/electron/tests && tsc -p electron/tsconfig.json && node --test dist-electron/electron/tests/faultInjection.test.js",
@@ -78,6 +79,13 @@
       {
         "from": "assets/bin/macos/stealth-virtual-display-helper",
         "to": "bin/macos/stealth-virtual-display-helper"
+      },
+      {
+        "from": "assets/bin/macos",
+        "to": "bin/macos",
+        "filter": [
+          "foundation-intent-helper"
+        ]
       }
     ],
     "extraFiles": [

@@ -5,6 +5,7 @@ import { PauseThresholdTuner } from '../pause/PauseThresholdTuner';
 import { detectQuestion } from './QuestionDetector';
 import { isOptimizationActive } from '../config/optimizations';
 import type { RuntimeBudgetScheduler } from '../runtime/RuntimeBudgetScheduler';
+import type { IntentResult } from '../llm/IntentClassifier';
 
 type ClassifierLane = Pick<RuntimeBudgetScheduler, 'submit'>;
 
@@ -39,6 +40,7 @@ export interface ConsciousAccelerationOptions {
   maxMemoryMB?: number;
   budgetScheduler?: Pick<RuntimeBudgetScheduler, 'shouldAdmitSpeculation'>;
   classifierLane?: ClassifierLane;
+  intentClassifier?: (query: string, transcriptRevision: number) => Promise<IntentResult>;
 }
 
 export class ConsciousAccelerationOrchestrator {
@@ -56,9 +58,12 @@ export class ConsciousAccelerationOrchestrator {
   private speculativeGeneration = 0;
   private lastPauseDecision: { action: PauseAction; confidence: PauseConfidence; at: number } | null = null;
   private readonly classifierLane?: ClassifierLane;
+  private intentClassifier?: (query: string, transcriptRevision: number) => Promise<IntentResult>;
+  private prefetchedIntents = new Map<string, IntentResult>();
 
   constructor(options: ConsciousAccelerationOptions = {}) {
     this.classifierLane = options.classifierLane;
+    this.intentClassifier = options.intentClassifier;
     this.prefetcher = new PredictivePrefetcher({
       maxPrefetchPredictions: options.maxPrefetchPredictions,
       maxMemoryMB: options.maxMemoryMB,
@@ -100,6 +105,7 @@ export class ConsciousAccelerationOrchestrator {
       if ((action === 'soft_speculate' || action === 'hard_speculate' || action === 'commit') && !this.prefetchTriggeredForCurrentPause) {
         this.prefetchTriggeredForCurrentPause = true;
         this.prefetcher.onSilenceStart();
+        await this.maybePrefetchIntent();
       }
 
       if ((action === 'hard_speculate' || action === 'commit') && isOptimizationActive('usePrefetching')) {
@@ -143,6 +149,11 @@ export class ConsciousAccelerationOrchestrator {
 
   setSpeculativeExecutor(executor: SpeculativeExecutor | null): void {
     this.speculativeExecutor = executor;
+  }
+
+  setIntentClassifier(classifier: ((query: string, transcriptRevision: number) => Promise<IntentResult>) | null): void {
+    this.intentClassifier = classifier ?? undefined;
+    this.prefetchedIntents.clear();
   }
 
   noteTranscriptText(speaker: 'interviewer' | 'user', transcript?: string): void {
@@ -243,6 +254,11 @@ export class ConsciousAccelerationOrchestrator {
     return this.finalizeSpeculativeAnswer(preview.key, waitMs > 0 ? Math.max(waitMs, 2000) : 0);
   }
 
+  getPrefetchedIntent(query: string, transcriptRevision: number): IntentResult | null {
+    const key = this.buildSpeculativeKey(query, transcriptRevision);
+    return this.prefetchedIntents.get(key) ?? null;
+  }
+
   clearState(): void {
     this.prefetcher.onTopicShiftDetected();
     this.prefetcher.clearTranscriptSegments();
@@ -251,6 +267,7 @@ export class ConsciousAccelerationOrchestrator {
     this.latestInterviewerTranscript = '';
     this.latestTranscriptRevision = 0;
     this.lastPauseDecision = null;
+    this.prefetchedIntents.clear();
     this.invalidateSpeculation(false);
   }
 
@@ -406,6 +423,33 @@ export class ConsciousAccelerationOrchestrator {
     }
   }
 
+  private async maybePrefetchIntent(): Promise<void> {
+    if (!this.intentClassifier) {
+      return;
+    }
+
+    const query = this.latestInterviewerTranscript.trim();
+    if (!query) {
+      return;
+    }
+
+    const revision = this.latestTranscriptRevision;
+    const key = this.buildSpeculativeKey(query, revision);
+    if (this.prefetchedIntents.has(key)) {
+      return;
+    }
+
+    try {
+      const intent = await this.intentClassifier(query, revision);
+      if (revision !== this.latestTranscriptRevision) {
+        return;
+      }
+      this.prefetchedIntents.set(key, intent);
+    } catch (error: unknown) {
+      console.warn('[ConsciousAccelerationOrchestrator] Intent preclassification failed:', error);
+    }
+  }
+
   async getSpeculativeAnswerPreview(query: string, transcriptRevision: number, waitMs: number = 0): Promise<SpeculativeAnswerPreview | null> {
     if (!this.enabled) {
       return null;
@@ -474,5 +518,6 @@ export class ConsciousAccelerationOrchestrator {
 
     this.speculativeGeneration += 1;
     this.speculativeAnswerEntries.clear();
+    this.prefetchedIntents.clear();
   }
 }

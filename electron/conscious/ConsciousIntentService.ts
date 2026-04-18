@@ -1,4 +1,5 @@
 import type { IntentResult } from '../llm/IntentClassifier';
+import type { CoordinatedIntentResult } from '../llm/providers/IntentClassificationCoordinator';
 
 export interface ResolvedIntentResult extends IntentResult {
   reason?: string;
@@ -23,7 +24,16 @@ export class ConsciousIntentService {
       preparedTranscript: string,
       assistantResponseCount: number,
     ) => Promise<IntentResult>;
+    prefetchedIntent?: CoordinatedIntentResult | null;
   }): Promise<ConsciousIntentResolution> {
+    if (input.prefetchedIntent) {
+      return {
+        intentResult: input.prefetchedIntent,
+        totalContextAssemblyMs: Date.now() - input.startedAt,
+        timedOut: false,
+      };
+    }
+
     let intentResult: ResolvedIntentResult = {
       intent: 'general',
       confidence: 0,

@@ -13,7 +13,7 @@ import {
 
 class TestIntelligenceEngine extends IntelligenceEngine {
   protected override async classifyIntentForRoute(_lastInterviewerTurn: string | null, _preparedTranscript: string, _assistantResponseCount: number) {
-    return { intent: 'general' as const, answerShape: 'concise', confidence: 1 };
+    return { intent: 'general' as const, answerShape: 'concise', confidence: 1, provider: 'test', retryCount: 0 };
   }
 }
 
