@@ -91,3 +91,42 @@ test('ConsciousAccelerationOrchestrator preclassifies the latest transcript inte
   assert.equal(classifierCalls, 1);
   assert.equal(orchestrator.getPrefetchedIntent(question, 7)?.intent, 'behavioral');
 });
+
+test('ConsciousAccelerationOrchestrator invalidates prefetched intents when transcript revision advances', async () => {
+  const lane = new StubClassifierLane();
+
+  const orchestrator = new ConsciousAccelerationOrchestrator({
+    classifierLane: lane,
+    budgetScheduler: { shouldAdmitSpeculation: () => true },
+    intentClassifier: async () => ({
+      intent: 'behavioral',
+      confidence: 0.9,
+      answerShape: 'Use one concrete example.',
+    }),
+  });
+  orchestrator.setEnabled(true);
+  orchestrator.getPauseDetector().updateConfig({
+    minSilenceMs: 0,
+    softSpeculateThreshold: 0,
+    hardSpeculateThreshold: 0,
+    commitThreshold: 0,
+    evalIntervalMs: 1,
+    maxEvaluationMs: 10,
+  });
+
+  const question = 'Tell me about a difficult stakeholder conversation.';
+  orchestrator.updateTranscriptSegments([
+    { speaker: 'interviewer', text: question, timestamp: Date.now() },
+  ], 3);
+  orchestrator.onSilenceStart(question);
+
+  await new Promise((resolve) => setTimeout(resolve, 40));
+  assert.equal(orchestrator.getPrefetchedIntent(question, 3)?.intent, 'behavioral');
+
+  orchestrator.updateTranscriptSegments([
+    { speaker: 'interviewer', text: question, timestamp: Date.now() },
+  ], 4);
+
+  assert.equal(orchestrator.getPrefetchedIntent(question, 3), null);
+  assert.equal(orchestrator.getPrefetchedIntent(question, 4), null);
+});

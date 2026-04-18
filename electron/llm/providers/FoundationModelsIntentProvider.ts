@@ -61,7 +61,7 @@ interface FoundationModelsIntentProviderOptions {
   isOptimizationEnabled?: (flag: 'useFoundationModelsIntent') => boolean;
 }
 
-const DEFAULT_TIMEOUT_MS = 1200;
+const DEFAULT_TIMEOUT_MS = 1500;
 
 function isConversationIntent(value: string): value is ConversationIntent {
   return INTENT_CANDIDATES.includes(value as ConversationIntent);
