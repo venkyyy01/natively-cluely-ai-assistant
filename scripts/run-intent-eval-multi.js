@@ -4,6 +4,7 @@ const {
   DEFAULT_INTENT_EVAL_CASES,
   runIntentEval,
 } = require('../dist-electron/electron/evals/intentClassificationEval.js');
+const fs = require('node:fs');
 
 const {
   FoundationModelsIntentProvider,
@@ -14,6 +15,7 @@ const {
 function parseArgs(argv) {
   let provider = 'coordinated';
   let runs = 10;
+  let datasetPath = null;
 
   for (const arg of argv) {
     if (arg.startsWith('--provider=')) {
@@ -25,13 +27,34 @@ function parseArgs(argv) {
         runs = Math.floor(parsed);
       }
     }
+    if (arg.startsWith('--dataset=')) {
+      const value = arg.slice('--dataset='.length).trim();
+      datasetPath = value ? value : null;
+    }
   }
 
   if (!['coordinated', 'foundation', 'legacy'].includes(provider)) {
     throw new Error(`Unsupported provider mode: ${provider}`);
   }
 
-  return { provider, runs };
+  return { provider, runs, datasetPath };
+}
+
+function loadCases(datasetPath) {
+  if (!datasetPath) {
+    return DEFAULT_INTENT_EVAL_CASES;
+  }
+
+  const raw = fs.readFileSync(datasetPath, 'utf8');
+  const parsed = JSON.parse(raw);
+  if (Array.isArray(parsed)) {
+    return parsed;
+  }
+  if (parsed && Array.isArray(parsed.cases)) {
+    return parsed.cases;
+  }
+
+  throw new Error(`Dataset at ${datasetPath} does not contain an array of cases`);
 }
 
 function buildClassifier(mode) {
@@ -101,7 +124,8 @@ function percentile(values, ratio) {
 }
 
 async function main() {
-  const { provider, runs } = parseArgs(process.argv.slice(2));
+  const { provider, runs, datasetPath } = parseArgs(process.argv.slice(2));
+  const cases = loadCases(datasetPath);
   const classify = buildClassifier(provider);
 
   const accuracySeries = [];
@@ -113,7 +137,7 @@ async function main() {
 
   for (let runIndex = 0; runIndex < runs; runIndex += 1) {
     const startedAt = Date.now();
-    const { outcomes, summary } = await runIntentEval(DEFAULT_INTENT_EVAL_CASES, classify);
+    const { outcomes, summary } = await runIntentEval(cases, classify);
     const durationMs = Date.now() - startedAt;
 
     accuracySeries.push(summary.accuracy);
@@ -146,7 +170,8 @@ async function main() {
   const report = {
     provider,
     runs,
-    casesPerRun: DEFAULT_INTENT_EVAL_CASES.length,
+    casesPerRun: cases.length,
+    datasetPath: datasetPath || 'default',
     accuracy: {
       mean: mean(accuracySeries),
       stddev: stddev(accuracySeries),

@@ -18,6 +18,7 @@ export interface IntentClassificationCoordinatorOptions {
   jitterMs?: number;
   minimumPrimaryConfidence?: number;
   contradictionDeltaConfidence?: number;
+  pairwiseDisambiguationMargin?: number;
   delayFn?: (ms: number) => Promise<void>;
   randomFn?: () => number;
 }
@@ -27,6 +28,7 @@ const DEFAULT_BASE_BACKOFF_MS = 100;
 const DEFAULT_JITTER_MS = 50;
 const DEFAULT_MINIMUM_PRIMARY_CONFIDENCE = 0.82;
 const DEFAULT_CONTRADICTION_DELTA_CONFIDENCE = 0.18;
+const DEFAULT_PAIRWISE_DISAMBIGUATION_MARGIN = 0.08;
 
 const FOLLOW_UP_CUES = [
   'what happened next',
@@ -38,9 +40,15 @@ const FOLLOW_UP_CUES = [
 const SUMMARY_PROBE_CUES = [
   'so you are saying',
   "so you're saying",
+  'so you re saying',
   'let me make sure',
   'to summarize',
   'so to summarize',
+  'if i understood correctly',
+  'am i right',
+  'just to confirm',
+  'do i have this right',
+  'to confirm',
   'if i understand correctly',
   'correct me if i am wrong',
   'correct me if i\'m wrong',
@@ -49,6 +57,15 @@ const SUMMARY_PROBE_CUES = [
 const EXAMPLE_REQUEST_CUES = [
   'concrete example',
   'specific example',
+  'concrete instance',
+  'specific case',
+  'concrete case',
+  'real example',
+  'practical example',
+  'real incident',
+  'scenario where',
+  'one concrete',
+  'one specific',
   'for example',
   'for instance',
   'specific instance',
@@ -60,6 +77,10 @@ const CLARIFICATION_CUES = [
   'can you explain',
   'can you unpack',
   'unpack',
+  'break down',
+  'when you say',
+  'what exactly do you mean',
+  'what exactly is',
   'how so',
 ];
 
@@ -97,12 +118,17 @@ const DEEP_DIVE_CUES = [
   'why choose',
   'why not',
   'compare',
+  'versus',
+  'vs ',
   'consistency',
   'availability',
   'latency',
   'freshness',
   'throughput',
 ];
+
+const PAIRWISE_DEEP_DIVE_VS_CLARIFICATION: readonly IntentResult['intent'][] = ['deep_dive', 'clarification'];
+const PAIRWISE_EXAMPLE_REQUEST_VS_DEEP_DIVE: readonly IntentResult['intent'][] = ['example_request', 'deep_dive'];
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -118,6 +144,7 @@ export class IntentClassificationCoordinator {
   private readonly jitterMs: number;
   private readonly minimumPrimaryConfidence: number;
   private readonly contradictionDeltaConfidence: number;
+  private readonly pairwiseDisambiguationMargin: number;
   private readonly delayFn: (ms: number) => Promise<void>;
   private readonly randomFn: () => number;
 
@@ -131,6 +158,7 @@ export class IntentClassificationCoordinator {
     this.jitterMs = options.jitterMs ?? DEFAULT_JITTER_MS;
     this.minimumPrimaryConfidence = options.minimumPrimaryConfidence ?? DEFAULT_MINIMUM_PRIMARY_CONFIDENCE;
     this.contradictionDeltaConfidence = options.contradictionDeltaConfidence ?? DEFAULT_CONTRADICTION_DELTA_CONFIDENCE;
+    this.pairwiseDisambiguationMargin = options.pairwiseDisambiguationMargin ?? DEFAULT_PAIRWISE_DISAMBIGUATION_MARGIN;
     this.delayFn = options.delayFn ?? sleep;
     this.randomFn = options.randomFn ?? Math.random;
   }
@@ -187,6 +215,85 @@ export class IntentClassificationCoordinator {
     }
 
     return null;
+  }
+
+  private choosePairwiseLabel(
+    first: IntentResult,
+    second: IntentResult,
+    pair: readonly IntentResult['intent'][],
+  ): IntentResult['intent'] | null {
+    if (!pair.includes(first.intent) && !pair.includes(second.intent)) {
+      return null;
+    }
+
+    if (pair.includes(first.intent) && !pair.includes(second.intent)) {
+      return first.intent;
+    }
+
+    if (!pair.includes(first.intent) && pair.includes(second.intent)) {
+      return second.intent;
+    }
+
+    const firstScore = first.confidence;
+    const secondScore = second.confidence;
+    if (Math.abs(firstScore - secondScore) <= this.pairwiseDisambiguationMargin) {
+      return null;
+    }
+
+    return firstScore >= secondScore ? first.intent : second.intent;
+  }
+
+  private applyPairwiseDisambiguation(
+    input: IntentClassificationInput,
+    primary: IntentResult,
+    fallback: IntentResult,
+  ): IntentResult | null {
+    const likelyIntent = this.inferLikelyIntentFromQuestion(input);
+
+    const clarificationVsDeepDiveCue = likelyIntent === 'clarification' || likelyIntent === 'deep_dive';
+    if (clarificationVsDeepDiveCue) {
+      const chosen = this.choosePairwiseLabel(primary, fallback, PAIRWISE_DEEP_DIVE_VS_CLARIFICATION);
+      if (chosen) {
+        if (primary.intent === chosen) {
+          return primary;
+        }
+        if (fallback.intent === chosen) {
+          return fallback;
+        }
+      }
+    }
+
+    const exampleVsDeepDiveCue = likelyIntent === 'example_request' || likelyIntent === 'deep_dive';
+    if (exampleVsDeepDiveCue) {
+      const chosen = this.choosePairwiseLabel(primary, fallback, PAIRWISE_EXAMPLE_REQUEST_VS_DEEP_DIVE);
+      if (chosen) {
+        if (primary.intent === chosen) {
+          return primary;
+        }
+        if (fallback.intent === chosen) {
+          return fallback;
+        }
+      }
+    }
+
+    return null;
+  }
+
+  private shouldPreferPrimaryOnFallbackLowConfidence(
+    primary: IntentResult,
+    fallback: IntentResult,
+    likelyIntent: IntentResult['intent'] | null,
+  ): boolean {
+    const fallbackLooksWeak = fallback.intent === 'general' || fallback.confidence <= 0.58;
+    if (!fallbackLooksWeak) {
+      return false;
+    }
+
+    if (likelyIntent && primary.intent === likelyIntent) {
+      return true;
+    }
+
+    return primary.confidence >= 0.5;
   }
 
   private hasStrongCueForLikelyIntent(
@@ -262,6 +369,27 @@ export class IntentClassificationCoordinator {
     retryCount: number,
   ): CoordinatedIntentResult {
     const likelyIntent = this.inferLikelyIntentFromQuestion(input);
+
+    if (this.shouldPreferPrimaryOnFallbackLowConfidence(primary, fallback, likelyIntent)) {
+      return {
+        ...primary,
+        provider: this.primary.name,
+        retryCount,
+      };
+    }
+
+    const pairwiseResult = this.applyPairwiseDisambiguation(input, primary, fallback);
+    if (pairwiseResult) {
+      if (pairwiseResult === primary) {
+        return {
+          ...primary,
+          provider: this.primary.name,
+          retryCount,
+        };
+      }
+      return this.createFallbackResult(fallback, retryCount, 'primary_contradiction');
+    }
+
     if (likelyIntent) {
       const strongLikelyCue = this.hasStrongCueForLikelyIntent(input, likelyIntent);
       const primaryMatchesLikely = primary.intent === likelyIntent;
@@ -294,6 +422,42 @@ export class IntentClassificationCoordinator {
     }
 
     return this.createFallbackResult(fallback, retryCount, 'primary_low_confidence');
+  }
+
+  private resolveFallbackOnPrimaryFailure(
+    input: IntentClassificationInput,
+    primaryErrorCode: IntentProviderErrorType,
+    retryable: boolean,
+    retryCount: number,
+    fallback: IntentResult,
+  ): CoordinatedIntentResult {
+    const likelyIntent = this.inferLikelyIntentFromQuestion(input);
+    const deepDiveCueStrong = likelyIntent === 'deep_dive' && this.hasStrongCueForLikelyIntent(input, 'deep_dive');
+    if (
+      deepDiveCueStrong
+      && fallback.intent === 'general'
+      && fallback.confidence <= 0.5
+    ) {
+      return {
+        ...fallback,
+        intent: 'deep_dive',
+        confidence: Math.max(0.62, fallback.confidence),
+        answerShape: 'Provide a structured but concise explanation. Use concrete specifics, not abstract concepts.',
+        provider: this.fallback.name,
+        retryCount,
+        fallbackReason: 'primary_low_confidence',
+      };
+    }
+
+    return this.createFallbackResult(
+      fallback,
+      retryCount,
+      retryable
+        ? 'primary_retries_exhausted'
+        : primaryErrorCode === 'unavailable'
+          ? 'primary_unavailable'
+          : 'primary_failed',
+    );
   }
 
   private async classifyWithFallback(input: IntentClassificationInput): Promise<IntentResult> {
@@ -331,15 +495,7 @@ export class IntentClassificationCoordinator {
           const retryable = isRetryableError(code);
           if (!retryable || retries >= this.maxPrimaryRetries) {
             const fallbackResult = await this.classifyWithFallback(input);
-            return this.createFallbackResult(
-              fallbackResult,
-              retries,
-              retryable
-                ? 'primary_retries_exhausted'
-                : code === 'unavailable'
-                  ? 'primary_unavailable'
-                  : 'primary_failed',
-            );
+            return this.resolveFallbackOnPrimaryFailure(input, code, retryable, retries, fallbackResult);
           }
 
           retries += 1;

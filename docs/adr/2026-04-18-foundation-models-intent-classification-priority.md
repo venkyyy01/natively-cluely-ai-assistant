@@ -140,6 +140,11 @@ Out of scope:
 
 - Intent evaluation runner: `npm run eval:intent`
 - Intent multi-run evaluation runner: `npm run eval:intent:multi -- --provider=coordinated --runs=20`
+- Generate 100+ noisy/paraphrase cases: `npm run eval:intent:generate-variants`
+- Run multi-eval on generated dataset:
+  - `npm run eval:intent:multi -- --provider=coordinated --runs=20 --dataset=electron/evals/intentEvalVariants.generated.json`
+  - `npm run eval:intent:multi -- --provider=foundation --runs=20 --dataset=electron/evals/intentEvalVariants.generated.json`
+  - `npm run eval:intent:multi -- --provider=legacy --runs=20 --dataset=electron/evals/intentEvalVariants.generated.json`
 - Provider mode overrides for evaluation:
   - `node scripts/run-intent-eval.js --provider=coordinated` (default)
   - `node scripts/run-intent-eval.js --provider=foundation`

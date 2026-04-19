@@ -262,3 +262,129 @@ test('IntentClassificationCoordinator keeps primary on low confidence when fallb
   assert.equal(result.fallbackReason, undefined);
   assert.equal(fallbackCalls, 1);
 });
+
+test('IntentClassificationCoordinator keeps low-confidence primary when fallback is weak and generic', async () => {
+  const summaryProbeInput: IntentClassificationInput = {
+    lastInterviewerTurn: 'Correct me if I am wrong: you keep writes sync but fan-out async?',
+    preparedTranscript: [
+      '[ASSISTANT]: I keep writes synchronous for correctness and move fan-out async.',
+      '[INTERVIEWER]: Correct me if I am wrong: you keep writes sync but fan-out async?',
+    ].join('\n'),
+    assistantResponseCount: 1,
+  };
+
+  const primary = new StubProvider('foundation', true, async () => ({
+    intent: 'follow_up',
+    confidence: 0.52,
+    answerShape: 'Continue narrative naturally.',
+  }));
+  const fallback = new StubProvider('legacy', true, async () => ({
+    intent: 'general',
+    confidence: 0.5,
+    answerShape: 'Respond naturally.',
+  }));
+
+  const coordinator = new IntentClassificationCoordinator(primary, fallback, {
+    minimumPrimaryConfidence: 0.82,
+    contradictionDeltaConfidence: 0.18,
+  });
+  const result = await coordinator.classify(summaryProbeInput);
+
+  assert.equal(result.intent, 'follow_up');
+  assert.equal(result.provider, 'foundation');
+  assert.equal(result.fallbackReason, undefined);
+});
+
+test('IntentClassificationCoordinator still falls back when low-confidence primary disagrees with a strong cue-matching fallback', async () => {
+  const exampleRequestInput: IntentClassificationInput = {
+    lastInterviewerTurn: 'Give one tangible example of this in action.',
+    preparedTranscript: [
+      '[ASSISTANT]: I start by instrumenting queue lag and latency.',
+      '[INTERVIEWER]: Give one tangible example of this in action.',
+    ].join('\n'),
+    assistantResponseCount: 1,
+  };
+
+  const primary = new StubProvider('foundation', true, async () => ({
+    intent: 'example_request',
+    confidence: 0.58,
+    answerShape: 'Provide one concrete example.',
+  }));
+  const fallback = new StubProvider('legacy', true, async () => ({
+    intent: 'coding',
+    confidence: 0.9,
+    answerShape: 'Provide a full implementation.',
+  }));
+
+  const coordinator = new IntentClassificationCoordinator(primary, fallback, {
+    minimumPrimaryConfidence: 0.82,
+    contradictionDeltaConfidence: 0.18,
+  });
+  const result = await coordinator.classify(exampleRequestInput);
+
+  assert.equal(result.intent, 'coding');
+  assert.equal(result.provider, 'legacy');
+  assert.equal(result.fallbackReason, 'primary_low_confidence');
+});
+
+test('IntentClassificationCoordinator applies pairwise disambiguation for deep_dive versus clarification', async () => {
+  const inputCase: IntentClassificationInput = {
+    lastInterviewerTurn: 'Can you clarify the tradeoffs you made between consistency and availability?',
+    preparedTranscript: [
+      '[ASSISTANT]: I chose eventual consistency to keep write latency low.',
+      '[INTERVIEWER]: Can you clarify the tradeoffs you made between consistency and availability?',
+    ].join('\n'),
+    assistantResponseCount: 1,
+  };
+
+  const primary = new StubProvider('foundation', true, async () => ({
+    intent: 'clarification',
+    confidence: 0.58,
+    answerShape: 'Clarify directly.',
+  }));
+  const fallback = new StubProvider('legacy', true, async () => ({
+    intent: 'deep_dive',
+    confidence: 0.85,
+    answerShape: 'Explain tradeoffs concisely.',
+  }));
+
+  const coordinator = new IntentClassificationCoordinator(primary, fallback, {
+    minimumPrimaryConfidence: 0.82,
+    contradictionDeltaConfidence: 0.18,
+    pairwiseDisambiguationMargin: 0.05,
+  });
+  const result = await coordinator.classify(inputCase);
+
+  assert.equal(result.intent, 'deep_dive');
+  assert.equal(result.provider, 'legacy');
+  assert.equal(result.fallbackReason, 'primary_contradiction');
+});
+
+test('IntentClassificationCoordinator overrides weak general fallback to deep_dive on strong deep-dive cues after primary failure', async () => {
+  const inputCase: IntentClassificationInput = {
+    lastInterviewerTurn: 'How would you handle conflict between cache freshness and latency?',
+    preparedTranscript: '[INTERVIEWER]: How would you handle conflict between cache freshness and latency?',
+    assistantResponseCount: 0,
+  };
+
+  const primary = new StubProvider('foundation', true, async () => {
+    throw createIntentProviderError('timeout', 'helper timeout');
+  });
+  const fallback = new StubProvider('legacy', true, async () => ({
+    intent: 'general',
+    confidence: 0.5,
+    answerShape: 'General answer.',
+  }));
+
+  const coordinator = new IntentClassificationCoordinator(primary, fallback, {
+    maxPrimaryRetries: 0,
+    baseBackoffMs: 100,
+    jitterMs: 0,
+  });
+  const result = await coordinator.classify(inputCase);
+
+  assert.equal(result.intent, 'deep_dive');
+  assert.equal(result.provider, 'legacy');
+  assert.equal(result.fallbackReason, 'primary_low_confidence');
+  assert.equal(result.confidence, 0.62);
+});

@@ -1,0 +1,1307 @@
+{
+  "version": 1,
+  "generatedAt": "2026-04-18T22:03:07.133Z",
+  "totalCases": 100,
+  "cases": [
+    {
+      "id": "deep-dive-03-cache-freshness-v01",
+      "description": "deep-dive-03-cache-freshness paraphrase 1",
+      "expectedIntent": "deep_dive",
+      "lastInterviewerTurn": "How would you handle conflict between cache freshness and latency?",
+      "preparedTranscript": "[INTERVIEWER]: How would you handle conflict between cache freshness and latency?",
+      "assistantResponseCount": 0,
+      "tags": [
+        "generated",
+        "paraphrase",
+        "deep-dive-03-cache-freshness"
+      ]
+    },
+    {
+      "id": "deep-dive-03-cache-freshness-v02",
+      "description": "deep-dive-03-cache-freshness paraphrase 2",
+      "expectedIntent": "deep_dive",
+      "lastInterviewerTurn": "How do you trade off cache freshness against response latency?",
+      "preparedTranscript": "[INTERVIEWER]: How do you trade off cache freshness against response latency?",
+      "assistantResponseCount": 0,
+      "tags": [
+        "generated",
+        "paraphrase",
+        "deep-dive-03-cache-freshness"
+      ]
+    },
+    {
+      "id": "deep-dive-03-cache-freshness-v03",
+      "description": "deep-dive-03-cache-freshness paraphrase 3",
+      "expectedIntent": "deep_dive",
+      "lastInterviewerTurn": "What tradeoffs would you make between freshness and latency in your cache?",
+      "preparedTranscript": "[INTERVIEWER]: What tradeoffs would you make between freshness and latency in your cache?",
+      "assistantResponseCount": 0,
+      "tags": [
+        "generated",
+        "paraphrase",
+        "deep-dive-03-cache-freshness"
+      ]
+    },
+    {
+      "id": "deep-dive-03-cache-freshness-v04",
+      "description": "deep-dive-03-cache-freshness paraphrase 4",
+      "expectedIntent": "deep_dive",
+      "lastInterviewerTurn": "How would you reason about freshness versus latency under heavy traffic?",
+      "preparedTranscript": "[INTERVIEWER]: How would you reason about freshness versus latency under heavy traffic?",
+      "assistantResponseCount": 0,
+      "tags": [
+        "generated",
+        "paraphrase",
+        "deep-dive-03-cache-freshness"
+      ]
+    },
+    {
+      "id": "deep-dive-03-cache-freshness-v05",
+      "description": "deep-dive-03-cache-freshness paraphrase 5",
+      "expectedIntent": "deep_dive",
+      "lastInterviewerTurn": "How would you compare stale reads risk against latency targets?",
+      "preparedTranscript": "[INTERVIEWER]: How would you compare stale reads risk against latency targets?",
+      "assistantResponseCount": 0,
+      "tags": [
+        "generated",
+        "paraphrase",
+        "deep-dive-03-cache-freshness"
+      ]
+    },
+    {
+      "id": "deep-dive-03-cache-freshness-v06",
+      "description": "deep-dive-03-cache-freshness paraphrase 6",
+      "expectedIntent": "deep_dive",
+      "lastInterviewerTurn": "If cache freshness drops, how do you balance correctness with speed?",
+      "preparedTranscript": "[INTERVIEWER]: If cache freshness drops, how do you balance correctness with speed?",
+      "assistantResponseCount": 0,
+      "tags": [
+        "generated",
+        "paraphrase",
+        "deep-dive-03-cache-freshness"
+      ]
+    },
+    {
+      "id": "deep-dive-03-cache-freshness-v07",
+      "description": "deep-dive-03-cache-freshness paraphrase 7",
+      "expectedIntent": "deep_dive",
+      "lastInterviewerTurn": "How do you tune freshness windows without blowing latency budgets?",
+      "preparedTranscript": "[INTERVIEWER]: How do you tune freshness windows without blowing latency budgets?",
+      "assistantResponseCount": 0,
+      "tags": [
+        "generated",
+        "paraphrase",
+        "deep-dive-03-cache-freshness"
+      ]
+    },
+    {
+      "id": "deep-dive-03-cache-freshness-v08",
+      "description": "deep-dive-03-cache-freshness paraphrase 8",
+      "expectedIntent": "deep_dive",
+      "lastInterviewerTurn": "What is your approach to freshness-latency tradeoffs for this design?",
+      "preparedTranscript": "[INTERVIEWER]: What is your approach to freshness-latency tradeoffs for this design?",
+      "assistantResponseCount": 0,
+      "tags": [
+        "generated",
+        "paraphrase",
+        "deep-dive-03-cache-freshness"
+      ]
+    },
+    {
+      "id": "deep-dive-03-cache-freshness-v09",
+      "description": "deep-dive-03-cache-freshness paraphrase 9",
+      "expectedIntent": "deep_dive",
+      "lastInterviewerTurn": "How do you prioritize freshness vs throughput and latency in this system?",
+      "preparedTranscript": "[INTERVIEWER]: How do you prioritize freshness vs throughput and latency in this system?",
+      "assistantResponseCount": 0,
+      "tags": [
+        "generated",
+        "paraphrase",
+        "deep-dive-03-cache-freshness"
+      ]
+    },
+    {
+      "id": "deep-dive-03-cache-freshness-v10",
+      "description": "deep-dive-03-cache-freshness paraphrase 10",
+      "expectedIntent": "deep_dive",
+      "lastInterviewerTurn": "How would you reason about cache invalidation cadence versus API latency?",
+      "preparedTranscript": "[INTERVIEWER]: How would you reason about cache invalidation cadence versus API latency?",
+      "assistantResponseCount": 0,
+      "tags": [
+        "generated",
+        "paraphrase",
+        "deep-dive-03-cache-freshness"
+      ]
+    },
+    {
+      "id": "clarification-01-eventual-consistency-v01",
+      "description": "clarification-01-eventual-consistency paraphrase 1",
+      "expectedIntent": "clarification",
+      "lastInterviewerTurn": "When you say eventual consistency here, what exactly do you mean?",
+      "preparedTranscript": "[ASSISTANT]: I would prioritize availability and rely on eventual consistency for replicas.\n[INTERVIEWER]: When you say eventual consistency here, what exactly do you mean?",
+      "assistantResponseCount": 1,
+      "tags": [
+        "generated",
+        "paraphrase",
+        "clarification-01-eventual-consistency"
+      ]
+    },
+    {
+      "id": "clarification-01-eventual-consistency-v02",
+      "description": "clarification-01-eventual-consistency paraphrase 2",
+      "expectedIntent": "clarification",
+      "lastInterviewerTurn": "Can you clarify what eventual consistency means in this design?",
+      "preparedTranscript": "[ASSISTANT]: I would prioritize availability and rely on eventual consistency for replicas.\n[INTERVIEWER]: Can you clarify what eventual consistency means in this design?",
+      "assistantResponseCount": 1,
+      "tags": [
+        "generated",
+        "paraphrase",
+        "clarification-01-eventual-consistency"
+      ]
+    },
+    {
+      "id": "clarification-01-eventual-consistency-v03",
+      "description": "clarification-01-eventual-consistency paraphrase 3",
+      "expectedIntent": "clarification",
+      "lastInterviewerTurn": "Could you unpack what you mean by eventual consistency?",
+      "preparedTranscript": "[ASSISTANT]: I would prioritize availability and rely on eventual consistency for replicas.\n[INTERVIEWER]: Could you unpack what you mean by eventual consistency?",
+      "assistantResponseCount": 1,
+      "tags": [
+        "generated",
+        "paraphrase",
+        "clarification-01-eventual-consistency"
+      ]
+    },
+    {
+      "id": "clarification-01-eventual-consistency-v04",
+      "description": "clarification-01-eventual-consistency paraphrase 4",
+      "expectedIntent": "clarification",
+      "lastInterviewerTurn": "What do you mean by eventual consistency in this context?",
+      "preparedTranscript": "[ASSISTANT]: I would prioritize availability and rely on eventual consistency for replicas.\n[INTERVIEWER]: What do you mean by eventual consistency in this context?",
+      "assistantResponseCount": 1,
+      "tags": [
+        "generated",
+        "paraphrase",
+        "clarification-01-eventual-consistency"
+      ]
+    },
+    {
+      "id": "clarification-01-eventual-consistency-v05",
+      "description": "clarification-01-eventual-consistency paraphrase 5",
+      "expectedIntent": "clarification",
+      "lastInterviewerTurn": "Can you explain eventual consistency a bit more precisely?",
+      "preparedTranscript": "[ASSISTANT]: I would prioritize availability and rely on eventual consistency for replicas.\n[INTERVIEWER]: Can you explain eventual consistency a bit more precisely?",
+      "assistantResponseCount": 1,
+      "tags": [
+        "generated",
+        "paraphrase",
+        "clarification-01-eventual-consistency"
+      ]
+    },
+    {
+      "id": "clarification-01-eventual-consistency-v06",
+      "description": "clarification-01-eventual-consistency paraphrase 6",
+      "expectedIntent": "clarification",
+      "lastInterviewerTurn": "When you said eventual consistency, what behavior should I expect?",
+      "preparedTranscript": "[ASSISTANT]: I would prioritize availability and rely on eventual consistency for replicas.\n[INTERVIEWER]: When you said eventual consistency, what behavior should I expect?",
+      "assistantResponseCount": 1,
+      "tags": [
+        "generated",
+        "paraphrase",
+        "clarification-01-eventual-consistency"
+      ]
+    },
+    {
+      "id": "clarification-01-eventual-consistency-v07",
+      "description": "clarification-01-eventual-consistency paraphrase 7",
+      "expectedIntent": "clarification",
+      "lastInterviewerTurn": "Can you clarify how eventual consistency shows up for users?",
+      "preparedTranscript": "[ASSISTANT]: I would prioritize availability and rely on eventual consistency for replicas.\n[INTERVIEWER]: Can you clarify how eventual consistency shows up for users?",
+      "assistantResponseCount": 1,
+      "tags": [
+        "generated",
+        "paraphrase",
+        "clarification-01-eventual-consistency"
+      ]
+    },
+    {
+      "id": "clarification-01-eventual-consistency-v08",
+      "description": "clarification-01-eventual-consistency paraphrase 8",
+      "expectedIntent": "clarification",
+      "lastInterviewerTurn": "What exactly is eventually consistent in your write path?",
+      "preparedTranscript": "[ASSISTANT]: I would prioritize availability and rely on eventual consistency for replicas.\n[INTERVIEWER]: What exactly is eventually consistent in your write path?",
+      "assistantResponseCount": 1,
+      "tags": [
+        "generated",
+        "paraphrase",
+        "clarification-01-eventual-consistency"
+      ]
+    },
+    {
+      "id": "clarification-01-eventual-consistency-v09",
+      "description": "clarification-01-eventual-consistency paraphrase 9",
+      "expectedIntent": "clarification",
+      "lastInterviewerTurn": "Can you explain what eventual consistency implies for reads?",
+      "preparedTranscript": "[ASSISTANT]: I would prioritize availability and rely on eventual consistency for replicas.\n[INTERVIEWER]: Can you explain what eventual consistency implies for reads?",
+      "assistantResponseCount": 1,
+      "tags": [
+        "generated",
+        "paraphrase",
+        "clarification-01-eventual-consistency"
+      ]
+    },
+    {
+      "id": "clarification-01-eventual-consistency-v10",
+      "description": "clarification-01-eventual-consistency paraphrase 10",
+      "expectedIntent": "clarification",
+      "lastInterviewerTurn": "Can you clarify your eventual consistency statement?",
+      "preparedTranscript": "[ASSISTANT]: I would prioritize availability and rely on eventual consistency for replicas.\n[INTERVIEWER]: Can you clarify your eventual consistency statement?",
+      "assistantResponseCount": 1,
+      "tags": [
+        "generated",
+        "paraphrase",
+        "clarification-01-eventual-consistency"
+      ]
+    },
+    {
+      "id": "example-request-02-specific-instance-v01",
+      "description": "example-request-02-specific-instance paraphrase 1",
+      "expectedIntent": "example_request",
+      "lastInterviewerTurn": "What is one specific instance where this tradeoff hurt you?",
+      "preparedTranscript": "[ASSISTANT]: We accepted eventual consistency to keep write latency low.\n[INTERVIEWER]: What is one specific instance where this tradeoff hurt you?",
+      "assistantResponseCount": 1,
+      "tags": [
+        "generated",
+        "paraphrase",
+        "example-request-02-specific-instance"
+      ]
+    },
+    {
+      "id": "example-request-02-specific-instance-v02",
+      "description": "example-request-02-specific-instance paraphrase 2",
+      "expectedIntent": "example_request",
+      "lastInterviewerTurn": "Can you give one concrete instance where that tradeoff backfired?",
+      "preparedTranscript": "[ASSISTANT]: We accepted eventual consistency to keep write latency low.\n[INTERVIEWER]: Can you give one concrete instance where that tradeoff backfired?",
+      "assistantResponseCount": 1,
+      "tags": [
+        "generated",
+        "paraphrase",
+        "example-request-02-specific-instance"
+      ]
+    },
+    {
+      "id": "example-request-02-specific-instance-v03",
+      "description": "example-request-02-specific-instance paraphrase 3",
+      "expectedIntent": "example_request",
+      "lastInterviewerTurn": "What is a real example where this tradeoff caused pain?",
+      "preparedTranscript": "[ASSISTANT]: We accepted eventual consistency to keep write latency low.\n[INTERVIEWER]: What is a real example where this tradeoff caused pain?",
+      "assistantResponseCount": 1,
+      "tags": [
+        "generated",
+        "paraphrase",
+        "example-request-02-specific-instance"
+      ]
+    },
+    {
+      "id": "example-request-02-specific-instance-v04",
+      "description": "example-request-02-specific-instance paraphrase 4",
+      "expectedIntent": "example_request",
+      "lastInterviewerTurn": "Can you share one specific example where this decision hurt outcomes?",
+      "preparedTranscript": "[ASSISTANT]: We accepted eventual consistency to keep write latency low.\n[INTERVIEWER]: Can you share one specific example where this decision hurt outcomes?",
+      "assistantResponseCount": 1,
+      "tags": [
+        "generated",
+        "paraphrase",
+        "example-request-02-specific-instance"
+      ]
+    },
+    {
+      "id": "example-request-02-specific-instance-v05",
+      "description": "example-request-02-specific-instance paraphrase 5",
+      "expectedIntent": "example_request",
+      "lastInterviewerTurn": "Give me one concrete case where this tradeoff failed.",
+      "preparedTranscript": "[ASSISTANT]: We accepted eventual consistency to keep write latency low.\n[INTERVIEWER]: Give me one concrete case where this tradeoff failed.",
+      "assistantResponseCount": 1,
+      "tags": [
+        "generated",
+        "paraphrase",
+        "example-request-02-specific-instance"
+      ]
+    },
+    {
+      "id": "example-request-02-specific-instance-v06",
+      "description": "example-request-02-specific-instance paraphrase 6",
+      "expectedIntent": "example_request",
+      "lastInterviewerTurn": "What is one scenario where this tradeoff created issues?",
+      "preparedTranscript": "[ASSISTANT]: We accepted eventual consistency to keep write latency low.\n[INTERVIEWER]: What is one scenario where this tradeoff created issues?",
+      "assistantResponseCount": 1,
+      "tags": [
+        "generated",
+        "paraphrase",
+        "example-request-02-specific-instance"
+      ]
+    },
+    {
+      "id": "example-request-02-specific-instance-v07",
+      "description": "example-request-02-specific-instance paraphrase 7",
+      "expectedIntent": "example_request",
+      "lastInterviewerTurn": "Could you provide one real incident where this tradeoff was costly?",
+      "preparedTranscript": "[ASSISTANT]: We accepted eventual consistency to keep write latency low.\n[INTERVIEWER]: Could you provide one real incident where this tradeoff was costly?",
+      "assistantResponseCount": 1,
+      "tags": [
+        "generated",
+        "paraphrase",
+        "example-request-02-specific-instance"
+      ]
+    },
+    {
+      "id": "example-request-02-specific-instance-v08",
+      "description": "example-request-02-specific-instance paraphrase 8",
+      "expectedIntent": "example_request",
+      "lastInterviewerTurn": "Can you point to a specific case where this tradeoff hurt reliability?",
+      "preparedTranscript": "[ASSISTANT]: We accepted eventual consistency to keep write latency low.\n[INTERVIEWER]: Can you point to a specific case where this tradeoff hurt reliability?",
+      "assistantResponseCount": 1,
+      "tags": [
+        "generated",
+        "paraphrase",
+        "example-request-02-specific-instance"
+      ]
+    },
+    {
+      "id": "example-request-02-specific-instance-v09",
+      "description": "example-request-02-specific-instance paraphrase 9",
+      "expectedIntent": "example_request",
+      "lastInterviewerTurn": "What is one practical example where this tradeoff caused trouble?",
+      "preparedTranscript": "[ASSISTANT]: We accepted eventual consistency to keep write latency low.\n[INTERVIEWER]: What is one practical example where this tradeoff caused trouble?",
+      "assistantResponseCount": 1,
+      "tags": [
+        "generated",
+        "paraphrase",
+        "example-request-02-specific-instance"
+      ]
+    },
+    {
+      "id": "example-request-02-specific-instance-v10",
+      "description": "example-request-02-specific-instance paraphrase 10",
+      "expectedIntent": "example_request",
+      "lastInterviewerTurn": "Share one concrete instance where this tradeoff did not work well.",
+      "preparedTranscript": "[ASSISTANT]: We accepted eventual consistency to keep write latency low.\n[INTERVIEWER]: Share one concrete instance where this tradeoff did not work well.",
+      "assistantResponseCount": 1,
+      "tags": [
+        "generated",
+        "paraphrase",
+        "example-request-02-specific-instance"
+      ]
+    },
+    {
+      "id": "summary-probe-01-you-saying-v01",
+      "description": "summary-probe-01-you-saying paraphrase 1",
+      "expectedIntent": "summary_probe",
+      "lastInterviewerTurn": "So you are saying writes stay synchronous while fan-out is async, right?",
+      "preparedTranscript": "[ASSISTANT]: I keep writes synchronous for correctness and move fan-out async.\n[INTERVIEWER]: So you are saying writes stay synchronous while fan-out is async, right?",
+      "assistantResponseCount": 1,
+      "tags": [
+        "generated",
+        "paraphrase",
+        "summary-probe-01-you-saying"
+      ]
+    },
+    {
+      "id": "summary-probe-01-you-saying-v02",
+      "description": "summary-probe-01-you-saying paraphrase 2",
+      "expectedIntent": "summary_probe",
+      "lastInterviewerTurn": "So to summarize, writes are sync and fan-out is async?",
+      "preparedTranscript": "[ASSISTANT]: I keep writes synchronous for correctness and move fan-out async.\n[INTERVIEWER]: So to summarize, writes are sync and fan-out is async?",
+      "assistantResponseCount": 1,
+      "tags": [
+        "generated",
+        "paraphrase",
+        "summary-probe-01-you-saying"
+      ]
+    },
+    {
+      "id": "summary-probe-01-you-saying-v03",
+      "description": "summary-probe-01-you-saying paraphrase 3",
+      "expectedIntent": "summary_probe",
+      "lastInterviewerTurn": "Let me make sure I got this: synchronous writes, asynchronous fan-out?",
+      "preparedTranscript": "[ASSISTANT]: I keep writes synchronous for correctness and move fan-out async.\n[INTERVIEWER]: Let me make sure I got this: synchronous writes, asynchronous fan-out?",
+      "assistantResponseCount": 1,
+      "tags": [
+        "generated",
+        "paraphrase",
+        "summary-probe-01-you-saying"
+      ]
+    },
+    {
+      "id": "summary-probe-01-you-saying-v04",
+      "description": "summary-probe-01-you-saying paraphrase 4",
+      "expectedIntent": "summary_probe",
+      "lastInterviewerTurn": "If I understood correctly, writes remain synchronous and fan-out runs async?",
+      "preparedTranscript": "[ASSISTANT]: I keep writes synchronous for correctness and move fan-out async.\n[INTERVIEWER]: If I understood correctly, writes remain synchronous and fan-out runs async?",
+      "assistantResponseCount": 1,
+      "tags": [
+        "generated",
+        "paraphrase",
+        "summary-probe-01-you-saying"
+      ]
+    },
+    {
+      "id": "summary-probe-01-you-saying-v05",
+      "description": "summary-probe-01-you-saying paraphrase 5",
+      "expectedIntent": "summary_probe",
+      "lastInterviewerTurn": "Correct me if I am wrong: you keep writes sync but fan-out async?",
+      "preparedTranscript": "[ASSISTANT]: I keep writes synchronous for correctness and move fan-out async.\n[INTERVIEWER]: Correct me if I am wrong: you keep writes sync but fan-out async?",
+      "assistantResponseCount": 1,
+      "tags": [
+        "generated",
+        "paraphrase",
+        "summary-probe-01-you-saying"
+      ]
+    },
+    {
+      "id": "summary-probe-01-you-saying-v06",
+      "description": "summary-probe-01-you-saying paraphrase 6",
+      "expectedIntent": "summary_probe",
+      "lastInterviewerTurn": "So your design keeps writes synchronous and fan-out asynchronous, yes?",
+      "preparedTranscript": "[ASSISTANT]: I keep writes synchronous for correctness and move fan-out async.\n[INTERVIEWER]: So your design keeps writes synchronous and fan-out asynchronous, yes?",
+      "assistantResponseCount": 1,
+      "tags": [
+        "generated",
+        "paraphrase",
+        "summary-probe-01-you-saying"
+      ]
+    },
+    {
+      "id": "summary-probe-01-you-saying-v07",
+      "description": "summary-probe-01-you-saying paraphrase 7",
+      "expectedIntent": "summary_probe",
+      "lastInterviewerTurn": "Am I right that writes are sync while fan-out happens async?",
+      "preparedTranscript": "[ASSISTANT]: I keep writes synchronous for correctness and move fan-out async.\n[INTERVIEWER]: Am I right that writes are sync while fan-out happens async?",
+      "assistantResponseCount": 1,
+      "tags": [
+        "generated",
+        "paraphrase",
+        "summary-probe-01-you-saying"
+      ]
+    },
+    {
+      "id": "summary-probe-01-you-saying-v08",
+      "description": "summary-probe-01-you-saying paraphrase 8",
+      "expectedIntent": "summary_probe",
+      "lastInterviewerTurn": "Just to confirm, write path is synchronous and fan-out is asynchronous?",
+      "preparedTranscript": "[ASSISTANT]: I keep writes synchronous for correctness and move fan-out async.\n[INTERVIEWER]: Just to confirm, write path is synchronous and fan-out is asynchronous?",
+      "assistantResponseCount": 1,
+      "tags": [
+        "generated",
+        "paraphrase",
+        "summary-probe-01-you-saying"
+      ]
+    },
+    {
+      "id": "summary-probe-01-you-saying-v09",
+      "description": "summary-probe-01-you-saying paraphrase 9",
+      "expectedIntent": "summary_probe",
+      "lastInterviewerTurn": "Do I have this right: sync writes, async fan-out?",
+      "preparedTranscript": "[ASSISTANT]: I keep writes synchronous for correctness and move fan-out async.\n[INTERVIEWER]: Do I have this right: sync writes, async fan-out?",
+      "assistantResponseCount": 1,
+      "tags": [
+        "generated",
+        "paraphrase",
+        "summary-probe-01-you-saying"
+      ]
+    },
+    {
+      "id": "summary-probe-01-you-saying-v10",
+      "description": "summary-probe-01-you-saying paraphrase 10",
+      "expectedIntent": "summary_probe",
+      "lastInterviewerTurn": "To confirm, you preserve sync writes and push fan-out async?",
+      "preparedTranscript": "[ASSISTANT]: I keep writes synchronous for correctness and move fan-out async.\n[INTERVIEWER]: To confirm, you preserve sync writes and push fan-out async?",
+      "assistantResponseCount": 1,
+      "tags": [
+        "generated",
+        "paraphrase",
+        "summary-probe-01-you-saying"
+      ]
+    },
+    {
+      "id": "follow-up-01-what-next-v01",
+      "description": "follow-up-01-what-next paraphrase 1",
+      "expectedIntent": "follow_up",
+      "lastInterviewerTurn": "What happened next after you paused the deployment?",
+      "preparedTranscript": "[ASSISTANT]: I paused the rollout and paged the on-call backend team.\n[INTERVIEWER]: What happened next after you paused the deployment?",
+      "assistantResponseCount": 1,
+      "tags": [
+        "generated",
+        "paraphrase",
+        "follow-up-01-what-next"
+      ]
+    },
+    {
+      "id": "follow-up-01-what-next-v02",
+      "description": "follow-up-01-what-next paraphrase 2",
+      "expectedIntent": "follow_up",
+      "lastInterviewerTurn": "Then what did you do right after pausing the deploy?",
+      "preparedTranscript": "[ASSISTANT]: I paused the rollout and paged the on-call backend team.\n[INTERVIEWER]: Then what did you do right after pausing the deploy?",
+      "assistantResponseCount": 1,
+      "tags": [
+        "generated",
+        "paraphrase",
+        "follow-up-01-what-next"
+      ]
+    },
+    {
+      "id": "follow-up-01-what-next-v03",
+      "description": "follow-up-01-what-next paraphrase 3",
+      "expectedIntent": "follow_up",
+      "lastInterviewerTurn": "After that, what was your next step?",
+      "preparedTranscript": "[ASSISTANT]: I paused the rollout and paged the on-call backend team.\n[INTERVIEWER]: After that, what was your next step?",
+      "assistantResponseCount": 1,
+      "tags": [
+        "generated",
+        "paraphrase",
+        "follow-up-01-what-next"
+      ]
+    },
+    {
+      "id": "follow-up-01-what-next-v04",
+      "description": "follow-up-01-what-next paraphrase 4",
+      "expectedIntent": "follow_up",
+      "lastInterviewerTurn": "What did you do next once the rollout was paused?",
+      "preparedTranscript": "[ASSISTANT]: I paused the rollout and paged the on-call backend team.\n[INTERVIEWER]: What did you do next once the rollout was paused?",
+      "assistantResponseCount": 1,
+      "tags": [
+        "generated",
+        "paraphrase",
+        "follow-up-01-what-next"
+      ]
+    },
+    {
+      "id": "follow-up-01-what-next-v05",
+      "description": "follow-up-01-what-next paraphrase 5",
+      "expectedIntent": "follow_up",
+      "lastInterviewerTurn": "What happened immediately after you paged on-call?",
+      "preparedTranscript": "[ASSISTANT]: I paused the rollout and paged the on-call backend team.\n[INTERVIEWER]: What happened immediately after you paged on-call?",
+      "assistantResponseCount": 1,
+      "tags": [
+        "generated",
+        "paraphrase",
+        "follow-up-01-what-next"
+      ]
+    },
+    {
+      "id": "follow-up-01-what-next-v06",
+      "description": "follow-up-01-what-next paraphrase 6",
+      "expectedIntent": "follow_up",
+      "lastInterviewerTurn": "Then how did you proceed?",
+      "preparedTranscript": "[ASSISTANT]: I paused the rollout and paged the on-call backend team.\n[INTERVIEWER]: Then how did you proceed?",
+      "assistantResponseCount": 1,
+      "tags": [
+        "generated",
+        "paraphrase",
+        "follow-up-01-what-next"
+      ]
+    },
+    {
+      "id": "follow-up-01-what-next-v07",
+      "description": "follow-up-01-what-next paraphrase 7",
+      "expectedIntent": "follow_up",
+      "lastInterviewerTurn": "What was your next move after the pause?",
+      "preparedTranscript": "[ASSISTANT]: I paused the rollout and paged the on-call backend team.\n[INTERVIEWER]: What was your next move after the pause?",
+      "assistantResponseCount": 1,
+      "tags": [
+        "generated",
+        "paraphrase",
+        "follow-up-01-what-next"
+      ]
+    },
+    {
+      "id": "follow-up-01-what-next-v08",
+      "description": "follow-up-01-what-next paraphrase 8",
+      "expectedIntent": "follow_up",
+      "lastInterviewerTurn": "After pausing rollout, what did you do next?",
+      "preparedTranscript": "[ASSISTANT]: I paused the rollout and paged the on-call backend team.\n[INTERVIEWER]: After pausing rollout, what did you do next?",
+      "assistantResponseCount": 1,
+      "tags": [
+        "generated",
+        "paraphrase",
+        "follow-up-01-what-next"
+      ]
+    },
+    {
+      "id": "follow-up-01-what-next-v09",
+      "description": "follow-up-01-what-next paraphrase 9",
+      "expectedIntent": "follow_up",
+      "lastInterviewerTurn": "What happened after that step?",
+      "preparedTranscript": "[ASSISTANT]: I paused the rollout and paged the on-call backend team.\n[INTERVIEWER]: What happened after that step?",
+      "assistantResponseCount": 1,
+      "tags": [
+        "generated",
+        "paraphrase",
+        "follow-up-01-what-next"
+      ]
+    },
+    {
+      "id": "follow-up-01-what-next-v10",
+      "description": "follow-up-01-what-next paraphrase 10",
+      "expectedIntent": "follow_up",
+      "lastInterviewerTurn": "And then what happened?",
+      "preparedTranscript": "[ASSISTANT]: I paused the rollout and paged the on-call backend team.\n[INTERVIEWER]: And then what happened?",
+      "assistantResponseCount": 1,
+      "tags": [
+        "generated",
+        "paraphrase",
+        "follow-up-01-what-next"
+      ]
+    },
+    {
+      "id": "coding-03-lru-v01",
+      "description": "coding-03-lru paraphrase 1",
+      "expectedIntent": "coding",
+      "lastInterviewerTurn": "Design and code an LRU cache in TypeScript.",
+      "preparedTranscript": "[INTERVIEWER]: Design and code an LRU cache in TypeScript.",
+      "assistantResponseCount": 0,
+      "tags": [
+        "generated",
+        "paraphrase",
+        "coding-03-lru"
+      ]
+    },
+    {
+      "id": "coding-03-lru-v02",
+      "description": "coding-03-lru paraphrase 2",
+      "expectedIntent": "coding",
+      "lastInterviewerTurn": "Implement an LRU cache with O(1) operations in TypeScript.",
+      "preparedTranscript": "[INTERVIEWER]: Implement an LRU cache with O(1) operations in TypeScript.",
+      "assistantResponseCount": 0,
+      "tags": [
+        "generated",
+        "paraphrase",
+        "coding-03-lru"
+      ]
+    },
+    {
+      "id": "coding-03-lru-v03",
+      "description": "coding-03-lru paraphrase 3",
+      "expectedIntent": "coding",
+      "lastInterviewerTurn": "Write code for an LRU cache in TypeScript.",
+      "preparedTranscript": "[INTERVIEWER]: Write code for an LRU cache in TypeScript.",
+      "assistantResponseCount": 0,
+      "tags": [
+        "generated",
+        "paraphrase",
+        "coding-03-lru"
+      ]
+    },
+    {
+      "id": "coding-03-lru-v04",
+      "description": "coding-03-lru paraphrase 4",
+      "expectedIntent": "coding",
+      "lastInterviewerTurn": "Can you implement an LRU cache class in TypeScript?",
+      "preparedTranscript": "[INTERVIEWER]: Can you implement an LRU cache class in TypeScript?",
+      "assistantResponseCount": 0,
+      "tags": [
+        "generated",
+        "paraphrase",
+        "coding-03-lru"
+      ]
+    },
+    {
+      "id": "coding-03-lru-v05",
+      "description": "coding-03-lru paraphrase 5",
+      "expectedIntent": "coding",
+      "lastInterviewerTurn": "Build an LRU cache data structure in TypeScript.",
+      "preparedTranscript": "[INTERVIEWER]: Build an LRU cache data structure in TypeScript.",
+      "assistantResponseCount": 0,
+      "tags": [
+        "generated",
+        "paraphrase",
+        "coding-03-lru"
+      ]
+    },
+    {
+      "id": "coding-03-lru-v06",
+      "description": "coding-03-lru paraphrase 6",
+      "expectedIntent": "coding",
+      "lastInterviewerTurn": "Code an LRU cache with get/put in TypeScript.",
+      "preparedTranscript": "[INTERVIEWER]: Code an LRU cache with get/put in TypeScript.",
+      "assistantResponseCount": 0,
+      "tags": [
+        "generated",
+        "paraphrase",
+        "coding-03-lru"
+      ]
+    },
+    {
+      "id": "coding-03-lru-v07",
+      "description": "coding-03-lru paraphrase 7",
+      "expectedIntent": "coding",
+      "lastInterviewerTurn": "Implement LRU cache logic in TS with hash map + list.",
+      "preparedTranscript": "[INTERVIEWER]: Implement LRU cache logic in TS with hash map + list.",
+      "assistantResponseCount": 0,
+      "tags": [
+        "generated",
+        "paraphrase",
+        "coding-03-lru"
+      ]
+    },
+    {
+      "id": "coding-03-lru-v08",
+      "description": "coding-03-lru paraphrase 8",
+      "expectedIntent": "coding",
+      "lastInterviewerTurn": "Write a production-ready TypeScript LRU cache.",
+      "preparedTranscript": "[INTERVIEWER]: Write a production-ready TypeScript LRU cache.",
+      "assistantResponseCount": 0,
+      "tags": [
+        "generated",
+        "paraphrase",
+        "coding-03-lru"
+      ]
+    },
+    {
+      "id": "coding-03-lru-v09",
+      "description": "coding-03-lru paraphrase 9",
+      "expectedIntent": "coding",
+      "lastInterviewerTurn": "Implement least-recently-used cache behavior in TypeScript.",
+      "preparedTranscript": "[INTERVIEWER]: Implement least-recently-used cache behavior in TypeScript.",
+      "assistantResponseCount": 0,
+      "tags": [
+        "generated",
+        "paraphrase",
+        "coding-03-lru"
+      ]
+    },
+    {
+      "id": "coding-03-lru-v10",
+      "description": "coding-03-lru paraphrase 10",
+      "expectedIntent": "coding",
+      "lastInterviewerTurn": "Create a TypeScript LRU cache implementation.",
+      "preparedTranscript": "[INTERVIEWER]: Create a TypeScript LRU cache implementation.",
+      "assistantResponseCount": 0,
+      "tags": [
+        "generated",
+        "paraphrase",
+        "coding-03-lru"
+      ]
+    },
+    {
+      "id": "behavioral-01-conflict-v01",
+      "description": "behavioral-01-conflict paraphrase 1",
+      "expectedIntent": "behavioral",
+      "lastInterviewerTurn": "Tell me about a time you disagreed with your manager and how you resolved it.",
+      "preparedTranscript": "[INTERVIEWER]: Tell me about a time you disagreed with your manager and how you resolved it.",
+      "assistantResponseCount": 0,
+      "tags": [
+        "generated",
+        "paraphrase",
+        "behavioral-01-conflict"
+      ]
+    },
+    {
+      "id": "behavioral-01-conflict-v02",
+      "description": "behavioral-01-conflict paraphrase 2",
+      "expectedIntent": "behavioral",
+      "lastInterviewerTurn": "Describe a situation where you had conflict with your manager and what you did.",
+      "preparedTranscript": "[INTERVIEWER]: Describe a situation where you had conflict with your manager and what you did.",
+      "assistantResponseCount": 0,
+      "tags": [
+        "generated",
+        "paraphrase",
+        "behavioral-01-conflict"
+      ]
+    },
+    {
+      "id": "behavioral-01-conflict-v03",
+      "description": "behavioral-01-conflict paraphrase 3",
+      "expectedIntent": "behavioral",
+      "lastInterviewerTurn": "Walk me through a disagreement with your manager and your resolution.",
+      "preparedTranscript": "[INTERVIEWER]: Walk me through a disagreement with your manager and your resolution.",
+      "assistantResponseCount": 0,
+      "tags": [
+        "generated",
+        "paraphrase",
+        "behavioral-01-conflict"
+      ]
+    },
+    {
+      "id": "behavioral-01-conflict-v04",
+      "description": "behavioral-01-conflict paraphrase 4",
+      "expectedIntent": "behavioral",
+      "lastInterviewerTurn": "Can you share a time you and your manager disagreed and how it ended?",
+      "preparedTranscript": "[INTERVIEWER]: Can you share a time you and your manager disagreed and how it ended?",
+      "assistantResponseCount": 0,
+      "tags": [
+        "generated",
+        "paraphrase",
+        "behavioral-01-conflict"
+      ]
+    },
+    {
+      "id": "behavioral-01-conflict-v05",
+      "description": "behavioral-01-conflict paraphrase 5",
+      "expectedIntent": "behavioral",
+      "lastInterviewerTurn": "Tell me about a conflict with your manager and how you handled it.",
+      "preparedTranscript": "[INTERVIEWER]: Tell me about a conflict with your manager and how you handled it.",
+      "assistantResponseCount": 0,
+      "tags": [
+        "generated",
+        "paraphrase",
+        "behavioral-01-conflict"
+      ]
+    },
+    {
+      "id": "behavioral-01-conflict-v06",
+      "description": "behavioral-01-conflict paraphrase 6",
+      "expectedIntent": "behavioral",
+      "lastInterviewerTurn": "Describe a time you had to navigate disagreement with leadership.",
+      "preparedTranscript": "[INTERVIEWER]: Describe a time you had to navigate disagreement with leadership.",
+      "assistantResponseCount": 0,
+      "tags": [
+        "generated",
+        "paraphrase",
+        "behavioral-01-conflict"
+      ]
+    },
+    {
+      "id": "behavioral-01-conflict-v07",
+      "description": "behavioral-01-conflict paraphrase 7",
+      "expectedIntent": "behavioral",
+      "lastInterviewerTurn": "Give me an example of conflict with your manager and your approach.",
+      "preparedTranscript": "[INTERVIEWER]: Give me an example of conflict with your manager and your approach.",
+      "assistantResponseCount": 0,
+      "tags": [
+        "generated",
+        "paraphrase",
+        "behavioral-01-conflict"
+      ]
+    },
+    {
+      "id": "behavioral-01-conflict-v08",
+      "description": "behavioral-01-conflict paraphrase 8",
+      "expectedIntent": "behavioral",
+      "lastInterviewerTurn": "What is one time you disagreed with your manager and resolved it well?",
+      "preparedTranscript": "[INTERVIEWER]: What is one time you disagreed with your manager and resolved it well?",
+      "assistantResponseCount": 0,
+      "tags": [
+        "generated",
+        "paraphrase",
+        "behavioral-01-conflict"
+      ]
+    },
+    {
+      "id": "behavioral-01-conflict-v09",
+      "description": "behavioral-01-conflict paraphrase 9",
+      "expectedIntent": "behavioral",
+      "lastInterviewerTurn": "Share a story where you and your manager had conflicting views.",
+      "preparedTranscript": "[INTERVIEWER]: Share a story where you and your manager had conflicting views.",
+      "assistantResponseCount": 0,
+      "tags": [
+        "generated",
+        "paraphrase",
+        "behavioral-01-conflict"
+      ]
+    },
+    {
+      "id": "behavioral-01-conflict-v10",
+      "description": "behavioral-01-conflict paraphrase 10",
+      "expectedIntent": "behavioral",
+      "lastInterviewerTurn": "Tell me about a manager conflict and how you reached alignment.",
+      "preparedTranscript": "[INTERVIEWER]: Tell me about a manager conflict and how you reached alignment.",
+      "assistantResponseCount": 0,
+      "tags": [
+        "generated",
+        "paraphrase",
+        "behavioral-01-conflict"
+      ]
+    },
+    {
+      "id": "general-01-role-interest-v01",
+      "description": "general-01-role-interest paraphrase 1",
+      "expectedIntent": "general",
+      "lastInterviewerTurn": "What interests you most about this role?",
+      "preparedTranscript": "[INTERVIEWER]: What interests you most about this role?",
+      "assistantResponseCount": 0,
+      "tags": [
+        "generated",
+        "paraphrase",
+        "general-01-role-interest"
+      ]
+    },
+    {
+      "id": "general-01-role-interest-v02",
+      "description": "general-01-role-interest paraphrase 2",
+      "expectedIntent": "general",
+      "lastInterviewerTurn": "Why are you interested in this position?",
+      "preparedTranscript": "[INTERVIEWER]: Why are you interested in this position?",
+      "assistantResponseCount": 0,
+      "tags": [
+        "generated",
+        "paraphrase",
+        "general-01-role-interest"
+      ]
+    },
+    {
+      "id": "general-01-role-interest-v03",
+      "description": "general-01-role-interest paraphrase 3",
+      "expectedIntent": "general",
+      "lastInterviewerTurn": "What attracts you to this job?",
+      "preparedTranscript": "[INTERVIEWER]: What attracts you to this job?",
+      "assistantResponseCount": 0,
+      "tags": [
+        "generated",
+        "paraphrase",
+        "general-01-role-interest"
+      ]
+    },
+    {
+      "id": "general-01-role-interest-v04",
+      "description": "general-01-role-interest paraphrase 4",
+      "expectedIntent": "general",
+      "lastInterviewerTurn": "What excites you most about this opportunity?",
+      "preparedTranscript": "[INTERVIEWER]: What excites you most about this opportunity?",
+      "assistantResponseCount": 0,
+      "tags": [
+        "generated",
+        "paraphrase",
+        "general-01-role-interest"
+      ]
+    },
+    {
+      "id": "general-01-role-interest-v05",
+      "description": "general-01-role-interest paraphrase 5",
+      "expectedIntent": "general",
+      "lastInterviewerTurn": "Why do you want this role in particular?",
+      "preparedTranscript": "[INTERVIEWER]: Why do you want this role in particular?",
+      "assistantResponseCount": 0,
+      "tags": [
+        "generated",
+        "paraphrase",
+        "general-01-role-interest"
+      ]
+    },
+    {
+      "id": "general-01-role-interest-v06",
+      "description": "general-01-role-interest paraphrase 6",
+      "expectedIntent": "general",
+      "lastInterviewerTurn": "What part of this role appeals to you?",
+      "preparedTranscript": "[INTERVIEWER]: What part of this role appeals to you?",
+      "assistantResponseCount": 0,
+      "tags": [
+        "generated",
+        "paraphrase",
+        "general-01-role-interest"
+      ]
+    },
+    {
+      "id": "general-01-role-interest-v07",
+      "description": "general-01-role-interest paraphrase 7",
+      "expectedIntent": "general",
+      "lastInterviewerTurn": "What makes this position interesting to you?",
+      "preparedTranscript": "[INTERVIEWER]: What makes this position interesting to you?",
+      "assistantResponseCount": 0,
+      "tags": [
+        "generated",
+        "paraphrase",
+        "general-01-role-interest"
+      ]
+    },
+    {
+      "id": "general-01-role-interest-v08",
+      "description": "general-01-role-interest paraphrase 8",
+      "expectedIntent": "general",
+      "lastInterviewerTurn": "Why does this role feel like a fit for you?",
+      "preparedTranscript": "[INTERVIEWER]: Why does this role feel like a fit for you?",
+      "assistantResponseCount": 0,
+      "tags": [
+        "generated",
+        "paraphrase",
+        "general-01-role-interest"
+      ]
+    },
+    {
+      "id": "general-01-role-interest-v09",
+      "description": "general-01-role-interest paraphrase 9",
+      "expectedIntent": "general",
+      "lastInterviewerTurn": "What are you hoping to get from this role?",
+      "preparedTranscript": "[INTERVIEWER]: What are you hoping to get from this role?",
+      "assistantResponseCount": 0,
+      "tags": [
+        "generated",
+        "paraphrase",
+        "general-01-role-interest"
+      ]
+    },
+    {
+      "id": "general-01-role-interest-v10",
+      "description": "general-01-role-interest paraphrase 10",
+      "expectedIntent": "general",
+      "lastInterviewerTurn": "What drew you to this position?",
+      "preparedTranscript": "[INTERVIEWER]: What drew you to this position?",
+      "assistantResponseCount": 0,
+      "tags": [
+        "generated",
+        "paraphrase",
+        "general-01-role-interest"
+      ]
+    },
+    {
+      "id": "clarification-02-backpressure-v01",
+      "description": "clarification-02-backpressure paraphrase 1",
+      "expectedIntent": "clarification",
+      "lastInterviewerTurn": "Can you unpack what you meant by backpressure in your queue workers?",
+      "preparedTranscript": "[ASSISTANT]: We add explicit backpressure by slowing producers when queue lag spikes.\n[INTERVIEWER]: Can you unpack what you meant by backpressure in your queue workers?",
+      "assistantResponseCount": 1,
+      "tags": [
+        "generated",
+        "paraphrase",
+        "clarification-02-backpressure"
+      ]
+    },
+    {
+      "id": "clarification-02-backpressure-v02",
+      "description": "clarification-02-backpressure paraphrase 2",
+      "expectedIntent": "clarification",
+      "lastInterviewerTurn": "Can you clarify what backpressure means in your worker setup?",
+      "preparedTranscript": "[ASSISTANT]: We add explicit backpressure by slowing producers when queue lag spikes.\n[INTERVIEWER]: Can you clarify what backpressure means in your worker setup?",
+      "assistantResponseCount": 1,
+      "tags": [
+        "generated",
+        "paraphrase",
+        "clarification-02-backpressure"
+      ]
+    },
+    {
+      "id": "clarification-02-backpressure-v03",
+      "description": "clarification-02-backpressure paraphrase 3",
+      "expectedIntent": "clarification",
+      "lastInterviewerTurn": "What do you mean by backpressure there?",
+      "preparedTranscript": "[ASSISTANT]: We add explicit backpressure by slowing producers when queue lag spikes.\n[INTERVIEWER]: What do you mean by backpressure there?",
+      "assistantResponseCount": 1,
+      "tags": [
+        "generated",
+        "paraphrase",
+        "clarification-02-backpressure"
+      ]
+    },
+    {
+      "id": "clarification-02-backpressure-v04",
+      "description": "clarification-02-backpressure paraphrase 4",
+      "expectedIntent": "clarification",
+      "lastInterviewerTurn": "Could you explain your backpressure mechanism a bit more?",
+      "preparedTranscript": "[ASSISTANT]: We add explicit backpressure by slowing producers when queue lag spikes.\n[INTERVIEWER]: Could you explain your backpressure mechanism a bit more?",
+      "assistantResponseCount": 1,
+      "tags": [
+        "generated",
+        "paraphrase",
+        "clarification-02-backpressure"
+      ]
+    },
+    {
+      "id": "clarification-02-backpressure-v05",
+      "description": "clarification-02-backpressure paraphrase 5",
+      "expectedIntent": "clarification",
+      "lastInterviewerTurn": "Can you break down that backpressure point?",
+      "preparedTranscript": "[ASSISTANT]: We add explicit backpressure by slowing producers when queue lag spikes.\n[INTERVIEWER]: Can you break down that backpressure point?",
+      "assistantResponseCount": 1,
+      "tags": [
+        "generated",
+        "paraphrase",
+        "clarification-02-backpressure"
+      ]
+    },
+    {
+      "id": "clarification-02-backpressure-v06",
+      "description": "clarification-02-backpressure paraphrase 6",
+      "expectedIntent": "clarification",
+      "lastInterviewerTurn": "When you say backpressure, what behavior are you enforcing?",
+      "preparedTranscript": "[ASSISTANT]: We add explicit backpressure by slowing producers when queue lag spikes.\n[INTERVIEWER]: When you say backpressure, what behavior are you enforcing?",
+      "assistantResponseCount": 1,
+      "tags": [
+        "generated",
+        "paraphrase",
+        "clarification-02-backpressure"
+      ]
+    },
+    {
+      "id": "clarification-02-backpressure-v07",
+      "description": "clarification-02-backpressure paraphrase 7",
+      "expectedIntent": "clarification",
+      "lastInterviewerTurn": "Can you explain how your backpressure approach works?",
+      "preparedTranscript": "[ASSISTANT]: We add explicit backpressure by slowing producers when queue lag spikes.\n[INTERVIEWER]: Can you explain how your backpressure approach works?",
+      "assistantResponseCount": 1,
+      "tags": [
+        "generated",
+        "paraphrase",
+        "clarification-02-backpressure"
+      ]
+    },
+    {
+      "id": "clarification-02-backpressure-v08",
+      "description": "clarification-02-backpressure paraphrase 8",
+      "expectedIntent": "clarification",
+      "lastInterviewerTurn": "Could you clarify the backpressure logic in workers?",
+      "preparedTranscript": "[ASSISTANT]: We add explicit backpressure by slowing producers when queue lag spikes.\n[INTERVIEWER]: Could you clarify the backpressure logic in workers?",
+      "assistantResponseCount": 1,
+      "tags": [
+        "generated",
+        "paraphrase",
+        "clarification-02-backpressure"
+      ]
+    },
+    {
+      "id": "clarification-02-backpressure-v09",
+      "description": "clarification-02-backpressure paraphrase 9",
+      "expectedIntent": "clarification",
+      "lastInterviewerTurn": "What exactly is applying pressure in that design?",
+      "preparedTranscript": "[ASSISTANT]: We add explicit backpressure by slowing producers when queue lag spikes.\n[INTERVIEWER]: What exactly is applying pressure in that design?",
+      "assistantResponseCount": 1,
+      "tags": [
+        "generated",
+        "paraphrase",
+        "clarification-02-backpressure"
+      ]
+    },
+    {
+      "id": "clarification-02-backpressure-v10",
+      "description": "clarification-02-backpressure paraphrase 10",
+      "expectedIntent": "clarification",
+      "lastInterviewerTurn": "Can you unpack your queue backpressure statement?",
+      "preparedTranscript": "[ASSISTANT]: We add explicit backpressure by slowing producers when queue lag spikes.\n[INTERVIEWER]: Can you unpack your queue backpressure statement?",
+      "assistantResponseCount": 1,
+      "tags": [
+        "generated",
+        "paraphrase",
+        "clarification-02-backpressure"
+      ]
+    },
+    {
+      "id": "example-request-01-concrete-v01",
+      "description": "example-request-01-concrete paraphrase 1",
+      "expectedIntent": "example_request",
+      "lastInterviewerTurn": "Can you give me one concrete example of that?",
+      "preparedTranscript": "[ASSISTANT]: I usually start by instrumenting latency and queue lag first.\n[INTERVIEWER]: Can you give me one concrete example of that?",
+      "assistantResponseCount": 1,
+      "tags": [
+        "generated",
+        "paraphrase",
+        "example-request-01-concrete"
+      ]
+    },
+    {
+      "id": "example-request-01-concrete-v02",
+      "description": "example-request-01-concrete paraphrase 2",
+      "expectedIntent": "example_request",
+      "lastInterviewerTurn": "Can you share a specific example?",
+      "preparedTranscript": "[ASSISTANT]: I usually start by instrumenting latency and queue lag first.\n[INTERVIEWER]: Can you share a specific example?",
+      "assistantResponseCount": 1,
+      "tags": [
+        "generated",
+        "paraphrase",
+        "example-request-01-concrete"
+      ]
+    },
+    {
+      "id": "example-request-01-concrete-v03",
+      "description": "example-request-01-concrete paraphrase 3",
+      "expectedIntent": "example_request",
+      "lastInterviewerTurn": "Give me one real example of that approach.",
+      "preparedTranscript": "[ASSISTANT]: I usually start by instrumenting latency and queue lag first.\n[INTERVIEWER]: Give me one real example of that approach.",
+      "assistantResponseCount": 1,
+      "tags": [
+        "generated",
+        "paraphrase",
+        "example-request-01-concrete"
+      ]
+    },
+    {
+      "id": "example-request-01-concrete-v04",
+      "description": "example-request-01-concrete paraphrase 4",
+      "expectedIntent": "example_request",
+      "lastInterviewerTurn": "Could you provide one concrete instance?",
+      "preparedTranscript": "[ASSISTANT]: I usually start by instrumenting latency and queue lag first.\n[INTERVIEWER]: Could you provide one concrete instance?",
+      "assistantResponseCount": 1,
+      "tags": [
+        "generated",
+        "paraphrase",
+        "example-request-01-concrete"
+      ]
+    },
+    {
+      "id": "example-request-01-concrete-v05",
+      "description": "example-request-01-concrete paraphrase 5",
+      "expectedIntent": "example_request",
+      "lastInterviewerTurn": "What is one practical example of that?",
+      "preparedTranscript": "[ASSISTANT]: I usually start by instrumenting latency and queue lag first.\n[INTERVIEWER]: What is one practical example of that?",
+      "assistantResponseCount": 1,
+      "tags": [
+        "generated",
+        "paraphrase",
+        "example-request-01-concrete"
+      ]
+    },
+    {
+      "id": "example-request-01-concrete-v06",
+      "description": "example-request-01-concrete paraphrase 6",
+      "expectedIntent": "example_request",
+      "lastInterviewerTurn": "Can you show one specific case?",
+      "preparedTranscript": "[ASSISTANT]: I usually start by instrumenting latency and queue lag first.\n[INTERVIEWER]: Can you show one specific case?",
+      "assistantResponseCount": 1,
+      "tags": [
+        "generated",
+        "paraphrase",
+        "example-request-01-concrete"
+      ]
+    },
+    {
+      "id": "example-request-01-concrete-v07",
+      "description": "example-request-01-concrete paraphrase 7",
+      "expectedIntent": "example_request",
+      "lastInterviewerTurn": "Share one clear example of that strategy.",
+      "preparedTranscript": "[ASSISTANT]: I usually start by instrumenting latency and queue lag first.\n[INTERVIEWER]: Share one clear example of that strategy.",
+      "assistantResponseCount": 1,
+      "tags": [
+        "generated",
+        "paraphrase",
+        "example-request-01-concrete"
+      ]
+    },
+    {
+      "id": "example-request-01-concrete-v08",
+      "description": "example-request-01-concrete paraphrase 8",
+      "expectedIntent": "example_request",
+      "lastInterviewerTurn": "What is one concrete case where you did that?",
+      "preparedTranscript": "[ASSISTANT]: I usually start by instrumenting latency and queue lag first.\n[INTERVIEWER]: What is one concrete case where you did that?",
+      "assistantResponseCount": 1,
+      "tags": [
+        "generated",
+        "paraphrase",
+        "example-request-01-concrete"
+      ]
+    },
+    {
+      "id": "example-request-01-concrete-v09",
+      "description": "example-request-01-concrete paraphrase 9",
+      "expectedIntent": "example_request",
+      "lastInterviewerTurn": "Give one tangible example of this in action.",
+      "preparedTranscript": "[ASSISTANT]: I usually start by instrumenting latency and queue lag first.\n[INTERVIEWER]: Give one tangible example of this in action.",
+      "assistantResponseCount": 1,
+      "tags": [
+        "generated",
+        "paraphrase",
+        "example-request-01-concrete"
+      ]
+    },
+    {
+      "id": "example-request-01-concrete-v10",
+      "description": "example-request-01-concrete paraphrase 10",
+      "expectedIntent": "example_request",
+      "lastInterviewerTurn": "Can you provide a specific instance?",
+      "preparedTranscript": "[ASSISTANT]: I usually start by instrumenting latency and queue lag first.\n[INTERVIEWER]: Can you provide a specific instance?",
+      "assistantResponseCount": 1,
+      "tags": [
+        "generated",
+        "paraphrase",
+        "example-request-01-concrete"
+      ]
+    }
+  ]
+}

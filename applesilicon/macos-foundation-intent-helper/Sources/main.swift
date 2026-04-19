@@ -143,6 +143,37 @@ private struct IntentFamilyEnvelope {
     var confidence: Double
 }
 
+@available(macOS 26.0, *)
+@Generable(description: "Pairwise disambiguation between deep_dive and clarification.")
+private struct DeepDiveClarificationEnvelope: IntentLabelEnvelope {
+    @Guide(description: "Intent label for deep-dive versus clarification disambiguation.", .anyOf([
+        "deep_dive",
+        "clarification"
+    ]))
+    var intent: String
+
+    @Guide(description: "Confidence from 0 to 1.")
+    var confidence: Double
+}
+
+@available(macOS 26.0, *)
+@Generable(description: "Pairwise disambiguation between example_request and deep_dive.")
+private struct ExampleRequestDeepDiveEnvelope: IntentLabelEnvelope {
+    @Guide(description: "Intent label for example-request versus deep-dive disambiguation.", .anyOf([
+        "example_request",
+        "deep_dive"
+    ]))
+    var intent: String
+
+    @Guide(description: "Confidence from 0 to 1.")
+    var confidence: Double
+}
+
+private enum PairwiseIntentTrack {
+    case deepDiveClarification
+    case exampleRequestDeepDive
+}
+
 private enum IntentProfile {
     case behavioral
     case coding
@@ -314,6 +345,191 @@ private func normalizeQuestion(_ question: String) -> String {
     question
         .lowercased()
         .replacingOccurrences(of: "[^a-z0-9\\s]", with: " ", options: .regularExpression)
+        .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+}
+
+private let codingCuePhrases = [
+    "implement",
+    "write code",
+    "debug",
+    "algorithm",
+    "lru",
+    "typescript",
+    "javascript",
+    "api payload",
+    "handler code",
+    "function",
+    "refactor",
+    "snippet"
+]
+
+private let deepDiveCuePhrases = [
+    "tradeoff",
+    "trade off",
+    "why would you choose",
+    "why choose",
+    "why not",
+    "compare",
+    "consistency",
+    "availability",
+    "latency",
+    "freshness",
+    "throughput"
+]
+
+private let clarificationCuePhrases = [
+    "clarify",
+    "what do you mean",
+    "can you explain",
+    "unpack",
+    "break down",
+    "when you say",
+    "when you said",
+    "what behavior should i expect",
+    "what behavior should we expect",
+    "what should i expect",
+    "what exactly do you mean",
+    "what exactly is"
+]
+
+private let followUpCuePhrases = [
+    "what happened next",
+    "then what",
+    "after that",
+    "what did you do next",
+    "what was your next step",
+    "what was your next move"
+]
+
+private let summaryProbeCuePhrases = [
+    "so you are saying",
+    "so you re saying",
+    "let me make sure",
+    "to summarize",
+    "so to summarize",
+    "if i understood correctly",
+    "correct me if i am wrong",
+    "correct me if i m wrong",
+    "am i right",
+    "just to confirm",
+    "do i have this right",
+    "to confirm"
+]
+
+private let exampleRequestCuePhrases = [
+    "concrete example",
+    "specific example",
+    "for example",
+    "for instance",
+    "scenario where",
+    "one scenario",
+    "specific instance",
+    "concrete instance",
+    "concrete case",
+    "specific case",
+    "tangible example",
+    "clear example",
+    "real example",
+    "practical example",
+    "real incident",
+    "one concrete",
+    "one specific"
+]
+
+private func containsAnyPhrase(_ normalizedQuestion: String, phrases: [String]) -> Bool {
+    phrases.contains { normalizedQuestion.contains($0) }
+}
+
+private func hasCodingCue(_ normalizedQuestion: String) -> Bool {
+    containsAnyPhrase(normalizedQuestion, phrases: codingCuePhrases)
+}
+
+private func hasDeepDiveCue(_ normalizedQuestion: String) -> Bool {
+    containsAnyPhrase(normalizedQuestion, phrases: deepDiveCuePhrases)
+}
+
+private func hasClarificationCue(_ normalizedQuestion: String) -> Bool {
+    containsAnyPhrase(normalizedQuestion, phrases: clarificationCuePhrases)
+}
+
+private func hasFollowUpCue(_ normalizedQuestion: String) -> Bool {
+    containsAnyPhrase(normalizedQuestion, phrases: followUpCuePhrases)
+}
+
+private func hasSummaryProbeCue(_ normalizedQuestion: String) -> Bool {
+    containsAnyPhrase(normalizedQuestion, phrases: summaryProbeCuePhrases)
+}
+
+private func hasExampleRequestCue(_ normalizedQuestion: String) -> Bool {
+    containsAnyPhrase(normalizedQuestion, phrases: exampleRequestCuePhrases)
+}
+
+private func boundedConfidence(_ value: Double) -> Double {
+    max(0.0, min(1.0, value))
+}
+
+private func reconcileIntentWithCues(request: IntentRequest, modelResult: IntentEnvelope) -> IntentEnvelope {
+    let lowered = normalizeQuestion(request.question)
+    let hasCoding = hasCodingCue(lowered)
+    let hasDeepDive = hasDeepDiveCue(lowered)
+    let hasClarification = hasClarificationCue(lowered)
+    let hasFollowUp = hasFollowUpCue(lowered)
+    let hasSummary = hasSummaryProbeCue(lowered)
+    let hasExample = hasExampleRequestCue(lowered)
+    let noPriorContext = request.assistantResponseCount == 0
+
+    var intent = modelResult.intent
+    var confidence = boundedConfidence(modelResult.confidence)
+
+    if intent == "follow_up" {
+        if hasSummary && !hasFollowUp {
+            intent = "summary_probe"
+            confidence = max(confidence, 0.64)
+        } else if hasClarification && !hasFollowUp {
+            intent = "clarification"
+            confidence = max(confidence, 0.63)
+        } else if hasExample && !hasFollowUp {
+            intent = "example_request"
+            confidence = max(confidence, 0.63)
+        } else if noPriorContext && hasDeepDive {
+            intent = "deep_dive"
+            confidence = max(confidence, 0.63)
+        }
+    }
+
+    if intent == "general" {
+        if hasSummary {
+            intent = "summary_probe"
+            confidence = max(confidence, 0.6)
+        } else if hasClarification {
+            intent = "clarification"
+            confidence = max(confidence, 0.6)
+        } else if hasExample && !hasCoding {
+            intent = "example_request"
+            confidence = max(confidence, 0.6)
+        } else if hasDeepDive && !hasCoding {
+            intent = "deep_dive"
+            confidence = max(confidence, 0.6)
+        }
+    }
+
+    if intent == "coding" && hasDeepDive && !hasCoding {
+        intent = "deep_dive"
+        confidence = max(confidence, 0.62)
+    }
+
+    if intent == "deep_dive" && hasExample && !hasCoding {
+        intent = "example_request"
+        confidence = min(max(confidence, 0.6), 0.82)
+    }
+
+    if intent == "deep_dive" && hasClarification && !hasDeepDive {
+        intent = "clarification"
+        confidence = min(max(confidence, 0.6), 0.82)
+    }
+
+    return IntentEnvelope(intent: intent, confidence: boundedConfidence(confidence))
 }
 
 private func inferHeuristicProfile(question: String, assistantResponseCount: Int) -> IntentProfile {
@@ -331,41 +547,15 @@ private func inferHeuristicProfile(question: String, assistantResponseCount: Int
         return .behavioral
     }
 
-    let codingCue = lowered.contains("implement")
-        || lowered.contains("write code")
-        || lowered.contains("debug")
-        || lowered.contains("algorithm")
-        || lowered.contains("lru")
-        || lowered.contains("typescript")
-        || lowered.contains("api payload")
-        || lowered.contains("handler code")
-
-    if codingCue {
+    if hasCodingCue(lowered) {
         return .coding
     }
 
-    let deepDiveCue = lowered.contains("tradeoff")
-        || lowered.contains("trade off")
-        || lowered.contains("why would you choose")
-        || lowered.contains("why choose")
-        || lowered.contains("why not")
-        || lowered.contains("compare")
-        || lowered.contains("consistency")
-        || lowered.contains("availability")
-
-    if deepDiveCue {
-        return .coding
-    }
-
-    let contextualCue = lowered.contains("what happened next")
-        || lowered.contains("then what")
-        || lowered.contains("after that")
-        || lowered.contains("clarify")
-        || lowered.contains("what do you mean")
-        || lowered.contains("unpack")
-        || lowered.contains("so you are saying")
-        || lowered.contains("let me make sure")
-        || lowered.contains("to summarize")
+    let contextualCue = hasFollowUpCue(lowered)
+        || hasClarificationCue(lowered)
+        || hasSummaryProbeCue(lowered)
+        || hasExampleRequestCue(lowered)
+        || hasDeepDiveCue(lowered)
 
     if contextualCue || assistantResponseCount > 0 {
         return .contextual
@@ -380,42 +570,30 @@ private func inferLikelyIntent(question: String, assistantResponseCount: Int) ->
         return nil
     }
 
-    if lowered.contains("implement")
-        || lowered.contains("write code")
-        || lowered.contains("debug")
-        || lowered.contains("algorithm")
-        || lowered.contains("lru")
-        || lowered.contains("typescript")
-        || lowered.contains("javascript")
-        || lowered.contains("handler code") {
+    let hasCoding = hasCodingCue(lowered)
+    let hasSummary = hasSummaryProbeCue(lowered)
+    let hasFollowUp = hasFollowUpCue(lowered)
+    let hasClarification = hasClarificationCue(lowered)
+    let hasExample = hasExampleRequestCue(lowered)
+    let hasDeepDive = hasDeepDiveCue(lowered)
+
+    if hasCoding && !hasClarification && !hasSummary {
         return "coding"
     }
 
-    if lowered.contains("so you are saying")
-        || lowered.contains("so you re saying")
-        || lowered.contains("let me make sure")
-        || lowered.contains("to summarize")
-        || lowered.contains("so to summarize") {
+    if hasSummary {
         return "summary_probe"
     }
 
-    if lowered.contains("what happened next")
-        || lowered.contains("then what")
-        || lowered.contains("after that") {
+    if hasFollowUp {
         return "follow_up"
     }
 
-    if lowered.contains("clarify")
-        || lowered.contains("what do you mean")
-        || lowered.contains("unpack")
-        || lowered.contains("can you explain") {
+    if hasClarification {
         return "clarification"
     }
 
-    if lowered.contains("concrete example")
-        || lowered.contains("specific example")
-        || lowered.contains("for example")
-        || lowered.contains("for instance") {
+    if hasExample {
         return "example_request"
     }
 
@@ -430,14 +608,7 @@ private func inferLikelyIntent(question: String, assistantResponseCount: Int) ->
         return "behavioral"
     }
 
-    if lowered.contains("tradeoff")
-        || lowered.contains("trade off")
-        || lowered.contains("why would you choose")
-        || lowered.contains("why choose")
-        || lowered.contains("why not")
-        || lowered.contains("compare")
-        || lowered.contains("consistency")
-        || lowered.contains("availability") {
+    if hasDeepDive {
         return "deep_dive"
     }
 
@@ -454,8 +625,14 @@ private func calibrateConfidence(
     baseConfidence: Double
 ) -> Double {
     let lowered = normalizeQuestion(request.question)
-    var confidence = max(0.0, min(1.0, baseConfidence))
+    var confidence = boundedConfidence(baseConfidence)
     let likelyIntent = inferLikelyIntent(question: request.question, assistantResponseCount: request.assistantResponseCount)
+    let hasCoding = hasCodingCue(lowered)
+    let hasDeepDive = hasDeepDiveCue(lowered)
+    let hasClarification = hasClarificationCue(lowered)
+    let hasFollowUp = hasFollowUpCue(lowered)
+    let hasSummary = hasSummaryProbeCue(lowered)
+    let hasExample = hasExampleRequestCue(lowered)
 
     if let likelyIntent, likelyIntent != predictedIntent {
         confidence = min(confidence, 0.58)
@@ -465,28 +642,48 @@ private func calibrateConfidence(
         confidence = min(confidence, 0.45)
     }
 
+    if predictedIntent == "follow_up" {
+        if hasSummary || hasExample || hasClarification {
+            confidence = min(confidence, 0.52)
+        }
+    }
+
+    if predictedIntent == "deep_dive" {
+        if hasClarification && !hasDeepDive {
+            confidence = min(confidence, 0.52)
+        }
+    }
+
+    if predictedIntent == "coding" {
+        if hasDeepDive && !hasCoding {
+            confidence = min(confidence, 0.55)
+        }
+    }
+
     if predictedIntent == "behavioral" {
-        let hasContextualCue = lowered.contains("what happened next")
-            || lowered.contains("then what")
-            || lowered.contains("after that")
-            || lowered.contains("so you are saying")
-            || lowered.contains("let me make sure")
-            || lowered.contains("to summarize")
-            || lowered.contains("clarify")
-            || lowered.contains("what do you mean")
+        let hasContextualCue = hasFollowUp
+            || hasSummary
+            || hasClarification
+            || hasDeepDive
         if hasContextualCue {
             confidence = min(confidence, 0.5)
         }
     }
 
+    if predictedIntent == "example_request" {
+        if !hasExample && hasDeepDive {
+            confidence = min(confidence, 0.56)
+        }
+    }
+
     if predictedIntent == "general" {
-        let hasStrongCue = inferLikelyIntent(question: request.question, assistantResponseCount: request.assistantResponseCount) != nil
+        let hasStrongCue = likelyIntent != nil
         if hasStrongCue {
             confidence = min(confidence, 0.55)
         }
     }
 
-    return max(0.0, min(1.0, confidence))
+    return boundedConfidence(confidence)
 }
 
 @available(macOS 26.0, *)
@@ -609,6 +806,173 @@ private func classifyIntentFamily(
 }
 
 @available(macOS 26.0, *)
+private func shouldRunPairwiseTrack(for request: IntentRequest, track: PairwiseIntentTrack) -> Bool {
+    let lowered = normalizeQuestion(request.question)
+    switch track {
+    case .deepDiveClarification:
+        return hasClarificationCue(lowered)
+            || hasDeepDiveCue(lowered)
+    case .exampleRequestDeepDive:
+        return hasExampleRequestCue(lowered)
+            || hasDeepDiveCue(lowered)
+    }
+}
+
+private func trackContainsIntent(_ track: PairwiseIntentTrack, intent: String) -> Bool {
+    switch track {
+    case .deepDiveClarification:
+        return intent == "deep_dive" || intent == "clarification"
+    case .exampleRequestDeepDive:
+        return intent == "example_request" || intent == "deep_dive"
+    }
+}
+
+private func shouldApplyPairwiseOverride(
+    baseResult: IntentEnvelope,
+    candidate: IntentEnvelope,
+    likelyIntent: String?
+) -> Bool {
+    let baseConfidence = boundedConfidence(baseResult.confidence)
+    let candidateConfidence = boundedConfidence(candidate.confidence)
+
+    if candidateConfidence < 0.62 {
+        return false
+    }
+
+    if candidate.intent == baseResult.intent {
+        return candidateConfidence > baseConfidence + 0.03
+    }
+
+    if let likelyIntent, candidate.intent == likelyIntent {
+        return candidateConfidence >= 0.6
+    }
+
+    return candidateConfidence >= baseConfidence + 0.07
+}
+
+@available(macOS 26.0, *)
+private func buildPairwisePrompt(_ request: IntentRequest, track: PairwiseIntentTrack) -> Prompt {
+    let recentDialogue = request.preparedTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
+
+    switch track {
+    case .deepDiveClarification:
+        return Prompt("""
+        Choose one label only: deep_dive or clarification.
+
+        deep_dive: asks for reasoning, tradeoffs, or deeper explanation of architecture/technical decisions.
+        clarification: asks to clarify wording or meaning of something already said.
+
+        If question asks "what do you mean" or "clarify", prefer clarification unless the main ask is explicit tradeoff reasoning.
+        If question asks tradeoffs between technical factors, prefer deep_dive.
+
+        Current interviewer turn:
+        \(request.question)
+
+        Recent dialogue:
+        \(recentDialogue.isEmpty ? "[none]" : recentDialogue)
+        """)
+    case .exampleRequestDeepDive:
+        return Prompt("""
+        Choose one label only: example_request or deep_dive.
+
+        example_request: asks for one concrete instance, scenario, or real example.
+        deep_dive: asks for explanation or reasoning about tradeoffs in general.
+
+        If wording asks for one specific/concrete instance, prefer example_request even when tradeoff words are present.
+
+        Current interviewer turn:
+        \(request.question)
+
+        Recent dialogue:
+        \(recentDialogue.isEmpty ? "[none]" : recentDialogue)
+        """)
+    }
+}
+
+@available(macOS 26.0, *)
+private func runPairwiseTrack(
+    request: IntentRequest,
+    session: LanguageModelSession,
+    track: PairwiseIntentTrack
+) async throws -> IntentEnvelope {
+    switch track {
+    case .deepDiveClarification:
+        let response = try await session.respond(
+            generating: DeepDiveClarificationEnvelope.self,
+            includeSchemaInPrompt: true,
+            options: GenerationOptions(temperature: 0),
+            prompt: {
+                buildPairwisePrompt(request, track: track)
+            }
+        )
+        return IntentEnvelope(intent: response.content.intent, confidence: response.content.confidence)
+    case .exampleRequestDeepDive:
+        let response = try await session.respond(
+            generating: ExampleRequestDeepDiveEnvelope.self,
+            includeSchemaInPrompt: true,
+            options: GenerationOptions(temperature: 0),
+            prompt: {
+                buildPairwisePrompt(request, track: track)
+            }
+        )
+        return IntentEnvelope(intent: response.content.intent, confidence: response.content.confidence)
+    }
+}
+
+@available(macOS 26.0, *)
+private func runPairwiseDisambiguation(
+    request: IntentRequest,
+    session: LanguageModelSession,
+    baseResult: IntentEnvelope
+) async throws -> IntentEnvelope {
+    var resolved = baseResult
+    let likelyIntent = inferLikelyIntent(question: request.question, assistantResponseCount: request.assistantResponseCount)
+    let lowConfidence = boundedConfidence(baseResult.confidence) <= 0.72
+
+    var tracks: [PairwiseIntentTrack] = []
+    switch likelyIntent {
+    case "example_request":
+        tracks = [.exampleRequestDeepDive]
+    case "clarification":
+        tracks = [.deepDiveClarification]
+    case "deep_dive":
+        tracks = [.deepDiveClarification, .exampleRequestDeepDive]
+    default:
+        if lowConfidence {
+            tracks = [.deepDiveClarification, .exampleRequestDeepDive]
+        }
+    }
+
+    if tracks.isEmpty {
+        return resolved
+    }
+
+    for track in tracks {
+        let isTrackRelevant = lowConfidence
+            || trackContainsIntent(track, intent: resolved.intent)
+            || (likelyIntent.map { trackContainsIntent(track, intent: $0) } ?? false)
+        if !isTrackRelevant {
+            continue
+        }
+
+        if !shouldRunPairwiseTrack(for: request, track: track) {
+            continue
+        }
+
+        let candidate = try await runPairwiseTrack(request: request, session: session, track: track)
+        if shouldApplyPairwiseOverride(baseResult: resolved, candidate: candidate, likelyIntent: likelyIntent) {
+            resolved = candidate
+        }
+
+        if boundedConfidence(resolved.confidence) >= 0.74 {
+            break
+        }
+    }
+
+    return resolved
+}
+
+@available(macOS 26.0, *)
 private func classifyIntent(_ request: IntentRequest) async throws -> IntentEnvelope {
     let model = SystemLanguageModel(useCase: .general)
     try ensureModelAvailable(model)
@@ -646,33 +1010,41 @@ private func classifyIntent(_ request: IntentRequest) async throws -> IntentEnve
 
     switch selectedProfile {
     case .behavioral:
-        return try await classifyProfile(
+        let base = try await classifyProfile(
             request: request,
             session: session,
             envelope: BehavioralIntentEnvelope.self,
             profile: selectedProfile
         )
+        let pairwise = try await runPairwiseDisambiguation(request: request, session: session, baseResult: base)
+        return reconcileIntentWithCues(request: request, modelResult: pairwise)
     case .coding:
-        return try await classifyProfile(
+        let base = try await classifyProfile(
             request: request,
             session: session,
             envelope: CodingIntentEnvelope.self,
             profile: selectedProfile
         )
+        let pairwise = try await runPairwiseDisambiguation(request: request, session: session, baseResult: base)
+        return reconcileIntentWithCues(request: request, modelResult: pairwise)
     case .contextual:
-        return try await classifyProfile(
+        let base = try await classifyProfile(
             request: request,
             session: session,
             envelope: ContextualIntentEnvelope.self,
             profile: selectedProfile
         )
+        let pairwise = try await runPairwiseDisambiguation(request: request, session: session, baseResult: base)
+        return reconcileIntentWithCues(request: request, modelResult: pairwise)
     case .general:
-        return try await classifyProfile(
+        let base = try await classifyProfile(
             request: request,
             session: session,
             envelope: GeneralIntentEnvelope.self,
             profile: selectedProfile
         )
+        let pairwise = try await runPairwiseDisambiguation(request: request, session: session, baseResult: base)
+        return reconcileIntentWithCues(request: request, modelResult: pairwise)
     }
 }
 
