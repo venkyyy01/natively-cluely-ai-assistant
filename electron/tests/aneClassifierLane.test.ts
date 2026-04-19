@@ -244,6 +244,7 @@ test('ConsciousAccelerationOrchestrator deduplicates concurrent intent prefetche
 });
 
 test('ConsciousAccelerationOrchestrator suppresses stale speculative previews and finalized answers after revision changes', async () => {
+  let aborted = false;
   const orchestrator = new ConsciousAccelerationOrchestrator({
     budgetScheduler: { shouldAdmitSpeculation: () => true },
     intentClassifier: async () => ({
@@ -253,10 +254,16 @@ test('ConsciousAccelerationOrchestrator suppresses stale speculative previews an
     }),
   });
   orchestrator.setEnabled(true);
-  orchestrator.setSpeculativeExecutor(async function* () {
+  orchestrator.setSpeculativeExecutor(async function* (_query, _revision, abortSignal) {
+    abortSignal.addEventListener('abort', () => {
+      aborted = true;
+    }, { once: true });
     await new Promise((resolve) => setTimeout(resolve, 20));
     yield 'partial ';
     await new Promise((resolve) => setTimeout(resolve, 20));
+    if (abortSignal.aborted) {
+      return;
+    }
     yield 'response';
   });
 
@@ -279,4 +286,5 @@ test('ConsciousAccelerationOrchestrator suppresses stale speculative previews an
 
   assert.equal(await previewPromise, null);
   assert.equal(await finalizePromise, null);
+  assert.equal(aborted, true);
 });

@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { ConsciousOrchestrator } from '../conscious/ConsciousOrchestrator';
+import { ConsciousVerifier } from '../conscious/ConsciousVerifier';
 import type { ConsciousModeStructuredResponse, ReasoningThread } from '../ConsciousMode';
 import type { AnswerHypothesis } from '../conscious/AnswerHypothesisStore';
 import type { QuestionReaction } from '../conscious/QuestionReactionClassifier';
@@ -184,4 +185,54 @@ test('ConsciousOrchestrator.prepareRoute promotes strong deep-dive prefetched in
   assert.equal(prepared.preRouteDecision.qualifies, true);
   assert.equal(prepared.preRouteDecision.threadAction, 'start');
   assert.equal(prepared.selectedRoute, 'conscious_answer');
+});
+
+test('ConsciousOrchestrator opens a circuit breaker after repeated conscious verification failures', async () => {
+  const { session } = createSession({ latestReaction: null, activeThread: null });
+  const failingVerifier = new ConsciousOrchestrator(
+    session as any,
+    new ConsciousVerifier({
+      judge: async (): Promise<{ ok: false; reason: string }> => ({ ok: false, reason: 'forced_reject' }),
+    } as any),
+  );
+
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const result = await failingVerifier.executeReasoningFirst({
+      route: { qualifies: true, threadAction: 'start' },
+      question: 'How would you design a rate limiter?',
+      preparedTranscript: 'QUESTION_MODE: system_design',
+      temporalContext: {
+        recentTranscript: 'How would you design a rate limiter?',
+        previousResponses: [],
+        roleContext: 'responding_to_interviewer',
+        toneSignals: [],
+        hasRecentResponses: false,
+      },
+      intentResult: {
+        intent: 'deep_dive',
+        confidence: 0.95,
+        answerShape: 'Explain the tradeoffs.',
+      },
+      whatToAnswerLLM: {
+        generateReasoningFirst: async () => response,
+      } as any,
+      answerLLM: null,
+    });
+
+    assert.equal(result.kind, 'fallback');
+  }
+
+  const prepared = failingVerifier.prepareRoute({
+    question: 'What tradeoffs matter most here?',
+    knowledgeStatus: null,
+    screenshotBackedLiveCodingTurn: false,
+    prefetchedIntent: {
+      intent: 'deep_dive',
+      confidence: 0.95,
+      answerShape: 'Explain the tradeoffs.',
+    },
+  });
+
+  assert.notEqual(prepared.selectedRoute, 'conscious_answer');
+  assert.notEqual(prepared.effectiveRoute, 'conscious_answer');
 });

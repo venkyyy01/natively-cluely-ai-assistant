@@ -189,16 +189,20 @@ export class IntelligenceEngine extends EventEmitter {
 
   attachAccelerationManager(accelerationManager: AccelerationManager | null): void {
     const consciousAcceleration = accelerationManager?.getConsciousOrchestrator();
-    consciousAcceleration?.setSpeculativeExecutor((query, transcriptRevision) =>
-      this.generateSpeculativeFastAnswerStream(query, transcriptRevision)
+    consciousAcceleration?.setSpeculativeExecutor((query, transcriptRevision, abortSignal) =>
+      this.generateSpeculativeFastAnswerStream(query, transcriptRevision, abortSignal)
     );
     consciousAcceleration?.setIntentClassifier((query: string, _transcriptRevision: number) =>
       this.classifyIntentForRoute(query, this.buildFastStandardTranscriptContext(query, this.session.getLastAssistantMessage()), this.session.getAssistantResponseHistory().length)
     );
   }
 
-  private async *generateSpeculativeFastAnswerStream(question: string, transcriptRevision: number): AsyncIterableIterator<string> {
+  private async *generateSpeculativeFastAnswerStream(question: string, transcriptRevision: number, abortSignal: AbortSignal): AsyncIterableIterator<string> {
     if (this.stealthContainmentActive) {
+      return;
+    }
+
+    if (abortSignal.aborted) {
       return;
     }
 
@@ -217,6 +221,9 @@ export class IntelligenceEngine extends EventEmitter {
       ? await accelerationManager.getEnhancedCache().get(cacheKey) as string | undefined
       : undefined;
     if (cached) {
+      if (abortSignal.aborted) {
+        return;
+      }
       yield cached;
       return;
     }
@@ -230,11 +237,19 @@ export class IntelligenceEngine extends EventEmitter {
     const stream = this.whatToAnswerLLM.generateStream(preparedTranscript, undefined, undefined, undefined, {
       fastPath: true,
       latestQuestion: normalizedQuestion,
+      abortSignal,
     });
 
     for await (const token of stream) {
+      if (abortSignal.aborted) {
+        return;
+      }
       fullAnswer += token;
       yield token;
+    }
+
+    if (abortSignal.aborted) {
+      return;
     }
 
     if (this.session.getTranscriptRevision() !== transcriptRevision) {

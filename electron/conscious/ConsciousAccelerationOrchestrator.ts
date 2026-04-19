@@ -16,6 +16,7 @@ interface SpeculativeAnswerEntry {
   transcriptRevision: number;
   generation: number;
   startedAt: number;
+  abortController: AbortController;
   embedding: number[];
   chunks: string[];
   partialText: string;
@@ -26,7 +27,7 @@ interface SpeculativeAnswerEntry {
   result?: string | null;
 }
 
-export type SpeculativeExecutor = (query: string, transcriptRevision: number) => AsyncIterableIterator<string>;
+export type SpeculativeExecutor = (query: string, transcriptRevision: number, abortSignal: AbortSignal) => AsyncIterableIterator<string>;
 
 export interface SpeculativeAnswerPreview {
   key: string;
@@ -400,12 +401,14 @@ export class ConsciousAccelerationOrchestrator {
       }
 
       let resolveFirstChunk = () => {};
+      const abortController = new AbortController();
       const entry: SpeculativeAnswerEntry = {
         key,
         query: candidate.query,
         transcriptRevision: candidate.transcriptRevision,
         generation,
         startedAt: Date.now(),
+        abortController,
         embedding: candidate.embedding,
         chunks: [],
         partialText: '',
@@ -419,9 +422,10 @@ export class ConsciousAccelerationOrchestrator {
 
       entry.completionPromise = (async (): Promise<string | null> => {
         try {
-          const stream = this.speculativeExecutor!(candidate.query, candidate.transcriptRevision);
+          const stream = this.speculativeExecutor!(candidate.query, candidate.transcriptRevision, abortController.signal);
           for await (const chunk of stream) {
             if (generation !== this.speculativeGeneration || candidate.transcriptRevision !== this.latestTranscriptRevision) {
+              abortController.abort(new Error('speculation_stale'));
               entry.result = null;
               entry.completed = true;
               entry.resolveFirstChunk();
@@ -441,7 +445,9 @@ export class ConsciousAccelerationOrchestrator {
           entry.resolveFirstChunk();
           return entry.result;
         } catch (error: unknown) {
-          console.warn('[ConsciousAccelerationOrchestrator] Speculative answer generation failed:', error);
+          if (!abortController.signal.aborted) {
+            console.warn('[ConsciousAccelerationOrchestrator] Speculative answer generation failed:', error);
+          }
           entry.completed = true;
           entry.result = null;
           entry.resolveFirstChunk();
@@ -512,6 +518,7 @@ export class ConsciousAccelerationOrchestrator {
     }
 
     if (this.isSpeculativeEntryStale(entry, transcriptRevision)) {
+      entry.abortController.abort(new Error('speculation_stale'));
       this.speculativeAnswerEntries.delete(entry.key);
       return null;
     }
@@ -537,6 +544,7 @@ export class ConsciousAccelerationOrchestrator {
     }
 
     if (this.isSpeculativeEntryStale(entry)) {
+      entry.abortController.abort(new Error('speculation_stale'));
       this.speculativeAnswerEntries.delete(key);
       return null;
     }
@@ -549,10 +557,13 @@ export class ConsciousAccelerationOrchestrator {
       ]);
       if (result !== timeoutSentinel) {
         entry.result = result as string | null;
+      } else {
+        entry.abortController.abort(new Error('speculation_finalize_timeout'));
       }
     }
 
     if (this.isSpeculativeEntryStale(entry)) {
+      entry.abortController.abort(new Error('speculation_stale'));
       this.speculativeAnswerEntries.delete(key);
       return null;
     }
@@ -575,6 +586,9 @@ export class ConsciousAccelerationOrchestrator {
     }
 
     this.speculativeGeneration += 1;
+    for (const entry of this.speculativeAnswerEntries.values()) {
+      entry.abortController.abort(new Error('speculation_invalidated'));
+    }
     this.speculativeAnswerEntries.clear();
     this.prefetchedIntents.clear();
     this.prefetchedIntentInflight.clear();

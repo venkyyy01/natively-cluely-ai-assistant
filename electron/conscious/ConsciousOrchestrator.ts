@@ -59,16 +59,47 @@ export type ConsciousExecutionResult =
   | { kind: 'handled'; structuredResponse: ConsciousModeStructuredResponse; fullAnswer: string };
 
 export class ConsciousOrchestrator {
+  private static readonly CIRCUIT_BREAKER_FAILURE_THRESHOLD = 3;
+  private static readonly CIRCUIT_BREAKER_COOLDOWN_MS = 60_000;
+
   private readonly verifier = new ConsciousVerifier();
   private readonly retrievalOrchestrator: ConsciousRetrievalOrchestrator;
   private readonly answerPlanner = new ConsciousAnswerPlanner();
   private readonly provenanceVerifier = new ConsciousProvenanceVerifier();
+  private consecutiveFailures = 0;
+  private circuitOpenUntil = 0;
 
   constructor(private readonly session: ConsciousSession, verifier?: ConsciousVerifier) {
     if (verifier) {
       this.verifier = verifier;
     }
     this.retrievalOrchestrator = new ConsciousRetrievalOrchestrator(this.session);
+  }
+
+  private isCircuitOpen(now: number = Date.now()): boolean {
+    return now < this.circuitOpenUntil;
+  }
+
+  private recordExecutionSuccess(): void {
+    this.consecutiveFailures = 0;
+    this.circuitOpenUntil = 0;
+  }
+
+  private recordExecutionFailure(reason: string): void {
+    this.consecutiveFailures += 1;
+    if (this.consecutiveFailures >= ConsciousOrchestrator.CIRCUIT_BREAKER_FAILURE_THRESHOLD) {
+      this.circuitOpenUntil = Date.now() + ConsciousOrchestrator.CIRCUIT_BREAKER_COOLDOWN_MS;
+      console.warn('[ConsciousOrchestrator] Opening conscious-mode circuit breaker after repeated failures:', {
+        reason,
+        consecutiveFailures: this.consecutiveFailures,
+        cooldownMs: ConsciousOrchestrator.CIRCUIT_BREAKER_COOLDOWN_MS,
+      });
+    }
+  }
+
+  private fallback(reason: string): ConsciousExecutionResult {
+    this.recordExecutionFailure(reason);
+    return { kind: 'fallback' };
   }
 
   private static readonly THREAD_COMPATIBILITY_STOPWORDS = new Set([
@@ -182,6 +213,7 @@ export class ConsciousOrchestrator {
     const currentReasoningThread = this.session.getActiveReasoningThread();
     const latestReaction = this.session.getLatestQuestionReaction();
     const hasStrongPrefetchedIntent = isStrongConsciousIntent(input.prefetchedIntent);
+    const circuitOpen = this.isCircuitOpen();
     let preRouteDecision = this.session.isConsciousModeEnabled()
       ? classifyConsciousModeQuestion(input.question, currentReasoningThread)
       : { qualifies: false, threadAction: 'ignore' as const };
@@ -219,7 +251,7 @@ export class ConsciousOrchestrator {
     let selectedRoute = selectAnswerRoute({
       explicitManual: false,
       explicitFollowUp: false,
-      consciousModeEnabled: this.session.isConsciousModeEnabled() && !shouldForceStandardRoute,
+      consciousModeEnabled: this.session.isConsciousModeEnabled() && !shouldForceStandardRoute && !circuitOpen,
       profileModeEnabled: !!input.knowledgeStatus?.activeMode,
       hasProfile: !!input.knowledgeStatus?.hasResume,
       hasKnowledgeData: !!input.knowledgeStatus?.hasResume || !!input.knowledgeStatus?.hasActiveJD,
@@ -227,12 +259,13 @@ export class ConsciousOrchestrator {
       activeReasoningThread,
     });
 
-    if (hasStrongPrefetchedIntent && selectedRoute !== 'conscious_answer') {
+    if (hasStrongPrefetchedIntent && !circuitOpen && selectedRoute !== 'conscious_answer') {
       selectedRoute = 'conscious_answer';
     }
 
     const effectiveRoute: AnswerRoute = input.screenshotBackedLiveCodingTurn
       && this.session.isConsciousModeEnabled()
+      && !circuitOpen
       && !preRouteDecision.qualifies
       ? 'conscious_answer'
       : selectedRoute;
@@ -275,59 +308,65 @@ export class ConsciousOrchestrator {
       return { kind: 'skip' };
     }
 
-    const retrievalPack = this.retrievalOrchestrator.buildPack({
-      question: input.resolvedQuestion,
-      lastSeconds: 600,
-    });
-    const evidenceContextBlock = this.session.getConsciousEvidenceContext();
+    try {
+      const retrievalPack = this.retrievalOrchestrator.buildPack({
+        question: input.resolvedQuestion,
+        lastSeconds: 600,
+      });
+      const evidenceContextBlock = this.session.getConsciousEvidenceContext();
 
-    const structuredResponse = await input.followUpLLM.generateReasoningFirstFollowUp(
-      input.activeReasoningThread,
-      input.resolvedQuestion,
-      [
-        this.answerPlanner.buildContextBlock(this.answerPlanner.plan({
-          question: input.resolvedQuestion,
-          reaction: this.session.getLatestQuestionReaction(),
-          hypothesis: this.session.getLatestAnswerHypothesis(),
-        })),
-        this.session.getConsciousSemanticContext(),
-        retrievalPack.combinedContext,
-      ].filter(Boolean).join('\n\n')
-    );
+      const structuredResponse = await input.followUpLLM.generateReasoningFirstFollowUp(
+        input.activeReasoningThread,
+        input.resolvedQuestion,
+        [
+          this.answerPlanner.buildContextBlock(this.answerPlanner.plan({
+            question: input.resolvedQuestion,
+            reaction: this.session.getLatestQuestionReaction(),
+            hypothesis: this.session.getLatestAnswerHypothesis(),
+          })),
+          this.session.getConsciousSemanticContext(),
+          retrievalPack.combinedContext,
+        ].filter(Boolean).join('\n\n')
+      );
 
-    if (input.isStale() || !isValidConsciousModeResponse(structuredResponse)) {
-      return { kind: 'fallback' };
+      if (input.isStale() || !isValidConsciousModeResponse(structuredResponse)) {
+        return this.fallback('continuation_invalid_or_stale');
+      }
+
+      const provenanceVerdict = this.provenanceVerifier.verify({
+        response: structuredResponse,
+        semanticContextBlock: this.session.getConsciousSemanticContext(),
+        evidenceContextBlock,
+        question: input.resolvedQuestion,
+        hypothesis: this.session.getLatestAnswerHypothesis(),
+      });
+      if (!provenanceVerdict.ok) {
+        console.warn('[ConsciousOrchestrator] Continuation provenance verification failed:', provenanceVerdict.reason);
+        return this.fallback(`continuation_provenance:${provenanceVerdict.reason ?? 'unknown'}`);
+      }
+      const verification = await this.verifier.verify({
+        response: structuredResponse,
+        route: { qualifies: true, threadAction: 'continue' },
+        reaction: this.session.getLatestQuestionReaction(),
+        hypothesis: this.session.getLatestAnswerHypothesis(),
+        question: input.resolvedQuestion,
+      });
+      if (!verification.ok) {
+        console.warn('[ConsciousOrchestrator] Continuation verification failed:', verification.reason);
+        return this.fallback(`continuation_verification:${verification.reason ?? 'unknown'}`);
+      }
+
+      this.session.recordConsciousResponse(input.resolvedQuestion, structuredResponse, 'continue');
+      this.recordExecutionSuccess();
+      return {
+        kind: 'handled',
+        structuredResponse,
+        fullAnswer: formatConsciousModeResponse(structuredResponse),
+      };
+    } catch (error) {
+      console.warn('[ConsciousOrchestrator] Continuation execution failed:', error);
+      return this.fallback('continuation_execution_error');
     }
-
-    const provenanceVerdict = this.provenanceVerifier.verify({
-      response: structuredResponse,
-      semanticContextBlock: this.session.getConsciousSemanticContext(),
-      evidenceContextBlock,
-      question: input.resolvedQuestion,
-      hypothesis: this.session.getLatestAnswerHypothesis(),
-    });
-    if (!provenanceVerdict.ok) {
-      console.warn('[ConsciousOrchestrator] Continuation provenance verification failed:', provenanceVerdict.reason);
-      return { kind: 'fallback' };
-    }
-    const verification = await this.verifier.verify({
-      response: structuredResponse,
-      route: { qualifies: true, threadAction: 'continue' },
-      reaction: this.session.getLatestQuestionReaction(),
-      hypothesis: this.session.getLatestAnswerHypothesis(),
-      question: input.resolvedQuestion,
-    });
-    if (!verification.ok) {
-      console.warn('[ConsciousOrchestrator] Continuation verification failed:', verification.reason);
-      return { kind: 'fallback' };
-    }
-
-    this.session.recordConsciousResponse(input.resolvedQuestion, structuredResponse, 'continue');
-    return {
-      kind: 'handled',
-      structuredResponse,
-      fullAnswer: formatConsciousModeResponse(structuredResponse),
-    };
   }
 
   async executeReasoningFirst(input: {
@@ -344,66 +383,72 @@ export class ConsciousOrchestrator {
       return { kind: 'skip' };
     }
 
-    let structuredResponse: ConsciousModeStructuredResponse | null = null;
+    try {
+      let structuredResponse: ConsciousModeStructuredResponse | null = null;
 
-    if (input.whatToAnswerLLM) {
-      structuredResponse = await input.whatToAnswerLLM.generateReasoningFirst(
-        input.preparedTranscript,
-        input.question,
-        input.temporalContext,
-        input.intentResult,
-        input.imagePaths
-      );
-    } else if (input.answerLLM) {
-      structuredResponse = await input.answerLLM.generateReasoningFirst(
-        input.question,
-        this.session.getFormattedContext(600)
-      );
-    }
+      if (input.whatToAnswerLLM) {
+        structuredResponse = await input.whatToAnswerLLM.generateReasoningFirst(
+          input.preparedTranscript,
+          input.question,
+          input.temporalContext,
+          input.intentResult,
+          input.imagePaths
+        );
+      } else if (input.answerLLM) {
+        structuredResponse = await input.answerLLM.generateReasoningFirst(
+          input.question,
+          this.session.getFormattedContext(600)
+        );
+      }
 
-    if (!isValidConsciousModeResponse(structuredResponse)) {
-      return { kind: 'fallback' };
-    }
+      if (!isValidConsciousModeResponse(structuredResponse)) {
+        return this.fallback('reasoning_invalid_response');
+      }
 
-    const provenanceVerdict = this.provenanceVerifier.verify({
-      response: structuredResponse,
-      semanticContextBlock: this.session.getConsciousSemanticContext(),
-      evidenceContextBlock: this.session.getConsciousEvidenceContext(),
-      question: input.question,
-      hypothesis: this.session.getLatestAnswerHypothesis(),
-    });
-    if (!provenanceVerdict.ok) {
-      console.warn('[ConsciousOrchestrator] Structured response provenance verification failed:', provenanceVerdict.reason);
-      return { kind: 'fallback' };
-    }
-    const verification = await this.verifier.verify({
-      response: structuredResponse,
-      route: input.route,
-      reaction: this.session.getLatestQuestionReaction(),
-      hypothesis: this.session.getLatestAnswerHypothesis(),
-      question: input.question,
-    });
-    if (!verification.ok) {
-      console.warn('[ConsciousOrchestrator] Structured response verification failed:', verification.reason);
-      return { kind: 'fallback' };
-    }
+      const provenanceVerdict = this.provenanceVerifier.verify({
+        response: structuredResponse,
+        semanticContextBlock: this.session.getConsciousSemanticContext(),
+        evidenceContextBlock: this.session.getConsciousEvidenceContext(),
+        question: input.question,
+        hypothesis: this.session.getLatestAnswerHypothesis(),
+      });
+      if (!provenanceVerdict.ok) {
+        console.warn('[ConsciousOrchestrator] Structured response provenance verification failed:', provenanceVerdict.reason);
+        return this.fallback(`reasoning_provenance:${provenanceVerdict.reason ?? 'unknown'}`);
+      }
+      const verification = await this.verifier.verify({
+        response: structuredResponse,
+        route: input.route,
+        reaction: this.session.getLatestQuestionReaction(),
+        hypothesis: this.session.getLatestAnswerHypothesis(),
+        question: input.question,
+      });
+      if (!verification.ok) {
+        console.warn('[ConsciousOrchestrator] Structured response verification failed:', verification.reason);
+        return this.fallback(`reasoning_verification:${verification.reason ?? 'unknown'}`);
+      }
 
-    if (input.route.threadAction !== 'ignore' && input.question) {
-      this.session.recordConsciousResponse(
-        input.question,
+      if (input.route.threadAction !== 'ignore' && input.question) {
+        this.session.recordConsciousResponse(
+          input.question,
+          structuredResponse,
+          input.route.threadAction === 'start'
+            ? 'start'
+            : input.route.threadAction === 'reset'
+              ? 'reset'
+              : 'continue'
+        );
+      }
+
+      this.recordExecutionSuccess();
+      return {
+        kind: 'handled',
         structuredResponse,
-        input.route.threadAction === 'start'
-          ? 'start'
-          : input.route.threadAction === 'reset'
-            ? 'reset'
-            : 'continue'
-      );
+        fullAnswer: formatConsciousModeResponse(structuredResponse),
+      };
+    } catch (error) {
+      console.warn('[ConsciousOrchestrator] Reasoning-first execution failed:', error);
+      return this.fallback('reasoning_execution_error');
     }
-
-    return {
-      kind: 'handled',
-      structuredResponse,
-      fullAnswer: formatConsciousModeResponse(structuredResponse),
-    };
   }
 }
