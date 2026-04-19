@@ -379,28 +379,13 @@ export class ConsciousAccelerationOrchestrator {
       return null;
     }
 
+    // NAT-002 / audit A-2: exact normalized-match commit only. The previous 0.72
+    // cosine fallback could bind a *different* question to another speculative
+    // stream's chunks, surfacing a plausible-but-wrong answer. Semantic similarity
+    // may be useful for *discarding* candidates in a future change, but never for
+    // *selecting* the entry that we promote as the answer.
     const exact = entries.find((entry) => this.normalizeQuery(entry.query) === this.normalizeQuery(query));
-    if (exact) {
-      return exact;
-    }
-
-    const queryEmbedding = await this.prefetcher.getSemanticEmbedding(query);
-    if (queryEmbedding.length === 0) {
-      return null;
-    }
-    let bestMatch: { entry: SpeculativeAnswerEntry; similarity: number } | null = null;
-
-    for (const entry of entries) {
-      if (entry.embedding.length === 0) {
-        continue;
-      }
-      const similarity = this.cosineSimilarity(queryEmbedding, entry.embedding);
-      if (!bestMatch || similarity > bestMatch.similarity) {
-        bestMatch = { entry, similarity };
-      }
-    }
-
-    return bestMatch && bestMatch.similarity >= 0.72 ? bestMatch.entry : null;
+    return exact ?? null;
   }
 
   private async maybeStartSpeculativeAnswer(): Promise<void> {

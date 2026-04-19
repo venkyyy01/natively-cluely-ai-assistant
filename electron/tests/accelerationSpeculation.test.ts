@@ -343,7 +343,11 @@ test('stealth containment stops speculative suffixes and final answers after the
   resetAccelerationTestState();
 });
 
-test('speculative hedging selects the closest predicted candidate when the finalized question shifts', async () => {
+test('NAT-002: speculative selection refuses semantic hedging when the finalized question shifts', async () => {
+  // Audit A-2 / NAT-002: the previous behavior was to fall back to a 0.72 cosine
+  // match when the finalized query did not exactly equal the noted speculative
+  // query. That allowed a *different* question to be answered with another
+  // speculation's chunks. The contract is now: exact normalized-query match only.
   setOptimizationFlags({
     ...DEFAULT_OPTIMIZATION_FLAGS,
     accelerationEnabled: true,
@@ -375,8 +379,13 @@ test('speculative hedging selects the closest predicted candidate when the final
   await (orchestrator as any).maybeStartSpeculativeAnswer();
   await new Promise((resolve) => setTimeout(resolve, 20));
 
+  // Finalized question differs from the noted speculative query — must not hedge.
   const answer = await orchestrator.getSpeculativeAnswer('What are the main components?', 1, 200);
+  assert.equal(answer, null);
 
-  assert.equal(answer, 'answer for: What are the main components?');
+  // Sanity: an exact normalized match still resolves the same speculation.
+  const exact = await orchestrator.getSpeculativeAnswer('What are the main comp', 1, 200);
+  assert.equal(exact, 'answer for: What are the main comp');
+
   resetAccelerationTestState();
 });
