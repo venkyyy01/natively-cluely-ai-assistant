@@ -112,6 +112,33 @@ test('ConsciousVerifier rejects behavioral answers when action depth and impact 
   assert.equal(result.reason, 'weak_behavioral_depth');
 });
 
+test('ConsciousVerifier accepts concise behavioral answers when the action is still materially deeper than setup', async () => {
+  const verifier = new ConsciousVerifier();
+  const result = await verifier.verify({
+    response: response({
+      behavioralAnswer: {
+        question: 'Tell me about a time you handled disagreement on a launch.',
+        headline: 'I aligned two teams around a safer rollout plan.',
+        situation: 'A partner team wanted to skip rollback drills before a risky billing migration.',
+        task: 'I had to protect the launch without escalating the disagreement.',
+        action: 'I pulled prior incident data, proposed a phased rollout, and secured both managers on rollback checkpoints.',
+        result: 'We launched a week later, avoided incidents, and cut rollback pages by 40 percent.',
+        whyThisAnswerWorks: [
+          'Shows direct conflict resolution.',
+          'Uses evidence instead of opinion.',
+          'Ends with a concrete measurable result.',
+        ],
+      },
+    }),
+    route: { qualifies: true, threadAction: 'start' },
+    reaction: null,
+    hypothesis: null,
+    question: 'Tell me about a time you handled disagreement on a launch.',
+  });
+
+  assert.equal(result.ok, true);
+});
+
 test('ConsciousVerifier accepts a tradeoff probe when tradeoffs are present', async () => {
   const verifier = new ConsciousVerifier();
   const result = await verifier.verify({

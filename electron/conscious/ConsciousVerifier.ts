@@ -51,6 +51,12 @@ function hasBehavioralImpactCue(text: string): boolean {
   return /(\b\d+(?:\.\d+)?(?:ms|s|x|%|k|m|b)?\b|improv|reduc|increas|decreas|saved|faster|slower|stabil|unblock|delivered|shipped|adopt|retention|latency|throughput|quality|incident|customer|user|team|process|runbook|checklist|learned|next time|would do differently)/i.test(text);
 }
 
+const BEHAVIORAL_DEPTH_RULES = {
+  minActionWords: 12,
+  minResultWords: 6,
+  minActionAdvantageWords: 2,
+} as const;
+
 function hasCompleteBehavioralStar(response: ConsciousModeStructuredResponse): boolean {
   const behavioral = response.behavioralAnswer;
   return Boolean(
@@ -76,10 +82,13 @@ function hasStrongBehavioralDepth(response: ConsciousModeStructuredResponse): bo
   const taskWords = wordCount(behavioral.task);
   const resultWords = wordCount(behavioral.result);
 
-  return actionWords >= 18
-    && actionWords > situationWords
-    && actionWords > taskWords
-    && resultWords >= 8
+  // Calibrated against the conscious harness fixtures: reject shallow STAR answers,
+  // but allow concise stories when the action still carries clearly more detail than
+  // the setup and the result has a concrete impact cue.
+  return actionWords >= BEHAVIORAL_DEPTH_RULES.minActionWords
+    && actionWords >= situationWords + BEHAVIORAL_DEPTH_RULES.minActionAdvantageWords
+    && actionWords >= taskWords + BEHAVIORAL_DEPTH_RULES.minActionAdvantageWords
+    && resultWords >= BEHAVIORAL_DEPTH_RULES.minResultWords
     && hasBehavioralImpactCue(behavioral.result);
 }
 

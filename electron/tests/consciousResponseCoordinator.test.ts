@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { ConsciousResponseCoordinator } from '../conscious/ConsciousResponseCoordinator';
 import { AnswerLatencyTracker } from '../latency/AnswerLatencyTracker';
+import { formatConsciousModeResponse, type ConsciousModeStructuredResponse } from '../ConsciousMode';
 
 test('ConsciousResponseCoordinator streams verified structured sections progressively', () => {
   const tokens: string[] = [];
@@ -9,6 +10,17 @@ test('ConsciousResponseCoordinator streams verified structured sections progress
   const sessionMessages: string[] = [];
   const tracker = new AnswerLatencyTracker();
   const requestId = tracker.start('conscious_answer', 'streaming');
+  const structuredResponse: ConsciousModeStructuredResponse = {
+    mode: 'reasoning_first',
+    openingReasoning: 'I would separate admission from processing.',
+    implementationPlan: ['Add durable enqueue'],
+    tradeoffs: [],
+    edgeCases: [],
+    scaleConsiderations: [],
+    pushbackResponses: [],
+    likelyFollowUps: [],
+    codeTransition: '',
+  };
   const coordinator = new ConsciousResponseCoordinator(
     {
       addAssistantMessage: (answer: string) => {
@@ -34,31 +46,11 @@ test('ConsciousResponseCoordinator streams verified structured sections progress
     requestId,
     questionLabel: 'How would you design a queue?',
     confidence: 0.9,
-    fullAnswer: [
-      'Opening reasoning: I would separate admission from processing.',
-      'Implementation plan:',
-      '- Add durable enqueue',
-      'Tradeoffs:',
-      'Edge cases:',
-      'Scale considerations:',
-      'Pushback responses:',
-      'Likely follow-ups:',
-      'Code transition:',
-    ].join('\n'),
-    structuredResponse: {
-      mode: 'reasoning_first',
-      openingReasoning: 'I would separate admission from processing.',
-      implementationPlan: ['Add durable enqueue'],
-      tradeoffs: [],
-      edgeCases: [],
-      scaleConsiderations: [],
-      pushbackResponses: [],
-      likelyFollowUps: [],
-      codeTransition: '',
-    },
+    fullAnswer: formatConsciousModeResponse(structuredResponse),
+    structuredResponse,
   });
 
-  assert.equal(tokens[0], 'Opening reasoning: I would separate admission from processing.');
+  assert.equal(tokens[0], 'I would separate admission from processing.');
   assert.ok(tokens.length > 1);
   assert.equal(tokens.join(''), fullAnswer);
   assert.deepEqual(answers, [fullAnswer]);
