@@ -388,3 +388,67 @@ test('IntentClassificationCoordinator overrides weak general fallback to deep_di
   assert.equal(result.fallbackReason, 'primary_low_confidence');
   assert.equal(result.confidence, 0.62);
 });
+
+test('IntentClassificationCoordinator overrides weak general fallback using strong non-general cue after primary failure', async () => {
+  const inputCase: IntentClassificationInput = {
+    lastInterviewerTurn: 'Correct me if I am wrong: you keep writes sync but fan-out async?',
+    preparedTranscript: [
+      '[ASSISTANT]: I keep writes synchronous for correctness and move fan-out async.',
+      '[INTERVIEWER]: Correct me if I am wrong: you keep writes sync but fan-out async?',
+    ].join('\n'),
+    assistantResponseCount: 1,
+  };
+
+  const primary = new StubProvider('foundation', true, async () => {
+    throw createIntentProviderError('timeout', 'helper timeout');
+  });
+  const fallback = new StubProvider('legacy', true, async () => ({
+    intent: 'general',
+    confidence: 0.5,
+    answerShape: 'General answer.',
+  }));
+
+  const coordinator = new IntentClassificationCoordinator(primary, fallback, {
+    maxPrimaryRetries: 0,
+    baseBackoffMs: 100,
+    jitterMs: 0,
+  });
+  const result = await coordinator.classify(inputCase);
+
+  assert.equal(result.intent, 'summary_probe');
+  assert.equal(result.provider, 'legacy');
+  assert.equal(result.fallbackReason, 'primary_low_confidence');
+  assert.equal(result.confidence, 0.62);
+});
+
+test('IntentClassificationCoordinator overrides weak mismatched fallback using strong cue after primary failure', async () => {
+  const inputCase: IntentClassificationInput = {
+    lastInterviewerTurn: 'When you said eventual consistency, what behavior should I expect?',
+    preparedTranscript: [
+      '[ASSISTANT]: I would prioritize availability and rely on eventual consistency for replicas.',
+      '[INTERVIEWER]: When you said eventual consistency, what behavior should I expect?',
+    ].join('\n'),
+    assistantResponseCount: 1,
+  };
+
+  const primary = new StubProvider('foundation', true, async () => {
+    throw createIntentProviderError('timeout', 'helper timeout');
+  });
+  const fallback = new StubProvider('legacy', true, async () => ({
+    intent: 'behavioral',
+    confidence: 0.5,
+    answerShape: 'Use STAR.',
+  }));
+
+  const coordinator = new IntentClassificationCoordinator(primary, fallback, {
+    maxPrimaryRetries: 0,
+    baseBackoffMs: 100,
+    jitterMs: 0,
+  });
+  const result = await coordinator.classify(inputCase);
+
+  assert.equal(result.intent, 'clarification');
+  assert.equal(result.provider, 'legacy');
+  assert.equal(result.fallbackReason, 'primary_low_confidence');
+  assert.equal(result.confidence, 0.62);
+});

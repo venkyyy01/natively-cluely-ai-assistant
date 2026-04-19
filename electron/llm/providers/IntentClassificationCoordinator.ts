@@ -1,4 +1,4 @@
-import type { IntentResult } from '../IntentClassifier';
+import { getAnswerShapeGuidance, type IntentResult } from '../IntentClassifier';
 import {
   getIntentProviderErrorCode,
   type IntentClassificationInput,
@@ -432,17 +432,42 @@ export class IntentClassificationCoordinator {
     fallback: IntentResult,
   ): CoordinatedIntentResult {
     const likelyIntent = this.inferLikelyIntentFromQuestion(input);
-    const deepDiveCueStrong = likelyIntent === 'deep_dive' && this.hasStrongCueForLikelyIntent(input, 'deep_dive');
-    if (
-      deepDiveCueStrong
+    const strongLikelyCue = (
+      likelyIntent
+      && likelyIntent !== 'general'
+      && this.hasStrongCueForLikelyIntent(input, likelyIntent)
+    );
+
+    const canOverrideWeakGeneralFallback = (
+      likelyIntent
+      && strongLikelyCue
       && fallback.intent === 'general'
       && fallback.confidence <= 0.5
-    ) {
+    );
+    if (canOverrideWeakGeneralFallback) {
       return {
         ...fallback,
-        intent: 'deep_dive',
+        intent: likelyIntent,
         confidence: Math.max(0.62, fallback.confidence),
-        answerShape: 'Provide a structured but concise explanation. Use concrete specifics, not abstract concepts.',
+        answerShape: getAnswerShapeGuidance(likelyIntent),
+        provider: this.fallback.name,
+        retryCount,
+        fallbackReason: 'primary_low_confidence',
+      };
+    }
+
+    const canOverrideWeakMismatchedFallback = (
+      likelyIntent
+      && strongLikelyCue
+      && fallback.intent !== likelyIntent
+      && fallback.confidence <= 0.58
+    );
+    if (canOverrideWeakMismatchedFallback) {
+      return {
+        ...fallback,
+        intent: likelyIntent,
+        confidence: Math.max(0.62, fallback.confidence),
+        answerShape: getAnswerShapeGuidance(likelyIntent),
         provider: this.fallback.name,
         retryCount,
         fallbackReason: 'primary_low_confidence',
