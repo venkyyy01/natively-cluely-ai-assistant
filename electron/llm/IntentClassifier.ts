@@ -2,9 +2,11 @@
 // Lightweight intent classification for "What should I say?"
 // Micro step that runs before answer generation
 //
-// Two-tier classification:
-//   1. Regex fast-path (< 1ms) for common patterns
-//   2. Local SLM fallback (zero-shot, ~10-50ms) for messy/ambiguous speech
+// Three-tier classification:
+// 1. Weighted cue scoring (< 1ms) for pattern-matched intents
+// 2. Fine-tuned SLM (~15-40ms) — DeBERTa-v3-small text-classification
+//    with post-SLM cue-override gate and calibration
+// 3. Context heuristic (0ms) for conversation-flow signals
 
 import { isElectronAppPackaged, resolveBundledModelsPath } from '../utils/modelPaths';
 const { loadTransformers } = require('../utils/transformersLoader');
@@ -41,28 +43,23 @@ const INTENT_ANSWER_SHAPES: Record<ConversationIntent, string> = {
 };
 
 // ========================
-// Zero-Shot SLM Classifier
+// Fine-Tuned SLM Classifier
 // ========================
 
-/**
- * Candidate labels for zero-shot classification.
- * These map to ConversationIntent types.
- */
-const ZERO_SHOT_LABELS: Record<string, ConversationIntent> = {
-    'asking for clarification or explanation': 'clarification',
-    'asking about what happened next or follow-up': 'follow_up',
-    'requesting more detail or deeper explanation': 'deep_dive',
-    'asking for a personal experience or behavioral example': 'behavioral',
-    'requesting a concrete example or instance': 'example_request',
-    'summarizing or confirming understanding': 'summary_probe',
-    'asking about code, programming, or implementation': 'coding',
-    'general conversation or question': 'general',
+const SLM_LABEL_MAP: Record<string, ConversationIntent> = {
+  'clarification': 'clarification',
+  'follow_up': 'follow_up',
+  'deep_dive': 'deep_dive',
+  'behavioral': 'behavioral',
+  'example_request': 'example_request',
+  'summary_probe': 'summary_probe',
+  'coding': 'coding',
+  'general': 'general',
 };
 
-const ZERO_SHOT_LABEL_KEYS = Object.keys(ZERO_SHOT_LABELS);
-
-/** Minimum confidence from the SLM to trust its classification */
-const SLM_CONFIDENCE_THRESHOLD = 0.35;
+const SLM_CONFIDENCE_THRESHOLD = 0.55;
+const CUE_OVERRIDE_MIN_WEIGHT = 3.0;
+const CUE_OVERRIDE_SLM_MAX_CONFIDENCE = 0.72;
 
 function normalizeForIntentHeuristics(text: string): string {
     return text
@@ -73,165 +70,348 @@ function normalizeForIntentHeuristics(text: string): string {
 }
 
 function likelyIntentCue(text: string): ConversationIntent | null {
-    const normalized = normalizeForIntentHeuristics(text);
-    if (!normalized) {
-        return null;
-    }
-
-    if (/(implement|write code|debug|algorithm|lru|typescript|javascript|handler code|api payload|function)/i.test(normalized)) {
-        return 'coding';
-    }
-
-    if (/(so you are saying|so you re saying|let me make sure|to summarize|so to summarize)/i.test(normalized)) {
-        return 'summary_probe';
-    }
-
-    if (/(what happened next|then what|after that)/i.test(normalized)) {
-        return 'follow_up';
-    }
-
-    if (/(clarify|what do you mean|can you explain|unpack|how so)/i.test(normalized)) {
-        return 'clarification';
-    }
-
-    if (/(concrete example|specific example|for example|for instance|specific instance)/i.test(normalized)) {
-        return 'example_request';
-    }
-
-    if (/(tradeoff|trade off|why would you choose|why choose|why not|compare|latency|freshness|consistency|availability|throughput)/i.test(normalized)) {
-        return 'deep_dive';
-    }
-
-    if (/(tell me about a time|describe a time|describe a situation|walk me through a failure|stakeholder|leadership|influence|conflict with|disagreed)/i.test(normalized)) {
-        return 'behavioral';
-    }
-
+  const normalized = normalizeForIntentHeuristics(text);
+  if (!normalized) {
     return null;
+  }
+
+  if (/(implement|write code|debug|algorithm|lru|typescript|javascript|handler code|api payload|function|refactor|snippet)/i.test(normalized)) {
+    return 'coding';
+  }
+
+  if (/(so you are saying|so you re saying|let me make sure|to summarize|so to summarize|if i understood correctly|am i right|do i have this right|to confirm)/i.test(normalized)) {
+    return 'summary_probe';
+  }
+
+  if (/(what happened next|then what|after that)/i.test(normalized)) {
+    return 'follow_up';
+  }
+
+  if (/(clarify|what do you mean|can you explain|unpack|how so|what exactly|when you say|break that down)/i.test(normalized)) {
+    return 'clarification';
+  }
+
+  // Weighted behavioral vs deep_dive — same logic as the cue scoring system
+  const hasStrongBehavioral = /\b(tell me about a time|describe a time|describe a situation where you|when have you|share an experience|walk me through a failure|walk me through .+ (time|situation|conflict|failure|mistake|decision))\b/i.test(normalized);
+  const hasDeepDive = /\b(tradeoff|trade.off|why would you choose|why choose|why not|compare|latency|freshness|consistency|availability|throughput|distributed systems|microservice|load balancer|consensus|raft|sharding|replication|rate limiting|circuit breaker|idempotency|backpressure|system design|design a|design an|how would you (build|design|scale|handle|approach)|architecture|scalability|partition tolerance|concurrency|parallelism|deadlock|race condition|big o|database|indexing|transaction|acid|docker|kubernetes|redis|kafka|postgres|mongodb|caching|queue|pipeline)\b/i.test(normalized);
+
+  if (hasStrongBehavioral && !hasDeepDive) {
+    return 'behavioral';
+  }
+  if (hasDeepDive) {
+    return 'deep_dive';
+  }
+
+  if (/(concrete example|specific example|for example|for instance|specific instance|like what|such as)/i.test(normalized)) {
+    return 'example_request';
+  }
+
+  if (/(tell me about your experience|describe a situation|how do you manage|how do you prioritize|give me an example|what is your .+ style|how do you influence)/i.test(normalized)) {
+    return 'behavioral';
+  }
+
+  return null;
 }
 
 function calibrateSlmResultByCue(text: string, slmResult: IntentResult): IntentResult {
-    const cue = likelyIntentCue(text);
-    if (!cue || cue === slmResult.intent) {
-        return slmResult;
-    }
+  const cue = likelyIntentCue(text);
+  if (!cue || cue === slmResult.intent) {
+    return slmResult;
+  }
 
-    const downgradedConfidence = Math.min(slmResult.confidence, 0.3);
-    return {
-        ...slmResult,
-        confidence: downgradedConfidence,
-    };
+  const conflictSeverity = isDistantConflict(cue, slmResult.intent) ? 0.35 : 0.2;
+  const downgradedConfidence = Math.min(slmResult.confidence - conflictSeverity, 0.48);
+  return {
+    ...slmResult,
+    confidence: downgradedConfidence,
+  };
 }
 
-/**
- * Singleton lazy-loaded zero-shot classifier using @xenova/transformers
- */
-class ZeroShotClassifier {
-    private static instance: ZeroShotClassifier | null = null;
-    private pipe: any = null;
-    private loadingPromise: Promise<void> | null = null;
-    private loadFailed = false;
+function isDistantConflict(cue: ConversationIntent, slmIntent: ConversationIntent): boolean {
+  const distantPairs: Array<[ConversationIntent, ConversationIntent]> = [
+    ['behavioral', 'coding'],
+    ['coding', 'behavioral'],
+    ['clarification', 'coding'],
+    ['coding', 'clarification'],
+    ['summary_probe', 'deep_dive'],
+    ['behavioral', 'deep_dive'],
+    ['deep_dive', 'behavioral'],
+    ['coding', 'deep_dive'],
+    ['deep_dive', 'coding'],
+    ['clarification', 'behavioral'],
+    ['behavioral', 'clarification'],
+  ];
+  return distantPairs.some(([a, b]) => cue === a && slmIntent === b);
+}
 
-    private constructor() {}
+class FineTunedClassifier {
+  private static instance: FineTunedClassifier | null = null;
+  private pipe: any = null;
+  private loadingPromise: Promise<void> | null = null;
+  private loadFailed = false;
 
-    static getInstance(): ZeroShotClassifier {
-        if (!ZeroShotClassifier.instance) {
-            ZeroShotClassifier.instance = new ZeroShotClassifier();
-        }
-        return ZeroShotClassifier.instance;
+  private constructor() {}
+
+  static getInstance(): FineTunedClassifier {
+    if (!FineTunedClassifier.instance) {
+      FineTunedClassifier.instance = new FineTunedClassifier();
+    }
+    return FineTunedClassifier.instance;
+  }
+
+  private async ensureLoaded(): Promise<void> {
+    if (this.pipe) return;
+    if (this.loadFailed) return;
+
+    if (this.loadingPromise) {
+      await this.loadingPromise;
+      return;
     }
 
-    /**
-     * Lazy-load the zero-shot classification model.
-     * Uses Xenova/mobilebert-uncased-mnli — tiny (~100MB quantized), fast (~10-50ms inference).
-     */
-    private async ensureLoaded(): Promise<void> {
-        if (this.pipe) return;
-        if (this.loadFailed) return;
+    this.loadingPromise = (async () => {
+      try {
+        const { pipeline, env } = await loadTransformers();
 
-        if (this.loadingPromise) {
-            await this.loadingPromise;
-            return;
-        }
+        env.allowRemoteModels = false;
+        env.localModelPath = resolveBundledModelsPath();
 
-        this.loadingPromise = (async () => {
-            try {
-                const { pipeline, env } = await loadTransformers();
+        console.log('[IntentClassifier] Loading fine-tuned classifier (nli-deberta-v3-small)...');
+        this.pipe = await pipeline(
+          'text-classification',
+          'Xenova/nli-deberta-v3-small',
+          { local_files_only: isElectronAppPackaged(), quantized: true }
+        );
+        console.log('[IntentClassifier] Fine-tuned classifier loaded successfully.');
+      } catch (e) {
+        console.warn('[IntentClassifier] Failed to load fine-tuned model, regex-only fallback:', e);
+        this.loadFailed = true;
+        this.pipe = null;
+      }
+    })();
 
-                env.allowRemoteModels = false;
-                env.localModelPath = resolveBundledModelsPath();
+    try {
+      await this.loadingPromise;
+    } catch {
+      this.loadingPromise = null;
+    }
+  }
 
-                console.log('[IntentClassifier] Loading zero-shot classifier (mobilebert-uncased-mnli)...');
-                this.pipe = await pipeline(
-                    'zero-shot-classification',
-                    'Xenova/mobilebert-uncased-mnli',
-                    { local_files_only: isElectronAppPackaged() }
-                );
-                console.log('[IntentClassifier] Zero-shot classifier loaded successfully.');
-            } catch (e) {
-                console.warn('[IntentClassifier] Failed to load zero-shot model, regex-only fallback:', e);
-                this.loadFailed = true;
-                this.pipe = null;
-            }
-        })();
+  async classify(text: string): Promise<IntentResult | null> {
+    await this.ensureLoaded();
+    if (!this.pipe) return null;
 
-        try {
-            await this.loadingPromise;
-        } catch {
-            this.loadingPromise = null;
-        }
+    try {
+      const result = await this.pipe(text, { top_k: 8 });
+
+      const allScores: Array<{ label: string; score: number }> = Array.isArray(result) ? result : [result];
+      allScores.sort((a: { score: number }, b: { score: number }) => b.score - a.score);
+
+      const top = allScores[0];
+      const resolvedIntent = SLM_LABEL_MAP[top.label] || 'general';
+
+      const rawResult: IntentResult = {
+        intent: resolvedIntent,
+        confidence: top.score,
+        answerShape: INTENT_ANSWER_SHAPES[resolvedIntent],
+      };
+
+      let calibratedResult = calibrateSlmResultByCue(text, rawResult);
+
+      calibratedResult = this.applyCueOverrideGate(text, calibratedResult);
+
+      if (calibratedResult.confidence < SLM_CONFIDENCE_THRESHOLD) {
+        return null;
+      }
+
+      console.log(`[IntentClassifier] SLM classified as "${calibratedResult.intent}" (${(calibratedResult.confidence * 100).toFixed(1)}%): "${text.substring(0, 60)}..."`);
+
+      return {
+        intent: calibratedResult.intent,
+        confidence: calibratedResult.confidence,
+        answerShape: calibratedResult.answerShape,
+      };
+    } catch (e) {
+      console.warn('[IntentClassifier] SLM classification error:', e);
+      return null;
+    }
+  }
+
+  private applyCueOverrideGate(text: string, slmResult: IntentResult): IntentResult {
+    const cueScores = computeCueScores(text);
+    const sorted = Array.from(cueScores.values()).sort((a, b) => b.totalWeight - a.totalWeight);
+    const topCue = sorted[0];
+
+    if (!topCue || topCue.category === slmResult.intent) {
+      return slmResult;
     }
 
-    /**
-     * Classify text using the zero-shot model.
-     * Returns null if the model isn't loaded or classification fails.
-     */
-    async classify(text: string): Promise<IntentResult | null> {
-        await this.ensureLoaded();
-        if (!this.pipe) return null;
-
-        try {
-            const result = await this.pipe(text, ZERO_SHOT_LABEL_KEYS, {
-                multi_label: false,
-            });
-
-            // result has { labels: string[], scores: number[] }
-            const topLabel = result.labels[0];
-            const topScore = result.scores[0];
-
-            const resolvedIntent = ZERO_SHOT_LABELS[topLabel] || 'general';
-            const rawResult: IntentResult = {
-                intent: resolvedIntent,
-                confidence: topScore,
-                answerShape: INTENT_ANSWER_SHAPES[resolvedIntent],
-            };
-
-            const calibratedResult = calibrateSlmResultByCue(text, rawResult);
-
-            if (calibratedResult.confidence < SLM_CONFIDENCE_THRESHOLD) {
-                return null; // Not confident enough
-            }
-
-            const intent = calibratedResult.intent;
-            console.log(`[IntentClassifier] SLM classified as "${intent}" (${(calibratedResult.confidence * 100).toFixed(1)}%): "${text.substring(0, 60)}..."`);
-
-            return {
-                intent: calibratedResult.intent,
-                confidence: calibratedResult.confidence,
-                answerShape: calibratedResult.answerShape,
-            };
-        } catch (e) {
-            console.warn('[IntentClassifier] SLM classification error:', e);
-            return null;
-        }
+    if (topCue.totalWeight >= CUE_OVERRIDE_MIN_WEIGHT && slmResult.confidence <= CUE_OVERRIDE_SLM_MAX_CONFIDENCE) {
+      const overrideConfidence = Math.min(0.88, 0.6 + topCue.totalWeight * 0.04);
+      console.log(
+        `[IntentClassifier] Cue override: SLM="${slmResult.intent}" (${(slmResult.confidence * 100).toFixed(0)}%) ` +
+        `overridden by cue="${topCue.category}" (weight=${topCue.totalWeight.toFixed(1)}): "${text.substring(0, 60)}..."`
+      );
+      return {
+        intent: topCue.category,
+        confidence: overrideConfidence,
+        answerShape: INTENT_ANSWER_SHAPES[topCue.category],
+      };
     }
 
-    /**
-     * Warm up the model in background (non-blocking).
-     * Call this early in app lifecycle to avoid cold-start latency.
-     */
-    warmup(): void {
-        this.ensureLoaded().catch(() => {});
+    return slmResult;
+  }
+
+  warmup(): void {
+    this.ensureLoaded().catch(() => {});
+  }
+}
+
+// ========================
+// Weighted Cue Scoring System
+// ========================
+
+type CueCategory = 'clarification' | 'follow_up' | 'deep_dive' | 'behavioral' | 'example_request' | 'summary_probe' | 'coding';
+
+interface WeightedCue {
+  pattern: RegExp;
+  weight: number;
+  category: CueCategory;
+}
+
+const WEIGHTED_CUES: WeightedCue[] = [
+  // ── Clarification (high weight — unambiguous) ──
+  { pattern: /\b(can you explain|what do you mean|clarify|could you elaborate on that specific|unpack that|break that down|what exactly do you mean|what exactly is|when you say|how so)\b/i, weight: 3.0, category: 'clarification' },
+
+  // ── Follow-up (high weight — unambiguous) ──
+  { pattern: /\b(what happened|then what|and after that|what's next|how did that go|what came next)\b/i, weight: 2.8, category: 'follow_up' },
+
+  // ── Summary probe (high weight — unambiguous) ──
+  { pattern: /\b(so to summarize|in summary|so basically|so you're saying|so you are saying|let me make sure|if i understood correctly|am i right|correct me if i.m wrong|do i have this right|to confirm)\b/i, weight: 3.0, category: 'summary_probe' },
+
+  // ── Coding (very high weight — unambiguous) ──
+  { pattern: /\b(write code|write a function|build a class|implement a method|program|function for|algorithm|how to code|setup a .+ project|using .+ library|debug this|snippet|boilerplate|optimize|refactor|best practice for .+ code|utility method|component for|logic for)\b/i, weight: 3.5, category: 'coding' },
+  { pattern: /\b(implement|debug)\b/i, weight: 2.5, category: 'coding' },
+  { pattern: /\bexample of .+ in .+\b/i, weight: 2.8, category: 'coding' },
+
+  // ── STRONG behavioral cues (personal-experience anchored — always behavioral) ──
+  { pattern: /\btell me about a time\b/i, weight: 3.5, category: 'behavioral' },
+  { pattern: /\bdescribe a time\b/i, weight: 3.5, category: 'behavioral' },
+  { pattern: /\bdescribe a situation where you\b/i, weight: 3.5, category: 'behavioral' },
+  { pattern: /\bwhen have you\b/i, weight: 3.0, category: 'behavioral' },
+  { pattern: /\bshare an experience\b/i, weight: 3.0, category: 'behavioral' },
+  { pattern: /\bgive me an example of a time\b/i, weight: 3.5, category: 'behavioral' },
+  { pattern: /\bwalk me through a failure\b/i, weight: 3.5, category: 'behavioral' },
+  { pattern: /\bwalk me through .+ (time|situation|conflict|failure|mistake|decision|disagreement|stakeholder|team challenge|project you led|owned end to end)\b/i, weight: 3.2, category: 'behavioral' },
+  { pattern: /\bconflict with|disagreed with|disagreement with\b/i, weight: 2.5, category: 'behavioral' },
+
+  // ── AMBIGUOUS behavioral cues (could be behavioral OR technical — lower weight) ──
+  { pattern: /\btell me about your experience\b/i, weight: 1.2, category: 'behavioral' },
+  { pattern: /\bdescribe a situation\b/i, weight: 1.0, category: 'behavioral' },
+  { pattern: /\bhow do you manage\b/i, weight: 1.0, category: 'behavioral' },
+  { pattern: /\bhow do you (make|take) .+ decision\b/i, weight: 1.0, category: 'behavioral' },
+  { pattern: /\bhow do you influence\b/i, weight: 1.2, category: 'behavioral' },
+  { pattern: /\bhow do you prioritize\b/i, weight: 1.0, category: 'behavioral' },
+  { pattern: /\bwhat is your .+ style\b/i, weight: 1.0, category: 'behavioral' },
+  { pattern: /\bwalk me through your experience\b/i, weight: 1.2, category: 'behavioral' },
+  { pattern: /\bleadership|stakeholder\b/i, weight: 0.8, category: 'behavioral' },
+  { pattern: /\bgive me an example\b/i, weight: 0.9, category: 'behavioral' },
+
+  // ── STRONG deep_dive / technical cues (higher weight than ambiguous behavioral) ──
+  { pattern: /\btell me more|dive deeper|explain further|how does that work\b/i, weight: 2.8, category: 'deep_dive' },
+  { pattern: /\bwalk me through .+ (design|architecture|approach|implementation|system|code|logic|structure|how .+ work|rate limiter|cache|queue|scale|pipeline|workflow|process|model|algorithm|database|schema|api|microservice|load balancer|raft|consensus)\b/i, weight: 3.0, category: 'deep_dive' },
+  { pattern: /\btradeoff|trade.off|why would you choose|why choose|why not\b/i, weight: 2.5, category: 'deep_dive' },
+  { pattern: /\bcompare|versus|vs\.?\b/i, weight: 2.2, category: 'deep_dive' },
+  { pattern: /\b(consistency|availability|latency|freshness|throughput|scalability|reliability|partition tolerance|cap theorem|eventual consistency|strong consistency)\b/i, weight: 2.5, category: 'deep_dive' },
+  { pattern: /\b(distributed systems|microservice|load balancer|consensus|raft|paxos|gossip|sharding|replication|caching strategy|rate limiting|circuit breaker|idempotency|backpressure|data pipeline|etl|message queue|pub sub|event driven|cqrs|event sourcing)\b/i, weight: 2.8, category: 'deep_dive' },
+  { pattern: /\b(system design|design a|design an|architect|architecture of|how would you (build|design|scale|handle|approach)|how does .+ (work|handle|scale|fail|recover))\b/i, weight: 2.6, category: 'deep_dive' },
+  { pattern: /\b(concurrency|parallelism|thread safety|deadlock|race condition|mutex|semaphore|atomic|lock.free|wait.free)\b/i, weight: 2.5, category: 'deep_dive' },
+  { pattern: /\b(big o|time complexity|space complexity|hash table|binary search|tree traversal|graph|sorting|dynamic programming|greedy|backtracking|divide and conquer)\b/i, weight: 2.5, category: 'deep_dive' },
+  { pattern: /\b(network|tcp|udp|http|dns|ssl|tls|websocket|grpc|rest|rpc|cdn|proxy|firewall)\b/i, weight: 1.8, category: 'deep_dive' },
+  { pattern: /\b(database|sql|nosql|indexing|query optimization|transaction|acid|join|normaliz|orm|migration|schema)\b/i, weight: 1.8, category: 'deep_dive' },
+  { pattern: /\b(security|authenticat|authoriz|encrypt|oauth|jwt|token|csrf|xss|injection|vulnerability)\b/i, weight: 1.8, category: 'deep_dive' },
+  { pattern: /\b(testing|unit test|integration test|e2e|tdd|bdd|mock|stub|coverage|ci|cd|deploy|pipeline|monitor|observ|logging|metric|alert)\b/i, weight: 1.5, category: 'deep_dive' },
+  { pattern: /\b(docker|kubernetes|container|orchestrat|vm|cloud|aws|gcp|azure|serverless|lambda|s3|dynamodb|redis|kafka|rabbitmq|postgres|mongodb)\b/i, weight: 1.8, category: 'deep_dive' },
+
+  // ── Example request (only when not mixed with coding/behavioral) ──
+  { pattern: /\b(concrete example|specific instance|specific example|like what|such as|for instance|one concrete|one specific)\b/i, weight: 2.0, category: 'example_request' },
+  { pattern: /\bfor example\b/i, weight: 1.0, category: 'example_request' },
+];
+
+interface CueScore {
+  category: CueCategory;
+  totalWeight: number;
+  matchedCues: string[];
+}
+
+function computeCueScores(text: string): Map<CueCategory, CueScore> {
+  const scores = new Map<CueCategory, CueScore>();
+
+  for (const cue of WEIGHTED_CUES) {
+    if (cue.pattern.test(text)) {
+      const existing = scores.get(cue.category);
+      if (existing) {
+        existing.totalWeight += cue.weight;
+        existing.matchedCues.push(cue.pattern.source.substring(0, 40));
+      } else {
+        scores.set(cue.category, {
+          category: cue.category,
+          totalWeight: cue.weight,
+          matchedCues: [cue.pattern.source.substring(0, 40)],
+        });
+      }
     }
+  }
+
+  return scores;
+}
+
+const AMBIGUOUS_PAIRS: Array<[CueCategory, CueCategory, number]> = [
+  ['behavioral', 'deep_dive', 1.5],
+  ['behavioral', 'coding', 1.2],
+  ['example_request', 'behavioral', 1.0],
+  ['example_request', 'deep_dive', 1.0],
+  ['example_request', 'coding', 0.8],
+];
+
+function resolveCueScores(scores: Map<CueCategory, CueScore>, text: string): IntentResult | null {
+  if (scores.size === 0) return null;
+
+  const sorted = Array.from(scores.values()).sort((a, b) => b.totalWeight - a.totalWeight);
+  const top = sorted[0];
+  const second = sorted.length > 1 ? sorted[1] : null;
+
+  // If top category has decisive lead, return it
+  if (!second || top.totalWeight > second.totalWeight * 2) {
+    const confidence = Math.min(0.9, 0.6 + top.totalWeight * 0.04);
+    return { intent: top.category, confidence, answerShape: INTENT_ANSWER_SHAPES[top.category] };
+  }
+
+  // Check ambiguous pairs — if top is behavioral but deep_dive has significant technical score
+  for (const [catA, catB, minRatio] of AMBIGUOUS_PAIRS) {
+    const scoreA = scores.get(catA);
+    const scoreB = scores.get(catB);
+    if (scoreA && scoreB) {
+      const ratio = scoreB.totalWeight / scoreA.totalWeight;
+      // If the competing category's score is close enough, prefer the more specific one
+      if (ratio >= minRatio) {
+        // Prefer the more TECHNICAL / SPECIFIC category over the more AMBIGUOUS one
+        // deep_dive > behavioral when both score similarly (technical cues are more specific)
+        // coding > behavioral, coding > example_request
+        // deep_dive > example_request
+        const preferOrder: CueCategory[] = ['coding', 'deep_dive', 'clarification', 'follow_up', 'summary_probe', 'example_request', 'behavioral'];
+        const idxA = preferOrder.indexOf(catA);
+        const idxB = preferOrder.indexOf(catB);
+        const winner = idxA < idxB ? catA : catB;
+        const winScore = scores.get(winner)!;
+        const confidence = Math.min(0.88, 0.6 + winScore.totalWeight * 0.04);
+        return { intent: winner, confidence, answerShape: INTENT_ANSWER_SHAPES[winner] };
+      }
+    }
+  }
+
+  // Default: return top-scoring category
+  const confidence = Math.min(0.85, 0.55 + top.totalWeight * 0.03);
+  return { intent: top.category, confidence, answerShape: INTENT_ANSWER_SHAPES[top.category] };
 }
 
 // ========================
@@ -239,49 +419,26 @@ class ZeroShotClassifier {
 // ========================
 
 /**
- * Pattern-based intent detection (fast, no model call)
- * For common patterns this is sufficient
+ * Pattern-based intent detection using weighted cue scoring.
+ * Instead of first-match-wins, collects ALL cue matches, weights them,
+ * and resolves conflicts — especially behavioral vs deep_dive.
  */
 function detectIntentByPattern(lastInterviewerTurn: string): IntentResult | null {
-    const text = lastInterviewerTurn.toLowerCase().trim();
-    const behavioralWalkthrough = /walk me through\b.*\b(time|situation|experience|example|conflict|failure|mistake|decision|disagreement|stakeholder|team challenge|project you led|owned end to end)\b/i;
+  const text = lastInterviewerTurn.toLowerCase().trim();
+  if (!text) return null;
 
-    // Clarification patterns
-    if (/(can you explain|what do you mean|clarify|could you elaborate on that specific)/i.test(text)) {
-        return { intent: 'clarification', confidence: 0.9, answerShape: INTENT_ANSWER_SHAPES.clarification };
-    }
+  const scores = computeCueScores(text);
+  const result = resolveCueScores(scores, text);
 
-    // Follow-up patterns  
-    if (/(what happened|then what|and after that|what.s next|how did that go)/i.test(text)) {
-        return { intent: 'follow_up', confidence: 0.85, answerShape: INTENT_ANSWER_SHAPES.follow_up };
-    }
+  if (result) {
+    console.log(
+      `[IntentClassifier] Cue scoring: intent=${result.intent} conf=${(result.confidence * 100).toFixed(0)}% ` +
+      `scores={${Array.from(scores.entries()).map(([k, v]) => `${k}=${v.totalWeight.toFixed(1)}`).join(', ')}} ` +
+      `text="${text.substring(0, 60)}..."`
+    );
+  }
 
-    // Behavioral patterns
-    if (behavioralWalkthrough.test(text) || /(give me an example|tell me about a time|describe a time|describe a situation|when have you|share an experience|how do you manage|what is your .*style|how do you make .*decision|how do you influence|how do you prioritize)/i.test(text)) {
-        return { intent: 'behavioral', confidence: 0.9, answerShape: INTENT_ANSWER_SHAPES.behavioral };
-    }
-
-    // Deep dive patterns
-    if (/(tell me more|dive deeper|explain further|walk me through|how does that work)/i.test(text)) {
-        return { intent: 'deep_dive', confidence: 0.85, answerShape: INTENT_ANSWER_SHAPES.deep_dive };
-    }
-
-    // Example request patterns
-    if (/(for example|concrete example|specific instance|like what|such as)/i.test(text)) {
-        return { intent: 'example_request', confidence: 0.85, answerShape: INTENT_ANSWER_SHAPES.example_request };
-    }
-
-    // Summary probe patterns
-    if (/(so to summarize|in summary|so basically|so you.re saying|let me make sure)/i.test(text)) {
-        return { intent: 'summary_probe', confidence: 0.85, answerShape: INTENT_ANSWER_SHAPES.summary_probe };
-    }
-
-    // Coding patterns (Broad detection for programming/implementation)
-    if (/(write code|program|implement|function for|algorithm|how to code|setup a .* project|using .* library|debug this|snippet|boilerplate|example of .* in .*|optimize|refactor|best practice for .* code|utility method|component for|logic for)/i.test(text)) {
-        return { intent: 'coding', confidence: 0.9, answerShape: INTENT_ANSWER_SHAPES.coding };
-    }
-
-    return null; // No clear pattern detected
+  return result;
 }
 
 // ========================
@@ -296,21 +453,38 @@ function detectIntentByContext(
     recentTranscript: string,
     assistantMessageCount: number
 ): IntentResult {
-    // If we've given multiple answers and interviewer is probing, likely follow_up
-    if (assistantMessageCount >= 2) {
-        // Check if interviewer is drilling down
-        const lines = recentTranscript.split('\n');
-        const interviewerLines = lines.filter(l => l.includes('[INTERVIEWER'));
+    const lines = recentTranscript.split('\n');
+    const interviewerLines = lines.filter(l => l.includes('[INTERVIEWER'));
+    const assistantLines = lines.filter(l => l.includes('[ASSISTANT') || l.includes('[INTERVIEWEE'));
+    const lastInterviewerLine = interviewerLines[interviewerLines.length - 1] || '';
+    const lastInterviewerText = lastInterviewerLine.replace(/\[INTERVIEWER[^]]*\]\s*:/i, '').trim();
 
+    // Check if recent assistant responses contained code → follow_up/deep_dive about code
+    const recentAssistantText = assistantLines.slice(-3).join('\n');
+    const hasCodeInRecentAnswers = /```|function |class |const |import |def /.test(recentAssistantText);
+
+    if (assistantMessageCount >= 2) {
         // Short interviewer prompts after long exchanges = follow-up probe
-        const lastInterviewerLine = interviewerLines[interviewerLines.length - 1] || '';
-        if (lastInterviewerLine.length < 50 && assistantMessageCount >= 2) {
+        if (lastInterviewerText.length < 50) {
+            if (hasCodeInRecentAnswers) {
+                return { intent: 'deep_dive', confidence: 0.6, answerShape: INTENT_ANSWER_SHAPES.deep_dive };
+            }
             return { intent: 'follow_up', confidence: 0.7, answerShape: INTENT_ANSWER_SHAPES.follow_up };
+        }
+
+        // Longer prompt after code answer → likely deep_dive
+        if (hasCodeInRecentAnswers) {
+            return { intent: 'deep_dive', confidence: 0.55, answerShape: INTENT_ANSWER_SHAPES.deep_dive };
         }
     }
 
+    // First exchange, long question → likely deep_dive or general
+    if (assistantMessageCount === 0 && lastInterviewerText.length > 80) {
+        return { intent: 'deep_dive', confidence: 0.5, answerShape: INTENT_ANSWER_SHAPES.deep_dive };
+    }
+
     // Default to general
-    return { intent: 'general', confidence: 0.5, answerShape: INTENT_ANSWER_SHAPES.general };
+    return { intent: 'general', confidence: 0.45, answerShape: INTENT_ANSWER_SHAPES.general };
 }
 
 // ========================
@@ -321,9 +495,9 @@ function detectIntentByContext(
  * Main intent classification function (async)
  *
  * Three-tier priority:
- *   1. Regex fast-path (< 1ms, high confidence)
- *   2. Zero-shot SLM fallback (~10-50ms, medium-high confidence)
- *   3. Context-based heuristic (0ms, low confidence)
+ * 1. Regex fast-path (< 1ms, high confidence)
+ * 2. Fine-tuned SLM fallback (~10-50ms, medium-high confidence)
+ * 3. Context-based heuristic (0ms, low confidence)
  */
 export async function classifyIntent(
     lastInterviewerTurn: string | null,
@@ -337,9 +511,9 @@ export async function classifyIntent(
             return patternResult;
         }
 
-        // Tier 2: Try zero-shot SLM (if regex didn't match)
-        if (lastInterviewerTurn.trim().length > 5) {
-            const slmResult = await ZeroShotClassifier.getInstance().classify(lastInterviewerTurn);
+    // Tier 2: Try fine-tuned SLM (if regex didn't match)
+    if (lastInterviewerTurn.trim().length > 5) {
+      const slmResult = await FineTunedClassifier.getInstance().classify(lastInterviewerTurn);
             if (slmResult) {
                 return slmResult;
             }
@@ -362,5 +536,5 @@ export function getAnswerShapeGuidance(intent: ConversationIntent): string {
  * Call this during app initialization to avoid cold-start on first classification.
  */
 export function warmupIntentClassifier(): void {
-    ZeroShotClassifier.getInstance().warmup();
+  FineTunedClassifier.getInstance().warmup();
 }

@@ -100,6 +100,17 @@ const BEHAVIORAL_CUES = [
   'disagreed',
 ];
 
+const BEHAVIORAL_AMBIGUOUS_CUES = [
+  'tell me about your experience',
+  'describe a situation',
+  'how do you manage',
+  'how do you prioritize',
+  'give me an example',
+  'walk me through your experience',
+  'what is your',
+  'style',
+];
+
 const CODING_CUES = [
   'implement',
   'write code',
@@ -129,10 +140,61 @@ const DEEP_DIVE_CUES = [
   'latency',
   'freshness',
   'throughput',
+  'distributed systems',
+  'microservice',
+  'load balancer',
+  'consensus',
+  'raft',
+  'sharding',
+  'replication',
+  'rate limiting',
+  'circuit breaker',
+  'idempotency',
+  'backpressure',
+  'system design',
+  'design a',
+  'design an',
+  'how would you build',
+  'how would you design',
+  'how would you scale',
+  'how would you handle',
+  'how would you approach',
+  'architecture',
+  'scalability',
+  'partition tolerance',
+  'eventual consistency',
+  'strong consistency',
+  'concurrency',
+  'parallelism',
+  'deadlock',
+  'race condition',
+  'big o',
+  'time complexity',
+  'hash table',
+  'binary search',
+  'graph',
+  'sorting',
+  'dynamic programming',
+  'database',
+  'indexing',
+  'transaction',
+  'acid',
+  'docker',
+  'kubernetes',
+  'redis',
+  'kafka',
+  'postgres',
+  'mongodb',
+  'caching',
+  'queue',
+  'pipeline',
 ];
 
 const PAIRWISE_DEEP_DIVE_VS_CLARIFICATION: readonly IntentResult['intent'][] = ['deep_dive', 'clarification'];
 const PAIRWISE_EXAMPLE_REQUEST_VS_DEEP_DIVE: readonly IntentResult['intent'][] = ['example_request', 'deep_dive'];
+const PAIRWISE_FOLLOW_UP_VS_SUMMARY_PROBE: readonly IntentResult['intent'][] = ['follow_up', 'summary_probe'];
+const PAIRWISE_BEHAVIORAL_VS_DEEP_DIVE: readonly IntentResult['intent'][] = ['behavioral', 'deep_dive'];
+const PAIRWISE_CLARIFICATION_VS_EXAMPLE: readonly IntentResult['intent'][] = ['clarification', 'example_request'];
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -214,11 +276,21 @@ export class IntentClassificationCoordinator {
       return 'example_request';
     }
 
-    if (this.includesAnyCue(questionText, DEEP_DIVE_CUES)) {
+    // Weighted behavioral vs deep_dive resolution:
+    // If only strong behavioral cues → behavioral
+    // If strong behavioral + deep_dive cues → deep_dive (technical cues are more specific)
+    // If ambiguous behavioral + deep_dive cues → deep_dive
+    const hasStrongBehavioral = this.includesAnyCue(questionText, BEHAVIORAL_CUES);
+    const hasAmbiguousBehavioral = this.includesAnyCue(questionText, BEHAVIORAL_AMBIGUOUS_CUES);
+    const hasDeepDive = this.includesAnyCue(questionText, DEEP_DIVE_CUES);
+
+    if (hasStrongBehavioral && !hasDeepDive) {
+      return 'behavioral';
+    }
+    if (hasDeepDive) {
       return 'deep_dive';
     }
-
-    if (this.includesAnyCue(questionText, BEHAVIORAL_CUES)) {
+    if (hasAmbiguousBehavioral) {
       return 'behavioral';
     }
 
@@ -284,6 +356,45 @@ export class IntentClassificationCoordinator {
       }
     }
 
+    const followUpVsSummaryProbeCue = likelyIntent === 'follow_up' || likelyIntent === 'summary_probe';
+    if (followUpVsSummaryProbeCue) {
+      const chosen = this.choosePairwiseLabel(primary, fallback, PAIRWISE_FOLLOW_UP_VS_SUMMARY_PROBE);
+      if (chosen) {
+        if (primary.intent === chosen) {
+          return primary;
+        }
+        if (fallback.intent === chosen) {
+          return fallback;
+        }
+      }
+    }
+
+    const behavioralVsDeepDiveCue = likelyIntent === 'behavioral' || likelyIntent === 'deep_dive';
+    if (behavioralVsDeepDiveCue) {
+      const chosen = this.choosePairwiseLabel(primary, fallback, PAIRWISE_BEHAVIORAL_VS_DEEP_DIVE);
+      if (chosen) {
+        if (primary.intent === chosen) {
+          return primary;
+        }
+        if (fallback.intent === chosen) {
+          return fallback;
+        }
+      }
+    }
+
+    const clarificationVsExampleCue = likelyIntent === 'clarification' || likelyIntent === 'example_request';
+    if (clarificationVsExampleCue) {
+      const chosen = this.choosePairwiseLabel(primary, fallback, PAIRWISE_CLARIFICATION_VS_EXAMPLE);
+      if (chosen) {
+        if (primary.intent === chosen) {
+          return primary;
+        }
+        if (fallback.intent === chosen) {
+          return fallback;
+        }
+      }
+    }
+
     return null;
   }
 
@@ -326,13 +437,8 @@ export class IntentClassificationCoordinator {
         return this.includesAnyCue(questionText, DEEP_DIVE_CUES);
       case 'coding':
         return this.includesAnyCue(questionText, CODING_CUES);
-      case 'behavioral':
-        return this.includesAnyCue(questionText, [
-          'tell me about a time',
-          'describe a time',
-          'describe a situation',
-          'walk me through a failure',
-        ]);
+    case 'behavioral':
+      return this.includesAnyCue(questionText, BEHAVIORAL_CUES) || this.includesAnyCue(questionText, BEHAVIORAL_AMBIGUOUS_CUES);
       default:
         return false;
     }

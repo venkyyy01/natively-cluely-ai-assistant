@@ -51,7 +51,7 @@ npm install
 > [!NOTE]
 > `npm install` automatically runs `postinstall` which:
 > 1. Rebuilds `sharp` for your architecture
-> 2. Downloads embedding models (`all-MiniLM-L6-v2`, `mobilebert-uncased-mnli`) to `resources/models/`
+> 2. Downloads embedding models (`all-MiniLM-L6-v2`, `nli-deberta-v3-small`) to `resources/models/`
 > 3. Ensures `sqlite-vec` native binary exists
 
 > [!WARNING]

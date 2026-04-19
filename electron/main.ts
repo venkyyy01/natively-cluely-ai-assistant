@@ -695,7 +695,7 @@ this.initializeAccelerationManager().catch(err => console.warn('[AppState] Accel
 
 this.setupIntelligenceEvents()
 
-    // Pre-warm the zero-shot intent classifier in background
+    // Pre-warm the fine-tuned intent classifier in background
     warmupIntentClassifier();
 
     // Setup Ollama IPC

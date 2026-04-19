@@ -1,0 +1,3507 @@
+[
+  {
+    "text": "What happens to partition tolerance when event bus experiences data center outages?",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "What happened next after you throttled the producers?",
+    "label": 1,
+    "label_text": "follow_up"
+  },
+  {
+    "text": "What are the tradeoffs between horizontal scaling and REST?",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "Walk me through what happened after added circuit breakers.",
+    "label": 1,
+    "label_text": "follow_up"
+  },
+  {
+    "text": "Write a Java snippet that converts CSV to JSON with type inference.",
+    "label": 6,
+    "label_text": "coding"
+  },
+  {
+    "text": "Can you give me one concrete example of that?",
+    "label": 5,
+    "label_text": "example_request"
+  },
+  {
+    "text": "Implement a rate limiter using the token bucket algorithm.",
+    "label": 6,
+    "label_text": "coding"
+  },
+  {
+    "text": "How did things proceed after that?",
+    "label": 1,
+    "label_text": "follow_up"
+  },
+  {
+    "text": "When have you had to make a difficult tradeoff under pressure?",
+    "label": 3,
+    "label_text": "behavioral"
+  },
+  {
+    "text": "What are the tradeoffs between latency and availability?",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "What are the tradeoffs between horizontal scaling and CRDT?",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "Tell me more about how replication pipeline works.",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "Walk me through how Postgres sharding layer works under split brain.",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "Why would you choose synchronous replication over replication?",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "Walk me through what happened after paged the on-call team.",
+    "label": 1,
+    "label_text": "follow_up"
+  },
+  {
+    "text": "Why would you choose horizontal scaling over REST?",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "What should we expect from vector clock under load?",
+    "label": 0,
+    "label_text": "clarification"
+  },
+  {
+    "text": "Implement a method that handles retry with exponential backoff.",
+    "label": 6,
+    "label_text": "coding"
+  },
+  {
+    "text": "Could you unpack that point about eventual consistency?",
+    "label": 0,
+    "label_text": "clarification"
+  },
+  {
+    "text": "What is a specific example of consistency?",
+    "label": 4,
+    "label_text": "example_request"
+  },
+  {
+    "text": "What is one specific instance where consistency applied?",
+    "label": 4,
+    "label_text": "example_request"
+  },
+  {
+    "text": "Write a utility method for validates webhook signatures.",
+    "label": 6,
+    "label_text": "coding"
+  },
+  {
+    "text": "What happened next after you triggered the canary?",
+    "label": 1,
+    "label_text": "follow_up"
+  },
+  {
+    "text": "Write boilerplate code for rate limiter.",
+    "label": 6,
+    "label_text": "coding"
+  },
+  {
+    "text": "What are the tradeoffs between sharding and RabbitMQ?",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "What was the follow-up after applied the hotfix?",
+    "label": 1,
+    "label_text": "follow_up"
+  },
+  {
+    "text": "Correct me if I'm wrong, but circuit breakers protect downstream services?",
+    "label": 5,
+    "label_text": "summary_probe"
+  },
+  {
+    "text": "Sorry, could you clarify the cache invalidation aspect?",
+    "label": 0,
+    "label_text": "clarification"
+  },
+  {
+    "text": "Walk me through a failure you owned end to end.",
+    "label": 3,
+    "label_text": "behavioral"
+  },
+  {
+    "text": "Code an binary search tree in Python.",
+    "label": 6,
+    "label_text": "coding"
+  },
+  {
+    "text": "What steps did you take next?",
+    "label": 1,
+    "label_text": "follow_up"
+  },
+  {
+    "text": "Let me make sure I understand: you prioritize availability over consistency?",
+    "label": 5,
+    "label_text": "summary_probe"
+  },
+  {
+    "text": "For instance, what would event sourcing entail?",
+    "label": 4,
+    "label_text": "example_request"
+  },
+  {
+    "text": "Give me an example of a time you dealt with a difficult stakeholder.",
+    "label": 3,
+    "label_text": "behavioral"
+  },
+  {
+    "text": "I didn't follow the part about gossip protocol, can you explain?",
+    "label": 0,
+    "label_text": "clarification"
+  },
+  {
+    "text": "So basically, you use eventual consistency for read replicas?",
+    "label": 5,
+    "label_text": "summary_probe"
+  },
+  {
+    "text": "Where do you see yourself in five years?",
+    "label": 7,
+    "label_text": "general"
+  },
+  {
+    "text": "When have you had to had to onboard a new team member remotely?",
+    "label": 3,
+    "label_text": "behavioral"
+  },
+  {
+    "text": "Build a component that provides a distributed lock using Redis.",
+    "label": 6,
+    "label_text": "coding"
+  },
+  {
+    "text": "What exactly do you mean by saga pattern?",
+    "label": 0,
+    "label_text": "clarification"
+  },
+  {
+    "text": "Could you unpack that point about backpressure?",
+    "label": 0,
+    "label_text": "clarification"
+  },
+  {
+    "text": "What are the failure modes of CQRS system and how does it recover?",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "How does config management system deal with thundering herd?",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "Then what happened with the search index?",
+    "label": 1,
+    "label_text": "follow_up"
+  },
+  {
+    "text": "What followed the rolled back the release?",
+    "label": 1,
+    "label_text": "follow_up"
+  },
+  {
+    "text": "Walk me through a time you had to escalate an issue.",
+    "label": 3,
+    "label_text": "behavioral"
+  },
+  {
+    "text": "And then what did you do?",
+    "label": 1,
+    "label_text": "follow_up"
+  },
+  {
+    "text": "If I understood correctly, you rely on canary deployments for safety?",
+    "label": 5,
+    "label_text": "summary_probe"
+  },
+  {
+    "text": "Describe a situation where you had to ship under a tight deadline.",
+    "label": 3,
+    "label_text": "behavioral"
+  },
+  {
+    "text": "I didn't follow the part about race condition, can you explain?",
+    "label": 0,
+    "label_text": "clarification"
+  },
+  {
+    "text": "I didn't follow the part about sharding strategy, can you explain?",
+    "label": 0,
+    "label_text": "clarification"
+  },
+  {
+    "text": "Write a function that serializes and deserializes a binary tree.",
+    "label": 6,
+    "label_text": "coding"
+  },
+  {
+    "text": "What are the tradeoffs between freshness and asynchronous replication?",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "Design and code an LRU cache in TypeScript.",
+    "label": 6,
+    "label_text": "coding"
+  },
+  {
+    "text": "I'm not sure I understand the deadlock prevention part \u2014 can you explain?",
+    "label": 0,
+    "label_text": "clarification"
+  },
+  {
+    "text": "Write a program that implements a thread-safe counter.",
+    "label": 6,
+    "label_text": "coding"
+  },
+  {
+    "text": "I'm not sure I understand the saga pattern part \u2014 can you explain?",
+    "label": 0,
+    "label_text": "clarification"
+  },
+  {
+    "text": "Let me make sure I got this: you sharded by tenant before region?",
+    "label": 4,
+    "label_text": "summary_probe"
+  },
+  {
+    "text": "When have you had to make a difficult tradeoff under pressure?",
+    "label": 3,
+    "label_text": "behavioral"
+  },
+  {
+    "text": "How do you reason about parallelism when designing saga orchestrator?",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "What steps did you take next?",
+    "label": 1,
+    "label_text": "follow_up"
+  },
+  {
+    "text": "Walk me through the ACID compliance mechanism in log aggregator.",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "Describe a situation where backpressure matters and explain your approach.",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "Implement command pattern in C++.",
+    "label": 6,
+    "label_text": "coding"
+  },
+  {
+    "text": "Explain the architecture of rate limiter and why you chose that pattern.",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "Why would you choose Kafka over RabbitMQ for an event-driven architecture?",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "How would you scale Kafka cluster under thundering herd?",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "I'm confused about the write-ahead log tradeoff \u2014 can you clarify?",
+    "label": 0,
+    "label_text": "clarification"
+  },
+  {
+    "text": "Tell me about a mistake you made and how you recovered.",
+    "label": 3,
+    "label_text": "behavioral"
+  },
+  {
+    "text": "Walk me through a disagreement you had with a colleague and how you resolved it.",
+    "label": 3,
+    "label_text": "behavioral"
+  },
+  {
+    "text": "I'm not sure I understand the write-ahead log part \u2014 can you explain?",
+    "label": 0,
+    "label_text": "clarification"
+  },
+  {
+    "text": "Walk me through the latency mechanism in service mesh.",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "Can you provide one concrete example of CQRS?",
+    "label": 4,
+    "label_text": "example_request"
+  },
+  {
+    "text": "How would you scale service mesh under slow consumers?",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "So you're saying writes are synchronous and fan-out is async, right?",
+    "label": 5,
+    "label_text": "summary_probe"
+  },
+  {
+    "text": "Walk me through the design of stream processor.",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "Build a class that handles graceful shutdown with in-flight request draining.",
+    "label": 6,
+    "label_text": "coding"
+  },
+  {
+    "text": "How would you design message queue to balance Kafka and RabbitMQ?",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "Walk me through a conflict you had with a teammate.",
+    "label": 3,
+    "label_text": "behavioral"
+  },
+  {
+    "text": "Describe a situation where ACID compliance matters and explain your approach.",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "Describe a situation where you had to push back on a requirement.",
+    "label": 3,
+    "label_text": "behavioral"
+  },
+  {
+    "text": "Write a throttle implementation.",
+    "label": 6,
+    "label_text": "coding"
+  },
+  {
+    "text": "Describe a situation where you had to push back on a requirement.",
+    "label": 3,
+    "label_text": "behavioral"
+  },
+  {
+    "text": "Can you elaborate on that specific point about consensus protocol?",
+    "label": 0,
+    "label_text": "clarification"
+  },
+  {
+    "text": "What interests you most about this role?",
+    "label": 7,
+    "label_text": "general"
+  },
+  {
+    "text": "Why would you choose push over availability?",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "Code an binary search tree in Rust.",
+    "label": 6,
+    "label_text": "coding"
+  },
+  {
+    "text": "Debug this function: it crashes on empty input.",
+    "label": 6,
+    "label_text": "coding"
+  },
+  {
+    "text": "Explain further how you handle reliability.",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "Write a function that handles retry with exponential backoff.",
+    "label": 6,
+    "label_text": "coding"
+  },
+  {
+    "text": "Tell me about your experience with API gateway and how it handles network partitions.",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "What did you do after the incident was resolved?",
+    "label": 1,
+    "label_text": "follow_up"
+  },
+  {
+    "text": "What was the outcome after triggered the canary?",
+    "label": 1,
+    "label_text": "follow_up"
+  },
+  {
+    "text": "I'm confused about the write-ahead log tradeoff \u2014 can you clarify?",
+    "label": 0,
+    "label_text": "clarification"
+  },
+  {
+    "text": "Write a utility method for serializes and deserializes a binary tree.",
+    "label": 6,
+    "label_text": "coding"
+  },
+  {
+    "text": "Can you give a concrete example of consistency?",
+    "label": 4,
+    "label_text": "example_request"
+  },
+  {
+    "text": "How does search index handle clock drift?",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "Can you show an example API payload and handler code for this endpoint?",
+    "label": 6,
+    "label_text": "coding"
+  },
+  {
+    "text": "Tell me about your experience with config management system and how it handles node failures.",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "How does event bus maintain event sourcing during cascading failures?",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "How does data pipeline handle slow consumers?",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "Share an experience where you had to navigate competing priorities.",
+    "label": 3,
+    "label_text": "behavioral"
+  },
+  {
+    "text": "If I understood correctly, writes are synchronous and fan-out is async?",
+    "label": 5,
+    "label_text": "summary_probe"
+  },
+  {
+    "text": "Explain further how you handle idempotency.",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "To confirm, you rely on canary deployments for safety?",
+    "label": 5,
+    "label_text": "summary_probe"
+  },
+  {
+    "text": "What followed the added circuit breakers?",
+    "label": 1,
+    "label_text": "follow_up"
+  },
+  {
+    "text": "How does config management system maintain throughput during slow consumers?",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "To confirm, the first step is hot partition isolation?",
+    "label": 5,
+    "label_text": "summary_probe"
+  },
+  {
+    "text": "Walk me through a conflict you had with a teammate.",
+    "label": 3,
+    "label_text": "behavioral"
+  },
+  {
+    "text": "Tell me about a time you had to make a decision with incomplete information.",
+    "label": 3,
+    "label_text": "behavioral"
+  },
+  {
+    "text": "What are you looking for in your next role?",
+    "label": 7,
+    "label_text": "general"
+  },
+  {
+    "text": "I'm not sure I understand the race condition part \u2014 can you explain?",
+    "label": 0,
+    "label_text": "clarification"
+  },
+  {
+    "text": "If I understand correctly, the key point is you split ownership between ingestion and enrichment?",
+    "label": 5,
+    "label_text": "summary_probe"
+  },
+  {
+    "text": "What is a specific example of partition tolerance?",
+    "label": 4,
+    "label_text": "example_request"
+  },
+  {
+    "text": "Correct me if I'm wrong, but you use eventual consistency for read replicas?",
+    "label": 5,
+    "label_text": "summary_probe"
+  },
+  {
+    "text": "For instance, what would partition tolerance entail?",
+    "label": 4,
+    "label_text": "example_request"
+  },
+  {
+    "text": "Write boilerplate code for strategy pattern.",
+    "label": 6,
+    "label_text": "coding"
+  },
+  {
+    "text": "What is your preferred work style?",
+    "label": 7,
+    "label_text": "general"
+  },
+  {
+    "text": "What exactly do you mean by retry jitter?",
+    "label": 0,
+    "label_text": "clarification"
+  },
+  {
+    "text": "Compare horizontal scaling vs throughput for this use case.",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "Am I right that you split ownership between ingestion and enrichment?",
+    "label": 5,
+    "label_text": "summary_probe"
+  },
+  {
+    "text": "So basically, you use eventual consistency for read replicas?",
+    "label": 5,
+    "label_text": "summary_probe"
+  },
+  {
+    "text": "Can you provide one concrete example of strong consistency?",
+    "label": 4,
+    "label_text": "example_request"
+  },
+  {
+    "text": "When have you had to dealt with a difficult stakeholder?",
+    "label": 3,
+    "label_text": "behavioral"
+  },
+  {
+    "text": "Can you walk through what consensus protocol means step by step?",
+    "label": 0,
+    "label_text": "clarification"
+  },
+  {
+    "text": "What considerations go into choosing between SQL and RabbitMQ?",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "So basically, you rely on canary deployments for safety?",
+    "label": 5,
+    "label_text": "summary_probe"
+  },
+  {
+    "text": "What is one specific instance where backpressure applied?",
+    "label": 4,
+    "label_text": "example_request"
+  },
+  {
+    "text": "Describe a time you influenced a team without authority.",
+    "label": 3,
+    "label_text": "behavioral"
+  },
+  {
+    "text": "Describe a time when you had to influence people without formal authority.",
+    "label": 3,
+    "label_text": "behavioral"
+  },
+  {
+    "text": "Can you be more specific about compaction strategy?",
+    "label": 0,
+    "label_text": "clarification"
+  },
+  {
+    "text": "Tell me about a situation where you disagreed with your manager.",
+    "label": 3,
+    "label_text": "behavioral"
+  },
+  {
+    "text": "What considerations go into choosing between freshness and REST?",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "How does search index deal with slow consumers?",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "Can you rephrase what you said about circuit breaker?",
+    "label": 0,
+    "label_text": "clarification"
+  },
+  {
+    "text": "What interests you most about this role?",
+    "label": 7,
+    "label_text": "general"
+  },
+  {
+    "text": "Write a JavaScript snippet that implements a sliding window rate limiter.",
+    "label": 6,
+    "label_text": "coding"
+  },
+  {
+    "text": "How so? What does exponential backoff look like in practice?",
+    "label": 0,
+    "label_text": "clarification"
+  },
+  {
+    "text": "Code an circular buffer in Java.",
+    "label": 6,
+    "label_text": "coding"
+  },
+  {
+    "text": "So basically, the saga orchestrator compensates on failure?",
+    "label": 5,
+    "label_text": "summary_probe"
+  },
+  {
+    "text": "And what did you do once the rate limiter recovered?",
+    "label": 1,
+    "label_text": "follow_up"
+  },
+  {
+    "text": "Where do you see yourself in five years?",
+    "label": 7,
+    "label_text": "general"
+  },
+  {
+    "text": "And then? What was the resolution?",
+    "label": 1,
+    "label_text": "follow_up"
+  },
+  {
+    "text": "What is one specific instance where scalability applied?",
+    "label": 4,
+    "label_text": "example_request"
+  },
+  {
+    "text": "What came after the added circuit breakers?",
+    "label": 1,
+    "label_text": "follow_up"
+  },
+  {
+    "text": "Describe a time you influenced a team without authority.",
+    "label": 3,
+    "label_text": "behavioral"
+  },
+  {
+    "text": "Optimize this function for better throughput under load.",
+    "label": 6,
+    "label_text": "coding"
+  },
+  {
+    "text": "Walk me through a time you had to navigated organizational change.",
+    "label": 3,
+    "label_text": "behavioral"
+  },
+  {
+    "text": "Walk me through how log aggregator works under traffic spikes.",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "Share an experience where you had to navigate competing priorities.",
+    "label": 3,
+    "label_text": "behavioral"
+  },
+  {
+    "text": "What motivates you in your work?",
+    "label": 7,
+    "label_text": "general"
+  },
+  {
+    "text": "So basically, you split ownership between ingestion and enrichment?",
+    "label": 5,
+    "label_text": "summary_probe"
+  },
+  {
+    "text": "When have you had to make a difficult tradeoff under pressure?",
+    "label": 3,
+    "label_text": "behavioral"
+  },
+  {
+    "text": "Am I right that you rely on canary deployments for safety?",
+    "label": 5,
+    "label_text": "summary_probe"
+  },
+  {
+    "text": "Walk me through a failure you owned end to end and what you learned.",
+    "label": 3,
+    "label_text": "behavioral"
+  },
+  {
+    "text": "Describe a time when you had to disagreed with your manager on a technical decision.",
+    "label": 3,
+    "label_text": "behavioral"
+  },
+  {
+    "text": "What did you do after the incident was resolved?",
+    "label": 1,
+    "label_text": "follow_up"
+  },
+  {
+    "text": "Can you give me an instance where latency was critical?",
+    "label": 4,
+    "label_text": "example_request"
+  },
+  {
+    "text": "What came next in the timeline?",
+    "label": 1,
+    "label_text": "follow_up"
+  },
+  {
+    "text": "What are the failure modes of API gateway and how does it recover?",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "Walk me through what happened after applied the hotfix.",
+    "label": 1,
+    "label_text": "follow_up"
+  },
+  {
+    "text": "Walk me through a disagreement you had with a colleague and how you resolved it.",
+    "label": 3,
+    "label_text": "behavioral"
+  },
+  {
+    "text": "Can you elaborate on that specific point about circuit breaker?",
+    "label": 0,
+    "label_text": "clarification"
+  },
+  {
+    "text": "Give me an example of backpressure in practice.",
+    "label": 4,
+    "label_text": "example_request"
+  },
+  {
+    "text": "Build a component that handles graceful shutdown with in-flight request draining.",
+    "label": 6,
+    "label_text": "coding"
+  },
+  {
+    "text": "Share an experience where you had to recover from a failed deployment.",
+    "label": 3,
+    "label_text": "behavioral"
+  },
+  {
+    "text": "Explain the architecture of stream processor and why you chose that pattern.",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "Can you provide one concrete example of strong consistency?",
+    "label": 4,
+    "label_text": "example_request"
+  },
+  {
+    "text": "Do you have any questions for us about the position?",
+    "label": 7,
+    "label_text": "general"
+  },
+  {
+    "text": "How do you reason about freshness when designing service mesh?",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "Let me make sure I understand: the saga orchestrator compensates on failure?",
+    "label": 5,
+    "label_text": "summary_probe"
+  },
+  {
+    "text": "What are you looking for in your next role?",
+    "label": 7,
+    "label_text": "general"
+  },
+  {
+    "text": "After you applied the hotfix, what changed?",
+    "label": 1,
+    "label_text": "follow_up"
+  },
+  {
+    "text": "Write a Go snippet that validates webhook signatures.",
+    "label": 6,
+    "label_text": "coding"
+  },
+  {
+    "text": "Give me an example of a time you had to ship under a tight deadline.",
+    "label": 3,
+    "label_text": "behavioral"
+  },
+  {
+    "text": "Then what happened with the Postgres sharding layer?",
+    "label": 1,
+    "label_text": "follow_up"
+  },
+  {
+    "text": "Where do you see yourself in five years?",
+    "label": 7,
+    "label_text": "general"
+  },
+  {
+    "text": "How would you design saga orchestrator to balance consistency and pull?",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "What is your biggest strength?",
+    "label": 7,
+    "label_text": "general"
+  },
+  {
+    "text": "Tell me about a time you failed to meet a deadline.",
+    "label": 3,
+    "label_text": "behavioral"
+  },
+  {
+    "text": "What was the next thing you did after triggered the canary?",
+    "label": 1,
+    "label_text": "follow_up"
+  },
+  {
+    "text": "Can you clarify what you mean by sharding strategy?",
+    "label": 0,
+    "label_text": "clarification"
+  },
+  {
+    "text": "Implement a method that serializes and deserializes a binary tree.",
+    "label": 6,
+    "label_text": "coding"
+  },
+  {
+    "text": "What happens to scalability when feature flag service experiences hot partitions?",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "If I understood correctly, the system uses a write-ahead log for durability?",
+    "label": 5,
+    "label_text": "summary_probe"
+  },
+  {
+    "text": "Can you clarify the scope boundary you drew between services?",
+    "label": 0,
+    "label_text": "clarification"
+  },
+  {
+    "text": "Code an rate limiter in C++.",
+    "label": 6,
+    "label_text": "coding"
+  },
+  {
+    "text": "Implement debouncing in JavaScript.",
+    "label": 6,
+    "label_text": "coding"
+  },
+  {
+    "text": "Share an experience where you had to navigate competing priorities from stakeholders.",
+    "label": 3,
+    "label_text": "behavioral"
+  },
+  {
+    "text": "What was the outcome after implemented retry logic?",
+    "label": 1,
+    "label_text": "follow_up"
+  },
+  {
+    "text": "What is one specific instance where event sourcing applied?",
+    "label": 4,
+    "label_text": "example_request"
+  },
+  {
+    "text": "Can you rephrase what you said about canary release?",
+    "label": 0,
+    "label_text": "clarification"
+  },
+  {
+    "text": "How do you stay current with industry trends?",
+    "label": 7,
+    "label_text": "general"
+  },
+  {
+    "text": "How does Kafka cluster maintain event sourcing during data center outages?",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "What do you mean by eventual consistency in this context?",
+    "label": 0,
+    "label_text": "clarification"
+  },
+  {
+    "text": "How did that go after you triggered the canary?",
+    "label": 1,
+    "label_text": "follow_up"
+  },
+  {
+    "text": "Implement command pattern in C++.",
+    "label": 6,
+    "label_text": "coding"
+  },
+  {
+    "text": "What exactly is outbox pattern here?",
+    "label": 0,
+    "label_text": "clarification"
+  },
+  {
+    "text": "So to summarize, your approach is circuit breakers protect downstream services?",
+    "label": 5,
+    "label_text": "summary_probe"
+  },
+  {
+    "text": "Like what? Give me one specific case.",
+    "label": 4,
+    "label_text": "example_request"
+  },
+  {
+    "text": "What followed the restarted the service?",
+    "label": 1,
+    "label_text": "follow_up"
+  },
+  {
+    "text": "Tell me about yourself.",
+    "label": 7,
+    "label_text": "general"
+  },
+  {
+    "text": "Walk me through a failure you owned end to end.",
+    "label": 3,
+    "label_text": "behavioral"
+  },
+  {
+    "text": "Give me an example of ACID compliance in practice.",
+    "label": 4,
+    "label_text": "example_request"
+  },
+  {
+    "text": "And what about after the paused the deployment \u2014 what was the impact?",
+    "label": 1,
+    "label_text": "follow_up"
+  },
+  {
+    "text": "Walk me through a conflict you had with a teammate.",
+    "label": 3,
+    "label_text": "behavioral"
+  },
+  {
+    "text": "Can you provide one concrete example of concurrency?",
+    "label": 4,
+    "label_text": "example_request"
+  },
+  {
+    "text": "So you're saying you split ownership between ingestion and enrichment, right?",
+    "label": 5,
+    "label_text": "summary_probe"
+  },
+  {
+    "text": "Do you have any questions for us about the position?",
+    "label": 7,
+    "label_text": "general"
+  },
+  {
+    "text": "How did things proceed after that?",
+    "label": 1,
+    "label_text": "follow_up"
+  },
+  {
+    "text": "How did the team respond after paged the on-call team?",
+    "label": 1,
+    "label_text": "follow_up"
+  },
+  {
+    "text": "So to summarize, your approach is the first step is hot partition isolation?",
+    "label": 5,
+    "label_text": "summary_probe"
+  },
+  {
+    "text": "Share an experience where you had to navigate competing priorities.",
+    "label": 3,
+    "label_text": "behavioral"
+  },
+  {
+    "text": "Implement prototype pattern in Python.",
+    "label": 6,
+    "label_text": "coding"
+  },
+  {
+    "text": "Then what happened with the search index?",
+    "label": 1,
+    "label_text": "follow_up"
+  },
+  {
+    "text": "Refactor this code to add proper error handling.",
+    "label": 6,
+    "label_text": "coding"
+  },
+  {
+    "text": "What does backpressure actually entail in your design?",
+    "label": 0,
+    "label_text": "clarification"
+  },
+  {
+    "text": "How did that go after you throttled the producers?",
+    "label": 1,
+    "label_text": "follow_up"
+  },
+  {
+    "text": "Can you clarify what you mean by hot partition?",
+    "label": 0,
+    "label_text": "clarification"
+  },
+  {
+    "text": "If I understand correctly, the key point is you shard by tenant before region?",
+    "label": 5,
+    "label_text": "summary_probe"
+  },
+  {
+    "text": "Do I have this right \u2014 you use eventual consistency for read replicas?",
+    "label": 5,
+    "label_text": "summary_probe"
+  },
+  {
+    "text": "Let me make sure I understand: writes are synchronous and fan-out is async?",
+    "label": 5,
+    "label_text": "summary_probe"
+  },
+  {
+    "text": "What is the concurrency consideration when building rate limiter?",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "Write a binary search tree implementation.",
+    "label": 6,
+    "label_text": "coding"
+  },
+  {
+    "text": "Implement the handler code for implements a thread-safe counter.",
+    "label": 6,
+    "label_text": "coding"
+  },
+  {
+    "text": "Explain the availability tradeoff in your design.",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "Give me an example of latency in practice.",
+    "label": 4,
+    "label_text": "example_request"
+  },
+  {
+    "text": "How would you handle conflict between cache freshness and latency in a CDN?",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "Walk me through a failure you owned end to end.",
+    "label": 3,
+    "label_text": "behavioral"
+  },
+  {
+    "text": "Tell me about a situation where you disagreed with your manager.",
+    "label": 3,
+    "label_text": "behavioral"
+  },
+  {
+    "text": "Walk me through a time you had to disagreed with your manager on a technical decision.",
+    "label": 3,
+    "label_text": "behavioral"
+  },
+  {
+    "text": "Can you be more specific about feature flagging?",
+    "label": 0,
+    "label_text": "clarification"
+  },
+  {
+    "text": "Implement decorator pattern in C++.",
+    "label": 6,
+    "label_text": "coding"
+  },
+  {
+    "text": "Walk me through a time you had to escalate an issue.",
+    "label": 3,
+    "label_text": "behavioral"
+  },
+  {
+    "text": "Can you rephrase what you said about exponential backoff?",
+    "label": 0,
+    "label_text": "clarification"
+  },
+  {
+    "text": "Optimize this function for faster cold start.",
+    "label": 6,
+    "label_text": "coding"
+  },
+  {
+    "text": "After you restarted the service, what changed?",
+    "label": 1,
+    "label_text": "follow_up"
+  },
+  {
+    "text": "Do you have any questions for us about the position?",
+    "label": 7,
+    "label_text": "general"
+  },
+  {
+    "text": "Do I have this right \u2014 you prioritize availability over consistency?",
+    "label": 5,
+    "label_text": "summary_probe"
+  },
+  {
+    "text": "Tell me about your experience with distributed systems and how you handle partition tolerance.",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "Write a function that computes the running median of a stream.",
+    "label": 6,
+    "label_text": "coding"
+  },
+  {
+    "text": "How would you design message queue to balance gRPC and monolith?",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "Write a program that finds the longest increasing subsequence.",
+    "label": 6,
+    "label_text": "coding"
+  },
+  {
+    "text": "Tell me about a time you had to influence leadership.",
+    "label": 3,
+    "label_text": "behavioral"
+  },
+  {
+    "text": "Explain the concurrency tradeoff in your design.",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "Write a program that computes the running median of a stream.",
+    "label": 6,
+    "label_text": "coding"
+  },
+  {
+    "text": "Tell me about your experience with stream processor and how it handles thundering herd.",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "So to summarize, your approach is writes are synchronous and fan-out is async?",
+    "label": 5,
+    "label_text": "summary_probe"
+  },
+  {
+    "text": "What interests you most about this role?",
+    "label": 7,
+    "label_text": "general"
+  },
+  {
+    "text": "What happened next after you paused the deployment?",
+    "label": 1,
+    "label_text": "follow_up"
+  },
+  {
+    "text": "Then what happened with the log aggregator?",
+    "label": 1,
+    "label_text": "follow_up"
+  },
+  {
+    "text": "Explain the impact of ACID compliance on worker pool performance.",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "I'm confused about the outbox pattern tradeoff \u2014 can you clarify?",
+    "label": 0,
+    "label_text": "clarification"
+  },
+  {
+    "text": "What kind of team environment helps you do your best work?",
+    "label": 7,
+    "label_text": "general"
+  },
+  {
+    "text": "Sorry, could you clarify the write-ahead log aspect?",
+    "label": 0,
+    "label_text": "clarification"
+  },
+  {
+    "text": "What do you mean by consensus protocol in this context?",
+    "label": 0,
+    "label_text": "clarification"
+  },
+  {
+    "text": "Describe a situation where you had to implement backpressure in a streaming system.",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "Walk me through the design of replication pipeline.",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "Describe a situation where you had to push back on a requirement.",
+    "label": 3,
+    "label_text": "behavioral"
+  },
+  {
+    "text": "Explain the impact of idempotency on feature flag service performance.",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "What should we expect from load shedding under load?",
+    "label": 0,
+    "label_text": "clarification"
+  },
+  {
+    "text": "Tell me about yourself.",
+    "label": 7,
+    "label_text": "general"
+  },
+  {
+    "text": "Describe a situation where latency matters and explain your approach.",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "Implement singleton in C++.",
+    "label": 6,
+    "label_text": "coding"
+  },
+  {
+    "text": "Explain the consistency tradeoff in your design.",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "Optimize this function for reduced latency.",
+    "label": 6,
+    "label_text": "coding"
+  },
+  {
+    "text": "Refactor this code to extract a reusable utility.",
+    "label": 6,
+    "label_text": "coding"
+  },
+  {
+    "text": "Write code for skip list.",
+    "label": 6,
+    "label_text": "coding"
+  },
+  {
+    "text": "Walk me through a disagreement you had with a colleague and how you resolved it.",
+    "label": 3,
+    "label_text": "behavioral"
+  },
+  {
+    "text": "Walk me through a conflict you had with a teammate.",
+    "label": 3,
+    "label_text": "behavioral"
+  },
+  {
+    "text": "Optimize this function for reduced latency.",
+    "label": 6,
+    "label_text": "coding"
+  },
+  {
+    "text": "To confirm, circuit breakers protect downstream services?",
+    "label": 5,
+    "label_text": "summary_probe"
+  },
+  {
+    "text": "How do you approach scalability in a distributed environment?",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "Explain the tradeoffs you made between consistency and availability in your last project.",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "What interests you most about this role?",
+    "label": 7,
+    "label_text": "general"
+  },
+  {
+    "text": "When have you had to had to make a decision with incomplete information?",
+    "label": 3,
+    "label_text": "behavioral"
+  },
+  {
+    "text": "What steps did you take next?",
+    "label": 1,
+    "label_text": "follow_up"
+  },
+  {
+    "text": "Can you give a concrete example of backpressure?",
+    "label": 4,
+    "label_text": "example_request"
+  },
+  {
+    "text": "So you're saying you shard by tenant before region, right?",
+    "label": 5,
+    "label_text": "summary_probe"
+  },
+  {
+    "text": "Debug this function: it returns stale data after cache invalidation.",
+    "label": 6,
+    "label_text": "coding"
+  },
+  {
+    "text": "How do you approach work-life balance?",
+    "label": 7,
+    "label_text": "general"
+  },
+  {
+    "text": "What followed the throttled the producers?",
+    "label": 1,
+    "label_text": "follow_up"
+  },
+  {
+    "text": "Describe a time you influenced a team without authority.",
+    "label": 3,
+    "label_text": "behavioral"
+  },
+  {
+    "text": "What came after the restarted the service?",
+    "label": 1,
+    "label_text": "follow_up"
+  },
+  {
+    "text": "What was the follow-up after implemented retry logic?",
+    "label": 1,
+    "label_text": "follow_up"
+  },
+  {
+    "text": "How do you approach partition tolerance in a distributed environment?",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "Optimize this function for smaller bundle size.",
+    "label": 6,
+    "label_text": "coding"
+  },
+  {
+    "text": "Tell me about a time you failed to meet a deadline.",
+    "label": 3,
+    "label_text": "behavioral"
+  },
+  {
+    "text": "Implement a method that handles retry with exponential backoff.",
+    "label": 6,
+    "label_text": "coding"
+  },
+  {
+    "text": "Tell me about your experience with Postgres sharding layer and how it handles network partitions.",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "Walk me through a conflict you had with a teammate.",
+    "label": 3,
+    "label_text": "behavioral"
+  },
+  {
+    "text": "After that, what was the next step?",
+    "label": 1,
+    "label_text": "follow_up"
+  },
+  {
+    "text": "What was the follow-up after paused the deployment?",
+    "label": 1,
+    "label_text": "follow_up"
+  },
+  {
+    "text": "How did things proceed after that?",
+    "label": 1,
+    "label_text": "follow_up"
+  },
+  {
+    "text": "How did that go after you scaled up the consumer pool?",
+    "label": 1,
+    "label_text": "follow_up"
+  },
+  {
+    "text": "And what did you do once the API gateway recovered?",
+    "label": 1,
+    "label_text": "follow_up"
+  },
+  {
+    "text": "Walk me through the design of event bus.",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "Implement rate limiter in C++.",
+    "label": 6,
+    "label_text": "coding"
+  },
+  {
+    "text": "How does log aggregator handle thundering herd?",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "Describe a situation where you had to prioritize competing demands.",
+    "label": 3,
+    "label_text": "behavioral"
+  },
+  {
+    "text": "What is your biggest strength?",
+    "label": 7,
+    "label_text": "general"
+  },
+  {
+    "text": "How do you reason about availability when designing log aggregator?",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "So you are saying writes stay synchronous while fan-out is async, right?",
+    "label": 4,
+    "label_text": "summary_probe"
+  },
+  {
+    "text": "How so? What does canary release look like in practice?",
+    "label": 0,
+    "label_text": "clarification"
+  },
+  {
+    "text": "How did the team respond after restarted the service?",
+    "label": 1,
+    "label_text": "follow_up"
+  },
+  {
+    "text": "Walk me through your experience with consensus protocols and why you chose Raft.",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "Explain the impact of latency on message queue performance.",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "What are the tradeoffs between microservices and cache hit rate?",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "Like what? Give me one specific case.",
+    "label": 4,
+    "label_text": "example_request"
+  },
+  {
+    "text": "When have you had to make a difficult tradeoff under pressure?",
+    "label": 3,
+    "label_text": "behavioral"
+  },
+  {
+    "text": "Can you elaborate on that specific point about feature flagging?",
+    "label": 0,
+    "label_text": "clarification"
+  },
+  {
+    "text": "I'm confused about the feature flagging tradeoff \u2014 can you clarify?",
+    "label": 0,
+    "label_text": "clarification"
+  },
+  {
+    "text": "Design and code skip list in Go.",
+    "label": 6,
+    "label_text": "coding"
+  },
+  {
+    "text": "How would you code trie?",
+    "label": 6,
+    "label_text": "coding"
+  },
+  {
+    "text": "Can you give me an instance where consistency was critical?",
+    "label": 4,
+    "label_text": "example_request"
+  },
+  {
+    "text": "What should we expect from gossip protocol under load?",
+    "label": 0,
+    "label_text": "clarification"
+  },
+  {
+    "text": "Implement consistent hashing in TypeScript.",
+    "label": 6,
+    "label_text": "coding"
+  },
+  {
+    "text": "Give me an example of a time you led a project that was at risk of missing its deadline.",
+    "label": 3,
+    "label_text": "behavioral"
+  },
+  {
+    "text": "To confirm, circuit breakers protect downstream services?",
+    "label": 5,
+    "label_text": "summary_probe"
+  },
+  {
+    "text": "What came after the rolled back the release?",
+    "label": 1,
+    "label_text": "follow_up"
+  },
+  {
+    "text": "Debug this function: it raises an exception for valid edge cases.",
+    "label": 6,
+    "label_text": "coding"
+  },
+  {
+    "text": "Sorry, could you clarify the sharding strategy aspect?",
+    "label": 0,
+    "label_text": "clarification"
+  },
+  {
+    "text": "So you're saying you shard by tenant before region, right?",
+    "label": 5,
+    "label_text": "summary_probe"
+  },
+  {
+    "text": "Can you give a concrete example of ACID compliance?",
+    "label": 4,
+    "label_text": "example_request"
+  },
+  {
+    "text": "What should we expect from graceful degradation under load?",
+    "label": 0,
+    "label_text": "clarification"
+  },
+  {
+    "text": "After you isolated the failing node, what changed?",
+    "label": 1,
+    "label_text": "follow_up"
+  },
+  {
+    "text": "Tell me about your experience building microservices and what tradeoffs you made.",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "Write code for min heap.",
+    "label": 6,
+    "label_text": "coding"
+  },
+  {
+    "text": "Can you give me an instance where latency was critical?",
+    "label": 4,
+    "label_text": "example_request"
+  },
+  {
+    "text": "Implement rate limiter in Rust.",
+    "label": 6,
+    "label_text": "coding"
+  },
+  {
+    "text": "What behavior should I expect from load shedding?",
+    "label": 0,
+    "label_text": "clarification"
+  },
+  {
+    "text": "How do you stay current with industry trends?",
+    "label": 7,
+    "label_text": "general"
+  },
+  {
+    "text": "Tell me about a situation where you disagreed with your manager.",
+    "label": 3,
+    "label_text": "behavioral"
+  },
+  {
+    "text": "Can you give me an instance where availability was critical?",
+    "label": 4,
+    "label_text": "example_request"
+  },
+  {
+    "text": "So you're saying you rely on canary deployments for safety, right?",
+    "label": 5,
+    "label_text": "summary_probe"
+  },
+  {
+    "text": "What do you mean by blue-green deployment in this context?",
+    "label": 0,
+    "label_text": "clarification"
+  },
+  {
+    "text": "Tell me about a time you failed to meet a deadline.",
+    "label": 3,
+    "label_text": "behavioral"
+  },
+  {
+    "text": "Tell me about a time you had to push back on a feature request from leadership.",
+    "label": 3,
+    "label_text": "behavioral"
+  },
+  {
+    "text": "Like what? Give me one specific case.",
+    "label": 4,
+    "label_text": "example_request"
+  },
+  {
+    "text": "Correct me if I'm wrong, but you rely on canary deployments for safety?",
+    "label": 5,
+    "label_text": "summary_probe"
+  },
+  {
+    "text": "Write a function that validates webhook signatures.",
+    "label": 6,
+    "label_text": "coding"
+  },
+  {
+    "text": "And what did you do once the stream processor recovered?",
+    "label": 1,
+    "label_text": "follow_up"
+  },
+  {
+    "text": "How do you handle stress?",
+    "label": 7,
+    "label_text": "general"
+  },
+  {
+    "text": "Walk me through the backpressure mechanism in worker pool.",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "Explain the event sourcing tradeoff in your design.",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "What happened next after you throttled the producers?",
+    "label": 1,
+    "label_text": "follow_up"
+  },
+  {
+    "text": "Could you unpack that point about saga pattern?",
+    "label": 0,
+    "label_text": "clarification"
+  },
+  {
+    "text": "How do you stay current with industry trends?",
+    "label": 7,
+    "label_text": "general"
+  },
+  {
+    "text": "How do you reason about idempotency when designing data pipeline?",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "Design and code throttle in Java.",
+    "label": 6,
+    "label_text": "coding"
+  },
+  {
+    "text": "How does search index handle clock drift?",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "Write a bloom filter implementation.",
+    "label": 6,
+    "label_text": "coding"
+  },
+  {
+    "text": "How do you influence the architecture decision between event sourcing and CQRS?",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "And then what did you do?",
+    "label": 1,
+    "label_text": "follow_up"
+  },
+  {
+    "text": "How do you approach work-life balance?",
+    "label": 7,
+    "label_text": "general"
+  },
+  {
+    "text": "And then? What was the resolution?",
+    "label": 1,
+    "label_text": "follow_up"
+  },
+  {
+    "text": "Can you show a concrete instance of idempotency?",
+    "label": 4,
+    "label_text": "example_request"
+  },
+  {
+    "text": "Tell me about your experience with rate limiter and how it handles node failures.",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "Write a min heap implementation.",
+    "label": 6,
+    "label_text": "coding"
+  },
+  {
+    "text": "Do I have this right \u2014 you rely on canary deployments for safety?",
+    "label": 5,
+    "label_text": "summary_probe"
+  },
+  {
+    "text": "When you say fencing token, what do you mean specifically?",
+    "label": 0,
+    "label_text": "clarification"
+  },
+  {
+    "text": "Walk me through how message queue works under traffic spikes.",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "Walk me through a failure you owned end to end.",
+    "label": 3,
+    "label_text": "behavioral"
+  },
+  {
+    "text": "So basically, writes are synchronous and fan-out is async?",
+    "label": 5,
+    "label_text": "summary_probe"
+  },
+  {
+    "text": "Build a component that manages circuit breaker state transitions.",
+    "label": 6,
+    "label_text": "coding"
+  },
+  {
+    "text": "What exactly is feature flagging here?",
+    "label": 0,
+    "label_text": "clarification"
+  },
+  {
+    "text": "How do you approach work-life balance?",
+    "label": 7,
+    "label_text": "general"
+  },
+  {
+    "text": "Write the algorithm for throttle.",
+    "label": 6,
+    "label_text": "coding"
+  },
+  {
+    "text": "Tell me about a time you had to influence leadership.",
+    "label": 3,
+    "label_text": "behavioral"
+  },
+  {
+    "text": "What is the ACID compliance consideration when building service mesh?",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "Am I right that you rely on canary deployments for safety?",
+    "label": 5,
+    "label_text": "summary_probe"
+  },
+  {
+    "text": "How does replication pipeline maintain circuit breaking during cascading failures?",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "Correct me if I'm wrong, but writes are synchronous and fan-out is async?",
+    "label": 5,
+    "label_text": "summary_probe"
+  },
+  {
+    "text": "Give me an example of a time you had to push back on a feature request.",
+    "label": 3,
+    "label_text": "behavioral"
+  },
+  {
+    "text": "Refactor this code to add proper error handling.",
+    "label": 6,
+    "label_text": "coding"
+  },
+  {
+    "text": "Can you show a concrete instance of latency?",
+    "label": 4,
+    "label_text": "example_request"
+  },
+  {
+    "text": "Can you give a concrete example of event sourcing?",
+    "label": 4,
+    "label_text": "example_request"
+  },
+  {
+    "text": "How do you approach idempotency in a distributed environment?",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "Such as? What does throughput look like concretely?",
+    "label": 4,
+    "label_text": "example_request"
+  },
+  {
+    "text": "What followed the paged the on-call team?",
+    "label": 1,
+    "label_text": "follow_up"
+  },
+  {
+    "text": "Walk me through the design of log aggregator.",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "Compare stateful vs vertical scaling for this use case.",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "Tell me about a time you had to influence leadership.",
+    "label": 3,
+    "label_text": "behavioral"
+  },
+  {
+    "text": "Write a skip list implementation.",
+    "label": 6,
+    "label_text": "coding"
+  },
+  {
+    "text": "How does Postgres sharding layer handle thundering herd?",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "Tell me about a time you had to deal with a critical production outage.",
+    "label": 3,
+    "label_text": "behavioral"
+  },
+  {
+    "text": "How does feature flag service deal with split brain?",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "Write a program that chunks an array into batches of N.",
+    "label": 6,
+    "label_text": "coding"
+  },
+  {
+    "text": "Let me make sure I understand: the saga orchestrator compensates on failure?",
+    "label": 5,
+    "label_text": "summary_probe"
+  },
+  {
+    "text": "Like what? Give me one specific case.",
+    "label": 4,
+    "label_text": "example_request"
+  },
+  {
+    "text": "What does partition tolerance actually entail in your design?",
+    "label": 0,
+    "label_text": "clarification"
+  },
+  {
+    "text": "When have you had to make a difficult tradeoff under pressure?",
+    "label": 3,
+    "label_text": "behavioral"
+  },
+  {
+    "text": "Write a utility method for chunks an array into batches of N.",
+    "label": 6,
+    "label_text": "coding"
+  },
+  {
+    "text": "So you're saying writes are synchronous and fan-out is async, right?",
+    "label": 5,
+    "label_text": "summary_probe"
+  },
+  {
+    "text": "Describe a time when you had to made a mistake that affected production.",
+    "label": 3,
+    "label_text": "behavioral"
+  },
+  {
+    "text": "And what about after the isolated the failing node \u2014 what was the impact?",
+    "label": 1,
+    "label_text": "follow_up"
+  },
+  {
+    "text": "What was the outcome after isolated the failing node?",
+    "label": 1,
+    "label_text": "follow_up"
+  },
+  {
+    "text": "Refactor this code to use dependency injection.",
+    "label": 6,
+    "label_text": "coding"
+  },
+  {
+    "text": "Give me an example of reliability in practice.",
+    "label": 4,
+    "label_text": "example_request"
+  },
+  {
+    "text": "How would you code rate limiter?",
+    "label": 6,
+    "label_text": "coding"
+  },
+  {
+    "text": "Walk me through a conflict you had with a teammate.",
+    "label": 3,
+    "label_text": "behavioral"
+  },
+  {
+    "text": "So you're saying the first step is hot partition isolation, right?",
+    "label": 5,
+    "label_text": "summary_probe"
+  },
+  {
+    "text": "How would you scale worker pool under disk full?",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "Share an experience where you had to push back on a feature request.",
+    "label": 3,
+    "label_text": "behavioral"
+  },
+  {
+    "text": "Explain the architecture of API gateway and why you chose that pattern.",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "How did you handle a conflict with a stakeholder?",
+    "label": 3,
+    "label_text": "behavioral"
+  },
+  {
+    "text": "Design and code trie in Rust.",
+    "label": 6,
+    "label_text": "coding"
+  },
+  {
+    "text": "When you say outbox pattern, what do you mean specifically?",
+    "label": 0,
+    "label_text": "clarification"
+  },
+  {
+    "text": "What considerations go into choosing between event sourcing and replication?",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "After you drained the queue backlog, what changed?",
+    "label": 1,
+    "label_text": "follow_up"
+  },
+  {
+    "text": "Am I right that writes are synchronous and fan-out is async?",
+    "label": 5,
+    "label_text": "summary_probe"
+  },
+  {
+    "text": "What happens to eventual consistency when worker pool experiences traffic spikes?",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "What did you do after the incident was resolved?",
+    "label": 1,
+    "label_text": "follow_up"
+  },
+  {
+    "text": "What is a specific example of scalability?",
+    "label": 4,
+    "label_text": "example_request"
+  },
+  {
+    "text": "For instance, what would eventual consistency entail?",
+    "label": 4,
+    "label_text": "example_request"
+  },
+  {
+    "text": "Tell me about a mistake you made in production and how you recovered.",
+    "label": 3,
+    "label_text": "behavioral"
+  },
+  {
+    "text": "How does replication pipeline handle node failures?",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "Tell me about a mistake you made and how you recovered.",
+    "label": 3,
+    "label_text": "behavioral"
+  },
+  {
+    "text": "How would you scale saga orchestrator under cascading failures?",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "Compare SQL vs NoSQL for a high-throughput write-heavy workload.",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "Could you unpack that point about sharding strategy?",
+    "label": 0,
+    "label_text": "clarification"
+  },
+  {
+    "text": "Could you explain the saga pattern concept more simply?",
+    "label": 0,
+    "label_text": "clarification"
+  },
+  {
+    "text": "Tell me about a time you had to ship under a tight deadline.",
+    "label": 3,
+    "label_text": "behavioral"
+  },
+  {
+    "text": "How do you reason about partition tolerance when designing search index?",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "For instance, what would scalability entail?",
+    "label": 4,
+    "label_text": "example_request"
+  },
+  {
+    "text": "When have you had to make a difficult decision under pressure with incomplete information?",
+    "label": 3,
+    "label_text": "behavioral"
+  },
+  {
+    "text": "Share an experience where you had to deal with a critical production outage.",
+    "label": 3,
+    "label_text": "behavioral"
+  },
+  {
+    "text": "Give me an example of how circuit breakers work in a distributed system.",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "Give me an example of a time you failed to meet a deadline and how you handled it.",
+    "label": 3,
+    "label_text": "behavioral"
+  },
+  {
+    "text": "Walk me through a disagreement you had with a colleague and how you resolved it.",
+    "label": 3,
+    "label_text": "behavioral"
+  },
+  {
+    "text": "Tell me about a mistake you made and how you recovered.",
+    "label": 3,
+    "label_text": "behavioral"
+  },
+  {
+    "text": "Tell me about yourself.",
+    "label": 7,
+    "label_text": "general"
+  },
+  {
+    "text": "What is a specific example of partition tolerance?",
+    "label": 4,
+    "label_text": "example_request"
+  },
+  {
+    "text": "How so? What does outbox pattern look like in practice?",
+    "label": 0,
+    "label_text": "clarification"
+  },
+  {
+    "text": "Give me an example of throughput in practice.",
+    "label": 4,
+    "label_text": "example_request"
+  },
+  {
+    "text": "Write boilerplate code for min heap.",
+    "label": 6,
+    "label_text": "coding"
+  },
+  {
+    "text": "Such as? What does partition tolerance look like concretely?",
+    "label": 4,
+    "label_text": "example_request"
+  },
+  {
+    "text": "Can you give me an instance where throughput was critical?",
+    "label": 4,
+    "label_text": "example_request"
+  },
+  {
+    "text": "Build a class that implements a least-recently-used eviction policy.",
+    "label": 6,
+    "label_text": "coding"
+  },
+  {
+    "text": "After that, what was the next step?",
+    "label": 1,
+    "label_text": "follow_up"
+  },
+  {
+    "text": "Can you walk through what fencing token means step by step?",
+    "label": 0,
+    "label_text": "clarification"
+  },
+  {
+    "text": "And what about after the paged the on-call team \u2014 what was the impact?",
+    "label": 1,
+    "label_text": "follow_up"
+  },
+  {
+    "text": "Write the algorithm for bloom filter.",
+    "label": 6,
+    "label_text": "coding"
+  },
+  {
+    "text": "What came after the scaled up the consumer pool?",
+    "label": 1,
+    "label_text": "follow_up"
+  },
+  {
+    "text": "Like what? Give me one specific case.",
+    "label": 4,
+    "label_text": "example_request"
+  },
+  {
+    "text": "Tell me about a time you made a mistake that affected production.",
+    "label": 3,
+    "label_text": "behavioral"
+  },
+  {
+    "text": "How do you manage tradeoffs between latency and throughput in a data pipeline?",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "What is one specific instance where this tradeoff hurt you?",
+    "label": 5,
+    "label_text": "example_request"
+  },
+  {
+    "text": "What kind of team environment helps you do your best work?",
+    "label": 7,
+    "label_text": "general"
+  },
+  {
+    "text": "Tell me more about how search index works.",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "To confirm, you split ownership between ingestion and enrichment?",
+    "label": 5,
+    "label_text": "summary_probe"
+  },
+  {
+    "text": "Why are you interested in this company?",
+    "label": 7,
+    "label_text": "general"
+  },
+  {
+    "text": "Why are you interested in this company?",
+    "label": 7,
+    "label_text": "general"
+  },
+  {
+    "text": "Walk me through a time you had to had to ship under a tight deadline.",
+    "label": 3,
+    "label_text": "behavioral"
+  },
+  {
+    "text": "Can you provide one concrete example of event sourcing?",
+    "label": 4,
+    "label_text": "example_request"
+  },
+  {
+    "text": "Tell me about a time you had to push back on a feature request.",
+    "label": 3,
+    "label_text": "behavioral"
+  },
+  {
+    "text": "Write the algorithm for binary search tree.",
+    "label": 6,
+    "label_text": "coding"
+  },
+  {
+    "text": "Do I have this right \u2014 writes are synchronous and fan-out is async?",
+    "label": 5,
+    "label_text": "summary_probe"
+  },
+  {
+    "text": "Write the algorithm for hash map.",
+    "label": 6,
+    "label_text": "coding"
+  },
+  {
+    "text": "Can you show a concrete instance of availability?",
+    "label": 4,
+    "label_text": "example_request"
+  },
+  {
+    "text": "Give me an example of CQRS in practice.",
+    "label": 4,
+    "label_text": "example_request"
+  },
+  {
+    "text": "Walk me through a time you had to onboard a new team member during a crisis.",
+    "label": 3,
+    "label_text": "behavioral"
+  },
+  {
+    "text": "So to summarize, your approach is the saga orchestrator compensates on failure?",
+    "label": 5,
+    "label_text": "summary_probe"
+  },
+  {
+    "text": "What came next in the timeline?",
+    "label": 1,
+    "label_text": "follow_up"
+  },
+  {
+    "text": "Share an experience where you dealt with a difficult stakeholder.",
+    "label": 3,
+    "label_text": "behavioral"
+  },
+  {
+    "text": "Explain the architecture of Kafka cluster and why you chose that pattern.",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "Can you clarify what you mean by strong consistency?",
+    "label": 0,
+    "label_text": "clarification"
+  },
+  {
+    "text": "Am I right that the saga orchestrator compensates on failure?",
+    "label": 5,
+    "label_text": "summary_probe"
+  },
+  {
+    "text": "Walk me through a conflict you had with a teammate.",
+    "label": 3,
+    "label_text": "behavioral"
+  },
+  {
+    "text": "I didn't follow the part about compaction strategy, can you explain?",
+    "label": 0,
+    "label_text": "clarification"
+  },
+  {
+    "text": "Write a utility method for chunks an array into batches of N.",
+    "label": 6,
+    "label_text": "coding"
+  },
+  {
+    "text": "Tell me about a mistake you made and how you recovered.",
+    "label": 3,
+    "label_text": "behavioral"
+  },
+  {
+    "text": "Why should we hire you?",
+    "label": 7,
+    "label_text": "general"
+  },
+  {
+    "text": "Write code for skip list.",
+    "label": 6,
+    "label_text": "coding"
+  },
+  {
+    "text": "Walk me through a time you had to escalate an issue.",
+    "label": 3,
+    "label_text": "behavioral"
+  },
+  {
+    "text": "Can you give me an instance where ACID compliance was critical?",
+    "label": 4,
+    "label_text": "example_request"
+  },
+  {
+    "text": "What behavior should I expect from circuit breaker?",
+    "label": 0,
+    "label_text": "clarification"
+  },
+  {
+    "text": "Describe a situation where you had to choose between consistency and availability in your system.",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "What are the tradeoffs between SQL and replication?",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "Can you walk through what vector clock means step by step?",
+    "label": 0,
+    "label_text": "clarification"
+  },
+  {
+    "text": "Why are you interested in this company?",
+    "label": 7,
+    "label_text": "general"
+  },
+  {
+    "text": "Tell me about a time you failed to meet a deadline.",
+    "label": 3,
+    "label_text": "behavioral"
+  },
+  {
+    "text": "Walk me through the design of worker pool.",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "Walk me through a time you had to had to influence a team without formal authority.",
+    "label": 3,
+    "label_text": "behavioral"
+  },
+  {
+    "text": "Implement a method that merges overlapping time intervals.",
+    "label": 6,
+    "label_text": "coding"
+  },
+  {
+    "text": "When you say deadlock prevention, what do you mean specifically?",
+    "label": 0,
+    "label_text": "clarification"
+  },
+  {
+    "text": "What happened next after you implemented retry logic?",
+    "label": 1,
+    "label_text": "follow_up"
+  },
+  {
+    "text": "Write a Python snippet that merges overlapping time intervals.",
+    "label": 6,
+    "label_text": "coding"
+  },
+  {
+    "text": "Write a function that implements a thread-safe counter.",
+    "label": 6,
+    "label_text": "coding"
+  },
+  {
+    "text": "Can you give me an instance where scalability was critical?",
+    "label": 4,
+    "label_text": "example_request"
+  },
+  {
+    "text": "Debug this function: it leaks memory when called repeatedly.",
+    "label": 6,
+    "label_text": "coding"
+  },
+  {
+    "text": "If I understood correctly, you split ownership between ingestion and enrichment?",
+    "label": 5,
+    "label_text": "summary_probe"
+  },
+  {
+    "text": "Walk me through how Postgres sharding layer works under thundering herd.",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "Share an experience where you had to navigate competing priorities.",
+    "label": 3,
+    "label_text": "behavioral"
+  },
+  {
+    "text": "After that, what was the next step?",
+    "label": 1,
+    "label_text": "follow_up"
+  },
+  {
+    "text": "Describe a situation where you had a conflict with a teammate and how you resolved it.",
+    "label": 3,
+    "label_text": "behavioral"
+  },
+  {
+    "text": "Refactor this code to eliminate code duplication.",
+    "label": 6,
+    "label_text": "coding"
+  },
+  {
+    "text": "Describe a situation where you had to resolve a conflict between two teams.",
+    "label": 3,
+    "label_text": "behavioral"
+  },
+  {
+    "text": "Walk me through a failure you owned end to end.",
+    "label": 3,
+    "label_text": "behavioral"
+  },
+  {
+    "text": "Design and code debounce in Rust.",
+    "label": 6,
+    "label_text": "coding"
+  },
+  {
+    "text": "Tell me about a situation where you disagreed with your manager.",
+    "label": 3,
+    "label_text": "behavioral"
+  },
+  {
+    "text": "Let me make sure I understand: circuit breakers protect downstream services?",
+    "label": 5,
+    "label_text": "summary_probe"
+  },
+  {
+    "text": "Why would you choose microservices over monolith?",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "Write a Go snippet that handles retry with exponential backoff.",
+    "label": 6,
+    "label_text": "coding"
+  },
+  {
+    "text": "Compare stateful vs monolith for this use case.",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "Tell me about a situation where you disagreed with your manager.",
+    "label": 3,
+    "label_text": "behavioral"
+  },
+  {
+    "text": "Describe a situation where you had to push back on a requirement.",
+    "label": 3,
+    "label_text": "behavioral"
+  },
+  {
+    "text": "So you're saying you split ownership between ingestion and enrichment, right?",
+    "label": 5,
+    "label_text": "summary_probe"
+  },
+  {
+    "text": "And then what did you do?",
+    "label": 1,
+    "label_text": "follow_up"
+  },
+  {
+    "text": "What should we expect from partition tolerance under load?",
+    "label": 0,
+    "label_text": "clarification"
+  },
+  {
+    "text": "What is a specific example of eventual consistency?",
+    "label": 4,
+    "label_text": "example_request"
+  },
+  {
+    "text": "What kind of team environment helps you do your best work?",
+    "label": 7,
+    "label_text": "general"
+  },
+  {
+    "text": "Explain the architecture of stream processor and why you chose that pattern.",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "Can you give a concrete example of retry jitter in practice?",
+    "label": 5,
+    "label_text": "example_request"
+  },
+  {
+    "text": "When have you had to led a project that was at risk of missing its deadline?",
+    "label": 3,
+    "label_text": "behavioral"
+  },
+  {
+    "text": "Implement the handler code for serializes and deserializes a binary tree.",
+    "label": 6,
+    "label_text": "coding"
+  },
+  {
+    "text": "Am I right that circuit breakers protect downstream services?",
+    "label": 5,
+    "label_text": "summary_probe"
+  },
+  {
+    "text": "Such as? What does circuit breaking look like concretely?",
+    "label": 4,
+    "label_text": "example_request"
+  },
+  {
+    "text": "Dive deeper into the stream processor architecture.",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "Describe a situation where partition tolerance matters and explain your approach.",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "Walk me through a time you had to escalate an issue.",
+    "label": 3,
+    "label_text": "behavioral"
+  },
+  {
+    "text": "For instance, what would parallelism entail?",
+    "label": 4,
+    "label_text": "example_request"
+  },
+  {
+    "text": "Compare synchronous replication vs availability for this use case.",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "How do you stay current with industry trends?",
+    "label": 7,
+    "label_text": "general"
+  },
+  {
+    "text": "When have you had to led a project that was at risk of missing its deadline?",
+    "label": 3,
+    "label_text": "behavioral"
+  },
+  {
+    "text": "What is your preferred work style?",
+    "label": 7,
+    "label_text": "general"
+  },
+  {
+    "text": "Dive deeper into the Postgres sharding layer architecture.",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "If I understand correctly, the key point is you shard by tenant before region?",
+    "label": 5,
+    "label_text": "summary_probe"
+  },
+  {
+    "text": "Walk me through a time you had to escalate an issue.",
+    "label": 3,
+    "label_text": "behavioral"
+  },
+  {
+    "text": "Describe a time when you had to had to ship under a tight deadline.",
+    "label": 3,
+    "label_text": "behavioral"
+  },
+  {
+    "text": "Describe a time you influenced a team without authority.",
+    "label": 3,
+    "label_text": "behavioral"
+  },
+  {
+    "text": "If I understand correctly, the key point is writes are synchronous and fan-out is async?",
+    "label": 5,
+    "label_text": "summary_probe"
+  },
+  {
+    "text": "How did you handle a conflict with a stakeholder?",
+    "label": 3,
+    "label_text": "behavioral"
+  },
+  {
+    "text": "How does Redis cluster handle network partitions?",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "What is your biggest strength?",
+    "label": 7,
+    "label_text": "general"
+  },
+  {
+    "text": "Write a Java snippet that computes the running median of a stream.",
+    "label": 6,
+    "label_text": "coding"
+  },
+  {
+    "text": "Dive deeper into the API gateway architecture.",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "What are the failure modes of worker pool and how does it recover?",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "Share an experience where you had to navigate competing priorities.",
+    "label": 3,
+    "label_text": "behavioral"
+  },
+  {
+    "text": "What happens to event sourcing when Redis cluster experiences data center outages?",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "Can you provide one concrete example of event sourcing?",
+    "label": 4,
+    "label_text": "example_request"
+  },
+  {
+    "text": "Tell me more about how notification service works.",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "For instance, what would idempotency entail?",
+    "label": 4,
+    "label_text": "example_request"
+  },
+  {
+    "text": "How do you handle stress?",
+    "label": 7,
+    "label_text": "general"
+  },
+  {
+    "text": "Let me make sure I understand: you split ownership between ingestion and enrichment?",
+    "label": 5,
+    "label_text": "summary_probe"
+  },
+  {
+    "text": "Describe a situation where backpressure matters and explain your approach.",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "Correct me if I'm wrong, but you prioritize availability over consistency?",
+    "label": 5,
+    "label_text": "summary_probe"
+  },
+  {
+    "text": "Code an rate limiter in Python.",
+    "label": 6,
+    "label_text": "coding"
+  },
+  {
+    "text": "Give me an example of backpressure in practice.",
+    "label": 4,
+    "label_text": "example_request"
+  },
+  {
+    "text": "Write code for LRU cache.",
+    "label": 6,
+    "label_text": "coding"
+  },
+  {
+    "text": "Describe a time when you had to had to recover from a failed deployment.",
+    "label": 3,
+    "label_text": "behavioral"
+  },
+  {
+    "text": "What does race condition actually entail in your design?",
+    "label": 0,
+    "label_text": "clarification"
+  },
+  {
+    "text": "Correct me if I'm wrong, but the first step is hot partition isolation?",
+    "label": 5,
+    "label_text": "summary_probe"
+  },
+  {
+    "text": "Describe a situation where you had to resolve a conflict between two teams.",
+    "label": 3,
+    "label_text": "behavioral"
+  },
+  {
+    "text": "What motivates you in your work?",
+    "label": 7,
+    "label_text": "general"
+  },
+  {
+    "text": "Compare push vs REST for this use case.",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "Walk me through a time you had to made a mistake that affected production.",
+    "label": 3,
+    "label_text": "behavioral"
+  },
+  {
+    "text": "Why should we hire you?",
+    "label": 7,
+    "label_text": "general"
+  },
+  {
+    "text": "How do you approach work-life balance?",
+    "label": 7,
+    "label_text": "general"
+  },
+  {
+    "text": "Dive deeper into the feature flag service architecture.",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "Why should we hire you?",
+    "label": 7,
+    "label_text": "general"
+  },
+  {
+    "text": "What are your career goals?",
+    "label": 7,
+    "label_text": "general"
+  },
+  {
+    "text": "Sorry, could you clarify the deadlock prevention aspect?",
+    "label": 0,
+    "label_text": "clarification"
+  },
+  {
+    "text": "What came next in the timeline?",
+    "label": 1,
+    "label_text": "follow_up"
+  },
+  {
+    "text": "Write the algorithm for skip list.",
+    "label": 6,
+    "label_text": "coding"
+  },
+  {
+    "text": "Can you break down what you meant by deadlock prevention?",
+    "label": 0,
+    "label_text": "clarification"
+  },
+  {
+    "text": "Implement a method that serializes and deserializes a binary tree.",
+    "label": 6,
+    "label_text": "coding"
+  },
+  {
+    "text": "Walk me through how Redis cluster works under split brain.",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "What was the next thing you did after drained the queue backlog?",
+    "label": 1,
+    "label_text": "follow_up"
+  },
+  {
+    "text": "Correct me if I'm wrong, but you use eventual consistency for read replicas?",
+    "label": 5,
+    "label_text": "summary_probe"
+  },
+  {
+    "text": "So to summarize, your approach is you use eventual consistency for read replicas?",
+    "label": 5,
+    "label_text": "summary_probe"
+  },
+  {
+    "text": "Write a function that handles retry with exponential backoff.",
+    "label": 6,
+    "label_text": "coding"
+  },
+  {
+    "text": "Can you break down what you meant by gossip protocol?",
+    "label": 0,
+    "label_text": "clarification"
+  },
+  {
+    "text": "Write code for bloom filter.",
+    "label": 6,
+    "label_text": "coding"
+  },
+  {
+    "text": "Walk me through how notification service works under poison messages.",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "What are the failure modes of rate limiter and how does it recover?",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "What happens to idempotency when Kafka cluster experiences data center outages?",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "How would you design CQRS system to balance SQL and monolith?",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "Design and code concurrent queue in Rust.",
+    "label": 6,
+    "label_text": "coding"
+  },
+  {
+    "text": "What is one specific instance where event sourcing applied?",
+    "label": 4,
+    "label_text": "example_request"
+  },
+  {
+    "text": "What does load shedding actually entail in your design?",
+    "label": 0,
+    "label_text": "clarification"
+  },
+  {
+    "text": "How do you approach backpressure in a distributed environment?",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "Walk me through a time you had to had to onboard a new team member remotely.",
+    "label": 3,
+    "label_text": "behavioral"
+  },
+  {
+    "text": "Write a pub-sub system implementation.",
+    "label": 6,
+    "label_text": "coding"
+  },
+  {
+    "text": "How did the team respond after rolled back the release?",
+    "label": 1,
+    "label_text": "follow_up"
+  },
+  {
+    "text": "Tell me more about how Kafka cluster works.",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "Could you unpack that point about write-ahead log?",
+    "label": 0,
+    "label_text": "clarification"
+  },
+  {
+    "text": "So basically, you prioritize availability over consistency?",
+    "label": 5,
+    "label_text": "summary_probe"
+  },
+  {
+    "text": "Explain the eventual consistency tradeoff in your design.",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "How would you code trie?",
+    "label": 6,
+    "label_text": "coding"
+  },
+  {
+    "text": "Such as? What does idempotency look like concretely?",
+    "label": 4,
+    "label_text": "example_request"
+  },
+  {
+    "text": "Give me an example of a time you navigated organizational change.",
+    "label": 3,
+    "label_text": "behavioral"
+  },
+  {
+    "text": "Implement a method that deduplicates IDs while preserving order.",
+    "label": 6,
+    "label_text": "coding"
+  },
+  {
+    "text": "When you say eventual consistency here, what exactly do you mean?",
+    "label": 0,
+    "label_text": "clarification"
+  },
+  {
+    "text": "Dive deeper into the feature flag service architecture.",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "After you restarted the service, what changed?",
+    "label": 1,
+    "label_text": "follow_up"
+  },
+  {
+    "text": "How did you handle a conflict with a stakeholder?",
+    "label": 3,
+    "label_text": "behavioral"
+  },
+  {
+    "text": "How do you handle stress?",
+    "label": 7,
+    "label_text": "general"
+  },
+  {
+    "text": "Write a utility method for implements a thread-safe counter.",
+    "label": 6,
+    "label_text": "coding"
+  },
+  {
+    "text": "What is a specific example of throughput?",
+    "label": 4,
+    "label_text": "example_request"
+  },
+  {
+    "text": "For instance, what would reliability entail?",
+    "label": 4,
+    "label_text": "example_request"
+  },
+  {
+    "text": "What was the next thing you did after throttled the producers?",
+    "label": 1,
+    "label_text": "follow_up"
+  },
+  {
+    "text": "Implement the handler code for computes the running median of a stream.",
+    "label": 6,
+    "label_text": "coding"
+  },
+  {
+    "text": "Tell me about a mistake you made and how you recovered.",
+    "label": 3,
+    "label_text": "behavioral"
+  },
+  {
+    "text": "How would you design saga orchestrator to balance latency and monolith?",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "Explain further how you handle concurrency.",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "Can you be more specific about vector clock?",
+    "label": 0,
+    "label_text": "clarification"
+  },
+  {
+    "text": "How does search index maintain ACID compliance during node failures?",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "Do I have this right \u2014 you use eventual consistency for read replicas?",
+    "label": 5,
+    "label_text": "summary_probe"
+  },
+  {
+    "text": "Walk me through how you would handle a cascading failure in a microservice architecture.",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "What behavior should I expect from consensus protocol?",
+    "label": 0,
+    "label_text": "clarification"
+  },
+  {
+    "text": "When have you had to handled a situation where you lacked expertise?",
+    "label": 3,
+    "label_text": "behavioral"
+  },
+  {
+    "text": "Give me an example of a time you made a mistake that affected production.",
+    "label": 3,
+    "label_text": "behavioral"
+  },
+  {
+    "text": "How do you handle stress?",
+    "label": 7,
+    "label_text": "general"
+  },
+  {
+    "text": "What behavior should I expect from compaction strategy?",
+    "label": 0,
+    "label_text": "clarification"
+  },
+  {
+    "text": "Do I have this right \u2014 the system uses a write-ahead log for durability?",
+    "label": 5,
+    "label_text": "summary_probe"
+  },
+  {
+    "text": "Debug this function: it crashes on empty input.",
+    "label": 6,
+    "label_text": "coding"
+  },
+  {
+    "text": "And what about after the rolled back the release \u2014 what was the impact?",
+    "label": 1,
+    "label_text": "follow_up"
+  },
+  {
+    "text": "Explain the circuit breaking tradeoff in your design.",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "Walk me through a failure you owned end to end.",
+    "label": 3,
+    "label_text": "behavioral"
+  },
+  {
+    "text": "Correct me if I'm wrong, but you rely on canary deployments for safety?",
+    "label": 5,
+    "label_text": "summary_probe"
+  },
+  {
+    "text": "What is your preferred work style?",
+    "label": 7,
+    "label_text": "general"
+  },
+  {
+    "text": "Debug this function: it raises an exception for valid edge cases.",
+    "label": 6,
+    "label_text": "coding"
+  },
+  {
+    "text": "Can you give a concrete example of idempotency?",
+    "label": 4,
+    "label_text": "example_request"
+  },
+  {
+    "text": "If I understood correctly, you shard by tenant before region?",
+    "label": 5,
+    "label_text": "summary_probe"
+  },
+  {
+    "text": "Describe a situation involving idempotency in a payment processing system.",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "Build a class that implements a least-recently-used eviction policy.",
+    "label": 6,
+    "label_text": "coding"
+  },
+  {
+    "text": "What kind of team environment helps you do your best work?",
+    "label": 7,
+    "label_text": "general"
+  },
+  {
+    "text": "How does service mesh deal with poison messages?",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "I'm not sure I understand the blue-green deployment part \u2014 can you explain?",
+    "label": 0,
+    "label_text": "clarification"
+  },
+  {
+    "text": "Code an debounce in C++.",
+    "label": 6,
+    "label_text": "coding"
+  },
+  {
+    "text": "What is the idempotency consideration when building message queue?",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "What considerations go into choosing between microservices and NoSQL?",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "What is the concurrency consideration when building Kafka cluster?",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "What are your career goals?",
+    "label": 7,
+    "label_text": "general"
+  },
+  {
+    "text": "Such as? What does strong consistency look like concretely?",
+    "label": 4,
+    "label_text": "example_request"
+  },
+  {
+    "text": "Tell me about a time you failed to meet a deadline.",
+    "label": 3,
+    "label_text": "behavioral"
+  },
+  {
+    "text": "Share an experience where you had to onboard a new team member remotely.",
+    "label": 3,
+    "label_text": "behavioral"
+  },
+  {
+    "text": "How would you code concurrent queue?",
+    "label": 6,
+    "label_text": "coding"
+  },
+  {
+    "text": "What is one specific instance where latency applied?",
+    "label": 4,
+    "label_text": "example_request"
+  },
+  {
+    "text": "Describe a situation where you had to push back on a requirement.",
+    "label": 3,
+    "label_text": "behavioral"
+  },
+  {
+    "text": "Build a class that implements an event emitter with once/on/off.",
+    "label": 6,
+    "label_text": "coding"
+  },
+  {
+    "text": "Can you elaborate on that specific point about replication lag?",
+    "label": 0,
+    "label_text": "clarification"
+  },
+  {
+    "text": "Can you give a concrete example of consistency?",
+    "label": 4,
+    "label_text": "example_request"
+  },
+  {
+    "text": "Tell me more about how feature flag service works.",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "If I understood correctly, you use eventual consistency for read replicas?",
+    "label": 5,
+    "label_text": "summary_probe"
+  },
+  {
+    "text": "Compare horizontal scaling vs pull for this use case.",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "Describe a time when you had to dealt with a difficult stakeholder.",
+    "label": 3,
+    "label_text": "behavioral"
+  },
+  {
+    "text": "Build a component that manages a connection pool with health checks.",
+    "label": 6,
+    "label_text": "coding"
+  },
+  {
+    "text": "Walk me through the freshness mechanism in Kafka cluster.",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "What is one specific instance where availability applied?",
+    "label": 4,
+    "label_text": "example_request"
+  },
+  {
+    "text": "Implement singleton pattern in Python.",
+    "label": 6,
+    "label_text": "coding"
+  },
+  {
+    "text": "Then what happened with the event bus?",
+    "label": 1,
+    "label_text": "follow_up"
+  },
+  {
+    "text": "To confirm, you use eventual consistency for read replicas?",
+    "label": 5,
+    "label_text": "summary_probe"
+  },
+  {
+    "text": "If I understand correctly, the key point is you prioritize availability over consistency?",
+    "label": 5,
+    "label_text": "summary_probe"
+  },
+  {
+    "text": "So to summarize, your approach is you shard by tenant before region?",
+    "label": 5,
+    "label_text": "summary_probe"
+  },
+  {
+    "text": "Describe a situation where you had to influence a team without formal authority.",
+    "label": 3,
+    "label_text": "behavioral"
+  },
+  {
+    "text": "How does service mesh deal with node failures?",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "Why should we hire you?",
+    "label": 7,
+    "label_text": "general"
+  },
+  {
+    "text": "Build a class that tracks feature flags with rollout percentages.",
+    "label": 6,
+    "label_text": "coding"
+  },
+  {
+    "text": "When have you had to disagreed with your manager on a technical decision?",
+    "label": 3,
+    "label_text": "behavioral"
+  },
+  {
+    "text": "Write boilerplate code for singleton.",
+    "label": 6,
+    "label_text": "coding"
+  },
+  {
+    "text": "Do I have this right \u2014 the first step is hot partition isolation?",
+    "label": 5,
+    "label_text": "summary_probe"
+  },
+  {
+    "text": "When have you had to make a difficult tradeoff under pressure?",
+    "label": 3,
+    "label_text": "behavioral"
+  },
+  {
+    "text": "Could you explain the rate limiting concept more simply?",
+    "label": 0,
+    "label_text": "clarification"
+  },
+  {
+    "text": "Like what? Give me one specific case.",
+    "label": 4,
+    "label_text": "example_request"
+  },
+  {
+    "text": "To confirm, you use eventual consistency for read replicas?",
+    "label": 5,
+    "label_text": "summary_probe"
+  },
+  {
+    "text": "Do you have any questions for us about the position?",
+    "label": 7,
+    "label_text": "general"
+  },
+  {
+    "text": "Where do you see yourself in five years?",
+    "label": 7,
+    "label_text": "general"
+  },
+  {
+    "text": "Walk me through how you would scale a PostgreSQL database for a global service.",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "Tell me more about how saga orchestrator works.",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "Describe a time when you had to dealt with a difficult stakeholder.",
+    "label": 3,
+    "label_text": "behavioral"
+  },
+  {
+    "text": "And then? What was the resolution?",
+    "label": 1,
+    "label_text": "follow_up"
+  },
+  {
+    "text": "How do you prioritize between strong consistency and availability when designing a database?",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "Can you walk through what rate limiting means step by step?",
+    "label": 0,
+    "label_text": "clarification"
+  },
+  {
+    "text": "How does service mesh deal with disk full?",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "Describe a time when you had to had to recover from a failed deployment.",
+    "label": 3,
+    "label_text": "behavioral"
+  },
+  {
+    "text": "What exactly is outbox pattern here?",
+    "label": 0,
+    "label_text": "clarification"
+  },
+  {
+    "text": "Tell me about a time you had to onboard a new team member remotely.",
+    "label": 3,
+    "label_text": "behavioral"
+  },
+  {
+    "text": "Can you show a concrete instance of eventual consistency?",
+    "label": 4,
+    "label_text": "example_request"
+  },
+  {
+    "text": "What motivates you in your work?",
+    "label": 7,
+    "label_text": "general"
+  },
+  {
+    "text": "Share an experience where you had to navigate competing priorities.",
+    "label": 3,
+    "label_text": "behavioral"
+  },
+  {
+    "text": "What are the failure modes of message queue and how does it recover?",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "What steps did you take next?",
+    "label": 1,
+    "label_text": "follow_up"
+  },
+  {
+    "text": "Sorry, could you clarify the outbox pattern aspect?",
+    "label": 0,
+    "label_text": "clarification"
+  },
+  {
+    "text": "Walk me through a time you had to had to resolve a conflict between two teams.",
+    "label": 3,
+    "label_text": "behavioral"
+  },
+  {
+    "text": "Like what? Give me one specific case.",
+    "label": 4,
+    "label_text": "example_request"
+  },
+  {
+    "text": "Write code for throttle.",
+    "label": 6,
+    "label_text": "coding"
+  },
+  {
+    "text": "Like what? Give me one specific case.",
+    "label": 4,
+    "label_text": "example_request"
+  },
+  {
+    "text": "How would you scale data pipeline under clock drift?",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "Tell me about a time you had to influence leadership.",
+    "label": 3,
+    "label_text": "behavioral"
+  },
+  {
+    "text": "Tell me about a time you failed to meet a deadline.",
+    "label": 3,
+    "label_text": "behavioral"
+  },
+  {
+    "text": "Share an experience where you had to deal with a critical production outage.",
+    "label": 3,
+    "label_text": "behavioral"
+  },
+  {
+    "text": "And then? What was the resolution?",
+    "label": 1,
+    "label_text": "follow_up"
+  },
+  {
+    "text": "What exactly do you mean by consensus protocol?",
+    "label": 0,
+    "label_text": "clarification"
+  },
+  {
+    "text": "After that, what was the next step?",
+    "label": 1,
+    "label_text": "follow_up"
+  },
+  {
+    "text": "How did you handle a conflict with a stakeholder?",
+    "label": 3,
+    "label_text": "behavioral"
+  },
+  {
+    "text": "What considerations go into choosing between Kafka and NoSQL?",
+    "label": 2,
+    "label_text": "deep_dive"
+  },
+  {
+    "text": "What exactly do you mean by retry jitter?",
+    "label": 0,
+    "label_text": "clarification"
+  },
+  {
+    "text": "Refactor this code to improve testability.",
+    "label": 6,
+    "label_text": "coding"
+  },
+  {
+    "text": "Write a program that parses and normalizes phone numbers.",
+    "label": 6,
+    "label_text": "coding"
+  }
+]

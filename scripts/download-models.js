@@ -18,9 +18,9 @@ async function downloadModels() {
         await pipeline('feature-extraction', 'Xenova/all-MiniLM-L6-v2');
         console.log('[download-models] all-MiniLM-L6-v2 downloaded.');
 
-        console.log('[download-models] Downloading Xenova/mobilebert-uncased-mnli...');
-        await pipeline('zero-shot-classification', 'Xenova/mobilebert-uncased-mnli');
-        console.log('[download-models] mobilebert-uncased-mnli downloaded.');
+        console.log('[download-models] Downloading Xenova/nli-deberta-v3-small...');
+        await pipeline('zero-shot-classification', 'Xenova/nli-deberta-v3-small');
+        console.log('[download-models] nli-deberta-v3-small downloaded.');
 
         console.log('[download-models] All models downloaded successfully!');
     } catch (e) {
