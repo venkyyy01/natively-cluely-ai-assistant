@@ -984,6 +984,12 @@ export class IntelligenceEngine extends EventEmitter {
                     return abandonCurrentRequest();
                 }
                 if (speculativePreview?.text) {
+                    // NAT-001 / audit A-1: capture the speculation's commitToken before we
+                    // emit any preview chunks. If invalidateSpeculation() runs between
+                    // preview and finalize, finalize will return null (entry deleted) or a
+                    // mismatched token, and we MUST abandon — never promote preview text as
+                    // the final answer.
+                    const speculativeCommitToken = speculativePreview.commitToken;
                     const emitSpeculativeToken = (chunk: string, markFirstChunk: boolean = false): boolean => {
                         if (!chunk) {
                             return true;
@@ -1011,28 +1017,28 @@ export class IntelligenceEngine extends EventEmitter {
                         return abandonCurrentRequest();
                     }
 
-                    if (!speculativePreview.complete) {
-                        const finalizedSpeculativeAnswer = await consciousAcceleration!.finalizeSpeculativeAnswer(speculativePreview.key, 2_000);
-                        if (shouldSuppressVisibleWork()) {
+                    const finalizedSpeculativeAnswer = await consciousAcceleration!.finalizeSpeculativeAnswer(
+                        speculativePreview.key,
+                        speculativePreview.complete ? 0 : 2_000,
+                        speculativeCommitToken,
+                    );
+                    if (shouldSuppressVisibleWork()) {
+                        return abandonCurrentRequest();
+                    }
+                    if (!finalizedSpeculativeAnswer) {
+                        // Speculation was invalidated / timed out / token mismatched.
+                        // Do NOT emit `suggested_answer`, do NOT addAssistantMessage —
+                        // fall through to the regular non-speculative path below.
+                        console.log('[IntelligenceEngine] Speculative finalize abandoned (invalidated or stale); falling back to non-speculative answer');
+                        speculativeAnswer = '';
+                    } else if (!speculativePreview.complete && finalizedSpeculativeAnswer.length > speculativeAnswer.length) {
+                        const suffix = finalizedSpeculativeAnswer.slice(speculativeAnswer.length);
+                        if (suffix && !emitSpeculativeToken(suffix)) {
                             return abandonCurrentRequest();
                         }
-                        if (finalizedSpeculativeAnswer && finalizedSpeculativeAnswer.length > speculativeAnswer.length) {
-                            const suffix = finalizedSpeculativeAnswer.slice(speculativeAnswer.length);
-                            if (suffix && !emitSpeculativeToken(suffix)) {
-                                return abandonCurrentRequest();
-                            }
-                            speculativeAnswer = finalizedSpeculativeAnswer;
-                        } else if (finalizedSpeculativeAnswer) {
-                            speculativeAnswer = finalizedSpeculativeAnswer;
-                        }
+                        speculativeAnswer = finalizedSpeculativeAnswer;
                     } else {
-                        const finalizedSpeculativeAnswer = await consciousAcceleration!.finalizeSpeculativeAnswer(speculativePreview.key, 0);
-                        if (shouldSuppressVisibleWork()) {
-                            return abandonCurrentRequest();
-                        }
-                        if (finalizedSpeculativeAnswer) {
-                            speculativeAnswer = finalizedSpeculativeAnswer;
-                        }
+                        speculativeAnswer = finalizedSpeculativeAnswer;
                     }
 
                     if (!speculativeAnswer || speculativeAnswer.trim().length < 5) {

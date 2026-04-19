@@ -15,6 +15,10 @@ interface SpeculativeAnswerEntry {
   query: string;
   transcriptRevision: number;
   generation: number;
+  // Monotonic id assigned at entry creation. Carried through preview -> finalize so a
+  // caller that observed a preview can detect that invalidation/recreate happened in
+  // between (NAT-001 / audit A-1).
+  commitToken: number;
   startedAt: number;
   abortController: AbortController;
   embedding: number[];
@@ -35,6 +39,7 @@ export interface SpeculativeAnswerPreview {
   chunks: string[];
   text: string;
   complete: boolean;
+  commitToken: number;
 }
 
 export interface ConsciousAccelerationOptions {
@@ -61,6 +66,7 @@ export class ConsciousAccelerationOrchestrator {
   private speculativeExecutor: SpeculativeExecutor | null = null;
   private speculativeAnswerEntries = new Map<string, SpeculativeAnswerEntry>();
   private speculativeGeneration = 0;
+  private nextCommitToken = 1;
   private lastPauseDecision: { action: PauseAction; confidence: PauseConfidence; at: number } | null = null;
   private readonly classifierLane?: ClassifierLane;
   private intentClassifier?: (query: string, transcriptRevision: number) => Promise<IntentResult>;
@@ -260,7 +266,11 @@ export class ConsciousAccelerationOrchestrator {
       return null;
     }
 
-    return this.finalizeSpeculativeAnswer(preview.key, waitMs > 0 ? Math.max(waitMs, 2000) : 0);
+    return this.finalizeSpeculativeAnswer(
+      preview.key,
+      waitMs > 0 ? Math.max(waitMs, 2000) : 0,
+      preview.commitToken,
+    );
   }
 
   getPrefetchedIntent(query: string, transcriptRevision: number): IntentResult | null {
@@ -428,6 +438,7 @@ export class ConsciousAccelerationOrchestrator {
         query: candidate.query,
         transcriptRevision: candidate.transcriptRevision,
         generation,
+        commitToken: this.nextCommitToken++,
         startedAt: Date.now(),
         abortController,
         embedding: candidate.embedding,
@@ -592,12 +603,24 @@ export class ConsciousAccelerationOrchestrator {
       chunks: [...entry.chunks],
       text,
       complete: entry.completed,
+      commitToken: entry.commitToken,
     };
   }
 
-  async finalizeSpeculativeAnswer(key: string, waitMs: number = 2000): Promise<string | null> {
+  async finalizeSpeculativeAnswer(
+    key: string,
+    waitMs: number = 2000,
+    expectedCommitToken?: number,
+  ): Promise<string | null> {
     const entry = this.speculativeAnswerEntries.get(key);
     if (!entry) {
+      return null;
+    }
+
+    // NAT-001 / audit A-1: the entry under `key` may have been recreated with a fresh
+    // commit token if invalidateSpeculation() ran and a follow-up turn re-populated the
+    // same key. Treat any mismatch as abandonment so callers don't promote stale text.
+    if (typeof expectedCommitToken === 'number' && entry.commitToken !== expectedCommitToken) {
       return null;
     }
 
@@ -618,6 +641,12 @@ export class ConsciousAccelerationOrchestrator {
       } else {
         entry.abortController.abort(new Error('speculation_finalize_timeout'));
       }
+    }
+
+    // NAT-001: re-verify the commit token in case the entry was invalidated and a new
+    // one took its place while we awaited completionPromise.
+    if (typeof expectedCommitToken === 'number' && entry.commitToken !== expectedCommitToken) {
+      return null;
     }
 
     if (this.isSpeculativeEntryStale(entry)) {
