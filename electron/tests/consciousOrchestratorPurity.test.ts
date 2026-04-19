@@ -146,3 +146,42 @@ test('ConsciousOrchestrator.prepareRoute can promote prefetched inferred intents
   assert.equal(prepared.preRouteDecision.threadAction, 'start');
   assert.equal(prepared.selectedRoute, 'conscious_answer');
 });
+
+test('ConsciousOrchestrator.prepareRoute downgrades fresh conscious routing on weak general prefetched intent', () => {
+  const { session } = createSession({ latestReaction: null, activeThread: null });
+  const orchestrator = new ConsciousOrchestrator(session as any);
+
+  const prepared = orchestrator.prepareRoute({
+    question: 'How would you partition the write path across tenants?',
+    knowledgeStatus: null,
+    screenshotBackedLiveCodingTurn: false,
+    prefetchedIntent: {
+      intent: 'general',
+      confidence: 0.41,
+      answerShape: 'Respond naturally.',
+    },
+  });
+
+  assert.equal(prepared.selectedRoute, 'fast_standard_answer');
+  assert.equal(prepared.effectiveRoute, 'fast_standard_answer');
+});
+
+test('ConsciousOrchestrator.prepareRoute promotes strong deep-dive prefetched intent into the conscious route', () => {
+  const { session } = createSession({ latestReaction: null, activeThread: null });
+  const orchestrator = new ConsciousOrchestrator(session as any);
+
+  const prepared = orchestrator.prepareRoute({
+    question: 'What tradeoffs matter most here?',
+    knowledgeStatus: null,
+    screenshotBackedLiveCodingTurn: false,
+    prefetchedIntent: {
+      intent: 'deep_dive',
+      confidence: 0.93,
+      answerShape: 'Explain the core tradeoffs.',
+    },
+  });
+
+  assert.equal(prepared.preRouteDecision.qualifies, true);
+  assert.equal(prepared.preRouteDecision.threadAction, 'start');
+  assert.equal(prepared.selectedRoute, 'conscious_answer');
+});

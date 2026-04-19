@@ -5,28 +5,27 @@ import { getAnswerShapeGuidance } from '../IntentClassifier';
 import { isOptimizationActive } from '../../config/optimizations';
 import { resolveFoundationModelsIntentHelperPath } from './FoundationModelsIntentHelperPath';
 import {
+  FOUNDATION_INTENT_ALLOWED_INTENTS,
+  FOUNDATION_INTENT_PROMPT_VERSION,
+  FOUNDATION_INTENT_SCHEMA_VERSION,
+} from './FoundationIntentPromptAssets';
+import {
   createIntentProviderError,
   type IntentClassificationInput,
   type IntentInferenceProvider,
   type IntentProviderErrorType,
 } from './IntentInferenceProvider';
 
-const INTENT_CANDIDATES: ConversationIntent[] = [
-  'behavioral',
-  'coding',
-  'deep_dive',
-  'clarification',
-  'follow_up',
-  'example_request',
-  'summary_probe',
-  'general',
-];
+const INTENT_CANDIDATES: ConversationIntent[] = [...FOUNDATION_INTENT_ALLOWED_INTENTS];
 
 interface FoundationIntentHelperRequest {
   version: 1;
   question: string;
   preparedTranscript: string;
   assistantResponseCount: number;
+  promptVersion: string;
+  schemaVersion: string;
+  locale?: string;
   candidateIntents: ConversationIntent[];
 }
 
@@ -55,6 +54,7 @@ interface HelperCommandResult {
 interface FoundationModelsIntentProviderOptions {
   helperPathResolver?: () => string | null;
   helperRunner?: (helperPath: string, request: FoundationIntentHelperRequest, timeoutMs: number) => Promise<HelperCommandResult>;
+  localeResolver?: () => string | null;
   timeoutMs?: number;
   platform?: NodeJS.Platform;
   arch?: string;
@@ -93,6 +93,8 @@ function isConversationIntent(value: string): value is ConversationIntent {
 function mapHelperErrorType(code: unknown): IntentProviderErrorType {
   if (
     code === 'unavailable'
+    || code === 'model_not_ready'
+    || code === 'unsupported_locale'
     || code === 'rate_limited'
     || code === 'refusal'
     || code === 'timeout'
@@ -107,6 +109,12 @@ function mapHelperErrorType(code: unknown): IntentProviderErrorType {
 
 function mapExitFailure(stderr: string): IntentProviderErrorType {
   const normalized = stderr.toLowerCase();
+  if (normalized.includes('model_not_ready') || normalized.includes('model not ready')) {
+    return 'model_not_ready';
+  }
+  if (normalized.includes('unsupported_locale') || normalized.includes('unsupported locale')) {
+    return 'unsupported_locale';
+  }
   if (normalized.includes('timeout')) {
     return 'timeout';
   }
@@ -127,6 +135,7 @@ export class FoundationModelsIntentProvider implements IntentInferenceProvider {
 
   private readonly helperPathResolver: () => string | null;
   private readonly helperRunner: (helperPath: string, request: FoundationIntentHelperRequest, timeoutMs: number) => Promise<HelperCommandResult>;
+  private readonly localeResolver: () => string | null;
   private readonly timeoutMs: number;
   private readonly platform: NodeJS.Platform;
   private readonly arch: string;
@@ -135,6 +144,13 @@ export class FoundationModelsIntentProvider implements IntentInferenceProvider {
   constructor(options: FoundationModelsIntentProviderOptions = {}) {
     this.helperPathResolver = options.helperPathResolver ?? (() => resolveFoundationModelsIntentHelperPath());
     this.helperRunner = options.helperRunner ?? this.runHelperBinary;
+    this.localeResolver = options.localeResolver ?? (() => {
+      try {
+        return Intl.DateTimeFormat().resolvedOptions().locale || null;
+      } catch {
+        return null;
+      }
+    });
     this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.platform = options.platform ?? process.platform;
     this.arch = options.arch ?? process.arch;
@@ -169,6 +185,9 @@ export class FoundationModelsIntentProvider implements IntentInferenceProvider {
       question: input.lastInterviewerTurn ?? '',
       preparedTranscript: compactPreparedTranscript(input.preparedTranscript, input.lastInterviewerTurn ?? ''),
       assistantResponseCount: input.assistantResponseCount,
+      promptVersion: FOUNDATION_INTENT_PROMPT_VERSION,
+      schemaVersion: FOUNDATION_INTENT_SCHEMA_VERSION,
+      locale: this.localeResolver() ?? undefined,
       candidateIntents: INTENT_CANDIDATES,
     };
 

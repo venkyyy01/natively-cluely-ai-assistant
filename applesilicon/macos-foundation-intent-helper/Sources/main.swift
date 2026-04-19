@@ -6,6 +6,9 @@ private struct IntentRequest: Decodable {
     let question: String
     let preparedTranscript: String
     let assistantResponseCount: Int
+    let promptVersion: String
+    let schemaVersion: String
+    let locale: String?
     let candidateIntents: [String]
 }
 
@@ -15,16 +18,20 @@ private struct IntentResponse: Encodable {
     let confidence: Double?
     let answerShape: String?
     let provider: String?
+    let promptVersion: String?
+    let schemaVersion: String?
     let errorType: String?
     let message: String?
 
-    static func success(intent: String, confidence: Double) -> IntentResponse {
+    static func success(intent: String, confidence: Double, promptVersion: String, schemaVersion: String) -> IntentResponse {
         IntentResponse(
             ok: true,
             intent: intent,
             confidence: confidence,
             answerShape: nil,
             provider: "apple_foundation_models",
+            promptVersion: promptVersion,
+            schemaVersion: schemaVersion,
             errorType: nil,
             message: nil
         )
@@ -37,11 +44,26 @@ private struct IntentResponse: Encodable {
             confidence: nil,
             answerShape: nil,
             provider: nil,
+            promptVersion: nil,
+            schemaVersion: nil,
             errorType: errorType,
             message: message
         )
     }
 }
+
+private let helperSupportedPromptVersion = "foundation_intent_prompt_v2"
+private let helperSupportedSchemaVersion = "foundation_intent_schema_v1"
+private let helperSupportedIntents: Set<String> = [
+    "behavioral",
+    "coding",
+    "deep_dive",
+    "clarification",
+    "follow_up",
+    "example_request",
+    "summary_probe",
+    "general"
+]
 
 @available(macOS 26.0, *)
 @Generable(description: "Interview intent label and confidence.")
@@ -240,6 +262,8 @@ private enum IntentProfile {
 private enum HelperError: Error {
     case invalidRequest(String)
     case unavailable(String)
+    case modelNotReady(String)
+    case unsupportedLocale(String)
     case invalidResponse(String)
     case refusal(String)
     case timeout(String)
@@ -251,6 +275,10 @@ private enum HelperError: Error {
             return "invalid_response"
         case .unavailable:
             return "unavailable"
+        case .modelNotReady:
+            return "model_not_ready"
+        case .unsupportedLocale:
+            return "unsupported_locale"
         case .refusal:
             return "refusal"
         case .timeout:
@@ -264,6 +292,8 @@ private enum HelperError: Error {
         switch self {
         case let .invalidRequest(message),
              let .unavailable(message),
+             let .modelNotReady(message),
+             let .unsupportedLocale(message),
              let .invalidResponse(message),
              let .refusal(message),
              let .timeout(message),
@@ -297,8 +327,18 @@ private func parseRequest() throws -> IntentRequest {
     guard request.version == 1 else {
         throw HelperError.invalidRequest("Unsupported request version")
     }
+    guard request.promptVersion == helperSupportedPromptVersion else {
+        throw HelperError.invalidRequest("Unsupported promptVersion: \(request.promptVersion)")
+    }
+    guard request.schemaVersion == helperSupportedSchemaVersion else {
+        throw HelperError.invalidRequest("Unsupported schemaVersion: \(request.schemaVersion)")
+    }
     guard !request.candidateIntents.isEmpty else {
         throw HelperError.invalidRequest("candidateIntents must be non-empty")
+    }
+    let candidateSet = Set(request.candidateIntents)
+    guard candidateSet == helperSupportedIntents else {
+        throw HelperError.invalidRequest("candidateIntents do not match supported helper schema")
     }
     return request
 }
@@ -314,11 +354,32 @@ private func availabilityErrorMessage(_ availability: SystemLanguageModel.Availa
 }
 
 @available(macOS 26.0, *)
-private func ensureModelAvailable(_ model: SystemLanguageModel) throws {
-    guard model.isAvailable else {
-        let message = availabilityErrorMessage(model.availability)
-        throw HelperError.unavailable(message.isEmpty ? "System language model unavailable" : message)
+private func ensureModelPreflight(_ model: SystemLanguageModel, locale: Locale?) throws {
+    if let locale, !model.supportsLocale(locale) {
+        throw HelperError.unsupportedLocale("Model does not support locale: \(locale.identifier)")
     }
+
+    switch model.availability {
+    case .available:
+        break
+    case .unavailable(let reason):
+        switch reason {
+        case .modelNotReady:
+            throw HelperError.modelNotReady("Model unavailable: \(String(describing: reason))")
+        case .deviceNotEligible, .appleIntelligenceNotEnabled:
+            throw HelperError.unavailable("Model unavailable: \(String(describing: reason))")
+        @unknown default:
+            let message = availabilityErrorMessage(model.availability)
+            throw HelperError.unavailable(message.isEmpty ? "System language model unavailable" : message)
+        }
+    }
+}
+
+private func parseRequestedLocale(_ request: IntentRequest) -> Locale? {
+    guard let raw = request.locale?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else {
+        return Locale.current
+    }
+    return Locale(identifier: raw)
 }
 
 @available(macOS 26.0, *)
@@ -975,7 +1036,7 @@ private func runPairwiseDisambiguation(
 @available(macOS 26.0, *)
 private func classifyIntent(_ request: IntentRequest) async throws -> IntentEnvelope {
     let model = SystemLanguageModel(useCase: .general)
-    try ensureModelAvailable(model)
+    try ensureModelPreflight(model, locale: parseRequestedLocale(request))
 
     let instructions = Instructions("""
     You are a precise intent classifier for interview coaching.
@@ -1066,7 +1127,9 @@ private func runHelper() async {
         writeResponse(
             .success(
                 intent: result.intent,
-                confidence: normalizedConfidence
+                confidence: normalizedConfidence,
+                promptVersion: request.promptVersion,
+                schemaVersion: request.schemaVersion
             )
         )
     } catch let error as HelperError {

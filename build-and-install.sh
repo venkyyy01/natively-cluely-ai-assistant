@@ -523,11 +523,33 @@ if [[ "${SKIP_QUALITY_GATES:-0}" == "0" ]]; then
 
     info "Running quality gates in visible stages so long-running checks do not look frozen..."
 
-    run_logged_command "[1/2] Running Electron tests (this may take a minute)..." npm run test:electron
+    FOUNDATION_RELEASE_VERIFY_ENABLED=false
+    if [[ "$BUILD_ARCH" == "arm64" && "${SKIP_FOUNDATION_INTENT_RELEASE_VERIFY:-0}" == "0" ]]; then
+        FOUNDATION_RELEASE_VERIFY_ENABLED=true
+    fi
+
+    if [[ "$FOUNDATION_RELEASE_VERIFY_ENABLED" == "true" ]]; then
+        QUALITY_GATE_TEST_LABEL="[1/3] Running Electron tests (this may take a minute)..."
+        QUALITY_GATE_VERIFY_LABEL="[2/3] Running production verification..."
+        QUALITY_GATE_FOUNDATION_LABEL="[3/3] Running Apple Silicon Foundation intent release verification..."
+    else
+        QUALITY_GATE_TEST_LABEL="[1/2] Running Electron tests (this may take a minute)..."
+        QUALITY_GATE_VERIFY_LABEL="[2/2] Running production verification..."
+        QUALITY_GATE_FOUNDATION_LABEL=""
+    fi
+
+    run_logged_command "$QUALITY_GATE_TEST_LABEL" npm run test:electron
     success "Electron tests passed"
 
-    run_logged_command "[2/2] Running production verification..." npm run verify:production
+    run_logged_command "$QUALITY_GATE_VERIFY_LABEL" npm run verify:production
     success "Production verification passed"
+
+    if [[ "$FOUNDATION_RELEASE_VERIFY_ENABLED" == "true" ]]; then
+        run_logged_command "$QUALITY_GATE_FOUNDATION_LABEL" npm run verify:foundation-intent-release
+        success "Apple Silicon Foundation intent release verification passed"
+    else
+        info "Skipping Apple Silicon Foundation intent release verification (requires arm64 build host; set SKIP_FOUNDATION_INTENT_RELEASE_VERIFY=1 to silence this message on Apple Silicon)"
+    fi
 
     QUALITY_GATES_RAN=true
     success "Quality gates passed"

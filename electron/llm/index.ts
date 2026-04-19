@@ -31,6 +31,9 @@ export {
     IntentClassificationCoordinator,
     FoundationModelsIntentProvider,
     LegacyIntentProvider,
+    FOUNDATION_INTENT_ALLOWED_INTENTS,
+    FOUNDATION_INTENT_PROMPT_VERSION,
+    FOUNDATION_INTENT_SCHEMA_VERSION,
     resolveFoundationModelsIntentHelperPath,
     createIntentProviderError,
     getIntentProviderErrorCode,
@@ -42,6 +45,7 @@ export type {
     IntentInferenceProvider,
     IntentProviderError,
     IntentProviderErrorType,
+    FoundationIntentLabel,
 } from './providers';
 export { MODE_CONFIGS } from "./types";
 export type { GenerationConfig, GeminiContent, LLMClient } from "./types";

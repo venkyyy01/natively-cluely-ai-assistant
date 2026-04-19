@@ -6,21 +6,33 @@ import {
 } from '../ConsciousMode';
 import { QuestionReactionClassifier, type QuestionReaction } from './QuestionReactionClassifier';
 import { AnswerHypothesisStore } from './AnswerHypothesisStore';
+import { ConsciousProvenanceVerifier } from './ConsciousProvenanceVerifier';
 import { ConsciousVerifier } from './ConsciousVerifier';
+
+export interface ConsciousEvalFamilySummary {
+  total: number;
+  passed: number;
+  failed: number;
+}
 
 export interface ConsciousEvalScenario {
   id: string;
+  family: string;
   description: string;
   priorQuestion: string;
   followUpQuestion: string;
   response: ConsciousModeStructuredResponse;
   expected: 'accept' | 'reject';
+  expectedProvenance?: 'accept' | 'reject';
+  semanticContextBlock?: string;
+  evidenceContextBlock?: string;
 }
 
 export interface ConsciousEvalScenarioResult {
   scenario: ConsciousEvalScenario;
   reaction: QuestionReaction;
   verdict: { ok: boolean; reason?: string };
+  provenanceVerdict: { ok: boolean; reason?: string };
   passed: boolean;
 }
 
@@ -28,6 +40,7 @@ export interface ConsciousEvalSummary {
   total: number;
   passed: number;
   failed: number;
+  byFamily: Record<string, ConsciousEvalFamilySummary>;
 }
 
 export interface ConsciousReplayContextItem {
@@ -39,6 +52,7 @@ export interface ConsciousReplayContextItem {
 
 export interface ConsciousReplayScenario {
   id: string;
+  family: string;
   description: string;
   question: string;
   activeThread: ReasoningThread | null;
@@ -79,10 +93,39 @@ function buildBaselineResponse(): ConsciousModeStructuredResponse {
   };
 }
 
+function buildBehavioralResponse(overrides: Partial<ConsciousModeStructuredResponse['behavioralAnswer']> = {}): ConsciousModeStructuredResponse {
+  return {
+    mode: 'reasoning_first',
+    openingReasoning: '',
+    implementationPlan: [],
+    tradeoffs: [],
+    edgeCases: [],
+    scaleConsiderations: [],
+    pushbackResponses: [],
+    likelyFollowUps: [],
+    codeTransition: '',
+    behavioralAnswer: {
+      question: 'Tell me about a time you handled disagreement on a team.',
+      headline: 'I aligned a skeptical partner team around a safer rollout plan.',
+      situation: 'We were about to launch a billing change and the partner team wanted to compress testing to hit the date.',
+      task: 'I needed to protect the launch quality without turning the discussion into a turf fight.',
+      action: 'I pulled the recent incident data, showed exactly where regressions were most likely, proposed a two-phase rollout with ownership checkpoints, and walked both managers through the rollback plan until we agreed on the sequence.',
+      result: 'We shipped one week later, avoided a repeat incident, and cut rollout rollback volume by 38 percent on the next release.',
+      whyThisAnswerWorks: [
+        'It shows I handled conflict directly.',
+        'It proves I used data instead of opinion.',
+        'It ends with a measurable result.',
+      ],
+      ...overrides,
+    },
+  };
+}
+
 export function getDefaultConsciousEvalScenarios(): ConsciousEvalScenario[] {
   return [
     {
       id: 'tradeoff-accept',
+      family: 'system_design',
       description: 'Tradeoff follow-up should accept a tradeoff-aware answer',
       priorQuestion: 'How would you partition a multi-tenant analytics system?',
       followUpQuestion: 'What are the tradeoffs?',
@@ -91,6 +134,7 @@ export function getDefaultConsciousEvalScenarios(): ConsciousEvalScenario[] {
     },
     {
       id: 'tradeoff-reject',
+      family: 'system_design',
       description: 'Tradeoff follow-up should reject a shallow duplicate answer',
       priorQuestion: 'How would you partition a multi-tenant analytics system?',
       followUpQuestion: 'What are the tradeoffs?',
@@ -104,7 +148,8 @@ export function getDefaultConsciousEvalScenarios(): ConsciousEvalScenario[] {
     },
     {
       id: 'metric-accept',
-      description: 'Metric probe should accept an answer with scale/measurement content',
+      family: 'system_design',
+      description: 'Metric probe should accept an answer with scale and measurement content',
       priorQuestion: 'How would you partition a multi-tenant analytics system?',
       followUpQuestion: 'What metrics would you watch first?',
       response: {
@@ -115,6 +160,7 @@ export function getDefaultConsciousEvalScenarios(): ConsciousEvalScenario[] {
     },
     {
       id: 'metric-reject',
+      family: 'system_design',
       description: 'Metric probe should reject an answer with no measurement detail',
       priorQuestion: 'How would you partition a multi-tenant analytics system?',
       followUpQuestion: 'What metrics would you watch first?',
@@ -125,6 +171,57 @@ export function getDefaultConsciousEvalScenarios(): ConsciousEvalScenario[] {
         pushbackResponses: [],
       },
       expected: 'reject',
+    },
+    {
+      id: 'behavioral-accept',
+      family: 'behavioral',
+      description: 'Behavioral follow-up should accept a grounded STAR story with strong action depth',
+      priorQuestion: 'Tell me about a time you handled disagreement on a team.',
+      followUpQuestion: 'Tell me about a time you handled disagreement on a team.',
+      response: buildBehavioralResponse(),
+      expected: 'accept',
+    },
+    {
+      id: 'behavioral-reject',
+      family: 'behavioral',
+      description: 'Behavioral follow-up should reject weak STAR answers with shallow action detail',
+      priorQuestion: 'Tell me about a time you handled disagreement on a team.',
+      followUpQuestion: 'Tell me about a time you handled disagreement on a team.',
+      response: buildBehavioralResponse({
+        action: 'I talked to the team and we aligned.',
+        result: 'It worked out well.',
+        whyThisAnswerWorks: ['It is short', 'It sounds clear', 'It resolves the issue'],
+      }),
+      expected: 'reject',
+    },
+    {
+      id: 'provenance-technology-reject',
+      family: 'provenance',
+      description: 'Unsupported technology claims should fail provenance even when the verifier passes',
+      priorQuestion: 'How would you evolve the ingestion path?',
+      followUpQuestion: 'Go deeper on the storage layer.',
+      response: {
+        ...buildBaselineResponse(),
+        openingReasoning: 'I would move the write path to Cassandra to absorb the tenant spikes.',
+        implementationPlan: ['Use Cassandra for the write path', 'Keep Kafka for async fan-out'],
+      },
+      expected: 'accept',
+      expectedProvenance: 'reject',
+      semanticContextBlock: '<conscious_semantic_memory>Technologies: Redis, Kafka</conscious_semantic_memory>',
+    },
+    {
+      id: 'provenance-metric-reject',
+      family: 'provenance',
+      description: 'Unsupported metric claims should fail provenance even when the verifier passes',
+      priorQuestion: 'How would you evolve the ingestion path?',
+      followUpQuestion: 'Go deeper on the rollout checks.',
+      response: {
+        ...buildBaselineResponse(),
+        scaleConsiderations: ['I would target 10ms p99 latency immediately before broad rollout'],
+      },
+      expected: 'accept',
+      expectedProvenance: 'reject',
+      semanticContextBlock: '<conscious_semantic_memory>Current production baseline is 70ms p99 latency.</conscious_semantic_memory>',
     },
   ];
 }
@@ -166,6 +263,7 @@ export function getDefaultConsciousReplayScenarios(): ConsciousReplayScenario[] 
   return [
     {
       id: 'question-to-verifier-trace',
+      family: 'system_design_continuation',
       description: 'Reconstructs route, selected context, verifier verdict, and fallback reason for a follow-up.',
       question: 'What are the tradeoffs for hot tenants?',
       activeThread,
@@ -189,7 +287,95 @@ export function getDefaultConsciousReplayScenarios(): ConsciousReplayScenario[] 
         verifierOk: true,
       },
     },
+    {
+      id: 'topic-shift-reset',
+      family: 'topic_shift',
+      description: 'Explicit topic shifts should reset the active thread while keeping the verifier trace visible.',
+      question: 'Let us switch gears and talk about the launch plan.',
+      activeThread,
+      contextItems: [
+        {
+          id: 'ctx_3',
+          role: 'assistant',
+          text: 'Partition by tenant and promote hot tenants to dedicated partitions.',
+          timestamp: Date.now() - 300,
+        },
+        {
+          id: 'ctx_4',
+          role: 'interviewer',
+          text: 'Let us switch gears and talk about the launch plan.',
+          timestamp: Date.now() - 200,
+        },
+      ],
+      response,
+      expected: {
+        route: { qualifies: true, threadAction: 'reset' },
+        verifierOk: true,
+      },
+    },
+    {
+      id: 'live-coding-continuation',
+      family: 'live_coding_continuation',
+      description: 'Deterministic continuation phrases should keep a technical thread alive for implementation follow-ups.',
+      question: 'What happens during failover?',
+      activeThread: {
+        rootQuestion: 'Implement an idempotent webhook handler.',
+        lastQuestion: 'Implement an idempotent webhook handler.',
+        response: {
+          ...response,
+          openingReasoning: 'I would start with a durable dedupe key and replay protection.',
+          implementationPlan: ['Generate a stable idempotency key', 'Persist processed deliveries'],
+          edgeCases: ['Retries can arrive out of order', 'The provider can replay stale events'],
+        },
+        followUpCount: 1,
+        updatedAt: Date.now() - 800,
+      },
+      contextItems: [
+        {
+          id: 'ctx_5',
+          role: 'assistant',
+          text: 'Start with an idempotency key and persist processed deliveries.',
+          timestamp: Date.now() - 250,
+        },
+        {
+          id: 'ctx_6',
+          role: 'interviewer',
+          text: 'What happens during failover?',
+          timestamp: Date.now() - 150,
+        },
+      ],
+      response: {
+        ...response,
+        edgeCases: ['Retries can arrive out of order', 'The provider can replay stale events'],
+      },
+      expected: {
+        route: { qualifies: true, threadAction: 'continue' },
+        verifierOk: true,
+      },
+    },
   ];
+}
+
+function summarizeResults<T extends { passed: boolean; scenario: { family: string } }>(results: T[]): ConsciousEvalSummary {
+  const byFamily: Record<string, ConsciousEvalFamilySummary> = {};
+
+  for (const result of results) {
+    const family = result.scenario.family;
+    byFamily[family] = byFamily[family] ?? { total: 0, passed: 0, failed: 0 };
+    byFamily[family].total += 1;
+    if (result.passed) {
+      byFamily[family].passed += 1;
+    } else {
+      byFamily[family].failed += 1;
+    }
+  }
+
+  return {
+    total: results.length,
+    passed: results.filter((result) => result.passed).length,
+    failed: results.filter((result) => !result.passed).length,
+    byFamily,
+  };
 }
 
 export async function runConsciousEvalHarness(options: {
@@ -197,23 +383,24 @@ export async function runConsciousEvalHarness(options: {
   scenarios?: ConsciousEvalScenario[];
 }): Promise<{ results: ConsciousEvalScenarioResult[]; summary: ConsciousEvalSummary }> {
   const classifier = new QuestionReactionClassifier();
+  const provenanceVerifier = new ConsciousProvenanceVerifier();
   const scenarios = options.scenarios ?? getDefaultConsciousEvalScenarios();
   const results: ConsciousEvalScenarioResult[] = [];
 
   for (const scenario of scenarios) {
     const store = new AnswerHypothesisStore();
-    store.recordStructuredSuggestion(scenario.priorQuestion, buildBaselineResponse(), 'start');
+    store.recordStructuredSuggestion(scenario.priorQuestion, scenario.response, 'start');
 
     const reaction = classifier.classify({
       question: scenario.followUpQuestion,
       activeThread: {
         rootQuestion: scenario.priorQuestion,
         lastQuestion: scenario.priorQuestion,
-        response: buildBaselineResponse(),
+        response: scenario.response,
         followUpCount: 0,
         updatedAt: Date.now(),
       },
-      latestResponse: buildBaselineResponse(),
+      latestResponse: scenario.response,
       latestHypothesis: store.getLatestHypothesis(),
     });
     store.noteObservedReaction(scenario.followUpQuestion, reaction);
@@ -226,18 +413,30 @@ export async function runConsciousEvalHarness(options: {
       hypothesis: store.getLatestHypothesis(),
       question: scenario.followUpQuestion,
     });
+    const provenanceVerdict = provenanceVerifier.verify({
+      response: scenario.response,
+      semanticContextBlock: scenario.semanticContextBlock,
+      evidenceContextBlock: scenario.evidenceContextBlock,
+      question: scenario.followUpQuestion,
+      hypothesis: store.getLatestHypothesis(),
+    });
 
-    const passed = scenario.expected === 'accept' ? verdict.ok : !verdict.ok;
-    results.push({ scenario, reaction, verdict, passed });
+    const expectedProvenance = scenario.expectedProvenance ?? 'accept';
+    const verifierPassed = scenario.expected === 'accept' ? verdict.ok : !verdict.ok;
+    const provenancePassed = expectedProvenance === 'accept' ? provenanceVerdict.ok : !provenanceVerdict.ok;
+    results.push({
+      scenario,
+      reaction,
+      verdict,
+      provenanceVerdict,
+      passed: verifierPassed && provenancePassed,
+    });
   }
 
-  const summary = {
-    total: results.length,
-    passed: results.filter((result) => result.passed).length,
-    failed: results.filter((result) => !result.passed).length,
+  return {
+    results,
+    summary: summarizeResults(results),
   };
-
-  return { results, summary };
 }
 
 export async function runConsciousReplayHarness(options: {
@@ -292,11 +491,8 @@ export async function runConsciousReplayHarness(options: {
     results.push({ scenario, trace, passed });
   }
 
-  const summary = {
-    total: results.length,
-    passed: results.filter((result) => result.passed).length,
-    failed: results.filter((result) => !result.passed).length,
+  return {
+    results,
+    summary: summarizeResults(results),
   };
-
-  return { results, summary };
 }

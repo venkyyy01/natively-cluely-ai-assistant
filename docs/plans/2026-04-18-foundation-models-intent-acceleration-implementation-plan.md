@@ -83,6 +83,9 @@ Request:
   "question": "...",
   "preparedTranscript": "...",
   "assistantResponseCount": 2,
+  "promptVersion": "foundation_intent_prompt_v2",
+  "schemaVersion": "foundation_intent_schema_v1",
+  "locale": "en-US",
   "candidateIntents": ["behavioral","coding","deep_dive","clarification","follow_up","example_request","summary_probe","general"]
 }
 ```
@@ -95,7 +98,9 @@ Response:
   "intent": "behavioral",
   "confidence": 0.91,
   "answerShape": "Tell one concrete story in first person.",
-  "provider": "apple_foundation_models"
+  "provider": "apple_foundation_models",
+  "promptVersion": "foundation_intent_prompt_v2",
+  "schemaVersion": "foundation_intent_schema_v1"
 }
 ```
 
@@ -104,7 +109,7 @@ Error response:
 ```json
 {
   "ok": false,
-  "errorType": "rate_limited|refusal|unavailable|timeout|invalid_response|unknown",
+  "errorType": "rate_limited|refusal|unavailable|model_not_ready|unsupported_locale|timeout|invalid_response|unknown",
   "message": "..."
 }
 ```

@@ -9,6 +9,11 @@ type SuggestedAnswerMetadata = {
   attemptedRoute?: 'fast_standard_answer' | 'enriched_standard_answer' | 'conscious_answer' | 'manual_answer' | 'follow_up_refinement'
   fallbackOccurred: boolean
   fallbackReason?: string
+  intentConfidence?: number
+  intentProviderUsed?: string
+  intentRetryCount?: number
+  intentFallbackReason?: 'primary_unavailable' | 'primary_retries_exhausted' | 'primary_failed' | 'primary_low_confidence' | 'primary_contradiction'
+  prefetchedIntentUsed?: boolean
   schemaVersion: 'standard_answer_v1' | 'conscious_mode_v1'
   evidenceHash: string
   contextSelectionHash?: string

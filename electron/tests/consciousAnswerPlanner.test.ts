@@ -70,3 +70,37 @@ test('ConsciousAnswerPlanner converts behavioral questions into short grounded n
   assert.ok(plan.maxWords <= 250);
   assert.match(planner.buildContextBlock(plan), /GROUNDING_HINT: Ground the answer in concrete past experience/);
 });
+
+test('ConsciousAnswerPlanner uses strong coding intent to force live-coding mode for ambiguous prompts', () => {
+  const planner = new ConsciousAnswerPlanner();
+  const plan = planner.plan({
+    question: 'Can you show me how you would approach this?',
+    reaction: null,
+    hypothesis: null,
+    intentResult: {
+      intent: 'coding',
+      confidence: 0.94,
+      answerShape: 'Provide a full implementation.',
+    },
+  });
+
+  assert.equal(plan.questionMode, 'live_coding');
+  assert.equal(plan.deliveryFormat, 'code_first_or_short_steps');
+});
+
+test('ConsciousAnswerPlanner uses strong deep-dive intent to force system-design mode', () => {
+  const planner = new ConsciousAnswerPlanner();
+  const plan = planner.plan({
+    question: 'What tradeoffs matter most here?',
+    reaction: null,
+    hypothesis: null,
+    intentResult: {
+      intent: 'deep_dive',
+      confidence: 0.91,
+      answerShape: 'Discuss the tradeoffs directly.',
+    },
+  });
+
+  assert.equal(plan.questionMode, 'system_design');
+  assert.equal(plan.deliveryFormat, 'architecture_then_tradeoffs');
+});

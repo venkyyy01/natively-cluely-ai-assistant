@@ -3,6 +3,10 @@ import assert from 'node:assert/strict';
 
 import { getAnswerShapeGuidance } from '../llm/IntentClassifier';
 import { FoundationModelsIntentProvider } from '../llm/providers/FoundationModelsIntentProvider';
+import {
+  FOUNDATION_INTENT_PROMPT_VERSION,
+  FOUNDATION_INTENT_SCHEMA_VERSION,
+} from '../llm/providers/FoundationIntentPromptAssets';
 import { resolveFoundationModelsIntentHelperPath } from '../llm/providers/FoundationModelsIntentHelperPath';
 
 test('resolveFoundationModelsIntentHelperPath prefers packaged helper path when present', () => {
@@ -62,22 +66,27 @@ test('FoundationModelsIntentProvider reports unavailable when optimization flag 
 });
 
 test('FoundationModelsIntentProvider classifies valid helper envelope', async () => {
+  let capturedRequest: any = null;
   const provider = new FoundationModelsIntentProvider({
     platform: 'darwin',
     arch: 'arm64',
     helperPathResolver: () => '/tmp/foundation-intent-helper',
     isOptimizationEnabled: () => true,
-    helperRunner: async () => ({
-      exitCode: 0,
-      stdout: JSON.stringify({
-        ok: true,
-        intent: 'behavioral',
-        confidence: 0.92,
-        answerShape: 'Tell one concise STAR story.',
-        provider: 'apple_foundation_models',
-      }),
-      stderr: '',
-    }),
+    localeResolver: () => 'en-US',
+    helperRunner: async (_helperPath, request) => {
+      capturedRequest = request;
+      return {
+        exitCode: 0,
+        stdout: JSON.stringify({
+          ok: true,
+          intent: 'behavioral',
+          confidence: 0.92,
+          answerShape: 'Tell one concise STAR story.',
+          provider: 'apple_foundation_models',
+        }),
+        stderr: '',
+      };
+    },
   });
 
   const result = await provider.classify({
@@ -89,6 +98,9 @@ test('FoundationModelsIntentProvider classifies valid helper envelope', async ()
   assert.equal(result.intent, 'behavioral');
   assert.equal(result.confidence, 0.92);
   assert.equal(result.answerShape, 'Tell one concise STAR story.');
+  assert.equal(capturedRequest.promptVersion, FOUNDATION_INTENT_PROMPT_VERSION);
+  assert.equal(capturedRequest.schemaVersion, FOUNDATION_INTENT_SCHEMA_VERSION);
+  assert.equal(capturedRequest.locale, 'en-US');
 });
 
 test('FoundationModelsIntentProvider falls back to default answer shape when helper omits it', async () => {
@@ -185,6 +197,60 @@ test('FoundationModelsIntentProvider maps helper error envelope to typed error c
       assistantResponseCount: 0,
     }),
     (error: any) => error?.code === 'refusal' && /model refused/i.test(String(error?.message)),
+  );
+});
+
+test('FoundationModelsIntentProvider maps helper model_not_ready envelope to typed error code', async () => {
+  const provider = new FoundationModelsIntentProvider({
+    platform: 'darwin',
+    arch: 'arm64',
+    helperPathResolver: () => '/tmp/foundation-intent-helper',
+    isOptimizationEnabled: () => true,
+    helperRunner: async () => ({
+      exitCode: 0,
+      stdout: JSON.stringify({
+        ok: false,
+        errorType: 'model_not_ready',
+        message: 'model is still downloading',
+      }),
+      stderr: '',
+    }),
+  });
+
+  await assert.rejects(
+    provider.classify({
+      lastInterviewerTurn: 'Question',
+      preparedTranscript: 'Transcript',
+      assistantResponseCount: 0,
+    }),
+    (error: any) => error?.code === 'model_not_ready' && /downloading/i.test(String(error?.message)),
+  );
+});
+
+test('FoundationModelsIntentProvider maps helper unsupported_locale envelope to typed error code', async () => {
+  const provider = new FoundationModelsIntentProvider({
+    platform: 'darwin',
+    arch: 'arm64',
+    helperPathResolver: () => '/tmp/foundation-intent-helper',
+    isOptimizationEnabled: () => true,
+    helperRunner: async () => ({
+      exitCode: 0,
+      stdout: JSON.stringify({
+        ok: false,
+        errorType: 'unsupported_locale',
+        message: 'locale not supported',
+      }),
+      stderr: '',
+    }),
+  });
+
+  await assert.rejects(
+    provider.classify({
+      lastInterviewerTurn: 'Question',
+      preparedTranscript: 'Transcript',
+      assistantResponseCount: 0,
+    }),
+    (error: any) => error?.code === 'unsupported_locale' && /locale/i.test(String(error?.message)),
   );
 });
 

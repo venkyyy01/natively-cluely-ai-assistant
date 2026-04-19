@@ -2,6 +2,8 @@ import type { IntentResult } from '../IntentClassifier';
 
 export type IntentProviderErrorType =
   | 'unavailable'
+  | 'model_not_ready'
+  | 'unsupported_locale'
   | 'rate_limited'
   | 'refusal'
   | 'timeout'
@@ -37,6 +39,8 @@ export function getIntentProviderErrorCode(error: unknown): IntentProviderErrorT
     const code = (error as { code?: unknown }).code;
     if (
       code === 'unavailable'
+      || code === 'model_not_ready'
+      || code === 'unsupported_locale'
       || code === 'rate_limited'
       || code === 'refusal'
       || code === 'timeout'

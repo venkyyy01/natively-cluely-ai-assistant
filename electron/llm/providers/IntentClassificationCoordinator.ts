@@ -79,6 +79,10 @@ const CLARIFICATION_CUES = [
   'unpack',
   'break down',
   'when you say',
+  'when you said',
+  'what behavior should i expect',
+  'what behavior should we expect',
+  'what should i expect',
   'what exactly do you mean',
   'what exactly is',
   'how so',
@@ -135,7 +139,11 @@ function sleep(ms: number): Promise<void> {
 }
 
 function isRetryableError(code: IntentProviderErrorType): boolean {
-  return code === 'rate_limited' || code === 'timeout' || code === 'refusal' || code === 'unknown';
+  return code === 'rate_limited'
+    || code === 'timeout'
+    || code === 'refusal'
+    || code === 'model_not_ready'
+    || code === 'unknown';
 }
 
 export class IntentClassificationCoordinator {
@@ -479,7 +487,7 @@ export class IntentClassificationCoordinator {
       retryCount,
       retryable
         ? 'primary_retries_exhausted'
-        : primaryErrorCode === 'unavailable'
+        : primaryErrorCode === 'unavailable' || primaryErrorCode === 'unsupported_locale'
           ? 'primary_unavailable'
           : 'primary_failed',
     );

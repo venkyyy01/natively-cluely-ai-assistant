@@ -17,6 +17,7 @@ import type { FollowUpLLM } from '../llm/FollowUpLLM';
 import { selectAnswerRoute } from '../latency/answerRouteSelector';
 import type { AnswerRoute } from '../latency/AnswerLatencyTracker';
 import { ConsciousRetrievalOrchestrator } from './ConsciousRetrievalOrchestrator';
+import { isStrongConsciousIntent, isUncertainConsciousIntent } from './ConsciousIntentService';
 import { ConsciousProvenanceVerifier } from './ConsciousProvenanceVerifier';
 import { ConsciousVerifier } from './ConsciousVerifier';
 
@@ -180,11 +181,12 @@ export class ConsciousOrchestrator {
   }): PreparedConsciousRoute {
     const currentReasoningThread = this.session.getActiveReasoningThread();
     const latestReaction = this.session.getLatestQuestionReaction();
+    const hasStrongPrefetchedIntent = isStrongConsciousIntent(input.prefetchedIntent);
     let preRouteDecision = this.session.isConsciousModeEnabled()
       ? classifyConsciousModeQuestion(input.question, currentReasoningThread)
       : { qualifies: false, threadAction: 'ignore' as const };
 
-    if (input.prefetchedIntent?.intent === 'behavioral' || input.prefetchedIntent?.intent === 'coding') {
+    if (hasStrongPrefetchedIntent && !preRouteDecision.qualifies) {
       preRouteDecision = {
         qualifies: true,
         threadAction: currentReasoningThread ? 'reset' : 'start',
@@ -207,16 +209,27 @@ export class ConsciousOrchestrator {
       ? null
       : currentReasoningThread;
 
-    const selectedRoute = selectAnswerRoute({
+    const shouldForceStandardRoute = Boolean(
+      input.prefetchedIntent
+      && preRouteDecision.threadAction !== 'continue'
+      && isUncertainConsciousIntent(input.prefetchedIntent)
+      && !hasStrongPrefetchedIntent
+    );
+
+    let selectedRoute = selectAnswerRoute({
       explicitManual: false,
       explicitFollowUp: false,
-      consciousModeEnabled: this.session.isConsciousModeEnabled(),
+      consciousModeEnabled: this.session.isConsciousModeEnabled() && !shouldForceStandardRoute,
       profileModeEnabled: !!input.knowledgeStatus?.activeMode,
       hasProfile: !!input.knowledgeStatus?.hasResume,
       hasKnowledgeData: !!input.knowledgeStatus?.hasResume || !!input.knowledgeStatus?.hasActiveJD,
       latestQuestion: input.question,
       activeReasoningThread,
     });
+
+    if (hasStrongPrefetchedIntent && selectedRoute !== 'conscious_answer') {
+      selectedRoute = 'conscious_answer';
+    }
 
     const effectiveRoute: AnswerRoute = input.screenshotBackedLiveCodingTurn
       && this.session.isConsciousModeEnabled()

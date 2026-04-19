@@ -17,6 +17,11 @@ export interface LatencyMetadata {
   attemptedRoute?: AnswerRoute;
   fallbackOccurred?: boolean;
   profileFallbackReason?: string;
+  intentConfidence?: number;
+  intentProviderUsed?: string;
+  intentRetryCount?: number;
+  intentFallbackReason?: 'primary_unavailable' | 'primary_retries_exhausted' | 'primary_failed' | 'primary_low_confidence' | 'primary_contradiction';
+  prefetchedIntentUsed?: boolean;
   interimQuestionSubstitutionOccurred?: boolean;
   profileEnrichmentState?: ProfileEnrichmentState;
   consciousPath?: ConsciousPath;

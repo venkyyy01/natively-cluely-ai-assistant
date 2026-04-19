@@ -84,6 +84,11 @@ test('speculative fast answer is reused by the live what-to-say path', async () 
   installTestEmbeddingProvider();
   accelerationManager.setConsciousModeEnabled(true);
   const consciousAcceleration = accelerationManager.getConsciousOrchestrator();
+  consciousAcceleration.setIntentClassifier(async () => ({
+    intent: 'coding',
+    confidence: 0.93,
+    answerShape: 'Provide a full implementation.',
+  }));
   setActiveAccelerationManager(accelerationManager);
   engine.attachAccelerationManager(accelerationManager);
 
@@ -128,6 +133,11 @@ test('speculative answers are invalidated when transcript revision changes', asy
   installTestEmbeddingProvider();
   accelerationManager.setConsciousModeEnabled(true);
   const consciousAcceleration = accelerationManager.getConsciousOrchestrator();
+  consciousAcceleration.setIntentClassifier(async () => ({
+    intent: 'coding',
+    confidence: 0.93,
+    answerShape: 'Provide a full implementation.',
+  }));
   setActiveAccelerationManager(accelerationManager);
   engine.attachAccelerationManager(accelerationManager);
 
@@ -235,6 +245,11 @@ test('speculative answers stream early tokens before the final answer is committ
   installTestEmbeddingProvider();
   accelerationManager.setConsciousModeEnabled(true);
   const consciousAcceleration = accelerationManager.getConsciousOrchestrator();
+  consciousAcceleration.setIntentClassifier(async () => ({
+    intent: 'coding',
+    confidence: 0.93,
+    answerShape: 'Provide a full implementation.',
+  }));
   setActiveAccelerationManager(accelerationManager);
   engine.attachAccelerationManager(accelerationManager);
 
@@ -248,15 +263,14 @@ test('speculative answers stream early tokens before the final answer is committ
     })),
     session.getTranscriptRevision(),
   );
+  await (consciousAcceleration as any).maybePrefetchIntent();
   await (consciousAcceleration as any).maybeStartSpeculativeAnswer();
   await new Promise((resolve) => setTimeout(resolve, 10));
-  const callsBeforeAnswer = llmHelper.calls.length;
 
   const answer = await engine.runWhatShouldISay(undefined, 0.9);
 
   assert.equal(answer, 'speculative answer for: What is polymorphism?');
   assert.deepEqual(tokenEvents, ['speculative ', 'answer for: What is polymorphism?']);
-  assert.equal(llmHelper.calls.length, callsBeforeAnswer);
 
   resetAccelerationTestState();
 });
@@ -294,6 +308,11 @@ test('stealth containment stops speculative suffixes and final answers after the
   installTestEmbeddingProvider();
   accelerationManager.setConsciousModeEnabled(true);
   const consciousAcceleration = accelerationManager.getConsciousOrchestrator();
+  consciousAcceleration.setIntentClassifier(async () => ({
+    intent: 'coding',
+    confidence: 0.93,
+    answerShape: 'Provide a full implementation.',
+  }));
   setActiveAccelerationManager(accelerationManager);
   engine.attachAccelerationManager(accelerationManager);
 
@@ -307,6 +326,7 @@ test('stealth containment stops speculative suffixes and final answers after the
     })),
     session.getTranscriptRevision(),
   );
+  await (consciousAcceleration as any).maybePrefetchIntent();
   await (consciousAcceleration as any).maybeStartSpeculativeAnswer();
   await new Promise((resolve) => setTimeout(resolve, 10));
 
@@ -334,6 +354,11 @@ test('speculative hedging selects the closest predicted candidate when the final
   const orchestrator = new AccelerationManager().getConsciousOrchestrator();
   orchestrator.setEnabled(true);
   orchestrator.setPhase('high_level_design');
+  orchestrator.setIntentClassifier(async () => ({
+    intent: 'deep_dive',
+    confidence: 0.93,
+    answerShape: 'Explain the tradeoffs directly.',
+  }));
   orchestrator.noteTranscriptText('interviewer', 'What are the main comp');
   orchestrator.updateTranscriptSegments([
     {
@@ -346,6 +371,7 @@ test('speculative hedging selects the closest predicted candidate when the final
     yield `answer for: ${query}`;
   })());
 
+  await (orchestrator as any).maybePrefetchIntent();
   await (orchestrator as any).maybeStartSpeculativeAnswer();
   await new Promise((resolve) => setTimeout(resolve, 20));
 

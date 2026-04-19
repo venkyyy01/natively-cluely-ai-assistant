@@ -77,6 +77,7 @@ export interface SuggestedAnswerMetadata {
   attemptedRoute?: AnswerRoute;
   fallbackOccurred: boolean;
   fallbackReason?: string;
+  intentConfidence?: number;
   intentProviderUsed?: string;
   intentRetryCount?: number;
   intentFallbackReason?: 'primary_unavailable' | 'primary_retries_exhausted' | 'primary_failed' | 'primary_low_confidence' | 'primary_contradiction';
@@ -464,6 +465,11 @@ export class IntelligenceEngine extends EventEmitter {
         contextItems?: ContextItem[],
     ): void {
         this.latencyTracker.annotate(requestId, {
+            intentConfidence: metadata.intentConfidence,
+            intentProviderUsed: metadata.intentProviderUsed,
+            intentRetryCount: metadata.intentRetryCount,
+            intentFallbackReason: metadata.intentFallbackReason,
+            prefetchedIntentUsed: metadata.prefetchedIntentUsed,
             contextItemIds: this.buildContextItemIds(contextItems),
             verifierOutcome: metadata.verifier,
             stealthContainmentActive: metadata.stealthContainmentActive,
@@ -519,6 +525,7 @@ export class IntelligenceEngine extends EventEmitter {
         attemptedRoute?: AnswerRoute;
         fallbackOccurred: boolean;
         fallbackReason?: string;
+        intentConfidence?: number;
         intentProviderUsed?: string;
         intentRetryCount?: number;
         intentFallbackReason?: 'primary_unavailable' | 'primary_retries_exhausted' | 'primary_failed' | 'primary_low_confidence' | 'primary_contradiction';
@@ -556,6 +563,7 @@ export class IntelligenceEngine extends EventEmitter {
             attemptedRoute: input.attemptedRoute,
             fallbackOccurred: input.fallbackOccurred,
             fallbackReason: input.fallbackReason,
+            intentConfidence: input.intentConfidence,
             intentProviderUsed: input.intentProviderUsed,
             intentRetryCount: input.intentRetryCount,
             intentFallbackReason: input.intentFallbackReason,
@@ -1326,6 +1334,7 @@ export class IntelligenceEngine extends EventEmitter {
             this.latencyTracker.mark(requestId, 'transcriptPrepared');
             const temporalContext = preparationResult.temporalContext;
             const { intentResult, totalContextAssemblyMs, timedOut } = preparationResult;
+            const intentConfidence = intentResult?.confidence;
             const intentProviderUsed = (intentResult as CoordinatedIntentResult | undefined)?.provider;
             const intentRetryCount = (intentResult as CoordinatedIntentResult | undefined)?.retryCount;
             const intentFallbackReason = (intentResult as CoordinatedIntentResult | undefined)?.fallbackReason;
@@ -1375,6 +1384,7 @@ export class IntelligenceEngine extends EventEmitter {
                         route: currentRouteForMetadata,
                         attemptedRoute,
                         fallbackOccurred: false,
+                        intentConfidence,
                         intentProviderUsed,
                         intentRetryCount,
                         intentFallbackReason,
@@ -1450,6 +1460,7 @@ export class IntelligenceEngine extends EventEmitter {
                     attemptedRoute,
                     fallbackOccurred: Boolean(lastFallbackReason),
                     fallbackReason: lastFallbackReason,
+                    intentConfidence,
                     intentProviderUsed,
                     intentRetryCount,
                     intentFallbackReason,
@@ -1551,6 +1562,7 @@ export class IntelligenceEngine extends EventEmitter {
                 attemptedRoute,
                 fallbackOccurred: Boolean(lastFallbackReason),
                 fallbackReason: lastFallbackReason,
+                intentConfidence,
                 intentProviderUsed,
                 intentRetryCount,
                 intentFallbackReason,

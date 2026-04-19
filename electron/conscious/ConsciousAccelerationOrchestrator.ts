@@ -6,6 +6,7 @@ import { detectQuestion } from './QuestionDetector';
 import { isOptimizationActive } from '../config/optimizations';
 import type { RuntimeBudgetScheduler } from '../runtime/RuntimeBudgetScheduler';
 import type { IntentResult } from '../llm/IntentClassifier';
+import { isStrongConsciousIntent } from './ConsciousIntentService';
 
 type ClassifierLane = Pick<RuntimeBudgetScheduler, 'submit'>;
 
@@ -60,6 +61,7 @@ export class ConsciousAccelerationOrchestrator {
   private readonly classifierLane?: ClassifierLane;
   private intentClassifier?: (query: string, transcriptRevision: number) => Promise<IntentResult>;
   private prefetchedIntents = new Map<string, IntentResult>();
+  private prefetchedIntentInflight = new Map<string, Promise<void>>();
 
   constructor(options: ConsciousAccelerationOptions = {}) {
     this.classifierLane = options.classifierLane;
@@ -154,6 +156,7 @@ export class ConsciousAccelerationOrchestrator {
   setIntentClassifier(classifier: ((query: string, transcriptRevision: number) => Promise<IntentResult>) | null): void {
     this.intentClassifier = classifier ?? undefined;
     this.prefetchedIntents.clear();
+    this.prefetchedIntentInflight.clear();
   }
 
   noteTranscriptText(speaker: 'interviewer' | 'user', transcript?: string): void {
@@ -268,7 +271,24 @@ export class ConsciousAccelerationOrchestrator {
     this.latestTranscriptRevision = 0;
     this.lastPauseDecision = null;
     this.prefetchedIntents.clear();
+    this.prefetchedIntentInflight.clear();
     this.invalidateSpeculation(false);
+  }
+
+  private isSpeculativeEntryStale(entry: SpeculativeAnswerEntry, expectedTranscriptRevision?: number): boolean {
+    if (entry.generation !== this.speculativeGeneration) {
+      return true;
+    }
+
+    if (entry.transcriptRevision !== this.latestTranscriptRevision) {
+      return true;
+    }
+
+    if (typeof expectedTranscriptRevision === 'number' && entry.transcriptRevision !== expectedTranscriptRevision) {
+      return true;
+    }
+
+    return false;
   }
 
   private normalizeQuery(query: string): string {
@@ -356,6 +376,16 @@ export class ConsciousAccelerationOrchestrator {
       return;
     }
 
+    const latestQuery = this.latestInterviewerTranscript.trim();
+    if (!latestQuery) {
+      return;
+    }
+
+    const prefetchedIntent = this.getPrefetchedIntent(latestQuery, this.latestTranscriptRevision);
+    if (!isStrongConsciousIntent(prefetchedIntent)) {
+      return;
+    }
+
     const candidates = await this.deriveSpeculativeCandidates();
     if (candidates.length === 0) {
       return;
@@ -439,15 +469,28 @@ export class ConsciousAccelerationOrchestrator {
       return;
     }
 
-    try {
-      const intent = await this.intentClassifier(query, revision);
-      if (revision !== this.latestTranscriptRevision) {
-        return;
-      }
-      this.prefetchedIntents.set(key, intent);
-    } catch (error: unknown) {
-      console.warn('[ConsciousAccelerationOrchestrator] Intent preclassification failed:', error);
+    const inflight = this.prefetchedIntentInflight.get(key);
+    if (inflight) {
+      await inflight;
+      return;
     }
+
+    const promise = (async (): Promise<void> => {
+      try {
+        const intent = await this.intentClassifier!(query, revision);
+        if (revision !== this.latestTranscriptRevision) {
+          return;
+        }
+        this.prefetchedIntents.set(key, intent);
+      } catch (error: unknown) {
+        console.warn('[ConsciousAccelerationOrchestrator] Intent preclassification failed:', error);
+      } finally {
+        this.prefetchedIntentInflight.delete(key);
+      }
+    })();
+
+    this.prefetchedIntentInflight.set(key, promise);
+    await promise;
   }
 
   async getSpeculativeAnswerPreview(query: string, transcriptRevision: number, waitMs: number = 0): Promise<SpeculativeAnswerPreview | null> {
@@ -466,6 +509,11 @@ export class ConsciousAccelerationOrchestrator {
         entry.firstChunkPromise,
         new Promise<symbol>((resolve) => setTimeout(() => resolve(timeoutSentinel), waitMs)),
       ]);
+    }
+
+    if (this.isSpeculativeEntryStale(entry, transcriptRevision)) {
+      this.speculativeAnswerEntries.delete(entry.key);
+      return null;
     }
 
     const text = entry.result ?? entry.partialText;
@@ -488,6 +536,11 @@ export class ConsciousAccelerationOrchestrator {
       return null;
     }
 
+    if (this.isSpeculativeEntryStale(entry)) {
+      this.speculativeAnswerEntries.delete(key);
+      return null;
+    }
+
     if (!entry.completed) {
       const timeoutSentinel = Symbol('speculative-final-timeout');
       const result = await Promise.race([
@@ -497,6 +550,11 @@ export class ConsciousAccelerationOrchestrator {
       if (result !== timeoutSentinel) {
         entry.result = result as string | null;
       }
+    }
+
+    if (this.isSpeculativeEntryStale(entry)) {
+      this.speculativeAnswerEntries.delete(key);
+      return null;
     }
 
     this.speculativeAnswerEntries.delete(key);
@@ -519,5 +577,6 @@ export class ConsciousAccelerationOrchestrator {
     this.speculativeGeneration += 1;
     this.speculativeAnswerEntries.clear();
     this.prefetchedIntents.clear();
+    this.prefetchedIntentInflight.clear();
   }
 }

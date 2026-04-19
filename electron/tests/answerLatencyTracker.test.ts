@@ -131,6 +131,11 @@ test('AnswerLatencyTracker records extended SLO metadata on snapshots', () => {
       transcriptRevision?: number;
       fallbackOccurred?: boolean;
       profileFallbackReason?: string;
+      intentConfidence?: number;
+      intentProviderUsed?: string;
+      intentRetryCount?: number;
+      intentFallbackReason?: 'primary_unavailable' | 'primary_retries_exhausted' | 'primary_failed' | 'primary_low_confidence' | 'primary_contradiction';
+      prefetchedIntentUsed?: boolean;
       interimQuestionSubstitutionOccurred?: boolean;
       profileEnrichmentState?: 'attempted' | 'completed' | 'failed' | 'timed_out';
       consciousPath?: 'fresh_start' | 'thread_continue';
@@ -149,6 +154,11 @@ test('AnswerLatencyTracker records extended SLO metadata on snapshots', () => {
     transcriptRevision?: number;
     fallbackOccurred?: boolean;
       profileFallbackReason?: string;
+      intentConfidence?: number;
+      intentProviderUsed?: string;
+      intentRetryCount?: number;
+      intentFallbackReason?: 'primary_unavailable' | 'primary_retries_exhausted' | 'primary_failed' | 'primary_low_confidence' | 'primary_contradiction';
+      prefetchedIntentUsed?: boolean;
       interimQuestionSubstitutionOccurred?: boolean;
       profileEnrichmentState?: 'attempted' | 'completed' | 'failed' | 'timed_out';
       consciousPath?: 'fresh_start' | 'thread_continue';
@@ -163,6 +173,11 @@ test('AnswerLatencyTracker records extended SLO metadata on snapshots', () => {
     transcriptRevision: 7,
     fallbackOccurred: true,
     profileFallbackReason: 'profile_timeout',
+    intentConfidence: 0.91,
+    intentProviderUsed: 'foundation',
+    intentRetryCount: 1,
+    intentFallbackReason: 'primary_retries_exhausted',
+    prefetchedIntentUsed: true,
     interimQuestionSubstitutionOccurred: true,
     profileEnrichmentState: 'timed_out',
     consciousPath: 'thread_continue',
@@ -183,6 +198,11 @@ test('AnswerLatencyTracker records extended SLO metadata on snapshots', () => {
   assert.equal(snapshot.transcriptRevision, 7);
   assert.equal(snapshot.fallbackOccurred, true);
   assert.equal(snapshot.profileFallbackReason, 'profile_timeout');
+  assert.equal(snapshot.intentConfidence, 0.91);
+  assert.equal(snapshot.intentProviderUsed, 'foundation');
+  assert.equal(snapshot.intentRetryCount, 1);
+  assert.equal(snapshot.intentFallbackReason, 'primary_retries_exhausted');
+  assert.equal(snapshot.prefetchedIntentUsed, true);
   assert.equal(snapshot.interimQuestionSubstitutionOccurred, true);
   assert.equal(snapshot.profileEnrichmentState, 'timed_out');
   assert.equal(snapshot.consciousPath, 'thread_continue');

@@ -30,6 +30,8 @@
     "eval:intent": "tsc -p electron/tsconfig.json && node scripts/run-intent-eval.js",
     "eval:intent:multi": "tsc -p electron/tsconfig.json && node scripts/run-intent-eval-multi.js",
     "eval:intent:generate-variants": "node scripts/generate-intent-eval-variants.js",
+    "bench:intent:foundation": "tsc -p electron/tsconfig.json && node scripts/run-foundation-intent-latency-spike.js",
+    "verify:foundation-intent-release": "node scripts/run-foundation-intent-release.js",
     "test:electron:coverage": "rimraf dist-electron/electron/tests && tsc -p electron/tsconfig.json && node --test --experimental-test-coverage dist-electron/electron/tests/*.test.js",
     "test:renderer": "npm --prefix renderer test",
     "test:renderer:coverage": "npm --prefix renderer run test:coverage",

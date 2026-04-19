@@ -138,6 +138,53 @@ test('IntentClassificationCoordinator does not retry deterministic unavailable e
   assert.equal(result.fallbackReason, 'primary_unavailable');
 });
 
+test('IntentClassificationCoordinator treats unsupported_locale as primary_unavailable without retries', async () => {
+  let primaryCalls = 0;
+  const primary = new StubProvider('foundation', true, async () => {
+    primaryCalls += 1;
+    throw createIntentProviderError('unsupported_locale', 'locale not supported');
+  });
+  const fallback = new StubProvider('legacy', true, async () => codingResult(0.74));
+
+  const coordinator = new IntentClassificationCoordinator(primary, fallback, {
+    maxPrimaryRetries: 3,
+    baseBackoffMs: 200,
+    jitterMs: 0,
+  });
+  const result = await coordinator.classify(input);
+
+  assert.equal(primaryCalls, 1);
+  assert.equal(result.provider, 'legacy');
+  assert.equal(result.retryCount, 0);
+  assert.equal(result.fallbackReason, 'primary_unavailable');
+});
+
+test('IntentClassificationCoordinator retries model_not_ready before fallback', async () => {
+  const recordedDelays: number[] = [];
+  let primaryCalls = 0;
+  const primary = new StubProvider('foundation', true, async () => {
+    primaryCalls += 1;
+    throw createIntentProviderError('model_not_ready', 'model still downloading');
+  });
+  const fallback = new StubProvider('legacy', true, async () => codingResult(0.78));
+
+  const coordinator = new IntentClassificationCoordinator(primary, fallback, {
+    maxPrimaryRetries: 1,
+    baseBackoffMs: 120,
+    jitterMs: 0,
+    delayFn: async (ms: number) => {
+      recordedDelays.push(ms);
+    },
+  });
+  const result = await coordinator.classify(input);
+
+  assert.equal(primaryCalls, 2);
+  assert.deepEqual(recordedDelays, [240]);
+  assert.equal(result.provider, 'legacy');
+  assert.equal(result.retryCount, 1);
+  assert.equal(result.fallbackReason, 'primary_retries_exhausted');
+});
+
 test('IntentClassificationCoordinator marks deterministic non-unavailable failures as primary_failed', async () => {
   let primaryCalls = 0;
   const primary = new StubProvider('foundation', true, async () => {

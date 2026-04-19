@@ -1,5 +1,9 @@
 import type { ConversationIntent } from '../llm/IntentClassifier';
 import { getIntentProviderErrorCode } from '../llm/providers/IntentInferenceProvider';
+import {
+  FOUNDATION_INTENT_PROMPT_VERSION,
+  FOUNDATION_INTENT_SCHEMA_VERSION,
+} from '../llm/providers/FoundationIntentPromptAssets';
 
 export interface IntentEvalCase {
   id: string;
@@ -43,6 +47,8 @@ export interface IntentEvalBucketSummary {
 }
 
 export interface IntentEvalSummary {
+  promptVersion?: string;
+  schemaVersion?: string;
   total: number;
   correct: number;
   accuracy: number;
@@ -95,6 +101,8 @@ function createBaseSummary(): IntentEvalSummary {
   ) as Record<ConversationIntent, Record<ConversationIntent, number>>;
 
   return {
+    promptVersion: FOUNDATION_INTENT_PROMPT_VERSION,
+    schemaVersion: FOUNDATION_INTENT_SCHEMA_VERSION,
     total: 0,
     correct: 0,
     accuracy: 0,
@@ -267,6 +275,8 @@ function formatConfusionMatrix(summary: IntentEvalSummary): string[] {
 
 export function formatIntentEvalSummary(summary: IntentEvalSummary): string {
   const lines: string[] = [];
+  lines.push(`Prompt version: ${summary.promptVersion ?? 'unknown'}`);
+  lines.push(`Schema version: ${summary.schemaVersion ?? 'unknown'}`);
   lines.push(`Total cases: ${summary.total}`);
   lines.push(`Overall accuracy: ${formatPercent(summary.accuracy)} (${formatRatio(summary.correct, summary.total)})`);
   lines.push(`Provider split: ${formatProviderSplit(summary.providerSplit)}`);
