@@ -204,6 +204,18 @@ export class ConsciousOrchestrator {
     return false;
   }
 
+  private static isValidIntentResult(value: unknown): value is IntentResult {
+    if (typeof value !== 'object' || value === null) {
+      return false;
+    }
+    const obj = value as Record<string, unknown>;
+    return (
+      typeof obj.intent === 'string'
+      && typeof obj.confidence === 'number'
+      && typeof obj.answerShape === 'string'
+    );
+  }
+
   prepareRoute(input: {
     question: string;
     knowledgeStatus?: KnowledgeStatusLike | null;
@@ -212,7 +224,8 @@ export class ConsciousOrchestrator {
   }): PreparedConsciousRoute {
     const currentReasoningThread = this.session.getActiveReasoningThread();
     const latestReaction = this.session.getLatestQuestionReaction();
-    const hasStrongPrefetchedIntent = isStrongConsciousIntent(input.prefetchedIntent);
+    const safePrefetchedIntent = ConsciousOrchestrator.isValidIntentResult(input.prefetchedIntent) ? input.prefetchedIntent : null;
+    const hasStrongPrefetchedIntent = isStrongConsciousIntent(safePrefetchedIntent);
     const circuitOpen = this.isCircuitOpen();
     let preRouteDecision = this.session.isConsciousModeEnabled()
       ? classifyConsciousModeQuestion(input.question, currentReasoningThread)
@@ -242,9 +255,9 @@ export class ConsciousOrchestrator {
       : currentReasoningThread;
 
     const shouldForceStandardRoute = Boolean(
-      input.prefetchedIntent
+      safePrefetchedIntent
       && preRouteDecision.threadAction !== 'continue'
-      && isUncertainConsciousIntent(input.prefetchedIntent)
+      && isUncertainConsciousIntent(safePrefetchedIntent)
       && !hasStrongPrefetchedIntent
     );
 
@@ -298,6 +311,11 @@ export class ConsciousOrchestrator {
     }
   }
 
+  private skip(): ConsciousExecutionResult {
+    this.consecutiveFailures = 0;
+    return { kind: 'skip' };
+  }
+
   async continueThread(input: {
     followUpLLM: FollowUpLLM | null;
     activeReasoningThread: ReasoningThread | null;
@@ -305,7 +323,11 @@ export class ConsciousOrchestrator {
     isStale: () => boolean;
   }): Promise<ConsciousExecutionResult> {
     if (!input.followUpLLM || !input.activeReasoningThread) {
-      return { kind: 'skip' };
+      return this.skip();
+    }
+
+    if (this.isCircuitOpen()) {
+      return { kind: 'fallback' };
     }
 
     try {
@@ -380,7 +402,11 @@ export class ConsciousOrchestrator {
     answerLLM: AnswerLLM | null;
   }): Promise<ConsciousExecutionResult> {
     if (!input.route.qualifies) {
-      return { kind: 'skip' };
+      return this.skip();
+    }
+
+    if (this.isCircuitOpen()) {
+      return { kind: 'fallback' };
     }
 
     try {

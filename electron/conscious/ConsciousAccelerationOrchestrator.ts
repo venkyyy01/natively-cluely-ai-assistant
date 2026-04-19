@@ -46,6 +46,9 @@ export interface ConsciousAccelerationOptions {
 }
 
 export class ConsciousAccelerationOrchestrator {
+  private static readonly MAX_SPECULATIVE_ENTRIES = 10;
+  private static readonly PREFETCHED_INTENT_TTL_MS = 30_000;
+
   private readonly prefetcher: PredictivePrefetcher;
   private readonly pauseDetector: PauseDetector;
   private readonly pauseThresholdTuner: PauseThresholdTuner;
@@ -61,8 +64,9 @@ export class ConsciousAccelerationOrchestrator {
   private lastPauseDecision: { action: PauseAction; confidence: PauseConfidence; at: number } | null = null;
   private readonly classifierLane?: ClassifierLane;
   private intentClassifier?: (query: string, transcriptRevision: number) => Promise<IntentResult>;
-  private prefetchedIntents = new Map<string, IntentResult>();
+  private prefetchedIntents = new Map<string, { intent: IntentResult; fetchedAt: number }>();
   private prefetchedIntentInflight = new Map<string, Promise<void>>();
+  private intentPrefetchAbortController: AbortController | null = null;
 
   constructor(options: ConsciousAccelerationOptions = {}) {
     this.classifierLane = options.classifierLane;
@@ -83,7 +87,7 @@ export class ConsciousAccelerationOrchestrator {
         void this.classifierLane
           .submit('semantic', run)
           .catch((error: unknown) => {
-            console.warn('[ConsciousAccelerationOrchestrator] Semantic classifier lane rejected pause action:', error);
+            console.error('[ConsciousAccelerationOrchestrator] Semantic classifier lane rejected pause action:', error);
           });
         return;
       }
@@ -156,6 +160,7 @@ export class ConsciousAccelerationOrchestrator {
 
   setIntentClassifier(classifier: ((query: string, transcriptRevision: number) => Promise<IntentResult>) | null): void {
     this.intentClassifier = classifier ?? undefined;
+    this.abortInflightIntentPrefetch();
     this.prefetchedIntents.clear();
     this.prefetchedIntentInflight.clear();
   }
@@ -221,7 +226,7 @@ export class ConsciousAccelerationOrchestrator {
           this.pauseDetector.onSpeechEnded();
         })
         .catch((error: unknown) => {
-          console.warn('[ConsciousAccelerationOrchestrator] Semantic classifier lane rejected silence evaluation:', error);
+          console.error('[ConsciousAccelerationOrchestrator] Semantic classifier lane rejected silence evaluation:', error);
         });
       return;
     }
@@ -260,7 +265,15 @@ export class ConsciousAccelerationOrchestrator {
 
   getPrefetchedIntent(query: string, transcriptRevision: number): IntentResult | null {
     const key = this.buildSpeculativeKey(query, transcriptRevision);
-    return this.prefetchedIntents.get(key) ?? null;
+    const entry = this.prefetchedIntents.get(key);
+    if (!entry) {
+      return null;
+    }
+    if (Date.now() - entry.fetchedAt > ConsciousAccelerationOrchestrator.PREFETCHED_INTENT_TTL_MS) {
+      this.prefetchedIntents.delete(key);
+      return null;
+    }
+    return entry.intent;
   }
 
   clearState(): void {
@@ -271,9 +284,17 @@ export class ConsciousAccelerationOrchestrator {
     this.latestInterviewerTranscript = '';
     this.latestTranscriptRevision = 0;
     this.lastPauseDecision = null;
+    this.abortInflightIntentPrefetch();
     this.prefetchedIntents.clear();
     this.prefetchedIntentInflight.clear();
     this.invalidateSpeculation(false);
+  }
+
+  private abortInflightIntentPrefetch(): void {
+    if (this.intentPrefetchAbortController) {
+      this.intentPrefetchAbortController.abort(new Error('intent_prefetch_cancelled'));
+      this.intentPrefetchAbortController = null;
+    }
   }
 
   private isSpeculativeEntryStale(entry: SpeculativeAnswerEntry, expectedTranscriptRevision?: number): boolean {
@@ -424,6 +445,13 @@ export class ConsciousAccelerationOrchestrator {
         try {
           const stream = this.speculativeExecutor!(candidate.query, candidate.transcriptRevision, abortController.signal);
           for await (const chunk of stream) {
+            if (abortController.signal.aborted) {
+              entry.result = null;
+              entry.completed = true;
+              entry.resolveFirstChunk();
+              return null;
+            }
+
             if (generation !== this.speculativeGeneration || candidate.transcriptRevision !== this.latestTranscriptRevision) {
               abortController.abort(new Error('speculation_stale'));
               entry.result = null;
@@ -456,6 +484,25 @@ export class ConsciousAccelerationOrchestrator {
       })();
 
       this.speculativeAnswerEntries.set(key, entry);
+      this.evictStaleSpeculativeEntries();
+    }
+  }
+
+  private evictStaleSpeculativeEntries(): void {
+    if (this.speculativeAnswerEntries.size <= ConsciousAccelerationOrchestrator.MAX_SPECULATIVE_ENTRIES) {
+      return;
+    }
+
+    const entries = Array.from(this.speculativeAnswerEntries.values())
+      .sort((a, b) => a.startedAt - b.startedAt);
+
+    while (this.speculativeAnswerEntries.size > ConsciousAccelerationOrchestrator.MAX_SPECULATIVE_ENTRIES) {
+      const oldest = entries.shift();
+      if (!oldest) {
+        break;
+      }
+      oldest.abortController.abort(new Error('speculative_evicted'));
+      this.speculativeAnswerEntries.delete(oldest.key);
     }
   }
 
@@ -481,17 +528,28 @@ export class ConsciousAccelerationOrchestrator {
       return;
     }
 
+    const abortController = new AbortController();
+    this.intentPrefetchAbortController = abortController;
+
     const promise = (async (): Promise<void> => {
       try {
         const intent = await this.intentClassifier!(query, revision);
+        if (abortController.signal.aborted) {
+          return;
+        }
         if (revision !== this.latestTranscriptRevision) {
           return;
         }
-        this.prefetchedIntents.set(key, intent);
+        this.prefetchedIntents.set(key, { intent, fetchedAt: Date.now() });
       } catch (error: unknown) {
-        console.warn('[ConsciousAccelerationOrchestrator] Intent preclassification failed:', error);
+        if (!abortController.signal.aborted) {
+          console.warn('[ConsciousAccelerationOrchestrator] Intent preclassification failed:', error);
+        }
       } finally {
         this.prefetchedIntentInflight.delete(key);
+        if (this.intentPrefetchAbortController === abortController) {
+          this.intentPrefetchAbortController = null;
+        }
       }
     })();
 

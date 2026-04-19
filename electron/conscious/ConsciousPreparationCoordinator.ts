@@ -119,20 +119,26 @@ export class ConsciousPreparationCoordinator {
     screenshotBackedLiveCodingTurn: boolean;
     prefetchedIntent?: CoordinatedIntentResult | null;
   }): ConsciousRoutePreparationResult {
+    const initialRoute = this.consciousOrchestrator.prepareRoute({
+      question: input.baseQuestion,
+      knowledgeStatus: input.knowledgeStatus,
+      screenshotBackedLiveCodingTurn: false,
+      prefetchedIntent: input.prefetchedIntent ?? null,
+    });
+
     const shouldUseScreenshotConsciousRoute = this.session.isConsciousModeEnabled()
-      && !this.consciousOrchestrator.prepareRoute({
-        question: input.baseQuestion,
-        knowledgeStatus: input.knowledgeStatus,
-        screenshotBackedLiveCodingTurn: false,
-        prefetchedIntent: input.prefetchedIntent ?? null,
-      }).preRouteDecision.qualifies
+      && !initialRoute.preRouteDecision.qualifies
       && input.screenshotBackedLiveCodingTurn;
+
+    if (!shouldUseScreenshotConsciousRoute) {
+      return { preparedRoute: initialRoute };
+    }
 
     return {
       preparedRoute: this.consciousOrchestrator.prepareRoute({
         question: input.baseQuestion,
         knowledgeStatus: input.knowledgeStatus,
-        screenshotBackedLiveCodingTurn: shouldUseScreenshotConsciousRoute,
+        screenshotBackedLiveCodingTurn: true,
         prefetchedIntent: input.prefetchedIntent ?? null,
       }),
     };
