@@ -3835,6 +3835,8 @@ ANSWER DIRECTLY:`;
   private async * streamWithGroq(fullMessage: string, modelOverride: string = GROQ_MODEL, abortSignal?: AbortSignal): AsyncGenerator<string, void, unknown> {
     if (!this.groqClient) throw new Error("Groq client not initialized");
 
+    await this.rateLimiters.groq.acquire();
+
     const requestControl = createRequestAbortController(LLM_API_TIMEOUT_MS, abortSignal);
     const targetModel = modelOverride || GROQ_MODEL;
     
@@ -3901,6 +3903,8 @@ ANSWER DIRECTLY:`;
    */
   private async * streamWithGroqMultimodal(userMessage: string, imagePaths: string[], systemPrompt?: string, abortSignal?: AbortSignal): AsyncGenerator<string, void, unknown> {
     if (!this.groqClient) throw new Error("Groq client not initialized");
+
+    await this.rateLimiters.groq.acquire();
 
     const messages: any[] = [];
     if (systemPrompt) {
@@ -4755,6 +4759,7 @@ ANSWER DIRECTLY:`;
     // Try Groq first if available
     if (this.groqClient) {
       try {
+        await this.rateLimiters.groq.acquire();
         console.log(`[LLMHelper] 🚀 Mode-specific Groq stream starting...`);
         const timeoutSignal = createTimeoutSignal(LLM_API_TIMEOUT_MS);
         
