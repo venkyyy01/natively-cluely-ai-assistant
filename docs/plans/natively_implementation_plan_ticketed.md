@@ -691,7 +691,7 @@ EPIC-19 (Mega-file decomposition)        -> last; blocks nothing
   - Will run `npm run test:electron`.
 - **Definition of done**: standard DoD.
 
-#### NAT-020 — Make `SupervisorBus.emit` non-throwing on listener errors
+#### NAT-020 [x] — Make `SupervisorBus.emit` non-throwing on listener errors
 
 - **Parent epic**: EPIC-03
 - **Priority**: P1

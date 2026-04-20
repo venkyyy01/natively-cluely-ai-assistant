@@ -40,6 +40,20 @@ export type SupervisorEvent = SupervisorCoreEvent
     failureCount: number;
     messages: string[];
     critical: boolean;
+  }
+  | {
+    /**
+     * NAT-020: emitted when a single listener has thrown
+     * `LISTENER_FAILURE_THRESHOLD` times within
+     * `LISTENER_FAILURE_WINDOW_MS` and has been auto-unsubscribed by the
+     * bus circuit-breaker. Subscribers can use this to alert / restart
+     * the offending component. The bus itself never re-throws.
+     */
+    type: 'bus:listener-circuit-open';
+    sourceEventType: SupervisorCoreEvent['type'] | 'any';
+    failureCount: number;
+    /** Reason string from the most recent failure, for debugging. */
+    lastErrorMessage: string;
   };
 
 export type SupervisorEventType = SupervisorEvent['type'];
