@@ -78,7 +78,12 @@ test('SupervisorBus emits a bus:listener-error meta event for non-critical liste
   }]);
 });
 
-test('SupervisorBus rethrows listener failures for critical events after notifying all listeners', async () => {
+test('SupervisorBus does not throw on listener failures for critical events but tags the meta-event as critical', async () => {
+  // NAT-020 contract: emit() never throws, even for critical events. The
+  // failure is logged, every other listener still runs, and the synthetic
+  // bus:listener-error event carries `critical: true` so consumers that
+  // *want* to react (e.g. force a process exit) can still do so without
+  // taking down the entire emit pipeline for unrelated subscribers.
   const errors: string[] = [];
   const bus = new SupervisorBus({
     error(message) {
@@ -105,10 +110,9 @@ test('SupervisorBus rethrows listener failures for critical events after notifyi
     });
   });
 
-  await assert.rejects(
-    () => bus.emit({ type: 'stealth:fault', reason: 'capture detected' }),
-    /Critical SupervisorBus event "stealth:fault" had listener failures: boom/,
-  );
+  // Must not throw. Calling .doesNotReject would also work; awaiting and
+  // letting the assertion library catch any throw is equally explicit.
+  await bus.emit({ type: 'stealth:fault', reason: 'capture detected' });
 
   assert.deepEqual(seen, ['before-error', 'after-error']);
   assert.equal(errors.length, 1);
