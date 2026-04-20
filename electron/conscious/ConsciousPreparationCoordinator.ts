@@ -16,6 +16,8 @@ import type { AnswerHypothesis } from './AnswerHypothesisStore';
 import type { ConsciousPlannerPreferenceSummary, ConsciousResponseQuestionMode } from './ConsciousResponsePreferenceStore';
 import { detectConsciousQuestionMode } from './ConsciousAnswerPlanner';
 import type { CoordinatedIntentResult } from '../llm/providers/IntentClassificationCoordinator';
+import { TokenCounter } from '../shared/TokenCounter';
+import { TokenBudgetManager } from './TokenBudget';
 
 interface SessionLike {
   isConsciousModeEnabled(): boolean;
@@ -58,16 +60,22 @@ export class ConsciousPreparationCoordinator {
   private readonly retrievalOrchestrator: ConsciousRetrievalOrchestrator;
   private readonly answerPlanner: ConsciousAnswerPlanner;
   private readonly semanticFactStore: ConsciousSemanticFactStore;
+  private readonly tokenCounter: TokenCounter;
+  private readonly tokenBudgetManager: TokenBudgetManager;
 
   constructor(
     private readonly session: SessionLike,
     private readonly consciousOrchestrator: ConsciousOrchestrator,
     private readonly consciousContextComposer: ConsciousContextComposer,
     private readonly consciousIntentService: ConsciousIntentService,
+    tokenCounter?: TokenCounter,
+    tokenBudgetManager?: TokenBudgetManager,
   ) {
     this.retrievalOrchestrator = new ConsciousRetrievalOrchestrator(this.session);
     this.answerPlanner = new ConsciousAnswerPlanner();
     this.semanticFactStore = new ConsciousSemanticFactStore();
+    this.tokenCounter = tokenCounter ?? new TokenCounter('openai');
+    this.tokenBudgetManager = tokenBudgetManager ?? new TokenBudgetManager('openai');
   }
 
   private buildEvidenceContextBlock(input: {
@@ -80,27 +88,63 @@ export class ConsciousPreparationCoordinator {
   }): string {
     const preferenceBlock = this.session.getConsciousResponsePreferenceContext(input.answerPlan.questionMode);
     const planBlock = this.answerPlanner.buildContextBlock(input.answerPlan);
+    // Priority-ordered evidence blocks (lower number = higher priority)
     const evidenceBlocks = [
-      preferenceBlock,
-      planBlock,
-      input.semanticBlock,
-      input.stateBlock,
-      input.liveRagBlock,
-      input.longMemoryBlock,
-      this.session.getConsciousEvidenceContext(),
-    ].filter(Boolean);
-    const softTokenBudget = Math.floor(input.tokenBudget * 0.6);
-    const estimatedEvidenceTokens = evidenceBlocks.join(' ').split(/\s+/).length;
+      { text: preferenceBlock, priority: 1 },
+      { text: planBlock, priority: 2 },
+      { text: input.semanticBlock, priority: 3 },
+      { text: input.stateBlock, priority: 4 },
+      { text: input.liveRagBlock, priority: 5 },
+      { text: input.longMemoryBlock, priority: 6 },
+      { text: this.session.getConsciousEvidenceContext(), priority: 7 },
+    ].filter((b): b is { text: string; priority: number } => Boolean(b.text));
 
-    if (estimatedEvidenceTokens <= softTokenBudget) {
-      return evidenceBlocks.join('\n\n');
+    const softTokenBudget = Math.floor(input.tokenBudget * 0.6);
+    const provider = this.tokenBudgetManager.getProvider();
+
+    const blocksWithTokens = evidenceBlocks.map((b) => ({
+      ...b,
+      tokens: this.tokenCounter.count(b.text, provider),
+    }));
+
+    const totalTokens = blocksWithTokens.reduce((sum, b) => sum + b.tokens, 0);
+
+    if (totalTokens <= softTokenBudget) {
+      return blocksWithTokens.map((b) => b.text).join('\n\n');
     }
 
-    const trimmed = evidenceBlocks
-      .map((block) => block.split(/\s+/).slice(0, Math.floor(softTokenBudget / evidenceBlocks.length)).join(' '))
-      .filter(Boolean);
-    console.warn(`[ConsciousPreparation] Evidence context exceeded soft token budget (${estimatedEvidenceTokens} > ${softTokenBudget}). Trimming blocks proportionally.`);
-    return trimmed.join('\n\n');
+    // Trim lowest-priority blocks first to fit budget
+    const sorted = [...blocksWithTokens].sort((a, b) => a.priority - b.priority);
+    let remainingBudget = softTokenBudget;
+    const result: string[] = [];
+
+    for (const block of sorted) {
+      if (block.tokens <= remainingBudget) {
+        result.push(block.text);
+        remainingBudget -= block.tokens;
+      } else if (remainingBudget > 32) {
+        // Partial trim: use character-ratio approximation guided by token ratio
+        const ratio = remainingBudget / Math.max(block.tokens, 1);
+        const charLimit = Math.floor(block.text.length * ratio);
+        let trimmed = block.text.slice(0, charLimit);
+        // Try to end on a sentence boundary if one exists in the latter half
+        const lastSentence = trimmed.lastIndexOf('.');
+        if (lastSentence > trimmed.length * 0.5) {
+          trimmed = trimmed.slice(0, lastSentence + 1);
+        }
+        if (trimmed.trim()) {
+          result.push(trimmed.trim());
+        }
+        remainingBudget = 0;
+      }
+      // Once budget is exhausted, drop remaining lower-priority blocks
+    }
+
+    console.warn(
+      `[ConsciousPreparation] Evidence context exceeded soft token budget (${totalTokens} > ${softTokenBudget}). ` +
+      `Trimmed ${blocksWithTokens.length - result.length} lowest-priority block(s).`
+    );
+    return result.join('\n\n');
   }
 
   private shouldRebuildPreparedTranscript(currentPlan: ConsciousAnswerPlan, nextPlan: ConsciousAnswerPlan): boolean {
