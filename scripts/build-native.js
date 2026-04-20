@@ -27,6 +27,19 @@ function runNapiBuild(buildArgs) {
   runCommand(`npx napi build ${buildArgs.join(' ')}`);
 }
 
+function writeAbiMetadata() {
+  const abiVersion = process.versions.modules;
+  const artifacts = fs
+    .readdirSync(nativeModulePath)
+    .filter((file) => file.endsWith('.node'));
+
+  artifacts.forEach((artifact) => {
+    const abiPath = path.join(nativeModulePath, `${artifact}.abi`);
+    fs.writeFileSync(abiPath, `${abiVersion}\n`, 'utf8');
+    console.log(`Wrote ABI metadata: ${path.relative(nativeModulePath, abiPath)} -> ${abiVersion}`);
+  });
+}
+
 if (os.platform() === 'darwin') {
   if (buildCurrentOnly) {
     const target = os.arch() === 'arm64' ? 'aarch64-apple-darwin' : 'x86_64-apple-darwin';
@@ -60,3 +73,5 @@ if (os.platform() === 'darwin') {
   console.log(`Building for current platform: ${os.platform()}`);
   runNapiBuild(['--platform', '--release']);
 }
+
+writeAbiMetadata();

@@ -765,26 +765,35 @@ EPIC-19 (Mega-file decomposition)        -> last; blocks nothing
   - `npm run test:electron` — green (858 tests, 854 pass, 4 skipped, 0 fail).
 - **Definition of done**: met.
 
-#### NAT-023 — Add ABI preflight check on native audio module load
+#### NAT-023 — Add ABI preflight check on native audio module load [x]
 
 - **Parent epic**: EPIC-03
 - **Priority**: P2
 - **Type**: bug-fix
 - **Original finding**: R-13
 - **Goal**: A wrong-ABI .node binary will surface an actionable error instead of a cryptic crash.
-- **Affected files**: `electron/audio/nativeModule.ts` (lines 39–94).
+- **Affected files**: `electron/audio/nativeModule.ts`, `scripts/build-native.js`, `electron/tests/nativeAudioAbiMismatch.test.ts`.
 - **Dependencies**: None
-- **Implementation steps**:
-  1. Will read `process.versions.modules` and compare against an `EXPECTED_NODE_MODULE_VERSION` constant set by build script.
-  2. On mismatch, throw `new Error('Native audio ABI mismatch: built for X, runtime is Y. Run `npm run build:native:current`.')`.
-  3. Will update `scripts/build-native.js` to write the ABI version into a sibling `.abi` file alongside the .node, then have `nativeModule.ts` read it.
+- **Implementation**:
+  1. Added ABI preflight logic in `electron/audio/nativeModule.ts`:
+     - read expected ABI from sibling metadata files (`*.node.abi`)
+     - compare expected value to `process.versions.modules`
+     - fail candidate load with actionable mismatch error:
+       `Native audio ABI mismatch: built for X, runtime is Y. Run \`npm run build:native:current\`.`
+  2. Added metadata emission in `scripts/build-native.js`:
+     - after build, enumerate native `.node` artifacts in `native-module/`
+     - write `<artifact>.abi` files containing the runtime ABI used for build
+  3. Wired fallback probing to keep behavior unchanged when ABI metadata is absent (no false hard-fail for legacy artifacts).
 - **Acceptance criteria**:
-  - [ ] Mismatch produces the actionable error.
-  - [ ] Match loads silently.
+  - [x] Mismatch produces the actionable error.
+  - [x] Match loads silently.
 - **Validation**:
-  - Will add `electron/tests/nativeAudioAbiMismatch.test.ts` with a stubbed mismatch.
-  - Will run `npm run test:electron`.
-- **Definition of done**: standard DoD.
+  - Added `electron/tests/nativeAudioAbiMismatch.test.ts` with two cases:
+    - mismatch `.abi` vs runtime ABI returns actionable error
+    - matching `.abi` allows module load with no ABI warning/failure
+  - `npx tsc -p electron/tsconfig.json --noEmit` — clean.
+  - `npm run test:electron` — green (860 tests, 856 pass, 4 skipped, 0 fail).
+- **Definition of done**: met.
 
 ---
 

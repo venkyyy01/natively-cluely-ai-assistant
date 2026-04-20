@@ -1,4 +1,5 @@
 import { app } from 'electron';
+import fs from 'fs';
 import path from 'path';
 
 let cachedModule: any | null | undefined;
@@ -6,13 +7,71 @@ let cachedError: Error | null = null;
 
 type Candidate = {
   label: string;
+  abiDirectory?: string;
   load: () => any;
 };
 
+const NODE_MODULE_ABI_VERSION = process.versions.modules || 'unknown';
+
+function readExpectedNodeAbiVersion(abiDirectory: string): string | null {
+  const preferredFiles = [
+    `index.${process.platform}-${process.arch}.node.abi`,
+    'index.node.abi',
+  ];
+  for (const fileName of preferredFiles) {
+    const filePath = path.join(abiDirectory, fileName);
+    try {
+      const expected = fs.readFileSync(filePath, 'utf8').trim();
+      if (expected) {
+        return expected;
+      }
+    } catch {
+      // Continue trying fallback paths.
+    }
+  }
+
+  try {
+    const firstAbiFile = fs
+      .readdirSync(abiDirectory)
+      .find((file) => file.endsWith('.abi'));
+    if (!firstAbiFile) {
+      return null;
+    }
+    const expected = fs.readFileSync(path.join(abiDirectory, firstAbiFile), 'utf8').trim();
+    return expected || null;
+  } catch {
+    return null;
+  }
+}
+
+function assertNativeAbiCompatibility(candidate: Candidate): void {
+  if (!candidate.abiDirectory) {
+    return;
+  }
+  const expected = readExpectedNodeAbiVersion(candidate.abiDirectory);
+  if (!expected || expected === NODE_MODULE_ABI_VERSION) {
+    return;
+  }
+  throw new Error(
+    `Native audio ABI mismatch: built for ${expected}, runtime is ${NODE_MODULE_ABI_VERSION}. Run \`npm run build:native:current\`.`,
+  );
+}
+
+function resolveNativelyAudioPackageDir(): string | undefined {
+  try {
+    const packageJsonPath = require.resolve('natively-audio/package.json');
+    return path.dirname(packageJsonPath);
+  } catch {
+    return undefined;
+  }
+}
+
 function getCandidates(): Candidate[] {
+  const packageDir = resolveNativelyAudioPackageDir();
   const candidates: Candidate[] = [
     {
       label: 'package:natively-audio',
+      abiDirectory: packageDir,
       load: () => require('natively-audio'),
     },
   ];
@@ -21,6 +80,7 @@ function getCandidates(): Candidate[] {
   if (appPath) {
     candidates.push({
       label: `appPath:${path.join(appPath, 'native-module')}`,
+      abiDirectory: path.join(appPath, 'native-module'),
       load: () => require(path.join(appPath, 'native-module')),
     });
   }
@@ -29,6 +89,7 @@ function getCandidates(): Candidate[] {
   if (!app?.isPackaged) {
     candidates.push({
       label: `cwd:${cwdPath}`,
+      abiDirectory: cwdPath,
       load: () => require(cwdPath),
     });
   }
@@ -46,6 +107,7 @@ export function loadNativeAudioModule(): any | null {
 
   for (const candidate of getCandidates()) {
     try {
+      assertNativeAbiCompatibility(candidate);
       console.log(`[NativeAudio] Attempting to load from: ${candidate.label}`);
       const mod = candidate.load();
       
