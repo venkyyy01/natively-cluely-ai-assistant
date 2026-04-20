@@ -549,7 +549,7 @@ EPIC-19 (Mega-file decomposition)        -> last; blocks nothing
 
 ### EPIC-03 — Critical reliability and lifecycle fixes
 
-#### NAT-013 — Bound `TieredMemoryManager.coldEntries` after persist
+#### NAT-013 [x] — Bound `TieredMemoryManager.coldEntries` after persist
 
 - **Parent epic**: EPIC-03
 - **Priority**: P0
