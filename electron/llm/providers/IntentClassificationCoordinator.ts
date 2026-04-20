@@ -21,6 +21,14 @@ export interface IntentClassificationCoordinatorOptions {
   pairwiseDisambiguationMargin?: number;
   delayFn?: (ms: number) => Promise<void>;
   randomFn?: () => number;
+  // NAT-039: when set to 0, disables in-process dedupe entirely (used by
+  // tests that rely on counting raw provider invocations). Negative values
+  // are clamped to 0. Inputs without a `transcriptRevision` always bypass
+  // the cache regardless of this value, since we have no isolation key.
+  dedupeTtlMs?: number;
+  // NAT-039: injectable clock so tests can deterministically advance the
+  // dedupe TTL without sleeping. Defaults to `Date.now`.
+  nowFn?: () => number;
 }
 
 const DEFAULT_MAX_PRIMARY_RETRIES = 2;
@@ -29,6 +37,14 @@ const DEFAULT_JITTER_MS = 50;
 const DEFAULT_MINIMUM_PRIMARY_CONFIDENCE = 0.82;
 const DEFAULT_CONTRADICTION_DELTA_CONFIDENCE = 0.18;
 const DEFAULT_PAIRWISE_DISAMBIGUATION_MARGIN = 0.08;
+
+// NAT-039 / audit P-4: in-process dedupe TTL for `(revision, question)`.
+// Sized for the worst-case window between a speculative classify-on-pause
+// and the actual user-driven classify on commit; long enough to absorb
+// duplicate calls from a single turn, short enough that a stale entry
+// cannot survive into a new turn even if the consumer forgot to bump
+// the revision (defense in depth alongside the explicit revision key).
+const DEFAULT_DEDUPE_TTL_MS = 1500;
 
 const FOLLOW_UP_CUES = [
   'what happened next',
@@ -217,6 +233,17 @@ export class IntentClassificationCoordinator {
   private readonly pairwiseDisambiguationMargin: number;
   private readonly delayFn: (ms: number) => Promise<void>;
   private readonly randomFn: () => number;
+  private readonly dedupeTtlMs: number;
+  private readonly nowFn: () => number;
+  // NAT-039: in-process dedupe of in-flight + recently-resolved coordinator
+  // results, keyed on `${transcriptRevision}|${normalizedQuestion}`. We
+  // store the *promise* (not the resolved value) so concurrent callers
+  // share a single underlying classify pipeline; subsequent callers within
+  // the TTL receive the same cached promise reference.
+  private readonly dedupeCache = new Map<
+    string,
+    { promise: Promise<CoordinatedIntentResult>; expiresAt: number }
+  >();
 
   constructor(
     private readonly primary: IntentInferenceProvider,
@@ -231,6 +258,8 @@ export class IntentClassificationCoordinator {
     this.pairwiseDisambiguationMargin = options.pairwiseDisambiguationMargin ?? DEFAULT_PAIRWISE_DISAMBIGUATION_MARGIN;
     this.delayFn = options.delayFn ?? sleep;
     this.randomFn = options.randomFn ?? Math.random;
+    this.dedupeTtlMs = Math.max(0, options.dedupeTtlMs ?? DEFAULT_DEDUPE_TTL_MS);
+    this.nowFn = options.nowFn ?? Date.now;
   }
 
   private normalizeText(value: string | null): string {
@@ -603,7 +632,75 @@ export class IntentClassificationCoordinator {
     return this.fallback.classify(input);
   }
 
+  // NAT-039: build the dedupe key. Returns null when caching is disabled
+  // (TTL=0) or when we lack the inputs needed to safely isolate cache
+  // entries across transcript turns. The transcript revision is required:
+  // without it, a cached entry from an old turn could be served to a new
+  // one. The normalized question text is also required so that two
+  // different questions in the same revision can never collide.
+  private buildDedupeKey(input: IntentClassificationInput): string | null {
+    if (this.dedupeTtlMs <= 0) {
+      return null;
+    }
+    if (typeof input.transcriptRevision !== 'number' || !Number.isFinite(input.transcriptRevision)) {
+      return null;
+    }
+    const normalizedQuestion = this.normalizeText(input.lastInterviewerTurn);
+    if (!normalizedQuestion) {
+      return null;
+    }
+    return `${input.transcriptRevision}|${normalizedQuestion}`;
+  }
+
+  // NAT-039: lazy purge of expired entries on every classify call. We
+  // tolerate a small amount of dead state between calls in exchange for
+  // not running a timer on a hot path; the cache is bounded by the number
+  // of distinct (revision, question) pairs in any 1.5s window, which in
+  // practice is a handful at most.
+  private purgeExpiredDedupeEntries(now: number): void {
+    for (const [key, entry] of this.dedupeCache) {
+      if (entry.expiresAt <= now) {
+        this.dedupeCache.delete(key);
+      }
+    }
+  }
+
   async classify(input: IntentClassificationInput): Promise<CoordinatedIntentResult> {
+    const now = this.nowFn();
+    this.purgeExpiredDedupeEntries(now);
+
+    const dedupeKey = this.buildDedupeKey(input);
+    if (dedupeKey === null) {
+      return this.classifyUncached(input);
+    }
+
+    const cached = this.dedupeCache.get(dedupeKey);
+    if (cached && cached.expiresAt > now) {
+      // Concurrent or repeat caller within TTL — share the in-flight or
+      // recently-resolved promise. Result objects are produced via spread
+      // (`{ ...result, provider, retryCount }`) and treated as read-only
+      // by downstream consumers, so the shared reference is safe.
+      return cached.promise;
+    }
+
+    const promise = this.classifyUncached(input);
+    this.dedupeCache.set(dedupeKey, {
+      promise,
+      expiresAt: now + this.dedupeTtlMs,
+    });
+    // Evict failures immediately so the next caller can retry instead of
+    // being served a stuck rejection. We attach a separate `.catch` so the
+    // error still propagates to the awaiting caller(s) unchanged.
+    promise.catch(() => {
+      const current = this.dedupeCache.get(dedupeKey);
+      if (current && current.promise === promise) {
+        this.dedupeCache.delete(dedupeKey);
+      }
+    });
+    return promise;
+  }
+
+  private async classifyUncached(input: IntentClassificationInput): Promise<CoordinatedIntentResult> {
     const primaryAvailable = await this.primary.isAvailable();
     if (primaryAvailable) {
       let retries = 0;

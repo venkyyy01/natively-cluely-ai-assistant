@@ -1109,27 +1109,34 @@ EPIC-19 (Mega-file decomposition)        -> last; blocks nothing
   - Will run `npm run test:electron`.
 - **Definition of done**: standard DoD.
 
-#### NAT-039 — Cache and dedupe coordinator results per `(transcriptRevision, normalizedQuestion)`
+#### NAT-039 [x] — Cache and dedupe coordinator results per `(transcriptRevision, normalizedQuestion)`
 
 - **Parent epic**: EPIC-06
 - **Priority**: P1
 - **Type**: bug-fix
 - **Original finding**: P-4
-- **Goal**: Duplicate intent classifications inside ~1 s windows will be served from a process-local cache.
-- **Affected files**: `electron/llm/providers/IntentClassificationCoordinator.ts` (lines 606–625, 632–644).
-- **Dependencies**: None
-- **Implementation steps**:
-  1. Will add a private `Map<string, { promise: Promise<IntentResult>, expiresAt: number }>` keyed by `${revision}|${normalizedQuestion}`.
-  2. Will short-circuit `classify()` to return the cached promise when fresh.
-  3. Will set TTL = 1500 ms.
-  4. Will skip caching error results.
+- **Goal**: Duplicate intent classifications inside ~1 s windows are now served from a process-local cache shared by concurrent and sequential identical callers.
+- **Affected files**: `electron/llm/providers/IntentClassificationCoordinator.ts` (cache fields + `buildDedupeKey` + cached `classify` + extracted `classifyUncached`); `electron/tests/intentCoordinatorDedupe.test.ts` (new).
+- **Dependencies**: None.
+- **Implementation notes**:
+  1. Added a private `Map<string, { promise: Promise<CoordinatedIntentResult>, expiresAt: number }>` keyed by `${transcriptRevision}|${normalizedQuestion}`. We cache the *promise* (not the resolved value) so the first caller and any concurrent duplicates share a single underlying classify pipeline.
+  2. Refactored: extracted the original `classify` body into `private async classifyUncached()`, and the new public `classify()` is a thin caching wrapper. The path through `classifyUncached` is byte-identical to the old code, so retry/fallback/contradiction semantics are unchanged.
+  3. TTL defaults to `DEFAULT_DEDUPE_TTL_MS = 1500`. Configurable via `dedupeTtlMs` option (set to `0` to disable, used by tests that count provider calls).
+  4. **Cache bypass when isolation is unsafe**: `buildDedupeKey` returns `null` (skipping the cache) when (a) TTL is disabled, (b) the input has no `transcriptRevision` (no isolation key — would risk serving an answer from the previous turn), or (c) the normalized question is empty. The existing 16 coordinator tests, which omit `transcriptRevision`, hit this bypass path and continue to assert raw provider call counts unchanged.
+  5. **Failure eviction**: a separate `.catch` deletes the cache entry on rejection so a transient failure does not poison the next caller. The error still propagates to whoever was awaiting the original promise (since `.catch` is on a derived promise). The eviction guards against TOCTOU by checking `current.promise === promise` before deleting, so an evicted entry that was already replaced isn't double-deleted.
+  6. **Lazy purge**: `purgeExpiredDedupeEntries(now)` runs on every `classify()` call. Map iteration during deletion is well-defined in ES; deleted keys aren't revisited. Bounded by the number of distinct `(revision, question)` pairs in any 1.5 s window, which in practice is a handful.
+  7. Added `nowFn` option for deterministic TTL testing without sleeping.
 - **Acceptance criteria**:
-  - [ ] Two concurrent identical classify calls share one provider call.
-  - [ ] Sequential identical calls within TTL share one provider call.
+  - [x] Two concurrent identical classify calls share one provider call (`NAT-039: identical concurrent classify calls share a single primary invocation`).
+  - [x] Sequential identical calls within TTL share one provider call (`NAT-039: repeat classify within TTL returns cached promise without re-invoking primary`).
+  - [x] A bumped `transcriptRevision` invalidates the cache and produces a fresh classify (`NAT-039: bumped transcriptRevision invalidates the cache entry`).
+  - [x] Inputs without `transcriptRevision` bypass the cache (`NAT-039: input without transcriptRevision bypasses dedupe entirely`).
+  - [x] TTL expiry triggers a fresh primary call (`NAT-039: TTL expiry triggers a fresh primary call`).
+  - [x] Failed classify is evicted and a follow-up call retries cleanly (`NAT-039: classify failures are evicted so the next caller can retry`).
 - **Validation**:
-  - Will add `electron/tests/intentCoordinatorDedup.test.ts`.
-  - Will run `npm run test:electron`.
-- **Definition of done**: standard DoD.
+  - `npx tsc -p electron/tsconfig.json --noEmit` — clean.
+  - All 22 coordinator tests pass: 16 existing in `intentClassificationCoordinator.test.ts` (unchanged behavior on the no-revision path) + 6 new in `intentCoordinatorDedupe.test.ts`.
+- **Definition of done**: met.
 
 #### NAT-040 [x] — Throw on Ollama streaming error instead of yielding fake token
 
