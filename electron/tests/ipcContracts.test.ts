@@ -549,7 +549,16 @@ test('root inference sync handlers prefer InferenceSupervisor when supervisor ru
 
   assert.deepEqual(await harness.handlers.get('set-gemini-api-key')?.({}, 'key-123'), { success: true });
   assert.deepEqual(await harness.handlers.get('switch-to-curl-provider')?.({}, 'curl-1'), { success: true });
-  assert.equal(await harness.handlers.get('gemini-chat')?.({}, 'hello', [], undefined, undefined), 'answer:hello');
+  assert.equal(
+    await harness.handlers.get('gemini-chat')?.(
+      {},
+      'hello',
+      [],
+      undefined,
+      { requestId: '00000000-0000-0000-0000-000000000001' },
+    ),
+    'answer:hello',
+  );
 
   assert.deepEqual(calls, [
     'setApiKey:key-123',

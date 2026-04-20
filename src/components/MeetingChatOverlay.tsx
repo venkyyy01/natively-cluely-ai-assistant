@@ -378,7 +378,8 @@ const MeetingChatOverlay: React.FC<MeetingChatOverlayProps> = ({
 ${contextString}`;
 
                     streamBuffer.reset();
-                    const oldTokenCleanup = window.electronAPI?.onGeminiStreamToken((token: string) => {
+                    const requestId = crypto.randomUUID();
+                    const oldTokenCleanup = window.electronAPI?.onGeminiStreamToken(requestId, (token: string) => {
                         setChatState('streaming_response');
                         streamBuffer.appendToken(token, (content) => {
                             setMessages(prev => prev.map(msg =>
@@ -389,7 +390,7 @@ ${contextString}`;
                         });
                     });
 
-                    const oldDoneCleanup = window.electronAPI?.onGeminiStreamDone(() => {
+                    const oldDoneCleanup = window.electronAPI?.onGeminiStreamDone(requestId, () => {
                         const finalContent = streamBuffer.getBufferedContent();
                         setMessages(prev => prev.map(msg =>
                             msg.id === assistantMessageId
@@ -402,7 +403,7 @@ ${contextString}`;
                         oldErrorCleanup?.();
                     });
 
-                    const oldErrorCleanup = window.electronAPI?.onGeminiStreamError((error: string) => {
+                    const oldErrorCleanup = window.electronAPI?.onGeminiStreamError(requestId, (error: string) => {
                         console.error('[MeetingChat] Gemini stream error (fallback):', error);
                         setMessages(prev => prev.filter(msg => msg.id !== assistantMessageId));
                         setErrorMessage("Couldn't get a response. Please check your settings.");
@@ -417,7 +418,7 @@ ${contextString}`;
                         question,
                         undefined,
                         systemPrompt,
-                        { skipSystemPrompt: true }
+                        { skipSystemPrompt: true, requestId }
                     );
                 }
             } else {
@@ -429,7 +430,8 @@ ${contextString}`;
 
                 // Switch to Gemini streaming (RAF-batched)
                 streamBuffer.reset();
-                const oldTokenCleanup = window.electronAPI?.onGeminiStreamToken((token: string) => {
+                const requestId = crypto.randomUUID();
+                const oldTokenCleanup = window.electronAPI?.onGeminiStreamToken(requestId, (token: string) => {
                     setChatState('streaming_response');
                     streamBuffer.appendToken(token, (content) => {
                         setMessages(prev => prev.map(msg =>
@@ -440,7 +442,7 @@ ${contextString}`;
                     });
                 });
 
-                const oldDoneCleanup = window.electronAPI?.onGeminiStreamDone(() => {
+                const oldDoneCleanup = window.electronAPI?.onGeminiStreamDone(requestId, () => {
                     const finalContent = streamBuffer.getBufferedContent();
                     setMessages(prev => prev.map(msg =>
                         msg.id === assistantMessageId
@@ -454,7 +456,7 @@ ${contextString}`;
                     oldErrorCleanup?.();
                 });
 
-                const oldErrorCleanup = window.electronAPI?.onGeminiStreamError((error: string) => {
+                const oldErrorCleanup = window.electronAPI?.onGeminiStreamError(requestId, (error: string) => {
                     console.error('[MeetingChat] Gemini stream error:', error);
                     setMessages(prev => prev.filter(msg => msg.id !== assistantMessageId));
                     setErrorMessage("Couldn't get a response. Please check your settings.");
@@ -469,7 +471,7 @@ ${contextString}`;
                     question,
                     undefined,
                     systemPrompt,
-                    { skipSystemPrompt: true }
+                    { skipSystemPrompt: true, requestId }
                 );
             }
 

@@ -12,7 +12,7 @@ type CapturedCall = {
   options?: {
     skipKnowledgeInterception?: boolean;
     abortSignal?: AbortSignal;
-    qualityTier?: 'fast' | 'standard' | 'structured_reasoning';
+    qualityTier?: 'fast' | 'quality' | 'verify';
   };
 };
 
@@ -54,7 +54,7 @@ test('WhatToAnswerLLM reasoning-first uses conscious structured routing options'
   assert.equal(helper.calls.length, 1);
   assert.equal(helper.calls[0].prompt, CONSCIOUS_REASONING_SYSTEM_PROMPT);
   assert.equal(helper.calls[0].options?.skipKnowledgeInterception, true);
-  assert.equal(helper.calls[0].options?.qualityTier, 'structured_reasoning');
+  assert.equal(helper.calls[0].options?.qualityTier, 'verify');
 });
 
 test('WhatToAnswerLLM selects the dedicated behavioral reasoning prompt for behavioral intents', async () => {

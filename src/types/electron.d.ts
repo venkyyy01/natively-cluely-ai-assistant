@@ -215,9 +215,10 @@ setDisguise: (mode: 'terminal' | 'settings' | 'activity' | 'none') => Promise<St
 
   // Streaming listeners
   streamGeminiChat: (message: string, imagePaths?: string[], context?: string, options?: GeminiChatOptions) => Promise<void>
-  onGeminiStreamToken: (callback: (token: string) => void) => () => void
-  onGeminiStreamDone: (callback: () => void) => () => void
-  onGeminiStreamError: (callback: (error: string) => void) => () => void;
+  cancelChat: (requestId: string) => void
+  onGeminiStreamToken: (requestId: string, callback: (token: string) => void) => () => void
+  onGeminiStreamDone: (requestId: string, callback: () => void) => () => void
+  onGeminiStreamError: (requestId: string, callback: (error: string) => void) => () => void;
 
   // Model Management
   getDefaultModel: () => Promise<{ model: string }>;

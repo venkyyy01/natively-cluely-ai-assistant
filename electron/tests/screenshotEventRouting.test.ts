@@ -298,7 +298,7 @@ test('streamChat preserves structured system prompt overrides for screenshot rea
       ['/tmp/screenshot.png'],
       'ctx',
       structuredPromptOverride,
-      { qualityTier: 'structured_reasoning' },
+      { qualityTier: 'verify' },
     )) {
       output += chunk;
     }

@@ -19,7 +19,7 @@ type StreamCall = {
   prompt?: string;
   options?: {
     skipKnowledgeInterception?: boolean;
-    qualityTier?: 'fast' | 'standard' | 'structured_reasoning';
+    qualityTier?: 'fast' | 'quality' | 'verify';
   };
 };
 
@@ -180,7 +180,7 @@ test('Conscious Mode routes qualifying technical questions into the structured r
   assert.equal(thread?.followUpCount, 0);
   assert.match(llmHelper.calls[0]?.message || '', /STRUCTURED_REASONING_RESPONSE/);
   assert.equal(llmHelper.calls[0]?.options?.skipKnowledgeInterception, true);
-  assert.equal(llmHelper.calls[0]?.options?.qualityTier, 'structured_reasoning');
+  assert.equal(llmHelper.calls[0]?.options?.qualityTier, 'verify');
 });
 
 test('Conscious Mode formats behavioral answers into the strict STAR interview layout', async () => {

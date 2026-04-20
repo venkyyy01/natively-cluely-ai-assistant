@@ -177,7 +177,7 @@ ANSWER SHAPE: ${intentResult.answerShape}
                 : CONSCIOUS_REASONING_SYSTEM_PROMPT,
             {
             skipKnowledgeInterception: true,
-            qualityTier: 'structured_reasoning',
+            qualityTier: 'verify',
         });
 
         for await (const chunk of stream) {

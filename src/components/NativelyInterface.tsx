@@ -1150,97 +1150,6 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
     useEffect(() => {
         const cleanups: (() => void)[] = [];
 
-        // Stream Token
-        cleanups.push(window.electronAPI.onGeminiStreamToken((token) => {
-            const targetId = activeGeminiStreamingIdRef.current;
-            if (!targetId) {
-                return;
-            }
-
-            setMessages(prev => updateMessageById(
-                prev,
-                targetId,
-                message => {
-                    const nextText = message.text + token;
-                    return {
-                        ...message,
-                        text: nextText,
-                        isCode: nextText.includes('```') || nextText.includes('def ') || nextText.includes('function ')
-                    };
-                }
-            ));
-        }));
-
-        // Stream Done
-        cleanups.push(window.electronAPI.onGeminiStreamDone(() => {
-            const targetId = activeGeminiStreamingIdRef.current;
-            if (!targetId) {
-                return;
-            }
-
-            setIsProcessing(false);
-
-            // Calculate latency if we have a start time
-            let latency = 0;
-            if (requestStartTimeRef.current) {
-                latency = Date.now() - requestStartTimeRef.current;
-                requestStartTimeRef.current = null;
-            }
-
-            // Track Usage
-            analytics.trackModelUsed({
-                model_name: currentModel,
-                provider_type: detectProviderType(currentModel),
-                latency_ms: latency
-            });
-
-            setMessages(prev => updateMessageById(
-                prev,
-                targetId,
-                message => ({
-                    ...message,
-                    isStreaming: false
-                })
-            ));
-
-            activeGeminiStreamingIdRef.current = null;
-            if (activeRagStreamingIdRef.current === targetId) {
-                activeRagStreamingIdRef.current = null;
-            }
-        }));
-
-        // Stream Error
-        cleanups.push(window.electronAPI.onGeminiStreamError((error) => {
-            const targetId = activeGeminiStreamingIdRef.current;
-            if (!targetId) {
-                return;
-            }
-
-            setIsProcessing(false);
-            requestStartTimeRef.current = null; // Clear timer on error
-
-            setMessages(prev => updateOrPrependMessageById(
-                prev,
-                targetId,
-                message => ({
-                    ...message,
-                    isStreaming: false,
-                    text: message.text + `\n\n[Error: ${error}]`
-                }),
-                {
-                    id: nextMessageId('system'),
-                    role: 'system',
-                    text: `❌ Error: ${error}`,
-                    createdAt: Date.now()
-                }
-            ));
-
-            activeGeminiStreamingIdRef.current = null;
-            if (targetId && activeRagStreamingIdRef.current === targetId) {
-                activeRagStreamingIdRef.current = null;
-            }
-        }));
-
         // JIT RAG Stream listeners (for live meeting RAG responses)
         if (window.electronAPI.onRAGStreamChunk) {
             cleanups.push(window.electronAPI.onRAGStreamChunk((data: { chunk: string }) => {
@@ -1326,6 +1235,85 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
         return () => cleanups.forEach(fn => fn());
     }, [currentModel, nextMessageId]); // Ensure tracking captures correct model
 
+    // NAT-036: per-request Gemini stream listener setup
+    const subscribeGeminiStream = (requestId: string, assistantMessageId: string): (() => void) => {
+        const tokenCleanup = window.electronAPI.onGeminiStreamToken(requestId, (token) => {
+            setMessages(prev => updateMessageById(
+                prev,
+                assistantMessageId,
+                message => {
+                    const nextText = message.text + token;
+                    return {
+                        ...message,
+                        text: nextText,
+                        isCode: nextText.includes('```') || nextText.includes('def ') || nextText.includes('function ')
+                    };
+                }
+            ));
+        });
+
+        const doneCleanup = window.electronAPI.onGeminiStreamDone(requestId, () => {
+            setIsProcessing(false);
+
+            let latency = 0;
+            if (requestStartTimeRef.current) {
+                latency = Date.now() - requestStartTimeRef.current;
+                requestStartTimeRef.current = null;
+            }
+
+            analytics.trackModelUsed({
+                model_name: currentModel,
+                provider_type: detectProviderType(currentModel),
+                latency_ms: latency
+            });
+
+            setMessages(prev => updateMessageById(
+                prev,
+                assistantMessageId,
+                message => ({
+                    ...message,
+                    isStreaming: false
+                })
+            ));
+
+            activeGeminiStreamingIdRef.current = null;
+            if (activeRagStreamingIdRef.current === assistantMessageId) {
+                activeRagStreamingIdRef.current = null;
+            }
+        });
+
+        const errorCleanup = window.electronAPI.onGeminiStreamError(requestId, (error) => {
+            setIsProcessing(false);
+            requestStartTimeRef.current = null;
+
+            setMessages(prev => updateOrPrependMessageById(
+                prev,
+                assistantMessageId,
+                message => ({
+                    ...message,
+                    isStreaming: false,
+                    text: message.text + `\n\n[Error: ${error}]`
+                }),
+                {
+                    id: nextMessageId('system'),
+                    role: 'system',
+                    text: `❌ Error: ${error}`,
+                    createdAt: Date.now()
+                }
+            ));
+
+            activeGeminiStreamingIdRef.current = null;
+            if (activeRagStreamingIdRef.current === assistantMessageId) {
+                activeRagStreamingIdRef.current = null;
+            }
+        });
+
+        return () => {
+            tokenCleanup();
+            doneCleanup();
+            errorCleanup();
+        };
+    };
 
     const handleAnswerNow = async () => {
         if (manualFinalizeInFlightRef.current) {
@@ -1439,9 +1427,15 @@ Instructions:
 Provide only the answer, nothing else.`;
                     }
 
-                    // Call Streaming API: message = question, context = instructions
-                    requestStartTimeRef.current = Date.now();
-                    await window.electronAPI.streamGeminiChat(question, currentAttachments.length > 0 ? currentAttachments.map(s => s.path) : undefined, prompt, { skipSystemPrompt: true });
+// Call Streaming API: message = question, context = instructions
+      const answerRequestId = crypto.randomUUID();
+      const streamCleanup = subscribeGeminiStream(answerRequestId, assistantMessageId);
+      requestStartTimeRef.current = Date.now();
+      try {
+        await window.electronAPI.streamGeminiChat(question, currentAttachments.length > 0 ? currentAttachments.map(s => s.path) : undefined, prompt, { skipSystemPrompt: true, requestId: answerRequestId });
+      } finally {
+        streamCleanup();
+      }
 
                 } catch (err) {
                     // Initial invocation failing (e.g. IPC error before stream starts)
@@ -1543,13 +1537,20 @@ Provide only the answer, nothing else.`;
                 }
             }
 
-            // Pass imagePath if attached, AND conversation context
-            requestStartTimeRef.current = Date.now();
-            await window.electronAPI.streamGeminiChat(
-                userText || 'Analyze this screenshot',
-                currentAttachments.length > 0 ? currentAttachments.map(s => s.path) : undefined,
-                conversationContext // Pass context so "answer this" works
-            );
+// Pass imagePath if attached, AND conversation context
+      const chatRequestId = crypto.randomUUID();
+      const chatStreamCleanup = subscribeGeminiStream(chatRequestId, assistantMessageId);
+      requestStartTimeRef.current = Date.now();
+      try {
+        await window.electronAPI.streamGeminiChat(
+          userText || 'Analyze this screenshot',
+          currentAttachments.length > 0 ? currentAttachments.map(s => s.path) : undefined,
+          conversationContext,
+          { requestId: chatRequestId }
+        );
+      } finally {
+        chatStreamCleanup();
+      }
         } catch (err) {
             setIsProcessing(false);
             if (activeGeminiStreamingIdRef.current === assistantMessageId) {

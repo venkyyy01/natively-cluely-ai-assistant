@@ -43,7 +43,7 @@ export class AnswerLLM {
             ].join('\n\n');
             const stream = this.llmHelper.streamChat(message, undefined, context, CONSCIOUS_REASONING_SYSTEM_PROMPT, {
                 skipKnowledgeInterception: true,
-                qualityTier: 'structured_reasoning',
+                qualityTier: 'verify',
             });
 
             let fullResponse = "";

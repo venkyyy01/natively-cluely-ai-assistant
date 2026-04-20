@@ -91,6 +91,9 @@ export function initializeIpcHandlers(appState: AppState): void {
   },
 });
 
+  // NAT-036: per-request abort controllers for streaming chat
+  const activeChatControllers = new Map<string, AbortController>();
+
   const getInferenceLlmHelper = () => {
     try {
       const coordinator = (appState as { getCoordinator?: () => unknown }).getCoordinator?.() as
@@ -421,6 +424,21 @@ safeHandleValidated("renderer:log-error", (args) => [parseIpcInput(ipcSchemas.re
 
   // Streaming IPC Handler
   safeHandleValidated("gemini-chat-stream", (args) => parseIpcInput(ipcSchemas.geminiChatArgs, args, 'gemini-chat-stream'), async (event, message, imagePaths, context, options) => {
+    const requestId = options?.requestId;
+    if (!requestId) {
+      throw new Error('gemini-chat-stream requires requestId in options');
+    }
+
+    // Clean up any previous controller for this requestId (shouldn't happen, but be safe)
+    const previousController = activeChatControllers.get(requestId);
+    if (previousController) {
+      previousController.abort();
+      activeChatControllers.delete(requestId);
+    }
+
+    const controller = new AbortController();
+    activeChatControllers.set(requestId, controller);
+
     try {
       console.log("[IPC] gemini-chat-stream started using LLMHelper.streamChat");
       const llmHelper = getInferenceLlmHelper();
@@ -453,7 +471,13 @@ safeHandleValidated("renderer:log-error", (args) => [parseIpcInput(ipcSchemas.re
 
       try {
         // USE streamChat which handles routing
-        const stream = llmHelper.streamChat(message, imagePaths, context, options?.skipSystemPrompt ? "" : undefined);
+        const stream = llmHelper.streamChat(
+          message,
+          imagePaths,
+          context,
+          options?.skipSystemPrompt ? "" : undefined,
+          { abortSignal: controller.signal, qualityTier: options?.qualityTier }
+        );
 
         // NAT-019 / audit R-7: micro-batch tokens before crossing the IPC
         // boundary. The previous implementation issued one IPC send per
@@ -483,7 +507,7 @@ safeHandleValidated("renderer:log-error", (args) => [parseIpcInput(ipcSchemas.re
             aborted = true;
             return false;
           }
-          event.sender.send("gemini-stream-token", pending);
+          event.sender.send(`gemini-stream-token:${requestId}`, pending);
           pending = '';
           pendingTokenCount = 0;
           lastFlushAt = Date.now();
@@ -491,9 +515,13 @@ safeHandleValidated("renderer:log-error", (args) => [parseIpcInput(ipcSchemas.re
         };
 
         for await (const token of stream) {
-          if (event.sender.isDestroyed()) {
+          if (event.sender.isDestroyed() || controller.signal.aborted) {
             aborted = true;
-            console.warn('[IPC] gemini-chat-stream: sender destroyed mid-stream; aborting');
+            if (event.sender.isDestroyed()) {
+              console.warn('[IPC] gemini-chat-stream: sender destroyed mid-stream; aborting');
+            } else {
+              console.log('[IPC] gemini-chat-stream: aborted by client');
+            }
             break;
           }
           pending += token;
@@ -508,7 +536,7 @@ safeHandleValidated("renderer:log-error", (args) => [parseIpcInput(ipcSchemas.re
         if (!aborted) {
           flush();
           if (!event.sender.isDestroyed()) {
-            event.sender.send("gemini-stream-done");
+            event.sender.send(`gemini-stream-final:${requestId}`);
           }
         }
 
@@ -522,7 +550,7 @@ safeHandleValidated("renderer:log-error", (args) => [parseIpcInput(ipcSchemas.re
       } catch (streamError: any) {
         console.error("[IPC] Streaming error:", streamError);
         if (!event.sender.isDestroyed()) {
-          event.sender.send("gemini-stream-error", streamError.message || "Unknown streaming error");
+          event.sender.send(`gemini-stream-error:${requestId}`, streamError.message || "Unknown streaming error");
         }
       }
 
@@ -531,6 +559,17 @@ safeHandleValidated("renderer:log-error", (args) => [parseIpcInput(ipcSchemas.re
     } catch (error: any) {
       console.error("[IPC] Error in gemini-chat-stream setup:", error);
       throw error;
+    } finally {
+      activeChatControllers.delete(requestId);
+    }
+  });
+
+  safeHandle("gemini-chat-cancel", (_event, requestId: string) => {
+    const controller = activeChatControllers.get(requestId);
+    if (controller) {
+      controller.abort();
+      activeChatControllers.delete(requestId);
+      console.log(`[IPC] gemini-chat-cancel: aborted request ${requestId}`);
     }
   });
 

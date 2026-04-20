@@ -223,7 +223,7 @@ const INDIAN_ENGLISH_STYLE_INSTRUCTION = `CRITICAL STYLE: Write in natural India
 - No text walls or unnecessary fluff.`
 type Provider = 'gemini' | 'groq' | 'openai' | 'claude';
 
-type StreamQualityTier = 'fast' | 'standard' | 'structured_reasoning';
+type StreamQualityTier = 'fast' | 'quality' | 'verify';
 
 interface StreamChatOptions {
   skipKnowledgeInterception?: boolean;
@@ -471,12 +471,12 @@ export class LLMHelper {
     return this.getDefaultFastModel(provider);
   }
 
-  private getActiveFastResponseTarget(qualityTier: StreamQualityTier = 'standard'): { provider: FastResponseProvider; model: string } | null {
+  private getActiveFastResponseTarget(qualityTier: StreamQualityTier = 'quality'): { provider: FastResponseProvider; model: string } | null {
     if (!this.fastResponseConfig.enabled) {
       return null;
     }
 
-    if (qualityTier === 'structured_reasoning') {
+    if (qualityTier === 'verify') {
       return null;
     }
 
@@ -3494,7 +3494,7 @@ ANSWER DIRECTLY:`;
     const hasScreenshotInput = !!(imagePaths?.length);
     let effectiveMessage = hasScreenshotInput ? message : this.applyDefaultBrevityHint(message);
     const structuredScreenshotRequest = this.isStructuredOutputRequest(effectiveMessage);
-    const preserveSystemPromptForStructuredOutput = structuredScreenshotRequest || options?.qualityTier === 'structured_reasoning';
+    const preserveSystemPromptForStructuredOutput = structuredScreenshotRequest || options?.qualityTier === 'verify';
     let screenshotRouting: ScreenshotEventRoutingResult | null = null;
     const forceTextFallback = this.shouldForceScreenshotTextFallback(imagePaths);
     const providerCacheKey = this.getStreamProviderCacheKey();
@@ -3592,7 +3592,7 @@ ANSWER DIRECTLY:`;
       : messageText;
     const userContent = buildStreamUserContent(effectiveMessage);
 
-    const qualityTier: StreamQualityTier = options?.qualityTier ?? 'standard';
+    const qualityTier: StreamQualityTier = options?.qualityTier ?? 'quality';
     const canUseFastResponse = !isMultimodal && !this.activeCurlProvider && !this.customProvider && !this.useOllama;
     const fastResponseTarget = canUseFastResponse ? this.getActiveFastResponseTarget(qualityTier) : null;
     await providerConnectP;
@@ -3789,7 +3789,7 @@ ANSWER DIRECTLY:`;
 
       // Race strategy (default)
       const raceMsg = this.joinPrompt(finalSystemPrompt, userContent);
-      if (qualityTier === 'structured_reasoning') {
+      if (qualityTier === 'verify') {
         if (isMultimodal && imagePaths?.length) {
           yield* this.streamWithScreenshotOcrFallback(
             `Gemini (${GEMINI_PRO_MODEL})`,

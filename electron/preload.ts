@@ -268,9 +268,10 @@ onAccelerationModeChanged: (callback: (enabled: boolean) => void) => () => void
 
   // Streaming listeners
   streamGeminiChat: (message: string, imagePaths?: string[], context?: string, options?: GeminiChatOptions) => Promise<void>
-  onGeminiStreamToken: (callback: (token: string) => void) => () => void
-  onGeminiStreamDone: (callback: () => void) => () => void
-  onGeminiStreamError: (callback: (error: string) => void) => () => void
+  cancelChat: (requestId: string) => void
+  onGeminiStreamToken: (requestId: string, callback: (token: string) => void) => () => void
+  onGeminiStreamDone: (requestId: string, callback: () => void) => () => void
+  onGeminiStreamError: (requestId: string, callback: (error: string) => void) => () => void
 
 
   onUndetectableChanged: (callback: (state: boolean) => void) => () => void
@@ -819,27 +820,32 @@ setOpenAtLogin: (open: boolean) => invokeStatus("set-open-at-login", open),
   // Streaming Chat
   streamGeminiChat: (message: string, imagePaths?: string[], context?: string, options?: GeminiChatOptions) => ipcRenderer.invoke("gemini-chat-stream", message, imagePaths, context, options),
 
-  onGeminiStreamToken: (callback: (token: string) => void) => {
+  cancelChat: (requestId: string) => ipcRenderer.invoke("gemini-chat-cancel", requestId),
+
+  onGeminiStreamToken: (requestId: string, callback: (token: string) => void) => {
+    const channel = `gemini-stream-token:${requestId}`;
     const subscription = (_: any, token: string) => callback(token)
-    ipcRenderer.on("gemini-stream-token", subscription)
+    ipcRenderer.on(channel, subscription)
     return () => {
-      ipcRenderer.removeListener("gemini-stream-token", subscription)
+      ipcRenderer.removeListener(channel, subscription)
     }
   },
 
-  onGeminiStreamDone: (callback: () => void) => {
+  onGeminiStreamDone: (requestId: string, callback: () => void) => {
+    const channel = `gemini-stream-final:${requestId}`;
     const subscription = () => callback()
-    ipcRenderer.on("gemini-stream-done", subscription)
+    ipcRenderer.on(channel, subscription)
     return () => {
-      ipcRenderer.removeListener("gemini-stream-done", subscription)
+      ipcRenderer.removeListener(channel, subscription)
     }
   },
 
-  onGeminiStreamError: (callback: (error: string) => void) => {
+  onGeminiStreamError: (requestId: string, callback: (error: string) => void) => {
+    const channel = `gemini-stream-error:${requestId}`;
     const subscription = (_: any, error: string) => callback(error)
-    ipcRenderer.on("gemini-stream-error", subscription)
+    ipcRenderer.on(channel, subscription)
     return () => {
-      ipcRenderer.removeListener("gemini-stream-error", subscription)
+      ipcRenderer.removeListener(channel, subscription)
     }
   },
 
