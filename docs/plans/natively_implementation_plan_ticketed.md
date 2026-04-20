@@ -391,7 +391,7 @@ EPIC-19 (Mega-file decomposition)        -> last; blocks nothing
   - Will run `npm run test:electron` and `npm run eval:intent`.
 - **Definition of done**: standard DoD.
 
-#### NAT-006 — Require `final === true` for auto-trigger speculative answers
+#### NAT-006 [x] — Require `final === true` for auto-trigger speculative answers
 
 - **Parent epic**: EPIC-01
 - **Priority**: P0

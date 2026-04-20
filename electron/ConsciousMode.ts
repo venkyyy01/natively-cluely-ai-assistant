@@ -609,25 +609,41 @@ export async function maybeHandleSuggestionTriggerFromTranscript(
     console.log(`[AUTO-TRIGGER] ❌ Rejected: speaker is "${input.speaker}", need "interviewer"`);
     return false;
   }
-  
-  if (!input.final && input.confidence != null && input.confidence < 0.5) {
-    console.log('[AUTO-TRIGGER] ❌ Rejected: interim transcript with low confidence');
+
+  // NAT-006 / audit A-6: never let an interim (non-final) transcript drive
+  // `handleSuggestionTrigger`. Interim hypotheses are routinely revised or
+  // outright discarded by the STT provider; acting on them produces an
+  // answer for a question the user never finished asking, which the user
+  // then sees and which we either have to hide (UX flicker) or replace
+  // (wasted token spend + provenance confusion).
+  //
+  // Speculative paths (prefetch / planner warm-up) live elsewhere
+  // (ConsciousAccelerationOrchestrator) and remain free to act on
+  // interim text — but only the *final* transcript is allowed to commit
+  // to a user-visible answer.
+  if (!input.final) {
+    console.log(
+      `[AUTO-TRIGGER] ❌ Rejected: transcript is interim (final=false, confidence=${input.confidence ?? 'n/a'})`,
+    );
+    return false;
+  }
+
+  // Belt-and-suspenders: even when `final === true`, refuse low-confidence
+  // finals. Some providers emit best-effort finals on UtteranceEnd timers
+  // (see NAT-009) which can be unreliable.
+  if (input.confidence != null && input.confidence < 0.5) {
+    console.log('[AUTO-TRIGGER] ❌ Rejected: final transcript with low confidence');
     return false;
   }
 
   const activeThread = input.intelligenceManager.getActiveReasoningThread();
   console.log(`[AUTO-TRIGGER] 🧠 Active reasoning thread: ${!!activeThread}`);
-  
+
   const decision = getTranscriptSuggestionDecision(
     input.text,
     input.consciousModeEnabled,
     activeThread,
   );
-  
-  const speculative = !input.final && input.confidence != null && input.confidence >= 0.5;
-  if (speculative) {
-    console.log('[AUTO-TRIGGER] ⚡ Proceeding with speculative trigger (interim but high confidence)');
-  }
 
   console.log('[AUTO-TRIGGER] 📊 Decision analysis:', {
     shouldTrigger: decision.shouldTrigger,
