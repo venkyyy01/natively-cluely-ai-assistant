@@ -341,6 +341,51 @@ codesign --force --deep \
 2. Restart the app after granting permission
 3. Verify a speech API key is configured (Deepgram, or use built-in Soniox)
 
+---
+
+## Debug Logging
+
+> [!IMPORTANT]
+> NAT-011 / audit S-5: file logging is **off by default in packaged builds** and writes
+> to a redacted, rotated path inside the app's user-data directory — never to
+> `~/Documents/`.
+
+| State | Behavior |
+|-------|----------|
+| Development (`electron .` / `npm start`) | File logging is **on** for convenience. |
+| Packaged release (`Natively.app` from `npm run dist`) | File logging is **off** unless explicitly opted in. |
+
+### Enable file logging in a packaged build
+
+Set the environment variable before launching the app:
+
+```bash
+NATIVELY_DEBUG_LOG=1 open -a /Applications/Natively.app
+```
+
+Or, for a persistent flag, add it to your shell profile and launch from a terminal.
+
+### Log location
+
+Logs are written to the Electron user-data directory under `Logs/`, partitioned by date and
+rotated at 10 MB with 3-file retention:
+
+```
+~/Library/Application Support/Natively/Logs/natively-YYYY-MM-DD.log
+```
+
+Quick command to tail the current day's log:
+
+```bash
+tail -f "$HOME/Library/Application Support/Natively/Logs/natively-$(date +%Y-%m-%d).log"
+```
+
+### What is redacted
+
+Stealth-related strings (StealthManager / PrivacyShield / capture-detection identifiers)
+are stripped from log lines before write via `electron/stealth/logRedactor.ts` so the log
+file never reveals the stealth mechanism even if shared for support.
+
 ### Model Download Fails
 
 ```bash

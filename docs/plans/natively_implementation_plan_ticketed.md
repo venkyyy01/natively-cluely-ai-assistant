@@ -529,7 +529,7 @@ EPIC-19 (Mega-file decomposition)        -> last; blocks nothing
 - **Rollout notes**: Existing debug guides will be updated to reference the new path and env flag (small docs change in `DEPLOYMENT.md`, ticket NAT-012 covers).
 - **Definition of done**: standard DoD plus updated docs.
 
-#### NAT-012 — Update `DEPLOYMENT.md` and `AGENTS.md` with new debug-log location
+#### NAT-012 [x] — Update `DEPLOYMENT.md` and `AGENTS.md` with new debug-log location
 
 - **Parent epic**: EPIC-02
 - **Priority**: P1
