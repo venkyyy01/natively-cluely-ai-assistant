@@ -87,6 +87,8 @@ test('NAT-005: ConsciousIntentService.resolve re-classifies on weak prefetched i
       intent: 'general',
       confidence: 0.40,
       answerShape: '',
+      provider: 'test-prefetch',
+      retryCount: 0,
     },
   });
 
@@ -115,6 +117,8 @@ test('NAT-005: ConsciousIntentService.resolve uses strong prefetched intent with
       intent: 'coding',
       confidence: 0.95,
       answerShape: 'Provide a full implementation.',
+      provider: 'test-prefetch',
+      retryCount: 0,
     },
   });
 

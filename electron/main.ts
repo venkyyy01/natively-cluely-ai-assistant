@@ -2330,6 +2330,16 @@ try {
     this.nativeStealthBridge?.dispose();
     this.nativeStealthBridge = null;
     this.virtualDisplayCoordinator?.dispose?.();
+
+    // Close SQLite last so all upstream consumers (intelligenceManager,
+    // checkpointer, ragManager) finish writing first. better-sqlite3 runs a
+    // PRAGMA wal_checkpoint(TRUNCATE) on close; without this the WAL/SHM
+    // sidecar files remain in userData/ after a graceful shutdown.
+    try {
+      DatabaseManager.closeIfOpen();
+    } catch (error) {
+      console.error('[Main] Failed to close DatabaseManager during quit:', error);
+    }
   }
 
   private async processCompletedMeetingForRAG(meetingId?: string | null): Promise<void> {

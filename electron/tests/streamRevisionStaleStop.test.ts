@@ -42,7 +42,7 @@ class ScheduledLLMHelper {
     return 'streaming' as const;
   }
 
-  getKnowledgeOrchestrator() {
+  getKnowledgeOrchestrator(): null {
     return null;
   }
 

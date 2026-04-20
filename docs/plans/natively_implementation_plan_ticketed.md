@@ -652,7 +652,7 @@ EPIC-19 (Mega-file decomposition)        -> last; blocks nothing
   - Will add `electron/tests/nativeAudioPanicRecovery.test.ts` that uses a stub native module to assert the recovery path.
 - **Definition of done**: standard DoD.
 
-#### NAT-018 — Add `DatabaseManager.close()` and call from shutdown
+#### NAT-018 [x] — Add `DatabaseManager.close()` and call from shutdown
 
 - **Parent epic**: EPIC-03
 - **Priority**: P0
