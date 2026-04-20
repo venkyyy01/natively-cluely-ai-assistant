@@ -1,18 +1,22 @@
 import { DatabaseManager, Meeting } from "./db/DatabaseManager";
 import { SessionTracker } from "./SessionTracker";
-import { BrowserWindow } from "electron";
+import { EventEmitter } from "events";
 
 const CHECKPOINT_INTERVAL_MS = 60000; // 60 seconds
 
-export class MeetingCheckpointer {
+export class MeetingCheckpointer extends EventEmitter {
     private interval: NodeJS.Timeout | null = null;
     private meetingId: string | null = null;
+    private lastCheckpointAt: number = 0;
+    private lastTranscriptTimestamp: number = 0;
 
     constructor(
         private readonly dbManager: DatabaseManager,
         private readonly getSessionTracker: () => SessionTracker,
         private readonly onCheckpointWritten?: (checkpointId: string) => void | Promise<void>,
-    ) {}
+    ) {
+        super();
+    }
 
     public start(meetingId: string): void {
         this.stop();
@@ -39,6 +43,8 @@ export class MeetingCheckpointer {
             console.log(`[MeetingCheckpointer] Stopped for meeting ${this.meetingId}`);
         }
         this.meetingId = null;
+        this.lastCheckpointAt = 0;
+        this.lastTranscriptTimestamp = 0;
     }
 
     public destroy(): void {
@@ -56,6 +62,18 @@ export class MeetingCheckpointer {
         const snapshot = this.getSessionTracker().createSnapshot();
         if (!snapshot || snapshot.transcript.length === 0) {
             return; // Nothing to save yet
+        }
+
+        // NAT-061: idle detection — skip checkpoint if no new transcript since last checkpoint
+        const latestTranscriptTimestamp = snapshot.transcript.length > 0
+            ? Math.max(...snapshot.transcript.map(t => t.timestamp ?? 0))
+            : 0;
+        if (latestTranscriptTimestamp > 0) {
+            this.lastTranscriptTimestamp = latestTranscriptTimestamp;
+        }
+        if (this.lastCheckpointAt > 0 && this.lastTranscriptTimestamp <= this.lastCheckpointAt) {
+            console.log(`[MeetingCheckpointer] Idle stretch detected for ${this.meetingId}; skipping checkpoint.`);
+            return;
         }
 
         const metadata = snapshot.meetingMetadata;
@@ -83,13 +101,9 @@ export class MeetingCheckpointer {
         
         try {
             this.dbManager.createOrUpdateMeetingProcessingRecord(meetingData, snapshot.startTime, snapshot.durationMs);
-            // Optionally notify frontend that a checkpoint happened (if they want to show an indicator)
-            const wins = typeof BrowserWindow?.getAllWindows === 'function' ? BrowserWindow.getAllWindows() : [];
-            wins.forEach((w) => {
-                if (!w.isDestroyed()) {
-                    w.webContents.send('meeting-checkpointed', this.meetingId);
-                }
-            });
+            // NAT-061: emit event for subscribers instead of broadcasting to all windows
+            this.emit('checkpoint', this.meetingId);
+            this.lastCheckpointAt = Date.now();
             if (this.onCheckpointWritten) {
                 await this.onCheckpointWritten(this.meetingId);
             }
