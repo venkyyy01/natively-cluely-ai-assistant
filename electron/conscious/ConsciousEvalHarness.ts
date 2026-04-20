@@ -8,6 +8,7 @@ import { QuestionReactionClassifier, type QuestionReaction } from './QuestionRea
 import { AnswerHypothesisStore } from './AnswerHypothesisStore';
 import { ConsciousProvenanceVerifier } from './ConsciousProvenanceVerifier';
 import { ConsciousVerifier } from './ConsciousVerifier';
+import { ConsciousOrchestrator, type PreparedConsciousRoute } from './ConsciousOrchestrator';
 
 export interface ConsciousEvalFamilySummary {
   total: number;
@@ -495,6 +496,163 @@ export async function runConsciousReplayHarness(options: {
       && fallbackReason === scenario.expected.fallbackReason;
 
     results.push({ scenario, trace, passed });
+  }
+
+  return {
+    results,
+    summary: summarizeResults(results),
+  };
+}
+
+// NAT-083 — Conscious end-to-end harness extension
+
+export interface ConsciousE2EScenario {
+  id: string;
+  family: string;
+  description: string;
+  question: string;
+  activeThread: ReasoningThread | null;
+  consciousModeEnabled: boolean;
+  circuitOpen?: boolean;
+  prefetchedIntent?: { intent: string; confidence: number; answerShape: string } | null;
+  expected: {
+    threadAction: 'start' | 'continue' | 'reset' | 'ignore';
+    qualifies: boolean;
+    effectiveRouteTag: 'conscious' | 'standard' | 'skip';
+  };
+}
+
+export interface ConsciousE2EResult {
+  scenario: ConsciousE2EScenario;
+  route: PreparedConsciousRoute;
+  passed: boolean;
+}
+
+export function getDefaultConsciousE2EScenarios(): ConsciousE2EScenario[] {
+  const response = buildBaselineResponse();
+  const activeThread: ReasoningThread = {
+    rootQuestion: 'How would you partition a multi-tenant analytics system?',
+    lastQuestion: 'How would you partition a multi-tenant analytics system?',
+    response,
+    followUpCount: 1,
+    updatedAt: Date.now() - 2000,
+  };
+
+  return [
+    {
+      id: 'prepare-route-start',
+      family: 'prepare_route',
+      description: 'A new question with no active thread routes to start',
+      question: 'How would you design a rate limiter?',
+      activeThread: null,
+      consciousModeEnabled: true,
+      expected: { threadAction: 'start', qualifies: true, effectiveRouteTag: 'conscious' },
+    },
+    {
+      id: 'prepare-route-continue',
+      family: 'prepare_route',
+      description: 'A follow-up on the same topic routes to continue',
+      question: 'What are the tradeoffs for hot tenants?',
+      activeThread,
+      consciousModeEnabled: true,
+      expected: { threadAction: 'continue', qualifies: true, effectiveRouteTag: 'conscious' },
+    },
+    {
+      id: 'acceleration-overlay-prefetch-boost',
+      family: 'acceleration_overlay',
+      description: 'Strong prefetched intent overrides non-qualifying route',
+      question: 'ok',
+      activeThread: null,
+      consciousModeEnabled: true,
+      prefetchedIntent: { intent: 'coding', confidence: 0.92, answerShape: 'reasoning_first' },
+      expected: { threadAction: 'start', qualifies: true, effectiveRouteTag: 'conscious' },
+    },
+    {
+      id: 'circuit-breaker-open',
+      family: 'circuit_breaker',
+      description: 'When circuit is open, conscious route falls back to standard',
+      question: 'How would you partition a multi-tenant analytics system?',
+      activeThread: null,
+      consciousModeEnabled: true,
+      circuitOpen: true,
+      expected: { threadAction: 'start', qualifies: true, effectiveRouteTag: 'standard' },
+    },
+    {
+      id: 'topical-compatibility-reset',
+      family: 'topical_compatibility',
+      description: 'Off-topic follow-up resets the thread',
+      question: 'Tell me about a time you handled conflict on a team.',
+      activeThread,
+      consciousModeEnabled: true,
+      expected: { threadAction: 'reset', qualifies: true, effectiveRouteTag: 'conscious' },
+    },
+    {
+      id: 'conscious-disabled-ignore',
+      family: 'prepare_route',
+      description: 'When conscious mode is disabled, question is ignored',
+      question: 'How would you design a rate limiter?',
+      activeThread: null,
+      consciousModeEnabled: false,
+      expected: { threadAction: 'ignore', qualifies: false, effectiveRouteTag: 'skip' },
+    },
+  ];
+}
+
+export function runConsciousE2EHarness(options: {
+  scenarios?: ConsciousE2EScenario[];
+}): { results: ConsciousE2EResult[]; summary: ConsciousEvalSummary } {
+  const scenarios = options.scenarios ?? getDefaultConsciousE2EScenarios();
+  const results: ConsciousE2EResult[] = [];
+  const response = buildBaselineResponse();
+
+  for (const scenario of scenarios) {
+    const mockSession = {
+      isConsciousModeEnabled: () => scenario.consciousModeEnabled,
+      getActiveReasoningThread: () => scenario.activeThread,
+      getLatestConsciousResponse: () => scenario.activeThread?.response ?? null,
+      clearConsciousModeThread: () => {},
+      getFormattedContext: () => '',
+      getConsciousEvidenceContext: () => '',
+      getConsciousSemanticContext: () => '',
+      getConsciousLongMemoryContext: () => '',
+      getLatestQuestionReaction: (): null => null,
+      getLatestAnswerHypothesis: (): null => null,
+      recordConsciousResponse: () => {},
+    };
+
+    const orchestrator = new ConsciousOrchestrator(
+      mockSession as never,
+      {
+        generateAnswer: async () => response,
+        generateFollowUp: async () => '',
+      } as never,
+    );
+
+    // Open circuit if scenario requires it
+    if (scenario.circuitOpen) {
+      (orchestrator as any).consecutiveFailures = 3;
+      (orchestrator as any).circuitOpenUntil = Date.now() + 60_000;
+    }
+
+    const route = orchestrator.prepareRoute({
+      question: scenario.question,
+      screenshotBackedLiveCodingTurn: false,
+      prefetchedIntent: scenario.prefetchedIntent as never ?? null,
+    });
+
+    const effectiveRouteTag
+      = !scenario.consciousModeEnabled
+        ? 'skip'
+        : scenario.circuitOpen
+          ? 'standard'
+          : 'conscious';
+
+    const passed
+      = route.preRouteDecision.threadAction === scenario.expected.threadAction
+      && route.preRouteDecision.qualifies === scenario.expected.qualifies
+      && effectiveRouteTag === scenario.expected.effectiveRouteTag;
+
+    results.push({ scenario, route, passed });
   }
 
   return {

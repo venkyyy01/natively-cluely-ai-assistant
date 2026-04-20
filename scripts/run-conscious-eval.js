@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-const { runConsciousEvalHarness, runConsciousReplayHarness } = require('../dist-electron/electron/conscious/ConsciousEvalHarness.js');
+const { runConsciousEvalHarness, runConsciousReplayHarness, runConsciousE2EHarness } = require('../dist-electron/electron/conscious/ConsciousEvalHarness.js');
 const { ConsciousVerifier } = require('../dist-electron/electron/conscious/ConsciousVerifier.js');
 const { ConsciousVerifierLLM } = require('../dist-electron/electron/conscious/ConsciousVerifierLLM.js');
 const { LLMHelper } = require('../dist-electron/electron/LLMHelper.js');
@@ -33,6 +33,7 @@ async function main() {
   const verifier = buildVerifier();
   const { results, summary } = await runConsciousEvalHarness({ verifier });
   const replay = await runConsciousReplayHarness({ verifier });
+  const e2e = runConsciousE2EHarness({});
 
   const printFamilyBreakdown = (byFamily) => {
     const families = Object.keys(byFamily).sort();
@@ -79,7 +80,21 @@ async function main() {
     console.log(`Verifier: ${result.trace.verifierVerdict.ok ? 'accept' : 'reject'}${result.trace.fallbackReason ? ` (${result.trace.fallbackReason})` : ''}`);
   }
 
-  if (summary.failed > 0 || replay.summary.failed > 0) {
+  console.log('\nE2E Route Summary');
+  console.log('==================');
+  console.log(`Total: ${e2e.summary.total}`);
+  console.log(`Passed: ${e2e.summary.passed}`);
+  console.log(`Failed: ${e2e.summary.failed}`);
+  printFamilyBreakdown(e2e.summary.byFamily);
+
+  for (const result of e2e.results) {
+    console.log(`\n[${result.passed ? 'PASS' : 'FAIL'}] ${result.scenario.id}`);
+    console.log(`Family: ${result.scenario.family}`);
+    console.log(`Route: ${result.route.preRouteDecision.threadAction}`);
+    console.log(`Qualifies: ${result.route.preRouteDecision.qualifies}`);
+  }
+
+  if (summary.failed > 0 || replay.summary.failed > 0 || e2e.summary.failed > 0) {
     process.exitCode = 1;
   }
 }
