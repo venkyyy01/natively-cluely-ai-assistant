@@ -481,7 +481,7 @@ EPIC-19 (Mega-file decomposition)        -> last; blocks nothing
 
 ### EPIC-02 — Critical stealth fixes
 
-#### NAT-010 — Disable the 500 ms opacity flicker
+#### NAT-010 [x] — Disable the 500 ms opacity flicker
 
 - **Parent epic**: EPIC-02
 - **Priority**: P0

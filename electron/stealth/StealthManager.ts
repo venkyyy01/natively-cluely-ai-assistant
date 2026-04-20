@@ -40,6 +40,13 @@ export interface StealthFeatureFlags {
   enableCaptureDetectionWatchdog?: boolean;
   enableVirtualDisplayIsolation?: boolean;
   enableSCStreamDetection?: boolean;
+  /**
+   * NAT-010 / audit S-1: gates the periodic 500 ms opacity-flicker loop on
+   * macOS 15.4+. Off by default because the deterministic 500 ms cadence is
+   * itself a fingerprint that defeats the supposed stealth gain. Reserved
+   * for ad-hoc capture-bypass test fixtures (see NAT-082).
+   */
+  enableOpacityFlicker?: boolean;
 }
 
 export type StealthWindowRole = 'primary' | 'auxiliary';
@@ -1442,6 +1449,16 @@ for window in windows:
       this.platform !== 'darwin' ||
       !this.isMacOS15Plus
     ) {
+      return;
+    }
+
+    // NAT-010 / audit S-1: the periodic 500 ms cadence is itself a
+    // detectable timing fingerprint, so it stays *off* by default. The
+    // method is preserved (and `applyOpacityFlicker()` remains callable)
+    // so that capture-bypass test fixtures (NAT-082) can opt in via
+    // `featureFlags.enableOpacityFlicker = true` and so a future
+    // `bus:capture-start-detected` event can fire it as a one-shot.
+    if (!this.featureFlags.enableOpacityFlicker) {
       return;
     }
 
