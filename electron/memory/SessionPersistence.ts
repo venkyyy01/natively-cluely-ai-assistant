@@ -290,12 +290,52 @@ export class SessionPersistence {
 
   private async loadIndex(): Promise<SessionIndex> {
     await this.init();
+    let index: SessionIndex;
     try {
       const content = await fs.readFile(this.indexFile, 'utf-8');
       const parsed = JSON.parse(content) as SessionIndex;
-      return parsed && Array.isArray(parsed.sessions) ? parsed : { sessions: [] };
+      index = parsed && Array.isArray(parsed.sessions) ? parsed : { sessions: [] };
     } catch {
-      return { sessions: [] };
+      index = { sessions: [] };
+    }
+
+    // NAT-060: orphan recovery — scan directory for session files not in index
+    const orphaned = await this.scanOrphanSessions(index);
+    if (orphaned.length > 0) {
+      index.sessions.push(...orphaned);
+    }
+
+    return index;
+  }
+
+  private async scanOrphanSessions(index: SessionIndex): Promise<SessionIndexEntry[]> {
+    try {
+      const files = await fs.readdir(this.sessionsDir);
+      const sessionFiles = files.filter((f) => f.endsWith('.json') && f !== 'index.json');
+      const indexedPaths = new Set(index.sessions.map((s) => s.filepath));
+      const orphaned: SessionIndexEntry[] = [];
+
+      for (const filename of sessionFiles) {
+        if (indexedPaths.has(filename)) continue;
+        try {
+          const content = await fs.readFile(join(this.sessionsDir, filename), 'utf-8');
+          const session = JSON.parse(content) as PersistedSession;
+          if (session.sessionId && session.meetingId) {
+            orphaned.push({
+              sessionId: session.sessionId,
+              meetingId: session.meetingId,
+              lastActiveAt: session.lastActiveAt || Date.now(),
+              filepath: filename,
+            });
+          }
+        } catch {
+          // skip unreadable files
+        }
+      }
+
+      return orphaned;
+    } catch {
+      return [];
     }
   }
 
