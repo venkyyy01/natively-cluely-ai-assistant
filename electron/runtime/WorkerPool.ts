@@ -1,3 +1,4 @@
+import { Metrics } from './Metrics';
 import { appleSiliconQoS, type AppleSiliconQoSClass, type AppleSiliconQoSHandle } from './AppleSiliconQoS';
 import type { RuntimeLane } from '../config/optimizations';
 
@@ -135,6 +136,7 @@ export class WorkerPool {
         right.priority - left.priority
         || left.id - right.id
       ));
+      Metrics.gauge('worker_pool.queue_depth', this.queue.length);
       this.pump();
     });
   }

@@ -824,7 +824,7 @@ EPIC-19 (Mega-file decomposition)        -> last; blocks nothing
 
 ### EPIC-05 — Stealth layer hardening
 
-#### NAT-025 — Apply content protection to both shell and offscreen content windows before any load
+#### NAT-025 [x] — Apply content protection to both shell and offscreen content windows before any load
 
 - **Parent epic**: EPIC-05
 - **Priority**: P0
@@ -845,7 +845,7 @@ EPIC-19 (Mega-file decomposition)        -> last; blocks nothing
   - Will run `npm run test:electron`.
 - **Definition of done**: standard DoD.
 
-#### NAT-026 — Make Privacy Shield UI visually generic
+#### NAT-026 [x] — Make Privacy Shield UI visually generic
 
 - **Parent epic**: EPIC-05
 - **Priority**: P0
@@ -865,7 +865,7 @@ EPIC-19 (Mega-file decomposition)        -> last; blocks nothing
   - Will run `npm run test:renderer`.
 - **Definition of done**: standard DoD.
 
-#### NAT-027 — Replace Chromium-capture `win.hide()` countermeasure with reapply + multi-signal corroboration
+#### NAT-027 [x] — Replace Chromium-capture `win.hide()` countermeasure with reapply + multi-signal corroboration
 
 - **Parent epic**: EPIC-05
 - **Priority**: P1
@@ -887,7 +887,7 @@ EPIC-19 (Mega-file decomposition)        -> last; blocks nothing
   - Will run `npm run test:electron`.
 - **Definition of done**: standard DoD.
 
-#### NAT-028 — Set correct `NSWindow` level / collection behavior in `MacosStealthEnhancer`
+#### NAT-028 [x] — Set correct `NSWindow` level / collection behavior in `MacosStealthEnhancer`
 
 - **Parent epic**: EPIC-05
 - **Priority**: P1
@@ -907,7 +907,7 @@ EPIC-19 (Mega-file decomposition)        -> last; blocks nothing
   - Will run `npm run test:electron`.
 - **Definition of done**: standard DoD.
 
-#### NAT-029 — Honest stealth health: verify hidden windows; report missing native bridge as degraded
+#### NAT-029 [x] — Honest stealth health: verify hidden windows; report missing native bridge as degraded
 
 - **Parent epic**: EPIC-05
 - **Priority**: P1
@@ -928,7 +928,7 @@ EPIC-19 (Mega-file decomposition)        -> last; blocks nothing
   - Will run `npm run test:electron`.
 - **Definition of done**: standard DoD.
 
-#### NAT-030 — Single-flight Privacy Shield recovery with atomic snapshot
+#### NAT-030 [x] — Single-flight Privacy Shield recovery with atomic snapshot
 
 - **Parent epic**: EPIC-05
 - **Priority**: P1
@@ -949,7 +949,7 @@ EPIC-19 (Mega-file decomposition)        -> last; blocks nothing
   - Will run `npm run test:electron`.
 - **Definition of done**: standard DoD.
 
-#### NAT-031 — Disguise virtual display helper binary and sanitize inherited environment
+#### NAT-031 [x] — Disguise virtual display helper binary and sanitize inherited environment
 
 - **Parent epic**: EPIC-05
 - **Priority**: P1
@@ -971,7 +971,7 @@ EPIC-19 (Mega-file decomposition)        -> last; blocks nothing
 - **Rollout notes**: Renaming binary is a build-pipeline change; will update `DEPLOYMENT.md` (NAT-012-style follow-up).
 - **Definition of done**: standard DoD.
 
-#### NAT-032 — Code-sign verify helper at startup; per-session attestation nonce
+#### NAT-032 [x] — Code-sign verify helper at startup; per-session attestation nonce
 
 - **Parent epic**: EPIC-05
 - **Priority**: P2
@@ -992,7 +992,7 @@ EPIC-19 (Mega-file decomposition)        -> last; blocks nothing
   - Will run `npm run test:electron`.
 - **Definition of done**: standard DoD.
 
-#### NAT-033 — Disable `InstallPingManager` by default in stealth distribution
+#### NAT-033 [x] — Disable `InstallPingManager` by default in stealth distribution
 
 - **Parent epic**: EPIC-05
 - **Priority**: P1
@@ -1012,7 +1012,7 @@ EPIC-19 (Mega-file decomposition)        -> last; blocks nothing
   - Will run `npm run test:electron`.
 - **Definition of done**: standard DoD.
 
-#### NAT-034 — Set generic outbound `userAgent` for provider sessions
+#### NAT-034 [x] — Set generic outbound `userAgent` for provider sessions
 
 - **Parent epic**: EPIC-05
 - **Priority**: P2
@@ -1032,7 +1032,7 @@ EPIC-19 (Mega-file decomposition)        -> last; blocks nothing
   - Will run `npm run test:electron`.
 - **Definition of done**: standard DoD.
 
-#### NAT-035 — Make `StealthStateMachine` fail closed on illegal transitions
+#### NAT-035 [x] — Make `StealthStateMachine` fail closed on illegal transitions
 
 - **Parent epic**: EPIC-05
 - **Priority**: P1
@@ -1056,7 +1056,7 @@ EPIC-19 (Mega-file decomposition)        -> last; blocks nothing
 
 ### EPIC-06 — IPC, cancellation, and stream control plumbing
 
-#### NAT-036 — Extend chat IPC schema with `requestId`, `qualityTier`, and abort channel
+#### NAT-036 [x] — Extend chat IPC schema with `requestId`, `qualityTier`, and abort channel
 
 - **Parent epic**: EPIC-06
 - **Priority**: P0
@@ -1087,7 +1087,7 @@ EPIC-19 (Mega-file decomposition)        -> last; blocks nothing
 - **Rollout notes**: Backwards-compatible by accepting and rejecting old-shape requests with a clear error during a transition window.
 - **Definition of done**: standard DoD.
 
-#### NAT-037 — Reorder `streamChat` prep so first-token blocking work runs in parallel with provider connect
+#### NAT-037 [x] — Reorder `streamChat` prep so first-token blocking work runs in parallel with provider connect
 
 - **Parent epic**: EPIC-06
 - **Priority**: P1
@@ -1108,7 +1108,7 @@ EPIC-19 (Mega-file decomposition)        -> last; blocks nothing
   - Will run `npm run bench:baseline`.
 - **Definition of done**: standard DoD.
 
-#### NAT-038 — Latest-wins coalescing for `queueCooldownDelay`
+#### NAT-038 [x] — Latest-wins coalescing for `queueCooldownDelay`
 
 - **Parent epic**: EPIC-06
 - **Priority**: P1
@@ -1176,7 +1176,7 @@ EPIC-19 (Mega-file decomposition)        -> last; blocks nothing
   - Will run `npm run test:electron`.
 - **Definition of done**: standard DoD.
 
-#### NAT-041 — Add per-request timeout and abort propagation to Anthropic and Gemini streams
+#### NAT-041 [x] — Add per-request timeout and abort propagation to Anthropic and Gemini streams
 
 - **Parent epic**: EPIC-06
 - **Priority**: P1
@@ -1199,7 +1199,7 @@ EPIC-19 (Mega-file decomposition)        -> last; blocks nothing
   - Will run `npm run test:electron`.
 - **Definition of done**: standard DoD.
 
-#### NAT-042 — Acquire Groq rate limiter on streaming path
+#### NAT-042 [x] — Acquire Groq rate limiter on streaming path
 
 - **Parent epic**: EPIC-06
 - **Priority**: P2
@@ -1222,7 +1222,7 @@ EPIC-19 (Mega-file decomposition)        -> last; blocks nothing
 
 ### EPIC-07 — Audio pipeline quality
 
-#### NAT-043 — Polyphase resample in native module before JS
+#### NAT-043 [x] — Polyphase resample in native module before JS
 
 - **Parent epic**: EPIC-07
 - **Priority**: P1
@@ -1270,7 +1270,7 @@ EPIC-19 (Mega-file decomposition)        -> last; blocks nothing
 
 ### EPIC-08 — Conscious mode hygiene
 
-#### NAT-045 — Use real `TokenBudgetManager` in `ConsciousPreparationCoordinator`
+#### NAT-045 [x] — Use real `TokenBudgetManager` in `ConsciousPreparationCoordinator`
 
 - **Parent epic**: EPIC-08
 - **Priority**: P1
@@ -1291,7 +1291,7 @@ EPIC-19 (Mega-file decomposition)        -> last; blocks nothing
   - Will run `npm run test:electron`.
 - **Definition of done**: standard DoD.
 
-#### NAT-046 — Adaptive context: force-include last N turns then fill by score
+#### NAT-046 [x] — Adaptive context: force-include last N turns then fill by score
 
 - **Parent epic**: EPIC-08
 - **Priority**: P1
@@ -1446,7 +1446,7 @@ EPIC-19 (Mega-file decomposition)        -> last; blocks nothing
 
 ### EPIC-09 — Foundation Models persistent helper
 
-#### NAT-051 — Convert Foundation helper to long-lived line-protocol process
+#### NAT-051 [x] — Convert Foundation helper to long-lived line-protocol process
 
 - **Parent epic**: EPIC-09
 - **Priority**: P1
@@ -1476,7 +1476,7 @@ EPIC-19 (Mega-file decomposition)        -> last; blocks nothing
 - **Rollout notes**: Behind a flag `NATIVELY_FOUNDATION_PERSISTENT=1` for first release; flip to default after one week of stable operation.
 - **Definition of done**: standard DoD plus benchmark numbers in changelog.
 
-#### NAT-052 — Tighten Foundation helper exit-failure mapping
+#### NAT-052 [x] — Tighten Foundation helper exit-failure mapping
 
 - **Parent epic**: EPIC-09
 - **Priority**: P2
@@ -1919,7 +1919,7 @@ EPIC-19 (Mega-file decomposition)        -> last; blocks nothing
 - **Validation**: run the script.
 - **Definition of done**: standard DoD.
 
-#### NAT-086 — Observability metrics emitters
+#### NAT-086 [x] — Observability metrics emitters
 
 - **Parent epic**: EPIC-20
 - **Priority**: P1

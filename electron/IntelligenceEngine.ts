@@ -20,6 +20,7 @@ import {
 import { ConsciousContextComposer, ConsciousIntentService, ConsciousOrchestrator, ConsciousPreparationCoordinator, ConsciousResponseCoordinator, ConsciousVerifier, ConsciousVerifierLLM, FallbackExecutor, ResponseFingerprinter, sanitizeProfileData } from './conscious';
 import { ParallelContextAssembler, ContextAssemblyInput, ContextAssemblyOutput } from './cache/ParallelContextAssembler';
 import { getOptimizationFlags, isOptimizationActive } from './config/optimizations';
+import { Metrics } from './runtime/Metrics';
 import { AnswerLatencyTracker, AnswerRoute } from './latency/AnswerLatencyTracker';
 import { getActiveAccelerationManager } from './services/AccelerationManager';
 import type { AccelerationManager } from './services/AccelerationManager';
@@ -907,6 +908,7 @@ export class IntelligenceEngine extends EventEmitter {
             return false;
         };
         const abandonCurrentRequest = (): null => {
+            Metrics.counter('speculation.abandoned_count');
             if (activeLatencyRequestId) {
                 this.latencyTracker.complete(activeLatencyRequestId);
             }

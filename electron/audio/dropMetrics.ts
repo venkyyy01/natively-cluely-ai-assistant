@@ -28,6 +28,8 @@
 // The metric is observability infrastructure and should not pollute
 // other suites' timer counts.
 
+import { Metrics } from '../runtime/Metrics';
+
 const NATIVE_SET_INTERVAL: typeof setInterval = setInterval;
 const NATIVE_CLEAR_INTERVAL: typeof clearInterval = clearInterval;
 
@@ -71,6 +73,7 @@ export class DropFrameMetric {
     if (count <= 0) return;
     this.windowDropped += count;
     this.cumulativeDropped += count;
+    Metrics.counter('stt.dropped_frames', count, { provider: this.provider });
   }
 
   /**

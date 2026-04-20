@@ -1,3 +1,4 @@
+import { Metrics } from '../../runtime/Metrics';
 import { getAnswerShapeGuidance, type IntentResult } from '../IntentClassifier';
 import {
   getIntentProviderErrorCode,
@@ -680,6 +681,7 @@ export class IntentClassificationCoordinator {
       // recently-resolved promise. Result objects are produced via spread
       // (`{ ...result, provider, retryCount }`) and treated as read-only
       // by downstream consumers, so the shared reference is safe.
+      Metrics.counter('intent.duplicate_classify_count');
       return cached.promise;
     }
 

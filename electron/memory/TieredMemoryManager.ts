@@ -1,3 +1,4 @@
+import { Metrics } from '../runtime/Metrics';
 import { SupervisorBus } from '../runtime/SupervisorBus';
 
 // NAT-013 / audit R-1: even if `persistCold` succeeds, we used to leave the
@@ -68,7 +69,9 @@ export class TieredMemoryManager<TValue = unknown> {
   }
 
   getColdState(): TieredMemoryEntry<TValue>[] {
-    return [...this.coldEntries];
+    const cold = [...this.coldEntries];
+    Metrics.gauge('cold_tier.entries_in_memory', cold.length);
+    return cold;
   }
 
   async compact(): Promise<void> {

@@ -15,6 +15,7 @@ import { registerEmailHandlers } from "./ipc/registerEmailHandlers";
 import { registerProfileHandlers } from "./ipc/registerProfileHandlers";
 import { registerIntelligenceHandlers } from "./ipc/registerIntelligenceHandlers";
 import { registerWindowHandlers } from "./ipc/registerWindowHandlers";
+import { Metrics } from "./runtime/Metrics";
 
 type ScreenshotFacadeLike = {
   deleteScreenshot?: (path: string) => Promise<{ success: boolean; error?: string }>;
@@ -93,6 +94,7 @@ export function initializeIpcHandlers(appState: AppState): void {
 
   // NAT-036: per-request abort controllers for streaming chat
   const activeChatControllers = new Map<string, AbortController>();
+  const streamChatStartedAt = new Map<string, number>();
 
   const getInferenceLlmHelper = () => {
     try {
@@ -438,6 +440,7 @@ safeHandleValidated("renderer:log-error", (args) => [parseIpcInput(ipcSchemas.re
 
     const controller = new AbortController();
     activeChatControllers.set(requestId, controller);
+    streamChatStartedAt.set(requestId, Date.now());
 
     try {
       console.log("[IPC] gemini-chat-stream started using LLMHelper.streamChat");
@@ -561,16 +564,28 @@ safeHandleValidated("renderer:log-error", (args) => [parseIpcInput(ipcSchemas.re
       throw error;
     } finally {
       activeChatControllers.delete(requestId);
+      streamChatStartedAt.delete(requestId);
     }
   });
 
   safeHandle("gemini-chat-cancel", (_event, requestId: string) => {
     const controller = activeChatControllers.get(requestId);
     if (controller) {
+      const started = streamChatStartedAt.get(requestId);
+      if (started !== undefined) {
+        Metrics.gauge('stream.cancel_latency_ms', Date.now() - started);
+        streamChatStartedAt.delete(requestId);
+      }
       controller.abort();
       activeChatControllers.delete(requestId);
       console.log(`[IPC] gemini-chat-cancel: aborted request ${requestId}`);
     }
+  });
+
+  safeHandle("metrics:get", () => {
+    const snapshot = Metrics.getSnapshot();
+    console.log('[metrics] snapshot', JSON.stringify(snapshot));
+    return snapshot;
   });
 
 

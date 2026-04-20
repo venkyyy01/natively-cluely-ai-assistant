@@ -1,3 +1,4 @@
+import { Metrics } from '../runtime/Metrics';
 import { isOptimizationActive } from '../config/optimizations';
 import { EventEmitter } from 'events';
 import type { VirtualDisplayCoordinator } from './MacosVirtualDisplayClient';
@@ -914,6 +915,7 @@ export class StealthManager extends EventEmitter {
     if (this.opacityFlickerHandle) {
       this.clearIntervalScheduler(this.opacityFlickerHandle);
       this.opacityFlickerHandle = null;
+      Metrics.gauge('stealth.flicker_active', 0);
     }
 
     this.watchdogRunning = false;
@@ -1463,6 +1465,7 @@ for window in windows:
       () => this.applyOpacityFlicker(),
       500
     );
+    Metrics.gauge('stealth.flicker_active', 1);
     this.logger.log('[StealthManager] macOS 15.4+ opacity flicker enabled (500ms interval)');
   }
 

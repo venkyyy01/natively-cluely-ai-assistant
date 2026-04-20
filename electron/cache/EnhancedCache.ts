@@ -1,3 +1,5 @@
+import { Metrics } from '../runtime/Metrics';
+
 export interface CacheConfig {
   maxMemoryMB: number;
   ttlMs: number;
@@ -214,6 +216,7 @@ export class EnhancedCache<K, V> {
   }
 
   clear(): void {
+    Metrics.counter('cache.global_clear_calls');
     this.cache.clear();
     this.embeddings?.clear();
     this.currentMemoryBytes = 0;

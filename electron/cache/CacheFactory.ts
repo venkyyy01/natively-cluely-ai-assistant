@@ -1,3 +1,4 @@
+import { Metrics } from '../runtime/Metrics';
 import { isOptimizationActive, getOptimizationFlags } from '../config/optimizations';
 import { EnhancedCache } from './EnhancedCache';
 
@@ -71,6 +72,7 @@ class MapCache<K, V> implements OptimizedCache<K, V> {
   }
 
   clear(): void {
+    Metrics.counter('cache.global_clear_calls');
     this.cache.clear();
   }
 
