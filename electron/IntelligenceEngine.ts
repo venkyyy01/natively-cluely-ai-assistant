@@ -157,9 +157,9 @@ export class IntelligenceEngine extends EventEmitter {
   // Timestamps for tracking
   private lastTranscriptTime: number = 0;
   private lastTriggerTime: number = 0;
-  private readonly triggerCooldown: number = 3000; // 3 seconds
+  private readonly triggerCooldown: number = 300; // 300 ms for finals (interims filtered at trigger gate per NAT-006)
   private readonly lastTriggerByCooldownKey = new Map<string, number>();
-  private readonly cooldownQueuesByKey = new Map<string, Promise<void>>();
+  private pendingCooldownTriggers = new Map<string, { timer: NodeJS.Timeout; reject: () => void }>();
   private stealthContainmentActive = false;
 
   constructor(llmHelper: LLMHelper, session: SessionTracker) {
@@ -376,7 +376,7 @@ export class IntelligenceEngine extends EventEmitter {
         this.cancelActiveWhatToSay('session-switch');
         this.session = session;
         this.lastTriggerByCooldownKey.clear();
-        this.cooldownQueuesByKey.clear();
+        this.pendingCooldownTriggers.clear();
         this.consciousOrchestrator = this.buildConsciousOrchestrator();
         this.consciousContextComposer = new ConsciousContextComposer();
         this.consciousIntentService = new ConsciousIntentService();
@@ -532,25 +532,21 @@ export class IntelligenceEngine extends EventEmitter {
     }
 
     private async queueCooldownDelay(key: string, delayMs: number): Promise<void> {
-        const prior = this.cooldownQueuesByKey.get(key) ?? Promise.resolve();
-        let releaseCurrent!: () => void;
-        const current = new Promise<void>((resolve) => {
-            releaseCurrent = resolve;
-        });
-        const chained = prior.catch((): void => undefined).then((): Promise<void> => current);
-        this.cooldownQueuesByKey.set(key, chained);
-
-        try {
-            await prior.catch((): void => undefined);
-            await new Promise<void>((resolve) => {
-                setTimeout(resolve, delayMs);
-            });
-        } finally {
-            releaseCurrent();
-            if (this.cooldownQueuesByKey.get(key) === chained) {
-                this.cooldownQueuesByKey.delete(key);
-            }
+        // NAT-038: latest-wins coalescing — cancel any pending trigger for this key
+        const existing = this.pendingCooldownTriggers.get(key);
+        if (existing) {
+            clearTimeout(existing.timer);
+            existing.reject();
+            this.pendingCooldownTriggers.delete(key);
         }
+
+        return new Promise<void>((resolve, reject) => {
+            const timer = setTimeout(() => {
+                this.pendingCooldownTriggers.delete(key);
+                resolve();
+            }, delayMs);
+            this.pendingCooldownTriggers.set(key, { timer, reject });
+        });
     }
 
     private buildSuggestedAnswerMetadata(input: {
@@ -850,7 +846,13 @@ export class IntelligenceEngine extends EventEmitter {
             cooldownDeferDepth += 1;
             totalCooldownSuppressedMs += cooldownRemaining;
             cooldownReason = deferReason;
-            await this.queueCooldownDelay(cooldownKey, cooldownRemaining);
+            try {
+                await this.queueCooldownDelay(cooldownKey, cooldownRemaining);
+            } catch {
+                // NAT-038: superseded by a newer trigger for the same key
+                console.log(`[INTELLIGENCE] ⏳ Cooldown for ${cooldownKey} superseded by newer trigger; dropping.`);
+                return null;
+            }
         }
 
         const now = Date.now();
@@ -1964,7 +1966,7 @@ export class IntelligenceEngine extends EventEmitter {
   reset(): void {
     this.activeMode = 'idle';
     this.lastTriggerByCooldownKey.clear();
-    this.cooldownQueuesByKey.clear();
+    this.pendingCooldownTriggers.clear();
     this.stealthContainmentActive = false;
     this.cancelActiveWhatToSay('reset');
     if (this.assistCancellationToken) {
