@@ -22,6 +22,7 @@ import { NativeStealthBridge } from "./stealth/NativeStealthBridge"
 import { derivePrivacyShieldState, type PrivacyShieldState } from "./stealth/privacyShieldState"
 import { PrivacyShieldRecoveryController } from "./stealth/PrivacyShieldRecoveryController"
 import { exitAfterCriticalFailure } from './processFailure'
+import { redactStealthSubstrings } from './stealth/logRedactor'
 if (!app.isPackaged) {
 require('dotenv').config();
 }
@@ -43,7 +44,26 @@ process.on('unhandledRejection', (reason, promise) => {
   )
 });
 
-const logFile = path.join(app.getPath('documents'), 'natively_debug.log');
+// NAT-011 / audit S-5: do NOT write logs to ~/Documents in release builds
+// (it leaks the product's presence to anyone browsing the home folder, and
+// the file name "natively_debug.log" itself is a fingerprint). The path is
+// now under `userData/Logs/` and dated, and *all* file logging is gated
+// behind `NATIVELY_DEBUG_LOG=1` for non-development builds. Dev builds keep
+// file logging on for convenience.
+const isDev = process.env.NODE_ENV === "development";
+const fileLoggingExplicitlyEnabled = (() => {
+  const raw = process.env.NATIVELY_DEBUG_LOG;
+  if (raw === undefined) return false;
+  const normalized = raw.trim().toLowerCase();
+  return normalized === '1' || normalized === 'true' || normalized === 'yes' || normalized === 'on';
+})();
+const fileLoggingEnabled = isDev || fileLoggingExplicitlyEnabled;
+
+function buildLogFilePath(): string {
+  const date = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+  return path.join(app.getPath('userData'), 'Logs', `natively-${date}.log`);
+}
+const logFile = buildLogFilePath();
 const LOG_MAX_SIZE_BYTES = 10 * 1024 * 1024; // 10MB
 const LOG_ROTATION_COUNT = 3; // Keep 3 rotated files
 
@@ -51,14 +71,25 @@ const originalLog = console.log;
 const originalWarn = console.warn;
 const originalError = console.error;
 
-const isDev = process.env.NODE_ENV === "development";
-
 // Log queue for non-blocking async writes
 const LOG_QUEUE_MAX_SIZE = 10000;
 let logQueue: string[] = [];
 let logFlushInProgress = false;
 let logRotationCheckPending = false;
 let droppedLogMessages = 0;
+let logDirEnsured = false;
+
+async function ensureLogDirOnce(): Promise<void> {
+  if (logDirEnsured) return;
+  try {
+    await fsPromises.mkdir(path.dirname(logFile), { recursive: true });
+    logDirEnsured = true;
+  } catch (error) {
+    // Surface to stderr but keep the queue draining so we don't spin.
+    originalError('[Logging] Failed to create log directory:', error);
+    logDirEnsured = true;
+  }
+}
 
 /**
  * Rotate log files asynchronously if they exceed the maximum size.
@@ -116,12 +147,19 @@ async function flushLogQueue(): Promise<void> {
   }
 
   try {
+    await ensureLogDirOnce();
     await rotateLogsIfNeededAsync();
     if (droppedLogMessages > 0) {
       pending.unshift(`[Logging] Dropped ${droppedLogMessages} log messages because the log queue exceeded ${LOG_QUEUE_MAX_SIZE} entries.`);
       droppedLogMessages = 0;
     }
-    const content = pending.map(msg => `${new Date().toISOString()} ${msg}`).join('\n') + '\n';
+    // NAT-011 / audit S-5: every line must pass through the stealth
+    // redactor before it touches disk. We do this here (rather than at
+    // enqueue time) so the in-memory queue and stdout/stderr remain
+    // unaffected — only the persisted file is sanitized.
+    const content = pending
+      .map(msg => `${new Date().toISOString()} ${redactStealthSubstrings(msg)}`)
+      .join('\n') + '\n';
     await fsPromises.appendFile(logFile, content);
   } catch (error) {
     originalError('[Logging] Failed to append debug log:', error);
@@ -134,9 +172,11 @@ async function flushLogQueue(): Promise<void> {
 }
 
 /**
- * Non-blocking async log to file
+ * Non-blocking async log to file. NAT-011: in release builds without
+ * `NATIVELY_DEBUG_LOG=1`, this is a no-op so we leave nothing on disk.
  */
 async function logToFileAsync(msg: string): Promise<void> {
+  if (!fileLoggingEnabled) return;
   if (logQueue.length >= LOG_QUEUE_MAX_SIZE) {
     const dropped = logQueue.length - LOG_QUEUE_MAX_SIZE + 1;
     logQueue.splice(0, dropped);

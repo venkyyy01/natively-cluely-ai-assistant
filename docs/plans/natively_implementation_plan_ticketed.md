@@ -503,7 +503,7 @@ EPIC-19 (Mega-file decomposition)        -> last; blocks nothing
 - **Rollout notes**: If a future capture-bypass test fixture proves the flicker is needed, the flag can be enabled with jittered period; that work is captured in EPIC-05.
 - **Definition of done**: standard DoD.
 
-#### NAT-011 — Relocate and redact debug log in release builds
+#### NAT-011 [x] — Relocate and redact debug log in release builds
 
 - **Parent epic**: EPIC-02
 - **Priority**: P0
