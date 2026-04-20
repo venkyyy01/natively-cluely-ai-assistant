@@ -1545,7 +1545,7 @@ EPIC-19 (Mega-file decomposition)        -> last; blocks nothing
 
 ### EPIC-11 — Unified conscious thread model
 
-#### NAT-055 — Introduce `ThreadDirector` and consolidate thread state
+#### NAT-055 [x] — Introduce `ThreadDirector` and consolidate thread state
 
 - **Parent epic**: EPIC-11
 - **Priority**: P2

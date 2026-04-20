@@ -109,10 +109,12 @@ export class ConsciousThreadStore {
     threadAction: 'start' | 'continue' | 'reset'
   ): void {
     this.latestConsciousResponse = response;
+    const designThreadId = this.threadManager.getActiveThread()?.id;
 
     if (threadAction === 'continue' && this.activeReasoningThread) {
       this.activeReasoningThread = {
         ...this.activeReasoningThread,
+        threadId: designThreadId ?? this.activeReasoningThread.threadId,
         lastQuestion: question,
         followUpCount: this.activeReasoningThread.followUpCount + 1,
         response: mergeConsciousModeResponses(this.activeReasoningThread.response, response),
@@ -140,6 +142,7 @@ export class ConsciousThreadStore {
     }
 
     this.activeReasoningThread = {
+      threadId: designThreadId,
       rootQuestion: question,
       lastQuestion: question,
       response,

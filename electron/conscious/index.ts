@@ -6,6 +6,12 @@ export { TokenBudgetManager } from './TokenBudget';
 export { InterviewPhaseDetector, type PhaseDetectionResult } from './InterviewPhase';
 export { ConfidenceScorer } from './ConfidenceScorer';
 export { ThreadManager } from './ThreadManager';
+export {
+  ThreadDirector,
+  type ConversationThreadViews,
+  type ThreadResetReason,
+} from './ThreadDirector';
+export { isNativelyThreadDirectorEnabled } from './threadDirectorEnv';
 export { ConsciousThreadStore, type PersistedActiveThreadSnapshot, type PersistedConsciousThreadState } from './ConsciousThreadStore';
 export { ObservedQuestionStore, type ObservedQuestion } from './ObservedQuestionStore';
 export { QuestionReactionClassifier, type QuestionReaction, type QuestionReactionKind } from './QuestionReactionClassifier';

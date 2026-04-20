@@ -88,6 +88,8 @@ export interface ConsciousModeStructuredResponse {
 }
 
 export interface ReasoningThread {
+  /** When set, matches `ConversationThread.id` from ThreadManager (design view). NAT-055 */
+  threadId?: string;
   rootQuestion: string;
   lastQuestion: string;
   response: ConsciousModeStructuredResponse;

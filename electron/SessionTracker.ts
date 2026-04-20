@@ -77,6 +77,8 @@ import {
   TokenBudgetManager,
   InterviewPhase,
   ConsciousThreadStore,
+  ThreadDirector,
+  isNativelyThreadDirectorEnabled,
   DesignStateStore,
   ObservedQuestionStore,
   QuestionReactionClassifier,
@@ -221,6 +223,9 @@ export class SessionTracker {
 
 // Conscious Mode Realtime components
   private consciousThreadStore: ConsciousThreadStore = new ConsciousThreadStore();
+  private threadDirector: ThreadDirector | null = isNativelyThreadDirectorEnabled()
+    ? new ThreadDirector(this.consciousThreadStore)
+    : null;
   private observedQuestionStore: ObservedQuestionStore = new ObservedQuestionStore();
   private questionReactionClassifier: QuestionReactionClassifier = new QuestionReactionClassifier();
   private answerHypothesisStore: AnswerHypothesisStore = new AnswerHypothesisStore();
@@ -530,11 +535,13 @@ export class SessionTracker {
     }
 
     private updateConsciousConversationState(transcript: string): void {
-        this.consciousThreadStore.handleObservedInterviewerTranscript(
-            transcript,
-            (value) => this.detectPhaseFromTranscript(value),
-            (phase) => this.phaseDetector.setPhase(phase)
-        );
+        const detect = (value: string) => this.detectPhaseFromTranscript(value);
+        const setPhase = (phase: InterviewPhase) => this.phaseDetector.setPhase(phase);
+        if (this.threadDirector) {
+            this.threadDirector.handleObservedInterviewerTranscript(transcript, detect, setPhase);
+        } else {
+            this.consciousThreadStore.handleObservedInterviewerTranscript(transcript, detect, setPhase);
+        }
     }
 
     // ============================================
@@ -1314,13 +1321,21 @@ isConsciousModeEnabled(): boolean {
     }
 
     clearConsciousModeThread(): void {
-        this.consciousThreadStore.reset();
+        if (this.threadDirector) {
+            this.threadDirector.resetThread('clear_conscious_mode');
+        } else {
+            this.consciousThreadStore.reset();
+        }
         this.answerHypothesisStore.reset();
         this.designStateStore.reset();
     }
 
     recordConsciousResponse(question: string, response: ConsciousModeStructuredResponse, threadAction: 'start' | 'continue' | 'reset'): void {
-        this.consciousThreadStore.recordConsciousResponse(question, response, threadAction);
+        if (this.threadDirector) {
+            this.threadDirector.recordConsciousResponse(question, response, threadAction);
+        } else {
+            this.consciousThreadStore.recordConsciousResponse(question, response, threadAction);
+        }
         this.answerHypothesisStore.recordStructuredSuggestion(question, response, threadAction);
         this.designStateStore.noteStructuredResponse({
           question,
