@@ -355,12 +355,13 @@ export class ConsciousOrchestrator {
         return this.fallback('continuation_invalid_or_stale');
       }
 
+      const latestHypothesis = this.session.getLatestAnswerHypothesis();
       const provenanceVerdict = this.provenanceVerifier.verify({
         response: structuredResponse,
         semanticContextBlock: this.session.getConsciousSemanticContext(),
         evidenceContextBlock,
         question: input.resolvedQuestion,
-        hypothesis: this.session.getLatestAnswerHypothesis(),
+        hypothesis: latestHypothesis,
       });
       if (!provenanceVerdict.ok) {
         console.warn('[ConsciousOrchestrator] Continuation provenance verification failed:', provenanceVerdict.reason);
@@ -370,7 +371,8 @@ export class ConsciousOrchestrator {
         response: structuredResponse,
         route: { qualifies: true, threadAction: 'continue' },
         reaction: this.session.getLatestQuestionReaction(),
-        hypothesis: this.session.getLatestAnswerHypothesis(),
+        hypothesis: latestHypothesis,
+        evidence: latestHypothesis?.evidence,
         question: input.resolvedQuestion,
       });
       if (!verification.ok) {
@@ -431,12 +433,13 @@ export class ConsciousOrchestrator {
         return this.fallback('reasoning_invalid_response');
       }
 
+      const latestHypothesis = this.session.getLatestAnswerHypothesis();
       const provenanceVerdict = this.provenanceVerifier.verify({
         response: structuredResponse,
         semanticContextBlock: this.session.getConsciousSemanticContext(),
         evidenceContextBlock: this.session.getConsciousEvidenceContext(),
         question: input.question,
-        hypothesis: this.session.getLatestAnswerHypothesis(),
+        hypothesis: latestHypothesis,
       });
       if (!provenanceVerdict.ok) {
         console.warn('[ConsciousOrchestrator] Structured response provenance verification failed:', provenanceVerdict.reason);
@@ -446,7 +449,8 @@ export class ConsciousOrchestrator {
         response: structuredResponse,
         route: input.route,
         reaction: this.session.getLatestQuestionReaction(),
-        hypothesis: this.session.getLatestAnswerHypothesis(),
+        hypothesis: latestHypothesis,
+        evidence: latestHypothesis?.evidence,
         question: input.question,
       });
       if (!verification.ok) {

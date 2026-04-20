@@ -1393,24 +1393,35 @@ EPIC-19 (Mega-file decomposition)        -> last; blocks nothing
   - `bench:baseline` deferred to the Wave-2 verification pass at the end.
 - **Definition of done**: standard DoD.
 
-#### NAT-050 — Pass `evidence` array into verifier and downgrade on inferred-only state
+#### NAT-050 — Pass `evidence` array into verifier and downgrade on inferred-only state [x]
 
 - **Parent epic**: EPIC-08
 - **Priority**: P2
 - **Type**: bug-fix
 - **Original finding**: from sub-agent B (AnswerHypothesisStore + ConsciousVerifier)
 - **Goal**: Inferred-only state will trigger more conservative verification.
-- **Affected files**: `electron/conscious/AnswerHypothesisStore.ts` (lines 145–165), `electron/conscious/ConsciousVerifier.ts` (lines 148–197).
+- **Affected files**: `electron/conscious/ConsciousVerifier.ts`, `electron/conscious/ConsciousOrchestrator.ts`, `electron/tests/consciousVerifier.test.ts`.
 - **Dependencies**: NAT-004
-- **Implementation steps**:
-  1. Will pass the `evidence` array (with `'inferred'` markers) from the hypothesis store into `ConsciousVerifier.verify`.
-  2. Will add a rule: when `evidence` is dominated by `'inferred'`, reject responses containing new tech/metric tokens that lack strict grounding.
+- **Implementation**:
+  1. Extended `ConsciousVerifierJudgeInput` with `evidence?: Array<'suggested' | 'inferred'>` so verification can evaluate evidence state directly (instead of implicitly relying on the hypothesis object shape).
+  2. Threaded `latestHypothesis?.evidence` from `ConsciousOrchestrator` into both verification call paths:
+     - continuation (`handleFollowUpContinuation`)
+     - reasoning-first (`executeReasoningFirst`)
+  3. Added inferred-dominant hardening rules in `ConsciousVerifier`:
+     - detect inferred-dominant evidence (`inferred >= suggested`)
+     - build strict grounding text from question + prior suggested answer + likely themes
+     - reject unsupported numeric specificity (`unsupported_numeric_claim_in_inferred_state`)
+     - reject unsupported technology specificity (`unsupported_technology_claim_in_inferred_state`)
+  4. Kept the new checks scoped to inferred-dominant state only, so normal suggested-backed flows preserve existing verifier behavior.
 - **Acceptance criteria**:
-  - [ ] Inferred-only path rejects unsupported numeric claims even when relaxed grounding is present.
+  - [x] Inferred-only path rejects unsupported numeric claims even when relaxed grounding is present.
 - **Validation**:
-  - Will extend existing `consciousVerifier*.test.ts`.
-  - Will run `npm run test:electron`.
-- **Definition of done**: standard DoD.
+  - Extended `electron/tests/consciousVerifier.test.ts` with NAT-050 coverage:
+    - rejects unsupported numeric claims under inferred-only evidence
+    - accepts numeric claims when those values are grounded in prior evidence
+  - `npx tsc -p electron/tsconfig.json --noEmit` — clean.
+  - `npm run test:electron` — green (856 tests, 852 pass, 4 skipped, 0 fail).
+- **Definition of done**: met.
 
 ---
 

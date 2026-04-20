@@ -13,6 +13,7 @@ export interface ConsciousVerifierJudgeInput {
   route: ConsciousModeQuestionRoute;
   reaction?: QuestionReaction | null;
   hypothesis?: AnswerHypothesis | null;
+  evidence?: Array<'suggested' | 'inferred'>;
   question: string;
 }
 
@@ -111,6 +112,52 @@ function summaryText(response: ConsciousModeStructuredResponse): string {
   ].join(' ').toLowerCase();
 }
 
+function isInferredDominantEvidence(evidence: Array<'suggested' | 'inferred'> | null | undefined): boolean {
+  if (!evidence || evidence.length === 0) {
+    return false;
+  }
+  let inferred = 0;
+  let suggested = 0;
+  for (const marker of evidence) {
+    if (marker === 'inferred') inferred += 1;
+    if (marker === 'suggested') suggested += 1;
+  }
+  return inferred > 0 && inferred >= suggested;
+}
+
+function gatherStrictGroundingText(input: ConsciousVerifierJudgeInput): string {
+  const hypothesis = input.hypothesis;
+  return [
+    input.question,
+    hypothesis?.sourceQuestion,
+    hypothesis?.latestSuggestedAnswer,
+    ...(hypothesis?.likelyThemes || []),
+  ]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase();
+}
+
+function hasUnsupportedNumericClaim(responseText: string, groundingText: string): boolean {
+  const numericClaims = responseText.match(/\b\d+(?:\.\d+)?(?:ms|s|m|h|x|%|k|m|b)?\b/g) || [];
+  if (numericClaims.length === 0) {
+    return false;
+  }
+  return numericClaims.some((claim) => !groundingText.includes(claim));
+}
+
+function hasUnsupportedTechnologyClaim(responseText: string, groundingText: string): boolean {
+  // Conservative allowlist of common technology tokens that frequently
+  // indicate fabricated specificity in inferred-only follow-ups.
+  const TECH_TOKEN_RE =
+    /\b(kafka|redis|postgres(?:ql)?|mysql|mongodb|dynamodb|snowflake|bigquery|clickhouse|elasticsearch|opensearch|weaviate|pinecone|qdrant|rabbitmq|grpc|kubernetes|docker|terraform|spark|airflow|node(?:\.js)?|typescript|python|java|golang|aws|gcp|azure)\b/g;
+  const techClaims = responseText.match(TECH_TOKEN_RE) || [];
+  if (techClaims.length === 0) {
+    return false;
+  }
+  return techClaims.some((token) => !groundingText.includes(token));
+}
+
 export class ConsciousVerifier {
   constructor(
     private readonly judge: ConsciousVerifierJudge | null = null,
@@ -157,6 +204,7 @@ export class ConsciousVerifier {
     const reaction = input.reaction;
     const hypothesis = input.hypothesis;
     const responseText = summaryText(input.response);
+    const evidence = input.evidence ?? hypothesis?.evidence;
 
     if (isBehavioralQuestion(input.question) && !hasCompleteBehavioralStar(input.response)) {
       return { ok: false, reason: 'missing_behavioral_star_structure' };
@@ -192,6 +240,21 @@ export class ConsciousVerifier {
       responseText.trim() === hypothesis.latestSuggestedAnswer.trim().toLowerCase()
     ) {
       return { ok: false, reason: 'duplicate_follow_up_response' };
+    }
+
+    // NAT-050: when the answer-state signal is inferred-dominant, reject
+    // unsupported numeric/technology specificity that isn't grounded by the
+    // strict verifier context (question + prior suggested answer + themes).
+    // This is intentionally stricter than normal continuation checks because
+    // inferred-only states are the highest-risk path for confident hallucination.
+    if (isInferredDominantEvidence(evidence)) {
+      const groundingText = gatherStrictGroundingText(input);
+      if (hasUnsupportedNumericClaim(responseText, groundingText)) {
+        return { ok: false, reason: 'unsupported_numeric_claim_in_inferred_state' };
+      }
+      if (hasUnsupportedTechnologyClaim(responseText, groundingText)) {
+        return { ok: false, reason: 'unsupported_technology_claim_in_inferred_state' };
+      }
     }
 
     return { ok: true };

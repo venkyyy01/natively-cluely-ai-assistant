@@ -158,6 +158,70 @@ test('ConsciousVerifier accepts a tradeoff probe when tradeoffs are present', as
   assert.equal(result.ok, true);
 });
 
+test('ConsciousVerifier rejects unsupported numeric claims when evidence is inferred-dominant', async () => {
+  const verifier = new ConsciousVerifier();
+  const result = await verifier.verify({
+    response: response({
+      openingReasoning: 'I would reduce p99 latency from 240ms to 90ms with a cache layer.',
+      implementationPlan: ['Introduce read-through cache in front of the database'],
+    }),
+    route: { qualifies: true, threadAction: 'continue' },
+    reaction: {
+      kind: 'metric_probe',
+      confidence: 0.85,
+      cues: ['metric_language'],
+      targetFacets: ['scale'],
+      shouldContinueThread: true,
+    },
+    hypothesis: {
+      sourceQuestion: 'How would you tune this endpoint?',
+      latestSuggestedAnswer: 'I would baseline the endpoint and remove N+1 queries first.',
+      likelyThemes: ['latency baseline', 'query optimization'],
+      confidence: 0.78,
+      evidence: ['inferred'],
+      targetFacets: ['scale'],
+      updatedAt: Date.now(),
+    },
+    evidence: ['inferred'],
+    question: 'How would you tune this endpoint?',
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, 'unsupported_numeric_claim_in_inferred_state');
+});
+
+test('ConsciousVerifier accepts numeric claims grounded in prior evidence even when inferred-dominant', async () => {
+  const verifier = new ConsciousVerifier();
+  const result = await verifier.verify({
+    response: response({
+      openingReasoning: 'I would hold the 70ms p99 baseline while reducing retries.',
+      implementationPlan: ['Keep the existing 70ms budget and optimize retry backoff'],
+      scaleConsiderations: ['Track p99 latency to keep the 70ms target stable.'],
+    }),
+    route: { qualifies: true, threadAction: 'continue' },
+    reaction: {
+      kind: 'metric_probe',
+      confidence: 0.85,
+      cues: ['metric_language'],
+      targetFacets: ['scale'],
+      shouldContinueThread: true,
+    },
+    hypothesis: {
+      sourceQuestion: 'How would you keep latency stable?',
+      latestSuggestedAnswer: 'Current baseline is 70ms p99 latency under load.',
+      likelyThemes: ['70ms baseline', 'retry policy'],
+      confidence: 0.82,
+      evidence: ['inferred'],
+      targetFacets: ['scale'],
+      updatedAt: Date.now(),
+    },
+    evidence: ['inferred'],
+    question: 'How would you keep latency stable?',
+  });
+
+  assert.equal(result.ok, true);
+});
+
 test('ConsciousVerifier falls back to rule-based acceptance when LLM judge is unavailable', async () => {
   const verifier = new ConsciousVerifier(new ConsciousVerifierLLM({
     generateContentStructured: async () => '{"ok": false, "reason": "should_not_run"}',
