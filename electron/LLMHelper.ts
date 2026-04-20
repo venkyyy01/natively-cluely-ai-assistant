@@ -4366,8 +4366,18 @@ ANSWER DIRECTLY:`;
         requestControl.cleanup();
       }
     } catch (e) {
+      // NAT-040 / audit P-9: previously this branch yielded the literal
+      // string "Error: Failed to stream from Ollama." which then flowed
+      // through the IPC and was rendered to the user as if it were a
+      // model response (and worse, was indexed by downstream answer
+      // ranking). The accuracy bug is straightforward: the model said
+      // nothing, but the user saw a sentence. We now propagate the
+      // failure as a typed Error so the streaming IPC layer translates
+      // it into a `gemini-stream-error` event (NAT-036).
       console.error("Ollama streaming failed", sanitizeError(e));
-      yield "Error: Failed to stream from Ollama.";
+      throw e instanceof Error
+        ? e
+        : new Error(`Ollama streaming failed: ${sanitizeError(e)}`);
     }
   }
 

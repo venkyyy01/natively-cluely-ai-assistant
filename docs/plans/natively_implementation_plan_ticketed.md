@@ -1131,7 +1131,7 @@ EPIC-19 (Mega-file decomposition)        -> last; blocks nothing
   - Will run `npm run test:electron`.
 - **Definition of done**: standard DoD.
 
-#### NAT-040 — Throw on Ollama streaming error instead of yielding fake token
+#### NAT-040 [x] — Throw on Ollama streaming error instead of yielding fake token
 
 - **Parent epic**: EPIC-06
 - **Priority**: P1
