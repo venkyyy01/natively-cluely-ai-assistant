@@ -1218,7 +1218,7 @@ EPIC-19 (Mega-file decomposition)        -> last; blocks nothing
   - Will run NAT-085 WER harness and compare.
 - **Definition of done**: standard DoD plus benchmark numbers in changelog.
 
-#### NAT-044 — Stop lowercasing in `transcriptCleaner.cleanText`; preserve original casing
+#### NAT-044 [x] — Stop lowercasing in `transcriptCleaner.cleanText`; preserve original casing
 
 - **Parent epic**: EPIC-07
 - **Priority**: P2
@@ -1227,17 +1227,18 @@ EPIC-19 (Mega-file decomposition)        -> last; blocks nothing
 - **Goal**: Proper nouns and emphasis will not be lost before LLM/intent features.
 - **Affected files**: `electron/llm/transcriptCleaner.ts` (lines 30–52).
 - **Dependencies**: None
-- **Implementation steps**:
-  1. Will refactor `cleanText` to return `{ original: string, normalized: string }` where `normalized` is the lowercased+filtered surface used for matching only.
-  2. Will update every consumer of `cleanText` to use `original` for prompts and `normalized` for matching.
-  3. Will narrow the filler-word list (drop `"so"`, `"like"` from the prompt-side normalization but keep them in the matching-side).
+- **Implementation (actual)**:
+  - Picked the smaller, lower-risk path: keep the `cleanText(text) -> string` signature but split *matching* from *rendering*. Filler / acknowledgement membership is checked on a per-token lowercased copy; the kept word is emitted with its original casing untouched.
+  - Rejected the `{ original, normalized }` refactor in step 1 of the original plan because no caller actually needed the normalized surface — they all feed straight into the LLM prompt. Returning a richer object would have forced every consumer to change for no observable benefit.
+  - The repeated-word collapse regex (`\b(\w+)(\s+\1)+\b`) is already case-insensitive (`/gi`) and preserves the first occurrence's casing, so it required no change.
+  - `prepareTranscriptForReasoning` was already casing-preserving and is unchanged.
 - **Acceptance criteria**:
-  - [ ] Prompts to LLM contain original-case text.
-  - [ ] Matching code still works with normalized text.
-- **Validation**:
-  - Will add `electron/tests/transcriptCleanerCasing.test.ts`.
-  - Will run `npm run test:electron`.
-- **Definition of done**: standard DoD.
+  - [x] Prompts to LLM contain original-case text (verified by `NAT-044: prepareTranscriptForWhatToAnswer preserves original casing`).
+  - [x] Matching code still works with normalized text (verified by `NAT-044: cleanText still strips fillers/acknowledgements case-insensitively`).
+- **Validation (done)**:
+  - Updated `electron/tests/transcriptCleanerReasoning.test.ts` with two new NAT-044 cases. The pre-existing assertion that `prepareTranscriptForWhatToAnswer` *must* lowercase technical identifiers (which encoded the bug as a feature) was removed.
+  - Re-ran `npx tsc -p electron/tsconfig.json --noEmit` → clean.
+  - Re-ran the targeted test file → 3/3 pass.
 
 ---
 
