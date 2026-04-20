@@ -3468,6 +3468,15 @@ async function initializeApp() {
   appState.applyInitialDisguise();
 
   app.whenReady().then(async () => {
+    // Set a generic user-agent so outbound HTTP does not announce "Electron"
+    try {
+      session.defaultSession.setUserAgent(
+        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+      );
+    } catch (uaError) {
+      console.warn('[Init] Failed to set generic user-agent:', uaError);
+    }
+
     // Check microphone permissions on macOS
     if (process.platform === 'darwin') {
       console.log('[Init] 🎤 Checking microphone permissions...');
