@@ -142,7 +142,7 @@ test('DeepgramStreamingSTT buffers audio written before the websocket is open an
   }
 });
 
-test('DeepgramStreamingSTT emits interim, utterance-end, and final transcript events', async () => {
+test('DeepgramStreamingSTT only emits final transcript events when Deepgram itself marks is_final (NAT-009)', async () => {
   const restoreWs = installWebSocketMock();
   const modulePath = require.resolve('../audio/DeepgramStreamingSTT');
   delete require.cache[modulePath];
@@ -151,9 +151,13 @@ test('DeepgramStreamingSTT emits interim, utterance-end, and final transcript ev
     const { DeepgramStreamingSTT } = await import('../audio/DeepgramStreamingSTT');
     const stt = new DeepgramStreamingSTT('test-key');
     const transcripts: Array<{ text: string; isFinal: boolean; confidence: number }> = [];
+    const telemetry: Array<{ kind: string; hadPendingInterim: boolean; pendingInterimLength: number }> = [];
 
     stt.on('transcript', (segment) => {
       transcripts.push(segment);
+    });
+    stt.on('telemetry', (entry) => {
+      telemetry.push(entry);
     });
 
     stt.start();
@@ -172,11 +176,54 @@ test('DeepgramStreamingSTT emits interim, utterance-end, and final transcript ev
       is_final: true,
     })));
 
+    // NAT-009 / audit A-10: the interim "hello there" must NOT be promoted to
+    // final on UtteranceEnd. Only the second Results message, which Deepgram
+    // itself marked is_final, may produce a final transcript event.
     assert.deepEqual(transcripts, [
       { text: 'hello there', isFinal: false, confidence: 0.75 },
-      { text: 'hello there', isFinal: true, confidence: 0.75 },
       { text: 'general kenobi', isFinal: true, confidence: 0.91 },
     ]);
+
+    assert.equal(telemetry.length, 1, 'one stt.utterance_end_seen telemetry event');
+    assert.equal(telemetry[0]!.kind, 'stt.utterance_end_seen');
+    assert.equal(telemetry[0]!.hadPendingInterim, true, 'telemetry records that an interim was in flight');
+    assert.equal(telemetry[0]!.pendingInterimLength, 'hello there'.length);
+
+    stt.stop();
+  } finally {
+    restoreWs();
+  }
+});
+
+test('DeepgramStreamingSTT UtteranceEnd with no pending interim emits telemetry only, no transcript (NAT-009)', async () => {
+  const restoreWs = installWebSocketMock();
+  const modulePath = require.resolve('../audio/DeepgramStreamingSTT');
+  delete require.cache[modulePath];
+
+  try {
+    const { DeepgramStreamingSTT } = await import('../audio/DeepgramStreamingSTT');
+    const stt = new DeepgramStreamingSTT('test-key');
+    const transcripts: Array<{ text: string; isFinal: boolean; confidence: number }> = [];
+    const telemetry: Array<{ kind: string; hadPendingInterim: boolean; pendingInterimLength: number }> = [];
+
+    stt.on('transcript', (segment) => {
+      transcripts.push(segment);
+    });
+    stt.on('telemetry', (entry) => {
+      telemetry.push(entry);
+    });
+
+    stt.start();
+    const socket = FakeWebSocket.instances[0]!;
+    socket.open();
+
+    socket.emit('message', Buffer.from(JSON.stringify({ type: 'UtteranceEnd' })));
+
+    assert.deepEqual(transcripts, []);
+    assert.equal(telemetry.length, 1);
+    assert.equal(telemetry[0]!.kind, 'stt.utterance_end_seen');
+    assert.equal(telemetry[0]!.hadPendingInterim, false);
+    assert.equal(telemetry[0]!.pendingInterimLength, 0);
 
     stt.stop();
   } finally {

@@ -284,15 +284,24 @@ export class DeepgramStreamingSTT extends EventEmitter {
 
                 // Deepgram response structure:
                 // { type: "Results", channel: { alternatives: [{ transcript, confidence }] }, is_final }
+                //
+                // NAT-009 / audit A-10: Deepgram emits `UtteranceEnd` from a
+                // VAD timer, not from a finalization decision. Synthesizing a
+                // `final` here from `lastInterimTranscript` produced *fake*
+                // finals -- text the user never finished saying -- which then
+                // satisfied the `final===true` gate added in NAT-006 and
+                // committed answers to half-utterances. We now strictly
+                // require `is_final` from the Results message itself, and
+                // only use `UtteranceEnd` for interim-state hygiene plus
+                // telemetry parity tracking.
                 if (msg.type === 'UtteranceEnd') {
-                    if (this.lastInterimTranscript.trim()) {
-                        this.emit('transcript', {
-                            text: this.lastInterimTranscript,
-                            isFinal: true,
-                            confidence: this.lastInterimConfidence,
-                        });
-                        this.lastInterimTranscript = '';
-                    }
+                    this.emit('telemetry', {
+                        kind: 'stt.utterance_end_seen',
+                        hadPendingInterim: this.lastInterimTranscript.trim().length > 0,
+                        pendingInterimLength: this.lastInterimTranscript.length,
+                    });
+                    this.lastInterimTranscript = '';
+                    this.lastInterimConfidence = 0;
                     return;
                 }
 

@@ -457,7 +457,7 @@ EPIC-19 (Mega-file decomposition)        -> last; blocks nothing
   - Will run `npm run test:electron`.
 - **Definition of done**: standard DoD.
 
-#### NAT-009 — Drop Deepgram `UtteranceEnd`-synthesized finals
+#### NAT-009 [x] — Drop Deepgram `UtteranceEnd`-synthesized finals
 
 - **Parent epic**: EPIC-01
 - **Priority**: P1
