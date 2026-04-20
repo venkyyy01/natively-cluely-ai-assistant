@@ -862,10 +862,29 @@ export class IntelligenceEngine extends EventEmitter {
         const whatToSayAbortController = new AbortController();
         this.whatToSayAbortController = whatToSayAbortController;
         const requestSequence = ++this.activeWhatToSayRequestId;
+        // NAT-007 / audit A-7: snapshot the transcript revision at the start
+        // of this request so the streaming loop can detect that the user has
+        // moved on (a new interviewer turn arrived) and abandon mid-stream.
+        // Without this guard, an in-flight LLM stream finishes and gets
+        // committed via `addAssistantMessage`, producing an answer to a
+        // stale question.
+        let staleStopReportedForRequest = false;
         const shouldSuppressVisibleWork = (): boolean => {
-            return this.stealthContainmentActive
+            const aborted = this.stealthContainmentActive
                 || whatToSayAbortController.signal.aborted
                 || requestSequence !== this.activeWhatToSayRequestId;
+            if (aborted) return true;
+            if (this.session.getTranscriptRevision() !== transcriptRevisionAtStart) {
+                if (!staleStopReportedForRequest && activeLatencyRequestId) {
+                    staleStopReportedForRequest = true;
+                    this.latencyTracker.markStaleStop(activeLatencyRequestId, 'transcript_revision_changed');
+                    console.log(
+                        `[INTELLIGENCE] 🛑 stale-stop: transcriptRevision drifted ${transcriptRevisionAtStart} -> ${this.session.getTranscriptRevision()} (requestId=${activeLatencyRequestId})`,
+                    );
+                }
+                return true;
+            }
+            return false;
         };
         const abandonCurrentRequest = (): null => {
             if (activeLatencyRequestId) {

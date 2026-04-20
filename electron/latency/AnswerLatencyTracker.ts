@@ -12,6 +12,11 @@ export function normalizeTrackedProviderCapability(
   return capability === 'non_streaming' ? 'non_streaming_custom' : capability;
 }
 
+export type StaleStopReason =
+  | 'transcript_revision_changed'
+  | 'request_superseded'
+  | 'aborted';
+
 export interface LatencyMetadata {
   transcriptRevision?: number;
   attemptedRoute?: AnswerRoute;
@@ -32,6 +37,7 @@ export interface LatencyMetadata {
     provenance: 'pass' | 'fail' | 'skipped';
   };
   stealthContainmentActive?: boolean;
+  staleStopReason?: StaleStopReason;
 }
 
 export interface LatencySnapshot extends LatencyMetadata {
@@ -159,9 +165,28 @@ export class AnswerLatencyTracker {
     Object.assign(snapshot, normalizedMetadata);
   }
 
+  /**
+   * NAT-007 / audit A-7: Mark a request as stopped before completion because
+   * the world it was answering against changed (e.g. the transcript revision
+   * advanced past `transcriptRevisionAtStart`). The snapshot is finalized
+   * with `staleStopReason` set so downstream telemetry can distinguish
+   * stale-stops from normal completion or hard aborts.
+   */
+  markStaleStop(requestId: string, reason: StaleStopReason = 'transcript_revision_changed'): LatencySnapshot | undefined {
+    const snapshot = this.snapshots.get(requestId);
+    if (!snapshot || snapshot.completed) return undefined;
+    snapshot.staleStopReason = reason;
+    return this.complete(requestId);
+  }
+
   complete(requestId: string): LatencySnapshot | undefined {
     const snapshot = this.snapshots.get(requestId);
     if (!snapshot) return undefined;
+    if (snapshot.completed) {
+      // Idempotent: a stale-stop call already finalized this snapshot; the
+      // normal `finally` cleanup must not double-record the measurement.
+      return this.createSnapshotCopy(snapshot);
+    }
     snapshot.completed = true;
     snapshot.marks.completedAt = Date.now();
 

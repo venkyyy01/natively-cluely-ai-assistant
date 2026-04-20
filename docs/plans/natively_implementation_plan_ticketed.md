@@ -415,7 +415,7 @@ EPIC-19 (Mega-file decomposition)        -> last; blocks nothing
 - **Rollout notes**: This will slightly raise median trigger latency. The follow-on EPIC-13 RouteDirector will recover that with explicit speculative branching, gated correctly.
 - **Definition of done**: standard DoD.
 
-#### NAT-007 — Add transcript-revision staleness check to main streaming path
+#### NAT-007 [x] — Add transcript-revision staleness check to main streaming path
 
 - **Parent epic**: EPIC-01
 - **Priority**: P0
