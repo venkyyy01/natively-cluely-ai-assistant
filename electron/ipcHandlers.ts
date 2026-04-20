@@ -455,12 +455,62 @@ safeHandleValidated("renderer:log-error", (args) => [parseIpcInput(ipcSchemas.re
         // USE streamChat which handles routing
         const stream = llmHelper.streamChat(message, imagePaths, context, options?.skipSystemPrompt ? "" : undefined);
 
+        // NAT-019 / audit R-7: micro-batch tokens before crossing the IPC
+        // boundary. The previous implementation issued one IPC send per
+        // token, so a fast provider (Groq, Cerebras) could push 200+ IPC
+        // messages/sec, flooding the renderer event loop and producing
+        // user-visible jank during streaming.
+        //
+        // Flush rule: every BATCH_FLUSH_INTERVAL_MS or every
+        // BATCH_FLUSH_MAX_TOKENS tokens, whichever comes first. The cap
+        // comes from the audit's acceptance criterion of <= 64 IPC
+        // sends/second (1000 / 16 ms = 62.5).
+        //
+        // Destroyed-sender guard: every flush checks
+        // `event.sender.isDestroyed()` first so a renderer crash or
+        // navigation no longer turns into "Object has been destroyed"
+        // exceptions surfacing in logs and aborting the stream consumer.
+        const BATCH_FLUSH_INTERVAL_MS = 16;
+        const BATCH_FLUSH_MAX_TOKENS = 32;
+        let pending = '';
+        let pendingTokenCount = 0;
+        let lastFlushAt = Date.now();
+        let aborted = false;
+
+        const flush = (): boolean => {
+          if (pending.length === 0) return true;
+          if (event.sender.isDestroyed()) {
+            aborted = true;
+            return false;
+          }
+          event.sender.send("gemini-stream-token", pending);
+          pending = '';
+          pendingTokenCount = 0;
+          lastFlushAt = Date.now();
+          return true;
+        };
+
         for await (const token of stream) {
-          event.sender.send("gemini-stream-token", token);
+          if (event.sender.isDestroyed()) {
+            aborted = true;
+            console.warn('[IPC] gemini-chat-stream: sender destroyed mid-stream; aborting');
+            break;
+          }
+          pending += token;
+          pendingTokenCount += 1;
           fullResponse += token;
+          const elapsed = Date.now() - lastFlushAt;
+          if (pendingTokenCount >= BATCH_FLUSH_MAX_TOKENS || elapsed >= BATCH_FLUSH_INTERVAL_MS) {
+            if (!flush()) break;
+          }
         }
 
-        event.sender.send("gemini-stream-done");
+        if (!aborted) {
+          flush();
+          if (!event.sender.isDestroyed()) {
+            event.sender.send("gemini-stream-done");
+          }
+        }
 
         // Update IntelligenceManager with ASSISTANT message after completion
         if (fullResponse.trim().length > 0) {
@@ -471,7 +521,9 @@ safeHandleValidated("renderer:log-error", (args) => [parseIpcInput(ipcSchemas.re
 
       } catch (streamError: any) {
         console.error("[IPC] Streaming error:", streamError);
-        event.sender.send("gemini-stream-error", streamError.message || "Unknown streaming error");
+        if (!event.sender.isDestroyed()) {
+          event.sender.send("gemini-stream-error", streamError.message || "Unknown streaming error");
+        }
       }
 
       return null; // Return null as data is sent via events

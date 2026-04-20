@@ -671,7 +671,7 @@ EPIC-19 (Mega-file decomposition)        -> last; blocks nothing
   - Will add `electron/tests/databaseManagerCloseOnShutdown.test.ts` that opens a DB, calls close, and asserts no error on subsequent re-open.
 - **Definition of done**: standard DoD.
 
-#### NAT-019 — Add token batching and destroyed-sender guard to streaming chat IPC
+#### NAT-019 [x] — Add token batching and destroyed-sender guard to streaming chat IPC
 
 - **Parent epic**: EPIC-03
 - **Priority**: P1
