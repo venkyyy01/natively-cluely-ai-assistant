@@ -610,7 +610,7 @@ EPIC-19 (Mega-file decomposition)        -> last; blocks nothing
   - Will run `npm run test:electron`.
 - **Definition of done**: standard DoD.
 
-#### NAT-016 — Bound `WorkerPool` task queue with admission control
+#### NAT-016 [x] — Bound `WorkerPool` task queue with admission control
 
 - **Parent epic**: EPIC-03
 - **Priority**: P1
