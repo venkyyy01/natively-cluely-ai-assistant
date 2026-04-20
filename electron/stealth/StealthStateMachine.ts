@@ -25,7 +25,7 @@ const legalTransitions: Record<StealthState, Partial<Record<StealthTransitionEve
 export function transitionStealthState(state: StealthState, event: StealthTransitionEvent): StealthState {
   const nextState = legalTransitions[state][event];
   if (!nextState) {
-    throw new Error(`Illegal stealth transition: ${state} -> ${event}`);
+    return 'FAULT';
   }
 
   return nextState;

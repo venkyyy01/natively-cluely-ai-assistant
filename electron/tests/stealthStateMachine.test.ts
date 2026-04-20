@@ -19,10 +19,10 @@ test('StealthStateMachine preserves current FAULT recovery permissiveness', () =
   assert.equal(transitionStealthState('FAULT', 'disabled'), 'OFF');
 });
 
-test('StealthStateMachine rejects illegal transitions', () => {
-  assert.throws(() => transitionStealthState('OFF', 'arm-succeeded'), /Illegal stealth transition/);
-  assert.throws(() => transitionStealthState('FULL_STEALTH', 'arm-succeeded'), /Illegal stealth transition/);
-  assert.throws(() => transitionStealthState('OFF', 'disabled'), /Illegal stealth transition/);
+test('StealthStateMachine fails closed on illegal transitions', () => {
+  assert.equal(transitionStealthState('OFF', 'arm-succeeded'), 'FAULT');
+  assert.equal(transitionStealthState('FULL_STEALTH', 'arm-succeeded'), 'FAULT');
+  assert.equal(transitionStealthState('OFF', 'disabled'), 'FAULT');
 });
 
 test('StealthStateMachine exposes legal no-op guards used by the supervisor', () => {

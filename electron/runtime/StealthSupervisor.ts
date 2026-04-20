@@ -5,6 +5,7 @@ import {
   canDisableStealth,
   canFaultStealth,
   transitionStealthState,
+  type StealthTransitionEvent,
 } from '../stealth/StealthStateMachine';
 import { StealthArmController } from '../stealth/StealthArmController';
 import { NativeStealthBridge, type NativeStealthArmRequest } from '../stealth/NativeStealthBridge';
@@ -154,11 +155,11 @@ export class StealthSupervisor implements ISupervisor {
       return;
     }
 
-    await this.transitionTo(transitionStealthState(this.stealthState, 'arm-requested'));
+    await this.transitionTo(this.transitionStealthStateLogged(this.stealthState, 'arm-requested'));
 
     try {
       await this.armController.arm();
-      await this.transitionTo(transitionStealthState(this.stealthState, 'arm-succeeded'));
+      await this.transitionTo(this.transitionStealthStateLogged(this.stealthState, 'arm-succeeded'));
       this.pendingEnabled = true;
       if (this.runtimeHeartbeatStalenessMs > 0) {
         this.lastRuntimeHeartbeatAt = this.now();
@@ -265,6 +266,15 @@ export class StealthSupervisor implements ISupervisor {
     const from = this.stealthState;
     this.stealthState = next;
     await this.emitStateChange(from, next);
+  }
+
+  private transitionStealthStateLogged(state: StealthState, event: StealthTransitionEvent): StealthState {
+    const next = transitionStealthState(state, event);
+    if (next === 'FAULT' && event !== 'faulted') {
+      this.options.logger?.warn(`[StealthSupervisor] Illegal stealth transition: ${state} -> ${event}`);
+      void this.bus.emit({ type: 'stealth:illegal_transition', from: state, event });
+    }
+    return next;
   }
 
   private async emitStateChange(from: StealthState, to: StealthState): Promise<void> {
