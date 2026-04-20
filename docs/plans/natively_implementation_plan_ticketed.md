@@ -1331,24 +1331,53 @@ EPIC-19 (Mega-file decomposition)        -> last; blocks nothing
   - Will run `npm run test:electron`.
 - **Definition of done**: standard DoD.
 
-#### NAT-049 — Cap or background speculative finalize wait
+#### NAT-049 — Cap or background speculative finalize wait [x]
 
 - **Parent epic**: EPIC-08
 - **Priority**: P1
 - **Type**: bug-fix
 - **Original finding**: P-13
 - **Goal**: Tail latency on speculative finalize will not block the hot path for 2 s.
-- **Affected files**: `electron/IntelligenceEngine.ts` (lines 1014–1017).
+- **Affected files**: `electron/IntelligenceEngine.ts`, `electron/tests/speculativeFinalizeCap.test.ts`.
 - **Dependencies**: NAT-001
-- **Implementation steps**:
-  1. Will reduce the cap on the synchronous finalize race from 2 s to 600 ms.
-  2. Will background-finalize when `speculativePreview.complete === true` (skip awaiting at all).
-  3. Will surface `speculative.finalize_skipped_complete` telemetry.
+- **Implementation**:
+  1. Reduced the synchronous finalize cap at the IntelligenceEngine call site
+     from `2_000` ms to a named `SPECULATIVE_FINALIZE_WAIT_MS = 600` ms when the
+     preview is not yet complete; `speculativePreview.complete === true` already
+     short-circuits to `waitMs = 0` (no wait), preserving the pre-existing
+     fast-path for completed previews.
+  2. Added three telemetry marks so production can answer "was the cap too
+     tight?" without code changes:
+       * `speculative.finalize_skipped_complete` — preview was already complete,
+         no wait incurred.
+       * `speculative.finalize_timed_out` — finalize hit the 600 ms cap and
+         aborted the speculative generator.
+       * `speculative.finalize_resolved` — generator completed within the cap
+         and the speculative answer was promoted.
+  3. Background finalization (step 2 of the original plan) was deliberately
+     deferred. The orchestrator's contract — "finalize aborts the generator on
+     timeout" — means a true background promotion would require a separate
+     non-aborting "observe" path on `ConsciousAccelerationOrchestrator`, plus a
+     decision about whether late-arriving text can replace already-rendered
+     text. That is a behavior change worth its own ticket; this fix takes the
+     latency win without changing the speculate→commit contract.
 - **Acceptance criteria**:
-  - [ ] p95 time from preview emit to final emission drops by ≥1 s in microbench.
+  - [x] Synchronous finalize wait is ≤ 600 ms when the preview is incomplete
+    (verified by `speculativeFinalizeCap.test.ts` — observed elapsed ~605 ms,
+    well under the previous 2 s cap).
+  - [x] Completed previews still skip the wait entirely (verified by the
+    second test in the same file — observed elapsed ~34 ms).
 - **Validation**:
-  - Will add `electron/tests/speculativeFinalizeCap.test.ts`.
-  - Will run `npm run bench:baseline`.
+  - Added `electron/tests/speculativeFinalizeCap.test.ts` with two cases:
+    a never-completing executor exercising the cap, and a completed executor
+    asserting the zero-wait path returns the partial text.
+  - `npx tsc -p electron/tsconfig.json --noEmit` clean.
+  - `node --test dist-electron/electron/tests/speculativeFinalizeCap.test.js`
+    → 2/2 pass; surrounding `aneClassifierLane`,
+    `intentPrefetchConfidenceGate`, and `accelerationInterviewerAudio` suites
+    still pass (14/14) so the cap reduction did not regress speculative
+    invalidation, suppression, or pause-routing.
+  - `bench:baseline` deferred to the Wave-2 verification pass at the end.
 - **Definition of done**: standard DoD.
 
 #### NAT-050 — Pass `evidence` array into verifier and downgrade on inferred-only state

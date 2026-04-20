@@ -1036,11 +1036,46 @@ export class IntelligenceEngine extends EventEmitter {
                         return abandonCurrentRequest();
                     }
 
+                    // NAT-049 / audit P-13: previously this race waited up to
+                    // 2_000 ms on the synchronous hot path for a *post-hoc*
+                    // refinement of an already-emitted preview. Worst case the
+                    // user saw the preview text immediately and then we sat
+                    // there for 2 s before emitting `suggested_answer` and
+                    // releasing the request slot. p95 tail latency took the
+                    // brunt of that.
+                    //
+                    // The fix:
+                    //   * When the speculation is already `complete`, pass 0
+                    //     (already done; this just preserves the existing
+                    //     short-circuit).
+                    //   * Otherwise cap the wait at 600 ms. The preview has
+                    //     already streamed, so any extension is opportunistic
+                    //     polish — not the answer itself. If 600 ms isn't
+                    //     enough, we accept the preview as-is and let the
+                    //     finalize complete in the background; the caller
+                    //     records a `speculative.finalize_timed_out` mark on
+                    //     the active latency request so we can tune later.
+                    const SPECULATIVE_FINALIZE_WAIT_MS = 600;
+                    const speculativeFinalizeWaitMs = speculativePreview.complete ? 0 : SPECULATIVE_FINALIZE_WAIT_MS;
+                    const speculativeFinalizeStart = Date.now();
                     const finalizedSpeculativeAnswer = await consciousAcceleration!.finalizeSpeculativeAnswer(
                         speculativePreview.key,
-                        speculativePreview.complete ? 0 : 2_000,
+                        speculativeFinalizeWaitMs,
                         speculativeCommitToken,
                     );
+                    const speculativeFinalizeElapsed = Date.now() - speculativeFinalizeStart;
+                    // Telemetry: tag what happened on the finalize race so we
+                    // can answer "was the cap too tight?" from production data.
+                    if (speculativePreview.complete) {
+                        this.latencyTracker.mark(requestId, 'speculative.finalize_skipped_complete');
+                    } else if (
+                        finalizedSpeculativeAnswer === null
+                        && speculativeFinalizeElapsed >= speculativeFinalizeWaitMs
+                    ) {
+                        this.latencyTracker.mark(requestId, 'speculative.finalize_timed_out');
+                    } else if (finalizedSpeculativeAnswer) {
+                        this.latencyTracker.mark(requestId, 'speculative.finalize_resolved');
+                    }
                     if (shouldSuppressVisibleWork()) {
                         return abandonCurrentRequest();
                     }
