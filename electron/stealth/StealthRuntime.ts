@@ -155,6 +155,24 @@ export class StealthRuntime {
     this.frameBridge.attach(this.contentWindow.webContents as unknown as Parameters<FrameBridge['attach']>[0]);
     this.bindShellEvents();
 
+    // NAT-025: apply content protection before any load on both shell and content windows
+    for (const win of [this.contentWindow, this.shellWindow]) {
+      if (win && typeof (win as any).setContentProtection === 'function') {
+        try {
+          (win as any).setContentProtection(true);
+        } catch (err) {
+          this.logger.warn('[StealthRuntime] setContentProtection failed:', err);
+        }
+      }
+      if (win && typeof (win as any).setExcludeFromCapture === 'function') {
+        try {
+          (win as any).setExcludeFromCapture(true);
+        } catch (err) {
+          this.logger.warn('[StealthRuntime] setExcludeFromCapture failed:', err);
+        }
+      }
+    }
+
     // Always use loadURL so packaged file:// targets keep their query string.
     void this.contentWindow.loadURL(this.startUrl).catch((err) => {
       this.logger.warn('[StealthRuntime] Content window loadURL failed:', err);
