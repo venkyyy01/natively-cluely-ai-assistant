@@ -2,6 +2,7 @@ import Foundation
 import FoundationModels
 
 private struct IntentRequest: Decodable {
+    let requestId: String?
     let version: Int
     let question: String
     let preparedTranscript: String
@@ -13,6 +14,7 @@ private struct IntentRequest: Decodable {
 }
 
 private struct IntentResponse: Encodable {
+    let requestId: String?
     let ok: Bool
     let intent: String?
     let confidence: Double?
@@ -23,8 +25,9 @@ private struct IntentResponse: Encodable {
     let errorType: String?
     let message: String?
 
-    static func success(intent: String, confidence: Double, promptVersion: String, schemaVersion: String) -> IntentResponse {
+    static func success(requestId: String?, intent: String, confidence: Double, promptVersion: String, schemaVersion: String) -> IntentResponse {
         IntentResponse(
+            requestId: requestId,
             ok: true,
             intent: intent,
             confidence: confidence,
@@ -37,8 +40,9 @@ private struct IntentResponse: Encodable {
         )
     }
 
-    static func failure(errorType: String, message: String) -> IntentResponse {
+    static func failure(requestId: String?, errorType: String, message: String) -> IntentResponse {
         IntentResponse(
+            requestId: requestId,
             ok: false,
             intent: nil,
             confidence: nil,
@@ -311,19 +315,12 @@ private func writeResponse(_ response: IntentResponse) {
         FileHandle.standardOutput.write(data)
         FileHandle.standardOutput.write(Data("\n".utf8))
     } catch {
-        let fallback = "{\"ok\":false,\"errorType\":\"unknown\",\"message\":\"Failed to encode helper response\"}\n"
+        let fallback = "{\"requestId\":null,\"ok\":false,\"errorType\":\"unknown\",\"message\":\"Failed to encode helper response\"}\n"
         FileHandle.standardOutput.write(Data(fallback.utf8))
     }
 }
 
-private func parseRequest() throws -> IntentRequest {
-    let data = try FileHandle.standardInput.readToEnd() ?? Data()
-    guard !data.isEmpty else {
-        throw HelperError.invalidRequest("Empty request payload")
-    }
-
-    let decoder = JSONDecoder()
-    let request = try decoder.decode(IntentRequest.self, from: data)
+private func validateIntentRequest(_ request: IntentRequest) throws {
     guard request.version == 1 else {
         throw HelperError.invalidRequest("Unsupported request version")
     }
@@ -340,7 +337,26 @@ private func parseRequest() throws -> IntentRequest {
     guard candidateSet == helperSupportedIntents else {
         throw HelperError.invalidRequest("candidateIntents do not match supported helper schema")
     }
+}
+
+private func parseRequestFromData(_ data: Data) throws -> IntentRequest {
+    guard !data.isEmpty else {
+        throw HelperError.invalidRequest("Empty request payload")
+    }
+    let decoder = JSONDecoder()
+    let request = try decoder.decode(IntentRequest.self, from: data)
+    try validateIntentRequest(request)
     return request
+}
+
+private func parseRequest() throws -> IntentRequest {
+    let data = try FileHandle.standardInput.readToEnd() ?? Data()
+    return try parseRequestFromData(data)
+}
+
+private func isPersistentFoundationModeEnabled() -> Bool {
+    let v = ProcessInfo.processInfo.environment["NATIVELY_FOUNDATION_PERSISTENT"]?.lowercased() ?? ""
+    return v == "1" || v == "true" || v == "yes"
 }
 
 @available(macOS 26.0, *)
@@ -1110,9 +1126,8 @@ private func classifyIntent(_ request: IntentRequest) async throws -> IntentEnve
 }
 
 @available(macOS 26.0, *)
-private func runHelper() async {
+private func runSingleIntent(request: IntentRequest) async {
     do {
-        let request = try parseRequest()
         let result = try await classifyIntent(request)
         let candidateSet = Set(request.candidateIntents)
         guard candidateSet.contains(result.intent) else {
@@ -1126,6 +1141,7 @@ private func runHelper() async {
         )
         writeResponse(
             .success(
+                requestId: request.requestId,
                 intent: result.intent,
                 confidence: normalizedConfidence,
                 promptVersion: request.promptVersion,
@@ -1133,9 +1149,45 @@ private func runHelper() async {
             )
         )
     } catch let error as HelperError {
-        writeResponse(.failure(errorType: error.type, message: error.message))
+        writeResponse(.failure(requestId: request.requestId, errorType: error.type, message: error.message))
     } catch {
-        writeResponse(.failure(errorType: "unknown", message: String(describing: error)))
+        writeResponse(.failure(requestId: request.requestId, errorType: "unknown", message: String(describing: error)))
+    }
+}
+
+@available(macOS 26.0, *)
+private func runHelper() async {
+    do {
+        let request = try parseRequest()
+        await runSingleIntent(request: request)
+    } catch let error as HelperError {
+        writeResponse(.failure(requestId: nil, errorType: error.type, message: error.message))
+    } catch {
+        writeResponse(.failure(requestId: nil, errorType: "unknown", message: String(describing: error)))
+    }
+}
+
+@available(macOS 26.0, *)
+private func runPersistentLoop() async {
+    while let line = readLine() {
+        let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { continue }
+        if trimmed.contains("\"type\""), trimmed.lowercased().contains("cancel") {
+            continue
+        }
+        guard let data = trimmed.data(using: .utf8) else { continue }
+        var requestIdForError: String?
+        if let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            requestIdForError = obj["requestId"] as? String
+        }
+        do {
+            let request = try parseRequestFromData(data)
+            await runSingleIntent(request: request)
+        } catch let error as HelperError {
+            writeResponse(.failure(requestId: requestIdForError, errorType: error.type, message: error.message))
+        } catch {
+            writeResponse(.failure(requestId: requestIdForError, errorType: "unknown", message: String(describing: error)))
+        }
     }
 }
 
@@ -1143,9 +1195,13 @@ private func runHelper() async {
 struct FoundationIntentHelperMain {
     static func main() async {
         if #available(macOS 26.0, *) {
-            await runHelper()
+            if isPersistentFoundationModeEnabled() {
+                await runPersistentLoop()
+            } else {
+                await runHelper()
+            }
         } else {
-            writeResponse(.failure(errorType: "unavailable", message: "Foundation Models intent helper requires macOS 26+"))
+            writeResponse(.failure(requestId: nil, errorType: "unavailable", message: "Foundation Models intent helper requires macOS 26+"))
         }
     }
 }
