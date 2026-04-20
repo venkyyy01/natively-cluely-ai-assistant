@@ -780,7 +780,7 @@ EPIC-19 (Mega-file decomposition)        -> last; blocks nothing
 
 ### EPIC-04 — Cache invalidation correctness
 
-#### NAT-024 — Implement per-key delete in `EnhancedCache` and stop full-clear on `delete`
+#### NAT-024 [x] — Implement per-key delete in `EnhancedCache` and stop full-clear on `delete`
 
 - **Parent epic**: EPIC-04
 - **Priority**: P0

@@ -188,6 +188,31 @@ export class EnhancedCache<K, V> {
     return value.length * 2;
   }
 
+  /**
+   * Remove a single entry (and its embedding, if any) without disturbing
+   * the rest of the cache.
+   *
+   * Added for NAT-024 / audit P-14: the legacy `EnhancedCacheAdapter.delete`
+   * path used to call `clear()` here, which silently wiped *every* cached
+   * entry whenever any caller asked to invalidate one key — a P0 cache
+   * coherence bug. Callers that still want a full wipe must call `clear()`
+   * explicitly.
+   *
+   * Returns true when an entry existed and was removed, false otherwise,
+   * matching the contract of `Map.prototype.delete`.
+   */
+  delete(key: K): boolean {
+    const stringKey = this.serialize(key);
+    if (!this.cache.has(stringKey)) {
+      // Best-effort cleanup of an orphaned embedding (should not happen,
+      // but the maps drifting apart would silently leak memory).
+      this.embeddings?.delete(stringKey);
+      return false;
+    }
+    this.evict(stringKey);
+    return true;
+  }
+
   clear(): void {
     this.cache.clear();
     this.embeddings?.clear();
