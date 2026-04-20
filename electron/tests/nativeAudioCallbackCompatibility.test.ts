@@ -12,6 +12,10 @@ class FakeSystemAudioMonitor {
     return 48_000;
   }
 
+  getOutputSampleRate(): number {
+    return 16000;
+  }
+
   start(callback: (first: Uint8Array | null, second?: Uint8Array) => void, onSpeechEnded?: () => void): void {
     FakeSystemAudioMonitor.startCalls += 1;
 
@@ -46,6 +50,10 @@ class FakeMicrophoneMonitor {
 
   getSampleRate(): number {
     return 48_000;
+  }
+
+  getOutputSampleRate(): number {
+    return 16000;
   }
 
   start(callback: (first: Uint8Array | null, second?: Uint8Array) => void, onSpeechEnded?: () => void): void {

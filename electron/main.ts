@@ -780,7 +780,7 @@ this.setupIntelligenceEvents()
             if (!this.googleSTT) {
               this.googleSTT = this.createSTTProvider('interviewer')
               if (this.systemAudioCapture) {
-                const rate = this.systemAudioCapture.getSampleRate()
+                const rate = this.systemAudioCapture.getOutputSampleRate()
                 this.googleSTT.setSampleRate(rate)
                 safeSetAudioChannelCount(this.googleSTT, 1)
               }
@@ -793,7 +793,7 @@ this.setupIntelligenceEvents()
           if (!this.googleSTT_User) {
             this.googleSTT_User = this.createSTTProvider('user')
             if (this.microphoneCapture) {
-              const rate = this.microphoneCapture.getSampleRate() || 48000
+              const rate = this.microphoneCapture.getOutputSampleRate() || 16000
               this.googleSTT_User.setSampleRate(rate)
               safeSetAudioChannelCount(this.googleSTT_User, 1)
             }
@@ -1611,7 +1611,7 @@ try {
     if (speaker === 'interviewer') {
       this.googleSTT = this.createSTTProvider('interviewer');
       if (this.systemAudioCapture) {
-        const rate = this.systemAudioCapture.getSampleRate();
+        const rate = this.systemAudioCapture.getOutputSampleRate();
         this.googleSTT?.setSampleRate(rate);
         safeSetAudioChannelCount(this.googleSTT, 1);
       }
@@ -1621,7 +1621,7 @@ try {
 
     this.googleSTT_User = this.createSTTProvider('user');
     if (this.microphoneCapture) {
-      const rate = this.microphoneCapture.getSampleRate() || 48000;
+      const rate = this.microphoneCapture.getOutputSampleRate() || 16000;
       this.googleSTT_User?.setSampleRate(rate);
       safeSetAudioChannelCount(this.googleSTT_User, 1);
     }
@@ -1689,14 +1689,14 @@ try {
     // Always sync rates, even if just initialized, to ensure consistency
 
     // 1. Sync System Audio Rate
-    const sysRate = this.systemAudioCapture?.getSampleRate() || 48000;
-    console.log(`[Main] Configuring Interviewer STT to ${sysRate}Hz`);
+    const sysRate = this.systemAudioCapture?.getOutputSampleRate() || 16000;
+    console.log(`[Main] Configuring Interviewer STT to ${sysRate}Hz (PCM output rate)`);
     this.googleSTT?.setSampleRate(sysRate);
     safeSetAudioChannelCount(this.googleSTT, 1);
 
     // 2. Sync Mic Rate
-    const micRate = this.microphoneCapture?.getSampleRate() || 48000;
-    console.log(`[Main] Configuring User STT to ${micRate}Hz`);
+    const micRate = this.microphoneCapture?.getOutputSampleRate() || 16000;
+    console.log(`[Main] Configuring User STT to ${micRate}Hz (PCM output rate)`);
     this.googleSTT_User?.setSampleRate(micRate);
     safeSetAudioChannelCount(this.googleSTT_User, 1);
 
@@ -1722,8 +1722,8 @@ try {
     try {
       console.log('[Main] Initializing SystemAudioCapture...');
       this.systemAudioCapture = new SystemAudioCapture(outputDeviceId || undefined);
-      const rate = this.systemAudioCapture.getSampleRate();
-      console.log(`[Main] SystemAudioCapture rate: ${rate}Hz`);
+      const rate = this.systemAudioCapture.getOutputSampleRate();
+      console.log(`[Main] SystemAudioCapture PCM rate: ${rate}Hz`);
       this.googleSTT?.setSampleRate(rate);
 
         this.systemAudioCapture.on('data', (chunk: Buffer) => {
@@ -1744,8 +1744,8 @@ try {
       console.warn('[Main] Failed to initialize SystemAudioCapture with preferred ID. Falling back to default.', err);
       try {
         this.systemAudioCapture = new SystemAudioCapture(); // Default
-        const rate = this.systemAudioCapture.getSampleRate();
-        console.log(`[Main] SystemAudioCapture (Default) rate: ${rate}Hz`);
+        const rate = this.systemAudioCapture.getOutputSampleRate();
+        console.log(`[Main] SystemAudioCapture (Default) PCM rate: ${rate}Hz`);
         this.googleSTT?.setSampleRate(rate);
 
         this.systemAudioCapture.on('data', (chunk: Buffer) => {
@@ -1777,8 +1777,8 @@ try {
       console.log(`[Main] 🎤 Target device: ${inputDeviceId || 'default'}`);
       
       this.microphoneCapture = new MicrophoneCapture(inputDeviceId || undefined);
-      const rate = this.microphoneCapture.getSampleRate();
-      console.log(`[Main] 🎤 MicrophoneCapture rate: ${rate}Hz`);
+      const rate = this.microphoneCapture.getOutputSampleRate();
+      console.log(`[Main] 🎤 MicrophoneCapture PCM rate: ${rate}Hz`);
       console.log(`[Main] 🎤 STT User ready: ${!!this.googleSTT_User}`);
       
       this.googleSTT_User?.setSampleRate(rate);
@@ -1809,8 +1809,8 @@ try {
       
       try {
         this.microphoneCapture = new MicrophoneCapture(); // Default
-        const rate = this.microphoneCapture.getSampleRate();
-        console.log(`[Main] 🎤 MicrophoneCapture (Default) rate: ${rate}Hz`);
+        const rate = this.microphoneCapture.getOutputSampleRate();
+        console.log(`[Main] 🎤 MicrophoneCapture (Default) PCM rate: ${rate}Hz`);
         this.googleSTT_User?.setSampleRate(rate);
 
         this.microphoneCapture.on('data', (chunk: Buffer) => {

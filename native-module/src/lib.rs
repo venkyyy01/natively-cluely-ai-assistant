@@ -18,11 +18,13 @@ use ringbuf::traits::Consumer;
 pub mod audio_config;
 pub mod license;
 pub mod microphone;
+pub mod resampler;
 pub mod silence_suppression;
 pub mod speaker;
 pub mod stealth;
 
 use crate::audio_config::DSP_POLL_MS;
+use crate::resampler::PolyphaseResampler;
 use crate::silence_suppression::{FrameAction, SilenceSuppressionConfig, SilenceSuppressor};
 
 // ============================================================================
@@ -38,6 +40,12 @@ fn i16_slice_to_le_bytes(samples: &[i16]) -> Vec<u8> {
         bytes.extend_from_slice(&s.to_le_bytes());
     }
     bytes
+}
+
+/// 20ms of mono silence at `output_sr` (STT-facing rate after NAT-043 resample).
+fn silence_pcm_le_bytes_20ms(output_sr: u32) -> Vec<u8> {
+    let samples = (output_sr as usize) / 50;
+    vec![0u8; samples.saturating_mul(2)]
 }
 
 /// Convert a panic payload (as returned by `catch_unwind`) into a printable string.
@@ -168,13 +176,25 @@ pub struct SystemAudioCapture {
     /// native device is initialized. Callers always get the real hardware rate.
     sample_rate: Arc<AtomicU32>,
     device_id: Option<String>,
+    /// PCM sample rate delivered to JS (16k or 24k) after polyphase resample (NAT-043).
+    output_sample_rate: u32,
 }
 
 #[napi]
 impl SystemAudioCapture {
     #[napi(constructor)]
-    pub fn new(device_id: Option<String>) -> napi::Result<Self> {
-        println!("[SystemAudioCapture] Created (device: {:?})", device_id);
+    pub fn new(device_id: Option<String>, output_sample_rate: Option<u32>) -> napi::Result<Self> {
+        let out_sr = output_sample_rate.unwrap_or(16_000);
+        if out_sr != 16_000 && out_sr != 24_000 {
+            return Err(napi::Error::from_reason(format!(
+                "output_sample_rate must be 16000 or 24000, got {}",
+                out_sr
+            )));
+        }
+        println!(
+            "[SystemAudioCapture] Created (device: {:?}, output_pcm_hz: {})",
+            device_id, out_sr
+        );
 
         Ok(SystemAudioCapture {
             stop_signal: Arc::new(AtomicBool::new(false)),
@@ -183,12 +203,19 @@ impl SystemAudioCapture {
             // 48kHz is the standard macOS CoreAudio rate.
             sample_rate: Arc::new(AtomicU32::new(48000)),
             device_id,
+            output_sample_rate: out_sr,
         })
     }
 
     #[napi]
     pub fn get_sample_rate(&self) -> u32 {
         self.sample_rate.load(Ordering::Acquire)
+    }
+
+    /// Sample rate of PCM buffers emitted to JS (after native polyphase resample).
+    #[napi]
+    pub fn get_output_sample_rate(&self) -> u32 {
+        self.output_sample_rate
     }
 
     #[napi]
@@ -215,6 +242,7 @@ impl SystemAudioCapture {
         let stop_signal = self.stop_signal.clone();
         let device_id = self.device_id.as_ref().cloned();
         let sample_rate_shared = self.sample_rate.clone();
+        let output_sr = self.output_sample_rate;
 
         // ★ ALL init + DSP runs in background thread — start() returns INSTANTLY
         // This prevents the 5-7 second main-thread block from SCK initialization.
@@ -264,10 +292,22 @@ impl SystemAudioCapture {
 
             // 20ms chunks at native rate (e.g. 960 samples at 48kHz)
             let chunk_size = (native_rate as usize / 1000) * 20;
+            let mut pcm_resampler = match PolyphaseResampler::new(native_rate, output_sr, chunk_size)
+            {
+                Ok(r) => r,
+                Err(e) => {
+                    eprintln!(
+                        "[SystemAudioCapture] FATAL: polyphase resampler ({}Hz → {}Hz): {}",
+                        native_rate, output_sr, e
+                    );
+                    return;
+                }
+            };
+            let silence_out = silence_pcm_le_bytes_20ms(output_sr);
+
             let mut frame_buffer: Vec<i16> = Vec::with_capacity(chunk_size * 4);
             let mut raw_batch: Vec<f32> = Vec::with_capacity(4096);
             let mut last_emit_at = Instant::now();
-            let silence = vec![0u8; chunk_size * 2];
 
             loop {
                 if stop_signal.load(Ordering::Relaxed) {
@@ -296,16 +336,22 @@ impl SystemAudioCapture {
 
                     match action {
                         FrameAction::Send(data) => {
-                            let bytes = i16_slice_to_le_bytes(&data);
-                            tsfn.call(
-                                Ok(Buffer::from(bytes)),
-                                ThreadsafeFunctionCallMode::NonBlocking,
-                            );
-                            last_emit_at = Instant::now();
+                            match pcm_resampler.push_i16(&data) {
+                                Ok(out) if !out.is_empty() => {
+                                    let bytes = i16_slice_to_le_bytes(&out);
+                                    tsfn.call(
+                                        Ok(Buffer::from(bytes)),
+                                        ThreadsafeFunctionCallMode::NonBlocking,
+                                    );
+                                    last_emit_at = Instant::now();
+                                }
+                                Ok(_) => {}
+                                Err(e) => eprintln!("[SystemAudioCapture] resample: {}", e),
+                            }
                         }
                         FrameAction::SendSilence => {
                             tsfn.call(
-                                Ok(Buffer::from(silence.clone())),
+                                Ok(Buffer::from(silence_out.clone())),
                                 ThreadsafeFunctionCallMode::NonBlocking,
                             );
                             last_emit_at = Instant::now();
@@ -327,7 +373,7 @@ impl SystemAudioCapture {
                     && last_emit_at.elapsed() >= Duration::from_millis(100)
                 {
                     tsfn.call(
-                        Ok(Buffer::from(silence.clone())),
+                        Ok(Buffer::from(silence_out.clone())),
                         ThreadsafeFunctionCallMode::NonBlocking,
                     );
                     last_emit_at = Instant::now();
@@ -382,12 +428,21 @@ pub struct MicrophoneCapture {
     device_id: Option<String>,
     /// Holds the live CPAL stream. Recreated on each start().
     input: Option<microphone::MicrophoneStream>,
+    /// PCM rate delivered to JS after resample (NAT-043).
+    output_sample_rate: u32,
 }
 
 #[napi]
 impl MicrophoneCapture {
     #[napi(constructor)]
-    pub fn new(device_id: Option<String>) -> napi::Result<Self> {
+    pub fn new(device_id: Option<String>, output_sample_rate: Option<u32>) -> napi::Result<Self> {
+        let out_sr = output_sample_rate.unwrap_or(16_000);
+        if out_sr != 16_000 && out_sr != 24_000 {
+            return Err(napi::Error::from_reason(format!(
+                "output_sample_rate must be 16000 or 24000, got {}",
+                out_sr
+            )));
+        }
         // Eagerly create the stream to detect device errors early and read the
         // native sample rate.
         let input = match microphone::MicrophoneStream::new(device_id.clone()) {
@@ -397,8 +452,8 @@ impl MicrophoneCapture {
 
         let native_rate = input.sample_rate();
         println!(
-            "[MicrophoneCapture] Initialized. Device: {:?}, Rate: {}Hz",
-            device_id, native_rate
+            "[MicrophoneCapture] Initialized. Device: {:?}, native={}Hz, output_pcm_hz={}",
+            device_id, native_rate, out_sr
         );
 
         Ok(MicrophoneCapture {
@@ -407,12 +462,18 @@ impl MicrophoneCapture {
             sample_rate: Arc::new(AtomicU32::new(native_rate)),
             device_id,
             input: Some(input),
+            output_sample_rate: out_sr,
         })
     }
 
     #[napi]
     pub fn get_sample_rate(&self) -> u32 {
         self.sample_rate.load(Ordering::Acquire)
+    }
+
+    #[napi]
+    pub fn get_output_sample_rate(&self) -> u32 {
+        self.output_sample_rate
     }
 
     #[napi]
@@ -436,6 +497,7 @@ impl MicrophoneCapture {
 
         self.stop_signal.store(false, Ordering::SeqCst);
         let stop_signal = self.stop_signal.clone();
+        let output_sr = self.output_sample_rate;
 
         // If the stream was consumed by a previous start() cycle, recreate it.
         // This is the fix for the one-shot take_consumer() bug.
@@ -482,10 +544,26 @@ impl MicrophoneCapture {
 
             // 20ms chunks at native rate
             let chunk_size = (native_rate as usize / 1000) * 20;
+            let mut pcm_resampler = match PolyphaseResampler::new(native_rate, output_sr, chunk_size)
+            {
+                Ok(r) => r,
+                Err(e) => {
+                    eprintln!(
+                        "[MicrophoneCapture] FATAL: polyphase resampler ({}Hz → {}Hz): {}",
+                        native_rate, output_sr, e
+                    );
+                    return;
+                }
+            };
+            let silence_out = silence_pcm_le_bytes_20ms(output_sr);
+
             let mut frame_buffer: Vec<i16> = Vec::with_capacity(chunk_size * 4);
             let mut raw_batch: Vec<f32> = Vec::with_capacity(4096);
 
-            println!("[MicrophoneCapture] DSP thread started (VAD + suppression active, rate={}Hz, chunk={})", native_rate, chunk_size);
+            println!(
+                "[MicrophoneCapture] DSP thread started (VAD + suppression + resample {}→{}Hz, chunk={})",
+                native_rate, output_sr, chunk_size
+            );
 
             loop {
                 if stop_signal.load(Ordering::Relaxed) {
@@ -511,16 +589,21 @@ impl MicrophoneCapture {
 
                     match action {
                         FrameAction::Send(data) => {
-                            let bytes = i16_slice_to_le_bytes(&data);
-                            tsfn.call(
-                                Ok(Buffer::from(bytes)),
-                                ThreadsafeFunctionCallMode::NonBlocking,
-                            );
+                            match pcm_resampler.push_i16(&data) {
+                                Ok(out) if !out.is_empty() => {
+                                    let bytes = i16_slice_to_le_bytes(&out);
+                                    tsfn.call(
+                                        Ok(Buffer::from(bytes)),
+                                        ThreadsafeFunctionCallMode::NonBlocking,
+                                    );
+                                }
+                                Ok(_) => {}
+                                Err(e) => eprintln!("[MicrophoneCapture] resample: {}", e),
+                            }
                         }
                         FrameAction::SendSilence => {
-                            let silence = vec![0u8; chunk_size * 2];
                             tsfn.call(
-                                Ok(Buffer::from(silence)),
+                                Ok(Buffer::from(silence_out.clone())),
                                 ThreadsafeFunctionCallMode::NonBlocking,
                             );
                         }

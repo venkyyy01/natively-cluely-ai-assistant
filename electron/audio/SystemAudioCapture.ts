@@ -70,6 +70,20 @@ export class SystemAudioCapture extends EventEmitter {
     }
 
     /**
+     * PCM sample rate of buffers emitted on `data` (after native polyphase resample, NAT-043).
+     * Use for STT `setSampleRate`; use `getSampleRate()` for hardware/native diagnostics.
+     */
+    public getOutputSampleRate(): number {
+        if (!this.monitor && !this.ensureMonitor('probe')) {
+            return 16000;
+        }
+        if (this.monitor && typeof this.monitor.getOutputSampleRate === 'function') {
+            return this.monitor.getOutputSampleRate() as number;
+        }
+        return 16000;
+    }
+
+    /**
      * Start capturing audio
      */
     public start(): void {

@@ -168,6 +168,7 @@ export class ElevenLabsStreamingSTT extends EventEmitter {
                 // No downsampling needed
                 outputS16 = inputS16;
             } else {
+                // Legacy path: native NAT-043 resample should make inputSampleRate === 16000.
                 // Downsample from inputSampleRate (e.g. 48000) to 16000Hz
                 const downsampleFactor = this.inputSampleRate / this.targetSampleRate;
                 const outputLength = Math.floor(inputS16.length / downsampleFactor);

@@ -47,6 +47,17 @@ export class MicrophoneCapture extends EventEmitter {
     }
 
     /**
+     * PCM sample rate of buffers emitted on `data` (after native polyphase resample, NAT-043).
+     * Use this for STT `setSampleRate`; use `getSampleRate()` for hardware/native diagnostics.
+     */
+    public getOutputSampleRate(): number {
+        if (this.monitor && typeof this.monitor.getOutputSampleRate === 'function') {
+            return this.monitor.getOutputSampleRate() as number;
+        }
+        return 16000;
+    }
+
+    /**
      * Start capturing microphone audio
      */
     public start(): void {

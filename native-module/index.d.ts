@@ -22,14 +22,17 @@ export interface AudioDeviceInfo {
 export declare function getInputDevices(): Array<AudioDeviceInfo>
 export declare function getOutputDevices(): Array<AudioDeviceInfo>
 export declare class SystemAudioCapture {
-  constructor(deviceId?: string | undefined | null)
+  constructor(deviceId?: string | undefined | null, outputSampleRate?: number | undefined | null)
   getSampleRate(): number
+  /** Sample rate of PCM buffers emitted to JS (after native polyphase resample). */
+  getOutputSampleRate(): number
   start(callback: (...args: any[]) => any, onSpeechEnded?: (...args: any[]) => any | undefined | null): void
   stop(): void
 }
 export declare class MicrophoneCapture {
-  constructor(deviceId?: string | undefined | null)
+  constructor(deviceId?: string | undefined | null, outputSampleRate?: number | undefined | null)
   getSampleRate(): number
+  getOutputSampleRate(): number
   start(callback: (...args: any[]) => any, onSpeechEnded?: (...args: any[]) => any | undefined | null): void
   stop(): void
 }
