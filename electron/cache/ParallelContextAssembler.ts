@@ -145,17 +145,54 @@ export class ParallelContextAssembler {
     return this.workerCount;
   }
 
+  // NAT-015 / audit R-3: every call to `runInWorker` used to spawn a new
+  // `Worker` and never call `terminate()` on it. The worker thread does
+  // *not* auto-exit when the script body finishes because `parentPort`
+  // keeps it alive waiting for more messages, so each invocation leaked a
+  // thread (~3 per `assemble()`). The fix is to always terminate after the
+  // result arrives, succeeds, or fails. We use a `finally` to ensure the
+  // termination runs even on cancellation.
+  //
+  // TODO(EPIC-13): replace this per-call spawn with reuse via WorkerPool's
+  // long-lived worker registry. The current pool only schedules the
+  // wrapping promise, not the underlying worker, so this still spawns a
+  // worker per task.
   private runInWorker<T>(type: string, payload: any): Promise<T> {
-    return this.workerPool.submit({ lane: 'semantic', priority: 1 }, () => new Promise<T>((resolve, reject) => {
+    return this.workerPool.submit({ lane: 'semantic', priority: 1 }, async () => {
       const worker = new Worker(__filename, {
-        workerData: { type, payload }
+        workerData: { type, payload },
       });
-      worker.on('message', resolve);
-      worker.on('error', reject);
-      worker.on('exit', (code) => {
-        if (code !== 0) reject(new Error(`Worker stopped with exit code ${code}`));
-      });
-    }));
+      try {
+        return await new Promise<T>((resolve, reject) => {
+          let settled = false;
+          const settleResolve = (value: T) => {
+            if (settled) return;
+            settled = true;
+            resolve(value);
+          };
+          const settleReject = (error: unknown) => {
+            if (settled) return;
+            settled = true;
+            reject(error instanceof Error ? error : new Error(String(error)));
+          };
+          worker.on('message', settleResolve);
+          worker.on('error', settleReject);
+          worker.on('exit', (code) => {
+            if (code !== 0) settleReject(new Error(`Worker stopped with exit code ${code}`));
+          });
+        });
+      } finally {
+        // Best-effort terminate: the worker may have already exited, in
+        // which case `terminate()` resolves immediately. We swallow errors
+        // because there is nothing higher-up the stack that can act on a
+        // failed thread teardown.
+        try {
+          await worker.terminate();
+        } catch {
+          // Worker already exited; nothing to do.
+        }
+      }
+    });
   }
 
   async assemble(input: ContextAssemblyInput): Promise<ContextAssemblyOutput> {

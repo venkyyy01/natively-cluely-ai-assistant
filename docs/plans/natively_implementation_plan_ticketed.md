@@ -590,7 +590,7 @@ EPIC-19 (Mega-file decomposition)        -> last; blocks nothing
   - Will run `npm run test:soak` and visually confirm RSS plateau.
 - **Definition of done**: standard DoD.
 
-#### NAT-015 — Terminate workers in `ParallelContextAssembler`
+#### NAT-015 [x] — Terminate workers in `ParallelContextAssembler`
 
 - **Parent epic**: EPIC-03
 - **Priority**: P0
