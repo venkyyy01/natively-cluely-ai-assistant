@@ -248,6 +248,12 @@ interface ScreenshotEventRoutingResult {
   imagePaths?: string[];
 }
 
+interface StreamKnowledgeInterceptionResult {
+  introResponse?: string;
+  contextBlock?: string;
+  systemPromptInjection?: string;
+}
+
 const DEFAULT_FAST_RESPONSE_CONFIG: FastResponseConfig = {
   enabled: false,
   provider: 'groq',
@@ -1677,6 +1683,55 @@ ANSWER DIRECTLY:`;
       systemPrompt: SCREENSHOT_EVENT_PROMPT,
       imagePaths: input.forceTextFallback ? [] : input.imagePaths,
     };
+  }
+
+  private getStreamProviderCacheKey(): string {
+    return this.activeCurlProvider
+      ? `curl:${this.activeCurlProvider.id}`
+      : this.isOpenAiModel(this.currentModelId)
+        ? 'openai'
+        : this.isClaudeModel(this.currentModelId)
+          ? 'claude'
+          : this.isGroqModel(this.currentModelId)
+            ? 'groq'
+            : this.useOllama
+              ? 'ollama'
+              : 'gemini';
+  }
+
+  private async connectToProvider(abortSignal?: AbortSignal): Promise<void> {
+    throwIfAborted(abortSignal);
+    // NAT-037: keep provider pre-connect strictly non-blocking for the stream
+    // hot path. Real SDK calls establish connections lazily on first request.
+    // We intentionally avoid eager network handshakes here (especially Ollama),
+    // since they can dominate TTFT and make tests appear hung.
+    return;
+  }
+
+  private async prepareKnowledgeInterceptionForStream(message: string): Promise<StreamKnowledgeInterceptionResult | null> {
+    if (!this.knowledgeOrchestrator?.isKnowledgeMode()) {
+      return null;
+    }
+    const knowledgeResult = await this.knowledgeOrchestrator.processQuestion(message);
+    if (!knowledgeResult) {
+      return null;
+    }
+    return {
+      introResponse: knowledgeResult.isIntroQuestion ? knowledgeResult.introResponse : undefined,
+      contextBlock: knowledgeResult.contextBlock,
+      systemPromptInjection: knowledgeResult.systemPromptInjection,
+    };
+  }
+
+  public async warmStreamChatPromptCache(): Promise<void> {
+    const providerCacheKey = this.getStreamProviderCacheKey();
+    const baseSystemPrompt = HARD_SYSTEM_PROMPT;
+    await this.withSystemPromptCache(
+      providerCacheKey,
+      this.getCurrentModel(),
+      baseSystemPrompt,
+      () => this.injectLanguageInstruction(baseSystemPrompt),
+    );
   }
 
   public async chatWithGemini(message: string, imagePaths?: string[], context?: string, skipSystemPrompt: boolean = false, alternateGroqMessage?: string): Promise<string> {
@@ -3442,15 +3497,42 @@ ANSWER DIRECTLY:`;
     const preserveSystemPromptForStructuredOutput = structuredScreenshotRequest || options?.qualityTier === 'structured_reasoning';
     let screenshotRouting: ScreenshotEventRoutingResult | null = null;
     const forceTextFallback = this.shouldForceScreenshotTextFallback(imagePaths);
+    const providerCacheKey = this.getStreamProviderCacheKey();
+    const prepareStreamSystemPrompt = (prompt: string): string => (
+      prompt === SCREENSHOT_EVENT_PROMPT ? prompt : this.injectLanguageInstruction(prompt)
+    );
+    const initialBaseSystemPrompt = systemPromptOverride || HARD_SYSTEM_PROMPT;
 
-    if (hasScreenshotInput && imagePaths) {
-      screenshotRouting = await this.prepareScreenshotEventRouting({
-        message: effectiveMessage,
-        context,
-        imagePaths,
-        signal: options?.abortSignal,
-        forceTextFallback,
-      });
+    // NAT-037: start TTFT blockers concurrently — screenshot/knowledge prep,
+    // system prompt warm, and provider warmup.
+    const screenshotPrepP = hasScreenshotInput && imagePaths
+      ? this.prepareScreenshotEventRouting({
+          message: effectiveMessage,
+          context,
+          imagePaths,
+          signal: options?.abortSignal,
+          forceTextFallback,
+        })
+      : Promise.resolve(null);
+    const knowledgePrepP = (!hasScreenshotInput && !options?.skipKnowledgeInterception)
+      ? this.prepareKnowledgeInterceptionForStream(message)
+      : Promise.resolve(null);
+    const promptCacheWarmP: Promise<string | null> = this
+      .withSystemPromptCache(
+        providerCacheKey,
+        this.getCurrentModel(),
+        initialBaseSystemPrompt,
+        () => prepareStreamSystemPrompt(initialBaseSystemPrompt),
+      )
+      .catch((): string | null => null);
+    const providerConnectP = this.connectToProvider(options?.abortSignal).catch((error) => {
+      console.warn('[LLMHelper] Provider pre-connect warmup skipped:', sanitizeError(error));
+    });
+
+    if (hasScreenshotInput) {
+      screenshotRouting = await screenshotPrepP;
+    }
+    if (screenshotRouting) {
       effectiveMessage = screenshotRouting.userMessage;
       context = screenshotRouting.context;
       imagePaths = screenshotRouting.imagePaths;
@@ -3462,12 +3544,12 @@ ANSWER DIRECTLY:`;
     // ============================================================
     // KNOWLEDGE MODE INTERCEPT (Streaming)
     // ============================================================
-    if (!hasScreenshotInput && !options?.skipKnowledgeInterception && this.knowledgeOrchestrator?.isKnowledgeMode()) {
+    if (!hasScreenshotInput && !options?.skipKnowledgeInterception) {
       try {
-        const knowledgeResult = await this.knowledgeOrchestrator.processQuestion(message);
+        const knowledgeResult = await knowledgePrepP;
         if (knowledgeResult) {
           // Intro question shortcut — yield generated response directly
-          if (knowledgeResult.isIntroQuestion && knowledgeResult.introResponse) {
+          if (knowledgeResult.introResponse) {
             console.log('[LLMHelper] Knowledge mode (stream): returning generated intro response');
             yield knowledgeResult.introResponse;
             return;
@@ -3490,25 +3572,14 @@ ANSWER DIRECTLY:`;
 
     // Preparation
     const isMultimodal = !!(imagePaths?.length);
-    const providerCacheKey = this.activeCurlProvider
-      ? `curl:${this.activeCurlProvider.id}`
-      : this.isOpenAiModel(this.currentModelId)
-        ? 'openai'
-        : this.isClaudeModel(this.currentModelId)
-          ? 'claude'
-          : this.isGroqModel(this.currentModelId)
-            ? 'groq'
-            : this.useOllama
-              ? 'ollama'
-              : 'gemini';
-
     // Determine the system prompt to use
     // logic: if override provided, use it. otherwise use HARD_SYSTEM_PROMPT (which is the universal base)
     const baseSystemPrompt = systemPromptOverride || HARD_SYSTEM_PROMPT;
-    const prepareStreamSystemPrompt = (prompt: string): string => (
-      prompt === SCREENSHOT_EVENT_PROMPT ? prompt : this.injectLanguageInstruction(prompt)
-    );
-    const finalSystemPrompt = await this.withSystemPromptCache(
+    const finalSystemPrompt = (
+      baseSystemPrompt === initialBaseSystemPrompt
+        ? (await promptCacheWarmP)
+        : null
+    ) || await this.withSystemPromptCache(
       providerCacheKey,
       this.getCurrentModel(),
       baseSystemPrompt,
@@ -3524,6 +3595,7 @@ ANSWER DIRECTLY:`;
     const qualityTier: StreamQualityTier = options?.qualityTier ?? 'standard';
     const canUseFastResponse = !isMultimodal && !this.activeCurlProvider && !this.customProvider && !this.useOllama;
     const fastResponseTarget = canUseFastResponse ? this.getActiveFastResponseTarget(qualityTier) : null;
+    await providerConnectP;
     if (fastResponseTarget) {
       console.log(`[LLMHelper] ⚡️ Fast Response Mode Active (Streaming). Routing to ${fastResponseTarget.provider} (${fastResponseTarget.model})...`);
       try {

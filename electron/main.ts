@@ -3452,6 +3452,14 @@ async function initializeApp() {
 
   // Explicitly load credentials into helpers
   appState.processingHelper.loadStoredCredentials();
+  // NAT-037: warm stream prompt cache at startup so first user request
+  // doesn't pay prompt-cache build cost on the TTFT-critical path.
+  void appState.processingHelper
+    .getLLMHelper()
+    .warmStreamChatPromptCache()
+    .catch((error: unknown) => {
+      console.warn('[Init] Stream prompt cache warmup skipped:', error);
+    });
 
   // Initialize IPC handlers before window creation
   initializeIpcHandlers(appState)
