@@ -17,7 +17,7 @@ import {
   LegacyIntentProvider,
   type CoordinatedIntentResult,
 } from './llm/providers';
-import { ConsciousContextComposer, ConsciousIntentService, ConsciousOrchestrator, ConsciousPreparationCoordinator, ConsciousResponseCoordinator, ConsciousVerifier, ConsciousVerifierLLM, FallbackExecutor, sanitizeProfileData } from './conscious';
+import { ConsciousContextComposer, ConsciousIntentService, ConsciousOrchestrator, ConsciousPreparationCoordinator, ConsciousResponseCoordinator, ConsciousVerifier, ConsciousVerifierLLM, FallbackExecutor, ResponseFingerprinter, sanitizeProfileData } from './conscious';
 import { ParallelContextAssembler, ContextAssemblyInput, ContextAssemblyOutput } from './cache/ParallelContextAssembler';
 import { getOptimizationFlags, isOptimizationActive } from './config/optimizations';
 import { AnswerLatencyTracker, AnswerRoute } from './latency/AnswerLatencyTracker';
@@ -138,6 +138,12 @@ export class IntelligenceEngine extends EventEmitter {
   private consciousContextComposer: ConsciousContextComposer;
   private consciousIntentService: ConsciousIntentService;
   private consciousPreparationCoordinator: ConsciousPreparationCoordinator;
+  // NAT-048: a single ResponseFingerprinter is shared across every
+  // ConsciousResponseCoordinator instance for the lifetime of the active
+  // session, so that duplicate detection sees the prior turn's answer.
+  // Recreated alongside the other conscious-mode singletons on
+  // setSessionTracker so cross-session bleed is impossible.
+  private consciousResponseFingerprinter: ResponseFingerprinter = new ResponseFingerprinter();
 
   // Parallel context assembler for acceleration
   private parallelContextAssembler: ParallelContextAssembler | null = null;
@@ -380,13 +386,25 @@ export class IntelligenceEngine extends EventEmitter {
             this.consciousContextComposer,
             this.consciousIntentService,
         );
+        // NAT-048: clear fingerprint history on session switch — answers
+        // emitted to a previous user must not suppress identical-looking
+        // answers in a fresh session (different person, different question
+        // context). The instance itself is reused (rather than reallocated)
+        // so any references stored elsewhere remain valid.
+        this.consciousResponseFingerprinter.clear();
         if (this.recapLLM) {
             this.session.setRecapLLM(this.recapLLM);
         }
     }
 
     private getConsciousResponseCoordinator(): ConsciousResponseCoordinator {
-        return new ConsciousResponseCoordinator(this.session, this.latencyTracker, this, this.setMode.bind(this));
+        return new ConsciousResponseCoordinator(
+            this.session,
+            this.latencyTracker,
+            this,
+            this.setMode.bind(this),
+            this.consciousResponseFingerprinter,
+        );
     }
 
     private shouldRequireConsciousJudge(): boolean {

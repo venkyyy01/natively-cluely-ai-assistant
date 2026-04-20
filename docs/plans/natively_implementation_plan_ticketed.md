@@ -1318,25 +1318,31 @@ EPIC-19 (Mega-file decomposition)        -> last; blocks nothing
   - Re-ran `npx tsc -p electron/tsconfig.json --noEmit` → clean.
   - Re-ran the affected test files → 15/15 pass (6 new NAT-047 + 4 existing `llm-validation` + 5 existing `llm-integration`, including the `LLM Integration Tests` suite for `generateSuggestion`, which exercises the same code path).
 
-#### NAT-048 — Wire `ResponseFingerprinter` into `ConsciousResponseCoordinator`
+#### NAT-048 [x] — Wire `ResponseFingerprinter` into `ConsciousResponseCoordinator`
 
 - **Parent epic**: EPIC-08
 - **Priority**: P2
 - **Type**: feature
 - **Original finding**: open question from sub-agent B
-- **Goal**: Duplicate response detection will be enforced at emit time.
-- **Affected files**: `electron/conscious/ResponseFingerprint.ts` (lines 14–70), `electron/conscious/ConsciousResponseCoordinator.ts`, `electron/conscious/index.ts`.
-- **Dependencies**: NAT-008
-- **Implementation steps**:
-  1. Will instantiate `ResponseFingerprinter` in `ConsciousResponseCoordinator`.
-  2. Will check fingerprint before emitting a final response; on near-duplicate within session, downgrade to a `clarification_answer` shape or skip.
-  3. Will export the fingerprinter through `electron/conscious/index.ts` for tests.
+- **Goal**: Duplicate response detection is now enforced at emit time. Identical and near-identical consecutive answers within a session are suppressed before any tokens, final emit, session append, or usage push happens.
+- **Affected files**: `electron/conscious/ConsciousResponseCoordinator.ts` (optional fingerprinter ctor param + suppression branch + post-emit `record()`); `electron/IntelligenceEngine.ts` (session-scoped `consciousResponseFingerprinter` field, threaded through `getConsciousResponseCoordinator`, cleared on `setSession`); `electron/tests/responseFingerprintDedup.test.ts` (new). `ResponseFingerprinter` itself is unchanged — already exported by `electron/conscious/index.ts`.
+- **Dependencies**: NAT-008 (fingerprinter exists).
+- **Implementation notes**:
+  1. **Optional injection** keeps backward compatibility: existing 4-arg constructor calls (the unit test in `consciousResponseCoordinator.test.ts`) work unchanged. When the engine constructs a coordinator, it now passes the long-lived session-scoped fingerprinter.
+  2. **Check before emit, record after emit**: the duplicate check fires *before* `setMode('reasoning_first')` so a suppressed duplicate never leaks a partial UI/mode state. The fingerprint is recorded *after* the emit so a downstream exception during emission doesn't permanently mark the answer as "seen" and suppress legitimate retries.
+  3. **Hard suppression** (vs. soft downgrade): on duplicate we skip token stream, final emit, session append, usage push, and tracker completion; we mark a `response.duplicate_suppressed` latency tag for observability and drop straight back to `idle`. Rationale rejected the "downgrade to clarification" path because emitting a templated "I already covered that" requires a new LLM call or canned-string library, both of which are out of scope and add a worse failure mode (spurious clarifications when the duplicate detection false-positives).
+  4. **Session-scoped lifetime**: a single `ResponseFingerprinter` instance lives on `IntelligenceEngine` and is `clear()`-ed on `setSession()`. Two reasons it's not reallocated: (a) the same instance is referenced by every coordinator the engine builds during the session — reallocating would only correctly wipe state if every coordinator was also reallocated; (b) `clear()` is the correct primitive — the fingerprinter is a pure cache and zero-arg recreation has no value over `clear()`.
+  5. **Latency tracker stays in-flight on suppression**: we deliberately do *not* call `latencyTracker.complete()` for a suppressed duplicate. This makes the suppression visible in the latency snapshot (the request shows up as in-flight + tagged) rather than misleadingly recording a phantom completion at zero duration.
 - **Acceptance criteria**:
-  - [ ] Two near-duplicate consecutive answers result in a single emission.
+  - [x] Two identical consecutive answers result in a single emission (`NAT-048: identical consecutive answers result in a single emission`).
+  - [x] Near-duplicates sharing a long enough first sentence are also suppressed (`NAT-048: near-duplicate (same first sentence) is also suppressed`).
+  - [x] Distinct answers are both emitted (no false positives) (`NAT-048: distinct answers are both emitted`).
+  - [x] Backward compatible: no fingerprinter ⇒ legacy behavior, no suppression (`NAT-048: with no fingerprinter injected, behavior matches the legacy contract`).
+  - [x] Session-switch via `clear()` re-allows previously-seen answers (`NAT-048: clearing the fingerprinter (e.g. on session switch) re-allows previously-seen answers`).
 - **Validation**:
-  - Will add `electron/tests/responseFingerprintDedup.test.ts`.
-  - Will run `npm run test:electron`.
-- **Definition of done**: standard DoD.
+  - `npx tsc -p electron/tsconfig.json` — clean.
+  - 5 new NAT-048 tests + the existing `consciousResponseCoordinator` test all pass; full electron suite green (854 / 850 pass / 4 skipped, 0 fail).
+- **Definition of done**: met.
 
 #### NAT-049 — Cap or background speculative finalize wait [x]
 
