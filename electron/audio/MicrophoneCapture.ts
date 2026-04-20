@@ -71,19 +71,28 @@ export class MicrophoneCapture extends EventEmitter {
         try {
             console.log('[MicrophoneCapture] Starting native capture...');
 
-            this.monitor.start((first: Uint8Array | null, second?: Uint8Array) => {
-                // napi-rs ThreadsafeFunction payloads can arrive as either `(chunk)` or
-                // `(err, chunk)` depending on the native ErrorStrategy. Support both.
+            this.monitor.start((first: Uint8Array | Error | null, second?: Uint8Array) => {
+                // napi-rs ThreadsafeFunction (CalleeHandled) invokes us as
+                // `(err, value)`. A panic inside the Rust DSP thread is now
+                // surfaced as `(Error, undefined)` instead of aborting the
+                // host process — emit it as a typed error so the existing
+                // recovery loop in `handleAudioCaptureError` re-runs the
+                // audio pipeline (and through it, STTReconnector).
+                if (first instanceof Error) {
+                    const panicErr = new Error(`audio_thread_panic: ${first.message}`);
+                    (panicErr as Error & { code?: string }).code = 'AUDIO_THREAD_PANIC';
+                    console.error('[MicrophoneCapture] Native DSP thread panicked:', first);
+                    this.emit('error', panicErr);
+                    return;
+                }
                 const chunk = second ?? first;
                 if (chunk && chunk.length > 0) {
-                    // Debug: log occasionally
                     if (Math.random() < 0.05) {
                         console.log(`[MicrophoneCapture] Emitting chunk: ${chunk.length} bytes to JS`);
                     }
                     this.emit('data', Buffer.from(chunk));
                 }
             }, () => {
-                // Speech-ended callback from Rust SilenceSuppressor
                 this.emit('speech_ended');
             });
 

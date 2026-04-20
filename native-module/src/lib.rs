@@ -3,6 +3,8 @@
 #[macro_use]
 extern crate napi_derive;
 
+use std::any::Any;
+use std::panic::AssertUnwindSafe;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
 use std::sync::mpsc;
@@ -38,6 +40,34 @@ fn i16_slice_to_le_bytes(samples: &[i16]) -> Vec<u8> {
     bytes
 }
 
+/// Convert a panic payload (as returned by `catch_unwind`) into a printable string.
+/// Matches the shapes most commonly produced by `panic!()` and `assert!()`.
+fn panic_payload_to_string(payload: Box<dyn Any + Send>) -> String {
+    if let Some(s) = payload.downcast_ref::<&'static str>() {
+        return (*s).to_string();
+    }
+    if let Some(s) = payload.downcast_ref::<String>() {
+        return s.clone();
+    }
+    "unknown panic payload".to_string()
+}
+
+/// Run a closure under `catch_unwind`. On panic, returns Err(message). On success, returns Ok(()).
+/// `label` is used purely for the error log written to stderr when a panic is caught.
+fn run_dsp_thread_body<F>(label: &str, body: F) -> std::result::Result<(), String>
+where
+    F: FnOnce(),
+{
+    match std::panic::catch_unwind(AssertUnwindSafe(body)) {
+        Ok(()) => Ok(()),
+        Err(payload) => {
+            let msg = panic_payload_to_string(payload);
+            eprintln!("[{}] DSP thread panicked: {}", label, msg);
+            Err(msg)
+        }
+    }
+}
+
 fn join_thread_with_timeout(handle: thread::JoinHandle<()>, timeout: Duration, label: &str) {
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || {
@@ -57,7 +87,9 @@ fn join_thread_with_timeout(handle: thread::JoinHandle<()>, timeout: Duration, l
 
 #[cfg(test)]
 mod tests {
-    use super::join_thread_with_timeout;
+    use super::{join_thread_with_timeout, panic_payload_to_string, run_dsp_thread_body};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
     use std::thread;
     use std::time::Duration;
 
@@ -72,6 +104,55 @@ mod tests {
         let handle = thread::spawn(|| thread::sleep(Duration::from_millis(100)));
         join_thread_with_timeout(handle, Duration::from_millis(1), "test");
         thread::sleep(Duration::from_millis(120));
+    }
+
+    #[test]
+    fn panic_payload_to_string_handles_str_literals() {
+        let payload: Box<dyn std::any::Any + Send> = Box::new("boom");
+        assert_eq!(panic_payload_to_string(payload), "boom");
+    }
+
+    #[test]
+    fn panic_payload_to_string_handles_string() {
+        let payload: Box<dyn std::any::Any + Send> = Box::new(String::from("kaboom"));
+        assert_eq!(panic_payload_to_string(payload), "kaboom");
+    }
+
+    #[test]
+    fn run_dsp_thread_body_returns_ok_on_clean_exit() {
+        let result = run_dsp_thread_body("clean", || {
+            // do nothing — simulates a normal DSP shutdown.
+        });
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn run_dsp_thread_body_catches_panic_and_returns_message() {
+        let result = run_dsp_thread_body("panicker", || panic!("simulated audio thread panic"));
+        match result {
+            Ok(()) => panic!("expected panic to be caught"),
+            Err(msg) => assert!(
+                msg.contains("simulated audio thread panic"),
+                "unexpected panic message: {msg}"
+            ),
+        }
+    }
+
+    #[test]
+    fn run_dsp_thread_body_panic_does_not_abort_process() {
+        // Spawn a worker thread that panics inside the boundary. If the panic
+        // boundary is missing, this test would terminate the process. The
+        // assertion below proves the panic was contained and observable.
+        let observed = Arc::new(AtomicBool::new(false));
+        let observed_clone = observed.clone();
+        let handle = thread::spawn(move || {
+            let result = run_dsp_thread_body("worker", || panic!("from inside worker"));
+            if result.is_err() {
+                observed_clone.store(true, Ordering::SeqCst);
+            }
+        });
+        handle.join().expect("worker thread should not abort process");
+        assert!(observed.load(Ordering::SeqCst), "panic boundary should report Err");
     }
 }
 
@@ -116,12 +197,15 @@ impl SystemAudioCapture {
         callback: JsFunction,
         on_speech_ended: Option<JsFunction>,
     ) -> napi::Result<()> {
-        // Zero-copy: TSFN sends Buffer (Uint8Array) directly — no V8 Array allocation
-        let tsfn: ThreadsafeFunction<Buffer, ErrorStrategy::Fatal> =
+        // CalleeHandled: a thrown JS callback won't abort the host process.
+        // The JS side already supports both `(chunk)` and `(err, chunk)` arities.
+        let tsfn: ThreadsafeFunction<Buffer, ErrorStrategy::CalleeHandled> =
             callback.create_threadsafe_function(0, |ctx| Ok(vec![ctx.value]))?;
+        // Cloned handle reserved for delivering an `audio_thread_panic` event
+        // to JS if the DSP thread panics.
+        let tsfn_for_panic = tsfn.clone();
 
-        // Optional speech-ended callback
-        let speech_ended_tsfn: Option<ThreadsafeFunction<bool, ErrorStrategy::Fatal>> =
+        let speech_ended_tsfn: Option<ThreadsafeFunction<bool, ErrorStrategy::CalleeHandled>> =
             match on_speech_ended {
                 Some(f) => Some(f.create_threadsafe_function(0, |ctx| Ok(vec![ctx.value]))?),
                 None => None,
@@ -135,6 +219,7 @@ impl SystemAudioCapture {
         // ★ ALL init + DSP runs in background thread — start() returns INSTANTLY
         // This prevents the 5-7 second main-thread block from SCK initialization.
         self.capture_thread = Some(thread::spawn(move || {
+            let dsp_body = move || {
             // 1. SCK Init (takes 5-7 seconds — runs OFF main thread)
             println!("[SystemAudioCapture] Background init starting...");
             let input = match speaker::SpeakerInput::new(device_id) {
@@ -212,12 +297,15 @@ impl SystemAudioCapture {
                     match action {
                         FrameAction::Send(data) => {
                             let bytes = i16_slice_to_le_bytes(&data);
-                            tsfn.call(Buffer::from(bytes), ThreadsafeFunctionCallMode::NonBlocking);
+                            tsfn.call(
+                                Ok(Buffer::from(bytes)),
+                                ThreadsafeFunctionCallMode::NonBlocking,
+                            );
                             last_emit_at = Instant::now();
                         }
                         FrameAction::SendSilence => {
                             tsfn.call(
-                                Buffer::from(silence.clone()),
+                                Ok(Buffer::from(silence.clone())),
                                 ThreadsafeFunctionCallMode::NonBlocking,
                             );
                             last_emit_at = Instant::now();
@@ -227,10 +315,9 @@ impl SystemAudioCapture {
                         }
                     }
 
-                    // Fire speech_ended callback on the exact transition frame
                     if speech_ended {
                         if let Some(ref se_tsfn) = speech_ended_tsfn {
-                            se_tsfn.call(true, ThreadsafeFunctionCallMode::NonBlocking);
+                            se_tsfn.call(Ok(true), ThreadsafeFunctionCallMode::NonBlocking);
                         }
                     }
                 }
@@ -240,18 +327,29 @@ impl SystemAudioCapture {
                     && last_emit_at.elapsed() >= Duration::from_millis(100)
                 {
                     tsfn.call(
-                        Buffer::from(silence.clone()),
+                        Ok(Buffer::from(silence.clone())),
                         ThreadsafeFunctionCallMode::NonBlocking,
                     );
                     last_emit_at = Instant::now();
                 }
 
-                // Keep the sleep small so we quickly read the ring buffer
                 thread::sleep(Duration::from_millis(DSP_POLL_MS));
             }
 
             println!("[SystemAudioCapture] DSP thread stopped.");
             // stream is dropped here → SpeakerStream::Drop calls stop_with_ch
+            };
+
+            // Run the DSP body under a panic boundary so a fault in audio
+            // processing surfaces as a typed event to JS instead of aborting
+            // the Electron process.
+            if let Err(panic_msg) = run_dsp_thread_body("SystemAudioCapture", dsp_body) {
+                let err = napi::Error::new(
+                    napi::Status::GenericFailure,
+                    format!("audio_thread_panic: {}", panic_msg),
+                );
+                tsfn_for_panic.call(Err(err), ThreadsafeFunctionCallMode::NonBlocking);
+            }
         }));
 
         Ok(())
@@ -323,12 +421,14 @@ impl MicrophoneCapture {
         callback: JsFunction,
         on_speech_ended: Option<JsFunction>,
     ) -> napi::Result<()> {
-        // Zero-copy: TSFN sends Buffer (Uint8Array) directly
-        let tsfn: ThreadsafeFunction<Buffer, ErrorStrategy::Fatal> =
+        // CalleeHandled so a JS-side throw doesn't abort the host process.
+        let tsfn: ThreadsafeFunction<Buffer, ErrorStrategy::CalleeHandled> =
             callback.create_threadsafe_function(0, |ctx| Ok(vec![ctx.value]))?;
+        // Cloned handle reserved for delivering an `audio_thread_panic` event
+        // to JS if the DSP thread panics.
+        let tsfn_for_panic = tsfn.clone();
 
-        // Optional speech-ended callback
-        let speech_ended_tsfn: Option<ThreadsafeFunction<bool, ErrorStrategy::Fatal>> =
+        let speech_ended_tsfn: Option<ThreadsafeFunction<bool, ErrorStrategy::CalleeHandled>> =
             match on_speech_ended {
                 Some(f) => Some(f.create_threadsafe_function(0, |ctx| Ok(vec![ctx.value]))?),
                 None => None,
@@ -374,6 +474,7 @@ impl MicrophoneCapture {
 
         // DSP thread with silence suppression + WebRTC VAD
         self.capture_thread = Some(thread::spawn(move || {
+            let dsp_body = move || {
             let mut suppressor = SilenceSuppressor::new(SilenceSuppressionConfig {
                 native_sample_rate: native_rate,
                 ..SilenceSuppressionConfig::for_microphone()
@@ -391,12 +492,10 @@ impl MicrophoneCapture {
                     break;
                 }
 
-                // 1. Drain ALL available samples from ring buffer (lock-free)
                 while let Some(sample) = consumer.try_pop() {
                     raw_batch.push(sample);
                 }
 
-                // 2. Convert f32 -> i16 at native sample rate
                 if !raw_batch.is_empty() {
                     for &f in &raw_batch {
                         let scaled = (f * 32767.0).clamp(-32768.0, 32767.0);
@@ -405,7 +504,6 @@ impl MicrophoneCapture {
                     raw_batch.clear();
                 }
 
-                // 3. Process in 20ms chunks through the two-stage gate
                 while frame_buffer.len() >= chunk_size {
                     let frame: Vec<i16> = frame_buffer.drain(0..chunk_size).collect();
 
@@ -414,12 +512,15 @@ impl MicrophoneCapture {
                     match action {
                         FrameAction::Send(data) => {
                             let bytes = i16_slice_to_le_bytes(&data);
-                            tsfn.call(Buffer::from(bytes), ThreadsafeFunctionCallMode::NonBlocking);
+                            tsfn.call(
+                                Ok(Buffer::from(bytes)),
+                                ThreadsafeFunctionCallMode::NonBlocking,
+                            );
                         }
                         FrameAction::SendSilence => {
                             let silence = vec![0u8; chunk_size * 2];
                             tsfn.call(
-                                Buffer::from(silence),
+                                Ok(Buffer::from(silence)),
                                 ThreadsafeFunctionCallMode::NonBlocking,
                             );
                         }
@@ -430,16 +531,27 @@ impl MicrophoneCapture {
 
                     if speech_ended {
                         if let Some(ref se_tsfn) = speech_ended_tsfn {
-                            se_tsfn.call(true, ThreadsafeFunctionCallMode::NonBlocking);
+                            se_tsfn.call(Ok(true), ThreadsafeFunctionCallMode::NonBlocking);
                         }
                     }
                 }
 
-                // 4. Short sleep
                 thread::sleep(Duration::from_millis(DSP_POLL_MS));
             }
 
             println!("[MicrophoneCapture] DSP thread stopped.");
+            };
+
+            // Run the DSP body under a panic boundary so a fault in audio
+            // processing surfaces as a typed event to JS instead of aborting
+            // the Electron process.
+            if let Err(panic_msg) = run_dsp_thread_body("MicrophoneCapture", dsp_body) {
+                let err = napi::Error::new(
+                    napi::Status::GenericFailure,
+                    format!("audio_thread_panic: {}", panic_msg),
+                );
+                tsfn_for_panic.call(Err(err), ThreadsafeFunctionCallMode::NonBlocking);
+            }
         }));
 
         Ok(())

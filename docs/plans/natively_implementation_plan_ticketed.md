@@ -630,7 +630,7 @@ EPIC-19 (Mega-file decomposition)        -> last; blocks nothing
   - Will run `npm run test:electron`.
 - **Definition of done**: standard DoD.
 
-#### NAT-017 — Switch native module ThreadsafeFunction to `NonFatal` and add panic boundary
+#### NAT-017 [x] — Switch native module ThreadsafeFunction to `NonFatal` and add panic boundary
 
 - **Parent epic**: EPIC-03
 - **Priority**: P0
