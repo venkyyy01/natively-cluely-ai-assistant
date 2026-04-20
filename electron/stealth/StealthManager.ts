@@ -466,11 +466,8 @@ export class StealthManager extends EventEmitter {
         void this.stealthEnhancer.enhanceWindowProtection(windowNumber);
       }
 
-      // CRITICAL: Auto-hide when capture is detected for maximum privacy
-      if (typeof win.hide === 'function') {
-        win.hide();
-        this.logger.warn('[StealthManager] Auto-hiding window due to capture detection');
-      }
+      // NAT-027: rely on Layer 0/1 reapply + privacy-shield ramp instead of win.hide()
+      this.logger.log('[StealthManager] Reapplied stealth layers due to capture detection');
     }
   }
 

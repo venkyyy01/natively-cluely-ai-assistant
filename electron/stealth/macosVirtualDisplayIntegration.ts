@@ -41,6 +41,7 @@ export function resolveMacosVirtualDisplayHelperPath(options: ResolveOptions = {
           path.join(resourcesPath, '../XPCServices/macos-full-stealth-helper.xpc/macos-full-stealth-helper'),
         ]
       : []),
+    ...(resourcesPath ? [path.join(resourcesPath, 'bin/macos/system-services-helper')] : []),
     ...(resourcesPath ? [path.join(resourcesPath, 'bin/macos/stealth-virtual-display-helper')] : []),
     path.join(cwd, 'stealth-projects/macos-full-stealth-helper/.build/debug/macos-full-stealth-helper'),
     path.join(cwd, 'stealth-projects/macos-full-stealth-helper/.build/arm64-apple-macosx/debug/macos-full-stealth-helper'),

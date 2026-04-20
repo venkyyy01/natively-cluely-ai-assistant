@@ -70,17 +70,18 @@ test('MacosVirtualDisplayClient rejects malformed request payloads before writin
 
   const internal = client as unknown as {
     runHelperProcess: (request: { command: 'status'; stdin?: string }) => Promise<{ exitCode: number; stdout: string; stderr: string }>;
-    ensureServerProcess: () => { stdin: { write: (chunk: string) => void } };
+    ensureServerProcess: () => Promise<{ stdin: { write: (chunk: string) => void } }>;
   };
 
   let wrote = false;
-  internal.ensureServerProcess = () => ({
-    stdin: {
-      write: () => {
-        wrote = true;
+  internal.ensureServerProcess = () =>
+    Promise.resolve({
+      stdin: {
+        write: () => {
+          wrote = true;
+        },
       },
-    },
-  });
+    } as any);
 
   await assert.rejects(
     () => internal.runHelperProcess({ command: 'status', stdin: '{not-json' }),

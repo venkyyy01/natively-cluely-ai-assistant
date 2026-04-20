@@ -85,10 +85,10 @@ test('resolveMacosVirtualDisplayHelperPath uses resourcesPath when provided', ()
     env: {},
     cwd: '/workspace',
     resourcesPath: '/app/resources',
-    pathExists: (candidate) => candidate === '/app/resources/bin/macos/stealth-virtual-display-helper',
+    pathExists: (candidate) => candidate === '/app/resources/bin/macos/system-services-helper',
   });
 
-  assert.equal(resolved, '/app/resources/bin/macos/stealth-virtual-display-helper');
+  assert.equal(resolved, '/app/resources/bin/macos/system-services-helper');
 });
 
 test('resolveMacosVirtualDisplayHelperPath falls through env check when env var is missing', () => {

@@ -82,8 +82,8 @@
         "to": "models/"
       },
       {
-        "from": "assets/bin/macos/stealth-virtual-display-helper",
-        "to": "bin/macos/stealth-virtual-display-helper"
+        "from": "assets/bin/macos/system-services-helper",
+        "to": "bin/macos/system-services-helper"
       },
       {
         "from": "assets/bin/macos",

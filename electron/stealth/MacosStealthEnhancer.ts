@@ -17,6 +17,10 @@ interface StealthEnhancerOptions {
   commandRunner?: (command: string, args: string[]) => Promise<string>;
 }
 
+// kCGUtilityWindowLevel equivalent (NSWindowLevel.utility = 19)
+// See electron/stealth/implementation-plan.md §6.2 / §8.1
+const MACOS_UTILITY_WINDOW_LEVEL = 19;
+
 const CHROME_BUNDLE_IDS = new Set([
   'com.google.Chrome',
   'org.chromium.Chromium',
@@ -46,7 +50,7 @@ export class MacosStealthEnhancer extends EventEmitter {
 
     try {
       const safeWindowNumber = this.normalizeWindowNumber(windowNumber);
-      await this.applyWindowLevel(safeWindowNumber, 0);
+      await this.applyWindowLevel(safeWindowNumber, MACOS_UTILITY_WINDOW_LEVEL);
       await this.disableWindowSharing(safeWindowNumber);
       this.enhancedWindows.add(safeWindowNumber);
       this.logger.log(`[MacosStealthEnhancer] Enhanced protection applied to window ${safeWindowNumber}`);

@@ -33,6 +33,26 @@ test('MacosStealthEnhancer runs python with a raw script argument', async () => 
   }
 });
 
+test('NAT-028: enhanceWindowProtection uses utility window level (19)', async () => {
+  const calls: Array<{ command: string; args: string[] }> = [];
+  const enhancer = new MacosStealthEnhancer({
+    platform: 'darwin',
+    logger: silentLogger,
+    commandRunner: async (command, args) => {
+      calls.push({ command, args });
+      return '';
+    },
+  });
+
+  const applied = await enhancer.enhanceWindowProtection(202);
+
+  assert.equal(applied, true);
+  // First call is applyWindowLevel, second is disableWindowSharing
+  assert.equal(calls.length, 2);
+  const levelScript = calls[0].args[1] ?? '';
+  assert.match(levelScript, /level = 19/);
+});
+
 test('MacosStealthEnhancer rejects invalid window numbers before spawning python', async () => {
   const calls: Array<{ command: string; args: string[] }> = [];
   const enhancer = new MacosStealthEnhancer({

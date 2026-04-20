@@ -1,5 +1,7 @@
-import { spawn } from 'node:child_process';
+import { spawn, execFile } from 'node:child_process';
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
+import { EventEmitter } from 'events';
+import { randomUUID } from 'node:crypto';
 import type {
   MacosLayer3CapabilityReport,
   MacosLayer3CreateProtectedSessionRequest,
@@ -12,6 +14,16 @@ import type {
   MacosLayer3TelemetryEvent,
   MacosLayer3ValidationReport,
 } from './separateProjectContracts';
+
+function pickEnv(allowList: string[], source: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const picked: NodeJS.ProcessEnv = {};
+  for (const key of allowList) {
+    if (source[key] !== undefined) {
+      picked[key] = source[key];
+    }
+  }
+  return picked;
+}
 
 export interface MacosVirtualDisplayStatus {
   ready: boolean;
@@ -73,13 +85,15 @@ interface MacosVirtualDisplayClientOptions {
   requestTimeoutMs?: number;
   helperEnv?: NodeJS.ProcessEnv;
   eventHandler?: (event: MacosVirtualDisplayHelperEvent) => void;
+  skipSignatureVerification?: boolean;
 }
 
-export class MacosVirtualDisplayClient {
+export class MacosVirtualDisplayClient extends EventEmitter {
   private readonly helperPath: string;
   private readonly runHelper: (request: HelperRunRequest) => Promise<HelperRunResult>;
   private readonly requestTimeoutMs: number;
   private readonly helperEnv: NodeJS.ProcessEnv;
+  private readonly skipSignatureVerification: boolean;
   private eventHandler?: (event: MacosVirtualDisplayHelperEvent) => void;
   private serverProcess: ChildProcessWithoutNullStreams | null = null;
   private requestSequence = 0;
@@ -88,13 +102,20 @@ export class MacosVirtualDisplayClient {
   private stdoutBuffer = '';
   private respawnTimestamps: number[] = [];
   private readonly MAX_RESPAWNS_PER_MINUTE = 3;
+  private readonly nonce: string;
 
   constructor(options: MacosVirtualDisplayClientOptions) {
+    super();
     this.helperPath = options.helperPath;
     this.runHelper = options.runHelper ?? ((request) => this.runHelperProcess(request));
     this.requestTimeoutMs = options.requestTimeoutMs ?? 10000;
-    this.helperEnv = options.helperEnv ?? process.env;
+    this.helperEnv = pickEnv(
+      ['PATH', 'HOME', 'TMPDIR', 'FULL_STEALTH_HEARTBEAT_TIMEOUT_MS', 'STEALTH_VIRTUAL_DISPLAY_STATE_PATH'],
+      options.helperEnv ?? process.env
+    );
     this.eventHandler = options.eventHandler;
+    this.skipSignatureVerification = options.skipSignatureVerification ?? false;
+    this.nonce = randomUUID();
   }
 
   setEventHandler(handler?: (event: MacosVirtualDisplayHelperEvent) => void): void {
@@ -199,7 +220,11 @@ export class MacosVirtualDisplayClient {
     const now = Date.now();
     const oneMinuteAgo = now - 60000;
     this.respawnTimestamps = this.respawnTimestamps.filter((t) => t > oneMinuteAgo);
-    return this.respawnTimestamps.length >= this.MAX_RESPAWNS_PER_MINUTE;
+    const exhausted = this.respawnTimestamps.length >= this.MAX_RESPAWNS_PER_MINUTE;
+    if (exhausted) {
+      this.emit('stealth:helper_dead');
+    }
+    return exhausted;
   }
 
   private async executeJsonCommand<T>(request: HelperRunRequest): Promise<T> {
@@ -218,39 +243,49 @@ export class MacosVirtualDisplayClient {
 
   private runHelperProcess(request: HelperRunRequest): Promise<HelperRunResult> {
     return new Promise((resolve, reject) => {
-      const child = this.ensureServerProcess();
-      const id = `req-${++this.requestSequence}`;
-      const timeout = setTimeout(() => {
-        this.pending.delete(id);
-        this.expiredRequestIds.add(id);
-        reject(new Error(`macOS virtual display helper request timed out: ${request.command}`));
-      }, this.requestTimeoutMs);
-      this.pending.set(id, { resolve, reject, timeout });
-
-      let payload: Record<string, unknown> = {};
-      if (request.stdin) {
-        try {
-          payload = JSON.parse(request.stdin) as Record<string, unknown>;
-        } catch (error) {
+      this.ensureServerProcess().then((child) => {
+        const id = `req-${++this.requestSequence}`;
+        const timeout = setTimeout(() => {
           this.pending.delete(id);
-          clearTimeout(timeout);
-          const message = error instanceof Error ? error.message : String(error);
-          reject(new Error(`macOS virtual display helper request payload for ${request.command} was not valid JSON: ${message}`));
-          return;
-        }
-      }
+          this.expiredRequestIds.add(id);
+          reject(new Error(`macOS virtual display helper request timed out: ${request.command}`));
+        }, this.requestTimeoutMs);
+        this.pending.set(id, { resolve, reject, timeout });
 
-      child.stdin.write(`${JSON.stringify({ id, command: request.command, ...payload })}\n`);
+        let payload: Record<string, unknown> = {};
+        if (request.stdin) {
+          try {
+            payload = JSON.parse(request.stdin) as Record<string, unknown>;
+          } catch (error) {
+            this.pending.delete(id);
+            clearTimeout(timeout);
+            const message = error instanceof Error ? error.message : String(error);
+            reject(new Error(`macOS virtual display helper request payload for ${request.command} was not valid JSON: ${message}`));
+            return;
+          }
+        }
+
+        child.stdin.write(`${JSON.stringify({ id, command: request.command, nonce: this.nonce, ...payload })}
+`);
+      }).catch(reject);
     });
   }
 
-  private ensureServerProcess(): ChildProcessWithoutNullStreams {
+  private async ensureServerProcess(): Promise<ChildProcessWithoutNullStreams> {
     if (this.serverProcess) {
       return this.serverProcess;
     }
 
     if (this.isExhausted()) {
       throw new Error('macOS virtual display helper client exhausted respawns');
+    }
+
+    if (process.platform === 'darwin' && !this.skipSignatureVerification) {
+      const signatureValid = await this.verifyHelperSignature(this.helperPath);
+      if (!signatureValid) {
+        this.emit('stealth:helper_signature_failed');
+        throw new Error('macOS virtual display helper signature verification failed');
+      }
     }
 
     this.respawnTimestamps.push(Date.now());
@@ -290,6 +325,14 @@ export class MacosVirtualDisplayClient {
     return child;
   }
 
+  private async verifyHelperSignature(path: string): Promise<boolean> {
+    return new Promise((resolve) => {
+      execFile('codesign', ['--verify', '--deep', '--strict', path], (error) => {
+        resolve(error === null);
+      });
+    });
+  }
+
   private flushServerResponses(): void {
     let newlineIndex = this.stdoutBuffer.indexOf('\n');
     while (newlineIndex >= 0) {
@@ -306,7 +349,15 @@ export class MacosVirtualDisplayClient {
             sessionId?: string;
             reason?: string;
             failClosed?: boolean;
+            nonce?: string;
           };
+
+          if (envelope.nonce !== undefined && envelope.nonce !== this.nonce) {
+            console.warn('[MacosVirtualDisplayClient] Response nonce mismatch; dropping line');
+            newlineIndex = this.stdoutBuffer.indexOf('\n');
+            continue;
+          }
+
           if (envelope.event === 'helper-fault' && typeof envelope.sessionId === 'string' && typeof envelope.reason === 'string') {
             this.eventHandler?.({
               type: 'helper-fault',
