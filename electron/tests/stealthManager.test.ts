@@ -625,7 +625,7 @@ describe('StealthManager', () => {
     assert.strictEqual(manager.verifyManagedWindows(), true);
   });
 
-  it('treats intentionally hidden managed windows as already safe during verification', () => {
+  it('NAT-029: hidden managed windows are still verified (visibility gate removed)', () => {
     let verifyCalls = 0;
     const first = new FakeWindow();
     const second = new FakeWindow();
@@ -648,10 +648,11 @@ describe('StealthManager', () => {
     manager.applyToWindow(second as any, true, { role: 'auxiliary' });
     first.hide();
     second.hide();
-    const verifyCallsBeforeHiddenVerification = verifyCalls;
+    const verifyCallsBefore = verifyCalls;
 
     assert.strictEqual(manager.verifyManagedWindows(), true);
-    assert.strictEqual(verifyCalls, verifyCallsBeforeHiddenVerification);
+    // NAT-029: hidden windows still run verifyStealth, so we expect 2 additional calls
+    assert.strictEqual(verifyCalls - verifyCallsBefore, 2);
     assert.ok(!manager.getStealthDegradationWarnings().includes('stealth_verification_failed'));
   });
 

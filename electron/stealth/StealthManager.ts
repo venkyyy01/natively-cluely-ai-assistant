@@ -544,14 +544,14 @@ export class StealthManager extends EventEmitter {
           continue;
         }
 
-        // Intentionally hidden windows, such as during app-initiated screenshots,
-        // are not capture-exposed and should not trip stealth heartbeat faults.
-        if (typeof win.isVisible === 'function' && !win.isVisible()) {
+        const isVisible = typeof win.isVisible !== 'function' || win.isVisible();
+        if (isVisible) {
+          verifiedVisibleWindowCount += 1;
+        } else {
           hiddenWindowCount += 1;
-          continue;
         }
 
-        verifiedVisibleWindowCount += 1;
+        // NAT-029: hidden windows still run verifyStealth; only the visibility gate is removed
         if (!this.verifyStealth(win)) {
           return false;
         }

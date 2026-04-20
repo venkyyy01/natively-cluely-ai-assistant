@@ -294,17 +294,21 @@ export class StealthSupervisor implements ISupervisor {
     return result.connected;
   }
 
-  private async heartbeatNativeStealth(): Promise<boolean> {
+  private async heartbeatNativeStealth(): Promise<{ status: 'healthy' | 'degraded' | 'not_applicable' }> {
     if (!this.nativeBridge) {
-      return true;
+      // NAT-029: missing required bridge is degraded, not healthy
+      if (this.nativeArmRequest) {
+        return { status: 'degraded' };
+      }
+      return { status: 'not_applicable' };
     }
 
     const result = await this.nativeBridge.heartbeat();
     if (!result.connected) {
-      return true;
+      return { status: 'not_applicable' };
     }
 
-    return result.healthy;
+    return result.healthy ? { status: 'healthy' } : { status: 'degraded' };
   }
 
   private async faultNativeStealth(reason: string): Promise<void> {
@@ -325,7 +329,8 @@ export class StealthSupervisor implements ISupervisor {
       return false;
     }
 
-    return this.heartbeatNativeStealth();
+    const nativeHealth = await this.heartbeatNativeStealth();
+    return nativeHealth.status === 'healthy' || nativeHealth.status === 'not_applicable';
   }
 
   private verifyRuntimeHeartbeatFresh(): boolean {
