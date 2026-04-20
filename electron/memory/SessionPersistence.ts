@@ -22,6 +22,13 @@ export interface SessionIndex {
   sessions: SessionIndexEntry[];
 }
 
+export interface SessionEvent {
+  eventId: string;
+  type: 'transcript' | 'usage' | 'checkpoint' | 'thread-action' | 'reset';
+  timestamp: number;
+  payload: Record<string, unknown>;
+}
+
 export interface PersistedSessionMemoryEntryValue {
   kind: 'transcript' | 'usage' | 'pinned-item' | 'constraint' | 'epoch-summary' | 'active-thread';
   text?: string;
@@ -290,5 +297,56 @@ export class SessionPersistence {
     } catch {
       return { sessions: [] };
     }
+  }
+
+  // NAT-059: event-sourced session persistence
+
+  private buildEventLogPath(sessionId: string): string {
+    const sanitized = sanitizeMeetingIdForFilename(sessionId);
+    return join(this.sessionsDir, `${sanitized}.events.log`);
+  }
+
+  async appendEvent(sessionId: string, event: SessionEvent): Promise<void> {
+    await this.init();
+    const logPath = this.buildEventLogPath(sessionId);
+    const line = JSON.stringify(event) + '\n';
+    await fs.appendFile(logPath, line, 'utf-8');
+  }
+
+  async replayEvents(sessionId: string): Promise<SessionEvent[]> {
+    const logPath = this.buildEventLogPath(sessionId);
+    try {
+      const content = await fs.readFile(logPath, 'utf-8');
+      return content
+        .split('\n')
+        .filter((line) => line.trim().length > 0)
+        .map((line) => JSON.parse(line) as SessionEvent);
+    } catch {
+      return [];
+    }
+  }
+
+  async snapshotEvents(sessionId: string, session: PersistedSession): Promise<void> {
+    await this.init();
+    const logPath = this.buildEventLogPath(sessionId);
+    const snapshotEvent: SessionEvent = {
+      eventId: `snapshot-${Date.now()}`,
+      type: 'checkpoint',
+      timestamp: Date.now(),
+      payload: { session },
+    };
+    const line = JSON.stringify(snapshotEvent) + '\n';
+    await fs.writeFile(logPath, line, 'utf-8');
+  }
+
+  async getEventCount(sessionId: string): Promise<number> {
+    const events = await this.replayEvents(sessionId);
+    return events.length;
+  }
+
+  async replayUntil(sessionId: string, eventId: string): Promise<SessionEvent[]> {
+    const allEvents = await this.replayEvents(sessionId);
+    const idx = allEvents.findIndex((e) => e.eventId === eventId);
+    return idx >= 0 ? allEvents.slice(0, idx + 1) : allEvents;
   }
 }

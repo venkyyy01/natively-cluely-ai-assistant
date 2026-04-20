@@ -256,6 +256,8 @@ export class SessionTracker {
   private readonly semanticEmbeddingCache = new Map<string, { embedding: number[]; createdAt: number }>();
   private readonly semanticEmbeddingTTLms = 5 * 60 * 1000;
   private supervisorBus?: SupervisorBusEmitter;
+  private eventCount = 0;
+  private readonly EVENT_SNAPSHOT_INTERVAL = 1000;
   private adaptiveWindowStats = {
     calls: 0,
     totalMs: 0,
@@ -387,6 +389,11 @@ export class SessionTracker {
 
       // Debounced compaction instead of immediate
       this.scheduleCompaction();
+
+      // NAT-059: append event to event-sourced log
+      this.appendTranscriptEvent(segment).catch((err) => {
+        console.warn('[SessionTracker] Event append failed:', err);
+      });
     }
 
         this.persistState();
@@ -1796,6 +1803,28 @@ isConsciousModeEnabled(): boolean {
       if (!this.activeMeetingId || this.activeMeetingId === 'unspecified') return;
       const snapshot = this.buildPersistedSession();
       this.persistence.scheduleSave(snapshot);
+    }
+
+    private async appendTranscriptEvent(segment: TranscriptSegment): Promise<void> {
+      if (!this.activeMeetingId || this.activeMeetingId === 'unspecified') return;
+      this.eventCount += 1;
+      await this.persistence.appendEvent(this.sessionId, {
+        eventId: `evt-${this.eventCount}-${Date.now()}`,
+        type: 'transcript',
+        timestamp: segment.timestamp,
+        payload: {
+          speaker: segment.speaker,
+          text: segment.text,
+          final: segment.final,
+        },
+      });
+      // NAT-059: periodic snapshot every N events
+      if (this.eventCount % this.EVENT_SNAPSHOT_INTERVAL === 0) {
+        const snapshot = this.buildPersistedSession();
+        await this.persistence.snapshotEvents(this.sessionId, snapshot).catch((err) => {
+          console.warn('[SessionTracker] Periodic event snapshot failed:', err);
+        });
+      }
     }
 
 async restoreFromMeetingId(meetingId: string, requestId: number = this.restoreRequestId): Promise<boolean> {
