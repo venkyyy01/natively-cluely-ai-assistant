@@ -1,33 +1,13 @@
 import type { IntentResult } from '../llm/IntentClassifier';
 import type { CoordinatedIntentResult } from '../llm/providers/IntentClassificationCoordinator';
-
-const STRONG_CONSCIOUS_INTENTS = new Set<IntentResult['intent']>([
-  'behavioral',
-  'coding',
-  'deep_dive',
-]);
-
-const STRONG_CONSCIOUS_INTENT_CONFIDENCE = 0.84;
-const MIN_RELIABLE_CONSCIOUS_INTENT_CONFIDENCE = 0.72;
+import { getIntentConfidenceService } from '../llm/IntentConfidenceService';
 
 export function isStrongConsciousIntent(intentResult?: IntentResult | null): boolean {
-  return Boolean(
-    intentResult
-    && STRONG_CONSCIOUS_INTENTS.has(intentResult.intent)
-    && intentResult.confidence >= STRONG_CONSCIOUS_INTENT_CONFIDENCE,
-  );
+  return getIntentConfidenceService().isStrongConsciousIntent(intentResult);
 }
 
 export function isUncertainConsciousIntent(intentResult?: IntentResult | null): boolean {
-  if (!intentResult) {
-    return true;
-  }
-
-  if (intentResult.intent === 'general') {
-    return true;
-  }
-
-  return intentResult.confidence < MIN_RELIABLE_CONSCIOUS_INTENT_CONFIDENCE;
+  return getIntentConfidenceService().isUncertainConsciousIntent(intentResult);
 }
 
 export interface ResolvedIntentResult extends IntentResult {

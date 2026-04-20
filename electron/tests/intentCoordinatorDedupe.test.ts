@@ -9,6 +9,17 @@ import {
   type IntentClassificationInput,
   type IntentInferenceProvider,
 } from '../llm/providers/IntentInferenceProvider';
+import type { CoordinatedIntentResult } from '../llm/providers/IntentClassificationCoordinator';
+
+function coreCoord(r: CoordinatedIntentResult) {
+  return {
+    intent: r.intent,
+    confidence: r.confidence,
+    answerShape: r.answerShape,
+    provider: r.provider,
+    retryCount: r.retryCount,
+  };
+}
 
 class StubProvider implements IntentInferenceProvider {
   constructor(
@@ -72,9 +83,11 @@ test('NAT-039: identical concurrent classify calls share a single primary invoca
   assert.equal(primaryCalls, 1, 'primary should only be invoked once across concurrent identical calls');
   assert.equal(r1.intent, 'behavioral');
   assert.equal(r1.provider, 'foundation');
-  // All callers must observe the same coordinated result.
-  assert.equal(r1, r2);
-  assert.equal(r2, r3);
+  // NAT-056: staleness is stamped per caller (ageMs may differ); core fields match.
+  assert.deepEqual(coreCoord(r1), coreCoord(r2));
+  assert.deepEqual(coreCoord(r2), coreCoord(r3));
+  assert.equal(r1.staleness?.transcriptRevision, 7);
+  assert.equal(r2.staleness?.transcriptRevision, 7);
 });
 
 test('NAT-039: repeat classify within TTL returns cached promise without re-invoking primary', async () => {
@@ -94,8 +107,9 @@ test('NAT-039: repeat classify within TTL returns cached promise without re-invo
   const r2 = await coordinator.classify(input);
 
   assert.equal(primaryCalls, 1, 'second call within TTL should hit the cache');
-  assert.equal(r1, r2);
+  assert.deepEqual(coreCoord(r1), coreCoord(r2));
   assert.equal(r1.intent, 'behavioral');
+  assert.equal(r1.staleness?.transcriptRevision, 7);
 });
 
 test('NAT-039: bumped transcriptRevision invalidates the cache entry', async () => {

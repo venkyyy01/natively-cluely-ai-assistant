@@ -1,4 +1,6 @@
 import { Metrics } from '../../runtime/Metrics';
+import { getIntentConfidenceService } from '../IntentConfidenceService';
+import { PIPELINE_INTENT_THRESHOLDS } from '../intentConfidenceCalibration';
 import { getAnswerShapeGuidance, type IntentResult } from '../IntentClassifier';
 import {
   getIntentProviderErrorCode,
@@ -35,7 +37,6 @@ export interface IntentClassificationCoordinatorOptions {
 const DEFAULT_MAX_PRIMARY_RETRIES = 2;
 const DEFAULT_BASE_BACKOFF_MS = 100;
 const DEFAULT_JITTER_MS = 50;
-const DEFAULT_MINIMUM_PRIMARY_CONFIDENCE = 0.82;
 const DEFAULT_CONTRADICTION_DELTA_CONFIDENCE = 0.18;
 const DEFAULT_PAIRWISE_DISAMBIGUATION_MARGIN = 0.08;
 
@@ -254,7 +255,7 @@ export class IntentClassificationCoordinator {
     this.maxPrimaryRetries = options.maxPrimaryRetries ?? DEFAULT_MAX_PRIMARY_RETRIES;
     this.baseBackoffMs = options.baseBackoffMs ?? DEFAULT_BASE_BACKOFF_MS;
     this.jitterMs = options.jitterMs ?? DEFAULT_JITTER_MS;
-    this.minimumPrimaryConfidence = options.minimumPrimaryConfidence ?? DEFAULT_MINIMUM_PRIMARY_CONFIDENCE;
+    this.minimumPrimaryConfidence = options.minimumPrimaryConfidence ?? PIPELINE_INTENT_THRESHOLDS.primaryMinConfidence;
     this.contradictionDeltaConfidence = options.contradictionDeltaConfidence ?? DEFAULT_CONTRADICTION_DELTA_CONFIDENCE;
     this.pairwiseDisambiguationMargin = options.pairwiseDisambiguationMargin ?? DEFAULT_PAIRWISE_DISAMBIGUATION_MARGIN;
     this.delayFn = options.delayFn ?? sleep;
@@ -667,12 +668,17 @@ export class IntentClassificationCoordinator {
   }
 
   async classify(input: IntentClassificationInput): Promise<CoordinatedIntentResult> {
-    const now = this.nowFn();
+    const startedAt = this.nowFn();
+    const now = startedAt;
     this.purgeExpiredDedupeEntries(now);
+
+    const stamp = (result: CoordinatedIntentResult): CoordinatedIntentResult =>
+      getIntentConfidenceService().attachStaleness(result, input, startedAt, this.nowFn()) as CoordinatedIntentResult;
 
     const dedupeKey = this.buildDedupeKey(input);
     if (dedupeKey === null) {
-      return this.classifyUncached(input);
+      const raw = await this.classifyUncached(input);
+      return stamp(raw);
     }
 
     const cached = this.dedupeCache.get(dedupeKey);
@@ -682,24 +688,26 @@ export class IntentClassificationCoordinator {
       // (`{ ...result, provider, retryCount }`) and treated as read-only
       // by downstream consumers, so the shared reference is safe.
       Metrics.counter('intent.duplicate_classify_count');
-      return cached.promise;
+      const raw = await cached.promise;
+      return stamp(raw);
     }
 
-    const promise = this.classifyUncached(input);
+    const uncachedPromise = this.classifyUncached(input);
     this.dedupeCache.set(dedupeKey, {
-      promise,
+      promise: uncachedPromise,
       expiresAt: now + this.dedupeTtlMs,
     });
     // Evict failures immediately so the next caller can retry instead of
     // being served a stuck rejection. We attach a separate `.catch` so the
     // error still propagates to the awaiting caller(s) unchanged.
-    promise.catch(() => {
+    uncachedPromise.catch(() => {
       const current = this.dedupeCache.get(dedupeKey);
-      if (current && current.promise === promise) {
+      if (current && current.promise === uncachedPromise) {
         this.dedupeCache.delete(dedupeKey);
       }
     });
-    return promise;
+    const raw = await uncachedPromise;
+    return stamp(raw);
   }
 
   private async classifyUncached(input: IntentClassificationInput): Promise<CoordinatedIntentResult> {

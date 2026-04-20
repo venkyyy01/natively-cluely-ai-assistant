@@ -9,6 +9,7 @@
 // 3. Context heuristic (0ms) for conversation-flow signals
 
 import { isElectronAppPackaged, resolveBundledModelsPath } from '../utils/modelPaths';
+import { getIntentConfidenceService } from './IntentConfidenceService';
 const { loadTransformers } = require('../utils/transformersLoader');
 
 export type ConversationIntent =
@@ -25,6 +26,8 @@ export interface IntentResult {
     intent: ConversationIntent;
     confidence: number;
     answerShape: string;
+    /** NAT-056: revision + age when produced via IntentClassificationCoordinator. */
+    staleness?: { transcriptRevision: number; ageMs: number };
 }
 
 /**
@@ -57,7 +60,6 @@ const SLM_LABEL_MAP: Record<string, ConversationIntent> = {
   'general': 'general',
 };
 
-const SLM_CONFIDENCE_THRESHOLD = 0.55;
 const CUE_OVERRIDE_MIN_WEIGHT = 3.0;
 const CUE_OVERRIDE_SLM_MAX_CONFIDENCE = 0.72;
 
@@ -219,7 +221,7 @@ class FineTunedClassifier {
 
       calibratedResult = this.applyCueOverrideGate(text, calibratedResult);
 
-      if (calibratedResult.confidence < SLM_CONFIDENCE_THRESHOLD) {
+      if (calibratedResult.confidence < getIntentConfidenceService().getSlmMinAcceptScore()) {
         return null;
       }
 

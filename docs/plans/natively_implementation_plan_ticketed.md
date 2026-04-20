@@ -1573,7 +1573,7 @@ EPIC-19 (Mega-file decomposition)        -> last; blocks nothing
 
 ### EPIC-12 — Unified Intent Confidence Service
 
-#### NAT-056 — Implement `IntentConfidenceService` with one calibration map
+#### NAT-056 [x] — Implement `IntentConfidenceService` with one calibration map
 
 - **Parent epic**: EPIC-12
 - **Priority**: P2
