@@ -4,6 +4,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { RECOGNITION_LANGUAGES } from '../config/languages';
+import { DropFrameMetric } from './dropMetrics';
 
 const ELEVENLABS_WS_URL = 'wss://api.elevenlabs.io/v1/speech-to-text/realtime';
 
@@ -18,6 +19,8 @@ export class ElevenLabsStreamingSTT extends EventEmitter {
     private targetSampleRate = 16000; // what ElevenLabs Scribe v2 requires
     
     private buffer: Buffer[] = [];
+    // NAT-021 / audit R-11: visible drop telemetry for backpressure.
+    private dropMetric = new DropFrameMetric({ provider: 'elevenlabs' });
     private isConnecting = false;
     private isSessionReady = false;
     private languageCode = 'en'; // Default to English
@@ -96,6 +99,7 @@ export class ElevenLabsStreamingSTT extends EventEmitter {
         this.shouldReconnect = true;
         this.reconnectAttempts = 0;
         this.ensureDebugWriteStream();
+        this.dropMetric.start(); // NAT-021
         this.connect();
     }
 
@@ -118,6 +122,7 @@ export class ElevenLabsStreamingSTT extends EventEmitter {
             this.debugWriteStream.end();
             this.debugWriteStream = null;
         }
+        this.dropMetric.stop(); // NAT-021
         console.log('[ElevenLabsStreaming] Stopped');
     }
 
@@ -138,6 +143,7 @@ export class ElevenLabsStreamingSTT extends EventEmitter {
             this.buffer.push(chunk);
             if (this.buffer.length > 500) {
                 this.buffer.shift(); // Cap buffer size
+                this.dropMetric.recordDrop(); // NAT-021
                 console.warn('[ElevenLabsStreaming] Buffer full — oldest audio chunk dropped.');
             }
 

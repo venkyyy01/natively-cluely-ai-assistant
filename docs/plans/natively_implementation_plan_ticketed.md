@@ -711,7 +711,7 @@ EPIC-19 (Mega-file decomposition)        -> last; blocks nothing
   - Will run `npm run test:electron`.
 - **Definition of done**: standard DoD.
 
-#### NAT-021 — Surface STT bounded-queue drops as metrics
+#### NAT-021 [x] — Surface STT bounded-queue drops as metrics
 
 - **Parent epic**: EPIC-03
 - **Priority**: P2

@@ -13,6 +13,7 @@ import { EventEmitter } from 'events';
 import WebSocket from 'ws';
 import { RECOGNITION_LANGUAGES } from '../config/languages';
 import { resampleToMonoPcm16 } from './pcm';
+import { DropFrameMetric } from './dropMetrics';
 
 const RECONNECT_BASE_DELAY_MS = 500;
 const RECONNECT_MAX_DELAY_MS = 10000;
@@ -32,6 +33,12 @@ class AudioChunkBuffer {
   private head: number = 0;
   private tail: number = 0;
   private count: number = 0;
+  /**
+   * NAT-021: ring-buffer overwrite drops are now visible to the owning
+   * provider via this counter. The provider reads & resets it on each
+   * `push()` so it can forward the delta into its DropFrameMetric.
+   */
+  public droppedSinceLastRead: number = 0;
 
   constructor(private capacity: number) {
     this.buffer = new Array(capacity).fill(null);
@@ -45,6 +52,7 @@ class AudioChunkBuffer {
       // Overwrite oldest
       this.head = (this.head + 1) % this.capacity;
       this.count = this.capacity;
+      this.droppedSinceLastRead += 1;
     }
   }
 
@@ -87,6 +95,9 @@ export class DeepgramStreamingSTT extends EventEmitter {
   private livenessTimer: NodeJS.Timeout | null = null;
   private connectionGuardTimer: NodeJS.Timeout | null = null;
   private buffer: AudioChunkBuffer = new AudioChunkBuffer(MAX_BUFFER_SIZE);
+  // NAT-021 / audit R-11: surface ring-buffer drops as metrics so silent
+  // audio loss under backpressure becomes visible in observability.
+  private dropMetric = new DropFrameMetric({ provider: 'deepgram' });
   private isConnecting = false;
   private lastInterimTranscript = '';
   private lastInterimConfidence = 1;
@@ -142,6 +153,7 @@ export class DeepgramStreamingSTT extends EventEmitter {
         this.lastInboundActivityAt = Date.now();
         this.lastAudioActivityAt = 0;
         this.startConnectionGuard();
+        this.dropMetric.start(); // NAT-021 — uses captured native setInterval, not visible to tests that mock global setInterval.
         this.connect();
     }
 
@@ -167,6 +179,7 @@ export class DeepgramStreamingSTT extends EventEmitter {
     this.lastInboundActivityAt = 0;
     this.lastAudioActivityAt = 0;
     this.stopConnectionGuard();
+    this.dropMetric.stop(); // NAT-021
     console.log('[DeepgramStreaming] Stopped');
   }
 
@@ -189,6 +202,13 @@ export class DeepgramStreamingSTT extends EventEmitter {
 
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
       this.buffer.push(chunk); // Ring buffer handles capacity internally
+      // NAT-021: forward any overwrite drops the ring buffer recorded
+      // during this push() into the metric so silent audio loss is
+      // visible in the periodic stt.dropped_frames log line.
+      if (this.buffer.droppedSinceLastRead > 0) {
+        this.dropMetric.recordDrop(this.buffer.droppedSinceLastRead);
+        this.buffer.droppedSinceLastRead = 0;
+      }
 
       if (!this.isConnecting && this.shouldReconnect && !this.reconnectTimer) {
         console.log('[DeepgramStreaming] WS not ready. Lazy connecting on new audio...');

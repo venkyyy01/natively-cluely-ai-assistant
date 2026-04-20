@@ -2,6 +2,7 @@ import { SpeechClient } from '@google-cloud/speech';
 import { EventEmitter } from 'events';
 import * as path from 'path';
 import { RECOGNITION_LANGUAGES, EnglishVariant } from '../config/languages';
+import { DropFrameMetric } from './dropMetrics';
 
 /**
  * GoogleSTT
@@ -128,6 +129,7 @@ export class GoogleSTT extends EventEmitter {
     public start(): void {
         if (this.isActive) return;
         this.isActive = true;
+        this.dropMetric.start(); // NAT-021
 
         console.log('[GoogleSTT] Starting recognition stream...');
         this.startStream();
@@ -144,6 +146,7 @@ export class GoogleSTT extends EventEmitter {
             this.stream.destroy();
             this.stream = null;
         }
+        this.dropMetric.stop(); // NAT-021
     }
 
     public destroy(): void {
@@ -152,6 +155,8 @@ export class GoogleSTT extends EventEmitter {
     }
 
     private buffer: Buffer[] = [];
+    // NAT-021: count overflow drops so silent audio loss is observable.
+    private dropMetric = new DropFrameMetric({ provider: 'google' });
     private isConnecting = false;
     private lastConnectAttempt = 0;
 
@@ -161,7 +166,10 @@ export class GoogleSTT extends EventEmitter {
         if (!this.isStreaming || !this.stream) {
             // Buffer if we are in connecting state, just started, or closed
             this.buffer.push(audioData);
-            if (this.buffer.length > 500) this.buffer.shift(); // Cap buffer size
+            if (this.buffer.length > 500) {
+                this.buffer.shift(); // Cap buffer size
+                this.dropMetric.recordDrop(); // NAT-021
+            }
             
             if (!this.isConnecting) {
                 if (Date.now() - this.lastConnectAttempt > 1000) {
@@ -177,7 +185,10 @@ export class GoogleSTT extends EventEmitter {
             this.isStreaming = false;
             this.stream = null;
             this.buffer.push(audioData);
-            if (this.buffer.length > 500) this.buffer.shift(); // Cap buffer size
+            if (this.buffer.length > 500) {
+                this.buffer.shift(); // Cap buffer size
+                this.dropMetric.recordDrop(); // NAT-021
+            }
             
             if (!this.isConnecting) {
                 if (Date.now() - this.lastConnectAttempt > 1000) {
