@@ -736,24 +736,34 @@ EPIC-19 (Mega-file decomposition)        -> last; blocks nothing
   - Will run `npm run test:electron`.
 - **Definition of done**: standard DoD.
 
-#### NAT-022 — Add `dispose()` to `SessionTracker` and call on handoff
+#### NAT-022 — Add `dispose()` to `SessionTracker` and call on handoff [x]
 
 - **Parent epic**: EPIC-03
 - **Priority**: P2
 - **Type**: bug-fix
 - **Original finding**: R-9
 - **Goal**: Old session trackers will not retain timers or pending work after handoff.
-- **Affected files**: `electron/SessionTracker.ts` (lines 2149–2169, 1637–1642), `electron/MeetingPersistence.ts` (lines 141–143).
+- **Affected files**: `electron/SessionTracker.ts`, `electron/MeetingPersistence.ts`, `electron/tests/sessionTrackerDispose.test.ts`, `electron/tests/meetingPersistence.test.ts`.
 - **Dependencies**: None
-- **Implementation steps**:
-  1. Will add `dispose(): Promise<void>` on `SessionTracker` that calls `cancelCompactionTimer`, awaits `flushPersistenceNow`, and rejects pending work with `'session_disposed'`.
-  2. Will call `oldSession.dispose()` in `MeetingPersistence.stopMeeting` after `createSuccessorSession`.
+- **Implementation**:
+  1. Added `SessionTracker.dispose(): Promise<void>` with idempotent teardown semantics:
+     - marks tracker disposed
+     - cancels compaction timer
+     - invalidates pending restore work (`restoreRequestId += 1`)
+     - clears buffered restore writes
+     - awaits `flushPersistenceNow()` to persist any final state
+  2. Added disposal guards so post-handoff old trackers stop accepting new transcript/assistant/supervisor work and `restoreFromMeetingId` rejects with `session_disposed`.
+  3. Updated `MeetingPersistence.stopMeeting` to capture `previousSession`, create the successor, swap to the successor session, then `await previousSession.dispose()` before returning.
 - **Acceptance criteria**:
-  - [ ] No active timers remain on the old tracker after handoff.
+  - [x] No active timers remain on the old tracker after handoff.
 - **Validation**:
-  - Will add `electron/tests/sessionTrackerDispose.test.ts`.
-  - Will run `npm run test:electron`.
-- **Definition of done**: standard DoD.
+  - Added `electron/tests/sessionTrackerDispose.test.ts`:
+    - verifies dispose clears the compaction timer
+    - verifies pending restore/buffered work is rejected as `session_disposed`
+  - Extended `electron/tests/meetingPersistence.test.ts` with NAT-022 handoff coverage to assert old-session `dispose()` is called.
+  - `npx tsc -p electron/tsconfig.json --noEmit` — clean.
+  - `npm run test:electron` — green (858 tests, 854 pass, 4 skipped, 0 fail).
+- **Definition of done**: met.
 
 #### NAT-023 — Add ABI preflight check on native audio module load
 

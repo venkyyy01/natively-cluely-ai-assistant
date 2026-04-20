@@ -259,6 +259,7 @@ export class SessionTracker {
   };
   private readonly ADAPTIVE_WINDOW_TIMEOUT_MS = 120;
   private readonly ADAPTIVE_QUERY_MAX_LEN = 220;
+  private disposed = false;
 
     // ============================================
     // Configuration
@@ -282,6 +283,9 @@ export class SessionTracker {
     }
 
     private emitSupervisorEvent(event: SupervisorEvent): void {
+        if (this.disposed) {
+            return;
+        }
         void this.supervisorBus?.emit(event).catch((error) => {
             console.warn(`[SessionTracker] Failed to emit supervisor event ${event.type}:`, error);
         });
@@ -306,6 +310,9 @@ export class SessionTracker {
      * Returns { role, isRefinementCandidate } so the engine can decide whether to trigger follow-up.
      */
     addTranscript(segment: TranscriptSegment): { role: 'interviewer' | 'user' | 'assistant' } | null {
+        if (this.disposed) {
+            return null;
+        }
         if (!segment.final) return null;
 
         if (this.isRestoring) {
@@ -386,6 +393,9 @@ export class SessionTracker {
      * Add assistant-generated message to context
      */
     addAssistantMessage(text: string): void {
+        if (this.disposed) {
+            return;
+        }
         console.log(`[SessionTracker] addAssistantMessage called with:`, text.substring(0, 50));
 
         if (this.isRestoring) {
@@ -465,6 +475,9 @@ export class SessionTracker {
      * Handle incoming transcript from native audio service
      */
     handleTranscript(segment: TranscriptSegment): { role: 'interviewer' | 'user' | 'assistant' } | null {
+        if (this.disposed) {
+            return null;
+        }
         // Track interim segments for interviewer to prevent data loss on stop
         if (segment.speaker === 'interviewer') {
             if (Math.random() < 0.05 || segment.final) {
@@ -1771,13 +1784,22 @@ isConsciousModeEnabled(): boolean {
     }
 
 async restoreFromMeetingId(meetingId: string, requestId: number = this.restoreRequestId): Promise<boolean> {
+      if (this.disposed) {
+        throw this.createSessionDisposedError();
+      }
       const normalizedMeetingId = meetingId.trim();
       if (!normalizedMeetingId) return false;
 
       this.activeMeetingId = normalizedMeetingId;
       this.isRestoring = true;
       try {
+      if (this.disposed) {
+        throw this.createSessionDisposedError();
+      }
       const session = await this.persistence.findByMeeting(normalizedMeetingId);
+      if (this.disposed) {
+        throw this.createSessionDisposedError();
+      }
       if (requestId !== this.restoreRequestId) return false;
       if (!session) return false;
 
@@ -1838,6 +1860,9 @@ async restoreFromMeetingId(meetingId: string, requestId: number = this.restoreRe
   }
 
     ensureMeetingContext(meetingId?: string): void {
+      if (this.disposed) {
+        return;
+      }
       const normalizedMeetingId = meetingId?.trim();
       if (!normalizedMeetingId) return;
 
@@ -1861,6 +1886,18 @@ async restoreFromMeetingId(meetingId: string, requestId: number = this.restoreRe
     async flushPersistenceNow(): Promise<void> {
       this.persistState();
       await this.persistence.flushScheduledSave();
+    }
+
+    private createSessionDisposedError(): Error {
+      return new Error('session_disposed');
+    }
+
+    private rejectPendingWorkOnDispose(): void {
+      this.restoreRequestId += 1;
+      this.pendingRestorePromise = null;
+      this.isRestoring = false;
+      this.writeBuffer = [];
+      this.pendingCompactionPromise = null;
     }
 
     getSessionStartTime(): number {
@@ -1982,6 +2019,9 @@ async restoreFromMeetingId(meetingId: string, requestId: number = this.restoreRe
     // ============================================
 
   async reset(): Promise<void> {
+    if (this.disposed) {
+      return;
+    }
     if (this.pendingCompactionPromise) {
       try {
         await this.pendingCompactionPromise;
@@ -2035,6 +2075,18 @@ async restoreFromMeetingId(meetingId: string, requestId: number = this.restoreRe
     
     this.pendingCompactionPromise = null;
     this.isCompacting = false;
+  }
+
+  async dispose(): Promise<void> {
+    if (this.disposed) {
+      return;
+    }
+
+    this.disposed = true;
+    this.cancelCompactionTimer();
+    this.rejectPendingWorkOnDispose();
+
+    await this.flushPersistenceNow();
   }
 
     // ============================================
@@ -2195,6 +2247,9 @@ async restoreFromMeetingId(meetingId: string, requestId: number = this.restoreRe
    * Called instead of raw slice() to preserve early meeting context.
    */
   private async compactTranscriptIfNeeded(): Promise<void> {
+    if (this.disposed) {
+      throw this.createSessionDisposedError();
+    }
     if (this.fullTranscript.length <= 1800 || this.isCompacting) return;
 
     this.isCompacting = true;
