@@ -437,7 +437,7 @@ EPIC-19 (Mega-file decomposition)        -> last; blocks nothing
   - Will run `npm run test:electron`.
 - **Definition of done**: standard DoD.
 
-#### NAT-008 — `ConsciousStreamingHandler.start()` aborts the previous controller
+#### NAT-008 [x] — `ConsciousStreamingHandler.start()` aborts the previous controller
 
 - **Parent epic**: EPIC-01
 - **Priority**: P0

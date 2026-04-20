@@ -41,6 +41,13 @@ export interface StreamEvent {
   item?: string;
   progress?: number;
   latencyMs?: number;
+  /**
+   * NAT-008 / audit A-8: monotonic id of the stream that produced this event.
+   * Bumped by every `start()` call. Handlers can use it to drop chunks from
+   * a stream that was cancelled by a subsequent `start()` if they were
+   * already mid-await when the cancel landed.
+   */
+  streamId?: number;
 }
 
 export type StreamHandler = (event: StreamEvent) => void | Promise<void>;
@@ -77,6 +84,14 @@ export class ConsciousStreamingHandler {
   private config: StreamingConfig;
   private handlers: Set<StreamHandler> = new Set();
   private abortController: AbortController | null = null;
+  /**
+   * NAT-008 / audit A-8: monotonic id of the *current* stream. Bumped on
+   * every `start()`. Each chunk-producing method captures this at its top,
+   * and bails the moment the captured id doesn't match -- which is the
+   * canonical "the world moved on while I was awaiting the next chunk emit"
+   * signal for streaming UIs.
+   */
+  private currentStreamId = 0;
   private metrics: StreamingMetrics = {
     startTime: 0,
     firstChunkTime: null,
@@ -101,12 +116,14 @@ export class ConsciousStreamingHandler {
   }
 
   /**
-   * Emit event to all handlers
+   * Emit event to all handlers. Always stamps `streamId` with the current
+   * stream id so handlers can drop stale events.
    */
   private async emit(event: StreamEvent): Promise<void> {
+    const stamped: StreamEvent = { ...event, streamId: event.streamId ?? this.currentStreamId };
     const promises = Array.from(this.handlers).map(async (handler) => {
       try {
-        await handler(event);
+        await handler(stamped);
       } catch (error) {
         console.error('[ConsciousStreamingHandler] Handler error:', error);
       }
@@ -115,9 +132,30 @@ export class ConsciousStreamingHandler {
   }
 
   /**
-   * Start streaming session
+   * Start a streaming session.
+   *
+   * NAT-008 / audit A-8: if a previous stream is still alive (controller
+   * exists and is not already aborted), it is aborted FIRST and a
+   * `cancelled` event for the *previous* stream id is awaited before the
+   * new controller takes over. Without this, calling `start()` twice in
+   * quick succession would leak the prior `AbortController`, leaving
+   * in-flight chunk loops racing against the new stream and producing
+   * cross-turn token interleaving in the renderer.
    */
-  start(): void {
+  async start(): Promise<void> {
+    if (this.abortController && !this.abortController.signal.aborted) {
+      const previousStreamId = this.currentStreamId;
+      this.abortController.abort();
+      // Emit cancelled with the OLD streamId so handlers can attribute it
+      // to the stream that was actually cancelled, not the one starting.
+      await this.emit({
+        type: 'cancelled',
+        timestamp: Date.now(),
+        streamId: previousStreamId,
+      });
+    }
+
+    this.currentStreamId += 1;
     this.abortController = new AbortController();
     this.metrics = {
       startTime: Date.now(),
@@ -135,9 +173,14 @@ export class ConsciousStreamingHandler {
    * Abort current stream
    */
   async abort(): Promise<void> {
-    if (this.abortController) {
+    if (this.abortController && !this.abortController.signal.aborted) {
+      const cancelledStreamId = this.currentStreamId;
       this.abortController.abort();
-      await this.emit({ type: 'cancelled', timestamp: Date.now() });
+      await this.emit({
+        type: 'cancelled',
+        timestamp: Date.now(),
+        streamId: cancelledStreamId,
+      });
     }
   }
 
@@ -149,29 +192,46 @@ export class ConsciousStreamingHandler {
   }
 
   /**
+   * Returns true if the given streamId is no longer current (either the
+   * controller was aborted or a new `start()` superseded it).
+   */
+  private isStaleStream(streamId: number): boolean {
+    return this.isAborted() || streamId !== this.currentStreamId;
+  }
+
+  /**
+   * Get the current stream id. Useful for tests and for handlers that
+   * want to ignore events from a stream id they didn't subscribe to.
+   */
+  getCurrentStreamId(): number {
+    return this.currentStreamId;
+  }
+
+  /**
    * Stream reasoning text progressively
    */
   async streamReasoning(reasoning: string): Promise<void> {
-    if (this.isAborted()) return;
+    const myStreamId = this.currentStreamId;
+    if (this.isStaleStream(myStreamId)) return;
 
     const startTime = Date.now();
-    await this.emit({ type: 'reasoning_start', timestamp: startTime });
+    await this.emit({ type: 'reasoning_start', timestamp: startTime, streamId: myStreamId });
 
     if (!this.config.enableProgressiveRendering) {
       await this.emit({
         type: 'reasoning_complete',
         timestamp: Date.now(),
         data: { reasoning },
+        streamId: myStreamId,
       });
       return;
     }
 
-    // Split into chunks and stream
     const chunks = this.splitIntoChunks(reasoning);
     let accumulated = '';
 
     for (const chunk of chunks) {
-      if (this.isAborted()) break;
+      if (this.isStaleStream(myStreamId)) return;
 
       accumulated += chunk;
       const chunkStart = Date.now();
@@ -181,17 +241,20 @@ export class ConsciousStreamingHandler {
         timestamp: chunkStart,
         chunk,
         data: { accumulated, progress: accumulated.length / reasoning.length },
+        streamId: myStreamId,
       });
 
       this.recordChunkLatency(Date.now() - chunkStart);
       await this.delay(this.config.chunkDelayMs);
     }
 
+    if (this.isStaleStream(myStreamId)) return;
     await this.emit({
       type: 'reasoning_complete',
       timestamp: Date.now(),
       data: { reasoning: accumulated },
       latencyMs: Date.now() - startTime,
+      streamId: myStreamId,
     });
   }
 
@@ -199,13 +262,14 @@ export class ConsciousStreamingHandler {
    * Stream implementation plan items
    */
   async streamImplementationPlan(items: string[]): Promise<void> {
-    if (this.isAborted()) return;
+    const myStreamId = this.currentStreamId;
+    if (this.isStaleStream(myStreamId)) return;
 
     const startTime = Date.now();
-    await this.emit({ type: 'plan_start', timestamp: startTime });
+    await this.emit({ type: 'plan_start', timestamp: startTime, streamId: myStreamId });
 
     for (let i = 0; i < items.length; i++) {
-      if (this.isAborted()) break;
+      if (this.isStaleStream(myStreamId)) return;
 
       await this.emit({
         type: 'plan_item',
@@ -216,16 +280,19 @@ export class ConsciousStreamingHandler {
           total: items.length,
           progress: (i + 1) / items.length,
         },
+        streamId: myStreamId,
       });
 
       await this.delay(this.config.chunkDelayMs);
     }
 
+    if (this.isStaleStream(myStreamId)) return;
     await this.emit({
       type: 'plan_complete',
       timestamp: Date.now(),
       data: { items },
       latencyMs: Date.now() - startTime,
+      streamId: myStreamId,
     });
   }
 
@@ -233,144 +300,70 @@ export class ConsciousStreamingHandler {
    * Stream tradeoffs
    */
   async streamTradeoffs(tradeoffs: string[]): Promise<void> {
-    if (this.isAborted()) return;
-
-    const startTime = Date.now();
-    await this.emit({ type: 'tradeoffs_start', timestamp: startTime });
-
-    for (let i = 0; i < tradeoffs.length; i++) {
-      if (this.isAborted()) break;
-
-      await this.emit({
-        type: 'tradeoffs_item',
-        timestamp: Date.now(),
-        item: tradeoffs[i],
-        data: { index: i, total: tradeoffs.length },
-      });
-
-      await this.delay(this.config.chunkDelayMs / 2); // Faster for tradeoffs
-    }
-
-    await this.emit({
-      type: 'tradeoffs_complete',
-      timestamp: Date.now(),
-      data: { tradeoffs },
-    });
+    await this.streamItems('tradeoffs_start', 'tradeoffs_item', 'tradeoffs_complete', tradeoffs, 'tradeoffs');
   }
 
   /**
    * Stream edge cases
    */
   async streamEdgeCases(edgeCases: string[]): Promise<void> {
-    if (this.isAborted()) return;
-
-    const startTime = Date.now();
-    await this.emit({ type: 'edge_cases_start', timestamp: startTime });
-
-    for (let i = 0; i < edgeCases.length; i++) {
-      if (this.isAborted()) break;
-
-      await this.emit({
-        type: 'edge_cases_item',
-        timestamp: Date.now(),
-        item: edgeCases[i],
-        data: { index: i, total: edgeCases.length },
-      });
-
-      await this.delay(this.config.chunkDelayMs / 2);
-    }
-
-    await this.emit({
-      type: 'edge_cases_complete',
-      timestamp: Date.now(),
-      data: { edgeCases },
-    });
+    await this.streamItems('edge_cases_start', 'edge_cases_item', 'edge_cases_complete', edgeCases, 'edgeCases');
   }
 
   /**
    * Stream scale considerations
    */
   async streamScaleConsiderations(considerations: string[]): Promise<void> {
-    if (this.isAborted()) return;
-
-    const startTime = Date.now();
-    await this.emit({ type: 'scale_start', timestamp: startTime });
-
-    for (let i = 0; i < considerations.length; i++) {
-      if (this.isAborted()) break;
-
-      await this.emit({
-        type: 'scale_item',
-        timestamp: Date.now(),
-        item: considerations[i],
-        data: { index: i, total: considerations.length },
-      });
-
-      await this.delay(this.config.chunkDelayMs / 2);
-    }
-
-    await this.emit({
-      type: 'scale_complete',
-      timestamp: Date.now(),
-      data: { considerations },
-    });
+    await this.streamItems('scale_start', 'scale_item', 'scale_complete', considerations, 'considerations');
   }
 
   /**
    * Stream pushback responses
    */
   async streamPushbackResponses(pushbacks: string[]): Promise<void> {
-    if (this.isAborted()) return;
-
-    const startTime = Date.now();
-    await this.emit({ type: 'pushback_start', timestamp: startTime });
-
-    for (let i = 0; i < pushbacks.length; i++) {
-      if (this.isAborted()) break;
-
-      await this.emit({
-        type: 'pushback_item',
-        timestamp: Date.now(),
-        item: pushbacks[i],
-        data: { index: i, total: pushbacks.length },
-      });
-
-      await this.delay(this.config.chunkDelayMs / 2);
-    }
-
-    await this.emit({
-      type: 'pushback_complete',
-      timestamp: Date.now(),
-      data: { pushbacks },
-    });
+    await this.streamItems('pushback_start', 'pushback_item', 'pushback_complete', pushbacks, 'pushbacks');
   }
 
   /**
    * Stream likely follow-ups
    */
   async streamLikelyFollowUps(followUps: string[]): Promise<void> {
-    if (this.isAborted()) return;
+    await this.streamItems('followups_start', 'followups_item', 'followups_complete', followUps, 'followUps');
+  }
+
+  private async streamItems(
+    startType: StreamEventType,
+    itemType: StreamEventType,
+    completeType: StreamEventType,
+    items: string[],
+    completeKey: string,
+  ): Promise<void> {
+    const myStreamId = this.currentStreamId;
+    if (this.isStaleStream(myStreamId)) return;
 
     const startTime = Date.now();
-    await this.emit({ type: 'followups_start', timestamp: startTime });
+    await this.emit({ type: startType, timestamp: startTime, streamId: myStreamId });
 
-    for (let i = 0; i < followUps.length; i++) {
-      if (this.isAborted()) break;
+    for (let i = 0; i < items.length; i++) {
+      if (this.isStaleStream(myStreamId)) return;
 
       await this.emit({
-        type: 'followups_item',
+        type: itemType,
         timestamp: Date.now(),
-        item: followUps[i],
-        data: { index: i, total: followUps.length },
+        item: items[i],
+        data: { index: i, total: items.length },
+        streamId: myStreamId,
       });
 
       await this.delay(this.config.chunkDelayMs / 2);
     }
 
+    if (this.isStaleStream(myStreamId)) return;
     await this.emit({
-      type: 'followups_complete',
+      type: completeType,
       timestamp: Date.now(),
-      data: { followUps },
+      data: { [completeKey]: items },
+      streamId: myStreamId,
     });
   }
 
@@ -378,26 +371,32 @@ export class ConsciousStreamingHandler {
    * Stream code transition
    */
   async streamCodeTransition(code: string, language?: string): Promise<void> {
-    if (this.isAborted()) return;
+    const myStreamId = this.currentStreamId;
+    if (this.isStaleStream(myStreamId)) return;
 
     const startTime = Date.now();
-    await this.emit({ type: 'code_start', timestamp: startTime, data: { language } });
+    await this.emit({
+      type: 'code_start',
+      timestamp: startTime,
+      data: { language },
+      streamId: myStreamId,
+    });
 
     if (!this.config.enableProgressiveRendering) {
       await this.emit({
         type: 'code_complete',
         timestamp: Date.now(),
         data: { code, language },
+        streamId: myStreamId,
       });
       return;
     }
 
-    // Stream code line by line for better readability
     const lines = code.split('\n');
     let accumulated = '';
 
     for (const line of lines) {
-      if (this.isAborted()) break;
+      if (this.isStaleStream(myStreamId)) return;
 
       accumulated += line + '\n';
       await this.emit({
@@ -408,15 +407,18 @@ export class ConsciousStreamingHandler {
           accumulated,
           progress: accumulated.length / code.length,
         },
+        streamId: myStreamId,
       });
 
       await this.delay(10); // Faster for code
     }
 
+    if (this.isStaleStream(myStreamId)) return;
     await this.emit({
       type: 'code_complete',
       timestamp: Date.now(),
       data: { code: accumulated, language },
+      streamId: myStreamId,
     });
   }
 
@@ -427,7 +429,8 @@ export class ConsciousStreamingHandler {
     response: ConsciousModeStructuredResponse,
     phase?: InterviewPhase
   ): Promise<void> {
-    this.start();
+    await this.start();
+    const myStreamId = this.currentStreamId;
 
     try {
       // Stream reasoning first
@@ -470,17 +473,23 @@ export class ConsciousStreamingHandler {
         await this.streamCodeTransition(response.codeTransition);
       }
 
-      // Complete
+      if (this.isStaleStream(myStreamId)) return;
       await this.emit({
         type: 'complete',
         timestamp: Date.now(),
         data: { response, phase },
+        streamId: myStreamId,
       });
     } catch (error) {
+      if (this.isStaleStream(myStreamId)) {
+        if (this.config.abortOnError) throw error;
+        return;
+      }
       await this.emit({
         type: 'error',
         timestamp: Date.now(),
         data: { error: error instanceof Error ? error.message : String(error) },
+        streamId: myStreamId,
       });
 
       if (this.config.abortOnError) {
