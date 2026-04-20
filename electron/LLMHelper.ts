@@ -3813,15 +3813,16 @@ ANSWER DIRECTLY:`;
             'Gemini race',
             imagePaths,
             effectiveMessage,
-            () => this.streamWithGeminiParallelRace(raceMsg, imagePaths),
+            () => this.streamWithGeminiParallelRace(raceMsg, imagePaths, options?.abortSignal),
             (fallbackMessage) => this.streamWithGeminiParallelRace(
               this.joinPrompt(finalSystemPrompt, buildStreamUserContent(fallbackMessage)),
               undefined,
+              options?.abortSignal,
             ),
             options?.abortSignal,
           );
         } else {
-          yield* this.streamWithGeminiParallelRace(raceMsg, imagePaths);
+          yield* this.streamWithGeminiParallelRace(raceMsg, imagePaths, options?.abortSignal);
         }
       }
     } else {
@@ -4011,25 +4012,18 @@ ANSWER DIRECTLY:`;
   private async * streamWithClaude(userMessage: string, systemPrompt?: string, abortSignal?: AbortSignal): AsyncGenerator<string, void, unknown> {
     if (!this.claudeClient) throw new Error("Claude client not initialized");
 
+    const requestControl = createRequestAbortController(LLM_API_TIMEOUT_MS, abortSignal);
+
     const stream = await this.claudeClient.messages.stream({
       model: CLAUDE_MODEL,
       max_tokens: CLAUDE_MAX_OUTPUT_TOKENS,
       ...(systemPrompt ? { system: systemPrompt } : {}),
       messages: [{ role: "user", content: userMessage }],
-    });
-
-    const cancelStream = () => {
-      try {
-        (stream as any).controller?.abort?.();
-      } catch {
-        // Best-effort cancellation only.
-      }
-    };
-    abortSignal?.addEventListener('abort', cancelStream, { once: true });
+    }, { signal: requestControl.signal });
 
     try {
       for await (const event of stream) {
-        if (abortSignal?.aborted) {
+        if (requestControl.signal.aborted) {
           return;
         }
         if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
@@ -4037,7 +4031,7 @@ ANSWER DIRECTLY:`;
         }
       }
     } finally {
-      abortSignal?.removeEventListener('abort', cancelStream);
+      requestControl.cleanup();
     }
   }
 
@@ -4199,6 +4193,8 @@ ANSWER DIRECTLY:`;
       }
     }
 
+    const requestControl = createRequestAbortController(LLM_API_TIMEOUT_MS, abortSignal);
+
     const stream = await this.claudeClient.messages.stream({
       model: CLAUDE_MODEL,
       max_tokens: CLAUDE_MAX_OUTPUT_TOKENS,
@@ -4210,20 +4206,11 @@ ANSWER DIRECTLY:`;
           { type: "text", text: userMessage }
         ]
       }],
-    });
-
-    const cancelStream = () => {
-      try {
-        (stream as any).controller?.abort?.();
-      } catch {
-        // Best-effort cancellation only.
-      }
-    };
-    abortSignal?.addEventListener('abort', cancelStream, { once: true });
+    }, { signal: requestControl.signal });
 
     try {
       for await (const event of stream) {
-        if (abortSignal?.aborted) {
+        if (requestControl.signal.aborted) {
           return;
         }
         if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
@@ -4231,7 +4218,7 @@ ANSWER DIRECTLY:`;
         }
       }
     } finally {
-      abortSignal?.removeEventListener('abort', cancelStream);
+      requestControl.cleanup();
     }
   }
 
@@ -4303,12 +4290,12 @@ ANSWER DIRECTLY:`;
   /**
    * Race Flash and Pro streams, return whichever succeeds first
    */
-  private async * streamWithGeminiParallelRace(fullMessage: string, imagePaths?: string[]): AsyncGenerator<string, void, unknown> {
+  private async * streamWithGeminiParallelRace(fullMessage: string, imagePaths?: string[], abortSignal?: AbortSignal): AsyncGenerator<string, void, unknown> {
     if (!this.client) throw new Error("Gemini client not initialized");
 
     const streams = {
-      flash: this.streamGeminiModelChunks(fullMessage, GEMINI_FLASH_MODEL, imagePaths)[Symbol.asyncIterator](),
-      pro: this.streamGeminiModelChunks(fullMessage, GEMINI_PRO_MODEL, imagePaths)[Symbol.asyncIterator](),
+      flash: this.streamGeminiModelChunks(fullMessage, GEMINI_FLASH_MODEL, imagePaths, abortSignal)[Symbol.asyncIterator](),
+      pro: this.streamGeminiModelChunks(fullMessage, GEMINI_PRO_MODEL, imagePaths, abortSignal)[Symbol.asyncIterator](),
     } as const;
 
     const nextChunk = (name: keyof typeof streams) =>
@@ -4351,7 +4338,7 @@ ANSWER DIRECTLY:`;
   /**
    * Stream chunks from a specific Gemini model.
    */
-  private async * streamGeminiModelChunks(fullMessage: string, model: string, imagePaths?: string[]): AsyncGenerator<string, void, unknown> {
+  private async * streamGeminiModelChunks(fullMessage: string, model: string, imagePaths?: string[], abortSignal?: AbortSignal): AsyncGenerator<string, void, unknown> {
     if (!this.client) throw new Error("Gemini client not initialized");
 
     const contents: any[] = [{ text: fullMessage }];
@@ -4369,6 +4356,8 @@ ANSWER DIRECTLY:`;
       }
     }
 
+    const requestControl = createRequestAbortController(LLM_API_TIMEOUT_MS, abortSignal);
+
     const streamResult = await this.client.models.generateContentStream({
       model: model,
       contents: contents,
@@ -4381,18 +4370,26 @@ ANSWER DIRECTLY:`;
     // @ts-ignore
     const stream = streamResult.stream || streamResult;
 
-    for await (const chunk of stream) {
-      let chunkText = "";
-      if (typeof chunk.text === 'function') {
-        chunkText = chunk.text();
-      } else if (typeof chunk.text === 'string') {
-        chunkText = chunk.text;
-      } else if (chunk.candidates?.[0]?.content?.parts?.[0]?.text) {
-        chunkText = chunk.candidates[0].content.parts[0].text;
+    try {
+      for await (const chunk of stream) {
+        if (requestControl.signal.aborted) {
+          console.log('[LLMHelper] streamGeminiModelChunks aborted');
+          return;
+        }
+        let chunkText = "";
+        if (typeof chunk.text === 'function') {
+          chunkText = chunk.text();
+        } else if (typeof chunk.text === 'string') {
+          chunkText = chunk.text;
+        } else if (chunk.candidates?.[0]?.content?.parts?.[0]?.text) {
+          chunkText = chunk.candidates[0].content.parts[0].text;
+        }
+        if (chunkText) {
+          yield chunkText;
+        }
       }
-      if (chunkText) {
-        yield chunkText;
-      }
+    } finally {
+      requestControl.cleanup();
     }
   }
 
