@@ -6,7 +6,7 @@ import { detectQuestion } from './QuestionDetector';
 import { isOptimizationActive } from '../config/optimizations';
 import type { RuntimeBudgetScheduler } from '../runtime/RuntimeBudgetScheduler';
 import type { IntentResult } from '../llm/IntentClassifier';
-import { isStrongConsciousIntent } from './ConsciousIntentService';
+import { isStrongConsciousIntent, isUncertainConsciousIntent } from './ConsciousIntentService';
 
 type ClassifierLane = Pick<RuntimeBudgetScheduler, 'submit'>;
 
@@ -53,6 +53,11 @@ export interface ConsciousAccelerationOptions {
 export class ConsciousAccelerationOrchestrator {
   private static readonly MAX_SPECULATIVE_ENTRIES = 10;
   private static readonly PREFETCHED_INTENT_TTL_MS = 30_000;
+  // NAT-005 / audit A-5: a prefetched intent that the downstream coordinator
+  // would itself have rejected as below its primary-confidence floor must not
+  // sneak past simply because it arrived before we asked. Mirrors
+  // DEFAULT_MINIMUM_PRIMARY_CONFIDENCE in IntentClassificationCoordinator.
+  private static readonly MIN_PREFETCH_CONFIDENCE = 0.82;
 
   private readonly prefetcher: PredictivePrefetcher;
   private readonly pauseDetector: PauseDetector;
@@ -534,6 +539,20 @@ export class ConsciousAccelerationOrchestrator {
           return;
         }
         if (revision !== this.latestTranscriptRevision) {
+          return;
+        }
+        // NAT-005 / audit A-5: only persist a prefetched intent that is
+        // strong enough to actually drive planner / answer-shape selection
+        // downstream. A weak (low-confidence or 'general') prefetch must
+        // not sit in the cache pretending to be an answer; the consumer
+        // will then re-classify on the live path.
+        if (
+          intent.confidence < ConsciousAccelerationOrchestrator.MIN_PREFETCH_CONFIDENCE
+          || isUncertainConsciousIntent(intent)
+        ) {
+          console.log(
+            `[ConsciousAccelerationOrchestrator] intent.prefetch_discarded_low_confidence intent=${intent.intent} confidence=${intent.confidence.toFixed(3)} threshold=${ConsciousAccelerationOrchestrator.MIN_PREFETCH_CONFIDENCE}`,
+          );
           return;
         }
         this.prefetchedIntents.set(key, { intent, fetchedAt: Date.now() });

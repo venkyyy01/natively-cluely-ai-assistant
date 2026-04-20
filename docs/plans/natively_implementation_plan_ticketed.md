@@ -367,7 +367,7 @@ EPIC-19 (Mega-file decomposition)        -> last; blocks nothing
 - **Rollout notes**: This will increase fallback rate on cold sessions until profile data loads; that is the intended behavior.
 - **Definition of done**: standard DoD.
 
-#### NAT-005 — Confidence-gate prefetched intent storage and re-classify on weak prefetch
+#### NAT-005 [x] — Confidence-gate prefetched intent storage and re-classify on weak prefetch
 
 - **Parent epic**: EPIC-01
 - **Priority**: P0

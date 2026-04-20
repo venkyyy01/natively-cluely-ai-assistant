@@ -56,11 +56,21 @@ export class ConsciousIntentService {
     prefetchedIntent?: CoordinatedIntentResult | null;
   }): Promise<ConsciousIntentResolution> {
     if (input.prefetchedIntent) {
-      return {
-        intentResult: input.prefetchedIntent,
-        totalContextAssemblyMs: Date.now() - input.startedAt,
-        timedOut: false,
-      };
+      // NAT-005 / audit A-5: a prefetched intent that is weak (low confidence
+      // or 'general') must NOT be allowed to silently drive planner and
+      // answer-shape selection. Discard it and run live classification so
+      // the live model gets a fair shot at the real intent.
+      if (isUncertainConsciousIntent(input.prefetchedIntent)) {
+        console.log(
+          `[ConsciousIntentService] intent.prefetch_discarded_low_confidence intent=${input.prefetchedIntent.intent} confidence=${input.prefetchedIntent.confidence?.toFixed?.(3) ?? input.prefetchedIntent.confidence}`,
+        );
+      } else {
+        return {
+          intentResult: input.prefetchedIntent,
+          totalContextAssemblyMs: Date.now() - input.startedAt,
+          timedOut: false,
+        };
+      }
     }
 
     let intentResult: ResolvedIntentResult = {
