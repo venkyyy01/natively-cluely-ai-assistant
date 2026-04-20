@@ -308,7 +308,7 @@ const WEIGHTED_CUES: WeightedCue[] = [
   { pattern: /\btell me about your experience\b/i, weight: 1.2, category: 'behavioral' },
   { pattern: /\bdescribe a situation\b/i, weight: 1.0, category: 'behavioral' },
   { pattern: /\bhow do you manage\b/i, weight: 1.0, category: 'behavioral' },
-  { pattern: /\bhow do you (make|take) .+ decision\b/i, weight: 1.0, category: 'behavioral' },
+  { pattern: /\bhow do you (make|take) .*?decisions?\b/i, weight: 1.0, category: 'behavioral' },
   { pattern: /\bhow do you influence\b/i, weight: 1.2, category: 'behavioral' },
   { pattern: /\bhow do you prioritize\b/i, weight: 1.0, category: 'behavioral' },
   { pattern: /\bwhat is your .+ style\b/i, weight: 1.0, category: 'behavioral' },

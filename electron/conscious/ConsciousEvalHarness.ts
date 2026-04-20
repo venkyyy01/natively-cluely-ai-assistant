@@ -180,6 +180,12 @@ export function getDefaultConsciousEvalScenarios(): ConsciousEvalScenario[] {
       followUpQuestion: 'Tell me about a time you handled disagreement on a team.',
       response: buildBehavioralResponse(),
       expected: 'accept',
+      // NAT-004 / audit A-4: the STAR result quotes "38 percent". The provenance
+      // verifier now fails closed on metric claims with no grounding context, so
+      // we ground the candidate's own behavioral memory here. In production this
+      // is the role the semantic memory plays for behavioral answers.
+      semanticContextBlock:
+        '<conscious_semantic_memory>Past projects: ran a two-phase billing rollout with the partner team and cut rollout rollback volume by 38 percent on the next release.</conscious_semantic_memory>',
     },
     {
       id: 'behavioral-reject',

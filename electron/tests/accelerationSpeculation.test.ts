@@ -348,6 +348,13 @@ test('NAT-002: speculative selection refuses semantic hedging when the finalized
   // match when the finalized query did not exactly equal the noted speculative
   // query. That allowed a *different* question to be answered with another
   // speculation's chunks. The contract is now: exact normalized-query match only.
+  //
+  // We deliberately use a transcript and a finalized question that do NOT
+  // overlap with any PHASE_FOLLOWUP_PATTERNS template — otherwise the prefetcher
+  // independently spawns a speculative entry for the template (e.g.
+  // 'What are the main components?' is a high_level_design template), which
+  // would *legitimately* match an exact-equality lookup and mask the bug we're
+  // guarding against.
   setOptimizationFlags({
     ...DEFAULT_OPTIMIZATION_FLAGS,
     accelerationEnabled: true,
@@ -363,11 +370,12 @@ test('NAT-002: speculative selection refuses semantic hedging when the finalized
     confidence: 0.93,
     answerShape: 'Explain the tradeoffs directly.',
   }));
-  orchestrator.noteTranscriptText('interviewer', 'What are the main comp');
+  const seedQuery = 'Walk me through the read path of your design end to end';
+  orchestrator.noteTranscriptText('interviewer', seedQuery);
   orchestrator.updateTranscriptSegments([
     {
       speaker: 'interviewer',
-      text: 'What are the main comp',
+      text: seedQuery,
       timestamp: Date.now(),
     },
   ], 1);
@@ -379,13 +387,16 @@ test('NAT-002: speculative selection refuses semantic hedging when the finalized
   await (orchestrator as any).maybeStartSpeculativeAnswer();
   await new Promise((resolve) => setTimeout(resolve, 20));
 
-  // Finalized question differs from the noted speculative query — must not hedge.
-  const answer = await orchestrator.getSpeculativeAnswer('What are the main components?', 1, 200);
+  // Finalized question differs from any speculative entry the prefetcher could
+  // have produced (the seed and the high_level_design templates don't mention
+  // "consistency model"). Pre-NAT-002, a 0.72 cosine fallback would have bound
+  // this question to the seed's chunks; post-NAT-002 we must return null.
+  const answer = await orchestrator.getSpeculativeAnswer('What consistency model does it provide for cross-region writes?', 1, 200);
   assert.equal(answer, null);
 
-  // Sanity: an exact normalized match still resolves the same speculation.
-  const exact = await orchestrator.getSpeculativeAnswer('What are the main comp', 1, 200);
-  assert.equal(exact, 'answer for: What are the main comp');
+  // Sanity: an exact normalized match still resolves the original speculation.
+  const exact = await orchestrator.getSpeculativeAnswer(seedQuery, 1, 200);
+  assert.equal(exact, `answer for: ${seedQuery}`);
 
   resetAccelerationTestState();
 });

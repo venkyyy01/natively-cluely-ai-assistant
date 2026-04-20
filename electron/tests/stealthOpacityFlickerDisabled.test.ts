@@ -109,7 +109,11 @@ test('NAT-010: opacity flicker is NOT scheduled even when opted in if not macOS 
       featureFlags: { enableOpacityFlicker: true },
     },
   );
-  // explicitly NOT setting isMacOS15Plus -> stays false
+  // The constructor runs `detectMacOSVersion()` which shells out to
+  // `sw_vers` and may legitimately set `isMacOS15Plus = true` on the host
+  // CI / dev machine. To exercise the "pre-15.4 macOS" branch
+  // deterministically, we override the field back to false here.
+  (manager as unknown as { isMacOS15Plus: boolean }).isMacOS15Plus = false;
   (manager as unknown as { ensureOpacityFlicker: () => void }).ensureOpacityFlicker();
 
   const flickerIntervals = intervals.filter((entry) => entry.intervalMs === 500);
