@@ -87,7 +87,10 @@ test('ConsciousProvenanceVerifier accepts dynamic technology claims grounded by 
   assert.equal(verdict.ok, true);
 });
 
-test('ConsciousProvenanceVerifier accepts technology claims grounded by the current question', () => {
+test('NAT-004 / audit A-9: question text is NOT treated as grounding for technology claims', () => {
+  // The verifier previously accepted this because `relaxed = strict + question`
+  // included the question's "Redis"/"Kafka" terms. Echoing the question is not
+  // evidence — the response must be backed by semantic or evidence context.
   const verifier = new ConsciousProvenanceVerifier();
   const verdict = verifier.verify({
     response: response(),
@@ -96,14 +99,38 @@ test('ConsciousProvenanceVerifier accepts technology claims grounded by the curr
     hypothesis: null,
   });
 
-  assert.equal(verdict.ok, true);
+  assert.equal(verdict.ok, false);
+  assert.equal(verdict.reason, 'unsupported_technology_claim');
 });
 
-test('ConsciousProvenanceVerifier does not reject open-ended technical answers without grounding context', () => {
+test('NAT-004 / audit A-4: empty grounding + technology claim fails closed', () => {
+  // Previously returned `{ ok: true }` because there was no strict grounding
+  // to compare against. That is exactly the failure mode we must close.
   const verifier = new ConsciousProvenanceVerifier();
   const verdict = verifier.verify({
     response: response({ openingReasoning: 'I would use Cassandra for the core path.', implementationPlan: ['Use Cassandra for the write path'] }),
     question: 'How would you use Redis for the cache layer?',
+    hypothesis: null,
+  });
+
+  assert.equal(verdict.ok, false);
+  assert.equal(verdict.reason, 'unsupported_grounding');
+});
+
+test('NAT-004 / audit A-4: empty grounding + no verifiable claim still passes', () => {
+  // Open-ended reasoning that doesn't name a specific technology or quote a
+  // metric is still allowed when there is no grounding context. We only fail
+  // closed when the response makes a claim the verifier cannot verify.
+  const verifier = new ConsciousProvenanceVerifier();
+  const verdict = verifier.verify({
+    response: response({
+      openingReasoning: 'I would scope the requirements first and confirm priorities with the team.',
+      implementationPlan: ['Confirm acceptance criteria', 'Sketch a minimal happy-path flow'],
+      tradeoffs: [],
+      edgeCases: [],
+      scaleConsiderations: [],
+    }),
+    question: 'How would you approach this open-ended design?',
     hypothesis: null,
   });
 

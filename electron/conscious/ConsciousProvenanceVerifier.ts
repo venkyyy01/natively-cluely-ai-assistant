@@ -200,27 +200,46 @@ export class ConsciousProvenanceVerifier {
   private normalizeGroundingContext(input: {
     semanticContextBlock?: string;
     evidenceContextBlock?: string;
-    question?: string;
-  }): { strict: string; relaxed: string } {
+  }): { strict: string } {
     const semanticContext = (input.semanticContextBlock || '').trim().toLowerCase();
     const evidenceContext = (input.evidenceContextBlock || '').trim().toLowerCase();
-    const questionContext = (input.question || '').trim().toLowerCase();
 
+    // NAT-004 / audit A-9: question text is intentionally NOT included in the
+    // grounding context. Echoing the user's question is not evidence that the
+    // claim is true; using it as grounding lets the model "supply" its own
+    // grounding by parroting the question back.
     const strict = [semanticContext, evidenceContext].filter(Boolean).join(' ');
-    const relaxed = [strict, questionContext].filter(Boolean).join(' ');
 
-    return { strict, relaxed };
+    return { strict };
   }
 
-  private findUnsupportedTerms(terms: string[], strictContext: string, relaxedContext: string): string[] {
+  private findUnsupportedTerms(terms: string[], strictContext: string): string[] {
     const unsupported: string[] = [];
     for (const term of terms) {
-      if (strictContext.includes(term) || relaxedContext.includes(term)) {
+      if (strictContext.includes(term)) {
         continue;
       }
       unsupported.push(term);
     }
     return unsupported;
+  }
+
+  /**
+   * NAT-004 / audit A-4: a response that names a specific technology or quotes
+   * a metric must be backed by strict grounding. Used to decide whether an
+   * empty-grounding response is "harmless to wave through" or a real fail.
+   */
+  private responseHasTechnologyOrMetricClaim(response: ConsciousModeStructuredResponse): boolean {
+    const lowered = summaryText(response);
+    const original = summaryText(response, false);
+
+    if (extractTechnologyClaims(original).length > 0) {
+      return true;
+    }
+    if (extractNumbers(lowered).length > 0) {
+      return true;
+    }
+    return false;
   }
 
   verify(input: {
@@ -234,24 +253,23 @@ export class ConsciousProvenanceVerifier {
     const hasStrictGroundingContext = Boolean(grounding.strict);
 
     if (!hasStrictGroundingContext) {
-      return { ok: true };
-    }
-
-    if (!grounding.relaxed.trim()) {
+      // NAT-004 / audit A-4: previously fell open with `{ ok: true }`. Now,
+      // if the response makes a verifiable claim (technology or metric) we
+      // must not pass the verdict — there is literally nothing to verify
+      // against. Open-ended responses with no such claims are still allowed.
+      if (this.responseHasTechnologyOrMetricClaim(input.response)) {
+        return { ok: false, reason: 'unsupported_grounding' };
+      }
       return { ok: true };
     }
 
     const responseText = summaryText(input.response);
     const originalResponseText = summaryText(input.response, false);
-    const dynamicGroundingVocabulary = extractGroundingTechnologyVocabulary(
-      grounding.strict,
-      grounding.relaxed,
-    );
+    const dynamicGroundingVocabulary = extractGroundingTechnologyVocabulary(grounding.strict);
 
     const unsupportedTech = this.findUnsupportedTerms(
       extractTechnologyClaims(originalResponseText, dynamicGroundingVocabulary),
       grounding.strict,
-      grounding.relaxed,
     );
     if (unsupportedTech.length > 0) {
       return { ok: false, reason: 'unsupported_technology_claim' };
@@ -260,7 +278,6 @@ export class ConsciousProvenanceVerifier {
     const unsupportedNumbers = this.findUnsupportedTerms(
       extractNumbers(responseText),
       grounding.strict,
-      grounding.relaxed,
     );
     if (unsupportedNumbers.length > 0) {
       return { ok: false, reason: 'unsupported_metric_claim' };

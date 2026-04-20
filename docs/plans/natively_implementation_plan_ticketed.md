@@ -341,7 +341,7 @@ EPIC-19 (Mega-file decomposition)        -> last; blocks nothing
   - Will run `npm run test:electron`.
 - **Definition of done**: standard DoD.
 
-#### NAT-004 — Make `ConsciousProvenanceVerifier` fail closed on empty grounding and exclude question text from relaxed check
+#### NAT-004 [x] — Make `ConsciousProvenanceVerifier` fail closed on empty grounding and exclude question text from relaxed check
 
 - **Parent epic**: EPIC-01
 - **Priority**: P0
