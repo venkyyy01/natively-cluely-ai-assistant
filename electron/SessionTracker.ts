@@ -14,6 +14,13 @@ const MAX_CONTEXT_HISTORY = 200;
 const HOT_MEMORY_WINDOW_MS = 60_000;
 const HOT_MEMORY_CEILING_BYTES = 50 * 1024 * 1024;
 const WARM_MEMORY_CEILING_BYTES = 100 * 1024 * 1024;
+// NAT-014 / audit R-2: getColdState() previously returned every cold entry
+// it knew about, which on a multi-hour meeting drove the persisted session
+// JSON unbounded. We now cap the snapshot at 8 MB. Overflow rows are
+// dropped from the snapshot — the existing `MeetingPersistence` already
+// owns the on-disk record so persisted history is not lost; the upcoming
+// EPIC-15 event-sourced path will replace this with cold-on-demand reads.
+const COLD_MEMORY_CEILING_BYTES = 8 * 1024 * 1024;
 
 /** Ring buffer for fixed-capacity context items */
 class RingBuffer<T> {
@@ -1631,7 +1638,15 @@ isConsciousModeEnabled(): boolean {
           .filter((entry) => entry.timestamp < cutoff)
           .map((entry, index) => this.toUsageMemoryEntry(entry, `cold-usage-${index}`));
 
-        return [...transcriptEntries, ...usageEntries];
+        // NAT-014: cap the snapshot at COLD_MEMORY_CEILING_BYTES (8 MB).
+        // Without this the persisted session JSON grows unbounded on long
+        // meetings. `applyMemoryCeiling` keeps the most recent entries that
+        // fit in the budget and discards older overflow from the snapshot
+        // (the on-disk record in `MeetingPersistence` is unaffected).
+        return this.applyMemoryCeiling(
+          [...transcriptEntries, ...usageEntries],
+          COLD_MEMORY_CEILING_BYTES,
+        );
     }
 
     createSuccessorSession(): SessionTracker {

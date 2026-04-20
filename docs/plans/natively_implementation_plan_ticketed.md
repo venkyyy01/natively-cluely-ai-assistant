@@ -569,7 +569,7 @@ EPIC-19 (Mega-file decomposition)        -> last; blocks nothing
   - Will run `npm run test:electron`.
 - **Definition of done**: standard DoD.
 
-#### NAT-014 — Apply memory ceiling to `SessionTracker.getColdState`
+#### NAT-014 [x] — Apply memory ceiling to `SessionTracker.getColdState`
 
 - **Parent epic**: EPIC-03
 - **Priority**: P0
