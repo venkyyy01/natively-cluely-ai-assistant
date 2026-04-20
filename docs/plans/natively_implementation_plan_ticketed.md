@@ -316,7 +316,7 @@ EPIC-19 (Mega-file decomposition)        -> last; blocks nothing
 - **Rollout notes**: Slight reduction in speculative hit-rate is expected and accepted.
 - **Definition of done**: standard DoD.
 
-#### NAT-003 — Bind prefetched-context cache lookups to transcript revision
+#### NAT-003 [x] — Bind prefetched-context cache lookups to transcript revision
 
 - **Parent epic**: EPIC-01
 - **Priority**: P0

@@ -227,7 +227,10 @@ export class PredictivePrefetcher {
       try {
         const context = await this.assembleContext(prediction.query);
         const semanticEmbedding = prediction.embedding.length > 0 ? prediction.embedding : undefined;
-        await this.prefetchCache.set(prediction.query, {
+        // NAT-003 / audit A-3: bind the cache key to the current transcript
+        // revision so a semantic match cannot return another revision's
+        // prefetched context. The matching key prefix is used by getContext().
+        await this.prefetchCache.set(this.bindKey(prediction.query), {
           context,
           embedding: prediction.embedding,
           confidence: prediction.confidence,
@@ -342,13 +345,28 @@ export class PredictivePrefetcher {
   } | null> {
     const computedEmbedding = embedding ?? await this.getSemanticEmbedding(query);
     const effectiveEmbedding = computedEmbedding.length > 0 ? computedEmbedding : undefined;
-    const cached = await this.prefetchCache.get(query, effectiveEmbedding);
+    // NAT-003 / audit A-3: lookups are partitioned by transcript revision so
+    // we never return a prefetch from a stale revision (or a different query
+    // that happens to embed close).
+    const cached = await this.prefetchCache.get(
+      this.bindKey(query),
+      effectiveEmbedding,
+      this.bindKeyPrefix(),
+    );
 
     if (cached) {
       return cached.context;
     }
 
     return null;
+  }
+
+  private bindKeyPrefix(): string {
+    return `prefetch:${this.transcriptRevision}:`;
+  }
+
+  private bindKey(query: string): string {
+    return `${this.bindKeyPrefix()}${query.trim().toLowerCase()}`;
   }
 
   private trimBm25Cache(): void {

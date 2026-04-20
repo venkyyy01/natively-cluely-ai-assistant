@@ -23,7 +23,7 @@ export class EnhancedCache<K, V> {
     }
   }
 
-  async get(key: K, embedding?: number[]): Promise<V | undefined> {
+  async get(key: K, embedding?: number[], bindKeyPrefix?: string): Promise<V | undefined> {
     const stringKey = this.serialize(key);
 
     const entry = this.cache.get(stringKey);
@@ -41,7 +41,16 @@ export class EnhancedCache<K, V> {
     }
 
     if (this.config.enableSemanticLookup && embedding && this.embeddings) {
-      return this.findSimilar(embedding);
+      // NAT-003 / audit A-3: refuse to walk the embedding map across binding
+      // domains. A semantic match must only be considered against entries that
+      // share the caller's bindKeyPrefix (e.g. `prefetch:${transcriptRevision}:`).
+      // If the caller forgot to pass a prefix, skip semantic lookup entirely
+      // rather than risking a cross-revision / cross-context bleed.
+      if (typeof bindKeyPrefix !== 'string' || bindKeyPrefix.length === 0) {
+        console.warn('[EnhancedCache] semantic lookup skipped: no bindKeyPrefix provided');
+        return undefined;
+      }
+      return this.findSimilar(embedding, bindKeyPrefix);
     }
 
     return undefined;
@@ -115,7 +124,7 @@ export class EnhancedCache<K, V> {
     }
   }
 
-  private findSimilar(embedding: number[]): V | undefined {
+  private findSimilar(embedding: number[], bindKeyPrefix: string): V | undefined {
     if (!this.embeddings || !this.config.similarityThreshold) {
       return undefined;
     }
@@ -123,6 +132,14 @@ export class EnhancedCache<K, V> {
     let bestMatch: { key: string; similarity: number } | null = null;
 
     for (const [key, storedEmbedding] of this.embeddings) {
+      // Hard partition: only consider entries that live in the caller's
+      // binding domain. Without this filter, a near-embedding from a stale
+      // transcript revision (or an unrelated request) could be returned in
+      // place of the caller's data. See audit A-3 / NAT-003.
+      if (!key.startsWith(bindKeyPrefix)) {
+        continue;
+      }
+
       const similarity = this.cosineSimilarity(embedding, storedEmbedding);
 
       if (similarity >= this.config.similarityThreshold) {
