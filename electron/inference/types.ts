@@ -11,6 +11,8 @@ export interface InferenceRequest {
   contextSnapshot: string;
   budgetDeadlineMs: number;
   draft?: string | null;
+  /** NAT-057: when set with RouteDirector + quality route, race fast-draft vs quality (first valid wins). */
+  parallelCandidates?: boolean;
 }
 
 export interface RouteDecision {

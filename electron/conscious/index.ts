@@ -54,3 +54,4 @@ export { extractConstraints, type ExtractedConstraint, type ConstraintType } fro
 export { detectQuestion, type QuestionDetection, type QuestionType } from './QuestionDetector';
 export { ResponseFingerprinter, type DuplicateCheckResult, type ResponseFingerprintEntry } from './ResponseFingerprint';
 export { ConsciousOrchestrator, type PreparedConsciousRoute, type ConsciousExecutionResult } from './ConsciousOrchestrator';
+export { ConsciousCache, type CacheEntry as ConsciousCacheEntry, type CacheStats as ConsciousCacheStats, type ConsciousCacheConfig } from './ConsciousCache';

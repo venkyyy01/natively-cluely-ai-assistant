@@ -21,6 +21,8 @@ import { ConsciousContextComposer, ConsciousIntentService, ConsciousOrchestrator
 import { ParallelContextAssembler, ContextAssemblyInput, ContextAssemblyOutput } from './cache/ParallelContextAssembler';
 import { getOptimizationFlags, isOptimizationActive } from './config/optimizations';
 import { Metrics } from './runtime/Metrics';
+import { getRouteDirector } from './runtime/RouteDirector';
+import { isRouteDirectorEnabled } from './runtime/routeDirectorEnv';
 import { AnswerLatencyTracker, AnswerRoute } from './latency/AnswerLatencyTracker';
 import { getActiveAccelerationManager } from './services/AccelerationManager';
 import type { AccelerationManager } from './services/AccelerationManager';
@@ -29,6 +31,8 @@ import type { AccelerationManager } from './services/AccelerationManager';
 export type IntelligenceMode = 'idle' | 'assist' | 'what_to_say' | 'follow_up' | 'recap' | 'manual' | 'follow_up_questions' | 'reasoning_first';
 
 const PROFILE_ENRICHMENT_TIMEOUT_MS = 250;
+/** NAT-057: soft wall-clock budget for RouteDirector.runTurn (what-to-say). */
+const WHAT_TO_SAY_ROUTE_DEADLINE_MS = 120_000;
 
 // Refinement intent detection (refined to avoid false positives)
 function detectRefinementIntent(userText: string): { isRefinement: boolean; intent: string } {
@@ -916,6 +920,7 @@ export class IntelligenceEngine extends EventEmitter {
         };
 
         try {
+            const executeWhatToSay = async (): Promise<string | null> => {
             if (!this.whatToAnswerLLM) {
                 console.log('[INTELLIGENCE] ⚠️  whatToAnswerLLM not available, checking fallback...');
                 if (!this.answerLLM) {
@@ -1689,6 +1694,21 @@ export class IntelligenceEngine extends EventEmitter {
 
             this.setMode('idle');
             return fullAnswer;
+            };
+
+            if (isRouteDirectorEnabled()) {
+                return await getRouteDirector().runTurn(
+                    {
+                        turnId: `wts-${requestSequence}`,
+                        transcriptRevision: transcriptRevisionAtStart,
+                        deadlineMs: Date.now() + WHAT_TO_SAY_ROUTE_DEADLINE_MS,
+                        abortSignal: whatToSayAbortController.signal,
+                        getCurrentTranscriptRevision: () => this.session.getTranscriptRevision(),
+                    },
+                    executeWhatToSay,
+                );
+            }
+            return await executeWhatToSay();
 
         } catch (error) {
             if (whatToSayAbortController.signal.aborted || requestSequence !== this.activeWhatToSayRequestId) {

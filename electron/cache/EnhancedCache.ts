@@ -1,4 +1,6 @@
 import { Metrics } from '../runtime/Metrics';
+import type { Cache, CacheGetOptions, CacheSetOptions, CacheStatsSnapshot, SemanticBindContext } from './Cache';
+import { buildSemanticBindKeyPrefix } from './Cache';
 
 export interface CacheConfig {
   maxMemoryMB: number;
@@ -14,7 +16,7 @@ interface CacheEntry<T> {
   sizeBytes: number;
 }
 
-export class EnhancedCache<K, V> {
+export class EnhancedCache<K, V> implements Cache<K, V> {
   private cache: Map<string, CacheEntry<V>> = new Map();
   private embeddings: Map<string, number[]> | null = null;
   private currentMemoryBytes: number = 0;
@@ -25,7 +27,26 @@ export class EnhancedCache<K, V> {
     }
   }
 
-  async get(key: K, embedding?: number[], bindKeyPrefix?: string): Promise<V | undefined> {
+  async get(
+    key: K,
+    embeddingOrOptions?: number[] | CacheGetOptions,
+    bindKeyPrefix?: string,
+  ): Promise<V | undefined> {
+    let embedding: number[] | undefined;
+    let resolvedPrefix: string | undefined = bindKeyPrefix;
+
+    if (embeddingOrOptions && typeof embeddingOrOptions === 'object' && !Array.isArray(embeddingOrOptions)) {
+      const o = embeddingOrOptions as CacheGetOptions;
+      embedding = o.embedding;
+      if (o.bind) {
+        resolvedPrefix = buildSemanticBindKeyPrefix(o.bind.revision, o.bind.sessionId);
+      } else if (o.bindKeyPrefix) {
+        resolvedPrefix = o.bindKeyPrefix;
+      }
+    } else {
+      embedding = embeddingOrOptions as number[] | undefined;
+    }
+
     const stringKey = this.serialize(key);
 
     const entry = this.cache.get(stringKey);
@@ -48,17 +69,24 @@ export class EnhancedCache<K, V> {
       // share the caller's bindKeyPrefix (e.g. `prefetch:${transcriptRevision}:`).
       // If the caller forgot to pass a prefix, skip semantic lookup entirely
       // rather than risking a cross-revision / cross-context bleed.
-      if (typeof bindKeyPrefix !== 'string' || bindKeyPrefix.length === 0) {
+      if (typeof resolvedPrefix !== 'string' || resolvedPrefix.length === 0) {
         console.warn('[EnhancedCache] semantic lookup skipped: no bindKeyPrefix provided');
         return undefined;
       }
-      return this.findSimilar(embedding, bindKeyPrefix);
+      return this.findSimilarByEmbedding(embedding, resolvedPrefix);
     }
 
     return undefined;
   }
 
-  set(key: K, value: V, embedding?: number[]): void {
+  set(key: K, value: V, embeddingOrOptions?: number[] | CacheSetOptions): void {
+    let embedding: number[] | undefined;
+    if (embeddingOrOptions && typeof embeddingOrOptions === 'object' && !Array.isArray(embeddingOrOptions)) {
+      embedding = (embeddingOrOptions as CacheSetOptions).embedding;
+    } else {
+      embedding = embeddingOrOptions as number[] | undefined;
+    }
+
     const stringKey = this.serialize(key);
     const valueStr = typeof value === 'string' ? value : JSON.stringify(value);
     const valueSizeBytes = this.estimateSize(valueStr);
@@ -126,7 +154,13 @@ export class EnhancedCache<K, V> {
     }
   }
 
-  private findSimilar(embedding: number[], bindKeyPrefix: string): V | undefined {
+  async findSimilar(query: string, embedding: number[], bind: SemanticBindContext): Promise<V | undefined> {
+    void query;
+    const prefix = buildSemanticBindKeyPrefix(bind.revision, bind.sessionId);
+    return this.findSimilarByEmbedding(embedding, prefix);
+  }
+
+  private findSimilarByEmbedding(embedding: number[], bindKeyPrefix: string): V | undefined {
     if (!this.embeddings || !this.config.similarityThreshold) {
       return undefined;
     }
@@ -203,7 +237,19 @@ export class EnhancedCache<K, V> {
    * Returns true when an entry existed and was removed, false otherwise,
    * matching the contract of `Map.prototype.delete`.
    */
-  delete(key: K): boolean {
+  evictByPrefix(prefix: string): number {
+    let removed = 0;
+    for (const k of [...this.cache.keys()]) {
+      if (k.startsWith(prefix)) {
+        this.evict(k);
+        removed++;
+      }
+    }
+    return removed;
+  }
+
+  delete(key: K, _options?: { bind?: SemanticBindContext }): boolean {
+    void _options;
     const stringKey = this.serialize(key);
     if (!this.cache.has(stringKey)) {
       // Best-effort cleanup of an orphaned embedding (should not happen,
@@ -222,7 +268,7 @@ export class EnhancedCache<K, V> {
     this.currentMemoryBytes = 0;
   }
 
-  getStats(): { size: number; memoryBytes: number } {
+  getStats(): CacheStatsSnapshot {
     return {
       size: this.cache.size,
       memoryBytes: this.currentMemoryBytes,

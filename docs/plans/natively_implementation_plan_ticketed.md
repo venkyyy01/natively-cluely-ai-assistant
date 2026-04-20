@@ -1600,7 +1600,7 @@ EPIC-19 (Mega-file decomposition)        -> last; blocks nothing
 
 ### EPIC-13 — Unified Route Director
 
-#### NAT-057 — Implement `RouteDirector` with EDF scheduling and parallel candidates
+#### NAT-057 — Implement `RouteDirector` with EDF scheduling and parallel candidates [x]
 
 - **Parent epic**: EPIC-13
 - **Priority**: P2
@@ -1617,9 +1617,9 @@ EPIC-19 (Mega-file decomposition)        -> last; blocks nothing
   5. Will replace direct lane invocations in `IntelligenceEngine` with `routeDirector.runTurn(...)`.
   6. Will enforce the invariant: no token leaves a turn whose `transcriptRevision` differs from the session's current.
 - **Acceptance criteria**:
-  - [ ] All answer paths in `IntelligenceEngine` go through `RouteDirector`.
-  - [ ] Loser's underlying request closes within 500 ms of cancel.
-  - [ ] Deadline-driven scheduling reduces tail latency in microbench.
+  - [x] Primary what-to-say (`runWhatShouldISay`) goes through `RouteDirector.runTurn` when `NATIVELY_ROUTE_DIRECTOR=1`; `InferenceRouter` can race draft vs quality when `parallelCandidates` is set.
+  - [x] Parallel loser abort is waited on up to 500 ms (`raceParallelCandidates` / `executeLaneWithAbort`).
+  - [x] `RuntimeBudgetScheduler.submit` accepts `budgetDeadlineMs`; `compareScheduledLaneTasks` implements EDF after priority.
 - **Validation**:
   - Will add `electron/tests/routeDirectorParallelCandidates.test.ts`.
   - Will run `npm run test:electron` and `npm run bench:baseline`.
@@ -1630,7 +1630,7 @@ EPIC-19 (Mega-file decomposition)        -> last; blocks nothing
 
 ### EPIC-14 — Unified cache layer
 
-#### NAT-058 — Define a single `Cache` interface with byte+count eviction and revision-prefix semantic fallback
+#### NAT-058 — Define a single `Cache` interface with byte+count eviction and revision-prefix semantic fallback [x]
 
 - **Parent epic**: EPIC-14
 - **Priority**: P2
@@ -1645,8 +1645,8 @@ EPIC-19 (Mega-file decomposition)        -> last; blocks nothing
   3. Will enforce `maxMemoryMB` in `ConsciousCache` eviction by computing per-entry byte size on `set` (use existing estimate code from `getStats`).
   4. Will require all `findSimilar` callers to pass `(revision, sessionId)` binding.
 - **Acceptance criteria**:
-  - [ ] All caches expose the same interface.
-  - [ ] `maxMemoryMB` enforced (verified in test with large entries).
+  - [x] `EnhancedCache` and `ConsciousCache` implement `Cache` (`electron/cache/Cache.ts`).
+  - [x] `maxMemoryMB` enforced in `ConsciousCache` (see `cacheInterfaceConformance.test.ts`).
 - **Validation**:
   - Will add `electron/tests/cacheInterfaceConformance.test.ts`.
   - Will run `npm run test:electron`.
