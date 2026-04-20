@@ -81,6 +81,11 @@ export class DatabaseManager {
         return DatabaseManager.instance;
     }
 
+    /** Absolute path to the SQLite DB file (e.g. worker_threads that open their own handle). */
+    public getDatabasePath(): string {
+        return this.dbPath;
+    }
+
     private init() {
         try {
             console.log(`[DatabaseManager] Initializing database at ${this.dbPath}`);

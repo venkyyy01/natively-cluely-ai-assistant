@@ -7,6 +7,10 @@
 // - At query time, VectorStore already has indexed chunks for fast search
 // - Falls back gracefully if embedding API unavailable
 
+import path from 'path';
+import { Worker } from 'worker_threads';
+
+import { DatabaseManager } from '../db/DatabaseManager';
 import { preprocessTranscript, RawSegment } from './TranscriptPreprocessor';
 import { chunkTranscript, Chunk } from './SemanticChunker';
 import { VectorStore } from './VectorStore';
@@ -16,6 +20,8 @@ import { getActiveAccelerationManager } from '../services/AccelerationManager';
 const INDEXING_INTERVAL_MS = 10_000;  // Backstop; final interviewer turns flush sooner
 const MIN_NEW_SEGMENTS = 3;           // Don't chunk unless we have enough new content
 const LIVE_SEGMENT_BACKLOG_LIMIT = 2000;
+/** NAT-053: batch provider.embed calls to reduce round-trips */
+const MAX_EMBED_BATCH = 8;
 const EMBEDDING_DELAY_MS = 250;
 const LIVE_FLUSH_DEBOUNCE_MS = 750;
 const LIVE_PAUSE_GAP_MS = 2_000;
@@ -68,9 +74,12 @@ export class LiveRAGIndexer {
 
         console.log(`[LiveRAGIndexer] Started for meeting ${meetingId}`);
 
+        // NAT-053: defer tick so the interval callback returns quickly (non-blocking scheduling).
         this.timer = setInterval(() => {
-            this.tick().catch(err => {
-                console.error('[LiveRAGIndexer] Tick error:', err);
+            setImmediate(() => {
+                void this.tick().catch(err => {
+                    console.error('[LiveRAGIndexer] Tick error:', err);
+                });
             });
         }, INDEXING_INTERVAL_MS);
     }
@@ -146,37 +155,50 @@ export class LiveRAGIndexer {
                 chunkIndex: this.chunkCounter + i,
             }));
 
-            // 4. Save chunks to DB (without embeddings initially)
-            const chunkIds = this.vectorStore.saveChunks(indexedChunks);
+            // 4. Save chunks off the main thread (worker SQLite insert), fallback to main thread on failure
+            let chunkIds: number[];
+            try {
+                chunkIds = await this.saveChunksViaWorker(indexedChunks);
+            } catch (err) {
+                console.warn('[LiveRAGIndexer] Worker chunk save failed; using main thread:', err);
+                chunkIds = this.vectorStore.saveChunks(indexedChunks);
+            }
             this.chunkCounter += indexedChunks.length;
 
             console.log(`[LiveRAGIndexer] Saved ${indexedChunks.length} chunks (${this.chunkCounter} total) for meeting ${meetingId}`);
 
-            // 5. Embed each chunk (fire-and-forget per chunk, but sequential to avoid rate limits)
+            // 5. Embed in batches (provider.embedBatch when available)
             if (this.embeddingPipeline.isReady()) {
                 let embeddedCount = 0;
-                for (let i = 0; i < chunkIds.length; i++) {
+                for (let i = 0; i < chunkIds.length; i += MAX_EMBED_BATCH) {
                     if (!this.isActive || this.runId !== runId || this.meetingId !== meetingId) {
                         console.warn('[LiveRAGIndexer] Aborting stale embedding loop');
                         break;
                     }
+                    const batchIds = chunkIds.slice(i, i + MAX_EMBED_BATCH);
+                    const batchTexts = indexedChunks.slice(i, i + MAX_EMBED_BATCH).map((c) => c.text);
                     try {
                         const accelerationManager = getActiveAccelerationManager();
-                        const embedding = accelerationManager
-                            ? await accelerationManager.runInLane('background', () => this.embeddingPipeline.getEmbedding(indexedChunks[i].text))
-                            : await this.embeddingPipeline.getEmbedding(indexedChunks[i].text);
+                        const runBatch = () => this.embeddingPipeline.embedDocumentsBatch(batchTexts);
+                        const embeddings = accelerationManager
+                            ? await accelerationManager.runInLane('background', runBatch)
+                            : await runBatch();
                         if (!this.isActive || this.runId !== runId || this.meetingId !== meetingId) {
-                            console.warn('[LiveRAGIndexer] Skipping stale embedding result');
+                            console.warn('[LiveRAGIndexer] Skipping stale embedding batch');
                             break;
                         }
-                        this.vectorStore.storeEmbedding(chunkIds[i], embedding);
-                        embeddedCount++;
-                        if (i < chunkIds.length - 1) {
-                            await new Promise(resolve => setTimeout(resolve, EMBEDDING_DELAY_MS));
+                        for (let j = 0; j < batchIds.length; j++) {
+                            const id = batchIds[j];
+                            const emb = embeddings[j];
+                            if (id === undefined || emb === undefined) continue;
+                            this.vectorStore.storeEmbedding(id, emb);
+                            embeddedCount++;
+                        }
+                        if (i + MAX_EMBED_BATCH < chunkIds.length) {
+                            await new Promise((resolve) => setTimeout(resolve, EMBEDDING_DELAY_MS));
                         }
                     } catch (err) {
-                        console.warn(`[LiveRAGIndexer] Failed to embed chunk ${chunkIds[i]}:`, err);
-                        // Continue with remaining chunks — partial indexing is better than none
+                        console.warn(`[LiveRAGIndexer] Failed to embed batch at offset ${i}:`, err);
                     }
                 }
                 this.indexedChunkCount += embeddedCount;
@@ -255,6 +277,53 @@ export class LiveRAGIndexer {
      */
     isRunning(): boolean {
         return this.isActive;
+    }
+
+    /**
+     * NAT-053: insert chunk rows in a worker thread so the main process does not run sync SQLite transactions.
+     */
+    private async saveChunksViaWorker(chunks: Chunk[]): Promise<number[]> {
+        if (chunks.length === 0) {
+            return [];
+        }
+        const dbPath = DatabaseManager.getInstance().getDatabasePath();
+        const workerPath = path.join(__dirname, 'liveRagIndexerWorker.js');
+        return new Promise((resolve, reject) => {
+            const worker = new Worker(workerPath);
+            let settled = false;
+            const cleanup = () => {
+                if (settled) return;
+                settled = true;
+                void worker.terminate().catch(() => {});
+            };
+            const onMessage = (msg: { ok: true; chunkIds: number[] } | { ok: false; error: string }) => {
+                cleanup();
+                if (msg.ok && 'chunkIds' in msg) {
+                    resolve(msg.chunkIds);
+                } else {
+                    reject(new Error('error' in msg ? msg.error : 'Worker chunk save failed'));
+                }
+            };
+            const onError = (err: Error) => {
+                cleanup();
+                reject(err);
+            };
+            worker.once('message', onMessage);
+            worker.once('error', onError);
+            worker.postMessage({
+                type: 'saveChunks',
+                dbPath,
+                chunks: chunks.map((c) => ({
+                    meetingId: c.meetingId,
+                    chunkIndex: c.chunkIndex,
+                    speaker: c.speaker,
+                    startMs: c.startMs,
+                    endMs: c.endMs,
+                    text: c.text,
+                    tokenCount: c.tokenCount,
+                })),
+            });
+        });
     }
 
     private clearPendingFlush(): void {

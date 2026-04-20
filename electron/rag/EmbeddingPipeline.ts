@@ -379,6 +379,24 @@ export class EmbeddingPipeline {
     }
 
     /**
+     * Batch embed document chunks (NAT-053). Uses provider.embedBatch when available.
+     */
+    async embedDocumentsBatch(texts: string[]): Promise<number[][]> {
+        if (!this.provider) {
+            throw new Error('Embedding provider not initialized');
+        }
+        if (texts.length === 0) {
+            return [];
+        }
+        try {
+            return await this.provider.embedBatch(texts);
+        } catch (err) {
+            console.warn('[EmbeddingPipeline] embedBatch failed; falling back to per-text embed:', err);
+            return Promise.all(texts.map((t) => this.provider!.embed(t)));
+        }
+    }
+
+    /**
      * Get embedding for a search query (may use different prefix for asymmetric models)
      */
     async getEmbeddingForQuery(text: string): Promise<number[]> {

@@ -1499,7 +1499,7 @@ EPIC-19 (Mega-file decomposition)        -> last; blocks nothing
 
 ### EPIC-10 — LiveRAG indexer to worker
 
-#### NAT-053 — Move `LiveRAGIndexer.tick` to a worker with embedding batching
+#### NAT-053 [x] — Move `LiveRAGIndexer.tick` to a worker with embedding batching
 
 - **Parent epic**: EPIC-10
 - **Priority**: P1
@@ -1521,7 +1521,7 @@ EPIC-19 (Mega-file decomposition)        -> last; blocks nothing
   - Will run `npm run test:soak`.
 - **Definition of done**: standard DoD.
 
-#### NAT-054 — Parallelize embedding with BM25 and phase in `ParallelContextAssembler`
+#### NAT-054 [x] — Parallelize embedding with BM25 and phase in `ParallelContextAssembler`
 
 - **Parent epic**: EPIC-10
 - **Priority**: P1

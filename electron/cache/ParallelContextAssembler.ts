@@ -202,22 +202,18 @@ export class ParallelContextAssembler {
 
     const docs = this.buildRetrievalDocuments(input.transcript);
 
-    // Try to use real embeddings if ANE provider is available
     const embeddingProvider = getEmbeddingProvider();
-    let embedding: number[];
+    const embeddingP: Promise<number[]> = embeddingProvider?.isInitialized()
+      ? embeddingProvider.embed(input.query)
+      : this.runInWorker<number[]>('embedding', { query: input.query });
 
-    if (embeddingProvider?.isInitialized()) {
-      // Use real embeddings from ANE provider
-      embedding = await embeddingProvider.embed(input.query);
-    } else {
-      // Fall back to hash-based embedding (worker thread)
-      embedding = await this.runInWorker<number[]>('embedding', { query: input.query });
-    }
+    const bm25P = this.runInWorker<Array<{ text: string; score: number; timestamp: number }>>('bm25', {
+      query: input.query,
+      documents: docs,
+    });
+    const phaseP = this.runInWorker<InterviewPhase>('phase', { transcript: input.transcript });
 
-    const [bm25ResultsRaw, phaseResult] = await Promise.all([
-      this.runInWorker<Array<{ text: string; score: number; timestamp: number }>>('bm25', { query: input.query, documents: docs }),
-      this.runInWorker<InterviewPhase>('phase', { transcript: input.transcript }),
-    ]);
+    const [embedding, bm25ResultsRaw, phase] = await Promise.all([embeddingP, bm25P, phaseP]);
 
     const speakerByText = new Map<string, 'interviewer' | 'user' | 'assistant'>();
     for (const doc of docs) {
@@ -227,13 +223,12 @@ export class ParallelContextAssembler {
       }
     }
 
-    const bm25Results = (await bm25ResultsRaw).map((r: { text: string; score: number; timestamp: number }) => ({
+    const bm25Results = bm25ResultsRaw.map((r: { text: string; score: number; timestamp: number }) => ({
       role: speakerByText.get(r.text.trim().toLowerCase()) ?? 'interviewer' as const,
       text: r.text,
       score: r.score,
       timestamp: r.timestamp,
     }));
-    const phase = await phaseResult;
     const relevantContext = this.selectRelevantContext(bm25Results, phase);
     const confidence = this.calculateConfidence(embedding, relevantContext);
 
