@@ -1285,24 +1285,31 @@ EPIC-19 (Mega-file decomposition)        -> last; blocks nothing
   - Will run `npm run test:electron`.
 - **Definition of done**: standard DoD.
 
-#### NAT-047 — Restore newlines in `clampResponse` for prose answers
+#### NAT-047 [x] — Restore newlines in `clampResponse` for prose answers
 
 - **Parent epic**: EPIC-08
 - **Priority**: P2
 - **Type**: bug-fix
 - **Original finding**: A-13
 - **Goal**: Multi-line prose will preserve structure; only collapse when text is non-list-like.
-- **Affected files**: `electron/llm/postProcessor.ts` (lines 128–133).
+- **Affected files**: `electron/llm/postProcessor.ts` (`stripMarkdown`).
 - **Dependencies**: None
-- **Implementation steps**:
-  1. Will change `result.replace(/\n+/g, ' ')` to first detect list-like or short-line content; if not list-like, collapse only runs of ≥3 blank lines into 2.
-  2. Will preserve existing code-fence handling.
+- **Implementation (actual)**:
+  - Replaced the two-line collapse-everything block (`/\n+/g, " "` then `/\s+/g, " "`) with a paragraph-aware pipeline:
+    1. Normalize CRLF → LF.
+    2. Strip trailing whitespace before each newline so wrap-time `"foo  \n"` doesn't pretend to be a structural break.
+    3. Replace runs of 2+ newlines with a sentinel.
+    4. Replace remaining single newlines with a space (line wrap → space).
+    5. Restore the sentinel as exactly `\n\n` (one blank line).
+    6. Collapse only `[ \t]+` (never `\s+`) so paragraph breaks survive the in-line whitespace pass.
+  - Did **not** add list-aware logic (step 1 of the original plan). By the time newline collapsing runs, bullet markers (`-`, `*`, `1.`) have already been stripped, so list-aware detection would be a redundant guess. The actual user-visible defect was paragraph break loss, and that's what the fix restores.
+  - Discovered and fixed a pre-existing latent bug while writing the code-fence regression test: the placeholder `__CODE_BLOCK_${i}__` was being mangled by the italic-stripping regex (`_text_`), permanently dropping code fences from output. Switched the placeholder to a markdown-inert control-character sentinel pair (`\u0002CODEBLOCK${i}\u0003`).
 - **Acceptance criteria**:
-  - [ ] Prose answer with paragraph breaks retains paragraph breaks.
-- **Validation**:
-  - Will add `electron/tests/postProcessorNewlines.test.ts`.
-  - Will run `npm run test:electron`.
-- **Definition of done**: standard DoD.
+  - [x] Prose answer with paragraph breaks retains paragraph breaks (verified end-to-end via `clampResponse`).
+- **Validation (done)**:
+  - Added `electron/tests/postProcessorNewlines.test.ts` with 6 cases: paragraph preservation, line-wrap collapse, trailing-whitespace handling, 3+ blank-line collapse, code-fence verbatim preservation, in-line whitespace collapse.
+  - Re-ran `npx tsc -p electron/tsconfig.json --noEmit` → clean.
+  - Re-ran the affected test files → 15/15 pass (6 new NAT-047 + 4 existing `llm-validation` + 5 existing `llm-integration`, including the `LLM Integration Tests` suite for `generateSuggestion`, which exercises the same code path).
 
 #### NAT-048 — Wire `ResponseFingerprinter` into `ConsciousResponseCoordinator`
 
