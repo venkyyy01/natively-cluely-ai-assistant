@@ -167,6 +167,3 @@ export function classifyTextModel(modelId: string): TextModelFamily | null {
 
   return null;
 }
-
-// ─── Service Class ──────────────────────────────────────────────────────
-

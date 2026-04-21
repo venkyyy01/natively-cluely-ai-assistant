@@ -143,11 +143,11 @@ function installIpcHandlersTestHarness(options?: {
       };
     }
 
-    if (request === './services/CredentialsManager') {
+    if (request === './services/CredentialsManager' || request === '../services/CredentialsManager') {
       return { CredentialsManager: { getInstance: () => credentialsManager } };
     }
 
-    if (request === './services/OllamaManager') {
+    if (request === './services/OllamaManager' || request === '../services/OllamaManager') {
       return { OllamaManager: { getInstance: () => ({ init: async () => {} }) } };
     }
 
@@ -203,6 +203,10 @@ showMainWindow: () => {},
 async function initializeHandlers(harness: ReturnType<typeof installIpcHandlersTestHarness>) {
   const modulePath = require.resolve('../ipcHandlers');
   delete require.cache[modulePath];
+  // handlerContext binds ipcMain at module load; each test installs a fresh electron mock with a new handler map.
+  delete require.cache[require.resolve('../ipc/handlerContext')];
+  delete require.cache[require.resolve('../ipc/registerLlmCredentialsIpcHandlers')];
+  delete require.cache[require.resolve('../ipc/registerProviderSttAndTestIpcHandlers')];
   const { initializeIpcHandlers } = await import('../ipcHandlers');
   initializeIpcHandlers(harness.appState as any);
 }
@@ -232,6 +236,8 @@ async function loadPreloadModule(invokeImpl: (channel: string, ...args: unknown[
 
   const modulePath = require.resolve('../preload');
   delete require.cache[modulePath];
+  delete require.cache[require.resolve('../preload/api')];
+  delete require.cache[require.resolve('../preload/types')];
   await import('../preload');
 
   return {

@@ -6,7 +6,14 @@ import path from 'path'
 const SERVICES_DIR = path.join(process.cwd(), 'electron', 'services')
 
 test('NAT-067: ModelVersionManager split modules exist', () => {
-  const modules = ['modelVersionTypes.ts', 'modelVersionUtils.ts', 'ModelVersionManager.ts']
+  const modules = [
+    'modelVersionTypes.ts',
+    'modelVersionUtils.ts',
+    'modelVersionPersistence.ts',
+    'modelVersionTierUpgrade.ts',
+    'modelVersionProviderDiscovery.ts',
+    'ModelVersionManager.ts',
+  ]
   for (const mod of modules) {
     const modPath = path.join(SERVICES_DIR, mod)
     assert.ok(fs.existsSync(modPath), `${mod} should exist`)
