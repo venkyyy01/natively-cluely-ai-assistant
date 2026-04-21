@@ -1095,9 +1095,9 @@ try {
     // Wire Transcript Events - store references for proper cleanup
     const sttEmitter = stt as EventEmitter
 
-    const transcriptHandler = (segment: { text: string, isFinal: boolean, confidence: number }) => {
+    const transcriptHandler = (segment: { text: string, isFinal: boolean, confidence: number, traceId?: string }) => {
       // Enhanced debugging for transcript flow
-      console.log(`[TRANSCRIPT] 📝 ${speaker}: "${segment.text.substring(0, 100)}${segment.text.length > 100 ? '...' : ''}" (final: ${segment.isFinal}, conf: ${segment.confidence?.toFixed(2) || 'N/A'}, meeting: ${this.isMeetingActive})`);
+      console.log(`[TRANSCRIPT] 📝 ${speaker}: "${segment.text.substring(0, 100)}${segment.text.length > 100 ? '...' : ''}" (final: ${segment.isFinal}, conf: ${segment.confidence?.toFixed(2) || 'N/A'}, meeting: ${this.isMeetingActive}, traceId: ${segment.traceId || 'none'})`);
       
       if (!this.isMeetingActive) {
         console.warn('[TRANSCRIPT] ⚠️  Transcript received but meeting not active - discarding');
@@ -1112,7 +1112,8 @@ try {
         text: segment.text,
         timestamp: Date.now(),
         final: segment.isFinal,
-        confidence: segment.confidence
+        confidence: segment.confidence,
+        traceId: segment.traceId,
       });
 
       // Feed final transcript to JIT RAG indexer

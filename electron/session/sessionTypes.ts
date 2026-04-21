@@ -79,6 +79,8 @@ export interface TranscriptSegment {
   timestamp: number;
   final: boolean;
   confidence?: number;
+  /** NAT-XXX: Trace ID for correlation with STT and intent classification */
+  traceId?: string;
 }
 
 export interface SuggestionTrigger {
