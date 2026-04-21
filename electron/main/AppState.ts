@@ -1,0 +1,3120 @@
+import { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, shell, systemPreferences, globalShortcut, session } from "electron"
+import { EventEmitter } from "events"
+import { randomUUID } from "node:crypto"
+import path from "path"
+import fs from "fs"
+import fsPromises from "fs/promises"
+import { syncOptimizationFlagsFromSettings } from "../config/optimizations"
+import { AudioSupervisor } from "../runtime/AudioSupervisor"
+import { SttSupervisor } from "../runtime/SttSupervisor"
+import { InferenceSupervisor } from "../runtime/InferenceSupervisor"
+import { StealthSupervisor } from "../runtime/StealthSupervisor"
+import { RecoverySupervisor } from "../runtime/RecoverySupervisor"
+import { WindowFacade } from "../runtime/WindowFacade"
+import { SettingsFacade } from "../runtime/SettingsFacade"
+import { ScreenshotFacade } from "../runtime/ScreenshotFacade"
+import { AudioFacade } from "../runtime/AudioFacade"
+import { getPerformanceInstrumentation, type PerformanceInstrumentation } from "../runtime/PerformanceInstrumentation"
+import { RuntimeCoordinator } from "../runtime/RuntimeCoordinator"
+import { StealthManager } from "../stealth/StealthManager"
+import { createMacosVirtualDisplayCoordinator, resolveMacosVirtualDisplayHelperPath } from "../stealth/macosVirtualDisplayIntegration"
+import { NativeStealthBridge } from "../stealth/NativeStealthBridge"
+import { derivePrivacyShieldState, type PrivacyShieldState } from "../stealth/privacyShieldState"
+import { PrivacyShieldRecoveryController } from "../stealth/PrivacyShieldRecoveryController"
+import { isEnvFlagEnabled } from './logging'
+import { WindowHelper } from "../WindowHelper"
+import { SettingsWindowHelper } from "../SettingsWindowHelper"
+import { ModelSelectorWindowHelper } from "../ModelSelectorWindowHelper"
+import { ScreenshotHelper } from "../ScreenshotHelper"
+import { KeybindManager } from "../services/KeybindManager"
+import { ProcessingHelper } from "../ProcessingHelper"
+import { IntelligenceManager } from "../IntelligenceManager"
+import type { SuggestedAnswerMetadata } from "../IntelligenceEngine"
+import { SystemAudioCapture } from "../audio/SystemAudioCapture"
+import { MicrophoneCapture } from "../audio/MicrophoneCapture"
+import { AudioDevices, type AudioDevice } from "../audio/AudioDevices"
+import { GoogleSTT } from "../audio/GoogleSTT"
+import { RestSTT } from "../audio/RestSTT"
+import { DeepgramStreamingSTT } from "../audio/DeepgramStreamingSTT"
+import { SonioxStreamingSTT } from "../audio/SonioxStreamingSTT"
+import { ElevenLabsStreamingSTT } from "../audio/ElevenLabsStreamingSTT"
+import { OpenAIStreamingSTT } from "../audio/OpenAIStreamingSTT"
+import { getNativeAudioLoadError } from "../audio/nativeModule"
+import { ThemeManager } from "../ThemeManager"
+import { RAGManager } from "../rag/RAGManager"
+import { DatabaseManager } from "../db/DatabaseManager"
+import { warmupIntentClassifier } from "../llm"
+import { maybeHandleSuggestionTriggerFromTranscript } from "../ConsciousMode"
+import { MeetingCheckpointer } from "../MeetingCheckpointer"
+import { STTReconnector } from "../STTReconnector"
+import { CredentialsManager } from "../services/CredentialsManager"
+import { SettingsManager } from "../services/SettingsManager"
+import { OllamaManager } from '../services/OllamaManager'
+import {
+  type STTProvider,
+  safeFinalize,
+  safeSetAudioChannelCount,
+  safeNotifySpeechEnded,
+  safeDestroy,
+  computePcm16Rms,
+} from './sttUtils'
+
+// Premium: Knowledge modules loaded conditionally
+let KnowledgeOrchestratorClass: any = null;
+let KnowledgeDatabaseManagerClass: any = null;
+try {
+    KnowledgeOrchestratorClass = require('../../premium/electron/knowledge/KnowledgeOrchestrator').KnowledgeOrchestrator;
+    KnowledgeDatabaseManagerClass = require('../../premium/electron/knowledge/KnowledgeDatabaseManager').KnowledgeDatabaseManager;
+} catch {
+    console.log('[Main] Knowledge modules not available — profile intelligence disabled.');
+}
+export class AppState {
+  private static instance: AppState | null = null
+
+  private windowHelper: WindowHelper
+  public settingsWindowHelper: SettingsWindowHelper
+  public modelSelectorWindowHelper: ModelSelectorWindowHelper
+  private stealthManager: StealthManager
+  private screenshotHelper: ScreenshotHelper
+  public processingHelper: ProcessingHelper
+  private accelerationManager: import('../services/AccelerationManager').AccelerationManager | null = null
+  private readonly performanceInstrumentation: PerformanceInstrumentation
+  private readonly runtimeCoordinator: RuntimeCoordinator
+
+  private intelligenceManager: IntelligenceManager
+  private themeManager: ThemeManager
+  private ragManager: RAGManager | null = null
+  private knowledgeOrchestrator: any = null
+  private checkpointer: MeetingCheckpointer | null = null
+  private sttReconnector: STTReconnector | null = null
+  private virtualDisplayCoordinator: import('../stealth/MacosVirtualDisplayClient').VirtualDisplayCoordinator | null = null
+  private nativeStealthBridge: NativeStealthBridge | null = null
+  private tray: Tray | null = null
+private disguiseMode: 'terminal' | 'settings' | 'activity' | 'none' = 'none'
+private consciousModeEnabled: boolean = false
+
+  // View management
+  private view: "queue" | "solutions" = "queue"
+  private isUndetectable: boolean = false
+  private privacyShieldFaultReason: string | null = null
+  private privacyShieldWarnings: string[] = []
+  private privacyShieldState: PrivacyShieldState = { active: false, reason: null }
+  private privacyShieldRecoveryController: PrivacyShieldRecoveryController | null = null
+
+  private problemInfo: {
+    problem_statement: string
+    input_format: Record<string, any>
+    output_format: Record<string, any>
+    constraints: Array<Record<string, any>>
+    test_cases: Array<Record<string, any>>
+  } | null = null // Allow null
+
+  private hasDebugged: boolean = false
+  private isMeetingActive: boolean = false; // Guard for session state leaks
+  private meetingLifecycleState: 'idle' | 'starting' | 'active' | 'stopping' = 'idle'
+  private meetingStartSequence = 0
+  private meetingStartMutex: Promise<void> = Promise.resolve() // Prevents race conditions
+  private nativeAudioConnected: boolean = false;
+  private latestTranscriptBySpeaker: Record<'interviewer' | 'user', string> = {
+    interviewer: '',
+    user: '',
+  }
+  private _disguiseTimers: NodeJS.Timeout[] = []; // Track forceUpdate timeouts
+
+  private clearDisguiseTimers(): void {
+    for (const timer of this._disguiseTimers) {
+      clearTimeout(timer)
+    }
+    this._disguiseTimers = []
+  }
+
+  private trackDisguiseTimer(timer: NodeJS.Timeout): void {
+    this._disguiseTimers.push(timer)
+  }
+
+  private scheduleDisguiseTimer(callback: () => void, delayMs: number): void {
+    const timer = setTimeout(() => {
+      try {
+        callback()
+      } finally {
+        this._disguiseTimers = this._disguiseTimers.filter(t => t !== timer)
+      }
+    }, delayMs)
+    this.trackDisguiseTimer(timer)
+  }
+  private _ollamaBootstrapPromise: Promise<void> | null = null;
+  private audioRecoveryAttempts: number = 0;
+  private readonly MAX_AUDIO_RECOVERY_ATTEMPTS = 3;
+  private audioRecoveryBackoffMs: number = 5000;
+  private currentMeetingId: string | null = null;
+  private startAbortController: AbortController | null = null;
+  private audioHealthCheckTimer: NodeJS.Timeout | null = null;
+  private readonly AUDIO_PIPELINE_STARTUP_HEALTH_DELAY_MS = 8000;
+  private readonly AUDIO_PIPELINE_PERIODIC_HEALTH_INTERVAL_MS = 60000;
+  private audioPipelineStats = {
+    startedAt: 0,
+    systemChunks: 0,
+    microphoneChunks: 0,
+    interviewerTranscripts: 0,
+    userTranscripts: 0,
+  };
+  private audioPipelineLastSnapshot = {
+    systemChunks: 0,
+    microphoneChunks: 0,
+    interviewerTranscripts: 0,
+    userTranscripts: 0,
+  };
+
+
+  // Processing events
+  public readonly PROCESSING_EVENTS = {
+    //global states
+    UNAUTHORIZED: "procesing-unauthorized",
+    NO_SCREENSHOTS: "processing-no-screenshots",
+
+    //states for generating the initial solution
+    INITIAL_START: "initial-start",
+    PROBLEM_EXTRACTED: "problem-extracted",
+    SOLUTION_SUCCESS: "solution-success",
+    INITIAL_SOLUTION_ERROR: "solution-error",
+
+    //states for processing the debugging
+    DEBUG_START: "debug-start",
+    DEBUG_SUCCESS: "debug-success",
+    DEBUG_ERROR: "debug-error"
+  } as const
+
+constructor() {
+// 1. Load boot-critical settings first (used by WindowHelpers)
+const settingsManager = SettingsManager.getInstance();
+this.isUndetectable = settingsManager.get('isUndetectable') ?? false;
+this.disguiseMode = settingsManager.get('disguiseMode') ?? 'none';
+this.consciousModeEnabled = settingsManager.get('consciousModeEnabled') ?? false;
+
+// 1a. Sync acceleration optimization flags from settings
+const accelerationModeEnabled = settingsManager.getAccelerationModeEnabled();
+syncOptimizationFlagsFromSettings(accelerationModeEnabled);
+
+console.log(`[AppState] Initialized with isUndetectable=${this.isUndetectable}, disguiseMode=${this.disguiseMode}, consciousModeEnabled=${this.consciousModeEnabled}, accelerationModeEnabled=${accelerationModeEnabled}`);
+
+// 2. Initialize Helpers with loaded state
+// Feature flags default to ON with safe fallback to Layer 0 if broken
+const enablePrivateMacosStealthApi =
+  !(process as NodeJS.Process & { mas?: boolean }).mas && (
+    isEnvFlagEnabled(process.env.NATIVELY_ENABLE_PRIVATE_MACOS_STEALTH_API) ??
+    (settingsManager.get('enablePrivateMacosStealthApi') ?? true)
+  )
+const enableCaptureDetectionWatchdog =
+  isEnvFlagEnabled(process.env.NATIVELY_ENABLE_CAPTURE_DETECTION_WATCHDOG) ??
+  // Off by default. The heuristic matches common apps like Chrome/Slack and
+  // visibly hides/restores the main window in normal desktop sessions.
+  (settingsManager.get('enableCaptureDetectionWatchdog') ?? false)
+const configuredCaptureToolPatterns = (settingsManager.get('captureToolPatterns') ?? [])
+  .map((pattern) => {
+    try {
+      return new RegExp(pattern, 'i')
+    } catch (error) {
+      console.warn(`[Stealth] Ignoring invalid capture tool pattern: ${pattern}`, error)
+      return null
+    }
+  })
+  .filter((pattern): pattern is RegExp => pattern !== null)
+const enableVirtualDisplayIsolation =
+  process.platform === 'darwin' &&
+  !(process as NodeJS.Process & { mas?: boolean }).mas &&
+  (
+    isEnvFlagEnabled(process.env.NATIVELY_ENABLE_VIRTUAL_DISPLAY_ISOLATION) ??
+    (settingsManager.get('enableVirtualDisplayIsolation') ?? true)
+  )
+
+this.virtualDisplayCoordinator =
+  process.platform === 'darwin' && enableVirtualDisplayIsolation
+    ? (() => {
+        const helperPath = resolveMacosVirtualDisplayHelperPath()
+        if (!helperPath) {
+          console.warn('[Stealth] macOS virtual display helper was requested but no helper binary was found')
+          return null
+        }
+
+        console.log(`[Stealth] macOS virtual display helper: ${helperPath}`)
+        return createMacosVirtualDisplayCoordinator(helperPath)
+      })()
+    : null
+
+this.nativeStealthBridge =
+  process.platform === 'darwin' && enableVirtualDisplayIsolation
+    ? new NativeStealthBridge({
+        helperPathResolver: () => resolveMacosVirtualDisplayHelperPath(),
+        logger: { warn: console.warn },
+        onHelperDisconnect: (reason) => {
+          this.handleStealthRuntimeFault(`native-helper-disconnect:${reason}`)
+        },
+      })
+    : null
+
+if (process.platform === 'darwin') {
+  const macosStealthLevel = enableVirtualDisplayIsolation
+    ? 'virtual-display'
+    : enablePrivateMacosStealthApi
+      ? 'native-plus-cgs'
+      : this.isUndetectable
+        ? 'native-baseline'
+        : 'fallback-only'
+  console.log(`[Stealth] macOS level=${macosStealthLevel}, helper=${this.virtualDisplayCoordinator ? 'connected' : 'none'}`)
+}
+
+this.stealthManager = new StealthManager({ enabled: this.isUndetectable }, {
+  featureFlags: {
+    enablePrivateMacosStealthApi,
+    enableCaptureDetectionWatchdog,
+    enableVirtualDisplayIsolation,
+    enableSCStreamDetection: true,
+  },
+  captureToolPatterns: configuredCaptureToolPatterns.length > 0 ? configuredCaptureToolPatterns : undefined,
+  virtualDisplayCoordinator: this.virtualDisplayCoordinator ?? undefined,
+})
+this.windowHelper = new WindowHelper(this, this.stealthManager)
+this.settingsWindowHelper = new SettingsWindowHelper(this.stealthManager)
+this.modelSelectorWindowHelper = new ModelSelectorWindowHelper(this.stealthManager)
+
+this.stealthManager.on('stealth-degraded', (warnings: string[]) => {
+  console.warn(`[Main] Stealth degraded: ${warnings.join(', ')}`);
+  this.privacyShieldWarnings = warnings;
+  this.syncPrivacyShieldState();
+  this.privacyShieldRecoveryController?.update()
+  this._broadcastToAllWindows('stealth-degraded', warnings);
+  this.handleStealthDegradation(warnings);
+});
+// 3. Initialize other helpers
+this.screenshotHelper = new ScreenshotHelper(this.view)
+this.processingHelper = new ProcessingHelper(this)
+this.performanceInstrumentation = getPerformanceInstrumentation()
+this.runtimeCoordinator = new RuntimeCoordinator(this)
+this.privacyShieldRecoveryController = new PrivacyShieldRecoveryController({
+  getSnapshot: () => ({
+    isUndetectable: this.isUndetectable,
+    faultReason: this.privacyShieldFaultReason,
+    warnings: this.privacyShieldWarnings,
+    stealthState: this.getStealthSupervisorOrNull()?.getStealthState() ?? 'OFF',
+  }),
+  recoverFullStealth: async () => {
+    if (!this.isUndetectable) {
+      return
+    }
+
+    const stealthSupervisor = this.runtimeCoordinator.getSupervisor<StealthSupervisor>('stealth')
+    if (stealthSupervisor.getState() === 'idle') {
+      await stealthSupervisor.start()
+    }
+
+    await stealthSupervisor.setEnabled(true)
+  },
+  logger: { log: console.log, warn: console.warn },
+})
+this.bindRuntimeCoordinatorEvents()
+this.windowHelper.setStealthRuntimeHeartbeatListener(() => {
+  try {
+    this.runtimeCoordinator.getSupervisor<StealthSupervisor>('stealth').noteRuntimeHeartbeat()
+  } catch (error) {
+    console.warn('[Stealth] Ignoring runtime heartbeat before supervisor registration:', error)
+  }
+})
+
+this.sttReconnector = new STTReconnector(async (speaker) => {
+  if (!this.isMeetingActive) return;
+  await this.reconnectSpeakerStt(speaker);
+});
+this.sttReconnector.on('reconnecting', (payload: { speaker: 'interviewer' | 'user'; attempt: number; delayMs: number }) => {
+  this.broadcast('reconnecting', payload);
+});
+this.sttReconnector.on('reconnected', (payload: { speaker: 'interviewer' | 'user'; attempt: number }) => {
+  this.broadcast('reconnected', payload);
+});
+this.sttReconnector.on('exhausted', ({ speaker }: { speaker: 'interviewer' | 'user' }) => {
+  this.broadcast('meeting-audio-error', `Transcription connection failed permanently for ${speaker}`);
+});
+
+this.syncWindowStealthProtection(this.isUndetectable);
+
+    // Initialize KeybindManager
+    const keybindManager = KeybindManager.getInstance();
+    keybindManager.setWindowHelper(this.windowHelper);
+    keybindManager.setupIpcHandlers();
+    keybindManager.onUpdate(() => {
+      this.updateTrayMenu();
+    });
+
+keybindManager.onShortcutTriggered(async (actionId) => {
+  console.log(`[Main] Global shortcut triggered: ${actionId}`);
+  try {
+    if (actionId === 'general:emergency-hide') {
+      // CRITICAL: Emergency hide - instantly hide all windows for privacy
+      console.warn('[Main] EMERGENCY HIDE ACTIVATED');
+      this.windowHelper.hideMainWindow();
+      // Activate privacy shield to hide sensitive content
+      this.setPrivacyShieldFault('emergency_hide', 'Emergency hide activated - sensitive content hidden');
+      const mainWindow = this.getMainWindow();
+      if (mainWindow) {
+        mainWindow.webContents.send('emergency-hide-activated');
+      }
+    } else if (actionId === 'general:toggle-visibility') {
+      this.toggleMainWindow();
+    } else if (actionId === 'general:toggle-clickthrough') {
+      const enabled = this.windowHelper.toggleOverlayClickthrough();
+      const mainWindow = this.getMainWindow();
+      if (mainWindow) {
+        mainWindow.webContents.send('overlay-clickthrough-changed', enabled);
+      }
+    } else if (actionId === 'general:restore-full-stealth') {
+      const recovered = await this.privacyShieldRecoveryController?.triggerManualRecovery() ?? false
+      if (!recovered) {
+        console.warn('[Stealth] Full stealth recovery shortcut ignored because capture risk is still active or stealth is not faulted')
+      }
+    } else if (actionId === 'general:take-screenshot') {
+          const screenshotPath = await this.takeScreenshot();
+          const preview = await this.getImagePreview(screenshotPath);
+          const mainWindow = this.getMainWindow();
+          if (mainWindow) {
+            mainWindow.webContents.send("screenshot-taken", {
+              path: screenshotPath,
+              preview
+            });
+          }
+        } else if (actionId === 'general:selective-screenshot') {
+          const screenshotPath = await this.takeSelectiveScreenshot();
+          const preview = await this.getImagePreview(screenshotPath);
+          const mainWindow = this.getMainWindow();
+          if (mainWindow) {
+            // preload.ts maps 'screenshot-attached' to onScreenshotAttached
+            mainWindow.webContents.send("screenshot-attached", {
+              path: screenshotPath,
+              preview
+            });
+          }
+        } else if (actionId === 'chat:scrollUp' || actionId === 'chat:scrollDown') {
+          const mainWindow = this.getMainWindow();
+          if (mainWindow) {
+            mainWindow.webContents.send('global-shortcut-action', actionId);
+          }
+        }
+      } catch (e: any) {
+        if (e.message !== "Selection cancelled") {
+          console.error(`[Main] Error handling global shortcut ${actionId}:`, e);
+        }
+      }
+    });
+
+// Inject WindowHelper into other helpers
+this.settingsWindowHelper.setWindowHelper(this.windowHelper);
+this.modelSelectorWindowHelper.setWindowHelper(this.windowHelper);
+
+
+// Initialize IntelligenceManager with LLMHelper
+this.intelligenceManager = new IntelligenceManager(this.processingHelper.getLLMHelper())
+this.intelligenceManager.setSupervisorBus(this.runtimeCoordinator.getBus())
+this.intelligenceManager.setConsciousModeEnabled(this.consciousModeEnabled)
+
+// Initialize Checkpointer
+this.checkpointer = new MeetingCheckpointer(
+  DatabaseManager.getInstance(),
+  () => this.intelligenceManager.getSessionTracker(),
+  (checkpointId) => this.runtimeCoordinator.getBus().emit({ type: 'recovery:checkpoint-written', checkpointId })
+);
+this.registerRuntimeSupervisors()
+
+// Initialize ThemeManager
+this.themeManager = ThemeManager.getInstance()
+
+// Initialize RAGManager (requires database to be ready)
+this.initializeRAGManager()
+
+// Initialize KnowledgeOrchestrator (requires RAGManager for embeddings)
+this.initializeKnowledgeOrchestrator()
+
+// Check and prep Ollama embedding model
+this.bootstrapOllamaEmbeddings().catch(err => console.error('[AppState] Ollama bootstrap failed:', err))
+
+// Initialize AccelerationManager (Apple Silicon enhancement)
+this.initializeAccelerationManager().catch(err => console.warn('[AppState] AccelerationManager init failed:', err))
+
+this.setupIntelligenceEvents()
+
+    // Pre-warm the fine-tuned intent classifier in background
+    warmupIntentClassifier();
+
+    // Setup Ollama IPC
+    this.setupOllamaIpcHandlers()
+    ipcMain.handle('get-meeting-lifecycle-state', () => this.meetingLifecycleState)
+
+    // --- NEW SYSTEM AUDIO PIPELINE (SOX + NODE GOOGLE STT) ---
+    // LAZY INIT: Do not setup pipeline here to prevent launch volume surge.
+    // this.setupSystemAudioPipeline()
+  }
+
+  private registerRuntimeSupervisors(): void {
+    const bus = this.runtimeCoordinator.getBus()
+
+    this.runtimeCoordinator.registerSupervisor(new AudioSupervisor({
+      bus,
+      delegates: {
+        startCapture: () => {
+          this.startManagedAudioRuntime()
+        },
+        stopCapture: () => {
+          this.stopManagedAudioRuntime()
+        },
+        startAudioTest: (deviceId) => {
+          this.startAudioTest(deviceId)
+        },
+        stopAudioTest: () => {
+          this.stopAudioTest()
+        },
+        onError: async (error) => {
+          this.broadcast('meeting-audio-error', error.message)
+        },
+      },
+      logger: { warn: console.warn },
+    }))
+
+    this.runtimeCoordinator.registerSupervisor(new SttSupervisor({
+      bus,
+      delegates: {
+        startSpeaker: async (speaker) => {
+          if (speaker === 'interviewer') {
+            if (!this.googleSTT) {
+              this.googleSTT = this.createSTTProvider('interviewer')
+              if (this.systemAudioCapture) {
+                const rate = this.systemAudioCapture.getOutputSampleRate()
+                this.googleSTT.setSampleRate(rate)
+                safeSetAudioChannelCount(this.googleSTT, 1)
+              }
+            }
+
+            this.googleSTT?.start()
+            return
+          }
+
+          if (!this.googleSTT_User) {
+            this.googleSTT_User = this.createSTTProvider('user')
+            if (this.microphoneCapture) {
+              const rate = this.microphoneCapture.getOutputSampleRate() || 16000
+              this.googleSTT_User.setSampleRate(rate)
+              safeSetAudioChannelCount(this.googleSTT_User, 1)
+            }
+          }
+
+          this.googleSTT_User?.start()
+        },
+        stopSpeaker: async (speaker) => {
+          this.cleanupSttProvider(speaker)
+        },
+        setRecognitionLanguage: async (language) => {
+          this.setRecognitionLanguage(language)
+        },
+        reconnectSpeaker: async (speaker) => {
+          await this.reconnectSpeakerStt(speaker)
+        },
+        reconfigureProvider: async () => {
+          await this.reconfigureSttProvider()
+        },
+        updateGoogleCredentials: async (keyPath) => {
+          this.updateGoogleCredentials(keyPath)
+        },
+        finalizeMicrophone: async () => {
+          this.finalizeMicSTT()
+        },
+        onError: async (speaker, error) => {
+          this.broadcast('meeting-audio-error', `Transcription connection failed for ${speaker}: ${error.message}`)
+        },
+      },
+      logger: { warn: console.warn },
+    }))
+
+    this.runtimeCoordinator.registerSupervisor(new InferenceSupervisor({
+      bus,
+      delegate: {
+        getLLMHelper: () => this.processingHelper.getLLMHelper(),
+        onStealthFault: async () => {
+          await this.intelligenceManager.reset()
+        },
+        runAssistMode: () => this.intelligenceManager.runAssistMode(),
+        runWhatShouldISay: (question, confidence, imagePaths) => this.intelligenceManager.runWhatShouldISay(question, confidence, imagePaths),
+        runFollowUp: (intent, userRequest) => this.intelligenceManager.runFollowUp(intent, userRequest),
+        runRecap: () => this.intelligenceManager.runRecap(),
+        runFollowUpQuestions: () => this.intelligenceManager.runFollowUpQuestions(),
+        runManualAnswer: (question) => this.intelligenceManager.runManualAnswer(question),
+        getFormattedContext: (lastSeconds) => this.intelligenceManager.getFormattedContext(lastSeconds),
+        getLastAssistantMessage: () => this.intelligenceManager.getLastAssistantMessage(),
+        getActiveMode: () => this.intelligenceManager.getActiveMode(),
+        reset: () => this.intelligenceManager.reset(),
+        getRAGManager: () => this.ragManager,
+        getKnowledgeOrchestrator: () => this.processingHelper.getLLMHelper().getKnowledgeOrchestrator?.() ?? this.knowledgeOrchestrator,
+        getIntelligenceManager: () => this.intelligenceManager,
+        initializeLLMs: () => this.intelligenceManager.initializeLLMs(),
+      },
+    }))
+
+this.runtimeCoordinator.registerSupervisor(new StealthSupervisor(
+      {
+        setEnabled: (enabled) => {
+          this.stealthManager.setEnabled(enabled)
+          this.syncWindowStealthProtection(enabled)
+        },
+        isEnabled: () => this.stealthManager.isEnabled(),
+        verifyStealthState: () => this.verifyStealthProtection(),
+      },
+      bus,
+      {
+        logger: { warn: console.warn },
+        nativeBridge: this.nativeStealthBridge ?? undefined,
+        runtimeHeartbeatStalenessMs: 2000,
+      },
+    ))
+
+    this.runtimeCoordinator.registerSupervisor(new RecoverySupervisor({
+      bus,
+      delegate: {
+        start: () => {
+          if (this.currentMeetingId) {
+            this.checkpointer?.start(this.currentMeetingId)
+          }
+        },
+        stop: () => {
+          this.checkpointer?.stop()
+        },
+        checkpoint: async () => {
+          await this.checkpointer?.checkpointNow()
+        },
+        restore: async (sessionId) => {
+          await this.intelligenceManager.getSessionTracker().restoreFromMeetingId(sessionId)
+        },
+      },
+    }))
+  }
+
+  private bindRuntimeCoordinatorEvents(): void {
+    const bus = this.runtimeCoordinator.getBus()
+
+    bus.subscribe('stealth:state-changed', async (event) => {
+      if (event.to === 'FULL_STEALTH') {
+        this.privacyShieldFaultReason = null
+        this.intelligenceManager.setStealthContainmentActive(false)
+        this.syncPrivacyShieldState()
+      }
+
+      this.privacyShieldRecoveryController?.update()
+
+      this._broadcastToAllWindows('stealth-state-changed', event)
+      this.performanceInstrumentation.recordEvent('stealth.state', {
+        from: event.from,
+        to: event.to,
+      })
+    })
+
+    bus.subscribe('stealth:fault', async (event) => {
+      this.privacyShieldFaultReason = event.reason
+      this.enforceStealthFaultContainment(event.reason)
+      this.syncPrivacyShieldState()
+      this.privacyShieldRecoveryController?.update()
+      this._broadcastToAllWindows('stealth-fault', event.reason)
+      this.performanceInstrumentation.recordEvent('stealth.fault', {
+        reason: event.reason,
+      })
+    })
+
+    bus.subscribe('recovery:checkpoint-written', async (event) => {
+      this.performanceInstrumentation.recordEvent('recovery.checkpoint-written', {
+        checkpointId: event.checkpointId,
+      })
+    })
+
+    bus.subscribe('recovery:restore-complete', async (event) => {
+      this.performanceInstrumentation.recordEvent('recovery.restore-complete', {
+        sessionId: event.sessionId,
+      })
+    })
+  }
+
+  private startManagedAudioRuntime(): void {
+    this.setupSystemAudioPipeline()
+    this.systemAudioCapture?.start()
+    this.microphoneCapture?.start()
+    this.scheduleAudioPipelineHealthCheck()
+    this.setNativeAudioConnected(true)
+  }
+
+  private stopManagedAudioRuntime(): void {
+    this.clearAudioPipelineHealthCheck()
+    this.setNativeAudioConnected(false)
+
+    try {
+      this.systemAudioCapture?.removeAllListeners()
+      this.systemAudioCapture?.stop()
+      if (typeof this.systemAudioCapture?.destroy === 'function') {
+        this.systemAudioCapture.destroy()
+      }
+      this.systemAudioCapture = null
+    } catch (error) {
+      console.error('[Main] Failed to stop system audio during managed runtime shutdown:', error)
+    }
+
+    try {
+      this.microphoneCapture?.removeAllListeners()
+      this.microphoneCapture?.stop()
+      if (typeof this.microphoneCapture?.destroy === 'function') {
+        this.microphoneCapture.destroy()
+      }
+      this.microphoneCapture = null
+    } catch (error) {
+      console.error('[Main] Failed to stop microphone capture during managed runtime shutdown:', error)
+    }
+  }
+
+  private broadcast(channel: string, ...args: any[]): void {
+    BrowserWindow.getAllWindows().forEach(win => {
+      if (!win.isDestroyed()) {
+        win.webContents.send(channel, ...args);
+      }
+    });
+  }
+
+  private setNativeAudioConnected(connected: boolean): void {
+    if (this.nativeAudioConnected === connected) {
+      return;
+    }
+
+    this.nativeAudioConnected = connected;
+    this.broadcast(connected ? 'native-audio-connected' : 'native-audio-disconnected');
+  }
+
+  public getNativeAudioStatus(): { connected: boolean } {
+    return { connected: this.nativeAudioConnected };
+  }
+
+  private async ensureMeetingAudioAccess(): Promise<void> {
+    const nativeLoadError = getNativeAudioLoadError();
+    if (nativeLoadError) {
+      throw new Error(nativeLoadError.message);
+    }
+
+    if (process.platform !== 'darwin') {
+      return;
+    }
+
+    const micStatus = systemPreferences.getMediaAccessStatus('microphone');
+    if (micStatus !== 'granted') {
+      const granted = micStatus === 'not-determined'
+        ? await systemPreferences.askForMediaAccess('microphone')
+        : false;
+
+      if (!granted) {
+        throw new Error('Microphone access is blocked. Enable Natively in System Settings > Privacy & Security > Microphone.');
+      }
+    }
+
+    const screenStatus = systemPreferences.getMediaAccessStatus('screen');
+    if (screenStatus !== 'granted') {
+      throw new Error('Screen Recording access is blocked. Enable Natively in System Settings > Privacy & Security > Screen Recording to capture system audio.');
+    }
+  }
+
+  private async validateMeetingAudioSetup(metadata?: any): Promise<void> {
+    await this.ensureMeetingAudioAccess();
+    this.assertSelectedSttProviderReady();
+
+    const inputDeviceId = metadata?.audio?.inputDeviceId;
+    const outputDeviceId = metadata?.audio?.outputDeviceId;
+
+    const inputDevices = AudioDevices.getInputDevices();
+    if (inputDevices.length === 0) {
+      throw new Error('No microphone devices were detected. Rebuild native audio with `npm run build:native:current` and confirm microphone permission is granted.');
+    }
+
+    if (inputDeviceId && inputDeviceId !== 'default' && !inputDevices.some((device: AudioDevice) => device.id === inputDeviceId)) {
+      throw new Error(`Selected microphone is unavailable: ${inputDeviceId}`);
+    }
+
+    const outputDevices = AudioDevices.getOutputDevices();
+    if (!outputDeviceId || outputDeviceId === 'default' || outputDeviceId === 'sck') {
+      return;
+    }
+
+    if (outputDevices.length === 0) {
+      throw new Error('No system audio output devices were detected. Rebuild native audio with `npm run build:native:current` and confirm Screen Recording permission is granted.');
+    }
+
+    if (!outputDevices.some((device: AudioDevice) => device.id === outputDeviceId)) {
+      throw new Error(`Selected speaker output is unavailable: ${outputDeviceId}`);
+    }
+  }
+
+  private assertSelectedSttProviderReady(): void {
+    const { CredentialsManager } = require('../services/CredentialsManager');
+    const credentials = CredentialsManager.getInstance();
+    const provider = credentials.getSttProvider();
+    const hasValue = (value?: string): boolean => Boolean(value && value.trim().length > 0);
+
+    if (provider === 'google') {
+      const serviceAccountPath = credentials.getGoogleServiceAccountPath();
+      if (!hasValue(serviceAccountPath)) {
+        throw new Error('Google STT is selected but no Google service account is configured. Add a service account JSON in Settings > Speech.');
+      }
+
+      if (!fs.existsSync(serviceAccountPath!)) {
+        throw new Error(`Google STT service account file is missing: ${serviceAccountPath}`);
+      }
+
+      return;
+    }
+
+    const providerKeys: Record<string, string | undefined> = {
+      deepgram: credentials.getDeepgramApiKey(),
+      soniox: credentials.getSonioxApiKey(),
+      elevenlabs: credentials.getElevenLabsApiKey(),
+      openai: credentials.getOpenAiSttApiKey(),
+      groq: credentials.getGroqSttApiKey(),
+      azure: credentials.getAzureApiKey(),
+      ibmwatson: credentials.getIbmWatsonApiKey(),
+    };
+
+    if (!hasValue(providerKeys[provider])) {
+      throw new Error(`${provider} STT is selected but its credentials are not configured. Add the API key in Settings > Speech or switch providers.`);
+    }
+  }
+
+  private resetAudioPipelineStats(): void {
+    this.audioPipelineStats = {
+      startedAt: Date.now(),
+      systemChunks: 0,
+      microphoneChunks: 0,
+      interviewerTranscripts: 0,
+      userTranscripts: 0,
+    };
+    this.audioPipelineLastSnapshot = {
+      systemChunks: 0,
+      microphoneChunks: 0,
+      interviewerTranscripts: 0,
+      userTranscripts: 0,
+    };
+  }
+
+  private clearAudioPipelineHealthCheck(): void {
+    if (this.audioHealthCheckTimer) {
+      clearTimeout(this.audioHealthCheckTimer);
+      this.audioHealthCheckTimer = null;
+    }
+  }
+
+  private noteAudioChunk(source: 'system' | 'microphone'): void {
+    if (source === 'system') {
+      this.audioPipelineStats.systemChunks += 1;
+      return;
+    }
+
+    this.audioPipelineStats.microphoneChunks += 1;
+  }
+
+  private noteInterviewerAudioActivity(chunk: Buffer): void {
+    const rms = computePcm16Rms(chunk);
+    this.accelerationManager?.getConsciousOrchestrator().onInterviewerAudioActivity(rms);
+  }
+
+  private noteTranscript(speaker: 'interviewer' | 'user'): void {
+    if (speaker === 'interviewer') {
+      this.audioPipelineStats.interviewerTranscripts += 1;
+      return;
+    }
+
+    this.audioPipelineStats.userTranscripts += 1;
+  }
+
+  private scheduleAudioPipelineHealthCheck(delayMs: number = this.AUDIO_PIPELINE_STARTUP_HEALTH_DELAY_MS): void {
+    this.clearAudioPipelineHealthCheck();
+    this.audioHealthCheckTimer = setTimeout(() => {
+      this.audioHealthCheckTimer = null;
+      if (!this.isMeetingActive) {
+        return;
+      }
+
+      const { systemChunks, microphoneChunks, interviewerTranscripts, userTranscripts, startedAt } = this.audioPipelineStats;
+      const elapsedMs = startedAt ? Date.now() - startedAt : 0;
+      const deltaSystemChunks = systemChunks - this.audioPipelineLastSnapshot.systemChunks;
+      const deltaMicrophoneChunks = microphoneChunks - this.audioPipelineLastSnapshot.microphoneChunks;
+      const deltaInterviewerTranscripts = interviewerTranscripts - this.audioPipelineLastSnapshot.interviewerTranscripts;
+      const deltaUserTranscripts = userTranscripts - this.audioPipelineLastSnapshot.userTranscripts;
+
+      console.warn('[AudioHealth] Snapshot:', {
+        windowMs: delayMs,
+        elapsedMs,
+        systemChunks,
+        microphoneChunks,
+        interviewerTranscripts,
+        userTranscripts,
+        deltaSystemChunks,
+        deltaMicrophoneChunks,
+        deltaInterviewerTranscripts,
+        deltaUserTranscripts,
+      });
+
+      if (deltaSystemChunks === 0 && deltaMicrophoneChunks === 0) {
+        console.warn('[AudioHealth] No audio chunks observed during the last health window. Investigate native capture initialization, device selection, runtime teardown, and macOS permissions first.');
+      } else {
+        if (deltaMicrophoneChunks === 0) {
+          console.warn('[AudioHealth] Microphone capture produced no chunks during the last health window. Investigate MicrophoneCapture/native CoreAudio startup.');
+        } else if (deltaUserTranscripts === 0) {
+          console.warn('[AudioHealth] Microphone chunks reached the STT layer during the last health window but no user transcripts were emitted. Investigate provider auth/session startup and audio format compatibility.');
+        }
+
+        if (deltaSystemChunks === 0) {
+          console.warn('[AudioHealth] System audio capture produced no chunks during the last health window. Investigate Screen Recording permission and output capture backend/device selection.');
+        } else if (deltaInterviewerTranscripts === 0) {
+          console.warn('[AudioHealth] System audio chunks reached the STT layer during the last health window but no interviewer transcripts were emitted. Investigate provider auth/session startup and transcript parsing.');
+        }
+      }
+
+      this.audioPipelineLastSnapshot = {
+        systemChunks,
+        microphoneChunks,
+        interviewerTranscripts,
+        userTranscripts,
+      };
+      this.scheduleAudioPipelineHealthCheck(this.AUDIO_PIPELINE_PERIODIC_HEALTH_INTERVAL_MS);
+    }, delayMs);
+    this.audioHealthCheckTimer.unref?.();
+  }
+
+  private async bootstrapOllamaEmbeddings() {
+    this._ollamaBootstrapPromise = (async () => {
+      try {
+        const { OllamaBootstrap } = require('../rag/OllamaBootstrap');
+        const bootstrap = new OllamaBootstrap();
+
+        // Fire and forget — don't await this before showing the window
+        const result = await bootstrap.bootstrap('nomic-embed-text', (status: string, percent: number) => {
+          // Send progress to renderer via IPC
+          this.broadcast('ollama:pull-progress', { status, percent });
+        });
+
+        if (result === 'pulled' || result === 'already_pulled') {
+          this.broadcast('ollama:pull-complete');
+          // Re-resolve the embedding provider given that Ollama might now be available
+          if (this.ragManager) {
+             console.log('[AppState] Ollama model ready, re-evaluating RAG pipeline provider');
+             const { CredentialsManager } = require('../services/CredentialsManager');
+             const cm = CredentialsManager.getInstance();
+             this.ragManager.initializeEmbeddings({
+                openaiKey: cm.getOpenaiApiKey() || process.env.OPENAI_API_KEY || undefined,
+                geminiKey: cm.getGeminiApiKey() || process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY || undefined,
+                ollamaUrl: process.env.OLLAMA_URL || "http://localhost:11434"
+             });
+          }
+        }
+      } catch (err) {
+         console.error('[AppState] Failed to bootstrap Ollama:', err);
+      }
+    })();
+  }
+
+  private initializeRAGManager(): void {
+    try {
+      const db = DatabaseManager.getInstance();
+      const sqliteDb = db.getDb();
+
+      if (sqliteDb) {
+        const { CredentialsManager } = require('../services/CredentialsManager');
+        const cm = CredentialsManager.getInstance();
+        const openaiKey = cm.getOpenaiApiKey() || process.env.OPENAI_API_KEY;
+        const geminiKey = cm.getGeminiApiKey() || process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY;
+        
+        this.ragManager = new RAGManager({ 
+            db: sqliteDb, 
+            dbPath: db.getDbPath(),
+            extPath: db.getExtPath(),
+            openaiKey,
+            geminiKey,
+            ollamaUrl: process.env.OLLAMA_URL || 'http://localhost:11434'
+        });
+        this.ragManager.setLLMHelper(this.processingHelper.getLLMHelper());
+        console.log('[AppState] RAGManager initialized');
+      }
+} catch (error) {
+console.error('[AppState] Failed to initialize RAGManager:', error);
+}
+}
+
+private async initializeAccelerationManager(): Promise<void> {
+try {
+const { AccelerationManager, setActiveAccelerationManager } = await import('../services/AccelerationManager');
+const accelerationManager = new AccelerationManager();
+await accelerationManager.initialize();
+accelerationManager.setConsciousModeEnabled(this.consciousModeEnabled);
+this.accelerationManager = accelerationManager;
+setActiveAccelerationManager(accelerationManager);
+this.intelligenceManager.attachAccelerationManager(accelerationManager);
+console.log('[AppState] AccelerationManager initialized (Apple Silicon enhancement)');
+} catch (error) {
+this.accelerationManager = null;
+  console.warn('[AppState] AccelerationManager initialization skipped (optional):', error);
+}
+}
+
+private initializeKnowledgeOrchestrator(): void {
+// Initialize Knowledge Orchestrator
+try {
+      const db = DatabaseManager.getInstance();
+      const sqliteDb = db.getDb();
+
+      if (sqliteDb && KnowledgeDatabaseManagerClass && KnowledgeOrchestratorClass) {
+        const knowledgeDb = new KnowledgeDatabaseManagerClass(sqliteDb);
+        this.knowledgeOrchestrator = new KnowledgeOrchestratorClass(knowledgeDb);
+
+        // Wire up LLM functions
+        const llmHelper = this.processingHelper.getLLMHelper();
+
+        // generateContent function for LLM calls
+        this.knowledgeOrchestrator.setGenerateContentFn(async (contents: any[]) => {
+          return await llmHelper.generateContentStructured(
+            contents[0]?.text || ''
+          );
+        });
+
+        // Embedding function — lazily delegate to the cascaded EmbeddingPipeline
+        // (OpenAI → Gemini → Ollama → Local bundled model).
+        // We await waitForReady() so uploads during boot wait for the pipeline
+        // instead of immediately throwing 'not ready'.
+        const self = this;
+        this.knowledgeOrchestrator.setEmbedFn(async (text: string) => {
+          const pipeline = self.ragManager?.getEmbeddingPipeline();
+          if (!pipeline) throw new Error('RAG pipeline not available');
+          await pipeline.waitForReady();
+          return await pipeline.getEmbedding(text);
+        });
+        if (typeof this.knowledgeOrchestrator.setEmbedQueryFn === 'function') {
+          this.knowledgeOrchestrator.setEmbedQueryFn(async (text: string) => {
+            const pipeline = self.ragManager?.getEmbeddingPipeline();
+            if (!pipeline) throw new Error('RAG pipeline not available');
+            await pipeline.waitForReady();
+            return await pipeline.getEmbeddingForQuery(text);
+          });
+        }
+
+        // Attach KnowledgeOrchestrator to LLMHelper
+        llmHelper.setKnowledgeOrchestrator(this.knowledgeOrchestrator);
+
+        console.log('[AppState] KnowledgeOrchestrator initialized');
+      }
+    } catch (error) {
+    console.error('[AppState] Failed to initialize KnowledgeOrchestrator:', error);
+    }
+  }
+
+  // Update-related methods removed
+
+  // New Property for System Audio & Microphone
+  private systemAudioCapture: SystemAudioCapture | null = null;
+  private microphoneCapture: MicrophoneCapture | null = null;
+  private audioTestCapture: MicrophoneCapture | null = null; // For audio settings test
+  private googleSTT: STTProvider | null = null; // Interviewer
+  private googleSTT_User: STTProvider | null = null; // User
+
+  // Listener references for proper cleanup (prevent memory leaks)
+  private sttTranscriptListener_Interviewer: ((segment: { text: string, isFinal: boolean, confidence: number }) => void) | null = null;
+  private sttErrorListener_Interviewer: ((err: Error) => void) | null = null;
+  private sttTranscriptListener_User: ((segment: { text: string, isFinal: boolean, confidence: number }) => void) | null = null;
+  private sttErrorListener_User: ((err: Error) => void) | null = null;
+
+  private createSTTProvider(speaker: 'interviewer' | 'user'): STTProvider {
+    const { CredentialsManager } = require('../services/CredentialsManager');
+    const sttProvider = CredentialsManager.getInstance().getSttProvider();
+    const sttLanguage = CredentialsManager.getInstance().getSttLanguage();
+
+    let stt: STTProvider;
+
+    if (sttProvider === 'deepgram') {
+      const apiKey = CredentialsManager.getInstance().getDeepgramApiKey();
+      if (apiKey) {
+        console.log(`[Main] Using DeepgramStreamingSTT for ${speaker}`);
+        stt = new DeepgramStreamingSTT(apiKey);
+      } else {
+        // FS-05: Remove silent fallback to a different cloud vendor
+        throw new Error(`[Main] No API key for Deepgram STT. Refusing to start STT silently.`);
+      }
+    } else if (sttProvider === 'soniox') {
+      const apiKey = CredentialsManager.getInstance().getSonioxApiKey();
+      if (apiKey) {
+        console.log(`[Main] Using SonioxStreamingSTT for ${speaker}`);
+        stt = new SonioxStreamingSTT(apiKey);
+      } else {
+        throw new Error(`[Main] No API key for Soniox STT. Refusing to start STT silently.`);
+      }
+    } else if (sttProvider === 'elevenlabs') {
+      const apiKey = CredentialsManager.getInstance().getElevenLabsApiKey();
+      if (apiKey) {
+        console.log(`[Main] Using ElevenLabsStreamingSTT for ${speaker}`);
+        stt = new ElevenLabsStreamingSTT(apiKey);
+      } else {
+        throw new Error(`[Main] No API key for ElevenLabs STT. Refusing to start STT silently.`);
+      }
+    } else if (sttProvider === 'openai') {
+      // OpenAI: WebSocket Realtime (gpt-4o-transcribe → gpt-4o-mini-transcribe) with whisper-1 REST fallback
+      const apiKey = CredentialsManager.getInstance().getOpenAiSttApiKey();
+      if (apiKey) {
+        console.log(`[Main] Using OpenAIStreamingSTT (WebSocket+REST fallback) for ${speaker}`);
+        stt = new OpenAIStreamingSTT(apiKey);
+      } else {
+        throw new Error(`[Main] No API key for OpenAI STT. Refusing to start STT silently.`);
+      }
+    } else if (sttProvider === 'groq' || sttProvider === 'azure' || sttProvider === 'ibmwatson') {
+      let apiKey: string | undefined;
+      let region: string | undefined;
+      let modelOverride: string | undefined;
+
+      if (sttProvider === 'groq') {
+        apiKey = CredentialsManager.getInstance().getGroqSttApiKey();
+        modelOverride = CredentialsManager.getInstance().getGroqSttModel();
+      } else if (sttProvider === 'azure') {
+        apiKey = CredentialsManager.getInstance().getAzureApiKey();
+        region = CredentialsManager.getInstance().getAzureRegion();
+      } else if (sttProvider === 'ibmwatson') {
+        apiKey = CredentialsManager.getInstance().getIbmWatsonApiKey();
+        region = CredentialsManager.getInstance().getIbmWatsonRegion();
+      }
+
+      if (apiKey) {
+        console.log(`[Main] Using RestSTT (${sttProvider}) for ${speaker}`);
+        stt = new RestSTT(sttProvider, apiKey, modelOverride, region);
+      } else {
+        throw new Error(`[Main] No API key for ${sttProvider} STT. Refusing to start STT silently.`);
+      }
+    } else {
+      stt = new GoogleSTT();
+    }
+
+    stt.setRecognitionLanguage(sttLanguage);
+
+    // Wire Transcript Events - store references for proper cleanup
+    const sttEmitter = stt as EventEmitter
+
+    const transcriptHandler = (segment: { text: string, isFinal: boolean, confidence: number }) => {
+      // Enhanced debugging for transcript flow
+      console.log(`[TRANSCRIPT] 📝 ${speaker}: "${segment.text.substring(0, 100)}${segment.text.length > 100 ? '...' : ''}" (final: ${segment.isFinal}, conf: ${segment.confidence?.toFixed(2) || 'N/A'}, meeting: ${this.isMeetingActive})`);
+      
+      if (!this.isMeetingActive) {
+        console.warn('[TRANSCRIPT] ⚠️  Transcript received but meeting not active - discarding');
+        return;
+      }
+
+      this.noteTranscript(speaker);
+      this.latestTranscriptBySpeaker[speaker] = segment.text;
+
+      this.intelligenceManager.handleTranscript({
+        speaker: speaker,
+        text: segment.text,
+        timestamp: Date.now(),
+        final: segment.isFinal,
+        confidence: segment.confidence
+      });
+
+      // Feed final transcript to JIT RAG indexer
+      if (segment.isFinal && this.ragManager) {
+        this.ragManager.feedLiveTranscript([{
+          speaker: speaker,
+          text: segment.text,
+          timestamp: Date.now()
+        }]);
+      }
+
+      const helper = this.getWindowHelper();
+      const payload = {
+        speaker: speaker,
+        text: segment.text,
+        timestamp: Date.now(),
+        final: segment.isFinal,
+        confidence: segment.confidence
+      };
+      
+      // Send to UI with debugging
+      const launcherWindow = helper.getLauncherWindow();
+      const overlayWindow = helper.getOverlayContentWindow();
+      console.log(`[TRANSCRIPT] 🖥️  Sending to UI: launcher=${!!launcherWindow}, overlay=${!!overlayWindow}`);
+      
+      launcherWindow?.webContents.send('native-audio-transcript', payload);
+      overlayWindow?.webContents.send('native-audio-transcript', payload);
+
+      // Auto-trigger logic with enhanced debugging
+      console.log(`[TRANSCRIPT] 🤖 Auto-trigger check: speaker=${speaker}, final=${segment.isFinal}, consciousMode=${this.consciousModeEnabled}, intelligenceManager=${!!this.intelligenceManager}`);
+      
+      void maybeHandleSuggestionTriggerFromTranscript({
+        speaker,
+        text: segment.text,
+        final: segment.isFinal,
+        confidence: segment.confidence,
+        consciousModeEnabled: this.consciousModeEnabled,
+        intelligenceManager: this.intelligenceManager,
+      }).then((triggered) => {
+        if (triggered) {
+          console.log('[TRANSCRIPT] ✅ Auto-trigger SUCCEEDED');
+        } else {
+          console.log('[TRANSCRIPT] ❌ Auto-trigger declined (conditions not met)');
+        }
+      }).catch((error) => {
+        console.error('[TRANSCRIPT] 🚨 Auto-trigger ERROR:', error);
+      });
+    };
+
+    const errorHandler = (err: Error) => {
+      console.error(`[Main] STT (${speaker}) Error:`, err);
+      if (this.isMeetingActive) {
+        this.sttReconnector?.onError(speaker);
+      }
+    };
+
+    // Store listener references based on speaker
+    if (speaker === 'interviewer') {
+      this.sttTranscriptListener_Interviewer = transcriptHandler;
+      this.sttErrorListener_Interviewer = errorHandler;
+    } else {
+      this.sttTranscriptListener_User = transcriptHandler;
+      this.sttErrorListener_User = errorHandler;
+    }
+
+    sttEmitter.on('transcript', transcriptHandler);
+    sttEmitter.on('error', errorHandler);
+
+    return stt;
+  }
+
+  private isReconfiguringAudio = false
+
+  private async handleAudioCaptureError(source: 'system' | 'microphone', err: Error): Promise<void> {
+    const noun = source === 'system' ? 'Audio pipeline' : 'Microphone';
+    const failureMessage = source === 'system'
+      ? 'Audio capture failed and recovery unsuccessful'
+      : 'Microphone failed and recovery unsuccessful';
+    const defaultErrorMessage = source === 'system'
+      ? 'System audio capture failed'
+      : 'Microphone capture failed';
+
+    console.error(`[Main] ${source === 'system' ? 'SystemAudioCapture' : 'MicrophoneCapture'} Error:`, err);
+    this.setNativeAudioConnected(false);
+
+    if (this.isReconfiguringAudio) {
+      console.log(`[Main] Skipping ${noun.toLowerCase()} recovery — reconfiguration already in progress`);
+      return;
+    }
+
+    if (this.isMeetingActive && this.audioRecoveryAttempts < this.MAX_AUDIO_RECOVERY_ATTEMPTS) {
+      this.isReconfiguringAudio = true;
+      this.audioRecoveryAttempts += 1;
+      const attempt = this.audioRecoveryAttempts;
+      const delayMs = this.audioRecoveryBackoffMs * attempt;
+      console.log(`[Main] Attempting ${noun.toLowerCase()} recovery (attempt ${attempt}/${this.MAX_AUDIO_RECOVERY_ATTEMPTS}, delay ${delayMs}ms)...`);
+
+      try {
+        await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
+
+        if (!this.isMeetingActive) {
+          this.isReconfiguringAudio = false;
+          return;
+        }
+
+        await this.reconfigureAudio();
+        console.log(`[Main] ${noun} recovered successfully on attempt ${attempt}`);
+        this.setNativeAudioConnected(true);
+      } catch (recoveryErr) {
+        console.error(`[Main] ${noun} recovery attempt ${attempt} failed:`, recoveryErr);
+        if (this.audioRecoveryAttempts >= this.MAX_AUDIO_RECOVERY_ATTEMPTS) {
+          this.broadcast('meeting-audio-error', failureMessage);
+        }
+      } finally {
+        this.isReconfiguringAudio = false;
+      }
+    } else {
+      this.broadcast('meeting-audio-error', err.message || defaultErrorMessage);
+    }
+  }
+
+  private attachSystemAudioCaptureListeners(): void {
+    if (!this.systemAudioCapture) {
+      return;
+    }
+
+    this.systemAudioCapture.removeAllListeners();
+    this.systemAudioCapture.on('data', (chunk: Buffer) => {
+      this.noteAudioChunk('system');
+      this.noteInterviewerAudioActivity(chunk);
+      this.googleSTT?.write(chunk);
+    });
+    this.systemAudioCapture.on('speech_ended', () => {
+      this.accelerationManager?.getConsciousOrchestrator().onSilenceStart(this.latestTranscriptBySpeaker.interviewer);
+      safeNotifySpeechEnded(this.googleSTT);
+    });
+    this.systemAudioCapture.on('error', (err: Error) => {
+      void this.handleAudioCaptureError('system', err);
+    });
+  }
+
+  private attachMicrophoneCaptureListeners(): void {
+    if (!this.microphoneCapture) {
+      return;
+    }
+
+    this.microphoneCapture.removeAllListeners();
+    this.microphoneCapture.on('data', (chunk: Buffer) => {
+      this.noteAudioChunk('microphone');
+      this.googleSTT_User?.write(chunk);
+    });
+    this.microphoneCapture.on('speech_ended', () => {
+      safeNotifySpeechEnded(this.googleSTT_User);
+    });
+    this.microphoneCapture.on('error', (err: Error) => {
+      void this.handleAudioCaptureError('microphone', err);
+    });
+  }
+
+  private cleanupSttProvider(speaker: 'interviewer' | 'user'): void {
+    const isInterviewer = speaker === 'interviewer';
+    const stt = isInterviewer ? this.googleSTT : this.googleSTT_User;
+    if (!stt) {
+      return;
+    }
+
+    const transcriptListener = isInterviewer
+      ? this.sttTranscriptListener_Interviewer
+      : this.sttTranscriptListener_User;
+    const errorListener = isInterviewer
+      ? this.sttErrorListener_Interviewer
+      : this.sttErrorListener_User;
+    const sttEmitter = stt as EventEmitter;
+
+    if (transcriptListener) {
+      sttEmitter.removeListener('transcript', transcriptListener);
+    }
+    if (errorListener) {
+      sttEmitter.removeListener('error', errorListener);
+    }
+
+    stt.stop();
+    stt.removeAllListeners();
+    safeDestroy(stt);
+
+    if (isInterviewer) {
+      this.sttTranscriptListener_Interviewer = null;
+      this.sttErrorListener_Interviewer = null;
+      this.googleSTT = null;
+    } else {
+      this.sttTranscriptListener_User = null;
+      this.sttErrorListener_User = null;
+      this.googleSTT_User = null;
+    }
+  }
+
+  private async reconnectSpeakerStt(speaker: 'interviewer' | 'user'): Promise<void> {
+    this.cleanupSttProvider(speaker);
+
+    if (speaker === 'interviewer') {
+      this.googleSTT = this.createSTTProvider('interviewer');
+      if (this.systemAudioCapture) {
+        const rate = this.systemAudioCapture.getOutputSampleRate();
+        this.googleSTT?.setSampleRate(rate);
+        safeSetAudioChannelCount(this.googleSTT, 1);
+      }
+      this.googleSTT?.start();
+      return;
+    }
+
+    this.googleSTT_User = this.createSTTProvider('user');
+    if (this.microphoneCapture) {
+      const rate = this.microphoneCapture.getOutputSampleRate() || 16000;
+      this.googleSTT_User?.setSampleRate(rate);
+      safeSetAudioChannelCount(this.googleSTT_User, 1);
+    }
+    this.googleSTT_User?.start();
+  }
+
+  private assertMeetingAudioPipelineReady(): void {
+    const missing: string[] = [];
+
+    if (!this.systemAudioCapture) {
+      missing.push('system audio capture');
+    }
+    if (!this.microphoneCapture) {
+      missing.push('microphone capture');
+    }
+    if (!this.googleSTT) {
+      missing.push('interviewer transcription');
+    }
+    if (!this.googleSTT_User) {
+      missing.push('user transcription');
+    }
+
+    if (missing.length > 0) {
+      throw new Error(`Audio pipeline unavailable: missing ${missing.join(', ')}`);
+    }
+  }
+
+  private assertAudioCapturesReady(): void {
+    const missing: string[] = [];
+
+    if (!this.systemAudioCapture) {
+      missing.push('system audio capture');
+    }
+    if (!this.microphoneCapture) {
+      missing.push('microphone capture');
+    }
+
+    if (missing.length > 0) {
+      throw new Error(`Audio capture unavailable: missing ${missing.join(', ')}`);
+    }
+  }
+
+  private setupSystemAudioPipeline(): void {
+    try {
+      if (!this.systemAudioCapture) {
+        this.systemAudioCapture = new SystemAudioCapture();
+      }
+      this.attachSystemAudioCaptureListeners();
+
+      if (!this.microphoneCapture) {
+        this.microphoneCapture = new MicrophoneCapture();
+      }
+      this.attachMicrophoneCaptureListeners();
+
+      // 2. Initialize STT Services if missing
+      if (!this.googleSTT) {
+        this.googleSTT = this.createSTTProvider('interviewer');
+      }
+
+      if (!this.googleSTT_User) {
+        this.googleSTT_User = this.createSTTProvider('user');
+      }
+
+    // --- CRITICAL FIX: SYNC SAMPLE RATES ---
+    // Always sync rates, even if just initialized, to ensure consistency
+
+    // 1. Sync System Audio Rate
+    const sysRate = this.systemAudioCapture?.getOutputSampleRate() || 16000;
+    console.log(`[Main] Configuring Interviewer STT to ${sysRate}Hz (PCM output rate)`);
+    this.googleSTT?.setSampleRate(sysRate);
+    safeSetAudioChannelCount(this.googleSTT, 1);
+
+    // 2. Sync Mic Rate
+    const micRate = this.microphoneCapture?.getOutputSampleRate() || 16000;
+    console.log(`[Main] Configuring User STT to ${micRate}Hz (PCM output rate)`);
+    this.googleSTT_User?.setSampleRate(micRate);
+    safeSetAudioChannelCount(this.googleSTT_User, 1);
+
+      console.log('[Main] Full Audio Pipeline (System + Mic) Initialized (Ready)');
+      this.assertMeetingAudioPipelineReady();
+
+    } catch (err) {
+      console.error('[Main] Failed to setup System Audio Pipeline:', err);
+      throw err;
+    }
+  }
+
+  private async reconfigureAudio(inputDeviceId?: string, outputDeviceId?: string): Promise<void> {
+    console.log(`[Main] Reconfiguring Audio: Input=${inputDeviceId}, Output=${outputDeviceId}`);
+
+    // 1. System Audio (Output Capture) - use destroy() for full cleanup
+    if (this.systemAudioCapture) {
+      this.systemAudioCapture.removeAllListeners();
+      this.systemAudioCapture.destroy();
+      this.systemAudioCapture = null;
+    }
+
+    try {
+      console.log('[Main] Initializing SystemAudioCapture...');
+      this.systemAudioCapture = new SystemAudioCapture(outputDeviceId || undefined);
+      const rate = this.systemAudioCapture.getOutputSampleRate();
+      console.log(`[Main] SystemAudioCapture PCM rate: ${rate}Hz`);
+      this.googleSTT?.setSampleRate(rate);
+
+        this.systemAudioCapture.on('data', (chunk: Buffer) => {
+          // console.log('[Main] SysAudio chunk', chunk.length);
+          this.noteAudioChunk('system');
+          this.noteInterviewerAudioActivity(chunk);
+          this.googleSTT?.write(chunk);
+        });
+        this.systemAudioCapture.on('speech_ended', () => {
+          this.accelerationManager?.getConsciousOrchestrator().onSilenceStart(this.latestTranscriptBySpeaker.interviewer);
+          safeNotifySpeechEnded(this.googleSTT);
+        });
+      this.systemAudioCapture.on('error', (err: Error) => {
+        void this.handleAudioCaptureError('system', err);
+      });
+      console.log('[Main] SystemAudioCapture initialized.');
+    } catch (err) {
+      console.warn('[Main] Failed to initialize SystemAudioCapture with preferred ID. Falling back to default.', err);
+      try {
+        this.systemAudioCapture = new SystemAudioCapture(); // Default
+        const rate = this.systemAudioCapture.getOutputSampleRate();
+        console.log(`[Main] SystemAudioCapture (Default) PCM rate: ${rate}Hz`);
+        this.googleSTT?.setSampleRate(rate);
+
+        this.systemAudioCapture.on('data', (chunk: Buffer) => {
+          this.noteAudioChunk('system');
+          this.noteInterviewerAudioActivity(chunk);
+          this.googleSTT?.write(chunk);
+        });
+        this.systemAudioCapture.on('speech_ended', () => {
+          this.accelerationManager?.getConsciousOrchestrator().onSilenceStart(this.latestTranscriptBySpeaker.interviewer);
+          safeNotifySpeechEnded(this.googleSTT);
+        });
+        this.systemAudioCapture.on('error', (err: Error) => {
+          void this.handleAudioCaptureError('system', err);
+        });
+      } catch (err2) {
+        console.error('[Main] Failed to initialize SystemAudioCapture (Default):', err2);
+      }
+    }
+
+    // 2. Microphone (Input Capture) - use destroy() for full cleanup
+    if (this.microphoneCapture) {
+      this.microphoneCapture.removeAllListeners();
+      this.microphoneCapture.destroy();
+      this.microphoneCapture = null;
+    }
+
+    try {
+      console.log('[Main] 🎤 Initializing MicrophoneCapture...');
+      console.log(`[Main] 🎤 Target device: ${inputDeviceId || 'default'}`);
+      
+      this.microphoneCapture = new MicrophoneCapture(inputDeviceId || undefined);
+      const rate = this.microphoneCapture.getOutputSampleRate();
+      console.log(`[Main] 🎤 MicrophoneCapture PCM rate: ${rate}Hz`);
+      console.log(`[Main] 🎤 STT User ready: ${!!this.googleSTT_User}`);
+      
+      this.googleSTT_User?.setSampleRate(rate);
+
+      this.microphoneCapture.on('data', (chunk: Buffer) => {
+        // Enhanced debugging - log periodically
+        if (Math.random() < 0.01) { // Log ~1% of chunks
+          console.log(`[Main] 🎤 Audio chunk: ${chunk.length}B → STT: ${!!this.googleSTT_User}`);
+        }
+        this.noteAudioChunk('microphone');
+        this.googleSTT_User?.write(chunk);
+      });
+      
+      this.microphoneCapture.on('speech_ended', () => {
+        console.log('[Main] 🎤 Speech ended detected');
+        safeNotifySpeechEnded(this.googleSTT_User);
+      });
+      
+      this.microphoneCapture.on('error', (err: Error) => {
+        console.error('[Main] 🎤 Microphone error:', err);
+        void this.handleAudioCaptureError('microphone', err);
+      });
+      
+      console.log('[Main] ✅ MicrophoneCapture initialized successfully.');
+    } catch (err) {
+      console.error('[Main] ❌ Failed to initialize MicrophoneCapture with preferred ID:', err);
+      console.log('[Main] 🔄 Attempting fallback to default device...');
+      
+      try {
+        this.microphoneCapture = new MicrophoneCapture(); // Default
+        const rate = this.microphoneCapture.getOutputSampleRate();
+        console.log(`[Main] 🎤 MicrophoneCapture (Default) PCM rate: ${rate}Hz`);
+        this.googleSTT_User?.setSampleRate(rate);
+
+        this.microphoneCapture.on('data', (chunk: Buffer) => {
+          if (Math.random() < 0.01) { // Log ~1% of chunks
+            console.log(`[Main] 🎤 Audio chunk (fallback): ${chunk.length}B → STT: ${!!this.googleSTT_User}`);
+          }
+          this.noteAudioChunk('microphone');
+          this.googleSTT_User?.write(chunk);
+        });
+        
+        this.microphoneCapture.on('speech_ended', () => {
+          console.log('[Main] 🎤 Speech ended detected (fallback)');
+          this.googleSTT_User?.notifySpeechEnded?.();
+        });
+        
+        this.microphoneCapture.on('error', (err: Error) => {
+          console.error('[Main] 🎤 Microphone error (fallback):', err);
+          void this.handleAudioCaptureError('microphone', err);
+        });
+        
+        console.log('[Main] ✅ MicrophoneCapture (Default) initialized successfully.');
+      } catch (err2) {
+        console.error('[Main] ❌ CRITICAL: Failed to initialize MicrophoneCapture (Default):', err2);
+        console.error('[Main] 🚨 Audio capture will not work! Check native module and permissions.');
+      }
+    }
+    this.assertAudioCapturesReady();
+  }
+
+  /**
+   * Reconfigure STT provider mid-session (called from IPC when user changes provider)
+   * Destroys existing STT instances and recreates them with the new provider
+   */
+  public async reconfigureSttProvider(): Promise<void> {
+    console.log('[Main] Reconfiguring STT Provider...');
+
+    // Stop existing STT instances - remove listeners using stored references first
+    if (this.googleSTT) {
+      const sttEmitter = this.googleSTT as EventEmitter;
+      if (this.sttTranscriptListener_Interviewer) {
+        sttEmitter.removeListener('transcript', this.sttTranscriptListener_Interviewer);
+        this.sttTranscriptListener_Interviewer = null;
+      }
+      if (this.sttErrorListener_Interviewer) {
+        sttEmitter.removeListener('error', this.sttErrorListener_Interviewer);
+        this.sttErrorListener_Interviewer = null;
+      }
+      this.googleSTT.stop();
+      this.googleSTT.removeAllListeners();
+      safeDestroy(this.googleSTT);
+      this.googleSTT = null;
+    }
+    if (this.googleSTT_User) {
+      const sttEmitter = this.googleSTT_User as EventEmitter;
+      if (this.sttTranscriptListener_User) {
+        sttEmitter.removeListener('transcript', this.sttTranscriptListener_User);
+        this.sttTranscriptListener_User = null;
+      }
+      if (this.sttErrorListener_User) {
+        sttEmitter.removeListener('error', this.sttErrorListener_User);
+        this.sttErrorListener_User = null;
+      }
+      this.googleSTT_User.stop();
+      this.googleSTT_User.removeAllListeners();
+      safeDestroy(this.googleSTT_User);
+      this.googleSTT_User = null;
+    }
+
+    // Reinitialize the pipeline (will pick up the new provider from CredentialsManager)
+    this.setupSystemAudioPipeline();
+
+    // Start the new STT instances if a meeting is active
+    if (this.isMeetingActive) {
+      const interviewerStt = this.googleSTT as STTProvider | null;
+      const userStt = this.googleSTT_User as STTProvider | null;
+      interviewerStt?.start?.();
+      userStt?.start?.();
+    }
+
+    console.log('[Main] STT Provider reconfigured');
+  }
+
+
+  public startAudioTest(deviceId?: string): void {
+    console.log(`[Main] Starting Audio Test on device: ${deviceId || 'default'}`);
+    this.stopAudioTest(); // Stop any existing test
+
+    try {
+      this.audioTestCapture = new MicrophoneCapture(deviceId || undefined);
+      this.audioTestCapture.start();
+
+      // Send to settings window if open, else main window
+      const win = this.settingsWindowHelper.getSettingsWindow() || this.getMainWindow();
+
+      this.audioTestCapture.on('data', (chunk: Buffer) => {
+        // Calculate basic RMS for level meter
+        if (!win || win.isDestroyed()) return;
+
+        let sum = 0;
+        const step = 10;
+        const len = chunk.length;
+
+        for (let i = 0; i < len; i += 2 * step) {
+          const val = chunk.readInt16LE(i);
+          sum += val * val;
+        }
+
+        const count = len / (2 * step);
+        if (count > 0) {
+          const rms = Math.sqrt(sum / count);
+          // Normalize 0-1 (heuristic scaling, max comfortable mic input is around 10000-20000)
+          const level = Math.min(rms / 10000, 1.0);
+          win.webContents.send('audio-level', level);
+        }
+      });
+
+      this.audioTestCapture.on('error', (err: Error) => {
+        console.error('[Main] AudioTest Error:', err);
+      });
+
+    } catch (err) {
+      console.error('[Main] Failed to start audio test:', err);
+    }
+  }
+
+  public stopAudioTest(): void {
+    if (this.audioTestCapture) {
+      console.log('[Main] Stopping Audio Test');
+      this.audioTestCapture.stop();
+      this.audioTestCapture = null;
+    }
+  }
+
+  public finalizeMicSTT(): void {
+    // We only want to finalize the user microphone, because the context is Manual Answer
+    safeFinalize(this.googleSTT_User);
+    console.log('[Main] STT finalized');
+  }
+
+  public async startMeeting(metadata?: any): Promise<void> {
+    const startedAt = Date.now()
+
+    try {
+      await this.runtimeCoordinator.activate(metadata)
+
+      this.performanceInstrumentation.recordDuration('meeting.activation', startedAt, {
+        runtime: 'coordinator',
+      })
+    } catch (error) {
+      this.performanceInstrumentation.recordEvent('meeting.activation.failed', {
+        runtime: 'coordinator',
+        error: error instanceof Error ? error.message : String(error),
+      })
+      throw error
+    }
+  }
+
+  public async prepareMeetingActivation(metadata?: any): Promise<void> {
+    console.log('[Main] Starting Meeting...', metadata);
+    this.audioRecoveryAttempts = 0;
+    this.audioRecoveryBackoffMs = 5000;
+    this.startAbortController = new AbortController();
+    const { signal } = this.startAbortController;
+
+    const normalizeDeviceId = (value: unknown): string | undefined => {
+      if (typeof value !== 'string') {
+        return undefined;
+      }
+
+      const trimmed = value.trim();
+      return trimmed.length > 0 ? trimmed : undefined;
+    };
+
+    if (metadata && typeof metadata !== 'object') {
+      throw new Error('startMeeting metadata must be an object or undefined');
+    }
+    if (metadata?.audio && (
+      (metadata.audio.inputDeviceId != null && typeof metadata.audio.inputDeviceId !== 'string') ||
+      (metadata.audio.outputDeviceId != null && typeof metadata.audio.outputDeviceId !== 'string')
+    )) {
+      throw new Error('startMeeting metadata.audio requires string inputDeviceId and outputDeviceId');
+    }
+
+    const normalizedMetadata = metadata
+      ? {
+          ...metadata,
+          ...(metadata.audio ? {
+            audio: {
+              inputDeviceId: normalizeDeviceId(metadata.audio.inputDeviceId),
+              outputDeviceId: normalizeDeviceId(metadata.audio.outputDeviceId),
+            },
+          } : {}),
+        }
+      : undefined;
+
+    const currentMutex = this.meetingStartMutex;
+    let settled = false;
+    this.meetingStartMutex = currentMutex.then(async () => {
+      if (signal.aborted) {
+        console.log('[Main] Start meeting aborted (canceled by endMeeting)');
+        return;
+      }
+
+      if (this.meetingLifecycleState === 'starting' || this.meetingLifecycleState === 'active') {
+        console.warn(`[Main] Ignoring startMeeting while state=${this.meetingLifecycleState}`)
+        return
+      }
+
+      this.meetingLifecycleState = 'starting'
+      this.broadcast('meeting-lifecycle-state', this.meetingLifecycleState)
+      const startSequence = ++this.meetingStartSequence
+
+      try {
+        await this.validateMeetingAudioSetup(normalizedMetadata);
+      } catch (error) {
+        this.currentMeetingId = null
+        this.meetingLifecycleState = 'idle'
+        this.broadcast('meeting-lifecycle-state', this.meetingLifecycleState)
+        throw error
+      }
+
+      if (signal.aborted) {
+        console.log('[Main] Start meeting aborted after validation');
+        this.meetingLifecycleState = 'idle';
+        this.broadcast('meeting-lifecycle-state', this.meetingLifecycleState);
+        return;
+      }
+
+      this.currentMeetingId = randomUUID()
+      this.isMeetingActive = true;
+      this.resetAudioPipelineStats();
+      this.intelligenceManager.getSessionTracker().ensureMeetingContext(this.currentMeetingId);
+      if (normalizedMetadata) {
+        this.intelligenceManager.setMeetingMetadata(normalizedMetadata);
+      }
+
+      this.getWindowHelper().getOverlayContentWindow()?.webContents.send('session-reset');
+      this.getWindowHelper().getLauncherWindow()?.webContents.send('session-reset');
+
+      return new Promise<void>((resolve, reject) => {
+        if (signal.aborted) {
+          console.log('[Main] Start meeting aborted before deferred step');
+          this.meetingLifecycleState = 'idle';
+          this.broadcast('meeting-lifecycle-state', this.meetingLifecycleState);
+          this.isMeetingActive = false;
+          this.currentMeetingId = null;
+          resolve();
+          return;
+        }
+
+        setTimeout(async () => {
+          if (signal.aborted) {
+            console.log('[Main] Start meeting aborted during deferred step');
+            this.meetingLifecycleState = 'idle';
+            this.broadcast('meeting-lifecycle-state', this.meetingLifecycleState);
+            this.isMeetingActive = false;
+            this.currentMeetingId = null;
+            resolve();
+            return;
+          }
+
+          if (startSequence !== this.meetingStartSequence || this.meetingLifecycleState !== 'starting') {
+            console.warn('[Main] Skipping stale deferred meeting start')
+            resolve()
+            return
+          }
+
+          try {
+            if (normalizedMetadata?.audio) {
+              await this.reconfigureAudio(normalizedMetadata.audio.inputDeviceId, normalizedMetadata.audio.outputDeviceId);
+            }
+
+            if (signal.aborted) {
+              console.log('[Main] Start meeting aborted during audio reconfig');
+              this.meetingLifecycleState = 'idle';
+              this.broadcast('meeting-lifecycle-state', this.meetingLifecycleState);
+              this.isMeetingActive = false;
+              this.currentMeetingId = null;
+              resolve();
+              return;
+            }
+
+            if (startSequence !== this.meetingStartSequence || this.meetingLifecycleState !== 'starting') {
+              console.warn('[Main] Meeting start invalidated during async initialization')
+              resolve()
+              return
+            }
+
+            if (this.ragManager) {
+              try {
+                this.ragManager.startLiveIndexing('live-meeting-current');
+              } catch (err) {
+                console.error('[Main] Live indexing failed:', err);
+              }
+            }
+
+            this.meetingLifecycleState = 'active'
+            this.broadcast('meeting-lifecycle-state', this.meetingLifecycleState)
+            this.stealthManager.setMeetingActive(true)
+            console.log('[Main] Meeting activation prepared successfully.');
+
+            resolve()
+          } catch (err) {
+            console.error('[Main] Error preparing meeting activation:', err);
+            this.setNativeAudioConnected(false);
+            this.broadcast('meeting-audio-error', (err as Error).message || 'Audio pipeline failed to start');
+            this.isMeetingActive = false;
+            this.stealthManager.setMeetingActive(false);
+            this.currentMeetingId = null;
+            this.meetingLifecycleState = 'idle'
+            this.broadcast('meeting-lifecycle-state', this.meetingLifecycleState)
+            this.clearAudioPipelineHealthCheck();
+            reject(err)
+          }
+        }, 0);
+      })
+    }).then(
+      () => { settled = true; },
+      (err) => { settled = true; throw err; }
+    ).catch((err) => {
+      if (!settled) {
+        console.error('[Main] startMeeting mutex error:', err);
+      }
+    });
+
+    return this.meetingStartMutex;
+  }
+
+  public async endMeeting(): Promise<void> {
+    const startedAt = Date.now()
+
+    try {
+      await this.runtimeCoordinator.deactivate()
+
+      this.performanceInstrumentation.recordDuration('meeting.deactivation', startedAt, {
+        runtime: 'coordinator',
+      })
+    } catch (error) {
+      this.performanceInstrumentation.recordEvent('meeting.deactivation.failed', {
+        runtime: 'coordinator',
+        error: error instanceof Error ? error.message : String(error),
+      })
+      throw error
+    }
+  }
+
+  public async finalizeMeetingDeactivation(): Promise<void> {
+    console.log('[Main] Ending Meeting...');
+    this.startAbortController?.abort();
+    this.startAbortController = null;
+    this.clearAudioPipelineHealthCheck();
+    const meetingId = this.currentMeetingId;
+    this.currentMeetingId = null;
+    const endSequence = ++this.meetingStartSequence  // Increment sequence to invalidate any pending starts
+    this.meetingLifecycleState = 'stopping'
+    this.broadcast('meeting-lifecycle-state', this.meetingLifecycleState)
+    this.isMeetingActive = false; // Block new data immediately
+    this.stealthManager.setMeetingActive(false);
+    this.setNativeAudioConnected(false);
+
+    // Wait for any pending meeting start operations to complete before proceeding
+    // This prevents race conditions between start and end operations
+    await this.meetingStartMutex.catch(() => {
+      // Ignore errors from the mutex as we're ending the meeting anyway
+      console.log('[Main] Ignoring pending meeting start errors during endMeeting');
+    });
+
+    this.sttReconnector?.stopAll();
+    this.checkpointer?.stop()
+
+    // 4b. Stop JIT RAG live indexing (flush remaining segments)
+    if (this.ragManager) {
+      try {
+        await this.ragManager.stopLiveIndexing();
+      } catch (error) {
+        console.error('[Main] Failed to stop live indexing during endMeeting:', error)
+      }
+    }
+
+    // 4. Reset Intelligence Context & Save
+    await this.intelligenceManager.stopMeeting(meetingId ?? undefined);
+    await this.intelligenceManager.waitForPendingSaves(10000);
+
+    // 5. Revert to Default Model (One-Way Sync Revert)
+    // This ensures next meeting starts with default, not the temporary one used in this session
+    try {
+      const { CredentialsManager } = require('../services/CredentialsManager');
+      const cm = CredentialsManager.getInstance();
+      const defaultModel = cm.getDefaultModel();
+      
+      // Re-fetch custom providers to ensure context correctness
+      const curlProviders = cm.getCurlProviders();
+      const legacyProviders = cm.getCustomProviders();
+      const all = [...(curlProviders || []), ...(legacyProviders || [])];
+
+      console.log(`[Main] Reverting model to default: ${defaultModel}`);
+      this.processingHelper.getLLMHelper().setModel(defaultModel, all);
+
+      // Broadcast revert to UI
+      BrowserWindow.getAllWindows().forEach(win => {
+        if (!win.isDestroyed()) win.webContents.send('model-changed', defaultModel);
+      });
+
+    } catch (e) {
+      console.error("[Main] Failed to revert model:", e);
+    }
+
+    // 6. Process meeting for RAG (embeddings)
+    await this.processCompletedMeetingForRAG(meetingId);
+
+    // 7. Clean up JIT RAG provisional chunks (post-meeting RAG replaces them)
+    if (this.ragManager) {
+      this.ragManager.deleteMeetingData('live-meeting-current');
+    }
+
+    this.meetingLifecycleState = 'idle'
+    this.broadcast('meeting-lifecycle-state', this.meetingLifecycleState)
+  }
+
+  public async cleanupForQuit(): Promise<void> {
+    await this.intelligenceManager.waitForPendingSaves(10000);
+    this.meetingStartSequence += 1
+    this.meetingLifecycleState = 'idle'
+    this.broadcast('meeting-lifecycle-state', this.meetingLifecycleState)
+    this.isMeetingActive = false
+    this.setNativeAudioConnected(false)
+    this.currentMeetingId = null
+    this.clearAudioPipelineHealthCheck();
+
+    // Clear disguise timers to prevent memory leaks
+    this.clearDisguiseTimers()
+
+    this.sttReconnector?.stopAll();
+    this.checkpointer?.destroy();
+
+    // Remove intelligence event listeners to prevent memory leaks
+    this.intelligenceManager.removeAllListeners()
+
+    try {
+      this.systemAudioCapture?.removeAllListeners()
+      this.systemAudioCapture?.stop()
+      if (typeof this.systemAudioCapture?.destroy === 'function') {
+        this.systemAudioCapture.destroy()
+      }
+    } catch (error) {
+      console.error('[Main] Failed to stop system audio during quit:', error)
+    }
+
+    // Stop interviewer STT with proper listener cleanup
+    try {
+      if (this.googleSTT) {
+        const sttEmitter = this.googleSTT as EventEmitter
+        if (this.sttTranscriptListener_Interviewer) {
+          sttEmitter.removeListener('transcript', this.sttTranscriptListener_Interviewer)
+          this.sttTranscriptListener_Interviewer = null
+        }
+        if (this.sttErrorListener_Interviewer) {
+          sttEmitter.removeListener('error', this.sttErrorListener_Interviewer)
+          this.sttErrorListener_Interviewer = null
+        }
+      this.googleSTT?.stop()
+      this.googleSTT?.removeAllListeners()
+      safeDestroy(this.googleSTT)
+    }
+  } catch (error) {
+    console.error('[Main] Failed to stop interviewer STT during quit:', error)
+  }
+
+  try {
+    this.microphoneCapture?.removeAllListeners()
+    this.microphoneCapture?.stop()
+    if (typeof this.microphoneCapture?.destroy === 'function') {
+      this.microphoneCapture.destroy()
+    }
+  } catch (error) {
+    console.error('[Main] Failed to stop microphone capture during quit:', error)
+  }
+
+  // Stop user STT with proper listener cleanup
+  try {
+    if (this.googleSTT_User) {
+      const sttEmitter = this.googleSTT_User as EventEmitter
+      if (this.sttTranscriptListener_User) {
+        sttEmitter.removeListener('transcript', this.sttTranscriptListener_User)
+        this.sttTranscriptListener_User = null
+      }
+      if (this.sttErrorListener_User) {
+        sttEmitter.removeListener('error', this.sttErrorListener_User)
+        this.sttErrorListener_User = null
+      }
+      this.googleSTT_User?.stop()
+      this.googleSTT_User?.removeAllListeners()
+      safeDestroy(this.googleSTT_User)
+    }
+    } catch (error) {
+      console.error('[Main] Failed to stop user STT during quit:', error)
+    }
+
+    try {
+      this.audioTestCapture?.stop()
+    } catch (error) {
+      console.error('[Main] Failed to stop audio test capture during quit:', error)
+    }
+
+    this.systemAudioCapture = null
+    this.microphoneCapture = null
+    this.audioTestCapture = null
+    this.googleSTT = null
+    this.googleSTT_User = null
+
+    this.ragManager?.stopLiveIndexing().catch(err => {
+      console.error('[Main] Failed to stop live indexing during quit:', err)
+    })
+
+    this.processingHelper.getLLMHelper().scrubKeys();
+
+    this.nativeStealthBridge?.dispose();
+    this.nativeStealthBridge = null;
+    this.virtualDisplayCoordinator?.dispose?.();
+
+    // Close SQLite last so all upstream consumers (intelligenceManager,
+    // checkpointer, ragManager) finish writing first. better-sqlite3 runs a
+    // PRAGMA wal_checkpoint(TRUNCATE) on close; without this the WAL/SHM
+    // sidecar files remain in userData/ after a graceful shutdown.
+    try {
+      DatabaseManager.closeIfOpen();
+    } catch (error) {
+      console.error('[Main] Failed to close DatabaseManager during quit:', error);
+    }
+  }
+
+  private async processCompletedMeetingForRAG(meetingId?: string | null): Promise<void> {
+    if (!this.ragManager) return;
+    if (!meetingId) return;
+
+    try {
+      const meeting = DatabaseManager.getInstance().getMeetingDetails(meetingId);
+      if (!meeting || !meeting.transcript || meeting.transcript.length === 0) return;
+
+      // Convert transcript to RAG format
+      const segments = meeting.transcript.map(t => ({
+        speaker: t.speaker,
+        text: t.text,
+        timestamp: t.timestamp
+      }));
+
+      // Generate summary from detailedSummary if available
+      let summary: string | undefined;
+      if (meeting.detailedSummary) {
+        summary = [
+          ...(meeting.detailedSummary.keyPoints || []),
+          ...(meeting.detailedSummary.actionItems || []).map(a => `Action: ${a}`)
+        ].join('. ');
+      }
+
+      const result = await this.ragManager.processMeeting(meeting.id, segments, summary);
+      console.log(`[AppState] RAG processed meeting ${meeting.id}: ${result.chunkCount} chunks`);
+
+    } catch (error) {
+      console.error('[AppState] Failed to process meeting for RAG:', error);
+    }
+  }
+
+  private setupIntelligenceEvents(): void {
+    const mainWindow = this.getMainWindow.bind(this)
+
+    // Forward intelligence events to renderer
+    this.intelligenceManager.on('assist_update', (insight: string) => {
+      // Send to both if both exist, though mostly overlay needs it
+      const helper = this.getWindowHelper();
+      const launcher = helper.getLauncherWindow();
+      const overlay = helper.getOverlayWindow();
+      if (launcher && !launcher.isDestroyed()) launcher.webContents.send('intelligence-assist-update', { insight });
+      const overlayContent = this.getWindowHelper().getOverlayContentWindow();
+      if (overlayContent && !overlayContent.isDestroyed()) overlayContent.webContents.send('intelligence-assist-update', { insight });
+    })
+
+    this.intelligenceManager.on('cooldown_deferred', (suppressedMs: number, question?: string, reason?: 'duplicate_question_debounce') => {
+      const win = mainWindow()
+      if (win && !win.isDestroyed()) {
+        win.webContents.send('intelligence-cooldown', { suppressedMs, question, reason })
+      }
+    })
+
+    this.intelligenceManager.on('suggested_answer', (answer: string, question: string, confidence: number, metadata?: SuggestedAnswerMetadata) => {
+      const win = mainWindow()
+      if (win && !win.isDestroyed()) {
+        win.webContents.send('intelligence-suggested-answer', { answer, question, confidence, metadata })
+      }
+
+    })
+
+    this.intelligenceManager.on('suggested_answer_token', (token: string, question: string, confidence: number) => {
+      const win = mainWindow()
+      if (win && !win.isDestroyed()) {
+        win.webContents.send('intelligence-suggested-answer-token', { token, question, confidence })
+      }
+    })
+
+    this.intelligenceManager.on('refined_answer_token', (token: string, intent: string) => {
+      const win = mainWindow()
+      if (win && !win.isDestroyed()) {
+        win.webContents.send('intelligence-refined-answer-token', { token, intent })
+      }
+    })
+
+    this.intelligenceManager.on('refined_answer', (answer: string, intent: string) => {
+      const win = mainWindow()
+      if (win && !win.isDestroyed()) {
+        win.webContents.send('intelligence-refined-answer', { answer, intent })
+      }
+
+    })
+
+    this.intelligenceManager.on('recap', (summary: string) => {
+      const win = mainWindow()
+      if (win && !win.isDestroyed()) {
+        win.webContents.send('intelligence-recap', { summary })
+      }
+    })
+
+    this.intelligenceManager.on('recap_token', (token: string) => {
+      const win = mainWindow()
+      if (win && !win.isDestroyed()) {
+        win.webContents.send('intelligence-recap-token', { token })
+      }
+    })
+
+    this.intelligenceManager.on('follow_up_questions_update', (questions: string) => {
+      const win = mainWindow()
+      if (win && !win.isDestroyed()) {
+        win.webContents.send('intelligence-follow-up-questions-update', { questions })
+      }
+    })
+
+    this.intelligenceManager.on('follow_up_questions_token', (token: string) => {
+      const win = mainWindow()
+      if (win && !win.isDestroyed()) {
+        win.webContents.send('intelligence-follow-up-questions-token', { token })
+      }
+    })
+
+    this.intelligenceManager.on('manual_answer_started', () => {
+      const win = mainWindow()
+      if (win && !win.isDestroyed()) {
+        win.webContents.send('intelligence-manual-started')
+      }
+    })
+
+    this.intelligenceManager.on('manual_answer_result', (answer: string, question: string) => {
+      const win = mainWindow()
+      if (win && !win.isDestroyed()) {
+        win.webContents.send('intelligence-manual-result', { answer, question })
+      }
+
+    })
+
+    this.intelligenceManager.on('mode_changed', (mode: string) => {
+      const win = mainWindow()
+      if (win && !win.isDestroyed()) {
+        win.webContents.send('intelligence-mode-changed', { mode })
+      }
+    })
+
+    this.intelligenceManager.on('error', (error: Error, mode: string) => {
+      console.error(`[IntelligenceManager] Error in ${mode}:`, error)
+      const win = mainWindow()
+      if (win && !win.isDestroyed()) {
+        win.webContents.send('intelligence-error', { error: error.message, mode })
+      }
+    })
+  }
+
+
+
+
+
+  public updateGoogleCredentials(keyPath: string): void {
+    console.log(`[AppState] Updating Google Credentials to: ${keyPath}`);
+    // Set global environment variable so new instances pick it up
+    process.env.GOOGLE_APPLICATION_CREDENTIALS = keyPath;
+
+    if (this.googleSTT) {
+      this.googleSTT.setCredentials(keyPath);
+    }
+
+    if (this.googleSTT_User) {
+      this.googleSTT_User.setCredentials(keyPath);
+    }
+  }
+
+  public setRecognitionLanguage(key: string): void {
+    console.log(`[AppState] Setting recognition language to: ${key}`);
+    const { CredentialsManager } = require('../services/CredentialsManager');
+    CredentialsManager.getInstance().setSttLanguage(key);
+    this.googleSTT?.setRecognitionLanguage(key);
+    this.googleSTT_User?.setRecognitionLanguage(key);
+    this.processingHelper.getLLMHelper().setSttLanguage(key);
+  }
+
+  public static getInstance(): AppState {
+    if (!AppState.instance) {
+      AppState.instance = new AppState()
+    }
+    return AppState.instance
+  }
+
+  // Getters and Setters
+  public getIsMeetingActive(): boolean {
+    return this.isMeetingActive;
+  }
+
+  public getMainWindow(): BrowserWindow | null {
+    return this.windowHelper.getMainWindow()
+  }
+
+  public getWindowHelper(): WindowHelper {
+    return this.windowHelper
+  }
+
+  public getWindowFacade(): WindowFacade {
+    return new WindowFacade({
+      getSettingsWindow: () => this.settingsWindowHelper.getSettingsWindow(),
+      setSettingsWindowDimensions: (window, width, height) => {
+        this.settingsWindowHelper.setWindowDimensions(window as BrowserWindow, width, height)
+      },
+      getOverlayWindow: () => this.windowHelper.getOverlayWindow(),
+      getLauncherContentWindow: () => this.windowHelper.getLauncherContentWindow(),
+      setOverlayDimensions: (width, height) => {
+        this.windowHelper.setOverlayDimensions(width, height)
+      },
+      setWindowMode: (mode) => {
+        this.windowHelper.setWindowMode(mode)
+      },
+      setOverlayClickthrough: (enabled) => {
+        this.windowHelper.setOverlayClickthrough(enabled)
+      },
+      toggleMainWindow: () => this.toggleMainWindow(),
+      showMainWindow: () => this.showMainWindow(),
+      hideMainWindow: () => this.hideMainWindow(),
+      moveWindowLeft: () => this.moveWindowLeft(),
+      moveWindowRight: () => this.moveWindowRight(),
+      moveWindowUp: () => this.moveWindowUp(),
+      moveWindowDown: () => this.moveWindowDown(),
+      centerAndShowWindow: () => this.centerAndShowWindow(),
+      toggleSettingsWindow: (x, y) => this.settingsWindowHelper.toggleWindow(x, y),
+      closeSettingsWindow: () => this.settingsWindowHelper.closeWindow(),
+      showModelSelectorWindow: (x, y) => this.modelSelectorWindowHelper.showWindow(x, y),
+      hideModelSelectorWindow: () => this.modelSelectorWindowHelper.hideWindow(),
+      toggleModelSelectorWindow: (x, y) => this.modelSelectorWindowHelper.toggleWindow(x, y),
+    })
+  }
+
+public getSettingsFacade(): SettingsFacade {
+return new SettingsFacade({
+setConsciousModeEnabled: (enabled) => this.setConsciousModeEnabled(enabled),
+getConsciousModeEnabled: () => this.getConsciousModeEnabled(),
+setAccelerationModeEnabled: (enabled) => this.setAccelerationModeEnabled(enabled),
+getAccelerationModeEnabled: () => this.getAccelerationModeEnabled(),
+setDisguise: (mode) => this.setDisguise(mode),
+getDisguise: () => this.getDisguise(),
+getUndetectable: () => this.getUndetectable(),
+getThemeMode: () => this.themeManager.getMode(),
+getResolvedTheme: () => this.themeManager.getResolvedTheme(),
+setThemeMode: (mode) => this.themeManager.setMode(mode as import('../ThemeManager').ThemeMode),
+})
+}
+
+  public getScreenshotFacade(): ScreenshotFacade {
+    return new ScreenshotFacade({
+      deleteScreenshot: (path) => this.deleteScreenshot(path),
+      takeScreenshot: () => this.takeScreenshot(),
+      takeSelectiveScreenshot: () => this.takeSelectiveScreenshot(),
+      getImagePreview: (filepath) => this.getImagePreview(filepath),
+      getView: () => this.getView(),
+      getScreenshotQueue: () => this.getScreenshotQueue(),
+      getExtraScreenshotQueue: () => this.getExtraScreenshotQueue(),
+      clearQueues: () => this.clearQueues(),
+    })
+  }
+
+  public getAudioFacade(): AudioFacade {
+    return new AudioFacade({
+      getNativeAudioStatus: () => this.getNativeAudioStatus(),
+    })
+  }
+
+  public getIntelligenceManager(): IntelligenceManager {
+    return this.intelligenceManager
+  }
+
+  public getThemeManager(): ThemeManager {
+    return this.themeManager
+  }
+
+  public getRAGManager(): RAGManager | null {
+    return this.ragManager;
+  }
+
+  public getKnowledgeOrchestrator(): any {
+    return this.knowledgeOrchestrator;
+  }
+
+  public getView(): "queue" | "solutions" {
+    return this.view
+  }
+
+  public setView(view: "queue" | "solutions"): void {
+    this.view = view
+    this.screenshotHelper.setView(view)
+  }
+
+  public isVisible(): boolean {
+    return this.windowHelper.isVisible()
+  }
+
+  public getScreenshotHelper(): ScreenshotHelper {
+    return this.screenshotHelper
+  }
+
+  public getProblemInfo(): any {
+    return this.problemInfo
+  }
+
+  public setProblemInfo(problemInfo: any): void {
+    this.problemInfo = problemInfo
+  }
+
+  public getScreenshotQueue(): string[] {
+    return this.screenshotHelper.getScreenshotQueue()
+  }
+
+  public getExtraScreenshotQueue(): string[] {
+    return this.screenshotHelper.getExtraScreenshotQueue()
+  }
+
+  // Window management methods
+  public setupOllamaIpcHandlers(): void {
+    ipcMain.handle('get-ollama-models', async () => {
+      try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 2000); // 2s timeout for detection
+
+        const response = await fetch('http://localhost:11434/api/tags', {
+          signal: controller.signal
+        });
+        clearTimeout(timeoutId);
+
+        if (response.ok) {
+          const data = await response.json();
+          // data.models is an array of objects: { name: "llama3:latest", ... }
+          return data.models.map((m: any) => m.name);
+        }
+        return [];
+      } catch (error) {
+        // console.warn("Ollama detection failed:", error);
+        return [];
+      }
+    });
+  }
+
+  public createWindow(): void {
+    this.windowHelper.createWindow()
+  }
+
+  public hideMainWindow(): void {
+    this.windowHelper.hideMainWindow()
+  }
+
+  public showMainWindow(): void {
+    this.windowHelper.showMainWindow()
+  }
+
+  public toggleMainWindow(): void {
+    console.log(
+      "Screenshots: ",
+      this.screenshotHelper.getScreenshotQueue().length,
+      "Extra screenshots: ",
+      this.screenshotHelper.getExtraScreenshotQueue().length
+    )
+    
+    // Send toggle-expand to the currently active window mode's window.
+    // If we use getMainWindow(), it might return the launcher window when the overlay is hidden,
+    // causing the IPC event to go to the wrong React tree and silently fail.
+    const mode = this.windowHelper.getCurrentWindowMode();
+    const targetWindow = mode === 'overlay' ? this.windowHelper.getOverlayContentWindow() : this.windowHelper.getLauncherContentWindow();
+
+    if (targetWindow && !targetWindow.isDestroyed()) {
+      targetWindow.webContents.send('toggle-expand');
+    }
+  }
+
+  public setWindowDimensions(width: number, height: number): void {
+    this.windowHelper.setWindowDimensions(width, height)
+  }
+
+  public clearQueues(): void {
+    this.screenshotHelper.clearQueues()
+
+    // Clear problem info
+    this.problemInfo = null
+
+    // Reset view to initial state
+    this.setView("queue")
+  }
+
+  // Screenshot management methods
+  public async takeScreenshot(): Promise<string> {
+    if (!this.getMainWindow()) throw new Error("No main window available")
+
+    this.stealthManager.pauseWatchdog('screenshot')
+
+    try {
+      const wasOverlayVisible = this.windowHelper.getOverlayWindow()?.isVisible() ?? false
+
+      return await this.screenshotHelper.takeScreenshot(
+        () => this.hideMainWindow(),
+        () => {
+          if (wasOverlayVisible) {
+            this.windowHelper.switchToOverlay()
+          } else {
+            this.showMainWindow()
+          }
+        }
+      )
+    } finally {
+      this.stealthManager.resumeWatchdog('screenshot')
+    }
+  }
+
+  public async takeSelectiveScreenshot(): Promise<string> {
+    if (!this.getMainWindow()) throw new Error("No main window available")
+
+    this.stealthManager.pauseWatchdog('selective-screenshot')
+
+    try {
+      const wasOverlayVisible = this.windowHelper.getOverlayWindow()?.isVisible() ?? false
+
+      return await this.screenshotHelper.takeSelectiveScreenshot(
+        () => this.hideMainWindow(),
+        () => {
+          if (wasOverlayVisible) {
+            this.windowHelper.switchToOverlay()
+          } else {
+            this.showMainWindow()
+          }
+        }
+      )
+    } finally {
+      this.stealthManager.resumeWatchdog('selective-screenshot')
+    }
+  }
+
+  public async getImagePreview(filepath: string): Promise<string> {
+    return this.screenshotHelper.getImagePreview(filepath)
+  }
+
+  public async deleteScreenshot(
+    path: string
+  ): Promise<{ success: boolean; error?: string }> {
+    return this.screenshotHelper.deleteScreenshot(path)
+  }
+
+  // New methods to move the window
+  public moveWindowLeft(): void {
+    this.windowHelper.moveWindowLeft()
+  }
+
+  public moveWindowRight(): void {
+    this.windowHelper.moveWindowRight()
+  }
+  public moveWindowDown(): void {
+    this.windowHelper.moveWindowDown()
+  }
+  public moveWindowUp(): void {
+    this.windowHelper.moveWindowUp()
+  }
+
+  public centerAndShowWindow(): void {
+    this.windowHelper.centerAndShowWindow()
+  }
+
+  public createTray(): void {
+    this.showTray();
+  }
+
+  public showTray(): void {
+    if (this.tray) return;
+
+    // Try to find a template image first for macOS
+    const resourcesPath = app.isPackaged ? process.resourcesPath : app.getAppPath();
+
+    // Potential paths for tray icon
+    const templatePath = path.join(resourcesPath, 'assets', 'iconTemplate.png');
+    const defaultIconPath = app.isPackaged
+      ? path.join(resourcesPath, 'src/components/icon.png')
+      : path.join(app.getAppPath(), 'src/components/icon.png');
+
+    let iconToUse = defaultIconPath;
+
+    // Check if template exists (sync check is fine for startup/rare toggle)
+    try {
+      if (require('fs').existsSync(templatePath)) {
+        iconToUse = templatePath;
+        console.log('[Tray] Using template icon:', templatePath);
+      } else {
+        // Also check src/components for dev
+        const devTemplatePath = path.join(app.getAppPath(), 'src/components/iconTemplate.png');
+        if (require('fs').existsSync(devTemplatePath)) {
+          iconToUse = devTemplatePath;
+          console.log('[Tray] Using dev template icon:', devTemplatePath);
+        } else {
+          console.log('[Tray] Template icon not found, using default:', defaultIconPath);
+        }
+      }
+    } catch (e) {
+      console.error('[Tray] Error checking for icon:', e);
+    }
+
+    const trayIcon = nativeImage.createFromPath(iconToUse).resize({ width: 16, height: 16 });
+    // IMPORTANT: specific template settings for macOS if needed, but 'Template' in name usually suffices
+    trayIcon.setTemplateImage(iconToUse.endsWith('Template.png'));
+
+    this.tray = new Tray(trayIcon)
+    this.tray.setToolTip('Natively') // This tooltip might also need update if we change global shortcut, but global shortcut is removed.
+    this.updateTrayMenu();
+
+    // Double-click to show window
+    this.tray.on('double-click', () => {
+      this.centerAndShowWindow()
+    })
+  }
+
+  public updateTrayMenu() {
+    if (!this.tray) return;
+
+    const keybindManager = KeybindManager.getInstance();
+    const screenshotAccel = keybindManager.getKeybind('general:take-screenshot') || 'Command+Alt+Shift+S';
+
+    console.log('[Main] updateTrayMenu called. Screenshot Accelerator:', screenshotAccel);
+
+    // Update tooltip for verification
+    this.tray.setToolTip('Natively');
+
+    // Helper to format accelerator for display (e.g. CommandOrControl+H -> Cmd+H)
+    const formatAccel = (accel: string) => {
+      return accel
+        .replace('CommandOrControl', 'Cmd')
+        .replace('Command', 'Cmd')
+        .replace('Control', 'Ctrl')
+        .replace('OrControl', '') // Cleanup just in case
+        .replace(/\+/g, '+');
+    };
+
+    const displayScreenshot = formatAccel(screenshotAccel);
+    // We can also get the toggle visibility shortcut if desired
+    const toggleKb = keybindManager.getKeybind('general:toggle-visibility');
+    const toggleAccel = toggleKb || 'Command+Alt+Shift+V';
+    const displayToggle = formatAccel(toggleAccel);
+
+    const contextMenu = Menu.buildFromTemplate([
+      {
+        label: 'Show Natively',
+        click: () => {
+          this.centerAndShowWindow()
+        }
+      },
+      {
+        label: `Toggle Window (${displayToggle})`,
+        click: () => {
+          this.toggleMainWindow()
+        }
+      },
+      {
+        type: 'separator'
+      },
+      {
+        label: `Take Screenshot (${displayScreenshot})`,
+        accelerator: screenshotAccel,
+        click: async () => {
+          try {
+            const screenshotPath = await this.takeScreenshot()
+            const preview = await this.getImagePreview(screenshotPath)
+            const mainWindow = this.getMainWindow()
+            if (mainWindow) {
+              mainWindow.webContents.send("screenshot-taken", {
+                path: screenshotPath,
+                preview
+              })
+            }
+          } catch (error) {
+            console.error("Error taking screenshot from tray:", error)
+          }
+        }
+      },
+      {
+        type: 'separator'
+      },
+      {
+        label: 'Quit',
+        accelerator: 'Command+Q',
+        click: () => {
+          app.quit()
+        }
+      }
+    ])
+
+    this.tray.setContextMenu(contextMenu)
+  }
+
+  public hideTray(): void {
+    if (this.tray) {
+      this.tray.destroy();
+      this.tray = null;
+    }
+  }
+
+  public setHasDebugged(value: boolean): void {
+    this.hasDebugged = value
+  }
+
+  public getHasDebugged(): boolean {
+    return this.hasDebugged
+  }
+
+  private pendingUndetectableState: boolean | null = null;
+
+  public async setUndetectableAsync(state: boolean): Promise<void> {
+    if (this.isUndetectable === state || this.pendingUndetectableState === state) return;
+
+    this.pendingUndetectableState = state;
+
+    console.log(`[Stealth] setUndetectable(${state}) called`);
+    const startedAt = Date.now();
+
+    const stealthSupervisor = this.runtimeCoordinator.getSupervisor<StealthSupervisor>('stealth')
+    if (stealthSupervisor.getState() === 'idle') {
+      await stealthSupervisor.start()
+    }
+    await stealthSupervisor.setEnabled(state)
+
+    this.pendingUndetectableState = null;
+
+    this.applyUndetectableState(state, startedAt, {
+      runtime: 'coordinator',
+    })
+  }
+
+  private applyUndetectableState(
+    state: boolean,
+    startedAt: number,
+    metadata: Record<string, unknown> = {},
+  ): void {
+    this.isUndetectable = state
+    this.syncWindowStealthProtection(state)
+    if (!state) {
+      this.clearPrivacyShieldFault()
+    }
+
+    // Persist state via SettingsManager
+    SettingsManager.getInstance().set('isUndetectable', state);
+
+    // Cancel pending disguise timers from prior dock/disguise transitions so
+    // stale blur-reset or app.setName() callbacks cannot fire after a rapid toggle.
+    this.clearDisguiseTimers()
+
+    // Broadcast state change to all relevant windows
+    this._broadcastToAllWindows('undetectable-changed', state);
+    this.performanceInstrumentation.recordDuration('stealth.toggle', startedAt, {
+      enabled: state,
+      ...metadata,
+    });
+
+    // --- STEALTH MODE LOGIC (restored from working version a820380) ---
+    if (process.platform === 'darwin') {
+      const activeWindow = this.windowHelper.getVisibleMainWindow();
+
+      // Determine the truly active window to restore focus to
+      const settingsWindow = this.settingsWindowHelper.getSettingsWindow();
+      let targetFocusWindow = activeWindow;
+
+      if (settingsWindow && !settingsWindow.isDestroyed() && settingsWindow.isVisible()) {
+        targetFocusWindow = settingsWindow;
+      }
+
+      // Temporarily ignore blur to prevent popups from closing during dock hide/show
+      const modelSelectorWindow = this.modelSelectorWindowHelper.getWindow();
+      const isModelSelectorVisible = modelSelectorWindow && !modelSelectorWindow.isDestroyed() && modelSelectorWindow.isVisible();
+
+      if (targetFocusWindow && (targetFocusWindow === settingsWindow)) {
+        this.settingsWindowHelper.setIgnoreBlur(true);
+      }
+      if (isModelSelectorVisible) {
+        this.modelSelectorWindowHelper.setIgnoreBlur(true);
+      }
+
+      if (state) {
+        console.log('[Stealth] Calling app.dock.hide()');
+        this.settingsWindowHelper.closeWindow();
+        this.modelSelectorWindowHelper.hideWindow();
+        app.dock.hide();
+        this.hideTray();
+
+        // Focus the window directly without calling .show() 
+        // (.show() can cause macOS to re-register the dock icon)
+        if (targetFocusWindow && !targetFocusWindow.isDestroyed()) {
+          targetFocusWindow.focus();
+        }
+      } else {
+        console.log('[Stealth] Calling app.dock.show()');
+        app.dock.show();
+        this.showTray();
+
+        // Restore focus when coming back to foreground/dock mode
+        if (targetFocusWindow && !targetFocusWindow.isDestroyed() && targetFocusWindow.isVisible()) {
+          targetFocusWindow.focus();
+        }
+      }
+
+      // Re-enable blur handling after the transition logic has settled
+      if (targetFocusWindow && (targetFocusWindow === settingsWindow)) {
+        this.scheduleDisguiseTimer(() => {
+          this.settingsWindowHelper.setIgnoreBlur(false);
+        }, 500)
+      }
+      if (isModelSelectorVisible) {
+        this.scheduleDisguiseTimer(() => {
+          this.modelSelectorWindowHelper.setIgnoreBlur(false);
+        }, 500)
+      }
+    }
+  }
+
+  private syncWindowStealthProtection(state: boolean): void {
+  console.log(`[Stealth] syncWindowStealthProtection: applying contentProtection=${state}`)
+  this.windowHelper.setContentProtection(state)
+  this.settingsWindowHelper.setContentProtection(state)
+  this.modelSelectorWindowHelper.setContentProtection(state)
+
+  // Verify stealth was applied
+  setTimeout(() => {
+    const verified = this.verifyStealthProtection()
+    console.log(`[Stealth] Verification result: ${verified ? 'PASS' : 'FAIL'}`)
+    if (!verified) {
+      const warnings = this.stealthManager.getStealthDegradationWarnings()
+      console.warn(`[Stealth] Verification failed. Current warnings: ${warnings.join(', ') || 'none'}`)
+      }
+    }, 500)
+}
+
+  private getStealthSupervisorOrNull(): StealthSupervisor | null {
+    try {
+      return this.runtimeCoordinator.getSupervisor<StealthSupervisor>('stealth')
+    } catch {
+      return null
+    }
+  }
+
+  public setUndetectable(state: boolean): void {
+    void this.setUndetectableAsync(state).catch((error) => {
+      console.error('[Stealth] Failed to update undetectable state:', error)
+    })
+  }
+
+  public handleStealthRuntimeFault(reason: string): void {
+    const normalizedReason = reason || 'stealth runtime fault'
+
+    const stealthSupervisor = this.runtimeCoordinator.getSupervisor<StealthSupervisor>('stealth')
+    if (stealthSupervisor.getStealthState() === 'FAULT') {
+      return
+    }
+
+    void stealthSupervisor.reportFault(new Error(normalizedReason)).catch((error) => {
+      console.error('[Stealth] Failed to report stealth runtime fault:', error)
+    })
+  }
+
+  public setPrivacyShieldFault(key: string, reason: string): void {
+    console.warn(`[AppState] Privacy shield fault set: ${key} - ${reason}`);
+    this.privacyShieldFaultReason = reason;
+    this.syncPrivacyShieldState();
+    this.privacyShieldRecoveryController?.update()
+  }
+
+  public clearPrivacyShieldFault(): void {
+    if (this.privacyShieldFaultReason) {
+      console.log('[AppState] Privacy shield fault cleared');
+    }
+    this.privacyShieldFaultReason = null;
+    this.intelligenceManager.setStealthContainmentActive(false)
+    this.syncPrivacyShieldState();
+    this.privacyShieldRecoveryController?.update()
+  }
+
+  private handleStealthDegradation(warnings: string[]): void {
+    if (!this.isUndetectable) {
+      return
+    }
+
+    const shouldFault =
+      warnings.includes('stealth_verification_failed') ||
+      warnings.includes('window_visible_to_capture') ||
+      warnings.includes('native_module_unavailable')
+
+    if (!shouldFault) {
+      return
+    }
+
+    const stealthSupervisor = this.runtimeCoordinator.getSupervisor<StealthSupervisor>('stealth')
+    if (stealthSupervisor.getStealthState() === 'FAULT') {
+      return
+    }
+
+    void stealthSupervisor.reportFault(new Error(`stealth degraded: ${warnings.join(', ')}`)).catch((error) => {
+      console.error('[Stealth] Failed to fault supervisor after degradation:', error)
+    })
+  }
+
+  private syncPrivacyShieldState(): void {
+    const nextState = derivePrivacyShieldState({
+      warnings: this.privacyShieldWarnings,
+      faultReason: this.privacyShieldFaultReason,
+      captureProtectionEnabled: this.isUndetectable,
+    })
+
+    if (
+      nextState.active === this.privacyShieldState.active &&
+      nextState.reason === this.privacyShieldState.reason
+    ) {
+      return
+    }
+
+    this.privacyShieldState = nextState
+    this._broadcastToAllWindows('privacy-shield-changed', nextState)
+  }
+
+  private enforceStealthFaultContainment(reason: string): void {
+    this.intelligenceManager.setStealthContainmentActive(true)
+    this.syncWindowStealthProtection(true)
+    this.performanceInstrumentation.recordEvent('stealth.fault.containment', {
+      reason,
+      protectionsRetained: true,
+    })
+  }
+
+  private verifyStealthProtection(): boolean {
+    if (this.stealthManager.verifyManagedWindows()) {
+      return true
+    }
+
+    const verificationWindows = [
+      this.windowHelper.getLauncherWindow(),
+      this.windowHelper.getOverlayWindow(),
+      this.settingsWindowHelper.getSettingsWindow(),
+      this.modelSelectorWindowHelper.getWindow(),
+    ].filter((win, index, windows): win is BrowserWindow => {
+      return Boolean(win) && !win.isDestroyed() && windows.indexOf(win) === index
+    })
+
+    if (verificationWindows.length === 0) {
+      return false
+    }
+
+    return verificationWindows.every((win) => this.stealthManager.verifyStealth(win))
+  }
+
+  public getUndetectable(): boolean {
+    return this.isUndetectable
+  }
+
+  public getCoordinator(): RuntimeCoordinator {
+    return this.runtimeCoordinator
+  }
+
+  public getPerformanceInstrumentation(): PerformanceInstrumentation {
+    return this.performanceInstrumentation
+  }
+
+  public setConsciousModeEnabled(enabled: boolean): boolean {
+    if (this.consciousModeEnabled === enabled) {
+      return true
+    }
+
+    this.intelligenceManager.cancelActiveWhatToSay('conscious_mode_changed')
+
+    const persisted = SettingsManager.getInstance().set('consciousModeEnabled', enabled)
+    if (!persisted) {
+      throw new Error('Unable to persist Conscious Mode')
+    }
+
+    this.consciousModeEnabled = enabled
+    this.intelligenceManager.setConsciousModeEnabled(enabled)
+    this.accelerationManager?.setConsciousModeEnabled(enabled)
+    this._broadcastToAllWindows('conscious-mode-changed', enabled)
+    return true
+  }
+
+public getConsciousModeEnabled(): boolean {
+return this.consciousModeEnabled
+}
+
+public setAccelerationModeEnabled(enabled: boolean): boolean {
+  const settings = SettingsManager.getInstance()
+  const previousEnabled = settings.getAccelerationModeEnabled()
+  if (previousEnabled === enabled) {
+    return true
+  }
+
+  const persisted = settings.set('accelerationModeEnabled', enabled)
+  if (!persisted) {
+    throw new Error('Unable to persist Acceleration Mode')
+  }
+
+  syncOptimizationFlagsFromSettings(settings.getAccelerationModeEnabled())
+  this._broadcastToAllWindows('acceleration-mode-changed', enabled)
+  return true
+}
+
+public getAccelerationModeEnabled(): boolean {
+  return SettingsManager.getInstance().getAccelerationModeEnabled()
+}
+
+public setDisguise(mode: 'terminal' | 'settings' | 'activity' | 'none'): void {
+    this.disguiseMode = mode;
+    SettingsManager.getInstance().set('disguiseMode', mode);
+
+    // Apply the disguise regardless of undetectable state
+    // (disguise affects Activity Monitor name via process.title,
+    //  dock icon only updates when NOT in stealth)
+    this._applyDisguise(mode);
+  }
+
+  public applyInitialDisguise(): void {
+    this._applyDisguise(this.disguiseMode);
+  }
+
+  private _applyDisguise(mode: 'terminal' | 'settings' | 'activity' | 'none'): void {
+    let appName = "Natively";
+    let iconPath = "";
+
+    const isWin = process.platform === 'win32';
+    const isMac = process.platform === 'darwin';
+
+    switch (mode) {
+      case 'terminal':
+        appName = isWin ? "Command Prompt " : "Terminal ";
+        if (isWin) {
+          iconPath = app.isPackaged
+            ? path.join(process.resourcesPath, "assets/fakeicon/win/terminal.png")
+            : path.join(app.getAppPath(), "assets/fakeicon/win/terminal.png");
+        } else {
+          iconPath = app.isPackaged
+            ? path.join(process.resourcesPath, "assets/fakeicon/mac/terminal.png")
+            : path.join(app.getAppPath(), "assets/fakeicon/mac/terminal.png");
+        }
+        break;
+      case 'settings':
+        appName = isWin ? "Settings " : "System Settings ";
+        if (isWin) {
+          iconPath = app.isPackaged
+            ? path.join(process.resourcesPath, "assets/fakeicon/win/settings.png")
+            : path.join(app.getAppPath(), "assets/fakeicon/win/settings.png");
+        } else {
+          iconPath = app.isPackaged
+            ? path.join(process.resourcesPath, "assets/fakeicon/mac/settings.png")
+            : path.join(app.getAppPath(), "assets/fakeicon/mac/settings.png");
+        }
+        break;
+      case 'activity':
+        appName = isWin ? "Task Manager " : "Activity Monitor ";
+        if (isWin) {
+          iconPath = app.isPackaged
+            ? path.join(process.resourcesPath, "assets/fakeicon/win/activity.png")
+            : path.join(app.getAppPath(), "assets/fakeicon/win/activity.png");
+        } else {
+          iconPath = app.isPackaged
+            ? path.join(process.resourcesPath, "assets/fakeicon/mac/activity.png")
+            : path.join(app.getAppPath(), "assets/fakeicon/mac/activity.png");
+        }
+        break;
+      case 'none':
+        appName = "Natively";
+        if (isMac) {
+          iconPath = app.isPackaged
+            ? path.join(process.resourcesPath, "natively.icns")
+            : path.join(app.getAppPath(), "assets/natively.icns");
+        } else if (isWin) {
+          iconPath = app.isPackaged
+            ? path.join(process.resourcesPath, "assets/icons/win/icon.ico")
+            : path.join(app.getAppPath(), "assets/icons/win/icon.ico");
+        } else {
+          iconPath = app.isPackaged
+            ? path.join(process.resourcesPath, "icon.png")
+            : path.join(app.getAppPath(), "assets/icon.png");
+        }
+        break;
+    }
+
+    console.log(`[AppState] Applying disguise: ${mode} (${appName}) on ${process.platform}`);
+
+    // 1. Update process title (affects Activity Monitor / Task Manager)
+    process.title = appName;
+
+    // 2. Update app name (affects macOS Menu / Dock)
+    // Skip when undetectable — app.setName() causes macOS to re-register
+    // the app and re-show the dock icon even after dock.hide()
+    if (!this.isUndetectable) {
+      app.setName(appName);
+    }
+
+    if (isMac) {
+      process.env.CFBundleName = appName.trim();
+    }
+
+    // 3. Update App User Model ID (Windows Taskbar grouping)
+    if (isWin) {
+      // Use unique AUMID per disguise to avoid grouping with the real app
+      app.setAppUserModelId(`com.natively.assistant.${mode}`);
+    }
+
+    // 4. Update Icons
+    if (fs.existsSync(iconPath)) {
+      const image = nativeImage.createFromPath(iconPath);
+
+      if (isMac) {
+        // Skip dock icon update when dock is hidden to avoid potential flicker
+        if (!this.isUndetectable) {
+          app.dock.setIcon(image);
+        }
+      } else {
+        // Windows/Linux: Update all window icons
+        this.windowHelper.getLauncherWindow()?.setIcon(image);
+        this.windowHelper.getOverlayWindow()?.setIcon(image);
+        this.settingsWindowHelper.getSettingsWindow()?.setIcon(image);
+      }
+    } else {
+      console.warn(`[AppState] Disguise icon not found: ${iconPath}`);
+    }
+
+    // 5. Update Window Titles
+    const launcher = this.windowHelper.getLauncherWindow();
+    if (launcher && !launcher.isDestroyed()) {
+      launcher.setTitle(appName.trim());
+      launcher.webContents.send('disguise-changed', mode);
+    }
+
+    const overlay = this.windowHelper.getOverlayWindow();
+    if (overlay && !overlay.isDestroyed()) {
+      overlay.setTitle(appName.trim());
+      overlay.webContents.send('disguise-changed', mode);
+    }
+
+    const settingsWin = this.settingsWindowHelper.getSettingsWindow();
+    if (settingsWin && !settingsWin.isDestroyed()) {
+      settingsWin.setTitle(appName.trim());
+      settingsWin.webContents.send('disguise-changed', mode);
+    }
+
+    // Cancel any stale forceUpdate timeouts from previous disguise changes
+    this.clearDisguiseTimers()
+
+    // Force periodic updates to ensure process title sticks
+    const forceUpdate = () => {
+      process.title = appName;
+      // Only call app.setName when NOT in stealth — it causes dock to re-show
+      if (isMac && !this.isUndetectable) {
+        app.setName(appName);
+      }
+    };
+
+    const scheduleUpdate = (ms: number) => {
+      this.scheduleDisguiseTimer(() => {
+        forceUpdate();
+      }, ms)
+    };
+
+    scheduleUpdate(200);
+    scheduleUpdate(1000);
+    scheduleUpdate(5000);
+  }
+
+  // Helper: broadcast an IPC event to all windows
+  private _broadcastToAllWindows(channel: string, ...args: any[]): void {
+    const windows = [
+      this.windowHelper.getMainWindow(),
+      this.windowHelper.getLauncherWindow(),
+      this.windowHelper.getOverlayWindow(),
+      this.settingsWindowHelper.getSettingsWindow(),
+      this.modelSelectorWindowHelper.getWindow(),
+    ];
+    const sent = new Set<number>();
+    for (const win of windows) {
+      if (win && !win.isDestroyed() && !sent.has(win.id)) {
+        sent.add(win.id);
+        win.webContents.send(channel, ...args);
+      }
+    }
+  }
+
+  public getDisguise(): string {
+    return this.disguiseMode;
+  }
+}
