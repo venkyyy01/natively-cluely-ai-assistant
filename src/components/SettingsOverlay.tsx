@@ -2231,7 +2231,7 @@ handleAiLanguageChange={handleAiLanguageChange}
                             )}
 
                             {activeTab === 'about' && (
-                                <AboutSection />
+                                <AboutSection setActiveTab={setActiveTab} />
                             )}
                         </div>
                     </div>
