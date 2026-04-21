@@ -17,178 +17,37 @@ import { registerIntelligenceHandlers } from "./ipc/registerIntelligenceHandlers
 import { registerWindowHandlers } from "./ipc/registerWindowHandlers";
 import { Metrics } from "./runtime/Metrics";
 
-type ScreenshotFacadeLike = {
-  deleteScreenshot?: (path: string) => Promise<{ success: boolean; error?: string }>;
-  takeScreenshot?: () => Promise<string>;
-  takeSelectiveScreenshot?: () => Promise<string>;
-  getImagePreview?: (filepath: string) => Promise<string>;
-  getView?: () => 'queue' | 'solutions';
-  getScreenshotQueue?: () => string[];
-  getExtraScreenshotQueue?: () => string[];
-  clearQueues?: () => void;
-};
-
-type RuntimeCoordinatorLike = {
-  getSupervisor?: (name: string) => unknown;
-};
-
-type SttSupervisorLike = {
-  reconfigureProvider?: () => Promise<void> | void;
-  updateGoogleCredentials?: (keyPath: string) => Promise<void> | void;
-  finalizeMicrophone?: () => Promise<void> | void;
-};
-
-type IntelligenceManagerLike = {
-  addTranscript: (entry: { text: string; speaker: string; timestamp: number; final: boolean }, skipRefinementCheck?: boolean) => void;
-  addAssistantMessage: (message: string) => void;
-  getLastAssistantMessage: () => string | null;
-  getFormattedContext: (lastSeconds?: number) => string;
-  logUsage: (type: string, input: string, output: string) => void;
-  initializeLLMs: () => void | Promise<void>;
-};
-
-type InferenceSupervisorLike = {
-  getLLMHelper?: () => unknown;
-  getIntelligenceManager?: () => unknown;
-  initializeLLMs?: () => Promise<void> | void;
-};
-
-type WindowFacadeLike = {
-  showModelSelectorWindow?: (x: number, y: number) => void;
-  hideModelSelectorWindow?: () => void;
-  toggleModelSelectorWindow?: (x: number, y: number) => void;
-};
-
-type SettingsFacadeLike = {
-  getThemeMode?: () => string;
-  getResolvedTheme?: () => string;
-  setThemeMode?: (mode: string) => void;
-};
-
-type AudioFacadeLike = {
-  getNativeAudioStatus?: () => unknown;
-};
+import {
+  type ScreenshotFacadeLike,
+  type RuntimeCoordinatorLike,
+  type SttSupervisorLike,
+  type IntelligenceManagerLike,
+  type InferenceSupervisorLike,
+  type WindowFacadeLike,
+  type SettingsFacadeLike,
+  type AudioFacadeLike,
+} from "./ipc/handlerTypes";
+import { createHandlerContext, type HandlerContext } from "./ipc/handlerContext";
 
 export function initializeIpcHandlers(appState: AppState): void {
-  const safeHandle = (channel: string, listener: (event: any, ...args: any[]) => Promise<any> | any) => {
-    ipcMain.removeHandler(channel);
-    ipcMain.handle(channel, listener);
-  };
-
-  const safeHandleValidated = <T extends unknown[]>(
-    channel: string,
-    parser: (args: unknown[]) => T,
-    listener: (event: any, ...args: T) => Promise<any> | any,
-  ) => {
-    safeHandle(channel, (event, ...args) => listener(event, ...parser(args)));
-  };
-
-  const ok = <T>(data: T) => ({ success: true as const, data });
-  const fail = (code: string, error: unknown, fallbackMessage: string) => ({
-    success: false as const,
-    error: {
-  code,
-    message: error instanceof Error ? error.message : fallbackMessage,
-  },
-});
-
-  // NAT-036: per-request abort controllers for streaming chat
-  const activeChatControllers = new Map<string, AbortController>();
-  const streamChatStartedAt = new Map<string, number>();
-
-  const getInferenceLlmHelper = () => {
-    try {
-      const coordinator = (appState as { getCoordinator?: () => unknown }).getCoordinator?.() as
-        | { getSupervisor?: (name: string) => unknown }
-        | undefined;
-      const supervisor = coordinator?.getSupervisor?.('inference') as
-        | { getLLMHelper?: () => unknown }
-        | undefined;
-      const llmHelper = supervisor?.getLLMHelper?.();
-      if (llmHelper) {
-        return llmHelper as ReturnType<typeof appState.processingHelper.getLLMHelper>;
-      }
-    } catch {
-      // Fall back to the direct AppState path if supervisor lookup fails.
-    }
-
-    return appState.processingHelper.getLLMHelper();
-  };
-
-  const getRuntimeCoordinator = (): RuntimeCoordinatorLike | null => {
-    try {
-      const coordinator = (appState as { getCoordinator?: () => unknown }).getCoordinator?.() as RuntimeCoordinatorLike | undefined;
-      if (typeof coordinator?.getSupervisor !== 'function') {
-        return null;
-      }
-
-      return coordinator;
-    } catch {
-      return null;
-    }
-  };
-
-  const getSttSupervisor = (): SttSupervisorLike | null => {
-    const coordinator = getRuntimeCoordinator();
-    return (coordinator?.getSupervisor?.('stt') as SttSupervisorLike | undefined) ?? null;
-  };
-
-  const getInferenceSupervisor = (): InferenceSupervisorLike | null => {
-    const coordinator = getRuntimeCoordinator();
-    return (coordinator?.getSupervisor?.('inference') as InferenceSupervisorLike | undefined) ?? null;
-  };
-
-  const getWindowFacade = (): WindowFacadeLike | null => {
-    if ('getWindowFacade' in appState && typeof appState.getWindowFacade === 'function') {
-      return appState.getWindowFacade() as WindowFacadeLike;
-    }
-
-    return null;
-  };
-
-  const getSettingsFacade = (): SettingsFacadeLike | null => {
-    if ('getSettingsFacade' in appState && typeof appState.getSettingsFacade === 'function') {
-      return appState.getSettingsFacade() as SettingsFacadeLike;
-    }
-
-    return null;
-  };
-
-  const getAudioFacade = (): AudioFacadeLike | null => {
-    if ('getAudioFacade' in appState && typeof appState.getAudioFacade === 'function') {
-      return appState.getAudioFacade() as AudioFacadeLike;
-    }
-
-    return null;
-  };
-
-  const getIntelligenceManager = (): IntelligenceManagerLike => {
-    const supervisor = getInferenceSupervisor();
-    const intelligenceManager = supervisor?.getIntelligenceManager?.();
-    if (intelligenceManager) {
-      return intelligenceManager as IntelligenceManagerLike;
-    }
-
-    return appState.getIntelligenceManager() as IntelligenceManagerLike;
-  };
-
-  const initializeInferenceLLMs = async (): Promise<void> => {
-    const supervisor = getInferenceSupervisor();
-    if (supervisor?.initializeLLMs) {
-      await supervisor.initializeLLMs();
-      return;
-    }
-
-    await appState.getIntelligenceManager().initializeLLMs();
-  };
-
-  const getScreenshotFacade = (): ScreenshotFacadeLike | null => {
-    if ('getScreenshotFacade' in appState && typeof appState.getScreenshotFacade === 'function') {
-      return appState.getScreenshotFacade() as ScreenshotFacadeLike;
-    }
-
-    return null;
-  };
+  const {
+    safeHandle,
+    safeHandleValidated,
+    ok,
+    fail,
+    getInferenceLlmHelper,
+    getRuntimeCoordinator,
+    getSttSupervisor,
+    getInferenceSupervisor,
+    getWindowFacade,
+    getSettingsFacade,
+    getAudioFacade,
+    getIntelligenceManager,
+    initializeInferenceLLMs,
+    getScreenshotFacade,
+    activeChatControllers,
+    streamChatStartedAt,
+  } = createHandlerContext(appState);
 
 safeHandleValidated("renderer:log-error", (args) => [parseIpcInput(ipcSchemas.rendererLogPayload, args[0], 'renderer:log-error')] as const, async (_, payload) => {
     try {

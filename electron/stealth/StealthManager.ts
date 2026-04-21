@@ -8,6 +8,21 @@ import { execFile } from 'node:child_process';
 import { ChromiumCaptureDetector } from './ChromiumCaptureDetector';
 import { MacosStealthEnhancer } from './MacosStealthEnhancer';
 import { TCCMonitor } from './TCCMonitor';
+import type {
+  StealthManagerDependencies,
+  StealthCapableWindow,
+  ManagedWindowRecord,
+  ScreenApi,
+  DisplayEventSource,
+} from './stealthTypes';
+import {
+  createManagedWindowRecord,
+  attachLifecycleListeners,
+  safeGetMediaSourceId,
+  isWindowDestroyed,
+  defaultHideFromSwitcher,
+} from './windowRecords';
+import { OpacityFlickerController } from './opacityFlicker';
 
 export interface StealthConfig {
   enabled: boolean;
@@ -56,56 +71,6 @@ export interface StealthApplyOptions {
   role?: StealthWindowRole;
   hideFromSwitcher?: boolean;
   allowVirtualDisplayIsolation?: boolean;
-}
-
-type DisplayBounds = { x: number; y: number; width: number; height: number };
-type DisplayInfo = { id: number; workArea: DisplayBounds };
-type DisplayEventSource = { on: (event: string, listener: () => void) => void };
-type ScreenApi = DisplayEventSource & { getAllDisplays: () => DisplayInfo[] };
-
-interface StealthManagerDependencies {
-  nativeModule?: NativeStealthBindings | null;
-  platform?: string;
-  powerMonitor?: { on: (event: string, listener: () => void) => void } | null;
-  displayEvents?: DisplayEventSource | null;
-  screenApi?: ScreenApi | null;
-  logger?: Pick<Console, 'log' | 'warn' | 'error'>;
-  featureFlags?: StealthFeatureFlags;
-  intervalScheduler?: (callback: () => Promise<void> | void, intervalMs: number) => unknown;
-  clearIntervalScheduler?: (handle: unknown) => void;
-  timeoutScheduler?: (callback: () => void, delayMs: number) => unknown;
-  virtualDisplayCoordinator?: VirtualDisplayCoordinator | null;
-  captureToolPatterns?: RegExp[];
-  processEnumerator?: (command: string, args: string[]) => Promise<string>;
-}
-
-interface StealthCapableWindow {
-  on?: (event: string, listener: () => void) => void;
-  setContentProtection: (value: boolean) => void;
-  setExcludeFromCapture?: (value: boolean) => void;
-  setHiddenInMissionControl?: (value: boolean) => void;
-  setExcludedFromShownWindowsMenu?: (value: boolean) => void;
-  setSkipTaskbar?: (value: boolean) => void;
-  setOpacity?: (value: number) => void;
-  setBounds?: (bounds: { x: number; y: number; width: number; height: number }) => void;
-  hide?: () => void;
-  show?: () => void;
-  getNativeWindowHandle?: () => Buffer;
-  getMediaSourceId?: () => string;
-  getBounds?: () => { x: number; y: number; width: number; height: number };
-  isVisible?: () => boolean;
-  isDestroyed?: () => boolean;
-}
-
-interface ManagedWindowRecord {
-  win: StealthCapableWindow;
-  role: StealthWindowRole;
-  hideFromSwitcher: boolean;
-  allowVirtualDisplayIsolation: boolean;
-  listenersAttached: boolean;
-  virtualDisplayRequestId: number;
-  virtualDisplayIsolationStarted: boolean;
-  privateMacosStealthApplied: boolean;
 }
 
 const WATCHDOG_INTERVAL_MS = 1000;
@@ -270,7 +235,7 @@ export class StealthManager extends EventEmitter {
   private isMacOS15Plus = false;
   private macOSMajor: number = 0;
   private macOSMinor: number = 0;
-  private opacityFlickerHandle: unknown = null;
+  private opacityFlickerController: OpacityFlickerController | null = null;
   private virtualDisplayTaskQueue: Promise<void> | null = null;
 
   constructor(config: StealthConfig, deps: StealthManagerDependencies = {}) {
@@ -363,7 +328,7 @@ export class StealthManager extends EventEmitter {
     enable: boolean = this.isEnabled(),
     options: StealthApplyOptions = {}
   ): void {
-    if (!win || this.isWindowDestroyed(win)) {
+    if (!win || isWindowDestroyed(win)) {
       return;
     }
 
@@ -385,9 +350,9 @@ export class StealthManager extends EventEmitter {
       return;
     }
 
-    const record = this.getOrCreateRecord(win, options);
+    const record = createManagedWindowRecord(win, options, this.managedWindows, this.managedWindowLookup);
     record.role = options.role ?? record.role;
-    record.hideFromSwitcher = options.hideFromSwitcher ?? this.defaultHideFromSwitcher(record.role);
+    record.hideFromSwitcher = options.hideFromSwitcher ?? defaultHideFromSwitcher(record.role);
     record.allowVirtualDisplayIsolation = options.allowVirtualDisplayIsolation ?? record.allowVirtualDisplayIsolation;
 
     this.applyLayer0(win, true);
@@ -398,7 +363,15 @@ export class StealthManager extends EventEmitter {
     } else {
       this.disableVirtualDisplayIsolation(record);
     }
-    this.attachLifecycleListeners(record);
+    attachLifecycleListeners(record, {
+      reapplyAfterShow: (win) => this.reapplyAfterShow(win),
+      onClosed: (record) => {
+        this.disableVirtualDisplayIsolation(record);
+        this.managedWindows.delete(record);
+        this.managedWindowLookup.delete(record.win as object);
+        this.stopBackgroundMonitorsIfIdle();
+      },
+    });
     this.bindPowerMonitor();
     this.bindDisplayEvents();
     this.ensureWatchdog();
@@ -448,7 +421,7 @@ export class StealthManager extends EventEmitter {
   private applyChromiumCountermeasures(): void {
     for (const record of this.managedWindows) {
       const win = record.win;
-      if (this.isWindowDestroyed(win)) {
+      if (isWindowDestroyed(win)) {
         continue;
       }
 
@@ -473,7 +446,7 @@ export class StealthManager extends EventEmitter {
   }
 
   reapplyAfterShow(win: StealthCapableWindow): void {
-    if (!win || this.isWindowDestroyed(win) || !this.isEnabled()) {
+    if (!win || isWindowDestroyed(win) || !this.isEnabled()) {
       return;
     }
 
@@ -505,7 +478,7 @@ export class StealthManager extends EventEmitter {
       // Force Layer 0 on all managed windows when a meeting is active
       for (const record of this.managedWindows) {
         const win = record.win;
-        if (this.isWindowDestroyed(win)) {
+        if (isWindowDestroyed(win)) {
           continue;
         }
         this.applyLayer0(win, true);
@@ -538,7 +511,7 @@ export class StealthManager extends EventEmitter {
 
       for (const record of this.managedWindows) {
         const win = record.win;
-        if (this.isWindowDestroyed(win)) {
+        if (isWindowDestroyed(win)) {
           continue;
         }
 
@@ -702,7 +675,7 @@ export class StealthManager extends EventEmitter {
   }
 
   private getMacosWindowNumber(win: StealthCapableWindow): number | null {
-    const mediaSourceId = this.safeGetMediaSourceId(win);
+    const mediaSourceId = safeGetMediaSourceId(win, this.logger);
     if (!mediaSourceId) {
       return null;
     }
@@ -733,7 +706,7 @@ export class StealthManager extends EventEmitter {
       return;
     }
     const win = record.win;
-    const windowId = this.safeGetMediaSourceId(win);
+    const windowId = safeGetMediaSourceId(win, this.logger);
     if (!windowId) {
       return;
     }
@@ -743,7 +716,7 @@ export class StealthManager extends EventEmitter {
     record.virtualDisplayIsolationStarted = true;
 
     this.enqueueVirtualDisplayTask(async () => {
-      if (!this.isCurrentVirtualDisplayRequest(record, requestId) || this.isWindowDestroyed(win)) {
+      if (!this.isCurrentVirtualDisplayRequest(record, requestId) || isWindowDestroyed(win)) {
         return;
       }
 
@@ -823,7 +796,7 @@ export class StealthManager extends EventEmitter {
       return;
     }
 
-    const windowId = this.safeGetMediaSourceId(win);
+    const windowId = safeGetMediaSourceId(win, this.logger);
     if (!windowId) {
       return;
     }
@@ -831,60 +804,6 @@ export class StealthManager extends EventEmitter {
     this.virtualDisplayCoordinator.releaseIsolationForWindow({ windowId }).catch((error) => {
       this.logger.warn('[StealthManager] Virtual display isolation release failed, continuing with Layer 0+1:', error);
     });
-  }
-
-  private getOrCreateRecord(win: StealthCapableWindow, options: StealthApplyOptions): ManagedWindowRecord {
-    const existing = this.managedWindowLookup.get(win as object);
-    if (existing) {
-      return existing;
-    }
-
-    const record: ManagedWindowRecord = {
-      win,
-      role: options.role ?? 'primary',
-      hideFromSwitcher: options.hideFromSwitcher ?? this.defaultHideFromSwitcher(options.role ?? 'primary'),
-      allowVirtualDisplayIsolation: options.allowVirtualDisplayIsolation ?? false,
-      listenersAttached: false,
-      virtualDisplayRequestId: 0,
-      virtualDisplayIsolationStarted: false,
-      privateMacosStealthApplied: false,
-    };
-    this.managedWindows.add(record);
-    this.managedWindowLookup.set(win as object, record);
-    return record;
-  }
-
-  private attachLifecycleListeners(record: ManagedWindowRecord): void {
-    if (record.listenersAttached || typeof record.win.on !== 'function') {
-      return;
-    }
-
-    const reapply = () => this.reapplyAfterShow(record.win);
-    record.win.on('restore', reapply);
-    record.win.on('unminimize', reapply);
-    record.win.on('move', reapply);
-    record.win.on('show', reapply);
-    record.win.on('closed', () => {
-      this.disableVirtualDisplayIsolation(record);
-      this.managedWindows.delete(record);
-      this.managedWindowLookup.delete(record.win as object);
-
-      this.stopBackgroundMonitorsIfIdle();
-    });
-    record.listenersAttached = true;
-  }
-
-  private safeGetMediaSourceId(win: StealthCapableWindow): string | null {
-    if (typeof win.isDestroyed === 'function' && win.isDestroyed()) {
-      return null;
-    }
-
-    try {
-      return win.getMediaSourceId?.() ?? null;
-    } catch (error) {
-      this.logger.warn('[StealthManager] Failed to read media source id from managed window:', error);
-      return null;
-    }
   }
 
   private stopBackgroundMonitorsIfIdle(): void {
@@ -912,10 +831,9 @@ export class StealthManager extends EventEmitter {
       this.cgWindowMonitorHandle = null;
     }
 
-    if (this.opacityFlickerHandle) {
-      this.clearIntervalScheduler(this.opacityFlickerHandle);
-      this.opacityFlickerHandle = null;
-      Metrics.gauge('stealth.flicker_active', 0);
+    if (this.opacityFlickerController) {
+      this.opacityFlickerController.stop();
+      this.opacityFlickerController = null;
     }
 
     this.watchdogRunning = false;
@@ -1014,7 +932,7 @@ export class StealthManager extends EventEmitter {
 
   private moveWindowToDisplay(record: ManagedWindowRecord, displayId: number, attempt: number, requestId: number): void {
     const win = record.win;
-    if (!this.screenApi || typeof win.setBounds !== 'function' || typeof win.getBounds !== 'function' || this.isWindowDestroyed(win)) {
+    if (!this.screenApi || typeof win.setBounds !== 'function' || typeof win.getBounds !== 'function' || isWindowDestroyed(win)) {
       return;
     }
 
@@ -1083,7 +1001,7 @@ export class StealthManager extends EventEmitter {
   private async verifyWindowsAffinity(): Promise<void> {
     for (const record of this.managedWindows) {
       const win = record.win;
-      if (this.isWindowDestroyed(win)) {
+      if (isWindowDestroyed(win)) {
         continue;
       }
 
@@ -1272,7 +1190,7 @@ export class StealthManager extends EventEmitter {
   private applyEnhancedProtectionForSCStream(): void {
     for (const record of this.managedWindows) {
       const win = record.win;
-      if (this.isWindowDestroyed(win)) {
+      if (isWindowDestroyed(win)) {
         continue;
       }
 
@@ -1310,7 +1228,7 @@ export class StealthManager extends EventEmitter {
 
       for (const record of this.managedWindows) {
         const win = record.win;
-        if (this.isWindowDestroyed(win)) {
+        if (isWindowDestroyed(win)) {
           continue;
         }
 
@@ -1379,7 +1297,7 @@ for window in windows:
   }
 
   private applyEmergencyProtection(win: StealthCapableWindow): void {
-    if (this.isWindowDestroyed(win)) {
+    if (isWindowDestroyed(win)) {
       return;
     }
 
@@ -1441,54 +1359,22 @@ for window in windows:
   }
 
   private ensureOpacityFlicker(): void {
-    if (
-      this.opacityFlickerHandle ||
-      !this.isEnabled() ||
-      !this.isEnhancedStealthEnabled() ||
-      this.platform !== 'darwin' ||
-      !this.isMacOS15Plus
-    ) {
-      return;
+    if (!this.opacityFlickerController) {
+      this.opacityFlickerController = new OpacityFlickerController({
+        isEnabled: () => this.isEnabled(),
+        isEnhancedStealthEnabled: () => this.isEnhancedStealthEnabled(),
+        platform: this.platform,
+        isMacOS15Plus: this.isMacOS15Plus,
+        featureFlags: this.featureFlags,
+        intervalScheduler: this.intervalScheduler,
+        clearIntervalScheduler: this.clearIntervalScheduler,
+        logger: this.logger,
+        managedWindows: this.managedWindows,
+        isWindowDestroyed: (win) => isWindowDestroyed(win),
+        timeoutScheduler: this.timeoutScheduler,
+      });
     }
-
-    // NAT-010 / audit S-1: the periodic 500 ms cadence is itself a
-    // detectable timing fingerprint, so it stays *off* by default. The
-    // method is preserved (and `applyOpacityFlicker()` remains callable)
-    // so that capture-bypass test fixtures (NAT-082) can opt in via
-    // `featureFlags.enableOpacityFlicker = true` and so a future
-    // `bus:capture-start-detected` event can fire it as a one-shot.
-    if (!this.featureFlags.enableOpacityFlicker) {
-      return;
-    }
-
-    this.opacityFlickerHandle = this.intervalScheduler(
-      () => this.applyOpacityFlicker(),
-      500
-    );
-    Metrics.gauge('stealth.flicker_active', 1);
-    this.logger.log('[StealthManager] macOS 15.4+ opacity flicker enabled (500ms interval)');
-  }
-
-  private applyOpacityFlicker(): void {
-    for (const record of this.managedWindows) {
-      const win = record.win;
-      if (this.isWindowDestroyed(win)) {
-        continue;
-      }
-
-      if (typeof win.setOpacity === 'function') {
-        try {
-          win.setOpacity(0.999);
-          this.timeoutScheduler(() => {
-            if (!this.isWindowDestroyed(win) && typeof win.setOpacity === 'function') {
-              win.setOpacity(1);
-            }
-          }, 30);
-        } catch (error) {
-          this.logger.warn('[StealthManager] Opacity flicker failed, continuing with Layer 0+1:', error);
-        }
-      }
-    }
+    this.opacityFlickerController.ensure();
   }
 
   private hideAndRestoreVisibleWindows(): void {
@@ -1496,7 +1382,7 @@ for window in windows:
 
     for (const record of this.managedWindows) {
       const win = record.win;
-      if (this.isWindowDestroyed(win)) {
+      if (isWindowDestroyed(win)) {
         continue;
       }
 
@@ -1538,7 +1424,7 @@ for window in windows:
       this.clearWarning('capture_tools_still_running');
 
       for (const { win, restoreWithOpacity } of windowsToRestore) {
-        if (this.isWindowDestroyed(win)) {
+        if (isWindowDestroyed(win)) {
           continue;
         }
 
@@ -1643,11 +1529,4 @@ for window in windows:
     }
   }
 
-  private defaultHideFromSwitcher(role: StealthWindowRole): boolean {
-    return role === 'auxiliary';
-  }
-
-  private isWindowDestroyed(win: StealthCapableWindow): boolean {
-    return typeof win.isDestroyed === 'function' ? win.isDestroyed() : false;
-  }
 }
