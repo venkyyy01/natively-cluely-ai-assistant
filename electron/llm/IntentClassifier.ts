@@ -10,6 +10,7 @@
 
 import { isElectronAppPackaged, resolveBundledModelsPath } from '../utils/modelPaths';
 import { getIntentConfidenceService } from './IntentConfidenceService';
+import { traceLogger } from '../tracing';
 const { loadTransformers } = require('../utils/transformersLoader');
 
 export type ConversationIntent =
@@ -23,11 +24,13 @@ export type ConversationIntent =
     | 'general';           // Default fallback
 
 export interface IntentResult {
-    intent: ConversationIntent;
-    confidence: number;
-    answerShape: string;
-    /** NAT-056: revision + age when produced via IntentClassificationCoordinator. */
-    staleness?: { transcriptRevision: number; ageMs: number };
+  intent: ConversationIntent;
+  confidence: number;
+  answerShape: string;
+  /** NAT-056: revision + age when produced via IntentClassificationCoordinator. */
+  staleness?: { transcriptRevision: number; ageMs: number };
+  /** NAT-XXX: Latency of the classification in ms (optional for tracing) */
+  latencyMs?: number;
 }
 
 /**
@@ -198,18 +201,31 @@ class FineTunedClassifier {
     }
   }
 
-  async classify(text: string): Promise<IntentResult | null> {
+  async classify(text: string, traceId?: string, spanId?: string): Promise<IntentResult | null> {
     await this.ensureLoaded();
     if (!this.pipe) return null;
 
+    const modelLatencyStart = Date.now();
+
     try {
       const result = await this.pipe(text, { top_k: 8 });
+      const modelLatencyMs = Date.now() - modelLatencyStart;
 
       const allScores: Array<{ label: string; score: number }> = Array.isArray(result) ? result : [result];
       allScores.sort((a: { score: number }, b: { score: number }) => b.score - a.score);
 
       const top = allScores[0];
       const resolvedIntent = SLM_LABEL_MAP[top.label] || 'general';
+
+      // NAT-XXX: Log SLM model invocation
+      if (traceId) {
+        traceLogger.logModelInvocation(traceId, spanId, {
+          modelName: 'Xenova/nli-deberta-v3-small',
+          modelVersion: 'quantized',
+          latencyMs: modelLatencyMs,
+          inputTokens: text.length / 4, // Rough estimate
+        });
+      }
 
       const rawResult: IntentResult = {
         intent: resolvedIntent,
@@ -233,7 +249,19 @@ class FineTunedClassifier {
         answerShape: calibratedResult.answerShape,
       };
     } catch (e) {
+      const errorMsg = e instanceof Error ? e.message : String(e);
       console.warn('[IntentClassifier] SLM classification error:', e);
+
+      // NAT-XXX: Log SLM error
+      if (traceId) {
+        traceLogger.logModelInvocation(traceId, spanId, {
+          modelName: 'Xenova/nli-deberta-v3-small',
+          modelVersion: 'quantized',
+          latencyMs: Date.now() - modelLatencyStart,
+          error: errorMsg,
+        });
+      }
+
       return null;
     }
   }
@@ -500,30 +528,112 @@ function detectIntentByContext(
  * 1. Regex fast-path (< 1ms, high confidence)
  * 2. Fine-tuned SLM fallback (~10-50ms, medium-high confidence)
  * 3. Context-based heuristic (0ms, low confidence)
+ *
+ * NAT-XXX: Full tracing of tier decisions and model usage
  */
 export async function classifyIntent(
-    lastInterviewerTurn: string | null,
-    recentTranscript: string,
-    assistantMessageCount: number
+  lastInterviewerTurn: string | null,
+  recentTranscript: string,
+  assistantMessageCount: number,
+  traceId?: string
 ): Promise<IntentResult> {
-    // Tier 1: Try regex-based first (high confidence, instant)
-    if (lastInterviewerTurn) {
-        const patternResult = detectIntentByPattern(lastInterviewerTurn);
-        if (patternResult) {
-            return patternResult;
-        }
+  const startTime = Date.now();
+  const spanId = traceId ? `classify-${startTime}` : undefined;
+
+  // Tier 1: Try regex-based first (high confidence, instant)
+  if (lastInterviewerTurn) {
+    const patternResult = detectIntentByPattern(lastInterviewerTurn);
+    if (patternResult) {
+      const result: IntentResult = {
+        ...patternResult,
+        latencyMs: Date.now() - startTime,
+      };
+
+      // NAT-XXX: Log Tier 1 success (regex)
+      if (traceId) {
+        traceLogger.logIntentClassificationEvent(traceId, spanId, 'completed', {
+          question: lastInterviewerTurn.substring(0, 200),
+          result: {
+            intent: result.intent,
+            confidence: result.confidence,
+            answerShape: result.answerShape,
+            provider: 'regex',
+            retryCount: 0,
+          },
+          modelUsed: 'regex',
+          tier: 1,
+        });
+        traceLogger.logModelInvocation(traceId, spanId, {
+          modelName: 'regex',
+          modelVersion: 'v1',
+          latencyMs: result.latencyMs,
+        });
+      }
+
+      console.log(`[IntentClassifier] Tier 1 (regex) classified as "${result.intent}" (${(result.confidence * 100).toFixed(0)}%): "${lastInterviewerTurn.substring(0, 60)}..."`);
+      return result;
+    }
 
     // Tier 2: Try fine-tuned SLM (if regex didn't match)
     if (lastInterviewerTurn.trim().length > 5) {
-      const slmResult = await FineTunedClassifier.getInstance().classify(lastInterviewerTurn);
-            if (slmResult) {
-                return slmResult;
-            }
-        }
-    }
+      const slmResult = await FineTunedClassifier.getInstance().classify(lastInterviewerTurn, traceId, spanId);
+      if (slmResult) {
+        const result: IntentResult = {
+          ...slmResult,
+          latencyMs: Date.now() - startTime,
+        };
 
-    // Tier 3: Fall back to context-based heuristic
-    return detectIntentByContext(recentTranscript, assistantMessageCount);
+        // NAT-XXX: Log Tier 2 success (SLM)
+        if (traceId) {
+          traceLogger.logIntentClassificationEvent(traceId, spanId, 'completed', {
+            question: lastInterviewerTurn.substring(0, 200),
+            result: {
+              intent: result.intent,
+              confidence: result.confidence,
+              answerShape: result.answerShape,
+              provider: 'slm',
+              retryCount: 0,
+            },
+            modelUsed: 'slm',
+            tier: 2,
+          });
+        }
+
+        return result;
+      }
+    }
+  }
+
+  // Tier 3: Fall back to context-based heuristic
+  const contextResult = detectIntentByContext(recentTranscript, assistantMessageCount);
+  const result: IntentResult = {
+    ...contextResult,
+    latencyMs: Date.now() - startTime,
+  };
+
+  // NAT-XXX: Log Tier 3 fallback (context heuristic)
+  if (traceId) {
+    traceLogger.logIntentClassificationEvent(traceId, spanId, 'completed', {
+      question: lastInterviewerTurn?.substring(0, 200) ?? '',
+      result: {
+        intent: result.intent,
+        confidence: result.confidence,
+        answerShape: result.answerShape,
+        provider: 'context_heuristic',
+        retryCount: 0,
+      },
+      modelUsed: 'context_heuristic',
+      tier: 3,
+    });
+    traceLogger.logModelInvocation(traceId, spanId, {
+      modelName: 'context_heuristic',
+      modelVersion: 'v1',
+      latencyMs: result.latencyMs,
+    });
+  }
+
+  console.log(`[IntentClassifier] Tier 3 (context) classified as "${result.intent}" (${(result.confidence * 100).toFixed(0)}%): "${lastInterviewerTurn?.substring(0, 60) ?? 'N/A'}..."`);
+  return result;
 }
 
 /**

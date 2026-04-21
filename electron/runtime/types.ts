@@ -17,7 +17,7 @@ export type SupervisorCoreEvent =
   | { type: 'audio:gap-detected'; durationMs: number }
   | { type: 'audio:capture-started' }
   | { type: 'audio:capture-stopped' }
-  | { type: 'stt:transcript'; speaker: 'interviewer' | 'user'; text: string; final: boolean }
+  | { type: 'stt:transcript'; speaker: 'interviewer' | 'user'; text: string; final: boolean; traceId?: string }
   | { type: 'stt:provider-exhausted'; speaker: 'interviewer' | 'user' }
   | { type: 'inference:draft-ready'; requestId: string }
   | { type: 'inference:answer-committed'; requestId: string }

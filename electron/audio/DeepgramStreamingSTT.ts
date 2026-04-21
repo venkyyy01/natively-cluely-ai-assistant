@@ -14,6 +14,7 @@ import WebSocket from 'ws';
 import { RECOGNITION_LANGUAGES } from '../config/languages';
 import { resampleToMonoPcm16 } from './pcm';
 import { DropFrameMetric } from './dropMetrics';
+import { startTrace, startSpan, endSpan, setSpanAttribute, traceLogger } from '../tracing';
 
 const RECONNECT_BASE_DELAY_MS = 500;
 const RECONNECT_MAX_DELAY_MS = 10000;
@@ -340,11 +341,40 @@ export class DeepgramStreamingSTT extends EventEmitter {
                     this.lastInterimTranscript = '';
                 }
 
-                this.emit('transcript', {
-                    text: transcript,
-                    isFinal,
-                    confidence,
-                });
+      // Generate trace context for this transcript
+      const traceId = `stt-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+      const span = startSpan(traceId, `stt.deepgram.transcript.${isFinal ? 'final' : 'interim'}`);
+
+      if (span) {
+        setSpanAttribute(traceId, span.spanId, 'stt.provider', 'deepgram');
+        setSpanAttribute(traceId, span.spanId, 'stt.model', 'nova-3');
+        setSpanAttribute(traceId, span.spanId, 'stt.input_sample_rate', this.inputSampleRate);
+        setSpanAttribute(traceId, span.spanId, 'stt.target_sample_rate', this.targetSampleRate);
+        setSpanAttribute(traceId, span.spanId, 'stt.language', this.languageCode);
+        setSpanAttribute(traceId, span.spanId, 'stt.confidence', confidence);
+        setSpanAttribute(traceId, span.spanId, 'stt.text_length', transcript.length);
+        setSpanAttribute(traceId, span.spanId, 'stt.is_final', isFinal);
+      }
+
+      traceLogger.logSttEvent(traceId, span?.spanId, isFinal ? 'transcript.final' : 'transcript.received', {
+        speaker: 'interviewer', // Deepgram is for interviewer audio
+        text: transcript.substring(0, 200),
+        isFinal,
+        confidence,
+        provider: 'deepgram',
+        sampleRate: this.targetSampleRate,
+      });
+
+      if (span) {
+        endSpan(traceId, span.spanId, 'ok');
+      }
+
+      this.emit('transcript', {
+        text: transcript,
+        isFinal,
+        confidence,
+        traceId, // Pass trace ID for correlation
+      });
             } catch (err) {
                 console.error('[DeepgramStreaming] Parse error:', err);
             }

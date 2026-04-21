@@ -17,6 +17,7 @@ import {
   type IntentInferenceProvider,
   type IntentProviderErrorType,
 } from './IntentInferenceProvider';
+import { traceLogger } from '../../tracing';
 
 const INTENT_CANDIDATES: ConversationIntent[] = [...FOUNDATION_INTENT_ALLOWED_INTENTS];
 
@@ -236,49 +237,79 @@ export class FoundationModelsIntentProvider implements IntentInferenceProvider {
       candidateIntents: INTENT_CANDIDATES,
     };
 
-    const commandResult = await this.helperRunner(helperPath, request, this.timeoutMs);
+    // NAT-XXX: Trace Foundation Models invocation
+    const traceId = input.traceId;
+    const modelStartTime = Date.now();
+    const spanId = traceId ? `foundation-${modelStartTime}` : undefined;
 
-    if (!commandResult.stdout.trim()) {
-      if (commandResult.exitCode !== 0) {
-        const failureCode = mapExitFailure(commandResult.stderr);
-        throw createIntentProviderError(failureCode, commandResult.stderr.trim() || 'Foundation helper exited with no output');
-      }
-      throw createIntentProviderError('invalid_response', 'Foundation helper returned empty output');
-    }
-
-    let envelope: FoundationIntentHelperEnvelope;
     try {
-      envelope = JSON.parse(commandResult.stdout) as FoundationIntentHelperEnvelope;
+      const commandResult = await this.helperRunner(helperPath, request, this.timeoutMs);
+      const modelLatencyMs = Date.now() - modelStartTime;
+
+      // NAT-XXX: Log model invocation
+      if (traceId) {
+        traceLogger.logModelInvocation(traceId, spanId, {
+          modelName: 'FoundationModelsIntentHelper',
+          modelVersion: request.promptVersion,
+          latencyMs: modelLatencyMs,
+          inputTokens: request.preparedTranscript.length / 4 + request.question.length / 4, // Rough estimate
+        });
+      }
+
+      if (!commandResult.stdout.trim()) {
+        if (commandResult.exitCode !== 0) {
+          const failureCode = mapExitFailure(commandResult.stderr);
+          throw createIntentProviderError(failureCode, commandResult.stderr.trim() || 'Foundation helper exited with no output');
+        }
+        throw createIntentProviderError('invalid_response', 'Foundation helper returned empty output');
+      }
+
+      let envelope: FoundationIntentHelperEnvelope;
+      try {
+        envelope = JSON.parse(commandResult.stdout) as FoundationIntentHelperEnvelope;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        throw createIntentProviderError('invalid_response', `Foundation helper returned invalid JSON: ${message}`);
+      }
+
+      if (!envelope || typeof envelope !== 'object' || typeof envelope.ok !== 'boolean') {
+        throw createIntentProviderError('invalid_response', 'Foundation helper response envelope missing ok flag');
+      }
+
+      if (!envelope.ok) {
+        const errorEnvelope = envelope as FoundationIntentHelperErrorEnvelope;
+        const code = mapHelperErrorType(errorEnvelope.errorType);
+        throw createIntentProviderError(code, errorEnvelope.message ?? 'Foundation helper reported an error');
+      }
+
+      if (!isConversationIntent(envelope.intent)) {
+        throw createIntentProviderError('invalid_response', `Foundation helper returned unsupported intent: ${String(envelope.intent)}`);
+      }
+
+      if (!Number.isFinite(envelope.confidence)) {
+        throw createIntentProviderError('invalid_response', 'Foundation helper returned non-numeric confidence');
+      }
+
+      return {
+        intent: envelope.intent,
+        confidence: Math.min(Math.max(envelope.confidence, 0), 1),
+        answerShape: (typeof envelope.answerShape === 'string' && envelope.answerShape.trim())
+          ? envelope.answerShape
+          : getAnswerShapeGuidance(envelope.intent),
+        latencyMs: modelLatencyMs,
+      };
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      throw createIntentProviderError('invalid_response', `Foundation helper returned invalid JSON: ${message}`);
+      // NAT-XXX: Log model invocation error
+      if (traceId) {
+        traceLogger.logModelInvocation(traceId, spanId, {
+          modelName: 'FoundationModelsIntentHelper',
+          modelVersion: request.promptVersion,
+          latencyMs: Date.now() - modelStartTime,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+      throw error;
     }
-
-    if (!envelope || typeof envelope !== 'object' || typeof envelope.ok !== 'boolean') {
-      throw createIntentProviderError('invalid_response', 'Foundation helper response envelope missing ok flag');
-    }
-
-    if (!envelope.ok) {
-      const errorEnvelope = envelope as FoundationIntentHelperErrorEnvelope;
-      const code = mapHelperErrorType(errorEnvelope.errorType);
-      throw createIntentProviderError(code, errorEnvelope.message ?? 'Foundation helper reported an error');
-    }
-
-    if (!isConversationIntent(envelope.intent)) {
-      throw createIntentProviderError('invalid_response', `Foundation helper returned unsupported intent: ${String(envelope.intent)}`);
-    }
-
-    if (!Number.isFinite(envelope.confidence)) {
-      throw createIntentProviderError('invalid_response', 'Foundation helper returned non-numeric confidence');
-    }
-
-    return {
-      intent: envelope.intent,
-      confidence: Math.min(Math.max(envelope.confidence, 0), 1),
-      answerShape: (typeof envelope.answerShape === 'string' && envelope.answerShape.trim())
-        ? envelope.answerShape
-        : getAnswerShapeGuidance(envelope.intent),
-    };
   }
 
   private runHelperDispatch(

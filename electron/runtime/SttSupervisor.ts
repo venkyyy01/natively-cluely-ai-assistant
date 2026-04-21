@@ -2,6 +2,7 @@ import type { SupervisorBus } from './SupervisorBus';
 import type { ISupervisor, SupervisorState } from './types';
 import type { ProviderHealthSnapshot } from '../STTReconnector';
 import type { WarmStandbyManager } from './WarmStandbyManager';
+import { startTrace, startSpan, endSpan, setSpanAttribute, traceLogger } from '../tracing';
 
 export type SttSpeaker = 'interviewer' | 'user';
 
@@ -87,13 +88,40 @@ export class SttSupervisor implements ISupervisor {
     }
   }
 
-  async handleTranscript(speaker: SttSpeaker, text: string, final: boolean): Promise<void> {
+  async handleTranscript(speaker: SttSpeaker, text: string, final: boolean, traceContext?: { traceId: string; confidence?: number; provider?: string; sampleRate?: number }): Promise<void> {
+    // Start or continue trace for this transcript
+    const correlationId = traceContext?.traceId ?? `stt-${Date.now()}`;
+    const span = startSpan(correlationId, `stt.transcript.${speaker}.${final ? 'final' : 'interim'}`);
+
+    if (span) {
+      setSpanAttribute(correlationId, span.spanId, 'stt.speaker', speaker);
+      setSpanAttribute(correlationId, span.spanId, 'stt.text_length', text.length);
+      setSpanAttribute(correlationId, span.spanId, 'stt.is_final', final);
+      setSpanAttribute(correlationId, span.spanId, 'stt.confidence', traceContext?.confidence ?? 0);
+      setSpanAttribute(correlationId, span.spanId, 'stt.provider', traceContext?.provider ?? 'unknown');
+      setSpanAttribute(correlationId, span.spanId, 'stt.sample_rate', traceContext?.sampleRate ?? 0);
+    }
+
+    traceLogger.logSttEvent(correlationId, span?.spanId, final ? 'transcript.final' : 'transcript.received', {
+      speaker,
+      text: text.substring(0, 200), // Truncate for privacy
+      isFinal: final,
+      confidence: traceContext?.confidence,
+      provider: traceContext?.provider,
+      sampleRate: traceContext?.sampleRate,
+    });
+
     await this.bus.emit({
       type: 'stt:transcript',
       speaker,
       text,
       final,
+      traceId: correlationId,
     });
+
+    if (span) {
+      endSpan(correlationId, span.spanId, 'ok');
+    }
   }
 
   async reportProviderExhausted(speaker: SttSpeaker): Promise<void> {

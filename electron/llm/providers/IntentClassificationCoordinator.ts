@@ -2,6 +2,7 @@ import { Metrics } from '../../runtime/Metrics';
 import { getIntentConfidenceService } from '../IntentConfidenceService';
 import { PIPELINE_INTENT_THRESHOLDS } from '../intentConfidenceCalibration';
 import { getAnswerShapeGuidance, type IntentResult } from '../IntentClassifier';
+import { startTrace, startSpan, endSpan, setSpanAttribute, traceLogger } from '../../tracing';
 import {
   getIntentProviderErrorCode,
   type IntentClassificationInput,
@@ -672,62 +673,158 @@ export class IntentClassificationCoordinator {
     const now = startedAt;
     this.purgeExpiredDedupeEntries(now);
 
-    const stamp = (result: CoordinatedIntentResult): CoordinatedIntentResult =>
-      getIntentConfidenceService().attachStaleness(result, input, startedAt, this.nowFn()) as CoordinatedIntentResult;
+    // NAT-XXX: Start trace for intent classification
+    const traceId = input.traceId ?? `intent-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+    const rootSpan = startSpan(traceId, 'intent.classification');
+    let spanId: string | undefined;
 
-    const dedupeKey = this.buildDedupeKey(input);
-    if (dedupeKey === null) {
-      const raw = await this.classifyUncached(input);
-      return stamp(raw);
+    if (rootSpan) {
+      spanId = rootSpan.spanId;
+      setSpanAttribute(traceId, spanId, 'intent.question', input.lastInterviewerTurn?.substring(0, 200) ?? '');
+      setSpanAttribute(traceId, spanId, 'intent.transcript_revision', input.transcriptRevision ?? -1);
+      setSpanAttribute(traceId, spanId, 'intent.assistant_response_count', input.assistantResponseCount);
+
+      traceLogger.logIntentClassificationEvent(traceId, spanId, 'started', {
+        question: input.lastInterviewerTurn?.substring(0, 200) ?? '',
+        transcriptRevision: input.transcriptRevision,
+        assistantResponseCount: input.assistantResponseCount,
+      });
     }
 
-    const cached = this.dedupeCache.get(dedupeKey);
-    if (cached && cached.expiresAt > now) {
-      // Concurrent or repeat caller within TTL — share the in-flight or
-      // recently-resolved promise. Result objects are produced via spread
-      // (`{ ...result, provider, retryCount }`) and treated as read-only
-      // by downstream consumers, so the shared reference is safe.
-      Metrics.counter('intent.duplicate_classify_count');
-      const raw = await cached.promise;
-      return stamp(raw);
-    }
+    const stamp = (result: CoordinatedIntentResult): CoordinatedIntentResult => {
+      const stamped = getIntentConfidenceService().attachStaleness(result, input, startedAt, this.nowFn()) as CoordinatedIntentResult;
 
-    const uncachedPromise = this.classifyUncached(input);
-    this.dedupeCache.set(dedupeKey, {
-      promise: uncachedPromise,
-      expiresAt: now + this.dedupeTtlMs,
-    });
-    // Evict failures immediately so the next caller can retry instead of
-    // being served a stuck rejection. We attach a separate `.catch` so the
-    // error still propagates to the awaiting caller(s) unchanged.
-    uncachedPromise.catch(() => {
-      const current = this.dedupeCache.get(dedupeKey);
-      if (current && current.promise === uncachedPromise) {
-        this.dedupeCache.delete(dedupeKey);
+      // NAT-XXX: Log completion with result
+      if (spanId) {
+        setSpanAttribute(traceId, spanId, 'intent.result.intent', stamped.intent);
+        setSpanAttribute(traceId, spanId, 'intent.result.confidence', stamped.confidence);
+        setSpanAttribute(traceId, spanId, 'intent.result.provider', stamped.provider);
+        setSpanAttribute(traceId, spanId, 'intent.result.retry_count', stamped.retryCount);
+        setSpanAttribute(traceId, spanId, 'intent.result.fallback_reason', stamped.fallbackReason ?? 'none');
+        setSpanAttribute(traceId, spanId, 'intent.result.staleness_age_ms', stamped.staleness?.ageMs ?? 0);
+
+        traceLogger.logIntentClassificationEvent(traceId, spanId, 'completed', {
+          question: input.lastInterviewerTurn?.substring(0, 200) ?? '',
+          transcriptRevision: input.transcriptRevision,
+          assistantResponseCount: input.assistantResponseCount,
+          result: {
+            intent: stamped.intent,
+            confidence: stamped.confidence,
+            answerShape: stamped.answerShape,
+            provider: stamped.provider,
+            retryCount: stamped.retryCount,
+            fallbackReason: stamped.fallbackReason,
+            staleness: stamped.staleness,
+          },
+        });
+
+        endSpan(traceId, spanId, 'ok');
       }
-    });
-    const raw = await uncachedPromise;
-    return stamp(raw);
+
+      return stamped;
+    };
+
+    try {
+      const dedupeKey = this.buildDedupeKey(input);
+      if (dedupeKey === null) {
+        const raw = await this.classifyUncached(input, traceId, spanId);
+        return stamp(raw);
+      }
+
+      const cached = this.dedupeCache.get(dedupeKey);
+      if (cached && cached.expiresAt > now) {
+        Metrics.counter('intent.duplicate_classify_count');
+        if (spanId) {
+          setSpanAttribute(traceId, spanId, 'intent.dedupe_hit', true);
+        }
+        const raw = await cached.promise;
+        return stamp(raw);
+      }
+
+      const uncachedPromise = this.classifyUncached(input, traceId, spanId);
+      this.dedupeCache.set(dedupeKey, {
+        promise: uncachedPromise,
+        expiresAt: now + this.dedupeTtlMs,
+      });
+      uncachedPromise.catch(() => {
+        const current = this.dedupeCache.get(dedupeKey);
+        if (current && current.promise === uncachedPromise) {
+          this.dedupeCache.delete(dedupeKey);
+        }
+      });
+      const raw = await uncachedPromise;
+      return stamp(raw);
+    } catch (error) {
+      // NAT-XXX: Log failure
+      if (spanId) {
+        const errorMsg = error instanceof Error ? error.message : String(error);
+        traceLogger.logIntentClassificationEvent(traceId, spanId, 'failed', {
+          question: input.lastInterviewerTurn?.substring(0, 200) ?? '',
+          transcriptRevision: input.transcriptRevision,
+          error: errorMsg,
+        });
+        endSpan(traceId, spanId, 'error', errorMsg);
+      }
+      throw error;
+    }
   }
 
-  private async classifyUncached(input: IntentClassificationInput): Promise<CoordinatedIntentResult> {
+  private async classifyUncached(
+    input: IntentClassificationInput,
+    traceId?: string,
+    parentSpanId?: string,
+  ): Promise<CoordinatedIntentResult> {
     const primaryAvailable = await this.primary.isAvailable();
     if (primaryAvailable) {
       let retries = 0;
       while (true) {
         try {
+          // NAT-XXX: Trace primary classification
+          const span = traceId ? startSpan(traceId, 'intent.classify.primary', parentSpanId) : undefined;
+          if (span) {
+            setSpanAttribute(traceId!, span.spanId, 'intent.primary.name', this.primary.name);
+            setSpanAttribute(traceId!, span.spanId, 'intent.retry_count', retries);
+          }
+
           const result = await this.primary.classify(input);
+
+          if (span) {
+            setSpanAttribute(traceId!, span.spanId, 'intent.result.intent', result.intent);
+            setSpanAttribute(traceId!, span.spanId, 'intent.result.confidence', result.confidence);
+            traceLogger.logModelInvocation(traceId!, span.spanId, {
+              modelName: this.primary.name,
+              modelVersion: 'foundation',
+              latencyMs: result.latencyMs,
+            });
+            endSpan(traceId!, span.spanId, 'ok');
+          }
+
           if (this.isLowConfidence(result)) {
+            const fallbackSpan = traceId ? startSpan(traceId, 'intent.handle_low_confidence', parentSpanId) : undefined;
             const fallbackResult = await this.classifyWithFallback(input);
-            return this.resolveLowConfidenceDecision(input, result, fallbackResult, retries);
+            const decision = this.resolveLowConfidenceDecision(input, result, fallbackResult, retries);
+            if (fallbackSpan) {
+              setSpanAttribute(traceId!, fallbackSpan.spanId, 'intent.decision', decision.fallbackReason ?? 'primary');
+              endSpan(traceId!, fallbackSpan.spanId, 'ok');
+            }
+            return decision;
           }
 
           const likelyIntent = this.inferLikelyIntentFromQuestion(input);
           if (likelyIntent && result.intent !== likelyIntent) {
             const strongLikelyCue = this.hasStrongCueForLikelyIntent(input, likelyIntent);
+            const fallbackSpan = traceId ? startSpan(traceId, 'intent.check_contradiction', parentSpanId) : undefined;
             const fallbackResult = await this.classifyWithFallback(input);
             if (this.isContradiction(likelyIntent, strongLikelyCue, result, fallbackResult)) {
+              if (fallbackSpan) {
+                setSpanAttribute(traceId!, fallbackSpan.spanId, 'intent.contradiction', true);
+                setSpanAttribute(traceId!, fallbackSpan.spanId, 'intent.decision', 'fallback');
+                endSpan(traceId!, fallbackSpan.spanId, 'ok');
+              }
               return this.createFallbackResult(fallbackResult, retries, 'primary_contradiction');
+            }
+            if (fallbackSpan) {
+              endSpan(traceId!, fallbackSpan.spanId, 'ok');
             }
           }
 
@@ -740,8 +837,14 @@ export class IntentClassificationCoordinator {
           const code = getIntentProviderErrorCode(error);
           const retryable = isRetryableError(code);
           if (!retryable || retries >= this.maxPrimaryRetries) {
+            const fallbackSpan = traceId ? startSpan(traceId, 'intent.handle_error', parentSpanId) : undefined;
             const fallbackResult = await this.classifyWithFallback(input);
-            return this.resolveFallbackOnPrimaryFailure(input, code, retryable, retries, fallbackResult);
+            const decision = this.resolveFallbackOnPrimaryFailure(input, code, retryable, retries, fallbackResult);
+            if (fallbackSpan) {
+              setSpanAttribute(traceId!, fallbackSpan.spanId, 'intent.fallback.reason', decision.fallbackReason ?? 'unknown');
+              endSpan(traceId!, fallbackSpan.spanId, 'ok');
+            }
+            return decision;
           }
 
           retries += 1;
@@ -752,7 +855,12 @@ export class IntentClassificationCoordinator {
       }
     }
 
+    const fallbackSpan = traceId ? startSpan(traceId, 'intent.classify.fallback_unavailable', parentSpanId) : undefined;
     const fallbackResult = await this.classifyWithFallback(input);
+    if (fallbackSpan) {
+      setSpanAttribute(traceId!, fallbackSpan.spanId, 'intent.fallback.reason', 'primary_unavailable');
+      endSpan(traceId!, fallbackSpan.spanId, 'ok');
+    }
     return this.createFallbackResult(fallbackResult, 0, 'primary_unavailable');
   }
 }

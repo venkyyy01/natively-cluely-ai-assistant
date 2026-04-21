@@ -15,6 +15,8 @@ export interface IntentClassificationInput {
   preparedTranscript: string;
   assistantResponseCount: number;
   transcriptRevision?: number;
+  /** NAT-XXX: Optional trace ID for correlation with STT/transcript events */
+  traceId?: string;
 }
 
 export interface IntentProviderError extends Error {
