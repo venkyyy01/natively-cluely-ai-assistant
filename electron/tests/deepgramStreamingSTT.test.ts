@@ -146,11 +146,12 @@ test('DeepgramStreamingSTT only emits final transcript events when Deepgram itse
   const restoreWs = installWebSocketMock();
   const modulePath = require.resolve('../audio/DeepgramStreamingSTT');
   delete require.cache[modulePath];
+  let stt: InstanceType<typeof import('../audio/DeepgramStreamingSTT').DeepgramStreamingSTT> | undefined;
 
   try {
     const { DeepgramStreamingSTT } = await import('../audio/DeepgramStreamingSTT');
-    const stt = new DeepgramStreamingSTT('test-key');
-    const transcripts: Array<{ text: string; isFinal: boolean; confidence: number }> = [];
+    stt = new DeepgramStreamingSTT('test-key');
+    const transcripts: Array<{ text: string; isFinal: boolean; confidence: number; traceId?: string }> = [];
     const telemetry: Array<{ kind: string; hadPendingInterim: boolean; pendingInterimLength: number }> = [];
 
     stt.on('transcript', (segment) => {
@@ -179,10 +180,12 @@ test('DeepgramStreamingSTT only emits final transcript events when Deepgram itse
     // NAT-009 / audit A-10: the interim "hello there" must NOT be promoted to
     // final on UtteranceEnd. Only the second Results message, which Deepgram
     // itself marked is_final, may produce a final transcript event.
-    assert.deepEqual(transcripts, [
+    assert.deepEqual(transcripts.map(({ text, isFinal, confidence }) => ({ text, isFinal, confidence })), [
       { text: 'hello there', isFinal: false, confidence: 0.75 },
       { text: 'general kenobi', isFinal: true, confidence: 0.91 },
     ]);
+    assert.equal(typeof transcripts[0]?.traceId, 'string');
+    assert.equal(typeof transcripts[1]?.traceId, 'string');
 
     assert.equal(telemetry.length, 1, 'one stt.utterance_end_seen telemetry event');
     assert.equal(telemetry[0]!.kind, 'stt.utterance_end_seen');
@@ -191,6 +194,7 @@ test('DeepgramStreamingSTT only emits final transcript events when Deepgram itse
 
     stt.stop();
   } finally {
+    stt?.stop();
     restoreWs();
   }
 });
