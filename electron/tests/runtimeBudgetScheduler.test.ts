@@ -84,6 +84,12 @@ test('RuntimeBudgetScheduler rejects lane submissions once the per-lane queue ca
       qos: { supported: false, setCurrentThreadQoS() {} },
       logger: { warn() {} },
     }),
+    laneBudgets: {
+      realtime: { deadlineMs: 20, maxConcurrent: 1, memoryCeilingMb: 64 },
+      'local-inference': { deadlineMs: 2000, maxConcurrent: 1, memoryCeilingMb: 256 },
+      semantic: { deadlineMs: 100, maxConcurrent: 2, memoryCeilingMb: 128 },
+      background: { deadlineMs: 5000, maxConcurrent: 1, memoryCeilingMb: 128 },
+    },
     maxQueueDepthByLane: {
       realtime: 8,
       'local-inference': 8,
@@ -102,12 +108,20 @@ test('RuntimeBudgetScheduler rejects lane submissions once the per-lane queue ca
     await firstGate;
     return 'first';
   });
-  const second = scheduler.submit('background', async () => 'second');
-  const overflow = scheduler.submit('background', async () => 'overflow');
+  const second = scheduler.submit('background', async () => {
+    await firstGate;
+    return 'second';
+  });
+  try {
+    await assert.rejects(
+      () => scheduler.submit('background', async () => 'overflow'),
+      /runtime_lane_queue_full:background/,
+    );
+  } finally {
+    releaseFirst?.();
+    await Promise.allSettled([first, second]);
+  }
 
-  await assert.rejects(() => overflow, /runtime_lane_queue_full:background/);
-
-  releaseFirst?.();
   assert.equal(await first, 'first');
   assert.equal(await second, 'second');
 });
