@@ -48,6 +48,7 @@ const FRAMEWORK_PATTERN = /(framework|format|structure|star|situation\b.*task\b.
 const BEHAVIORAL_SCOPE_PATTERN = /(behavioral|story|star|situation|task|action|result|learning|tell me about a time|leadership|conflict)/i;
 const SYSTEM_DESIGN_SCOPE_PATTERN = /(system design|architecture|design round|high level design|distributed|scal(?:e|ing))/i;
 const LIVE_CODING_SCOPE_PATTERN = /(live coding|live-coding|coding round|write code|implement|function|leetcode|algorithm)/i;
+const UNSAFE_DIRECTIVE_PATTERN = /(ignore\s+(all\s+)?(previous|prior|above|earlier)\s+instructions|disregard\s+(all\s+)?(previous|prior|above|earlier)\s+instructions|reveal\s+(the\s+)?(system|developer)\s+(prompt|message|instructions)|system\s+prompt|developer\s+message|jailbreak|act\s+as\s+(?:a|an|the)?\s*(different|uncensored|unrestricted)?\s*(ai|assistant|model))/i;
 
 function normalizeText(value: string): string {
   return value
@@ -116,6 +117,10 @@ export class ConsciousResponsePreferenceStore {
   noteUserTranscript(text: string, timestamp: number): boolean {
     const rawText = text.trim().replace(/\s+/g, ' ');
     if (!rawText || !hasPreferenceSignal(rawText)) {
+      return false;
+    }
+
+    if (UNSAFE_DIRECTIVE_PATTERN.test(rawText)) {
       return false;
     }
 

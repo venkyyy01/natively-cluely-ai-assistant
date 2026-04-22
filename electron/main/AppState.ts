@@ -19,7 +19,11 @@ import { RuntimeCoordinator } from "../runtime/RuntimeCoordinator"
 import { StealthManager } from "../stealth/StealthManager"
 import { createMacosVirtualDisplayCoordinator, resolveMacosVirtualDisplayHelperPath } from "../stealth/macosVirtualDisplayIntegration"
 import { NativeStealthBridge } from "../stealth/NativeStealthBridge"
-import { derivePrivacyShieldState, type PrivacyShieldState } from "../stealth/privacyShieldState"
+import {
+  detectExternalScreenShare,
+  resolveSafeSystemAudioDeviceId,
+} from "../stealth/screenShareInterruptionGuard"
+import { derivePrivacyShieldState, hasCaptureRiskWarnings, type PrivacyShieldState } from "../stealth/privacyShieldState"
 import { PrivacyShieldRecoveryController } from "../stealth/PrivacyShieldRecoveryController"
 import { isEnvFlagEnabled } from './logging'
 import { WindowHelper } from "../WindowHelper"
@@ -224,7 +228,7 @@ const enableVirtualDisplayIsolation =
   !(process as NodeJS.Process & { mas?: boolean }).mas &&
   (
     isEnvFlagEnabled(process.env.NATIVELY_ENABLE_VIRTUAL_DISPLAY_ISOLATION) ??
-    (settingsManager.get('enableVirtualDisplayIsolation') ?? true)
+    (settingsManager.get('enableVirtualDisplayIsolation') ?? false)
   )
 
 this.virtualDisplayCoordinator =
@@ -567,6 +571,25 @@ this.runtimeCoordinator.registerSupervisor(new StealthSupervisor(
       {
         logger: { warn: console.warn },
         nativeBridge: this.nativeStealthBridge ?? undefined,
+        nativeArmGuard: async () => {
+          try {
+            const snapshot = await detectExternalScreenShare()
+            if (!snapshot.active) {
+              return { allowed: true }
+            }
+
+            return {
+              allowed: false,
+              reason: snapshot.reason,
+            }
+          } catch (error) {
+            console.warn('[Stealth] Screen-share detection failed; skipping interruptive native helper arm:', error)
+            return {
+              allowed: false,
+              reason: 'screen-share-detection-unavailable',
+            }
+          }
+        },
         runtimeHeartbeatStalenessMs: 2000,
       },
     ))
@@ -1699,21 +1722,46 @@ try {
       throw new Error('startMeeting metadata.audio requires string inputDeviceId and outputDeviceId');
     }
 
+    const normalizedAudio = metadata?.audio
+      ? {
+          inputDeviceId: normalizeDeviceId(metadata.audio.inputDeviceId),
+          outputDeviceId: normalizeDeviceId(metadata.audio.outputDeviceId),
+        }
+      : undefined;
+
+    if (normalizedAudio?.outputDeviceId === 'sck') {
+      try {
+        // Avoid starting a display-backed SCK stream while another app is already sharing the screen.
+        const screenShareSnapshot = await detectExternalScreenShare()
+        const safeOutputDeviceId = resolveSafeSystemAudioDeviceId(
+          normalizedAudio.outputDeviceId,
+          screenShareSnapshot,
+        )
+
+        if (safeOutputDeviceId !== normalizedAudio.outputDeviceId) {
+          console.warn(`[Audio] External screen share detected (${screenShareSnapshot.reason}); falling back from ScreenCaptureKit to the default system-audio backend to avoid interrupting the existing share.`)
+        }
+
+        normalizedAudio.outputDeviceId = safeOutputDeviceId
+      } catch (error) {
+        normalizedAudio.outputDeviceId = undefined
+        console.warn('[Audio] Screen-share detection failed while selecting the ScreenCaptureKit audio backend; falling back to the default system-audio backend to avoid interrupting an existing share:', error)
+      }
+    }
+
     const normalizedMetadata = metadata
       ? {
           ...metadata,
-          ...(metadata.audio ? {
-            audio: {
-              inputDeviceId: normalizeDeviceId(metadata.audio.inputDeviceId),
-              outputDeviceId: normalizeDeviceId(metadata.audio.outputDeviceId),
-            },
+          ...(normalizedAudio ? {
+            audio: normalizedAudio,
           } : {}),
         }
       : undefined;
 
-    const currentMutex = this.meetingStartMutex;
-    let settled = false;
-    this.meetingStartMutex = currentMutex.then(async () => {
+    const currentMutex = this.meetingStartMutex.catch(() => {
+      // Keep the serialized start queue alive after a failed activation attempt.
+    });
+    const activationPromise = currentMutex.then(async () => {
       if (signal.aborted) {
         console.log('[Main] Start meeting aborted (canceled by endMeeting)');
         return;
@@ -1832,16 +1880,13 @@ try {
           }
         }, 0);
       })
-    }).then(
-      () => { settled = true; },
-      (err) => { settled = true; throw err; }
-    ).catch((err) => {
-      if (!settled) {
-        console.error('[Main] startMeeting mutex error:', err);
-      }
     });
 
-    return this.meetingStartMutex;
+    this.meetingStartMutex = activationPromise.catch((err) => {
+      console.error('[Main] startMeeting mutex error:', err);
+    });
+
+    return activationPromise;
   }
 
   public async endMeeting(): Promise<void> {
@@ -2651,17 +2696,21 @@ setThemeMode: (mode) => this.themeManager.setMode(mode as import('../ThemeManage
     console.log(`[Stealth] setUndetectable(${state}) called`);
     const startedAt = Date.now();
 
-    const stealthSupervisor = this.runtimeCoordinator.getSupervisor<StealthSupervisor>('stealth')
-    if (stealthSupervisor.getState() === 'idle') {
-      await stealthSupervisor.start()
+    try {
+      const stealthSupervisor = this.runtimeCoordinator.getSupervisor<StealthSupervisor>('stealth')
+      if (stealthSupervisor.getState() === 'idle') {
+        await stealthSupervisor.start()
+      }
+      await stealthSupervisor.setEnabled(state)
+
+      this.applyUndetectableState(state, startedAt, {
+        runtime: 'coordinator',
+      })
+    } finally {
+      if (this.pendingUndetectableState === state) {
+        this.pendingUndetectableState = null;
+      }
     }
-    await stealthSupervisor.setEnabled(state)
-
-    this.pendingUndetectableState = null;
-
-    this.applyUndetectableState(state, startedAt, {
-      runtime: 'coordinator',
-    })
   }
 
   private applyUndetectableState(
@@ -2815,10 +2864,7 @@ setThemeMode: (mode) => this.themeManager.setMode(mode as import('../ThemeManage
       return
     }
 
-    const shouldFault =
-      warnings.includes('stealth_verification_failed') ||
-      warnings.includes('window_visible_to_capture') ||
-      warnings.includes('native_module_unavailable')
+    const shouldFault = hasCaptureRiskWarnings(warnings)
 
     if (!shouldFault) {
       return

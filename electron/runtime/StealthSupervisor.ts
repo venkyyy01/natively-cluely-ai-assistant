@@ -27,6 +27,7 @@ export interface StealthSupervisorOptions {
   clearIntervalScheduler?: (handle: unknown) => void;
   nativeBridge?: NativeStealthBridge;
   nativeArmRequest?: NativeStealthArmRequest;
+  nativeArmGuard?: () => boolean | Promise<boolean> | { allowed: boolean; reason?: string } | Promise<{ allowed: boolean; reason?: string }>;
   runtimeHeartbeatStalenessMs?: number;
   now?: () => number;
 }
@@ -290,8 +291,29 @@ export class StealthSupervisor implements ISupervisor {
       return false;
     }
 
+    const armAllowed = await this.isNativeArmAllowed();
+    if (!armAllowed.allowed) {
+      const reason = armAllowed.reason ?? 'native arm guard declined';
+      this.options.logger?.warn(`[StealthSupervisor] Skipping native stealth helper arm: ${reason}`);
+      await this.bus.emit({ type: 'stealth:native-arm-skipped', reason });
+      return false;
+    }
+
     const result = await this.nativeBridge.arm(this.nativeArmRequest);
     return result.connected;
+  }
+
+  private async isNativeArmAllowed(): Promise<{ allowed: boolean; reason?: string }> {
+    if (!this.options.nativeArmGuard) {
+      return { allowed: true };
+    }
+
+    const result = await this.options.nativeArmGuard();
+    if (typeof result === 'boolean') {
+      return result ? { allowed: true } : { allowed: false };
+    }
+
+    return result.allowed ? { allowed: true } : { allowed: false, reason: result.reason };
   }
 
   private async heartbeatNativeStealth(): Promise<{ status: 'healthy' | 'degraded' | 'not_applicable' }> {

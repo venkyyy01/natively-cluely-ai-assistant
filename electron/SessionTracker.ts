@@ -496,7 +496,9 @@ export class SessionTracker {
     this.consciousModeEnabled = enabled;
     if (!enabled) {
       this.consciousThreadStore.reset();
+      this.observedQuestionStore.reset();
       this.answerHypothesisStore.reset();
+      this.responsePreferenceStore.reset();
       this.designStateStore.reset();
       this.consciousSemanticContext = '';
     }
@@ -875,6 +877,7 @@ export class SessionTracker {
     this.consciousThreadStore.reset();
     this.observedQuestionStore.reset();
     this.answerHypothesisStore.reset();
+    this.responsePreferenceStore.reset();
     this.designStateStore.reset();
     this.consciousSemanticContext = '';
     this.phaseDetector.reset();

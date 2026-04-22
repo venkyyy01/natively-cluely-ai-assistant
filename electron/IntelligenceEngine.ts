@@ -154,6 +154,7 @@ export class IntelligenceEngine extends EventEmitter {
   private parallelContextAssembler: ParallelContextAssembler | null = null;
   private latencyTracker: AnswerLatencyTracker = new AnswerLatencyTracker();
   private activeWhatToSayRequestId = 0;
+  private activeAuxiliaryRequestId = 0;
   private readonly CONTEXT_ASSEMBLY_SOFT_BUDGET_MS = 80;
   private readonly CONTEXT_ASSEMBLY_HARD_BUDGET_MS = 120;
   private readonly MAX_COOLDOWN_DEFER_DEPTH = 3;
@@ -739,35 +740,36 @@ export class IntelligenceEngine extends EventEmitter {
             return null;
         }
 
+        if (this.shouldBlockModeForStealthContainment('assist')) {
+            return null;
+        }
+
         if (this.assistCancellationToken) {
             this.assistCancellationToken.abort();
         }
 
         this.assistCancellationToken = new AbortController();
-        this.setMode('assist');
+        const requestId = this.beginAuxiliaryMode('assist');
 
         try {
             if (!this.assistLLM) {
-                this.setMode('idle');
                 return null;
             }
 
             const context = this.session.getFormattedContext(60);
             if (!context) {
-                this.setMode('idle');
                 return null;
             }
 
             const insight = await this.assistLLM.generate(context);
 
-            if (this.assistCancellationToken?.signal.aborted) {
+            if (this.assistCancellationToken?.signal.aborted || this.shouldSuppressAuxiliaryMode(requestId)) {
                 return null;
             }
 
             if (insight) {
                 this.emit('assist_update', insight);
             }
-            this.setMode('idle');
             return insight;
 
         } catch (error) {
@@ -775,8 +777,9 @@ export class IntelligenceEngine extends EventEmitter {
                 return null;
             }
             this.emit('error', error as Error, 'assist');
-            this.setMode('idle');
             return null;
+        } finally {
+            this.finishAuxiliaryMode(requestId, 'assist');
         }
     }
 
@@ -1743,6 +1746,10 @@ export class IntelligenceEngine extends EventEmitter {
   setStealthContainmentActive(active: boolean): void {
     this.stealthContainmentActive = active;
     if (active) {
+      this.activeAuxiliaryRequestId += 1;
+      if (this.activeMode !== 'idle' && this.activeMode !== 'what_to_say') {
+        this.setMode('idle');
+      }
       this.cancelActiveWhatToSay('stealth_containment_active');
     }
   }
@@ -1753,18 +1760,20 @@ export class IntelligenceEngine extends EventEmitter {
      */
     async runFollowUp(intent: string, userRequest?: string): Promise<string | null> {
         console.log(`[IntelligenceEngine] runFollowUp called with intent: ${intent}`);
+        if (this.shouldBlockModeForStealthContainment('follow_up')) {
+            return null;
+        }
         const lastMsg = this.session.getLastAssistantMessage();
         if (!lastMsg) {
             console.warn('[IntelligenceEngine] No lastAssistantMessage found for follow-up');
             return null;
         }
 
-        this.setMode('follow_up');
+        const requestId = this.beginAuxiliaryMode('follow_up');
 
         try {
             if (!this.followUpLLM) {
                 console.error('[IntelligenceEngine] FollowUpLLM not initialized');
-                this.setMode('idle');
                 return null;
             }
 
@@ -1779,8 +1788,15 @@ export class IntelligenceEngine extends EventEmitter {
             );
 
             for await (const token of stream) {
+                if (this.shouldSuppressAuxiliaryMode(requestId)) {
+                    return null;
+                }
                 this.emit('refined_answer_token', token, intent);
                 fullRefined += token;
+            }
+
+            if (this.shouldSuppressAuxiliaryMode(requestId)) {
+                return null;
             }
 
             if (fullRefined) {
@@ -1808,13 +1824,13 @@ export class IntelligenceEngine extends EventEmitter {
                 });
             }
 
-            this.setMode('idle');
             return fullRefined;
 
         } catch (error) {
             this.emit('error', error as Error, 'follow_up');
-            this.setMode('idle');
             return null;
+        } finally {
+            this.finishAuxiliaryMode(requestId, 'follow_up');
         }
     }
 
@@ -1824,19 +1840,20 @@ export class IntelligenceEngine extends EventEmitter {
      */
     async runRecap(): Promise<string | null> {
         console.log('[IntelligenceEngine] runRecap called');
-        this.setMode('recap');
+        if (this.shouldBlockModeForStealthContainment('recap')) {
+            return null;
+        }
+        const requestId = this.beginAuxiliaryMode('recap');
 
         try {
             if (!this.recapLLM) {
                 console.error('[IntelligenceEngine] RecapLLM not initialized');
-                this.setMode('idle');
                 return null;
             }
 
             const context = this.session.getFormattedContext(120);
             if (!context) {
                 console.warn('[IntelligenceEngine] No context available for recap');
-                this.setMode('idle');
                 return null;
             }
 
@@ -1844,8 +1861,15 @@ export class IntelligenceEngine extends EventEmitter {
             const stream = this.recapLLM.generateStream(context);
 
             for await (const token of stream) {
+                if (this.shouldSuppressAuxiliaryMode(requestId)) {
+                    return null;
+                }
                 this.emit('recap_token', token);
                 fullSummary += token;
+            }
+
+            if (this.shouldSuppressAuxiliaryMode(requestId)) {
+                return null;
             }
 
             if (fullSummary) {
@@ -1858,13 +1882,13 @@ export class IntelligenceEngine extends EventEmitter {
                     answer: fullSummary
                 });
             }
-            this.setMode('idle');
             return fullSummary;
 
         } catch (error) {
             this.emit('error', error as Error, 'recap');
-            this.setMode('idle');
             return null;
+        } finally {
+            this.finishAuxiliaryMode(requestId, 'recap');
         }
     }
 
@@ -1874,19 +1898,20 @@ export class IntelligenceEngine extends EventEmitter {
      */
     async runFollowUpQuestions(): Promise<string | null> {
         console.log('[IntelligenceEngine] runFollowUpQuestions called');
-        this.setMode('follow_up_questions');
+        if (this.shouldBlockModeForStealthContainment('follow_up_questions')) {
+            return null;
+        }
+        const requestId = this.beginAuxiliaryMode('follow_up_questions');
 
         try {
             if (!this.followUpQuestionsLLM) {
                 console.error('[IntelligenceEngine] FollowUpQuestionsLLM not initialized');
-                this.setMode('idle');
                 return null;
             }
 
             const context = this.session.getFormattedContext(120);
             if (!context) {
                 console.warn('[IntelligenceEngine] No context available for follow-up questions');
-                this.setMode('idle');
                 return null;
             }
 
@@ -1894,8 +1919,15 @@ export class IntelligenceEngine extends EventEmitter {
             const stream = this.followUpQuestionsLLM.generateStream(context);
 
             for await (const token of stream) {
+                if (this.shouldSuppressAuxiliaryMode(requestId)) {
+                    return null;
+                }
                 this.emit('follow_up_questions_token', token);
                 fullQuestions += token;
+            }
+
+            if (this.shouldSuppressAuxiliaryMode(requestId)) {
+                return null;
             }
 
             if (fullQuestions) {
@@ -1907,13 +1939,13 @@ export class IntelligenceEngine extends EventEmitter {
                     answer: fullQuestions
                 });
             }
-            this.setMode('idle');
             return fullQuestions;
 
         } catch (error) {
             this.emit('error', error as Error, 'follow_up_questions');
-            this.setMode('idle');
             return null;
+        } finally {
+            this.finishAuxiliaryMode(requestId, 'follow_up_questions');
         }
     }
 
@@ -1922,17 +1954,23 @@ export class IntelligenceEngine extends EventEmitter {
      * Explicit bypass when auto-detection fails
      */
     async runManualAnswer(question: string): Promise<string | null> {
+        if (this.shouldBlockModeForStealthContainment('manual')) {
+            return null;
+        }
         this.emit('manual_answer_started');
-        this.setMode('manual');
+        const requestId = this.beginAuxiliaryMode('manual');
 
         try {
             if (!this.answerLLM) {
-                this.setMode('idle');
                 return null;
             }
 
             const context = this.session.getFormattedContext(120);
             const answer = await this.answerLLM.generate(question, context);
+
+            if (this.shouldSuppressAuxiliaryMode(requestId)) {
+                return null;
+            }
 
             if (answer) {
                 this.session.addAssistantMessage(answer);
@@ -1946,13 +1984,13 @@ export class IntelligenceEngine extends EventEmitter {
                 });
             }
 
-            this.setMode('idle');
             return answer;
 
         } catch (error) {
             this.emit('error', error as Error, 'manual');
-            this.setMode('idle');
             return null;
+        } finally {
+            this.finishAuxiliaryMode(requestId, 'manual');
         }
     }
 
@@ -1982,6 +2020,38 @@ export class IntelligenceEngine extends EventEmitter {
     }
   }
 
+  private shouldBlockModeForStealthContainment(
+    mode: Exclude<IntelligenceMode, 'idle' | 'what_to_say' | 'reasoning_first'>,
+  ): boolean {
+    if (!this.stealthContainmentActive) {
+      return false;
+    }
+
+    console.warn(`[IntelligenceEngine] Suppressing ${mode.replace(/_/g, '-')} while stealth containment is active.`);
+    return true;
+  }
+
+  private beginAuxiliaryMode(
+    mode: Exclude<IntelligenceMode, 'idle' | 'what_to_say' | 'reasoning_first'>,
+  ): number {
+    const requestId = ++this.activeAuxiliaryRequestId;
+    this.setMode(mode);
+    return requestId;
+  }
+
+  private shouldSuppressAuxiliaryMode(requestId: number): boolean {
+    return this.stealthContainmentActive || requestId !== this.activeAuxiliaryRequestId;
+  }
+
+  private finishAuxiliaryMode(
+    requestId: number,
+    mode: Exclude<IntelligenceMode, 'idle' | 'what_to_say' | 'reasoning_first'>,
+  ): void {
+    if (requestId === this.activeAuxiliaryRequestId && this.activeMode === mode) {
+      this.setMode('idle');
+    }
+  }
+
   /**
   * Reset engine state (cancels any in-flight operations)
   */
@@ -1990,6 +2060,7 @@ export class IntelligenceEngine extends EventEmitter {
     this.lastTriggerByCooldownKey.clear();
     this.pendingCooldownTriggers.clear();
     this.stealthContainmentActive = false;
+    this.activeAuxiliaryRequestId = 0;
     this.cancelActiveWhatToSay('reset');
     if (this.assistCancellationToken) {
       this.assistCancellationToken.abort();

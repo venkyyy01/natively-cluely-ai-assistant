@@ -13,6 +13,24 @@ test('PrivacyShieldState activates when capture-risk warnings are present', () =
   );
 });
 
+test('PrivacyShieldState treats SCStream and persistent capture-tool warnings as capture-risk warnings', () => {
+  assert.deepEqual(
+    derivePrivacyShieldState({ warnings: ['scstream_capture_detected'] }),
+    {
+      active: true,
+      reason: 'Sensitive content hidden while capture risk is detected.',
+    },
+  );
+
+  assert.deepEqual(
+    derivePrivacyShieldState({ warnings: ['capture_tools_still_running'] }),
+    {
+      active: true,
+      reason: 'Sensitive content hidden while capture risk is detected.',
+    },
+  );
+});
+
 test('PrivacyShieldState activates on stealth faults until protection is restored', () => {
   assert.deepEqual(
     derivePrivacyShieldState({ faultReason: 'stealth heartbeat missed' }),

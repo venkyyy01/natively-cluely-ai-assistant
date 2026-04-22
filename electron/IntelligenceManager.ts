@@ -253,8 +253,6 @@ export class IntelligenceManager extends EventEmitter {
     // ============================================
 
   async reset(): Promise<void> {
-    this.engine.removeAllListeners();
-    this.removeAllListeners();
     await this.session.reset();
     this.engine.reset();
   }

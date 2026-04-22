@@ -47,6 +47,48 @@ test('StealthSupervisor arms and disarms through the delegate while emitting sta
   ]);
 });
 
+test('StealthSupervisor skips native helper arm when guard detects active screen sharing', async () => {
+  const calls: boolean[] = [];
+  const skippedReasons: string[] = [];
+  let nativeArmCalls = 0;
+  const bus = createBus();
+
+  bus.subscribe('stealth:native-arm-skipped', async (event) => {
+    skippedReasons.push(event.reason);
+  });
+
+  const supervisor = new StealthSupervisor(
+    {
+      async setEnabled(enabled: boolean) {
+        calls.push(enabled);
+      },
+      isEnabled: () => calls[calls.length - 1] ?? false,
+      verifyStealthState: () => true,
+    },
+    bus,
+    {
+      nativeBridge: {
+        arm: async () => {
+          nativeArmCalls += 1;
+          return { connected: true, sessionId: 'session-a', surfaceId: 'surface-a' };
+        },
+        heartbeat: async () => ({ connected: false, healthy: false }),
+        fault: async () => {},
+      } as unknown as import('../stealth/NativeStealthBridge').NativeStealthBridge,
+      nativeArmGuard: () => ({ allowed: false, reason: 'screen-capture-agent-with-meeting-app' }),
+      heartbeatIntervalMs: 0,
+    },
+  );
+
+  await supervisor.start();
+  await supervisor.setEnabled(true);
+
+  assert.equal(supervisor.getStealthState(), 'FULL_STEALTH');
+  assert.deepEqual(calls, [true]);
+  assert.equal(nativeArmCalls, 0);
+  assert.deepEqual(skippedReasons, ['screen-capture-agent-with-meeting-app']);
+});
+
 test('StealthSupervisor fails closed when arm verification fails', async () => {
   const delegateCalls: boolean[] = [];
   const faultReasons: string[] = [];
