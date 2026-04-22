@@ -387,6 +387,10 @@ const App: React.FC = () => {
       })
     }
 
+    electronAPI.getPrivacyShieldState?.().then((state) => {
+      setPrivacyShieldState(state)
+    }).catch(() => {})
+
     const removePrivacyShieldListener = electronAPI.onPrivacyShieldChanged?.((state) => {
       setPrivacyShieldState(state)
     })

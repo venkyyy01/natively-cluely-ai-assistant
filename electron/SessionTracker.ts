@@ -197,9 +197,17 @@ export class SessionTracker {
     this.currentMeetingMetadata = metadata;
     const inferredMeetingId = metadata?.meetingId || metadata?.calendarEventId || metadata?.title;
     if (typeof inferredMeetingId === 'string' && inferredMeetingId.trim()) {
-      this.activeMeetingId = inferredMeetingId.trim();
+      const normalizedMeetingId = inferredMeetingId.trim();
+      if (normalizedMeetingId !== this.activeMeetingId) {
+        return;
+      }
+      this.activeMeetingId = normalizedMeetingId;
     }
     persistState(this);
+  }
+
+  getActiveMeetingId(): string {
+    return this.activeMeetingId;
   }
 
   setSupervisorBus(bus?: SupervisorBusEmitter): void {
@@ -501,6 +509,7 @@ export class SessionTracker {
       this.responsePreferenceStore.reset();
       this.designStateStore.reset();
       this.consciousSemanticContext = '';
+      persistState(this);
     }
   }
 
@@ -531,7 +540,9 @@ export class SessionTracker {
       this.consciousThreadStore.reset();
     }
     this.answerHypothesisStore.reset();
+    this.responsePreferenceStore.reset();
     this.designStateStore.reset();
+    persistState(this);
   }
 
   recordConsciousResponse(question: string, response: ConsciousModeStructuredResponse, threadAction: 'start' | 'continue' | 'reset'): void {
@@ -860,6 +871,7 @@ export class SessionTracker {
     this.cancelCompactionTimer();
 
     const consciousModeEnabled = this.consciousModeEnabled;
+    const previousMeetingId = this.activeMeetingId;
 
     const freshSessionId = `session_${SessionTracker.nextSessionId++}`;
     const freshStartTime = Date.now();
@@ -891,9 +903,6 @@ export class SessionTracker {
     this.pinnedItems = [];
     this.extractedConstraints = [];
     this.fingerprinter.clear();
-    this.activeMeetingId = 'unspecified';
-    this.pendingRestorePromise = null;
-    this.restoreRequestId = 0;
     this.adaptiveWindowStats = {
       calls: 0,
       totalMs: 0,
@@ -901,8 +910,21 @@ export class SessionTracker {
       timeouts: 0,
     };
 
+    if (previousMeetingId && previousMeetingId !== 'unspecified') {
+      this.activeMeetingId = previousMeetingId;
+      persistState(this);
+      try {
+        await this.persistence.flushScheduledSave();
+      } catch {
+        // Ignore persistence flush errors during reset; the in-memory state is already clear.
+      }
+    }
+
     this.pendingCompactionPromise = null;
     this.isCompacting = false;
+    this.activeMeetingId = 'unspecified';
+    this.pendingRestorePromise = null;
+    this.restoreRequestId = 0;
   }
 
   async dispose(): Promise<void> {

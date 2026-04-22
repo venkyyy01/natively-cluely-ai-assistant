@@ -195,6 +195,11 @@ export function buildPersistedSession(tracker: SessionTracker, now: number = Dat
       topic: thread.topic,
       goal: thread.goal,
       suspendedAt: thread.suspendedAt || thread.lastActiveAt,
+      phase: thread.phase,
+      turnCount: thread.turnCount,
+      resumeKeywords: Array.isArray(thread.resumeKeywords) ? [...thread.resumeKeywords] : undefined,
+      keyDecisions: Array.isArray(thread.keyDecisions) ? [...thread.keyDecisions] : undefined,
+      constraints: Array.isArray(thread.constraints) ? [...thread.constraints] : undefined,
     })),
     pinnedItems: t.pinnedItems,
     constraints: t.extractedConstraints,
@@ -215,6 +220,31 @@ export function persistState(tracker: SessionTracker): void {
   if (!t.activeMeetingId || t.activeMeetingId === 'unspecified') return;
   const snapshot = buildPersistedSession(tracker);
   t.persistence.scheduleSave(snapshot);
+}
+
+function clearLiveMeetingScopedState(tracker: SessionTracker): void {
+  const t = tracker as any;
+
+  t.contextItemsBuffer.clear();
+  t.fullTranscript = [];
+  t.fullUsage = [];
+  t.lastAssistantMessage = null;
+  t.assistantResponseHistory = [];
+  t.lastInterimInterviewer = null;
+  t.transcriptEpochSummaries = [];
+  t.consciousThreadStore.reset();
+  t.observedQuestionStore.reset();
+  t.answerHypothesisStore.reset();
+  t.responsePreferenceStore.reset();
+  t.designStateStore.reset();
+  t.consciousSemanticContext = '';
+  t.transcriptRevision = 0;
+  t.contextAssembleCache.clear();
+  t.compactSnapshotCache.clear();
+  t.semanticEmbeddingCache.clear();
+  t.pinnedItems = [];
+  t.extractedConstraints = [];
+  t.fingerprinter.clear();
 }
 
 export async function appendTranscriptEvent(tracker: SessionTracker, segment: TranscriptSegment): Promise<void> {
@@ -299,6 +329,7 @@ export async function restoreFromMeetingId(tracker: SessionTracker, meetingId: s
           turnCount: session.activeThread.turnCount,
         });
       }
+      t.consciousThreadStore.getThreadManager().restoreSuspendedThreads(session.suspendedThreads as any);
       t.consciousThreadStore.restorePersistenceSnapshot(session.consciousState?.threadState);
     }
 
@@ -324,6 +355,10 @@ export function ensureMeetingContext(tracker: SessionTracker, meetingId?: string
   }
   const normalizedMeetingId = meetingId?.trim();
   if (!normalizedMeetingId) return;
+
+  if (normalizedMeetingId !== t.activeMeetingId) {
+    clearLiveMeetingScopedState(tracker);
+  }
 
   t.activeMeetingId = normalizedMeetingId;
   const requestId = ++t.restoreRequestId;

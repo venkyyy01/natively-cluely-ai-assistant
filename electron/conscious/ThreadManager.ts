@@ -11,6 +11,18 @@ import { ConfidenceScorer } from './ConfidenceScorer';
 const MAX_SUSPENDED_THREADS = 3;
 const DEFAULT_TTL_MS = 5 * 60 * 1000; // 5 minutes
 
+export interface SuspendedThreadSnapshot {
+  id: string;
+  topic: string;
+  goal?: string;
+  suspendedAt: number;
+  phase?: InterviewPhase;
+  turnCount?: number;
+  resumeKeywords?: string[];
+  keyDecisions?: string[];
+  constraints?: string[];
+}
+
 function generateThreadId(): string {
   return `thread_${randomUUID()}`;
 }
@@ -231,6 +243,85 @@ export class ThreadManager {
   reset(): void {
     this.activeThread = null;
     this.suspendedThreads = [];
+  }
+
+  restoreSuspendedThreads(snapshots: SuspendedThreadSnapshot[] | null | undefined): void {
+    if (!Array.isArray(snapshots) || snapshots.length === 0) {
+      this.suspendedThreads = [];
+      return;
+    }
+
+    const now = Date.now();
+    const seenIds = new Set<string>();
+    const restored: ConversationThread[] = [];
+
+    for (const snapshot of snapshots) {
+      if (!snapshot || typeof snapshot.id !== 'string' || !snapshot.id.trim()) {
+        continue;
+      }
+
+      const id = snapshot.id.trim();
+      if (seenIds.has(id)) {
+        continue;
+      }
+      seenIds.add(id);
+
+      const topic = typeof snapshot.topic === 'string' && snapshot.topic.trim()
+        ? snapshot.topic.trim()
+        : 'Suspended discussion';
+      const goal = typeof snapshot.goal === 'string' && snapshot.goal.trim()
+        ? snapshot.goal.trim()
+        : `Discuss ${topic}`;
+      const suspendedAt = Number.isFinite(snapshot.suspendedAt)
+        ? Number(snapshot.suspendedAt)
+        : now;
+      const phase = snapshot.phase ?? 'requirements_gathering';
+      const turnCount = Math.max(0, Math.floor(snapshot.turnCount ?? 0));
+      const resumeKeywords = Array.from(new Set([
+        ...extractKeywords(`${topic} ${goal}`),
+        ...((snapshot.resumeKeywords ?? []).filter((keyword) => typeof keyword === 'string' && keyword.trim().length > 0)),
+      ])).slice(0, 64);
+
+      const keyDecisions = (snapshot.keyDecisions ?? [])
+        .filter((decision) => typeof decision === 'string' && decision.trim().length > 0)
+        .map((decision) => decision.trim())
+        .slice(0, 32);
+      const constraints = (snapshot.constraints ?? [])
+        .filter((constraint) => typeof constraint === 'string' && constraint.trim().length > 0)
+        .map((constraint) => constraint.trim())
+        .slice(0, 32);
+
+      restored.push({
+        id,
+        status: 'suspended',
+        topic,
+        goal,
+        phase,
+        keyDecisions,
+        constraints,
+        codeContext: { snippets: [], maxSnippets: 3, totalTokenBudget: 500 },
+        createdAt: suspendedAt,
+        lastActiveAt: suspendedAt,
+        suspendedAt,
+        ttlMs: DEFAULT_TTL_MS,
+        resumeKeywords,
+        turnCount,
+        tokenCount: 0,
+        resumeCount: 0,
+        embedding: this.buildPseudoEmbedding(`${topic} ${goal} ${resumeKeywords.join(' ')}`),
+      });
+    }
+
+    restored.sort((left, right) => {
+      const leftSuspendedAt = left.suspendedAt ?? left.lastActiveAt;
+      const rightSuspendedAt = right.suspendedAt ?? right.lastActiveAt;
+      return rightSuspendedAt - leftSuspendedAt;
+    });
+
+    const activeThreadId = this.activeThread?.id;
+    this.suspendedThreads = restored
+      .filter((thread) => thread.id !== activeThreadId)
+      .slice(0, MAX_SUSPENDED_THREADS);
   }
 
   completeActiveThread(): void {

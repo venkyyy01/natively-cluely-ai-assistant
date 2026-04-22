@@ -209,6 +209,15 @@ export function registerSettingsHandlers({ appState, safeHandle, safeHandleValid
     }
   });
 
+  safeHandle('get-privacy-shield-state', async () => {
+    try {
+      return settingsSuccess(appState.getPrivacyShieldState());
+    } catch (error: any) {
+      console.error('Error getting privacy shield state:', error);
+      return settingsError('SETTINGS_READ_FAILED', error?.message || 'Unable to read Privacy Shield state');
+    }
+  });
+
   safeHandleValidated('set-acceleration-mode', (args) => [parseIpcInput(ipcSchemas.booleanFlag, args[0], 'set-acceleration-mode')] as const, async (_event, enabled) => {
     try {
       const settingsFacade = getSettingsFacade(appState);

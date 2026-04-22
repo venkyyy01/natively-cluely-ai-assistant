@@ -28,6 +28,7 @@ export interface StealthSupervisorOptions {
   nativeBridge?: NativeStealthBridge;
   nativeArmRequest?: NativeStealthArmRequest;
   nativeArmGuard?: () => boolean | Promise<boolean> | { allowed: boolean; reason?: string } | Promise<{ allowed: boolean; reason?: string }>;
+  requireNativeStealth?: (() => Promise<boolean> | boolean) | boolean;
   runtimeHeartbeatStalenessMs?: number;
   now?: () => number;
 }
@@ -71,6 +72,7 @@ export class StealthSupervisor implements ISupervisor {
       startHeartbeat: () => this.startHeartbeat(),
       stopHeartbeat: () => this.stopHeartbeat(),
       armNativeStealth: () => this.armNativeStealth(),
+      requireNativeStealth: options.requireNativeStealth,
       faultNativeStealth: (reason) => this.faultNativeStealth(reason),
     });
   }

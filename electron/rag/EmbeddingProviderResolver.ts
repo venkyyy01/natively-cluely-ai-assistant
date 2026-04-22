@@ -27,6 +27,7 @@ export class EmbeddingProviderResolver {
       const aneProvider = new ANEEmbeddingProvider();
       
       if (!EmbeddingProviderResolver.aneProviderChecked) {
+        await aneProvider.initialize();
         EmbeddingProviderResolver.aneProviderAvailable = await aneProvider.isAvailable();
         EmbeddingProviderResolver.aneProviderChecked = true;
       }

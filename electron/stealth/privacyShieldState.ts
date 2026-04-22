@@ -15,8 +15,11 @@ const CAPTURE_RISK_WARNINGS = new Set([
   'capture_tools_still_running',
   'native_module_unavailable',
   'native_stealth_failed',
+  'private_api_failed',
   'new_screencapture_permission',
   'stealth_verification_failed',
+  'virtual_display_failed',
+  'virtual_display_exhausted',
   'window_visible_to_capture',
 ]);
 

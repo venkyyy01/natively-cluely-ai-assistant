@@ -2061,6 +2061,16 @@ export class IntelligenceEngine extends EventEmitter {
     this.pendingCooldownTriggers.clear();
     this.stealthContainmentActive = false;
     this.activeAuxiliaryRequestId = 0;
+    this.consciousOrchestrator = this.buildConsciousOrchestrator();
+    this.consciousContextComposer = new ConsciousContextComposer();
+    this.consciousIntentService = new ConsciousIntentService();
+    this.consciousPreparationCoordinator = new ConsciousPreparationCoordinator(
+      this.session,
+      this.consciousOrchestrator,
+      this.consciousContextComposer,
+      this.consciousIntentService,
+    );
+    this.consciousResponseFingerprinter.clear();
     this.cancelActiveWhatToSay('reset');
     if (this.assistCancellationToken) {
       this.assistCancellationToken.abort();

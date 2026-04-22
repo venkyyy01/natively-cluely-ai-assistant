@@ -81,6 +81,11 @@ export interface PersistedSession {
     topic: string;
     goal?: string;
     suspendedAt: number;
+    phase?: string;
+    turnCount?: number;
+    resumeKeywords?: string[];
+    keyDecisions?: string[];
+    constraints?: string[];
   }>;
   pinnedItems: Array<{
     id: string;

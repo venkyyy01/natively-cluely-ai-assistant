@@ -134,6 +134,16 @@ export class AccelerationManager {
     console.log('[AccelerationManager] Initialized with acceleration modules');
   }
 
+  activate(): void {
+    this.registerEmbeddingProvider();
+  }
+
+  deactivate(): void {
+    this.clearCaches();
+    this.consciousOrchestrator.setEnabled(false);
+    setEmbeddingProvider(null);
+  }
+
   getPromptCompiler(): PromptCompiler {
     return this.promptCompiler;
   }

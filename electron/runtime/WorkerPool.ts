@@ -151,7 +151,11 @@ export class WorkerPool {
       this.activeWorkers += 1;
       Promise.resolve()
         .then(() => {
-          this.qos.setCurrentThreadQoS(task.qosClass);
+          try {
+            this.qos.setCurrentThreadQoS(task.qosClass);
+          } catch (error) {
+            this.logger.warn(`[WorkerPool] QoS placement failed for lane "${task.lane}", continuing without QoS:`, error);
+          }
           return task.run();
         })
         .then((value) => {

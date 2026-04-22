@@ -193,6 +193,7 @@ onAccelerationModeChanged: (callback: (enabled: boolean) => void) => () => void
 
 
   onUndetectableChanged: (callback: (state: boolean) => void) => () => void
+  getPrivacyShieldState: () => Promise<{ active: boolean; reason: string | null }>
   onPrivacyShieldChanged: (callback: (state: { active: boolean; reason: string | null }) => void) => () => void
   onFastResponseConfigChanged: (callback: (config: FastResponseConfig) => void) => () => void
   onModelChanged: (callback: (modelId: string) => void) => () => void
@@ -818,6 +819,8 @@ setOpenAtLogin: (open: boolean) => invokeStatus("set-open-at-login", open),
       ipcRenderer.removeListener('undetectable-changed', subscription)
     }
   },
+
+  getPrivacyShieldState: () => invokeAndUnwrap<{ active: boolean; reason: string | null }>('get-privacy-shield-state'),
 
   onPrivacyShieldChanged: (callback: (state: { active: boolean; reason: string | null }) => void) => {
     const subscription = (_: any, state: { active: boolean; reason: string | null }) => callback(state)

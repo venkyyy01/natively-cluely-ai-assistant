@@ -31,6 +31,7 @@ import { SettingsWindowHelper } from "../SettingsWindowHelper"
 import { ModelSelectorWindowHelper } from "../ModelSelectorWindowHelper"
 import { ScreenshotHelper } from "../ScreenshotHelper"
 import { KeybindManager } from "../services/KeybindManager"
+import { setActiveAccelerationManager } from "../services/AccelerationManager"
 import { ProcessingHelper } from "../ProcessingHelper"
 import { IntelligenceManager } from "../IntelligenceManager"
 import type { SuggestedAnswerMetadata } from "../IntelligenceEngine"
@@ -571,6 +572,7 @@ this.runtimeCoordinator.registerSupervisor(new StealthSupervisor(
       {
         logger: { warn: console.warn },
         nativeBridge: this.nativeStealthBridge ?? undefined,
+        requireNativeStealth: () => Boolean(this.nativeStealthBridge),
         nativeArmGuard: async () => {
           try {
             const snapshot = await detectExternalScreenShare()
@@ -590,7 +592,7 @@ this.runtimeCoordinator.registerSupervisor(new StealthSupervisor(
             }
           }
         },
-        runtimeHeartbeatStalenessMs: 2000,
+        runtimeHeartbeatStalenessMs: (process.platform !== 'darwin' || process.env.NATIVELY_FORCE_STEALTH_RUNTIME === '1') ? 2000 : 0,
       },
     ))
 
@@ -967,13 +969,20 @@ console.error('[AppState] Failed to initialize RAGManager:', error);
 
 private async initializeAccelerationManager(): Promise<void> {
 try {
-const { AccelerationManager, setActiveAccelerationManager } = await import('../services/AccelerationManager');
+const { AccelerationManager } = await import('../services/AccelerationManager');
 const accelerationManager = new AccelerationManager();
 await accelerationManager.initialize();
-accelerationManager.setConsciousModeEnabled(this.consciousModeEnabled);
 this.accelerationManager = accelerationManager;
+if (SettingsManager.getInstance().getAccelerationModeEnabled()) {
+accelerationManager.setConsciousModeEnabled(this.consciousModeEnabled);
+accelerationManager.activate();
 setActiveAccelerationManager(accelerationManager);
 this.intelligenceManager.attachAccelerationManager(accelerationManager);
+} else {
+accelerationManager.deactivate();
+setActiveAccelerationManager(null);
+this.intelligenceManager.attachAccelerationManager(null);
+}
 console.log('[AppState] AccelerationManager initialized (Apple Silicon enhancement)');
 } catch (error) {
 this.accelerationManager = null;
@@ -2976,15 +2985,35 @@ public setAccelerationModeEnabled(enabled: boolean): boolean {
   }
 
   syncOptimizationFlagsFromSettings(settings.getAccelerationModeEnabled())
+  if (enabled) {
+    if (this.accelerationManager) {
+      this.accelerationManager.setConsciousModeEnabled(this.consciousModeEnabled)
+      this.accelerationManager.activate()
+      setActiveAccelerationManager(this.accelerationManager)
+      this.intelligenceManager.attachAccelerationManager(this.accelerationManager)
+    } else {
+      void this.initializeAccelerationManager().catch((error) => {
+        console.warn('[AppState] Failed to initialize AccelerationManager after enabling acceleration mode:', error)
+      })
+    }
+  } else {
+    this.accelerationManager?.deactivate()
+    setActiveAccelerationManager(null)
+    this.intelligenceManager.attachAccelerationManager(null)
+  }
   this._broadcastToAllWindows('acceleration-mode-changed', enabled)
   return true
 }
 
-public getAccelerationModeEnabled(): boolean {
+  public getAccelerationModeEnabled(): boolean {
   return SettingsManager.getInstance().getAccelerationModeEnabled()
-}
+  }
 
-public setDisguise(mode: 'terminal' | 'settings' | 'activity' | 'none'): void {
+  public getPrivacyShieldState(): PrivacyShieldState {
+    return this.privacyShieldState
+  }
+
+  public setDisguise(mode: 'terminal' | 'settings' | 'activity' | 'none'): void {
     this.disguiseMode = mode;
     SettingsManager.getInstance().set('disguiseMode', mode);
 

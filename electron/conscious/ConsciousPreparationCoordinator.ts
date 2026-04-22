@@ -123,6 +123,11 @@ export class ConsciousPreparationCoordinator {
         result.push(block.text);
         remainingBudget -= block.tokens;
       } else if (remainingBudget > 32) {
+        if (/^<conscious_answer_plan>/i.test(block.text)) {
+          // Keep structural plan blocks atomic so consumers never receive
+          // malformed pseudo-XML fragments.
+          continue;
+        }
         // Partial trim: use character-ratio approximation guided by token ratio
         const ratio = remainingBudget / Math.max(block.tokens, 1);
         const charLimit = Math.floor(block.text.length * ratio);

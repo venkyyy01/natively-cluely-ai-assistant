@@ -41,9 +41,35 @@ test('PrivacyShieldState activates on stealth faults until protection is restore
   );
 });
 
-test('PrivacyShieldState ignores non-capture degradation warnings', () => {
+test('PrivacyShieldState activates for enhanced stealth degradation warnings', () => {
   assert.deepEqual(
     derivePrivacyShieldState({ warnings: ['private_api_failed'] }),
+    {
+      active: true,
+      reason: 'Sensitive content hidden while capture risk is detected.',
+    },
+  );
+
+  assert.deepEqual(
+    derivePrivacyShieldState({ warnings: ['virtual_display_failed'] }),
+    {
+      active: true,
+      reason: 'Sensitive content hidden while capture risk is detected.',
+    },
+  );
+
+  assert.deepEqual(
+    derivePrivacyShieldState({ warnings: ['virtual_display_exhausted'] }),
+    {
+      active: true,
+      reason: 'Sensitive content hidden while capture risk is detected.',
+    },
+  );
+});
+
+test('PrivacyShieldState ignores unrelated non-capture warnings', () => {
+  assert.deepEqual(
+    derivePrivacyShieldState({ warnings: ['unrelated_warning'] }),
     {
       active: false,
       reason: null,

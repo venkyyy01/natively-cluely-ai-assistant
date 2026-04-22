@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 
 const helperPath = path.resolve(__dirname, '../../src/lib/electronApi.ts');
+const preloadApiPath = path.resolve(__dirname, '../../electron/preload/api.ts');
 const generalSettingsPath = path.resolve(__dirname, '../../src/components/settings/GeneralSettingsSection.tsx');
 const settingsPopupPath = path.resolve(__dirname, '../../src/components/SettingsPopup.tsx');
 const launcherPath = path.resolve(__dirname, '../../src/components/Launcher.tsx');
@@ -33,4 +34,12 @@ test('meeting start paths use the guarded Electron bridge helper', () => {
 
   expect(launcherSource).toContain("requireElectronMethod('startMeeting')");
   expect(appSource).toContain("requireElectronMethod('startMeeting')");
+});
+
+test('privacy shield state is exposed through preload and hydrated on app boot', () => {
+  const preloadSource = fs.readFileSync(preloadApiPath, 'utf8');
+  const appSource = fs.readFileSync(appPath, 'utf8');
+
+  expect(preloadSource).toContain('getPrivacyShieldState');
+  expect(appSource).toContain('electronAPI.getPrivacyShieldState?.()');
 });

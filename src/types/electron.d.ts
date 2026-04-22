@@ -257,6 +257,7 @@ setDisguise: (mode: 'terminal' | 'settings' | 'activity' | 'none') => Promise<St
   flushDatabase: () => Promise<{ success: boolean }>;
 
   onUndetectableChanged: (callback: (state: boolean) => void) => () => void;
+  getPrivacyShieldState: () => Promise<{ active: boolean; reason: string | null }>;
   onPrivacyShieldChanged: (callback: (state: { active: boolean; reason: string | null }) => void) => () => void;
   onFastResponseConfigChanged: (callback: (config: FastResponseConfig) => void) => () => void;
   onModelChanged: (callback: (modelId: string) => void) => () => void;

@@ -47,12 +47,16 @@ test('StealthSupervisor arms and disarms through the delegate while emitting sta
   ]);
 });
 
-test('StealthSupervisor skips native helper arm when guard detects active screen sharing', async () => {
+test('StealthSupervisor fails closed when required native helper arm is skipped by the arm guard', async () => {
   const calls: boolean[] = [];
+  const faultReasons: string[] = [];
   const skippedReasons: string[] = [];
   let nativeArmCalls = 0;
   const bus = createBus();
 
+  bus.subscribe('stealth:fault', async (event) => {
+    faultReasons.push(event.reason);
+  });
   bus.subscribe('stealth:native-arm-skipped', async (event) => {
     skippedReasons.push(event.reason);
   });
@@ -76,16 +80,18 @@ test('StealthSupervisor skips native helper arm when guard detects active screen
         fault: async () => {},
       } as unknown as import('../stealth/NativeStealthBridge').NativeStealthBridge,
       nativeArmGuard: () => ({ allowed: false, reason: 'screen-capture-agent-with-meeting-app' }),
+      requireNativeStealth: true,
       heartbeatIntervalMs: 0,
     },
   );
 
   await supervisor.start();
-  await supervisor.setEnabled(true);
+  await assert.rejects(() => supervisor.setEnabled(true), /native stealth helper did not arm/);
 
-  assert.equal(supervisor.getStealthState(), 'FULL_STEALTH');
-  assert.deepEqual(calls, [true]);
+  assert.equal(supervisor.getStealthState(), 'FAULT');
+  assert.deepEqual(calls, []);
   assert.equal(nativeArmCalls, 0);
+  assert.deepEqual(faultReasons, ['native stealth helper did not arm']);
   assert.deepEqual(skippedReasons, ['screen-capture-agent-with-meeting-app']);
 });
 
