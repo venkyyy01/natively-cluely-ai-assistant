@@ -1,22 +1,30 @@
 import React from "react"
 import ReactDOM from "react-dom/client"
 import App from "./App"
+import { getOptionalElectronMethod, installElectronApiGuard } from "./lib/electronApi"
 import "./index.css"
 
+installElectronApiGuard()
+
 // Initialize Theme
-if (window.electronAPI && window.electronAPI.getThemeMode) {
-  window.electronAPI.getThemeMode().then(({ resolved }) => {
+const getThemeMode = getOptionalElectronMethod('getThemeMode')
+const onThemeChanged = getOptionalElectronMethod('onThemeChanged')
+
+if (getThemeMode) {
+  getThemeMode().then(({ resolved }) => {
     document.documentElement.setAttribute('data-theme', resolved);
   });
 
   // Listen for changes
-  window.electronAPI.onThemeChanged(({ resolved }) => {
+  onThemeChanged?.(({ resolved }) => {
     document.documentElement.setAttribute('data-theme', resolved);
   });
 }
 
+const logErrorToMain = getOptionalElectronMethod('logErrorToMain')
+
 window.addEventListener("error", (event) => {
-  void window.electronAPI?.logErrorToMain?.({
+  void logErrorToMain?.({
     type: "window-error",
     message: event.message,
     filename: event.filename,
@@ -28,7 +36,7 @@ window.addEventListener("error", (event) => {
 
 window.addEventListener("unhandledrejection", (event) => {
   const reason = event.reason
-  void window.electronAPI?.logErrorToMain?.({
+  void logErrorToMain?.({
     type: "unhandled-rejection",
     message: reason?.message ?? String(reason),
     stack: reason?.stack,

@@ -3,6 +3,7 @@ import { Brain, MessageSquare, Camera, Zap, User } from 'lucide-react';
 import { useShortcuts } from '../hooks/useShortcuts';
 import { analytics } from '../lib/analytics/analytics.service';
 import { SESSION_MENU_TOGGLE_ORDER } from '../lib/consciousModeSettings';
+import { requireElectronMethod } from '../lib/electronApi';
 import type { FastResponseConfig } from '../../shared/ipc';
 
 const SettingsPopup = () => {
@@ -195,7 +196,11 @@ const [showTranscript, setShowTranscript] = useState(() => {
                             const newState = !isUndetectable;
                             setIsUndetectable(newState);
                             localStorage.setItem('natively_undetectable', String(newState));
-                            window.electronAPI?.setUndetectable(newState);
+                            const setUndetectable = requireElectronMethod('setUndetectable');
+                            void setUndetectable(newState).catch((error) => {
+                                console.error('[SettingsPopup] Failed to toggle undetectable mode:', error);
+                                setIsUndetectable(!newState);
+                            });
                         }}
                         className={`w-[30px] h-[18px] rounded-full p-[1.5px] transition-all duration-300 ease-spring active:scale-[0.92] ${isUndetectable ? 'bg-white shadow-[0_2px_8px_rgba(255,255,255,0.2)]' : 'bg-white/10'}`}
                     >
@@ -269,7 +274,8 @@ const [showTranscript, setShowTranscript] = useState(() => {
                             setConsciousModeEnabled(nextState);
 
                             try {
-                                const result = await window.electronAPI?.setConsciousMode(nextState);
+                                const setConsciousMode = requireElectronMethod('setConsciousMode');
+                                const result = await setConsciousMode(nextState);
                                 if (!result?.success) {
                                     throw new Error(result?.error?.message || 'Unable to persist Conscious Mode');
                                 }

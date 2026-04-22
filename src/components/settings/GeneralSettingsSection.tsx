@@ -22,6 +22,7 @@ import {
   Zap,
 } from 'lucide-react';
 import { analytics } from '../../lib/analytics/analytics.service';
+import { requireElectronMethod } from '../../lib/electronApi';
 
 const DISGUISE_OPTIONS: Array<{
   id: 'none' | 'terminal' | 'settings' | 'activity';
@@ -142,7 +143,8 @@ export const GeneralSettingsSection: React.FC<GeneralSettingsSectionProps> = ({
               const newState = !isUndetectable;
               setIsUndetectable(newState);
               try {
-                const result = await window.electronAPI?.setUndetectable(newState);
+                const setUndetectable = requireElectronMethod('setUndetectable');
+                const result = await setUndetectable(newState);
                 if (!result?.success) {
                   throw new Error(result?.error || 'Unable to update stealth mode');
                 }
@@ -267,7 +269,8 @@ onClick={async () => {
 const newState = !consciousModeEnabled;
 setConsciousModeEnabled(newState);
 try {
-const result = await window.electronAPI?.setConsciousMode(newState);
+const setConsciousMode = requireElectronMethod('setConsciousMode');
+const result = await setConsciousMode(newState);
 if (result && !result.success) {
 throw new Error(result.error?.message || 'Unable to update conscious mode');
 }

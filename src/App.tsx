@@ -19,7 +19,7 @@ import {
   type AppWindowContext,
 } from './appBootstrap'
 import { analytics } from './lib/analytics/analytics.service'
-import { getElectronAPI } from './lib/electronApi'
+import { getElectronAPI, getOptionalElectronMethod, requireElectronMethod } from './lib/electronApi'
 
 const queryClient = new QueryClient()
 
@@ -414,9 +414,10 @@ const App: React.FC = () => {
   }, [electronAPI, windowKind])
 
   const handleReindex = async () => {
-    if (window.electronAPI?.reindexIncompatibleMeetings) {
+    const reindexIncompatibleMeetings = getOptionalElectronMethod('reindexIncompatibleMeetings')
+    if (reindexIncompatibleMeetings) {
       setIncompatibleWarning(null)
-      await window.electronAPI.reindexIncompatibleMeetings()
+      await reindexIncompatibleMeetings()
     }
   }
 
@@ -435,13 +436,15 @@ const App: React.FC = () => {
         console.log('[App] Using CoreAudio backend (Default).')
       }
 
-      const result = await window.electronAPI.startMeeting({
+      const startMeeting = requireElectronMethod('startMeeting')
+
+      const result = await startMeeting({
         audio: { inputDeviceId, outputDeviceId }
       })
 
       if (result.success) {
         analytics.trackMeetingStarted()
-        await window.electronAPI.setWindowMode('overlay')
+        await electronAPI.setWindowMode('overlay')
       } else {
         console.error('Failed to start meeting:', result.error)
         setMeetingAudioError(result.error || 'Audio pipeline failed to start.')
@@ -459,7 +462,7 @@ const App: React.FC = () => {
     setMeetingAudioError(null)
 
     try {
-      await window.electronAPI.endMeeting()
+      await electronAPI.endMeeting()
       console.log('[App.tsx] endMeeting IPC completed')
 
       const startStr = localStorage.getItem('natively_last_meeting_start')
@@ -473,10 +476,10 @@ const App: React.FC = () => {
         localStorage.removeItem('natively_last_meeting_start')
       }
 
-      await window.electronAPI.setWindowMode('launcher')
+      await electronAPI.setWindowMode('launcher')
     } catch (err) {
       console.error('Failed to end meeting:', err)
-      window.electronAPI.setWindowMode('launcher')
+      electronAPI.setWindowMode('launcher')
     }
   }
 
