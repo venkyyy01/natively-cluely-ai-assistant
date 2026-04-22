@@ -510,9 +510,13 @@ else
         info "Fresh install — this may take a few minutes..."
     fi
 
-    run_with_spinner "syncing npm dependency matrix" "${INSTALL_COMMAND[@]}"
-    success "Dependencies installed"
+  run_with_spinner "syncing npm dependency matrix" "${INSTALL_COMMAND[@]}"
+  success "Dependencies installed"
 fi
+
+# Ensure native dependencies match the target architecture
+run_with_spinner "verifying native dependencies for ${BUILD_ARCH}" node scripts/ensure-electron-native-deps.js
+success "Native dependencies ready for ${BUILD_ARCH}"
 
 # ╔═══════════════════════════════════════════════════════════════════╗
 # ║ Step 4: Run Quality Gates                                        
