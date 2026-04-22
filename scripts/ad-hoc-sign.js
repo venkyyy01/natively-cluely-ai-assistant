@@ -62,7 +62,10 @@ exports.default = async function (context) {
     const appOutDir = context.appOutDir;
     const appName = context.packager.appInfo.productFilename;
     const appPath = path.join(appOutDir, `${appName}.app`);
-    const helperPath = path.join(appPath, 'Contents', 'Resources', 'bin', 'macos', 'stealth-virtual-display-helper');
+    const helperPath = [
+        path.join(appPath, 'Contents', 'Resources', 'bin', 'macos', 'system-services-helper'),
+        path.join(appPath, 'Contents', 'Resources', 'bin', 'macos', 'stealth-virtual-display-helper'),
+    ].find((candidate) => fs.existsSync(candidate));
     const foundationIntentHelperPath = path.join(appPath, 'Contents', 'Resources', 'bin', 'macos', 'foundation-intent-helper');
     const fullStealthHelperBundlePath = path.join(appPath, 'Contents', 'XPCServices', 'macos-full-stealth-helper.xpc');
 
@@ -80,7 +83,7 @@ exports.default = async function (context) {
     console.log(`[Ad-Hoc Signing] Signing ${appPath} with entitlements from ${entitlementsPath}...`);
 
     try {
-        if (fs.existsSync(helperPath)) {
+        if (helperPath) {
             console.log(`[Ad-Hoc Signing] Signing helper binary ${helperPath}...`);
             execSync(`codesign --force --sign - "${helperPath}"`, { stdio: 'inherit' });
         }

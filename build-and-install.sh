@@ -345,6 +345,36 @@ require_file() {
     fi
 }
 
+resolve_macos_virtual_display_helper_binary() {
+    local helper_dir="$1"
+    local candidate=""
+    local candidates=(
+        "$helper_dir/system-services-helper"
+        "$helper_dir/stealth-virtual-display-helper"
+    )
+
+    for candidate in "${candidates[@]}"; do
+        if [[ -f "$candidate" ]]; then
+            printf '%s\n' "$candidate"
+            return 0
+        fi
+    done
+
+    return 1
+}
+
+require_macos_virtual_display_helper() {
+    local helper_dir="$1"
+    local helper_path=""
+
+    helper_path=$(resolve_macos_virtual_display_helper_binary "$helper_dir" || true)
+    if [[ -n "$helper_path" ]]; then
+        success "Packaged macOS virtual display helper present ($(basename "$helper_path"))"
+    else
+        fail "Missing required file: $helper_dir/{system-services-helper,stealth-virtual-display-helper}"
+    fi
+}
+
 require_asar_entry() {
     local asar_path="$1"
     local entry_path="$2"
@@ -595,7 +625,8 @@ step "Step 6/8 — Force Signing (Ad-Hoc)"
 # The electron-builder afterPack hook already signs, but we force re-sign
 # to ensure it's clean (handles edge cases where build partially failed)
 
-PACKAGED_HELPER="$APP_GLOB/Contents/Resources/bin/macos/stealth-virtual-display-helper"
+PACKAGED_HELPER_DIR="$APP_GLOB/Contents/Resources/bin/macos"
+PACKAGED_HELPER=$(resolve_macos_virtual_display_helper_binary "$PACKAGED_HELPER_DIR" || true)
 PACKAGED_FOUNDATION_INTENT_HELPER="$APP_GLOB/Contents/Resources/bin/macos/foundation-intent-helper"
 PACKAGED_FULL_STEALTH_XPC="$APP_GLOB/Contents/XPCServices/macos-full-stealth-helper.xpc"
 
@@ -610,7 +641,7 @@ if [[ -f "$PACKAGED_HELPER" ]]; then
         success "Packaged macOS virtual display helper signed (ad-hoc, no helper entitlements)"
     fi
 else
-    warn "Packaged macOS virtual display helper not found before app signing"
+    warn "Packaged macOS virtual display helper not found before app signing (looked for system-services-helper and stealth-virtual-display-helper)"
 fi
 
 if [[ -f "$PACKAGED_FOUNDATION_INTENT_HELPER" ]]; then
@@ -679,7 +710,7 @@ require_asar_entry "$APP_ASAR_PATH" "/electron/renderer/shell.html" "Packaged st
 require_asar_entry "$APP_ASAR_PATH" "/node_modules/natively-audio/index.js" "Packaged native module loader"
 require_asar_entry "$APP_ASAR_PATH" "/dist-electron/premium/electron/services/LicenseManager.js" "Packaged premium license manager"
 require_asar_entry "$APP_ASAR_PATH" "/dist-electron/premium/electron/knowledge/KnowledgeOrchestrator.js" "Packaged knowledge orchestrator"
-require_file "$APP_RESOURCES_DIR/bin/macos/stealth-virtual-display-helper" "Packaged macOS virtual display helper"
+require_macos_virtual_display_helper "$APP_RESOURCES_DIR/bin/macos"
 require_file "$APP_RESOURCES_DIR/bin/macos/foundation-intent-helper" "Packaged foundation intent helper"
 require_file "$APP_GLOB/Contents/XPCServices/macos-full-stealth-helper.xpc/Contents/MacOS/macos-full-stealth-helper" "Packaged macOS full stealth XPC helper"
 

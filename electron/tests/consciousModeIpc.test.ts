@@ -120,7 +120,9 @@ async function loadPreloadModule() {
   };
 
   const preloadModulePath = require.resolve('../preload');
+  const preloadApiModulePath = require.resolve('../preload/api');
   delete require.cache[preloadModulePath];
+  delete require.cache[preloadApiModulePath];
   await import('../preload');
 
   return {
