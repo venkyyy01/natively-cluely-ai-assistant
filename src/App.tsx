@@ -32,6 +32,22 @@ const AppProviders: React.FC<{ children: React.ReactNode }> = ({ children }) => 
   </QueryClientProvider>
 )
 
+const RendererStartupFallback: React.FC<{ errorMessage: string }> = ({ errorMessage }) => (
+  <div className="flex h-full min-h-0 w-full items-center justify-center bg-[#050505] px-6">
+    <div className="w-full max-w-lg rounded-3xl border border-white/10 bg-[#111111] p-6 text-left shadow-2xl">
+      <p className="text-xs font-semibold uppercase tracking-[0.28em] text-[#8A8A8A]">Startup Error</p>
+      <h1 className="mt-3 text-2xl font-semibold text-white">Renderer startup failed</h1>
+      <p className="mt-3 text-sm leading-6 text-[#B5B5B5]">
+        The Electron preload bridge did not initialize, so the UI cannot finish booting. Restart the app.
+        If this keeps happening, the preload script or startup shell is failing before the renderer is ready.
+      </p>
+      <code className="mt-4 block overflow-x-auto rounded-2xl border border-[#ff3333]/20 bg-[#1A1A1A] px-4 py-3 text-xs text-[#ff7b7b]">
+        {errorMessage}
+      </code>
+    </div>
+  </div>
+)
+
 const getStoredAudioDeviceId = (storageKey: string, fallback = 'default'): string => {
   const value = localStorage.getItem(storageKey)?.trim()
   return value && value.length > 0 ? value : fallback
@@ -327,6 +343,20 @@ const App: React.FC = () => {
 
   useWindowAnalytics(windowContext)
 
+  const { api: electronAPI, error: electronBridgeError } = useMemo(() => {
+    try {
+      return {
+        api: getElectronAPI(),
+        error: null as Error | null,
+      }
+    } catch (error) {
+      return {
+        api: null,
+        error: error instanceof Error ? error : new Error(String(error)),
+      }
+    }
+  }, [])
+
   const [showStartup, setShowStartup] = useState(true)
   const [isSettingsOpen, setIsSettingsOpen] = useState(false)
   const [settingsInitialTab, setSettingsInitialTab] = useState('general')
@@ -346,9 +376,12 @@ const App: React.FC = () => {
   const [incompatibleWarning, setIncompatibleWarning] = useState<{ count: number; oldProvider: string; newProvider: string } | null>(null)
   const [meetingAudioError, setMeetingAudioError] = useState<string | null>(null)
   const [privacyShieldState, setPrivacyShieldState] = useState<PrivacyShieldState>({ active: false, reason: null })
-  const electronAPI = getElectronAPI()
 
   useEffect(() => {
+    if (!electronAPI) {
+      return
+    }
+
     localStorage.removeItem('useLegacyAudioBackend')
 
     const removeMeetingsListener = electronAPI.onMeetingsUpdated(() => {
@@ -406,7 +439,7 @@ const App: React.FC = () => {
   }, [electronAPI])
 
   useEffect(() => {
-    if (!shouldListenForOverlayOpacity(windowContext)) return
+    if (!electronAPI || !shouldListenForOverlayOpacity(windowContext)) return
 
     const removeOpacityListener = electronAPI.onOverlayOpacityChanged?.((opacity) => {
       setOverlayOpacity(opacity)
@@ -426,6 +459,11 @@ const App: React.FC = () => {
   }
 
   const handleStartMeeting = async () => {
+    if (!electronAPI) {
+      setMeetingAudioError(electronBridgeError?.message ?? 'Electron API bridge is unavailable')
+      return
+    }
+
     try {
       setMeetingAudioError(null)
       localStorage.setItem('natively_last_meeting_start', Date.now().toString())
@@ -460,6 +498,10 @@ const App: React.FC = () => {
   }
 
   const handleEndMeeting = async () => {
+    if (!electronAPI) {
+      return
+    }
+
     console.log('[App.tsx] handleEndMeeting triggered')
     analytics.trackMeetingEnded()
     setIsProcessingMeeting(true)
@@ -485,6 +527,14 @@ const App: React.FC = () => {
       console.error('Failed to end meeting:', err)
       electronAPI.setWindowMode('launcher')
     }
+  }
+
+  if (!electronAPI) {
+    return (
+      <RendererStartupFallback
+        errorMessage={electronBridgeError?.message ?? 'Electron API bridge is unavailable'}
+      />
+    )
   }
 
   if (windowKind === 'settings') {

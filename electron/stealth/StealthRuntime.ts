@@ -42,6 +42,7 @@ interface StealthRuntimeOptions {
   ipcMain?: Pick<typeof ipcMain, 'on' | 'removeListener'>;
   onFault: (reason: string) => void | Promise<void>;
   onHeartbeat?: () => void | Promise<void>;
+  onFirstFrame?: () => void | Promise<void>;
 }
 
 export class StealthRuntime {
@@ -55,6 +56,7 @@ export class StealthRuntime {
   private readonly ipcMain: Pick<typeof ipcMain, 'on' | 'removeListener'>;
   private readonly onFault?: (reason: string) => void | Promise<void>;
   private readonly onHeartbeat?: () => void | Promise<void>;
+  private readonly onFirstFrame?: () => void | Promise<void>;
   private readonly frameBridge: FrameBridge;
   private readonly inputBridge = new InputBridge();
   private contentWindow: BrowserWindow | null = null;
@@ -62,6 +64,9 @@ export class StealthRuntime {
   private boundInputHandler: ((event: IpcMainEvent, payload: StealthInputEvent) => void) | null = null;
   private boundReadyHandler: ((event: IpcMainEvent) => void) | null = null;
   private boundHeartbeatHandler: ((event: IpcMainEvent) => void) | null = null;
+  private firstFrameReceived = false;
+  private showRequestedBeforeFirstFrame = false;
+  private firstFrameTimeout: NodeJS.Timeout | null = null;
 
   constructor(options: StealthRuntimeOptions) {
     this.stealthManager = options.stealthManager;
@@ -77,9 +82,29 @@ export class StealthRuntime {
     this.ipcMain = options.ipcMain ?? ipcMain;
     this.onFault = options.onFault;
     this.onHeartbeat = options.onHeartbeat;
+    this.onFirstFrame = options.onFirstFrame;
     this.frameBridge = new FrameBridge({
       target: {
         send: (channel, payload) => {
+          if (channel === 'stealth-shell:frame' && !this.firstFrameReceived) {
+            this.firstFrameReceived = true;
+            if (this.firstFrameTimeout) {
+              clearTimeout(this.firstFrameTimeout);
+              this.firstFrameTimeout = null;
+            }
+            this.logger.log('[StealthRuntime] First frame received by shell');
+
+            if (this.showRequestedBeforeFirstFrame && this.shellWindow && !this.shellWindow.isDestroyed()) {
+              this.showRequestedBeforeFirstFrame = false;
+              this.shellWindow.show();
+              this.shellWindow.focus();
+            }
+
+            Promise.resolve(this.onFirstFrame?.()).catch((error) => {
+              this.logger.warn('[StealthRuntime] Failed to propagate first-frame event:', error);
+            });
+          }
+
           this.shellWindow?.webContents.send(channel, payload);
         },
       },
@@ -153,6 +178,8 @@ export class StealthRuntime {
     }
 
     this.contentWindow = contentWindow;
+    this.firstFrameReceived = false;
+    this.showRequestedBeforeFirstFrame = false;
     this.frameBridge.attach(this.contentWindow.webContents as unknown as Parameters<FrameBridge['attach']>[0]);
     this.bindShellEvents();
 
@@ -210,25 +237,13 @@ export class StealthRuntime {
       this.handleContentCrash(`content-render-gone:${details.reason}`);
     });
 
-    let frameReceived = false;
-    const originalAttach = this.frameBridge.attach.bind(this.frameBridge);
-    this.frameBridge.attach = (source) => {
-      originalAttach(source);
-      const originalSend = this.frameBridge['target'].send.bind(this.frameBridge['target']);
-      this.frameBridge['target'].send = (channel, payload) => {
-        if (channel === 'stealth-shell:frame' && !frameReceived) {
-          frameReceived = true;
-          this.logger.log('[StealthRuntime] First frame received by shell');
-        }
-        originalSend(channel, payload);
-      };
-    };
-
-    setTimeout(() => {
-      if (!frameReceived) {
+    this.firstFrameTimeout = setTimeout(() => {
+      if (!this.firstFrameReceived) {
         this.logger.warn('[StealthRuntime] No frames received after 10s - content window may have failed to load');
+        this.emitFault('content-first-frame-timeout');
       }
     }, 10000);
+    this.firstFrameTimeout.unref?.();
 
     this.shellWindow.on('resize', () => this.syncBounds());
     this.shellWindow.on('move', () => this.syncBounds());
@@ -248,8 +263,16 @@ export class StealthRuntime {
     return this.contentWindow;
   }
 
+  hasReceivedFirstFrame(): boolean {
+    return this.firstFrameReceived;
+  }
+
   show(): void {
     if (!this.shellWindow || this.shellWindow.isDestroyed()) {
+      return;
+    }
+    if (!this.firstFrameReceived) {
+      this.showRequestedBeforeFirstFrame = true;
       return;
     }
     this.shellWindow.show();
@@ -262,6 +285,10 @@ export class StealthRuntime {
 
   destroy(): void {
     this.frameBridge.detach();
+    if (this.firstFrameTimeout) {
+      clearTimeout(this.firstFrameTimeout);
+      this.firstFrameTimeout = null;
+    }
     if (this.boundInputHandler) {
       this.ipcMain.removeListener('stealth-shell:input', this.boundInputHandler);
       this.boundInputHandler = null;
@@ -282,6 +309,8 @@ export class StealthRuntime {
     }
     this.contentWindow = null;
     this.shellWindow = null;
+    this.firstFrameReceived = false;
+    this.showRequestedBeforeFirstFrame = false;
   }
 
   syncBounds(): void {

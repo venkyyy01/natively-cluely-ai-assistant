@@ -1,6 +1,7 @@
 import React from "react"
 import ReactDOM from "react-dom/client"
 import App from "./App"
+import { ErrorBoundary } from "./components/ErrorBoundary"
 import { getOptionalElectronMethod, installElectronApiGuard } from "./lib/electronApi"
 import "./index.css"
 
@@ -45,6 +46,8 @@ window.addEventListener("unhandledrejection", (event) => {
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
-    <App />
+    <ErrorBoundary context="AppBootstrap">
+      <App />
+    </ErrorBoundary>
   </React.StrictMode>
 )

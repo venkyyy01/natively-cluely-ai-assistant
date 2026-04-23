@@ -296,6 +296,11 @@ export class WindowHelper {
           onHeartbeat: () => {
             this.stealthHeartbeatListener?.()
           },
+          onFirstFrame: () => {
+            if (this.currentWindowMode === 'launcher') {
+              this.switchToLauncher()
+            }
+          },
         })
         this.launcherWindow = this.launcherRuntime.createPrimaryStealthSurface(launcherSettings) as BrowserWindow
         this.launcherContentWindow = this.launcherRuntime.getContentWindow()
@@ -372,6 +377,11 @@ export class WindowHelper {
           onHeartbeat: () => {
             this.stealthHeartbeatListener?.()
           },
+          onFirstFrame: () => {
+            if (this.currentWindowMode === 'overlay' && this.isWindowVisible) {
+              this.switchToOverlay()
+            }
+          },
         })
         this.overlayWindow = this.overlayRuntime.createPrimaryStealthSurface(overlaySettings) as BrowserWindow
         this.overlayContentWindow = this.overlayRuntime.getContentWindow()
@@ -401,10 +411,14 @@ export class WindowHelper {
       this.overlayWindow.setAlwaysOnTop(true, "floating")
     }
     this.setOverlayClickthrough(this.overlayClickthroughEnabled)
-    this.launcherWindow.once('ready-to-show', () => {
-      this.switchToLauncher()
-      this.isWindowVisible = true
-    })
+    if (this.launcherRuntime) {
+      console.log('[WindowHelper] Waiting for first launcher frame before showing stealth shell');
+    } else {
+      this.launcherWindow.once('ready-to-show', () => {
+        this.switchToLauncher()
+        this.isWindowVisible = true
+      })
+    }
 
     this.setupWindowListeners()
   }

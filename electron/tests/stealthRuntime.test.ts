@@ -124,7 +124,7 @@ test('StealthRuntime ignores shell events from unrelated senders and cleans up s
   runtime.destroy();
   runtime.destroy();
 
-  assert.equal(created[1]?.shown, true);
+  assert.equal(created[1]?.shown, false);
   assert.equal(created[1]?.hidden, true);
 });
 
@@ -215,6 +215,52 @@ test('StealthRuntime forwards shell runtime heartbeat signals through onHeartbea
   await new Promise((resolve) => setImmediate(resolve));
 
   assert.deepEqual(heartbeats, ['tick', 'tick']);
+});
+
+test('StealthRuntime defers shell visibility until the first content frame arrives', async () => {
+  const created: FakeWindow[] = [];
+  let firstFrameCount = 0;
+
+  const runtime = new StealthRuntime({
+    startUrl: 'http://localhost:5180?window=launcher',
+    stealthManager: { applyToWindow() {} } as never,
+    createWindow: (options) => {
+      const win = new FakeWindow(created.length + 81, options as Record<string, unknown>);
+      created.push(win);
+      return win as never;
+    },
+    shellHtmlPath: '/tmp/shell.html',
+    preloadPath: '/tmp/preload.js',
+    shellPreloadPath: '/tmp/shellPreload.js',
+    ipcMain: new EventEmitter() as never,
+    logger: { log() {}, warn() {}, error() {} },
+    onFault: () => {},
+    onFirstFrame: () => {
+      firstFrameCount += 1;
+    },
+  });
+
+  runtime.createPrimaryStealthSurface({ width: 100, height: 100, webPreferences: {} });
+  runtime.show();
+
+  assert.equal(created[1]?.shown, false);
+  assert.equal(runtime.hasReceivedFirstFrame(), false);
+
+  created[0]?.webContents.emit(
+    'paint',
+    {},
+    { x: 0, y: 0, width: 100, height: 100 },
+    {
+      toPNG: () => Buffer.from('frame'),
+      getSize: () => ({ width: 100, height: 100 }),
+    },
+  );
+
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(runtime.hasReceivedFirstFrame(), true);
+  assert.equal(firstFrameCount, 1);
+  assert.equal(created[1]?.shown, true);
 });
 
 test('StealthRuntime uses loadURL for packaged file targets so query params survive', () => {
