@@ -18,7 +18,7 @@ export interface StealthDelegate {
 
 export interface StealthSupervisorOptions {
   bus?: SupervisorBus;
-  logger?: Pick<Console, 'warn'>;
+  logger?: Pick<Console, 'log' | 'warn' | 'error'>;
   verifier?: () => boolean | Promise<boolean>;
   startHeartbeat?: () => Promise<void> | void;
   stopHeartbeat?: () => Promise<void> | void;
@@ -50,6 +50,13 @@ export class StealthSupervisor implements ISupervisor {
   private heartbeatHandle: unknown = null;
   private heartbeatCheckInFlight = false;
   private lastRuntimeHeartbeatAt: number | null = null;
+
+  // S-3: Fault cooldown tracking to prevent thrash loops
+  private faultTimestamps: number[] = [];
+  private faultLoopDetected = false;
+  private static readonly FAULT_COOLDOWN_MS = 5000;
+  private static readonly MAX_RAPID_FAULTS = 3;
+  private static readonly FAULT_WINDOW_MS = 60000;
 
   constructor(
     private readonly delegate: StealthDelegate,
@@ -153,8 +160,38 @@ export class StealthSupervisor implements ISupervisor {
     }
   }
 
+  private canRearmAfterFault(): boolean {
+    // S-3: Prevent thrash loops with cooldown and fault window tracking
+    if (this.faultLoopDetected) {
+      return false;
+    }
+
+    const now = this.now();
+    this.faultTimestamps = this.faultTimestamps.filter(t => now - t < StealthSupervisor.FAULT_WINDOW_MS);
+
+    if (this.faultTimestamps.length >= StealthSupervisor.MAX_RAPID_FAULTS) {
+      this.options.logger?.error('[StealthSupervisor] Too many rapid faults, refusing re-arm');
+      this.faultLoopDetected = true;
+      void this.bus.emit({ type: 'stealth:fault-loop-detected', reason: 'max-rapid-faults-exceeded' });
+      return false;
+    }
+
+    const lastFault = this.faultTimestamps[this.faultTimestamps.length - 1];
+    if (lastFault && now - lastFault < StealthSupervisor.FAULT_COOLDOWN_MS) {
+      return false;
+    }
+
+    return true;
+  }
+
   private async armStealth(): Promise<void> {
     if (!canArmStealth(this.stealthState)) {
+      return;
+    }
+
+    // S-3: Check fault cooldown before re-arming from FAULT state
+    if (this.stealthState === 'FAULT' && !this.canRearmAfterFault()) {
+      this.options.logger?.warn('[StealthSupervisor] Re-arm blocked due to fault cooldown or fault loop');
       return;
     }
 
@@ -205,6 +242,10 @@ export class StealthSupervisor implements ISupervisor {
 
   private async failClosed(error: unknown): Promise<void> {
     const reason = error instanceof Error ? error.message : String(error);
+
+    // S-3: Track fault timestamp for cooldown logic
+    this.faultTimestamps.push(this.now());
+
     if (canFaultStealth(this.stealthState)) {
       await this.transitionTo(transitionStealthState(this.stealthState, 'faulted'));
     }

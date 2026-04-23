@@ -28,6 +28,7 @@ type RuntimeWindowFactory = (options: Electron.BrowserWindowConstructorOptions) 
 interface RuntimeLogger {
   log: Console['log'];
   warn: Console['warn'];
+  error: Console['error'];
 }
 
 interface StealthRuntimeOptions {
@@ -39,7 +40,7 @@ interface StealthRuntimeOptions {
   preloadPath?: string;
   shellPreloadPath?: string;
   ipcMain?: Pick<typeof ipcMain, 'on' | 'removeListener'>;
-  onFault?: (reason: string) => void | Promise<void>;
+  onFault: (reason: string) => void | Promise<void>;
   onHeartbeat?: () => void | Promise<void>;
 }
 
@@ -201,12 +202,12 @@ export class StealthRuntime {
 
     this.contentWindow.webContents.on('crashed', (_event, killed) => {
       this.logger.warn(`[StealthRuntime] Content window crashed (killed=${killed})`);
-      this.emitFault('content-window-crashed');
+      this.handleContentCrash('content-window-crashed');
     });
 
     this.contentWindow.webContents.on('render-process-gone', (_event, details) => {
       this.logger.warn(`[StealthRuntime] Content render process gone: ${details.reason} exitCode=${details.exitCode}`);
-      this.emitFault(`content-render-gone:${details.reason}`);
+      this.handleContentCrash(`content-render-gone:${details.reason}`);
     });
 
     let frameReceived = false;
@@ -346,8 +347,27 @@ export class StealthRuntime {
     }
   }
 
+  private handleContentCrash(reason: string): void {
+    // Fail-closed: hide shell window immediately before propagating fault
+    try {
+      this.shellWindow?.hide();
+      this.shellWindow?.setOpacity(0);
+    } catch {
+      // Best-effort: continue with fault propagation even if hide fails
+    }
+    this.emitFault(reason);
+  }
+
   private emitFault(reason: string): void {
     if (!this.onFault) {
+      // Defensive fallback: if onFault is not provided, hide shell and log critical error
+      this.logger.error(`[StealthRuntime] CRITICAL: Fault with no handler, hiding shell window. Reason: ${reason}`);
+      try {
+        this.shellWindow?.hide();
+        this.shellWindow?.setOpacity(0);
+      } catch {
+        // Best-effort
+      }
       return;
     }
 

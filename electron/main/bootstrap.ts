@@ -4,12 +4,20 @@ import { initializeIpcHandlers } from "../ipcHandlers"
 import { CredentialsManager } from "../services/CredentialsManager"
 import { OllamaManager } from '../services/OllamaManager'
 import { KeybindManager } from "../services/KeybindManager"
+import { initRedactorWithUserDataPath } from '../stealth/logRedactor'
 
 // Application initialization
 
 export async function initializeApp() {
   // 2. Wait for app to be ready
   await app.whenReady()
+
+  // S-7: Initialize log redactor with userData path for dynamic redaction
+  try {
+    initRedactorWithUserDataPath(app.getPath('userData'));
+  } catch {
+    // Best effort - if initialization fails, static patterns still apply
+  }
 
   // 3. Set Content Security Policy headers for XSS protection
   session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
@@ -101,23 +109,27 @@ export async function initializeApp() {
       appState.updateGoogleCredentials(storedServiceAccountPath);
     }
 
-    console.log("App is ready")
+  console.log("App is ready")
 
-    appState.createWindow()
-
-    // Apply initial stealth state based on isUndetectable setting
-    if (appState.getUndetectable()) {
-      // Stealth mode: hide dock and tray
-      if (process.platform === 'darwin') {
-        app.dock.hide();
-      }
-    } else {
-      // Normal mode: show dock and tray
-      appState.showTray();
-      if (process.platform === 'darwin') {
-        app.dock.show();
-      }
+  // Apply dock stealth BEFORE window creation to prevent visible window before protection
+  if (appState.getUndetectable()) {
+    if (process.platform === 'darwin') {
+      app.dock.hide();
     }
+  }
+
+  appState.createWindow()
+
+  // Apply initial stealth state based on isUndetectable setting
+  if (appState.getUndetectable()) {
+    // Stealth mode: dock already hidden above
+  } else {
+    // Normal mode: show dock and tray
+    appState.showTray();
+    if (process.platform === 'darwin') {
+      app.dock.show();
+    }
+  }
     // Register global shortcuts using KeybindManager
     KeybindManager.getInstance().registerGlobalShortcuts()
 

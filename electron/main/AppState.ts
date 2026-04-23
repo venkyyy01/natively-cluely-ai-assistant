@@ -570,8 +570,8 @@ this.runtimeCoordinator.registerSupervisor(new StealthSupervisor(
       },
       bus,
       {
-        logger: { warn: console.warn },
-        nativeBridge: this.nativeStealthBridge ?? undefined,
+      logger: { log: console.log, warn: console.warn, error: console.error },
+      nativeBridge: this.nativeStealthBridge ?? undefined,
         requireNativeStealth: () => Boolean(this.nativeStealthBridge),
         nativeArmGuard: async () => {
           try {

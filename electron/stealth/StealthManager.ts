@@ -40,6 +40,15 @@ export interface PlatformCapabilities {
   supportsNativeExclusion: boolean;
 }
 
+export interface WindowInfo {
+  windowNumber: number;
+  ownerName: string;
+  ownerPid: number;
+  windowTitle: string;
+  isOnScreen: boolean;
+  sharingState: number;
+}
+
 export interface NativeStealthBindings {
   applyMacosWindowStealth?: (windowNumber: number) => void;
   applyMacosPrivateWindowStealth?: (windowNumber: number) => void;
@@ -49,6 +58,9 @@ export interface NativeStealthBindings {
   applyWindowsWindowStealth?: (handle: Buffer) => void;
   removeWindowsWindowStealth?: (handle: Buffer) => void;
   verifyWindowsStealthState?: (handle: Buffer) => number;
+  // S-8: CGWindow native functions
+  listVisibleWindows?: () => WindowInfo[];
+  checkBrowserCaptureWindows?: () => boolean;
 }
 
 export interface StealthFeatureFlags {
@@ -332,6 +344,11 @@ export class StealthManager extends EventEmitter {
       return;
     }
 
+    // S-5: Guard against applying stealth to already-visible windows
+    if (win.isVisible && win.isVisible()) {
+      this.logger.warn('[StealthManager] WARNING: Applying stealth layers to an already-visible window. This may cause a race condition where the window is briefly visible unprotected.');
+    }
+
     if (!enable) {
       const record = this.managedWindowLookup.get(win as object);
       if (!record) {
@@ -464,6 +481,25 @@ export class StealthManager extends EventEmitter {
     } catch (error) {
       this.logger.warn('[StealthManager] reapplyAfterShow failed, maintaining Layer 0 protection:', error);
       this.applyLayer0(win, true);
+    }
+  }
+
+  // S-1: Reapply protection layers to all managed windows
+  reapplyProtectionLayers(): void {
+    if (!this.isEnabled()) {
+      return;
+    }
+
+    for (const record of this.managedWindows) {
+      if (isWindowDestroyed(record.win)) {
+        continue;
+      }
+
+      try {
+        this.applyLayer0(record.win, true);
+      } catch (error) {
+        this.logger.warn('[StealthManager] reapplyProtectionLayers failed for window:', error);
+      }
     }
   }
 
@@ -852,6 +888,9 @@ export class StealthManager extends EventEmitter {
       this.tccMonitor.stop();
       this.tccMonitor = null;
     }
+
+    // S-4: Clear any pending window restore retries
+    this.clearRestoreRetry();
   }
 
   private clearTransientCaptureWarnings(): void {
@@ -1027,7 +1066,8 @@ export class StealthManager extends EventEmitter {
     }
   }
 
-  private async pollCaptureTools(): Promise<void> {
+  // S-1: Public method for enforcement loop to trigger immediate capture detection
+  async pollCaptureTools(): Promise<void> {
     if (this.watchdogRunning || this.watchdogPauseTokens.size > 0) {
       return;
     }
@@ -1261,6 +1301,29 @@ export class StealthManager extends EventEmitter {
   private async getWindowNumbersVisibleToCapture(): Promise<Set<number>> {
     const visibleWindows = new Set<number>();
 
+    // S-8: Try native module first, fall back to Python3 subprocess if unavailable or fails
+    try {
+      const nativeModule = this.getNativeModule();
+      if (nativeModule?.listVisibleWindows) {
+        const windows = nativeModule.listVisibleWindows();
+        // Only use native results if we got valid data
+        if (windows.length > 0) {
+          this.logger.log('[StealthManager] S-8: Using native listVisibleWindows');
+          for (const win of windows) {
+            if (win.windowNumber > 0 && win.isOnScreen && win.sharingState > 0) {
+              visibleWindows.add(win.windowNumber);
+            }
+          }
+          return visibleWindows;
+        }
+        // Native returned empty - fall through to Python fallback
+        this.logger.log('[StealthManager] S-8: Native returned empty, falling back to Python');
+      }
+    } catch (nativeError) {
+      this.logger.warn('[StealthManager] S-8: Native listVisibleWindows failed, using Python fallback:', nativeError);
+    }
+
+    // S-8: Python3 fallback - reliable but slower
     try {
       const stdout = await this.processEnumerator('python3', ['-c', `
 import Quartz
@@ -1273,11 +1336,10 @@ windows = Quartz.CGWindowListCopyWindowInfo(
 
 for window in windows:
     window_number = window.get('kCGWindowNumber', -1)
-    layer = window.get('kCGWindowLayer', -1)
     alpha = window.get('kCGWindowAlpha', 1.0)
     sharing_state = window.get('kCGWindowSharingState', 0)
 
-    if window_number > 0 and alpha > 0 and layer == 0 and sharing_state > 0:
+    if window_number > 0 and alpha > 0 and sharing_state > 0:
         print(window_number)
 `]);
 
@@ -1289,8 +1351,8 @@ for window in windows:
           }
         }
       }
-    } catch {
-      // Ignore
+    } catch (pythonError) {
+      this.logger.warn('[StealthManager] S-8: Python fallback also failed:', pythonError);
     }
 
     return visibleWindows;
@@ -1377,8 +1439,21 @@ for window in windows:
     this.opacityFlickerController.ensure();
   }
 
+  // S-4: Window restore retry tracking
+  private restoreRetryHandle: NodeJS.Timeout | null = null;
+  private restoreAttemptCount = 0;
+  private windowsToRestore: Array<{ win: StealthCapableWindow; restoreWithOpacity: boolean }> = [];
+  private static readonly MAX_RESTORE_ATTEMPTS = 5;
+  private static readonly RESTORE_RETRY_INTERVAL_MS = 5000;
+
   private hideAndRestoreVisibleWindows(): void {
-    const windowsToRestore: Array<{ win: StealthCapableWindow; restoreWithOpacity: boolean }> = [];
+    // Clear any existing retry timer when new hide is triggered
+    if (this.restoreRetryHandle) {
+      clearTimeout(this.restoreRetryHandle);
+      this.restoreRetryHandle = null;
+    }
+    this.restoreAttemptCount = 0;
+    this.windowsToRestore = [];
 
     for (const record of this.managedWindows) {
       const win = record.win;
@@ -1394,50 +1469,81 @@ for window in windows:
       if (typeof win.setOpacity === 'function') {
         win.setOpacity(0);
         this.reapplyAfterShow(win);
-        windowsToRestore.push({ win, restoreWithOpacity: true });
+        this.windowsToRestore.push({ win, restoreWithOpacity: true });
       } else if (typeof win.hide === 'function' && typeof win.show === 'function') {
         win.hide();
-        windowsToRestore.push({ win, restoreWithOpacity: false });
+        this.windowsToRestore.push({ win, restoreWithOpacity: false });
       }
     }
 
-    if (windowsToRestore.length === 0) {
+    if (this.windowsToRestore.length === 0) {
       return;
     }
 
-    const attemptRestore = async (): Promise<void> => {
-      await this.delay(WATCHDOG_RESTORE_DELAY_MS);
+    // Initial delay before first restore attempt
+    void this.scheduleRestoreAttempt();
+  }
 
-      const stillRunning = await this.detectCaptureProcesses();
-      if (stillRunning.length > 0) {
-        this.logger.log('[StealthManager] Capture tools still running, delaying window restore');
-        await this.delay(WATCHDOG_RESTORE_DELAY_MS * 2);
+  // S-4: Tracked retry loop for window restore
+  private scheduleRestoreAttempt(): void {
+    if (this.restoreRetryHandle) {
+      return;
+    }
 
-        const recheck = await this.detectCaptureProcesses();
-        if (recheck.length > 0) {
-          this.logger.warn('[StealthManager] Capture tools persist, keeping windows hidden');
-          this.addWarning('capture_tools_still_running');
-          return;
+    const handle = this.timeoutScheduler(() => {
+      void (async () => {
+        this.restoreRetryHandle = null;
+
+        const toolsStillActive = await this.detectCaptureProcesses();
+        if (toolsStillActive.length > 0) {
+          this.restoreAttemptCount++;
+          if (this.restoreAttemptCount >= StealthManager.MAX_RESTORE_ATTEMPTS) {
+            this.addWarning('window_opacity_stuck');
+            this.emit('stealth:fault', 'restore-exhausted');
+            return;
+          }
+          // Schedule another retry
+          this.scheduleRestoreAttempt();
+        } else {
+          // Safe to restore
+          await this.restoreWindows();
+          this.restoreAttemptCount = 0;
         }
+      })();
+    }, StealthManager.RESTORE_RETRY_INTERVAL_MS);
+
+    this.restoreRetryHandle = handle as NodeJS.Timeout;
+  }
+
+  // S-4: Restore windows after capture tools are gone
+  private async restoreWindows(): Promise<void> {
+    this.clearWarning('capture_tools_still_running');
+    this.clearWarning('window_opacity_stuck');
+
+    for (const { win, restoreWithOpacity } of this.windowsToRestore) {
+      if (isWindowDestroyed(win)) {
+        continue;
       }
 
-      this.clearWarning('capture_tools_still_running');
-
-      for (const { win, restoreWithOpacity } of windowsToRestore) {
-        if (isWindowDestroyed(win)) {
-          continue;
-        }
-
-        if (restoreWithOpacity && typeof win.setOpacity === 'function') {
-          win.setOpacity(1);
-        } else if (typeof win.show === 'function') {
-          win.show();
-        }
-        this.reapplyAfterShow(win);
+      if (restoreWithOpacity && typeof win.setOpacity === 'function') {
+        win.setOpacity(1);
+      } else if (typeof win.show === 'function') {
+        win.show();
       }
-    };
+      this.reapplyAfterShow(win);
+    }
 
-    void attemptRestore();
+    this.windowsToRestore = [];
+  }
+
+  // S-4: Cleanup restore timer on dispose/stealth disable
+  private clearRestoreRetry(): void {
+    if (this.restoreRetryHandle) {
+      this.clearIntervalScheduler(this.restoreRetryHandle as NodeJS.Timeout);
+      this.restoreRetryHandle = null;
+    }
+    this.restoreAttemptCount = 0;
+    this.windowsToRestore = [];
   }
 
   private delay(ms: number): Promise<void> {

@@ -1185,23 +1185,33 @@ describe('StealthManager', () => {
     ]);
   });
 
-  it('only treats shareable CG windows as visible to capture', async () => {
+  it('treats shareable CG windows as visible to capture using native with Python fallback', async () => {
+    // S-8: Native is primary, Python is reliable fallback
     let embeddedScript = '';
     const manager = new StealthManager(
       { enabled: true },
       {
         platform: 'darwin',
         logger: silentLogger,
-        processEnumerator: async (_command: string, args: string[]) => {
+        processEnumerator: async (_command: string, args: string[]): Promise<string> => {
           embeddedScript = args[1] ?? '';
-          return '';
+          return '12345\n67890\n'; // Simulate Python returning window numbers
         },
       },
     );
 
-    await (manager as any).getWindowNumbersVisibleToCapture();
+    // Mock native module to return empty (forcing fallback)
+    (manager as any).nativeModule = { listVisibleWindows: (): Array<{ windowNumber: number; ownerName: string; ownerPid: number; windowTitle: string; isOnScreen: boolean; sharingState: number }> => [] };
 
-    assert.match(embeddedScript, /sharing_state > 0/);
+    const result = await (manager as any).getWindowNumbersVisibleToCapture();
+
+    // Should have fallen back to Python
+    assert.ok(result instanceof Set, 'should return a Set');
+    assert.ok(embeddedScript.includes('Quartz'), 'should use Python Quartz when native fails');
+    assert.ok(embeddedScript.includes('sharing_state'), 'should check sharing_state in Python');
+    assert.strictEqual(result.size, 2);
+    assert.ok(result.has(12345));
+    assert.ok(result.has(67890));
   });
 
   it('compares macOS versions using both major and minor components', () => {

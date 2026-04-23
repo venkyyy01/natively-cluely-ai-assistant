@@ -300,3 +300,46 @@ pub fn remove_windows_window_stealth(hwnd_buffer: Buffer) -> napi::Result<()> {
 pub fn verify_windows_stealth_state(hwnd_buffer: Buffer) -> napi::Result<i32> {
     windows_impl::verify(hwnd_buffer)
 }
+
+// ============================================================================
+// S-8: CGWindow List Functions (Native replacement for Python3 subprocess)
+// ============================================================================
+
+/// Represents information about a visible window.
+/// Used by the Electron side for capture detection instead of spawning Python.
+#[derive(Debug)]
+#[napi(object)]
+pub struct WindowInfo {
+    pub window_number: i32,
+    pub owner_name: String,
+    pub owner_pid: i32,
+    pub window_title: String,
+    pub is_on_screen: bool,
+    pub sharing_state: i32,
+}
+
+/// List all visible windows using Core Graphics.
+/// This replaces the Python3 subprocess call to Quartz.CGWindowListCopyWindowInfo.
+/// 
+/// NOTE: This is a placeholder implementation. Full CGWindowList integration
+/// requires Core Graphics C API bindings that are complex to implement.
+/// The Electron side has fallback to the existing Python3 approach.
+#[napi]
+pub fn list_visible_windows() -> napi::Result<Vec<WindowInfo>> {
+    // S-8: Stub implementation - Electron side has fallback
+    // Full implementation would use CGWindowListCopyWindowInfo via FFI
+    Ok(Vec::new())
+}
+
+/// Check if any browser-based capture is active based on window titles.
+/// Combines the Quartz window enumeration + browser check in a single native call.
+///
+/// NOTE: This is a placeholder implementation. Full CGWindowList integration
+/// requires Core Graphics C API bindings that are complex to implement.
+/// The Electron side has fallback to the existing Python3 approach.
+#[napi]
+pub fn check_browser_capture_windows() -> napi::Result<bool> {
+    // S-8: Stub implementation - Electron side has fallback
+    // Full implementation would iterate CGWindowList via FFI
+    Ok(false)
+}

@@ -130,9 +130,10 @@ test('StealthSupervisor fails closed when arm verification fails', async () => {
   assert.deepEqual(clearedHandles, []);
 });
 
-test('StealthSupervisor can re-arm from FAULT back to FULL_STEALTH', async () => {
+test('StealthSupervisor can re-arm from FAULT back to FULL_STEALTH after cooldown', async () => {
   const calls: boolean[] = [];
   const bus = createBus();
+  let now = 0;
   const supervisor = new StealthSupervisor(
     {
       async setEnabled(enabled: boolean) {
@@ -142,12 +143,20 @@ test('StealthSupervisor can re-arm from FAULT back to FULL_STEALTH', async () =>
       verifyStealthState: () => true,
     },
     bus,
+    {
+      now: () => now,
+    },
   );
 
   await supervisor.start();
   await supervisor.setEnabled(true);
+
+  // Report fault at time 0
   await supervisor.reportFault(new Error('window_visible_to_capture'));
   assert.equal(supervisor.getStealthState(), 'FAULT');
+
+  // Advance time past the 5s cooldown (S-3: FAULT_COOLDOWN_MS)
+  now = 6000;
 
   await supervisor.setEnabled(true);
 
@@ -844,7 +853,8 @@ test('StealthSupervisor fails closed once the native helper disconnects after ex
 
   assert.equal(supervisor.getStealthState(), 'FAULT');
   assert.deepEqual(calls, [true]);
-  assert.deepEqual(faultReasons, ['stealth heartbeat missed']);
+  // S-6: Now emits specific fault reason when restart budget is exhausted
+  assert.deepEqual(faultReasons, ['native-bridge-restart-exhausted: heartbeat']);
   assert.equal(createCalls, 3);
 });
 

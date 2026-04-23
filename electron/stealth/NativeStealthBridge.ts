@@ -375,18 +375,26 @@ export class NativeStealthBridge {
   }
 
   private markClientDisconnected(reason: string, notifyDisconnect: boolean): void {
+    // S-6: Snapshot lastArmRequest at disconnect time before it can mutate
+    const armSnapshot = this.lastArmRequest ? { ...this.lastArmRequest } : null;
+
     this.client?.dispose?.();
     this.client = null;
     this.lastDisconnectReason = reason;
     if (notifyDisconnect) {
-      this.notifyHelperDisconnect(reason);
+      this.notifyHelperDisconnect(reason, armSnapshot);
     }
   }
 
-  private notifyHelperDisconnect(reason: string): void {
+  private notifyHelperDisconnect(reason: string, armSnapshot?: NativeStealthArmRequest | null): void {
     Promise.resolve(this.onHelperDisconnect?.(reason)).catch((error) => {
       this.logger.warn('[NativeStealthBridge] Failed to notify helper disconnect:', error);
     });
+
+    // S-6: Trigger restart with snapshotted arm request
+    if (armSnapshot && this.restartAttemptsForActiveSession < this.maxRestartAttempts) {
+      void this.tryRestartAfterDisconnect(reason, armSnapshot);
+    }
   }
 
   private handleHelperEvent(event: MacosVirtualDisplayHelperEvent): void {
@@ -399,14 +407,30 @@ export class NativeStealthBridge {
     });
   }
 
-  private async tryRestartAfterDisconnect(reason: string): Promise<boolean> {
-    if (this.restartAttemptsForActiveSession >= this.maxRestartAttempts || !this.lastArmRequest) {
+  // S-6: Updated to accept arm snapshot and log original disconnect reason
+  private async tryRestartAfterDisconnect(
+    disconnectReason: string,
+    armSnapshot?: NativeStealthArmRequest | null
+  ): Promise<boolean> {
+    // S-6: Log the original disconnect reason at each restart attempt
+    this.logger.warn(
+      `[NativeStealthBridge] Attempting restart (reason: ${disconnectReason}, attempt ${this.restartAttemptsForActiveSession + 1}/${this.maxRestartAttempts})`
+    );
+
+    if (this.restartAttemptsForActiveSession >= this.maxRestartAttempts) {
+      // S-6: Emit structured fault after exhausting restart attempts
+      this.emitFault(`native-bridge-restart-exhausted: ${disconnectReason}`);
+      return false;
+    }
+
+    // S-6: Use the snapshotted arm request, not the potentially stale this.lastArmRequest
+    const armRequest = armSnapshot ?? this.lastArmRequest;
+    if (!armRequest) {
       return false;
     }
 
     this.restartAttemptsForActiveSession += 1;
-    const restartAttempt = this.restartAttemptsForActiveSession;
-    const backoffMs = this.restartBackoffBaseMs * Math.max(1, 2 ** (restartAttempt - 1));
+    const backoffMs = this.restartBackoffBaseMs * Math.max(1, 2 ** (this.restartAttemptsForActiveSession - 1));
 
     try {
       await this.waitForRestartBackoff(backoffMs);
@@ -415,11 +439,18 @@ export class NativeStealthBridge {
         return false;
       }
 
-      const restarted = await this.arm(this.lastArmRequest);
+      const restarted = await this.arm(armRequest);
       return restarted.connected;
     } catch (error) {
-      this.logger.warn(`[NativeStealthBridge] Restart attempt after ${reason} failed:`, error);
+      this.logger.warn(`[NativeStealthBridge] Restart attempt after ${disconnectReason} failed:`, error);
       return false;
     }
+  }
+
+  // S-6: Emit structured fault event
+  private emitFault(reason: string): void {
+    Promise.resolve(this.onHelperFault?.(reason)).catch((error) => {
+      this.logger.warn('[NativeStealthBridge] Failed to emit fault:', error);
+    });
   }
 }

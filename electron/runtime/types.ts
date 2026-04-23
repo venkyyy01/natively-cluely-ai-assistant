@@ -25,6 +25,7 @@ export type SupervisorCoreEvent =
   | { type: 'stealth:illegal_transition'; from: StealthState; event: string }
   | { type: 'stealth:native-arm-skipped'; reason: string }
   | { type: 'stealth:fault'; reason: string }
+  | { type: 'stealth:fault-loop-detected'; reason: string }
   | { type: 'recovery:checkpoint-written'; checkpointId: string }
   | { type: 'recovery:restore-complete'; sessionId: string }
   | { type: 'lifecycle:meeting-starting'; meetingId: string }

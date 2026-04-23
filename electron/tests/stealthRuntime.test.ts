@@ -77,8 +77,9 @@ test('StealthRuntime creates shell/content pair and applies stealth to the visib
     preloadPath: '/tmp/preload.js',
     shellPreloadPath: '/tmp/shellPreload.js',
     ipcMain: new EventEmitter() as never,
-    logger: { log() {}, warn() {} },
-  });
+  logger: { log() {}, warn() {}, error() {} },
+  onFault: () => {},
+});
 
   const shell = runtime.createPrimaryStealthSurface({ width: 100, height: 100, webPreferences: {} });
   runtime.applyStealth(true);
@@ -110,9 +111,10 @@ test('StealthRuntime ignores shell events from unrelated senders and cleans up s
     shellHtmlPath: '/tmp/shell.html',
     preloadPath: '/tmp/preload.js',
     shellPreloadPath: '/tmp/shellPreload.js',
-    ipcMain: ipcBus as never,
-    logger: { log() {}, warn() {} },
-  });
+  ipcMain: ipcBus as never,
+  logger: { log() {}, warn() {}, error() {} },
+  onFault: () => {},
+});
 
   runtime.createPrimaryStealthSurface({ width: 100, height: 100, webPreferences: {} });
   runtime.show();
@@ -140,9 +142,10 @@ test('StealthRuntime requests an initial repaint after content load and shell re
     shellHtmlPath: '/tmp/shell.html',
     preloadPath: '/tmp/preload.js',
     shellPreloadPath: '/tmp/shellPreload.js',
-    ipcMain: ipcBus as never,
-    logger: { log() {}, warn() {} },
-  });
+  ipcMain: ipcBus as never,
+  logger: { log() {}, warn() {}, error() {} },
+  onFault: () => {},
+});
 
   runtime.createPrimaryStealthSurface({ width: 100, height: 100, transparent: true, vibrancy: 'under-window', webPreferences: {} });
   created[0]?.webContents.emit('did-finish-load');
@@ -165,12 +168,12 @@ test('StealthRuntime reports content runtime faults through onFault callback', a
     shellHtmlPath: '/tmp/shell.html',
     preloadPath: '/tmp/preload.js',
     shellPreloadPath: '/tmp/shellPreload.js',
-    ipcMain: new EventEmitter() as never,
-    logger: { log() {}, warn() {} },
-    onFault: (reason) => {
-      faults.push(reason);
-    },
-  });
+  ipcMain: new EventEmitter() as never,
+  logger: { log() {}, warn() {}, error() {} },
+  onFault: (reason) => {
+    faults.push(reason);
+  },
+});
 
   runtime.createPrimaryStealthSurface({ width: 100, height: 100, webPreferences: {} });
   created[0]?.webContents.emit('crashed', {}, false);
@@ -196,12 +199,13 @@ test('StealthRuntime forwards shell runtime heartbeat signals through onHeartbea
     shellHtmlPath: '/tmp/shell.html',
     preloadPath: '/tmp/preload.js',
     shellPreloadPath: '/tmp/shellPreload.js',
-    ipcMain: ipcBus as never,
-    logger: { log() {}, warn() {} },
-    onHeartbeat: () => {
-      heartbeats.push('tick');
-    },
-  });
+  ipcMain: ipcBus as never,
+  logger: { log() {}, warn() {}, error() {} },
+  onFault: () => {},
+  onHeartbeat: () => {
+    heartbeats.push('tick');
+  },
+});
 
   runtime.createPrimaryStealthSurface({ width: 100, height: 100, webPreferences: {} });
   ipcBus.emit('stealth-shell:ready', { sender: { id: created[1]?.webContents.id } });
@@ -226,9 +230,10 @@ test('StealthRuntime uses loadURL for packaged file targets so query params surv
     shellHtmlPath: '/tmp/shell.html',
     preloadPath: '/tmp/preload.js',
     shellPreloadPath: '/tmp/shellPreload.js',
-    ipcMain: new EventEmitter() as never,
-    logger: { log() {}, warn() {} },
-  });
+  ipcMain: new EventEmitter() as never,
+  logger: { log() {}, warn() {}, error() {} },
+  onFault: () => {},
+});
 
   runtime.createPrimaryStealthSurface({ width: 100, height: 100, webPreferences: {} });
 

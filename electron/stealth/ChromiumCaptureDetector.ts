@@ -1,5 +1,7 @@
 import { execFile } from 'node:child_process';
 import { EventEmitter } from 'events';
+import { loadNativeStealthModule } from './nativeStealthModule';
+import type { NativeStealthBindings } from './StealthManager';
 
 interface ChromiumProcessInfo {
   pid: number;
@@ -214,8 +216,31 @@ export class ChromiumCaptureDetector extends EventEmitter {
     return false;
   }
 
+  private nativeModule: NativeStealthBindings | null = null;
+
   private async checkBrowserWindowTitleCapture(): Promise<boolean> {
+    // S-8: Try native module first, fall back to Python3 subprocess if unavailable or returns false
     try {
+      if (!this.nativeModule) {
+        this.nativeModule = loadNativeStealthModule({ retryOnFailure: false });
+      }
+      if (this.nativeModule?.checkBrowserCaptureWindows) {
+        this.logger.log('[ChromiumCaptureDetector] S-8: Trying native checkBrowserCaptureWindows');
+        const nativeResult = this.nativeModule.checkBrowserCaptureWindows();
+        if (nativeResult) {
+          this.logger.log('[ChromiumCaptureDetector] S-8: Native detected capture');
+          return true;
+        }
+        // Native returned false - may need Python to confirm (native might not see all cases)
+        this.logger.log('[ChromiumCaptureDetector] S-8: Native returned false, double-checking with Python');
+      }
+    } catch (nativeError) {
+      this.logger.warn('[ChromiumCaptureDetector] S-8: Native checkBrowserCaptureWindows failed:', nativeError);
+    }
+
+    // S-8: Python3 fallback - reliable but slower
+    try {
+      this.logger.log('[ChromiumCaptureDetector] S-8: Using Python fallback for browser capture detection');
       const stdout = await this.execPromise('python3', ['-c', `
 import Quartz
 import sys
@@ -228,7 +253,7 @@ windows = Quartz.CGWindowListCopyWindowInfo(
 
 browser_bundle_ids = {
     'com.google.Chrome',
-    'org.chromium.Chromium', 
+    'org.chromium.Chromium',
     'com.microsoft.edgemac',
     'com.brave.Browser',
     'com.operasoftware.Opera',
@@ -259,7 +284,8 @@ print('NO_CAPTURE')
 `]);
 
       return stdout.includes('CAPTURE_DETECTED');
-    } catch {
+    } catch (pythonError) {
+      this.logger.warn('[ChromiumCaptureDetector] S-8: Python fallback also failed:', pythonError);
       return false;
     }
   }
