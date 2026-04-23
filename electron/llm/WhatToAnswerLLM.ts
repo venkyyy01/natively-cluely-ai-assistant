@@ -89,10 +89,19 @@ ANSWER SHAPE: ${intentResult.answerShape}
             const primaryQuestion = options?.latestQuestion?.trim() || cleanedTranscript;
 
             const prompt = options?.fastPath ? FAST_STANDARD_ANSWER_PROMPT : UNIVERSAL_WHAT_TO_ANSWER_PROMPT;
-            for await (const chunk of this.llmHelper.streamChat(primaryQuestion, imagePaths, conversationContext, prompt, {
+            if (typeof this.llmHelper.streamChat !== 'function') {
+                throw new TypeError('LLMHelper.streamChat is not available');
+            }
+
+            const stream = this.llmHelper.streamChat(primaryQuestion, imagePaths, conversationContext, prompt, {
                 skipKnowledgeInterception: !!options?.fastPath,
                 abortSignal: options?.abortSignal,
-            })) {
+            });
+            if (!stream || typeof (stream as AsyncIterable<string>)[Symbol.asyncIterator] !== 'function') {
+                throw new TypeError('LLMHelper.streamChat must return an async iterable');
+            }
+
+            for await (const chunk of stream) {
                 yieldedAnyChunk = true;
                 yield chunk;
             }

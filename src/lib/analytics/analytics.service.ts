@@ -57,6 +57,7 @@ interface SessionDurationPayload {
 
 const GA4_MEASUREMENT_ID = "G-494RMJ2G6E";
 const APP_VERSION = "1.1.3";
+const ANALYTICS_ENABLED = import.meta.env.DEV || import.meta.env.VITE_ENABLE_ANALYTICS === '1';
 
 // Extend window to include gtag/dataLayer
 declare global {
@@ -108,7 +109,7 @@ class AnalyticsService {
     }
 
     public initAnalytics(): void {
-        if (this.initialized) return;
+        if (this.initialized || !ANALYTICS_ENABLED) return;
 
         try {
             // 1. Initialize dataLayer

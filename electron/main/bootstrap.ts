@@ -21,6 +21,9 @@ export async function initializeApp() {
 
   // 3. Set Content Security Policy headers for XSS protection
   session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
+    const connectSrc = process.env.NODE_ENV === 'development'
+      ? "connect-src 'self' https: wss: ws:; "
+      : "connect-src 'self'; ";
     callback({
       responseHeaders: {
         ...details.responseHeaders,
@@ -30,7 +33,7 @@ export async function initializeApp() {
           "style-src 'self' 'unsafe-inline'; " +
           "img-src 'self' data: blob: https:; " +
           "font-src 'self' data:; " +
-          "connect-src 'self' https: wss: ws:; " +
+          connectSrc +
           "media-src 'self' blob:; " +
           "object-src 'none'; " +
           "frame-src 'self'; " +
@@ -96,11 +99,6 @@ export async function initializeApp() {
 
     // NOTE: CredentialsManager.init() and loadStoredCredentials() are already called
     // above before this block — do NOT call them again here to avoid double key-load.
-
-    // Anonymous install ping - one-time, non-blocking
-    // See electron/services/InstallPingManager.ts for privacy details
-    const { sendAnonymousInstallPing } = require('../services/InstallPingManager');
-    sendAnonymousInstallPing();
 
     // Load stored Google Service Account path (for Speech-to-Text)
     const storedServiceAccountPath = CredentialsManager.getInstance().getGoogleServiceAccountPath();
