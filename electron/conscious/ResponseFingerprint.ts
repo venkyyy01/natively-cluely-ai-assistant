@@ -4,6 +4,7 @@ export interface ResponseFingerprintEntry {
   hash: string;
   timestamp: number;
   preview: string;
+  contextKey: string | null;
 }
 
 export interface DuplicateCheckResult {
@@ -29,21 +30,36 @@ export class ResponseFingerprinter {
     return createHash('sha256').update(normalized).digest('hex').slice(0, 16);
   }
 
-  isDuplicate(text: string): DuplicateCheckResult {
+  private normalizeContextKey(contextKey?: string): string | null {
+    const normalized = (contextKey || '')
+      .toLowerCase()
+      .replace(/[^\w\s]/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+    return normalized || null;
+  }
+
+  isDuplicate(text: string, contextKey?: string): DuplicateCheckResult {
     const normalizedText = text.trim();
     if (!normalizedText) {
       return { isDupe: false };
     }
 
+    const normalizedContextKey = this.normalizeContextKey(contextKey);
+    const candidateEntries = normalizedContextKey === null
+      ? this.recentFingerprints
+      : this.recentFingerprints.filter((entry) => entry.contextKey === normalizedContextKey);
+
     const hash = this.fingerprint(normalizedText);
-    const exact = this.recentFingerprints.find((entry) => entry.hash === hash);
+    const exact = candidateEntries.find((entry) => entry.hash === hash);
     if (exact) {
       return { isDupe: true, matchedPreview: exact.preview };
     }
 
     const firstSentence = normalizedText.split(/[.!?]/)[0]?.trim().toLowerCase() || '';
     if (firstSentence.length >= 12) {
-      const fuzzy = this.recentFingerprints.find((entry) =>
+      const fuzzy = candidateEntries.find((entry) =>
         entry.preview.toLowerCase().startsWith(firstSentence.slice(0, Math.min(40, firstSentence.length)))
       );
       if (fuzzy) {
@@ -54,7 +70,7 @@ export class ResponseFingerprinter {
     return { isDupe: false };
   }
 
-  record(text: string): void {
+  record(text: string, contextKey?: string): void {
     const trimmed = text.trim();
     if (!trimmed) return;
 
@@ -62,6 +78,7 @@ export class ResponseFingerprinter {
       hash: this.fingerprint(trimmed),
       timestamp: Date.now(),
       preview: trimmed.slice(0, 50),
+      contextKey: this.normalizeContextKey(contextKey),
     });
 
     if (this.recentFingerprints.length > this.maxHistory) {
@@ -81,10 +98,11 @@ export class ResponseFingerprinter {
     this.recentFingerprints = hashes
       .filter((hash) => typeof hash === 'string' && hash.trim().length > 0)
       .slice(-this.maxHistory)
-      .map((hash) => ({
+      .map<ResponseFingerprintEntry>((hash) => ({
         hash,
         timestamp: Date.now(),
         preview: '',
+        contextKey: null,
       }));
   }
 }

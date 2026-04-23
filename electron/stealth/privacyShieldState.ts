@@ -11,6 +11,7 @@ interface DerivePrivacyShieldStateOptions {
 
 const CAPTURE_RISK_WARNINGS = new Set([
   'chromium_capture_active',
+  'capture_visibility_unknown',
   'scstream_capture_detected',
   'capture_tools_still_running',
   'native_module_unavailable',

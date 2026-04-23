@@ -671,6 +671,7 @@ export class ConsciousAccelerationOrchestrator {
       this.lastPauseDecision = null;
     }
 
+    this.abortInflightIntentPrefetch();
     this.speculativeGeneration += 1;
     for (const entry of this.speculativeAnswerEntries.values()) {
       entry.abortController.abort(new Error('speculation_invalidated'));

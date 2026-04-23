@@ -48,7 +48,7 @@ export class ConsciousResponseCoordinator {
     // match anything (recent history is empty), so this only fires when
     // a near-identical answer has been emitted recently in the session.
     if (this.fingerprinter) {
-      const dupeCheck = this.fingerprinter.isDuplicate(input.fullAnswer);
+      const dupeCheck = this.fingerprinter.isDuplicate(input.fullAnswer, input.questionLabel);
       if (dupeCheck.isDupe) {
         // The user already has the prior answer on screen. Re-emitting an
         // identical paragraph is the worst kind of "AI slop" — it makes the
@@ -96,7 +96,7 @@ export class ConsciousResponseCoordinator {
     // NAT-048: record the emitted answer AFTER the emit so a downstream
     // exception during emission doesn't leave the fingerprint mistakenly
     // remembered (which would suppress a legitimate retry).
-    this.fingerprinter?.record(input.fullAnswer);
+    this.fingerprinter?.record(input.fullAnswer, input.questionLabel);
     const latencySnapshot = this.latencyTracker.complete(input.requestId);
     console.log('[IntelligenceEngine] Answer latency snapshot:', latencySnapshot);
     this.setMode('idle');

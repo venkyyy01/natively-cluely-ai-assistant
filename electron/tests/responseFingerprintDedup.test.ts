@@ -207,3 +207,29 @@ test('NAT-048: clearing the fingerprinter (e.g. on session switch) re-allows pre
   });
   assert.equal(harness.emissions.filter((e) => e.type === 'final').length, 2);
 });
+
+test('NAT-048: the same answer can be emitted again for a different question', () => {
+  const fingerprinter = new ResponseFingerprinter();
+  const harness = buildHarness(fingerprinter);
+
+  const answer = 'I would start with a token bucket and then add per-tenant quotas.';
+
+  const r1 = harness.tracker.start('conscious_answer', 'streaming');
+  harness.coordinator.completeStructuredAnswer({
+    requestId: r1,
+    questionLabel: 'How would you rate limit this API?',
+    confidence: 0.9,
+    fullAnswer: answer,
+  });
+
+  const r2 = harness.tracker.start('conscious_answer', 'streaming');
+  harness.coordinator.completeStructuredAnswer({
+    requestId: r2,
+    questionLabel: 'How would you protect this queue from bursts?',
+    confidence: 0.9,
+    fullAnswer: answer,
+  });
+
+  const finalEmissions = harness.emissions.filter((e) => e.type === 'final');
+  assert.equal(finalEmissions.length, 2, 'question changes must reset duplicate suppression');
+});

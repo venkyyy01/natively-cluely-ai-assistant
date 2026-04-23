@@ -400,3 +400,45 @@ test('NAT-002: speculative selection refuses semantic hedging when the finalized
 
   resetAccelerationTestState();
 });
+
+test('intent prefetch is discarded when speech resumes before the prefetched classification resolves', async () => {
+  setOptimizationFlags({
+    ...DEFAULT_OPTIMIZATION_FLAGS,
+    accelerationEnabled: true,
+    usePrefetching: true,
+    useANEEmbeddings: false,
+  });
+
+  const orchestrator = new AccelerationManager().getConsciousOrchestrator();
+  orchestrator.setEnabled(true);
+
+  let resolveIntent!: (value: { intent: 'coding'; confidence: number; answerShape: string }) => void;
+  orchestrator.setIntentClassifier(async () => {
+    return await new Promise((resolve) => {
+      resolveIntent = resolve;
+    });
+  });
+
+  const query = 'What is polymorphism?';
+  orchestrator.noteTranscriptText('interviewer', query);
+  orchestrator.updateTranscriptSegments([
+    {
+      speaker: 'interviewer',
+      text: query,
+      timestamp: Date.now(),
+    },
+  ], 1);
+
+  const prefetchPromise = (orchestrator as any).maybePrefetchIntent();
+  orchestrator.onUserSpeaking();
+  resolveIntent({
+    intent: 'coding',
+    confidence: 0.93,
+    answerShape: 'Provide a full implementation.',
+  });
+  await prefetchPromise;
+
+  assert.equal(orchestrator.getPrefetchedIntent(query, 1), null);
+
+  resetAccelerationTestState();
+});

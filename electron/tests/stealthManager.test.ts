@@ -656,7 +656,7 @@ describe('StealthManager', () => {
     assert.ok(!manager.getStealthDegradationWarnings().includes('stealth_verification_failed'));
   });
 
-  it('passes managed-window verification when Layer 0 is active but native module is unavailable', () => {
+  it('fails managed-window verification when native stealth is unavailable in stealth mode', () => {
     const win = new FakeWindow();
     const manager = new StealthManager(
       { enabled: true },
@@ -669,10 +669,29 @@ describe('StealthManager', () => {
 
     manager.applyToWindow(win as any, true, { role: 'primary' });
 
-    // Layer 0 (setContentProtection) is the expected fallback when native module
-    // is unavailable, so verification should pass rather than falsely report failure.
-    assert.strictEqual(manager.verifyManagedWindows(), true);
+    assert.strictEqual(manager.verifyManagedWindows(), false);
     assert.ok(manager.getStealthDegradationWarnings().includes('native_module_unavailable'));
+  });
+
+  it('marks capture visibility as degraded when native and Python probes are both unavailable', async () => {
+    const manager = new StealthManager(
+      { enabled: true },
+      {
+        platform: 'darwin',
+        logger: silentLogger,
+        processEnumerator: async () => {
+          throw new Error('python unavailable');
+        },
+      },
+    );
+
+    (manager as any).nativeModule = {
+      listVisibleWindows: (): Array<{ windowNumber: number; ownerName: string; ownerPid: number; windowTitle: string; isOnScreen: boolean; sharingState: number }> => [],
+    };
+
+    await (manager as any).pollCGWindowVisibility();
+
+    assert.ok(manager.getStealthDegradationWarnings().includes('capture_visibility_unknown'));
   });
 
   it('falls back to hide and show when opacity APIs are unavailable', async () => {

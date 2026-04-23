@@ -896,6 +896,7 @@ export class StealthManager extends EventEmitter {
   private clearTransientCaptureWarnings(): void {
     this.clearWarning('chromium_capture_active');
     this.clearWarning('scstream_capture_detected');
+    this.clearWarning('capture_visibility_unknown');
     this.clearWarning('window_visible_to_capture');
   }
 
@@ -1264,6 +1265,7 @@ export class StealthManager extends EventEmitter {
     this.cgWindowMonitorRunning = true;
     try {
       const visibleWindowNumbers = await this.getWindowNumbersVisibleToCapture();
+      this.clearWarning('capture_visibility_unknown');
       let windowVisibleToCaptureDetected = false;
 
       for (const record of this.managedWindows) {
@@ -1292,6 +1294,7 @@ export class StealthManager extends EventEmitter {
         this.clearWarning('window_visible_to_capture');
       }
     } catch (error) {
+      this.addWarning('capture_visibility_unknown');
       this.logger.warn('[StealthManager] CGWindow visibility check failed, maintaining Layer 0 protection:', error);
     } finally {
       this.cgWindowMonitorRunning = false;
@@ -1353,6 +1356,7 @@ for window in windows:
       }
     } catch (pythonError) {
       this.logger.warn('[StealthManager] S-8: Python fallback also failed:', pythonError);
+      throw pythonError;
     }
 
     return visibleWindows;
@@ -1556,7 +1560,7 @@ for window in windows:
     const nativeModule = this.getNativeModule();
     const record = this.managedWindowLookup.get(win as object);
     if (!nativeModule) {
-      return this.isEnabled();
+      return false;
     }
 
     try {
