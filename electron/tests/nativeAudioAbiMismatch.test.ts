@@ -46,10 +46,10 @@ function installNativeAudioLoadMock(options: {
   };
 }
 
-function writeAbiFile(appPath: string, abiVersion: string): void {
+function writeAbiFile(appPath: string, abiMetadata: string): void {
   const moduleDir = path.join(appPath, 'native-module');
   fs.mkdirSync(moduleDir, { recursive: true });
-  fs.writeFileSync(path.join(moduleDir, 'index.node.abi'), `${abiVersion}\n`, 'utf8');
+  fs.writeFileSync(path.join(moduleDir, 'index.node.abi'), `${abiMetadata}\n`, 'utf8');
 }
 
 async function importFreshNativeModule() {
@@ -58,9 +58,9 @@ async function importFreshNativeModule() {
   return import('../audio/nativeModule');
 }
 
-test('NAT-023: native audio load reports actionable ABI mismatch error', async () => {
+test('NAT-023: native audio load reports actionable N-API mismatch error', async () => {
   const appPath = fs.mkdtempSync(path.join(os.tmpdir(), 'native-audio-abi-mismatch-'));
-  writeAbiFile(appPath, String(Number(process.versions.modules) + 1));
+  writeAbiFile(appPath, `napi>=${Number(process.versions.napi || '0') + 1}`);
   const restore = installNativeAudioLoadMock({ appPath, appPathModule: { MicrophoneCapture: class {} } });
 
   try {
@@ -70,17 +70,34 @@ test('NAT-023: native audio load reports actionable ABI mismatch error', async (
 
     const error = nativeModule.getNativeAudioLoadError();
     assert.ok(error);
-    assert.match(error!.message, /Native audio ABI mismatch: built for/);
-    assert.match(error!.message, /Run `npm run build:native:current`\./);
+    assert.match(error!.message, /Native audio N-API mismatch: requires N-API/);
+    assert.match(error!.message, /compatible toolchain or upgrade Electron/);
   } finally {
     restore();
     fs.rmSync(appPath, { recursive: true, force: true });
   }
 });
 
-test('NAT-023: native audio load succeeds when ABI metadata matches runtime', async () => {
+test('NAT-023: native audio load succeeds when N-API metadata matches runtime', async () => {
   const appPath = fs.mkdtempSync(path.join(os.tmpdir(), 'native-audio-abi-match-'));
-  writeAbiFile(appPath, process.versions.modules);
+  writeAbiFile(appPath, `napi>=${process.versions.napi}`);
+  const moduleExports = { MicrophoneCapture: class {} };
+  const restore = installNativeAudioLoadMock({ appPath, appPathModule: moduleExports });
+
+  try {
+    const nativeModule = await importFreshNativeModule();
+    const loaded = nativeModule.loadNativeAudioModule();
+    assert.equal(loaded, moduleExports);
+    assert.equal(nativeModule.getNativeAudioLoadError(), null);
+  } finally {
+    restore();
+    fs.rmSync(appPath, { recursive: true, force: true });
+  }
+});
+
+test('NAT-023: native audio load ignores stale legacy node ABI metadata for N-API modules', async () => {
+  const appPath = fs.mkdtempSync(path.join(os.tmpdir(), 'native-audio-legacy-abi-'));
+  writeAbiFile(appPath, String(Number(process.versions.modules) + 100));
   const moduleExports = { MicrophoneCapture: class {} };
   const restore = installNativeAudioLoadMock({ appPath, appPathModule: moduleExports });
 

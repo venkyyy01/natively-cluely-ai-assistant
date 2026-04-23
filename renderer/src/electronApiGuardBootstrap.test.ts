@@ -13,6 +13,10 @@ test('renderer bootstrap installs the guarded Electron API bridge before first u
   expect(helperSource).toContain('export function installElectronApiGuard()');
   expect(mainSource).toContain("installElectronApiGuard()");
   expect(mainSource.indexOf('installElectronApiGuard()')).toBeLessThan(mainSource.indexOf("getThemeMode"));
+  expect(mainSource).toContain('resolveWindowContext(window.location.search).kind');
+  expect(mainSource).toContain('setAttribute("data-window-kind", kind)');
+  expect(mainSource).toContain('await import("./App")');
+  expect(mainSource).toContain('Renderer bootstrap failed');
   expect(mainSource).toContain('ErrorBoundary');
   expect(mainSource).toContain('context="AppBootstrap"');
   expect(appSource).toContain('Renderer startup failed');

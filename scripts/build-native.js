@@ -8,6 +8,19 @@ const localNapiCli = path.join(nativeModulePath, 'node_modules', '@napi-rs', 'cl
 const args = new Set(process.argv.slice(2));
 const buildCurrentOnly = args.has('--current');
 
+function getMinimumNapiVersion() {
+  const cargoTomlPath = path.join(nativeModulePath, 'Cargo.toml');
+  try {
+    const cargoToml = fs.readFileSync(cargoTomlPath, 'utf8');
+    const matches = [...cargoToml.matchAll(/napi(\d+)/g)].map((match) => Number(match[1]));
+    const maxVersion = Math.max(...matches);
+    return Number.isFinite(maxVersion) ? String(maxVersion) : null;
+  } catch (error) {
+    console.warn(`Warning: Could not determine minimum N-API version from ${cargoTomlPath}.`, error);
+    return null;
+  }
+}
+
 function runCommand(command) {
   console.log(`> ${command}`);
   execSync(command, { stdio: 'inherit', cwd: nativeModulePath });
@@ -28,15 +41,18 @@ function runNapiBuild(buildArgs) {
 }
 
 function writeAbiMetadata() {
-  const abiVersion = process.versions.modules;
+  const minimumNapiVersion = getMinimumNapiVersion();
+  const compatibilityMetadata = minimumNapiVersion
+    ? `napi>=${minimumNapiVersion}`
+    : `napi>=${process.versions.napi || 'unknown'}`;
   const artifacts = fs
     .readdirSync(nativeModulePath)
     .filter((file) => file.endsWith('.node'));
 
   artifacts.forEach((artifact) => {
     const abiPath = path.join(nativeModulePath, `${artifact}.abi`);
-    fs.writeFileSync(abiPath, `${abiVersion}\n`, 'utf8');
-    console.log(`Wrote ABI metadata: ${path.relative(nativeModulePath, abiPath)} -> ${abiVersion}`);
+    fs.writeFileSync(abiPath, `${compatibilityMetadata}\n`, 'utf8');
+    console.log(`Wrote ABI metadata: ${path.relative(nativeModulePath, abiPath)} -> ${compatibilityMetadata}`);
   });
 }
 

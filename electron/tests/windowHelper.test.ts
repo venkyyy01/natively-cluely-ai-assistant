@@ -117,6 +117,7 @@ test('WindowHelper can show and hide a direct launcher window when StealthRuntim
     let overlayHidden = 0;
 
     (helper as any).launcherRuntime = null;
+    (helper as any).directLauncherLoaded = true;
     (helper as any).launcherWindow = {
       isDestroyed: () => false,
       show() { launcherShown += 1; },
@@ -137,6 +138,85 @@ test('WindowHelper can show and hide a direct launcher window when StealthRuntim
     assert.equal(launcherFocused, 2);
     assert.equal(launcherHidden, 1);
     assert.equal(overlayHidden, 2);
+  } finally {
+    restoreElectron();
+  }
+});
+
+test('WindowHelper defers direct launcher show requests until the renderer load completes', async () => {
+  const restoreElectron = installElectronMock();
+  const windowHelperPath = require.resolve('../WindowHelper');
+  delete require.cache[windowHelperPath];
+
+  try {
+    const { WindowHelper } = await import('../WindowHelper');
+    const helper = new WindowHelper({} as never, { applyToWindow() {}, reapplyAfterShow() {} } as never);
+
+    let launcherShown = 0;
+
+    (helper as any).launcherRuntime = null;
+    (helper as any).directLauncherLoaded = false;
+    (helper as any).launcherWindow = {
+      isDestroyed: () => false,
+      show() { launcherShown += 1; },
+      focus() {},
+      setOpacity() {},
+      hide() {},
+    };
+    (helper as any).overlayWindow = {
+      isDestroyed: () => false,
+      hide() {},
+    };
+
+    helper.switchToLauncher();
+
+    assert.equal(launcherShown, 0);
+    assert.equal((helper as any).pendingDirectLauncherReveal, true);
+    assert.equal(helper.isVisible(), false);
+  } finally {
+    restoreElectron();
+  }
+});
+
+test('WindowHelper reveals the direct launcher after did-finish-load when a show request is pending', async () => {
+  const restoreElectron = installElectronMock();
+  const windowHelperPath = require.resolve('../WindowHelper');
+  delete require.cache[windowHelperPath];
+
+  try {
+    const { WindowHelper } = await import('../WindowHelper');
+    const helper = new WindowHelper({} as never, { applyToWindow() {}, reapplyAfterShow() {} } as never);
+
+    let didFinishLoadHandler: (() => void) | null = null;
+    let switchToLauncherCalls = 0;
+
+    (helper as any).launcherRuntime = null;
+    (helper as any).pendingDirectLauncherReveal = true;
+    (helper as any).launcherWindow = {
+      isDestroyed: () => false,
+    };
+    (helper as any).launcherContentWindow = {
+      isDestroyed: () => false,
+      webContents: {
+        once(event: string, handler: () => void) {
+          if (event === 'did-finish-load') {
+            didFinishLoadHandler = handler;
+          }
+        },
+      },
+    };
+    (helper as any).switchToLauncher = () => {
+      switchToLauncherCalls += 1;
+    };
+
+    (helper as any).queueDirectLauncherRevealAfterLoad();
+
+    assert.ok(didFinishLoadHandler, 'direct launcher should wait for did-finish-load');
+    didFinishLoadHandler?.();
+
+    assert.equal((helper as any).directLauncherLoaded, true);
+    assert.equal((helper as any).pendingDirectLauncherReveal, false);
+    assert.equal(switchToLauncherCalls, 1);
   } finally {
     restoreElectron();
   }

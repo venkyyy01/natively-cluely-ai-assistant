@@ -39,6 +39,8 @@ export class WindowHelper {
   private overlayClickthroughEnabled: boolean = false
   private opacityTimeout: NodeJS.Timeout | null = null
   private readonly overlayContentProtection: boolean = true
+  private directLauncherLoaded: boolean = false
+  private pendingDirectLauncherReveal: boolean = false
 
   // Initialize with explicit number type and 0 value
   private screenWidth: number = 0
@@ -111,6 +113,37 @@ export class WindowHelper {
       console.error(`[WindowHelper] ${label} direct load failed:`, error)
     })
     return win
+  }
+
+  private queueDirectLauncherRevealAfterLoad(): void {
+    const launcherContentWindow = this.launcherContentWindow
+    if (!launcherContentWindow || launcherContentWindow.isDestroyed()) {
+      return
+    }
+
+    let revealQueued = false
+    const revealWhenReady = (source: 'dom-ready' | 'did-finish-load') => {
+      if (revealQueued) {
+        return
+      }
+      revealQueued = true
+      this.directLauncherLoaded = true
+      console.log(`[WindowHelper] Direct launcher ready to reveal via ${source}`);
+
+      if (!this.pendingDirectLauncherReveal || this.currentWindowMode !== 'launcher') {
+        return
+      }
+
+      this.pendingDirectLauncherReveal = false
+      this.switchToLauncher()
+    }
+
+    launcherContentWindow.webContents.once('dom-ready', () => {
+      revealWhenReady('dom-ready')
+    })
+    launcherContentWindow.webContents.once('did-finish-load', () => {
+      revealWhenReady('did-finish-load')
+    })
   }
 
   public setContentProtection(enable: boolean): void {
@@ -220,6 +253,7 @@ export class WindowHelper {
     // Ensure y is at least workArea.y (don't go offscreen top)
     const topMargin = Math.round(workArea.height * 0.05);
     const y = Math.round(workArea.y + topMargin);
+    const useStealthRuntime = this.shouldUseStealthRuntime();
 
 // --- 1. Create Launcher Window ---
   const launcherSettings: Electron.BrowserWindowConstructorOptions = {
@@ -237,18 +271,24 @@ export class WindowHelper {
       webSecurity: true,
     },
     show: false,
+    paintWhenInitiallyHidden: true,
     skipTaskbar: this.contentProtection,
       titleBarStyle: 'hiddenInset',
       trafficLightPosition: { x: 14, y: 14 },
-      vibrancy: 'under-window',
-      visualEffectState: 'followWindow',
-      transparent: true,
       hasShadow: true,
-      backgroundColor: "#00000000",
       focusable: true,
       resizable: true,
       movable: true,
       center: true,
+      ...(useStealthRuntime ? {
+        vibrancy: 'under-window' as const,
+        visualEffectState: 'followWindow' as const,
+        transparent: true,
+        backgroundColor: "#00000000",
+      } : {
+        transparent: false,
+        backgroundColor: "#050505",
+      }),
       icon: (() => {
         const isMac = process.platform === "darwin";
         const isWin = process.platform === "win32";
@@ -285,7 +325,7 @@ export class WindowHelper {
     console.log(`[WindowHelper] Icon Path: ${launcherSettings.icon}`);
     console.log(`[WindowHelper] Start URL: ${startUrl}`);
 
-    if (this.shouldUseStealthRuntime()) {
+    if (useStealthRuntime) {
       try {
         this.launcherRuntime = new StealthRuntime({
           stealthManager: this.stealthManager,
@@ -311,7 +351,11 @@ export class WindowHelper {
       }
     } else {
       this.launcherRuntime = null
+      this.directLauncherLoaded = false
+      this.pendingDirectLauncherReveal = true
       this.launcherWindow = this.createDirectWindow(launcherSettings, `${startUrl}?window=launcher`, 'Launcher')
+      this.launcherWindow.setOpacity(0)
+      this.launcherWindow.hide()
       this.launcherContentWindow = this.launcherWindow
       console.log('[WindowHelper] Using direct launcher window on macOS');
     }
@@ -366,7 +410,7 @@ export class WindowHelper {
     hasShadow: false, // Prevent shadow from adding perceived size/artifacts
   }
 
-    if (this.shouldUseStealthRuntime()) {
+    if (useStealthRuntime) {
       try {
         this.overlayRuntime = new StealthRuntime({
           stealthManager: this.stealthManager,
@@ -414,10 +458,7 @@ export class WindowHelper {
     if (this.launcherRuntime) {
       console.log('[WindowHelper] Waiting for first launcher frame before showing stealth shell');
     } else {
-      this.launcherWindow.once('ready-to-show', () => {
-        this.switchToLauncher()
-        this.isWindowVisible = true
-      })
+      this.queueDirectLauncherRevealAfterLoad()
     }
 
     this.setupWindowListeners()
@@ -503,6 +544,7 @@ export class WindowHelper {
 
   public hideMainWindow(): void {
     // Hide BOTH
+    this.pendingDirectLauncherReveal = false
     this.hideLauncherSurface()
     this.overlayWindow?.hide()
     this.isWindowVisible = false
@@ -602,6 +644,20 @@ export class WindowHelper {
     console.log('[WindowHelper] Switching to LAUNCHER');
     this.currentWindowMode = 'launcher';
 
+    if (!this.launcherRuntime && !this.directLauncherLoaded) {
+      console.log('[WindowHelper] Delaying launcher reveal until direct renderer load completes');
+      this.pendingDirectLauncherReveal = true
+      if (this.launcherWindow && !this.launcherWindow.isDestroyed()) {
+        this.launcherWindow.setOpacity(0)
+        this.launcherWindow.hide();
+      }
+      if (this.overlayWindow && !this.overlayWindow.isDestroyed()) {
+        this.overlayWindow.hide();
+      }
+      this.isWindowVisible = false
+      return
+    }
+
     // Show Launcher FIRST
     if (this.launcherWindow && !this.launcherWindow.isDestroyed()) {
       if (process.platform === 'win32' && this.contentProtection) {
@@ -624,6 +680,9 @@ export class WindowHelper {
       }
     }, 16);
       } else {
+        if (!this.launcherRuntime) {
+          this.launcherWindow.setOpacity(1)
+        }
         this.applyLauncherSurfaceProtection();
         this.showLauncherSurface();
         this.stealthManager.reapplyAfterShow(this.launcherWindow);

@@ -1,4 +1,5 @@
 import { app } from "electron"
+import os from "os"
 import path from "path"
 import fsPromises from "fs/promises"
 import { exitAfterCriticalFailure } from '../processFailure'
@@ -38,7 +39,10 @@ export const fileLoggingEnabled = isDev || fileLoggingExplicitlyEnabled;
 
 export function buildLogFilePath(): string {
   const date = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
-  return path.join(app.getPath('userData'), 'Logs', `natively-${date}.log`);
+  const baseDir = app.isReady()
+    ? app.getPath('userData')
+    : path.join(os.tmpdir(), 'natively-preflight');
+  return path.join(baseDir, 'Logs', `natively-${date}.log`);
 }
 const logFile = buildLogFilePath();
 export const LOG_MAX_SIZE_BYTES = 10 * 1024 * 1024; // 10MB

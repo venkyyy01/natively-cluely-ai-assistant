@@ -1,6 +1,7 @@
 import { IEmbeddingProvider } from './IEmbeddingProvider';
 import { isAppleSilicon, isOptimizationActive } from '../../config/optimizations';
 import path from 'path';
+import { resolveBundledModelsPath } from '../../utils/modelPaths';
 
 let ort: any = null;
 let loadError: Error | null = null;
@@ -80,12 +81,12 @@ export class ANEEmbeddingProvider implements IEmbeddingProvider {
     }
   }
 
-  private getModelPath(): string {
-    const resourcesPath = process.env.NODE_ENV === 'production'
-      ? process.resourcesPath
-      : path.join(__dirname, '../../resources');
+  private getModelDirectory(): string {
+    return path.join(resolveBundledModelsPath(), 'Xenova', 'all-MiniLM-L6-v2');
+  }
 
-    return path.join(resourcesPath, 'models', 'minilm-l6-v2.onnx');
+  private getModelPath(): string {
+    return path.join(this.getModelDirectory(), 'onnx', 'model_quantized.onnx');
   }
 
   private async loadTokenizer(): Promise<any> {
@@ -94,7 +95,7 @@ export class ANEEmbeddingProvider implements IEmbeddingProvider {
       return await AutoTokenizer.from_pretrained('Xenova/all-MiniLM-L6-v2');
     } catch (error) {
       console.warn('[ANEEmbeddingProvider] @xenova/transformers not available, using fallback tokenizer');
-      const vocabPath = path.join(this.getModelPath(), '..', 'tokenizer.json');
+      const vocabPath = path.join(this.getModelDirectory(), 'tokenizer.json');
       const fs = await import('fs/promises');
       const vocabData = JSON.parse(await fs.readFile(vocabPath, 'utf-8'));
       return this.createTokenizerFromVocab(vocabData);
@@ -119,6 +120,18 @@ export class ANEEmbeddingProvider implements IEmbeddingProvider {
     };
   }
 
+  private normalizeTokenization(tokens: any): { ids: number[]; attentionMask: number[] } {
+    const rawIds = tokens?.ids ?? tokens?.inputIds ?? tokens?.input_ids ?? [];
+    const rawAttentionMask = tokens?.attentionMask ?? tokens?.attention_mask ?? [];
+
+    const ids = Array.from(rawIds, Number);
+    const attentionMask = rawAttentionMask.length > 0
+      ? Array.from(rawAttentionMask, Number)
+      : ids.map(() => 1);
+
+    return { ids, attentionMask };
+  }
+
   async isAvailable(): Promise<boolean> {
     return this.initialized;
   }
@@ -128,7 +141,7 @@ export class ANEEmbeddingProvider implements IEmbeddingProvider {
       throw new Error('ANEEmbeddingProvider not initialized');
     }
 
-    const tokens = this.tokenizer.encode(text);
+    const tokens = this.normalizeTokenization(this.tokenizer.encode(text));
 
     const runtime = await loadOnnxRuntime();
     
@@ -144,9 +157,16 @@ export class ANEEmbeddingProvider implements IEmbeddingProvider {
       [1, tokens.attentionMask.length]
     );
 
+    const tokenTypeIds = new runtime.Tensor(
+      'int64',
+      new BigInt64Array(tokens.ids.length),
+      [1, tokens.ids.length]
+    );
+
     const results = await this.session.run({
       input_ids: inputIds,
       attention_mask: attentionMask,
+      token_type_ids: tokenTypeIds,
     });
 
     const embeddings = results['last_hidden_state'].data as Float32Array;

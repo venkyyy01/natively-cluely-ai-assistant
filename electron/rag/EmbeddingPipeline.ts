@@ -47,21 +47,23 @@ export class EmbeddingPipeline {
         return this.initPromise;
     }
 
-    private async _doInitialize(config: AppAPIConfig): Promise<void> {
-        // ── Step 1: Eagerly init the local fallback FIRST, independently of the primary.
-        // This guarantees fallbackProvider is set even if the primary throws,
-        // so activateMeetingFallback() is always safe to call.
-        try {
-            const local = new LocalEmbeddingProvider();
-            if (await local.isAvailable()) {
-                this.fallbackProvider = local;
-                console.log(`[EmbeddingPipeline] Local fallback provider ready (${local.dimensions}d)`);
-            } else {
-                console.warn('[EmbeddingPipeline] Local fallback provider unavailable — bundled model may be missing');
-            }
-        } catch (e) {
-            console.warn('[EmbeddingPipeline] Could not initialize local fallback provider:', e);
+    private async ensureFallbackProviderAvailable(): Promise<boolean> {
+        if (!this.fallbackProvider) {
+            this.fallbackProvider = new LocalEmbeddingProvider();
         }
+
+        try {
+            return await this.fallbackProvider.isAvailable();
+        } catch (error) {
+            console.warn('[EmbeddingPipeline] Local fallback provider unavailable — bundled model may be missing', error);
+            return false;
+        }
+    }
+
+    private async _doInitialize(config: AppAPIConfig): Promise<void> {
+        // ── Step 1: Prepare the local fallback lazily so startup never blocks on transformers.js / ONNX.
+        this.fallbackProvider = new LocalEmbeddingProvider();
+        console.log(`[EmbeddingPipeline] Local fallback provider prepared (${this.fallbackProvider.dimensions}d, lazy init)`);
 
         // ── Step 2: Resolve primary provider.
         try {
@@ -103,7 +105,8 @@ export class EmbeddingPipeline {
             // Don't rethrow — if we have a fallback, the pipeline can still function
             // in local-only mode. Callers check isReady() which checks this.provider.
             // Only throw if we also have no fallback at all.
-            if (!this.fallbackProvider) {
+            const fallbackAvailable = await this.ensureFallbackProviderAvailable();
+            if (!fallbackAvailable || !this.fallbackProvider) {
                 throw err;
             }
             console.warn('[EmbeddingPipeline] Falling back to local-only mode for all meetings.');
@@ -318,7 +321,8 @@ export class EmbeddingPipeline {
      * 3. Notifies the renderer so the user sees an informative toast.
      */
     private async activateMeetingFallback(meetingId: string): Promise<void> {
-        if (!this.fallbackProvider) {
+        const fallbackAvailable = await this.ensureFallbackProviderAvailable();
+        if (!fallbackAvailable || !this.fallbackProvider) {
             // Should never happen — guard exists in the caller, but be defensive.
             console.error(`[EmbeddingPipeline] Cannot activate fallback for ${meetingId}: no local fallback provider available.`);
             return;

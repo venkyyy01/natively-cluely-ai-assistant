@@ -12,8 +12,13 @@ type Candidate = {
 };
 
 const NODE_MODULE_ABI_VERSION = process.versions.modules || 'unknown';
+const NAPI_VERSION = process.versions.napi || 'unknown';
 
-function readExpectedNodeAbiVersion(abiDirectory: string): string | null {
+type CompatibilityMetadata =
+  | { kind: 'napi'; minimumVersion: number }
+  | { kind: 'legacy-node-abi'; version: string };
+
+function readCompatibilityMetadata(abiDirectory: string): CompatibilityMetadata | null {
   const preferredFiles = [
     `index.${process.platform}-${process.arch}.node.abi`,
     'index.node.abi',
@@ -21,9 +26,20 @@ function readExpectedNodeAbiVersion(abiDirectory: string): string | null {
   for (const fileName of preferredFiles) {
     const filePath = path.join(abiDirectory, fileName);
     try {
-      const expected = fs.readFileSync(filePath, 'utf8').trim();
-      if (expected) {
-        return expected;
+      const metadata = fs.readFileSync(filePath, 'utf8').trim();
+      if (metadata) {
+        const napiMatch = metadata.match(/^napi>=(\d+)$/);
+        if (napiMatch) {
+          return {
+            kind: 'napi',
+            minimumVersion: Number(napiMatch[1]),
+          };
+        }
+
+        return {
+          kind: 'legacy-node-abi',
+          version: metadata,
+        };
       }
     } catch {
       // Continue trying fallback paths.
@@ -37,8 +53,23 @@ function readExpectedNodeAbiVersion(abiDirectory: string): string | null {
     if (!firstAbiFile) {
       return null;
     }
-    const expected = fs.readFileSync(path.join(abiDirectory, firstAbiFile), 'utf8').trim();
-    return expected || null;
+    const metadata = fs.readFileSync(path.join(abiDirectory, firstAbiFile), 'utf8').trim();
+    if (!metadata) {
+      return null;
+    }
+
+    const napiMatch = metadata.match(/^napi>=(\d+)$/);
+    if (napiMatch) {
+      return {
+        kind: 'napi',
+        minimumVersion: Number(napiMatch[1]),
+      };
+    }
+
+    return {
+      kind: 'legacy-node-abi',
+      version: metadata,
+    };
   } catch {
     return null;
   }
@@ -48,12 +79,27 @@ function assertNativeAbiCompatibility(candidate: Candidate): void {
   if (!candidate.abiDirectory) {
     return;
   }
-  const expected = readExpectedNodeAbiVersion(candidate.abiDirectory);
-  if (!expected || expected === NODE_MODULE_ABI_VERSION) {
+  const metadata = readCompatibilityMetadata(candidate.abiDirectory);
+  if (!metadata) {
     return;
   }
-  throw new Error(
-    `Native audio ABI mismatch: built for ${expected}, runtime is ${NODE_MODULE_ABI_VERSION}. Run \`npm run build:native:current\`.`,
+
+  if (metadata.kind === 'napi') {
+    const runtimeNapiVersion = Number(NAPI_VERSION);
+    if (!Number.isFinite(runtimeNapiVersion) || runtimeNapiVersion < metadata.minimumVersion) {
+      throw new Error(
+        `Native audio N-API mismatch: requires N-API ${metadata.minimumVersion}, runtime provides ${NAPI_VERSION}. Rebuild native audio with a compatible toolchain or upgrade Electron.`,
+      );
+    }
+    return;
+  }
+
+  if (metadata.version === NODE_MODULE_ABI_VERSION) {
+    return;
+  }
+
+  console.warn(
+    `[NativeAudio] Ignoring legacy Node ABI metadata (${metadata.version}) for ${candidate.label}; runtime is ${NODE_MODULE_ABI_VERSION}. Rebuild native audio to refresh compatibility metadata.`,
   );
 }
 
