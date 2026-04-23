@@ -39,7 +39,7 @@ export const fileLoggingEnabled = isDev || fileLoggingExplicitlyEnabled;
 
 export function buildLogFilePath(): string {
   const date = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
-  const baseDir = app.isReady()
+  const baseDir = (typeof app.isReady === 'function' && app.isReady())
     ? app.getPath('userData')
     : path.join(os.tmpdir(), 'natively-preflight');
   return path.join(baseDir, 'Logs', `natively-${date}.log`);

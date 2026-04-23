@@ -92,6 +92,11 @@ test('active renderer lifecycle: start/stop and shell readiness remain determini
   const { runtime, created, ipcBus } = createRuntimeHarness(() => {});
 
   runtime.show();
+  // Simulate first paint frame so the deferred show actually reveals the shell
+  created[0]?.webContents.emit('paint', {}, { x: 0, y: 0, width: 1, height: 1 }, {
+    getSize: () => ({ width: 1, height: 1 }),
+    toPNG: () => Buffer.from([]),
+  });
   runtime.hide();
   ipcBus.emit('stealth-shell:ready', { sender: { id: created[1]?.webContents.id } });
   runtime.destroy();
