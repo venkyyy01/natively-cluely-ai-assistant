@@ -121,6 +121,8 @@ export class WindowHelper {
       return
     }
 
+    ;(launcherContentWindow.webContents as any)._revealListenersQueued = true
+
     let revealQueued = false
     const revealWhenReady = (source: 'dom-ready' | 'did-finish-load') => {
       if (revealQueued) {
@@ -655,6 +657,13 @@ export class WindowHelper {
         this.overlayWindow.hide();
       }
       this.isWindowVisible = false
+      if (!this.launcherContentWindow || this.launcherContentWindow.isDestroyed()) {
+        return
+      }
+      const hasPendingListeners = (this.launcherContentWindow.webContents as any)._revealListenersQueued
+      if (!hasPendingListeners) {
+        this.queueDirectLauncherRevealAfterLoad()
+      }
       return
     }
 
