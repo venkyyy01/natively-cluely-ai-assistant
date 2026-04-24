@@ -6,6 +6,8 @@ import { StealthManager } from "./stealth/StealthManager"
 import { StealthRuntime } from "./stealth/StealthRuntime"
 import { attachRendererBridgeMonitor } from "./runtime/rendererBridgeHealth"
 import { resolveRendererPreloadPath, resolveRendererStartUrl } from "./runtime/windowAssetPaths"
+import { attachRevealSafetyNet, attachWindowCrashRecovery } from "./startup/rendererBridgeRecovery"
+import { recordStartupFailure } from "./startup/StartupHealer"
 
 type BrowserWindowOptionsWithContentProtection = Electron.BrowserWindowConstructorOptions & {
   contentProtection?: boolean
@@ -331,11 +333,21 @@ export class WindowHelper {
       this.launcherWindow.setOpacity(0)
       this.launcherWindow.hide()
       this.launcherContentWindow = this.launcherWindow
+
+      // NAT-SELF-HEAL: safety net — if bridge never settles, force reveal anyway
+      let revealSafetyNet = attachRevealSafetyNet('Launcher', this.launcherWindow, () => {
+        this.directLauncherLoaded = true
+        this.pendingDirectLauncherReveal = false
+        console.warn('[WindowHelper] Force-revealing launcher after safety-net timeout');
+        this.switchToLauncher()
+      })
+
       this.detachDirectLauncherBridgeMonitor = attachRendererBridgeMonitor('Launcher', this.launcherWindow, {
         expectedPreloadPath: preloadPath,
         url: `${startUrl}?window=launcher`,
         onSettled: (result) => {
           this.directLauncherLoaded = true
+          revealSafetyNet.cancel()
           console.log(`[WindowHelper] Direct launcher bridge settled: ${result}`)
 
           if (!this.pendingDirectLauncherReveal || this.currentWindowMode !== 'launcher') {
@@ -352,25 +364,43 @@ export class WindowHelper {
 
     this.applyLauncherSurfaceProtection()
 
+    // NAT-SELF-HEAL: auto-reload on load failure instead of permanent black screen
+    let launcherLoadFailures = 0;
+    const MAX_LAUNCHER_LOAD_FAILURES = 2;
     this.launcherContentWindow?.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL) => {
       console.error(`[WindowHelper] did-fail-load: ${errorCode} ${errorDescription} URL: ${validatedURL}`);
+      if (launcherLoadFailures < MAX_LAUNCHER_LOAD_FAILURES && this.launcherContentWindow && !this.launcherContentWindow.isDestroyed()) {
+        launcherLoadFailures += 1;
+        console.warn(`[WindowHelper] Auto-reloading launcher after load failure (${launcherLoadFailures}/${MAX_LAUNCHER_LOAD_FAILURES})`);
+        this.launcherContentWindow.webContents.reloadIgnoringCache();
+      } else {
+        console.error('[WindowHelper] Launcher load failed permanently. Recording startup failure.');
+        recordStartupFailure();
+      }
     });
 
     this.launcherContentWindow?.webContents.on('did-finish-load', () => {
       console.log('[WindowHelper] Launcher content window did-finish-load');
+      launcherLoadFailures = 0; // reset on success
     });
 
     this.launcherContentWindow?.webContents.on('dom-ready', () => {
       console.log('[WindowHelper] Launcher content window dom-ready');
     });
 
-    this.launcherContentWindow?.webContents.on('crashed', (_event, killed) => {
-      console.error(`[WindowHelper] Launcher content window crashed (killed=${killed})`);
-    });
-
-    this.launcherContentWindow?.webContents.on('render-process-gone', (_event, details) => {
-      console.error(`[WindowHelper] Launcher render process gone: reason=${details.reason} exitCode=${details.exitCode}`);
-    });
+    // NAT-SELF-HEAL: crash recovery — recreate the window instead of leaving a dead frame
+    if (this.launcherWindow && !this.launcherWindow.isDestroyed()) {
+      attachWindowCrashRecovery('Launcher', this.launcherWindow, () => {
+        console.warn('[WindowHelper] Recreating launcher window after crash');
+        recordStartupFailure();
+        if (this.launcherWindow && !this.launcherWindow.isDestroyed()) {
+          this.launcherWindow.destroy();
+        }
+        this.launcherWindow = null;
+        this.launcherContentWindow = null;
+        this.createWindow();
+      });
+    }
 
     // if (isDev) {
     //   this.launcherWindow.webContents.openDevTools({ mode: 'detach' }); // DEBUG: Open DevTools
@@ -438,6 +468,20 @@ export class WindowHelper {
       this.detachDirectOverlayBridgeMonitor = null
       this.overlayWindow = this.createDirectWindow(overlaySettings)
       this.overlayContentWindow = this.overlayWindow
+
+      // NAT-SELF-HEAL: overlay crash recovery
+      if (this.overlayWindow && !this.overlayWindow.isDestroyed()) {
+        attachWindowCrashRecovery('Overlay', this.overlayWindow, () => {
+          console.warn('[WindowHelper] Recreating overlay window after crash');
+          if (this.overlayWindow && !this.overlayWindow.isDestroyed()) {
+            this.overlayWindow.destroy();
+          }
+          this.overlayWindow = null;
+          this.overlayContentWindow = null;
+          // Overlay will be recreated on next toggle
+        });
+      }
+
       this.detachDirectOverlayBridgeMonitor = attachRendererBridgeMonitor('Overlay', this.overlayWindow, {
         expectedPreloadPath: preloadPath,
         url: `${startUrl}?window=overlay`,

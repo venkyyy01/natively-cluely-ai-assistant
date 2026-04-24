@@ -5,10 +5,26 @@ import { CredentialsManager } from "../services/CredentialsManager"
 import { OllamaManager } from '../services/OllamaManager'
 import { KeybindManager } from "../services/KeybindManager"
 import { initRedactorWithUserDataPath } from '../stealth/logRedactor'
+import {
+  runPreReadyHealing,
+  markSessionHealthy,
+  markSessionEnding,
+  wasPreviousSessionUnclean,
+} from '../startup/StartupHealer'
 
 // Application initialization
 
 export async function initializeApp() {
+  // NAT-SELF-HEAL: run synchronous cleanup BEFORE app.whenReady()
+  // so we can clear stale caches and kill zombie processes before
+  // Electron starts its renderer compositor.
+  const previousUnclean = wasPreviousSessionUnclean();
+  if (previousUnclean) {
+    console.warn('[Bootstrap] Previous session exited uncleanly. Running startup healing...');
+  }
+  const startupHealth = runPreReadyHealing();
+  console.log('[Bootstrap] Startup health:', startupHealth);
+
   // 2. Wait for app to be ready
   await app.whenReady()
 
@@ -118,6 +134,10 @@ export async function initializeApp() {
 
   appState.createWindow()
 
+  // NAT-SELF-HEAL: window created and renderer bridge is on its way.
+  // Mark session healthy so the next startup doesn't aggressively clear caches.
+  markSessionHealthy();
+
   // Apply initial stealth state based on isUndetectable setting
   if (appState.getUndetectable()) {
     // Stealth mode: dock already hidden above
@@ -212,6 +232,10 @@ export async function initializeApp() {
     }
 
     console.log("App is quitting, cleaning up resources...");
+
+    // NAT-SELF-HEAL: mark that we're shutting down cleanly.
+    // If we crash after this point, the next startup will still see unclean.
+    markSessionEnding();
 
     try {
       await appState.getIntelligenceManager()?.waitForPendingSaves(10000);

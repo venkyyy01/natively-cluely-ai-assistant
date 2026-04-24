@@ -63,15 +63,32 @@ export function registerIntelligenceHandlers({ appState, safeHandle, safeHandleV
     return [question, imagePaths] as const;
   }, async (_event, question?: string, imagePaths?: string[]) => {
     const resolvedQuestion = question || 'inferred from context';
+    const facade = getIntelligenceFacade(appState);
+
+    // NAT-SELF-HEAL: helper that attempts the call with one retry on null.
+    // Null usually means a transient race (cooldown, abort controller, or
+    // stealth containment) — a single retry after a short delay recovers
+    // the vast majority of cases.
+    const tryGenerate = async (attempt: number): Promise<string | null> => {
+      const answer = await facade.runWhatShouldISay?.(question, 0.8, imagePaths);
+      if (answer) return answer;
+
+      if (attempt === 1) {
+        console.warn('[IPC] generate-what-to-say returned null on attempt 1, retrying after 400ms...');
+        await new Promise((r) => setTimeout(r, 400));
+        return tryGenerate(2);
+      }
+      return null;
+    };
 
     try {
-      const answer = await getIntelligenceFacade(appState).runWhatShouldISay?.(question, 0.8, imagePaths);
+      const answer = await tryGenerate(1);
       if (!answer) {
         return {
           answer: null,
           question: resolvedQuestion,
           status: 'canceled' as const,
-          error: 'Request canceled before completion.',
+          error: 'Request canceled before completion. Retry with the current settings.',
         };
       }
 

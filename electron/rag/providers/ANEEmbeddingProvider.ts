@@ -1,5 +1,6 @@
 import { IEmbeddingProvider } from './IEmbeddingProvider';
 import { isAppleSilicon, isOptimizationActive } from '../../config/optimizations';
+import { safeCreateOnnxSession, type SafeOnnxSession } from '../../startup/onnxCrashGuard';
 import path from 'path';
 import { resolveBundledModelsPath } from '../../utils/modelPaths';
 
@@ -22,8 +23,8 @@ async function loadOnnxRuntime() {
 export class ANEEmbeddingProvider implements IEmbeddingProvider {
   readonly name = 'ane-embedding';
   readonly dimensions = 384;
-  
-  private session: any = null;
+
+  private session: SafeOnnxSession | null = null;
   private tokenizer: any = null;
   private useANE: boolean = false;
   private initialized: boolean = false;
@@ -32,6 +33,12 @@ export class ANEEmbeddingProvider implements IEmbeddingProvider {
   async initialize(): Promise<void> {
     if (!isOptimizationActive('useANEEmbeddings')) {
       console.log('[ANEEmbeddingProvider] Disabled via flag (toggle OFF), skipping initialization');
+      return;
+    }
+
+    // NAT-SELF-HEAL: if ONNX has crashed repeatedly in previous sessions, stay off
+    if (process.env.NATIVELY_DISABLE_ANE_EMBEDDINGS === '1') {
+      console.warn('[ANEEmbeddingProvider] Disabled by crash guard due to repeated ONNX failures in prior sessions');
       return;
     }
 
@@ -48,10 +55,17 @@ export class ANEEmbeddingProvider implements IEmbeddingProvider {
         ? ['coreml', 'cpu']
         : ['cpu'];
 
-      this.session = await runtime.InferenceSession.create(modelPath, {
+      // NAT-SELF-HEAL: use crash-isolated session creation
+      this.session = await safeCreateOnnxSession(runtime, modelPath, {
         executionProviders,
         graphOptimizationLevel: 'all',
       });
+
+      if (!this.session) {
+        console.warn('[ANEEmbeddingProvider] safeCreateOnnxSession returned null, falling back to existing provider');
+        this.initialized = false;
+        return;
+      }
 
       this.useANE = executionProviders[0] === 'coreml';
       this.tokenizer = await this.loadTokenizer();
