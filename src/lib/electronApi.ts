@@ -15,15 +15,18 @@ let cachedGuardedElectronApi: ElectronAPI | null = null;
 function guardElectronAPI(api: ElectronAPI): ElectronAPI {
   const target = api as ElectronApiRecord;
 
-  return new Proxy(target, {
-    get(currentTarget, property, receiver) {
-      const value = Reflect.get(currentTarget, property, receiver);
+  return new Proxy({} as ElectronApiRecord, {
+    get(_currentTarget, property) {
+      const value = target[property as keyof ElectronApiRecord];
 
       if (typeof value === 'function') {
-        return value.bind(currentTarget);
+        return value.bind(target);
       }
 
       return value;
+    },
+    has(_currentTarget, property) {
+      return property in target;
     },
   }) as ElectronAPI;
 }
@@ -68,27 +71,5 @@ export function installElectronApiGuard(): void {
     return;
   }
 
-  const guardedApi = getElectronAPI();
-  const descriptor = Object.getOwnPropertyDescriptor(window, 'electronAPI');
-
-  try {
-    if (!descriptor || descriptor.configurable) {
-      Object.defineProperty(window, 'electronAPI', {
-        configurable: true,
-        enumerable: true,
-        writable: false,
-        value: guardedApi,
-      });
-      return;
-    }
-
-    if (descriptor.writable) {
-      (window as Window & { electronAPI: ElectronAPI }).electronAPI = guardedApi;
-      return;
-    }
-
-    console.warn('[electronApi] Unable to install guarded Electron API bridge because window.electronAPI is read-only.');
-  } catch (error) {
-    console.warn('[electronApi] Failed to install guarded Electron API bridge:', error);
-  }
+  getElectronAPI();
 }

@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { EventEmitter } from 'node:events';
 import Module from 'node:module';
 
 function installElectronMock(): () => void {
@@ -32,6 +33,8 @@ test('WindowHelper treats overlay as a primary stealth surface', async () => {
   const restoreElectron = installElectronMock();
   const windowHelperPath = require.resolve('../WindowHelper');
   delete require.cache[windowHelperPath];
+  const originalResourcesPath = process.resourcesPath;
+  (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath = '/tmp/resources';
 
   try {
     const { WindowHelper } = await import('../WindowHelper');
@@ -53,6 +56,7 @@ test('WindowHelper treats overlay as a primary stealth surface', async () => {
       { enable: true, role: 'primary', hideFromSwitcher: false },
     ]);
   } finally {
+    (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath = originalResourcesPath;
     restoreElectron();
   }
 });
@@ -187,36 +191,82 @@ test('WindowHelper reveals the direct launcher after did-finish-load when a show
     const { WindowHelper } = await import('../WindowHelper');
     const helper = new WindowHelper({} as never, { applyToWindow() {}, reapplyAfterShow() {} } as never);
 
-    let didFinishLoadHandler: (() => void) | null = null;
-    let switchToLauncherCalls = 0;
+    class FakeWebContents extends EventEmitter {
+      executeJavaScript(): Promise<boolean> {
+        return Promise.resolve(true);
+      }
 
-    (helper as any).launcherRuntime = null;
-    (helper as any).pendingDirectLauncherReveal = true;
-    (helper as any).launcherWindow = {
-      isDestroyed: () => false,
+      reloadIgnoringCache(): void {}
+    }
+
+    class FakeWindow extends EventEmitter {
+      public webContents = new FakeWebContents();
+
+      isDestroyed(): boolean {
+        return false;
+      }
+
+      setOpacity(): void {}
+      hide(): void {}
+      show(): void {}
+      focus(): void {}
+      setIgnoreMouseEvents(): void {}
+      setFocusable(): void {}
+      blur(): void {}
+      setVisibleOnAllWorkspaces(): void {}
+      setAlwaysOnTop(): void {}
+      setBounds(): void {}
+
+      getBounds() {
+        return { x: 0, y: 0, width: 600, height: 300 };
+      }
+
+      close(): void {}
+    }
+
+    let launcherShown = 0;
+    let launcherFocused = 0;
+    const launcherWindow = new FakeWindow();
+    launcherWindow.show = () => {
+      launcherShown += 1;
     };
-    (helper as any).launcherContentWindow = {
-      isDestroyed: () => false,
-      webContents: {
-        once(event: string, handler: () => void) {
-          if (event === 'did-finish-load') {
-            didFinishLoadHandler = handler;
-          }
-        },
-      },
-    };
-    (helper as any).switchToLauncher = () => {
-      switchToLauncherCalls += 1;
+    launcherWindow.focus = () => {
+      launcherFocused += 1;
     };
 
-    (helper as any).queueDirectLauncherRevealAfterLoad();
+    const overlayWindow = new FakeWindow();
+    overlayWindow.show = () => {};
+    overlayWindow.focus = () => {};
+    overlayWindow.setBounds = () => {};
+    overlayWindow.hide = () => {};
 
-    assert.ok(didFinishLoadHandler, 'direct launcher should wait for did-finish-load');
-    didFinishLoadHandler?.();
+    const appState = {
+      getDisguise: () => 'none',
+      handleStealthRuntimeFault() {},
+      settingsWindowHelper: { reposition() {} },
+    };
+
+    (helper as any).appState = appState;
+    let windowCreationCount = 0;
+    (helper as any).createDirectWindow = () => {
+      windowCreationCount += 1;
+      return windowCreationCount === 1 ? launcherWindow : overlayWindow;
+    };
+    (helper as any).loadDirectWindow = () => {};
+    (helper as any).currentWindowMode = 'launcher';
+
+    helper.createWindow();
+
+    assert.equal((helper as any).directLauncherLoaded, false);
+    assert.equal((helper as any).pendingDirectLauncherReveal, true);
+
+    launcherWindow.webContents.emit('did-finish-load');
+    await new Promise((resolve) => setImmediate(resolve));
 
     assert.equal((helper as any).directLauncherLoaded, true);
     assert.equal((helper as any).pendingDirectLauncherReveal, false);
-    assert.equal(switchToLauncherCalls, 1);
+    assert.equal(launcherShown, 1);
+    assert.equal(launcherFocused, 2);
   } finally {
     restoreElectron();
   }

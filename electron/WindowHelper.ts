@@ -4,21 +4,14 @@ import { AppState } from "./main"
 import path from "node:path"
 import { StealthManager } from "./stealth/StealthManager"
 import { StealthRuntime } from "./stealth/StealthRuntime"
-
-const isEnvDev = process.env.NODE_ENV === "development"
-const isPackaged = app.isPackaged
+import { attachRendererBridgeMonitor } from "./runtime/rendererBridgeHealth"
+import { resolveRendererPreloadPath, resolveRendererStartUrl } from "./runtime/windowAssetPaths"
 
 type BrowserWindowOptionsWithContentProtection = Electron.BrowserWindowConstructorOptions & {
   contentProtection?: boolean
 }
 
-console.log(`[WindowHelper] isEnvDev: ${isEnvDev}, isPackaged: ${isPackaged}`)
-
-const isDev = isEnvDev && !isPackaged
-
-const startUrl = isDev
-  ? "http://localhost:5180"
-  : `file://${path.join(app.getAppPath(), "dist", "index.html")}`
+console.log(`[WindowHelper] isEnvDev: ${process.env.NODE_ENV === "development"}, isPackaged: ${app.isPackaged}`)
 
 export class WindowHelper {
   private launcherWindow: BrowserWindow | null = null
@@ -41,6 +34,8 @@ export class WindowHelper {
   private readonly overlayContentProtection: boolean = true
   private directLauncherLoaded: boolean = false
   private pendingDirectLauncherReveal: boolean = false
+  private detachDirectLauncherBridgeMonitor: (() => void) | null = null
+  private detachDirectOverlayBridgeMonitor: (() => void) | null = null
 
   // Initialize with explicit number type and 0 value
   private screenWidth: number = 0
@@ -107,44 +102,14 @@ export class WindowHelper {
     this.launcherWindow?.hide()
   }
 
-  private createDirectWindow(options: Electron.BrowserWindowConstructorOptions, url: string, label: string): BrowserWindow {
+  private createDirectWindow(options: Electron.BrowserWindowConstructorOptions): BrowserWindow {
     const win = new BrowserWindow(options)
-    void win.loadURL(url).catch((error) => {
-      console.error(`[WindowHelper] ${label} direct load failed:`, error)
-    })
     return win
   }
 
-  private queueDirectLauncherRevealAfterLoad(): void {
-    const launcherContentWindow = this.launcherContentWindow
-    if (!launcherContentWindow || launcherContentWindow.isDestroyed()) {
-      return
-    }
-
-    ;(launcherContentWindow.webContents as any)._revealListenersQueued = true
-
-    let revealQueued = false
-    const revealWhenReady = (source: 'dom-ready' | 'did-finish-load') => {
-      if (revealQueued) {
-        return
-      }
-      revealQueued = true
-      this.directLauncherLoaded = true
-      console.log(`[WindowHelper] Direct launcher ready to reveal via ${source}`);
-
-      if (!this.pendingDirectLauncherReveal || this.currentWindowMode !== 'launcher') {
-        return
-      }
-
-      this.pendingDirectLauncherReveal = false
-      this.switchToLauncher()
-    }
-
-    launcherContentWindow.webContents.once('dom-ready', () => {
-      revealWhenReady('dom-ready')
-    })
-    launcherContentWindow.webContents.once('did-finish-load', () => {
-      revealWhenReady('did-finish-load')
+  private loadDirectWindow(win: BrowserWindow, url: string, label: string): void {
+    void win.loadURL(url).catch((error) => {
+      console.error(`[WindowHelper] ${label} direct load failed:`, error)
     })
   }
 
@@ -241,6 +206,9 @@ export class WindowHelper {
   public createWindow(): void {
     if (this.launcherWindow !== null) return // Already created
 
+    const startUrl = resolveRendererStartUrl({ electronDir: __dirname })
+    const preloadPath = resolveRendererPreloadPath({ electronDir: __dirname })
+
     const primaryDisplay = screen.getPrimaryDisplay()
     const workArea = primaryDisplay.workArea
     this.screenWidth = workArea.width
@@ -258,7 +226,7 @@ export class WindowHelper {
     const useStealthRuntime = this.shouldUseStealthRuntime();
 
 // --- 1. Create Launcher Window ---
-  const launcherSettings: Electron.BrowserWindowConstructorOptions = {
+    const launcherSettings: Electron.BrowserWindowConstructorOptions = {
     width: width,
     height: height,
     x: x,
@@ -268,7 +236,8 @@ export class WindowHelper {
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
-      preload: path.join(__dirname, "preload.js"),
+      sandbox: false,
+      preload: preloadPath,
       scrollBounce: true,
       webSecurity: true,
     },
@@ -326,6 +295,7 @@ export class WindowHelper {
 
     console.log(`[WindowHelper] Icon Path: ${launcherSettings.icon}`);
     console.log(`[WindowHelper] Start URL: ${startUrl}`);
+    console.log(`[WindowHelper] Preload Path: ${preloadPath}`);
 
     if (useStealthRuntime) {
       try {
@@ -355,10 +325,28 @@ export class WindowHelper {
       this.launcherRuntime = null
       this.directLauncherLoaded = false
       this.pendingDirectLauncherReveal = true
-      this.launcherWindow = this.createDirectWindow(launcherSettings, `${startUrl}?window=launcher`, 'Launcher')
+      this.detachDirectLauncherBridgeMonitor?.()
+      this.detachDirectLauncherBridgeMonitor = null
+      this.launcherWindow = this.createDirectWindow(launcherSettings)
       this.launcherWindow.setOpacity(0)
       this.launcherWindow.hide()
       this.launcherContentWindow = this.launcherWindow
+      this.detachDirectLauncherBridgeMonitor = attachRendererBridgeMonitor('Launcher', this.launcherWindow, {
+        expectedPreloadPath: preloadPath,
+        url: `${startUrl}?window=launcher`,
+        onSettled: (result) => {
+          this.directLauncherLoaded = true
+          console.log(`[WindowHelper] Direct launcher bridge settled: ${result}`)
+
+          if (!this.pendingDirectLauncherReveal || this.currentWindowMode !== 'launcher') {
+            return
+          }
+
+          this.pendingDirectLauncherReveal = false
+          this.switchToLauncher()
+        },
+      })
+      this.loadDirectWindow(this.launcherWindow, `${startUrl}?window=launcher`, 'Launcher')
       console.log('[WindowHelper] Using direct launcher window on macOS');
     }
 
@@ -397,7 +385,8 @@ export class WindowHelper {
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
-      preload: path.join(__dirname, "preload.js"),
+      sandbox: false,
+      preload: preloadPath,
       scrollBounce: true,
     },
     show: false,
@@ -445,8 +434,15 @@ export class WindowHelper {
       }
     } else {
       this.overlayRuntime = null
-      this.overlayWindow = this.createDirectWindow(overlaySettings, `${startUrl}?window=overlay`, 'Overlay')
+      this.detachDirectOverlayBridgeMonitor?.()
+      this.detachDirectOverlayBridgeMonitor = null
+      this.overlayWindow = this.createDirectWindow(overlaySettings)
       this.overlayContentWindow = this.overlayWindow
+      this.detachDirectOverlayBridgeMonitor = attachRendererBridgeMonitor('Overlay', this.overlayWindow, {
+        expectedPreloadPath: preloadPath,
+        url: `${startUrl}?window=overlay`,
+      })
+      this.loadDirectWindow(this.overlayWindow, `${startUrl}?window=overlay`, 'Overlay')
       console.log('[WindowHelper] Using direct overlay window on macOS');
     }
 
@@ -459,8 +455,6 @@ export class WindowHelper {
     this.setOverlayClickthrough(this.overlayClickthroughEnabled)
     if (this.launcherRuntime) {
       console.log('[WindowHelper] Waiting for first launcher frame before showing stealth shell');
-    } else {
-      this.queueDirectLauncherRevealAfterLoad()
     }
 
     this.setupWindowListeners()
@@ -492,6 +486,10 @@ export class WindowHelper {
       }
       this.launcherRuntime?.destroy()
       this.launcherRuntime = null
+      this.detachDirectLauncherBridgeMonitor?.()
+      this.detachDirectLauncherBridgeMonitor = null
+      this.detachDirectOverlayBridgeMonitor?.()
+      this.detachDirectOverlayBridgeMonitor = null
       this.launcherWindow = null
       this.launcherContentWindow = null
       if (this.overlayWindow && !this.overlayWindow.isDestroyed()) {
@@ -657,13 +655,6 @@ export class WindowHelper {
         this.overlayWindow.hide();
       }
       this.isWindowVisible = false
-      if (!this.launcherContentWindow || this.launcherContentWindow.isDestroyed()) {
-        return
-      }
-      const hasPendingListeners = (this.launcherContentWindow.webContents as any)._revealListenersQueued
-      if (!hasPendingListeners) {
-        this.queueDirectLauncherRevealAfterLoad()
-      }
       return
     }
 

@@ -1,4 +1,4 @@
-import { getOptionalElectronMethod, installElectronApiGuard, requireElectronMethod } from '../../src/lib/electronApi';
+import { getElectronAPI, getOptionalElectronMethod, installElectronApiGuard, requireElectronMethod } from '../../src/lib/electronApi';
 
 const originalElectronAPI = window.electronAPI;
 
@@ -14,18 +14,25 @@ afterEach(() => {
   }
 });
 
-test('installElectronApiGuard preserves missing preload methods as absent and keeps restart-hint helpers available', async () => {
+test('installElectronApiGuard preserves missing preload methods as absent without replacing the live preload bridge', async () => {
+  const rawBridge = Object.freeze({
+    getThemeMode: jest.fn().mockResolvedValue({ mode: 'dark', resolved: 'dark' }),
+  });
+
   Object.defineProperty(window, 'electronAPI', {
     configurable: true,
-    writable: true,
-    value: {
-      getThemeMode: jest.fn().mockResolvedValue({ mode: 'dark', resolved: 'dark' }),
-    },
+    writable: false,
+    value: rawBridge,
   });
 
   installElectronApiGuard();
 
-  await expect(window.electronAPI.getThemeMode()).resolves.toEqual({ mode: 'dark', resolved: 'dark' });
+  expect(window.electronAPI).toBe(rawBridge);
+
+  const guardedBridge = getElectronAPI();
+
+  expect(guardedBridge).not.toBe(rawBridge);
+  await expect(guardedBridge.getThemeMode()).resolves.toEqual({ mode: 'dark', resolved: 'dark' });
 
   expect((window.electronAPI as any).startMeeting).toBeUndefined();
   expect(() => requireElectronMethod('startMeeting')).toThrow(

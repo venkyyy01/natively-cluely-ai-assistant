@@ -635,7 +635,9 @@ export class DatabaseManager {
                 console.warn('[DatabaseManager] wal_checkpoint(TRUNCATE) failed on close:', error);
             }
             try { this.db.pragma('journal_mode = DELETE'); } catch (error) {
-                console.warn('[DatabaseManager] journal_mode=DELETE failed on close:', error);
+                if ((error as NodeJS.ErrnoException | undefined)?.code !== 'SQLITE_BUSY') {
+                    console.warn('[DatabaseManager] journal_mode=DELETE failed on close:', error);
+                }
             }
             this.db.close();
             console.log('[DatabaseManager] Closed SQLite connection (WAL truncated).');

@@ -468,7 +468,7 @@ export class LLMHelper {
     this.responseCache.clear();
     this.inFlightResponseCache.clear();
     // Stop model version manager background scheduler and null reference
-    this.modelVersionManager.stopScheduler();
+    (this.modelVersionManager as ModelVersionManager | null)?.stopScheduler?.();
     this.modelVersionManager = null as any;
     console.log('[LLMHelper] Keys scrubbed from memory');
   }

@@ -5,6 +5,12 @@ import { FrameBridge } from './frameBridge';
 import { InputBridge } from './inputBridge';
 import type { StealthInputEvent } from './types';
 import type { StealthManager } from './StealthManager';
+import { attachRendererBridgeMonitor } from '../runtime/rendererBridgeHealth';
+import {
+  resolveRendererPreloadPath,
+  resolveStealthShellHtmlPath,
+  resolveStealthShellPreloadPath,
+} from '../runtime/windowAssetPaths';
 
 type RuntimeWindow = Pick<BrowserWindow,
   | 'loadURL'
@@ -67,18 +73,19 @@ export class StealthRuntime {
   private firstFrameReceived = false;
   private showRequestedBeforeFirstFrame = false;
   private firstFrameTimeout: NodeJS.Timeout | null = null;
+  private detachContentBridgeMonitor: (() => void) | null = null;
 
   constructor(options: StealthRuntimeOptions) {
     this.stealthManager = options.stealthManager;
     this.startUrl = options.startUrl;
-    this.shellHtmlPath = options.shellHtmlPath ?? path.join(app.getAppPath(), 'electron', 'renderer', 'shell.html');
+    this.shellHtmlPath = options.shellHtmlPath ?? resolveStealthShellHtmlPath({ electronDir: path.resolve(__dirname, '..') });
     if (!this.shellHtmlPath.endsWith('.html') || this.shellHtmlPath.includes('..')) {
       throw new Error(`Invalid shellHtmlPath: ${this.shellHtmlPath}`);
     }
     this.createWindow = options.createWindow ?? ((windowOptions) => new BrowserWindow(windowOptions));
     this.logger = options.logger ?? console;
-    this.preloadPath = options.preloadPath ?? path.join(__dirname, '../preload.js');
-    this.shellPreloadPath = options.shellPreloadPath ?? path.join(__dirname, './shellPreload.js');
+    this.preloadPath = options.preloadPath ?? resolveRendererPreloadPath({ electronDir: path.resolve(__dirname, '..') });
+    this.shellPreloadPath = options.shellPreloadPath ?? resolveStealthShellPreloadPath({ electronDir: path.resolve(__dirname, '..') });
     this.ipcMain = options.ipcMain ?? ipcMain;
     this.onFault = options.onFault;
     this.onHeartbeat = options.onHeartbeat;
@@ -158,6 +165,7 @@ export class StealthRuntime {
           ...webPreferences,
           preload: this.preloadPath,
           offscreen: true,
+          sandbox: false,
           backgroundThrottling: false,
         },
       });
@@ -167,6 +175,7 @@ export class StealthRuntime {
         webPreferences: {
           nodeIntegration: false,
           contextIsolation: true,
+          sandbox: false,
           preload: this.shellPreloadPath,
           backgroundThrottling: false,
         },
@@ -180,6 +189,17 @@ export class StealthRuntime {
     this.contentWindow = contentWindow;
     this.firstFrameReceived = false;
     this.showRequestedBeforeFirstFrame = false;
+    this.detachContentBridgeMonitor?.();
+    this.detachContentBridgeMonitor = attachRendererBridgeMonitor('Stealth content', this.contentWindow, {
+      expectedPreloadPath: this.preloadPath,
+      url: this.startUrl,
+      logger: this.logger,
+      onSettled: (result) => {
+        if (result === 'failed') {
+          this.emitFault('content-preload-bridge-unavailable');
+        }
+      },
+    });
     this.frameBridge.attach(this.contentWindow.webContents as unknown as Parameters<FrameBridge['attach']>[0]);
     this.bindShellEvents();
 
@@ -289,6 +309,8 @@ export class StealthRuntime {
       clearTimeout(this.firstFrameTimeout);
       this.firstFrameTimeout = null;
     }
+    this.detachContentBridgeMonitor?.();
+    this.detachContentBridgeMonitor = null;
     if (this.boundInputHandler) {
       this.ipcMain.removeListener('stealth-shell:input', this.boundInputHandler);
       this.boundInputHandler = null;

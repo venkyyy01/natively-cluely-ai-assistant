@@ -11,7 +11,7 @@
     "typecheck": "tsc --noEmit && tsc -p electron/tsconfig.json --noEmit",
     "postinstall": "node scripts/ensure-electron-native-deps.js && node scripts/download-models.js && node scripts/ensure-sqlite-vec.js",
     "electron:dev": "node scripts/ensure-electron-native-deps.js && npm run build:native:current && tsc -p electron/tsconfig.json && cross-env NODE_ENV=development electron .",
-    "electron:build": "node scripts/ensure-electron-native-deps.js && npm run build:native:current && tsc -p electron/tsconfig.json && cross-env NODE_ENV=production electron .",
+    "electron:build": "node scripts/ensure-electron-native-deps.js && npm run build:native:current && rimraf dist && vite build && tsc -p electron/tsconfig.json && cross-env NODE_ENV=production electron .",
     "prepare:macos:virtual-display-helper": "node scripts/prepare-macos-virtual-display-helper.js",
     "prepare:macos:full-stealth-helper": "node scripts/prepare-macos-full-stealth-helper.js",
     "prepare:macos:foundation-intent-helper": "node scripts/prepare-macos-foundation-intent-helper.js",
@@ -62,7 +62,10 @@
     ],
     "asarUnpack": [
       "**/*.node",
-      "**/*.dylib"
+      "**/*.dylib",
+      "dist-electron/electron/preload.js",
+      "dist-electron/electron/preload/**",
+      "dist-electron/electron/stealth/shellPreload.js"
     ],
     "directories": {
       "output": "release",

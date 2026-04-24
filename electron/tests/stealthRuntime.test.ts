@@ -91,6 +91,8 @@ test('StealthRuntime creates shell/content pair and applies stealth to the visib
   assert.equal(created[0]?.options.transparent, false);
   assert.equal(created[0]?.options.frame, false);
   assert.equal(created[0]?.options.vibrancy, undefined);
+  assert.equal((created[0]?.options.webPreferences as Record<string, unknown>)?.sandbox, false);
+  assert.equal((created[1]?.options.webPreferences as Record<string, unknown>)?.sandbox, false);
   assert.deepEqual(applied, [
     { id: 2, options: { role: 'primary', hideFromSwitcher: false, allowVirtualDisplayIsolation: false } },
   ]);

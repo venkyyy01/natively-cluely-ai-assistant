@@ -715,10 +715,14 @@ require_file "$APP_RESOURCES_DIR/bin/macos/foundation-intent-helper" "Packaged f
 require_file "$APP_GLOB/Contents/XPCServices/macos-full-stealth-helper.xpc/Contents/MacOS/macos-full-stealth-helper" "Packaged macOS full stealth XPC helper"
 
 if [[ "$BUILD_ARCH" == "arm64" ]]; then
+    require_file "$APP_ASAR_UNPACKED_DIR/dist-electron/electron/preload.js" "Unpacked renderer preload"
+    require_file "$APP_ASAR_UNPACKED_DIR/dist-electron/electron/stealth/shellPreload.js" "Unpacked stealth shell preload"
     require_file "$APP_ASAR_UNPACKED_DIR/node_modules/natively-audio/index.darwin-arm64.node" "Unpacked arm64 native audio binary"
     require_file "$APP_ASAR_UNPACKED_DIR/node_modules/better-sqlite3/build/Release/better_sqlite3.node" "Unpacked arm64 better-sqlite3 binary"
     require_file "$APP_ASAR_UNPACKED_DIR/node_modules/sqlite3/build/Release/node_sqlite3.node" "Unpacked arm64 sqlite3 binary"
 else
+    require_file "$APP_ASAR_UNPACKED_DIR/dist-electron/electron/preload.js" "Unpacked renderer preload"
+    require_file "$APP_ASAR_UNPACKED_DIR/dist-electron/electron/stealth/shellPreload.js" "Unpacked stealth shell preload"
     require_file "$APP_ASAR_UNPACKED_DIR/node_modules/natively-audio/index.darwin-x64.node" "Unpacked x64 native audio binary"
     require_file "$APP_ASAR_UNPACKED_DIR/node_modules/better-sqlite3/build/Release/better_sqlite3.node" "Unpacked x64 better-sqlite3 binary"
     require_file "$APP_ASAR_UNPACKED_DIR/node_modules/sqlite3/build/Release/node_sqlite3.node" "Unpacked x64 sqlite3 binary"
