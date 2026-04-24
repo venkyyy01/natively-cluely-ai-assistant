@@ -77,6 +77,8 @@ test('NAT-048: identical consecutive answers result in a single emission', () =>
   );
   assert.equal(harness.sessionMessages.length, 1, 'session must not double-record the same answer');
   assert.equal(harness.usagePushes.length, 1, 'usage must not double-count the duplicate');
+  assert.equal(harness.tracker.getSnapshot(requestId2)?.terminalStatus, 'suppressed');
+  assert.equal(harness.tracker.getSnapshot(requestId2)?.suppressionReason, 'duplicate_answer');
   // Backward-compat: the call still returns the input answer for telemetry.
   assert.equal(ret, answer);
 });

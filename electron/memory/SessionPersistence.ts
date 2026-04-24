@@ -24,7 +24,19 @@ export interface SessionIndex {
 
 export interface SessionEvent {
   eventId: string;
-  type: 'transcript' | 'usage' | 'checkpoint' | 'thread-action' | 'reset';
+  type:
+    | 'transcript'
+    | 'usage'
+    | 'checkpoint'
+    | 'thread-action'
+    | 'reset'
+    | 'containment_activated'
+    | 'containment_cleared'
+    | 'stealth_fault'
+    | 'conscious_route_decision'
+    | 'conscious_thread_action'
+    | 'conscious_verifier_result'
+    | 'inference_aborted';
   timestamp: number;
   payload: Record<string, unknown>;
 }
@@ -373,15 +385,13 @@ export class SessionPersistence {
 
   async snapshotEvents(sessionId: string, session: PersistedSession): Promise<void> {
     await this.init();
-    const logPath = this.buildEventLogPath(sessionId);
     const snapshotEvent: SessionEvent = {
       eventId: `snapshot-${Date.now()}`,
       type: 'checkpoint',
       timestamp: Date.now(),
       payload: { session },
     };
-    const line = JSON.stringify(snapshotEvent) + '\n';
-    await fs.writeFile(logPath, line, 'utf-8');
+    await this.appendEvent(sessionId, snapshotEvent);
   }
 
   async getEventCount(sessionId: string): Promise<number> {

@@ -35,6 +35,8 @@ Not included as primary implementation tickets:
 | FS-006 | Await live RAG shutdown before closing database | P1 | shutdown/RAG | none |
 | FS-007 | Add critical supervisor-bus observability and health gates | P1 | observability | FS-001 |
 | FS-008 | Decide and enforce stealth-supervisor lifecycle policy | P1 | runtime/stealth | FS-002 |
+| FS-009 | Add protected startup gate and visibility intent state | P0 | startup/privacy | FS-001, FS-002 |
+| FS-010 | Make invisible-mode toggle a two-phase privacy transition | P1 | UX/privacy | FS-009 |
 | CM-001 | Make conscious question source explicit | P0 | conscious mode | none |
 | CM-002 | Buffer whole transcript handling during session restore | P0 | conscious/session | CM-001 |
 | CM-003 | Report actual conscious verifier/provenance outcomes | P1 | transparency | CM-001 |
@@ -410,6 +412,144 @@ Acceptance criteria:
 
 - Every meeting has explicit stealth monitoring status: active, optional-unmonitored, or failed-closed.
 
+## FS-009: Add Protected Startup Gate and Visibility Intent State
+
+Priority: P0
+Severity: Critical
+Validated: yes
+
+Brainstormed design direction:
+
+- Do not use `openAsHidden: true` as the primary privacy mechanism. It can make the app hard to find on login and still does not prove that no sensitive renderer state exists.
+- Do not use `openAsHidden: false` as-is either. It improves discoverability, but current startup, recovery, and error surfaces can visibly identify the app or expose non-shield UI during a screen share.
+- Introduce a startup privacy gate that starts the app in a protected state, then reveals only the surface allowed by an explicit visibility intent.
+- Treat invisible/privacy mode as the default startup intent when enabled in settings. Normal app UI should become visible only after the user explicitly toggles invisible mode off.
+- While invisible/privacy mode is on, startup may create windows and initialize services, but renderer content must be blank shield or a non-sensitive local status surface. It must not render startup animation, branded copy, transcript content, assistant placeholders, model names, settings content, or errors.
+
+Evidence:
+
+- `electron/ipc/registerSettingsHandlers.ts:289` configures login startup with `openAsHidden: false`.
+- `electron/main/bootstrap.ts:135` creates the main window during bootstrap.
+- `src/App.tsx:207` renders `StartupSequence` during startup.
+- `src/main.tsx:8` and `src/App.tsx:35` render visible startup error screens.
+- `electron/WindowHelper.ts:337` force-reveals launcher on bootstrap timeout.
+
+Failure scenario:
+
+1. User has invisible/privacy mode enabled and app is configured to launch at login.
+2. App starts while the user is already sharing their screen or shortly before a meeting starts.
+3. Current login behavior can create and reveal a normal startup surface.
+4. If bootstrap fails or times out, fallback UI can reveal app identity or error details.
+5. If `openAsHidden: true` is used instead, the app becomes hard to discover and recover, but sensitive renderer state is still not formally gated by a privacy state machine.
+
+Minimal fix:
+
+- Add a `VisibilityIntentController` or equivalent state owned by main:
+  - `boot_unknown`
+  - `protected_hidden`
+  - `protected_shield`
+  - `visible_safe_controls`
+  - `visible_app`
+  - `faulted_shield`
+- Load persisted invisible/privacy mode before creating any user-facing renderer surface.
+- On startup, set intent to `protected_hidden` or `protected_shield` when invisible/privacy mode is enabled.
+- Only transition to `visible_app` after the user explicitly toggles invisible/privacy mode off.
+- Replace startup animation and startup error screens with privacy shield content whenever intent is not `visible_app`.
+- Move detailed startup errors to logs/diagnostics instead of renderer text while protected.
+- Make `openAsHidden` a UX preference derived from visibility intent, not the safety boundary.
+
+Robust fix:
+
+- Make all window helpers require a `VisibilityIntentSnapshot` before `show()`.
+- Add renderer boot props that include `allowedSurface: shield | safe_controls | full_app`.
+- Enforce a renderer-side guard that refuses to mount full app routes unless `allowedSurface === 'full_app'`.
+- Convert force-reveal fallback into force-shield fallback. If bootstrap readiness is unknown, show shield or remain hidden; never reveal launcher UI as recovery.
+- Add a non-sensitive recovery path for users who cannot find the app after login, such as an explicit menu/shortcut action that toggles invisible mode off and commits `visible_app`.
+
+Tests:
+
+- Unit: login startup with invisible/privacy mode enabled sets visibility intent to `protected_hidden` or `protected_shield`, never `visible_app`.
+- Unit: startup timeout transitions to `faulted_shield`, not launcher reveal.
+- Renderer: protected startup does not mount `StartupSequence`, settings text, transcript text, model names, assistant placeholders, or startup error copy.
+- Integration: app launched at login with invisible/privacy enabled produces only shield-safe pixels before user toggle.
+- Regression: app launched with invisible/privacy disabled still opens normally, with content protection applied before show where supported.
+
+Acceptance criteria:
+
+- No sensitive or branded app UI renders before `visible_app` intent is committed.
+- Invisible/privacy mode survives relaunch and blocks full UI on startup until explicitly toggled off.
+- `openAsHidden` is not documented or relied on as the privacy guarantee.
+- Startup failure, bootstrap timeout, and renderer crash all fail closed to shield/hidden state.
+
+## FS-010: Make Invisible-Mode Toggle a Two-Phase Privacy Transition
+
+Priority: P1
+Severity: High
+Validated: yes
+
+Brainstormed design direction:
+
+- The toggle should be an explicit privacy transition, not just a renderer visibility event.
+- Turning invisible/privacy mode on should blank or hide sensitive UI before any animation, resize, or delayed hide path.
+- Turning invisible/privacy mode off should reveal normal UI only after main and renderer agree on the new visibility intent.
+- The user needs a reliable way to recover visibility after startup, but that recovery path must be intentional and must not auto-reveal sensitive content.
+
+Evidence:
+
+- `electron/main/AppState.ts:2454` sends `toggle-expand` to the current content window instead of directly committing a privacy state.
+- `src/components/NativelyInterface.tsx:371` delays `hideWindow()` by about 400ms when collapsed.
+- `src/components/NativelyInterface.tsx:928` creates a visible assistant placeholder before IPC response completion.
+- `electron/main/AppState.ts:355` emergency hide is direct and closer to the desired fail-closed behavior.
+
+Failure scenario:
+
+1. User toggles invisible/privacy mode while a response panel or startup surface is visible.
+2. Main process sends a UI event, but renderer animation/timing controls when hiding occurs.
+3. For a short interval, assistant panel, placeholder, canceled message, or startup UI can remain visible.
+4. If the current renderer is launcher/settings rather than the main interface, the toggle event may not reach a mounted handler.
+
+Minimal fix:
+
+- Add `requestVisibilityIntent(nextIntent, source)` in main.
+- For invisible/privacy mode on:
+  - synchronously clear sensitive renderer state
+  - activate shield
+  - hide or shield windows directly from main
+  - abort/suppress active response rendering
+- For invisible/privacy mode off:
+  - clear shield fault only if startup and stealth/protection state are valid
+  - commit `visible_app`
+  - then reveal the appropriate window
+- Replace delayed renderer hide with an immediate main-owned hide/shield path for privacy transitions.
+
+Robust fix:
+
+- Model transition phases:
+  - `requested`
+  - `blanking`
+  - `main_committed`
+  - `renderer_acknowledged`
+  - `visible_or_hidden`
+  - `failed_closed`
+- Require renderer acknowledgement before showing full app UI after invisible/privacy mode is turned off.
+- Add a timeout that returns to `faulted_shield` if renderer acknowledgement does not arrive.
+- Use the same path for startup, tray/menu action, global shortcut, emergency hide, and settings toggle.
+
+Tests:
+
+- Unit: toggling invisible/privacy on immediately activates shield before delayed UI paths can run.
+- Unit: toggle event works regardless of current surface: launcher, overlay, settings, model selector, or startup.
+- Renderer: assistant placeholder and canceled/error response text are cleared when privacy transition starts.
+- Integration: rapid toggle on/off during streaming response never leaves response text visible after protected intent is committed.
+- Regression: emergency hide and invisible/privacy toggle share the same containment/shield primitives.
+
+Acceptance criteria:
+
+- Turning invisible/privacy mode on is fail-closed and immediate from main's perspective.
+- Turning invisible/privacy mode off is the only path that reveals full app UI after protected startup.
+- No renderer animation or delayed callback controls the privacy boundary.
+- Users can recover visibility intentionally without auto-revealing sensitive startup or response state.
+
 ## CM-001: Make Conscious Question Source Explicit
 
 Priority: P0
@@ -700,4 +840,3 @@ npm run test:electron -- --test-name-pattern Conscious
 - Persisted event/session schema additions must be backward-compatible for existing sessions.
 - New audit event fields should be optional when replaying older logs.
 - Avoid deleting or renaming existing persisted files as part of these tickets.
-

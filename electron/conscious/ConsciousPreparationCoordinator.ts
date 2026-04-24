@@ -242,18 +242,14 @@ export class ConsciousPreparationCoordinator {
     if (!input.profileData && this.session.isConsciousModeEnabled()) {
       console.warn('[ConsciousPreparation] No profile data available for semantic fact enrichment. Conscious mode responses will lack personalized context.');
     }
-    const stateBlock = this.retrievalOrchestrator.buildStateBlock(
-      input.lastInterviewerTurn || input.resolvedQuestion,
-    );
+    const planningQuestion = input.resolvedQuestion || input.lastInterviewerTurn || '';
+    const stateBlock = this.retrievalOrchestrator.buildStateBlock(planningQuestion);
     const liveRagBlock = this.retrievalOrchestrator.buildLiveRagBlock({
-      question: input.lastInterviewerTurn || input.resolvedQuestion,
+      question: planningQuestion,
       contextItems,
       maxItems: 6,
     });
-    const longMemoryBlock = this.session.getConsciousLongMemoryContext(
-      input.lastInterviewerTurn || input.resolvedQuestion
-    );
-    const planningQuestion = input.lastInterviewerTurn || input.resolvedQuestion;
+    const longMemoryBlock = this.session.getConsciousLongMemoryContext(planningQuestion);
     const reaction = this.session.getLatestQuestionReaction();
     const hypothesis = this.session.getLatestAnswerHypothesis();
     let preferenceSummary = this.session.getConsciousResponsePreferenceSummary(detectConsciousQuestionMode(planningQuestion));
@@ -275,7 +271,7 @@ export class ConsciousPreparationCoordinator {
       });
     }
     const semanticBlock = this.semanticFactStore.buildContextBlock({
-      question: input.lastInterviewerTurn || input.resolvedQuestion,
+      question: planningQuestion,
       reaction,
       limit: 5,
     });

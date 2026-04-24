@@ -3,10 +3,19 @@ export interface PrivacyShieldState {
   reason: string | null;
 }
 
+export type VisibilityIntent =
+  | 'boot_unknown'
+  | 'protected_hidden'
+  | 'protected_shield'
+  | 'visible_safe_controls'
+  | 'visible_app'
+  | 'faulted_shield';
+
 interface DerivePrivacyShieldStateOptions {
   warnings?: readonly string[];
   faultReason?: string | null;
   captureProtectionEnabled?: boolean;
+  visibilityIntent?: VisibilityIntent;
 }
 
 const CAPTURE_RISK_WARNINGS = new Set([
@@ -26,6 +35,7 @@ const CAPTURE_RISK_WARNINGS = new Set([
 
 const CAPTURE_RISK_REASON = 'Sensitive content hidden while capture risk is detected.';
 const PROTECTION_FAULT_REASON = 'Sensitive content hidden until privacy protection is restored.';
+const PROTECTED_INTENT_REASON = 'Sensitive content hidden while privacy mode is active.';
 
 export function hasCaptureRiskWarnings(warnings: readonly string[] = []): boolean {
   return warnings.some((warning) => CAPTURE_RISK_WARNINGS.has(warning));
@@ -36,6 +46,14 @@ export function derivePrivacyShieldState(options: DerivePrivacyShieldStateOption
     return {
       active: true,
       reason: PROTECTION_FAULT_REASON,
+    };
+  }
+
+  const visibilityIntent = options.visibilityIntent ?? 'visible_app';
+  if (visibilityIntent !== 'visible_app' && visibilityIntent !== 'visible_safe_controls') {
+    return {
+      active: true,
+      reason: PROTECTED_INTENT_REASON,
     };
   }
 

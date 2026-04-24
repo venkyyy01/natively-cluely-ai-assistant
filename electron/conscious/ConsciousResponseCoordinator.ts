@@ -53,11 +53,11 @@ export class ConsciousResponseCoordinator {
         // The user already has the prior answer on screen. Re-emitting an
         // identical paragraph is the worst kind of "AI slop" — it makes the
         // assistant look broken and burns the user's attention. Suppress
-        // the entire emission cycle: no tokens, no final, no session
-        // append, no usage push, no latency completion. The latency
-        // tracker stays "in flight" deliberately so its snapshot reflects
-        // the suppression rather than recording a phantom completion.
+        // the entire emission cycle: no tokens, no final event, no session
+        // append, and no usage push. Complete the latency lifecycle with a
+        // suppressed terminal state so metrics cannot drift.
         this.latencyTracker.mark(input.requestId, 'response.duplicate_suppressed');
+        this.latencyTracker.completeSuppressed(input.requestId, 'duplicate_answer');
         console.log(
           '[ConsciousResponseCoordinator] Suppressing duplicate answer; matched prior preview:',
           dupeCheck.matchedPreview,

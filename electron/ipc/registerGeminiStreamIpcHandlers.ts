@@ -10,6 +10,7 @@ export type GeminiStreamIpcDeps = Pick<
   | 'getIntelligenceManager'
   | 'activeChatControllers'
   | 'streamChatStartedAt'
+  | 'appState'
 >;
 
 export function registerGeminiStreamIpcHandlers(deps: GeminiStreamIpcDeps): void {
@@ -20,11 +21,20 @@ export function registerGeminiStreamIpcHandlers(deps: GeminiStreamIpcDeps): void
     getIntelligenceManager,
     activeChatControllers,
     streamChatStartedAt,
+    appState,
   } = deps;
+
+  const assertNotContained = (): void => {
+    if (typeof appState.isStealthContainmentActive === 'function' && appState.isStealthContainmentActive()) {
+      throw new Error('CONTAINMENT_ACTIVE');
+    }
+  };
 
   safeHandleValidated("gemini-chat", (args) => parseIpcInput(ipcSchemas.geminiChatArgs, args, 'gemini-chat'), async (event, message, imagePaths, context, options) => {
     try {
+      assertNotContained();
       const result = await getInferenceLlmHelper().chatWithGemini(message, imagePaths, context, options?.skipSystemPrompt);
+      assertNotContained();
 
       console.log(`[IPC] gemini - chat response: `, result ? result.substring(0, 50) : "(empty)");
 
@@ -65,6 +75,7 @@ export function registerGeminiStreamIpcHandlers(deps: GeminiStreamIpcDeps): void
   // Streaming IPC Handler
   safeHandleValidated("gemini-chat-stream", (args) => parseIpcInput(ipcSchemas.geminiChatArgs, args, 'gemini-chat-stream'), async (event, message, imagePaths, context, options) => {
     const requestId = options?.requestId;
+    assertNotContained();
     if (!requestId) {
       throw new Error('gemini-chat-stream requires requestId in options');
     }
@@ -144,6 +155,10 @@ export function registerGeminiStreamIpcHandlers(deps: GeminiStreamIpcDeps): void
 
         const flush = (): boolean => {
           if (pending.length === 0) return true;
+          if (typeof appState.isStealthContainmentActive === 'function' && appState.isStealthContainmentActive()) {
+            aborted = true;
+            return false;
+          }
           if (event.sender.isDestroyed()) {
             aborted = true;
             return false;
@@ -156,7 +171,11 @@ export function registerGeminiStreamIpcHandlers(deps: GeminiStreamIpcDeps): void
         };
 
         for await (const token of stream) {
-          if (event.sender.isDestroyed() || controller.signal.aborted) {
+          if (
+            event.sender.isDestroyed()
+            || controller.signal.aborted
+            || (typeof appState.isStealthContainmentActive === 'function' && appState.isStealthContainmentActive())
+          ) {
             aborted = true;
             if (event.sender.isDestroyed()) {
               console.warn('[IPC] gemini-chat-stream: sender destroyed mid-stream; aborting');

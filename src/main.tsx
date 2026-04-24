@@ -5,20 +5,8 @@ import { ErrorBoundary } from "./components/ErrorBoundary"
 import { getOptionalElectronMethod, installElectronApiGuard } from "./lib/electronApi"
 import "./index.css"
 
-const BootstrapFailureScreen: React.FC<{ errorMessage: string }> = ({ errorMessage }) => (
-  <div className="flex h-full min-h-0 w-full items-center justify-center bg-[#050505] px-6">
-    <div className="w-full max-w-lg rounded-3xl border border-white/10 bg-[#111111] p-6 text-left shadow-2xl">
-      <p className="text-xs font-semibold uppercase tracking-[0.28em] text-[#8A8A8A]">Startup Error</p>
-      <h1 className="mt-3 text-2xl font-semibold text-white">Renderer bootstrap failed</h1>
-      <p className="mt-3 text-sm leading-6 text-[#B5B5B5]">
-        The renderer loaded, but the main app bundle failed before the launcher could render.
-        Restart the app. If this repeats, the startup log now captures the import failure directly.
-      </p>
-      <code className="mt-4 block overflow-x-auto rounded-2xl border border-[#ff3333]/20 bg-[#1A1A1A] px-4 py-3 text-xs text-[#ff7b7b]">
-        {errorMessage}
-      </code>
-    </div>
-  </div>
+const BootstrapFailureScreen: React.FC<{ errorMessage: string }> = ({ errorMessage: _errorMessage }) => (
+  <div className="h-full min-h-0 w-full bg-black" aria-hidden="true" />
 )
 
 const applyWindowKindAttributes = (kind: AppWindowKind): void => {

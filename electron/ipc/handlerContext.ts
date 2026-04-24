@@ -1,4 +1,4 @@
-import { ipcMain } from "electron"
+import { app, ipcMain } from "electron"
 import { AppState } from "../main"
 import {
   type RuntimeCoordinatorLike,
@@ -60,10 +60,18 @@ export function createHandlerContext(appState: AppState): HandlerContext {
     },
   });
 
-  const activeChatControllers = new Map<string, AbortController>();
-  const streamChatStartedAt = new Map<string, number>();
+  const activeChatControllers = typeof appState.getActiveChatControllers === 'function'
+    ? appState.getActiveChatControllers()
+    : new Map<string, AbortController>();
+  const streamChatStartedAt = typeof appState.getStreamChatStartedAt === 'function'
+    ? appState.getStreamChatStartedAt()
+    : new Map<string, number>();
 
   const getInferenceLlmHelper = () => {
+    if (typeof appState.isStealthContainmentActive === 'function' && appState.isStealthContainmentActive()) {
+      throw new Error('CONTAINMENT_ACTIVE');
+    }
+
     try {
       const coordinator = (appState as { getCoordinator?: () => unknown }).getCoordinator?.() as
         | { getSupervisor?: (name: string) => unknown }
@@ -75,9 +83,19 @@ export function createHandlerContext(appState: AppState): HandlerContext {
       if (llmHelper) {
         return llmHelper as ReturnType<AppState['processingHelper']['getLLMHelper']>;
       }
-    } catch {
-      // Fall back to the direct AppState path if supervisor lookup fails.
+    } catch (error) {
+      if ((error as Error).message === 'CONTAINMENT_ACTIVE') {
+        throw error;
+      }
+      if (app.isPackaged && process.env.NODE_ENV !== 'test') {
+        throw new Error('INFERENCE_SUPERVISOR_UNAVAILABLE');
+      }
     }
+
+    if (app.isPackaged && process.env.NODE_ENV !== 'test') {
+      throw new Error('INFERENCE_SUPERVISOR_UNAVAILABLE');
+    }
+
     return appState.processingHelper.getLLMHelper();
   };
 

@@ -141,7 +141,12 @@ test('AnswerLatencyTracker records extended SLO metadata on snapshots', () => {
       consciousPath?: 'fresh_start' | 'thread_continue';
       firstVisibleAnswer?: number;
       contextItemIds?: string[];
-      verifierOutcome?: { deterministic: 'pass' | 'fail' | 'skipped'; provenance: 'pass' | 'fail' | 'skipped' };
+      verifierOutcome?: {
+        deterministic: 'pass' | 'fail' | 'skipped';
+        judge?: 'pass' | 'fail' | 'skipped';
+        provenance: 'pass' | 'fail' | 'skipped';
+        reasons?: string[];
+      };
       stealthContainmentActive?: boolean;
     }): void;
   };
@@ -163,7 +168,12 @@ test('AnswerLatencyTracker records extended SLO metadata on snapshots', () => {
       profileEnrichmentState?: 'attempted' | 'completed' | 'failed' | 'timed_out';
       consciousPath?: 'fresh_start' | 'thread_continue';
       contextItemIds?: string[];
-      verifierOutcome?: { deterministic: 'pass' | 'fail' | 'skipped'; provenance: 'pass' | 'fail' | 'skipped' };
+      verifierOutcome?: {
+        deterministic: 'pass' | 'fail' | 'skipped';
+        judge?: 'pass' | 'fail' | 'skipped';
+        provenance: 'pass' | 'fail' | 'skipped';
+        reasons?: string[];
+      };
       stealthContainmentActive?: boolean;
     };
 
@@ -239,6 +249,19 @@ test('AnswerLatencyTracker covers all capability classes and uses firstVisibleAn
   assert.equal(nonStreamingSnapshot?.profileEnrichmentState, undefined);
 });
 
+test('AnswerLatencyTracker finalizes duplicate suppression as a terminal state', () => {
+  const tracker = new AnswerLatencyTracker();
+  const requestId = tracker.start('conscious_answer', 'streaming');
+
+  const snapshot = tracker.completeSuppressed(requestId, 'duplicate_answer');
+
+  assert.equal(snapshot?.completed, true);
+  assert.equal(snapshot?.terminalStatus, 'suppressed');
+  assert.equal(snapshot?.suppressionReason, 'duplicate_answer');
+  assert.equal(snapshot?.marks.suppressedAt !== undefined, true);
+  assert.equal(tracker.getSnapshot(requestId)?.terminalStatus, 'suppressed');
+});
+
 test('AnswerLatencyTracker records answer.firstVisible from first visibility, not completion time', async () => {
   const benchmarkDir = await mkdtemp(join(tmpdir(), 'answer-latency-metric-'));
   const originalDateNow = Date.now;
@@ -286,7 +309,12 @@ test('IntelligenceEngine records conscious route provider start metadata', async
   assert.equal(consciousSnapshot?.marks.providerRequestStarted !== undefined, true);
   assert.equal(consciousSnapshot?.marks.firstVisibleAnswer !== undefined, true);
   assert.equal((consciousSnapshot?.contextItemIds?.length ?? 0) > 0, true);
-  assert.deepEqual(consciousSnapshot?.verifierOutcome, { deterministic: 'pass', provenance: 'pass' });
+  assert.deepEqual(consciousSnapshot?.verifierOutcome, {
+    deterministic: 'pass',
+    judge: 'skipped',
+    provenance: 'pass',
+    reasons: ['judge_unavailable'],
+  });
   assert.equal(consciousSnapshot?.stealthContainmentActive, false);
   assert.equal(
     (consciousSnapshot?.marks.providerRequestStarted ?? 0) <= (consciousSnapshot?.marks.firstVisibleAnswer ?? 0),

@@ -19,6 +19,7 @@ import {
   PersistedSessionMemoryEntry,
   PersistedSessionMemoryEntryValue,
   PersistedSessionMemoryState,
+  type SessionEvent,
 } from '../memory/SessionPersistence';
 import type { ExtractedConstraint } from '../conscious';
 import { buildPseudoEmbedding, inferItemPhase } from './sessionContext';
@@ -247,19 +248,22 @@ function clearLiveMeetingScopedState(tracker: SessionTracker): void {
   t.fingerprinter.clear();
 }
 
-export async function appendTranscriptEvent(tracker: SessionTracker, segment: TranscriptSegment): Promise<void> {
+type DurableSessionEventType = SessionEvent['type'];
+
+export async function appendSessionEvent(
+  tracker: SessionTracker,
+  type: DurableSessionEventType,
+  payload: Record<string, unknown>,
+  timestamp: number = Date.now(),
+): Promise<void> {
   const t = tracker as any;
   if (!t.activeMeetingId || t.activeMeetingId === 'unspecified') return;
   t.eventCount += 1;
   await t.persistence.appendEvent(t.sessionId, {
     eventId: `evt-${t.eventCount}-${Date.now()}`,
-    type: 'transcript',
-    timestamp: segment.timestamp,
-    payload: {
-      speaker: segment.speaker,
-      text: segment.text,
-      final: segment.final,
-    },
+    type,
+    timestamp,
+    payload,
   });
   // NAT-059: periodic snapshot every N events
   if (t.eventCount % t.EVENT_SNAPSHOT_INTERVAL === 0) {
@@ -268,6 +272,19 @@ export async function appendTranscriptEvent(tracker: SessionTracker, segment: Tr
       console.warn('[SessionTracker] Periodic event snapshot failed:', err);
     });
   }
+}
+
+export async function appendTranscriptEvent(tracker: SessionTracker, segment: TranscriptSegment): Promise<void> {
+  return appendSessionEvent(
+    tracker,
+    'transcript',
+    {
+      speaker: segment.speaker,
+      text: segment.text,
+      final: segment.final,
+    },
+    segment.timestamp,
+  );
 }
 
 export async function restoreFromMeetingId(tracker: SessionTracker, meetingId: string, requestId: number = (tracker as any).restoreRequestId): Promise<boolean> {

@@ -89,13 +89,18 @@ export function attachWindowCrashRecovery(
     onRecreate();
   };
 
-  window.webContents.on('crashed', handleCrashed);
-  window.webContents.on('render-process-gone', handleGone);
+  const crashEvents = window.webContents as unknown as {
+    on(event: 'crashed' | 'render-process-gone', listener: (...args: any[]) => void): void;
+    removeListener(event: 'crashed' | 'render-process-gone', listener: (...args: any[]) => void): void;
+  };
+
+  crashEvents.on('crashed', handleCrashed);
+  crashEvents.on('render-process-gone', handleGone);
 
   return () => {
     if (!window.isDestroyed()) {
-      window.webContents.removeListener('crashed', handleCrashed);
-      window.webContents.removeListener('render-process-gone', handleGone);
+      crashEvents.removeListener('crashed', handleCrashed);
+      crashEvents.removeListener('render-process-gone', handleGone);
     }
   };
 }

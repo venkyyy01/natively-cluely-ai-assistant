@@ -16,9 +16,11 @@ test('renderer bootstrap installs the guarded Electron API bridge before first u
   expect(mainSource).toContain('resolveWindowContext(window.location.search).kind');
   expect(mainSource).toContain('setAttribute("data-window-kind", kind)');
   expect(mainSource).toContain('await import("./App")');
-  expect(mainSource).toContain('Renderer bootstrap failed');
+  expect(mainSource).toContain('BootstrapFailureScreen');
+  expect(mainSource).toContain('bg-black');
   expect(mainSource).toContain('ErrorBoundary');
   expect(mainSource).toContain('context="AppBootstrap"');
-  expect(appSource).toContain('Renderer startup failed');
+  expect(appSource).toContain('RendererStartupFallback');
+  expect(appSource).toContain('privacyShield');
   expect(appSource).toContain('if (!electronAPI)');
 });

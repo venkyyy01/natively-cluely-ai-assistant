@@ -115,6 +115,19 @@ export class WindowHelper {
     })
   }
 
+  private shouldStartRendererShielded(): boolean {
+    const appState = this.appState as unknown as { shouldStartRendererShielded?: () => boolean }
+    return typeof appState.shouldStartRendererShielded === 'function'
+      ? appState.shouldStartRendererShielded()
+      : false
+  }
+
+  private buildRendererWindowUrl(baseUrl: string, windowKind: 'launcher' | 'overlay'): string {
+    const separator = baseUrl.includes('?') ? '&' : '?'
+    const privacyParam = this.shouldStartRendererShielded() ? '&privacyShield=1' : ''
+    return `${baseUrl}${separator}window=${windowKind}${privacyParam}`
+  }
+
   public setContentProtection(enable: boolean): void {
     this.contentProtection = enable
     this.applyContentProtection(enable)
@@ -303,7 +316,7 @@ export class WindowHelper {
       try {
         this.launcherRuntime = new StealthRuntime({
           stealthManager: this.stealthManager,
-          startUrl: `${startUrl}?window=launcher`,
+          startUrl: this.buildRendererWindowUrl(startUrl, 'launcher'),
           onFault: (reason) => {
             this.appState.handleStealthRuntimeFault(reason)
           },
@@ -338,13 +351,18 @@ export class WindowHelper {
       let revealSafetyNet = attachRevealSafetyNet('Launcher', this.launcherWindow, () => {
         this.directLauncherLoaded = true
         this.pendingDirectLauncherReveal = false
+        if (this.shouldStartRendererShielded()) {
+          console.warn('[WindowHelper] Launcher safety-net timeout; staying protected instead of revealing launcher');
+          this.hideMainWindow()
+          return
+        }
         console.warn('[WindowHelper] Force-revealing launcher after safety-net timeout');
         this.switchToLauncher()
       })
 
       this.detachDirectLauncherBridgeMonitor = attachRendererBridgeMonitor('Launcher', this.launcherWindow, {
         expectedPreloadPath: preloadPath,
-        url: `${startUrl}?window=launcher`,
+        url: this.buildRendererWindowUrl(startUrl, 'launcher'),
         onSettled: (result) => {
           this.directLauncherLoaded = true
           revealSafetyNet.cancel()
@@ -355,10 +373,14 @@ export class WindowHelper {
           }
 
           this.pendingDirectLauncherReveal = false
+          if (this.shouldStartRendererShielded()) {
+            this.hideMainWindow()
+            return
+          }
           this.switchToLauncher()
         },
       })
-      this.loadDirectWindow(this.launcherWindow, `${startUrl}?window=launcher`, 'Launcher')
+      this.loadDirectWindow(this.launcherWindow, this.buildRendererWindowUrl(startUrl, 'launcher'), 'Launcher')
       console.log('[WindowHelper] Using direct launcher window on macOS');
     }
 
@@ -435,7 +457,7 @@ export class WindowHelper {
       try {
         this.overlayRuntime = new StealthRuntime({
           stealthManager: this.stealthManager,
-          startUrl: `${startUrl}?window=overlay`,
+          startUrl: this.buildRendererWindowUrl(startUrl, 'overlay'),
           onFault: (reason) => {
             this.appState.handleStealthRuntimeFault(reason)
           },
@@ -484,9 +506,9 @@ export class WindowHelper {
 
       this.detachDirectOverlayBridgeMonitor = attachRendererBridgeMonitor('Overlay', this.overlayWindow, {
         expectedPreloadPath: preloadPath,
-        url: `${startUrl}?window=overlay`,
+        url: this.buildRendererWindowUrl(startUrl, 'overlay'),
       })
-      this.loadDirectWindow(this.overlayWindow, `${startUrl}?window=overlay`, 'Overlay')
+      this.loadDirectWindow(this.overlayWindow, this.buildRendererWindowUrl(startUrl, 'overlay'), 'Overlay')
       console.log('[WindowHelper] Using direct overlay window on macOS');
     }
 

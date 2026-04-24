@@ -82,7 +82,9 @@ import {
   restoreFromMeetingId,
   ensureMeetingContext,
   flushPersistenceNow,
+  appendSessionEvent,
 } from './session/sessionPersistence';
+import type { SessionEvent } from './memory/SessionPersistence';
 
 function resolveClassifierLane(): Pick<RuntimeBudgetScheduler, 'submit'> | undefined {
   return getActiveAccelerationManager()?.getRuntimeBudgetScheduler();
@@ -415,6 +417,15 @@ export class SessionTracker {
     if (this.disposed) {
       return null;
     }
+    if (this.isRestoring) {
+      const capturedSegment = { ...segment };
+      this.writeBuffer.push(() => {
+        this.handleTranscript(capturedSegment);
+      });
+      const role = mapSpeakerToRoleImpl(segment.speaker);
+      return role ? { role } : null;
+    }
+
     // Track interim segments for interviewer to prevent data loss on stop
     if (segment.speaker === 'interviewer') {
       if (Math.random() < 0.05 || segment.final) {
@@ -561,6 +572,13 @@ export class SessionTracker {
     const activeThread = this.consciousThreadStore.getThreadManager().getActiveThread();
     this.emitSupervisorEvent({
       type: 'conscious:thread_action',
+      action: threadAction,
+      question,
+      phase: this.phaseDetector.getCurrentPhase(),
+      threadId: activeThread?.id ?? null,
+      topic: activeThread?.topic ?? null,
+    });
+    void this.recordSessionEvent('conscious_thread_action', {
       action: threadAction,
       question,
       phase: this.phaseDetector.getCurrentPhase(),
@@ -1074,8 +1092,26 @@ export class SessionTracker {
     ensureMeetingContext(this, meetingId);
   }
 
+  async waitForPendingRestore(): Promise<void> {
+    if (this.pendingRestorePromise) {
+      await this.pendingRestorePromise;
+    }
+  }
+
   async flushPersistenceNow(): Promise<void> {
     await flushPersistenceNow(this);
+  }
+
+  async recordSessionEvent(
+    type: SessionEvent['type'],
+    payload: Record<string, unknown>,
+    timestamp: number = Date.now(),
+  ): Promise<void> {
+    try {
+      await appendSessionEvent(this, type, payload, timestamp);
+    } catch (error) {
+      console.warn('[SessionTracker] Failed to append session event:', error);
+    }
   }
 
   // ============================================

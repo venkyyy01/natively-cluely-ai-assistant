@@ -38,7 +38,9 @@ type SuggestedAnswerMetadata = {
   cooldownReason?: 'duplicate_question_debounce'
   verifier?: {
     deterministic: 'pass' | 'fail' | 'skipped'
+    judge?: 'pass' | 'fail' | 'skipped'
     provenance: 'pass' | 'fail' | 'skipped'
+    reasons?: string[]
   }
   stealthContainmentActive: boolean
 }

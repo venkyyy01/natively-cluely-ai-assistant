@@ -23,7 +23,7 @@ import {
   detectExternalScreenShare,
   resolveSafeSystemAudioDeviceId,
 } from "../stealth/screenShareInterruptionGuard"
-import { derivePrivacyShieldState, hasCaptureRiskWarnings, type PrivacyShieldState } from "../stealth/privacyShieldState"
+import { derivePrivacyShieldState, hasCaptureRiskWarnings, type PrivacyShieldState, type VisibilityIntent } from "../stealth/privacyShieldState"
 import { PrivacyShieldRecoveryController } from "../stealth/PrivacyShieldRecoveryController"
 import { isEnvFlagEnabled } from './logging'
 import { WindowHelper } from "../WindowHelper"
@@ -55,6 +55,7 @@ import { STTReconnector } from "../STTReconnector"
 import { CredentialsManager } from "../services/CredentialsManager"
 import { SettingsManager } from "../services/SettingsManager"
 import { OllamaManager } from '../services/OllamaManager'
+import type { SessionEvent } from "../memory/SessionPersistence"
 import {
   type STTProvider,
   safeFinalize,
@@ -104,6 +105,10 @@ private consciousModeEnabled: boolean = false
   private privacyShieldFaultReason: string | null = null
   private privacyShieldWarnings: string[] = []
   private privacyShieldState: PrivacyShieldState = { active: false, reason: null }
+  private visibilityIntent: VisibilityIntent = 'boot_unknown'
+  private containmentActive: boolean = false
+  private activeInferenceStreamControllers = new Map<string, AbortController>()
+  private streamChatStartedAt = new Map<string, number>()
   private privacyShieldRecoveryController: PrivacyShieldRecoveryController | null = null
 
   private problemInfo: {
@@ -193,6 +198,7 @@ constructor() {
 // 1. Load boot-critical settings first (used by WindowHelpers)
 const settingsManager = SettingsManager.getInstance();
 this.isUndetectable = settingsManager.get('isUndetectable') ?? false;
+this.visibilityIntent = this.isUndetectable ? 'protected_shield' : 'visible_app';
 this.disguiseMode = settingsManager.get('disguiseMode') ?? 'none';
 this.consciousModeEnabled = settingsManager.get('consciousModeEnabled') ?? false;
 
@@ -289,6 +295,19 @@ this.stealthManager.on('stealth-degraded', (warnings: string[]) => {
   this.privacyShieldRecoveryController?.update()
   this._broadcastToAllWindows('stealth-degraded', warnings);
   this.handleStealthDegradation(warnings);
+});
+this.stealthManager.on('stealth:fault', (reason: string) => {
+  const normalizedReason = reason || 'stealth-manager-fault'
+  const stealthSupervisor = this.getStealthSupervisorOrNull()
+  if (!stealthSupervisor || stealthSupervisor.getStealthState() === 'FAULT') {
+    this.activateContainment('stealth-manager', normalizedReason)
+    return
+  }
+
+  void stealthSupervisor.reportFault(new Error(normalizedReason)).catch((error) => {
+    console.error('[Stealth] Failed to route StealthManager fault through supervisor:', error)
+    this.activateContainment('stealth-manager-report-failed', normalizedReason)
+  })
 });
 // 3. Initialize other helpers
 this.screenshotHelper = new ScreenshotHelper(this.view)
@@ -418,6 +437,10 @@ this.modelSelectorWindowHelper.setWindowHelper(this.windowHelper);
 this.intelligenceManager = new IntelligenceManager(this.processingHelper.getLLMHelper())
 this.intelligenceManager.setSupervisorBus(this.runtimeCoordinator.getBus())
 this.intelligenceManager.setConsciousModeEnabled(this.consciousModeEnabled)
+if (this.isUndetectable) {
+  this.setContainmentActive(true, 'protected_startup')
+}
+this.syncPrivacyShieldState()
 
 // Initialize Checkpointer
 this.checkpointer = new MeetingCheckpointer(
@@ -547,8 +570,8 @@ this.setupIntelligenceEvents()
       bus,
       delegate: {
         getLLMHelper: () => this.processingHelper.getLLMHelper(),
-        onStealthFault: async () => {
-          await this.intelligenceManager.reset()
+        onStealthFault: async (reason) => {
+          this.activateContainment('inference-supervisor', reason)
         },
         runAssistMode: () => this.intelligenceManager.runAssistMode(),
         runWhatShouldISay: (question, confidence, imagePaths) => this.intelligenceManager.runWhatShouldISay(question, confidence, imagePaths),
@@ -631,7 +654,9 @@ this.runtimeCoordinator.registerSupervisor(new StealthSupervisor(
     bus.subscribe('stealth:state-changed', async (event) => {
       if (event.to === 'FULL_STEALTH') {
         this.privacyShieldFaultReason = null
-        this.intelligenceManager.setStealthContainmentActive(false)
+        if (this.visibilityIntent === 'visible_app') {
+          this.setContainmentActive(false, 'stealth_recovered')
+        }
         this.syncPrivacyShieldState()
       }
 
@@ -645,14 +670,37 @@ this.runtimeCoordinator.registerSupervisor(new StealthSupervisor(
     })
 
     bus.subscribe('stealth:fault', async (event) => {
-      this.privacyShieldFaultReason = event.reason
-      this.enforceStealthFaultContainment(event.reason)
+      const stealthSupervisor = this.getStealthSupervisorOrNull()
+      if (stealthSupervisor && stealthSupervisor.getStealthState() !== 'FAULT') {
+        void stealthSupervisor.reportFault(new Error(event.reason)).catch((error) => {
+          console.error('[Stealth] Failed to reconcile external bus fault with supervisor:', error)
+        })
+      }
+      this.activateContainment('stealth-fault', event.reason)
       this.syncPrivacyShieldState()
       this.privacyShieldRecoveryController?.update()
       this._broadcastToAllWindows('stealth-fault', event.reason)
       this.performanceInstrumentation.recordEvent('stealth.fault', {
         reason: event.reason,
       })
+      void this.recordSessionEvent('stealth_fault', { reason: event.reason })
+    })
+
+    bus.subscribe('bus:listener-error', async (event) => {
+      if (!event.critical) {
+        return
+      }
+
+      this.activateContainment('critical-bus-listener-error', `critical listener failed for ${event.sourceEventType}`)
+    })
+
+    bus.subscribe('bus:listener-circuit-open', async (event) => {
+      const criticalSources = new Set(['stealth:fault', 'lifecycle:meeting-starting', 'lifecycle:meeting-stopping'])
+      if (!criticalSources.has(event.sourceEventType)) {
+        return
+      }
+
+      this.activateContainment('critical-bus-listener-circuit-open', `critical listener circuit opened for ${event.sourceEventType}`)
     })
 
     bus.subscribe('recovery:checkpoint-written', async (event) => {
@@ -1810,9 +1858,14 @@ try {
       }
 
       this.currentMeetingId = randomUUID()
+      const activationMeetingId = this.currentMeetingId
       this.isMeetingActive = true;
       this.resetAudioPipelineStats();
-      this.intelligenceManager.getSessionTracker().ensureMeetingContext(this.currentMeetingId);
+      const sessionTracker = this.intelligenceManager.getSessionTracker()
+      sessionTracker.ensureMeetingContext(this.currentMeetingId);
+      if (typeof sessionTracker.waitForPendingRestore === 'function') {
+        await sessionTracker.waitForPendingRestore();
+      }
       if (normalizedMetadata) {
         this.intelligenceManager.setMeetingMetadata(normalizedMetadata);
       }
@@ -1844,6 +1897,7 @@ try {
 
           if (startSequence !== this.meetingStartSequence || this.meetingLifecycleState !== 'starting') {
             console.warn('[Main] Skipping stale deferred meeting start')
+            this.rollbackMeetingActivation(startSequence, activationMeetingId, 'stale_deferred_start')
             resolve()
             return
           }
@@ -1865,9 +1919,12 @@ try {
 
             if (startSequence !== this.meetingStartSequence || this.meetingLifecycleState !== 'starting') {
               console.warn('[Main] Meeting start invalidated during async initialization')
+              this.rollbackMeetingActivation(startSequence, activationMeetingId, 'async_initialization_invalidated')
               resolve()
               return
             }
+
+            await this.ensureRequiredStealthSupervisorRunning()
 
             if (this.ragManager) {
               try {
@@ -1904,6 +1961,36 @@ try {
     });
 
     return activationPromise;
+  }
+
+  private rollbackMeetingActivation(startSequence: number, meetingId: string | null, reason: string): void {
+    if (startSequence !== this.meetingStartSequence && this.currentMeetingId !== meetingId) {
+      return
+    }
+
+    this.isMeetingActive = false
+    this.currentMeetingId = null
+    this.meetingLifecycleState = 'idle'
+    this.stealthManager.setMeetingActive(false)
+    this.setNativeAudioConnected(false)
+    this.clearAudioPipelineHealthCheck()
+    this.broadcast('meeting-lifecycle-state', this.meetingLifecycleState)
+    this.performanceInstrumentation.recordEvent('meeting.activation.rollback', {
+      reason,
+      meetingId,
+    })
+  }
+
+  private async ensureRequiredStealthSupervisorRunning(): Promise<void> {
+    if (!this.isUndetectable) {
+      return
+    }
+
+    const stealthSupervisor = this.runtimeCoordinator.getSupervisor<StealthSupervisor>('stealth')
+    if (stealthSupervisor.getState() === 'idle') {
+      await stealthSupervisor.start()
+    }
+    await stealthSupervisor.setEnabled(true)
   }
 
   public async endMeeting(): Promise<void> {
@@ -2088,9 +2175,11 @@ try {
     this.googleSTT = null
     this.googleSTT_User = null
 
-    this.ragManager?.stopLiveIndexing().catch(err => {
+    try {
+      await this.ragManager?.stopLiveIndexing()
+    } catch (err) {
       console.error('[Main] Failed to stop live indexing during quit:', err)
-    })
+    }
 
     this.processingHelper.getLLMHelper().scrubKeys();
 
@@ -2143,9 +2232,11 @@ try {
 
   private setupIntelligenceEvents(): void {
     const mainWindow = this.getMainWindow.bind(this)
+    const shouldSuppressVisibleIntelligence = () => this.containmentActive || this.privacyShieldState.active
 
     // Forward intelligence events to renderer
     this.intelligenceManager.on('assist_update', (insight: string) => {
+      if (shouldSuppressVisibleIntelligence()) return
       // Send to both if both exist, though mostly overlay needs it
       const helper = this.getWindowHelper();
       const launcher = helper.getLauncherWindow();
@@ -2156,6 +2247,7 @@ try {
     })
 
     this.intelligenceManager.on('cooldown_deferred', (suppressedMs: number, question?: string, reason?: 'duplicate_question_debounce') => {
+      if (shouldSuppressVisibleIntelligence()) return
       const win = mainWindow()
       if (win && !win.isDestroyed()) {
         win.webContents.send('intelligence-cooldown', { suppressedMs, question, reason })
@@ -2163,6 +2255,7 @@ try {
     })
 
     this.intelligenceManager.on('suggested_answer', (answer: string, question: string, confidence: number, metadata?: SuggestedAnswerMetadata) => {
+      if (shouldSuppressVisibleIntelligence()) return
       const win = mainWindow()
       if (win && !win.isDestroyed()) {
         win.webContents.send('intelligence-suggested-answer', { answer, question, confidence, metadata })
@@ -2171,6 +2264,7 @@ try {
     })
 
     this.intelligenceManager.on('suggested_answer_token', (token: string, question: string, confidence: number) => {
+      if (shouldSuppressVisibleIntelligence()) return
       const win = mainWindow()
       if (win && !win.isDestroyed()) {
         win.webContents.send('intelligence-suggested-answer-token', { token, question, confidence })
@@ -2178,6 +2272,7 @@ try {
     })
 
     this.intelligenceManager.on('refined_answer_token', (token: string, intent: string) => {
+      if (shouldSuppressVisibleIntelligence()) return
       const win = mainWindow()
       if (win && !win.isDestroyed()) {
         win.webContents.send('intelligence-refined-answer-token', { token, intent })
@@ -2185,6 +2280,7 @@ try {
     })
 
     this.intelligenceManager.on('refined_answer', (answer: string, intent: string) => {
+      if (shouldSuppressVisibleIntelligence()) return
       const win = mainWindow()
       if (win && !win.isDestroyed()) {
         win.webContents.send('intelligence-refined-answer', { answer, intent })
@@ -2193,6 +2289,7 @@ try {
     })
 
     this.intelligenceManager.on('recap', (summary: string) => {
+      if (shouldSuppressVisibleIntelligence()) return
       const win = mainWindow()
       if (win && !win.isDestroyed()) {
         win.webContents.send('intelligence-recap', { summary })
@@ -2200,6 +2297,7 @@ try {
     })
 
     this.intelligenceManager.on('recap_token', (token: string) => {
+      if (shouldSuppressVisibleIntelligence()) return
       const win = mainWindow()
       if (win && !win.isDestroyed()) {
         win.webContents.send('intelligence-recap-token', { token })
@@ -2207,6 +2305,7 @@ try {
     })
 
     this.intelligenceManager.on('follow_up_questions_update', (questions: string) => {
+      if (shouldSuppressVisibleIntelligence()) return
       const win = mainWindow()
       if (win && !win.isDestroyed()) {
         win.webContents.send('intelligence-follow-up-questions-update', { questions })
@@ -2214,6 +2313,7 @@ try {
     })
 
     this.intelligenceManager.on('follow_up_questions_token', (token: string) => {
+      if (shouldSuppressVisibleIntelligence()) return
       const win = mainWindow()
       if (win && !win.isDestroyed()) {
         win.webContents.send('intelligence-follow-up-questions-token', { token })
@@ -2221,6 +2321,7 @@ try {
     })
 
     this.intelligenceManager.on('manual_answer_started', () => {
+      if (shouldSuppressVisibleIntelligence()) return
       const win = mainWindow()
       if (win && !win.isDestroyed()) {
         win.webContents.send('intelligence-manual-started')
@@ -2228,6 +2329,7 @@ try {
     })
 
     this.intelligenceManager.on('manual_answer_result', (answer: string, question: string) => {
+      if (shouldSuppressVisibleIntelligence()) return
       const win = mainWindow()
       if (win && !win.isDestroyed()) {
         win.webContents.send('intelligence-manual-result', { answer, question })
@@ -2236,6 +2338,7 @@ try {
     })
 
     this.intelligenceManager.on('mode_changed', (mode: string) => {
+      if (shouldSuppressVisibleIntelligence()) return
       const win = mainWindow()
       if (win && !win.isDestroyed()) {
         win.webContents.send('intelligence-mode-changed', { mode })
@@ -2244,6 +2347,7 @@ try {
 
     this.intelligenceManager.on('error', (error: Error, mode: string) => {
       console.error(`[IntelligenceManager] Error in ${mode}:`, error)
+      if (shouldSuppressVisibleIntelligence()) return
       const win = mainWindow()
       if (win && !win.isDestroyed()) {
         win.webContents.send('intelligence-error', { error: error.message, mode })
@@ -2452,6 +2556,13 @@ setThemeMode: (mode) => this.themeManager.setMode(mode as import('../ThemeManage
   }
 
   public toggleMainWindow(): void {
+    if (this.isUndetectable && this.visibilityIntent !== 'visible_app') {
+      void this.setUndetectableAsync(false).catch((error) => {
+        console.error('[Main] Failed to reveal app by disabling privacy mode:', error)
+      })
+      return
+    }
+
     console.log(
       "Screenshots: ",
       this.screenshotHelper.getScreenshotQueue().length,
@@ -2607,6 +2718,10 @@ setThemeMode: (mode) => this.themeManager.setMode(mode as import('../ThemeManage
 
     // Double-click to show window
     this.tray.on('double-click', () => {
+      if (this.isUndetectable && this.visibilityIntent !== 'visible_app') {
+        void this.setUndetectableAsync(false)
+        return
+      }
       this.centerAndShowWindow()
     })
   }
@@ -2642,6 +2757,10 @@ setThemeMode: (mode) => this.themeManager.setMode(mode as import('../ThemeManage
       {
         label: 'Show Natively',
         click: () => {
+          if (this.isUndetectable && this.visibilityIntent !== 'visible_app') {
+            void this.setUndetectableAsync(false)
+            return
+          }
           this.centerAndShowWindow()
         }
       },
@@ -2750,6 +2869,7 @@ setThemeMode: (mode) => this.themeManager.setMode(mode as import('../ThemeManage
 
     // Broadcast state change to all relevant windows
     this._broadcastToAllWindows('undetectable-changed', state);
+    this.requestVisibilityIntent(state ? 'protected_shield' : 'visible_app', state ? 'undetectable_enabled' : 'undetectable_disabled')
     this.performanceInstrumentation.recordDuration('stealth.toggle', startedAt, {
       enabled: state,
       ...metadata,
@@ -2861,9 +2981,7 @@ setThemeMode: (mode) => this.themeManager.setMode(mode as import('../ThemeManage
 
   public setPrivacyShieldFault(key: string, reason: string): void {
     console.warn(`[AppState] Privacy shield fault set: ${key} - ${reason}`);
-    this.privacyShieldFaultReason = reason;
-    this.syncPrivacyShieldState();
-    this.privacyShieldRecoveryController?.update()
+    this.activateContainment(key, reason)
   }
 
   public clearPrivacyShieldFault(): void {
@@ -2871,7 +2989,9 @@ setThemeMode: (mode) => this.themeManager.setMode(mode as import('../ThemeManage
       console.log('[AppState] Privacy shield fault cleared');
     }
     this.privacyShieldFaultReason = null;
-    this.intelligenceManager.setStealthContainmentActive(false)
+    if (this.visibilityIntent === 'visible_app') {
+      this.setContainmentActive(false, 'privacy_fault_cleared')
+    }
     this.syncPrivacyShieldState();
     this.privacyShieldRecoveryController?.update()
   }
@@ -2902,6 +3022,7 @@ setThemeMode: (mode) => this.themeManager.setMode(mode as import('../ThemeManage
       warnings: this.privacyShieldWarnings,
       faultReason: this.privacyShieldFaultReason,
       captureProtectionEnabled: this.isUndetectable,
+      visibilityIntent: this.visibilityIntent,
     })
 
     if (
@@ -2915,12 +3036,103 @@ setThemeMode: (mode) => this.themeManager.setMode(mode as import('../ThemeManage
     this._broadcastToAllWindows('privacy-shield-changed', nextState)
   }
 
-  private enforceStealthFaultContainment(reason: string): void {
-    this.intelligenceManager.setStealthContainmentActive(true)
+  private setContainmentActive(active: boolean, reason: string): void {
+    if (this.containmentActive === active) {
+      return
+    }
+
+    this.containmentActive = active
+    this.intelligenceManager.setStealthContainmentActive(active)
+    this._broadcastToAllWindows(active ? 'containment-activated' : 'containment-cleared', { reason })
+    void this.recordSessionEvent(active ? 'containment_activated' : 'containment_cleared', { reason })
+  }
+
+  private abortActiveInferenceStreams(reason: string): number {
+    let aborted = 0
+    for (const [requestId, controller] of this.activeInferenceStreamControllers) {
+      if (!controller.signal.aborted) {
+        controller.abort(new Error(reason))
+        aborted += 1
+      }
+      this.activeInferenceStreamControllers.delete(requestId)
+      this.streamChatStartedAt.delete(requestId)
+    }
+
+    if (aborted > 0) {
+      void this.recordSessionEvent('inference_aborted', { reason, abortedStreamCount: aborted })
+    }
+
+    return aborted
+  }
+
+  private activateContainment(source: string, reason: string): void {
+    const normalizedReason = reason || source || 'privacy containment active'
+    this.privacyShieldFaultReason = normalizedReason
+    this.visibilityIntent = 'faulted_shield'
+    this.setContainmentActive(true, normalizedReason)
+    const abortedStreamCount = this.abortActiveInferenceStreams(normalizedReason)
     this.syncWindowStealthProtection(true)
+    this.windowHelper.hideMainWindow()
+    this.syncPrivacyShieldState()
+    this.privacyShieldRecoveryController?.update()
     this.performanceInstrumentation.recordEvent('stealth.fault.containment', {
-      reason,
+      reason: normalizedReason,
+      source,
       protectionsRetained: true,
+      abortedStreamCount,
+    })
+  }
+
+  public requestVisibilityIntent(intent: VisibilityIntent, source: string): void {
+    const previous = this.visibilityIntent
+    this.visibilityIntent = intent
+
+    if (intent === 'visible_app') {
+      if (!this.privacyShieldFaultReason) {
+        this.setContainmentActive(false, source)
+      }
+      this.syncPrivacyShieldState()
+      this.showMainWindow()
+      this._broadcastToAllWindows('visibility-intent-changed', { from: previous, to: intent, source })
+      return
+    }
+
+    this.setContainmentActive(true, source)
+    this.abortActiveInferenceStreams(source)
+    this.syncWindowStealthProtection(true)
+    this.syncPrivacyShieldState()
+    this.windowHelper.hideMainWindow()
+    this._broadcastToAllWindows('visibility-intent-changed', { from: previous, to: intent, source })
+  }
+
+  public isStealthContainmentActive(): boolean {
+    return this.containmentActive
+  }
+
+  public getActiveChatControllers(): Map<string, AbortController> {
+    return this.activeInferenceStreamControllers
+  }
+
+  public getStreamChatStartedAt(): Map<string, number> {
+    return this.streamChatStartedAt
+  }
+
+  public getVisibilityIntent(): VisibilityIntent {
+    return this.visibilityIntent
+  }
+
+  public shouldStartRendererShielded(): boolean {
+    return this.visibilityIntent !== 'visible_app' && this.visibilityIntent !== 'visible_safe_controls'
+  }
+
+  private recordSessionEvent(type: SessionEvent['type'], payload: Record<string, unknown>): Promise<void> {
+    const tracker = this.intelligenceManager?.getSessionTracker?.()
+    if (!tracker || typeof tracker.recordSessionEvent !== 'function') {
+      return Promise.resolve()
+    }
+
+    return tracker.recordSessionEvent(type, payload).catch((error: unknown) => {
+      console.warn(`[AppState] Failed to record session event ${type}:`, error)
     })
   }
 

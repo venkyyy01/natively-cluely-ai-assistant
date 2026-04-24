@@ -41,6 +41,16 @@ test('PrivacyShieldState activates on stealth faults until protection is restore
   );
 });
 
+test('PrivacyShieldState activates while startup visibility intent is protected', () => {
+  assert.deepEqual(
+    derivePrivacyShieldState({ visibilityIntent: 'protected_shield' }),
+    {
+      active: true,
+      reason: 'Sensitive content hidden while privacy mode is active.',
+    },
+  );
+});
+
 test('PrivacyShieldState activates for enhanced stealth degradation warnings', () => {
   assert.deepEqual(
     derivePrivacyShieldState({ warnings: ['private_api_failed'] }),

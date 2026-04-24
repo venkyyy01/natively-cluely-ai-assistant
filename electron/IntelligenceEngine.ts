@@ -26,6 +26,7 @@ import { isRouteDirectorEnabled } from './runtime/routeDirectorEnv';
 import { AnswerLatencyTracker, AnswerRoute } from './latency/AnswerLatencyTracker';
 import { getActiveAccelerationManager } from './services/AccelerationManager';
 import type { AccelerationManager } from './services/AccelerationManager';
+import type { SessionEvent } from './memory/SessionPersistence';
 
 // Mode types
 export type IntelligenceMode = 'idle' | 'assist' | 'what_to_say' | 'follow_up' | 'recap' | 'manual' | 'follow_up_questions' | 'reasoning_first';
@@ -112,7 +113,9 @@ export interface SuggestedAnswerMetadata {
   contextSelectionHash?: string;
   verifier?: {
     deterministic: 'pass' | 'fail' | 'skipped';
+    judge?: 'pass' | 'fail' | 'skipped';
     provenance: 'pass' | 'fail' | 'skipped';
+    reasons?: string[];
   };
   stealthContainmentActive: boolean;
 }
@@ -515,6 +518,18 @@ export class IntelligenceEngine extends EventEmitter {
         });
     }
 
+    private recordSessionEvent(type: SessionEvent['type'], payload: Record<string, unknown>): void {
+        const recordEvent = (this.session as unknown as {
+            recordSessionEvent?: (type: SessionEvent['type'], payload: Record<string, unknown>) => Promise<void>;
+        }).recordSessionEvent;
+        if (!recordEvent) {
+            return;
+        }
+        void recordEvent.call(this.session, type, payload).catch((error: unknown) => {
+            console.warn(`[IntelligenceEngine] Failed to record session event ${type}:`, error);
+        });
+    }
+
     private buildCooldownKey(question: string | undefined): string {
         const normalizedQuestion = (question || 'inferred')
             .trim()
@@ -574,7 +589,9 @@ export class IntelligenceEngine extends EventEmitter {
         contextItems?: ContextItem[];
         verifier?: {
             deterministic: 'pass' | 'fail' | 'skipped';
+            judge?: 'pass' | 'fail' | 'skipped';
             provenance: 'pass' | 'fail' | 'skipped';
+            reasons?: string[];
         };
     }): SuggestedAnswerMetadata {
         const thread = this.session.getActiveReasoningThread();
@@ -996,6 +1013,14 @@ export class IntelligenceEngine extends EventEmitter {
                 screenshotBackedLiveCodingTurn: this.isScreenshotBackedLiveCodingTurn(resolvedQuestion, imagePaths),
                 prefetchedIntent,
             });
+            this.recordSessionEvent('conscious_route_decision', {
+                question: resolvedQuestion,
+                selectedRoute: routePreparation.preparedRoute.selectedRoute,
+                effectiveRoute: routePreparation.preparedRoute.effectiveRoute,
+                threadAction: routePreparation.preparedRoute.preRouteDecision.threadAction,
+                qualifies: routePreparation.preparedRoute.preRouteDecision.qualifies,
+                transcriptRevision: transcriptRevisionAtRoute,
+            });
             this.consciousOrchestrator.applyRouteSideEffects(routePreparation.preparedRoute);
             const {
                 preRouteDecision: preRouteConsciousDecision,
@@ -1392,14 +1417,21 @@ export class IntelligenceEngine extends EventEmitter {
                         transcriptRevision: transcriptRevisionAtStart,
                         threadAction: activeThreadAction,
                         verifier: {
-                            deterministic: 'pass',
-                            provenance: 'pass',
+                            deterministic: continuationResult.verification.deterministic,
+                            judge: continuationResult.verification.judge,
+                            provenance: continuationResult.verification.provenance,
+                            reasons: continuationResult.verification.reasons,
                         },
                         cooldownSuppressedMs: metadataCooldownSuppressedMs,
                         cooldownReason: metadataCooldownReason,
                         contextItems,
                     });
                     this.annotateLatencyQualityMetadata(requestId, metadata, contextItems);
+                    this.recordSessionEvent('conscious_verifier_result', {
+                        question: resolvedQuestion,
+                        verifier: metadata.verifier ?? null,
+                        route: currentRouteForMetadata,
+                    });
                     return consciousResponseCoordinator.completeStructuredAnswer({
                         requestId,
                         questionLabel: question || 'What to Answer',
@@ -1504,14 +1536,21 @@ export class IntelligenceEngine extends EventEmitter {
                         transcriptRevision: transcriptRevisionAtStart,
                         threadAction: activeThreadAction,
                         verifier: {
-                            deterministic: 'pass',
-                            provenance: 'pass',
+                            deterministic: consciousResult.verification.deterministic,
+                            judge: consciousResult.verification.judge,
+                            provenance: consciousResult.verification.provenance,
+                            reasons: consciousResult.verification.reasons,
                         },
                         cooldownSuppressedMs: metadataCooldownSuppressedMs,
                         cooldownReason: metadataCooldownReason,
                         contextItems: preparationResult.contextItems,
                     });
                     this.annotateLatencyQualityMetadata(requestId, metadata, preparationResult.contextItems);
+                    this.recordSessionEvent('conscious_verifier_result', {
+                        question: resolvedQuestion,
+                        verifier: metadata.verifier ?? null,
+                        route: currentRouteForMetadata,
+                    });
                     return consciousResponseCoordinator.completeStructuredAnswer({
                         requestId,
                         questionLabel: question || 'What to Answer',

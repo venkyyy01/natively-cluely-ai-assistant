@@ -1486,7 +1486,7 @@ test('intelligence handlers return canceled status when what-to-say yields no an
     answer: null,
     question: 'inferred from context',
     status: 'canceled',
-    error: 'Request canceled before completion.',
+    error: 'Request canceled before completion. Retry with the current settings.',
   });
 });
 

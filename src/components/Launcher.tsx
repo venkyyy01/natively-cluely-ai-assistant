@@ -239,8 +239,8 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onP
         void setUndetectable(!newState).catch((error) => {
             console.error('Failed to toggle undetectable mode', error);
             setIsDetectable(!newState);
-        }); // Note: setUndetectable takes the *undetectable* state, which is inverse of *detectable*
-        analytics.trackModeSelected(newState ? 'launcher' : 'undetectable'); // If visible (detectable), mode is normal/launcher. If not detectable, mode is undetectable.
+        });
+        analytics.trackModeSelected(newState ? 'launcher' : 'privacy_mode');
     };
 
     // Group meetings
@@ -477,7 +477,7 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onP
                                                 <RefreshCw size={18} />
                                             </button>
 
-                                            {/* Detectable Toggle Pill */}
+                                            {/* Privacy Toggle Pill */}
                                             <div className="flex items-center gap-3 bg-[#101011] border border-border-muted rounded-full px-3 py-1.5 min-w-[140px]">
                                                 {isDetectable ? (
                                                     <Ghost
@@ -503,7 +503,7 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onP
                                                     </svg>
                                                 )}
                                                 <span className={`text-xs font-medium flex-1 transition-colors text-[#B7B7B8]`}>
-                                                    {isDetectable ? "Detectable" : "Undetectable"}
+                                                    {isDetectable ? "Visible" : "Privacy"}
                                                 </span>
                                                 <div
                                                     className={`w-8 h-4 rounded-full relative transition-colors ${!isDetectable ? 'bg-blue-500' : 'bg-zinc-700'}`}

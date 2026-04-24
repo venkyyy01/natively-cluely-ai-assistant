@@ -33,6 +33,10 @@ function getInferenceLlmHelper(appState: AppState): {
     groqPrompt?: string,
   ) => Promise<string>;
 } {
+  if (typeof appState.isStealthContainmentActive === 'function' && appState.isStealthContainmentActive()) {
+    throw new Error('CONTAINMENT_ACTIVE');
+  }
+
   const coordinator = ('getCoordinator' in appState && typeof appState.getCoordinator === 'function')
     ? (appState.getCoordinator() as RuntimeCoordinatorLike)
     : null;

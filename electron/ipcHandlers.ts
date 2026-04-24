@@ -89,6 +89,7 @@ safeHandleValidated("renderer:log-error", (args) => [parseIpcInput(ipcSchemas.re
     getIntelligenceManager,
     activeChatControllers,
     streamChatStartedAt,
+    appState,
   });
 
   safeHandleValidated("delete-screenshot", (args) => [parseIpcInput(ipcSchemas.absoluteUserDataPath, args[0], 'delete-screenshot')] as const, async (event, filePath) => {

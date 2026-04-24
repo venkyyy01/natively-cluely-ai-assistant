@@ -34,10 +34,14 @@ export interface LatencyMetadata {
   contextItemIds?: string[];
   verifierOutcome?: {
     deterministic: 'pass' | 'fail' | 'skipped';
+    judge?: 'pass' | 'fail' | 'skipped';
     provenance: 'pass' | 'fail' | 'skipped';
+    reasons?: string[];
   };
   stealthContainmentActive?: boolean;
   staleStopReason?: StaleStopReason;
+  terminalStatus?: 'completed' | 'stale' | 'suppressed';
+  suppressionReason?: string;
 }
 
 export interface LatencySnapshot extends LatencyMetadata {
@@ -176,6 +180,16 @@ export class AnswerLatencyTracker {
     const snapshot = this.snapshots.get(requestId);
     if (!snapshot || snapshot.completed) return undefined;
     snapshot.staleStopReason = reason;
+    snapshot.terminalStatus = 'stale';
+    return this.complete(requestId);
+  }
+
+  completeSuppressed(requestId: string, reason: string): LatencySnapshot | undefined {
+    const snapshot = this.snapshots.get(requestId);
+    if (!snapshot || snapshot.completed) return undefined;
+    snapshot.terminalStatus = 'suppressed';
+    snapshot.suppressionReason = reason;
+    this.writeMark(snapshot, 'suppressedAt', Date.now());
     return this.complete(requestId);
   }
 
@@ -188,6 +202,7 @@ export class AnswerLatencyTracker {
       return this.createSnapshotCopy(snapshot);
     }
     snapshot.completed = true;
+    snapshot.terminalStatus = snapshot.terminalStatus ?? 'completed';
     snapshot.marks.completedAt = Date.now();
 
     const startedAt = snapshot.marks.startedAt;

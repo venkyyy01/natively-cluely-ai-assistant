@@ -6,6 +6,8 @@ import type { QuestionReaction } from './QuestionReactionClassifier';
 export interface ConsciousVerificationResult {
   ok: boolean;
   reason?: string;
+  deterministic?: 'pass' | 'fail' | 'skipped';
+  judge?: 'pass' | 'fail' | 'skipped';
 }
 
 export interface ConsciousVerifierJudgeInput {
@@ -172,23 +174,30 @@ export class ConsciousVerifier {
 
     if (!this.judge) {
       return this.options.requireJudge
-        ? { ok: false, reason: 'judge_unavailable' }
-        : ruleVerdict;
+        ? { ok: false, reason: 'judge_unavailable', deterministic: 'pass', judge: 'fail' }
+        : { ...ruleVerdict, judge: 'skipped' };
     }
 
     try {
       const judgeVerdict = await this.judge.judge(input);
       if (!judgeVerdict) {
         return this.options.requireJudge
-          ? { ok: false, reason: 'judge_unavailable' }
-          : ruleVerdict;
+          ? { ok: false, reason: 'judge_unavailable', deterministic: 'pass', judge: 'fail' }
+          : { ...ruleVerdict, judge: 'skipped', reason: ruleVerdict.reason ?? 'judge_unavailable' };
       }
 
-      return judgeVerdict.ok ? ruleVerdict : judgeVerdict;
+      return judgeVerdict.ok
+        ? { ...ruleVerdict, judge: 'pass' }
+        : {
+            ok: false,
+            reason: judgeVerdict.reason,
+            deterministic: 'pass',
+            judge: 'fail',
+          };
     } catch {
       return this.options.requireJudge
-        ? { ok: false, reason: 'judge_execution_failed' }
-        : ruleVerdict;
+        ? { ok: false, reason: 'judge_execution_failed', deterministic: 'pass', judge: 'fail' }
+        : { ...ruleVerdict, judge: 'skipped', reason: ruleVerdict.reason ?? 'judge_execution_failed' };
     }
   }
 
@@ -198,7 +207,7 @@ export class ConsciousVerifier {
 
   private verifyRuleSet(input: ConsciousVerifierJudgeInput): ConsciousVerificationResult {
     if (!hasSubstance(input.response)) {
-      return { ok: false, reason: 'empty_structured_response' };
+      return { ok: false, reason: 'empty_structured_response', deterministic: 'fail', judge: 'skipped' };
     }
 
     const reaction = input.reaction;
@@ -207,31 +216,31 @@ export class ConsciousVerifier {
     const evidence = input.evidence ?? hypothesis?.evidence;
 
     if (isBehavioralQuestion(input.question) && !hasCompleteBehavioralStar(input.response)) {
-      return { ok: false, reason: 'missing_behavioral_star_structure' };
+      return { ok: false, reason: 'missing_behavioral_star_structure', deterministic: 'fail', judge: 'skipped' };
     }
 
     if (isBehavioralQuestion(input.question) && !hasStrongBehavioralDepth(input.response)) {
-      return { ok: false, reason: 'weak_behavioral_depth' };
+      return { ok: false, reason: 'weak_behavioral_depth', deterministic: 'fail', judge: 'skipped' };
     }
 
     if (reaction?.kind === 'tradeoff_probe' && input.response.tradeoffs.length === 0 && input.response.pushbackResponses.length === 0) {
-      return { ok: false, reason: 'missing_tradeoff_content' };
+      return { ok: false, reason: 'missing_tradeoff_content', deterministic: 'fail', judge: 'skipped' };
     }
 
     if (reaction?.kind === 'metric_probe' && input.response.scaleConsiderations.length === 0 && !/metric|latency|throughput|monitor|measure|slo|sla/.test(responseText)) {
-      return { ok: false, reason: 'missing_metric_content' };
+      return { ok: false, reason: 'missing_metric_content', deterministic: 'fail', judge: 'skipped' };
     }
 
     if (reaction?.kind === 'challenge' && input.response.pushbackResponses.length === 0 && input.response.tradeoffs.length === 0) {
-      return { ok: false, reason: 'missing_defense_content' };
+      return { ok: false, reason: 'missing_defense_content', deterministic: 'fail', judge: 'skipped' };
     }
 
     if (reaction?.kind === 'deep_dive' && input.response.edgeCases.length === 0 && input.response.scaleConsiderations.length === 0 && input.response.implementationPlan.length === 0) {
-      return { ok: false, reason: 'missing_depth_content' };
+      return { ok: false, reason: 'missing_depth_content', deterministic: 'fail', judge: 'skipped' };
     }
 
     if (reaction?.kind === 'example_request' && input.response.implementationPlan.length === 0 && !/example|for instance|for example/.test(responseText)) {
-      return { ok: false, reason: 'missing_example_content' };
+      return { ok: false, reason: 'missing_example_content', deterministic: 'fail', judge: 'skipped' };
     }
 
     if (
@@ -239,7 +248,7 @@ export class ConsciousVerifier {
       hypothesis?.latestSuggestedAnswer &&
       responseText.trim() === hypothesis.latestSuggestedAnswer.trim().toLowerCase()
     ) {
-      return { ok: false, reason: 'duplicate_follow_up_response' };
+      return { ok: false, reason: 'duplicate_follow_up_response', deterministic: 'fail', judge: 'skipped' };
     }
 
     // NAT-050: when the answer-state signal is inferred-dominant, reject
@@ -250,13 +259,13 @@ export class ConsciousVerifier {
     if (isInferredDominantEvidence(evidence)) {
       const groundingText = gatherStrictGroundingText(input);
       if (hasUnsupportedNumericClaim(responseText, groundingText)) {
-        return { ok: false, reason: 'unsupported_numeric_claim_in_inferred_state' };
+        return { ok: false, reason: 'unsupported_numeric_claim_in_inferred_state', deterministic: 'fail', judge: 'skipped' };
       }
       if (hasUnsupportedTechnologyClaim(responseText, groundingText)) {
-        return { ok: false, reason: 'unsupported_technology_claim_in_inferred_state' };
+        return { ok: false, reason: 'unsupported_technology_claim_in_inferred_state', deterministic: 'fail', judge: 'skipped' };
       }
     }
 
-    return { ok: true };
+    return { ok: true, deterministic: 'pass', judge: 'skipped' };
   }
 }

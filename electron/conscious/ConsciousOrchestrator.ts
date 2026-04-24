@@ -56,7 +56,19 @@ export interface PreparedConsciousRoute {
 export type ConsciousExecutionResult =
   | { kind: 'skip' }
   | { kind: 'fallback' }
-  | { kind: 'handled'; structuredResponse: ConsciousModeStructuredResponse; fullAnswer: string };
+  | {
+      kind: 'handled';
+      structuredResponse: ConsciousModeStructuredResponse;
+      fullAnswer: string;
+      verification: ConsciousVerificationMetadata;
+    };
+
+export interface ConsciousVerificationMetadata {
+  deterministic: 'pass' | 'fail' | 'skipped';
+  judge: 'pass' | 'fail' | 'skipped';
+  provenance: 'pass' | 'fail' | 'skipped';
+  reasons: string[];
+}
 
 export class ConsciousOrchestrator {
   private static readonly CIRCUIT_BREAKER_FAILURE_THRESHOLD = 3;
@@ -102,6 +114,23 @@ export class ConsciousOrchestrator {
     return { kind: 'fallback' };
   }
 
+  private buildVerificationMetadata(input: {
+    provenanceOk: boolean;
+    provenanceReason?: string;
+    verificationOk: boolean;
+    verificationReason?: string;
+    deterministic?: 'pass' | 'fail' | 'skipped';
+    judge?: 'pass' | 'fail' | 'skipped';
+  }): ConsciousVerificationMetadata {
+    const reasons = [input.provenanceReason, input.verificationReason].filter((reason): reason is string => Boolean(reason));
+    return {
+      deterministic: input.deterministic ?? (input.verificationOk ? 'pass' : 'fail'),
+      judge: input.judge ?? 'skipped',
+      provenance: input.provenanceOk ? 'pass' : 'fail',
+      reasons,
+    };
+  }
+
   private static readonly THREAD_COMPATIBILITY_STOPWORDS = new Set([
     'the', 'and', 'for', 'with', 'that', 'this', 'from', 'have', 'your', 'about', 'would', 'what',
     'when', 'where', 'which', 'into', 'while', 'there', 'their', 'then', 'than', 'been', 'were',
@@ -115,6 +144,15 @@ export class ConsciousOrchestrator {
         .toLowerCase()
         .replace(/[^a-z0-9\s]/g, ' ')
         .split(/\s+/)
+        .map((token) => {
+          if (token.length > 4 && token.endsWith('ies')) {
+            return `${token.slice(0, -3)}y`;
+          }
+          if (token.length > 4 && token.endsWith('s')) {
+            return token.slice(0, -1);
+          }
+          return token;
+        })
         .filter((token) => token.length >= 3 && !ConsciousOrchestrator.THREAD_COMPATIBILITY_STOPWORDS.has(token))
     ));
   }
@@ -134,7 +172,7 @@ export class ConsciousOrchestrator {
   }
 
   private isDeterministicContinuationPhrase(loweredQuestion: string): boolean {
-    return /^(what are the tradeoffs\??|how would you shard this\??|what happens during failover\??|what metrics would you watch( first)?\??)$/i.test(loweredQuestion)
+    return /^(what are the tradeoffs\??|how would you shard this\??|what happens during failover\??|what metrics would you watch( first)?\??|would that still hold\??)$/i.test(loweredQuestion)
       || /^(why this approach|why this|why not|how so|go deeper|can you go deeper|walk me through that|talk through that|and then|what about reliability|what about scale|what about failure handling|what about bottlenecks)$/i.test(loweredQuestion);
   }
 
@@ -155,21 +193,8 @@ export class ConsciousOrchestrator {
     const threadCorpus = [
       thread.rootQuestion,
       thread.lastQuestion,
-      thread.response.openingReasoning,
-      ...thread.response.implementationPlan,
-      ...thread.response.tradeoffs,
-      ...thread.response.edgeCases,
-      ...thread.response.scaleConsiderations,
-      ...thread.response.pushbackResponses,
       ...thread.response.likelyFollowUps,
-      thread.response.codeTransition,
       thread.response.behavioralAnswer?.question,
-      thread.response.behavioralAnswer?.headline,
-      thread.response.behavioralAnswer?.situation,
-      thread.response.behavioralAnswer?.task,
-      thread.response.behavioralAnswer?.action,
-      thread.response.behavioralAnswer?.result,
-      ...(thread.response.behavioralAnswer?.whyThisAnswerWorks || []),
     ].filter(Boolean).join(' ');
     const threadTokens = new Set(this.tokenizeForThreadCompatibility(threadCorpus));
 
@@ -193,11 +218,7 @@ export class ConsciousOrchestrator {
       return true;
     }
 
-    if (overlapHits === 0 && this.isShortReferentialFollowUp(loweredQuestion)) {
-      return true;
-    }
-
-    if (overlapHits === 0 && referentialFollowUp && questionTokens.length <= 1) {
+    if (overlapHits === 0 && referentialFollowUp && questionTokens.length <= 1 && thread.followUpCount === 0) {
       return true;
     }
 
@@ -386,6 +407,14 @@ export class ConsciousOrchestrator {
         kind: 'handled',
         structuredResponse,
         fullAnswer: formatConsciousModeResponse(structuredResponse),
+        verification: this.buildVerificationMetadata({
+          provenanceOk: provenanceVerdict.ok,
+          provenanceReason: provenanceVerdict.reason,
+          verificationOk: verification.ok,
+          verificationReason: verification.reason,
+          deterministic: verification.deterministic,
+          judge: verification.judge,
+        }),
       };
     } catch (error) {
       console.warn('[ConsciousOrchestrator] Continuation execution failed:', error);
@@ -475,6 +504,14 @@ export class ConsciousOrchestrator {
         kind: 'handled',
         structuredResponse,
         fullAnswer: formatConsciousModeResponse(structuredResponse),
+        verification: this.buildVerificationMetadata({
+          provenanceOk: provenanceVerdict.ok,
+          provenanceReason: provenanceVerdict.reason,
+          verificationOk: verification.ok,
+          verificationReason: verification.reason,
+          deterministic: verification.deterministic,
+          judge: verification.judge,
+        }),
       };
     } catch (error) {
       console.warn('[ConsciousOrchestrator] Reasoning-first execution failed:', error);

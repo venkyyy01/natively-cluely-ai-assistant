@@ -45,7 +45,7 @@ test('NAT-059: replayEvents returns multiple events in order', async () => {
   rmSync(dir, { recursive: true, force: true });
 });
 
-test('NAT-059: snapshotEvents replaces log with checkpoint event', async () => {
+test('NAT-059: snapshotEvents appends checkpoint without destroying the audit log', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'natively-sessions-'));
   const persistence = new SessionPersistence({ sessionsDirectory: dir });
 
@@ -73,9 +73,9 @@ test('NAT-059: snapshotEvents replaces log with checkpoint event', async () => {
   await persistence.snapshotEvents('session-3', session);
 
   const events = await persistence.replayEvents('session-3');
-  assert.equal(events.length, 1);
-  assert.equal(events[0].type, 'checkpoint');
-  assert.equal((events[0].payload.session as PersistedSession).sessionId, 'session-3');
+  assert.equal(events.length, 2);
+  assert.deepEqual(events.map((event) => event.type), ['transcript', 'checkpoint']);
+  assert.equal((events[1].payload.session as PersistedSession).sessionId, 'session-3');
 
   rmSync(dir, { recursive: true, force: true });
 });

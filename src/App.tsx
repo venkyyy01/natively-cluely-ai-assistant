@@ -32,20 +32,8 @@ const AppProviders: React.FC<{ children: React.ReactNode }> = ({ children }) => 
   </QueryClientProvider>
 )
 
-const RendererStartupFallback: React.FC<{ errorMessage: string }> = ({ errorMessage }) => (
-  <div className="flex h-full min-h-0 w-full items-center justify-center bg-[#050505] px-6">
-    <div className="w-full max-w-lg rounded-3xl border border-white/10 bg-[#111111] p-6 text-left shadow-2xl">
-      <p className="text-xs font-semibold uppercase tracking-[0.28em] text-[#8A8A8A]">Startup Error</p>
-      <h1 className="mt-3 text-2xl font-semibold text-white">Renderer startup failed</h1>
-      <p className="mt-3 text-sm leading-6 text-[#B5B5B5]">
-        The Electron preload bridge did not initialize, so the UI cannot finish booting. Restart the app.
-        If this keeps happening, the preload script or startup shell is failing before the renderer is ready.
-      </p>
-      <code className="mt-4 block overflow-x-auto rounded-2xl border border-[#ff3333]/20 bg-[#1A1A1A] px-4 py-3 text-xs text-[#ff7b7b]">
-        {errorMessage}
-      </code>
-    </div>
-  </div>
+const RendererStartupFallback: React.FC<{ errorMessage: string }> = ({ errorMessage: _errorMessage }) => (
+  <div className="h-full min-h-0 w-full bg-black" aria-hidden="true" />
 )
 
 const getStoredAudioDeviceId = (storageKey: string, fallback = 'default'): string => {
@@ -357,7 +345,11 @@ const App: React.FC = () => {
     }
   }, [])
 
-  const [showStartup, setShowStartup] = useState(true)
+  const startsShielded = useMemo(() => {
+    const params = new URLSearchParams(window.location.search)
+    return params.get('privacyShield') === '1' || localStorage.getItem('natively_undetectable') === 'true'
+  }, [])
+  const [showStartup, setShowStartup] = useState(() => !startsShielded)
   const [isSettingsOpen, setIsSettingsOpen] = useState(false)
   const [settingsInitialTab, setSettingsInitialTab] = useState('general')
   const [overlayOpacity, setOverlayOpacity] = useState<number>(() => {
@@ -375,7 +367,10 @@ const App: React.FC = () => {
 
   const [incompatibleWarning, setIncompatibleWarning] = useState<{ count: number; oldProvider: string; newProvider: string } | null>(null)
   const [meetingAudioError, setMeetingAudioError] = useState<string | null>(null)
-  const [privacyShieldState, setPrivacyShieldState] = useState<PrivacyShieldState>({ active: false, reason: null })
+  const [privacyShieldState, setPrivacyShieldState] = useState<PrivacyShieldState>(() => ({
+    active: startsShielded,
+    reason: null,
+  }))
 
   useEffect(() => {
     if (!electronAPI) {
@@ -544,6 +539,10 @@ const App: React.FC = () => {
     )
   }
 
+  if (privacyShieldState.active) {
+    return <PrivacyShieldWindowContent variant={windowKind === 'overlay' ? 'overlay' : 'launcher'} onEndMeeting={windowKind === 'overlay' ? handleEndMeeting : undefined} />
+  }
+
   if (windowKind === 'settings') {
     return (
       <ErrorBoundary context="SettingsPopup">
@@ -569,10 +568,6 @@ const App: React.FC = () => {
   }
 
   if (windowKind === 'overlay') {
-    if (privacyShieldState.active) {
-      return <PrivacyShieldWindowContent variant="overlay" onEndMeeting={handleEndMeeting} />
-    }
-
     return (
       <OverlayWindowContent
         meetingAudioError={meetingAudioError}
@@ -581,10 +576,6 @@ const App: React.FC = () => {
         onEndMeeting={handleEndMeeting}
       />
     )
-  }
-
-  if (privacyShieldState.active) {
-    return <PrivacyShieldWindowContent variant="launcher" />
   }
 
   return (

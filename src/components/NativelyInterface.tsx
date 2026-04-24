@@ -129,6 +129,7 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
     const onUndetectableChanged = getOptionalElectronMethod('onUndetectableChanged');
     const onToggleExpand = getOptionalElectronMethod('onToggleExpand');
     const onSessionReset = getOptionalElectronMethod('onSessionReset');
+    const onPrivacyShieldChanged = getOptionalElectronMethod('onPrivacyShieldChanged');
     const setOverlayBounds = getOptionalElectronMethod('setOverlayBounds');
     const onGlobalShortcutAction = getOptionalElectronMethod('onGlobalShortcutAction');
     const [isExpanded, setIsExpanded] = useState(true);
@@ -373,12 +374,23 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
         if (isExpanded) {
             electronAPI.showWindow();
         } else {
-            // Slight delay to allow animation to clean up if needed, though immediate is safer for click-through
-            // Using setTimeout to ensure the render cycle completes first
-            // Increased to 400ms to allow "contract to bottom" exit animation to finish
-            setTimeout(() => electronAPI.hideWindow(), 400);
+            electronAPI.hideWindow();
         }
     }, [electronAPI, isExpanded]);
+
+    useEffect(() => {
+        if (!onPrivacyShieldChanged) return;
+        return onPrivacyShieldChanged((state) => {
+            if (!state.active) return;
+            setMessages([]);
+            setInputValue('');
+            setAttachedContext([]);
+            activeIntelligenceStreamingIdsRef.current = {};
+            activeGeminiStreamingIdRef.current = null;
+            activeRagStreamingIdRef.current = null;
+            setIsProcessing(false);
+        });
+    }, [onPrivacyShieldChanged]);
 
     // Keyboard shortcut to toggle expanded state (via Main Process)
     useEffect(() => {
@@ -961,6 +973,10 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
         try {
             // Pass imagePath if attached
             const result = await window.electronAPI.generateWhatToSay(undefined, currentAttachments.length > 0 ? currentAttachments.map(s => s.path) : undefined);
+            if (result?.status === 'canceled') {
+                setMessages(prev => prev.filter(message => message.id !== assistantMessageId));
+                return;
+            }
             setMessages(prev => updateOrPrependMessageById(
                 prev,
                 assistantMessageId,
@@ -994,6 +1010,10 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
                 }
             ));
         } catch (err) {
+            if (String(err).includes('CONTAINMENT_ACTIVE')) {
+                setMessages(prev => prev.filter(message => message.id !== assistantMessageId));
+                return;
+            }
             setMessages(prev => updateOrPrependMessageById(
                 prev,
                 assistantMessageId,
