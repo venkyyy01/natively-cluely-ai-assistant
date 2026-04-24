@@ -1,6 +1,11 @@
 import { execFile } from 'node:child_process';
 import { EventEmitter } from 'events';
 import { loadNativeStealthModule } from './nativeStealthModule';
+import {
+  getOptionalPythonFallbackReason,
+  getProcessErrorSummary,
+  withStderr,
+} from './pythonFallback';
 import type { NativeStealthBindings } from './StealthManager';
 
 interface ChromiumProcessInfo {
@@ -49,6 +54,7 @@ export class ChromiumCaptureDetector extends EventEmitter {
   private captureActive = false;
   private confirmationStartTime: number | null = null;
   private lastActiveEmitTime = 0;
+  private readonly pythonFallbackNotices = new Set<string>();
 
   constructor(options: ChromiumCaptureDetectorOptions = {}) {
     super();
@@ -82,6 +88,15 @@ export class ChromiumCaptureDetector extends EventEmitter {
 
   isCaptureLikelyActive(): boolean {
     return this.captureActive;
+  }
+
+  private logPythonFallbackNoticeOnce(key: string, message: string): void {
+    if (this.pythonFallbackNotices.has(key)) {
+      return;
+    }
+
+    this.pythonFallbackNotices.add(key);
+    this.logger.log(message);
   }
 
   private async check(): Promise<void> {
@@ -285,17 +300,30 @@ print('NO_CAPTURE')
 
       return stdout.includes('CAPTURE_DETECTED');
     } catch (pythonError) {
-      this.logger.warn('[ChromiumCaptureDetector] S-8: Python fallback also failed:', pythonError);
+      const optionalReason = getOptionalPythonFallbackReason(pythonError);
+      if (optionalReason) {
+        this.logPythonFallbackNoticeOnce(
+          `optional:${optionalReason}`,
+          `[ChromiumCaptureDetector] S-8: Python fallback unavailable (${optionalReason}); continuing without browser-title corroboration`
+        );
+        return false;
+      }
+
+      const summary = getProcessErrorSummary(pythonError);
+      this.logPythonFallbackNoticeOnce(
+        `unexpected:${summary}`,
+        '[ChromiumCaptureDetector] S-8: Python fallback failed; continuing without browser-title corroboration'
+      );
       return false;
     }
   }
 
   private execPromise(command: string, args: string[]): Promise<string> {
     return new Promise((resolve, reject) => {
-      execFile(command, args, { timeout: 5000 }, (error, stdout) => {
-        const err = error as NodeJS.ErrnoException | null;
+      execFile(command, args, { timeout: 5000 }, (error, stdout, stderr) => {
+        const err = withStderr(error, stderr);
         if (err && err.code !== '1') {
-          reject(error);
+          reject(err);
           return;
         }
         resolve(stdout);

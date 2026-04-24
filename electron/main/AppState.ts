@@ -444,8 +444,16 @@ this.initializeAccelerationManager().catch(err => console.warn('[AppState] Accel
 
 this.setupIntelligenceEvents()
 
-    // Pre-warm the fine-tuned intent classifier in background
-    warmupIntentClassifier();
+    const allowIntentWarmup =
+      !app.isPackaged ||
+      isEnvFlagEnabled(process.env.NATIVELY_ENABLE_INTENT_WARMUP) === true
+
+    if (allowIntentWarmup) {
+      // Pre-warm the fine-tuned intent classifier in background
+      warmupIntentClassifier();
+    } else {
+      console.log('[AppState] Skipping intent classifier warmup in packaged build');
+    }
 
     // Setup Ollama IPC
     this.setupOllamaIpcHandlers()

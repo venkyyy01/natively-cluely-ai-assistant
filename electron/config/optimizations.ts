@@ -91,7 +91,9 @@ export const DEFAULT_OPTIMIZATION_FLAGS: OptimizationFlags = {
   useEnhancedCache: true,
 
   // Phase 2
-  useANEEmbeddings: true,
+  // Disabled by default until packaged macOS builds stop crashing inside
+  // onnxruntime-node / CoreML session teardown.
+  useANEEmbeddings: false,
   useParallelContext: true,
 
   // Phase 3

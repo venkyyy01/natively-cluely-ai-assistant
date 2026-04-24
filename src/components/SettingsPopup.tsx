@@ -3,7 +3,7 @@ import { Brain, MessageSquare, Camera, Zap, User } from 'lucide-react';
 import { useShortcuts } from '../hooks/useShortcuts';
 import { analytics } from '../lib/analytics/analytics.service';
 import { SESSION_MENU_TOGGLE_ORDER } from '../lib/consciousModeSettings';
-import { requireElectronMethod } from '../lib/electronApi';
+import { getOptionalElectronMethod, requireElectronMethod } from '../lib/electronApi';
 import type { FastResponseConfig } from '../../shared/ipc';
 
 const SettingsPopup = () => {
@@ -14,14 +14,24 @@ const [profileMode, setProfileMode] = useState(false);
 const [hasProfile, setHasProfile] = useState(false);
 const [consciousModeEnabled, setConsciousModeEnabled] = useState(false);
 const isPremium = true; // All features unlocked
+const getStoredCredentials = getOptionalElectronMethod('getStoredCredentials');
+const profileGetStatus = getOptionalElectronMethod('profileGetStatus');
+const getUndetectable = getOptionalElectronMethod('getUndetectable');
+const onUndetectableChanged = getOptionalElectronMethod('onUndetectableChanged');
+const onFastResponseConfigChanged = getOptionalElectronMethod('onFastResponseConfigChanged');
+const getFastResponseConfig = getOptionalElectronMethod('getFastResponseConfig');
+const getConsciousMode = getOptionalElectronMethod('getConsciousMode');
+const onConsciousModeChanged = getOptionalElectronMethod('onConsciousModeChanged');
+const updateContentDimensions = getOptionalElectronMethod('updateContentDimensions');
+const setFastResponseConfigInMain = getOptionalElectronMethod('setFastResponseConfig');
+const profileSetMode = getOptionalElectronMethod('profileSetMode');
 
     const [hasStoredKey, setHasStoredKey] = useState<Record<string, boolean>>({});
 
     // Load credentials func
     const loadCredentials = async () => {
         try {
-            // @ts-ignore
-            const creds = await window.electronAPI?.getStoredCredentials?.();
+            const creds = await getStoredCredentials?.();
             if (creds) {
                 setHasStoredKey({
                     gemini: creds.hasGeminiKey,
@@ -45,8 +55,7 @@ const isPremium = true; // All features unlocked
         // Load profile status
         const loadProfile = async () => {
             try {
-                // @ts-ignore
-                const status = await window.electronAPI?.profileGetStatus?.();
+                const status = await profileGetStatus?.();
                 if (status) {
                     setHasProfile(status.hasProfile);
                     setProfileMode(status.profileMode);
@@ -61,8 +70,8 @@ const isPremium = true; // All features unlocked
 
     // Fetch initial undetectable state from main process (source of truth)
     useEffect(() => {
-        if (window.electronAPI?.getUndetectable) {
-            window.electronAPI.getUndetectable().then((state: boolean) => {
+        if (getUndetectable) {
+            getUndetectable().then((state: boolean) => {
                 setIsUndetectable(state);
             });
         }
@@ -70,8 +79,8 @@ const isPremium = true; // All features unlocked
 
     // One-way listener: receive state changes from main process, never echo back
     useEffect(() => {
-        if (window.electronAPI?.onUndetectableChanged) {
-            const unsubscribe = window.electronAPI.onUndetectableChanged((newState: boolean) => {
+        if (onUndetectableChanged) {
+            const unsubscribe = onUndetectableChanged((newState: boolean) => {
                 setIsUndetectable(newState);
                 localStorage.setItem('natively_undetectable', String(newState));
             });
@@ -81,8 +90,8 @@ const isPremium = true; // All features unlocked
 
     useEffect(() => {
         // Listen for changes from other windows (2-way sync)
-        if (window.electronAPI?.onFastResponseConfigChanged) {
-            const unsubscribe = window.electronAPI.onFastResponseConfigChanged((config: FastResponseConfig) => {
+        if (onFastResponseConfigChanged) {
+            const unsubscribe = onFastResponseConfigChanged((config: FastResponseConfig) => {
                 setFastResponseConfig(config);
             });
             return () => unsubscribe();
@@ -92,8 +101,8 @@ const isPremium = true; // All features unlocked
     useEffect(() => {
         let cancelled = false;
 
-        if (window.electronAPI?.getFastResponseConfig) {
-            window.electronAPI.getFastResponseConfig().then((config) => {
+        if (getFastResponseConfig) {
+            getFastResponseConfig().then((config) => {
                 if (!cancelled) {
                     setFastResponseConfig(config);
                 }
@@ -110,8 +119,8 @@ const isPremium = true; // All features unlocked
     useEffect(() => {
         let cancelled = false;
 
-        if (window.electronAPI?.getConsciousMode) {
-            window.electronAPI.getConsciousMode().then((result) => {
+        if (getConsciousMode) {
+            getConsciousMode().then((result) => {
                 if (!cancelled && result.success) {
                     setConsciousModeEnabled(result.data.enabled);
                 }
@@ -120,8 +129,8 @@ const isPremium = true; // All features unlocked
             });
         }
 
-        if (window.electronAPI?.onConsciousModeChanged) {
-            const unsubscribe = window.electronAPI.onConsciousModeChanged((enabled: boolean) => {
+        if (onConsciousModeChanged) {
+            const unsubscribe = onConsciousModeChanged((enabled: boolean) => {
                 setConsciousModeEnabled(enabled);
             });
             return () => {
@@ -161,8 +170,7 @@ const [showTranscript, setShowTranscript] = useState(() => {
                 const rect = entry.target.getBoundingClientRect();
                 // Send exact dimensions to Electron
                 try {
-                    // @ts-ignore
-                    window.electronAPI?.updateContentDimensions({
+                    void updateContentDimensions?.({
                         width: Math.ceil(rect.width),
                         height: Math.ceil(rect.height)
                     });
@@ -222,7 +230,7 @@ const [showTranscript, setShowTranscript] = useState(() => {
                         onClick={async () => {
                             if (hasStoredKey[fastResponseConfig.provider] === false) return;
                             try {
-                                await window.electronAPI?.setFastResponseConfig({
+                                await setFastResponseConfigInMain?.({
                                     ...fastResponseConfig,
                                     enabled: !fastResponseConfig.enabled,
                                 });
@@ -308,8 +316,7 @@ const [showTranscript, setShowTranscript] = useState(() => {
                                 const newState = !profileMode;
                                 setProfileMode(newState);
                                 try {
-                                    // @ts-ignore
-                                    await window.electronAPI?.profileSetMode?.(newState);
+                                    await profileSetMode?.(newState);
                                 } catch (e) { console.error(e); }
                             }}
                             className={`w-[30px] h-[18px] rounded-full p-[1.5px] transition-all duration-300 ease-spring active:scale-[0.92] ${profileMode ? 'bg-accent-primary shadow-[0_2px_10px_rgba(var(--color-accent-primary),0.3)]' : 'bg-white/10'}`}

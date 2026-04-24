@@ -8,6 +8,11 @@ import { execFile } from 'node:child_process';
 import { ChromiumCaptureDetector } from './ChromiumCaptureDetector';
 import { MacosStealthEnhancer } from './MacosStealthEnhancer';
 import { TCCMonitor } from './TCCMonitor';
+import {
+  getOptionalPythonFallbackReason,
+  getProcessErrorSummary,
+  withStderr,
+} from './pythonFallback';
 import type {
   StealthManagerDependencies,
   StealthCapableWindow,
@@ -174,19 +179,19 @@ function scheduleUnrefTimeout(callback: () => void, delayMs: number): NodeJS.Tim
 
 function defaultProcessEnumerator(command: string, args: string[]): Promise<string> {
   return new Promise((resolve, reject) => {
-    execFile(command, args, (error, stdout) => {
+    execFile(command, args, (error, stdout, stderr) => {
       if (!error) {
         resolve(stdout);
         return;
       }
 
-      const err = error as NodeJS.ErrnoException & { code?: number };
-      if (command === 'pgrep' && err.code === 1) {
+      const err = withStderr(error, stderr);
+      if (command === 'pgrep' && String(err.code) === '1') {
         resolve('');
         return;
       }
 
-      reject(error);
+      reject(err);
     });
   });
 }
@@ -194,6 +199,7 @@ function defaultProcessEnumerator(command: string, args: string[]): Promise<stri
 export class StealthManager extends EventEmitter {
   private config: StealthConfig;
   private stealthDegradationWarnings = new Set<string>();
+  private readonly pythonFallbackNotices = new Set<string>();
 
   public getStealthDegradationWarnings(): string[] {
     return Array.from(this.stealthDegradationWarnings);
@@ -211,6 +217,15 @@ export class StealthManager extends EventEmitter {
       this.stealthDegradationWarnings.delete(warning);
       this.emit('stealth-degraded', this.getStealthDegradationWarnings());
     }
+  }
+
+  private logPythonFallbackNoticeOnce(key: string, message: string): void {
+    if (this.pythonFallbackNotices.has(key)) {
+      return;
+    }
+
+    this.pythonFallbackNotices.add(key);
+    this.logger.log(message);
   }
   private readonly platform: string;
   private readonly logger: Pick<Console, 'log' | 'warn' | 'error'>;
@@ -1265,7 +1280,6 @@ export class StealthManager extends EventEmitter {
     this.cgWindowMonitorRunning = true;
     try {
       const visibleWindowNumbers = await this.getWindowNumbersVisibleToCapture();
-      this.clearWarning('capture_visibility_unknown');
       let windowVisibleToCaptureDetected = false;
 
       for (const record of this.managedWindows) {
@@ -1317,6 +1331,7 @@ export class StealthManager extends EventEmitter {
               visibleWindows.add(win.windowNumber);
             }
           }
+          this.clearWarning('capture_visibility_unknown');
           return visibleWindows;
         }
         // Native returned empty - fall through to Python fallback
@@ -1354,9 +1369,25 @@ for window in windows:
           }
         }
       }
+      this.clearWarning('capture_visibility_unknown');
     } catch (pythonError) {
-      this.logger.warn('[StealthManager] S-8: Python fallback also failed:', pythonError);
-      throw pythonError;
+      this.addWarning('capture_visibility_unknown');
+
+      const optionalReason = getOptionalPythonFallbackReason(pythonError);
+      if (optionalReason) {
+        this.logPythonFallbackNoticeOnce(
+          `optional:${optionalReason}`,
+          `[StealthManager] S-8: Python fallback unavailable (${optionalReason}); continuing with reduced capture visibility detection`
+        );
+        return visibleWindows;
+      }
+
+      const summary = getProcessErrorSummary(pythonError);
+      this.logPythonFallbackNoticeOnce(
+        `unexpected:${summary}`,
+        '[StealthManager] S-8: Python fallback failed; continuing with reduced capture visibility detection'
+      );
+      return visibleWindows;
     }
 
     return visibleWindows;

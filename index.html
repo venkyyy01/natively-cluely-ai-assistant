@@ -14,7 +14,12 @@
 <body style="background-color: #000000; margin: 0; overflow: hidden;">
   <script>
     // Mock electronAPI for browser development
-    if (typeof window.electronAPI === 'undefined') {
+    const isBrowserDevelopment =
+      typeof window.electronAPI === 'undefined' &&
+      /^https?:$/.test(window.location.protocol) &&
+      !navigator.userAgent.includes('Electron');
+
+    if (isBrowserDevelopment) {
       window.electronAPI = {
         onUpdateAvailable: () => () => {},
         onDownloadProgress: () => () => {},

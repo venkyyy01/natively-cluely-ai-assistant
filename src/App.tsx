@@ -391,14 +391,16 @@ const App: React.FC = () => {
 
     let removeProgress: (() => void) | undefined
     let removeComplete: (() => void) | undefined
-    if (electronAPI.onOllamaPullProgress && electronAPI.onOllamaPullComplete) {
-      removeProgress = electronAPI.onOllamaPullProgress((data) => {
+    const onOllamaPullProgress = getOptionalElectronMethod('onOllamaPullProgress')
+    const onOllamaPullComplete = getOptionalElectronMethod('onOllamaPullComplete')
+    if (onOllamaPullProgress && onOllamaPullComplete) {
+      removeProgress = onOllamaPullProgress((data) => {
         setOllamaPullStatus('downloading')
         setOllamaPullPercent(data.percent || 0)
         setOllamaPullMessage(data.status || 'Downloading...')
       })
 
-      removeComplete = electronAPI.onOllamaPullComplete(() => {
+      removeComplete = onOllamaPullComplete(() => {
         setOllamaPullStatus('complete')
         setOllamaPullMessage('Local AI memory ready')
         setOllamaPullPercent(100)
@@ -407,24 +409,28 @@ const App: React.FC = () => {
     }
 
     let removeWarning: (() => void) | undefined
-    if (electronAPI.onIncompatibleProviderWarning) {
-      removeWarning = electronAPI.onIncompatibleProviderWarning((data) => {
+    const onIncompatibleProviderWarning = getOptionalElectronMethod('onIncompatibleProviderWarning')
+    if (onIncompatibleProviderWarning) {
+      removeWarning = onIncompatibleProviderWarning((data) => {
         setIncompatibleWarning(data)
       })
     }
 
     let removeMeetingAudioError: (() => void) | undefined
-    if (electronAPI.onMeetingAudioError) {
-      removeMeetingAudioError = electronAPI.onMeetingAudioError((message) => {
+    const onMeetingAudioError = getOptionalElectronMethod('onMeetingAudioError')
+    if (onMeetingAudioError) {
+      removeMeetingAudioError = onMeetingAudioError((message) => {
         setMeetingAudioError(message)
       })
     }
 
-    electronAPI.getPrivacyShieldState?.().then((state) => {
+    const getPrivacyShieldState = getOptionalElectronMethod('getPrivacyShieldState')
+    getPrivacyShieldState?.().then((state) => {
       setPrivacyShieldState(state)
     }).catch(() => {})
 
-    const removePrivacyShieldListener = electronAPI.onPrivacyShieldChanged?.((state) => {
+    const onPrivacyShieldChanged = getOptionalElectronMethod('onPrivacyShieldChanged')
+    const removePrivacyShieldListener = onPrivacyShieldChanged?.((state) => {
       setPrivacyShieldState(state)
     })
 
@@ -441,7 +447,8 @@ const App: React.FC = () => {
   useEffect(() => {
     if (!electronAPI || !shouldListenForOverlayOpacity(windowContext)) return
 
-    const removeOpacityListener = electronAPI.onOverlayOpacityChanged?.((opacity) => {
+    const onOverlayOpacityChanged = getOptionalElectronMethod('onOverlayOpacityChanged')
+    const removeOpacityListener = onOverlayOpacityChanged?.((opacity) => {
       setOverlayOpacity(opacity)
     })
 

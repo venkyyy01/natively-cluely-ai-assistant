@@ -1,9 +1,18 @@
 import React, { useState, useEffect } from 'react';
 import { Info, Monitor, Globe } from 'lucide-react';
+import { getOptionalElectronMethod } from '../../lib/electronApi';
 
 interface GeneralSettingsProps { }
 
 export const GeneralSettings: React.FC<GeneralSettingsProps> = () => {
+    const getStoredCredentials = getOptionalElectronMethod('getStoredCredentials');
+    const getRecognitionLanguages = getOptionalElectronMethod('getRecognitionLanguages');
+    const getSttLanguage = getOptionalElectronMethod('getSttLanguage');
+    const getAiResponseLanguages = getOptionalElectronMethod('getAiResponseLanguages');
+    const getAiResponseLanguage = getOptionalElectronMethod('getAiResponseLanguage');
+    const setRecognitionLanguageInMain = getOptionalElectronMethod('setRecognitionLanguage');
+    const setAiResponseLanguageInMain = getOptionalElectronMethod('setAiResponseLanguage');
+    const selectServiceAccount = getOptionalElectronMethod('selectServiceAccount');
     // Recognition Language
     const [recognitionLanguage, setRecognitionLanguage] = useState('english-us');
     const [availableLanguages, setAvailableLanguages] = useState<Record<string, any>>({});
@@ -19,8 +28,7 @@ export const GeneralSettings: React.FC<GeneralSettingsProps> = () => {
         const loadInitialData = async () => {
             // Load Credentials
             try {
-                // @ts-ignore  
-                const creds = await window.electronAPI?.getStoredCredentials?.();
+                const creds = await getStoredCredentials?.();
                 if (creds && creds.googleServiceAccountPath) {
                     setServiceAccountPath(creds.googleServiceAccountPath);
                 }
@@ -29,20 +37,20 @@ export const GeneralSettings: React.FC<GeneralSettingsProps> = () => {
             }
 
             // Load STT Languages
-            if (window.electronAPI?.getRecognitionLanguages) {
-                const langs = await window.electronAPI.getRecognitionLanguages();
+            if (getRecognitionLanguages && getSttLanguage) {
+                const langs = await getRecognitionLanguages();
                 setAvailableLanguages(langs);
 
-                const storedStt = await window.electronAPI.getSttLanguage();
+                const storedStt = await getSttLanguage();
                 setRecognitionLanguage(storedStt || 'english-us');
             }
 
             // Load AI Response Languages
-            if (window.electronAPI?.getAiResponseLanguages) {
-                const aiLangs = await window.electronAPI.getAiResponseLanguages();
+            if (getAiResponseLanguages && getAiResponseLanguage) {
+                const aiLangs = await getAiResponseLanguages();
                 setAvailableAiLanguages(aiLangs);
 
-                const storedAi = await window.electronAPI.getAiResponseLanguage();
+                const storedAi = await getAiResponseLanguage();
                 setAiResponseLanguage(storedAi || 'English');
             }
         };
@@ -51,22 +59,22 @@ export const GeneralSettings: React.FC<GeneralSettingsProps> = () => {
 
     const handleLanguageChange = async (key: string) => {
         setRecognitionLanguage(key);
-        if (window.electronAPI?.setRecognitionLanguage) {
-            await window.electronAPI.setRecognitionLanguage(key);
+        if (setRecognitionLanguageInMain) {
+            await setRecognitionLanguageInMain(key);
         }
     };
 
     const handleAiLanguageChange = async (key: string) => {
         setAiResponseLanguage(key);
-        if (window.electronAPI?.setAiResponseLanguage) {
-            await window.electronAPI.setAiResponseLanguage(key);
+        if (setAiResponseLanguageInMain) {
+            await setAiResponseLanguageInMain(key);
         }
     };
 
     const handleSelectServiceAccount = async () => {
         try {
-            const result = await window.electronAPI.selectServiceAccount();
-            if (result.success && result.path) {
+            const result = await selectServiceAccount?.();
+            if (result?.success && result.path) {
                 setServiceAccountPath(result.path);
             }
         } catch (error) {

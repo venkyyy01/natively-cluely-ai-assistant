@@ -6,6 +6,7 @@ import {
 } from 'lucide-react';
 import packageJson from '../../package.json';
 import { DEFAULT_SHORTCUTS } from '../hooks/useShortcuts';
+import { getOptionalElectronMethod } from '../lib/electronApi';
 
 const LICENSE_URL =
     'https://github.com/evinjohnn/natively-cluely-ai-assistant/blob/main/LICENSE';
@@ -45,12 +46,13 @@ export interface AboutSectionProps {
 }
 
 export const AboutSection: React.FC<AboutSectionProps> = ({ setActiveTab }) => {
+    const openExternal = getOptionalElectronMethod('openExternal');
 
     const handleOpenLink = (e: React.MouseEvent<HTMLAnchorElement>, url: string) => {
         e.preventDefault();
 
-        if (window.electronAPI?.openExternal) {
-            window.electronAPI.openExternal(url);
+        if (openExternal) {
+            void openExternal(url);
         } else {
             window.open(url, '_blank');
         }

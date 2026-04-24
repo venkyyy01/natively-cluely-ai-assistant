@@ -38,7 +38,7 @@ import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
 import 'katex/dist/katex.min.css';
-import { getElectronAPI } from '../lib/electronApi';
+import { getElectronAPI, getOptionalElectronMethod } from '../lib/electronApi';
 import { analytics, detectProviderType } from '../lib/analytics/analytics.service';
 import { useShortcuts } from '../hooks/useShortcuts';
 import { useHumanSpeedAutoScroll } from '../hooks/useHumanSpeedAutoScroll';
@@ -121,6 +121,16 @@ interface NativelyInterfaceProps {
 
 const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) => {
     const electronAPI = getElectronAPI();
+    const getDefaultModel = getOptionalElectronMethod('getDefaultModel');
+    const setModel = getOptionalElectronMethod('setModel');
+    const onModelChanged = getOptionalElectronMethod('onModelChanged');
+    const onModelFallback = getOptionalElectronMethod('onModelFallback');
+    const getUndetectable = getOptionalElectronMethod('getUndetectable');
+    const onUndetectableChanged = getOptionalElectronMethod('onUndetectableChanged');
+    const onToggleExpand = getOptionalElectronMethod('onToggleExpand');
+    const onSessionReset = getOptionalElectronMethod('onSessionReset');
+    const setOverlayBounds = getOptionalElectronMethod('setOverlayBounds');
+    const onGlobalShortcutAction = getOptionalElectronMethod('onGlobalShortcutAction');
     const [isExpanded, setIsExpanded] = useState(true);
     const [inputValue, setInputValue] = useState('');
     const { shortcuts, isShortcutPressed } = useShortcuts();
@@ -209,13 +219,15 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
     useEffect(() => {
         // Load the persisted default model (not the runtime model)
         // Each new meeting starts with the default from settings
-        if (window.electronAPI?.getDefaultModel) {
-            window.electronAPI.getDefaultModel()
+        if (getDefaultModel) {
+            getDefaultModel()
                 .then((result: any) => {
                     if (result && result.model) {
                         setCurrentModel(result.model);
                         // Also set the runtime model to the default
-                        window.electronAPI.setModel(result.model).catch(() => { });
+                        if (setModel) {
+                            void setModel(result.model).catch(() => { });
+                        }
                     }
                 })
                 .catch((err: any) => console.error("Failed to fetch default model:", err));
@@ -225,22 +237,24 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
     const handleModelSelect = (modelId: string) => {
         setCurrentModel(modelId);
         // Session-only: update runtime but don't persist as default
-        window.electronAPI.setModel(modelId)
-            .catch((err: any) => console.error("Failed to set model:", err));
+        if (setModel) {
+            void setModel(modelId)
+                .catch((err: any) => console.error("Failed to set model:", err));
+        }
     };
 
     // Listen for default model changes from Settings
     useEffect(() => {
-        if (!window.electronAPI?.onModelChanged) return;
-        const unsubscribe = window.electronAPI.onModelChanged((modelId: string) => {
+        if (!onModelChanged) return;
+        const unsubscribe = onModelChanged((modelId: string) => {
             setCurrentModel(prev => prev === modelId ? prev : modelId);
         });
         return () => unsubscribe();
     }, []);
 
     useEffect(() => {
-        if (!window.electronAPI?.onModelFallback) return;
-        const unsubscribe = window.electronAPI.onModelFallback(({ previousModel, fallbackModel }) => {
+        if (!onModelFallback) return;
+        const unsubscribe = onModelFallback(({ previousModel, fallbackModel }) => {
             setCurrentModel(fallbackModel);
             setModelFallbackNotice(`Selected model unavailable. Switched from ${previousModel} to ${fallbackModel}.`);
         });
@@ -256,12 +270,12 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
     // Global State Sync
     useEffect(() => {
         // Fetch initial state
-        if (window.electronAPI?.getUndetectable) {
-            window.electronAPI.getUndetectable().then(setIsUndetectable);
+        if (getUndetectable) {
+            getUndetectable().then(setIsUndetectable);
         }
 
-        if (window.electronAPI?.onUndetectableChanged) {
-            const unsubscribe = window.electronAPI.onUndetectableChanged((state) => {
+        if (onUndetectableChanged) {
+            const unsubscribe = onUndetectableChanged((state) => {
                 setIsUndetectable(state);
             });
             return () => unsubscribe();
@@ -368,8 +382,8 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
 
     // Keyboard shortcut to toggle expanded state (via Main Process)
     useEffect(() => {
-        if (!window.electronAPI?.onToggleExpand) return;
-        const unsubscribe = window.electronAPI.onToggleExpand(() => {
+        if (!onToggleExpand) return;
+        const unsubscribe = onToggleExpand(() => {
             setIsExpanded(prev => !prev);
         });
         return () => unsubscribe();
@@ -377,8 +391,8 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
 
     // Session Reset Listener - Clears UI when a NEW meeting starts
     useEffect(() => {
-        if (!window.electronAPI?.onSessionReset) return;
-        const unsubscribe = window.electronAPI.onSessionReset(() => {
+        if (!onSessionReset) return;
+        const unsubscribe = onSessionReset(() => {
             console.log('[NativelyInterface] Resetting session state...');
             setMessages([]);
             setInputValue('');
@@ -461,7 +475,9 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
 
             setPanelWidth(nextWidth);
             setChatViewportHeight(nextHeight);
-            window.electronAPI?.setOverlayBounds({ width: nextWidth, height: nextHeight, x: nextX, y: nextY }).catch(() => { });
+            if (setOverlayBounds) {
+                void setOverlayBounds({ width: nextWidth, height: nextHeight, x: nextX, y: nextY }).catch(() => { });
+            }
         };
 
         const stopResize = () => {
@@ -893,8 +909,9 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
         cleanups.push(electronAPI.onScreenshotTaken(handleScreenshotAttach));
 
         // Selective Screenshot (Latent Context)
-        if (electronAPI.onScreenshotAttached) {
-            cleanups.push(electronAPI.onScreenshotAttached(handleScreenshotAttach));
+        const onScreenshotAttached = getOptionalElectronMethod('onScreenshotAttached');
+        if (onScreenshotAttached) {
+            cleanups.push(onScreenshotAttached(handleScreenshotAttach));
         }
 
         return () => cleanups.forEach(fn => fn());
@@ -2042,7 +2059,7 @@ Provide only the answer, nothing else.`;
     }, [isShortcutPressed]);
 
     useEffect(() => {
-        const unsubscribe = window.electronAPI?.onGlobalShortcutAction?.((actionId) => {
+        const unsubscribe = onGlobalShortcutAction?.((actionId) => {
             if (actionId === 'chat:scrollUp') {
                 scrollContainerRef.current?.scrollBy({ top: -100, behavior: 'smooth' });
             } else if (actionId === 'chat:scrollDown') {

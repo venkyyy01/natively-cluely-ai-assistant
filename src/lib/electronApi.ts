@@ -12,12 +12,6 @@ const createUnavailableElectronMethodError = (method: string): Error => {
 let cachedRawElectronApi: ElectronAPI | null = null;
 let cachedGuardedElectronApi: ElectronAPI | null = null;
 
-function createMissingElectronMethod(method: string): (...args: never[]) => never {
-  return () => {
-    throw createUnavailableElectronMethodError(method);
-  };
-}
-
 function guardElectronAPI(api: ElectronAPI): ElectronAPI {
   const target = api as ElectronApiRecord;
 
@@ -27,10 +21,6 @@ function guardElectronAPI(api: ElectronAPI): ElectronAPI {
 
       if (typeof value === 'function') {
         return value.bind(currentTarget);
-      }
-
-      if (typeof property === 'string' && value === undefined) {
-        return createMissingElectronMethod(property);
       }
 
       return value;
