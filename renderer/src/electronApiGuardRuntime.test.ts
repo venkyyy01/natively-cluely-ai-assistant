@@ -1,4 +1,4 @@
-import { getOptionalElectronMethod, installElectronApiGuard } from '../../src/lib/electronApi';
+import { getOptionalElectronMethod, installElectronApiGuard, requireElectronMethod } from '../../src/lib/electronApi';
 
 const originalElectronAPI = window.electronAPI;
 
@@ -14,7 +14,7 @@ afterEach(() => {
   }
 });
 
-test('installElectronApiGuard makes missing preload methods fail with a restart hint', async () => {
+test('installElectronApiGuard preserves missing preload methods as absent and keeps restart-hint helpers available', async () => {
   Object.defineProperty(window, 'electronAPI', {
     configurable: true,
     writable: true,
@@ -26,7 +26,9 @@ test('installElectronApiGuard makes missing preload methods fail with a restart 
   installElectronApiGuard();
 
   await expect(window.electronAPI.getThemeMode()).resolves.toEqual({ mode: 'dark', resolved: 'dark' });
-  expect(() => (window.electronAPI as any).startMeeting()).toThrow(
+
+  expect((window.electronAPI as any).startMeeting).toBeUndefined();
+  expect(() => requireElectronMethod('startMeeting')).toThrow(
     "Electron API method 'startMeeting' is unavailable. Restart the app or Electron dev process to reload the preload bridge."
   );
 });

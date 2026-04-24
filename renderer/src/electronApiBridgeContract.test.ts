@@ -41,5 +41,7 @@ test('privacy shield state is exposed through preload and hydrated on app boot',
   const appSource = fs.readFileSync(appPath, 'utf8');
 
   expect(preloadSource).toContain('getPrivacyShieldState');
-  expect(appSource).toContain('electronAPI.getPrivacyShieldState?.()');
+  expect(appSource).toContain("getOptionalElectronMethod('getPrivacyShieldState')");
+  expect(appSource).toContain('getPrivacyShieldState?.().then((state) => {');
+  expect(appSource).toContain("getOptionalElectronMethod('onPrivacyShieldChanged')");
 });
