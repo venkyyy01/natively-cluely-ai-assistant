@@ -158,8 +158,12 @@ export class IntelligenceEngine extends EventEmitter {
   private latencyTracker: AnswerLatencyTracker = new AnswerLatencyTracker();
   private activeWhatToSayRequestId = 0;
   private activeAuxiliaryRequestId = 0;
-  private readonly CONTEXT_ASSEMBLY_SOFT_BUDGET_MS = 80;
-  private readonly CONTEXT_ASSEMBLY_HARD_BUDGET_MS = 120;
+  // NAT-L1: widened from 80/120 to 300/500. Intent classification requires
+  // at minimum 200ms for an SLM call + 100ms for context assembly. The
+  // previous 120ms budget caused intent to time out on nearly every question,
+  // silently degrading conscious mode to fast_standard_answer.
+  private readonly CONTEXT_ASSEMBLY_SOFT_BUDGET_MS = 300;
+  private readonly CONTEXT_ASSEMBLY_HARD_BUDGET_MS = 500;
   private readonly MAX_COOLDOWN_DEFER_DEPTH = 3;
   private readonly intentCoordinator: IntentClassificationCoordinator;
 
@@ -1510,6 +1514,12 @@ export class IntelligenceEngine extends EventEmitter {
                     imagePaths,
                     whatToAnswerLLM: this.whatToAnswerLLM,
                     answerLLM: this.answerLLM,
+                    onEarlyReasoning: (text) => {
+                        if (!shouldSuppressVisibleWork()) {
+                            this.latencyTracker.markFirstStreamingUpdate(requestId);
+                            this.emit('suggested_answer_token', text, resolvedQuestion || 'inferred', intentConfidence);
+                        }
+                    },
                 });
                 if (shouldSuppressVisibleWork()) {
                     return abandonCurrentRequest();

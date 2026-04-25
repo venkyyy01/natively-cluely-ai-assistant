@@ -24,10 +24,24 @@ async function primePrefetch(orchestrator: ConsciousAccelerationOrchestrator, re
   await (orchestrator as unknown as { maybePrefetchIntent: () => Promise<void> }).maybePrefetchIntent();
 }
 
-test('NAT-005: low-confidence prefetched intent is NOT stored', async () => {
+test('NAT-L3: medium-confidence non-general prefetched intent IS stored', async () => {
   const orchestrator = buildOrchestrator({
     intent: 'deep_dive',
     confidence: 0.55,
+    answerShape: '',
+  });
+
+  await primePrefetch(orchestrator, 1);
+
+  const stored = orchestrator.getPrefetchedIntent(baseQuery, 1);
+  assert.equal(stored?.intent, 'deep_dive');
+  assert.equal(stored?.confidence, 0.55);
+});
+
+test('NAT-L3: very-low-confidence prefetched intent is NOT stored', async () => {
+  const orchestrator = buildOrchestrator({
+    intent: 'deep_dive',
+    confidence: 0.40,
     answerShape: '',
   });
 
@@ -125,4 +139,34 @@ test('NAT-005: ConsciousIntentService.resolve uses strong prefetched intent with
   assert.equal(classifyCalls, 0, 'strong prefetch must short-circuit live classification');
   assert.equal(result.intentResult.intent, 'coding');
   assert.equal(result.intentResult.confidence, 0.95);
+});
+
+test('NAT-L3: ConsciousIntentService.resolve uses medium-confidence non-general prefetch without re-classification', async () => {
+  const service = new ConsciousIntentService();
+  let classifyCalls = 0;
+
+  const result = await service.resolve({
+    lastInterviewerTurn: baseQuery,
+    preparedTranscript: baseQuery,
+    assistantResponseCount: 0,
+    startedAt: Date.now(),
+    hardBudgetMs: 1_000,
+    isLikelyGeneralIntent: false,
+    classifyIntent: async () => {
+      classifyCalls += 1;
+      return { intent: 'general', confidence: 0, answerShape: '' };
+    },
+    prefetchedIntent: {
+      intent: 'behavioral',
+      confidence: 0.60,
+      answerShape: 'Tell one grounded story.',
+      provider: 'test-prefetch',
+      retryCount: 0,
+    },
+  });
+
+  assert.equal(classifyCalls, 0, 'medium-confidence non-general prefetch must short-circuit live classification');
+  assert.equal(result.intentResult.intent, 'behavioral');
+  assert.equal(result.intentResult.confidence, 0.60);
+  assert.equal(result.timedOut, false);
 });

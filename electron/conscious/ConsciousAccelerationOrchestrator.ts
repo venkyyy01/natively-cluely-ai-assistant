@@ -537,16 +537,14 @@ export class ConsciousAccelerationOrchestrator {
           return;
         }
         // NAT-005 / audit A-5: only persist a prefetched intent that is
-        // strong enough to actually drive planner / answer-shape selection
-        // downstream. A weak (low-confidence or 'general') prefetch must
-        // not sit in the cache pretending to be an answer; the consumer
-        // will then re-classify on the live path.
-        if (
-          intent.confidence < getIntentConfidenceService().getPrimaryMinConfidence()
-          || isUncertainConsciousIntent(intent)
-        ) {
+        // NAT-L3: Relax prefetch storage gate. Only discard 'general' intents
+        // and truly empty results. A medium-confidence prefetch (0.55-0.82)
+        // is still better than timing out on live classify (NAT-L1).
+        // The consumer (ConsciousIntentService.resolve) applies its own
+        // quality gate before using the result.
+        if (intent.intent === 'general' || intent.confidence < 0.45) {
           console.log(
-            `[ConsciousAccelerationOrchestrator] intent.prefetch_discarded_low_confidence intent=${intent.intent} confidence=${intent.confidence.toFixed(3)} threshold=${getIntentConfidenceService().getPrimaryMinConfidence()}`,
+            `[ConsciousAccelerationOrchestrator] intent.prefetch_discarded intent=${intent.intent} confidence=${intent.confidence.toFixed(3)}`,
           );
           return;
         }

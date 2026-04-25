@@ -12,6 +12,7 @@ import {
     ConsciousModeStructuredResponse,
     isBehavioralQuestionText,
     parseConsciousModeResponse,
+    tryParseConsciousModeOpeningReasoning,
 } from "../ConsciousMode";
 
 export interface StreamFailureDetails {
@@ -135,9 +136,15 @@ ANSWER SHAPE: ${intentResult.answerShape}
         question: string,
         temporalContext?: TemporalContext,
         intentResult?: IntentResult,
-        imagePaths?: string[]
+        imagePaths?: string[],
+        options?: {
+          /** Called when openingReasoning is extractable from partial JSON.
+           *  Enables early display before full response is parsed. */
+          onEarlyReasoning?: (text: string) => void;
+        }
     ): Promise<ConsciousModeStructuredResponse> {
         let full = "";
+        let earlyReasoningEmitted = false;
         const behavioralPromptRequested = intentResult?.intent === 'behavioral'
             || /QUESTION_MODE:\s*behavioral/i.test(cleanedTranscript)
             || isBehavioralQuestionText(question);
@@ -191,6 +198,16 @@ ANSWER SHAPE: ${intentResult.answerShape}
 
         for await (const chunk of stream) {
             full += chunk;
+
+            // NAT-L4: Try to extract openingReasoning from partial JSON
+            // so the UI can show something while the rest accumulates.
+            if (!earlyReasoningEmitted && options?.onEarlyReasoning && full.length > 30) {
+                const early = tryParseConsciousModeOpeningReasoning(full);
+                if (early) {
+                    options.onEarlyReasoning(early);
+                    earlyReasoningEmitted = true;
+                }
+            }
         }
 
         return parseConsciousModeResponse(full);

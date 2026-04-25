@@ -1238,6 +1238,22 @@ try {
         traceId: segment.traceId,
       });
 
+      // NAT-L2: Trigger speculative prefetch on high-confidence interim
+      // interviewer transcripts. This gives the acceleration orchestrator
+      // a 1-2s head start before the final transcript arrives.
+      // Only for interviewer (system audio), only for interims with enough
+      // substance to be worth prefetching.
+      if (
+        speaker === 'interviewer'
+        && !segment.isFinal
+        && segment.confidence != null
+        && segment.confidence > 0.75
+        && segment.text.trim().split(/\s+/).length >= 4
+      ) {
+        this.accelerationManager?.getConsciousOrchestrator()
+          .onSilenceStart(segment.text);
+      }
+
       // Feed final transcript to JIT RAG indexer
       if (segment.isFinal && this.ragManager) {
         this.ragManager.feedLiveTranscript([{

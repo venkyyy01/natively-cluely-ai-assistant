@@ -36,13 +36,13 @@ export class ConsciousIntentService {
     prefetchedIntent?: CoordinatedIntentResult | null;
   }): Promise<ConsciousIntentResolution> {
     if (input.prefetchedIntent) {
-      // NAT-005 / audit A-5: a prefetched intent that is weak (low confidence
-      // or 'general') must NOT be allowed to silently drive planner and
-      // answer-shape selection. Discard it and run live classification so
-      // the live model gets a fair shot at the real intent.
-      if (isUncertainConsciousIntent(input.prefetchedIntent)) {
+      // NAT-L3: Accept prefetched intent if it's non-general. Previously,
+      // anything below minReliableConfidence (0.72) was discarded, forcing a
+      // live re-classify that almost always times out (NAT-L1). A 0.55
+      // deep_dive is far more useful than a timed-out general/0.
+      if (input.prefetchedIntent.intent === 'general') {
         console.log(
-          `[ConsciousIntentService] intent.prefetch_discarded_low_confidence intent=${input.prefetchedIntent.intent} confidence=${input.prefetchedIntent.confidence?.toFixed?.(3) ?? input.prefetchedIntent.confidence}`,
+          `[ConsciousIntentService] intent.prefetch_discarded_general confidence=${input.prefetchedIntent.confidence?.toFixed?.(3) ?? input.prefetchedIntent.confidence}`,
         );
       } else {
         return {

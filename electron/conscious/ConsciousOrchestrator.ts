@@ -431,6 +431,7 @@ export class ConsciousOrchestrator {
     imagePaths?: string[];
     whatToAnswerLLM: WhatToAnswerLLM | null;
     answerLLM: AnswerLLM | null;
+    onEarlyReasoning?: (text: string) => void;
   }): Promise<ConsciousExecutionResult> {
     if (!input.route.qualifies) {
       return this.skip();
@@ -444,12 +445,21 @@ export class ConsciousOrchestrator {
       let structuredResponse: ConsciousModeStructuredResponse | null = null;
 
       if (input.whatToAnswerLLM) {
-        structuredResponse = await input.whatToAnswerLLM.generateReasoningFirst(
+        structuredResponse = await input.whatToAnswerLLM!.generateReasoningFirst(
           input.preparedTranscript,
           input.question,
           input.temporalContext,
           input.intentResult,
-          input.imagePaths
+          input.imagePaths,
+          {
+            onEarlyReasoning: (text) => {
+              // NAT-L4: Emit opening reasoning as a streaming preview
+              // so the user sees first content within ~400ms instead of
+              // waiting 2-5s for full JSON completion.
+              console.log(`[ConsciousOrchestrator] Early reasoning: "${text.substring(0, 60)}..."`);
+              input.onEarlyReasoning?.(text);
+            },
+          }
         );
       } else if (input.answerLLM) {
         structuredResponse = await input.answerLLM.generateReasoningFirst(
