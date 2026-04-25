@@ -2986,6 +2986,7 @@ ANSWER DIRECTLY:`;
     const structuredScreenshotRequest = this.isStructuredOutputRequest(effectiveMessage);
     const preserveSystemPromptForStructuredOutput = structuredScreenshotRequest || options?.qualityTier === 'verify';
     let screenshotRouting: ScreenshotEventRoutingResult | null = null;
+    let forcedScreenshotTextFallback = false;
     const forceTextFallback = this.shouldForceScreenshotTextFallback(imagePaths);
     const providerCacheKey = this.getStreamProviderCacheKey();
     const prepareStreamSystemPrompt = (prompt: string): string => (
@@ -3026,6 +3027,7 @@ ANSWER DIRECTLY:`;
       effectiveMessage = screenshotRouting.userMessage;
       context = screenshotRouting.context;
       imagePaths = screenshotRouting.imagePaths;
+      forcedScreenshotTextFallback = forceTextFallback && (imagePaths?.length || 0) === 0;
       if (!preserveSystemPromptForStructuredOutput) {
         systemPromptOverride = screenshotRouting.systemPrompt;
       }
@@ -3155,7 +3157,7 @@ ANSWER DIRECTLY:`;
             yield response;
             return;
           }
-        } else if (hasScreenshotInput && forceTextFallback) {
+        } else if (forcedScreenshotTextFallback) {
           // Forced OCR fallback already converted the screenshot into text and
           // removed image paths. Keep this on the buffered cURL path from the
           // pre-SSE workflow so screenshot analysis is handled as one complete
@@ -3166,7 +3168,7 @@ ANSWER DIRECTLY:`;
             curlSystemPrompt,
             effectiveMessage,
             context || "",
-            imagePaths,
+            [],
             this.activeCurlProvider.responsePath,
             options?.abortSignal,
             CURL_PROVIDER_TIMEOUT_MS,

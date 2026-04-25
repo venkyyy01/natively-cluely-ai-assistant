@@ -200,6 +200,65 @@ test('streamChat keeps forced screenshot OCR fallback on the buffered cURL path'
   }
 });
 
+test('streamChat still uses cURL SSE streaming for non-screenshot text requests', async () => {
+  const LLMHelper = await loadLLMHelper();
+  const helper = new LLMHelper() as any;
+  const originalExecuteCustomProvider = helper.executeCustomProvider;
+  const originalStreamCustomProvider = helper.streamCustomProvider;
+
+  helper.setModel('curl-provider', [{
+    id: 'curl-provider',
+    name: 'cURL',
+    curlCommand: 'curl https://example.com -d "{\"prompt\":\"{{TEXT}}\"}"',
+    responsePath: 'choices[0].message.content',
+  }]);
+
+  let executedBuffered = false;
+  let captured: {
+    rawUserMessage: string;
+    imageCount: number;
+  } | null = null;
+
+  helper.streamCustomProvider = async function* (
+    _curlCommand: string,
+    _combinedMessage: string,
+    _systemPrompt: string,
+    rawUserMessage: string,
+    _context: string,
+    imagePaths?: string[],
+  ) {
+    captured = {
+      rawUserMessage,
+      imageCount: imagePaths?.length || 0,
+    };
+    yield 'stream-';
+    yield 'ok';
+  };
+
+  helper.executeCustomProvider = async () => {
+    executedBuffered = true;
+    return 'buffered';
+  };
+
+  try {
+    let output = '';
+    for await (const chunk of helper.streamChat('solve this from text', undefined, 'ctx', 'OVERRIDE_PROMPT', {
+      skipKnowledgeInterception: true,
+    })) {
+      output += chunk;
+    }
+
+    assert.equal(output, 'stream-ok');
+    assert.equal(executedBuffered, false);
+    assert.equal(captured?.imageCount, 0);
+    assert.doesNotMatch(captured?.rawUserMessage || '', /SCREENSHOT_TEXT_FALLBACK:/);
+  } finally {
+    helper.executeCustomProvider = originalExecuteCustomProvider;
+    helper.streamCustomProvider = originalStreamCustomProvider;
+    helper.scrubKeys();
+  }
+});
+
 test('chatWithGemini falls back to local OCR for Ollama screenshot requests', async () => {
   const LLMHelper = await loadLLMHelper();
   const helper = new LLMHelper() as any;
