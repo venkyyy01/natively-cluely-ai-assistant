@@ -840,3 +840,427 @@ npm run test:electron -- --test-name-pattern Conscious
 - Persisted event/session schema additions must be backward-compatible for existing sessions.
 - New audit event fields should be optional when replaying older logs.
 - Avoid deleting or renaming existing persisted files as part of these tickets.
+
+
+
+--- commit 90ca0b99506f497c6868728166f4ad2c55e7fad1 ---
+
+# Natively — Hardening Implementation Plan
+
+> Tickets derived from verified audit findings. Ignored findings (C3, C4, C6, C8, C9, C10, C12) are excluded.
+
+---
+
+## Ticket Index
+
+| Ticket | Finding | Severity | File(s) |
+|--------|---------|----------|---------|
+| [NAT-H1](#nat-h1) | C1 — `process.exit()` with zero cleanup | CRITICAL | `processFailure.ts`, `logging.ts` |
+| [NAT-H2](#nat-h2) | C2 — `reconfigureAudio` error paths leave audio dead | HIGH | `AppState.ts` |
+| [NAT-H3](#nat-h3) | C5 — `UnsafeCell` in `sck.rs` is unsound | HIGH | `native-module/src/speaker/sck.rs` |
+| [NAT-H4](#nat-h4) | C11 — Audio self-healing exhaustion with no user recovery | HIGH | `AppState.ts` |
+
+---
+
+## NAT-H1 — Graceful Shutdown Manager
+
+### Problem
+
+[processFailure.ts:12-48](file:///Users/venkatasai/Downloads/natively-cluely-ai-assistant/.worktrees/todo-completion/electron/processFailure.ts#L12-L48) calls `process.exit()` after a 3 s log-flush timeout. Any uncaught exception instantly kills the process with:
+- In-flight DB writes abandoned
+- Active session transcript lost
+- Audio stream not torn down (leaves native handles open)
+- No IPC notification to renderer (spinner frozen)
+
+[logging.ts:13-23](file:///Users/venkatasai/Downloads/natively-cluely-ai-assistant/.worktrees/todo-completion/electron/main/logging.ts#L13-L23) wires **both** `uncaughtException` and `unhandledRejection` directly into this path.
+
+### Solution: `GracefulShutdownManager`
+
+Create a singleton that collects shutdown hooks and replaces the bare `process.exit` call.
+
+#### [NEW] `electron/GracefulShutdownManager.ts`
+
+```typescript
+type ShutdownHook = () => Promise<void>;
+
+class GracefulShutdownManager {
+  private static instance: GracefulShutdownManager | null = null;
+  private hooks: Array<{ name: string; fn: ShutdownHook }> = [];
+  private shuttingDown = false;
+
+  static getInstance(): GracefulShutdownManager {
+    if (!GracefulShutdownManager.instance) {
+      GracefulShutdownManager.instance = new GracefulShutdownManager();
+    }
+    return GracefulShutdownManager.instance;
+  }
+
+  /**
+   * Register a cleanup hook. Hooks run in registration order.
+   * Each hook has 2s to complete before it is abandoned.
+   */
+  register(name: string, fn: ShutdownHook): void {
+    this.hooks.push({ name, fn });
+  }
+
+  /**
+   * Run all hooks then exit. Safe to call multiple times — only
+   * the first call executes; subsequent calls are no-ops.
+   */
+  async shutdown(code: number, reason: string): Promise<never> {
+    if (this.shuttingDown) {
+      // Already in progress — just wait for the process to die
+      await new Promise(() => {});
+      process.exit(code); // unreachable, satisfies TS
+    }
+    this.shuttingDown = true;
+    console.error(`[GracefulShutdown] Initiating (code=${code}): ${reason}`);
+
+    const HOOK_TIMEOUT_MS = 2000;
+    for (const hook of this.hooks) {
+      try {
+        await Promise.race([
+          hook.fn(),
+          new Promise<void>((_, reject) =>
+            setTimeout(() => reject(new Error('timeout')), HOOK_TIMEOUT_MS)
+          ),
+        ]);
+        console.log(`[GracefulShutdown] Hook "${hook.name}" done`);
+      } catch (err) {
+        console.error(`[GracefulShutdown] Hook "${hook.name}" failed/timed-out:`, err);
+      }
+    }
+
+    console.error(`[GracefulShutdown] Exiting with code ${code}`);
+    process.exit(code);
+  }
+}
+
+export const gracefulShutdown = GracefulShutdownManager.getInstance();
+```
+
+#### [MODIFY] `electron/main/logging.ts` — wire shutdown manager
+
+```diff
+-import { exitAfterCriticalFailure } from '../processFailure'
++import { gracefulShutdown } from '../GracefulShutdownManager'
+
+ process.on('uncaughtException', (err) => {
+-  void exitAfterCriticalFailure(
+-    logToFileAsync('[CRITICAL] Uncaught Exception: ' + (err.stack || err.message || err)),
+-  )
++  void logToFileAsync('[CRITICAL] Uncaught Exception: ' + (err.stack || err.message || err))
++    .catch(() => undefined)
++    .finally(() => gracefulShutdown.shutdown(1, `uncaughtException: ${err.message}`))
+ });
+
+ process.on('unhandledRejection', (reason, promise) => {
+-  void exitAfterCriticalFailure(
+-    logToFileAsync('[CRITICAL] Unhandled Rejection at: ' + promise + ' reason: ' + (reason instanceof Error ? reason.stack : reason)),
+-  )
++  const msg = reason instanceof Error ? reason.stack : String(reason);
++  void logToFileAsync('[CRITICAL] Unhandled Rejection at: ' + promise + ' reason: ' + msg)
++    .catch(() => undefined)
++    .finally(() => gracefulShutdown.shutdown(1, `unhandledRejection: ${msg}`))
+ });
+```
+
+#### [MODIFY] `electron/main/AppState.ts` — register hooks at startup
+
+In `prepareMeetingActivation` or the app `ready` handler, after building AppState:
+
+```typescript
+import { gracefulShutdown } from '../GracefulShutdownManager';
+
+// After AppState is constructed:
+gracefulShutdown.register('session-flush', async () => {
+  await this.intelligenceManager?.flushPersistenceNow?.();
+});
+
+gracefulShutdown.register('audio-teardown', async () => {
+  this.systemAudioCapture?.removeAllListeners();
+  this.systemAudioCapture?.destroy();
+  this.microphoneCapture?.removeAllListeners();
+  this.microphoneCapture?.destroy();
+  this.googleSTT?.stop();
+  this.googleSTT_User?.stop();
+});
+
+gracefulShutdown.register('db-flush', async () => {
+  await this.meetingPersistence?.flush?.();
+});
+```
+
+### Verification
+- Throw an uncaught error in dev mode; confirm hooks log + session file is updated on disk before process dies.
+- Confirm renderer receives a final IPC `meeting-lifecycle-state: 'idle'` or equivalent.
+
+---
+
+## NAT-H2 — `reconfigureAudio` Error-Path Hardening
+
+### Problem
+
+[AppState.ts:1505-1650](file:///Users/venkatasai/Downloads/natively-cluely-ai-assistant/.worktrees/todo-completion/electron/main/AppState.ts#L1505-L1650) `reconfigureAudio` has two independent try/catch blocks for system audio and microphone. If the **preferred device** fails and the **default device fallback** also fails, the code silently swallows the error (`console.error` only) and leaves `this.systemAudioCapture = null` / `this.microphoneCapture = null`. The caller at [AppState.ts:1310](file:///Users/venkatasai/Downloads/natively-cluely-ai-assistant/.worktrees/todo-completion/electron/main/AppState.ts#L1310) then sets `nativeAudioConnected = true` on the optimistic path regardless.
+
+Additionally, `reconfigureAudio` creates new capture objects and wires listeners, but **never calls `.start()`** on the native capture handles — `start()` is expected to be called by the caller's pipeline, but the recovery path at line 1310 only calls `reconfigureAudio()` and `setNativeAudioConnected(true)` without explicitly ensuring the pipeline is started.
+
+### Exact Changes
+
+#### [MODIFY] `electron/main/AppState.ts` — `reconfigureAudio` must throw on total failure
+
+```diff
+     } catch (err2) {
+       console.error('[Main] Failed to initialize SystemAudioCapture (Default):', err2);
++      // Both preferred and default failed — propagate so the recovery loop
++      // can count this as a failed attempt and notify the user correctly.
++      throw new Error(`SystemAudioCapture unavailable: ${err2 instanceof Error ? err2.message : err2}`);
+     }
+```
+
+```diff
+     } catch (err2) {
+       console.error('[Main] ❌ Failed to initialize MicrophoneCapture (Default):', err2);
++      throw new Error(`MicrophoneCapture unavailable: ${err2 instanceof Error ? err2.message : err2}`);
+     }
+```
+
+#### [MODIFY] `AppState.ts` — guarantee `start()` is called after reconfigure
+
+After `reconfigureAudio()` completes successfully, the recovery path must explicitly start the capture handles. Replace the call at line 1310:
+
+```diff
+-        await this.reconfigureAudio();
+-        console.log(`[Main] ${noun} recovered successfully on attempt ${attempt}`);
+-        this.setNativeAudioConnected(true);
++        await this.reconfigureAudio();
++        // Explicitly start capture handles — reconfigureAudio only wires listeners.
++        this.systemAudioCapture?.start?.();
++        this.microphoneCapture?.start?.();
++        this.googleSTT?.start();
++        this.googleSTT_User?.start();
++        console.log(`[Main] ${noun} recovered successfully on attempt ${attempt}`);
++        // Reset counter so a future independent error gets a full 3 attempts.
++        this.audioRecoveryAttempts = 0;
++        this.setNativeAudioConnected(true);
+```
+
+#### [MODIFY] `AppState.ts` — surface failure to user on partial success
+
+```diff
+       } catch (recoveryErr) {
+         console.error(`[Main] ${noun} recovery attempt ${attempt} failed:`, recoveryErr);
+         if (this.audioRecoveryAttempts >= this.MAX_AUDIO_RECOVERY_ATTEMPTS) {
+           this.broadcast('meeting-audio-error', failureMessage);
++          // Also broadcast a UI-visible status so user can act (reconnect device, restart)
++          this.broadcast('meeting-audio-degraded', {
++            source,
++            attempts: this.audioRecoveryAttempts,
++            message: failureMessage,
++          });
+         }
+```
+
+### Verification
+- Simulate `SystemAudioCapture` constructor throwing on both attempts; confirm `handleAudioCaptureError` catch block receives the error, recovery counter increments, and `meeting-audio-error` fires.
+- Confirm `audioRecoveryAttempts` resets to 0 on a successful recovery.
+
+---
+
+## NAT-H3 — Replace `UnsafeCell` with `OnceLock` in `sck.rs`
+
+### Problem
+
+[sck.rs:105-149](file:///Users/venkatasai/Downloads/natively-cluely-ai-assistant/.worktrees/todo-completion/native-module/src/speaker/sck.rs#L105-L149) shares `Arc<UnsafeCell<Option<...>>>` between the calling thread and a ScreenCaptureKit completion callback. `UnsafeCell` is `!Sync` — putting it in an `Arc` and accessing it from two threads is **undefined behavior** per Rust's aliasing rules, even when guarded by an `AtomicBool`. The atomic only provides ordering; it does not satisfy Rust's ownership invariants.
+
+### Exact Changes
+
+#### [MODIFY] `native-module/src/speaker/sck.rs` — replace `UnsafeCell` with `OnceLock`
+
+```diff
+-        use std::cell::UnsafeCell;
+-        use std::sync::{
+-            atomic::{AtomicBool, Ordering},
+-            Arc,
+-        };
+-
+-        let content_cell: Arc<UnsafeCell<Option<arc::R<sc::ShareableContent>>>> =
+-            Arc::new(UnsafeCell::new(None));
+-        let content_ready = Arc::new(AtomicBool::new(false));
+-        let content_error = Arc::new(AtomicBool::new(false));
+-
+-        let cell_clone = content_cell.clone();
+-        let ready_clone = content_ready.clone();
+-        let error_clone = content_error.clone();
+-
+-        sc::ShareableContent::current_with_ch(move |content_opt, error_opt| {
+-            if let Some(e) = error_opt {
+-                println!("[SpeakerInput] ERROR: ScreenCaptureKit access denied: {:?}", e);
+-                error_clone.store(true, Ordering::SeqCst);
+-            } else if let Some(c) = content_opt {
+-                unsafe { *cell_clone.get() = Some(c.retained()); }
+-            }
+-            ready_clone.store(true, Ordering::SeqCst);
+-        });
+-
+-        // Wait for shareable content (max 5 seconds)
+-        for _ in 0..500 {
+-            if content_ready.load(Ordering::SeqCst) { break; }
+-            std::thread::sleep(std::time::Duration::from_millis(10));
+-        }
+-
+-        if content_error.load(Ordering::SeqCst) {
+-            println!("[SpeakerInput] Please grant Screen Recording permission...");
+-            return Err(anyhow::anyhow!("ScreenCaptureKit access denied"));
+-        }
+-
+-        let content = unsafe { (*content_cell.get()).take() }
+-            .ok_or_else(|| anyhow::anyhow!("Failed to get shareable content (timeout)"))?;
++        use std::sync::{Arc, OnceLock};
++
++        // OnceLock<Result<...>> is Sync + Send — sound cross-thread sharing.
++        let result_cell: Arc<OnceLock<Result<arc::R<sc::ShareableContent>, String>>> =
++            Arc::new(OnceLock::new());
++        let cell_clone = result_cell.clone();
++
++        sc::ShareableContent::current_with_ch(move |content_opt, error_opt| {
++            let result = if let Some(e) = error_opt {
++                Err(format!("ScreenCaptureKit access denied: {:?}", e))
++            } else if let Some(c) = content_opt {
++                Ok(c.retained())
++            } else {
++                Err("No content and no error returned".to_string())
++            };
++            // set() is a no-op if already set — safe to call from callback thread.
++            let _ = cell_clone.set(result);
++        });
++
++        // Poll until OnceLock is populated (max 5 s).
++        let mut waited_ms = 0u32;
++        while result_cell.get().is_none() && waited_ms < 5000 {
++            std::thread::sleep(std::time::Duration::from_millis(10));
++            waited_ms += 10;
++        }
++
++        let content = match result_cell.get() {
++            None => return Err(anyhow::anyhow!("ScreenCaptureKit shareable content timed out after 5s")),
++            Some(Err(msg)) => {
++                println!("[SpeakerInput] Please grant Screen Recording permission in System Settings > Privacy & Security");
++                return Err(anyhow::anyhow!("{}", msg));
++            }
++            Some(Ok(c)) => c.clone(),
++        };
+```
+
+> [!NOTE]
+> `OnceLock` is stable since Rust 1.70. Confirm `Cargo.toml` MSRV is ≥ 1.70 (it should be given other features used).
+
+### Verification
+- `cargo clippy` must pass with no `unsafe` warnings in `sck.rs`.
+- Run `cargo test` in `native-module/`.
+- Functional smoke-test: start a meeting, confirm system audio capture initialises without panic.
+
+---
+
+## NAT-H4 — Audio Self-Healing Watchdog
+
+### Problem
+
+[AppState.ts:156-158](file:///Users/venkatasai/Downloads/natively-cluely-ai-assistant/.worktrees/todo-completion/electron/main/AppState.ts#L156-L158):
+
+```typescript
+private audioRecoveryAttempts: number = 0;
+private readonly MAX_AUDIO_RECOVERY_ATTEMPTS = 3;
+private audioRecoveryBackoffMs: number = 5000;
+```
+
+Current failure modes:
+1. Counter only resets in `prepareMeetingActivation` — a successful recovery mid-meeting never resets it, so the **second** audio failure gets zero attempts (already at max).
+2. After exhaustion the system silently delivers no audio with no way for the user to self-serve.
+3. No detection of "audio technically alive but delivering 0 bytes" (silent hardware freeze).
+
+### Exact Changes
+
+#### [MODIFY] `AppState.ts` — reset counter on successful recovery (already in NAT-H2, repeated for clarity)
+
+See NAT-H2 diff: `this.audioRecoveryAttempts = 0` after a successful `reconfigureAudio()`.
+
+#### [MODIFY] `AppState.ts` — proactive silence watchdog in existing health-check timer
+
+The file already has `audioHealthCheckTimer` at [line 161](file:///Users/venkatasai/Downloads/natively-cluely-ai-assistant/.worktrees/todo-completion/electron/main/AppState.ts#L161) and `AUDIO_PIPELINE_PERIODIC_HEALTH_INTERVAL_MS = 60000`. Extend the existing health-check body:
+
+```typescript
+// Inside the periodic health-check callback (locate the existing
+// AUDIO_PIPELINE_PERIODIC_HEALTH_INTERVAL_MS timer body):
+
+const snapshot = { ...this.audioPipelineStats };
+const deltaSystem  = snapshot.systemChunks   - this.audioPipelineLastSnapshot.systemChunks;
+const deltaMic     = snapshot.microphoneChunks - this.audioPipelineLastSnapshot.microphoneChunks;
+this.audioPipelineLastSnapshot = snapshot;
+
+if (this.isMeetingActive && (deltaSystem === 0 || deltaMic === 0)) {
+  const silentSources: string[] = [];
+  if (deltaSystem === 0) silentSources.push('system');
+  if (deltaMic    === 0) silentSources.push('microphone');
+
+  console.warn(
+    `[AudioHealth] Silent source(s) detected over last ${this.AUDIO_PIPELINE_PERIODIC_HEALTH_INTERVAL_MS / 1000}s: ${silentSources.join(', ')}. Triggering proactive recovery.`
+  );
+
+  // Only attempt if not already recovering and attempts remain.
+  if (!this.isReconfiguringAudio && this.audioRecoveryAttempts < this.MAX_AUDIO_RECOVERY_ATTEMPTS) {
+    void this.handleAudioCaptureError(
+      silentSources.includes('system') ? 'system' : 'microphone',
+      new Error('Audio silence watchdog: no chunks received in health window')
+    );
+  } else if (this.audioRecoveryAttempts >= this.MAX_AUDIO_RECOVERY_ATTEMPTS) {
+    // Exhausted — notify user with actionable message
+    this.broadcast('meeting-audio-error',
+      'Audio pipeline is silent and could not be recovered. ' +
+      'Please check your audio devices and restart the meeting.'
+    );
+    // Reset counter so user can restart meeting and get fresh attempts
+    this.audioRecoveryAttempts = 0;
+  }
+}
+```
+
+#### [MODIFY] `AppState.ts` — increase max recovery attempts for mid-meeting resilience
+
+```diff
+-  private readonly MAX_AUDIO_RECOVERY_ATTEMPTS = 3;
++  // 5 attempts with exponential backoff gives up to ~75s of retry window
++  // (5s, 10s, 15s, 20s, 25s) before declaring permanent failure.
++  private readonly MAX_AUDIO_RECOVERY_ATTEMPTS = 5;
+```
+
+#### [MODIFY] `AppState.ts` — add jitter to backoff to prevent thundering-herd on device reconnect
+
+```diff
+-      const delayMs = this.audioRecoveryBackoffMs * attempt;
++      // Exponential backoff with ±20% jitter to avoid synchronized retries
++      const base = this.audioRecoveryBackoffMs * attempt;
++      const jitter = base * 0.2 * (Math.random() - 0.5);
++      const delayMs = Math.round(base + jitter);
+```
+
+### Verification
+- Simulate `noteAudioChunk` not being called for one full health-check interval while `isMeetingActive = true`; confirm watchdog fires and `handleAudioCaptureError` is called.
+- Confirm that after a successful proactive recovery the counter resets.
+- Confirm that after MAX_AUDIO_RECOVERY_ATTEMPTS exhaustion, `meeting-audio-error` is broadcast and counter resets to 0.
+
+---
+
+## Proposed Execution Order
+
+```
+NAT-H3 (Rust, isolated, no TS deps) → NAT-H1 (infra, no feature logic) → NAT-H2 + NAT-H4 (coupled, do together in AppState.ts)
+```
+
+## Open Questions
+
+> [!IMPORTANT]
+> **NAT-H2**: Does `SystemAudioCapture` / `MicrophoneCapture` expose a `.start()` method that must be called after construction, or does the constructor auto-start? Confirm in the native module binding before adding explicit `.start()` calls in the recovery path.
+
+> [!IMPORTANT]
+> **NAT-H4**: Confirm the existing `audioHealthCheckTimer` periodic callback location in `AppState.ts` (search for `AUDIO_PIPELINE_PERIODIC_HEALTH_INTERVAL_MS`) — the silence watchdog code must be inserted into that existing callback, not a new timer.
