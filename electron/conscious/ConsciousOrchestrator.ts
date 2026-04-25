@@ -287,7 +287,20 @@ export class ConsciousOrchestrator {
 
     // Intent-based override: if layered router says this is a reliable conscious intent
     // (deep_dive, behavioral, coding, etc.) but regex/thread logic missed it, override.
-    if (intentBasedQualifies && !preRouteDecision.qualifies) {
+    // NAT-XXX: Exclude follow_up and clarification — they depend on thread context and
+    // regex logic handles them better. Exclude coding without screenshots — live coding
+    // should only go conscious when a screenshot is present. Exclude very short questions
+    // (< 4 words) — vague pushbacks like "What if?" should not hijack threads.
+    const intent = routedIntentResult?.intent;
+    const wordCount = input.question.trim().split(/\s+/).filter(Boolean).length;
+    const isSubstantialQuestion = wordCount >= 4;
+    const canIntentOverride = intentBasedQualifies
+      && isSubstantialQuestion
+      && intent !== 'follow_up'
+      && intent !== 'clarification'
+      && (intent !== 'coding' || input.screenshotBackedLiveCodingTurn);
+
+    if (canIntentOverride && !preRouteDecision.qualifies) {
       preRouteDecision = {
         qualifies: true,
         threadAction: currentReasoningThread ? 'reset' : 'start',
@@ -330,8 +343,19 @@ export class ConsciousOrchestrator {
       activeReasoningThread,
     });
 
-    // Override to conscious_answer if we have a reliable intent and circuit is closed
-    if (hasReliableIntent && !circuitOpen && selectedRoute !== 'conscious_answer') {
+    // Override to conscious_answer if we have a reliable intent and circuit is closed.
+    // NAT-XXX: Do not force conscious mode for follow_up / clarification — they rely on
+    // thread context. Do not force coding unless screenshots are present. Do not force
+    // for very short questions — vague pushbacks should stay on the fast path.
+    const canForceConscious = hasReliableIntent
+      && !circuitOpen
+      && selectedRoute !== 'conscious_answer'
+      && isSubstantialQuestion
+      && intent !== 'follow_up'
+      && intent !== 'clarification'
+      && (intent !== 'coding' || input.screenshotBackedLiveCodingTurn);
+
+    if (canForceConscious) {
       selectedRoute = 'conscious_answer';
     }
 

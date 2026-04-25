@@ -116,6 +116,11 @@ export class ConsciousAccelerationOrchestrator {
       }
 
       if ((action === 'hard_speculate' || action === 'commit') && isOptimizationActive('usePrefetching')) {
+        // NAT-XXX: Ensure prefetch completes before starting speculative answer.
+        // Prefetch is initiated early in onSilenceStart, but if the pause detector
+        // fires before it completes, we must await the in-flight prefetch here to
+        // avoid a race where speculative answer starts with no prefetched intent.
+        await this.maybePrefetchIntent();
         void this.maybeStartSpeculativeAnswer();
       }
   }

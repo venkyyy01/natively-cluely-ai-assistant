@@ -550,10 +550,12 @@ export class LayeredIntentRouter {
     }
 
     // Rule 3: Weighted scoring
+    // NAT-XXX: Increase SetFit/SLM authority over embedding to prevent
+    // false positives from pseudo-embedding similarity on short/vague queries.
     const providerBonus: Record<string, number> = {
-      setfit: 1.15,
-      slm: 1.1,
-      embedding: 0.95,
+      setfit: 1.25,
+      slm: 1.15,
+      embedding: 0.85,
       regex: 0.9,
     };
 

@@ -561,10 +561,10 @@ export function getDefaultConsciousE2EScenarios(): ConsciousE2EScenario[] {
       id: 'acceleration-overlay-prefetch-boost',
       family: 'acceleration_overlay',
       description: 'Strong prefetched intent overrides non-qualifying route',
-      question: 'ok',
+      question: 'How would you handle backpressure?',
       activeThread: null,
       consciousModeEnabled: true,
-      prefetchedIntent: { intent: 'coding', confidence: 0.92, answerShape: 'reasoning_first' },
+      prefetchedIntent: { intent: 'deep_dive', confidence: 0.92, answerShape: 'reasoning_first' },
       expected: { threadAction: 'start', qualifies: true, effectiveRouteTag: 'conscious' },
     },
     {
