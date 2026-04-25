@@ -66,6 +66,7 @@ export async function initializeApp() {
 
   // 4. Initialize State
   const appState = AppState.getInstance()
+  appState.registerShutdownHooks()
 
   // Explicitly load credentials into helpers
   appState.processingHelper.loadStoredCredentials();

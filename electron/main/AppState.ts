@@ -26,6 +26,7 @@ import {
 import { derivePrivacyShieldState, hasCaptureRiskWarnings, type PrivacyShieldState, type VisibilityIntent } from "../stealth/privacyShieldState"
 import { PrivacyShieldRecoveryController } from "../stealth/PrivacyShieldRecoveryController"
 import { isEnvFlagEnabled } from './logging'
+import { gracefulShutdown } from '../GracefulShutdownManager'
 import { WindowHelper } from "../WindowHelper"
 import { SettingsWindowHelper } from "../SettingsWindowHelper"
 import { ModelSelectorWindowHelper } from "../ModelSelectorWindowHelper"
@@ -154,7 +155,9 @@ private consciousModeEnabled: boolean = false
   }
   private _ollamaBootstrapPromise: Promise<void> | null = null;
   private audioRecoveryAttempts: number = 0;
-  private readonly MAX_AUDIO_RECOVERY_ATTEMPTS = 3;
+  // 5 attempts with exponential backoff gives up to ~75s of retry window
+  // (5s, 10s, 15s, 20s, 25s) before declaring permanent failure.
+  private readonly MAX_AUDIO_RECOVERY_ATTEMPTS = 5;
   private audioRecoveryBackoffMs: number = 5000;
   private currentMeetingId: string | null = null;
   private startAbortController: AbortController | null = null;
@@ -953,6 +956,37 @@ this.runtimeCoordinator.registerSupervisor(new StealthSupervisor(
         }
       }
 
+      // --- NAT-H4: Proactive silence watchdog ---
+      const snapshot = { ...this.audioPipelineStats };
+      const deltaSystem  = snapshot.systemChunks   - this.audioPipelineLastSnapshot.systemChunks;
+      const deltaMic     = snapshot.microphoneChunks - this.audioPipelineLastSnapshot.microphoneChunks;
+
+      if (this.isMeetingActive && (deltaSystem === 0 || deltaMic === 0)) {
+        const silentSources: string[] = [];
+        if (deltaSystem === 0) silentSources.push('system');
+        if (deltaMic    === 0) silentSources.push('microphone');
+
+        console.warn(
+          `[AudioHealth] Silent source(s) detected over last ${this.AUDIO_PIPELINE_PERIODIC_HEALTH_INTERVAL_MS / 1000}s: ${silentSources.join(', ')}. Triggering proactive recovery.`
+        );
+
+        // Only attempt if not already recovering and attempts remain.
+        if (!this.isReconfiguringAudio && this.audioRecoveryAttempts < this.MAX_AUDIO_RECOVERY_ATTEMPTS) {
+          void this.handleAudioCaptureError(
+            silentSources.includes('system') ? 'system' : 'microphone',
+            new Error('Audio silence watchdog: no chunks received in health window')
+          );
+        } else if (this.audioRecoveryAttempts >= this.MAX_AUDIO_RECOVERY_ATTEMPTS) {
+          // Exhausted — notify user with actionable message
+          this.broadcast('meeting-audio-error',
+            'Audio pipeline is silent and could not be recovered. ' +
+            'Please check your audio devices and restart the meeting.'
+          );
+          // Reset counter so user can restart meeting and get fresh attempts
+          this.audioRecoveryAttempts = 0;
+        }
+      }
+
       this.audioPipelineLastSnapshot = {
         systemChunks,
         microphoneChunks,
@@ -1296,7 +1330,10 @@ try {
       this.isReconfiguringAudio = true;
       this.audioRecoveryAttempts += 1;
       const attempt = this.audioRecoveryAttempts;
-      const delayMs = this.audioRecoveryBackoffMs * attempt;
+      // Exponential backoff with ±20% jitter to avoid synchronized retries
+      const base = this.audioRecoveryBackoffMs * attempt;
+      const jitter = base * 0.2 * (Math.random() - 0.5);
+      const delayMs = Math.round(base + jitter);
       console.log(`[Main] Attempting ${noun.toLowerCase()} recovery (attempt ${attempt}/${this.MAX_AUDIO_RECOVERY_ATTEMPTS}, delay ${delayMs}ms)...`);
 
       try {
@@ -1308,12 +1345,25 @@ try {
         }
 
         await this.reconfigureAudio();
+        // Explicitly start capture handles — reconfigureAudio only wires listeners.
+        this.systemAudioCapture?.start?.();
+        this.microphoneCapture?.start?.();
+        this.googleSTT?.start();
+        this.googleSTT_User?.start();
         console.log(`[Main] ${noun} recovered successfully on attempt ${attempt}`);
+        // Reset counter so a future independent error gets a full 5 attempts.
+        this.audioRecoveryAttempts = 0;
         this.setNativeAudioConnected(true);
       } catch (recoveryErr) {
         console.error(`[Main] ${noun} recovery attempt ${attempt} failed:`, recoveryErr);
         if (this.audioRecoveryAttempts >= this.MAX_AUDIO_RECOVERY_ATTEMPTS) {
           this.broadcast('meeting-audio-error', failureMessage);
+          // Also broadcast a UI-visible status so user can act (reconnect device, restart)
+          this.broadcast('meeting-audio-degraded', {
+            source,
+            attempts: this.audioRecoveryAttempts,
+            message: failureMessage,
+          });
         }
       } finally {
         this.isReconfiguringAudio = false;
@@ -1555,6 +1605,9 @@ try {
         });
       } catch (err2) {
         console.error('[Main] Failed to initialize SystemAudioCapture (Default):', err2);
+        // Both preferred and default failed — propagate so the recovery loop
+        // can count this as a failed attempt and notify the user correctly.
+        throw new Error(`SystemAudioCapture unavailable: ${err2 instanceof Error ? err2.message : err2}`);
       }
     }
 
@@ -1628,6 +1681,7 @@ try {
       } catch (err2) {
         console.error('[Main] ❌ CRITICAL: Failed to initialize MicrophoneCapture (Default):', err2);
         console.error('[Main] 🚨 Audio capture will not work! Check native module and permissions.');
+        throw new Error(`MicrophoneCapture unavailable: ${err2 instanceof Error ? err2.message : err2}`);
       }
     }
     this.assertAudioCapturesReady();
@@ -2387,6 +2441,25 @@ try {
       AppState.instance = new AppState()
     }
     return AppState.instance
+  }
+
+  public registerShutdownHooks(): void {
+    gracefulShutdown.register('session-flush', async () => {
+      await this.intelligenceManager?.waitForPendingSaves?.();
+    });
+
+    gracefulShutdown.register('audio-teardown', async () => {
+      this.systemAudioCapture?.removeAllListeners();
+      this.systemAudioCapture?.destroy();
+      this.microphoneCapture?.removeAllListeners();
+      this.microphoneCapture?.destroy();
+      this.googleSTT?.stop();
+      this.googleSTT_User?.stop();
+    });
+
+    gracefulShutdown.register('db-flush', async () => {
+      await this.checkpointer?.checkpointNow?.();
+    });
   }
 
   // Getters and Setters

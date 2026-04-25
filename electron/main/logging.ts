@@ -2,7 +2,7 @@ import { app } from "electron"
 import os from "os"
 import path from "path"
 import fsPromises from "fs/promises"
-import { exitAfterCriticalFailure } from '../processFailure'
+import { gracefulShutdown } from '../GracefulShutdownManager'
 import { redactStealthSubstrings } from '../stealth/logRedactor'
 
 // Handle stdout/stderr errors at the process level to prevent EIO crashes
@@ -10,16 +10,17 @@ import { redactStealthSubstrings } from '../stealth/logRedactor'
 process.stdout?.on?.('error', () => { });
 process.stderr?.on?.('error', () => { });
 
-process.on('uncaughtException', (err) => {
-  void exitAfterCriticalFailure(
-    logToFileAsync('[CRITICAL] Uncaught Exception: ' + (err.stack || err.message || err)),
-  )
+process.on('uncaughtException', (err: Error): void => {
+  void logToFileAsync('[CRITICAL] Uncaught Exception: ' + (err.stack || err.message || err))
+    .catch((): undefined => undefined)
+    .finally((): void => { void gracefulShutdown.shutdown(1, `uncaughtException: ${err.message}`); });
 });
 
-process.on('unhandledRejection', (reason, promise) => {
-  void exitAfterCriticalFailure(
-    logToFileAsync('[CRITICAL] Unhandled Rejection at: ' + promise + ' reason: ' + (reason instanceof Error ? reason.stack : reason)),
-  )
+process.on('unhandledRejection', (reason: unknown, promise: Promise<unknown>): void => {
+  const msg = reason instanceof Error ? reason.stack : String(reason);
+  void logToFileAsync('[CRITICAL] Unhandled Rejection at: ' + promise + ' reason: ' + msg)
+    .catch((): undefined => undefined)
+    .finally((): void => { void gracefulShutdown.shutdown(1, `unhandledRejection: ${msg}`); });
 });
 
 // NAT-011 / audit S-5: do NOT write logs to ~/Documents in release builds
