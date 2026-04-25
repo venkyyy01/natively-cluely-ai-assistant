@@ -12,6 +12,7 @@ export {
 } from './FoundationIntentPromptAssets';
 export { resolveFoundationModelsIntentHelperPath } from './FoundationModelsIntentHelperPath';
 export { LegacyIntentProvider } from './LegacyIntentProvider';
+export { SetFitIntentProvider } from './SetFitIntentProvider';
 export {
   createIntentProviderError,
   getIntentProviderErrorCode,

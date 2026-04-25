@@ -15,6 +15,7 @@ import {
   FoundationModelsIntentProvider,
   IntentClassificationCoordinator,
   LegacyIntentProvider,
+  SetFitIntentProvider,
   type CoordinatedIntentResult,
 } from './llm/providers';
 import { ConsciousContextComposer, ConsciousIntentService, ConsciousOrchestrator, ConsciousPreparationCoordinator, ConsciousResponseCoordinator, ConsciousVerifier, ConsciousVerifierLLM, FallbackExecutor, ResponseFingerprinter, sanitizeProfileData } from './conscious';
@@ -190,9 +191,15 @@ export class IntelligenceEngine extends EventEmitter {
     );
     this.initializeLLMs();
     const optimizationFlags = getOptimizationFlags();
+    // NAT-XXX: Hybrid intent classification.
+    // Primary: SetFit (fast, domain-specific, ~10-30ms)
+    // Fallback: Foundation model (slow but most accurate, ~2-3s)
+    // The coordinator handles the cascade: SetFit first, foundation model
+    // only when SetFit is uncertain or unavailable.
+    const setFitProvider = new SetFitIntentProvider();
     this.intentCoordinator = new IntentClassificationCoordinator(
+      setFitProvider,
       new FoundationModelsIntentProvider(),
-      new LegacyIntentProvider(),
       {
         maxPrimaryRetries: optimizationFlags.foundationIntentMaxRetries,
         baseBackoffMs: optimizationFlags.foundationIntentRetryBaseMs,
@@ -211,9 +218,20 @@ export class IntelligenceEngine extends EventEmitter {
     consciousAcceleration?.setSpeculativeExecutor((query, transcriptRevision, abortSignal) =>
       this.generateSpeculativeFastAnswerStream(query, transcriptRevision, abortSignal)
     );
-    consciousAcceleration?.setIntentClassifier((query: string, _transcriptRevision: number) =>
-      this.classifyIntentForRoute(query, this.buildFastStandardTranscriptContext(query, this.session.getLastAssistantMessage()), this.session.getAssistantResponseHistory().length)
-    );
+    // NAT-XXX: Prefetch uses LayeredIntentRouter parallel ensemble for best
+    // accuracy. Runs SetFit + SLM + Regex + Embedding simultaneously (~20-50ms),
+    // only falling back to foundation model if ensemble is uncertain.
+    consciousAcceleration?.setIntentClassifier(async (query: string, _transcriptRevision: number) => {
+      const router = (await import('./llm/LayeredIntentRouter')).LayeredIntentRouter.getInstance();
+      const decision = await router.routeFast({
+        question: query,
+        transcript: this.buildFastStandardTranscriptContext(query, this.session.getLastAssistantMessage()),
+        assistantResponseCount: this.session.getAssistantResponseHistory().length,
+        prefetchedIntent: null,
+        coordinator: this.intentCoordinator,
+      });
+      return decision.intentResult;
+    });
   }
 
   private async *generateSpeculativeFastAnswerStream(question: string, transcriptRevision: number, abortSignal: AbortSignal): AsyncIterableIterator<string> {
@@ -452,25 +470,12 @@ export class IntelligenceEngine extends EventEmitter {
 
   private buildFastStandardTranscriptContext(latestQuestion: string, latestAssistantMessage: string | null): string {
         const turns: string[] = [];
-
-        // Include the last 5 context turns so the fast path isn't stateless.
-        // This preserves topic/memory for multi-turn system design conversations
-        // while still being fast (no semantic search / embedding scoring).
-        const recentContext = this.session.getContext(240).slice(-5);
-        for (const item of recentContext) {
-            const label = item.role === 'interviewer' ? 'INTERVIEWER' :
-                item.role === 'assistant' ? 'ASSISTANT' : 'ME';
-            turns.push(`[${label}]: ${item.text}`);
-        }
-
-        if (latestAssistantMessage?.trim() && !recentContext.some(i => i.role === 'assistant' && i.text === latestAssistantMessage.trim())) {
+        if (latestAssistantMessage?.trim()) {
             turns.push(`[ASSISTANT]: ${latestAssistantMessage.trim()}`);
         }
-
-        if (latestQuestion.trim() && !recentContext.some(i => i.role === 'interviewer' && i.text === latestQuestion.trim())) {
+        if (latestQuestion.trim()) {
             turns.push(`[INTERVIEWER]: ${latestQuestion.trim()}`);
         }
-
         return turns.join('\n');
     }
 

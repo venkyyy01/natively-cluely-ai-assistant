@@ -52,7 +52,7 @@ const INTENT_ANSWER_SHAPES: Record<ConversationIntent, string> = {
 // Fine-Tuned SLM Classifier
 // ========================
 
-const SLM_LABEL_MAP: Record<string, ConversationIntent> = {
+export const SLM_LABEL_MAP: Record<string, ConversationIntent> = {
   'clarification': 'clarification',
   'follow_up': 'follow_up',
   'deep_dive': 'deep_dive',
