@@ -198,7 +198,7 @@ constructor() {
 // 1. Load boot-critical settings first (used by WindowHelpers)
 const settingsManager = SettingsManager.getInstance();
 this.isUndetectable = settingsManager.get('isUndetectable') ?? false;
-this.visibilityIntent = this.isUndetectable ? 'protected_shield' : 'visible_app';
+this.visibilityIntent = this.isUndetectable ? 'visible_safe_controls' : 'visible_app';
 this.disguiseMode = settingsManager.get('disguiseMode') ?? 'none';
 this.consciousModeEnabled = settingsManager.get('consciousModeEnabled') ?? false;
 
@@ -654,7 +654,7 @@ this.runtimeCoordinator.registerSupervisor(new StealthSupervisor(
     bus.subscribe('stealth:state-changed', async (event) => {
       if (event.to === 'FULL_STEALTH') {
         this.privacyShieldFaultReason = null
-        if (this.visibilityIntent === 'visible_app') {
+        if (this.visibilityIntent === 'visible_app' || this.visibilityIntent === 'visible_safe_controls') {
           this.setContainmentActive(false, 'stealth_recovered')
         }
         this.syncPrivacyShieldState()
@@ -2943,7 +2943,7 @@ setThemeMode: (mode) => this.themeManager.setMode(mode as import('../ThemeManage
     // stale blur-reset or app.setName() callbacks cannot fire after a rapid toggle.
     this.clearDisguiseTimers()
 
-    this.requestVisibilityIntent(state ? 'protected_shield' : 'visible_app', state ? 'undetectable_enabled' : 'undetectable_disabled')
+    this.requestVisibilityIntent(state ? 'visible_safe_controls' : 'visible_app', state ? 'undetectable_enabled' : 'undetectable_disabled')
     // Broadcast only after the canonical main-process transition succeeds.
     this._broadcastToAllWindows('undetectable-changed', state);
     this.performanceInstrumentation.recordDuration('stealth.toggle', startedAt, {
@@ -3065,7 +3065,7 @@ setThemeMode: (mode) => this.themeManager.setMode(mode as import('../ThemeManage
       console.log('[AppState] Privacy shield fault cleared');
     }
     this.privacyShieldFaultReason = null;
-    if (this.visibilityIntent === 'visible_app') {
+    if (this.visibilityIntent === 'visible_app' || this.visibilityIntent === 'visible_safe_controls') {
       this.setContainmentActive(false, 'privacy_fault_cleared')
     }
     this.syncPrivacyShieldState();
@@ -3168,7 +3168,7 @@ setThemeMode: (mode) => this.themeManager.setMode(mode as import('../ThemeManage
     const previous = this.visibilityIntent
     this.visibilityIntent = intent
 
-    if (intent === 'visible_app') {
+    if (intent === 'visible_app' || intent === 'visible_safe_controls') {
       this.stealthManager.recordProtectionEvent('show-requested', {
         source: `AppState.requestVisibilityIntent:${source}`,
         reason: intent,
@@ -3176,6 +3176,9 @@ setThemeMode: (mode) => this.themeManager.setMode(mode as import('../ThemeManage
       })
       if (!this.privacyShieldFaultReason) {
         this.setContainmentActive(false, source)
+      }
+      if (intent === 'visible_safe_controls') {
+        this.syncWindowStealthProtection(true)
       }
       this.syncPrivacyShieldState()
       this.showMainWindow()

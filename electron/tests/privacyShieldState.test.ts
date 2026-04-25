@@ -51,6 +51,16 @@ test('PrivacyShieldState activates while startup visibility intent is protected'
   );
 });
 
+test('PrivacyShieldState keeps local controls visible for invisible mode safe-controls intent', () => {
+  assert.deepEqual(
+    derivePrivacyShieldState({ visibilityIntent: 'visible_safe_controls', captureProtectionEnabled: true }),
+    {
+      active: false,
+      reason: null,
+    },
+  );
+});
+
 test('PrivacyShieldState activates for enhanced stealth degradation warnings', () => {
   assert.deepEqual(
     derivePrivacyShieldState({ warnings: ['private_api_failed'] }),
