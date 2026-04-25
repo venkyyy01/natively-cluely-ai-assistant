@@ -2377,6 +2377,110 @@ ANSWER DIRECTLY:`;
   }
 
   /**
+   * Stream a custom cURL provider using SSE (Server-Sent Events).
+   * This is an additive enhancement — callers should fall back to
+   * `executeCustomProvider` on empty/non-SSE responses so existing
+   * non-streaming providers keep working.
+   */
+  public async *streamCustomProvider(
+    curlCommand: string,
+    combinedMessage: string,
+    systemPrompt: string,
+    rawUserMessage: string,
+    context: string,
+    imagePaths?: string[],
+    responsePath?: string,
+    abortSignal?: AbortSignal,
+    timeoutMs: number = CURL_PROVIDER_TIMEOUT_MS,
+  ): AsyncGenerator<string, void, unknown> {
+    const requestConfig = curl2Json(curlCommand);
+    const base64Images = await this.readImagesAsBase64(imagePaths);
+    const primaryBase64Image = base64Images[0] || "";
+    const { OPENAI_USER_CONTENT, OPENAI_MESSAGES } = this.buildOpenAiCompatibleVariables(
+      rawUserMessage, systemPrompt, context, base64Images,
+    );
+    const variables = {
+      TEXT: combinedMessage,
+      PROMPT: combinedMessage,
+      SYSTEM_PROMPT: systemPrompt,
+      USER_MESSAGE: rawUserMessage,
+      CONTEXT: context,
+      IMAGE_BASE64: primaryBase64Image,
+      IMAGE_BASE64S: base64Images,
+      IMAGE_COUNT: String(base64Images.length),
+      OPENAI_USER_CONTENT,
+      OPENAI_MESSAGES,
+      API_KEY: this.openaiApiKey || this.groqApiKey || this.cerebrasApiKey || this.claudeApiKey || this.apiKey || "",
+      OPENAI_API_KEY: this.openaiApiKey || "",
+      GROQ_API_KEY: this.groqApiKey || "",
+      CEREBRAS_API_KEY: this.cerebrasApiKey || "",
+      CLAUDE_API_KEY: this.claudeApiKey || "",
+      GEMINI_API_KEY: this.apiKey || "",
+    };
+    const url = deepVariableReplacer(requestConfig.url, variables);
+    const headers = deepVariableReplacer(requestConfig.header || {}, variables);
+    const bodyTemplate = this.getCurlDataTemplate(requestConfig);
+    let body = deepVariableReplacer(bodyTemplate, variables);
+    body = this.normalizeProviderRequestPayload(body);
+    if (body && typeof body === 'object') {
+      body = { ...body, stream: true };
+    }
+    const requestBody = this.buildFetchRequestBody(body);
+    const requestControl = createRequestAbortController(timeoutMs, abortSignal);
+    let response: Response;
+    try {
+      response = await fetch(url, {
+        method: requestConfig.method || 'POST',
+        headers: { ...headers, Accept: 'text/event-stream' },
+        body: requestBody,
+        signal: requestControl.signal,
+      });
+    } catch (error) {
+      requestControl.cleanup();
+      throw error;
+    }
+    if (!response.ok) {
+      requestControl.cleanup();
+      const errorText = await readFetchBodyWithLimit(response);
+      throw new Error(`Custom Provider HTTP ${response.status}: ${summarizeResponseBody(errorText.trim())}`);
+    }
+    if (!response.body) {
+      requestControl.cleanup();
+      return;
+    }
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    try {
+      while (true) {
+        if (abortSignal?.aborted) return;
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed.startsWith('data:')) continue;
+          const dataStr = trimmed.slice(5).trim();
+          if (dataStr === '[DONE]') return;
+          if (!dataStr) continue;
+          try {
+            const data = JSON.parse(dataStr);
+            const text = this.extractCurlResponseText(data, responsePath);
+            if (text) yield text;
+          } catch {
+            // malformed SSE line — ignore
+          }
+        }
+      }
+    } finally {
+      requestControl.cleanup();
+      reader.releaseLock();
+    }
+  }
+
+  /**
    * Try to extract text content from common LLM API response formats.
    * Supports: Ollama, OpenAI, Anthropic, and generic formats.
    */
@@ -3009,65 +3113,99 @@ ANSWER DIRECTLY:`;
       return;
     }
 
-    // 2. Custom Provider Streaming (via cURL - Non-streaming fallback for now)
+    // 2. Custom Provider Streaming (via cURL)
     if (this.activeCurlProvider) {
       // Map UNIVERSAL prompts to CUSTOM before injecting language instruction,
       // because injectLanguageInstruction modifies the string and breaks mapToCustomPrompt matching
       const mappedBase = this.mapToCustomPrompt(baseSystemPrompt);
       const curlSystemPrompt = prepareStreamSystemPrompt(mappedBase);
       try {
-        const response = isMultimodal && imagePaths?.length
-          ? await this.runWithScreenshotOcrFallback(
-              `cURL Provider (${this.activeCurlProvider.name})`,
-              imagePaths,
-              effectiveMessage,
-              () => this.executeCustomProvider(
-                this.activeCurlProvider!.curlCommand,
-                userContent,
-                curlSystemPrompt,
-                effectiveMessage,
-                context || "",
-                imagePaths,
-                this.activeCurlProvider!.responsePath,
-                options?.abortSignal,
-                CURL_PROVIDER_TIMEOUT_MS,
-              ),
-              (fallbackMessage) => this.executeCustomProvider(
-                this.activeCurlProvider!.curlCommand,
-                buildStreamUserContent(fallbackMessage),
-                curlSystemPrompt,
-                fallbackMessage,
-                context || "",
-                [],
-                this.activeCurlProvider!.responsePath,
-                options?.abortSignal,
-                CURL_PROVIDER_TIMEOUT_MS,
-              ),
-              options?.abortSignal,
-            )
-          : await this.executeCustomProvider(
-              this.activeCurlProvider.curlCommand,
+        // Multimodal / screenshot path: keep the existing non-streaming behaviour
+        // with screenshot-OCR fallback exactly as before.
+        if (isMultimodal && imagePaths?.length) {
+          const response = await this.runWithScreenshotOcrFallback(
+            `cURL Provider (${this.activeCurlProvider.name})`,
+            imagePaths,
+            effectiveMessage,
+            () => this.executeCustomProvider(
+              this.activeCurlProvider!.curlCommand,
               userContent,
               curlSystemPrompt,
               effectiveMessage,
               context || "",
               imagePaths,
+              this.activeCurlProvider!.responsePath,
+              options?.abortSignal,
+              CURL_PROVIDER_TIMEOUT_MS,
+            ),
+            (fallbackMessage) => this.executeCustomProvider(
+              this.activeCurlProvider!.curlCommand,
+              buildStreamUserContent(fallbackMessage),
+              curlSystemPrompt,
+              fallbackMessage,
+              context || "",
+              [],
+              this.activeCurlProvider!.responsePath,
+              options?.abortSignal,
+              CURL_PROVIDER_TIMEOUT_MS,
+            ),
+            options?.abortSignal,
+          );
+          if (response.trim().length > 0) {
+            yield response;
+            return;
+          }
+        } else {
+          // Text-only path: try SSE streaming first for real-time tokens.
+          // If the provider does not support SSE (yields nothing) or throws,
+          // fall back transparently to the old buffered executeCustomProvider.
+          let streamedAny = false;
+          try {
+            for await (const chunk of this.streamCustomProvider(
+              this.activeCurlProvider.curlCommand,
+              userContent,
+              curlSystemPrompt,
+              effectiveMessage,
+              context || "",
+              undefined,
               this.activeCurlProvider.responsePath,
               options?.abortSignal,
               CURL_PROVIDER_TIMEOUT_MS,
-            );
-
-        if (response.trim().length > 0) {
-          yield response;
-          return;
+            )) {
+              streamedAny = true;
+              yield chunk;
+            }
+          } catch (streamErr: any) {
+            // Streaming failed — fall through to buffered fallback below
+            console.warn(`[LLMHelper] cURL provider (${this.activeCurlProvider.name}) SSE streaming failed, falling back to buffered:`, streamErr.message);
+          }
+          if (streamedAny) {
+            return;
+          }
+          // Non-SSE provider or empty stream: fall back to buffered request
+          const response = await this.executeCustomProvider(
+            this.activeCurlProvider.curlCommand,
+            userContent,
+            curlSystemPrompt,
+            effectiveMessage,
+            context || "",
+            undefined,
+            this.activeCurlProvider.responsePath,
+            options?.abortSignal,
+            CURL_PROVIDER_TIMEOUT_MS,
+          );
+          if (response.trim().length > 0) {
+            yield response;
+            return;
+          }
         }
 
-        console.warn(`[LLMHelper] cURL provider (${this.activeCurlProvider.name}) returned no response while streaming. Falling back to standard routing.`);
+        console.warn(`[LLMHelper] cURL provider (${this.activeCurlProvider.name}) returned no response. Falling back to standard routing.`);
       } catch (error: any) {
         if (options?.abortSignal?.aborted) {
           throw error;
         }
-        console.warn(`[LLMHelper] cURL provider (${this.activeCurlProvider.name}) streaming failed after ${CURL_PROVIDER_TIMEOUT_MS}ms timeout window. Falling back to standard routing:`, error.message);
+        console.warn(`[LLMHelper] cURL provider (${this.activeCurlProvider.name}) failed after ${CURL_PROVIDER_TIMEOUT_MS}ms timeout window. Falling back to standard routing:`, error.message);
       }
 
       yield* this.streamWithProviderFallbackBypass(() => this.streamChat(
