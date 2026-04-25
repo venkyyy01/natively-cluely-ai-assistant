@@ -17,8 +17,8 @@ test('NAT-083: default E2E scenarios cover all required families', () => {
   assert.equal(scenarios.length, 6, 'expected 6 default scenarios');
 });
 
-test('NAT-083: E2E harness runs all scenarios and produces summary', () => {
-  const { results, summary } = runConsciousE2EHarness({});
+test('NAT-083: E2E harness runs all scenarios and produces summary', async () => {
+  const { results, summary } = await runConsciousE2EHarness({});
 
   assert.equal(results.length, 6, 'should run 6 scenarios');
   assert.equal(summary.total, 6, 'summary total should match');
@@ -31,31 +31,31 @@ test('NAT-083: E2E harness runs all scenarios and produces summary', () => {
   }
 });
 
-test('NAT-083: prepare-route-start scenario routes to start', () => {
-  const { results } = runConsciousE2EHarness({});
+test('NAT-083: prepare-route-start scenario routes to start', async () => {
+  const { results } = await runConsciousE2EHarness({});
   const result = results.find((r) => r.scenario.id === 'prepare-route-start');
   assert.ok(result, 'scenario should exist');
   assert.equal(result!.route.preRouteDecision.threadAction, 'start');
   assert.equal(result!.route.preRouteDecision.qualifies, true);
 });
 
-test('NAT-083: prepare-route-continue scenario routes to continue', () => {
-  const { results } = runConsciousE2EHarness({});
+test('NAT-083: prepare-route-continue scenario routes to continue', async () => {
+  const { results } = await runConsciousE2EHarness({});
   const result = results.find((r) => r.scenario.id === 'prepare-route-continue');
   assert.ok(result, 'scenario should exist');
   assert.equal(result!.route.preRouteDecision.threadAction, 'continue');
   assert.equal(result!.route.preRouteDecision.qualifies, true);
 });
 
-test('NAT-083: acceleration-overlay-prefetch-boost overrides with strong prefetch', () => {
-  const { results } = runConsciousE2EHarness({});
+test('NAT-083: acceleration-overlay-prefetch-boost overrides with strong prefetch', async () => {
+  const { results } = await runConsciousE2EHarness({});
   const result = results.find((r) => r.scenario.id === 'acceleration-overlay-prefetch-boost');
   assert.ok(result, 'scenario should exist');
   assert.equal(result!.route.preRouteDecision.qualifies, true, 'strong prefetch should qualify');
 });
 
-test('NAT-083: circuit-breaker-open forces standard route', () => {
-  const { results } = runConsciousE2EHarness({});
+test('NAT-083: circuit-breaker-open forces standard route', async () => {
+  const { results } = await runConsciousE2EHarness({});
   const result = results.find((r) => r.scenario.id === 'circuit-breaker-open');
   assert.ok(result, 'scenario should exist');
   assert.equal(result!.route.preRouteDecision.qualifies, true);
@@ -63,15 +63,15 @@ test('NAT-083: circuit-breaker-open forces standard route', () => {
   // route determined by the harness should be standard
 });
 
-test('NAT-083: topical-compatibility-reset resets on off-topic question', () => {
-  const { results } = runConsciousE2EHarness({});
+test('NAT-083: topical-compatibility-reset resets on off-topic question', async () => {
+  const { results } = await runConsciousE2EHarness({});
   const result = results.find((r) => r.scenario.id === 'topical-compatibility-reset');
   assert.ok(result, 'scenario should exist');
   assert.equal(result!.route.preRouteDecision.threadAction, 'reset');
 });
 
-test('NAT-083: conscious-disabled-ignore ignores when disabled', () => {
-  const { results } = runConsciousE2EHarness({});
+test('NAT-083: conscious-disabled-ignore ignores when disabled', async () => {
+  const { results } = await runConsciousE2EHarness({});
   const result = results.find((r) => r.scenario.id === 'conscious-disabled-ignore');
   assert.ok(result, 'scenario should exist');
   assert.equal(result!.route.preRouteDecision.threadAction, 'ignore');

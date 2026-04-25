@@ -598,9 +598,9 @@ export function getDefaultConsciousE2EScenarios(): ConsciousE2EScenario[] {
   ];
 }
 
-export function runConsciousE2EHarness(options: {
+export async function runConsciousE2EHarness(options: {
   scenarios?: ConsciousE2EScenario[];
-}): { results: ConsciousE2EResult[]; summary: ConsciousEvalSummary } {
+}): Promise<{ results: ConsciousE2EResult[]; summary: ConsciousEvalSummary }> {
   const scenarios = options.scenarios ?? getDefaultConsciousE2EScenarios();
   const results: ConsciousE2EResult[] = [];
   const response = buildBaselineResponse();
@@ -634,7 +634,7 @@ export function runConsciousE2EHarness(options: {
       (orchestrator as any).circuitOpenUntil = Date.now() + 60_000;
     }
 
-    const route = orchestrator.prepareRoute({
+    const route = await orchestrator.prepareRoute({
       question: scenario.question,
       screenshotBackedLiveCodingTurn: false,
       prefetchedIntent: scenario.prefetchedIntent as never ?? null,

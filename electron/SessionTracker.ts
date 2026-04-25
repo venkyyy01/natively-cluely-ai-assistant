@@ -183,7 +183,7 @@ export class SessionTracker {
     over50ms: 0,
     timeouts: 0,
   };
-  private readonly ADAPTIVE_WINDOW_TIMEOUT_MS = 120;
+  private readonly ADAPTIVE_WINDOW_TIMEOUT_MS = 300;
   private readonly ADAPTIVE_QUERY_MAX_LEN = 220;
   private disposed = false;
 
@@ -272,6 +272,20 @@ export class SessionTracker {
       Math.abs(lastItem.timestamp - segment.timestamp) < 500 &&
       lastItem.text === text) {
       return null;
+    }
+
+    // Consolidate: append to last item if same speaker within 300ms.
+    // This merges rapid transcript fragments without combining distinct turns.
+    if (lastItem &&
+      lastItem.role === role &&
+      Math.abs(lastItem.timestamp - segment.timestamp) < 300) {
+      const consolidatedText = `${lastItem.text} ${text}`;
+      lastItem.text = consolidatedText;
+      lastItem.embedding = buildPseudoEmbedding(consolidatedText);
+      this.transcriptRevision++;
+      this.compactSnapshotCache.clear();
+      this.contextAssembleCache.clear();
+      return { role };
     }
 
     const itemPhase = inferItemPhase(this, role, text);

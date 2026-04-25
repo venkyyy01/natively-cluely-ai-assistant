@@ -29,7 +29,7 @@ function makeCoordinator(opts?: {
   } as any;
 
   const orchestrator = {
-    prepareRoute: () => ({
+    prepareRoute: async () => ({
       preRouteDecision: { qualifies: true },
     }),
   } as any;

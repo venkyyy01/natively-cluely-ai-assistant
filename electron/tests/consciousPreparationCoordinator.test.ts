@@ -37,7 +37,7 @@ function createCoordinatorWithTinyBudget() {
   const coordinator = new ConsciousPreparationCoordinator(
     session as any,
     {
-      prepareRoute: () => ({ preRouteDecision: { qualifies: true } }),
+      prepareRoute: async () => ({ preRouteDecision: { qualifies: true } }),
     } as any,
     {
       compose: (input: any) => ({

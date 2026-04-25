@@ -453,7 +453,7 @@ function resolveCueScores(scores: Map<CueCategory, CueScore>, text: string): Int
  * Instead of first-match-wins, collects ALL cue matches, weights them,
  * and resolves conflicts — especially behavioral vs deep_dive.
  */
-function detectIntentByPattern(lastInterviewerTurn: string): IntentResult | null {
+export function detectIntentByPattern(lastInterviewerTurn: string): IntentResult | null {
   const text = lastInterviewerTurn.toLowerCase().trim();
   if (!text) return null;
 
@@ -479,7 +479,7 @@ function detectIntentByPattern(lastInterviewerTurn: string): IntentResult | null
  * Context-aware intent detection
  * Looks at conversation flow, not just the last turn
  */
-function detectIntentByContext(
+export function detectIntentByContext(
     recentTranscript: string,
     assistantMessageCount: number
 ): IntentResult {

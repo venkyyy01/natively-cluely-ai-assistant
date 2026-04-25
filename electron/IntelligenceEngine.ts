@@ -453,11 +453,21 @@ export class IntelligenceEngine extends EventEmitter {
   private buildFastStandardTranscriptContext(latestQuestion: string, latestAssistantMessage: string | null): string {
         const turns: string[] = [];
 
-        if (latestAssistantMessage?.trim()) {
+        // Include the last 5 context turns so the fast path isn't stateless.
+        // This preserves topic/memory for multi-turn system design conversations
+        // while still being fast (no semantic search / embedding scoring).
+        const recentContext = this.session.getContext(240).slice(-5);
+        for (const item of recentContext) {
+            const label = item.role === 'interviewer' ? 'INTERVIEWER' :
+                item.role === 'assistant' ? 'ASSISTANT' : 'ME';
+            turns.push(`[${label}]: ${item.text}`);
+        }
+
+        if (latestAssistantMessage?.trim() && !recentContext.some(i => i.role === 'assistant' && i.text === latestAssistantMessage.trim())) {
             turns.push(`[ASSISTANT]: ${latestAssistantMessage.trim()}`);
         }
 
-        if (latestQuestion.trim()) {
+        if (latestQuestion.trim() && !recentContext.some(i => i.role === 'interviewer' && i.text === latestQuestion.trim())) {
             turns.push(`[INTERVIEWER]: ${latestQuestion.trim()}`);
         }
 
@@ -1011,11 +1021,15 @@ export class IntelligenceEngine extends EventEmitter {
             const prefetchedIntent: CoordinatedIntentResult | null = useConsciousAcceleration
                 ? (consciousAcceleration?.getPrefetchedIntent(resolvedQuestion, transcriptRevisionAtRoute) ?? null) as CoordinatedIntentResult | null
                 : null;
-            const routePreparation = this.consciousPreparationCoordinator.prepareRoute({
+            const routePreparation = await this.consciousPreparationCoordinator.prepareRoute({
                 baseQuestion,
                 knowledgeStatus,
                 screenshotBackedLiveCodingTurn: this.isScreenshotBackedLiveCodingTurn(resolvedQuestion, imagePaths),
                 prefetchedIntent,
+                transcript: this.session.getFormattedContext(120),
+                assistantResponseCount: this.session.getAssistantResponseHistory().length,
+                coordinator: this.intentCoordinator,
+                transcriptRevision: transcriptRevisionAtRoute,
             });
             this.recordSessionEvent('conscious_route_decision', {
                 question: resolvedQuestion,

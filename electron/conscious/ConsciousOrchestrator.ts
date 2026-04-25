@@ -20,6 +20,8 @@ import { ConsciousRetrievalOrchestrator } from './ConsciousRetrievalOrchestrator
 import { isStrongConsciousIntent, isUncertainConsciousIntent } from './ConsciousIntentService';
 import { ConsciousProvenanceVerifier } from './ConsciousProvenanceVerifier';
 import { ConsciousVerifier } from './ConsciousVerifier';
+import { LayeredIntentRouter, isReliableIntent } from '../llm/LayeredIntentRouter';
+import type { IntentClassificationCoordinator } from '../llm/providers/IntentClassificationCoordinator';
 
 interface KnowledgeStatusLike {
   activeMode?: unknown;
@@ -237,22 +239,55 @@ export class ConsciousOrchestrator {
     );
   }
 
-  prepareRoute(input: {
+  async prepareRoute(input: {
     question: string;
     knowledgeStatus?: KnowledgeStatusLike | null;
     screenshotBackedLiveCodingTurn: boolean;
     prefetchedIntent?: IntentResult | null;
-  }): PreparedConsciousRoute {
+    transcript?: string;
+    assistantResponseCount?: number;
+    coordinator?: IntentClassificationCoordinator | null;
+    transcriptRevision?: number;
+  }): Promise<PreparedConsciousRoute> {
     const currentReasoningThread = this.session.getActiveReasoningThread();
     const latestReaction = this.session.getLatestQuestionReaction();
     const safePrefetchedIntent = ConsciousOrchestrator.isValidIntentResult(input.prefetchedIntent) ? input.prefetchedIntent : null;
-    const hasStrongPrefetchedIntent = isStrongConsciousIntent(safePrefetchedIntent);
     const circuitOpen = this.isCircuitOpen();
+
+    // Layered intent router: SLM → Intent Coordinator → Semantic Embedding → Regex → Context
+    // Uses prefetched intent (coordinator result) if available and reliable.
+    // Only active when conscious mode is enabled; disabled conscious mode falls through to regex.
+    let intentBasedQualifies = false;
+    let routedIntentResult: IntentResult | null = null;
+
+    if (this.session.isConsciousModeEnabled()) {
+      if (safePrefetchedIntent && isReliableIntent(safePrefetchedIntent)) {
+        intentBasedQualifies = true;
+        routedIntentResult = safePrefetchedIntent;
+      } else {
+        const router = LayeredIntentRouter.getInstance();
+        const routerInput = {
+          question: input.question,
+          transcript: input.transcript ?? '',
+          assistantResponseCount: input.assistantResponseCount ?? 0,
+          prefetchedIntent: safePrefetchedIntent,
+          coordinator: input.coordinator ?? null,
+          transcriptRevision: input.transcriptRevision,
+        };
+        const decision = await router.routeFast(routerInput);
+        routedIntentResult = decision.intentResult;
+        intentBasedQualifies = decision.isReliable;
+      }
+    }
+
+    // Regex/thread-based decision for threadAction (handles continuations, topic shifts)
     let preRouteDecision = this.session.isConsciousModeEnabled()
       ? classifyConsciousModeQuestion(input.question, currentReasoningThread)
       : { qualifies: false, threadAction: 'ignore' as const };
 
-    if (hasStrongPrefetchedIntent && !preRouteDecision.qualifies) {
+    // Intent-based override: if layered router says this is a reliable conscious intent
+    // (deep_dive, behavioral, coding, etc.) but regex/thread logic missed it, override.
+    if (intentBasedQualifies && !preRouteDecision.qualifies) {
       preRouteDecision = {
         qualifies: true,
         threadAction: currentReasoningThread ? 'reset' : 'start',
@@ -275,11 +310,13 @@ export class ConsciousOrchestrator {
       ? null
       : currentReasoningThread;
 
+    // Force standard route if we have a prefetched/intent result that is uncertain
+    // (e.g., low-confidence deep_dive) and not a thread continuation.
+    const hasReliableIntent = routedIntentResult ? isReliableIntent(routedIntentResult) : false;
     const shouldForceStandardRoute = Boolean(
-      safePrefetchedIntent
+      routedIntentResult
       && preRouteDecision.threadAction !== 'continue'
-      && isUncertainConsciousIntent(safePrefetchedIntent)
-      && !hasStrongPrefetchedIntent
+      && !hasReliableIntent
     );
 
     let selectedRoute = selectAnswerRoute({
@@ -293,7 +330,8 @@ export class ConsciousOrchestrator {
       activeReasoningThread,
     });
 
-    if (hasStrongPrefetchedIntent && !circuitOpen && selectedRoute !== 'conscious_answer') {
+    // Override to conscious_answer if we have a reliable intent and circuit is closed
+    if (hasReliableIntent && !circuitOpen && selectedRoute !== 'conscious_answer') {
       selectedRoute = 'conscious_answer';
     }
 

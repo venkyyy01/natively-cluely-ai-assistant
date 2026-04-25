@@ -115,12 +115,6 @@ export class ConsciousAccelerationOrchestrator {
         };
       }
 
-      if ((action === 'soft_speculate' || action === 'hard_speculate' || action === 'commit') && !this.prefetchTriggeredForCurrentPause) {
-        this.prefetchTriggeredForCurrentPause = true;
-        this.prefetcher.onSilenceStart();
-        await this.maybePrefetchIntent();
-      }
-
       if ((action === 'hard_speculate' || action === 'commit') && isOptimizationActive('usePrefetching')) {
         void this.maybeStartSpeculativeAnswer();
       }
@@ -226,6 +220,16 @@ export class ConsciousAccelerationOrchestrator {
 
     this.noteTranscriptText('interviewer', transcript);
     this.prefetchTriggeredForCurrentPause = false;
+
+    // NAT-XXX: Start intent prefetch immediately when interviewer stops speaking.
+    // Previously, prefetch only started when the pause detector fired (handlePauseAction),
+    // which could be too late if the user triggers quickly after the interviewer finishes.
+    // By starting prefetch on silence start, we maximize the time available for
+    // the foundation model classifier (~2-3s) before the user triggers.
+    // Note: prefetcher.onSilenceStart() stays in handlePauseAction to avoid
+    // interfering with the speculative answer lifecycle.
+    void this.maybePrefetchIntent();
+
     if (this.classifierLane) {
       void this.classifierLane
         .submit('semantic', async () => {

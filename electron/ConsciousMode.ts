@@ -479,7 +479,9 @@ function isAdministrativePrompt(lower: string): boolean {
 }
 
 function isSystemDesignQuestion(lower: string): boolean {
-  return /(^how would you design\b|\bsystem design\b|\barchitect\b|\bhigh[- ]level design\b|\bdistributed system\b|\brate limiter\b|\bpartition\b|\bmonolith to microservices\b|\bmigrate a monolith\b|\bdesign the data model\b|\bdesign a .*system\b|\bdesign an .*system\b|\bdesign the .*system\b|\bdesign a .*service\b|\bdesign an .*service\b|\bdesign the .*service\b)/i.test(lower);
+  // NOTE: removed ^ anchors so phrases like "So how would you design..." match.
+  // Added \b word boundaries to prevent false positives.
+  return /(\bhow would you design\b|\bsystem design\b|\barchitect\b|\bhigh[- ]level design\b|\bdistributed system\b|\brate limiter\b|\bpartition\b|\bmonolith to microservices\b|\bmigrate a monolith\b|\bdesign the data model\b|\bdesign a .*system\b|\bdesign an .*system\b|\bdesign the .*system\b|\bdesign a .*service\b|\bdesign an .*service\b|\bdesign the .*service\b|\bdesign this\b|\bdesign that\b)/i.test(lower);
 }
 
 function isQuestionContinuationPhrase(lower: string): boolean {

@@ -162,17 +162,25 @@ export class ConsciousPreparationCoordinator {
       || currentPlan.focalFacets.join('|') !== nextPlan.focalFacets.join('|');
   }
 
-  prepareRoute(input: {
+  async prepareRoute(input: {
     baseQuestion: string;
     knowledgeStatus?: KnowledgeStatusLike | null;
     screenshotBackedLiveCodingTurn: boolean;
     prefetchedIntent?: CoordinatedIntentResult | null;
-  }): ConsciousRoutePreparationResult {
-    const initialRoute = this.consciousOrchestrator.prepareRoute({
+    transcript?: string;
+    assistantResponseCount?: number;
+    coordinator?: import('../llm/providers/IntentClassificationCoordinator').IntentClassificationCoordinator | null;
+    transcriptRevision?: number;
+  }): Promise<ConsciousRoutePreparationResult> {
+    const initialRoute = await this.consciousOrchestrator.prepareRoute({
       question: input.baseQuestion,
       knowledgeStatus: input.knowledgeStatus,
       screenshotBackedLiveCodingTurn: false,
       prefetchedIntent: input.prefetchedIntent ?? null,
+      transcript: input.transcript,
+      assistantResponseCount: input.assistantResponseCount,
+      coordinator: input.coordinator,
+      transcriptRevision: input.transcriptRevision,
     });
 
     const shouldUseScreenshotConsciousRoute = this.session.isConsciousModeEnabled()
@@ -184,11 +192,15 @@ export class ConsciousPreparationCoordinator {
     }
 
     return {
-      preparedRoute: this.consciousOrchestrator.prepareRoute({
+      preparedRoute: await this.consciousOrchestrator.prepareRoute({
         question: input.baseQuestion,
         knowledgeStatus: input.knowledgeStatus,
         screenshotBackedLiveCodingTurn: true,
         prefetchedIntent: input.prefetchedIntent ?? null,
+        transcript: input.transcript,
+        assistantResponseCount: input.assistantResponseCount,
+        coordinator: input.coordinator,
+        transcriptRevision: input.transcriptRevision,
       }),
     };
   }

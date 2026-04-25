@@ -586,7 +586,9 @@ export function getAdaptiveFallbackContext(tracker: SessionTracker, tokenBudget:
   // Deterministic fallback ladder:
   // Tier A/B approximation: recency + pinned
   // Tier C: pinned + last N turns
-  const lastSeconds = Math.max(30, Math.floor(tokenBudget / 4));
+  // NOTE: use tokenBudget / 2 instead of / 4 so fallback still captures
+  // meaningful conversation history (~2-4 minutes for typical budgets).
+  const lastSeconds = Math.max(60, Math.floor(tokenBudget / 2));
   const recency = t.getContext(lastSeconds);
   const pinnedAsContext: ContextItem[] = t.pinnedItems.map((item: PinnedItem) => ({
     role: 'interviewer',
@@ -596,7 +598,7 @@ export function getAdaptiveFallbackContext(tracker: SessionTracker, tokenBudget:
 
   const merged = [...pinnedAsContext, ...recency];
   if (merged.length === 0) {
-    return t.getContext(120).slice(-Math.max(4, Math.floor(tokenBudget / 20)));
+    return t.getContext(180).slice(-Math.max(4, Math.floor(tokenBudget / 20)));
   }
   return merged;
 }
@@ -888,7 +890,17 @@ export function getFormattedContext(tracker: SessionTracker, lastSeconds: number
   }
 
   const t = tracker as any;
-  const items = t.getContext(lastSeconds);
+
+  // Phase-aware context expansion: system design conversations span 5-10 minutes.
+  // When in design phases, use a much longer window so early constraints
+  // (e.g., "100 invoice PDFs, 1 page each") are not lost.
+  const currentPhase = t.phaseDetector.getCurrentPhase();
+  const designPhases = new Set(['high_level_design', 'deep_dive', 'scaling_discussion', 'failure_handling']);
+  const effectiveLastSeconds = designPhases.has(currentPhase)
+    ? Math.max(lastSeconds, 480) // 8 minutes for design phases
+    : lastSeconds;
+
+  const items = t.getContext(effectiveLastSeconds);
   const baseContext = items.map((item: ContextItem) => {
     const label = item.role === 'interviewer' ? 'INTERVIEWER' :
       item.role === 'user' ? 'ME' :
@@ -897,7 +909,15 @@ export function getFormattedContext(tracker: SessionTracker, lastSeconds: number
   }).join('\n');
 
   const pinnedSection = buildPinnedContextSection(tracker);
-  const assembled = pinnedSection ? `${pinnedSection}\n${baseContext}` : baseContext;
+  let assembled = pinnedSection ? `${pinnedSection}\n${baseContext}` : baseContext;
+
+  // Inject meeting metadata so the LLM knows the topic/domain
+  const meetingMeta = t.currentMeetingMetadata;
+  if (meetingMeta?.title) {
+    const metaLine = `[CURRENT_TOPIC]: ${meetingMeta.title}`;
+    assembled = `${metaLine}\n${assembled}`;
+  }
+
   setCachedAssembledContext(tracker, `formatted:${lastSeconds}`, assembled);
   return assembled;
 }
