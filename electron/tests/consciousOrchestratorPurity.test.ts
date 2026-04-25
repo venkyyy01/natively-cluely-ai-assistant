@@ -198,7 +198,8 @@ test('ConsciousOrchestrator opens a circuit breaker after repeated conscious ver
     } as any),
   );
 
-  for (let attempt = 0; attempt < 3; attempt += 1) {
+  // Circuit breaker threshold is now 6 (was 3) to be more resilient
+  for (let attempt = 0; attempt < 6; attempt += 1) {
     const result = await failingVerifier.executeReasoningFirst({
       route: { qualifies: true, threadAction: 'start' },
       question: 'How would you design a rate limiter?',

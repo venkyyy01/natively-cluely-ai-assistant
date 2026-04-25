@@ -17,6 +17,7 @@ export interface ConsciousVerifierJudgeInput {
   hypothesis?: AnswerHypothesis | null;
   evidence?: Array<'suggested' | 'inferred'>;
   question: string;
+  skipJudge?: boolean;
 }
 
 export interface ConsciousVerifierJudge {
@@ -170,6 +171,11 @@ export class ConsciousVerifier {
     const ruleVerdict = this.verifyRules(input);
     if (!ruleVerdict.ok) {
       return ruleVerdict;
+    }
+
+    // Skip judge when explicitly requested (degraded mode / circuit breaker open)
+    if (input.skipJudge) {
+      return { ...ruleVerdict, judge: 'skipped' };
     }
 
     if (!this.judge) {

@@ -40,7 +40,7 @@ function buildHarness(fingerprinter?: ResponseFingerprinter) {
 }
 
 test('NAT-048: identical consecutive answers result in a single emission', () => {
-  const fingerprinter = new ResponseFingerprinter();
+  const fingerprinter = new ResponseFingerprinter(20, 0);
   const harness = buildHarness(fingerprinter);
 
   const answer = 'I would partition the queue by tenant, with a per-tenant rate cap and a shared overflow shelf.';
@@ -84,7 +84,7 @@ test('NAT-048: identical consecutive answers result in a single emission', () =>
 });
 
 test('NAT-048: near-duplicate (same first sentence) is also suppressed', () => {
-  const fingerprinter = new ResponseFingerprinter();
+  const fingerprinter = new ResponseFingerprinter(20, 0);
   const harness = buildHarness(fingerprinter);
 
   const first =
@@ -118,7 +118,7 @@ test('NAT-048: near-duplicate (same first sentence) is also suppressed', () => {
 });
 
 test('NAT-048: distinct answers are both emitted', () => {
-  const fingerprinter = new ResponseFingerprinter();
+  const fingerprinter = new ResponseFingerprinter(20, 0);
   const harness = buildHarness(fingerprinter);
 
   const first = 'I would use a leader-follower replication topology with quorum writes.';
@@ -173,7 +173,7 @@ test('NAT-048: with no fingerprinter injected, behavior matches the legacy contr
 });
 
 test('NAT-048: clearing the fingerprinter (e.g. on session switch) re-allows previously-seen answers', () => {
-  const fingerprinter = new ResponseFingerprinter();
+  const fingerprinter = new ResponseFingerprinter(20, 0);
   const harness = buildHarness(fingerprinter);
 
   const answer = 'I would shard the database by user_id with consistent hashing.';
@@ -211,7 +211,7 @@ test('NAT-048: clearing the fingerprinter (e.g. on session switch) re-allows pre
 });
 
 test('NAT-048: the same answer can be emitted again for a different question', () => {
-  const fingerprinter = new ResponseFingerprinter();
+  const fingerprinter = new ResponseFingerprinter(20, 0);
   const harness = buildHarness(fingerprinter);
 
   const answer = 'I would start with a token bucket and then add per-tenant quotas.';

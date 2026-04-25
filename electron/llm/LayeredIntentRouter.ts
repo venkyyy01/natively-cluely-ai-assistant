@@ -433,7 +433,7 @@ export class LayeredIntentRouter {
     try {
       const result = await withTimeout(
         classifyIntent(question, transcript, assistantResponseCount),
-        80,
+        150,
         'slm'
       );
       return {
@@ -475,7 +475,7 @@ export class LayeredIntentRouter {
     try {
       const result = await withTimeout(
         this.semanticRouter.classify(question),
-        20,
+        50,
         'embedding'
       );
       return {
@@ -574,7 +574,9 @@ export class LayeredIntentRouter {
     }
 
     // Only return if score meets threshold
-    if (bestScore >= 0.65 && bestResult) {
+    // Lower threshold when fewer providers are available (partial ensemble)
+    const effectiveThreshold = validResults.length <= 2 ? 0.50 : 0.65;
+    if (bestScore >= effectiveThreshold && bestResult) {
       return bestResult;
     }
 

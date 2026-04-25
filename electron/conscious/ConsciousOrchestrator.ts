@@ -73,8 +73,8 @@ export interface ConsciousVerificationMetadata {
 }
 
 export class ConsciousOrchestrator {
-  private static readonly CIRCUIT_BREAKER_FAILURE_THRESHOLD = 3;
-  private static readonly CIRCUIT_BREAKER_COOLDOWN_MS = 60_000;
+  private static readonly CIRCUIT_BREAKER_FAILURE_THRESHOLD = 6;
+  private static readonly CIRCUIT_BREAKER_COOLDOWN_MS = 20_000;
 
   private readonly verifier = new ConsciousVerifier();
   private readonly retrievalOrchestrator: ConsciousRetrievalOrchestrator;
@@ -330,12 +330,17 @@ export class ConsciousOrchestrator {
       routedIntentResult
       && preRouteDecision.threadAction !== 'continue'
       && !hasReliableIntent
+      && !circuitOpen
     );
 
+    // When circuit breaker is open, still allow conscious mode via regex-based
+    // classification (preRouteDecision.qualifies) — only skip the expensive
+    // intent-based path. This prevents the circuit breaker from completely
+    // killing conscious mode when the intent router is flaky.
     let selectedRoute = selectAnswerRoute({
       explicitManual: false,
       explicitFollowUp: false,
-      consciousModeEnabled: this.session.isConsciousModeEnabled() && !shouldForceStandardRoute && !circuitOpen,
+      consciousModeEnabled: this.session.isConsciousModeEnabled() && !shouldForceStandardRoute,
       profileModeEnabled: !!input.knowledgeStatus?.activeMode,
       hasProfile: !!input.knowledgeStatus?.hasResume,
       hasKnowledgeData: !!input.knowledgeStatus?.hasResume || !!input.knowledgeStatus?.hasActiveJD,
@@ -361,7 +366,6 @@ export class ConsciousOrchestrator {
 
     const effectiveRoute: AnswerRoute = input.screenshotBackedLiveCodingTurn
       && this.session.isConsciousModeEnabled()
-      && !circuitOpen
       && !preRouteDecision.qualifies
       ? 'conscious_answer'
       : selectedRoute;
@@ -409,9 +413,7 @@ export class ConsciousOrchestrator {
       return this.skip();
     }
 
-    if (this.isCircuitOpen()) {
-      return { kind: 'fallback' };
-    }
+    const degradedMode = this.isCircuitOpen();
 
     try {
       const retrievalPack = this.retrievalOrchestrator.buildPack({
@@ -439,17 +441,23 @@ export class ConsciousOrchestrator {
       }
 
       const latestHypothesis = this.session.getLatestAnswerHypothesis();
-      const provenanceVerdict = this.provenanceVerifier.verify({
-        response: structuredResponse,
-        semanticContextBlock: this.session.getConsciousSemanticContext(),
-        evidenceContextBlock,
-        question: input.resolvedQuestion,
-        hypothesis: latestHypothesis,
-      });
-      if (!provenanceVerdict.ok) {
-        console.warn('[ConsciousOrchestrator] Continuation provenance verification failed:', provenanceVerdict.reason);
-        return this.fallback(`continuation_provenance:${provenanceVerdict.reason ?? 'unknown'}`);
+
+      // In degraded mode (circuit breaker open), skip provenance verification
+      let provenanceVerdict: { ok: boolean; reason?: string } = { ok: true };
+      if (!degradedMode) {
+        provenanceVerdict = this.provenanceVerifier.verify({
+          response: structuredResponse,
+          semanticContextBlock: this.session.getConsciousSemanticContext(),
+          evidenceContextBlock,
+          question: input.resolvedQuestion,
+          hypothesis: latestHypothesis,
+        });
+        if (!provenanceVerdict.ok) {
+          console.warn('[ConsciousOrchestrator] Continuation provenance verification failed:', provenanceVerdict.reason);
+          return this.fallback(`continuation_provenance:${provenanceVerdict.reason ?? 'unknown'}`);
+        }
       }
+
       const verification = await this.verifier.verify({
         response: structuredResponse,
         route: { qualifies: true, threadAction: 'continue' },
@@ -457,6 +465,7 @@ export class ConsciousOrchestrator {
         hypothesis: latestHypothesis,
         evidence: latestHypothesis?.evidence,
         question: input.resolvedQuestion,
+        skipJudge: degradedMode,
       });
       if (!verification.ok) {
         console.warn('[ConsciousOrchestrator] Continuation verification failed:', verification.reason);
@@ -475,7 +484,7 @@ export class ConsciousOrchestrator {
           verificationOk: verification.ok,
           verificationReason: verification.reason,
           deterministic: verification.deterministic,
-          judge: verification.judge,
+          judge: degradedMode ? 'skipped' : verification.judge,
         }),
       };
     } catch (error) {
@@ -499,9 +508,7 @@ export class ConsciousOrchestrator {
       return this.skip();
     }
 
-    if (this.isCircuitOpen()) {
-      return { kind: 'fallback' };
-    }
+    const degradedMode = this.isCircuitOpen();
 
     try {
       let structuredResponse: ConsciousModeStructuredResponse | null = null;
@@ -535,17 +542,29 @@ export class ConsciousOrchestrator {
       }
 
       const latestHypothesis = this.session.getLatestAnswerHypothesis();
-      const provenanceVerdict = this.provenanceVerifier.verify({
-        response: structuredResponse,
-        semanticContextBlock: this.session.getConsciousSemanticContext(),
-        evidenceContextBlock: this.session.getConsciousEvidenceContext(),
-        question: input.question,
-        hypothesis: latestHypothesis,
-      });
-      if (!provenanceVerdict.ok) {
-        console.warn('[ConsciousOrchestrator] Structured response provenance verification failed:', provenanceVerdict.reason);
-        return this.fallback(`reasoning_provenance:${provenanceVerdict.reason ?? 'unknown'}`);
+
+      // In degraded mode (circuit breaker open), skip provenance verification
+      // since it fails closed when semantic context is empty (no profile data).
+      // This prevents the circuit breaker from staying permanently open due to
+      // provenance failures on every question.
+      let provenanceVerdict: { ok: boolean; reason?: string } = { ok: true };
+      if (!degradedMode) {
+        provenanceVerdict = this.provenanceVerifier.verify({
+          response: structuredResponse,
+          semanticContextBlock: this.session.getConsciousSemanticContext(),
+          evidenceContextBlock: this.session.getConsciousEvidenceContext(),
+          question: input.question,
+          hypothesis: latestHypothesis,
+        });
+        if (!provenanceVerdict.ok) {
+          console.warn('[ConsciousOrchestrator] Structured response provenance verification failed:', provenanceVerdict.reason);
+          return this.fallback(`reasoning_provenance:${provenanceVerdict.reason ?? 'unknown'}`);
+        }
+      } else {
+        console.log('[ConsciousOrchestrator] Skipping provenance verification in degraded mode (circuit breaker open)');
       }
+
+      // In degraded mode, use rule-only verification (skip LLM judge)
       const verification = await this.verifier.verify({
         response: structuredResponse,
         route: input.route,
@@ -553,6 +572,7 @@ export class ConsciousOrchestrator {
         hypothesis: latestHypothesis,
         evidence: latestHypothesis?.evidence,
         question: input.question,
+        skipJudge: degradedMode,
       });
       if (!verification.ok) {
         console.warn('[ConsciousOrchestrator] Structured response verification failed:', verification.reason);
@@ -582,7 +602,7 @@ export class ConsciousOrchestrator {
           verificationOk: verification.ok,
           verificationReason: verification.reason,
           deterministic: verification.deterministic,
-          judge: verification.judge,
+          judge: degradedMode ? 'skipped' : verification.judge,
         }),
       };
     } catch (error) {

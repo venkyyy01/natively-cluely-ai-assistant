@@ -30,13 +30,13 @@ process.on('unhandledRejection', (reason: unknown, promise: Promise<unknown>): v
 // behind `NATIVELY_DEBUG_LOG=1` for non-development builds. Dev builds keep
 // file logging on for convenience.
 const isDev = process.env.NODE_ENV === "development";
-const fileLoggingExplicitlyEnabled = (() => {
+const fileLoggingExplicitlyDisabled = (() => {
   const raw = process.env.NATIVELY_DEBUG_LOG;
   if (raw === undefined) return false;
   const normalized = raw.trim().toLowerCase();
-  return normalized === '1' || normalized === 'true' || normalized === 'yes' || normalized === 'on';
+  return normalized === '0' || normalized === 'false' || normalized === 'no' || normalized === 'off';
 })();
-export const fileLoggingEnabled = isDev || fileLoggingExplicitlyEnabled;
+export const fileLoggingEnabled = isDev || !fileLoggingExplicitlyDisabled;
 
 export function buildLogFilePath(): string {
   const date = new Date().toISOString().slice(0, 10); // YYYY-MM-DD

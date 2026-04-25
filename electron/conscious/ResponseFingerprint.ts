@@ -15,9 +15,11 @@ export interface DuplicateCheckResult {
 export class ResponseFingerprinter {
   private recentFingerprints: ResponseFingerprintEntry[] = [];
   private readonly maxHistory: number;
+  private readonly minDuplicateGapMs: number;
 
-  constructor(maxHistory: number = 20) {
+  constructor(maxHistory: number = 20, minDuplicateGapMs: number = 30_000) {
     this.maxHistory = Math.max(1, maxHistory);
+    this.minDuplicateGapMs = minDuplicateGapMs;
   }
 
   fingerprint(text: string): string {
@@ -46,20 +48,28 @@ export class ResponseFingerprinter {
       return { isDupe: false };
     }
 
+    const now = Date.now();
     const normalizedContextKey = this.normalizeContextKey(contextKey);
     const candidateEntries = normalizedContextKey === null
       ? this.recentFingerprints
       : this.recentFingerprints.filter((entry) => entry.contextKey === normalizedContextKey);
 
+    // Only consider entries older than minDuplicateGapMs as duplicates.
+    // Recent entries (within the gap) are likely legitimate re-answers to
+    // the same question (e.g., interviewer asks again after a pause).
+    const eligibleEntries = candidateEntries.filter(
+      (entry) => now - entry.timestamp >= this.minDuplicateGapMs
+    );
+
     const hash = this.fingerprint(normalizedText);
-    const exact = candidateEntries.find((entry) => entry.hash === hash);
+    const exact = eligibleEntries.find((entry) => entry.hash === hash);
     if (exact) {
       return { isDupe: true, matchedPreview: exact.preview };
     }
 
     const firstSentence = normalizedText.split(/[.!?]/)[0]?.trim().toLowerCase() || '';
     if (firstSentence.length >= 12) {
-      const fuzzy = candidateEntries.find((entry) =>
+      const fuzzy = eligibleEntries.find((entry) =>
         entry.preview.toLowerCase().startsWith(firstSentence.slice(0, Math.min(40, firstSentence.length)))
       );
       if (fuzzy) {
