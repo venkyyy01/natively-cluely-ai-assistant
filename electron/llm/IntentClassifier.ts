@@ -33,6 +33,14 @@ export interface IntentResult {
   latencyMs?: number;
 }
 
+type SlmClassifierOverrideForTesting = (
+  text: string,
+  traceId?: string,
+  spanId?: string
+) => IntentResult | null | Promise<IntentResult | null>;
+
+let slmClassifierOverrideForTesting: SlmClassifierOverrideForTesting | null = null;
+
 /**
  * Answer shapes mapped to intents
  * This controls HOW the answer is structured, not just WHAT it says
@@ -47,6 +55,12 @@ const INTENT_ANSWER_SHAPES: Record<ConversationIntent, string> = {
     coding: 'Provide a FULL, complete, working and production-ready code implementation (including necessary boilerplate like Java imports/classes). Start with a brief approach description, then the fully runnable code block, then a concise explanation of why this approach works.',
     general: 'Respond naturally based on context. Keep it conversational and direct.'
 };
+
+export function __setSlmIntentClassifierForTesting(
+  override: SlmClassifierOverrideForTesting | null
+): void {
+  slmClassifierOverrideForTesting = override;
+}
 
 // ========================
 // Fine-Tuned SLM Classifier
@@ -202,6 +216,16 @@ class FineTunedClassifier {
   }
 
   async classify(text: string, traceId?: string, spanId?: string): Promise<IntentResult | null> {
+    if (slmClassifierOverrideForTesting) {
+      const overrideResult = await slmClassifierOverrideForTesting(text, traceId, spanId);
+      return overrideResult
+        ? {
+            ...overrideResult,
+            answerShape: INTENT_ANSWER_SHAPES[overrideResult.intent],
+          }
+        : null;
+    }
+
     await this.ensureLoaded();
     if (!this.pipe) return null;
 
@@ -520,6 +544,58 @@ export function detectIntentByContext(
 // ========================
 // Public API
 // ========================
+
+/**
+ * SLM-only classifier entrypoint for the layered router.
+ *
+ * Keep this separate from classifyIntent(): the legacy public API is regex-first
+ * for compatibility, while conscious mode needs a true model result in the SLM
+ * ensemble slot so regex can be evaluated independently.
+ */
+export async function classifyIntentBySlm(
+  lastInterviewerTurn: string | null,
+  traceId?: string,
+  spanId?: string
+): Promise<IntentResult | null> {
+  const startTime = Date.now();
+  const effectiveSpanId = spanId ?? (traceId ? `classify-slm-${startTime}` : undefined);
+
+  if (!lastInterviewerTurn || lastInterviewerTurn.trim().length <= 5) {
+    return null;
+  }
+
+  const slmResult = await FineTunedClassifier.getInstance().classify(
+    lastInterviewerTurn,
+    traceId,
+    effectiveSpanId
+  );
+
+  if (!slmResult) {
+    return null;
+  }
+
+  const result: IntentResult = {
+    ...slmResult,
+    latencyMs: Date.now() - startTime,
+  };
+
+  if (traceId) {
+    traceLogger.logIntentClassificationEvent(traceId, effectiveSpanId, 'completed', {
+      question: lastInterviewerTurn.substring(0, 200),
+      result: {
+        intent: result.intent,
+        confidence: result.confidence,
+        answerShape: result.answerShape,
+        provider: 'slm',
+        retryCount: 0,
+      },
+      modelUsed: 'slm',
+      tier: 1,
+    });
+  }
+
+  return result;
+}
 
 /**
  * Main intent classification function (async)

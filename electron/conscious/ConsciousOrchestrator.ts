@@ -254,9 +254,9 @@ export class ConsciousOrchestrator {
     const safePrefetchedIntent = ConsciousOrchestrator.isValidIntentResult(input.prefetchedIntent) ? input.prefetchedIntent : null;
     const circuitOpen = this.isCircuitOpen();
 
-    // Layered intent router: SLM → Intent Coordinator → Semantic Embedding → Regex → Context
-    // Uses prefetched intent (coordinator result) if available and reliable.
-    // Only active when conscious mode is enabled; disabled conscious mode falls through to regex.
+    // Layered intent router: prefetched coordinator result first, then the
+    // fast SetFit/SLM/embedding/regex ensemble. Reliable model classifiers
+    // take authority over regex cues; disabled conscious mode skips this path.
     let intentBasedQualifies = false;
     let routedIntentResult: IntentResult | null = null;
 

@@ -218,9 +218,9 @@ export class IntelligenceEngine extends EventEmitter {
     consciousAcceleration?.setSpeculativeExecutor((query, transcriptRevision, abortSignal) =>
       this.generateSpeculativeFastAnswerStream(query, transcriptRevision, abortSignal)
     );
-    // NAT-XXX: Prefetch uses LayeredIntentRouter parallel ensemble for best
-    // accuracy. Runs SetFit + SLM + Regex + Embedding simultaneously (~20-50ms),
-    // only falling back to foundation model if ensemble is uncertain.
+    // NAT-XXX: Prefetch uses the LayeredIntentRouter fast ensemble. It runs
+    // SetFit + SLM(model-only) + Regex + Embedding in parallel and lets
+    // reliable model classifiers take authority over heuristic regex cues.
     consciousAcceleration?.setIntentClassifier(async (query: string, _transcriptRevision: number) => {
       const router = (await import('./llm/LayeredIntentRouter')).LayeredIntentRouter.getInstance();
       const decision = await router.routeFast({

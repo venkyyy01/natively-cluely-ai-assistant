@@ -27,7 +27,7 @@
 
 import type { ConversationIntent, IntentResult } from './IntentClassifier';
 import {
-  classifyIntent,
+  classifyIntentBySlm,
   detectIntentByPattern,
   detectIntentByContext,
   getAnswerShapeGuidance,
@@ -173,7 +173,7 @@ export class LayeredIntentRouter {
     const [setFitResult, slmResult, regexResult, embeddingResult] = await Promise.all([
       // SetFit: domain-specific few-shot classifier
       this.runSetFit(input.question),
-      // SLM: general zero-shot classifier
+      // SLM: general zero-shot classifier, model-only so regex is independent
       this.runSLM(input.question, input.transcript, input.assistantResponseCount),
       // Regex: fast pattern matching
       this.runRegex(input.question),
@@ -432,7 +432,7 @@ export class LayeredIntentRouter {
     const start = Date.now();
     try {
       const result = await withTimeout(
-        classifyIntent(question, transcript, assistantResponseCount),
+        classifyIntentBySlm(question),
         150,
         'slm'
       );
@@ -501,19 +501,53 @@ export class LayeredIntentRouter {
    * Resolve ensemble: pick the best intent from multiple classifier results.
    *
    * Rules (in order):
-   * 1. STRONG CONSENSUS: ≥2 classifiers agree with confidence ≥ 0.72 → return that intent
-   * 2. HIGH CONFIDENCE SINGLE: 1 classifier ≥ 0.82, no contradiction → return it
-   * 3. WEIGHTED BEST: Score each result by (confidence × intent_weight × provider_bonus)
+   * 1. MODEL AUTHORITY: Reliable SetFit/SLM result wins over regex/embedding heuristics
+   * 2. STRONG CONSENSUS: ≥2 classifiers agree with confidence ≥ 0.72 → return that intent
+   * 3. HIGH CONFIDENCE SINGLE: 1 classifier ≥ 0.82, no contradiction → return it
+   * 4. WEIGHTED BEST: Score each result by (confidence × intent_weight × provider_bonus)
    *    - SetFit and SLM get higher weight than regex/embedding
    *    - Return highest scorer if ≥ 0.65
-   * 4. CONTRADICTION: High-confidence disagreement → return null (trigger foundation rescue)
-   * 5. UNCERTAIN: All below threshold → return null (trigger foundation rescue)
+   * 5. CONTRADICTION: High-confidence disagreement → return null (trigger foundation rescue)
+   * 6. UNCERTAIN: All below threshold → return null (trigger foundation rescue)
    */
   private resolveEnsemble(results: FastClassifierResult[]): IntentResult | null {
     const validResults = results
       .filter((r): r is FastClassifierResult & { result: IntentResult } => r.result !== null);
 
     if (validResults.length === 0) return null;
+
+    // Rule 1: SetFit/SLM are model classifiers and should not be overruled by
+    // regex/embedding heuristics once they meet the calibrated reliability bar.
+    const authoritativeModelResults = validResults.filter(
+      (r) => (r.provider === 'setfit' || r.provider === 'slm') && isReliableIntent(r.result)
+    );
+    const reliableSetFit = authoritativeModelResults.find((r) => r.provider === 'setfit');
+    const reliableSlm = authoritativeModelResults.find((r) => r.provider === 'slm');
+
+    if (reliableSetFit && reliableSlm) {
+      if (reliableSetFit.result.intent === reliableSlm.result.intent) {
+        return {
+          intent: reliableSlm.result.intent,
+          confidence: Math.min(
+            Math.max(reliableSetFit.result.confidence, reliableSlm.result.confidence) + 0.04,
+            0.96
+          ),
+          answerShape: getAnswerShapeGuidance(reliableSlm.result.intent),
+        };
+      }
+
+      // Real model disagreement should be resolved by the coordinator in full
+      // routing. routeFast will still use provider-prioritized fallback below.
+      return null;
+    }
+
+    if (reliableSetFit) {
+      return reliableSetFit.result;
+    }
+
+    if (reliableSlm) {
+      return reliableSlm.result;
+    }
 
     // Group by intent
     const byIntent = new Map<string, FastClassifierResult[]>();
@@ -601,6 +635,18 @@ export class LayeredIntentRouter {
       embedding: 2,
       regex: 3,
     };
+
+    const reliableModelResults = validResults.filter(
+      (r) => (r.provider === 'setfit' || r.provider === 'slm') && isReliableIntent(r.result)
+    );
+
+    if (reliableModelResults.length > 0) {
+      return reliableModelResults.sort((a, b) => {
+        const confDiff = b.result.confidence - a.result.confidence;
+        if (Math.abs(confDiff) > 0.1) return confDiff;
+        return (providerRank[a.provider] ?? 99) - (providerRank[b.provider] ?? 99);
+      })[0]?.result ?? null;
+    }
 
     return validResults.sort((a, b) => {
       const confDiff = b.result.confidence - a.result.confidence;
