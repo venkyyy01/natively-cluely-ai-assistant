@@ -6,10 +6,15 @@ import { MacosVirtualDisplayClient } from '../stealth/MacosVirtualDisplayClient'
 test('NAT-032: client generates a nonce on construction', () => {
   const client = new MacosVirtualDisplayClient({ helperPath: '/tmp/helper' });
   const nonce = (client as any).nonce as string;
+  const capability = (client as any).capability as string;
   assert.ok(typeof nonce === 'string');
   assert.ok(nonce.length > 0);
+  assert.ok(typeof capability === 'string');
+  assert.ok(capability.length > 0);
+  assert.notEqual(capability, nonce);
   // UUID v4 pattern
   assert.ok(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(nonce));
+  assert.ok(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(capability));
 });
 
 test('NAT-032: signature verification fails for unsigned helper on darwin', async () => {
@@ -151,4 +156,77 @@ test('NAT-032: flushServerResponses allows backward-compatible responses without
   assert.equal((client as any).pending.has('req-1'), false);
 
   clearTimeout(pending.timeout);
+});
+
+test('NAT-032: serve mode sends capability hello before authenticated requests', async () => {
+  const client = new MacosVirtualDisplayClient({
+    helperPath: '/tmp/helper',
+    skipSignatureVerification: true,
+  });
+  const internal = client as any;
+  const writes: Array<Record<string, unknown>> = [];
+
+  internal.ensureServerProcess = () => Promise.resolve({
+    stdin: {
+      write(chunk: string) {
+        const payload = JSON.parse(chunk.trim()) as Record<string, unknown>;
+        writes.push(payload);
+        process.nextTick(() => {
+          if (payload.command === 'hello') {
+            internal.stdoutBuffer += `${JSON.stringify({
+              id: payload.id,
+              ok: true,
+              result: { authenticated: true, capability: payload.capability },
+              nonce: payload.nonce,
+              capability: payload.capability,
+            })}\n`;
+          } else {
+            internal.stdoutBuffer += `${JSON.stringify({
+              id: payload.id,
+              ok: true,
+              result: { ready: true },
+              nonce: payload.nonce,
+              capability: payload.capability,
+            })}\n`;
+          }
+          internal.flushServerResponses();
+        });
+      },
+    },
+  });
+
+  const result = await internal.runHelperProcess({ command: 'status' });
+
+  assert.equal(result.exitCode, 0);
+  assert.deepEqual(writes.map((write) => write.command), ['hello', 'status']);
+  assert.equal(writes[0]?.capability, writes[1]?.capability);
+  assert.equal(internal.helperProtocolState, 'authenticated');
+});
+
+test('NAT-032: strict protocol rejects authenticated responses without capability', () => {
+  const client = new MacosVirtualDisplayClient({
+    helperPath: '/tmp/helper',
+    strictProtocolAuth: true,
+  });
+  const internal = client as any;
+  const nonce = internal.nonce as string;
+  let rejected: Error | null = null;
+  let killed = false;
+
+  internal.helperProtocolState = 'authenticated';
+  internal.serverProcess = { kill: () => { killed = true; } };
+  internal.pending.set('req-1', {
+    resolve: () => {},
+    reject: (error: Error) => {
+      rejected = error;
+    },
+    timeout: setTimeout(() => undefined, 1000),
+  });
+  internal.stdoutBuffer = `${JSON.stringify({ id: 'req-1', ok: true, result: { ready: true }, nonce })}\n`;
+  internal.flushServerResponses();
+
+  assert.ok(rejected);
+  assert.match(rejected?.message ?? '', /unauthenticated response/);
+  assert.equal(internal.pending.size, 0);
+  assert.equal(killed, true);
 });

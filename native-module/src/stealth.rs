@@ -1,8 +1,67 @@
 use napi::bindgen_prelude::Buffer;
 
+/// Represents information about a visible window.
+/// Used by the Electron side for capture detection instead of spawning Python.
+#[derive(Debug)]
+#[napi(object)]
+pub struct WindowInfo {
+    pub window_number: i32,
+    pub owner_name: String,
+    pub owner_pid: i32,
+    pub window_title: String,
+    pub is_on_screen: bool,
+    pub sharing_state: i32,
+    pub alpha: f64,
+}
+
+const BROWSER_OWNER_PATTERNS: &[&str] = &[
+    "google chrome",
+    "chromium",
+    "microsoft edge",
+    "brave browser",
+    "opera",
+    "arc",
+];
+
+const CAPTURE_TITLE_PATTERNS: &[&str] = &[
+    "sharing",
+    "presenting",
+    "screen",
+    "broadcast",
+    "meet.google.com",
+    "teams.microsoft.com",
+    "zoom.us",
+    "webex.com",
+    "app.slack.com",
+    "discord.com",
+];
+
+fn is_browser_capture_window(window: &WindowInfo) -> bool {
+    let owner = window.owner_name.to_ascii_lowercase();
+    let title = window.window_title.to_ascii_lowercase();
+
+    BROWSER_OWNER_PATTERNS
+        .iter()
+        .any(|pattern| owner.contains(pattern))
+        && CAPTURE_TITLE_PATTERNS
+            .iter()
+            .any(|pattern| title.contains(pattern))
+}
+
 #[cfg(target_os = "macos")]
 mod macos {
+    use super::{is_browser_capture_window, WindowInfo};
     use cidre::{arc, ns, objc};
+    use core_foundation::base::{CFType, TCFType};
+    use core_foundation::boolean::CFBoolean;
+    use core_foundation::dictionary::{CFDictionary, CFDictionaryRef};
+    use core_foundation::number::CFNumber;
+    use core_foundation::string::{CFString, CFStringRef};
+    use core_graphics::window::{
+        copy_window_info, kCGNullWindowID, kCGWindowAlpha, kCGWindowIsOnscreen,
+        kCGWindowListOptionAll, kCGWindowName, kCGWindowNumber, kCGWindowOwnerName,
+        kCGWindowOwnerPID, kCGWindowSharingState,
+    };
     use libc::{c_char, c_void, dlsym, RTLD_DEFAULT};
     use std::ptr::NonNull;
 
@@ -61,6 +120,12 @@ mod macos {
     pub fn remove_private(window_number: u32) -> napi::Result<()> {
         let _ = find_window_or_err(window_number)?;
         apply_cgs(window_number, K_CGS_NORMAL_SHARE, "remove")
+    }
+
+    pub fn set_level(window_number: u32, level: i32) -> napi::Result<()> {
+        let mut window = find_window_or_err(window_number)?;
+        window.set_level(ns::WindowLevel(level as isize));
+        Ok(())
     }
 
     pub fn verify(window_number: u32) -> napi::Result<i32> {
@@ -128,8 +193,10 @@ mod macos {
 
             let connection_fn: CGSMainConnectionIDFn =
                 std::mem::transmute::<*mut c_void, CGSMainConnectionIDFn>(connection_ptr.as_ptr());
-            let sharing_fn: CGSSetWindowSharingStateFn =
-                std::mem::transmute::<*mut c_void, CGSSetWindowSharingStateFn>(sharing_ptr.as_ptr());
+            let sharing_fn: CGSSetWindowSharingStateFn = std::mem::transmute::<
+                *mut c_void,
+                CGSSetWindowSharingStateFn,
+            >(sharing_ptr.as_ptr());
 
             let connection_id = connection_fn();
             let result = sharing_fn(connection_id, window_number as i32, sharing_state);
@@ -143,10 +210,97 @@ mod macos {
 
         Ok(())
     }
+
+    pub fn list_visible_windows() -> napi::Result<Vec<WindowInfo>> {
+        list_window_info()
+    }
+
+    pub fn check_browser_capture_windows() -> napi::Result<bool> {
+        Ok(list_window_info()?.iter().any(is_browser_capture_window))
+    }
+
+    fn list_window_info() -> napi::Result<Vec<WindowInfo>> {
+        let array = copy_window_info(kCGWindowListOptionAll, kCGNullWindowID).ok_or_else(|| {
+            napi::Error::from_reason("CGWindowListCopyWindowInfo returned null".to_string())
+        })?;
+
+        let mut windows = Vec::with_capacity(array.len() as usize);
+        for raw_value in array.get_all_values() {
+            if raw_value.is_null() {
+                continue;
+            }
+
+            let dictionary = unsafe {
+                CFDictionary::<CFString, CFType>::wrap_under_get_rule(raw_value as CFDictionaryRef)
+            };
+            if let Some(window) = window_info_from_dictionary(&dictionary) {
+                windows.push(window);
+            }
+        }
+
+        Ok(windows)
+    }
+
+    fn window_info_from_dictionary(
+        dictionary: &CFDictionary<CFString, CFType>,
+    ) -> Option<WindowInfo> {
+        let window_number = get_i32(dictionary, unsafe { kCGWindowNumber })?;
+        if window_number <= 0 {
+            return None;
+        }
+
+        Some(WindowInfo {
+            window_number,
+            owner_name: get_string(dictionary, unsafe { kCGWindowOwnerName }),
+            owner_pid: get_i32(dictionary, unsafe { kCGWindowOwnerPID }).unwrap_or(-1),
+            window_title: get_string(dictionary, unsafe { kCGWindowName }),
+            is_on_screen: get_bool(dictionary, unsafe { kCGWindowIsOnscreen }).unwrap_or(false),
+            sharing_state: get_i32(dictionary, unsafe { kCGWindowSharingState }).unwrap_or(0),
+            alpha: get_f64(dictionary, unsafe { kCGWindowAlpha }).unwrap_or(1.0),
+        })
+    }
+
+    fn get_value<'a>(
+        dictionary: &'a CFDictionary<CFString, CFType>,
+        key: CFStringRef,
+    ) -> Option<core_foundation::base::ItemRef<'a, CFType>> {
+        dictionary.find(key)
+    }
+
+    fn get_i32(dictionary: &CFDictionary<CFString, CFType>, key: CFStringRef) -> Option<i32> {
+        get_value(dictionary, key)
+            .and_then(|value| value.downcast::<CFNumber>())
+            .and_then(|number| number.to_i32())
+    }
+
+    fn get_f64(dictionary: &CFDictionary<CFString, CFType>, key: CFStringRef) -> Option<f64> {
+        get_value(dictionary, key)
+            .and_then(|value| value.downcast::<CFNumber>())
+            .and_then(|number| number.to_f64())
+    }
+
+    fn get_bool(dictionary: &CFDictionary<CFString, CFType>, key: CFStringRef) -> Option<bool> {
+        if let Some(boolean) =
+            get_value(dictionary, key).and_then(|value| value.downcast::<CFBoolean>())
+        {
+            return Some(bool::from(boolean));
+        }
+
+        get_i32(dictionary, key).map(|value| value != 0)
+    }
+
+    fn get_string(dictionary: &CFDictionary<CFString, CFType>, key: CFStringRef) -> String {
+        get_value(dictionary, key)
+            .and_then(|value| value.downcast::<CFString>())
+            .map(|string| string.to_string())
+            .unwrap_or_default()
+    }
 }
 
 #[cfg(not(target_os = "macos"))]
 mod macos {
+    use super::WindowInfo;
+
     pub fn apply(_window_number: u32) -> napi::Result<()> {
         Ok(())
     }
@@ -163,8 +317,20 @@ mod macos {
         Ok(())
     }
 
+    pub fn set_level(_window_number: u32, _level: i32) -> napi::Result<()> {
+        Ok(())
+    }
+
     pub fn verify(_window_number: u32) -> napi::Result<i32> {
         Ok(-1)
+    }
+
+    pub fn list_visible_windows() -> napi::Result<Vec<WindowInfo>> {
+        Ok(Vec::new())
+    }
+
+    pub fn check_browser_capture_windows() -> napi::Result<bool> {
+        Ok(false)
     }
 }
 
@@ -282,6 +448,11 @@ pub fn remove_macos_private_window_stealth(window_number: u32) -> napi::Result<(
 }
 
 #[napi]
+pub fn set_macos_window_level(window_number: u32, level: i32) -> napi::Result<()> {
+    macos::set_level(window_number, level)
+}
+
+#[napi]
 pub fn verify_macos_stealth_state(window_number: u32) -> napi::Result<i32> {
     macos::verify(window_number)
 }
@@ -305,41 +476,49 @@ pub fn verify_windows_stealth_state(hwnd_buffer: Buffer) -> napi::Result<i32> {
 // S-8: CGWindow List Functions (Native replacement for Python3 subprocess)
 // ============================================================================
 
-/// Represents information about a visible window.
-/// Used by the Electron side for capture detection instead of spawning Python.
-#[derive(Debug)]
-#[napi(object)]
-pub struct WindowInfo {
-    pub window_number: i32,
-    pub owner_name: String,
-    pub owner_pid: i32,
-    pub window_title: String,
-    pub is_on_screen: bool,
-    pub sharing_state: i32,
-}
-
 /// List all visible windows using Core Graphics.
 /// This replaces the Python3 subprocess call to Quartz.CGWindowListCopyWindowInfo.
-/// 
-/// NOTE: This is a placeholder implementation. Full CGWindowList integration
-/// requires Core Graphics C API bindings that are complex to implement.
-/// The Electron side has fallback to the existing Python3 approach.
 #[napi]
 pub fn list_visible_windows() -> napi::Result<Vec<WindowInfo>> {
-    // S-8: Stub implementation - Electron side has fallback
-    // Full implementation would use CGWindowListCopyWindowInfo via FFI
-    Ok(Vec::new())
+    macos::list_visible_windows()
 }
 
 /// Check if any browser-based capture is active based on window titles.
 /// Combines the Quartz window enumeration + browser check in a single native call.
-///
-/// NOTE: This is a placeholder implementation. Full CGWindowList integration
-/// requires Core Graphics C API bindings that are complex to implement.
-/// The Electron side has fallback to the existing Python3 approach.
 #[napi]
 pub fn check_browser_capture_windows() -> napi::Result<bool> {
-    // S-8: Stub implementation - Electron side has fallback
-    // Full implementation would iterate CGWindowList via FFI
-    Ok(false)
+    macos::check_browser_capture_windows()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{is_browser_capture_window, WindowInfo};
+
+    fn window(owner_name: &str, window_title: &str) -> WindowInfo {
+        WindowInfo {
+            window_number: 1,
+            owner_name: owner_name.to_string(),
+            owner_pid: 42,
+            window_title: window_title.to_string(),
+            is_on_screen: true,
+            sharing_state: 1,
+            alpha: 1.0,
+        }
+    }
+
+    #[test]
+    fn browser_capture_detection_requires_browser_owner_and_capture_title() {
+        assert!(is_browser_capture_window(&window(
+            "Google Chrome",
+            "meet.google.com is sharing your screen",
+        )));
+        assert!(!is_browser_capture_window(&window(
+            "Google Chrome",
+            "Inbox",
+        )));
+        assert!(!is_browser_capture_window(&window(
+            "Notes",
+            "screen broadcast",
+        )));
+    }
 }

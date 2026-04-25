@@ -3,6 +3,33 @@ import assert from 'node:assert/strict';
 
 import { ChromiumCaptureDetector } from '../stealth/ChromiumCaptureDetector';
 
+const silentLogger = {
+  log() {},
+  warn() {},
+  error() {},
+};
+
+test('ChromiumCaptureDetector treats native false as authoritative without Python fallback', async () => {
+  const detector = new ChromiumCaptureDetector({
+    platform: 'darwin',
+    logger: silentLogger,
+  });
+  const execCalls: Array<{ command: string; args: string[] }> = [];
+
+  (detector as any).nativeModule = {
+    checkBrowserCaptureWindows: () => false,
+  };
+  (detector as any).execPromise = async (command: string, args: string[]) => {
+    execCalls.push({ command, args });
+    return 'CAPTURE_DETECTED';
+  };
+
+  const result = await (detector as any).checkBrowserWindowTitleCapture();
+
+  assert.equal(result, false);
+  assert.deepEqual(execCalls, []);
+});
+
 test('NAT-027: single-signal event does not trigger capture-active', async () => {
   const detector = new ChromiumCaptureDetector({
     platform: 'darwin',

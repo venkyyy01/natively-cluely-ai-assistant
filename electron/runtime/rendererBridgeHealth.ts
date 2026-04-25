@@ -1,13 +1,14 @@
 import type { BrowserWindow } from 'electron';
 
-export type RendererBridgeHealthResult = 'ready' | 'reloading' | 'failed';
+export type RendererBridgeHealthResult = 'ready' | 'reloading' | 'failed' | 'destroyed' | 'unprobeable';
+export type RendererBridgeSettledResult = Exclude<RendererBridgeHealthResult, 'reloading'>;
 
 type RendererBridgeMonitorOptions = {
   expectedPreloadPath: string;
   url: string;
   logger?: Pick<Console, 'log' | 'warn' | 'error'>;
   maxReloadAttempts?: number;
-  onSettled?: (result: Exclude<RendererBridgeHealthResult, 'reloading'>) => void;
+  onSettled?: (result: RendererBridgeSettledResult) => void;
 };
 
 type ProbeableWebContents = Electron.WebContents & {
@@ -33,8 +34,14 @@ async function probeRendererBridge(
   const maxReloadAttempts = options.maxReloadAttempts ?? 1;
   const webContents = window.webContents as ProbeableWebContents;
 
-  if (window.isDestroyed() || typeof webContents.executeJavaScript !== 'function') {
-    return 'ready';
+  if (window.isDestroyed()) {
+    logger.warn(`[RendererBridge] ${label} bridge probe skipped: window destroyed`);
+    return 'destroyed';
+  }
+
+  if (typeof webContents.executeJavaScript !== 'function') {
+    logger.warn(`[RendererBridge] ${label} bridge probe skipped: executeJavaScript unavailable`);
+    return 'unprobeable';
   }
 
   try {
@@ -72,7 +79,9 @@ export function attachRendererBridgeMonitor(
         return;
       }
 
-      window.webContents.removeListener('did-finish-load', handleDidFinishLoad);
+      if (!window.isDestroyed()) {
+        window.webContents.removeListener('did-finish-load', handleDidFinishLoad);
+      }
       options.onSettled?.(result);
     });
   };

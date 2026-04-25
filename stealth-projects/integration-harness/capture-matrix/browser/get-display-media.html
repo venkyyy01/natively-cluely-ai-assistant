@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Natively getDisplayMedia Capture Matrix</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      font-family: Menlo, Consolas, monospace;
+      background: #050505;
+      color: #f7f7f7;
+    }
+
+    html,
+    body {
+      height: 100%;
+      margin: 0;
+    }
+
+    body {
+      display: grid;
+      grid-template-rows: auto 1fr;
+      gap: 16px;
+      padding: 24px;
+      box-sizing: border-box;
+    }
+
+    button,
+    input {
+      font: inherit;
+    }
+
+    button {
+      border: 1px solid #f7f7f7;
+      background: #111;
+      color: #f7f7f7;
+      padding: 8px 12px;
+    }
+
+    .toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .canary {
+      width: min(720px, 90vw);
+      aspect-ratio: 14 / 5;
+      display: grid;
+      grid-template-columns: repeat(14, 1fr);
+      border: 8px solid #fff;
+    }
+
+    .canary span:nth-child(odd) {
+      background: #ff00ff;
+    }
+
+    .canary span:nth-child(even) {
+      background: #00ff00;
+    }
+
+    .stage {
+      display: grid;
+      align-content: center;
+      justify-items: center;
+      gap: 24px;
+    }
+
+    video {
+      max-width: min(720px, 90vw);
+      border: 1px solid #444;
+      background: #000;
+    }
+  </style>
+</head>
+<body>
+  <div class="toolbar">
+    <label>Canary <input id="token" value="NATIVELY_CAPTURE_CANARY_CONTROL" size="42"></label>
+    <button id="start">Start getDisplayMedia</button>
+    <span id="status">idle</span>
+  </div>
+  <main class="stage">
+    <div id="canary" class="canary" aria-label="capture canary"></div>
+    <code id="visible-token">NATIVELY_CAPTURE_CANARY_CONTROL</code>
+    <video id="preview" autoplay muted playsinline></video>
+  </main>
+  <script>
+    const canary = document.getElementById('canary');
+    const token = document.getElementById('token');
+    const visibleToken = document.getElementById('visible-token');
+    const status = document.getElementById('status');
+    const preview = document.getElementById('preview');
+    const start = document.getElementById('start');
+
+    for (let index = 0; index < 70; index += 1) {
+      canary.appendChild(document.createElement('span'));
+    }
+
+    token.addEventListener('input', () => {
+      visibleToken.textContent = token.value;
+      document.title = token.value;
+    });
+
+    start.addEventListener('click', async () => {
+      try {
+        status.textContent = 'requesting';
+        const stream = await navigator.mediaDevices.getDisplayMedia({
+          video: true,
+          audio: false,
+        });
+        preview.srcObject = stream;
+        status.textContent = 'capturing';
+      } catch (error) {
+        status.textContent = error instanceof Error ? error.message : String(error);
+      }
+    });
+  </script>
+</body>
+</html>

@@ -2823,30 +2823,106 @@ setThemeMode: (mode) => this.themeManager.setMode(mode as import('../ThemeManage
   }
 
   private pendingUndetectableState: boolean | null = null;
+  private undetectableToggleMutex: Promise<void> = Promise.resolve();
 
   public async setUndetectableAsync(state: boolean): Promise<void> {
-    if (this.isUndetectable === state || this.pendingUndetectableState === state) return;
+    if (this.pendingUndetectableState === state) return;
+    if (this.pendingUndetectableState === null && this.isUndetectable === state) return;
 
     this.pendingUndetectableState = state;
+    const previousToggle = this.undetectableToggleMutex ?? Promise.resolve();
+    const runToggle = async (): Promise<void> => {
+      console.log(`[Stealth] setUndetectable(${state}) called`);
+      const startedAt = Date.now();
 
-    console.log(`[Stealth] setUndetectable(${state}) called`);
-    const startedAt = Date.now();
+      try {
+        if (this.isUndetectable === state) {
+          return;
+        }
 
-    try {
-      const stealthSupervisor = this.runtimeCoordinator.getSupervisor<StealthSupervisor>('stealth')
-      if (stealthSupervisor.getState() === 'idle') {
-        await stealthSupervisor.start()
-      }
-      await stealthSupervisor.setEnabled(state)
+        const stealthSupervisor = this.runtimeCoordinator.getSupervisor<StealthSupervisor>('stealth')
+        if (stealthSupervisor.getState() === 'idle') {
+          await stealthSupervisor.start()
+        }
 
-      this.applyUndetectableState(state, startedAt, {
-        runtime: 'coordinator',
-      })
-    } finally {
-      if (this.pendingUndetectableState === state) {
-        this.pendingUndetectableState = null;
+        if (state) {
+          this.hideForUndetectableEnable()
+          this.syncWindowStealthProtection(true)
+        }
+
+        await stealthSupervisor.setEnabled(state)
+
+        if (state) {
+          this.verifyUndetectableEnableProtection()
+        } else {
+          this.prepareUndetectableDisableProtection()
+        }
+
+        this.applyUndetectableState(state, startedAt, {
+          runtime: 'coordinator',
+        })
+      } finally {
+        if (this.pendingUndetectableState === state) {
+          this.pendingUndetectableState = null;
+        }
       }
     }
+
+    const operation = previousToggle.then(runToggle, runToggle);
+    this.undetectableToggleMutex = operation.catch(() => {});
+    await operation;
+  }
+
+  private isStrictProtectionEnabled(): boolean {
+    return process.env.NATIVELY_STRICT_PROTECTION === '1'
+  }
+
+  private hideForUndetectableEnable(): void {
+    this.stealthManager.recordProtectionEvent('hide-requested', {
+      source: 'AppState.hideForUndetectableEnable',
+      reason: 'undetectable_enable',
+      windowRole: 'unknown',
+    })
+    this.windowHelper.hideMainWindow()
+    this.settingsWindowHelper.closeWindow()
+    this.modelSelectorWindowHelper.hideWindow()
+  }
+
+  private verifyUndetectableEnableProtection(): void {
+    const verified = this.verifyStealthProtection()
+    if (verified) {
+      this.stealthManager.recordProtectionEvent('verification-passed', {
+        source: 'AppState.verifyUndetectableEnableProtection',
+        reason: 'undetectable_enable',
+        windowRole: 'unknown',
+      })
+      return
+    }
+
+    const reason = 'Invisible mode protection could not be verified; sensitive content remains hidden.'
+    this.stealthManager.recordProtectionEvent('verification-failed', {
+      source: 'AppState.verifyUndetectableEnableProtection',
+      reason,
+      windowRole: 'unknown',
+      strict: this.isStrictProtectionEnabled(),
+    })
+
+    if (!this.isStrictProtectionEnabled()) {
+      console.warn(`[Stealth] Observe-only: ${reason}`)
+      return
+    }
+
+    this.setPrivacyShieldFault('undetectable_enable_verification_failed', reason)
+    throw new Error(reason)
+  }
+
+  private prepareUndetectableDisableProtection(): void {
+    this.stealthManager.recordProtectionEvent('recovery-requested', {
+      source: 'AppState.prepareUndetectableDisableProtection',
+      reason: 'undetectable_disabled',
+      windowRole: 'unknown',
+      strict: this.isStrictProtectionEnabled(),
+    })
   }
 
   private applyUndetectableState(
@@ -2855,7 +2931,7 @@ setThemeMode: (mode) => this.themeManager.setMode(mode as import('../ThemeManage
     metadata: Record<string, unknown> = {},
   ): void {
     this.isUndetectable = state
-    this.syncWindowStealthProtection(state)
+    this.syncWindowStealthProtection(state || (!state && this.isStrictProtectionEnabled()))
     if (!state) {
       this.clearPrivacyShieldFault()
     }
@@ -2867,9 +2943,9 @@ setThemeMode: (mode) => this.themeManager.setMode(mode as import('../ThemeManage
     // stale blur-reset or app.setName() callbacks cannot fire after a rapid toggle.
     this.clearDisguiseTimers()
 
-    // Broadcast state change to all relevant windows
-    this._broadcastToAllWindows('undetectable-changed', state);
     this.requestVisibilityIntent(state ? 'protected_shield' : 'visible_app', state ? 'undetectable_enabled' : 'undetectable_disabled')
+    // Broadcast only after the canonical main-process transition succeeds.
+    this._broadcastToAllWindows('undetectable-changed', state);
     this.performanceInstrumentation.recordDuration('stealth.toggle', startedAt, {
       enabled: state,
       ...metadata,
@@ -3067,6 +3143,11 @@ setThemeMode: (mode) => this.themeManager.setMode(mode as import('../ThemeManage
 
   private activateContainment(source: string, reason: string): void {
     const normalizedReason = reason || source || 'privacy containment active'
+    this.stealthManager.recordProtectionEvent('fault', {
+      source: `AppState.activateContainment:${source}`,
+      reason: normalizedReason,
+      windowRole: 'unknown',
+    })
     this.privacyShieldFaultReason = normalizedReason
     this.visibilityIntent = 'faulted_shield'
     this.setContainmentActive(true, normalizedReason)
@@ -3088,6 +3169,11 @@ setThemeMode: (mode) => this.themeManager.setMode(mode as import('../ThemeManage
     this.visibilityIntent = intent
 
     if (intent === 'visible_app') {
+      this.stealthManager.recordProtectionEvent('show-requested', {
+        source: `AppState.requestVisibilityIntent:${source}`,
+        reason: intent,
+        windowRole: 'unknown',
+      })
       if (!this.privacyShieldFaultReason) {
         this.setContainmentActive(false, source)
       }
@@ -3098,6 +3184,11 @@ setThemeMode: (mode) => this.themeManager.setMode(mode as import('../ThemeManage
     }
 
     this.setContainmentActive(true, source)
+    this.stealthManager.recordProtectionEvent('hide-requested', {
+      source: `AppState.requestVisibilityIntent:${source}`,
+      reason: intent,
+      windowRole: 'unknown',
+    })
     this.abortActiveInferenceStreams(source)
     this.syncWindowStealthProtection(true)
     this.syncPrivacyShieldState()

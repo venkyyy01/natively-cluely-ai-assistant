@@ -1,5 +1,7 @@
 import type { VirtualDisplayCoordinator } from './MacosVirtualDisplayClient';
 import type { NativeStealthBindings, StealthFeatureFlags, StealthWindowRole } from './StealthManager';
+import type { ProtectionStateMachine } from './ProtectionStateMachine';
+import type { VisibilityController } from './VisibilityController';
 
 export type DisplayBounds = { x: number; y: number; width: number; height: number };
 export type DisplayInfo = { id: number; workArea: DisplayBounds };
@@ -20,6 +22,8 @@ export interface StealthManagerDependencies {
   virtualDisplayCoordinator?: VirtualDisplayCoordinator | null;
   captureToolPatterns?: RegExp[];
   processEnumerator?: (command: string, args: string[]) => Promise<string>;
+  protectionStateMachine?: ProtectionStateMachine;
+  visibilityController?: VisibilityController;
 }
 
 export interface StealthCapableWindow {

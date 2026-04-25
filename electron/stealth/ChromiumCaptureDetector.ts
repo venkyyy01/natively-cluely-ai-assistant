@@ -7,6 +7,7 @@ import {
   withStderr,
 } from './pythonFallback';
 import type { NativeStealthBindings } from './StealthManager';
+import { decideStealthFallback } from './StealthFallbackPolicy';
 
 interface ChromiumProcessInfo {
   pid: number;
@@ -234,7 +235,7 @@ export class ChromiumCaptureDetector extends EventEmitter {
   private nativeModule: NativeStealthBindings | null = null;
 
   private async checkBrowserWindowTitleCapture(): Promise<boolean> {
-    // S-8: Try native module first, fall back to Python3 subprocess if unavailable or returns false
+    // S-8: Native result is authoritative. False means no matching browser capture window.
     try {
       if (!this.nativeModule) {
         this.nativeModule = loadNativeStealthModule({ retryOnFailure: false });
@@ -246,14 +247,27 @@ export class ChromiumCaptureDetector extends EventEmitter {
           this.logger.log('[ChromiumCaptureDetector] S-8: Native detected capture');
           return true;
         }
-        // Native returned false - may need Python to confirm (native might not see all cases)
-        this.logger.log('[ChromiumCaptureDetector] S-8: Native returned false, double-checking with Python');
+        this.logger.log('[ChromiumCaptureDetector] S-8: Native returned no browser capture windows');
+        return false;
       }
     } catch (nativeError) {
-      this.logger.warn('[ChromiumCaptureDetector] S-8: Native checkBrowserCaptureWindows failed:', nativeError);
+      this.logger.warn('[ChromiumCaptureDetector] S-8: Native checkBrowserCaptureWindows failed, checking fallback policy:', nativeError);
     }
 
-    // S-8: Python3 fallback - reliable but slower
+    // Development-only fallback for local diagnosis when the native module is unavailable.
+    const pythonPolicy = decideStealthFallback({ kind: 'python' });
+    if (!pythonPolicy.allow) {
+      this.logPythonFallbackNoticeOnce(
+        `policy:${pythonPolicy.warning}`,
+        `[ChromiumCaptureDetector] S-8: Python fallback blocked by policy (${pythonPolicy.reason}); continuing without browser-title corroboration`
+      );
+      return false;
+    }
+    this.logPythonFallbackNoticeOnce(
+      `policy:${pythonPolicy.warning}`,
+      `[ChromiumCaptureDetector] S-8: Python fallback policy: ${pythonPolicy.reason}`
+    );
+
     try {
       this.logger.log('[ChromiumCaptureDetector] S-8: Using Python fallback for browser capture detection');
       const stdout = await this.execPromise('python3', ['-c', `

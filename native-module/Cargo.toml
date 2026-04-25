@@ -25,6 +25,8 @@ libc = "0.2"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 cidre = { version = "0.11.10", features = ["ca", "cm", "av", "cat", "dispatch", "ns", "sc", "cf", "blocks", "objc"] }
+core-foundation = "0.10"
+core-graphics = "0.24"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 wasapi = "0.13.0"

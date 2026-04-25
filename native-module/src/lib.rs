@@ -6,8 +6,8 @@ extern crate napi_derive;
 use std::any::Any;
 use std::panic::AssertUnwindSafe;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::sync::Arc;
 use std::sync::mpsc;
+use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -85,7 +85,10 @@ fn join_thread_with_timeout(handle: thread::JoinHandle<()>, timeout: Duration, l
     match rx.recv_timeout(timeout) {
         Ok(_) => {}
         Err(mpsc::RecvTimeoutError::Timeout) => {
-            eprintln!("[{}] DSP thread did not exit in {:?}, detaching", label, timeout);
+            eprintln!(
+                "[{}] DSP thread did not exit in {:?}, detaching",
+                label, timeout
+            );
         }
         Err(mpsc::RecvTimeoutError::Disconnected) => {
             eprintln!("[{}] DSP thread join channel disconnected", label);
@@ -159,8 +162,13 @@ mod tests {
                 observed_clone.store(true, Ordering::SeqCst);
             }
         });
-        handle.join().expect("worker thread should not abort process");
-        assert!(observed.load(Ordering::SeqCst), "panic boundary should report Err");
+        handle
+            .join()
+            .expect("worker thread should not abort process");
+        assert!(
+            observed.load(Ordering::SeqCst),
+            "panic boundary should report Err"
+        );
     }
 }
 
@@ -248,95 +256,94 @@ impl SystemAudioCapture {
         // This prevents the 5-7 second main-thread block from SCK initialization.
         self.capture_thread = Some(thread::spawn(move || {
             let dsp_body = move || {
-            // 1. SCK Init (takes 5-7 seconds — runs OFF main thread)
-            println!("[SystemAudioCapture] Background init starting...");
-            let input = match speaker::SpeakerInput::new(device_id) {
-                Ok(i) => i,
-                Err(e) => {
-                    println!("[SystemAudioCapture] Init failed: {}. Trying default...", e);
-                    match speaker::SpeakerInput::new(None) {
-                        Ok(i) => i,
-                        Err(e2) => {
-                            eprintln!(
-                                "[SystemAudioCapture] FATAL: All init attempts failed: {}",
-                                e2
-                            );
-                            return;
+                // 1. SCK Init (takes 5-7 seconds — runs OFF main thread)
+                println!("[SystemAudioCapture] Background init starting...");
+                let input = match speaker::SpeakerInput::new(device_id) {
+                    Ok(i) => i,
+                    Err(e) => {
+                        println!("[SystemAudioCapture] Init failed: {}. Trying default...", e);
+                        match speaker::SpeakerInput::new(None) {
+                            Ok(i) => i,
+                            Err(e2) => {
+                                eprintln!(
+                                    "[SystemAudioCapture] FATAL: All init attempts failed: {}",
+                                    e2
+                                );
+                                return;
+                            }
                         }
                     }
-                }
-            };
+                };
 
-            let mut stream = input.stream();
-            let mut consumer = match stream.take_consumer() {
-                Some(c) => c,
-                None => {
-                    eprintln!("[SystemAudioCapture] FATAL: Failed to get consumer");
-                    return;
-                }
-            };
+                let mut stream = input.stream();
+                let mut consumer = match stream.take_consumer() {
+                    Some(c) => c,
+                    None => {
+                        eprintln!("[SystemAudioCapture] FATAL: Failed to get consumer");
+                        return;
+                    }
+                };
 
-            let native_rate = stream.sample_rate();
-            // Publish the real native rate so JS can read it via get_sample_rate()
-            sample_rate_shared.store(native_rate, Ordering::Release);
-            println!(
+                let native_rate = stream.sample_rate();
+                // Publish the real native rate so JS can read it via get_sample_rate()
+                sample_rate_shared.store(native_rate, Ordering::Release);
+                println!(
                 "[SystemAudioCapture] Background init complete. Initial Rate: {}Hz. DSP starting.",
                 native_rate
             );
 
-            // 2. DSP loop with silence suppression + WebRTC VAD
-            let mut suppressor = SilenceSuppressor::new(SilenceSuppressionConfig {
-                native_sample_rate: native_rate,
-                ..SilenceSuppressionConfig::for_system_audio()
-            });
+                // 2. DSP loop with silence suppression + WebRTC VAD
+                let mut suppressor = SilenceSuppressor::new(SilenceSuppressionConfig {
+                    native_sample_rate: native_rate,
+                    ..SilenceSuppressionConfig::for_system_audio()
+                });
 
-            // 20ms chunks at native rate (e.g. 960 samples at 48kHz)
-            let chunk_size = (native_rate as usize / 1000) * 20;
-            let mut pcm_resampler = match PolyphaseResampler::new(native_rate, output_sr, chunk_size)
-            {
-                Ok(r) => r,
-                Err(e) => {
-                    eprintln!(
-                        "[SystemAudioCapture] FATAL: polyphase resampler ({}Hz → {}Hz): {}",
-                        native_rate, output_sr, e
-                    );
-                    return;
-                }
-            };
-            let silence_out = silence_pcm_le_bytes_20ms(output_sr);
+                // 20ms chunks at native rate (e.g. 960 samples at 48kHz)
+                let chunk_size = (native_rate as usize / 1000) * 20;
+                let mut pcm_resampler =
+                    match PolyphaseResampler::new(native_rate, output_sr, chunk_size) {
+                        Ok(r) => r,
+                        Err(e) => {
+                            eprintln!(
+                                "[SystemAudioCapture] FATAL: polyphase resampler ({}Hz → {}Hz): {}",
+                                native_rate, output_sr, e
+                            );
+                            return;
+                        }
+                    };
+                let silence_out = silence_pcm_le_bytes_20ms(output_sr);
 
-            let mut frame_buffer: Vec<i16> = Vec::with_capacity(chunk_size * 4);
-            let mut raw_batch: Vec<f32> = Vec::with_capacity(4096);
-            let mut last_emit_at = Instant::now();
+                let mut frame_buffer: Vec<i16> = Vec::with_capacity(chunk_size * 4);
+                let mut raw_batch: Vec<f32> = Vec::with_capacity(4096);
+                let mut last_emit_at = Instant::now();
 
-            loop {
-                if stop_signal.load(Ordering::Relaxed) {
-                    break;
-                }
-
-                // Drain ALL available samples from ring buffer (lock-free)
-                while let Some(sample) = consumer.try_pop() {
-                    raw_batch.push(sample);
-                }
-
-                // Convert f32 -> i16 at native sample rate
-                if !raw_batch.is_empty() {
-                    for &f in &raw_batch {
-                        let scaled = (f * 32767.0).clamp(-32768.0, 32767.0);
-                        frame_buffer.push(scaled as i16);
+                loop {
+                    if stop_signal.load(Ordering::Relaxed) {
+                        break;
                     }
-                    raw_batch.clear();
-                }
 
-                // Process in 20ms chunks through the two-stage gate
-                while frame_buffer.len() >= chunk_size {
-                    let frame: Vec<i16> = frame_buffer.drain(0..chunk_size).collect();
+                    // Drain ALL available samples from ring buffer (lock-free)
+                    while let Some(sample) = consumer.try_pop() {
+                        raw_batch.push(sample);
+                    }
 
-                    let (action, speech_ended) = suppressor.process(&frame);
+                    // Convert f32 -> i16 at native sample rate
+                    if !raw_batch.is_empty() {
+                        for &f in &raw_batch {
+                            let scaled = (f * 32767.0).clamp(-32768.0, 32767.0);
+                            frame_buffer.push(scaled as i16);
+                        }
+                        raw_batch.clear();
+                    }
 
-                    match action {
-                        FrameAction::Send(data) => {
-                            match pcm_resampler.push_i16(&data) {
+                    // Process in 20ms chunks through the two-stage gate
+                    while frame_buffer.len() >= chunk_size {
+                        let frame: Vec<i16> = frame_buffer.drain(0..chunk_size).collect();
+
+                        let (action, speech_ended) = suppressor.process(&frame);
+
+                        match action {
+                            FrameAction::Send(data) => match pcm_resampler.push_i16(&data) {
                                 Ok(out) if !out.is_empty() => {
                                     let bytes = i16_slice_to_le_bytes(&out);
                                     tsfn.call(
@@ -347,43 +354,42 @@ impl SystemAudioCapture {
                                 }
                                 Ok(_) => {}
                                 Err(e) => eprintln!("[SystemAudioCapture] resample: {}", e),
+                            },
+                            FrameAction::SendSilence => {
+                                tsfn.call(
+                                    Ok(Buffer::from(silence_out.clone())),
+                                    ThreadsafeFunctionCallMode::NonBlocking,
+                                );
+                                last_emit_at = Instant::now();
+                            }
+                            FrameAction::Suppress => {
+                                // Do nothing — bandwidth saving
                             }
                         }
-                        FrameAction::SendSilence => {
-                            tsfn.call(
-                                Ok(Buffer::from(silence_out.clone())),
-                                ThreadsafeFunctionCallMode::NonBlocking,
-                            );
-                            last_emit_at = Instant::now();
-                        }
-                        FrameAction::Suppress => {
-                            // Do nothing — bandwidth saving
+
+                        if speech_ended {
+                            if let Some(ref se_tsfn) = speech_ended_tsfn {
+                                se_tsfn.call(Ok(true), ThreadsafeFunctionCallMode::NonBlocking);
+                            }
                         }
                     }
 
-                    if speech_ended {
-                        if let Some(ref se_tsfn) = speech_ended_tsfn {
-                            se_tsfn.call(Ok(true), ThreadsafeFunctionCallMode::NonBlocking);
-                        }
+                    if raw_batch.is_empty()
+                        && frame_buffer.is_empty()
+                        && last_emit_at.elapsed() >= Duration::from_millis(100)
+                    {
+                        tsfn.call(
+                            Ok(Buffer::from(silence_out.clone())),
+                            ThreadsafeFunctionCallMode::NonBlocking,
+                        );
+                        last_emit_at = Instant::now();
                     }
+
+                    thread::sleep(Duration::from_millis(DSP_POLL_MS));
                 }
 
-                if raw_batch.is_empty()
-                    && frame_buffer.is_empty()
-                    && last_emit_at.elapsed() >= Duration::from_millis(100)
-                {
-                    tsfn.call(
-                        Ok(Buffer::from(silence_out.clone())),
-                        ThreadsafeFunctionCallMode::NonBlocking,
-                    );
-                    last_emit_at = Instant::now();
-                }
-
-                thread::sleep(Duration::from_millis(DSP_POLL_MS));
-            }
-
-            println!("[SystemAudioCapture] DSP thread stopped.");
-            // stream is dropped here → SpeakerStream::Drop calls stop_with_ch
+                println!("[SystemAudioCapture] DSP thread stopped.");
+                // stream is dropped here → SpeakerStream::Drop calls stop_with_ch
             };
 
             // Run the DSP body under a panic boundary so a fault in audio
@@ -537,59 +543,58 @@ impl MicrophoneCapture {
         // DSP thread with silence suppression + WebRTC VAD
         self.capture_thread = Some(thread::spawn(move || {
             let dsp_body = move || {
-            let mut suppressor = SilenceSuppressor::new(SilenceSuppressionConfig {
-                native_sample_rate: native_rate,
-                ..SilenceSuppressionConfig::for_microphone()
-            });
+                let mut suppressor = SilenceSuppressor::new(SilenceSuppressionConfig {
+                    native_sample_rate: native_rate,
+                    ..SilenceSuppressionConfig::for_microphone()
+                });
 
-            // 20ms chunks at native rate
-            let chunk_size = (native_rate as usize / 1000) * 20;
-            let mut pcm_resampler = match PolyphaseResampler::new(native_rate, output_sr, chunk_size)
-            {
-                Ok(r) => r,
-                Err(e) => {
-                    eprintln!(
-                        "[MicrophoneCapture] FATAL: polyphase resampler ({}Hz → {}Hz): {}",
-                        native_rate, output_sr, e
-                    );
-                    return;
-                }
-            };
-            let silence_out = silence_pcm_le_bytes_20ms(output_sr);
+                // 20ms chunks at native rate
+                let chunk_size = (native_rate as usize / 1000) * 20;
+                let mut pcm_resampler =
+                    match PolyphaseResampler::new(native_rate, output_sr, chunk_size) {
+                        Ok(r) => r,
+                        Err(e) => {
+                            eprintln!(
+                                "[MicrophoneCapture] FATAL: polyphase resampler ({}Hz → {}Hz): {}",
+                                native_rate, output_sr, e
+                            );
+                            return;
+                        }
+                    };
+                let silence_out = silence_pcm_le_bytes_20ms(output_sr);
 
-            let mut frame_buffer: Vec<i16> = Vec::with_capacity(chunk_size * 4);
-            let mut raw_batch: Vec<f32> = Vec::with_capacity(4096);
+                let mut frame_buffer: Vec<i16> = Vec::with_capacity(chunk_size * 4);
+                let mut raw_batch: Vec<f32> = Vec::with_capacity(4096);
 
-            println!(
+                println!(
                 "[MicrophoneCapture] DSP thread started (VAD + suppression + resample {}→{}Hz, chunk={})",
                 native_rate, output_sr, chunk_size
             );
 
-            loop {
-                if stop_signal.load(Ordering::Relaxed) {
-                    break;
-                }
-
-                while let Some(sample) = consumer.try_pop() {
-                    raw_batch.push(sample);
-                }
-
-                if !raw_batch.is_empty() {
-                    for &f in &raw_batch {
-                        let scaled = (f * 32767.0).clamp(-32768.0, 32767.0);
-                        frame_buffer.push(scaled as i16);
+                loop {
+                    if stop_signal.load(Ordering::Relaxed) {
+                        break;
                     }
-                    raw_batch.clear();
-                }
 
-                while frame_buffer.len() >= chunk_size {
-                    let frame: Vec<i16> = frame_buffer.drain(0..chunk_size).collect();
+                    while let Some(sample) = consumer.try_pop() {
+                        raw_batch.push(sample);
+                    }
 
-                    let (action, speech_ended) = suppressor.process(&frame);
+                    if !raw_batch.is_empty() {
+                        for &f in &raw_batch {
+                            let scaled = (f * 32767.0).clamp(-32768.0, 32767.0);
+                            frame_buffer.push(scaled as i16);
+                        }
+                        raw_batch.clear();
+                    }
 
-                    match action {
-                        FrameAction::Send(data) => {
-                            match pcm_resampler.push_i16(&data) {
+                    while frame_buffer.len() >= chunk_size {
+                        let frame: Vec<i16> = frame_buffer.drain(0..chunk_size).collect();
+
+                        let (action, speech_ended) = suppressor.process(&frame);
+
+                        match action {
+                            FrameAction::Send(data) => match pcm_resampler.push_i16(&data) {
                                 Ok(out) if !out.is_empty() => {
                                     let bytes = i16_slice_to_le_bytes(&out);
                                     tsfn.call(
@@ -599,30 +604,29 @@ impl MicrophoneCapture {
                                 }
                                 Ok(_) => {}
                                 Err(e) => eprintln!("[MicrophoneCapture] resample: {}", e),
+                            },
+                            FrameAction::SendSilence => {
+                                tsfn.call(
+                                    Ok(Buffer::from(silence_out.clone())),
+                                    ThreadsafeFunctionCallMode::NonBlocking,
+                                );
+                            }
+                            FrameAction::Suppress => {
+                                // Do nothing
                             }
                         }
-                        FrameAction::SendSilence => {
-                            tsfn.call(
-                                Ok(Buffer::from(silence_out.clone())),
-                                ThreadsafeFunctionCallMode::NonBlocking,
-                            );
-                        }
-                        FrameAction::Suppress => {
-                            // Do nothing
+
+                        if speech_ended {
+                            if let Some(ref se_tsfn) = speech_ended_tsfn {
+                                se_tsfn.call(Ok(true), ThreadsafeFunctionCallMode::NonBlocking);
+                            }
                         }
                     }
 
-                    if speech_ended {
-                        if let Some(ref se_tsfn) = speech_ended_tsfn {
-                            se_tsfn.call(Ok(true), ThreadsafeFunctionCallMode::NonBlocking);
-                        }
-                    }
+                    thread::sleep(Duration::from_millis(DSP_POLL_MS));
                 }
 
-                thread::sleep(Duration::from_millis(DSP_POLL_MS));
-            }
-
-            println!("[MicrophoneCapture] DSP thread stopped.");
+                println!("[MicrophoneCapture] DSP thread stopped.");
             };
 
             // Run the DSP body under a panic boundary so a fault in audio

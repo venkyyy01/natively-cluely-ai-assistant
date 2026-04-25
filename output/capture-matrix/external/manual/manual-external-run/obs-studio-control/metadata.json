@@ -1,0 +1,33 @@
+{
+  "row": {
+    "id": "obs-studio-control",
+    "platform": "darwin",
+    "osVersion": "Darwin 25.3.0",
+    "appVersion": "local-dev",
+    "captureTool": "obs-display-capture",
+    "mode": "manual",
+    "monitors": 1,
+    "strict": false,
+    "surface": "unprotected-canary-control",
+    "expectedResult": "visible",
+    "canaryToken": "NATIVELY_CAPTURE_CANARY_CONTROL",
+    "externalAppName": "OBS Studio",
+    "externalAppVersion": "unknown",
+    "externalCaptureMode": "display-capture"
+  },
+  "adapter": "manual-external-capture",
+  "actualResult": "skipped",
+  "passed": false,
+  "reason": "manual external capture artifact is missing",
+  "artifactPaths": {
+    "metadata": "/Users/venkatasai/Downloads/natively-cluely-ai-assistant/.worktrees/todo-completion/output/capture-matrix/external/manual/manual-external-run/obs-studio-control/metadata.json",
+    "log": "/Users/venkatasai/Downloads/natively-cluely-ai-assistant/.worktrees/todo-completion/output/capture-matrix/external/manual/manual-external-run/obs-studio-control/capture.log"
+  },
+  "artifactMetadata": {
+    "platform": "darwin",
+    "externalAppName": "OBS Studio",
+    "externalAppVersion": "unknown",
+    "externalCaptureMode": "display-capture",
+    "artifactProvided": false
+  }
+}

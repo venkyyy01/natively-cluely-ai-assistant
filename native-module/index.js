@@ -310,7 +310,7 @@ if (!nativeBinding) {
   throw new Error(`Failed to load native binding`)
 }
 
-const { getHardwareId, verifyGumroadKey, applyMacosWindowStealth, removeMacosWindowStealth, applyMacosPrivateWindowStealth, removeMacosPrivateWindowStealth, verifyMacosStealthState, applyWindowsWindowStealth, removeWindowsWindowStealth, verifyWindowsStealthState, listVisibleWindows, checkBrowserCaptureWindows, SystemAudioCapture, MicrophoneCapture, getInputDevices, getOutputDevices } = nativeBinding
+const { getHardwareId, verifyGumroadKey, applyMacosWindowStealth, removeMacosWindowStealth, applyMacosPrivateWindowStealth, removeMacosPrivateWindowStealth, setMacosWindowLevel, verifyMacosStealthState, applyWindowsWindowStealth, removeWindowsWindowStealth, verifyWindowsStealthState, listVisibleWindows, checkBrowserCaptureWindows, SystemAudioCapture, MicrophoneCapture, getInputDevices, getOutputDevices } = nativeBinding
 
 module.exports.getHardwareId = getHardwareId
 module.exports.verifyGumroadKey = verifyGumroadKey
@@ -318,6 +318,7 @@ module.exports.applyMacosWindowStealth = applyMacosWindowStealth
 module.exports.removeMacosWindowStealth = removeMacosWindowStealth
 module.exports.applyMacosPrivateWindowStealth = applyMacosPrivateWindowStealth
 module.exports.removeMacosPrivateWindowStealth = removeMacosPrivateWindowStealth
+module.exports.setMacosWindowLevel = setMacosWindowLevel
 module.exports.verifyMacosStealthState = verifyMacosStealthState
 module.exports.applyWindowsWindowStealth = applyWindowsWindowStealth
 module.exports.removeWindowsWindowStealth = removeWindowsWindowStealth

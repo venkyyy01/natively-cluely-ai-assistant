@@ -18,7 +18,12 @@ impl SpeakerInput {
     pub fn new(device_id: Option<String>) -> Result<Self> {
         let force_sck = device_id.as_deref() == Some("sck");
         let allow_sck_fallback = std::env::var("NATIVELY_ALLOW_SCK_AUDIO_FALLBACK")
-            .map(|value| matches!(value.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+            .map(|value| {
+                matches!(
+                    value.trim().to_ascii_lowercase().as_str(),
+                    "1" | "true" | "yes" | "on"
+                )
+            })
             .unwrap_or(false);
 
         if !force_sck {

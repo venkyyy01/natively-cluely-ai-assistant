@@ -164,6 +164,18 @@ describe('StealthManager', () => {
     assert.deepStrictEqual(calls, ['apply:42', 'apply:42', 'apply:42', 'apply:42']);
   });
 
+  it('records observe-only protection violations without blocking application', () => {
+    const win = new FakeWindow();
+    win.visible = true;
+    const manager = new StealthManager({ enabled: true }, { platform: 'darwin', logger: silentLogger, nativeModule: null });
+
+    manager.applyToWindow(win as any, true, { role: 'primary' });
+
+    const snapshot = manager.getProtectionStateSnapshot();
+    assert.equal(win.contentProtectionCalls.length > 0, true);
+    assert.equal(snapshot.violations.some((violation) => violation.type === 'protecting-visible-window'), true);
+  });
+
   it('applies auxiliary UI hardening on macOS windows', () => {
     const nativeModule: NativeStealthBindings = {
       applyMacosWindowStealth(windowNumber: number) {
@@ -686,7 +698,9 @@ describe('StealthManager', () => {
     );
 
     (manager as any).nativeModule = {
-      listVisibleWindows: (): Array<{ windowNumber: number; ownerName: string; ownerPid: number; windowTitle: string; isOnScreen: boolean; sharingState: number }> => [],
+      listVisibleWindows: () => {
+        throw new Error('native unavailable');
+      },
     };
 
     await (manager as any).pollCGWindowVisibility();
@@ -1204,8 +1218,36 @@ describe('StealthManager', () => {
     ]);
   });
 
-  it('treats shareable CG windows as visible to capture using native with Python fallback', async () => {
-    // S-8: Native is primary, Python is reliable fallback
+  it('treats native shareable CG windows as visible to capture without Python fallback', async () => {
+    let processEnumeratorCalled = false;
+    const manager = new StealthManager(
+      { enabled: true },
+      {
+        platform: 'darwin',
+        logger: silentLogger,
+        processEnumerator: async (): Promise<string> => {
+          processEnumeratorCalled = true;
+          return '12345\n67890\n';
+        },
+      },
+    );
+
+    (manager as any).nativeModule = {
+      listVisibleWindows: () => [
+        { windowNumber: 12345, ownerName: 'Natively', ownerPid: 1, windowTitle: 'Protected', isOnScreen: true, sharingState: 1, alpha: 1 },
+        { windowNumber: 22222, ownerName: 'Hidden', ownerPid: 2, windowTitle: 'Hidden', isOnScreen: true, sharingState: 1, alpha: 0 },
+        { windowNumber: 33333, ownerName: 'Private', ownerPid: 3, windowTitle: 'Private', isOnScreen: true, sharingState: 0, alpha: 1 },
+      ],
+    };
+
+    const result = await (manager as any).getWindowNumbersVisibleToCapture();
+
+    assert.ok(result instanceof Set, 'should return a Set');
+    assert.deepEqual(Array.from(result), [12345]);
+    assert.equal(processEnumeratorCalled, false);
+  });
+
+  it('uses Python capture fallback only when native enumeration fails in development', async () => {
     let embeddedScript = '';
     const manager = new StealthManager(
       { enabled: true },
@@ -1219,18 +1261,66 @@ describe('StealthManager', () => {
       },
     );
 
-    // Mock native module to return empty (forcing fallback)
-    (manager as any).nativeModule = { listVisibleWindows: (): Array<{ windowNumber: number; ownerName: string; ownerPid: number; windowTitle: string; isOnScreen: boolean; sharingState: number }> => [] };
+    (manager as any).nativeModule = {
+      listVisibleWindows: () => {
+        throw new Error('native unavailable');
+      },
+    };
 
     const result = await (manager as any).getWindowNumbersVisibleToCapture();
 
-    // Should have fallen back to Python
     assert.ok(result instanceof Set, 'should return a Set');
     assert.ok(embeddedScript.includes('Quartz'), 'should use Python Quartz when native fails');
     assert.ok(embeddedScript.includes('sharing_state'), 'should check sharing_state in Python');
     assert.strictEqual(result.size, 2);
     assert.ok(result.has(12345));
     assert.ok(result.has(67890));
+  });
+
+  it('blocks Python capture fallback in strict production mode', async () => {
+    const previousNodeEnv = process.env.NODE_ENV;
+    const previousStrict = process.env.NATIVELY_STRICT_PROTECTION;
+    process.env.NODE_ENV = 'production';
+    process.env.NATIVELY_STRICT_PROTECTION = '1';
+
+    try {
+      let processEnumeratorCalled = false;
+      const manager = new StealthManager(
+        { enabled: true },
+        {
+          platform: 'darwin',
+          logger: silentLogger,
+          processEnumerator: async (): Promise<string> => {
+            processEnumeratorCalled = true;
+            return '12345\n';
+          },
+        },
+      );
+
+      (manager as any).nativeModule = {
+        listVisibleWindows: () => {
+          throw new Error('native unavailable');
+        },
+      };
+
+      const result = await (manager as any).getWindowNumbersVisibleToCapture();
+
+      assert.ok(result instanceof Set);
+      assert.equal(result.size, 0);
+      assert.equal(processEnumeratorCalled, false);
+      assert.ok(manager.getStealthDegradationWarnings().includes('stealth_python_fallback_blocked'));
+    } finally {
+      if (previousNodeEnv === undefined) {
+        delete process.env.NODE_ENV;
+      } else {
+        process.env.NODE_ENV = previousNodeEnv;
+      }
+      if (previousStrict === undefined) {
+        delete process.env.NATIVELY_STRICT_PROTECTION;
+      } else {
+        process.env.NATIVELY_STRICT_PROTECTION = previousStrict;
+      }
+    }
   });
 
   it('compares macOS versions using both major and minor components', () => {

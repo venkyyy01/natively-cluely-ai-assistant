@@ -9,11 +9,16 @@ const silentLogger = {
   error() {},
 };
 
-test('MacosStealthEnhancer runs python with a raw script argument', async () => {
+test('MacosStealthEnhancer applies level and sharing protection through native bindings', async () => {
   const calls: Array<{ command: string; args: string[] }> = [];
+  const nativeCalls: string[] = [];
   const enhancer = new MacosStealthEnhancer({
     platform: 'darwin',
     logger: silentLogger,
+    nativeModule: {
+      setMacosWindowLevel: (windowNumber, level) => nativeCalls.push(`level:${windowNumber}:${level}`),
+      applyMacosWindowStealth: (windowNumber) => nativeCalls.push(`apply:${windowNumber}`),
+    },
     commandRunner: async (command, args) => {
       calls.push({ command, args });
       return '';
@@ -23,41 +28,44 @@ test('MacosStealthEnhancer runs python with a raw script argument', async () => 
   const applied = await enhancer.enhanceWindowProtection(101);
 
   assert.equal(applied, true);
-  assert.equal(calls.length, 2);
-  for (const call of calls) {
-    assert.equal(call.command, 'python3');
-    assert.deepEqual(call.args[0], '-c');
-    assert.match(call.args[1] ?? '', /window_number = 101/);
-    assert.equal(call.args[1]?.startsWith("'"), false);
-    assert.equal(call.args[1]?.endsWith("'"), false);
-  }
+  assert.deepEqual(nativeCalls, ['level:101:19', 'apply:101']);
+  assert.deepEqual(calls, []);
 });
 
-test('NAT-028: enhanceWindowProtection uses utility window level (19)', async () => {
+test('MacosStealthEnhancer removes sharing protection through native bindings', async () => {
   const calls: Array<{ command: string; args: string[] }> = [];
+  const nativeCalls: string[] = [];
   const enhancer = new MacosStealthEnhancer({
     platform: 'darwin',
     logger: silentLogger,
+    nativeModule: {
+      removeMacosWindowStealth: (windowNumber) => nativeCalls.push(`remove:${windowNumber}`),
+    },
     commandRunner: async (command, args) => {
       calls.push({ command, args });
       return '';
     },
   });
 
-  const applied = await enhancer.enhanceWindowProtection(202);
+  await enhancer.removeEnhancedProtection(202);
 
-  assert.equal(applied, true);
-  // First call is applyWindowLevel, second is disableWindowSharing
-  assert.equal(calls.length, 2);
-  const levelScript = calls[0].args[1] ?? '';
-  assert.match(levelScript, /level = 19/);
+  assert.deepEqual(nativeCalls, ['remove:202']);
+  assert.deepEqual(calls, []);
 });
 
-test('MacosStealthEnhancer rejects invalid window numbers before spawning python', async () => {
+test('MacosStealthEnhancer rejects invalid window numbers before native calls', async () => {
   const calls: Array<{ command: string; args: string[] }> = [];
   const enhancer = new MacosStealthEnhancer({
     platform: 'darwin',
     logger: silentLogger,
+    nativeModule: {
+      setMacosWindowLevel: () => {
+        throw new Error('should not be called');
+      },
+      applyMacosWindowStealth: () => {
+        throw new Error('should not be called');
+      },
+    },
     commandRunner: async (command, args) => {
       calls.push({ command, args });
       return '';
@@ -68,4 +76,40 @@ test('MacosStealthEnhancer rejects invalid window numbers before spawning python
 
   assert.equal(applied, false);
   assert.deepEqual(calls, []);
+});
+
+test('MacosStealthEnhancer blocks python fallback in strict production mode', async () => {
+  const previousNodeEnv = process.env.NODE_ENV;
+  const previousStrict = process.env.NATIVELY_STRICT_PROTECTION;
+  process.env.NODE_ENV = 'production';
+  process.env.NATIVELY_STRICT_PROTECTION = '1';
+
+  try {
+    const calls: Array<{ command: string; args: string[] }> = [];
+    const enhancer = new MacosStealthEnhancer({
+      platform: 'darwin',
+      logger: silentLogger,
+      nativeModule: null,
+      commandRunner: async (command, args) => {
+        calls.push({ command, args });
+        return '';
+      },
+    });
+
+    const applied = await enhancer.enhanceWindowProtection(303);
+
+    assert.equal(applied, false);
+    assert.deepEqual(calls, []);
+  } finally {
+    if (previousNodeEnv === undefined) {
+      delete process.env.NODE_ENV;
+    } else {
+      process.env.NODE_ENV = previousNodeEnv;
+    }
+    if (previousStrict === undefined) {
+      delete process.env.NATIVELY_STRICT_PROTECTION;
+    } else {
+      process.env.NATIVELY_STRICT_PROTECTION = previousStrict;
+    }
+  }
 });

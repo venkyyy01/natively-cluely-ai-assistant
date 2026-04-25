@@ -186,6 +186,35 @@ test('StealthRuntime reports content runtime faults through onFault callback', a
   assert.deepEqual(faults, ['content-window-crashed', 'content-render-gone:crashed']);
 });
 
+test('StealthRuntime treats an unprobeable content bridge as a runtime fault', async () => {
+  const faults: string[] = [];
+  const created: FakeWindow[] = [];
+  const runtime = new StealthRuntime({
+    startUrl: 'http://localhost:5180?window=launcher',
+    stealthManager: { applyToWindow() {} } as never,
+    createWindow: (options) => {
+      const win = new FakeWindow(created.length + 51, options as Record<string, unknown>);
+      created.push(win);
+      return win as never;
+    },
+    shellHtmlPath: '/tmp/shell.html',
+    preloadPath: '/tmp/preload.js',
+    shellPreloadPath: '/tmp/shellPreload.js',
+    ipcMain: new EventEmitter() as never,
+    logger: { log() {}, warn() {}, error() {} },
+    onFault: (reason) => {
+      faults.push(reason);
+    },
+  });
+
+  runtime.createPrimaryStealthSurface({ width: 100, height: 100, webPreferences: {} });
+  created[0]?.webContents.emit('did-finish-load');
+
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.deepEqual(faults, ['content-preload-bridge-unprobeable']);
+});
+
 test('StealthRuntime forwards shell runtime heartbeat signals through onHeartbeat callback', async () => {
   const heartbeats: string[] = [];
   const ipcBus = new EventEmitter();

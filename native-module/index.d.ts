@@ -7,14 +7,6 @@
 export declare function getHardwareId(): string
 /** Open build compatibility shim - always resolves successfully. */
 export declare function verifyGumroadKey(licenseKey: string): Promise<unknown>
-export declare function applyMacosWindowStealth(windowNumber: number): void
-export declare function removeMacosWindowStealth(windowNumber: number): void
-export declare function applyMacosPrivateWindowStealth(windowNumber: number): void
-export declare function removeMacosPrivateWindowStealth(windowNumber: number): void
-export declare function verifyMacosStealthState(windowNumber: number): number
-export declare function applyWindowsWindowStealth(hwndBuffer: Buffer): void
-export declare function removeWindowsWindowStealth(hwndBuffer: Buffer): void
-export declare function verifyWindowsStealthState(hwndBuffer: Buffer): number
 /**
  * Represents information about a visible window.
  * Used by the Electron side for capture detection instead of spawning Python.
@@ -26,23 +18,25 @@ export interface WindowInfo {
   windowTitle: string
   isOnScreen: boolean
   sharingState: number
+  alpha: number
 }
+export declare function applyMacosWindowStealth(windowNumber: number): void
+export declare function removeMacosWindowStealth(windowNumber: number): void
+export declare function applyMacosPrivateWindowStealth(windowNumber: number): void
+export declare function removeMacosPrivateWindowStealth(windowNumber: number): void
+export declare function setMacosWindowLevel(windowNumber: number, level: number): void
+export declare function verifyMacosStealthState(windowNumber: number): number
+export declare function applyWindowsWindowStealth(hwndBuffer: Buffer): void
+export declare function removeWindowsWindowStealth(hwndBuffer: Buffer): void
+export declare function verifyWindowsStealthState(hwndBuffer: Buffer): number
 /**
  * List all visible windows using Core Graphics.
  * This replaces the Python3 subprocess call to Quartz.CGWindowListCopyWindowInfo.
- *
- * NOTE: This is a placeholder implementation. Full CGWindowList integration
- * requires Core Graphics C API bindings that are complex to implement.
- * The Electron side has fallback to the existing Python3 approach.
  */
 export declare function listVisibleWindows(): Array<WindowInfo>
 /**
  * Check if any browser-based capture is active based on window titles.
  * Combines the Quartz window enumeration + browser check in a single native call.
- *
- * NOTE: This is a placeholder implementation. Full CGWindowList integration
- * requires Core Graphics C API bindings that are complex to implement.
- * The Electron side has fallback to the existing Python3 approach.
  */
 export declare function checkBrowserCaptureWindows(): boolean
 export interface AudioDeviceInfo {

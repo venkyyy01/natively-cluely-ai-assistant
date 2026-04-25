@@ -160,7 +160,8 @@ impl SilenceSuppressor {
         let decimation_factor = config.native_sample_rate as f64 / 16000.0;
         let vad_mode_name = vad_mode_label(&config.vad_mode);
 
-        let vad = Vad::new_with_rate_and_mode(VadSampleRate::Rate16kHz, vad_mode_value(&config.vad_mode));
+        let vad =
+            Vad::new_with_rate_and_mode(VadSampleRate::Rate16kHz, vad_mode_value(&config.vad_mode));
 
         println!(
             "[SilenceSuppressor] Created: threshold={} (adaptive), hangover={}ms, \

@@ -108,21 +108,33 @@ export class SettingsWindowHelper {
         this.ensureVisibleOnScreen();
 
         if (process.platform === 'win32' && this.contentProtection) {
-            this.settingsWindow.setOpacity(0);
-            this.settingsWindow.show();
+            this.stealthManager.setWindowOpacity(this.settingsWindow, 0, {
+                source: 'SettingsWindowHelper.showWindow.win32',
+                windowRole: 'auxiliary',
+            });
+            this.stealthManager.requestWindowShow(this.settingsWindow, {
+                source: 'SettingsWindowHelper.showWindow.win32',
+                windowRole: 'auxiliary',
+            });
             this.applyStealth(true);
             
             if (this.opacityTimeout) clearTimeout(this.opacityTimeout);
             this.opacityTimeout = setTimeout(() => {
                 if (this.settingsWindow && !this.settingsWindow.isDestroyed()) {
-                    this.settingsWindow.setOpacity(1);
+                    this.stealthManager.setWindowOpacity(this.settingsWindow, 1, {
+                        source: 'SettingsWindowHelper.showWindow.win32.restore',
+                        windowRole: 'auxiliary',
+                    });
                     this.stealthManager.reapplyAfterShow(this.settingsWindow);
                     this.settingsWindow.focus();
                 }
             }, 60);
         } else {
             this.applyStealth(this.contentProtection);
-            this.settingsWindow.show();
+            this.stealthManager.requestWindowShow(this.settingsWindow, {
+                source: 'SettingsWindowHelper.showWindow',
+                windowRole: 'auxiliary',
+            });
             this.stealthManager.reapplyAfterShow(this.settingsWindow);
             this.settingsWindow.focus();
         }
@@ -141,7 +153,10 @@ export class SettingsWindowHelper {
 
     public closeWindow(): void {
         if (this.settingsWindow && !this.settingsWindow.isDestroyed()) {
-            this.settingsWindow.hide()
+            this.stealthManager.requestWindowHide(this.settingsWindow, {
+                source: 'SettingsWindowHelper.closeWindow',
+                windowRole: 'auxiliary',
+            })
             this.emitVisibilityChange(false);
         }
     }
@@ -183,6 +198,11 @@ private createWindow(x?: number, y?: number, showWhenReady: boolean = true): voi
         }
 
         this.settingsWindow = new BrowserWindow(windowSettings)
+        this.stealthManager.recordProtectionEvent('window-created', {
+            source: 'SettingsWindowHelper.createWindow',
+            windowRole: 'auxiliary',
+            visible: false,
+        })
         this.detachRendererBridgeMonitor?.()
         this.detachRendererBridgeMonitor = attachRendererBridgeMonitor('Settings', this.settingsWindow, {
             expectedPreloadPath: preloadPath,
