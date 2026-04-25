@@ -141,6 +141,65 @@ test('streamChat falls back to tesseract text only when cURL template has no ima
   }
 });
 
+test('streamChat keeps forced screenshot OCR fallback on the buffered cURL path', async () => {
+  const LLMHelper = await loadLLMHelper();
+  const helper = new LLMHelper() as any;
+  const originalExecuteCustomProvider = helper.executeCustomProvider;
+  const originalStreamCustomProvider = helper.streamCustomProvider;
+
+  helper.setModel('curl-provider', [{
+    id: 'curl-provider',
+    name: 'cURL',
+    curlCommand: 'curl https://example.com -d "{\"prompt\":\"{{TEXT}}\"}"',
+    responsePath: 'choices[0].message.content',
+  }]);
+
+  helper.extractImageTextWithTesseract = async () => 'Forced OCR fallback text from screenshot';
+
+  let streamed = false;
+  let captured: {
+    rawUserMessage: string;
+    imageCount: number;
+  } | null = null;
+
+  helper.streamCustomProvider = async function* () {
+    streamed = true;
+    yield 'wrong-stream-path';
+  };
+
+  helper.executeCustomProvider = async (
+    _curlCommand: string,
+    _combinedMessage: string,
+    _systemPrompt: string,
+    rawUserMessage: string,
+    _context: string,
+    imagePaths?: string[],
+  ) => {
+    captured = {
+      rawUserMessage,
+      imageCount: imagePaths?.length || 0,
+    };
+    return 'ocr-buffered-ok';
+  };
+
+  try {
+    let output = '';
+    for await (const chunk of helper.streamChat('solve this', ['/tmp/screenshot.png'], 'ctx', 'OVERRIDE_PROMPT')) {
+      output += chunk;
+    }
+
+    assert.equal(output, 'ocr-buffered-ok');
+    assert.equal(streamed, false);
+    assert.equal(captured?.imageCount, 0);
+    assert.match(captured?.rawUserMessage || '', /SCREENSHOT_TEXT_FALLBACK:/);
+    assert.match(captured?.rawUserMessage || '', /Forced OCR fallback text from screenshot/);
+  } finally {
+    helper.executeCustomProvider = originalExecuteCustomProvider;
+    helper.streamCustomProvider = originalStreamCustomProvider;
+    helper.scrubKeys();
+  }
+});
+
 test('chatWithGemini falls back to local OCR for Ollama screenshot requests', async () => {
   const LLMHelper = await loadLLMHelper();
   const helper = new LLMHelper() as any;

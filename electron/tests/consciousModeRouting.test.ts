@@ -454,6 +454,7 @@ test('Conscious Mode transcript auto-trigger widens for actionable interviewer p
   assert.equal(shouldAutoTriggerSuggestionFromTranscript('What are the tradeoffs', true, null), true);
   assert.equal(shouldAutoTriggerSuggestionFromTranscript('Give me an example of when you disagreed with a PM', true, null), true);
   assert.equal(shouldAutoTriggerSuggestionFromTranscript('How do you make difficult decisions', true, null), true);
+  assert.equal(shouldAutoTriggerSuggestionFromTranscript('So designing a', true, null), false);
   assert.equal(shouldAutoTriggerSuggestionFromTranscript('Can you repeat that for me', true, null), false);
   assert.equal(shouldAutoTriggerSuggestionFromTranscript('okay sounds good', true, null), false);
 });

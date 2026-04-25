@@ -3155,6 +3155,26 @@ ANSWER DIRECTLY:`;
             yield response;
             return;
           }
+        } else if (hasScreenshotInput && forceTextFallback) {
+          // Forced OCR fallback already converted the screenshot into text and
+          // removed image paths. Keep this on the buffered cURL path from the
+          // pre-SSE workflow so screenshot analysis is handled as one complete
+          // request instead of a generic text streaming request.
+          const response = await this.executeCustomProvider(
+            this.activeCurlProvider.curlCommand,
+            userContent,
+            curlSystemPrompt,
+            effectiveMessage,
+            context || "",
+            imagePaths,
+            this.activeCurlProvider.responsePath,
+            options?.abortSignal,
+            CURL_PROVIDER_TIMEOUT_MS,
+          );
+          if (response.trim().length > 0) {
+            yield response;
+            return;
+          }
         } else {
           // Text-only path: try SSE streaming first for real-time tokens.
           // If the provider does not support SSE (yields nothing) or throws,

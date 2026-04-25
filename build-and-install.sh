@@ -30,6 +30,8 @@ INSTALL_DIR="/Applications"
 ENTITLEMENTS="$SCRIPT_DIR/assets/entitlements.mac.plist"
 HELPER_ENTITLEMENTS="$SCRIPT_DIR/stealth-projects/macos-virtual-display-helper/entitlements.plist"
 RELEASE_DIR="$SCRIPT_DIR/release"
+APP_SUPPORT_DIR="${HOME}/Library/Application Support/natively"
+APP_LOG_DIR="${APP_SUPPORT_DIR}/Logs"
 IS_TTY=false
 if [[ -t 1 ]]; then
     IS_TTY=true
@@ -122,6 +124,20 @@ run_logged_command() {
 
     info "$label"
     "$@"
+}
+
+enable_default_app_logging() {
+    mkdir -p "$APP_LOG_DIR"
+    export NATIVELY_DEBUG_LOG=1
+    if command -v launchctl >/dev/null 2>&1; then
+        if launchctl setenv NATIVELY_DEBUG_LOG 1; then
+            success "Enabled default app logging for LaunchServices"
+        else
+            warn "Could not set LaunchServices logging environment; shell launch will still inherit NATIVELY_DEBUG_LOG=1"
+        fi
+    else
+        warn "launchctl not found; shell launch will still inherit NATIVELY_DEBUG_LOG=1"
+    fi
 }
 
 artifact_mtime() {
@@ -795,6 +811,8 @@ fi
 # ╚═══════════════════════════════════════════════════════════════════╝
 print_done_card
 
+enable_default_app_logging
+
 echo -e "${MAGENTA}${BOLD}Next steps:${NC}"
 echo ""
 echo -e "  ${CYAN}1.${NC} Launch with ${WHITE}open ${INSTALL_DIR}/${APP_NAME}.app${NC}"
@@ -806,6 +824,9 @@ echo -e "     ${YELLOW}>${NC} Accessibility  ${BLUE}-${NC} keyboard shortcuts"
 echo ""
 echo -e "  ${CYAN}3.${NC} Configure API keys in Settings -> AI Providers"
 echo -e "     ${YELLOW}>${NC} Or use Ollama for a fully local setup"
+echo ""
+echo -e "  ${CYAN}4.${NC} Logs are on by default for this launch session:"
+echo -e "     ${YELLOW}>${NC} ${APP_LOG_DIR}/natively-$(date +%F).log"
 echo ""
 
 # Ask to launch only in interactive terminals

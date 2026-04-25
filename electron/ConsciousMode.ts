@@ -467,7 +467,7 @@ function isSubstantialConversationTurn(lower: string): boolean {
 }
 
 function isBroadConsciousSeed(lower: string): boolean {
-  return /(design|architecture|component|service|database|api|scale|scaling|throughput|latency|tradeoff|failure|retry|cache|queue|shard|replica|microservice|monolith|algorithm|data structure|complexity|optimi[sz]e|partition|failover|bottleneck|consistency|availability|backpressure|hotspot|rate limiter|data model|ledger|notification system|streaming system|distributed)/i.test(lower);
+  return /\b(design|architecture|component|components|service|services|database|databases|api|apis|scale|scaling|throughput|latency|tradeoff|tradeoffs|failure|retry|cache|caching|queue|queues|shard|sharding|replica|replication|microservice|microservices|monolith|algorithm|algorithms|complexity|optimization|optimisation|optimize|optimise|partition|partitioning|failover|bottleneck|consistency|availability|backpressure|hotspot|ledger|distributed)\b|\b(data structure|data structures|rate limiter|rate limiters|data model|notification system|streaming system)\b/i.test(lower);
 }
 
 function isBehavioralPrompt(lower: string): boolean {
@@ -510,7 +510,7 @@ function isActionableInterviewerPrompt(lower: string): boolean {
     return true;
   }
 
-  return (isQuestionLike(lower) && words.length >= 4) || isBroadConsciousSeed(lower);
+  return (isQuestionLike(lower) && words.length >= 4) || (words.length >= 6 && isBroadConsciousSeed(lower));
 }
 
 export function classifyConsciousModeQuestion(

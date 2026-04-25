@@ -26,9 +26,9 @@ process.on('unhandledRejection', (reason: unknown, promise: Promise<unknown>): v
 // NAT-011 / audit S-5: do NOT write logs to ~/Documents in release builds
 // (it leaks the product's presence to anyone browsing the home folder, and
 // the file name "natively_debug.log" itself is a fingerprint). The path is
-// now under `userData/Logs/` and dated, and *all* file logging is gated
-// behind `NATIVELY_DEBUG_LOG=1` for non-development builds. Dev builds keep
-// file logging on for convenience.
+// now under `userData/Logs/` and dated. File logging is on by default so
+// installed builds leave enough diagnostics for incident analysis; set
+// `NATIVELY_DEBUG_LOG=0|false|no|off` to disable it.
 const isDev = process.env.NODE_ENV === "development";
 const fileLoggingExplicitlyDisabled = (() => {
   const raw = process.env.NATIVELY_DEBUG_LOG;
@@ -154,8 +154,8 @@ async function flushLogQueue(): Promise<void> {
 }
 
 /**
- * Non-blocking async log to file. NAT-011: in release builds without
- * `NATIVELY_DEBUG_LOG=1`, this is a no-op so we leave nothing on disk.
+ * Non-blocking async log to file. Set `NATIVELY_DEBUG_LOG=0|false|no|off`
+ * to disable persisted logs for release builds.
  */
 export async function logToFileAsync(msg: string): Promise<void> {
   if (!fileLoggingEnabled) return;
