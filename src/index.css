@@ -135,10 +135,13 @@ body,
   -moz-osx-font-smoothing: grayscale;
 }
 
+html[data-window-kind='overlay'],
 html[data-window-kind='overlay'] body,
 html[data-window-kind='overlay'] #root,
+html[data-window-kind='settings'],
 html[data-window-kind='settings'] body,
 html[data-window-kind='settings'] #root,
+html[data-window-kind='model-selector'],
 html[data-window-kind='model-selector'] body,
 html[data-window-kind='model-selector'] #root {
   background: transparent !important;
