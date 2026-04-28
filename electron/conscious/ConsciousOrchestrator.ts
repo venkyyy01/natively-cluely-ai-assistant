@@ -7,6 +7,7 @@ import {
   type ReasoningThread,
   isBehavioralQuestionText,
 } from '../ConsciousMode';
+import { SemanticThreadMatcher } from './SemanticThreadMatcher';
 import type { QuestionReaction } from './QuestionReactionClassifier';
 import type { AnswerHypothesis } from './AnswerHypothesisStore';
 import { ConsciousAnswerPlanner } from './ConsciousAnswerPlanner';
@@ -83,6 +84,7 @@ export class ConsciousOrchestrator {
   private readonly retrievalOrchestrator: ConsciousRetrievalOrchestrator;
   private readonly answerPlanner = new ConsciousAnswerPlanner();
   private readonly provenanceVerifier = new ConsciousProvenanceVerifier();
+  private readonly semanticThreadMatcher = new SemanticThreadMatcher();
   private consecutiveFailures = 0;
   private circuitOpenUntil = 0;
 
@@ -181,7 +183,7 @@ export class ConsciousOrchestrator {
       || /^(why this approach|why this|why not|how so|go deeper|can you go deeper|walk me through that|talk through that|and then|what about reliability|what about scale|what about failure handling|what about bottlenecks)$/i.test(loweredQuestion);
   }
 
-  private isTopicallyCompatibleWithThread(question: string, thread: ReasoningThread): boolean {
+  private async isTopicallyCompatibleWithThread(question: string, thread: ReasoningThread): Promise<boolean> {
     const normalizedQuestion = question.trim();
     if (!normalizedQuestion) {
       return false;
@@ -192,6 +194,24 @@ export class ConsciousOrchestrator {
       return true;
     }
 
+    // Use semantic thread matcher if flag is enabled
+    const useSemantic = isVerifierOptimizationActive('useSemanticThreadContinuation');
+    if (useSemantic) {
+      try {
+        const semanticCompatible = await this.semanticThreadMatcher.isCompatible(question, thread);
+        // If semantic matcher returns a definitive result, use it
+        // If it returns false (e.g., model load failed or low similarity), fall back to original method
+        if (semanticCompatible) {
+          return true;
+        }
+        // Fall through to original method if semantic matcher returned false
+      } catch (error) {
+        console.warn('[ConsciousOrchestrator] Semantic thread matcher failed, falling back to stopword method:', error);
+        // Fall through to original method
+      }
+    }
+
+    // Original stopword-based method (fallback or when flag is disabled)
     const questionTokens = this.tokenizeForThreadCompatibility(normalizedQuestion);
     const referentialFollowUp = this.hasReferentialFollowUpCue(loweredQuestion);
 
@@ -317,7 +337,7 @@ export class ConsciousOrchestrator {
     if (
       preRouteDecision.threadAction === 'continue'
       && currentReasoningThread
-      && !this.isTopicallyCompatibleWithThread(input.question, currentReasoningThread)
+      && !(await this.isTopicallyCompatibleWithThread(input.question, currentReasoningThread))
     ) {
       preRouteDecision = { qualifies: true, threadAction: 'reset' };
     }

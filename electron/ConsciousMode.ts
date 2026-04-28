@@ -95,6 +95,8 @@ export interface ReasoningThread {
   response: ConsciousModeStructuredResponse;
   followUpCount: number;
   updatedAt: number;
+  /** Cached embedding for semantic thread continuation compatibility checks */
+  embedding?: number[];
 }
 
 export type ConsciousModeThreadAction = 'start' | 'continue' | 'reset' | 'ignore';
