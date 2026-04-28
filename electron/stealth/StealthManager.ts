@@ -601,7 +601,7 @@ export class StealthManager extends EventEmitter {
   }
 
   public isEnabled(): boolean {
-    return this.config.enabled || this.meetingActive;
+    return this.config.enabled;
   }
 
   public setMeetingActive(active: boolean): void {
@@ -616,6 +616,9 @@ export class StealthManager extends EventEmitter {
         }
         this.applyLayer0(win, true);
       }
+    } else {
+      // Stop background monitors when meeting ends
+      this.stopBackgroundMonitorsIfIdle();
     }
   }
 
