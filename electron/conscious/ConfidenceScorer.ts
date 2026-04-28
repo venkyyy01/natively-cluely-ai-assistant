@@ -6,6 +6,8 @@ import {
   InterviewPhase,
   RESUME_THRESHOLD 
 } from './types';
+import { IsotonicCalibrator } from './ConfidenceCalibrator';
+import { isVerifierOptimizationActive } from '../config/optimizations';
 
 const EXPLICIT_RESUME_MARKERS = [
   /back to/i,
@@ -31,6 +33,16 @@ const TOPIC_SHIFT_MARKERS = [
 ];
 
 export class ConfidenceScorer {
+  private calibrator: IsotonicCalibrator | null = null;
+  private profileId: string | null = null;
+
+  constructor(profileId?: string) {
+    if (profileId) {
+      this.profileId = profileId;
+      this.calibrator = IsotonicCalibrator.load(profileId);
+    }
+  }
+
   private cosineSimilarity(a: number[], b: number[]): number {
     if (a.length !== b.length) return 0;
 
@@ -92,7 +104,7 @@ export class ConfidenceScorer {
       : 0;
     
     // Calculate weighted sum
-    const total = Math.max(0, Math.min(1,
+    const rawTotal = Math.max(0, Math.min(1,
       (bm25Score * CONFIDENCE_WEIGHTS.bm25) +
       (embeddingScore * CONFIDENCE_WEIGHTS.embedding) +
       (explicitMarkers * CONFIDENCE_WEIGHTS.explicitMarkers) +
@@ -102,6 +114,12 @@ export class ConfidenceScorer {
       (topicShiftPenalty * CONFIDENCE_WEIGHTS.topicShiftPenalty) +
       (interruptionRecency * CONFIDENCE_WEIGHTS.interruptionRecency)
     ));
+
+    // Apply calibration if flag is enabled
+    const useCalibration = isVerifierOptimizationActive('useConfidenceCalibration');
+    const calibratedTotal = useCalibration && this.calibrator
+      ? this.calibrator.calibrate(rawTotal)
+      : rawTotal;
     
     return {
       bm25Score,
@@ -112,7 +130,7 @@ export class ConfidenceScorer {
       sttQuality,
       topicShiftPenalty,
       interruptionRecency,
-      total,
+      total: calibratedTotal,
     };
   }
   
@@ -181,5 +199,24 @@ export class ConfidenceScorer {
   
   shouldResume(confidence: ConfidenceScore): boolean {
     return confidence.total >= RESUME_THRESHOLD;
+  }
+
+  addTrainingSample(rawScore: number, outcome: boolean): void {
+    if (!this.calibrator) return;
+    this.calibrator.addSample(rawScore, outcome);
+  }
+
+  fitCalibrator(): void {
+    if (!this.calibrator) return;
+    this.calibrator.fitFromSamples();
+  }
+
+  persistCalibration(): void {
+    if (!this.calibrator || !this.profileId) return;
+    this.calibrator.persist(this.profileId);
+  }
+
+  getCalibrationSampleCount(): number {
+    return this.calibrator?.getSampleCount() ?? 0;
   }
 }

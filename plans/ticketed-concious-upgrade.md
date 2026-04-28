@@ -66,7 +66,7 @@ useSemanticThreadContinuation: false,
 
 ## 1. Sprint A — High Impact, Low Risk (1-2 weeks)
 
-### CMU-001 — Orchestrator: replace stopword Jaccard with SBERT thread continuation
+### CMU-001 — Orchestrator: replace stopword Jaccard with SBERT thread continuation ~~[ ]~~ **[x]**
 
 - **Severity**: P1
 - **Subsystem**: conscious / orchestrator
