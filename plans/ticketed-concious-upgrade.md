@@ -206,7 +206,7 @@ The existing `ReasoningThread.embedding` field (types.ts:63) is populated but un
 
 ## 2. Sprint B — Hallucination & False-Reject Reduction (2-4 weeks)
 
-### CMU-003 — Verifier: add cross-encoder NLI for semantic entailment verification
+### CMU-003 — Verifier: add cross-encoder NLI for semantic entailment verification ~~[ ]~~ **[x]**
 
 - **Severity**: P0
 - **Subsystem**: conscious / verifier

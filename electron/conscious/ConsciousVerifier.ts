@@ -4,6 +4,7 @@ import type { AnswerHypothesis } from './AnswerHypothesisStore';
 import type { QuestionReaction } from './QuestionReactionClassifier';
 import { isVerifierOptimizationActive } from '../config/optimizations';
 import techAllowlist from './data/techAllowlist.json';
+import { StarScorer } from './StarScorer';
 
 export interface ConsciousVerificationResult {
   ok: boolean;
@@ -83,6 +84,15 @@ function hasStrongBehavioralDepth(response: ConsciousModeStructuredResponse): bo
     return false;
   }
 
+  // Use probabilistic scorer if flag is enabled
+  const useProbabilistic = isVerifierOptimizationActive('useProbabilisticStar');
+  if (useProbabilistic) {
+    const scorer = new StarScorer();
+    const score = scorer.score(response);
+    return scorer.isAcceptable(score);
+  }
+
+  // Original hard floor rules (fallback or when flag is disabled)
   const actionWords = wordCount(behavioral.action);
   const situationWords = wordCount(behavioral.situation);
   const taskWords = wordCount(behavioral.task);
