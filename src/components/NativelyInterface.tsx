@@ -345,7 +345,7 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
         return () => clearTimeout(timer);
     }, []);
 
-    const latestReadableMessage = messages.find(msg => msg.role === 'system') || null;
+    const latestReadableMessage = useMemo(() => messages.find(msg => msg.role === 'system') || null, [messages]);
 
     useHumanSpeedAutoScroll({
         enabled: isExpanded,
