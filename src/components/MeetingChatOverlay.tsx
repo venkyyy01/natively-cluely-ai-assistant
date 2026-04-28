@@ -198,6 +198,7 @@ const MeetingChatOverlay: React.FC<MeetingChatOverlayProps> = ({
     const chatWindowRef = useRef<HTMLDivElement>(null);
     const scrollContainerRef = useRef<HTMLDivElement>(null);
     const streamBuffer = useStreamBuffer();
+    const initialSubmitTimerRef = useRef<NodeJS.Timeout | null>(null);
 
     const latestReadableMessage = messages.find(msg => msg.role === 'assistant') || null;
 
@@ -217,10 +218,18 @@ const MeetingChatOverlay: React.FC<MeetingChatOverlayProps> = ({
     useEffect(() => {
         if (isOpen && initialQuery && messages.length === 0) {
             setChatState('opening');
-            setTimeout(() => {
-                submitQuestion(initialQuery);
+            initialSubmitTimerRef.current = setTimeout(() => {
+                if (isOpen) {
+                    submitQuestion(initialQuery);
+                }
             }, 100);
         }
+        return () => {
+            if (initialSubmitTimerRef.current) {
+                clearTimeout(initialSubmitTimerRef.current);
+                initialSubmitTimerRef.current = null;
+            }
+        };
     }, [isOpen, initialQuery]);
 
     // Listen for new queries from parent
