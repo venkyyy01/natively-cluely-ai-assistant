@@ -680,10 +680,11 @@ export async function * streamWithGeminiModel(helper: LLMHelper, fullMessage: st
     // Create abort controller for timeout/cancellation
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), LLM_API_TIMEOUT_MS);
-    
+
     // Wire up external abort signal if provided
+    const abortHandler = () => controller.abort(abortSignal?.reason);
     if (abortSignal) {
-      abortSignal.addEventListener('abort', () => controller.abort(abortSignal.reason), { once: true });
+      abortSignal.addEventListener('abort', abortHandler, { once: true });
     }
 
     try {
@@ -718,6 +719,9 @@ export async function * streamWithGeminiModel(helper: LLMHelper, fullMessage: st
       }
     } finally {
       clearTimeout(timeoutId);
+      if (abortSignal) {
+        abortSignal.removeEventListener('abort', abortHandler);
+      }
     }
   }
 
