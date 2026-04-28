@@ -611,7 +611,7 @@ export async function * streamChatWithGemini(helper: LLMHelper, message: string,
 
     // ============================================================
     // RELENTLESS RETRY: Try all providers, then retry entire chain
-    // with exponential backoff. Max 2 full rotations.
+    // with exponential backoff. Max 1 full rotation.
     // ============================================================
     const MAX_FULL_ROTATIONS = 1;
 
