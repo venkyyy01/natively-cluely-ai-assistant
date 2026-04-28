@@ -632,13 +632,23 @@ export async function * streamChatWithGemini(helper: LLMHelper, message: string,
           return;
         }
         const provider = providers[i];
+        let yieldedAny = false;
         try {
           console.log(`[LLMHelper] ${rotation === 0 ? '🚀' : '🔁'} Attempting ${provider.name}...`);
-          yield* provider.execute();
+          const stream = provider.execute();
+          for await (const chunk of stream) {
+            yieldedAny = true;
+            yield chunk;
+          }
           console.log(`[LLMHelper] ✅ ${provider.name} stream completed successfully`);
           return; // SUCCESS — exit immediately
         } catch (err: any) {
-          console.warn(`[LLMHelper] ⚠️ ${provider.name} failed: ${err.message}`);
+          if (yieldedAny) {
+            // Provider yielded tokens then failed - rethrow to avoid concatenation
+            console.error(`[LLMHelper] ❌ ${provider.name} failed after yielding tokens: ${err.message}`);
+            throw err;
+          }
+          console.warn(`[LLMHelper] ⚠️ ${provider.name} failed without yielding tokens: ${err.message}`);
           // Continue to next provider
         }
       }
