@@ -27,11 +27,11 @@ export class RecapLLM {
     /**
      * Generate a neutral conversation summary (Streamed)
      */
-    async *generateStream(context: string): AsyncGenerator<string> {
+    async *generateStream(context: string, abortSignal?: AbortSignal): AsyncGenerator<string> {
         if (!context.trim()) return;
         try {
             // Use our universal helper
-            yield* this.llmHelper.streamChat(context, undefined, undefined, UNIVERSAL_RECAP_PROMPT);
+            yield* this.llmHelper.streamChat(context, undefined, undefined, UNIVERSAL_RECAP_PROMPT, { abortSignal });
         } catch (error) {
             console.error("[RecapLLM] Streaming generation failed:", error);
         }

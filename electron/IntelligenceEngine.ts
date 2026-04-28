@@ -1849,14 +1849,17 @@ export class IntelligenceEngine extends EventEmitter {
             const refinementRequest = userRequest || intent;
 
             let fullRefined = "";
+            const abortController = new AbortController();
             const stream = this.followUpLLM.generateStream(
                 lastMsg,
                 refinementRequest,
-                context
+                context,
+                abortController.signal
             );
 
             for await (const token of stream) {
                 if (this.shouldSuppressAuxiliaryMode(requestId)) {
+                    abortController.abort();
                     return null;
                 }
                 this.emit('refined_answer_token', token, intent);
@@ -1926,10 +1929,12 @@ export class IntelligenceEngine extends EventEmitter {
             }
 
             let fullSummary = "";
-            const stream = this.recapLLM.generateStream(context);
+            const abortController = new AbortController();
+            const stream = this.recapLLM.generateStream(context, abortController.signal);
 
             for await (const token of stream) {
                 if (this.shouldSuppressAuxiliaryMode(requestId)) {
+                    abortController.abort();
                     return null;
                 }
                 this.emit('recap_token', token);

@@ -27,10 +27,10 @@ export class FollowUpLLM {
         }
     }
 
-    async *generateStream(previousAnswer: string, refinementRequest: string, context?: string): AsyncGenerator<string> {
+    async *generateStream(previousAnswer: string, refinementRequest: string, context?: string, abortSignal?: AbortSignal): AsyncGenerator<string> {
         try {
             const message = `PREVIOUS ANSWER:\n${previousAnswer}\n\nREQUEST: ${refinementRequest}`;
-            yield* this.llmHelper.streamChat(message, undefined, context, UNIVERSAL_FOLLOWUP_PROMPT);
+            yield* this.llmHelper.streamChat(message, undefined, context, UNIVERSAL_FOLLOWUP_PROMPT, { abortSignal });
         } catch (e) {
             console.error("[FollowUpLLM] Stream Failed:", e);
         }
