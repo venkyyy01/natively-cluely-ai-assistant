@@ -44,6 +44,9 @@ export interface OptimizationFlags {
   /** Conscious mode confidence: use isotonic regression calibration for confidence scores */
   useConfidenceCalibration: boolean;
 
+  /** Conscious mode verifier: use NLI semantic entailment for claim verification */
+  useSemanticEntailment: boolean;
+
   /** Worker thread configuration */
   workerThreadCount: number;
 
@@ -142,6 +145,9 @@ export const DEFAULT_OPTIMIZATION_FLAGS: OptimizationFlags = {
   // Conscious mode confidence
   useConfidenceCalibration: false,
 
+  // Conscious mode verifier
+  useSemanticEntailment: false,
+
   // Worker config (6 cores default, user-adjustable)
   workerThreadCount: 6,
 
@@ -208,7 +214,7 @@ export function isOptimizationActive(key: keyof Omit<OptimizationFlags, 'acceler
  * Check if a conscious mode verifier optimization is active
  * These run independently of the acceleration master toggle since they affect correctness
  */
-export function isVerifierOptimizationActive(key: 'useConsciousVerifierWordBoundary' | 'useDegradedProvenanceCheck' | 'useTighterNumericClaimRegex' | 'useExpandedTechAllowlist' | 'useSemanticThreadContinuation' | 'useConfidenceCalibration'): boolean {
+export function isVerifierOptimizationActive(key: 'useConsciousVerifierWordBoundary' | 'useDegradedProvenanceCheck' | 'useTighterNumericClaimRegex' | 'useExpandedTechAllowlist' | 'useSemanticThreadContinuation' | 'useConfidenceCalibration' | 'useSemanticEntailment'): boolean {
   return currentFlags[key];
 }
 

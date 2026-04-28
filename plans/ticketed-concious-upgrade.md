@@ -143,7 +143,7 @@ The existing `ReasoningThread.embedding` field (types.ts:63) is populated but un
 
 ---
 
-### CMU-002 — Confidence: add isotonic regression calibration for confidence scores
+### CMU-002 — Confidence: add isotonic regression calibration for confidence scores ~~[ ]~~ **[x]**
 
 - **Severity**: P2
 - **Subsystem**: conscious / confidence

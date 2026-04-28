@@ -471,7 +471,7 @@ export class ConsciousOrchestrator {
       const useDegradedProvenanceCheck = isVerifierOptimizationActive('useDegradedProvenanceCheck');
       let provenanceVerdict: { ok: boolean; reason?: string } = { ok: true };
       if (!degradedMode || useDegradedProvenanceCheck) {
-        provenanceVerdict = this.provenanceVerifier.verify({
+        provenanceVerdict = await this.provenanceVerifier.verify({
           response: structuredResponse,
           semanticContextBlock: this.session.getConsciousSemanticContext(),
           evidenceContextBlock,
@@ -578,7 +578,7 @@ export class ConsciousOrchestrator {
       const useDegradedProvenanceCheck = isVerifierOptimizationActive('useDegradedProvenanceCheck');
       let provenanceVerdict: { ok: boolean; reason?: string } = { ok: true };
       if (!degradedMode || useDegradedProvenanceCheck) {
-        provenanceVerdict = this.provenanceVerifier.verify({
+        provenanceVerdict = await this.provenanceVerifier.verify({
           response: structuredResponse,
           semanticContextBlock: this.session.getConsciousSemanticContext(),
           evidenceContextBlock: this.session.getConsciousEvidenceContext(),

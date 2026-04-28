@@ -1,5 +1,7 @@
 import type { ConsciousModeStructuredResponse } from '../ConsciousMode';
 import type { AnswerHypothesis } from './AnswerHypothesisStore';
+import { SemanticEntailmentVerifier } from './SemanticEntailmentVerifier';
+import { isVerifierOptimizationActive } from '../config/optimizations';
 
 export interface ConsciousProvenanceVerdict {
   ok: boolean;
@@ -197,6 +199,8 @@ function extractNumbers(text: string): string[] {
 }
 
 export class ConsciousProvenanceVerifier {
+  private semanticEntailmentVerifier = new SemanticEntailmentVerifier();
+
   private normalizeGroundingContext(input: {
     semanticContextBlock?: string;
     evidenceContextBlock?: string;
@@ -213,12 +217,29 @@ export class ConsciousProvenanceVerifier {
     return { strict };
   }
 
-  private findUnsupportedTerms(terms: string[], strictContext: string): string[] {
+  private async findUnsupportedTerms(terms: string[], strictContext: string): Promise<string[]> {
     const unsupported: string[] = [];
+    const useSemantic = isVerifierOptimizationActive('useSemanticEntailment');
+
     for (const term of terms) {
+      // Token-based check (fast path)
       if (strictContext.includes(term)) {
         continue;
       }
+
+      // Semantic check if flag is enabled
+      if (useSemantic) {
+        try {
+          const isSemanticallySupported = await this.semanticEntailmentVerifier.verifyTermSemantically(term, strictContext);
+          if (isSemanticallySupported) {
+            continue; // Term is semantically supported
+          }
+        } catch (error) {
+          console.warn('[ConsciousProvenanceVerifier] Semantic entailment check failed, falling back to unsupported:', error);
+          // Fall through to mark as unsupported
+        }
+      }
+
       unsupported.push(term);
     }
     return unsupported;
@@ -242,13 +263,13 @@ export class ConsciousProvenanceVerifier {
     return false;
   }
 
-  verify(input: {
+  async verify(input: {
     response: ConsciousModeStructuredResponse;
     semanticContextBlock?: string;
     evidenceContextBlock?: string;
     question?: string;
     hypothesis?: AnswerHypothesis | null;
-  }): ConsciousProvenanceVerdict {
+  }): Promise<ConsciousProvenanceVerdict> {
     const grounding = this.normalizeGroundingContext(input);
     const hasStrictGroundingContext = Boolean(grounding.strict);
 
@@ -268,7 +289,7 @@ export class ConsciousProvenanceVerifier {
     const originalResponseText = summaryText(input.response, false);
     const dynamicGroundingVocabulary = extractGroundingTechnologyVocabulary(grounding.strict);
 
-    const unsupportedTech = this.findUnsupportedTerms(
+    const unsupportedTech = await this.findUnsupportedTerms(
       extractTechnologyClaims(originalResponseText, dynamicGroundingVocabulary),
       grounding.strict,
     );
@@ -276,7 +297,7 @@ export class ConsciousProvenanceVerifier {
       return { ok: false, reason: 'unsupported_technology_claim' };
     }
 
-    const unsupportedNumbers = this.findUnsupportedTerms(
+    const unsupportedNumbers = await this.findUnsupportedTerms(
       extractNumbers(responseText),
       grounding.strict,
     );
