@@ -123,12 +123,13 @@ None — every B-2/B-3/B-4 finding from the deep-dive survived re-audit at some 
 
 ---
 
-### CM-001 — Verifier: word-boundary match for unsupported tech / numeric claims
+### CM-001 — Verifier: word-boundary match for unsupported tech / numeric claims ✅ COMPLETED
 
 - **Severity**: P0
 - **Subsystem**: conscious / verifier
 - **Owner**: agentic_worker
 - **Order**: standalone
+- **Status**: COMPLETED
 
 #### Problem
 
@@ -209,12 +210,13 @@ Revert the helper + the two call-site replacements. If feature-flagged, set `use
 
 ---
 
-### CM-002 — Verifier: always run rule-based provenance, even in degraded mode
+### CM-002 — Verifier: always run rule-based provenance, even in degraded mode ✅ COMPLETED
 
 - **Severity**: P0
 - **Subsystem**: conscious / orchestrator
 - **Owner**: agentic_worker
 - **Order**: standalone
+- **Status**: COMPLETED
 
 #### Problem
 
@@ -289,12 +291,13 @@ Set `useDegradedProvenanceCheck: false` in flags. Provenance is skipped in degra
 
 ---
 
-### CM-003 — Verifier: numeric claim regex requires unit suffix or claim verb
+### CM-003 — Verifier: numeric claim regex requires unit suffix or claim verb ✅ COMPLETED
 
 - **Severity**: P1
 - **Subsystem**: conscious / verifier
 - **Owner**: agentic_worker
 - **Order**: standalone (CM-001 reduces but does not eliminate this issue)
+- **Status**: COMPLETED
 
 #### Problem
 
@@ -367,12 +370,13 @@ Set `useTighterNumericClaimRegex: false`.
 
 ---
 
-### CM-004 — Verifier: expand and externalize technology allowlist
+### CM-004 — Verifier: expand and externalize technology allowlist ✅ COMPLETED
 
 - **Severity**: P1
 - **Subsystem**: conscious / verifier
 - **Owner**: agentic_worker
 - **Order**: after CM-001 (relies on word-boundary matching being correct)
+- **Status**: COMPLETED
 
 #### Problem
 

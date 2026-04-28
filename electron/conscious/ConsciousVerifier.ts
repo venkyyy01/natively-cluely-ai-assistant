@@ -2,6 +2,8 @@ import { isBehavioralQuestionText } from '../ConsciousMode';
 import type { ConsciousModeQuestionRoute, ConsciousModeStructuredResponse } from '../ConsciousMode';
 import type { AnswerHypothesis } from './AnswerHypothesisStore';
 import type { QuestionReaction } from './QuestionReactionClassifier';
+import { isVerifierOptimizationActive } from '../config/optimizations';
+import techAllowlist from './data/techAllowlist.json';
 
 export interface ConsciousVerificationResult {
   ok: boolean;
@@ -141,24 +143,90 @@ function gatherStrictGroundingText(input: ConsciousVerifierJudgeInput): string {
     .toLowerCase();
 }
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function groundingHasToken(groundingText: string, token: string): boolean {
+  return new RegExp(`\\b${escapeRegExp(token)}\\b`, 'i').test(groundingText);
+}
+
 function hasUnsupportedNumericClaim(responseText: string, groundingText: string): boolean {
-  const numericClaims = responseText.match(/\b\d+(?:\.\d+)?(?:ms|s|m|h|x|%|k|m|b)?\b/g) || [];
+  const useTighterRegex = isVerifierOptimizationActive('useTighterNumericClaimRegex');
+
+  // Tighter regex: requires unit suffix to avoid false positives on years, counts, team sizes
+  const NUMERIC_WITH_UNIT_RE = useTighterRegex
+    ? /\b\d+(?:\.\d+)?(?:ms|sec|min|hr|hours|hrs|x|%|kb|mb|gb|tb|qps|rps|rpm)\b/gi
+    : /\b\d+(?:\.\d+)?(?:ms|s|m|h|x|%|k|m|b)?\b/g;
+
+  const numericClaims = responseText.match(NUMERIC_WITH_UNIT_RE) || [];
   if (numericClaims.length === 0) {
     return false;
   }
-  return numericClaims.some((claim) => !groundingText.includes(claim));
+  const useWordBoundary = isVerifierOptimizationActive('useConsciousVerifierWordBoundary');
+  return numericClaims.some((claim) => {
+    if (useWordBoundary) {
+      return !groundingHasToken(groundingText, claim);
+    }
+    return !groundingText.includes(claim);
+  });
 }
 
 function hasUnsupportedTechnologyClaim(responseText: string, groundingText: string): boolean {
-  // Conservative allowlist of common technology tokens that frequently
-  // indicate fabricated specificity in inferred-only follow-ups.
-  const TECH_TOKEN_RE =
-    /\b(kafka|redis|postgres(?:ql)?|mysql|mongodb|dynamodb|snowflake|bigquery|clickhouse|elasticsearch|opensearch|weaviate|pinecone|qdrant|rabbitmq|grpc|kubernetes|docker|terraform|spark|airflow|node(?:\.js)?|typescript|python|java|golang|aws|gcp|azure)\b/g;
+  const useExpandedAllowlist = isVerifierOptimizationActive('useExpandedTechAllowlist');
+
+  // Build the tech token regex from the allowlist
+  // Sort by length descending to match longer tokens first (e.g., postgresql before postgres)
+  const tokens = useExpandedAllowlist
+    ? [...techAllowlist.tokens].sort((a, b) => b.length - a.length)
+    : [
+        'kafka',
+        'redis',
+        'postgres',
+        'postgresql',
+        'mysql',
+        'mongodb',
+        'dynamodb',
+        'snowflake',
+        'bigquery',
+        'clickhouse',
+        'elasticsearch',
+        'opensearch',
+        'weaviate',
+        'pinecone',
+        'qdrant',
+        'rabbitmq',
+        'grpc',
+        'kubernetes',
+        'docker',
+        'terraform',
+        'spark',
+        'airflow',
+        'node',
+        'nodejs',
+        'typescript',
+        'python',
+        'java',
+        'golang',
+        'aws',
+        'gcp',
+        'azure',
+      ];
+
+  const escapedTokens = tokens.map(escapeRegExp);
+  const TECH_TOKEN_RE = new RegExp(`\\b(${escapedTokens.join('|')})\\b`, 'gi');
+
   const techClaims = responseText.match(TECH_TOKEN_RE) || [];
   if (techClaims.length === 0) {
     return false;
   }
-  return techClaims.some((token) => !groundingText.includes(token));
+  const useWordBoundary = isVerifierOptimizationActive('useConsciousVerifierWordBoundary');
+  return techClaims.some((token) => {
+    if (useWordBoundary) {
+      return !groundingHasToken(groundingText, token);
+    }
+    return !groundingText.includes(token);
+  });
 }
 
 export class ConsciousVerifier {

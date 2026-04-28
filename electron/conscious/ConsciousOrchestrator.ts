@@ -5,6 +5,7 @@ import {
   type ConsciousModeQuestionRoute,
   type ConsciousModeStructuredResponse,
   type ReasoningThread,
+  isBehavioralQuestionText,
 } from '../ConsciousMode';
 import type { QuestionReaction } from './QuestionReactionClassifier';
 import type { AnswerHypothesis } from './AnswerHypothesisStore';
@@ -22,6 +23,8 @@ import { ConsciousProvenanceVerifier } from './ConsciousProvenanceVerifier';
 import { ConsciousVerifier } from './ConsciousVerifier';
 import { LayeredIntentRouter, isReliableIntent } from '../llm/LayeredIntentRouter';
 import type { IntentClassificationCoordinator } from '../llm/providers/IntentClassificationCoordinator';
+import { isVerifierOptimizationActive } from '../config/optimizations';
+import { Metrics } from '../runtime/Metrics';
 
 interface KnowledgeStatusLike {
   activeMode?: unknown;
@@ -442,9 +445,12 @@ export class ConsciousOrchestrator {
 
       const latestHypothesis = this.session.getLatestAnswerHypothesis();
 
-      // In degraded mode (circuit breaker open), skip provenance verification
+      // Always run rule-based provenance — it is fast, deterministic, no network.
+      // When degraded mode is active, the LLM judge is skipped but rule-based checks
+      // must still run to prevent hallucinations when the system is least healthy.
+      const useDegradedProvenanceCheck = isVerifierOptimizationActive('useDegradedProvenanceCheck');
       let provenanceVerdict: { ok: boolean; reason?: string } = { ok: true };
-      if (!degradedMode) {
+      if (!degradedMode || useDegradedProvenanceCheck) {
         provenanceVerdict = this.provenanceVerifier.verify({
           response: structuredResponse,
           semanticContextBlock: this.session.getConsciousSemanticContext(),
@@ -454,6 +460,9 @@ export class ConsciousOrchestrator {
         });
         if (!provenanceVerdict.ok) {
           console.warn('[ConsciousOrchestrator] Continuation provenance verification failed:', provenanceVerdict.reason);
+          if (degradedMode) {
+            Metrics.counter('conscious.degraded_provenance_fail', 1);
+          }
           return this.fallback(`continuation_provenance:${provenanceVerdict.reason ?? 'unknown'}`);
         }
       }
@@ -543,12 +552,12 @@ export class ConsciousOrchestrator {
 
       const latestHypothesis = this.session.getLatestAnswerHypothesis();
 
-      // In degraded mode (circuit breaker open), skip provenance verification
-      // since it fails closed when semantic context is empty (no profile data).
-      // This prevents the circuit breaker from staying permanently open due to
-      // provenance failures on every question.
+      // Always run rule-based provenance — it is fast, deterministic, no network.
+      // When degraded mode is active, the LLM judge is skipped but rule-based checks
+      // must still run to prevent hallucinations when the system is least healthy.
+      const useDegradedProvenanceCheck = isVerifierOptimizationActive('useDegradedProvenanceCheck');
       let provenanceVerdict: { ok: boolean; reason?: string } = { ok: true };
-      if (!degradedMode) {
+      if (!degradedMode || useDegradedProvenanceCheck) {
         provenanceVerdict = this.provenanceVerifier.verify({
           response: structuredResponse,
           semanticContextBlock: this.session.getConsciousSemanticContext(),
@@ -558,10 +567,11 @@ export class ConsciousOrchestrator {
         });
         if (!provenanceVerdict.ok) {
           console.warn('[ConsciousOrchestrator] Structured response provenance verification failed:', provenanceVerdict.reason);
+          if (degradedMode) {
+            Metrics.counter('conscious.degraded_provenance_fail', 1);
+          }
           return this.fallback(`reasoning_provenance:${provenanceVerdict.reason ?? 'unknown'}`);
         }
-      } else {
-        console.log('[ConsciousOrchestrator] Skipping provenance verification in degraded mode (circuit breaker open)');
       }
 
       // In degraded mode, use rule-only verification (skip LLM judge)
