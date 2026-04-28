@@ -1,4 +1,5 @@
 import { app } from 'electron';
+import fs from 'fs';
 import path from 'path';
 
 interface CachedModuleInfo {
@@ -14,13 +15,117 @@ const CACHE_TTL_FAILURE_MS = 30 * 1000; // 30 seconds for failed loads
 
 type Candidate = {
   label: string;
+  abiDirectory?: string;
   load: () => any;
 };
 
+const NODE_MODULE_ABI_VERSION = process.versions.modules || 'unknown';
+const NAPI_VERSION = process.versions.napi || 'unknown';
+
+type CompatibilityMetadata =
+  | { kind: 'napi'; minimumVersion: number }
+  | { kind: 'legacy-node-abi'; version: string };
+
+function readCompatibilityMetadata(abiDirectory: string): CompatibilityMetadata | null {
+  const preferredFiles = [
+    `index.${process.platform}-${process.arch}.node.abi`,
+    'index.node.abi',
+  ];
+  for (const fileName of preferredFiles) {
+    const filePath = path.join(abiDirectory, fileName);
+    try {
+      const metadata = fs.readFileSync(filePath, 'utf8').trim();
+      if (metadata) {
+        const napiMatch = metadata.match(/^napi>=(\d+)$/);
+        if (napiMatch) {
+          return {
+            kind: 'napi',
+            minimumVersion: Number(napiMatch[1]),
+          };
+        }
+
+        return {
+          kind: 'legacy-node-abi',
+          version: metadata,
+        };
+      }
+    } catch {
+      // Continue trying fallback paths.
+    }
+  }
+
+  try {
+    const firstAbiFile = fs
+      .readdirSync(abiDirectory)
+      .find((file) => file.endsWith('.abi'));
+    if (!firstAbiFile) {
+      return null;
+    }
+    const metadata = fs.readFileSync(path.join(abiDirectory, firstAbiFile), 'utf8').trim();
+    if (!metadata) {
+      return null;
+    }
+
+    const napiMatch = metadata.match(/^napi>=(\d+)$/);
+    if (napiMatch) {
+      return {
+        kind: 'napi',
+        minimumVersion: Number(napiMatch[1]),
+      };
+    }
+
+    return {
+      kind: 'legacy-node-abi',
+      version: metadata,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function assertNativeAbiCompatibility(candidate: Candidate): void {
+  if (!candidate.abiDirectory) {
+    return;
+  }
+  const metadata = readCompatibilityMetadata(candidate.abiDirectory);
+  if (!metadata) {
+    return;
+  }
+
+  if (metadata.kind === 'napi') {
+    const runtimeNapiVersion = Number(NAPI_VERSION);
+    if (!Number.isFinite(runtimeNapiVersion) || runtimeNapiVersion < metadata.minimumVersion) {
+      throw new Error(
+        `Native audio N-API mismatch: requires N-API ${metadata.minimumVersion}, runtime provides ${NAPI_VERSION}. Rebuild native audio with a compatible toolchain or upgrade Electron.`,
+      );
+    }
+    return;
+  }
+
+  if (metadata.version === NODE_MODULE_ABI_VERSION) {
+    return;
+  }
+
+  console.warn(
+    `[NativeAudio] Ignoring legacy Node ABI metadata (${metadata.version}) for ${candidate.label}; runtime is ${NODE_MODULE_ABI_VERSION}. Rebuild native audio to refresh compatibility metadata.`,
+  );
+}
+
+function resolveNativelyAudioPackageDir(): string | undefined {
+  try {
+    const packageJsonPath = require.resolve('natively-audio/package.json');
+    return path.dirname(packageJsonPath);
+  } catch {
+    return undefined;
+  }
+}
+
 function getCandidates(): Candidate[] {
+  const packageDir = resolveNativelyAudioPackageDir();
   const candidates: Candidate[] = [
     {
       label: 'package:natively-audio',
+      abiDirectory: packageDir,
       load: () => require('natively-audio'),
     },
   ];
@@ -29,6 +134,7 @@ function getCandidates(): Candidate[] {
   if (appPath) {
     candidates.push({
       label: `appPath:${path.join(appPath, 'native-module')}`,
+      abiDirectory: path.join(appPath, 'native-module'),
       load: () => require(path.join(appPath, 'native-module')),
     });
   }
@@ -37,6 +143,7 @@ function getCandidates(): Candidate[] {
   if (!app?.isPackaged) {
     candidates.push({
       label: `cwd:${cwdPath}`,
+      abiDirectory: cwdPath,
       load: () => require(cwdPath),
     });
   }
@@ -68,6 +175,7 @@ export function loadNativeAudioModule(): any | null {
 
   for (const candidate of getCandidates()) {
     try {
+      assertNativeAbiCompatibility(candidate);
       console.log(`[NativeAudio] Attempting to load from: ${candidate.label}`);
       const mod = candidate.load();
       

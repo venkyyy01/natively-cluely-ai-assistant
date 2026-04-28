@@ -1,39 +1,44 @@
 import { execFile } from 'node:child_process';
 import { EventEmitter } from 'events';
-
-interface WindowInfo {
-  windowId: number;
-  ownerPid: number;
-  ownerName: string;
-  bundleId?: string;
-  layer: number;
-  alpha: number;
-  sharingState?: string;
-}
+import { decideStealthFallback } from './StealthFallbackPolicy';
+import { loadNativeStealthModule } from './nativeStealthModule';
 
 interface StealthEnhancerOptions {
   platform?: string;
   logger?: Pick<Console, 'log' | 'warn' | 'error'>;
+  commandRunner?: (command: string, args: string[]) => Promise<string>;
+  nativeModule?: NativeMacosStealthBindings | null;
 }
 
-const CHROME_BUNDLE_IDS = new Set([
-  'com.google.Chrome',
-  'org.chromium.Chromium',
-  'com.microsoft.edgemac',
-  'com.brave.Browser',
-  'com.operasoftware.Opera',
-  'company.thebrowser.Browser',
-]);
+interface NativeMacosWindowInfo {
+  windowNumber: number;
+  ownerPid: number;
+}
+
+interface NativeMacosStealthBindings {
+  applyMacosWindowStealth?: (windowNumber: number) => void;
+  removeMacosWindowStealth?: (windowNumber: number) => void;
+  setMacosWindowLevel?: (windowNumber: number, level: number) => void;
+  listVisibleWindows?: () => NativeMacosWindowInfo[];
+}
+
+// kCGUtilityWindowLevel equivalent (NSWindowLevel.utility = 19)
+// See electron/stealth/implementation-plan.md §6.2 / §8.1
+const MACOS_UTILITY_WINDOW_LEVEL = 19;
 
 export class MacosStealthEnhancer extends EventEmitter {
   private readonly platform: string;
   private readonly logger: Pick<Console, 'log' | 'warn' | 'error'>;
+  private readonly commandRunner: (command: string, args: string[]) => Promise<string>;
+  private nativeModule: NativeMacosStealthBindings | null | undefined;
   private enhancedWindows = new Set<number>();
 
   constructor(options: StealthEnhancerOptions = {}) {
     super();
     this.platform = options.platform ?? process.platform;
     this.logger = options.logger ?? console;
+    this.commandRunner = options.commandRunner ?? ((command, args) => this.execPromise(command, args));
+    this.nativeModule = options.nativeModule;
   }
 
   async enhanceWindowProtection(windowNumber: number): Promise<boolean> {
@@ -42,11 +47,12 @@ export class MacosStealthEnhancer extends EventEmitter {
     }
 
     try {
-      await this.applyWindowLevel(windowNumber, 0);
-      await this.disableWindowSharing(windowNumber);
-      this.enhancedWindows.add(windowNumber);
-      this.logger.log(`[MacosStealthEnhancer] Enhanced protection applied to window ${windowNumber}`);
-      this.emit('window-enhanced', windowNumber);
+      const safeWindowNumber = this.normalizeWindowNumber(windowNumber);
+      await this.applyWindowLevel(safeWindowNumber, MACOS_UTILITY_WINDOW_LEVEL);
+      await this.disableWindowSharing(safeWindowNumber);
+      this.enhancedWindows.add(safeWindowNumber);
+      this.logger.log(`[MacosStealthEnhancer] Enhanced protection applied to window ${safeWindowNumber}`);
+      this.emit('window-enhanced', safeWindowNumber);
       return true;
     } catch (error) {
       this.logger.warn('[MacosStealthEnhancer] Failed to enhance window protection:', error);
@@ -60,10 +66,11 @@ export class MacosStealthEnhancer extends EventEmitter {
     }
 
     try {
-      await this.enableWindowSharing(windowNumber);
-      this.enhancedWindows.delete(windowNumber);
-      this.logger.log(`[MacosStealthEnhancer] Enhanced protection removed from window ${windowNumber}`);
-      this.emit('window-degraded', windowNumber);
+      const safeWindowNumber = this.normalizeWindowNumber(windowNumber);
+      await this.enableWindowSharing(safeWindowNumber);
+      this.enhancedWindows.delete(safeWindowNumber);
+      this.logger.log(`[MacosStealthEnhancer] Enhanced protection removed from window ${safeWindowNumber}`);
+      this.emit('window-degraded', safeWindowNumber);
     } catch (error) {
       this.logger.warn('[MacosStealthEnhancer] Failed to remove enhanced protection:', error);
     }
@@ -75,16 +82,25 @@ export class MacosStealthEnhancer extends EventEmitter {
     }
 
     try {
+      const safeWindowNumber = this.normalizeWindowNumber(targetWindowNumber);
       const chromePids = await this.getChromePids();
       if (chromePids.size === 0) {
         return false;
       }
 
       const capturedWindows = await this.getWindowsCapturedByPids(chromePids);
-      return capturedWindows.has(targetWindowNumber);
+      return capturedWindows.has(safeWindowNumber);
     } catch {
       return false;
     }
+  }
+
+  private normalizeWindowNumber(windowNumber: number): number {
+    if (!Number.isSafeInteger(windowNumber) || windowNumber <= 0) {
+      throw new Error(`Invalid macOS window number: ${windowNumber}`);
+    }
+
+    return windowNumber;
   }
 
   async getActiveScreenCaptureSessions(): Promise<Array<{ pid: number; name: string }>> {
@@ -117,7 +133,13 @@ export class MacosStealthEnhancer extends EventEmitter {
   }
 
   private async applyWindowLevel(windowNumber: number, level: number): Promise<void> {
-    await this.execPython(`
+    const nativeModule = this.getNativeModule();
+    if (nativeModule?.setMacosWindowLevel) {
+      nativeModule.setMacosWindowLevel(windowNumber, level);
+      return;
+    }
+
+    await this.execDevelopmentPythonFallback(`
 import Cocoa
 import sys
 
@@ -135,7 +157,13 @@ for window in windows:
   }
 
   private async disableWindowSharing(windowNumber: number): Promise<void> {
-    await this.execPython(`
+    const nativeModule = this.getNativeModule();
+    if (nativeModule?.applyMacosWindowStealth) {
+      nativeModule.applyMacosWindowStealth(windowNumber);
+      return;
+    }
+
+    await this.execDevelopmentPythonFallback(`
 import Cocoa
 import sys
 
@@ -152,7 +180,13 @@ for window in windows:
   }
 
   private async enableWindowSharing(windowNumber: number): Promise<void> {
-    await this.execPython(`
+    const nativeModule = this.getNativeModule();
+    if (nativeModule?.removeMacosWindowStealth) {
+      nativeModule.removeMacosWindowStealth(windowNumber);
+      return;
+    }
+
+    await this.execDevelopmentPythonFallback(`
 import Cocoa
 import sys
 
@@ -206,33 +240,14 @@ for window in windows:
     const capturedWindows = new Set<number>();
 
     try {
-      const pidList = Array.from(pids).join(',');
-      const stdout = await this.execPython(`
-import Quartz
-import sys
+      const nativeModule = this.getNativeModule();
+      if (!nativeModule?.listVisibleWindows) {
+        throw new Error('native listVisibleWindows unavailable');
+      }
 
-target_pids = {${pidList}}
-windows = Quartz.CGWindowListCopyWindowInfo(
-    Quartz.kCGWindowListOptionAll,
-    Quartz.kCGNullWindowID
-)
-
-captured = []
-for window in windows:
-    owner_pid = window.get('kCGWindowOwnerPID', -1)
-    if owner_pid in target_pids:
-        window_id = window.get('kCGWindowNumber', -1)
-        captured.append(window_id)
-
-print(','.join(str(w) for w in captured))
-`);
-
-      if (stdout && stdout.trim()) {
-        for (const part of stdout.trim().split(',')) {
-          const windowId = parseInt(part, 10);
-          if (Number.isFinite(windowId) && windowId > 0) {
-            capturedWindows.add(windowId);
-          }
+      for (const window of nativeModule.listVisibleWindows()) {
+        if (pids.has(window.ownerPid) && window.windowNumber > 0) {
+          capturedWindows.add(window.windowNumber);
         }
       }
     } catch {
@@ -262,13 +277,24 @@ print(','.join(str(w) for w in captured))
     return null;
   }
 
-  private async execPython(script: string): Promise<string> {
-    const sanitizedScript = script.replace(/['"`]/g, (match) => {
-      if (match === "'") return "'\\''";
-      return match;
-    });
+  private getNativeModule(): NativeMacosStealthBindings | null {
+    if (this.nativeModule !== undefined) {
+      return this.nativeModule;
+    }
 
-    return this.execPromise('python3', ['-c', `'${sanitizedScript}'`]);
+    this.nativeModule = loadNativeStealthModule({ retryOnFailure: false });
+    return this.nativeModule;
+  }
+
+  private async execDevelopmentPythonFallback(script: string): Promise<string> {
+    const decision = decideStealthFallback({ kind: 'python' });
+    if (!decision.allow) {
+      this.logger.warn(`[MacosStealthEnhancer] Python fallback blocked: ${decision.reason}`);
+      throw new Error(decision.reason);
+    }
+
+    this.logger.log(`[MacosStealthEnhancer] Python fallback policy: ${decision.reason}`);
+    return this.commandRunner('python3', ['-c', script]);
   }
 
   private execPromise(command: string, args: string[]): Promise<string> {

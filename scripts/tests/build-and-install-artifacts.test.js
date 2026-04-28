@@ -96,7 +96,56 @@ test('cleanup removes stale packaged app directories and archive files', () => {
 test('cleanup preserves the tracked macOS virtual display helper source path', () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'build-install-helper-'));
   const releaseDir = path.join(tempDir, 'release');
-  const helperPath = path.join(tempDir, 'assets', 'bin', 'macos', 'stealth-virtual-display-helper');
+  const helperPath = path.join(tempDir, 'assets', 'bin', 'macos', 'system-services-helper');
+
+  touch(helperPath, 1_000);
+
+  runShell(
+    `source "${scriptPath}" && SCRIPT_DIR="${tempDir}" RELEASE_DIR="${releaseDir}" HOME="${tempDir}" clean_build_artifacts`
+  );
+
+  assert.equal(fs.existsSync(helperPath), true);
+});
+
+test('virtual display helper resolution prefers the renamed helper and falls back to the legacy name', () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'build-install-helper-resolution-'));
+  const helperDir = path.join(tempDir, 'assets', 'bin', 'macos');
+  const renamedHelperPath = path.join(helperDir, 'system-services-helper');
+  const legacyHelperPath = path.join(helperDir, 'stealth-virtual-display-helper');
+
+  touch(legacyHelperPath, 1_000);
+  assert.equal(
+    runShell(`source "${scriptPath}" && resolve_macos_virtual_display_helper_binary "${helperDir}"`),
+    legacyHelperPath,
+  );
+
+  touch(renamedHelperPath, 2_000);
+  assert.equal(
+    runShell(`source "${scriptPath}" && resolve_macos_virtual_display_helper_binary "${helperDir}"`),
+    renamedHelperPath,
+  );
+});
+
+test('cleanup preserves the tracked macOS full stealth XPC bundle source path', () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'build-install-full-stealth-helper-'));
+  const releaseDir = path.join(tempDir, 'release');
+  const helperBundlePath = path.join(tempDir, 'assets', 'xpcservices', 'macos-full-stealth-helper.xpc');
+  const helperBinaryPath = path.join(helperBundlePath, 'Contents', 'MacOS', 'macos-full-stealth-helper');
+
+  touch(helperBinaryPath, 1_000);
+
+  runShell(
+    `source "${scriptPath}" && SCRIPT_DIR="${tempDir}" RELEASE_DIR="${releaseDir}" HOME="${tempDir}" clean_build_artifacts`
+  );
+
+  assert.equal(fs.existsSync(helperBundlePath), true);
+  assert.equal(fs.existsSync(helperBinaryPath), true);
+});
+
+test('cleanup preserves the tracked foundation intent helper source path', () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'build-install-foundation-intent-helper-'));
+  const releaseDir = path.join(tempDir, 'release');
+  const helperPath = path.join(tempDir, 'assets', 'bin', 'macos', 'foundation-intent-helper');
 
   touch(helperPath, 1_000);
 
@@ -138,4 +187,17 @@ test('artifact helpers fail clearly when packaged app is missing', () => {
   } catch (error) {
     assert.match(error.stdout || '', /Missing packaged app/);
   }
+});
+
+test('is_truthy_flag accepts expected truthy and falsy values', () => {
+  const output = runShell(`source "${scriptPath}" && for value in 1 true TRUE yes on; do is_truthy_flag "$value" || exit 1; done && for value in 0 false FALSE no off ""; do if is_truthy_flag "$value"; then exit 1; fi; done && printf 'ok'`);
+  assert.equal(output, 'ok');
+});
+
+test('validate_packaged_helper_launch_modes probes with and without helper', () => {
+  const output = runShell(`source "${scriptPath}" && require_file(){ :; } && run_packaged_launch_probe(){ printf 'probe:%s:%s\n' "$1" "$3"; } && success(){ printf 'success:%s\n' "$1"; } && validate_packaged_helper_launch_modes "/Applications/Natively.app" "/Applications/Natively.app/Contents/MacOS/Natively"`);
+
+  assert.match(output, /probe:with-helper:0/);
+  assert.match(output, /probe:without-helper:1/);
+  assert.match(output, /Packaged helper launch validation passed/);
 });

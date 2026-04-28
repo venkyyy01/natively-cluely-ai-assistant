@@ -77,8 +77,9 @@ test('StealthRuntime creates shell/content pair and applies stealth to the visib
     preloadPath: '/tmp/preload.js',
     shellPreloadPath: '/tmp/shellPreload.js',
     ipcMain: new EventEmitter() as never,
-    logger: { log() {}, warn() {} },
-  });
+  logger: { log() {}, warn() {}, error() {} },
+  onFault: () => {},
+});
 
   const shell = runtime.createPrimaryStealthSurface({ width: 100, height: 100, webPreferences: {} });
   runtime.applyStealth(true);
@@ -90,6 +91,8 @@ test('StealthRuntime creates shell/content pair and applies stealth to the visib
   assert.equal(created[0]?.options.transparent, false);
   assert.equal(created[0]?.options.frame, false);
   assert.equal(created[0]?.options.vibrancy, undefined);
+  assert.equal((created[0]?.options.webPreferences as Record<string, unknown>)?.sandbox, false);
+  assert.equal((created[1]?.options.webPreferences as Record<string, unknown>)?.sandbox, false);
   assert.deepEqual(applied, [
     { id: 2, options: { role: 'primary', hideFromSwitcher: false, allowVirtualDisplayIsolation: false } },
   ]);
@@ -110,9 +113,10 @@ test('StealthRuntime ignores shell events from unrelated senders and cleans up s
     shellHtmlPath: '/tmp/shell.html',
     preloadPath: '/tmp/preload.js',
     shellPreloadPath: '/tmp/shellPreload.js',
-    ipcMain: ipcBus as never,
-    logger: { log() {}, warn() {} },
-  });
+  ipcMain: ipcBus as never,
+  logger: { log() {}, warn() {}, error() {} },
+  onFault: () => {},
+});
 
   runtime.createPrimaryStealthSurface({ width: 100, height: 100, webPreferences: {} });
   runtime.show();
@@ -122,7 +126,7 @@ test('StealthRuntime ignores shell events from unrelated senders and cleans up s
   runtime.destroy();
   runtime.destroy();
 
-  assert.equal(created[1]?.shown, true);
+  assert.equal(created[1]?.shown, false);
   assert.equal(created[1]?.hidden, true);
 });
 
@@ -140,15 +144,154 @@ test('StealthRuntime requests an initial repaint after content load and shell re
     shellHtmlPath: '/tmp/shell.html',
     preloadPath: '/tmp/preload.js',
     shellPreloadPath: '/tmp/shellPreload.js',
-    ipcMain: ipcBus as never,
-    logger: { log() {}, warn() {} },
-  });
+  ipcMain: ipcBus as never,
+  logger: { log() {}, warn() {}, error() {} },
+  onFault: () => {},
+});
 
   runtime.createPrimaryStealthSurface({ width: 100, height: 100, transparent: true, vibrancy: 'under-window', webPreferences: {} });
   created[0]?.webContents.emit('did-finish-load');
   ipcBus.emit('stealth-shell:ready', { sender: { id: created[1]?.webContents.id } });
 
   assert.equal(created[0]?.webContents.invalidations, 3);
+});
+
+test('StealthRuntime reports content runtime faults through onFault callback', async () => {
+  const faults: string[] = [];
+  const created: FakeWindow[] = [];
+  const runtime = new StealthRuntime({
+    startUrl: 'http://localhost:5180?window=launcher',
+    stealthManager: { applyToWindow() {} } as never,
+    createWindow: (options) => {
+      const win = new FakeWindow(created.length + 41, options as Record<string, unknown>);
+      created.push(win);
+      return win as never;
+    },
+    shellHtmlPath: '/tmp/shell.html',
+    preloadPath: '/tmp/preload.js',
+    shellPreloadPath: '/tmp/shellPreload.js',
+  ipcMain: new EventEmitter() as never,
+  logger: { log() {}, warn() {}, error() {} },
+  onFault: (reason) => {
+    faults.push(reason);
+  },
+});
+
+  runtime.createPrimaryStealthSurface({ width: 100, height: 100, webPreferences: {} });
+  created[0]?.webContents.emit('crashed', {}, false);
+  created[0]?.webContents.emit('render-process-gone', {}, { reason: 'crashed', exitCode: 1 });
+
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.deepEqual(faults, ['content-window-crashed', 'content-render-gone:crashed']);
+});
+
+test('StealthRuntime treats an unprobeable content bridge as a runtime fault', async () => {
+  const faults: string[] = [];
+  const created: FakeWindow[] = [];
+  const runtime = new StealthRuntime({
+    startUrl: 'http://localhost:5180?window=launcher',
+    stealthManager: { applyToWindow() {} } as never,
+    createWindow: (options) => {
+      const win = new FakeWindow(created.length + 51, options as Record<string, unknown>);
+      created.push(win);
+      return win as never;
+    },
+    shellHtmlPath: '/tmp/shell.html',
+    preloadPath: '/tmp/preload.js',
+    shellPreloadPath: '/tmp/shellPreload.js',
+    ipcMain: new EventEmitter() as never,
+    logger: { log() {}, warn() {}, error() {} },
+    onFault: (reason) => {
+      faults.push(reason);
+    },
+  });
+
+  runtime.createPrimaryStealthSurface({ width: 100, height: 100, webPreferences: {} });
+  created[0]?.webContents.emit('did-finish-load');
+
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.deepEqual(faults, ['content-preload-bridge-unprobeable']);
+});
+
+test('StealthRuntime forwards shell runtime heartbeat signals through onHeartbeat callback', async () => {
+  const heartbeats: string[] = [];
+  const ipcBus = new EventEmitter();
+  const created: FakeWindow[] = [];
+  const runtime = new StealthRuntime({
+    startUrl: 'http://localhost:5180?window=launcher',
+    stealthManager: { applyToWindow() {} } as never,
+    createWindow: (options) => {
+      const win = new FakeWindow(created.length + 61, options as Record<string, unknown>);
+      created.push(win);
+      return win as never;
+    },
+    shellHtmlPath: '/tmp/shell.html',
+    preloadPath: '/tmp/preload.js',
+    shellPreloadPath: '/tmp/shellPreload.js',
+  ipcMain: ipcBus as never,
+  logger: { log() {}, warn() {}, error() {} },
+  onFault: () => {},
+  onHeartbeat: () => {
+    heartbeats.push('tick');
+  },
+});
+
+  runtime.createPrimaryStealthSurface({ width: 100, height: 100, webPreferences: {} });
+  ipcBus.emit('stealth-shell:ready', { sender: { id: created[1]?.webContents.id } });
+  ipcBus.emit('stealth-shell:heartbeat', { sender: { id: created[1]?.webContents.id } });
+  ipcBus.emit('stealth-shell:heartbeat', { sender: { id: 99999 } });
+
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.deepEqual(heartbeats, ['tick', 'tick']);
+});
+
+test('StealthRuntime defers shell visibility until the first content frame arrives', async () => {
+  const created: FakeWindow[] = [];
+  let firstFrameCount = 0;
+
+  const runtime = new StealthRuntime({
+    startUrl: 'http://localhost:5180?window=launcher',
+    stealthManager: { applyToWindow() {} } as never,
+    createWindow: (options) => {
+      const win = new FakeWindow(created.length + 81, options as Record<string, unknown>);
+      created.push(win);
+      return win as never;
+    },
+    shellHtmlPath: '/tmp/shell.html',
+    preloadPath: '/tmp/preload.js',
+    shellPreloadPath: '/tmp/shellPreload.js',
+    ipcMain: new EventEmitter() as never,
+    logger: { log() {}, warn() {}, error() {} },
+    onFault: () => {},
+    onFirstFrame: () => {
+      firstFrameCount += 1;
+    },
+  });
+
+  runtime.createPrimaryStealthSurface({ width: 100, height: 100, webPreferences: {} });
+  runtime.show();
+
+  assert.equal(created[1]?.shown, false);
+  assert.equal(runtime.hasReceivedFirstFrame(), false);
+
+  created[0]?.webContents.emit(
+    'paint',
+    {},
+    { x: 0, y: 0, width: 100, height: 100 },
+    {
+      toPNG: () => Buffer.from('frame'),
+      getSize: () => ({ width: 100, height: 100 }),
+    },
+  );
+
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(runtime.hasReceivedFirstFrame(), true);
+  assert.equal(firstFrameCount, 1);
+  assert.equal(created[1]?.shown, true);
 });
 
 test('StealthRuntime uses loadURL for packaged file targets so query params survive', () => {
@@ -164,9 +307,10 @@ test('StealthRuntime uses loadURL for packaged file targets so query params surv
     shellHtmlPath: '/tmp/shell.html',
     preloadPath: '/tmp/preload.js',
     shellPreloadPath: '/tmp/shellPreload.js',
-    ipcMain: new EventEmitter() as never,
-    logger: { log() {}, warn() {} },
-  });
+  ipcMain: new EventEmitter() as never,
+  logger: { log() {}, warn() {}, error() {} },
+  onFault: () => {},
+});
 
   runtime.createPrimaryStealthSurface({ width: 100, height: 100, webPreferences: {} });
 

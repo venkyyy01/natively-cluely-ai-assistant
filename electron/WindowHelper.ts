@@ -4,14 +4,45 @@ import { AppState } from "./main"
 import path from "node:path"
 import { StealthManager } from "./stealth/StealthManager"
 import { StealthRuntime } from "./stealth/StealthRuntime"
-import { getRendererRouteUrl, loadRendererRoute, type RendererWindowKind } from './rendererRoute'
+import { attachRendererBridgeMonitor } from "./runtime/rendererBridgeHealth"
+import { resolveRendererPreloadPath, resolveRendererStartUrl } from "./runtime/windowAssetPaths"
+import { attachRevealSafetyNet, attachWindowCrashRecovery } from "./startup/rendererBridgeRecovery"
+import { recordStartupFailure } from "./startup/StartupHealer"
+import type { ProtectionEventType } from "./stealth/protectionStateTypes"
+import { StartupProtectionGate, type StartupProtectionGateDecision } from "./stealth/StartupProtectionGate"
+import type { VisibilityIntent } from "./stealth/privacyShieldState"
 
-const isEnvDev = process.env.NODE_ENV === "development"
-const isPackaged = app.isPackaged
+type ProtectionEventRecorder = {
+  recordProtectionEvent?: (
+    type: ProtectionEventType,
+    context?: {
+      source?: string
+      windowRole?: 'primary' | 'auxiliary' | 'unknown'
+      windowId?: string
+      visible?: boolean
+    },
+  ) => void
+  requestWindowShow?: (
+    win: BrowserWindow | null | undefined,
+    context: { source: string; windowRole?: 'primary' | 'auxiliary' | 'unknown' },
+  ) => void
+  requestWindowHide?: (
+    win: BrowserWindow | null | undefined,
+    context: { source: string; windowRole?: 'primary' | 'auxiliary' | 'unknown' },
+  ) => void
+  setWindowOpacity?: (
+    win: BrowserWindow | null | undefined,
+    value: number,
+    context: { source: string; windowRole?: 'primary' | 'auxiliary' | 'unknown' },
+  ) => void
+  verifyManagedWindows?: () => boolean
+}
 
-console.log(`[WindowHelper] isEnvDev: ${isEnvDev}, isPackaged: ${isPackaged}`)
+type BrowserWindowOptionsWithContentProtection = Electron.BrowserWindowConstructorOptions & {
+  contentProtection?: boolean
+}
 
-const isDev = isEnvDev && !isPackaged
+console.log(`[WindowHelper] isEnvDev: ${process.env.NODE_ENV === "development"}, isPackaged: ${app.isPackaged}`)
 
 export class WindowHelper {
   private launcherWindow: BrowserWindow | null = null
@@ -32,6 +63,10 @@ export class WindowHelper {
   private overlayClickthroughEnabled: boolean = false
   private opacityTimeout: NodeJS.Timeout | null = null
   private readonly overlayContentProtection: boolean = true
+  private directLauncherLoaded: boolean = false
+  private pendingDirectLauncherReveal: boolean = false
+  private detachDirectLauncherBridgeMonitor: (() => void) | null = null
+  private detachDirectOverlayBridgeMonitor: (() => void) | null = null
 
   // Initialize with explicit number type and 0 value
   private screenWidth: number = 0
@@ -42,10 +77,26 @@ export class WindowHelper {
   private currentX: number = 0
   private currentY: number = 0
   private readonly stealthManager: StealthManager
+  private readonly startupProtectionGate: StartupProtectionGate
+  private stealthHeartbeatListener: (() => void) | null = null
 
   constructor(appState: AppState, stealthManager: StealthManager) {
     this.appState = appState
     this.stealthManager = stealthManager
+    this.startupProtectionGate = new StartupProtectionGate({
+      logger: console,
+      isStrictProtectionEnabled: () => process.env.NATIVELY_STRICT_PROTECTION === '1',
+      verifyProtection: () => this.verifyStartupProtection(),
+      recordProtectionEvent: (type, context) => {
+        const recorder = this.stealthManager as ProtectionEventRecorder
+        return recorder.recordProtectionEvent?.(type, context)
+      },
+      onBlocked: (decision) => this.handleStartupRevealBlocked(decision),
+    })
+  }
+
+  public setStealthRuntimeHeartbeatListener(listener: (() => void) | null): void {
+    this.stealthHeartbeatListener = listener
   }
 
   private shouldUseStealthRuntime(): boolean {
@@ -74,13 +125,86 @@ export class WindowHelper {
     }
   }
 
+  private recordProtectionEvent(
+    type: ProtectionEventType,
+    win: BrowserWindow | null,
+    source: string,
+    windowRole: 'primary' | 'auxiliary' | 'unknown' = 'primary',
+  ): void {
+    if (!win || win.isDestroyed()) {
+      return
+    }
+
+    let windowId: string | undefined
+    try {
+      windowId = win.getMediaSourceId?.()
+    } catch {
+      windowId = undefined
+    }
+
+    const recorder = this.stealthManager as ProtectionEventRecorder
+    recorder.recordProtectionEvent?.(type, {
+      source,
+      windowRole,
+      windowId,
+      visible: typeof win.isVisible === 'function' ? win.isVisible() : undefined,
+    })
+  }
+
+  private requestWindowShow(
+    win: BrowserWindow | null,
+    source: string,
+    windowRole: 'primary' | 'auxiliary' | 'unknown' = 'primary',
+  ): void {
+    const manager = this.stealthManager as ProtectionEventRecorder
+    if (manager.requestWindowShow) {
+      manager.requestWindowShow(win, { source, windowRole })
+      return
+    }
+
+    this.recordProtectionEvent('show-requested', win, source, windowRole)
+    win?.show()
+    this.recordProtectionEvent('shown', win, source, windowRole)
+  }
+
+  private requestWindowHide(
+    win: BrowserWindow | null,
+    source: string,
+    windowRole: 'primary' | 'auxiliary' | 'unknown' = 'primary',
+  ): void {
+    const manager = this.stealthManager as ProtectionEventRecorder
+    if (manager.requestWindowHide) {
+      manager.requestWindowHide(win, { source, windowRole })
+      return
+    }
+
+    this.recordProtectionEvent('hide-requested', win, source, windowRole)
+    win?.hide()
+    this.recordProtectionEvent('hidden', win, source, windowRole)
+  }
+
+  private setWindowOpacity(
+    win: BrowserWindow | null,
+    value: number,
+    source: string,
+    windowRole: 'primary' | 'auxiliary' | 'unknown' = 'primary',
+  ): void {
+    const manager = this.stealthManager as ProtectionEventRecorder
+    if (manager.setWindowOpacity) {
+      manager.setWindowOpacity(win, value, { source, windowRole })
+      return
+    }
+
+    win?.setOpacity(value)
+  }
+
   private showLauncherSurface(): void {
     if (this.launcherRuntime) {
       this.launcherRuntime.show()
       return
     }
 
-    this.launcherWindow?.show()
+    this.requestWindowShow(this.launcherWindow, 'WindowHelper.showLauncherSurface')
     this.launcherWindow?.focus()
   }
 
@@ -90,19 +214,87 @@ export class WindowHelper {
       return
     }
 
-    this.launcherWindow?.hide()
+    this.requestWindowHide(this.launcherWindow, 'WindowHelper.hideLauncherSurface')
   }
 
-  private createDirectWindow(
-    options: Electron.BrowserWindowConstructorOptions,
-    windowKind: RendererWindowKind,
-    label: string,
-  ): BrowserWindow {
+  private createDirectWindow(options: Electron.BrowserWindowConstructorOptions): BrowserWindow {
     const win = new BrowserWindow(options)
-    void loadRendererRoute(win, windowKind).catch((error) => {
+    this.recordProtectionEvent('window-created', win, 'WindowHelper.createDirectWindow', 'unknown')
+    return win
+  }
+
+  private loadDirectWindow(win: BrowserWindow, url: string, label: string): void {
+    void win.loadURL(url).catch((error) => {
       console.error(`[WindowHelper] ${label} direct load failed:`, error)
     })
-    return win
+  }
+
+  private shouldStartRendererShielded(): boolean {
+    const appState = this.appState as unknown as { shouldStartRendererShielded?: () => boolean }
+    return typeof appState.shouldStartRendererShielded === 'function'
+      ? appState.shouldStartRendererShielded()
+      : false
+  }
+
+  private getStartupVisibilityIntent(): VisibilityIntent {
+    const appState = this.appState as unknown as { getVisibilityIntent?: () => VisibilityIntent }
+    if (typeof appState.getVisibilityIntent === 'function') {
+      return appState.getVisibilityIntent()
+    }
+
+    return this.shouldStartRendererShielded() ? 'protected_shield' : 'visible_app'
+  }
+
+  private verifyStartupProtection(): boolean {
+    const manager = this.stealthManager as ProtectionEventRecorder
+    if (typeof manager.verifyManagedWindows !== 'function') {
+      return false
+    }
+
+    return manager.verifyManagedWindows()
+  }
+
+  private handleStartupRevealBlocked(decision: StartupProtectionGateDecision): void {
+    this.pendingDirectLauncherReveal = false
+    const appState = this.appState as unknown as {
+      setPrivacyShieldFault?: (key: string, reason: string) => void
+    }
+    const reason = decision.reason === 'startup-verification-timeout'
+      ? 'Startup privacy protection verification timed out; sensitive content remains hidden.'
+      : 'Startup privacy protection could not be verified; sensitive content remains hidden.'
+
+    if (typeof appState.setPrivacyShieldFault === 'function') {
+      appState.setPrivacyShieldFault('startup_protection_verification_failed', reason)
+      return
+    }
+
+    this.hideMainWindow()
+  }
+
+  private async revealLauncherAfterStartupGate(source: string): Promise<void> {
+    if (this.shouldStartRendererShielded()) {
+      console.warn(`[WindowHelper] ${source}: staying protected instead of revealing launcher`)
+      this.hideMainWindow()
+      return
+    }
+
+    const decision = await this.startupProtectionGate.evaluateReveal({
+      source,
+      windowRole: 'primary',
+      intent: this.getStartupVisibilityIntent(),
+    })
+
+    if (!decision.allowReveal) {
+      return
+    }
+
+    this.switchToLauncher()
+  }
+
+  private buildRendererWindowUrl(baseUrl: string, windowKind: 'launcher' | 'overlay'): string {
+    const separator = baseUrl.includes('?') ? '&' : '?'
+    const privacyParam = this.shouldStartRendererShielded() ? '&privacyShield=1' : ''
+    return `${baseUrl}${separator}window=${windowKind}${privacyParam}`
   }
 
   public setContentProtection(enable: boolean): void {
@@ -198,6 +390,9 @@ export class WindowHelper {
   public createWindow(): void {
     if (this.launcherWindow !== null) return // Already created
 
+    const startUrl = resolveRendererStartUrl({ electronDir: __dirname })
+    const preloadPath = resolveRendererPreloadPath({ electronDir: __dirname })
+
     const primaryDisplay = screen.getPrimaryDisplay()
     const workArea = primaryDisplay.workArea
     this.screenWidth = workArea.width
@@ -212,35 +407,43 @@ export class WindowHelper {
     // Ensure y is at least workArea.y (don't go offscreen top)
     const topMargin = Math.round(workArea.height * 0.05);
     const y = Math.round(workArea.y + topMargin);
+    const useStealthRuntime = this.shouldUseStealthRuntime();
 
-    // --- 1. Create Launcher Window ---
+// --- 1. Create Launcher Window ---
     const launcherSettings: Electron.BrowserWindowConstructorOptions = {
-      width: width,
-      height: height,
-      x: x,
-      y: y,
-      minWidth: 600,
-      minHeight: 400,
-      webPreferences: {
-        nodeIntegration: false,
-        contextIsolation: true,
-        preload: path.join(__dirname, "preload.js"),
-        scrollBounce: true,
-        webSecurity: true,
-      },
-      show: false,
-      skipTaskbar: this.contentProtection,
+    width: width,
+    height: height,
+    x: x,
+    y: y,
+    minWidth: 600,
+    minHeight: 400,
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true,
+      sandbox: false,
+      preload: preloadPath,
+      scrollBounce: true,
+      webSecurity: true,
+    },
+    show: false,
+    paintWhenInitiallyHidden: true,
+    skipTaskbar: this.contentProtection,
       titleBarStyle: 'hiddenInset',
       trafficLightPosition: { x: 14, y: 14 },
-      vibrancy: 'under-window',
-      visualEffectState: 'followWindow',
-      transparent: true,
       hasShadow: true,
-      backgroundColor: "#00000000",
       focusable: true,
       resizable: true,
       movable: true,
       center: true,
+      ...(useStealthRuntime ? {
+        vibrancy: 'under-window' as const,
+        visualEffectState: 'followWindow' as const,
+        transparent: true,
+        backgroundColor: "#00000000",
+      } : {
+        transparent: false,
+        backgroundColor: "#050505",
+      }),
       icon: (() => {
         const isMac = process.platform === "darwin";
         const isWin = process.platform === "win32";
@@ -275,13 +478,25 @@ export class WindowHelper {
     }
 
     console.log(`[WindowHelper] Icon Path: ${launcherSettings.icon}`);
-    console.log(`[WindowHelper] Start URL: ${getRendererRouteUrl('launcher')}`);
+    console.log(`[WindowHelper] Start URL: ${startUrl}`);
+    console.log(`[WindowHelper] Preload Path: ${preloadPath}`);
 
-    if (this.shouldUseStealthRuntime()) {
+    if (useStealthRuntime) {
       try {
         this.launcherRuntime = new StealthRuntime({
           stealthManager: this.stealthManager,
-          startUrl: getRendererRouteUrl('launcher'),
+          startUrl: this.buildRendererWindowUrl(startUrl, 'launcher'),
+          onFault: (reason) => {
+            this.appState.handleStealthRuntimeFault(reason)
+          },
+          onHeartbeat: () => {
+            this.stealthHeartbeatListener?.()
+          },
+          onFirstFrame: () => {
+            if (this.currentWindowMode === 'launcher') {
+              void this.revealLauncherAfterStartupGate('WindowHelper.launcherRuntime.onFirstFrame')
+            }
+          },
         })
         this.launcherWindow = this.launcherRuntime.createPrimaryStealthSurface(launcherSettings) as BrowserWindow
         this.launcherContentWindow = this.launcherRuntime.getContentWindow()
@@ -292,66 +507,128 @@ export class WindowHelper {
       }
     } else {
       this.launcherRuntime = null
-      this.launcherWindow = this.createDirectWindow(launcherSettings, 'launcher', 'Launcher')
+      this.directLauncherLoaded = false
+      this.pendingDirectLauncherReveal = true
+      this.detachDirectLauncherBridgeMonitor?.()
+      this.detachDirectLauncherBridgeMonitor = null
+      this.launcherWindow = this.createDirectWindow(launcherSettings)
+      this.setWindowOpacity(this.launcherWindow, 0, 'WindowHelper.createWindow.launcherInitial')
+      this.requestWindowHide(this.launcherWindow, 'WindowHelper.createWindow.launcherInitial')
       this.launcherContentWindow = this.launcherWindow
+
+      // NAT-SELF-HEAL: safety net — if bridge never settles, force reveal anyway
+      let revealSafetyNet = attachRevealSafetyNet('Launcher', this.launcherWindow, () => {
+        this.directLauncherLoaded = true
+        this.pendingDirectLauncherReveal = false
+        console.warn('[WindowHelper] Force-revealing launcher after safety-net timeout');
+        void this.revealLauncherAfterStartupGate('WindowHelper.directLauncher.safetyNet')
+      })
+
+      this.detachDirectLauncherBridgeMonitor = attachRendererBridgeMonitor('Launcher', this.launcherWindow, {
+        expectedPreloadPath: preloadPath,
+        url: this.buildRendererWindowUrl(startUrl, 'launcher'),
+        onSettled: (result) => {
+          this.directLauncherLoaded = true
+          revealSafetyNet.cancel()
+          console.log(`[WindowHelper] Direct launcher bridge settled: ${result}`)
+
+          if (!this.pendingDirectLauncherReveal || this.currentWindowMode !== 'launcher') {
+            return
+          }
+
+          this.pendingDirectLauncherReveal = false
+          void this.revealLauncherAfterStartupGate('WindowHelper.directLauncher.bridgeSettled')
+        },
+      })
+      this.loadDirectWindow(this.launcherWindow, this.buildRendererWindowUrl(startUrl, 'launcher'), 'Launcher')
       console.log('[WindowHelper] Using direct launcher window on macOS');
     }
 
     this.applyLauncherSurfaceProtection()
 
+    // NAT-SELF-HEAL: auto-reload on load failure instead of permanent black screen
+    let launcherLoadFailures = 0;
+    const MAX_LAUNCHER_LOAD_FAILURES = 2;
     this.launcherContentWindow?.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL) => {
       console.error(`[WindowHelper] did-fail-load: ${errorCode} ${errorDescription} URL: ${validatedURL}`);
+      if (launcherLoadFailures < MAX_LAUNCHER_LOAD_FAILURES && this.launcherContentWindow && !this.launcherContentWindow.isDestroyed()) {
+        launcherLoadFailures += 1;
+        console.warn(`[WindowHelper] Auto-reloading launcher after load failure (${launcherLoadFailures}/${MAX_LAUNCHER_LOAD_FAILURES})`);
+        this.launcherContentWindow.webContents.reloadIgnoringCache();
+      } else {
+        console.error('[WindowHelper] Launcher load failed permanently. Recording startup failure.');
+        recordStartupFailure();
+      }
     });
 
     this.launcherContentWindow?.webContents.on('did-finish-load', () => {
       console.log('[WindowHelper] Launcher content window did-finish-load');
+      launcherLoadFailures = 0; // reset on success
     });
 
     this.launcherContentWindow?.webContents.on('dom-ready', () => {
       console.log('[WindowHelper] Launcher content window dom-ready');
     });
 
-    this.launcherContentWindow?.webContents.on('crashed', (_event, killed) => {
-      console.error(`[WindowHelper] Launcher content window crashed (killed=${killed})`);
-    });
-
-    this.launcherContentWindow?.webContents.on('render-process-gone', (_event, details) => {
-      console.error(`[WindowHelper] Launcher render process gone: reason=${details.reason} exitCode=${details.exitCode}`);
-    });
+    // NAT-SELF-HEAL: crash recovery — recreate the window instead of leaving a dead frame
+    if (this.launcherWindow && !this.launcherWindow.isDestroyed()) {
+      attachWindowCrashRecovery('Launcher', this.launcherWindow, () => {
+        console.warn('[WindowHelper] Recreating launcher window after crash');
+        recordStartupFailure();
+        if (this.launcherWindow && !this.launcherWindow.isDestroyed()) {
+          this.launcherWindow.destroy();
+        }
+        this.launcherWindow = null;
+        this.launcherContentWindow = null;
+        this.createWindow();
+      });
+    }
 
     // if (isDev) {
     //   this.launcherWindow.webContents.openDevTools({ mode: 'detach' }); // DEBUG: Open DevTools
     // }
 
-    // --- 2. Create Overlay Window (Hidden initially) ---
-    const overlaySettings: Electron.BrowserWindowConstructorOptions = {
-      width: 600,
-      height: 1,
-      minWidth: 300,
-      minHeight: 1,
-      webPreferences: {
-        nodeIntegration: false,
-        contextIsolation: true,
-        preload: path.join(__dirname, "preload.js"),
-        scrollBounce: true,
-      },
-      show: false,
-      frame: false, // Frameless
-      transparent: true,
-      backgroundColor: "#00000000",
-      alwaysOnTop: true,
-      focusable: true,
-      resizable: true,
-      movable: true,
-      skipTaskbar: false,
-      hasShadow: false, // Prevent shadow from adding perceived size/artifacts
-    }
+// --- 2. Create Overlay Window (Hidden initially) ---
+  const overlaySettings: Electron.BrowserWindowConstructorOptions = {
+    width: 600,
+    height: 1,
+    minWidth: 300,
+    minHeight: 1,
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true,
+      sandbox: false,
+      preload: preloadPath,
+      scrollBounce: true,
+    },
+    show: false,
+    frame: false, // Frameless
+    transparent: true,
+    backgroundColor: "#00000000",
+    alwaysOnTop: true,
+    focusable: true,
+    resizable: true,
+    movable: true,
+    skipTaskbar: this.overlayContentProtection, // CRITICAL: Hide from taskbar when privacy protection is active
+    hasShadow: false, // Prevent shadow from adding perceived size/artifacts
+  }
 
-    if (this.shouldUseStealthRuntime()) {
+    if (useStealthRuntime) {
       try {
         this.overlayRuntime = new StealthRuntime({
           stealthManager: this.stealthManager,
-          startUrl: getRendererRouteUrl('overlay'),
+          startUrl: this.buildRendererWindowUrl(startUrl, 'overlay'),
+          onFault: (reason) => {
+            this.appState.handleStealthRuntimeFault(reason)
+          },
+          onHeartbeat: () => {
+            this.stealthHeartbeatListener?.()
+          },
+          onFirstFrame: () => {
+            if (this.currentWindowMode === 'overlay' && this.isWindowVisible) {
+              this.switchToOverlay()
+            }
+          },
         })
         this.overlayWindow = this.overlayRuntime.createPrimaryStealthSurface(overlaySettings) as BrowserWindow
         this.overlayContentWindow = this.overlayRuntime.getContentWindow()
@@ -369,8 +646,29 @@ export class WindowHelper {
       }
     } else {
       this.overlayRuntime = null
-      this.overlayWindow = this.createDirectWindow(overlaySettings, 'overlay', 'Overlay')
+      this.detachDirectOverlayBridgeMonitor?.()
+      this.detachDirectOverlayBridgeMonitor = null
+      this.overlayWindow = this.createDirectWindow(overlaySettings)
       this.overlayContentWindow = this.overlayWindow
+
+      // NAT-SELF-HEAL: overlay crash recovery
+      if (this.overlayWindow && !this.overlayWindow.isDestroyed()) {
+        attachWindowCrashRecovery('Overlay', this.overlayWindow, () => {
+          console.warn('[WindowHelper] Recreating overlay window after crash');
+          if (this.overlayWindow && !this.overlayWindow.isDestroyed()) {
+            this.overlayWindow.destroy();
+          }
+          this.overlayWindow = null;
+          this.overlayContentWindow = null;
+          // Overlay will be recreated on next toggle
+        });
+      }
+
+      this.detachDirectOverlayBridgeMonitor = attachRendererBridgeMonitor('Overlay', this.overlayWindow, {
+        expectedPreloadPath: preloadPath,
+        url: this.buildRendererWindowUrl(startUrl, 'overlay'),
+      })
+      this.loadDirectWindow(this.overlayWindow, this.buildRendererWindowUrl(startUrl, 'overlay'), 'Overlay')
       console.log('[WindowHelper] Using direct overlay window on macOS');
     }
 
@@ -381,10 +679,9 @@ export class WindowHelper {
       this.overlayWindow.setAlwaysOnTop(true, "floating")
     }
     this.setOverlayClickthrough(this.overlayClickthroughEnabled)
-    this.launcherWindow.once('ready-to-show', () => {
-      this.switchToLauncher()
-      this.isWindowVisible = true
-    })
+    if (this.launcherRuntime) {
+      console.log('[WindowHelper] Waiting for first launcher frame before showing stealth shell');
+    }
 
     this.setupWindowListeners()
   }
@@ -415,6 +712,10 @@ export class WindowHelper {
       }
       this.launcherRuntime?.destroy()
       this.launcherRuntime = null
+      this.detachDirectLauncherBridgeMonitor?.()
+      this.detachDirectLauncherBridgeMonitor = null
+      this.detachDirectOverlayBridgeMonitor?.()
+      this.detachDirectOverlayBridgeMonitor = null
       this.launcherWindow = null
       this.launcherContentWindow = null
       if (this.overlayWindow && !this.overlayWindow.isDestroyed()) {
@@ -469,8 +770,9 @@ export class WindowHelper {
 
   public hideMainWindow(): void {
     // Hide BOTH
+    this.pendingDirectLauncherReveal = false
     this.hideLauncherSurface()
-    this.overlayWindow?.hide()
+    this.requestWindowHide(this.overlayWindow, 'WindowHelper.hideMainWindow.overlay')
     this.isWindowVisible = false
   }
 
@@ -527,27 +829,28 @@ export class WindowHelper {
 
       if (process.platform === 'win32' && this.contentProtection) {
         // Opacity Shield: Show at 0 opacity first to prevent frame leak
-        this.overlayWindow.setOpacity(0);
-        this.overlayWindow.show();
+        this.setWindowOpacity(this.overlayWindow, 0, 'WindowHelper.switchToOverlay.win32');
+        this.requestWindowShow(this.overlayWindow, 'WindowHelper.switchToOverlay.win32');
         this.applyStealth(this.overlayWindow, true, 'primary', false);
         this.setOverlayClickthrough(this.overlayClickthroughEnabled)
         // Small delay to ensure Windows DWM processes the flag before making it opaque
 
-        if (this.opacityTimeout) clearTimeout(this.opacityTimeout);
-        this.opacityTimeout = setTimeout(() => {
-          if (this.overlayWindow && !this.overlayWindow.isDestroyed()) {
-            this.overlayWindow.setOpacity(1);
-            this.stealthManager.reapplyAfterShow(this.overlayWindow);
-            if (!this.overlayClickthroughEnabled) {
-              this.overlayWindow.focus();
-            }
-            this.overlayWindow.setAlwaysOnTop(true, "floating");
-          }
-        }, 60);
+    if (this.opacityTimeout) clearTimeout(this.opacityTimeout);
+    // CRITICAL: Reduced from 60ms to 16ms (1 frame at 60fps) to prevent frame leaks during screen capture
+    this.opacityTimeout = setTimeout(() => {
+      if (this.overlayWindow && !this.overlayWindow.isDestroyed()) {
+        this.setWindowOpacity(this.overlayWindow, 1, 'WindowHelper.switchToOverlay.win32.restore');
+        this.stealthManager.reapplyAfterShow(this.overlayWindow);
+        if (!this.overlayClickthroughEnabled) {
+          this.overlayWindow.focus();
+        }
+        this.overlayWindow.setAlwaysOnTop(true, "floating");
+      }
+    }, 16);
       } else {
         this.applyStealth(this.overlayWindow, this.contentProtection, 'primary', false);
         this.setOverlayClickthrough(this.overlayClickthroughEnabled)
-        this.overlayWindow.show();
+        this.requestWindowShow(this.overlayWindow, 'WindowHelper.switchToOverlay')
         this.stealthManager.reapplyAfterShow(this.overlayWindow);
         if (!this.overlayClickthroughEnabled) {
           this.overlayWindow.focus();
@@ -559,7 +862,7 @@ export class WindowHelper {
 
     // Hide Launcher SECOND
     if (this.launcherWindow && !this.launcherWindow.isDestroyed()) {
-      this.launcherWindow.hide();
+      this.requestWindowHide(this.launcherWindow, 'WindowHelper.switchToOverlay.launcher')
     }
   }
 
@@ -567,11 +870,25 @@ export class WindowHelper {
     console.log('[WindowHelper] Switching to LAUNCHER');
     this.currentWindowMode = 'launcher';
 
+    if (!this.launcherRuntime && !this.directLauncherLoaded) {
+      console.log('[WindowHelper] Delaying launcher reveal until direct renderer load completes');
+      this.pendingDirectLauncherReveal = true
+      if (this.launcherWindow && !this.launcherWindow.isDestroyed()) {
+        this.setWindowOpacity(this.launcherWindow, 0, 'WindowHelper.switchToLauncher.delay')
+        this.requestWindowHide(this.launcherWindow, 'WindowHelper.switchToLauncher.delay')
+      }
+      if (this.overlayWindow && !this.overlayWindow.isDestroyed()) {
+        this.requestWindowHide(this.overlayWindow, 'WindowHelper.switchToLauncher.delayOverlay')
+      }
+      this.isWindowVisible = false
+      return
+    }
+
     // Show Launcher FIRST
     if (this.launcherWindow && !this.launcherWindow.isDestroyed()) {
       if (process.platform === 'win32' && this.contentProtection) {
         // Opacity Shield: Show at 0 opacity first
-        this.launcherWindow.setOpacity(0);
+        this.setWindowOpacity(this.launcherWindow, 0, 'WindowHelper.switchToLauncher.win32');
         this.showLauncherSurface();
         if (this.launcherRuntime) {
           this.launcherRuntime.applyStealth(true);
@@ -579,15 +896,19 @@ export class WindowHelper {
           this.applyStealth(this.launcherWindow, true, 'primary', false);
         }
 
-        if (this.opacityTimeout) clearTimeout(this.opacityTimeout);
-        this.opacityTimeout = setTimeout(() => {
-          if (this.launcherWindow && !this.launcherWindow.isDestroyed()) {
-            this.launcherWindow.setOpacity(1);
-            this.stealthManager.reapplyAfterShow(this.launcherWindow);
-            this.launcherWindow.focus();
-          }
-        }, 60);
+    if (this.opacityTimeout) clearTimeout(this.opacityTimeout);
+    // CRITICAL: Reduced from 60ms to 16ms (1 frame at 60fps) to prevent frame leaks during screen capture
+    this.opacityTimeout = setTimeout(() => {
+      if (this.launcherWindow && !this.launcherWindow.isDestroyed()) {
+        this.setWindowOpacity(this.launcherWindow, 1, 'WindowHelper.switchToLauncher.win32.restore');
+        this.stealthManager.reapplyAfterShow(this.launcherWindow);
+        this.launcherWindow.focus();
+      }
+    }, 16);
       } else {
+        if (!this.launcherRuntime) {
+          this.setWindowOpacity(this.launcherWindow, 1, 'WindowHelper.switchToLauncher')
+        }
         this.applyLauncherSurfaceProtection();
         this.showLauncherSurface();
         this.stealthManager.reapplyAfterShow(this.launcherWindow);
@@ -598,7 +919,7 @@ export class WindowHelper {
 
     // Hide Overlay SECOND
     if (this.overlayWindow && !this.overlayWindow.isDestroyed()) {
-      this.overlayWindow.hide();
+      this.requestWindowHide(this.overlayWindow, 'WindowHelper.switchToLauncher.overlay')
     }
   }
 

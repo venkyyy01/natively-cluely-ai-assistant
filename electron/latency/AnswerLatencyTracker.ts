@@ -1,4 +1,5 @@
 import { ProviderCapabilityClass } from './providerCapability';
+import { getPerformanceInstrumentation } from '../runtime/PerformanceInstrumentation';
 
 export type AnswerRoute = 'fast_standard_answer' | 'enriched_standard_answer' | 'conscious_answer' | 'manual_answer' | 'follow_up_refinement';
 export type TrackedProviderCapabilityClass = ProviderCapabilityClass | 'non_streaming_custom';
@@ -11,15 +12,36 @@ export function normalizeTrackedProviderCapability(
   return capability === 'non_streaming' ? 'non_streaming_custom' : capability;
 }
 
+export type StaleStopReason =
+  | 'transcript_revision_changed'
+  | 'request_superseded'
+  | 'aborted';
+
 export interface LatencyMetadata {
   transcriptRevision?: number;
   attemptedRoute?: AnswerRoute;
   fallbackOccurred?: boolean;
   profileFallbackReason?: string;
+  intentConfidence?: number;
+  intentProviderUsed?: string;
+  intentRetryCount?: number;
+  intentFallbackReason?: 'primary_unavailable' | 'primary_retries_exhausted' | 'primary_failed' | 'primary_low_confidence' | 'primary_contradiction';
+  prefetchedIntentUsed?: boolean;
   interimQuestionSubstitutionOccurred?: boolean;
   profileEnrichmentState?: ProfileEnrichmentState;
   consciousPath?: ConsciousPath;
   firstVisibleAnswer?: number;
+  contextItemIds?: string[];
+  verifierOutcome?: {
+    deterministic: 'pass' | 'fail' | 'skipped';
+    judge?: 'pass' | 'fail' | 'skipped';
+    provenance: 'pass' | 'fail' | 'skipped';
+    reasons?: string[];
+  };
+  stealthContainmentActive?: boolean;
+  staleStopReason?: StaleStopReason;
+  terminalStatus?: 'completed' | 'stale' | 'suppressed';
+  suppressionReason?: string;
 }
 
 export interface LatencySnapshot extends LatencyMetadata {
@@ -32,7 +54,15 @@ export interface LatencySnapshot extends LatencyMetadata {
 
 export class AnswerLatencyTracker {
   private static nextId = 1;
+  private readonly MAX_SNAPSHOTS = 100;
   private snapshots = new Map<string, LatencySnapshot>();
+
+  private evictOldSnapshots(): void {
+    while (this.snapshots.size > this.MAX_SNAPSHOTS) {
+      const oldestKey = this.snapshots.keys().next().value;
+      if (oldestKey) this.snapshots.delete(oldestKey);
+    }
+  }
 
   private getMutableSnapshot(requestId: string): LatencySnapshot | undefined {
     const snapshot = this.snapshots.get(requestId);
@@ -69,6 +99,7 @@ export class AnswerLatencyTracker {
       },
       ...normalizedMetadata,
     });
+    this.evictOldSnapshots();
     return requestId;
   }
 
@@ -138,11 +169,59 @@ export class AnswerLatencyTracker {
     Object.assign(snapshot, normalizedMetadata);
   }
 
+  /**
+   * NAT-007 / audit A-7: Mark a request as stopped before completion because
+   * the world it was answering against changed (e.g. the transcript revision
+   * advanced past `transcriptRevisionAtStart`). The snapshot is finalized
+   * with `staleStopReason` set so downstream telemetry can distinguish
+   * stale-stops from normal completion or hard aborts.
+   */
+  markStaleStop(requestId: string, reason: StaleStopReason = 'transcript_revision_changed'): LatencySnapshot | undefined {
+    const snapshot = this.snapshots.get(requestId);
+    if (!snapshot || snapshot.completed) return undefined;
+    snapshot.staleStopReason = reason;
+    snapshot.terminalStatus = 'stale';
+    return this.complete(requestId);
+  }
+
+  completeSuppressed(requestId: string, reason: string): LatencySnapshot | undefined {
+    const snapshot = this.snapshots.get(requestId);
+    if (!snapshot || snapshot.completed) return undefined;
+    snapshot.terminalStatus = 'suppressed';
+    snapshot.suppressionReason = reason;
+    this.writeMark(snapshot, 'suppressedAt', Date.now());
+    return this.complete(requestId);
+  }
+
   complete(requestId: string): LatencySnapshot | undefined {
     const snapshot = this.snapshots.get(requestId);
     if (!snapshot) return undefined;
+    if (snapshot.completed) {
+      // Idempotent: a stale-stop call already finalized this snapshot; the
+      // normal `finally` cleanup must not double-record the measurement.
+      return this.createSnapshotCopy(snapshot);
+    }
     snapshot.completed = true;
+    snapshot.terminalStatus = snapshot.terminalStatus ?? 'completed';
     snapshot.marks.completedAt = Date.now();
+
+    const startedAt = snapshot.marks.startedAt;
+    const firstVisibleAnswer = snapshot.marks.firstVisibleAnswer;
+    if (startedAt !== undefined && firstVisibleAnswer !== undefined) {
+      getPerformanceInstrumentation().recordMeasurement(
+        'answer.firstVisible',
+        firstVisibleAnswer - startedAt,
+        {
+        requestId: snapshot.requestId,
+        route: snapshot.route,
+        capability: snapshot.capability,
+        attemptedRoute: snapshot.attemptedRoute,
+        fallbackOccurred: snapshot.fallbackOccurred ?? false,
+        transcriptRevision: snapshot.transcriptRevision,
+        },
+      );
+    }
+
     return this.createSnapshotCopy(snapshot);
   }
 

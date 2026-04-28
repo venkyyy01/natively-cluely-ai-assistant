@@ -48,8 +48,12 @@ import { v4 as uuidv4 } from 'uuid';
 const INSTALL_PING_URL = 'https://divine-sun-927d.natively.workers.dev';
 
 // Local storage paths (inside user data directory)
-const INSTALL_ID_PATH = path.join(app.getPath('userData'), 'install_id.txt');
-const INSTALL_PING_SENT_PATH = path.join(app.getPath('userData'), 'install_ping_sent.txt');
+function getInstallIdPath(): string {
+  return path.join(app.getPath('userData'), 'install_id.txt');
+}
+function getInstallPingSentPath(): string {
+  return path.join(app.getPath('userData'), 'install_ping_sent.txt');
+}
 
 // ============================================================================
 // Helper Functions
@@ -62,9 +66,10 @@ const INSTALL_PING_SENT_PATH = path.join(app.getPath('userData'), 'install_ping_
  */
 export function getOrCreateInstallId(): string {
     try {
+        const installIdPath = getInstallIdPath();
         // Check if install ID already exists
-        if (fs.existsSync(INSTALL_ID_PATH)) {
-            const existingId = fs.readFileSync(INSTALL_ID_PATH, 'utf-8').trim();
+        if (fs.existsSync(installIdPath)) {
+            const existingId = fs.readFileSync(installIdPath, 'utf-8').trim();
             if (existingId && existingId.length > 0) {
                 return existingId;
             }
@@ -72,7 +77,7 @@ export function getOrCreateInstallId(): string {
 
         // Generate new UUID
         const newId = uuidv4();
-        fs.writeFileSync(INSTALL_ID_PATH, newId, 'utf-8');
+        fs.writeFileSync(installIdPath, newId, 'utf-8');
         console.log('[InstallPingManager] Generated new install ID');
         return newId;
     } catch (error) {
@@ -87,8 +92,9 @@ export function getOrCreateInstallId(): string {
  */
 function hasInstallPingBeenSent(): boolean {
     try {
-        if (fs.existsSync(INSTALL_PING_SENT_PATH)) {
-            const value = fs.readFileSync(INSTALL_PING_SENT_PATH, 'utf-8').trim();
+        const installPingSentPath = getInstallPingSentPath();
+        if (fs.existsSync(installPingSentPath)) {
+            const value = fs.readFileSync(installPingSentPath, 'utf-8').trim();
             return value === 'true';
         }
         return false;
@@ -102,7 +108,7 @@ function hasInstallPingBeenSent(): boolean {
  */
 function markInstallPingSent(): void {
     try {
-        fs.writeFileSync(INSTALL_PING_SENT_PATH, 'true', 'utf-8');
+        fs.writeFileSync(getInstallPingSentPath(), 'true', 'utf-8');
         console.log('[InstallPingManager] Install ping marked as sent');
     } catch (error) {
         console.error('[InstallPingManager] Error marking ping as sent:', error);
@@ -125,6 +131,12 @@ function markInstallPingSent(): void {
  */
 export async function sendAnonymousInstallPing(): Promise<void> {
     try {
+        // Early exit if install ping is disabled (default off in stealth builds)
+        if (process.env.NATIVELY_INSTALL_PING_ENABLED !== '1') {
+            console.log('[InstallPingManager] Install ping disabled; set NATIVELY_INSTALL_PING_ENABLED=1 to enable');
+            return;
+        }
+
         // Early exit if ping already sent
         if (hasInstallPingBeenSent()) {
             console.log('[InstallPingManager] Install ping already sent, skipping');

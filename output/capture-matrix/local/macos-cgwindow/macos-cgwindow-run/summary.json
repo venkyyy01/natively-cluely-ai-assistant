@@ -1,0 +1,54 @@
+{
+  "runId": "macos-cgwindow-run",
+  "generatedAt": "2026-04-25T03:46:46.349Z",
+  "outputRoot": "/Users/venkatasai/Downloads/natively-cluely-ai-assistant/.worktrees/todo-completion/output/capture-matrix/local/macos-cgwindow/macos-cgwindow-run",
+  "passed": false,
+  "results": [
+    {
+      "row": {
+        "id": "macos-cgwindow-protected",
+        "platform": "darwin",
+        "osVersion": "Darwin 25.3.0",
+        "appVersion": "local-dev",
+        "captureTool": "macos-cgwindow-enumeration",
+        "mode": "window-enumeration",
+        "monitors": 1,
+        "strict": true,
+        "surface": "protected-canary-surface",
+        "expectedResult": "hidden",
+        "canaryToken": "NATIVELY_CAPTURE_CANARY_PROTECTED"
+      },
+      "adapter": "macos-cgwindow-enumeration",
+      "actualResult": "skipped",
+      "passed": false,
+      "reason": "canary surface is not armed; expose the canary token in the protected/control window title and set NATIVELY_CAPTURE_MATRIX_CANARY_ARMED=1",
+      "artifactPaths": {
+        "metadata": "/Users/venkatasai/Downloads/natively-cluely-ai-assistant/.worktrees/todo-completion/output/capture-matrix/local/macos-cgwindow/macos-cgwindow-run/macos-cgwindow-protected/metadata.json",
+        "log": "/Users/venkatasai/Downloads/natively-cluely-ai-assistant/.worktrees/todo-completion/output/capture-matrix/local/macos-cgwindow/macos-cgwindow-run/macos-cgwindow-protected/capture.log"
+      }
+    },
+    {
+      "row": {
+        "id": "macos-cgwindow-control",
+        "platform": "darwin",
+        "osVersion": "Darwin 25.3.0",
+        "appVersion": "local-dev",
+        "captureTool": "macos-cgwindow-enumeration",
+        "mode": "window-enumeration",
+        "monitors": 1,
+        "strict": false,
+        "surface": "unprotected-canary-control",
+        "expectedResult": "visible",
+        "canaryToken": "NATIVELY_CAPTURE_CANARY_CONTROL"
+      },
+      "adapter": "macos-cgwindow-enumeration",
+      "actualResult": "skipped",
+      "passed": false,
+      "reason": "canary surface is not armed; expose the canary token in the protected/control window title and set NATIVELY_CAPTURE_MATRIX_CANARY_ARMED=1",
+      "artifactPaths": {
+        "metadata": "/Users/venkatasai/Downloads/natively-cluely-ai-assistant/.worktrees/todo-completion/output/capture-matrix/local/macos-cgwindow/macos-cgwindow-run/macos-cgwindow-control/metadata.json",
+        "log": "/Users/venkatasai/Downloads/natively-cluely-ai-assistant/.worktrees/todo-completion/output/capture-matrix/local/macos-cgwindow/macos-cgwindow-run/macos-cgwindow-control/capture.log"
+      }
+    }
+  ]
+}

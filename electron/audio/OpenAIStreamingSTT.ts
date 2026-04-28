@@ -17,6 +17,7 @@ import WebSocket from 'ws';
 import axios from 'axios';
 import FormData from 'form-data';
 import { RECOGNITION_LANGUAGES } from '../config/languages';
+import { DropFrameMetric } from './dropMetrics';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -103,6 +104,8 @@ export class OpenAIStreamingSTT extends EventEmitter {
     // Used to avoid losing speech at the start of a WS session or during fallback
     private ringBuffer: Buffer[] = [];
     private ringBufferBytes = 0;
+    // NAT-021: visible drop telemetry for backpressure.
+    private dropMetric = new DropFrameMetric({ provider: 'openai' });
 
     // REST fallback state
     private restChunks: Buffer[]   = [];
@@ -162,6 +165,7 @@ export class OpenAIStreamingSTT extends EventEmitter {
         this.wsFailures     = 0;
         this.reconnectAttempts = 0;
         this.mode           = 'ws';
+        this.dropMetric.start(); // NAT-021
 
         this._connectWs();
     }
@@ -200,6 +204,7 @@ export class OpenAIStreamingSTT extends EventEmitter {
         this.ringBufferBytes = 0;
         this.pcmAccumulator = [];
         this.pcmAccumulatorLen = 0;
+        this.dropMetric.stop(); // NAT-021
     }
 
     public destroy(): void {
@@ -586,6 +591,7 @@ export class OpenAIStreamingSTT extends EventEmitter {
         while (this.ringBufferBytes > MAX_RING_BUFFER_BYTES && this.ringBuffer.length > 0) {
             const evicted = this.ringBuffer.shift()!;
             this.ringBufferBytes -= evicted.length;
+            this.dropMetric.recordDrop(); // NAT-021
         }
     }
 

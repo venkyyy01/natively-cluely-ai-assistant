@@ -1,13 +1,25 @@
 import { PromptCompiler } from '../llm/PromptCompiler';
 import { StreamManager } from '../llm/StreamManager';
 import { EnhancedCache } from '../cache/EnhancedCache';
-import { ParallelContextAssembler } from '../cache/ParallelContextAssembler';
+import { ParallelContextAssembler, setEmbeddingProvider, type EmbeddingProvider } from '../cache/ParallelContextAssembler';
 import { AdaptiveContextWindow } from '../conscious/AdaptiveContextWindow';
-import { PredictivePrefetcher } from '../prefetch/PredictivePrefetcher';
+import { ConsciousAccelerationOrchestrator } from '../conscious/ConsciousAccelerationOrchestrator';
 import { ANEEmbeddingProvider } from '../rag/providers/ANEEmbeddingProvider';
+import { LocalEmbeddingProvider } from '../rag/providers/LocalEmbeddingProvider';
 import { StealthManager } from '../stealth/StealthManager';
-import { getOptimizationFlags, isOptimizationActive, setOptimizationFlags } from '../config/optimizations';
-import { InterviewPhase } from '../conscious/types';
+import { getOptimizationFlags, isOptimizationActive } from '../config/optimizations';
+import { WorkerPool } from '../runtime/WorkerPool';
+import { RuntimeBudgetScheduler } from '../runtime/RuntimeBudgetScheduler';
+
+let activeAccelerationManager: AccelerationManager | null = null;
+
+export function setActiveAccelerationManager(manager: AccelerationManager | null): void {
+  activeAccelerationManager = manager;
+}
+
+export function getActiveAccelerationManager(): AccelerationManager | null {
+  return activeAccelerationManager;
+}
 
 export interface AccelerationModules {
   promptCompiler: PromptCompiler;
@@ -15,18 +27,29 @@ export interface AccelerationModules {
   enhancedCache: EnhancedCache<string, unknown>;
   parallelAssembler: ParallelContextAssembler;
   adaptiveWindow: AdaptiveContextWindow;
-  prefetcher: PredictivePrefetcher;
   aneProvider: ANEEmbeddingProvider;
   stealthManager: StealthManager | null;
+  consciousOrchestrator: ConsciousAccelerationOrchestrator;
+  workerPool: WorkerPool;
+  runtimeBudgetScheduler: RuntimeBudgetScheduler;
 }
 
 export class AccelerationManager {
+  private static sharedLocalEmbeddingProvider: LocalEmbeddingProvider | null = null;
   private promptCompiler: PromptCompiler;
   private enhancedCache: EnhancedCache<string, unknown>;
   private parallelAssembler: ParallelContextAssembler;
   private adaptiveWindow: AdaptiveContextWindow;
-  private prefetcher: PredictivePrefetcher;
   private aneProvider: ANEEmbeddingProvider;
+  private consciousOrchestrator: ConsciousAccelerationOrchestrator;
+  private workerPool: WorkerPool;
+  private runtimeBudgetScheduler: RuntimeBudgetScheduler;
+  private externalEmbeddingProvider: EmbeddingProvider | null = null;
+  private localEmbeddingProvider: Pick<LocalEmbeddingProvider, 'embed'>;
+  private readonly localEmbeddingAdapter: EmbeddingProvider = {
+    embed: async (text: string): Promise<number[]> => this.localEmbeddingProvider.embed(text),
+    isInitialized: (): boolean => true,
+  };
 
   constructor() {
     const flags = getOptimizationFlags();
@@ -38,25 +61,87 @@ export class AccelerationManager {
       enableSemanticLookup: flags.semanticCacheThreshold > 0,
       similarityThreshold: flags.semanticCacheThreshold,
     });
+    this.workerPool = new WorkerPool({ size: flags.workerThreadCount });
+    this.runtimeBudgetScheduler = new RuntimeBudgetScheduler({
+      workerPool: this.workerPool,
+      laneBudgets: flags.laneBudgets,
+    });
     this.parallelAssembler = new ParallelContextAssembler({
       workerThreadCount: flags.workerThreadCount,
+      workerPool: this.workerPool,
     });
     this.adaptiveWindow = new AdaptiveContextWindow();
-    this.prefetcher = new PredictivePrefetcher({
+    this.consciousOrchestrator = new ConsciousAccelerationOrchestrator({
       maxPrefetchPredictions: flags.maxPrefetchPredictions,
       maxMemoryMB: flags.maxCacheMemoryMB,
+      budgetScheduler: this.runtimeBudgetScheduler,
+      classifierLane: this.runtimeBudgetScheduler,
     });
     this.aneProvider = new ANEEmbeddingProvider();
+    if (!AccelerationManager.sharedLocalEmbeddingProvider) {
+      AccelerationManager.sharedLocalEmbeddingProvider = new LocalEmbeddingProvider();
+    }
+    this.localEmbeddingProvider = AccelerationManager.sharedLocalEmbeddingProvider;
   }
 
-  async initialize(): Promise<void> {
-    if (!isOptimizationActive('useANEEmbeddings')) {
-      console.log('[AccelerationManager] ANE embeddings disabled, skipping provider init');
+  setConsciousModeEnabled(enabled: boolean): void {
+    this.consciousOrchestrator.setEnabled(enabled);
+  }
+
+  isConsciousModeEnabled(): boolean {
+    return this.consciousOrchestrator.isEnabled();
+  }
+
+  getPauseThresholdProfile() {
+    return this.consciousOrchestrator.getPauseThresholdProfile();
+  }
+
+  getConsciousOrchestrator(): ConsciousAccelerationOrchestrator {
+    return this.consciousOrchestrator;
+  }
+
+  /**
+   * Register ANE provider as the global embedding source
+   */
+  private registerEmbeddingProvider(): void {
+    if (isOptimizationActive('useANEEmbeddings') && this.aneProvider.isInitialized()) {
+      setEmbeddingProvider(this.aneProvider);
+      console.log('[AccelerationManager] ANE provider registered for real embeddings');
       return;
     }
 
-    await this.aneProvider.initialize();
+    if (this.externalEmbeddingProvider) {
+      setEmbeddingProvider(this.externalEmbeddingProvider);
+      console.log('[AccelerationManager] External embedding provider registered for semantic lookup');
+      return;
+    }
+
+    setEmbeddingProvider(this.localEmbeddingAdapter);
+    console.log('[AccelerationManager] Local embedding provider registered for semantic fallback');
+  }
+
+  setExternalEmbeddingProvider(provider: EmbeddingProvider | null): void {
+    this.externalEmbeddingProvider = provider;
+    this.registerEmbeddingProvider();
+  }
+
+  async initialize(): Promise<void> {
+    if (isOptimizationActive('useANEEmbeddings')) {
+      await this.aneProvider.initialize();
+    }
+
+    this.registerEmbeddingProvider();
     console.log('[AccelerationManager] Initialized with acceleration modules');
+  }
+
+  activate(): void {
+    this.registerEmbeddingProvider();
+  }
+
+  deactivate(): void {
+    this.clearCaches();
+    this.consciousOrchestrator.setEnabled(false);
+    setEmbeddingProvider(null);
   }
 
   getPromptCompiler(): PromptCompiler {
@@ -75,31 +160,30 @@ export class AccelerationManager {
     return this.adaptiveWindow;
   }
 
-  getPrefetcher(): PredictivePrefetcher {
-    return this.prefetcher;
-  }
-
   getANEProvider(): ANEEmbeddingProvider {
     return this.aneProvider;
   }
 
-  setPhase(phase: InterviewPhase): void {
-    this.adaptiveWindow.setCurrentPhase(phase);
-    this.prefetcher.onPhaseChange(phase);
+  getWorkerPool(): WorkerPool {
+    return this.workerPool;
   }
 
-  onSilenceStart(): void {
-    this.prefetcher.onSilenceStart();
+  getRuntimeBudgetScheduler(): RuntimeBudgetScheduler {
+    return this.runtimeBudgetScheduler;
   }
 
-  onUserSpeaking(): void {
-    this.prefetcher.onUserSpeaking();
+  async runInLane<T>(lane: 'realtime' | 'local-inference' | 'semantic' | 'background', task: () => Promise<T> | T): Promise<T> {
+    return this.runtimeBudgetScheduler.submit(lane, task);
+  }
+
+  shouldAdmitSpeculation(probability: number, valueOfPrefetch: number, costOfCompute: number): boolean {
+    return this.runtimeBudgetScheduler.shouldAdmitSpeculation(probability, valueOfPrefetch, costOfCompute);
   }
 
   clearCaches(): void {
     this.promptCompiler.clearCache();
     this.enhancedCache.clear();
-    this.prefetcher.onTopicShiftDetected();
+    this.consciousOrchestrator.clearState();
   }
 
   getModules(): AccelerationModules {
@@ -109,9 +193,11 @@ export class AccelerationManager {
       enhancedCache: this.enhancedCache,
       parallelAssembler: this.parallelAssembler,
       adaptiveWindow: this.adaptiveWindow,
-      prefetcher: this.prefetcher,
       aneProvider: this.aneProvider,
       stealthManager: null,
+      consciousOrchestrator: this.consciousOrchestrator,
+      workerPool: this.workerPool,
+      runtimeBudgetScheduler: this.runtimeBudgetScheduler,
     };
   }
 }

@@ -1,7 +1,11 @@
 import { LLMHelper } from "../LLMHelper";
-import { UNIVERSAL_FOLLOWUP_PROMPT } from "./prompts";
-import { ConsciousModeStructuredResponse, ReasoningThread, parseConsciousModeResponse } from "../ConsciousMode";
-import { Result, Ok, Err, LLMError, wrapAsync } from "../types/Result";
+import { CONSCIOUS_REASONING_SYSTEM_PROMPT, UNIVERSAL_FOLLOWUP_PROMPT } from "./prompts";
+import {
+    CONSCIOUS_MODE_JSON_RESPONSE_INSTRUCTIONS,
+    ConsciousModeStructuredResponse,
+    ReasoningThread,
+    parseConsciousModeResponse,
+} from "../ConsciousMode";
 
 export class FollowUpLLM {
     private llmHelper: LLMHelper;
@@ -77,20 +81,20 @@ export class FollowUpLLM {
         reasoningThread: ReasoningThread,
         followUpQuestion: string,
         context?: string
-    ): Promise<Result<ConsciousModeStructuredResponse, LLMError>> {
-        return await wrapAsync(
-            async () => {
-                const message = [
-                    'ACTIVE_REASONING_THREAD',
-                    `ROOT_QUESTION: ${reasoningThread.rootQuestion}`,
-                    `LAST_QUESTION: ${reasoningThread.lastQuestion}`,
-                    `CURRENT_RESPONSE: ${JSON.stringify(reasoningThread.response)}`,
-                    `FOLLOW_UP_QUESTION: ${followUpQuestion}`,
-                    'Return JSON with keys: mode, openingReasoning, implementationPlan, tradeoffs, edgeCases, scaleConsiderations, pushbackResponses, likelyFollowUps, codeTransition.',
-                    'Set mode to reasoning_first.',
-                ].join('\n\n');
-                
-                const stream = this.llmHelper.streamChat(message, undefined, context, UNIVERSAL_FOLLOWUP_PROMPT);
+    ): Promise<ConsciousModeStructuredResponse> {
+        try {
+            const message = [
+                'ACTIVE_REASONING_THREAD',
+                `ROOT_QUESTION: ${reasoningThread.rootQuestion}`,
+                `LAST_QUESTION: ${reasoningThread.lastQuestion}`,
+                `CURRENT_RESPONSE: ${JSON.stringify(reasoningThread.response)}`,
+                `FOLLOW_UP_QUESTION: ${followUpQuestion}`,
+                CONSCIOUS_MODE_JSON_RESPONSE_INSTRUCTIONS,
+            ].join('\n\n');
+            const stream = this.llmHelper.streamChat(message, undefined, context, CONSCIOUS_REASONING_SYSTEM_PROMPT, {
+                skipKnowledgeInterception: true,
+                qualityTier: 'verify',
+            });
 
                 let full = "";
                 for await (const chunk of stream) {

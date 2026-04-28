@@ -26,16 +26,19 @@ async function loadLLMHelper() {
 test('model-specific budgeting gives larger context windows to larger-context providers', async () => {
   const LLMHelper = await loadLLMHelper();
   const helper = new LLMHelper() as any;
-  const message = 'm'.repeat(4_000);
-  const context = 'c'.repeat(400_000);
+  try {
+    const message = 'm'.repeat(4_000);
+    const context = 'c'.repeat(400_000);
 
-  const groqContent = helper.prepareUserContentForModel('groq', 'llama-3.3-70b-versatile', message, context);
-  const claudeContent = helper.prepareUserContentForModel('claude', 'claude-sonnet-4-6', message, context);
+    const groqContent = helper.prepareUserContentForModel('groq', 'llama-3.3-70b-versatile', message, context);
+    const claudeContent = helper.prepareUserContentForModel('claude', 'claude-sonnet-4-6', message, context);
 
-  assert.ok(claudeContent.length > groqContent.length);
-  assert.match(groqContent, /\.\.\.\[truncated\]/);
-  assert.match(claudeContent, /USER QUESTION:/);
-  helper.scrubKeys();
+    assert.ok(claudeContent.length > groqContent.length);
+    assert.match(groqContent, /\.\.\.\[(?:middle )?truncated\]/);
+    assert.match(claudeContent, /USER QUESTION:/);
+  } finally {
+    helper.scrubKeys();
+  }
 });
 
 test('retry normalization treats provider status objects consistently', async () => {

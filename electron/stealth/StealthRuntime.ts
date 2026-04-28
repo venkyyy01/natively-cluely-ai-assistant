@@ -5,6 +5,39 @@ import { FrameBridge } from './frameBridge';
 import { InputBridge } from './inputBridge';
 import type { StealthInputEvent } from './types';
 import type { StealthManager } from './StealthManager';
+import { attachRendererBridgeMonitor } from '../runtime/rendererBridgeHealth';
+import {
+  resolveRendererPreloadPath,
+  resolveStealthShellHtmlPath,
+  resolveStealthShellPreloadPath,
+} from '../runtime/windowAssetPaths';
+import type { ProtectionEventType } from './protectionStateTypes';
+
+type ProtectionEventRecorder = {
+  recordProtectionEvent?: (
+    type: ProtectionEventType,
+    context?: {
+      source?: string;
+      windowRole?: 'primary' | 'auxiliary' | 'unknown';
+      windowId?: string;
+      visible?: boolean;
+      reason?: string;
+    },
+  ) => void;
+  requestWindowShow?: (
+    win: BrowserWindow | null | undefined,
+    context: { source: string; windowRole?: 'primary' | 'auxiliary' | 'unknown' },
+  ) => void;
+  requestWindowHide?: (
+    win: BrowserWindow | null | undefined,
+    context: { source: string; windowRole?: 'primary' | 'auxiliary' | 'unknown' },
+  ) => void;
+  setWindowOpacity?: (
+    win: BrowserWindow | null | undefined,
+    value: number,
+    context: { source: string; windowRole?: 'primary' | 'auxiliary' | 'unknown' },
+  ) => void;
+};
 
 type RuntimeWindow = Pick<BrowserWindow,
   | 'loadURL'
@@ -28,6 +61,7 @@ type RuntimeWindowFactory = (options: Electron.BrowserWindowConstructorOptions) 
 interface RuntimeLogger {
   log: Console['log'];
   warn: Console['warn'];
+  error: Console['error'];
 }
 
 interface StealthRuntimeOptions {
@@ -39,6 +73,9 @@ interface StealthRuntimeOptions {
   preloadPath?: string;
   shellPreloadPath?: string;
   ipcMain?: Pick<typeof ipcMain, 'on' | 'removeListener'>;
+  onFault: (reason: string) => void | Promise<void>;
+  onHeartbeat?: () => void | Promise<void>;
+  onFirstFrame?: () => void | Promise<void>;
 }
 
 export class StealthRuntime {
@@ -50,28 +87,58 @@ export class StealthRuntime {
   private readonly preloadPath: string;
   private readonly shellPreloadPath: string;
   private readonly ipcMain: Pick<typeof ipcMain, 'on' | 'removeListener'>;
+  private readonly onFault?: (reason: string) => void | Promise<void>;
+  private readonly onHeartbeat?: () => void | Promise<void>;
+  private readonly onFirstFrame?: () => void | Promise<void>;
   private readonly frameBridge: FrameBridge;
   private readonly inputBridge = new InputBridge();
   private contentWindow: BrowserWindow | null = null;
   private shellWindow: BrowserWindow | null = null;
   private boundInputHandler: ((event: IpcMainEvent, payload: StealthInputEvent) => void) | null = null;
   private boundReadyHandler: ((event: IpcMainEvent) => void) | null = null;
+  private boundHeartbeatHandler: ((event: IpcMainEvent) => void) | null = null;
+  private firstFrameReceived = false;
+  private showRequestedBeforeFirstFrame = false;
+  private firstFrameTimeout: NodeJS.Timeout | null = null;
+  private detachContentBridgeMonitor: (() => void) | null = null;
 
   constructor(options: StealthRuntimeOptions) {
     this.stealthManager = options.stealthManager;
     this.startUrl = options.startUrl;
-    this.shellHtmlPath = options.shellHtmlPath ?? path.join(app.getAppPath(), 'electron', 'renderer', 'shell.html');
+    this.shellHtmlPath = options.shellHtmlPath ?? resolveStealthShellHtmlPath({ electronDir: path.resolve(__dirname, '..') });
     if (!this.shellHtmlPath.endsWith('.html') || this.shellHtmlPath.includes('..')) {
       throw new Error(`Invalid shellHtmlPath: ${this.shellHtmlPath}`);
     }
     this.createWindow = options.createWindow ?? ((windowOptions) => new BrowserWindow(windowOptions));
     this.logger = options.logger ?? console;
-    this.preloadPath = options.preloadPath ?? path.join(__dirname, '../preload.js');
-    this.shellPreloadPath = options.shellPreloadPath ?? path.join(__dirname, './shellPreload.js');
+    this.preloadPath = options.preloadPath ?? resolveRendererPreloadPath({ electronDir: path.resolve(__dirname, '..') });
+    this.shellPreloadPath = options.shellPreloadPath ?? resolveStealthShellPreloadPath({ electronDir: path.resolve(__dirname, '..') });
     this.ipcMain = options.ipcMain ?? ipcMain;
+    this.onFault = options.onFault;
+    this.onHeartbeat = options.onHeartbeat;
+    this.onFirstFrame = options.onFirstFrame;
     this.frameBridge = new FrameBridge({
       target: {
         send: (channel, payload) => {
+          if (channel === 'stealth-shell:frame' && !this.firstFrameReceived) {
+            this.firstFrameReceived = true;
+            if (this.firstFrameTimeout) {
+              clearTimeout(this.firstFrameTimeout);
+              this.firstFrameTimeout = null;
+            }
+            this.logger.log('[StealthRuntime] First frame received by shell');
+
+            if (this.showRequestedBeforeFirstFrame && this.shellWindow && !this.shellWindow.isDestroyed()) {
+              this.showRequestedBeforeFirstFrame = false;
+              this.requestWindowShow(this.shellWindow, 'StealthRuntime.firstFrame');
+              this.shellWindow.focus();
+            }
+
+            Promise.resolve(this.onFirstFrame?.()).catch((error) => {
+              this.logger.warn('[StealthRuntime] Failed to propagate first-frame event:', error);
+            });
+          }
+
           this.shellWindow?.webContents.send(channel, payload);
         },
       },
@@ -125,6 +192,7 @@ export class StealthRuntime {
           ...webPreferences,
           preload: this.preloadPath,
           offscreen: true,
+          sandbox: false,
           backgroundThrottling: false,
         },
       });
@@ -134,10 +202,13 @@ export class StealthRuntime {
         webPreferences: {
           nodeIntegration: false,
           contextIsolation: true,
+          sandbox: false,
           preload: this.shellPreloadPath,
           backgroundThrottling: false,
         },
       });
+      this.recordProtectionEvent('window-created', contentWindow, 'StealthRuntime.createPrimaryStealthSurface.content');
+      this.recordProtectionEvent('window-created', this.shellWindow, 'StealthRuntime.createPrimaryStealthSurface.shell');
     } catch (error) {
       contentWindow?.close();
       this.shellWindow?.close();
@@ -145,8 +216,43 @@ export class StealthRuntime {
     }
 
     this.contentWindow = contentWindow;
+    this.firstFrameReceived = false;
+    this.showRequestedBeforeFirstFrame = false;
+    this.detachContentBridgeMonitor?.();
+    this.detachContentBridgeMonitor = attachRendererBridgeMonitor('Stealth content', this.contentWindow, {
+      expectedPreloadPath: this.preloadPath,
+      url: this.startUrl,
+      logger: this.logger,
+      onSettled: (result) => {
+        if (result !== 'ready') {
+          this.emitFault(result === 'failed'
+            ? 'content-preload-bridge-unavailable'
+            : `content-preload-bridge-${result}`);
+        }
+      },
+    });
     this.frameBridge.attach(this.contentWindow.webContents as unknown as Parameters<FrameBridge['attach']>[0]);
     this.bindShellEvents();
+
+    // NAT-025: apply content protection before any load on both shell and content windows
+    for (const win of [this.contentWindow, this.shellWindow]) {
+      this.recordProtectionEvent('protection-apply-started', win, 'StealthRuntime.createPrimaryStealthSurface');
+      if (win && typeof (win as any).setContentProtection === 'function') {
+        try {
+          (win as any).setContentProtection(true);
+        } catch (err) {
+          this.logger.warn('[StealthRuntime] setContentProtection failed:', err);
+        }
+      }
+      if (win && typeof (win as any).setExcludeFromCapture === 'function') {
+        try {
+          (win as any).setExcludeFromCapture(true);
+        } catch (err) {
+          this.logger.warn('[StealthRuntime] setExcludeFromCapture failed:', err);
+        }
+      }
+      this.recordProtectionEvent('protection-apply-finished', win, 'StealthRuntime.createPrimaryStealthSurface');
+    }
 
     // Always use loadURL so packaged file:// targets keep their query string.
     void this.contentWindow.loadURL(this.startUrl).catch((err) => {
@@ -176,31 +282,21 @@ export class StealthRuntime {
 
     this.contentWindow.webContents.on('crashed', (_event, killed) => {
       this.logger.warn(`[StealthRuntime] Content window crashed (killed=${killed})`);
+      this.handleContentCrash('content-window-crashed');
     });
 
     this.contentWindow.webContents.on('render-process-gone', (_event, details) => {
       this.logger.warn(`[StealthRuntime] Content render process gone: ${details.reason} exitCode=${details.exitCode}`);
+      this.handleContentCrash(`content-render-gone:${details.reason}`);
     });
 
-    let frameReceived = false;
-    const originalAttach = this.frameBridge.attach.bind(this.frameBridge);
-    this.frameBridge.attach = (source) => {
-      originalAttach(source);
-      const originalSend = this.frameBridge['target'].send.bind(this.frameBridge['target']);
-      this.frameBridge['target'].send = (channel, payload) => {
-        if (channel === 'stealth-shell:frame' && !frameReceived) {
-          frameReceived = true;
-          this.logger.log('[StealthRuntime] First frame received by shell');
-        }
-        originalSend(channel, payload);
-      };
-    };
-
-    setTimeout(() => {
-      if (!frameReceived) {
+    this.firstFrameTimeout = setTimeout(() => {
+      if (!this.firstFrameReceived) {
         this.logger.warn('[StealthRuntime] No frames received after 10s - content window may have failed to load');
+        this.emitFault('content-first-frame-timeout');
       }
     }, 10000);
+    this.firstFrameTimeout.unref?.();
 
     this.shellWindow.on('resize', () => this.syncBounds());
     this.shellWindow.on('move', () => this.syncBounds());
@@ -220,20 +316,35 @@ export class StealthRuntime {
     return this.contentWindow;
   }
 
+  hasReceivedFirstFrame(): boolean {
+    return this.firstFrameReceived;
+  }
+
   show(): void {
     if (!this.shellWindow || this.shellWindow.isDestroyed()) {
       return;
     }
-    this.shellWindow.show();
+    if (!this.firstFrameReceived) {
+      this.recordProtectionEvent('show-requested', this.shellWindow, 'StealthRuntime.show.deferred');
+      this.showRequestedBeforeFirstFrame = true;
+      return;
+    }
+    this.requestWindowShow(this.shellWindow, 'StealthRuntime.show');
     this.shellWindow.focus();
   }
 
   hide(): void {
-    this.shellWindow?.hide();
+    this.requestWindowHide(this.shellWindow, 'StealthRuntime.hide');
   }
 
   destroy(): void {
     this.frameBridge.detach();
+    if (this.firstFrameTimeout) {
+      clearTimeout(this.firstFrameTimeout);
+      this.firstFrameTimeout = null;
+    }
+    this.detachContentBridgeMonitor?.();
+    this.detachContentBridgeMonitor = null;
     if (this.boundInputHandler) {
       this.ipcMain.removeListener('stealth-shell:input', this.boundInputHandler);
       this.boundInputHandler = null;
@@ -241,6 +352,10 @@ export class StealthRuntime {
     if (this.boundReadyHandler) {
       this.ipcMain.removeListener('stealth-shell:ready', this.boundReadyHandler);
       this.boundReadyHandler = null;
+    }
+    if (this.boundHeartbeatHandler) {
+      this.ipcMain.removeListener('stealth-shell:heartbeat', this.boundHeartbeatHandler);
+      this.boundHeartbeatHandler = null;
     }
     if (this.contentWindow && !this.contentWindow.isDestroyed()) {
       this.contentWindow.close();
@@ -250,6 +365,8 @@ export class StealthRuntime {
     }
     this.contentWindow = null;
     this.shellWindow = null;
+    this.firstFrameReceived = false;
+    this.showRequestedBeforeFirstFrame = false;
   }
 
   syncBounds(): void {
@@ -289,8 +406,17 @@ export class StealthRuntime {
       }
       this.syncBounds();
       this.requestInitialFrame('shell-ready');
+      this.emitHeartbeat();
     };
     this.ipcMain.on('stealth-shell:ready', this.boundReadyHandler);
+
+    this.boundHeartbeatHandler = (event) => {
+      if (!this.shellWindow || event.sender.id !== this.shellWindow.webContents.id) {
+        return;
+      }
+      this.emitHeartbeat();
+    };
+    this.ipcMain.on('stealth-shell:heartbeat', this.boundHeartbeatHandler);
   }
 
   private requestInitialFrame(reason: string): void {
@@ -304,5 +430,105 @@ export class StealthRuntime {
     } catch (error) {
       this.logger.warn(`[StealthRuntime] Failed to request content repaint (${reason}):`, error);
     }
+  }
+
+  private handleContentCrash(reason: string): void {
+    // Fail-closed: hide shell window immediately before propagating fault
+    try {
+      this.requestWindowHide(this.shellWindow, 'StealthRuntime.handleContentCrash');
+      this.setWindowOpacity(this.shellWindow, 0, 'StealthRuntime.handleContentCrash');
+    } catch {
+      // Best-effort: continue with fault propagation even if hide fails
+    }
+    const recorder = this.stealthManager as ProtectionEventRecorder;
+    recorder.recordProtectionEvent?.('fault', {
+      source: 'StealthRuntime.handleContentCrash',
+      reason,
+      windowRole: 'primary',
+    });
+    this.emitFault(reason);
+  }
+
+  private emitFault(reason: string): void {
+    if (!this.onFault) {
+      // Defensive fallback: if onFault is not provided, hide shell and log critical error
+      this.logger.error(`[StealthRuntime] CRITICAL: Fault with no handler, hiding shell window. Reason: ${reason}`);
+      try {
+        this.requestWindowHide(this.shellWindow, 'StealthRuntime.emitFaultFallback');
+        this.setWindowOpacity(this.shellWindow, 0, 'StealthRuntime.emitFaultFallback');
+      } catch {
+        // Best-effort
+      }
+      return;
+    }
+
+    Promise.resolve(this.onFault(reason)).catch((error) => {
+      this.logger.warn(`[StealthRuntime] Failed to propagate runtime fault (${reason}):`, error);
+    });
+  }
+
+  private emitHeartbeat(): void {
+    if (!this.onHeartbeat) {
+      return;
+    }
+
+    Promise.resolve(this.onHeartbeat()).catch((error) => {
+      this.logger.warn('[StealthRuntime] Failed to propagate runtime heartbeat:', error);
+    });
+  }
+
+  private recordProtectionEvent(type: ProtectionEventType, win: BrowserWindow | null, source: string): void {
+    if (!win || win.isDestroyed()) {
+      return;
+    }
+
+    let windowId: string | undefined;
+    try {
+      windowId = win.getMediaSourceId?.();
+    } catch {
+      windowId = undefined;
+    }
+
+    const recorder = this.stealthManager as ProtectionEventRecorder;
+    recorder.recordProtectionEvent?.(type, {
+      source,
+      windowRole: 'primary',
+      windowId,
+      visible: typeof win.isVisible === 'function' ? win.isVisible() : undefined,
+    });
+  }
+
+  private requestWindowShow(win: BrowserWindow | null, source: string): void {
+    const recorder = this.stealthManager as ProtectionEventRecorder;
+    if (recorder.requestWindowShow) {
+      recorder.requestWindowShow(win, { source, windowRole: 'primary' });
+      return;
+    }
+
+    this.recordProtectionEvent('show-requested', win, source);
+    win?.show();
+    this.recordProtectionEvent('shown', win, source);
+  }
+
+  private requestWindowHide(win: BrowserWindow | null, source: string): void {
+    const recorder = this.stealthManager as ProtectionEventRecorder;
+    if (recorder.requestWindowHide) {
+      recorder.requestWindowHide(win, { source, windowRole: 'primary' });
+      return;
+    }
+
+    this.recordProtectionEvent('hide-requested', win, source);
+    win?.hide();
+    this.recordProtectionEvent('hidden', win, source);
+  }
+
+  private setWindowOpacity(win: BrowserWindow | null, value: number, source: string): void {
+    const recorder = this.stealthManager as ProtectionEventRecorder;
+    if (recorder.setWindowOpacity) {
+      recorder.setWindowOpacity(win, value, { source, windowRole: 'primary' });
+      return;
+    }
+
+    win?.setOpacity(value);
   }
 }

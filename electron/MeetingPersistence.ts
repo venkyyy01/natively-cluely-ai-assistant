@@ -11,18 +11,69 @@ const crypto = require('crypto');
 const PLACEHOLDER_MEETING_TITLES = new Set(['', 'Processing...', 'Untitled Session']);
 const DEFAULT_FINAL_MEETING_TITLE = 'Untitled Session';
 
+type MeetingPersistenceOptions = {
+  finalizeRetryDelaysMs?: number[];
+};
+
 export class MeetingPersistence {
   private session: SessionTracker;
   private llmHelper: LLMHelper;
   private pendingSaves: Set<Promise<void>> = new Set();
+  private readonly finalizeRetryDelaysMs: number[];
 
-  constructor(session: SessionTracker, llmHelper: LLMHelper) {
+  constructor(session: SessionTracker, llmHelper: LLMHelper, options: MeetingPersistenceOptions = {}) {
     this.session = session;
     this.llmHelper = llmHelper;
+    this.finalizeRetryDelaysMs = options.finalizeRetryDelaysMs ?? [250, 500];
   }
 
   setSession(session: SessionTracker): void {
     this.session = session;
+  }
+
+  private async waitForRetry(delayMs: number): Promise<void> {
+    if (delayMs <= 0) {
+      return;
+    }
+
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, delayMs);
+    });
+  }
+
+  private notifyRenderer(channel: string, payload?: unknown): void {
+    try {
+      const electron = require('electron');
+      const windows = electron?.BrowserWindow?.getAllWindows?.();
+      if (!Array.isArray(windows)) {
+        return;
+      }
+
+      windows.forEach((w: any) => w?.webContents?.send?.(channel, payload));
+    } catch (error) {
+      console.warn(`[MeetingPersistence] Failed to notify renderer on ${channel}:`, error);
+    }
+  }
+
+  private async finalizeMeetingWithRetry(meetingData: Meeting, startTimeMs: number, durationMs: number): Promise<number> {
+    const maxAttempts = this.finalizeRetryDelaysMs.length + 1;
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      try {
+        DatabaseManager.getInstance().finalizeMeetingProcessing(meetingData, startTimeMs, durationMs);
+        return attempt;
+      } catch (error) {
+        if (attempt === maxAttempts) {
+          throw Object.assign(error instanceof Error ? error : new Error(String(error)), {
+            finalizeRetryCount: attempt,
+          });
+        }
+
+        await this.waitForRetry(this.finalizeRetryDelaysMs[attempt - 1] ?? 0);
+      }
+    }
+
+    return maxAttempts;
   }
 
   private isMeaningfulTitle(title?: string | null): title is string {
@@ -75,13 +126,25 @@ export class MeetingPersistence {
     public async stopMeeting(meetingId?: string): Promise<SessionTracker> {
         console.log('[MeetingPersistence] Stopping meeting and queueing save...');
 
+        if (meetingId && typeof (this.session as any).setActiveMeetingId === 'function') {
+            (this.session as any).setActiveMeetingId(meetingId);
+        }
+
         // 0. Force-save any pending interim transcript
         this.session.flushInterimTranscript();
 
         // 1. Snapshot valid data BEFORE resetting
-        const snapshot = this.session.createSnapshot();
-        const nextSession = this.session.createSuccessorSession();
+        if (typeof (this.session as any).flushPersistenceNow === 'function') {
+            await (this.session as any).flushPersistenceNow();
+        }
+
+        const previousSession = this.session;
+        const snapshot = previousSession.createSnapshot();
+        const nextSession = previousSession.createSuccessorSession();
         this.session = nextSession;
+        if (typeof (previousSession as unknown as { dispose?: () => Promise<void> }).dispose === 'function') {
+            await (previousSession as unknown as { dispose: () => Promise<void> }).dispose();
+        }
 
         if (snapshot.durationMs < 1000) {
             console.log("Meeting too short, ignoring.");
@@ -118,12 +181,7 @@ export class MeetingPersistence {
         try {
             DatabaseManager.getInstance().createOrUpdateMeetingProcessingRecord(placeholder, snapshot.startTime, snapshot.durationMs);
             // Notify Frontend
-            const wins = require('electron').BrowserWindow.getAllWindows();
-            wins.forEach((w: any) => {
-                if (!w.isDestroyed()) {
-                    w.webContents.send('meetings-updated');
-                }
-            });
+            this.notifyRenderer('meetings-updated');
         } catch (e) {
             console.error("Failed to save placeholder", e);
         }
@@ -220,25 +278,23 @@ export class MeetingPersistence {
                 isProcessed: true
             };
 
-            DatabaseManager.getInstance().finalizeMeetingProcessing(meetingData, data.startTime, data.durationMs);
+            await this.finalizeMeetingWithRetry(meetingData, data.startTime, data.durationMs);
 
             // Notify Frontend to refresh list
-            const wins = require('electron').BrowserWindow.getAllWindows();
-            wins.forEach((w: any) => {
-                if (!w.isDestroyed()) {
-                    w.webContents.send('meetings-updated');
-                }
-            });
+            this.notifyRenderer('meetings-updated');
 
         } catch (error) {
             console.error('[MeetingPersistence] Failed to save meeting:', error);
             DatabaseManager.getInstance().markMeetingProcessingFailed(meetingId, error);
-            const wins = require('electron').BrowserWindow.getAllWindows();
-            wins.forEach((w: any) => {
-                if (!w.isDestroyed()) {
-                    w.webContents.send('meetings-updated');
-                }
+            const retryCount = typeof (error as { finalizeRetryCount?: unknown }).finalizeRetryCount === 'number'
+              ? Number((error as { finalizeRetryCount?: number }).finalizeRetryCount)
+              : this.finalizeRetryDelaysMs.length + 1;
+            this.notifyRenderer('meeting-save-failed', {
+              meetingId,
+              retryCount,
+              error: error instanceof Error ? error.message : String(error),
             });
+            this.notifyRenderer('meetings-updated');
         }
     }
 

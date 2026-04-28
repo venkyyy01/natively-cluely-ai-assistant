@@ -59,3 +59,31 @@ test('FallbackExecutor - should get start tier based on degradation level', () =
   executor.recordFailure('reduced_conscious');
   assert.equal(executor.getStartTier(), 2); // minimal -> tier 2
 });
+
+test('FallbackExecutor - does not auto-recover on cooldown alone without a full conscious success', () => {
+  const executor = new FallbackExecutor();
+  executor.recordFailure('full_conscious');
+  executor.recordFailure('full_conscious');
+  (executor as any).failureState.lastFailureTime = Date.now() - 301_000;
+
+  const recovered = executor.checkAutoRecovery();
+
+  assert.equal(recovered, false);
+  assert.equal(executor.getFailureState().degradationLevel, 'reduced');
+});
+
+test('FallbackExecutor - auto-recovery requires a successful full conscious probe after failures', () => {
+  const executor = new FallbackExecutor();
+  executor.recordFailure('full_conscious');
+  executor.recordFailure('full_conscious');
+  executor.recordFailure('reduced_conscious');
+  executor.recordFailure('reduced_conscious');
+  executor.recordSuccess('full_conscious');
+  (executor as any).failureState.lastFailureTime = Date.now() - 301_000;
+
+  const recovered = executor.checkAutoRecovery();
+
+  assert.equal(recovered, true);
+  assert.equal(executor.getFailureState().degradationLevel, 'none');
+  assert.equal(executor.getFailureState().consecutiveFailures, 0);
+});

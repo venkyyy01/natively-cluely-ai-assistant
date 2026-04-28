@@ -90,10 +90,19 @@ function stripMarkdown(text: string): string {
     const codeBlocks: string[] = [];
     let result = text;
 
+    // NAT-047 follow-up: the previous placeholder `__CODE_BLOCK_${i}__`
+    // looked like markdown bold/italic and was being mangled by the
+    // italic-stripping regex below (the underscores around BLOCK and N
+    // matched `_text_`), producing things like `_CODEBLOCK0_` and
+    // permanently dropping the code fence on restore. Use a non-printable
+    // ASCII control-character sentinel pair (\u0002 ... \u0003) that no
+    // markdown rule will ever touch.
+    const codeBlockSentinel = (i: number): string => `\u0002CODEBLOCK${i}\u0003`;
+
     // Extract code blocks to protect them
     result = result.replace(/```[\s\S]*?```/g, (match) => {
         codeBlocks.push(match);
-        return `__CODE_BLOCK_${codeBlocks.length - 1}__`;
+        return codeBlockSentinel(codeBlocks.length - 1);
     });
 
     // Remove headers (# ## ### etc.)
@@ -125,17 +134,36 @@ function stripMarkdown(text: string): string {
     // Remove links [text](url) -> text
     result = result.replace(/\[([^\]]+)\]\([^)]+\)/g, "$1");
 
-    // Collapse multiple newlines to single space (but preserve structure around blocks later?)
-    // We should be careful collapsing newlines around placeholders
-    result = result.replace(/\n+/g, " ");
+    // NAT-047 / audit A-13: previously this branch ran
+    //   result = result.replace(/\n+/g, " ");
+    //   result = result.replace(/\s+/g, " ");
+    // which collapsed *every* newline into a single space, destroying
+    // paragraph structure for prose answers and producing wall-of-text
+    // output. The fix preserves blank-line paragraph breaks while still
+    // collapsing wrap-induced single newlines (and trailing whitespace)
+    // into spaces. Code fences are already extracted to placeholders
+    // above, so this transformation never touches code formatting.
+    //
+    // Algorithm:
+    //   1. Normalize CRLF and strip trailing whitespace per line, so
+    //      "foo  \nbar" doesn't get treated as a structural break.
+    //   2. Hold paragraph breaks (>=2 newlines) in a sentinel.
+    //   3. Replace remaining single newlines with a space (line wrap).
+    //   4. Restore the sentinel as exactly one blank line.
+    //   5. Collapse runs of in-line whitespace (spaces/tabs only) so we
+    //      never re-collapse paragraph breaks.
+    result = result.replace(/\r\n/g, "\n");
+    result = result.replace(/[ \t]+\n/g, "\n");
+    const PARAGRAPH_SENTINEL = "\u0001PARA\u0001";
+    result = result.replace(/\n{2,}/g, PARAGRAPH_SENTINEL);
+    result = result.replace(/\n/g, " ");
+    result = result.replace(new RegExp(PARAGRAPH_SENTINEL, "g"), "\n\n");
+    result = result.replace(/[ \t]+/g, " ");
 
-    // Collapse multiple spaces
-    result = result.replace(/\s+/g, " ");
-
-    // Restore code blocks
-    // Add newlines around them for better formatting
+    // Restore code blocks (using markdown-inert sentinel from above).
+    // Add newlines around them for better formatting.
     codeBlocks.forEach((block, index) => {
-        result = result.replace(`__CODE_BLOCK_${index}__`, `\n${block}\n`);
+        result = result.replace(codeBlockSentinel(index), `\n${block}\n`);
     });
 
     return result.trim();

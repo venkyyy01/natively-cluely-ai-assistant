@@ -37,8 +37,22 @@ export class ScreenshotHelper {
     }
   }
 
+  private readonly SCREENSHOT_TIMEOUT_MS = 30000
+
   private async waitForWindowHide(): Promise<void> {
     await new Promise(resolve => setTimeout(resolve, process.platform === 'darwin' ? 180 : 120))
+  }
+
+  private async withTimeout<T>(promise: Promise<T>, timeoutMs: number, errorMessage: string): Promise<T> {
+    let timeoutId: NodeJS.Timeout
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      timeoutId = setTimeout(() => reject(new Error(errorMessage)), timeoutMs)
+    })
+    try {
+      return await Promise.race([promise, timeoutPromise])
+    } finally {
+      clearTimeout(timeoutId!)
+    }
   }
 
   private async withQueueLock<T>(operation: () => Promise<T>): Promise<T> {
@@ -161,20 +175,43 @@ export class ScreenshotHelper {
       let screenshotPath = ""
 
       const exec = util.promisify(require('child_process').exec)
+      const execWithTimeout = (cmd: string) => this.withTimeout(
+        Promise.resolve(exec(cmd)),
+        this.SCREENSHOT_TIMEOUT_MS,
+        `Screenshot timed out after ${this.SCREENSHOT_TIMEOUT_MS}ms`
+      )
 
       if (this.view === "queue") {
         screenshotPath = path.join(this.screenshotDir, `${uuidv4()}.png`)
         // Use native screencapture for reliability on macOS
         // -x: do not play sound
         // -C: capture cursor
-        await exec(this.getScreenshotCommand(screenshotPath, false))
+        try {
+          await execWithTimeout(this.getScreenshotCommand(screenshotPath, false))
+        } catch (e: any) {
+          if (e.message?.includes('timed out')) throw e
+          const errorMsg = e.message || String(e)
+          if (errorMsg.includes('could not create image') || errorMsg.includes('Screen Recording')) {
+            throw new Error('Screen Recording permission denied. Please enable in System Settings > Privacy & Security > Screen Recording.')
+          }
+          throw e
+        }
         await this.enforceFileSizeLimit(screenshotPath)
 
         this.screenshotQueue.push(screenshotPath)
         await this.trimQueue(this.screenshotQueue)
       } else {
         screenshotPath = path.join(this.extraScreenshotDir, `${uuidv4()}.png`)
-        await exec(this.getScreenshotCommand(screenshotPath, false))
+        try {
+          await execWithTimeout(this.getScreenshotCommand(screenshotPath, false))
+        } catch (e: any) {
+          if (e.message?.includes('timed out')) throw e
+          const errorMsg = e.message || String(e)
+          if (errorMsg.includes('could not create image') || errorMsg.includes('Screen Recording')) {
+            throw new Error('Screen Recording permission denied. Please enable in System Settings > Privacy & Security > Screen Recording.')
+          }
+          throw e
+        }
         await this.enforceFileSizeLimit(screenshotPath)
 
         this.extraScreenshotQueue.push(screenshotPath)
@@ -202,6 +239,11 @@ export class ScreenshotHelper {
 
       let screenshotPath = ""
       const exec = util.promisify(require('child_process').exec)
+      const execWithTimeout = (cmd: string) => this.withTimeout(
+        Promise.resolve(exec(cmd)),
+        this.SCREENSHOT_TIMEOUT_MS,
+        `Screenshot timed out after ${this.SCREENSHOT_TIMEOUT_MS}ms`
+      )
 
       // Always use the standard queue directory for this temporary context
       screenshotPath = path.join(this.screenshotDir, `selective-${uuidv4()}.png`)
@@ -209,9 +251,13 @@ export class ScreenshotHelper {
       // -i: interactive mode (selection)
       // -x: do not play sound
       try {
-        await exec(this.getScreenshotCommand(screenshotPath, true))
+        await execWithTimeout(this.getScreenshotCommand(screenshotPath, true))
       } catch (e: any) {
-        // User cancelled selection (exit code 1 usually)
+        if (e.message?.includes('timed out')) throw e
+        const errorMsg = e.message || String(e)
+        if (errorMsg.includes('could not create image') || errorMsg.includes('Screen Recording')) {
+          throw new Error('Screen Recording permission denied. Please enable in System Settings > Privacy & Security > Screen Recording.')
+        }
         throw new Error("Selection cancelled")
       }
 

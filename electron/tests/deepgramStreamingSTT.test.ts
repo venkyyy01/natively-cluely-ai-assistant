@@ -12,6 +12,7 @@ class FakeWebSocket extends EventEmitter {
   public readyState = FakeWebSocket.CONNECTING;
   public sent: unknown[] = [];
   public closeCalls = 0;
+  public terminateCalls = 0;
 
   constructor(public url: string, public options: unknown) {
     super();
@@ -24,6 +25,11 @@ class FakeWebSocket extends EventEmitter {
 
   close(): void {
     this.closeCalls += 1;
+    this.readyState = FakeWebSocket.CLOSED;
+  }
+
+  terminate(): void {
+    this.terminateCalls += 1;
     this.readyState = FakeWebSocket.CLOSED;
   }
 
@@ -91,7 +97,7 @@ test('DeepgramStreamingSTT ignores stale socket close events after an in-place r
 
     firstSocket.closeWith(1006, 'stale-close');
 
-    assert.equal(scheduledTimeouts.length, 0);
+    assert.equal(scheduledTimeouts.length, 2);
     assert.equal((stt as any).ws, secondSocket);
 
     stt.stop();
@@ -136,18 +142,23 @@ test('DeepgramStreamingSTT buffers audio written before the websocket is open an
   }
 });
 
-test('DeepgramStreamingSTT emits interim, utterance-end, and final transcript events', async () => {
+test('DeepgramStreamingSTT only emits final transcript events when Deepgram itself marks is_final (NAT-009)', async () => {
   const restoreWs = installWebSocketMock();
   const modulePath = require.resolve('../audio/DeepgramStreamingSTT');
   delete require.cache[modulePath];
+  let stt: InstanceType<typeof import('../audio/DeepgramStreamingSTT').DeepgramStreamingSTT> | undefined;
 
   try {
     const { DeepgramStreamingSTT } = await import('../audio/DeepgramStreamingSTT');
-    const stt = new DeepgramStreamingSTT('test-key');
-    const transcripts: Array<{ text: string; isFinal: boolean; confidence: number }> = [];
+    stt = new DeepgramStreamingSTT('test-key');
+    const transcripts: Array<{ text: string; isFinal: boolean; confidence: number; traceId?: string }> = [];
+    const telemetry: Array<{ kind: string; hadPendingInterim: boolean; pendingInterimLength: number }> = [];
 
     stt.on('transcript', (segment) => {
       transcripts.push(segment);
+    });
+    stt.on('telemetry', (entry) => {
+      telemetry.push(entry);
     });
 
     stt.start();
@@ -166,11 +177,57 @@ test('DeepgramStreamingSTT emits interim, utterance-end, and final transcript ev
       is_final: true,
     })));
 
-    assert.deepEqual(transcripts, [
+    // NAT-009 / audit A-10: the interim "hello there" must NOT be promoted to
+    // final on UtteranceEnd. Only the second Results message, which Deepgram
+    // itself marked is_final, may produce a final transcript event.
+    assert.deepEqual(transcripts.map(({ text, isFinal, confidence }) => ({ text, isFinal, confidence })), [
       { text: 'hello there', isFinal: false, confidence: 0.75 },
-      { text: 'hello there', isFinal: true, confidence: 0.75 },
       { text: 'general kenobi', isFinal: true, confidence: 0.91 },
     ]);
+    assert.equal(typeof transcripts[0]?.traceId, 'string');
+    assert.equal(typeof transcripts[1]?.traceId, 'string');
+
+    assert.equal(telemetry.length, 1, 'one stt.utterance_end_seen telemetry event');
+    assert.equal(telemetry[0]!.kind, 'stt.utterance_end_seen');
+    assert.equal(telemetry[0]!.hadPendingInterim, true, 'telemetry records that an interim was in flight');
+    assert.equal(telemetry[0]!.pendingInterimLength, 'hello there'.length);
+
+    stt.stop();
+  } finally {
+    stt?.stop();
+    restoreWs();
+  }
+});
+
+test('DeepgramStreamingSTT UtteranceEnd with no pending interim emits telemetry only, no transcript (NAT-009)', async () => {
+  const restoreWs = installWebSocketMock();
+  const modulePath = require.resolve('../audio/DeepgramStreamingSTT');
+  delete require.cache[modulePath];
+
+  try {
+    const { DeepgramStreamingSTT } = await import('../audio/DeepgramStreamingSTT');
+    const stt = new DeepgramStreamingSTT('test-key');
+    const transcripts: Array<{ text: string; isFinal: boolean; confidence: number }> = [];
+    const telemetry: Array<{ kind: string; hadPendingInterim: boolean; pendingInterimLength: number }> = [];
+
+    stt.on('transcript', (segment) => {
+      transcripts.push(segment);
+    });
+    stt.on('telemetry', (entry) => {
+      telemetry.push(entry);
+    });
+
+    stt.start();
+    const socket = FakeWebSocket.instances[0]!;
+    socket.open();
+
+    socket.emit('message', Buffer.from(JSON.stringify({ type: 'UtteranceEnd' })));
+
+    assert.deepEqual(transcripts, []);
+    assert.equal(telemetry.length, 1);
+    assert.equal(telemetry[0]!.kind, 'stt.utterance_end_seen');
+    assert.equal(telemetry[0]!.hadPendingInterim, false);
+    assert.equal(telemetry[0]!.pendingInterimLength, 0);
 
     stt.stop();
   } finally {
@@ -178,7 +235,7 @@ test('DeepgramStreamingSTT emits interim, utterance-end, and final transcript ev
   }
 });
 
-test('DeepgramStreamingSTT reconnects only on unexpected closes', async () => {
+test('DeepgramStreamingSTT reconnects on close while active, including clean closes', async () => {
   const restoreWs = installWebSocketMock();
   const originalSetTimeout = global.setTimeout;
   const originalClearTimeout = global.clearTimeout;
@@ -214,16 +271,16 @@ test('DeepgramStreamingSTT reconnects only on unexpected closes', async () => {
 
     assert.equal(errors.length, 1);
     assert.equal(errors[0]!.message, 'ws exploded');
-    assert.equal(scheduledTimeouts.length, 1);
+    assert.equal(scheduledTimeouts.length, 2);
 
-    scheduledTimeouts[0]!();
+    scheduledTimeouts[1]!();
     assert.equal(FakeWebSocket.instances.length, 2);
 
     const secondSocket = FakeWebSocket.instances[1]!;
     secondSocket.open();
     secondSocket.closeWith(1000, 'clean');
 
-    assert.equal(scheduledTimeouts.length, 1);
+    assert.equal(scheduledTimeouts.length, 4);
 
     stt.stop();
   } finally {
@@ -296,9 +353,9 @@ test('DeepgramStreamingSTT sends periodic keepalives and a graceful close messag
     const socket = FakeWebSocket.instances[0]!;
     socket.open();
 
-    assert.equal(scheduledIntervals.length, 1);
+    assert.equal(scheduledIntervals.length, 3);
 
-    scheduledIntervals[0]!();
+    scheduledIntervals[1]!();
     assert.equal(socket.sent[0], JSON.stringify({ type: 'KeepAlive' }));
     assert.equal(socket.sent[1], JSON.stringify({ type: 'KeepAlive' }));
 
@@ -313,7 +370,57 @@ test('DeepgramStreamingSTT sends periodic keepalives and a graceful close messag
   }
 });
 
-test('DeepgramStreamingSTT stops reconnecting after the retry cap is exhausted', async () => {
+test('DeepgramStreamingSTT connection guard reconnects when socket disappears without new audio', async () => {
+  const restoreWs = installWebSocketMock();
+  const originalSetTimeout = global.setTimeout;
+  const originalClearTimeout = global.clearTimeout;
+  const originalSetInterval = global.setInterval;
+  const originalClearInterval = global.clearInterval;
+  const scheduledIntervals: Array<() => void> = [];
+
+  (global as any).setTimeout = (fn: () => void) => {
+    return fn as unknown as number;
+  };
+  (global as any).clearTimeout = () => {};
+  (global as any).setInterval = (fn: () => void) => {
+    scheduledIntervals.push(fn);
+    return scheduledIntervals.length;
+  };
+  (global as any).clearInterval = () => {};
+
+  const modulePath = require.resolve('../audio/DeepgramStreamingSTT');
+  delete require.cache[modulePath];
+
+  try {
+    const { DeepgramStreamingSTT } = await import('../audio/DeepgramStreamingSTT');
+    const stt = new DeepgramStreamingSTT('test-key');
+
+    stt.start();
+    const firstSocket = FakeWebSocket.instances[0]!;
+    firstSocket.open();
+
+    assert.equal(FakeWebSocket.instances.length, 1);
+    assert.equal(scheduledIntervals.length, 3);
+
+    (stt as any).ws = null;
+    (stt as any).isConnecting = false;
+    (stt as any).reconnectTimer = null;
+
+    scheduledIntervals[0]!();
+
+    assert.equal(FakeWebSocket.instances.length, 2);
+
+    stt.stop();
+  } finally {
+    restoreWs();
+    (global as any).setTimeout = originalSetTimeout;
+    (global as any).clearTimeout = originalClearTimeout;
+    (global as any).setInterval = originalSetInterval;
+    (global as any).clearInterval = originalClearInterval;
+  }
+});
+
+test('DeepgramStreamingSTT aborts hung connection attempts and schedules a reconnect', async () => {
   const restoreWs = installWebSocketMock();
   const originalSetTimeout = global.setTimeout;
   const originalClearTimeout = global.clearTimeout;
@@ -335,28 +442,16 @@ test('DeepgramStreamingSTT stops reconnecting after the retry cap is exhausted',
   try {
     const { DeepgramStreamingSTT } = await import('../audio/DeepgramStreamingSTT');
     const stt = new DeepgramStreamingSTT('test-key');
-    const errors: Error[] = [];
-
-    stt.on('error', (err) => errors.push(err));
 
     stt.start();
     assert.equal(FakeWebSocket.instances.length, 1);
+    assert.equal(scheduledTimeouts.length, 1);
 
-    let currentSocket = FakeWebSocket.instances[0]!;
-    for (let attempt = 0; attempt < 5; attempt++) {
-      currentSocket.closeWith(1011, `unexpected-${attempt}`);
-      assert.equal(scheduledTimeouts.length, attempt + 1);
-      scheduledTimeouts[attempt]!();
-      currentSocket = FakeWebSocket.instances[attempt + 1]!;
-    }
+    scheduledTimeouts[0]!();
 
-    currentSocket.closeWith(1011, 'exhausted');
-
-    assert.equal(scheduledTimeouts.length, 5);
-    assert.equal(FakeWebSocket.instances.length, 6);
-    assert.equal(errors.length, 1);
-    assert.match(errors[0]!.message, /max reconnect/i);
-    assert.equal((stt as any).isActive, false);
+    const socket = FakeWebSocket.instances[0]!;
+    assert.equal(socket.terminateCalls, 1);
+    assert.equal(scheduledTimeouts.length, 2);
 
     stt.stop();
   } finally {
@@ -365,5 +460,64 @@ test('DeepgramStreamingSTT stops reconnecting after the retry cap is exhausted',
     (global as any).clearTimeout = originalClearTimeout;
     (global as any).setInterval = originalSetInterval;
     (global as any).clearInterval = originalClearInterval;
+  }
+});
+
+test('DeepgramStreamingSTT recycles an open socket when inbound activity stalls during audio flow', async () => {
+  const restoreWs = installWebSocketMock();
+  const originalSetTimeout = global.setTimeout;
+  const originalClearTimeout = global.clearTimeout;
+  const originalSetInterval = global.setInterval;
+  const originalClearInterval = global.clearInterval;
+  const scheduledTimeouts: Array<() => void> = [];
+  const scheduledIntervals: Array<() => void> = [];
+
+  (global as any).setTimeout = (fn: () => void) => {
+    scheduledTimeouts.push(fn);
+    return scheduledTimeouts.length;
+  };
+  (global as any).clearTimeout = () => {};
+  (global as any).setInterval = (fn: () => void) => {
+    scheduledIntervals.push(fn);
+    return scheduledIntervals.length;
+  };
+  (global as any).clearInterval = () => {};
+
+  const originalNow = Date.now;
+  let now = 0;
+  Date.now = () => now;
+
+  const modulePath = require.resolve('../audio/DeepgramStreamingSTT');
+  delete require.cache[modulePath];
+
+  try {
+    const { DeepgramStreamingSTT } = await import('../audio/DeepgramStreamingSTT');
+    const stt = new DeepgramStreamingSTT('test-key');
+    stt.setSampleRate(16000);
+
+    stt.start();
+    const socket = FakeWebSocket.instances[0]!;
+    socket.open();
+
+    assert.equal(scheduledIntervals.length, 3);
+
+    now = 1000;
+    stt.write(Buffer.from([100, 0, 100, 0, 100, 0, 100, 0]));
+
+    now = 16000;
+    scheduledIntervals[2]!();
+
+    assert.equal(socket.terminateCalls, 1);
+    assert.equal(FakeWebSocket.instances.length, 1);
+    assert.equal(scheduledTimeouts.length, 2);
+
+    stt.stop();
+  } finally {
+    restoreWs();
+    (global as any).setTimeout = originalSetTimeout;
+    (global as any).clearTimeout = originalClearTimeout;
+    (global as any).setInterval = originalSetInterval;
+    (global as any).clearInterval = originalClearInterval;
+    Date.now = originalNow;
   }
 });

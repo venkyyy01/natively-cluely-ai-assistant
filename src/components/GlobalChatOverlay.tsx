@@ -198,7 +198,8 @@ const GlobalChatOverlay: React.FC<GlobalChatOverlayProps> = ({
 
                 // Setup fallback listeners (Standard Gemini)
                 streamBuffer.reset();
-                const oldTokenCleanup = window.electronAPI?.onGeminiStreamToken((token: string) => {
+                const geminiRequestId = crypto.randomUUID();
+                const oldTokenCleanup = window.electronAPI?.onGeminiStreamToken(geminiRequestId, (token: string) => {
                     if (!isCurrentRequest()) return;
                     setChatState('streaming_response');
                     streamBuffer.appendToken(token, (content) => {
@@ -211,7 +212,7 @@ const GlobalChatOverlay: React.FC<GlobalChatOverlayProps> = ({
                     });
                 });
 
-                const oldDoneCleanup = window.electronAPI?.onGeminiStreamDone(() => {
+                const oldDoneCleanup = window.electronAPI?.onGeminiStreamDone(geminiRequestId, () => {
                     if (!isCurrentRequest()) return;
                     const finalContent = streamBuffer.getBufferedContent();
                     setMessages(prev => prev.map(msg =>
@@ -223,7 +224,7 @@ const GlobalChatOverlay: React.FC<GlobalChatOverlayProps> = ({
                     finishRequest();
                 });
 
-                const oldErrorCleanup = window.electronAPI?.onGeminiStreamError((error: string) => {
+                const oldErrorCleanup = window.electronAPI?.onGeminiStreamError(geminiRequestId, (error: string) => {
                     if (!isCurrentRequest()) return;
                     console.error('[GlobalChat] Gemini stream error:', error);
                     setMessages(prev => prev.filter(msg => msg.id !== assistantMessageId));
@@ -235,7 +236,7 @@ const GlobalChatOverlay: React.FC<GlobalChatOverlayProps> = ({
                 activeCleanupRef.current = [oldTokenCleanup, oldDoneCleanup, oldErrorCleanup].filter(Boolean) as Array<() => void>;
 
                 // Call standard chat
-                await window.electronAPI?.streamGeminiChat(question, undefined, undefined, { skipSystemPrompt: false });
+                await window.electronAPI?.streamGeminiChat(question, undefined, undefined, { skipSystemPrompt: false, requestId: geminiRequestId });
             }
 
         } catch (error) {

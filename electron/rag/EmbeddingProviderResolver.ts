@@ -15,6 +15,7 @@ export interface AppAPIConfig {
 export class EmbeddingProviderResolver {
   private static aneProviderAvailable: boolean | null = null;
   private static aneProviderChecked: boolean = false;
+  private static aneProvider: ANEEmbeddingProvider | null = null;
 
   /**
    * Returns the best available provider.
@@ -24,16 +25,19 @@ export class EmbeddingProviderResolver {
   static async resolve(config: AppAPIConfig): Promise<IEmbeddingProvider> {
     // ANE (Apple Neural Engine) provider - highest priority when acceleration enabled
     if (isOptimizationActive('useANEEmbeddings')) {
-      const aneProvider = new ANEEmbeddingProvider();
-      
       if (!EmbeddingProviderResolver.aneProviderChecked) {
+        const aneProvider = new ANEEmbeddingProvider();
+        await aneProvider.initialize();
         EmbeddingProviderResolver.aneProviderAvailable = await aneProvider.isAvailable();
+        EmbeddingProviderResolver.aneProvider = EmbeddingProviderResolver.aneProviderAvailable
+          ? aneProvider
+          : null;
         EmbeddingProviderResolver.aneProviderChecked = true;
       }
 
-      if (EmbeddingProviderResolver.aneProviderAvailable) {
-        console.log(`[EmbeddingProviderResolver] ANE provider available, using ${aneProvider.name} (${aneProvider.dimensions}d)`);
-        return aneProvider;
+      if (EmbeddingProviderResolver.aneProviderAvailable && EmbeddingProviderResolver.aneProvider) {
+        console.log(`[EmbeddingProviderResolver] ANE provider available, using ${EmbeddingProviderResolver.aneProvider.name} (${EmbeddingProviderResolver.aneProvider.dimensions}d)`);
+        return EmbeddingProviderResolver.aneProvider;
       }
       console.log('[EmbeddingProviderResolver] ANE provider unavailable, falling back to other providers');
     }

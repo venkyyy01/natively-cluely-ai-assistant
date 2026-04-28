@@ -18,3 +18,12 @@ test('wires the general tab through the extracted general settings section', () 
   expect(source).toContain("import { GeneralSettingsSection } from './settings/GeneralSettingsSection';");
   expect(source).toContain('<GeneralSettingsSection');
 });
+
+test('keeps first-setup STT provider selection local until credentials are configured', () => {
+  const source = readSettingsOverlay();
+
+  expect(source).toContain('if (!hasConfiguredSttProvider(provider)) {');
+  expect(source).toContain('if (sttProviderRef.current === provider) {');
+  expect(source).toContain('await persistSttProvider(provider);');
+  expect(source).toContain('const handleGoogleServiceAccountSelected = React.useCallback');
+});

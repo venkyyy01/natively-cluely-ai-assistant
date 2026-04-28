@@ -1,5 +1,8 @@
 // electron/conscious/InterviewPhase.ts
 import { InterviewPhase, INTERVIEW_PHASES } from './types';
+import type { RuntimeBudgetScheduler } from '../runtime/RuntimeBudgetScheduler';
+
+type ClassifierLane = Pick<RuntimeBudgetScheduler, 'submit'>;
 
 interface PhaseSignal {
   phase: InterviewPhase;
@@ -71,10 +74,37 @@ export interface PhaseDetectionResult {
   signals: string[];
 }
 
+export interface PhaseDetectorOptions {
+  classifierLane?: ClassifierLane;
+}
+
 export class InterviewPhaseDetector {
   private currentPhase: InterviewPhase = 'requirements_gathering';
+  private readonly classifierLane?: ClassifierLane;
+
+  constructor(options: PhaseDetectorOptions = {}) {
+    this.classifierLane = options.classifierLane;
+  }
   
   detectPhase(
+    transcript: string,
+    currentPhase: InterviewPhase,
+    recentContext: string[]
+  ): PhaseDetectionResult {
+    if (this.classifierLane) {
+      const detected = this.detectPhaseOnCurrentThread(transcript, currentPhase, recentContext);
+      void this.classifierLane
+        .submit('semantic', async () => detected)
+        .catch((error: unknown) => {
+          console.warn('[InterviewPhaseDetector] Semantic classifier lane rejected detection task:', error);
+        });
+      return detected;
+    }
+
+    return this.detectPhaseOnCurrentThread(transcript, currentPhase, recentContext);
+  }
+
+  private detectPhaseOnCurrentThread(
     transcript: string,
     currentPhase: InterviewPhase,
     recentContext: string[]

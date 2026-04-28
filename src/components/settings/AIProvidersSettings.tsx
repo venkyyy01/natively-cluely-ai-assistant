@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Plus, Trash2, Edit2, AlertCircle, CheckCircle, Save, ChevronDown, Check, RefreshCw, ExternalLink, Loader2 } from 'lucide-react';
 import { STANDARD_CLOUD_MODELS, prettifyModelId } from '../../utils/modelUtils';
 import { validateCurl } from '../../lib/curl-validator';
+import { getOptionalElectronMethod } from '../../lib/electronApi';
 import { ProviderCard } from './ProviderCard';
 import type { CustomProviderPayload, FastResponseConfig } from '../../../shared/ipc';
 
@@ -75,6 +76,17 @@ const ModelSelect: React.FC<ModelSelectProps> = ({ value, options, onChange, pla
 };
 
 export const AIProvidersSettings: React.FC = () => {
+    const getFastResponseConfig = getOptionalElectronMethod('getFastResponseConfig');
+    const getStoredCredentials = getOptionalElectronMethod('getStoredCredentials');
+    const getCustomProviders = getOptionalElectronMethod('getCustomProviders');
+    const getDefaultModel = getOptionalElectronMethod('getDefaultModel');
+    const onFastResponseConfigChanged = getOptionalElectronMethod('onFastResponseConfigChanged');
+    const setFastResponseConfigInMain = getOptionalElectronMethod('setFastResponseConfig');
+    const openExternal = getOptionalElectronMethod('openExternal');
+    const fetchProviderModels = getOptionalElectronMethod('fetchProviderModels');
+    const saveCustomProvider = getOptionalElectronMethod('saveCustomProvider');
+    const deleteCustomProvider = getOptionalElectronMethod('deleteCustomProvider');
+    const setDefaultModelInMain = getOptionalElectronMethod('setDefaultModel');
     // --- Standard Providers ---
     const [apiKey, setApiKey] = useState('');
     const [groqApiKey, setGroqApiKey] = useState('');
@@ -118,11 +130,10 @@ export const AIProvidersSettings: React.FC = () => {
     useEffect(() => {
         const loadCredentials = async () => {
             try {                // @ts-ignore
-                const fastConfig = await window.electronAPI?.getFastResponseConfig();
+                const fastConfig = await getFastResponseConfig?.();
                 if (fastConfig) setFastResponseConfig(fastConfig);
 
-                // @ts-ignore
-                const creds = await window.electronAPI?.getStoredCredentials?.();
+                const creds = await getStoredCredentials?.();
                 if (creds) {
                     setHasStoredKey({
                         gemini: creds.hasGeminiKey,
@@ -141,15 +152,13 @@ export const AIProvidersSettings: React.FC = () => {
                     setPreferredModels(pm);
                 }
 
-                // @ts-ignore
-                const custom = await window.electronAPI?.getCustomProviders();
+                const custom = await getCustomProviders?.();
                 if (custom) {
                     setCustomProviders(custom);
                 }
 
                 // Load persisted default model
-                // @ts-ignore
-                const result = await window.electronAPI?.getDefaultModel();
+                const result = await getDefaultModel?.();
                 if (result && result.model) {
                     setDefaultModel(result.model);
                 }
@@ -164,9 +173,8 @@ export const AIProvidersSettings: React.FC = () => {
         loadCredentials();
 
         // Listen for changes from other windows (2-way sync)
-        if (window.electronAPI?.onFastResponseConfigChanged) {
-            // @ts-ignore
-            const unsubscribe = window.electronAPI.onFastResponseConfigChanged((config: FastResponseConfig) => {
+        if (onFastResponseConfigChanged) {
+            const unsubscribe = onFastResponseConfigChanged((config: FastResponseConfig) => {
                 setFastResponseConfig(config);
             });
             return () => unsubscribe();
@@ -179,8 +187,7 @@ export const AIProvidersSettings: React.FC = () => {
         if (!providerHasKey && fastResponseConfig.enabled) {
             const nextConfig = { ...fastResponseConfig, enabled: false };
             setFastResponseConfig(nextConfig);
-            // @ts-ignore
-            window.electronAPI?.setFastResponseConfig(nextConfig);
+            void setFastResponseConfigInMain?.(nextConfig);
         }
     }, [hasStoredKey, fastResponseConfig]);
 
@@ -341,15 +348,17 @@ export const AIProvidersSettings: React.FC = () => {
             openai: 'https://platform.openai.com/api-keys',
             claude: 'https://console.anthropic.com/settings/keys'
         };
-        // @ts-ignore
-        window.electronAPI?.openExternal(urls[provider]);
+        if (openExternal) {
+            void openExternal(urls[provider]);
+        } else {
+            window.open(urls[provider], '_blank');
+        }
     };
 
     const persistFastResponseConfig = async (nextConfig: FastResponseConfig) => {
         setFastResponseConfig(nextConfig);
         try {
-            // @ts-ignore
-            await window.electronAPI?.setFastResponseConfig(nextConfig);
+            await setFastResponseConfigInMain?.(nextConfig);
         } catch (e) {
             console.error('Failed to persist fast response config:', e);
         }
@@ -376,8 +385,7 @@ export const AIProvidersSettings: React.FC = () => {
         setFastResponseFetchError(prev => ({ ...prev, [provider]: null }));
 
         try {
-            // @ts-ignore
-            const result = await window.electronAPI?.fetchProviderModels(provider, '');
+            const result = await fetchProviderModels?.(provider, '');
             if (!result?.success || !result.models) {
                 setFastResponseFetchError(prev => ({ ...prev, [provider]: result?.error || 'Failed to fetch models' }));
                 return;
@@ -457,16 +465,16 @@ export const AIProvidersSettings: React.FC = () => {
         };
 
         try {
-            // @ts-ignore
-            const result = await window.electronAPI.saveCustomProvider(newProvider);
-            if (result.success) {
+            const result = await saveCustomProvider?.(newProvider);
+            if (result?.success) {
                 // Refresh list
-                // @ts-ignore
-                const updated = await window.electronAPI.getCustomProviders();
-                setCustomProviders(updated);
+                const updated = await getCustomProviders?.();
+                if (updated) {
+                    setCustomProviders(updated);
+                }
                 setIsEditingCustom(false);
             } else {
-                setCurlError(result.error ?? null);
+                setCurlError(result?.error ?? 'Custom provider bridge unavailable.');
             }
         } catch (e: any) {
             setCurlError(e.message);
@@ -476,12 +484,12 @@ export const AIProvidersSettings: React.FC = () => {
     const handleDeleteCustom = async (id: string) => {
         if (!confirm("Are you sure you want to delete this provider?")) return;
         try {
-            // @ts-ignore
-            const result = await window.electronAPI.deleteCustomProvider(id);
-            if (result.success) {
-                // @ts-ignore
-                const updated = await window.electronAPI.getCustomProviders();
-                setCustomProviders(updated);
+            const result = await deleteCustomProvider?.(id);
+            if (result?.success) {
+                const updated = await getCustomProviders?.();
+                if (updated) {
+                    setCustomProviders(updated);
+                }
             }
         } catch (e) {
             console.error("Failed to delete provider:", e);
@@ -524,8 +532,9 @@ export const AIProvidersSettings: React.FC = () => {
                         })()}
                         onChange={(val) => {
                             setDefaultModel(val);
-                            // @ts-ignore - persist as default + update runtime + broadcast
-                            window.electronAPI?.setDefaultModel(val).catch(console.error);
+                            if (setDefaultModelInMain) {
+                                void setDefaultModelInMain(val).catch(console.error);
+                            }
                         }}
                     />
                 </div>
@@ -880,13 +889,54 @@ export const AIProvidersSettings: React.FC = () => {
                                         <div className="grid grid-cols-1 gap-2">
                                             <div className="flex items-center gap-2 text-xs">
                                                 <code className="bg-bg-input px-1.5 py-0.5 rounded text-text-primary font-mono border border-border-subtle">{"{{TEXT}}"}</code>
-                                                <span className="text-text-tertiary">Combined System + Context + Message (Recommended)</span>
+                                                <span className="text-text-tertiary">Combined System + Context + Message</span>
+                                            </div>
+                                            <div className="flex items-center gap-2 text-xs">
+                                                <code className="bg-bg-input px-1.5 py-0.5 rounded text-text-primary font-mono border border-border-subtle">{"{{PROMPT}}"}</code>
+                                                <span className="text-text-tertiary">Alias of {"{{TEXT}}"}</span>
+                                            </div>
+                                            <div className="flex items-center gap-2 text-xs">
+                                                <code className="bg-bg-input px-1.5 py-0.5 rounded text-text-primary font-mono border border-border-subtle">{"{{USER_MESSAGE}}"}</code>
+                                                <span className="text-text-tertiary">Raw user message only</span>
+                                            </div>
+                                            <div className="flex items-center gap-2 text-xs">
+                                                <code className="bg-bg-input px-1.5 py-0.5 rounded text-text-primary font-mono border border-border-subtle">{"{{SYSTEM_PROMPT}}"}</code>
+                                                <span className="text-text-tertiary">Injected system instruction</span>
+                                            </div>
+                                            <div className="flex items-center gap-2 text-xs">
+                                                <code className="bg-bg-input px-1.5 py-0.5 rounded text-text-primary font-mono border border-border-subtle">{"{{CONTEXT}}"}</code>
+                                                <span className="text-text-tertiary">Conversation context (if available)</span>
                                             </div>
                                             <div className="flex items-center gap-2 text-xs">
                                                 <code className="bg-bg-input px-1.5 py-0.5 rounded text-text-primary font-mono border border-border-subtle">{"{{IMAGE_BASE64}}"}</code>
-                                                <span className="text-text-tertiary">Screenshot data (if available)</span>
+                                                <span className="text-text-tertiary">First screenshot as base64</span>
+                                            </div>
+                                            <div className="flex items-center gap-2 text-xs">
+                                                <code className="bg-bg-input px-1.5 py-0.5 rounded text-text-primary font-mono border border-border-subtle">{"{{IMAGE_BASE64S}}"}</code>
+                                                <span className="text-text-tertiary">JSON array of all screenshots (base64)</span>
+                                            </div>
+                                            <div className="flex items-center gap-2 text-xs">
+                                                <code className="bg-bg-input px-1.5 py-0.5 rounded text-text-primary font-mono border border-border-subtle">{"{{IMAGE_COUNT}}"}</code>
+                                                <span className="text-text-tertiary">Number of attached screenshots</span>
+                                            </div>
+                                            <div className="flex items-center gap-2 text-xs">
+                                                <code className="bg-bg-input px-1.5 py-0.5 rounded text-text-primary font-mono border border-border-subtle">{"{{OPENAI_USER_CONTENT}}"}</code>
+                                                <span className="text-text-tertiary">OpenAI-compatible user content array (text + images)</span>
+                                            </div>
+                                            <div className="flex items-center gap-2 text-xs">
+                                                <code className="bg-bg-input px-1.5 py-0.5 rounded text-text-primary font-mono border border-border-subtle">{"{{OPENAI_MESSAGES}}"}</code>
+                                                <span className="text-text-tertiary">OpenAI-compatible messages array (system + user multimodal)</span>
+                                            </div>
+                                            <div className="flex items-center gap-2 text-xs">
+                                                <code className="bg-bg-input px-1.5 py-0.5 rounded text-text-primary font-mono border border-border-subtle">{"{{API_KEY}}"}</code>
+                                                <span className="text-text-tertiary">Best-available configured LLM API key</span>
+                                            </div>
+                                            <div className="flex items-center gap-2 text-xs">
+                                                <code className="bg-bg-input px-1.5 py-0.5 rounded text-text-primary font-mono border border-border-subtle">{"{{OPENAI_API_KEY}}"}</code>
+                                                <span className="text-text-tertiary">Provider-specific key placeholders are also supported</span>
                                             </div>
                                         </div>
+                                        <p className="text-[10px] text-text-tertiary mt-2">Tip: include at least one text or image placeholder so input can flow through in text-only, image-only, and mixed scenarios.</p>
                                     </div>
 
                                     <div>
@@ -909,13 +959,10 @@ export const AIProvidersSettings: React.FC = () => {
                                                     <code className="font-mono text-[10px] text-text-primary whitespace-pre block">
                                                         {`curl https://api.openai.com/v1/chat/completions \\
   -H "Content-Type: application/json" \\
-  -H "Authorization: Bearer YOUR_API_KEY" \\
+  -H "Authorization: Bearer {{OPENAI_API_KEY}}" \\
   -d '{
     "model": "gpt-4o-mini",
-    "messages": [
-      {"role": "system", "content": "You are a helpful assistant."},
-      {"role": "user", "content": "{{TEXT}}"}
-    ],
+    "messages": {{OPENAI_MESSAGES}},
     "temperature": 0.7
   }'`}
                                                     </code>

@@ -30,6 +30,8 @@ INSTALL_DIR="/Applications"
 ENTITLEMENTS="$SCRIPT_DIR/assets/entitlements.mac.plist"
 HELPER_ENTITLEMENTS="$SCRIPT_DIR/stealth-projects/macos-virtual-display-helper/entitlements.plist"
 RELEASE_DIR="$SCRIPT_DIR/release"
+APP_SUPPORT_DIR="${HOME}/Library/Application Support/natively"
+APP_LOG_DIR="${APP_SUPPORT_DIR}/Logs"
 IS_TTY=false
 if [[ -t 1 ]]; then
     IS_TTY=true
@@ -122,6 +124,20 @@ run_logged_command() {
 
     info "$label"
     "$@"
+}
+
+enable_default_app_logging() {
+    mkdir -p "$APP_LOG_DIR"
+    export NATIVELY_DEBUG_LOG=1
+    if command -v launchctl >/dev/null 2>&1; then
+        if launchctl setenv NATIVELY_DEBUG_LOG 1; then
+            success "Enabled default app logging for LaunchServices"
+        else
+            warn "Could not set LaunchServices logging environment; shell launch will still inherit NATIVELY_DEBUG_LOG=1"
+        fi
+    else
+        warn "launchctl not found; shell launch will still inherit NATIVELY_DEBUG_LOG=1"
+    fi
 }
 
 artifact_mtime() {
@@ -345,6 +361,36 @@ require_file() {
     fi
 }
 
+resolve_macos_virtual_display_helper_binary() {
+    local helper_dir="$1"
+    local candidate=""
+    local candidates=(
+        "$helper_dir/system-services-helper"
+        "$helper_dir/stealth-virtual-display-helper"
+    )
+
+    for candidate in "${candidates[@]}"; do
+        if [[ -f "$candidate" ]]; then
+            printf '%s\n' "$candidate"
+            return 0
+        fi
+    done
+
+    return 1
+}
+
+require_macos_virtual_display_helper() {
+    local helper_dir="$1"
+    local helper_path=""
+
+    helper_path=$(resolve_macos_virtual_display_helper_binary "$helper_dir" || true)
+    if [[ -n "$helper_path" ]]; then
+        success "Packaged macOS virtual display helper present ($(basename "$helper_path"))"
+    else
+        fail "Missing required file: $helper_dir/{system-services-helper,stealth-virtual-display-helper}"
+    fi
+}
+
 require_asar_entry() {
     local asar_path="$1"
     local entry_path="$2"
@@ -355,6 +401,58 @@ require_asar_entry() {
     else
         fail "Missing required app.asar entry: $entry_path"
     fi
+}
+
+is_truthy_flag() {
+    local value="${1:-}"
+    case "$value" in
+        1|[Tt][Rr][Uu][Ee]|[Yy][Ee][Ss]|[Oo][Nn])
+            return 0
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+run_packaged_launch_probe() {
+    local mode_label="$1"
+    local app_binary="$2"
+    local disable_helper="$3"
+    local log_file
+    local pid
+
+    log_file=$(mktemp)
+    if [[ "$disable_helper" == "1" ]]; then
+        NATIVELY_DISABLE_MACOS_VIRTUAL_DISPLAY_HELPER=1 "$app_binary" >"$log_file" 2>&1 &
+    else
+        "$app_binary" >"$log_file" 2>&1 &
+    fi
+    pid=$!
+
+    sleep 4
+    if ! kill -0 "$pid" 2>/dev/null; then
+        echo -e "${RED}${BOLD}--- launch log (${mode_label}) -------------------------------------------------${NC}"
+        sed -n '1,160p' "$log_file"
+        rm -f "$log_file"
+        fail "Packaged launch probe failed (${mode_label})"
+    fi
+
+    kill "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+    rm -f "$log_file"
+    success "Packaged launch probe passed (${mode_label})"
+}
+
+validate_packaged_helper_launch_modes() {
+    local app_bundle="$1"
+    local app_binary="$2"
+    local helper_binary="$app_bundle/Contents/XPCServices/macos-full-stealth-helper.xpc/Contents/MacOS/macos-full-stealth-helper"
+
+    require_file "$helper_binary" "Installed macOS full stealth XPC helper"
+    run_packaged_launch_probe "with-helper" "$app_binary" "0"
+    run_packaged_launch_probe "without-helper" "$app_binary" "1"
+    success "Packaged helper launch validation passed (with and without helper)"
 }
 
 if [[ "${BUILD_AND_INSTALL_LIB:-0}" == "1" ]]; then
@@ -465,9 +563,13 @@ else
         info "Fresh install — this may take a few minutes..."
     fi
 
-    run_with_spinner "syncing npm dependency matrix" "${INSTALL_COMMAND[@]}"
-    success "Dependencies installed"
+  run_with_spinner "syncing npm dependency matrix" "${INSTALL_COMMAND[@]}"
+  success "Dependencies installed"
 fi
+
+# Ensure native dependencies match the target architecture
+run_with_spinner "verifying native dependencies for ${BUILD_ARCH}" node scripts/ensure-electron-native-deps.js
+success "Native dependencies ready for ${BUILD_ARCH}"
 
 # ╔═══════════════════════════════════════════════════════════════════╗
 # ║ Step 4: Run Quality Gates                                        
@@ -478,11 +580,33 @@ if [[ "${SKIP_QUALITY_GATES:-0}" == "0" ]]; then
 
     info "Running quality gates in visible stages so long-running checks do not look frozen..."
 
-    run_logged_command "[1/2] Running Electron tests (this may take a minute)..." npm run test:electron
+    FOUNDATION_RELEASE_VERIFY_ENABLED=false
+    if [[ "$BUILD_ARCH" == "arm64" && "${SKIP_FOUNDATION_INTENT_RELEASE_VERIFY:-0}" == "0" ]]; then
+        FOUNDATION_RELEASE_VERIFY_ENABLED=true
+    fi
+
+    if [[ "$FOUNDATION_RELEASE_VERIFY_ENABLED" == "true" ]]; then
+        QUALITY_GATE_TEST_LABEL="[1/3] Running Electron tests (this may take a minute)..."
+        QUALITY_GATE_VERIFY_LABEL="[2/3] Running production verification..."
+        QUALITY_GATE_FOUNDATION_LABEL="[3/3] Running Apple Silicon Foundation intent release verification..."
+    else
+        QUALITY_GATE_TEST_LABEL="[1/2] Running Electron tests (this may take a minute)..."
+        QUALITY_GATE_VERIFY_LABEL="[2/2] Running production verification..."
+        QUALITY_GATE_FOUNDATION_LABEL=""
+    fi
+
+    run_logged_command "$QUALITY_GATE_TEST_LABEL" npm run test:electron
     success "Electron tests passed"
 
-    run_logged_command "[2/2] Running production verification..." npm run verify:production
+    run_logged_command "$QUALITY_GATE_VERIFY_LABEL" npm run verify:production
     success "Production verification passed"
+
+    if [[ "$FOUNDATION_RELEASE_VERIFY_ENABLED" == "true" ]]; then
+        run_logged_command "$QUALITY_GATE_FOUNDATION_LABEL" npm run verify:foundation-intent-release
+        success "Apple Silicon Foundation intent release verification passed"
+    else
+        info "Skipping Apple Silicon Foundation intent release verification (requires arm64 build host; set SKIP_FOUNDATION_INTENT_RELEASE_VERIFY=1 to silence this message on Apple Silicon)"
+    fi
 
     QUALITY_GATES_RAN=true
     success "Quality gates passed"
@@ -524,7 +648,10 @@ step "Step 6/8 — Force Signing (Ad-Hoc)"
 # The electron-builder afterPack hook already signs, but we force re-sign
 # to ensure it's clean (handles edge cases where build partially failed)
 
-PACKAGED_HELPER="$APP_GLOB/Contents/Resources/bin/macos/stealth-virtual-display-helper"
+PACKAGED_HELPER_DIR="$APP_GLOB/Contents/Resources/bin/macos"
+PACKAGED_HELPER=$(resolve_macos_virtual_display_helper_binary "$PACKAGED_HELPER_DIR" || true)
+PACKAGED_FOUNDATION_INTENT_HELPER="$APP_GLOB/Contents/Resources/bin/macos/foundation-intent-helper"
+PACKAGED_FULL_STEALTH_XPC="$APP_GLOB/Contents/XPCServices/macos-full-stealth-helper.xpc"
 
 if [[ -f "$PACKAGED_HELPER" ]]; then
     if [[ -f "$HELPER_ENTITLEMENTS" ]]; then
@@ -537,7 +664,35 @@ if [[ -f "$PACKAGED_HELPER" ]]; then
         success "Packaged macOS virtual display helper signed (ad-hoc, no helper entitlements)"
     fi
 else
-    warn "Packaged macOS virtual display helper not found before app signing"
+    warn "Packaged macOS virtual display helper not found before app signing (looked for system-services-helper and stealth-virtual-display-helper)"
+fi
+
+if [[ -f "$PACKAGED_FOUNDATION_INTENT_HELPER" ]]; then
+    if [[ -f "$ENTITLEMENTS" ]]; then
+        info "Signing packaged foundation intent helper with app entitlements: $ENTITLEMENTS"
+        run_with_spinner "signing packaged foundation intent helper" codesign --force --options runtime --entitlements "$ENTITLEMENTS" --sign - "$PACKAGED_FOUNDATION_INTENT_HELPER"
+        success "Packaged foundation intent helper signed"
+    else
+        warn "App entitlements file not found, signing packaged foundation intent helper without entitlements"
+        run_with_spinner "signing packaged foundation intent helper" codesign --force --sign - "$PACKAGED_FOUNDATION_INTENT_HELPER"
+        success "Packaged foundation intent helper signed (ad-hoc, no entitlements)"
+    fi
+else
+    warn "Packaged foundation intent helper not found before app signing"
+fi
+
+if [[ -d "$PACKAGED_FULL_STEALTH_XPC" ]]; then
+    if [[ -f "$ENTITLEMENTS" ]]; then
+        info "Signing packaged macOS full stealth XPC bundle with app entitlements: $ENTITLEMENTS"
+        run_with_spinner "signing packaged full stealth xpc bundle" codesign --force --options runtime --entitlements "$ENTITLEMENTS" --sign - "$PACKAGED_FULL_STEALTH_XPC"
+        success "Packaged macOS full stealth XPC bundle signed"
+    else
+        warn "App entitlements file not found, signing packaged XPC bundle without entitlements"
+        run_with_spinner "signing packaged full stealth xpc bundle" codesign --force --sign - "$PACKAGED_FULL_STEALTH_XPC"
+        success "Packaged macOS full stealth XPC bundle signed (ad-hoc, no entitlements)"
+    fi
+else
+    warn "Packaged macOS full stealth XPC bundle not found before app signing"
 fi
 
 if [[ -f "$ENTITLEMENTS" ]]; then
@@ -578,13 +733,19 @@ require_asar_entry "$APP_ASAR_PATH" "/electron/renderer/shell.html" "Packaged st
 require_asar_entry "$APP_ASAR_PATH" "/node_modules/natively-audio/index.js" "Packaged native module loader"
 require_asar_entry "$APP_ASAR_PATH" "/dist-electron/premium/electron/services/LicenseManager.js" "Packaged premium license manager"
 require_asar_entry "$APP_ASAR_PATH" "/dist-electron/premium/electron/knowledge/KnowledgeOrchestrator.js" "Packaged knowledge orchestrator"
-require_file "$APP_RESOURCES_DIR/bin/macos/stealth-virtual-display-helper" "Packaged macOS virtual display helper"
+require_macos_virtual_display_helper "$APP_RESOURCES_DIR/bin/macos"
+require_file "$APP_RESOURCES_DIR/bin/macos/foundation-intent-helper" "Packaged foundation intent helper"
+require_file "$APP_GLOB/Contents/XPCServices/macos-full-stealth-helper.xpc/Contents/MacOS/macos-full-stealth-helper" "Packaged macOS full stealth XPC helper"
 
 if [[ "$BUILD_ARCH" == "arm64" ]]; then
+    require_file "$APP_ASAR_UNPACKED_DIR/dist-electron/electron/preload.js" "Unpacked renderer preload"
+    require_file "$APP_ASAR_UNPACKED_DIR/dist-electron/electron/stealth/shellPreload.js" "Unpacked stealth shell preload"
     require_file "$APP_ASAR_UNPACKED_DIR/node_modules/natively-audio/index.darwin-arm64.node" "Unpacked arm64 native audio binary"
     require_file "$APP_ASAR_UNPACKED_DIR/node_modules/better-sqlite3/build/Release/better_sqlite3.node" "Unpacked arm64 better-sqlite3 binary"
     require_file "$APP_ASAR_UNPACKED_DIR/node_modules/sqlite3/build/Release/node_sqlite3.node" "Unpacked arm64 sqlite3 binary"
 else
+    require_file "$APP_ASAR_UNPACKED_DIR/dist-electron/electron/preload.js" "Unpacked renderer preload"
+    require_file "$APP_ASAR_UNPACKED_DIR/dist-electron/electron/stealth/shellPreload.js" "Unpacked stealth shell preload"
     require_file "$APP_ASAR_UNPACKED_DIR/node_modules/natively-audio/index.darwin-x64.node" "Unpacked x64 native audio binary"
     require_file "$APP_ASAR_UNPACKED_DIR/node_modules/better-sqlite3/build/Release/better_sqlite3.node" "Unpacked x64 better-sqlite3 binary"
     require_file "$APP_ASAR_UNPACKED_DIR/node_modules/sqlite3/build/Release/node_sqlite3.node" "Unpacked x64 sqlite3 binary"
@@ -645,10 +806,19 @@ else
     fail "Installed binary architecture does not match expected ${BUILD_ARCH}"
 fi
 
+if is_truthy_flag "${NATIVELY_VALIDATE_PACKAGED_HELPER_LAUNCH:-0}"; then
+    step "Step 9/9 — Validating packaged helper launch modes"
+    validate_packaged_helper_launch_modes "${INSTALL_DIR}/${APP_NAME}.app" "$INSTALLED_BINARY"
+else
+    info "Skipping packaged helper launch validation (set NATIVELY_VALIDATE_PACKAGED_HELPER_LAUNCH=1 to enable)"
+fi
+
 # ╔═══════════════════════════════════════════════════════════════════╗
 # ║  Done!                                                           ║
 # ╚═══════════════════════════════════════════════════════════════════╝
 print_done_card
+
+enable_default_app_logging
 
 echo -e "${MAGENTA}${BOLD}Next steps:${NC}"
 echo ""
@@ -661,6 +831,9 @@ echo -e "     ${YELLOW}>${NC} Accessibility  ${BLUE}-${NC} keyboard shortcuts"
 echo ""
 echo -e "  ${CYAN}3.${NC} Configure API keys in Settings -> AI Providers"
 echo -e "     ${YELLOW}>${NC} Or use Ollama for a fully local setup"
+echo ""
+echo -e "  ${CYAN}4.${NC} Logs are on by default for this launch session:"
+echo -e "     ${YELLOW}>${NC} ${APP_LOG_DIR}/natively-$(date +%F).log"
 echo ""
 
 # Ask to launch only in interactive terminals

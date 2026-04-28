@@ -11,6 +11,7 @@ import GlobalChatOverlay from './GlobalChatOverlay';
 import { motion, AnimatePresence } from 'framer-motion';
 import { FeatureSpotlight } from './FeatureSpotlight';
 import { analytics } from '../lib/analytics/analytics.service'; // Added analytics import
+import { getElectronAPI, getOptionalElectronMethod, requireElectronMethod } from '../lib/electronApi';
 import { useShortcuts } from '../hooks/useShortcuts';
 
 interface Meeting {
@@ -95,14 +96,16 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onP
     const [submittedGlobalQuery, setSubmittedGlobalQuery] = useState('');
 
     const fetchMeetings = () => {
-        if (window.electronAPI && window.electronAPI.getRecentMeetings) {
-            window.electronAPI.getRecentMeetings().then(setMeetings).catch(err => console.error("Failed to fetch meetings:", err));
+        const getRecentMeetings = getOptionalElectronMethod('getRecentMeetings');
+        if (getRecentMeetings) {
+            getRecentMeetings().then(setMeetings).catch(err => console.error("Failed to fetch meetings:", err));
         }
     };
 
     const fetchEvents = () => {
-        if (window.electronAPI && window.electronAPI.getUpcomingEvents) {
-            window.electronAPI.getUpcomingEvents().then(setUpcomingEvents).catch(err => console.error("Failed to fetch events:", err));
+        const getUpcomingEvents = getOptionalElectronMethod('getUpcomingEvents');
+        if (getUpcomingEvents) {
+            getUpcomingEvents().then(setUpcomingEvents).catch(err => console.error("Failed to fetch events:", err));
         }
     }
 
@@ -110,9 +113,10 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onP
         setIsRefreshing(true);
         analytics.trackCommandExecuted('refresh_calendar');
         try {
-            if (window.electronAPI && window.electronAPI.calendarRefresh) {
+            const calendarRefresh = getOptionalElectronMethod('calendarRefresh');
+            if (calendarRefresh) {
                 setShowNotification(true);
-                await window.electronAPI.calendarRefresh();
+                await calendarRefresh();
                 fetchEvents();
                 fetchMeetings();
                 setTimeout(() => {
@@ -135,21 +139,24 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onP
     useEffect(() => {
         console.log("Launcher mounted");
         // Seed demo data if needed (safe to call always)
-        if (window.electronAPI && window.electronAPI.seedDemo) {
-            window.electronAPI.seedDemo().catch(err => console.error("Failed to seed demo:", err));
+        const seedDemo = getOptionalElectronMethod('seedDemo');
+        if (seedDemo) {
+            seedDemo().catch(err => console.error("Failed to seed demo:", err));
         }
 
         // Sync initial undetectable state
-        if (window.electronAPI?.getUndetectable) {
-            window.electronAPI.getUndetectable().then((undetectable) => {
+        const getUndetectable = getOptionalElectronMethod('getUndetectable');
+        if (getUndetectable) {
+            getUndetectable().then((undetectable) => {
                 setIsDetectable(!undetectable);
             });
         }
 
         // Listen for undetectable changes
         let removeUndetectableListener: (() => void) | undefined;
-        if (window.electronAPI?.onUndetectableChanged) {
-            removeUndetectableListener = window.electronAPI.onUndetectableChanged((undetectable) => {
+        const onUndetectableChanged = getOptionalElectronMethod('onUndetectableChanged');
+        if (onUndetectableChanged) {
+            removeUndetectableListener = onUndetectableChanged((undetectable) => {
                 setIsDetectable(!undetectable);
             });
         }
@@ -158,7 +165,7 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onP
         fetchEvents();
 
         // Listen for background updates (e.g. after meeting processing finishes)
-        const removeMeetingsListener = window.electronAPI.onMeetingsUpdated(() => {
+        const removeMeetingsListener = getElectronAPI().onMeetingsUpdated(() => {
             console.log("Received meetings-updated event");
             fetchMeetings();
         });
@@ -170,7 +177,7 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onP
         const handleKeyDown = (e: KeyboardEvent) => {
             if (isShortcutPressed(e, 'toggleVisibility')) {
                 e.preventDefault();
-                window.electronAPI.toggleWindow();
+                getElectronAPI().toggleWindow();
             }
         };
         window.addEventListener('keydown', handleKeyDown);
@@ -200,8 +207,9 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onP
         try {
             const inputDeviceId = getStoredAudioDeviceId('preferredInputDeviceId');
             const outputDeviceId = getStoredAudioDeviceId('preferredOutputDeviceId');
+            const startMeeting = requireElectronMethod('startMeeting');
 
-            const result = await window.electronAPI.startMeeting({
+            const result = await startMeeting({
                 title: preparedEvent.title,
                 calendarEventId: preparedEvent.id,
                 source: 'calendar',
@@ -214,7 +222,7 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onP
             }
 
             setIsPrepared(false);
-            await window.electronAPI.setWindowMode('overlay');
+            await getElectronAPI().setWindowMode('overlay');
         } catch (e) {
             console.error("Failed to start prepared meeting", e);
         }
@@ -227,8 +235,12 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onP
     const toggleDetectable = () => {
         const newState = !isDetectable;
         setIsDetectable(newState);
-        window.electronAPI?.setUndetectable(!newState); // Note: setUndetectable takes the *undetectable* state, which is inverse of *detectable*
-        analytics.trackModeSelected(newState ? 'launcher' : 'undetectable'); // If visible (detectable), mode is normal/launcher. If not detectable, mode is undetectable.
+        const setUndetectable = requireElectronMethod('setUndetectable');
+        void setUndetectable(!newState).catch((error) => {
+            console.error('Failed to toggle undetectable mode', error);
+            setIsDetectable(!newState);
+        });
+        analytics.trackModeSelected(newState ? 'launcher' : 'privacy_mode');
     };
 
     // Group meetings - Memoized for performance optimization
@@ -282,10 +294,11 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onP
         analytics.trackCommandExecuted('open_meeting_details');
 
         // Fetch full meeting details including transcript and usage
-        if (window.electronAPI && window.electronAPI.getMeetingDetails) {
+        const getMeetingDetails = getOptionalElectronMethod('getMeetingDetails');
+        if (getMeetingDetails) {
             try {
                 console.log("[Launcher] Fetching full meeting details...");
-                const fullMeeting = await window.electronAPI.getMeetingDetails(meeting.id);
+                const fullMeeting = await getMeetingDetails(meeting.id);
                 console.log("[Launcher] Got meeting details:", fullMeeting);
                 console.log("[Launcher] Transcript count:", fullMeeting?.transcript?.length);
                 console.log("[Launcher] Usage count:", fullMeeting?.usage?.length);
@@ -466,7 +479,7 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onP
                                                 <RefreshCw size={18} />
                                             </button>
 
-                                            {/* Detectable Toggle Pill */}
+                                            {/* Privacy Toggle Pill */}
                                             <div className="flex items-center gap-3 bg-[#101011] border border-border-muted rounded-full px-3 py-1.5 min-w-[140px]">
                                                 {isDetectable ? (
                                                     <Ghost
@@ -492,7 +505,7 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onP
                                                     </svg>
                                                 )}
                                                 <span className={`text-xs font-medium flex-1 transition-colors text-[#B7B7B8]`}>
-                                                    {isDetectable ? "Detectable" : "Undetectable"}
+                                                    {isDetectable ? "Visible" : "Privacy"}
                                                 </span>
                                                 <div
                                                     className={`w-8 h-4 rounded-full relative transition-colors ${!isDetectable ? 'bg-blue-500' : 'bg-zinc-700'}`}
@@ -784,9 +797,10 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onP
                                                                                     setActiveMenuId(null);
                                                                                     analytics.trackPdfExported();
                                                                                     // Fetch full details if needed
-                                                                                    if (window.electronAPI && window.electronAPI.getMeetingDetails) {
+                                                                                    const getMeetingDetails = getOptionalElectronMethod('getMeetingDetails');
+                                                                                    if (getMeetingDetails) {
                                                                                         try {
-                                                                                            const fullMeeting = await window.electronAPI.getMeetingDetails(m.id);
+                                                                                            const fullMeeting = await getMeetingDetails(m.id);
                                                                                             if (fullMeeting) {
                                                                                                 generateMeetingPDF(fullMeeting);
                                                                                             } else {
@@ -807,8 +821,9 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onP
                                                                             <button
                                                                                 className="w-full flex items-center gap-2 px-3 py-1.5 text-[12px] text-red-400 hover:bg-red-500/10 hover:text-red-300 rounded-lg transition-colors text-left"
                                                                                 onClick={async () => {
-                                                                                    if (window.electronAPI && window.electronAPI.deleteMeeting) {
-                                                                                        const success = await window.electronAPI.deleteMeeting(m.id);
+                                                                                    const deleteMeeting = getOptionalElectronMethod('deleteMeeting');
+                                                                                    if (deleteMeeting) {
+                                                                                        const success = await deleteMeeting(m.id);
                                                                                         if (success) {
                                                                                             // Optimistic update or refetch
                                                                                             setMeetings(prev => prev.filter(meeting => meeting.id !== m.id));

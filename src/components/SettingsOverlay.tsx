@@ -206,6 +206,9 @@ interface ProviderSelectProps {
     onChange: (value: string) => void;
 }
 
+type SttProvider = 'google' | 'groq' | 'openai' | 'deepgram' | 'elevenlabs' | 'azure' | 'ibmwatson' | 'soniox';
+type NonGoogleSttProvider = Exclude<SttProvider, 'google'>;
+
 const ProviderSelect: React.FC<ProviderSelectProps> = ({ value, options, onChange }) => {
     const [isOpen, setIsOpen] = useState(false);
     const containerRef = React.useRef<HTMLDivElement>(null);
@@ -759,7 +762,7 @@ return () => unsubscribe();
     const [useExperimentalSck, setUseExperimentalSck] = useState(false);
 
     // STT Provider settings
-    const [sttProvider, setSttProvider] = useState<'google' | 'groq' | 'openai' | 'deepgram' | 'elevenlabs' | 'azure' | 'ibmwatson' | 'soniox'>('google');
+    const [sttProvider, setSttProvider] = useState<SttProvider>('google');
     const [groqSttModel, setGroqSttModel] = useState('whisper-large-v3-turbo');
     const [sttGroqKey, setSttGroqKey] = useState('');
     const [sttOpenaiKey, setSttOpenaiKey] = useState('');
@@ -813,6 +816,69 @@ return () => unsubscribe();
     useEffect(() => {
         sttProviderRef.current = sttProvider;
     }, [sttProvider]);
+
+    const getSttProviderErrorMessage = React.useCallback((error: unknown) => {
+        if (typeof error === 'string' && error.trim()) {
+            return error;
+        }
+        if (error && typeof error === 'object' && 'message' in error) {
+            const message = (error as { message?: unknown }).message;
+            if (typeof message === 'string' && message.trim()) {
+                return message;
+            }
+        }
+        return 'Failed to update STT provider';
+    }, []);
+
+    const persistSttProvider = React.useCallback(async (provider: SttProvider) => {
+        // @ts-ignore
+        const result = await window.electronAPI?.setSttProvider?.(provider);
+        if (!result?.success) {
+            throw new Error(getSttProviderErrorMessage(result?.error));
+        }
+    }, [getSttProviderErrorMessage]);
+
+    const hasConfiguredSttProvider = React.useCallback((provider: SttProvider) => {
+        if (provider === 'google') {
+            return Boolean(googleServiceAccountPath?.trim());
+        }
+
+        const storedProviderKeys: Record<NonGoogleSttProvider, boolean> = {
+            groq: hasStoredSttGroqKey,
+            openai: hasStoredSttOpenaiKey,
+            deepgram: hasStoredDeepgramKey,
+            elevenlabs: hasStoredElevenLabsKey,
+            azure: hasStoredAzureKey,
+            ibmwatson: hasStoredIbmWatsonKey,
+            soniox: hasStoredSonioxKey,
+        };
+
+        return storedProviderKeys[provider];
+    }, [
+        googleServiceAccountPath,
+        hasStoredAzureKey,
+        hasStoredDeepgramKey,
+        hasStoredElevenLabsKey,
+        hasStoredIbmWatsonKey,
+        hasStoredSonioxKey,
+        hasStoredSttGroqKey,
+        hasStoredSttOpenaiKey,
+    ]);
+
+    const handleGoogleServiceAccountSelected = React.useCallback(async (filePath: string) => {
+        setGoogleServiceAccountPath(filePath);
+        if (sttProviderRef.current !== 'google') {
+            return;
+        }
+
+        try {
+            await persistSttProvider('google');
+        } catch (e) {
+            console.error('Failed to activate Google STT provider:', e);
+            setSttTestStatus('error');
+            setSttTestError(getSttProviderErrorMessage(e));
+        }
+    }, [getSttProviderErrorMessage, persistSttProvider]);
 
     const isCurrentSttProviderRequest = React.useCallback((requestId: number, provider: string) => {
         return isCurrentSttRequest(requestId) && sttProviderRef.current === provider;
@@ -886,7 +952,7 @@ return () => unsubscribe();
         if (isOpen) loadSttSettings();
     }, [isOpen]);
 
-    const handleSttProviderChange = async (provider: 'google' | 'groq' | 'openai' | 'deepgram' | 'elevenlabs' | 'azure' | 'ibmwatson' | 'soniox') => {
+    const handleSttProviderChange = async (provider: SttProvider) => {
         const previousProvider = sttProvider;
         nextSttRequestId();
         sttSaveInFlightRef.current = null;
@@ -898,19 +964,22 @@ return () => unsubscribe();
         setSttTestError('');
         setSttSaving(false);
         setSttSaved(false);
+
+        // The dropdown also controls which credential editor is visible, so keep
+        // the local selection even before the provider is ready to be activated.
+        if (!hasConfiguredSttProvider(provider)) {
+            return;
+        }
+
         try {
-            // @ts-ignore
-            const result = await window.electronAPI?.setSttProvider?.(provider);
-            if (!result?.success) {
-                throw new Error(result?.error || 'Failed to update STT provider');
-            }
+            await persistSttProvider(provider);
         } catch (e) {
             console.error('Failed to set STT provider:', e);
             setSttProvider(previousProvider);
         }
     };
 
-    const handleSttKeySubmit = async (provider: 'groq' | 'openai' | 'deepgram' | 'elevenlabs' | 'azure' | 'ibmwatson' | 'soniox', key: string) => {
+    const handleSttKeySubmit = async (provider: NonGoogleSttProvider, key: string) => {
         if (!key.trim()) return;
         if (sttTestInFlightRef.current?.provider === provider) return;
         if (sttSaveInFlightRef.current?.provider === provider) return;
@@ -981,6 +1050,11 @@ return () => unsubscribe();
             else if (provider === 'ibmwatson') setHasStoredIbmWatsonKey(true);
             else if (provider === 'soniox') setHasStoredSonioxKey(true);
             else setHasStoredDeepgramKey(true);
+
+            if (sttProviderRef.current === provider) {
+                await persistSttProvider(provider);
+                if (!isCurrentSttProviderRequest(requestId, provider)) return;
+            }
 
             setSttSaved(true);
             scheduleSttSavedReset();
@@ -2083,7 +2157,7 @@ handleAiLanguageChange={handleAiLanguageChange}
                                         hasStoredSonioxKey={hasStoredSonioxKey}
                                         groqSttModel={groqSttModel}
                                         setGroqSttModel={setGroqSttModel}
-                                        setGoogleServiceAccountPath={setGoogleServiceAccountPath}
+                                        handleGoogleServiceAccountSelected={handleGoogleServiceAccountSelected}
                                         sttGroqKey={sttGroqKey}
                                         sttOpenaiKey={sttOpenaiKey}
                                         sttDeepgramKey={sttDeepgramKey}
@@ -2157,7 +2231,7 @@ handleAiLanguageChange={handleAiLanguageChange}
                             )}
 
                             {activeTab === 'about' && (
-                                <AboutSection />
+                                <AboutSection setActiveTab={setActiveTab} />
                             )}
                         </div>
                     </div>

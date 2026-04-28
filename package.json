@@ -11,15 +11,35 @@
     "typecheck": "tsc --noEmit && tsc -p electron/tsconfig.json --noEmit",
     "postinstall": "node scripts/ensure-electron-native-deps.js && node scripts/download-models.js && node scripts/ensure-sqlite-vec.js",
     "electron:dev": "node scripts/ensure-electron-native-deps.js && npm run build:native:current && tsc -p electron/tsconfig.json && cross-env NODE_ENV=development electron .",
-    "electron:build": "node scripts/ensure-electron-native-deps.js && npm run build:native:current && tsc -p electron/tsconfig.json && cross-env NODE_ENV=production electron .",
+    "electron:build": "node scripts/ensure-electron-native-deps.js && npm run build:native:current && rimraf dist && vite build && tsc -p electron/tsconfig.json && cross-env NODE_ENV=production electron .",
     "prepare:macos:virtual-display-helper": "node scripts/prepare-macos-virtual-display-helper.js",
-"notarize:helper": "node scripts/notarize-macos-helper.js",
+    "prepare:macos:full-stealth-helper": "node scripts/prepare-macos-full-stealth-helper.js",
+    "prepare:macos:foundation-intent-helper": "node scripts/prepare-macos-foundation-intent-helper.js",
+    "notarize:helper": "node scripts/notarize-macos-helper.js",
     "app:dev": "concurrently \"npm run dev -- --port 5180\" \"wait-on http://localhost:5180 && npm run electron:dev\"",
-    "app:build": "node scripts/ensure-electron-native-deps.js && npm run build && npm run build:native && npm run prepare:macos:virtual-display-helper && tsc -p electron/tsconfig.json && electron-builder",
-    "app:build:arm64": "node scripts/ensure-electron-native-deps.js && npm run build && npm run build:native:current && npm run prepare:macos:virtual-display-helper && tsc -p electron/tsconfig.json && electron-builder --mac --arm64",
-    "app:build:x64": "node scripts/ensure-electron-native-deps.js && npm run build && npm run build:native:current && npm run prepare:macos:virtual-display-helper && tsc -p electron/tsconfig.json && electron-builder --mac --x64",
-    "test:electron": "tsc -p electron/tsconfig.json && node --test dist-electron/electron/tests/*.test.js",
-    "test:electron:coverage": "tsc -p electron/tsconfig.json && node --test --experimental-test-coverage dist-electron/electron/tests/*.test.js",
+    "app:build": "node scripts/ensure-electron-native-deps.js && npm run build && npm run build:native && npm run prepare:macos:virtual-display-helper && cross-env NATIVELY_REQUIRE_FULL_STEALTH_HELPER=1 npm run prepare:macos:full-stealth-helper && cross-env NATIVELY_REQUIRE_FOUNDATION_INTENT_HELPER=1 npm run prepare:macos:foundation-intent-helper && tsc -p electron/tsconfig.json && electron-builder",
+    "app:build:arm64": "node scripts/ensure-electron-native-deps.js && npm run build && npm run build:native:current && npm run prepare:macos:virtual-display-helper && cross-env NATIVELY_REQUIRE_FULL_STEALTH_HELPER=1 npm run prepare:macos:full-stealth-helper && cross-env NATIVELY_REQUIRE_FOUNDATION_INTENT_HELPER=1 npm run prepare:macos:foundation-intent-helper && tsc -p electron/tsconfig.json && electron-builder --mac --arm64",
+    "app:build:x64": "node scripts/ensure-electron-native-deps.js && npm run build && npm run build:native:current && npm run prepare:macos:virtual-display-helper && cross-env NATIVELY_REQUIRE_FULL_STEALTH_HELPER=1 npm run prepare:macos:full-stealth-helper && cross-env NATIVELY_REQUIRE_FOUNDATION_INTENT_HELPER=1 npm run prepare:macos:foundation-intent-helper && tsc -p electron/tsconfig.json && electron-builder --mac --x64",
+    "test:electron": "rimraf dist-electron/electron/tests && tsc -p electron/tsconfig.json && node --test dist-electron/electron/tests/*.test.js",
+    "test:soak": "rimraf dist-electron/electron/tests && tsc -p electron/tsconfig.json && node scripts/run-soak-scenarios.js",
+    "test:fault-injection": "rimraf dist-electron/electron/tests && tsc -p electron/tsconfig.json && node --test dist-electron/electron/tests/faultInjection.test.js",
+    "test:active-renderer-lifecycle": "rimraf dist-electron/electron/tests && tsc -p electron/tsconfig.json && node --test dist-electron/electron/tests/activeRendererLifecycle.test.js",
+    "bench:baseline": "rimraf dist-electron/electron/tests && tsc -p electron/tsconfig.json && node scripts/run-baseline-benchmark.js",
+    "capture-matrix:mock": "tsc -p electron/tsconfig.json && node scripts/run-capture-matrix.js --mock",
+    "capture-matrix:local": "tsc -p electron/tsconfig.json && node scripts/run-capture-matrix.js --local",
+    "capture-matrix:macos:screencapture": "tsc -p electron/tsconfig.json && node scripts/run-capture-matrix.js --macos-screencapture",
+    "capture-matrix:macos:cgwindow": "tsc -p electron/tsconfig.json && node scripts/run-capture-matrix.js --macos-cgwindow",
+    "capture-matrix:windows:stub": "tsc -p electron/tsconfig.json && node scripts/run-capture-matrix.js --windows-stub",
+    "capture-matrix:browser:get-display-media": "tsc -p electron/tsconfig.json && node scripts/run-capture-matrix.js --browser-get-display-media",
+    "capture-matrix:external:manual": "tsc -p electron/tsconfig.json && node scripts/run-capture-matrix.js --manual-external",
+    "test:release-gate": "node scripts/run-release-gate.js",
+    "eval:conscious": "tsc -p electron/tsconfig.json && node scripts/run-conscious-eval.js",
+    "eval:intent": "tsc -p electron/tsconfig.json && node scripts/run-intent-eval.js",
+    "eval:intent:multi": "tsc -p electron/tsconfig.json && node scripts/run-intent-eval-multi.js",
+    "eval:intent:generate-variants": "node scripts/generate-intent-eval-variants.js",
+    "bench:intent:foundation": "tsc -p electron/tsconfig.json && node scripts/run-foundation-intent-latency-spike.js",
+    "verify:foundation-intent-release": "node scripts/run-foundation-intent-release.js",
+    "test:electron:coverage": "rimraf dist-electron/electron/tests && tsc -p electron/tsconfig.json && node --test --experimental-test-coverage dist-electron/electron/tests/*.test.js",
     "test:renderer": "npm --prefix renderer test",
     "test:renderer:coverage": "npm --prefix renderer run test:coverage",
     "verify:electron:coverage": "node scripts/verify-electron-coverage.js",
@@ -49,7 +69,10 @@
     ],
     "asarUnpack": [
       "**/*.node",
-      "**/*.dylib"
+      "**/*.dylib",
+      "dist-electron/electron/preload.js",
+      "dist-electron/electron/preload/**",
+      "dist-electron/electron/stealth/shellPreload.js"
     ],
     "directories": {
       "output": "release",
@@ -69,15 +92,27 @@
         "to": "models/"
       },
       {
-        "from": "assets/bin/macos/stealth-virtual-display-helper",
-        "to": "bin/macos/stealth-virtual-display-helper"
+        "from": "assets/bin/macos/system-services-helper",
+        "to": "bin/macos/system-services-helper"
+      },
+      {
+        "from": "assets/bin/macos",
+        "to": "bin/macos",
+        "filter": [
+          "foundation-intent-helper"
+        ]
+      }
+    ],
+    "extraFiles": [
+      {
+        "from": "assets/xpcservices/macos-full-stealth-helper.xpc",
+        "to": "XPCServices/macos-full-stealth-helper.xpc"
       }
     ],
     "mac": {
       "category": "public.app-category.productivity",
       "extendInfo": {
         "NSMicrophoneUsageDescription": "Natively needs microphone access to capture meeting audio and voice input.",
-        "NSCameraUsageDescription": "Natively needs camera access only when a camera-enabled workflow is used.",
         "NSScreenCaptureUsageDescription": "Natively needs screen recording access so you can capture screenshots and analyze on-screen meeting content.",
         "NSAppleEventsUsageDescription": "Natively needs automation access for desktop integrations you trigger from the app."
       },

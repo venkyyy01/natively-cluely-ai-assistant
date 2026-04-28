@@ -81,3 +81,21 @@ if (!needsRebuild()) {
 }
 
 run(`npx electron-builder install-app-deps --arch=${arch}`);
+
+// Verify rebuild succeeded and binaries match target architecture
+console.log('[ensure-electron-native-deps] Verifying rebuilt binaries...');
+for (const binary of binaries) {
+  if (!fs.existsSync(binary.path)) {
+    if (binary.optional) continue;
+    console.error(`[ensure-electron-native-deps] ERROR: ${binary.name} binary missing after rebuild: ${binary.path}`);
+    process.exit(1);
+  }
+  const info = getBinaryInfo(binary.path);
+  if (!matchesCurrentArch(info)) {
+    console.error(`[ensure-electron-native-deps] ERROR: ${binary.name} still has wrong architecture after rebuild: ${info}`);
+    console.error(`[ensure-electron-native-deps] Expected ${arch} but binary is not compatible`);
+    process.exit(1);
+  }
+  console.log(`[ensure-electron-native-deps] ✓ ${binary.name}: ${info}`);
+}
+console.log(`[ensure-electron-native-deps] All native dependencies verified for ${platform}-${arch}.`);

@@ -1,5 +1,79 @@
 export type ConsciousModeResponseMode = 'reasoning_first' | 'invalid';
 
+export const CONSCIOUS_MODE_SCHEMA_VERSION = 'conscious_mode_v1' as const;
+
+export const CONSCIOUS_MODE_RESPONSE_FIELDS = [
+  'schemaVersion',
+  'mode',
+  'openingReasoning',
+  'implementationPlan',
+  'tradeoffs',
+  'edgeCases',
+  'scaleConsiderations',
+  'pushbackResponses',
+  'likelyFollowUps',
+  'codeTransition',
+  'behavioralAnswer',
+] as const;
+
+export const CONSCIOUS_MODE_JSON_RESPONSE_INSTRUCTIONS = `RESPONSE SCHEMA VERSION: ${CONSCIOUS_MODE_SCHEMA_VERSION}
+
+Return ONLY valid JSON with these canonical keys:
+{
+  "schemaVersion": "${CONSCIOUS_MODE_SCHEMA_VERSION}",
+  "mode": "reasoning_first",
+  "openingReasoning": "string",
+  "implementationPlan": ["string"],
+  "tradeoffs": ["string"],
+  "edgeCases": ["string"],
+  "scaleConsiderations": ["string"],
+  "pushbackResponses": ["string"],
+  "likelyFollowUps": ["string"],
+  "codeTransition": "string",
+  "behavioralAnswer": {
+    "question": "string",
+    "headline": "string",
+    "situation": "string",
+    "task": "string",
+    "action": "string",
+    "result": "string",
+    "whyThisAnswerWorks": ["string"]
+  }
+}
+
+CRITICAL RULES — MOST FIELDS SHOULD BE EMPTY:
+- Leave ALL array fields as [] unless the interviewer EXPLICITLY asked for that dimension.
+- If they asked one thing, answer that ONE thing. Do NOT fill every field.
+- openingReasoning: 1-2 sentences MAX. Natural Indian English like "So basically I'd..." or "See, the thing is..."
+- tradeoffs: Only if they asked about tradeoffs. ONE tradeoff max, spoken naturally.
+- edgeCases: [] unless they specifically asked about edge cases.
+- scaleConsiderations: [] unless they specifically asked about scale.
+- pushbackResponses: [] unless they challenged your approach.
+- likelyFollowUps: 0-2 max. What they might ask next, not a list of everything you know.
+- codeTransition: "" unless it's a coding question.
+
+SPEECH STYLE — TALK LIKE A REAL PERSON:
+- Write like someone actually talking, not writing an essay
+- Indian English naturally: "So basically...", "See...", "The thing is...", "Yeah, what happened was..."
+- Contractions everywhere: "I'd", "I'm", "I've", "don't", "won't", "it's"
+- Simple words: "use" not "leverage", "build" not "architect", "start" not "commence"
+- NO bullet points, numbered lists, or structured formatting in spoken fields
+- NO "First, Second, Third" or "In conclusion" — real people don't talk like that
+- NO "Let me walk you through" or "Let me break this down" — just say it
+- If any field reads like a textbook, tutorial, or presentation, REWRITE it in plain speech
+
+If the interviewer wants more, THEY WILL ASK. Your job is to give a focused answer, not anticipate every possible follow-up and dump it all at once.`;
+
+export interface ConsciousBehavioralAnswer {
+  question: string;
+  headline: string;
+  situation: string;
+  task: string;
+  action: string;
+  result: string;
+  whyThisAnswerWorks: string[];
+}
+
 export interface ConsciousModeStructuredResponse {
   mode: ConsciousModeResponseMode;
   openingReasoning: string;
@@ -10,9 +84,12 @@ export interface ConsciousModeStructuredResponse {
   pushbackResponses: string[];
   likelyFollowUps: string[];
   codeTransition: string;
+  behavioralAnswer?: ConsciousBehavioralAnswer | null;
 }
 
 export interface ReasoningThread {
+  /** When set, matches `ConversationThread.id` from ThreadManager (design view). NAT-055 */
+  threadId?: string;
   rootQuestion: string;
   lastQuestion: string;
   response: ConsciousModeStructuredResponse;
@@ -25,6 +102,49 @@ export type ConsciousModeThreadAction = 'start' | 'continue' | 'reset' | 'ignore
 export interface ConsciousModeQuestionRoute {
   qualifies: boolean;
   threadAction: ConsciousModeThreadAction;
+}
+
+const BEHAVIORAL_ACTIONABLE_QUESTION_PATTERNS = [
+  /^tell me about a time\b/i,
+  /^describe a time\b/i,
+  /^describe a situation\b/i,
+  /^share an experience\b/i,
+  /^give me an example\b/i,
+  /^walk me through\b.*\b(time|situation|experience|example|conflict|failure|mistake|decision|disagreement|stakeholder|team challenge|project you led|owned end to end)\b/i,
+  /^talk about\b/i,
+  /^how do you handle\b/i,
+  /^how do you manage\b/i,
+  /^what is your .*style\b/i,
+  /^how do you make .*decision/i,
+  /^how do you influence\b/i,
+  /^how do you prioritize\b/i,
+  /\bleadership\b/i,
+  /\bconflict\b/i,
+  /\bdisagreed\b/i,
+  /\bdisagreement\b/i,
+  /\bfeedback\b/i,
+  /\bfailure\b/i,
+  /\bmistake\b/i,
+  /\bproject you led\b/i,
+  /\bowned end to end\b/i,
+  /\bteam challenge\b/i,
+  /\bculture\b/i,
+  /\bvalues\b/i,
+  /\bmentor\b/i,
+  /\bstakeholder\b/i,
+];
+
+export function isBehavioralQuestionText(value: string | null | undefined): boolean {
+  const normalized = normalizeText(value).toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+
+  return BEHAVIORAL_ACTIONABLE_QUESTION_PATTERNS.some((pattern) => pattern.test(normalized));
+}
+
+function isBehavioralActionableQuestion(lower: string): boolean {
+  return isBehavioralQuestionText(lower);
 }
 
 export interface TranscriptSuggestionDecision {
@@ -64,6 +184,41 @@ function normalizeList(value: unknown): string[] {
   return text ? [text] : [];
 }
 
+function normalizeBehavioralAnswer(value: unknown): ConsciousBehavioralAnswer | null {
+  if (!value || typeof value !== 'object') {
+    return null;
+  }
+
+  const behavioral = value as Record<string, unknown>;
+  const normalized: ConsciousBehavioralAnswer = {
+    question: normalizeText(behavioral.question),
+    headline: normalizeText(behavioral.headline),
+    situation: normalizeText(behavioral.situation),
+    task: normalizeText(behavioral.task),
+    action: normalizeText(behavioral.action),
+    result: normalizeText(behavioral.result),
+    whyThisAnswerWorks: normalizeList(behavioral.whyThisAnswerWorks),
+  };
+
+  if (!normalized.question && !normalized.headline && !normalized.situation && !normalized.task && !normalized.action && !normalized.result && normalized.whyThisAnswerWorks.length === 0) {
+    return null;
+  }
+
+  return normalized;
+}
+
+function hasBehavioralAnswerSubstance(value: ConsciousBehavioralAnswer | null | undefined): boolean {
+  return Boolean(
+    value?.question
+    || value?.headline
+    || value?.situation
+    || value?.task
+    || value?.action
+    || value?.result
+    || value?.whyThisAnswerWorks.length
+  );
+}
+
 export function createEmptyConsciousModeResponse(mode: ConsciousModeResponseMode = 'reasoning_first'): ConsciousModeStructuredResponse {
   return {
     mode,
@@ -75,21 +230,79 @@ export function createEmptyConsciousModeResponse(mode: ConsciousModeResponseMode
     pushbackResponses: [],
     likelyFollowUps: [],
     codeTransition: '',
+    behavioralAnswer: null,
   };
 }
 
-export function normalizeConsciousModeResponse(value: Partial<ConsciousModeStructuredResponse> | null | undefined): ConsciousModeStructuredResponse {
-  const mode = value?.mode === 'reasoning_first' ? 'reasoning_first' : 'invalid';
+function normalizePushbackResponses(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return normalizeList(value);
+  }
+
+  if (value && typeof value === 'object') {
+    return Object.entries(value as Record<string, unknown>)
+      .map(([concern, response]) => {
+        const normalizedResponse = normalizeText(response);
+        return normalizedResponse ? `${normalizeText(concern)}: ${normalizedResponse}` : '';
+      })
+      .filter(Boolean);
+  }
+
+  return normalizeList(value);
+}
+
+function normalizeCodeTransition(value: unknown, codeBlock: unknown): string {
+  const direct = normalizeText(value);
+  if (direct) {
+    return direct;
+  }
+
+  if (!codeBlock || typeof codeBlock !== 'object') {
+    return '';
+  }
+
+  const block = codeBlock as { language?: unknown; code?: unknown };
+  const code = normalizeText(block.code);
+  if (!code) {
+    return '';
+  }
+
+  const language = normalizeText(block.language);
+  return `Here is the code path I would walk through:\n\`\`\`${language}\n${code}\n\`\`\``;
+}
+
+export function normalizeConsciousModeResponse(value: (Partial<ConsciousModeStructuredResponse> & {
+  schemaVersion?: unknown;
+  spokenResponse?: unknown;
+  codeBlock?: unknown;
+  pushbackResponses?: unknown;
+}) | null | undefined): ConsciousModeStructuredResponse {
+  const hasCanonicalMode = value?.mode === 'reasoning_first';
+  const hasAdaptableLegacyPayload = Boolean(
+    normalizeText(value?.openingReasoning) ||
+    normalizeText(value?.spokenResponse) ||
+    normalizeList(value?.implementationPlan).length ||
+    normalizeList(value?.tradeoffs).length ||
+    normalizeCodeTransition(value?.codeTransition, value?.codeBlock) ||
+    hasBehavioralAnswerSubstance(normalizeBehavioralAnswer((value as Record<string, unknown> | undefined)?.behavioralAnswer))
+  );
+  const mode = hasCanonicalMode || hasAdaptableLegacyPayload ? 'reasoning_first' : 'invalid';
+  const behavioralAnswer = normalizeBehavioralAnswer((value as Record<string, unknown> | undefined)?.behavioralAnswer);
+  const openingReasoning = normalizeText(value?.openingReasoning)
+    || normalizeText(value?.spokenResponse)
+    || behavioralAnswer?.headline
+    || '';
   return {
     mode,
-    openingReasoning: normalizeText(value?.openingReasoning),
+    openingReasoning,
     implementationPlan: normalizeList(value?.implementationPlan),
     tradeoffs: normalizeList(value?.tradeoffs),
     edgeCases: normalizeList(value?.edgeCases),
     scaleConsiderations: normalizeList(value?.scaleConsiderations),
-    pushbackResponses: normalizeList(value?.pushbackResponses),
+    pushbackResponses: normalizePushbackResponses(value?.pushbackResponses),
     likelyFollowUps: normalizeList(value?.likelyFollowUps),
-    codeTransition: normalizeText(value?.codeTransition),
+    codeTransition: normalizeCodeTransition(value?.codeTransition, value?.codeBlock),
+    behavioralAnswer,
   };
 }
 
@@ -106,7 +319,8 @@ export function isValidConsciousModeResponse(response: ConsciousModeStructuredRe
     response.scaleConsiderations.length ||
     response.pushbackResponses.length ||
     response.likelyFollowUps.length ||
-    response.codeTransition
+    response.codeTransition ||
+    hasBehavioralAnswerSubstance(response.behavioralAnswer)
   );
 }
 
@@ -150,51 +364,114 @@ export function mergeConsciousModeResponses(
     pushbackResponses: mergeList(base.pushbackResponses, incoming.pushbackResponses),
     likelyFollowUps: mergeList(base.likelyFollowUps, incoming.likelyFollowUps),
     codeTransition: incoming.codeTransition || base.codeTransition,
+    behavioralAnswer: incoming.behavioralAnswer || base.behavioralAnswer || null,
   };
 }
 
 function formatSection(label: string, values: string[]): string[] {
-  if (values.length === 0) {
-    return [];
+  if (values.length === 0) return [];
+  if (values.length === 1) return [`${label} ${values[0]}`];
+  return [label, ...values.map((value, i) => {
+    if (i === 0) return `So, ${value[0].toLowerCase()}${value.slice(1)}`;
+    return `Also, ${value[0].toLowerCase()}${value.slice(1)}`;
+  })];
+}
+
+function formatBehavioralAnswer(answer: ConsciousBehavioralAnswer): string[] {
+  const parts: string[] = [];
+  if (answer.question) {
+    parts.push(`Question: ${answer.question}`);
+  }
+  if (answer.headline) {
+    parts.push('Headline:');
+    parts.push(answer.headline);
+  }
+  if (answer.situation) {
+    parts.push(`Situation: ${answer.situation}`);
+  }
+  if (answer.task) {
+    parts.push(`Task: ${answer.task}`);
+  }
+  if (answer.action) {
+    parts.push(`Action: ${answer.action}`);
+  }
+  if (answer.result) {
+    parts.push(`Result: ${answer.result}`);
+  }
+  if (answer.whyThisAnswerWorks.length > 0) {
+    parts.push('Why this answer works:');
+    parts.push(...answer.whyThisAnswerWorks.map((value) => `- ${value}`));
+  }
+  return parts.filter(Boolean);
+}
+
+export function formatConsciousModeResponseChunks(response: ConsciousModeStructuredResponse): string[] {
+  if (response.behavioralAnswer && hasBehavioralAnswerSubstance(response.behavioralAnswer)) {
+    return formatBehavioralAnswer(response.behavioralAnswer);
   }
 
-  return [label, ...values.map(value => `- ${value}`)];
+  const chunks: string[] = [];
+
+  if (response.openingReasoning) {
+    chunks.push(response.openingReasoning);
+  }
+
+  const implSection = formatSection('', response.implementationPlan);
+  if (implSection.length) chunks.push(implSection.join(' '));
+
+  const tradeoffSection = formatSection('The tradeoff is,', response.tradeoffs);
+  if (tradeoffSection.length) chunks.push(tradeoffSection.join(' '));
+
+  const edgeSection = formatSection('Edge case —', response.edgeCases);
+  if (edgeSection.length) chunks.push(edgeSection.join(' '));
+
+  const scaleSection = formatSection('At scale,', response.scaleConsiderations);
+  if (scaleSection.length) chunks.push(scaleSection.join(' '));
+
+  const pushbackSection = formatSection('If they push back,', response.pushbackResponses);
+  if (pushbackSection.length) chunks.push(pushbackSection.join(' '));
+
+  if (response.codeTransition) {
+    chunks.push(response.codeTransition);
+  }
+
+  return chunks.filter(Boolean);
 }
 
 export function formatConsciousModeResponse(response: ConsciousModeStructuredResponse): string {
-  const lines: string[] = [];
+  return formatConsciousModeResponseChunks(response).join('\n').trim();
+}
 
-  if (response.openingReasoning) {
-    lines.push(`Opening reasoning: ${response.openingReasoning}`);
+export function tryParseConsciousModeOpeningReasoning(raw: string): string | null {
+  const match = raw.match(/"openingReasoning"\s*:\s*"((?:\\.|[^"\\])*)"/);
+  if (!match) {
+    return null;
   }
 
-  lines.push(...formatSection('Implementation plan:', response.implementationPlan));
-  lines.push(...formatSection('Tradeoffs:', response.tradeoffs));
-  lines.push(...formatSection('Edge cases:', response.edgeCases));
-  lines.push(...formatSection('Scale considerations:', response.scaleConsiderations));
-  lines.push(...formatSection('Pushback responses:', response.pushbackResponses));
-  lines.push(...formatSection('Likely follow-ups:', response.likelyFollowUps));
-
-  if (response.codeTransition) {
-    lines.push(`Code transition: ${response.codeTransition}`);
+  try {
+    return normalizeText(JSON.parse(`"${match[1]}"`));
+  } catch {
+    return null;
   }
-
-  return lines.join('\n').trim();
 }
 
 function isQuestionLike(lower: string): boolean {
-  return /\?$/.test(lower) || /^(how|what|why|when|where|which|who|can|could|would|walk me through|tell me)/i.test(lower);
+  return /\?$/.test(lower) || /^(how|what|why|when|where|which|who|can|could|would|walk me through|tell me|give me|describe|share|talk about)/i.test(lower);
 }
 
 function isSubstantialConversationTurn(lower: string): boolean {
   const words = lower.split(/\s+/).filter(Boolean);
   if (words.length < 4) return false;
   if (isAdministrativePrompt(lower)) return false;
-  return isBroadConsciousSeed(lower) || /^(let me (walk through|start with|explain|show)|walk me through|tell me about|describe|give me an example|switch gears and talk about)/i.test(lower);
+  return isBroadConsciousSeed(lower) || /^(let me (walk through|start with|explain|show)|walk me through|switch gears and talk about)/i.test(lower);
 }
 
 function isBroadConsciousSeed(lower: string): boolean {
-  return /(design|architecture|component|service|database|api|scale|scaling|throughput|latency|tradeoff|failure|retry|cache|queue|shard|replica|microservice|monolith|algorithm|data structure|complexity|optimi[sz]e|tell me about a time|describe a situation|give me an example|challenge|conflict|leadership|project)/i.test(lower);
+  return /\b(design|architecture|component|components|service|services|database|databases|api|apis|scale|scaling|throughput|latency|tradeoff|tradeoffs|failure|retry|cache|caching|queue|queues|shard|sharding|replica|replication|microservice|microservices|monolith|algorithm|algorithms|complexity|optimization|optimisation|optimize|optimise|partition|partitioning|failover|bottleneck|consistency|availability|backpressure|hotspot|ledger|distributed)\b|\b(data structure|data structures|rate limiter|rate limiters|data model|notification system|streaming system)\b/i.test(lower);
+}
+
+function isBehavioralPrompt(lower: string): boolean {
+  return isBehavioralQuestionText(lower);
 }
 
 function isAdministrativePrompt(lower: string): boolean {
@@ -202,15 +479,38 @@ function isAdministrativePrompt(lower: string): boolean {
 }
 
 function isSystemDesignQuestion(lower: string): boolean {
-  return /(^how would you design\b|\bsystem design\b|\barchitect\b|\bhigh[- ]level design\b|\bdistributed system\b|\brate limiter\b|\bpartition\b|\bmonolith to microservices\b|\bmigrate a monolith\b|\bdesign the data model\b|\bdesign a .*system\b|\bdesign an .*system\b|\bdesign the .*system\b|\bdesign a .*service\b|\bdesign an .*service\b|\bdesign the .*service\b)/i.test(lower);
+  // NOTE: removed ^ anchors so phrases like "So how would you design..." match.
+  // Added \b word boundaries to prevent false positives.
+  return /(\bhow would you design\b|\bsystem design\b|\barchitect\b|\bhigh[- ]level design\b|\bdistributed system\b|\brate limiter\b|\bpartition\b|\bmonolith to microservices\b|\bmigrate a monolith\b|\bdesign the data model\b|\bdesign a .*system\b|\bdesign an .*system\b|\bdesign the .*system\b|\bdesign a .*service\b|\bdesign an .*service\b|\bdesign the .*service\b|\bdesign this\b|\bdesign that\b)/i.test(lower);
 }
 
 function isQuestionContinuationPhrase(lower: string): boolean {
   return /^(what are the tradeoffs\??|how would you shard this\??|what happens during failover\??|what metrics would you watch( first)?\??)$/i.test(lower);
 }
 
+function isColdStartContinuationPhrase(lower: string): boolean {
+  return /^(what are the tradeoffs\??|how would you shard this\??)$/i.test(lower);
+}
+
 function isExplicitTopicShift(lower: string): boolean {
-  return /(switch gears|talk about the launch plan|talk about launch|move on to|different topic|new topic)/i.test(lower);
+  return /(switch gears|talk about the launch plan|talk about launch|move on to|different topic|new topic|let(?:'s| us) talk about)/i.test(lower);
+}
+
+function isShortActionablePrompt(lower: string): boolean {
+  return /^(why this approach|why this|why not|how so|go deeper|can you go deeper|walk me through that|talk through that|and then|what about reliability|what about scale|what about failure handling|what about bottlenecks)$/i.test(lower);
+}
+
+function isActionableInterviewerPrompt(lower: string): boolean {
+  if (isAdministrativePrompt(lower)) {
+    return false;
+  }
+
+  const words = lower.split(/\s+/).filter(Boolean);
+  if (isShortActionablePrompt(lower)) {
+    return true;
+  }
+
+  return (isQuestionLike(lower) && words.length >= 4) || (words.length >= 6 && isBroadConsciousSeed(lower));
 }
 
 export function classifyConsciousModeQuestion(
@@ -226,6 +526,15 @@ export function classifyConsciousModeQuestion(
   const questionLike = isQuestionLike(lower);
   const systemDesignQuestion = isSystemDesignQuestion(lower);
   const explicitContinuation = isQuestionContinuationPhrase(lower);
+  const behavioralQuestion = isBehavioralActionableQuestion(lower);
+
+  if (behavioralQuestion) {
+    if (activeThread) {
+      return { qualifies: true, threadAction: 'reset' };
+    }
+
+    return { qualifies: true, threadAction: 'start' };
+  }
 
   if (activeThread) {
     if (explicitContinuation) {
@@ -247,7 +556,7 @@ export function classifyConsciousModeQuestion(
     return { qualifies: false, threadAction: 'ignore' };
   }
 
-  if ((((questionLike && normalizedQuestion.split(/\s+/).length >= 3) && (systemDesignQuestion || isBroadConsciousSeed(lower) || normalizedQuestion.split(/\s+/).length >= 5)) || isSubstantialConversationTurn(lower)) && !isAdministrativePrompt(lower)) {
+  if ((systemDesignQuestion || isColdStartContinuationPhrase(lower) || (isSubstantialConversationTurn(lower) && !questionLike)) && !isAdministrativePrompt(lower)) {
     return { qualifies: true, threadAction: 'start' };
   }
 
@@ -265,7 +574,10 @@ export function shouldAutoTriggerSuggestionFromTranscript(
   }
 
   if (consciousModeEnabled) {
-    return classifyConsciousModeQuestion(trimmed, activeReasoningThread).qualifies || isSubstantialConversationTurn(trimmed.toLowerCase());
+    const lower = trimmed.toLowerCase();
+    return classifyConsciousModeQuestion(trimmed, activeReasoningThread).qualifies
+      || isSubstantialConversationTurn(lower)
+      || isActionableInterviewerPrompt(lower);
   }
 
   const wordCount = trimmed.split(/\s+/).filter(Boolean).length;
@@ -301,15 +613,36 @@ export async function maybeHandleSuggestionTriggerFromTranscript(
     console.log(`[AUTO-TRIGGER] ❌ Rejected: speaker is "${input.speaker}", need "interviewer"`);
     return false;
   }
-  
+
+  // NAT-006 / audit A-6: never let an interim (non-final) transcript drive
+  // `handleSuggestionTrigger`. Interim hypotheses are routinely revised or
+  // outright discarded by the STT provider; acting on them produces an
+  // answer for a question the user never finished asking, which the user
+  // then sees and which we either have to hide (UX flicker) or replace
+  // (wasted token spend + provenance confusion).
+  //
+  // Speculative paths (prefetch / planner warm-up) live elsewhere
+  // (ConsciousAccelerationOrchestrator) and remain free to act on
+  // interim text — but only the *final* transcript is allowed to commit
+  // to a user-visible answer.
   if (!input.final) {
-    console.log('[AUTO-TRIGGER] ❌ Rejected: transcript not final (interim transcript)');
+    console.log(
+      `[AUTO-TRIGGER] ❌ Rejected: transcript is interim (final=false, confidence=${input.confidence ?? 'n/a'})`,
+    );
+    return false;
+  }
+
+  // Belt-and-suspenders: even when `final === true`, refuse low-confidence
+  // finals. Some providers emit best-effort finals on UtteranceEnd timers
+  // (see NAT-009) which can be unreliable.
+  if (input.confidence != null && input.confidence < 0.5) {
+    console.log('[AUTO-TRIGGER] ❌ Rejected: final transcript with low confidence');
     return false;
   }
 
   const activeThread = input.intelligenceManager.getActiveReasoningThread();
   console.log(`[AUTO-TRIGGER] 🧠 Active reasoning thread: ${!!activeThread}`);
-  
+
   const decision = getTranscriptSuggestionDecision(
     input.text,
     input.consciousModeEnabled,

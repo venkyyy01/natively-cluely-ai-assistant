@@ -19,7 +19,7 @@ import {
   type AppWindowContext,
 } from './appBootstrap'
 import { analytics } from './lib/analytics/analytics.service'
-import { getElectronAPI } from './lib/electronApi'
+import { getElectronAPI, getOptionalElectronMethod, requireElectronMethod } from './lib/electronApi'
 
 const queryClient = new QueryClient()
 
@@ -32,6 +32,10 @@ const AppProviders: React.FC<{ children: React.ReactNode }> = ({ children }) => 
   </QueryClientProvider>
 )
 
+const RendererStartupFallback: React.FC<{ errorMessage: string }> = ({ errorMessage: _errorMessage }) => (
+  <div className="h-full min-h-0 w-full bg-black" aria-hidden="true" />
+)
+
 const getStoredAudioDeviceId = (storageKey: string, fallback = 'default'): string => {
   const value = localStorage.getItem(storageKey)?.trim()
   return value && value.length > 0 ? value : fallback
@@ -42,6 +46,16 @@ type MeetingAudioBannerProps = {
   title: string
   variant: 'overlay' | 'launcher'
   onDismiss: () => void
+}
+
+type PrivacyShieldState = {
+  active: boolean
+  reason: string | null
+}
+
+type PrivacyShieldWindowContentProps = {
+  variant: 'overlay' | 'launcher'
+  onEndMeeting?: () => Promise<void>
 }
 
 const MeetingAudioBanner: React.FC<MeetingAudioBannerProps> = ({ message, title, variant, onDismiss }) => {
@@ -87,8 +101,20 @@ const MeetingAudioBanner: React.FC<MeetingAudioBannerProps> = ({ message, title,
   )
 }
 
-// Memoized MeetingAudioBanner component for performance
-const MemoizedMeetingAudioBanner = memo(MeetingAudioBanner);
+export const PrivacyShieldWindowContent: React.FC<PrivacyShieldWindowContentProps> = ({ variant, onEndMeeting }) => {
+  const isOverlay = variant === 'overlay'
+
+  return (
+    <ErrorBoundary context="PrivacyShield">
+      <div
+        className={`flex h-full min-h-0 w-full items-center justify-center ${isOverlay ? 'bg-black' : 'bg-black'}`}
+        onClick={isOverlay && onEndMeeting ? () => { void onEndMeeting() } : undefined}
+        role={isOverlay && onEndMeeting ? 'button' : undefined}
+        tabIndex={isOverlay && onEndMeeting ? 0 : undefined}
+      />
+    </ErrorBoundary>
+  )
+}
 
 type OverlayWindowContentProps = {
   meetingAudioError: string | null
@@ -311,7 +337,25 @@ const App: React.FC = () => {
 
   useWindowAnalytics(windowContext)
 
-  const [showStartup, setShowStartup] = useState(true)
+  const { api: electronAPI, error: electronBridgeError } = useMemo(() => {
+    try {
+      return {
+        api: getElectronAPI(),
+        error: null as Error | null,
+      }
+    } catch (error) {
+      return {
+        api: null,
+        error: error instanceof Error ? error : new Error(String(error)),
+      }
+    }
+  }, [])
+
+  const startsShielded = useMemo(() => {
+    const params = new URLSearchParams(window.location.search)
+    return params.get('privacyShield') === '1' || localStorage.getItem('natively_undetectable') === 'true'
+  }, [])
+  const [showStartup, setShowStartup] = useState(() => !startsShielded)
   const [isSettingsOpen, setIsSettingsOpen] = useState(false)
   const [settingsInitialTab, setSettingsInitialTab] = useState('general')
   const [overlayOpacity, setOverlayOpacity] = useState<number>(() => {
@@ -329,9 +373,16 @@ const App: React.FC = () => {
 
   const [incompatibleWarning, setIncompatibleWarning] = useState<{ count: number; oldProvider: string; newProvider: string } | null>(null)
   const [meetingAudioError, setMeetingAudioError] = useState<string | null>(null)
-  const electronAPI = getElectronAPI()
+  const [privacyShieldState, setPrivacyShieldState] = useState<PrivacyShieldState>(() => ({
+    active: startsShielded,
+    reason: null,
+  }))
 
   useEffect(() => {
+    if (!electronAPI) {
+      return
+    }
+
     localStorage.removeItem('useLegacyAudioBackend')
 
     const removeMeetingsListener = electronAPI.onMeetingsUpdated(() => {
@@ -341,14 +392,16 @@ const App: React.FC = () => {
 
     let removeProgress: (() => void) | undefined
     let removeComplete: (() => void) | undefined
-    if (electronAPI.onOllamaPullProgress && electronAPI.onOllamaPullComplete) {
-      removeProgress = electronAPI.onOllamaPullProgress((data) => {
+    const onOllamaPullProgress = getOptionalElectronMethod('onOllamaPullProgress')
+    const onOllamaPullComplete = getOptionalElectronMethod('onOllamaPullComplete')
+    if (onOllamaPullProgress && onOllamaPullComplete) {
+      removeProgress = onOllamaPullProgress((data) => {
         setOllamaPullStatus('downloading')
         setOllamaPullPercent(data.percent || 0)
         setOllamaPullMessage(data.status || 'Downloading...')
       })
 
-      removeComplete = electronAPI.onOllamaPullComplete(() => {
+      removeComplete = onOllamaPullComplete(() => {
         setOllamaPullStatus('complete')
         setOllamaPullMessage('Local AI memory ready')
         setOllamaPullPercent(100)
@@ -357,18 +410,30 @@ const App: React.FC = () => {
     }
 
     let removeWarning: (() => void) | undefined
-    if (electronAPI.onIncompatibleProviderWarning) {
-      removeWarning = electronAPI.onIncompatibleProviderWarning((data) => {
+    const onIncompatibleProviderWarning = getOptionalElectronMethod('onIncompatibleProviderWarning')
+    if (onIncompatibleProviderWarning) {
+      removeWarning = onIncompatibleProviderWarning((data) => {
         setIncompatibleWarning(data)
       })
     }
 
     let removeMeetingAudioError: (() => void) | undefined
-    if (electronAPI.onMeetingAudioError) {
-      removeMeetingAudioError = electronAPI.onMeetingAudioError((message) => {
+    const onMeetingAudioError = getOptionalElectronMethod('onMeetingAudioError')
+    if (onMeetingAudioError) {
+      removeMeetingAudioError = onMeetingAudioError((message) => {
         setMeetingAudioError(message)
       })
     }
+
+    const getPrivacyShieldState = getOptionalElectronMethod('getPrivacyShieldState')
+    getPrivacyShieldState?.().then((state) => {
+      setPrivacyShieldState(state)
+    }).catch(() => {})
+
+    const onPrivacyShieldChanged = getOptionalElectronMethod('onPrivacyShieldChanged')
+    const removePrivacyShieldListener = onPrivacyShieldChanged?.((state) => {
+      setPrivacyShieldState(state)
+    })
 
     return () => {
       if (removeMeetingsListener) removeMeetingsListener()
@@ -376,13 +441,15 @@ const App: React.FC = () => {
       if (removeComplete) removeComplete()
       if (removeWarning) removeWarning()
       if (removeMeetingAudioError) removeMeetingAudioError()
+      if (removePrivacyShieldListener) removePrivacyShieldListener()
     }
   }, [electronAPI])
 
   useEffect(() => {
-    if (!shouldListenForOverlayOpacity(windowContext)) return
+    if (!electronAPI || !shouldListenForOverlayOpacity(windowContext)) return
 
-    const removeOpacityListener = electronAPI.onOverlayOpacityChanged?.((opacity) => {
+    const onOverlayOpacityChanged = getOptionalElectronMethod('onOverlayOpacityChanged')
+    const removeOpacityListener = onOverlayOpacityChanged?.((opacity) => {
       setOverlayOpacity(opacity)
     })
 
@@ -392,13 +459,19 @@ const App: React.FC = () => {
   }, [electronAPI, windowKind])
 
   const handleReindex = async () => {
-    if (window.electronAPI?.reindexIncompatibleMeetings) {
+    const reindexIncompatibleMeetings = getOptionalElectronMethod('reindexIncompatibleMeetings')
+    if (reindexIncompatibleMeetings) {
       setIncompatibleWarning(null)
-      await window.electronAPI.reindexIncompatibleMeetings()
+      await reindexIncompatibleMeetings()
     }
   }
 
   const handleStartMeeting = async () => {
+    if (!electronAPI) {
+      setMeetingAudioError(electronBridgeError?.message ?? 'Electron API bridge is unavailable')
+      return
+    }
+
     try {
       setMeetingAudioError(null)
       localStorage.setItem('natively_last_meeting_start', Date.now().toString())
@@ -413,13 +486,15 @@ const App: React.FC = () => {
         console.log('[App] Using CoreAudio backend (Default).')
       }
 
-      const result = await window.electronAPI.startMeeting({
+      const startMeeting = requireElectronMethod('startMeeting')
+
+      const result = await startMeeting({
         audio: { inputDeviceId, outputDeviceId }
       })
 
       if (result.success) {
         analytics.trackMeetingStarted()
-        await window.electronAPI.setWindowMode('overlay')
+        await electronAPI.setWindowMode('overlay')
       } else {
         console.error('Failed to start meeting:', result.error)
         setMeetingAudioError(result.error || 'Audio pipeline failed to start.')
@@ -431,13 +506,17 @@ const App: React.FC = () => {
   }
 
   const handleEndMeeting = async () => {
+    if (!electronAPI) {
+      return
+    }
+
     console.log('[App.tsx] handleEndMeeting triggered')
     analytics.trackMeetingEnded()
     setIsProcessingMeeting(true)
     setMeetingAudioError(null)
 
     try {
-      await window.electronAPI.endMeeting()
+      await electronAPI.endMeeting()
       console.log('[App.tsx] endMeeting IPC completed')
 
       const startStr = localStorage.getItem('natively_last_meeting_start')
@@ -451,11 +530,23 @@ const App: React.FC = () => {
         localStorage.removeItem('natively_last_meeting_start')
       }
 
-      await window.electronAPI.setWindowMode('launcher')
+      await electronAPI.setWindowMode('launcher')
     } catch (err) {
       console.error('Failed to end meeting:', err)
-      window.electronAPI.setWindowMode('launcher')
+      electronAPI.setWindowMode('launcher')
     }
+  }
+
+  if (!electronAPI) {
+    return (
+      <RendererStartupFallback
+        errorMessage={electronBridgeError?.message ?? 'Electron API bridge is unavailable'}
+      />
+    )
+  }
+
+  if (privacyShieldState.active) {
+    return <PrivacyShieldWindowContent variant={windowKind === 'overlay' ? 'overlay' : 'launcher'} onEndMeeting={windowKind === 'overlay' ? handleEndMeeting : undefined} />
   }
 
   if (windowKind === 'settings') {

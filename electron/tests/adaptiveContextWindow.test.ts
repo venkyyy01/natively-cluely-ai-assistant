@@ -72,4 +72,59 @@ describe('AdaptiveContextWindow', () => {
 
     assert(result[0].text === 'Recent context');
   });
+
+  it('falls back to lexical relevance when embedding dimensions mismatch', async () => {
+    const config: ContextSelectionConfig = {
+      tokenBudget: 1000,
+      recencyWeight: 0.05,
+      semanticWeight: 0.9,
+      phaseAlignmentWeight: 0.05,
+      embeddingModel: 'query-model',
+    };
+
+    const now = Date.now();
+    const candidates: ContextEntry[] = [
+      // 4 recent entries with mismatched dimensions (force-included by recency floor)
+      { text: 'Recent one', timestamp: now - 100, embedding: [0, 0, 1], embeddingModel: 'query-model', embeddingDimension: 3 },
+      { text: 'Recent two', timestamp: now - 200, embedding: [0, 0, 1], embeddingModel: 'query-model', embeddingDimension: 3 },
+      { text: 'Recent three', timestamp: now - 300, embedding: [0, 0, 1], embeddingModel: 'query-model', embeddingDimension: 3 },
+      { text: 'Recent four', timestamp: now - 400, embedding: [0, 0, 1], embeddingModel: 'query-model', embeddingDimension: 3 },
+      // Older entry with mismatched dimensions but high lexical relevance to query
+      {
+        text: 'Consistent hashing keeps cache resharding stable',
+        timestamp: now - 20_000,
+        embedding: [0.2, 0.8],
+        embeddingModel: 'old-model',
+        embeddingDimension: 2,
+      },
+      // Another old entry with low lexical relevance
+      {
+        text: 'Unrelated weather update',
+        timestamp: now - 500,
+        embedding: [0, 0, 1],
+        embeddingModel: 'query-model',
+        embeddingDimension: 3,
+      },
+    ];
+
+    const result = await window.selectContext(
+      'consistent hashing cache',
+      [1, 0, 0],
+      candidates,
+      config
+    );
+
+    // The 4 recent entries are force-included first
+    assert.equal(result[0].text, 'Recent one');
+    // The lexically relevant older entry should appear in the scored fill
+    const texts = result.map((r) => r.text);
+    assert.ok(texts.includes('Consistent hashing keeps cache resharding stable'));
+    // The low-relevance older entry should not beat the high-relevance one in scored fill
+    const consistentIndex = texts.indexOf('Consistent hashing keeps cache resharding stable');
+    const unrelatedIndex = texts.indexOf('Unrelated weather update');
+    assert.ok(
+      consistentIndex < unrelatedIndex || unrelatedIndex === -1,
+      'Lexically relevant entry should rank above unrelated entry in scored fill'
+    );
+  });
 });

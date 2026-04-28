@@ -1,45 +1,23 @@
 import { DatabaseManager, Meeting } from "./db/DatabaseManager";
 import { SessionTracker } from "./SessionTracker";
-import { BrowserWindow } from "electron";
 import { EventEmitter } from "events";
-import * as fs from "fs/promises";
-import * as path from "path";
-import * as os from "os";
 
 const CHECKPOINT_INTERVAL_MS = 60000; // 60 seconds
 const MAX_RETRY_ATTEMPTS = 3;
 const RETRY_DELAY_MS = 2000;
 
-// Types for better error handling
-export interface CheckpointResult {
-  success: boolean;
-  retryCount: number;
-  error?: string;
-  usedFallback?: boolean;
-  fallbackPath?: string;
-}
-
-export interface CheckpointError {
-  meetingId: string;
-  error: Error;
-  retryCount: number;
-  usedFallback: boolean;
-  fallbackPath?: string;
-}
-
 export class MeetingCheckpointer extends EventEmitter {
     private interval: NodeJS.Timeout | null = null;
     private meetingId: string | null = null;
-    private tempDir: string;
-    private checkpointInProgress = false;
+    private lastCheckpointAt: number = 0;
+    private lastTranscriptTimestamp: number = 0;
 
     constructor(
         private readonly dbManager: DatabaseManager,
-        private readonly getSessionTracker: () => SessionTracker
+        private readonly getSessionTracker: () => SessionTracker,
+        private readonly onCheckpointWritten?: (checkpointId: string) => void | Promise<void>,
     ) {
         super();
-        this.tempDir = path.join(os.tmpdir(), 'meeting-checkpoints');
-        this.ensureTempDir();
     }
 
     public start(meetingId: string): void {
@@ -68,6 +46,8 @@ export class MeetingCheckpointer extends EventEmitter {
             console.log(`[MeetingCheckpointer] Stopped for meeting ${this.meetingId}`);
         }
         this.meetingId = null;
+        this.lastCheckpointAt = 0;
+        this.lastTranscriptTimestamp = 0;
     }
 
     public destroy(): void {
@@ -81,6 +61,10 @@ export class MeetingCheckpointer extends EventEmitter {
         } catch (error) {
             console.error('[MeetingCheckpointer] Failed to create temp directory:', error);
         }
+    }
+
+    public async checkpointNow(): Promise<void> {
+        await this.checkpoint();
     }
 
     private async checkpoint(): Promise<void> {
@@ -147,29 +131,19 @@ export class MeetingCheckpointer extends EventEmitter {
             }
         }
 
-        // All database attempts failed, try fallback file save
-        console.warn('[MeetingCheckpointer] All database attempts failed, using file fallback');
-        
-        try {
-            const fallbackPath = await this.saveFallbackFile(meetingData, snapshot);
-            
-            return {
-                success: true,
-                retryCount: MAX_RETRY_ATTEMPTS,
-                usedFallback: true,
-                fallbackPath
-            };
-        } catch (fallbackError) {
-            console.error('[MeetingCheckpointer] Fallback file save also failed:', fallbackError);
-            
-            return {
-                success: false,
-                retryCount: MAX_RETRY_ATTEMPTS,
-                usedFallback: true,
-                error: `Database and fallback both failed: ${fallbackError instanceof Error ? fallbackError.message : String(fallbackError)}`
-            };
+        // NAT-061: idle detection — skip checkpoint if no new transcript since last checkpoint
+        const latestTranscriptTimestamp = snapshot.transcript.length > 0
+            ? Math.max(...snapshot.transcript.map(t => t.timestamp ?? 0))
+            : 0;
+        if (latestTranscriptTimestamp > 0) {
+            this.lastTranscriptTimestamp = latestTranscriptTimestamp;
         }
-    }
+        if (this.lastCheckpointAt > 0 && this.lastTranscriptTimestamp <= this.lastCheckpointAt) {
+            console.log(`[MeetingCheckpointer] Idle stretch detected for ${this.meetingId}; skipping checkpoint.`);
+            return;
+        }
+
+        const metadata = snapshot.meetingMetadata;
 
     private createMeetingData(snapshot: any): Meeting {
         const metadata = snapshot.meetingMetadata;
@@ -213,14 +187,15 @@ export class MeetingCheckpointer extends EventEmitter {
 
     private notifyFrontend(event: string, data: any): void {
         try {
-            const wins = typeof BrowserWindow?.getAllWindows === 'function' ? BrowserWindow.getAllWindows() : [];
-            wins.forEach((w) => {
-                if (!w.isDestroyed()) {
-                    w.webContents.send(event, data);
-                }
-            });
-        } catch (error) {
-            console.error('[MeetingCheckpointer] Failed to notify frontend:', error);
+            this.dbManager.createOrUpdateMeetingProcessingRecord(meetingData, snapshot.startTime, snapshot.durationMs);
+            // NAT-061: emit event for subscribers instead of broadcasting to all windows
+            this.emit('checkpoint', this.meetingId);
+            this.lastCheckpointAt = Date.now();
+            if (this.onCheckpointWritten) {
+                await this.onCheckpointWritten(this.meetingId);
+            }
+        } catch (e) {
+            console.error('[MeetingCheckpointer] Failed to save checkpoint to database', e);
         }
     }
 

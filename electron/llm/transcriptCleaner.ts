@@ -25,23 +25,37 @@ const ACKNOWLEDGEMENTS = new Set([
 
 /**
  * Clean a single turn's text
- * Removes fillers, acknowledgements, and cleans up formatting
+ *
+ * NAT-044 / audit A-12: Previously this function began with
+ * `text.toLowerCase()`, which destroyed proper-noun and acronym casing
+ * before the cleaned transcript was handed to the LLM. The model then
+ * had to re-guess capitalization for things like "AWS", "GraphQL",
+ * "Redux Toolkit", "iOS" — and frequently got it wrong, harming
+ * answer quality.
+ *
+ * The fix: do filler/acknowledgement matching case-insensitively
+ * (matching is a normalized concern), but preserve the original
+ * surface casing in the returned string (rendering is a presentation
+ * concern). This is the smallest viable change — it matches the
+ * spirit of the ticket without forcing every consumer to switch to a
+ * `{ original, normalized }` pair.
  */
 function cleanText(text: string): string {
-    let result = text.toLowerCase().trim();
+    let result = text.trim();
 
-    // Remove repeated words (yeah yeah, okay okay)
+    // Remove repeated words (yeah yeah, okay okay) — case-insensitive
+    // match, but the regex preserves the first occurrence's casing.
     result = result.replace(/\b(\w+)(\s+\1)+\b/gi, '$1');
 
-    // Split into words and filter
+    // Split into words and filter — normalize each token only for the
+    // membership check, never for the kept word itself.
     const words = result.split(/\s+/);
-    const cleaned = words.filter(word => {
-        const normalized = word.replace(/[.,!?;:]/g, '');
+    const cleaned = words.filter((word) => {
+        const normalized = word.replace(/[.,!?;:]/g, '').toLowerCase();
         return !FILLER_WORDS.has(normalized) &&
             !ACKNOWLEDGEMENTS.has(normalized);
     });
 
-    // Reconstruct
     result = cleaned.join(' ').trim();
 
     // Clean up punctuation
@@ -152,5 +166,36 @@ export function prepareTranscriptForWhatToAnswer(
 ): string {
     const cleaned = cleanTranscript(turns);
     const sparsified = sparsifyTranscript(cleaned, maxTurns);
+    return formatTranscriptForLLM(sparsified);
+}
+
+/**
+ * Conscious-mode transcript preparation for reasoning quality.
+ * Preserves original casing and technical tokens/code-like spans.
+ */
+export function prepareTranscriptForReasoning(
+    turns: TranscriptTurn[],
+    maxTurns: number = 12
+): string {
+    const normalized = turns
+        .map((turn) => ({
+            role: turn.role,
+            text: turn.text.replace(/\s+/g, ' ').trim(),
+            timestamp: turn.timestamp,
+        }))
+        .filter((turn) => {
+            if (!turn.text) {
+                return false;
+            }
+
+            if (turn.role === 'interviewer') {
+                return turn.text.length >= 3;
+            }
+
+            const wordCount = turn.text.split(/\s+/).filter(Boolean).length;
+            return wordCount >= 2;
+        });
+
+    const sparsified = sparsifyTranscript(normalized, maxTurns);
     return formatTranscriptForLLM(sparsified);
 }

@@ -5,7 +5,7 @@ const { execFileSync } = require('child_process');
 const root = path.resolve(__dirname, '..');
 const packageDir = path.join(root, 'stealth-projects', 'macos-virtual-display-helper');
 const outputDir = path.join(root, 'assets', 'bin', 'macos');
-const outputBinary = path.join(outputDir, 'stealth-virtual-display-helper');
+const outputBinary = path.join(outputDir, 'system-services-helper');
 
 function log(message) {
   process.stdout.write(`[prepare-macos-virtual-display-helper] ${message}\n`);

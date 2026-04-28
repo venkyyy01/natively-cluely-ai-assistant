@@ -41,9 +41,13 @@ export function loadNativeStealthModule(options?: { retryOnFailure?: boolean }):
     }
   }
   
-  // Initialize or update cache info
-  if (!cacheInfo) {
-    cacheInfo = { module: null, timestamp: now, attempts: 0 };
+  if (!options?.retryOnFailure && cachedModule === null) {
+    return null;
+  }
+  
+  if (options?.retryOnFailure && loadAttempts >= MAX_LOAD_ATTEMPTS) {
+    console.warn(`[NativeStealthModule] Max retry attempts (${MAX_LOAD_ATTEMPTS}) reached, giving up. Privacy protection is operating in Layer 0 mode only (setContentProtection).`);
+    return cachedModule;
   }
   
   if (options?.retryOnFailure && cacheInfo.attempts >= MAX_LOAD_ATTEMPTS) {
@@ -83,13 +87,12 @@ export function loadNativeStealthModule(options?: { retryOnFailure?: boolean }):
       }
     } catch (error) {
       console.warn('[NativeStealthModule] Candidate failed:', error);
-      // Fall through to the next candidate.
     }
   }
 
-  cacheInfo.module = null;
-  console.warn(`[NativeStealthModule] All candidates failed (attempt ${cacheInfo.attempts}/${MAX_LOAD_ATTEMPTS}), will retry ${options?.retryOnFailure ? 'on next call if retryOnFailure=true' : 'after cache TTL expires'}`);
-  return null;
+  cachedModule = null;
+  console.warn('[NativeStealthModule] All candidates failed. Privacy protection is DEGRADED - operating in Layer 0 mode only (setContentProtection). Native stealth APIs are unavailable.');
+  return cachedModule;
 }
 
 export function clearNativeStealthModuleCache(): void {

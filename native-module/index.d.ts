@@ -7,14 +7,38 @@
 export declare function getHardwareId(): string
 /** Open build compatibility shim - always resolves successfully. */
 export declare function verifyGumroadKey(licenseKey: string): Promise<unknown>
+/**
+ * Represents information about a visible window.
+ * Used by the Electron side for capture detection instead of spawning Python.
+ */
+export interface WindowInfo {
+  windowNumber: number
+  ownerName: string
+  ownerPid: number
+  windowTitle: string
+  isOnScreen: boolean
+  sharingState: number
+  alpha: number
+}
 export declare function applyMacosWindowStealth(windowNumber: number): void
 export declare function removeMacosWindowStealth(windowNumber: number): void
 export declare function applyMacosPrivateWindowStealth(windowNumber: number): void
 export declare function removeMacosPrivateWindowStealth(windowNumber: number): void
+export declare function setMacosWindowLevel(windowNumber: number, level: number): void
 export declare function verifyMacosStealthState(windowNumber: number): number
 export declare function applyWindowsWindowStealth(hwndBuffer: Buffer): void
 export declare function removeWindowsWindowStealth(hwndBuffer: Buffer): void
 export declare function verifyWindowsStealthState(hwndBuffer: Buffer): number
+/**
+ * List all visible windows using Core Graphics.
+ * This replaces the Python3 subprocess call to Quartz.CGWindowListCopyWindowInfo.
+ */
+export declare function listVisibleWindows(): Array<WindowInfo>
+/**
+ * Check if any browser-based capture is active based on window titles.
+ * Combines the Quartz window enumeration + browser check in a single native call.
+ */
+export declare function checkBrowserCaptureWindows(): boolean
 export interface AudioDeviceInfo {
   id: string
   name: string
@@ -22,14 +46,17 @@ export interface AudioDeviceInfo {
 export declare function getInputDevices(): Array<AudioDeviceInfo>
 export declare function getOutputDevices(): Array<AudioDeviceInfo>
 export declare class SystemAudioCapture {
-  constructor(deviceId?: string | undefined | null)
+  constructor(deviceId?: string | undefined | null, outputSampleRate?: number | undefined | null)
   getSampleRate(): number
+  /** Sample rate of PCM buffers emitted to JS (after native polyphase resample). */
+  getOutputSampleRate(): number
   start(callback: (...args: any[]) => any, onSpeechEnded?: (...args: any[]) => any | undefined | null): void
   stop(): void
 }
 export declare class MicrophoneCapture {
-  constructor(deviceId?: string | undefined | null)
+  constructor(deviceId?: string | undefined | null, outputSampleRate?: number | undefined | null)
   getSampleRate(): number
+  getOutputSampleRate(): number
   start(callback: (...args: any[]) => any, onSpeechEnded?: (...args: any[]) => any | undefined | null): void
   stop(): void
 }

@@ -10,6 +10,7 @@ import {
   CUSTOM_SYSTEM_PROMPT,
   CONSCIOUS_MODE_PHASE_PROMPTS,
 } from './prompts';
+import { TokenCounter } from '../shared/TokenCounter';
 
 export interface CompileOptions {
   provider: string;
@@ -44,6 +45,7 @@ const PROVIDER_PROMPT_MAP: Record<string, string> = {
 export class PromptCompiler {
   private cache: Map<string, CacheEntry> = new Map();
   private readonly CACHE_TTL_MS = 5 * 60 * 1000;
+  private readonly tokenCounter = new TokenCounter();
 
   async compile(options: CompileOptions): Promise<CompiledPrompt> {
     if (!isOptimizationActive('usePromptCompiler')) {
@@ -64,7 +66,23 @@ export class PromptCompiler {
   }
 
   private getCacheKey(options: CompileOptions): string {
-    return `${options.provider}:${options.phase}:${options.mode}`;
+    const contextHash = options.contextSnapshot
+      ? this.hashContext(options.contextSnapshot)
+      : 'no-context';
+    return `${options.provider}:${options.phase}:${options.mode}:${contextHash}`;
+  }
+
+  private hashContext(snapshot: NonNullable<CompileOptions['contextSnapshot']>): string {
+    const thread = snapshot.activeThread || '';
+    const topics = snapshot.recentTopics?.join(',') || '';
+    let hash = 0;
+    const str = `${thread}::${topics}`;
+    for (let i = 0; i < str.length; i++) {
+      const char = str.charCodeAt(i);
+      hash = ((hash << 5) - hash) + char;
+      hash |= 0;
+    }
+    return hash.toString(36);
   }
 
   private async assemble(options: CompileOptions): Promise<CompiledPrompt> {
@@ -92,7 +110,7 @@ export class PromptCompiler {
     }
 
     const systemPrompt = adapter.systemPromptWrapper(finalPrompt);
-    const estimatedTokens = this.estimateTokens(systemPrompt) * adapter.tokenBudgetMultiplier;
+    const estimatedTokens = this.estimateTokens(systemPrompt, options.provider) * adapter.tokenBudgetMultiplier;
 
     return {
       systemPrompt,
@@ -117,8 +135,8 @@ DO NOT include any other text outside the JSON.
 `;
   }
 
-  private estimateTokens(text: string): number {
-    return Math.ceil(text.length / 4);
+  private estimateTokens(text: string, modelHint: string): number {
+    return this.tokenCounter.count(text, modelHint);
   }
 
   private compileLegacy(options: CompileOptions): CompiledPrompt {
@@ -130,7 +148,7 @@ DO NOT include any other text outside the JSON.
         return {
           systemPrompt: consciousPrompt,
           responseFormat: 'json',
-          estimatedTokens: this.estimateTokens(consciousPrompt),
+          estimatedTokens: this.estimateTokens(consciousPrompt, options.provider),
         };
       }
     }
@@ -138,7 +156,7 @@ DO NOT include any other text outside the JSON.
     return {
       systemPrompt: basePrompt,
       responseFormat: 'markdown',
-      estimatedTokens: this.estimateTokens(basePrompt),
+      estimatedTokens: this.estimateTokens(basePrompt, options.provider),
     };
   }
 

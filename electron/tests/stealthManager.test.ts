@@ -17,6 +17,7 @@ class FakeWindow extends EventEmitter {
   public skipTaskbarCalls: boolean[] = [];
   public hiddenInMissionControlCalls: boolean[] = [];
   public excludedFromShownWindowsMenuCalls: boolean[] = [];
+  public excludeFromCaptureCalls: boolean[] = [];
   public hideCalls = 0;
   public showCalls = 0;
   public setOpacityCalls: number[] = [];
@@ -34,6 +35,10 @@ class FakeWindow extends EventEmitter {
 
   setContentProtection(value: boolean): void {
     this.contentProtectionCalls.push(value);
+  }
+
+  setExcludeFromCapture(value: boolean): void {
+    this.excludeFromCaptureCalls.push(value);
   }
 
   setSkipTaskbar(value: boolean): void {
@@ -115,6 +120,10 @@ describe('StealthManager', () => {
     setOptimizationFlagsForTesting({ accelerationEnabled: false, useStealthMode: true });
   });
 
+  async function flushAsyncWork(): Promise<void> {
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+
   it('returns stealth-ready window defaults when enabled', () => {
     const manager = new StealthManager({ enabled: true });
     const options = manager.getBrowserWindowOptions();
@@ -153,6 +162,18 @@ describe('StealthManager', () => {
 
     assert.deepStrictEqual(win.contentProtectionCalls, [true, true, true, true]);
     assert.deepStrictEqual(calls, ['apply:42', 'apply:42', 'apply:42', 'apply:42']);
+  });
+
+  it('records observe-only protection violations without blocking application', () => {
+    const win = new FakeWindow();
+    win.visible = true;
+    const manager = new StealthManager({ enabled: true }, { platform: 'darwin', logger: silentLogger, nativeModule: null });
+
+    manager.applyToWindow(win as any, true, { role: 'primary' });
+
+    const snapshot = manager.getProtectionStateSnapshot();
+    assert.equal(win.contentProtectionCalls.length > 0, true);
+    assert.equal(snapshot.violations.some((violation) => violation.type === 'protecting-visible-window'), true);
   });
 
   it('applies auxiliary UI hardening on macOS windows', () => {
@@ -357,6 +378,7 @@ describe('StealthManager', () => {
         const powerMonitor = new EventEmitter();
         const intervals: Array<() => Promise<void> | void> = [];
         const timeouts: Array<() => void> = [];
+        let enumeratorCallCount = 0;
         const manager = new StealthManager(
             { enabled: true },
             {
@@ -373,7 +395,10 @@ describe('StealthManager', () => {
                     timeouts.push(fn);
                     return timeouts.length;
                 },
-                processEnumerator: async () => 'obs',
+                processEnumerator: async () => {
+                    enumeratorCallCount++;
+                    return enumeratorCallCount <= 1 ? 'obs' : '';
+                },
             } as any
         );
         const win = new FakeWindow();
@@ -385,6 +410,7 @@ describe('StealthManager', () => {
         assert.deepStrictEqual(win.setOpacityCalls, [0]);
 
         timeouts[0]();
+        await new Promise((r) => setTimeout(r, 0));
         assert.deepStrictEqual(win.setOpacityCalls, [0, 1]);
         win.destroy();
     });
@@ -482,7 +508,7 @@ describe('StealthManager', () => {
         win.destroy();
     });
 
-    it('logs capture detections when the watchdog hides windows', async () => {
+  it('logs capture detections when the watchdog hides windows', async () => {
         const intervals: Array<() => Promise<void> | void> = [];
         const logs: string[] = [];
         const manager = new StealthManager(
@@ -517,6 +543,30 @@ describe('StealthManager', () => {
         win.destroy();
     });
 
+  it('uses a single darwin process snapshot before falling back to per-pattern probing', async () => {
+    const calls: Array<{ command: string; args: string[] }> = [];
+    const manager = new StealthManager(
+      { enabled: true },
+      {
+        platform: 'darwin',
+        logger: silentLogger,
+        processEnumerator: async (command: string, args: string[]) => {
+          calls.push({ command, args });
+          if (command === 'ps') {
+            return '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome\n/usr/bin/obs';
+          }
+          throw new Error('fallback scan should not run when snapshot succeeds');
+        },
+      },
+    );
+
+    const matches = await (manager as any).detectCaptureProcesses();
+
+    assert.ok(matches.some((pattern: RegExp) => pattern.test('chrome')));
+    assert.ok(matches.some((pattern: RegExp) => pattern.test('obs')));
+    assert.deepStrictEqual(calls, [{ command: 'ps', args: ['-A', '-o', 'command='] }]);
+  });
+
   it('verifies applied stealth state through native bindings', () => {
     const win = new FakeWindow();
     const manager = new StealthManager(
@@ -538,9 +588,130 @@ describe('StealthManager', () => {
     assert.strictEqual(manager.verifyStealth(win as any), true);
   });
 
+  it('accepts the private macOS stealth path when NSWindow sharingType does not reflect CGS state', () => {
+    const win = new FakeWindow();
+    const manager = new StealthManager(
+      { enabled: true },
+      {
+        platform: 'darwin',
+        logger: silentLogger,
+        featureFlags: { enablePrivateMacosStealthApi: true },
+        nativeModule: {
+          applyMacosWindowStealth() {},
+          applyMacosPrivateWindowStealth() {},
+          verifyMacosStealthState() {
+            return 1;
+          },
+        },
+      },
+    );
+
+    (manager as any).macOSMajor = 15;
+    (manager as any).macOSMinor = 4;
+
+    manager.applyToWindow(win as any, true, { role: 'primary' });
+
+    assert.strictEqual(manager.verifyStealth(win as any), true);
+  });
+
+  it('verifies all managed windows through native bindings', () => {
+    const first = new FakeWindow();
+    const second = new FakeWindow();
+    const manager = new StealthManager(
+      { enabled: true },
+      {
+        platform: 'darwin',
+        logger: silentLogger,
+        nativeModule: {
+          applyMacosWindowStealth() {},
+          verifyMacosStealthState() {
+            return 0;
+          },
+        },
+      },
+    );
+
+    manager.applyToWindow(first as any, true, { role: 'primary' });
+    manager.applyToWindow(second as any, true, { role: 'auxiliary' });
+
+    assert.strictEqual(manager.verifyManagedWindows(), true);
+  });
+
+  it('NAT-029: hidden managed windows are still verified (visibility gate removed)', () => {
+    let verifyCalls = 0;
+    const first = new FakeWindow();
+    const second = new FakeWindow();
+    const manager = new StealthManager(
+      { enabled: true },
+      {
+        platform: 'darwin',
+        logger: silentLogger,
+        nativeModule: {
+          applyMacosWindowStealth() {},
+          verifyMacosStealthState() {
+            verifyCalls += 1;
+            return 0;
+          },
+        },
+      },
+    );
+
+    manager.applyToWindow(first as any, true, { role: 'primary' });
+    manager.applyToWindow(second as any, true, { role: 'auxiliary' });
+    first.hide();
+    second.hide();
+    const verifyCallsBefore = verifyCalls;
+
+    assert.strictEqual(manager.verifyManagedWindows(), true);
+    // NAT-029: hidden windows still run verifyStealth, so we expect 2 additional calls
+    assert.strictEqual(verifyCalls - verifyCallsBefore, 2);
+    assert.ok(!manager.getStealthDegradationWarnings().includes('stealth_verification_failed'));
+  });
+
+  it('fails managed-window verification when native stealth is unavailable in stealth mode', () => {
+    const win = new FakeWindow();
+    const manager = new StealthManager(
+      { enabled: true },
+      {
+        platform: 'darwin',
+        logger: silentLogger,
+        nativeModule: null,
+      },
+    );
+
+    manager.applyToWindow(win as any, true, { role: 'primary' });
+
+    assert.strictEqual(manager.verifyManagedWindows(), false);
+    assert.ok(manager.getStealthDegradationWarnings().includes('native_module_unavailable'));
+  });
+
+  it('marks capture visibility as degraded when native and Python probes are both unavailable', async () => {
+    const manager = new StealthManager(
+      { enabled: true },
+      {
+        platform: 'darwin',
+        logger: silentLogger,
+        processEnumerator: async () => {
+          throw new Error('python unavailable');
+        },
+      },
+    );
+
+    (manager as any).nativeModule = {
+      listVisibleWindows: () => {
+        throw new Error('native unavailable');
+      },
+    };
+
+    await (manager as any).pollCGWindowVisibility();
+
+    assert.ok(manager.getStealthDegradationWarnings().includes('capture_visibility_unknown'));
+  });
+
   it('falls back to hide and show when opacity APIs are unavailable', async () => {
     const intervals: Array<() => Promise<void> | void> = [];
     const timeouts: Array<() => void> = [];
+    let enumeratorCallCount = 0;
     const manager = new StealthManager(
       { enabled: true },
       {
@@ -556,7 +727,10 @@ describe('StealthManager', () => {
           timeouts.push(fn);
           return timeouts.length;
         },
-        processEnumerator: async () => 'obs',
+        processEnumerator: async () => {
+          enumeratorCallCount++;
+          return enumeratorCallCount <= 1 ? 'obs' : '';
+        },
       } as any,
     );
     const win = new FakeWindow();
@@ -564,10 +738,82 @@ describe('StealthManager', () => {
 
     manager.applyToWindow(win as any, true, { role: 'primary' });
     await intervals[0]();
+
     timeouts[0]();
+    await new Promise((r) => setTimeout(r, 0));
 
     assert.strictEqual(win.hideCalls, 1);
     assert.strictEqual(win.showCalls, 1);
+  });
+
+  it('ignores stale capture detections when the watchdog is paused after a poll has already started', async () => {
+    const intervals: Array<() => Promise<void> | void> = [];
+    let resolveEnumerator!: (value: string) => void;
+    const enumeratorPromise = new Promise<string>((resolve) => {
+      resolveEnumerator = resolve;
+    });
+    const manager = new StealthManager(
+      { enabled: true },
+      {
+        platform: 'darwin',
+        logger: silentLogger,
+        featureFlags: { enableCaptureDetectionWatchdog: true },
+        intervalScheduler: (fn: () => Promise<void> | void) => {
+          intervals.push(fn);
+          return intervals.length;
+        },
+        clearIntervalScheduler() {},
+        processEnumerator: async () => enumeratorPromise,
+      } as any,
+    );
+    const win = new FakeWindow();
+
+    manager.applyToWindow(win as any, true, { role: 'primary' });
+
+    const pollPromise = Promise.resolve(intervals[0]?.());
+    manager.pauseWatchdog();
+    manager.pauseWatchdog();
+    manager.pauseWatchdog();
+    resolveEnumerator('screencapture');
+    await pollPromise;
+
+    assert.deepStrictEqual(win.setOpacityCalls, []);
+    assert.strictEqual(win.hideCalls, 0);
+    assert.ok(!manager.getStealthDegradationWarnings().includes('capture_tools_still_running'));
+  });
+
+  it('ignores in-flight capture detections even if the watchdog resumes before the stale poll completes', async () => {
+    const intervals: Array<() => Promise<void> | void> = [];
+    let resolveEnumerator!: (value: string) => void;
+    const enumeratorPromise = new Promise<string>((resolve) => {
+      resolveEnumerator = resolve;
+    });
+    const manager = new StealthManager(
+      { enabled: true },
+      {
+        platform: 'darwin',
+        logger: silentLogger,
+        featureFlags: { enableCaptureDetectionWatchdog: true },
+        intervalScheduler: (fn: () => Promise<void> | void) => {
+          intervals.push(fn);
+          return intervals.length;
+        },
+        clearIntervalScheduler() {},
+        processEnumerator: async () => enumeratorPromise,
+      } as any,
+    );
+    const win = new FakeWindow();
+
+    manager.applyToWindow(win as any, true, { role: 'primary' });
+
+    const pollPromise = Promise.resolve(intervals[0]?.());
+    manager.pauseWatchdog();
+    manager.resumeWatchdog();
+    resolveEnumerator('screencapture');
+    await pollPromise;
+
+    assert.deepStrictEqual(win.setOpacityCalls, []);
+    assert.strictEqual(win.hideCalls, 0);
   });
 
   it('verifies Windows stealth state through native bindings', () => {
@@ -589,6 +835,55 @@ describe('StealthManager', () => {
     manager.applyToWindow(win as any, true, { role: 'primary' });
 
     assert.strictEqual(manager.verifyStealth(win as any), true);
+  });
+
+  it('clears the capture-visibility warning once windows are no longer visible to capture tools', async () => {
+    const win = new FakeWindow();
+    const manager = new StealthManager(
+      { enabled: true },
+      {
+        platform: 'darwin',
+        logger: silentLogger,
+        nativeModule: {
+          applyMacosWindowStealth() {},
+          verifyMacosStealthState() {
+            return 0;
+          },
+        },
+      },
+    );
+
+    manager.applyToWindow(win as any, true, { role: 'primary' });
+
+    (manager as any).getWindowNumbersVisibleToCapture = async () => new Set([101]);
+    await (manager as any).pollCGWindowVisibility();
+    assert.ok(manager.getStealthDegradationWarnings().includes('window_visible_to_capture'));
+
+    (manager as any).getWindowNumbersVisibleToCapture = async () => new Set<number>();
+    await (manager as any).pollCGWindowVisibility();
+    assert.ok(!manager.getStealthDegradationWarnings().includes('window_visible_to_capture'));
+  });
+
+  it('clears transient capture warnings when stealth is disabled', () => {
+    const win = new FakeWindow();
+    const manager = new StealthManager(
+      { enabled: true },
+      {
+        platform: 'darwin',
+        logger: silentLogger,
+      },
+    );
+
+    manager.applyToWindow(win as any, true, { role: 'primary' });
+    (manager as any).addWarning('chromium_capture_active');
+    (manager as any).addWarning('scstream_capture_detected');
+    (manager as any).addWarning('window_visible_to_capture');
+
+    manager.setEnabled(false);
+
+    assert.ok(!manager.getStealthDegradationWarnings().includes('chromium_capture_active'));
+    assert.ok(!manager.getStealthDegradationWarnings().includes('scstream_capture_detected'));
+    assert.ok(!manager.getStealthDegradationWarnings().includes('window_visible_to_capture'));
   });
 
   it('starts macOS virtual display isolation with the current window bounds when the feature flag is enabled', async () => {
@@ -675,6 +970,66 @@ describe('StealthManager', () => {
     ]);
   });
 
+  it('serializes virtual display isolation requests so a second window waits for the first helper call to finish', async () => {
+    const calls: string[] = [];
+    const displays = [{ id: 777, workArea: { x: 200, y: 100, width: 1600, height: 900 } }];
+    let resolveFirstRequest: (() => void) | null = null;
+    const firstRequestSettled = new Promise<void>((resolve) => {
+      resolveFirstRequest = resolve;
+    });
+    const manager = new StealthManager(
+      { enabled: true },
+      {
+        platform: 'darwin',
+        screenApi: {
+          getAllDisplays() {
+            return displays;
+          },
+        },
+        logger: silentLogger,
+        featureFlags: { enableVirtualDisplayIsolation: true },
+        virtualDisplayCoordinator: {
+          ensureIsolationForWindow({ windowId }: { windowId: string }) {
+            calls.push(windowId);
+            if (calls.length === 1) {
+              return firstRequestSettled.then(() => ({
+                ready: true,
+                sessionId: windowId,
+                mode: 'virtual-display' as const,
+                surfaceToken: 'display-777',
+              }));
+            }
+
+            return Promise.resolve({
+              ready: true,
+              sessionId: windowId,
+              mode: 'virtual-display' as const,
+              surfaceToken: 'display-777',
+            });
+          },
+          releaseIsolationForWindow() {
+            return Promise.resolve();
+          },
+        },
+      } as any,
+    );
+    const first = new FakeWindow();
+    const second = new FakeWindow();
+    second.mediaSourceId = 'window:202:0';
+
+    manager.applyToWindow(first as any, true, { role: 'primary', allowVirtualDisplayIsolation: true });
+    manager.applyToWindow(second as any, true, { role: 'primary', allowVirtualDisplayIsolation: true });
+    await flushAsyncWork();
+
+    assert.deepStrictEqual(calls, ['window:101:0']);
+
+    resolveFirstRequest?.();
+    await flushAsyncWork();
+    await flushAsyncWork();
+
+    assert.deepStrictEqual(calls, ['window:101:0', 'window:202:0']);
+  });
+
   it('does not start virtual display isolation unless the window opts in', async () => {
     const calls: Array<{ action: string; windowId: string }> = [];
     const manager = new StealthManager(
@@ -739,7 +1094,7 @@ describe('StealthManager', () => {
 
     ready = true;
     manager.reapplyAfterShow(win as any);
-    await Promise.resolve();
+    await flushAsyncWork();
 
     assert.deepStrictEqual(calls, ['not-ready', 'ready']);
     assert.deepStrictEqual(win.setBoundsCalls, [
@@ -826,7 +1181,7 @@ describe('StealthManager', () => {
     }
 
     manager.reapplyAfterShow(win as any);
-    await Promise.resolve();
+    await flushAsyncWork();
 
     assert.deepStrictEqual(calls, ['window:101:0', 'window:101:0']);
   });
@@ -863,23 +1218,109 @@ describe('StealthManager', () => {
     ]);
   });
 
-  it('only treats shareable CG windows as visible to capture', async () => {
+  it('treats native shareable CG windows as visible to capture without Python fallback', async () => {
+    let processEnumeratorCalled = false;
+    const manager = new StealthManager(
+      { enabled: true },
+      {
+        platform: 'darwin',
+        logger: silentLogger,
+        processEnumerator: async (): Promise<string> => {
+          processEnumeratorCalled = true;
+          return '12345\n67890\n';
+        },
+      },
+    );
+
+    (manager as any).nativeModule = {
+      listVisibleWindows: () => [
+        { windowNumber: 12345, ownerName: 'Natively', ownerPid: 1, windowTitle: 'Protected', isOnScreen: true, sharingState: 1, alpha: 1 },
+        { windowNumber: 22222, ownerName: 'Hidden', ownerPid: 2, windowTitle: 'Hidden', isOnScreen: true, sharingState: 1, alpha: 0 },
+        { windowNumber: 33333, ownerName: 'Private', ownerPid: 3, windowTitle: 'Private', isOnScreen: true, sharingState: 0, alpha: 1 },
+      ],
+    };
+
+    const result = await (manager as any).getWindowNumbersVisibleToCapture();
+
+    assert.ok(result instanceof Set, 'should return a Set');
+    assert.deepEqual(Array.from(result), [12345]);
+    assert.equal(processEnumeratorCalled, false);
+  });
+
+  it('uses Python capture fallback only when native enumeration fails in development', async () => {
     let embeddedScript = '';
     const manager = new StealthManager(
       { enabled: true },
       {
         platform: 'darwin',
         logger: silentLogger,
-        processEnumerator: async (_command: string, args: string[]) => {
+        processEnumerator: async (_command: string, args: string[]): Promise<string> => {
           embeddedScript = args[1] ?? '';
-          return '';
+          return '12345\n67890\n'; // Simulate Python returning window numbers
         },
       },
     );
 
-    await (manager as any).getWindowNumbersVisibleToCapture();
+    (manager as any).nativeModule = {
+      listVisibleWindows: () => {
+        throw new Error('native unavailable');
+      },
+    };
 
-    assert.match(embeddedScript, /sharing_state > 0/);
+    const result = await (manager as any).getWindowNumbersVisibleToCapture();
+
+    assert.ok(result instanceof Set, 'should return a Set');
+    assert.ok(embeddedScript.includes('Quartz'), 'should use Python Quartz when native fails');
+    assert.ok(embeddedScript.includes('sharing_state'), 'should check sharing_state in Python');
+    assert.strictEqual(result.size, 2);
+    assert.ok(result.has(12345));
+    assert.ok(result.has(67890));
+  });
+
+  it('blocks Python capture fallback in strict production mode', async () => {
+    const previousNodeEnv = process.env.NODE_ENV;
+    const previousStrict = process.env.NATIVELY_STRICT_PROTECTION;
+    process.env.NODE_ENV = 'production';
+    process.env.NATIVELY_STRICT_PROTECTION = '1';
+
+    try {
+      let processEnumeratorCalled = false;
+      const manager = new StealthManager(
+        { enabled: true },
+        {
+          platform: 'darwin',
+          logger: silentLogger,
+          processEnumerator: async (): Promise<string> => {
+            processEnumeratorCalled = true;
+            return '12345\n';
+          },
+        },
+      );
+
+      (manager as any).nativeModule = {
+        listVisibleWindows: () => {
+          throw new Error('native unavailable');
+        },
+      };
+
+      const result = await (manager as any).getWindowNumbersVisibleToCapture();
+
+      assert.ok(result instanceof Set);
+      assert.equal(result.size, 0);
+      assert.equal(processEnumeratorCalled, false);
+      assert.ok(manager.getStealthDegradationWarnings().includes('stealth_python_fallback_blocked'));
+    } finally {
+      if (previousNodeEnv === undefined) {
+        delete process.env.NODE_ENV;
+      } else {
+        process.env.NODE_ENV = previousNodeEnv;
+      }
+      if (previousStrict === undefined) {
+        delete process.env.NATIVELY_STRICT_PROTECTION;
+      } else {
+        process.env.NATIVELY_STRICT_PROTECTION = previousStrict;
+      }
+    }
   });
 
   it('compares macOS versions using both major and minor components', () => {

@@ -102,52 +102,40 @@ impl SpeakerInput {
 
         // Get available content - triggers permission check
         // Use blocking wait since we're in a sync context
-        use std::cell::UnsafeCell;
-        use std::sync::{
-            atomic::{AtomicBool, Ordering},
-            Arc,
-        };
+        use std::sync::{Arc, OnceLock};
 
-        let content_cell: Arc<UnsafeCell<Option<arc::R<sc::ShareableContent>>>> =
-            Arc::new(UnsafeCell::new(None));
-        let content_ready = Arc::new(AtomicBool::new(false));
-        let content_error = Arc::new(AtomicBool::new(false));
-
-        let cell_clone = content_cell.clone();
-        let ready_clone = content_ready.clone();
-        let error_clone = content_error.clone();
+        // OnceLock<Result<...>> is Sync + Send — sound cross-thread sharing.
+        let result_cell: Arc<OnceLock<Result<arc::R<sc::ShareableContent>, String>>> =
+            Arc::new(OnceLock::new());
+        let cell_clone = result_cell.clone();
 
         sc::ShareableContent::current_with_ch(move |content_opt, error_opt| {
-            if let Some(e) = error_opt {
-                println!(
-                    "[SpeakerInput] ERROR: ScreenCaptureKit access denied: {:?}",
-                    e
-                );
-                error_clone.store(true, Ordering::SeqCst);
+            let result = if let Some(e) = error_opt {
+                Err(format!("ScreenCaptureKit access denied: {:?}", e))
             } else if let Some(c) = content_opt {
-                // Retain the content
-                unsafe {
-                    *cell_clone.get() = Some(c.retained());
-                }
-            }
-            ready_clone.store(true, Ordering::SeqCst);
+                Ok(c.retained())
+            } else {
+                Err("No content and no error returned".to_string())
+            };
+            // set() is a no-op if already set — safe to call from callback thread.
+            let _ = cell_clone.set(result);
         });
 
-        // Wait for shareable content (max 5 seconds)
-        for _ in 0..500 {
-            if content_ready.load(Ordering::SeqCst) {
-                break;
-            }
+        // Poll until OnceLock is populated (max 5 s).
+        let mut waited_ms = 0u32;
+        while result_cell.get().is_none() && waited_ms < 5000 {
             std::thread::sleep(std::time::Duration::from_millis(10));
+            waited_ms += 10;
         }
 
-        if content_error.load(Ordering::SeqCst) {
-            println!("[SpeakerInput] Please grant Screen Recording permission in System Settings > Privacy & Security");
-            return Err(anyhow::anyhow!("ScreenCaptureKit access denied"));
-        }
-
-        let content = unsafe { (*content_cell.get()).take() }
-            .ok_or_else(|| anyhow::anyhow!("Failed to get shareable content (timeout)"))?;
+        let content = match result_cell.get() {
+            None => return Err(anyhow::anyhow!("ScreenCaptureKit shareable content timed out after 5s")),
+            Some(Err(msg)) => {
+                println!("[SpeakerInput] Please grant Screen Recording permission in System Settings > Privacy & Security");
+                return Err(anyhow::anyhow!("{}", msg));
+            }
+            Some(Ok(c)) => c.clone(),
+        };
 
         let displays = content.displays();
         if displays.is_empty() {

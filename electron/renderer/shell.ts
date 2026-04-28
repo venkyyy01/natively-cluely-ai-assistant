@@ -4,7 +4,10 @@ export interface StealthShellBridge {
   onFrame(callback: (payload: StealthFramePayload) => void): () => void;
   sendInputEvent(event: StealthInputEvent): void;
   notifyReady(): void;
+  notifyHeartbeat(): void;
 }
+
+const SHELL_HEARTBEAT_INTERVAL_MS = 500;
 
 const mapModifiers = (event: MouseEvent | KeyboardEvent | WheelEvent): Array<'shift' | 'control' | 'alt' | 'meta'> => {
   const modifiers: Array<'shift' | 'control' | 'alt' | 'meta'> = [];
@@ -75,4 +78,10 @@ export function mountStealthShell(bridge: StealthShellBridge, documentRef: Docum
 
   bridge.onFrame(drawFrame);
   bridge.notifyReady();
+  bridge.notifyHeartbeat();
+  const heartbeatTimer = setInterval(() => {
+    bridge.notifyHeartbeat();
+  }, SHELL_HEARTBEAT_INTERVAL_MS);
+  const timerHandle = heartbeatTimer as unknown as { unref?: () => void };
+  timerHandle.unref?.();
 }

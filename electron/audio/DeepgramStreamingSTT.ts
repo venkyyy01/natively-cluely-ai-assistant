@@ -13,11 +13,16 @@ import { EventEmitter } from 'events';
 import WebSocket from 'ws';
 import { RECOGNITION_LANGUAGES } from '../config/languages';
 import { resampleToMonoPcm16 } from './pcm';
+import { DropFrameMetric } from './dropMetrics';
+import { startTrace, startSpan, endSpan, setSpanAttribute, traceLogger } from '../tracing';
 
-const RECONNECT_BASE_DELAY_MS = 1000;
-const RECONNECT_MAX_DELAY_MS = 30000;
-const MAX_RECONNECT_ATTEMPTS = 5;
+const RECONNECT_BASE_DELAY_MS = 500;
+const RECONNECT_MAX_DELAY_MS = 10000;
 const KEEPALIVE_INTERVAL_MS = 5000;
+const CONNECT_TIMEOUT_MS = 10000;
+const LIVENESS_CHECK_INTERVAL_MS = 5000;
+const INBOUND_STALL_TIMEOUT_MS = 15000;
+const CONNECTION_GUARD_INTERVAL_MS = 8000;
 const MAX_BUFFER_SIZE = 500;
 
 /**
@@ -29,6 +34,12 @@ class AudioChunkBuffer {
   private head: number = 0;
   private tail: number = 0;
   private count: number = 0;
+  /**
+   * NAT-021: ring-buffer overwrite drops are now visible to the owning
+   * provider via this counter. The provider reads & resets it on each
+   * `push()` so it can forward the delta into its DropFrameMetric.
+   */
+  public droppedSinceLastRead: number = 0;
 
   constructor(private capacity: number) {
     this.buffer = new Array(capacity).fill(null);
@@ -42,6 +53,7 @@ class AudioChunkBuffer {
       // Overwrite oldest
       this.head = (this.head + 1) % this.capacity;
       this.count = this.capacity;
+      this.droppedSinceLastRead += 1;
     }
   }
 
@@ -80,10 +92,18 @@ export class DeepgramStreamingSTT extends EventEmitter {
   private reconnectAttempts = 0;
   private reconnectTimer: NodeJS.Timeout | null = null;
   private keepAliveTimer: NodeJS.Timeout | null = null;
+  private connectTimeoutTimer: NodeJS.Timeout | null = null;
+  private livenessTimer: NodeJS.Timeout | null = null;
+  private connectionGuardTimer: NodeJS.Timeout | null = null;
   private buffer: AudioChunkBuffer = new AudioChunkBuffer(MAX_BUFFER_SIZE);
+  // NAT-021 / audit R-11: surface ring-buffer drops as metrics so silent
+  // audio loss under backpressure becomes visible in observability.
+  private dropMetric = new DropFrameMetric({ provider: 'deepgram' });
   private isConnecting = false;
   private lastInterimTranscript = '';
   private lastInterimConfidence = 1;
+  private lastInboundActivityAt = 0;
+  private lastAudioActivityAt = 0;
 
     constructor(apiKey: string) {
         super();
@@ -131,6 +151,10 @@ export class DeepgramStreamingSTT extends EventEmitter {
         this.isActive = true;
         this.shouldReconnect = true;
         this.reconnectAttempts = 0;
+        this.lastInboundActivityAt = Date.now();
+        this.lastAudioActivityAt = 0;
+        this.startConnectionGuard();
+        this.dropMetric.start(); // NAT-021 — uses captured native setInterval, not visible to tests that mock global setInterval.
         this.connect();
     }
 
@@ -140,12 +164,10 @@ export class DeepgramStreamingSTT extends EventEmitter {
 
     if (this.ws) {
       try {
-        // Send Deepgram's graceful close message
         if (this.ws.readyState === WebSocket.OPEN) {
           this.ws.send(JSON.stringify({ type: 'CloseStream' }));
         }
       } catch {
-        // Ignore send errors during shutdown
       }
       this.ws.close();
       this.ws = null;
@@ -155,6 +177,10 @@ export class DeepgramStreamingSTT extends EventEmitter {
     this.isConnecting = false;
     this.buffer.clear();
     this.lastInterimTranscript = '';
+    this.lastInboundActivityAt = 0;
+    this.lastAudioActivityAt = 0;
+    this.stopConnectionGuard();
+    this.dropMetric.stop(); // NAT-021
     console.log('[DeepgramStreaming] Stopped');
   }
 
@@ -170,8 +196,20 @@ export class DeepgramStreamingSTT extends EventEmitter {
   public write(chunk: Buffer): void {
     if (!this.isActive) return;
 
+    const pcm16 = resampleToMonoPcm16(chunk, this.inputSampleRate, this.numChannels, this.targetSampleRate);
+    if (pcm16.length > 0 && this.hasNonSilentAudio(pcm16)) {
+      this.lastAudioActivityAt = Date.now();
+    }
+
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
       this.buffer.push(chunk); // Ring buffer handles capacity internally
+      // NAT-021: forward any overwrite drops the ring buffer recorded
+      // during this push() into the metric so silent audio loss is
+      // visible in the periodic stt.dropped_frames log line.
+      if (this.buffer.droppedSinceLastRead > 0) {
+        this.dropMetric.recordDrop(this.buffer.droppedSinceLastRead);
+        this.buffer.droppedSinceLastRead = 0;
+      }
 
       if (!this.isConnecting && this.shouldReconnect && !this.reconnectTimer) {
         console.log('[DeepgramStreaming] WS not ready. Lazy connecting on new audio...');
@@ -180,7 +218,6 @@ export class DeepgramStreamingSTT extends EventEmitter {
       return;
     }
 
-    const pcm16 = resampleToMonoPcm16(chunk, this.inputSampleRate, this.numChannels, this.targetSampleRate);
     if (pcm16.length > 0) {
       this.ws.send(pcm16);
     }
@@ -191,7 +228,14 @@ export class DeepgramStreamingSTT extends EventEmitter {
     // =========================================================================
 
     private connect(): void {
-        if (this.isConnecting) return;
+        if (!this.isActive || !this.shouldReconnect || this.isConnecting) {
+            return;
+        }
+
+        if (this.ws?.readyState === WebSocket.OPEN || this.ws?.readyState === WebSocket.CONNECTING) {
+            return;
+        }
+
         this.isConnecting = true;
 
         const url =
@@ -215,6 +259,8 @@ export class DeepgramStreamingSTT extends EventEmitter {
             },
         });
         this.ws = socket;
+        this.lastInboundActivityAt = Date.now();
+        this.armConnectTimeout(socket);
 
   socket.on('open', () => {
     if (this.ws !== socket) {
@@ -223,6 +269,8 @@ export class DeepgramStreamingSTT extends EventEmitter {
 
     this.isConnecting = false;
     this.reconnectAttempts = 0;
+    this.clearConnectTimeout();
+    this.lastInboundActivityAt = Date.now();
     console.log('[DeepgramStreaming] Connected');
 
     // Send buffered audio (ring buffer O(1) per chunk)
@@ -238,6 +286,7 @@ export class DeepgramStreamingSTT extends EventEmitter {
 
     // Start keep-alive pings
     this.startKeepAlive();
+    this.startLivenessWatchdog(socket);
     try {
       this.ws.send(JSON.stringify({ type: 'KeepAlive' }));
     } catch {
@@ -251,19 +300,29 @@ export class DeepgramStreamingSTT extends EventEmitter {
             }
 
             try {
+                this.lastInboundActivityAt = Date.now();
                 const msg = JSON.parse(data.toString());
 
                 // Deepgram response structure:
                 // { type: "Results", channel: { alternatives: [{ transcript, confidence }] }, is_final }
+                //
+                // NAT-009 / audit A-10: Deepgram emits `UtteranceEnd` from a
+                // VAD timer, not from a finalization decision. Synthesizing a
+                // `final` here from `lastInterimTranscript` produced *fake*
+                // finals -- text the user never finished saying -- which then
+                // satisfied the `final===true` gate added in NAT-006 and
+                // committed answers to half-utterances. We now strictly
+                // require `is_final` from the Results message itself, and
+                // only use `UtteranceEnd` for interim-state hygiene plus
+                // telemetry parity tracking.
                 if (msg.type === 'UtteranceEnd') {
-                    if (this.lastInterimTranscript.trim()) {
-                        this.emit('transcript', {
-                            text: this.lastInterimTranscript,
-                            isFinal: true,
-                            confidence: this.lastInterimConfidence,
-                        });
-                        this.lastInterimTranscript = '';
-                    }
+                    this.emit('telemetry', {
+                        kind: 'stt.utterance_end_seen',
+                        hadPendingInterim: this.lastInterimTranscript.trim().length > 0,
+                        pendingInterimLength: this.lastInterimTranscript.length,
+                    });
+                    this.lastInterimTranscript = '';
+                    this.lastInterimConfidence = 0;
                     return;
                 }
 
@@ -282,11 +341,40 @@ export class DeepgramStreamingSTT extends EventEmitter {
                     this.lastInterimTranscript = '';
                 }
 
-                this.emit('transcript', {
-                    text: transcript,
-                    isFinal,
-                    confidence,
-                });
+      // Generate trace context for this transcript
+      const traceId = `stt-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+      const span = startSpan(traceId, `stt.deepgram.transcript.${isFinal ? 'final' : 'interim'}`);
+
+      if (span) {
+        setSpanAttribute(traceId, span.spanId, 'stt.provider', 'deepgram');
+        setSpanAttribute(traceId, span.spanId, 'stt.model', 'nova-3');
+        setSpanAttribute(traceId, span.spanId, 'stt.input_sample_rate', this.inputSampleRate);
+        setSpanAttribute(traceId, span.spanId, 'stt.target_sample_rate', this.targetSampleRate);
+        setSpanAttribute(traceId, span.spanId, 'stt.language', this.languageCode);
+        setSpanAttribute(traceId, span.spanId, 'stt.confidence', confidence);
+        setSpanAttribute(traceId, span.spanId, 'stt.text_length', transcript.length);
+        setSpanAttribute(traceId, span.spanId, 'stt.is_final', isFinal);
+      }
+
+      traceLogger.logSttEvent(traceId, span?.spanId, isFinal ? 'transcript.final' : 'transcript.received', {
+        speaker: 'interviewer', // Deepgram is for interviewer audio
+        text: transcript.substring(0, 200),
+        isFinal,
+        confidence,
+        provider: 'deepgram',
+        sampleRate: this.targetSampleRate,
+      });
+
+      if (span) {
+        endSpan(traceId, span.spanId, 'ok');
+      }
+
+      this.emit('transcript', {
+        text: transcript,
+        isFinal,
+        confidence,
+        traceId, // Pass trace ID for correlation
+      });
             } catch (err) {
                 console.error('[DeepgramStreaming] Parse error:', err);
             }
@@ -302,20 +390,7 @@ export class DeepgramStreamingSTT extends EventEmitter {
         });
 
         socket.on('close', (code: number, reason: Buffer) => {
-            if (this.ws !== socket) {
-                return;
-            }
-
-            this.ws = null;
-            // Do not force isActive=false; let write() trigger reconnect if isActive is still true
-            this.isConnecting = false;
-            this.clearKeepAlive();
-            console.log(`[DeepgramStreaming] Closed (code=${code}, reason=${reason.toString()})`);
-
-            // Auto-reconnect on unexpected close (excluding silence timeout 1000)
-            if (this.shouldReconnect && code !== 1000) {
-                this.scheduleReconnect();
-            }
+            this.handleSocketClose(socket, code, reason);
         });
     }
 
@@ -324,7 +399,7 @@ export class DeepgramStreamingSTT extends EventEmitter {
     // =========================================================================
 
     private scheduleReconnect(): void {
-        if (!this.shouldReconnect) return;
+        if (!this.shouldReconnect || !this.isActive || this.reconnectTimer || this.isConnecting) return;
 
         if (this.reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
             this.shouldReconnect = false;
@@ -371,6 +446,54 @@ export class DeepgramStreamingSTT extends EventEmitter {
         }, KEEPALIVE_INTERVAL_MS);
     }
 
+    private startConnectionGuard(): void {
+        this.stopConnectionGuard();
+        this.connectionGuardTimer = setInterval(() => {
+            if (!this.isActive || !this.shouldReconnect || this.isConnecting || this.reconnectTimer) {
+                return;
+            }
+
+            if (this.ws?.readyState === WebSocket.OPEN || this.ws?.readyState === WebSocket.CONNECTING) {
+                return;
+            }
+
+            console.warn('[DeepgramStreaming] Connection guard detected inactive socket. Reconnecting...');
+            this.connect();
+        }, CONNECTION_GUARD_INTERVAL_MS);
+    }
+
+    private stopConnectionGuard(): void {
+        if (this.connectionGuardTimer) {
+            clearInterval(this.connectionGuardTimer);
+            this.connectionGuardTimer = null;
+        }
+    }
+
+    private startLivenessWatchdog(socket: WebSocket): void {
+        this.clearLivenessWatchdog();
+        this.livenessTimer = setInterval(() => {
+            if (this.ws !== socket || socket.readyState !== WebSocket.OPEN) {
+                return;
+            }
+
+            if (this.lastAudioActivityAt === 0) {
+                return;
+            }
+
+            const now = Date.now();
+            if (now - this.lastAudioActivityAt > INBOUND_STALL_TIMEOUT_MS) {
+                return;
+            }
+
+            if (now - this.lastInboundActivityAt <= INBOUND_STALL_TIMEOUT_MS) {
+                return;
+            }
+
+            console.warn('[DeepgramStreaming] No inbound activity while audio is flowing. Recycling socket...');
+            this.abortSocket(socket, 1006, 'inbound-stall');
+        }, LIVENESS_CHECK_INTERVAL_MS);
+    }
+
     private clearKeepAlive(): void {
         if (this.keepAliveTimer) {
             clearInterval(this.keepAliveTimer);
@@ -378,8 +501,91 @@ export class DeepgramStreamingSTT extends EventEmitter {
         }
     }
 
+    private clearLivenessWatchdog(): void {
+        if (this.livenessTimer) {
+            clearInterval(this.livenessTimer);
+            this.livenessTimer = null;
+        }
+    }
+
+    private armConnectTimeout(socket: WebSocket): void {
+        this.clearConnectTimeout();
+        this.connectTimeoutTimer = setTimeout(() => {
+            if (this.ws !== socket || !this.isConnecting) {
+                return;
+            }
+
+            console.warn('[DeepgramStreaming] Connection attempt timed out. Recycling socket...');
+            this.abortSocket(socket, 1006, 'connect-timeout');
+        }, CONNECT_TIMEOUT_MS);
+    }
+
+    private clearConnectTimeout(): void {
+        if (this.connectTimeoutTimer) {
+            clearTimeout(this.connectTimeoutTimer);
+            this.connectTimeoutTimer = null;
+        }
+    }
+
+    private abortSocket(socket: WebSocket, code: number, reason: string): void {
+        if (this.ws !== socket) {
+            return;
+        }
+
+        try {
+            const terminable = socket as WebSocket & { terminate?: () => void };
+            if (typeof terminable.terminate === 'function') {
+                terminable.terminate();
+            } else {
+                socket.close();
+            }
+        } catch {
+            // Ignore close/terminate errors during forced recycling
+        }
+
+        this.handleSocketClose(socket, code, Buffer.from(reason));
+    }
+
+    private handleSocketClose(socket: WebSocket, code: number, reason: Buffer): void {
+        if (this.ws !== socket) {
+            return;
+        }
+
+        this.ws = null;
+        // Do not force isActive=false; let write() trigger reconnect if isActive is still true
+        this.isConnecting = false;
+        this.clearKeepAlive();
+        this.clearLivenessWatchdog();
+        this.clearConnectTimeout();
+        console.log(`[DeepgramStreaming] Closed (code=${code}, reason=${reason.toString()})`);
+
+        // Auto-reconnect on any close while active.
+        // Intentional shutdown sets shouldReconnect=false in stop().
+        if (this.shouldReconnect) {
+            this.scheduleReconnect();
+        }
+    }
+
+    private static readonly SILENCE_RMS_THRESHOLD = 50;
+
+    private hasNonSilentAudio(chunk: Buffer): boolean {
+        let sum = 0;
+        let count = 0;
+        const step = 20;
+        for (let i = 0; i + 1 < chunk.length; i += 2 * step) {
+            const sample = chunk.readInt16LE(i);
+            sum += sample * sample;
+            count++;
+        }
+        if (count === 0) return false;
+        return Math.sqrt(sum / count) >= DeepgramStreamingSTT.SILENCE_RMS_THRESHOLD;
+    }
+
     private clearTimers(): void {
         this.clearKeepAlive();
+        this.clearLivenessWatchdog();
+        this.clearConnectTimeout();
+        this.stopConnectionGuard();
         if (this.reconnectTimer) {
             clearTimeout(this.reconnectTimer);
             this.reconnectTimer = null;

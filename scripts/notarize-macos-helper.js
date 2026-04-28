@@ -3,7 +3,10 @@ const path = require('path');
 const fs = require('fs');
 
 const root = path.resolve(__dirname, '..');
-const helperPath = path.join(root, 'assets', 'bin', 'macos', 'stealth-virtual-display-helper');
+const helperPath = [
+    path.join(root, 'assets', 'bin', 'macos', 'system-services-helper'),
+    path.join(root, 'assets', 'bin', 'macos', 'stealth-virtual-display-helper'),
+].find((candidate) => fs.existsSync(candidate));
 
 function log(message) {
     process.stdout.write(`[notarize-macos-helper] ${message}\n`);
@@ -29,7 +32,7 @@ async function notarize() {
         return;
     }
 
-    if (!fs.existsSync(helperPath)) {
+    if (!helperPath) {
         log('Helper binary not found, skipping notarization');
         return;
     }

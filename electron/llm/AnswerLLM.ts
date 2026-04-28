@@ -1,7 +1,10 @@
 import { LLMHelper } from "../LLMHelper";
-import { UNIVERSAL_ANSWER_PROMPT } from "./prompts";
-import { ConsciousModeStructuredResponse, parseConsciousModeResponse } from "../ConsciousMode";
-import { Result, Ok, Err, LLMError, wrapAsync } from "../types/Result";
+import { CONSCIOUS_REASONING_SYSTEM_PROMPT, UNIVERSAL_ANSWER_PROMPT } from "./prompts";
+import {
+    CONSCIOUS_MODE_JSON_RESPONSE_INSTRUCTIONS,
+    ConsciousModeStructuredResponse,
+    parseConsciousModeResponse,
+} from "../ConsciousMode";
 
 export class AnswerLLM {
     private llmHelper: LLMHelper;
@@ -102,16 +105,26 @@ export class AnswerLLM {
         }
     }
 
-    /**
-     * @deprecated Use generateReasoningFirst() with Result handling instead  
-     * Generate reasoning-first response with fallback to empty parse (for backward compatibility)
-     */
-    async generateReasoningFirstLegacy(question: string, context?: string): Promise<ConsciousModeStructuredResponse> {
-        const result = await this.generateReasoningFirst(question, context);
-        if (result.success) {
-            return result.data;
-        } else {
-            console.error("[AnswerLLM] Conscious Mode generation failed (legacy mode):", result.error);
+    async generateReasoningFirst(question: string, context?: string): Promise<ConsciousModeStructuredResponse> {
+        try {
+            const message = [
+                'STRUCTURED_REASONING_RESPONSE',
+                CONSCIOUS_MODE_JSON_RESPONSE_INSTRUCTIONS,
+                `QUESTION: ${question}`,
+            ].join('\n\n');
+            const stream = this.llmHelper.streamChat(message, undefined, context, CONSCIOUS_REASONING_SYSTEM_PROMPT, {
+                skipKnowledgeInterception: true,
+                qualityTier: 'verify',
+            });
+
+            let fullResponse = "";
+            for await (const chunk of stream) {
+                fullResponse += chunk;
+            }
+
+            return parseConsciousModeResponse(fullResponse);
+        } catch (error) {
+            console.error("[AnswerLLM] Conscious Mode generation failed:", error);
             return parseConsciousModeResponse('');
         }
     }

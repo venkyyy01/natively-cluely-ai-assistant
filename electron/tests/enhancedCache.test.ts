@@ -44,7 +44,7 @@ describe('EnhancedCache', () => {
     assert.strictEqual(oldest, undefined);
   });
 
-  it('should support semantic similarity lookup', async () => {
+  it('should support semantic similarity lookup within a binding domain', async () => {
     const config: CacheConfig = {
       maxMemoryMB: 10,
       ttlMs: 60000,
@@ -53,9 +53,32 @@ describe('EnhancedCache', () => {
     };
     const semanticCache = new EnhancedCache<string, string>(config);
 
-    await semanticCache.set('query1', 'answer1', [1, 0, 0]);
+    await semanticCache.set('rev1:query1', 'answer1', [1, 0, 0]);
 
-    const result = await semanticCache.get('query2', [0.9, 0.1, 0]);
+    const result = await semanticCache.get('rev1:query2', [0.9, 0.1, 0], 'rev1:');
     assert.strictEqual(result, 'answer1');
+  });
+
+  it('NAT-003: semantic lookup is partitioned by bindKeyPrefix and never bleeds across domains', async () => {
+    const config: CacheConfig = {
+      maxMemoryMB: 10,
+      ttlMs: 60000,
+      enableSemanticLookup: true,
+      similarityThreshold: 0.8,
+    };
+    const semanticCache = new EnhancedCache<string, string>(config);
+
+    // Two domains store identical embeddings under different prefixes.
+    await semanticCache.set('rev1:query', 'answer-from-rev1', [1, 0, 0]);
+    await semanticCache.set('rev2:query', 'answer-from-rev2', [1, 0, 0]);
+
+    // A rev2 lookup with a near embedding must NEVER return rev1's value,
+    // even though the embeddings are identical (audit A-3 / NAT-003).
+    const result = await semanticCache.get('rev2:other-query', [1, 0, 0], 'rev2:');
+    assert.strictEqual(result, 'answer-from-rev2');
+
+    // And a lookup that forgets to pass a prefix must refuse semantic match.
+    const unbounded = await semanticCache.get('rev2:other-query', [1, 0, 0]);
+    assert.strictEqual(unbounded, undefined);
   });
 });

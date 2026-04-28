@@ -81,6 +81,11 @@ export class DatabaseManager {
         return DatabaseManager.instance;
     }
 
+    /** Absolute path to the SQLite DB file (e.g. worker_threads that open their own handle). */
+    public getDatabasePath(): string {
+        return this.dbPath;
+    }
+
     private init() {
         try {
             console.log(`[DatabaseManager] Initializing database at ${this.dbPath}`);
@@ -625,6 +630,61 @@ export class DatabaseManager {
     private ensuredDims = new Set<number>();
 
     /**
+     * Close the underlying SQLite connection and release the singleton.
+     *
+     * Must be called from `cleanupForQuit()` (and any test teardown that opens
+     * a real DB) so better-sqlite3 can run a `PRAGMA wal_checkpoint(TRUNCATE)`
+     * via `Database.close()`. Without this call the `*.db-wal` / `*.db-shm`
+     * files hang around in `userData/` after a graceful shutdown and can
+     * silently disable subsequent transactions on next launch.
+     *
+     * Safe to call multiple times: a second invocation is a no-op once the
+     * handle has been nulled.
+     */
+    public close(): void {
+        if (!this.db) return;
+        try {
+            // Force a full checkpoint and truncate the WAL before close. With
+            // `journal_mode=WAL`, better-sqlite3.close() alone leaves
+            // `*.db-wal` and `*.db-shm` sidecar files in userData/ which then
+            // cause noisy "stale WAL" recovery on next launch. Switching to
+            // `journal_mode=DELETE` after the checkpoint deletes both
+            // sidecars cleanly. Both pragmas are best-effort: a corrupted DB
+            // or an exclusive-lock contention should still let the process
+            // exit, so we swallow errors per-step.
+            try { this.db.pragma('wal_checkpoint(TRUNCATE)'); } catch (error) {
+                console.warn('[DatabaseManager] wal_checkpoint(TRUNCATE) failed on close:', error);
+            }
+            try { this.db.pragma('journal_mode = DELETE'); } catch (error) {
+                if ((error as NodeJS.ErrnoException | undefined)?.code !== 'SQLITE_BUSY') {
+                    console.warn('[DatabaseManager] journal_mode=DELETE failed on close:', error);
+                }
+            }
+            this.db.close();
+            console.log('[DatabaseManager] Closed SQLite connection (WAL truncated).');
+        } catch (error) {
+            console.error('[DatabaseManager] Error while closing DB:', error);
+        } finally {
+            this.db = null;
+            this.ensuredDims.clear();
+            // Allow a future getInstance() (e.g. in tests) to re-open the DB.
+            (DatabaseManager as unknown as { instance?: DatabaseManager }).instance = undefined;
+        }
+    }
+
+    /**
+     * Close the singleton if it has been instantiated; otherwise a no-op.
+     *
+     * Use from shutdown hooks where calling `getInstance().close()` would
+     * spuriously create a fresh DB connection just to immediately tear it
+     * down (e.g. if shutdown fires before any DB consumer ran).
+     */
+    public static closeIfOpen(): void {
+        const existing = (DatabaseManager as unknown as { instance?: DatabaseManager }).instance;
+        if (existing) existing.close();
+    }
+
+    /**
      * Lazily create a per-dimension vec0 table pair if not already present.
      * Called by v8 migration and at runtime when a new embedding dimension is first seen.
      * Uses an in-memory cache to avoid redundant CREATE TABLE IF NOT EXISTS on every insert.
@@ -835,6 +895,11 @@ export class DatabaseManager {
     }
 
     public createOrUpdateMeetingProcessingRecord(meeting: Meeting, startTimeMs: number, durationMs: number): void {
+        const existing = this.getMeetingDetails(meeting.id);
+        if (existing && existing.isProcessed) {
+            console.warn(`[DatabaseManager] Skipping overwrite of finalized meeting ${meeting.id}`);
+            return;
+        }
         this.saveMeeting({
             ...meeting,
             isProcessed: false,
