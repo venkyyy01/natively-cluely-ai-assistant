@@ -453,7 +453,7 @@ The existing `ReasoningThread.embedding` field (types.ts:63) is populated but un
 
 ## 4. Sprint D — Efficiency & Robustness (2-4 weeks)
 
-### CMU-007 — Acceleration: fuzzy speculative selection with cosine similarity
+### CMU-007 — Acceleration: fuzzy speculative selection with cosine similarity ~~[ ]~~ **[x]**
 
 - **Severity**: P2
 - **Subsystem**: conscious / acceleration

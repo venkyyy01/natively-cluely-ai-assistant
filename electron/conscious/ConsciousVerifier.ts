@@ -5,12 +5,15 @@ import type { QuestionReaction } from './QuestionReactionClassifier';
 import { isVerifierOptimizationActive } from '../config/optimizations';
 import techAllowlist from './data/techAllowlist.json';
 import { StarScorer } from './StarScorer';
+import { BayesianVerifierAggregator, type VerifierResult } from './BayesianVerifierAggregator';
 
 export interface ConsciousVerificationResult {
   ok: boolean;
   reason?: string;
   deterministic?: 'pass' | 'fail' | 'skipped';
   judge?: 'pass' | 'fail' | 'skipped';
+  posterior?: number; // Bayesian aggregated confidence
+  decision?: 'accept' | 'reject' | 'reroute'; // Bayesian decision
 }
 
 export interface ConsciousVerifierJudgeInput {
@@ -21,6 +24,7 @@ export interface ConsciousVerifierJudgeInput {
   evidence?: Array<'suggested' | 'inferred'>;
   question: string;
   skipJudge?: boolean;
+  provenanceResult?: { ok: boolean; confidence?: number } | null; // Optional provenance verification result
 }
 
 export interface ConsciousVerifierJudge {
@@ -247,6 +251,14 @@ export class ConsciousVerifier {
 
   async verify(input: ConsciousVerifierJudgeInput): Promise<ConsciousVerificationResult> {
     const ruleVerdict = this.verifyRules(input);
+    
+    // Use Bayesian aggregation if flag is enabled and we have all verifier results
+    const useBayesian = isVerifierOptimizationActive('useBayesianAggregation');
+    if (useBayesian && input.provenanceResult !== undefined) {
+      return this.verifyWithBayesianAggregation(input, ruleVerdict);
+    }
+    
+    // Original hard AND chain (fallback or when flag is disabled)
     if (!ruleVerdict.ok) {
       return ruleVerdict;
     }
@@ -283,6 +295,70 @@ export class ConsciousVerifier {
         ? { ok: false, reason: 'judge_execution_failed', deterministic: 'pass', judge: 'fail' }
         : { ...ruleVerdict, judge: 'skipped', reason: ruleVerdict.reason ?? 'judge_execution_failed' };
     }
+  }
+
+  private async verifyWithBayesianAggregation(
+    input: ConsciousVerifierJudgeInput,
+    ruleVerdict: ConsciousVerificationResult
+  ): Promise<ConsciousVerificationResult> {
+    const aggregator = new BayesianVerifierAggregator();
+    const results: VerifierResult[] = [];
+
+    // Add deterministic rules result
+    results.push(BayesianVerifierAggregator.deterministicResult(
+      ruleVerdict.ok,
+      ruleVerdict.ok ? 0.8 : 0.2
+    ));
+
+    // Add provenance result if available
+    if (input.provenanceResult) {
+      results.push(BayesianVerifierAggregator.provenanceResult(
+        input.provenanceResult.ok,
+        input.provenanceResult.confidence ?? 0.5
+      ));
+    }
+
+    // Add judge result if available
+    if (!input.skipJudge && this.judge) {
+      try {
+        const judgeVerdict = await this.judge.judge(input);
+        if (judgeVerdict) {
+          results.push(BayesianVerifierAggregator.judgeResult(
+            judgeVerdict.ok,
+            judgeVerdict.ok ? 0.8 : 0.2
+          ));
+        }
+      } catch {
+        // Judge failed, skip it
+      }
+    }
+
+    // Aggregate results
+    const aggregation = aggregator.aggregate(results);
+
+    // Map Bayesian decision to ConsciousVerificationResult
+    let ok: boolean;
+    let reason: string | undefined;
+
+    if (aggregation.decision === 'accept') {
+      ok = true;
+    } else if (aggregation.decision === 'reject') {
+      ok = false;
+      reason = 'bayesian_reject';
+    } else {
+      // reroute - treat as ok but with a note
+      ok = true;
+      reason = 'bayesian_reroute';
+    }
+
+    return {
+      ok,
+      reason,
+      deterministic: ruleVerdict.ok ? 'pass' : 'fail',
+      judge: results.find(r => r.name === 'judge')?.passed ? 'pass' : 'skipped',
+      posterior: aggregation.posterior,
+      decision: aggregation.decision,
+    };
   }
 
   private verifyRules(input: ConsciousVerifierJudgeInput): ConsciousVerificationResult {
