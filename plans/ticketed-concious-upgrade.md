@@ -330,7 +330,7 @@ The existing `ReasoningThread.embedding` field (types.ts:63) is populated but un
 
 ## 3. Sprint C — Personalization & Paraphrase Tolerance (2-4 weeks)
 
-### CMU-005 — Reaction: SetFit classifier for question reaction classification
+### CMU-005 — Reaction: SetFit classifier for question reaction classification ~~[ ]~~ **[x]**
 
 - **Severity**: P1
 - **Subsystem**: conscious / reaction
