@@ -3,7 +3,7 @@ import { InterviewPhase } from './types';
 import { PauseDetector, PauseAction, PauseConfidence } from '../pause/PauseDetector';
 import { PauseThresholdTuner } from '../pause/PauseThresholdTuner';
 import { detectQuestion } from './QuestionDetector';
-import { isOptimizationActive } from '../config/optimizations';
+import { isOptimizationActive, isVerifierOptimizationActive } from '../config/optimizations';
 import type { RuntimeBudgetScheduler } from '../runtime/RuntimeBudgetScheduler';
 import type { IntentResult } from '../llm/IntentClassifier';
 import { getIntentConfidenceService } from '../llm/IntentConfidenceService';
@@ -394,7 +394,41 @@ export class ConsciousAccelerationOrchestrator {
     // may be useful for *discarding* candidates in a future change, but never for
     // *selecting* the entry that we promote as the answer.
     const exact = entries.find((entry) => this.normalizeQuery(entry.query) === this.normalizeQuery(query));
-    return exact ?? null;
+    if (exact) {
+      return exact;
+    }
+
+    // Fuzzy speculation: try to find a close match when no exact match exists
+    const useFuzzy = isVerifierOptimizationActive('useFuzzySpeculation');
+    if (useFuzzy) {
+      const queryEmbedding = await this.prefetcher.getSemanticEmbedding(query);
+      if (!queryEmbedding) {
+        return null;
+      }
+
+      const FUZZY_THRESHOLD = 0.92;
+      let bestMatch: SpeculativeAnswerEntry | null = null;
+      let bestSimilarity = 0;
+
+      for (const entry of entries) {
+        if (!entry.embedding || entry.embedding.length === 0) {
+          continue;
+        }
+
+        const similarity = this.cosineSimilarity(queryEmbedding, entry.embedding);
+        if (similarity > bestSimilarity && similarity >= FUZZY_THRESHOLD) {
+          bestSimilarity = similarity;
+          bestMatch = entry;
+        }
+      }
+
+      if (bestMatch) {
+        console.log(`[ConsciousAccelerationOrchestrator] Fuzzy match found: "${query}" -> "${bestMatch.query}" (similarity: ${bestSimilarity.toFixed(3)})`);
+        return bestMatch;
+      }
+    }
+
+    return null;
   }
 
   private async maybeStartSpeculativeAnswer(): Promise<void> {

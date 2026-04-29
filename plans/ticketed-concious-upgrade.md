@@ -391,7 +391,7 @@ The existing `ReasoningThread.embedding` field (types.ts:63) is populated but un
 
 ---
 
-### CMU-006 — Pause: online learning for adaptive pause weights (per-user, per-language)
+### CMU-006 — Pause: online learning for adaptive pause weights (per-user, per-language) ~~[ ]~~ **[x]**
 
 - **Severity**: P1
 - **Subsystem**: conscious / pause

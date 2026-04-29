@@ -56,6 +56,9 @@ export interface OptimizationFlags {
   /** Pause detection: use adaptive pause weights with online learning */
   useAdaptivePause: boolean;
 
+  /** Acceleration: use fuzzy speculation with cosine similarity */
+  useFuzzySpeculation: boolean;
+
   /** Worker thread configuration */
   workerThreadCount: number;
 
@@ -166,6 +169,9 @@ export const DEFAULT_OPTIMIZATION_FLAGS: OptimizationFlags = {
   // Pause detection
   useAdaptivePause: false,
 
+  // Acceleration
+  useFuzzySpeculation: false,
+
   // Worker config (6 cores default, user-adjustable)
   workerThreadCount: 6,
 
@@ -232,7 +238,7 @@ export function isOptimizationActive(key: keyof Omit<OptimizationFlags, 'acceler
  * Check if a conscious mode verifier optimization is active
  * These run independently of the acceleration master toggle since they affect correctness
  */
-export function isVerifierOptimizationActive(key: 'useConsciousVerifierWordBoundary' | 'useDegradedProvenanceCheck' | 'useTighterNumericClaimRegex' | 'useExpandedTechAllowlist' | 'useSemanticThreadContinuation' | 'useConfidenceCalibration' | 'useSemanticEntailment' | 'useProbabilisticStar' | 'useSetFitReactions' | 'useAdaptivePause'): boolean {
+export function isVerifierOptimizationActive(key: 'useConsciousVerifierWordBoundary' | 'useDegradedProvenanceCheck' | 'useTighterNumericClaimRegex' | 'useExpandedTechAllowlist' | 'useSemanticThreadContinuation' | 'useConfidenceCalibration' | 'useSemanticEntailment' | 'useProbabilisticStar' | 'useSetFitReactions' | 'useAdaptivePause' | 'useFuzzySpeculation'): boolean {
   return currentFlags[key];
 }
 
