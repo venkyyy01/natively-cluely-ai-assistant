@@ -511,7 +511,7 @@ The existing `ReasoningThread.embedding` field (types.ts:63) is populated but un
 
 ---
 
-### CMU-008 — Verifier: Bayesian confidence aggregation across verifiers
+### CMU-008 — Verifier: Bayesian confidence aggregation across verifiers ~~[ ]~~ **[x]**
 
 - **Severity**: P1
 - **Subsystem**: conscious / verifier

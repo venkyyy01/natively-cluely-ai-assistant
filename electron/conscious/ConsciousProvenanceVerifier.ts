@@ -2,6 +2,7 @@ import type { ConsciousModeStructuredResponse } from '../ConsciousMode';
 import type { AnswerHypothesis } from './AnswerHypothesisStore';
 import { SemanticEntailmentVerifier } from './SemanticEntailmentVerifier';
 import { isVerifierOptimizationActive } from '../config/optimizations';
+import { TranscriptIndex, type SearchResult } from './TranscriptIndex';
 
 export interface ConsciousProvenanceVerdict {
   ok: boolean;
@@ -269,8 +270,25 @@ export class ConsciousProvenanceVerifier {
     evidenceContextBlock?: string;
     question?: string;
     hypothesis?: AnswerHypothesis | null;
+    transcriptIndex?: TranscriptIndex | null;
   }): Promise<ConsciousProvenanceVerdict> {
-    const grounding = this.normalizeGroundingContext(input);
+    // Expand grounding context with RAG if flag is enabled
+    let expandedSemanticContext = input.semanticContextBlock || '';
+    const useRAG = isVerifierOptimizationActive('useRAGVerification');
+    if (useRAG && input.transcriptIndex) {
+      const responseText = summaryText(input.response);
+      const ragResults = input.transcriptIndex.search(responseText);
+      if (ragResults.length > 0) {
+        const ragContext = ragResults.map(r => r.segment.text).join(' ');
+        expandedSemanticContext = [expandedSemanticContext, ragContext].filter(Boolean).join(' ');
+        console.log(`[ConsciousProvenanceVerifier] RAG expanded grounding with ${ragResults.length} segments`);
+      }
+    }
+
+    const grounding = this.normalizeGroundingContext({ 
+      semanticContextBlock: expandedSemanticContext,
+      evidenceContextBlock: input.evidenceContextBlock 
+    });
     const hasStrictGroundingContext = Boolean(grounding.strict);
 
     if (!hasStrictGroundingContext) {
