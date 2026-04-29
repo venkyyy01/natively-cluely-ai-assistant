@@ -625,7 +625,7 @@ Current verification is a hard `AND` chain (rules → provenance → judge). Fai
 
 ---
 
-### CMU-010 — Verifier: retrieval-augmented verification (RAG over session transcript)
+### CMU-010 — Verifier: retrieval-augmented verification (RAG over session transcript) ~~[ ]~~ **[x]**
 
 - **Severity**: P2
 - **Subsystem**: conscious / verifier

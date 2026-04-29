@@ -65,6 +65,9 @@ export interface OptimizationFlags {
   /** Verifier: use RAG over session transcript for verification */
   useRAGVerification: boolean;
 
+  /** Verifier: use verification logging for active learning */
+  useVerificationLogging: boolean;
+
   /** Worker thread configuration */
   workerThreadCount: number;
 
@@ -181,6 +184,7 @@ export const DEFAULT_OPTIMIZATION_FLAGS: OptimizationFlags = {
   // Verifier
   useBayesianAggregation: false,
   useRAGVerification: false,
+  useVerificationLogging: false,
 
   // Worker config (6 cores default, user-adjustable)
   workerThreadCount: 6,
@@ -248,7 +252,7 @@ export function isOptimizationActive(key: keyof Omit<OptimizationFlags, 'acceler
  * Check if a conscious mode verifier optimization is active
  * These run independently of the acceleration master toggle since they affect correctness
  */
-export function isVerifierOptimizationActive(key: 'useConsciousVerifierWordBoundary' | 'useDegradedProvenanceCheck' | 'useTighterNumericClaimRegex' | 'useExpandedTechAllowlist' | 'useSemanticThreadContinuation' | 'useConfidenceCalibration' | 'useSemanticEntailment' | 'useProbabilisticStar' | 'useSetFitReactions' | 'useAdaptivePause' | 'useFuzzySpeculation' | 'useBayesianAggregation' | 'useRAGVerification'): boolean {
+export function isVerifierOptimizationActive(key: 'useConsciousVerifierWordBoundary' | 'useDegradedProvenanceCheck' | 'useTighterNumericClaimRegex' | 'useExpandedTechAllowlist' | 'useSemanticThreadContinuation' | 'useConfidenceCalibration' | 'useSemanticEntailment' | 'useProbabilisticStar' | 'useSetFitReactions' | 'useAdaptivePause' | 'useFuzzySpeculation' | 'useBayesianAggregation' | 'useRAGVerification' | 'useVerificationLogging'): boolean {
   return currentFlags[key];
 }
 

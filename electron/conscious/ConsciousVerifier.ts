@@ -6,6 +6,7 @@ import { isVerifierOptimizationActive } from '../config/optimizations';
 import techAllowlist from './data/techAllowlist.json';
 import { StarScorer } from './StarScorer';
 import { BayesianVerifierAggregator, type VerifierResult } from './BayesianVerifierAggregator';
+import { VerificationLogger } from './VerificationLogger';
 
 export interface ConsciousVerificationResult {
   ok: boolean;
@@ -33,6 +34,7 @@ export interface ConsciousVerifierJudge {
 
 export interface ConsciousVerifierOptions {
   requireJudge?: boolean;
+  profileId?: string;
 }
 
 function hasSubstance(response: ConsciousModeStructuredResponse): boolean {
@@ -244,10 +246,17 @@ function hasUnsupportedTechnologyClaim(responseText: string, groundingText: stri
 }
 
 export class ConsciousVerifier {
+  private verificationLogger: VerificationLogger | null = null;
+
   constructor(
     private readonly judge: ConsciousVerifierJudge | null = null,
     private readonly options: ConsciousVerifierOptions = {},
-  ) {}
+  ) {
+    const useLogging = isVerifierOptimizationActive('useVerificationLogging');
+    if (useLogging && options.profileId) {
+      this.verificationLogger = new VerificationLogger(options.profileId);
+    }
+  }
 
   async verify(input: ConsciousVerifierJudgeInput): Promise<ConsciousVerificationResult> {
     const ruleVerdict = this.verifyRules(input);
@@ -260,15 +269,18 @@ export class ConsciousVerifier {
     
     // Original hard AND chain (fallback or when flag is disabled)
     if (!ruleVerdict.ok) {
+      this.logVerification(input, ruleVerdict, 'deterministic');
       return ruleVerdict;
     }
 
     // Skip judge when explicitly requested (degraded mode / circuit breaker open)
     if (input.skipJudge) {
+      this.logVerification(input, ruleVerdict, 'deterministic');
       return { ...ruleVerdict, judge: 'skipped' };
     }
 
     if (!this.judge) {
+      this.logVerification(input, ruleVerdict, 'deterministic');
       return this.options.requireJudge
         ? { ok: false, reason: 'judge_unavailable', deterministic: 'pass', judge: 'fail' }
         : { ...ruleVerdict, judge: 'skipped' };
@@ -277,23 +289,48 @@ export class ConsciousVerifier {
     try {
       const judgeVerdict = await this.judge.judge(input);
       if (!judgeVerdict) {
+        this.logVerification(input, ruleVerdict, 'deterministic');
         return this.options.requireJudge
           ? { ok: false, reason: 'judge_unavailable', deterministic: 'pass', judge: 'fail' }
           : { ...ruleVerdict, judge: 'skipped', reason: ruleVerdict.reason ?? 'judge_unavailable' };
       }
 
-      return judgeVerdict.ok
-        ? { ...ruleVerdict, judge: 'pass' }
+      const result: ConsciousVerificationResult = judgeVerdict.ok
+        ? { ...ruleVerdict, judge: 'pass' as const }
         : {
             ok: false,
             reason: judgeVerdict.reason,
-            deterministic: 'pass',
-            judge: 'fail',
+            deterministic: 'pass' as const,
+            judge: 'fail' as const,
           };
+      
+      this.logVerification(input, result, 'judge');
+      return result;
     } catch {
+      this.logVerification(input, ruleVerdict, 'deterministic');
       return this.options.requireJudge
         ? { ok: false, reason: 'judge_execution_failed', deterministic: 'pass', judge: 'fail' }
         : { ...ruleVerdict, judge: 'skipped', reason: ruleVerdict.reason ?? 'judge_execution_failed' };
+    }
+  }
+
+  private logVerification(input: ConsciousVerifierJudgeInput, result: ConsciousVerificationResult, verifierType: 'deterministic' | 'provenance' | 'judge' | 'bayesian'): void {
+    if (!this.verificationLogger) return;
+
+    try {
+      const responseText = summaryText(input.response);
+      const groundingText = input.hypothesis?.latestSuggestedAnswer || '';
+      
+      this.verificationLogger.log({
+        timestamp: Date.now(),
+        response: responseText,
+        grounding: groundingText,
+        verdict: result.ok ? 'pass' : 'fail',
+        reason: result.reason,
+        verifierType,
+      });
+    } catch (error) {
+      console.warn('[ConsciousVerifier] Failed to log verification:', error);
     }
   }
 
