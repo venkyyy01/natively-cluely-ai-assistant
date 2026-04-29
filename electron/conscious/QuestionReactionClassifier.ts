@@ -1,5 +1,7 @@
 import type { ConsciousModeStructuredResponse, ReasoningThread } from '../ConsciousMode';
 import type { AnswerHypothesis } from './AnswerHypothesisStore';
+import { SetFitReactionClassifier } from './SetFitReactionClassifier';
+import { isVerifierOptimizationActive } from '../config/optimizations';
 
 export type QuestionReactionKind =
   | 'fresh_question'
@@ -50,6 +52,8 @@ function collectTargets(response?: ConsciousModeStructuredResponse | null): stri
 }
 
 export class QuestionReactionClassifier {
+  private setFitClassifier = new SetFitReactionClassifier();
+
   classify(input: {
     question: string;
     activeThread: ReasoningThread | null;
@@ -71,6 +75,75 @@ export class QuestionReactionClassifier {
         shouldContinueThread: false,
       };
     }
+
+    // Fallback to regex-based classification (synchronous)
+    return this.classifyWithRegex(normalized, lower, targetFacets);
+  }
+
+  async classifyAsync(input: {
+    question: string;
+    activeThread: ReasoningThread | null;
+    latestResponse?: ConsciousModeStructuredResponse | null;
+    latestHypothesis?: AnswerHypothesis | null;
+  }): Promise<QuestionReaction> {
+    const normalized = input.question.trim();
+    const hasThread = !!input.activeThread;
+    const targetFacets = collectTargets(input.latestResponse);
+
+    if (!hasThread) {
+      return {
+        kind: 'fresh_question',
+        confidence: 0.45,
+        cues: normalized ? ['no_active_thread'] : [],
+        targetFacets,
+        shouldContinueThread: false,
+      };
+    }
+
+    // Try SetFit classification if flag is enabled
+    const useSetFit = isVerifierOptimizationActive('useSetFitReactions');
+    if (useSetFit) {
+      try {
+        const setFitResult = await this.setFitClassifier.classify(normalized);
+        if (setFitResult) {
+          // SetFit classification with high confidence
+          return this.buildReactionFromSetFit(setFitResult, targetFacets);
+        }
+      } catch (error) {
+        console.warn('[QuestionReactionClassifier] SetFit classification failed, falling back to regex:', error);
+      }
+    }
+
+    // Fallback to regex-based classification
+    const lower = normalized.toLowerCase();
+    return this.classifyWithRegex(normalized, lower, targetFacets);
+  }
+
+  private buildReactionFromSetFit(setFitResult: { kind: QuestionReactionKind; confidence: number }, targetFacets: string[]): QuestionReaction {
+    const kindToShouldContinue: Record<QuestionReactionKind, boolean> = {
+      fresh_question: false,
+      challenge: true,
+      tradeoff_probe: true,
+      metric_probe: true,
+      example_request: true,
+      clarification: true,
+      repeat_request: false,
+      deep_dive: true,
+      topic_shift: false,
+      generic_follow_up: true,
+    };
+
+    return {
+      kind: setFitResult.kind,
+      confidence: setFitResult.confidence,
+      cues: ['setfit_classification'],
+      targetFacets,
+      shouldContinueThread: kindToShouldContinue[setFitResult.kind],
+    };
+  }
+
+  private classifyWithRegex(normalized: string, lower: string, targetFacets: string[]): QuestionReaction {
+    const cues: string[] = [];
 
     if (includesAny(lower, [/(switch gears|different topic|move on to|new topic|something else|let(?:'s| us) talk about)/i])) {
       return {

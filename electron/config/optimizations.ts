@@ -50,6 +50,9 @@ export interface OptimizationFlags {
   /** Conscious mode verifier: use probabilistic STAR scorer instead of hard floor rules */
   useProbabilisticStar: boolean;
 
+  /** Conscious mode reaction: use SetFit classifier for reaction classification */
+  useSetFitReactions: boolean;
+
   /** Worker thread configuration */
   workerThreadCount: number;
 
@@ -154,6 +157,9 @@ export const DEFAULT_OPTIMIZATION_FLAGS: OptimizationFlags = {
   // Conscious mode verifier
   useProbabilisticStar: false,
 
+  // Conscious mode reaction
+  useSetFitReactions: false,
+
   // Worker config (6 cores default, user-adjustable)
   workerThreadCount: 6,
 
@@ -220,7 +226,7 @@ export function isOptimizationActive(key: keyof Omit<OptimizationFlags, 'acceler
  * Check if a conscious mode verifier optimization is active
  * These run independently of the acceleration master toggle since they affect correctness
  */
-export function isVerifierOptimizationActive(key: 'useConsciousVerifierWordBoundary' | 'useDegradedProvenanceCheck' | 'useTighterNumericClaimRegex' | 'useExpandedTechAllowlist' | 'useSemanticThreadContinuation' | 'useConfidenceCalibration' | 'useSemanticEntailment' | 'useProbabilisticStar'): boolean {
+export function isVerifierOptimizationActive(key: 'useConsciousVerifierWordBoundary' | 'useDegradedProvenanceCheck' | 'useTighterNumericClaimRegex' | 'useExpandedTechAllowlist' | 'useSemanticThreadContinuation' | 'useConfidenceCalibration' | 'useSemanticEntailment' | 'useProbabilisticStar' | 'useSetFitReactions'): boolean {
   return currentFlags[key];
 }
 

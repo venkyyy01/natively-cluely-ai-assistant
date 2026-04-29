@@ -268,7 +268,7 @@ The existing `ReasoningThread.embedding` field (types.ts:63) is populated but un
 
 ---
 
-### CMU-004 — Verifier: probabilistic STAR completeness scorer (replaces hard floor)
+### CMU-004 — Verifier: probabilistic STAR completeness scorer (replaces hard floor) ~~[ ]~~ **[x]**
 
 - **Severity**: P1
 - **Subsystem**: conscious / verifier
