@@ -64,7 +64,8 @@ interface PatternMatch {
 
 const SMALLTALK_PATTERNS: PatternMatch[] = [
   { pattern: /^\s*(hi|hello|hey|yo|hiya)\b[\s!.,?]*$/i },
-  { pattern: /^\s*good\s+(morning|afternoon|evening|day)\b[\s!.,?]*$/i },
+  { pattern: /^\s*(hi|hello|hey|yo|hiya)\s+(there|everyone|everybody|guys|folks|all|team|sir|ma'am|miss|mister)\b[\s!.,?]*$/i },
+  { pattern: /^\s*good\s+(morning|afternoon|evening|day)\b/i },
   { pattern: /^\s*(thanks|thank you|thx|ty|cheers|appreciate it)\b[\s!.,?]*$/i },
   { pattern: /^\s*(how('?| ?i)?s? (are )?(you|it going|things)|what'?s up|how have you been)\b/i },
   { pattern: /^\s*(nice to meet you|good to see you|pleased to meet you)\b/i },
@@ -91,7 +92,7 @@ const REFINEMENT_PATTERNS: PatternMatch[] = [
   { pattern: /\b(make it (longer|detailed)|expand (on (this|that|it)|more)|elaborate|go deeper|tell me more)\b/i, refinementIntent: 'expand' },
   { pattern: /\b(rephrase (that|this|it)|say it differently|put it another way|word it differently)\b/i, refinementIntent: 'rephrase' },
   { pattern: /\b(simplify (this|that|it)|make it simpler|in (plain|simple) (english|words)|like i'?m five|eli5)\b/i, refinementIntent: 'simplify' },
-  { pattern: /\b(more formal|be more professional|sound professional|formal tone)\b/i, refinementIntent: 'more_formal' },
+  { pattern: /\b(more formal|more professional|be more professional|sound professional|formal tone)\b/i, refinementIntent: 'more_formal' },
   { pattern: /\b(more casual|less formal|sound (relaxed|natural)|casual tone)\b/i, refinementIntent: 'more_casual' },
   { pattern: /\b(give me an example|provide an (example|instance)|for example|with an example)\b/i, refinementIntent: 'add_example' },
   { pattern: /\b(more (detail|specific)|be more specific|add (more )?detail)\b/i, refinementIntent: 'add_detail' },

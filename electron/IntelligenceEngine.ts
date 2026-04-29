@@ -909,6 +909,9 @@ export class IntelligenceEngine extends EventEmitter {
             : undefined;
         const metadataCooldownReason = cooldownReason;
         const transcriptRevisionAtStart = this.session.getTranscriptRevision();
+        if (sourceUtteranceId) {
+            this.session.noteUtteranceRevision(sourceUtteranceId);
+        }
         const sourceUtteranceRevisionAtStart = sourceUtteranceId
             ? this.session.getUtteranceRevision(sourceUtteranceId)
             : undefined;

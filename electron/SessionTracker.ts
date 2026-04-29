@@ -226,7 +226,7 @@ export class SessionTracker {
     });
   }
 
-  private noteUtteranceRevision(utteranceId: string | undefined): void {
+  noteUtteranceRevision(utteranceId: string | undefined): void {
     if (!utteranceId) return;
     this.utteranceRevisions.set(utteranceId, (this.utteranceRevisions.get(utteranceId) ?? 0) + 1);
   }

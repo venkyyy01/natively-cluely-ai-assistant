@@ -102,7 +102,7 @@ test('NAT-007 / audit A-7: stream stops mid-flight when the source utterance rev
 
   const initialQuestion = 'How would you design a rate limiter?';
   addInterviewerTurn(session, initialQuestion, Date.now(), 'utterance-1');
-  const revisionAtStart = session.getTranscriptRevision();
+  const initialUtteranceRev = session.getUtteranceRevision('utterance-1');
 
   const assistantBefore = session
     .getContext(180)
@@ -127,10 +127,9 @@ test('NAT-007 / audit A-7: stream stops mid-flight when the source utterance rev
     'session must NOT have addAssistantMessage called for a stale-stopped stream',
   );
 
-  assert.notEqual(
-    session.getTranscriptRevision(),
-    revisionAtStart,
-    'sanity: transcript revision actually advanced during the run',
+  assert.ok(
+    (session.getUtteranceRevision('utterance-1') ?? 0) > (initialUtteranceRev ?? 0),
+    'sanity: utterance revision for utterance-1 actually advanced during the run',
   );
 
   const snapshot = tracker.completedSnapshots[tracker.completedSnapshots.length - 1];
