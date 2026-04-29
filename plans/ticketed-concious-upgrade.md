@@ -683,7 +683,7 @@ Current verification only uses latest hypothesis + semantic context as grounding
 
 ---
 
-### CMU-011 — Verifier: active learning from verification failures
+### CMU-011 — Verifier: active learning from verification failures ~~[ ]~~ **[x]**
 
 - **Severity**: P2
 - **Subsystem**: conscious / verifier

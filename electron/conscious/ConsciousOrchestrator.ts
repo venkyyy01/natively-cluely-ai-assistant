@@ -24,8 +24,12 @@ import { ConsciousProvenanceVerifier } from './ConsciousProvenanceVerifier';
 import { ConsciousVerifier } from './ConsciousVerifier';
 import { LayeredIntentRouter, isReliableIntent } from '../llm/LayeredIntentRouter';
 import type { IntentClassificationCoordinator } from '../llm/providers/IntentClassificationCoordinator';
-import { isVerifierOptimizationActive } from '../config/optimizations';
+import { isVerifierOptimizationActive, isConsciousOptimizationActive } from '../config/optimizations';
 import { Metrics } from '../runtime/Metrics';
+import { FlexibleResponseRouter, type ConsciousTurnPlan } from './FlexibleResponseRouter';
+import { HumanLikeConversationEngine } from './HumanLikeConversationEngine';
+import { ConsciousRefinementOrchestrator } from './ConsciousRefinementOrchestrator';
+import { AdaptiveVerificationGate } from './AdaptiveVerificationGate';
 
 interface KnowledgeStatusLike {
   activeMode?: unknown;
@@ -85,6 +89,10 @@ export class ConsciousOrchestrator {
   private readonly answerPlanner = new ConsciousAnswerPlanner();
   private readonly provenanceVerifier = new ConsciousProvenanceVerifier();
   private readonly semanticThreadMatcher = new SemanticThreadMatcher();
+  private readonly humanConversationEngine = new HumanLikeConversationEngine();
+  private readonly verificationGate = new AdaptiveVerificationGate();
+  private readonly refinementOrchestrator = new ConsciousRefinementOrchestrator();
+  private readonly flexibleRouter: FlexibleResponseRouter;
   private consecutiveFailures = 0;
   private circuitOpenUntil = 0;
 
@@ -93,6 +101,69 @@ export class ConsciousOrchestrator {
       this.verifier = verifier;
     }
     this.retrievalOrchestrator = new ConsciousRetrievalOrchestrator(this.session);
+    this.flexibleRouter = new FlexibleResponseRouter(
+      this.humanConversationEngine,
+      this.verificationGate,
+    );
+  }
+
+  /**
+   * Plan a single conscious turn. The IntelligenceEngine calls this BEFORE
+   * deciding whether to enter the conscious pipeline so that smalltalk,
+   * acknowledgements, and refinement requests can short-circuit to standard
+   * mode (which already handles them naturally). Gated by the
+   * `useHumanLikeConsciousMode` flag — with the flag off, every turn is
+   * planned as a strict, structured conscious answer (legacy behaviour).
+   */
+  planTurn(utterance: string): ConsciousTurnPlan {
+    const enabled = isConsciousOptimizationActive('useHumanLikeConsciousMode');
+    return this.flexibleRouter.plan({
+      utterance,
+      options: { enabled },
+    });
+  }
+
+  /**
+   * Build the LLM prompt needed to refine a previous conscious-mode answer.
+   * Returns null when refinement is disabled, the intent is missing, or the
+   * refinement would be a no-op (e.g. asking to shorten an already short
+   * answer).
+   *
+   * The IntelligenceEngine streams the prompt through the standard answer
+   * LLM path so streaming, abort signals, and stealth containment are
+   * handled uniformly with non-conscious refinements.
+   */
+  buildRefinementPrompt(input: {
+    plan: ConsciousTurnPlan;
+    previousAnswer: string;
+    lastInterviewerQuestion?: string;
+    userRefinementRequest: string;
+  }): { systemPrompt: string; userMessage: string } | null {
+    if (!isConsciousOptimizationActive('useConsciousRefinement')) {
+      return null;
+    }
+    const intent = input.plan.refinementIntent;
+    if (!intent || input.plan.conversationKind !== 'refinement') {
+      return null;
+    }
+    if (!this.refinementOrchestrator.isRefinementUseful({ intent, previousAnswer: input.previousAnswer })) {
+      return null;
+    }
+    return this.refinementOrchestrator.buildPrompt({
+      intent,
+      previousAnswer: input.previousAnswer,
+      lastInterviewerQuestion: input.lastInterviewerQuestion,
+      userRefinementRequest: input.userRefinementRequest,
+    });
+  }
+
+  /**
+   * Test/inspection hook: expose the embedded refinement orchestrator so
+   * that test fixtures and other modules can reuse the same flatten/prompt
+   * logic without duplicating it.
+   */
+  getRefinementOrchestrator(): ConsciousRefinementOrchestrator {
+    return this.refinementOrchestrator;
   }
 
   private isCircuitOpen(now: number = Date.now()): boolean {
@@ -532,6 +603,13 @@ export class ConsciousOrchestrator {
     whatToAnswerLLM: WhatToAnswerLLM | null;
     answerLLM: AnswerLLM | null;
     onEarlyReasoning?: (text: string) => void;
+    /**
+     * Optional pre-computed plan for this turn. When the
+     * `useHumanLikeConsciousMode` flag is on, the IntelligenceEngine passes
+     * the plan it already computed via `planTurn()` so verification rigor
+     * matches the conversational kind.
+     */
+    turnPlan?: ConsciousTurnPlan;
   }): Promise<ConsciousExecutionResult> {
     if (!input.route.qualifies) {
       return this.skip();
@@ -576,8 +654,16 @@ export class ConsciousOrchestrator {
       // When degraded mode is active, the LLM judge is skipped but rule-based checks
       // must still run to prevent hallucinations when the system is least healthy.
       const useDegradedProvenanceCheck = isVerifierOptimizationActive('useDegradedProvenanceCheck');
+      // When a turn plan is supplied (human-like flag on), use it to pick the
+      // adaptive verification rigor. Falls back to legacy strict behaviour.
+      const adaptivePlan = input.turnPlan
+        ? this.verificationGate.applyDegradedMode(input.turnPlan.verification, degradedMode)
+        : null;
+      const shouldRunProvenance = adaptivePlan
+        ? adaptivePlan.runProvenance
+        : (!degradedMode || useDegradedProvenanceCheck);
       let provenanceVerdict: { ok: boolean; reason?: string } = { ok: true };
-      if (!degradedMode || useDegradedProvenanceCheck) {
+      if (shouldRunProvenance) {
         provenanceVerdict = await this.provenanceVerifier.verify({
           response: structuredResponse,
           semanticContextBlock: this.session.getConsciousSemanticContext(),
@@ -594,7 +680,9 @@ export class ConsciousOrchestrator {
         }
       }
 
-      // In degraded mode, use rule-only verification (skip LLM judge)
+      // In degraded mode, use rule-only verification (skip LLM judge).
+      // The adaptive plan can also request judge to be skipped on relaxed turns.
+      const skipJudge = adaptivePlan ? !adaptivePlan.runJudge : degradedMode;
       const verification = await this.verifier.verify({
         response: structuredResponse,
         route: input.route,
@@ -602,7 +690,7 @@ export class ConsciousOrchestrator {
         hypothesis: latestHypothesis,
         evidence: latestHypothesis?.evidence,
         question: input.question,
-        skipJudge: degradedMode,
+        skipJudge,
       });
       if (!verification.ok) {
         console.warn('[ConsciousOrchestrator] Structured response verification failed:', verification.reason);
@@ -632,7 +720,7 @@ export class ConsciousOrchestrator {
           verificationOk: verification.ok,
           verificationReason: verification.reason,
           deterministic: verification.deterministic,
-          judge: degradedMode ? 'skipped' : verification.judge,
+          judge: skipJudge ? 'skipped' : verification.judge,
         }),
       };
     } catch (error) {
