@@ -28,6 +28,8 @@ export type ConversationKind =
   | 'refinement'
   | 'acknowledgement'
   | 'off_topic_aside'
+  | 'behavioral'
+  | 'pushback'
   | 'technical';
 
 export interface ConversationClassification {
@@ -68,6 +70,9 @@ const SMALLTALK_PATTERNS: PatternMatch[] = [
   { pattern: /^\s*(nice to meet you|good to see you|pleased to meet you)\b/i },
   { pattern: /^\s*(bye|goodbye|see you|talk soon|have a (good|nice) (one|day|evening))\b/i },
   { pattern: /^\s*(welcome|you('re| are) welcome|no problem|np|sure thing)\b[\s!.,?]*$/i },
+  // Real transcript patterns: greetings with audience
+  { pattern: /^\s*(hi,?\s+everyone|hello,?\s+everyone|welcome\s+(to|everyone))\b/i },
+  { pattern: /^\s*(cool\.?\s+so|okay\.?\s+so|alright\.?\s+so)\b/i },
 ];
 
 const CLARIFICATION_PATTERNS: PatternMatch[] = [
@@ -106,11 +111,24 @@ const OFF_TOPIC_ASIDE_PATTERNS: PatternMatch[] = [
   { pattern: /^\s*(speaking of|that reminds me|oh,?\s*(also|and))/i },
 ];
 
+const BEHAVIORAL_PATTERNS: PatternMatch[] = [
+  { pattern: /\b(tell me about a time|describe a situation|describe a time|have you ever|give me an example of)\b/i },
+  { pattern: /\b(walk me through|how did you handle|how would you handle|what was your role)\b/i },
+  { pattern: /\b(a project where|describe.*when you|tell me about.*(led|managed|worked on))\b/i },
+];
+
+const PUSHBACK_PATTERNS: PatternMatch[] = [
+  { pattern: /\b(but what about|why not|why did you|are you sure|doesn'?t that|wouldn'?t that)\b/i },
+  { pattern: /\b(how would that|what if|would that still|but then|isn'?t that)\b/i },
+];
+
 const ALL_PATTERNS: ReadonlyArray<{
   kind: Exclude<ConversationKind, 'technical'>;
   patterns: PatternMatch[];
 }> = [
   { kind: 'refinement', patterns: REFINEMENT_PATTERNS },
+  { kind: 'pushback', patterns: PUSHBACK_PATTERNS },
+  { kind: 'behavioral', patterns: BEHAVIORAL_PATTERNS },
   { kind: 'clarification', patterns: CLARIFICATION_PATTERNS },
   { kind: 'smalltalk', patterns: SMALLTALK_PATTERNS },
   { kind: 'acknowledgement', patterns: ACKNOWLEDGEMENT_PATTERNS },
@@ -201,6 +219,10 @@ export class HumanLikeConversationEngine {
         return 'relaxed';
       case 'off_topic_aside':
         return 'moderate';
+      case 'behavioral':
+        return 'moderate';
+      case 'pushback':
+        return 'strict';
       case 'technical':
       default:
         return 'strict';
@@ -238,12 +260,14 @@ export class HumanLikeConversationEngine {
     refinementIntent?: RefinementIntent,
   ): ConversationClassification {
     const verificationLevel = this.recommendVerificationLevel(kind);
+    // Behavioral and pushback should use structured responses (not free-form)
+    const preferFreeForm = kind !== 'behavioral' && kind !== 'pushback';
     return {
       kind,
       confidence: this.confidenceForKind(kind, utterance),
       refinementIntent,
       verificationLevel,
-      preferFreeForm: true,
+      preferFreeForm,
       reason: `matched_${kind}_pattern`,
     };
   }
@@ -261,6 +285,10 @@ export class HumanLikeConversationEngine {
         return 0.92;
       case 'off_topic_aside':
         return 0.85;
+      case 'behavioral':
+        return 0.88;
+      case 'pushback':
+        return 0.9;
       default:
         return 0.7;
     }

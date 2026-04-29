@@ -1,3 +1,7 @@
+import { InterviewerUtteranceBuffer, type BufferedUtterance } from './buffering/InterviewerUtteranceBuffer';
+import { getOptimizationFlags } from './config/optimizations';
+import { getDefaultTriggerAuditLog, TriggerAuditLog, type TriggerDecisionCohort, type TriggerDecisionReasonCode } from './observability/TriggerAuditLog';
+
 export type ConsciousModeResponseMode = 'reasoning_first' | 'invalid';
 
 export const CONSCIOUS_MODE_SCHEMA_VERSION = 'conscious_mode_v1' as const;
@@ -112,7 +116,8 @@ const BEHAVIORAL_ACTIONABLE_QUESTION_PATTERNS = [
   /^describe a situation\b/i,
   /^share an experience\b/i,
   /^give me an example\b/i,
-  /^walk me through\b.*\b(time|situation|experience|example|conflict|failure|mistake|decision|disagreement|stakeholder|team challenge|project you led|owned end to end)\b/i,
+  // Broader walk-me-through: catches "walk me through your approach", "walk me through how you", etc.
+  /^walk me through\b/i,
   /^talk about\b/i,
   /^how do you handle\b/i,
   /^how do you manage\b/i,
@@ -161,6 +166,7 @@ export interface TranscriptSuggestionIntelligenceManager {
     context: string;
     lastQuestion: string;
     confidence: number;
+    sourceUtteranceId?: string;
   }): Promise<void>;
 }
 
@@ -171,7 +177,11 @@ export interface TranscriptSuggestionInput {
   confidence?: number;
   consciousModeEnabled: boolean;
   intelligenceManager: TranscriptSuggestionIntelligenceManager;
+  utteranceBuffer?: InterviewerUtteranceBuffer;
+  triggerAuditLog?: TriggerAuditLog;
 }
+
+const defaultInterviewerUtteranceBuffer = new InterviewerUtteranceBuffer();
 
 function normalizeText(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
@@ -458,7 +468,19 @@ export function tryParseConsciousModeOpeningReasoning(raw: string): string | nul
 }
 
 function isQuestionLike(lower: string): boolean {
-  return /\?$/.test(lower) || /^(how|what|why|when|where|which|who|can|could|would|walk me through|tell me|give me|describe|share|talk about)/i.test(lower);
+  return /\?$/.test(lower) || hasQuestionPrefix(lower);
+}
+
+function hasTerminalPunctuation(text: string): boolean {
+  return /[.!?]$/.test(text.trim());
+}
+
+function hasQuestionPrefix(lower: string): boolean {
+  return /^(how|what|what's|why|when|where|which|who|can|could|would|should|tell me|give me|describe|explain|walk me through|talk about|share|how would you|what is your approach|what's your approach)\b/i.test(lower);
+}
+
+function stripTrailingPunctuation(text: string): string {
+  return text.replace(/[.!?]+$/, '');
 }
 
 function isSubstantialConversationTurn(lower: string): boolean {
@@ -469,7 +491,9 @@ function isSubstantialConversationTurn(lower: string): boolean {
 }
 
 function isBroadConsciousSeed(lower: string): boolean {
-  return /\b(design|architecture|component|components|service|services|database|databases|api|apis|scale|scaling|throughput|latency|tradeoff|tradeoffs|failure|retry|cache|caching|queue|queues|shard|sharding|replica|replication|microservice|microservices|monolith|algorithm|algorithms|complexity|optimization|optimisation|optimize|optimise|partition|partitioning|failover|bottleneck|consistency|availability|backpressure|hotspot|ledger|distributed)\b|\b(data structure|data structures|rate limiter|rate limiters|data model|notification system|streaming system)\b/i.test(lower);
+  // Strip trailing punctuation so "limiters?" matches "limiters" word boundary
+  const clean = stripTrailingPunctuation(lower);
+  return /\b(design|architecture|component|components|service|services|database|databases|api|apis|scale|scaling|throughput|latency|tradeoff|tradeoffs|failure|retry|cache|caching|queue|queues|shard|sharding|replica|replication|microservice|microservices|monolith|algorithm|algorithms|complexity|optimization|optimisation|optimize|optimise|partition|partitioning|failover|bottleneck|consistency|availability|backpressure|hotspot|ledger|distributed)\b|\b(data structure|data structures|rate limiter|rate limiters|data model|notification system|streaming system)\b/i.test(clean);
 }
 
 function isBehavioralPrompt(lower: string): boolean {
@@ -483,7 +507,9 @@ function isAdministrativePrompt(lower: string): boolean {
 function isSystemDesignQuestion(lower: string): boolean {
   // NOTE: removed ^ anchors so phrases like "So how would you design..." match.
   // Added \b word boundaries to prevent false positives.
-  return /(\bhow would you design\b|\bsystem design\b|\barchitect\b|\bhigh[- ]level design\b|\bdistributed system\b|\brate limiter\b|\bpartition\b|\bmonolith to microservices\b|\bmigrate a monolith\b|\bdesign the data model\b|\bdesign a .*system\b|\bdesign an .*system\b|\bdesign the .*system\b|\bdesign a .*service\b|\bdesign an .*service\b|\bdesign the .*service\b|\bdesign this\b|\bdesign that\b)/i.test(lower);
+  // Strip trailing punctuation so "limiter?" matches "limiter" word boundary
+  const clean = stripTrailingPunctuation(lower);
+  return /(\bhow would you design\b|\bsystem design\b|\barchitect\b|\bhigh[- ]level design\b|\bdistributed system\b|\brate limiter\b|\bpartition\b|\bmonolith to microservices\b|\bmigrate a monolith\b|\bdesign the data model\b|\bdesign a .*system\b|\bdesign an .*system\b|\bdesign the .*system\b|\bdesign a .*service\b|\bdesign an .*service\b|\bdesign the .*service\b|\bdesign this\b|\bdesign that\b)/i.test(clean);
 }
 
 function isQuestionContinuationPhrase(lower: string): boolean {
@@ -499,7 +525,7 @@ function isExplicitTopicShift(lower: string): boolean {
 }
 
 function isShortActionablePrompt(lower: string): boolean {
-  return /^(why this approach|why this|why not|how so|go deeper|can you go deeper|walk me through that|talk through that|and then|what about reliability|what about scale|what about failure handling|what about bottlenecks)$/i.test(lower);
+  return /^(why this approach|why this|why not|how so|go deeper|can you go deeper|walk me through that|walk me through it|talk through that|and then|what about reliability|what about scale|what about failure handling|what about bottlenecks|what's your approach|what is your approach)$/i.test(lower);
 }
 
 function isActionableInterviewerPrompt(lower: string): boolean {
@@ -569,6 +595,7 @@ export function shouldAutoTriggerSuggestionFromTranscript(
   text: string,
   consciousModeEnabled: boolean,
   activeReasoningThread: ReasoningThread | null,
+  isBufferFlushEvent: boolean = false,
 ): boolean {
   const trimmed = normalizeText(text);
   if (!trimmed) {
@@ -582,25 +609,137 @@ export function shouldAutoTriggerSuggestionFromTranscript(
       || isActionableInterviewerPrompt(lower);
   }
 
+  const lower = trimmed.toLowerCase();
   const wordCount = trimmed.split(/\s+/).filter(Boolean).length;
-  return trimmed.endsWith('?') || wordCount >= 5;
+  return hasTerminalPunctuation(trimmed) || (hasQuestionPrefix(lower) && wordCount >= 4);
 }
 
 export function getTranscriptSuggestionDecision(
   text: string,
   consciousModeEnabled: boolean,
   activeReasoningThread: ReasoningThread | null,
+  isBufferFlushEvent: boolean = false,
 ): TranscriptSuggestionDecision {
   const lastQuestion = normalizeText(text);
   return {
-    shouldTrigger: shouldAutoTriggerSuggestionFromTranscript(lastQuestion, consciousModeEnabled, activeReasoningThread),
+    shouldTrigger: shouldAutoTriggerSuggestionFromTranscript(lastQuestion, consciousModeEnabled, activeReasoningThread, isBufferFlushEvent),
     lastQuestion,
   };
+}
+
+function snippet(text: string): string {
+  const normalized = normalizeText(text);
+  return normalized.length > 120 ? `${normalized.slice(0, 117)}...` : normalized;
+}
+
+function auditTriggerDecision(
+  log: TriggerAuditLog,
+  input: {
+    utteranceId?: string;
+    speaker: string;
+    text: string;
+    reasonCode: TriggerDecisionReasonCode;
+    outcome: 'accepted' | 'declined' | 'stale' | 'completed';
+    cohort: TriggerDecisionCohort;
+    requestOutcome?: string;
+  },
+): void {
+  log.record({
+    timestamp: Date.now(),
+    utteranceId: input.utteranceId,
+    speaker: input.speaker,
+    textSnippet: snippet(input.text),
+    reasonCode: input.reasonCode,
+    outcome: input.outcome,
+    cohort: input.cohort,
+    requestOutcome: input.requestOutcome,
+  });
+}
+
+async function triggerFromCandidate(input: TranscriptSuggestionInput, candidate: {
+  text: string;
+  speaker: string;
+  sourceUtteranceId?: string;
+  isBufferFlushEvent: boolean;
+  auditLog: TriggerAuditLog;
+  cohort: TriggerDecisionCohort;
+}): Promise<boolean> {
+  const activeThread = input.intelligenceManager.getActiveReasoningThread();
+  console.log(`[AUTO-TRIGGER] 🧠 Active reasoning thread: ${!!activeThread}`);
+
+  const decision = getTranscriptSuggestionDecision(
+    candidate.text,
+    input.consciousModeEnabled,
+    activeThread,
+    candidate.isBufferFlushEvent,
+  );
+
+  console.log('[AUTO-TRIGGER] 📊 Decision analysis:', {
+    shouldTrigger: decision.shouldTrigger,
+    lastQuestion: decision.lastQuestion.substring(0, 50) + (decision.lastQuestion.length > 50 ? '...' : ''),
+    questionLength: decision.lastQuestion.length,
+    hasActiveThread: !!activeThread,
+    consciousModeEnabled: input.consciousModeEnabled,
+    sourceUtteranceId: candidate.sourceUtteranceId,
+  });
+
+  if (!decision.shouldTrigger) {
+    console.log('[AUTO-TRIGGER] ❌ Decision logic declined to trigger');
+    auditTriggerDecision(candidate.auditLog, {
+      utteranceId: candidate.sourceUtteranceId,
+      speaker: candidate.speaker,
+      text: candidate.text,
+      reasonCode: decision.lastQuestion ? 'declined_no_punctuation' : 'declined_too_short',
+      outcome: 'declined',
+      cohort: candidate.cohort,
+    });
+    return false;
+  }
+
+  try {
+    const context = input.intelligenceManager.getFormattedContext(180);
+    console.log(`[AUTO-TRIGGER] 📝 Context length: ${context ? context.length : 0} chars`);
+    console.log('[AUTO-TRIGGER] 🚀 Calling handleSuggestionTrigger...');
+    auditTriggerDecision(candidate.auditLog, {
+      utteranceId: candidate.sourceUtteranceId,
+      speaker: candidate.speaker,
+      text: candidate.text,
+      reasonCode: 'fired',
+      outcome: 'accepted',
+      cohort: candidate.cohort,
+    });
+
+    const trigger = {
+      context,
+      lastQuestion: decision.lastQuestion,
+      confidence: input.confidence ?? 0.8,
+      ...(candidate.sourceUtteranceId ? { sourceUtteranceId: candidate.sourceUtteranceId } : {}),
+    };
+    await input.intelligenceManager.handleSuggestionTrigger(trigger);
+
+    auditTriggerDecision(candidate.auditLog, {
+      utteranceId: candidate.sourceUtteranceId,
+      speaker: candidate.speaker,
+      text: candidate.text,
+      reasonCode: 'completed',
+      outcome: 'completed',
+      cohort: candidate.cohort,
+      requestOutcome: 'completed',
+    });
+    console.log('[AUTO-TRIGGER] ✅ Successfully triggered LLM response');
+    return true;
+  } catch (error) {
+    console.error('[AUTO-TRIGGER] 🚨 Failed to trigger:', error);
+    return false;
+  }
 }
 
 export async function maybeHandleSuggestionTriggerFromTranscript(
   input: TranscriptSuggestionInput,
 ): Promise<boolean> {
+  const flags = getOptimizationFlags();
+  const auditLog = input.triggerAuditLog ?? getDefaultTriggerAuditLog();
+  const cohort: TriggerDecisionCohort = flags.useUtteranceLevelTriggering ? 'utterance_level' : 'legacy_fragment';
   console.log('[AUTO-TRIGGER] 🔍 Processing transcript:', {
     speaker: input.speaker,
     final: input.final,
@@ -611,8 +750,16 @@ export async function maybeHandleSuggestionTriggerFromTranscript(
     hasIntelligenceManager: !!input.intelligenceManager
   });
   
-  if (input.speaker !== 'interviewer') {
+  const speakerAllowed = input.speaker === 'interviewer' || (input.speaker === 'user' && flags.useMicTranscriptTriggers);
+  if (!speakerAllowed) {
     console.log(`[AUTO-TRIGGER] ❌ Rejected: speaker is "${input.speaker}", need "interviewer"`);
+    auditTriggerDecision(auditLog, {
+      speaker: input.speaker,
+      text: input.text,
+      reasonCode: 'declined_speaker',
+      outcome: 'declined',
+      cohort,
+    });
     return false;
   }
 
@@ -631,6 +778,13 @@ export async function maybeHandleSuggestionTriggerFromTranscript(
     console.log(
       `[AUTO-TRIGGER] ❌ Rejected: transcript is interim (final=false, confidence=${input.confidence ?? 'n/a'})`,
     );
+    auditTriggerDecision(auditLog, {
+      speaker: input.speaker,
+      text: input.text,
+      reasonCode: 'declined_no_punctuation',
+      outcome: 'declined',
+      cohort,
+    });
     return false;
   }
 
@@ -639,46 +793,53 @@ export async function maybeHandleSuggestionTriggerFromTranscript(
   // (see NAT-009) which can be unreliable.
   if (input.confidence != null && input.confidence < 0.5) {
     console.log('[AUTO-TRIGGER] ❌ Rejected: final transcript with low confidence');
-    return false;
-  }
-
-  const activeThread = input.intelligenceManager.getActiveReasoningThread();
-  console.log(`[AUTO-TRIGGER] 🧠 Active reasoning thread: ${!!activeThread}`);
-
-  const decision = getTranscriptSuggestionDecision(
-    input.text,
-    input.consciousModeEnabled,
-    activeThread,
-  );
-
-  console.log('[AUTO-TRIGGER] 📊 Decision analysis:', {
-    shouldTrigger: decision.shouldTrigger,
-    lastQuestion: decision.lastQuestion.substring(0, 50) + (decision.lastQuestion.length > 50 ? '...' : ''),
-    questionLength: decision.lastQuestion.length,
-    hasActiveThread: !!activeThread,
-    consciousModeEnabled: input.consciousModeEnabled
-  });
-
-  if (!decision.shouldTrigger) {
-    console.log('[AUTO-TRIGGER] ❌ Decision logic declined to trigger');
-    return false;
-  }
-
-  try {
-    const context = input.intelligenceManager.getFormattedContext(180);
-    console.log(`[AUTO-TRIGGER] 📝 Context length: ${context ? context.length : 0} chars`);
-    console.log('[AUTO-TRIGGER] 🚀 Calling handleSuggestionTrigger...');
-    
-    await input.intelligenceManager.handleSuggestionTrigger({
-      context: context,
-      lastQuestion: decision.lastQuestion,
-      confidence: input.confidence ?? 0.8,
+    auditTriggerDecision(auditLog, {
+      speaker: input.speaker,
+      text: input.text,
+      reasonCode: 'declined_too_short',
+      outcome: 'declined',
+      cohort,
     });
-    
-    console.log('[AUTO-TRIGGER] ✅ Successfully triggered LLM response');
-    return true;
-  } catch (error) {
-    console.error('[AUTO-TRIGGER] 🚨 Failed to trigger:', error);
     return false;
   }
+
+  if (flags.useUtteranceLevelTriggering) {
+    const buffer = input.utteranceBuffer ?? defaultInterviewerUtteranceBuffer;
+    const pendingFlushes: Promise<boolean>[] = [];
+    buffer.setOnUtterance((utterance: BufferedUtterance) => {
+      const pending = triggerFromCandidate(input, {
+        text: utterance.text,
+        speaker: utterance.speaker,
+        sourceUtteranceId: utterance.utteranceId,
+        isBufferFlushEvent: true,
+        auditLog,
+        cohort,
+      });
+      pendingFlushes.push(pending);
+      void pending;
+    });
+
+    const flushed = buffer.pushFragment(input.speaker, input.text, input.final);
+    if (flushed.length === 0) {
+      auditTriggerDecision(auditLog, {
+        speaker: input.speaker,
+        text: input.text,
+        reasonCode: 'declined_no_punctuation',
+        outcome: 'declined',
+        cohort,
+      });
+      return false;
+    }
+
+    const results = await Promise.all(pendingFlushes);
+    return results.some(Boolean);
+  }
+
+  return triggerFromCandidate(input, {
+    text: input.text,
+    speaker: input.speaker,
+    isBufferFlushEvent: false,
+    auditLog,
+    cohort,
+  });
 }

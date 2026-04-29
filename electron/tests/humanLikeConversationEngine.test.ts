@@ -70,7 +70,12 @@ describe('HumanLikeConversationEngine', () => {
   it('falls through to technical for real questions', () => {
     expectKind('How would you design a rate limiter?', 'technical');
     expectKind('Explain how Kafka handles backpressure', 'technical');
-    expectKind('Tell me about a time you led a team', 'technical');
+  });
+
+  it('classifies behavioral questions separately from technical', () => {
+    expectKind('Tell me about a time you led a team', 'behavioral');
+    expectKind('describe a situation where you had to handle a mistake', 'behavioral');
+    expectKind('walk me through your approach to optimizing a pipeline', 'behavioral');
   });
 
   it('recommends skip verification for smalltalk and acknowledgements', () => {

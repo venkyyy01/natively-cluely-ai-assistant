@@ -159,6 +159,7 @@ export class SessionTracker {
   private adaptiveContextWindow: AdaptiveContextWindow | null = null;
   private sessionId: string = `session_${SessionTracker.nextSessionId++}`;
   private transcriptRevision: number = 0;
+  private utteranceRevisions = new Map<string, number>();
   private compactSnapshotCache = new Map<string, { revision: number; value: string }>();
   private readonly persistence = new SessionPersistence();
   private pendingRestorePromise: Promise<void> | null = null;
@@ -225,6 +226,11 @@ export class SessionTracker {
     });
   }
 
+  private noteUtteranceRevision(utteranceId: string | undefined): void {
+    if (!utteranceId) return;
+    this.utteranceRevisions.set(utteranceId, (this.utteranceRevisions.get(utteranceId) ?? 0) + 1);
+  }
+
   public getMeetingMetadata() {
     return this.currentMeetingMetadata;
   }
@@ -283,6 +289,7 @@ export class SessionTracker {
       lastItem.text = consolidatedText;
       lastItem.embedding = buildPseudoEmbedding(consolidatedText);
       this.transcriptRevision++;
+      this.noteUtteranceRevision(segment.utteranceId);
       this.compactSnapshotCache.clear();
       this.contextAssembleCache.clear();
       return { role };
@@ -297,6 +304,7 @@ export class SessionTracker {
       embedding: buildPseudoEmbedding(text),
     });
     this.transcriptRevision++;
+    this.noteUtteranceRevision(segment.utteranceId);
     this.compactSnapshotCache.clear();
     this.contextAssembleCache.clear();
 
@@ -649,6 +657,11 @@ export class SessionTracker {
     return this.transcriptRevision;
   }
 
+  getUtteranceRevision(utteranceId: string | null | undefined): number | undefined {
+    if (!utteranceId) return undefined;
+    return this.utteranceRevisions.get(utteranceId);
+  }
+
   getCompactTranscriptSnapshot(maxTurns: number = 12, snapshotType: 'standard' | 'fast' = 'standard'): string {
     return getCompactTranscriptSnapshot(this, maxTurns, snapshotType);
   }
@@ -928,6 +941,7 @@ export class SessionTracker {
     this.tokenBudgetManager.reset();
     this.adaptiveContextWindow = null;
     this.transcriptRevision = 0;
+    this.utteranceRevisions.clear();
     this.compactSnapshotCache.clear();
     this.contextAssembleCache.clear();
     this.semanticEmbeddingCache.clear();

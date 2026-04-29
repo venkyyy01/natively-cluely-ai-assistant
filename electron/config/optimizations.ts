@@ -77,6 +77,12 @@ export interface OptimizationFlags {
   /** Conscious: enable refinement turns inside conscious mode (shorten/expand/rephrase) */
   useConsciousRefinement: boolean;
 
+  /** Triggering: buffer STT final fragments into utterance-level trigger decisions */
+  useUtteranceLevelTriggering: boolean;
+
+  /** Triggering: allow user microphone transcripts to request suggestions */
+  useMicTranscriptTriggers: boolean;
+
   /** Worker thread configuration */
   workerThreadCount: number;
 
@@ -199,6 +205,8 @@ export const DEFAULT_OPTIMIZATION_FLAGS: OptimizationFlags = {
   useFlexibleConsciousResponse: false,
   useHumanLikeConsciousMode: false,
   useConsciousRefinement: false,
+  useUtteranceLevelTriggering: true,
+  useMicTranscriptTriggers: false,
 
   // Worker config (6 cores default, user-adjustable)
   workerThreadCount: 6,
@@ -274,7 +282,7 @@ export function isVerifierOptimizationActive(key: 'useConsciousVerifierWordBound
  * Check if a conscious mode optimization is active
  * These run independently of the acceleration master toggle
  */
-export function isConsciousOptimizationActive(key: 'useFlexibleConsciousResponse' | 'useHumanLikeConsciousMode' | 'useConsciousRefinement'): boolean {
+export function isConsciousOptimizationActive(key: 'useFlexibleConsciousResponse' | 'useHumanLikeConsciousMode' | 'useConsciousRefinement' | 'useUtteranceLevelTriggering' | 'useMicTranscriptTriggers'): boolean {
   return currentFlags[key];
 }
 

@@ -81,12 +81,15 @@ export interface TranscriptSegment {
   confidence?: number;
   /** NAT-XXX: Trace ID for correlation with STT and intent classification */
   traceId?: string;
+  /** Stable utterance identifier assigned by utterance-level trigger buffering. */
+  utteranceId?: string;
 }
 
 export interface SuggestionTrigger {
   context: string;
   lastQuestion: string;
   confidence: number;
+  sourceUtteranceId?: string;
 }
 
 // Context item matching Swift ContextManager structure

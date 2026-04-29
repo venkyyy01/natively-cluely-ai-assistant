@@ -85,12 +85,25 @@ export class LocalConsciousEmbeddingClassifier {
       'Side note',
       'Actually',
     ],
+    behavioral: [
+      'Tell me about a time',
+      'Describe a situation',
+      'Give me an example of a conflict',
+      'Walk me through a project you led',
+      'Have you ever handled a difficult stakeholder',
+    ],
+    pushback: [
+      'But what about',
+      'Why not',
+      'Are you sure',
+      'Doesnt that',
+      'Wouldnt that',
+    ],
     technical: [
       'How does React work',
       'Design a system',
       'Explain the algorithm',
       'What is the complexity',
-      'Tell me about a time',
     ],
   };
 

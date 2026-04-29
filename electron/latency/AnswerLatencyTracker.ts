@@ -14,6 +14,7 @@ export function normalizeTrackedProviderCapability(
 
 export type StaleStopReason =
   | 'transcript_revision_changed'
+  | 'source_utterance_revision_changed'
   | 'request_superseded'
   | 'aborted';
 

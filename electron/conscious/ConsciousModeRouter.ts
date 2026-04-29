@@ -25,6 +25,8 @@ export type ConversationKind =
   | 'refinement'
   | 'acknowledgement'
   | 'off_topic_aside'
+  | 'behavioral'
+  | 'pushback'
   | 'technical';
 
 export type RefinementIntent = 'shorten' | 'expand' | 'rephrase' | 'more_casual' | 'more_formal' | 'simplify' | 'add_example';
@@ -50,6 +52,8 @@ export interface ConsciousTurnPlan {
   shouldBypassConscious: boolean;
   /** Strategy hint for the LLM (e.g., "Use STAR format"). */
   strategyHint?: string;
+  /** Tone and speech constraints for senior interview answers. */
+  tonePreamble?: string;
   /** Human-readable explanation for debugging. */
   reason: string;
 }
@@ -123,7 +127,25 @@ const PATTERNS: Record<Exclude<ConversationKind, 'technical'>, RegExp[]> = {
     /^(can i ask|quick question|side note)/i,
     /^(by the way|before we continue|just curious)/i,
   ],
+  behavioral: [
+    /tell me about a time|describe a situation|describe a time|have you ever|give me an example/i,
+    /walk me through.*(time|situation|experience|conflict|failure|project you led)/i,
+  ],
+  pushback: [
+    /but what about|why not|why did you|are you sure|doesn't that|wouldn't that/i,
+  ],
 };
+
+const SENIOR_TONE_PREAMBLE = [
+  'Use natural Indian English with crisp signposting phrases like "There are three parts..." and "The key tradeoff is...".',
+  'Keep each block short: 1-3 sentences, no rambling, no textbook voice.',
+  'No filler phrases such as "Let me break this down", "In conclusion", or generic preambles.',
+].join(' ');
+
+const BEHAVIORAL_STRATEGY_HINT = 'Direct answer (1-2 lines). STAR format (Situation, Task, Action, Result). Tradeoff: why this approach over alternatives.';
+const CODING_STRATEGY_HINT = 'Direct answer (1-2 lines). Code-first approach: show implementation, then explain. Tradeoff: performance vs. readability.';
+const DEEP_DIVE_STRATEGY_HINT = 'Direct answer (1-2 lines). Structured approach: constraints → design → tradeoffs → alternatives. Tradeoff: complexity vs. maintainability.';
+const PUSHBACK_STRATEGY_HINT = 'Reframe concern with architectural reasoning. Use template: "That would be a concern if X. In our case, we did Y because Z."';
 
 const REFINEMENT_PATTERNS: { pattern: RegExp; intent: RefinementIntent }[] = [
   { pattern: /make it shorter|shorten this|be brief/i, intent: 'shorten' },
@@ -205,6 +227,15 @@ export class ConsciousModeRouter {
       if (firstKey !== undefined) this.classificationCache.delete(firstKey);
     }
 
+    // In tests and high-confidence hosted routing, prefer the provided LLM helper.
+    // The local embedding model can be overconfident on short utterances, so do
+    // not let it override an explicit classifier dependency.
+    if (options.llmHelper) {
+      const plan = await this.llmBasedPlan(utterance, options);
+      this.classificationCache.set(cacheKey, plan);
+      return plan;
+    }
+
     // Try embedding-based classification first (fast, ~1-2ms)
     const embeddingResult = await this.classifyWithEmbeddings(utterance, options);
     if (embeddingResult.confidence > 0.75) {
@@ -242,7 +273,14 @@ export class ConsciousModeRouter {
    * Generate cache key for classification result.
    */
   private getCacheKey(utterance: string, options: RouterOptions): string {
-    return `${utterance.trim().toLowerCase()}_${options.isInsideThread}_${options.isLiveCoding}`;
+    return [
+      utterance.trim().toLowerCase(),
+      options.isInsideThread,
+      options.isLiveCoding,
+      options.isDegraded,
+      options.useDegradedProvenanceCheck,
+      Boolean(options.llmHelper),
+    ].join('_');
   }
 
   /**
@@ -294,7 +332,9 @@ export class ConsciousModeRouter {
 - refinement: asking to modify previous response (shorten, expand, rephrase, etc.)
 - acknowledgement: confirming understanding, agreeing
 - off_topic_aside: side note, unrelated question
-- technical: actual interview question (behavioral, coding, system design, etc.)
+- behavioral: STAR format interview questions (tell me about a time, describe a situation)
+- pushback: interviewer challenge, objection, or skepticism about the answer
+- technical: actual interview question (coding, system design, deep dive, etc.)
 
 Utterance: "${utterance}"
 
@@ -313,7 +353,7 @@ Return JSON with keys: kind (one of the categories above), confidence (0-1), ref
       // Strip markdown code fences if LLM wraps JSON in ```json ... ```
       const cleaned = response.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
       const parsed = JSON.parse(cleaned);
-      const validKinds: ConversationKind[] = ['smalltalk', 'clarification', 'refinement', 'acknowledgement', 'off_topic_aside', 'technical'];
+      const validKinds: ConversationKind[] = ['smalltalk', 'clarification', 'refinement', 'acknowledgement', 'off_topic_aside', 'behavioral', 'pushback', 'technical'];
       const kind: ConversationKind = validKinds.includes(parsed.kind) ? parsed.kind : 'technical';
       const confidence = typeof parsed.confidence === 'number' && parsed.confidence >= 0 && parsed.confidence <= 1
         ? parsed.confidence : 0.7;
@@ -362,6 +402,14 @@ Return JSON with keys: kind (one of the categories above), confidence (0-1), ref
       return this.technicalPlan(utterance, options);
     }
 
+    if (classification.kind === 'behavioral') {
+      return this.behavioralPlan(classification.confidence, reason, options);
+    }
+
+    if (classification.kind === 'pushback') {
+      return this.pushbackPlan(classification.confidence, reason, options);
+    }
+
     const verificationLevel = this.defaultVerificationLevel(classification.kind);
     const verification = this.getVerificationPlan(verificationLevel, options.isDegraded ?? false, options.useDegradedProvenanceCheck ?? false);
 
@@ -384,24 +432,22 @@ Return JSON with keys: kind (one of the categories above), confidence (0-1), ref
     let verificationLevel: VerificationLevel = 'strict';
     let strategyHint: string | undefined;
 
-    // Detect behavioral question patterns
-    if (/tell me about a time|describe a situation|have you ever|give me an example/i.test(utterance)) {
-      strategyHint = 'Use STAR format (Situation, Task, Action, Result). Lead with impact.';
-      verificationLevel = 'moderate';
+    // Detect behavioral question patterns (broadened to catch real transcript variations)
+    if (/\b(tell me about a time|describe a situation|describe a time|have you ever|give me an example|walk me through)\b/i.test(utterance)) {
+      return this.behavioralPlan(0.7, 'behavioral_question_detected', options);
     }
     // Detect coding/technical patterns
-    else if (/design a|implement|build|architect|algorithm|data structure|system design/i.test(utterance)) {
-      strategyHint = 'Code-first approach: show implementation, then explain tradeoffs.';
+    else if (/\b(design a|implement|build|architect|algorithm|data structure|system design)\b/i.test(utterance)) {
+      strategyHint = CODING_STRATEGY_HINT;
     }
     // Detect deep dive patterns
-    else if (/explain how|how does|complexity|scalability|latency|throughput|concurrency/i.test(utterance)) {
-      strategyHint = 'Structured technical answer: approach → constraints → tradeoffs → alternative.';
+    else if (/\b(explain how|how does|complexity|scalability|latency|throughput|concurrency)\b/i.test(utterance)) {
+      strategyHint = DEEP_DIVE_STRATEGY_HINT;
     }
 
     // Detect pushback patterns - boost verification
-    if (/but what about|why not|why did you|are you sure|doesn't that|wouldn't that/i.test(utterance)) {
-      verificationLevel = 'strict';
-      strategyHint = strategyHint ? `${strategyHint} Be assertive and defend your reasoning.` : 'Be assertive and defend your reasoning.';
+    if (/\b(but what about|why not|why did you|are you sure|doesn't that|wouldn't that)\b/i.test(utterance)) {
+      return this.pushbackPlan(0.7, 'pushback_detected', options);
     }
 
     // Context adjustments
@@ -423,7 +469,40 @@ Return JSON with keys: kind (one of the categories above), confidence (0-1), ref
       responseShape: 'structured',
       shouldBypassConscious: false,
       strategyHint,
+      tonePreamble: SENIOR_TONE_PREAMBLE,
       reason: 'technical_question_detected',
+    };
+  }
+
+  private behavioralPlan(confidence: number, reason: string, options: RouterOptions): ConsciousTurnPlan {
+    const verificationLevel: VerificationLevel = 'moderate';
+    const verification = this.getVerificationPlan(verificationLevel, options.isDegraded ?? false, options.useDegradedProvenanceCheck ?? false);
+    return {
+      kind: 'behavioral',
+      confidence,
+      verificationLevel,
+      verification,
+      responseShape: 'structured',
+      shouldBypassConscious: false,
+      strategyHint: BEHAVIORAL_STRATEGY_HINT,
+      tonePreamble: SENIOR_TONE_PREAMBLE,
+      reason,
+    };
+  }
+
+  private pushbackPlan(confidence: number, reason: string, options: RouterOptions): ConsciousTurnPlan {
+    const verificationLevel: VerificationLevel = 'strict';
+    const verification = this.getVerificationPlan(verificationLevel, options.isDegraded ?? false, options.useDegradedProvenanceCheck ?? false);
+    return {
+      kind: 'pushback',
+      confidence,
+      verificationLevel,
+      verification,
+      responseShape: 'structured',
+      shouldBypassConscious: false,
+      strategyHint: PUSHBACK_STRATEGY_HINT,
+      tonePreamble: SENIOR_TONE_PREAMBLE,
+      reason,
     };
   }
 
@@ -485,6 +564,10 @@ Return JSON with keys: kind (one of the categories above), confidence (0-1), ref
         return 'relaxed';
       case 'refinement':
         return 'moderate';
+      case 'behavioral':
+        return 'moderate';
+      case 'pushback':
+        return 'strict';
       default:
         return 'strict';
     }
@@ -496,11 +579,11 @@ Return JSON with keys: kind (one of the categories above), confidence (0-1), ref
   isRefinementUseful(input: { intent: RefinementIntent; previousAnswer: string }): boolean {
     const { intent, previousAnswer } = input;
 
-    if (intent === 'shorten' && previousAnswer.length < 100) {
+    if (intent === 'shorten' && previousAnswer.length < 40) {
       return false;
     }
 
-    if (intent === 'expand' && previousAnswer.length > 500) {
+    if (intent === 'expand' && previousAnswer.length > 80) {
       return false;
     }
 
