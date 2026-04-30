@@ -1,5 +1,5 @@
 import { EventEmitter } from 'events';
-import { loadNativeStealthModule } from './nativeStealthModule';
+import { createNativeProcessesProvider, loadNativeStealthModule } from './nativeStealthModule';
 import type { NativeStealthBindings } from './StealthManager';
 
 interface ChromiumProcessInfo {
@@ -33,6 +33,7 @@ export class ChromiumCaptureDetector extends EventEmitter {
   private readonly checkIntervalMs: number;
   private readonly logger: Pick<Console, 'log' | 'warn' | 'error'>;
   private readonly getProcessList: () => Array<{ pid: number; ppid: number; name: string }>;
+  private readonly nativeModule: NativeStealthBindings | null;
   private checkHandle: unknown = null;
   private running = false;
   private detectedBrowsers = new Map<string, ChromiumProcessInfo>();
@@ -45,10 +46,11 @@ export class ChromiumCaptureDetector extends EventEmitter {
     this.platform = options.platform ?? process.platform;
     this.checkIntervalMs = options.checkIntervalMs ?? 500;
     this.logger = options.logger ?? console;
-    this.getProcessList = options.getProcessList ?? (() => {
-      const mod = loadNativeStealthModule({ retryOnFailure: false });
-      return mod?.getRunningProcesses?.() ?? [];
+    this.getProcessList = options.getProcessList ?? createNativeProcessesProvider({
+      logger: this.logger,
+      label: 'ChromiumCaptureDetector',
     });
+    this.nativeModule = loadNativeStealthModule({ retryOnFailure: false });
   }
 
   start(): void {
@@ -186,14 +188,9 @@ export class ChromiumCaptureDetector extends EventEmitter {
     return false;
   }
 
-  private nativeModule: NativeStealthBindings | null = null;
-
   private async checkBrowserWindowTitleCapture(): Promise<boolean> {
     // S-8: Native result is authoritative. False means no matching browser capture window.
     try {
-      if (!this.nativeModule) {
-        this.nativeModule = loadNativeStealthModule({ retryOnFailure: false });
-      }
       if (this.nativeModule?.checkBrowserCaptureWindows) {
         this.logger.log('[ChromiumCaptureDetector] S-8: Trying native checkBrowserCaptureWindows');
         const nativeResult = this.nativeModule.checkBrowserCaptureWindows();

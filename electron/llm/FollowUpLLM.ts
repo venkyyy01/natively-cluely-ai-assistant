@@ -81,20 +81,21 @@ export class FollowUpLLM {
         reasoningThread: ReasoningThread,
         followUpQuestion: string,
         context?: string
-    ): Promise<ConsciousModeStructuredResponse> {
-        try {
-            const message = [
-                'ACTIVE_REASONING_THREAD',
-                `ROOT_QUESTION: ${reasoningThread.rootQuestion}`,
-                `LAST_QUESTION: ${reasoningThread.lastQuestion}`,
-                `CURRENT_RESPONSE: ${JSON.stringify(reasoningThread.response)}`,
-                `FOLLOW_UP_QUESTION: ${followUpQuestion}`,
-                CONSCIOUS_MODE_JSON_RESPONSE_INSTRUCTIONS,
-            ].join('\n\n');
-            const stream = this.llmHelper.streamChat(message, undefined, context, CONSCIOUS_REASONING_SYSTEM_PROMPT, {
-                skipKnowledgeInterception: true,
-                qualityTier: 'verify',
-            });
+    ): Promise<Result<ConsciousModeStructuredResponse, LLMError>> {
+        return await wrapAsync(
+            async () => {
+                const message = [
+                    'ACTIVE_REASONING_THREAD',
+                    `ROOT_QUESTION: ${reasoningThread.rootQuestion}`,
+                    `LAST_QUESTION: ${reasoningThread.lastQuestion}`,
+                    `CURRENT_RESPONSE: ${JSON.stringify(reasoningThread.response)}`,
+                    `FOLLOW_UP_QUESTION: ${followUpQuestion}`,
+                    CONSCIOUS_MODE_JSON_RESPONSE_INSTRUCTIONS,
+                ].join('\n\n');
+                const stream = this.llmHelper.streamChat(message, undefined, context, CONSCIOUS_REASONING_SYSTEM_PROMPT, {
+                    skipKnowledgeInterception: true,
+                    qualityTier: 'verify',
+                });
 
                 let full = "";
                 for await (const chunk of stream) {

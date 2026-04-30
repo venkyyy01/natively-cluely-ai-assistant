@@ -1,5 +1,5 @@
 import { EventEmitter } from 'events';
-import { loadNativeStealthModule } from './nativeStealthModule';
+import { createNativeProcessesProvider } from './nativeStealthModule';
 import { KNOWN_ENTERPRISE_TOOLS } from './enterpriseToolRegistry';
 
 interface TCCMonitorOptions {
@@ -26,9 +26,9 @@ export class TCCMonitor extends EventEmitter {
     this.platform = options.platform ?? process.platform;
     this.checkIntervalMs = options.checkIntervalMs ?? 2000;
     this.logger = options.logger ?? console;
-    this.getProcessList = options.getProcessList ?? (() => {
-      const mod = loadNativeStealthModule({ retryOnFailure: false });
-      return mod?.getRunningProcesses?.() ?? [];
+    this.getProcessList = options.getProcessList ?? createNativeProcessesProvider({
+      logger: this.logger,
+      label: 'TCCMonitor',
     });
   }
 

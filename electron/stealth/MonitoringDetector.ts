@@ -1,4 +1,4 @@
-import { loadNativeStealthModule } from './nativeStealthModule';
+import { createNativeProcessesProvider } from './nativeStealthModule';
 import { KNOWN_ENTERPRISE_TOOLS } from './enterpriseToolRegistry';
 
 export type ThreatCategory = 'monitoring' | 'proctoring' | 'remote-desktop' | 'screen-capture';
@@ -30,9 +30,9 @@ export class MonitoringDetector {
   constructor(options: MonitoringDetectorOptions = {}) {
     this.platform = options.platform ?? process.platform;
     this.logger = options.logger ?? console;
-    this.getProcessList = options.getProcessList ?? (() => {
-      const mod = loadNativeStealthModule({ retryOnFailure: false });
-      return mod?.getRunningProcesses?.() ?? [];
+    this.getProcessList = options.getProcessList ?? createNativeProcessesProvider({
+      logger: this.logger,
+      label: 'MonitoringDetector',
     });
     this.timeoutMs = options.timeoutMs ?? 5000;
   }
