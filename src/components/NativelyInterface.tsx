@@ -929,13 +929,13 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
 
     // Quick Actions - Updated to use new Intelligence APIs
 
-    const handleCopy = (text: string) => {
+    const handleCopy = useCallback((text: string) => {
         navigator.clipboard.writeText(text);
         analytics.trackCopyAnswer();
         // Optional: Trigger a small toast or state change for visual feedback
-    };
+    }, [analytics]);
 
-    const handleWhatToSay = async () => {
+    const handleWhatToSay = useCallback(async () => {
         setIsExpanded(true);
         setIsProcessing(true);
         analytics.trackCommandExecuted('what_to_say');
@@ -1036,9 +1036,9 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
             );
             setIsProcessing(false);
         }
-    };
+    }, [attachedContext, setIsExpanded, setIsProcessing, setMessages, setAttachedContext, analytics]);
 
-    const handleFollowUp = async (intent: string = 'rephrase') => {
+    const handleFollowUp = useCallback(async (intent: string = 'rephrase') => {
         setIsExpanded(true);
         setIsProcessing(true);
         analytics.trackCommandExecuted('follow_up_' + intent);
@@ -1084,9 +1084,9 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
         } finally {
             setIsProcessing(false);
         }
-    };
+    }, [setIsExpanded, setIsProcessing, setMessages, analytics]);
 
-    const handleRecap = async () => {
+    const handleRecap = useCallback(async () => {
         setIsExpanded(true);
         setIsProcessing(true);
         analytics.trackCommandExecuted('recap');
@@ -1131,9 +1131,9 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
         } finally {
             setIsProcessing(false);
         }
-    };
+    }, [setIsExpanded, setIsProcessing, setMessages, analytics]);
 
-    const handleFollowUpQuestions = async () => {
+    const handleFollowUpQuestions = useCallback(async () => {
         setIsExpanded(true);
         setIsProcessing(true);
         analytics.trackCommandExecuted('suggest_questions');
@@ -1178,7 +1178,7 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
         } finally {
             setIsProcessing(false);
         }
-    };
+    }, [setIsExpanded, setIsProcessing, setMessages, analytics]);
 
 
     // Setup Streaming Listeners
@@ -1619,7 +1619,8 @@ Provide only the answer, nothing else.`;
 
 
 
-    const renderMessageText = (msg: Message) => {
+    // 🚀 PERFORMANCE OPTIMIZATION: Memoize expensive message rendering to prevent unnecessary re-renders
+    const renderMessageText = useCallback((msg: Message) => {
         if (msg.intent === 'what_to_answer') {
             const consciousModeAnswer = parseConsciousModeAnswer(msg.text);
             if (consciousModeAnswer) {
@@ -1726,9 +1727,12 @@ Provide only the answer, nothing else.`;
                             strong: ({ node, ...props }: any) => <strong className="font-bold text-cyan-100" {...props} />,
                             ul: ({ node, ...props }: any) => <ul className="list-disc ml-4 mb-2" {...props} />,
                             li: ({ node, ...props }: any) => <li className="pl-1" {...props} />,
-                        }}>
-                            {msg.text}
-                        </ReactMarkdown>
+                            h1: ({ node, ...props }: any) => <h1 className="text-lg font-bold text-cyan-100 mb-2 mt-3" {...props} />,
+                            h2: ({ node, ...props }: any) => <h2 className="text-base font-bold text-cyan-100 mb-2 mt-3" {...props} />,
+                            h3: ({ node, ...props }: any) => <h3 className="text-sm font-bold text-cyan-100 mb-1 mt-2" {...props} />,
+                            code: ({ node, ...props }: any) => <code className="bg-cyan-700/30 rounded px-1 py-0.5 text-[15px] font-mono text-cyan-200" {...props} />,
+                            a: ({ node, ...props }: any) => <a className="underline hover:opacity-80" target="_blank" rel="noopener noreferrer" {...props} />,
+                        }}>{msg.text}</ReactMarkdown>
                     </div>
                 </div>
             );
@@ -1737,19 +1741,46 @@ Provide only the answer, nothing else.`;
         if (msg.intent === 'recap') {
             return (
                 <div className="bg-white/5 border border-white/10 rounded-lg p-3 my-1">
-                    <div className="flex items-center gap-2 mb-2 text-indigo-300 font-semibold text-xs uppercase tracking-wide">
+                    <div className="flex items-center gap-2 mb-2 text-emerald-300 font-semibold text-xs uppercase tracking-wide">
                         <RefreshCw className="w-3.5 h-3.5" />
                         <span>Recap</span>
                     </div>
                     <div className="text-slate-200 text-[15.25px] leading-[1.72] markdown-content">
                         <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]} components={{
                             p: ({ node, ...props }: any) => <p className="mb-2 last:mb-0" {...props} />,
-                            strong: ({ node, ...props }: any) => <strong className="font-bold text-indigo-100" {...props} />,
+                            strong: ({ node, ...props }: any) => <strong className="font-bold text-emerald-100" {...props} />,
                             ul: ({ node, ...props }: any) => <ul className="list-disc ml-4 mb-2" {...props} />,
                             li: ({ node, ...props }: any) => <li className="pl-1" {...props} />,
-                        }}>
-                            {msg.text}
-                        </ReactMarkdown>
+                            h1: ({ node, ...props }: any) => <h1 className="text-lg font-bold text-emerald-100 mb-2 mt-3" {...props} />,
+                            h2: ({ node, ...props }: any) => <h2 className="text-base font-bold text-emerald-100 mb-2 mt-3" {...props} />,
+                            h3: ({ node, ...props }: any) => <h3 className="text-sm font-bold text-emerald-100 mb-1 mt-2" {...props} />,
+                            code: ({ node, ...props }: any) => <code className="bg-emerald-700/30 rounded px-1 py-0.5 text-[15px] font-mono text-emerald-200" {...props} />,
+                            a: ({ node, ...props }: any) => <a className="underline hover:opacity-80" target="_blank" rel="noopener noreferrer" {...props} />,
+                        }}>{msg.text}</ReactMarkdown>
+                    </div>
+                </div>
+            );
+        }
+
+        if (msg.intent === 'follow_up') {
+            return (
+                <div className="bg-white/5 border border-white/10 rounded-lg p-3 my-1">
+                    <div className="flex items-center gap-2 mb-2 text-yellow-300 font-semibold text-xs uppercase tracking-wide">
+                        <Sparkles className="w-3.5 h-3.5" />
+                        <span>Follow-Up</span>
+                    </div>
+                    <div className="text-slate-200 text-[15.25px] leading-[1.72] markdown-content">
+                        <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]} components={{
+                            p: ({ node, ...props }: any) => <p className="mb-2 last:mb-0" {...props} />,
+                            strong: ({ node, ...props }: any) => <strong className="font-bold text-yellow-100" {...props} />,
+                            ul: ({ node, ...props }: any) => <ul className="list-disc ml-4 mb-2" {...props} />,
+                            li: ({ node, ...props }: any) => <li className="pl-1" {...props} />,
+                            h1: ({ node, ...props }: any) => <h1 className="text-lg font-bold text-yellow-100 mb-2 mt-3" {...props} />,
+                            h2: ({ node, ...props }: any) => <h2 className="text-base font-bold text-yellow-100 mb-2 mt-3" {...props} />,
+                            h3: ({ node, ...props }: any) => <h3 className="text-sm font-bold text-yellow-100 mb-1 mt-2" {...props} />,
+                            code: ({ node, ...props }: any) => <code className="bg-yellow-700/30 rounded px-1 py-0.5 text-[15px] font-mono text-yellow-200" {...props} />,
+                            a: ({ node, ...props }: any) => <a className="underline hover:opacity-80" target="_blank" rel="noopener noreferrer" {...props} />,
+                        }}>{msg.text}</ReactMarkdown>
                     </div>
                 </div>
             );
@@ -1758,17 +1789,92 @@ Provide only the answer, nothing else.`;
         if (msg.intent === 'follow_up_questions') {
             return (
                 <div className="bg-white/5 border border-white/10 rounded-lg p-3 my-1">
-                    <div className="flex items-center gap-2 mb-2 text-[#FFD60A] font-semibold text-xs uppercase tracking-wide">
+                    <div className="flex items-center gap-2 mb-2 text-orange-300 font-semibold text-xs uppercase tracking-wide">
                         <HelpCircle className="w-3.5 h-3.5" />
-                        <span>Follow-Up Questions</span>
+                        <span>Questions</span>
                     </div>
+                    <div className="text-slate-200 text-[15.25px] leading-[1.72]">
+                        {/* Extract bullet point list for questions */}
+                        {msg.text.split('\n').filter(line => line.trim().startsWith('•')).map((question, i) => (
+                            <div 
+                                key={i}
+                                className="mb-3 last:mb-0 p-2.5 bg-white/5 rounded-lg border border-white/5 hover:bg-white/10 cursor-pointer transition-colors"
+                                onClick={() => {
+                                    const questionText = question.replace(/^•\s*/, '');
+                                    // Handle question click
+                                    console.log('Question clicked:', questionText);
+                                }}
+                            >
+                                <div className="flex items-start gap-2">
+                                    <span className="text-orange-400 font-bold text-sm mt-0.5">Q:</span>
+                                    <span className="text-slate-200 text-[15px] leading-relaxed">{question.replace(/^•\s*/, '')}</span>
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            );
+        }
+
+        // Follow-up questions as clickable pills
+        if (msg.intent === 'follow_up_questions' && msg.role === 'system') {
+            // Extract individual questions
+            const questions = msg.text.split('\n').filter(line => line.trim().startsWith('•')).map(q => q.replace(/^•\s*/, ''));
+
+            return (
+                <div className="bg-white/5 border border-white/10 rounded-lg p-3 my-1">
+                    <div className="flex items-center gap-2 mb-2 text-orange-300 font-semibold text-xs uppercase tracking-wide">
+                        <HelpCircle className="w-3.5 h-3.5" />
+                        <span>Follow-up Questions</span>
+                    </div>
+                    <div className="space-y-2">
+                        {questions.map((question, i) => (
+                            <button
+                                key={i}
+                                className="w-full text-left p-2.5 bg-white/5 rounded-lg border border-white/5 hover:bg-white/10 transition-colors group"
+                                onClick={() => {
+                                    // Handle question click - trigger what to say with this question
+                                    console.log('Follow-up question clicked:', question);
+                                }}
+                            >
+                                <div className="flex items-start gap-2">
+                                    <span className="text-orange-400 font-bold text-sm mt-0.5">Q:</span>
+                                    <span className="text-slate-200 text-[15px] leading-relaxed group-hover:text-white">{question}</span>
+                                </div>
+                            </button>
+                        ))}
+                    </div>
+                </div>
+            );
+        }
+
+        if (msg.intent === 'answer_now') {
+            return (
+                <div className="bg-white/5 border border-white/10 rounded-lg p-3 my-1">
+                    <div className="flex items-center gap-2 mb-2 text-blue-300 font-semibold text-xs uppercase tracking-wide">
+                        <ArrowUp className="w-3.5 h-3.5" />
+                        <span>Answer Now</span>
+                    </div>
+
                     <div className="text-slate-200 text-[15.25px] leading-[1.72] markdown-content">
-                        <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]} components={{
-                            p: ({ node, ...props }: any) => <p className="mb-2 last:mb-0" {...props} />,
-                            strong: ({ node, ...props }: any) => <strong className="font-bold text-[#FFF9C4]" {...props} />,
-                            ul: ({ node, ...props }: any) => <ul className="list-disc ml-4 mb-2" {...props} />,
-                            li: ({ node, ...props }: any) => <li className="pl-1" {...props} />,
-                        }}>
+                        <ReactMarkdown
+                            remarkPlugins={[remarkGfm, remarkMath]}
+                            rehypePlugins={[rehypeKatex]}
+                            components={{
+                                p: ({ node, ...props }: any) => <p className="mb-2 last:mb-0" {...props} />,
+                                strong: ({ node, ...props }: any) => <strong className="font-bold text-emerald-100" {...props} />,
+                                em: ({ node, ...props }: any) => <em className="italic text-emerald-200/80" {...props} />,
+                                ul: ({ node, ...props }: any) => <ul className="list-disc ml-4 mb-2 space-y-1" {...props} />,
+                                ol: ({ node, ...props }: any) => <ol className="list-decimal ml-4 mb-2 space-y-1" {...props} />,
+                                li: ({ node, ...props }: any) => <li className="pl-1" {...props} />,
+                                h1: ({ node, ...props }: any) => <h1 className="text-lg font-bold text-emerald-100 mb-2 mt-3" {...props} />,
+                                h2: ({ node, ...props }: any) => <h2 className="text-base font-bold text-emerald-100 mb-2 mt-3" {...props} />,
+                                h3: ({ node, ...props }: any) => <h3 className="text-sm font-bold text-emerald-100 mb-1 mt-2" {...props} />,
+                                code: ({ node, ...props }: any) => <code className="bg-emerald-700/30 rounded px-1 py-0.5 text-[15px] font-mono text-emerald-200" {...props} />,
+                                blockquote: ({ node, ...props }: any) => <blockquote className="border-l-2 border-emerald-500/50 pl-3 italic text-emerald-300/70 my-2" {...props} />,
+                                a: ({ node, ...props }: any) => <a className="underline hover:opacity-80" target="_blank" rel="noopener noreferrer" {...props} />,
+                            }}
+                        >
                             {msg.text}
                         </ReactMarkdown>
                     </div>
@@ -1776,106 +1882,24 @@ Provide only the answer, nothing else.`;
             );
         }
 
-        if (msg.intent === 'what_to_answer') {
-            // Split text by code blocks (Handle unclosed blocks at EOF)
-            const parts = msg.text.split(/(```[\s\S]*?(?:```|$))/g);
-
-            return (
-                <div className="bg-white/5 border border-white/10 rounded-lg p-3 my-1">
-                    <div className="flex items-center gap-2 mb-2 text-emerald-400 font-semibold text-xs uppercase tracking-wide">
-                        <span>Say this</span>
-                    </div>
-                    <div className="text-slate-100 text-[16.5px] leading-[1.72]">
-                        {parts.map((part, i) => {
-                            if (part.startsWith('```')) {
-                                // Robust matching: handles unclosed blocks for streaming (```...$)
-                                const match = part.match(/```(\w*)\s+([\s\S]*?)(?:```|$)/);
-
-                                // Fallback logic: if it starts with ticks, treat as code (even if unclosed)
-                                if (match || part.startsWith('```')) {
-                                    const lang = (match && match[1]) ? match[1] : 'python';
-                                    let code = '';
-
-                                    if (match && match[2]) {
-                                        code = match[2].trim();
-                                    } else {
-                                        // Manual strip if regex failed
-                                        code = part.replace(/^```\w*\s*/, '').replace(/```$/, '').trim();
-                                    }
-
-                                    return (
-                                        <div key={i} className="my-3 rounded-xl overflow-hidden border border-white/[0.08] shadow-lg bg-zinc-800/60 backdrop-blur-md">
-                                            {/* Minimalist Apple Header */}
-                                            <div className="bg-white/[0.04] px-3 py-1.5 border-b border-white/[0.08]">
-                                                <span className="text-[10px] uppercase tracking-widest font-semibold text-white/40 font-mono">
-                                                    {lang || 'CODE'}
-                                                </span>
-                                            </div>
-
-                                            <div className="bg-transparent">
-                                                <SyntaxHighlighter
-                                                    language={lang}
-                                                    style={vscDarkPlus}
-                                                    customStyle={{
-                                                        margin: 0,
-                                                        borderRadius: 0,
-                                                        fontSize: '13px',
-                                                        lineHeight: '1.6',
-                                                        background: 'transparent',
-                                                        padding: '16px',
-                                                        fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace'
-                                                    }}
-                                                    wrapLongLines={true}
-                                                    showLineNumbers={true}
-                                                    lineNumberStyle={{ minWidth: '2.5em', paddingRight: '1.2em', color: 'rgba(255,255,255,0.2)', textAlign: 'right', fontSize: '11px' }}
-                                                >
-                                                    {code}
-                                                </SyntaxHighlighter>
-                                            </div>
-                                        </div>
-                                    );
-                                }
-                            }
-                            // Regular text - Render Markdown
-                            return (
-                                <div key={i} className="markdown-content">
-                                    <ReactMarkdown
-                                        remarkPlugins={[remarkGfm, remarkMath]}
-                                        rehypePlugins={[rehypeKatex]}
-                                        components={{
-                                            p: ({ node, ...props }: any) => <p className="mb-2 last:mb-0" {...props} />,
-                                            strong: ({ node, ...props }: any) => <strong className="font-bold text-emerald-100" {...props} />,
-                                            em: ({ node, ...props }: any) => <em className="italic text-emerald-200/80" {...props} />,
-                                            ul: ({ node, ...props }: any) => <ul className="list-disc ml-4 mb-2 space-y-1" {...props} />,
-                                            ol: ({ node, ...props }: any) => <ol className="list-decimal ml-4 mb-2 space-y-1" {...props} />,
-                                            li: ({ node, ...props }: any) => <li className="pl-1" {...props} />,
-                                        }}
-                                    >
-                                        {part}
-                                    </ReactMarkdown>
-                                </div>
-                            );
-                        })}
-                    </div>
-                </div>
-            );
-        }
-
-        // Standard Text Messages (e.g. from User or Interviewer)
-        // We still want basic markdown support here too
+        // Regular messages with Markdown support
         return (
-            <div className="markdown-content">
+            <div className="text-slate-200 text-[15.25px] leading-[1.72] markdown-content">
                 <ReactMarkdown
                     remarkPlugins={[remarkGfm, remarkMath]}
                     rehypePlugins={[rehypeKatex]}
                     components={{
-                        p: ({ node, ...props }: any) => <p className="mb-2 last:mb-0 whitespace-pre-wrap" {...props} />,
-                        strong: ({ node, ...props }: any) => <strong className="font-bold opacity-100" {...props} />,
-                        em: ({ node, ...props }: any) => <em className="italic opacity-90" {...props} />,
+                        p: ({ node, ...props }: any) => <p className="mb-2 last:mb-0" {...props} />,
+                        strong: ({ node, ...props }: any) => <strong className="font-bold text-emerald-100" {...props} />,
+                        em: ({ node, ...props }: any) => <em className="italic text-emerald-200/80" {...props} />,
                         ul: ({ node, ...props }: any) => <ul className="list-disc ml-4 mb-2 space-y-1" {...props} />,
                         ol: ({ node, ...props }: any) => <ol className="list-decimal ml-4 mb-2 space-y-1" {...props} />,
                         li: ({ node, ...props }: any) => <li className="pl-1" {...props} />,
-                        code: ({ node, ...props }: any) => <code className="bg-black/20 rounded px-1 py-0.5 text-xs font-mono" {...props} />,
+                        h1: ({ node, ...props }: any) => <h1 className="text-lg font-bold text-emerald-100 mb-2 mt-3" {...props} />,
+                        h2: ({ node, ...props }: any) => <h2 className="text-base font-bold text-emerald-100 mb-2 mt-3" {...props} />,
+                        h3: ({ node, ...props }: any) => <h3 className="text-sm font-bold text-emerald-100 mb-1 mt-2" {...props} />,
+                        code: ({ node, ...props }: any) => <code className="bg-emerald-700/30 rounded px-1 py-0.5 text-[15px] font-mono text-emerald-200" {...props} />,
+                        blockquote: ({ node, ...props }: any) => <blockquote className="border-l-2 border-emerald-500/50 pl-3 italic text-emerald-300/70 my-2" {...props} />,
                         a: ({ node, ...props }: any) => <a className="underline hover:opacity-80" target="_blank" rel="noopener noreferrer" {...props} />,
                     }}
                 >
@@ -1883,7 +1907,7 @@ Provide only the answer, nothing else.`;
                 </ReactMarkdown>
             </div>
         );
-    };
+    }, []); // No dependencies - this function is pure and uses only its msg parameter
 
 
     // Keyboard Shortcuts

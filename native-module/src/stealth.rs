@@ -49,6 +49,7 @@ fn is_browser_capture_window(window: &WindowInfo) -> bool {
 }
 
 #[cfg(target_os = "macos")]
+#[allow(unexpected_cfgs, deprecated)]
 mod macos {
     use super::{is_browser_capture_window, WindowInfo};
     use cidre::{arc, ns, objc};

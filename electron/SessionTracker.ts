@@ -3,6 +3,7 @@
 // Extracted from IntelligenceManager to decouple state management from LLM orchestration.
 
 import { RecapLLM } from './llm';
+import { Result, LLMError } from './types/Result';
 import {
   ConsciousModeStructuredResponse,
   ReasoningThread,

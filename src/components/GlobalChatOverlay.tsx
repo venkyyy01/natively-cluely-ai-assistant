@@ -1,14 +1,10 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useStreamBuffer } from '../hooks/useStreamBuffer';
 import { useHumanSpeedAutoScroll } from '../hooks/useHumanSpeedAutoScroll';
-import { X, Copy, Check, ArrowUp } from 'lucide-react';
+import { X, ArrowUp } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
-import remarkMath from 'remark-math';
-import rehypeKatex from 'rehype-katex';
-import 'katex/dist/katex.min.css';
 import nativelyIcon from './icon.png';
+import { UserMessage, AssistantMessage } from './ChatMessage';
 
 // ============================================
 // Types
@@ -28,123 +24,7 @@ interface GlobalChatOverlayProps {
     initialQuery?: string;
 }
 
-// ============================================
-// Typing Indicator Component
-// ============================================
 
-const TypingIndicator: React.FC = () => (
-    <div className="flex items-center gap-1 py-4">
-        <div className="flex items-center gap-1">
-            {[0, 1, 2].map((i) => (
-                <motion.div
-                    key={i}
-                    className="w-2 h-2 rounded-full bg-text-tertiary"
-                    animate={{ opacity: [0.4, 1, 0.4] }}
-                    transition={{
-                        duration: 0.6,
-                        repeat: Infinity,
-                        delay: i * 0.15,
-                        ease: "easeInOut"
-                    }}
-                />
-            ))}
-        </div>
-    </div>
-);
-
-// ============================================
-// Message Components
-// ============================================
-
-const UserMessage: React.FC<{ content: string }> = ({ content }) => (
-    <motion.div
-        initial={{ opacity: 0, y: 8 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.15 }}
-        className="flex justify-end mb-6"
-    >
-        <div className="bg-[#2C2C2E] text-white px-5 py-3 rounded-2xl rounded-tr-md max-w-[70%] text-[17.5px] leading-[1.72]">
-            {content}
-        </div>
-    </motion.div>
-);
-
-const AssistantMessage: React.FC<{ content: string; isStreaming?: boolean }> = ({ content, isStreaming }) => {
-    const [copied, setCopied] = useState(false);
-
-    const handleCopy = async () => {
-        try {
-            await navigator.clipboard.writeText(content);
-            setCopied(true);
-            setTimeout(() => setCopied(false), 2000);
-        } catch (err) {
-            console.error('Failed to copy:', err);
-        }
-    };
-
-    return (
-        <motion.div
-            initial={{ opacity: 0, y: 8 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.15 }}
-            className="flex flex-col items-start mb-6"
-        >
-            <div className="text-text-primary text-[17.5px] leading-[1.72] max-w-[88%]">
-                <div className="markdown-content">
-                    <ReactMarkdown
-                        remarkPlugins={[remarkGfm, remarkMath]}
-                        rehypePlugins={[rehypeKatex]}
-                        components={{
-                            p: ({ node, ...props }: any) => <p className="mb-2 last:mb-0 whitespace-pre-wrap" {...props} />,
-                            strong: ({ node, ...props }: any) => <strong className="font-semibold text-text-primary" {...props} />,
-                            em: ({ node, ...props }: any) => <em className="italic text-text-secondary" {...props} />,
-                            ul: ({ node, ...props }: any) => <ul className="list-disc ml-5 mb-2 space-y-1" {...props} />,
-                            ol: ({ node, ...props }: any) => <ol className="list-decimal ml-5 mb-2 space-y-1" {...props} />,
-                            li: ({ node, ...props }: any) => <li className="pl-1" {...props} />,
-                            a: ({ node, ...props }: any) => <a className="text-blue-500 hover:underline" target="_blank" rel="noopener noreferrer" {...props} />,
-                            pre: ({ node, ...props }: any) => (
-                                <pre
-                                    className="my-3 overflow-x-auto rounded-xl border border-border-subtle bg-bg-tertiary px-4 py-3 text-[15.25px] leading-[1.72]"
-                                    {...props}
-                                />
-                            ),
-                            code: ({ node, inline, className, ...props }: any) => {
-                                const isInline = inline ?? !String(className || '').includes('language-');
-                                return (
-                                    <code
-                                        className={isInline
-                                            ? 'rounded bg-bg-tertiary px-1.5 py-0.5 text-[15.25px] font-mono text-text-primary'
-                                            : 'font-mono'}
-                                        {...props}
-                                    />
-                                );
-                            },
-                            blockquote: ({ node, ...props }: any) => <blockquote className="my-2 border-l-2 border-border-subtle pl-3 italic text-text-secondary" {...props} />,
-                        }}
-                    >
-                        {content}
-                    </ReactMarkdown>
-                </div>
-                {isStreaming && (
-                    <motion.span
-                        className="inline-block w-0.5 h-4 bg-text-secondary ml-0.5 align-middle"
-                        animate={{ opacity: [1, 0] }}
-                        transition={{ duration: 0.5, repeat: Infinity }}
-                    />
-                )}
-            </div>
-            {!isStreaming && content && (
-                <button
-                    onClick={handleCopy}
-                    className="flex items-center gap-2 mt-3 text-[13px] text-text-tertiary hover:text-text-secondary transition-colors"
-                >
-                    {copied ? <Check size={14} className="text-emerald-500" /> : <Copy size={14} />}
-                    {copied ? 'Copied' : 'Copy message'}
-                </button>
-            )}
-        </motion.div>
-    );
-};
 
 // ============================================
 // Main Component
@@ -434,27 +314,28 @@ const GlobalChatOverlay: React.FC<GlobalChatOverlayProps> = ({
                             </button>
                         </div>
 
-                        {/* Messages area - scrollable */}
-                        <div ref={scrollContainerRef} className="flex-1 overflow-y-auto px-6 py-4 pb-32 custom-scrollbar flex flex-col">
+                        {/* Messages area - scrollable with improved spacing */}
+                        <div ref={scrollContainerRef} className="flex-1 overflow-y-auto px-8 py-6 pb-32 custom-scrollbar flex flex-col">
                             <AnimatePresence initial={false}>
-                                {messages.map((msg) => (
-                                    <motion.div
+                                {messages.map((msg, index) => (
+                                    <div
                                         key={msg.id}
                                         data-autoscroll-message-id={msg.id}
-                                        initial={{ opacity: 0, y: -8 }}
-                                        animate={{ opacity: 1, y: 0 }}
-                                        exit={{ opacity: 0, y: -4 }}
-                                        transition={{ 
-                                            opacity: { duration: 0.12, ease: [0.22, 1, 0.36, 1] },
-                                            y: { duration: 0.16, ease: [0.22, 1, 0.36, 1] },
-                                            layout: { duration: 0.18, ease: [0.22, 1, 0.36, 1] }
-                                        }}
-                                        layout="position"
                                     >
                                         {msg.role === 'user'
-                                            ? <UserMessage content={msg.content} />
-                                            : <AssistantMessage content={msg.content} isStreaming={msg.isStreaming} />}
-                                    </motion.div>
+                                            ? <UserMessage 
+                                                role={msg.role}
+                                                content={msg.content}
+                                                isNew={index === 0}
+                                              />
+                                            : <AssistantMessage 
+                                                role={msg.role}
+                                                content={msg.content} 
+                                                isStreaming={msg.isStreaming}
+                                                isNew={index === 0}
+                                              />
+                                        }
+                                    </div>
                                 ))}
                             </AnimatePresence>
 
@@ -462,7 +343,20 @@ const GlobalChatOverlay: React.FC<GlobalChatOverlayProps> = ({
                                 <motion.div
                                     initial={{ opacity: 0, y: 4 }}
                                     animate={{ opacity: 1, y: 0 }}
-                                    className="text-[#FF6B6B] text-[13px] py-2"
+                                    className="
+                                        px-5 
+                                        py-3 
+                                        rounded-xl 
+                                        bg-red-50 
+                                        dark:bg-red-900/20 
+                                        border 
+                                        border-red-200 
+                                        dark:border-red-800/40 
+                                        text-red-700 
+                                        dark:text-red-400 
+                                        text-sm
+                                        mb-4
+                                    "
                                 >
                                     {errorMessage}
                                 </motion.div>

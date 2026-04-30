@@ -470,7 +470,14 @@ elif [[ "$ARCH" == "x86_64" ]]; then
     ARCH_LABEL="Intel"
     BUILD_COMMAND=(npm run app:build:x64)
 else
-    fail "Unsupported architecture: $ARCH"
+fail "Unsupported architecture: $ARCH"
+fi
+
+# ── Detect Rust ──
+if command -v cargo &>/dev/null; then
+HAS_RUST="true"
+else
+HAS_RUST="false"
 fi
 
 # ── Detect Rust ──

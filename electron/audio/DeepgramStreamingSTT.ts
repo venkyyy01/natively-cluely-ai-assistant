@@ -401,6 +401,17 @@ export class DeepgramStreamingSTT extends EventEmitter {
     private scheduleReconnect(): void {
         if (!this.shouldReconnect || !this.isActive || this.reconnectTimer || this.isConnecting) return;
 
+        if (this.reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
+            this.shouldReconnect = false;
+            this.isActive = false;
+            this.isConnecting = false;
+            this.buffer.clear();
+            const error = new Error(`Deepgram max reconnect attempts (${MAX_RECONNECT_ATTEMPTS}) reached`);
+            console.error('[DeepgramStreaming] Max reconnect attempts reached. Giving up.');
+            this.emit('error', error);
+            return;
+        }
+
         const delay = Math.min(
             RECONNECT_BASE_DELAY_MS * Math.pow(2, this.reconnectAttempts),
             RECONNECT_MAX_DELAY_MS

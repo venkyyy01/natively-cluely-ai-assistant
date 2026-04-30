@@ -1,17 +1,10 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useStreamBuffer } from '../hooks/useStreamBuffer';
 import { useHumanSpeedAutoScroll } from '../hooks/useHumanSpeedAutoScroll';
-import { X, Copy, Check } from 'lucide-react';
+import { X } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import nativelyIcon from './icon.png';
-
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
-import remarkMath from 'remark-math';
-import rehypeKatex from 'rehype-katex';
-import 'katex/dist/katex.min.css';
-import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
-import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
+import { UserMessage, AssistantMessage } from './ChatMessage';
 
 // ============================================
 // Types 
@@ -44,141 +37,7 @@ interface MeetingChatOverlayProps {
 
 type ChatState = 'idle' | 'opening' | 'waiting_for_llm' | 'streaming_response' | 'error' | 'closing';
 
-// ============================================
-// Typing Indicator Component
-// ============================================
 
-const TypingIndicator: React.FC = () => (
-    <div className="flex items-center gap-1 py-4">
-        <div className="flex items-center gap-1">
-            {[0, 1, 2].map((i) => (
-                <motion.div
-                    key={i}
-                    className="w-2 h-2 rounded-full bg-text-tertiary"
-                    animate={{ opacity: [0.4, 1, 0.4] }}
-                    transition={{
-                        duration: 0.6,
-                        repeat: Infinity,
-                        delay: i * 0.15,
-                        ease: "easeInOut"
-                    }}
-                />
-            ))}
-        </div>
-    </div>
-);
-
-// ============================================
-// Message Components
-// ============================================
-
-const UserMessage: React.FC<{ content: string }> = ({ content }) => (
-    <motion.div
-        initial={{ opacity: 0, y: 8 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.15 }}
-        className="flex justify-end mb-6"
-    >
-        <div className="bg-accent-primary text-white px-5 py-3 rounded-2xl rounded-tr-md max-w-[70%] text-[17.5px] leading-[1.72]">
-            {content}
-        </div>
-    </motion.div>
-);
-
-const AssistantMessage: React.FC<{ content: string; isStreaming?: boolean }> = ({ content, isStreaming }) => {
-    const [copied, setCopied] = useState(false);
-
-    const handleCopy = async () => {
-        try {
-            await navigator.clipboard.writeText(content);
-            setCopied(true);
-            setTimeout(() => setCopied(false), 2000);
-        } catch (err) {
-            console.error('Failed to copy:', err);
-        }
-    };
-
-    return (
-        <motion.div
-            initial={{ opacity: 0, y: 8 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.15 }}
-            className="flex flex-col items-start mb-6"
-        >
-            <div className="text-text-primary text-[17.5px] leading-[1.72] max-w-[85%]">
-                <div className="markdown-content">
-                    <ReactMarkdown
-                        remarkPlugins={[remarkGfm, remarkMath]}
-                        rehypePlugins={[rehypeKatex]}
-                        components={{
-                            p: ({ node, ...props }: any) => <p className="mb-2 last:mb-0 whitespace-pre-wrap" {...props} />,
-                            a: ({ node, ...props }: any) => <a className="text-blue-500 hover:underline" {...props} />,
-                            pre: ({ children }: any) => <div className="not-prose mb-4">{children}</div>,
-                            code: ({ node, inline, className, children, ...props }: any) => {
-                                const match = /language-(\w+)/.exec(className || '');
-                                const isInline = inline ?? false;
-                                const lang = match ? match[1] : '';
-
-                                return !isInline ? (
-                                    <div className="my-3 rounded-xl overflow-hidden border border-white/[0.08] shadow-lg bg-zinc-800/60 backdrop-blur-md">
-                                        <div className="bg-white/[0.04] px-3 py-1.5 border-b border-white/[0.08]">
-                                            <span className="text-[10px] uppercase tracking-widest font-semibold text-white/40 font-mono">
-                                                {lang || 'CODE'}
-                                            </span>
-                                        </div>
-                                        <div className="bg-transparent">
-                                            <SyntaxHighlighter
-                                                language={lang || 'text'}
-                                                style={vscDarkPlus}
-                                                customStyle={{
-                                                    margin: 0,
-                                                    borderRadius: 0,
-                                                        fontSize: '15.25px',
-                                                        lineHeight: '1.72',
-                                                    background: 'transparent',
-                                                    padding: '16px',
-                                                    fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace'
-                                                }}
-                                                wrapLongLines={true}
-                                                showLineNumbers={true}
-                                                lineNumberStyle={{ minWidth: '2.5em', paddingRight: '1.2em', color: 'rgba(255,255,255,0.2)', textAlign: 'right', fontSize: '12.75px' }}
-                                                {...props}
-                                            >
-                                                {String(children).replace(/\n$/, '')}
-                                            </SyntaxHighlighter>
-                                        </div>
-                                    </div>
-                                ) : (
-                                    <code className="bg-bg-tertiary px-1.5 py-0.5 rounded text-[15.25px] font-mono text-text-primary border border-border-subtle whitespace-pre-wrap" {...props}>
-                                        {children}
-                                    </code>
-                                );
-                            },
-                        }}
-                    >
-                        {content}
-                    </ReactMarkdown>
-                </div>
-                {isStreaming && (
-                    <motion.span
-                        className="inline-block w-0.5 h-4 bg-text-secondary ml-0.5 align-middle"
-                        animate={{ opacity: [1, 0] }}
-                        transition={{ duration: 0.5, repeat: Infinity }}
-                    />
-                )}
-            </div>
-            {!isStreaming && content && (
-                <button
-                    onClick={handleCopy}
-                    className="flex items-center gap-2 mt-3 text-[13px] text-text-tertiary hover:text-text-secondary transition-colors"
-                >
-                    {copied ? <Check size={14} className="text-emerald-500" /> : <Copy size={14} />}
-                    {copied ? 'Copied' : 'Copy message'}
-                </button>
-            )}
-        </motion.div>
-    );
-};
 
 // ============================================
 // Main Component
@@ -539,27 +398,28 @@ ${contextString}`;
                             </button>
                         </div>
 
-                        {/* Messages area - scrollable */}
-                        <div ref={scrollContainerRef} className="flex-1 overflow-y-auto px-6 py-4 pb-32 custom-scrollbar flex flex-col">
+                        {/* Messages area - scrollable with improved spacing */}
+                        <div ref={scrollContainerRef} className="flex-1 overflow-y-auto px-8 py-6 pb-32 custom-scrollbar flex flex-col">
                             <AnimatePresence initial={false}>
-                                {messages.map((msg) => (
-                                    <motion.div
+                                {messages.map((msg, index) => (
+                                    <div
                                         key={msg.id}
                                         data-autoscroll-message-id={msg.id}
-                                        initial={{ opacity: 0, y: -8 }}
-                                        animate={{ opacity: 1, y: 0 }}
-                                        exit={{ opacity: 0, y: -4 }}
-                                        transition={{ 
-                                            opacity: { duration: 0.12, ease: [0.22, 1, 0.36, 1] },
-                                            y: { duration: 0.16, ease: [0.22, 1, 0.36, 1] },
-                                            layout: { duration: 0.18, ease: [0.22, 1, 0.36, 1] }
-                                        }}
-                                        layout="position"
                                     >
                                         {msg.role === 'user'
-                                            ? <UserMessage content={msg.content} />
-                                            : <AssistantMessage content={msg.content} isStreaming={msg.isStreaming} />}
-                                    </motion.div>
+                                            ? <UserMessage 
+                                                role={msg.role}
+                                                content={msg.content} 
+                                                isNew={index === 0}
+                                              />
+                                            : <AssistantMessage 
+                                                role={msg.role}
+                                                content={msg.content} 
+                                                isStreaming={msg.isStreaming}
+                                                isNew={index === 0}
+                                              />
+                                        }
+                                    </div>
                                 ))}
                             </AnimatePresence>
 
@@ -567,7 +427,20 @@ ${contextString}`;
                                 <motion.div
                                     initial={{ opacity: 0, y: 4 }}
                                     animate={{ opacity: 1, y: 0 }}
-                                    className="text-[#FF6B6B] text-[13px] py-2"
+                                    className="
+                                        px-5 
+                                        py-3 
+                                        rounded-xl 
+                                        bg-red-50 
+                                        dark:bg-red-900/20 
+                                        border 
+                                        border-red-200 
+                                        dark:border-red-800/40 
+                                        text-red-700 
+                                        dark:text-red-400 
+                                        text-sm
+                                        mb-4
+                                    "
                                 >
                                     {errorMessage}
                                 </motion.div>

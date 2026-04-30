@@ -365,6 +365,7 @@ test('MeetingPersistence marks failed finalization attempts and notifies listene
   const notifications: string[] = [];
   const restoreElectron = installElectronMock([
     {
+      isDestroyed: () => false,
       webContents: {
         send(channel: string) {
           notifications.push(channel);

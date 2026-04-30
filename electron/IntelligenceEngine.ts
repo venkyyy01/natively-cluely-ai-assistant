@@ -6,6 +6,7 @@ import { EventEmitter } from 'events';
 import { createHash } from 'crypto';
 import { LLMHelper } from './LLMHelper';
 import { SessionTracker, TranscriptSegment, SuggestionTrigger, ContextItem } from './SessionTracker';
+import { Result, LLMError } from './types/Result';
 import {
   AnswerLLM, AssistLLM, FollowUpLLM, RecapLLM,
   FollowUpQuestionsLLM, WhatToAnswerLLM,
@@ -798,14 +799,21 @@ export class IntelligenceEngine extends EventEmitter {
                 return null;
             }
 
-            const insight = await this.assistLLM.generate(context);
+            const insightResult = await this.assistLLM.generate(context);
 
             if (this.assistCancellationToken?.signal.aborted || this.shouldSuppressAuxiliaryMode(requestId)) {
                 return null;
             }
 
-            if (insight) {
-                this.emit('assist_update', insight);
+            if (insightResult.success && insightResult.data) {
+                this.emit('assist_update', insightResult.data);
+                this.setMode('idle');
+                return insightResult.data;
+            } else {
+                // Log error but don't throw - assist mode failures should be silent
+                console.warn('[INTELLIGENCE] AssistLLM failed:', insightResult.error);
+                this.setMode('idle');
+                return null;
             }
             return insight;
 
@@ -1000,9 +1008,12 @@ export class IntelligenceEngine extends EventEmitter {
                 }
                 console.log('[INTELLIGENCE] 🔄 Using fallback answerLLM');
                 const context = this.session.getFormattedContext(180);
-                let answer = await this.answerLLM.generate(question || '', context);
-                if (answer) {
-                // No clamping - prompt enforces brevity
+                let answerResult = await this.answerLLM.generate(question || '', context);
+                
+                let answer: string | null = null;
+                if (answerResult.success && answerResult.data) {
+                    answer = answerResult.data;
+                    // No clamping - prompt enforces brevity
                     this.session.addAssistantMessage(answer);
                     const metadata = this.buildSuggestedAnswerMetadata({
                         route: 'fast_standard_answer',
@@ -1023,6 +1034,7 @@ export class IntelligenceEngine extends EventEmitter {
                     });
                     this.emit('suggested_answer', answer, question || 'inferred', confidence, metadata);
                 }
+                
                 this.setMode('idle');
                 return answer || "Could you repeat that? I want to make sure I address your question properly.";
             }
@@ -2070,7 +2082,7 @@ export class IntelligenceEngine extends EventEmitter {
             }
 
             const context = this.session.getFormattedContext(120);
-            const answer = await this.answerLLM.generate(question, context);
+            const answerResult = await this.answerLLM.generate(question, context);
 
             if (this.shouldSuppressAuxiliaryMode(requestId)) {
                 return null;
@@ -2086,6 +2098,13 @@ export class IntelligenceEngine extends EventEmitter {
                     question: question,
                     answer: answer
                 });
+                
+                this.setMode('idle');
+                return answer;
+            } else {
+                console.warn('[INTELLIGENCE] Manual answer failed:', answerResult.error);
+                this.setMode('idle');
+                return null;
             }
 
             return answer;

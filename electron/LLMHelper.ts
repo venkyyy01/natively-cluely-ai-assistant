@@ -5,7 +5,7 @@ import Anthropic from "@anthropic-ai/sdk"
 import Tesseract from "tesseract.js"
 import fs from "fs"
 import sharp from "sharp"
-import { ModelVersionManager, ModelFamily, TextModelFamily, parseModelVersion, compareVersions, classifyTextModel } from './services/ModelVersionManager'
+import { ModelVersionManager, ModelFamily, TextModelFamily, parseModelVersion, compareVersions, classifyTextModel, TieredModels } from './services/ModelVersionManager'
 import {
   HARD_SYSTEM_PROMPT, GROQ_SYSTEM_PROMPT, OPENAI_SYSTEM_PROMPT, CLAUDE_SYSTEM_PROMPT,
   UNIVERSAL_SYSTEM_PROMPT, UNIVERSAL_ANSWER_PROMPT, UNIVERSAL_WHAT_TO_ANSWER_PROMPT,
@@ -540,6 +540,45 @@ export class LLMHelper {
   // ---------------------------
 
   public currentModelId: string = GEMINI_FLASH_MODEL;
+
+  private prioritizeTierEntries<T extends { family: string }>(entries: T[], preferredFamily: string | null): T[] {
+    if (!preferredFamily) {
+      return entries;
+    }
+
+    const selected = entries.find((entry) => entry.family === preferredFamily);
+    if (!selected) {
+      return entries;
+    }
+
+    return [selected, ...entries.filter((entry) => entry.family !== preferredFamily)];
+  }
+
+  private getSelectedTextFamily(): TextModelFamily | null {
+    if (this.isOpenAiModel(this.currentModelId)) return TextModelFamily.OPENAI;
+    if (this.isClaudeModel(this.currentModelId)) return TextModelFamily.CLAUDE;
+    if (this.isGroqModel(this.currentModelId)) return TextModelFamily.GROQ;
+    if (this.currentModelId.includes('gemini') && this.currentModelId.includes('pro')) return TextModelFamily.GEMINI_PRO;
+    if (this.isGeminiModel(this.currentModelId)) return TextModelFamily.GEMINI_FLASH;
+    return null;
+  }
+
+  private getOrderedTextTiers(): Array<{ family: TextModelFamily } & TieredModels> {
+    return this.prioritizeTierEntries(this.modelVersionManager.getAllTextTiers(), this.getSelectedTextFamily());
+  }
+
+  private getSelectedVisionFamily(): ModelFamily | null {
+    if (this.isOpenAiModel(this.currentModelId)) return ModelFamily.OPENAI;
+    if (this.isClaudeModel(this.currentModelId)) return ModelFamily.CLAUDE;
+    if (this.isGroqModel(this.currentModelId)) return ModelFamily.GROQ_LLAMA;
+    if (this.currentModelId.includes('gemini') && this.currentModelId.includes('pro')) return ModelFamily.GEMINI_PRO;
+    if (this.isGeminiModel(this.currentModelId)) return ModelFamily.GEMINI_FLASH;
+    return null;
+  }
+
+  private getOrderedVisionTiers(): Array<{ family: ModelFamily } & TieredModels> {
+    return this.prioritizeTierEntries(this.modelVersionManager.getAllVisionTiers(), this.getSelectedVisionFamily());
+  }
 
   public setModel(modelId: string, customProviders: (CustomProvider | CurlProvider)[] = []) {
     // Map UI short codes to internal Model IDs
@@ -2233,14 +2272,15 @@ ANSWER DIRECTLY:`;
   public async generateWithClaude(userMessage: string, systemPrompt?: string, imagePaths?: string[]): Promise<string> {
     if (!this.claudeClient) throw new Error("Claude client not initialized");
 
+    const targetModel = modelOverride || CLAUDE_MODEL;
     await this.rateLimiters.claude.acquire();
     const systemPromptHash = this.hashValue(systemPrompt || '');
-    const payloadHash = this.hashValue({ userMessage, systemPrompt: systemPrompt || '', imagePaths: imagePaths || [] });
+    const payloadHash = this.hashValue({ model: targetModel, userMessage, systemPrompt: systemPrompt || '', imagePaths: imagePaths || [] });
 
-    return this.withResponseCache('claude', CLAUDE_MODEL, systemPromptHash, payloadHash, async () => {
+    return this.withResponseCache('claude', targetModel, systemPromptHash, payloadHash, async () => {
       const requestPayload = await this.withFinalPayloadCache(
         'claude',
-        CLAUDE_MODEL,
+        targetModel,
         systemPromptHash,
         payloadHash,
         async () => {
@@ -2263,7 +2303,7 @@ ANSWER DIRECTLY:`;
           content.push({ type: "text", text: userMessage });
 
           return {
-            model: CLAUDE_MODEL,
+            model: targetModel,
             max_tokens: CLAUDE_MAX_OUTPUT_TOKENS,
             ...(systemPrompt ? { system: systemPrompt } : {}),
             messages: [{ role: "user", content }],
@@ -2517,6 +2557,22 @@ ANSWER DIRECTLY:`;
     return "";
   }
 
+  private extractResponseByPath(data: any, responsePath: string): string | null {
+    const answer = getByPath(data, responsePath);
+
+    if (typeof answer === 'string' && answer.trim().length > 0) return answer;
+    if (answer !== null && answer !== undefined) {
+      if (typeof answer === 'number' || typeof answer === 'boolean') return String(answer);
+      if (Array.isArray(answer) && answer.length > 0) return JSON.stringify(answer);
+      if (typeof answer === 'object' && Object.keys(answer).length > 0) return JSON.stringify(answer);
+    }
+
+    const guessed = this.extractOpenAIFormattedText(data, false);
+    if (guessed && guessed.trim().length > 0) return guessed;
+
+    return null;
+  }
+
   private extractOpenAIFormattedText(data: any, allowRawJsonFallback: boolean = true): string {
     if (!data || typeof data === 'string') return data || "";
 
@@ -2655,7 +2711,7 @@ ANSWER DIRECTLY:`;
 
     const response = await withTimeout(
       this.groqClient.chat.completions.create({
-        model: "meta-llama/llama-4-scout-17b-16e-instruct",
+        model: modelOverride,
         messages,
         temperature: 1,
         max_completion_tokens: 28672,
@@ -2964,6 +3020,23 @@ ANSWER DIRECTLY:`;
     yield* _streamChatWithGemini(this, message, imagePaths, context, skipSystemPrompt, abortSignal);
   }
 
+  private async * streamWithFallbackGuard(
+    execute: () => AsyncGenerator<string, void, unknown>
+  ): AsyncGenerator<string, boolean, unknown> {
+    let emittedTokens = false;
+
+    try {
+      for await (const chunk of execute()) {
+        emittedTokens = true;
+        yield chunk;
+      }
+      return emittedTokens;
+    } catch (error: any) {
+      error.streamHadOutput = emittedTokens;
+      throw error;
+    }
+  }
+
   /**
    * Universal Stream Chat - Routes to correct provider based on currentModelId
    */
@@ -3104,6 +3177,9 @@ ANSWER DIRECTLY:`;
         yield* this.streamWithGroq(groqFullMessage, fastResponseTarget.model, options?.abortSignal);
         return;
       } catch (e: any) {
+        if (e?.streamHadOutput) {
+          throw e;
+        }
         console.warn(`[LLMHelper] Fast Response Mode streaming failed on ${fastResponseTarget.provider}, falling back:`, e.message);
         // Fall through
       }
@@ -3240,9 +3316,16 @@ ANSWER DIRECTLY:`;
       return;
     }
 
-    // 3. Cloud Provider Routing
+    // 3. Cloud Provider Routing with cross-provider fallback
+    const openAiSystem = systemPromptOverride || OPENAI_SYSTEM_PROMPT;
+    const finalOpenAiSystem = this.injectLanguageInstruction(openAiSystem);
+    const claudeSystem = systemPromptOverride || CLAUDE_SYSTEM_PROMPT;
+    const finalClaudeSystem = this.injectLanguageInstruction(claudeSystem);
+    const groqSystem = systemPromptOverride ? baseSystemPrompt : GROQ_SYSTEM_PROMPT;
+    const finalGroqSystem = this.injectLanguageInstruction(groqSystem);
+    const groqFullMessage = this.joinPrompt(finalGroqSystem, userContent);
+    const geminiFullMessage = this.joinPrompt(finalSystemPrompt, userContent);
 
-    // OpenAI
     if (this.isOpenAiModel(this.currentModelId) && this.openaiClient) {
       const openAiSystem = systemPromptOverride || OPENAI_SYSTEM_PROMPT;
       const finalOpenAiSystem = prepareStreamSystemPrompt(openAiSystem);
@@ -3258,10 +3341,8 @@ ANSWER DIRECTLY:`;
       } else {
         yield* this.streamWithOpenai(userContent, finalOpenAiSystem, options?.abortSignal);
       }
-      return;
     }
 
-    // Claude
     if (this.isClaudeModel(this.currentModelId) && this.claudeClient) {
       const claudeSystem = systemPromptOverride || CLAUDE_SYSTEM_PROMPT;
       const finalClaudeSystem = prepareStreamSystemPrompt(claudeSystem);
@@ -3277,10 +3358,8 @@ ANSWER DIRECTLY:`;
       } else {
         yield* this.streamWithClaude(userContent, finalClaudeSystem, options?.abortSignal);
       }
-      return;
     }
 
-    // Groq (Text + Multimodal)
     if (this.isGroqModel(this.currentModelId) && this.groqClient) {
       if (isMultimodal && imagePaths) {
         // Route multimodal to Groq Llama 4 Scout (vision-capable)
@@ -3299,6 +3378,16 @@ ANSWER DIRECTLY:`;
           options?.abortSignal,
         );
         return;
+      } catch (error: any) {
+        if (error?.streamHadOutput) {
+          throw error;
+        }
+        if (isMultimodal) {
+          excludedVisionTier1Family = ModelFamily.GROQ_LLAMA;
+        } else {
+          excludedTextTier1Family = TextModelFamily.GROQ;
+        }
+        console.warn(`[LLMHelper] Selected Groq stream failed. Falling back across providers: ${error.message}`);
       }
       // Text-only Groq
       const groqSystem = systemPromptOverride ? baseSystemPrompt : GROQ_SYSTEM_PROMPT;
@@ -3331,6 +3420,63 @@ ANSWER DIRECTLY:`;
         }
         yield* this.streamWithGeminiModel(fullMsg, this.currentModelId, imagePaths, options?.abortSignal);
         return;
+      } catch (error: any) {
+        if (error?.streamHadOutput) {
+          throw error;
+        }
+        if (isMultimodal) {
+          excludedVisionTier1Family = this.currentModelId.includes('pro') ? ModelFamily.GEMINI_PRO : ModelFamily.GEMINI_FLASH;
+        } else {
+          excludedTextTier1Family = this.currentModelId.includes('pro') ? TextModelFamily.GEMINI_PRO : TextModelFamily.GEMINI_FLASH;
+        }
+        console.warn(`[LLMHelper] Selected Gemini stream failed. Falling back across providers: ${error.message}`);
+      }
+    }
+
+    type ProviderStreamAttempt = { name: string; execute: () => AsyncGenerator<string, void, unknown> };
+    const orderedTiers = isMultimodal ? this.getOrderedVisionTiers() : this.getOrderedTextTiers();
+    const tierKeys: Array<keyof TieredModels> = ['tier1', 'tier2', 'tier3'];
+
+    for (let tierIndex = 0; tierIndex < tierKeys.length; tierIndex++) {
+      const providers: ProviderStreamAttempt[] = [];
+      const tierKey = tierKeys[tierIndex];
+      const tierEntries = isMultimodal
+        ? (tierIndex === 0 && excludedVisionTier1Family
+            ? orderedTiers.filter((entry) => entry.family !== excludedVisionTier1Family)
+            : orderedTiers)
+        : (tierIndex === 0 && excludedTextTier1Family
+            ? orderedTiers.filter((entry) => entry.family !== excludedTextTier1Family)
+            : orderedTiers);
+
+      for (const entry of tierEntries) {
+        const modelId = entry[tierKey];
+
+        if (isMultimodal) {
+          if (entry.family === ModelFamily.OPENAI && this.openaiClient && imagePaths) {
+            providers.push({ name: `OpenAI (${modelId})`, execute: () => this.streamWithOpenaiMultimodalUsingModel(userContent, imagePaths, modelId, finalOpenAiSystem) });
+          } else if (entry.family === ModelFamily.CLAUDE && this.claudeClient && imagePaths) {
+            providers.push({ name: `Claude (${modelId})`, execute: () => this.streamWithClaudeMultimodal(userContent, imagePaths, finalClaudeSystem, modelId) });
+          } else if (entry.family === ModelFamily.GEMINI_FLASH && this.client) {
+            providers.push({ name: `Gemini Flash (${modelId})`, execute: () => this.streamWithGeminiModel(geminiFullMessage, modelId, imagePaths) });
+          } else if (entry.family === ModelFamily.GEMINI_PRO && this.client) {
+            providers.push({ name: `Gemini Pro (${modelId})`, execute: () => this.streamWithGeminiModel(geminiFullMessage, modelId, imagePaths) });
+          } else if (entry.family === ModelFamily.GROQ_LLAMA && this.groqClient && imagePaths) {
+            providers.push({ name: `Groq (${modelId})`, execute: () => this.streamWithGroqMultimodal(userContent, imagePaths, finalOpenAiSystem, modelId) });
+          }
+          continue;
+        }
+
+        if (entry.family === TextModelFamily.GROQ && this.groqClient) {
+          providers.push({ name: `Groq (${modelId})`, execute: () => this.streamWithGroq(groqFullMessage, modelId) });
+        } else if (entry.family === TextModelFamily.OPENAI && this.openaiClient) {
+          providers.push({ name: `OpenAI (${modelId})`, execute: () => this.streamWithOpenaiUsingModel(userContent, modelId, finalOpenAiSystem) });
+        } else if (entry.family === TextModelFamily.CLAUDE && this.claudeClient) {
+          providers.push({ name: `Claude (${modelId})`, execute: () => this.streamWithClaude(userContent, finalClaudeSystem, modelId) });
+        } else if (entry.family === TextModelFamily.GEMINI_FLASH && this.client) {
+          providers.push({ name: `Gemini Flash (${modelId})`, execute: () => this.streamWithGeminiModel(geminiFullMessage, modelId) });
+        } else if (entry.family === TextModelFamily.GEMINI_PRO && this.client) {
+          providers.push({ name: `Gemini Pro (${modelId})`, execute: () => this.streamWithGeminiModel(geminiFullMessage, modelId) });
+        }
       }
 
       // Race strategy (default)
@@ -3374,6 +3520,8 @@ ANSWER DIRECTLY:`;
     } else {
       throw new Error("No LLM provider available");
     }
+
+    throw new Error("No LLM provider available");
   }
 
   /**

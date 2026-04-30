@@ -1,4 +1,5 @@
 #![deny(clippy::all)]
+#![allow(unexpected_cfgs, deprecated)]
 
 #[macro_use]
 extern crate napi_derive;

@@ -8,6 +8,7 @@ module.exports = {
         bg: {
           primary: 'var(--bg-primary)',
           secondary: 'var(--bg-secondary)',
+          tertiary: 'var(--bg-tertiary)',
           elevated: 'var(--bg-elevated)',
           input: 'var(--bg-input)',
 
