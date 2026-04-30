@@ -102,6 +102,11 @@ export class StealthRuntime {
   private firstFrameTimeout: NodeJS.Timeout | null = null;
   private detachContentBridgeMonitor: (() => void) | null = null;
 
+  private contentCrashCount = 0;
+  private contentCrashWindowStart = 0;
+  private static readonly MAX_CRASHES_PER_WINDOW = 3;
+  private static readonly CRASH_WINDOW_MS = 60_000;
+
   constructor(options: StealthRuntimeOptions) {
     this.stealthManager = options.stealthManager;
     this.startUrl = options.startUrl;
@@ -446,7 +451,50 @@ export class StealthRuntime {
       reason,
       windowRole: 'primary',
     });
+
+    const now = Date.now();
+    if (now - this.contentCrashWindowStart > StealthRuntime.CRASH_WINDOW_MS) {
+      this.contentCrashCount = 0;
+      this.contentCrashWindowStart = now;
+    }
+    this.contentCrashCount++;
+    if (this.contentCrashCount <= StealthRuntime.MAX_CRASHES_PER_WINDOW) {
+      setTimeout(() => this.attemptContentRecovery(), 2000);
+    }
     this.emitFault(reason);
+  }
+
+  private attemptContentRecovery(): void {
+    this.logger.log('[StealthRuntime] Attempting content window recovery...');
+    try {
+      // Destroy existing windows first
+      if (this.contentWindow && !this.contentWindow.isDestroyed()) {
+        this.contentWindow.close();
+      }
+      if (this.shellWindow && !this.shellWindow.isDestroyed()) {
+        this.shellWindow.close();
+      }
+      this.contentWindow = null;
+      this.shellWindow = null;
+      this.firstFrameReceived = false;
+      this.showRequestedBeforeFirstFrame = false;
+
+      // Recreate the stealth surface with same protections
+      this.createPrimaryStealthSurface({
+        width: 800,
+        height: 600,
+        webPreferences: {
+          nodeIntegration: false,
+          contextIsolation: true,
+          sandbox: false,
+        },
+      });
+
+      this.logger.log('[StealthRuntime] Content window recovery successful');
+    } catch (error) {
+      this.logger.error('[StealthRuntime] Content window recovery failed:', error);
+      this.emitFault('content-recovery-failed');
+    }
   }
 
   private emitFault(reason: string): void {

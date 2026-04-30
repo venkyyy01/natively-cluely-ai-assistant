@@ -5,6 +5,7 @@ import { CredentialsManager } from "../services/CredentialsManager"
 import { OllamaManager } from '../services/OllamaManager'
 import { KeybindManager } from "../services/KeybindManager"
 import { initRedactorWithUserDataPath } from '../stealth/logRedactor'
+import { installConsoleRedactor } from '../stealth/consoleRedactor'
 import {
   runPreReadyHealing,
   markSessionHealthy,
@@ -24,6 +25,11 @@ export async function initializeApp() {
   }
   const startupHealth = runPreReadyHealing();
   console.log('[Bootstrap] Startup health:', startupHealth);
+
+  // T-004: Install console redactor early when strict protection is enabled
+  if (process.env.NATIVELY_STRICT_PROTECTION === '1') {
+    installConsoleRedactor();
+  }
 
   // 2. Wait for app to be ready
   await app.whenReady()

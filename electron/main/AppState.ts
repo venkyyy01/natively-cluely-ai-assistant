@@ -155,6 +155,9 @@ private consciousModeEnabled: boolean = false
   }
   private _ollamaBootstrapPromise: Promise<void> | null = null;
   private audioRecoveryAttempts: number = 0;
+  private audioRecoveryTimestamps: number[] = [];
+  private static readonly MAX_RECOVERIES_PER_WINDOW = 3;
+  private static readonly RECOVERY_WINDOW_MS = 5 * 60 * 1000; // 5 min
   // 5 attempts with exponential backoff gives up to ~75s of retry window
   // (5s, 10s, 15s, 20s, 25s) before declaring permanent failure.
   private readonly MAX_AUDIO_RECOVERY_ATTEMPTS = 5;
@@ -1343,6 +1346,17 @@ try {
     }
 
     if (this.isMeetingActive && this.audioRecoveryAttempts < this.MAX_AUDIO_RECOVERY_ATTEMPTS) {
+      // Check sliding window cap
+      const now = Date.now();
+      this.audioRecoveryTimestamps = this.audioRecoveryTimestamps.filter(t => now - t < AppState.RECOVERY_WINDOW_MS);
+      if (this.audioRecoveryTimestamps.length >= AppState.MAX_RECOVERIES_PER_WINDOW) {
+        console.warn('[Main] Audio recovery cap reached. Manual restart required.');
+        this.broadcast('audio-recovery-exhausted');
+        this.isReconfiguringAudio = false;
+        return;
+      }
+      this.audioRecoveryTimestamps.push(now);
+
       this.isReconfiguringAudio = true;
       this.audioRecoveryAttempts += 1;
       const attempt = this.audioRecoveryAttempts;
@@ -1367,8 +1381,6 @@ try {
         this.googleSTT?.start();
         this.googleSTT_User?.start();
         console.log(`[Main] ${noun} recovered successfully on attempt ${attempt}`);
-        // Reset counter so a future independent error gets a full 5 attempts.
-        this.audioRecoveryAttempts = 0;
         this.setNativeAudioConnected(true);
       } catch (recoveryErr) {
         console.error(`[Main] ${noun} recovery attempt ${attempt} failed:`, recoveryErr);
@@ -1646,9 +1658,9 @@ try {
       this.googleSTT_User?.setSampleRate(rate);
 
       this.microphoneCapture.on('data', (chunk: Buffer) => {
-        // Enhanced debugging - log periodically
-        if (Math.random() < 0.01) { // Log ~1% of chunks
-          console.log(`[Main] 🎤 Audio chunk: ${chunk.length}B → STT: ${!!this.googleSTT_User}`);
+        // Enhanced debugging - log periodically (only when debug flag is set)
+        if (process.env.NATIVELY_DEBUG_AUDIO === '1' && Math.random() < 0.01) { // Log ~1% of chunks
+          console.log(`[Main] Audio chunk: ${chunk.length}B → STT: ${!!this.googleSTT_User}`);
         }
         this.noteAudioChunk('microphone');
         this.googleSTT_User?.write(chunk);
@@ -1676,8 +1688,8 @@ try {
         this.googleSTT_User?.setSampleRate(rate);
 
         this.microphoneCapture.on('data', (chunk: Buffer) => {
-          if (Math.random() < 0.01) { // Log ~1% of chunks
-            console.log(`[Main] 🎤 Audio chunk (fallback): ${chunk.length}B → STT: ${!!this.googleSTT_User}`);
+          if (process.env.NATIVELY_DEBUG_AUDIO === '1' && Math.random() < 0.01) { // Log ~1% of chunks
+            console.log(`[Main] Audio chunk (fallback): ${chunk.length}B → STT: ${!!this.googleSTT_User}`);
           }
           this.noteAudioChunk('microphone');
           this.googleSTT_User?.write(chunk);
@@ -1834,6 +1846,7 @@ try {
   public async prepareMeetingActivation(metadata?: any): Promise<void> {
     console.log('[Main] Starting Meeting...', metadata);
     this.audioRecoveryAttempts = 0;
+    this.audioRecoveryTimestamps = [];
     this.audioRecoveryBackoffMs = 5000;
     this.startAbortController = new AbortController();
     const { signal } = this.startAbortController;
@@ -2765,6 +2778,7 @@ setThemeMode: (mode) => this.themeManager.setMode(mode as import('../ThemeManage
   }
 
   public showTray(): void {
+    if (this.isUndetectable) return;
     if (this.tray) return;
 
     // Try to find a template image first for macOS
@@ -2802,7 +2816,7 @@ setThemeMode: (mode) => this.themeManager.setMode(mode as import('../ThemeManage
     trayIcon.setTemplateImage(iconToUse.endsWith('Template.png'));
 
     this.tray = new Tray(trayIcon)
-    this.tray.setToolTip('Natively') // This tooltip might also need update if we change global shortcut, but global shortcut is removed.
+    this.tray.setToolTip(process.title.trim()) // This tooltip might also need update if we change global shortcut, but global shortcut is removed.
     this.updateTrayMenu();
 
     // Double-click to show window
@@ -2824,7 +2838,7 @@ setThemeMode: (mode) => this.themeManager.setMode(mode as import('../ThemeManage
     console.log('[Main] updateTrayMenu called. Screenshot Accelerator:', screenshotAccel);
 
     // Update tooltip for verification
-    this.tray.setToolTip('Natively');
+    this.tray.setToolTip(process.title.trim());
 
     // Helper to format accelerator for display (e.g. CommandOrControl+H -> Cmd+H)
     const formatAccel = (accel: string) => {
@@ -2844,7 +2858,7 @@ setThemeMode: (mode) => this.themeManager.setMode(mode as import('../ThemeManage
 
     const contextMenu = Menu.buildFromTemplate([
       {
-        label: 'Show Natively',
+        label: `Show ${process.title.trim()}`,
         click: () => {
           if (this.isUndetectable && this.visibilityIntent !== 'visible_app') {
             void this.setUndetectableAsync(false)
@@ -3510,8 +3524,14 @@ public setAccelerationModeEnabled(enabled: boolean): boolean {
 
     // 3. Update App User Model ID (Windows Taskbar grouping)
     if (isWin) {
+      const DISGUISE_AUMID: Record<string, string> = {
+        terminal: 'Microsoft.WindowsTerminal',
+        settings: 'windows.immersivecontrolpanel',
+        activity: 'Microsoft.Windows.TaskManager',
+        none: 'com.natively.assistant',
+      };
       // Use unique AUMID per disguise to avoid grouping with the real app
-      app.setAppUserModelId(`com.natively.assistant.${mode}`);
+      app.setAppUserModelId(DISGUISE_AUMID[mode] ?? DISGUISE_AUMID.none);
     }
 
     // 4. Update Icons

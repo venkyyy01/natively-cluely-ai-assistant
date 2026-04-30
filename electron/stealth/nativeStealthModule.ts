@@ -46,7 +46,7 @@ export function loadNativeStealthModule(options?: { retryOnFailure?: boolean }):
   }
   
   if (options?.retryOnFailure && loadAttempts >= MAX_LOAD_ATTEMPTS) {
-    console.warn(`[NativeStealthModule] Max retry attempts (${MAX_LOAD_ATTEMPTS}) reached, giving up. Privacy protection is operating in Layer 0 mode only (setContentProtection).`);
+    console.warn(`[NativeStealthModule] Max retry attempts (${MAX_LOAD_ATTEMPTS}) reached. L0 fallback active.`);
     return cachedModule;
   }
   
@@ -91,7 +91,7 @@ export function loadNativeStealthModule(options?: { retryOnFailure?: boolean }):
   }
 
   cachedModule = null;
-  console.warn('[NativeStealthModule] All candidates failed. Privacy protection is DEGRADED - operating in Layer 0 mode only (setContentProtection). Native stealth APIs are unavailable.');
+  console.warn('[NativeStealthModule] All candidates failed. Module L1 unavailable. L0 fallback active.');
   return cachedModule;
 }
 

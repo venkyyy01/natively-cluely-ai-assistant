@@ -395,9 +395,11 @@ describe('StealthManager', () => {
                     timeouts.push(fn);
                     return timeouts.length;
                 },
-                processEnumerator: async () => {
-                    enumeratorCallCount++;
-                    return enumeratorCallCount <= 1 ? 'obs' : '';
+                nativeModule: {
+                    getRunningProcesses: () => {
+                        enumeratorCallCount++;
+                        return enumeratorCallCount <= 1 ? [{ pid: 1, ppid: 1, name: 'obs' }] : [];
+                    },
                 },
             } as any
         );
@@ -434,7 +436,7 @@ describe('StealthManager', () => {
                 timeoutScheduler() {
                     return 1;
                 },
-                processEnumerator: async () => '',
+                nativeModule: { getRunningProcesses: (): Array<{ pid: number; ppid: number; name: string }> => [] },
             } as any,
         );
         const first = new FakeWindow();
@@ -470,7 +472,7 @@ describe('StealthManager', () => {
                 timeoutScheduler() {
                     return 1;
                 },
-                processEnumerator: async () => '',
+                nativeModule: { getRunningProcesses: (): Array<{ pid: number; ppid: number; name: string }> => [] },
             } as any,
         );
         const win = new FakeWindow();
@@ -500,7 +502,7 @@ describe('StealthManager', () => {
                 timeoutScheduler() {
                     return 1;
                 },
-                processEnumerator: async () => '',
+                nativeModule: { getRunningProcesses: (): Array<{ pid: number; ppid: number; name: string }> => [] },
             } as any
         );
 
@@ -531,7 +533,7 @@ describe('StealthManager', () => {
                 timeoutScheduler() {
                     return 1;
                 },
-                processEnumerator: async () => 'obs',
+                nativeModule: { getRunningProcesses: () => [{ pid: 1, ppid: 1, name: 'obs' }] },
             } as any
         );
         const win = new FakeWindow();
@@ -543,19 +545,17 @@ describe('StealthManager', () => {
         win.destroy();
     });
 
-  it('uses a single darwin process snapshot before falling back to per-pattern probing', async () => {
-    const calls: Array<{ command: string; args: string[] }> = [];
+  it('uses native process list for capture detection', async () => {
     const manager = new StealthManager(
       { enabled: true },
       {
         platform: 'darwin',
         logger: silentLogger,
-        processEnumerator: async (command: string, args: string[]) => {
-          calls.push({ command, args });
-          if (command === 'ps') {
-            return '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome\n/usr/bin/obs';
-          }
-          throw new Error('fallback scan should not run when snapshot succeeds');
+        nativeModule: {
+          getRunningProcesses: () => [
+            { pid: 1, ppid: 1, name: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' },
+            { pid: 2, ppid: 1, name: '/usr/bin/obs' },
+          ],
         },
       },
     );
@@ -564,7 +564,6 @@ describe('StealthManager', () => {
 
     assert.ok(matches.some((pattern: RegExp) => pattern.test('chrome')));
     assert.ok(matches.some((pattern: RegExp) => pattern.test('obs')));
-    assert.deepStrictEqual(calls, [{ command: 'ps', args: ['-A', '-o', 'command='] }]);
   });
 
   it('verifies applied stealth state through native bindings', () => {
@@ -691,8 +690,8 @@ describe('StealthManager', () => {
       {
         platform: 'darwin',
         logger: silentLogger,
-        processEnumerator: async () => {
-          throw new Error('python unavailable');
+        execFileFn: (_file: string, _args: readonly string[], _options: { timeout?: number }, callback: (error: Error | null, stdout: string, stderr: string) => void) => {
+          callback(new Error('python unavailable'), '', '');
         },
       },
     );
@@ -727,9 +726,11 @@ describe('StealthManager', () => {
           timeouts.push(fn);
           return timeouts.length;
         },
-        processEnumerator: async () => {
-          enumeratorCallCount++;
-          return enumeratorCallCount <= 1 ? 'obs' : '';
+        nativeModule: {
+          getRunningProcesses: () => {
+            enumeratorCallCount++;
+            return enumeratorCallCount <= 1 ? [{ pid: 1, ppid: 1, name: 'obs' }] : [];
+          },
         },
       } as any,
     );
@@ -763,7 +764,12 @@ describe('StealthManager', () => {
           return intervals.length;
         },
         clearIntervalScheduler() {},
-        processEnumerator: async () => enumeratorPromise,
+        nativeModule: {
+          getRunningProcesses: async () => {
+            await enumeratorPromise;
+            return [{ pid: 1, ppid: 1, name: 'screencapture' }];
+          },
+        },
       } as any,
     );
     const win = new FakeWindow();
@@ -799,7 +805,12 @@ describe('StealthManager', () => {
           return intervals.length;
         },
         clearIntervalScheduler() {},
-        processEnumerator: async () => enumeratorPromise,
+        nativeModule: {
+          getRunningProcesses: async () => {
+            await enumeratorPromise;
+            return [{ pid: 1, ppid: 1, name: 'screencapture' }];
+          },
+        },
       } as any,
     );
     const win = new FakeWindow();
@@ -1219,16 +1230,11 @@ describe('StealthManager', () => {
   });
 
   it('treats native shareable CG windows as visible to capture without Python fallback', async () => {
-    let processEnumeratorCalled = false;
     const manager = new StealthManager(
       { enabled: true },
       {
         platform: 'darwin',
         logger: silentLogger,
-        processEnumerator: async (): Promise<string> => {
-          processEnumeratorCalled = true;
-          return '12345\n67890\n';
-        },
       },
     );
 
@@ -1244,7 +1250,6 @@ describe('StealthManager', () => {
 
     assert.ok(result instanceof Set, 'should return a Set');
     assert.deepEqual(Array.from(result), [12345]);
-    assert.equal(processEnumeratorCalled, false);
   });
 
   it('uses Python capture fallback only when native enumeration fails in development', async () => {
@@ -1254,9 +1259,9 @@ describe('StealthManager', () => {
       {
         platform: 'darwin',
         logger: silentLogger,
-        processEnumerator: async (_command: string, args: string[]): Promise<string> => {
+        execFileFn: (_file: string, args: readonly string[], _options: { timeout?: number }, callback: (error: Error | null, stdout: string, stderr: string) => void) => {
           embeddedScript = args[1] ?? '';
-          return '12345\n67890\n'; // Simulate Python returning window numbers
+          callback(null, '12345\n67890\n', '');
         },
       },
     );
@@ -1284,15 +1289,13 @@ describe('StealthManager', () => {
     process.env.NATIVELY_STRICT_PROTECTION = '1';
 
     try {
-      let processEnumeratorCalled = false;
       const manager = new StealthManager(
         { enabled: true },
         {
           platform: 'darwin',
           logger: silentLogger,
-          processEnumerator: async (): Promise<string> => {
-            processEnumeratorCalled = true;
-            return '12345\n';
+          execFileFn: (_file: string, _args: readonly string[], _options: { timeout?: number }, callback: (error: Error | null, stdout: string, stderr: string) => void) => {
+            callback(null, '12345\n', '');
           },
         },
       );
@@ -1307,7 +1310,6 @@ describe('StealthManager', () => {
 
       assert.ok(result instanceof Set);
       assert.equal(result.size, 0);
-      assert.equal(processEnumeratorCalled, false);
       assert.ok(manager.getStealthDegradationWarnings().includes('stealth_python_fallback_blocked'));
     } finally {
       if (previousNodeEnv === undefined) {

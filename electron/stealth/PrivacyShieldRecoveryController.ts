@@ -37,6 +37,9 @@ export class PrivacyShieldRecoveryController {
   private recoveryInFlight: Promise<void> | null = null;
   private autoRecoveryAttempts = 0;
 
+  private hourlyRecoveryTimestamps: number[] = [];
+  private static readonly MAX_RECOVERIES_PER_HOUR = 10;
+
   constructor(options: PrivacyShieldRecoveryControllerOptions) {
     this.getSnapshot = options.getSnapshot;
     this.recoverFullStealth = options.recoverFullStealth;
@@ -68,6 +71,14 @@ export class PrivacyShieldRecoveryController {
       return;
     }
 
+    // Session-level cap: max 10 recoveries per hour
+    const now = Date.now();
+    this.hourlyRecoveryTimestamps = this.hourlyRecoveryTimestamps.filter(t => now - t < 3600000);
+    if (this.hourlyRecoveryTimestamps.length >= PrivacyShieldRecoveryController.MAX_RECOVERIES_PER_HOUR) {
+      this.logger.warn('[PrivacyShieldRecovery] Hourly recovery cap reached. Manual recovery required via shortcut.');
+      return;
+    }
+
     this.recoveryHandle = this.timeoutScheduler(() => {
       this.recoveryHandle = null;
       void this.runAutoRecovery();
@@ -92,6 +103,7 @@ export class PrivacyShieldRecoveryController {
     }
 
     this.autoRecoveryAttempts += 1;
+    this.hourlyRecoveryTimestamps.push(Date.now());
     await this.attemptRecovery('timeout');
   }
 
@@ -152,6 +164,7 @@ export class PrivacyShieldRecoveryController {
 
   private reset(): void {
     this.autoRecoveryAttempts = 0;
+    this.hourlyRecoveryTimestamps = [];
     this.cancelPendingRecovery();
   }
 }
