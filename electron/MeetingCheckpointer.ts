@@ -79,6 +79,18 @@ export class MeetingCheckpointer extends EventEmitter {
                 return; // Nothing to save yet
             }
 
+            // NAT-061: idle detection — skip checkpoint if no new transcript since last checkpoint
+            const latestTranscriptTimestamp = snapshot.transcript.length > 0
+                ? Math.max(...snapshot.transcript.map(t => t.timestamp ?? 0))
+                : 0;
+            if (latestTranscriptTimestamp > 0) {
+                this.lastTranscriptTimestamp = latestTranscriptTimestamp;
+            }
+            if (this.lastCheckpointAt > 0 && this.lastTranscriptTimestamp <= this.lastCheckpointAt) {
+                console.log(`[MeetingCheckpointer] Idle stretch detected for ${this.meetingId}; skipping checkpoint.`);
+                return;
+            }
+
             const result = await this.saveCheckpointWithRetry(snapshot);
             
             // Emit events based on result
@@ -131,19 +143,7 @@ export class MeetingCheckpointer extends EventEmitter {
             }
         }
 
-        // NAT-061: idle detection — skip checkpoint if no new transcript since last checkpoint
-        const latestTranscriptTimestamp = snapshot.transcript.length > 0
-            ? Math.max(...snapshot.transcript.map(t => t.timestamp ?? 0))
-            : 0;
-        if (latestTranscriptTimestamp > 0) {
-            this.lastTranscriptTimestamp = latestTranscriptTimestamp;
-        }
-        if (this.lastCheckpointAt > 0 && this.lastTranscriptTimestamp <= this.lastCheckpointAt) {
-            console.log(`[MeetingCheckpointer] Idle stretch detected for ${this.meetingId}; skipping checkpoint.`);
-            return;
-        }
-
-        const metadata = snapshot.meetingMetadata;
+    }
 
     private createMeetingData(snapshot: any): Meeting {
         const metadata = snapshot.meetingMetadata;

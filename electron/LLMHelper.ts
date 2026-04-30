@@ -3361,23 +3361,25 @@ ANSWER DIRECTLY:`;
     }
 
     if (this.isGroqModel(this.currentModelId) && this.groqClient) {
-      if (isMultimodal && imagePaths) {
-        // Route multimodal to Groq Llama 4 Scout (vision-capable)
-        const groqSystem = systemPromptOverride || OPENAI_SYSTEM_PROMPT;
-        const finalGroqSystem = prepareStreamSystemPrompt(groqSystem);
-        yield* this.streamWithScreenshotOcrFallback(
-          'Groq multimodal',
-          imagePaths,
-          effectiveMessage,
-          () => this.streamWithGroqMultimodal(userContent, imagePaths, finalGroqSystem, options?.abortSignal),
-          (fallbackMessage) => this.streamWithGroq(
-            this.joinPrompt(finalGroqSystem, buildStreamUserContent(fallbackMessage)),
-            GROQ_MODEL,
+      try {
+        if (isMultimodal && imagePaths) {
+          // Route multimodal to Groq Llama 4 Scout (vision-capable)
+          const groqSystem = systemPromptOverride || OPENAI_SYSTEM_PROMPT;
+          const finalGroqSystem = prepareStreamSystemPrompt(groqSystem);
+          yield* this.streamWithScreenshotOcrFallback(
+            'Groq multimodal',
+            imagePaths,
+            effectiveMessage,
+            () => this.streamWithGroqMultimodal(userContent, imagePaths, finalGroqSystem, options?.abortSignal),
+            (fallbackMessage) => this.streamWithGroq(
+              this.joinPrompt(finalGroqSystem, buildStreamUserContent(fallbackMessage)),
+              GROQ_MODEL,
+              options?.abortSignal,
+            ),
             options?.abortSignal,
-          ),
-          options?.abortSignal,
-        );
-        return;
+          );
+          return;
+        }
       } catch (error: any) {
         if (error?.streamHadOutput) {
           throw error;
@@ -3399,27 +3401,29 @@ ANSWER DIRECTLY:`;
 
     // 4. Gemini Routing & Fallback
     if (this.client) {
-      // Direct model use if specified
-      if (this.isGeminiModel(this.currentModelId)) {
-        const fullMsg = this.joinPrompt(finalSystemPrompt, userContent);
-        if (isMultimodal && imagePaths?.length) {
-          yield* this.streamWithScreenshotOcrFallback(
-            `Gemini (${this.currentModelId})`,
-            imagePaths,
-            effectiveMessage,
-            () => this.streamWithGeminiModel(fullMsg, this.currentModelId, imagePaths, options?.abortSignal),
-            (fallbackMessage) => this.streamWithGeminiModel(
-              this.joinPrompt(finalSystemPrompt, buildStreamUserContent(fallbackMessage)),
-              this.currentModelId,
-              undefined,
+      try {
+        // Direct model use if specified
+        if (this.isGeminiModel(this.currentModelId)) {
+          const fullMsg = this.joinPrompt(finalSystemPrompt, userContent);
+          if (isMultimodal && imagePaths?.length) {
+            yield* this.streamWithScreenshotOcrFallback(
+              `Gemini (${this.currentModelId})`,
+              imagePaths,
+              effectiveMessage,
+              () => this.streamWithGeminiModel(fullMsg, this.currentModelId, imagePaths, options?.abortSignal),
+              (fallbackMessage) => this.streamWithGeminiModel(
+                this.joinPrompt(finalSystemPrompt, buildStreamUserContent(fallbackMessage)),
+                this.currentModelId,
+                undefined,
+                options?.abortSignal,
+              ),
               options?.abortSignal,
-            ),
-            options?.abortSignal,
-          );
+            );
+            return;
+          }
+          yield* this.streamWithGeminiModel(fullMsg, this.currentModelId, imagePaths, options?.abortSignal);
           return;
         }
-        yield* this.streamWithGeminiModel(fullMsg, this.currentModelId, imagePaths, options?.abortSignal);
-        return;
       } catch (error: any) {
         if (error?.streamHadOutput) {
           throw error;
@@ -3517,8 +3521,6 @@ ANSWER DIRECTLY:`;
           yield* this.streamWithGeminiParallelRace(raceMsg, imagePaths, options?.abortSignal);
         }
       }
-    } else {
-      throw new Error("No LLM provider available");
     }
 
     throw new Error("No LLM provider available");
