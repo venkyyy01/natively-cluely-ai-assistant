@@ -127,7 +127,9 @@ ANSWER SHAPE: ${intentResult.answerShape}
                 yield "Could you repeat that? I want to make sure I address your question properly.";
                 return;
             }
-            console.error("[WhatToAnswerLLM] Stream failed:", error);
+            // Stream yielded tokens then failed - signal truncation to consumer
+            console.error("[WhatToAnswerLLM] Stream failed after yielding tokens:", error);
+            yield "\n\n[Response truncated due to error. Please ask again.]";
         }
     }
 

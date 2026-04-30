@@ -420,7 +420,7 @@ export async function runConsciousEvalHarness(options: {
       hypothesis: store.getLatestHypothesis(),
       question: scenario.followUpQuestion,
     });
-    const provenanceVerdict = provenanceVerifier.verify({
+    const provenanceVerdict = await provenanceVerifier.verify({
       response: scenario.response,
       semanticContextBlock: scenario.semanticContextBlock,
       evidenceContextBlock: scenario.evidenceContextBlock,

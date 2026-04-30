@@ -29,6 +29,7 @@ import { AnswerLatencyTracker, AnswerRoute } from './latency/AnswerLatencyTracke
 import { getActiveAccelerationManager } from './services/AccelerationManager';
 import type { AccelerationManager } from './services/AccelerationManager';
 import type { SessionEvent } from './memory/SessionPersistence';
+import { getDefaultTriggerAuditLog } from './observability/TriggerAuditLog';
 
 // Mode types
 export type IntelligenceMode = 'idle' | 'assist' | 'what_to_say' | 'follow_up' | 'recap' | 'manual' | 'follow_up_questions' | 'reasoning_first';
@@ -761,7 +762,7 @@ export class IntelligenceEngine extends EventEmitter {
         if (trigger.confidence < 0.5) {
             return;
         }
-        await this.runWhatShouldISay(trigger.lastQuestion, trigger.confidence);
+        await this.runWhatShouldISay(trigger.lastQuestion, trigger.confidence, undefined, 0, undefined, trigger.sourceUtteranceId);
     }
 
     // ============================================
@@ -838,6 +839,7 @@ export class IntelligenceEngine extends EventEmitter {
         imagePaths?: string[],
         priorCooldownSuppressedMs: number = 0,
         priorCooldownReason?: CooldownSuppressionReason,
+        sourceUtteranceId?: string,
     ): Promise<string | null> {
         const cooldownQuestion = question?.trim()
             || this.session.getLastInterimInterviewer()?.text?.trim()
@@ -861,7 +863,8 @@ export class IntelligenceEngine extends EventEmitter {
             this.pruneCooldownKeys(now);
             const cooldownKey = this.buildCooldownKey(cooldownQuestion);
             const lastTriggerForKey = this.lastTriggerByCooldownKey.get(cooldownKey) ?? 0;
-            const cooldownRemaining = Math.max(0, this.triggerCooldown - (now - lastTriggerForKey));
+            const effectiveTriggerCooldown = sourceUtteranceId ? 0 : this.triggerCooldown;
+            const cooldownRemaining = Math.max(0, effectiveTriggerCooldown - (now - lastTriggerForKey));
 
             console.log('[INTELLIGENCE] 🤖 runWhatShouldISay triggered:', {
                 question: question?.substring(0, 50) + (question && question.length > 50 ? '...' : ''),
@@ -914,6 +917,12 @@ export class IntelligenceEngine extends EventEmitter {
             : undefined;
         const metadataCooldownReason = cooldownReason;
         const transcriptRevisionAtStart = this.session.getTranscriptRevision();
+        if (sourceUtteranceId) {
+            this.session.noteUtteranceRevision(sourceUtteranceId);
+        }
+        const sourceUtteranceRevisionAtStart = sourceUtteranceId
+            ? this.session.getUtteranceRevision(sourceUtteranceId)
+            : undefined;
         const recentContextForEvidence = this.session.getContext(180);
 
         if (this.assistCancellationToken) {
@@ -946,12 +955,34 @@ export class IntelligenceEngine extends EventEmitter {
                 || whatToSayAbortController.signal.aborted
                 || requestSequence !== this.activeWhatToSayRequestId;
             if (aborted) return true;
-            if (this.session.getTranscriptRevision() !== transcriptRevisionAtStart) {
+            const sourceUtteranceRevision = sourceUtteranceId
+                ? this.session.getUtteranceRevision(sourceUtteranceId)
+                : undefined;
+            const sourceUtteranceChanged = sourceUtteranceId
+                ? sourceUtteranceRevisionAtStart !== undefined
+                    && sourceUtteranceRevision !== undefined
+                    && sourceUtteranceRevision !== sourceUtteranceRevisionAtStart
+                : false;
+            const legacyTranscriptChanged = !sourceUtteranceId && this.session.getTranscriptRevision() !== transcriptRevisionAtStart;
+            if (sourceUtteranceChanged || legacyTranscriptChanged) {
                 if (!staleStopReportedForRequest && activeLatencyRequestId) {
                     staleStopReportedForRequest = true;
-                    this.latencyTracker.markStaleStop(activeLatencyRequestId, 'transcript_revision_changed');
+                    const staleReason = sourceUtteranceChanged ? 'source_utterance_revision_changed' : 'transcript_revision_changed';
+                    this.latencyTracker.markStaleStop(activeLatencyRequestId, staleReason);
+                    getDefaultTriggerAuditLog().record({
+                        timestamp: Date.now(),
+                        utteranceId: sourceUtteranceId,
+                        speaker: 'interviewer',
+                        textSnippet: (question || cooldownQuestion || 'inferred').slice(0, 120),
+                        reasonCode: 'stale_stopped',
+                        outcome: 'stale',
+                        cohort: sourceUtteranceId ? 'utterance_level' : 'legacy_fragment',
+                        requestOutcome: staleReason,
+                    });
                     console.log(
-                        `[INTELLIGENCE] 🛑 stale-stop: transcriptRevision drifted ${transcriptRevisionAtStart} -> ${this.session.getTranscriptRevision()} (requestId=${activeLatencyRequestId})`,
+                        sourceUtteranceChanged
+                            ? `[INTELLIGENCE] 🛑 stale-stop: source utterance ${sourceUtteranceId} revision drifted ${sourceUtteranceRevisionAtStart} -> ${sourceUtteranceRevision} (requestId=${activeLatencyRequestId})`
+                            : `[INTELLIGENCE] 🛑 stale-stop: transcriptRevision drifted ${transcriptRevisionAtStart} -> ${this.session.getTranscriptRevision()} (requestId=${activeLatencyRequestId})`,
                     );
                 }
                 return true;
@@ -1420,7 +1451,7 @@ export class IntelligenceEngine extends EventEmitter {
                     resolvedQuestion,
                     isStale: () => shouldSuppressVisibleWork()
                         || requestSequence !== this.activeWhatToSayRequestId
-                        || this.session.getTranscriptRevision() !== continuationRevision,
+                        || (!sourceUtteranceId && this.session.getTranscriptRevision() !== continuationRevision),
                 });
                 if (shouldSuppressVisibleWork()) {
                     return abandonCurrentRequest();
@@ -1786,7 +1817,7 @@ export class IntelligenceEngine extends EventEmitter {
                         transcriptRevision: transcriptRevisionAtStart,
                         deadlineMs: Date.now() + WHAT_TO_SAY_ROUTE_DEADLINE_MS,
                         abortSignal: whatToSayAbortController.signal,
-                        getCurrentTranscriptRevision: () => this.session.getTranscriptRevision(),
+                        getCurrentTranscriptRevision: () => sourceUtteranceId ? transcriptRevisionAtStart : this.session.getTranscriptRevision(),
                     },
                     executeWhatToSay,
                 );
@@ -1861,14 +1892,17 @@ export class IntelligenceEngine extends EventEmitter {
             const refinementRequest = userRequest || intent;
 
             let fullRefined = "";
+            const abortController = new AbortController();
             const stream = this.followUpLLM.generateStream(
                 lastMsg,
                 refinementRequest,
-                context
+                context,
+                abortController.signal
             );
 
             for await (const token of stream) {
                 if (this.shouldSuppressAuxiliaryMode(requestId)) {
+                    abortController.abort();
                     return null;
                 }
                 this.emit('refined_answer_token', token, intent);
@@ -1938,10 +1972,12 @@ export class IntelligenceEngine extends EventEmitter {
             }
 
             let fullSummary = "";
-            const stream = this.recapLLM.generateStream(context);
+            const abortController = new AbortController();
+            const stream = this.recapLLM.generateStream(context, abortController.signal);
 
             for await (const token of stream) {
                 if (this.shouldSuppressAuxiliaryMode(requestId)) {
+                    abortController.abort();
                     return null;
                 }
                 this.emit('recap_token', token);

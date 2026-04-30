@@ -5,7 +5,9 @@ import {
   type ConsciousModeQuestionRoute,
   type ConsciousModeStructuredResponse,
   type ReasoningThread,
+  isBehavioralQuestionText,
 } from '../ConsciousMode';
+import { SemanticThreadMatcher } from './SemanticThreadMatcher';
 import type { QuestionReaction } from './QuestionReactionClassifier';
 import type { AnswerHypothesis } from './AnswerHypothesisStore';
 import { ConsciousAnswerPlanner } from './ConsciousAnswerPlanner';
@@ -22,6 +24,12 @@ import { ConsciousProvenanceVerifier } from './ConsciousProvenanceVerifier';
 import { ConsciousVerifier } from './ConsciousVerifier';
 import { LayeredIntentRouter, isReliableIntent } from '../llm/LayeredIntentRouter';
 import type { IntentClassificationCoordinator } from '../llm/providers/IntentClassificationCoordinator';
+import { isVerifierOptimizationActive, isConsciousOptimizationActive } from '../config/optimizations';
+import { Metrics } from '../runtime/Metrics';
+import { FlexibleResponseRouter, type ConsciousTurnPlan } from './FlexibleResponseRouter';
+import { HumanLikeConversationEngine } from './HumanLikeConversationEngine';
+import { ConsciousRefinementOrchestrator } from './ConsciousRefinementOrchestrator';
+import { AdaptiveVerificationGate } from './AdaptiveVerificationGate';
 
 interface KnowledgeStatusLike {
   activeMode?: unknown;
@@ -80,6 +88,11 @@ export class ConsciousOrchestrator {
   private readonly retrievalOrchestrator: ConsciousRetrievalOrchestrator;
   private readonly answerPlanner = new ConsciousAnswerPlanner();
   private readonly provenanceVerifier = new ConsciousProvenanceVerifier();
+  private readonly semanticThreadMatcher = new SemanticThreadMatcher();
+  private readonly humanConversationEngine = new HumanLikeConversationEngine();
+  private readonly verificationGate = new AdaptiveVerificationGate();
+  private readonly refinementOrchestrator = new ConsciousRefinementOrchestrator();
+  private readonly flexibleRouter: FlexibleResponseRouter;
   private consecutiveFailures = 0;
   private circuitOpenUntil = 0;
 
@@ -88,6 +101,69 @@ export class ConsciousOrchestrator {
       this.verifier = verifier;
     }
     this.retrievalOrchestrator = new ConsciousRetrievalOrchestrator(this.session);
+    this.flexibleRouter = new FlexibleResponseRouter(
+      this.humanConversationEngine,
+      this.verificationGate,
+    );
+  }
+
+  /**
+   * Plan a single conscious turn. The IntelligenceEngine calls this BEFORE
+   * deciding whether to enter the conscious pipeline so that smalltalk,
+   * acknowledgements, and refinement requests can short-circuit to standard
+   * mode (which already handles them naturally). Gated by the
+   * `useHumanLikeConsciousMode` flag — with the flag off, every turn is
+   * planned as a strict, structured conscious answer (legacy behaviour).
+   */
+  planTurn(utterance: string): ConsciousTurnPlan {
+    const enabled = isConsciousOptimizationActive('useHumanLikeConsciousMode');
+    return this.flexibleRouter.plan({
+      utterance,
+      options: { enabled },
+    });
+  }
+
+  /**
+   * Build the LLM prompt needed to refine a previous conscious-mode answer.
+   * Returns null when refinement is disabled, the intent is missing, or the
+   * refinement would be a no-op (e.g. asking to shorten an already short
+   * answer).
+   *
+   * The IntelligenceEngine streams the prompt through the standard answer
+   * LLM path so streaming, abort signals, and stealth containment are
+   * handled uniformly with non-conscious refinements.
+   */
+  buildRefinementPrompt(input: {
+    plan: ConsciousTurnPlan;
+    previousAnswer: string;
+    lastInterviewerQuestion?: string;
+    userRefinementRequest: string;
+  }): { systemPrompt: string; userMessage: string } | null {
+    if (!isConsciousOptimizationActive('useConsciousRefinement')) {
+      return null;
+    }
+    const intent = input.plan.refinementIntent;
+    if (!intent || input.plan.conversationKind !== 'refinement') {
+      return null;
+    }
+    if (!this.refinementOrchestrator.isRefinementUseful({ intent, previousAnswer: input.previousAnswer })) {
+      return null;
+    }
+    return this.refinementOrchestrator.buildPrompt({
+      intent,
+      previousAnswer: input.previousAnswer,
+      lastInterviewerQuestion: input.lastInterviewerQuestion,
+      userRefinementRequest: input.userRefinementRequest,
+    });
+  }
+
+  /**
+   * Test/inspection hook: expose the embedded refinement orchestrator so
+   * that test fixtures and other modules can reuse the same flatten/prompt
+   * logic without duplicating it.
+   */
+  getRefinementOrchestrator(): ConsciousRefinementOrchestrator {
+    return this.refinementOrchestrator;
   }
 
   private isCircuitOpen(now: number = Date.now()): boolean {
@@ -178,7 +254,7 @@ export class ConsciousOrchestrator {
       || /^(why this approach|why this|why not|how so|go deeper|can you go deeper|walk me through that|talk through that|and then|what about reliability|what about scale|what about failure handling|what about bottlenecks)$/i.test(loweredQuestion);
   }
 
-  private isTopicallyCompatibleWithThread(question: string, thread: ReasoningThread): boolean {
+  private async isTopicallyCompatibleWithThread(question: string, thread: ReasoningThread): Promise<boolean> {
     const normalizedQuestion = question.trim();
     if (!normalizedQuestion) {
       return false;
@@ -189,6 +265,24 @@ export class ConsciousOrchestrator {
       return true;
     }
 
+    // Use semantic thread matcher if flag is enabled
+    const useSemantic = isVerifierOptimizationActive('useSemanticThreadContinuation');
+    if (useSemantic) {
+      try {
+        const semanticCompatible = await this.semanticThreadMatcher.isCompatible(question, thread);
+        // If semantic matcher returns a definitive result, use it
+        // If it returns false (e.g., model load failed or low similarity), fall back to original method
+        if (semanticCompatible) {
+          return true;
+        }
+        // Fall through to original method if semantic matcher returned false
+      } catch (error) {
+        console.warn('[ConsciousOrchestrator] Semantic thread matcher failed, falling back to stopword method:', error);
+        // Fall through to original method
+      }
+    }
+
+    // Original stopword-based method (fallback or when flag is disabled)
     const questionTokens = this.tokenizeForThreadCompatibility(normalizedQuestion);
     const referentialFollowUp = this.hasReferentialFollowUpCue(loweredQuestion);
 
@@ -314,7 +408,7 @@ export class ConsciousOrchestrator {
     if (
       preRouteDecision.threadAction === 'continue'
       && currentReasoningThread
-      && !this.isTopicallyCompatibleWithThread(input.question, currentReasoningThread)
+      && !(await this.isTopicallyCompatibleWithThread(input.question, currentReasoningThread))
     ) {
       preRouteDecision = { qualifies: true, threadAction: 'reset' };
     }
@@ -442,10 +536,13 @@ export class ConsciousOrchestrator {
 
       const latestHypothesis = this.session.getLatestAnswerHypothesis();
 
-      // In degraded mode (circuit breaker open), skip provenance verification
+      // Always run rule-based provenance — it is fast, deterministic, no network.
+      // When degraded mode is active, the LLM judge is skipped but rule-based checks
+      // must still run to prevent hallucinations when the system is least healthy.
+      const useDegradedProvenanceCheck = isVerifierOptimizationActive('useDegradedProvenanceCheck');
       let provenanceVerdict: { ok: boolean; reason?: string } = { ok: true };
-      if (!degradedMode) {
-        provenanceVerdict = this.provenanceVerifier.verify({
+      if (!degradedMode || useDegradedProvenanceCheck) {
+        provenanceVerdict = await this.provenanceVerifier.verify({
           response: structuredResponse,
           semanticContextBlock: this.session.getConsciousSemanticContext(),
           evidenceContextBlock,
@@ -454,6 +551,9 @@ export class ConsciousOrchestrator {
         });
         if (!provenanceVerdict.ok) {
           console.warn('[ConsciousOrchestrator] Continuation provenance verification failed:', provenanceVerdict.reason);
+          if (degradedMode) {
+            Metrics.counter('conscious.degraded_provenance_fail', 1);
+          }
           return this.fallback(`continuation_provenance:${provenanceVerdict.reason ?? 'unknown'}`);
         }
       }
@@ -503,6 +603,13 @@ export class ConsciousOrchestrator {
     whatToAnswerLLM: WhatToAnswerLLM | null;
     answerLLM: AnswerLLM | null;
     onEarlyReasoning?: (text: string) => void;
+    /**
+     * Optional pre-computed plan for this turn. When the
+     * `useHumanLikeConsciousMode` flag is on, the IntelligenceEngine passes
+     * the plan it already computed via `planTurn()` so verification rigor
+     * matches the conversational kind.
+     */
+    turnPlan?: ConsciousTurnPlan;
   }): Promise<ConsciousExecutionResult> {
     if (!input.route.qualifies) {
       return this.skip();
@@ -543,13 +650,21 @@ export class ConsciousOrchestrator {
 
       const latestHypothesis = this.session.getLatestAnswerHypothesis();
 
-      // In degraded mode (circuit breaker open), skip provenance verification
-      // since it fails closed when semantic context is empty (no profile data).
-      // This prevents the circuit breaker from staying permanently open due to
-      // provenance failures on every question.
+      // Always run rule-based provenance — it is fast, deterministic, no network.
+      // When degraded mode is active, the LLM judge is skipped but rule-based checks
+      // must still run to prevent hallucinations when the system is least healthy.
+      const useDegradedProvenanceCheck = isVerifierOptimizationActive('useDegradedProvenanceCheck');
+      // When a turn plan is supplied (human-like flag on), use it to pick the
+      // adaptive verification rigor. Falls back to legacy strict behaviour.
+      const adaptivePlan = input.turnPlan
+        ? this.verificationGate.applyDegradedMode(input.turnPlan.verification, degradedMode)
+        : null;
+      const shouldRunProvenance = adaptivePlan
+        ? adaptivePlan.runProvenance
+        : (!degradedMode || useDegradedProvenanceCheck);
       let provenanceVerdict: { ok: boolean; reason?: string } = { ok: true };
-      if (!degradedMode) {
-        provenanceVerdict = this.provenanceVerifier.verify({
+      if (shouldRunProvenance) {
+        provenanceVerdict = await this.provenanceVerifier.verify({
           response: structuredResponse,
           semanticContextBlock: this.session.getConsciousSemanticContext(),
           evidenceContextBlock: this.session.getConsciousEvidenceContext(),
@@ -558,13 +673,16 @@ export class ConsciousOrchestrator {
         });
         if (!provenanceVerdict.ok) {
           console.warn('[ConsciousOrchestrator] Structured response provenance verification failed:', provenanceVerdict.reason);
+          if (degradedMode) {
+            Metrics.counter('conscious.degraded_provenance_fail', 1);
+          }
           return this.fallback(`reasoning_provenance:${provenanceVerdict.reason ?? 'unknown'}`);
         }
-      } else {
-        console.log('[ConsciousOrchestrator] Skipping provenance verification in degraded mode (circuit breaker open)');
       }
 
-      // In degraded mode, use rule-only verification (skip LLM judge)
+      // In degraded mode, use rule-only verification (skip LLM judge).
+      // The adaptive plan can also request judge to be skipped on relaxed turns.
+      const skipJudge = adaptivePlan ? !adaptivePlan.runJudge : degradedMode;
       const verification = await this.verifier.verify({
         response: structuredResponse,
         route: input.route,
@@ -572,7 +690,7 @@ export class ConsciousOrchestrator {
         hypothesis: latestHypothesis,
         evidence: latestHypothesis?.evidence,
         question: input.question,
-        skipJudge: degradedMode,
+        skipJudge,
       });
       if (!verification.ok) {
         console.warn('[ConsciousOrchestrator] Structured response verification failed:', verification.reason);
@@ -602,7 +720,7 @@ export class ConsciousOrchestrator {
           verificationOk: verification.ok,
           verificationReason: verification.reason,
           deterministic: verification.deterministic,
-          judge: degradedMode ? 'skipped' : verification.judge,
+          judge: skipJudge ? 'skipped' : verification.judge,
         }),
       };
     } catch (error) {

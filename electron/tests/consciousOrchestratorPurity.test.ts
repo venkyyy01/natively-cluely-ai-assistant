@@ -6,6 +6,8 @@ import type { ConsciousModeStructuredResponse, ReasoningThread } from '../Consci
 import type { AnswerHypothesis } from '../conscious/AnswerHypothesisStore';
 import type { QuestionReaction } from '../conscious/QuestionReactionClassifier';
 import type { IntentResult } from '../llm/IntentClassifier';
+import { setOptimizationFlagsForTesting } from '../config/optimizations';
+import { Metrics } from '../runtime/Metrics';
 
 const response: ConsciousModeStructuredResponse = {
   mode: 'reasoning_first',
@@ -238,4 +240,13 @@ test('ConsciousOrchestrator opens a circuit breaker after repeated conscious ver
 
   assert.notEqual(prepared.selectedRoute, 'conscious_answer');
   assert.notEqual(prepared.effectiveRoute, 'conscious_answer');
+});
+
+test('CM-002: degraded mode flag is respected by isVerifierOptimizationActive', () => {
+  setOptimizationFlagsForTesting({ useDegradedProvenanceCheck: true });
+  const { isVerifierOptimizationActive } = require('../config/optimizations');
+  assert.equal(isVerifierOptimizationActive('useDegradedProvenanceCheck'), true);
+
+  setOptimizationFlagsForTesting({ useDegradedProvenanceCheck: false });
+  assert.equal(isVerifierOptimizationActive('useDegradedProvenanceCheck'), false);
 });

@@ -345,7 +345,7 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
         return () => clearTimeout(timer);
     }, []);
 
-    const latestReadableMessage = messages.find(msg => msg.role === 'system') || null;
+    const latestReadableMessage = useMemo(() => messages.find(msg => msg.role === 'system') || null, [messages]);
 
     useHumanSpeedAutoScroll({
         enabled: isExpanded,
@@ -446,11 +446,6 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
     };
 
     useEffect(() => {
-        localStorage.setItem('natively_overlay_width', String(panelWidth));
-        localStorage.setItem('natively_overlay_chat_height', String(chatViewportHeight));
-    }, [panelWidth, chatViewportHeight]);
-
-    useEffect(() => {
         const handlePointerMove = (event: MouseEvent) => {
             if (!resizeStartRef.current) return;
             const deltaX = event.clientX - resizeStartRef.current.x;
@@ -495,6 +490,9 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
         const stopResize = () => {
             resizeStartRef.current = null;
             setIsResizing(false);
+            // Write to localStorage only when resize stops
+            localStorage.setItem('natively_overlay_width', String(panelWidth));
+            localStorage.setItem('natively_overlay_chat_height', String(chatViewportHeight));
         };
 
         window.addEventListener('mousemove', handlePointerMove);

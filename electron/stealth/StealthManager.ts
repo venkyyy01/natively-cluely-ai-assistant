@@ -398,7 +398,15 @@ export class StealthManager extends EventEmitter {
   setEnabled(enabled: boolean): void {
     this.config = { ...this.config, enabled };
     if (!enabled) {
-      this.stopBackgroundMonitorsIfIdle();
+      // Unconditionally stop background monitors and remove native stealth
+      this.stopAllBackgroundMonitors();
+      for (const record of this.managedWindows) {
+        const win = record.win;
+        if (isWindowDestroyed(win)) {
+          continue;
+        }
+        this.removeNativeStealth(win);
+      }
     }
   }
 
@@ -601,7 +609,7 @@ export class StealthManager extends EventEmitter {
   }
 
   public isEnabled(): boolean {
-    return this.config.enabled || this.meetingActive;
+    return this.config.enabled;
   }
 
   public setMeetingActive(active: boolean): void {
@@ -616,6 +624,9 @@ export class StealthManager extends EventEmitter {
         }
         this.applyLayer0(win, true);
       }
+    } else {
+      // Stop background monitors when meeting ends
+      this.stopBackgroundMonitorsIfIdle();
     }
   }
 
@@ -1001,6 +1012,51 @@ export class StealthManager extends EventEmitter {
 
     // S-4: Clear any pending window restore retries
     this.clearRestoreRetry();
+  }
+
+  private stopAllBackgroundMonitors(): void {
+    // Unconditionally stop all background monitors regardless of window state
+    if (this.watchdogHandle) {
+      this.clearIntervalScheduler(this.watchdogHandle);
+      this.watchdogHandle = null;
+    }
+
+    if (this.windowsAffinityHandle) {
+      this.clearIntervalScheduler(this.windowsAffinityHandle);
+      this.windowsAffinityHandle = null;
+    }
+
+    if (this.scStreamMonitorHandle) {
+      this.clearIntervalScheduler(this.scStreamMonitorHandle);
+      this.scStreamMonitorHandle = null;
+    }
+
+    if (this.cgWindowMonitorHandle) {
+      this.clearIntervalScheduler(this.cgWindowMonitorHandle);
+      this.cgWindowMonitorHandle = null;
+    }
+
+    if (this.opacityFlickerController) {
+      this.opacityFlickerController.stop();
+      this.opacityFlickerController = null;
+    }
+
+    this.watchdogRunning = false;
+    this.scStreamMonitorRunning = false;
+    this.cgWindowMonitorRunning = false;
+    this.scStreamActive = false;
+    this.captureVisibleToToolsActive = false;
+    this.clearTransientCaptureWarnings();
+
+    if (this.chromiumDetector) {
+      this.chromiumDetector.stop();
+      this.chromiumDetector = null;
+    }
+
+    if (this.tccMonitor) {
+      this.tccMonitor.stop();
+      this.tccMonitor = null;
+    }
   }
 
   private clearTransientCaptureWarnings(): void {

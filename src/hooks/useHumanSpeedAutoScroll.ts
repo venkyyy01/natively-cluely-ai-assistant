@@ -34,8 +34,10 @@ function estimateDurationMs(content: string): number {
   return clamp((words / HUMAN_WORDS_PER_MINUTE) * 60_000, MIN_SCROLL_DURATION_MS, MAX_SCROLL_DURATION_MS);
 }
 
-function isNearBottom(container: HTMLElement): boolean {
+function isNearTop(container: HTMLElement): boolean {
   // The latest rendered message lives at the top edge of the scroll container.
+  // Since messages are rendered in reverse order (newest at top), "near top"
+  // means the user can see the latest content.
   return Math.abs(container.scrollTop) <= RESUME_THRESHOLD_PX;
 }
 
@@ -116,7 +118,7 @@ export function useHumanSpeedAutoScroll({
         return;
       }
 
-      if (isNearBottom(container)) {
+      if (isNearTop(container)) {
         manualPauseUntilRef.current = 0;
         followLatestRef.current = true;
         return;
@@ -127,7 +129,7 @@ export function useHumanSpeedAutoScroll({
     };
 
     const handleScroll = () => {
-      const userMovedAwayFromLatest = !isNearBottom(container);
+      const userMovedAwayFromLatest = !isNearTop(container);
 
       if (userMovedAwayFromLatest) {
         if (hasManualScrollIntent()) {
@@ -149,7 +151,7 @@ export function useHumanSpeedAutoScroll({
         return;
       }
 
-      if (isNearBottom(container)) {
+      if (isNearTop(container)) {
         manualPauseUntilRef.current = 0;
         followLatestRef.current = true;
         return;
@@ -195,7 +197,7 @@ export function useHumanSpeedAutoScroll({
     const previousMessageId = activeMessageIdRef.current;
     const isNewMessage = previousMessageId !== latestMessage.id;
     const isUserPaused = Date.now() < manualPauseUntilRef.current;
-    let userIsNearBottom = isNearBottom(container);
+    let userIsNearBottom = isNearTop(container);
     const userIsHoldingManualScroll = isPointerInteractingRef.current && isHoldingManualScrollRef.current;
     const hasRecentManualScrollIntent =
       isPointerInteractingRef.current || Date.now() < userScrollIntentUntilRef.current;
@@ -251,7 +253,7 @@ export function useHumanSpeedAutoScroll({
         return;
       }
 
-      if (!isNearBottom(container)) {
+      if (!isNearTop(container)) {
         followLatestRef.current = false;
         manualPauseUntilRef.current = Date.now() + MANUAL_PAUSE_MS;
         animationFrameRef.current = null;

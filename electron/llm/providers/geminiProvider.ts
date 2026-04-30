@@ -611,7 +611,7 @@ export async function * streamChatWithGemini(helper: LLMHelper, message: string,
 
     // ============================================================
     // RELENTLESS RETRY: Try all providers, then retry entire chain
-    // with exponential backoff. Max 2 full rotations.
+    // with exponential backoff. Max 1 full rotation.
     // ============================================================
     const MAX_FULL_ROTATIONS = 1;
 
@@ -632,13 +632,23 @@ export async function * streamChatWithGemini(helper: LLMHelper, message: string,
           return;
         }
         const provider = providers[i];
+        let yieldedAny = false;
         try {
           console.log(`[LLMHelper] ${rotation === 0 ? '🚀' : '🔁'} Attempting ${provider.name}...`);
-          yield* provider.execute();
+          const stream = provider.execute();
+          for await (const chunk of stream) {
+            yieldedAny = true;
+            yield chunk;
+          }
           console.log(`[LLMHelper] ✅ ${provider.name} stream completed successfully`);
           return; // SUCCESS — exit immediately
         } catch (err: any) {
-          console.warn(`[LLMHelper] ⚠️ ${provider.name} failed: ${err.message}`);
+          if (yieldedAny) {
+            // Provider yielded tokens then failed - rethrow to avoid concatenation
+            console.error(`[LLMHelper] ❌ ${provider.name} failed after yielding tokens: ${err.message}`);
+            throw err;
+          }
+          console.warn(`[LLMHelper] ⚠️ ${provider.name} failed without yielding tokens: ${err.message}`);
           // Continue to next provider
         }
       }
@@ -670,10 +680,11 @@ export async function * streamWithGeminiModel(helper: LLMHelper, fullMessage: st
     // Create abort controller for timeout/cancellation
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), LLM_API_TIMEOUT_MS);
-    
+
     // Wire up external abort signal if provided
+    const abortHandler = () => controller.abort(abortSignal?.reason);
     if (abortSignal) {
-      abortSignal.addEventListener('abort', () => controller.abort(abortSignal.reason), { once: true });
+      abortSignal.addEventListener('abort', abortHandler, { once: true });
     }
 
     try {
@@ -708,6 +719,9 @@ export async function * streamWithGeminiModel(helper: LLMHelper, fullMessage: st
       }
     } finally {
       clearTimeout(timeoutId);
+      if (abortSignal) {
+        abortSignal.removeEventListener('abort', abortHandler);
+      }
     }
   }
 

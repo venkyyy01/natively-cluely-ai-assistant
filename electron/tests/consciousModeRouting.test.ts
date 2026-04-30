@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { InterviewerUtteranceBuffer } from '../buffering/InterviewerUtteranceBuffer';
 import { IntelligenceEngine } from '../IntelligenceEngine';
 import { SessionTracker } from '../SessionTracker';
 import {
@@ -469,6 +470,8 @@ test('Conscious Mode transcript-trigger path fires for substantive interviewer p
     },
   };
 
+  const utteranceBuffer = new InterviewerUtteranceBuffer();
+
   await maybeHandleSuggestionTriggerFromTranscript({
     speaker: 'interviewer',
     text: 'Why this approach',
@@ -476,7 +479,10 @@ test('Conscious Mode transcript-trigger path fires for substantive interviewer p
     confidence: 0.91,
     consciousModeEnabled: true,
     intelligenceManager: manager,
+    utteranceBuffer,
   });
+
+  utteranceBuffer.flush('punctuation');
 
   await maybeHandleSuggestionTriggerFromTranscript({
     speaker: 'interviewer',
@@ -485,15 +491,21 @@ test('Conscious Mode transcript-trigger path fires for substantive interviewer p
     confidence: 0.72,
     consciousModeEnabled: true,
     intelligenceManager: manager,
+    utteranceBuffer,
   });
+
+  utteranceBuffer.flush('punctuation');
 
   assert.deepEqual(calls, [
     {
       context: 'ctx',
       lastQuestion: 'Why this approach',
       confidence: 0.91,
+      sourceUtteranceId: 'utterance-1',
     },
   ]);
+
+  utteranceBuffer.dispose();
 });
 
 test('Conscious Mode routes screenshot-backed live-coding turns but keeps the same question on the fast path without screenshots', async () => {
@@ -557,6 +569,8 @@ test('Non-Conscious transcript-trigger path preserves the existing actionable he
     },
   };
 
+  const utteranceBuffer = new InterviewerUtteranceBuffer();
+
   await maybeHandleSuggestionTriggerFromTranscript({
     speaker: 'interviewer',
     text: 'Can you repeat that for me',
@@ -564,7 +578,10 @@ test('Non-Conscious transcript-trigger path preserves the existing actionable he
     confidence: 0.72,
     consciousModeEnabled: false,
     intelligenceManager: manager,
+    utteranceBuffer,
   });
+
+  utteranceBuffer.flush('punctuation');
 
   await maybeHandleSuggestionTriggerFromTranscript({
     speaker: 'interviewer',
@@ -573,15 +590,21 @@ test('Non-Conscious transcript-trigger path preserves the existing actionable he
     confidence: 0.72,
     consciousModeEnabled: false,
     intelligenceManager: manager,
+    utteranceBuffer,
   });
+
+  utteranceBuffer.flush('punctuation');
 
   assert.deepEqual(calls, [
     {
       context: 'ctx',
       lastQuestion: 'Can you repeat that for me',
       confidence: 0.72,
+      sourceUtteranceId: 'utterance-1',
     },
   ]);
+
+  utteranceBuffer.dispose();
 });
 
 test('Conscious Mode falls back to the normal intent path when structured output is malformed', async () => {

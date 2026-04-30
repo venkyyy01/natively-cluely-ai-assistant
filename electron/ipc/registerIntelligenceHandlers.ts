@@ -1,6 +1,7 @@
 import type { AppState } from '../main';
 import { ipcSchemas, parseIpcInput } from '../ipcValidation';
 import type { SafeHandle, SafeHandleValidated } from './registerTypes';
+import { getDefaultTriggerAuditLog } from '../observability/TriggerAuditLog';
 
 type RegisterIntelligenceHandlersDeps = {
   appState: AppState;
@@ -141,6 +142,10 @@ export function registerIntelligenceHandlers({ appState, safeHandle, safeHandleV
       activeMode: intelligence.getActiveMode?.(),
     };
   });
+
+  safeHandle('get-trigger-decision-audit', async () => ({
+    entries: getDefaultTriggerAuditLog().getEntries(250),
+  }));
 
   safeHandle('reset-intelligence', async () => {
     try {

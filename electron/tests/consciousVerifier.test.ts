@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { ConsciousVerifier } from '../conscious/ConsciousVerifier';
 import { ConsciousVerifierLLM } from '../conscious/ConsciousVerifierLLM';
 import type { ConsciousModeStructuredResponse } from '../ConsciousMode';
+import { setOptimizationFlagsForTesting } from '../config/optimizations';
 
 function response(overrides: Partial<ConsciousModeStructuredResponse> = {}): ConsciousModeStructuredResponse {
   return {
@@ -291,4 +292,333 @@ test('ConsciousVerifier honors an LLM judge rejection when rules pass', async ()
 
   assert.equal(result.ok, false);
   assert.equal(result.reason, 'llm_detected_misalignment');
+});
+
+test('CM-001: rejects "java" claim when grounding only mentions "javascript" with word-boundary flag ON', async () => {
+  setOptimizationFlagsForTesting({ useConsciousVerifierWordBoundary: true });
+  const verifier = new ConsciousVerifier();
+
+  const result = await verifier.verify({
+    response: response({
+      openingReasoning: 'I would implement this in java using a reactive framework.',
+      implementationPlan: ['Set up a java project with spring boot'],
+    }),
+    route: { qualifies: true, threadAction: 'continue' },
+    reaction: null,
+    hypothesis: {
+      sourceQuestion: 'What tech stack would you use?',
+      latestSuggestedAnswer: 'We should use javascript with node.js for the backend.',
+      likelyThemes: ['javascript', 'node.js', 'backend'],
+      confidence: 0.8,
+      evidence: ['inferred'],
+      targetFacets: [],
+      updatedAt: Date.now(),
+    },
+    evidence: ['inferred'],
+    question: 'What tech stack would you use?',
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, 'unsupported_technology_claim_in_inferred_state');
+});
+
+test('CM-001: accepts "java" claim when grounding mentions java with word-boundary flag ON', async () => {
+  setOptimizationFlagsForTesting({ useConsciousVerifierWordBoundary: true });
+  const verifier = new ConsciousVerifier();
+
+  const result = await verifier.verify({
+    response: response({
+      openingReasoning: 'I would implement this in java using a reactive framework.',
+      implementationPlan: ['Set up a java project with spring boot'],
+    }),
+    route: { qualifies: true, threadAction: 'continue' },
+    reaction: null,
+    hypothesis: {
+      sourceQuestion: 'What tech stack would you use?',
+      latestSuggestedAnswer: 'We should use java with spring boot for the backend.',
+      likelyThemes: ['java', 'spring boot', 'backend'],
+      confidence: 0.8,
+      evidence: ['inferred'],
+      targetFacets: [],
+      updatedAt: Date.now(),
+    },
+    evidence: ['inferred'],
+    question: 'What tech stack would you use?',
+  });
+
+  assert.equal(result.ok, true);
+});
+
+test('CM-001: rejects "200ms" claim when grounding only mentions "20000" with word-boundary flag ON', async () => {
+  setOptimizationFlagsForTesting({ useConsciousVerifierWordBoundary: true });
+  const verifier = new ConsciousVerifier();
+
+  const result = await verifier.verify({
+    response: response({
+      openingReasoning: 'I would reduce latency to 200ms by adding caching.',
+      implementationPlan: ['Add redis cache layer'],
+    }),
+    route: { qualifies: true, threadAction: 'continue' },
+    reaction: null,
+    hypothesis: {
+      sourceQuestion: 'How would you improve performance?',
+      latestSuggestedAnswer: 'The system currently handles 20000 requests per second.',
+      likelyThemes: ['throughput', 'requests per second'],
+      confidence: 0.8,
+      evidence: ['inferred'],
+      targetFacets: [],
+      updatedAt: Date.now(),
+    },
+    evidence: ['inferred'],
+    question: 'How would you improve performance?',
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, 'unsupported_numeric_claim_in_inferred_state');
+});
+
+test('CM-001: accepts "70ms" claim grounded in "70ms p99 latency" with word-boundary flag ON', async () => {
+  setOptimizationFlagsForTesting({ useConsciousVerifierWordBoundary: true });
+  const verifier = new ConsciousVerifier();
+
+  const result = await verifier.verify({
+    response: response({
+      openingReasoning: 'I would maintain the 70ms p99 baseline while adding features.',
+      implementationPlan: ['Keep existing cache layer'],
+    }),
+    route: { qualifies: true, threadAction: 'continue' },
+    reaction: null,
+    hypothesis: {
+      sourceQuestion: 'How would you keep latency stable?',
+      latestSuggestedAnswer: 'Current baseline is 70ms p99 latency under load.',
+      likelyThemes: ['70ms baseline', 'latency'],
+      confidence: 0.8,
+      evidence: ['inferred'],
+      targetFacets: [],
+      updatedAt: Date.now(),
+    },
+    evidence: ['inferred'],
+    question: 'How would you keep latency stable?',
+  });
+
+  assert.equal(result.ok, true);
+});
+
+test('CM-001: word-boundary flag OFF falls back to substring matching', async () => {
+  setOptimizationFlagsForTesting({ useConsciousVerifierWordBoundary: false });
+  const verifier = new ConsciousVerifier();
+
+  // With substring matching (flag OFF), "java" should match "javascript" and pass
+  const result = await verifier.verify({
+    response: response({
+      openingReasoning: 'I would implement this in java using a reactive framework.',
+      implementationPlan: ['Set up a java project with spring boot'],
+    }),
+    route: { qualifies: true, threadAction: 'continue' },
+    reaction: null,
+    hypothesis: {
+      sourceQuestion: 'What tech stack would you use?',
+      latestSuggestedAnswer: 'We should use javascript with node.js for the backend.',
+      likelyThemes: ['javascript', 'node.js', 'backend'],
+      confidence: 0.8,
+      evidence: ['inferred'],
+      targetFacets: [],
+      updatedAt: Date.now(),
+    },
+    evidence: ['inferred'],
+    question: 'What tech stack would you use?',
+  });
+
+  assert.equal(result.ok, true);
+});
+
+test('CM-003: accepts year mention "2024" when not in grounding with tighter regex flag ON', async () => {
+  setOptimizationFlagsForTesting({ useTighterNumericClaimRegex: true });
+  const verifier = new ConsciousVerifier();
+
+  const result = await verifier.verify({
+    response: response({
+      openingReasoning: 'In 2024 we shipped 3 features to improve the system.',
+      implementationPlan: [],
+    }),
+    route: { qualifies: true, threadAction: 'continue' },
+    reaction: null,
+    hypothesis: {
+      sourceQuestion: 'What did you accomplish?',
+      latestSuggestedAnswer: 'We improved the system architecture.',
+      likelyThemes: ['architecture', 'improvement'],
+      confidence: 0.8,
+      evidence: ['inferred'],
+      targetFacets: [],
+      updatedAt: Date.now(),
+    },
+    evidence: ['inferred'],
+    question: 'What did you accomplish?',
+  });
+
+  assert.equal(result.ok, true);
+});
+
+test('CM-003: accepts count "3 features" with tighter regex flag ON', async () => {
+  setOptimizationFlagsForTesting({ useTighterNumericClaimRegex: true });
+  const verifier = new ConsciousVerifier();
+
+  const result = await verifier.verify({
+    response: response({
+      openingReasoning: 'We implemented 3 features to improve performance.',
+      implementationPlan: [],
+    }),
+    route: { qualifies: true, threadAction: 'continue' },
+    reaction: null,
+    hypothesis: {
+      sourceQuestion: 'How did you improve performance?',
+      latestSuggestedAnswer: 'We added caching and optimized queries.',
+      likelyThemes: ['caching', 'optimization'],
+      confidence: 0.8,
+      evidence: ['inferred'],
+      targetFacets: [],
+      updatedAt: Date.now(),
+    },
+    evidence: ['inferred'],
+    question: 'How did you improve performance?',
+  });
+
+  assert.equal(result.ok, true);
+});
+
+test('CM-003: rejects unsupported "200ms" with tighter regex flag ON', async () => {
+  setOptimizationFlagsForTesting({ useTighterNumericClaimRegex: true });
+  const verifier = new ConsciousVerifier();
+
+  const result = await verifier.verify({
+    response: response({
+      openingReasoning: 'I would reduce latency to 200ms by adding caching.',
+      implementationPlan: ['Add redis cache layer'],
+    }),
+    route: { qualifies: true, threadAction: 'continue' },
+    reaction: null,
+    hypothesis: {
+      sourceQuestion: 'How would you improve performance?',
+      latestSuggestedAnswer: 'The system currently handles 20000 requests per second.',
+      likelyThemes: ['throughput', 'requests per second'],
+      confidence: 0.8,
+      evidence: ['inferred'],
+      targetFacets: [],
+      updatedAt: Date.now(),
+    },
+    evidence: ['inferred'],
+    question: 'How would you improve performance?',
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, 'unsupported_numeric_claim_in_inferred_state');
+});
+
+test('CM-003: accepts grounded "200ms" with tighter regex flag ON', async () => {
+  setOptimizationFlagsForTesting({ useTighterNumericClaimRegex: true });
+  const verifier = new ConsciousVerifier();
+
+  const result = await verifier.verify({
+    response: response({
+      openingReasoning: 'I would maintain the 200ms p99 baseline while adding features.',
+      implementationPlan: ['Keep existing cache layer'],
+    }),
+    route: { qualifies: true, threadAction: 'continue' },
+    reaction: null,
+    hypothesis: {
+      sourceQuestion: 'How would you keep latency stable?',
+      latestSuggestedAnswer: 'Current baseline is 200ms p99 latency under load.',
+      likelyThemes: ['200ms baseline', 'latency'],
+      confidence: 0.8,
+      evidence: ['inferred'],
+      targetFacets: [],
+      updatedAt: Date.now(),
+    },
+    evidence: ['inferred'],
+    question: 'How would you keep latency stable?',
+  });
+
+  assert.equal(result.ok, true);
+});
+
+test('CM-004: expanded allowlist catches "cassandra" when not in grounding with flag ON', async () => {
+  setOptimizationFlagsForTesting({ useExpandedTechAllowlist: true, useConsciousVerifierWordBoundary: true });
+  const verifier = new ConsciousVerifier();
+
+  const result = await verifier.verify({
+    response: response({
+      openingReasoning: 'I would use cassandra for the write path.',
+      implementationPlan: ['Set up cassandra cluster'],
+    }),
+    route: { qualifies: true, threadAction: 'continue' },
+    reaction: null,
+    hypothesis: {
+      sourceQuestion: 'What database would you use?',
+      latestSuggestedAnswer: 'We should use postgres for the backend.',
+      likelyThemes: ['postgres', 'backend'],
+      confidence: 0.8,
+      evidence: ['inferred'],
+      targetFacets: [],
+      updatedAt: Date.now(),
+    },
+    evidence: ['inferred'],
+    question: 'What database would you use?',
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, 'unsupported_technology_claim_in_inferred_state');
+});
+
+test('CM-004: expanded allowlist accepts grounded "cassandra" with flag ON', async () => {
+  setOptimizationFlagsForTesting({ useExpandedTechAllowlist: true, useConsciousVerifierWordBoundary: true });
+  const verifier = new ConsciousVerifier();
+
+  const result = await verifier.verify({
+    response: response({
+      openingReasoning: 'I would use cassandra for the write path.',
+      implementationPlan: ['Set up cassandra cluster'],
+    }),
+    route: { qualifies: true, threadAction: 'continue' },
+    reaction: null,
+    hypothesis: {
+      sourceQuestion: 'What database would you use?',
+      latestSuggestedAnswer: 'We should use cassandra for the write path.',
+      likelyThemes: ['cassandra', 'write path'],
+      confidence: 0.8,
+      evidence: ['inferred'],
+      targetFacets: [],
+      updatedAt: Date.now(),
+    },
+    evidence: ['inferred'],
+    question: 'What database would you use?',
+  });
+
+  assert.equal(result.ok, true);
+});
+
+test('CM-004: default allowlist misses "cassandra" with flag OFF', async () => {
+  setOptimizationFlagsForTesting({ useExpandedTechAllowlist: false, useConsciousVerifierWordBoundary: true });
+  const verifier = new ConsciousVerifier();
+
+  const result = await verifier.verify({
+    response: response({
+      openingReasoning: 'I would use cassandra for the write path.',
+      implementationPlan: ['Set up cassandra cluster'],
+    }),
+    route: { qualifies: true, threadAction: 'continue' },
+    reaction: null,
+    hypothesis: {
+      sourceQuestion: 'What database would you use?',
+      latestSuggestedAnswer: 'We should use postgres for the backend.',
+      likelyThemes: ['postgres', 'backend'],
+      confidence: 0.8,
+      evidence: ['inferred'],
+      targetFacets: [],
+      updatedAt: Date.now(),
+    },
+    evidence: ['inferred'],
+    question: 'What database would you use?',
+  });
+
+  assert.equal(result.ok, true);
 });
