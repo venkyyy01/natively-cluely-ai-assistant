@@ -2269,7 +2269,7 @@ ANSWER DIRECTLY:`;
   /**
    * Non-streaming Claude generation with proper system/user separation
    */
-  public async generateWithClaude(userMessage: string, systemPrompt?: string, imagePaths?: string[]): Promise<string> {
+  public async generateWithClaude(userMessage: string, systemPrompt?: string, imagePaths?: string[], modelOverride?: string): Promise<string> {
     if (!this.claudeClient) throw new Error("Claude client not initialized");
 
     const targetModel = modelOverride || CLAUDE_MODEL;
@@ -2692,7 +2692,7 @@ ANSWER DIRECTLY:`;
   /**
    * Non-streaming multimodal response from Groq using Llama 4 Scout
    */
-  public async generateWithGroqMultimodal(userMessage: string, imagePaths: string[], systemPrompt?: string): Promise<string> {
+  public async generateWithGroqMultimodal(userMessage: string, imagePaths: string[], systemPrompt?: string, modelOverride?: string): Promise<string> {
     if (!this.groqClient) throw new Error("Groq client not initialized");
 
     const messages: any[] = [];
@@ -3066,6 +3066,8 @@ ANSWER DIRECTLY:`;
       prompt === SCREENSHOT_EVENT_PROMPT ? prompt : this.injectLanguageInstruction(prompt)
     );
     const initialBaseSystemPrompt = systemPromptOverride || HARD_SYSTEM_PROMPT;
+    let excludedVisionTier1Family: ModelFamily | undefined;
+    let excludedTextTier1Family: TextModelFamily | undefined;
 
     // NAT-037: start TTFT blockers concurrently — screenshot/knowledge prep,
     // system prompt warm, and provider warmup.
@@ -3459,13 +3461,13 @@ ANSWER DIRECTLY:`;
           if (entry.family === ModelFamily.OPENAI && this.openaiClient && imagePaths) {
             providers.push({ name: `OpenAI (${modelId})`, execute: () => this.streamWithOpenaiMultimodalUsingModel(userContent, imagePaths, modelId, finalOpenAiSystem) });
           } else if (entry.family === ModelFamily.CLAUDE && this.claudeClient && imagePaths) {
-            providers.push({ name: `Claude (${modelId})`, execute: () => this.streamWithClaudeMultimodal(userContent, imagePaths, finalClaudeSystem, modelId) });
+            providers.push({ name: `Claude (${modelId})`, execute: () => this.streamWithClaudeMultimodal(userContent, imagePaths, finalClaudeSystem) });
           } else if (entry.family === ModelFamily.GEMINI_FLASH && this.client) {
             providers.push({ name: `Gemini Flash (${modelId})`, execute: () => this.streamWithGeminiModel(geminiFullMessage, modelId, imagePaths) });
           } else if (entry.family === ModelFamily.GEMINI_PRO && this.client) {
             providers.push({ name: `Gemini Pro (${modelId})`, execute: () => this.streamWithGeminiModel(geminiFullMessage, modelId, imagePaths) });
           } else if (entry.family === ModelFamily.GROQ_LLAMA && this.groqClient && imagePaths) {
-            providers.push({ name: `Groq (${modelId})`, execute: () => this.streamWithGroqMultimodal(userContent, imagePaths, finalOpenAiSystem, modelId) });
+            providers.push({ name: `Groq (${modelId})`, execute: () => this.streamWithGroqMultimodal(userContent, imagePaths, finalOpenAiSystem) });
           }
           continue;
         }
@@ -3475,7 +3477,7 @@ ANSWER DIRECTLY:`;
         } else if (entry.family === TextModelFamily.OPENAI && this.openaiClient) {
           providers.push({ name: `OpenAI (${modelId})`, execute: () => this.streamWithOpenaiUsingModel(userContent, modelId, finalOpenAiSystem) });
         } else if (entry.family === TextModelFamily.CLAUDE && this.claudeClient) {
-          providers.push({ name: `Claude (${modelId})`, execute: () => this.streamWithClaude(userContent, finalClaudeSystem, modelId) });
+          providers.push({ name: `Claude (${modelId})`, execute: () => this.streamWithClaude(userContent, finalClaudeSystem) });
         } else if (entry.family === TextModelFamily.GEMINI_FLASH && this.client) {
           providers.push({ name: `Gemini Flash (${modelId})`, execute: () => this.streamWithGeminiModel(geminiFullMessage, modelId) });
         } else if (entry.family === TextModelFamily.GEMINI_PRO && this.client) {

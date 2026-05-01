@@ -1,16 +1,37 @@
 import { DatabaseManager, Meeting } from "./db/DatabaseManager";
 import { SessionTracker } from "./SessionTracker";
 import { EventEmitter } from "events";
+import fs from "fs/promises";
+import path from "path";
+import os from "os";
 
 const CHECKPOINT_INTERVAL_MS = 60000; // 60 seconds
 const MAX_RETRY_ATTEMPTS = 3;
 const RETRY_DELAY_MS = 2000;
+
+interface CheckpointResult {
+    success: boolean;
+    retryCount: number;
+    usedFallback: boolean;
+    fallbackPath?: string;
+    error?: string;
+}
+
+interface CheckpointError {
+    meetingId: string | null;
+    error: Error;
+    retryCount: number;
+    usedFallback: boolean;
+    fallbackPath?: string;
+}
 
 export class MeetingCheckpointer extends EventEmitter {
     private interval: NodeJS.Timeout | null = null;
     private meetingId: string | null = null;
     private lastCheckpointAt: number = 0;
     private lastTranscriptTimestamp: number = 0;
+    private checkpointInProgress: boolean = false;
+    private tempDir: string;
 
     constructor(
         private readonly dbManager: DatabaseManager,
@@ -18,6 +39,7 @@ export class MeetingCheckpointer extends EventEmitter {
         private readonly onCheckpointWritten?: (checkpointId: string) => void | Promise<void>,
     ) {
         super();
+        this.tempDir = path.join(os.tmpdir(), 'meeting-checkpoints');
     }
 
     public start(meetingId: string): void {
@@ -143,6 +165,24 @@ export class MeetingCheckpointer extends EventEmitter {
             }
         }
 
+        // All retries exhausted — save to fallback file
+        try {
+            const fallbackPath = await this.saveFallbackFile(meetingData, snapshot);
+            return {
+                success: false,
+                retryCount: MAX_RETRY_ATTEMPTS,
+                usedFallback: true,
+                fallbackPath,
+                error: 'All database retries failed'
+            };
+        } catch (fallbackError) {
+            return {
+                success: false,
+                retryCount: MAX_RETRY_ATTEMPTS,
+                usedFallback: false,
+                error: `Fallback save also failed: ${fallbackError instanceof Error ? fallbackError.message : String(fallbackError)}`
+            };
+        }
     }
 
     private createMeetingData(snapshot: any): Meeting {
@@ -185,17 +225,11 @@ export class MeetingCheckpointer extends EventEmitter {
         return filePath;
     }
 
-    private notifyFrontend(event: string, data: any): void {
-        try {
-            this.dbManager.createOrUpdateMeetingProcessingRecord(meetingData, snapshot.startTime, snapshot.durationMs);
-            // NAT-061: emit event for subscribers instead of broadcasting to all windows
-            this.emit('checkpoint', this.meetingId);
-            this.lastCheckpointAt = Date.now();
-            if (this.onCheckpointWritten) {
-                await this.onCheckpointWritten(this.meetingId);
-            }
-        } catch (e) {
-            console.error('[MeetingCheckpointer] Failed to save checkpoint to database', e);
+    private async notifyFrontend(event: string, data: any): Promise<void> {
+        this.emit(event, data);
+        this.lastCheckpointAt = Date.now();
+        if (this.onCheckpointWritten) {
+            await this.onCheckpointWritten(this.meetingId!);
         }
     }
 
@@ -209,7 +243,7 @@ export class MeetingCheckpointer extends EventEmitter {
         
         try {
             const files = await fs.readdir(this.tempDir);
-            const checkpointFiles = files.filter(f => f.startsWith('meeting-') && f.endsWith('.json'));
+            const checkpointFiles = files.filter((f: string) => f.startsWith('meeting-') && f.endsWith('.json'));
             
             for (const file of checkpointFiles) {
                 try {

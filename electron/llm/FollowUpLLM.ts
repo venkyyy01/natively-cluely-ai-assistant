@@ -6,6 +6,7 @@ import {
     ReasoningThread,
     parseConsciousModeResponse,
 } from "../ConsciousMode";
+import { Result, LLMError, wrapAsync } from "../types/Result";
 
 export class FollowUpLLM {
     private llmHelper: LLMHelper;
@@ -53,7 +54,7 @@ export class FollowUpLLM {
      * HIGH RELIABILITY FIX:
      * Better error handling for streams - errors are logged but don't crash
      */
-    async *generateStream(previousAnswer: string, refinementRequest: string, context?: string): AsyncGenerator<string> {
+    async *generateStream(previousAnswer: string, refinementRequest: string, context?: string, abortSignal?: AbortSignal): AsyncGenerator<string> {
         try {
             const message = `PREVIOUS ANSWER:\n${previousAnswer}\n\nREQUEST: ${refinementRequest}`;
             yield* this.llmHelper.streamChat(message, undefined, context, UNIVERSAL_FOLLOWUP_PROMPT, { abortSignal });

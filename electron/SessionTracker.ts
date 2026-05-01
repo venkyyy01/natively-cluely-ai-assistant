@@ -1068,8 +1068,8 @@ export class SessionTracker {
             const epochSummary = await this.recapLLM.generate(
               `Summarize this conversation segment into 3-5 concise bullet points preserving key topics, decisions, and questions:\n\n${summaryInput}`
             );
-            if (epochSummary && epochSummary.trim().length > 0) {
-              this.transcriptEpochSummaries.push(epochSummary.trim());
+            if (epochSummary.success && epochSummary.data.trim().length > 0) {
+              this.transcriptEpochSummaries.push(epochSummary.data.trim());
               console.log(`[SessionTracker] Epoch summary created (${this.transcriptEpochSummaries.length} total)`);
             }
           } catch (e) {

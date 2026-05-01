@@ -815,7 +815,6 @@ export class IntelligenceEngine extends EventEmitter {
                 this.setMode('idle');
                 return null;
             }
-            return insight;
 
         } catch (error) {
             if ((error as Error).name === 'AbortError') {
@@ -2088,7 +2087,8 @@ export class IntelligenceEngine extends EventEmitter {
                 return null;
             }
 
-            if (answer) {
+            if (answerResult.success) {
+                const answer = answerResult.data;
                 this.session.addAssistantMessage(answer);
                 this.emit('manual_answer_result', answer, question);
 
@@ -2106,8 +2106,6 @@ export class IntelligenceEngine extends EventEmitter {
                 this.setMode('idle');
                 return null;
             }
-
-            return answer;
 
         } catch (error) {
             this.emit('error', error as Error, 'manual');
