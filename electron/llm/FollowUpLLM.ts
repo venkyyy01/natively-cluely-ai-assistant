@@ -6,6 +6,7 @@ import {
     ReasoningThread,
     parseConsciousModeResponse,
 } from "../ConsciousMode";
+import { Result, LLMError, wrapAsync } from "../types/Result";
 
 export class FollowUpLLM {
     private llmHelper: LLMHelper;
@@ -56,7 +57,7 @@ export class FollowUpLLM {
     async *generateStream(previousAnswer: string, refinementRequest: string, context?: string): AsyncGenerator<string> {
         try {
             const message = `PREVIOUS ANSWER:\n${previousAnswer}\n\nREQUEST: ${refinementRequest}`;
-            yield* this.llmHelper.streamChat(message, undefined, context, UNIVERSAL_FOLLOWUP_PROMPT, { abortSignal });
+            yield* this.llmHelper.streamChat(message, undefined, context, UNIVERSAL_FOLLOWUP_PROMPT);
         } catch (e) {
             console.error("[FollowUpLLM] Stream Failed:", new LLMError(
                 "Follow-up stream generation failed",
@@ -114,14 +115,10 @@ export class FollowUpLLM {
                 }
                 
                 return parsed;
-            },
-            `Failed to generate reasoning-first follow-up for question: "${followUpQuestion.substring(0, 50)}${followUpQuestion.length > 50 ? '...' : ''}"`,
-            { 
-                rootQuestion: reasoningThread.rootQuestion,
-                followUpQuestion, 
-                contextLength: context?.length || 0 
+            } catch (error: any) {
+                console.error(`[FollowUpLLM] Reasoning-first follow-up failed:`, error);
+                throw new Error(`Failed to generate reasoning-first follow-up for question: "${followUpQuestion.substring(0, 50)}${followUpQuestion.length > 50 ? '...' : ''}". Error: ${error.message}`);
             }
-        );
     }
 
     // BACKWARD COMPATIBILITY METHODS:
@@ -132,11 +129,16 @@ export class FollowUpLLM {
      * Generate follow-up with fallback to empty string (for backward compatibility)
      */
     async generateLegacy(previousAnswer: string, refinementRequest: string, context?: string): Promise<string> {
-        const result = await this.generate(previousAnswer, refinementRequest, context);
-        if (result.success) {
-            return result.data;
-        } else {
-            console.error("[FollowUpLLM] Generation failed (legacy mode):", result.error);
+        try {
+            const result = await this.generate(previousAnswer, refinementRequest, context);
+            if (result.success) {
+                return result.data;
+            } else {
+                console.error("[FollowUpLLM] Generation failed (legacy mode):", result.error);
+                return "";
+            }
+        } catch (error) {
+            console.error("[FollowUpLLM] Generation failed (legacy mode):", error);
             return "";
         }
     }
@@ -150,11 +152,10 @@ export class FollowUpLLM {
         followUpQuestion: string,
         context?: string
     ): Promise<ConsciousModeStructuredResponse> {
-        const result = await this.generateReasoningFirstFollowUp(reasoningThread, followUpQuestion, context);
-        if (result.success) {
-            return result.data;
-        } else {
-            console.error("[FollowUpLLM] Reasoning-first follow-up failed (legacy mode):", result.error);
+        try {
+            return await this.generateReasoningFirstFollowUp(reasoningThread, followUpQuestion, context);
+        } catch (error) {
+            console.error("[FollowUpLLM] Reasoning-first follow-up failed (legacy mode):", error);
             return parseConsciousModeResponse('');
         }
     }

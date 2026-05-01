@@ -638,10 +638,13 @@ export class ConsciousOrchestrator {
           }
         );
       } else if (input.answerLLM) {
-        structuredResponse = await input.answerLLM.generateReasoningFirst(
+        const reasoningResult = await input.answerLLM.generateReasoningFirst(
           input.question,
           this.session.getFormattedContext(600)
         );
+        if (reasoningResult.success) {
+          structuredResponse = reasoningResult.data;
+        }
       }
 
       if (!isValidConsciousModeResponse(structuredResponse)) {

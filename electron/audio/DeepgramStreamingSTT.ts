@@ -24,6 +24,7 @@ const LIVENESS_CHECK_INTERVAL_MS = 5000;
 const INBOUND_STALL_TIMEOUT_MS = 15000;
 const CONNECTION_GUARD_INTERVAL_MS = 8000;
 const MAX_BUFFER_SIZE = 500;
+const MAX_RECONNECT_ATTEMPTS = 5;
 
 /**
  * Ring buffer for O(1) push/pop operations.

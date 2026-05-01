@@ -2272,7 +2272,7 @@ ANSWER DIRECTLY:`;
   public async generateWithClaude(userMessage: string, systemPrompt?: string, imagePaths?: string[]): Promise<string> {
     if (!this.claudeClient) throw new Error("Claude client not initialized");
 
-    const targetModel = modelOverride || CLAUDE_MODEL;
+    const targetModel = CLAUDE_MODEL;
     await this.rateLimiters.claude.acquire();
     const systemPromptHash = this.hashValue(systemPrompt || '');
     const payloadHash = this.hashValue({ model: targetModel, userMessage, systemPrompt: systemPrompt || '', imagePaths: imagePaths || [] });
@@ -2711,7 +2711,7 @@ ANSWER DIRECTLY:`;
 
     const response = await withTimeout(
       this.groqClient.chat.completions.create({
-        model: modelOverride,
+        model: GROQ_MODEL,
         messages,
         temperature: 1,
         max_completion_tokens: 28672,
@@ -3317,6 +3317,8 @@ ANSWER DIRECTLY:`;
     }
 
     // 3. Cloud Provider Routing with cross-provider fallback
+    let excludedVisionTier1Family: ModelFamily | undefined;
+    let excludedTextTier1Family: TextModelFamily | undefined;
     const openAiSystem = systemPromptOverride || OPENAI_SYSTEM_PROMPT;
     const finalOpenAiSystem = this.injectLanguageInstruction(openAiSystem);
     const claudeSystem = systemPromptOverride || CLAUDE_SYSTEM_PROMPT;
@@ -3361,22 +3363,30 @@ ANSWER DIRECTLY:`;
     }
 
     if (this.isGroqModel(this.currentModelId) && this.groqClient) {
-      if (isMultimodal && imagePaths) {
-        // Route multimodal to Groq Llama 4 Scout (vision-capable)
-        const groqSystem = systemPromptOverride || OPENAI_SYSTEM_PROMPT;
-        const finalGroqSystem = prepareStreamSystemPrompt(groqSystem);
-        yield* this.streamWithScreenshotOcrFallback(
-          'Groq multimodal',
-          imagePaths,
-          effectiveMessage,
-          () => this.streamWithGroqMultimodal(userContent, imagePaths, finalGroqSystem, options?.abortSignal),
-          (fallbackMessage) => this.streamWithGroq(
-            this.joinPrompt(finalGroqSystem, buildStreamUserContent(fallbackMessage)),
-            GROQ_MODEL,
+      try {
+        if (isMultimodal && imagePaths) {
+          // Route multimodal to Groq Llama 4 Scout (vision-capable)
+          const groqSystem = systemPromptOverride || OPENAI_SYSTEM_PROMPT;
+          const finalGroqSystem = prepareStreamSystemPrompt(groqSystem);
+          yield* this.streamWithScreenshotOcrFallback(
+            'Groq multimodal',
+            imagePaths,
+            effectiveMessage,
+            () => this.streamWithGroqMultimodal(userContent, imagePaths, finalGroqSystem, options?.abortSignal),
+            (fallbackMessage) => this.streamWithGroq(
+              this.joinPrompt(finalGroqSystem, buildStreamUserContent(fallbackMessage)),
+              GROQ_MODEL,
+              options?.abortSignal,
+            ),
             options?.abortSignal,
-          ),
-          options?.abortSignal,
-        );
+          );
+          return;
+        }
+        // Text-only Groq
+        const groqSystem = systemPromptOverride ? baseSystemPrompt : GROQ_SYSTEM_PROMPT;
+        const finalGroqSystem = prepareStreamSystemPrompt(groqSystem);
+        const groqFullMessage = this.joinPrompt(finalGroqSystem, userContent);
+        yield* this.streamWithGroq(groqFullMessage, GROQ_MODEL, options?.abortSignal);
         return;
       } catch (error: any) {
         if (error?.streamHadOutput) {
@@ -3389,47 +3399,43 @@ ANSWER DIRECTLY:`;
         }
         console.warn(`[LLMHelper] Selected Groq stream failed. Falling back across providers: ${error.message}`);
       }
-      // Text-only Groq
-      const groqSystem = systemPromptOverride ? baseSystemPrompt : GROQ_SYSTEM_PROMPT;
-      const finalGroqSystem = prepareStreamSystemPrompt(groqSystem);
-      const groqFullMessage = this.joinPrompt(finalGroqSystem, userContent);
-      yield* this.streamWithGroq(groqFullMessage, GROQ_MODEL, options?.abortSignal);
-      return;
     }
 
     // 4. Gemini Routing & Fallback
     if (this.client) {
       // Direct model use if specified
       if (this.isGeminiModel(this.currentModelId)) {
-        const fullMsg = this.joinPrompt(finalSystemPrompt, userContent);
-        if (isMultimodal && imagePaths?.length) {
-          yield* this.streamWithScreenshotOcrFallback(
-            `Gemini (${this.currentModelId})`,
-            imagePaths,
-            effectiveMessage,
-            () => this.streamWithGeminiModel(fullMsg, this.currentModelId, imagePaths, options?.abortSignal),
-            (fallbackMessage) => this.streamWithGeminiModel(
-              this.joinPrompt(finalSystemPrompt, buildStreamUserContent(fallbackMessage)),
-              this.currentModelId,
-              undefined,
+        try {
+          const fullMsg = this.joinPrompt(finalSystemPrompt, userContent);
+          if (isMultimodal && imagePaths?.length) {
+            yield* this.streamWithScreenshotOcrFallback(
+              `Gemini (${this.currentModelId})`,
+              imagePaths,
+              effectiveMessage,
+              () => this.streamWithGeminiModel(fullMsg, this.currentModelId, imagePaths, options?.abortSignal),
+              (fallbackMessage) => this.streamWithGeminiModel(
+                this.joinPrompt(finalSystemPrompt, buildStreamUserContent(fallbackMessage)),
+                this.currentModelId,
+                undefined,
+                options?.abortSignal,
+              ),
               options?.abortSignal,
-            ),
-            options?.abortSignal,
-          );
+            );
+            return;
+          }
+          yield* this.streamWithGeminiModel(fullMsg, this.currentModelId, imagePaths, options?.abortSignal);
           return;
+        } catch (error: any) {
+          if (error?.streamHadOutput) {
+            throw error;
+          }
+          if (isMultimodal) {
+            excludedVisionTier1Family = this.currentModelId.includes('pro') ? ModelFamily.GEMINI_PRO : ModelFamily.GEMINI_FLASH;
+          } else {
+            excludedTextTier1Family = this.currentModelId.includes('pro') ? TextModelFamily.GEMINI_PRO : TextModelFamily.GEMINI_FLASH;
+          }
+          console.warn(`[LLMHelper] Selected Gemini stream failed. Falling back across providers: ${error.message}`);
         }
-        yield* this.streamWithGeminiModel(fullMsg, this.currentModelId, imagePaths, options?.abortSignal);
-        return;
-      } catch (error: any) {
-        if (error?.streamHadOutput) {
-          throw error;
-        }
-        if (isMultimodal) {
-          excludedVisionTier1Family = this.currentModelId.includes('pro') ? ModelFamily.GEMINI_PRO : ModelFamily.GEMINI_FLASH;
-        } else {
-          excludedTextTier1Family = this.currentModelId.includes('pro') ? TextModelFamily.GEMINI_PRO : TextModelFamily.GEMINI_FLASH;
-        }
-        console.warn(`[LLMHelper] Selected Gemini stream failed. Falling back across providers: ${error.message}`);
       }
     }
 
@@ -3455,13 +3461,13 @@ ANSWER DIRECTLY:`;
           if (entry.family === ModelFamily.OPENAI && this.openaiClient && imagePaths) {
             providers.push({ name: `OpenAI (${modelId})`, execute: () => this.streamWithOpenaiMultimodalUsingModel(userContent, imagePaths, modelId, finalOpenAiSystem) });
           } else if (entry.family === ModelFamily.CLAUDE && this.claudeClient && imagePaths) {
-            providers.push({ name: `Claude (${modelId})`, execute: () => this.streamWithClaudeMultimodal(userContent, imagePaths, finalClaudeSystem, modelId) });
+            providers.push({ name: `Claude (${modelId})`, execute: () => this.streamWithClaudeMultimodal(userContent, imagePaths, finalClaudeSystem) });
           } else if (entry.family === ModelFamily.GEMINI_FLASH && this.client) {
             providers.push({ name: `Gemini Flash (${modelId})`, execute: () => this.streamWithGeminiModel(geminiFullMessage, modelId, imagePaths) });
           } else if (entry.family === ModelFamily.GEMINI_PRO && this.client) {
             providers.push({ name: `Gemini Pro (${modelId})`, execute: () => this.streamWithGeminiModel(geminiFullMessage, modelId, imagePaths) });
           } else if (entry.family === ModelFamily.GROQ_LLAMA && this.groqClient && imagePaths) {
-            providers.push({ name: `Groq (${modelId})`, execute: () => this.streamWithGroqMultimodal(userContent, imagePaths, finalOpenAiSystem, modelId) });
+            providers.push({ name: `Groq (${modelId})`, execute: () => this.streamWithGroqMultimodal(userContent, imagePaths, finalOpenAiSystem) });
           }
           continue;
         }
@@ -3471,7 +3477,7 @@ ANSWER DIRECTLY:`;
         } else if (entry.family === TextModelFamily.OPENAI && this.openaiClient) {
           providers.push({ name: `OpenAI (${modelId})`, execute: () => this.streamWithOpenaiUsingModel(userContent, modelId, finalOpenAiSystem) });
         } else if (entry.family === TextModelFamily.CLAUDE && this.claudeClient) {
-          providers.push({ name: `Claude (${modelId})`, execute: () => this.streamWithClaude(userContent, finalClaudeSystem, modelId) });
+          providers.push({ name: `Claude (${modelId})`, execute: () => this.streamWithClaude(userContent, finalClaudeSystem) });
         } else if (entry.family === TextModelFamily.GEMINI_FLASH && this.client) {
           providers.push({ name: `Gemini Flash (${modelId})`, execute: () => this.streamWithGeminiModel(geminiFullMessage, modelId) });
         } else if (entry.family === TextModelFamily.GEMINI_PRO && this.client) {
@@ -3517,8 +3523,6 @@ ANSWER DIRECTLY:`;
           yield* this.streamWithGeminiParallelRace(raceMsg, imagePaths, options?.abortSignal);
         }
       }
-    } else {
-      throw new Error("No LLM provider available");
     }
 
     throw new Error("No LLM provider available");

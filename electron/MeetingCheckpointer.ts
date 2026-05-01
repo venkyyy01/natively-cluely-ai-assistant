@@ -1,16 +1,30 @@
 import { DatabaseManager, Meeting } from "./db/DatabaseManager";
 import { SessionTracker } from "./SessionTracker";
 import { EventEmitter } from "events";
+import * as fs from "node:fs/promises";
+import * as path from "node:path";
 
 const CHECKPOINT_INTERVAL_MS = 60000; // 60 seconds
 const MAX_RETRY_ATTEMPTS = 3;
 const RETRY_DELAY_MS = 2000;
+
+interface CheckpointResult {
+    success: boolean;
+    retryCount: number;
+    usedFallback: boolean;
+    fallbackPath?: string;
+    error?: string;
+}
+
+type CheckpointError = { meetingId: string | null; error: Error; retryCount: number; usedFallback: boolean; fallbackPath?: string };
 
 export class MeetingCheckpointer extends EventEmitter {
     private interval: NodeJS.Timeout | null = null;
     private meetingId: string | null = null;
     private lastCheckpointAt: number = 0;
     private lastTranscriptTimestamp: number = 0;
+    private checkpointInProgress = false;
+    private tempDir: string;
 
     constructor(
         private readonly dbManager: DatabaseManager,
@@ -18,6 +32,7 @@ export class MeetingCheckpointer extends EventEmitter {
         private readonly onCheckpointWritten?: (checkpointId: string) => void | Promise<void>,
     ) {
         super();
+        this.tempDir = path.join(process.cwd(), 'checkpoints');
     }
 
     public start(meetingId: string): void {
@@ -133,17 +148,18 @@ export class MeetingCheckpointer extends EventEmitter {
 
         // NAT-061: idle detection — skip checkpoint if no new transcript since last checkpoint
         const latestTranscriptTimestamp = snapshot.transcript.length > 0
-            ? Math.max(...snapshot.transcript.map(t => t.timestamp ?? 0))
+            ? Math.max(...snapshot.transcript.map((t: any) => t.timestamp ?? 0))
             : 0;
         if (latestTranscriptTimestamp > 0) {
             this.lastTranscriptTimestamp = latestTranscriptTimestamp;
         }
         if (this.lastCheckpointAt > 0 && this.lastTranscriptTimestamp <= this.lastCheckpointAt) {
             console.log(`[MeetingCheckpointer] Idle stretch detected for ${this.meetingId}; skipping checkpoint.`);
-            return;
+            return { success: false, retryCount: MAX_RETRY_ATTEMPTS, usedFallback: false, error: 'Idle stretch - no new transcript' };
         }
 
-        const metadata = snapshot.meetingMetadata;
+        return { success: false, retryCount: MAX_RETRY_ATTEMPTS, usedFallback: false, error: 'All database save attempts failed' };
+    }
 
     private createMeetingData(snapshot: any): Meeting {
         const metadata = snapshot.meetingMetadata;
@@ -185,17 +201,15 @@ export class MeetingCheckpointer extends EventEmitter {
         return filePath;
     }
 
-    private notifyFrontend(event: string, data: any): void {
+    private async notifyFrontend(event: string, data: any): Promise<void> {
         try {
-            this.dbManager.createOrUpdateMeetingProcessingRecord(meetingData, snapshot.startTime, snapshot.durationMs);
-            // NAT-061: emit event for subscribers instead of broadcasting to all windows
-            this.emit('checkpoint', this.meetingId);
+            this.emit(event, data);
             this.lastCheckpointAt = Date.now();
             if (this.onCheckpointWritten) {
-                await this.onCheckpointWritten(this.meetingId);
+                await this.onCheckpointWritten(this.meetingId!);
             }
         } catch (e) {
-            console.error('[MeetingCheckpointer] Failed to save checkpoint to database', e);
+            console.error('[MeetingCheckpointer] Failed to notify frontend:', e);
         }
     }
 
@@ -209,7 +223,7 @@ export class MeetingCheckpointer extends EventEmitter {
         
         try {
             const files = await fs.readdir(this.tempDir);
-            const checkpointFiles = files.filter(f => f.startsWith('meeting-') && f.endsWith('.json'));
+            const checkpointFiles = files.filter((f: string) => f.startsWith('meeting-') && f.endsWith('.json'));
             
             for (const file of checkpointFiles) {
                 try {

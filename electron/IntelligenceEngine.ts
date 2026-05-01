@@ -815,8 +815,6 @@ export class IntelligenceEngine extends EventEmitter {
                 this.setMode('idle');
                 return null;
             }
-            return insight;
-
         } catch (error) {
             if ((error as Error).name === 'AbortError') {
                 return null;
@@ -1896,8 +1894,7 @@ export class IntelligenceEngine extends EventEmitter {
             const stream = this.followUpLLM.generateStream(
                 lastMsg,
                 refinementRequest,
-                context,
-                abortController.signal
+                context
             );
 
             for await (const token of stream) {
@@ -2088,26 +2085,24 @@ export class IntelligenceEngine extends EventEmitter {
                 return null;
             }
 
-            if (answer) {
-                this.session.addAssistantMessage(answer);
-                this.emit('manual_answer_result', answer, question);
+            if (answerResult.success) {
+                this.session.addAssistantMessage(answerResult.data);
+                this.emit('manual_answer_result', answerResult.data, question);
 
                 this.session.pushUsage({
                     type: 'chat',
                     timestamp: Date.now(),
                     question: question,
-                    answer: answer
+                    answer: answerResult.data
                 });
                 
                 this.setMode('idle');
-                return answer;
+                return answerResult.data;
             } else {
                 console.warn('[INTELLIGENCE] Manual answer failed:', answerResult.error);
                 this.setMode('idle');
                 return null;
             }
-
-            return answer;
 
         } catch (error) {
             this.emit('error', error as Error, 'manual');

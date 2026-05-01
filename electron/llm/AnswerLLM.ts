@@ -5,6 +5,7 @@ import {
     ConsciousModeStructuredResponse,
     parseConsciousModeResponse,
 } from "../ConsciousMode";
+import { Result, LLMError, wrapAsync } from "../types/Result";
 
 export class AnswerLLM {
     private llmHelper: LLMHelper;
@@ -105,7 +106,7 @@ export class AnswerLLM {
         }
     }
 
-    async generateReasoningFirst(question: string, context?: string): Promise<ConsciousModeStructuredResponse> {
+    async generateReasoningFirstLegacy(question: string, context?: string): Promise<ConsciousModeStructuredResponse> {
         try {
             const message = [
                 'STRUCTURED_REASONING_RESPONSE',
