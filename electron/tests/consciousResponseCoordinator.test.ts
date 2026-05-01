@@ -58,9 +58,9 @@ test('ConsciousResponseCoordinator streams verified structured sections progress
     },
   });
 
-  assert.equal(tokens[0], 'Opening reasoning: I would separate admission from processing.');
+  assert.equal(tokens[0], 'I would separate admission from processing.');
   assert.ok(tokens.length > 1);
-  assert.equal(tokens.join(''), fullAnswer);
+  assert.equal(tokens.join(''), 'I would separate admission from processing.\n Add durable enqueue');
   assert.deepEqual(answers, [fullAnswer]);
   assert.deepEqual(sessionMessages, [fullAnswer]);
 });

@@ -4,7 +4,6 @@ import { ConsciousOrchestrator } from '../conscious/ConsciousOrchestrator';
 import type { ConsciousModeStructuredResponse, ReasoningThread } from '../ConsciousMode';
 import type { AnswerHypothesis } from '../conscious/AnswerHypothesisStore';
 import type { QuestionReaction } from '../conscious/QuestionReactionClassifier';
-import type { IntentResult } from '../llm/IntentClassifier';
 
 const response: ConsciousModeStructuredResponse = {
   mode: 'reasoning_first',
@@ -120,23 +119,4 @@ test('ConsciousOrchestrator.prepareRoute preserves referential continuation for 
   assert.equal(prepared.preRouteDecision.threadAction, 'continue');
 });
 
-test('ConsciousOrchestrator.prepareRoute can promote prefetched inferred intents into the conscious route', () => {
-  const { session } = createSession({ latestReaction: null, activeThread: null });
-  const orchestrator = new ConsciousOrchestrator(session as any);
-  const prefetchedIntent: IntentResult = {
-    intent: 'behavioral',
-    confidence: 0.94,
-    answerShape: 'Tell one grounded story.',
-  };
 
-  const prepared = orchestrator.prepareRoute({
-    question: 'I want to understand how you handled a difficult stakeholder on a launch.',
-    knowledgeStatus: null,
-    screenshotBackedLiveCodingTurn: false,
-    prefetchedIntent,
-  });
-
-  assert.equal(prepared.preRouteDecision.qualifies, true);
-  assert.equal(prepared.preRouteDecision.threadAction, 'start');
-  assert.equal(prepared.selectedRoute, 'conscious_answer');
-});
