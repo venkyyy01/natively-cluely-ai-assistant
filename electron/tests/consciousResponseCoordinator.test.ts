@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { ConsciousResponseCoordinator } from '../conscious/ConsciousResponseCoordinator';
 import { AnswerLatencyTracker } from '../latency/AnswerLatencyTracker';
+import { formatConsciousModeResponse } from '../ConsciousMode';
 
 test('ConsciousResponseCoordinator streams verified structured sections progressively', () => {
   const tokens: string[] = [];
@@ -30,37 +31,31 @@ test('ConsciousResponseCoordinator streams verified structured sections progress
     () => {},
   );
 
-  const fullAnswer = coordinator.completeStructuredAnswer({
+  const structuredResponse = {
+    mode: 'reasoning_first' as const,
+    openingReasoning: 'I would separate admission from processing.',
+    implementationPlan: ['Add durable enqueue'],
+    tradeoffs: [] as string[],
+    edgeCases: [] as string[],
+    scaleConsiderations: [] as string[],
+    pushbackResponses: [] as string[],
+    likelyFollowUps: [] as string[],
+    codeTransition: '',
+  };
+
+  const fullAnswer = formatConsciousModeResponse(structuredResponse);
+
+  const result = coordinator.completeStructuredAnswer({
     requestId,
     questionLabel: 'How would you design a queue?',
     confidence: 0.9,
-    fullAnswer: [
-      'Opening reasoning: I would separate admission from processing.',
-      'Implementation plan:',
-      '- Add durable enqueue',
-      'Tradeoffs:',
-      'Edge cases:',
-      'Scale considerations:',
-      'Pushback responses:',
-      'Likely follow-ups:',
-      'Code transition:',
-    ].join('\n'),
-    structuredResponse: {
-      mode: 'reasoning_first',
-      openingReasoning: 'I would separate admission from processing.',
-      implementationPlan: ['Add durable enqueue'],
-      tradeoffs: [],
-      edgeCases: [],
-      scaleConsiderations: [],
-      pushbackResponses: [],
-      likelyFollowUps: [],
-      codeTransition: '',
-    },
+    fullAnswer,
+    structuredResponse,
   });
 
-  assert.equal(tokens[0], 'Opening reasoning: I would separate admission from processing.');
+  assert.equal(tokens[0], 'I would separate admission from processing.');
   assert.ok(tokens.length > 1);
-  assert.equal(tokens.join(''), fullAnswer);
-  assert.deepEqual(answers, [fullAnswer]);
-  assert.deepEqual(sessionMessages, [fullAnswer]);
+  assert.equal(tokens.join(''), result);
+  assert.deepEqual(answers, [result]);
+  assert.deepEqual(sessionMessages, [result]);
 });

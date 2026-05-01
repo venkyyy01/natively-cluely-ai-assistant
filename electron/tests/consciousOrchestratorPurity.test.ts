@@ -4,7 +4,6 @@ import { ConsciousOrchestrator } from '../conscious/ConsciousOrchestrator';
 import type { ConsciousModeStructuredResponse, ReasoningThread } from '../ConsciousMode';
 import type { AnswerHypothesis } from '../conscious/AnswerHypothesisStore';
 import type { QuestionReaction } from '../conscious/QuestionReactionClassifier';
-import type { IntentResult } from '../llm/IntentClassifier';
 
 const response: ConsciousModeStructuredResponse = {
   mode: 'reasoning_first',
@@ -43,7 +42,7 @@ function createSession(overrides?: {
   let cleared = false;
   const session = {
     isConsciousModeEnabled: (): boolean => true,
-    getActiveReasoningThread: (): ReasoningThread | null => overrides?.activeThread ?? createThread(),
+    getActiveReasoningThread: (): ReasoningThread | null => overrides && Object.prototype.hasOwnProperty.call(overrides, 'activeThread') ? overrides.activeThread ?? null : createThread(),
     getLatestConsciousResponse: (): ConsciousModeStructuredResponse | null => null,
     clearConsciousModeThread: () => {
       cleared = true;
@@ -123,17 +122,10 @@ test('ConsciousOrchestrator.prepareRoute preserves referential continuation for 
 test('ConsciousOrchestrator.prepareRoute can promote prefetched inferred intents into the conscious route', () => {
   const { session } = createSession({ latestReaction: null, activeThread: null });
   const orchestrator = new ConsciousOrchestrator(session as any);
-  const prefetchedIntent: IntentResult = {
-    intent: 'behavioral',
-    confidence: 0.94,
-    answerShape: 'Tell one grounded story.',
-  };
-
   const prepared = orchestrator.prepareRoute({
     question: 'I want to understand how you handled a difficult stakeholder on a launch.',
     knowledgeStatus: null,
     screenshotBackedLiveCodingTurn: false,
-    prefetchedIntent,
   });
 
   assert.equal(prepared.preRouteDecision.qualifies, true);
