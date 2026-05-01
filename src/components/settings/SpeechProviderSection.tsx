@@ -15,7 +15,7 @@ interface SpeechProviderSectionProps {
   hasStoredSonioxKey: boolean;
   groqSttModel: string;
   setGroqSttModel: (value: string) => void;
-  setGoogleServiceAccountPath: (value: string) => void;
+  handleGoogleServiceAccountSelected: (value: string) => void;
   sttGroqKey: string;
   sttOpenaiKey: string;
   sttDeepgramKey: string;
@@ -64,7 +64,7 @@ export const SpeechProviderSection: React.FC<SpeechProviderSectionProps> = (prop
     hasStoredSonioxKey,
     groqSttModel,
     setGroqSttModel,
-    setGoogleServiceAccountPath,
+    handleGoogleServiceAccountSelected,
     sttGroqKey,
     sttOpenaiKey,
     sttDeepgramKey,
@@ -174,7 +174,7 @@ export const SpeechProviderSection: React.FC<SpeechProviderSectionProps> = (prop
                   onClick={async () => {
                     const result = await electronAPI.selectServiceAccount();
                     if (result?.success && result.path) {
-                      setGoogleServiceAccountPath(result.path);
+                      handleGoogleServiceAccountSelected(result.path);
                     }
                   }}
                   className="px-3 py-2 bg-bg-input hover:bg-bg-elevated border border-border-subtle rounded-lg text-xs font-medium text-text-primary transition-colors flex items-center gap-2"

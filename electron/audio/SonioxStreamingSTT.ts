@@ -101,6 +101,7 @@ export class SonioxStreamingSTT extends EventEmitter {
 
     public start(): void {
         if (this.isActive) return;
+        this.isActive = true;
         this.shouldReconnect = true;
         this.reconnectAttempts = 0;
         this.connect();
@@ -319,7 +320,7 @@ export class SonioxStreamingSTT extends EventEmitter {
             // Auto-reconnect on unexpected close
             if (this.shouldReconnect && code !== 1000) {
                 this.scheduleReconnect();
-            } else {
+            } else if (!this.shouldReconnect) {
                 // If not reconnecting, mark session as truly inactive
                 this.isActive = false;
             }

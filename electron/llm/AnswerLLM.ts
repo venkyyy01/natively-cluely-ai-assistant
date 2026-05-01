@@ -1,6 +1,10 @@
 import { LLMHelper } from "../LLMHelper";
-import { UNIVERSAL_ANSWER_PROMPT } from "./prompts";
-import { ConsciousModeStructuredResponse, parseConsciousModeResponse } from "../ConsciousMode";
+import { CONSCIOUS_REASONING_SYSTEM_PROMPT, UNIVERSAL_ANSWER_PROMPT } from "./prompts";
+import {
+    CONSCIOUS_MODE_JSON_RESPONSE_INSTRUCTIONS,
+    ConsciousModeStructuredResponse,
+    parseConsciousModeResponse,
+} from "../ConsciousMode";
 
 export class AnswerLLM {
     private llmHelper: LLMHelper;
@@ -34,11 +38,13 @@ export class AnswerLLM {
         try {
             const message = [
                 'STRUCTURED_REASONING_RESPONSE',
-                'Return JSON with keys: mode, openingReasoning, implementationPlan, tradeoffs, edgeCases, scaleConsiderations, pushbackResponses, likelyFollowUps, codeTransition.',
-                'Set mode to reasoning_first.',
+                CONSCIOUS_MODE_JSON_RESPONSE_INSTRUCTIONS,
                 `QUESTION: ${question}`,
             ].join('\n\n');
-            const stream = this.llmHelper.streamChat(message, undefined, context, UNIVERSAL_ANSWER_PROMPT);
+            const stream = this.llmHelper.streamChat(message, undefined, context, CONSCIOUS_REASONING_SYSTEM_PROMPT, {
+                skipKnowledgeInterception: true,
+                qualityTier: 'structured_reasoning',
+            });
 
             let fullResponse = "";
             for await (const chunk of stream) {

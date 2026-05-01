@@ -6,6 +6,7 @@ import type { MeetingSnapshot } from '../SessionTracker';
 
 test('MeetingCheckpointer writes provisional snapshots', async () => {
   const writes: Array<{ id: string; durationMs: number }> = [];
+  const emittedCheckpointIds: string[] = [];
   const checkpointer = new MeetingCheckpointer(
     {
       createOrUpdateMeetingProcessingRecord(meeting: { id: string }, _startTime: number, durationMs: number) {
@@ -24,14 +25,18 @@ test('MeetingCheckpointer writes provisional snapshots', async () => {
         };
       },
     }) as never,
+    async (checkpointId) => {
+      emittedCheckpointIds.push(checkpointId);
+    },
   );
 
   checkpointer.start('meeting-1');
-  await (checkpointer as unknown as { checkpoint: () => Promise<void> }).checkpoint();
+  await checkpointer.checkpointNow();
   checkpointer.stop();
 
   assert.equal(writes.length, 1);
   assert.equal(writes[0].id, 'meeting-1');
+  assert.deepEqual(emittedCheckpointIds, ['meeting-1']);
 });
 
 test('MeetingCheckpointer destroy clears the active timer state', () => {
@@ -64,7 +69,7 @@ test('MeetingCheckpointer skips writes when the snapshot has no transcript', asy
   );
 
   checkpointer.start('meeting-3');
-  await (checkpointer as unknown as { checkpoint: () => Promise<void> }).checkpoint();
+  await checkpointer.checkpointNow();
   checkpointer.stop();
 
   assert.equal(writes, 0);
@@ -83,7 +88,7 @@ test('MeetingCheckpointer ignores checkpoint requests when no meeting is active'
     }) as never,
   );
 
-  await (checkpointer as unknown as { checkpoint: () => Promise<void> }).checkpoint();
+  await checkpointer.checkpointNow();
 
   assert.equal(snapshots, 0);
   assert.equal(writes, 0);
@@ -120,7 +125,7 @@ test('MeetingCheckpointer preserves metadata on provisional checkpoints', async 
   );
 
   checkpointer.start('meeting-4');
-  await (checkpointer as unknown as { checkpoint: () => Promise<void> }).checkpoint();
+  await checkpointer.checkpointNow();
   checkpointer.stop();
 
   assert.deepEqual(writes, [
@@ -155,7 +160,7 @@ test('MeetingCheckpointer swallows database checkpoint errors', async () => {
 
   checkpointer.start('meeting-5');
   await assert.doesNotReject(async () => {
-    await (checkpointer as unknown as { checkpoint: () => Promise<void> }).checkpoint();
+    await checkpointer.checkpointNow();
   });
   checkpointer.stop();
 });

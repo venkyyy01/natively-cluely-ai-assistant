@@ -6,13 +6,13 @@ import { SESSION_MENU_TOGGLE_ORDER } from '../lib/consciousModeSettings';
 import type { FastResponseConfig } from '../../shared/ipc';
 
 const SettingsPopup = () => {
-    const { shortcuts } = useShortcuts();
-    const [isUndetectable, setIsUndetectable] = useState(false);
-    const [fastResponseConfig, setFastResponseConfig] = useState<FastResponseConfig>({ enabled: false, provider: 'groq', model: '' });
-    const [profileMode, setProfileMode] = useState(false);
-    const [hasProfile, setHasProfile] = useState(false);
-    const [consciousModeEnabled, setConsciousModeEnabled] = useState(false);
-    const isPremium = true; // All features unlocked
+const { shortcuts } = useShortcuts();
+const [isUndetectable, setIsUndetectable] = useState(false);
+const [fastResponseConfig, setFastResponseConfig] = useState<FastResponseConfig>({ enabled: false, provider: 'groq', model: '' });
+const [profileMode, setProfileMode] = useState(false);
+const [hasProfile, setHasProfile] = useState(false);
+const [consciousModeEnabled, setConsciousModeEnabled] = useState(false);
+const isPremium = true; // All features unlocked
 
     const [hasStoredKey, setHasStoredKey] = useState<Record<string, boolean>>({});
 
@@ -129,12 +129,12 @@ const SettingsPopup = () => {
             };
         }
 
-        return () => {
-            cancelled = true;
-        };
-    }, []);
+return () => {
+cancelled = true;
+};
+}, []);
 
-    const [showTranscript, setShowTranscript] = useState(() => {
+const [showTranscript, setShowTranscript] = useState(() => {
         const stored = localStorage.getItem('natively_interviewer_transcript');
         return stored !== 'false'; // Default to true if not set
     });
@@ -283,12 +283,12 @@ const SettingsPopup = () => {
                         }}
                         className={`w-[30px] h-[18px] rounded-full p-[1.5px] transition-all duration-300 ease-spring active:scale-[0.92] ${consciousModeEnabled ? 'bg-violet-500 shadow-[0_2px_10px_rgba(139,92,246,0.35)]' : 'bg-white/10'}`}
                     >
-                        <div className={`w-[15px] h-[15px] rounded-full bg-black shadow-sm transition-transform duration-300 ease-spring ${consciousModeEnabled ? 'translate-x-[12px]' : 'translate-x-0'}`} />
-                    </button>
-                </div>
+<div className={`w-[15px] h-[15px] rounded-full bg-black shadow-sm transition-transform duration-300 ease-spring ${consciousModeEnabled ? 'translate-x-[12px]' : 'translate-x-0'}`} />
+</button>
+</div>
 
-                {/* Profile Mode Toggle */}
-                {hasProfile && (
+{/* Profile Mode Toggle */}
+{hasProfile && (
                     <div className={`flex items-center justify-between px-3 py-2 rounded-lg transition-colors duration-200 group hover:bg-white/5 cursor-default`}>
                         <div className="flex items-center gap-3">
                             <User

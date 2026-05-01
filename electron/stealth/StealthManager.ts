@@ -74,6 +74,7 @@ interface StealthManagerDependencies {
 interface StealthCapableWindow {
   on?: (event: string, listener: () => void) => void;
   setContentProtection: (value: boolean) => void;
+  setExcludeFromCapture?: (value: boolean) => void;
   setHiddenInMissionControl?: (value: boolean) => void;
   setExcludedFromShownWindowsMenu?: (value: boolean) => void;
   setSkipTaskbar?: (value: boolean) => void;
@@ -96,6 +97,7 @@ interface ManagedWindowRecord {
   listenersAttached: boolean;
   virtualDisplayRequestId: number;
   virtualDisplayIsolationStarted: boolean;
+  privateMacosStealthApplied: boolean;
 }
 
 const WATCHDOG_INTERVAL_MS = 1000;
@@ -106,8 +108,11 @@ const SCSTREAM_CHECK_INTERVAL_MS = 500;
 const CGWINDOW_VISIBILITY_CHECK_MS = 500;
 const KNOWN_CAPTURE_TOOL_PATTERNS = [
   /obs/i,
+  /zoom\.us/i,
   /zoom/i,
-  /teams/i,
+  /microsoft teams/i,
+  /teams2/i,
+  /teams for enterprise/i,
   /meet/i,
   /webex/i,
   /snipping/i,
@@ -147,6 +152,27 @@ const KNOWN_CAPTURE_TOOL_PATTERNS = [
   /screenshot/i,
   /parallels/i,
   /vmware/i,
+  /rdpclip/i,
+  /mstsc/i,
+  /remote desktop/i,
+  /parsec/i,
+  /nomachine/i,
+  /distant/i,
+  /screenrecording/i,
+  /screencasting/i,
+  /airplay/i,
+  /coreaudiod/i,
+  /facet/i,
+  /gather/i,
+  /teramind/i,
+  /activtrak/i,
+  /time doctor/i,
+  /hubstaff/i,
+  /workpuls/i,
+  /idletime/i,
+  /screencastify/i,
+  /vidyard/i,
+  /wistia/i,
 ];
 
 function scheduleUnrefInterval(callback: () => Promise<void> | void, intervalMs: number): NodeJS.Timeout {
@@ -221,9 +247,13 @@ export class StealthManager extends EventEmitter {
   private watchdogHandle: unknown = null;
   private windowsAffinityHandle: unknown = null;
   private watchdogRunning = false;
+  private watchdogPauseTokens = new Set<string>();
+  private watchdogStateVersion = 0;
+  private meetingActive = false;
   private scStreamMonitorHandle: unknown = null;
   private scStreamMonitorRunning = false;
   private scStreamActive = false;
+  private captureVisibleToToolsActive = false;
   private chromiumDetector: ChromiumCaptureDetector | null = null;
   private stealthEnhancer: MacosStealthEnhancer | null = null;
   private cgWindowMonitorHandle: unknown = null;
@@ -233,6 +263,7 @@ export class StealthManager extends EventEmitter {
   private macOSMajor: number = 0;
   private macOSMinor: number = 0;
   private opacityFlickerHandle: unknown = null;
+  private virtualDisplayTaskQueue: Promise<void> | null = null;
 
   constructor(config: StealthConfig, deps: StealthManagerDependencies = {}) {
     super();
@@ -336,7 +367,8 @@ export class StealthManager extends EventEmitter {
 
       this.removeNativeStealth(win);
       this.disableVirtualDisplayIsolation(record);
-      this.applyLayer0(win, false);
+      // Layer 0 (setContentProtection + setExcludeFromCapture) is never disabled
+      // once applied — it remains active regardless of stealth enable state.
       this.applyUiHardening(win, record.hideFromSwitcher);
       return;
     }
@@ -426,6 +458,12 @@ export class StealthManager extends EventEmitter {
       if (windowNumber !== null) {
         void this.stealthEnhancer.enhanceWindowProtection(windowNumber);
       }
+
+      // CRITICAL: Auto-hide when capture is detected for maximum privacy
+      if (typeof win.hide === 'function') {
+        win.hide();
+        this.logger.warn('[StealthManager] Auto-hiding window due to capture detection');
+      }
     }
   }
 
@@ -451,8 +489,75 @@ export class StealthManager extends EventEmitter {
     }
   }
 
-  private isEnabled(): boolean {
-    return this.config.enabled;
+  public isEnabled(): boolean {
+    return this.config.enabled || this.meetingActive;
+  }
+
+  public setMeetingActive(active: boolean): void {
+    this.meetingActive = active;
+
+    if (active) {
+      // Force Layer 0 on all managed windows when a meeting is active
+      for (const record of this.managedWindows) {
+        const win = record.win;
+        if (this.isWindowDestroyed(win)) {
+          continue;
+        }
+        this.applyLayer0(win, true);
+      }
+    }
+  }
+
+  public pauseWatchdog(token: string = 'default'): void {
+    this.watchdogPauseTokens.add(token);
+    this.watchdogStateVersion++;
+  }
+
+  public resumeWatchdog(token: string = 'default'): void {
+    if (this.watchdogPauseTokens.has(token)) {
+      this.watchdogPauseTokens.delete(token);
+      this.watchdogStateVersion++;
+    }
+  }
+
+  public verifyManagedWindows(): boolean {
+    if (!this.isEnabled()) {
+      return false;
+    }
+
+    this.pauseWatchdog('verification');
+
+    try {
+      let verifiedVisibleWindowCount = 0;
+      let hiddenWindowCount = 0;
+
+      for (const record of this.managedWindows) {
+        const win = record.win;
+        if (this.isWindowDestroyed(win)) {
+          continue;
+        }
+
+        // Intentionally hidden windows, such as during app-initiated screenshots,
+        // are not capture-exposed and should not trip stealth heartbeat faults.
+        if (typeof win.isVisible === 'function' && !win.isVisible()) {
+          hiddenWindowCount += 1;
+          continue;
+        }
+
+        verifiedVisibleWindowCount += 1;
+        if (!this.verifyStealth(win)) {
+          return false;
+        }
+      }
+
+      if (verifiedVisibleWindowCount === 0 && hiddenWindowCount > 0) {
+        return true;
+      }
+
+      return verifiedVisibleWindowCount > 0;
+    } finally {
+      this.resumeWatchdog('verification');
+    }
   }
 
   private isEnhancedStealthEnabled(): boolean {
@@ -464,6 +569,14 @@ export class StealthManager extends EventEmitter {
       win.setContentProtection(enable);
     } catch (error) {
       this.logger.warn('[StealthManager] setContentProtection failed:', error);
+    }
+
+    if (typeof win.setExcludeFromCapture === 'function') {
+      try {
+        win.setExcludeFromCapture(enable);
+      } catch (error) {
+        this.logger.warn('[StealthManager] setExcludeFromCapture failed:', error);
+      }
     }
   }
 
@@ -499,7 +612,11 @@ export class StealthManager extends EventEmitter {
 
   private applyNativeStealth(win: StealthCapableWindow): void {
     const nativeModule = this.getNativeModule();
+    const record = this.managedWindowLookup.get(win as object);
     if (!nativeModule) {
+      if (record) {
+        record.privateMacosStealthApplied = false;
+      }
       return;
     }
 
@@ -516,12 +633,18 @@ export class StealthManager extends EventEmitter {
       if (this.platform === 'darwin' && nativeModule.applyMacosWindowStealth) {
         const windowNumber = this.getMacosWindowNumber(win);
         if (windowNumber !== null) {
+          if (record) {
+            record.privateMacosStealthApplied = false;
+          }
           nativeModule.applyMacosWindowStealth(windowNumber);
           
           if (this.featureFlags.enablePrivateMacosStealthApi && nativeModule.applyMacosPrivateWindowStealth) {
             if (this.isMacOSVersionCompatible('15.0')) {
               try {
                 nativeModule.applyMacosPrivateWindowStealth(windowNumber);
+                if (record) {
+                  record.privateMacosStealthApplied = true;
+                }
               } catch (privateError) {
                 this.logger.warn('[StealthManager] Private macOS stealth API failed (incompatible version), falling back to Layer 0:', privateError);
                 this.addWarning('private_api_failed');
@@ -542,6 +665,10 @@ export class StealthManager extends EventEmitter {
 
   private removeNativeStealth(win: StealthCapableWindow): void {
     const nativeModule = this.getNativeModule();
+    const record = this.managedWindowLookup.get(win as object);
+    if (record) {
+      record.privateMacosStealthApplied = false;
+    }
     if (!nativeModule) {
       return;
     }
@@ -596,6 +723,10 @@ export class StealthManager extends EventEmitter {
       return;
     }
 
+    const coordinator = this.virtualDisplayCoordinator;
+    if (!coordinator) {
+      return;
+    }
     const win = record.win;
     const windowId = this.safeGetMediaSourceId(win);
     if (!windowId) {
@@ -606,38 +737,64 @@ export class StealthManager extends EventEmitter {
     record.virtualDisplayRequestId = requestId;
     record.virtualDisplayIsolationStarted = true;
 
-    this.virtualDisplayCoordinator.ensureIsolationForWindow({
-      sessionId: windowId,
-      windowId,
-      width: win.getBounds?.().width ?? 0,
-      height: win.getBounds?.().height ?? 0,
-    }).then((response) => {
-      if (!this.isCurrentVirtualDisplayRequest(record, requestId)) {
+    this.enqueueVirtualDisplayTask(async () => {
+      if (!this.isCurrentVirtualDisplayRequest(record, requestId) || this.isWindowDestroyed(win)) {
         return;
       }
 
-      if (!response.ready || !response.surfaceToken) {
-        record.virtualDisplayIsolationStarted = false;
-        this.logger.warn('[StealthManager] Virtual display isolation not ready, falling back to Layer 0+1');
-        if (this.isEnabled()) this.addWarning('virtual_display_failed');
-        return;
-      }
+      try {
+        const response = await coordinator.ensureIsolationForWindow({
+          sessionId: windowId,
+          windowId,
+          width: win.getBounds?.().width ?? 0,
+          height: win.getBounds?.().height ?? 0,
+        });
 
-      this.clearWarning('virtual_display_failed');
-      this.clearWarning('virtual_display_exhausted');
-
-      this.moveWindowToVirtualDisplay(record, response.surfaceToken, requestId);
-    }).catch((error) => {
-      if (this.isCurrentVirtualDisplayRequest(record, requestId)) {
-        record.virtualDisplayIsolationStarted = false;
-      }
-      this.logger.warn('[StealthManager] Virtual display isolation failed, falling back to Layer 0+1:', error);
-      if (this.isEnabled()) {
-        if (this.virtualDisplayCoordinator.isExhausted?.()) {
-          this.addWarning('virtual_display_exhausted');
-        } else {
-          this.addWarning('virtual_display_failed');
+        if (!this.isCurrentVirtualDisplayRequest(record, requestId)) {
+          return;
         }
+
+        if (!response.ready || !response.surfaceToken) {
+          record.virtualDisplayIsolationStarted = false;
+          this.logger.warn('[StealthManager] Virtual display isolation not ready, falling back to Layer 0+1');
+          if (this.isEnabled()) this.addWarning('virtual_display_failed');
+          return;
+        }
+
+        this.clearWarning('virtual_display_failed');
+        this.clearWarning('virtual_display_exhausted');
+
+        this.moveWindowToVirtualDisplay(record, response.surfaceToken, requestId);
+      } catch (error) {
+        if (this.isCurrentVirtualDisplayRequest(record, requestId)) {
+          record.virtualDisplayIsolationStarted = false;
+        }
+        this.logger.warn('[StealthManager] Virtual display isolation failed, falling back to Layer 0+1:', error);
+        if (this.isEnabled()) {
+          if (coordinator.isExhausted?.()) {
+            this.addWarning('virtual_display_exhausted');
+          } else {
+            this.addWarning('virtual_display_failed');
+          }
+        }
+      }
+    });
+  }
+
+  private enqueueVirtualDisplayTask(task: () => Promise<void>): void {
+    const runTask = async (): Promise<void> => {
+      await task();
+    };
+    const activeQueue = this.virtualDisplayTaskQueue;
+    const next = activeQueue ? activeQueue.then(runTask, runTask) : runTask();
+    const trackedQueue = next.then(
+      (): void => undefined,
+      (): void => undefined,
+    );
+    this.virtualDisplayTaskQueue = trackedQueue;
+    void trackedQueue.finally(() => {
+      if (this.virtualDisplayTaskQueue === trackedQueue) {
+        this.virtualDisplayTaskQueue = null;
       }
     });
   }
@@ -685,6 +842,7 @@ export class StealthManager extends EventEmitter {
       listenersAttached: false,
       virtualDisplayRequestId: 0,
       virtualDisplayIsolationStarted: false,
+      privateMacosStealthApplied: false,
     };
     this.managedWindows.add(record);
     this.managedWindowLookup.set(win as object, record);
@@ -758,6 +916,8 @@ export class StealthManager extends EventEmitter {
     this.scStreamMonitorRunning = false;
     this.cgWindowMonitorRunning = false;
     this.scStreamActive = false;
+    this.captureVisibleToToolsActive = false;
+    this.clearTransientCaptureWarnings();
 
     if (this.chromiumDetector) {
       this.chromiumDetector.stop();
@@ -768,6 +928,12 @@ export class StealthManager extends EventEmitter {
       this.tccMonitor.stop();
       this.tccMonitor = null;
     }
+  }
+
+  private clearTransientCaptureWarnings(): void {
+    this.clearWarning('chromium_capture_active');
+    this.clearWarning('scstream_capture_detected');
+    this.clearWarning('window_visible_to_capture');
   }
 
   private bindPowerMonitor(): void {
@@ -938,13 +1104,20 @@ export class StealthManager extends EventEmitter {
   }
 
   private async pollCaptureTools(): Promise<void> {
-    if (this.watchdogRunning) {
+    if (this.watchdogRunning || this.watchdogPauseTokens.size > 0) {
       return;
     }
 
+    const watchdogStateVersionAtStart = this.watchdogStateVersion;
     this.watchdogRunning = true;
     try {
       const suspiciousToolMatches = await this.detectCaptureProcesses();
+
+      // Ignore stale detections if a screenshot or verification flow paused
+      // the watchdog while this poll was already in flight.
+      if (this.watchdogPauseTokens.size > 0 || this.watchdogStateVersion !== watchdogStateVersionAtStart) {
+        return;
+      }
 
       if (suspiciousToolMatches.length > 0) {
         this.logger.log(
@@ -966,6 +1139,11 @@ export class StealthManager extends EventEmitter {
     }
 
     if (this.platform === 'darwin') {
+      const processSnapshot = await this.readDarwinProcessSnapshot();
+      if (processSnapshot !== null) {
+        return this.captureToolPatterns.filter((pattern) => pattern.test(processSnapshot));
+      }
+
       const matches: RegExp[] = [];
       const browserPatterns = this.getBrowserCapturePatterns();
       const nonBrowserPatterns = this.captureToolPatterns.filter((p) => !browserPatterns.includes(p));
@@ -999,6 +1177,14 @@ export class StealthManager extends EventEmitter {
     return [];
   }
 
+  private async readDarwinProcessSnapshot(): Promise<string | null> {
+    try {
+      return await this.processEnumerator('ps', ['-A', '-o', 'command=']);
+    } catch {
+      return null;
+    }
+  }
+
   private getBrowserCapturePatterns(): RegExp[] {
     return [
       /chrome/i,
@@ -1026,11 +1212,6 @@ export class StealthManager extends EventEmitter {
         if (controlCenterOutput.includes('screen') || controlCenterOutput.includes('capture')) {
           return true;
         }
-      }
-
-      const stdout3 = await this.processEnumerator('pgrep', ['-lf', 'WindowServer']);
-      if (stdout3 && stdout3.trim()) {
-        return false;
       }
 
       return false;
@@ -1119,6 +1300,7 @@ export class StealthManager extends EventEmitter {
     this.cgWindowMonitorRunning = true;
     try {
       const visibleWindowNumbers = await this.getWindowNumbersVisibleToCapture();
+      let windowVisibleToCaptureDetected = false;
 
       for (const record of this.managedWindows) {
         const win = record.win;
@@ -1132,13 +1314,18 @@ export class StealthManager extends EventEmitter {
         }
 
         if (visibleWindowNumbers.has(windowNumber)) {
+          windowVisibleToCaptureDetected = true;
           this.logger.log(`[StealthManager] Window ${windowNumber} is visible to capture tools - applying emergency protection`);
           this.applyEmergencyProtection(win);
-          if (!this.scStreamActive) {
-            this.scStreamActive = true;
-            this.addWarning('window_visible_to_capture');
-          }
         }
+      }
+
+      if (windowVisibleToCaptureDetected) {
+        this.captureVisibleToToolsActive = true;
+        this.addWarning('window_visible_to_capture');
+      } else if (this.captureVisibleToToolsActive) {
+        this.captureVisibleToToolsActive = false;
+        this.clearWarning('window_visible_to_capture');
       }
     } catch (error) {
       this.logger.warn('[StealthManager] CGWindow visibility check failed, maintaining Layer 0 protection:', error);
@@ -1192,13 +1379,10 @@ for window in windows:
 
     if (typeof win.setOpacity === 'function') {
       win.setOpacity(0);
-      this.timeoutScheduler(() => {
-        if (!this.isWindowDestroyed(win) && typeof win.setOpacity === 'function') {
-          win.setOpacity(1);
-          this.applyLayer0(win, true);
-          this.applyNativeStealth(win);
-        }
-      }, 100);
+    }
+
+    if (typeof win.hide === 'function') {
+      win.hide();
     }
 
     this.applyLayer0(win, true);
@@ -1263,9 +1447,9 @@ for window in windows:
 
     this.opacityFlickerHandle = this.intervalScheduler(
       () => this.applyOpacityFlicker(),
-      100
+      500
     );
-    this.logger.log('[StealthManager] macOS 15.4+ opacity flicker enabled (100ms interval)');
+    this.logger.log('[StealthManager] macOS 15.4+ opacity flicker enabled (500ms interval)');
   }
 
   private applyOpacityFlicker(): void {
@@ -1277,7 +1461,7 @@ for window in windows:
 
       if (typeof win.setOpacity === 'function') {
         try {
-          win.setOpacity(0.99);
+          win.setOpacity(0.999);
           this.timeoutScheduler(() => {
             if (!this.isWindowDestroyed(win) && typeof win.setOpacity === 'function') {
               win.setOpacity(1);
@@ -1318,7 +1502,24 @@ for window in windows:
       return;
     }
 
-    this.timeoutScheduler(() => {
+    const attemptRestore = async (): Promise<void> => {
+      await this.delay(WATCHDOG_RESTORE_DELAY_MS);
+
+      const stillRunning = await this.detectCaptureProcesses();
+      if (stillRunning.length > 0) {
+        this.logger.log('[StealthManager] Capture tools still running, delaying window restore');
+        await this.delay(WATCHDOG_RESTORE_DELAY_MS * 2);
+
+        const recheck = await this.detectCaptureProcesses();
+        if (recheck.length > 0) {
+          this.logger.warn('[StealthManager] Capture tools persist, keeping windows hidden');
+          this.addWarning('capture_tools_still_running');
+          return;
+        }
+      }
+
+      this.clearWarning('capture_tools_still_running');
+
       for (const { win, restoreWithOpacity } of windowsToRestore) {
         if (this.isWindowDestroyed(win)) {
           continue;
@@ -1326,18 +1527,27 @@ for window in windows:
 
         if (restoreWithOpacity && typeof win.setOpacity === 'function') {
           win.setOpacity(1);
-        } else {
-          win.show?.();
+        } else if (typeof win.show === 'function') {
+          win.show();
         }
         this.reapplyAfterShow(win);
       }
-    }, WATCHDOG_RESTORE_DELAY_MS);
+    };
+
+    void attemptRestore();
+  }
+
+  private delay(ms: number): Promise<void> {
+    return new Promise((resolve) => {
+      this.timeoutScheduler(() => resolve(), ms);
+    });
   }
 
   verifyStealth(win: StealthCapableWindow): boolean {
     const nativeModule = this.getNativeModule();
+    const record = this.managedWindowLookup.get(win as object);
     if (!nativeModule) {
-      return false;
+      return this.isEnabled();
     }
 
     try {
@@ -1348,10 +1558,18 @@ for window in windows:
         }
 
         const sharingType = nativeModule.verifyMacosStealthState(windowNumber);
-        const verified = sharingType === 0;
+        // The private CGS path does not reliably reflect through NSWindow.sharingType.
+        const privatePathVerified = Boolean(
+          this.featureFlags.enablePrivateMacosStealthApi &&
+          this.isMacOSVersionCompatible('15.0') &&
+          record?.privateMacosStealthApplied
+        );
+        const verified = sharingType === 0 || privatePathVerified;
         if (!verified && this.isEnabled()) {
           this.addWarning('stealth_verification_failed');
           this.logger.warn('[StealthManager] macOS stealth verification failed, maintaining Layer 0 protection');
+        } else {
+          this.clearWarning('stealth_verification_failed');
         }
         return verified;
       }
@@ -1367,6 +1585,8 @@ for window in windows:
         if (!verified && this.isEnabled()) {
           this.addWarning('stealth_verification_failed');
           this.logger.warn('[StealthManager] Windows stealth verification failed, maintaining Layer 0 protection');
+        } else {
+          this.clearWarning('stealth_verification_failed');
         }
         return verified;
       }

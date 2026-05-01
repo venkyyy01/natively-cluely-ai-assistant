@@ -2,7 +2,7 @@
 // JIT RAG: Incrementally indexes transcript during a live meeting.
 //
 // Architecture:
-// - Background timer (30s) chunks & embeds NEW transcript segments
+// - Background timer chunks & embeds NEW transcript segments
 // - Embedding is fire-and-forget — never blocks the query path
 // - At query time, VectorStore already has indexed chunks for fast search
 // - Falls back gracefully if embedding API unavailable
@@ -11,11 +11,14 @@ import { preprocessTranscript, RawSegment } from './TranscriptPreprocessor';
 import { chunkTranscript, Chunk } from './SemanticChunker';
 import { VectorStore } from './VectorStore';
 import { EmbeddingPipeline } from './EmbeddingPipeline';
+import { getActiveAccelerationManager } from '../services/AccelerationManager';
 
-const INDEXING_INTERVAL_MS = 30_000;  // 30 seconds
+const INDEXING_INTERVAL_MS = 10_000;  // Backstop; final interviewer turns flush sooner
 const MIN_NEW_SEGMENTS = 3;           // Don't chunk unless we have enough new content
 const LIVE_SEGMENT_BACKLOG_LIMIT = 2000;
 const EMBEDDING_DELAY_MS = 250;
+const LIVE_FLUSH_DEBOUNCE_MS = 750;
+const LIVE_PAUSE_GAP_MS = 2_000;
 
 export class LiveRAGIndexer {
     private vectorStore: VectorStore;
@@ -29,6 +32,7 @@ export class LiveRAGIndexer {
     private isProcessing = false;     // Guard against concurrent ticks
     private isActive = false;
     private runId = 0;
+    private pendingFlushTimer: ReturnType<typeof setTimeout> | null = null;
 
     private resetState(meetingId: string | null = null): void {
         this.meetingId = meetingId;
@@ -55,6 +59,7 @@ export class LiveRAGIndexer {
                 clearInterval(this.timer);
                 this.timer = null;
             }
+            this.clearPendingFlush();
         }
 
         this.runId += 1;
@@ -77,11 +82,15 @@ export class LiveRAGIndexer {
      */
     feedSegments(segments: RawSegment[]): void {
         if (!this.isActive || !this.meetingId) return;
+        const previousLastSegment = this.allSegments[this.allSegments.length - 1] ?? null;
         this.allSegments.push(...segments);
         if (this.allSegments.length > LIVE_SEGMENT_BACKLOG_LIMIT) {
             const overflow = this.allSegments.length - LIVE_SEGMENT_BACKLOG_LIMIT;
             this.allSegments.splice(0, overflow);
             this.indexedSegmentCount = Math.max(0, this.indexedSegmentCount - overflow);
+        }
+        if (this.shouldFlushSoon(segments, previousLastSegment)) {
+            this.scheduleFreshnessFlush();
         }
     }
 
@@ -96,12 +105,18 @@ export class LiveRAGIndexer {
      * 5. Embed each chunk via Gemini API
      * 6. Advance high-water mark
      */
-    private async tick(): Promise<void> {
+    async flushNow(_reason: 'manual' | 'final_interviewer_turn' | 'long_pause' | 'stop' = 'manual'): Promise<void> {
+        this.clearPendingFlush();
+        await this.tick(true);
+    }
+
+    private async tick(force: boolean = false): Promise<void> {
         if (!this.isActive || !this.meetingId) return;
         if (this.isProcessing) return;  // Skip if previous tick still running
 
         const newSegmentCount = this.allSegments.length - this.indexedSegmentCount;
-        if (newSegmentCount < MIN_NEW_SEGMENTS) return;  // Not enough new content
+        if (newSegmentCount <= 0) return;
+        if (!force && newSegmentCount < MIN_NEW_SEGMENTS) return;  // Not enough new content
 
         this.isProcessing = true;
         const meetingId = this.meetingId;
@@ -146,7 +161,10 @@ export class LiveRAGIndexer {
                         break;
                     }
                     try {
-                        const embedding = await this.embeddingPipeline.getEmbedding(indexedChunks[i].text);
+                        const accelerationManager = getActiveAccelerationManager();
+                        const embedding = accelerationManager
+                            ? await accelerationManager.runInLane('background', () => this.embeddingPipeline.getEmbedding(indexedChunks[i].text))
+                            : await this.embeddingPipeline.getEmbedding(indexedChunks[i].text);
                         if (!this.isActive || this.runId !== runId || this.meetingId !== meetingId) {
                             console.warn('[LiveRAGIndexer] Skipping stale embedding result');
                             break;
@@ -194,9 +212,10 @@ export class LiveRAGIndexer {
             clearInterval(this.timer);
             this.timer = null;
         }
+        this.clearPendingFlush();
 
         // Final flush — process any remaining segments
-        await this.tick();
+        await this.flushNow('stop');
 
         if (this.runId !== runId) {
             console.warn('[LiveRAGIndexer] Stop detected a newer run; skipping reset of current session');
@@ -236,5 +255,46 @@ export class LiveRAGIndexer {
      */
     isRunning(): boolean {
         return this.isActive;
+    }
+
+    private clearPendingFlush(): void {
+        if (!this.pendingFlushTimer) {
+            return;
+        }
+        clearTimeout(this.pendingFlushTimer);
+        this.pendingFlushTimer = null;
+    }
+
+    private scheduleFreshnessFlush(): void {
+        this.clearPendingFlush();
+        this.pendingFlushTimer = setTimeout(() => {
+            this.pendingFlushTimer = null;
+            this.flushNow('final_interviewer_turn').catch(err => {
+                console.error('[LiveRAGIndexer] Freshness flush error:', err);
+            });
+        }, LIVE_FLUSH_DEBOUNCE_MS);
+    }
+
+    private shouldFlushSoon(segments: RawSegment[], previousLastSegment: RawSegment | null): boolean {
+        if (segments.length === 0) {
+            return false;
+        }
+
+        const hasInterviewerFinalTurn = segments.some((segment) => {
+            const speaker = segment.speaker.toLowerCase();
+            const text = segment.text.trim();
+            const wordCount = text.split(/\s+/).filter(Boolean).length;
+            return /interviewer|speaker|system/.test(speaker)
+                && (text.endsWith('?') || wordCount >= 4);
+        });
+        if (hasInterviewerFinalTurn) {
+            return true;
+        }
+
+        const firstNewSegment = segments[0];
+        return Boolean(
+            previousLastSegment
+            && firstNewSegment.timestamp - previousLastSegment.timestamp >= LIVE_PAUSE_GAP_MS
+        );
     }
 }

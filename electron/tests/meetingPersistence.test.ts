@@ -60,6 +60,7 @@ test('MeetingPersistence uses the meeting start time for placeholder records', a
             meetingMetadata: null,
           };
         },
+        async flushPersistenceNow() {},
         createSuccessorSession() {
           return this;
         },
@@ -221,6 +222,7 @@ test('MeetingPersistence skips placeholder and background saves for meetings sho
             meetingMetadata: null,
           };
         },
+        async flushPersistenceNow() {},
         createSuccessorSession() {
           return successorSession;
         },
@@ -356,7 +358,111 @@ test('MeetingPersistence marks failed finalization attempts and notifies listene
     }, 'meeting-finalize-error');
 
     assert.deepEqual(failed, [{ id: 'meeting-finalize-error', message: 'persist failed' }]);
-    assert.deepEqual(notifications, ['meetings-updated']);
+    assert.deepEqual(notifications, ['meeting-save-failed', 'meetings-updated']);
+  } finally {
+    DatabaseManager.getInstance = originalGetInstance;
+    restoreElectron();
+  }
+});
+
+test('MeetingPersistence retries final save failures before succeeding', async () => {
+  const originalGetInstance = DatabaseManager.getInstance;
+  const restoreElectron = installElectronMock();
+  let finalizeCalls = 0;
+  const failed: string[] = [];
+
+  DatabaseManager.getInstance = ((() => ({
+    finalizeMeetingProcessing() {
+      finalizeCalls += 1;
+      if (finalizeCalls < 3) {
+        throw new Error(`persist failed ${finalizeCalls}`);
+      }
+    },
+    markMeetingProcessingFailed(id: string) {
+      failed.push(id);
+      return true;
+    },
+  })) as unknown) as typeof DatabaseManager.getInstance;
+
+  try {
+    const persistence = new MeetingPersistence(
+      { createSnapshot() { throw new Error('unused'); } } as never,
+      { generateMeetingSummary: async () => 'unused' } as never,
+      { finalizeRetryDelaysMs: [0, 0] },
+    );
+
+    await (persistence as unknown as {
+      processAndSaveMeeting: (snapshot: MeetingSnapshot, meetingId: string) => Promise<void>;
+    }).processAndSaveMeeting({
+      transcript: [
+        { speaker: 'interviewer', text: 'one', timestamp: 1, final: true },
+        { speaker: 'user', text: 'two', timestamp: 2, final: true },
+      ],
+      usage: [],
+      startTime: 65_000,
+      durationMs: 65_000,
+      context: '[INTERVIEWER]: one\n[ME]: two',
+      meetingMetadata: null,
+    }, 'meeting-retry-success');
+
+    assert.equal(finalizeCalls, 3);
+    assert.deepEqual(failed, []);
+  } finally {
+    DatabaseManager.getInstance = originalGetInstance;
+    restoreElectron();
+  }
+});
+
+test('MeetingPersistence emits meeting-save-failed after exhausting final save retries', async () => {
+  const originalGetInstance = DatabaseManager.getInstance;
+  const notifications: Array<{ channel: string; payload: unknown }> = [];
+  const restoreElectron = installElectronMock([
+    {
+      webContents: {
+        send(channel: string, payload?: unknown) {
+          notifications.push({ channel, payload });
+        },
+      },
+    },
+  ]);
+  let finalizeCalls = 0;
+
+  DatabaseManager.getInstance = ((() => ({
+    finalizeMeetingProcessing() {
+      finalizeCalls += 1;
+      throw new Error('persist failed');
+    },
+    markMeetingProcessingFailed() {
+      return true;
+    },
+  })) as unknown) as typeof DatabaseManager.getInstance;
+
+  try {
+    const persistence = new MeetingPersistence(
+      { createSnapshot() { throw new Error('unused'); } } as never,
+      { generateMeetingSummary: async () => 'unused' } as never,
+      { finalizeRetryDelaysMs: [0, 0] },
+    );
+
+    await (persistence as unknown as {
+      processAndSaveMeeting: (snapshot: MeetingSnapshot, meetingId: string) => Promise<void>;
+    }).processAndSaveMeeting({
+      transcript: [
+        { speaker: 'interviewer', text: 'one', timestamp: 1, final: true },
+        { speaker: 'user', text: 'two', timestamp: 2, final: true },
+      ],
+      usage: [],
+      startTime: 65_000,
+      durationMs: 65_000,
+      context: '[INTERVIEWER]: one\n[ME]: two',
+      meetingMetadata: null,
+    }, 'meeting-retry-failed');
+
+    assert.equal(finalizeCalls, 3);
+    assert.deepEqual(notifications, [
+      { channel: 'meeting-save-failed', payload: { meetingId: 'meeting-retry-failed', retryCount: 3, error: 'persist failed' } },
+      { channel: 'meetings-updated', payload: undefined },
+    ]);
   } finally {
     DatabaseManager.getInstance = originalGetInstance;
     restoreElectron();
@@ -433,6 +539,7 @@ test('MeetingPersistence falls back to placeholder titles and manual source for 
             },
           };
         },
+        async flushPersistenceNow() {},
         createSuccessorSession() {
           return this;
         },
@@ -446,6 +553,152 @@ test('MeetingPersistence falls back to placeholder titles and manual source for 
 
     assert.equal(placeholderWrites[0]?.title, 'Processing...');
     assert.equal(placeholderWrites[0]?.source, 'manual');
+  } finally {
+    DatabaseManager.getInstance = originalGetInstance;
+    restoreElectron();
+  }
+});
+
+test('MeetingPersistence waits for tracker flush before snapshotting', async () => {
+  const originalGetInstance = DatabaseManager.getInstance;
+  const restoreElectron = installElectronMock();
+  const callOrder: string[] = [];
+
+  DatabaseManager.getInstance = ((() => ({
+    createOrUpdateMeetingProcessingRecord() {},
+    finalizeMeetingProcessing() {},
+    markMeetingProcessingFailed() {
+      return false;
+    },
+  })) as unknown) as typeof DatabaseManager.getInstance;
+
+  try {
+    let releaseFlush: (() => void) | null = null;
+    const flushGate = new Promise<void>((resolve) => {
+      releaseFlush = resolve;
+    });
+
+    const persistence = new MeetingPersistence(
+      {
+        flushInterimTranscript() {
+          callOrder.push('flushInterim');
+        },
+        async flushPersistenceNow() {
+          callOrder.push('flushPersistence:start');
+          await flushGate;
+          callOrder.push('flushPersistence:end');
+        },
+        createSnapshot(): MeetingSnapshot {
+          callOrder.push('createSnapshot');
+          return {
+            transcript: [
+              { speaker: 'interviewer', text: 'hello', timestamp: 1, final: true },
+              { speaker: 'user', text: 'world', timestamp: 2, final: true },
+            ],
+            usage: [],
+            startTime: 5_000,
+            durationMs: 5_000,
+            context: '[INTERVIEWER]: hello\n[ME]: world',
+            meetingMetadata: null,
+          };
+        },
+        createSuccessorSession() {
+          callOrder.push('createSuccessor');
+          return this;
+        },
+      } as never,
+      {
+        generateMeetingSummary: async () => 'unused',
+      } as never,
+    );
+
+    const stopPromise = persistence.stopMeeting('meeting-flush-order');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    assert.deepEqual(callOrder, ['flushInterim', 'flushPersistence:start']);
+
+    releaseFlush?.();
+    await stopPromise;
+
+    assert.ok(callOrder.indexOf('createSnapshot') > callOrder.indexOf('flushPersistence:end'));
+  } finally {
+    DatabaseManager.getInstance = originalGetInstance;
+    restoreElectron();
+  }
+});
+
+test('MeetingPersistence tracks the final save so callers can wait for it before downstream processing', async () => {
+  const originalGetInstance = DatabaseManager.getInstance;
+  const restoreElectron = installElectronMock();
+  const callOrder: string[] = [];
+  let releaseSave: (() => void) | null = null;
+
+  DatabaseManager.getInstance = ((() => ({
+    createOrUpdateMeetingProcessingRecord() {},
+    finalizeMeetingProcessing() {},
+    markMeetingProcessingFailed() {
+      return false;
+    },
+  })) as unknown) as typeof DatabaseManager.getInstance;
+
+  try {
+    const saveGate = new Promise<void>((resolve) => {
+      releaseSave = resolve;
+    });
+
+    const persistence = new MeetingPersistence(
+      {
+        flushInterimTranscript() {},
+        async flushPersistenceNow() {},
+        createSnapshot(): MeetingSnapshot {
+          return {
+            transcript: [
+              { speaker: 'interviewer', text: 'hello', timestamp: 1, final: true },
+              { speaker: 'user', text: 'world', timestamp: 2, final: true },
+            ],
+            usage: [],
+            startTime: 5_000,
+            durationMs: 5_000,
+            context: '[INTERVIEWER]: hello\n[ME]: world',
+            meetingMetadata: null,
+          };
+        },
+        createSuccessorSession() {
+          return this;
+        },
+      } as never,
+      {
+        generateMeetingSummary: async () => 'unused',
+      } as never,
+    );
+
+    (persistence as unknown as {
+      processAndSaveMeeting: (snapshot: MeetingSnapshot, meetingId: string) => Promise<void>;
+    }).processAndSaveMeeting = async (_snapshot: MeetingSnapshot, meetingId: string) => {
+      callOrder.push(`save:start:${meetingId}`);
+      await saveGate;
+      callOrder.push(`save:end:${meetingId}`);
+    };
+
+    const stopPromise = persistence.stopMeeting('meeting-pending-save');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    assert.deepEqual(callOrder, ['save:start:meeting-pending-save']);
+    assert.equal((persistence as unknown as { pendingSaves: Set<Promise<void>> }).pendingSaves.size, 1);
+
+    const waitPromise = persistence.waitForPendingSaves(1000);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.deepEqual(callOrder, ['save:start:meeting-pending-save']);
+
+    releaseSave?.();
+    await stopPromise;
+    await waitPromise;
+
+    assert.deepEqual(callOrder, [
+      'save:start:meeting-pending-save',
+      'save:end:meeting-pending-save',
+    ]);
+    assert.equal((persistence as unknown as { pendingSaves: Set<Promise<void>> }).pendingSaves.size, 0);
   } finally {
     DatabaseManager.getInstance = originalGetInstance;
     restoreElectron();

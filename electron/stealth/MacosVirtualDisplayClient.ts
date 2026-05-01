@@ -35,6 +35,15 @@ export interface MacosVirtualDisplaySessionResponse {
   reason?: string;
 }
 
+export interface MacosVirtualDisplayHelperFaultEvent {
+  type: 'helper-fault';
+  sessionId: string;
+  reason: string;
+  failClosed: boolean;
+}
+
+export type MacosVirtualDisplayHelperEvent = MacosVirtualDisplayHelperFaultEvent;
+
 interface HelperRunRequest {
   command:
     | 'status'
@@ -44,6 +53,7 @@ interface HelperRunRequest {
     | 'create-protected-session'
     | 'attach-surface'
     | 'present'
+    | 'heartbeat'
     | 'teardown-session'
     | 'get-health'
     | 'get-telemetry'
@@ -61,12 +71,16 @@ interface MacosVirtualDisplayClientOptions {
   helperPath: string;
   runHelper?: (request: HelperRunRequest) => Promise<HelperRunResult>;
   requestTimeoutMs?: number;
+  helperEnv?: NodeJS.ProcessEnv;
+  eventHandler?: (event: MacosVirtualDisplayHelperEvent) => void;
 }
 
 export class MacosVirtualDisplayClient {
   private readonly helperPath: string;
   private readonly runHelper: (request: HelperRunRequest) => Promise<HelperRunResult>;
   private readonly requestTimeoutMs: number;
+  private readonly helperEnv: NodeJS.ProcessEnv;
+  private eventHandler?: (event: MacosVirtualDisplayHelperEvent) => void;
   private serverProcess: ChildProcessWithoutNullStreams | null = null;
   private requestSequence = 0;
   private pending = new Map<string, { resolve: (result: HelperRunResult) => void; reject: (error: Error) => void; timeout: NodeJS.Timeout }>();
@@ -79,6 +93,12 @@ export class MacosVirtualDisplayClient {
     this.helperPath = options.helperPath;
     this.runHelper = options.runHelper ?? ((request) => this.runHelperProcess(request));
     this.requestTimeoutMs = options.requestTimeoutMs ?? 10000;
+    this.helperEnv = options.helperEnv ?? process.env;
+    this.eventHandler = options.eventHandler;
+  }
+
+  setEventHandler(handler?: (event: MacosVirtualDisplayHelperEvent) => void): void {
+    this.eventHandler = handler;
   }
 
   async getStatus(): Promise<MacosVirtualDisplayStatus> {
@@ -121,6 +141,13 @@ export class MacosVirtualDisplayClient {
     return this.executeJsonCommand<MacosLayer3ResponseEnvelope<MacosLayer3HealthReport>>({
       command: 'present',
       stdin: JSON.stringify(request),
+    });
+  }
+
+  async heartbeat(sessionId: string): Promise<MacosLayer3ResponseEnvelope<MacosLayer3HealthReport>> {
+    return this.executeJsonCommand<MacosLayer3ResponseEnvelope<MacosLayer3HealthReport>>({
+      command: 'heartbeat',
+      stdin: JSON.stringify({ sessionId }),
     });
   }
 
@@ -181,7 +208,12 @@ export class MacosVirtualDisplayClient {
       throw new Error(result.stderr || `Helper exited with code ${result.exitCode}`);
     }
 
-    return JSON.parse(result.stdout) as T;
+    try {
+      return JSON.parse(result.stdout) as T;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(`macOS virtual display helper returned invalid JSON for ${request.command}: ${message}`);
+    }
   }
 
   private runHelperProcess(request: HelperRunRequest): Promise<HelperRunResult> {
@@ -195,7 +227,19 @@ export class MacosVirtualDisplayClient {
       }, this.requestTimeoutMs);
       this.pending.set(id, { resolve, reject, timeout });
 
-      const payload = request.stdin ? JSON.parse(request.stdin) as Record<string, unknown> : {};
+      let payload: Record<string, unknown> = {};
+      if (request.stdin) {
+        try {
+          payload = JSON.parse(request.stdin) as Record<string, unknown>;
+        } catch (error) {
+          this.pending.delete(id);
+          clearTimeout(timeout);
+          const message = error instanceof Error ? error.message : String(error);
+          reject(new Error(`macOS virtual display helper request payload for ${request.command} was not valid JSON: ${message}`));
+          return;
+        }
+      }
+
       child.stdin.write(`${JSON.stringify({ id, command: request.command, ...payload })}\n`);
     });
   }
@@ -213,6 +257,7 @@ export class MacosVirtualDisplayClient {
 
     const child = spawn(this.helperPath, ['serve'], {
       stdio: 'pipe',
+      env: this.helperEnv,
     });
     child.stdout.on('data', (chunk) => {
       this.stdoutBuffer += chunk.toString();
@@ -252,7 +297,27 @@ export class MacosVirtualDisplayClient {
       this.stdoutBuffer = this.stdoutBuffer.slice(newlineIndex + 1);
       if (line) {
         try {
-          const envelope = JSON.parse(line) as { id?: string; ok: boolean; result?: unknown; error?: string };
+          const envelope = JSON.parse(line) as {
+            id?: string;
+            ok?: boolean;
+            result?: unknown;
+            error?: string;
+            event?: string;
+            sessionId?: string;
+            reason?: string;
+            failClosed?: boolean;
+          };
+          if (envelope.event === 'helper-fault' && typeof envelope.sessionId === 'string' && typeof envelope.reason === 'string') {
+            this.eventHandler?.({
+              type: 'helper-fault',
+              sessionId: envelope.sessionId,
+              reason: envelope.reason,
+              failClosed: envelope.failClosed !== false,
+            });
+            newlineIndex = this.stdoutBuffer.indexOf('\n');
+            continue;
+          }
+
           const pending = envelope.id ? this.pending.get(envelope.id) : undefined;
           if (envelope.id && this.expiredRequestIds.has(envelope.id)) {
             this.expiredRequestIds.delete(envelope.id);

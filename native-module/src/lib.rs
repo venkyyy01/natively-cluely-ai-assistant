@@ -5,6 +5,7 @@ extern crate napi_derive;
 
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
+use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -35,6 +36,43 @@ fn i16_slice_to_le_bytes(samples: &[i16]) -> Vec<u8> {
         bytes.extend_from_slice(&s.to_le_bytes());
     }
     bytes
+}
+
+fn join_thread_with_timeout(handle: thread::JoinHandle<()>, timeout: Duration, label: &str) {
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let _ = tx.send(handle.join());
+    });
+
+    match rx.recv_timeout(timeout) {
+        Ok(_) => {}
+        Err(mpsc::RecvTimeoutError::Timeout) => {
+            eprintln!("[{}] DSP thread did not exit in {:?}, detaching", label, timeout);
+        }
+        Err(mpsc::RecvTimeoutError::Disconnected) => {
+            eprintln!("[{}] DSP thread join channel disconnected", label);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::join_thread_with_timeout;
+    use std::thread;
+    use std::time::Duration;
+
+    #[test]
+    fn join_thread_with_timeout_handles_fast_shutdown() {
+        let handle = thread::spawn(|| {});
+        join_thread_with_timeout(handle, Duration::from_millis(50), "test");
+    }
+
+    #[test]
+    fn join_thread_with_timeout_handles_timeout_without_panicking() {
+        let handle = thread::spawn(|| thread::sleep(Duration::from_millis(100)));
+        join_thread_with_timeout(handle, Duration::from_millis(1), "test");
+        thread::sleep(Duration::from_millis(120));
+    }
 }
 
 // ============================================================================
@@ -223,22 +261,7 @@ impl SystemAudioCapture {
     pub fn stop(&mut self) {
         self.stop_signal.store(true, Ordering::SeqCst);
         if let Some(handle) = self.capture_thread.take() {
-            // Wait up to 2 seconds for graceful shutdown.
-            // If the DSP thread is stuck (e.g. in a long I/O wait),
-            // we detach rather than freezing the entire app.
-            let join_result = Arc::new(std::sync::Mutex::new(None));
-            let join_result_clone = join_result.clone();
-            let _join_thread = thread::spawn(move || {
-                *join_result_clone.lock().unwrap() = Some(handle.join());
-            });
-            let deadline = Instant::now() + Duration::from_secs(2);
-            while join_result.lock().unwrap().is_none() {
-                if Instant::now() >= deadline {
-                    eprintln!("[SystemAudioCapture] DSP thread did not exit in 2s, detaching");
-                    break;
-                }
-                thread::sleep(Duration::from_millis(50));
-            }
+            join_thread_with_timeout(handle, Duration::from_secs(2), "SystemAudioCapture");
         }
     }
 }

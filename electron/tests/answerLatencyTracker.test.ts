@@ -1,8 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { IntelligenceEngine } from '../IntelligenceEngine';
 import { SessionTracker } from '../SessionTracker';
 import { AnswerLatencyTracker } from '../latency/AnswerLatencyTracker';
+import {
+  PerformanceInstrumentation,
+  setPerformanceInstrumentationForTesting,
+} from '../runtime/PerformanceInstrumentation';
 
 class TestIntelligenceEngine extends IntelligenceEngine {
   protected override async classifyIntentForRoute(_lastInterviewerTurn: string | null, _preparedTranscript: string, _assistantResponseCount: number) {
@@ -128,6 +135,9 @@ test('AnswerLatencyTracker records extended SLO metadata on snapshots', () => {
       profileEnrichmentState?: 'attempted' | 'completed' | 'failed' | 'timed_out';
       consciousPath?: 'fresh_start' | 'thread_continue';
       firstVisibleAnswer?: number;
+      contextItemIds?: string[];
+      verifierOutcome?: { deterministic: 'pass' | 'fail' | 'skipped'; provenance: 'pass' | 'fail' | 'skipped' };
+      stealthContainmentActive?: boolean;
     }): void;
   };
   const snapshotWithMetadata = (snapshot: unknown) => snapshot as {
@@ -138,11 +148,14 @@ test('AnswerLatencyTracker records extended SLO metadata on snapshots', () => {
     firstVisibleAnswer?: number;
     transcriptRevision?: number;
     fallbackOccurred?: boolean;
-    profileFallbackReason?: string;
-    interimQuestionSubstitutionOccurred?: boolean;
-    profileEnrichmentState?: 'attempted' | 'completed' | 'failed' | 'timed_out';
-    consciousPath?: 'fresh_start' | 'thread_continue';
-  };
+      profileFallbackReason?: string;
+      interimQuestionSubstitutionOccurred?: boolean;
+      profileEnrichmentState?: 'attempted' | 'completed' | 'failed' | 'timed_out';
+      consciousPath?: 'fresh_start' | 'thread_continue';
+      contextItemIds?: string[];
+      verifierOutcome?: { deterministic: 'pass' | 'fail' | 'skipped'; provenance: 'pass' | 'fail' | 'skipped' };
+      stealthContainmentActive?: boolean;
+    };
 
   const requestId = tracker.start('conscious_answer', 'non_streaming');
   tracker.markFirstStreamingUpdate(requestId);
@@ -154,6 +167,9 @@ test('AnswerLatencyTracker records extended SLO metadata on snapshots', () => {
     profileEnrichmentState: 'timed_out',
     consciousPath: 'thread_continue',
     firstVisibleAnswer: 1234,
+    contextItemIds: ['interviewer:1:0'],
+    verifierOutcome: { deterministic: 'pass', provenance: 'pass' },
+    stealthContainmentActive: false,
   });
 
   const snapshot = snapshotWithMetadata(tracker.complete(requestId));
@@ -170,6 +186,9 @@ test('AnswerLatencyTracker records extended SLO metadata on snapshots', () => {
   assert.equal(snapshot.interimQuestionSubstitutionOccurred, true);
   assert.equal(snapshot.profileEnrichmentState, 'timed_out');
   assert.equal(snapshot.consciousPath, 'thread_continue');
+  assert.deepEqual(snapshot.contextItemIds, ['interviewer:1:0']);
+  assert.deepEqual(snapshot.verifierOutcome, { deterministic: 'pass', provenance: 'pass' });
+  assert.equal(snapshot.stealthContainmentActive, false);
 });
 
 test('AnswerLatencyTracker covers all capability classes and uses firstVisibleAnswer mark for non-streaming visibility', () => {
@@ -200,6 +219,36 @@ test('AnswerLatencyTracker covers all capability classes and uses firstVisibleAn
   assert.equal(nonStreamingSnapshot?.profileEnrichmentState, undefined);
 });
 
+test('AnswerLatencyTracker records answer.firstVisible from first visibility, not completion time', async () => {
+  const benchmarkDir = await mkdtemp(join(tmpdir(), 'answer-latency-metric-'));
+  const originalDateNow = Date.now;
+  let now = 2_000;
+  Date.now = () => now;
+  const instrumentation = new PerformanceInstrumentation({
+    logDirectory: benchmarkDir,
+    now: () => now,
+  });
+  setPerformanceInstrumentationForTesting(instrumentation);
+
+  try {
+    const tracker = new AnswerLatencyTracker();
+    const requestId = tracker.start('fast_standard_answer', 'streaming');
+
+    now += 42;
+    tracker.markFirstStreamingUpdate(requestId);
+    now += 300;
+    tracker.complete(requestId);
+
+    await instrumentation.flush();
+    const firstVisibleMetric = (await instrumentation.readAll()).find((event) => event.metric === 'answer.firstVisible');
+    assert.equal(firstVisibleMetric?.durationMs, 42);
+  } finally {
+    Date.now = originalDateNow;
+    setPerformanceInstrumentationForTesting(null);
+    await rm(benchmarkDir, { recursive: true, force: true });
+  }
+});
+
 test('IntelligenceEngine records conscious route provider start metadata', async () => {
   const consciousSession = new SessionTracker();
   const consciousEngine = new TestIntelligenceEngine(new FakeLLMHelper('non_streaming') as any, consciousSession);
@@ -216,6 +265,9 @@ test('IntelligenceEngine records conscious route provider start metadata', async
   assert.equal(consciousSnapshot?.capability, 'non_streaming_custom');
   assert.equal(consciousSnapshot?.marks.providerRequestStarted !== undefined, true);
   assert.equal(consciousSnapshot?.marks.firstVisibleAnswer !== undefined, true);
+  assert.equal((consciousSnapshot?.contextItemIds?.length ?? 0) > 0, true);
+  assert.deepEqual(consciousSnapshot?.verifierOutcome, { deterministic: 'pass', provenance: 'pass' });
+  assert.equal(consciousSnapshot?.stealthContainmentActive, false);
   assert.equal(
     (consciousSnapshot?.marks.providerRequestStarted ?? 0) <= (consciousSnapshot?.marks.firstVisibleAnswer ?? 0),
     true,
@@ -401,4 +453,43 @@ test('IntelligenceEngine does not mark fallbackOccurred for superseded fallback 
     (snapshot) => snapshot?.route === 'fast_standard_answer' && snapshot?.marks.firstToken === undefined,
   );
   assert.equal(staleSnapshot?.fallbackOccurred, false);
+});
+
+test('IntelligenceEngine emits suggested answer metadata for duplicate cooldown deferrals', async () => {
+  class SlowStreamingLLMHelper {
+    async *streamChat(): AsyncGenerator<string> {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      yield 'slow answer';
+    }
+  }
+
+  const session = new SessionTracker();
+  const engine = new TestIntelligenceEngine(new SlowStreamingLLMHelper() as any, session);
+  const metadataByAnswer: Array<{ cooldownSuppressedMs?: number; cooldownReason?: string }> = [];
+  const deferredEvents: Array<{ suppressedMs: number; question?: string; reason?: string }> = [];
+
+  (engine as any).triggerCooldown = 20;
+  engine.on('suggested_answer', (_answer: string, _question: string, _confidence: number, metadata?: { cooldownSuppressedMs?: number; cooldownReason?: string }) => {
+    metadataByAnswer.push({ cooldownSuppressedMs: metadata?.cooldownSuppressedMs, cooldownReason: metadata?.cooldownReason });
+  });
+  engine.on('cooldown_deferred', (suppressedMs: number, question?: string, reason?: string) => {
+    deferredEvents.push({ suppressedMs, question, reason });
+  });
+
+  addInterviewerTurn(session, 'Same question?', Date.now() - 200);
+  const first = await engine.runWhatShouldISay(undefined, 0.9);
+  assert.equal(first, 'slow answer');
+
+  (engine as any).setMode('idle');
+  addInterviewerTurn(session, 'Same question?', Date.now());
+  const second = await engine.runWhatShouldISay(undefined, 0.9);
+
+  assert.equal(second, 'slow answer');
+  assert.equal(deferredEvents.length, 1);
+  assert.equal((deferredEvents[0]?.suppressedMs ?? 0) > 0, true);
+  assert.equal(deferredEvents[0]?.question, 'Same question?');
+  assert.equal(deferredEvents[0]?.reason, 'duplicate_question_debounce');
+  assert.equal(metadataByAnswer[0]?.cooldownSuppressedMs, undefined);
+  assert.equal((metadataByAnswer[1]?.cooldownSuppressedMs ?? 0) > 0, true);
+  assert.equal(metadataByAnswer[1]?.cooldownReason, 'duplicate_question_debounce');
 });

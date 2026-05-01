@@ -16,7 +16,7 @@ type StreamCall = {
   message: string;
   context?: string;
   prompt?: string;
-  options?: { skipKnowledgeInterception?: boolean };
+  options?: { skipKnowledgeInterception?: boolean; qualityTier?: 'fast' | 'standard' | 'structured_reasoning' };
   startedAt: number;
 };
 
@@ -56,7 +56,7 @@ class FakeLLMHelper {
     _imagePaths?: string[],
     context?: string,
     prompt?: string,
-    options?: { skipKnowledgeInterception?: boolean },
+    options?: { skipKnowledgeInterception?: boolean; qualityTier?: 'fast' | 'standard' | 'structured_reasoning' },
   ): AsyncGenerator<string> {
     this.calls.push({ message, context, prompt, options, startedAt: Date.now() });
     yield this.answer;

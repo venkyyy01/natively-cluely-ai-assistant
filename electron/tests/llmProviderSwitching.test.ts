@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import Module from 'node:module';
+import { ReadableStream } from 'node:stream/web';
 
 async function loadLLMHelper() {
   const originalRequire = Module.prototype.require;
@@ -158,4 +159,158 @@ test('fast response streaming falls back to the default Cerebras model when none
   assert.equal(seenModel, 'gpt-oss-120b');
   assert.equal(output, 'fast stream');
   helper.scrubKeys();
+});
+
+test('chatWithGemini falls back to text-only screenshot routing when active cURL template has no image placeholders', async () => {
+  const LLMHelper = await loadLLMHelper();
+  const helper = new LLMHelper() as any;
+  const originalChatWithCurl = helper.chatWithCurl;
+  const originalExtractImageTextWithTesseract = helper.extractImageTextWithTesseract;
+  const calls: Array<{ userMessage: string; context: string; imageCount: number }> = [];
+
+  helper.setModel('curl-provider', [{
+    id: 'curl-provider',
+    name: 'cURL',
+    curlCommand: 'curl https://example.com -d "{{TEXT}}"',
+    responsePath: 'choices[0].message.content',
+  }]);
+
+  helper.chatWithCurl = async (userMessage: string, _systemPrompt?: string, context: string = '', imagePaths?: string[]) => {
+    calls.push({ userMessage, context, imageCount: imagePaths?.length || 0 });
+    return 'ok';
+  };
+  helper.extractImageTextWithTesseract = async () => 'deterministic screenshot fallback text';
+
+  try {
+    const imageOnly = await helper.chatWithGemini('', ['/tmp/image-only.png']);
+    const mixed = await helper.chatWithGemini('hello', ['/tmp/mixed.png'], 'ctx');
+
+    assert.equal(imageOnly, 'ok');
+    assert.equal(mixed, 'ok');
+    assert.equal(calls.length, 2);
+    assert.equal(calls[0].imageCount, 0);
+    assert.equal(calls[1].imageCount, 0);
+    assert.match(calls[0].userMessage, /SCREENSHOT_TEXT_FALLBACK:/);
+    assert.match(calls[1].userMessage, /SCREENSHOT_TEXT_FALLBACK:/);
+    assert.match(calls[0].userMessage, /deterministic screenshot fallback text/);
+    assert.match(calls[1].userMessage, /deterministic screenshot fallback text/);
+    assert.equal(calls[1].context, 'ctx');
+  } finally {
+    helper.chatWithCurl = originalChatWithCurl;
+    helper.extractImageTextWithTesseract = originalExtractImageTextWithTesseract;
+    helper.scrubKeys();
+  }
+});
+
+test('streamChat uses responsePath for active cURL providers', async () => {
+  const LLMHelper = await loadLLMHelper();
+  const helper = new LLMHelper() as any;
+
+  helper.setModel('curl-provider', [{
+    id: 'curl-provider',
+    name: 'cURL',
+    curlCommand: "curl https://example.com -H 'Content-Type: application/json' -d '{\"messages\":{{OPENAI_MESSAGES}}}'",
+    responsePath: 'payload.answer',
+  }]);
+
+  const originalFetch = global.fetch;
+  const payload = JSON.stringify({ payload: { answer: 'from-response-path' } });
+  global.fetch = async () => ({
+    ok: true,
+    status: 200,
+    headers: {
+      get: (header: string) => header.toLowerCase() === 'content-length' ? String(Buffer.byteLength(payload)) : null,
+    },
+    body: new ReadableStream({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(payload));
+        controller.close();
+      },
+    }),
+  } as any);
+
+  try {
+    let output = '';
+    for await (const chunk of helper.streamChat('hello')) {
+      output += chunk;
+    }
+
+    assert.equal(output, 'from-response-path');
+  } finally {
+    global.fetch = originalFetch;
+    helper.scrubKeys();
+  }
+});
+
+test('chatWithGemini falls back to fast response when the active cURL provider times out', async () => {
+  const LLMHelper = await loadLLMHelper();
+  const helper = new LLMHelper() as any;
+  const originalChatWithCurl = helper.chatWithCurl;
+
+  helper.setModel('curl-provider', [{
+    id: 'curl-provider',
+    name: 'cURL',
+    curlCommand: 'curl https://example.com',
+    responsePath: 'choices[0].message.content',
+  }]);
+
+  helper.cerebrasClient = {
+    chat: {
+      completions: {
+        create: async () => ({ choices: [{ message: { content: 'fast fallback ok' } }] }),
+      },
+    },
+  };
+  helper.setFastResponseConfig({ enabled: true, provider: 'cerebras', model: 'gpt-oss-120b' });
+  helper.chatWithCurl = async () => {
+    throw new Error('LLM API timeout after 60000ms');
+  };
+
+  try {
+    const result = await helper.chatWithGemini('hello from slow curl provider');
+    assert.equal(result, 'fast fallback ok');
+  } finally {
+    helper.chatWithCurl = originalChatWithCurl;
+    helper.scrubKeys();
+  }
+});
+
+test('streamChat falls back to fast response when the active cURL provider fails', async () => {
+  const LLMHelper = await loadLLMHelper();
+  const helper = new LLMHelper() as any;
+  const originalExecuteCustomProvider = helper.executeCustomProvider;
+
+  helper.setModel('curl-provider', [{
+    id: 'curl-provider',
+    name: 'cURL',
+    curlCommand: 'curl https://example.com',
+    responsePath: 'choices[0].message.content',
+  }]);
+
+  helper.cerebrasClient = {
+    chat: {
+      completions: {
+        create: async function* () {
+          yield { choices: [{ delta: { content: 'fast ' } }] };
+          yield { choices: [{ delta: { content: 'fallback' } }] };
+        },
+      },
+    },
+  };
+  helper.setFastResponseConfig({ enabled: true, provider: 'cerebras', model: 'gpt-oss-120b' });
+  helper.executeCustomProvider = async () => {
+    throw new Error('LLM API timeout after 60000ms');
+  };
+
+  try {
+    let output = '';
+    for await (const chunk of helper.streamChat('hello from curl stream timeout')) {
+      output += chunk;
+    }
+
+    assert.equal(output, 'fast fallback');
+  } finally {
+    helper.executeCustomProvider = originalExecuteCustomProvider;
+    helper.scrubKeys();
+  }
 });

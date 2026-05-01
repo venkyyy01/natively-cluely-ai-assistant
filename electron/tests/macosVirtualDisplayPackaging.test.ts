@@ -24,3 +24,16 @@ test('resolveMacosVirtualDisplayHelperPath falls back to local build output for 
 
   assert.equal(resolved, '/workspace/stealth-projects/macos-virtual-display-helper/.build/debug/stealth-virtual-display-helper');
 });
+
+test('resolveMacosVirtualDisplayHelperPath supports disabling helper resolution for packaged launch validation', () => {
+  const resolved = resolveMacosVirtualDisplayHelperPath({
+    env: {
+      NATIVELY_DISABLE_MACOS_VIRTUAL_DISPLAY_HELPER: '1',
+    },
+    cwd: '/workspace',
+    resourcesPath: '/Applications/Natively.app/Contents/Resources',
+    pathExists: () => true,
+  });
+
+  assert.equal(resolved, null);
+});

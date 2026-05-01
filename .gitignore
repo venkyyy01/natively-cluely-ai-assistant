@@ -1,6 +1,7 @@
 # Logs
 logs
 *.log
+config.yaml
 release
 /release
 .release

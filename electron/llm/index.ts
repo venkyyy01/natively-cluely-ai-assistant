@@ -12,7 +12,8 @@ export {
     cleanTranscript,
     sparsifyTranscript,
     formatTranscriptForLLM,
-    prepareTranscriptForWhatToAnswer
+    prepareTranscriptForWhatToAnswer,
+    prepareTranscriptForReasoning
 } from "./transcriptCleaner";
 export type { TranscriptTurn } from "./transcriptCleaner";
 export {

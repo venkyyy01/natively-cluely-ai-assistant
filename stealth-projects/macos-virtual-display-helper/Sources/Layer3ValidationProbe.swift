@@ -87,19 +87,26 @@ private struct DefaultLayer3ShareableContentProvider: Layer3ShareableContentProv
         let semaphore = DispatchSemaphore(value: 0)
         var windows: [Layer3WindowMetadata] = []
 
-        Task {
-            defer { semaphore.signal() }
+        let task = Task { () -> [Layer3WindowMetadata] in
             do {
                 let shareable = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
-                windows = shareable.windows.map { window in
+                return shareable.windows.map { window in
                     Layer3WindowMetadata(windowNumber: Int(window.windowID), title: window.title)
                 }
             } catch {
-                windows = []
+                return []
             }
         }
 
-        _ = semaphore.wait(timeout: .now() + 2)
+        Task {
+            windows = await task.value
+            semaphore.signal()
+        }
+
+        if semaphore.wait(timeout: .now() + 2) == .timedOut {
+            task.cancel()
+            return []
+        }
         return windows
         #else
         return []

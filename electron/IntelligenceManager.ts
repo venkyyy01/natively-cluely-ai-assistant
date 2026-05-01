@@ -11,8 +11,15 @@ import { EventEmitter } from 'events';
 import { LLMHelper } from './LLMHelper';
 import { SessionTracker } from './SessionTracker';
 import { IntelligenceEngine } from './IntelligenceEngine';
+import type { SuggestedAnswerMetadata } from './IntelligenceEngine';
 import { MeetingPersistence } from './MeetingPersistence';
+import type { AccelerationManager } from './services/AccelerationManager';
 import type { ConsciousModeStructuredResponse, ReasoningThread } from './ConsciousMode';
+import type { SupervisorEvent } from './runtime/types';
+
+type SupervisorBusEmitter = {
+    emit(event: SupervisorEvent): Promise<void>;
+};
 
 // Re-export types for backward compatibility
 export type { TranscriptSegment, SuggestionTrigger, ContextItem } from './SessionTracker';
@@ -50,7 +57,7 @@ export class IntelligenceManager extends EventEmitter {
      */
     private forwardEngineEvents(): void {
         const events = [
-            'assist_update', 'suggested_answer', 'suggested_answer_token',
+            'assist_update', 'cooldown_deferred', 'suggested_answer', 'suggested_answer_token',
             'refined_answer', 'refined_answer_token',
             'recap', 'recap_token',
             'follow_up_questions_update', 'follow_up_questions_token',
@@ -63,6 +70,13 @@ export class IntelligenceManager extends EventEmitter {
                 this.emit(event, ...args);
             });
         }
+    }
+
+    override on(event: 'cooldown_deferred', listener: (suppressedMs: number, question?: string, reason?: 'duplicate_question_debounce') => void): this;
+    override on(event: 'suggested_answer', listener: (answer: string, question: string, confidence: number, metadata?: SuggestedAnswerMetadata) => void): this;
+    override on(event: string | symbol, listener: (...args: any[]) => void): this;
+    override on(event: string | symbol, listener: (...args: any[]) => void): this {
+        return super.on(event, listener);
     }
 
     // ============================================
@@ -83,10 +97,22 @@ export class IntelligenceManager extends EventEmitter {
 
     setMeetingMetadata(metadata: any): void {
         this.session.setMeetingMetadata(metadata);
+        const inferredMeetingId = metadata?.meetingId || metadata?.calendarEventId;
+        if (typeof inferredMeetingId === 'string' && inferredMeetingId.trim()) {
+            this.session.ensureMeetingContext(inferredMeetingId.trim());
+        }
     }
 
     getSessionTracker(): SessionTracker {
         return this.session;
+    }
+
+    attachAccelerationManager(accelerationManager: AccelerationManager | null): void {
+        this.engine.attachAccelerationManager(accelerationManager);
+    }
+
+    setSupervisorBus(bus?: SupervisorBusEmitter): void {
+        this.session.setSupervisorBus(bus);
     }
 
     addTranscript(segment: import('./SessionTracker').TranscriptSegment, skipRefinementCheck: boolean = false): void {
@@ -113,6 +139,14 @@ export class IntelligenceManager extends EventEmitter {
 
     setConsciousModeEnabled(enabled: boolean): void {
         this.session.setConsciousModeEnabled(enabled);
+    }
+
+    cancelActiveWhatToSay(reason?: string): void {
+        this.engine.cancelActiveWhatToSay(reason);
+    }
+
+    setStealthContainmentActive(active: boolean): void {
+        this.engine.setStealthContainmentActive(active);
     }
 
     isConsciousModeEnabled(): boolean {
@@ -197,6 +231,9 @@ export class IntelligenceManager extends EventEmitter {
     // ============================================
 
   async stopMeeting(meetingId?: string): Promise<void> {
+    if (meetingId) {
+      this.session.setActiveMeetingId(meetingId);
+    }
     const nextSession = await this.persistence.stopMeeting(meetingId);
     this.session = nextSession;
     this.persistence.setSession(nextSession);

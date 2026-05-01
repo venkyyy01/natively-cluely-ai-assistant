@@ -59,6 +59,78 @@ class FakeLLMHelper {
   }
 }
 
+class EvidenceCapturingLLMHelper {
+  private callIndex = 0;
+  public contexts: Array<string | undefined> = [];
+
+  getKnowledgeOrchestrator() {
+    return {
+      getStatus: () => ({ hasResume: true, hasActiveJD: true, activeMode: true }),
+      getProfileData: () => ({
+        identity: {
+          name: 'Jane Doe',
+          role: 'Senior Backend Engineer',
+          summary: 'Built multi-tenant distributed systems.',
+        },
+        skills: ['Redis', 'Kafka', 'Postgres'],
+        projects: [
+          {
+            name: 'Tenant Analytics Platform',
+            description: 'Multi-tenant analytics system with tenant partitioning and async read aggregation.',
+            technologies: ['Redis', 'Kafka', 'ClickHouse'],
+          },
+        ],
+        experience: [
+          {
+            company: 'Acme',
+            role: 'Senior Backend Engineer',
+            bullets: ['Reduced p99 latency with caching and batching.'],
+          },
+        ],
+        activeJD: {
+          title: 'Staff Backend Engineer',
+          company: 'ExampleCorp',
+          technologies: ['Redis', 'Kafka'],
+          requirements: ['Design distributed systems'],
+          keywords: ['scalability', 'latency'],
+        },
+      }),
+    };
+  }
+
+  async *streamChat(message: string, _imagePaths?: string[], context?: string): AsyncGenerator<string> {
+    this.callIndex += 1;
+    this.contexts.push(context);
+
+    if (this.callIndex === 1) {
+      yield JSON.stringify({
+        mode: 'reasoning_first',
+        openingReasoning: 'I would start with tenant partitioning.',
+        implementationPlan: ['Partition by tenant'],
+        tradeoffs: ['Cross-tenant reads get more expensive'],
+        edgeCases: [],
+        scaleConsiderations: [],
+        pushbackResponses: ['The model buys clean write isolation.'],
+        likelyFollowUps: [],
+        codeTransition: '',
+      });
+      return;
+    }
+
+    yield JSON.stringify({
+      mode: 'reasoning_first',
+      openingReasoning: 'The tradeoff is mostly around the cross-tenant read path.',
+      implementationPlan: [],
+      tradeoffs: ['Cross-tenant reads become more explicit'],
+      edgeCases: [],
+      scaleConsiderations: [],
+      pushbackResponses: [],
+      likelyFollowUps: [],
+      codeTransition: '',
+    });
+  }
+}
+
 class CapturingLatencyTracker extends AnswerLatencyTracker {
   public completedSnapshots: Array<ReturnType<AnswerLatencyTracker['complete']>> = [];
 
@@ -232,6 +304,31 @@ test('Conscious Mode continuation fast lane skips fresh-start enrichment work an
   assert.equal(continuationSnapshot?.marks.providerRequestStarted !== undefined, true);
 });
 
+test('Conscious Mode skips expensive intent classification for tiny generic follow-ups', async () => {
+  class TrackingEngine extends IntelligenceEngine {
+    public classifyIntentCalls = 0;
+
+    protected override async classifyIntentForRoute(lastInterviewerTurn: string | null, preparedTranscript: string, assistantResponseCount: number) {
+      this.classifyIntentCalls += 1;
+      return super.classifyIntentForRoute(lastInterviewerTurn, preparedTranscript, assistantResponseCount);
+    }
+  }
+
+  const session = new SessionTracker();
+  const llmHelper = new FakeLLMHelper();
+  const engine = new TrackingEngine(llmHelper as any, session);
+
+  session.setConsciousModeEnabled(true);
+  addInterviewerTurn(session, 'How would you partition a multi-tenant analytics system?', Date.now() - 3000);
+  await engine.runWhatShouldISay(undefined, 0.85);
+
+  (engine as any).lastTriggerTime = 0;
+  addInterviewerTurn(session, 'What if?', Date.now() - 500);
+  await engine.runWhatShouldISay(undefined, 0.85);
+
+  assert.equal(engine.classifyIntentCalls, 1);
+});
+
 test('Conscious Mode resets an active reasoning thread when the interviewer clearly changes to a non-technical topic', async () => {
   const session = new SessionTracker();
   const llmHelper = new FakeLLMHelper();
@@ -251,6 +348,86 @@ test('Conscious Mode resets an active reasoning thread when the interviewer clea
   assert.equal(answer, 'Could you repeat that? I want to make sure I address your question properly.');
   assert.equal(session.getActiveReasoningThread(), null);
   assert.equal(session.getLatestConsciousResponse(), null);
+});
+
+test('Conscious Mode follow-up context includes inferred answer evidence', async () => {
+  const session = new SessionTracker();
+  const llmHelper = new EvidenceCapturingLLMHelper();
+  const engine = new IntelligenceEngine(llmHelper as any, session);
+
+  session.setConsciousModeEnabled(true);
+
+  addInterviewerTurn(session, 'How would you partition a multi-tenant analytics system?', Date.now() - 2000);
+  await engine.runWhatShouldISay(undefined, 0.85);
+
+  (engine as any).lastTriggerTime = 0;
+  addInterviewerTurn(session, 'What are the tradeoffs?', Date.now() - 1000);
+  await engine.runWhatShouldISay(undefined, 0.85);
+
+  const continuationContext = llmHelper.contexts[1] || '';
+  assert.ok(continuationContext.includes('<conscious_state>'));
+  assert.ok(continuationContext.includes('<conscious_answer_plan>'));
+  assert.ok(continuationContext.includes('<conscious_long_memory>'));
+  assert.ok(continuationContext.includes('<conscious_semantic_memory>'));
+  assert.ok(continuationContext.includes('<conscious_evidence>'));
+  assert.ok(continuationContext.includes('INTERVIEWER_REACTION: tradeoff_probe'));
+  assert.ok(continuationContext.includes('LATEST_SUGGESTED_ANSWER:'));
+});
+
+test('Conscious Mode verifier rejects weak tradeoff follow-ups and falls back cleanly', async () => {
+  class VerifierFallbackHelper {
+    private callIndex = 0;
+
+    async *streamChat(message: string): AsyncGenerator<string> {
+      this.callIndex += 1;
+
+      if (this.callIndex === 1) {
+        yield JSON.stringify({
+          mode: 'reasoning_first',
+          openingReasoning: 'I would partition by tenant to keep writes isolated.',
+          implementationPlan: ['Partition by tenant'],
+          tradeoffs: ['Cross-tenant reads get more expensive'],
+          edgeCases: [],
+          scaleConsiderations: [],
+          pushbackResponses: ['The write path stays simple.'],
+          likelyFollowUps: [],
+          codeTransition: '',
+        });
+        return;
+      }
+
+      if (message.includes('ACTIVE_REASONING_THREAD')) {
+        yield JSON.stringify({
+          mode: 'reasoning_first',
+          openingReasoning: 'I would keep the same partitioning.',
+          implementationPlan: ['Partition by tenant'],
+          tradeoffs: [],
+          edgeCases: [],
+          scaleConsiderations: [],
+          pushbackResponses: [],
+          likelyFollowUps: [],
+          codeTransition: '',
+        });
+        return;
+      }
+
+      yield 'fallback standard answer';
+    }
+  }
+
+  const session = new SessionTracker();
+  const llmHelper = new VerifierFallbackHelper();
+  const engine = new IntelligenceEngine(llmHelper as any, session);
+
+  session.setConsciousModeEnabled(true);
+  addInterviewerTurn(session, 'How would you partition a multi-tenant analytics system?', Date.now() - 2000);
+  await engine.runWhatShouldISay(undefined, 0.85);
+
+  (engine as any).lastTriggerTime = 0;
+  addInterviewerTurn(session, 'What are the tradeoffs?', Date.now() - 1000);
+  const answer = await engine.runWhatShouldISay(undefined, 0.85);
+
+  assert.equal(answer, 'fallback standard answer');
 });
 
 test('Conscious Mode does not let unrelated generic pushback hijack an old thread', async () => {

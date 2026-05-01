@@ -158,26 +158,26 @@ export class SettingsWindowHelper {
         }
     }
 
-    private createWindow(x?: number, y?: number, showWhenReady: boolean = true): void {
-        const windowSettings: Electron.BrowserWindowConstructorOptions = {
-            width: 200, // Match React component width
-            height: 238, // Increased to accommodate new Transcript toggle
-            frame: false,
-            transparent: true,
-            resizable: false,
-            fullscreenable: false,
-            hasShadow: false,
-            alwaysOnTop: true,
-            backgroundColor: "#00000000",
-            show: false,
-            skipTaskbar: true,
-            webPreferences: {
-                nodeIntegration: false,
-                contextIsolation: true,
-                preload: path.join(__dirname, "preload.js"),
-                backgroundThrottling: false // Keep window ready even when hidden
-            }
-        }
+private createWindow(x?: number, y?: number, showWhenReady: boolean = true): void {
+  const windowSettings: Electron.BrowserWindowConstructorOptions = {
+    width: 200, // Match React component width
+    height: 238, // Increased to accommodate new Transcript toggle
+    frame: false,
+    transparent: true,
+    resizable: false,
+    fullscreenable: false,
+    hasShadow: false,
+    alwaysOnTop: true,
+    backgroundColor: "#00000000",
+    show: false,
+    skipTaskbar: true,
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true,
+      preload: path.join(__dirname, "preload.js"),
+      backgroundThrottling: false // Keep window ready even when hidden
+    }
+  }
 
         if (x !== undefined && y !== undefined) {
             windowSettings.x = Math.round(x)

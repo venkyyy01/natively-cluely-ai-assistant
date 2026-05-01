@@ -1,6 +1,7 @@
 import { isOptimizationActive, getEffectiveWorkerCount } from '../config/optimizations';
 import { InterviewPhase } from '../conscious/types';
 import { Worker, isMainThread, parentPort, workerData } from 'worker_threads';
+import { WorkerPool } from '../runtime/WorkerPool';
 
 export interface ContextAssemblyInput {
   query: string;
@@ -17,15 +18,32 @@ export interface ContextAssemblyInput {
 
 export interface ContextAssemblyOutput {
   embedding: number[];
-  bm25Results: Array<{ text: string; score: number }>;
+  bm25Results: Array<{ role: 'interviewer' | 'user' | 'assistant'; text: string; score: number; timestamp: number }>;
   phase: InterviewPhase;
   confidence: number;
-  relevantContext: Array<{ text: string; timestamp: number }>;
+  relevantContext: Array<{ role: 'interviewer' | 'user' | 'assistant'; text: string; timestamp: number }>;
 }
 
-async function computeBM25(
+// Embedding provider interface for real embeddings
+export interface EmbeddingProvider {
+  embed(text: string): Promise<number[]>;
+  isInitialized(): boolean;
+}
+
+// Global embedding provider set by AccelerationManager
+let globalEmbeddingProvider: EmbeddingProvider | null = null;
+
+export function setEmbeddingProvider(provider: EmbeddingProvider | null): void {
+  globalEmbeddingProvider = provider;
+}
+
+export function getEmbeddingProvider(): EmbeddingProvider | null {
+  return globalEmbeddingProvider;
+}
+
+export async function computeBM25(
   query: string,
-  documents: Array<{ text: string; timestamp: number }>,
+  documents: Array<{ role: 'interviewer' | 'user' | 'assistant'; text: string; timestamp: number }>,
   k1: number = 1.5,
   b: number = 0.75
 ): Promise<Array<{ text: string; score: number; timestamp: number }>> {
@@ -91,7 +109,7 @@ function simpleHash(str: string): number {
   return Math.abs(hash);
 }
 
-function generateEmbeddingSync(query: string): number[] {
+function generateEmbeddingFallback(query: string): number[] {
   const hash = simpleHash(query);
   const embedding = new Array(384).fill(0);
   embedding[hash % 384] = 1;
@@ -106,7 +124,7 @@ if (!isMainThread) {
       parentPort?.postMessage(result);
     });
   } else if (type === 'embedding') {
-    parentPort?.postMessage(generateEmbeddingSync(payload.query));
+    parentPort?.postMessage(generateEmbeddingFallback(payload.query));
   } else if (type === 'phase') {
     parentPort?.postMessage(detectPhase(payload.transcript));
   }
@@ -114,9 +132,13 @@ if (!isMainThread) {
 
 export class ParallelContextAssembler {
   private workerCount: number;
+  private readonly workerPool: WorkerPool;
+  private readonly includeAssistantTurns: boolean;
 
-  constructor(options: { workerThreadCount?: number }) {
+  constructor(options: { workerThreadCount?: number; workerPool?: WorkerPool; includeAssistantTurns?: boolean }) {
     this.workerCount = options.workerThreadCount || getEffectiveWorkerCount();
+    this.workerPool = options.workerPool ?? new WorkerPool({ size: this.workerCount });
+    this.includeAssistantTurns = options.includeAssistantTurns ?? true;
   }
 
   getWorkerCount(): number {
@@ -124,7 +146,7 @@ export class ParallelContextAssembler {
   }
 
   private runInWorker<T>(type: string, payload: any): Promise<T> {
-    return new Promise((resolve, reject) => {
+    return this.workerPool.submit({ lane: 'semantic', priority: 1 }, () => new Promise<T>((resolve, reject) => {
       const worker = new Worker(__filename, {
         workerData: { type, payload }
       });
@@ -133,7 +155,7 @@ export class ParallelContextAssembler {
       worker.on('exit', (code) => {
         if (code !== 0) reject(new Error(`Worker stopped with exit code ${code}`));
       });
-    });
+    }));
   }
 
   async assemble(input: ContextAssemblyInput): Promise<ContextAssemblyOutput> {
@@ -141,17 +163,39 @@ export class ParallelContextAssembler {
       return this.assembleLegacy(input);
     }
 
-    const docs = input.transcript
-      .filter(t => t.speaker !== 'assistant')
-      .map(t => ({ text: t.text, timestamp: t.timestamp }));
+    const docs = this.buildRetrievalDocuments(input.transcript);
 
-    const [embedding, bm25ResultsRaw, phaseResult] = await Promise.all([
-      this.runInWorker<number[]>('embedding', { query: input.query }),
+    // Try to use real embeddings if ANE provider is available
+    const embeddingProvider = getEmbeddingProvider();
+    let embedding: number[];
+
+    if (embeddingProvider?.isInitialized()) {
+      // Use real embeddings from ANE provider
+      embedding = await embeddingProvider.embed(input.query);
+    } else {
+      // Fall back to hash-based embedding (worker thread)
+      embedding = await this.runInWorker<number[]>('embedding', { query: input.query });
+    }
+
+    const [bm25ResultsRaw, phaseResult] = await Promise.all([
       this.runInWorker<Array<{ text: string; score: number; timestamp: number }>>('bm25', { query: input.query, documents: docs }),
       this.runInWorker<InterviewPhase>('phase', { transcript: input.transcript }),
     ]);
 
-    const bm25Results = (await bm25ResultsRaw).map((r: { text: string; score: number }) => ({ text: r.text, score: r.score }));
+    const speakerByText = new Map<string, 'interviewer' | 'user' | 'assistant'>();
+    for (const doc of docs) {
+      const key = doc.text.trim().toLowerCase();
+      if (!speakerByText.has(key)) {
+        speakerByText.set(key, doc.role);
+      }
+    }
+
+    const bm25Results = (await bm25ResultsRaw).map((r: { text: string; score: number; timestamp: number }) => ({
+      role: speakerByText.get(r.text.trim().toLowerCase()) ?? 'interviewer' as const,
+      text: r.text,
+      score: r.score,
+      timestamp: r.timestamp,
+    }));
     const phase = await phaseResult;
     const relevantContext = this.selectRelevantContext(bm25Results, phase);
     const confidence = this.calculateConfidence(embedding, relevantContext);
@@ -166,9 +210,9 @@ export class ParallelContextAssembler {
   }
 
   private selectRelevantContext(
-    bm25Results: Array<{ text: string; score: number }>,
+    bm25Results: Array<{ role: 'interviewer' | 'user' | 'assistant'; text: string; score: number; timestamp: number }>,
     phase: InterviewPhase
-  ): Array<{ text: string; timestamp: number }> {
+  ): Array<{ role: 'interviewer' | 'user' | 'assistant'; text: string; timestamp: number }> {
     const budgetMap: Record<InterviewPhase, number> = {
       requirements_gathering: 500,
       high_level_design: 800,
@@ -183,12 +227,12 @@ export class ParallelContextAssembler {
 
     const budget = budgetMap[phase] || 500;
     let usedTokens = 0;
-    const selected: Array<{ text: string; timestamp: number }> = [];
+    const selected: Array<{ role: 'interviewer' | 'user' | 'assistant'; text: string; timestamp: number }> = [];
 
     for (const result of bm25Results) {
       const tokens = result.text.split(/\s+/).length;
       if (usedTokens + tokens <= budget) {
-        selected.push({ text: result.text, timestamp: Date.now() });
+        selected.push({ role: result.role, text: result.text, timestamp: result.timestamp });
         usedTokens += tokens;
       }
     }
@@ -196,7 +240,7 @@ export class ParallelContextAssembler {
     return selected;
   }
 
-  private calculateConfidence(embedding: number[], context: Array<{ text: string; timestamp: number }>): number {
+  private calculateConfidence(embedding: number[], context: Array<{ role: 'interviewer' | 'user' | 'assistant'; text: string; timestamp: number }>): number {
     const contextScore = context.length > 0 ? 0.5 : 0;
     const embeddingScore = embedding.length === 384 ? 0.3 : 0;
     const baseScore = 0.2;
@@ -205,12 +249,25 @@ export class ParallelContextAssembler {
   }
 
   private async assembleLegacy(input: ContextAssemblyInput): Promise<ContextAssemblyOutput> {
-    const embedding = generateEmbeddingSync(input.query);
-    const docs = input.transcript
-      .filter(t => t.speaker !== 'assistant')
-      .map(t => ({ text: t.text, timestamp: t.timestamp }));
+    const embeddingProvider = getEmbeddingProvider();
+    const embedding = embeddingProvider?.isInitialized()
+      ? await embeddingProvider.embed(input.query)
+      : generateEmbeddingFallback(input.query);
+    const docs = this.buildRetrievalDocuments(input.transcript);
     const bm25ResultsRaw = await computeBM25(input.query, docs);
-    const bm25Results = bm25ResultsRaw.map((r: { text: string; score: number }) => ({ text: r.text, score: r.score }));
+    const speakerByText = new Map<string, 'interviewer' | 'user' | 'assistant'>();
+    for (const doc of docs) {
+      const key = doc.text.trim().toLowerCase();
+      if (!speakerByText.has(key)) {
+        speakerByText.set(key, doc.role);
+      }
+    }
+    const bm25Results = bm25ResultsRaw.map((r: { text: string; score: number; timestamp: number }) => ({
+      role: speakerByText.get(r.text.trim().toLowerCase()) ?? 'interviewer' as const,
+      text: r.text,
+      score: r.score,
+      timestamp: r.timestamp,
+    }));
     const phase = detectPhase(input.transcript);
     const relevantContext = this.selectRelevantContext(bm25Results, phase);
     const confidence = this.calculateConfidence(embedding, relevantContext);
@@ -220,5 +277,19 @@ export class ParallelContextAssembler {
 
   terminate(): void {
     // Cleanup if needed (worker pool would be terminated here)
+  }
+
+  private buildRetrievalDocuments(transcript: ContextAssemblyInput['transcript']): Array<{
+    role: 'interviewer' | 'user' | 'assistant';
+    text: string;
+    timestamp: number;
+  }> {
+    return transcript
+      .filter(turn => this.includeAssistantTurns || turn.speaker !== 'assistant')
+      .map(turn => ({
+        role: turn.speaker === 'user' ? 'user' as const : turn.speaker === 'assistant' ? 'assistant' as const : 'interviewer' as const,
+        text: turn.text,
+        timestamp: turn.timestamp,
+      }));
   }
 }

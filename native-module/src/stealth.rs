@@ -2,9 +2,9 @@ use napi::bindgen_prelude::Buffer;
 
 #[cfg(target_os = "macos")]
 mod macos {
+    use cidre::{arc, ns, objc};
     use libc::{c_char, c_void, dlsym, RTLD_DEFAULT};
-    use cocoa::base::{id, nil};
-    use objc::{class, msg_send, sel, sel_impl};
+    use std::ptr::NonNull;
 
     type CGSMainConnectionIDFn = unsafe extern "C" fn() -> i32;
     type CGSSetWindowSharingStateFn = unsafe extern "C" fn(i32, i32, i32) -> i32;
@@ -12,75 +12,92 @@ mod macos {
     const K_CGS_DO_NOT_SHARE: i32 = 0;
     const K_CGS_NORMAL_SHARE: i32 = 1;
 
-    pub fn apply(window_number: u32) -> napi::Result<()> {
-        unsafe {
-            if let Some(window) = find_window(window_number) {
-                let _: () = msg_send![window, setSharingType: 0usize];
-            } else {
-                eprintln!(
-                    "[stealth] macOS window not found for window number {}",
-                    window_number
-                );
-            }
-        }
+    /// Extension trait adding stealth-related selectors that cidre does not wrap.
+    /// `setSharingType:` / `sharingType` live on NSWindow but are not in cidre's bindings.
+    /// `windows` lives on NSApplication but is also absent.
+    ///
+    /// Using cidre's `#[objc::msg_send]` attribute lets the proc-macro generate
+    /// the objc_msgSend call with proper ABI, without pulling in the deprecated
+    /// `cocoa` / `objc` crates.
+    trait NSWindowStealthExt {
+        fn set_sharing_type(&self, sharing_type: usize);
+        fn sharing_type(&self) -> usize;
+    }
 
+    impl NSWindowStealthExt for ns::Window {
+        #[objc::msg_send(setSharingType:)]
+        fn set_sharing_type(&self, sharing_type: usize);
+
+        #[objc::msg_send(sharingType)]
+        fn sharing_type(&self) -> usize;
+    }
+
+    trait NSAppWindowsExt {
+        fn windows(&self) -> &ns::Array<ns::Window>;
+    }
+
+    impl NSAppWindowsExt for ns::App {
+        #[objc::msg_send(windows)]
+        fn windows(&self) -> &ns::Array<ns::Window>;
+    }
+
+    pub fn apply(window_number: u32) -> napi::Result<()> {
+        let window = find_window_or_err(window_number)?;
+        window.set_sharing_type(K_CGS_DO_NOT_SHARE as usize);
         Ok(())
     }
 
     pub fn remove(window_number: u32) -> napi::Result<()> {
-        unsafe {
-            if let Some(window) = find_window(window_number) {
-                let _: () = msg_send![window, setSharingType: 1usize];
-            }
-        }
-
+        let window = find_window_or_err(window_number)?;
+        window.set_sharing_type(K_CGS_NORMAL_SHARE as usize);
         Ok(())
     }
 
     pub fn apply_private(window_number: u32) -> napi::Result<()> {
+        let _ = find_window_or_err(window_number)?;
         apply_cgs(window_number, K_CGS_DO_NOT_SHARE, "apply")
     }
 
     pub fn remove_private(window_number: u32) -> napi::Result<()> {
+        let _ = find_window_or_err(window_number)?;
         apply_cgs(window_number, K_CGS_NORMAL_SHARE, "remove")
     }
 
     pub fn verify(window_number: u32) -> napi::Result<i32> {
-        unsafe {
-            if let Some(window) = find_window(window_number) {
-                let sharing_type: usize = msg_send![window, sharingType];
-                return Ok(sharing_type as i32);
-            }
+        if let Some(window) = find_window(window_number) {
+            let sharing_type = window.sharing_type();
+            return Ok(sharing_type as i32);
         }
 
         Ok(-1)
     }
 
-    unsafe fn find_window(window_number: u32) -> Option<id> {
-        let app: id = msg_send![class!(NSApplication), sharedApplication];
-        if app == nil {
-            return None;
-        }
+    fn find_window(window_number: u32) -> Option<arc::R<ns::Window>> {
+        let app = ns::App::shared();
+        let windows = app.windows();
+        let count = windows.len();
 
-        let windows: id = msg_send![app, windows];
-        if windows == nil {
-            return None;
-        }
-
-        let count: usize = msg_send![windows, count];
         for index in 0..count {
-            let window: id = msg_send![windows, objectAtIndex: index];
-            if window == nil {
-                continue;
-            }
-
-            let current_window_number: isize = msg_send![window, windowNumber];
-            if current_window_number == window_number as isize {
-                return Some(window);
+            let window = match windows.get(index) {
+                Ok(w) => w,
+                Err(_) => continue,
+            };
+            let current_window_number = window.window_number();
+            if current_window_number == window_number as ns::Integer {
+                return Some(window.retained());
             }
         }
 
         None
+    }
+
+    fn find_window_or_err(window_number: u32) -> napi::Result<arc::R<ns::Window>> {
+        find_window(window_number).ok_or_else(|| {
+            napi::Error::from_reason(format!(
+                "macOS window not found for window number {}",
+                window_number
+            ))
+        })
     }
 
     fn apply_cgs(window_number: u32, sharing_state: i32, operation: &str) -> napi::Result<()> {
@@ -88,23 +105,39 @@ mod macos {
             let connection_symbol = c"CGSMainConnectionID";
             let sharing_symbol = c"CGSSetWindowSharingState";
 
-            let connection_ptr = dlsym(RTLD_DEFAULT, connection_symbol.as_ptr() as *const c_char);
-            let sharing_ptr = dlsym(RTLD_DEFAULT, sharing_symbol.as_ptr() as *const c_char);
+            let connection_ptr = NonNull::new(dlsym(
+                RTLD_DEFAULT,
+                connection_symbol.as_ptr() as *const c_char,
+            ))
+            .ok_or_else(|| {
+                napi::Error::from_reason(format!(
+                    "CGSMainConnectionID symbol unavailable during {}",
+                    operation
+                ))
+            })?;
+            let sharing_ptr = NonNull::new(dlsym(
+                RTLD_DEFAULT,
+                sharing_symbol.as_ptr() as *const c_char,
+            ))
+            .ok_or_else(|| {
+                napi::Error::from_reason(format!(
+                    "CGSSetWindowSharingState symbol unavailable during {}",
+                    operation
+                ))
+            })?;
 
-            if connection_ptr.is_null() || sharing_ptr.is_null() {
-                eprintln!("[stealth] CGS private symbols unavailable; skipping private macOS stealth path during {}", operation);
-                return Ok(());
-            }
-
-            let connection_fn: CGSMainConnectionIDFn = std::mem::transmute::<*mut c_void, CGSMainConnectionIDFn>(connection_ptr);
-            let sharing_fn: CGSSetWindowSharingStateFn = std::mem::transmute::<*mut c_void, CGSSetWindowSharingStateFn>(sharing_ptr);
+            let connection_fn: CGSMainConnectionIDFn =
+                std::mem::transmute::<*mut c_void, CGSMainConnectionIDFn>(connection_ptr.as_ptr());
+            let sharing_fn: CGSSetWindowSharingStateFn =
+                std::mem::transmute::<*mut c_void, CGSSetWindowSharingStateFn>(sharing_ptr.as_ptr());
 
             let connection_id = connection_fn();
             let result = sharing_fn(connection_id, window_number as i32, sharing_state);
             if result != 0 {
-                eprintln!("[stealth] CGSSetWindowSharingState {} rejected with {}", operation, result);
-            } else {
-                eprintln!("[stealth] CGSSetWindowSharingState {} applied for window {}", operation, window_number);
+                return Err(napi::Error::from_reason(format!(
+                    "CGSSetWindowSharingState {} rejected with {} for window {}",
+                    operation, result, window_number
+                )));
             }
         }
 
@@ -140,7 +173,8 @@ mod windows_impl {
     use super::Buffer;
     use windows::Win32::Foundation::{GetLastError, HWND};
     use windows::Win32::UI::WindowsAndMessaging::{
-        GetWindowDisplayAffinity, SetWindowDisplayAffinity, WDA_MONITOR, WDA_NONE, WINDOW_DISPLAY_AFFINITY,
+        GetWindowDisplayAffinity, SetWindowDisplayAffinity, WDA_MONITOR, WDA_NONE,
+        WINDOW_DISPLAY_AFFINITY,
     };
 
     const WDA_EXCLUDEFROMCAPTURE: WINDOW_DISPLAY_AFFINITY = WINDOW_DISPLAY_AFFINITY(0x00000011);
