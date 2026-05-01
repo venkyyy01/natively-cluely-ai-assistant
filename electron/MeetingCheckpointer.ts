@@ -117,6 +117,7 @@ export class MeetingCheckpointer extends EventEmitter {
             
             // Emit events based on result
             if (result.success) {
+                this.emit('checkpoint', this.meetingId);
                 this.emit('checkpoint-saved', { 
                     meetingId: this.meetingId, 
                     usedFallback: result.usedFallback,
@@ -166,10 +167,11 @@ export class MeetingCheckpointer extends EventEmitter {
         }
 
         // All retries exhausted — save to fallback file
+        await this.ensureTempDir();
         try {
             const fallbackPath = await this.saveFallbackFile(meetingData, snapshot);
             return {
-                success: false,
+                success: true,
                 retryCount: MAX_RETRY_ATTEMPTS,
                 usedFallback: true,
                 fallbackPath,

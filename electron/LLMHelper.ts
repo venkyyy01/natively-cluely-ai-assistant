@@ -3343,6 +3343,7 @@ ANSWER DIRECTLY:`;
       } else {
         yield* this.streamWithOpenai(userContent, finalOpenAiSystem, options?.abortSignal);
       }
+      return;
     }
 
     if (this.isClaudeModel(this.currentModelId) && this.claudeClient) {
@@ -3360,6 +3361,7 @@ ANSWER DIRECTLY:`;
       } else {
         yield* this.streamWithClaude(userContent, finalClaudeSystem, options?.abortSignal);
       }
+      return;
     }
 
     if (this.isGroqModel(this.currentModelId) && this.groqClient) {
