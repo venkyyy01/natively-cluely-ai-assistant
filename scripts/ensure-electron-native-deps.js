@@ -51,10 +51,36 @@ function matchesCurrentArch(info) {
   return true;
 }
 
+function readForgeMeta(binaryPath) {
+  const forgeMetaPath = path.join(path.dirname(binaryPath), '.forge-meta');
+  if (fs.existsSync(forgeMetaPath)) {
+    return fs.readFileSync(forgeMetaPath, 'utf8').trim();
+  }
+  return null;
+}
+
+function getExpectedForgeMeta() {
+  const osArch = arch === 'arm64' ? 'arm64' : 'x64';
+  try {
+    const electronPkg = require(path.join(rootDir, 'node_modules', 'electron', 'package.json'));
+    const version = electronPkg.version || '';
+    const majorVersion = parseInt(version.split('.')[0], 10);
+
+    if (majorVersion >= 33) return `${osArch}--145`;
+    if (majorVersion >= 30) return `${osArch}--131`;
+    if (majorVersion >= 28) return `${osArch}--114`;
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 function needsRebuild() {
   if (platform !== 'darwin') {
     return true;
   }
+
+  const expectedMeta = getExpectedForgeMeta();
 
   for (const binary of binaries) {
     if (!fs.existsSync(binary.path)) {
@@ -70,6 +96,22 @@ function needsRebuild() {
       console.log(`[ensure-electron-native-deps] ${binary.name} arch mismatch: ${info}`);
       return true;
     }
+
+    const actualMeta = readForgeMeta(binary.path);
+    if (!actualMeta) {
+      if (!binary.optional) {
+        console.log(`[ensure-electron-native-deps] ${binary.name} missing .forge-meta, rebuild needed`);
+        return true;
+      }
+      continue;
+    }
+
+    if (expectedMeta && actualMeta !== expectedMeta) {
+      console.log(`[ensure-electron-native-deps] ${binary.name} .forge-meta mismatch:`);
+      console.log(`  expected: ${expectedMeta}`);
+      console.log(`  actual:   ${actualMeta}`);
+      return true;
+    }
   }
 
   return false;
@@ -82,7 +124,6 @@ if (!needsRebuild()) {
 
 run(`npx electron-builder install-app-deps --arch=${arch}`);
 
-// Verify rebuild succeeded and binaries match target architecture
 console.log('[ensure-electron-native-deps] Verifying rebuilt binaries...');
 for (const binary of binaries) {
   if (!fs.existsSync(binary.path)) {
@@ -93,9 +134,25 @@ for (const binary of binaries) {
   const info = getBinaryInfo(binary.path);
   if (!matchesCurrentArch(info)) {
     console.error(`[ensure-electron-native-deps] ERROR: ${binary.name} still has wrong architecture after rebuild: ${info}`);
-    console.error(`[ensure-electron-native-deps] Expected ${arch} but binary is not compatible`);
     process.exit(1);
   }
-  console.log(`[ensure-electron-native-deps] ✓ ${binary.name}: ${info}`);
+  console.log(`[ensure-electron-native-deps] ${binary.name}: ${info}`);
 }
+
+const expectedMeta = getExpectedForgeMeta();
+if (expectedMeta) {
+  for (const binary of binaries) {
+    if (binary.optional && !fs.existsSync(binary.path)) continue;
+    if (!fs.existsSync(binary.path)) continue;
+    const actualMeta = readForgeMeta(binary.path);
+    if (actualMeta !== expectedMeta) {
+      console.error(`[ensure-electron-native-deps] ERROR: ${binary.name} .forge-meta mismatch after rebuild:`);
+      console.error(`  expected: ${expectedMeta}`);
+      console.error(`  actual:   ${actualMeta}`);
+      process.exit(1);
+    }
+    console.log(`[ensure-electron-native-deps] ${binary.name} .forge-meta: ${actualMeta}`);
+  }
+}
+
 console.log(`[ensure-electron-native-deps] All native dependencies verified for ${platform}-${arch}.`);
