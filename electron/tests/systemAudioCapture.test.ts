@@ -14,6 +14,10 @@ class FakeSystemAudioMonitor {
     return FakeSystemAudioMonitor.sampleRate;
   }
 
+  getOutputSampleRate(): number {
+    return 16000;
+  }
+
   start(): void {}
   stop(): void {}
 }
@@ -53,6 +57,7 @@ test('SystemAudioCapture probes the native sample rate before start without recr
     const capture = new SystemAudioCapture();
 
     assert.equal(capture.getSampleRate(), 44100);
+    assert.equal(capture.getOutputSampleRate(), 16000);
     assert.equal(FakeSystemAudioMonitor.instances, 1);
 
     capture.start();

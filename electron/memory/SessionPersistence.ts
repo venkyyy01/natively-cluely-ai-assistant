@@ -22,6 +22,25 @@ export interface SessionIndex {
   sessions: SessionIndexEntry[];
 }
 
+export interface SessionEvent {
+  eventId: string;
+  type:
+    | 'transcript'
+    | 'usage'
+    | 'checkpoint'
+    | 'thread-action'
+    | 'reset'
+    | 'containment_activated'
+    | 'containment_cleared'
+    | 'stealth_fault'
+    | 'conscious_route_decision'
+    | 'conscious_thread_action'
+    | 'conscious_verifier_result'
+    | 'inference_aborted';
+  timestamp: number;
+  payload: Record<string, unknown>;
+}
+
 export interface PersistedSessionMemoryEntryValue {
   kind: 'transcript' | 'usage' | 'pinned-item' | 'constraint' | 'epoch-summary' | 'active-thread';
   text?: string;
@@ -33,7 +52,7 @@ export interface PersistedSessionMemoryEntryValue {
   usageType?: 'assist' | 'followup' | 'chat' | 'followup_questions';
   question?: string;
   answer?: string;
-  items?: string[];
+  items?: unknown;
   normalized?: string;
   raw?: string;
   constraintType?: string;
@@ -74,6 +93,11 @@ export interface PersistedSession {
     topic: string;
     goal?: string;
     suspendedAt: number;
+    phase?: string;
+    turnCount?: number;
+    resumeKeywords?: string[];
+    keyDecisions?: string[];
+    constraints?: string[];
   }>;
   pinnedItems: Array<{
     id: string;
@@ -283,12 +307,101 @@ export class SessionPersistence {
 
   private async loadIndex(): Promise<SessionIndex> {
     await this.init();
+    let index: SessionIndex;
     try {
       const content = await fs.readFile(this.indexFile, 'utf-8');
       const parsed = JSON.parse(content) as SessionIndex;
-      return parsed && Array.isArray(parsed.sessions) ? parsed : { sessions: [] };
+      index = parsed && Array.isArray(parsed.sessions) ? parsed : { sessions: [] };
     } catch {
-      return { sessions: [] };
+      index = { sessions: [] };
     }
+
+    // NAT-060: orphan recovery — scan directory for session files not in index
+    const orphaned = await this.scanOrphanSessions(index);
+    if (orphaned.length > 0) {
+      index.sessions.push(...orphaned);
+    }
+
+    return index;
+  }
+
+  private async scanOrphanSessions(index: SessionIndex): Promise<SessionIndexEntry[]> {
+    try {
+      const files = await fs.readdir(this.sessionsDir);
+      const sessionFiles = files.filter((f) => f.endsWith('.json') && f !== 'index.json');
+      const indexedPaths = new Set(index.sessions.map((s) => s.filepath));
+      const orphaned: SessionIndexEntry[] = [];
+
+      for (const filename of sessionFiles) {
+        if (indexedPaths.has(filename)) continue;
+        try {
+          const content = await fs.readFile(join(this.sessionsDir, filename), 'utf-8');
+          const session = JSON.parse(content) as PersistedSession;
+          if (session.sessionId && session.meetingId) {
+            orphaned.push({
+              sessionId: session.sessionId,
+              meetingId: session.meetingId,
+              lastActiveAt: session.lastActiveAt || Date.now(),
+              filepath: filename,
+            });
+          }
+        } catch {
+          // skip unreadable files
+        }
+      }
+
+      return orphaned;
+    } catch {
+      return [];
+    }
+  }
+
+  // NAT-059: event-sourced session persistence
+
+  private buildEventLogPath(sessionId: string): string {
+    const sanitized = sanitizeMeetingIdForFilename(sessionId);
+    return join(this.sessionsDir, `${sanitized}.events.log`);
+  }
+
+  async appendEvent(sessionId: string, event: SessionEvent): Promise<void> {
+    await this.init();
+    const logPath = this.buildEventLogPath(sessionId);
+    const line = JSON.stringify(event) + '\n';
+    await fs.appendFile(logPath, line, 'utf-8');
+  }
+
+  async replayEvents(sessionId: string): Promise<SessionEvent[]> {
+    const logPath = this.buildEventLogPath(sessionId);
+    try {
+      const content = await fs.readFile(logPath, 'utf-8');
+      return content
+        .split('\n')
+        .filter((line) => line.trim().length > 0)
+        .map((line) => JSON.parse(line) as SessionEvent);
+    } catch {
+      return [];
+    }
+  }
+
+  async snapshotEvents(sessionId: string, session: PersistedSession): Promise<void> {
+    await this.init();
+    const snapshotEvent: SessionEvent = {
+      eventId: `snapshot-${Date.now()}`,
+      type: 'checkpoint',
+      timestamp: Date.now(),
+      payload: { session },
+    };
+    await this.appendEvent(sessionId, snapshotEvent);
+  }
+
+  async getEventCount(sessionId: string): Promise<number> {
+    const events = await this.replayEvents(sessionId);
+    return events.length;
+  }
+
+  async replayUntil(sessionId: string, eventId: string): Promise<SessionEvent[]> {
+    const allEvents = await this.replayEvents(sessionId);
+    const idx = allEvents.findIndex((e) => e.eventId === eventId);
+    return idx >= 0 ? allEvents.slice(0, idx + 1) : allEvents;
   }
 }

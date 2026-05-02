@@ -6,22 +6,37 @@ import { EventEmitter } from 'events';
 import { createHash } from 'crypto';
 import { LLMHelper } from './LLMHelper';
 import { SessionTracker, TranscriptSegment, SuggestionTrigger, ContextItem } from './SessionTracker';
+import { Result, LLMError } from './types/Result';
 import {
   AnswerLLM, AssistLLM, FollowUpLLM, RecapLLM,
   FollowUpQuestionsLLM, WhatToAnswerLLM,
-  AssistantResponse as LLMAssistantResponse, classifyIntent
+  AssistantResponse as LLMAssistantResponse
 } from './llm';
-import { ConsciousContextComposer, ConsciousIntentService, ConsciousOrchestrator, ConsciousPreparationCoordinator, ConsciousResponseCoordinator, ConsciousVerifier, ConsciousVerifierLLM, FallbackExecutor, sanitizeProfileData } from './conscious';
+import {
+  FoundationModelsIntentProvider,
+  IntentClassificationCoordinator,
+  LegacyIntentProvider,
+  SetFitIntentProvider,
+  type CoordinatedIntentResult,
+} from './llm/providers';
+import { ConsciousContextComposer, ConsciousIntentService, ConsciousOrchestrator, ConsciousPreparationCoordinator, ConsciousResponseCoordinator, ConsciousVerifier, ConsciousVerifierLLM, FallbackExecutor, ResponseFingerprinter, sanitizeProfileData } from './conscious';
 import { ParallelContextAssembler, ContextAssemblyInput, ContextAssemblyOutput } from './cache/ParallelContextAssembler';
-import { isOptimizationActive } from './config/optimizations';
+import { getOptimizationFlags, isOptimizationActive } from './config/optimizations';
+import { Metrics } from './runtime/Metrics';
+import { getRouteDirector } from './runtime/RouteDirector';
+import { isRouteDirectorEnabled } from './runtime/routeDirectorEnv';
 import { AnswerLatencyTracker, AnswerRoute } from './latency/AnswerLatencyTracker';
 import { getActiveAccelerationManager } from './services/AccelerationManager';
 import type { AccelerationManager } from './services/AccelerationManager';
+import type { SessionEvent } from './memory/SessionPersistence';
+import { getDefaultTriggerAuditLog } from './observability/TriggerAuditLog';
 
 // Mode types
 export type IntelligenceMode = 'idle' | 'assist' | 'what_to_say' | 'follow_up' | 'recap' | 'manual' | 'follow_up_questions' | 'reasoning_first';
 
 const PROFILE_ENRICHMENT_TIMEOUT_MS = 250;
+/** NAT-057: soft wall-clock budget for RouteDirector.runTurn (what-to-say). */
+const WHAT_TO_SAY_ROUTE_DEADLINE_MS = 120_000;
 
 // Refinement intent detection (refined to avoid false positives)
 function detectRefinementIntent(userText: string): { isRefinement: boolean; intent: string } {
@@ -71,6 +86,11 @@ export interface SuggestedAnswerMetadata {
   attemptedRoute?: AnswerRoute;
   fallbackOccurred: boolean;
   fallbackReason?: string;
+  intentConfidence?: number;
+  intentProviderUsed?: string;
+  intentRetryCount?: number;
+  intentFallbackReason?: 'primary_unavailable' | 'primary_retries_exhausted' | 'primary_failed' | 'primary_low_confidence' | 'primary_contradiction';
+  prefetchedIntentUsed?: boolean;
   schemaVersion: 'standard_answer_v1' | 'conscious_mode_v1';
   evidenceHash: string;
   transcriptRevision: number;
@@ -96,7 +116,9 @@ export interface SuggestedAnswerMetadata {
   contextSelectionHash?: string;
   verifier?: {
     deterministic: 'pass' | 'fail' | 'skipped';
+    judge?: 'pass' | 'fail' | 'skipped';
     provenance: 'pass' | 'fail' | 'skipped';
+    reasons?: string[];
   };
   stealthContainmentActive: boolean;
 }
@@ -127,21 +149,33 @@ export class IntelligenceEngine extends EventEmitter {
   private consciousContextComposer: ConsciousContextComposer;
   private consciousIntentService: ConsciousIntentService;
   private consciousPreparationCoordinator: ConsciousPreparationCoordinator;
+  // NAT-048: a single ResponseFingerprinter is shared across every
+  // ConsciousResponseCoordinator instance for the lifetime of the active
+  // session, so that duplicate detection sees the prior turn's answer.
+  // Recreated alongside the other conscious-mode singletons on
+  // setSessionTracker so cross-session bleed is impossible.
+  private consciousResponseFingerprinter: ResponseFingerprinter = new ResponseFingerprinter();
 
   // Parallel context assembler for acceleration
   private parallelContextAssembler: ParallelContextAssembler | null = null;
   private latencyTracker: AnswerLatencyTracker = new AnswerLatencyTracker();
   private activeWhatToSayRequestId = 0;
-  private readonly CONTEXT_ASSEMBLY_SOFT_BUDGET_MS = 80;
-  private readonly CONTEXT_ASSEMBLY_HARD_BUDGET_MS = 120;
+  private activeAuxiliaryRequestId = 0;
+  // NAT-L1: widened from 80/120 to 300/500. Intent classification requires
+  // at minimum 200ms for an SLM call + 100ms for context assembly. The
+  // previous 120ms budget caused intent to time out on nearly every question,
+  // silently degrading conscious mode to fast_standard_answer.
+  private readonly CONTEXT_ASSEMBLY_SOFT_BUDGET_MS = 300;
+  private readonly CONTEXT_ASSEMBLY_HARD_BUDGET_MS = 500;
   private readonly MAX_COOLDOWN_DEFER_DEPTH = 3;
+  private readonly intentCoordinator: IntentClassificationCoordinator;
 
   // Timestamps for tracking
   private lastTranscriptTime: number = 0;
   private lastTriggerTime: number = 0;
-  private readonly triggerCooldown: number = 3000; // 3 seconds
+  private readonly triggerCooldown: number = 300; // 300 ms for finals (interims filtered at trigger gate per NAT-006)
   private readonly lastTriggerByCooldownKey = new Map<string, number>();
-  private readonly cooldownQueuesByKey = new Map<string, Promise<void>>();
+  private pendingCooldownTriggers = new Map<string, { timer: NodeJS.Timeout; reject: () => void }>();
   private stealthContainmentActive = false;
 
   constructor(llmHelper: LLMHelper, session: SessionTracker) {
@@ -158,6 +192,21 @@ export class IntelligenceEngine extends EventEmitter {
       this.consciousIntentService,
     );
     this.initializeLLMs();
+    const optimizationFlags = getOptimizationFlags();
+    // NAT-XXX: Hybrid intent classification.
+    // Primary: SetFit (fast, domain-specific, ~10-30ms)
+    // Fallback: Foundation model (slow but most accurate, ~2-3s)
+    // The coordinator handles the cascade: SetFit first, foundation model
+    // only when SetFit is uncertain or unavailable.
+    const setFitProvider = new SetFitIntentProvider();
+    this.intentCoordinator = new IntentClassificationCoordinator(
+      setFitProvider,
+      new FoundationModelsIntentProvider(),
+      {
+        maxPrimaryRetries: optimizationFlags.foundationIntentMaxRetries,
+        baseBackoffMs: optimizationFlags.foundationIntentRetryBaseMs,
+      },
+    );
     
     if (isOptimizationActive('useParallelContext')) {
       this.parallelContextAssembler = new ParallelContextAssembler({});
@@ -167,13 +216,32 @@ export class IntelligenceEngine extends EventEmitter {
   }
 
   attachAccelerationManager(accelerationManager: AccelerationManager | null): void {
-    accelerationManager?.getConsciousOrchestrator().setSpeculativeExecutor((query, transcriptRevision) =>
-      this.generateSpeculativeFastAnswerStream(query, transcriptRevision)
+    const consciousAcceleration = accelerationManager?.getConsciousOrchestrator();
+    consciousAcceleration?.setSpeculativeExecutor((query, transcriptRevision, abortSignal) =>
+      this.generateSpeculativeFastAnswerStream(query, transcriptRevision, abortSignal)
     );
+    // NAT-XXX: Prefetch uses the LayeredIntentRouter fast ensemble. It runs
+    // SetFit + SLM(model-only) + Regex + Embedding in parallel and lets
+    // reliable model classifiers take authority over heuristic regex cues.
+    consciousAcceleration?.setIntentClassifier(async (query: string, _transcriptRevision: number) => {
+      const router = (await import('./llm/LayeredIntentRouter')).LayeredIntentRouter.getInstance();
+      const decision = await router.routeFast({
+        question: query,
+        transcript: this.buildFastStandardTranscriptContext(query, this.session.getLastAssistantMessage()),
+        assistantResponseCount: this.session.getAssistantResponseHistory().length,
+        prefetchedIntent: null,
+        coordinator: this.intentCoordinator,
+      });
+      return decision.intentResult;
+    });
   }
 
-  private async *generateSpeculativeFastAnswerStream(question: string, transcriptRevision: number): AsyncIterableIterator<string> {
+  private async *generateSpeculativeFastAnswerStream(question: string, transcriptRevision: number, abortSignal: AbortSignal): AsyncIterableIterator<string> {
     if (this.stealthContainmentActive) {
+      return;
+    }
+
+    if (abortSignal.aborted) {
       return;
     }
 
@@ -192,6 +260,9 @@ export class IntelligenceEngine extends EventEmitter {
       ? await accelerationManager.getEnhancedCache().get(cacheKey) as string | undefined
       : undefined;
     if (cached) {
+      if (abortSignal.aborted) {
+        return;
+      }
       yield cached;
       return;
     }
@@ -205,11 +276,19 @@ export class IntelligenceEngine extends EventEmitter {
     const stream = this.whatToAnswerLLM.generateStream(preparedTranscript, undefined, undefined, undefined, {
       fastPath: true,
       latestQuestion: normalizedQuestion,
+      abortSignal,
     });
 
     for await (const token of stream) {
+      if (abortSignal.aborted) {
+        return;
+      }
       fullAnswer += token;
       yield token;
+    }
+
+    if (abortSignal.aborted) {
+      return;
     }
 
     if (this.session.getTranscriptRevision() !== transcriptRevision) {
@@ -229,7 +308,11 @@ export class IntelligenceEngine extends EventEmitter {
     preparedTranscript: string,
     assistantResponseCount: number,
   ) {
-    return classifyIntent(lastInterviewerTurn, preparedTranscript, assistantResponseCount);
+    return this.intentCoordinator.classify({
+      lastInterviewerTurn,
+      preparedTranscript,
+      assistantResponseCount,
+    });
   }
 
   private async getAssembledContext(query: string, tokenBudget: number): Promise<{
@@ -326,7 +409,7 @@ export class IntelligenceEngine extends EventEmitter {
         this.cancelActiveWhatToSay('session-switch');
         this.session = session;
         this.lastTriggerByCooldownKey.clear();
-        this.cooldownQueuesByKey.clear();
+        this.pendingCooldownTriggers.clear();
         this.consciousOrchestrator = this.buildConsciousOrchestrator();
         this.consciousContextComposer = new ConsciousContextComposer();
         this.consciousIntentService = new ConsciousIntentService();
@@ -336,13 +419,25 @@ export class IntelligenceEngine extends EventEmitter {
             this.consciousContextComposer,
             this.consciousIntentService,
         );
+        // NAT-048: clear fingerprint history on session switch — answers
+        // emitted to a previous user must not suppress identical-looking
+        // answers in a fresh session (different person, different question
+        // context). The instance itself is reused (rather than reallocated)
+        // so any references stored elsewhere remain valid.
+        this.consciousResponseFingerprinter.clear();
         if (this.recapLLM) {
             this.session.setRecapLLM(this.recapLLM);
         }
     }
 
     private getConsciousResponseCoordinator(): ConsciousResponseCoordinator {
-        return new ConsciousResponseCoordinator(this.session, this.latencyTracker, this, this.setMode.bind(this));
+        return new ConsciousResponseCoordinator(
+            this.session,
+            this.latencyTracker,
+            this,
+            this.setMode.bind(this),
+            this.consciousResponseFingerprinter,
+        );
     }
 
     private shouldRequireConsciousJudge(): boolean {
@@ -377,15 +472,12 @@ export class IntelligenceEngine extends EventEmitter {
 
   private buildFastStandardTranscriptContext(latestQuestion: string, latestAssistantMessage: string | null): string {
         const turns: string[] = [];
-
         if (latestAssistantMessage?.trim()) {
             turns.push(`[ASSISTANT]: ${latestAssistantMessage.trim()}`);
         }
-
         if (latestQuestion.trim()) {
             turns.push(`[INTERVIEWER]: ${latestQuestion.trim()}`);
         }
-
         return turns.join('\n');
     }
 
@@ -436,9 +528,26 @@ export class IntelligenceEngine extends EventEmitter {
         contextItems?: ContextItem[],
     ): void {
         this.latencyTracker.annotate(requestId, {
+            intentConfidence: metadata.intentConfidence,
+            intentProviderUsed: metadata.intentProviderUsed,
+            intentRetryCount: metadata.intentRetryCount,
+            intentFallbackReason: metadata.intentFallbackReason,
+            prefetchedIntentUsed: metadata.prefetchedIntentUsed,
             contextItemIds: this.buildContextItemIds(contextItems),
             verifierOutcome: metadata.verifier,
             stealthContainmentActive: metadata.stealthContainmentActive,
+        });
+    }
+
+    private recordSessionEvent(type: SessionEvent['type'], payload: Record<string, unknown>): void {
+        const recordEvent = (this.session as unknown as {
+            recordSessionEvent?: (type: SessionEvent['type'], payload: Record<string, unknown>) => Promise<void>;
+        }).recordSessionEvent;
+        if (!recordEvent) {
+            return;
+        }
+        void recordEvent.call(this.session, type, payload).catch((error: unknown) => {
+            console.warn(`[IntelligenceEngine] Failed to record session event ${type}:`, error);
         });
     }
 
@@ -465,25 +574,21 @@ export class IntelligenceEngine extends EventEmitter {
     }
 
     private async queueCooldownDelay(key: string, delayMs: number): Promise<void> {
-        const prior = this.cooldownQueuesByKey.get(key) ?? Promise.resolve();
-        let releaseCurrent!: () => void;
-        const current = new Promise<void>((resolve) => {
-            releaseCurrent = resolve;
-        });
-        const chained = prior.catch((): void => undefined).then((): Promise<void> => current);
-        this.cooldownQueuesByKey.set(key, chained);
-
-        try {
-            await prior.catch((): void => undefined);
-            await new Promise<void>((resolve) => {
-                setTimeout(resolve, delayMs);
-            });
-        } finally {
-            releaseCurrent();
-            if (this.cooldownQueuesByKey.get(key) === chained) {
-                this.cooldownQueuesByKey.delete(key);
-            }
+        // NAT-038: latest-wins coalescing — cancel any pending trigger for this key
+        const existing = this.pendingCooldownTriggers.get(key);
+        if (existing) {
+            clearTimeout(existing.timer);
+            existing.reject();
+            this.pendingCooldownTriggers.delete(key);
         }
+
+        return new Promise<void>((resolve, reject) => {
+            const timer = setTimeout(() => {
+                this.pendingCooldownTriggers.delete(key);
+                resolve();
+            }, delayMs);
+            this.pendingCooldownTriggers.set(key, { timer, reject });
+        });
     }
 
     private buildSuggestedAnswerMetadata(input: {
@@ -491,6 +596,11 @@ export class IntelligenceEngine extends EventEmitter {
         attemptedRoute?: AnswerRoute;
         fallbackOccurred: boolean;
         fallbackReason?: string;
+        intentConfidence?: number;
+        intentProviderUsed?: string;
+        intentRetryCount?: number;
+        intentFallbackReason?: 'primary_unavailable' | 'primary_retries_exhausted' | 'primary_failed' | 'primary_low_confidence' | 'primary_contradiction';
+        prefetchedIntentUsed?: boolean;
         schemaVersion: 'standard_answer_v1' | 'conscious_mode_v1';
         evidenceHash: string;
         transcriptRevision: number;
@@ -500,7 +610,9 @@ export class IntelligenceEngine extends EventEmitter {
         contextItems?: ContextItem[];
         verifier?: {
             deterministic: 'pass' | 'fail' | 'skipped';
+            judge?: 'pass' | 'fail' | 'skipped';
             provenance: 'pass' | 'fail' | 'skipped';
+            reasons?: string[];
         };
     }): SuggestedAnswerMetadata {
         const thread = this.session.getActiveReasoningThread();
@@ -524,6 +636,11 @@ export class IntelligenceEngine extends EventEmitter {
             attemptedRoute: input.attemptedRoute,
             fallbackOccurred: input.fallbackOccurred,
             fallbackReason: input.fallbackReason,
+            intentConfidence: input.intentConfidence,
+            intentProviderUsed: input.intentProviderUsed,
+            intentRetryCount: input.intentRetryCount,
+            intentFallbackReason: input.intentFallbackReason,
+            prefetchedIntentUsed: input.prefetchedIntentUsed,
             schemaVersion: input.schemaVersion,
             evidenceHash: input.evidenceHash,
             contextSelectionHash: this.computeContextSelectionHash(input.contextItems),
@@ -645,7 +762,7 @@ export class IntelligenceEngine extends EventEmitter {
         if (trigger.confidence < 0.5) {
             return;
         }
-        await this.runWhatShouldISay(trigger.lastQuestion, trigger.confidence);
+        await this.runWhatShouldISay(trigger.lastQuestion, trigger.confidence, undefined, 0, undefined, trigger.sourceUtteranceId);
     }
 
     // ============================================
@@ -661,44 +778,52 @@ export class IntelligenceEngine extends EventEmitter {
             return null;
         }
 
+        if (this.shouldBlockModeForStealthContainment('assist')) {
+            return null;
+        }
+
         if (this.assistCancellationToken) {
             this.assistCancellationToken.abort();
         }
 
         this.assistCancellationToken = new AbortController();
-        this.setMode('assist');
+        const requestId = this.beginAuxiliaryMode('assist');
 
         try {
             if (!this.assistLLM) {
-                this.setMode('idle');
                 return null;
             }
 
             const context = this.session.getFormattedContext(60);
             if (!context) {
+                return null;
+            }
+
+            const insightResult = await this.assistLLM.generate(context);
+
+            if (this.assistCancellationToken?.signal.aborted || this.shouldSuppressAuxiliaryMode(requestId)) {
+                return null;
+            }
+
+            if (insightResult.success && insightResult.data) {
+                this.emit('assist_update', insightResult.data);
+                this.setMode('idle');
+                return insightResult.data;
+            } else {
+                // Log error but don't throw - assist mode failures should be silent
+                console.warn('[INTELLIGENCE] AssistLLM failed:', insightResult.error);
                 this.setMode('idle');
                 return null;
             }
-
-            const insight = await this.assistLLM.generate(context);
-
-            if (this.assistCancellationToken?.signal.aborted) {
-                return null;
-            }
-
-            if (insight) {
-                this.emit('assist_update', insight);
-            }
-            this.setMode('idle');
-            return insight;
 
         } catch (error) {
             if ((error as Error).name === 'AbortError') {
                 return null;
             }
             this.emit('error', error as Error, 'assist');
-            this.setMode('idle');
             return null;
+        } finally {
+            this.finishAuxiliaryMode(requestId, 'assist');
         }
     }
 
@@ -713,6 +838,7 @@ export class IntelligenceEngine extends EventEmitter {
         imagePaths?: string[],
         priorCooldownSuppressedMs: number = 0,
         priorCooldownReason?: CooldownSuppressionReason,
+        sourceUtteranceId?: string,
     ): Promise<string | null> {
         const cooldownQuestion = question?.trim()
             || this.session.getLastInterimInterviewer()?.text?.trim()
@@ -736,7 +862,8 @@ export class IntelligenceEngine extends EventEmitter {
             this.pruneCooldownKeys(now);
             const cooldownKey = this.buildCooldownKey(cooldownQuestion);
             const lastTriggerForKey = this.lastTriggerByCooldownKey.get(cooldownKey) ?? 0;
-            const cooldownRemaining = Math.max(0, this.triggerCooldown - (now - lastTriggerForKey));
+            const effectiveTriggerCooldown = sourceUtteranceId ? 0 : this.triggerCooldown;
+            const cooldownRemaining = Math.max(0, effectiveTriggerCooldown - (now - lastTriggerForKey));
 
             console.log('[INTELLIGENCE] 🤖 runWhatShouldISay triggered:', {
                 question: question?.substring(0, 50) + (question && question.length > 50 ? '...' : ''),
@@ -773,7 +900,13 @@ export class IntelligenceEngine extends EventEmitter {
             cooldownDeferDepth += 1;
             totalCooldownSuppressedMs += cooldownRemaining;
             cooldownReason = deferReason;
-            await this.queueCooldownDelay(cooldownKey, cooldownRemaining);
+            try {
+                await this.queueCooldownDelay(cooldownKey, cooldownRemaining);
+            } catch {
+                // NAT-038: superseded by a newer trigger for the same key
+                console.log(`[INTELLIGENCE] ⏳ Cooldown for ${cooldownKey} superseded by newer trigger; dropping.`);
+                return null;
+            }
         }
 
         const now = Date.now();
@@ -783,6 +916,12 @@ export class IntelligenceEngine extends EventEmitter {
             : undefined;
         const metadataCooldownReason = cooldownReason;
         const transcriptRevisionAtStart = this.session.getTranscriptRevision();
+        if (sourceUtteranceId) {
+            this.session.noteUtteranceRevision(sourceUtteranceId);
+        }
+        const sourceUtteranceRevisionAtStart = sourceUtteranceId
+            ? this.session.getUtteranceRevision(sourceUtteranceId)
+            : undefined;
         const recentContextForEvidence = this.session.getContext(180);
 
         if (this.assistCancellationToken) {
@@ -803,12 +942,54 @@ export class IntelligenceEngine extends EventEmitter {
         const whatToSayAbortController = new AbortController();
         this.whatToSayAbortController = whatToSayAbortController;
         const requestSequence = ++this.activeWhatToSayRequestId;
+        // NAT-007 / audit A-7: snapshot the transcript revision at the start
+        // of this request so the streaming loop can detect that the user has
+        // moved on (a new interviewer turn arrived) and abandon mid-stream.
+        // Without this guard, an in-flight LLM stream finishes and gets
+        // committed via `addAssistantMessage`, producing an answer to a
+        // stale question.
+        let staleStopReportedForRequest = false;
         const shouldSuppressVisibleWork = (): boolean => {
-            return this.stealthContainmentActive
+            const aborted = this.stealthContainmentActive
                 || whatToSayAbortController.signal.aborted
                 || requestSequence !== this.activeWhatToSayRequestId;
+            if (aborted) return true;
+            const sourceUtteranceRevision = sourceUtteranceId
+                ? this.session.getUtteranceRevision(sourceUtteranceId)
+                : undefined;
+            const sourceUtteranceChanged = sourceUtteranceId
+                ? sourceUtteranceRevisionAtStart !== undefined
+                    && sourceUtteranceRevision !== undefined
+                    && sourceUtteranceRevision !== sourceUtteranceRevisionAtStart
+                : false;
+            const legacyTranscriptChanged = !sourceUtteranceId && this.session.getTranscriptRevision() !== transcriptRevisionAtStart;
+            if (sourceUtteranceChanged || legacyTranscriptChanged) {
+                if (!staleStopReportedForRequest && activeLatencyRequestId) {
+                    staleStopReportedForRequest = true;
+                    const staleReason = sourceUtteranceChanged ? 'source_utterance_revision_changed' : 'transcript_revision_changed';
+                    this.latencyTracker.markStaleStop(activeLatencyRequestId, staleReason);
+                    getDefaultTriggerAuditLog().record({
+                        timestamp: Date.now(),
+                        utteranceId: sourceUtteranceId,
+                        speaker: 'interviewer',
+                        textSnippet: (question || cooldownQuestion || 'inferred').slice(0, 120),
+                        reasonCode: 'stale_stopped',
+                        outcome: 'stale',
+                        cohort: sourceUtteranceId ? 'utterance_level' : 'legacy_fragment',
+                        requestOutcome: staleReason,
+                    });
+                    console.log(
+                        sourceUtteranceChanged
+                            ? `[INTELLIGENCE] 🛑 stale-stop: source utterance ${sourceUtteranceId} revision drifted ${sourceUtteranceRevisionAtStart} -> ${sourceUtteranceRevision} (requestId=${activeLatencyRequestId})`
+                            : `[INTELLIGENCE] 🛑 stale-stop: transcriptRevision drifted ${transcriptRevisionAtStart} -> ${this.session.getTranscriptRevision()} (requestId=${activeLatencyRequestId})`,
+                    );
+                }
+                return true;
+            }
+            return false;
         };
         const abandonCurrentRequest = (): null => {
+            Metrics.counter('speculation.abandoned_count');
             if (activeLatencyRequestId) {
                 this.latencyTracker.complete(activeLatencyRequestId);
             }
@@ -816,6 +997,7 @@ export class IntelligenceEngine extends EventEmitter {
         };
 
         try {
+            const executeWhatToSay = async (): Promise<string | null> => {
             if (!this.whatToAnswerLLM) {
                 console.log('[INTELLIGENCE] ⚠️  whatToAnswerLLM not available, checking fallback...');
                 if (!this.answerLLM) {
@@ -825,9 +1007,12 @@ export class IntelligenceEngine extends EventEmitter {
                 }
                 console.log('[INTELLIGENCE] 🔄 Using fallback answerLLM');
                 const context = this.session.getFormattedContext(180);
-                let answer = await this.answerLLM.generate(question || '', context);
-                if (answer) {
-                // No clamping - prompt enforces brevity
+                let answerResult = await this.answerLLM.generate(question || '', context);
+                
+                let answer: string | null = null;
+                if (answerResult.success && answerResult.data) {
+                    answer = answerResult.data;
+                    // No clamping - prompt enforces brevity
                     this.session.addAssistantMessage(answer);
                     const metadata = this.buildSuggestedAnswerMetadata({
                         route: 'fast_standard_answer',
@@ -848,6 +1033,7 @@ export class IntelligenceEngine extends EventEmitter {
                     });
                     this.emit('suggested_answer', answer, question || 'inferred', confidence, metadata);
                 }
+                
                 this.setMode('idle');
                 return answer || "Could you repeat that? I want to make sure I address your question properly.";
             }
@@ -878,10 +1064,27 @@ export class IntelligenceEngine extends EventEmitter {
             const accelerationManager = getActiveAccelerationManager();
             const consciousAcceleration = accelerationManager?.getConsciousOrchestrator();
             const useConsciousAcceleration = consciousAcceleration?.isEnabled() === true && this.session.isConsciousModeEnabled();
-            const routePreparation = this.consciousPreparationCoordinator.prepareRoute({
+            const transcriptRevisionAtRoute = this.session.getTranscriptRevision();
+            const prefetchedIntent: CoordinatedIntentResult | null = useConsciousAcceleration
+                ? (consciousAcceleration?.getPrefetchedIntent(resolvedQuestion, transcriptRevisionAtRoute) ?? null) as CoordinatedIntentResult | null
+                : null;
+            const routePreparation = await this.consciousPreparationCoordinator.prepareRoute({
                 baseQuestion,
                 knowledgeStatus,
                 screenshotBackedLiveCodingTurn: this.isScreenshotBackedLiveCodingTurn(resolvedQuestion, imagePaths),
+                prefetchedIntent,
+                transcript: this.session.getFormattedContext(120),
+                assistantResponseCount: this.session.getAssistantResponseHistory().length,
+                coordinator: this.intentCoordinator,
+                transcriptRevision: transcriptRevisionAtRoute,
+            });
+            this.recordSessionEvent('conscious_route_decision', {
+                question: resolvedQuestion,
+                selectedRoute: routePreparation.preparedRoute.selectedRoute,
+                effectiveRoute: routePreparation.preparedRoute.effectiveRoute,
+                threadAction: routePreparation.preparedRoute.preRouteDecision.threadAction,
+                qualifies: routePreparation.preparedRoute.preRouteDecision.qualifies,
+                transcriptRevision: transcriptRevisionAtRoute,
             });
             this.consciousOrchestrator.applyRouteSideEffects(routePreparation.preparedRoute);
             const {
@@ -920,6 +1123,12 @@ export class IntelligenceEngine extends EventEmitter {
                     return abandonCurrentRequest();
                 }
                 if (speculativePreview?.text) {
+                    // NAT-001 / audit A-1: capture the speculation's commitToken before we
+                    // emit any preview chunks. If invalidateSpeculation() runs between
+                    // preview and finalize, finalize will return null (entry deleted) or a
+                    // mismatched token, and we MUST abandon — never promote preview text as
+                    // the final answer.
+                    const speculativeCommitToken = speculativePreview.commitToken;
                     const emitSpeculativeToken = (chunk: string, markFirstChunk: boolean = false): boolean => {
                         if (!chunk) {
                             return true;
@@ -947,28 +1156,63 @@ export class IntelligenceEngine extends EventEmitter {
                         return abandonCurrentRequest();
                     }
 
-                    if (!speculativePreview.complete) {
-                        const finalizedSpeculativeAnswer = await consciousAcceleration!.finalizeSpeculativeAnswer(speculativePreview.key, 2_000);
-                        if (shouldSuppressVisibleWork()) {
+                    // NAT-049 / audit P-13: previously this race waited up to
+                    // 2_000 ms on the synchronous hot path for a *post-hoc*
+                    // refinement of an already-emitted preview. Worst case the
+                    // user saw the preview text immediately and then we sat
+                    // there for 2 s before emitting `suggested_answer` and
+                    // releasing the request slot. p95 tail latency took the
+                    // brunt of that.
+                    //
+                    // The fix:
+                    //   * When the speculation is already `complete`, pass 0
+                    //     (already done; this just preserves the existing
+                    //     short-circuit).
+                    //   * Otherwise cap the wait at 600 ms. The preview has
+                    //     already streamed, so any extension is opportunistic
+                    //     polish — not the answer itself. If 600 ms isn't
+                    //     enough, we accept the preview as-is and let the
+                    //     finalize complete in the background; the caller
+                    //     records a `speculative.finalize_timed_out` mark on
+                    //     the active latency request so we can tune later.
+                    const SPECULATIVE_FINALIZE_WAIT_MS = 600;
+                    const speculativeFinalizeWaitMs = speculativePreview.complete ? 0 : SPECULATIVE_FINALIZE_WAIT_MS;
+                    const speculativeFinalizeStart = Date.now();
+                    const finalizedSpeculativeAnswer = await consciousAcceleration!.finalizeSpeculativeAnswer(
+                        speculativePreview.key,
+                        speculativeFinalizeWaitMs,
+                        speculativeCommitToken,
+                    );
+                    const speculativeFinalizeElapsed = Date.now() - speculativeFinalizeStart;
+                    // Telemetry: tag what happened on the finalize race so we
+                    // can answer "was the cap too tight?" from production data.
+                    if (speculativePreview.complete) {
+                        this.latencyTracker.mark(requestId, 'speculative.finalize_skipped_complete');
+                    } else if (
+                        finalizedSpeculativeAnswer === null
+                        && speculativeFinalizeElapsed >= speculativeFinalizeWaitMs
+                    ) {
+                        this.latencyTracker.mark(requestId, 'speculative.finalize_timed_out');
+                    } else if (finalizedSpeculativeAnswer) {
+                        this.latencyTracker.mark(requestId, 'speculative.finalize_resolved');
+                    }
+                    if (shouldSuppressVisibleWork()) {
+                        return abandonCurrentRequest();
+                    }
+                    if (!finalizedSpeculativeAnswer) {
+                        // Speculation was invalidated / timed out / token mismatched.
+                        // Do NOT emit `suggested_answer`, do NOT addAssistantMessage —
+                        // fall through to the regular non-speculative path below.
+                        console.log('[IntelligenceEngine] Speculative finalize abandoned (invalidated or stale); falling back to non-speculative answer');
+                        speculativeAnswer = '';
+                    } else if (!speculativePreview.complete && finalizedSpeculativeAnswer.length > speculativeAnswer.length) {
+                        const suffix = finalizedSpeculativeAnswer.slice(speculativeAnswer.length);
+                        if (suffix && !emitSpeculativeToken(suffix)) {
                             return abandonCurrentRequest();
                         }
-                        if (finalizedSpeculativeAnswer && finalizedSpeculativeAnswer.length > speculativeAnswer.length) {
-                            const suffix = finalizedSpeculativeAnswer.slice(speculativeAnswer.length);
-                            if (suffix && !emitSpeculativeToken(suffix)) {
-                                return abandonCurrentRequest();
-                            }
-                            speculativeAnswer = finalizedSpeculativeAnswer;
-                        } else if (finalizedSpeculativeAnswer) {
-                            speculativeAnswer = finalizedSpeculativeAnswer;
-                        }
+                        speculativeAnswer = finalizedSpeculativeAnswer;
                     } else {
-                        const finalizedSpeculativeAnswer = await consciousAcceleration!.finalizeSpeculativeAnswer(speculativePreview.key, 0);
-                        if (shouldSuppressVisibleWork()) {
-                            return abandonCurrentRequest();
-                        }
-                        if (finalizedSpeculativeAnswer) {
-                            speculativeAnswer = finalizedSpeculativeAnswer;
-                        }
+                        speculativeAnswer = finalizedSpeculativeAnswer;
                     }
 
                     if (!speculativeAnswer || speculativeAnswer.trim().length < 5) {
@@ -1206,7 +1450,7 @@ export class IntelligenceEngine extends EventEmitter {
                     resolvedQuestion,
                     isStale: () => shouldSuppressVisibleWork()
                         || requestSequence !== this.activeWhatToSayRequestId
-                        || this.session.getTranscriptRevision() !== continuationRevision,
+                        || (!sourceUtteranceId && this.session.getTranscriptRevision() !== continuationRevision),
                 });
                 if (shouldSuppressVisibleWork()) {
                     return abandonCurrentRequest();
@@ -1238,14 +1482,21 @@ export class IntelligenceEngine extends EventEmitter {
                         transcriptRevision: transcriptRevisionAtStart,
                         threadAction: activeThreadAction,
                         verifier: {
-                            deterministic: 'pass',
-                            provenance: 'pass',
+                            deterministic: continuationResult.verification.deterministic,
+                            judge: continuationResult.verification.judge,
+                            provenance: continuationResult.verification.provenance,
+                            reasons: continuationResult.verification.reasons,
                         },
                         cooldownSuppressedMs: metadataCooldownSuppressedMs,
                         cooldownReason: metadataCooldownReason,
                         contextItems,
                     });
                     this.annotateLatencyQualityMetadata(requestId, metadata, contextItems);
+                    this.recordSessionEvent('conscious_verifier_result', {
+                        question: resolvedQuestion,
+                        verifier: metadata.verifier ?? null,
+                        route: currentRouteForMetadata,
+                    });
                     return consciousResponseCoordinator.completeStructuredAnswer({
                         requestId,
                         questionLabel: question || 'What to Answer',
@@ -1273,6 +1524,7 @@ export class IntelligenceEngine extends EventEmitter {
                 hardBudgetMs: this.CONTEXT_ASSEMBLY_HARD_BUDGET_MS,
                 contextAssemblyStart,
                 classifyIntent: this.classifyIntentForRoute.bind(this),
+                prefetchedIntent,
                 onInterimInjected: (text) => {
                     console.log(`[IntelligenceEngine] Injecting interim transcript: "${text.substring(0, 50)}..."`);
                 },
@@ -1284,6 +1536,14 @@ export class IntelligenceEngine extends EventEmitter {
             this.latencyTracker.mark(requestId, 'transcriptPrepared');
             const temporalContext = preparationResult.temporalContext;
             const { intentResult, totalContextAssemblyMs, timedOut } = preparationResult;
+            const intentConfidence = intentResult?.confidence;
+            const intentProviderUsed = (intentResult as CoordinatedIntentResult | undefined)?.provider;
+            const intentRetryCount = (intentResult as CoordinatedIntentResult | undefined)?.retryCount;
+            const intentFallbackReason = (intentResult as CoordinatedIntentResult | undefined)?.fallbackReason;
+            this.latencyTracker.annotate(requestId, {
+                fallbackOccurred: timedOut,
+                profileFallbackReason: timedOut ? 'context_timeout' : undefined,
+            });
             if (timedOut) {
                 this.latencyTracker.markFallbackOccurred(requestId, 'context_timeout');
             }
@@ -1315,6 +1575,12 @@ export class IntelligenceEngine extends EventEmitter {
                     imagePaths,
                     whatToAnswerLLM: this.whatToAnswerLLM,
                     answerLLM: this.answerLLM,
+                    onEarlyReasoning: (text) => {
+                        if (!shouldSuppressVisibleWork()) {
+                            this.latencyTracker.markFirstStreamingUpdate(requestId);
+                            this.emit('suggested_answer_token', text, resolvedQuestion || 'inferred', intentConfidence);
+                        }
+                    },
                 });
                 if (shouldSuppressVisibleWork()) {
                     return abandonCurrentRequest();
@@ -1326,6 +1592,11 @@ export class IntelligenceEngine extends EventEmitter {
                         route: currentRouteForMetadata,
                         attemptedRoute,
                         fallbackOccurred: false,
+                        intentConfidence,
+                        intentProviderUsed,
+                        intentRetryCount,
+                        intentFallbackReason,
+                        prefetchedIntentUsed: preparationResult.prefetchedIntentUsed,
                         schemaVersion: 'conscious_mode_v1',
                         evidenceHash: this.computeEvidenceHash({
                             question: question || 'What to Answer',
@@ -1336,14 +1607,21 @@ export class IntelligenceEngine extends EventEmitter {
                         transcriptRevision: transcriptRevisionAtStart,
                         threadAction: activeThreadAction,
                         verifier: {
-                            deterministic: 'pass',
-                            provenance: 'pass',
+                            deterministic: consciousResult.verification.deterministic,
+                            judge: consciousResult.verification.judge,
+                            provenance: consciousResult.verification.provenance,
+                            reasons: consciousResult.verification.reasons,
                         },
                         cooldownSuppressedMs: metadataCooldownSuppressedMs,
                         cooldownReason: metadataCooldownReason,
                         contextItems: preparationResult.contextItems,
                     });
                     this.annotateLatencyQualityMetadata(requestId, metadata, preparationResult.contextItems);
+                    this.recordSessionEvent('conscious_verifier_result', {
+                        question: resolvedQuestion,
+                        verifier: metadata.verifier ?? null,
+                        route: currentRouteForMetadata,
+                    });
                     return consciousResponseCoordinator.completeStructuredAnswer({
                         requestId,
                         questionLabel: question || 'What to Answer',
@@ -1397,6 +1675,11 @@ export class IntelligenceEngine extends EventEmitter {
                     attemptedRoute,
                     fallbackOccurred: Boolean(lastFallbackReason),
                     fallbackReason: lastFallbackReason,
+                    intentConfidence,
+                    intentProviderUsed,
+                    intentRetryCount,
+                    intentFallbackReason,
+                    prefetchedIntentUsed: preparationResult.prefetchedIntentUsed,
                     schemaVersion: currentRouteForMetadata === 'conscious_answer' ? 'conscious_mode_v1' : 'standard_answer_v1',
                     evidenceHash: this.computeEvidenceHash({
                         question: question || 'What to Answer',
@@ -1494,6 +1777,11 @@ export class IntelligenceEngine extends EventEmitter {
                 attemptedRoute,
                 fallbackOccurred: Boolean(lastFallbackReason),
                 fallbackReason: lastFallbackReason,
+                intentConfidence,
+                intentProviderUsed,
+                intentRetryCount,
+                intentFallbackReason,
+                prefetchedIntentUsed: preparationResult.prefetchedIntentUsed,
                 schemaVersion: currentRouteForMetadata === 'conscious_answer' ? 'conscious_mode_v1' : 'standard_answer_v1',
                 evidenceHash: this.computeEvidenceHash({
                     question: question || 'What to Answer',
@@ -1519,6 +1807,21 @@ export class IntelligenceEngine extends EventEmitter {
 
             this.setMode('idle');
             return fullAnswer;
+            };
+
+            if (isRouteDirectorEnabled()) {
+                return await getRouteDirector().runTurn(
+                    {
+                        turnId: `wts-${requestSequence}`,
+                        transcriptRevision: transcriptRevisionAtStart,
+                        deadlineMs: Date.now() + WHAT_TO_SAY_ROUTE_DEADLINE_MS,
+                        abortSignal: whatToSayAbortController.signal,
+                        getCurrentTranscriptRevision: () => sourceUtteranceId ? transcriptRevisionAtStart : this.session.getTranscriptRevision(),
+                    },
+                    executeWhatToSay,
+                );
+            }
+            return await executeWhatToSay();
 
         } catch (error) {
             if (whatToSayAbortController.signal.aborted || requestSequence !== this.activeWhatToSayRequestId) {
@@ -1553,6 +1856,10 @@ export class IntelligenceEngine extends EventEmitter {
   setStealthContainmentActive(active: boolean): void {
     this.stealthContainmentActive = active;
     if (active) {
+      this.activeAuxiliaryRequestId += 1;
+      if (this.activeMode !== 'idle' && this.activeMode !== 'what_to_say') {
+        this.setMode('idle');
+      }
       this.cancelActiveWhatToSay('stealth_containment_active');
     }
   }
@@ -1563,18 +1870,20 @@ export class IntelligenceEngine extends EventEmitter {
      */
     async runFollowUp(intent: string, userRequest?: string): Promise<string | null> {
         console.log(`[IntelligenceEngine] runFollowUp called with intent: ${intent}`);
+        if (this.shouldBlockModeForStealthContainment('follow_up')) {
+            return null;
+        }
         const lastMsg = this.session.getLastAssistantMessage();
         if (!lastMsg) {
             console.warn('[IntelligenceEngine] No lastAssistantMessage found for follow-up');
             return null;
         }
 
-        this.setMode('follow_up');
+        const requestId = this.beginAuxiliaryMode('follow_up');
 
         try {
             if (!this.followUpLLM) {
                 console.error('[IntelligenceEngine] FollowUpLLM not initialized');
-                this.setMode('idle');
                 return null;
             }
 
@@ -1582,15 +1891,25 @@ export class IntelligenceEngine extends EventEmitter {
             const refinementRequest = userRequest || intent;
 
             let fullRefined = "";
+            const abortController = new AbortController();
             const stream = this.followUpLLM.generateStream(
                 lastMsg,
                 refinementRequest,
-                context
+                context,
+                abortController.signal
             );
 
             for await (const token of stream) {
+                if (this.shouldSuppressAuxiliaryMode(requestId)) {
+                    abortController.abort();
+                    return null;
+                }
                 this.emit('refined_answer_token', token, intent);
                 fullRefined += token;
+            }
+
+            if (this.shouldSuppressAuxiliaryMode(requestId)) {
+                return null;
             }
 
             if (fullRefined) {
@@ -1618,13 +1937,13 @@ export class IntelligenceEngine extends EventEmitter {
                 });
             }
 
-            this.setMode('idle');
             return fullRefined;
 
         } catch (error) {
             this.emit('error', error as Error, 'follow_up');
-            this.setMode('idle');
             return null;
+        } finally {
+            this.finishAuxiliaryMode(requestId, 'follow_up');
         }
     }
 
@@ -1634,28 +1953,38 @@ export class IntelligenceEngine extends EventEmitter {
      */
     async runRecap(): Promise<string | null> {
         console.log('[IntelligenceEngine] runRecap called');
-        this.setMode('recap');
+        if (this.shouldBlockModeForStealthContainment('recap')) {
+            return null;
+        }
+        const requestId = this.beginAuxiliaryMode('recap');
 
         try {
             if (!this.recapLLM) {
                 console.error('[IntelligenceEngine] RecapLLM not initialized');
-                this.setMode('idle');
                 return null;
             }
 
             const context = this.session.getFormattedContext(120);
             if (!context) {
                 console.warn('[IntelligenceEngine] No context available for recap');
-                this.setMode('idle');
                 return null;
             }
 
             let fullSummary = "";
-            const stream = this.recapLLM.generateStream(context);
+            const abortController = new AbortController();
+            const stream = this.recapLLM.generateStream(context, abortController.signal);
 
             for await (const token of stream) {
+                if (this.shouldSuppressAuxiliaryMode(requestId)) {
+                    abortController.abort();
+                    return null;
+                }
                 this.emit('recap_token', token);
                 fullSummary += token;
+            }
+
+            if (this.shouldSuppressAuxiliaryMode(requestId)) {
+                return null;
             }
 
             if (fullSummary) {
@@ -1668,13 +1997,13 @@ export class IntelligenceEngine extends EventEmitter {
                     answer: fullSummary
                 });
             }
-            this.setMode('idle');
             return fullSummary;
 
         } catch (error) {
             this.emit('error', error as Error, 'recap');
-            this.setMode('idle');
             return null;
+        } finally {
+            this.finishAuxiliaryMode(requestId, 'recap');
         }
     }
 
@@ -1684,19 +2013,20 @@ export class IntelligenceEngine extends EventEmitter {
      */
     async runFollowUpQuestions(): Promise<string | null> {
         console.log('[IntelligenceEngine] runFollowUpQuestions called');
-        this.setMode('follow_up_questions');
+        if (this.shouldBlockModeForStealthContainment('follow_up_questions')) {
+            return null;
+        }
+        const requestId = this.beginAuxiliaryMode('follow_up_questions');
 
         try {
             if (!this.followUpQuestionsLLM) {
                 console.error('[IntelligenceEngine] FollowUpQuestionsLLM not initialized');
-                this.setMode('idle');
                 return null;
             }
 
             const context = this.session.getFormattedContext(120);
             if (!context) {
                 console.warn('[IntelligenceEngine] No context available for follow-up questions');
-                this.setMode('idle');
                 return null;
             }
 
@@ -1704,8 +2034,15 @@ export class IntelligenceEngine extends EventEmitter {
             const stream = this.followUpQuestionsLLM.generateStream(context);
 
             for await (const token of stream) {
+                if (this.shouldSuppressAuxiliaryMode(requestId)) {
+                    return null;
+                }
                 this.emit('follow_up_questions_token', token);
                 fullQuestions += token;
+            }
+
+            if (this.shouldSuppressAuxiliaryMode(requestId)) {
+                return null;
             }
 
             if (fullQuestions) {
@@ -1717,13 +2054,13 @@ export class IntelligenceEngine extends EventEmitter {
                     answer: fullQuestions
                 });
             }
-            this.setMode('idle');
             return fullQuestions;
 
         } catch (error) {
             this.emit('error', error as Error, 'follow_up_questions');
-            this.setMode('idle');
             return null;
+        } finally {
+            this.finishAuxiliaryMode(requestId, 'follow_up_questions');
         }
     }
 
@@ -1732,19 +2069,26 @@ export class IntelligenceEngine extends EventEmitter {
      * Explicit bypass when auto-detection fails
      */
     async runManualAnswer(question: string): Promise<string | null> {
+        if (this.shouldBlockModeForStealthContainment('manual')) {
+            return null;
+        }
         this.emit('manual_answer_started');
-        this.setMode('manual');
+        const requestId = this.beginAuxiliaryMode('manual');
 
         try {
             if (!this.answerLLM) {
-                this.setMode('idle');
                 return null;
             }
 
             const context = this.session.getFormattedContext(120);
-            const answer = await this.answerLLM.generate(question, context);
+            const answerResult = await this.answerLLM.generate(question, context);
 
-            if (answer) {
+            if (this.shouldSuppressAuxiliaryMode(requestId)) {
+                return null;
+            }
+
+            if (answerResult.success) {
+                const answer = answerResult.data;
                 this.session.addAssistantMessage(answer);
                 this.emit('manual_answer_result', answer, question);
 
@@ -1754,15 +2098,20 @@ export class IntelligenceEngine extends EventEmitter {
                     question: question,
                     answer: answer
                 });
+                
+                this.setMode('idle');
+                return answer;
+            } else {
+                console.warn('[INTELLIGENCE] Manual answer failed:', answerResult.error);
+                this.setMode('idle');
+                return null;
             }
-
-            this.setMode('idle');
-            return answer;
 
         } catch (error) {
             this.emit('error', error as Error, 'manual');
-            this.setMode('idle');
             return null;
+        } finally {
+            this.finishAuxiliaryMode(requestId, 'manual');
         }
     }
 
@@ -1792,14 +2141,57 @@ export class IntelligenceEngine extends EventEmitter {
     }
   }
 
+  private shouldBlockModeForStealthContainment(
+    mode: Exclude<IntelligenceMode, 'idle' | 'what_to_say' | 'reasoning_first'>,
+  ): boolean {
+    if (!this.stealthContainmentActive) {
+      return false;
+    }
+
+    console.warn(`[IntelligenceEngine] Suppressing ${mode.replace(/_/g, '-')} while stealth containment is active.`);
+    return true;
+  }
+
+  private beginAuxiliaryMode(
+    mode: Exclude<IntelligenceMode, 'idle' | 'what_to_say' | 'reasoning_first'>,
+  ): number {
+    const requestId = ++this.activeAuxiliaryRequestId;
+    this.setMode(mode);
+    return requestId;
+  }
+
+  private shouldSuppressAuxiliaryMode(requestId: number): boolean {
+    return this.stealthContainmentActive || requestId !== this.activeAuxiliaryRequestId;
+  }
+
+  private finishAuxiliaryMode(
+    requestId: number,
+    mode: Exclude<IntelligenceMode, 'idle' | 'what_to_say' | 'reasoning_first'>,
+  ): void {
+    if (requestId === this.activeAuxiliaryRequestId && this.activeMode === mode) {
+      this.setMode('idle');
+    }
+  }
+
   /**
   * Reset engine state (cancels any in-flight operations)
   */
   reset(): void {
     this.activeMode = 'idle';
     this.lastTriggerByCooldownKey.clear();
-    this.cooldownQueuesByKey.clear();
+    this.pendingCooldownTriggers.clear();
     this.stealthContainmentActive = false;
+    this.activeAuxiliaryRequestId = 0;
+    this.consciousOrchestrator = this.buildConsciousOrchestrator();
+    this.consciousContextComposer = new ConsciousContextComposer();
+    this.consciousIntentService = new ConsciousIntentService();
+    this.consciousPreparationCoordinator = new ConsciousPreparationCoordinator(
+      this.session,
+      this.consciousOrchestrator,
+      this.consciousContextComposer,
+      this.consciousIntentService,
+    );
+    this.consciousResponseFingerprinter.clear();
     this.cancelActiveWhatToSay('reset');
     if (this.assistCancellationToken) {
       this.assistCancellationToken.abort();

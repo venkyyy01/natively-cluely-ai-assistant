@@ -228,6 +228,7 @@ function runReleaseGate(options = {}) {
   const baselineMetricsReader = options.readBaselineMetrics ?? readBaselineMetrics;
   const benchmarkRunner = options.runBenchmarksForReleaseGate ?? runBenchmarksForReleaseGate;
   const helperValidator = options.validatePackagedHelperLaunch ?? validatePackagedHelperLaunch;
+  const helperTargetResolver = options.resolvePackagedHelperLaunchTarget ?? resolvePackagedHelperLaunchTarget;
   const soakProfile = env.NATIVELY_RELEASE_GATE_PROFILE === 'prerelease' ? 'prerelease' : 'ci';
 
   console.log(`[release-gate] profile=${soakProfile}`);
@@ -243,7 +244,7 @@ function runReleaseGate(options = {}) {
   const baselineMetrics = baselineMetricsReader(options.cwd ?? process.cwd());
   assertMetricsWithinGate(currentMetrics, baselineMetrics, env);
 
-  const packagedHelperLaunchTarget = resolvePackagedHelperLaunchTarget(env, {
+  const packagedHelperLaunchTarget = helperTargetResolver(env, {
     cwd: options.cwd,
   });
   if (packagedHelperLaunchTarget) {

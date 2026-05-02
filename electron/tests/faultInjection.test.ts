@@ -8,6 +8,8 @@ import { SttSupervisor } from '../runtime/SttSupervisor';
 import { StealthSupervisor } from '../runtime/StealthSupervisor';
 import { RuntimeBudgetScheduler } from '../runtime/RuntimeBudgetScheduler';
 import { WorkerPool } from '../runtime/WorkerPool';
+import { ConsciousAccelerationOrchestrator } from '../conscious/ConsciousAccelerationOrchestrator';
+import { DropFrameMetric } from '../audio/dropMetrics';
 
 test('fault injection: stealth heartbeat miss emits fail-closed fault and sheds critical lanes', async () => {
   const bus = new SupervisorBus({ error() {} });
@@ -196,4 +198,108 @@ test('fault injection: stealth heartbeat loss is reported via proactive helper f
 
   assert.deepEqual(faults, ['stealth-heartbeat-missed']);
   assert.deepEqual(calls, [true]);
+});
+
+test('NAT-084: speculative invalidation between preview and finalize yields no suggested_answer', async () => {
+  const orchestrator = new ConsciousAccelerationOrchestrator({
+    budgetScheduler: { shouldAdmitSpeculation: () => true },
+    intentClassifier: async () => ({
+      intent: 'coding',
+      confidence: 0.95,
+      answerShape: 'Provide a full implementation.',
+    }),
+  });
+  orchestrator.setEnabled(true);
+
+  let generatorAborted = false;
+  orchestrator.setSpeculativeExecutor(async function* (_query, _revision, abortSignal) {
+    abortSignal.addEventListener('abort', () => { generatorAborted = true; }, { once: true });
+    yield 'partial ';
+    await new Promise<void>((resolve) => {
+      abortSignal.addEventListener('abort', () => resolve(), { once: true });
+    });
+  });
+
+  const question = 'Implement a retry-safe worker loop.';
+  orchestrator.noteTranscriptText('interviewer', question);
+  orchestrator.updateTranscriptSegments([
+    { speaker: 'interviewer', text: question, timestamp: Date.now() },
+  ], 42);
+  await (orchestrator as any).maybePrefetchIntent();
+  await (orchestrator as any).maybeStartSpeculativeAnswer();
+
+  // Retrieve preview to establish the entry
+  await orchestrator.getSpeculativeAnswerPreview(question, 42, 50);
+
+  // Invalidate speculation before finalize by changing transcript revision
+  orchestrator.updateTranscriptSegments([
+    { speaker: 'interviewer', text: 'new question', timestamp: Date.now() },
+  ], 99);
+
+  const key = (orchestrator as any).buildSpeculativeKey(question, 42);
+  const result = await orchestrator.finalizeSpeculativeAnswer(key, 600);
+
+  // After invalidation, finalize should return null (abandoned), never the partial text
+  assert.equal(result, null, 'finalize after invalidation must return null, never a suggested_answer');
+  assert.equal(generatorAborted, true, 'generator should be aborted');
+});
+
+test('NAT-084: STT frame drops surface as cumulative metrics', () => {
+  const metric = new DropFrameMetric({
+    provider: 'deepgram',
+    flushIntervalMs: 60_000,
+    logger: { warn() {} },
+  });
+
+  metric.recordDrop(3);
+  metric.recordDrop(7);
+
+  let counters = metric.getCounters();
+  assert.equal(counters.windowDropped, 10);
+  assert.equal(counters.cumulativeDropped, 10);
+
+  metric.recordDrop(5);
+  counters = metric.getCounters();
+  assert.equal(counters.cumulativeDropped, 15);
+
+  metric.stop(false);
+});
+
+test('NAT-084: helper crash mid-stream recovers via fresh spawn', async () => {
+  // Simulate a helper-host pattern: first spawn crashes mid-stream,
+  // second spawn succeeds. The consumer must receive the successful result.
+  let spawnCount = 0;
+
+  const mockHelperHost = {
+    async *send(request: string): AsyncGenerator<string> {
+      spawnCount += 1;
+      if (spawnCount === 1) {
+        yield 'partial';
+        throw new Error('helper crash');
+      }
+      yield `success for: ${request}`;
+    },
+  };
+
+  async function resilientStream(request: string): Promise<string> {
+    const maxRetries = 2;
+    for (let attempt = 1; attempt <= maxRetries; attempt += 1) {
+      try {
+        const chunks: string[] = [];
+        for await (const chunk of mockHelperHost.send(request)) {
+          chunks.push(chunk);
+        }
+        return chunks.join('');
+      } catch (err: any) {
+        if (attempt >= maxRetries) throw err;
+        // Simulate restart delay
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+    }
+    throw new Error('unreachable');
+  }
+
+  const result = await resilientStream('test-request');
+  assert.equal(result, 'success for: test-request');
+  assert.equal(spawnCount, 2, 'helper should be respawned once after crash');
 });

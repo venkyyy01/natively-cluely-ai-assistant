@@ -285,6 +285,30 @@ test('stealth containment cancels in-flight what-to-say work before any answer i
   assert.equal(session.getLastAssistantMessage(), null);
 });
 
+test('stealth containment blocks all non-primary output modes while containment is active', async () => {
+  const session = new SessionTracker();
+  const llmHelper = new ImmediateStreamingLLMHelper();
+  const engine = new IntelligenceEngine(llmHelper as any, session);
+
+  addTurn(session, 'interviewer', 'How would you summarize this design?', Date.now() - 10);
+  session.addAssistantMessage('Start with the critical path and then discuss backpressure handling.');
+  (engine as any).setStealthContainmentActive(true);
+
+  const assist = await engine.runAssistMode();
+  const followUp = await engine.runFollowUp('shorten', 'Make it shorter');
+  const recap = await engine.runRecap();
+  const followUpQuestions = await engine.runFollowUpQuestions();
+  const manual = await engine.runManualAnswer('How would you answer this?');
+
+  assert.equal(assist, null);
+  assert.equal(followUp, null);
+  assert.equal(recap, null);
+  assert.equal(followUpQuestions, null);
+  assert.equal(manual, null);
+  assert.equal(llmHelper.calls, 0);
+  assert.equal(session.getLastAssistantMessage(), 'Start with the critical path and then discuss backpressure handling.');
+});
+
 test('cooldown queue aborts after the maximum defer depth instead of recursively growing the stack', async () => {
   const session = new SessionTracker();
   const llmHelper = new ImmediateStreamingLLMHelper();

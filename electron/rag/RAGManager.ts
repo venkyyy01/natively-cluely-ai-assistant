@@ -286,30 +286,32 @@ export class RAGManager {
     }
 
     /**
-     * Delete RAG data for a meeting
+     * Delete RAG data for a meeting (atomic transaction)
      */
     deleteMeetingData(meetingId: string): void {
-        // 1. Delete from vector store (chunks and summaries)
-        this.vectorStore.deleteChunksForMeeting(meetingId);
-        
-        // 2. Clear embedding queue for this meeting to prevent "Chunk not found" errors on re-processing
-        try {
-            const info = this.db.prepare('DELETE FROM embedding_queue WHERE meeting_id = ?').run(meetingId);
-            if (info.changes > 0) {
-                console.log(`[RAGManager] Cleared ${info.changes} items from embedding_queue for meeting ${meetingId}`);
+        this.db.transaction(() => {
+            // 1. Clear embedding queue FIRST to prevent foreign-key issues
+            try {
+                const info = this.db.prepare('DELETE FROM embedding_queue WHERE meeting_id = ?').run(meetingId);
+                if (info.changes > 0) {
+                    console.log(`[RAGManager] Cleared ${info.changes} items from embedding_queue for meeting ${meetingId}`);
+                }
+            } catch (e) {
+                console.warn(`[RAGManager] Failed to clear embedding_queue for meeting ${meetingId}`, e);
             }
-        } catch (e) {
-            console.warn(`[RAGManager] Failed to clear embedding_queue for meeting ${meetingId}`, e);
-        }
-        
-        // 3. Clean up transient meeting row if it was a live session
-        try {
-            if (meetingId === 'live-meeting-current') {
-                this.db.prepare('DELETE FROM meetings WHERE id = ?').run(meetingId);
+
+            // 2. Delete from vector store (chunks, summaries, vec entries)
+            this.vectorStore.deleteChunksForMeeting(meetingId);
+
+            // 3. Clean up transient meeting row if it was a live session
+            try {
+                if (meetingId === 'live-meeting-current') {
+                    this.db.prepare('DELETE FROM meetings WHERE id = ?').run(meetingId);
+                }
+            } catch (e) {
+                console.warn('[RAGManager] Failed to delete transient meeting row', e);
             }
-        } catch (e) {
-            console.warn('[RAGManager] Failed to delete transient meeting row', e);
-        }
+        })();
     }
 
     /**

@@ -20,6 +20,7 @@ import { EventEmitter } from 'events';
 import WebSocket from 'ws';
 import { RECOGNITION_LANGUAGES } from '../config/languages';
 import { resampleToMonoPcm16 } from './pcm';
+import { DropFrameMetric } from './dropMetrics';
 
 const SONIOX_WEBSOCKET_URL = 'wss://stt-rt.soniox.com/transcribe-websocket';
 const RECONNECT_BASE_DELAY_MS = 1000;
@@ -45,6 +46,8 @@ export class SonioxStreamingSTT extends EventEmitter {
     private pendingFinalText = '';
     
     private buffer: Buffer[] = [];
+    // NAT-021: visible drop telemetry for backpressure.
+    private dropMetric = new DropFrameMetric({ provider: 'soniox' });
     private isConnecting = false;
 
     constructor(apiKey: string) {
@@ -104,6 +107,7 @@ export class SonioxStreamingSTT extends EventEmitter {
         this.isActive = true;
         this.shouldReconnect = true;
         this.reconnectAttempts = 0;
+        this.dropMetric.start(); // NAT-021
         this.connect();
     }
 
@@ -129,6 +133,7 @@ export class SonioxStreamingSTT extends EventEmitter {
         this.configSent = false;
         this.pendingFinalText = '';
         this.buffer = [];
+        this.dropMetric.stop(); // NAT-021
         console.log('[SonioxStreaming] Stopped');
     }
 
@@ -146,7 +151,10 @@ export class SonioxStreamingSTT extends EventEmitter {
 
         if (!this.ws || this.ws.readyState !== WebSocket.OPEN || !this.configSent) {
             this.buffer.push(chunk);
-            if (this.buffer.length > 500) this.buffer.shift(); // Cap buffer size
+            if (this.buffer.length > 500) {
+                this.buffer.shift(); // Cap buffer size
+                this.dropMetric.recordDrop(); // NAT-021
+            }
 
             if (!this.isConnecting && this.shouldReconnect && !this.reconnectTimer) {
                 console.log('[SonioxStreaming] WS not ready. Lazy connecting on new audio...');

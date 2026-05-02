@@ -112,6 +112,7 @@ export interface MacosLayer3ResponseEnvelope<T> {
   presentationAllowed: boolean;
   blockers: MacosLayer3Blocker[];
   data: T;
+  nonce?: string;
 }
 
 export interface MacosLayer3CapabilityReport {

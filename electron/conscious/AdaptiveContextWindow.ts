@@ -20,6 +20,8 @@ export interface ContextSelectionConfig {
   embeddingModel?: string;
 }
 
+const MIN_RECENT_TURNS = 4;
+
 export class AdaptiveContextWindow {
   private currentPhase: InterviewPhase = 'requirements_gathering';
   private tokenCounter: TokenCounter;
@@ -42,17 +44,35 @@ export class AdaptiveContextWindow {
       return this.selectContextLegacy(candidates, config.tokenBudget);
     }
 
+    // Sort by recency descending (most recent first) for force-include
+    const byRecency = [...candidates].sort((a, b) => b.timestamp - a.timestamp);
+
+    const selected: ContextEntry[] = [];
+    let usedTokens = 0;
+    const forceIncluded = new Set<ContextEntry>();
+
+    // Phase 1: force-include the last MIN_RECENT_TURNS regardless of score
+    for (let i = 0; i < Math.min(MIN_RECENT_TURNS, byRecency.length); i++) {
+      const entry = byRecency[i];
+      const entryTokens = this.estimateTokens(entry.text);
+      if (usedTokens + entryTokens <= config.tokenBudget) {
+        selected.push(entry);
+        usedTokens += entryTokens;
+        forceIncluded.add(entry);
+      }
+    }
+
+    // Phase 2: score remaining candidates and fill by descending score
+    const remaining = byRecency.filter((entry) => !forceIncluded.has(entry));
+
     const scored = await Promise.all(
-      candidates.map(async (entry) => ({
+      remaining.map(async (entry) => ({
         entry,
         score: this.computeScore(entry, query, queryEmbedding, config),
       }))
     );
 
     scored.sort((a, b) => b.score - a.score);
-
-    const selected: ContextEntry[] = [];
-    let usedTokens = 0;
 
     for (const { entry } of scored) {
       const entryTokens = this.estimateTokens(entry.text);

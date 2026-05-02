@@ -2,9 +2,13 @@
 // Intelligent caching layer with LRU eviction and semantic similarity matching
 
 import { createHash } from 'crypto';
+import type { Cache, CacheGetOptions, CacheSetOptions, CacheStatsSnapshot, SemanticBindContext } from '../cache/Cache';
+import { buildSemanticBindKeyPrefix } from '../cache/Cache';
 
 export interface CacheEntry<T> {
   key: string;
+  /** Prefix from `buildSemanticBindKeyPrefix` — scopes semantic search and eviction. */
+  bindPrefix: string;
   query: string;
   normalizedQuery: string;
   embedding?: number[];
@@ -42,7 +46,7 @@ const DEFAULT_CONFIG: ConsciousCacheConfig = {
   maxMemoryMB: 50,
 };
 
-export class ConsciousCache<T> {
+export class ConsciousCache<T> implements Cache<string, T> {
   private cache = new Map<string, CacheEntry<T>>();
   private config: ConsciousCacheConfig;
   private stats = {
@@ -50,9 +54,65 @@ export class ConsciousCache<T> {
     misses: 0,
     evictions: 0,
   };
+  private currentMemoryBytes = 0;
 
   constructor(config: Partial<ConsciousCacheConfig> = {}) {
     this.config = { ...DEFAULT_CONFIG, ...config };
+  }
+
+  private defaultBind(): SemanticBindContext {
+    return { revision: 0, sessionId: 'default' };
+  }
+
+  private resolveBind(options?: { bind?: SemanticBindContext }): SemanticBindContext {
+    return options?.bind ?? this.defaultBind();
+  }
+
+  private bindPrefixFor(bind: SemanticBindContext): string {
+    return buildSemanticBindKeyPrefix(bind.revision, bind.sessionId);
+  }
+
+  private storageKey(query: string, bind: SemanticBindContext): string {
+    return `${this.bindPrefixFor(bind)}${this.generateKey(query)}`;
+  }
+
+  private estimateEntryBytes(entry: CacheEntry<T>): number {
+    const dataStr = typeof entry.data === 'string' ? entry.data : JSON.stringify(entry.data);
+    let bytes = (entry.query.length + entry.normalizedQuery.length + dataStr.length + entry.key.length + entry.bindPrefix.length) * 2;
+    bytes += entry.embedding ? entry.embedding.length * 4 : 0;
+    bytes += entry.tags.join(',').length * 2;
+    return bytes + 128;
+  }
+
+  private evictEntryByStorageKey(storageKey: string): void {
+    const entry = this.cache.get(storageKey);
+    if (!entry) {
+      return;
+    }
+    this.currentMemoryBytes -= this.estimateEntryBytes(entry);
+    this.cache.delete(storageKey);
+    this.stats.evictions++;
+  }
+
+  private evictLruForMemory(): void {
+    const maxBytes = this.config.maxMemoryMB * 1024 * 1024;
+    if (this.currentMemoryBytes <= maxBytes) {
+      return;
+    }
+
+    let oldest: CacheEntry<T> | null = null;
+    let oldestKey = '';
+
+    for (const [key, entry] of this.cache) {
+      if (!oldest || entry.lastAccessed < oldest.lastAccessed) {
+        oldest = entry;
+        oldestKey = key;
+      }
+    }
+
+    if (oldestKey) {
+      this.evictEntryByStorageKey(oldestKey);
+    }
   }
 
   /**
@@ -99,14 +159,18 @@ export class ConsciousCache<T> {
   /**
    * Find similar cached entries using semantic matching
    */
-  private findSimilarEntry(query: string, embedding?: number[]): CacheEntry<T> | null {
+  private findSimilarEntry(query: string, embedding: number[] | undefined, bind: SemanticBindContext): CacheEntry<T> | null {
     if (!this.config.enableSemanticMatching) return null;
 
     const normalizedQuery = this.normalizeQuery(query);
+    const prefix = this.bindPrefixFor(bind);
     let bestMatch: CacheEntry<T> | null = null;
     let bestScore = 0;
 
     for (const entry of this.cache.values()) {
+      if (entry.bindPrefix !== prefix) {
+        continue;
+      }
       // Check exact normalized match first
       if (entry.normalizedQuery === normalizedQuery) {
         return entry;
@@ -153,12 +217,11 @@ export class ConsciousCache<T> {
   }
 
   /**
-   * Evict oldest entries (LRU)
+   * Evict oldest entries (LRU) by count
    */
   private evictIfNeeded(): void {
     if (this.cache.size < this.config.maxSize) return;
 
-    // Find oldest entry by lastAccessed
     let oldest: CacheEntry<T> | null = null;
     let oldestKey = '';
 
@@ -170,22 +233,31 @@ export class ConsciousCache<T> {
     }
 
     if (oldestKey) {
-      this.cache.delete(oldestKey);
-      this.stats.evictions++;
+      this.evictEntryByStorageKey(oldestKey);
     }
   }
 
   /**
    * Get entry from cache
    */
-  get(query: string, embedding?: number[]): T | null {
-    // Try exact match first
-    const key = this.generateKey(query);
-    let entry = this.cache.get(key);
+  get(query: string, embeddingOrOptions?: number[] | CacheGetOptions): T | null {
+    let embedding: number[] | undefined;
+    let bind = this.defaultBind();
+    if (embeddingOrOptions && typeof embeddingOrOptions === 'object' && !Array.isArray(embeddingOrOptions)) {
+      embedding = embeddingOrOptions.embedding;
+      if (embeddingOrOptions.bind) {
+        bind = embeddingOrOptions.bind;
+      }
+    } else {
+      embedding = embeddingOrOptions as number[] | undefined;
+    }
 
-    // Try semantic match if no exact match
+    const storageKey = this.storageKey(query, bind);
+    let entry = this.cache.get(storageKey);
+
     if (!entry && this.config.enableSemanticMatching) {
-      entry = this.findSimilarEntry(query, embedding);
+      const similar = this.findSimilarEntry(query, embedding, bind);
+      entry = similar ?? undefined;
     }
 
     if (!entry) {
@@ -194,17 +266,27 @@ export class ConsciousCache<T> {
     }
 
     if (this.isExpired(entry)) {
-      this.cache.delete(entry.key);
+      this.evictEntryByStorageKey(entry.key);
       this.stats.misses++;
       return null;
     }
 
-    // Update access stats
     entry.accessCount++;
     entry.lastAccessed = Date.now();
     this.stats.hits++;
 
     return entry.data;
+  }
+
+  findSimilar(query: string, embedding: number[], bind: SemanticBindContext): T | null {
+    const hit = this.findSimilarEntry(query, embedding, bind);
+    if (!hit || this.isExpired(hit)) {
+      return null;
+    }
+    hit.accessCount++;
+    hit.lastAccessed = Date.now();
+    this.stats.hits++;
+    return hit.data;
   }
 
   /**
@@ -213,20 +295,21 @@ export class ConsciousCache<T> {
   set(
     query: string,
     data: T,
-    options: {
-      ttlMs?: number;
-      embedding?: number[];
+    options: CacheSetOptions & {
       phase?: string;
       tags?: string[];
-    } = {}
+    } = {},
   ): void {
+    const bind = this.resolveBind(options);
+    const storageKey = this.storageKey(query, bind);
+    const normalizedQuery = this.normalizeQuery(query);
+    const bindPrefix = this.bindPrefixFor(bind);
+
     this.evictIfNeeded();
 
-    const key = this.generateKey(query);
-    const normalizedQuery = this.normalizeQuery(query);
-
-    const entry: CacheEntry<T> = {
-      key,
+    const newEntry: CacheEntry<T> = {
+      key: storageKey,
+      bindPrefix,
       query,
       normalizedQuery,
       embedding: options.embedding,
@@ -239,7 +322,51 @@ export class ConsciousCache<T> {
       tags: options.tags ?? [],
     };
 
-    this.cache.set(key, entry);
+    const newBytes = this.estimateEntryBytes(newEntry);
+    const existing = this.cache.get(storageKey);
+    if (existing) {
+      this.currentMemoryBytes -= this.estimateEntryBytes(existing);
+    }
+
+    const maxBytes = this.config.maxMemoryMB * 1024 * 1024;
+    while (this.cache.size > 0 && this.currentMemoryBytes + newBytes > maxBytes) {
+      const before = this.currentMemoryBytes;
+      this.evictLruForMemory();
+      if (this.currentMemoryBytes === before) {
+        break;
+      }
+    }
+
+    this.cache.set(storageKey, newEntry);
+    this.currentMemoryBytes += newBytes;
+
+    while (this.cache.size > 1 && this.currentMemoryBytes > maxBytes) {
+      const before = this.currentMemoryBytes;
+      this.evictLruForMemory();
+      if (this.currentMemoryBytes === before) {
+        break;
+      }
+    }
+  }
+
+  delete(query: string, options?: { bind?: SemanticBindContext }): boolean {
+    const storageKey = this.storageKey(query, this.resolveBind(options));
+    if (!this.cache.has(storageKey)) {
+      return false;
+    }
+    this.evictEntryByStorageKey(storageKey);
+    return true;
+  }
+
+  evictByPrefix(prefix: string): number {
+    let count = 0;
+    for (const k of [...this.cache.keys()]) {
+      if (k.startsWith(prefix)) {
+        this.evictEntryByStorageKey(k);
+        count++;
+      }
+    }
+    return count;
   }
 
   /**
@@ -249,7 +376,7 @@ export class ConsciousCache<T> {
     let count = 0;
     for (const [key, entry] of this.cache) {
       if (entry.tags.includes(tag)) {
-        this.cache.delete(key);
+        this.evictEntryByStorageKey(key);
         count++;
       }
     }
@@ -263,7 +390,7 @@ export class ConsciousCache<T> {
     let count = 0;
     for (const [key, entry] of this.cache) {
       if (entry.phase === phase) {
-        this.cache.delete(key);
+        this.evictEntryByStorageKey(key);
         count++;
       }
     }
@@ -275,22 +402,22 @@ export class ConsciousCache<T> {
    */
   clear(): void {
     this.cache.clear();
+    this.currentMemoryBytes = 0;
     this.stats = { hits: 0, misses: 0, evictions: 0 };
   }
 
   /**
    * Get cache statistics
    */
-  getStats(): CacheStats {
+  getStats(): CacheStatsSnapshot {
     const total = this.stats.hits + this.stats.misses;
-    const memoryBytes = JSON.stringify([...this.cache.values()]).length * 2; // Rough estimate
 
     return {
+      size: this.cache.size,
+      memoryBytes: this.currentMemoryBytes,
       hits: this.stats.hits,
       misses: this.stats.misses,
       evictions: this.stats.evictions,
-      size: this.cache.size,
-      memoryBytes,
       hitRate: total > 0 ? this.stats.hits / total : 0,
     };
   }
@@ -309,7 +436,7 @@ export class ConsciousCache<T> {
     let count = 0;
     for (const [key, entry] of this.cache) {
       if (this.isExpired(entry)) {
-        this.cache.delete(key);
+        this.evictEntryByStorageKey(key);
         count++;
       }
     }

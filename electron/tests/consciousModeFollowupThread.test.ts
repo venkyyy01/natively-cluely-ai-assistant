@@ -4,8 +4,61 @@ import { IntelligenceEngine } from '../IntelligenceEngine';
 import { SessionTracker } from '../SessionTracker';
 import { AnswerLatencyTracker } from '../latency/AnswerLatencyTracker';
 
+// NAT-004 / audit A-4: the FakeLLMHelper responses below name a "10x" metric
+// in the third reasoning turn. ConsciousProvenanceVerifier now fails closed on
+// metric claims with no semantic grounding, so we have to expose a profile
+// here that grounds the same vocabulary ("10x", "tenant", "partitioning",
+// "rebalancing") the model is going to mention.
+const FOLLOWUP_THREAD_PROFILE = {
+  identity: {
+    name: 'Jane Doe',
+    role: 'Senior Backend Engineer',
+    summary:
+      'Built multi-tenant analytics with tenant partitioning. Promoted hot tenants ' +
+      'to dedicated partitions and scaled write throughput 10x by rebalancing.',
+  },
+  skills: ['multi-tenant partitioning', 'rebalancing', 'shard mapping'],
+  projects: [
+    {
+      name: 'Tenant Analytics Platform',
+      description:
+        'Multi-tenant analytics with tenant partitioning, hot-tenant promotion, ' +
+        'asynchronous rebalancing, and 10x scaling experience on the write path.',
+      technologies: ['partitioning', 'tenant'],
+    },
+  ],
+  experience: [
+    {
+      company: 'Acme',
+      role: 'Senior Backend Engineer',
+      bullets: [
+        'Scaled write throughput 10x by promoting hot tenants to dedicated partitions.',
+        'Designed shard-mapping abstraction for tenant-aware repositories.',
+      ],
+    },
+  ],
+  activeJD: {
+    title: 'Staff Backend Engineer',
+    company: 'ExampleCorp',
+    technologies: ['partitioning', 'tenant'],
+    requirements: ['Design tenant-aware analytics with rebalancing'],
+    keywords: ['scalability', 'tenant', 'partitioning', '10x', 'rebalancing'],
+  },
+};
+
+function buildFollowupThreadKnowledgeOrchestrator() {
+  return {
+    getStatus: () => ({ hasResume: true, hasActiveJD: true, activeMode: true }),
+    getProfileData: () => FOLLOWUP_THREAD_PROFILE,
+  };
+}
+
 class FakeLLMHelper {
   private callIndex = 0;
+
+  getKnowledgeOrchestrator() {
+    return buildFollowupThreadKnowledgeOrchestrator();
+  }
 
   async *streamChat(message: string): AsyncGenerator<string> {
     this.callIndex += 1;
@@ -206,6 +259,10 @@ test('Conscious Mode continuation discards stale follow-up work when transcript 
   class DelayedFollowupHelper {
     private callIndex = 0;
 
+    getKnowledgeOrchestrator() {
+      return buildFollowupThreadKnowledgeOrchestrator();
+    }
+
     async *streamChat(message: string): AsyncGenerator<string> {
       this.callIndex += 1;
 
@@ -264,7 +321,12 @@ test('Conscious Mode continuation discards stale follow-up work when transcript 
 
   const result = await pending;
 
-  assert.equal(result, 'Could you repeat that? I want to make sure I address your question properly.');
+  // NAT-007 / audit A-7: the engine now snapshots transcriptRevision at the
+  // start of each request and abandons mid-stream when the user moves on.
+  // `addAssistantMessage` above bumps the revision, so the in-flight stale
+  // continuation is suppressed cleanly — the contract is "say nothing" rather
+  // than "ship a confused fallback string back to the user".
+  assert.equal(result, null);
   assert.deepEqual(session.getActiveReasoningThread(), before);
   assert.equal(session.getLatestConsciousResponse()?.openingReasoning, before?.response.openingReasoning);
 });

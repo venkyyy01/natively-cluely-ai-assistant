@@ -13,6 +13,24 @@ test('PrivacyShieldState activates when capture-risk warnings are present', () =
   );
 });
 
+test('PrivacyShieldState treats SCStream and persistent capture-tool warnings as capture-risk warnings', () => {
+  assert.deepEqual(
+    derivePrivacyShieldState({ warnings: ['scstream_capture_detected'] }),
+    {
+      active: true,
+      reason: 'Sensitive content hidden while capture risk is detected.',
+    },
+  );
+
+  assert.deepEqual(
+    derivePrivacyShieldState({ warnings: ['capture_tools_still_running'] }),
+    {
+      active: true,
+      reason: 'Sensitive content hidden while capture risk is detected.',
+    },
+  );
+});
+
 test('PrivacyShieldState activates on stealth faults until protection is restored', () => {
   assert.deepEqual(
     derivePrivacyShieldState({ faultReason: 'stealth heartbeat missed' }),
@@ -23,9 +41,55 @@ test('PrivacyShieldState activates on stealth faults until protection is restore
   );
 });
 
-test('PrivacyShieldState ignores non-capture degradation warnings', () => {
+test('PrivacyShieldState activates while startup visibility intent is protected', () => {
+  assert.deepEqual(
+    derivePrivacyShieldState({ visibilityIntent: 'protected_shield' }),
+    {
+      active: true,
+      reason: 'Sensitive content hidden while privacy mode is active.',
+    },
+  );
+});
+
+test('PrivacyShieldState keeps local controls visible for invisible mode safe-controls intent', () => {
+  assert.deepEqual(
+    derivePrivacyShieldState({ visibilityIntent: 'visible_safe_controls', captureProtectionEnabled: true }),
+    {
+      active: false,
+      reason: null,
+    },
+  );
+});
+
+test('PrivacyShieldState activates for enhanced stealth degradation warnings', () => {
   assert.deepEqual(
     derivePrivacyShieldState({ warnings: ['private_api_failed'] }),
+    {
+      active: true,
+      reason: 'Sensitive content hidden while capture risk is detected.',
+    },
+  );
+
+  assert.deepEqual(
+    derivePrivacyShieldState({ warnings: ['virtual_display_failed'] }),
+    {
+      active: true,
+      reason: 'Sensitive content hidden while capture risk is detected.',
+    },
+  );
+
+  assert.deepEqual(
+    derivePrivacyShieldState({ warnings: ['virtual_display_exhausted'] }),
+    {
+      active: true,
+      reason: 'Sensitive content hidden while capture risk is detected.',
+    },
+  );
+});
+
+test('PrivacyShieldState ignores unrelated non-capture warnings', () => {
+  assert.deepEqual(
+    derivePrivacyShieldState({ warnings: ['unrelated_warning'] }),
     {
       active: false,
       reason: null,

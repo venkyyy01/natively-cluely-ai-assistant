@@ -9,7 +9,7 @@ Accepted
 The app currently classifies interviewer intent (behavioral, coding, deep_dive, general, etc.) using a three-tier path in `electron/llm/IntentClassifier.ts`:
 
 1. Regex fast path (`detectIntentByPattern`)
-2. Local zero-shot model (MobileBERT MNLI)
+2. Local zero-shot model (DeBERTa-v3-small MNLI)
 3. Context heuristic fallback
 
 In real STT traffic, regex-first routing is brittle and can misclassify questions that are semantically clear to a model but lexically noisy or phrased unexpectedly. This affects conscious-mode prompt selection and final answer quality.
@@ -33,7 +33,7 @@ Requirements from product direction:
 
 ## Considered Options
 
-### Option 1: Keep current regex+MobileBERT pipeline only
+### Option 1: Keep current regex+DeBERTa pipeline only
 
 - Pros: no new platform bridge, low implementation effort.
 - Cons: known misclassification risk persists; does not satisfy Apple-first requirement.
@@ -62,7 +62,7 @@ Classification path in that case:
 
 1. Foundation Models classifier (primary)
 2. Exponential backoff retries for transient failure/refusal/rate-limit
-3. Existing classifier stack as fallback (regex -> MobileBERT -> context heuristic)
+3. Existing classifier stack as fallback (regex -> DeBERTa-v3-small -> context heuristic)
 
 On Windows and non-eligible macOS environments, retain existing behavior.
 
@@ -135,3 +135,18 @@ Out of scope:
 - `SystemLanguageModel` overview + availability checks
 - `LanguageModelSession.respond(...)` and `streamResponse(...)`
 - `SystemLanguageModel.contextSize`
+
+## Operational Notes
+
+- Intent evaluation runner: `npm run eval:intent`
+- Intent multi-run evaluation runner: `npm run eval:intent:multi -- --provider=coordinated --runs=20`
+- Generate 100+ noisy/paraphrase cases: `npm run eval:intent:generate-variants`
+- Run multi-eval on generated dataset:
+  - `npm run eval:intent:multi -- --provider=coordinated --runs=20 --dataset=electron/evals/intentEvalVariants.generated.json`
+  - `npm run eval:intent:multi -- --provider=foundation --runs=20 --dataset=electron/evals/intentEvalVariants.generated.json`
+  - `npm run eval:intent:multi -- --provider=legacy --runs=20 --dataset=electron/evals/intentEvalVariants.generated.json`
+- Provider mode overrides for evaluation:
+  - `node scripts/run-intent-eval.js --provider=coordinated` (default)
+  - `node scripts/run-intent-eval.js --provider=foundation`
+  - `node scripts/run-intent-eval.js --provider=legacy`
+  - `INTENT_EVAL_DISABLE_FOUNDATION=1 node scripts/run-intent-eval.js --provider=coordinated`

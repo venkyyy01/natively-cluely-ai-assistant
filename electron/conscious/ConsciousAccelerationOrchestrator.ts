@@ -3,8 +3,11 @@ import { InterviewPhase } from './types';
 import { PauseDetector, PauseAction, PauseConfidence } from '../pause/PauseDetector';
 import { PauseThresholdTuner } from '../pause/PauseThresholdTuner';
 import { detectQuestion } from './QuestionDetector';
-import { isOptimizationActive } from '../config/optimizations';
+import { isOptimizationActive, isVerifierOptimizationActive } from '../config/optimizations';
 import type { RuntimeBudgetScheduler } from '../runtime/RuntimeBudgetScheduler';
+import type { IntentResult } from '../llm/IntentClassifier';
+import { getIntentConfidenceService } from '../llm/IntentConfidenceService';
+import { isStrongConsciousIntent, isUncertainConsciousIntent } from './ConsciousIntentService';
 
 type ClassifierLane = Pick<RuntimeBudgetScheduler, 'submit'>;
 
@@ -13,7 +16,12 @@ interface SpeculativeAnswerEntry {
   query: string;
   transcriptRevision: number;
   generation: number;
+  // Monotonic id assigned at entry creation. Carried through preview -> finalize so a
+  // caller that observed a preview can detect that invalidation/recreate happened in
+  // between (NAT-001 / audit A-1).
+  commitToken: number;
   startedAt: number;
+  abortController: AbortController;
   embedding: number[];
   chunks: string[];
   partialText: string;
@@ -24,7 +32,7 @@ interface SpeculativeAnswerEntry {
   result?: string | null;
 }
 
-export type SpeculativeExecutor = (query: string, transcriptRevision: number) => AsyncIterableIterator<string>;
+export type SpeculativeExecutor = (query: string, transcriptRevision: number, abortSignal: AbortSignal) => AsyncIterableIterator<string>;
 
 export interface SpeculativeAnswerPreview {
   key: string;
@@ -32,6 +40,7 @@ export interface SpeculativeAnswerPreview {
   chunks: string[];
   text: string;
   complete: boolean;
+  commitToken: number;
 }
 
 export interface ConsciousAccelerationOptions {
@@ -39,9 +48,12 @@ export interface ConsciousAccelerationOptions {
   maxMemoryMB?: number;
   budgetScheduler?: Pick<RuntimeBudgetScheduler, 'shouldAdmitSpeculation'>;
   classifierLane?: ClassifierLane;
+  intentClassifier?: (query: string, transcriptRevision: number) => Promise<IntentResult>;
 }
 
 export class ConsciousAccelerationOrchestrator {
+  private static readonly MAX_SPECULATIVE_ENTRIES = 10;
+  private static readonly PREFETCHED_INTENT_TTL_MS = 30_000;
   private readonly prefetcher: PredictivePrefetcher;
   private readonly pauseDetector: PauseDetector;
   private readonly pauseThresholdTuner: PauseThresholdTuner;
@@ -54,11 +66,17 @@ export class ConsciousAccelerationOrchestrator {
   private speculativeExecutor: SpeculativeExecutor | null = null;
   private speculativeAnswerEntries = new Map<string, SpeculativeAnswerEntry>();
   private speculativeGeneration = 0;
+  private nextCommitToken = 1;
   private lastPauseDecision: { action: PauseAction; confidence: PauseConfidence; at: number } | null = null;
   private readonly classifierLane?: ClassifierLane;
+  private intentClassifier?: (query: string, transcriptRevision: number) => Promise<IntentResult>;
+  private prefetchedIntents = new Map<string, { intent: IntentResult; fetchedAt: number }>();
+  private prefetchedIntentInflight = new Map<string, Promise<void>>();
+  private intentPrefetchAbortController: AbortController | null = null;
 
   constructor(options: ConsciousAccelerationOptions = {}) {
     this.classifierLane = options.classifierLane;
+    this.intentClassifier = options.intentClassifier;
     this.prefetcher = new PredictivePrefetcher({
       maxPrefetchPredictions: options.maxPrefetchPredictions,
       maxMemoryMB: options.maxMemoryMB,
@@ -75,7 +93,7 @@ export class ConsciousAccelerationOrchestrator {
         void this.classifierLane
           .submit('semantic', run)
           .catch((error: unknown) => {
-            console.warn('[ConsciousAccelerationOrchestrator] Semantic classifier lane rejected pause action:', error);
+            console.error('[ConsciousAccelerationOrchestrator] Semantic classifier lane rejected pause action:', error);
           });
         return;
       }
@@ -97,12 +115,12 @@ export class ConsciousAccelerationOrchestrator {
         };
       }
 
-      if ((action === 'soft_speculate' || action === 'hard_speculate' || action === 'commit') && !this.prefetchTriggeredForCurrentPause) {
-        this.prefetchTriggeredForCurrentPause = true;
-        this.prefetcher.onSilenceStart();
-      }
-
       if ((action === 'hard_speculate' || action === 'commit') && isOptimizationActive('usePrefetching')) {
+        // NAT-XXX: Ensure prefetch completes before starting speculative answer.
+        // Prefetch is initiated early in onSilenceStart, but if the pause detector
+        // fires before it completes, we must await the in-flight prefetch here to
+        // avoid a race where speculative answer starts with no prefetched intent.
+        await this.maybePrefetchIntent();
         void this.maybeStartSpeculativeAnswer();
       }
   }
@@ -143,6 +161,13 @@ export class ConsciousAccelerationOrchestrator {
 
   setSpeculativeExecutor(executor: SpeculativeExecutor | null): void {
     this.speculativeExecutor = executor;
+  }
+
+  setIntentClassifier(classifier: ((query: string, transcriptRevision: number) => Promise<IntentResult>) | null): void {
+    this.intentClassifier = classifier ?? undefined;
+    this.abortInflightIntentPrefetch();
+    this.prefetchedIntents.clear();
+    this.prefetchedIntentInflight.clear();
   }
 
   noteTranscriptText(speaker: 'interviewer' | 'user', transcript?: string): void {
@@ -200,13 +225,23 @@ export class ConsciousAccelerationOrchestrator {
 
     this.noteTranscriptText('interviewer', transcript);
     this.prefetchTriggeredForCurrentPause = false;
+
+    // NAT-XXX: Start intent prefetch immediately when interviewer stops speaking.
+    // Previously, prefetch only started when the pause detector fired (handlePauseAction),
+    // which could be too late if the user triggers quickly after the interviewer finishes.
+    // By starting prefetch on silence start, we maximize the time available for
+    // the foundation model classifier (~2-3s) before the user triggers.
+    // Note: prefetcher.onSilenceStart() stays in handlePauseAction to avoid
+    // interfering with the speculative answer lifecycle.
+    void this.maybePrefetchIntent();
+
     if (this.classifierLane) {
       void this.classifierLane
         .submit('semantic', async () => {
           this.pauseDetector.onSpeechEnded();
         })
         .catch((error: unknown) => {
-          console.warn('[ConsciousAccelerationOrchestrator] Semantic classifier lane rejected silence evaluation:', error);
+          console.error('[ConsciousAccelerationOrchestrator] Semantic classifier lane rejected silence evaluation:', error);
         });
       return;
     }
@@ -240,7 +275,24 @@ export class ConsciousAccelerationOrchestrator {
       return null;
     }
 
-    return this.finalizeSpeculativeAnswer(preview.key, waitMs > 0 ? Math.max(waitMs, 2000) : 0);
+    return this.finalizeSpeculativeAnswer(
+      preview.key,
+      waitMs > 0 ? Math.max(waitMs, 2000) : 0,
+      preview.commitToken,
+    );
+  }
+
+  getPrefetchedIntent(query: string, transcriptRevision: number): IntentResult | null {
+    const key = this.buildSpeculativeKey(query, transcriptRevision);
+    const entry = this.prefetchedIntents.get(key);
+    if (!entry) {
+      return null;
+    }
+    if (Date.now() - entry.fetchedAt > ConsciousAccelerationOrchestrator.PREFETCHED_INTENT_TTL_MS) {
+      this.prefetchedIntents.delete(key);
+      return null;
+    }
+    return entry.intent;
   }
 
   clearState(): void {
@@ -251,7 +303,33 @@ export class ConsciousAccelerationOrchestrator {
     this.latestInterviewerTranscript = '';
     this.latestTranscriptRevision = 0;
     this.lastPauseDecision = null;
+    this.abortInflightIntentPrefetch();
+    this.prefetchedIntents.clear();
+    this.prefetchedIntentInflight.clear();
     this.invalidateSpeculation(false);
+  }
+
+  private abortInflightIntentPrefetch(): void {
+    if (this.intentPrefetchAbortController) {
+      this.intentPrefetchAbortController.abort(new Error('intent_prefetch_cancelled'));
+      this.intentPrefetchAbortController = null;
+    }
+  }
+
+  private isSpeculativeEntryStale(entry: SpeculativeAnswerEntry, expectedTranscriptRevision?: number): boolean {
+    if (entry.generation !== this.speculativeGeneration) {
+      return true;
+    }
+
+    if (entry.transcriptRevision !== this.latestTranscriptRevision) {
+      return true;
+    }
+
+    if (typeof expectedTranscriptRevision === 'number' && entry.transcriptRevision !== expectedTranscriptRevision) {
+      return true;
+    }
+
+    return false;
   }
 
   private normalizeQuery(query: string): string {
@@ -310,32 +388,61 @@ export class ConsciousAccelerationOrchestrator {
       return null;
     }
 
+    // NAT-002 / audit A-2: exact normalized-match commit only. The previous 0.72
+    // cosine fallback could bind a *different* question to another speculative
+    // stream's chunks, surfacing a plausible-but-wrong answer. Semantic similarity
+    // may be useful for *discarding* candidates in a future change, but never for
+    // *selecting* the entry that we promote as the answer.
     const exact = entries.find((entry) => this.normalizeQuery(entry.query) === this.normalizeQuery(query));
     if (exact) {
       return exact;
     }
 
-    const queryEmbedding = await this.prefetcher.getSemanticEmbedding(query);
-    if (queryEmbedding.length === 0) {
-      return null;
-    }
-    let bestMatch: { entry: SpeculativeAnswerEntry; similarity: number } | null = null;
-
-    for (const entry of entries) {
-      if (entry.embedding.length === 0) {
-        continue;
+    // Fuzzy speculation: try to find a close match when no exact match exists
+    const useFuzzy = isVerifierOptimizationActive('useFuzzySpeculation');
+    if (useFuzzy) {
+      const queryEmbedding = await this.prefetcher.getSemanticEmbedding(query);
+      if (!queryEmbedding) {
+        return null;
       }
-      const similarity = this.cosineSimilarity(queryEmbedding, entry.embedding);
-      if (!bestMatch || similarity > bestMatch.similarity) {
-        bestMatch = { entry, similarity };
+
+      const FUZZY_THRESHOLD = 0.92;
+      let bestMatch: SpeculativeAnswerEntry | null = null;
+      let bestSimilarity = 0;
+
+      for (const entry of entries) {
+        if (!entry.embedding || entry.embedding.length === 0) {
+          continue;
+        }
+
+        const similarity = this.cosineSimilarity(queryEmbedding, entry.embedding);
+        if (similarity > bestSimilarity && similarity >= FUZZY_THRESHOLD) {
+          bestSimilarity = similarity;
+          bestMatch = entry;
+        }
+      }
+
+      if (bestMatch) {
+        console.log(`[ConsciousAccelerationOrchestrator] Fuzzy match found: "${query}" -> "${bestMatch.query}" (similarity: ${bestSimilarity.toFixed(3)})`);
+        return bestMatch;
       }
     }
 
-    return bestMatch && bestMatch.similarity >= 0.72 ? bestMatch.entry : null;
+    return null;
   }
 
   private async maybeStartSpeculativeAnswer(): Promise<void> {
     if (!this.enabled || !this.speculativeExecutor) {
+      return;
+    }
+
+    const latestQuery = this.latestInterviewerTranscript.trim();
+    if (!latestQuery) {
+      return;
+    }
+
+    const prefetchedIntent = this.getPrefetchedIntent(latestQuery, this.latestTranscriptRevision);
+    if (!isStrongConsciousIntent(prefetchedIntent)) {
       return;
     }
 
@@ -353,12 +460,15 @@ export class ConsciousAccelerationOrchestrator {
       }
 
       let resolveFirstChunk = () => {};
+      const abortController = new AbortController();
       const entry: SpeculativeAnswerEntry = {
         key,
         query: candidate.query,
         transcriptRevision: candidate.transcriptRevision,
         generation,
+        commitToken: this.nextCommitToken++,
         startedAt: Date.now(),
+        abortController,
         embedding: candidate.embedding,
         chunks: [],
         partialText: '',
@@ -372,9 +482,17 @@ export class ConsciousAccelerationOrchestrator {
 
       entry.completionPromise = (async (): Promise<string | null> => {
         try {
-          const stream = this.speculativeExecutor!(candidate.query, candidate.transcriptRevision);
+          const stream = this.speculativeExecutor!(candidate.query, candidate.transcriptRevision, abortController.signal);
           for await (const chunk of stream) {
+            if (abortController.signal.aborted) {
+              entry.result = null;
+              entry.completed = true;
+              entry.resolveFirstChunk();
+              return null;
+            }
+
             if (generation !== this.speculativeGeneration || candidate.transcriptRevision !== this.latestTranscriptRevision) {
+              abortController.abort(new Error('speculation_stale'));
               entry.result = null;
               entry.completed = true;
               entry.resolveFirstChunk();
@@ -394,7 +512,9 @@ export class ConsciousAccelerationOrchestrator {
           entry.resolveFirstChunk();
           return entry.result;
         } catch (error: unknown) {
-          console.warn('[ConsciousAccelerationOrchestrator] Speculative answer generation failed:', error);
+          if (!abortController.signal.aborted) {
+            console.warn('[ConsciousAccelerationOrchestrator] Speculative answer generation failed:', error);
+          }
           entry.completed = true;
           entry.result = null;
           entry.resolveFirstChunk();
@@ -403,7 +523,89 @@ export class ConsciousAccelerationOrchestrator {
       })();
 
       this.speculativeAnswerEntries.set(key, entry);
+      this.evictStaleSpeculativeEntries();
     }
+  }
+
+  private evictStaleSpeculativeEntries(): void {
+    if (this.speculativeAnswerEntries.size <= ConsciousAccelerationOrchestrator.MAX_SPECULATIVE_ENTRIES) {
+      return;
+    }
+
+    const entries = Array.from(this.speculativeAnswerEntries.values())
+      .sort((a, b) => a.startedAt - b.startedAt);
+
+    while (this.speculativeAnswerEntries.size > ConsciousAccelerationOrchestrator.MAX_SPECULATIVE_ENTRIES) {
+      const oldest = entries.shift();
+      if (!oldest) {
+        break;
+      }
+      oldest.abortController.abort(new Error('speculative_evicted'));
+      this.speculativeAnswerEntries.delete(oldest.key);
+    }
+  }
+
+  private async maybePrefetchIntent(): Promise<void> {
+    if (!this.intentClassifier) {
+      return;
+    }
+
+    const query = this.latestInterviewerTranscript.trim();
+    if (!query) {
+      return;
+    }
+
+    const revision = this.latestTranscriptRevision;
+    const key = this.buildSpeculativeKey(query, revision);
+    if (this.prefetchedIntents.has(key)) {
+      return;
+    }
+
+    const inflight = this.prefetchedIntentInflight.get(key);
+    if (inflight) {
+      await inflight;
+      return;
+    }
+
+    const abortController = new AbortController();
+    this.intentPrefetchAbortController = abortController;
+
+    const promise = (async (): Promise<void> => {
+      try {
+        const intent = await this.intentClassifier!(query, revision);
+        if (abortController.signal.aborted) {
+          return;
+        }
+        if (revision !== this.latestTranscriptRevision) {
+          return;
+        }
+        // NAT-005 / audit A-5: only persist a prefetched intent that is
+        // NAT-L3: Relax prefetch storage gate. Only discard 'general' intents
+        // and truly empty results. A medium-confidence prefetch (0.55-0.82)
+        // is still better than timing out on live classify (NAT-L1).
+        // The consumer (ConsciousIntentService.resolve) applies its own
+        // quality gate before using the result.
+        if (intent.intent === 'general' || intent.confidence < 0.45) {
+          console.log(
+            `[ConsciousAccelerationOrchestrator] intent.prefetch_discarded intent=${intent.intent} confidence=${intent.confidence.toFixed(3)}`,
+          );
+          return;
+        }
+        this.prefetchedIntents.set(key, { intent, fetchedAt: Date.now() });
+      } catch (error: unknown) {
+        if (!abortController.signal.aborted) {
+          console.warn('[ConsciousAccelerationOrchestrator] Intent preclassification failed:', error);
+        }
+      } finally {
+        this.prefetchedIntentInflight.delete(key);
+        if (this.intentPrefetchAbortController === abortController) {
+          this.intentPrefetchAbortController = null;
+        }
+      }
+    })();
+
+    this.prefetchedIntentInflight.set(key, promise);
+    await promise;
   }
 
   async getSpeculativeAnswerPreview(query: string, transcriptRevision: number, waitMs: number = 0): Promise<SpeculativeAnswerPreview | null> {
@@ -424,6 +626,12 @@ export class ConsciousAccelerationOrchestrator {
       ]);
     }
 
+    if (this.isSpeculativeEntryStale(entry, transcriptRevision)) {
+      entry.abortController.abort(new Error('speculation_stale'));
+      this.speculativeAnswerEntries.delete(entry.key);
+      return null;
+    }
+
     const text = entry.result ?? entry.partialText;
     if (!text) {
       return null;
@@ -435,12 +643,30 @@ export class ConsciousAccelerationOrchestrator {
       chunks: [...entry.chunks],
       text,
       complete: entry.completed,
+      commitToken: entry.commitToken,
     };
   }
 
-  async finalizeSpeculativeAnswer(key: string, waitMs: number = 2000): Promise<string | null> {
+  async finalizeSpeculativeAnswer(
+    key: string,
+    waitMs: number = 2000,
+    expectedCommitToken?: number,
+  ): Promise<string | null> {
     const entry = this.speculativeAnswerEntries.get(key);
     if (!entry) {
+      return null;
+    }
+
+    // NAT-001 / audit A-1: the entry under `key` may have been recreated with a fresh
+    // commit token if invalidateSpeculation() ran and a follow-up turn re-populated the
+    // same key. Treat any mismatch as abandonment so callers don't promote stale text.
+    if (typeof expectedCommitToken === 'number' && entry.commitToken !== expectedCommitToken) {
+      return null;
+    }
+
+    if (this.isSpeculativeEntryStale(entry)) {
+      entry.abortController.abort(new Error('speculation_stale'));
+      this.speculativeAnswerEntries.delete(key);
       return null;
     }
 
@@ -452,7 +678,21 @@ export class ConsciousAccelerationOrchestrator {
       ]);
       if (result !== timeoutSentinel) {
         entry.result = result as string | null;
+      } else {
+        entry.abortController.abort(new Error('speculation_finalize_timeout'));
       }
+    }
+
+    // NAT-001: re-verify the commit token in case the entry was invalidated and a new
+    // one took its place while we awaited completionPromise.
+    if (typeof expectedCommitToken === 'number' && entry.commitToken !== expectedCommitToken) {
+      return null;
+    }
+
+    if (this.isSpeculativeEntryStale(entry)) {
+      entry.abortController.abort(new Error('speculation_stale'));
+      this.speculativeAnswerEntries.delete(key);
+      return null;
     }
 
     this.speculativeAnswerEntries.delete(key);
@@ -472,7 +712,13 @@ export class ConsciousAccelerationOrchestrator {
       this.lastPauseDecision = null;
     }
 
+    this.abortInflightIntentPrefetch();
     this.speculativeGeneration += 1;
+    for (const entry of this.speculativeAnswerEntries.values()) {
+      entry.abortController.abort(new Error('speculation_invalidated'));
+    }
     this.speculativeAnswerEntries.clear();
+    this.prefetchedIntents.clear();
+    this.prefetchedIntentInflight.clear();
   }
 }

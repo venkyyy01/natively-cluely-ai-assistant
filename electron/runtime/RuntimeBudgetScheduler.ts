@@ -20,6 +20,7 @@ interface RuntimeBudgetSchedulerOptions {
   bus?: SupervisorBus;
   workerPool?: WorkerPool;
   laneBudgets?: Partial<Record<RuntimeLane, LaneBudgetConfig>>;
+  maxQueueDepthByLane?: Partial<Record<RuntimeLane, number>>;
   memoryUsageReader?: () => number;
   logger?: Pick<Console, 'warn'>;
 }
@@ -28,9 +29,37 @@ interface ScheduledLaneTask<T> {
   lane: RuntimeLane;
   priority: number;
   order: number;
+  /** Absolute wall-clock ms — earlier deadline runs first (EDF) after priority (NAT-057). */
+  budgetDeadlineMs?: number;
   run: () => Promise<T>;
   resolve: (value: T) => void;
   reject: (error: unknown) => void;
+}
+
+/** Sort key for queue ordering + cross-lane pickNext (exported for unit tests). */
+export interface ScheduledLaneTaskSortKey {
+  priority: number;
+  order: number;
+  budgetDeadlineMs?: number;
+}
+
+/** Higher priority first; then earlier `budgetDeadlineMs` (EDF); then FIFO `order`. */
+export function compareScheduledLaneTasks(left: ScheduledLaneTaskSortKey, right: ScheduledLaneTaskSortKey): number {
+  if (right.priority !== left.priority) {
+    return right.priority - left.priority;
+  }
+  const ld = left.budgetDeadlineMs;
+  const rd = right.budgetDeadlineMs;
+  if (ld != null && rd != null && ld !== rd) {
+    return ld - rd;
+  }
+  if (ld != null && rd == null) {
+    return -1;
+  }
+  if (ld == null && rd != null) {
+    return 1;
+  }
+  return left.order - right.order;
 }
 
 const LANE_PRIORITY: Record<RuntimeLane, number> = {
@@ -40,10 +69,18 @@ const LANE_PRIORITY: Record<RuntimeLane, number> = {
   background: 1,
 };
 
+const DEFAULT_MAX_QUEUE_DEPTH_BY_LANE: Record<RuntimeLane, number> = {
+  realtime: 64,
+  'local-inference': 128,
+  semantic: 256,
+  background: 1024,
+};
+
 export class RuntimeBudgetScheduler {
   private readonly bus: SupervisorBus;
   private readonly workerPool: WorkerPool | null;
   private readonly laneBudgets: Record<RuntimeLane, LaneBudgetConfig>;
+  private readonly maxQueueDepthByLane: Record<RuntimeLane, number>;
   private readonly memoryUsageReader: () => number;
   private readonly logger: Pick<Console, 'warn'>;
 
@@ -59,6 +96,10 @@ export class RuntimeBudgetScheduler {
       ...DEFAULT_LANE_BUDGETS,
       ...options.laneBudgets,
     };
+    this.maxQueueDepthByLane = {
+      ...DEFAULT_MAX_QUEUE_DEPTH_BY_LANE,
+      ...(options.maxQueueDepthByLane ?? {}),
+    };
     this.memoryUsageReader = options.memoryUsageReader ?? (() => process.memoryUsage().heapUsed);
     this.logger = options.logger ?? console;
 
@@ -72,7 +113,7 @@ export class RuntimeBudgetScheduler {
   async submit<T>(
     lane: RuntimeLane,
     task: () => Promise<T> | T,
-    options: { priority?: number } = {},
+    options: { priority?: number; budgetDeadlineMs?: number } = {},
   ): Promise<T> {
     return new Promise<T>((resolve, reject) => {
       const queue = this.queues.get(lane);
@@ -81,19 +122,22 @@ export class RuntimeBudgetScheduler {
         return;
       }
 
+      if (queue.length >= this.maxQueueDepthByLane[lane]) {
+        reject(new Error(`runtime_lane_queue_full:${lane}`));
+        return;
+      }
+
       queue.push({
         lane,
         priority: options.priority ?? LANE_PRIORITY[lane],
         order: ++this.sequence,
+        budgetDeadlineMs: options.budgetDeadlineMs,
         run: async () => await task(),
         resolve,
         reject,
       });
 
-      queue.sort((left, right) => (
-        right.priority - left.priority
-        || left.order - right.order
-      ));
+      queue.sort((left, right) => compareScheduledLaneTasks(left, right));
       this.updatePressure(lane);
       this.pump();
     });
@@ -180,7 +224,7 @@ export class RuntimeBudgetScheduler {
       }
 
       const candidate = queue[0];
-      if (!best || candidate.priority > best.priority || (candidate.priority === best.priority && candidate.order < best.order)) {
+      if (!best || compareScheduledLaneTasks(candidate, best) < 0) {
         best = candidate;
       }
     }

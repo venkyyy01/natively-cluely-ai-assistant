@@ -52,7 +52,7 @@ export interface Meeting {
         timestamp: number;
         question?: string;
         answer?: string;
-        items?: string[];
+        items?: unknown;
     }>;
     calendarEventId?: string;
     source?: 'manual' | 'calendar';
@@ -79,6 +79,11 @@ export class DatabaseManager {
             DatabaseManager.instance = new DatabaseManager();
         }
         return DatabaseManager.instance;
+    }
+
+    /** Absolute path to the SQLite DB file (e.g. worker_threads that open their own handle). */
+    public getDatabasePath(): string {
+        return this.dbPath;
     }
 
     private init() {
@@ -470,6 +475,48 @@ export class DatabaseManager {
             this.db.pragma('user_version = 10');
         }
 
+        // Version 10 → 11: Clean orphaned embedding_queue entries and backfill meeting embeddings metadata
+        if (version < 11) {
+            console.log('[DatabaseManager] Applying migration v10 → v11: Clean orphaned embedding queue + backfill meeting embeddings');
+
+            try {
+                this.createMigrationBackup();
+                const migrate = this.db.transaction(() => {
+                    // 1. Delete embedding_queue entries that reference non-existent chunks
+                    const orphaned = this.db!.prepare(`
+                        DELETE FROM embedding_queue
+                        WHERE chunk_id IS NOT NULL
+                          AND chunk_id NOT IN (SELECT id FROM chunks)
+                    `).run();
+                    console.log(`[DatabaseManager] v11: Cleaned ${orphaned.changes} orphaned embedding_queue entries`);
+
+                    // 2. Delete embedding_queue entries with NULL chunk_id older than 24h
+                    const stale = this.db!.prepare(`
+                        DELETE FROM embedding_queue
+                        WHERE chunk_id IS NULL
+                          AND created_at < datetime('now', '-1 day')
+                    `).run();
+                    console.log(`[DatabaseManager] v11: Cleaned ${stale.changes} stale NULL-chunk embedding_queue entries`);
+
+                    // 3. Backfill embedding_provider for ALL meetings (use last_embedding_provider from app_state or default to openai)
+                    const provider = (this.db!.prepare("SELECT value FROM app_state WHERE key = 'last_embedding_provider'").get() as any)?.value || 'openai';
+                    const backfilled = this.db!.prepare(`
+                        UPDATE meetings
+                        SET embedding_provider = ?, embedding_dimensions = 1536
+                        WHERE (embedding_provider IS NULL OR embedding_provider = '')
+                    `).run(provider);
+                    console.log(`[DatabaseManager] v11: Backfilled embedding_provider='${provider}' for ${backfilled.changes} meetings`);
+                });
+                migrate();
+                this.removeMigrationBackup();
+                console.log('[DatabaseManager] v11 migration completed ✓');
+            } catch (e) {
+                console.error('[DatabaseManager] v11 migration failed:', e);
+                this.restoreMigrationBackup();
+            }
+            this.db.pragma('user_version = 11');
+        }
+
         console.log('[DatabaseManager] Migrations completed.');
     }
 
@@ -535,9 +582,12 @@ export class DatabaseManager {
 
     /**
      * One-time migration: Copy existing BLOB embeddings into vec0 virtual tables.
+     * CRITICAL FIX: Added batching to prevent SQLite transaction limits for large datasets
      */
     private migrateExistingEmbeddings(): void {
         if (!this.db) return;
+
+        const MIGRATION_BATCH_SIZE = 500; // Smaller batch for migrations to be safe
 
         // Migrate chunk embeddings
         try {
@@ -546,21 +596,30 @@ export class DatabaseManager {
             ).all() as any[];
 
             if (chunkRows.length > 0) {
+                console.log(`[DatabaseManager] Migrating ${chunkRows.length} chunk embeddings in batches of ${MIGRATION_BATCH_SIZE}`);
                 const insert = this.db.prepare(
                     'INSERT OR IGNORE INTO vec_chunks(chunk_id, embedding) VALUES (?, ?)'
                 );
-                const migrateAll = this.db.transaction(() => {
-                    for (const row of chunkRows) {
-                        try {
-                            insert.run(row.id, row.embedding);
-                        } catch (err) {
-                            // On mismatch (e.g. mixed 768 and 3072 dims), nullify to re-embed later
-                            this.db.prepare('UPDATE chunks SET embedding = NULL WHERE id = ?').run(row.id);
+                
+                for (let i = 0; i < chunkRows.length; i += MIGRATION_BATCH_SIZE) {
+                    const batch = chunkRows.slice(i, i + MIGRATION_BATCH_SIZE);
+                    const migrateBatch = this.db.transaction(() => {
+                        for (const row of batch) {
+                            try {
+                                insert.run(row.id, row.embedding);
+                            } catch (err) {
+                                // On mismatch (e.g. mixed 768 and 3072 dims), nullify to re-embed later
+                                this.db.prepare('UPDATE chunks SET embedding = NULL WHERE id = ?').run(row.id);
+                            }
                         }
+                    });
+                    migrateBatch();
+                    
+                    if (chunkRows.length > MIGRATION_BATCH_SIZE) {
+                        console.log(`[DatabaseManager] Migrated chunk batch ${Math.floor(i / MIGRATION_BATCH_SIZE) + 1}/${Math.ceil(chunkRows.length / MIGRATION_BATCH_SIZE)}`);
                     }
-                });
-                migrateAll();
-                console.log(`[DatabaseManager] Migrated ${chunkRows.length} chunk embeddings to vec_chunks`);
+                }
+                console.log(`[DatabaseManager] Successfully migrated ${chunkRows.length} chunk embeddings to vec_chunks`);
             }
         } catch (e) {
             console.error('[DatabaseManager] Failed to migrate chunk embeddings:', e);
@@ -573,20 +632,29 @@ export class DatabaseManager {
             ).all() as any[];
 
             if (summaryRows.length > 0) {
+                console.log(`[DatabaseManager] Migrating ${summaryRows.length} summary embeddings in batches of ${MIGRATION_BATCH_SIZE}`);
                 const insert = this.db.prepare(
                     'INSERT OR IGNORE INTO vec_summaries(summary_id, embedding) VALUES (?, ?)'
                 );
-                const migrateAll = this.db.transaction(() => {
-                    for (const row of summaryRows) {
-                        try {
-                            insert.run(row.id, row.embedding);
-                        } catch (err) {
-                            this.db.prepare('UPDATE chunk_summaries SET embedding = NULL WHERE id = ?').run(row.id);
+                
+                for (let i = 0; i < summaryRows.length; i += MIGRATION_BATCH_SIZE) {
+                    const batch = summaryRows.slice(i, i + MIGRATION_BATCH_SIZE);
+                    const migrateBatch = this.db.transaction(() => {
+                        for (const row of batch) {
+                            try {
+                                insert.run(row.id, row.embedding);
+                            } catch (err) {
+                                this.db.prepare('UPDATE chunk_summaries SET embedding = NULL WHERE id = ?').run(row.id);
+                            }
                         }
+                    });
+                    migrateBatch();
+                    
+                    if (summaryRows.length > MIGRATION_BATCH_SIZE) {
+                        console.log(`[DatabaseManager] Migrated summary batch ${Math.floor(i / MIGRATION_BATCH_SIZE) + 1}/${Math.ceil(summaryRows.length / MIGRATION_BATCH_SIZE)}`);
                     }
-                });
-                migrateAll();
-                console.log(`[DatabaseManager] Migrated ${summaryRows.length} summary embeddings to vec_summaries`);
+                }
+                console.log(`[DatabaseManager] Successfully migrated ${summaryRows.length} summary embeddings to vec_summaries`);
             }
         } catch (e) {
             console.error('[DatabaseManager] Failed to migrate summary embeddings:', e);
@@ -602,6 +670,61 @@ export class DatabaseManager {
 
     /** Cache: dimensions for which vec0 tables have already been verified/created this session. */
     private ensuredDims = new Set<number>();
+
+    /**
+     * Close the underlying SQLite connection and release the singleton.
+     *
+     * Must be called from `cleanupForQuit()` (and any test teardown that opens
+     * a real DB) so better-sqlite3 can run a `PRAGMA wal_checkpoint(TRUNCATE)`
+     * via `Database.close()`. Without this call the `*.db-wal` / `*.db-shm`
+     * files hang around in `userData/` after a graceful shutdown and can
+     * silently disable subsequent transactions on next launch.
+     *
+     * Safe to call multiple times: a second invocation is a no-op once the
+     * handle has been nulled.
+     */
+    public close(): void {
+        if (!this.db) return;
+        try {
+            // Force a full checkpoint and truncate the WAL before close. With
+            // `journal_mode=WAL`, better-sqlite3.close() alone leaves
+            // `*.db-wal` and `*.db-shm` sidecar files in userData/ which then
+            // cause noisy "stale WAL" recovery on next launch. Switching to
+            // `journal_mode=DELETE` after the checkpoint deletes both
+            // sidecars cleanly. Both pragmas are best-effort: a corrupted DB
+            // or an exclusive-lock contention should still let the process
+            // exit, so we swallow errors per-step.
+            try { this.db.pragma('wal_checkpoint(TRUNCATE)'); } catch (error) {
+                console.warn('[DatabaseManager] wal_checkpoint(TRUNCATE) failed on close:', error);
+            }
+            try { this.db.pragma('journal_mode = DELETE'); } catch (error) {
+                if ((error as NodeJS.ErrnoException | undefined)?.code !== 'SQLITE_BUSY') {
+                    console.warn('[DatabaseManager] journal_mode=DELETE failed on close:', error);
+                }
+            }
+            this.db.close();
+            console.log('[DatabaseManager] Closed SQLite connection (WAL truncated).');
+        } catch (error) {
+            console.error('[DatabaseManager] Error while closing DB:', error);
+        } finally {
+            this.db = null;
+            this.ensuredDims.clear();
+            // Allow a future getInstance() (e.g. in tests) to re-open the DB.
+            (DatabaseManager as unknown as { instance?: DatabaseManager }).instance = undefined;
+        }
+    }
+
+    /**
+     * Close the singleton if it has been instantiated; otherwise a no-op.
+     *
+     * Use from shutdown hooks where calling `getInstance().close()` would
+     * spuriously create a fresh DB connection just to immediately tear it
+     * down (e.g. if shutdown fires before any DB consumer ran).
+     */
+    public static closeIfOpen(): void {
+        const existing = (DatabaseManager as unknown as { instance?: DatabaseManager }).instance;
+        if (existing) existing.close();
+    }
 
     /**
      * Lazily create a per-dimension vec0 table pair if not already present.
@@ -702,71 +825,113 @@ export class DatabaseManager {
             detailedSummary: meeting.detailedSummary
         });
 
-        const runTransaction = this.db.transaction(() => {
-            // 1. Insert Meeting
-            insertMeeting.run(
-                meeting.id,
-                meeting.title,
-                startTimeMs,
-                durationMs,
-                summaryJson,
-                meeting.date, // Using the ISO string as created_at for sorting simply
-                meeting.calendarEventId || null,
-                meeting.source || 'manual',
-                meeting.isProcessed ? 1 : 0
-            );
-
-            deleteTranscripts.run(meeting.id);
-            deleteInteractions.run(meeting.id);
-
-            // 2. Insert Transcript
-            if (meeting.transcript) {
-                for (const segment of meeting.transcript) {
-                    insertTranscript.run(
-                        meeting.id,
-                        segment.speaker,
-                        segment.text,
-                        segment.timestamp
-                    );
-                }
-            }
-
-            // 3. Insert Interactions
-            if (meeting.usage) {
-                for (const usage of meeting.usage) {
-                    let metadata = null;
-                    if (usage.items) {
-                        metadata = JSON.stringify(usage.items);
-                    } else if (usage.type === 'followup_questions' && usage.answer) {
-                        // Sometimes answer is the array for questions, or we store it in metadata
-                        // In intelligence manager we pushed: { type: 'followup_questions', answer: fullQuestions }
-                        // Let's store that 'answer' (array) in metadata for this type
-                        if (Array.isArray(usage.answer)) {
-                            metadata = JSON.stringify(usage.answer);
-                        }
-                    }
-
-                    // Normalization
-                    const answerText = Array.isArray(usage.answer) ? null : usage.answer || null;
-                    const queryText = usage.question || null;
-
-                    insertInteraction.run(
-                        meeting.id,
-                        usage.type,
-                        usage.timestamp,
-                        queryText,
-                        answerText,
-                        metadata
-                    );
-                }
-            }
-        });
+        // CRITICAL FIX: Batch large transactions to prevent SQLite limits
+        const BATCH_SIZE = 1000; // Process in chunks of 1000 items
 
         try {
-            runTransaction();
-            console.log(`[DatabaseManager] Successfully saved meeting ${meeting.id}`);
+            // First transaction: Insert meeting record and clear old data
+            const setupTransaction = this.db.transaction(() => {
+                // 1. Insert Meeting
+                insertMeeting.run(
+                    meeting.id,
+                    meeting.title,
+                    startTimeMs,
+                    durationMs,
+                    summaryJson,
+                    meeting.date, // Using the ISO string as created_at for sorting simply
+                    meeting.calendarEventId || null,
+                    meeting.source || 'manual',
+                    meeting.isProcessed ? 1 : 0
+                );
+
+                // 2. Clear old transcript and interaction data
+                deleteTranscripts.run(meeting.id);
+                deleteInteractions.run(meeting.id);
+            });
+            
+            setupTransaction();
+            console.log(`[DatabaseManager] Setup completed for meeting ${meeting.id}`);
+
+            // Second phase: Insert transcript in batches
+            if (meeting.transcript && meeting.transcript.length > 0) {
+                console.log(`[DatabaseManager] Processing ${meeting.transcript.length} transcript segments in batches of ${BATCH_SIZE}`);
+                
+                for (let i = 0; i < meeting.transcript.length; i += BATCH_SIZE) {
+                    const batch = meeting.transcript.slice(i, i + BATCH_SIZE);
+                    const transcriptBatch = this.db.transaction(() => {
+                        for (const segment of batch) {
+                            insertTranscript.run(
+                                meeting.id,
+                                segment.speaker,
+                                segment.text,
+                                segment.timestamp
+                            );
+                        }
+                    });
+                    transcriptBatch();
+                    
+                    // Optional: Log progress for very large batches
+                    if (meeting.transcript.length > BATCH_SIZE) {
+                        console.log(`[DatabaseManager] Processed transcript batch ${Math.floor(i / BATCH_SIZE) + 1}/${Math.ceil(meeting.transcript.length / BATCH_SIZE)}`);
+                    }
+                }
+            }
+
+            // Third phase: Insert interactions in batches
+            if (meeting.usage && meeting.usage.length > 0) {
+                console.log(`[DatabaseManager] Processing ${meeting.usage.length} interactions in batches of ${BATCH_SIZE}`);
+                
+                for (let i = 0; i < meeting.usage.length; i += BATCH_SIZE) {
+                    const batch = meeting.usage.slice(i, i + BATCH_SIZE);
+                    const interactionBatch = this.db.transaction(() => {
+                        for (const usage of batch) {
+                            let metadata = null;
+                            if (usage.items) {
+                                metadata = JSON.stringify(usage.items);
+                            } else if (usage.type === 'followup_questions' && usage.answer) {
+                                // Sometimes answer is the array for questions, or we store it in metadata
+                                // In intelligence manager we pushed: { type: 'followup_questions', answer: fullQuestions }
+                                // Let's store that 'answer' (array) in metadata for this type
+                                if (Array.isArray(usage.answer)) {
+                                    metadata = JSON.stringify(usage.answer);
+                                }
+                            }
+
+                            // Normalization
+                            const answerText = Array.isArray(usage.answer) ? null : usage.answer || null;
+                            const queryText = usage.question || null;
+
+                            insertInteraction.run(
+                                meeting.id,
+                                usage.type,
+                                usage.timestamp,
+                                queryText,
+                                answerText,
+                                metadata
+                            );
+                        }
+                    });
+                    interactionBatch();
+                    
+                    // Optional: Log progress for very large batches
+                    if (meeting.usage.length > BATCH_SIZE) {
+                        console.log(`[DatabaseManager] Processed interaction batch ${Math.floor(i / BATCH_SIZE) + 1}/${Math.ceil(meeting.usage.length / BATCH_SIZE)}`);
+                    }
+                }
+            }
+
+            console.log(`[DatabaseManager] Successfully saved meeting ${meeting.id} with batched operations`);
         } catch (err) {
             console.error(`[DatabaseManager] Failed to save meeting ${meeting.id}`, err);
+            // In case of failure, attempt cleanup
+            try {
+                this.db.prepare('DELETE FROM meetings WHERE id = ?').run(meeting.id);
+                this.db.prepare('DELETE FROM transcripts WHERE meeting_id = ?').run(meeting.id);
+                this.db.prepare('DELETE FROM ai_interactions WHERE meeting_id = ?').run(meeting.id);
+                console.log(`[DatabaseManager] Cleaned up partial data for meeting ${meeting.id}`);
+            } catch (cleanupErr) {
+                console.error(`[DatabaseManager] Failed to cleanup meeting ${meeting.id}`, cleanupErr);
+            }
             throw err;
         }
     }
@@ -934,16 +1099,14 @@ export class DatabaseManager {
         }));
 
         const usage = usageRows.map(row => {
-            let items: string[] | undefined;
+            let items: unknown;
             let answer = row.ai_response;
 
             if (row.metadata_json) {
                 try {
                     const parsed = JSON.parse(row.metadata_json);
-                    if (Array.isArray(parsed)) {
+                    if (parsed && typeof parsed === 'object') {
                         items = parsed;
-                        // Special case: for 'followup_questions', earlier we treated 'answer' as the array in memory
-                        // UI expects appropriate field. If type is 'followup_questions', usually answer is null and items has the questions.
                     }
                 } catch (e) { console.warn('[DatabaseManager] Failed to parse metadata_json for interaction:', row?.id, e); }
             }

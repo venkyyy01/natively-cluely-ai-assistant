@@ -22,6 +22,7 @@ import {
   Zap,
 } from 'lucide-react';
 import { analytics } from '../../lib/analytics/analytics.service';
+import { requireElectronMethod } from '../../lib/electronApi';
 
 const DISGUISE_OPTIONS: Array<{
   id: 'none' | 'terminal' | 'settings' | 'activity';
@@ -130,10 +131,10 @@ export const GeneralSettingsSection: React.FC<GeneralSettingsSectionProps> = ({
               ) : (
                 <Ghost size={18} className="text-text-primary" />
               )}
-              <h3 className="text-lg font-bold text-text-primary">{isUndetectable ? 'Undetectable' : 'Detectable'}</h3>
+              <h3 className="text-lg font-bold text-text-primary">{isUndetectable ? 'Privacy mode' : 'Visible mode'}</h3>
             </div>
             <p className="text-xs text-text-secondary">
-              Natively is currently {isUndetectable ? 'undetectable' : 'detectable'} by screen-sharing.{' '}
+              Privacy mode is {isUndetectable ? 'active' : 'off'}. Sensitive content is hidden until protection is cleared.{' '}
               <button className="text-blue-400 hover:underline">Supported apps here</button>
             </p>
           </div>
@@ -142,11 +143,12 @@ export const GeneralSettingsSection: React.FC<GeneralSettingsSectionProps> = ({
               const newState = !isUndetectable;
               setIsUndetectable(newState);
               try {
-                const result = await window.electronAPI?.setUndetectable(newState);
+                const setUndetectable = requireElectronMethod('setUndetectable');
+                const result = await setUndetectable(newState);
                 if (!result?.success) {
                   throw new Error(result?.error || 'Unable to update stealth mode');
                 }
-                analytics.trackModeSelected(newState ? 'undetectable' : 'overlay');
+                analytics.trackModeSelected(newState ? 'privacy_mode' : 'overlay');
               } catch (error: any) {
                 setIsUndetectable(!newState);
                 showGeneralSettingsError(error?.message || 'Unable to update stealth mode');
@@ -267,7 +269,8 @@ onClick={async () => {
 const newState = !consciousModeEnabled;
 setConsciousModeEnabled(newState);
 try {
-const result = await window.electronAPI?.setConsciousMode(newState);
+const setConsciousMode = requireElectronMethod('setConsciousMode');
+const result = await setConsciousMode(newState);
 if (result && !result.success) {
 throw new Error(result.error?.message || 'Unable to update conscious mode');
 }

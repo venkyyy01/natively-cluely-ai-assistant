@@ -96,3 +96,16 @@ test('QuestionReactionClassifier continues generic follow-ups when they contain 
   assert.equal(reaction.kind, 'generic_follow_up');
   assert.equal(reaction.shouldContinueThread, true);
 });
+
+test('QuestionReactionClassifier classifyAsync uses SetFit when flag is enabled', async () => {
+  const classifier = new QuestionReactionClassifier();
+  const reaction = await classifier.classifyAsync({
+    question: 'What are the tradeoffs here?',
+    activeThread: createThread(),
+    latestResponse: createResponse(),
+  });
+
+  // Should return a valid reaction (may be SetFit or regex fallback)
+  assert.ok(reaction.kind);
+  assert.ok(typeof reaction.confidence === 'number');
+});

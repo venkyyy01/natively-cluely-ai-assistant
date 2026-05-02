@@ -5,6 +5,7 @@ public enum FullStealthProtocolVersion: Int, Codable {
 }
 
 public enum Command: String {
+    case hello
     case createSession = "create-session"
     case releaseSession = "release-session"
     case status

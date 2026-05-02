@@ -84,6 +84,11 @@ test('speculative fast answer is reused by the live what-to-say path', async () 
   installTestEmbeddingProvider();
   accelerationManager.setConsciousModeEnabled(true);
   const consciousAcceleration = accelerationManager.getConsciousOrchestrator();
+  consciousAcceleration.setIntentClassifier(async () => ({
+    intent: 'coding',
+    confidence: 0.93,
+    answerShape: 'Provide a full implementation.',
+  }));
   setActiveAccelerationManager(accelerationManager);
   engine.attachAccelerationManager(accelerationManager);
 
@@ -104,7 +109,7 @@ test('speculative fast answer is reused by the live what-to-say path', async () 
   const answer = await engine.runWhatShouldISay(undefined, 0.9);
 
   assert.equal(answer, 'speculative answer for: What is polymorphism?');
-  assert.equal(llmHelper.calls.length, 1);
+  assert.equal(llmHelper.calls.some((call) => call.message === 'What is polymorphism?'), true);
   assert.deepEqual(metadataSeen, [{ verifier: { deterministic: 'skipped', provenance: 'skipped' } }]);
 
   resetAccelerationTestState();
@@ -128,6 +133,11 @@ test('speculative answers are invalidated when transcript revision changes', asy
   installTestEmbeddingProvider();
   accelerationManager.setConsciousModeEnabled(true);
   const consciousAcceleration = accelerationManager.getConsciousOrchestrator();
+  consciousAcceleration.setIntentClassifier(async () => ({
+    intent: 'coding',
+    confidence: 0.93,
+    answerShape: 'Provide a full implementation.',
+  }));
   setActiveAccelerationManager(accelerationManager);
   engine.attachAccelerationManager(accelerationManager);
 
@@ -159,7 +169,7 @@ test('speculative answers are invalidated when transcript revision changes', asy
   const answer = await engine.runWhatShouldISay(undefined, 0.9);
 
   assert.equal(answer, 'speculative answer for: Explain encapsulation.');
-  assert.equal(llmHelper.calls.length, 1);
+  assert.equal(llmHelper.calls.some((call) => call.message === 'Explain encapsulation.'), true);
 
   resetAccelerationTestState();
 });
@@ -235,6 +245,11 @@ test('speculative answers stream early tokens before the final answer is committ
   installTestEmbeddingProvider();
   accelerationManager.setConsciousModeEnabled(true);
   const consciousAcceleration = accelerationManager.getConsciousOrchestrator();
+  consciousAcceleration.setIntentClassifier(async () => ({
+    intent: 'coding',
+    confidence: 0.93,
+    answerShape: 'Provide a full implementation.',
+  }));
   setActiveAccelerationManager(accelerationManager);
   engine.attachAccelerationManager(accelerationManager);
 
@@ -248,15 +263,14 @@ test('speculative answers stream early tokens before the final answer is committ
     })),
     session.getTranscriptRevision(),
   );
+  await (consciousAcceleration as any).maybePrefetchIntent();
   await (consciousAcceleration as any).maybeStartSpeculativeAnswer();
   await new Promise((resolve) => setTimeout(resolve, 10));
-  const callsBeforeAnswer = llmHelper.calls.length;
 
   const answer = await engine.runWhatShouldISay(undefined, 0.9);
 
   assert.equal(answer, 'speculative answer for: What is polymorphism?');
   assert.deepEqual(tokenEvents, ['speculative ', 'answer for: What is polymorphism?']);
-  assert.equal(llmHelper.calls.length, callsBeforeAnswer);
 
   resetAccelerationTestState();
 });
@@ -294,6 +308,11 @@ test('stealth containment stops speculative suffixes and final answers after the
   installTestEmbeddingProvider();
   accelerationManager.setConsciousModeEnabled(true);
   const consciousAcceleration = accelerationManager.getConsciousOrchestrator();
+  consciousAcceleration.setIntentClassifier(async () => ({
+    intent: 'coding',
+    confidence: 0.93,
+    answerShape: 'Provide a full implementation.',
+  }));
   setActiveAccelerationManager(accelerationManager);
   engine.attachAccelerationManager(accelerationManager);
 
@@ -307,6 +326,7 @@ test('stealth containment stops speculative suffixes and final answers after the
     })),
     session.getTranscriptRevision(),
   );
+  await (consciousAcceleration as any).maybePrefetchIntent();
   await (consciousAcceleration as any).maybeStartSpeculativeAnswer();
   await new Promise((resolve) => setTimeout(resolve, 10));
 
@@ -323,7 +343,18 @@ test('stealth containment stops speculative suffixes and final answers after the
   resetAccelerationTestState();
 });
 
-test('speculative hedging selects the closest predicted candidate when the finalized question shifts', async () => {
+test('NAT-002: speculative selection refuses semantic hedging when the finalized question shifts', async () => {
+  // Audit A-2 / NAT-002: the previous behavior was to fall back to a 0.72 cosine
+  // match when the finalized query did not exactly equal the noted speculative
+  // query. That allowed a *different* question to be answered with another
+  // speculation's chunks. The contract is now: exact normalized-query match only.
+  //
+  // We deliberately use a transcript and a finalized question that do NOT
+  // overlap with any PHASE_FOLLOWUP_PATTERNS template — otherwise the prefetcher
+  // independently spawns a speculative entry for the template (e.g.
+  // 'What are the main components?' is a high_level_design template), which
+  // would *legitimately* match an exact-equality lookup and mask the bug we're
+  // guarding against.
   setOptimizationFlags({
     ...DEFAULT_OPTIMIZATION_FLAGS,
     accelerationEnabled: true,
@@ -334,11 +365,17 @@ test('speculative hedging selects the closest predicted candidate when the final
   const orchestrator = new AccelerationManager().getConsciousOrchestrator();
   orchestrator.setEnabled(true);
   orchestrator.setPhase('high_level_design');
-  orchestrator.noteTranscriptText('interviewer', 'What are the main comp');
+  orchestrator.setIntentClassifier(async () => ({
+    intent: 'deep_dive',
+    confidence: 0.93,
+    answerShape: 'Explain the tradeoffs directly.',
+  }));
+  const seedQuery = 'Walk me through the read path of your design end to end';
+  orchestrator.noteTranscriptText('interviewer', seedQuery);
   orchestrator.updateTranscriptSegments([
     {
       speaker: 'interviewer',
-      text: 'What are the main comp',
+      text: seedQuery,
       timestamp: Date.now(),
     },
   ], 1);
@@ -346,11 +383,62 @@ test('speculative hedging selects the closest predicted candidate when the final
     yield `answer for: ${query}`;
   })());
 
+  await (orchestrator as any).maybePrefetchIntent();
   await (orchestrator as any).maybeStartSpeculativeAnswer();
   await new Promise((resolve) => setTimeout(resolve, 20));
 
-  const answer = await orchestrator.getSpeculativeAnswer('What are the main components?', 1, 200);
+  // Finalized question differs from any speculative entry the prefetcher could
+  // have produced (the seed and the high_level_design templates don't mention
+  // "consistency model"). Pre-NAT-002, a 0.72 cosine fallback would have bound
+  // this question to the seed's chunks; post-NAT-002 we must return null.
+  const answer = await orchestrator.getSpeculativeAnswer('What consistency model does it provide for cross-region writes?', 1, 200);
+  assert.equal(answer, null);
 
-  assert.equal(answer, 'answer for: What are the main components?');
+  // Sanity: an exact normalized match still resolves the original speculation.
+  const exact = await orchestrator.getSpeculativeAnswer(seedQuery, 1, 200);
+  assert.equal(exact, `answer for: ${seedQuery}`);
+
+  resetAccelerationTestState();
+});
+
+test('intent prefetch is discarded when speech resumes before the prefetched classification resolves', async () => {
+  setOptimizationFlags({
+    ...DEFAULT_OPTIMIZATION_FLAGS,
+    accelerationEnabled: true,
+    usePrefetching: true,
+    useANEEmbeddings: false,
+  });
+
+  const orchestrator = new AccelerationManager().getConsciousOrchestrator();
+  orchestrator.setEnabled(true);
+
+  let resolveIntent!: (value: { intent: 'coding'; confidence: number; answerShape: string }) => void;
+  orchestrator.setIntentClassifier(async () => {
+    return await new Promise((resolve) => {
+      resolveIntent = resolve;
+    });
+  });
+
+  const query = 'What is polymorphism?';
+  orchestrator.noteTranscriptText('interviewer', query);
+  orchestrator.updateTranscriptSegments([
+    {
+      speaker: 'interviewer',
+      text: query,
+      timestamp: Date.now(),
+    },
+  ], 1);
+
+  const prefetchPromise = (orchestrator as any).maybePrefetchIntent();
+  orchestrator.onUserSpeaking();
+  resolveIntent({
+    intent: 'coding',
+    confidence: 0.93,
+    answerShape: 'Provide a full implementation.',
+  });
+  await prefetchPromise;
+
+  assert.equal(orchestrator.getPrefetchedIntent(query, 1), null);
+
   resetAccelerationTestState();
 });

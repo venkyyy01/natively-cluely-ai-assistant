@@ -1196,3 +1196,16 @@ Usage notes:
 <!-- SKILLS_TABLE_END -->
 
 </skills_system>
+
+<project_operations priority="2">
+
+## Debug logging (NAT-011)
+
+File logging is **off by default** in packaged Natively builds. Set
+`NATIVELY_DEBUG_LOG=1` in the environment to opt in. Logs are written to
+`<userData>/Logs/natively-YYYY-MM-DD.log` (on macOS:
+`~/Library/Application Support/Natively/Logs/...`), rotated at 10 MB with
+3-file retention, and stealth identifiers are redacted before write. See
+`DEPLOYMENT.md` → "Debug Logging" for the full operator guide.
+
+</project_operations>

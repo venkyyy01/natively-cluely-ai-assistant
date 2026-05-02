@@ -2,6 +2,8 @@ import type { AnswerHypothesis } from './AnswerHypothesisStore';
 import { isBehavioralQuestionText } from '../ConsciousMode';
 import type { ConsciousPlannerPreferenceSummary, ConsciousResponseQuestionMode } from './ConsciousResponsePreferenceStore';
 import type { QuestionReaction } from './QuestionReactionClassifier';
+import type { IntentResult } from '../llm/IntentClassifier';
+import { isStrongConsciousIntent } from './ConsciousIntentService';
 
 export type ConsciousAnswerShape =
   | 'direct_answer'
@@ -57,16 +59,34 @@ export function detectConsciousQuestionMode(question: string): ConsciousResponse
   return 'general';
 }
 
+function detectQuestionModeFromIntent(intentResult?: IntentResult | null): ConsciousResponseQuestionMode | null {
+  if (!isStrongConsciousIntent(intentResult)) {
+    return null;
+  }
+
+  switch (intentResult.intent) {
+    case 'behavioral':
+      return 'behavioral';
+    case 'coding':
+      return 'live_coding';
+    case 'deep_dive':
+      return 'system_design';
+    default:
+      return null;
+  }
+}
+
 export class ConsciousAnswerPlanner {
   plan(input: {
     question: string;
     reaction?: QuestionReaction | null;
     hypothesis?: AnswerHypothesis | null;
     preferenceSummary?: ConsciousPlannerPreferenceSummary | null;
+    intentResult?: IntentResult | null;
   }): ConsciousAnswerPlan {
     const reaction = input.reaction;
     const focalFacets = reaction?.targetFacets?.length ? reaction.targetFacets : input.hypothesis?.targetFacets || [];
-    const questionMode = detectConsciousQuestionMode(input.question);
+    const questionMode = detectQuestionModeFromIntent(input.intentResult) ?? detectConsciousQuestionMode(input.question);
     const buildPlan = (plan: Omit<ConsciousAnswerPlan, 'questionMode' | 'deliveryFormat' | 'deliveryStyle' | 'groundingHint'>): ConsciousAnswerPlan => {
       const modeAdjusted: ConsciousAnswerPlan = {
         ...plan,

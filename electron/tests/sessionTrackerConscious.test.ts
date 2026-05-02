@@ -220,6 +220,54 @@ test('SessionTracker ensureMeetingContext keeps latest meeting id when restores 
   }
 });
 
+test('SessionTracker ensureMeetingContext clears stale conscious state before switching into a meeting with no persisted snapshot', async () => {
+  const tracker = new SessionTracker();
+  tracker.setConsciousModeEnabled(true);
+  tracker.recordConsciousResponse('How would you design a cache?', {
+    mode: 'reasoning_first',
+    openingReasoning: 'I would start with cache aside.',
+    implementationPlan: ['Use Redis'],
+    tradeoffs: ['Cold misses still hit the database'],
+    edgeCases: [],
+    scaleConsiderations: [],
+    pushbackResponses: [],
+    likelyFollowUps: [],
+    codeTransition: '',
+  }, 'start');
+  (tracker as any).answerHypothesisStore.restorePersistenceSnapshot({
+    latestHypothesis: null,
+    latestReaction: {
+      kind: 'tradeoff_probe',
+      confidence: 0.9,
+      cues: ['tradeoff_language'],
+      targetFacets: ['tradeoffs'],
+      shouldContinueThread: true,
+    },
+  });
+
+  const persistence = (tracker as any).persistence;
+  const originalFindByMeeting = persistence.findByMeeting.bind(persistence);
+  persistence.findByMeeting = async (meetingId: string) => {
+    if (meetingId === 'meeting-empty') {
+      return null;
+    }
+
+    return originalFindByMeeting(meetingId);
+  };
+
+  try {
+    tracker.ensureMeetingContext('meeting-empty');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    assert.equal(tracker.getLatestConsciousResponse(), null);
+    assert.equal(tracker.getActiveReasoningThread(), null);
+    assert.equal(tracker.getLatestQuestionReaction(), null);
+    assert.equal(tracker.getConsciousEvidenceContext(), '');
+  } finally {
+    persistence.findByMeeting = originalFindByMeeting;
+  }
+});
+
 test('SessionTracker restoreFromMeetingId restores conscious reasoning and hypothesis state', async () => {
   const tracker = new SessionTracker();
   tracker.setConsciousModeEnabled(true);
@@ -341,6 +389,77 @@ test('SessionTracker restoreFromMeetingId restores conscious reasoning and hypot
   }
 });
 
+test('SessionTracker restoreFromMeetingId restores suspended conscious threads for resume continuity', async () => {
+  const tracker = new SessionTracker();
+  tracker.setConsciousModeEnabled(true);
+  const persistence = (tracker as any).persistence;
+
+  const originalFindByMeeting = persistence.findByMeeting.bind(persistence);
+  persistence.findByMeeting = async (meetingId: string) => {
+    if (meetingId !== 'meeting-suspended-threads') {
+      return originalFindByMeeting(meetingId);
+    }
+
+    const now = Date.now();
+    return {
+      version: 1,
+      sessionId: 'session-suspended-threads',
+      meetingId,
+      createdAt: now - 1000,
+      lastActiveAt: now,
+      activeThread: {
+        id: 'thread_active',
+        topic: 'Active topic',
+        goal: 'Continue active design thread',
+        phase: 'high_level_design',
+        turnCount: 3,
+      },
+      suspendedThreads: [
+        {
+          id: 'thread_suspend_1',
+          topic: 'Retry strategy',
+          goal: 'Resume retry discussion',
+          suspendedAt: now - 2000,
+          phase: 'deep_dive',
+          turnCount: 2,
+          resumeKeywords: ['retry', 'backoff'],
+          keyDecisions: ['Use capped exponential backoff'],
+          constraints: ['Bound retries to avoid thundering herds'],
+        },
+      ],
+      pinnedItems: [],
+      constraints: [],
+      epochSummaries: [],
+      responseHashes: [],
+      consciousState: {
+        threadState: {
+          latestConsciousResponse: null,
+          activeReasoningThread: null,
+        },
+        hypothesisState: {
+          latestHypothesis: null,
+          latestReaction: null,
+        },
+      },
+    };
+  };
+
+  try {
+    const restored = await tracker.restoreFromMeetingId('meeting-suspended-threads');
+    assert.equal(restored, true);
+
+    const suspended = tracker.getThreadManager().getSuspendedThreads();
+    assert.equal(suspended.length, 1);
+    assert.equal(suspended[0].id, 'thread_suspend_1');
+    assert.equal(suspended[0].topic, 'Retry strategy');
+    assert.equal(suspended[0].phase, 'deep_dive');
+    assert.ok(suspended[0].resumeKeywords.includes('retry'));
+    assert.ok(suspended[0].keyDecisions.includes('Use capped exponential backoff'));
+  } finally {
+    persistence.findByMeeting = originalFindByMeeting;
+  }
+});
+
 test('SessionTracker restoreFromMeetingId keeps conscious state cleared when conscious mode is disabled', async () => {
   const tracker = new SessionTracker();
   tracker.setConsciousModeEnabled(false);
@@ -439,6 +558,43 @@ test('SessionTracker restoreFromMeetingId keeps conscious state cleared when con
     assert.equal(tracker.getConsciousEvidenceContext(), '');
   } finally {
     persistence.findByMeeting = originalFindByMeeting;
+  }
+});
+
+test('SessionTracker persists cleared conscious state when clearing threads or disabling conscious mode', () => {
+  const tracker = new SessionTracker();
+  tracker.setConsciousModeEnabled(true);
+  (tracker as any).activeMeetingId = 'meeting-conscious-persist';
+
+  const scheduledSnapshots: any[] = [];
+  const persistence = (tracker as any).persistence;
+  const originalScheduleSave = persistence.scheduleSave.bind(persistence);
+  persistence.scheduleSave = (snapshot: any) => {
+    scheduledSnapshots.push(snapshot);
+  };
+
+  try {
+    tracker.recordConsciousResponse('How would you design a cache?', {
+      mode: 'reasoning_first',
+      openingReasoning: 'I would start with cache aside.',
+      implementationPlan: ['Use Redis'],
+      tradeoffs: ['Cold misses still hit the database'],
+      edgeCases: [],
+      scaleConsiderations: [],
+      pushbackResponses: [],
+      likelyFollowUps: [],
+      codeTransition: '',
+    }, 'start');
+
+    tracker.clearConsciousModeThread();
+    tracker.setConsciousModeEnabled(false);
+
+    assert.ok(scheduledSnapshots.length >= 2);
+    const lastSnapshot = scheduledSnapshots.at(-1);
+    assert.equal(lastSnapshot?.consciousState?.threadState?.latestConsciousResponse ?? null, null);
+    assert.deepEqual(lastSnapshot?.consciousState?.preferenceState?.directives ?? [], []);
+  } finally {
+    persistence.scheduleSave = originalScheduleSave;
   }
 });
 

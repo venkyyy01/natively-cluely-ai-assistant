@@ -69,9 +69,9 @@ Use Apple Foundation Models as the highest-priority intent classifier in acceler
 
 **Files to create**
 
-- `stealth-projects/macos-foundation-intent-helper/Package.swift`
-- `stealth-projects/macos-foundation-intent-helper/Sources/main.swift`
-- `stealth-projects/macos-foundation-intent-helper/README.md`
+- `applesilicon/macos-foundation-intent-helper/Package.swift`
+- `applesilicon/macos-foundation-intent-helper/Sources/main.swift`
+- `applesilicon/macos-foundation-intent-helper/README.md`
 
 **Helper contract (stdin JSON -> stdout JSON)**
 
@@ -83,6 +83,9 @@ Request:
   "question": "...",
   "preparedTranscript": "...",
   "assistantResponseCount": 2,
+  "promptVersion": "foundation_intent_prompt_v2",
+  "schemaVersion": "foundation_intent_schema_v1",
+  "locale": "en-US",
   "candidateIntents": ["behavioral","coding","deep_dive","clarification","follow_up","example_request","summary_probe","general"]
 }
 ```
@@ -95,7 +98,9 @@ Response:
   "intent": "behavioral",
   "confidence": 0.91,
   "answerShape": "Tell one concrete story in first person.",
-  "provider": "apple_foundation_models"
+  "provider": "apple_foundation_models",
+  "promptVersion": "foundation_intent_prompt_v2",
+  "schemaVersion": "foundation_intent_schema_v1"
 }
 ```
 
@@ -104,7 +109,7 @@ Error response:
 ```json
 {
   "ok": false,
-  "errorType": "rate_limited|refusal|unavailable|timeout|invalid_response|unknown",
+  "errorType": "rate_limited|refusal|unavailable|model_not_ready|unsupported_locale|timeout|invalid_response|unknown",
   "message": "..."
 }
 ```
@@ -314,9 +319,9 @@ Error response:
 - `electron/llm/providers/IntentClassificationCoordinator.ts`
 - `electron/tests/intentClassificationCoordinator.test.ts`
 - `electron/tests/foundationModelsIntentProvider.test.ts`
-- `stealth-projects/macos-foundation-intent-helper/Package.swift`
-- `stealth-projects/macos-foundation-intent-helper/Sources/main.swift`
-- `stealth-projects/macos-foundation-intent-helper/README.md`
+- `applesilicon/macos-foundation-intent-helper/Package.swift`
+- `applesilicon/macos-foundation-intent-helper/Sources/main.swift`
+- `applesilicon/macos-foundation-intent-helper/README.md`
 
 ### Modified files
 

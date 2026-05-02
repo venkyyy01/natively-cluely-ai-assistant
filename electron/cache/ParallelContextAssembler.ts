@@ -145,17 +145,54 @@ export class ParallelContextAssembler {
     return this.workerCount;
   }
 
+  // NAT-015 / audit R-3: every call to `runInWorker` used to spawn a new
+  // `Worker` and never call `terminate()` on it. The worker thread does
+  // *not* auto-exit when the script body finishes because `parentPort`
+  // keeps it alive waiting for more messages, so each invocation leaked a
+  // thread (~3 per `assemble()`). The fix is to always terminate after the
+  // result arrives, succeeds, or fails. We use a `finally` to ensure the
+  // termination runs even on cancellation.
+  //
+  // TODO(EPIC-13): replace this per-call spawn with reuse via WorkerPool's
+  // long-lived worker registry. The current pool only schedules the
+  // wrapping promise, not the underlying worker, so this still spawns a
+  // worker per task.
   private runInWorker<T>(type: string, payload: any): Promise<T> {
-    return this.workerPool.submit({ lane: 'semantic', priority: 1 }, () => new Promise<T>((resolve, reject) => {
+    return this.workerPool.submit({ lane: 'semantic', priority: 1 }, async () => {
       const worker = new Worker(__filename, {
-        workerData: { type, payload }
+        workerData: { type, payload },
       });
-      worker.on('message', resolve);
-      worker.on('error', reject);
-      worker.on('exit', (code) => {
-        if (code !== 0) reject(new Error(`Worker stopped with exit code ${code}`));
-      });
-    }));
+      try {
+        return await new Promise<T>((resolve, reject) => {
+          let settled = false;
+          const settleResolve = (value: T) => {
+            if (settled) return;
+            settled = true;
+            resolve(value);
+          };
+          const settleReject = (error: unknown) => {
+            if (settled) return;
+            settled = true;
+            reject(error instanceof Error ? error : new Error(String(error)));
+          };
+          worker.on('message', settleResolve);
+          worker.on('error', settleReject);
+          worker.on('exit', (code) => {
+            if (code !== 0) settleReject(new Error(`Worker stopped with exit code ${code}`));
+          });
+        });
+      } finally {
+        // Best-effort terminate: the worker may have already exited, in
+        // which case `terminate()` resolves immediately. We swallow errors
+        // because there is nothing higher-up the stack that can act on a
+        // failed thread teardown.
+        try {
+          await worker.terminate();
+        } catch {
+          // Worker already exited; nothing to do.
+        }
+      }
+    });
   }
 
   async assemble(input: ContextAssemblyInput): Promise<ContextAssemblyOutput> {
@@ -165,22 +202,18 @@ export class ParallelContextAssembler {
 
     const docs = this.buildRetrievalDocuments(input.transcript);
 
-    // Try to use real embeddings if ANE provider is available
     const embeddingProvider = getEmbeddingProvider();
-    let embedding: number[];
+    const embeddingP: Promise<number[]> = embeddingProvider?.isInitialized()
+      ? embeddingProvider.embed(input.query)
+      : this.runInWorker<number[]>('embedding', { query: input.query });
 
-    if (embeddingProvider?.isInitialized()) {
-      // Use real embeddings from ANE provider
-      embedding = await embeddingProvider.embed(input.query);
-    } else {
-      // Fall back to hash-based embedding (worker thread)
-      embedding = await this.runInWorker<number[]>('embedding', { query: input.query });
-    }
+    const bm25P = this.runInWorker<Array<{ text: string; score: number; timestamp: number }>>('bm25', {
+      query: input.query,
+      documents: docs,
+    });
+    const phaseP = this.runInWorker<InterviewPhase>('phase', { transcript: input.transcript });
 
-    const [bm25ResultsRaw, phaseResult] = await Promise.all([
-      this.runInWorker<Array<{ text: string; score: number; timestamp: number }>>('bm25', { query: input.query, documents: docs }),
-      this.runInWorker<InterviewPhase>('phase', { transcript: input.transcript }),
-    ]);
+    const [embedding, bm25ResultsRaw, phase] = await Promise.all([embeddingP, bm25P, phaseP]);
 
     const speakerByText = new Map<string, 'interviewer' | 'user' | 'assistant'>();
     for (const doc of docs) {
@@ -190,13 +223,12 @@ export class ParallelContextAssembler {
       }
     }
 
-    const bm25Results = (await bm25ResultsRaw).map((r: { text: string; score: number; timestamp: number }) => ({
+    const bm25Results = bm25ResultsRaw.map((r: { text: string; score: number; timestamp: number }) => ({
       role: speakerByText.get(r.text.trim().toLowerCase()) ?? 'interviewer' as const,
       text: r.text,
       score: r.score,
       timestamp: r.timestamp,
     }));
-    const phase = await phaseResult;
     const relevantContext = this.selectRelevantContext(bm25Results, phase);
     const confidence = this.calculateConfidence(embedding, relevantContext);
 

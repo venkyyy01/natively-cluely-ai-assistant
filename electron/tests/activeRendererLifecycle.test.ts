@@ -58,7 +58,7 @@ class FakeWindow extends EventEmitter {
 }
 
 function createRuntimeHarness(
-  onFault?: (reason: string) => void | Promise<void>,
+  onFault: (reason: string) => void | Promise<void>,
   options: { startUrl?: string } = {},
 ) {
   const ipcBus = new EventEmitter();
@@ -75,7 +75,7 @@ function createRuntimeHarness(
     preloadPath: '/tmp/preload.js',
     shellPreloadPath: '/tmp/shellPreload.js',
     ipcMain: ipcBus as never,
-    logger: { log() {}, warn() {} },
+    logger: { log() {}, warn() {}, error() {} },
     onFault,
   });
 
@@ -89,9 +89,14 @@ function createRuntimeHarness(
 }
 
 test('active renderer lifecycle: start/stop and shell readiness remain deterministic', () => {
-  const { runtime, created, ipcBus } = createRuntimeHarness();
+  const { runtime, created, ipcBus } = createRuntimeHarness(() => {});
 
   runtime.show();
+  // Simulate first paint frame so the deferred show actually reveals the shell
+  created[0]?.webContents.emit('paint', {}, { x: 0, y: 0, width: 1, height: 1 }, {
+    getSize: () => ({ width: 1, height: 1 }),
+    toPNG: () => Buffer.from([]),
+  });
   runtime.hide();
   ipcBus.emit('stealth-shell:ready', { sender: { id: created[1]?.webContents.id } });
   runtime.destroy();
@@ -142,10 +147,10 @@ test('active renderer lifecycle: content crash triggers fail-closed supervisor f
 });
 
 test('active renderer lifecycle: rapid shell restarts keep teardown deterministic', () => {
-  const first = createRuntimeHarness();
+  const first = createRuntimeHarness(() => {});
   first.runtime.destroy();
 
-  const second = createRuntimeHarness();
+  const second = createRuntimeHarness(() => {});
   second.runtime.destroy();
 
   assert.equal(first.created[0]?.destroyed, true);

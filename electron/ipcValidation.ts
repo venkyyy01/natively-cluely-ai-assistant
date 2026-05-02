@@ -23,7 +23,11 @@ export const ipcSchemas = {
     boundedString(50000),
     z.array(z.string().trim().min(1).max(4096)).max(8).optional(),
     z.string().max(100000).optional(),
-    z.object({ skipSystemPrompt: z.boolean().optional() }).optional(),
+    z.object({
+      skipSystemPrompt: z.boolean().optional(),
+      qualityTier: z.enum(['fast', 'quality', 'verify']).optional(),
+      requestId: z.string().uuid().optional(),
+    }),
   ]),
   customProvider: z.object({
     id: boundedString(128),

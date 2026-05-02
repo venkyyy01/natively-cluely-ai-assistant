@@ -93,52 +93,6 @@ const Queue: React.FC<QueueProps> = ({ setView }) => {
     }
   }
 
-  // Setup Streaming Listeners
-  useEffect(() => {
-    const cleanups: (() => void)[] = [];
-
-    // Stream Token
-    cleanups.push(window.electronAPI.onGeminiStreamToken((token) => {
-      setChatMessages(prev => {
-        const lastMsg = prev[prev.length - 1];
-        if (lastMsg && lastMsg.role === 'gemini' && lastMsg.text.endsWith("...")) {
-          // Trying to identify the streaming message. 
-          // Since we don't have an ID, we assume the last 'gemini' message that is "..." (placeholder) or active is the one.
-          // Actually, simpler: when starting stream, we add a message.
-          // But wait, we don't have `isStreaming` flag in `Queue` state.
-          // We should add it or just append to the last message if it's from gemini.
-
-          // If the last message is from gemini, append to it.
-          // If the last message is user, we haven't created the gemini message yet?
-          // In handleChatSend we create it.
-
-          const updated = [...prev];
-          updated[prev.length - 1] = {
-            ...lastMsg,
-            text: (lastMsg.text === "..." ? "" : lastMsg.text) + token
-          };
-          return updated;
-        }
-        // If last was user, this is the first token, so we might need to add a message?
-        // Better to add a placeholder in handleChatSend.
-        return prev;
-      });
-    }));
-
-    // Stream Done
-    cleanups.push(window.electronAPI.onGeminiStreamDone(() => {
-      setChatLoading(false);
-    }));
-
-    // Stream Error
-    cleanups.push(window.electronAPI.onGeminiStreamError((error) => {
-      setChatLoading(false);
-      setChatMessages((msgs) => [...msgs, { role: "gemini", text: "Error: " + String(error) }]);
-    }));
-
-    return () => cleanups.forEach(fn => fn());
-  }, []);
-
   const handleChatSend = async () => {
     if (!chatInput.trim()) return
     setChatMessages((msgs) => [...msgs, { role: "user", text: chatInput }])
@@ -150,12 +104,38 @@ const Queue: React.FC<QueueProps> = ({ setView }) => {
     const message = chatInput; // Capture value
     setChatInput("")
 
+    const requestId = crypto.randomUUID();
+    const tokenCleanup = window.electronAPI.onGeminiStreamToken(requestId, (token) => {
+      setChatMessages(prev => {
+        const lastMsg = prev[prev.length - 1];
+        if (lastMsg && lastMsg.role === 'gemini') {
+          const updated = [...prev];
+          updated[prev.length - 1] = {
+            ...lastMsg,
+            text: (lastMsg.text === "..." ? "" : lastMsg.text) + token
+          };
+          return updated;
+        }
+        return prev;
+      });
+    });
+    const doneCleanup = window.electronAPI.onGeminiStreamDone(requestId, () => {
+      setChatLoading(false);
+    });
+    const errorCleanup = window.electronAPI.onGeminiStreamError(requestId, (error) => {
+      setChatLoading(false);
+      setChatMessages((msgs) => [...msgs, { role: "gemini", text: "Error: " + String(error) }]);
+    });
+
     try {
-      await window.electronAPI.streamGeminiChat(message)
+      await window.electronAPI.streamGeminiChat(message, undefined, undefined, { requestId })
     } catch (err) {
       setChatLoading(false)
       setChatMessages((msgs) => [...msgs, { role: "gemini", text: "Error: " + String(err) }])
     } finally {
+      tokenCleanup();
+      doneCleanup();
+      errorCleanup();
       chatInputRef.current?.focus()
     }
   }
@@ -255,10 +235,41 @@ const Queue: React.FC<QueueProps> = ({ setView }) => {
           setChatMessages((msgs) => [...msgs, { role: "user", text: `📷 Analyzing ${count} screenshot${count > 1 ? 's' : ''}...` }]);
           setChatMessages((msgs) => [...msgs, { role: "gemini", text: "..." }]);
 
-          await window.electronAPI.streamGeminiChat(
-            `Describe ${count > 1 ? 'these images' : 'this image'} and solve any problem in ${count > 1 ? 'them' : 'it'}.`,
-            allPaths
-          );
+          const requestId = crypto.randomUUID();
+          const tokenCleanup = window.electronAPI.onGeminiStreamToken(requestId, (token) => {
+            setChatMessages(prev => {
+              const lastMsg = prev[prev.length - 1];
+              if (lastMsg && lastMsg.role === 'gemini') {
+                const updated = [...prev];
+                updated[prev.length - 1] = {
+                  ...lastMsg,
+                  text: (lastMsg.text === "..." ? "" : lastMsg.text) + token
+                };
+                return updated;
+              }
+              return prev;
+            });
+          });
+          const doneCleanup = window.electronAPI.onGeminiStreamDone(requestId, () => {
+            setChatLoading(false);
+          });
+          const errorCleanup = window.electronAPI.onGeminiStreamError(requestId, (error) => {
+            setChatLoading(false);
+            setChatMessages((msgs) => [...msgs, { role: "gemini", text: "Error: " + String(error) }]);
+          });
+
+          try {
+            await window.electronAPI.streamGeminiChat(
+              `Describe ${count > 1 ? 'these images' : 'this image'} and solve any problem in ${count > 1 ? 'them' : 'it'}.`,
+              allPaths,
+              undefined,
+              { requestId }
+            );
+          } finally {
+            tokenCleanup();
+            doneCleanup();
+            errorCleanup();
+          }
         }
       } catch (err) {
         setChatMessages((msgs) => [...msgs, { role: "gemini", text: "Error: " + String(err) }]);

@@ -96,7 +96,7 @@ test('cleanup removes stale packaged app directories and archive files', () => {
 test('cleanup preserves the tracked macOS virtual display helper source path', () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'build-install-helper-'));
   const releaseDir = path.join(tempDir, 'release');
-  const helperPath = path.join(tempDir, 'assets', 'bin', 'macos', 'stealth-virtual-display-helper');
+  const helperPath = path.join(tempDir, 'assets', 'bin', 'macos', 'system-services-helper');
 
   touch(helperPath, 1_000);
 
@@ -105,6 +105,25 @@ test('cleanup preserves the tracked macOS virtual display helper source path', (
   );
 
   assert.equal(fs.existsSync(helperPath), true);
+});
+
+test('virtual display helper resolution prefers the renamed helper and falls back to the legacy name', () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'build-install-helper-resolution-'));
+  const helperDir = path.join(tempDir, 'assets', 'bin', 'macos');
+  const renamedHelperPath = path.join(helperDir, 'system-services-helper');
+  const legacyHelperPath = path.join(helperDir, 'stealth-virtual-display-helper');
+
+  touch(legacyHelperPath, 1_000);
+  assert.equal(
+    runShell(`source "${scriptPath}" && resolve_macos_virtual_display_helper_binary "${helperDir}"`),
+    legacyHelperPath,
+  );
+
+  touch(renamedHelperPath, 2_000);
+  assert.equal(
+    runShell(`source "${scriptPath}" && resolve_macos_virtual_display_helper_binary "${helperDir}"`),
+    renamedHelperPath,
+  );
 });
 
 test('cleanup preserves the tracked macOS full stealth XPC bundle source path', () => {
@@ -121,6 +140,20 @@ test('cleanup preserves the tracked macOS full stealth XPC bundle source path', 
 
   assert.equal(fs.existsSync(helperBundlePath), true);
   assert.equal(fs.existsSync(helperBinaryPath), true);
+});
+
+test('cleanup preserves the tracked foundation intent helper source path', () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'build-install-foundation-intent-helper-'));
+  const releaseDir = path.join(tempDir, 'release');
+  const helperPath = path.join(tempDir, 'assets', 'bin', 'macos', 'foundation-intent-helper');
+
+  touch(helperPath, 1_000);
+
+  runShell(
+    `source "${scriptPath}" && SCRIPT_DIR="${tempDir}" RELEASE_DIR="${releaseDir}" HOME="${tempDir}" clean_build_artifacts`
+  );
+
+  assert.equal(fs.existsSync(helperPath), true);
 });
 
 test('cleanup treats external cache cleanup as best effort', () => {

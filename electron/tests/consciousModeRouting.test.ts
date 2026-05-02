@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { InterviewerUtteranceBuffer } from '../buffering/InterviewerUtteranceBuffer';
 import { IntelligenceEngine } from '../IntelligenceEngine';
 import { SessionTracker } from '../SessionTracker';
 import {
@@ -19,12 +20,89 @@ type StreamCall = {
   prompt?: string;
   options?: {
     skipKnowledgeInterception?: boolean;
-    qualityTier?: 'fast' | 'standard' | 'structured_reasoning';
+    qualityTier?: 'fast' | 'quality' | 'verify';
   };
 };
 
+// NAT-004: ConsciousProvenanceVerifier now fails closed when a structured
+// response names a technology or quotes a metric and there is no semantic
+// grounding context to verify it against. The fake LLMs in this file emit
+// responses that legitimately reference Redis, IP, QA, PM, and metrics like
+// 10x, so we must seed a profile with vocabulary that covers those terms.
+// Without this, the verifier rejects the response and the orchestrator falls
+// back to raw streamed JSON / no recorded thread, masking what these tests
+// actually want to assert (routing + STAR formatting + thread continuation).
+// The profile must surface vocabulary for every question these tests ask
+// (rate limiter, monolith → microservices migration, behavioral conflict
+// stories) AND every term the structured responses cite (Redis, IP, QA,
+// PM, 10x). The fact store keys facts by question-token overlap, so each
+// expected question token must appear somewhere in a fact's text or tags.
+const ROUTING_TEST_PROFILE = {
+  identity: {
+    name: 'Jane Doe',
+    role: 'Senior Backend Engineer',
+    summary:
+      'Built distributed systems and APIs. Designed rate limiters with Redis ' +
+      'and IP-based throttling. Migrated a monolith to microservices using ' +
+      'the strangler pattern. Partnered with QA on release validation and ' +
+      'with PM on incident communications. Scaled traffic 10x in prior roles.',
+  },
+  skills: ['Redis', 'rate limiting', 'monolith migration', 'microservices', 'incident response'],
+  projects: [
+    {
+      name: 'Multi-region rate limiter',
+      description:
+        'Per-user token bucket backed by Redis with IP fallbacks for shared NAT, ' +
+        'tuned for 10x traffic spikes.',
+      technologies: ['Redis', 'IP', 'token bucket', 'API'],
+    },
+    {
+      name: 'Monolith to microservices migration',
+      description:
+        'Carved a legacy monolith into microservices via the strangler pattern, ' +
+        'extracting bounded contexts behind a Redis-backed gateway.',
+      technologies: ['Redis', 'microservices', 'monolith', 'API'],
+    },
+  ],
+  experience: [
+    {
+      company: 'Acme',
+      role: 'Senior Backend Engineer',
+      bullets: [
+        'Designed rate limiter for the public API using Redis and per-IP buckets.',
+        'Led migration from monolith to microservices behind a strangler facade.',
+        'Partnered with QA on release validation checklists.',
+        'Coordinated with PM on customer-impacting incidents.',
+        'Scaled write throughput 10x by sharding hot keys.',
+      ],
+    },
+  ],
+  activeJD: {
+    title: 'Staff Backend Engineer',
+    company: 'ExampleCorp',
+    technologies: ['Redis', 'IP', 'rate limiting', 'microservices', 'monolith', 'API'],
+    requirements: [
+      'Design rate limiters for high-traffic APIs',
+      'Migrate monolith services to microservices safely',
+      'Coordinate with QA and PM during incidents',
+    ],
+    keywords: ['Redis', 'IP', 'QA', 'PM', '10x', 'monolith', 'microservices', 'API', 'design', 'migrate'],
+  },
+};
+
+function buildKnowledgeOrchestratorStub() {
+  return {
+    getStatus: () => ({ hasResume: true, hasActiveJD: true, activeMode: true }),
+    getProfileData: () => ROUTING_TEST_PROFILE,
+  };
+}
+
 class FakeLLMHelper {
   public calls: StreamCall[] = [];
+
+  getKnowledgeOrchestrator() {
+    return buildKnowledgeOrchestratorStub();
+  }
 
   async *streamChat(
     message: string,
@@ -103,12 +181,16 @@ test('Conscious Mode routes qualifying technical questions into the structured r
   assert.equal(thread?.followUpCount, 0);
   assert.match(llmHelper.calls[0]?.message || '', /STRUCTURED_REASONING_RESPONSE/);
   assert.equal(llmHelper.calls[0]?.options?.skipKnowledgeInterception, true);
-  assert.equal(llmHelper.calls[0]?.options?.qualityTier, 'structured_reasoning');
+  assert.equal(llmHelper.calls[0]?.options?.qualityTier, 'verify');
 });
 
 test('Conscious Mode formats behavioral answers into the strict STAR interview layout', async () => {
   class BehavioralLLMHelper {
     public calls: StreamCall[] = [];
+
+    getKnowledgeOrchestrator() {
+      return buildKnowledgeOrchestratorStub();
+    }
 
     async *streamChat(
       message: string,
@@ -373,6 +455,7 @@ test('Conscious Mode transcript auto-trigger widens for actionable interviewer p
   assert.equal(shouldAutoTriggerSuggestionFromTranscript('What are the tradeoffs', true, null), true);
   assert.equal(shouldAutoTriggerSuggestionFromTranscript('Give me an example of when you disagreed with a PM', true, null), true);
   assert.equal(shouldAutoTriggerSuggestionFromTranscript('How do you make difficult decisions', true, null), true);
+  assert.equal(shouldAutoTriggerSuggestionFromTranscript('So designing a', true, null), false);
   assert.equal(shouldAutoTriggerSuggestionFromTranscript('Can you repeat that for me', true, null), false);
   assert.equal(shouldAutoTriggerSuggestionFromTranscript('okay sounds good', true, null), false);
 });
@@ -387,6 +470,8 @@ test('Conscious Mode transcript-trigger path fires for substantive interviewer p
     },
   };
 
+  const utteranceBuffer = new InterviewerUtteranceBuffer();
+
   await maybeHandleSuggestionTriggerFromTranscript({
     speaker: 'interviewer',
     text: 'Why this approach',
@@ -394,7 +479,10 @@ test('Conscious Mode transcript-trigger path fires for substantive interviewer p
     confidence: 0.91,
     consciousModeEnabled: true,
     intelligenceManager: manager,
+    utteranceBuffer,
   });
+
+  utteranceBuffer.flush('punctuation');
 
   await maybeHandleSuggestionTriggerFromTranscript({
     speaker: 'interviewer',
@@ -403,15 +491,21 @@ test('Conscious Mode transcript-trigger path fires for substantive interviewer p
     confidence: 0.72,
     consciousModeEnabled: true,
     intelligenceManager: manager,
+    utteranceBuffer,
   });
+
+  utteranceBuffer.flush('punctuation');
 
   assert.deepEqual(calls, [
     {
       context: 'ctx',
       lastQuestion: 'Why this approach',
       confidence: 0.91,
+      sourceUtteranceId: 'utterance-1',
     },
   ]);
+
+  utteranceBuffer.dispose();
 });
 
 test('Conscious Mode routes screenshot-backed live-coding turns but keeps the same question on the fast path without screenshots', async () => {
@@ -475,6 +569,8 @@ test('Non-Conscious transcript-trigger path preserves the existing actionable he
     },
   };
 
+  const utteranceBuffer = new InterviewerUtteranceBuffer();
+
   await maybeHandleSuggestionTriggerFromTranscript({
     speaker: 'interviewer',
     text: 'Can you repeat that for me',
@@ -482,7 +578,10 @@ test('Non-Conscious transcript-trigger path preserves the existing actionable he
     confidence: 0.72,
     consciousModeEnabled: false,
     intelligenceManager: manager,
+    utteranceBuffer,
   });
+
+  utteranceBuffer.flush('punctuation');
 
   await maybeHandleSuggestionTriggerFromTranscript({
     speaker: 'interviewer',
@@ -491,15 +590,21 @@ test('Non-Conscious transcript-trigger path preserves the existing actionable he
     confidence: 0.72,
     consciousModeEnabled: false,
     intelligenceManager: manager,
+    utteranceBuffer,
   });
+
+  utteranceBuffer.flush('punctuation');
 
   assert.deepEqual(calls, [
     {
       context: 'ctx',
       lastQuestion: 'Can you repeat that for me',
       confidence: 0.72,
+      sourceUtteranceId: 'utterance-1',
     },
   ]);
+
+  utteranceBuffer.dispose();
 });
 
 test('Conscious Mode falls back to the normal intent path when structured output is malformed', async () => {
@@ -536,6 +641,10 @@ test('Conscious Mode falls back to the normal intent path when structured output
 test('Conscious Mode reset clears the old thread before malformed structured fallback on a new technical topic', async () => {
   class ResetFallbackLLMHelper {
     public calls: string[] = [];
+
+    getKnowledgeOrchestrator() {
+      return buildKnowledgeOrchestratorStub();
+    }
 
     async *streamChat(message: string): AsyncGenerator<string> {
       this.calls.push(message);

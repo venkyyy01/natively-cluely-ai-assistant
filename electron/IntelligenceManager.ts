@@ -40,6 +40,7 @@ export class IntelligenceManager extends EventEmitter {
     private session: SessionTracker;
     private engine: IntelligenceEngine;
     private persistence: MeetingPersistence;
+    private accelerationManager: AccelerationManager | null = null;
 
     constructor(llmHelper: LLMHelper) {
         super();
@@ -96,10 +97,15 @@ export class IntelligenceManager extends EventEmitter {
     // ============================================
 
     setMeetingMetadata(metadata: any): void {
+        const previousMeetingId = this.session.getActiveMeetingId();
         this.session.setMeetingMetadata(metadata);
-        const inferredMeetingId = metadata?.meetingId || metadata?.calendarEventId;
+        const inferredMeetingId = metadata?.meetingId || metadata?.calendarEventId || metadata?.title;
         if (typeof inferredMeetingId === 'string' && inferredMeetingId.trim()) {
-            this.session.ensureMeetingContext(inferredMeetingId.trim());
+            const nextMeetingId = inferredMeetingId.trim();
+            if (previousMeetingId && previousMeetingId !== 'unspecified' && previousMeetingId !== nextMeetingId) {
+                this.accelerationManager?.clearCaches();
+            }
+            this.session.ensureMeetingContext(nextMeetingId);
         }
     }
 
@@ -108,6 +114,7 @@ export class IntelligenceManager extends EventEmitter {
     }
 
     attachAccelerationManager(accelerationManager: AccelerationManager | null): void {
+        this.accelerationManager = accelerationManager;
         this.engine.attachAccelerationManager(accelerationManager);
     }
 
@@ -169,8 +176,8 @@ export class IntelligenceManager extends EventEmitter {
         return this.session.getLastInterviewerTurn();
     }
 
-    logUsage(type: 'assist' | 'followup' | 'chat' | 'followup_questions', question: string, answer: string): void {
-        this.session.logUsage(type, question, answer);
+    logUsage(type: 'assist' | 'followup' | 'chat' | 'followup_questions', question: string, answer: string, items?: Record<string, unknown>): void {
+        this.session.logUsage(type, question, answer, items);
     }
 
     // ============================================
@@ -253,8 +260,6 @@ export class IntelligenceManager extends EventEmitter {
     // ============================================
 
   async reset(): Promise<void> {
-    this.engine.removeAllListeners();
-    this.removeAllListeners();
     await this.session.reset();
     this.engine.reset();
   }

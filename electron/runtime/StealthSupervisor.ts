@@ -5,6 +5,7 @@ import {
   canDisableStealth,
   canFaultStealth,
   transitionStealthState,
+  type StealthTransitionEvent,
 } from '../stealth/StealthStateMachine';
 import { StealthArmController } from '../stealth/StealthArmController';
 import { NativeStealthBridge, type NativeStealthArmRequest } from '../stealth/NativeStealthBridge';
@@ -17,7 +18,7 @@ export interface StealthDelegate {
 
 export interface StealthSupervisorOptions {
   bus?: SupervisorBus;
-  logger?: Pick<Console, 'warn'>;
+  logger?: Pick<Console, 'log' | 'warn' | 'error'>;
   verifier?: () => boolean | Promise<boolean>;
   startHeartbeat?: () => Promise<void> | void;
   stopHeartbeat?: () => Promise<void> | void;
@@ -26,6 +27,8 @@ export interface StealthSupervisorOptions {
   clearIntervalScheduler?: (handle: unknown) => void;
   nativeBridge?: NativeStealthBridge;
   nativeArmRequest?: NativeStealthArmRequest;
+  nativeArmGuard?: () => boolean | Promise<boolean> | { allowed: boolean; reason?: string } | Promise<{ allowed: boolean; reason?: string }>;
+  requireNativeStealth?: (() => Promise<boolean> | boolean) | boolean;
   runtimeHeartbeatStalenessMs?: number;
   now?: () => number;
 }
@@ -48,6 +51,13 @@ export class StealthSupervisor implements ISupervisor {
   private heartbeatCheckInFlight = false;
   private lastRuntimeHeartbeatAt: number | null = null;
 
+  // S-3: Fault cooldown tracking to prevent thrash loops
+  private faultTimestamps: number[] = [];
+  private faultLoopDetected = false;
+  private static readonly FAULT_COOLDOWN_MS = 5000;
+  private static readonly MAX_RAPID_FAULTS = 3;
+  private static readonly FAULT_WINDOW_MS = 60000;
+
   constructor(
     private readonly delegate: StealthDelegate,
     private readonly bus: SupervisorBus,
@@ -69,6 +79,7 @@ export class StealthSupervisor implements ISupervisor {
       startHeartbeat: () => this.startHeartbeat(),
       stopHeartbeat: () => this.stopHeartbeat(),
       armNativeStealth: () => this.armNativeStealth(),
+      requireNativeStealth: options.requireNativeStealth,
       faultNativeStealth: (reason) => this.faultNativeStealth(reason),
     });
   }
@@ -149,16 +160,46 @@ export class StealthSupervisor implements ISupervisor {
     }
   }
 
+  private canRearmAfterFault(): boolean {
+    // S-3: Prevent thrash loops with cooldown and fault window tracking
+    if (this.faultLoopDetected) {
+      return false;
+    }
+
+    const now = this.now();
+    this.faultTimestamps = this.faultTimestamps.filter(t => now - t < StealthSupervisor.FAULT_WINDOW_MS);
+
+    if (this.faultTimestamps.length >= StealthSupervisor.MAX_RAPID_FAULTS) {
+      this.options.logger?.error('[StealthSupervisor] Too many rapid faults, refusing re-arm');
+      this.faultLoopDetected = true;
+      void this.bus.emit({ type: 'stealth:fault-loop-detected', reason: 'max-rapid-faults-exceeded' });
+      return false;
+    }
+
+    const lastFault = this.faultTimestamps[this.faultTimestamps.length - 1];
+    if (lastFault && now - lastFault < StealthSupervisor.FAULT_COOLDOWN_MS) {
+      return false;
+    }
+
+    return true;
+  }
+
   private async armStealth(): Promise<void> {
     if (!canArmStealth(this.stealthState)) {
       return;
     }
 
-    await this.transitionTo(transitionStealthState(this.stealthState, 'arm-requested'));
+    // S-3: Check fault cooldown before re-arming from FAULT state
+    if (this.stealthState === 'FAULT' && !this.canRearmAfterFault()) {
+      this.options.logger?.warn('[StealthSupervisor] Re-arm blocked due to fault cooldown or fault loop');
+      return;
+    }
+
+    await this.transitionTo(this.transitionStealthStateLogged(this.stealthState, 'arm-requested'));
 
     try {
       await this.armController.arm();
-      await this.transitionTo(transitionStealthState(this.stealthState, 'arm-succeeded'));
+      await this.transitionTo(this.transitionStealthStateLogged(this.stealthState, 'arm-succeeded'));
       this.pendingEnabled = true;
       if (this.runtimeHeartbeatStalenessMs > 0) {
         this.lastRuntimeHeartbeatAt = this.now();
@@ -201,6 +242,10 @@ export class StealthSupervisor implements ISupervisor {
 
   private async failClosed(error: unknown): Promise<void> {
     const reason = error instanceof Error ? error.message : String(error);
+
+    // S-3: Track fault timestamp for cooldown logic
+    this.faultTimestamps.push(this.now());
+
     if (canFaultStealth(this.stealthState)) {
       await this.transitionTo(transitionStealthState(this.stealthState, 'faulted'));
     }
@@ -267,6 +312,15 @@ export class StealthSupervisor implements ISupervisor {
     await this.emitStateChange(from, next);
   }
 
+  private transitionStealthStateLogged(state: StealthState, event: StealthTransitionEvent): StealthState {
+    const next = transitionStealthState(state, event);
+    if (next === 'FAULT' && event !== 'faulted') {
+      this.options.logger?.warn(`[StealthSupervisor] Illegal stealth transition: ${state} -> ${event}`);
+      void this.bus.emit({ type: 'stealth:illegal_transition', from: state, event });
+    }
+    return next;
+  }
+
   private async emitStateChange(from: StealthState, to: StealthState): Promise<void> {
     if (from === to) {
       return;
@@ -280,21 +334,46 @@ export class StealthSupervisor implements ISupervisor {
       return false;
     }
 
+    const armAllowed = await this.isNativeArmAllowed();
+    if (!armAllowed.allowed) {
+      const reason = armAllowed.reason ?? 'native arm guard declined';
+      this.options.logger?.warn(`[StealthSupervisor] Skipping native stealth helper arm: ${reason}`);
+      await this.bus.emit({ type: 'stealth:native-arm-skipped', reason });
+      return false;
+    }
+
     const result = await this.nativeBridge.arm(this.nativeArmRequest);
     return result.connected;
   }
 
-  private async heartbeatNativeStealth(): Promise<boolean> {
+  private async isNativeArmAllowed(): Promise<{ allowed: boolean; reason?: string }> {
+    if (!this.options.nativeArmGuard) {
+      return { allowed: true };
+    }
+
+    const result = await this.options.nativeArmGuard();
+    if (typeof result === 'boolean') {
+      return result ? { allowed: true } : { allowed: false };
+    }
+
+    return result.allowed ? { allowed: true } : { allowed: false, reason: result.reason };
+  }
+
+  private async heartbeatNativeStealth(): Promise<{ status: 'healthy' | 'degraded' | 'not_applicable' }> {
     if (!this.nativeBridge) {
-      return true;
+      // NAT-029: missing required bridge is degraded, not healthy
+      if (this.nativeArmRequest) {
+        return { status: 'degraded' };
+      }
+      return { status: 'not_applicable' };
     }
 
     const result = await this.nativeBridge.heartbeat();
     if (!result.connected) {
-      return true;
+      return { status: 'not_applicable' };
     }
 
-    return result.healthy;
+    return result.healthy ? { status: 'healthy' } : { status: 'degraded' };
   }
 
   private async faultNativeStealth(reason: string): Promise<void> {
@@ -315,7 +394,8 @@ export class StealthSupervisor implements ISupervisor {
       return false;
     }
 
-    return this.heartbeatNativeStealth();
+    const nativeHealth = await this.heartbeatNativeStealth();
+    return nativeHealth.status === 'healthy' || nativeHealth.status === 'not_applicable';
   }
 
   private verifyRuntimeHeartbeatFresh(): boolean {

@@ -12,6 +12,7 @@ import {
     ConsciousModeStructuredResponse,
     isBehavioralQuestionText,
     parseConsciousModeResponse,
+    tryParseConsciousModeOpeningReasoning,
 } from "../ConsciousMode";
 
 export interface StreamFailureDetails {
@@ -89,10 +90,19 @@ ANSWER SHAPE: ${intentResult.answerShape}
             const primaryQuestion = options?.latestQuestion?.trim() || cleanedTranscript;
 
             const prompt = options?.fastPath ? FAST_STANDARD_ANSWER_PROMPT : UNIVERSAL_WHAT_TO_ANSWER_PROMPT;
-            for await (const chunk of this.llmHelper.streamChat(primaryQuestion, imagePaths, conversationContext, prompt, {
+            if (typeof this.llmHelper.streamChat !== 'function') {
+                throw new TypeError('LLMHelper.streamChat is not available');
+            }
+
+            const stream = this.llmHelper.streamChat(primaryQuestion, imagePaths, conversationContext, prompt, {
                 skipKnowledgeInterception: !!options?.fastPath,
                 abortSignal: options?.abortSignal,
-            })) {
+            });
+            if (!stream || typeof (stream as AsyncIterable<string>)[Symbol.asyncIterator] !== 'function') {
+                throw new TypeError('LLMHelper.streamChat must return an async iterable');
+            }
+
+            for await (const chunk of stream) {
                 yieldedAnyChunk = true;
                 yield chunk;
             }
@@ -117,7 +127,9 @@ ANSWER SHAPE: ${intentResult.answerShape}
                 yield "Could you repeat that? I want to make sure I address your question properly.";
                 return;
             }
-            console.error("[WhatToAnswerLLM] Stream failed:", error);
+            // Stream yielded tokens then failed - signal truncation to consumer
+            console.error("[WhatToAnswerLLM] Stream failed after yielding tokens:", error);
+            yield "\n\n[Response truncated due to error. Please ask again.]";
         }
     }
 
@@ -126,9 +138,15 @@ ANSWER SHAPE: ${intentResult.answerShape}
         question: string,
         temporalContext?: TemporalContext,
         intentResult?: IntentResult,
-        imagePaths?: string[]
+        imagePaths?: string[],
+        options?: {
+          /** Called when openingReasoning is extractable from partial JSON.
+           *  Enables early display before full response is parsed. */
+          onEarlyReasoning?: (text: string) => void;
+        }
     ): Promise<ConsciousModeStructuredResponse> {
         let full = "";
+        let earlyReasoningEmitted = false;
         const behavioralPromptRequested = intentResult?.intent === 'behavioral'
             || /QUESTION_MODE:\s*behavioral/i.test(cleanedTranscript)
             || isBehavioralQuestionText(question);
@@ -177,11 +195,21 @@ ANSWER SHAPE: ${intentResult.answerShape}
                 : CONSCIOUS_REASONING_SYSTEM_PROMPT,
             {
             skipKnowledgeInterception: true,
-            qualityTier: 'structured_reasoning',
+            qualityTier: 'verify',
         });
 
         for await (const chunk of stream) {
             full += chunk;
+
+            // NAT-L4: Try to extract openingReasoning from partial JSON
+            // so the UI can show something while the rest accumulates.
+            if (!earlyReasoningEmitted && options?.onEarlyReasoning && full.length > 30) {
+                const early = tryParseConsciousModeOpeningReasoning(full);
+                if (early) {
+                    options.onEarlyReasoning(early);
+                    earlyReasoningEmitted = true;
+                }
+            }
         }
 
         return parseConsciousModeResponse(full);

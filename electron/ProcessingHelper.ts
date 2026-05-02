@@ -161,7 +161,9 @@ export class ProcessingHelper {
     if (view === "queue") {
       const screenshotQueue = this.appState.getScreenshotHelper().getScreenshotQueue()
       if (screenshotQueue.length === 0) {
-        mainWindow.webContents.send(this.appState.PROCESSING_EVENTS.NO_SCREENSHOTS)
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send(this.appState.PROCESSING_EVENTS.NO_SCREENSHOTS)
+        }
         return
       }
 
@@ -170,7 +172,9 @@ export class ProcessingHelper {
       const allPaths = this.appState.getScreenshotHelper().getScreenshotQueue();
 
       // NEW: Handle screenshot as plain text (like audio)
-      mainWindow.webContents.send(this.appState.PROCESSING_EVENTS.INITIAL_START)
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send(this.appState.PROCESSING_EVENTS.INITIAL_START)
+      }
       this.appState.setView("solutions")
       this.currentProcessingAbortController?.abort()
       this.currentProcessingAbortController = new AbortController()
@@ -188,14 +192,18 @@ export class ProcessingHelper {
           validation_type: "manual",
           difficulty: "custom"
         };
-        mainWindow.webContents.send(this.appState.PROCESSING_EVENTS.PROBLEM_EXTRACTED, problemInfo);
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send(this.appState.PROCESSING_EVENTS.PROBLEM_EXTRACTED, problemInfo);
+        }
         this.appState.setProblemInfo(problemInfo);
       } catch (error: any) {
         if (this.currentProcessingAbortController?.signal.aborted) {
           return
         }
         // console.error("Image processing error:", error)
-        mainWindow.webContents.send(this.appState.PROCESSING_EVENTS.INITIAL_SOLUTION_ERROR, error.message)
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send(this.appState.PROCESSING_EVENTS.INITIAL_SOLUTION_ERROR, error.message)
+        }
       } finally {
         this.currentProcessingAbortController = null
       }
@@ -205,11 +213,15 @@ export class ProcessingHelper {
       const extraScreenshotQueue = this.appState.getScreenshotHelper().getExtraScreenshotQueue()
       if (extraScreenshotQueue.length === 0) {
         // console.log("No extra screenshots to process")
-        mainWindow.webContents.send(this.appState.PROCESSING_EVENTS.NO_SCREENSHOTS)
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send(this.appState.PROCESSING_EVENTS.NO_SCREENSHOTS)
+        }
         return
       }
 
-      mainWindow.webContents.send(this.appState.PROCESSING_EVENTS.DEBUG_START)
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send(this.appState.PROCESSING_EVENTS.DEBUG_START)
+      }
       this.currentExtraProcessingAbortController?.abort()
       this.currentExtraProcessingAbortController = new AbortController()
 
@@ -239,20 +251,24 @@ export class ProcessingHelper {
         }
 
         this.appState.setHasDebugged(true)
-        mainWindow.webContents.send(
-          this.appState.PROCESSING_EVENTS.DEBUG_SUCCESS,
-          debugResult
-        )
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send(
+            this.appState.PROCESSING_EVENTS.DEBUG_SUCCESS,
+            debugResult
+          )
+        }
 
       } catch (error: any) {
         if (this.currentExtraProcessingAbortController?.signal.aborted) {
           return
         }
         // console.error("Debug processing error:", error)
-        mainWindow.webContents.send(
-          this.appState.PROCESSING_EVENTS.DEBUG_ERROR,
-          error.message
-        )
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send(
+            this.appState.PROCESSING_EVENTS.DEBUG_ERROR,
+            error.message
+          )
+        }
       } finally {
         this.currentExtraProcessingAbortController = null
       }

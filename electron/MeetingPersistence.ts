@@ -138,9 +138,13 @@ export class MeetingPersistence {
             await (this.session as any).flushPersistenceNow();
         }
 
-        const snapshot = this.session.createSnapshot();
-        const nextSession = this.session.createSuccessorSession();
+        const previousSession = this.session;
+        const snapshot = previousSession.createSnapshot();
+        const nextSession = previousSession.createSuccessorSession();
         this.session = nextSession;
+        if (typeof (previousSession as unknown as { dispose?: () => Promise<void> }).dispose === 'function') {
+            await (previousSession as unknown as { dispose: () => Promise<void> }).dispose();
+        }
 
         if (snapshot.durationMs < 1000) {
             console.log("Meeting too short, ignoring.");

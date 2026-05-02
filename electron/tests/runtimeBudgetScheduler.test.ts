@@ -76,3 +76,52 @@ test('RuntimeBudgetScheduler emits critical pressure and sheds queued background
   await assert.rejects(() => shed, /background work shed due to critical pressure on realtime/);
   assert.ok(pressures.includes('realtime:critical'));
 });
+
+test('RuntimeBudgetScheduler rejects lane submissions once the per-lane queue cap is reached', async () => {
+  const scheduler = new RuntimeBudgetScheduler({
+    workerPool: new WorkerPool({
+      size: 1,
+      qos: { supported: false, setCurrentThreadQoS() {} },
+      logger: { warn() {} },
+    }),
+    laneBudgets: {
+      realtime: { deadlineMs: 20, maxConcurrent: 1, memoryCeilingMb: 64 },
+      'local-inference': { deadlineMs: 2000, maxConcurrent: 1, memoryCeilingMb: 256 },
+      semantic: { deadlineMs: 100, maxConcurrent: 2, memoryCeilingMb: 128 },
+      background: { deadlineMs: 5000, maxConcurrent: 1, memoryCeilingMb: 128 },
+    },
+    maxQueueDepthByLane: {
+      realtime: 8,
+      'local-inference': 8,
+      semantic: 8,
+      background: 1,
+    },
+    logger: { warn() {} },
+  });
+
+  let releaseFirst: (() => void) | null = null;
+  const firstGate = new Promise<void>((resolve) => {
+    releaseFirst = resolve;
+  });
+
+  const first = scheduler.submit('background', async () => {
+    await firstGate;
+    return 'first';
+  });
+  const second = scheduler.submit('background', async () => {
+    await firstGate;
+    return 'second';
+  });
+  try {
+    await assert.rejects(
+      () => scheduler.submit('background', async () => 'overflow'),
+      /runtime_lane_queue_full:background/,
+    );
+  } finally {
+    releaseFirst?.();
+    await Promise.allSettled([first, second]);
+  }
+
+  assert.equal(await first, 'first');
+  assert.equal(await second, 'second');
+});

@@ -164,6 +164,18 @@ describe('StealthManager', () => {
     assert.deepStrictEqual(calls, ['apply:42', 'apply:42', 'apply:42', 'apply:42']);
   });
 
+  it('records observe-only protection violations without blocking application', () => {
+    const win = new FakeWindow();
+    win.visible = true;
+    const manager = new StealthManager({ enabled: true }, { platform: 'darwin', logger: silentLogger, nativeModule: null });
+
+    manager.applyToWindow(win as any, true, { role: 'primary' });
+
+    const snapshot = manager.getProtectionStateSnapshot();
+    assert.equal(win.contentProtectionCalls.length > 0, true);
+    assert.equal(snapshot.violations.some((violation) => violation.type === 'protecting-visible-window'), true);
+  });
+
   it('applies auxiliary UI hardening on macOS windows', () => {
     const nativeModule: NativeStealthBindings = {
       applyMacosWindowStealth(windowNumber: number) {
@@ -383,9 +395,11 @@ describe('StealthManager', () => {
                     timeouts.push(fn);
                     return timeouts.length;
                 },
-                processEnumerator: async () => {
-                    enumeratorCallCount++;
-                    return enumeratorCallCount <= 1 ? 'obs' : '';
+                nativeModule: {
+                    getRunningProcesses: () => {
+                        enumeratorCallCount++;
+                        return enumeratorCallCount <= 1 ? [{ pid: 1, ppid: 1, name: 'obs' }] : [];
+                    },
                 },
             } as any
         );
@@ -422,7 +436,7 @@ describe('StealthManager', () => {
                 timeoutScheduler() {
                     return 1;
                 },
-                processEnumerator: async () => '',
+                nativeModule: { getRunningProcesses: (): Array<{ pid: number; ppid: number; name: string }> => [] },
             } as any,
         );
         const first = new FakeWindow();
@@ -458,7 +472,7 @@ describe('StealthManager', () => {
                 timeoutScheduler() {
                     return 1;
                 },
-                processEnumerator: async () => '',
+                nativeModule: { getRunningProcesses: (): Array<{ pid: number; ppid: number; name: string }> => [] },
             } as any,
         );
         const win = new FakeWindow();
@@ -488,7 +502,7 @@ describe('StealthManager', () => {
                 timeoutScheduler() {
                     return 1;
                 },
-                processEnumerator: async () => '',
+                nativeModule: { getRunningProcesses: (): Array<{ pid: number; ppid: number; name: string }> => [] },
             } as any
         );
 
@@ -519,7 +533,7 @@ describe('StealthManager', () => {
                 timeoutScheduler() {
                     return 1;
                 },
-                processEnumerator: async () => 'obs',
+                nativeModule: { getRunningProcesses: () => [{ pid: 1, ppid: 1, name: 'obs' }] },
             } as any
         );
         const win = new FakeWindow();
@@ -531,19 +545,17 @@ describe('StealthManager', () => {
         win.destroy();
     });
 
-  it('uses a single darwin process snapshot before falling back to per-pattern probing', async () => {
-    const calls: Array<{ command: string; args: string[] }> = [];
+  it('uses native process list for capture detection', async () => {
     const manager = new StealthManager(
       { enabled: true },
       {
         platform: 'darwin',
         logger: silentLogger,
-        processEnumerator: async (command: string, args: string[]) => {
-          calls.push({ command, args });
-          if (command === 'ps') {
-            return '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome\n/usr/bin/obs';
-          }
-          throw new Error('fallback scan should not run when snapshot succeeds');
+        nativeModule: {
+          getRunningProcesses: () => [
+            { pid: 1, ppid: 1, name: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' },
+            { pid: 2, ppid: 1, name: '/usr/bin/obs' },
+          ],
         },
       },
     );
@@ -552,7 +564,6 @@ describe('StealthManager', () => {
 
     assert.ok(matches.some((pattern: RegExp) => pattern.test('chrome')));
     assert.ok(matches.some((pattern: RegExp) => pattern.test('obs')));
-    assert.deepStrictEqual(calls, [{ command: 'ps', args: ['-A', '-o', 'command='] }]);
   });
 
   it('verifies applied stealth state through native bindings', () => {
@@ -625,7 +636,7 @@ describe('StealthManager', () => {
     assert.strictEqual(manager.verifyManagedWindows(), true);
   });
 
-  it('treats intentionally hidden managed windows as already safe during verification', () => {
+  it('NAT-029: hidden managed windows are still verified (visibility gate removed)', () => {
     let verifyCalls = 0;
     const first = new FakeWindow();
     const second = new FakeWindow();
@@ -648,14 +659,15 @@ describe('StealthManager', () => {
     manager.applyToWindow(second as any, true, { role: 'auxiliary' });
     first.hide();
     second.hide();
-    const verifyCallsBeforeHiddenVerification = verifyCalls;
+    const verifyCallsBefore = verifyCalls;
 
     assert.strictEqual(manager.verifyManagedWindows(), true);
-    assert.strictEqual(verifyCalls, verifyCallsBeforeHiddenVerification);
+    // NAT-029: hidden windows still run verifyStealth, so we expect 2 additional calls
+    assert.strictEqual(verifyCalls - verifyCallsBefore, 2);
     assert.ok(!manager.getStealthDegradationWarnings().includes('stealth_verification_failed'));
   });
 
-  it('passes managed-window verification when Layer 0 is active but native module is unavailable', () => {
+  it('fails managed-window verification when native stealth is unavailable in stealth mode', () => {
     const win = new FakeWindow();
     const manager = new StealthManager(
       { enabled: true },
@@ -668,10 +680,31 @@ describe('StealthManager', () => {
 
     manager.applyToWindow(win as any, true, { role: 'primary' });
 
-    // Layer 0 (setContentProtection) is the expected fallback when native module
-    // is unavailable, so verification should pass rather than falsely report failure.
-    assert.strictEqual(manager.verifyManagedWindows(), true);
+    assert.strictEqual(manager.verifyManagedWindows(), false);
     assert.ok(manager.getStealthDegradationWarnings().includes('native_module_unavailable'));
+  });
+
+  it('marks capture visibility as degraded when native and Python probes are both unavailable', async () => {
+    const manager = new StealthManager(
+      { enabled: true },
+      {
+        platform: 'darwin',
+        logger: silentLogger,
+        execFileFn: (_file: string, _args: readonly string[], _options: { timeout?: number }, callback: (error: Error | null, stdout: string, stderr: string) => void) => {
+          callback(new Error('python unavailable'), '', '');
+        },
+      },
+    );
+
+    (manager as any).nativeModule = {
+      listVisibleWindows: () => {
+        throw new Error('native unavailable');
+      },
+    };
+
+    await (manager as any).pollCGWindowVisibility();
+
+    assert.ok(manager.getStealthDegradationWarnings().includes('capture_visibility_unknown'));
   });
 
   it('falls back to hide and show when opacity APIs are unavailable', async () => {
@@ -693,9 +726,11 @@ describe('StealthManager', () => {
           timeouts.push(fn);
           return timeouts.length;
         },
-        processEnumerator: async () => {
-          enumeratorCallCount++;
-          return enumeratorCallCount <= 1 ? 'obs' : '';
+        nativeModule: {
+          getRunningProcesses: () => {
+            enumeratorCallCount++;
+            return enumeratorCallCount <= 1 ? [{ pid: 1, ppid: 1, name: 'obs' }] : [];
+          },
         },
       } as any,
     );
@@ -729,7 +764,12 @@ describe('StealthManager', () => {
           return intervals.length;
         },
         clearIntervalScheduler() {},
-        processEnumerator: async () => enumeratorPromise,
+        nativeModule: {
+          getRunningProcesses: async () => {
+            await enumeratorPromise;
+            return [{ pid: 1, ppid: 1, name: 'screencapture' }];
+          },
+        },
       } as any,
     );
     const win = new FakeWindow();
@@ -765,7 +805,12 @@ describe('StealthManager', () => {
           return intervals.length;
         },
         clearIntervalScheduler() {},
-        processEnumerator: async () => enumeratorPromise,
+        nativeModule: {
+          getRunningProcesses: async () => {
+            await enumeratorPromise;
+            return [{ pid: 1, ppid: 1, name: 'screencapture' }];
+          },
+        },
       } as any,
     );
     const win = new FakeWindow();
@@ -1184,23 +1229,100 @@ describe('StealthManager', () => {
     ]);
   });
 
-  it('only treats shareable CG windows as visible to capture', async () => {
+  it('treats native shareable CG windows as visible to capture without Python fallback', async () => {
+    const manager = new StealthManager(
+      { enabled: true },
+      {
+        platform: 'darwin',
+        logger: silentLogger,
+      },
+    );
+
+    (manager as any).nativeModule = {
+      listVisibleWindows: () => [
+        { windowNumber: 12345, ownerName: 'Natively', ownerPid: 1, windowTitle: 'Protected', isOnScreen: true, sharingState: 1, alpha: 1 },
+        { windowNumber: 22222, ownerName: 'Hidden', ownerPid: 2, windowTitle: 'Hidden', isOnScreen: true, sharingState: 1, alpha: 0 },
+        { windowNumber: 33333, ownerName: 'Private', ownerPid: 3, windowTitle: 'Private', isOnScreen: true, sharingState: 0, alpha: 1 },
+      ],
+    };
+
+    const result = await (manager as any).getWindowNumbersVisibleToCapture();
+
+    assert.ok(result instanceof Set, 'should return a Set');
+    assert.deepEqual(Array.from(result), [12345]);
+  });
+
+  it('uses Python capture fallback only when native enumeration fails in development', async () => {
     let embeddedScript = '';
     const manager = new StealthManager(
       { enabled: true },
       {
         platform: 'darwin',
         logger: silentLogger,
-        processEnumerator: async (_command: string, args: string[]) => {
+        execFileFn: (_file: string, args: readonly string[], _options: { timeout?: number }, callback: (error: Error | null, stdout: string, stderr: string) => void) => {
           embeddedScript = args[1] ?? '';
-          return '';
+          callback(null, '12345\n67890\n', '');
         },
       },
     );
 
-    await (manager as any).getWindowNumbersVisibleToCapture();
+    (manager as any).nativeModule = {
+      listVisibleWindows: () => {
+        throw new Error('native unavailable');
+      },
+    };
 
-    assert.match(embeddedScript, /sharing_state > 0/);
+    const result = await (manager as any).getWindowNumbersVisibleToCapture();
+
+    assert.ok(result instanceof Set, 'should return a Set');
+    assert.ok(embeddedScript.includes('Quartz'), 'should use Python Quartz when native fails');
+    assert.ok(embeddedScript.includes('sharing_state'), 'should check sharing_state in Python');
+    assert.strictEqual(result.size, 2);
+    assert.ok(result.has(12345));
+    assert.ok(result.has(67890));
+  });
+
+  it('blocks Python capture fallback in strict production mode', async () => {
+    const previousNodeEnv = process.env.NODE_ENV;
+    const previousStrict = process.env.NATIVELY_STRICT_PROTECTION;
+    process.env.NODE_ENV = 'production';
+    process.env.NATIVELY_STRICT_PROTECTION = '1';
+
+    try {
+      const manager = new StealthManager(
+        { enabled: true },
+        {
+          platform: 'darwin',
+          logger: silentLogger,
+          execFileFn: (_file: string, _args: readonly string[], _options: { timeout?: number }, callback: (error: Error | null, stdout: string, stderr: string) => void) => {
+            callback(null, '12345\n', '');
+          },
+        },
+      );
+
+      (manager as any).nativeModule = {
+        listVisibleWindows: () => {
+          throw new Error('native unavailable');
+        },
+      };
+
+      const result = await (manager as any).getWindowNumbersVisibleToCapture();
+
+      assert.ok(result instanceof Set);
+      assert.equal(result.size, 0);
+      assert.ok(manager.getStealthDegradationWarnings().includes('stealth_python_fallback_blocked'));
+    } finally {
+      if (previousNodeEnv === undefined) {
+        delete process.env.NODE_ENV;
+      } else {
+        process.env.NODE_ENV = previousNodeEnv;
+      }
+      if (previousStrict === undefined) {
+        delete process.env.NATIVELY_STRICT_PROTECTION;
+      } else {
+        process.env.NATIVELY_STRICT_PROTECTION = previousStrict;
+      }
+    }
   });
 
   it('compares macOS versions using both major and minor components', () => {

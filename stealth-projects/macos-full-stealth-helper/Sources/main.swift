@@ -802,6 +802,11 @@ guard args.count >= 2, let command = Command(rawValue: args[1]) else {
 
 do {
     switch command {
+    case .hello:
+        let data = try FileHandle.standardInput.readToEnd() ?? Data()
+        let request = (try JSONSerialization.jsonObject(with: data)) as? JsonObject ?? [:]
+        let capability = request["capability"] as? String
+        try writeJson(["authenticated": capability != nil, "capability": capability ?? NSNull()])
     case .createSession:
         let request = try decodeStdin(LegacySessionRequest.self)
         try writeJson(service.createSession(request).asJsonObject())
@@ -865,11 +870,18 @@ private func writeJson(_ payload: JsonObject) throws {
 }
 
 private func runServer(service: FullStealthHelperService) throws {
+    var serverCapability: String?
     let heartbeatMonitor = DispatchSource.makeTimerSource(queue: DispatchQueue.global(qos: .userInitiated))
     heartbeatMonitor.schedule(deadline: .now() + .milliseconds(100), repeating: .milliseconds(100))
     heartbeatMonitor.setEventHandler {
         do {
-            try service.emitHeartbeatFaultEventsIfNeeded(writeJson)
+            try service.emitHeartbeatFaultEventsIfNeeded { payload in
+                var authenticatedPayload = payload
+                if let capability = serverCapability {
+                    authenticatedPayload["capability"] = capability
+                }
+                try writeJson(authenticatedPayload)
+            }
         } catch {
             FileHandle.standardError.write(Data("\(error.localizedDescription)\n".utf8))
         }
@@ -882,11 +894,11 @@ private func runServer(service: FullStealthHelperService) throws {
             continue
         }
 
-        handleServerRequestLine(line, service: service)
+        handleServerRequestLine(line, service: service, serverCapability: &serverCapability)
     }
 }
 
-private func handleServerRequestLine(_ line: String, service: FullStealthHelperService) {
+private func handleServerRequestLine(_ line: String, service: FullStealthHelperService, serverCapability: inout String?) {
     var requestId: String?
     do {
         guard let request = try JSONSerialization.jsonObject(with: Data(line.utf8)) as? JsonObject else {
@@ -903,8 +915,40 @@ private func handleServerRequestLine(_ line: String, service: FullStealthHelperS
             return
         }
 
+        let requestNonce = request["nonce"] as? String
+        let requestCapability = request["capability"] as? String
+        if command == .hello {
+            guard let capability = requestCapability, !capability.isEmpty else {
+                try writeServerResponse(id: id, ok: false, result: nil, error: "Missing capability", nonce: requestNonce, capability: serverCapability)
+                return
+            }
+
+            if let expected = serverCapability, expected != capability {
+                try writeServerResponse(id: id, ok: false, result: nil, error: "Capability mismatch", nonce: requestNonce, capability: serverCapability)
+                return
+            }
+
+            serverCapability = capability
+            try writeServerResponse(
+                id: id,
+                ok: true,
+                result: ["authenticated": true, "capability": capability],
+                error: nil,
+                nonce: requestNonce,
+                capability: capability
+            )
+            return
+        }
+
+        if let expected = serverCapability, requestCapability != expected {
+            try writeServerResponse(id: id, ok: false, result: nil, error: "Capability mismatch", nonce: requestNonce, capability: expected)
+            return
+        }
+
         let result: JsonObject
         switch command {
+        case .hello:
+            result = ["authenticated": true]
         case .createSession:
             result = service.createSession(try decodeObject(LegacySessionRequest.self, from: request)).asJsonObject()
         case .releaseSession:
@@ -933,7 +977,7 @@ private func handleServerRequestLine(_ line: String, service: FullStealthHelperS
             result = service.validateSession(sessionId: try decodeObject(SessionLookupRequest.self, from: request).sessionId).asJsonObject()
         }
 
-        try writeJson(["id": id, "ok": true, "result": result])
+        try writeServerResponse(id: id, ok: true, result: result, error: nil, nonce: requestNonce, capability: serverCapability)
     } catch {
         do {
             try writeJson(["id": requestId ?? NSNull(), "ok": false, "error": error.localizedDescription])
@@ -941,4 +985,28 @@ private func handleServerRequestLine(_ line: String, service: FullStealthHelperS
             FileHandle.standardError.write(Data("\(error.localizedDescription)\n".utf8))
         }
     }
+}
+
+private func writeServerResponse(
+    id: String,
+    ok: Bool,
+    result: JsonObject?,
+    error: String?,
+    nonce: String?,
+    capability: String?
+) throws {
+    var response: JsonObject = ["id": id, "ok": ok]
+    if let result {
+        response["result"] = result
+    }
+    if let error {
+        response["error"] = error
+    }
+    if let nonce {
+        response["nonce"] = nonce
+    }
+    if let capability {
+        response["capability"] = capability
+    }
+    try writeJson(response)
 }

@@ -143,11 +143,11 @@ function installIpcHandlersTestHarness(options?: {
       };
     }
 
-    if (request === './services/CredentialsManager') {
+    if (request === './services/CredentialsManager' || request === '../services/CredentialsManager') {
       return { CredentialsManager: { getInstance: () => credentialsManager } };
     }
 
-    if (request === './services/OllamaManager') {
+    if (request === './services/OllamaManager' || request === '../services/OllamaManager') {
       return { OllamaManager: { getInstance: () => ({ init: async () => {} }) } };
     }
 
@@ -203,6 +203,10 @@ showMainWindow: () => {},
 async function initializeHandlers(harness: ReturnType<typeof installIpcHandlersTestHarness>) {
   const modulePath = require.resolve('../ipcHandlers');
   delete require.cache[modulePath];
+  // handlerContext binds ipcMain at module load; each test installs a fresh electron mock with a new handler map.
+  delete require.cache[require.resolve('../ipc/handlerContext')];
+  delete require.cache[require.resolve('../ipc/registerLlmCredentialsIpcHandlers')];
+  delete require.cache[require.resolve('../ipc/registerProviderSttAndTestIpcHandlers')];
   const { initializeIpcHandlers } = await import('../ipcHandlers');
   initializeIpcHandlers(harness.appState as any);
 }
@@ -232,6 +236,8 @@ async function loadPreloadModule(invokeImpl: (channel: string, ...args: unknown[
 
   const modulePath = require.resolve('../preload');
   delete require.cache[modulePath];
+  delete require.cache[require.resolve('../preload/api')];
+  delete require.cache[require.resolve('../preload/types')];
   await import('../preload');
 
   return {
@@ -549,7 +555,16 @@ test('root inference sync handlers prefer InferenceSupervisor when supervisor ru
 
   assert.deepEqual(await harness.handlers.get('set-gemini-api-key')?.({}, 'key-123'), { success: true });
   assert.deepEqual(await harness.handlers.get('switch-to-curl-provider')?.({}, 'curl-1'), { success: true });
-  assert.equal(await harness.handlers.get('gemini-chat')?.({}, 'hello', [], undefined, undefined), 'answer:hello');
+  assert.equal(
+    await harness.handlers.get('gemini-chat')?.(
+      {},
+      'hello',
+      [],
+      undefined,
+      { requestId: '00000000-0000-0000-0000-000000000001' },
+    ),
+    'answer:hello',
+  );
 
   assert.deepEqual(calls, [
     'setApiKey:key-123',
@@ -1471,7 +1486,7 @@ test('intelligence handlers return canceled status when what-to-say yields no an
     answer: null,
     question: 'inferred from context',
     status: 'canceled',
-    error: 'Request canceled before completion.',
+    error: 'Request canceled before completion. Retry with the current settings.',
   });
 });
 

@@ -347,7 +347,8 @@ export class VectorStore {
     }
 
     /**
-     * Delete all chunks for a meeting (removes from all tracked dimension tables)
+     * Delete all chunks for a meeting (removes from all tracked dimension tables).
+     * Callers should wrap this in a transaction together with embedding_queue cleanup.
      */
     deleteChunksForMeeting(meetingId: string): void {
         if (this.useNativeVec) {
@@ -373,6 +374,7 @@ export class VectorStore {
             }
         }
 
+        this.db.prepare('DELETE FROM chunk_summaries WHERE meeting_id = ?').run(meetingId);
         this.db.prepare('DELETE FROM chunks WHERE meeting_id = ?').run(meetingId);
     }
 

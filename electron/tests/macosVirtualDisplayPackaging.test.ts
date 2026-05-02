@@ -8,10 +8,10 @@ test('resolveMacosVirtualDisplayHelperPath prefers packaged helper in resources'
     env: {},
     cwd: '/workspace',
     resourcesPath: '/Applications/Natively.app/Contents/Resources',
-    pathExists: (candidate) => candidate === '/Applications/Natively.app/Contents/Resources/bin/macos/stealth-virtual-display-helper',
+    pathExists: (candidate) => candidate === '/Applications/Natively.app/Contents/Resources/bin/macos/system-services-helper',
   });
 
-  assert.equal(resolved, '/Applications/Natively.app/Contents/Resources/bin/macos/stealth-virtual-display-helper');
+  assert.equal(resolved, '/Applications/Natively.app/Contents/Resources/bin/macos/system-services-helper');
 });
 
 test('resolveMacosVirtualDisplayHelperPath falls back to local build output for dev', () => {
