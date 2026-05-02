@@ -17,19 +17,13 @@ import { extractDocumentText } from "./DocumentReader";
 import { formatDossierBlock, getRelevantNodes } from "./HybridSearchEngine";
 import { classifyIntent, needsCompanyResearch } from "./IntentClassifier";
 import type { KnowledgeDatabaseManager } from "./KnowledgeDatabaseManager";
-import { generateMockQuestions } from "./MockInterviewGenerator";
 import { processResume } from "./PostProcessor";
-import {
-	generateStarStories,
-	generateStarStoryNodes,
-} from "./StarStoryGenerator";
+import { generateStarStoryNodes } from "./StarStoryGenerator";
 import { extractStructuredData } from "./StructuredExtractor";
 import { TechnicalDepthScorer } from "./TechnicalDepthScorer";
 import {
-	CompanyDossier,
 	type ContextNode,
 	DocType,
-	IntentType,
 	type KnowledgeDocument,
 	type KnowledgeStatus,
 	type StructuredJD,
@@ -169,8 +163,8 @@ export class KnowledgeOrchestrator {
 		let resumeSummary;
 		if (hasResume) {
 			try {
-				const structured = this.activeResume!
-					.structured_data as StructuredResume;
+				const structured = this.activeResume
+					?.structured_data as StructuredResume;
 				const { totalExperienceYears } = processResume(structured);
 				resumeSummary = {
 					name: structured.identity.name,
@@ -185,7 +179,7 @@ export class KnowledgeOrchestrator {
 		let jdSummary;
 		if (hasJD) {
 			try {
-				const structured = this.activeJD!.structured_data as StructuredJD;
+				const structured = this.activeJD?.structured_data as StructuredJD;
 				jdSummary = {
 					title:
 						structured.title || (structured as any).role || "Unknown Title",
@@ -404,7 +398,7 @@ export class KnowledgeOrchestrator {
 			const gapAnalysis = this.getGapAnalysis() as
 				| import("./types").GapAnalysisResult
 				| null;
-			if (gapAnalysis && gapAnalysis.gaps && gapAnalysis.gaps.length > 0) {
+			if (gapAnalysis?.gaps && gapAnalysis.gaps.length > 0) {
 				const questionLower = question.toLowerCase();
 				const matchingGaps = gapAnalysis.gaps.filter((gap) =>
 					questionLower.includes(gap.skill.toLowerCase()),

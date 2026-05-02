@@ -39,7 +39,7 @@ export function refresh(req: Request, res: Response) {
 	try {
 		const tokens = refreshAccessToken(refreshToken);
 		return res.json(tokens);
-	} catch (error) {
+	} catch (_error) {
 		return res.status(401).json({ error: "Invalid refresh token" });
 	}
 }

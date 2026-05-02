@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
-import { promises as fs } from "fs";
-import { homedir } from "os";
-import { dirname, join } from "path";
+import { promises as fs } from "node:fs";
+import { homedir } from "node:os";
+import { dirname, join } from "node:path";
 import type {
 	PersistedAnswerHypothesisState,
 	PersistedConsciousResponsePreferenceState,
@@ -394,7 +394,7 @@ export class SessionPersistence {
 	async appendEvent(sessionId: string, event: SessionEvent): Promise<void> {
 		await this.init();
 		const logPath = this.buildEventLogPath(sessionId);
-		const line = JSON.stringify(event) + "\n";
+		const line = `${JSON.stringify(event)}\n`;
 		await fs.appendFile(logPath, line, "utf-8");
 	}
 

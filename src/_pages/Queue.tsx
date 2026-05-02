@@ -6,7 +6,6 @@ import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import QueueCommands from "../components/Queue/QueueCommands";
-import ScreenshotQueue from "../components/Queue/ScreenshotQueue";
 import { ModelSelector } from "../components/ui/ModelSelector";
 import {
 	Toast,
@@ -84,7 +83,7 @@ const Queue: React.FC<QueueProps> = ({ setView }) => {
 		setToastOpen(true);
 	};
 
-	const handleDeleteScreenshot = async (index: number) => {
+	const _handleDeleteScreenshot = async (index: number) => {
 		const screenshotToDelete = screenshots[index];
 
 		try {
@@ -141,7 +140,7 @@ const Queue: React.FC<QueueProps> = ({ setView }) => {
 				setChatLoading(false);
 				setChatMessages((msgs) => [
 					...msgs,
-					{ role: "gemini", text: "Error: " + String(error) },
+					{ role: "gemini", text: `Error: ${String(error)}` },
 				]);
 			},
 		);
@@ -154,7 +153,7 @@ const Queue: React.FC<QueueProps> = ({ setView }) => {
 			setChatLoading(false);
 			setChatMessages((msgs) => [
 				...msgs,
-				{ role: "gemini", text: "Error: " + String(err) },
+				{ role: "gemini", text: `Error: ${String(err)}` },
 			]);
 		} finally {
 			tokenCleanup();
@@ -168,12 +167,10 @@ const Queue: React.FC<QueueProps> = ({ setView }) => {
 	useEffect(() => {
 		const loadDefaultModel = async () => {
 			try {
-				// @ts-expect-error
 				const result = await window.electronAPI.getDefaultModel();
-				if (result && result.model) {
+				if (result?.model) {
 					setCurrentModel(result.model);
 					// Set runtime model to the default
-					// @ts-expect-error
 					window.electronAPI.setModel(result.model).catch(() => {});
 				}
 			} catch (error) {
@@ -185,9 +182,7 @@ const Queue: React.FC<QueueProps> = ({ setView }) => {
 
 	// Listen for default model changes from Settings
 	useEffect(() => {
-		// @ts-expect-error
 		if (!window.electronAPI?.onModelChanged) return;
-		// @ts-expect-error
 		const unsubscribe = window.electronAPI.onModelChanged((modelId: string) => {
 			setCurrentModel((prev) => (prev === modelId ? prev : modelId));
 		});
@@ -239,7 +234,7 @@ const Queue: React.FC<QueueProps> = ({ setView }) => {
 			resizeObserver.disconnect();
 			cleanupFunctions.forEach((cleanup) => cleanup());
 		};
-	}, [isTooltipVisible, tooltipHeight]);
+	}, [isTooltipVisible, tooltipHeight, showToast, setView, refetch]);
 
 	// Seamless screenshot-to-LLM flow
 	useEffect(() => {
@@ -295,7 +290,7 @@ const Queue: React.FC<QueueProps> = ({ setView }) => {
 							setChatLoading(false);
 							setChatMessages((msgs) => [
 								...msgs,
-								{ role: "gemini", text: "Error: " + String(error) },
+								{ role: "gemini", text: `Error: ${String(error)}` },
 							]);
 						},
 					);
@@ -316,13 +311,13 @@ const Queue: React.FC<QueueProps> = ({ setView }) => {
 			} catch (err) {
 				setChatMessages((msgs) => [
 					...msgs,
-					{ role: "gemini", text: "Error: " + String(err) },
+					{ role: "gemini", text: `Error: ${String(err)}` },
 				]);
 				setChatLoading(false);
 			}
 		});
 		return () => {
-			unsubscribe && unsubscribe();
+			unsubscribe?.();
 		};
 	}, [refetch]);
 

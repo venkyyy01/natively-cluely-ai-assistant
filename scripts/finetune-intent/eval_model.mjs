@@ -1,14 +1,13 @@
-import { readFileSync } from "fs";
-import { dirname, resolve } from "path";
-import { fileURLToPath } from "url";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = resolve(__dirname, "../../");
-const MODEL_DIR = resolve(
+const _MODEL_DIR = resolve(
 	PROJECT_ROOT,
 	"resources/models/Xenova/nli-deberta-v3-small",
 );
-const LABEL_MAP = {
+const _LABEL_MAP = {
 	0: "clarification",
 	1: "follow_up",
 	2: "deep_dive",
@@ -158,7 +157,7 @@ const EVAL_CASES = [
 ];
 
 async function main() {
-	const ort = await import("onnxruntime-node");
+	const _ort = await import("onnxruntime-node");
 	const { pipeline } = await import("@xenova/transformers");
 
 	const env = (await import("@xenova/transformers")).env;

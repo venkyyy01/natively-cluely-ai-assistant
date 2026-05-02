@@ -1,7 +1,7 @@
 // Test for MeetingCheckpointer reliability
 
 import assert from "node:assert/strict";
-import { afterEach, beforeEach, describe, it, mock } from "node:test";
+import { afterEach, beforeEach, describe, it } from "node:test";
 import { MeetingCheckpointer } from "../MeetingCheckpointer";
 
 describe("MeetingCheckpointer Reliability Tests", () => {
@@ -148,9 +148,9 @@ describe("MeetingCheckpointer Reliability Tests", () => {
 			checkpointer.start("test-meeting-id");
 			await (checkpointer as any).checkpoint();
 
-			const fs = await import("fs/promises");
-			const path = await import("path");
-			const os = await import("os");
+			const fs = await import("node:fs/promises");
+			const path = await import("node:path");
+			const os = await import("node:os");
 			const tempDir = path.join(os.tmpdir(), "meeting-checkpoints");
 			const tempFiles = await fs.readdir(tempDir);
 			const checkpointFiles = tempFiles.filter((f: string) =>

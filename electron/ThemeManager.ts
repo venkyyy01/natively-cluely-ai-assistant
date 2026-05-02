@@ -1,6 +1,6 @@
-import { app, BrowserWindow, ipcMain, nativeTheme } from "electron";
-import * as fs from "fs";
-import * as path from "path";
+import * as fs from "node:fs";
+import * as path from "node:path";
+import { app, BrowserWindow, nativeTheme } from "electron";
 
 export type ThemeMode = "system" | "light" | "dark";
 export type ResolvedTheme = "light" | "dark";
@@ -46,7 +46,7 @@ export class ThemeManager {
 	private saveConfig() {
 		try {
 			const config: ThemeConfig = { mode: this.mode };
-			const tmpPath = this.configPath + ".tmp";
+			const tmpPath = `${this.configPath}.tmp`;
 			fs.writeFileSync(tmpPath, JSON.stringify(config, null, 2));
 			fs.renameSync(tmpPath, this.configPath);
 		} catch (error) {

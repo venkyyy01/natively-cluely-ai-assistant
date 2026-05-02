@@ -10,7 +10,7 @@ export interface CurlValidationResult {
  * Validates if the cURL command is parseable and contains required variables
  */
 export const validateCurl = (curl: string): CurlValidationResult => {
-	if (!curl || !curl.trim()) {
+	if (!curl?.trim()) {
 		return { isValid: false, message: "Command cannot be empty." };
 	}
 
@@ -44,7 +44,7 @@ export const validateCurl = (curl: string): CurlValidationResult => {
 		}
 
 		return { isValid: true, json };
-	} catch (error) {
+	} catch (_error) {
 		return { isValid: false, message: "Invalid cURL syntax." };
 	}
 };
@@ -101,5 +101,5 @@ export function getByPath(obj: any, path: string): any {
 		.replace(/\[/g, ".")
 		.replace(/\]/g, "")
 		.split(".")
-		.reduce((o, k) => (o || {})[k], obj);
+		.reduce((o, k) => o?.[k], obj);
 }

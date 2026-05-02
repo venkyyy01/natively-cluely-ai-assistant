@@ -1,4 +1,4 @@
-import fs from "fs";
+import fs from "node:fs";
 import type { LLMHelper, ScreenshotEventRoutingResult } from "../../LLMHelper";
 import { CLAUDE_MODEL, GROQ_MODEL } from "../../LLMHelper";
 import {
@@ -375,7 +375,7 @@ export async function chatWithGemini(
 							effectiveMessage,
 							() =>
 								helper.executeCustomProvider(
-									helper.customProvider!.curlCommand,
+									helper.customProvider?.curlCommand,
 									combinedMessages.gemini,
 									customSystemPrompt,
 									effectiveMessage,
@@ -398,7 +398,7 @@ export async function chatWithGemini(
 									),
 								);
 								return helper.executeCustomProvider(
-									helper.customProvider!.curlCommand,
+									helper.customProvider?.curlCommand,
 									fallbackCombinedMessage,
 									customSystemPrompt,
 									fallbackMessage,
@@ -684,12 +684,16 @@ export async function chatWithGemini(
 							"Groq multimodal",
 							imagePaths,
 							effectiveMessage,
-							() =>
-								helper.generateWithGroqMultimodal(
+							() => {
+								if (!imagePaths) {
+									throw new Error("imagePaths is required for Groq multimodal");
+								}
+								return helper.generateWithGroqMultimodal(
 									openaiUserContent,
-									imagePaths!,
+									imagePaths,
 									openaiSystemPrompt,
-								),
+								);
+							},
 							(fallbackMessage) => {
 								const fallbackUserContent = helper.prepareUserContentForModel(
 									"groq",
@@ -906,15 +910,19 @@ export async function* streamChatWithGemini(
 
 	if (isMultimodal) {
 		// MULTIMODAL PROVIDER ORDER: OpenAI -> Gemini Flash -> Claude -> Gemini Pro -> Groq Scout 4
-		if (helper.openaiClient) {
+		if (helper.client) {
 			providers.push({
 				name: `OpenAI (${textOpenAI})`,
-				execute: () =>
-					helper.streamWithOpenaiMultimodal(
+				execute: () => {
+					if (!imagePaths) {
+						throw new Error("imagePaths is required for OpenAI multimodal");
+					}
+					return helper.streamWithOpenaiMultimodal(
 						userContent,
-						imagePaths!,
+						imagePaths,
 						openaiSystemPrompt,
-					),
+					);
+				},
 			});
 		}
 		if (helper.client) {
@@ -932,35 +940,47 @@ export async function* streamChatWithGemini(
 		if (helper.claudeClient) {
 			providers.push({
 				name: `Claude (${textClaude})`,
-				execute: () =>
-					helper.streamWithClaudeMultimodal(
+				execute: () => {
+					if (!imagePaths) {
+						throw new Error("imagePaths is required for Claude multimodal");
+					}
+					return helper.streamWithClaudeMultimodal(
 						userContent,
-						imagePaths!,
+						imagePaths,
 						claudeSystemPrompt,
-					),
+					);
+				},
 			});
 		}
 		if (helper.client) {
 			providers.push({
 				name: `Gemini Pro (${textGeminiPro})`,
-				execute: () =>
-					helper.streamWithGeminiModel(
+				execute: () => {
+					if (!imagePaths) {
+						throw new Error("imagePaths is required for Gemini Pro multimodal");
+					}
+					return helper.streamWithGeminiModel(
 						combinedMessages.gemini,
 						textGeminiPro,
 						imagePaths,
 						abortSignal,
-					),
+					);
+				},
 			});
 		}
 		if (helper.groqClient) {
 			providers.push({
 				name: `Groq (meta-llama/llama-4-scout-17b-16e-instruct)`,
-				execute: () =>
-					helper.streamWithGroqMultimodal(
+				execute: () => {
+					if (!imagePaths) {
+						throw new Error("imagePaths is required for Groq multimodal");
+					}
+					return helper.streamWithGroqMultimodal(
 						userContent,
-						imagePaths!,
+						imagePaths,
 						openaiSystemPrompt,
-					),
+					);
+				},
 			});
 		}
 	} else {

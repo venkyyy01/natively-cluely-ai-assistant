@@ -7,8 +7,8 @@
 // - At query time, VectorStore already has indexed chunks for fast search
 // - Falls back gracefully if embedding API unavailable
 
-import path from "path";
-import { Worker } from "worker_threads";
+import path from "node:path";
+import { Worker } from "node:worker_threads";
 
 import { DatabaseManager } from "../db/DatabaseManager";
 import { getActiveAccelerationManager } from "../services/AccelerationManager";

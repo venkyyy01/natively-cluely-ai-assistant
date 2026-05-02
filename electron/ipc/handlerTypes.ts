@@ -1,5 +1,3 @@
-import { AppState } from "../main";
-
 export type ScreenshotFacadeLike = {
 	deleteScreenshot?: (
 		path: string,

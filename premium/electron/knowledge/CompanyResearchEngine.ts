@@ -2,11 +2,7 @@
 // Company research engine with pluggable web search, LLM summarization, and SQLite caching
 
 import type { KnowledgeDatabaseManager } from "./KnowledgeDatabaseManager";
-import {
-	type CompanyDossier,
-	SalaryEstimate,
-	type StructuredJD,
-} from "./types";
+import type { CompanyDossier, StructuredJD } from "./types";
 
 // ============================================
 // Pluggable Search Provider Interface

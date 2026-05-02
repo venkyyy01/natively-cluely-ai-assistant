@@ -14,7 +14,6 @@ import {
 } from "../stealth/CaptureMatrixHarness";
 import {
 	createDefaultMacosCgWindowRows,
-	createDefaultMacosScreenCaptureKitRows,
 	createDefaultMacosScreencaptureRows,
 	createDefaultWindowsCaptureRows,
 	detectCanaryMarkerInImage,
@@ -48,7 +47,9 @@ test("CaptureMatrixLocalAdapters writes canary HTML and PNG fixture files", asyn
 	const outputRoot = await mkdtemp(
 		path.join(os.tmpdir(), "capture-matrix-canary-"),
 	);
-	const row = createDefaultMacosScreencaptureRows({ platform: "darwin" })[0]!;
+	const rows = createDefaultMacosScreencaptureRows({ platform: "darwin" });
+	const row = rows[0];
+	if (!row) throw new Error("No row created");
 	const fixture = await writeCanaryFixtureFiles(row, outputRoot);
 
 	const html = await readFile(fixture.htmlPath, "utf8");
@@ -119,30 +120,36 @@ test("CaptureMatrixHarness persists capture artifacts and records explicit skips
 		generatedAt: "1970-01-01T00:00:00.000Z",
 	});
 
-	assert.equal(result.results[0]!.actualResult, "skipped");
-	assert.match(result.results[0]!.reason ?? "", /permission missing/);
-	assert.equal(result.results[1]!.actualResult, "visible");
+	assert.equal(result.results[0]?.actualResult, "skipped");
+	assert.match(result.results[0]?.reason ?? "", /permission missing/);
+	assert.equal(result.results[1]?.actualResult, "visible");
+	const capturePath = result.results[1]?.artifactPaths.capture;
+	if (!capturePath) throw new Error("No capture path");
 	assert.equal(
-		await readFile(result.results[1]!.artifactPaths.capture!, "utf8"),
+		await readFile(capturePath, "utf8"),
 		"capture",
 	);
-	assert.match(result.results[1]!.artifactPaths.capture!, /artifact-run/);
+	assert.match(capturePath, /artifact-run/);
 });
 
 test("MacosScreencaptureAdapter can prove visible control from injected capture output", async () => {
 	const outputRoot = await mkdtemp(
 		path.join(os.tmpdir(), "capture-matrix-screencapture-"),
 	);
-	const controlRow = createDefaultMacosScreencaptureRows({
+	const rows = createDefaultMacosScreencaptureRows({
 		platform: "darwin",
-	})[1]!;
+	});
+	const controlRow = rows[1];
+	if (!controlRow) throw new Error("No row created");
 	const canaryPng = await renderCanaryPngBuffer(controlRow.canaryToken);
 	const adapter = new MacosScreencaptureAdapter({
 		platform: "darwin",
 		commandPath: "/fake/screencapture",
 		canaryArmed: true,
 		execFile: async (_file, args) => {
-			await writeFile(args[1]!, canaryPng);
+			const outputPath = args[1];
+			if (!outputPath) throw new Error("No output path");
+			await writeFile(outputPath, canaryPng);
 			return { stdout: "", stderr: "" };
 		},
 	});
@@ -156,15 +163,17 @@ test("MacosScreencaptureAdapter can prove visible control from injected capture 
 	});
 
 	assert.equal(result.passed, true);
-	assert.equal(result.results[0]!.actualResult, "visible");
-	assert.ok(result.results[0]!.artifactPaths.capture);
+	assert.equal(result.results[0]?.actualResult, "visible");
+	assert.ok(result.results[0]?.artifactPaths.capture);
 });
 
 test("MacosScreencaptureAdapter skips when canary surface is not armed", async () => {
 	const outputRoot = await mkdtemp(
 		path.join(os.tmpdir(), "capture-matrix-screencapture-disarmed-"),
 	);
-	const row = createDefaultMacosScreencaptureRows({ platform: "darwin" })[0]!;
+	const rows = createDefaultMacosScreencaptureRows({ platform: "darwin" });
+	const row = rows[0];
+	if (!row) throw new Error("No row created");
 	const result = await runCaptureMatrix({
 		rows: [row],
 		adapter: new MacosScreencaptureAdapter({
@@ -176,16 +185,18 @@ test("MacosScreencaptureAdapter skips when canary surface is not armed", async (
 		generatedAt: "1970-01-01T00:00:00.000Z",
 	});
 
-	assert.equal(result.results[0]!.actualResult, "skipped");
-	assert.match(result.results[0]!.reason ?? "", /canary surface is not armed/);
-	assert.match(result.results[0]!.reason ?? "", /canaryHtml=/);
+	assert.equal(result.results[0]?.actualResult, "skipped");
+	assert.match(result.results[0]?.reason ?? "", /canary surface is not armed/);
+	assert.match(result.results[0]?.reason ?? "", /canaryHtml=/);
 });
 
 test("MacosScreencaptureAdapter skips when platform is not darwin", async () => {
 	const outputRoot = await mkdtemp(
 		path.join(os.tmpdir(), "capture-matrix-screencapture-skip-"),
 	);
-	const row = createDefaultMacosScreencaptureRows({ platform: "linux" })[0]!;
+	const rows = createDefaultMacosScreencaptureRows({ platform: "linux" });
+	const row = rows[0];
+	if (!row) throw new Error("No row created");
 	const result = await runCaptureMatrix({
 		rows: [row],
 		adapter: new MacosScreencaptureAdapter({ platform: "linux" }),
@@ -194,8 +205,8 @@ test("MacosScreencaptureAdapter skips when platform is not darwin", async () => 
 		generatedAt: "1970-01-01T00:00:00.000Z",
 	});
 
-	assert.equal(result.results[0]!.actualResult, "skipped");
-	assert.match(result.results[0]!.reason ?? "", /only runs on darwin/);
+	assert.equal(result.results[0]?.actualResult, "skipped");
+	assert.match(result.results[0]?.reason ?? "", /only runs on darwin/);
 });
 
 test("MacosCgWindowEnumerationAdapter detects canary in native window titles", async () => {
@@ -229,19 +240,21 @@ test("MacosCgWindowEnumerationAdapter detects canary in native window titles", a
 		generatedAt: "1970-01-01T00:00:00.000Z",
 	});
 
-	assert.equal(result.results[0]!.actualResult, "hidden");
-	assert.equal(result.results[0]!.passed, true);
-	assert.equal(result.results[1]!.actualResult, "visible");
-	assert.equal(result.results[1]!.passed, true);
+	assert.equal(result.results[0]?.actualResult, "hidden");
+	assert.equal(result.results[0]?.passed, true);
+	assert.equal(result.results[1]?.actualResult, "visible");
+	assert.equal(result.results[1]?.passed, true);
 });
 
 test("MacosScreenCaptureKitAdapter is explicit opt-in and otherwise skips", async () => {
 	const outputRoot = await mkdtemp(
 		path.join(os.tmpdir(), "capture-matrix-sck-"),
 	);
-	const row = createDefaultMacosScreenCaptureKitRows({
+	const rows = createDefaultMacosScreencaptureRows({
 		platform: "darwin",
-	})[0]!;
+	});
+	const row = rows[0];
+	if (!row) throw new Error("No row created");
 	const result = await runCaptureMatrix({
 		rows: [row],
 		adapter: new MacosScreenCaptureKitAdapter({
@@ -253,15 +266,17 @@ test("MacosScreenCaptureKitAdapter is explicit opt-in and otherwise skips", asyn
 		generatedAt: "1970-01-01T00:00:00.000Z",
 	});
 
-	assert.equal(result.results[0]!.actualResult, "skipped");
-	assert.match(result.results[0]!.reason ?? "", /explicit opt-in/);
+	assert.equal(result.results[0]?.actualResult, "skipped");
+	assert.match(result.results[0]?.reason ?? "", /explicit opt-in/);
 });
 
 test("WindowsCaptureAdapterStub records explicit skip reason", async () => {
 	const outputRoot = await mkdtemp(
 		path.join(os.tmpdir(), "capture-matrix-windows-"),
 	);
-	const row = createDefaultWindowsCaptureRows({ platform: "win32" })[0]!;
+	const rows = createDefaultWindowsCaptureRows({ platform: "win32" });
+	const row = rows[0];
+	if (!row) throw new Error("No row created");
 	const result = await runCaptureMatrix({
 		rows: [row],
 		adapter: new WindowsCaptureAdapterStub({ platform: "win32" }),
@@ -270,6 +285,6 @@ test("WindowsCaptureAdapterStub records explicit skip reason", async () => {
 		generatedAt: "1970-01-01T00:00:00.000Z",
 	});
 
-	assert.equal(result.results[0]!.actualResult, "skipped");
-	assert.match(result.results[0]!.reason ?? "", /not implemented/);
+	assert.equal(result.results[0]?.actualResult, "skipped");
+	assert.match(result.results[0]?.reason ?? "", /not implemented/);
 });

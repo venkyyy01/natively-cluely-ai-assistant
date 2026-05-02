@@ -12,37 +12,32 @@ export interface AppAPIConfig {
 	ollamaUrl?: string; // e.g. 'http://localhost:11434'
 }
 
-export class EmbeddingProviderResolver {
-	private static aneProviderAvailable: boolean | null = null;
-	private static aneProviderChecked: boolean = false;
-	private static aneProvider: ANEEmbeddingProvider | null = null;
+let aneProviderAvailable: boolean | null = null;
+let aneProviderChecked: boolean = false;
+let aneProvider: ANEEmbeddingProvider | null = null;
 
+export const EmbeddingProviderResolver = {
 	/**
 	 * Returns the best available provider.
 	 * Runs isAvailable() checks in priority order.
 	 * Local model is the unconditional fallback — always last.
 	 */
-	static async resolve(config: AppAPIConfig): Promise<IEmbeddingProvider> {
+	async resolve(config: AppAPIConfig): Promise<IEmbeddingProvider> {
 		// ANE (Apple Neural Engine) provider - highest priority when acceleration enabled
 		if (isOptimizationActive("useANEEmbeddings")) {
-			if (!EmbeddingProviderResolver.aneProviderChecked) {
-				const aneProvider = new ANEEmbeddingProvider();
-				await aneProvider.initialize();
-				EmbeddingProviderResolver.aneProviderAvailable =
-					await aneProvider.isAvailable();
-				EmbeddingProviderResolver.aneProvider =
-					EmbeddingProviderResolver.aneProviderAvailable ? aneProvider : null;
-				EmbeddingProviderResolver.aneProviderChecked = true;
+			if (!aneProviderChecked) {
+				const newAneProvider = new ANEEmbeddingProvider();
+				await newAneProvider.initialize();
+				aneProviderAvailable = await newAneProvider.isAvailable();
+				aneProvider = aneProviderAvailable ? newAneProvider : null;
+				aneProviderChecked = true;
 			}
 
-			if (
-				EmbeddingProviderResolver.aneProviderAvailable &&
-				EmbeddingProviderResolver.aneProvider
-			) {
+			if (aneProviderAvailable && aneProvider) {
 				console.log(
-					`[EmbeddingProviderResolver] ANE provider available, using ${EmbeddingProviderResolver.aneProvider.name} (${EmbeddingProviderResolver.aneProvider.dimensions}d)`,
+					`[EmbeddingProviderResolver] ANE provider available, using ${aneProvider.name} (${aneProvider.dimensions}d)`,
 				);
-				return EmbeddingProviderResolver.aneProvider;
+				return aneProvider;
 			}
 			console.log(
 				"[EmbeddingProviderResolver] ANE provider unavailable, falling back to other providers",

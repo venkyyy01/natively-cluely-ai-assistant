@@ -112,10 +112,6 @@ export class SetFitReactionClassifier {
 	private prototypeEmbeddings: Map<QuestionReactionKind, number[][]> =
 		new Map();
 
-	constructor() {
-		// Lazy load model on first use
-	}
-
 	private async ensureModelLoaded(): Promise<void> {
 		if (this.embedder) {
 			return;

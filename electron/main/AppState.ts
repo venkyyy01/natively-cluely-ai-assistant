@@ -1,20 +1,16 @@
 import { randomUUID } from "node:crypto";
+import type { EventEmitter } from "node:events";
+import fs from "node:fs";
+import path from "node:path";
 import {
 	app,
 	BrowserWindow,
-	globalShortcut,
 	ipcMain,
 	Menu,
 	nativeImage,
-	session,
-	shell,
 	systemPreferences,
 	Tray,
 } from "electron";
-import type { EventEmitter } from "events";
-import fs from "fs";
-import fsPromises from "fs/promises";
-import path from "path";
 import { type AudioDevice, AudioDevices } from "../audio/AudioDevices";
 import { DeepgramStreamingSTT } from "../audio/DeepgramStreamingSTT";
 import { ElevenLabsStreamingSTT } from "../audio/ElevenLabsStreamingSTT";
@@ -55,9 +51,7 @@ import { ScreenshotHelper } from "../ScreenshotHelper";
 import { SettingsWindowHelper } from "../SettingsWindowHelper";
 import { STTReconnector } from "../STTReconnector";
 import { setActiveAccelerationManager } from "../services/AccelerationManager";
-import { CredentialsManager } from "../services/CredentialsManager";
 import { KeybindManager } from "../services/KeybindManager";
-import { OllamaManager } from "../services/OllamaManager";
 import { SettingsManager } from "../services/SettingsManager";
 import {
 	createMacosVirtualDisplayCoordinator,
@@ -189,7 +183,6 @@ export class AppState {
 		}, delayMs);
 		this.trackDisguiseTimer(timer);
 	}
-	private _ollamaBootstrapPromise: Promise<void> | null = null;
 	private audioRecoveryAttempts: number = 0;
 	private audioRecoveryTimestamps: number[] = [];
 	private static readonly MAX_RECOVERIES_PER_WINDOW = 3;
@@ -1079,7 +1072,7 @@ export class AppState {
 				);
 			}
 
-			if (!fs.existsSync(serviceAccountPath!)) {
+			if (!fs.existsSync(serviceAccountPath)) {
 				throw new Error(
 					`Google STT service account file is missing: ${serviceAccountPath}`,
 				);
@@ -2618,7 +2611,7 @@ export class AppState {
 		this.clearAudioPipelineHealthCheck();
 		const meetingId = this.currentMeetingId;
 		this.currentMeetingId = null;
-		const endSequence = ++this.meetingStartSequence; // Increment sequence to invalidate any pending starts
+		const _endSequence = ++this.meetingStartSequence; // Increment sequence to invalidate any pending starts
 		this.meetingLifecycleState = "stopping";
 		this.broadcast("meeting-lifecycle-state", this.meetingLifecycleState);
 		this.isMeetingActive = false; // Block new data immediately
@@ -2830,8 +2823,7 @@ export class AppState {
 		try {
 			const meeting =
 				DatabaseManager.getInstance().getMeetingDetails(meetingId);
-			if (!meeting || !meeting.transcript || meeting.transcript.length === 0)
-				return;
+			if (!meeting?.transcript || meeting.transcript.length === 0) return;
 
 			// Convert transcript to RAG format
 			const segments = meeting.transcript.map((t) => ({
@@ -2875,7 +2867,7 @@ export class AppState {
 			// Send to both if both exist, though mostly overlay needs it
 			const helper = this.getWindowHelper();
 			const launcher = helper.getLauncherWindow();
-			const overlay = helper.getOverlayWindow();
+			const _overlay = helper.getOverlayWindow();
 			if (launcher && !launcher.isDestroyed())
 				launcher.webContents.send("intelligence-assist-update", { insight });
 			const overlayContent = this.getWindowHelper().getOverlayContentWindow();
@@ -3263,7 +3255,7 @@ export class AppState {
 					return data.models.map((m: any) => m.name);
 				}
 				return [];
-			} catch (error) {
+			} catch (_error) {
 				// console.warn("Ollama detection failed:", error);
 				return [];
 			}
@@ -3429,7 +3421,7 @@ export class AppState {
 
 		// Check if template exists (sync check is fine for startup/rare toggle)
 		try {
-			if (require("fs").existsSync(templatePath)) {
+			if (require("node:fs").existsSync(templatePath)) {
 				iconToUse = templatePath;
 				console.log("[Tray] Using template icon:", templatePath);
 			} else {
@@ -3438,7 +3430,7 @@ export class AppState {
 					app.getAppPath(),
 					"src/components/iconTemplate.png",
 				);
-				if (require("fs").existsSync(devTemplatePath)) {
+				if (require("node:fs").existsSync(devTemplatePath)) {
 					iconToUse = devTemplatePath;
 					console.log("[Tray] Using dev template icon:", devTemplatePath);
 				} else {

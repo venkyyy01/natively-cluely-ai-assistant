@@ -67,7 +67,7 @@ async function benchmarkModel(
 				text: example.text,
 			});
 			latencies.push(latency);
-		} catch (error) {
+		} catch (_error) {
 			predictions.push({
 				expected: example.label,
 				predicted: "general", // fallback

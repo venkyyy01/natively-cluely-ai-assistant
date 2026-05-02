@@ -61,7 +61,6 @@ export class SetFitIntentProvider implements IntentInferenceProvider {
 	// Python subprocess state
 	private pythonProc: child_process.ChildProcess | null = null;
 	private pythonReady = false;
-	private pythonLoading = false;
 	private requestId = 0;
 	private pendingRequests = new Map<number, PendingRequest>();
 
@@ -211,12 +210,8 @@ export class SetFitIntentProvider implements IntentInferenceProvider {
 				timer,
 			});
 
-			if (
-				this.pythonProc &&
-				this.pythonProc.stdin &&
-				!this.pythonProc.stdin.destroyed
-			) {
-				this.pythonProc.stdin.write(JSON.stringify({ id, text }) + "\n");
+			if (this.pythonProc?.stdin && !this.pythonProc.stdin.destroyed) {
+				this.pythonProc.stdin.write(`${JSON.stringify({ id, text })}\n`);
 			} else {
 				this.pendingRequests.delete(id);
 				clearTimeout(timer);
@@ -387,7 +382,8 @@ export class SetFitIntentProvider implements IntentInferenceProvider {
 					}
 					const reqId = resp.id;
 					if (reqId !== undefined && this.pendingRequests.has(reqId)) {
-						const pending = this.pendingRequests.get(reqId)!;
+						const pending = this.pendingRequests.get(reqId);
+						if (!pending) continue;
 						this.pendingRequests.delete(reqId);
 						pending.resolve(resp);
 					}

@@ -1,5 +1,5 @@
 import { AnimatePresence, motion } from "framer-motion";
-import { Sparkles, UserCircle } from "lucide-react";
+import { Sparkles } from "lucide-react";
 import type React from "react";
 import { useEffect, useState } from "react";
 import { cn } from "../../src/lib/utils";
@@ -17,7 +17,7 @@ export const ProfileFeatureToaster: React.FC<ProfileFeatureToasterProps> = ({
 	onDismiss,
 	onSetupProfile,
 }) => {
-	const [isButtonHovered, setIsButtonHovered] = useState(false);
+	const [_isButtonHovered, setIsButtonHovered] = useState(false);
 
 	useEffect(() => {
 		// DEV OVERRIDE: For testing, press Ctrl/Cmd + E

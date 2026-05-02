@@ -1,5 +1,5 @@
 import assert from "node:assert";
-import { after, before, describe, it } from "node:test";
+import { before, describe, it } from "node:test";
 import { SemanticEntailmentVerifier } from "../conscious/SemanticEntailmentVerifier";
 
 describe("SemanticEntailmentVerifier", () => {

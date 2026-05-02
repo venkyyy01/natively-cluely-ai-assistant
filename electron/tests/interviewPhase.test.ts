@@ -3,7 +3,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { InterviewPhaseDetector } from "../conscious/InterviewPhase";
-import { InterviewPhase } from "../conscious/types";
 
 test("InterviewPhaseDetector - should detect requirements_gathering phase", () => {
 	const detector = new InterviewPhaseDetector();

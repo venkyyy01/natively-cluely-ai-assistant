@@ -2,25 +2,14 @@ import { AnimatePresence, motion } from "framer-motion";
 import {
 	ArrowRight,
 	ArrowUp,
-	Camera,
-	Check,
 	ChevronDown,
-	ChevronUp,
 	Code,
 	Copy,
-	CornerDownLeft,
-	Edit3,
-	Ghost,
 	HelpCircle,
 	Image,
-	Link,
-	LogOut,
 	MessageSquare,
-	Mic,
-	MicOff,
 	Pencil,
 	RefreshCw,
-	Settings,
 	SlidersHorizontal,
 	Sparkles,
 	X,
@@ -167,7 +156,7 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({
 	const [inputValue, setInputValue] = useState("");
 	const { shortcuts, isShortcutPressed } = useShortcuts();
 	const [messages, setMessages] = useState<Message[]>([]);
-	const [isConnected, setIsConnected] = useState(false);
+	const [_isConnected, setIsConnected] = useState(false);
 	const [isProcessing, setIsProcessing] = useState(false);
 	const [isSettingsOpen, setIsSettingsOpen] = useState(false);
 	const conversationContext = useMemo(() => {
@@ -247,7 +236,7 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({
 			: 450;
 	});
 	const [isResizing, setIsResizing] = useState(false);
-	const [hideChatHidesWidget, setHideChatHidesWidget] = useState(() => {
+	const [hideChatHidesWidget, _setHideChatHidesWidget] = useState(() => {
 		const stored = localStorage.getItem("natively_hideChatHidesWidget");
 		return stored ? stored === "true" : true;
 	});
@@ -273,7 +262,7 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({
 		if (getDefaultModel) {
 			getDefaultModel()
 				.then((result: any) => {
-					if (result && result.model) {
+					if (result?.model) {
 						setCurrentModel(result.model);
 						// Also set the runtime model to the default
 						if (setModel) {
@@ -285,9 +274,9 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({
 					console.error("Failed to fetch default model:", err),
 				);
 		}
-	}, []);
+	}, [setModel, getDefaultModel]);
 
-	const handleModelSelect = (modelId: string) => {
+	const _handleModelSelect = (modelId: string) => {
 		setCurrentModel(modelId);
 		// Session-only: update runtime but don't persist as default
 		if (setModel) {
@@ -304,7 +293,7 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({
 			setCurrentModel((prev) => (prev === modelId ? prev : modelId));
 		});
 		return () => unsubscribe();
-	}, []);
+	}, [onModelChanged]);
 
 	useEffect(() => {
 		if (!onModelFallback) return;
@@ -315,7 +304,7 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({
 			);
 		});
 		return () => unsubscribe();
-	}, []);
+	}, [onModelFallback]);
 
 	useEffect(() => {
 		if (!modelFallbackNotice) return;
@@ -336,7 +325,7 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({
 			});
 			return () => unsubscribe();
 		}
-	}, []);
+	}, [getUndetectable, onUndetectableChanged]);
 
 	// Persist Settings
 	useEffect(() => {
@@ -387,7 +376,7 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({
 				height: Math.ceil(rect.height),
 			});
 		});
-	}, [attachedContext]);
+	}, []);
 
 	// Force initial sizing safety check
 	useEffect(() => {
@@ -432,7 +421,7 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({
 			},
 		);
 		return () => unsubscribe();
-	}, [electronAPI, nextMessageId]);
+	}, [electronAPI]);
 
 	// Sync Window Visibility with Expanded State
 	useEffect(() => {
@@ -464,7 +453,7 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({
 			setIsExpanded((prev) => !prev);
 		});
 		return () => unsubscribe();
-	}, []);
+	}, [onToggleExpand]);
 
 	// Session Reset Listener - Clears UI when a NEW meeting starts
 	useEffect(() => {
@@ -497,7 +486,7 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({
 			analytics.trackConversationStarted();
 		});
 		return () => unsubscribe();
-	}, []);
+	}, [onSessionReset]);
 
 	const handleScreenshotAttach = (data: { path: string; preview: string }) => {
 		setIsExpanded(true);
@@ -598,7 +587,7 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({
 			window.removeEventListener("mousemove", handlePointerMove);
 			window.removeEventListener("mouseup", stopResize);
 		};
-	}, []);
+	}, [setOverlayBounds, panelWidth, chatViewportHeight]);
 
 	const handleResizeStart =
 		(direction: ResizeDirection) =>
@@ -1124,18 +1113,15 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({
 		}
 
 		return () => cleanups.forEach((fn) => fn());
-	}, [electronAPI]);
+	}, [electronAPI, nextMessageId, handleScreenshotAttach]);
 
 	// Quick Actions - Updated to use new Intelligence APIs
 
-	const handleCopy = useCallback(
-		(text: string) => {
-			navigator.clipboard.writeText(text);
-			analytics.trackCopyAnswer();
-			// Optional: Trigger a small toast or state change for visual feedback
-		},
-		[analytics],
-	);
+	const handleCopy = useCallback((text: string) => {
+		navigator.clipboard.writeText(text);
+		analytics.trackCopyAnswer();
+		// Optional: Trigger a small toast or state change for visual feedback
+	}, []);
 
 	const handleWhatToSay = useCallback(async () => {
 		setIsExpanded(true);
@@ -1258,20 +1244,13 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({
 				);
 			setIsProcessing(false);
 		}
-	}, [
-		attachedContext,
-		setIsExpanded,
-		setIsProcessing,
-		setMessages,
-		setAttachedContext,
-		analytics,
-	]);
+	}, [attachedContext, nextMessageId]);
 
 	const handleFollowUp = useCallback(
 		async (intent: string = "rephrase") => {
 			setIsExpanded(true);
 			setIsProcessing(true);
-			analytics.trackCommandExecuted("follow_up_" + intent);
+			analytics.trackCommandExecuted(`follow_up_${intent}`);
 			const assistantMessageId = nextMessageId("assistant");
 
 			setMessages((prev) =>
@@ -1320,7 +1299,7 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({
 				setIsProcessing(false);
 			}
 		},
-		[setIsExpanded, setIsProcessing, setMessages, analytics],
+		[nextMessageId],
 	);
 
 	const handleRecap = useCallback(async () => {
@@ -1373,7 +1352,7 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({
 		} finally {
 			setIsProcessing(false);
 		}
-	}, [setIsExpanded, setIsProcessing, setMessages, analytics]);
+	}, [nextMessageId]);
 
 	const handleFollowUpQuestions = useCallback(async () => {
 		setIsExpanded(true);
@@ -1425,7 +1404,7 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({
 		} finally {
 			setIsProcessing(false);
 		}
-	}, [setIsExpanded, setIsProcessing, setMessages, analytics]);
+	}, [nextMessageId]);
 
 	// Setup Streaming Listeners
 	useEffect(() => {
@@ -1498,7 +1477,7 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({
 							(message) => ({
 								...message,
 								isStreaming: false,
-								text: message.text + `\n\n[RAG Error: ${data.error}]`,
+								text: `${message.text}\n\n[RAG Error: ${data.error}]`,
 							}),
 							{
 								id: nextMessageId("system"),
@@ -1518,7 +1497,7 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({
 		}
 
 		return () => cleanups.forEach((fn) => fn());
-	}, [currentModel, nextMessageId]); // Ensure tracking captures correct model
+	}, [nextMessageId]); // Ensure tracking captures correct model
 
 	// NAT-036: per-request Gemini stream listener setup
 	const subscribeGeminiStream = (
@@ -1585,7 +1564,7 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({
 						(message) => ({
 							...message,
 							isStreaming: false,
-							text: message.text + `\n\n[Error: ${error}]`,
+							text: `${message.text}\n\n[Error: ${error}]`,
 						}),
 						{
 							id: nextMessageId("system"),
@@ -1658,7 +1637,7 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({
 
 				const question = (
 					voiceInputRef.current +
-					(manualTranscriptRef.current ? " " + manualTranscriptRef.current : "")
+					(manualTranscriptRef.current ? ` ${manualTranscriptRef.current}` : "")
 				).trim();
 				isRecordingRef.current = false;
 				setVoiceInput("");
@@ -1816,7 +1795,7 @@ Provide only the answer, nothing else.`;
 			try {
 				// Native audio is now managed by main process
 				// await window.electronAPI.invoke('native-audio-connect');
-			} catch (err) {
+			} catch (_err) {
 				// Already connected, that's fine
 			}
 		}
@@ -1920,7 +1899,7 @@ Provide only the answer, nothing else.`;
 		}
 	};
 
-	const clearChat = () => {
+	const _clearChat = () => {
 		setMessages([]);
 	};
 
@@ -2594,7 +2573,7 @@ Provide only the answer, nothing else.`;
 		takeScreenshot: async () => {
 			try {
 				const data = await window.electronAPI.takeScreenshot();
-				if (data && data.path) {
+				if (data?.path) {
 					handleScreenshotAttach(data as { path: string; preview: string });
 				}
 			} catch (err) {
@@ -2644,7 +2623,7 @@ Provide only the answer, nothing else.`;
 		takeScreenshot: async () => {
 			try {
 				const data = await window.electronAPI.takeScreenshot();
-				if (data && data.path) {
+				if (data?.path) {
 					handleScreenshotAttach(data as { path: string; preview: string });
 				}
 			} catch (err) {
@@ -2722,7 +2701,7 @@ Provide only the answer, nothing else.`;
 		});
 
 		return () => unsubscribe?.();
-	}, []);
+	}, [onGlobalShortcutAction]);
 
 	return (
 		<div
@@ -3129,7 +3108,7 @@ Provide only the answer, nothing else.`;
 														contentRef.current.getBoundingClientRect();
 													const buttonRect =
 														e.currentTarget.getBoundingClientRect();
-													const POPUP_WIDTH = 270; // Matches SettingsWindowHelper actual width
+													const _POPUP_WIDTH = 270; // Matches SettingsWindowHelper actual width
 													const GAP = 8; // Same gap as between TopPill and main body (gap-2 = 8px)
 
 													// X: Left-aligned relative to the Settings Button

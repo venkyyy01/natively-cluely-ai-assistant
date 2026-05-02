@@ -1,10 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { InterviewerUtteranceBuffer } from "../buffering/InterviewerUtteranceBuffer";
-import {
-	getTranscriptSuggestionDecision,
-	shouldAutoTriggerSuggestionFromTranscript,
-} from "../ConsciousMode";
+import { getTranscriptSuggestionDecision } from "../ConsciousMode";
 
 /**
  * RBC Meeting Scenario Test

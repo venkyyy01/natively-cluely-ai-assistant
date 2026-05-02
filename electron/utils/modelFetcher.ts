@@ -160,7 +160,7 @@ async function fetchGeminiModels(apiKey: string): Promise<ProviderModel[]> {
 	const filtered = models.filter((m: any) => {
 		const name = (m.name || "").toLowerCase();
 		const displayName = (m.displayName || "").toLowerCase();
-		const combined = name + " " + displayName;
+		const combined = `${name} ${displayName}`;
 
 		// Must support generateContent
 		const supportsChat =

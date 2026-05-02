@@ -3,9 +3,9 @@
  * Uses Electron's safeStorage API for encryption at rest
  */
 
+import fs from "node:fs";
+import path from "node:path";
 import { app, safeStorage } from "electron";
-import fs from "fs";
-import path from "path";
 import type {
 	CustomProviderPayload,
 	FastResponseConfig,
@@ -452,7 +452,7 @@ export class CredentialsManager {
 		if (fs.existsSync(CREDENTIALS_PATH)) {
 			fs.unlinkSync(CREDENTIALS_PATH);
 		}
-		const plaintextPath = CREDENTIALS_PATH + ".json";
+		const plaintextPath = `${CREDENTIALS_PATH}.json`;
 		if (fs.existsSync(plaintextPath)) {
 			fs.unlinkSync(plaintextPath);
 		}
@@ -496,7 +496,7 @@ export class CredentialsManager {
 
 			const data = JSON.stringify(this.credentials);
 			const encrypted = safeStorage.encryptString(data);
-			const tmpEnc = CREDENTIALS_PATH + ".tmp";
+			const tmpEnc = `${CREDENTIALS_PATH}.tmp`;
 			fs.writeFileSync(tmpEnc, encrypted);
 			fs.renameSync(tmpEnc, CREDENTIALS_PATH);
 		} catch (error) {
@@ -534,7 +534,7 @@ export class CredentialsManager {
 				}
 
 				// Clean up any leftover plaintext fallback file to eliminate the data leak
-				const plaintextPath = CREDENTIALS_PATH + ".json";
+				const plaintextPath = `${CREDENTIALS_PATH}.json`;
 				if (fs.existsSync(plaintextPath)) {
 					try {
 						fs.unlinkSync(plaintextPath);
@@ -551,7 +551,7 @@ export class CredentialsManager {
 				return;
 			}
 
-			const plaintextPath = CREDENTIALS_PATH + ".json";
+			const plaintextPath = `${CREDENTIALS_PATH}.json`;
 			if (fs.existsSync(plaintextPath)) {
 				try {
 					fs.unlinkSync(plaintextPath);

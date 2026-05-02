@@ -1,5 +1,3 @@
-import React from "react";
-
 export const CONSCIOUS_MODE_SECTION_TITLES = [
 	"Say This First",
 	"Then Build It",
@@ -247,7 +245,7 @@ export function validateConsciousModeGuardrails(
 	text: string,
 ): ConsciousModeGuardrailResult {
 	const parsed = parseSourceSections(text);
-	if (!parsed || !parsed.openingReasoning.trim()) {
+	if (!parsed?.openingReasoning.trim()) {
 		return { isValid: false, reason: "missing_opening_reasoning" };
 	}
 

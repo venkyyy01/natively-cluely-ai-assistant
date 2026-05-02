@@ -1,30 +1,9 @@
 // ipcHandlers.ts
 
-import {
-	app,
-	BrowserWindow,
-	desktopCapturer,
-	dialog,
-	ipcMain,
-	screen,
-	shell,
-	systemPreferences,
-} from "electron";
-import * as fs from "fs";
-import * as path from "path";
+import * as path from "node:path";
+import { app, BrowserWindow, dialog } from "electron";
 import { DatabaseManager } from "./db/DatabaseManager"; // Import Database Manager
-import { GEMINI_FLASH_MODEL } from "./IntelligenceManager";
 import { createHandlerContext } from "./ipc/handlerContext";
-import type {
-	AudioFacadeLike,
-	InferenceSupervisorLike,
-	IntelligenceManagerLike,
-	RuntimeCoordinatorLike,
-	ScreenshotFacadeLike,
-	SettingsFacadeLike,
-	SttSupervisorLike,
-	WindowFacadeLike,
-} from "./ipc/handlerTypes";
 import { registerCalendarHandlers } from "./ipc/registerCalendarHandlers";
 import { registerEmailHandlers } from "./ipc/registerEmailHandlers";
 import { registerGeminiStreamIpcHandlers } from "./ipc/registerGeminiStreamIpcHandlers";
@@ -46,9 +25,7 @@ export function initializeIpcHandlers(appState: AppState): void {
 		ok,
 		fail,
 		getInferenceLlmHelper,
-		getRuntimeCoordinator,
 		getSttSupervisor,
-		getInferenceSupervisor,
 		getWindowFacade,
 		getSettingsFacade,
 		getAudioFacade,
@@ -83,7 +60,7 @@ export function initializeIpcHandlers(appState: AppState): void {
 		},
 	);
 
-	safeHandle("license:activate", async (event, key: string) => {
+	safeHandle("license:activate", async (_event, _key: string) => {
 		return { success: true };
 	});
 	safeHandle("license:check-premium", async () => {
@@ -124,7 +101,7 @@ export function initializeIpcHandlers(appState: AppState): void {
 					"delete-screenshot",
 				),
 			] as const,
-		async (event, filePath) => {
+		async (_event, filePath) => {
 			// Guard: only allow deletion of files within the app's own userData directory
 			const userDataDir = app.getPath("userData");
 			const resolved = path.resolve(filePath);
@@ -192,7 +169,7 @@ export function initializeIpcHandlers(appState: AppState): void {
 				? screenshotFacade.getView()
 				: appState.getView();
 			const getPreview = screenshotFacade?.getImagePreview
-				? (filePath: string) => screenshotFacade.getImagePreview!(filePath)
+				? (filePath: string) => screenshotFacade.getImagePreview?.(filePath)
 				: (filePath: string) => appState.getImagePreview(filePath);
 			let previews: Array<{ path: string; preview: string }> = [];
 			if (view === "queue") {

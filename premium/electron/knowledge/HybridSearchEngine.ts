@@ -134,7 +134,7 @@ export async function getRelevantNodes(
 	let targetNodes = allNodes;
 	if (options.sourceTypes && options.sourceTypes.length > 0) {
 		targetNodes = allNodes.filter((n) =>
-			options.sourceTypes!.includes(n.source_type),
+			options.sourceTypes?.includes(n.source_type),
 		);
 	}
 

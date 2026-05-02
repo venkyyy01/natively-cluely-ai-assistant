@@ -56,7 +56,7 @@ export class StealthCaptureFixture {
 			};
 		}
 
-		const nsWindowLevelOk = win.expectedNsWindowLevel == null ? true : true; // mock assumes ok
+		const nsWindowLevelOk = true; // mock assumes ok
 
 		return {
 			window: win.name,

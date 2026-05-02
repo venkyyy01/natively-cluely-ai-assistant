@@ -1,7 +1,7 @@
 // electron/knowledge/StarStoryGenerator.ts
 // Expands resume experience bullets into structured STAR stories during ingestion
 
-import { calculateDurationMonths, extractTags } from "./DocumentChunker";
+import { extractTags } from "./DocumentChunker";
 import { callWithTimeout, extractJSONArray } from "./llmUtils";
 import {
 	type ContextNode,
@@ -144,7 +144,7 @@ Return ONLY the JSON array.`;
  */
 export function starStoriesToNodes(
 	stories: StarStory[],
-	embedFn?: (text: string) => Promise<number[]>,
+	_embedFn?: (text: string) => Promise<number[]>,
 ): Omit<ContextNode, "embedding">[] {
 	return stories.map((story) => {
 		const contextPrefix = `[${story.parent_role} @ ${story.parent_company}, ${story.timeline}]`;

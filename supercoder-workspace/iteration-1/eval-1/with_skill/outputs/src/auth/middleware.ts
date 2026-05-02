@@ -12,7 +12,7 @@ export function authMiddleware(
 ) {
 	const authHeader = req.headers.authorization;
 
-	if (!authHeader || !authHeader.startsWith("Bearer ")) {
+	if (!authHeader?.startsWith("Bearer ")) {
 		return res.status(401).json({ error: "No token provided" });
 	}
 
@@ -22,19 +22,19 @@ export function authMiddleware(
 		const payload = verifyAccessToken(token);
 		req.user = payload;
 		next();
-	} catch (error) {
+	} catch (_error) {
 		return res.status(401).json({ error: "Invalid token" });
 	}
 }
 
 export function optionalAuthMiddleware(
 	req: AuthenticatedRequest,
-	res: Response,
+	_res: Response,
 	next: NextFunction,
 ) {
 	const authHeader = req.headers.authorization;
 
-	if (!authHeader || !authHeader.startsWith("Bearer ")) {
+	if (!authHeader?.startsWith("Bearer ")) {
 		return next();
 	}
 

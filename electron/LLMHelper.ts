@@ -1,15 +1,15 @@
+import { exec } from "node:child_process";
+import { createHash } from "node:crypto";
+import fs from "node:fs";
+import { promisify } from "node:util";
 import Anthropic from "@anthropic-ai/sdk";
 import curl2Json from "@bany/curl-to-json";
 import { GoogleGenAI } from "@google/genai";
 import axios from "axios";
-import { exec } from "child_process";
-import { createHash } from "crypto";
-import fs from "fs";
 import Groq from "groq-sdk";
 import OpenAI from "openai";
 import sharp from "sharp";
 import Tesseract from "tesseract.js";
-import { promisify } from "util";
 import type { FastResponseConfig, FastResponseProvider } from "../shared/ipc";
 import {
 	classifyProviderCapability,
@@ -82,10 +82,7 @@ import {
 	TextModelFamily,
 	type TieredModels,
 } from "./services/ModelVersionManager";
-import {
-	createProviderRateLimiters,
-	RateLimiter,
-} from "./services/RateLimiter";
+import { createProviderRateLimiters } from "./services/RateLimiter";
 import { TokenCounter } from "./shared/TokenCounter";
 import { deepVariableReplacer, getByPath } from "./utils/curlUtils";
 
@@ -370,7 +367,6 @@ export class LLMHelper {
 	public useOllama: boolean = false;
 	private ollamaModel: string = "llama3.2";
 	private ollamaUrl: string = "http://localhost:11434";
-	private ollamaStartedByApp: boolean = false;
 	private geminiModel: string = GEMINI_FLASH_MODEL;
 	public customProvider: CustomProvider | null = null;
 	public activeCurlProvider: CurlProvider | null = null;
@@ -380,7 +376,6 @@ export class LLMHelper {
 	};
 	public knowledgeOrchestrator: any = null;
 	private aiResponseLanguage: string = "English";
-	private sttLanguage: string = "english-us";
 	private shouldEnforceValidation: boolean =
 		process.env.ENFORCE_RESPONSE_VALIDATION === "true";
 	private systemPromptCache = new Map<
@@ -996,7 +991,7 @@ export class LLMHelper {
 			// Test the selected model works
 			await this.callOllama("Hello");
 			// console.log(`[LLMHelper] Successfully initialized with model: ${this.ollamaModel}`)
-		} catch (error: any) {
+		} catch (_error: any) {
 			// console.error(`[LLMHelper] Failed to initialize Ollama model: ${error.message}`)
 			// Try to use first available model as fallback
 			try {
@@ -1005,7 +1000,7 @@ export class LLMHelper {
 					this.ollamaModel = models[0];
 					// console.log(`[LLMHelper] Fallback to: ${this.ollamaModel}`)
 				}
-			} catch (fallbackError: any) {
+			} catch (_fallbackError: any) {
 				// console.error(`[LLMHelper] Fallback also failed: ${fallbackError.message}`)
 			}
 		}
@@ -1352,7 +1347,7 @@ export class LLMHelper {
 					);
 
 					const response =
-						await this.client!.models.generateContent(requestPayload);
+						await this.client?.models.generateContent(requestPayload);
 
 					// Debug: log full response structure
 					// console.log(`[LLMHelper] Full response:`, JSON.stringify(response, null, 2).substring(0, 500))
@@ -1430,24 +1425,19 @@ export class LLMHelper {
 	}
 
 	public async extractProblemFromImages(imagePaths: string[]) {
-		try {
-			const prompt = `You are a wingman. Please analyze these images and extract the following information in JSON format:\n{
+		const prompt = `You are a wingman. Please analyze these images and extract the following information in JSON format:\n{
   "problem_statement": "A clear statement of the problem or situation depicted in the images.",
   "context": "Relevant background or context from the images.",
   "suggested_responses": ["First possible answer or action", "Second possible answer or action", "..."],
   "reasoning": "Explanation of why these suggestions are appropriate."
 }\nImportant: Return ONLY the JSON object, without any markdown formatting or code blocks.`;
 
-			const text = await this.generateWithVisionFallback(
-				IMAGE_ANALYSIS_PROMPT,
-				prompt,
-				imagePaths,
-			);
-			return JSON.parse(this.cleanJsonResponse(text));
-		} catch (error) {
-			// console.error("Error extracting problem from images:", error)
-			throw error;
-		}
+		const text = await this.generateWithVisionFallback(
+			IMAGE_ANALYSIS_PROMPT,
+			prompt,
+			imagePaths,
+		);
+		return JSON.parse(this.cleanJsonResponse(text));
 	}
 
 	public async generateSolution(problemInfo: any, signal?: AbortSignal) {
@@ -1460,21 +1450,16 @@ export class LLMHelper {
     "reasoning": "Explanation of why these suggestions are appropriate."
   }
 }\nImportant: Return ONLY the JSON object, without any markdown formatting or code blocks.`;
-
-		try {
-			throwIfAborted(signal);
-			const text = await this.generateWithVisionFallback(
-				IMAGE_ANALYSIS_PROMPT,
-				prompt,
-				[],
-				signal,
-			);
-			throwIfAborted(signal);
-			const parsed = JSON.parse(this.cleanJsonResponse(text));
-			return parsed;
-		} catch (error) {
-			throw error;
-		}
+		throwIfAborted(signal);
+		const text = await this.generateWithVisionFallback(
+			IMAGE_ANALYSIS_PROMPT,
+			prompt,
+			[],
+			signal,
+		);
+		throwIfAborted(signal);
+		const parsed = JSON.parse(this.cleanJsonResponse(text));
+		return parsed;
 	}
 
 	public async debugSolutionWithImages(
@@ -1483,8 +1468,7 @@ export class LLMHelper {
 		debugImagePaths: string[],
 		signal?: AbortSignal,
 	) {
-		try {
-			const prompt = `You are a wingman. Given:\n1. The original problem or situation: ${JSON.stringify(problemInfo, null, 2)}\n2. The current response or approach: ${currentCode}\n3. The debug information in the provided images\n\nPlease analyze the debug information and provide feedback in this JSON format:\n{
+		const prompt = `You are a wingman. Given:\n1. The original problem or situation: ${JSON.stringify(problemInfo, null, 2)}\n2. The current response or approach: ${currentCode}\n3. The debug information in the provided images\n\nPlease analyze the debug information and provide feedback in this JSON format:\n{
   "solution": {
     "code": "The code or main answer here.",
     "problem_statement": "Restate the problem or situation.",
@@ -1494,19 +1478,16 @@ export class LLMHelper {
   }
 }\nImportant: Return ONLY the JSON object, without any markdown formatting or code blocks.`;
 
-			throwIfAborted(signal);
-			const text = await this.generateWithVisionFallback(
-				IMAGE_ANALYSIS_PROMPT,
-				prompt,
-				debugImagePaths,
-				signal,
-			);
-			throwIfAborted(signal);
-			const parsed = JSON.parse(this.cleanJsonResponse(text));
-			return parsed;
-		} catch (error) {
-			throw error;
-		}
+		throwIfAborted(signal);
+		const text = await this.generateWithVisionFallback(
+			IMAGE_ANALYSIS_PROMPT,
+			prompt,
+			debugImagePaths,
+			signal,
+		);
+		throwIfAborted(signal);
+		const parsed = JSON.parse(this.cleanJsonResponse(text));
+		return parsed;
 	}
 
 	/**
@@ -1603,24 +1584,17 @@ LATEST QUESTION FROM INTERVIEWER:
 ${lastQuestion}
 
 ANSWER DIRECTLY:`;
-
-		try {
-			if (this.useOllama) {
-				const ollamaResponse = await this.callOllama(systemPrompt);
-				return this.validateAndProcessResponse(ollamaResponse, systemPrompt);
-			} else if (this.client) {
-				// Use Flash model as default (Pro is experimental)
-				// Wraps generateWithFlash logic but with retry
-				const text = await this.generateWithFlash([{ text: systemPrompt }]);
-				const processedResponse = this.processResponse(text);
-				return this.validateAndProcessResponse(processedResponse, systemPrompt);
-			} else {
-				throw new Error("No LLM provider configured");
-			}
-		} catch (error) {
-			//   console.error("[LLMHelper] Error generating suggestion:", error);
-			// Silence error
-			throw error;
+		if (this.useOllama) {
+			const ollamaResponse = await this.callOllama(systemPrompt);
+			return this.validateAndProcessResponse(ollamaResponse, systemPrompt);
+		} else if (this.client) {
+			// Use Flash model as default (Pro is experimental)
+			// Wraps generateWithFlash logic but with retry
+			const text = await this.generateWithFlash([{ text: systemPrompt }]);
+			const processedResponse = this.processResponse(text);
+			return this.validateAndProcessResponse(processedResponse, systemPrompt);
+		} else {
+			throw new Error("No LLM provider configured");
 		}
 	}
 
@@ -2121,9 +2095,12 @@ ANSWER DIRECTLY:`;
 				`[LLMHelper] ${label} rejected image input. Falling back to local OCR text.`,
 			);
 			throwIfAborted(signal);
+			if (!imagePaths) {
+				throw new Error("imagePaths is required for OCR fallback");
+			}
 			const fallbackMessage = await this.buildScreenshotTextFallbackMessage(
 				originalMessage,
-				imagePaths!,
+				imagePaths,
 				signal,
 			);
 			throwIfAborted(signal);
@@ -2152,9 +2129,12 @@ ANSWER DIRECTLY:`;
 				`[LLMHelper] ${label} rejected image input. Falling back to local OCR text.`,
 			);
 			throwIfAborted(signal);
+			if (!imagePaths) {
+				throw new Error("imagePaths is required for OCR fallback");
+			}
 			const fallbackMessage = await this.buildScreenshotTextFallbackMessage(
 				originalMessage,
-				imagePaths!,
+				imagePaths,
 				signal,
 			);
 			throwIfAborted(signal);
@@ -2283,7 +2263,7 @@ ANSWER DIRECTLY:`;
 				execute: async () => {
 					// Call the API directly with the Pro model instead of touching shared state
 					const response = await this.withRetry(async () => {
-						const res = await this.client!.models.generateContent({
+						const res = await this.client?.models.generateContent({
 							model: GEMINI_PRO_MODEL,
 							contents: [{ role: "user", parts: [{ text: message }] }],
 							config: { maxOutputTokens: MAX_OUTPUT_TOKENS, temperature: 0.4 },
@@ -2426,7 +2406,7 @@ ANSWER DIRECTLY:`;
 
 				try {
 					const response = await withTimeout(
-						this.openaiClient!.chat.completions.create(requestPayload as any),
+						this.openaiClient?.chat.completions.create(requestPayload as any),
 						LLM_API_TIMEOUT_MS,
 					);
 					return response.choices[0]?.message?.content || "";
@@ -2902,7 +2882,7 @@ ANSWER DIRECTLY:`;
 				);
 
 				const response = await withTimeout(
-					this.claudeClient!.messages.create(requestPayload as any),
+					this.claudeClient?.messages.create(requestPayload as any),
 					LLM_API_TIMEOUT_MS,
 				);
 				const textBlock = response.content.find(
@@ -3185,28 +3165,6 @@ ANSWER DIRECTLY:`;
 		}
 
 		return "";
-	}
-
-	private extractResponseByPath(
-		data: any,
-		responsePath: string,
-	): string | null {
-		const answer = getByPath(data, responsePath);
-
-		if (typeof answer === "string" && answer.trim().length > 0) return answer;
-		if (answer !== null && answer !== undefined) {
-			if (typeof answer === "number" || typeof answer === "boolean")
-				return String(answer);
-			if (Array.isArray(answer) && answer.length > 0)
-				return JSON.stringify(answer);
-			if (typeof answer === "object" && Object.keys(answer).length > 0)
-				return JSON.stringify(answer);
-		}
-
-		const guessed = this.extractOpenAIFormattedText(data, false);
-		if (guessed && guessed.trim().length > 0) return guessed;
-
-		return null;
 	}
 
 	private extractOpenAIFormattedText(
@@ -3640,7 +3598,7 @@ ANSWER DIRECTLY:`;
 						? imagePaths
 						: [];
 					return this.executeCustomProvider(
-						this.customProvider!.curlCommand,
+						this.customProvider?.curlCommand,
 						`${systemPrompt}\n\n${effectiveUserPrompt}`,
 						systemPrompt,
 						effectiveUserPrompt,
@@ -3803,23 +3761,6 @@ ANSWER DIRECTLY:`;
 			skipSystemPrompt,
 			abortSignal,
 		);
-	}
-
-	private async *streamWithFallbackGuard(
-		execute: () => AsyncGenerator<string, void, unknown>,
-	): AsyncGenerator<string, boolean, unknown> {
-		let emittedTokens = false;
-
-		try {
-			for await (const chunk of execute()) {
-				emittedTokens = true;
-				yield chunk;
-			}
-			return emittedTokens;
-		} catch (error: any) {
-			error.streamHadOutput = emittedTokens;
-			throw error;
-		}
 	}
 
 	/**
@@ -4037,25 +3978,25 @@ ANSWER DIRECTLY:`;
 						effectiveMessage,
 						() =>
 							this.executeCustomProvider(
-								this.activeCurlProvider!.curlCommand,
+								this.activeCurlProvider?.curlCommand,
 								userContent,
 								curlSystemPrompt,
 								effectiveMessage,
 								context || "",
 								imagePaths,
-								this.activeCurlProvider!.responsePath,
+								this.activeCurlProvider?.responsePath,
 								options?.abortSignal,
 								CURL_PROVIDER_TIMEOUT_MS,
 							),
 						(fallbackMessage) =>
 							this.executeCustomProvider(
-								this.activeCurlProvider!.curlCommand,
+								this.activeCurlProvider?.curlCommand,
 								buildStreamUserContent(fallbackMessage),
 								curlSystemPrompt,
 								fallbackMessage,
 								context || "",
 								[],
-								this.activeCurlProvider!.responsePath,
+								this.activeCurlProvider?.responsePath,
 								options?.abortSignal,
 								CURL_PROVIDER_TIMEOUT_MS,
 							),
@@ -4849,7 +4790,7 @@ ANSWER DIRECTLY:`;
 							const json = JSON.parse(line);
 							if (json.response) yield json.response;
 							if (json.done) return;
-						} catch (e) {
+						} catch (_e) {
 							// ignore partial json
 						}
 					}
@@ -4871,167 +4812,6 @@ ANSWER DIRECTLY:`;
 				? e
 				: new Error(`Ollama streaming failed: ${sanitizeError(e)}`);
 		}
-	}
-
-	// --- CUSTOM PROVIDER STREAMING ---
-	private async *streamWithCustom(
-		message: string,
-		context?: string,
-		imagePaths?: string[],
-		systemPrompt: string = UNIVERSAL_SYSTEM_PROMPT,
-	): AsyncGenerator<string, void, unknown> {
-		if (!this.customProvider) return;
-		// We reuse the executeCustomProvider logic but we need it to stream.
-		// If the user provided a curl command, it might support streaming (SSE) or not.
-		// If we execute it via Child Process, we can read stdout stream.
-
-		// 1. Prepare command with variables
-		// Re-use logic from executeCustomProvider to replace variables
-		// But we can't easily reuse the function since it awaits the whole fetch.
-		// So we'll implement a simplified streaming version using our existing variable replacer and node-fetch.
-
-		const curlCommand = this.customProvider.curlCommand;
-		const requestConfig = curl2Json(curlCommand);
-
-		const base64Images = await this.readImagesAsBase64(imagePaths);
-		const base64Image = base64Images[0] || "";
-
-		const combinedMessage = context ? `${context}\n\n${message}` : message;
-
-		const variables = {
-			TEXT: combinedMessage,
-			PROMPT: combinedMessage,
-			SYSTEM_PROMPT: systemPrompt,
-			USER_MESSAGE: message,
-			CONTEXT: context || "",
-			IMAGE_BASE64: base64Image,
-			IMAGE_BASE64S: base64Images,
-			IMAGE_COUNT: String(base64Images.length),
-			API_KEY:
-				this.openaiApiKey ||
-				this.groqApiKey ||
-				this.cerebrasApiKey ||
-				this.claudeApiKey ||
-				this.apiKey ||
-				"",
-			OPENAI_API_KEY: this.openaiApiKey || "",
-			GROQ_API_KEY: this.groqApiKey || "",
-			CEREBRAS_API_KEY: this.cerebrasApiKey || "",
-			CLAUDE_API_KEY: this.claudeApiKey || "",
-			GEMINI_API_KEY: this.apiKey || "",
-		};
-
-		const url = deepVariableReplacer(requestConfig.url, variables);
-		const headers = deepVariableReplacer(requestConfig.header || {}, variables);
-		const bodyTemplate = this.getCurlDataTemplate(requestConfig);
-		const body = deepVariableReplacer(bodyTemplate, variables);
-		const requestBody = this.buildFetchRequestBody(body);
-
-		try {
-			const response = await fetch(url, {
-				method: requestConfig.method || "POST",
-				headers: headers,
-				body: requestBody,
-				signal: createTimeoutSignal(),
-			});
-
-			if (!response.ok) {
-				const errorText = await readFetchBodyWithLimit(response);
-				throw new Error(
-					`Custom Provider HTTP ${response.status}: ${summarizeResponseBody(errorText)}`,
-				);
-			}
-
-			if (!response.body) return;
-
-			// Collect all chunks to handle both SSE streaming and non-SSE JSON responses
-			let fullBody = "";
-			let yieldedAny = false;
-
-			for await (const chunk of response.body) {
-				const text = new TextDecoder().decode(chunk);
-				if (
-					Buffer.byteLength(fullBody, "utf8") +
-						Buffer.byteLength(text, "utf8") >
-					CUSTOM_PROVIDER_MAX_RESPONSE_BYTES
-				) {
-					throw new Error(
-						`Custom Provider stream exceeded ${CUSTOM_PROVIDER_MAX_RESPONSE_BYTES} bytes`,
-					);
-				}
-				fullBody += text;
-
-				const lines = text.split("\n");
-				for (const line of lines) {
-					if (line.trim().length === 0) continue;
-
-					const items = this.parseStreamLine(line);
-					if (items) {
-						yield items;
-						yieldedAny = true;
-					}
-				}
-			}
-
-			// If no SSE content was yielded, try parsing the full body as JSON
-			// This handles non-streaming responses (e.g. Ollama with stream: false)
-			if (!yieldedAny && fullBody.trim().length > 0) {
-				try {
-					const data = JSON.parse(fullBody);
-					const extracted = this.extractFromCommonFormats(data, false);
-					if (!extracted) {
-						throw new Error(
-							"Custom Provider response did not contain extractable text",
-						);
-					}
-					yield extracted;
-				} catch {
-					// Not JSON, yield raw text if it's not looking like garbage
-					const trimmedBody = fullBody.trim();
-					if (!trimmedBody) {
-						throw new Error("Custom Provider returned an empty response body");
-					}
-					if (trimmedBody.length < 5000) {
-						yield trimmedBody;
-						return;
-					}
-					throw new Error(
-						"Custom Provider returned an unparseable oversized response",
-					);
-				}
-			}
-		} catch (e) {
-			console.error("Custom streaming failed", sanitizeError(e));
-			throw e instanceof Error ? e : new Error(String(e));
-		}
-	}
-
-	private parseStreamLine(line: string): string | null {
-		const trimmed = line.trim();
-		if (!trimmed) return null;
-
-		// 1. Handle SSE (data: ...)
-		if (trimmed.startsWith("data: ")) {
-			if (trimmed === "data: [DONE]") return null;
-			try {
-				const json = JSON.parse(trimmed.substring(6));
-				return this.extractFromCommonFormats(json);
-			} catch {
-				return null;
-			}
-		}
-
-		// 2. Handle raw JSON chunks (Ollama/Generic)
-		if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
-			try {
-				const json = JSON.parse(trimmed);
-				return this.extractFromCommonFormats(json);
-			} catch {
-				return null;
-			}
-		}
-
-		return null;
 	}
 
 	public delay(ms: number): Promise<void> {
@@ -5061,12 +4841,12 @@ ANSWER DIRECTLY:`;
 			if (!response.ok) return [];
 
 			const data = await response.json();
-			if (data && data.models) {
+			if (data?.models) {
 				return data.models.map((m: any) => m.name);
 			}
 
 			return [];
-		} catch (error: any) {
+		} catch (_error: any) {
 			// Silently catch connection refused/timeout errors.
 			// OllamaManager handles logging the startup status.
 			return [];
@@ -5085,7 +4865,7 @@ ANSWER DIRECTLY:`;
 					console.log(`[LLMHelper] Found blocking PID: ${pid}. Killing...`);
 					await execAsync(`kill -9 ${pid}`);
 				}
-			} catch (e: any) {
+			} catch (_e: any) {
 				// lsof returns 1 if no process found, which throws error in execAsync
 				// Ignore unless it's a real error
 			}
@@ -5331,31 +5111,22 @@ ANSWER DIRECTLY:`;
 		// 2. Parallel Execution (Retry Flash vs Pro)
 		// We create promises for both but treat them carefully
 		const flashRetryPromise = (async () => {
-			// Small delay before retry to let system settle? No, user said "immediately"
-			try {
-				const res = await client.models.generateContent({
-					...args,
-					model: originalModel,
-				});
-				if (isValidResponse(res)) return { type: "flash", res };
-				throw new Error("Empty Flash Response");
-			} catch (e) {
-				throw e;
-			}
+			const res = await client.models.generateContent({
+				...args,
+				model: originalModel,
+			});
+			if (isValidResponse(res)) return { type: "flash", res };
+			throw new Error("Empty Flash Response");
 		})();
 
 		const proBackupPromise = (async () => {
-			try {
-				// Pro might be slower, but it's the robust backup
-				const res = await client.models.generateContent({
-					...args,
-					model: GEMINI_PRO_MODEL,
-				});
-				if (isValidResponse(res)) return { type: "pro", res };
-				throw new Error("Empty Pro Response");
-			} catch (e) {
-				throw e;
-			}
+			// Pro might be slower, but it's the robust backup
+			const res = await client.models.generateContent({
+				...args,
+				model: GEMINI_PRO_MODEL,
+			});
+			if (isValidResponse(res)) return { type: "pro", res };
+			throw new Error("Empty Pro Response");
 		})();
 
 		// 3. Race / Fallback Logic
@@ -5370,7 +5141,7 @@ ANSWER DIRECTLY:`;
 			const winner = await Promise.any([flashRetryPromise, proBackupPromise]);
 			console.log(`[LLMHelper] Parallel race won by: ${winner.type}`);
 			return winner.res;
-		} catch (aggregateError) {
+		} catch (_aggregateError) {
 			console.warn(`[LLMHelper] Both parallel retry attempts failed.`);
 		}
 

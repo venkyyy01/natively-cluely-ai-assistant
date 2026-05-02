@@ -3,12 +3,7 @@
 // Enables value-aligned answer injection during interviews
 
 import { extractJSONArray } from "./llmUtils";
-import {
-	type CompanyDossier,
-	ContextNode,
-	DocType,
-	type StarStory,
-} from "./types";
+import type { CompanyDossier, StarStory } from "./types";
 
 const BATCH_SIZE = 5;
 

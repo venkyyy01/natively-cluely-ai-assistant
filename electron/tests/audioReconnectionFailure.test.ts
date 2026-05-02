@@ -5,8 +5,8 @@ import { beforeEach, describe, it } from "node:test";
 
 describe("Audio Reconnection Mid-Meeting Tests", () => {
 	let mockSystemAudioCapture: any;
-	let mockMicrophoneCapture: any;
-	let mockSTTProvider: any;
+	let _mockMicrophoneCapture: any;
+	let _mockSTTProvider: any;
 	let audioReconnectionEvents: string[] = [];
 
 	beforeEach(() => {
@@ -23,13 +23,13 @@ describe("Audio Reconnection Mid-Meeting Tests", () => {
 			write: () => {},
 		};
 
-		mockMicrophoneCapture = {
+		_mockMicrophoneCapture = {
 			on: () => {},
 			start: () => {},
 			stop: () => {},
 		};
 
-		mockSTTProvider = {
+		_mockSTTProvider = {
 			write: () => {},
 			destroy: () => {},
 			on: () => {},
@@ -63,7 +63,7 @@ describe("Audio Reconnection Mid-Meeting Tests", () => {
 			const reconnectionEvents: string[] = [];
 
 			const audioReconnector = {
-				scheduleReconnect: async (speaker: "system" | "microphone") => {
+				scheduleReconnect: async (_speaker: "system" | "microphone") => {
 					reconnectionAttempts++;
 					reconnectionEvents.push(`reconnect-attempt-${reconnectionAttempts}`);
 

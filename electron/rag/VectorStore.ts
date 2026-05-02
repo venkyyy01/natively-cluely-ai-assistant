@@ -2,9 +2,9 @@
 // SQLite-based vector storage with native sqlite-vec search (fallback to JS cosine similarity)
 // JS fallback is offloaded to a worker_threads Worker to avoid blocking the Electron main thread.
 
+import path from "node:path";
+import { Worker } from "node:worker_threads";
 import type Database from "better-sqlite3";
-import path from "path";
-import { Worker } from "worker_threads";
 import { DatabaseManager } from "../db/DatabaseManager";
 import type { Chunk } from "./SemanticChunker";
 
@@ -103,7 +103,7 @@ export class VectorStore {
 	 * Reject all pending requests (used on worker crash or exit).
 	 */
 	private rejectAllPending(err: Error): void {
-		for (const [id, pending] of this.pendingRequests) {
+		for (const [_id, pending] of this.pendingRequests) {
 			clearTimeout(pending.timer);
 			pending.reject(err);
 		}

@@ -47,7 +47,7 @@ export const useAdCampaigns = (
 			}
 
 			const dismissedTime = parseInt(val, 10);
-			if (isNaN(dismissedTime)) return true;
+			if (Number.isNaN(dismissedTime)) return true;
 
 			const daysSinceDismissal = (now - dismissedTime) / (1000 * 60 * 60 * 24);
 			const cooldownDays = import.meta.env.DEV ? 0 : 7; // In DEV always eligible if dismissed, or 0 days. Actually, let's keep it 7 for logic testing, but DEV overrides global cooldown anyway. Let's stick to 7.

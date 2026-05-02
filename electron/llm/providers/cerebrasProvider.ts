@@ -102,7 +102,7 @@ export async function generateWithCerebras(
 			);
 
 			const response = await withTimeout(
-				helper.cerebrasClient!.chat.completions.create(requestPayload as any),
+				helper.cerebrasClient?.chat.completions.create(requestPayload as any),
 				LLM_API_TIMEOUT_MS,
 			);
 			return response.choices[0]?.message?.content || "";

@@ -4,12 +4,7 @@ import type { HandlerContext } from "./handlerContext";
 
 export type ProviderSttTestIpcDeps = Pick<
 	HandlerContext,
-	| "safeHandle"
-	| "safeHandleValidated"
-	| "ok"
-	| "fail"
-	| "getInferenceLlmHelper"
-	| "getSttSupervisor"
+	"safeHandle" | "safeHandleValidated" | "ok" | "fail" | "getSttSupervisor"
 > & { appState: AppState };
 
 export function registerProviderSttAndTestIpcHandlers(
@@ -21,7 +16,6 @@ export function registerProviderSttAndTestIpcHandlers(
 		safeHandleValidated,
 		ok,
 		fail,
-		getInferenceLlmHelper,
 		getSttSupervisor,
 	} = deps;
 
@@ -588,7 +582,7 @@ export function registerProviderSttAndTestIpcHandlers(
 				`[IPC] Received test-llm-connection request for provider: ${provider}`,
 			);
 			try {
-				if (!apiKey || !apiKey.trim()) {
+				if (!apiKey?.trim()) {
 					const {
 						CredentialsManager,
 					} = require("../services/CredentialsManager");
@@ -600,7 +594,7 @@ export function registerProviderSttAndTestIpcHandlers(
 					else if (provider === "claude") apiKey = creds.getClaudeApiKey();
 				}
 
-				if (!apiKey || !apiKey.trim()) {
+				if (!apiKey?.trim()) {
 					return { success: false, error: "No API key provided" };
 				}
 
@@ -680,7 +674,7 @@ export function registerProviderSttAndTestIpcHandlers(
 				} else {
 					return {
 						success: false,
-						error: "Request failed with status " + response?.status,
+						error: `Request failed with status ${response?.status}`,
 					};
 				}
 			} catch (error: any) {

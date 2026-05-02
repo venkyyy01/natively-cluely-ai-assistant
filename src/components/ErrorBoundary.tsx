@@ -45,7 +45,6 @@ export class ErrorBoundary extends Component<Props, State> {
 
 		// Report to analytics if IPC is available (non-blocking)
 		try {
-			// @ts-expect-error
 			window.electronAPI?.logErrorToMain?.({
 				type: "uncaught-render-error",
 				context,

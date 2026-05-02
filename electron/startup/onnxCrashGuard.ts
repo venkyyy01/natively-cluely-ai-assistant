@@ -18,7 +18,7 @@ import {
  *   3. Tracks success so we can re-enable ANE once it stabilizes
  */
 
-const SUCCESS_WINDOW_MS = 5 * 60 * 1000; // 5 minutes
+const _SUCCESS_WINDOW_MS = 5 * 60 * 1000; // 5 minutes
 let onnxSuccessTimestamp = 0;
 
 export type SafeOnnxSession = {

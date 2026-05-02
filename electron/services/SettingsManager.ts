@@ -1,6 +1,6 @@
+import fs from "node:fs";
+import path from "node:path";
 import { app } from "electron";
-import fs from "fs";
-import path from "path";
 
 export interface AppSettings {
 	// Only boot-critical or non-encrypted settings should live here.
@@ -158,7 +158,7 @@ export class SettingsManager {
 
 	private saveSettings(): boolean {
 		try {
-			const tmpPath = this.settingsPath + ".tmp";
+			const tmpPath = `${this.settingsPath}.tmp`;
 			fs.writeFileSync(tmpPath, JSON.stringify(this.settings, null, 2));
 			fs.renameSync(tmpPath, this.settingsPath);
 			return true;

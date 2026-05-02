@@ -11,9 +11,9 @@ if (!app.isPackaged) {
 	require("dotenv").config();
 }
 
-const isDev = process.env.NODE_ENV === "development";
-const isDevTest = process.env.IS_DEV_TEST === "true";
-const MOCK_API_WAIT_TIME = Number(process.env.MOCK_API_WAIT_TIME) || 500;
+const _isDev = process.env.NODE_ENV === "development";
+const _isDevTest = process.env.IS_DEV_TEST === "true";
+const _MOCK_API_WAIT_TIME = Number(process.env.MOCK_API_WAIT_TIME) || 500;
 
 export class ProcessingHelper {
 	private appState: AppState;

@@ -1,18 +1,5 @@
-import { AnimatePresence, motion } from "framer-motion";
-import {
-	ArrowLeft,
-	ArrowRight,
-	ArrowUp,
-	Check,
-	ChevronDown,
-	Copy,
-	Link,
-	Mail,
-	MoreHorizontal,
-	Play,
-	Search,
-	Settings,
-} from "lucide-react";
+import { motion } from "framer-motion";
+import { ArrowUp, Check, Copy } from "lucide-react";
 import type React from "react";
 import { useEffect, useState } from "react";
 import ReactMarkdown from "react-markdown";
@@ -31,7 +18,7 @@ const formatTime = (ms: number) => {
 		.toLowerCase();
 };
 
-const formatDuration = (ms: number) => {
+const _formatDuration = (ms: number) => {
 	const minutes = Math.floor(ms / 60000);
 	const seconds = ((ms % 60000) / 1000).toFixed(0);
 	return `${minutes}:${Number(seconds) < 10 ? "0" : ""}${seconds}`;
@@ -172,7 +159,7 @@ ${meeting.detailedSummary?.keyPoints?.map((item) => `- ${item}`).join("\n") || "
 		}
 	};
 
-	const handleOverviewSave = async (newOverview: string) => {
+	const _handleOverviewSave = async (newOverview: string) => {
 		setMeeting((prev) => ({
 			...prev,
 			detailedSummary: {

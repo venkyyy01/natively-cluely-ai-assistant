@@ -1,4 +1,4 @@
-const { Worker, isMainThread, parentPort } = require("worker_threads");
+const { Worker, isMainThread, parentPort } = require("node:worker_threads");
 if (isMainThread) {
 	const worker = new Worker(__filename);
 	worker.on("message", (m) => console.log("Main got:", m));
@@ -6,10 +6,10 @@ if (isMainThread) {
 	worker.on("exit", (code) => console.log("Worker exited:", code));
 } else {
 	try {
-		const NativeModule = require("natively-audio");
+		const _NativeModule = require("natively-audio");
 		parentPort.postMessage("Loaded natively-audio successfully in worker!");
 		process.exit(0);
 	} catch (e) {
-		parentPort.postMessage("Failed to load: " + e.message);
+		parentPort.postMessage(`Failed to load: ${e.message}`);
 	}
 }

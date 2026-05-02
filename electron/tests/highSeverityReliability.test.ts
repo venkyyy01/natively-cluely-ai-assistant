@@ -13,7 +13,7 @@ describe("HIGH Severity Reliability Issues Tests", () => {
 			};
 
 			const currentAnswerLLM = {
-				generate: async (messages: any[]) => {
+				generate: async (_messages: any[]) => {
 					try {
 						return await mockLLMProvider();
 					} catch (error) {
@@ -32,9 +32,9 @@ describe("HIGH Severity Reliability Issues Tests", () => {
 		});
 
 		it("should require typed result for proper error handling", async () => {
-			let mockLLMProviderCalls = 0;
+			let _mockLLMProviderCalls = 0;
 			const mockLLMProvider = async () => {
-				mockLLMProviderCalls++;
+				_mockLLMProviderCalls++;
 				throw new Error("API quota exceeded");
 			};
 
@@ -45,7 +45,7 @@ describe("HIGH Severity Reliability Issues Tests", () => {
 			};
 
 			const improvedAnswerLLM = {
-				generate: async (messages: any[]): Promise<LLMResult> => {
+				generate: async (_messages: any[]): Promise<LLMResult> => {
 					try {
 						const result = await mockLLMProvider();
 						return { ok: true, data: result };
@@ -77,7 +77,7 @@ describe("HIGH Severity Reliability Issues Tests", () => {
 			class CurrentStreamManager {
 				private backgroundTasks: Promise<void>[] = [];
 
-				async processStream(stream: any) {
+				async processStream(_stream: any) {
 					for (let i = 0; i < 3; i++) {
 						const task = this.createBackgroundTask(i);
 						this.backgroundTasks.push(task);
@@ -87,11 +87,11 @@ describe("HIGH Severity Reliability Issues Tests", () => {
 					throw new Error("Stream connection lost");
 				}
 
-				private async createBackgroundTask(id: number): Promise<void> {
+				private async createBackgroundTask(_id: number): Promise<void> {
 					try {
 						await new Promise((resolve) => setTimeout(resolve, 100));
 						tasksCompleted++;
-					} catch (error) {
+					} catch (_error) {
 						// Task doesn't know about cancellation
 					}
 				}
@@ -105,7 +105,7 @@ describe("HIGH Severity Reliability Issues Tests", () => {
 
 			try {
 				await streamManager.processStream({});
-			} catch (error) {
+			} catch (_error) {
 				streamManager.reset();
 			}
 
@@ -125,7 +125,7 @@ describe("HIGH Severity Reliability Issues Tests", () => {
 				private abortController: AbortController = new AbortController();
 				private backgroundTasks: Promise<void>[] = [];
 
-				async processStream(stream: any) {
+				async processStream(_stream: any) {
 					this.abortController = new AbortController();
 
 					for (let i = 0; i < 3; i++) {
@@ -141,7 +141,7 @@ describe("HIGH Severity Reliability Issues Tests", () => {
 				}
 
 				private async createBackgroundTask(
-					id: number,
+					_id: number,
 					signal: AbortSignal,
 				): Promise<void> {
 					try {
@@ -175,7 +175,7 @@ describe("HIGH Severity Reliability Issues Tests", () => {
 
 			try {
 				await streamManager.processStream({});
-			} catch (error) {
+			} catch (_error) {
 				streamManager.reset();
 			}
 
@@ -219,19 +219,19 @@ describe("HIGH Severity Reliability Issues Tests", () => {
 
 			try {
 				await currentLoader();
-			} catch (error) {
+			} catch (_error) {
 				results.push("failed-1");
 			}
 
 			try {
 				await currentLoader();
-			} catch (error) {
+			} catch (_error) {
 				results.push("failed-2");
 			}
 
 			try {
 				await currentLoader();
-			} catch (error) {
+			} catch (_error) {
 				results.push("failed-3");
 			}
 
@@ -280,7 +280,7 @@ describe("HIGH Severity Reliability Issues Tests", () => {
 
 			try {
 				await improvedLoader();
-			} catch (error) {
+			} catch (_error) {
 				results.push("failed-1");
 			}
 
@@ -288,7 +288,7 @@ describe("HIGH Severity Reliability Issues Tests", () => {
 
 			try {
 				await improvedLoader();
-			} catch (error) {
+			} catch (_error) {
 				results.push("failed-2");
 			}
 
@@ -298,7 +298,7 @@ describe("HIGH Severity Reliability Issues Tests", () => {
 				const module = await improvedLoader();
 				results.push("success");
 				assert.equal(module.version, "1.0.0");
-			} catch (error) {
+			} catch (_error) {
 				results.push("failed-3");
 			}
 

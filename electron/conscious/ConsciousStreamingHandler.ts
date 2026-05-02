@@ -443,11 +443,11 @@ export class ConsciousStreamingHandler {
 		for (const line of lines) {
 			if (this.isStaleStream(myStreamId)) return;
 
-			accumulated += line + "\n";
+			accumulated += `${line}\n`;
 			await this.emit({
 				type: "code_chunk",
 				timestamp: Date.now(),
-				chunk: line + "\n",
+				chunk: `${line}\n`,
 				data: {
 					accumulated,
 					progress: accumulated.length / code.length,

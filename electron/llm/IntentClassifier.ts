@@ -656,7 +656,7 @@ const AMBIGUOUS_PAIRS: Array<[CueCategory, CueCategory, number]> = [
 
 function resolveCueScores(
 	scores: Map<CueCategory, CueScore>,
-	text: string,
+	_text: string,
 ): IntentResult | null {
 	if (scores.size === 0) return null;
 
@@ -700,7 +700,10 @@ function resolveCueScores(
 				const idxA = preferOrder.indexOf(catA);
 				const idxB = preferOrder.indexOf(catB);
 				const winner = idxA < idxB ? catA : catB;
-				const winScore = scores.get(winner)!;
+				const winScore = scores.get(winner);
+				if (!winScore) {
+					throw new Error(`Score for ${winner} not found`);
+				}
 				const confidence = Math.min(0.88, 0.6 + winScore.totalWeight * 0.04);
 				return {
 					intent: winner,
@@ -771,7 +774,7 @@ export function detectIntentByContext(
 	const lastInterviewerLine =
 		interviewerLines[interviewerLines.length - 1] || "";
 	const lastInterviewerText = lastInterviewerLine
-		.replace(/\[INTERVIEWER[^]]*\]\s*:/i, "")
+		.replace(/\[INTERVIEWER[^\]]*\]\s*:/i, "")
 		.trim();
 
 	// Check if recent assistant responses contained code → follow_up/deep_dive about code

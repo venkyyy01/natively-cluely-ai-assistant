@@ -279,9 +279,9 @@ test("cooldown defers repeated duplicate triggers instead of silently dropping w
 	assert.equal(answers.length, 2);
 	assert.equal(session.getLastAssistantMessage(), "slow answer");
 	assert.equal(deferredEvents.length, 1);
-	assert.equal(deferredEvents[0]!.suppressedMs > 0, true);
-	assert.equal(deferredEvents[0]!.question, "Repeat this question?");
-	assert.equal(deferredEvents[0]!.reason, "duplicate_question_debounce");
+	assert.equal(deferredEvents[0]?.suppressedMs > 0, true);
+	assert.equal(deferredEvents[0]?.question, "Repeat this question?");
+	assert.equal(deferredEvents[0]?.reason, "duplicate_question_debounce");
 	assert.equal(metadataByAnswer[0]?.cooldownSuppressedMs, undefined);
 	assert.equal((metadataByAnswer[1]?.cooldownSuppressedMs ?? 0) > 0, true);
 	assert.equal(

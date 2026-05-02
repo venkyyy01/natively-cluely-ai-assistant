@@ -1,5 +1,5 @@
 // electron/conscious/ThreadDirector.ts — NAT-055 single entry for conversation thread lifecycle
-import { EventEmitter } from "events";
+import { EventEmitter } from "node:events";
 import type { ConsciousModeStructuredResponse } from "../ConsciousMode";
 import type { ConsciousThreadStore } from "./ConsciousThreadStore";
 import type { ThreadManager } from "./ThreadManager";

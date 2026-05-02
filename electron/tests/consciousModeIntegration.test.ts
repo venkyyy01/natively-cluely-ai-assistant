@@ -4,9 +4,6 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { ConfidenceScorer } from "../conscious/ConfidenceScorer";
 import { FallbackExecutor } from "../conscious/FallbackExecutor";
-import { InterviewPhaseDetector } from "../conscious/InterviewPhase";
-import { ThreadManager } from "../conscious/ThreadManager";
-import { RESUME_THRESHOLD } from "../conscious/types";
 import { SessionTracker } from "../SessionTracker";
 
 test("Conscious Mode Integration - Thread Resume Flow", () => {
@@ -118,7 +115,7 @@ test("Conscious Mode Integration - Full Interview Scenario", () => {
 	);
 	assert.equal(phase.phase, "requirements_gathering");
 
-	const youtubeThread = threadManager.createThread(
+	const _youtubeThread = threadManager.createThread(
 		"Design YouTube",
 		phase.phase,
 	);

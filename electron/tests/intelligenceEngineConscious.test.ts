@@ -23,7 +23,7 @@ test("IntelligenceEngine Conscious Integration - should detect phase from transc
 	} as unknown as LLMHelper;
 
 	const session = new SessionTracker();
-	const engine = new IntelligenceEngine(mockLLMHelper, session);
+	const _engine = new IntelligenceEngine(mockLLMHelper, session);
 
 	session.setConsciousModeEnabled(true);
 	const phase = session.detectPhaseFromTranscript(

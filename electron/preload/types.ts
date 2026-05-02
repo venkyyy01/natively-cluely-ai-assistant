@@ -1,12 +1,4 @@
 import { ipcRenderer } from "electron";
-import type {
-	CustomProviderPayload,
-	FastResponseConfig,
-	FollowUpEmailInput,
-	GeminiChatOptions,
-	OverlayBounds,
-	TranscriptTextEntry,
-} from "../../shared/ipc";
 
 export type IpcErrorContract = { code: string; message: string };
 export type IpcResult<T> =

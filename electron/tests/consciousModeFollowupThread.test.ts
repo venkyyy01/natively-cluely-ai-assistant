@@ -178,7 +178,7 @@ class EvidenceCapturingLLMHelper {
 	}
 
 	async *streamChat(
-		message: string,
+		_message: string,
 		_imagePaths?: string[],
 		context?: string,
 	): AsyncGenerator<string> {

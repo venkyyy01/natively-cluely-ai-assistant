@@ -235,7 +235,7 @@ export class AOTPipeline {
 
 	private async preComputeCultureMapping(
 		jdDoc: KnowledgeDocument,
-		resumeDoc: KnowledgeDocument,
+		_resumeDoc: KnowledgeDocument,
 	): Promise<void> {
 		try {
 			this.status.starMapping = "running";

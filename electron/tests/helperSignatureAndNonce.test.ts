@@ -132,13 +132,12 @@ test("NAT-032: flushServerResponses resolves response with matching nonce", () =
 	};
 
 	(client as any).pending.set("req-1", pending);
-	(client as any).stdoutBuffer =
-		JSON.stringify({
-			id: "req-1",
-			ok: true,
-			result: { ready: true },
-			nonce: correctNonce,
-		}) + "\n";
+	(client as any).stdoutBuffer = `${JSON.stringify({
+		id: "req-1",
+		ok: true,
+		result: { ready: true },
+		nonce: correctNonce,
+	})}\n`;
 	(client as any).flushServerResponses();
 
 	assert.equal(resolved, true);
@@ -166,7 +165,7 @@ test("NAT-032: flushServerResponses allows backward-compatible responses without
 
 	(client as any).pending.set("req-1", pending);
 	(client as any).stdoutBuffer =
-		JSON.stringify({ id: "req-1", ok: true, result: { ready: true } }) + "\n";
+		`${JSON.stringify({ id: "req-1", ok: true, result: { ready: true } })}\n`;
 	(client as any).flushServerResponses();
 
 	assert.equal(resolved, true);

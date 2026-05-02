@@ -138,7 +138,7 @@ test("SystemAudioCapture forwards chunks when native callbacks include a leading
 		capture.start();
 
 		assert.ok(received);
-		assert.deepEqual(Array.from(received!.values()), [1, 2, 3, 4]);
+		assert.deepEqual(Array.from(received?.values()), [1, 2, 3, 4]);
 	} finally {
 		restore();
 	}
@@ -204,7 +204,7 @@ test("MicrophoneCapture forwards chunks when native callbacks include a leading 
 		capture.start();
 
 		assert.ok(received);
-		assert.deepEqual(Array.from(received!.values()), [5, 6, 7, 8]);
+		assert.deepEqual(Array.from(received?.values()), [5, 6, 7, 8]);
 	} finally {
 		restore();
 	}

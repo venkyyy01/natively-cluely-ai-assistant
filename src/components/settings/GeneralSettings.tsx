@@ -1,11 +1,9 @@
-import { Globe, Info, Monitor } from "lucide-react";
+import { Globe, Info } from "lucide-react";
 import type React from "react";
 import { useEffect, useState } from "react";
 import { getOptionalElectronMethod } from "../../lib/electronApi";
 
-type GeneralSettingsProps = {};
-
-export const GeneralSettings: React.FC<GeneralSettingsProps> = () => {
+export const GeneralSettings: React.FC = () => {
 	const getStoredCredentials = getOptionalElectronMethod(
 		"getStoredCredentials",
 	);
@@ -46,7 +44,7 @@ export const GeneralSettings: React.FC<GeneralSettingsProps> = () => {
 			// Load Credentials
 			try {
 				const creds = await getStoredCredentials?.();
-				if (creds && creds.googleServiceAccountPath) {
+				if (creds?.googleServiceAccountPath) {
 					setServiceAccountPath(creds.googleServiceAccountPath);
 				}
 			} catch (e) {
@@ -72,7 +70,13 @@ export const GeneralSettings: React.FC<GeneralSettingsProps> = () => {
 			}
 		};
 		loadInitialData();
-	}, []);
+	}, [
+		getAiResponseLanguages,
+		getSttLanguage,
+		getStoredCredentials,
+		getRecognitionLanguages,
+		getAiResponseLanguage,
+	]);
 
 	const handleLanguageChange = async (key: string) => {
 		setRecognitionLanguage(key);
@@ -112,14 +116,15 @@ export const GeneralSettings: React.FC<GeneralSettingsProps> = () => {
 				<div className="space-y-4">
 					{/* Google Cloud Service Account */}
 					<div className="bg-bg-item-surface rounded-xl p-5 border border-border-subtle">
-						<label className="block text-xs font-medium text-text-secondary uppercase tracking-wide mb-2">
+						<span className="block text-xs font-medium text-text-secondary uppercase tracking-wide mb-2">
 							Google Speech-to-Text Key (JSON)
-						</label>
+						</span>
 						<div className="flex gap-3">
 							<div className="flex-1 bg-bg-input border border-border-subtle rounded-lg px-4 py-2.5 text-xs text-text-secondary truncate flex items-center">
 								{serviceAccountPath || "No file selected"}
 							</div>
 							<button
+								type="button"
 								onClick={handleSelectServiceAccount}
 								className="bg-bg-input hover:bg-bg-secondary border border-border-subtle text-text-primary px-5 py-2.5 rounded-lg text-xs font-medium transition-colors whitespace-nowrap"
 							>
@@ -133,11 +138,12 @@ export const GeneralSettings: React.FC<GeneralSettingsProps> = () => {
 
 					{/* Recognition Language */}
 					<div className="bg-bg-item-surface rounded-xl p-5 border border-border-subtle">
-						<label className="block text-xs font-medium text-text-secondary uppercase tracking-wide mb-2">
+						<label htmlFor="recognition-language-select" className="block text-xs font-medium text-text-secondary uppercase tracking-wide mb-2">
 							Recognition Language (STT)
 						</label>
 						<div className="relative inline-block">
 							<select
+								id="recognition-language-select"
 								value={recognitionLanguage}
 								onChange={(e) => handleLanguageChange(e.target.value)}
 								className="appearance-none bg-bg-input border border-border-subtle rounded-lg pl-5 pr-10 py-2.5 text-xs text-text-primary focus:outline-none focus:border-accent-primary transition-colors cursor-pointer"
@@ -160,11 +166,12 @@ export const GeneralSettings: React.FC<GeneralSettingsProps> = () => {
 
 					{/* AI Response Language */}
 					<div className="bg-bg-item-surface rounded-xl p-5 border border-border-subtle">
-						<label className="block text-xs font-medium text-text-secondary uppercase tracking-wide mb-2">
+						<label htmlFor="ai-response-language-select" className="block text-xs font-medium text-text-secondary uppercase tracking-wide mb-2">
 							AI Response Language
 						</label>
 						<div className="relative inline-block">
 							<select
+								id="ai-response-language-select"
 								value={aiResponseLanguage}
 								onChange={(e) => handleAiLanguageChange(e.target.value)}
 								className="appearance-none bg-bg-input border border-border-subtle rounded-lg pl-5 pr-10 py-2.5 text-xs text-text-primary focus:outline-none focus:border-accent-primary transition-colors cursor-pointer"

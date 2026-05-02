@@ -1,4 +1,9 @@
-import { isMainThread, parentPort, Worker, workerData } from "worker_threads";
+import {
+	isMainThread,
+	parentPort,
+	Worker,
+	workerData,
+} from "node:worker_threads";
 import {
 	getEffectiveWorkerCount,
 	isOptimizationActive,

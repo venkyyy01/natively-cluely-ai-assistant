@@ -1,7 +1,3 @@
-const { DatabaseManager } = require("./DatabaseManager");
-const path = require("path");
-const { app } = require("electron");
-
 // We need to mock the electron app.getPath because this script runs in node context
 // In a real scenario, this would be a utility called from main.ts or similar.
 // Since we can't easily run this standalone without electron, I'll create a function

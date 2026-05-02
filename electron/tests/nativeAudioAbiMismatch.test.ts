@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
 import Module from "node:module";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
-import fs from "fs";
-import os from "os";
-import path from "path";
 
 function installNativeAudioLoadMock(options: {
 	appPath: string;
@@ -83,8 +83,8 @@ test("NAT-023: native audio load reports actionable N-API mismatch error", async
 
 		const error = nativeModule.getNativeAudioLoadError();
 		assert.ok(error);
-		assert.match(error!.message, /Native audio N-API mismatch: requires N-API/);
-		assert.match(error!.message, /compatible toolchain or upgrade Electron/);
+		assert.match(error?.message, /Native audio N-API mismatch: requires N-API/);
+		assert.match(error?.message, /compatible toolchain or upgrade Electron/);
 	} finally {
 		restore();
 		fs.rmSync(appPath, { recursive: true, force: true });

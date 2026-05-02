@@ -1,11 +1,10 @@
 // electron/conscious/ThreadManager.ts
-import { randomUUID } from "crypto";
+import { randomUUID } from "node:crypto";
 import { ConfidenceScorer } from "./ConfidenceScorer";
-import {
-	type ConfidenceScore,
-	type ConversationThread,
-	type InterviewPhase,
-	ThreadCodeContext,
+import type {
+	ConfidenceScore,
+	ConversationThread,
+	InterviewPhase,
 } from "./types";
 
 const MAX_SUSPENDED_THREADS = 3;

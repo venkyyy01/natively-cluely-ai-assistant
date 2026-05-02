@@ -1,7 +1,3 @@
-const { DatabaseManager } = require("./DatabaseManager");
-const path = require("path");
-const { app } = require("electron");
-
 // MOCK electron app path for testing without full electron environment
 // effectively mocking 'electron' module behavior if we run this with ts-node directly?
 // Actually, since DatabaseManager imports 'electron', running this with plain node/ts-node might fail

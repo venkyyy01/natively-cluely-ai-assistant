@@ -1,4 +1,4 @@
-import path from "path";
+import path from "node:path";
 import {
 	isAppleSilicon,
 	isOptimizationActive,
@@ -128,12 +128,12 @@ export class ANEEmbeddingProvider implements IEmbeddingProvider {
 		try {
 			const { AutoTokenizer } = await import("@xenova/transformers");
 			return await AutoTokenizer.from_pretrained("Xenova/all-MiniLM-L6-v2");
-		} catch (error) {
+		} catch (_error) {
 			console.warn(
 				"[ANEEmbeddingProvider] @xenova/transformers not available, using fallback tokenizer",
 			);
 			const vocabPath = path.join(this.getModelDirectory(), "tokenizer.json");
-			const fs = await import("fs/promises");
+			const fs = await import("node:fs/promises");
 			const vocabData = JSON.parse(await fs.readFile(vocabPath, "utf-8"));
 			return this.createTokenizerFromVocab(vocabData);
 		}
@@ -211,7 +211,7 @@ export class ANEEmbeddingProvider implements IEmbeddingProvider {
 			token_type_ids: tokenTypeIds,
 		});
 
-		const embeddings = results["last_hidden_state"].data as Float32Array;
+		const embeddings = results.last_hidden_state.data as Float32Array;
 		return this.meanPool(embeddings, tokens.attentionMask);
 	}
 
@@ -234,10 +234,10 @@ export class ANEEmbeddingProvider implements IEmbeddingProvider {
 		const dim = embeddings.length / attentionMask.length;
 		const pooled = new Array(dim).fill(0);
 
-		let sum = 0;
+		let _sum = 0;
 		for (let i = 0; i < attentionMask.length; i++) {
 			if (attentionMask[i] === 1) {
-				sum++;
+				_sum++;
 				for (let j = 0; j < dim; j++) {
 					pooled[j] += embeddings[i * dim + j];
 				}

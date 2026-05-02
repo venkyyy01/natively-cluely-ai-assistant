@@ -1,7 +1,7 @@
-const { execFileSync, execSync } = require("child_process");
-const fs = require("fs");
-const os = require("os");
-const path = require("path");
+const { execFileSync, execSync } = require("node:child_process");
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
 
 const nativeModulePath = path.join(__dirname, "..", "native-module");
 const localNapiCli = path.join(
@@ -80,7 +80,7 @@ if (os.platform() === "darwin") {
 
 		try {
 			runCommand(`rustup target add ${target}`);
-		} catch (err) {
+		} catch (_err) {
 			console.warn(
 				`Warning: Could not configure rust target ${target} via rustup. Continuing anyway.`,
 			);
@@ -93,7 +93,7 @@ if (os.platform() === "darwin") {
 		try {
 			runCommand("rustup target add x86_64-apple-darwin");
 			runCommand("rustup target add aarch64-apple-darwin");
-		} catch (err) {
+		} catch (_err) {
 			console.warn(
 				"Warning: Could not configure rust targets via rustup. Continuing anyway.",
 			);

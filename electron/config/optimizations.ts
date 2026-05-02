@@ -339,7 +339,7 @@ export function isAppleSilicon(): boolean {
 export function getEffectiveWorkerCount(): number {
 	if (cachedCpuCount === null) {
 		try {
-			const os = require("os");
+			const os = require("node:os");
 			cachedCpuCount = os.cpus().length;
 		} catch {
 			cachedCpuCount = 4;

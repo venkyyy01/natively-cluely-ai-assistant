@@ -1,5 +1,5 @@
 import { Brain, Camera, MessageSquare, User, Zap } from "lucide-react";
-import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { FastResponseConfig } from "../../shared/ipc";
 import { useShortcuts } from "../hooks/useShortcuts";
 import { analytics } from "../lib/analytics/analytics.service";
@@ -21,7 +21,7 @@ const SettingsPopup = () => {
 	const [profileMode, setProfileMode] = useState(false);
 	const [hasProfile, setHasProfile] = useState(false);
 	const [consciousModeEnabled, setConsciousModeEnabled] = useState(false);
-	const isPremium = true; // All features unlocked
+	const _isPremium = true; // All features unlocked
 	const getStoredCredentials = getOptionalElectronMethod(
 		"getStoredCredentials",
 	);
@@ -89,7 +89,7 @@ const SettingsPopup = () => {
 		loadProfile();
 
 		return () => window.removeEventListener("focus", handleFocus);
-	}, []);
+	}, [profileGetStatus, loadCredentials]);
 
 	// Fetch initial undetectable state from main process (source of truth)
 	useEffect(() => {
@@ -98,7 +98,7 @@ const SettingsPopup = () => {
 				setIsUndetectable(state);
 			});
 		}
-	}, []);
+	}, [getUndetectable]);
 
 	// One-way listener: receive state changes from main process, never echo back
 	useEffect(() => {
@@ -109,7 +109,7 @@ const SettingsPopup = () => {
 			});
 			return () => unsubscribe();
 		}
-	}, []);
+	}, [onUndetectableChanged]);
 
 	useEffect(() => {
 		// Listen for changes from other windows (2-way sync)
@@ -121,7 +121,7 @@ const SettingsPopup = () => {
 			);
 			return () => unsubscribe();
 		}
-	}, []);
+	}, [onFastResponseConfigChanged]);
 
 	useEffect(() => {
 		let cancelled = false;
@@ -144,7 +144,7 @@ const SettingsPopup = () => {
 		return () => {
 			cancelled = true;
 		};
-	}, []);
+	}, [getFastResponseConfig]);
 
 	useEffect(() => {
 		let cancelled = false;
@@ -174,7 +174,7 @@ const SettingsPopup = () => {
 		return () => {
 			cancelled = true;
 		};
-	}, []);
+	}, [onConsciousModeChanged, getConsciousMode]);
 
 	const [showTranscript, setShowTranscript] = useState(() => {
 		const stored = localStorage.getItem("natively_interviewer_transcript");
@@ -214,7 +214,7 @@ const SettingsPopup = () => {
 
 		observer.observe(contentRef.current);
 		return () => observer.disconnect();
-	}, []);
+	}, [updateContentDimensions]);
 
 	return (
 		<div className="w-fit h-fit bg-transparent flex flex-col">

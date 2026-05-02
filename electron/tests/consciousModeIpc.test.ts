@@ -108,7 +108,7 @@ function createHandlerRegistry() {
 
 async function loadPreloadModule() {
 	const originalLoad = (Module as any)._load;
-	const listeners = new Map<string, Function[]>();
+	const listeners = new Map<string, ((...args: unknown[]) => void)[]>();
 	let exposedApi: any;
 
 	(Module as any)._load = function patchedLoad(
@@ -125,13 +125,13 @@ async function loadPreloadModule() {
 				},
 				ipcRenderer: {
 					invoke: async (): Promise<undefined> => undefined,
-					on: (channel: string, listener: Function) => {
+					on: (channel: string, listener: (...args: unknown[]) => void) => {
 						listeners.set(channel, [
 							...(listeners.get(channel) || []),
 							listener,
 						]);
 					},
-					removeListener: (channel: string, listener: Function) => {
+					removeListener: (channel: string, listener: (...args: unknown[]) => void) => {
 						listeners.set(
 							channel,
 							(listeners.get(channel) || []).filter(

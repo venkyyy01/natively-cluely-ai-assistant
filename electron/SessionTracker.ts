@@ -25,7 +25,6 @@ import {
 	type ThreadManager,
 	TokenBudgetManager,
 } from "./conscious";
-import type { AdaptiveContextWindow } from "./conscious/AdaptiveContextWindow";
 import type { RecapLLM } from "./llm";
 import { SessionPersistence } from "./memory/SessionPersistence";
 import type { RuntimeBudgetScheduler } from "./runtime/RuntimeBudgetScheduler";
@@ -46,8 +45,6 @@ import {
 	type TranscriptSegment,
 	type UsageInteraction,
 } from "./session/sessionTypes";
-import { TokenCounter } from "./shared/TokenCounter";
-import { LLMError, Result } from "./types/Result";
 
 // Re-export types so existing consumers don't break
 export type {
@@ -64,7 +61,6 @@ export type {
 import type { SessionEvent } from "./memory/SessionPersistence";
 import {
 	buildFullSessionContext,
-	buildPinnedContextSection,
 	buildPseudoEmbedding,
 	getAdaptiveContext,
 	getCompactTranscriptSnapshot,
@@ -99,8 +95,6 @@ export class SessionTracker {
 	private writeBuffer: Array<() => void> = [];
 	// Context management (mirrors Swift ContextManager)
 	private contextItemsBuffer = new RingBuffer<ContextItem>(500);
-	private readonly contextWindowDuration: number = 120; // 120 seconds
-	private readonly maxContextItems: number = 500;
 
 	private getContextItems(): ContextItem[] {
 		return this.contextItemsBuffer.toArray();
@@ -165,9 +159,6 @@ export class SessionTracker {
 	private tokenBudgetManager: TokenBudgetManager = new TokenBudgetManager(
 		"openai",
 	);
-
-	// Adaptive context window for acceleration
-	private adaptiveContextWindow: AdaptiveContextWindow | null = null;
 	private sessionId: string = `session_${SessionTracker.nextSessionId++}`;
 	private transcriptRevision: number = 0;
 	private utteranceRevisions = new Map<string, number>();
@@ -193,25 +184,17 @@ export class SessionTracker {
 			createdAt: number;
 		}
 	>();
-	private readonly contextCacheTTLms = 10000;
-	private readonly contextCacheMaxEntries = 20;
-	private readonly tokenCounter: TokenCounter = new TokenCounter("openai");
 	private readonly semanticEmbeddingCache = new Map<
 		string,
 		{ embedding: number[]; createdAt: number }
 	>();
-	private readonly semanticEmbeddingTTLms = 5 * 60 * 1000;
 	private supervisorBus?: SupervisorBusEmitter;
-	private eventCount = 0;
-	private readonly EVENT_SNAPSHOT_INTERVAL = 1000;
 	private adaptiveWindowStats = {
 		calls: 0,
 		totalMs: 0,
 		over50ms: 0,
 		timeouts: 0,
 	};
-	private readonly ADAPTIVE_WINDOW_TIMEOUT_MS = 300;
-	private readonly ADAPTIVE_QUERY_MAX_LEN = 220;
 	private disposed = false;
 
 	// ============================================
@@ -292,11 +275,11 @@ export class SessionTracker {
 
 		if (this.isRestoring) {
 			const capturedSegment = { ...segment };
-			let bufferedResult: {
+			let _bufferedResult: {
 				role: "interviewer" | "user" | "assistant";
 			} | null = null;
 			this.writeBuffer.push(() => {
-				bufferedResult = this.addTranscript(capturedSegment);
+				_bufferedResult = this.addTranscript(capturedSegment);
 			});
 			const role = mapSpeakerToRoleImpl(segment.speaker);
 			return role ? { role } : null;
@@ -1245,7 +1228,7 @@ export class SessionTracker {
 								`[SessionTracker] Epoch summary created (${this.transcriptEpochSummaries.length} total)`,
 							);
 						}
-					} catch (e) {
+					} catch (_e) {
 						// If summarization fails, store a simple marker
 						const fallback = `[Earlier discussion: ${oldEntries.length} segments, topics: ${oldEntries
 							.slice(0, 3)

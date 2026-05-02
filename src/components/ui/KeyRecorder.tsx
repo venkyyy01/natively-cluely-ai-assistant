@@ -1,4 +1,3 @@
-import { Check, X } from "lucide-react";
 import type React from "react";
 import { useEffect, useRef, useState } from "react";
 
@@ -15,7 +14,7 @@ export const KeyRecorder: React.FC<KeyRecorderProps> = ({
 }) => {
 	const [isRecording, setIsRecording] = useState(false);
 	const [recordedKeys, setRecordedKeys] = useState<string[]>([]);
-	const inputRef = useRef<HTMLDivElement>(null);
+	const inputRef = useRef<HTMLInputElement>(null);
 
 	useEffect(() => {
 		if (isRecording && inputRef.current) {
@@ -69,20 +68,22 @@ export const KeyRecorder: React.FC<KeyRecorderProps> = ({
 	};
 
 	return (
-		<div
+		<button
+			type="button"
 			className={`relative flex items-center gap-1.5 group ${className || ""}`}
 			onClick={() => setIsRecording(true)}
 		>
 			{isRecording ? (
-				<div
+				<input
 					ref={inputRef}
-					tabIndex={0}
 					onKeyDown={handleKeyDown}
 					onBlur={() => setIsRecording(false)}
+					tabIndex={0}
+					aria-label="Key recording input"
 					className="flex items-center gap-1 bg-bg-input border border-accent-primary text-accent-primary px-2 py-1 rounded-md text-xs font-sans shadow-sm outline-none min-w-[60px] justify-center"
-				>
-					{recordedKeys.length > 0 ? recordedKeys.join(" + ") : "Press keys..."}
-				</div>
+					readOnly
+					value={recordedKeys.length > 0 ? recordedKeys.join(" + ") : "Press keys..."}
+				/>
 			) : (
 				<div className="flex items-center gap-1">
 					{currentKeys.map((k, i) => {
@@ -103,6 +104,6 @@ export const KeyRecorder: React.FC<KeyRecorderProps> = ({
 					})}
 				</div>
 			)}
-		</div>
+		</button>
 	);
 };

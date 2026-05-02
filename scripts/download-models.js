@@ -1,6 +1,6 @@
 const { pipeline, env } = require("@xenova/transformers");
-const path = require("path");
-const fs = require("fs");
+const path = require("node:path");
+const fs = require("node:fs");
 
 async function downloadModels() {
 	const modelsDir = path.join(__dirname, "../resources/models");

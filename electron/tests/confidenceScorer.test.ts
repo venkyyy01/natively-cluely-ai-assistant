@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { ConfidenceScorer } from "../conscious/ConfidenceScorer";
-import { type ConversationThread, InterviewPhase } from "../conscious/types";
+import type { ConversationThread } from "../conscious/types";
 
 const createMockThread = (
 	overrides: Partial<ConversationThread> = {},

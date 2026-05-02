@@ -464,7 +464,8 @@ export class FoundationModelsIntentProvider implements IntentInferenceProvider {
 				? parsed.requestId
 				: null;
 		if (rid && this.pendingByRequestId.has(rid)) {
-			const pending = this.pendingByRequestId.get(rid)!;
+			const pending = this.pendingByRequestId.get(rid);
+			if (!pending) return;
 			this.pendingByRequestId.delete(rid);
 			clearTimeout(pending.timeout);
 			pending.resolve({
@@ -477,7 +478,8 @@ export class FoundationModelsIntentProvider implements IntentInferenceProvider {
 		}
 
 		if (!rid && this.pendingByRequestId.size === 1) {
-			const [onlyId, pending] = [...this.pendingByRequestId.entries()][0]!;
+			const [onlyId, pending] = [...this.pendingByRequestId.entries()][0];
+			if (!onlyId || !pending) return;
 			this.pendingByRequestId.delete(onlyId);
 			clearTimeout(pending.timeout);
 			pending.resolve({

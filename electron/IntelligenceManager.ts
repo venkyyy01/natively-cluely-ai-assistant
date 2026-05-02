@@ -7,7 +7,7 @@
 //   IntelligenceEngine — LLM mode routing (6 modes), event emission
 //   MeetingPersistence — meeting stop/save/recovery
 
-import { EventEmitter } from "events";
+import { EventEmitter } from "node:events";
 import type {
 	ConsciousModeStructuredResponse,
 	ReasoningThread,

@@ -1,6 +1,5 @@
+import { EventEmitter } from "node:events";
 import { SpeechClient } from "@google-cloud/speech";
-import { EventEmitter } from "events";
-import * as path from "path";
 import {
 	type EnglishVariant,
 	RECOGNITION_LANGUAGES,
@@ -227,7 +226,7 @@ export class GoogleSTT extends EventEmitter {
 				console.log(`[GoogleSTT] Writing ${audioData.length} bytes to stream`);
 			}
 
-			if (this.stream.command && this.stream.command.writable) {
+			if (this.stream.command?.writable) {
 				this.stream.write(audioData);
 			} else if (this.stream.writable) {
 				this.stream.write(audioData);
@@ -349,7 +348,7 @@ export class GoogleSTT extends EventEmitter {
 			.on("data", (data: any) => {
 				if (this.stream !== activeStream) return;
 				// ... (existing data handler)
-				if (data.results[0] && data.results[0].alternatives[0]) {
+				if (data.results[0]?.alternatives[0]) {
 					const result = data.results[0];
 					const alt = result.alternatives[0];
 					const transcript = alt.transcript;

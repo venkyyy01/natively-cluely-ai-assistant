@@ -45,6 +45,7 @@ export const CalendarSettingsSection: React.FC<
 						</div>
 
 						<button
+							type="button"
 							onClick={async () => {
 								setIsCalendarsLoading(true);
 								try {
@@ -74,6 +75,7 @@ export const CalendarSettingsSection: React.FC<
 						</div>
 
 						<button
+							type="button"
 							onClick={async () => {
 								setIsCalendarsLoading(true);
 								try {
@@ -94,6 +96,8 @@ export const CalendarSettingsSection: React.FC<
 								width="14"
 								height="14"
 								xmlns="http://www.w3.org/2000/svg"
+								role="img"
+								aria-label="Google logo"
 							>
 								<g transform="matrix(1, 0, 0, 1, 27.009001, -39.238998)">
 									<path

@@ -1,6 +1,6 @@
 const sharp = require("sharp");
-const path = require("path");
-const fs = require("fs");
+const path = require("node:path");
+const fs = require("node:fs");
 
 const inputPath = path.join(__dirname, "src/components/icon.png");
 const outputAssets = path.join(__dirname, "assets/iconTemplate.png");

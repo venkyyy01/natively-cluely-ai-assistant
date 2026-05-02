@@ -6,7 +6,6 @@ import test from "node:test";
 
 import {
 	type PersistedSession,
-	type SessionEvent,
 	SessionPersistence,
 } from "../memory/SessionPersistence";
 

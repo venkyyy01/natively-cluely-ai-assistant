@@ -36,7 +36,7 @@ interface StartupProtectionGateOptions {
 	recordProtectionEvent?: (
 		type: ProtectionEventType,
 		context?: ProtectionEventContext,
-	) => ProtectionSnapshot | void;
+	) => ProtectionSnapshot | undefined;
 	onBlocked?: (decision: StartupProtectionGateDecision) => void;
 	timeoutMs?: number;
 	logger?: Pick<Console, "log" | "warn" | "error">;

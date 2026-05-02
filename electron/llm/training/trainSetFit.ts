@@ -57,22 +57,24 @@ function parseArgs(): Partial<TrainConfig> {
 		args.find((a) => a.startsWith(prefix))?.split("=")[1];
 
 	return {
-		epochs: get("--epochs=") ? parseInt(get("--epochs=")!) : undefined,
+		epochs: get("--epochs=") ? parseInt(get("--epochs="), 10) : undefined,
 		batchSize: get("--batch-size=")
-			? parseInt(get("--batch-size=")!)
+			? parseInt(get("--batch-size="), 10)
 			: undefined,
 		learningRate: get("--learning-rate=")
-			? parseFloat(get("--learning-rate=")!)
+			? parseFloat(get("--learning-rate="))
 			: undefined,
 		warmupRatio: get("--warmup-ratio=")
-			? parseFloat(get("--warmup-ratio=")!)
+			? parseFloat(get("--warmup-ratio="))
 			: undefined,
 		weightDecay: get("--weight-decay=")
-			? parseFloat(get("--weight-decay=")!)
+			? parseFloat(get("--weight-decay="))
 			: undefined,
-		patience: get("--patience=") ? parseInt(get("--patience=")!) : undefined,
+		patience: get("--patience=")
+			? parseInt(get("--patience="), 10)
+			: undefined,
 		minDelta: get("--min-delta=")
-			? parseFloat(get("--min-delta=")!)
+			? parseFloat(get("--min-delta="))
 			: undefined,
 		outputDir: get("--output-dir=") || undefined,
 		skipCv: args.includes("--skip-cv"),

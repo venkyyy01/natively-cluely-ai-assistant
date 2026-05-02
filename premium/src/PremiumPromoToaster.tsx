@@ -1,8 +1,7 @@
 import { AnimatePresence, motion } from "framer-motion";
-import { CheckCircle, Sparkles, Zap } from "lucide-react";
+import { Sparkles, Zap } from "lucide-react";
 import type React from "react";
 import { useEffect, useState } from "react";
-import { useShortcuts } from "../../src/hooks/useShortcuts";
 import { cn } from "../../src/lib/utils";
 
 interface PremiumPromoToasterProps {
@@ -18,7 +17,7 @@ export const PremiumPromoToaster: React.FC<PremiumPromoToasterProps> = ({
 	onDismiss,
 	onUpgrade,
 }) => {
-	const [isButtonHovered, setIsButtonHovered] = useState(false);
+	const [_isButtonHovered, _setIsButtonHovered] = useState(false);
 
 	// DEV OVERRIDE: For testing, press Ctrl/Cmd + B
 	useEffect(() => {

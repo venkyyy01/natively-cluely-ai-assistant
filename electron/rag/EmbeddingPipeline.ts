@@ -107,7 +107,7 @@ export class EmbeddingPipeline {
 							win.webContents.send("embedding:incompatible-provider-warning", {
 								count,
 								oldProvider: lastProvider,
-								newProvider: this.provider!.name,
+								newProvider: this.provider?.name,
 							});
 						}
 					});
@@ -470,7 +470,7 @@ export class EmbeddingPipeline {
 				"[EmbeddingPipeline] embedBatch failed; falling back to per-text embed:",
 				err,
 			);
-			return Promise.all(texts.map((t) => this.provider!.embed(t)));
+			return Promise.all(texts.map((t) => this.provider?.embed(t)));
 		}
 	}
 
@@ -513,7 +513,7 @@ export class EmbeddingPipeline {
 					"UPDATE meetings SET embedding_provider = ?, embedding_dimensions = ? WHERE id = ? AND embedding_provider IS NULL",
 				)
 				.run(p.name, p.dimensions, row.meeting_id);
-		} catch (e) {
+		} catch (_e) {
 			// Non-fatal — metadata is for safety filtering, not critical path
 		}
 

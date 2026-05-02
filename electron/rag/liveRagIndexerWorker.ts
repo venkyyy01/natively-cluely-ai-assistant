@@ -4,8 +4,8 @@
  * thread via EmbeddingPipeline after chunk IDs are returned.
  */
 
+import { parentPort } from "node:worker_threads";
 import Database from "better-sqlite3";
-import { parentPort } from "worker_threads";
 
 export interface LiveRagChunkInsertRow {
 	meetingId: string;

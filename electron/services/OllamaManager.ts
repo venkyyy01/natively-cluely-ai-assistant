@@ -1,5 +1,5 @@
 // electron/services/OllamaManager.ts
-import { type ChildProcess, spawn } from "child_process";
+import { type ChildProcess, spawn } from "node:child_process";
 import treeKill from "tree-kill";
 
 export class OllamaManager {
@@ -55,7 +55,7 @@ export class OllamaManager {
 
 			clearTimeout(timeoutId);
 			return response.ok;
-		} catch (error) {
+		} catch (_error) {
 			// ECONNREFUSED or timeout means it's not running
 			return false;
 		}
@@ -135,7 +135,7 @@ export class OllamaManager {
 			clearInterval(this.pollInterval);
 		}
 
-		if (this.isAppManaged && this.ollamaProcess && this.ollamaProcess.pid) {
+		if (this.isAppManaged && this.ollamaProcess?.pid) {
 			console.log(
 				"[OllamaManager] App is quitting. Terminating managed Ollama process tree...",
 			);

@@ -6,11 +6,7 @@ import type Database from "better-sqlite3";
 import type { LLMHelper } from "../LLMHelper";
 import { EmbeddingPipeline } from "./EmbeddingPipeline";
 import { LiveRAGIndexer } from "./LiveRAGIndexer";
-import {
-	buildRAGPrompt,
-	NO_CONTEXT_FALLBACK,
-	NO_GLOBAL_CONTEXT_FALLBACK,
-} from "./prompts";
+import { buildRAGPrompt, NO_GLOBAL_CONTEXT_FALLBACK } from "./prompts";
 import { RAGRetriever } from "./RAGRetriever";
 import { chunkTranscript } from "./SemanticChunker";
 import {
@@ -456,7 +452,7 @@ export class RAGManager {
 		}
 
 		// Double check queue to avoid double-queueing
-		const queueStatus = this.getQueueStatus();
+		const _queueStatus = this.getQueueStatus();
 		// This is a naive check (checks total pending), but good enough for now.
 		// Ideally we check if *this* meeting is in queue.
 		// For now, relies on isMeetingProcessed check mostly.

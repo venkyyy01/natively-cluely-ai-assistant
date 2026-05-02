@@ -5,7 +5,6 @@ import {
 	type ContextEntry,
 	type ContextSelectionConfig,
 } from "../conscious/AdaptiveContextWindow";
-import { InterviewPhase } from "../conscious/types";
 
 describe("AdaptiveContextWindow", () => {
 	let window: AdaptiveContextWindow;

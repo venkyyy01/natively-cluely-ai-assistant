@@ -1,6 +1,6 @@
-const { execFileSync } = require("child_process");
-const path = require("path");
-const fs = require("fs");
+const { execFileSync } = require("node:child_process");
+const path = require("node:path");
+const fs = require("node:fs");
 
 const root = path.resolve(__dirname, "..");
 const helperPath = [

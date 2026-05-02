@@ -57,6 +57,7 @@ export const SettingsSidebar: React.FC<SettingsSidebarProps> = ({
 					{items.map((item) => (
 						<button
 							key={item.id}
+							type="button"
 							onClick={() => {
 								setActiveTab(item.id);
 								if (item.id === "profile") {
@@ -73,12 +74,14 @@ export const SettingsSidebar: React.FC<SettingsSidebarProps> = ({
 
 			<div className="mt-auto p-6 border-t border-border-subtle">
 				<button
+					type="button"
 					onClick={() => window.electronAPI.quitApp()}
 					className="w-full text-left px-3 py-2 rounded-lg text-sm font-medium text-red-400 hover:bg-red-500/10 transition-colors flex items-center gap-3"
 				>
 					<LogOut size={16} /> Quit Natively
 				</button>
 				<button
+					type="button"
 					onClick={onClose}
 					className="group mt-2 w-full text-left px-3 py-2 rounded-lg text-sm font-medium text-text-secondary hover:text-text-primary hover:bg-bg-item-active/50 transition-colors flex items-center gap-3"
 				>

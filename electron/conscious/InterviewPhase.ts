@@ -1,7 +1,7 @@
 // electron/conscious/InterviewPhase.ts
 
 import type { RuntimeBudgetScheduler } from "../runtime/RuntimeBudgetScheduler";
-import { INTERVIEW_PHASES, type InterviewPhase } from "./types";
+import type { InterviewPhase } from "./types";
 
 type ClassifierLane = Pick<RuntimeBudgetScheduler, "submit">;
 
@@ -237,7 +237,7 @@ export class InterviewPhaseDetector {
 	private detectPhaseOnCurrentThread(
 		transcript: string,
 		currentPhase: InterviewPhase,
-		recentContext: string[],
+		_recentContext: string[],
 	): PhaseDetectionResult {
 		const scores = new Map<
 			InterviewPhase,

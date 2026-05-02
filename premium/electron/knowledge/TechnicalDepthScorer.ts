@@ -216,7 +216,6 @@ export class TechnicalDepthScorer {
 				return "<tone>High-level, business impact focused. Use executive-friendly language, emphasize team leadership, stakeholder management, and measurable outcomes. Avoid deep technical jargon.</tone>";
 			case "deep_technical":
 				return "<tone>Deep technical, code-level detail. Use precise technical terminology, discuss implementation details, time/space complexity, and architectural trade-offs. The interviewer is technically sophisticated.</tone>";
-			case "balanced":
 			default:
 				return "<tone>Balanced technical and business context. Mix implementation details with impact metrics. Adapt depth to match the question specificity.</tone>";
 		}

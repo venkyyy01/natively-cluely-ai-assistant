@@ -1,6 +1,6 @@
+import * as fs from "node:fs";
+import * as path from "node:path";
 import { app } from "electron";
-import * as fs from "fs";
-import * as path from "path";
 
 export interface PauseFeatures {
 	silenceDuration: number;

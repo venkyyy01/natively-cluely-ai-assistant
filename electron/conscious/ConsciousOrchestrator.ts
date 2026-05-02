@@ -3,7 +3,6 @@ import {
 	type ConsciousModeStructuredResponse,
 	classifyConsciousModeQuestion,
 	formatConsciousModeResponse,
-	isBehavioralQuestionText,
 	isValidConsciousModeResponse,
 	parseConsciousModeResponse,
 	type ReasoningThread,
@@ -33,19 +32,11 @@ import { Metrics } from "../runtime/Metrics";
 import { AdaptiveVerificationGate } from "./AdaptiveVerificationGate";
 import type { AnswerHypothesis } from "./AnswerHypothesisStore";
 import { ConsciousAnswerPlanner } from "./ConsciousAnswerPlanner";
-import {
-	isStrongConsciousIntent,
-	isUncertainConsciousIntent,
-} from "./ConsciousIntentService";
 import { ConsciousProvenanceVerifier } from "./ConsciousProvenanceVerifier";
 import { ConsciousRefinementOrchestrator } from "./ConsciousRefinementOrchestrator";
 import { ConsciousRetrievalOrchestrator } from "./ConsciousRetrievalOrchestrator";
 import { ConsciousVerifier } from "./ConsciousVerifier";
-import {
-	type BackgroundVerificationOutcome,
-	type Claim,
-	extractClaims,
-} from "./DeepMode";
+import { type BackgroundVerificationOutcome, extractClaims } from "./DeepMode";
 import {
 	type ConsciousTurnPlan,
 	FlexibleResponseRouter,
@@ -366,17 +357,6 @@ export class ConsciousOrchestrator {
 			/\b(what if|how would that|how does that|why that|why this)\b/.test(
 				loweredQuestion,
 			)
-		);
-	}
-
-	private isShortReferentialFollowUp(loweredQuestion: string): boolean {
-		const wordCount = loweredQuestion.split(/\s+/).filter(Boolean).length;
-		return (
-			wordCount <= 16 &&
-			/^(would|could|can|should|does|do|is|are|was|were|how|why|what)\b/.test(
-				loweredQuestion,
-			) &&
-			/\b(this|that|it|those|these|them)\b/.test(loweredQuestion)
 		);
 	}
 
@@ -709,8 +689,7 @@ export class ConsciousOrchestrator {
 			contextParts.push(`FULL CONVERSATION CONTEXT:\n${input.fullContext}`);
 
 			const message = contextParts.join("\n\n");
-			const systemPrompt =
-				CONSCIOUS_DEEP_IDENTITY + "\n\n" + CONSCIOUS_DEEP_CONTRACT;
+			const systemPrompt = `${CONSCIOUS_DEEP_IDENTITY}\n\n${CONSCIOUS_DEEP_CONTRACT}`;
 
 			let full = "";
 			let earlyReasoningEmitted = false;
@@ -758,7 +737,7 @@ export class ConsciousOrchestrator {
 					full = await this.deepLlmHelper.executeDeepWithAdaptiveContext(
 						message,
 						(ctx: string) =>
-							this.deepLlmHelper!.chat!(
+							this.deepLlmHelper?.chat?.(
 								ctx,
 								undefined,
 								undefined,
@@ -993,7 +972,7 @@ export class ConsciousOrchestrator {
 
 			if (input.whatToAnswerLLM) {
 				structuredResponse =
-					await input.whatToAnswerLLM!.generateReasoningFirst(
+					await input.whatToAnswerLLM?.generateReasoningFirst(
 						input.preparedTranscript,
 						input.question,
 						input.temporalContext,

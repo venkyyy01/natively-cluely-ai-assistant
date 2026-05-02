@@ -1,5 +1,5 @@
+import path from "node:path";
 import { app } from "electron";
-import path from "path";
 import {
 	loadPersistedState,
 	savePersistedState,
@@ -30,8 +30,19 @@ import {
 } from "./modelVersionTypes";
 import { parseModelVersion } from "./modelVersionUtils";
 
-export { ModelVersion, ModelFamily, TextModelFamily, TieredModels } from './modelVersionTypes';
-export { parseModelVersion, compareVersions, versionDistance, classifyModel, classifyTextModel } from './modelVersionUtils';
+export {
+	ModelFamily,
+	ModelVersion,
+	TextModelFamily,
+	TieredModels,
+} from "./modelVersionTypes";
+export {
+	classifyModel,
+	classifyTextModel,
+	compareVersions,
+	parseModelVersion,
+	versionDistance,
+} from "./modelVersionUtils";
 
 export class ModelVersionManager {
 	private state: PersistedState;

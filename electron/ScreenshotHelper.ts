@@ -2,9 +2,8 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import util from "node:util";
 import { app } from "electron";
-import screenshot from "screenshot-desktop";
-import util from "util";
 import { v4 as uuidv4 } from "uuid";
 export class ScreenshotHelper {
 	private screenshotQueue: string[] = [];
@@ -57,7 +56,9 @@ export class ScreenshotHelper {
 		try {
 			return await Promise.race([promise, timeoutPromise]);
 		} finally {
-			clearTimeout(timeoutId!);
+			if (timeoutId) {
+				clearTimeout(timeoutId);
+			}
 		}
 	}
 
@@ -185,7 +186,7 @@ export class ScreenshotHelper {
 
 			let screenshotPath = "";
 
-			const exec = util.promisify(require("child_process").exec);
+			const exec = util.promisify(require("node:child_process").exec);
 			const execWithTimeout = (cmd: string) =>
 				this.withTimeout(
 					Promise.resolve(exec(cmd)),
@@ -266,7 +267,7 @@ export class ScreenshotHelper {
 			await this.waitForWindowHide();
 
 			let screenshotPath = "";
-			const exec = util.promisify(require("child_process").exec);
+			const exec = util.promisify(require("node:child_process").exec);
 			const execWithTimeout = (cmd: string) =>
 				this.withTimeout(
 					Promise.resolve(exec(cmd)),
@@ -309,8 +310,6 @@ export class ScreenshotHelper {
 			await this.trimQueue(this.screenshotQueue);
 
 			return screenshotPath;
-		} catch (error) {
-			throw error;
 		} finally {
 			showMainWindow();
 		}
@@ -330,7 +329,7 @@ export class ScreenshotHelper {
 						return `data:image/png;base64,${data.toString("base64")}`;
 					}
 				}
-			} catch (error) {
+			} catch (_error) {
 				// console.log(`[ScreenshotHelper] Retry ${i + 1}/${maxRetries} failed:`, error)
 			}
 			// Wait for file system

@@ -1,6 +1,6 @@
+import fs from "node:fs";
+import path from "node:path";
 import { app, BrowserWindow, globalShortcut, ipcMain, Menu } from "electron";
-import fs from "fs";
-import path from "path";
 
 export interface KeybindConfig {
 	id: string;
@@ -202,7 +202,8 @@ export class KeybindManager {
 				// Validate and merge
 				for (const fileKb of data) {
 					if (this.keybinds.has(fileKb.id)) {
-						const current = this.keybinds.get(fileKb.id)!;
+						const current = this.keybinds.get(fileKb.id);
+						if (!current) continue;
 						current.accelerator = fileKb.accelerator;
 						this.keybinds.set(fileKb.id, current);
 					}
@@ -219,7 +220,7 @@ export class KeybindManager {
 				id: kb.id,
 				accelerator: kb.accelerator,
 			}));
-			const tmpPath = this.filePath + ".tmp";
+			const tmpPath = `${this.filePath}.tmp`;
 			fs.writeFileSync(tmpPath, JSON.stringify(data, null, 2));
 			fs.renameSync(tmpPath, this.filePath);
 		} catch (error) {
@@ -238,7 +239,8 @@ export class KeybindManager {
 	public setKeybind(id: string, accelerator: string) {
 		if (!this.keybinds.has(id)) return;
 
-		const kb = this.keybinds.get(id)!;
+		const kb = this.keybinds.get(id);
+		if (!kb) return;
 		kb.accelerator = accelerator;
 		this.keybinds.set(id, kb);
 

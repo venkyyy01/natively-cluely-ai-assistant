@@ -177,7 +177,6 @@ export interface SemanticRouterResult extends IntentResult {
 export class SemanticEmbeddingRouter {
 	private static instance: SemanticEmbeddingRouter | null = null;
 	private patterns: IntentPattern[];
-	private initialized = false;
 
 	private constructor() {
 		this.patterns = INTENT_PATTERNS.map((p) => ({
@@ -241,7 +240,7 @@ export class SemanticEmbeddingRouter {
 
 		// Find the minConfidence for the matched intent
 		const patternDef = this.patterns.find(
-			(p) => p.intent === bestMatch!.intent,
+			(p) => p.intent === bestMatch?.intent,
 		);
 		const minConfidence = patternDef?.minConfidence ?? 0.6;
 

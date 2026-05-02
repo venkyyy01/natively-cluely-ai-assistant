@@ -1,5 +1,5 @@
-import fs from "fs";
-import path from "path";
+import fs from "node:fs";
+import path from "node:path";
 import {
 	BASELINE_MODELS,
 	type FamilyState,
@@ -126,7 +126,7 @@ export function savePersistedState(
 		if (!fs.existsSync(dir)) {
 			fs.mkdirSync(dir, { recursive: true });
 		}
-		const tmpPath = persistPath + ".tmp";
+		const tmpPath = `${persistPath}.tmp`;
 		fs.writeFileSync(tmpPath, JSON.stringify(state, null, 2), "utf-8");
 		fs.renameSync(tmpPath, persistPath);
 	} catch (e) {

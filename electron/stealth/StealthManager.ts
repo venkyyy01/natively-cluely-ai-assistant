@@ -1,6 +1,5 @@
-import { EventEmitter } from "events";
+import { EventEmitter } from "node:events";
 import { isOptimizationActive } from "../config/optimizations";
-import { Metrics } from "../runtime/Metrics";
 import { ChromiumCaptureDetector } from "./ChromiumCaptureDetector";
 import { MacosStealthEnhancer } from "./MacosStealthEnhancer";
 import type { VirtualDisplayCoordinator } from "./MacosVirtualDisplayClient";
@@ -105,7 +104,7 @@ export interface StealthApplyOptions {
 }
 
 const WATCHDOG_INTERVAL_MS = 1000;
-const WATCHDOG_RESTORE_DELAY_MS = 500;
+const _WATCHDOG_RESTORE_DELAY_MS = 500;
 const DISPLAY_MOVE_RETRY_DELAY_MS = 100;
 const DISPLAY_MOVE_MAX_RETRIES = 10;
 const SCSTREAM_CHECK_INTERVAL_MS = 500;
@@ -262,7 +261,6 @@ export class StealthManager extends EventEmitter {
 	private watchdogRunning = false;
 	private watchdogPauseTokens = new Set<string>();
 	private watchdogStateVersion = 0;
-	private meetingActive = false;
 	private scStreamMonitorHandle: unknown = null;
 	private scStreamMonitorRunning = false;
 	private scStreamActive = false;
@@ -405,7 +403,7 @@ export class StealthManager extends EventEmitter {
 		}
 
 		try {
-			const { execSync } = require("child_process");
+			const { execSync } = require("node:child_process");
 			const version = execSync("sw_vers -productVersion", {
 				encoding: "utf8",
 			}).trim();
@@ -508,7 +506,7 @@ export class StealthManager extends EventEmitter {
 		}
 
 		// S-5: Guard against applying stealth to already-visible windows
-		if (win.isVisible && win.isVisible()) {
+		if (win.isVisible?.()) {
 			this.logger.warn(
 				"[StealthManager] WARNING: Applying stealth layers to an already-visible window. This may cause a race condition where the window is briefly visible unprotected.",
 			);
@@ -1469,10 +1467,6 @@ export class StealthManager extends EventEmitter {
 		);
 	}
 
-	private getBrowserCapturePatterns(): RegExp[] {
-		return [/chrome/i, /chromium/i, /msedge/i, /microsoft edge/i, /brave/i];
-	}
-
 	private async checkSCStreamActive(): Promise<boolean> {
 		if (this.platform !== "darwin") {
 			return false;
@@ -1709,7 +1703,7 @@ for window in windows:
 				);
 			});
 
-			if (stdout && stdout.trim()) {
+			if (stdout?.trim()) {
 				for (const line of stdout.trim().split("\n").filter(Boolean)) {
 					const windowNumber = parseInt(line, 10);
 					if (Number.isFinite(windowNumber) && windowNumber > 0) {
@@ -1956,12 +1950,6 @@ for window in windows:
 		}
 		this.restoreAttemptCount = 0;
 		this.windowsToRestore = [];
-	}
-
-	private delay(ms: number): Promise<void> {
-		return new Promise((resolve) => {
-			this.timeoutScheduler(() => resolve(), ms);
-		});
 	}
 
 	verifyStealth(win: StealthCapableWindow): boolean {

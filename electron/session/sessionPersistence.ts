@@ -2,13 +2,12 @@
 // Session persistence: save, load, restore, and memory-state helpers.
 
 import type { ExtractedConstraint } from "../conscious";
-import {
-	type PersistedSession,
-	type PersistedSessionMemoryEntry,
-	type PersistedSessionMemoryEntryValue,
-	type PersistedSessionMemoryState,
-	type SessionEvent,
-	SessionPersistence,
+import type {
+	PersistedSession,
+	PersistedSessionMemoryEntry,
+	PersistedSessionMemoryEntryValue,
+	PersistedSessionMemoryState,
+	SessionEvent,
 } from "../memory/SessionPersistence";
 import type { SessionTracker } from "../SessionTracker";
 import { buildPseudoEmbedding, inferItemPhase } from "./sessionContext";
@@ -518,7 +517,7 @@ export function restorePersistedMemoryState(
 	t.fullUsage = memoryEntries
 		.filter((entry) => entry.value.kind === "usage" && entry.value.usageType)
 		.map((entry) => ({
-			type: entry.value.usageType!,
+			type: entry.value.usageType || "unknown",
 			timestamp: entry.value.timestamp,
 			question: entry.value.question,
 			answer: entry.value.answer,

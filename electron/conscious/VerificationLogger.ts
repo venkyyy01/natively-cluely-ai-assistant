@@ -1,6 +1,6 @@
+import path from "node:path";
 import Database from "better-sqlite3";
 import { app } from "electron";
-import path from "path";
 
 export interface VerificationLogEntry {
 	id?: number;

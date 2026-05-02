@@ -1,4 +1,4 @@
-import { Cpu, Info, Monitor } from "lucide-react";
+import { Cpu, Monitor } from "lucide-react";
 import type React from "react";
 
 interface SidebarProps {
@@ -20,12 +20,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
 				</h2>
 				<nav className="space-y-1">
 					<button
+						type="button"
 						onClick={() => setActiveTab("general")}
 						className={`w-full text-left px-3 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-3 ${activeTab === "general" ? "bg-bg-item-active text-text-primary" : "text-text-secondary hover:text-text-primary hover:bg-bg-item-active/50"}`}
 					>
 						<Monitor size={16} /> General
 					</button>
 					<button
+						type="button"
 						onClick={() => setActiveTab("ai-providers")}
 						className={`w-full text-left px-3 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-3 ${activeTab === "ai-providers" ? "bg-bg-item-active text-text-primary" : "text-text-secondary hover:text-text-primary hover:bg-bg-item-active/50"}`}
 					>
@@ -37,6 +39,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
 			<div className="mt-auto p-6 border-t border-border-subtle">
 				<button
+					type="button"
 					onClick={onClose}
 					className="w-full text-left px-3 py-2 rounded-lg text-sm font-medium text-text-secondary hover:text-text-primary hover:bg-bg-item-active/50 transition-colors flex items-center gap-3"
 				>

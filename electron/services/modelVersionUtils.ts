@@ -1,10 +1,8 @@
 import {
-	BASELINE_MODELS,
 	ModelFamily,
 	type ModelVersion,
-	TEXT_BASELINE_MODELS,
 	TextModelFamily,
-} from './modelVersionTypes';
+} from "./modelVersionTypes";
 
 export function parseModelVersion(modelId: string): ModelVersion | null {
 	// Normalize: strip vendor prefixes and non-version suffixes

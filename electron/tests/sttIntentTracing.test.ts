@@ -181,8 +181,8 @@ test("TraceContext: purges finished spans correctly", () => {
 	const span1 = startSpan("purge-test", "span1");
 	const span2 = startSpan("purge-test", "span2");
 
-	endSpan("purge-test", span1!.spanId, "ok");
-	endSpan("purge-test", span2!.spanId, "error", "failed");
+	endSpan("purge-test", span1?.spanId, "ok");
+	endSpan("purge-test", span2?.spanId, "error", "failed");
 
 	// Verify trace still has spans
 	assert.equal(trace.getAllSpans().length, 2);

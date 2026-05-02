@@ -13,7 +13,6 @@ import {
 	invokeAndUnwrap,
 	invokeStatus,
 	invokeVoid,
-	isIpcResult,
 	type StatusResult,
 } from "./types";
 

@@ -233,7 +233,7 @@ export class RAGRetriever {
 			if (!byMeeting.has(chunk.meetingId)) {
 				byMeeting.set(chunk.meetingId, []);
 			}
-			byMeeting.get(chunk.meetingId)!.push(chunk);
+			byMeeting.get(chunk.meetingId)?.push(chunk);
 		}
 
 		// Format with meeting grouping

@@ -10,7 +10,6 @@ import { ConsciousOrchestrator } from "../conscious/ConsciousOrchestrator";
 import { ConsciousVerifier } from "../conscious/ConsciousVerifier";
 import type { QuestionReaction } from "../conscious/QuestionReactionClassifier";
 import type { IntentResult } from "../llm/IntentClassifier";
-import { Metrics } from "../runtime/Metrics";
 
 const response: ConsciousModeStructuredResponse = {
 	mode: "reasoning_first",

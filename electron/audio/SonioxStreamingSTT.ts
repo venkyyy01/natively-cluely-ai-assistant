@@ -16,7 +16,7 @@
  *   - Up to 8000-token structured context for domain-specific terms
  */
 
-import { EventEmitter } from "events";
+import { EventEmitter } from "node:events";
 import WebSocket from "ws";
 import { RECOGNITION_LANGUAGES } from "../config/languages";
 import { DropFrameMetric } from "./dropMetrics";
@@ -41,9 +41,6 @@ export class SonioxStreamingSTT extends EventEmitter {
 	private reconnectAttempts = 0;
 	private reconnectTimer: NodeJS.Timeout | null = null;
 	private keepAliveTimer: NodeJS.Timeout | null = null;
-
-	// Accumulated final tokens for building transcript text
-	private pendingFinalText = "";
 
 	private buffer: Buffer[] = [];
 	// NAT-021: visible drop telemetry for backpressure.
@@ -230,7 +227,7 @@ export class SonioxStreamingSTT extends EventEmitter {
 			}
 
 			try {
-				this.ws!.send(JSON.stringify(config));
+				this.ws?.send(JSON.stringify(config));
 				this.configSent = true;
 				this.isConnecting = false;
 				console.log("[SonioxStreaming] Config sent");

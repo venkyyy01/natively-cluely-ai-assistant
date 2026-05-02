@@ -3,7 +3,7 @@
 // Even if Gemini misbehaves, this ensures clean output
 
 import { LLM_SPEAK_BLOCKLIST } from "./prompts";
-import { ResponseQuality, type ValidationResult } from "./types";
+import type { ValidationResult } from "./types";
 
 /**
  * Filler phrases to strip from end of responses

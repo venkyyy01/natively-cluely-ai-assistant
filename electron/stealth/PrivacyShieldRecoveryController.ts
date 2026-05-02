@@ -166,21 +166,21 @@ export class PrivacyShieldRecoveryController {
 			throw error;
 		} finally {
 			this.recoveryInFlight = null;
-			// NAT-030: re-check warnings after recovery; if capture-risk still present, keep shield
-			const postSnapshot = this.getSnapshot();
-			if (
-				hasCaptureRiskWarnings(postSnapshot.warnings) ||
-				hasCaptureRiskWarnings(preRecoveryWarnings)
-			) {
-				// Do not clear attempts or shield while capture risk persists
-				this.update();
-				return;
-			}
-			if (!needsRecovery(postSnapshot)) {
-				this.autoRecoveryAttempts = 0;
-			}
-			this.update();
 		}
+		// NAT-030: re-check warnings after recovery; if capture-risk still present, keep shield
+		const postSnapshot = this.getSnapshot();
+		if (
+			hasCaptureRiskWarnings(postSnapshot.warnings) ||
+			hasCaptureRiskWarnings(preRecoveryWarnings)
+		) {
+			// Do not clear attempts or shield while capture risk persists
+			this.update();
+			return;
+		}
+		if (!needsRecovery(postSnapshot)) {
+			this.autoRecoveryAttempts = 0;
+		}
+		this.update();
 	}
 
 	private cancelPendingRecovery(): void {

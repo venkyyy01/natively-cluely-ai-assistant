@@ -1,11 +1,5 @@
 import type { ProviderHealthSnapshot } from "../STTReconnector";
-import {
-	endSpan,
-	setSpanAttribute,
-	startSpan,
-	startTrace,
-	traceLogger,
-} from "../tracing";
+import { endSpan, setSpanAttribute, startSpan, traceLogger } from "../tracing";
 import type { SupervisorBus } from "./SupervisorBus";
 import type { ISupervisor, SupervisorState } from "./types";
 import type { WarmStandbyManager } from "./WarmStandbyManager";

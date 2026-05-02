@@ -3,28 +3,15 @@ import {
 	AlertCircle,
 	ArrowLeft,
 	ArrowRight,
-	Bell,
 	Calendar,
-	Check,
 	CheckCircle,
-	ChevronDown,
-	ChevronRight,
-	Clock,
 	Download,
 	DownloadCloud,
-	Eye,
-	EyeOff,
 	Ghost,
-	Globe,
 	Link as LinkIcon,
-	Mail,
 	MoreHorizontal,
-	Plus,
 	RefreshCw,
-	Search,
 	Settings,
-	ToggleLeft,
-	ToggleRight,
 	Trash2,
 	Zap,
 } from "lucide-react";
@@ -38,7 +25,6 @@ import {
 	requireElectronMethod,
 } from "../lib/electronApi";
 import calender from "../UI_comp/calender.png";
-import mainui from "../UI_comp/mainui.png";
 import { generateMeetingPDF } from "../utils/pdfGenerator";
 import { FeatureSpotlight } from "./FeatureSpotlight";
 import GlobalChatOverlay from "./GlobalChatOverlay";
@@ -251,7 +237,7 @@ const Launcher: React.FC<LauncherProps> = ({
 			clearInterval(interval);
 			window.removeEventListener("keydown", handleKeyDown);
 		};
-	}, [isShortcutPressed]);
+	}, [isShortcutPressed, fetchEvents, fetchMeetings]);
 
 	// Filter next meeting (within 60 mins)
 	const nextMeeting = upcomingEvents.find((e) => {
@@ -341,7 +327,7 @@ const Launcher: React.FC<LauncherProps> = ({
 
 	useEffect(() => {
 		setMenuEntered(false);
-	}, [activeMenuId]);
+	}, []);
 
 	// Global click listener to close menu
 	useEffect(() => {
@@ -417,7 +403,7 @@ const Launcher: React.FC<LauncherProps> = ({
 		}
 
 		// Fallback for "X min" format (legacy)
-		const minutes = parseInt(durationStr.replace("min", "").trim()) || 0;
+		const minutes = parseInt(durationStr.replace("min", "").trim(), 10) || 0;
 		const mm = minutes.toString().padStart(2, "0");
 		return `${mm}:00`;
 	};

@@ -191,7 +191,11 @@ export function createMutex(name: string, timeout = 30000): AsyncMutex {
  * Decorator for methods that should run exclusively
  */
 export function exclusive(mutex: AsyncMutex) {
-	return (target: any, propertyKey: string, descriptor: PropertyDescriptor) => {
+	return (
+		_target: any,
+		_propertyKey: string,
+		descriptor: PropertyDescriptor,
+	) => {
 		const originalMethod = descriptor.value;
 
 		descriptor.value = async function (...args: any[]) {

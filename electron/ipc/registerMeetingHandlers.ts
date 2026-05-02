@@ -211,7 +211,7 @@ export function registerMeetingHandlers({
 	safeHandle("seed-demo", async () => {
 		DatabaseManager.getInstance().seedDemoMeeting();
 		const ragManager = getInferenceRagManager(appState);
-		if (ragManager && ragManager.isReady()) {
+		if (ragManager?.isReady()) {
 			ragManager.reprocessMeeting("demo-meeting").catch(console.error);
 		}
 		return { success: true };

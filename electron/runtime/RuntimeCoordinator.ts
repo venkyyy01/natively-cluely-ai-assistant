@@ -42,7 +42,6 @@ export class RuntimeCoordinator {
 		unknown
 	>;
 	private lifecycleState: RuntimeLifecycleState = "idle";
-	private activeMeetingId: string | null = null;
 
 	constructor(
 		private readonly delegate: RuntimeCoordinatorDelegate,

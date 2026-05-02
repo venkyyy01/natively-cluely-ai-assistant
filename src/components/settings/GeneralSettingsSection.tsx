@@ -2,7 +2,6 @@ import {
 	Activity,
 	BadgeCheck,
 	Brain,
-	Check,
 	ChevronDown,
 	Eye,
 	Ghost,
@@ -125,6 +124,8 @@ export const GeneralSettingsSection: React.FC<GeneralSettingsSectionProps> = ({
 									strokeLinecap="round"
 									strokeLinejoin="round"
 									className="text-text-primary"
+									role="img"
+									aria-label="Privacy mode icon"
 								>
 									<path
 										d="M12 2a8 8 0 0 0-8 8v12l3-3 2.5 2.5L12 19l2.5 2.5L17 19l3 3V10a8 8 0 0 0-8-8z"
@@ -151,13 +152,14 @@ export const GeneralSettingsSection: React.FC<GeneralSettingsSectionProps> = ({
 						</div>
 						<p className="text-xs text-text-secondary">
 							Privacy mode is {isUndetectable ? "active" : "off"}. Sensitive
-							content is hidden until protection is cleared.{" "}
-							<button className="text-blue-400 hover:underline">
+							content is hidden until protection is cleared. {" "}
+							<button type="button" className="text-blue-400 hover:underline">
 								Supported apps here
 							</button>
 						</p>
 					</div>
-					<div
+					<button
+						type="button"
 						onClick={async () => {
 							const newState = !isUndetectable;
 							setIsUndetectable(newState);
@@ -181,11 +183,12 @@ export const GeneralSettingsSection: React.FC<GeneralSettingsSectionProps> = ({
 							}
 						}}
 						className={`w-11 h-6 rounded-full relative transition-colors ${isUndetectable ? "bg-accent-primary" : "bg-bg-toggle-switch border border-border-muted"}`}
+						aria-label="Toggle privacy mode"
 					>
 						<div
 							className={`absolute top-1 left-1 w-4 h-4 rounded-full bg-white transition-transform ${isUndetectable ? "translate-x-5" : "translate-x-0"}`}
 						/>
-					</div>
+					</button>
 				</div>
 
 				<div>
@@ -218,7 +221,8 @@ export const GeneralSettingsSection: React.FC<GeneralSettingsSectionProps> = ({
 									</p>
 								</div>
 							</div>
-							<div
+							<button
+								type="button"
 								onClick={async () => {
 									const newState = !openOnLogin;
 									setOpenOnLogin(newState);
@@ -238,11 +242,12 @@ export const GeneralSettingsSection: React.FC<GeneralSettingsSectionProps> = ({
 									}
 								}}
 								className={`w-11 h-6 rounded-full relative transition-colors ${openOnLogin ? "bg-accent-primary" : "bg-bg-toggle-switch border border-border-muted"}`}
+								aria-label="Toggle open on login"
 							>
 								<div
 									className={`absolute top-1 left-1 w-4 h-4 rounded-full bg-white transition-transform ${openOnLogin ? "translate-x-5" : "translate-x-0"}`}
 								/>
-							</div>
+							</button>
 						</div>
 
 						<div className="flex items-center justify-between">
@@ -259,7 +264,8 @@ export const GeneralSettingsSection: React.FC<GeneralSettingsSectionProps> = ({
 									</p>
 								</div>
 							</div>
-							<div
+							<button
+								type="button"
 								onClick={() => {
 									const newState = !showTranscript;
 									setShowTranscript(newState);
@@ -270,11 +276,12 @@ export const GeneralSettingsSection: React.FC<GeneralSettingsSectionProps> = ({
 									window.dispatchEvent(new Event("storage"));
 								}}
 								className={`w-11 h-6 rounded-full relative transition-colors ${showTranscript ? "bg-accent-primary" : "bg-bg-toggle-switch border border-border-muted"}`}
+								aria-label="Toggle interviewer transcript"
 							>
 								<div
 									className={`absolute top-1 left-1 w-4 h-4 rounded-full bg-white transition-transform ${showTranscript ? "translate-x-5" : "translate-x-0"}`}
 								/>
-							</div>
+							</button>
 						</div>
 
 						<div className="flex items-center justify-between">
@@ -292,7 +299,8 @@ export const GeneralSettingsSection: React.FC<GeneralSettingsSectionProps> = ({
 									</p>
 								</div>
 							</div>
-							<div
+							<button
+								type="button"
 								onClick={async () => {
 									const newState = !accelerationModeEnabled;
 									setAccelerationModeEnabled(newState);
@@ -313,11 +321,12 @@ export const GeneralSettingsSection: React.FC<GeneralSettingsSectionProps> = ({
 									}
 								}}
 								className={`w-11 h-6 rounded-full relative transition-colors ${accelerationModeEnabled ? "bg-accent-primary" : "bg-bg-toggle-switch border border-border-muted"}`}
+								aria-label="Toggle acceleration mode"
 							>
 								<div
 									className={`absolute top-1 left-1 w-4 h-4 rounded-full bg-white transition-transform ${accelerationModeEnabled ? "translate-x-5" : "translate-x-0"}`}
 								/>
-							</div>
+							</button>
 						</div>
 
 						<div className="flex items-center justify-between">
@@ -334,7 +343,8 @@ export const GeneralSettingsSection: React.FC<GeneralSettingsSectionProps> = ({
 									</p>
 								</div>
 							</div>
-							<div
+							<button
+								type="button"
 								onClick={async () => {
 									const newState = !consciousModeEnabled;
 									setConsciousModeEnabled(newState);
@@ -356,11 +366,12 @@ export const GeneralSettingsSection: React.FC<GeneralSettingsSectionProps> = ({
 									}
 								}}
 								className={`w-11 h-6 rounded-full relative transition-colors ${consciousModeEnabled ? "bg-accent-primary" : "bg-bg-toggle-switch border border-border-muted"}`}
+								aria-label="Toggle conscious mode"
 							>
 								<div
 									className={`absolute top-1 left-1 w-4 h-4 rounded-full bg-white transition-transform ${consciousModeEnabled ? "translate-x-5" : "translate-x-0"}`}
 								/>
-							</div>
+							</button>
 						</div>
 
 						<div className="flex items-center justify-between">
@@ -378,6 +389,7 @@ export const GeneralSettingsSection: React.FC<GeneralSettingsSectionProps> = ({
 
 							<div className="relative" ref={themeDropdownRef}>
 								<button
+									type="button"
 									onClick={() => setIsThemeDropdownOpen(!isThemeDropdownOpen)}
 									className="bg-bg-component hover:bg-bg-elevated border border-border-subtle text-text-primary px-3 py-1.5 rounded-lg text-xs font-medium transition-colors flex items-center gap-2 min-w-[110px] justify-between"
 								>
@@ -413,6 +425,7 @@ export const GeneralSettingsSection: React.FC<GeneralSettingsSectionProps> = ({
 											{ mode: "dark", label: "Dark", icon: <Moon size={14} /> },
 										].map((option) => (
 											<button
+												type="button"
 												key={option.mode}
 												onClick={() => {
 													handleSetTheme(
@@ -456,6 +469,7 @@ export const GeneralSettingsSection: React.FC<GeneralSettingsSectionProps> = ({
 
 							<div className="relative" ref={aiLangDropdownRef}>
 								<button
+									type="button"
 									onClick={() => setIsAiLangDropdownOpen(!isAiLangDropdownOpen)}
 									className="bg-bg-component hover:bg-bg-elevated border border-border-subtle text-text-primary pl-4 pr-3 py-1.5 rounded-lg text-xs font-medium transition-colors flex items-center gap-2 min-w-[110px] justify-between"
 								>
@@ -472,6 +486,7 @@ export const GeneralSettingsSection: React.FC<GeneralSettingsSectionProps> = ({
 									<div className="absolute right-0 top-full mt-1 min-w-full w-max bg-bg-elevated border border-border-subtle rounded-lg shadow-xl overflow-hidden z-20 p-1 animated fadeIn select-none max-h-60 overflow-y-auto custom-scrollbar">
 										{availableAiLanguages.map((option) => (
 											<button
+												type="button"
 												key={option.code}
 												onClick={() => {
 													handleAiLanguageChange(option.code);
@@ -517,10 +532,10 @@ export const GeneralSettingsSection: React.FC<GeneralSettingsSectionProps> = ({
 							className="bg-bg-item-surface rounded-xl p-5 border border-border-subtle mt-4"
 						>
 							<div className="flex items-center justify-between mb-3">
-								<label className="flex items-center gap-2 text-xs font-medium text-text-secondary uppercase tracking-wide">
+								<span className="flex items-center gap-2 text-xs font-medium text-text-secondary uppercase tracking-wide">
 									<Eye size={13} className="text-text-secondary" />
 									Interface Opacity
-								</label>
+								</span>
 								<span className="opacity-percent-label text-xs font-semibold text-text-primary tabular-nums">
 									{Math.round(overlayOpacity * 100)}%
 								</span>
@@ -623,6 +638,7 @@ export const GeneralSettingsSection: React.FC<GeneralSettingsSectionProps> = ({
 					)}
 					{DISGUISE_OPTIONS.map((option) => (
 						<button
+							type="button"
 							key={option.id}
 							disabled={isUndetectable}
 							onClick={() => {

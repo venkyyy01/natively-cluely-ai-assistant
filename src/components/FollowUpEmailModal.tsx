@@ -1,14 +1,7 @@
 import { AnimatePresence, motion } from "framer-motion";
-import {
-	ExternalLink,
-	Loader2,
-	Mail,
-	Paperclip,
-	RotateCcw,
-	X,
-} from "lucide-react";
+import { RotateCcw, X } from "lucide-react";
 import type React from "react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 
 interface Meeting {
 	id: string;
@@ -49,14 +42,7 @@ const FollowUpEmailModal: React.FC<FollowUpEmailModalProps> = ({
 
 	// State
 	const [isGenerating, setIsGenerating] = useState(false);
-	const [hasGeneratedOnce, setHasGeneratedOnce] = useState(false);
-
-	// Mount effect - Initialize and Generate
-	useEffect(() => {
-		if (isOpen) {
-			initializeFields();
-		}
-	}, [isOpen, meeting]);
+	const [_hasGeneratedOnce, _setHasGeneratedOnce] = useState(false);
 
 	const initializeFields = async () => {
 		// 1. Set Subject
@@ -142,6 +128,13 @@ const FollowUpEmailModal: React.FC<FollowUpEmailModalProps> = ({
 		}
 	};
 
+	// Mount effect - Initialize and Generate
+	useEffect(() => {
+		if (isOpen) {
+			initializeFields();
+		}
+	}, [isOpen]);
+
 	const handleReset = () => {
 		generateEmail();
 	};
@@ -153,7 +146,7 @@ const FollowUpEmailModal: React.FC<FollowUpEmailModalProps> = ({
 		onClose();
 	};
 
-	const handleSendDefault = async () => {
+	const _handleSendDefault = async () => {
 		// @ts-expect-error
 		await window.electronAPI?.invoke("open-mailto", {
 			to: recipientEmail,
@@ -232,7 +225,6 @@ const FollowUpEmailModal: React.FC<FollowUpEmailModalProps> = ({
 												onChange={(e) => setRecipientEmail(e.target.value)}
 												placeholder="Recipient email"
 												className="w-full bg-transparent text-[#E9E9E9] placeholder-[#525255] focus:outline-none text-[14px]"
-												autoFocus
 											/>
 										)}
 									</div>

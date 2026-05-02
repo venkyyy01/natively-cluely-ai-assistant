@@ -121,7 +121,7 @@
 	/* Frosted matte glass */
 
 	.force-black-icon {
-		filter: brightness(0) !important;
+		filter: brightness(0);
 	}
 }
 
@@ -150,7 +150,7 @@ html[data-window-kind="settings"] #root,
 html[data-window-kind="model-selector"],
 html[data-window-kind="model-selector"] body,
 html[data-window-kind="model-selector"] #root {
-	background: transparent !important;
+	background: transparent;
 }
 
 /* Allow selection in specific areas if needed */
@@ -313,5 +313,5 @@ a {
 /* Force instant transitions globally during previews */
 .disable-transitions,
 .disable-transitions * {
-	transition: none !important;
+	transition: none;
 }

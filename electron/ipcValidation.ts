@@ -28,7 +28,7 @@ const llmProviderEnum = z.enum([
 	"claude",
 	"cerebras",
 ]);
-const fastResponseProviderEnum = z.enum(["groq", "cerebras"]);
+const _fastResponseProviderEnum = z.enum(["groq", "cerebras"]);
 const externalUrlSchema = z
 	.string()
 	.trim()

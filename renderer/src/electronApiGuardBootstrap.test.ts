@@ -1,5 +1,5 @@
-import fs from "fs";
-import path from "path";
+import fs from "node:fs";
+import path from "node:path";
 
 const helperPath = path.resolve(__dirname, "../../src/lib/electronApi.ts");
 const mainPath = path.resolve(__dirname, "../../src/main.tsx");

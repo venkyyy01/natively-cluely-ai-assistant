@@ -1,7 +1,6 @@
 import assert from "node:assert";
 import { after, before, describe, it } from "node:test";
 import type { ReasoningThread } from "../ConsciousMode";
-import { setOptimizationFlagsForTesting } from "../config/optimizations";
 import { SemanticThreadMatcher } from "../conscious/SemanticThreadMatcher";
 
 describe("SemanticThreadMatcher", () => {
@@ -215,7 +214,7 @@ describe("SemanticThreadMatcher", () => {
 		await matcher.cacheThreadEmbedding(thread);
 		assert.ok(thread.embedding, "Thread embedding should be cached");
 		assert.ok(Array.isArray(thread.embedding), "Embedding should be an array");
-		assert.ok(thread.embedding!.length > 0, "Embedding should not be empty");
+		assert.ok(thread.embedding?.length > 0, "Embedding should not be empty");
 	});
 
 	it("should handle empty thread corpus when caching", async () => {

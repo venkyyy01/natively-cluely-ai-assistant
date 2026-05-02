@@ -71,7 +71,6 @@ export class PauseDetector {
 	private evaluationStartTime: number = 0;
 	private isActive: boolean = false;
 	private adaptiveModel: AdaptivePauseModel | null = null;
-	private profileId: string = "default";
 
 	constructor(
 		config: Partial<PauseDetectorConfig> = {},
@@ -270,7 +269,7 @@ export class PauseDetector {
 		};
 
 		// Use adaptive weights if model is ready, otherwise use hardcoded weights
-		if (this.adaptiveModel && this.adaptiveModel.isReady()) {
+		if (this.adaptiveModel?.isReady()) {
 			const adaptiveWeights = this.adaptiveModel.getCurrentWeights();
 			weights = {
 				silenceDuration: adaptiveWeights.silenceDuration,

@@ -173,7 +173,7 @@ function mergeConsecutiveSpeakerSegments(
 
 		// Merge if same speaker and gap < 5 seconds
 		if (seg.speaker === current.speaker && gap < 5000) {
-			current.text += " " + seg.text;
+			current.text += ` ${seg.text}`;
 			current.endMs = seg.timestamp;
 		} else {
 			merged.push(current);

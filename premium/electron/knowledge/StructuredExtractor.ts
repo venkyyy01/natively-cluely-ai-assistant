@@ -150,7 +150,7 @@ export async function extractStructuredData<T>(
 
 		if (type === DocType.RESUME) {
 			const resume = parsed as unknown as StructuredResume;
-			if (!resume.identity || !resume.identity.name) {
+			if (!resume.identity?.name) {
 				throw new Error("Parsed resume missing identity.name");
 			}
 			// Set defaults

@@ -9,14 +9,13 @@ const mockApp = {
 
 // Mock better-sqlite3
 class MockDatabase {
-	private data: any[] = [];
 	private tables: Map<string, any[]> = new Map();
 
-	constructor(path: string) {
+	constructor(_path: string) {
 		this.tables.set("verification_logs", []);
 	}
 
-	pragma(statement: string): void {
+	pragma(_statement: string): void {
 		// No-op for mock
 	}
 

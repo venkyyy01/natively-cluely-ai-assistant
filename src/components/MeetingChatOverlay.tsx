@@ -82,6 +82,7 @@ const MeetingChatOverlay: React.FC<MeetingChatOverlayProps> = ({
 	});
 
 	// Submit initial query when overlay opens
+	// eslint-disable-next-line react-hooks/exhaustive-deps
 	useEffect(() => {
 		if (isOpen && initialQuery && messages.length === 0) {
 			setChatState("opening");
@@ -97,15 +98,20 @@ const MeetingChatOverlay: React.FC<MeetingChatOverlayProps> = ({
 				initialSubmitTimerRef.current = null;
 			}
 		};
-	}, [isOpen, initialQuery]);
+	}, [isOpen, initialQuery, messages.length]);
 
 	// Listen for new queries from parent
+	// eslint-disable-next-line react-hooks/exhaustive-deps
 	useEffect(() => {
 		if (isOpen && initialQuery && messages.length > 0) {
 			// This is a follow-up query
 			submitQuestion(initialQuery);
 		}
-	}, [initialQuery]);
+	}, [
+		initialQuery,
+		messages.length,
+		isOpen, // This is a follow-up query
+	]);
 
 	// Reset state when overlay closes
 	useEffect(() => {
@@ -117,6 +123,7 @@ const MeetingChatOverlay: React.FC<MeetingChatOverlayProps> = ({
 	}, [isOpen]);
 
 	// ESC key handler
+	// eslint-disable-next-line react-hooks/exhaustive-deps
 	useEffect(() => {
 		const handleKeyDown = (e: KeyboardEvent) => {
 			if (e.key === "Escape" && isOpen) {

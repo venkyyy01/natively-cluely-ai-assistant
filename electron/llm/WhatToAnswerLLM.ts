@@ -1,5 +1,4 @@
 import {
-	CONSCIOUS_MODE_JSON_RESPONSE_INSTRUCTIONS,
 	type ConsciousModeStructuredResponse,
 	isBehavioralQuestionText,
 	parseConsciousModeResponse,
@@ -46,7 +45,7 @@ ANSWER SHAPE: ${intentResult.answerShape}
 </intent_and_shape>`);
 		}
 
-		if (temporalContext && temporalContext.hasRecentResponses) {
+		if (temporalContext?.hasRecentResponses) {
 			const history = temporalContext.previousResponses
 				.map((r, i) => `${i + 1}. "${r}"`)
 				.join("\n");

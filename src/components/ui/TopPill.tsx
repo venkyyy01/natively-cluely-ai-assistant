@@ -26,6 +26,7 @@ export default function TopPill({ expanded, onToggle, onQuit }: TopPillProps) {
 			>
 				{/* LOGO BUTTON */}
 				<button
+					type="button"
 					className="
             w-8 h-8
             rounded-full
@@ -47,6 +48,7 @@ export default function TopPill({ expanded, onToggle, onQuit }: TopPillProps) {
 
 				{/* CENTER SEGMENT */}
 				<button
+					type="button"
 					onClick={onToggle}
 					className="
             flex items-center gap-2
@@ -76,6 +78,7 @@ export default function TopPill({ expanded, onToggle, onQuit }: TopPillProps) {
 
 				{/* STOP / QUIT BUTTON */}
 				<button
+					type="button"
 					onClick={onQuit}
 					className="
             w-8 h-8

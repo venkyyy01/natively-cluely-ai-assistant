@@ -586,7 +586,7 @@ function isBroadConsciousSeed(lower: string): boolean {
 	);
 }
 
-function isBehavioralPrompt(lower: string): boolean {
+function _isBehavioralPrompt(lower: string): boolean {
 	return isBehavioralQuestionText(lower);
 }
 
@@ -709,7 +709,7 @@ export function shouldAutoTriggerSuggestionFromTranscript(
 	text: string,
 	consciousModeEnabled: boolean,
 	activeReasoningThread: ReasoningThread | null,
-	isBufferFlushEvent: boolean = false,
+	_isBufferFlushEvent: boolean = false,
 ): boolean {
 	const trimmed = normalizeText(text);
 	if (!trimmed) {

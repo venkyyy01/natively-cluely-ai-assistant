@@ -13,10 +13,6 @@ export class SemanticEntailmentVerifier {
 	private static readonly ENTAILMENT_THRESHOLD = 0.7;
 	private static readonly MAX_TOKENS = 512;
 
-	constructor() {
-		// Lazy load model on first use
-	}
-
 	private async ensureModelLoaded(): Promise<void> {
 		if (this.model) {
 			return;

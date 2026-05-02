@@ -153,7 +153,7 @@ function formatPreviousResponses(
 	return recent.map((r) => {
 		// Truncate long responses but keep enough context
 		const text =
-			r.text.length > 200 ? r.text.substring(0, 200) + "..." : r.text;
+			r.text.length > 200 ? `${r.text.substring(0, 200)}...` : r.text;
 		return text;
 	});
 }

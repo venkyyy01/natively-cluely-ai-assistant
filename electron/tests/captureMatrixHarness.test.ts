@@ -12,11 +12,13 @@ import {
 } from "../stealth/CaptureMatrixHarness";
 
 test("CaptureMatrixHarness validates required row schema fields", () => {
-	const row = createDefaultMockCaptureMatrixRows({
+	const rows = createDefaultMockCaptureMatrixRows({
 		platform: "darwin",
 		osVersion: "15.4",
 		appVersion: "2.0.9",
-	})[0]!;
+	});
+	const row = rows[0];
+	if (!row) throw new Error("No row created");
 
 	assert.deepEqual(validateCaptureMatrixRow(row), []);
 	assert.deepEqual(
@@ -47,8 +49,8 @@ test("CaptureMatrixHarness mock adapter produces deterministic pass artifacts", 
 
 	assert.equal(result.passed, true);
 	assert.equal(result.results.length, 2);
-	assert.equal(result.results[0]!.actualResult, "hidden");
-	assert.equal(result.results[1]!.actualResult, "visible");
+	assert.equal(result.results[0]?.actualResult, "hidden");
+	assert.equal(result.results[1]?.actualResult, "visible");
 
 	const summary = JSON.parse(
 		await readFile(path.join(outputRoot, "mock-run", "summary.json"), "utf8"),
@@ -57,7 +59,7 @@ test("CaptureMatrixHarness mock adapter produces deterministic pass artifacts", 
 	assert.equal(summary.generatedAt, "1970-01-01T00:00:00.000Z");
 
 	const metadata = JSON.parse(
-		await readFile(result.results[0]!.artifactPaths.metadata, "utf8"),
+		await readFile(result.results[0]?.artifactPaths.metadata, "utf8"),
 	);
 	assert.equal(metadata.row.canaryToken, "NATIVELY_CAPTURE_CANARY_PROTECTED");
 	assert.equal(metadata.passed, true);
@@ -66,9 +68,11 @@ test("CaptureMatrixHarness mock adapter produces deterministic pass artifacts", 
 test("CaptureMatrixHarness mock adapter fails when expected hidden canary is visible", async () => {
 	const outputRoot = await mkdtemp(path.join(os.tmpdir(), "capture-matrix-"));
 	const rows = createDefaultMockCaptureMatrixRows();
+	const row = rows[0];
+	if (!row) throw new Error("No row created");
 
 	const result = await runCaptureMatrix({
-		rows: [rows[0]!],
+		rows: [row],
 		adapter: new MockCaptureAdapter({ "mock-protected-screen-share": true }),
 		outputRoot,
 		runId: "mock-fail",
@@ -76,6 +80,6 @@ test("CaptureMatrixHarness mock adapter fails when expected hidden canary is vis
 	});
 
 	assert.equal(result.passed, false);
-	assert.equal(result.results[0]!.actualResult, "visible");
-	assert.match(result.results[0]!.reason ?? "", /expected hidden/);
+	assert.equal(result.results[0]?.actualResult, "visible");
+	assert.match(result.results[0]?.reason ?? "", /expected hidden/);
 });

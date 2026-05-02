@@ -98,7 +98,7 @@ export interface RouterOptions {
 /**
  * Pattern matchers for each conversation kind.
  */
-const PATTERNS: Record<Exclude<ConversationKind, "technical">, RegExp[]> = {
+const _PATTERNS: Record<Exclude<ConversationKind, "technical">, RegExp[]> = {
 	smalltalk: [
 		/^(hi|hello|hey|good morning|good afternoon|good evening)/i,
 		/^(how are you|how's it going|what's up)/i,
@@ -158,7 +158,7 @@ const DEEP_DIVE_STRATEGY_HINT =
 const PUSHBACK_STRATEGY_HINT =
 	'Reframe concern with architectural reasoning. Use template: "That would be a concern if X. In our case, we did Y because Z."';
 
-const REFINEMENT_PATTERNS: { pattern: RegExp; intent: RefinementIntent }[] = [
+const _REFINEMENT_PATTERNS: { pattern: RegExp; intent: RefinementIntent }[] = [
 	{ pattern: /make it shorter|shorten this|be brief/i, intent: "shorten" },
 	{
 		pattern: /make it longer|expand on this|elaborate more/i,
@@ -253,7 +253,8 @@ export class ConsciousModeRouter {
 		// Check cache first
 		const cacheKey = this.getCacheKey(utterance, options);
 		if (this.classificationCache.has(cacheKey)) {
-			return this.classificationCache.get(cacheKey)!;
+			const cached = this.classificationCache.get(cacheKey);
+			if (cached) return cached;
 		}
 
 		// Evict oldest entry if cache is full
@@ -299,7 +300,7 @@ export class ConsciousModeRouter {
 	 */
 	private async classifyWithEmbeddings(
 		utterance: string,
-		options: RouterOptions,
+		_options: RouterOptions,
 	): Promise<{
 		kind: ConversationKind;
 		confidence: number;
@@ -713,19 +714,6 @@ Return JSON with keys: kind (one of the categories above), confidence (0-1), ref
 			runJudge: false,
 			reason: `${basePlan.reason}_degraded_mode`,
 		};
-	}
-
-	/**
-	 * Detect refinement intent from utterance.
-	 */
-	private detectRefinementIntent(utterance: string): RefinementIntent | null {
-		const lowercased = utterance.toLowerCase();
-		for (const { pattern, intent } of REFINEMENT_PATTERNS) {
-			if (pattern.test(lowercased)) {
-				return intent;
-			}
-		}
-		return null;
 	}
 
 	/**

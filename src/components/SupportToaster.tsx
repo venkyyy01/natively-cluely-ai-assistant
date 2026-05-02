@@ -1,5 +1,5 @@
 import { AnimatePresence, motion } from "framer-motion";
-import { ExternalLink, Heart, X } from "lucide-react";
+import { Heart } from "lucide-react";
 import React, { useEffect, useState } from "react";
 import { getOptionalElectronMethod } from "../lib/electronApi";
 import { cn } from "../lib/utils";
@@ -18,7 +18,7 @@ export const SupportToaster: React.FC<SupportToasterProps> = ({
 	const setDonationComplete = getOptionalElectronMethod("setDonationComplete");
 	const openExternal = getOptionalElectronMethod("openExternal");
 	const [isVisible, setIsVisible] = useState(false);
-	const [hasDonated, setHasDonated] = useState(false);
+	const [_hasDonated, setHasDonated] = useState(false);
 	const [isButtonHovered, setIsButtonHovered] = useState(false);
 
 	useEffect(() => {
@@ -49,7 +49,7 @@ export const SupportToaster: React.FC<SupportToasterProps> = ({
 		return () => {
 			mounted = false;
 		};
-	}, []);
+	}, [getDonationStatus, markDonationToastShown]);
 
 	useEffect(() => {
 		const handleKeyDown = (e: KeyboardEvent) => {
@@ -85,7 +85,7 @@ export const SupportToaster: React.FC<SupportToasterProps> = ({
 		};
 		window.addEventListener("focus", handleFocus);
 		return () => window.removeEventListener("focus", handleFocus);
-	}, []);
+	}, [setDonationComplete]);
 
 	const handleDismiss = () => {
 		setIsVisible(false);
@@ -207,6 +207,7 @@ export const SupportToaster: React.FC<SupportToasterProps> = ({
 						<div className="mt-auto w-full flex flex-col items-center pb-[32px]">
 							{/* Primary Button */}
 							<button
+								type="button"
 								onClick={handleSupport}
 								onMouseEnter={() => setIsButtonHovered(true)}
 								onMouseLeave={() => setIsButtonHovered(false)}
@@ -221,6 +222,7 @@ export const SupportToaster: React.FC<SupportToasterProps> = ({
 
 							{/* Secondary Button */}
 							<button
+								type="button"
 								onClick={handleDismiss}
 								className="text-[14px] text-white/30 font-medium hover:text-white/60 transition-colors duration-200"
 							>

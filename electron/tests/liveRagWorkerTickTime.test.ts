@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
-import fs from "fs";
-import os from "os";
-import path from "path";
-import { Worker } from "worker_threads";
+import { Worker } from "node:worker_threads";
 
 /**
  * NAT-053: chunk inserts run in `liveRagIndexerWorker` (worker_threads), not on the main thread.

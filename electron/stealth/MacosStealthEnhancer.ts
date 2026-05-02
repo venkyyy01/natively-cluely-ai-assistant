@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { EventEmitter } from "events";
+import { EventEmitter } from "node:events";
 import { loadNativeStealthModule } from "./nativeStealthModule";
 import { decideStealthFallback } from "./StealthFallbackPolicy";
 
@@ -134,7 +134,7 @@ export class MacosStealthEnhancer extends EventEmitter {
 				"-lf",
 				"ScreenCaptureAgent",
 			]);
-			if (stdout && stdout.trim()) {
+			if (stdout?.trim()) {
 				const lines = stdout.trim().split("\n").filter(Boolean);
 				for (const line of lines) {
 					const parts = line.split(/\s+/);
@@ -232,7 +232,7 @@ for window in windows:
 
 		try {
 			const stdout = await this.execPromise("pgrep", ["-f", "Google Chrome"]);
-			if (stdout && stdout.trim()) {
+			if (stdout?.trim()) {
 				for (const line of stdout.trim().split("\n").filter(Boolean)) {
 					const pid = parseInt(line.split(/\s+/)[0], 10);
 					if (Number.isFinite(pid)) {
@@ -246,7 +246,7 @@ for window in windows:
 
 		try {
 			const stdout = await this.execPromise("pgrep", ["-f", "Microsoft Edge"]);
-			if (stdout && stdout.trim()) {
+			if (stdout?.trim()) {
 				for (const line of stdout.trim().split("\n").filter(Boolean)) {
 					const pid = parseInt(line.split(/\s+/)[0], 10);
 					if (Number.isFinite(pid)) {
@@ -294,7 +294,7 @@ for window in windows:
 				"-p",
 				String(pid),
 			]);
-			if (stdout && stdout.trim()) {
+			if (stdout?.trim()) {
 				const parts = stdout.trim().split(/\s+/);
 				if (parts.length >= 2) {
 					const parentPid = parseInt(parts[0], 10);

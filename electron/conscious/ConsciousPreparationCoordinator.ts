@@ -2,7 +2,6 @@ import type {
 	ConsciousModeStructuredResponse,
 	ReasoningThread,
 } from "../ConsciousMode";
-import type { AnswerRoute } from "../latency/AnswerLatencyTracker";
 import type { IntentResult } from "../llm/IntentClassifier";
 import type { CoordinatedIntentResult } from "../llm/providers/IntentClassificationCoordinator";
 import type { AssistantResponse } from "../llm/TemporalContextBuilder";

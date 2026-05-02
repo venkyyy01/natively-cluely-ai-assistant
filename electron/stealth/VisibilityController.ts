@@ -23,7 +23,7 @@ export interface VisibilityControllerOptions {
 	recordProtectionEvent: (
 		type: ProtectionEventType,
 		context?: ProtectionEventContext,
-	) => ProtectionSnapshot | void;
+	) => ProtectionSnapshot | undefined;
 	logger?: Pick<Console, "warn">;
 }
 
@@ -106,7 +106,7 @@ export class VisibilityController {
 	setOpacity(
 		win: VisibilityCapableWindow | null | undefined,
 		value: number,
-		context: VisibilityOperationContext,
+		_context: VisibilityOperationContext,
 	): void {
 		if (isDestroyed(win) || typeof win?.setOpacity !== "function") {
 			return;

@@ -1,4 +1,4 @@
-import { spawn } from "child_process";
+import { spawn } from "node:child_process";
 import { DatabaseManager } from "../db/DatabaseManager";
 
 export class OllamaBootstrap {
@@ -84,7 +84,7 @@ export class OllamaBootstrap {
 
 		if (!res.ok) throw new Error(`Ollama pull failed: ${res.statusText}`);
 
-		const reader = res.body!.getReader();
+		const reader = res.body?.getReader();
 		const decoder = new TextDecoder();
 
 		while (true) {

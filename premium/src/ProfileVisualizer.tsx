@@ -1,10 +1,4 @@
-import {
-	Briefcase,
-	Calendar,
-	Code,
-	ExternalLink,
-	GraduationCap,
-} from "lucide-react";
+import { Briefcase, Code, ExternalLink, GraduationCap } from "lucide-react";
 import type React from "react";
 
 interface ExperienceEntry {

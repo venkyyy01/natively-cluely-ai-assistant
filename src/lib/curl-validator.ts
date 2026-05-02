@@ -7,7 +7,7 @@ export interface CurlValidationResult {
 }
 
 export const validateCurl = (curl: string): CurlValidationResult => {
-	if (!curl || !curl.trim()) {
+	if (!curl?.trim()) {
 		return { isValid: false, message: "Command cannot be empty." };
 	}
 
@@ -45,7 +45,7 @@ export const validateCurl = (curl: string): CurlValidationResult => {
 		}
 
 		return { isValid: true, json };
-	} catch (error) {
+	} catch (_error) {
 		return {
 			isValid: false,
 			message: "Invalid cURL command syntax. Please check for typos.",

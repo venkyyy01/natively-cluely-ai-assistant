@@ -71,7 +71,7 @@ export class QuestionReactionClassifier {
 		const lower = normalized.toLowerCase();
 		const hasThread = !!input.activeThread;
 		const targetFacets = collectTargets(input.latestResponse);
-		const cues: string[] = [];
+		const _cues: string[] = [];
 
 		if (!hasThread) {
 			return {

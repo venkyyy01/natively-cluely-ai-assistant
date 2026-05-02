@@ -1,5 +1,5 @@
 import assert from "node:assert";
-import { afterEach, beforeEach, describe, it, mock } from "node:test";
+import { beforeEach, describe, it, mock } from "node:test";
 
 describe("Audio Pipeline Auto-Recovery", () => {
 	let mockAppState: any;
@@ -24,7 +24,7 @@ describe("Audio Pipeline Auto-Recovery", () => {
 	it("should attempt recovery on first error during active meeting", async () => {
 		mockAppState.isMeetingActive = true;
 
-		const errorHandler = async (err: Error) => {
+		const errorHandler = async (_err: Error) => {
 			if (
 				mockAppState.isMeetingActive &&
 				!mockAppState.audioRecoveryAttempted
@@ -84,7 +84,7 @@ describe("Audio Pipeline Auto-Recovery", () => {
 		mockAppState.isMeetingActive = true;
 		mockAppState.audioRecoveryAttempted = false;
 
-		const errorHandler = async (err: Error) => {
+		const errorHandler = async (_err: Error) => {
 			if (
 				mockAppState.isMeetingActive &&
 				!mockAppState.audioRecoveryAttempted
@@ -93,7 +93,7 @@ describe("Audio Pipeline Auto-Recovery", () => {
 				try {
 					await mockAppState.reconfigureAudio();
 					mockAppState.setNativeAudioConnected(true);
-				} catch (recoveryErr) {
+				} catch (_recoveryErr) {
 					mockAppState.broadcast(
 						"meeting-audio-error",
 						"Audio capture failed and recovery unsuccessful",

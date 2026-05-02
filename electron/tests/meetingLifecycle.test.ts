@@ -78,7 +78,7 @@ describe("Meeting Lifecycle Race Conditions", () => {
 	it("should save meeting data on forced quit", async () => {
 		let savedMeetingData: any = null;
 		const mockPersistence = {
-			waitForPendingSaves: mock.fn(async (timeout: number) => {
+			waitForPendingSaves: mock.fn(async (_timeout: number) => {
 				savedMeetingData = { transcript: [], usage: [] };
 			}),
 		};
@@ -102,7 +102,7 @@ describe("Meeting Lifecycle Race Conditions", () => {
 
 	it("should prevent duplicate meeting starts", async () => {
 		let startCount = 0;
-		const meetingStartMutex = Promise.resolve();
+		const _meetingStartMutex = Promise.resolve();
 
 		const startMeeting = async (sequence: number) => {
 			if (

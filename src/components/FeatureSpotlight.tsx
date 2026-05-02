@@ -1,7 +1,7 @@
 import { AnimatePresence, motion } from "framer-motion";
-import { Bell, Check } from "lucide-react";
+import { Bell } from "lucide-react";
 import type React from "react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import mainui from "../UI_comp/mainui.png";
 
 // --- Types ---
@@ -47,7 +47,7 @@ export const FeatureSpotlight: React.FC = () => {
 			try {
 				const saved = localStorage.getItem("natively_feature_interest");
 				return saved ? JSON.parse(saved) : {};
-			} catch (e) {
+			} catch (_e) {
 				return {};
 			}
 		},
@@ -71,7 +71,7 @@ export const FeatureSpotlight: React.FC = () => {
 		}, intervalDuration);
 
 		return () => clearTimeout(timer);
-	}, [currentIndex, isPaused]);
+	}, [isPaused]);
 
 	// --- Interaction Handlers ---
 

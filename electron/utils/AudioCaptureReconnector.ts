@@ -1,4 +1,4 @@
-import { EventEmitter } from "events";
+import { EventEmitter } from "node:events";
 
 /**
  * AudioCaptureReconnector - Comprehensive audio reconnection management
@@ -103,7 +103,7 @@ export class AudioCaptureReconnector extends EventEmitter {
 	 */
 	public async reconnect(
 		captureInstance: AudioCaptureInstance,
-		originalError: Error,
+		_originalError: Error,
 		currentDeviceId?: string,
 	): Promise<boolean> {
 		if (this.isReconnecting) {
@@ -201,7 +201,7 @@ export class AudioCaptureReconnector extends EventEmitter {
 	 * Get list of reconnection strategies to try
 	 */
 	private getReconnectionStrategies(
-		captureInstance: AudioCaptureInstance,
+		_captureInstance: AudioCaptureInstance,
 		currentDeviceId?: string,
 	): ReconnectionStrategy[] {
 		const strategies: ReconnectionStrategy[] = [];

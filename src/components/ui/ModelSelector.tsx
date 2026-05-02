@@ -3,7 +3,6 @@ import {
 	ChevronDown,
 	Cloud,
 	Monitor,
-	Plus,
 	Server,
 	Terminal,
 } from "lucide-react";
@@ -67,7 +66,6 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
 				if (local) setOllamaModels(local);
 
 				// Build dynamic cloud models from credentials
-				// @ts-expect-error
 				const creds = await window.electronAPI?.getStoredCredentials?.();
 				const cModels: {
 					id: string;
@@ -139,6 +137,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
 	return (
 		<div className="relative" ref={dropdownRef}>
 			<button
+				type="button"
 				onClick={() => setIsOpen(!isOpen)}
 				className="flex items-center gap-2 px-3 py-1.5 bg-bg-input hover:bg-bg-elevated border border-border-subtle rounded-lg transition-colors text-xs font-medium text-text-primary max-w-[150px]"
 			>
@@ -154,18 +153,21 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
 					{/* Tabs */}
 					<div className="flex border-b border-border-subtle bg-bg-input/50">
 						<button
+							type="button"
 							onClick={() => setActiveTab("cloud")}
 							className={`flex-1 py-2 text-[10px] font-bold uppercase tracking-wider transition-colors ${activeTab === "cloud" ? "text-accent-primary bg-bg-item-surface border-t-2 border-t-accent-primary" : "text-text-secondary hover:text-text-primary"}`}
 						>
 							Cloud
 						</button>
 						<button
+							type="button"
 							onClick={() => setActiveTab("custom")}
 							className={`flex-1 py-2 text-[10px] font-bold uppercase tracking-wider transition-colors ${activeTab === "custom" ? "text-accent-primary bg-bg-item-surface border-t-2 border-t-accent-primary" : "text-text-secondary hover:text-text-primary"}`}
 						>
 							Custom
 						</button>
 						<button
+							type="button"
 							onClick={() => setActiveTab("local")}
 							className={`flex-1 py-2 text-[10px] font-bold uppercase tracking-wider transition-colors ${activeTab === "local" ? "text-accent-primary bg-bg-item-surface border-t-2 border-t-accent-primary" : "text-text-secondary hover:text-text-primary"}`}
 						>
@@ -225,7 +227,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
 								{customProviders.length === 0 ? (
 									<div className="text-center py-6 text-text-tertiary">
 										<p className="text-xs mb-2">No custom providers.</p>
-										<button className="text-[10px] text-accent-primary hover:underline">
+										<button type="button" className="text-[10px] text-accent-primary hover:underline">
 											Manage in Settings
 										</button>
 									</div>
@@ -294,6 +296,7 @@ const ModelOption: React.FC<ModelOptionProps> = ({
 	onSelect,
 }) => (
 	<button
+		type="button"
 		onClick={onSelect}
 		className={`w-full flex items-center justify-between p-2 rounded-lg transition-colors group ${selected ? "bg-accent-primary/10" : "hover:bg-bg-input"}`}
 	>

@@ -48,8 +48,8 @@ test("NAT-083: prepare-route-start scenario routes to start", async () => {
 	const { results } = await runConsciousE2EHarness({});
 	const result = results.find((r) => r.scenario.id === "prepare-route-start");
 	assert.ok(result, "scenario should exist");
-	assert.equal(result!.route.preRouteDecision.threadAction, "start");
-	assert.equal(result!.route.preRouteDecision.qualifies, true);
+	assert.equal(result?.route.preRouteDecision.threadAction, "start");
+	assert.equal(result?.route.preRouteDecision.qualifies, true);
 });
 
 test("NAT-083: prepare-route-continue scenario routes to continue", async () => {
@@ -58,8 +58,8 @@ test("NAT-083: prepare-route-continue scenario routes to continue", async () => 
 		(r) => r.scenario.id === "prepare-route-continue",
 	);
 	assert.ok(result, "scenario should exist");
-	assert.equal(result!.route.preRouteDecision.threadAction, "continue");
-	assert.equal(result!.route.preRouteDecision.qualifies, true);
+	assert.equal(result?.route.preRouteDecision.threadAction, "continue");
+	assert.equal(result?.route.preRouteDecision.qualifies, true);
 });
 
 test("NAT-083: acceleration-overlay-prefetch-boost overrides with strong prefetch", async () => {
@@ -69,7 +69,7 @@ test("NAT-083: acceleration-overlay-prefetch-boost overrides with strong prefetc
 	);
 	assert.ok(result, "scenario should exist");
 	assert.equal(
-		result!.route.preRouteDecision.qualifies,
+		result?.route.preRouteDecision.qualifies,
 		true,
 		"strong prefetch should qualify",
 	);
@@ -79,7 +79,7 @@ test("NAT-083: circuit-breaker-open forces standard route", async () => {
 	const { results } = await runConsciousE2EHarness({});
 	const result = results.find((r) => r.scenario.id === "circuit-breaker-open");
 	assert.ok(result, "scenario should exist");
-	assert.equal(result!.route.preRouteDecision.qualifies, true);
+	assert.equal(result?.route.preRouteDecision.qualifies, true);
 	// When circuit is open, the orchestrator should still qualify but the effective
 	// route determined by the harness should be standard
 });
@@ -90,7 +90,7 @@ test("NAT-083: topical-compatibility-reset resets on off-topic question", async 
 		(r) => r.scenario.id === "topical-compatibility-reset",
 	);
 	assert.ok(result, "scenario should exist");
-	assert.equal(result!.route.preRouteDecision.threadAction, "reset");
+	assert.equal(result?.route.preRouteDecision.threadAction, "reset");
 });
 
 test("NAT-083: conscious-disabled-ignore ignores when disabled", async () => {
@@ -99,6 +99,6 @@ test("NAT-083: conscious-disabled-ignore ignores when disabled", async () => {
 		(r) => r.scenario.id === "conscious-disabled-ignore",
 	);
 	assert.ok(result, "scenario should exist");
-	assert.equal(result!.route.preRouteDecision.threadAction, "ignore");
-	assert.equal(result!.route.preRouteDecision.qualifies, false);
+	assert.equal(result?.route.preRouteDecision.threadAction, "ignore");
+	assert.equal(result?.route.preRouteDecision.qualifies, false);
 });

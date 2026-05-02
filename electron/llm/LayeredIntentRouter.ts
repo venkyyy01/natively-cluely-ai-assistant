@@ -220,7 +220,7 @@ export class LayeredIntentRouter {
 					.filter((r) => r.result !== null)
 					.map(
 						(r) =>
-							`${r.provider}=${r.result!.intent}(${(r.result!.confidence * 100).toFixed(0)}%)`,
+							`${r.provider}=${r.result?.intent}(${(r.result?.confidence * 100).toFixed(0)}%)`,
 					)
 					.join(", ") +
 				` | decision=${ensembleDecision?.intent ?? "uncertain"}`,
@@ -471,8 +471,8 @@ export class LayeredIntentRouter {
 
 	private async runSLM(
 		question: string,
-		transcript: string,
-		assistantResponseCount: number,
+		_transcript: string,
+		_assistantResponseCount: number,
 	): Promise<FastClassifierResult> {
 		const start = Date.now();
 		try {

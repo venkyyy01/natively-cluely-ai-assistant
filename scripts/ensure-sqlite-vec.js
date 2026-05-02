@@ -3,9 +3,9 @@
  * even when the current CPU doesn't match (e.g. building x64 release on arm64).
  * npm skips optional deps with non-matching "cpu" constraints, so we force-install them.
  */
-const { execSync } = require("child_process");
-const path = require("path");
-const fs = require("fs");
+const { execSync } = require("node:child_process");
+const path = require("node:path");
+const fs = require("node:fs");
 
 const SQLITE_VEC_VERSION = "0.1.7-alpha.2";
 

@@ -1,5 +1,5 @@
 import { Check, Loader2 } from "lucide-react";
-import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { prettifyModelId, STANDARD_CLOUD_MODELS } from "../utils/modelUtils";
 
 // Define Model Types
@@ -55,9 +55,7 @@ const ModelSelectorWindow = () => {
 					// If no models found, try to fix/restart Ollama (server might be down)
 					if (!oModels || oModels.length === 0) {
 						try {
-							// @ts-expect-error
 							if (window.electronAPI?.forceRestartOllama) {
-								// @ts-expect-error
 								await window.electronAPI.forceRestartOllama();
 								// Wait a moment for server to come up
 								await new Promise((resolve) => setTimeout(resolve, 1500));
@@ -71,7 +69,7 @@ const ModelSelectorWindow = () => {
 					}
 
 					if (oModels) ollamaModels = oModels;
-				} catch (e) {
+				} catch (_e) {
 					// Ignore ollama errors here
 				}
 
@@ -119,7 +117,7 @@ const ModelSelectorWindow = () => {
 
 				// 4. Get Current Active Model
 				const config = await window.electronAPI?.getCurrentLlmConfig?.(); // Get runtime model
-				if (config && config.model) {
+				if (config?.model) {
 					setCurrentModel(config.model);
 					localStorage.setItem("cached-current-model", config.model);
 				}
@@ -139,7 +137,7 @@ const ModelSelectorWindow = () => {
 			},
 		);
 		return () => unsubscribe?.();
-	}, []);
+	}, [availableModels.length]);
 
 	const handleSelectFn = (modelId: string) => {
 		setCurrentModel(modelId);

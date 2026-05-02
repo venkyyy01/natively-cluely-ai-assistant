@@ -7,10 +7,7 @@
 
 import assert from "node:assert";
 import { describe, it } from "node:test";
-import {
-	ConsciousModeRouter,
-	type RouterOptions,
-} from "../conscious/ConsciousModeRouter";
+import { ConsciousModeRouter } from "../conscious/ConsciousModeRouter";
 
 // Mock LLMHelper for testing
 class MockLLMHelper {
@@ -18,9 +15,9 @@ class MockLLMHelper {
 
 	async *streamChat(
 		prompt: string,
-		imagePaths: string[] | undefined,
-		context: string | undefined,
-		systemPrompt: string,
+		_imagePaths: string[] | undefined,
+		_context: string | undefined,
+		_systemPrompt: string,
 	): AsyncGenerator<string> {
 		this.prompts.push(prompt);
 		const utterance = prompt.match(/Utterance: "([\s\S]*?)"/)?.[1] ?? "";

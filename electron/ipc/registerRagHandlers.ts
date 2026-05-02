@@ -84,8 +84,7 @@ export function registerRagHandlers({
 			] as const,
 		async (event, { meetingId, query }) => {
 			const ragManager = getRagManager(appState);
-			if (!ragManager || !ragManager.isReady())
-				return ragSuccess({ fallback: true });
+			if (!ragManager?.isReady()) return ragSuccess({ fallback: true });
 			if (
 				!ragManager.isMeetingProcessed(meetingId) &&
 				!ragManager.isLiveIndexingActive(meetingId)
@@ -136,8 +135,7 @@ export function registerRagHandlers({
 			] as const,
 		async (event, { query }) => {
 			const ragManager = getRagManager(appState);
-			if (!ragManager || !ragManager.isReady())
-				return ragSuccess({ fallback: true });
+			if (!ragManager?.isReady()) return ragSuccess({ fallback: true });
 			if (!ragManager.isLiveIndexingActive("live-meeting-current"))
 				return ragSuccess({ fallback: true });
 
@@ -185,8 +183,7 @@ export function registerRagHandlers({
 			] as const,
 		async (event, { query }) => {
 			const ragManager = getRagManager(appState);
-			if (!ragManager || !ragManager.isReady())
-				return ragSuccess({ fallback: true });
+			if (!ragManager?.isReady()) return ragSuccess({ fallback: true });
 
 			const abortController = new AbortController();
 			const queryKey = `global-${Date.now()}`;

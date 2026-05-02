@@ -74,6 +74,7 @@ export const AudioConfigSection: React.FC<AudioConfigSectionProps> = ({
 
 				<div className="flex justify-end">
 					<button
+						type="button"
 						onClick={onTestSound}
 						className="text-xs bg-bg-input hover:bg-bg-elevated text-text-primary px-3 py-1.5 rounded-md transition-colors flex items-center gap-2"
 					>
@@ -104,14 +105,16 @@ export const AudioConfigSection: React.FC<AudioConfigSectionProps> = ({
 								</p>
 							</div>
 						</div>
-						<div
+						<button
+							type="button"
 							onClick={onToggleExperimentalSck}
 							className={`w-11 h-6 rounded-full relative transition-colors shrink-0 ${useExperimentalSck ? "bg-amber-500" : "bg-bg-toggle-switch border border-border-muted"}`}
+							aria-label="Toggle experimental Screen Capture Kit"
 						>
 							<div
 								className={`absolute top-1 left-1 w-4 h-4 rounded-full bg-white transition-transform ${useExperimentalSck ? "translate-x-5" : "translate-x-0"}`}
 							/>
-						</div>
+						</button>
 					</div>
 				</div>
 			</div>

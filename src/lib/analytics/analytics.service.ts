@@ -118,9 +118,10 @@ class AnalyticsService {
 		try {
 			// 1. Initialize dataLayer
 			window.dataLayer = window.dataLayer || [];
-			window.gtag = function () {
-				window.dataLayer.push(arguments);
-			};
+			function gtagWrapper(...args: unknown[]) {
+				window.dataLayer.push(args);
+			}
+			window.gtag = gtagWrapper;
 			window.gtag("js", new Date());
 
 			// 2. Configure GA4 with privacy settings

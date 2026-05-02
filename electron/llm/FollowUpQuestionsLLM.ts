@@ -1,5 +1,5 @@
 import type { LLMHelper } from "../LLMHelper";
-import { Err, LLMError, Ok, type Result, wrapAsync } from "../types/Result";
+import { LLMError, type Result, wrapAsync } from "../types/Result";
 import { UNIVERSAL_FOLLOW_UP_QUESTIONS_PROMPT } from "./prompts";
 
 export class FollowUpQuestionsLLM {

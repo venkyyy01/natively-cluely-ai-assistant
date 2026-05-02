@@ -11,7 +11,7 @@
  * - Race condition prevention
  */
 
-import { EventEmitter } from "events";
+import { EventEmitter } from "node:events";
 import { AsyncMutex } from "./AsyncMutex";
 
 export enum MeetingState {

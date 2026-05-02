@@ -2,7 +2,7 @@ import type { ConsciousModeStructuredResponse } from "../ConsciousMode";
 import { isVerifierOptimizationActive } from "../config/optimizations";
 import type { AnswerHypothesis } from "./AnswerHypothesisStore";
 import { SemanticEntailmentVerifier } from "./SemanticEntailmentVerifier";
-import type { SearchResult, TranscriptIndex } from "./TranscriptIndex";
+import type { TranscriptIndex } from "./TranscriptIndex";
 
 export interface ConsciousProvenanceVerdict {
 	ok: boolean;

@@ -165,6 +165,6 @@ async function sendRequest(
 		};
 
 		child.stdout?.on("data", onData);
-		child.stdin?.write(JSON.stringify(request) + "\n");
+		child.stdin?.write(`${JSON.stringify(request)}\n`);
 	});
 }

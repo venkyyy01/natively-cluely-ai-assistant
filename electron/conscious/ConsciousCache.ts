@@ -1,7 +1,7 @@
 // electron/conscious/ConsciousCache.ts
 // Intelligent caching layer with LRU eviction and semantic similarity matching
 
-import { createHash } from "crypto";
+import { createHash } from "node:crypto";
 import type {
 	Cache,
 	CacheGetOptions,

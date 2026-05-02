@@ -5,11 +5,6 @@ import {
 import { Metrics } from "../runtime/Metrics";
 import { EnhancedCache } from "./EnhancedCache";
 
-interface CacheEntry<T> {
-	expiresAt: number;
-	value: T;
-}
-
 export interface OptimizedCache<K, V> {
 	get(key: K): V | undefined;
 	set(key: K, value: V, ttlMs?: number): void;

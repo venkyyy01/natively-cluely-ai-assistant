@@ -1,7 +1,7 @@
+import fsPromises from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { app } from "electron";
-import fsPromises from "fs/promises";
-import os from "os";
-import path from "path";
 import { gracefulShutdown } from "../GracefulShutdownManager";
 import { redactStealthSubstrings } from "../stealth/logRedactor";
 
@@ -12,7 +12,7 @@ process.stderr?.on?.("error", () => {});
 
 process.on("uncaughtException", (err: Error): void => {
 	void logToFileAsync(
-		"[CRITICAL] Uncaught Exception: " + (err.stack || err.message || err),
+		`[CRITICAL] Uncaught Exception: ${err.stack || err.message || err}`,
 	)
 		.catch((): undefined => undefined)
 		.finally((): void => {
@@ -25,7 +25,7 @@ process.on(
 	(reason: unknown, promise: Promise<unknown>): void => {
 		const msg = reason instanceof Error ? reason.stack : String(reason);
 		void logToFileAsync(
-			"[CRITICAL] Unhandled Rejection at: " + promise + " reason: " + msg,
+			`[CRITICAL] Unhandled Rejection at: ${promise} reason: ${msg}`,
 		)
 			.catch((): undefined => undefined)
 			.finally((): void => {
@@ -124,11 +124,10 @@ async function rotateLogsIfNeededAsync(): Promise<void> {
 			originalLog(
 				`[LogRotation] Rotated debug log (size was ${Math.round(stats.size / 1024 / 1024)}MB)`,
 			);
-		} catch {
+		} catch (e) {
 			// Log file doesn't exist yet, nothing to rotate
+			originalError("[LogRotation] Failed to rotate logs:", e);
 		}
-	} catch (e) {
-		originalError("[LogRotation] Failed to rotate logs:", e);
 	} finally {
 		logRotationCheckPending = false;
 	}
@@ -160,13 +159,11 @@ async function flushLogQueue(): Promise<void> {
 		// redactor before it touches disk. We do this here (rather than at
 		// enqueue time) so the in-memory queue and stdout/stderr remain
 		// unaffected — only the persisted file is sanitized.
-		const content =
-			pending
-				.map(
-					(msg) =>
-						`${new Date().toISOString()} ${redactStealthSubstrings(msg)}`,
-				)
-				.join("\n") + "\n";
+		const content = `${pending
+			.map(
+				(msg) => `${new Date().toISOString()} ${redactStealthSubstrings(msg)}`,
+			)
+			.join("\n")}\n`;
 		await fsPromises.appendFile(logFile, content);
 	} catch (error) {
 		originalError("[Logging] Failed to append debug log:", error);
@@ -227,7 +224,7 @@ console.log = (...args: any[]) => {
 					: String(a),
 		)
 		.join(" ");
-	logToFile("[LOG] " + msg);
+	logToFile(`[LOG] ${msg}`);
 	try {
 		originalLog.apply(console, args);
 	} catch {}
@@ -243,7 +240,7 @@ console.warn = (...args: any[]) => {
 					: String(a),
 		)
 		.join(" ");
-	logToFile("[WARN] " + msg);
+	logToFile(`[WARN] ${msg}`);
 	try {
 		originalWarn.apply(console, args);
 	} catch {}
@@ -259,7 +256,7 @@ console.error = (...args: any[]) => {
 					: String(a),
 		)
 		.join(" ");
-	logToFile("[ERROR] " + msg);
+	logToFile(`[ERROR] ${msg}`);
 	try {
 		originalError.apply(console, args);
 	} catch {}

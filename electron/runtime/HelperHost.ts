@@ -6,8 +6,8 @@
  * subprocesses (Foundation intent helper, macOS virtual display helper).
  */
 
-import { type ChildProcessWithoutNullStreams, spawn } from "child_process";
-import { EventEmitter } from "events";
+import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
+import { EventEmitter } from "node:events";
 
 export interface HelperHostSpec {
 	command: string;
@@ -88,7 +88,7 @@ export class HelperHost extends EventEmitter {
 				return;
 			}
 			this.pendingRequests.set(req.id, resolve);
-			this.process.stdin?.write(req.payload + "\n", (err) => {
+			this.process.stdin?.write(`${req.payload}\n`, (err) => {
 				if (err) reject(err);
 			});
 		});
@@ -125,7 +125,8 @@ export class HelperHost extends EventEmitter {
 			try {
 				const parsed = JSON.parse(trimmed) as HelperResponse;
 				if (parsed.id && this.pendingRequests.has(parsed.id)) {
-					const resolve = this.pendingRequests.get(parsed.id)!;
+					const resolve = this.pendingRequests.get(parsed.id);
+					if (!resolve) continue;
 					this.pendingRequests.delete(parsed.id);
 					resolve(parsed);
 				} else {

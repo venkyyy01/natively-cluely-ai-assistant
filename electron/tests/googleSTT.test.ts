@@ -24,8 +24,6 @@ class FakeRecognitionStream extends EventEmitter {
 class FakeSpeechClient {
 	static streams: FakeRecognitionStream[] = [];
 
-	constructor(_options: unknown) {}
-
 	streamingRecognize(): FakeRecognitionStream {
 		const stream = new FakeRecognitionStream();
 		FakeSpeechClient.streams.push(stream);

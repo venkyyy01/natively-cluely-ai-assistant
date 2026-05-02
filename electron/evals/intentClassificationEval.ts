@@ -147,7 +147,7 @@ function toSafeConfidence(value: number): number {
 function getBucketIndex(confidence: number): number {
 	const safeConfidence = toSafeConfidence(confidence);
 	for (let index = 0; index < CONFIDENCE_BUCKET_RANGES.length; index += 1) {
-		if (safeConfidence <= CONFIDENCE_BUCKET_RANGES[index]!.maxInclusive) {
+		if (safeConfidence <= CONFIDENCE_BUCKET_RANGES[index]?.maxInclusive) {
 			return index;
 		}
 	}

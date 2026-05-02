@@ -1,7 +1,7 @@
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { execFile, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { EventEmitter } from "events";
+import { EventEmitter } from "node:events";
 import type {
 	MacosLayer3CapabilityReport,
 	MacosLayer3CreateProtectedSessionRequest,

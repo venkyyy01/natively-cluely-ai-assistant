@@ -17,11 +17,11 @@ function makeStubClient(
 	name: string,
 	behavior: "ok" | "retryable" | "fatal",
 ): ProviderClient {
-	let calls = 0;
+	let _calls = 0;
 	return {
 		name,
 		async *stream(_req: ProviderRequest, _signal?: AbortSignal) {
-			calls += 1;
+			_calls += 1;
 			if (behavior === "ok") {
 				yield { kind: "token", text: "hello" };
 			} else if (behavior === "retryable") {

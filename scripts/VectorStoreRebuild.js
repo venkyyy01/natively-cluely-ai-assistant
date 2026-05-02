@@ -1,5 +1,5 @@
-const fs = require("fs");
-const path = require("path");
+const fs = require("node:fs");
+const path = require("node:path");
 const content = `// electron/rag/VectorStore.ts
 // SQLite-based vector storage with native sqlite-vec search (fallback to JS cosine similarity)
 // JS fallback is offloaded to a worker_threads Worker to avoid blocking the Electron main thread.

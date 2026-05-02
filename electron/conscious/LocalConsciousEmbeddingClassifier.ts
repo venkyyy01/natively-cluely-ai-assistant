@@ -135,8 +135,11 @@ export class LocalConsciousEmbeddingClassifier {
 				? (["coreml", "cuda", "dml", "cpu"] as any[])
 				: (["cpu"] as any[]);
 
+			if (!this.options.modelPath) {
+				throw new Error("modelPath is required");
+			}
 			this.model = await this.ort.InferenceSession.create(
-				this.options.modelPath!,
+				this.options.modelPath,
 				{
 					executionProviders,
 				},
@@ -232,7 +235,8 @@ export class LocalConsciousEmbeddingClassifier {
 		const cacheKey = text.toLowerCase().trim();
 
 		if (this.embeddingCache.has(cacheKey)) {
-			return this.embeddingCache.get(cacheKey)!;
+			const cached = this.embeddingCache.get(cacheKey);
+			if (cached) return cached;
 		}
 
 		// Evict oldest entry if cache is full

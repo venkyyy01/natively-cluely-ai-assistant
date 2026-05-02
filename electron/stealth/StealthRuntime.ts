@@ -1,5 +1,5 @@
 import path from "node:path";
-import { app, BrowserWindow, type IpcMainEvent, ipcMain } from "electron";
+import { BrowserWindow, type IpcMainEvent, ipcMain } from "electron";
 import { attachRendererBridgeMonitor } from "../runtime/rendererBridgeHealth";
 import {
 	resolveRendererPreloadPath,

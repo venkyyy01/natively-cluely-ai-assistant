@@ -1,11 +1,11 @@
+import crypto from "node:crypto";
+import { EventEmitter } from "node:events";
+import fs from "node:fs";
+import http from "node:http";
+import path from "node:path";
+import url from "node:url";
 import axios from "axios";
-import crypto from "crypto";
 import { app, safeStorage, shell } from "electron";
-import { EventEmitter } from "events";
-import fs from "fs";
-import http from "http";
-import path from "path";
-import url from "url";
 
 // Configuration
 // In a real app, these should be in environment variables or build configs
@@ -43,7 +43,6 @@ export class CalendarManager extends EventEmitter {
 	private refreshToken: string | null = null;
 	private expiryDate: number | null = null;
 	private isConnected: boolean = false;
-	private updateInterval: NodeJS.Timeout | null = null;
 	private pendingOauthState: string | null = null;
 
 	private createPkcePair(): { verifier: string; challenge: string } {
@@ -368,7 +367,7 @@ export class CalendarManager extends EventEmitter {
 		});
 
 		const encrypted = safeStorage.encryptString(data);
-		const tmpPath = TOKEN_PATH + ".tmp";
+		const tmpPath = `${TOKEN_PATH}.tmp`;
 		fs.writeFileSync(tmpPath, encrypted);
 		fs.renameSync(tmpPath, TOKEN_PATH);
 	}
@@ -445,7 +444,7 @@ export class CalendarManager extends EventEmitter {
 			sound: true,
 		});
 
-		notif.on("action", (event_unused: any, index: number) => {
+		notif.on("action", (_event_unused: any, index: number) => {
 			if (index === 0) {
 				// Start Meeting
 				// We need to tell the main process to open window and start meeting
@@ -467,7 +466,7 @@ export class CalendarManager extends EventEmitter {
 	// =========================================================================
 
 	public async getUpcomingEvents(
-		force: boolean = false,
+		_force: boolean = false,
 	): Promise<CalendarEvent[]> {
 		if (!this.isConnected || !this.accessToken) return [];
 

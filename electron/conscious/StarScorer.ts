@@ -125,7 +125,10 @@ export class StarScorer {
 	private extractFeatures(
 		response: ConsciousModeStructuredResponse,
 	): StarFeatures {
-		const behavioral = response.behavioralAnswer!;
+		const behavioral = response.behavioralAnswer;
+		if (!behavioral) {
+			throw new Error("behavioralAnswer is required");
+		}
 
 		const actionWordCount = this.wordCount(behavioral.action);
 		const situationWordCount = this.wordCount(behavioral.situation);

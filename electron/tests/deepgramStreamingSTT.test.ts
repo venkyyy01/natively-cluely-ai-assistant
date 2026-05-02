@@ -96,12 +96,14 @@ test("DeepgramStreamingSTT ignores stale socket close events after an in-place r
 		stt.start();
 		assert.equal(FakeWebSocket.instances.length, 1);
 
-		const firstSocket = FakeWebSocket.instances[0]!;
+		const firstSocket = FakeWebSocket.instances[0];
+		if (!firstSocket) throw new Error("No first socket");
 		firstSocket.open();
 
 		stt.setRecognitionLanguage("spanish");
 		assert.equal(FakeWebSocket.instances.length, 2);
-		const secondSocket = FakeWebSocket.instances[1]!;
+		const secondSocket = FakeWebSocket.instances[1];
+		if (!secondSocket) throw new Error("No second socket");
 		assert.equal(firstSocket.closeCalls, 1);
 
 		firstSocket.closeWith(1006, "stale-close");
@@ -134,7 +136,8 @@ test("DeepgramStreamingSTT buffers audio written before the websocket is open an
 		stt.start();
 		assert.equal(FakeWebSocket.instances.length, 1);
 
-		const socket = FakeWebSocket.instances[0]!;
+		const socket = FakeWebSocket.instances[0];
+		if (!socket) throw new Error("No socket");
 		stt.write(Buffer.from([1, 0, 2, 0, 3, 0, 4, 0]));
 
 		assert.equal(socket.sent.length, 0);
@@ -188,7 +191,8 @@ test("DeepgramStreamingSTT only emits final transcript events when Deepgram itse
 		});
 
 		stt.start();
-		const socket = FakeWebSocket.instances[0]!;
+		const socket = FakeWebSocket.instances[0];
+		if (!socket) throw new Error("No socket");
 		socket.open();
 
 		socket.emit(
@@ -242,13 +246,13 @@ test("DeepgramStreamingSTT only emits final transcript events when Deepgram itse
 			1,
 			"one stt.utterance_end_seen telemetry event",
 		);
-		assert.equal(telemetry[0]!.kind, "stt.utterance_end_seen");
+		assert.equal(telemetry[0]?.kind, "stt.utterance_end_seen");
 		assert.equal(
-			telemetry[0]!.hadPendingInterim,
+			telemetry[0]?.hadPendingInterim,
 			true,
 			"telemetry records that an interim was in flight",
 		);
-		assert.equal(telemetry[0]!.pendingInterimLength, "hello there".length);
+		assert.equal(telemetry[0]?.pendingInterimLength, "hello there".length);
 
 		stt.stop();
 	} finally {
@@ -286,7 +290,8 @@ test("DeepgramStreamingSTT UtteranceEnd with no pending interim emits telemetry 
 		});
 
 		stt.start();
-		const socket = FakeWebSocket.instances[0]!;
+		const socket = FakeWebSocket.instances[0];
+		if (!socket) throw new Error("No socket");
 		socket.open();
 
 		socket.emit(
@@ -296,9 +301,9 @@ test("DeepgramStreamingSTT UtteranceEnd with no pending interim emits telemetry 
 
 		assert.deepEqual(transcripts, []);
 		assert.equal(telemetry.length, 1);
-		assert.equal(telemetry[0]!.kind, "stt.utterance_end_seen");
-		assert.equal(telemetry[0]!.hadPendingInterim, false);
-		assert.equal(telemetry[0]!.pendingInterimLength, 0);
+		assert.equal(telemetry[0]?.kind, "stt.utterance_end_seen");
+		assert.equal(telemetry[0]?.hadPendingInterim, false);
+		assert.equal(telemetry[0]?.pendingInterimLength, 0);
 
 		stt.stop();
 	} finally {
@@ -337,19 +342,21 @@ test("DeepgramStreamingSTT reconnects on close while active, including clean clo
 		});
 
 		stt.start();
-		const firstSocket = FakeWebSocket.instances[0]!;
+		const firstSocket = FakeWebSocket.instances[0];
+		if (!firstSocket) throw new Error("No first socket");
 		firstSocket.open();
 		firstSocket.emit("error", new Error("ws exploded"));
 		firstSocket.closeWith(1011, "unexpected");
 
 		assert.equal(errors.length, 1);
-		assert.equal(errors[0]!.message, "ws exploded");
+		assert.equal(errors[0]?.message, "ws exploded");
 		assert.equal(scheduledTimeouts.length, 2);
 
-		scheduledTimeouts[1]!();
+		scheduledTimeouts[1]?.();
 		assert.equal(FakeWebSocket.instances.length, 2);
 
-		const secondSocket = FakeWebSocket.instances[1]!;
+		const secondSocket = FakeWebSocket.instances[1];
+		if (!secondSocket) throw new Error("No second socket");
 		secondSocket.open();
 		secondSocket.closeWith(1000, "clean");
 
@@ -391,7 +398,8 @@ test("DeepgramStreamingSTT ignores inactive writes and malformed or non-transcri
 		stt.start();
 		assert.equal(FakeWebSocket.instances.length, 1);
 
-		const socket = FakeWebSocket.instances[0]!;
+		const socket = FakeWebSocket.instances[0];
+		if (!socket) throw new Error("No socket");
 		socket.open();
 		socket.emit("message", Buffer.from("not-json"));
 		socket.emit("message", Buffer.from(JSON.stringify({ type: "Metadata" })));
@@ -436,12 +444,13 @@ test("DeepgramStreamingSTT sends periodic keepalives and a graceful close messag
 		const stt = new DeepgramStreamingSTT("test-key");
 
 		stt.start();
-		const socket = FakeWebSocket.instances[0]!;
+		const socket = FakeWebSocket.instances[0];
+		if (!socket) throw new Error("No socket");
 		socket.open();
 
 		assert.equal(scheduledIntervals.length, 3);
 
-		scheduledIntervals[1]!();
+		scheduledIntervals[1]?.();
 		assert.equal(socket.sent[0], JSON.stringify({ type: "KeepAlive" }));
 		assert.equal(socket.sent[1], JSON.stringify({ type: "KeepAlive" }));
 
@@ -484,7 +493,8 @@ test("DeepgramStreamingSTT connection guard reconnects when socket disappears wi
 		const stt = new DeepgramStreamingSTT("test-key");
 
 		stt.start();
-		const firstSocket = FakeWebSocket.instances[0]!;
+		const firstSocket = FakeWebSocket.instances[0];
+		if (!firstSocket) throw new Error("No first socket");
 		firstSocket.open();
 
 		assert.equal(FakeWebSocket.instances.length, 1);
@@ -494,7 +504,7 @@ test("DeepgramStreamingSTT connection guard reconnects when socket disappears wi
 		(stt as any).isConnecting = false;
 		(stt as any).reconnectTimer = null;
 
-		scheduledIntervals[0]!();
+		scheduledIntervals[0]?.();
 
 		assert.equal(FakeWebSocket.instances.length, 2);
 
@@ -537,9 +547,10 @@ test("DeepgramStreamingSTT aborts hung connection attempts and schedules a recon
 		assert.equal(FakeWebSocket.instances.length, 1);
 		assert.equal(scheduledTimeouts.length, 1);
 
-		scheduledTimeouts[0]!();
+		scheduledTimeouts[0]?.();
 
-		const socket = FakeWebSocket.instances[0]!;
+		const socket = FakeWebSocket.instances[0];
+		if (!socket) throw new Error("No socket");
 		assert.equal(socket.terminateCalls, 1);
 		assert.equal(scheduledTimeouts.length, 2);
 
@@ -588,7 +599,8 @@ test("DeepgramStreamingSTT recycles an open socket when inbound activity stalls 
 		stt.setSampleRate(16000);
 
 		stt.start();
-		const socket = FakeWebSocket.instances[0]!;
+		const socket = FakeWebSocket.instances[0];
+		if (!socket) throw new Error("No socket");
 		socket.open();
 
 		assert.equal(scheduledIntervals.length, 3);
@@ -597,7 +609,7 @@ test("DeepgramStreamingSTT recycles an open socket when inbound activity stalls 
 		stt.write(Buffer.from([100, 0, 100, 0, 100, 0, 100, 0]));
 
 		now = 16000;
-		scheduledIntervals[2]!();
+		scheduledIntervals[2]?.();
 
 		assert.equal(socket.terminateCalls, 1);
 		assert.equal(FakeWebSocket.instances.length, 1);

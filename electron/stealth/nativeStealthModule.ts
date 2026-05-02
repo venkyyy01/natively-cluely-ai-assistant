@@ -118,7 +118,7 @@ export function loadNativeStealthModule(options?: {
 				_health.successCount++;
 				return cacheInfo.module;
 			}
-		} catch (error) {
+		} catch (_error) {
 			// Individual candidate failed — try next
 		}
 	}
@@ -224,7 +224,7 @@ export function createNativeProcessesProvider(options?: {
 			}
 		}
 
-		if (!moduleRef || !moduleRef.getRunningProcesses) {
+		if (!moduleRef?.getRunningProcesses) {
 			return [];
 		}
 

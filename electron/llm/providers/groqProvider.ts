@@ -1,4 +1,4 @@
-import fs from "fs";
+import fs from "node:fs";
 import {
 	createRequestAbortController,
 	GROQ_MODEL,
@@ -148,7 +148,7 @@ export async function generateWithGroq(
 			);
 
 			const response = await withTimeout(
-				helper.groqClient!.chat.completions.create(requestPayload as any),
+				helper.groqClient?.chat.completions.create(requestPayload as any),
 				LLM_API_TIMEOUT_MS,
 			);
 			return response.choices[0]?.message?.content || "";

@@ -2,8 +2,8 @@
 // LLM mode routing and orchestration.
 // Extracted from IntelligenceManager to decouple LLM logic from state management.
 
-import { createHash } from "crypto";
-import { EventEmitter } from "events";
+import { createHash } from "node:crypto";
+import { EventEmitter } from "node:events";
 import {
 	type ContextAssemblyInput,
 	type ContextAssemblyOutput,
@@ -36,7 +36,6 @@ import {
 	AssistLLM,
 	FollowUpLLM,
 	FollowUpQuestionsLLM,
-	AssistantResponse as LLMAssistantResponse,
 	RecapLLM,
 	WhatToAnswerLLM,
 } from "./llm";
@@ -45,7 +44,6 @@ import {
 	type CoordinatedIntentResult,
 	FoundationModelsIntentProvider,
 	IntentClassificationCoordinator,
-	LegacyIntentProvider,
 	SetFitIntentProvider,
 } from "./llm/providers";
 import type { SessionEvent } from "./memory/SessionPersistence";
@@ -61,7 +59,6 @@ import type {
 } from "./SessionTracker";
 import type { AccelerationManager } from "./services/AccelerationManager";
 import { getActiveAccelerationManager } from "./services/AccelerationManager";
-import { LLMError, Result } from "./types/Result";
 
 // Mode types
 export type IntelligenceMode =
@@ -252,10 +249,6 @@ export class IntelligenceEngine extends EventEmitter {
 	private readonly CONTEXT_ASSEMBLY_HARD_BUDGET_MS = 500;
 	private readonly MAX_COOLDOWN_DEFER_DEPTH = 3;
 	private readonly intentCoordinator: IntentClassificationCoordinator;
-
-	// Timestamps for tracking
-	private lastTranscriptTime: number = 0;
-	private lastTriggerTime: number = 0;
 	private readonly triggerCooldown: number = 300; // 300 ms for finals (interims filtered at trigger gate per NAT-006)
 	private readonly lastTriggerByCooldownKey = new Map<string, number>();
 	private pendingCooldownTriggers = new Map<
@@ -521,8 +514,8 @@ export class IntelligenceEngine extends EventEmitter {
 				assemblyResult,
 			};
 			if (useConsciousAcceleration) {
-				accelerationManager!
-					.getEnhancedCache()
+				accelerationManager
+					?.getEnhancedCache()
 					.set(cacheKey, result, assemblyResult.embedding);
 			}
 			return result;
@@ -533,7 +526,7 @@ export class IntelligenceEngine extends EventEmitter {
 			);
 			const result = { contextItems };
 			if (useConsciousAcceleration) {
-				accelerationManager!.getEnhancedCache().set(cacheKey, result);
+				accelerationManager?.getEnhancedCache().set(cacheKey, result);
 			}
 			return result;
 		}
@@ -600,24 +593,6 @@ export class IntelligenceEngine extends EventEmitter {
 				requireJudge: this.shouldRequireConsciousJudge(),
 			}),
 		);
-	}
-
-	private buildCompactTranscriptSnapshot(
-		transcriptTurns: Array<{ role: string; text: string; timestamp: number }>,
-		maxTurns: number = 12,
-	): string {
-		return transcriptTurns
-			.slice(-maxTurns)
-			.map((item) => {
-				const label =
-					item.role === "interviewer"
-						? "INTERVIEWER"
-						: item.role === "assistant"
-							? "ASSISTANT"
-							: "ME";
-				return `[${label}]: ${item.text}`;
-			})
-			.join("\n");
 	}
 
 	private buildFastStandardTranscriptContext(
@@ -1658,7 +1633,7 @@ export class IntelligenceEngine extends EventEmitter {
 							: SPECULATIVE_FINALIZE_WAIT_MS;
 						const speculativeFinalizeStart = Date.now();
 						const finalizedSpeculativeAnswer =
-							await consciousAcceleration!.finalizeSpeculativeAnswer(
+							await consciousAcceleration?.finalizeSpeculativeAnswer(
 								speculativePreview.key,
 								speculativeFinalizeWaitMs,
 								speculativeCommitToken,
@@ -1833,7 +1808,7 @@ export class IntelligenceEngine extends EventEmitter {
 						fallbackResponsePrepared = true;
 						syntheticFallbackPending = true;
 					};
-					const stream = this.whatToAnswerLLM!.generateStream(
+					const stream = this.whatToAnswerLLM?.generateStream(
 						preparedTranscript,
 						undefined,
 						undefined,
@@ -1887,7 +1862,7 @@ export class IntelligenceEngine extends EventEmitter {
 					}
 
 					if (useConsciousAcceleration) {
-						accelerationManager!.getEnhancedCache().set(cacheKey, fullAnswer);
+						accelerationManager?.getEnhancedCache().set(cacheKey, fullAnswer);
 					}
 					this.session.addAssistantMessage(fullAnswer);
 
@@ -2417,8 +2392,8 @@ export class IntelligenceEngine extends EventEmitter {
 				// No post-processing - prompt enforces brevity, code blocks preserved
 
 				if (useConsciousAcceleration) {
-					accelerationManager!
-						.getEnhancedCache()
+					accelerationManager
+						?.getEnhancedCache()
 						.set(answerCacheKey, fullAnswer);
 				}
 				this.session.addAssistantMessage(fullAnswer);

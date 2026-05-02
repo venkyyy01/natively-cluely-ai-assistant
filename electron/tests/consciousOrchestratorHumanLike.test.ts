@@ -9,7 +9,7 @@ import type { AnswerHypothesis } from "../conscious/AnswerHypothesisStore";
 import { ConsciousOrchestrator } from "../conscious/ConsciousOrchestrator";
 import type { QuestionReaction } from "../conscious/QuestionReactionClassifier";
 
-const baselineResponse: ConsciousModeStructuredResponse = {
+const _baselineResponse: ConsciousModeStructuredResponse = {
 	mode: "reasoning_first",
 	openingReasoning: "Use a token bucket.",
 	implementationPlan: ["Use Redis as the counter."],
@@ -110,8 +110,8 @@ test("ConsciousOrchestrator.buildRefinementPrompt returns a prompt when both fla
 		userRefinementRequest: "make it shorter",
 	});
 	assert.ok(prompt, "prompt should be non-null");
-	assert.match(prompt!.userMessage, /REFINEMENT_INTENT: shorten/);
-	assert.match(prompt!.userMessage, /caching layer/);
+	assert.match(prompt?.userMessage, /REFINEMENT_INTENT: shorten/);
+	assert.match(prompt?.userMessage, /caching layer/);
 });
 
 test("ConsciousOrchestrator.buildRefinementPrompt skips no-op refinements", () => {

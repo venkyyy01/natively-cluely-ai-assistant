@@ -26,7 +26,7 @@ const ConnectCalendarButton: React.FC<ConnectCalendarButtonProps> = ({
 				}
 			});
 		}
-	}, []);
+	}, [props.onConnect]);
 
 	const handleClick = async (e: React.MouseEvent<HTMLButtonElement>) => {
 		if (props.onClick) props.onClick(e);
@@ -211,6 +211,8 @@ const ConnectCalendarButton: React.FC<ConnectCalendarButtonProps> = ({
 						fill="none"
 						xmlns="http://www.w3.org/2000/svg"
 						className="opacity-90"
+						role="img"
+						aria-label="Calendar icon"
 					>
 						<path
 							d="M23.52 12.212c0-.848-.076-1.654-.216-2.428H12v4.594h6.473c-.28 1.503-1.12 2.775-2.38 3.619v3.01h3.84c2.247-2.07 3.54-5.118 3.54-8.795z"

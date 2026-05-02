@@ -1,8 +1,8 @@
 // electron/knowledge/DocumentReader.ts
 // Raw text extraction from PDF and DOCX files
 
-import fs from "fs";
-import path from "path";
+import fs from "node:fs";
+import path from "node:path";
 
 /**
  * Extract raw text from a document file (PDF or DOCX).

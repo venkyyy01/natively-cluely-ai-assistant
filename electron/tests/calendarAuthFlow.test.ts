@@ -164,7 +164,7 @@ test("startAuthFlow binds a single-use loopback listener and exchanges against t
 		assert.ok(handler);
 
 		const response = createResponseRecorder();
-		await handler!(
+		await handler?.(
 			{
 				method: "GET",
 				url: `/auth/callback?code=auth-code&state=${state}`,
@@ -198,7 +198,7 @@ test("startAuthFlow rejects callbacks with the wrong state and tears down the li
 		assert.ok(handler);
 
 		const response = createResponseRecorder();
-		await handler!(
+		await handler?.(
 			{
 				method: "GET",
 				url: "/auth/callback?code=auth-code&state=wrong-state",

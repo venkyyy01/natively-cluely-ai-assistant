@@ -5,7 +5,6 @@ import { afterEach, beforeEach, describe, it } from "node:test";
 import { setOptimizationFlagsForTesting } from "../config/optimizations";
 import {
 	type NativeStealthBindings,
-	type StealthConfig,
 	StealthManager,
 } from "../stealth/StealthManager";
 

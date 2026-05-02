@@ -60,7 +60,6 @@ export class InferenceRouter {
 					reason: "quality budget unavailable, degrading to fast draft",
 				};
 			}
-			case "fast":
 			default:
 				return {
 					lane: "fast-draft",
@@ -131,7 +130,6 @@ export class InferenceRouter {
 				};
 			case "quality":
 				return { decision, result: await this.qualityLane.execute(request) };
-			case "fast-draft":
 			default:
 				return { decision, result: await this.fastDraftLane.execute(request) };
 		}

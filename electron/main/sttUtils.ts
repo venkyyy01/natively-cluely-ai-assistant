@@ -1,4 +1,4 @@
-import type { EventEmitter } from "events";
+import type { EventEmitter } from "node:events";
 import type { DeepgramStreamingSTT } from "../audio/DeepgramStreamingSTT";
 import type { ElevenLabsStreamingSTT } from "../audio/ElevenLabsStreamingSTT";
 import type { GoogleSTT } from "../audio/GoogleSTT";

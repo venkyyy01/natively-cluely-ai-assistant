@@ -11,8 +11,8 @@
  *   - Raw binary body (Azure, IBM Watson)
  */
 
+import { EventEmitter } from "node:events";
 import axios from "axios";
-import { EventEmitter } from "events";
 import FormData from "form-data";
 import { RECOGNITION_LANGUAGES } from "../config/languages";
 import { resampleToMonoPcm16 } from "./pcm";
@@ -41,7 +41,7 @@ type ProviderConfigFactory = (
 ) => RestSttProviderConfig;
 
 const PROVIDER_CONFIGS: Record<RestSttProvider, ProviderConfigFactory> = {
-	groq: (apiKey, region, languageKey) => {
+	groq: (apiKey, _region, languageKey) => {
 		const lang = languageKey
 			? RECOGNITION_LANGUAGES[languageKey]?.iso639
 			: undefined;
@@ -61,7 +61,7 @@ const PROVIDER_CONFIGS: Record<RestSttProvider, ProviderConfigFactory> = {
 			},
 		};
 	},
-	openai: (apiKey, region, languageKey) => {
+	openai: (apiKey, _region, languageKey) => {
 		const lang = languageKey
 			? RECOGNITION_LANGUAGES[languageKey]?.iso639
 			: undefined;
@@ -79,7 +79,7 @@ const PROVIDER_CONFIGS: Record<RestSttProvider, ProviderConfigFactory> = {
 			},
 		};
 	},
-	elevenlabs: (apiKey, region, languageKey) => {
+	elevenlabs: (apiKey, _region, languageKey) => {
 		const lang = languageKey
 			? RECOGNITION_LANGUAGES[languageKey]?.iso639
 			: undefined;
@@ -324,7 +324,7 @@ export class RestSTT extends EventEmitter {
 		// Grab current buffer and reset
 		const currentChunks = this.chunks;
 		this.chunks = [];
-		const currentBytes = this.totalBufferedBytes;
+		const _currentBytes = this.totalBufferedBytes;
 		this.totalBufferedBytes = 0;
 
 		// Concatenate all chunks

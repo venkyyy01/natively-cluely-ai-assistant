@@ -57,7 +57,7 @@ export function registerCalendarHandlers({
 				const events = await cm.getUpcomingEvents();
 				const event = events?.find((entry: any) => entry.id === eventId);
 
-				if (event && event.attendees) {
+				if (event?.attendees) {
 					return event.attendees
 						.map((attendee: any) => ({
 							email: attendee.email,

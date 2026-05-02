@@ -1,4 +1,4 @@
-import { EventEmitter } from "events";
+import { EventEmitter } from "node:events";
 import { KNOWN_ENTERPRISE_TOOLS } from "./enterpriseToolRegistry";
 import { createNativeProcessesProvider } from "./nativeStealthModule";
 

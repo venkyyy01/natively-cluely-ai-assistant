@@ -1,5 +1,5 @@
 import type { LLMHelper } from "../LLMHelper";
-import { Err, LLMError, Ok, type Result, wrapAsync } from "../types/Result";
+import { LLMError, Ok, type Result, wrapAsync } from "../types/Result";
 import { UNIVERSAL_RECAP_PROMPT } from "./prompts";
 
 export class RecapLLM {

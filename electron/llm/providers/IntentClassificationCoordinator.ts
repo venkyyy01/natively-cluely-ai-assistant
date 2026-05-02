@@ -3,7 +3,6 @@ import {
 	endSpan,
 	setSpanAttribute,
 	startSpan,
-	startTrace,
 	traceLogger,
 } from "../../tracing";
 import { getAnswerShapeGuidance, type IntentResult } from "../IntentClassifier";
@@ -953,13 +952,13 @@ export class IntentClassificationCoordinator {
 						: undefined;
 					if (span) {
 						setSpanAttribute(
-							traceId!,
+							traceId,
 							span.spanId,
 							"intent.primary.name",
 							this.primary.name,
 						);
 						setSpanAttribute(
-							traceId!,
+							traceId,
 							span.spanId,
 							"intent.retry_count",
 							retries,
@@ -970,23 +969,23 @@ export class IntentClassificationCoordinator {
 
 					if (span) {
 						setSpanAttribute(
-							traceId!,
+							traceId,
 							span.spanId,
 							"intent.result.intent",
 							result.intent,
 						);
 						setSpanAttribute(
-							traceId!,
+							traceId,
 							span.spanId,
 							"intent.result.confidence",
 							result.confidence,
 						);
-						traceLogger.logModelInvocation(traceId!, span.spanId, {
+						traceLogger.logModelInvocation(traceId, span.spanId, {
 							modelName: this.primary.name,
 							modelVersion: "foundation",
 							latencyMs: result.latencyMs,
 						});
-						endSpan(traceId!, span.spanId, "ok");
+						endSpan(traceId, span.spanId, "ok");
 					}
 
 					if (this.isLowConfidence(result)) {
@@ -1002,12 +1001,12 @@ export class IntentClassificationCoordinator {
 						);
 						if (fallbackSpan) {
 							setSpanAttribute(
-								traceId!,
+								traceId,
 								fallbackSpan.spanId,
 								"intent.decision",
 								decision.fallbackReason ?? "primary",
 							);
-							endSpan(traceId!, fallbackSpan.spanId, "ok");
+							endSpan(traceId, fallbackSpan.spanId, "ok");
 						}
 						return decision;
 					}
@@ -1032,18 +1031,18 @@ export class IntentClassificationCoordinator {
 						) {
 							if (fallbackSpan) {
 								setSpanAttribute(
-									traceId!,
+									traceId,
 									fallbackSpan.spanId,
 									"intent.contradiction",
 									true,
 								);
 								setSpanAttribute(
-									traceId!,
+									traceId,
 									fallbackSpan.spanId,
 									"intent.decision",
 									"fallback",
 								);
-								endSpan(traceId!, fallbackSpan.spanId, "ok");
+								endSpan(traceId, fallbackSpan.spanId, "ok");
 							}
 							return this.createFallbackResult(
 								fallbackResult,
@@ -1052,7 +1051,7 @@ export class IntentClassificationCoordinator {
 							);
 						}
 						if (fallbackSpan) {
-							endSpan(traceId!, fallbackSpan.spanId, "ok");
+							endSpan(traceId, fallbackSpan.spanId, "ok");
 						}
 					}
 
@@ -1078,12 +1077,12 @@ export class IntentClassificationCoordinator {
 						);
 						if (fallbackSpan) {
 							setSpanAttribute(
-								traceId!,
+								traceId,
 								fallbackSpan.spanId,
 								"intent.fallback.reason",
 								decision.fallbackReason ?? "unknown",
 							);
-							endSpan(traceId!, fallbackSpan.spanId, "ok");
+							endSpan(traceId, fallbackSpan.spanId, "ok");
 						}
 						return decision;
 					}
@@ -1103,12 +1102,12 @@ export class IntentClassificationCoordinator {
 		const fallbackResult = await this.classifyWithFallback(input);
 		if (fallbackSpan) {
 			setSpanAttribute(
-				traceId!,
+				traceId,
 				fallbackSpan.spanId,
 				"intent.fallback.reason",
 				"primary_unavailable",
 			);
-			endSpan(traceId!, fallbackSpan.spanId, "ok");
+			endSpan(traceId, fallbackSpan.spanId, "ok");
 		}
 		return this.createFallbackResult(fallbackResult, 0, "primary_unavailable");
 	}

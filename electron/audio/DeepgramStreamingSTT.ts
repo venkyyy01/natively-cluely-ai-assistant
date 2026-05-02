@@ -9,16 +9,10 @@
  * Receives interim and final transcription results in real time.
  */
 
-import { EventEmitter } from "events";
+import { EventEmitter } from "node:events";
 import WebSocket from "ws";
 import { RECOGNITION_LANGUAGES } from "../config/languages";
-import {
-	endSpan,
-	setSpanAttribute,
-	startSpan,
-	startTrace,
-	traceLogger,
-} from "../tracing";
+import { endSpan, setSpanAttribute, startSpan, traceLogger } from "../tracing";
 import { DropFrameMetric } from "./dropMetrics";
 import { resampleToMonoPcm16 } from "./pcm";
 
@@ -108,7 +102,6 @@ export class DeepgramStreamingSTT extends EventEmitter {
 	private dropMetric = new DropFrameMetric({ provider: "deepgram" });
 	private isConnecting = false;
 	private lastInterimTranscript = "";
-	private lastInterimConfidence = 1;
 	private lastInboundActivityAt = 0;
 	private lastAudioActivityAt = 0;
 

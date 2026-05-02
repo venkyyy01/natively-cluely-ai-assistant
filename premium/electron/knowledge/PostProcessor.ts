@@ -1,7 +1,7 @@
 // electron/knowledge/PostProcessor.ts
 // Deterministic post-processing of structured resume data
 
-import { calculateDurationMonths, extractTags } from "./DocumentChunker";
+import { calculateDurationMonths } from "./DocumentChunker";
 import type {
 	ProcessedResumeData,
 	SkillExperienceMap,

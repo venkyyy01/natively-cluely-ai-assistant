@@ -298,7 +298,6 @@ export const AIProvidersSettings: React.FC = () => {
 		// if (isInitial) setOllamaStatus('checking');
 
 		try {
-			// @ts-expect-error
 			const models = await window.electronAPI?.getAvailableOllamaModels?.();
 			if (models && models.length > 0) {
 				setOllamaModels(models);
@@ -345,19 +344,14 @@ export const AIProvidersSettings: React.FC = () => {
 		setSavingStatus((prev) => ({ ...prev, [provider]: true }));
 		try {
 			let result;
-			// @ts-expect-error
 			if (provider === "gemini")
 				result = await window.electronAPI.setGeminiApiKey(key);
-			// @ts-expect-error
 			if (provider === "groq")
 				result = await window.electronAPI.setGroqApiKey(key);
-			// @ts-expect-error
 			if (provider === "cerebras")
 				result = await window.electronAPI.setCerebrasApiKey(key);
-			// @ts-expect-error
 			if (provider === "openai")
 				result = await window.electronAPI.setOpenaiApiKey(key);
-			// @ts-expect-error
 			if (provider === "claude")
 				result = await window.electronAPI.setClaudeApiKey(key);
 
@@ -385,19 +379,14 @@ export const AIProvidersSettings: React.FC = () => {
 			return;
 		try {
 			let result;
-			// @ts-expect-error
 			if (provider === "gemini")
 				result = await window.electronAPI.setGeminiApiKey("");
-			// @ts-expect-error
 			if (provider === "groq")
 				result = await window.electronAPI.setGroqApiKey("");
-			// @ts-expect-error
 			if (provider === "cerebras")
 				result = await window.electronAPI.setCerebrasApiKey("");
-			// @ts-expect-error
 			if (provider === "openai")
 				result = await window.electronAPI.setOpenaiApiKey("");
-			// @ts-expect-error
 			if (provider === "claude")
 				result = await window.electronAPI.setClaudeApiKey("");
 
@@ -970,6 +959,7 @@ export const AIProvidersSettings: React.FC = () => {
 						</p>
 					</div>
 					<button
+						type="button"
 						onClick={async () => {
 							setIsRefreshingOllama(true);
 							await checkOllama(false);
@@ -1012,6 +1002,7 @@ export const AIProvidersSettings: React.FC = () => {
 									Ensure Ollama is running (`ollama serve`).
 								</p>
 								<button
+									type="button"
 									onClick={handleFixOllama}
 									className="text-[10px] bg-bg-elevated hover:bg-bg-input px-2 py-1 rounded border border-border-subtle"
 								>
@@ -1072,6 +1063,7 @@ export const AIProvidersSettings: React.FC = () => {
 					</div>
 					{!isEditingCustom && (
 						<button
+							type="button"
 							onClick={handleNewProvider}
 							className="flex items-center gap-2 px-3 py-1.5 bg-bg-input hover:bg-bg-elevated border border-border-subtle rounded-lg text-xs font-medium text-text-primary transition-colors"
 						>
@@ -1302,12 +1294,14 @@ export const AIProvidersSettings: React.FC = () => {
 
 							<div className="flex justify-end gap-3 pt-2">
 								<button
+									type="button"
 									onClick={() => setIsEditingCustom(false)}
 									className="px-4 py-2 rounded-lg text-xs font-medium text-text-secondary hover:text-text-primary hover:bg-bg-input transition-colors"
 								>
 									Cancel
 								</button>
 								<button
+									type="button"
 									onClick={handleSaveCustom}
 									className="px-4 py-2 rounded-lg text-xs font-medium bg-accent-primary text-white hover:bg-accent-secondary transition-colors flex items-center gap-2"
 								>
@@ -1350,6 +1344,7 @@ export const AIProvidersSettings: React.FC = () => {
 									</div>
 									<div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
 										<button
+											type="button"
 											onClick={() => handleEditProvider(provider)}
 											className="p-1.5 rounded-lg text-text-secondary hover:text-text-primary hover:bg-bg-elevated transition-colors"
 											title="Edit"
@@ -1357,6 +1352,7 @@ export const AIProvidersSettings: React.FC = () => {
 											<Edit2 size={14} />
 										</button>
 										<button
+											type="button"
 											onClick={() => handleDeleteCustom(provider.id)}
 											className="p-1.5 rounded-lg text-text-secondary hover:text-red-400 hover:bg-red-500/10 transition-colors"
 											title="Delete"

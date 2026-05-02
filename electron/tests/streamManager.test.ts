@@ -10,7 +10,7 @@ describe("StreamManager", () => {
 	let manager: StreamManager;
 	let tokens: string[];
 	let partialJsons: any[];
-	let completeResult: any;
+	let _completeResult: any;
 
 	beforeEach(() => {
 		setOptimizationFlags({
@@ -19,13 +19,13 @@ describe("StreamManager", () => {
 		});
 		tokens = [];
 		partialJsons = [];
-		completeResult = null;
+		_completeResult = null;
 
 		manager = new StreamManager({
 			onToken: (token) => tokens.push(token),
 			onPartialJson: (partial) => partialJsons.push(partial),
 			onComplete: (full) => {
-				completeResult = full;
+				_completeResult = full;
 			},
 			onError: (error) => {
 				throw error;

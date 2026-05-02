@@ -23,7 +23,7 @@ type DiffLine = {
 	removed?: boolean;
 };
 
-const syntaxHighlighterStyles = {
+const _syntaxHighlighterStyles = {
 	".syntax-line": {
 		whiteSpace: "pre-wrap",
 		wordBreak: "break-word",
@@ -335,7 +335,14 @@ const Debug: React.FC<DebugProps> = ({ isProcessing, setIsProcessing }) => {
 			resizeObserver.disconnect();
 			cleanupFunctions.forEach((cleanup) => cleanup());
 		};
-	}, [queryClient]);
+	}, [
+		queryClient,
+		refetch,
+		tooltipHeight,
+		showToast,
+		setIsProcessing,
+		isTooltipVisible,
+	]);
 
 	const handleTooltipVisibilityChange = (visible: boolean, height: number) => {
 		setIsTooltipVisible(visible);

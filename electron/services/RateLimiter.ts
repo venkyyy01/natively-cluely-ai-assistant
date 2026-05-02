@@ -79,8 +79,8 @@ export class RateLimiter {
 			// Wake up waiting requests
 			while (this.waitQueue.length > 0 && this.tokens >= 1) {
 				this.tokens -= 1;
-				const resolve = this.waitQueue.shift()!;
-				resolve();
+				const resolve = this.waitQueue.shift();
+				if (resolve) resolve();
 			}
 		}
 	}
@@ -92,8 +92,8 @@ export class RateLimiter {
 		}
 		// Release all waiting requests
 		while (this.waitQueue.length > 0) {
-			const resolve = this.waitQueue.shift()!;
-			resolve();
+			const resolve = this.waitQueue.shift();
+			if (resolve) resolve();
 		}
 	}
 }

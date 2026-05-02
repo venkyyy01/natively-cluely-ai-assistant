@@ -8,10 +8,8 @@
 //
 // All responses are sent back as { type: 'result' | 'error', requestId, data? }.
 
+import { parentPort } from "node:worker_threads";
 import Database from "better-sqlite3";
-import path from "path";
-import * as sqliteVec from "sqlite-vec";
-import { parentPort } from "worker_threads";
 
 interface NativeVecSearchChunksMessage {
 	type: "nativeVecSearch";
@@ -120,11 +118,12 @@ if (!parentPort) {
 const dbCache = new Map<string, Database.Database>();
 
 function getDb(dbPath: string, extPath: string): Database.Database {
-	if (dbCache.has(dbPath)) return dbCache.get(dbPath)!;
+	const cached = dbCache.get(dbPath);
+	if (cached) return cached;
 	const db = new Database(dbPath, { readonly: true, fileMustExist: true });
 	try {
 		db.loadExtension(extPath);
-	} catch (e) {
+	} catch (_e) {
 		// Extension may already be loaded or unavailable; proceed anyway.
 	}
 	dbCache.set(dbPath, db);
@@ -180,7 +179,7 @@ parentPort.on("message", (message: WorkerMessage) => {
 				}
 
 				scored.sort((a, b) => b.similarity - a.similarity);
-				parentPort!.postMessage({
+				parentPort?.postMessage({
 					type: "result",
 					requestId,
 					data: scored.slice(0, limit),
@@ -219,7 +218,7 @@ parentPort.on("message", (message: WorkerMessage) => {
 				}
 
 				scored.sort((a, b) => b.similarity - a.similarity);
-				parentPort!.postMessage({
+				parentPort?.postMessage({
 					type: "result",
 					requestId,
 					data: scored.slice(0, limit),
@@ -253,7 +252,7 @@ parentPort.on("message", (message: WorkerMessage) => {
 					.all(queryBlob, fetchLimit) as any[];
 
 				if (vecRows.length === 0) {
-					parentPort!.postMessage({ type: "result", requestId, data: [] });
+					parentPort?.postMessage({ type: "result", requestId, data: [] });
 					break;
 				}
 
@@ -293,7 +292,7 @@ parentPort.on("message", (message: WorkerMessage) => {
 						});
 					}
 				}
-				parentPort!.postMessage({
+				parentPort?.postMessage({
 					type: "result",
 					requestId,
 					data: scored.slice(0, limit),
@@ -323,7 +322,7 @@ parentPort.on("message", (message: WorkerMessage) => {
 					.all(queryBlob, fetchLimit) as any[];
 
 				if (vecRows.length === 0) {
-					parentPort!.postMessage({ type: "result", requestId, data: [] });
+					parentPort?.postMessage({ type: "result", requestId, data: [] });
 					break;
 				}
 
@@ -350,7 +349,7 @@ parentPort.on("message", (message: WorkerMessage) => {
 						similarity: 1 - vecRow.distance,
 					});
 				}
-				parentPort!.postMessage({
+				parentPort?.postMessage({
 					type: "result",
 					requestId,
 					data: results.slice(0, limit),
@@ -359,14 +358,14 @@ parentPort.on("message", (message: WorkerMessage) => {
 			}
 
 			default:
-				parentPort!.postMessage({
+				parentPort?.postMessage({
 					type: "error",
 					requestId: (message as any).requestId,
 					error: `Unknown message type: ${(message as any).type}`,
 				});
 		}
 	} catch (error: any) {
-		parentPort!.postMessage({
+		parentPort?.postMessage({
 			type: "error",
 			requestId: (message as any).requestId,
 			error: error.message,

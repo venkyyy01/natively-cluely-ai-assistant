@@ -1,59 +1,36 @@
 import { AnimatePresence, motion } from "framer-motion";
 import {
-	Activity,
 	ArrowDown,
 	ArrowLeft,
 	ArrowRight,
 	ArrowUp,
-	BadgeCheck,
 	Briefcase,
 	Building2,
-	Calendar,
 	Camera,
 	Check,
-	CheckCircle,
 	ChevronDown,
 	ChevronUp,
 	Crop,
-	ExternalLink,
 	Eye,
-	FlaskConical,
-	Ghost,
 	Globe,
 	HelpCircle,
 	Info,
-	Keyboard,
-	Layout,
-	LifeBuoy,
-	LogOut,
-	MapPin,
 	MessageSquare,
 	Mic,
-	Monitor,
-	Moon,
 	MousePointerClick,
-	Palette,
 	Pencil,
-	Power,
 	RefreshCw,
 	RotateCcw,
 	Search,
-	Settings,
 	SlidersHorizontal,
 	Sparkles,
-	Speaker,
-	Sun,
-	Terminal,
 	Trash2,
 	Upload,
-	User,
 	X,
 	Zap,
 } from "lucide-react";
 import React, { useEffect, useState } from "react";
-import packageJson from "../../package.json";
 import { useShortcuts } from "../hooks/useShortcuts";
-import { analytics } from "../lib/analytics/analytics.service";
 import { ProfileVisualizer } from "../premium";
 import { AboutSection } from "./AboutSection";
 import icon from "./icon.png";
@@ -565,8 +542,8 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({
 	const [profileUploading, setProfileUploading] = useState(false);
 	const [profileError, setProfileError] = useState("");
 	const [profileData, setProfileData] = useState<any>(null);
-	const [isPremiumModalOpen, setIsPremiumModalOpen] = useState(false);
-	const isPremium = true; // All features unlocked
+	const [_isPremiumModalOpen, _setIsPremiumModalOpen] = useState(false);
+	const _isPremium = true; // All features unlocked
 	const [jdUploading, setJdUploading] = useState(false);
 	const [jdError, setJdError] = useState("");
 	const [companyResearching, setCompanyResearching] = useState(false);
@@ -691,7 +668,7 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({
 	const [availableLanguages, setAvailableLanguages] = useState<
 		Record<string, any>
 	>({});
-	const [languageOptions, setLanguageOptions] = useState<any[]>([]);
+	const [_languageOptions, _setLanguageOptions] = useState<any[]>([]);
 
 	// AI Response Language
 	const [aiResponseLanguage, setAiResponseLanguage] = useState("English");
@@ -702,7 +679,9 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({
 		const stored = localStorage.getItem("natively_overlay_opacity");
 		if (!stored) return 0.65;
 		const parsed = parseFloat(stored);
-		return !isNaN(parsed) && parsed >= 0.15 && parsed <= 1.0 ? parsed : 0.65;
+		return !Number.isNaN(parsed) && parsed >= 0.15 && parsed <= 1.0
+			? parsed
+			: 0.65;
 	});
 
 	// Live preview state — true while the user is holding down the slider
@@ -743,11 +722,12 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({
 
 	// Bug fix #3 (close-during-drag): if the overlay closes while the user is still dragging,
 	// restore all DOM state so nothing is left in a broken state.
+	// eslint-disable-next-line react-hooks/exhaustive-deps
 	useEffect(() => {
 		if (!isOpen && isPreviewingOpacity) {
 			stopPreviewingOpacity();
 		}
-	}, [isOpen]); // eslint-disable-line react-hooks/exhaustive-deps
+	}, [isOpen, isPreviewingOpacity]);
 
 	const startPreviewingOpacity = () => {
 		// Bug fix #5: guard against rapid repeated calls (double pointerDown / touch events)
@@ -880,7 +860,7 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({
 						([_, config]: [string, any]) =>
 							config.bcp47 === systemLocale ||
 							config.iso639 === systemLocale ||
-							(config.alternates && config.alternates.includes(systemLocale)),
+							config.alternates?.includes(systemLocale),
 					);
 
 					currentLangKey = match ? match[0] : "english-us";
@@ -1073,7 +1053,6 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({
 
 	const persistSttProvider = React.useCallback(
 		async (provider: SttProvider) => {
-			// @ts-expect-error
 			const result = await window.electronAPI?.setSttProvider?.(provider);
 			if (!result?.success) {
 				throw new Error(getSttProviderErrorMessage(result?.error));
@@ -1186,7 +1165,6 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({
 	useEffect(() => {
 		const loadSttSettings = async () => {
 			try {
-				// @ts-expect-error
 				const creds = await window.electronAPI?.getStoredCredentials?.();
 				if (creds) {
 					setSttProvider(creds.sttProvider || "google");
@@ -1255,7 +1233,6 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({
 		setSttTestError("");
 
 		try {
-			// @ts-expect-error
 			const testResult = await window.electronAPI?.testSttConnection?.(
 				provider,
 				key.trim(),
@@ -1278,27 +1255,20 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({
 
 			let saveResult: { success: boolean; error?: string } | undefined;
 			if (provider === "groq") {
-				// @ts-expect-error
 				saveResult = await window.electronAPI?.setGroqSttApiKey?.(key.trim());
 			} else if (provider === "openai") {
-				// @ts-expect-error
 				saveResult = await window.electronAPI?.setOpenAiSttApiKey?.(key.trim());
 			} else if (provider === "elevenlabs") {
-				// @ts-expect-error
 				saveResult = await window.electronAPI?.setElevenLabsApiKey?.(
 					key.trim(),
 				);
 			} else if (provider === "azure") {
-				// @ts-expect-error
 				saveResult = await window.electronAPI?.setAzureApiKey?.(key.trim());
 			} else if (provider === "ibmwatson") {
-				// @ts-expect-error
 				saveResult = await window.electronAPI?.setIbmWatsonApiKey?.(key.trim());
 			} else if (provider === "soniox") {
-				// @ts-expect-error
 				saveResult = await window.electronAPI?.setSonioxApiKey?.(key.trim());
 			} else {
-				// @ts-expect-error
 				saveResult = await window.electronAPI?.setDeepgramApiKey?.(key.trim());
 			}
 
@@ -1357,37 +1327,30 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({
 
 		try {
 			if (provider === "groq") {
-				// @ts-expect-error
 				await window.electronAPI?.setGroqSttApiKey?.("");
 				setSttGroqKey("");
 				setHasStoredSttGroqKey(false);
 			} else if (provider === "openai") {
-				// @ts-expect-error
 				await window.electronAPI?.setOpenAiSttApiKey?.("");
 				setSttOpenaiKey("");
 				setHasStoredSttOpenaiKey(false);
 			} else if (provider === "elevenlabs") {
-				// @ts-expect-error
 				await window.electronAPI?.setElevenLabsApiKey?.("");
 				setSttElevenLabsKey("");
 				setHasStoredElevenLabsKey(false);
 			} else if (provider === "azure") {
-				// @ts-expect-error
 				await window.electronAPI?.setAzureApiKey?.("");
 				setSttAzureKey("");
 				setHasStoredAzureKey(false);
 			} else if (provider === "ibmwatson") {
-				// @ts-expect-error
 				await window.electronAPI?.setIbmWatsonApiKey?.("");
 				setSttIbmKey("");
 				setHasStoredIbmWatsonKey(false);
 			} else if (provider === "soniox") {
-				// @ts-expect-error
 				await window.electronAPI?.setSonioxApiKey?.("");
 				setSttSonioxKey("");
 				setHasStoredSonioxKey(false);
 			} else {
-				// @ts-expect-error
 				await window.electronAPI?.setDeepgramApiKey?.("");
 				setSttDeepgramKey("");
 				setHasStoredDeepgramKey(false);
@@ -1447,7 +1410,6 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({
 		setSttTestStatus("testing");
 		setSttTestError("");
 		try {
-			// @ts-expect-error
 			const result = await window.electronAPI?.testSttConnection?.(
 				providerUnderTest,
 				keyToTest.trim(),
@@ -1552,9 +1514,7 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({
 			const loadDevices = async () => {
 				try {
 					const [inputs, outputs] = await Promise.all([
-						// @ts-expect-error
 						window.electronAPI?.getInputDevices() || Promise.resolve([]),
-						// @ts-expect-error
 						window.electronAPI?.getOutputDevices() || Promise.resolve([]),
 					]);
 

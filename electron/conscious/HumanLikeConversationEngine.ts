@@ -358,7 +358,6 @@ export class HumanLikeConversationEngine {
 				return "moderate";
 			case "pushback":
 				return "strict";
-			case "technical":
 			default:
 				return "strict";
 		}

@@ -2,13 +2,11 @@
 // Just-In-Time context building replacing static pre-computed personas
 
 import { formatContextBlock } from "./HybridSearchEngine";
-import {
-	DocType,
-	type KnowledgeDocument,
-	KnowledgeStatus,
-	type ScoredNode,
-	type StructuredJD,
-	type StructuredResume,
+import type {
+	KnowledgeDocument,
+	ScoredNode,
+	StructuredJD,
+	StructuredResume,
 } from "./types";
 
 export interface PromptAssemblyResult {
@@ -86,7 +84,7 @@ function buildIdentityHeader(
 	if (jdDoc) {
 		const jd = jdDoc.structured_data as StructuredJD;
 		const levelStr = jd.level
-			? jd.level.charAt(0).toUpperCase() + jd.level.slice(1) + "-level"
+			? `${jd.level.charAt(0).toUpperCase() + jd.level.slice(1)}-level`
 			: "";
 		targetContext = ` The candidate is interviewing for the ${levelStr} position of ${jd.title} at ${jd.company}.`;
 
@@ -95,7 +93,7 @@ function buildIdentityHeader(
 			.map((k: string) => k.toLowerCase())
 			.join(" ");
 		const descLower = (jd.description_summary || "").toLowerCase();
-		const combined = kwLower + " " + descLower;
+		const combined = `${kwLower} ${descLower}`;
 
 		if (combined.includes("startup") || combined.includes("fast-paced")) {
 			toneModifier = " Use a product-focused, pragmatic tone.";

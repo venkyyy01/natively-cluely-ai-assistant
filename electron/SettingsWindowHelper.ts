@@ -1,5 +1,4 @@
-import path from "node:path";
-import { app, BrowserWindow, screen } from "electron";
+import { BrowserWindow, screen } from "electron";
 import { attachRendererBridgeMonitor } from "./runtime/rendererBridgeHealth";
 import {
 	resolveRendererPreloadPath,
@@ -156,11 +155,7 @@ export class SettingsWindowHelper {
 	}
 
 	public reposition(mainBounds: Electron.Rectangle): void {
-		if (
-			!this.settingsWindow ||
-			!this.settingsWindow.isVisible() ||
-			this.settingsWindow.isDestroyed()
-		)
+		if (!this.settingsWindow?.isVisible() || this.settingsWindow.isDestroyed())
 			return;
 
 		const newX = mainBounds.x + this.offsetX;

@@ -12,8 +12,8 @@
  *            setRecognitionLanguage(), setCredentials(), notifySpeechEnded()
  */
 
+import { EventEmitter } from "node:events";
 import axios from "axios";
-import { EventEmitter } from "events";
 import FormData from "form-data";
 import WebSocket from "ws";
 import { RECOGNITION_LANGUAGES } from "../config/languages";
@@ -658,9 +658,11 @@ export class OpenAIStreamingSTT extends EventEmitter {
 			this.ringBufferBytes > MAX_RING_BUFFER_BYTES &&
 			this.ringBuffer.length > 0
 		) {
-			const evicted = this.ringBuffer.shift()!;
-			this.ringBufferBytes -= evicted.length;
-			this.dropMetric.recordDrop(); // NAT-021
+			const evicted = this.ringBuffer.shift();
+			if (evicted) {
+				this.ringBufferBytes -= evicted.length;
+				this.dropMetric.recordDrop(); // NAT-021
+			}
 		}
 	}
 

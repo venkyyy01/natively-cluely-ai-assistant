@@ -38,69 +38,63 @@ export function registerGeminiStreamIpcHandlers(
 	safeHandleValidated(
 		"gemini-chat",
 		(args) => parseIpcInput(ipcSchemas.geminiChatArgs, args, "gemini-chat"),
-		async (event, message, imagePaths, context, options) => {
-			try {
-				assertNotContained();
-				const result = await getInferenceLlmHelper().chatWithGemini(
-					message,
-					imagePaths,
-					context,
-					options?.skipSystemPrompt,
+		async (_event, message, imagePaths, context, options) => {
+			assertNotContained();
+			const result = await getInferenceLlmHelper().chatWithGemini(
+				message,
+				imagePaths,
+				context,
+				options?.skipSystemPrompt,
+			);
+			assertNotContained();
+
+			console.log(
+				`[IPC] gemini - chat response: `,
+				result ? result.substring(0, 50) : "(empty)",
+			);
+
+			// Don't process empty responses
+			if (!result || result.trim().length === 0) {
+				console.warn(
+					"[IPC] Empty response from LLM, not updating IntelligenceManager",
 				);
-				assertNotContained();
-
-				console.log(
-					`[IPC] gemini - chat response: `,
-					result ? result.substring(0, 50) : "(empty)",
-				);
-
-				// Don't process empty responses
-				if (!result || result.trim().length === 0) {
-					console.warn(
-						"[IPC] Empty response from LLM, not updating IntelligenceManager",
-					);
-					return "I apologize, but I couldn't generate a response. Please try again.";
-				}
-
-				// Sync with IntelligenceManager so Follow-Up/Recap work
-				const intelligenceManager = getIntelligenceManager();
-
-				// 1. Add user question to context (as 'user')
-				// CRITICAL: Skip refinement check to prevent auto-triggering follow-up logic
-				// The user's manual question is a NEW input, not a refinement of previous answer.
-				intelligenceManager.addTranscript(
-					{
-						text: message,
-						speaker: "user",
-						timestamp: Date.now(),
-						final: true,
-					},
-					true,
-				);
-
-				// 2. Add assistant response and set as last message
-				console.log(
-					`[IPC] Updating IntelligenceManager with assistant message...`,
-				);
-				intelligenceManager.addAssistantMessage(result);
-				console.log(
-					`[IPC] Updated IntelligenceManager.Last message: `,
-					intelligenceManager.getLastAssistantMessage()?.substring(0, 50),
-				);
-
-				// Log Usage
-				intelligenceManager.logUsage("chat", message, result, {
-					model: getInferenceLlmHelper().getCurrentModel?.() ?? "unknown",
-					hasImages: !!imagePaths?.length,
-					consciousMode:
-						intelligenceManager.isConsciousModeEnabled?.() ?? false,
-				});
-
-				return result;
-			} catch (error: any) {
-				// console.error("Error in gemini-chat handler:", error);
-				throw error;
+				return "I apologize, but I couldn't generate a response. Please try again.";
 			}
+
+			// Sync with IntelligenceManager so Follow-Up/Recap work
+			const intelligenceManager = getIntelligenceManager();
+
+			// 1. Add user question to context (as 'user')
+			// CRITICAL: Skip refinement check to prevent auto-triggering follow-up logic
+			// The user's manual question is a NEW input, not a refinement of previous answer.
+			intelligenceManager.addTranscript(
+				{
+					text: message,
+					speaker: "user",
+					timestamp: Date.now(),
+					final: true,
+				},
+				true,
+			);
+
+			// 2. Add assistant response and set as last message
+			console.log(
+				`[IPC] Updating IntelligenceManager with assistant message...`,
+			);
+			intelligenceManager.addAssistantMessage(result);
+			console.log(
+				`[IPC] Updated IntelligenceManager.Last message: `,
+				intelligenceManager.getLastAssistantMessage()?.substring(0, 50),
+			);
+
+			// Log Usage
+			intelligenceManager.logUsage("chat", message, result, {
+				model: getInferenceLlmHelper().getCurrentModel?.() ?? "unknown",
+				hasImages: !!imagePaths?.length,
+				consciousMode: intelligenceManager.isConsciousModeEnabled?.() ?? false,
+			});
+
+			return result;
 		},
 	);
 

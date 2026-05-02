@@ -95,7 +95,6 @@ export class PredictivePrefetcher {
 	private isUserSpeaking: boolean = false;
 	private currentPhase: InterviewPhase = "requirements_gathering";
 	private predictions: PredictedFollowUp[] = [];
-	private silenceStartTime: number = 0;
 	private transcriptSegments: Array<{
 		text: string;
 		timestamp: number;

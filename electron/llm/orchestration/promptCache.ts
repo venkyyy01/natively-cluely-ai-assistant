@@ -1,4 +1,4 @@
-import { createHash } from "crypto";
+import { createHash } from "node:crypto";
 
 const SYSTEM_PROMPT_CACHE_TTL_MS = 5 * 60 * 1000;
 const FINAL_PAYLOAD_CACHE_TTL_MS = 15 * 1000;

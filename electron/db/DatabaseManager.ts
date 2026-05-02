@@ -1,7 +1,7 @@
+import fs from "node:fs";
+import path from "node:path";
 import Database from "better-sqlite3";
 import { app } from "electron";
-import fs from "fs";
-import path from "path";
 import * as sqliteVec from "sqlite-vec";
 
 export type MeetingProcessingState = "processing" | "completed" | "failed";
@@ -313,7 +313,7 @@ export class DatabaseManager {
 			for (const sql of columnsToAdd) {
 				try {
 					this.db.exec(sql);
-				} catch (e) {
+				} catch (_e) {
 					/* Column already exists from v1 CREATE */
 				}
 			}
@@ -405,7 +405,7 @@ export class DatabaseManager {
 			for (const sql of columnsToAdd) {
 				try {
 					this.db.exec(sql);
-				} catch (e) {
+				} catch (_e) {
 					/* Column already exists */
 				}
 			}
@@ -534,12 +534,12 @@ export class DatabaseManager {
 				// preventing the dangerous half-renamed table state that a bare exec() chain would leave.
 				const migrate = this.db.transaction(() => {
 					// Step 1: Rename the existing table to a temp name
-					this.db!.exec(
+					this.db?.exec(
 						"ALTER TABLE embedding_queue RENAME TO embedding_queue_old;",
 					);
 
 					// Step 2: Recreate with the UNIQUE(meeting_id, chunk_id) constraint
-					this.db!.exec(`
+					this.db?.exec(`
                         CREATE TABLE embedding_queue (
                             id INTEGER PRIMARY KEY AUTOINCREMENT,
                             meeting_id TEXT NOT NULL,
@@ -554,7 +554,7 @@ export class DatabaseManager {
                     `);
 
 					// Step 3: Copy rows; INSERT OR IGNORE silently drops any pre-existing duplicates
-					this.db!.exec(`
+					this.db?.exec(`
                         INSERT OR IGNORE INTO embedding_queue
                             (id, meeting_id, chunk_id, status, retry_count, error_message, created_at, processed_at)
                         SELECT id, meeting_id, chunk_id, status, retry_count, error_message, created_at, processed_at
@@ -562,7 +562,7 @@ export class DatabaseManager {
                     `);
 
 					// Step 4: Drop the backup
-					this.db!.exec("DROP TABLE embedding_queue_old;");
+					this.db?.exec("DROP TABLE embedding_queue_old;");
 				});
 				migrate();
 				this.verifyEmbeddingQueueConsistency();
@@ -591,21 +591,25 @@ export class DatabaseManager {
 				this.createMigrationBackup();
 				const migrate = this.db.transaction(() => {
 					// 1. Delete embedding_queue entries that reference non-existent chunks
-					const orphaned = this.db!.prepare(`
+					const orphaned = this.db
+						?.prepare(`
                         DELETE FROM embedding_queue
                         WHERE chunk_id IS NOT NULL
                           AND chunk_id NOT IN (SELECT id FROM chunks)
-                    `).run();
+                    `)
+						.run();
 					console.log(
 						`[DatabaseManager] v11: Cleaned ${orphaned.changes} orphaned embedding_queue entries`,
 					);
 
 					// 2. Delete embedding_queue entries with NULL chunk_id older than 24h
-					const stale = this.db!.prepare(`
+					const stale = this.db
+						?.prepare(`
                         DELETE FROM embedding_queue
                         WHERE chunk_id IS NULL
                           AND created_at < datetime('now', '-1 day')
-                    `).run();
+                    `)
+						.run();
 					console.log(
 						`[DatabaseManager] v11: Cleaned ${stale.changes} stale NULL-chunk embedding_queue entries`,
 					);
@@ -613,15 +617,19 @@ export class DatabaseManager {
 					// 3. Backfill embedding_provider for ALL meetings (use last_embedding_provider from app_state or default to openai)
 					const provider =
 						(
-							this.db!.prepare(
-								"SELECT value FROM app_state WHERE key = 'last_embedding_provider'",
-							).get() as any
+							this.db
+								?.prepare(
+									"SELECT value FROM app_state WHERE key = 'last_embedding_provider'",
+								)
+								.get() as any
 						)?.value || "openai";
-					const backfilled = this.db!.prepare(`
+					const backfilled = this.db
+						?.prepare(`
                         UPDATE meetings
                         SET embedding_provider = ?, embedding_dimensions = 1536
                         WHERE (embedding_provider IS NULL OR embedding_provider = '')
-                    `).run(provider);
+                    `)
+						.run(provider);
 					console.log(
 						`[DatabaseManager] v11: Backfilled embedding_provider='${provider}' for ${backfilled.changes} meetings`,
 					);
@@ -739,7 +747,7 @@ export class DatabaseManager {
 						for (const row of batch) {
 							try {
 								insert.run(row.id, row.embedding);
-							} catch (err) {
+							} catch (_err) {
 								// On mismatch (e.g. mixed 768 and 3072 dims), nullify to re-embed later
 								this.db
 									.prepare("UPDATE chunks SET embedding = NULL WHERE id = ?")
@@ -785,7 +793,7 @@ export class DatabaseManager {
 						for (const row of batch) {
 							try {
 								insert.run(row.id, row.embedding);
-							} catch (err) {
+							} catch (_err) {
 								this.db
 									.prepare(
 										"UPDATE chunk_summaries SET embedding = NULL WHERE id = ?",
@@ -943,7 +951,7 @@ export class DatabaseManager {
 			// Check the most common dimension (Ollama 768); any may suffice
 			this.db.prepare("SELECT count(*) FROM vec_chunks_768 LIMIT 1").get();
 			return true;
-		} catch (e) {
+		} catch (_e) {
 			return false;
 		}
 	}
@@ -1151,7 +1159,7 @@ export class DatabaseManager {
 		durationMs: number,
 	): void {
 		const existing = this.getMeetingDetails(meeting.id);
-		if (existing && existing.isProcessed) {
+		if (existing?.isProcessed) {
 			console.warn(
 				`[DatabaseManager] Skipping overwrite of finalized meeting ${meeting.id}`,
 			);
@@ -1408,33 +1416,37 @@ export class DatabaseManager {
 		try {
 			const deleteTransaction = this.db.transaction(() => {
 				const chunkIds = (
-					this.db!.prepare("SELECT id FROM chunks WHERE meeting_id = ?").all(
-						id,
-					) as Array<{ id: number }>
+					this.db
+						?.prepare("SELECT id FROM chunks WHERE meeting_id = ?")
+						.all(id) as Array<{ id: number }>
 				).map((row) => row.id);
 				const summaryIds = (
-					this.db!.prepare(
-						"SELECT id FROM chunk_summaries WHERE meeting_id = ?",
-					).all(id) as Array<{ id: number }>
+					this.db
+						?.prepare("SELECT id FROM chunk_summaries WHERE meeting_id = ?")
+						.all(id) as Array<{ id: number }>
 				).map((row) => row.id);
 
-				this.db!.prepare(
-					"DELETE FROM embedding_queue WHERE meeting_id = ?",
-				).run(id);
+				this.db
+					?.prepare("DELETE FROM embedding_queue WHERE meeting_id = ?")
+					.run(id);
 
 				for (const dim of this.getKnownVecDimensions()) {
 					try {
 						if (chunkIds.length > 0) {
 							const chunkPlaceholders = chunkIds.map(() => "?").join(", ");
-							this.db!.prepare(
-								`DELETE FROM vec_chunks_${dim} WHERE chunk_id IN (${chunkPlaceholders})`,
-							).run(...chunkIds);
+							this.db
+								?.prepare(
+									`DELETE FROM vec_chunks_${dim} WHERE chunk_id IN (${chunkPlaceholders})`,
+								)
+								.run(...chunkIds);
 						}
 						if (summaryIds.length > 0) {
 							const summaryPlaceholders = summaryIds.map(() => "?").join(", ");
-							this.db!.prepare(
-								`DELETE FROM vec_summaries_${dim} WHERE summary_id IN (${summaryPlaceholders})`,
-							).run(...summaryIds);
+							this.db
+								?.prepare(
+									`DELETE FROM vec_summaries_${dim} WHERE summary_id IN (${summaryPlaceholders})`,
+								)
+								.run(...summaryIds);
 						}
 					} catch (vecError) {
 						console.warn(
@@ -1444,11 +1456,11 @@ export class DatabaseManager {
 					}
 				}
 
-				this.db!.prepare(
-					"DELETE FROM chunk_summaries WHERE meeting_id = ?",
-				).run(id);
-				this.db!.prepare("DELETE FROM chunks WHERE meeting_id = ?").run(id);
-				return this.db!.prepare("DELETE FROM meetings WHERE id = ?").run(id);
+				this.db
+					?.prepare("DELETE FROM chunk_summaries WHERE meeting_id = ?")
+					.run(id);
+				this.db?.prepare("DELETE FROM chunks WHERE meeting_id = ?").run(id);
+				return this.db?.prepare("DELETE FROM meetings WHERE id = ?").run(id);
 			});
 			const info = deleteTransaction();
 			console.log(
@@ -1506,8 +1518,8 @@ export class DatabaseManager {
 			this.db.transaction(() => {
 				for (const dim of this.getKnownVecDimensions()) {
 					try {
-						this.db!.exec(`DELETE FROM vec_chunks_${dim}`);
-						this.db!.exec(`DELETE FROM vec_summaries_${dim}`);
+						this.db?.exec(`DELETE FROM vec_chunks_${dim}`);
+						this.db?.exec(`DELETE FROM vec_summaries_${dim}`);
 					} catch (vecError) {
 						console.warn(
 							`[DatabaseManager] Failed clearing vec tables for dim=${dim}:`,
@@ -1515,12 +1527,12 @@ export class DatabaseManager {
 						);
 					}
 				}
-				this.db!.exec("DELETE FROM embedding_queue");
-				this.db!.exec("DELETE FROM chunk_summaries");
-				this.db!.exec("DELETE FROM chunks");
-				this.db!.exec("DELETE FROM ai_interactions");
-				this.db!.exec("DELETE FROM transcripts");
-				this.db!.exec("DELETE FROM meetings");
+				this.db?.exec("DELETE FROM embedding_queue");
+				this.db?.exec("DELETE FROM chunk_summaries");
+				this.db?.exec("DELETE FROM chunks");
+				this.db?.exec("DELETE FROM ai_interactions");
+				this.db?.exec("DELETE FROM transcripts");
+				this.db?.exec("DELETE FROM meetings");
 			})();
 
 			console.log("[DatabaseManager] All data cleared from database.");

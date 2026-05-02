@@ -3,7 +3,6 @@ import {
 	isVerifierOptimizationActive,
 } from "../config/optimizations";
 import type { IntentResult } from "../llm/IntentClassifier";
-import { getIntentConfidenceService } from "../llm/IntentConfidenceService";
 import {
 	type PauseAction,
 	type PauseConfidence,
@@ -12,10 +11,7 @@ import {
 import { PauseThresholdTuner } from "../pause/PauseThresholdTuner";
 import { PredictivePrefetcher } from "../prefetch/PredictivePrefetcher";
 import type { RuntimeBudgetScheduler } from "../runtime/RuntimeBudgetScheduler";
-import {
-	isStrongConsciousIntent,
-	isUncertainConsciousIntent,
-} from "./ConsciousIntentService";
+import { isStrongConsciousIntent } from "./ConsciousIntentService";
 import { detectQuestion } from "./QuestionDetector";
 import type { InterviewPhase } from "./types";
 
@@ -74,11 +70,9 @@ export class ConsciousAccelerationOrchestrator {
 	private readonly prefetcher: PredictivePrefetcher;
 	private readonly pauseDetector: PauseDetector;
 	private readonly pauseThresholdTuner: PauseThresholdTuner;
-	private currentPhase: InterviewPhase = "requirements_gathering";
 	private enabled = false;
 	private deepMode = false;
 	private latestTranscriptTexts: string[] = [];
-	private prefetchTriggeredForCurrentPause = false;
 	private latestTranscriptRevision = 0;
 	private latestInterviewerTranscript = "";
 	private speculativeExecutor: SpeculativeExecutor | null = null;
@@ -597,7 +591,7 @@ export class ConsciousAccelerationOrchestrator {
 
 			entry.completionPromise = (async (): Promise<string | null> => {
 				try {
-					const stream = this.speculativeExecutor!(
+					const stream = this.speculativeExecutor?.(
 						candidate.query,
 						candidate.transcriptRevision,
 						abortController.signal,
@@ -704,7 +698,7 @@ export class ConsciousAccelerationOrchestrator {
 
 		const promise = (async (): Promise<void> => {
 			try {
-				const intent = await this.intentClassifier!(query, revision);
+				const intent = await this.intentClassifier?.(query, revision);
 				if (abortController.signal.aborted) {
 					return;
 				}

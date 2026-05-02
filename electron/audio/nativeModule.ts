@@ -1,6 +1,6 @@
+import fs from "node:fs";
+import path from "node:path";
 import { app } from "electron";
-import fs from "fs";
-import path from "path";
 
 interface CachedModuleInfo {
 	module: any | null;

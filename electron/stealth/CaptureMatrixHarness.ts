@@ -96,10 +96,6 @@ export interface RunCaptureMatrixOptions {
 
 export class CaptureMatrixSkipError extends Error {
 	override readonly name = "CaptureMatrixSkipError";
-
-	constructor(message: string) {
-		super(message);
-	}
 }
 
 export function analyzeCanaryVisibility(

@@ -421,9 +421,9 @@ const App: React.FC = () => {
 		return stored ? parseFloat(stored) : 0.65;
 	});
 
-	const [isLauncherMainView, setIsLauncherMainView] = useState(true);
+	const [_isLauncherMainView, setIsLauncherMainView] = useState(true);
 
-	const [isProcessingMeeting, setIsProcessingMeeting] =
+	const [_isProcessingMeeting, setIsProcessingMeeting] =
 		useState<boolean>(false);
 
 	const [ollamaPullStatus, setOllamaPullStatus] = useState<
@@ -540,7 +540,7 @@ const App: React.FC = () => {
 		return () => {
 			if (removeOpacityListener) removeOpacityListener();
 		};
-	}, [electronAPI, windowKind]);
+	}, [electronAPI, windowContext]);
 
 	const handleReindex = async () => {
 		const reindexIncompatibleMeetings = getOptionalElectronMethod(

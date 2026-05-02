@@ -135,8 +135,8 @@ const Solutions: React.FC<SolutionsProps> = ({ setView }) => {
 	const contentRef = useRef<HTMLDivElement>(null);
 
 	// Audio recording state
-	const [audioRecording, setAudioRecording] = useState(false);
-	const [audioResult, setAudioResult] = useState<AudioResult | null>(null);
+	const [_audioRecording, _setAudioRecording] = useState(false);
+	const [_audioResult, setAudioResult] = useState<AudioResult | null>(null);
 
 	const [debugProcessing, setDebugProcessing] = useState(false);
 	const [problemStatementData, setProblemStatementData] =
@@ -149,7 +149,7 @@ const Solutions: React.FC<SolutionsProps> = ({ setView }) => {
 	const [spaceComplexityData, setSpaceComplexityData] = useState<string | null>(
 		null,
 	);
-	const [customContent, setCustomContent] = useState<string | null>(null);
+	const [_customContent, setCustomContent] = useState<string | null>(null);
 
 	const [toastOpen, setToastOpen] = useState(false);
 	const [toastMessage, setToastMessage] = useState<ToastMessage>({
@@ -356,7 +356,16 @@ const Solutions: React.FC<SolutionsProps> = ({ setView }) => {
 			resizeObserver.disconnect();
 			cleanupFunctions.forEach((cleanup) => cleanup());
 		};
-	}, [isTooltipVisible, tooltipHeight]);
+	}, [
+		isTooltipVisible,
+		tooltipHeight,
+		setView,
+		queryClient.removeQueries,
+		showToast,
+		queryClient.setQueryData, // Reset other states
+		refetch,
+		queryClient.getQueryData,
+	]);
 
 	useEffect(() => {
 		setProblemStatementData(
@@ -425,12 +434,10 @@ const Solutions: React.FC<SolutionsProps> = ({ setView }) => {
 	return (
 		<>
 			{!isResetting && queryClient.getQueryData(["new_solution"]) ? (
-				<>
-					<Debug
-						isProcessing={debugProcessing}
-						setIsProcessing={setDebugProcessing}
-					/>
-				</>
+				<Debug
+					isProcessing={debugProcessing}
+					setIsProcessing={setDebugProcessing}
+				/>
 			) : (
 				<div ref={contentRef} className="relative space-y-3 px-4 py-3">
 					<Toast

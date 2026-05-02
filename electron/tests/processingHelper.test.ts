@@ -9,8 +9,6 @@ test("loadStoredCredentials restores saved keys and fast response config at star
 	let initializeCount = 0;
 
 	class FakeLLMHelper {
-		constructor() {}
-
 		setModelFallbackHandler() {}
 		setApiKey(value: string) {
 			llmCalls.push({ method: "setApiKey", value });
@@ -150,8 +148,6 @@ test("loadStoredCredentials skips optional startup branches when credentials and
 	let initializeCount = 0;
 
 	class FakeLLMHelper {
-		constructor() {}
-
 		setModelFallbackHandler() {}
 		setApiKey(value: string) {
 			llmCalls.push({ method: "setApiKey", value });

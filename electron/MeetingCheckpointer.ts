@@ -1,7 +1,7 @@
-import { EventEmitter } from "events";
-import fs from "fs/promises";
-import os from "os";
-import path from "path";
+import { EventEmitter } from "node:events";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import type { DatabaseManager, Meeting } from "./db/DatabaseManager";
 import type { SessionTracker } from "./SessionTracker";
 
@@ -212,8 +212,12 @@ export class MeetingCheckpointer extends EventEmitter {
 		const secs = durationSec % 60;
 		const durationStr = `${mins}:${secs.toString().padStart(2, "0")}`;
 
+		if (!this.meetingId) {
+			throw new Error("Meeting ID is required");
+		}
+
 		return {
-			id: this.meetingId!,
+			id: this.meetingId,
 			title: metadata?.title || "Interim Recording...",
 			date: new Date(snapshot.startTime).toISOString(),
 			duration: durationStr,
@@ -258,7 +262,10 @@ export class MeetingCheckpointer extends EventEmitter {
 		this.emit(event, data);
 		this.lastCheckpointAt = Date.now();
 		if (this.onCheckpointWritten) {
-			await this.onCheckpointWritten(this.meetingId!);
+			if (!this.meetingId) {
+				throw new Error("Meeting ID is required for checkpoint callback");
+			}
+			await this.onCheckpointWritten(this.meetingId);
 		}
 	}
 

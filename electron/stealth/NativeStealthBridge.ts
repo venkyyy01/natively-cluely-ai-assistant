@@ -197,9 +197,9 @@ export class NativeStealthBridge {
 			sessionId,
 			surfaceSource: "native-ui-host",
 			surfaceId,
-			width: normalizedRequest.width!,
-			height: normalizedRequest.height!,
-			hiDpi: normalizedRequest.hiDpi!,
+			width: normalizedRequest.width || 800,
+			height: normalizedRequest.height || 600,
+			hiDpi: normalizedRequest.hiDpi ?? false,
 		});
 		this.assertArmResponse("attach-surface", attachResponse);
 
@@ -241,7 +241,7 @@ export class NativeStealthBridge {
 		}
 
 		const health = await this.callClient(
-			() => client.getHealth(this.activeSessionId!),
+			() => client.getHealth(this.activeSessionId || ""),
 			"submit-frame:health",
 		);
 		if (!health) {
@@ -262,8 +262,8 @@ export class NativeStealthBridge {
 
 		try {
 			const fetchHealth = client.heartbeat
-				? () => client.heartbeat!(this.activeSessionId!)
-				: () => client.getHealth(this.activeSessionId!);
+				? () => client.heartbeat?.(this.activeSessionId || "")
+				: () => client.getHealth(this.activeSessionId || "");
 			const health = await this.callClient(fetchHealth, "heartbeat", {
 				notifyDisconnect: false,
 			});

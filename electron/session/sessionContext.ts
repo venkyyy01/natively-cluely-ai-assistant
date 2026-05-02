@@ -12,11 +12,8 @@ import {
 } from "../conscious/AdaptiveContextWindow";
 import type { SessionTracker } from "../SessionTracker";
 import { getActiveAccelerationManager } from "../services/AccelerationManager";
-import { TokenCounter } from "../shared/TokenCounter";
 import {
 	type ContextItem,
-	MAX_ASSISTANT_HISTORY,
-	MAX_TRANSCRIPT_ENTRIES,
 	mapSpeakerToRole,
 	type PinnedItem,
 	type TranscriptSegment,

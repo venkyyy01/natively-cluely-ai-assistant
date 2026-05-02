@@ -16,9 +16,11 @@ test("BrowserGetDisplayMediaAdapter skips unless explicitly enabled", async () =
 	const outputRoot = await mkdtemp(
 		path.join(os.tmpdir(), "capture-matrix-browser-skip-"),
 	);
-	const row = createDefaultBrowserGetDisplayMediaRows({
+	const rows = createDefaultBrowserGetDisplayMediaRows({
 		platform: "darwin",
-	})[0]!;
+	});
+	const row = rows[0];
+	if (!row) throw new Error("No row created");
 	const result = await runCaptureMatrix({
 		rows: [row],
 		adapter: new BrowserGetDisplayMediaAdapter({
@@ -30,10 +32,10 @@ test("BrowserGetDisplayMediaAdapter skips unless explicitly enabled", async () =
 		generatedAt: "1970-01-01T00:00:00.000Z",
 	});
 
-	assert.equal(result.results[0]!.actualResult, "skipped");
-	assert.match(result.results[0]!.reason ?? "", /explicit opt-in/);
+	assert.equal(result.results[0]?.actualResult, "skipped");
+	assert.match(result.results[0]?.reason ?? "", /explicit opt-in/);
 	assert.equal(
-		result.results[0]!.artifactMetadata?.externalCaptureMode,
+		result.results[0]?.artifactMetadata?.externalCaptureMode,
 		"getDisplayMedia",
 	);
 });
@@ -42,9 +44,11 @@ test("BrowserGetDisplayMediaAdapter analyzes injected Playwright capture artifac
 	const outputRoot = await mkdtemp(
 		path.join(os.tmpdir(), "capture-matrix-browser-"),
 	);
-	const row = createDefaultBrowserGetDisplayMediaRows({
+	const rows = createDefaultBrowserGetDisplayMediaRows({
 		platform: "darwin",
-	})[1]!;
+	});
+	const row = rows[1];
+	if (!row) throw new Error("No row created");
 	const canaryPng = await renderCanaryPngBuffer(row.canaryToken);
 	const result = await runCaptureMatrix({
 		rows: [row],
@@ -68,19 +72,19 @@ test("BrowserGetDisplayMediaAdapter analyzes injected Playwright capture artifac
 	});
 
 	assert.equal(result.passed, true);
-	assert.equal(result.results[0]!.actualResult, "visible");
+	assert.equal(result.results[0]?.actualResult, "visible");
 	assert.equal(
-		result.results[0]!.artifactMetadata?.externalAppVersion,
+		result.results[0]?.artifactMetadata?.externalAppVersion,
 		"Chromium 120",
 	);
-	assert.ok(result.results[0]!.artifactPaths.capture);
+	assert.ok(result.results[0]?.artifactPaths.capture);
 });
 
 test("ManualExternalCaptureAdapter records external app metadata when artifact is missing", async () => {
 	const outputRoot = await mkdtemp(
 		path.join(os.tmpdir(), "capture-matrix-manual-skip-"),
 	);
-	const row = createDefaultMeetingAppRows({
+	const rows = createDefaultMeetingAppRows({
 		platform: "darwin",
 		externalApps: [
 			{
@@ -90,7 +94,9 @@ test("ManualExternalCaptureAdapter records external app metadata when artifact i
 				captureMode: "screen-share",
 			},
 		],
-	})[0]!;
+	});
+	const row = rows[0];
+	if (!row) throw new Error("No row created");
 	const result = await runCaptureMatrix({
 		rows: [row],
 		adapter: new ManualExternalCaptureAdapter({ platform: "darwin" }),
@@ -99,14 +105,14 @@ test("ManualExternalCaptureAdapter records external app metadata when artifact i
 		generatedAt: "1970-01-01T00:00:00.000Z",
 	});
 
-	assert.equal(result.results[0]!.actualResult, "skipped");
-	assert.equal(result.results[0]!.artifactMetadata?.externalAppName, "Zoom");
+	assert.equal(result.results[0]?.actualResult, "skipped");
+	assert.equal(result.results[0]?.artifactMetadata?.externalAppName, "Zoom");
 	assert.equal(
-		result.results[0]!.artifactMetadata?.externalAppVersion,
+		result.results[0]?.artifactMetadata?.externalAppVersion,
 		"6.0.0",
 	);
 	assert.equal(
-		result.results[0]!.artifactMetadata?.externalCaptureMode,
+		result.results[0]?.artifactMetadata?.externalCaptureMode,
 		"screen-share",
 	);
 });
@@ -115,7 +121,7 @@ test("ManualExternalCaptureAdapter analyzes supplied meeting app capture artifac
 	const outputRoot = await mkdtemp(
 		path.join(os.tmpdir(), "capture-matrix-manual-"),
 	);
-	const row = createDefaultMeetingAppRows({
+	const rows = createDefaultMeetingAppRows({
 		platform: "darwin",
 		externalApps: [
 			{
@@ -125,7 +131,9 @@ test("ManualExternalCaptureAdapter analyzes supplied meeting app capture artifac
 				captureMode: "display-capture",
 			},
 		],
-	})[1]!;
+	});
+	const row = rows[1];
+	if (!row) throw new Error("No row created");
 	const canaryPng = await renderCanaryPngBuffer(row.canaryToken);
 	const result = await runCaptureMatrix({
 		rows: [row],
@@ -147,13 +155,15 @@ test("ManualExternalCaptureAdapter analyzes supplied meeting app capture artifac
 	});
 
 	assert.equal(result.passed, true);
-	assert.equal(result.results[0]!.actualResult, "visible");
+	assert.equal(result.results[0]?.actualResult, "visible");
 	assert.equal(
-		result.results[0]!.artifactMetadata?.externalAppName,
+		result.results[0]?.artifactMetadata?.externalAppName,
 		"OBS Studio",
 	);
+	const capturePath = result.results[0]?.artifactPaths.capture;
+	if (!capturePath) throw new Error("No capture path");
 	assert.equal(
-		await readFile(result.results[0]!.artifactPaths.capture!, "utf8").then(
+		await readFile(capturePath, "utf8").then(
 			() => true,
 		),
 		true,

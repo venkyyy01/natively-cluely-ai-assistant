@@ -76,7 +76,7 @@ export const ProviderCard: React.FC<ProviderCardProps> = ({
 			}
 		}, 5000);
 		return () => clearTimeout(timer);
-	}, [apiKey]);
+	}, [apiKey, onSaveKey]);
 
 	// Sync preferredModel prop
 	useEffect(() => {
@@ -109,7 +109,6 @@ export const ProviderCard: React.FC<ProviderCardProps> = ({
 
 			// Fetch models using the key (or stored key)
 			const keyToUse = apiKey.trim() || "";
-			// @ts-expect-error
 			const result = await window.electronAPI?.fetchProviderModels(
 				providerId,
 				keyToUse,
@@ -125,7 +124,6 @@ export const ProviderCard: React.FC<ProviderCardProps> = ({
 					if (!existsInList) {
 						const firstModel = result.models[0].id;
 						setSelectedModel(firstModel);
-						// @ts-expect-error
 						await window.electronAPI?.setProviderPreferredModel(
 							providerId,
 							firstModel,
@@ -149,7 +147,6 @@ export const ProviderCard: React.FC<ProviderCardProps> = ({
 		setSelectedModel(modelId);
 		setIsDropdownOpen(false);
 		try {
-			// @ts-expect-error
 			await window.electronAPI?.setProviderPreferredModel(providerId, modelId);
 			if (onPreferredModelChange) {
 				onPreferredModelChange(modelId);
@@ -164,15 +161,15 @@ export const ProviderCard: React.FC<ProviderCardProps> = ({
 	return (
 		<div className="bg-bg-item-surface rounded-xl p-5 border border-border-subtle">
 			<div className="mb-2 flex items-center justify-between">
-				<label className="flex items-center text-xs font-medium text-text-primary uppercase tracking-wide">
+				<span className="flex items-center text-xs font-medium text-text-primary uppercase tracking-wide">
 					{providerName} API Key
 					{hasStoredKey && (
 						<span className="ml-2 text-green-500 normal-case">✓ Saved</span>
 					)}
-				</label>
+				</span>
 				<button
+					type="button"
 					onClick={() => {
-						// @ts-expect-error
 						window.electronAPI?.openExternal(keyUrl);
 					}}
 					className="text-xs text-text-tertiary hover:text-text-primary flex items-center gap-1 transition-colors"
@@ -191,6 +188,7 @@ export const ProviderCard: React.FC<ProviderCardProps> = ({
 					className="flex-1 bg-bg-input border border-border-subtle rounded-lg px-4 py-2.5 text-xs text-text-primary focus:outline-none focus:border-accent-primary transition-colors"
 				/>
 				<button
+					type="button"
 					onClick={onSaveKey}
 					disabled={savingStatus || !apiKey.trim()}
 					className={`px-5 py-2.5 rounded-lg text-xs font-medium transition-colors ${
@@ -203,6 +201,7 @@ export const ProviderCard: React.FC<ProviderCardProps> = ({
 				</button>
 				{hasStoredKey && (
 					<button
+						type="button"
 						onClick={onRemoveKey}
 						className="px-2.5 py-2.5 rounded-lg text-xs font-medium text-text-tertiary hover:text-red-500 hover:bg-red-500/10 transition-all"
 						title="Remove API Key"
@@ -215,6 +214,7 @@ export const ProviderCard: React.FC<ProviderCardProps> = ({
 			{/* Action Row: Test Connection + Conditional Dropdown + Fetch Models */}
 			<div className="flex items-center justify-between mb-3 w-full">
 				<button
+					type="button"
 					onClick={onTestConnection}
 					disabled={
 						(!apiKey.trim() && !hasStoredKey) || testStatus === "testing"
@@ -295,6 +295,7 @@ export const ProviderCard: React.FC<ProviderCardProps> = ({
 
 				{hasStoredKey ? (
 					<button
+						type="button"
 						onClick={handleFetchModels}
 						disabled={isFetching}
 						className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors border border-border-subtle flex items-center gap-2 shrink-0 ${

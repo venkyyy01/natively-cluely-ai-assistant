@@ -1,7 +1,6 @@
 import type React from "react";
 import { useEffect, useRef, useState } from "react";
 import { IoLogOutOutline } from "react-icons/io5";
-import { Dialog, DialogClose, DialogContent } from "../ui/dialog";
 
 interface QueueCommandsProps {
 	onTooltipVisibilityChange: (visible: boolean, height: number) => void;
@@ -24,18 +23,20 @@ const QueueCommands: React.FC<QueueCommandsProps> = ({
 }) => {
 	const [isTooltipVisible, setIsTooltipVisible] = useState(false);
 	const tooltipRef = useRef<HTMLDivElement>(null);
-	const [isRecording, setIsRecording] = useState(false);
-	const [mediaRecorder, setMediaRecorder] = useState<MediaRecorder | null>(
+	const [isRecording, _setIsRecording] = useState(false);
+	const [_mediaRecorder, _setMediaRecorder] = useState<MediaRecorder | null>(
 		null,
 	);
 	const [audioResult, setAudioResult] = useState<string | null>(null);
-	const chunks = useRef<Blob[]>([]);
+	const _chunks = useRef<Blob[]>([]);
 
 	// Native audio service state
 	const [isNativeAudioConnected, setIsNativeAudioConnected] = useState(false);
-	const [transcripts, setTranscripts] = useState<Transcript[]>([]);
-	const [latestSuggestion, setLatestSuggestion] = useState<string | null>(null);
-	const [isSuggestionLoading, setIsSuggestionLoading] = useState(false);
+	const [_transcripts, setTranscripts] = useState<Transcript[]>([]);
+	const [_latestSuggestion, setLatestSuggestion] = useState<string | null>(
+		null,
+	);
+	const [_isSuggestionLoading, setIsSuggestionLoading] = useState(false);
 
 	// Subscribe to native audio events
 	useEffect(() => {
@@ -112,7 +113,7 @@ const QueueCommands: React.FC<QueueCommandsProps> = ({
 			tooltipHeight = tooltipRef.current.offsetHeight + 10;
 		}
 		onTooltipVisibilityChange(isTooltipVisible, tooltipHeight);
-	}, [isTooltipVisible]);
+	}, [isTooltipVisible, onTooltipVisibilityChange]);
 
 	const handleMouseEnter = () => {
 		setIsTooltipVisible(true);

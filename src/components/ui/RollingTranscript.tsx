@@ -1,4 +1,4 @@
-import React, { memo, useEffect, useRef } from "react";
+import { memo, useEffect, useRef } from "react";
 
 interface RollingTranscriptProps {
 	text: string;
@@ -24,7 +24,7 @@ const RollingTranscript = memo<RollingTranscriptProps>(
 			if (containerRef.current) {
 				containerRef.current.scrollLeft = containerRef.current.scrollWidth;
 			}
-		}, [text]);
+		}, []);
 
 		if (!text) return null;
 

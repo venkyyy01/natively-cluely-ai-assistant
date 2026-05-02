@@ -11,10 +11,6 @@ export class SemanticThreadMatcher {
 	private static readonly THRESHOLD = 0.62;
 	private static readonly MIN_WORD_COUNT = 4;
 
-	constructor() {
-		// Lazy load model on first use
-	}
-
 	private async ensureModelLoaded(): Promise<void> {
 		if (this.embedder) {
 			return;

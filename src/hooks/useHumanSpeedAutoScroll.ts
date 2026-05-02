@@ -266,7 +266,7 @@ export function useHumanSpeedAutoScroll({
 			followLatestRef.current = true;
 		}
 
-		const durationMs = estimateDurationMs(latestMessage.content);
+		const _durationMs = estimateDurationMs(latestMessage.content);
 
 		const step = (timestamp: number) => {
 			if (isPointerInteractingRef.current && isHoldingManualScrollRef.current) {

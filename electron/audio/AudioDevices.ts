@@ -16,8 +16,8 @@ export interface AudioDevice {
 	name: string;
 }
 
-export class AudioDevices {
-	public static getInputDevices(): AudioDevice[] {
+export const AudioDevices = {
+	getInputDevices(): AudioDevice[] {
 		if (!getInputDevices) {
 			console.warn("[AudioDevices] Native functionality not available");
 			return [];
@@ -28,9 +28,9 @@ export class AudioDevices {
 			console.error("[AudioDevices] Failed to get input devices:", e);
 			return [];
 		}
-	}
+	},
 
-	public static getOutputDevices(): AudioDevice[] {
+	getOutputDevices(): AudioDevice[] {
 		if (!getOutputDevices) {
 			console.warn("[AudioDevices] Native functionality not available");
 			return [];
@@ -42,4 +42,4 @@ export class AudioDevices {
 			return [];
 		}
 	}
-}
+};

@@ -1,4 +1,4 @@
-const { parentPort } = require("worker_threads");
+const { parentPort } = require("node:worker_threads");
 
 // Handle messages from the main thread
 parentPort.on("message", async (message) => {

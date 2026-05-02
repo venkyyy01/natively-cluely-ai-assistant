@@ -203,7 +203,7 @@ export class StreamManager {
 					),
 				),
 			]);
-		} catch (error) {
+		} catch (_error) {
 			console.warn(
 				"[StreamManager] Background tasks timed out, cancelling remaining tasks",
 			);

@@ -1,11 +1,4 @@
-import type { VirtualDisplayCoordinator } from "./MacosVirtualDisplayClient";
-import type { ProtectionStateMachine } from "./ProtectionStateMachine";
-import type {
-	NativeStealthBindings,
-	StealthFeatureFlags,
-	StealthWindowRole,
-} from "./StealthManager";
-import type { VisibilityController } from "./VisibilityController";
+import type { StealthWindowRole } from "./StealthManager";
 
 export type DisplayBounds = {
 	x: number;

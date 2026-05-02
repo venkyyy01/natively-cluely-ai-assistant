@@ -2,15 +2,7 @@
 
 import assert from "node:assert/strict";
 import test from "node:test";
-import {
-	ConfidenceScore,
-	ConsciousResponse,
-	ConversationThread,
-	type FallbackTier,
-	INTERVIEW_PHASES,
-	InterviewPhase,
-	TokenBudget,
-} from "../conscious/types";
+import { type FallbackTier, INTERVIEW_PHASES } from "../conscious/types";
 
 test("ConsciousModeTypes - should have all interview phases defined", () => {
 	assert.ok(INTERVIEW_PHASES.includes("requirements_gathering"));

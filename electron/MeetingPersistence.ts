@@ -12,7 +12,7 @@ import type {
 	TranscriptSegment,
 } from "./SessionTracker";
 
-const crypto = require("crypto");
+const crypto = require("node:crypto");
 
 const PLACEHOLDER_MEETING_TITLES = new Set([
 	"",

@@ -4,10 +4,8 @@ import {
 	Check,
 	CheckCircle,
 	Copy,
-	ExternalLink,
 	Key,
 	Lock,
-	Sparkles,
 	X,
 } from "lucide-react";
 import type React from "react";

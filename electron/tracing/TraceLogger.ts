@@ -3,7 +3,7 @@
  * Logs to console and optionally to file for debugging
  */
 
-import { type Span, TraceContext } from "./TraceContext";
+import type { Span } from "./TraceContext";
 
 export type TraceLevel = "debug" | "info" | "warn" | "error";
 

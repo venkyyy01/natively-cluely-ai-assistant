@@ -82,8 +82,11 @@ interface DatabaseManagerInstance {
 }
 
 function attachManager(dbPath: string): DatabaseManagerInstance {
-	const RealDatabase = Database!;
-	const RealDatabaseManager = DatabaseManager!;
+	const RealDatabase = Database;
+	const RealDatabaseManager = DatabaseManager;
+	if (!RealDatabase || !RealDatabaseManager) {
+		throw new Error("Database or DatabaseManager not available");
+	}
 	const realDb = new RealDatabase(dbPath);
 	realDb.pragma("journal_mode = WAL");
 	realDb.pragma("synchronous = NORMAL");
@@ -165,7 +168,8 @@ test("DatabaseManager.close() flushes WAL so re-opening the same path succeeds a
 		// Simulate the next launch: open the same path, run a trivial query.
 		// The original row must be visible — proving the WAL was checkpointed
 		// into the main DB before the sidecars were unlinked.
-		const RealDatabase = Database!;
+		const RealDatabase = Database;
+		if (!RealDatabase) throw new Error("Database not available");
 		const reopened = new RealDatabase(dbPath);
 		try {
 			const rows = reopened.prepare("SELECT v FROM smoke").all() as Array<{
@@ -183,7 +187,10 @@ test("DatabaseManager.close() flushes WAL so re-opening the same path succeeds a
 test("DatabaseManager.closeIfOpen() is a no-op when the singleton was never instantiated", {
 	skip: skipReason ?? false,
 }, () => {
-	const RealDatabaseManager = DatabaseManager!;
+	const RealDatabaseManager = DatabaseManager;
+	if (!RealDatabaseManager) {
+		throw new Error("DatabaseManager not available");
+	}
 	// Force the singleton slot to be empty regardless of test ordering.
 	(
 		RealDatabaseManager as unknown as { instance?: DatabaseManagerInstance }

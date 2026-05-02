@@ -1,6 +1,6 @@
-const fs = require("fs");
-const path = require("path");
-const { execFileSync, spawnSync } = require("child_process");
+const fs = require("node:fs");
+const path = require("node:path");
+const { execFileSync, spawnSync } = require("node:child_process");
 
 const root = path.resolve(__dirname, "..");
 const defaultPackageDir = path.join(

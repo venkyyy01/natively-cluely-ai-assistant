@@ -33,7 +33,7 @@ export class TranscriptIndex {
 	 * Search for semantically similar segments
 	 * Returns top-K segments with similarity above threshold
 	 */
-	search(query: string, queryEmbedding?: number[]): SearchResult[] {
+	search(_query: string, queryEmbedding?: number[]): SearchResult[] {
 		if (this.segments.length === 0) {
 			return [];
 		}

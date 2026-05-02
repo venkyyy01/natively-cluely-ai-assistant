@@ -1,5 +1,4 @@
-import path from "node:path";
-import { app, BrowserWindow, screen } from "electron";
+import { BrowserWindow, screen } from "electron";
 import { attachRendererBridgeMonitor } from "./runtime/rendererBridgeHealth";
 import {
 	resolveRendererPreloadPath,

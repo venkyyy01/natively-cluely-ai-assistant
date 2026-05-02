@@ -55,11 +55,6 @@ type ProtectionEventRecorder = {
 	verifyManagedWindows?: () => boolean;
 };
 
-type BrowserWindowOptionsWithContentProtection =
-	Electron.BrowserWindowConstructorOptions & {
-		contentProtection?: boolean;
-	};
-
 console.log(
 	`[WindowHelper] isEnvDev: ${process.env.NODE_ENV === "development"}, isPackaged: ${app.isPackaged}`,
 );
@@ -72,9 +67,6 @@ export class WindowHelper {
 	private launcherRuntime: StealthRuntime | null = null;
 	private overlayRuntime: StealthRuntime | null = null;
 	private isWindowVisible: boolean = false;
-	// Position/Size tracking for Launcher
-	private launcherPosition: { x: number; y: number } | null = null;
-	private launcherSize: { width: number; height: number } | null = null;
 	// Track current window mode (persists even when overlay is hidden via Cmd+B)
 	private currentWindowMode: "launcher" | "overlay" = "launcher";
 
@@ -88,14 +80,8 @@ export class WindowHelper {
 	private detachDirectLauncherBridgeMonitor: (() => void) | null = null;
 	private detachDirectOverlayBridgeMonitor: (() => void) | null = null;
 
-	// Initialize with explicit number type and 0 value
-	private screenWidth: number = 0;
-	private screenHeight: number = 0;
-
 	// Movement variables (apply to active window)
 	private step: number = 20;
-	private currentX: number = 0;
-	private currentY: number = 0;
 	private readonly stealthManager: StealthManager;
 	private readonly startupProtectionGate: StartupProtectionGate;
 	private stealthHeartbeatListener: (() => void) | null = null;

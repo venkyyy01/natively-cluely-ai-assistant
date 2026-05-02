@@ -1,7 +1,7 @@
 // electron/knowledge/GoogleCustomSearchProvider.ts
 // Google Custom Search JSON API integration for company research
 
-import https from "https";
+import https from "node:https";
 import type { SearchProvider, SearchResult } from "./CompanyResearchEngine";
 
 const GOOGLE_CSE_ENDPOINT = "https://www.googleapis.com/customsearch/v1";

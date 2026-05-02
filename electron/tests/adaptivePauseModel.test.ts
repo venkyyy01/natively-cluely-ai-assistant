@@ -51,7 +51,7 @@ describe("AdaptivePauseModel", () => {
 
 	it("should update weights on user action", () => {
 		const model = new AdaptivePauseModel("test-profile");
-		const initialWeights = model.getCurrentWeights();
+		const _initialWeights = model.getCurrentWeights();
 
 		const features: PauseFeatures = {
 			silenceDuration: 0.8,
@@ -64,7 +64,7 @@ describe("AdaptivePauseModel", () => {
 		// Update with label 1 (user was done speaking)
 		model.update(features, 1);
 
-		const updatedWeights = model.getCurrentWeights();
+		const _updatedWeights = model.getCurrentWeights();
 		assert.ok(model.getSampleCount() > 0, "Sample count should increase");
 	});
 
@@ -140,7 +140,7 @@ describe("AdaptivePauseModel", () => {
 			model.update(features, 1);
 		}
 
-		const beforeReset = model.getCurrentWeights();
+		const _beforeReset = model.getCurrentWeights();
 		assert.ok(model.getSampleCount() > 0, "Should have samples before reset");
 
 		model.reset();
