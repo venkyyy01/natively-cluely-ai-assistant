@@ -1351,7 +1351,6 @@ export class LLMHelper {
 						}),
 					);
 
-					// @ts-expect-error
 					const response =
 						await this.client!.models.generateContent(requestPayload);
 
@@ -2284,7 +2283,6 @@ ANSWER DIRECTLY:`;
 				execute: async () => {
 					// Call the API directly with the Pro model instead of touching shared state
 					const response = await this.withRetry(async () => {
-						// @ts-expect-error
 						const res = await this.client!.models.generateContent({
 							model: GEMINI_PRO_MODEL,
 							contents: [{ role: "user", parts: [{ text: message }] }],
@@ -2774,7 +2772,6 @@ ANSWER DIRECTLY:`;
 		const { curlCommand, responsePath } = this.activeCurlProvider;
 
 		// 1. Parse cURL to config object
-		// @ts-expect-error
 		const curlConfig = curl2Json(curlCommand);
 
 		// 2. Prepare Variables
@@ -4840,7 +4837,6 @@ ANSWER DIRECTLY:`;
 				if (!response.body) throw new Error("No response body from Ollama");
 
 				// iterate over the readable stream
-				// @ts-expect-error
 				for await (const chunk of response.body) {
 					if (abortSignal?.aborted) {
 						return;
@@ -4952,7 +4948,6 @@ ANSWER DIRECTLY:`;
 			let fullBody = "";
 			let yieldedAny = false;
 
-			// @ts-expect-error
 			for await (const chunk of response.body) {
 				const text = new TextDecoder().decode(chunk);
 				if (
@@ -5525,7 +5520,6 @@ ANSWER DIRECTLY:`;
 					`[LLMHelper] 🔄 Gemini Pro Attempt ${attempt}/${maxProRetries}...`,
 				);
 				const response = await this.withTimeout(
-					// @ts-expect-error
 					this.client.models.generateContent({
 						model: GEMINI_PRO_MODEL,
 						contents: contents,
