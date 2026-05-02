@@ -1,4 +1,4 @@
-import { EventEmitter } from 'events';
+import { EventEmitter } from "events";
 
 /**
  * NAT-062 — Multichannel STT session abstraction.
@@ -13,20 +13,20 @@ import { EventEmitter } from 'events';
  */
 
 export interface MultichannelSTTOptions {
-  sampleRate: number;
-  channels: number;
-  channelLabels: string[];
-  /** Provider-specific query params appended to WS URL. */
-  providerParams?: Record<string, string>;
+	sampleRate: number;
+	channels: number;
+	channelLabels: string[];
+	/** Provider-specific query params appended to WS URL. */
+	providerParams?: Record<string, string>;
 }
 
 export interface DiarizedTranscript {
-  text: string;
-  isFinal: boolean;
-  confidence: number;
-  /** Channel index or label that produced this transcript. */
-  channel: number | string;
-  speaker?: string;
+	text: string;
+	isFinal: boolean;
+	confidence: number;
+	/** Channel index or label that produced this transcript. */
+	channel: number | string;
+	speaker?: string;
 }
 
 /**
@@ -34,77 +34,79 @@ export interface DiarizedTranscript {
  * Implementations provider-specific (Deepgram, Soniox, etc.).
  */
 export abstract class MultichannelSTTSession extends EventEmitter {
-  protected connected = false;
+	protected connected = false;
 
-  constructor(protected readonly options: MultichannelSTTOptions) {
-    super();
-  }
+	constructor(protected readonly options: MultichannelSTTOptions) {
+		super();
+	}
 
-  abstract start(): Promise<void>;
-  abstract stop(): Promise<void>;
+	abstract start(): Promise<void>;
+	abstract stop(): Promise<void>;
 
-  /**
-   * Write a frame of interleaved PCM16 data.
-   * Frame length must be a multiple of `channels * 2` bytes.
-   */
-  abstract writeInterleavedFrame(frame: Buffer): void;
+	/**
+	 * Write a frame of interleaved PCM16 data.
+	 * Frame length must be a multiple of `channels * 2` bytes.
+	 */
+	abstract writeInterleavedFrame(frame: Buffer): void;
 
-  isConnected(): boolean {
-    return this.connected;
-  }
+	isConnected(): boolean {
+		return this.connected;
+	}
 }
 
 /** Deepgram-specific multichannel session. */
 export class DeepgramMultichannelSession extends MultichannelSTTSession {
-  private ws: WebSocket | null = null;
+	private ws: WebSocket | null = null;
 
-  async start(): Promise<void> {
-    // Placeholder: real implementation would open a single WS with
-    // channels=2, diarize=true, multichannel=true
-    this.connected = true;
-    this.emit('connected');
-  }
+	async start(): Promise<void> {
+		// Placeholder: real implementation would open a single WS with
+		// channels=2, diarize=true, multichannel=true
+		this.connected = true;
+		this.emit("connected");
+	}
 
-  async stop(): Promise<void> {
-    this.connected = false;
-    this.ws = null;
-    this.emit('disconnected');
-  }
+	async stop(): Promise<void> {
+		this.connected = false;
+		this.ws = null;
+		this.emit("disconnected");
+	}
 
-  writeInterleavedFrame(_frame: Buffer): void {
-    if (!this.connected) return;
-    // Placeholder: send over WS
-  }
+	writeInterleavedFrame(_frame: Buffer): void {
+		if (!this.connected) return;
+		// Placeholder: send over WS
+	}
 }
 
 /** Soniox-specific multichannel session. */
 export class SonioxMultichannelSession extends MultichannelSTTSession {
-  async start(): Promise<void> {
-    this.connected = true;
-    this.emit('connected');
-  }
+	async start(): Promise<void> {
+		this.connected = true;
+		this.emit("connected");
+	}
 
-  async stop(): Promise<void> {
-    this.connected = false;
-    this.emit('disconnected');
-  }
+	async stop(): Promise<void> {
+		this.connected = false;
+		this.emit("disconnected");
+	}
 
-  writeInterleavedFrame(_frame: Buffer): void {
-    if (!this.connected) return;
-  }
+	writeInterleavedFrame(_frame: Buffer): void {
+		if (!this.connected) return;
+	}
 }
 
 /** Capabilities registry. */
 export function supportsMultichannelDiarization(provider: string): boolean {
-  return provider === 'deepgram' || provider === 'soniox';
+	return provider === "deepgram" || provider === "soniox";
 }
 
 /** Factory. */
 export function createMultichannelSession(
-  provider: string,
-  options: MultichannelSTTOptions,
+	provider: string,
+	options: MultichannelSTTOptions,
 ): MultichannelSTTSession {
-  if (provider === 'deepgram') return new DeepgramMultichannelSession(options);
-  if (provider === 'soniox') return new SonioxMultichannelSession(options);
-  throw new Error(`Provider ${provider} does not support multichannel diarization`);
+	if (provider === "deepgram") return new DeepgramMultichannelSession(options);
+	if (provider === "soniox") return new SonioxMultichannelSession(options);
+	throw new Error(
+		`Provider ${provider} does not support multichannel diarization`,
+	);
 }

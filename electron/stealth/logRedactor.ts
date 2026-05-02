@@ -14,7 +14,7 @@
 // unchanged so debugging release builds remains feasible when the operator
 // explicitly enables file logging via `NATIVELY_DEBUG_LOG=1`.
 
-const REDACTION_PLACEHOLDER = '[REDACTED]';
+const REDACTION_PLACEHOLDER = "[REDACTED]";
 
 /**
  * S-7: Dynamic userData path pattern for redaction.
@@ -35,37 +35,37 @@ let userDataPattern: RegExp | null = null;
  * - processFailure: Kill switch function name
  */
 const STEALTH_SUBSTRING_PATTERNS: ReadonlyArray<RegExp> = [
-  /\bStealth(?:Manager|Supervisor|Runtime|ArmController|StateMachine|Bridge|Enhancer)?\b/gi,
-  /\bMacosStealthEnhancer\b/gi,
-  /\bNativeStealthBridge\b/gi,
-  /\bMacosVirtualDisplay\w*\b/gi,
-  /\bvirtual[- ]display\b/gi,
-  /\bcapture[- ]bypass\b/gi,
-  /\bopacity[- ]flicker\b/gi,
-  /\bSCStream(?:Monitor|Detection)?\b/gi,
-  /\bChromiumCaptureDetector\b/gi,
-  /\bTCCMonitor\b/gi,
-  /\bsetContentProtection\b/gi,
-  /\bsetExcludeFromCapture\b/gi,
-  /\bisUndetectable\b/gi,
-  /\bprivacy[- ]shield\b/gi,
-  /\bfull[- ]stealth\b/gi,
-  /\bfoundation[- ]intent\b/gi,
-  // S-7: Product name redaction
-  /\bNatively\b/gi,
-  /\bCluely\b/gi,
-  /\bnatively[-_]debug/gi,
-  /Application Support\/Natively/gi,
-  /Application Support\/Cluely/gi,
-  /\.natively/gi,
-  /processFailure/gi,
-  // T-004: Additional stealth-revealing patterns
-  /\[AudioHealth\]/gi,
-  /\[MicrophoneCapture\]/gi,
-  /\[SystemAudioCapture\]/gi,
-  /pgrep/gi,
-  /tasklist/gi,
-  /CGS\w*/gi,
+	/\bStealth(?:Manager|Supervisor|Runtime|ArmController|StateMachine|Bridge|Enhancer)?\b/gi,
+	/\bMacosStealthEnhancer\b/gi,
+	/\bNativeStealthBridge\b/gi,
+	/\bMacosVirtualDisplay\w*\b/gi,
+	/\bvirtual[- ]display\b/gi,
+	/\bcapture[- ]bypass\b/gi,
+	/\bopacity[- ]flicker\b/gi,
+	/\bSCStream(?:Monitor|Detection)?\b/gi,
+	/\bChromiumCaptureDetector\b/gi,
+	/\bTCCMonitor\b/gi,
+	/\bsetContentProtection\b/gi,
+	/\bsetExcludeFromCapture\b/gi,
+	/\bisUndetectable\b/gi,
+	/\bprivacy[- ]shield\b/gi,
+	/\bfull[- ]stealth\b/gi,
+	/\bfoundation[- ]intent\b/gi,
+	// S-7: Product name redaction
+	/\bNatively\b/gi,
+	/\bCluely\b/gi,
+	/\bnatively[-_]debug/gi,
+	/Application Support\/Natively/gi,
+	/Application Support\/Cluely/gi,
+	/\.natively/gi,
+	/processFailure/gi,
+	// T-004: Additional stealth-revealing patterns
+	/\[AudioHealth\]/gi,
+	/\[MicrophoneCapture\]/gi,
+	/\[SystemAudioCapture\]/gi,
+	/pgrep/gi,
+	/tasklist/gi,
+	/CGS\w*/gi,
 ];
 
 /**
@@ -73,8 +73,8 @@ const STEALTH_SUBSTRING_PATTERNS: ReadonlyArray<RegExp> = [
  * Must be called after app.whenReady() to get the correct path.
  */
 export function initRedactorWithUserDataPath(userDataPath: string): void {
-  const escaped = userDataPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  userDataPattern = new RegExp(escaped, 'gi');
+	const escaped = userDataPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+	userDataPattern = new RegExp(escaped, "gi");
 }
 
 /**
@@ -83,19 +83,19 @@ export function initRedactorWithUserDataPath(userDataPath: string): void {
  * `[CRITICAL]` and trailing newline.
  */
 export function redactStealthSubstrings(line: string): string {
-  let out = line;
+	let out = line;
 
-  // Apply static patterns
-  for (const pattern of STEALTH_SUBSTRING_PATTERNS) {
-    out = out.replace(pattern, REDACTION_PLACEHOLDER);
-  }
+	// Apply static patterns
+	for (const pattern of STEALTH_SUBSTRING_PATTERNS) {
+		out = out.replace(pattern, REDACTION_PLACEHOLDER);
+	}
 
-  // S-7: Apply dynamic userData path pattern if initialized
-  if (userDataPattern) {
-    out = out.replace(userDataPattern, REDACTION_PLACEHOLDER);
-  }
+	// S-7: Apply dynamic userData path pattern if initialized
+	if (userDataPattern) {
+		out = out.replace(userDataPattern, REDACTION_PLACEHOLDER);
+	}
 
-  return out;
+	return out;
 }
 
 /**
@@ -103,5 +103,5 @@ export function redactStealthSubstrings(line: string): string {
  * without inverting the test hierarchy.
  */
 export function getStealthRedactionPatternsForTesting(): ReadonlyArray<RegExp> {
-  return STEALTH_SUBSTRING_PATTERNS;
+	return STEALTH_SUBSTRING_PATTERNS;
 }

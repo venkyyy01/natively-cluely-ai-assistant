@@ -2,118 +2,147 @@
 // Enhanced transcript cleaning for RAG - extends existing transcriptCleaner.ts patterns
 // Adds semantic detection (questions, decisions, action items)
 
-import { TokenCounter } from '../shared/TokenCounter';
+import { TokenCounter } from "../shared/TokenCounter";
 
 export interface RawSegment {
-    speaker: string;
-    text: string;
-    timestamp: number;  // ms
+	speaker: string;
+	text: string;
+	timestamp: number; // ms
 }
 
 export interface CleanedSegment {
-    speaker: string;
-    text: string;
-    startMs: number;
-    endMs: number;
-    isQuestion: boolean;
-    isDecision: boolean;
-    isActionItem: boolean;
+	speaker: string;
+	text: string;
+	startMs: number;
+	endMs: number;
+	isQuestion: boolean;
+	isDecision: boolean;
+	isActionItem: boolean;
 }
 
 // Filler words to remove (extended from transcriptCleaner.ts)
 const FILLERS = new Set([
-    'uh', 'um', 'ah', 'hmm', 'hm', 'er', 'erm',
-    'like', 'you know', 'i mean', 'basically', 'actually',
-    'so', 'well', 'anyway', 'anyways'
+	"uh",
+	"um",
+	"ah",
+	"hmm",
+	"hm",
+	"er",
+	"erm",
+	"like",
+	"you know",
+	"i mean",
+	"basically",
+	"actually",
+	"so",
+	"well",
+	"anyway",
+	"anyways",
 ]);
 
 const ACKNOWLEDGEMENTS = new Set([
-    'okay', 'ok', 'yeah', 'yes', 'right', 'sure', 'got it',
-    'gotcha', 'uh-huh', 'uh huh', 'mm-hmm', 'mm hmm', 'mhm',
-    'cool', 'great', 'nice', 'perfect', 'alright', 'all right'
+	"okay",
+	"ok",
+	"yeah",
+	"yes",
+	"right",
+	"sure",
+	"got it",
+	"gotcha",
+	"uh-huh",
+	"uh huh",
+	"mm-hmm",
+	"mm hmm",
+	"mhm",
+	"cool",
+	"great",
+	"nice",
+	"perfect",
+	"alright",
+	"all right",
 ]);
 
 // Detection patterns for semantic markers
 const QUESTION_PATTERNS = [
-    /\?$/,
-    /^(what|who|when|where|why|how|can|could|would|should|is|are|do|does|did)\b/i
+	/\?$/,
+	/^(what|who|when|where|why|how|can|could|would|should|is|are|do|does|did)\b/i,
 ];
 
 const DECISION_PATTERNS = [
-    /\b(decided|agreed|confirmed|approved|let's go with|we'll do|going with)\b/i
+	/\b(decided|agreed|confirmed|approved|let's go with|we'll do|going with)\b/i,
 ];
 
 const ACTION_PATTERNS = [
-    /\b(will|going to|need to|should|must|action item|todo|follow up|follow-up)\b/i,
-    /\b(by|before|deadline|next week|tomorrow|end of day|eod)\b/i
+	/\b(will|going to|need to|should|must|action item|todo|follow up|follow-up)\b/i,
+	/\b(by|before|deadline|next week|tomorrow|end of day|eod)\b/i,
 ];
 
-const TOKEN_COUNTER = new TokenCounter('generic');
+const TOKEN_COUNTER = new TokenCounter("generic");
 
 /**
  * Clean a single text segment - remove fillers and normalize
  */
 function cleanText(text: string): string {
-    let result = text.trim();
+	let result = text.trim();
 
-    // Remove repeated words (yeah yeah, okay okay)
-    result = result.replace(/\b(\w+)(\s+\1)+\b/gi, '$1');
+	// Remove repeated words (yeah yeah, okay okay)
+	result = result.replace(/\b(\w+)(\s+\1)+\b/gi, "$1");
 
-    // Split into words and filter fillers
-    const words = result.split(/\s+/);
-    const cleaned = words.filter(word => {
-        const normalized = word.toLowerCase().replace(/[.,!?;:]/g, '');
-        return !FILLERS.has(normalized) && !ACKNOWLEDGEMENTS.has(normalized);
-    });
+	// Split into words and filter fillers
+	const words = result.split(/\s+/);
+	const cleaned = words.filter((word) => {
+		const normalized = word.toLowerCase().replace(/[.,!?;:]/g, "");
+		return !FILLERS.has(normalized) && !ACKNOWLEDGEMENTS.has(normalized);
+	});
 
-    // Reconstruct
-    result = cleaned.join(' ').trim();
+	// Reconstruct
+	result = cleaned.join(" ").trim();
 
-    // Clean up punctuation
-    result = result.replace(/\s+([.,!?;:])/g, '$1');
-    result = result.replace(/([.,!?;:])+/g, '$1');
-    result = result.replace(/\s+/g, ' ');
+	// Clean up punctuation
+	result = result.replace(/\s+([.,!?;:])/g, "$1");
+	result = result.replace(/([.,!?;:])+/g, "$1");
+	result = result.replace(/\s+/g, " ");
 
-    return result;
+	return result;
 }
 
 /**
  * Normalize speaker labels for consistency
  */
 function normalizeSpeaker(speaker: string): string {
-    const lower = speaker.toLowerCase();
-    if (lower === 'interviewer' || lower === 'speaker') {
-        return 'Speaker';
-    }
-    if (lower === 'user' || lower === 'me') {
-        return 'You';
-    }
-    if (lower === 'assistant' || lower === 'natively') {
-        return 'Natively';
-    }
-    // Keep original if it looks like a name
-    return speaker;
+	const lower = speaker.toLowerCase();
+	if (lower === "interviewer" || lower === "speaker") {
+		return "Speaker";
+	}
+	if (lower === "user" || lower === "me") {
+		return "You";
+	}
+	if (lower === "assistant" || lower === "natively") {
+		return "Natively";
+	}
+	// Keep original if it looks like a name
+	return speaker;
 }
 
 /**
  * Check if text contains a question
  */
 function detectQuestion(text: string): boolean {
-    return QUESTION_PATTERNS.some(pattern => pattern.test(text));
+	return QUESTION_PATTERNS.some((pattern) => pattern.test(text));
 }
 
 /**
  * Check if text contains a decision marker
  */
 function detectDecision(text: string): boolean {
-    return DECISION_PATTERNS.some(pattern => pattern.test(text));
+	return DECISION_PATTERNS.some((pattern) => pattern.test(text));
 }
 
 /**
  * Check if text contains an action item marker
  */
 function detectActionItem(text: string): boolean {
-    return ACTION_PATTERNS.some(pattern => pattern.test(text));
+	return ACTION_PATTERNS.some((pattern) => pattern.test(text));
 }
 
 /**
@@ -121,43 +150,48 @@ function detectActionItem(text: string): boolean {
  * This reduces fragmentation from real-time transcription
  */
 function mergeConsecutiveSpeakerSegments(
-    segments: RawSegment[]
+	segments: RawSegment[],
 ): { speaker: string; text: string; startMs: number; endMs: number }[] {
-    if (segments.length === 0) return [];
+	if (segments.length === 0) return [];
 
-    const merged: { speaker: string; text: string; startMs: number; endMs: number }[] = [];
-    let current = {
-        speaker: segments[0].speaker,
-        text: segments[0].text,
-        startMs: segments[0].timestamp,
-        endMs: segments[0].timestamp
-    };
+	const merged: {
+		speaker: string;
+		text: string;
+		startMs: number;
+		endMs: number;
+	}[] = [];
+	let current = {
+		speaker: segments[0].speaker,
+		text: segments[0].text,
+		startMs: segments[0].timestamp,
+		endMs: segments[0].timestamp,
+	};
 
-    for (let i = 1; i < segments.length; i++) {
-        const seg = segments[i];
-        const gap = seg.timestamp - current.endMs;
+	for (let i = 1; i < segments.length; i++) {
+		const seg = segments[i];
+		const gap = seg.timestamp - current.endMs;
 
-        // Merge if same speaker and gap < 5 seconds
-        if (seg.speaker === current.speaker && gap < 5000) {
-            current.text += ' ' + seg.text;
-            current.endMs = seg.timestamp;
-        } else {
-            merged.push(current);
-            current = {
-                speaker: seg.speaker,
-                text: seg.text,
-                startMs: seg.timestamp,
-                endMs: seg.timestamp
-            };
-        }
-    }
+		// Merge if same speaker and gap < 5 seconds
+		if (seg.speaker === current.speaker && gap < 5000) {
+			current.text += " " + seg.text;
+			current.endMs = seg.timestamp;
+		} else {
+			merged.push(current);
+			current = {
+				speaker: seg.speaker,
+				text: seg.text,
+				startMs: seg.timestamp,
+				endMs: seg.timestamp,
+			};
+		}
+	}
 
-    merged.push(current);
-    return merged;
+	merged.push(current);
+	return merged;
 }
 
 export const __testUtils = {
-    mergeConsecutiveSpeakerSegments
+	mergeConsecutiveSpeakerSegments,
 };
 
 /**
@@ -165,37 +199,37 @@ export const __testUtils = {
  * Takes raw transcript segments and returns cleaned, annotated segments
  */
 export function preprocessTranscript(segments: RawSegment[]): CleanedSegment[] {
-    if (segments.length === 0) return [];
+	if (segments.length === 0) return [];
 
-    // 1. Merge consecutive segments from same speaker
-    const merged = mergeConsecutiveSpeakerSegments(segments);
+	// 1. Merge consecutive segments from same speaker
+	const merged = mergeConsecutiveSpeakerSegments(segments);
 
-    // 2. Clean and annotate each segment
-    const cleaned: CleanedSegment[] = [];
+	// 2. Clean and annotate each segment
+	const cleaned: CleanedSegment[] = [];
 
-    for (const seg of merged) {
-        const text = cleanText(seg.text);
+	for (const seg of merged) {
+		const text = cleanText(seg.text);
 
-        const isQuestion = detectQuestion(text);
-        const isDecision = detectDecision(text);
-        const isActionItem = detectActionItem(text);
+		const isQuestion = detectQuestion(text);
+		const isDecision = detectDecision(text);
+		const isActionItem = detectActionItem(text);
 
-        // Skip filler fragments, but keep compact semantic turns like "Why Redis?"
-        const wordCount = text.split(/\s+/).filter(w => w.length > 0).length;
-        if (wordCount < 3 && !isQuestion && !isDecision && !isActionItem) continue;
+		// Skip filler fragments, but keep compact semantic turns like "Why Redis?"
+		const wordCount = text.split(/\s+/).filter((w) => w.length > 0).length;
+		if (wordCount < 3 && !isQuestion && !isDecision && !isActionItem) continue;
 
-        cleaned.push({
-            speaker: normalizeSpeaker(seg.speaker),
-            text,
-            startMs: seg.startMs,
-            endMs: seg.endMs,
-            isQuestion,
-            isDecision,
-            isActionItem
-        });
-    }
+		cleaned.push({
+			speaker: normalizeSpeaker(seg.speaker),
+			text,
+			startMs: seg.startMs,
+			endMs: seg.endMs,
+			isQuestion,
+			isDecision,
+			isActionItem,
+		});
+	}
 
-    return cleaned;
+	return cleaned;
 }
 
 /**
@@ -203,7 +237,7 @@ export function preprocessTranscript(segments: RawSegment[]): CleanedSegment[] {
  * Heuristic: blend word and character counts for better cross-language behavior.
  */
 export function estimateTokens(text: string): number {
-    const trimmed = text.trim();
-    if (!trimmed) return 0;
-    return TOKEN_COUNTER.count(trimmed, 'generic');
+	const trimmed = text.trim();
+	if (!trimmed) return 0;
+	return TOKEN_COUNTER.count(trimmed, "generic");
 }

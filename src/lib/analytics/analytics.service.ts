@@ -2,279 +2,295 @@
 // Works in Electron by dynamically loading the gtag script into the renderer DOM
 // Only requires the public Measurement ID — no API secrets needed
 
-import { buildConsciousModeModeSelectedPayload } from '../consciousModeSettings';
+import { buildConsciousModeModeSelectedPayload } from "../consciousModeSettings";
 
 // --- Types ---
 
-export type ModelProviderType = 'cloud' | 'local';
+export type ModelProviderType = "cloud" | "local";
 
-export type AssistantMode = 'launcher' | 'overlay' | 'undetectable' | string;
+export type AssistantMode = "launcher" | "overlay" | "undetectable" | string;
 
 export type AnalyticsEventName =
-    // App Lifecycle
-    | 'app_opened'
-    | 'app_closed'
-    | 'first_launch'
-    // Feature Usage
-    | 'assistant_started'
-    | 'assistant_stopped'
-    | 'mode_selected'
-    | 'copy_answer_clicked'
-    | 'calendar_connected'
-    | 'pdf_exported'
-    // Meeting Lifecycle
-    | 'meeting_started'
-    | 'meeting_ended'
-    // Model Usage
-    | 'model_used'
-    // Session
-    | 'session_duration'
-    // Engagement
-    | 'command_executed'
-    | 'conversation_started'
-    | 'interview_assist_rendered';
+	// App Lifecycle
+	| "app_opened"
+	| "app_closed"
+	| "first_launch"
+	// Feature Usage
+	| "assistant_started"
+	| "assistant_stopped"
+	| "mode_selected"
+	| "copy_answer_clicked"
+	| "calendar_connected"
+	| "pdf_exported"
+	// Meeting Lifecycle
+	| "meeting_started"
+	| "meeting_ended"
+	// Model Usage
+	| "model_used"
+	// Session
+	| "session_duration"
+	// Engagement
+	| "command_executed"
+	| "conversation_started"
+	| "interview_assist_rendered";
 
 interface InterviewAssistRenderedPayload {
-    output_variant: 'conscious_mode' | 'standard_interview_assist';
-    thread_type: 'fresh_reasoning_thread' | 'follow_up_extension' | 'fresh_answer';
-    source_intent: string;
+	output_variant: "conscious_mode" | "standard_interview_assist";
+	thread_type:
+		| "fresh_reasoning_thread"
+		| "follow_up_extension"
+		| "fresh_answer";
+	source_intent: string;
 }
 
 interface ModelUsedPayload {
-    model_name: string;
-    provider_type: ModelProviderType;
-    latency_ms: number;
-    tokens_used?: number;
+	model_name: string;
+	provider_type: ModelProviderType;
+	latency_ms: number;
+	tokens_used?: number;
 }
 
 interface SessionDurationPayload {
-    duration_seconds: number;
-    assistant_active_seconds?: number;
-    idle_seconds?: number;
+	duration_seconds: number;
+	assistant_active_seconds?: number;
+	idle_seconds?: number;
 }
 
 // --- Configuration ---
 
 const GA4_MEASUREMENT_ID = "G-494RMJ2G6E";
 const APP_VERSION = "1.1.3";
-const ANALYTICS_ENABLED = import.meta.env.DEV || import.meta.env.VITE_ENABLE_ANALYTICS === '1';
+const ANALYTICS_ENABLED =
+	import.meta.env.DEV || import.meta.env.VITE_ENABLE_ANALYTICS === "1";
 
 // Extend window to include gtag/dataLayer
 declare global {
-    interface Window {
-        dataLayer: any[];
-        gtag: (...args: any[]) => void;
-    }
+	interface Window {
+		dataLayer: any[];
+		gtag: (...args: any[]) => void;
+	}
 }
 
 // --- Provider Detection ---
 
 /** Detect if a model is running locally (Ollama) or in the cloud */
 export function detectProviderType(modelName: string): ModelProviderType {
-    const lower = modelName.toLowerCase();
-    // Ollama / local model patterns
-    if (
-        lower.startsWith('ollama:') ||
-        lower.includes('llama') ||
-        lower.includes('mistral') ||
-        lower.includes('codellama') ||
-        lower.includes('phi') ||
-        lower.includes('deepseek') ||
-        lower.includes('qwen') ||
-        lower.includes('vicuna') ||
-        lower.includes('orca')
-    ) {
-        return 'local';
-    }
-    // Cloud models (Gemini, GPT, Claude, Groq)
-    return 'cloud';
+	const lower = modelName.toLowerCase();
+	// Ollama / local model patterns
+	if (
+		lower.startsWith("ollama:") ||
+		lower.includes("llama") ||
+		lower.includes("mistral") ||
+		lower.includes("codellama") ||
+		lower.includes("phi") ||
+		lower.includes("deepseek") ||
+		lower.includes("qwen") ||
+		lower.includes("vicuna") ||
+		lower.includes("orca")
+	) {
+		return "local";
+	}
+	// Cloud models (Gemini, GPT, Claude, Groq)
+	return "cloud";
 }
 
 // --- Service ---
 
 class AnalyticsService {
-    private static instance: AnalyticsService;
-    private initialized = false;
-    private sessionStartTime: number = Date.now();
-    private assistantStartTime: number | null = null;
-    private totalAssistantDuration: number = 0;
+	private static instance: AnalyticsService;
+	private initialized = false;
+	private sessionStartTime: number = Date.now();
+	private assistantStartTime: number | null = null;
+	private totalAssistantDuration: number = 0;
 
-    private constructor() { }
+	private constructor() {}
 
-    public static getInstance(): AnalyticsService {
-        if (!AnalyticsService.instance) {
-            AnalyticsService.instance = new AnalyticsService();
-        }
-        return AnalyticsService.instance;
-    }
+	public static getInstance(): AnalyticsService {
+		if (!AnalyticsService.instance) {
+			AnalyticsService.instance = new AnalyticsService();
+		}
+		return AnalyticsService.instance;
+	}
 
-    public initAnalytics(): void {
-        if (this.initialized || !ANALYTICS_ENABLED) return;
+	public initAnalytics(): void {
+		if (this.initialized || !ANALYTICS_ENABLED) return;
 
-        try {
-            // 1. Initialize dataLayer
-            window.dataLayer = window.dataLayer || [];
-            window.gtag = function () {
-                window.dataLayer.push(arguments);
-            };
-            window.gtag('js', new Date());
+		try {
+			// 1. Initialize dataLayer
+			window.dataLayer = window.dataLayer || [];
+			window.gtag = function () {
+				window.dataLayer.push(arguments);
+			};
+			window.gtag("js", new Date());
 
-            // 2. Configure GA4 with privacy settings
-            window.gtag('config', GA4_MEASUREMENT_ID, {
-                anonymize_ip: true,
-                send_page_view: false,
-                cookie_flags: 'SameSite=None;Secure',
-                app_version: APP_VERSION,
-            });
+			// 2. Configure GA4 with privacy settings
+			window.gtag("config", GA4_MEASUREMENT_ID, {
+				anonymize_ip: true,
+				send_page_view: false,
+				cookie_flags: "SameSite=None;Secure",
+				app_version: APP_VERSION,
+			});
 
-            // 3. Inject the gtag.js script
-            const script = document.createElement('script');
-            script.async = true;
-            script.src = `https://www.googletagmanager.com/gtag/js?id=${GA4_MEASUREMENT_ID}`;
-            script.onerror = () => {
-                console.warn("[Analytics] Failed to load gtag.js — analytics disabled.");
-            };
-            document.head.appendChild(script);
+			// 3. Inject the gtag.js script
+			const script = document.createElement("script");
+			script.async = true;
+			script.src = `https://www.googletagmanager.com/gtag/js?id=${GA4_MEASUREMENT_ID}`;
+			script.onerror = () => {
+				console.warn(
+					"[Analytics] Failed to load gtag.js — analytics disabled.",
+				);
+			};
+			document.head.appendChild(script);
 
-            this.initialized = true;
-            console.log(`[Analytics] Initialized (v${APP_VERSION}) via gtag.js injection.`);
-        } catch (error) {
-            console.warn("[Analytics] Initialization failed:", error);
-        }
-    }
+			this.initialized = true;
+			console.log(
+				`[Analytics] Initialized (v${APP_VERSION}) via gtag.js injection.`,
+			);
+		} catch (error) {
+			console.warn("[Analytics] Initialization failed:", error);
+		}
+	}
 
-    // --- Tracking Methods ---
+	// --- Tracking Methods ---
 
-    public trackAppOpen(): void {
-        if (!this.initialized) return;
+	public trackAppOpen(): void {
+		if (!this.initialized) return;
 
-        this.trackEvent('app_opened');
+		this.trackEvent("app_opened");
 
-        const hasLaunched = localStorage.getItem('natively_has_launched');
-        if (!hasLaunched) {
-            this.trackEvent('first_launch');
-            localStorage.setItem('natively_has_launched', 'true');
-        }
-    }
+		const hasLaunched = localStorage.getItem("natively_has_launched");
+		if (!hasLaunched) {
+			this.trackEvent("first_launch");
+			localStorage.setItem("natively_has_launched", "true");
+		}
+	}
 
-    public trackAppClose(): void {
-        if (!this.initialized) return;
+	public trackAppClose(): void {
+		if (!this.initialized) return;
 
-        this.trackSessionDuration();
-        this.trackEvent('app_closed');
-    }
+		this.trackSessionDuration();
+		this.trackEvent("app_closed");
+	}
 
-    public trackAssistantStart(): void {
-        if (!this.initialized) return;
+	public trackAssistantStart(): void {
+		if (!this.initialized) return;
 
-        this.assistantStartTime = Date.now();
-        this.trackEvent('assistant_started');
-    }
+		this.assistantStartTime = Date.now();
+		this.trackEvent("assistant_started");
+	}
 
-    public trackAssistantStop(): void {
-        if (!this.initialized) return;
+	public trackAssistantStop(): void {
+		if (!this.initialized) return;
 
-        if (this.assistantStartTime) {
-            const duration = (Date.now() - this.assistantStartTime) / 1000;
-            this.totalAssistantDuration += duration;
-            this.assistantStartTime = null;
-        }
-        this.trackEvent('assistant_stopped');
-    }
+		if (this.assistantStartTime) {
+			const duration = (Date.now() - this.assistantStartTime) / 1000;
+			this.totalAssistantDuration += duration;
+			this.assistantStartTime = null;
+		}
+		this.trackEvent("assistant_stopped");
+	}
 
-    public trackModeSelected(mode: AssistantMode): void {
-        if (!this.initialized) return;
+	public trackModeSelected(mode: AssistantMode): void {
+		if (!this.initialized) return;
 
-        this.trackEvent('mode_selected', { mode });
-    }
+		this.trackEvent("mode_selected", { mode });
+	}
 
-    public trackConsciousModeSelected(enabled: boolean): void {
-        if (!this.initialized) return;
+	public trackConsciousModeSelected(enabled: boolean): void {
+		if (!this.initialized) return;
 
-        this.trackEvent('mode_selected', buildConsciousModeModeSelectedPayload(enabled));
-    }
+		this.trackEvent(
+			"mode_selected",
+			buildConsciousModeModeSelectedPayload(enabled),
+		);
+	}
 
-    public trackModelUsed(payload: ModelUsedPayload): void {
-        if (!this.initialized) return;
+	public trackModelUsed(payload: ModelUsedPayload): void {
+		if (!this.initialized) return;
 
-        this.trackEvent('model_used', payload);
-    }
+		this.trackEvent("model_used", payload);
+	}
 
-    public trackCopyAnswer(): void {
-        if (!this.initialized) return;
-        this.trackEvent('copy_answer_clicked');
-    }
+	public trackCopyAnswer(): void {
+		if (!this.initialized) return;
+		this.trackEvent("copy_answer_clicked");
+	}
 
-    public trackCommandExecuted(commandType: string): void {
-        if (!this.initialized) return;
-        this.trackEvent('command_executed', { command_type: commandType });
-    }
+	public trackCommandExecuted(commandType: string): void {
+		if (!this.initialized) return;
+		this.trackEvent("command_executed", { command_type: commandType });
+	}
 
-    public trackConversationStarted(): void {
-        if (!this.initialized) return;
-        this.trackEvent('conversation_started');
-    }
+	public trackConversationStarted(): void {
+		if (!this.initialized) return;
+		this.trackEvent("conversation_started");
+	}
 
-    public trackInterviewAssistRendered(payload: InterviewAssistRenderedPayload): void {
-        if (!this.initialized) return;
-        this.trackEvent('interview_assist_rendered', payload);
-    }
+	public trackInterviewAssistRendered(
+		payload: InterviewAssistRenderedPayload,
+	): void {
+		if (!this.initialized) return;
+		this.trackEvent("interview_assist_rendered", payload);
+	}
 
-    public trackCalendarConnected(): void {
-        if (!this.initialized) return;
-        this.trackEvent('calendar_connected');
-    }
+	public trackCalendarConnected(): void {
+		if (!this.initialized) return;
+		this.trackEvent("calendar_connected");
+	}
 
-    public trackMeetingStarted(): void {
-        if (!this.initialized) return;
-        this.trackEvent('meeting_started');
-    }
+	public trackMeetingStarted(): void {
+		if (!this.initialized) return;
+		this.trackEvent("meeting_started");
+	}
 
-    public trackMeetingEnded(): void {
-        if (!this.initialized) return;
-        this.trackEvent('meeting_ended');
-    }
+	public trackMeetingEnded(): void {
+		if (!this.initialized) return;
+		this.trackEvent("meeting_ended");
+	}
 
-    public trackPdfExported(): void {
-        if (!this.initialized) return;
-        this.trackEvent('pdf_exported');
-    }
+	public trackPdfExported(): void {
+		if (!this.initialized) return;
+		this.trackEvent("pdf_exported");
+	}
 
-    private trackSessionDuration(): void {
-        const totalDuration = (Date.now() - this.sessionStartTime) / 1000;
+	private trackSessionDuration(): void {
+		const totalDuration = (Date.now() - this.sessionStartTime) / 1000;
 
-        let currentAssistantDuration = this.totalAssistantDuration;
-        if (this.assistantStartTime) {
-            currentAssistantDuration += (Date.now() - this.assistantStartTime) / 1000;
-        }
+		let currentAssistantDuration = this.totalAssistantDuration;
+		if (this.assistantStartTime) {
+			currentAssistantDuration += (Date.now() - this.assistantStartTime) / 1000;
+		}
 
-        const payload: SessionDurationPayload = {
-            duration_seconds: Math.round(totalDuration),
-            assistant_active_seconds: Math.round(currentAssistantDuration),
-            idle_seconds: Math.round(totalDuration - currentAssistantDuration)
-        };
+		const payload: SessionDurationPayload = {
+			duration_seconds: Math.round(totalDuration),
+			assistant_active_seconds: Math.round(currentAssistantDuration),
+			idle_seconds: Math.round(totalDuration - currentAssistantDuration),
+		};
 
-        this.trackEvent('session_duration', payload);
-    }
+		this.trackEvent("session_duration", payload);
+	}
 
-    // --- Core Event Sender ---
+	// --- Core Event Sender ---
 
-    private trackEvent(eventName: AnalyticsEventName, payload?: Record<string, any>): void {
-        if (import.meta.env.DEV) {
-            console.log(`[Analytics] ${eventName}`, payload);
-        }
+	private trackEvent(
+		eventName: AnalyticsEventName,
+		payload?: Record<string, any>,
+	): void {
+		if (import.meta.env.DEV) {
+			console.log(`[Analytics] ${eventName}`, payload);
+		}
 
-        try {
-            if (typeof window.gtag === 'function') {
-                window.gtag('event', eventName, {
-                    app_version: APP_VERSION,
-                    ...payload
-                });
-            }
-        } catch (error) {
-            console.warn("[Analytics] Failed to send event:", error);
-        }
-    }
+		try {
+			if (typeof window.gtag === "function") {
+				window.gtag("event", eventName, {
+					app_version: APP_VERSION,
+					...payload,
+				});
+			}
+		} catch (error) {
+			console.warn("[Analytics] Failed to send event:", error);
+		}
+	}
 }
 
 export const analytics = AnalyticsService.getInstance();

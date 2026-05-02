@@ -1,60 +1,60 @@
 {
-  "version": 1,
-  "skills": {
-    "changeset-validation": {
-      "source": "openai/openai-agents-js",
-      "sourceType": "github",
-      "computedHash": "25bfe77691857c8fceebfd020711897bf2902b506c2e72c069a1759f62940377"
-    },
-    "code-change-verification": {
-      "source": "openai/openai-agents-js",
-      "sourceType": "github",
-      "computedHash": "5db290611e3fdc1e1f8460095d30e0230ec64cb274fe881d243e6cb6e5790a12"
-    },
-    "docs-sync": {
-      "source": "openai/openai-agents-js",
-      "sourceType": "github",
-      "computedHash": "473e75e3449e49ab82dbacd80cc8322ab29a2e9a149553edecbb613912885b25"
-    },
-    "examples-auto-run": {
-      "source": "openai/openai-agents-js",
-      "sourceType": "github",
-      "computedHash": "99b34a5455c97ea8679d671b8f9f31cb35418f2135a6fa68a611906f17399ac5"
-    },
-    "final-release-review": {
-      "source": "openai/openai-agents-js",
-      "sourceType": "github",
-      "computedHash": "75e5c0cc2666ad5f3dc785a63760f54aecb60756a90ef828a8532a4fee19c07e"
-    },
-    "implementation-strategy": {
-      "source": "openai/openai-agents-js",
-      "sourceType": "github",
-      "computedHash": "872bc45db7beb06dc5243a8ce6b05d72c8fa1d1086b11524d698e9518cabe47c"
-    },
-    "integration-tests": {
-      "source": "openai/openai-agents-js",
-      "sourceType": "github",
-      "computedHash": "998d65e62c02c1b6c7852812da97d2422de348544280643767c5454dd9159da7"
-    },
-    "openai-knowledge": {
-      "source": "openai/openai-agents-js",
-      "sourceType": "github",
-      "computedHash": "daf01a76e2b4383bdc3841ff847184b0ca3dc7b39c458ad45639e03d830246db"
-    },
-    "pnpm-upgrade": {
-      "source": "openai/openai-agents-js",
-      "sourceType": "github",
-      "computedHash": "d5caadf8602d68b4ba05583c0e4a5e78723e432bd81958ad754a4b0191deeeec"
-    },
-    "pr-draft-summary": {
-      "source": "openai/openai-agents-js",
-      "sourceType": "github",
-      "computedHash": "bf958054ea6167da21f40ef32107154933bb3a1f4daf5b27a62461fc38d41c5e"
-    },
-    "test-coverage-improver": {
-      "source": "openai/openai-agents-js",
-      "sourceType": "github",
-      "computedHash": "bb6bb4f85171f018b15c15e24915a380bb0f9cbbcafc499d502b32261675b2bb"
-    }
-  }
+	"version": 1,
+	"skills": {
+		"changeset-validation": {
+			"source": "openai/openai-agents-js",
+			"sourceType": "github",
+			"computedHash": "25bfe77691857c8fceebfd020711897bf2902b506c2e72c069a1759f62940377"
+		},
+		"code-change-verification": {
+			"source": "openai/openai-agents-js",
+			"sourceType": "github",
+			"computedHash": "5db290611e3fdc1e1f8460095d30e0230ec64cb274fe881d243e6cb6e5790a12"
+		},
+		"docs-sync": {
+			"source": "openai/openai-agents-js",
+			"sourceType": "github",
+			"computedHash": "473e75e3449e49ab82dbacd80cc8322ab29a2e9a149553edecbb613912885b25"
+		},
+		"examples-auto-run": {
+			"source": "openai/openai-agents-js",
+			"sourceType": "github",
+			"computedHash": "99b34a5455c97ea8679d671b8f9f31cb35418f2135a6fa68a611906f17399ac5"
+		},
+		"final-release-review": {
+			"source": "openai/openai-agents-js",
+			"sourceType": "github",
+			"computedHash": "75e5c0cc2666ad5f3dc785a63760f54aecb60756a90ef828a8532a4fee19c07e"
+		},
+		"implementation-strategy": {
+			"source": "openai/openai-agents-js",
+			"sourceType": "github",
+			"computedHash": "872bc45db7beb06dc5243a8ce6b05d72c8fa1d1086b11524d698e9518cabe47c"
+		},
+		"integration-tests": {
+			"source": "openai/openai-agents-js",
+			"sourceType": "github",
+			"computedHash": "998d65e62c02c1b6c7852812da97d2422de348544280643767c5454dd9159da7"
+		},
+		"openai-knowledge": {
+			"source": "openai/openai-agents-js",
+			"sourceType": "github",
+			"computedHash": "daf01a76e2b4383bdc3841ff847184b0ca3dc7b39c458ad45639e03d830246db"
+		},
+		"pnpm-upgrade": {
+			"source": "openai/openai-agents-js",
+			"sourceType": "github",
+			"computedHash": "d5caadf8602d68b4ba05583c0e4a5e78723e432bd81958ad754a4b0191deeeec"
+		},
+		"pr-draft-summary": {
+			"source": "openai/openai-agents-js",
+			"sourceType": "github",
+			"computedHash": "bf958054ea6167da21f40ef32107154933bb3a1f4daf5b27a62461fc38d41c5e"
+		},
+		"test-coverage-improver": {
+			"source": "openai/openai-agents-js",
+			"sourceType": "github",
+			"computedHash": "bb6bb4f85171f018b15c15e24915a380bb0f9cbbcafc499d502b32261675b2bb"
+		}
+	}
 }

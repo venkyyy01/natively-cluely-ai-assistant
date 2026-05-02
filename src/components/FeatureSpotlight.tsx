@@ -1,248 +1,272 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
-import { Check, Bell } from 'lucide-react';
+import { AnimatePresence, motion } from "framer-motion";
+import { Bell, Check } from "lucide-react";
+import type React from "react";
+import { useEffect, useRef, useState } from "react";
 import mainui from "../UI_comp/mainui.png";
 
 // --- Types ---
 // ... (rest of imports and types unchanged)
 
 interface FeatureSlide {
-    id: string;
-    headline: string;
-    subtitle: string;
-    type?: 'feature' | 'support' | 'premium';
-    actionLabel?: string;
-    url?: string;
-    eyebrow?: string;
-    bullets?: string[];
-    footer?: string;
+	id: string;
+	headline: string;
+	subtitle: string;
+	type?: "feature" | "support" | "premium";
+	actionLabel?: string;
+	url?: string;
+	eyebrow?: string;
+	bullets?: string[];
+	footer?: string;
 }
 
 // --- Data ---
 
 const FEATURES: FeatureSlide[] = [
-    {
-        id: 'tailored_answers',
-        headline: 'Upcoming features',
-        subtitle: 'Answers, tailored to you',
-        bullets: ['Repo aware explanations', 'System design interview specialization'],
-        footer: 'Designed to work silently during live interviews.',
-        type: 'feature',
-    },
+	{
+		id: "tailored_answers",
+		headline: "Upcoming features",
+		subtitle: "Answers, tailored to you",
+		bullets: [
+			"Repo aware explanations",
+			"System design interview specialization",
+		],
+		footer: "Designed to work silently during live interviews.",
+		type: "feature",
+	},
 ];
 
 // --- Component ---
 
 export const FeatureSpotlight: React.FC = () => {
-    const [currentIndex, setCurrentIndex] = useState(0);
-    const [isPaused, setIsPaused] = useState(false);
+	const [currentIndex, setCurrentIndex] = useState(0);
+	const [isPaused, setIsPaused] = useState(false);
 
-    // Interest state: map of feature ID -> boolean
-    const [interestState, setInterestState] = useState<Record<string, boolean>>(() => {
-        try {
-            const saved = localStorage.getItem('natively_feature_interest');
-            return saved ? JSON.parse(saved) : {};
-        } catch (e) {
-            return {};
-        }
-    });
+	// Interest state: map of feature ID -> boolean
+	const [interestState, setInterestState] = useState<Record<string, boolean>>(
+		() => {
+			try {
+				const saved = localStorage.getItem("natively_feature_interest");
+				return saved ? JSON.parse(saved) : {};
+			} catch (e) {
+				return {};
+			}
+		},
+	);
 
-    const currentFeature = FEATURES[currentIndex];
-    const isInterested = interestState[currentFeature.id] || false;
+	const currentFeature = FEATURES[currentIndex];
+	const isInterested = interestState[currentFeature.id] || false;
 
-    // --- Auto-Advance Logic ---
+	// --- Auto-Advance Logic ---
 
-    useEffect(() => {
-        if (isPaused) return;
+	useEffect(() => {
+		if (isPaused) return;
 
-        // Auto-advance duration
-        const baseDuration = 6000;
-        const randomFactor = Math.random() * 2000;
-        const intervalDuration = baseDuration + randomFactor;
+		// Auto-advance duration
+		const baseDuration = 6000;
+		const randomFactor = Math.random() * 2000;
+		const intervalDuration = baseDuration + randomFactor;
 
-        const timer = setTimeout(() => {
-            setCurrentIndex((prev) => (prev + 1) % FEATURES.length);
-        }, intervalDuration);
+		const timer = setTimeout(() => {
+			setCurrentIndex((prev) => (prev + 1) % FEATURES.length);
+		}, intervalDuration);
 
-        return () => clearTimeout(timer);
-    }, [currentIndex, isPaused]);
+		return () => clearTimeout(timer);
+	}, [currentIndex, isPaused]);
 
+	// --- Interaction Handlers ---
 
-    // --- Interaction Handlers ---
+	const handleActionClick = (e: React.MouseEvent) => {
+		e.stopPropagation();
 
-    const handleActionClick = (e: React.MouseEvent) => {
-        e.stopPropagation();
+		const newState = { ...interestState, [currentFeature.id]: !isInterested };
+		setInterestState(newState);
+		localStorage.setItem("natively_feature_interest", JSON.stringify(newState));
 
-        const newState = { ...interestState, [currentFeature.id]: !isInterested };
-        setInterestState(newState);
-        localStorage.setItem('natively_feature_interest', JSON.stringify(newState));
+		if (!isInterested) {
+			console.log(
+				`[FeatureSpotlight] User registered interest in: ${currentFeature.id}`,
+			);
+		} else {
+			console.log(
+				`[FeatureSpotlight] User removed interest in: ${currentFeature.id}`,
+			);
+		}
+	};
 
-        if (!isInterested) {
-            console.log(`[FeatureSpotlight] User registered interest in: ${currentFeature.id}`);
-        } else {
-            console.log(`[FeatureSpotlight] User removed interest in: ${currentFeature.id}`);
-        }
-    };
+	return (
+		<div
+			className="relative h-full w-full overflow-hidden rounded-xl bg-gradient-to-br from-[#1C1C1E] to-[#151516] flex flex-col group select-none"
+			onMouseEnter={() => setIsPaused(true)}
+			onMouseLeave={() => setIsPaused(false)}
+			style={{ isolation: "isolate" }}
+		>
+			{/* Background */}
+			<div className="absolute inset-0 z-0 pointer-events-none">
+				<img
+					src={mainui}
+					alt=""
+					className="w-full h-full object-cover opacity-85 scale-100 transition-transform duration-[700ms] ease-out group-hover:scale-110"
+				/>
+				<div className="absolute inset-0 bg-black/20" />
+			</div>
 
-    return (
-        <div
-            className="relative h-full w-full overflow-hidden rounded-xl bg-gradient-to-br from-[#1C1C1E] to-[#151516] flex flex-col group select-none"
-            onMouseEnter={() => setIsPaused(true)}
-            onMouseLeave={() => setIsPaused(false)}
-            style={{ isolation: 'isolate' }}
-        >
-            {/* Background */}
-            <div className="absolute inset-0 z-0 pointer-events-none">
-                <img
-                    src={mainui}
-                    alt=""
-                    className="w-full h-full object-cover opacity-85 scale-100 transition-transform duration-[700ms] ease-out group-hover:scale-110"
-                />
-                <div className="absolute inset-0 bg-black/20" />
-            </div>
+			{/* Content */}
+			<div className="relative z-10 w-full h-full text-center">
+				<AnimatePresence initial={false}>
+					<motion.div
+						key={currentFeature.id}
+						initial={{ opacity: 0, scale: 0.95 }}
+						animate={{ opacity: 1, scale: 1 }}
+						exit={{ opacity: 0, scale: 1.05 }}
+						transition={{
+							duration: 0.5,
+							ease: [0.16, 1, 0.3, 1],
+						}}
+						className="absolute inset-0 z-10 flex flex-col items-center justify-center w-full h-full px-7"
+					>
+						{currentFeature.eyebrow && (
+							<div className="mb-2 text-[11px] font-semibold tracking-[0.15em] text-yellow-500/80 uppercase">
+								{currentFeature.eyebrow}
+							</div>
+						)}
 
-            {/* Content */}
-            <div className="relative z-10 w-full h-full text-center">
-                <AnimatePresence initial={false}>
-                    <motion.div
-                        key={currentFeature.id}
-                        initial={{ opacity: 0, scale: 0.95 }}
-                        animate={{ opacity: 1, scale: 1 }}
-                        exit={{ opacity: 0, scale: 1.05 }}
-                        transition={{
-                            duration: 0.5,
-                            ease: [0.16, 1, 0.3, 1]
-                        }}
-                        className="absolute inset-0 z-10 flex flex-col items-center justify-center w-full h-full px-7"
-                    >
-                        {currentFeature.eyebrow && (
-                            <div className="mb-2 text-[11px] font-semibold tracking-[0.15em] text-yellow-500/80 uppercase">
-                                {currentFeature.eyebrow}
-                            </div>
-                        )}
+						<div className="relative h-full w-full flex flex-col items-center justify-center">
+							<div className="flex flex-col items-center justify-center transition-all duration-300 -translate-y-2.5">
+								{/* Title */}
+								<h2
+									className="text-white drop-shadow-sm tracking-tight mb-0 transition-all duration-300 group-hover:brightness-105"
+									style={{
+										fontFamily:
+											'-apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text"',
+										fontSize: "26px",
+										fontWeight: 500,
+										lineHeight: 1.1,
+										color: "#ffffff",
+									}}
+								>
+									{currentFeature.headline}
+								</h2>
 
-                        <div className="relative h-full w-full flex flex-col items-center justify-center">
-                            <div className="flex flex-col items-center justify-center transition-all duration-300 -translate-y-2.5">
+								{/* Subtitle */}
+								<p
+									className="antialiased mb-2"
+									style={{
+										fontFamily:
+											'-apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text"',
+										fontSize: "15px",
+										fontWeight: 400,
+										lineHeight: 1.4,
+										color: "#F5F7FA",
+										opacity: 0.9,
+										maxWidth: "360px",
+									}}
+								>
+									{currentFeature.subtitle}
+								</p>
 
-                                {/* Title */}
-                                <h2
-                                    className="text-white drop-shadow-sm tracking-tight mb-0 transition-all duration-300 group-hover:brightness-105"
-                                    style={{
-                                        fontFamily: '-apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text"',
-                                        fontSize: '26px',
-                                        fontWeight: 500,
-                                        lineHeight: 1.1,
-                                        color: '#ffffff',
-                                    }}
-                                >
-                                    {currentFeature.headline}
-                                </h2>
+								{currentFeature.bullets && (
+									<div className="flex flex-col w-full max-w-[340px] gap-1 items-center translate-y-2.5">
+										{currentFeature.bullets.map((bullet, idx) => (
+											<div
+												key={idx}
+												className="flex items-center justify-center group/item transition-transform duration-200 px-2"
+											>
+												<span
+													className="text-[12.5px] leading-snug font-medium text-[#E6C46A]"
+													style={{ letterSpacing: "-0.01em" }}
+												>
+													{bullet}
+												</span>
+											</div>
+										))}
+									</div>
+								)}
 
-                                {/* Subtitle */}
-                                <p
-                                    className="antialiased mb-2"
-                                    style={{
-                                        fontFamily: '-apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text"',
-                                        fontSize: '15px',
-                                        fontWeight: 400,
-                                        lineHeight: 1.4,
-                                        color: '#F5F7FA',
-                                        opacity: 0.9,
-                                        maxWidth: '360px'
-                                    }}
-                                >
-                                    {currentFeature.subtitle}
-                                </p>
+								{currentFeature.footer && (
+									<div className="w-full text-center pointer-events-none mt-2 translate-y-5">
+										<p
+											className="text-[#F5F7FA] opacity-65 font-medium tracking-wide"
+											style={{ fontSize: "15px" }}
+										>
+											{currentFeature.footer}
+										</p>
+									</div>
+								)}
 
-                                {currentFeature.bullets && (
-                                    <div className="flex flex-col w-full max-w-[340px] gap-1 items-center translate-y-2.5">
-                                        {currentFeature.bullets.map((bullet, idx) => (
-                                            <div key={idx} className="flex items-center justify-center group/item transition-transform duration-200 px-2">
-                                                <span
-                                                    className="text-[12.5px] leading-snug font-medium text-[#E6C46A]"
-                                                    style={{ letterSpacing: '-0.01em' }}
-                                                >
-                                                    {bullet}
-                                                </span>
-                                            </div>
-                                        ))}
-                                    </div>
-                                )}
+								{/* Interest Button */}
+								<motion.button
+									onClick={handleActionClick}
+									whileHover="hover"
+									className="group relative flex items-center justify-center gap-3 rounded-full transition-all duration-200 ease-out hover:brightness-105 active:scale-[0.98] overflow-hidden px-10 py-2.5 text-[13px] font-medium text-[#F5F7FA]"
+									style={{
+										minWidth: "220px",
+										backgroundColor: isInterested
+											? "rgba(255, 255, 255, 0.12)"
+											: "rgba(255, 255, 255, 0.08)",
+										backdropFilter: "blur(14px)",
+										WebkitBackdropFilter: "blur(14px)",
+									}}
+								>
+									<div
+										className="absolute inset-0 rounded-full pointer-events-none transition-opacity duration-300 group-hover:opacity-80"
+										style={{
+											padding: "1px",
+											background: "linear-gradient(to right, #FFFFFF, #A1A1AA)",
+											WebkitMask:
+												"linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0)",
+											WebkitMaskComposite: "xor",
+											maskComposite: "exclude",
+											opacity: 0.6,
+										}}
+									/>
+									<div
+										className="absolute inset-0 rounded-full pointer-events-none"
+										style={{
+											boxShadow: "inset 0 1px 0 0 rgba(255, 255, 255, 0.08)",
+										}}
+									/>
 
-                                {currentFeature.footer && (
-                                    <div className="w-full text-center pointer-events-none mt-2 translate-y-5">
-                                        <p
-                                            className="text-[#F5F7FA] opacity-65 font-medium tracking-wide"
-                                            style={{ fontSize: '15px' }}
-                                        >
-                                            {currentFeature.footer}
-                                        </p>
-                                    </div>
-                                )}
-
-                                {/* Interest Button */}
-                                <motion.button
-                                    onClick={handleActionClick}
-                                    whileHover="hover"
-                                    className="group relative flex items-center justify-center gap-3 rounded-full transition-all duration-200 ease-out hover:brightness-105 active:scale-[0.98] overflow-hidden px-10 py-2.5 text-[13px] font-medium text-[#F5F7FA]"
-                                    style={{
-                                        minWidth: '220px',
-                                        backgroundColor: isInterested ? 'rgba(255, 255, 255, 0.12)' : 'rgba(255, 255, 255, 0.08)',
-                                        backdropFilter: 'blur(14px)',
-                                        WebkitBackdropFilter: 'blur(14px)',
-                                    }}
-                                >
-                                    <div
-                                        className="absolute inset-0 rounded-full pointer-events-none transition-opacity duration-300 group-hover:opacity-80"
-                                        style={{
-                                            padding: '1px',
-                                            background: 'linear-gradient(to right, #FFFFFF, #A1A1AA)',
-                                            WebkitMask: 'linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0)',
-                                            WebkitMaskComposite: 'xor',
-                                            maskComposite: 'exclude',
-                                            opacity: 0.6,
-                                        }}
-                                    />
-                                    <div
-                                        className="absolute inset-0 rounded-full pointer-events-none"
-                                        style={{ boxShadow: 'inset 0 1px 0 0 rgba(255, 255, 255, 0.08)' }}
-                                    />
-
-                                    <AnimatePresence mode="wait" initial={false}>
-                                        <motion.span
-                                            key={isInterested ? 'interested' : 'cta'}
-                                            initial={{ opacity: 0, y: isInterested ? 5 : -5 }}
-                                            animate={{ opacity: 1, y: 0 }}
-                                            exit={{ opacity: 0, y: isInterested ? -5 : 5 }}
-                                            className="flex items-center gap-2.5 relative z-10"
-                                        >
-                                            <span>
-                                                {isInterested ? 'Interested' : (currentFeature.actionLabel || 'Mark interest')}
-                                            </span>
-                                            <motion.div
-                                                variants={{
-                                                    hover: isInterested ? {
-                                                        rotate: [0, -10, 10, -10, 10, 0],
-                                                        transition: { duration: 0.5, repeat: Infinity, repeatDelay: 2 }
-                                                    } : {}
-                                                }}
-                                            >
-                                                <Bell
-                                                    size={14}
-                                                    className={`${isInterested ? 'text-blue-400' : 'opacity-80'}`}
-                                                    fill={isInterested ? "currentColor" : "none"}
-                                                />
-                                            </motion.div>
-                                        </motion.span>
-                                    </AnimatePresence>
-                                </motion.button>
-                            </div>
-                        </div>
-
-                    </motion.div>
-                </AnimatePresence>
-
-            </div>
-        </div >
-    );
+									<AnimatePresence mode="wait" initial={false}>
+										<motion.span
+											key={isInterested ? "interested" : "cta"}
+											initial={{ opacity: 0, y: isInterested ? 5 : -5 }}
+											animate={{ opacity: 1, y: 0 }}
+											exit={{ opacity: 0, y: isInterested ? -5 : 5 }}
+											className="flex items-center gap-2.5 relative z-10"
+										>
+											<span>
+												{isInterested
+													? "Interested"
+													: currentFeature.actionLabel || "Mark interest"}
+											</span>
+											<motion.div
+												variants={{
+													hover: isInterested
+														? {
+																rotate: [0, -10, 10, -10, 10, 0],
+																transition: {
+																	duration: 0.5,
+																	repeat: Infinity,
+																	repeatDelay: 2,
+																},
+															}
+														: {},
+												}}
+											>
+												<Bell
+													size={14}
+													className={`${isInterested ? "text-blue-400" : "opacity-80"}`}
+													fill={isInterested ? "currentColor" : "none"}
+												/>
+											</motion.div>
+										</motion.span>
+									</AnimatePresence>
+								</motion.button>
+							</div>
+						</div>
+					</motion.div>
+				</AnimatePresence>
+			</div>
+		</div>
+	);
 };

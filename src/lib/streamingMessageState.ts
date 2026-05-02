@@ -1,96 +1,100 @@
 export interface MessageWithId {
-  id: string;
+	id: string;
 }
 
 export type ActiveStreamingIds = Record<string, string>;
 
-export function createMessageId(prefix: string, now: number, sequence: number): string {
-  return `${prefix}-${now}-${sequence}`;
+export function createMessageId(
+	prefix: string,
+	now: number,
+	sequence: number,
+): string {
+	return `${prefix}-${now}-${sequence}`;
 }
 
 export function updateMessageById<T extends MessageWithId>(
-  prev: T[],
-  messageId: string | null,
-  updater: (message: T) => T,
+	prev: T[],
+	messageId: string | null,
+	updater: (message: T) => T,
 ): T[] {
-  if (!messageId) {
-    return prev;
-  }
+	if (!messageId) {
+		return prev;
+	}
 
-  let didUpdate = false;
-  const updated = prev.map((message) => {
-    if (message.id !== messageId) {
-      return message;
-    }
+	let didUpdate = false;
+	const updated = prev.map((message) => {
+		if (message.id !== messageId) {
+			return message;
+		}
 
-    didUpdate = true;
-    return updater(message);
-  });
+		didUpdate = true;
+		return updater(message);
+	});
 
-  return didUpdate ? updated : prev;
+	return didUpdate ? updated : prev;
 }
 
 export function updateOrPrependMessageById<T extends MessageWithId>(
-  prev: T[],
-  messageId: string | null,
-  updater: (message: T) => T,
-  fallbackMessage: T,
+	prev: T[],
+	messageId: string | null,
+	updater: (message: T) => T,
+	fallbackMessage: T,
 ): T[] {
-  const updatedMessages = updateMessageById(prev, messageId, updater);
-  if (updatedMessages !== prev) {
-    return updatedMessages;
-  }
+	const updatedMessages = updateMessageById(prev, messageId, updater);
+	if (updatedMessages !== prev) {
+		return updatedMessages;
+	}
 
-  return [fallbackMessage, ...prev];
+	return [fallbackMessage, ...prev];
 }
 
 export function setActiveStreamingIds(
-  activeIds: ActiveStreamingIds,
-  keys: string[],
-  messageId: string,
+	activeIds: ActiveStreamingIds,
+	keys: string[],
+	messageId: string,
 ): ActiveStreamingIds {
-  const next = { ...activeIds };
+	const next = { ...activeIds };
 
-  for (const key of keys) {
-    next[key] = messageId;
-  }
+	for (const key of keys) {
+		next[key] = messageId;
+	}
 
-  return next;
+	return next;
 }
 
 export function getActiveStreamingId(
-  activeIds: ActiveStreamingIds,
-  keys: string[],
+	activeIds: ActiveStreamingIds,
+	keys: string[],
 ): string | null {
-  for (const key of keys) {
-    const messageId = activeIds[key];
-    if (messageId) {
-      return messageId;
-    }
-  }
+	for (const key of keys) {
+		const messageId = activeIds[key];
+		if (messageId) {
+			return messageId;
+		}
+	}
 
-  return null;
+	return null;
 }
 
 export function clearActiveStreamingIdsByMessageId(
-  activeIds: ActiveStreamingIds,
-  messageId: string | null,
+	activeIds: ActiveStreamingIds,
+	messageId: string | null,
 ): ActiveStreamingIds {
-  if (!messageId) {
-    return activeIds;
-  }
+	if (!messageId) {
+		return activeIds;
+	}
 
-  let didClear = false;
-  const next: ActiveStreamingIds = {};
+	let didClear = false;
+	const next: ActiveStreamingIds = {};
 
-  for (const [key, activeMessageId] of Object.entries(activeIds)) {
-    if (activeMessageId === messageId) {
-      didClear = true;
-      continue;
-    }
+	for (const [key, activeMessageId] of Object.entries(activeIds)) {
+		if (activeMessageId === messageId) {
+			didClear = true;
+			continue;
+		}
 
-    next[key] = activeMessageId;
-  }
+		next[key] = activeMessageId;
+	}
 
-  return didClear ? next : activeIds;
+	return didClear ? next : activeIds;
 }

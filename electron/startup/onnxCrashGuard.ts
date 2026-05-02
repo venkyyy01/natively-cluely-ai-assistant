@@ -1,8 +1,8 @@
 import {
-  incrementOnnxFailureCount,
-  resetOnnxFailureCount,
-  shouldDisableOnnx,
-} from './StartupHealer';
+	incrementOnnxFailureCount,
+	resetOnnxFailureCount,
+	shouldDisableOnnx,
+} from "./StartupHealer";
 
 /**
  * NAT-SELF-HEAL: ONNX / CoreML crash isolation wrapper.
@@ -22,27 +22,27 @@ const SUCCESS_WINDOW_MS = 5 * 60 * 1000; // 5 minutes
 let onnxSuccessTimestamp = 0;
 
 export type SafeOnnxSession = {
-  run: (feeds: any, options?: any) => Promise<any>;
-  release: () => Promise<void>;
+	run: (feeds: any, options?: any) => Promise<any>;
+	release: () => Promise<void>;
 };
 
 /**
  * Wrap an ONNX InferenceSession so that release() never throws.
  */
 function wrapSession(session: any): SafeOnnxSession {
-  return {
-    async run(feeds: any, options?: any): Promise<any> {
-      return session.run(feeds, options);
-    },
-    async release(): Promise<void> {
-      try {
-        await session.release?.();
-      } catch (err) {
-        // Swallow — teardown segfaults are a known issue
-        console.warn('[OnnxCrashGuard] Swallowed session release error:', err);
-      }
-    },
-  };
+	return {
+		async run(feeds: any, options?: any): Promise<any> {
+			return session.run(feeds, options);
+		},
+		async release(): Promise<void> {
+			try {
+				await session.release?.();
+			} catch (err) {
+				// Swallow — teardown segfaults are a known issue
+				console.warn("[OnnxCrashGuard] Swallowed session release error:", err);
+			}
+		},
+	};
 }
 
 /**
@@ -50,37 +50,42 @@ function wrapSession(session: any): SafeOnnxSession {
  * Returns null if ANE should be disabled due to repeated crashes.
  */
 export async function safeCreateOnnxSession(
-  runtime: any,
-  modelPath: string,
-  options: any,
+	runtime: any,
+	modelPath: string,
+	options: any,
 ): Promise<SafeOnnxSession | null> {
-  if (shouldDisableOnnx()) {
-    console.warn('[OnnxCrashGuard] ANE embeddings disabled due to repeated ONNX crashes.');
-    return null;
-  }
+	if (shouldDisableOnnx()) {
+		console.warn(
+			"[OnnxCrashGuard] ANE embeddings disabled due to repeated ONNX crashes.",
+		);
+		return null;
+	}
 
-  try {
-    const session = await runtime.InferenceSession.create(modelPath, options);
-    onnxSuccessTimestamp = Date.now();
-    console.log('[OnnxCrashGuard] ONNX session created successfully.');
+	try {
+		const session = await runtime.InferenceSession.create(modelPath, options);
+		onnxSuccessTimestamp = Date.now();
+		console.log("[OnnxCrashGuard] ONNX session created successfully.");
 
-    // If we've had enough consecutive successes, reset the failure counter
-    if (onnxSuccessTimestamp > 0) {
-      resetOnnxFailureCount();
-    }
+		// If we've had enough consecutive successes, reset the failure counter
+		if (onnxSuccessTimestamp > 0) {
+			resetOnnxFailureCount();
+		}
 
-    return wrapSession(session);
-  } catch (error) {
-    const count = incrementOnnxFailureCount();
-    console.error(`[OnnxCrashGuard] ONNX session creation failed (failure #${count}):`, error);
-    if (count >= 3) {
-      console.error(
-        '[OnnxCrashGuard] ANE embeddings will be disabled for the remainder of this session. ' +
-        'Restart Natively to attempt re-enabling.',
-      );
-    }
-    return null;
-  }
+		return wrapSession(session);
+	} catch (error) {
+		const count = incrementOnnxFailureCount();
+		console.error(
+			`[OnnxCrashGuard] ONNX session creation failed (failure #${count}):`,
+			error,
+		);
+		if (count >= 3) {
+			console.error(
+				"[OnnxCrashGuard] ANE embeddings will be disabled for the remainder of this session. " +
+					"Restart Natively to attempt re-enabling.",
+			);
+		}
+		return null;
+	}
 }
 
 /**
@@ -89,6 +94,8 @@ export async function safeCreateOnnxSession(
  * startup disables ANE.
  */
 export function recordOnnxCrash(): void {
-  const count = incrementOnnxFailureCount();
-  console.error(`[OnnxCrashGuard] Recorded external ONNX crash. Failure count = ${count}`);
+	const count = incrementOnnxFailureCount();
+	console.error(
+		`[OnnxCrashGuard] Recorded external ONNX crash. Failure count = ${count}`,
+	);
 }

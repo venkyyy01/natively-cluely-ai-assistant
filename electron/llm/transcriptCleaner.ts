@@ -3,24 +3,53 @@
 // Fast string-based processing for interview copilot
 
 export interface TranscriptTurn {
-    role: 'interviewer' | 'user' | 'assistant';
-    text: string;
-    timestamp: number;
+	role: "interviewer" | "user" | "assistant";
+	text: string;
+	timestamp: number;
 }
 
 /**
  * Filler words and verbal acknowledgements to remove
  */
 const FILLER_WORDS = new Set([
-    'uh', 'um', 'ah', 'hmm', 'hm', 'er', 'erm',
-    'like', 'you know', 'i mean', 'basically', 'actually',
-    'so', 'well', 'anyway', 'anyways'
+	"uh",
+	"um",
+	"ah",
+	"hmm",
+	"hm",
+	"er",
+	"erm",
+	"like",
+	"you know",
+	"i mean",
+	"basically",
+	"actually",
+	"so",
+	"well",
+	"anyway",
+	"anyways",
 ]);
 
 const ACKNOWLEDGEMENTS = new Set([
-    'okay', 'ok', 'yeah', 'yes', 'right', 'sure', 'got it',
-    'gotcha', 'uh-huh', 'uh huh', 'mm-hmm', 'mm hmm', 'mhm',
-    'cool', 'great', 'nice', 'perfect', 'alright', 'all right'
+	"okay",
+	"ok",
+	"yeah",
+	"yes",
+	"right",
+	"sure",
+	"got it",
+	"gotcha",
+	"uh-huh",
+	"uh huh",
+	"mm-hmm",
+	"mm hmm",
+	"mhm",
+	"cool",
+	"great",
+	"nice",
+	"perfect",
+	"alright",
+	"all right",
 ]);
 
 /**
@@ -41,52 +70,51 @@ const ACKNOWLEDGEMENTS = new Set([
  * `{ original, normalized }` pair.
  */
 function cleanText(text: string): string {
-    let result = text.trim();
+	let result = text.trim();
 
-    // Remove repeated words (yeah yeah, okay okay) — case-insensitive
-    // match, but the regex preserves the first occurrence's casing.
-    result = result.replace(/\b(\w+)(\s+\1)+\b/gi, '$1');
+	// Remove repeated words (yeah yeah, okay okay) — case-insensitive
+	// match, but the regex preserves the first occurrence's casing.
+	result = result.replace(/\b(\w+)(\s+\1)+\b/gi, "$1");
 
-    // Split into words and filter — normalize each token only for the
-    // membership check, never for the kept word itself.
-    const words = result.split(/\s+/);
-    const cleaned = words.filter((word) => {
-        const normalized = word.replace(/[.,!?;:]/g, '').toLowerCase();
-        return !FILLER_WORDS.has(normalized) &&
-            !ACKNOWLEDGEMENTS.has(normalized);
-    });
+	// Split into words and filter — normalize each token only for the
+	// membership check, never for the kept word itself.
+	const words = result.split(/\s+/);
+	const cleaned = words.filter((word) => {
+		const normalized = word.replace(/[.,!?;:]/g, "").toLowerCase();
+		return !FILLER_WORDS.has(normalized) && !ACKNOWLEDGEMENTS.has(normalized);
+	});
 
-    result = cleaned.join(' ').trim();
+	result = cleaned.join(" ").trim();
 
-    // Clean up punctuation
-    result = result.replace(/\s+([.,!?;:])/g, '$1');
-    result = result.replace(/([.,!?;:])+/g, '$1');
-    result = result.replace(/\s+/g, ' ');
+	// Clean up punctuation
+	result = result.replace(/\s+([.,!?;:])/g, "$1");
+	result = result.replace(/([.,!?;:])+/g, "$1");
+	result = result.replace(/\s+/g, " ");
 
-    return result;
+	return result;
 }
 
 /**
  * Check if a turn is meaningful enough to keep
  */
 function isMeaningfulTurn(turn: TranscriptTurn, cleanedText: string): boolean {
-    // Always keep interviewer speech (priority)
-    if (turn.role === 'interviewer' && cleanedText.length >= 5) {
-        return true;
-    }
+	// Always keep interviewer speech (priority)
+	if (turn.role === "interviewer" && cleanedText.length >= 5) {
+		return true;
+	}
 
-    // Minimum 3 words for other roles
-    const wordCount = cleanedText.split(/\s+/).filter(w => w.length > 0).length;
-    if (wordCount < 3) {
-        return false;
-    }
+	// Minimum 3 words for other roles
+	const wordCount = cleanedText.split(/\s+/).filter((w) => w.length > 0).length;
+	if (wordCount < 3) {
+		return false;
+	}
 
-    // Skip pure filler turns
-    if (cleanedText.length < 10) {
-        return false;
-    }
+	// Skip pure filler turns
+	if (cleanedText.length < 10) {
+		return false;
+	}
 
-    return true;
+	return true;
 }
 
 /**
@@ -95,21 +123,21 @@ function isMeaningfulTurn(turn: TranscriptTurn, cleanedText: string): boolean {
  * Returns cleaned array preserving order
  */
 export function cleanTranscript(turns: TranscriptTurn[]): TranscriptTurn[] {
-    const cleaned: TranscriptTurn[] = [];
+	const cleaned: TranscriptTurn[] = [];
 
-    for (const turn of turns) {
-        const cleanedText = cleanText(turn.text);
+	for (const turn of turns) {
+		const cleanedText = cleanText(turn.text);
 
-        if (isMeaningfulTurn(turn, cleanedText)) {
-            cleaned.push({
-                role: turn.role,
-                text: cleanedText,
-                timestamp: turn.timestamp
-            });
-        }
-    }
+		if (isMeaningfulTurn(turn, cleanedText)) {
+			cleaned.push({
+				role: turn.role,
+				text: cleanedText,
+				timestamp: turn.timestamp,
+			});
+		}
+	}
 
-    return cleaned;
+	return cleaned;
 }
 
 /**
@@ -118,55 +146,61 @@ export function cleanTranscript(turns: TranscriptTurn[]): TranscriptTurn[] {
  * Target: 8-12 turns, ~300-600 tokens
  */
 export function sparsifyTranscript(
-    turns: TranscriptTurn[],
-    maxTurns: number = 12
+	turns: TranscriptTurn[],
+	maxTurns: number = 12,
 ): TranscriptTurn[] {
-    if (turns.length <= maxTurns) {
-        return turns;
-    }
+	if (turns.length <= maxTurns) {
+		return turns;
+	}
 
-    // Separate by role
-    const interviewerTurns = turns.filter(t => t.role === 'interviewer');
-    const otherTurns = turns.filter(t => t.role !== 'interviewer');
+	// Separate by role
+	const interviewerTurns = turns.filter((t) => t.role === "interviewer");
+	const otherTurns = turns.filter((t) => t.role !== "interviewer");
 
-    // Keep all interviewer turns if under limit
-    const result: TranscriptTurn[] = [];
+	// Keep all interviewer turns if under limit
+	const result: TranscriptTurn[] = [];
 
-    // Prioritize recent interviewer turns (last 6)
-    const recentInterviewer = interviewerTurns.slice(-6);
+	// Prioritize recent interviewer turns (last 6)
+	const recentInterviewer = interviewerTurns.slice(-6);
 
-    // Fill remaining with recent other turns
-    const remainingSlots = maxTurns - recentInterviewer.length;
-    const recentOther = otherTurns.slice(-remainingSlots);
+	// Fill remaining with recent other turns
+	const remainingSlots = maxTurns - recentInterviewer.length;
+	const recentOther = otherTurns.slice(-remainingSlots);
 
-    // Merge and sort by timestamp
-    result.push(...recentInterviewer, ...recentOther);
-    result.sort((a, b) => a.timestamp - b.timestamp);
+	// Merge and sort by timestamp
+	result.push(...recentInterviewer, ...recentOther);
+	result.sort((a, b) => a.timestamp - b.timestamp);
 
-    return result;
+	return result;
 }
 
 /**
  * Format cleaned transcript for LLM input
  */
 export function formatTranscriptForLLM(turns: TranscriptTurn[]): string {
-    return turns.map(turn => {
-        const label = turn.role === 'interviewer' ? 'INTERVIEWER' :
-            turn.role === 'user' ? 'ME' : 'ASSISTANT';
-        return `[${label}]: ${turn.text}`;
-    }).join('\n');
+	return turns
+		.map((turn) => {
+			const label =
+				turn.role === "interviewer"
+					? "INTERVIEWER"
+					: turn.role === "user"
+						? "ME"
+						: "ASSISTANT";
+			return `[${label}]: ${turn.text}`;
+		})
+		.join("\n");
 }
 
 /**
  * Full pipeline: clean, sparsify, format
  */
 export function prepareTranscriptForWhatToAnswer(
-    turns: TranscriptTurn[],
-    maxTurns: number = 12
+	turns: TranscriptTurn[],
+	maxTurns: number = 12,
 ): string {
-    const cleaned = cleanTranscript(turns);
-    const sparsified = sparsifyTranscript(cleaned, maxTurns);
-    return formatTranscriptForLLM(sparsified);
+	const cleaned = cleanTranscript(turns);
+	const sparsified = sparsifyTranscript(cleaned, maxTurns);
+	return formatTranscriptForLLM(sparsified);
 }
 
 /**
@@ -174,28 +208,28 @@ export function prepareTranscriptForWhatToAnswer(
  * Preserves original casing and technical tokens/code-like spans.
  */
 export function prepareTranscriptForReasoning(
-    turns: TranscriptTurn[],
-    maxTurns: number = 12
+	turns: TranscriptTurn[],
+	maxTurns: number = 12,
 ): string {
-    const normalized = turns
-        .map((turn) => ({
-            role: turn.role,
-            text: turn.text.replace(/\s+/g, ' ').trim(),
-            timestamp: turn.timestamp,
-        }))
-        .filter((turn) => {
-            if (!turn.text) {
-                return false;
-            }
+	const normalized = turns
+		.map((turn) => ({
+			role: turn.role,
+			text: turn.text.replace(/\s+/g, " ").trim(),
+			timestamp: turn.timestamp,
+		}))
+		.filter((turn) => {
+			if (!turn.text) {
+				return false;
+			}
 
-            if (turn.role === 'interviewer') {
-                return turn.text.length >= 3;
-            }
+			if (turn.role === "interviewer") {
+				return turn.text.length >= 3;
+			}
 
-            const wordCount = turn.text.split(/\s+/).filter(Boolean).length;
-            return wordCount >= 2;
-        });
+			const wordCount = turn.text.split(/\s+/).filter(Boolean).length;
+			return wordCount >= 2;
+		});
 
-    const sparsified = sparsifyTranscript(normalized, maxTurns);
-    return formatTranscriptForLLM(sparsified);
+	const sparsified = sparsifyTranscript(normalized, maxTurns);
+	return formatTranscriptForLLM(sparsified);
 }

@@ -6,74 +6,85 @@
  * (open-source build), the globs return empty objects and no-op
  * fallbacks are used instead. No build errors.
  */
-import React from 'react';
+import type React from "react";
 
 // ─── No-op fallbacks ────────────────────────────────────────────────
 const NullComponent: React.FC<any> = () => null;
 
 const nullAdCampaigns = (
-  _isPremium: boolean,
-  _hasProfile: boolean,
-  _isAppReady: boolean,
-  _appStartTime?: number,
-  _lastMeetingEndTime?: number | null,
-  _isProcessingMeeting?: boolean
+	_isPremium: boolean,
+	_hasProfile: boolean,
+	_isAppReady: boolean,
+	_appStartTime?: number,
+	_lastMeetingEndTime?: number | null,
+	_isProcessingMeeting?: boolean,
 ) => ({
-  activeAd: null as string | null,
-  dismissAd: () => {},
+	activeAd: null as string | null,
+	dismissAd: () => {},
 });
 
 // ─── Glob-import premium modules (empty {} when premium/ is absent) ──
 const _premiumModal = import.meta.glob<any>(
-  '../../premium/src/PremiumUpgradeModal.tsx',
-  { eager: true }
+	"../../premium/src/PremiumUpgradeModal.tsx",
+	{ eager: true },
 );
 const _profileVis = import.meta.glob<any>(
-  '../../premium/src/ProfileVisualizer.tsx',
-  { eager: true }
+	"../../premium/src/ProfileVisualizer.tsx",
+	{ eager: true },
 );
 const _promoToaster = import.meta.glob<any>(
-  '../../premium/src/PremiumPromoToaster.tsx',
-  { eager: true }
+	"../../premium/src/PremiumPromoToaster.tsx",
+	{ eager: true },
 );
 const _profileToaster = import.meta.glob<any>(
-  '../../premium/src/ProfileFeatureToaster.tsx',
-  { eager: true }
+	"../../premium/src/ProfileFeatureToaster.tsx",
+	{ eager: true },
 );
 const _jdToaster = import.meta.glob<any>(
-  '../../premium/src/JDAwarenessToaster.tsx',
-  { eager: true }
+	"../../premium/src/JDAwarenessToaster.tsx",
+	{ eager: true },
 );
 const _remoteCampaignToaster = import.meta.glob<any>(
-  '../../premium/src/RemoteCampaignToaster.tsx',
-  { eager: true }
+	"../../premium/src/RemoteCampaignToaster.tsx",
+	{ eager: true },
 );
-const _adHook = import.meta.glob<any>(
-  '../../premium/src/useAdCampaigns.ts',
-  { eager: true }
-);
+const _adHook = import.meta.glob<any>("../../premium/src/useAdCampaigns.ts", {
+	eager: true,
+});
 
 // ─── Helper ──────────────────────────────────────────────────────────
 function get<T>(mods: Record<string, any>, name: string, fallback: T): T {
-  const mod = Object.values(mods)[0];
-  return mod?.[name] ?? fallback;
+	const mod = Object.values(mods)[0];
+	return mod?.[name] ?? fallback;
 }
 
 // ─── Exports (always safe to import) ─────────────────────────────────
 export const PremiumUpgradeModal: React.FC<any> = NullComponent;
 
-export const ProfileVisualizer: React.FC<any> =
-  get(_profileVis, 'ProfileVisualizer', NullComponent);
+export const ProfileVisualizer: React.FC<any> = get(
+	_profileVis,
+	"ProfileVisualizer",
+	NullComponent,
+);
 
 export const PremiumPromoToaster: React.FC<any> = NullComponent;
 
 export const ProfileFeatureToaster: React.FC<any> = NullComponent;
 
-export const JDAwarenessToaster: React.FC<any> =
-  get(_jdToaster, 'JDAwarenessToaster', NullComponent);
+export const JDAwarenessToaster: React.FC<any> = get(
+	_jdToaster,
+	"JDAwarenessToaster",
+	NullComponent,
+);
 
-export const RemoteCampaignToaster: React.FC<any> =
-  get(_remoteCampaignToaster, 'RemoteCampaignToaster', NullComponent);
+export const RemoteCampaignToaster: React.FC<any> = get(
+	_remoteCampaignToaster,
+	"RemoteCampaignToaster",
+	NullComponent,
+);
 
-export const useAdCampaigns: typeof nullAdCampaigns =
-  get(_adHook, 'useAdCampaigns', nullAdCampaigns);
+export const useAdCampaigns: typeof nullAdCampaigns = get(
+	_adHook,
+	"useAdCampaigns",
+	nullAdCampaigns,
+);

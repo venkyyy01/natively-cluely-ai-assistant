@@ -8,87 +8,96 @@
  */
 
 export interface CaptureFixtureWindow {
-  name: string;
-  id?: number;
-  contentProtection: boolean;
-  expectedNsWindowLevel?: number;
+	name: string;
+	id?: number;
+	contentProtection: boolean;
+	expectedNsWindowLevel?: number;
 }
 
 export interface CaptureFixtureResult {
-  window: string;
-  passed: boolean;
-  blank: boolean;
-  nsWindowLevelOk?: boolean;
-  reason?: string;
+	window: string;
+	passed: boolean;
+	blank: boolean;
+	nsWindowLevelOk?: boolean;
+	reason?: string;
 }
 
 export interface StealthCaptureFixtureOptions {
-  mode: 'mock' | 'live';
-  frameCount?: number;
-  helperPath?: string;
+	mode: "mock" | "live";
+	frameCount?: number;
+	helperPath?: string;
 }
 
 export class StealthCaptureFixture {
-  constructor(private readonly options: StealthCaptureFixtureOptions) {}
+	constructor(private readonly options: StealthCaptureFixtureOptions) {}
 
-  async run(windows: CaptureFixtureWindow[]): Promise<CaptureFixtureResult[]> {
-    const results: CaptureFixtureResult[] = [];
+	async run(windows: CaptureFixtureWindow[]): Promise<CaptureFixtureResult[]> {
+		const results: CaptureFixtureResult[] = [];
 
-    for (const win of windows) {
-      if (this.options.mode === 'live') {
-        results.push(await this.captureLive(win));
-      } else {
-        results.push(this.captureMock(win));
-      }
-    }
+		for (const win of windows) {
+			if (this.options.mode === "live") {
+				results.push(await this.captureLive(win));
+			} else {
+				results.push(this.captureMock(win));
+			}
+		}
 
-    return results;
-  }
+		return results;
+	}
 
-  private captureMock(win: CaptureFixtureWindow): CaptureFixtureResult {
-    // In mock mode we verify the window configuration, not actual pixels.
-    if (!win.contentProtection) {
-      return {
-        window: win.name,
-        passed: false,
-        blank: false,
-        reason: 'content protection is not enabled',
-      };
-    }
+	private captureMock(win: CaptureFixtureWindow): CaptureFixtureResult {
+		// In mock mode we verify the window configuration, not actual pixels.
+		if (!win.contentProtection) {
+			return {
+				window: win.name,
+				passed: false,
+				blank: false,
+				reason: "content protection is not enabled",
+			};
+		}
 
-    const nsWindowLevelOk = win.expectedNsWindowLevel == null ? true : true; // mock assumes ok
+		const nsWindowLevelOk = win.expectedNsWindowLevel == null ? true : true; // mock assumes ok
 
-    return {
-      window: win.name,
-      passed: true,
-      blank: true,
-      nsWindowLevelOk,
-    };
-  }
+		return {
+			window: win.name,
+			passed: true,
+			blank: true,
+			nsWindowLevelOk,
+		};
+	}
 
-  private async captureLive(_win: CaptureFixtureWindow): Promise<CaptureFixtureResult> {
-    // Placeholder: would call SCK helper binary.
-    return {
-      window: _win.name,
-      passed: false,
-      blank: false,
-      reason: 'live mode not yet implemented without SCK helper binary',
-    };
-  }
+	private async captureLive(
+		_win: CaptureFixtureWindow,
+	): Promise<CaptureFixtureResult> {
+		// Placeholder: would call SCK helper binary.
+		return {
+			window: _win.name,
+			passed: false,
+			blank: false,
+			reason: "live mode not yet implemented without SCK helper binary",
+		};
+	}
 }
 
 /** Standard protected windows in Natively. */
 export function getDefaultProtectedWindows(): CaptureFixtureWindow[] {
-  return [
-    { name: 'shell', contentProtection: true, expectedNsWindowLevel: 19 },
-    { name: 'content', contentProtection: true, expectedNsWindowLevel: 19 },
-    { name: 'privacy-shield', contentProtection: true, expectedNsWindowLevel: 19 },
-    { name: 'launcher', contentProtection: true, expectedNsWindowLevel: 19 },
-    { name: 'overlay', contentProtection: true, expectedNsWindowLevel: 19 },
-  ];
+	return [
+		{ name: "shell", contentProtection: true, expectedNsWindowLevel: 19 },
+		{ name: "content", contentProtection: true, expectedNsWindowLevel: 19 },
+		{
+			name: "privacy-shield",
+			contentProtection: true,
+			expectedNsWindowLevel: 19,
+		},
+		{ name: "launcher", contentProtection: true, expectedNsWindowLevel: 19 },
+		{ name: "overlay", contentProtection: true, expectedNsWindowLevel: 19 },
+	];
 }
 
 /** Smoke check: fixture should fail if content protection is removed. */
 export function getUnprotectedWindows(): CaptureFixtureWindow[] {
-  return getDefaultProtectedWindows().map((w) => ({ ...w, contentProtection: false }));
+	return getDefaultProtectedWindows().map((w) => ({
+		...w,
+		contentProtection: false,
+	}));
 }

@@ -1,12 +1,12 @@
 export const SESSION_MENU_TOGGLE_ORDER = [
-'Fast Response',
-'Transcript',
-'Conscious Mode',
+	"Fast Response",
+	"Transcript",
+	"Conscious Mode",
 ] as const;
 
 export function buildConsciousModeModeSelectedPayload(enabled: boolean) {
-  return {
-    mode: 'conscious_mode' as const,
-    enabled,
-  };
+	return {
+		mode: "conscious_mode" as const,
+		enabled,
+	};
 }

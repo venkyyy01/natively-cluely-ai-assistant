@@ -1,327 +1,431 @@
-import { isOptimizationActive, getEffectiveWorkerCount } from '../config/optimizations';
-import { InterviewPhase } from '../conscious/types';
-import { Worker, isMainThread, parentPort, workerData } from 'worker_threads';
-import { WorkerPool } from '../runtime/WorkerPool';
+import { isMainThread, parentPort, Worker, workerData } from "worker_threads";
+import {
+	getEffectiveWorkerCount,
+	isOptimizationActive,
+} from "../config/optimizations";
+import type { InterviewPhase } from "../conscious/types";
+import { WorkerPool } from "../runtime/WorkerPool";
 
 export interface ContextAssemblyInput {
-  query: string;
-  transcript: Array<{
-    speaker: string;
-    text: string;
-    timestamp: number;
-  }>;
-  previousContext: {
-    recentTopics: string[];
-    activeThread: string | null;
-  };
+	query: string;
+	transcript: Array<{
+		speaker: string;
+		text: string;
+		timestamp: number;
+	}>;
+	previousContext: {
+		recentTopics: string[];
+		activeThread: string | null;
+	};
 }
 
 export interface ContextAssemblyOutput {
-  embedding: number[];
-  bm25Results: Array<{ role: 'interviewer' | 'user' | 'assistant'; text: string; score: number; timestamp: number }>;
-  phase: InterviewPhase;
-  confidence: number;
-  relevantContext: Array<{ role: 'interviewer' | 'user' | 'assistant'; text: string; timestamp: number }>;
+	embedding: number[];
+	bm25Results: Array<{
+		role: "interviewer" | "user" | "assistant";
+		text: string;
+		score: number;
+		timestamp: number;
+	}>;
+	phase: InterviewPhase;
+	confidence: number;
+	relevantContext: Array<{
+		role: "interviewer" | "user" | "assistant";
+		text: string;
+		timestamp: number;
+	}>;
 }
 
 // Embedding provider interface for real embeddings
 export interface EmbeddingProvider {
-  embed(text: string): Promise<number[]>;
-  isInitialized(): boolean;
+	embed(text: string): Promise<number[]>;
+	isInitialized(): boolean;
 }
 
 // Global embedding provider set by AccelerationManager
 let globalEmbeddingProvider: EmbeddingProvider | null = null;
 
 export function setEmbeddingProvider(provider: EmbeddingProvider | null): void {
-  globalEmbeddingProvider = provider;
+	globalEmbeddingProvider = provider;
 }
 
 export function getEmbeddingProvider(): EmbeddingProvider | null {
-  return globalEmbeddingProvider;
+	return globalEmbeddingProvider;
 }
 
 export async function computeBM25(
-  query: string,
-  documents: Array<{ role: 'interviewer' | 'user' | 'assistant'; text: string; timestamp: number }>,
-  k1: number = 1.5,
-  b: number = 0.75
+	query: string,
+	documents: Array<{
+		role: "interviewer" | "user" | "assistant";
+		text: string;
+		timestamp: number;
+	}>,
+	k1: number = 1.5,
+	b: number = 0.75,
 ): Promise<Array<{ text: string; score: number; timestamp: number }>> {
-  if (documents.length === 0) return [];
+	if (documents.length === 0) return [];
 
-  const queryTerms = query.toLowerCase().split(/\s+/);
-  const docTerms = documents.map(d => d.text.toLowerCase().split(/\s+/));
+	const queryTerms = query.toLowerCase().split(/\s+/);
+	const docTerms = documents.map((d) => d.text.toLowerCase().split(/\s+/));
 
-  const avgDocLength = docTerms.reduce((sum, doc) => sum + doc.length, 0) / docTerms.length;
+	const avgDocLength =
+		docTerms.reduce((sum, doc) => sum + doc.length, 0) / docTerms.length;
 
-  return documents.map((doc, idx) => {
-    let score = 0;
-    const docLen = docTerms[idx].length;
+	return documents
+		.map((doc, idx) => {
+			let score = 0;
+			const docLen = docTerms[idx].length;
 
-    for (const term of queryTerms) {
-      const tf = docTerms[idx].filter(t => t.includes(term)).length;
-      if (tf > 0) {
-        const df = docTerms.filter(doc => doc.some(t => t.includes(term))).length;
-        const idf = Math.log((documents.length - df + 0.5) / (df + 0.5) + 1);
-        score += idf * (tf * (k1 + 1)) / (tf + k1 * (1 - b + b * (docLen / avgDocLength)));
-      }
-    }
+			for (const term of queryTerms) {
+				const tf = docTerms[idx].filter((t) => t.includes(term)).length;
+				if (tf > 0) {
+					const df = docTerms.filter((doc) =>
+						doc.some((t) => t.includes(term)),
+					).length;
+					const idf = Math.log((documents.length - df + 0.5) / (df + 0.5) + 1);
+					score +=
+						(idf * (tf * (k1 + 1))) /
+						(tf + k1 * (1 - b + b * (docLen / avgDocLength)));
+				}
+			}
 
-    return { text: doc.text, score, timestamp: doc.timestamp };
-  }).filter(d => d.score > 0).sort((a, b) => b.score - a.score);
+			return { text: doc.text, score, timestamp: doc.timestamp };
+		})
+		.filter((d) => d.score > 0)
+		.sort((a, b) => b.score - a.score);
 }
 
-function detectPhase(transcript: Array<{ text: string; timestamp: number }>): InterviewPhase {
-  const recentText = transcript.slice(-3).map(t => t.text.toLowerCase()).join(' ');
+function detectPhase(
+	transcript: Array<{ text: string; timestamp: number }>,
+): InterviewPhase {
+	const recentText = transcript
+		.slice(-3)
+		.map((t) => t.text.toLowerCase())
+		.join(" ");
 
-  if (recentText.includes('implement') || recentText.includes('code')) {
-    return 'implementation';
-  }
-  if (recentText.includes('scale') || recentText.includes('million')) {
-    return 'scaling_discussion';
-  }
-  if (recentText.includes('why') || recentText.includes('design') || recentText.includes('architecture')) {
-    return 'high_level_design';
-  }
-  if (recentText.includes('complexity') || recentText.includes('big o')) {
-    return 'complexity_analysis';
-  }
-  if (recentText.includes('fail') || recentText.includes('error')) {
-    return 'failure_handling';
-  }
-  if (recentText.includes('tell me about') || recentText.includes('experience')) {
-    return 'behavioral_story';
-  }
-  if (recentText.includes('wrap up') || recentText.includes('any questions')) {
-    return 'wrap_up';
-  }
+	if (recentText.includes("implement") || recentText.includes("code")) {
+		return "implementation";
+	}
+	if (recentText.includes("scale") || recentText.includes("million")) {
+		return "scaling_discussion";
+	}
+	if (
+		recentText.includes("why") ||
+		recentText.includes("design") ||
+		recentText.includes("architecture")
+	) {
+		return "high_level_design";
+	}
+	if (recentText.includes("complexity") || recentText.includes("big o")) {
+		return "complexity_analysis";
+	}
+	if (recentText.includes("fail") || recentText.includes("error")) {
+		return "failure_handling";
+	}
+	if (
+		recentText.includes("tell me about") ||
+		recentText.includes("experience")
+	) {
+		return "behavioral_story";
+	}
+	if (recentText.includes("wrap up") || recentText.includes("any questions")) {
+		return "wrap_up";
+	}
 
-  return 'requirements_gathering';
+	return "requirements_gathering";
 }
 
 function simpleHash(str: string): number {
-  let hash = 0;
-  for (let i = 0; i < str.length; i++) {
-    const char = str.charCodeAt(i);
-    hash = ((hash << 5) - hash) + char;
-    hash = hash & hash;
-  }
-  return Math.abs(hash);
+	let hash = 0;
+	for (let i = 0; i < str.length; i++) {
+		const char = str.charCodeAt(i);
+		hash = (hash << 5) - hash + char;
+		hash = hash & hash;
+	}
+	return Math.abs(hash);
 }
 
 function generateEmbeddingFallback(query: string): number[] {
-  const hash = simpleHash(query);
-  const embedding = new Array(384).fill(0);
-  embedding[hash % 384] = 1;
-  embedding[(hash + 1) % 384] = 0.5;
-  return embedding;
+	const hash = simpleHash(query);
+	const embedding = new Array(384).fill(0);
+	embedding[hash % 384] = 1;
+	embedding[(hash + 1) % 384] = 0.5;
+	return embedding;
 }
 
 if (!isMainThread) {
-  const { type, payload } = workerData;
-  if (type === 'bm25') {
-    computeBM25(payload.query, payload.documents).then(result => {
-      parentPort?.postMessage(result);
-    });
-  } else if (type === 'embedding') {
-    parentPort?.postMessage(generateEmbeddingFallback(payload.query));
-  } else if (type === 'phase') {
-    parentPort?.postMessage(detectPhase(payload.transcript));
-  }
+	const { type, payload } = workerData;
+	if (type === "bm25") {
+		computeBM25(payload.query, payload.documents).then((result) => {
+			parentPort?.postMessage(result);
+		});
+	} else if (type === "embedding") {
+		parentPort?.postMessage(generateEmbeddingFallback(payload.query));
+	} else if (type === "phase") {
+		parentPort?.postMessage(detectPhase(payload.transcript));
+	}
 }
 
 export class ParallelContextAssembler {
-  private workerCount: number;
-  private readonly workerPool: WorkerPool;
-  private readonly includeAssistantTurns: boolean;
+	private workerCount: number;
+	private readonly workerPool: WorkerPool;
+	private readonly includeAssistantTurns: boolean;
 
-  constructor(options: { workerThreadCount?: number; workerPool?: WorkerPool; includeAssistantTurns?: boolean }) {
-    this.workerCount = options.workerThreadCount || getEffectiveWorkerCount();
-    this.workerPool = options.workerPool ?? new WorkerPool({ size: this.workerCount });
-    this.includeAssistantTurns = options.includeAssistantTurns ?? true;
-  }
+	constructor(options: {
+		workerThreadCount?: number;
+		workerPool?: WorkerPool;
+		includeAssistantTurns?: boolean;
+	}) {
+		this.workerCount = options.workerThreadCount || getEffectiveWorkerCount();
+		this.workerPool =
+			options.workerPool ?? new WorkerPool({ size: this.workerCount });
+		this.includeAssistantTurns = options.includeAssistantTurns ?? true;
+	}
 
-  getWorkerCount(): number {
-    return this.workerCount;
-  }
+	getWorkerCount(): number {
+		return this.workerCount;
+	}
 
-  // NAT-015 / audit R-3: every call to `runInWorker` used to spawn a new
-  // `Worker` and never call `terminate()` on it. The worker thread does
-  // *not* auto-exit when the script body finishes because `parentPort`
-  // keeps it alive waiting for more messages, so each invocation leaked a
-  // thread (~3 per `assemble()`). The fix is to always terminate after the
-  // result arrives, succeeds, or fails. We use a `finally` to ensure the
-  // termination runs even on cancellation.
-  //
-  // TODO(EPIC-13): replace this per-call spawn with reuse via WorkerPool's
-  // long-lived worker registry. The current pool only schedules the
-  // wrapping promise, not the underlying worker, so this still spawns a
-  // worker per task.
-  private runInWorker<T>(type: string, payload: any): Promise<T> {
-    return this.workerPool.submit({ lane: 'semantic', priority: 1 }, async () => {
-      const worker = new Worker(__filename, {
-        workerData: { type, payload },
-      });
-      try {
-        return await new Promise<T>((resolve, reject) => {
-          let settled = false;
-          const settleResolve = (value: T) => {
-            if (settled) return;
-            settled = true;
-            resolve(value);
-          };
-          const settleReject = (error: unknown) => {
-            if (settled) return;
-            settled = true;
-            reject(error instanceof Error ? error : new Error(String(error)));
-          };
-          worker.on('message', settleResolve);
-          worker.on('error', settleReject);
-          worker.on('exit', (code) => {
-            if (code !== 0) settleReject(new Error(`Worker stopped with exit code ${code}`));
-          });
-        });
-      } finally {
-        // Best-effort terminate: the worker may have already exited, in
-        // which case `terminate()` resolves immediately. We swallow errors
-        // because there is nothing higher-up the stack that can act on a
-        // failed thread teardown.
-        try {
-          await worker.terminate();
-        } catch {
-          // Worker already exited; nothing to do.
-        }
-      }
-    });
-  }
+	// NAT-015 / audit R-3: every call to `runInWorker` used to spawn a new
+	// `Worker` and never call `terminate()` on it. The worker thread does
+	// *not* auto-exit when the script body finishes because `parentPort`
+	// keeps it alive waiting for more messages, so each invocation leaked a
+	// thread (~3 per `assemble()`). The fix is to always terminate after the
+	// result arrives, succeeds, or fails. We use a `finally` to ensure the
+	// termination runs even on cancellation.
+	//
+	// TODO(EPIC-13): replace this per-call spawn with reuse via WorkerPool's
+	// long-lived worker registry. The current pool only schedules the
+	// wrapping promise, not the underlying worker, so this still spawns a
+	// worker per task.
+	private runInWorker<T>(type: string, payload: any): Promise<T> {
+		return this.workerPool.submit(
+			{ lane: "semantic", priority: 1 },
+			async () => {
+				const worker = new Worker(__filename, {
+					workerData: { type, payload },
+				});
+				try {
+					return await new Promise<T>((resolve, reject) => {
+						let settled = false;
+						const settleResolve = (value: T) => {
+							if (settled) return;
+							settled = true;
+							resolve(value);
+						};
+						const settleReject = (error: unknown) => {
+							if (settled) return;
+							settled = true;
+							reject(error instanceof Error ? error : new Error(String(error)));
+						};
+						worker.on("message", settleResolve);
+						worker.on("error", settleReject);
+						worker.on("exit", (code) => {
+							if (code !== 0)
+								settleReject(
+									new Error(`Worker stopped with exit code ${code}`),
+								);
+						});
+					});
+				} finally {
+					// Best-effort terminate: the worker may have already exited, in
+					// which case `terminate()` resolves immediately. We swallow errors
+					// because there is nothing higher-up the stack that can act on a
+					// failed thread teardown.
+					try {
+						await worker.terminate();
+					} catch {
+						// Worker already exited; nothing to do.
+					}
+				}
+			},
+		);
+	}
 
-  async assemble(input: ContextAssemblyInput): Promise<ContextAssemblyOutput> {
-    if (!isOptimizationActive('useParallelContext')) {
-      return this.assembleLegacy(input);
-    }
+	async assemble(input: ContextAssemblyInput): Promise<ContextAssemblyOutput> {
+		if (!isOptimizationActive("useParallelContext")) {
+			return this.assembleLegacy(input);
+		}
 
-    const docs = this.buildRetrievalDocuments(input.transcript);
+		const docs = this.buildRetrievalDocuments(input.transcript);
 
-    const embeddingProvider = getEmbeddingProvider();
-    const embeddingP: Promise<number[]> = embeddingProvider?.isInitialized()
-      ? embeddingProvider.embed(input.query)
-      : this.runInWorker<number[]>('embedding', { query: input.query });
+		const embeddingProvider = getEmbeddingProvider();
+		const embeddingP: Promise<number[]> = embeddingProvider?.isInitialized()
+			? embeddingProvider.embed(input.query)
+			: this.runInWorker<number[]>("embedding", { query: input.query });
 
-    const bm25P = this.runInWorker<Array<{ text: string; score: number; timestamp: number }>>('bm25', {
-      query: input.query,
-      documents: docs,
-    });
-    const phaseP = this.runInWorker<InterviewPhase>('phase', { transcript: input.transcript });
+		const bm25P = this.runInWorker<
+			Array<{ text: string; score: number; timestamp: number }>
+		>("bm25", {
+			query: input.query,
+			documents: docs,
+		});
+		const phaseP = this.runInWorker<InterviewPhase>("phase", {
+			transcript: input.transcript,
+		});
 
-    const [embedding, bm25ResultsRaw, phase] = await Promise.all([embeddingP, bm25P, phaseP]);
+		const [embedding, bm25ResultsRaw, phase] = await Promise.all([
+			embeddingP,
+			bm25P,
+			phaseP,
+		]);
 
-    const speakerByText = new Map<string, 'interviewer' | 'user' | 'assistant'>();
-    for (const doc of docs) {
-      const key = doc.text.trim().toLowerCase();
-      if (!speakerByText.has(key)) {
-        speakerByText.set(key, doc.role);
-      }
-    }
+		const speakerByText = new Map<
+			string,
+			"interviewer" | "user" | "assistant"
+		>();
+		for (const doc of docs) {
+			const key = doc.text.trim().toLowerCase();
+			if (!speakerByText.has(key)) {
+				speakerByText.set(key, doc.role);
+			}
+		}
 
-    const bm25Results = bm25ResultsRaw.map((r: { text: string; score: number; timestamp: number }) => ({
-      role: speakerByText.get(r.text.trim().toLowerCase()) ?? 'interviewer' as const,
-      text: r.text,
-      score: r.score,
-      timestamp: r.timestamp,
-    }));
-    const relevantContext = this.selectRelevantContext(bm25Results, phase);
-    const confidence = this.calculateConfidence(embedding, relevantContext);
+		const bm25Results = bm25ResultsRaw.map(
+			(r: { text: string; score: number; timestamp: number }) => ({
+				role:
+					speakerByText.get(r.text.trim().toLowerCase()) ??
+					("interviewer" as const),
+				text: r.text,
+				score: r.score,
+				timestamp: r.timestamp,
+			}),
+		);
+		const relevantContext = this.selectRelevantContext(bm25Results, phase);
+		const confidence = this.calculateConfidence(embedding, relevantContext);
 
-    return {
-      embedding,
-      bm25Results,
-      phase,
-      confidence,
-      relevantContext
-    };
-  }
+		return {
+			embedding,
+			bm25Results,
+			phase,
+			confidence,
+			relevantContext,
+		};
+	}
 
-  private selectRelevantContext(
-    bm25Results: Array<{ role: 'interviewer' | 'user' | 'assistant'; text: string; score: number; timestamp: number }>,
-    phase: InterviewPhase
-  ): Array<{ role: 'interviewer' | 'user' | 'assistant'; text: string; timestamp: number }> {
-    const budgetMap: Record<InterviewPhase, number> = {
-      requirements_gathering: 500,
-      high_level_design: 800,
-      deep_dive: 1000,
-      implementation: 1200,
-      complexity_analysis: 600,
-      scaling_discussion: 800,
-      failure_handling: 600,
-      behavioral_story: 400,
-      wrap_up: 300,
-    };
+	private selectRelevantContext(
+		bm25Results: Array<{
+			role: "interviewer" | "user" | "assistant";
+			text: string;
+			score: number;
+			timestamp: number;
+		}>,
+		phase: InterviewPhase,
+	): Array<{
+		role: "interviewer" | "user" | "assistant";
+		text: string;
+		timestamp: number;
+	}> {
+		const budgetMap: Record<InterviewPhase, number> = {
+			requirements_gathering: 500,
+			high_level_design: 800,
+			deep_dive: 1000,
+			implementation: 1200,
+			complexity_analysis: 600,
+			scaling_discussion: 800,
+			failure_handling: 600,
+			behavioral_story: 400,
+			wrap_up: 300,
+		};
 
-    const budget = budgetMap[phase] || 500;
-    let usedTokens = 0;
-    const selected: Array<{ role: 'interviewer' | 'user' | 'assistant'; text: string; timestamp: number }> = [];
+		const budget = budgetMap[phase] || 500;
+		let usedTokens = 0;
+		const selected: Array<{
+			role: "interviewer" | "user" | "assistant";
+			text: string;
+			timestamp: number;
+		}> = [];
 
-    for (const result of bm25Results) {
-      const tokens = result.text.split(/\s+/).length;
-      if (usedTokens + tokens <= budget) {
-        selected.push({ role: result.role, text: result.text, timestamp: result.timestamp });
-        usedTokens += tokens;
-      }
-    }
+		for (const result of bm25Results) {
+			const tokens = result.text.split(/\s+/).length;
+			if (usedTokens + tokens <= budget) {
+				selected.push({
+					role: result.role,
+					text: result.text,
+					timestamp: result.timestamp,
+				});
+				usedTokens += tokens;
+			}
+		}
 
-    return selected;
-  }
+		return selected;
+	}
 
-  private calculateConfidence(embedding: number[], context: Array<{ role: 'interviewer' | 'user' | 'assistant'; text: string; timestamp: number }>): number {
-    const contextScore = context.length > 0 ? 0.5 : 0;
-    const embeddingScore = embedding.length === 384 ? 0.3 : 0;
-    const baseScore = 0.2;
+	private calculateConfidence(
+		embedding: number[],
+		context: Array<{
+			role: "interviewer" | "user" | "assistant";
+			text: string;
+			timestamp: number;
+		}>,
+	): number {
+		const contextScore = context.length > 0 ? 0.5 : 0;
+		const embeddingScore = embedding.length === 384 ? 0.3 : 0;
+		const baseScore = 0.2;
 
-    return Math.min(0.95, baseScore + contextScore + embeddingScore);
-  }
+		return Math.min(0.95, baseScore + contextScore + embeddingScore);
+	}
 
-  private async assembleLegacy(input: ContextAssemblyInput): Promise<ContextAssemblyOutput> {
-    const embeddingProvider = getEmbeddingProvider();
-    const embedding = embeddingProvider?.isInitialized()
-      ? await embeddingProvider.embed(input.query)
-      : generateEmbeddingFallback(input.query);
-    const docs = this.buildRetrievalDocuments(input.transcript);
-    const bm25ResultsRaw = await computeBM25(input.query, docs);
-    const speakerByText = new Map<string, 'interviewer' | 'user' | 'assistant'>();
-    for (const doc of docs) {
-      const key = doc.text.trim().toLowerCase();
-      if (!speakerByText.has(key)) {
-        speakerByText.set(key, doc.role);
-      }
-    }
-    const bm25Results = bm25ResultsRaw.map((r: { text: string; score: number; timestamp: number }) => ({
-      role: speakerByText.get(r.text.trim().toLowerCase()) ?? 'interviewer' as const,
-      text: r.text,
-      score: r.score,
-      timestamp: r.timestamp,
-    }));
-    const phase = detectPhase(input.transcript);
-    const relevantContext = this.selectRelevantContext(bm25Results, phase);
-    const confidence = this.calculateConfidence(embedding, relevantContext);
+	private async assembleLegacy(
+		input: ContextAssemblyInput,
+	): Promise<ContextAssemblyOutput> {
+		const embeddingProvider = getEmbeddingProvider();
+		const embedding = embeddingProvider?.isInitialized()
+			? await embeddingProvider.embed(input.query)
+			: generateEmbeddingFallback(input.query);
+		const docs = this.buildRetrievalDocuments(input.transcript);
+		const bm25ResultsRaw = await computeBM25(input.query, docs);
+		const speakerByText = new Map<
+			string,
+			"interviewer" | "user" | "assistant"
+		>();
+		for (const doc of docs) {
+			const key = doc.text.trim().toLowerCase();
+			if (!speakerByText.has(key)) {
+				speakerByText.set(key, doc.role);
+			}
+		}
+		const bm25Results = bm25ResultsRaw.map(
+			(r: { text: string; score: number; timestamp: number }) => ({
+				role:
+					speakerByText.get(r.text.trim().toLowerCase()) ??
+					("interviewer" as const),
+				text: r.text,
+				score: r.score,
+				timestamp: r.timestamp,
+			}),
+		);
+		const phase = detectPhase(input.transcript);
+		const relevantContext = this.selectRelevantContext(bm25Results, phase);
+		const confidence = this.calculateConfidence(embedding, relevantContext);
 
-    return { embedding, bm25Results, phase, confidence, relevantContext };
-  }
+		return { embedding, bm25Results, phase, confidence, relevantContext };
+	}
 
-  terminate(): void {
-    // Cleanup if needed (worker pool would be terminated here)
-  }
+	terminate(): void {
+		// Cleanup if needed (worker pool would be terminated here)
+	}
 
-  private buildRetrievalDocuments(transcript: ContextAssemblyInput['transcript']): Array<{
-    role: 'interviewer' | 'user' | 'assistant';
-    text: string;
-    timestamp: number;
-  }> {
-    return transcript
-      .filter(turn => this.includeAssistantTurns || turn.speaker !== 'assistant')
-      .map(turn => ({
-        role: turn.speaker === 'user' ? 'user' as const : turn.speaker === 'assistant' ? 'assistant' as const : 'interviewer' as const,
-        text: turn.text,
-        timestamp: turn.timestamp,
-      }));
-  }
+	private buildRetrievalDocuments(
+		transcript: ContextAssemblyInput["transcript"],
+	): Array<{
+		role: "interviewer" | "user" | "assistant";
+		text: string;
+		timestamp: number;
+	}> {
+		return transcript
+			.filter(
+				(turn) => this.includeAssistantTurns || turn.speaker !== "assistant",
+			)
+			.map((turn) => ({
+				role:
+					turn.speaker === "user"
+						? ("user" as const)
+						: turn.speaker === "assistant"
+							? ("assistant" as const)
+							: ("interviewer" as const),
+				text: turn.text,
+				timestamp: turn.timestamp,
+			}));
+	}
 }

@@ -7,36 +7,36 @@
  */
 
 export class LicenseManager {
-    private static instance: LicenseManager;
-    private premiumEnabled = true;
+	private static instance: LicenseManager;
+	private premiumEnabled = true;
 
-    private constructor() { }
+	private constructor() {}
 
-    public static getInstance(): LicenseManager {
-        if (!LicenseManager.instance) {
-            LicenseManager.instance = new LicenseManager();
-        }
-        return LicenseManager.instance;
-    }
+	public static getInstance(): LicenseManager {
+		if (!LicenseManager.instance) {
+			LicenseManager.instance = new LicenseManager();
+		}
+		return LicenseManager.instance;
+	}
 
-    public activateLicense(_key: string): { success: boolean; error?: string } {
-        this.premiumEnabled = true;
-        return { success: true };
-    }
+	public activateLicense(_key: string): { success: boolean; error?: string } {
+		this.premiumEnabled = true;
+		return { success: true };
+	}
 
-    public isPremium(): boolean {
-        return this.premiumEnabled;
-    }
+	public isPremium(): boolean {
+		return this.premiumEnabled;
+	}
 
-    public deactivate(): void {
-        this.premiumEnabled = true;
-    }
+	public deactivate(): void {
+		this.premiumEnabled = true;
+	}
 
-    public getHardwareId(): string {
-        return 'premium-unlocked';
-    }
+	public getHardwareId(): string {
+		return "premium-unlocked";
+	}
 
-    public clearCache(): void {
-        this.premiumEnabled = true;
-    }
+	public clearCache(): void {
+		this.premiumEnabled = true;
+	}
 }

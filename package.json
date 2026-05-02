@@ -1,294 +1,294 @@
 {
-  "name": "natively",
-  "version": "2.0.9",
-  "main": "./dist-electron/electron/main.js",
-  "description": "Natively is a meeting notes app that uses AI to generate notes from your meetings.",
-  "scripts": {
-    "clean": "rimraf dist dist-electron",
-    "dev": "vite",
-    "build": "npm run clean && tsc && vite build",
-    "preview": "vite preview",
-    "typecheck": "tsc --noEmit && tsc -p electron/tsconfig.json --noEmit",
-    "postinstall": "node scripts/ensure-electron-native-deps.js && node scripts/download-models.js && node scripts/ensure-sqlite-vec.js",
-    "electron:dev": "node scripts/ensure-electron-native-deps.js && npm run build:native:current && tsc -p electron/tsconfig.json && cross-env NODE_ENV=development electron .",
-    "electron:build": "node scripts/ensure-electron-native-deps.js && npm run build:native:current && rimraf dist && vite build && tsc -p electron/tsconfig.json && cross-env NODE_ENV=production electron .",
-    "prepare:macos:virtual-display-helper": "node scripts/prepare-macos-virtual-display-helper.js",
-    "prepare:macos:full-stealth-helper": "node scripts/prepare-macos-full-stealth-helper.js",
-    "prepare:macos:foundation-intent-helper": "node scripts/prepare-macos-foundation-intent-helper.js",
-    "notarize:helper": "node scripts/notarize-macos-helper.js",
-    "app:dev": "concurrently \"npm run dev -- --port 5180\" \"wait-on http://localhost:5180 && npm run electron:dev\"",
-    "app:build": "node scripts/ensure-electron-native-deps.js && npm run build && npm run build:native && npm run prepare:macos:virtual-display-helper && cross-env NATIVELY_REQUIRE_FULL_STEALTH_HELPER=1 npm run prepare:macos:full-stealth-helper && cross-env NATIVELY_REQUIRE_FOUNDATION_INTENT_HELPER=1 npm run prepare:macos:foundation-intent-helper && tsc -p electron/tsconfig.json && electron-builder",
-    "app:build:arm64": "node scripts/ensure-electron-native-deps.js && npm run build && npm run build:native:current && npm run prepare:macos:virtual-display-helper && cross-env NATIVELY_REQUIRE_FULL_STEALTH_HELPER=1 npm run prepare:macos:full-stealth-helper && cross-env NATIVELY_REQUIRE_FOUNDATION_INTENT_HELPER=1 npm run prepare:macos:foundation-intent-helper && tsc -p electron/tsconfig.json && electron-builder --mac --arm64",
-    "app:build:x64": "node scripts/ensure-electron-native-deps.js && npm run build && npm run build:native:current && npm run prepare:macos:virtual-display-helper && cross-env NATIVELY_REQUIRE_FULL_STEALTH_HELPER=1 npm run prepare:macos:full-stealth-helper && cross-env NATIVELY_REQUIRE_FOUNDATION_INTENT_HELPER=1 npm run prepare:macos:foundation-intent-helper && tsc -p electron/tsconfig.json && electron-builder --mac --x64",
-    "test:electron": "node scripts/ensure-node-native-deps.js && rimraf dist-electron/electron/tests && tsc -p electron/tsconfig.json && node --test --test-force-exit dist-electron/electron/tests/*.test.js",
-    "test:soak": "rimraf dist-electron/electron/tests && tsc -p electron/tsconfig.json && node scripts/run-soak-scenarios.js",
-    "test:fault-injection": "rimraf dist-electron/electron/tests && tsc -p electron/tsconfig.json && node --test dist-electron/electron/tests/faultInjection.test.js",
-    "test:active-renderer-lifecycle": "rimraf dist-electron/electron/tests && tsc -p electron/tsconfig.json && node --test dist-electron/electron/tests/activeRendererLifecycle.test.js",
-    "bench:baseline": "rimraf dist-electron/electron/tests && tsc -p electron/tsconfig.json && node scripts/run-baseline-benchmark.js",
-    "capture-matrix:mock": "tsc -p electron/tsconfig.json && node scripts/run-capture-matrix.js --mock",
-    "capture-matrix:local": "tsc -p electron/tsconfig.json && node scripts/run-capture-matrix.js --local",
-    "capture-matrix:macos:screencapture": "tsc -p electron/tsconfig.json && node scripts/run-capture-matrix.js --macos-screencapture",
-    "capture-matrix:macos:cgwindow": "tsc -p electron/tsconfig.json && node scripts/run-capture-matrix.js --macos-cgwindow",
-    "capture-matrix:windows:stub": "tsc -p electron/tsconfig.json && node scripts/run-capture-matrix.js --windows-stub",
-    "capture-matrix:browser:get-display-media": "tsc -p electron/tsconfig.json && node scripts/run-capture-matrix.js --browser-get-display-media",
-    "capture-matrix:external:manual": "tsc -p electron/tsconfig.json && node scripts/run-capture-matrix.js --manual-external",
-    "test:release-gate": "node scripts/run-release-gate.js",
-    "eval:conscious": "tsc -p electron/tsconfig.json && node scripts/run-conscious-eval.js",
-    "eval:intent": "tsc -p electron/tsconfig.json && node scripts/run-intent-eval.js",
-    "eval:intent:multi": "tsc -p electron/tsconfig.json && node scripts/run-intent-eval-multi.js",
-    "eval:intent:generate-variants": "node scripts/generate-intent-eval-variants.js",
-    "bench:intent:foundation": "tsc -p electron/tsconfig.json && node scripts/run-foundation-intent-latency-spike.js",
-    "verify:foundation-intent-release": "node scripts/run-foundation-intent-release.js",
-    "test:electron:coverage": "node scripts/ensure-node-native-deps.js && rimraf dist-electron/electron/tests && tsc -p electron/tsconfig.json && node --test --test-force-exit --experimental-test-coverage dist-electron/electron/tests/*.test.js",
-    "test:renderer": "npm --prefix renderer test",
-    "test:renderer:coverage": "npm --prefix renderer run test:coverage",
-    "verify:electron:coverage": "node scripts/verify-electron-coverage.js",
-    "verify:renderer:coverage": "node scripts/verify-renderer-coverage.js",
-    "verify:production": "npm run typecheck && npm run verify:electron:coverage && npm run verify:renderer:coverage && cargo test --manifest-path native-module/Cargo.toml",
-    "test": "npm run test:electron && cargo test --manifest-path native-module/Cargo.toml",
-    "preapp:build": "node scripts/run-production-verify-if-needed.js",
-    "watch": "tsc -p electron/tsconfig.json --watch",
-    "start": "npm run app:dev",
-    "dist": "npm run app:build",
-    "build:native": "node scripts/build-native.js",
-    "build:native:current": "node scripts/build-native.js --current"
-  },
-  "build": {
-    "appId": "com.electron.meeting-notes",
-    "afterPack": "./scripts/ad-hoc-sign.js",
-    "productName": "Natively",
-    "files": [
-      "dist",
-      "dist-electron",
-      "electron/renderer",
-      "package.json",
-      "node_modules",
-      "!**/native-module/target",
-      "!**/native-module/src",
-      "!**/native-module/.cargo"
-    ],
-    "asarUnpack": [
-      "**/*.node",
-      "**/*.dylib",
-      "dist-electron/electron/preload.js",
-      "dist-electron/electron/preload/**",
-      "dist-electron/electron/stealth/shellPreload.js"
-    ],
-    "directories": {
-      "output": "release",
-      "buildResources": "assets"
-    },
-    "extraResources": [
-      {
-        "from": "assets/",
-        "to": "assets/"
-      },
-      {
-        "from": "assets/natively.icns",
-        "to": "natively.icns"
-      },
-      {
-        "from": "resources/models/",
-        "to": "models/"
-      },
-      {
-        "from": "assets/bin/macos/system-services-helper",
-        "to": "bin/macos/system-services-helper"
-      },
-      {
-        "from": "assets/bin/macos",
-        "to": "bin/macos",
-        "filter": [
-          "foundation-intent-helper"
-        ]
-      }
-    ],
-    "extraFiles": [
-      {
-        "from": "assets/xpcservices/macos-full-stealth-helper.xpc",
-        "to": "XPCServices/macos-full-stealth-helper.xpc"
-      }
-    ],
-    "mac": {
-      "category": "public.app-category.productivity",
-      "extendInfo": {
-        "NSMicrophoneUsageDescription": "Natively needs microphone access to capture meeting audio and voice input.",
-        "NSScreenCaptureUsageDescription": "Natively needs screen recording access so you can capture screenshots and analyze on-screen meeting content.",
-        "NSAppleEventsUsageDescription": "Natively needs automation access for desktop integrations you trigger from the app."
-      },
-      "target": [
-        {
-          "target": "zip",
-          "arch": [
-            "x64",
-            "arm64"
-          ]
-        },
-        {
-          "target": "dmg",
-          "arch": [
-            "x64",
-            "arm64"
-          ]
-        }
-      ],
-      "icon": "assets/natively.icns",
-      "identity": null,
-      "hardenedRuntime": true,
-      "entitlements": "assets/entitlements.mac.plist",
-      "entitlementsInherit": "assets/entitlements.mac.plist"
-    },
-    "win": {
-      "target": [
-        {
-          "target": "nsis",
-          "arch": [
-            "x64",
-            "ia32"
-          ]
-        },
-        {
-          "target": "portable",
-          "arch": [
-            "x64"
-          ]
-        }
-      ],
-      "icon": "assets/icons/win/icon.ico",
-      "requestedExecutionLevel": "asInvoker"
-    },
-    "linux": {
-      "target": [
-        {
-          "target": "AppImage",
-          "arch": [
-            "x64"
-          ]
-        },
-        {
-          "target": "deb",
-          "arch": [
-            "x64"
-          ]
-        }
-      ],
-      "icon": "assets/icons/png/",
-      "category": "Office"
-    },
-    "nsis": {
-      "oneClick": false,
-      "perMachine": false,
-      "allowToChangeInstallationDirectory": true,
-      "deleteAppDataOnUninstall": false
-    },
-    "publish": [
-      {
-        "provider": "github",
-        "owner": "evinjohnn",
-        "repo": "natively-cluely-ai-assistant",
-        "releaseType": "release"
-      }
-    ]
-  },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "devDependencies": {
-    "@electron/notarize": "^3.1.1",
-    "@electron/rebuild": "^4.0.3",
-    "@napi-rs/cli": "^3.5.1",
-    "@types/better-sqlite3": "^7.6.13",
-    "@types/color": "^4.2.0",
-    "@types/diff": "^6.0.0",
-    "@types/electron": "^1.4.38",
-    "@types/node": "^22.9.0",
-    "@types/react": "^18.3.12",
-    "@types/react-dom": "^18.3.1",
-    "@types/react-syntax-highlighter": "^15.5.13",
-    "@types/screenshot-desktop": "^1.12.3",
-    "@types/uuid": "^9.0.8",
-    "@types/ws": "^8.18.1",
-    "@typescript-eslint/eslint-plugin": "^8.14.0",
-    "@typescript-eslint/parser": "^8.14.0",
-    "@vitejs/plugin-react": "^6.0.1",
-    "autoprefixer": "^10.4.20",
-    "concurrently": "^9.1.0",
-    "cross-env": "^7.0.3",
-    "dotenv": "^17.3.1",
-    "electron": "^41.0.3",
-    "electron-builder": "^26.8.1",
-    "electron-is-dev": "^3.0.1",
-    "electron-rebuild": "^2.0.3",
-    "postcss": "^8.4.49",
-    "rimraf": "^6.0.1",
-    "tailwindcss": "^3.4.15",
-    "tap": "^21.5.0",
-    "typescript": "^5.6.3",
-    "vite": "^8.0.1",
-    "vite-plugin-electron": "^0.28.8",
-    "vite-plugin-electron-renderer": "^0.14.6",
-    "wait-on": "^8.0.1"
-  },
-  "dependencies": {
-    "@anthropic-ai/sdk": "^0.74.0",
-    "@bany/curl-to-json": "^1.2.10",
-    "@elevenlabs/client": "^0.15.1",
-    "@elevenlabs/elevenlabs-js": "^2.39.0",
-    "@google-cloud/speech": "^5.0.0",
-    "@google/genai": "^1.44.0",
-    "@grpc/grpc-js": "^1.14.3",
-    "@grpc/proto-loader": "^0.8.0",
-    "@radix-ui/react-dialog": "^1.1.2",
-    "@radix-ui/react-toast": "^1.2.2",
-    "@types/keytar": "^4.4.0",
-    "@types/three": "^0.182.0",
-    "@xenova/transformers": "^2.17.2",
-    "axios": "^1.7.7",
-    "better-sqlite3": "^12.8.0",
-    "class-variance-authority": "^0.7.0",
-    "clsx": "^2.1.1",
-    "diff": "^8.0.3",
-    "electron-store": "^8.1.0",
-    "form-data": "^4.0.1",
-    "framer-motion": "^12.29.2",
-    "groq-sdk": "^0.37.0",
-    "jspdf": "^4.0.0",
-    "katex": "^0.16.27",
-    "keytar": "^7.9.0",
-    "lucide-react": "^0.460.0",
-    "mammoth": "^1.11.0",
-    "openai": "^6.22.0",
-    "pdf-parse": "^2.4.5",
-    "react": "^18.3.1",
-    "react-code-blocks": "^0.1.6",
-    "react-dom": "^18.3.1",
-    "react-icons": "^5.3.0",
-    "react-markdown": "^10.1.0",
-    "react-query": "^3.39.3",
-    "react-syntax-highlighter": "^15.6.1",
-    "rehype-katex": "^7.0.1",
-    "remark-gfm": "^4.0.1",
-    "remark-math": "^6.0.0",
-    "screenshot-desktop": "^1.15.0",
-    "sharp": "^0.33.5",
-    "sqlite-vec": "^0.1.7-alpha.2",
-    "sqlite3": "^6.0.1",
-    "tailwind-merge": "^2.5.4",
-    "tesseract.js": "^5.0.5",
-    "three": "^0.182.0",
-    "tree-kill": "^1.2.2",
-    "uuid": "^11.0.3",
-    "ws": "^8.19.0",
-    "zod": "^3.24.1"
-  },
-  "optionalDependencies": {
-    "natively-audio": "file:./native-module",
-    "onnxruntime-node": "^1.18.0",
-    "onnxruntime-node-win32-x64": "^1.18.0",
-    "onnxruntime-node-win32-ia32": "^1.18.0",
-    "sqlite-vec-darwin-arm64": "^0.1.7-alpha.2",
-    "sqlite-vec-darwin-x64": "^0.1.7-alpha.2",
-    "sqlite-vec-win32-x64": "^0.1.7-alpha.2",
-    "sqlite-vec-win32-ia32": "^0.1.7-alpha.2"
-  }
+	"name": "natively",
+	"version": "2.0.9",
+	"main": "./dist-electron/electron/main.js",
+	"description": "Natively is a meeting notes app that uses AI to generate notes from your meetings.",
+	"scripts": {
+		"clean": "rimraf dist dist-electron",
+		"dev": "vite",
+		"build": "npm run clean && tsc && vite build",
+		"preview": "vite preview",
+		"typecheck": "tsc --noEmit && tsc -p electron/tsconfig.json --noEmit",
+		"postinstall": "node scripts/ensure-electron-native-deps.js && node scripts/download-models.js && node scripts/ensure-sqlite-vec.js",
+		"electron:dev": "node scripts/ensure-electron-native-deps.js && npm run build:native:current && tsc -p electron/tsconfig.json && cross-env NODE_ENV=development electron .",
+		"electron:build": "node scripts/ensure-electron-native-deps.js && npm run build:native:current && rimraf dist && vite build && tsc -p electron/tsconfig.json && cross-env NODE_ENV=production electron .",
+		"prepare:macos:virtual-display-helper": "node scripts/prepare-macos-virtual-display-helper.js",
+		"prepare:macos:full-stealth-helper": "node scripts/prepare-macos-full-stealth-helper.js",
+		"prepare:macos:foundation-intent-helper": "node scripts/prepare-macos-foundation-intent-helper.js",
+		"notarize:helper": "node scripts/notarize-macos-helper.js",
+		"app:dev": "concurrently \"npm run dev -- --port 5180\" \"wait-on http://localhost:5180 && npm run electron:dev\"",
+		"app:build": "node scripts/ensure-electron-native-deps.js && npm run build && npm run build:native && npm run prepare:macos:virtual-display-helper && cross-env NATIVELY_REQUIRE_FULL_STEALTH_HELPER=1 npm run prepare:macos:full-stealth-helper && cross-env NATIVELY_REQUIRE_FOUNDATION_INTENT_HELPER=1 npm run prepare:macos:foundation-intent-helper && tsc -p electron/tsconfig.json && electron-builder",
+		"app:build:arm64": "node scripts/ensure-electron-native-deps.js && npm run build && npm run build:native:current && npm run prepare:macos:virtual-display-helper && cross-env NATIVELY_REQUIRE_FULL_STEALTH_HELPER=1 npm run prepare:macos:full-stealth-helper && cross-env NATIVELY_REQUIRE_FOUNDATION_INTENT_HELPER=1 npm run prepare:macos:foundation-intent-helper && tsc -p electron/tsconfig.json && electron-builder --mac --arm64",
+		"app:build:x64": "node scripts/ensure-electron-native-deps.js && npm run build && npm run build:native:current && npm run prepare:macos:virtual-display-helper && cross-env NATIVELY_REQUIRE_FULL_STEALTH_HELPER=1 npm run prepare:macos:full-stealth-helper && cross-env NATIVELY_REQUIRE_FOUNDATION_INTENT_HELPER=1 npm run prepare:macos:foundation-intent-helper && tsc -p electron/tsconfig.json && electron-builder --mac --x64",
+		"test:electron": "node scripts/ensure-node-native-deps.js && rimraf dist-electron/electron/tests && tsc -p electron/tsconfig.json && node --test --test-force-exit dist-electron/electron/tests/*.test.js",
+		"test:soak": "rimraf dist-electron/electron/tests && tsc -p electron/tsconfig.json && node scripts/run-soak-scenarios.js",
+		"test:fault-injection": "rimraf dist-electron/electron/tests && tsc -p electron/tsconfig.json && node --test dist-electron/electron/tests/faultInjection.test.js",
+		"test:active-renderer-lifecycle": "rimraf dist-electron/electron/tests && tsc -p electron/tsconfig.json && node --test dist-electron/electron/tests/activeRendererLifecycle.test.js",
+		"bench:baseline": "rimraf dist-electron/electron/tests && tsc -p electron/tsconfig.json && node scripts/run-baseline-benchmark.js",
+		"capture-matrix:mock": "tsc -p electron/tsconfig.json && node scripts/run-capture-matrix.js --mock",
+		"capture-matrix:local": "tsc -p electron/tsconfig.json && node scripts/run-capture-matrix.js --local",
+		"capture-matrix:macos:screencapture": "tsc -p electron/tsconfig.json && node scripts/run-capture-matrix.js --macos-screencapture",
+		"capture-matrix:macos:cgwindow": "tsc -p electron/tsconfig.json && node scripts/run-capture-matrix.js --macos-cgwindow",
+		"capture-matrix:windows:stub": "tsc -p electron/tsconfig.json && node scripts/run-capture-matrix.js --windows-stub",
+		"capture-matrix:browser:get-display-media": "tsc -p electron/tsconfig.json && node scripts/run-capture-matrix.js --browser-get-display-media",
+		"capture-matrix:external:manual": "tsc -p electron/tsconfig.json && node scripts/run-capture-matrix.js --manual-external",
+		"test:release-gate": "node scripts/run-release-gate.js",
+		"eval:conscious": "tsc -p electron/tsconfig.json && node scripts/run-conscious-eval.js",
+		"eval:intent": "tsc -p electron/tsconfig.json && node scripts/run-intent-eval.js",
+		"eval:intent:multi": "tsc -p electron/tsconfig.json && node scripts/run-intent-eval-multi.js",
+		"eval:intent:generate-variants": "node scripts/generate-intent-eval-variants.js",
+		"bench:intent:foundation": "tsc -p electron/tsconfig.json && node scripts/run-foundation-intent-latency-spike.js",
+		"verify:foundation-intent-release": "node scripts/run-foundation-intent-release.js",
+		"test:electron:coverage": "node scripts/ensure-node-native-deps.js && rimraf dist-electron/electron/tests && tsc -p electron/tsconfig.json && node --test --test-force-exit --experimental-test-coverage dist-electron/electron/tests/*.test.js",
+		"test:renderer": "npm --prefix renderer test",
+		"test:renderer:coverage": "npm --prefix renderer run test:coverage",
+		"verify:electron:coverage": "node scripts/verify-electron-coverage.js",
+		"verify:renderer:coverage": "node scripts/verify-renderer-coverage.js",
+		"verify:production": "npm run typecheck && npm run verify:electron:coverage && npm run verify:renderer:coverage && cargo test --manifest-path native-module/Cargo.toml",
+		"test": "npm run test:electron && cargo test --manifest-path native-module/Cargo.toml",
+		"preapp:build": "node scripts/run-production-verify-if-needed.js",
+		"watch": "tsc -p electron/tsconfig.json --watch",
+		"start": "npm run app:dev",
+		"dist": "npm run app:build",
+		"build:native": "node scripts/build-native.js",
+		"build:native:current": "node scripts/build-native.js --current"
+	},
+	"build": {
+		"appId": "com.electron.meeting-notes",
+		"afterPack": "./scripts/ad-hoc-sign.js",
+		"productName": "Natively",
+		"files": [
+			"dist",
+			"dist-electron",
+			"electron/renderer",
+			"package.json",
+			"node_modules",
+			"!**/native-module/target",
+			"!**/native-module/src",
+			"!**/native-module/.cargo"
+		],
+		"asarUnpack": [
+			"**/*.node",
+			"**/*.dylib",
+			"dist-electron/electron/preload.js",
+			"dist-electron/electron/preload/**",
+			"dist-electron/electron/stealth/shellPreload.js"
+		],
+		"directories": {
+			"output": "release",
+			"buildResources": "assets"
+		},
+		"extraResources": [
+			{
+				"from": "assets/",
+				"to": "assets/"
+			},
+			{
+				"from": "assets/natively.icns",
+				"to": "natively.icns"
+			},
+			{
+				"from": "resources/models/",
+				"to": "models/"
+			},
+			{
+				"from": "assets/bin/macos/system-services-helper",
+				"to": "bin/macos/system-services-helper"
+			},
+			{
+				"from": "assets/bin/macos",
+				"to": "bin/macos",
+				"filter": [
+					"foundation-intent-helper"
+				]
+			}
+		],
+		"extraFiles": [
+			{
+				"from": "assets/xpcservices/macos-full-stealth-helper.xpc",
+				"to": "XPCServices/macos-full-stealth-helper.xpc"
+			}
+		],
+		"mac": {
+			"category": "public.app-category.productivity",
+			"extendInfo": {
+				"NSMicrophoneUsageDescription": "Natively needs microphone access to capture meeting audio and voice input.",
+				"NSScreenCaptureUsageDescription": "Natively needs screen recording access so you can capture screenshots and analyze on-screen meeting content.",
+				"NSAppleEventsUsageDescription": "Natively needs automation access for desktop integrations you trigger from the app."
+			},
+			"target": [
+				{
+					"target": "zip",
+					"arch": [
+						"x64",
+						"arm64"
+					]
+				},
+				{
+					"target": "dmg",
+					"arch": [
+						"x64",
+						"arm64"
+					]
+				}
+			],
+			"icon": "assets/natively.icns",
+			"identity": null,
+			"hardenedRuntime": true,
+			"entitlements": "assets/entitlements.mac.plist",
+			"entitlementsInherit": "assets/entitlements.mac.plist"
+		},
+		"win": {
+			"target": [
+				{
+					"target": "nsis",
+					"arch": [
+						"x64",
+						"ia32"
+					]
+				},
+				{
+					"target": "portable",
+					"arch": [
+						"x64"
+					]
+				}
+			],
+			"icon": "assets/icons/win/icon.ico",
+			"requestedExecutionLevel": "asInvoker"
+		},
+		"linux": {
+			"target": [
+				{
+					"target": "AppImage",
+					"arch": [
+						"x64"
+					]
+				},
+				{
+					"target": "deb",
+					"arch": [
+						"x64"
+					]
+				}
+			],
+			"icon": "assets/icons/png/",
+			"category": "Office"
+		},
+		"nsis": {
+			"oneClick": false,
+			"perMachine": false,
+			"allowToChangeInstallationDirectory": true,
+			"deleteAppDataOnUninstall": false
+		},
+		"publish": [
+			{
+				"provider": "github",
+				"owner": "evinjohnn",
+				"repo": "natively-cluely-ai-assistant",
+				"releaseType": "release"
+			}
+		]
+	},
+	"keywords": [],
+	"author": "",
+	"license": "ISC",
+	"devDependencies": {
+		"@electron/notarize": "^3.1.1",
+		"@electron/rebuild": "^4.0.3",
+		"@napi-rs/cli": "^3.5.1",
+		"@types/better-sqlite3": "^7.6.13",
+		"@types/color": "^4.2.0",
+		"@types/diff": "^6.0.0",
+		"@types/electron": "^1.4.38",
+		"@types/node": "^22.9.0",
+		"@types/react": "^18.3.12",
+		"@types/react-dom": "^18.3.1",
+		"@types/react-syntax-highlighter": "^15.5.13",
+		"@types/screenshot-desktop": "^1.12.3",
+		"@types/uuid": "^9.0.8",
+		"@types/ws": "^8.18.1",
+		"@typescript-eslint/eslint-plugin": "^8.14.0",
+		"@typescript-eslint/parser": "^8.14.0",
+		"@vitejs/plugin-react": "^6.0.1",
+		"autoprefixer": "^10.4.20",
+		"concurrently": "^9.1.0",
+		"cross-env": "^7.0.3",
+		"dotenv": "^17.3.1",
+		"electron": "^41.0.3",
+		"electron-builder": "^26.8.1",
+		"electron-is-dev": "^3.0.1",
+		"electron-rebuild": "^2.0.3",
+		"postcss": "^8.4.49",
+		"rimraf": "^6.0.1",
+		"tailwindcss": "^3.4.15",
+		"tap": "^21.5.0",
+		"typescript": "^5.6.3",
+		"vite": "^8.0.1",
+		"vite-plugin-electron": "^0.28.8",
+		"vite-plugin-electron-renderer": "^0.14.6",
+		"wait-on": "^8.0.1"
+	},
+	"dependencies": {
+		"@anthropic-ai/sdk": "^0.74.0",
+		"@bany/curl-to-json": "^1.2.10",
+		"@elevenlabs/client": "^0.15.1",
+		"@elevenlabs/elevenlabs-js": "^2.39.0",
+		"@google-cloud/speech": "^5.0.0",
+		"@google/genai": "^1.44.0",
+		"@grpc/grpc-js": "^1.14.3",
+		"@grpc/proto-loader": "^0.8.0",
+		"@radix-ui/react-dialog": "^1.1.2",
+		"@radix-ui/react-toast": "^1.2.2",
+		"@types/keytar": "^4.4.0",
+		"@types/three": "^0.182.0",
+		"@xenova/transformers": "^2.17.2",
+		"axios": "^1.7.7",
+		"better-sqlite3": "^12.8.0",
+		"class-variance-authority": "^0.7.0",
+		"clsx": "^2.1.1",
+		"diff": "^8.0.3",
+		"electron-store": "^8.1.0",
+		"form-data": "^4.0.1",
+		"framer-motion": "^12.29.2",
+		"groq-sdk": "^0.37.0",
+		"jspdf": "^4.0.0",
+		"katex": "^0.16.27",
+		"keytar": "^7.9.0",
+		"lucide-react": "^0.460.0",
+		"mammoth": "^1.11.0",
+		"openai": "^6.22.0",
+		"pdf-parse": "^2.4.5",
+		"react": "^18.3.1",
+		"react-code-blocks": "^0.1.6",
+		"react-dom": "^18.3.1",
+		"react-icons": "^5.3.0",
+		"react-markdown": "^10.1.0",
+		"react-query": "^3.39.3",
+		"react-syntax-highlighter": "^15.6.1",
+		"rehype-katex": "^7.0.1",
+		"remark-gfm": "^4.0.1",
+		"remark-math": "^6.0.0",
+		"screenshot-desktop": "^1.15.0",
+		"sharp": "^0.33.5",
+		"sqlite-vec": "^0.1.7-alpha.2",
+		"sqlite3": "^6.0.1",
+		"tailwind-merge": "^2.5.4",
+		"tesseract.js": "^5.0.5",
+		"three": "^0.182.0",
+		"tree-kill": "^1.2.2",
+		"uuid": "^11.0.3",
+		"ws": "^8.19.0",
+		"zod": "^3.24.1"
+	},
+	"optionalDependencies": {
+		"natively-audio": "file:./native-module",
+		"onnxruntime-node": "^1.18.0",
+		"onnxruntime-node-win32-x64": "^1.18.0",
+		"onnxruntime-node-win32-ia32": "^1.18.0",
+		"sqlite-vec-darwin-arm64": "^0.1.7-alpha.2",
+		"sqlite-vec-darwin-x64": "^0.1.7-alpha.2",
+		"sqlite-vec-win32-x64": "^0.1.7-alpha.2",
+		"sqlite-vec-win32-ia32": "^0.1.7-alpha.2"
+	}
 }

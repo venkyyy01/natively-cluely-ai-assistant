@@ -1,258 +1,278 @@
-import { BrowserWindow, screen, app } from "electron"
-import path from "node:path"
-import { StealthManager } from "./stealth/StealthManager"
-import { attachRendererBridgeMonitor } from "./runtime/rendererBridgeHealth"
-import { resolveRendererPreloadPath, resolveRendererStartUrl } from "./runtime/windowAssetPaths"
+import path from "node:path";
+import { app, BrowserWindow, screen } from "electron";
+import { attachRendererBridgeMonitor } from "./runtime/rendererBridgeHealth";
+import {
+	resolveRendererPreloadPath,
+	resolveRendererStartUrl,
+} from "./runtime/windowAssetPaths";
+import type { StealthManager } from "./stealth/StealthManager";
 
-import type { WindowHelper } from "./WindowHelper"
+import type { WindowHelper } from "./WindowHelper";
 
 export class ModelSelectorWindowHelper {
-    private window: BrowserWindow | null = null
-    private contentProtection: boolean = false
-    private opacityTimeout: NodeJS.Timeout | null = null;
-    private readonly stealthManager: StealthManager;
+	private window: BrowserWindow | null = null;
+	private contentProtection: boolean = false;
+	private opacityTimeout: NodeJS.Timeout | null = null;
+	private readonly stealthManager: StealthManager;
 
-    // Store offsets relative to main window if needed, but absolute positioning is simpler for dropdowns
-    private lastBlurTime: number = 0
-    private ignoreBlur: boolean = false;
-    private detachRendererBridgeMonitor: (() => void) | null = null
+	// Store offsets relative to main window if needed, but absolute positioning is simpler for dropdowns
+	private lastBlurTime: number = 0;
+	private ignoreBlur: boolean = false;
+	private detachRendererBridgeMonitor: (() => void) | null = null;
 
-    constructor(stealthManager: StealthManager) {
-        this.stealthManager = stealthManager;
-    }
+	constructor(stealthManager: StealthManager) {
+		this.stealthManager = stealthManager;
+	}
 
-    private applyStealth(enable: boolean): void {
-        if (!this.window || this.window.isDestroyed()) return;
+	private applyStealth(enable: boolean): void {
+		if (!this.window || this.window.isDestroyed()) return;
 
-        this.stealthManager.applyToWindow(this.window, enable, {
-            role: 'auxiliary',
-            hideFromSwitcher: true,
-        });
-    }
+		this.stealthManager.applyToWindow(this.window, enable, {
+			role: "auxiliary",
+			hideFromSwitcher: true,
+		});
+	}
 
-    public setIgnoreBlur(ignore: boolean): void {
-        this.ignoreBlur = ignore;
-    }
+	public setIgnoreBlur(ignore: boolean): void {
+		this.ignoreBlur = ignore;
+	}
 
-    private windowHelper: WindowHelper | null = null;
+	private windowHelper: WindowHelper | null = null;
 
-    public setWindowHelper(wh: WindowHelper): void {
-        this.windowHelper = wh;
-    }
+	public setWindowHelper(wh: WindowHelper): void {
+		this.windowHelper = wh;
+	}
 
-    public getWindow(): BrowserWindow | null {
-        return this.window
-    }
+	public getWindow(): BrowserWindow | null {
+		return this.window;
+	}
 
-    public preloadWindow(): void {
-        if (!this.window || this.window.isDestroyed()) {
-            this.createWindow(-10000, -10000, false);
-        }
-    }
+	public preloadWindow(): void {
+		if (!this.window || this.window.isDestroyed()) {
+			this.createWindow(-10000, -10000, false);
+		}
+	}
 
-    public showWindow(x: number, y: number): void {
-        if (!this.window || this.window.isDestroyed()) {
-            this.createWindow(x, y)
-            return
-        }
+	public showWindow(x: number, y: number): void {
+		if (!this.window || this.window.isDestroyed()) {
+			this.createWindow(x, y);
+			return;
+		}
 
-        // Set parent and align window settings
-        const mainWin = this.windowHelper?.getVisibleMainWindow();
-        const isOverlay = mainWin === this.windowHelper?.getOverlayWindow();
+		// Set parent and align window settings
+		const mainWin = this.windowHelper?.getVisibleMainWindow();
+		const isOverlay = mainWin === this.windowHelper?.getOverlayWindow();
 
-        if (mainWin && !mainWin.isDestroyed()) {
-            this.window.setParentWindow(mainWin);
-        }
+		if (mainWin && !mainWin.isDestroyed()) {
+			this.window.setParentWindow(mainWin);
+		}
 
-        if (process.platform === "darwin") {
-            // Align with parent window behavior
-            this.window.setVisibleOnAllWorkspaces(isOverlay, { visibleOnFullScreen: isOverlay });
-            this.window.setAlwaysOnTop(isOverlay, "floating");
-            // Always hide from MC as it's a dropdown
-            this.window.setHiddenInMissionControl(true);
-        }
+		if (process.platform === "darwin") {
+			// Align with parent window behavior
+			this.window.setVisibleOnAllWorkspaces(isOverlay, {
+				visibleOnFullScreen: isOverlay,
+			});
+			this.window.setAlwaysOnTop(isOverlay, "floating");
+			// Always hide from MC as it's a dropdown
+			this.window.setHiddenInMissionControl(true);
+		}
 
-        // Standard dropdown positioning
-        this.window.setPosition(Math.round(x), Math.round(y))
-        this.ensureVisibleOnScreen();
+		// Standard dropdown positioning
+		this.window.setPosition(Math.round(x), Math.round(y));
+		this.ensureVisibleOnScreen();
 
-        if (process.platform === 'win32' && this.contentProtection) {
-            this.stealthManager.setWindowOpacity(this.window, 0, {
-                source: 'ModelSelectorWindowHelper.showWindow.win32',
-                windowRole: 'auxiliary',
-            });
-            this.stealthManager.requestWindowShow(this.window, {
-                source: 'ModelSelectorWindowHelper.showWindow.win32',
-                windowRole: 'auxiliary',
-            });
-            this.applyStealth(true);
-            
-            if (this.opacityTimeout) clearTimeout(this.opacityTimeout);
-            this.opacityTimeout = setTimeout(() => {
-                if (this.window && !this.window.isDestroyed()) {
-                    this.stealthManager.setWindowOpacity(this.window, 1, {
-                        source: 'ModelSelectorWindowHelper.showWindow.win32.restore',
-                        windowRole: 'auxiliary',
-                    });
-                    this.stealthManager.reapplyAfterShow(this.window);
-                    this.window.focus();
-                }
-            }, 60);
-        } else {
-            this.applyStealth(this.contentProtection);
-            this.stealthManager.requestWindowShow(this.window, {
-                source: 'ModelSelectorWindowHelper.showWindow',
-                windowRole: 'auxiliary',
-            });
-            this.stealthManager.reapplyAfterShow(this.window);
-            this.window.focus();
-        }
-    }
+		if (process.platform === "win32" && this.contentProtection) {
+			this.stealthManager.setWindowOpacity(this.window, 0, {
+				source: "ModelSelectorWindowHelper.showWindow.win32",
+				windowRole: "auxiliary",
+			});
+			this.stealthManager.requestWindowShow(this.window, {
+				source: "ModelSelectorWindowHelper.showWindow.win32",
+				windowRole: "auxiliary",
+			});
+			this.applyStealth(true);
 
-    public hideWindow(): void {
-        if (this.window && !this.window.isDestroyed()) {
-            this.window.setParentWindow(null);
-            this.stealthManager.requestWindowHide(this.window, {
-                source: 'ModelSelectorWindowHelper.hideWindow',
-                windowRole: 'auxiliary',
-            })
+			if (this.opacityTimeout) clearTimeout(this.opacityTimeout);
+			this.opacityTimeout = setTimeout(() => {
+				if (this.window && !this.window.isDestroyed()) {
+					this.stealthManager.setWindowOpacity(this.window, 1, {
+						source: "ModelSelectorWindowHelper.showWindow.win32.restore",
+						windowRole: "auxiliary",
+					});
+					this.stealthManager.reapplyAfterShow(this.window);
+					this.window.focus();
+				}
+			}, 60);
+		} else {
+			this.applyStealth(this.contentProtection);
+			this.stealthManager.requestWindowShow(this.window, {
+				source: "ModelSelectorWindowHelper.showWindow",
+				windowRole: "auxiliary",
+			});
+			this.stealthManager.reapplyAfterShow(this.window);
+			this.window.focus();
+		}
+	}
 
-            // Restore focus
-            const mainWin = this.windowHelper?.getVisibleMainWindow();
-            if (mainWin && !mainWin.isDestroyed() && mainWin.isVisible()) {
-                mainWin.focus();
-            }
-        }
-    }
+	public hideWindow(): void {
+		if (this.window && !this.window.isDestroyed()) {
+			this.window.setParentWindow(null);
+			this.stealthManager.requestWindowHide(this.window, {
+				source: "ModelSelectorWindowHelper.hideWindow",
+				windowRole: "auxiliary",
+			});
 
-    public toggleWindow(x: number, y: number): void {
-        if (this.window && !this.window.isDestroyed()) {
-            // Fix: If window was just closed by blur (e.g. clicking the toggle button), don't re-open immediately
-            if (!this.window.isVisible() && (Date.now() - this.lastBlurTime < 250)) {
-                return;
-            }
+			// Restore focus
+			const mainWin = this.windowHelper?.getVisibleMainWindow();
+			if (mainWin && !mainWin.isDestroyed() && mainWin.isVisible()) {
+				mainWin.focus();
+			}
+		}
+	}
 
-            if (this.window.isVisible()) {
-                this.hideWindow()
-            } else {
-                this.showWindow(x, y)
-            }
-        } else {
-            this.createWindow(x, y)
-        }
-    }
+	public toggleWindow(x: number, y: number): void {
+		if (this.window && !this.window.isDestroyed()) {
+			// Fix: If window was just closed by blur (e.g. clicking the toggle button), don't re-open immediately
+			if (!this.window.isVisible() && Date.now() - this.lastBlurTime < 250) {
+				return;
+			}
 
-    public closeWindow(): void {
-        this.hideWindow();
-    }
+			if (this.window.isVisible()) {
+				this.hideWindow();
+			} else {
+				this.showWindow(x, y);
+			}
+		} else {
+			this.createWindow(x, y);
+		}
+	}
 
-private createWindow(x?: number, y?: number, showWhenReady: boolean = true): void {
-  const startUrl = resolveRendererStartUrl({ electronDir: __dirname })
-  const preloadPath = resolveRendererPreloadPath({ electronDir: __dirname })
-  const windowSettings: Electron.BrowserWindowConstructorOptions = {
-    width: 140,
-    height: 200,
-    frame: false,
-    transparent: true,
-    resizable: false,
-    fullscreenable: false,
-    hasShadow: false,
-    alwaysOnTop: true,
-    backgroundColor: "#00000000",
-    show: false,
-    skipTaskbar: true,
-    webPreferences: {
-      nodeIntegration: false,
-      contextIsolation: true,
-      sandbox: false,
-      preload: preloadPath,
-      backgroundThrottling: false
-    }
-  }
+	public closeWindow(): void {
+		this.hideWindow();
+	}
 
-        if (x !== undefined && y !== undefined) {
-            windowSettings.x = Math.round(x)
-            windowSettings.y = Math.round(y)
-        }
+	private createWindow(
+		x?: number,
+		y?: number,
+		showWhenReady: boolean = true,
+	): void {
+		const startUrl = resolveRendererStartUrl({ electronDir: __dirname });
+		const preloadPath = resolveRendererPreloadPath({ electronDir: __dirname });
+		const windowSettings: Electron.BrowserWindowConstructorOptions = {
+			width: 140,
+			height: 200,
+			frame: false,
+			transparent: true,
+			resizable: false,
+			fullscreenable: false,
+			hasShadow: false,
+			alwaysOnTop: true,
+			backgroundColor: "#00000000",
+			show: false,
+			skipTaskbar: true,
+			webPreferences: {
+				nodeIntegration: false,
+				contextIsolation: true,
+				sandbox: false,
+				preload: preloadPath,
+				backgroundThrottling: false,
+			},
+		};
 
-        this.window = new BrowserWindow(windowSettings)
-        this.stealthManager.recordProtectionEvent('window-created', {
-            source: 'ModelSelectorWindowHelper.createWindow',
-            windowRole: 'auxiliary',
-            visible: false,
-        })
-        this.detachRendererBridgeMonitor?.()
-        this.detachRendererBridgeMonitor = attachRendererBridgeMonitor('Model selector', this.window, {
-            expectedPreloadPath: preloadPath,
-            url: `${startUrl}?window=model-selector`,
-        })
+		if (x !== undefined && y !== undefined) {
+			windowSettings.x = Math.round(x);
+			windowSettings.y = Math.round(y);
+		}
 
-        if (process.platform === "darwin") {
-            // Initial defaults - will be updated in showWindow
-            this.window.setHiddenInMissionControl(true)
-        }
+		this.window = new BrowserWindow(windowSettings);
+		this.stealthManager.recordProtectionEvent("window-created", {
+			source: "ModelSelectorWindowHelper.createWindow",
+			windowRole: "auxiliary",
+			visible: false,
+		});
+		this.detachRendererBridgeMonitor?.();
+		this.detachRendererBridgeMonitor = attachRendererBridgeMonitor(
+			"Model selector",
+			this.window,
+			{
+				expectedPreloadPath: preloadPath,
+				url: `${startUrl}?window=model-selector`,
+			},
+		);
 
-        // Apply content protection for Undetectable Mode
-        console.log(`[ModelSelectorWindowHelper] Creating window with Content Protection: ${this.contentProtection}`);
-        this.applyStealth(this.contentProtection)
+		if (process.platform === "darwin") {
+			// Initial defaults - will be updated in showWindow
+			this.window.setHiddenInMissionControl(true);
+		}
 
-        // Load with query param for routing
-        const url = `${startUrl}?window=model-selector`
+		// Apply content protection for Undetectable Mode
+		console.log(
+			`[ModelSelectorWindowHelper] Creating window with Content Protection: ${this.contentProtection}`,
+		);
+		this.applyStealth(this.contentProtection);
 
-        this.window.loadURL(url).catch(e => {
-            console.error('[ModelSelectorWindowHelper] Failed to load URL:', e);
-        });
+		// Load with query param for routing
+		const url = `${startUrl}?window=model-selector`;
 
-        this.window.once('ready-to-show', () => {
-            if (showWhenReady) {
-                this.showWindow(this.window?.getBounds().x || 0, this.window?.getBounds().y || 0)
-            }
-        })
+		this.window.loadURL(url).catch((e) => {
+			console.error("[ModelSelectorWindowHelper] Failed to load URL:", e);
+		});
 
-        // Close on blur (click outside)
-        this.window.on('blur', () => {
-            if (this.ignoreBlur) return;
-            this.lastBlurTime = Date.now();
-            this.hideWindow();
-        })
+		this.window.once("ready-to-show", () => {
+			if (showWhenReady) {
+				this.showWindow(
+					this.window?.getBounds().x || 0,
+					this.window?.getBounds().y || 0,
+				);
+			}
+		});
 
-        this.window.on('closed', () => {
-            this.detachRendererBridgeMonitor?.();
-            this.detachRendererBridgeMonitor = null;
-        })
-    }
+		// Close on blur (click outside)
+		this.window.on("blur", () => {
+			if (this.ignoreBlur) return;
+			this.lastBlurTime = Date.now();
+			this.hideWindow();
+		});
 
-    private ensureVisibleOnScreen() {
-        if (!this.window) return;
-        const { x, y, width, height } = this.window.getBounds();
-        const display = screen.getDisplayNearestPoint({ x, y });
-        const bounds = display.workArea;
+		this.window.on("closed", () => {
+			this.detachRendererBridgeMonitor?.();
+			this.detachRendererBridgeMonitor = null;
+		});
+	}
 
-        let newX = x;
-        let newY = y;
+	private ensureVisibleOnScreen() {
+		if (!this.window) return;
+		const { x, y, width, height } = this.window.getBounds();
+		const display = screen.getDisplayNearestPoint({ x, y });
+		const bounds = display.workArea;
 
-        // Keep within horizontal bounds
-        if (x + width > bounds.x + bounds.width) {
-            newX = bounds.x + bounds.width - width;
-        }
-        if (x < bounds.x) {
-            newX = bounds.x;
-        }
+		let newX = x;
+		let newY = y;
 
-        // Keep within vertical bounds
-        if (y + height > bounds.y + bounds.height) {
-            newY = bounds.y + bounds.height - height;
-        }
-        if (y < bounds.y) {
-            newY = bounds.y;
-        }
+		// Keep within horizontal bounds
+		if (x + width > bounds.x + bounds.width) {
+			newX = bounds.x + bounds.width - width;
+		}
+		if (x < bounds.x) {
+			newX = bounds.x;
+		}
 
-        this.window.setPosition(newX, newY);
-    }
+		// Keep within vertical bounds
+		if (y + height > bounds.y + bounds.height) {
+			newY = bounds.y + bounds.height - height;
+		}
+		if (y < bounds.y) {
+			newY = bounds.y;
+		}
 
-    public setContentProtection(enable: boolean): void {
-        console.log(`[ModelSelectorWindowHelper] Setting content protection to: ${enable}`);
-        this.contentProtection = enable;
-        this.applyStealth(enable);
-    }
+		this.window.setPosition(newX, newY);
+	}
+
+	public setContentProtection(enable: boolean): void {
+		console.log(
+			`[ModelSelectorWindowHelper] Setting content protection to: ${enable}`,
+		);
+		this.contentProtection = enable;
+		this.applyStealth(enable);
+	}
 }

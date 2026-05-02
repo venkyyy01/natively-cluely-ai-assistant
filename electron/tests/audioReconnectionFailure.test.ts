@@ -1,132 +1,135 @@
 // Test for audio reconnection failures
-import { describe, it, beforeEach } from 'node:test';
-import assert from 'node:assert/strict';
 
-describe('Audio Reconnection Mid-Meeting Tests', () => {
-  let mockSystemAudioCapture: any;
-  let mockMicrophoneCapture: any;
-  let mockSTTProvider: any;
-  let audioReconnectionEvents: string[] = [];
+import assert from "node:assert/strict";
+import { beforeEach, describe, it } from "node:test";
 
-  beforeEach(() => {
-    audioReconnectionEvents = [];
-    
-    mockSystemAudioCapture = {
-      on: (event: string, callback: (err: Error) => void) => {
-        if (event === 'error') {
-          mockSystemAudioCapture._errorCallback = callback;
-        }
-      },
-      start: () => {},
-      stop: () => {},
-      write: () => {}
-    };
+describe("Audio Reconnection Mid-Meeting Tests", () => {
+	let mockSystemAudioCapture: any;
+	let mockMicrophoneCapture: any;
+	let mockSTTProvider: any;
+	let audioReconnectionEvents: string[] = [];
 
-    mockMicrophoneCapture = {
-      on: () => {},
-      start: () => {},
-      stop: () => {}
-    };
+	beforeEach(() => {
+		audioReconnectionEvents = [];
 
-    mockSTTProvider = {
-      write: () => {},
-      destroy: () => {},
-      on: () => {}
-    };
-  });
+		mockSystemAudioCapture = {
+			on: (event: string, callback: (err: Error) => void) => {
+				if (event === "error") {
+					mockSystemAudioCapture._errorCallback = callback;
+				}
+			},
+			start: () => {},
+			stop: () => {},
+			write: () => {},
+		};
 
-  describe('CRITICAL: Audio Reconnection Mid-Meeting', () => {
-    it('should demonstrate current behavior - no recovery on audio failure', async () => {
-      let nativeAudioConnected = true;
+		mockMicrophoneCapture = {
+			on: () => {},
+			start: () => {},
+			stop: () => {},
+		};
 
-      const currentErrorHandler = (error: Error) => {
-        console.log('[CRITICAL] Native audio error:', error);
-        nativeAudioConnected = false;
-        audioReconnectionEvents.push('audio-disconnected');
-      };
+		mockSTTProvider = {
+			write: () => {},
+			destroy: () => {},
+			on: () => {},
+		};
+	});
 
-      mockSystemAudioCapture.on('error', currentErrorHandler);
-      mockSystemAudioCapture._errorCallback(new Error('USB microphone unplugged'));
+	describe("CRITICAL: Audio Reconnection Mid-Meeting", () => {
+		it("should demonstrate current behavior - no recovery on audio failure", async () => {
+			let nativeAudioConnected = true;
 
-      await new Promise(resolve => setTimeout(resolve, 100));
+			const currentErrorHandler = (error: Error) => {
+				console.log("[CRITICAL] Native audio error:", error);
+				nativeAudioConnected = false;
+				audioReconnectionEvents.push("audio-disconnected");
+			};
 
-      assert.equal(nativeAudioConnected, false);
-      assert.deepEqual(audioReconnectionEvents, ['audio-disconnected']);
-    });
+			mockSystemAudioCapture.on("error", currentErrorHandler);
+			mockSystemAudioCapture._errorCallback(
+				new Error("USB microphone unplugged"),
+			);
 
-    it('should require AudioCaptureReconnector for proper recovery', async () => {
-      let audioState = 'connected';
-      let reconnectionAttempts = 0;
-      const reconnectionEvents: string[] = [];
+			await new Promise((resolve) => setTimeout(resolve, 100));
 
-      const audioReconnector = {
-        scheduleReconnect: async (speaker: 'system' | 'microphone') => {
-          reconnectionAttempts++;
-          reconnectionEvents.push(`reconnect-attempt-${reconnectionAttempts}`);
-          
-          await new Promise(resolve => setTimeout(resolve, 50));
-          
-          audioState = 'connected';
-          reconnectionEvents.push('reconnected');
-          return true;
-        }
-      };
+			assert.equal(nativeAudioConnected, false);
+			assert.deepEqual(audioReconnectionEvents, ["audio-disconnected"]);
+		});
 
-      const improvedErrorHandler = async (error: Error) => {
-        console.log('[WARN] Audio error, attempting recovery:', error);
-        audioState = 'reconnecting';
-        reconnectionEvents.push('reconnecting');
-        
-        const success = await audioReconnector.scheduleReconnect('system');
-        if (!success) {
-          audioState = 'failed';
-          reconnectionEvents.push('recovery-failed');
-        }
-      };
+		it("should require AudioCaptureReconnector for proper recovery", async () => {
+			let audioState = "connected";
+			let reconnectionAttempts = 0;
+			const reconnectionEvents: string[] = [];
 
-      await improvedErrorHandler(new Error('Audio device changed'));
+			const audioReconnector = {
+				scheduleReconnect: async (speaker: "system" | "microphone") => {
+					reconnectionAttempts++;
+					reconnectionEvents.push(`reconnect-attempt-${reconnectionAttempts}`);
 
-      assert.equal(audioState, 'connected');
-      assert.equal(reconnectionAttempts, 1);
-      assert.deepEqual(reconnectionEvents, [
-        'reconnecting',
-        'reconnect-attempt-1',
-        'reconnected'
-      ]);
-    });
+					await new Promise((resolve) => setTimeout(resolve, 50));
 
-    it('should pause transcription during audio reconnection', async () => {
-      let transcriptionPaused = false;
-      const transcriptionEvents: string[] = [];
+					audioState = "connected";
+					reconnectionEvents.push("reconnected");
+					return true;
+				},
+			};
 
-      const mockTranscriptionManager = {
-        pause: () => {
-          transcriptionPaused = true;
-          transcriptionEvents.push('transcription-paused');
-        },
-        resume: () => {
-          transcriptionPaused = false;
-          transcriptionEvents.push('transcription-resumed');
-        }
-      };
+			const improvedErrorHandler = async (error: Error) => {
+				console.log("[WARN] Audio error, attempting recovery:", error);
+				audioState = "reconnecting";
+				reconnectionEvents.push("reconnecting");
 
-      const coordinatedRecovery = async () => {
-        mockTranscriptionManager.pause();
-        
-        await new Promise(resolve => setTimeout(resolve, 100));
-        transcriptionEvents.push('audio-restarted');
-        
-        mockTranscriptionManager.resume();
-      };
+				const success = await audioReconnector.scheduleReconnect("system");
+				if (!success) {
+					audioState = "failed";
+					reconnectionEvents.push("recovery-failed");
+				}
+			};
 
-      await coordinatedRecovery();
+			await improvedErrorHandler(new Error("Audio device changed"));
 
-      assert.deepEqual(transcriptionEvents, [
-        'transcription-paused',
-        'audio-restarted', 
-        'transcription-resumed'
-      ]);
-      assert.equal(transcriptionPaused, false);
-    });
-  });
+			assert.equal(audioState, "connected");
+			assert.equal(reconnectionAttempts, 1);
+			assert.deepEqual(reconnectionEvents, [
+				"reconnecting",
+				"reconnect-attempt-1",
+				"reconnected",
+			]);
+		});
+
+		it("should pause transcription during audio reconnection", async () => {
+			let transcriptionPaused = false;
+			const transcriptionEvents: string[] = [];
+
+			const mockTranscriptionManager = {
+				pause: () => {
+					transcriptionPaused = true;
+					transcriptionEvents.push("transcription-paused");
+				},
+				resume: () => {
+					transcriptionPaused = false;
+					transcriptionEvents.push("transcription-resumed");
+				},
+			};
+
+			const coordinatedRecovery = async () => {
+				mockTranscriptionManager.pause();
+
+				await new Promise((resolve) => setTimeout(resolve, 100));
+				transcriptionEvents.push("audio-restarted");
+
+				mockTranscriptionManager.resume();
+			};
+
+			await coordinatedRecovery();
+
+			assert.deepEqual(transcriptionEvents, [
+				"transcription-paused",
+				"audio-restarted",
+				"transcription-resumed",
+			]);
+			assert.equal(transcriptionPaused, false);
+		});
+	});
 });

@@ -1,6 +1,6 @@
 /// <reference types="vite/client" />
-import { ElectronAPI } from './types/electron';
+import { ElectronAPI } from "./types/electron";
 
 interface Window {
-    electronAPI: ElectronAPI
+	electronAPI: ElectronAPI;
 }

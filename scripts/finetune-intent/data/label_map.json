@@ -1,10 +1,10 @@
 {
-  "0": "clarification",
-  "1": "follow_up",
-  "2": "deep_dive",
-  "3": "behavioral",
-  "4": "example_request",
-  "5": "summary_probe",
-  "6": "coding",
-  "7": "general"
+	"0": "clarification",
+	"1": "follow_up",
+	"2": "deep_dive",
+	"3": "behavioral",
+	"4": "example_request",
+	"5": "summary_probe",
+	"6": "coding",
+	"7": "general"
 }

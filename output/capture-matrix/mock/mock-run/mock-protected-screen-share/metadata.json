@@ -1,22 +1,22 @@
 {
-  "row": {
-    "id": "mock-protected-screen-share",
-    "platform": "darwin",
-    "osVersion": "mock-os",
-    "appVersion": "mock-app",
-    "captureTool": "mock-screen-share",
-    "mode": "mock",
-    "monitors": 1,
-    "strict": true,
-    "surface": "protected-shell",
-    "expectedResult": "hidden",
-    "canaryToken": "NATIVELY_CAPTURE_CANARY_PROTECTED"
-  },
-  "adapter": "mock",
-  "actualResult": "hidden",
-  "passed": true,
-  "artifactPaths": {
-    "metadata": "/Users/venkatasai/Downloads/natively-cluely-ai-assistant/.worktrees/todo-completion/output/capture-matrix/mock/mock-run/mock-protected-screen-share/metadata.json",
-    "log": "/Users/venkatasai/Downloads/natively-cluely-ai-assistant/.worktrees/todo-completion/output/capture-matrix/mock/mock-run/mock-protected-screen-share/capture.log"
-  }
+	"row": {
+		"id": "mock-protected-screen-share",
+		"platform": "darwin",
+		"osVersion": "mock-os",
+		"appVersion": "mock-app",
+		"captureTool": "mock-screen-share",
+		"mode": "mock",
+		"monitors": 1,
+		"strict": true,
+		"surface": "protected-shell",
+		"expectedResult": "hidden",
+		"canaryToken": "NATIVELY_CAPTURE_CANARY_PROTECTED"
+	},
+	"adapter": "mock",
+	"actualResult": "hidden",
+	"passed": true,
+	"artifactPaths": {
+		"metadata": "/Users/venkatasai/Downloads/natively-cluely-ai-assistant/.worktrees/todo-completion/output/capture-matrix/mock/mock-run/mock-protected-screen-share/metadata.json",
+		"log": "/Users/venkatasai/Downloads/natively-cluely-ai-assistant/.worktrees/todo-completion/output/capture-matrix/mock/mock-run/mock-protected-screen-share/capture.log"
+	}
 }

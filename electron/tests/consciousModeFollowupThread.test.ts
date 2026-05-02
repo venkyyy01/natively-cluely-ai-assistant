@@ -1,8 +1,8 @@
-import test from 'node:test';
-import assert from 'node:assert/strict';
-import { IntelligenceEngine } from '../IntelligenceEngine';
-import { SessionTracker } from '../SessionTracker';
-import { AnswerLatencyTracker } from '../latency/AnswerLatencyTracker';
+import assert from "node:assert/strict";
+import test from "node:test";
+import { IntelligenceEngine } from "../IntelligenceEngine";
+import { AnswerLatencyTracker } from "../latency/AnswerLatencyTracker";
+import { SessionTracker } from "../SessionTracker";
 
 // NAT-004 / audit A-4: the FakeLLMHelper responses below name a "10x" metric
 // in the third reasoning turn. ConsciousProvenanceVerifier now fails closed on
@@ -10,506 +10,636 @@ import { AnswerLatencyTracker } from '../latency/AnswerLatencyTracker';
 // here that grounds the same vocabulary ("10x", "tenant", "partitioning",
 // "rebalancing") the model is going to mention.
 const FOLLOWUP_THREAD_PROFILE = {
-  identity: {
-    name: 'Jane Doe',
-    role: 'Senior Backend Engineer',
-    summary:
-      'Built multi-tenant analytics with tenant partitioning. Promoted hot tenants ' +
-      'to dedicated partitions and scaled write throughput 10x by rebalancing.',
-  },
-  skills: ['multi-tenant partitioning', 'rebalancing', 'shard mapping'],
-  projects: [
-    {
-      name: 'Tenant Analytics Platform',
-      description:
-        'Multi-tenant analytics with tenant partitioning, hot-tenant promotion, ' +
-        'asynchronous rebalancing, and 10x scaling experience on the write path.',
-      technologies: ['partitioning', 'tenant'],
-    },
-  ],
-  experience: [
-    {
-      company: 'Acme',
-      role: 'Senior Backend Engineer',
-      bullets: [
-        'Scaled write throughput 10x by promoting hot tenants to dedicated partitions.',
-        'Designed shard-mapping abstraction for tenant-aware repositories.',
-      ],
-    },
-  ],
-  activeJD: {
-    title: 'Staff Backend Engineer',
-    company: 'ExampleCorp',
-    technologies: ['partitioning', 'tenant'],
-    requirements: ['Design tenant-aware analytics with rebalancing'],
-    keywords: ['scalability', 'tenant', 'partitioning', '10x', 'rebalancing'],
-  },
+	identity: {
+		name: "Jane Doe",
+		role: "Senior Backend Engineer",
+		summary:
+			"Built multi-tenant analytics with tenant partitioning. Promoted hot tenants " +
+			"to dedicated partitions and scaled write throughput 10x by rebalancing.",
+	},
+	skills: ["multi-tenant partitioning", "rebalancing", "shard mapping"],
+	projects: [
+		{
+			name: "Tenant Analytics Platform",
+			description:
+				"Multi-tenant analytics with tenant partitioning, hot-tenant promotion, " +
+				"asynchronous rebalancing, and 10x scaling experience on the write path.",
+			technologies: ["partitioning", "tenant"],
+		},
+	],
+	experience: [
+		{
+			company: "Acme",
+			role: "Senior Backend Engineer",
+			bullets: [
+				"Scaled write throughput 10x by promoting hot tenants to dedicated partitions.",
+				"Designed shard-mapping abstraction for tenant-aware repositories.",
+			],
+		},
+	],
+	activeJD: {
+		title: "Staff Backend Engineer",
+		company: "ExampleCorp",
+		technologies: ["partitioning", "tenant"],
+		requirements: ["Design tenant-aware analytics with rebalancing"],
+		keywords: ["scalability", "tenant", "partitioning", "10x", "rebalancing"],
+	},
 };
 
 function buildFollowupThreadKnowledgeOrchestrator() {
-  return {
-    getStatus: () => ({ hasResume: true, hasActiveJD: true, activeMode: true }),
-    getProfileData: () => FOLLOWUP_THREAD_PROFILE,
-  };
+	return {
+		getStatus: () => ({ hasResume: true, hasActiveJD: true, activeMode: true }),
+		getProfileData: () => FOLLOWUP_THREAD_PROFILE,
+	};
 }
 
 class FakeLLMHelper {
-  private callIndex = 0;
+	private callIndex = 0;
 
-  getKnowledgeOrchestrator() {
-    return buildFollowupThreadKnowledgeOrchestrator();
-  }
+	getKnowledgeOrchestrator() {
+		return buildFollowupThreadKnowledgeOrchestrator();
+	}
 
-  async *streamChat(message: string): AsyncGenerator<string> {
-    this.callIndex += 1;
+	async *streamChat(message: string): AsyncGenerator<string> {
+		this.callIndex += 1;
 
-    if (this.callIndex === 1) {
-      yield JSON.stringify({
-        mode: 'reasoning_first',
-        openingReasoning: 'I would first pick the simplest partitioning strategy that keeps writes cheap.',
-        implementationPlan: ['Partition by tenant', 'Cache hot reads', 'Keep writes append-only'],
-        tradeoffs: ['Cross-tenant analytics become more complex'],
-        edgeCases: ['Tenants with highly uneven traffic can create hotspots'],
-        scaleConsiderations: [],
-        pushbackResponses: ['The partitioning keeps the operational model straightforward while we validate load patterns.'],
-        likelyFollowUps: ['What happens when one tenant grows much faster than the others?'],
-        codeTransition: 'Then I would model the tenant-aware repository boundary.',
-      });
-      return;
-    }
+		if (this.callIndex === 1) {
+			yield JSON.stringify({
+				mode: "reasoning_first",
+				openingReasoning:
+					"I would first pick the simplest partitioning strategy that keeps writes cheap.",
+				implementationPlan: [
+					"Partition by tenant",
+					"Cache hot reads",
+					"Keep writes append-only",
+				],
+				tradeoffs: ["Cross-tenant analytics become more complex"],
+				edgeCases: ["Tenants with highly uneven traffic can create hotspots"],
+				scaleConsiderations: [],
+				pushbackResponses: [
+					"The partitioning keeps the operational model straightforward while we validate load patterns.",
+				],
+				likelyFollowUps: [
+					"What happens when one tenant grows much faster than the others?",
+				],
+				codeTransition:
+					"Then I would model the tenant-aware repository boundary.",
+			});
+			return;
+		}
 
-    if (message.includes('ACTIVE_REASONING_THREAD') && this.callIndex === 2) {
-      yield JSON.stringify({
-        mode: 'reasoning_first',
-        openingReasoning: 'The tradeoff is mostly around cross-tenant coordination and operational visibility.',
-        implementationPlan: [],
-        tradeoffs: ['Cross-tenant reporting needs an aggregation path'],
-        edgeCases: [],
-        scaleConsiderations: [],
-        pushbackResponses: ['I would call out that the tradeoff buys us better tenant isolation on the write path.'],
-        likelyFollowUps: ['How does this behave if one tenant is 10x larger?'],
-        codeTransition: '',
-      });
-      return;
-    }
+		if (message.includes("ACTIVE_REASONING_THREAD") && this.callIndex === 2) {
+			yield JSON.stringify({
+				mode: "reasoning_first",
+				openingReasoning:
+					"The tradeoff is mostly around cross-tenant coordination and operational visibility.",
+				implementationPlan: [],
+				tradeoffs: ["Cross-tenant reporting needs an aggregation path"],
+				edgeCases: [],
+				scaleConsiderations: [],
+				pushbackResponses: [
+					"I would call out that the tradeoff buys us better tenant isolation on the write path.",
+				],
+				likelyFollowUps: ["How does this behave if one tenant is 10x larger?"],
+				codeTransition: "",
+			});
+			return;
+		}
 
-    if (message.includes('ACTIVE_REASONING_THREAD')) {
-      yield JSON.stringify({
-        mode: 'reasoning_first',
-        openingReasoning: 'If one tenant is 10x larger, I would split that tenant again before changing the whole design.',
-        implementationPlan: [],
-        tradeoffs: [],
-        edgeCases: ['Hot tenants need rebalancing without moving everyone else'],
-        scaleConsiderations: ['Promote large tenants to dedicated partitions and rebalance asynchronously'],
-        pushbackResponses: ['That lets me preserve the base design while scaling the exceptional tenant separately.'],
-        likelyFollowUps: ['What metrics would you watch first?'],
-        codeTransition: 'At that point I would show the shard-mapping abstraction.',
-      });
-      return;
-    }
+		if (message.includes("ACTIVE_REASONING_THREAD")) {
+			yield JSON.stringify({
+				mode: "reasoning_first",
+				openingReasoning:
+					"If one tenant is 10x larger, I would split that tenant again before changing the whole design.",
+				implementationPlan: [],
+				tradeoffs: [],
+				edgeCases: [
+					"Hot tenants need rebalancing without moving everyone else",
+				],
+				scaleConsiderations: [
+					"Promote large tenants to dedicated partitions and rebalance asynchronously",
+				],
+				pushbackResponses: [
+					"That lets me preserve the base design while scaling the exceptional tenant separately.",
+				],
+				likelyFollowUps: ["What metrics would you watch first?"],
+				codeTransition:
+					"At that point I would show the shard-mapping abstraction.",
+			});
+			return;
+		}
 
-    yield 'Could you repeat that? I want to make sure I address your question properly.';
-  }
+		yield "Could you repeat that? I want to make sure I address your question properly.";
+	}
 }
 
 class EvidenceCapturingLLMHelper {
-  private callIndex = 0;
-  public contexts: Array<string | undefined> = [];
+	private callIndex = 0;
+	public contexts: Array<string | undefined> = [];
 
-  getKnowledgeOrchestrator() {
-    return {
-      getStatus: () => ({ hasResume: true, hasActiveJD: true, activeMode: true }),
-      getProfileData: () => ({
-        identity: {
-          name: 'Jane Doe',
-          role: 'Senior Backend Engineer',
-          summary: 'Built multi-tenant distributed systems.',
-        },
-        skills: ['Redis', 'Kafka', 'Postgres'],
-        projects: [
-          {
-            name: 'Tenant Analytics Platform',
-            description: 'Multi-tenant analytics system with tenant partitioning and async read aggregation.',
-            technologies: ['Redis', 'Kafka', 'ClickHouse'],
-          },
-        ],
-        experience: [
-          {
-            company: 'Acme',
-            role: 'Senior Backend Engineer',
-            bullets: ['Reduced p99 latency with caching and batching.'],
-          },
-        ],
-        activeJD: {
-          title: 'Staff Backend Engineer',
-          company: 'ExampleCorp',
-          technologies: ['Redis', 'Kafka'],
-          requirements: ['Design distributed systems'],
-          keywords: ['scalability', 'latency'],
-        },
-      }),
-    };
-  }
+	getKnowledgeOrchestrator() {
+		return {
+			getStatus: () => ({
+				hasResume: true,
+				hasActiveJD: true,
+				activeMode: true,
+			}),
+			getProfileData: () => ({
+				identity: {
+					name: "Jane Doe",
+					role: "Senior Backend Engineer",
+					summary: "Built multi-tenant distributed systems.",
+				},
+				skills: ["Redis", "Kafka", "Postgres"],
+				projects: [
+					{
+						name: "Tenant Analytics Platform",
+						description:
+							"Multi-tenant analytics system with tenant partitioning and async read aggregation.",
+						technologies: ["Redis", "Kafka", "ClickHouse"],
+					},
+				],
+				experience: [
+					{
+						company: "Acme",
+						role: "Senior Backend Engineer",
+						bullets: ["Reduced p99 latency with caching and batching."],
+					},
+				],
+				activeJD: {
+					title: "Staff Backend Engineer",
+					company: "ExampleCorp",
+					technologies: ["Redis", "Kafka"],
+					requirements: ["Design distributed systems"],
+					keywords: ["scalability", "latency"],
+				},
+			}),
+		};
+	}
 
-  async *streamChat(message: string, _imagePaths?: string[], context?: string): AsyncGenerator<string> {
-    this.callIndex += 1;
-    this.contexts.push(context);
+	async *streamChat(
+		message: string,
+		_imagePaths?: string[],
+		context?: string,
+	): AsyncGenerator<string> {
+		this.callIndex += 1;
+		this.contexts.push(context);
 
-    if (this.callIndex === 1) {
-      yield JSON.stringify({
-        mode: 'reasoning_first',
-        openingReasoning: 'I would start with tenant partitioning.',
-        implementationPlan: ['Partition by tenant'],
-        tradeoffs: ['Cross-tenant reads get more expensive'],
-        edgeCases: [],
-        scaleConsiderations: [],
-        pushbackResponses: ['The model buys clean write isolation.'],
-        likelyFollowUps: [],
-        codeTransition: '',
-      });
-      return;
-    }
+		if (this.callIndex === 1) {
+			yield JSON.stringify({
+				mode: "reasoning_first",
+				openingReasoning: "I would start with tenant partitioning.",
+				implementationPlan: ["Partition by tenant"],
+				tradeoffs: ["Cross-tenant reads get more expensive"],
+				edgeCases: [],
+				scaleConsiderations: [],
+				pushbackResponses: ["The model buys clean write isolation."],
+				likelyFollowUps: [],
+				codeTransition: "",
+			});
+			return;
+		}
 
-    yield JSON.stringify({
-      mode: 'reasoning_first',
-      openingReasoning: 'The tradeoff is mostly around the cross-tenant read path.',
-      implementationPlan: [],
-      tradeoffs: ['Cross-tenant reads become more explicit'],
-      edgeCases: [],
-      scaleConsiderations: [],
-      pushbackResponses: [],
-      likelyFollowUps: [],
-      codeTransition: '',
-    });
-  }
+		yield JSON.stringify({
+			mode: "reasoning_first",
+			openingReasoning:
+				"The tradeoff is mostly around the cross-tenant read path.",
+			implementationPlan: [],
+			tradeoffs: ["Cross-tenant reads become more explicit"],
+			edgeCases: [],
+			scaleConsiderations: [],
+			pushbackResponses: [],
+			likelyFollowUps: [],
+			codeTransition: "",
+		});
+	}
 }
 
 class CapturingLatencyTracker extends AnswerLatencyTracker {
-  public completedSnapshots: Array<ReturnType<AnswerLatencyTracker['complete']>> = [];
+	public completedSnapshots: Array<
+		ReturnType<AnswerLatencyTracker["complete"]>
+	> = [];
 
-  override complete(requestId: string) {
-    const snapshot = super.complete(requestId);
-    this.completedSnapshots.push(snapshot);
-    return snapshot;
-  }
+	override complete(requestId: string) {
+		const snapshot = super.complete(requestId);
+		this.completedSnapshots.push(snapshot);
+		return snapshot;
+	}
 }
 
-function addInterviewerTurn(session: SessionTracker, text: string, timestamp: number): void {
-  session.handleTranscript({
-    speaker: 'interviewer',
-    text,
-    timestamp,
-    final: true,
-  });
+function addInterviewerTurn(
+	session: SessionTracker,
+	text: string,
+	timestamp: number,
+): void {
+	session.handleTranscript({
+		speaker: "interviewer",
+		text,
+		timestamp,
+		final: true,
+	});
 }
 
-test('Conscious Mode preserves the active design thread and keeps extending it through relevant ongoing follow-ups', async () => {
-  const session = new SessionTracker();
-  const llmHelper = new FakeLLMHelper();
-  const engine = new IntelligenceEngine(llmHelper as any, session);
+test("Conscious Mode preserves the active design thread and keeps extending it through relevant ongoing follow-ups", async () => {
+	const session = new SessionTracker();
+	const llmHelper = new FakeLLMHelper();
+	const engine = new IntelligenceEngine(llmHelper as any, session);
 
-  session.setConsciousModeEnabled(true);
+	session.setConsciousModeEnabled(true);
 
-  addInterviewerTurn(session, 'How would you partition a multi-tenant analytics system?', Date.now() - 3000);
-  await engine.runWhatShouldISay(undefined, 0.85);
+	addInterviewerTurn(
+		session,
+		"How would you partition a multi-tenant analytics system?",
+		Date.now() - 3000,
+	);
+	await engine.runWhatShouldISay(undefined, 0.85);
 
-  (engine as any).lastTriggerTime = 0;
-  addInterviewerTurn(session, 'Why this approach?', Date.now() - 2000);
-  await engine.runWhatShouldISay(undefined, 0.85);
+	(engine as any).lastTriggerTime = 0;
+	addInterviewerTurn(session, "Why this approach?", Date.now() - 2000);
+	await engine.runWhatShouldISay(undefined, 0.85);
 
-  (engine as any).lastTriggerTime = 0;
-  addInterviewerTurn(session, 'What if one tenant is 10x larger?', Date.now() - 1000);
-  await engine.runWhatShouldISay(undefined, 0.85);
+	(engine as any).lastTriggerTime = 0;
+	addInterviewerTurn(
+		session,
+		"What if one tenant is 10x larger?",
+		Date.now() - 1000,
+	);
+	await engine.runWhatShouldISay(undefined, 0.85);
 
-  (engine as any).lastTriggerTime = 0;
-  addInterviewerTurn(session, 'What metrics would you watch first?', Date.now() - 500);
-  await engine.runWhatShouldISay(undefined, 0.85);
+	(engine as any).lastTriggerTime = 0;
+	addInterviewerTurn(
+		session,
+		"What metrics would you watch first?",
+		Date.now() - 500,
+	);
+	await engine.runWhatShouldISay(undefined, 0.85);
 
-  const thread = session.getActiveReasoningThread();
+	const thread = session.getActiveReasoningThread();
 
-  assert.equal(thread?.rootQuestion, 'How would you partition a multi-tenant analytics system?');
-  assert.equal(thread?.followUpCount, 3);
-  assert.equal(thread?.response.mode, 'reasoning_first');
-  assert.equal(thread?.response.openingReasoning, 'If one tenant is 10x larger, I would split that tenant again before changing the whole design.');
-  assert.deepEqual(thread?.response.implementationPlan, [
-    'Partition by tenant',
-    'Cache hot reads',
-    'Keep writes append-only',
-  ]);
-  assert.deepEqual(thread?.response.tradeoffs, [
-    'Cross-tenant analytics become more complex',
-    'Cross-tenant reporting needs an aggregation path',
-  ]);
-  assert.deepEqual(thread?.response.edgeCases, [
-    'Tenants with highly uneven traffic can create hotspots',
-    'Hot tenants need rebalancing without moving everyone else',
-  ]);
-  assert.deepEqual(thread?.response.scaleConsiderations, [
-    'Promote large tenants to dedicated partitions and rebalance asynchronously',
-  ]);
-  assert.deepEqual(thread?.response.pushbackResponses, [
-    'The partitioning keeps the operational model straightforward while we validate load patterns.',
-    'I would call out that the tradeoff buys us better tenant isolation on the write path.',
-    'That lets me preserve the base design while scaling the exceptional tenant separately.',
-  ]);
-  assert.equal(thread?.response.codeTransition, 'At that point I would show the shard-mapping abstraction.');
+	assert.equal(
+		thread?.rootQuestion,
+		"How would you partition a multi-tenant analytics system?",
+	);
+	assert.equal(thread?.followUpCount, 3);
+	assert.equal(thread?.response.mode, "reasoning_first");
+	assert.equal(
+		thread?.response.openingReasoning,
+		"If one tenant is 10x larger, I would split that tenant again before changing the whole design.",
+	);
+	assert.deepEqual(thread?.response.implementationPlan, [
+		"Partition by tenant",
+		"Cache hot reads",
+		"Keep writes append-only",
+	]);
+	assert.deepEqual(thread?.response.tradeoffs, [
+		"Cross-tenant analytics become more complex",
+		"Cross-tenant reporting needs an aggregation path",
+	]);
+	assert.deepEqual(thread?.response.edgeCases, [
+		"Tenants with highly uneven traffic can create hotspots",
+		"Hot tenants need rebalancing without moving everyone else",
+	]);
+	assert.deepEqual(thread?.response.scaleConsiderations, [
+		"Promote large tenants to dedicated partitions and rebalance asynchronously",
+	]);
+	assert.deepEqual(thread?.response.pushbackResponses, [
+		"The partitioning keeps the operational model straightforward while we validate load patterns.",
+		"I would call out that the tradeoff buys us better tenant isolation on the write path.",
+		"That lets me preserve the base design while scaling the exceptional tenant separately.",
+	]);
+	assert.equal(
+		thread?.response.codeTransition,
+		"At that point I would show the shard-mapping abstraction.",
+	);
 });
 
-test('Conscious Mode continuation discards stale follow-up work when transcript revision changes before the response lands', async () => {
-  class DelayedFollowupHelper {
-    private callIndex = 0;
+test("Conscious Mode continuation discards stale follow-up work when transcript revision changes before the response lands", async () => {
+	class DelayedFollowupHelper {
+		private callIndex = 0;
 
-    getKnowledgeOrchestrator() {
-      return buildFollowupThreadKnowledgeOrchestrator();
-    }
+		getKnowledgeOrchestrator() {
+			return buildFollowupThreadKnowledgeOrchestrator();
+		}
 
-    async *streamChat(message: string): AsyncGenerator<string> {
-      this.callIndex += 1;
+		async *streamChat(message: string): AsyncGenerator<string> {
+			this.callIndex += 1;
 
-      if (this.callIndex === 1) {
-        yield JSON.stringify({
-          mode: 'reasoning_first',
-          openingReasoning: 'I would start with a write-optimized partition key and keep reads denormalized.',
-          implementationPlan: ['Partition by tenant'],
-          tradeoffs: [],
-          edgeCases: [],
-          scaleConsiderations: [],
-          pushbackResponses: [],
-          likelyFollowUps: [],
-          codeTransition: '',
-        });
-        return;
-      }
+			if (this.callIndex === 1) {
+				yield JSON.stringify({
+					mode: "reasoning_first",
+					openingReasoning:
+						"I would start with a write-optimized partition key and keep reads denormalized.",
+					implementationPlan: ["Partition by tenant"],
+					tradeoffs: [],
+					edgeCases: [],
+					scaleConsiderations: [],
+					pushbackResponses: [],
+					likelyFollowUps: [],
+					codeTransition: "",
+				});
+				return;
+			}
 
-      if (message.includes('ACTIVE_REASONING_THREAD')) {
-        await new Promise(resolve => setTimeout(resolve, 20));
-        yield JSON.stringify({
-          mode: 'reasoning_first',
-          openingReasoning: 'Stale continuation that should be discarded.',
-          implementationPlan: [],
-          tradeoffs: ['Stale'],
-          edgeCases: [],
-          scaleConsiderations: [],
-          pushbackResponses: [],
-          likelyFollowUps: [],
-          codeTransition: '',
-        });
-        return;
-      }
+			if (message.includes("ACTIVE_REASONING_THREAD")) {
+				await new Promise((resolve) => setTimeout(resolve, 20));
+				yield JSON.stringify({
+					mode: "reasoning_first",
+					openingReasoning: "Stale continuation that should be discarded.",
+					implementationPlan: [],
+					tradeoffs: ["Stale"],
+					edgeCases: [],
+					scaleConsiderations: [],
+					pushbackResponses: [],
+					likelyFollowUps: [],
+					codeTransition: "",
+				});
+				return;
+			}
 
-      yield 'Could you repeat that? I want to make sure I address your question properly.';
-    }
-  }
+			yield "Could you repeat that? I want to make sure I address your question properly.";
+		}
+	}
 
-  const session = new SessionTracker();
-  const llmHelper = new DelayedFollowupHelper();
-  const engine = new IntelligenceEngine(llmHelper as any, session);
+	const session = new SessionTracker();
+	const llmHelper = new DelayedFollowupHelper();
+	const engine = new IntelligenceEngine(llmHelper as any, session);
 
-  session.setConsciousModeEnabled(true);
-  addInterviewerTurn(session, 'How would you partition a multi-tenant analytics system?', Date.now() - 2000);
-  await engine.runWhatShouldISay(undefined, 0.85);
+	session.setConsciousModeEnabled(true);
+	addInterviewerTurn(
+		session,
+		"How would you partition a multi-tenant analytics system?",
+		Date.now() - 2000,
+	);
+	await engine.runWhatShouldISay(undefined, 0.85);
 
-  const before = session.getActiveReasoningThread();
-  assert.equal(before?.followUpCount, 0);
+	const before = session.getActiveReasoningThread();
+	assert.equal(before?.followUpCount, 0);
 
-  (engine as any).lastTriggerTime = 0;
-  addInterviewerTurn(session, 'What are the tradeoffs?', Date.now() - 1000);
-  const pending = engine.runWhatShouldISay(undefined, 0.85);
+	(engine as any).lastTriggerTime = 0;
+	addInterviewerTurn(session, "What are the tradeoffs?", Date.now() - 1000);
+	const pending = engine.runWhatShouldISay(undefined, 0.85);
 
-  await new Promise(resolve => setTimeout(resolve, 5));
-  session.addAssistantMessage('A newer answer arrived while the continuation was still being prepared.');
+	await new Promise((resolve) => setTimeout(resolve, 5));
+	session.addAssistantMessage(
+		"A newer answer arrived while the continuation was still being prepared.",
+	);
 
-  const result = await pending;
+	const result = await pending;
 
-  // NAT-007 / audit A-7: the engine now snapshots transcriptRevision at the
-  // start of each request and abandons mid-stream when the user moves on.
-  // `addAssistantMessage` above bumps the revision, so the in-flight stale
-  // continuation is suppressed cleanly — the contract is "say nothing" rather
-  // than "ship a confused fallback string back to the user".
-  assert.equal(result, null);
-  assert.deepEqual(session.getActiveReasoningThread(), before);
-  assert.equal(session.getLatestConsciousResponse()?.openingReasoning, before?.response.openingReasoning);
+	// NAT-007 / audit A-7: the engine now snapshots transcriptRevision at the
+	// start of each request and abandons mid-stream when the user moves on.
+	// `addAssistantMessage` above bumps the revision, so the in-flight stale
+	// continuation is suppressed cleanly — the contract is "say nothing" rather
+	// than "ship a confused fallback string back to the user".
+	assert.equal(result, null);
+	assert.deepEqual(session.getActiveReasoningThread(), before);
+	assert.equal(
+		session.getLatestConsciousResponse()?.openingReasoning,
+		before?.response.openingReasoning,
+	);
 });
 
-test('Conscious Mode continuation fast lane skips fresh-start enrichment work and stays tagged as thread continuation', async () => {
-  class TrackingEngine extends IntelligenceEngine {
-    public classifyIntentCalls = 0;
+test("Conscious Mode continuation fast lane skips fresh-start enrichment work and stays tagged as thread continuation", async () => {
+	class TrackingEngine extends IntelligenceEngine {
+		public classifyIntentCalls = 0;
 
-    protected override async classifyIntentForRoute(lastInterviewerTurn: string | null, preparedTranscript: string, assistantResponseCount: number) {
-      this.classifyIntentCalls += 1;
-      return super.classifyIntentForRoute(lastInterviewerTurn, preparedTranscript, assistantResponseCount);
-    }
-  }
+		protected override async classifyIntentForRoute(
+			lastInterviewerTurn: string | null,
+			preparedTranscript: string,
+			assistantResponseCount: number,
+		) {
+			this.classifyIntentCalls += 1;
+			return super.classifyIntentForRoute(
+				lastInterviewerTurn,
+				preparedTranscript,
+				assistantResponseCount,
+			);
+		}
+	}
 
-  const session = new SessionTracker();
-  const llmHelper = new FakeLLMHelper();
-  const engine = new TrackingEngine(llmHelper as any, session);
-  const latencyTracker = new CapturingLatencyTracker();
-  (engine as any).latencyTracker = latencyTracker;
+	const session = new SessionTracker();
+	const llmHelper = new FakeLLMHelper();
+	const engine = new TrackingEngine(llmHelper as any, session);
+	const latencyTracker = new CapturingLatencyTracker();
+	(engine as any).latencyTracker = latencyTracker;
 
-  session.setConsciousModeEnabled(true);
+	session.setConsciousModeEnabled(true);
 
-  addInterviewerTurn(session, 'How would you partition a multi-tenant analytics system?', Date.now() - 3000);
-  await engine.runWhatShouldISay(undefined, 0.85);
-  const freshSnapshot = latencyTracker.completedSnapshots[0];
+	addInterviewerTurn(
+		session,
+		"How would you partition a multi-tenant analytics system?",
+		Date.now() - 3000,
+	);
+	await engine.runWhatShouldISay(undefined, 0.85);
+	const freshSnapshot = latencyTracker.completedSnapshots[0];
 
-  (engine as any).lastTriggerTime = 0;
-  addInterviewerTurn(session, 'What are the tradeoffs?', Date.now() - 1000);
-  await engine.runWhatShouldISay(undefined, 0.85);
-  const continuationSnapshot = latencyTracker.completedSnapshots[1];
+	(engine as any).lastTriggerTime = 0;
+	addInterviewerTurn(session, "What are the tradeoffs?", Date.now() - 1000);
+	await engine.runWhatShouldISay(undefined, 0.85);
+	const continuationSnapshot = latencyTracker.completedSnapshots[1];
 
-  assert.equal(engine.classifyIntentCalls, 1);
-  assert.equal(freshSnapshot?.consciousPath, 'fresh_start');
-  assert.equal(continuationSnapshot?.consciousPath, 'thread_continue');
-  assert.equal(freshSnapshot?.marks.enrichmentReady !== undefined, true);
-  assert.equal(continuationSnapshot?.marks.enrichmentReady, undefined);
-  assert.equal(continuationSnapshot?.marks.providerRequestStarted !== undefined, true);
+	assert.equal(engine.classifyIntentCalls, 1);
+	assert.equal(freshSnapshot?.consciousPath, "fresh_start");
+	assert.equal(continuationSnapshot?.consciousPath, "thread_continue");
+	assert.equal(freshSnapshot?.marks.enrichmentReady !== undefined, true);
+	assert.equal(continuationSnapshot?.marks.enrichmentReady, undefined);
+	assert.equal(
+		continuationSnapshot?.marks.providerRequestStarted !== undefined,
+		true,
+	);
 });
 
-test('Conscious Mode skips expensive intent classification for tiny generic follow-ups', async () => {
-  class TrackingEngine extends IntelligenceEngine {
-    public classifyIntentCalls = 0;
+test("Conscious Mode skips expensive intent classification for tiny generic follow-ups", async () => {
+	class TrackingEngine extends IntelligenceEngine {
+		public classifyIntentCalls = 0;
 
-    protected override async classifyIntentForRoute(lastInterviewerTurn: string | null, preparedTranscript: string, assistantResponseCount: number) {
-      this.classifyIntentCalls += 1;
-      return super.classifyIntentForRoute(lastInterviewerTurn, preparedTranscript, assistantResponseCount);
-    }
-  }
+		protected override async classifyIntentForRoute(
+			lastInterviewerTurn: string | null,
+			preparedTranscript: string,
+			assistantResponseCount: number,
+		) {
+			this.classifyIntentCalls += 1;
+			return super.classifyIntentForRoute(
+				lastInterviewerTurn,
+				preparedTranscript,
+				assistantResponseCount,
+			);
+		}
+	}
 
-  const session = new SessionTracker();
-  const llmHelper = new FakeLLMHelper();
-  const engine = new TrackingEngine(llmHelper as any, session);
+	const session = new SessionTracker();
+	const llmHelper = new FakeLLMHelper();
+	const engine = new TrackingEngine(llmHelper as any, session);
 
-  session.setConsciousModeEnabled(true);
-  addInterviewerTurn(session, 'How would you partition a multi-tenant analytics system?', Date.now() - 3000);
-  await engine.runWhatShouldISay(undefined, 0.85);
+	session.setConsciousModeEnabled(true);
+	addInterviewerTurn(
+		session,
+		"How would you partition a multi-tenant analytics system?",
+		Date.now() - 3000,
+	);
+	await engine.runWhatShouldISay(undefined, 0.85);
 
-  (engine as any).lastTriggerTime = 0;
-  addInterviewerTurn(session, 'What if?', Date.now() - 500);
-  await engine.runWhatShouldISay(undefined, 0.85);
+	(engine as any).lastTriggerTime = 0;
+	addInterviewerTurn(session, "What if?", Date.now() - 500);
+	await engine.runWhatShouldISay(undefined, 0.85);
 
-  assert.equal(engine.classifyIntentCalls, 1);
+	assert.equal(engine.classifyIntentCalls, 1);
 });
 
-test('Conscious Mode resets an active reasoning thread when the interviewer clearly changes to a non-technical topic', async () => {
-  const session = new SessionTracker();
-  const llmHelper = new FakeLLMHelper();
-  const engine = new IntelligenceEngine(llmHelper as any, session);
+test("Conscious Mode resets an active reasoning thread when the interviewer clearly changes to a non-technical topic", async () => {
+	const session = new SessionTracker();
+	const llmHelper = new FakeLLMHelper();
+	const engine = new IntelligenceEngine(llmHelper as any, session);
 
-  session.setConsciousModeEnabled(true);
-  addInterviewerTurn(session, 'How would you partition a multi-tenant analytics system?', Date.now() - 2000);
-  await engine.runWhatShouldISay(undefined, 0.85);
+	session.setConsciousModeEnabled(true);
+	addInterviewerTurn(
+		session,
+		"How would you partition a multi-tenant analytics system?",
+		Date.now() - 2000,
+	);
+	await engine.runWhatShouldISay(undefined, 0.85);
 
-  const existingThread = session.getActiveReasoningThread();
-  assert.equal(existingThread?.rootQuestion, 'How would you partition a multi-tenant analytics system?');
+	const existingThread = session.getActiveReasoningThread();
+	assert.equal(
+		existingThread?.rootQuestion,
+		"How would you partition a multi-tenant analytics system?",
+	);
 
-  (engine as any).lastTriggerTime = 0;
-  addInterviewerTurn(session, 'Let us switch gears and talk about the launch plan.', Date.now());
-  const answer = await engine.runWhatShouldISay(undefined, 0.85);
+	(engine as any).lastTriggerTime = 0;
+	addInterviewerTurn(
+		session,
+		"Let us switch gears and talk about the launch plan.",
+		Date.now(),
+	);
+	const answer = await engine.runWhatShouldISay(undefined, 0.85);
 
-  assert.equal(answer, 'Could you repeat that? I want to make sure I address your question properly.');
-  assert.equal(session.getActiveReasoningThread(), null);
-  assert.equal(session.getLatestConsciousResponse(), null);
+	assert.equal(
+		answer,
+		"Could you repeat that? I want to make sure I address your question properly.",
+	);
+	assert.equal(session.getActiveReasoningThread(), null);
+	assert.equal(session.getLatestConsciousResponse(), null);
 });
 
-test('Conscious Mode follow-up context includes inferred answer evidence', async () => {
-  const session = new SessionTracker();
-  const llmHelper = new EvidenceCapturingLLMHelper();
-  const engine = new IntelligenceEngine(llmHelper as any, session);
+test("Conscious Mode follow-up context includes inferred answer evidence", async () => {
+	const session = new SessionTracker();
+	const llmHelper = new EvidenceCapturingLLMHelper();
+	const engine = new IntelligenceEngine(llmHelper as any, session);
 
-  session.setConsciousModeEnabled(true);
+	session.setConsciousModeEnabled(true);
 
-  addInterviewerTurn(session, 'How would you partition a multi-tenant analytics system?', Date.now() - 2000);
-  await engine.runWhatShouldISay(undefined, 0.85);
+	addInterviewerTurn(
+		session,
+		"How would you partition a multi-tenant analytics system?",
+		Date.now() - 2000,
+	);
+	await engine.runWhatShouldISay(undefined, 0.85);
 
-  (engine as any).lastTriggerTime = 0;
-  addInterviewerTurn(session, 'What are the tradeoffs?', Date.now() - 1000);
-  await engine.runWhatShouldISay(undefined, 0.85);
+	(engine as any).lastTriggerTime = 0;
+	addInterviewerTurn(session, "What are the tradeoffs?", Date.now() - 1000);
+	await engine.runWhatShouldISay(undefined, 0.85);
 
-  const continuationContext = llmHelper.contexts[1] || '';
-  assert.ok(continuationContext.includes('<conscious_state>'));
-  assert.ok(continuationContext.includes('<conscious_answer_plan>'));
-  assert.ok(continuationContext.includes('<conscious_long_memory>'));
-  assert.ok(continuationContext.includes('<conscious_semantic_memory>'));
-  assert.ok(continuationContext.includes('<conscious_evidence>'));
-  assert.ok(continuationContext.includes('INTERVIEWER_REACTION: tradeoff_probe'));
-  assert.ok(continuationContext.includes('LATEST_SUGGESTED_ANSWER:'));
+	const continuationContext = llmHelper.contexts[1] || "";
+	assert.ok(continuationContext.includes("<conscious_state>"));
+	assert.ok(continuationContext.includes("<conscious_answer_plan>"));
+	assert.ok(continuationContext.includes("<conscious_long_memory>"));
+	assert.ok(continuationContext.includes("<conscious_semantic_memory>"));
+	assert.ok(continuationContext.includes("<conscious_evidence>"));
+	assert.ok(
+		continuationContext.includes("INTERVIEWER_REACTION: tradeoff_probe"),
+	);
+	assert.ok(continuationContext.includes("LATEST_SUGGESTED_ANSWER:"));
 });
 
-test('Conscious Mode verifier rejects weak tradeoff follow-ups and falls back cleanly', async () => {
-  class VerifierFallbackHelper {
-    private callIndex = 0;
+test("Conscious Mode verifier rejects weak tradeoff follow-ups and falls back cleanly", async () => {
+	class VerifierFallbackHelper {
+		private callIndex = 0;
 
-    async *streamChat(message: string): AsyncGenerator<string> {
-      this.callIndex += 1;
+		async *streamChat(message: string): AsyncGenerator<string> {
+			this.callIndex += 1;
 
-      if (this.callIndex === 1) {
-        yield JSON.stringify({
-          mode: 'reasoning_first',
-          openingReasoning: 'I would partition by tenant to keep writes isolated.',
-          implementationPlan: ['Partition by tenant'],
-          tradeoffs: ['Cross-tenant reads get more expensive'],
-          edgeCases: [],
-          scaleConsiderations: [],
-          pushbackResponses: ['The write path stays simple.'],
-          likelyFollowUps: [],
-          codeTransition: '',
-        });
-        return;
-      }
+			if (this.callIndex === 1) {
+				yield JSON.stringify({
+					mode: "reasoning_first",
+					openingReasoning:
+						"I would partition by tenant to keep writes isolated.",
+					implementationPlan: ["Partition by tenant"],
+					tradeoffs: ["Cross-tenant reads get more expensive"],
+					edgeCases: [],
+					scaleConsiderations: [],
+					pushbackResponses: ["The write path stays simple."],
+					likelyFollowUps: [],
+					codeTransition: "",
+				});
+				return;
+			}
 
-      if (message.includes('ACTIVE_REASONING_THREAD')) {
-        yield JSON.stringify({
-          mode: 'reasoning_first',
-          openingReasoning: 'I would keep the same partitioning.',
-          implementationPlan: ['Partition by tenant'],
-          tradeoffs: [],
-          edgeCases: [],
-          scaleConsiderations: [],
-          pushbackResponses: [],
-          likelyFollowUps: [],
-          codeTransition: '',
-        });
-        return;
-      }
+			if (message.includes("ACTIVE_REASONING_THREAD")) {
+				yield JSON.stringify({
+					mode: "reasoning_first",
+					openingReasoning: "I would keep the same partitioning.",
+					implementationPlan: ["Partition by tenant"],
+					tradeoffs: [],
+					edgeCases: [],
+					scaleConsiderations: [],
+					pushbackResponses: [],
+					likelyFollowUps: [],
+					codeTransition: "",
+				});
+				return;
+			}
 
-      yield 'fallback standard answer';
-    }
-  }
+			yield "fallback standard answer";
+		}
+	}
 
-  const session = new SessionTracker();
-  const llmHelper = new VerifierFallbackHelper();
-  const engine = new IntelligenceEngine(llmHelper as any, session);
+	const session = new SessionTracker();
+	const llmHelper = new VerifierFallbackHelper();
+	const engine = new IntelligenceEngine(llmHelper as any, session);
 
-  session.setConsciousModeEnabled(true);
-  addInterviewerTurn(session, 'How would you partition a multi-tenant analytics system?', Date.now() - 2000);
-  await engine.runWhatShouldISay(undefined, 0.85);
+	session.setConsciousModeEnabled(true);
+	addInterviewerTurn(
+		session,
+		"How would you partition a multi-tenant analytics system?",
+		Date.now() - 2000,
+	);
+	await engine.runWhatShouldISay(undefined, 0.85);
 
-  (engine as any).lastTriggerTime = 0;
-  addInterviewerTurn(session, 'What are the tradeoffs?', Date.now() - 1000);
-  const answer = await engine.runWhatShouldISay(undefined, 0.85);
+	(engine as any).lastTriggerTime = 0;
+	addInterviewerTurn(session, "What are the tradeoffs?", Date.now() - 1000);
+	const answer = await engine.runWhatShouldISay(undefined, 0.85);
 
-  assert.equal(answer, 'fallback standard answer');
+	assert.equal(answer, "fallback standard answer");
 });
 
-test('Conscious Mode does not let unrelated generic pushback hijack an old thread', async () => {
-  const session = new SessionTracker();
-  const llmHelper = new FakeLLMHelper();
-  const engine = new IntelligenceEngine(llmHelper as any, session);
+test("Conscious Mode does not let unrelated generic pushback hijack an old thread", async () => {
+	const session = new SessionTracker();
+	const llmHelper = new FakeLLMHelper();
+	const engine = new IntelligenceEngine(llmHelper as any, session);
 
-  session.setConsciousModeEnabled(true);
-  addInterviewerTurn(session, 'How would you partition a multi-tenant analytics system?', Date.now() - 30_000);
-  await engine.runWhatShouldISay(undefined, 0.85);
+	session.setConsciousModeEnabled(true);
+	addInterviewerTurn(
+		session,
+		"How would you partition a multi-tenant analytics system?",
+		Date.now() - 30_000,
+	);
+	await engine.runWhatShouldISay(undefined, 0.85);
 
-  const threadBefore = session.getActiveReasoningThread();
-  assert.equal(threadBefore?.followUpCount, 0);
+	const threadBefore = session.getActiveReasoningThread();
+	assert.equal(threadBefore?.followUpCount, 0);
 
-  (engine as any).lastTriggerTime = 0;
-  addInterviewerTurn(session, 'What if?', Date.now());
-  const answer = await engine.runWhatShouldISay(undefined, 0.85);
+	(engine as any).lastTriggerTime = 0;
+	addInterviewerTurn(session, "What if?", Date.now());
+	const answer = await engine.runWhatShouldISay(undefined, 0.85);
 
-  assert.equal(answer, 'Could you repeat that? I want to make sure I address your question properly.');
-  const threadAfter = session.getActiveReasoningThread();
-  assert.equal(threadAfter?.rootQuestion, 'How would you partition a multi-tenant analytics system?');
-  assert.equal(threadAfter?.followUpCount, 0);
+	assert.equal(
+		answer,
+		"Could you repeat that? I want to make sure I address your question properly.",
+	);
+	const threadAfter = session.getActiveReasoningThread();
+	assert.equal(
+		threadAfter?.rootQuestion,
+		"How would you partition a multi-tenant analytics system?",
+	);
+	assert.equal(threadAfter?.followUpCount, 0);
 });

@@ -1,4 +1,4 @@
-import { InterviewPhase } from '../conscious/types';
+import type { InterviewPhase } from "../conscious/types";
 
 export const CORE_IDENTITY = `
 <core_identity>
@@ -39,59 +39,59 @@ export const STRICT_BEHAVIOR_RULES = `
 `;
 
 export const PHASE_GUIDANCE: Record<InterviewPhase, string> = {
-  requirements_gathering: `
+	requirements_gathering: `
 <phase_guidance>
 Current phase: REQUIREMENTS GATHERING
 Focus on clarifying what the interviewer needs. Ask clarifying questions if requirements are ambiguous.
 Keep answers brief and focused on confirming understanding.
 </phase_guidance>`,
 
-  high_level_design: `
+	high_level_design: `
 <phase_guidance>
 Current phase: HIGH-LEVEL DESIGN
 Focus on architectural decisions, component interactions, and trade-offs.
 Keep answers structured and concise. Use diagrams when helpful.
 </phase_guidance>`,
 
-  deep_dive: `
+	deep_dive: `
 <phase_guidance>
 Current phase: DEEP DIVE
 Focus on implementation details, code examples, and technical depth.
 Provide specific, actionable responses.
 </phase_guidance>`,
 
-  implementation: `
+	implementation: `
 <phase_guidance>
 Current phase: IMPLEMENTATION
 Focus on actual code solutions. Be specific and precise.
 </phase_guidance>`,
 
-  complexity_analysis: `
+	complexity_analysis: `
 <phase_guidance>
 Current phase: COMPLEXITY ANALYSIS
 Focus on time/space complexity, optimization opportunities, and trade-offs.
 </phase_guidance>`,
 
-  scaling_discussion: `
+	scaling_discussion: `
 <phase_guidance>
 Current phase: SCALING DISCUSSION
 Focus on horizontal/vertical scaling, load balancing, caching strategies.
 </phase_guidance>`,
 
-  failure_handling: `
+	failure_handling: `
 <phase_guidance>
 Current phase: FAILURE HANDLING
 Focus on error handling, retries, fallback strategies, monitoring.
 </phase_guidance>`,
 
-  behavioral_story: `
+	behavioral_story: `
 <phase_guidance>
 Current phase: BEHAVIORAL STORY
 Use STAR method: Situation, Task, Action, Result.
 Keep stories concise and impactful.
 </phase_guidance>`,
 
-  wrap_up: `
+	wrap_up: `
 <phase_guidance>
 Current phase: WRAP-UP
 Summarize key points. Ask if interviewer has more questions.
@@ -99,40 +99,40 @@ Summarize key points. Ask if interviewer has more questions.
 };
 
 export interface ProviderAdapter {
-  systemPromptWrapper: (base: string) => string;
-  responseFormatHints: string;
-  tokenBudgetMultiplier: number;
+	systemPromptWrapper: (base: string) => string;
+	responseFormatHints: string;
+	tokenBudgetMultiplier: number;
 }
 
 export const PROVIDER_ADAPTERS: Record<string, ProviderAdapter> = {
-  openai: {
-    systemPromptWrapper: (base: string) => base,
-    responseFormatHints: 'markdown',
-    tokenBudgetMultiplier: 1.0,
-  },
-  groq: {
-    systemPromptWrapper: (base: string) => base,
-    responseFormatHints: 'markdown',
-    tokenBudgetMultiplier: 1.0,
-  },
-  claude: {
-    systemPromptWrapper: (base: string) => base,
-    responseFormatHints: 'json_or_markdown',
-    tokenBudgetMultiplier: 1.2,
-  },
-  gemini: {
-    systemPromptWrapper: (base: string) => base,
-    responseFormatHints: 'markdown',
-    tokenBudgetMultiplier: 0.9,
-  },
-  ollama: {
-    systemPromptWrapper: (base: string) => base,
-    responseFormatHints: 'markdown',
-    tokenBudgetMultiplier: 0.8,
-  },
-  custom: {
-    systemPromptWrapper: (base: string) => base,
-    responseFormatHints: 'markdown',
-    tokenBudgetMultiplier: 1.0,
-  },
+	openai: {
+		systemPromptWrapper: (base: string) => base,
+		responseFormatHints: "markdown",
+		tokenBudgetMultiplier: 1.0,
+	},
+	groq: {
+		systemPromptWrapper: (base: string) => base,
+		responseFormatHints: "markdown",
+		tokenBudgetMultiplier: 1.0,
+	},
+	claude: {
+		systemPromptWrapper: (base: string) => base,
+		responseFormatHints: "json_or_markdown",
+		tokenBudgetMultiplier: 1.2,
+	},
+	gemini: {
+		systemPromptWrapper: (base: string) => base,
+		responseFormatHints: "markdown",
+		tokenBudgetMultiplier: 0.9,
+	},
+	ollama: {
+		systemPromptWrapper: (base: string) => base,
+		responseFormatHints: "markdown",
+		tokenBudgetMultiplier: 0.8,
+	},
+	custom: {
+		systemPromptWrapper: (base: string) => base,
+		responseFormatHints: "markdown",
+		tokenBudgetMultiplier: 1.0,
+	},
 };

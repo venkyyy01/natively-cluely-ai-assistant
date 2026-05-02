@@ -1,7 +1,7 @@
 {
-  "plugins": {
-    "temporal": {
-      "enabled": true
-    }
-  }
+	"plugins": {
+		"temporal": {
+			"enabled": true
+		}
+	}
 }

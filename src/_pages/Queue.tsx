@@ -1,471 +1,576 @@
-import React, { useState, useEffect, useRef } from "react"
-import { useQuery } from "react-query"
-import ScreenshotQueue from "../components/Queue/ScreenshotQueue"
+import type React from "react";
+import { useEffect, useRef, useState } from "react";
+import ReactMarkdown from "react-markdown";
+import { useQuery } from "react-query";
+import rehypeKatex from "rehype-katex";
+import remarkGfm from "remark-gfm";
+import remarkMath from "remark-math";
+import QueueCommands from "../components/Queue/QueueCommands";
+import ScreenshotQueue from "../components/Queue/ScreenshotQueue";
+import { ModelSelector } from "../components/ui/ModelSelector";
 import {
-  Toast,
-  ToastTitle,
-  ToastDescription,
-  ToastVariant,
-  ToastMessage
-} from "../components/ui/toast"
-import QueueCommands from "../components/Queue/QueueCommands"
-import { ModelSelector } from "../components/ui/ModelSelector"
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
-import remarkMath from 'remark-math';
-import rehypeKatex from 'rehype-katex';
-import 'katex/dist/katex.min.css';
-import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
-import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
+	Toast,
+	ToastDescription,
+	type ToastMessage,
+	ToastTitle,
+	type ToastVariant,
+} from "../components/ui/toast";
+import "katex/dist/katex.min.css";
+import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
+import { vscDarkPlus } from "react-syntax-highlighter/dist/esm/styles/prism";
 
 interface QueueProps {
-  setView: React.Dispatch<React.SetStateAction<"queue" | "solutions" | "debug">>
+	setView: React.Dispatch<
+		React.SetStateAction<"queue" | "solutions" | "debug">
+	>;
 }
 
 const Queue: React.FC<QueueProps> = ({ setView }) => {
-  const [toastOpen, setToastOpen] = useState(false)
-  const [toastMessage, setToastMessage] = useState<ToastMessage>({
-    title: "",
-    description: "",
-    variant: "neutral"
-  })
+	const [toastOpen, setToastOpen] = useState(false);
+	const [toastMessage, setToastMessage] = useState<ToastMessage>({
+		title: "",
+		description: "",
+		variant: "neutral",
+	});
 
-  const [isTooltipVisible, setIsTooltipVisible] = useState(false)
-  const [tooltipHeight, setTooltipHeight] = useState(0)
-  const contentRef = useRef<HTMLDivElement>(null)
+	const [isTooltipVisible, setIsTooltipVisible] = useState(false);
+	const [tooltipHeight, setTooltipHeight] = useState(0);
+	const contentRef = useRef<HTMLDivElement>(null);
 
-  const [chatInput, setChatInput] = useState("")
-  const [chatMessages, setChatMessages] = useState<{ role: "user" | "gemini", text: string }[]>([])
-  const [chatLoading, setChatLoading] = useState(false)
-  const [isChatOpen, setIsChatOpen] = useState(false)
-  const chatInputRef = useRef<HTMLInputElement>(null)
+	const [chatInput, setChatInput] = useState("");
+	const [chatMessages, setChatMessages] = useState<
+		{ role: "user" | "gemini"; text: string }[]
+	>([]);
+	const [chatLoading, setChatLoading] = useState(false);
+	const [isChatOpen, setIsChatOpen] = useState(false);
+	const chatInputRef = useRef<HTMLInputElement>(null);
 
-  const [isSettingsOpen, setIsSettingsOpen] = useState(false)
-  const [currentModel, setCurrentModel] = useState<string>('gemini-3.1-flash-lite-preview')
+	const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+	const [currentModel, setCurrentModel] = useState<string>(
+		"gemini-3.1-flash-lite-preview",
+	);
 
-  const barRef = useRef<HTMLDivElement>(null)
+	const barRef = useRef<HTMLDivElement>(null);
 
-  const { data: screenshots = [], refetch } = useQuery<Array<{ path: string; preview: string }>, Error>(
-    ["screenshots"],
-    async () => {
-      try {
-        const existing = await window.electronAPI.getScreenshots()
-        return existing
-      } catch (error) {
-        console.error("Error loading screenshots:", error)
-        showToast("Error", "Failed to load existing screenshots", "error")
-        return []
-      }
-    },
-    {
-      staleTime: Infinity,
-      cacheTime: Infinity,
-      refetchOnWindowFocus: true,
-      refetchOnMount: true
-    }
-  )
+	const { data: screenshots = [], refetch } = useQuery<
+		Array<{ path: string; preview: string }>,
+		Error
+	>(
+		["screenshots"],
+		async () => {
+			try {
+				const existing = await window.electronAPI.getScreenshots();
+				return existing;
+			} catch (error) {
+				console.error("Error loading screenshots:", error);
+				showToast("Error", "Failed to load existing screenshots", "error");
+				return [];
+			}
+		},
+		{
+			staleTime: Infinity,
+			cacheTime: Infinity,
+			refetchOnWindowFocus: true,
+			refetchOnMount: true,
+		},
+	);
 
-  const showToast = (
-    title: string,
-    description: string,
-    variant: ToastVariant
-  ) => {
-    setToastMessage({ title, description, variant })
-    setToastOpen(true)
-  }
+	const showToast = (
+		title: string,
+		description: string,
+		variant: ToastVariant,
+	) => {
+		setToastMessage({ title, description, variant });
+		setToastOpen(true);
+	};
 
-  const handleDeleteScreenshot = async (index: number) => {
-    const screenshotToDelete = screenshots[index]
+	const handleDeleteScreenshot = async (index: number) => {
+		const screenshotToDelete = screenshots[index];
 
-    try {
-      const response = await window.electronAPI.deleteScreenshot(
-        screenshotToDelete.path
-      )
+		try {
+			const response = await window.electronAPI.deleteScreenshot(
+				screenshotToDelete.path,
+			);
 
-      if (response.success) {
-        refetch()
-      } else {
-        console.error("Failed to delete screenshot:", response.error)
-        showToast("Error", "Failed to delete the screenshot file", "error")
-      }
-    } catch (error) {
-      console.error("Error deleting screenshot:", error)
-    }
-  }
+			if (response.success) {
+				refetch();
+			} else {
+				console.error("Failed to delete screenshot:", response.error);
+				showToast("Error", "Failed to delete the screenshot file", "error");
+			}
+		} catch (error) {
+			console.error("Error deleting screenshot:", error);
+		}
+	};
 
-  const handleChatSend = async () => {
-    if (!chatInput.trim()) return
-    setChatMessages((msgs) => [...msgs, { role: "user", text: chatInput }])
+	const handleChatSend = async () => {
+		if (!chatInput.trim()) return;
+		setChatMessages((msgs) => [...msgs, { role: "user", text: chatInput }]);
 
-    // Add placeholder
-    setChatMessages((msgs) => [...msgs, { role: "gemini", text: "..." }])
+		// Add placeholder
+		setChatMessages((msgs) => [...msgs, { role: "gemini", text: "..." }]);
 
-    setChatLoading(true)
-    const message = chatInput; // Capture value
-    setChatInput("")
+		setChatLoading(true);
+		const message = chatInput; // Capture value
+		setChatInput("");
 
-    const requestId = crypto.randomUUID();
-    const tokenCleanup = window.electronAPI.onGeminiStreamToken(requestId, (token) => {
-      setChatMessages(prev => {
-        const lastMsg = prev[prev.length - 1];
-        if (lastMsg && lastMsg.role === 'gemini') {
-          const updated = [...prev];
-          updated[prev.length - 1] = {
-            ...lastMsg,
-            text: (lastMsg.text === "..." ? "" : lastMsg.text) + token
-          };
-          return updated;
-        }
-        return prev;
-      });
-    });
-    const doneCleanup = window.electronAPI.onGeminiStreamDone(requestId, () => {
-      setChatLoading(false);
-    });
-    const errorCleanup = window.electronAPI.onGeminiStreamError(requestId, (error) => {
-      setChatLoading(false);
-      setChatMessages((msgs) => [...msgs, { role: "gemini", text: "Error: " + String(error) }]);
-    });
+		const requestId = crypto.randomUUID();
+		const tokenCleanup = window.electronAPI.onGeminiStreamToken(
+			requestId,
+			(token) => {
+				setChatMessages((prev) => {
+					const lastMsg = prev[prev.length - 1];
+					if (lastMsg && lastMsg.role === "gemini") {
+						const updated = [...prev];
+						updated[prev.length - 1] = {
+							...lastMsg,
+							text: (lastMsg.text === "..." ? "" : lastMsg.text) + token,
+						};
+						return updated;
+					}
+					return prev;
+				});
+			},
+		);
+		const doneCleanup = window.electronAPI.onGeminiStreamDone(requestId, () => {
+			setChatLoading(false);
+		});
+		const errorCleanup = window.electronAPI.onGeminiStreamError(
+			requestId,
+			(error) => {
+				setChatLoading(false);
+				setChatMessages((msgs) => [
+					...msgs,
+					{ role: "gemini", text: "Error: " + String(error) },
+				]);
+			},
+		);
 
-    try {
-      await window.electronAPI.streamGeminiChat(message, undefined, undefined, { requestId })
-    } catch (err) {
-      setChatLoading(false)
-      setChatMessages((msgs) => [...msgs, { role: "gemini", text: "Error: " + String(err) }])
-    } finally {
-      tokenCleanup();
-      doneCleanup();
-      errorCleanup();
-      chatInputRef.current?.focus()
-    }
-  }
+		try {
+			await window.electronAPI.streamGeminiChat(message, undefined, undefined, {
+				requestId,
+			});
+		} catch (err) {
+			setChatLoading(false);
+			setChatMessages((msgs) => [
+				...msgs,
+				{ role: "gemini", text: "Error: " + String(err) },
+			]);
+		} finally {
+			tokenCleanup();
+			doneCleanup();
+			errorCleanup();
+			chatInputRef.current?.focus();
+		}
+	};
 
-  // Load persisted default model on mount (each session starts with the default)
-  useEffect(() => {
-    const loadDefaultModel = async () => {
-      try {
-        // @ts-ignore
-        const result = await window.electronAPI.getDefaultModel();
-        if (result && result.model) {
-          setCurrentModel(result.model);
-          // Set runtime model to the default
-          // @ts-ignore
-          window.electronAPI.setModel(result.model).catch(() => { });
-        }
-      } catch (error) {
-        console.error('Error loading default model:', error);
-      }
-    };
-    loadDefaultModel();
-  }, []);
+	// Load persisted default model on mount (each session starts with the default)
+	useEffect(() => {
+		const loadDefaultModel = async () => {
+			try {
+				// @ts-expect-error
+				const result = await window.electronAPI.getDefaultModel();
+				if (result && result.model) {
+					setCurrentModel(result.model);
+					// Set runtime model to the default
+					// @ts-expect-error
+					window.electronAPI.setModel(result.model).catch(() => {});
+				}
+			} catch (error) {
+				console.error("Error loading default model:", error);
+			}
+		};
+		loadDefaultModel();
+	}, []);
 
-  // Listen for default model changes from Settings
-  useEffect(() => {
-    // @ts-ignore
-    if (!window.electronAPI?.onModelChanged) return;
-    // @ts-ignore
-    const unsubscribe = window.electronAPI.onModelChanged((modelId: string) => {
-      setCurrentModel(prev => prev === modelId ? prev : modelId);
-    });
-    return () => unsubscribe();
-  }, []);
+	// Listen for default model changes from Settings
+	useEffect(() => {
+		// @ts-expect-error
+		if (!window.electronAPI?.onModelChanged) return;
+		// @ts-expect-error
+		const unsubscribe = window.electronAPI.onModelChanged((modelId: string) => {
+			setCurrentModel((prev) => (prev === modelId ? prev : modelId));
+		});
+		return () => unsubscribe();
+	}, []);
 
-  useEffect(() => {
-    const updateDimensions = () => {
-      if (contentRef.current) {
-        let contentHeight = contentRef.current.scrollHeight
-        const contentWidth = contentRef.current.scrollWidth
-        if (isTooltipVisible) {
-          contentHeight += tooltipHeight
-        }
-        window.electronAPI.updateContentDimensions({
-          width: contentWidth,
-          height: contentHeight
-        })
-      }
-    }
+	useEffect(() => {
+		const updateDimensions = () => {
+			if (contentRef.current) {
+				let contentHeight = contentRef.current.scrollHeight;
+				const contentWidth = contentRef.current.scrollWidth;
+				if (isTooltipVisible) {
+					contentHeight += tooltipHeight;
+				}
+				window.electronAPI.updateContentDimensions({
+					width: contentWidth,
+					height: contentHeight,
+				});
+			}
+		};
 
-    const resizeObserver = new ResizeObserver(updateDimensions)
-    if (contentRef.current) {
-      resizeObserver.observe(contentRef.current)
-    }
-    updateDimensions()
+		const resizeObserver = new ResizeObserver(updateDimensions);
+		if (contentRef.current) {
+			resizeObserver.observe(contentRef.current);
+		}
+		updateDimensions();
 
-    const cleanupFunctions = [
-      window.electronAPI.onResetView(() => refetch()),
-      window.electronAPI.onSolutionError((error: string) => {
-        showToast(
-          "Processing Failed",
-          "There was an error processing your screenshots.",
-          "error"
-        )
-        setView("queue")
-        console.error("Processing error:", error)
-      }),
-      window.electronAPI.onProcessingNoScreenshots(() => {
-        showToast(
-          "No Screenshots",
-          "There are no screenshots to process.",
-          "neutral"
-        )
-      })
-    ]
+		const cleanupFunctions = [
+			window.electronAPI.onResetView(() => refetch()),
+			window.electronAPI.onSolutionError((error: string) => {
+				showToast(
+					"Processing Failed",
+					"There was an error processing your screenshots.",
+					"error",
+				);
+				setView("queue");
+				console.error("Processing error:", error);
+			}),
+			window.electronAPI.onProcessingNoScreenshots(() => {
+				showToast(
+					"No Screenshots",
+					"There are no screenshots to process.",
+					"neutral",
+				);
+			}),
+		];
 
-    return () => {
-      resizeObserver.disconnect()
-      cleanupFunctions.forEach((cleanup) => cleanup())
-    }
-  }, [isTooltipVisible, tooltipHeight])
+		return () => {
+			resizeObserver.disconnect();
+			cleanupFunctions.forEach((cleanup) => cleanup());
+		};
+	}, [isTooltipVisible, tooltipHeight]);
 
-  // Seamless screenshot-to-LLM flow
-  useEffect(() => {
-    // Listen for screenshot taken event
-    const unsubscribe = window.electronAPI.onScreenshotTaken(async () => {
-      // Refetch screenshots to update the queue
-      const updatedScreenshots = await refetch();
-      // Show loading in chat
-      setChatLoading(true);
-      try {
-        // Gather all screenshot paths
-        const allScreenshots = updatedScreenshots.data || [];
-        const allPaths = allScreenshots.map((s: { path: string }) => s.path);
-        if (allPaths.length > 0) {
-          // Call the LLM to process all screenshots
-          const count = allPaths.length;
-          setChatMessages((msgs) => [...msgs, { role: "user", text: `📷 Analyzing ${count} screenshot${count > 1 ? 's' : ''}...` }]);
-          setChatMessages((msgs) => [...msgs, { role: "gemini", text: "..." }]);
+	// Seamless screenshot-to-LLM flow
+	useEffect(() => {
+		// Listen for screenshot taken event
+		const unsubscribe = window.electronAPI.onScreenshotTaken(async () => {
+			// Refetch screenshots to update the queue
+			const updatedScreenshots = await refetch();
+			// Show loading in chat
+			setChatLoading(true);
+			try {
+				// Gather all screenshot paths
+				const allScreenshots = updatedScreenshots.data || [];
+				const allPaths = allScreenshots.map((s: { path: string }) => s.path);
+				if (allPaths.length > 0) {
+					// Call the LLM to process all screenshots
+					const count = allPaths.length;
+					setChatMessages((msgs) => [
+						...msgs,
+						{
+							role: "user",
+							text: `📷 Analyzing ${count} screenshot${count > 1 ? "s" : ""}...`,
+						},
+					]);
+					setChatMessages((msgs) => [...msgs, { role: "gemini", text: "..." }]);
 
-          const requestId = crypto.randomUUID();
-          const tokenCleanup = window.electronAPI.onGeminiStreamToken(requestId, (token) => {
-            setChatMessages(prev => {
-              const lastMsg = prev[prev.length - 1];
-              if (lastMsg && lastMsg.role === 'gemini') {
-                const updated = [...prev];
-                updated[prev.length - 1] = {
-                  ...lastMsg,
-                  text: (lastMsg.text === "..." ? "" : lastMsg.text) + token
-                };
-                return updated;
-              }
-              return prev;
-            });
-          });
-          const doneCleanup = window.electronAPI.onGeminiStreamDone(requestId, () => {
-            setChatLoading(false);
-          });
-          const errorCleanup = window.electronAPI.onGeminiStreamError(requestId, (error) => {
-            setChatLoading(false);
-            setChatMessages((msgs) => [...msgs, { role: "gemini", text: "Error: " + String(error) }]);
-          });
+					const requestId = crypto.randomUUID();
+					const tokenCleanup = window.electronAPI.onGeminiStreamToken(
+						requestId,
+						(token) => {
+							setChatMessages((prev) => {
+								const lastMsg = prev[prev.length - 1];
+								if (lastMsg && lastMsg.role === "gemini") {
+									const updated = [...prev];
+									updated[prev.length - 1] = {
+										...lastMsg,
+										text: (lastMsg.text === "..." ? "" : lastMsg.text) + token,
+									};
+									return updated;
+								}
+								return prev;
+							});
+						},
+					);
+					const doneCleanup = window.electronAPI.onGeminiStreamDone(
+						requestId,
+						() => {
+							setChatLoading(false);
+						},
+					);
+					const errorCleanup = window.electronAPI.onGeminiStreamError(
+						requestId,
+						(error) => {
+							setChatLoading(false);
+							setChatMessages((msgs) => [
+								...msgs,
+								{ role: "gemini", text: "Error: " + String(error) },
+							]);
+						},
+					);
 
-          try {
-            await window.electronAPI.streamGeminiChat(
-              `Describe ${count > 1 ? 'these images' : 'this image'} and solve any problem in ${count > 1 ? 'them' : 'it'}.`,
-              allPaths,
-              undefined,
-              { requestId }
-            );
-          } finally {
-            tokenCleanup();
-            doneCleanup();
-            errorCleanup();
-          }
-        }
-      } catch (err) {
-        setChatMessages((msgs) => [...msgs, { role: "gemini", text: "Error: " + String(err) }]);
-        setChatLoading(false);
-      }
-    });
-    return () => {
-      unsubscribe && unsubscribe();
-    };
-  }, [refetch]);
+					try {
+						await window.electronAPI.streamGeminiChat(
+							`Describe ${count > 1 ? "these images" : "this image"} and solve any problem in ${count > 1 ? "them" : "it"}.`,
+							allPaths,
+							undefined,
+							{ requestId },
+						);
+					} finally {
+						tokenCleanup();
+						doneCleanup();
+						errorCleanup();
+					}
+				}
+			} catch (err) {
+				setChatMessages((msgs) => [
+					...msgs,
+					{ role: "gemini", text: "Error: " + String(err) },
+				]);
+				setChatLoading(false);
+			}
+		});
+		return () => {
+			unsubscribe && unsubscribe();
+		};
+	}, [refetch]);
 
-  const handleTooltipVisibilityChange = (visible: boolean, height: number) => {
-    setIsTooltipVisible(visible)
-    setTooltipHeight(height)
-  }
+	const handleTooltipVisibilityChange = (visible: boolean, height: number) => {
+		setIsTooltipVisible(visible);
+		setTooltipHeight(height);
+	};
 
-  const handleChatToggle = () => {
-    setIsChatOpen(!isChatOpen)
-  }
+	const handleChatToggle = () => {
+		setIsChatOpen(!isChatOpen);
+	};
 
-  const handleSettingsToggle = () => {
-    setIsSettingsOpen(!isSettingsOpen)
-  }
+	const handleSettingsToggle = () => {
+		setIsSettingsOpen(!isSettingsOpen);
+	};
 
-  const handleModelChange = (modelId: string) => {
-    setCurrentModel(modelId)
-    window.electronAPI.setModel(modelId).catch(console.error);
-    setChatMessages((msgs) => [...msgs, {
-      role: "gemini",
-      text: `🔄 Switched to ${modelId}. Ready for your questions!`
-    }])
-  }
+	const handleModelChange = (modelId: string) => {
+		setCurrentModel(modelId);
+		window.electronAPI.setModel(modelId).catch(console.error);
+		setChatMessages((msgs) => [
+			...msgs,
+			{
+				role: "gemini",
+				text: `🔄 Switched to ${modelId}. Ready for your questions!`,
+			},
+		]);
+	};
 
+	return (
+		<div
+			ref={barRef}
+			style={{
+				position: "relative",
+				width: "100%",
+				pointerEvents: "auto",
+			}}
+			className="select-none"
+		>
+			<div className="bg-transparent w-full">
+				<div className="px-2 py-1">
+					<Toast
+						open={toastOpen}
+						onOpenChange={setToastOpen}
+						variant={toastMessage.variant}
+						duration={3000}
+					>
+						<ToastTitle>{toastMessage.title}</ToastTitle>
+						<ToastDescription>{toastMessage.description}</ToastDescription>
+					</Toast>
+					<div className="w-fit">
+						<QueueCommands
+							screenshots={screenshots}
+							onTooltipVisibilityChange={handleTooltipVisibilityChange}
+							onChatToggle={handleChatToggle}
+							onSettingsToggle={handleSettingsToggle}
+						/>
+					</div>
+					{/* Conditional Settings Interface */}
+					{isSettingsOpen && (
+						<div className="mt-4 w-full mx-auto">
+							<ModelSelector
+								currentModel={currentModel}
+								onSelectModel={handleModelChange}
+							/>
+						</div>
+					)}
 
-  return (
-    <div
-      ref={barRef}
-      style={{
-        position: "relative",
-        width: "100%",
-        pointerEvents: "auto"
-      }}
-      className="select-none"
-    >
-      <div className="bg-transparent w-full">
-        <div className="px-2 py-1">
-          <Toast
-            open={toastOpen}
-            onOpenChange={setToastOpen}
-            variant={toastMessage.variant}
-            duration={3000}
-          >
-            <ToastTitle>{toastMessage.title}</ToastTitle>
-            <ToastDescription>{toastMessage.description}</ToastDescription>
-          </Toast>
-          <div className="w-fit">
-            <QueueCommands
-              screenshots={screenshots}
-              onTooltipVisibilityChange={handleTooltipVisibilityChange}
-              onChatToggle={handleChatToggle}
-              onSettingsToggle={handleSettingsToggle}
-            />
-          </div>
-          {/* Conditional Settings Interface */}
-          {isSettingsOpen && (
-            <div className="mt-4 w-full mx-auto">
-              <ModelSelector currentModel={currentModel} onSelectModel={handleModelChange} />
-            </div>
-          )}
+					{/* Conditional Chat Interface */}
+					{isChatOpen && (
+						<div className="mt-4 w-full mx-auto liquid-glass chat-container p-4 flex flex-col">
+							<div className="flex-1 overflow-y-auto mb-3 p-3 rounded-lg bg-white/10 backdrop-blur-md max-h-64 min-h-[120px] glass-content border border-white/20 shadow-lg">
+								{chatMessages.length === 0 ? (
+									<div className="text-sm text-gray-600 text-center mt-8">
+										💬 Chat with {currentModel}
+										<br />
+										<span className="text-xs text-gray-500">
+											Take a screenshot (Cmd+Option+Shift+S or F14) for
+											automatic analysis
+										</span>
+										<br />
+										<span className="text-xs text-gray-500">
+											Click ⚙️ Models to switch AI providers
+										</span>
+									</div>
+								) : (
+									chatMessages.map((msg, idx) => (
+										<div
+											key={idx}
+											className={`w-full flex ${msg.role === "user" ? "justify-end" : "justify-start"} mb-3`}
+										>
+											<div
+												className={`max-w-[80%] px-3 py-1.5 rounded-xl text-xs shadow-md backdrop-blur-sm border ${
+													msg.role === "user"
+														? "bg-gray-700/80 text-gray-100 ml-12 border-gray-600/40"
+														: "bg-white/85 text-gray-700 mr-12 border-gray-200/50"
+												}`}
+												style={{ wordBreak: "break-word", lineHeight: "1.4" }}
+											>
+												<ReactMarkdown
+													remarkPlugins={[remarkGfm, remarkMath]}
+													rehypePlugins={[rehypeKatex]}
+													components={{
+														p: ({ node, ...props }: any) => (
+															<p
+																className="mb-2 last:mb-0 whitespace-pre-wrap"
+																{...props}
+															/>
+														),
+														a: ({ node, ...props }: any) => (
+															<a
+																className="underline hover:opacity-80"
+																target="_blank"
+																rel="noopener noreferrer"
+																{...props}
+															/>
+														),
+														pre: ({ children }: any) => (
+															<div className="not-prose mb-4">{children}</div>
+														),
+														code: ({
+															node,
+															inline,
+															className,
+															children,
+															...props
+														}: any) => {
+															const match = /language-(\w+)/.exec(
+																className || "",
+															);
+															const isInline = inline ?? false;
+															const lang = match ? match[1] : "";
 
-          {/* Conditional Chat Interface */}
-          {isChatOpen && (
-            <div className="mt-4 w-full mx-auto liquid-glass chat-container p-4 flex flex-col">
-              <div className="flex-1 overflow-y-auto mb-3 p-3 rounded-lg bg-white/10 backdrop-blur-md max-h-64 min-h-[120px] glass-content border border-white/20 shadow-lg">
-                {chatMessages.length === 0 ? (
-                  <div className="text-sm text-gray-600 text-center mt-8">
-                    💬 Chat with {currentModel}
-                    <br />
-                    <span className="text-xs text-gray-500">Take a screenshot (Cmd+Option+Shift+S or F14) for automatic analysis</span>
-                    <br />
-                    <span className="text-xs text-gray-500">Click ⚙️ Models to switch AI providers</span>
-                  </div>
-                ) : (
-                  chatMessages.map((msg, idx) => (
-                    <div
-                      key={idx}
-                      className={`w-full flex ${msg.role === "user" ? "justify-end" : "justify-start"} mb-3`}
-                    >
-                      <div
-                        className={`max-w-[80%] px-3 py-1.5 rounded-xl text-xs shadow-md backdrop-blur-sm border ${msg.role === "user"
-                          ? "bg-gray-700/80 text-gray-100 ml-12 border-gray-600/40"
-                          : "bg-white/85 text-gray-700 mr-12 border-gray-200/50"
-                          }`}
-                        style={{ wordBreak: "break-word", lineHeight: "1.4" }}
-                      >
-                        <ReactMarkdown
-                          remarkPlugins={[remarkGfm, remarkMath]}
-                          rehypePlugins={[rehypeKatex]}
-                          components={{
-                            p: ({ node, ...props }: any) => <p className="mb-2 last:mb-0 whitespace-pre-wrap" {...props} />,
-                            a: ({ node, ...props }: any) => <a className="underline hover:opacity-80" target="_blank" rel="noopener noreferrer" {...props} />,
-                            pre: ({ children }: any) => <div className="not-prose mb-4">{children}</div>,
-                            code: ({ node, inline, className, children, ...props }: any) => {
-                              const match = /language-(\w+)/.exec(className || '');
-                              const isInline = inline ?? false;
-                              const lang = match ? match[1] : '';
+															return !isInline ? (
+																<div className="my-3 rounded-xl overflow-hidden border border-white/[0.08] shadow-lg bg-zinc-800/60 backdrop-blur-md">
+																	<div className="bg-white/[0.04] px-3 py-1.5 border-b border-white/[0.08]">
+																		<span className="text-[10px] uppercase tracking-widest font-semibold text-white/40 font-mono">
+																			{lang || "CODE"}
+																		</span>
+																	</div>
+																	<div className="bg-transparent">
+																		<SyntaxHighlighter
+																			language={lang || "text"}
+																			style={vscDarkPlus}
+																			customStyle={{
+																				margin: 0,
+																				borderRadius: 0,
+																				fontSize: "13px",
+																				lineHeight: "1.6",
+																				background: "transparent",
+																				padding: "16px",
+																				fontFamily:
+																					"ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
+																			}}
+																			wrapLongLines={true}
+																			showLineNumbers={true}
+																			lineNumberStyle={{
+																				minWidth: "2.5em",
+																				paddingRight: "1.2em",
+																				color: "rgba(255,255,255,0.2)",
+																				textAlign: "right",
+																				fontSize: "11px",
+																			}}
+																			{...props}
+																		>
+																			{String(children).replace(/\n$/, "")}
+																		</SyntaxHighlighter>
+																	</div>
+																</div>
+															) : (
+																<code
+																	className="bg-black/20 rounded px-1.5 py-0.5 text-[13px] font-mono border border-white/10"
+																	{...props}
+																>
+																	{children}
+																</code>
+															);
+														},
+													}}
+												>
+													{msg.text}
+												</ReactMarkdown>
+											</div>
+										</div>
+									))
+								)}
+								{chatLoading && (
+									<div className="flex justify-start mb-3">
+										<div className="bg-white/85 text-gray-600 px-3 py-1.5 rounded-xl text-xs backdrop-blur-sm border border-gray-200/50 shadow-md mr-12">
+											<span className="inline-flex items-center">
+												<span className="animate-pulse text-gray-400">●</span>
+												<span className="animate-pulse animation-delay-200 text-gray-400">
+													●
+												</span>
+												<span className="animate-pulse animation-delay-400 text-gray-400">
+													●
+												</span>
+												<span className="ml-2">
+													{currentModel} is replying...
+												</span>
+											</span>
+										</div>
+									</div>
+								)}
+							</div>
+							<form
+								className="flex gap-2 items-center glass-content"
+								onSubmit={(e) => {
+									e.preventDefault();
+									handleChatSend();
+								}}
+							>
+								<input
+									ref={chatInputRef}
+									className="flex-1 rounded-lg px-3 py-2 bg-white/25 backdrop-blur-md text-gray-800 placeholder-gray-500 text-xs focus:outline-none focus:ring-1 focus:ring-gray-400/60 border border-white/40 shadow-lg transition-all duration-200"
+									placeholder="Type your message..."
+									value={chatInput}
+									onChange={(e) => setChatInput(e.target.value)}
+									disabled={chatLoading}
+								/>
+								<button
+									type="submit"
+									className="p-2 rounded-lg bg-gray-600/80 hover:bg-gray-700/80 border border-gray-500/60 flex items-center justify-center transition-all duration-200 backdrop-blur-sm shadow-lg disabled:opacity-50"
+									disabled={chatLoading || !chatInput.trim()}
+									tabIndex={-1}
+									aria-label="Send"
+								>
+									<svg
+										xmlns="http://www.w3.org/2000/svg"
+										fill="none"
+										viewBox="0 0 24 24"
+										strokeWidth={2}
+										stroke="white"
+										className="w-4 h-4"
+									>
+										<path
+											strokeLinecap="round"
+											strokeLinejoin="round"
+											d="M4.5 19.5l15-7.5-15-7.5v6l10 1.5-10 1.5v6z"
+										/>
+									</svg>
+								</button>
+							</form>
+						</div>
+					)}
+				</div>
+			</div>
+		</div>
+	);
+};
 
-                              return !isInline ? (
-                                <div className="my-3 rounded-xl overflow-hidden border border-white/[0.08] shadow-lg bg-zinc-800/60 backdrop-blur-md">
-                                  <div className="bg-white/[0.04] px-3 py-1.5 border-b border-white/[0.08]">
-                                    <span className="text-[10px] uppercase tracking-widest font-semibold text-white/40 font-mono">
-                                      {lang || 'CODE'}
-                                    </span>
-                                  </div>
-                                  <div className="bg-transparent">
-                                    <SyntaxHighlighter
-                                      language={lang || 'text'}
-                                      style={vscDarkPlus}
-                                      customStyle={{
-                                        margin: 0,
-                                        borderRadius: 0,
-                                        fontSize: '13px',
-                                        lineHeight: '1.6',
-                                        background: 'transparent',
-                                        padding: '16px',
-                                        fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace'
-                                      }}
-                                      wrapLongLines={true}
-                                      showLineNumbers={true}
-                                      lineNumberStyle={{ minWidth: '2.5em', paddingRight: '1.2em', color: 'rgba(255,255,255,0.2)', textAlign: 'right', fontSize: '11px' }}
-                                      {...props}
-                                    >
-                                      {String(children).replace(/\n$/, '')}
-                                    </SyntaxHighlighter>
-                                  </div>
-                                </div>
-                              ) : (
-                                <code className="bg-black/20 rounded px-1.5 py-0.5 text-[13px] font-mono border border-white/10" {...props}>
-                                  {children}
-                                </code>
-                              );
-                            },
-                          }}
-                        >
-                          {msg.text}
-                        </ReactMarkdown>
-                      </div>
-                    </div>
-                  ))
-                )}
-                {chatLoading && (
-                  <div className="flex justify-start mb-3">
-                    <div className="bg-white/85 text-gray-600 px-3 py-1.5 rounded-xl text-xs backdrop-blur-sm border border-gray-200/50 shadow-md mr-12">
-                      <span className="inline-flex items-center">
-                        <span className="animate-pulse text-gray-400">●</span>
-                        <span className="animate-pulse animation-delay-200 text-gray-400">●</span>
-                        <span className="animate-pulse animation-delay-400 text-gray-400">●</span>
-                        <span className="ml-2">{currentModel} is replying...</span>
-                      </span>
-                    </div>
-                  </div>
-                )}
-              </div>
-              <form
-                className="flex gap-2 items-center glass-content"
-                onSubmit={e => {
-                  e.preventDefault();
-                  handleChatSend();
-                }}
-              >
-                <input
-                  ref={chatInputRef}
-                  className="flex-1 rounded-lg px-3 py-2 bg-white/25 backdrop-blur-md text-gray-800 placeholder-gray-500 text-xs focus:outline-none focus:ring-1 focus:ring-gray-400/60 border border-white/40 shadow-lg transition-all duration-200"
-                  placeholder="Type your message..."
-                  value={chatInput}
-                  onChange={e => setChatInput(e.target.value)}
-                  disabled={chatLoading}
-                />
-                <button
-                  type="submit"
-                  className="p-2 rounded-lg bg-gray-600/80 hover:bg-gray-700/80 border border-gray-500/60 flex items-center justify-center transition-all duration-200 backdrop-blur-sm shadow-lg disabled:opacity-50"
-                  disabled={chatLoading || !chatInput.trim()}
-                  tabIndex={-1}
-                  aria-label="Send"
-                >
-                  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="white" className="w-4 h-4">
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 19.5l15-7.5-15-7.5v6l10 1.5-10 1.5v6z" />
-                  </svg>
-                </button>
-              </form>
-            </div>
-          )}
-        </div>
-      </div>
-    </div>
-  )
-}
-
-export default Queue
+export default Queue;

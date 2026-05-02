@@ -1,5 +1,5 @@
-const fs = require('fs');
-const path = require('path');
+const fs = require("fs");
+const path = require("path");
 const content = `// electron/rag/VectorStore.ts
 // SQLite-based vector storage with native sqlite-vec search (fallback to JS cosine similarity)
 // JS fallback is offloaded to a worker_threads Worker to avoid blocking the Electron main thread.
@@ -699,6 +699,6 @@ export class VectorStore {
 }
 `;
 
-const outputPath = path.join(__dirname, '../electron/rag/VectorStore.ts');
-fs.writeFileSync(outputPath, content, 'utf8');
-console.log('[VectorStoreRebuild] Written to', outputPath);
+const outputPath = path.join(__dirname, "../electron/rag/VectorStore.ts");
+fs.writeFileSync(outputPath, content, "utf8");
+console.log("[VectorStoreRebuild] Written to", outputPath);

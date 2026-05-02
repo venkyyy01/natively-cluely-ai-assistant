@@ -1,29 +1,27 @@
 // electron/rag/index.ts
 // Barrel export for RAG modules
 
-export { preprocessTranscript, estimateTokens } from './TranscriptPreprocessor';
-export type { RawSegment, CleanedSegment } from './TranscriptPreprocessor';
-
-export { chunkTranscript, formatChunkForContext } from './SemanticChunker';
-export type { Chunk } from './SemanticChunker';
-
-export { VectorStore } from './VectorStore';
-export type { StoredChunk, ScoredChunk } from './VectorStore';
-
-export { EmbeddingPipeline } from './EmbeddingPipeline';
-export type { AppAPIConfig } from './EmbeddingProviderResolver';
-
-export { RAGRetriever } from './RAGRetriever';
-export type { RetrievalOptions, RetrievedContext, QueryIntent } from './RAGRetriever';
-
+export { EmbeddingPipeline } from "./EmbeddingPipeline";
+export type { AppAPIConfig } from "./EmbeddingProviderResolver";
 export {
-    MEETING_RAG_SYSTEM_PROMPT,
-    GLOBAL_RAG_SYSTEM_PROMPT,
-    NO_CONTEXT_FALLBACK,
-    NO_GLOBAL_CONTEXT_FALLBACK,
-    PARTIAL_CONTEXT_FALLBACK,
-    buildRAGPrompt
-} from './prompts';
-
-export { RAGManager } from './RAGManager';
-export type { RAGManagerConfig } from './RAGManager';
+	buildRAGPrompt,
+	GLOBAL_RAG_SYSTEM_PROMPT,
+	MEETING_RAG_SYSTEM_PROMPT,
+	NO_CONTEXT_FALLBACK,
+	NO_GLOBAL_CONTEXT_FALLBACK,
+	PARTIAL_CONTEXT_FALLBACK,
+} from "./prompts";
+export type { RAGManagerConfig } from "./RAGManager";
+export { RAGManager } from "./RAGManager";
+export type {
+	QueryIntent,
+	RetrievalOptions,
+	RetrievedContext,
+} from "./RAGRetriever";
+export { RAGRetriever } from "./RAGRetriever";
+export type { Chunk } from "./SemanticChunker";
+export { chunkTranscript, formatChunkForContext } from "./SemanticChunker";
+export type { CleanedSegment, RawSegment } from "./TranscriptPreprocessor";
+export { estimateTokens, preprocessTranscript } from "./TranscriptPreprocessor";
+export type { ScoredChunk, StoredChunk } from "./VectorStore";
+export { VectorStore } from "./VectorStore";

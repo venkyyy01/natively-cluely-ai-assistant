@@ -1,11 +1,11 @@
 export interface AudioFacadeDeps {
-  getNativeAudioStatus: () => unknown;
+	getNativeAudioStatus: () => unknown;
 }
 
 export class AudioFacade {
-  constructor(private readonly deps: AudioFacadeDeps) {}
+	constructor(private readonly deps: AudioFacadeDeps) {}
 
-  getNativeAudioStatus<T = unknown>(): T {
-    return this.deps.getNativeAudioStatus() as T;
-  }
+	getNativeAudioStatus<T = unknown>(): T {
+		return this.deps.getNativeAudioStatus() as T;
+	}
 }

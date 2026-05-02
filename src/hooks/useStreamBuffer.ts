@@ -1,4 +1,4 @@
-import { useRef, useCallback } from 'react';
+import { useCallback, useRef } from "react";
 
 /**
  * useStreamBuffer — Batches high-frequency streaming tokens into
@@ -19,41 +19,44 @@ import { useRef, useCallback } from 'react';
  *   });
  */
 export function useStreamBuffer() {
-    const bufferRef = useRef<string>('');
-    const rafIdRef = useRef<number | null>(null);
+	const bufferRef = useRef<string>("");
+	const rafIdRef = useRef<number | null>(null);
 
-    /**
-     * Append a token to the buffer and schedule a batched flush.
-     * The flush callback receives the full accumulated content so far.
-     */
-    const appendToken = useCallback((token: string, onFlush: (content: string) => void) => {
-        bufferRef.current += token;
+	/**
+	 * Append a token to the buffer and schedule a batched flush.
+	 * The flush callback receives the full accumulated content so far.
+	 */
+	const appendToken = useCallback(
+		(token: string, onFlush: (content: string) => void) => {
+			bufferRef.current += token;
 
-        // Only schedule one RAF — subsequent tokens within the same
-        // frame just append to the buffer without scheduling another.
-        if (rafIdRef.current === null) {
-            rafIdRef.current = requestAnimationFrame(() => {
-                rafIdRef.current = null;
-                onFlush(bufferRef.current);
-            });
-        }
-    }, []);
+			// Only schedule one RAF — subsequent tokens within the same
+			// frame just append to the buffer without scheduling another.
+			if (rafIdRef.current === null) {
+				rafIdRef.current = requestAnimationFrame(() => {
+					rafIdRef.current = null;
+					onFlush(bufferRef.current);
+				});
+			}
+		},
+		[],
+	);
 
-    /**
-     * Get the current buffered content (useful for final commit on stream done).
-     */
-    const getBufferedContent = useCallback(() => bufferRef.current, []);
+	/**
+	 * Get the current buffered content (useful for final commit on stream done).
+	 */
+	const getBufferedContent = useCallback(() => bufferRef.current, []);
 
-    /**
-     * Reset the buffer (call when starting a new stream or on cleanup).
-     */
-    const reset = useCallback(() => {
-        bufferRef.current = '';
-        if (rafIdRef.current !== null) {
-            cancelAnimationFrame(rafIdRef.current);
-            rafIdRef.current = null;
-        }
-    }, []);
+	/**
+	 * Reset the buffer (call when starting a new stream or on cleanup).
+	 */
+	const reset = useCallback(() => {
+		bufferRef.current = "";
+		if (rafIdRef.current !== null) {
+			cancelAnimationFrame(rafIdRef.current);
+			rafIdRef.current = null;
+		}
+	}, []);
 
-    return { appendToken, getBufferedContent, reset };
+	return { appendToken, getBufferedContent, reset };
 }

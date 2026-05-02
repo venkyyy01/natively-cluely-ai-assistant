@@ -1,177 +1,201 @@
-import { pipeline } from '@xenova/transformers';
-import type { ReasoningThread } from '../ConsciousMode';
+import { pipeline } from "@xenova/transformers";
+import type { ReasoningThread } from "../ConsciousMode";
 
 export class SemanticThreadMatcher {
-  private embedder: any | null = null;
-  private embeddingCache = new Map<string, number[]>();
-  private inFlightEmbeddings = new Map<string, Promise<number[]>>();
-  private modelLoadPromise: Promise<void> | null = null;
-  private modelLoadError = false;
+	private embedder: any | null = null;
+	private embeddingCache = new Map<string, number[]>();
+	private inFlightEmbeddings = new Map<string, Promise<number[]>>();
+	private modelLoadPromise: Promise<void> | null = null;
+	private modelLoadError = false;
 
-  private static readonly THRESHOLD = 0.62;
-  private static readonly MIN_WORD_COUNT = 4;
+	private static readonly THRESHOLD = 0.62;
+	private static readonly MIN_WORD_COUNT = 4;
 
-  constructor() {
-    // Lazy load model on first use
-  }
+	constructor() {
+		// Lazy load model on first use
+	}
 
-  private async ensureModelLoaded(): Promise<void> {
-    if (this.embedder) {
-      return;
-    }
+	private async ensureModelLoaded(): Promise<void> {
+		if (this.embedder) {
+			return;
+		}
 
-    if (this.modelLoadError) {
-      throw new Error('SBERT model failed to load, semantic thread continuation disabled');
-    }
+		if (this.modelLoadError) {
+			throw new Error(
+				"SBERT model failed to load, semantic thread continuation disabled",
+			);
+		}
 
-    if (this.modelLoadPromise) {
-      return this.modelLoadPromise;
-    }
+		if (this.modelLoadPromise) {
+			return this.modelLoadPromise;
+		}
 
-    this.modelLoadPromise = (async () => {
-      try {
-        this.embedder = await pipeline('feature-extraction', 'Xenova/all-MiniLM-L6-v2');
-      } catch (error) {
-        console.warn('[SemanticThreadMatcher] Failed to load SBERT model:', error);
-        this.modelLoadError = true;
-        throw error;
-      }
-    })();
+		this.modelLoadPromise = (async () => {
+			try {
+				this.embedder = await pipeline(
+					"feature-extraction",
+					"Xenova/all-MiniLM-L6-v2",
+				);
+			} catch (error) {
+				console.warn(
+					"[SemanticThreadMatcher] Failed to load SBERT model:",
+					error,
+				);
+				this.modelLoadError = true;
+				throw error;
+			}
+		})();
 
-    return this.modelLoadPromise;
-  }
+		return this.modelLoadPromise;
+	}
 
-  private async getEmbedding(text: string): Promise<number[]> {
-    const cacheKey = text.toLowerCase().trim();
-    
-    // Check cache
-    const cached = this.embeddingCache.get(cacheKey);
-    if (cached) {
-      return cached;
-    }
+	private async getEmbedding(text: string): Promise<number[]> {
+		const cacheKey = text.toLowerCase().trim();
 
-    // Check if already in flight
-    const inFlight = this.inFlightEmbeddings.get(cacheKey);
-    if (inFlight) {
-      return inFlight;
-    }
+		// Check cache
+		const cached = this.embeddingCache.get(cacheKey);
+		if (cached) {
+			return cached;
+		}
 
-    // Compute embedding
-    const promise = (async () => {
-      await this.ensureModelLoaded();
-      if (!this.embedder) {
-        throw new Error('Embedder not initialized');
-      }
+		// Check if already in flight
+		const inFlight = this.inFlightEmbeddings.get(cacheKey);
+		if (inFlight) {
+			return inFlight;
+		}
 
-      const output = await this.embedder(text, {
-        pooling: 'mean',
-        normalize: true,
-      });
+		// Compute embedding
+		const promise = (async () => {
+			await this.ensureModelLoaded();
+			if (!this.embedder) {
+				throw new Error("Embedder not initialized");
+			}
 
-      const embedding = Array.from(output.data) as number[];
-      this.embeddingCache.set(cacheKey, embedding);
-      this.inFlightEmbeddings.delete(cacheKey);
-      
-      return embedding;
-    })();
+			const output = await this.embedder(text, {
+				pooling: "mean",
+				normalize: true,
+			});
 
-    this.inFlightEmbeddings.set(cacheKey, promise);
-    return promise;
-  }
+			const embedding = Array.from(output.data) as number[];
+			this.embeddingCache.set(cacheKey, embedding);
+			this.inFlightEmbeddings.delete(cacheKey);
 
-  private cosineSimilarity(a: number[], b: number[]): number {
-    if (a.length !== b.length) {
-      return 0;
-    }
+			return embedding;
+		})();
 
-    let dotProduct = 0;
-    let normA = 0;
-    let normB = 0;
+		this.inFlightEmbeddings.set(cacheKey, promise);
+		return promise;
+	}
 
-    for (let i = 0; i < a.length; i++) {
-      dotProduct += a[i] * b[i];
-      normA += a[i] * a[i];
-      normB += b[i] * b[i];
-    }
+	private cosineSimilarity(a: number[], b: number[]): number {
+		if (a.length !== b.length) {
+			return 0;
+		}
 
-    if (normA === 0 || normB === 0) {
-      return 0;
-    }
+		let dotProduct = 0;
+		let normA = 0;
+		let normB = 0;
 
-    return dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
-  }
+		for (let i = 0; i < a.length; i++) {
+			dotProduct += a[i] * b[i];
+			normA += a[i] * a[i];
+			normB += b[i] * b[i];
+		}
 
-  private hasReferentialFollowUpCue(question: string): boolean {
-    const lowered = question.toLowerCase();
-    return /\b(this|that|it|those|these|them|there|then)\b/.test(lowered)
-      || /^(and|but|so)\b/.test(lowered)
-      || /\b(expand|clarify|explain|unpack|elaborate|deeper)\b/.test(lowered)
-      || /\b(what if|how would that|how does that|why that|why this)\b/.test(lowered);
-  }
+		if (normA === 0 || normB === 0) {
+			return 0;
+		}
 
-  private buildThreadCorpus(thread: ReasoningThread): string {
-    return [
-      thread.rootQuestion,
-      thread.lastQuestion,
-      ...thread.response.likelyFollowUps,
-      thread.response.behavioralAnswer?.question,
-    ].filter(Boolean).join(' ');
-  }
+		return dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
+	}
 
-  async isCompatible(question: string, thread: ReasoningThread): Promise<boolean> {
-    const normalizedQuestion = question.trim();
-    if (!normalizedQuestion) {
-      return false;
-    }
+	private hasReferentialFollowUpCue(question: string): boolean {
+		const lowered = question.toLowerCase();
+		return (
+			/\b(this|that|it|those|these|them|there|then)\b/.test(lowered) ||
+			/^(and|but|so)\b/.test(lowered) ||
+			/\b(expand|clarify|explain|unpack|elaborate|deeper)\b/.test(lowered) ||
+			/\b(what if|how would that|how does that|why that|why this)\b/.test(
+				lowered,
+			)
+		);
+	}
 
-    const wordCount = normalizedQuestion.split(/\s+/).filter(Boolean).length;
-    
-    // Fallback to original method for very short questions
-    if (wordCount < SemanticThreadMatcher.MIN_WORD_COUNT) {
-      return false; // Caller will use original stopword method
-    }
+	private buildThreadCorpus(thread: ReasoningThread): string {
+		return [
+			thread.rootQuestion,
+			thread.lastQuestion,
+			...thread.response.likelyFollowUps,
+			thread.response.behavioralAnswer?.question,
+		]
+			.filter(Boolean)
+			.join(" ");
+	}
 
-    // Check for referential follow-up cues (fast path)
-    const hasReferentialCue = this.hasReferentialFollowUpCue(normalizedQuestion);
-    if (hasReferentialCue) {
-      return true;
-    }
+	async isCompatible(
+		question: string,
+		thread: ReasoningThread,
+	): Promise<boolean> {
+		const normalizedQuestion = question.trim();
+		if (!normalizedQuestion) {
+			return false;
+		}
 
-    try {
-      const qEmb = await this.getEmbedding(normalizedQuestion);
-      
-      // Use cached thread embedding if available
-      let tEmb = thread.embedding;
-      if (!tEmb) {
-        const threadCorpus = this.buildThreadCorpus(thread);
-        if (!threadCorpus) {
-          return false;
-        }
-        tEmb = await this.getEmbedding(threadCorpus);
-      }
+		const wordCount = normalizedQuestion.split(/\s+/).filter(Boolean).length;
 
-      const sim = this.cosineSimilarity(qEmb, tEmb);
-      return sim >= SemanticThreadMatcher.THRESHOLD;
-    } catch (error) {
-      console.warn('[SemanticThreadMatcher] Embedding computation failed, falling back:', error);
-      return false; // Caller will use original stopword method
-    }
-  }
+		// Fallback to original method for very short questions
+		if (wordCount < SemanticThreadMatcher.MIN_WORD_COUNT) {
+			return false; // Caller will use original stopword method
+		}
 
-  async cacheThreadEmbedding(thread: ReasoningThread): Promise<void> {
-    try {
-      const threadCorpus = this.buildThreadCorpus(thread);
-      if (!threadCorpus) {
-        return;
-      }
-      thread.embedding = await this.getEmbedding(threadCorpus);
-    } catch (error) {
-      console.warn('[SemanticThreadMatcher] Failed to cache thread embedding:', error);
-    }
-  }
+		// Check for referential follow-up cues (fast path)
+		const hasReferentialCue =
+			this.hasReferentialFollowUpCue(normalizedQuestion);
+		if (hasReferentialCue) {
+			return true;
+		}
 
-  clearCache(): void {
-    this.embeddingCache.clear();
-    this.inFlightEmbeddings.clear();
-  }
+		try {
+			const qEmb = await this.getEmbedding(normalizedQuestion);
+
+			// Use cached thread embedding if available
+			let tEmb = thread.embedding;
+			if (!tEmb) {
+				const threadCorpus = this.buildThreadCorpus(thread);
+				if (!threadCorpus) {
+					return false;
+				}
+				tEmb = await this.getEmbedding(threadCorpus);
+			}
+
+			const sim = this.cosineSimilarity(qEmb, tEmb);
+			return sim >= SemanticThreadMatcher.THRESHOLD;
+		} catch (error) {
+			console.warn(
+				"[SemanticThreadMatcher] Embedding computation failed, falling back:",
+				error,
+			);
+			return false; // Caller will use original stopword method
+		}
+	}
+
+	async cacheThreadEmbedding(thread: ReasoningThread): Promise<void> {
+		try {
+			const threadCorpus = this.buildThreadCorpus(thread);
+			if (!threadCorpus) {
+				return;
+			}
+			thread.embedding = await this.getEmbedding(threadCorpus);
+		} catch (error) {
+			console.warn(
+				"[SemanticThreadMatcher] Failed to cache thread embedding:",
+				error,
+			);
+		}
+	}
+
+	clearCache(): void {
+		this.embeddingCache.clear();
+		this.inFlightEmbeddings.clear();
+	}
 }

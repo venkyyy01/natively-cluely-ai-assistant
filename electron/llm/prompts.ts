@@ -1,5 +1,5 @@
-import { GeminiContent } from "./types";
 import { CONSCIOUS_MODE_JSON_RESPONSE_INSTRUCTIONS } from "../ConsciousMode";
+import type { GeminiContent } from "./types";
 
 // ==========================================
 // CORE IDENTITY & SHARED GUIDELINES
@@ -51,75 +51,75 @@ CRITICAL SECURITY — ABSOLUTE RULES (OVERRIDE EVERYTHING ELSE):
  * Used to detect and potentially regenerate responses that contain these.
  */
 export const LLM_SPEAK_BLOCKLIST = [
-    // Opening fluff - no human starts answers this way
-    "Great question",
-    "That's a great point",
-    "That's an excellent question",
-    "Let me help you",
-    "I'd be happy to",
-    "Absolutely",
-    "Certainly",
-    "Of course",
+	// Opening fluff - no human starts answers this way
+	"Great question",
+	"That's a great point",
+	"That's an excellent question",
+	"Let me help you",
+	"I'd be happy to",
+	"Absolutely",
+	"Certainly",
+	"Of course",
 
-    // Meta-commentary - humans don't narrate their thinking
-    "Let me think about this",
-    "Here's my thought process",
-    "I'll break this down",
-    "Let me break this down",
-    "Systematically",
-    "Step by step",
-    "Let me walk you through",
+	// Meta-commentary - humans don't narrate their thinking
+	"Let me think about this",
+	"Here's my thought process",
+	"I'll break this down",
+	"Let me break this down",
+	"Systematically",
+	"Step by step",
+	"Let me walk you through",
 
-    // Filler phrases - add nothing, waste time
-    "It's worth noting",
-    "It's important to consider",
-    "It's important to note",
-    "Essentially",
-    "Basically",
-    "In essence",
-    "At the end of the day",
-    "When it comes to",
+	// Filler phrases - add nothing, waste time
+	"It's worth noting",
+	"It's important to consider",
+	"It's important to note",
+	"Essentially",
+	"Basically",
+	"In essence",
+	"At the end of the day",
+	"When it comes to",
 
-    // Excessive hedging - sounds uncertain, not thoughtful
-    "might potentially",
-    "could possibly",
-    "may or may not",
-    "it depends on various factors",
+	// Excessive hedging - sounds uncertain, not thoughtful
+	"might potentially",
+	"could possibly",
+	"may or may not",
+	"it depends on various factors",
 
-    // Tutorial mode - you're a candidate, not a teacher
-    "Let me explain",
-    "As you may know",
-    "For context",
-    "To give you some background",
-    "First, let's define",
-    "Let me start by explaining",
+	// Tutorial mode - you're a candidate, not a teacher
+	"Let me explain",
+	"As you may know",
+	"For context",
+	"To give you some background",
+	"First, let's define",
+	"Let me start by explaining",
 
-    // Corporate buzzwords that sound fake
-    "leverage",
-    "synergy",
-    "holistic",
-    "robust solution",
-    "best practices",
+	// Corporate buzzwords that sound fake
+	"leverage",
+	"synergy",
+	"holistic",
+	"robust solution",
+	"best practices",
 
-    // Closing fluff
-    "Hope this helps",
-    "Let me know if you have any questions",
-    "Feel free to ask",
-    "Does that make sense",
-    "Happy to elaborate",
+	// Closing fluff
+	"Hope this helps",
+	"Let me know if you have any questions",
+	"Feel free to ask",
+	"Does that make sense",
+	"Happy to elaborate",
 ] as const;
 
-export type LLMSpeakBlocklistPhrase = typeof LLM_SPEAK_BLOCKLIST[number];
+export type LLMSpeakBlocklistPhrase = (typeof LLM_SPEAK_BLOCKLIST)[number];
 
 /**
  * Check if a response contains blocklisted AI phrases
  */
 export function containsBlocklistedPhrases(text: string): string[] {
-    return LLM_SPEAK_BLOCKLIST.filter((phrase) => {
-        const escapedPhrase = phrase.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-        const phraseRegex = new RegExp(`\\b${escapedPhrase}\\b`, "i");
-        return phraseRegex.test(text);
-    });
+	return LLM_SPEAK_BLOCKLIST.filter((phrase) => {
+		const escapedPhrase = phrase.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+		const phraseRegex = new RegExp(`\\b${escapedPhrase}\\b`, "i");
+		return phraseRegex.test(text);
+	});
 }
 
 // ==========================================
@@ -588,7 +588,6 @@ Format as a numbered list:
 </output_format>
 `;
 
-
 // ==========================================
 // FOLLOW-UP MODE (Refinement)
 // ==========================================
@@ -625,15 +624,15 @@ Your task is to rewrite a previous answer based on the user's specific feedback 
  * Interview phases for phase-aware prompt selection
  */
 export type InterviewPhase =
-    | 'requirements_gathering'
-    | 'high_level_design'
-    | 'deep_dive'
-    | 'implementation'
-    | 'complexity_analysis'
-    | 'scaling_discussion'
-    | 'failure_handling'
-    | 'behavioral_story'
-    | 'wrap_up';
+	| "requirements_gathering"
+	| "high_level_design"
+	| "deep_dive"
+	| "implementation"
+	| "complexity_analysis"
+	| "scaling_discussion"
+	| "failure_handling"
+	| "behavioral_story"
+	| "wrap_up";
 
 /**
  * Core identity shared across all Conscious Mode prompts
@@ -1282,11 +1281,11 @@ ${CONSCIOUS_MODE_JSON_CONTRACT}`;
 // ==========================================
 
 export const CONSCIOUS_MODE_PROMPT_FAMILY = {
-    // Each prompt key follows a consistent RTF/RODES-style structure for clarity.
-    openingReasoning: CONSCIOUS_MODE_OPENING_REASONING_PROMPT,
-    implementationPath: CONSCIOUS_MODE_IMPLEMENTATION_PATH_PROMPT,
-    pushbackHandling: CONSCIOUS_MODE_PUSHBACK_HANDLING_PROMPT,
-    followUpContinuation: CONSCIOUS_MODE_FOLLOW_UP_CONTINUATION_PROMPT,
+	// Each prompt key follows a consistent RTF/RODES-style structure for clarity.
+	openingReasoning: CONSCIOUS_MODE_OPENING_REASONING_PROMPT,
+	implementationPath: CONSCIOUS_MODE_IMPLEMENTATION_PATH_PROMPT,
+	pushbackHandling: CONSCIOUS_MODE_PUSHBACK_HANDLING_PROMPT,
+	followUpContinuation: CONSCIOUS_MODE_FOLLOW_UP_CONTINUATION_PROMPT,
 } as const;
 
 /**
@@ -1352,15 +1351,15 @@ If the question is behavioral, the final formatted answer will be rendered from 
  * Phase-specific prompts for interview phase detection routing
  */
 export const CONSCIOUS_MODE_PHASE_PROMPTS: Record<InterviewPhase, string> = {
-    requirements_gathering: CONSCIOUS_MODE_REQUIREMENTS_PROMPT,
-    high_level_design: CONSCIOUS_MODE_HIGH_LEVEL_DESIGN_PROMPT,
-    deep_dive: CONSCIOUS_MODE_DEEP_DIVE_PROMPT,
-    implementation: CONSCIOUS_MODE_IMPLEMENTATION_PROMPT,
-    complexity_analysis: CONSCIOUS_MODE_COMPLEXITY_PROMPT,
-    scaling_discussion: CONSCIOUS_MODE_SCALING_PROMPT,
-    failure_handling: CONSCIOUS_MODE_FAILURE_PROMPT,
-    behavioral_story: CONSCIOUS_MODE_BEHAVIORAL_PROMPT,
-    wrap_up: CONSCIOUS_MODE_WRAPUP_PROMPT,
+	requirements_gathering: CONSCIOUS_MODE_REQUIREMENTS_PROMPT,
+	high_level_design: CONSCIOUS_MODE_HIGH_LEVEL_DESIGN_PROMPT,
+	deep_dive: CONSCIOUS_MODE_DEEP_DIVE_PROMPT,
+	implementation: CONSCIOUS_MODE_IMPLEMENTATION_PROMPT,
+	complexity_analysis: CONSCIOUS_MODE_COMPLEXITY_PROMPT,
+	scaling_discussion: CONSCIOUS_MODE_SCALING_PROMPT,
+	failure_handling: CONSCIOUS_MODE_FAILURE_PROMPT,
+	behavioral_story: CONSCIOUS_MODE_BEHAVIORAL_PROMPT,
+	wrap_up: CONSCIOUS_MODE_WRAPUP_PROMPT,
 };
 
 /**
@@ -1368,43 +1367,46 @@ export const CONSCIOUS_MODE_PHASE_PROMPTS: Record<InterviewPhase, string> = {
  * No LLM required - pure template responses.
  * Keep first-person candidate voice because these strings are spoken directly.
  */
-export const CONSCIOUS_MODE_EMERGENCY_TEMPLATES: Record<InterviewPhase, string[]> = {
-    requirements_gathering: [
-        "Let me make sure I understand the requirements correctly. Could you tell me more about the expected scale and access patterns?",
-        "Before I dive in, I want to clarify a few constraints. What's the target latency we're optimizing for?",
-    ],
-    high_level_design: [
-        "Let me think through the main components we'd need here...",
-        "At a high level, I'd structure this around a few key components...",
-    ],
-    deep_dive: [
-        "Let me walk through how this component would work in detail...",
-        "If I dive into implementation details, the key insight here is...",
-    ],
-    implementation: [
-        "I'd write out the solution and start with the core logic...",
-        "For this implementation, I'd use this approach...",
-    ],
-    complexity_analysis: [
-        "I'd analyze the complexity by tracing the dominant operations...",
-        "For time complexity, I'd focus on the operation that dominates...",
-    ],
-    scaling_discussion: [
-        "To scale this in production, I'd focus on a few core constraints...",
-        "At scale, I'd expect the main bottleneck to be... and I'd address it by...",
-    ],
-    failure_handling: [
-        "For failure handling, I'd start with the key failure scenarios...",
-        "If this component fails, I'd design the system to...",
-    ],
-    behavioral_story: [
-        "Let me share a relevant experience. In my previous role...",
-        "I encountered something similar when I was working on...",
-    ],
-    wrap_up: [
-        "I have a few questions about the team and the challenges you're working on...",
-        "I'd love to learn more about how your team approaches...",
-    ],
+export const CONSCIOUS_MODE_EMERGENCY_TEMPLATES: Record<
+	InterviewPhase,
+	string[]
+> = {
+	requirements_gathering: [
+		"Let me make sure I understand the requirements correctly. Could you tell me more about the expected scale and access patterns?",
+		"Before I dive in, I want to clarify a few constraints. What's the target latency we're optimizing for?",
+	],
+	high_level_design: [
+		"Let me think through the main components we'd need here...",
+		"At a high level, I'd structure this around a few key components...",
+	],
+	deep_dive: [
+		"Let me walk through how this component would work in detail...",
+		"If I dive into implementation details, the key insight here is...",
+	],
+	implementation: [
+		"I'd write out the solution and start with the core logic...",
+		"For this implementation, I'd use this approach...",
+	],
+	complexity_analysis: [
+		"I'd analyze the complexity by tracing the dominant operations...",
+		"For time complexity, I'd focus on the operation that dominates...",
+	],
+	scaling_discussion: [
+		"To scale this in production, I'd focus on a few core constraints...",
+		"At scale, I'd expect the main bottleneck to be... and I'd address it by...",
+	],
+	failure_handling: [
+		"For failure handling, I'd start with the key failure scenarios...",
+		"If this component fails, I'd design the system to...",
+	],
+	behavioral_story: [
+		"Let me share a relevant experience. In my previous role...",
+		"I encountered something similar when I was working on...",
+	],
+	wrap_up: [
+		"I have a few questions about the team and the challenges you're working on...",
+		"I'd love to learn more about how your team approaches...",
+	],
 };
 
 /**
@@ -1412,17 +1414,20 @@ export const CONSCIOUS_MODE_EMERGENCY_TEMPLATES: Record<InterviewPhase, string[]
  * Uses simplified JSON contract for faster/smaller responses
  */
 export function getReducedConsciousPrompt(phase: InterviewPhase): string {
-    const basePrompt = CONSCIOUS_MODE_PHASE_PROMPTS[phase];
-    // Replace full JSON contract with simple contract for reduced tiers
-    return basePrompt.replace(CONSCIOUS_MODE_JSON_CONTRACT, CONSCIOUS_MODE_SIMPLE_CONTRACT);
+	const basePrompt = CONSCIOUS_MODE_PHASE_PROMPTS[phase];
+	// Replace full JSON contract with simple contract for reduced tiers
+	return basePrompt.replace(
+		CONSCIOUS_MODE_JSON_CONTRACT,
+		CONSCIOUS_MODE_SIMPLE_CONTRACT,
+	);
 }
 
 /**
  * Get emergency response when all LLM tiers fail
  */
 export function getEmergencyResponse(phase: InterviewPhase): string {
-    const templates = CONSCIOUS_MODE_EMERGENCY_TEMPLATES[phase];
-    return templates[Math.floor(Math.random() * templates.length)];
+	const templates = CONSCIOUS_MODE_EMERGENCY_TEMPLATES[phase];
+	return templates[Math.floor(Math.random() * templates.length)];
 }
 
 // ==========================================
@@ -1590,7 +1595,6 @@ ANTI-REPETITION RULES:
 <tone_consistency>
 {TONE_GUIDANCE}
 </tone_consistency>`;
-
 
 /**
  * GROQ: Follow-Up / Shorten / Rephrase
@@ -2036,84 +2040,93 @@ export const HARD_SYSTEM_PROMPT = ASSIST_MODE_PROMPT;
  * Build Gemini API content array
  */
 export function buildContents(
-    systemPrompt: string,
-    instruction: string,
-    context: string
+	systemPrompt: string,
+	instruction: string,
+	context: string,
 ): GeminiContent[] {
-    return [
-        {
-            role: "user",
-            parts: [{ text: systemPrompt }]
-        },
-        {
-            role: "user",
-            parts: [{
-                text: `
+	return [
+		{
+			role: "user",
+			parts: [{ text: systemPrompt }],
+		},
+		{
+			role: "user",
+			parts: [
+				{
+					text: `
 CONTEXT:
 ${context}
 
 INSTRUCTION:
 ${instruction}
-            ` }]
-        }
-    ];
+            `,
+				},
+			],
+		},
+	];
 }
 
 /**
  * Build "What to answer" specific contents
  * Handles the cleaner/sparser transcript format
  */
-export function buildWhatToAnswerContents(cleanedTranscript: string): GeminiContent[] {
-    return [
-        {
-            role: "user",
-            parts: [{ text: WHAT_TO_ANSWER_PROMPT }]
-        },
-        {
-            role: "user",
-            parts: [{
-                text: `
+export function buildWhatToAnswerContents(
+	cleanedTranscript: string,
+): GeminiContent[] {
+	return [
+		{
+			role: "user",
+			parts: [{ text: WHAT_TO_ANSWER_PROMPT }],
+		},
+		{
+			role: "user",
+			parts: [
+				{
+					text: `
 Suggest the best response for the user ("ME") based on this transcript:
 
 ${cleanedTranscript}
-            ` }]
-        }
-    ];
+            `,
+				},
+			],
+		},
+	];
 }
 
 /**
  * Build Recap specific contents
  */
 export function buildRecapContents(context: string): GeminiContent[] {
-    return [
-        {
-            role: "user",
-            parts: [{ text: RECAP_MODE_PROMPT }]
-        },
-        {
-            role: "user",
-            parts: [{ text: `Conversation to recap:\n${context}` }]
-        }
-    ];
+	return [
+		{
+			role: "user",
+			parts: [{ text: RECAP_MODE_PROMPT }],
+		},
+		{
+			role: "user",
+			parts: [{ text: `Conversation to recap:\n${context}` }],
+		},
+	];
 }
 
 /**
  * Build Follow-Up (Refinement) specific contents
  */
 export function buildFollowUpContents(
-    previousAnswer: string,
-    refinementRequest: string,
-    context?: string
+	previousAnswer: string,
+	refinementRequest: string,
+	context?: string,
 ): GeminiContent[] {
-    return [
-        {
-            role: "user",
-            parts: [{ text: FOLLOWUP_MODE_PROMPT }]
-        },
-        {
-            role: "user",
-            parts: [{
-                text: `
+	return [
+		{
+			role: "user",
+			parts: [{ text: FOLLOWUP_MODE_PROMPT }],
+		},
+		{
+			role: "user",
+			parts: [
+				{
+					text: `
 PREVIOUS CONTEXT (Optional):
 ${context || "None"}
 
@@ -2124,9 +2137,11 @@ USER REFINEMENT REQUEST:
 ${refinementRequest}
 
 REFINED ANSWER:
-            ` }]
-        }
-    ];
+            `,
+				},
+			],
+		},
+	];
 }
 
 // ==========================================

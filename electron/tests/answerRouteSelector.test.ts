@@ -1,102 +1,143 @@
-import test from 'node:test';
-import assert from 'node:assert/strict';
-import { selectAnswerRoute, isProfileRequiredQuestion, isKnowledgeRequiredQuestion } from '../latency/answerRouteSelector';
+import assert from "node:assert/strict";
+import test from "node:test";
+import {
+	isKnowledgeRequiredQuestion,
+	isProfileRequiredQuestion,
+	selectAnswerRoute,
+} from "../latency/answerRouteSelector";
 
-test('route selector prefers manual and follow-up routes first', () => {
-  assert.equal(selectAnswerRoute({
-    explicitManual: true,
-    explicitFollowUp: false,
-    consciousModeEnabled: true,
-    profileModeEnabled: true,
-    hasProfile: true,
-    hasKnowledgeData: true,
-    latestQuestion: 'tell me about yourself',
-    activeReasoningThread: null,
-  }), 'manual_answer');
+test("route selector prefers manual and follow-up routes first", () => {
+	assert.equal(
+		selectAnswerRoute({
+			explicitManual: true,
+			explicitFollowUp: false,
+			consciousModeEnabled: true,
+			profileModeEnabled: true,
+			hasProfile: true,
+			hasKnowledgeData: true,
+			latestQuestion: "tell me about yourself",
+			activeReasoningThread: null,
+		}),
+		"manual_answer",
+	);
 
-  assert.equal(selectAnswerRoute({
-    explicitManual: false,
-    explicitFollowUp: true,
-    consciousModeEnabled: true,
-    profileModeEnabled: true,
-    hasProfile: true,
-    hasKnowledgeData: true,
-    latestQuestion: 'tell me about yourself',
-    activeReasoningThread: null,
-  }), 'follow_up_refinement');
+	assert.equal(
+		selectAnswerRoute({
+			explicitManual: false,
+			explicitFollowUp: true,
+			consciousModeEnabled: true,
+			profileModeEnabled: true,
+			hasProfile: true,
+			hasKnowledgeData: true,
+			latestQuestion: "tell me about yourself",
+			activeReasoningThread: null,
+		}),
+		"follow_up_refinement",
+	);
 });
 
-test('route selector sends conscious questions to conscious route without intent classification', () => {
-  assert.equal(selectAnswerRoute({
-    explicitManual: false,
-    explicitFollowUp: false,
-    consciousModeEnabled: true,
-    profileModeEnabled: false,
-    hasProfile: false,
-    hasKnowledgeData: false,
-    latestQuestion: 'How would you design a rate limiter for an API?',
-    activeReasoningThread: null,
-  }), 'conscious_answer');
+test("route selector sends conscious questions to conscious route without intent classification", () => {
+	assert.equal(
+		selectAnswerRoute({
+			explicitManual: false,
+			explicitFollowUp: false,
+			consciousModeEnabled: true,
+			profileModeEnabled: false,
+			hasProfile: false,
+			hasKnowledgeData: false,
+			latestQuestion: "How would you design a rate limiter for an API?",
+			activeReasoningThread: null,
+		}),
+		"conscious_answer",
+	);
 
-  assert.equal(selectAnswerRoute({
-    explicitManual: false,
-    explicitFollowUp: false,
-    consciousModeEnabled: true,
-    profileModeEnabled: false,
-    hasProfile: false,
-    hasKnowledgeData: false,
-    latestQuestion: 'Tell me about a time you handled team conflict.',
-    activeReasoningThread: null,
-  }), 'conscious_answer');
+	assert.equal(
+		selectAnswerRoute({
+			explicitManual: false,
+			explicitFollowUp: false,
+			consciousModeEnabled: true,
+			profileModeEnabled: false,
+			hasProfile: false,
+			hasKnowledgeData: false,
+			latestQuestion: "Tell me about a time you handled team conflict.",
+			activeReasoningThread: null,
+		}),
+		"conscious_answer",
+	);
 });
 
-test('route selector uses conservative profile and knowledge heuristics', () => {
-  assert.equal(isProfileRequiredQuestion('What experience do you have with Redis?'), false);
-  assert.equal(isProfileRequiredQuestion('What experience do you have with Redis in your previous role?'), true);
-  assert.equal(isProfileRequiredQuestion('Give me an example of when you disagreed with a PM.'), true);
-  assert.equal(isProfileRequiredQuestion('How do you make difficult decisions?'), true);
-  assert.equal(isKnowledgeRequiredQuestion('Why do you want to work here?'), true);
-  assert.equal(isKnowledgeRequiredQuestion('How would you design a rate limiter?'), false);
+test("route selector uses conservative profile and knowledge heuristics", () => {
+	assert.equal(
+		isProfileRequiredQuestion("What experience do you have with Redis?"),
+		false,
+	);
+	assert.equal(
+		isProfileRequiredQuestion(
+			"What experience do you have with Redis in your previous role?",
+		),
+		true,
+	);
+	assert.equal(
+		isProfileRequiredQuestion(
+			"Give me an example of when you disagreed with a PM.",
+		),
+		true,
+	);
+	assert.equal(
+		isProfileRequiredQuestion("How do you make difficult decisions?"),
+		true,
+	);
+	assert.equal(
+		isKnowledgeRequiredQuestion("Why do you want to work here?"),
+		true,
+	);
+	assert.equal(
+		isKnowledgeRequiredQuestion("How would you design a rate limiter?"),
+		false,
+	);
 });
 
-test('route selector only treats the canonical deterministic profile fixtures as profile-required', () => {
-  const positives = [
-    'tell me about yourself',
-    'walk me through your resume',
-    'walk me through your background',
-    'tell me about your background',
-    'why are you a fit for this role',
-    'tell me about a project you worked on',
-    'what experience do you have with redis in your previous role',
-    'give me an example of when you disagreed with a pm',
-    'how do you make difficult decisions',
-  ];
-  const negatives = [
-    'how would you design a rate limiter',
-    'what are the tradeoffs',
-    'how would you shard this',
-    'have you worked with redis',
-    'what experience do you have with redis',
-  ];
+test("route selector only treats the canonical deterministic profile fixtures as profile-required", () => {
+	const positives = [
+		"tell me about yourself",
+		"walk me through your resume",
+		"walk me through your background",
+		"tell me about your background",
+		"why are you a fit for this role",
+		"tell me about a project you worked on",
+		"what experience do you have with redis in your previous role",
+		"give me an example of when you disagreed with a pm",
+		"how do you make difficult decisions",
+	];
+	const negatives = [
+		"how would you design a rate limiter",
+		"what are the tradeoffs",
+		"how would you shard this",
+		"have you worked with redis",
+		"what experience do you have with redis",
+	];
 
-  for (const fixture of positives) {
-    assert.equal(isProfileRequiredQuestion(fixture), true, fixture);
-  }
+	for (const fixture of positives) {
+		assert.equal(isProfileRequiredQuestion(fixture), true, fixture);
+	}
 
-  for (const fixture of negatives) {
-    assert.equal(isProfileRequiredQuestion(fixture), false, fixture);
-  }
+	for (const fixture of negatives) {
+		assert.equal(isProfileRequiredQuestion(fixture), false, fixture);
+	}
 });
 
-test('route selector keeps generic technical questions on fast standard route', () => {
-  assert.equal(selectAnswerRoute({
-    explicitManual: false,
-    explicitFollowUp: false,
-    consciousModeEnabled: false,
-    profileModeEnabled: true,
-    hasProfile: true,
-    hasKnowledgeData: true,
-    latestQuestion: 'What are the tradeoffs of using Redis here?',
-    activeReasoningThread: null,
-  }), 'fast_standard_answer');
+test("route selector keeps generic technical questions on fast standard route", () => {
+	assert.equal(
+		selectAnswerRoute({
+			explicitManual: false,
+			explicitFollowUp: false,
+			consciousModeEnabled: false,
+			profileModeEnabled: true,
+			hasProfile: true,
+			hasKnowledgeData: true,
+			latestQuestion: "What are the tradeoffs of using Redis here?",
+			activeReasoningThread: null,
+		}),
+		"fast_standard_answer",
+	);
 });

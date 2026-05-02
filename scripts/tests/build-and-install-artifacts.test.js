@@ -1,203 +1,272 @@
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const os = require('node:os');
-const path = require('node:path');
-const { execFileSync } = require('node:child_process');
-const test = require('node:test');
+const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
+const { execFileSync } = require("node:child_process");
+const test = require("node:test");
 
-const repoRoot = path.resolve(__dirname, '..', '..');
-const scriptPath = path.join(repoRoot, 'build-and-install.sh');
+const repoRoot = path.resolve(__dirname, "..", "..");
+const scriptPath = path.join(repoRoot, "build-and-install.sh");
 
 function runShell(script, env = {}) {
-  return execFileSync('bash', ['-lc', script], {
-    cwd: repoRoot,
-    encoding: 'utf8',
-    env: {
-      ...process.env,
-      BUILD_AND_INSTALL_LIB: '1',
-      ...env,
-    },
-  }).trim();
+	return execFileSync("bash", ["-lc", script], {
+		cwd: repoRoot,
+		encoding: "utf8",
+		env: {
+			...process.env,
+			BUILD_AND_INSTALL_LIB: "1",
+			...env,
+		},
+	}).trim();
 }
 
 function touch(filePath, timeMs) {
-  if (filePath.endsWith('.app')) {
-    fs.mkdirSync(filePath, { recursive: true });
-  } else {
-    fs.mkdirSync(path.dirname(filePath), { recursive: true });
-    fs.writeFileSync(filePath, path.basename(filePath));
-  }
-  const time = new Date(timeMs);
-  fs.utimesSync(filePath, time, time);
+	if (filePath.endsWith(".app")) {
+		fs.mkdirSync(filePath, { recursive: true });
+	} else {
+		fs.mkdirSync(path.dirname(filePath), { recursive: true });
+		fs.writeFileSync(filePath, path.basename(filePath));
+	}
+	const time = new Date(timeMs);
+	fs.utimesSync(filePath, time, time);
 }
 
-test('artifact helpers prefer the arm64 packaged app over a newer generic mac app', () => {
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'build-install-artifacts-'));
-  const releaseDir = path.join(tempDir, 'release');
+test("artifact helpers prefer the arm64 packaged app over a newer generic mac app", () => {
+	const tempDir = fs.mkdtempSync(
+		path.join(os.tmpdir(), "build-install-artifacts-"),
+	);
+	const releaseDir = path.join(tempDir, "release");
 
-  touch(path.join(releaseDir, 'mac', 'Natively.app'), 2_000);
-  touch(path.join(releaseDir, 'mac-arm64', 'Natively.app'), 1_000);
-  touch(path.join(releaseDir, 'Natively-old.dmg'), 1_500);
-  touch(path.join(releaseDir, 'Natively-new.dmg'), 3_000);
-  touch(path.join(releaseDir, 'Natively-old.zip'), 1_600);
-  touch(path.join(releaseDir, 'Natively-new.zip'), 4_000);
+	touch(path.join(releaseDir, "mac", "Natively.app"), 2_000);
+	touch(path.join(releaseDir, "mac-arm64", "Natively.app"), 1_000);
+	touch(path.join(releaseDir, "Natively-old.dmg"), 1_500);
+	touch(path.join(releaseDir, "Natively-new.dmg"), 3_000);
+	touch(path.join(releaseDir, "Natively-old.zip"), 1_600);
+	touch(path.join(releaseDir, "Natively-new.zip"), 4_000);
 
-  const output = runShell(
-    `source "${scriptPath}" && collect_packaged_artifacts "${releaseDir}"`,
-    { APP_NAME: 'Natively', BUILD_ARCH: 'arm64' }
-  );
+	const output = runShell(
+		`source "${scriptPath}" && collect_packaged_artifacts "${releaseDir}"`,
+		{ APP_NAME: "Natively", BUILD_ARCH: "arm64" },
+	);
 
-  const lines = output.split('\n');
-  assert.equal(lines[0], path.join(releaseDir, 'mac-arm64', 'Natively.app'));
-  assert.equal(lines[1], path.join(releaseDir, 'Natively-new.dmg'));
-  assert.equal(lines[2], path.join(releaseDir, 'Natively-new.zip'));
+	const lines = output.split("\n");
+	assert.equal(lines[0], path.join(releaseDir, "mac-arm64", "Natively.app"));
+	assert.equal(lines[1], path.join(releaseDir, "Natively-new.dmg"));
+	assert.equal(lines[2], path.join(releaseDir, "Natively-new.zip"));
 });
 
-test('artifact helpers fall back to newest packaged app when no arch-specific app exists', () => {
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'build-install-artifacts-fallback-'));
-  const releaseDir = path.join(tempDir, 'release');
+test("artifact helpers fall back to newest packaged app when no arch-specific app exists", () => {
+	const tempDir = fs.mkdtempSync(
+		path.join(os.tmpdir(), "build-install-artifacts-fallback-"),
+	);
+	const releaseDir = path.join(tempDir, "release");
 
-  touch(path.join(releaseDir, 'mac-old', 'Natively.app'), 1_000);
-  touch(path.join(releaseDir, 'mac-new', 'Natively.app'), 2_000);
+	touch(path.join(releaseDir, "mac-old", "Natively.app"), 1_000);
+	touch(path.join(releaseDir, "mac-new", "Natively.app"), 2_000);
 
-  const output = runShell(
-    `source "${scriptPath}" && collect_packaged_artifacts "${releaseDir}"`,
-    { APP_NAME: 'Natively', BUILD_ARCH: 'arm64' }
-  );
+	const output = runShell(
+		`source "${scriptPath}" && collect_packaged_artifacts "${releaseDir}"`,
+		{ APP_NAME: "Natively", BUILD_ARCH: "arm64" },
+	);
 
-  const lines = output.split('\n');
-  assert.equal(lines[0], path.join(releaseDir, 'mac-new', 'Natively.app'));
+	const lines = output.split("\n");
+	assert.equal(lines[0], path.join(releaseDir, "mac-new", "Natively.app"));
 });
 
-test('cleanup removes stale packaged app directories and archive files', () => {
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'build-install-clean-'));
-  const releaseDir = path.join(tempDir, 'release');
-  const cacheDir = path.join(tempDir, 'cache');
+test("cleanup removes stale packaged app directories and archive files", () => {
+	const tempDir = fs.mkdtempSync(
+		path.join(os.tmpdir(), "build-install-clean-"),
+	);
+	const releaseDir = path.join(tempDir, "release");
+	const cacheDir = path.join(tempDir, "cache");
 
-  touch(path.join(releaseDir, 'mac', 'Natively.app'), 1_000);
-  touch(path.join(releaseDir, 'mac-arm64', 'Natively.app'), 1_000);
-  touch(path.join(releaseDir, 'Natively.dmg'), 1_000);
-  touch(path.join(releaseDir, 'Natively.zip'), 1_000);
-  touch(path.join(tempDir, 'Natively.dmg'), 1_000);
-  touch(path.join(tempDir, 'Natively.zip'), 1_000);
+	touch(path.join(releaseDir, "mac", "Natively.app"), 1_000);
+	touch(path.join(releaseDir, "mac-arm64", "Natively.app"), 1_000);
+	touch(path.join(releaseDir, "Natively.dmg"), 1_000);
+	touch(path.join(releaseDir, "Natively.zip"), 1_000);
+	touch(path.join(tempDir, "Natively.dmg"), 1_000);
+	touch(path.join(tempDir, "Natively.zip"), 1_000);
 
-  runShell(
-    `source "${scriptPath}" && SCRIPT_DIR="${tempDir}" RELEASE_DIR="${releaseDir}" HOME="${cacheDir}" clean_build_artifacts`
-  );
+	runShell(
+		`source "${scriptPath}" && SCRIPT_DIR="${tempDir}" RELEASE_DIR="${releaseDir}" HOME="${cacheDir}" clean_build_artifacts`,
+	);
 
-  assert.equal(fs.existsSync(path.join(releaseDir, 'mac', 'Natively.app')), false);
-  assert.equal(fs.existsSync(path.join(releaseDir, 'mac-arm64', 'Natively.app')), false);
-  assert.equal(fs.existsSync(path.join(releaseDir, 'Natively.dmg')), false);
-  assert.equal(fs.existsSync(path.join(releaseDir, 'Natively.zip')), false);
-  assert.equal(fs.existsSync(path.join(tempDir, 'Natively.dmg')), false);
-  assert.equal(fs.existsSync(path.join(tempDir, 'Natively.zip')), false);
+	assert.equal(
+		fs.existsSync(path.join(releaseDir, "mac", "Natively.app")),
+		false,
+	);
+	assert.equal(
+		fs.existsSync(path.join(releaseDir, "mac-arm64", "Natively.app")),
+		false,
+	);
+	assert.equal(fs.existsSync(path.join(releaseDir, "Natively.dmg")), false);
+	assert.equal(fs.existsSync(path.join(releaseDir, "Natively.zip")), false);
+	assert.equal(fs.existsSync(path.join(tempDir, "Natively.dmg")), false);
+	assert.equal(fs.existsSync(path.join(tempDir, "Natively.zip")), false);
 });
 
-test('cleanup preserves the tracked macOS virtual display helper source path', () => {
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'build-install-helper-'));
-  const releaseDir = path.join(tempDir, 'release');
-  const helperPath = path.join(tempDir, 'assets', 'bin', 'macos', 'system-services-helper');
+test("cleanup preserves the tracked macOS virtual display helper source path", () => {
+	const tempDir = fs.mkdtempSync(
+		path.join(os.tmpdir(), "build-install-helper-"),
+	);
+	const releaseDir = path.join(tempDir, "release");
+	const helperPath = path.join(
+		tempDir,
+		"assets",
+		"bin",
+		"macos",
+		"system-services-helper",
+	);
 
-  touch(helperPath, 1_000);
+	touch(helperPath, 1_000);
 
-  runShell(
-    `source "${scriptPath}" && SCRIPT_DIR="${tempDir}" RELEASE_DIR="${releaseDir}" HOME="${tempDir}" clean_build_artifacts`
-  );
+	runShell(
+		`source "${scriptPath}" && SCRIPT_DIR="${tempDir}" RELEASE_DIR="${releaseDir}" HOME="${tempDir}" clean_build_artifacts`,
+	);
 
-  assert.equal(fs.existsSync(helperPath), true);
+	assert.equal(fs.existsSync(helperPath), true);
 });
 
-test('virtual display helper resolution prefers the renamed helper and falls back to the legacy name', () => {
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'build-install-helper-resolution-'));
-  const helperDir = path.join(tempDir, 'assets', 'bin', 'macos');
-  const renamedHelperPath = path.join(helperDir, 'system-services-helper');
-  const legacyHelperPath = path.join(helperDir, 'stealth-virtual-display-helper');
+test("virtual display helper resolution prefers the renamed helper and falls back to the legacy name", () => {
+	const tempDir = fs.mkdtempSync(
+		path.join(os.tmpdir(), "build-install-helper-resolution-"),
+	);
+	const helperDir = path.join(tempDir, "assets", "bin", "macos");
+	const renamedHelperPath = path.join(helperDir, "system-services-helper");
+	const legacyHelperPath = path.join(
+		helperDir,
+		"stealth-virtual-display-helper",
+	);
 
-  touch(legacyHelperPath, 1_000);
-  assert.equal(
-    runShell(`source "${scriptPath}" && resolve_macos_virtual_display_helper_binary "${helperDir}"`),
-    legacyHelperPath,
-  );
+	touch(legacyHelperPath, 1_000);
+	assert.equal(
+		runShell(
+			`source "${scriptPath}" && resolve_macos_virtual_display_helper_binary "${helperDir}"`,
+		),
+		legacyHelperPath,
+	);
 
-  touch(renamedHelperPath, 2_000);
-  assert.equal(
-    runShell(`source "${scriptPath}" && resolve_macos_virtual_display_helper_binary "${helperDir}"`),
-    renamedHelperPath,
-  );
+	touch(renamedHelperPath, 2_000);
+	assert.equal(
+		runShell(
+			`source "${scriptPath}" && resolve_macos_virtual_display_helper_binary "${helperDir}"`,
+		),
+		renamedHelperPath,
+	);
 });
 
-test('cleanup preserves the tracked macOS full stealth XPC bundle source path', () => {
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'build-install-full-stealth-helper-'));
-  const releaseDir = path.join(tempDir, 'release');
-  const helperBundlePath = path.join(tempDir, 'assets', 'xpcservices', 'macos-full-stealth-helper.xpc');
-  const helperBinaryPath = path.join(helperBundlePath, 'Contents', 'MacOS', 'macos-full-stealth-helper');
+test("cleanup preserves the tracked macOS full stealth XPC bundle source path", () => {
+	const tempDir = fs.mkdtempSync(
+		path.join(os.tmpdir(), "build-install-full-stealth-helper-"),
+	);
+	const releaseDir = path.join(tempDir, "release");
+	const helperBundlePath = path.join(
+		tempDir,
+		"assets",
+		"xpcservices",
+		"macos-full-stealth-helper.xpc",
+	);
+	const helperBinaryPath = path.join(
+		helperBundlePath,
+		"Contents",
+		"MacOS",
+		"macos-full-stealth-helper",
+	);
 
-  touch(helperBinaryPath, 1_000);
+	touch(helperBinaryPath, 1_000);
 
-  runShell(
-    `source "${scriptPath}" && SCRIPT_DIR="${tempDir}" RELEASE_DIR="${releaseDir}" HOME="${tempDir}" clean_build_artifacts`
-  );
+	runShell(
+		`source "${scriptPath}" && SCRIPT_DIR="${tempDir}" RELEASE_DIR="${releaseDir}" HOME="${tempDir}" clean_build_artifacts`,
+	);
 
-  assert.equal(fs.existsSync(helperBundlePath), true);
-  assert.equal(fs.existsSync(helperBinaryPath), true);
+	assert.equal(fs.existsSync(helperBundlePath), true);
+	assert.equal(fs.existsSync(helperBinaryPath), true);
 });
 
-test('cleanup preserves the tracked foundation intent helper source path', () => {
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'build-install-foundation-intent-helper-'));
-  const releaseDir = path.join(tempDir, 'release');
-  const helperPath = path.join(tempDir, 'assets', 'bin', 'macos', 'foundation-intent-helper');
+test("cleanup preserves the tracked foundation intent helper source path", () => {
+	const tempDir = fs.mkdtempSync(
+		path.join(os.tmpdir(), "build-install-foundation-intent-helper-"),
+	);
+	const releaseDir = path.join(tempDir, "release");
+	const helperPath = path.join(
+		tempDir,
+		"assets",
+		"bin",
+		"macos",
+		"foundation-intent-helper",
+	);
 
-  touch(helperPath, 1_000);
+	touch(helperPath, 1_000);
 
-  runShell(
-    `source "${scriptPath}" && SCRIPT_DIR="${tempDir}" RELEASE_DIR="${releaseDir}" HOME="${tempDir}" clean_build_artifacts`
-  );
+	runShell(
+		`source "${scriptPath}" && SCRIPT_DIR="${tempDir}" RELEASE_DIR="${releaseDir}" HOME="${tempDir}" clean_build_artifacts`,
+	);
 
-  assert.equal(fs.existsSync(helperPath), true);
+	assert.equal(fs.existsSync(helperPath), true);
 });
 
-test('cleanup treats external cache cleanup as best effort', () => {
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'build-install-optional-cache-'));
-  const releaseDir = path.join(tempDir, 'release');
-  const homeDir = path.join(tempDir, 'home');
-  const builderCacheDir = path.join(homeDir, 'Library', 'Caches', 'electron-builder');
-  const cachesDir = path.join(homeDir, 'Library', 'Caches');
+test("cleanup treats external cache cleanup as best effort", () => {
+	const tempDir = fs.mkdtempSync(
+		path.join(os.tmpdir(), "build-install-optional-cache-"),
+	);
+	const releaseDir = path.join(tempDir, "release");
+	const homeDir = path.join(tempDir, "home");
+	const builderCacheDir = path.join(
+		homeDir,
+		"Library",
+		"Caches",
+		"electron-builder",
+	);
+	const cachesDir = path.join(homeDir, "Library", "Caches");
 
-  touch(path.join(releaseDir, 'mac', 'Natively.app'), 1_000);
-  touch(path.join(builderCacheDir, 'cache-file'), 1_000);
-  fs.chmodSync(cachesDir, 0o555);
+	touch(path.join(releaseDir, "mac", "Natively.app"), 1_000);
+	touch(path.join(builderCacheDir, "cache-file"), 1_000);
+	fs.chmodSync(cachesDir, 0o555);
 
-  const output = runShell(
-    `source "${scriptPath}" && SCRIPT_DIR="${tempDir}" RELEASE_DIR="${releaseDir}" HOME="${homeDir}" clean_build_artifacts`
-  );
+	const output = runShell(
+		`source "${scriptPath}" && SCRIPT_DIR="${tempDir}" RELEASE_DIR="${releaseDir}" HOME="${homeDir}" clean_build_artifacts`,
+	);
 
-  assert.match(output, /Skipping optional cache cleanup/);
-  assert.equal(fs.existsSync(path.join(releaseDir, 'mac', 'Natively.app')), false);
-  assert.equal(fs.existsSync(builderCacheDir), true);
+	assert.match(output, /Skipping optional cache cleanup/);
+	assert.equal(
+		fs.existsSync(path.join(releaseDir, "mac", "Natively.app")),
+		false,
+	);
+	assert.equal(fs.existsSync(builderCacheDir), true);
 });
 
-test('artifact helpers fail clearly when packaged app is missing', () => {
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'build-install-missing-app-'));
-  const releaseDir = path.join(tempDir, 'release');
-  touch(path.join(releaseDir, 'Natively.zip'), 1_000);
+test("artifact helpers fail clearly when packaged app is missing", () => {
+	const tempDir = fs.mkdtempSync(
+		path.join(os.tmpdir(), "build-install-missing-app-"),
+	);
+	const releaseDir = path.join(tempDir, "release");
+	touch(path.join(releaseDir, "Natively.zip"), 1_000);
 
-  try {
-    runShell(`source "${scriptPath}" && collect_packaged_artifacts "${releaseDir}"`);
-    assert.fail('expected collect_packaged_artifacts to fail when no app is present');
-  } catch (error) {
-    assert.match(error.stdout || '', /Missing packaged app/);
-  }
+	try {
+		runShell(
+			`source "${scriptPath}" && collect_packaged_artifacts "${releaseDir}"`,
+		);
+		assert.fail(
+			"expected collect_packaged_artifacts to fail when no app is present",
+		);
+	} catch (error) {
+		assert.match(error.stdout || "", /Missing packaged app/);
+	}
 });
 
-test('is_truthy_flag accepts expected truthy and falsy values', () => {
-  const output = runShell(`source "${scriptPath}" && for value in 1 true TRUE yes on; do is_truthy_flag "$value" || exit 1; done && for value in 0 false FALSE no off ""; do if is_truthy_flag "$value"; then exit 1; fi; done && printf 'ok'`);
-  assert.equal(output, 'ok');
+test("is_truthy_flag accepts expected truthy and falsy values", () => {
+	const output = runShell(
+		`source "${scriptPath}" && for value in 1 true TRUE yes on; do is_truthy_flag "$value" || exit 1; done && for value in 0 false FALSE no off ""; do if is_truthy_flag "$value"; then exit 1; fi; done && printf 'ok'`,
+	);
+	assert.equal(output, "ok");
 });
 
-test('validate_packaged_helper_launch_modes probes with and without helper', () => {
-  const output = runShell(`source "${scriptPath}" && require_file(){ :; } && run_packaged_launch_probe(){ printf 'probe:%s:%s\n' "$1" "$3"; } && success(){ printf 'success:%s\n' "$1"; } && validate_packaged_helper_launch_modes "/Applications/Natively.app" "/Applications/Natively.app/Contents/MacOS/Natively"`);
+test("validate_packaged_helper_launch_modes probes with and without helper", () => {
+	const output = runShell(
+		`source "${scriptPath}" && require_file(){ :; } && run_packaged_launch_probe(){ printf 'probe:%s:%s\n' "$1" "$3"; } && success(){ printf 'success:%s\n' "$1"; } && validate_packaged_helper_launch_modes "/Applications/Natively.app" "/Applications/Natively.app/Contents/MacOS/Natively"`,
+	);
 
-  assert.match(output, /probe:with-helper:0/);
-  assert.match(output, /probe:without-helper:1/);
-  assert.match(output, /Packaged helper launch validation passed/);
+	assert.match(output, /probe:with-helper:0/);
+	assert.match(output, /probe:without-helper:1/);
+	assert.match(output, /Packaged helper launch validation passed/);
 });
