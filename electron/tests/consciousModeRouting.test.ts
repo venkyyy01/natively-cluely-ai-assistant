@@ -378,11 +378,11 @@ test('Conscious Mode transcript auto-trigger widens for actionable interviewer p
 });
 
 test('Conscious Mode transcript-trigger path fires for substantive interviewer prompts when awareness is enabled', async () => {
-  const calls: Array<{ context: string; lastQuestion: string; confidence: number }> = [];
+  const calls: Array<{ context: string; lastQuestion: string; confidence: number; imagePaths?: string[] }> = [];
   const manager = {
     getActiveReasoningThread: (): ReasoningThread | null => null,
     getFormattedContext: (): string => 'ctx',
-    handleSuggestionTrigger: async (trigger: { context: string; lastQuestion: string; confidence: number }) => {
+    handleSuggestionTrigger: async (trigger: { context: string; lastQuestion: string; confidence: number; imagePaths?: string[] }) => {
       calls.push(trigger);
     },
   };
@@ -410,6 +410,7 @@ test('Conscious Mode transcript-trigger path fires for substantive interviewer p
       context: 'ctx',
       lastQuestion: 'Why this approach',
       confidence: 0.91,
+      imagePaths: undefined,
     },
   ]);
 });
@@ -466,11 +467,11 @@ test('Conscious Mode routes screenshot-backed live-coding turns but keeps the sa
 });
 
 test('Non-Conscious transcript-trigger path preserves the existing actionable heuristic', async () => {
-  const calls: Array<{ context: string; lastQuestion: string; confidence: number }> = [];
+  const calls: Array<{ context: string; lastQuestion: string; confidence: number; imagePaths?: string[] }> = [];
   const manager = {
     getActiveReasoningThread: (): ReasoningThread | null => null,
     getFormattedContext: (): string => 'ctx',
-    handleSuggestionTrigger: async (trigger: { context: string; lastQuestion: string; confidence: number }) => {
+    handleSuggestionTrigger: async (trigger: { context: string; lastQuestion: string; confidence: number; imagePaths?: string[] }) => {
       calls.push(trigger);
     },
   };
@@ -498,6 +499,7 @@ test('Non-Conscious transcript-trigger path preserves the existing actionable he
       context: 'ctx',
       lastQuestion: 'Can you repeat that for me',
       confidence: 0.72,
+      imagePaths: undefined,
     },
   ]);
 });
