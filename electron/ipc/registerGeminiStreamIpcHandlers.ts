@@ -63,7 +63,11 @@ export function registerGeminiStreamIpcHandlers(deps: GeminiStreamIpcDeps): void
       console.log(`[IPC] Updated IntelligenceManager.Last message: `, intelligenceManager.getLastAssistantMessage()?.substring(0, 50));
 
       // Log Usage
-      intelligenceManager.logUsage('chat', message, result);
+      intelligenceManager.logUsage('chat', message, result, {
+        model: getInferenceLlmHelper().getCurrentModel?.() ?? 'unknown',
+        hasImages: !!(imagePaths?.length),
+        consciousMode: intelligenceManager.isConsciousModeEnabled?.() ?? false,
+      });
 
       return result;
     } catch (error: any) {
@@ -201,16 +205,45 @@ export function registerGeminiStreamIpcHandlers(deps: GeminiStreamIpcDeps): void
         }
 
         // Update IntelligenceManager with ASSISTANT message after completion
-        if (fullResponse.trim().length > 0) {
-          intelligenceManager.addAssistantMessage(fullResponse);
-          // Log Usage for streaming chat
-          intelligenceManager.logUsage('chat', message, fullResponse);
+        const cleanedResponse = fullResponse
+          .replace(/^data: \{.*\}$/gm, '')
+          .replace(/\n{3,}/g, '\n\n')
+          .trim();
+        if (cleanedResponse.length > 0) {
+          intelligenceManager.addAssistantMessage(cleanedResponse);
+          intelligenceManager.logUsage('chat', message, cleanedResponse, {
+            model: llmHelper.getCurrentModel?.() ?? 'unknown',
+            hasImages: !!(imagePaths?.length),
+            streamDurationMs: Date.now() - (streamChatStartedAt.get(requestId) ?? Date.now()),
+            consciousMode: intelligenceManager.isConsciousModeEnabled?.() ?? false,
+          });
+        } else {
+          console.error(`[IPC] gemini-chat-stream: empty response for request ${requestId} (${imagePaths?.length ?? 0} images)`);
+          intelligenceManager.logUsage('chat', message, '[no response — all providers failed]', {
+            model: llmHelper.getCurrentModel?.() ?? 'unknown',
+            hasImages: !!(imagePaths?.length),
+            failed: true,
+            streamDurationMs: Date.now() - (streamChatStartedAt.get(requestId) ?? Date.now()),
+          });
+          if (!event.sender.isDestroyed()) {
+            event.sender.send(`gemini-stream-error:${requestId}`,
+              'Could not generate a response. No AI provider was able to process the request.');
+          }
         }
 
       } catch (streamError: any) {
         console.error("[IPC] Streaming error:", streamError);
+        const errorMsg = streamError.message || "Unknown streaming error";
+        try {
+          intelligenceManager.logUsage('chat', message, `[stream error: ${errorMsg}]`, {
+            model: llmHelper.getCurrentModel?.() ?? 'unknown',
+            hasImages: !!(imagePaths?.length),
+            failed: true,
+            streamDurationMs: Date.now() - (streamChatStartedAt.get(requestId) ?? Date.now()),
+          });
+        } catch (_) { /* best-effort logging */ }
         if (!event.sender.isDestroyed()) {
-          event.sender.send(`gemini-stream-error:${requestId}`, streamError.message || "Unknown streaming error");
+          event.sender.send(`gemini-stream-error:${requestId}`, errorMsg);
         }
       }
 
@@ -218,6 +251,13 @@ export function registerGeminiStreamIpcHandlers(deps: GeminiStreamIpcDeps): void
 
     } catch (error: any) {
       console.error("[IPC] Error in gemini-chat-stream setup:", error);
+      try {
+        intelligenceManager.logUsage('chat', message, `[setup error: ${error.message}]`, {
+          model: llmHelper.getCurrentModel?.() ?? 'unknown',
+          hasImages: !!(imagePaths?.length),
+          failed: true,
+        });
+      } catch (_) { /* best-effort */ }
       throw error;
     } finally {
       activeChatControllers.delete(requestId);

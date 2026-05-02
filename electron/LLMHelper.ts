@@ -2920,6 +2920,7 @@ ANSWER DIRECTLY:`;
 
     if (this.activeCurlProvider && !this.customProvider) {
       const curlProviderAcceptsImages = !isMultimodal || this.curlLikelyAcceptsImages(this.activeCurlProvider.curlCommand || '');
+      if (isMultimodal) console.log(`[LLMHelper] cURL provider "${this.activeCurlProvider.name}": image support = ${curlProviderAcceptsImages}`);
       localProviders.push({
         name: `cURL Provider (${this.activeCurlProvider.name})`,
         execute: async () => {

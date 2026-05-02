@@ -817,12 +817,13 @@ export class SessionTracker {
   /**
    * Public method to log usage from external sources (e.g. IPC direct chat)
    */
-  logUsage(type: UsageInteraction['type'], question: string, answer: string): void {
+  logUsage(type: UsageInteraction['type'], question: string, answer: string, items?: Record<string, unknown>): void {
     this.fullUsage.push({
       type,
       timestamp: Date.now(),
       question,
-      answer
+      answer,
+      items,
     });
   }
 
