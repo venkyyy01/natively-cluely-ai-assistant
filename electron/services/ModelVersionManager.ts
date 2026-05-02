@@ -30,19 +30,8 @@ import {
 } from "./modelVersionTypes";
 import { parseModelVersion } from "./modelVersionUtils";
 
-export {
-	ModelFamily,
-	ModelVersion,
-	TextModelFamily,
-	TieredModels,
-} from "./modelVersionTypes";
-export {
-	classifyModel,
-	classifyTextModel,
-	compareVersions,
-	parseModelVersion,
-	versionDistance,
-} from "./modelVersionUtils";
+export { ModelVersion, ModelFamily, TextModelFamily, TieredModels } from './modelVersionTypes';
+export { parseModelVersion, compareVersions, versionDistance, classifyModel, classifyTextModel } from './modelVersionUtils';
 
 export class ModelVersionManager {
 	private state: PersistedState;
