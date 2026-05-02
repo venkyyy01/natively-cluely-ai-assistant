@@ -111,6 +111,7 @@ export interface SuggestionTrigger {
     context: string;
     lastQuestion: string;
     confidence: number;
+    imagePaths?: string[];
 }
 
 // Context item matching Swift ContextManager structure

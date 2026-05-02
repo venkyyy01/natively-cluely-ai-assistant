@@ -157,6 +157,7 @@ export interface TranscriptSuggestionIntelligenceManager {
     context: string;
     lastQuestion: string;
     confidence: number;
+    imagePaths?: string[];
   }): Promise<void>;
 }
 
@@ -167,6 +168,7 @@ export interface TranscriptSuggestionInput {
   confidence?: number;
   consciousModeEnabled: boolean;
   intelligenceManager: TranscriptSuggestionIntelligenceManager;
+  imagePaths?: string[];
 }
 
 function normalizeText(value: unknown): string {
@@ -651,6 +653,7 @@ export async function maybeHandleSuggestionTriggerFromTranscript(
       context: context,
       lastQuestion: decision.lastQuestion,
       confidence: input.confidence ?? 0.8,
+      imagePaths: input.imagePaths,
     });
     
     console.log('[AUTO-TRIGGER] ✅ Successfully triggered LLM response');

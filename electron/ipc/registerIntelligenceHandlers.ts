@@ -66,7 +66,7 @@ export function registerIntelligenceHandlers({ appState, safeHandle, safeHandleV
 
     try {
       const answer = await getIntelligenceFacade(appState).runWhatShouldISay?.(question, 0.8, imagePaths);
-      if (!answer) {
+      if (answer == null) {
         return {
           answer: null,
           question: resolvedQuestion,

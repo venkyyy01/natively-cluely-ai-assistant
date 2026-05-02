@@ -645,7 +645,7 @@ export class IntelligenceEngine extends EventEmitter {
         if (trigger.confidence < 0.5) {
             return;
         }
-        await this.runWhatShouldISay(trigger.lastQuestion, trigger.confidence);
+        await this.runWhatShouldISay(trigger.lastQuestion, trigger.confidence, trigger.imagePaths);
     }
 
     // ============================================

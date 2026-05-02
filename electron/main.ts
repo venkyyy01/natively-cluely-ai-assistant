@@ -1400,6 +1400,12 @@ try {
       // Auto-trigger logic with enhanced debugging
       console.log(`[TRANSCRIPT] 🤖 Auto-trigger check: speaker=${speaker}, final=${segment.isFinal}, consciousMode=${this.consciousModeEnabled}, intelligenceManager=${!!this.intelligenceManager}`);
       
+      const screenshotQueue = this.screenshotHelper.getScreenshotQueue();
+      const extraScreenshotQueue = this.screenshotHelper.getExtraScreenshotQueue();
+      const allImagePaths = screenshotQueue.length || extraScreenshotQueue.length
+        ? [...screenshotQueue, ...extraScreenshotQueue]
+        : undefined;
+
       void maybeHandleSuggestionTriggerFromTranscript({
         speaker,
         text: segment.text,
@@ -1407,6 +1413,7 @@ try {
         confidence: segment.confidence,
         consciousModeEnabled: this.consciousModeEnabled,
         intelligenceManager: this.intelligenceManager,
+        imagePaths: allImagePaths,
       }).then((triggered) => {
         if (triggered) {
           console.log('[TRANSCRIPT] ✅ Auto-trigger SUCCEEDED');
