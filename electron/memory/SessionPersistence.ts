@@ -52,7 +52,7 @@ export interface PersistedSessionMemoryEntryValue {
   usageType?: 'assist' | 'followup' | 'chat' | 'followup_questions';
   question?: string;
   answer?: string;
-  items?: string[];
+  items?: unknown;
   normalized?: string;
   raw?: string;
   constraintType?: string;

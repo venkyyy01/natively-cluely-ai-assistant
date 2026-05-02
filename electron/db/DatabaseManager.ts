@@ -52,7 +52,7 @@ export interface Meeting {
         timestamp: number;
         question?: string;
         answer?: string;
-        items?: string[];
+        items?: unknown;
     }>;
     calendarEventId?: string;
     source?: 'manual' | 'calendar';

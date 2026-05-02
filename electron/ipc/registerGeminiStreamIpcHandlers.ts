@@ -95,12 +95,13 @@ export function registerGeminiStreamIpcHandlers(deps: GeminiStreamIpcDeps): void
     activeChatControllers.set(requestId, controller);
     streamChatStartedAt.set(requestId, Date.now());
 
+    const llmHelper = getInferenceLlmHelper();
+    const intelligenceManager = getIntelligenceManager();
+
     try {
       console.log("[IPC] gemini-chat-stream started using LLMHelper.streamChat");
-      const llmHelper = getInferenceLlmHelper();
 
       // Update IntelligenceManager with USER message immediately
-      const intelligenceManager = getIntelligenceManager();
       intelligenceManager.addTranscript({
         text: message,
         speaker: 'user',
