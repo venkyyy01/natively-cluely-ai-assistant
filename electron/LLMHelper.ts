@@ -376,6 +376,7 @@ export class LLMHelper {
 	};
 	public knowledgeOrchestrator: any = null;
 	private aiResponseLanguage: string = "English";
+	private sttLanguage: string = "en";
 	private shouldEnforceValidation: boolean =
 		process.env.ENFORCE_RESPONSE_VALIDATION === "true";
 	private systemPromptCache = new Map<

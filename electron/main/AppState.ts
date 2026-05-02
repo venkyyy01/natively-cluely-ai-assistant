@@ -192,6 +192,8 @@ export class AppState {
 	private readonly MAX_AUDIO_RECOVERY_ATTEMPTS = 5;
 	private audioRecoveryBackoffMs: number = 5000;
 	private currentMeetingId: string | null = null;
+	private _ollamaBootstrapPromise: Promise<any> | null = null;
+
 	private startAbortController: AbortController | null = null;
 	private audioHealthCheckTimer: NodeJS.Timeout | null = null;
 	private readonly AUDIO_PIPELINE_STARTUP_HEALTH_DELAY_MS = 8000;

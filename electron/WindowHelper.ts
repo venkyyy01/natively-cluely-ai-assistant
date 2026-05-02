@@ -19,6 +19,7 @@ import {
 } from "./stealth/StartupProtectionGate";
 import type { StealthManager } from "./stealth/StealthManager";
 import { StealthRuntime } from "./stealth/StealthRuntime";
+import type { ProtectionSnapshot } from "./stealth/protectionStateTypes";
 
 type ProtectionEventRecorder = {
 	recordProtectionEvent?: (
@@ -29,7 +30,7 @@ type ProtectionEventRecorder = {
 			windowId?: string;
 			visible?: boolean;
 		},
-	) => void;
+	) => ProtectionSnapshot | undefined;
 	requestWindowShow?: (
 		win: BrowserWindow | null | undefined,
 		context: {
@@ -85,6 +86,13 @@ export class WindowHelper {
 	private readonly stealthManager: StealthManager;
 	private readonly startupProtectionGate: StartupProtectionGate;
 	private stealthHeartbeatListener: (() => void) | null = null;
+
+	private launcherSize: { width: number; height: number } | null = null;
+	private launcherPosition: { x: number; y: number } | null = null;
+	private screenWidth = 0;
+	private screenHeight = 0;
+	private currentX = 0;
+	private currentY = 0;
 
 	constructor(appState: AppState, stealthManager: StealthManager) {
 		this.appState = appState;

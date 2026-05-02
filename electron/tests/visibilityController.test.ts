@@ -52,6 +52,7 @@ describe("VisibilityController", () => {
 		const controller = new VisibilityController({
 			recordProtectionEvent(type, context) {
 				events.push({ type, visible: context?.visible });
+				return undefined;
 			},
 		});
 		const win = new FakeVisibilityWindow();
@@ -74,6 +75,7 @@ describe("VisibilityController", () => {
 		const controller = new VisibilityController({
 			recordProtectionEvent(type) {
 				events.push(type);
+				return undefined;
 			},
 		});
 		const win = new FakeVisibilityWindow();
@@ -86,7 +88,7 @@ describe("VisibilityController", () => {
 	});
 
 	it("uses showInactive when available", () => {
-		const controller = new VisibilityController({ recordProtectionEvent() {} });
+		const controller = new VisibilityController({ recordProtectionEvent() { return undefined; } });
 		const win = new FakeVisibilityWindow();
 
 		controller.requestShowInactive(win, {
@@ -103,6 +105,7 @@ describe("VisibilityController", () => {
 		const controller = new VisibilityController({
 			recordProtectionEvent(type) {
 				events.push(type);
+				return undefined;
 			},
 		});
 		const win = new FakeVisibilityWindow();
@@ -118,6 +121,7 @@ describe("VisibilityController", () => {
 		const controller = new VisibilityController({
 			recordProtectionEvent(type) {
 				events.push(type);
+				return undefined;
 			},
 		});
 		const win = new FakeVisibilityWindow();

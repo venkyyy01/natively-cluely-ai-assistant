@@ -71,6 +71,7 @@ export class PauseDetector {
 	private evaluationStartTime: number = 0;
 	private isActive: boolean = false;
 	private adaptiveModel: AdaptivePauseModel | null = null;
+	private profileId: string;
 
 	constructor(
 		config: Partial<PauseDetectorConfig> = {},

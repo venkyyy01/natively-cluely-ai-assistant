@@ -107,6 +107,7 @@ export class PredictivePrefetcher {
 		Array<{ text: string; score: number; timestamp: number }>
 	>();
 	private readonly MAX_BM25_CACHE_SIZE = 50;
+	private silenceStartTime = 0;
 	private readonly budgetScheduler?: Pick<
 		RuntimeBudgetScheduler,
 		"shouldAdmitSpeculation"

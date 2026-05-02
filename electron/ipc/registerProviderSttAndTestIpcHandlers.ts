@@ -5,7 +5,7 @@ import type { HandlerContext } from "./handlerContext";
 export type ProviderSttTestIpcDeps = Pick<
 	HandlerContext,
 	"safeHandle" | "safeHandleValidated" | "ok" | "fail" | "getSttSupervisor"
-> & { appState: AppState };
+> & { appState: AppState; getInferenceLlmHelper: () => import("../LLMHelper").LLMHelper };
 
 export function registerProviderSttAndTestIpcHandlers(
 	deps: ProviderSttTestIpcDeps,
@@ -17,6 +17,7 @@ export function registerProviderSttAndTestIpcHandlers(
 		ok,
 		fail,
 		getSttSupervisor,
+		getInferenceLlmHelper,
 	} = deps;
 
 	// ==========================================

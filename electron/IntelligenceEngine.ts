@@ -256,6 +256,8 @@ export class IntelligenceEngine extends EventEmitter {
 		{ timer: NodeJS.Timeout; reject: () => void }
 	>();
 	private stealthContainmentActive = false;
+	private lastTranscriptTime = 0;
+	private lastTriggerTime = 0;
 
 	constructor(llmHelper: LLMHelper, session: SessionTracker) {
 		super();

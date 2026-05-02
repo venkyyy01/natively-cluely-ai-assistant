@@ -56,6 +56,8 @@ export abstract class MultichannelSTTSession extends EventEmitter {
 
 /** Deepgram-specific multichannel session. */
 export class DeepgramMultichannelSession extends MultichannelSTTSession {
+	private ws: any = null;
+
 	async start(): Promise<void> {
 		// Placeholder: real implementation would open a single WS with
 		// channels=2, diarize=true, multichannel=true

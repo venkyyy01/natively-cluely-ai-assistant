@@ -43,6 +43,7 @@ export class SonioxStreamingSTT extends EventEmitter {
 	private keepAliveTimer: NodeJS.Timeout | null = null;
 
 	private buffer: Buffer[] = [];
+	private pendingFinalText = "";
 	// NAT-021: visible drop telemetry for backpressure.
 	private dropMetric = new DropFrameMetric({ provider: "soniox" });
 	private isConnecting = false;

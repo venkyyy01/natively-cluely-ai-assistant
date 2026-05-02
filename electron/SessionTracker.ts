@@ -175,26 +175,17 @@ export class SessionTracker {
 	private extractedConstraints: ExtractedConstraint[] = [];
 	private readonly fingerprinter: ResponseFingerprinter =
 		new ResponseFingerprinter();
-	private readonly contextAssembleCache = new Map<
-		string,
-		{
-			assembled: string;
-			tokenCount: number;
-			revision: number;
-			createdAt: number;
-		}
-	>();
-	private readonly semanticEmbeddingCache = new Map<
-		string,
-		{ embedding: number[]; createdAt: number }
-	>();
-	private supervisorBus?: SupervisorBusEmitter;
+	private readonly contextAssembleCache = new Map<string, any>();
+	private readonly semanticEmbeddingCache = new Map<string, number[]>();
+	private contextAssemblePromise: Promise<any> | null = null;
+	private adaptiveContextWindow: any | null = null;
 	private adaptiveWindowStats = {
 		calls: 0,
 		totalMs: 0,
 		over50ms: 0,
 		timeouts: 0,
 	};
+	private supervisorBus: SupervisorBusEmitter | undefined;
 	private disposed = false;
 
 	// ============================================
@@ -231,7 +222,7 @@ export class SessionTracker {
 		if (this.disposed) {
 			return;
 		}
-		void this.supervisorBus?.emit(event).catch((error) => {
+		void this.supervisorBus?.emit(event).catch((error: unknown) => {
 			console.warn(
 				`[SessionTracker] Failed to emit supervisor event ${event.type}:`,
 				error,

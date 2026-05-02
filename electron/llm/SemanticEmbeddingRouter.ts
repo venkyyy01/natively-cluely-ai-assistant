@@ -177,6 +177,7 @@ export interface SemanticRouterResult extends IntentResult {
 export class SemanticEmbeddingRouter {
 	private static instance: SemanticEmbeddingRouter | null = null;
 	private patterns: IntentPattern[];
+	private initialized = false;
 
 	private constructor() {
 		this.patterns = INTENT_PATTERNS.map((p) => ({

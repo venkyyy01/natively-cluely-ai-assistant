@@ -275,6 +275,7 @@ export class StealthManager extends EventEmitter {
 	private macOSMinor: number = 0;
 	private opacityFlickerController: OpacityFlickerController | null = null;
 	private virtualDisplayTaskQueue: Promise<void> | null = null;
+	private meetingActive = false;
 
 	private readonly execFileFn: (
 		file: string,

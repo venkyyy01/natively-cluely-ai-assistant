@@ -84,10 +84,12 @@ export class DeepgramStreamingSTT extends EventEmitter {
 	private ws: WebSocket | null = null;
 	private isActive = false;
 	private shouldReconnect = false;
-
+	private configSent = false;
+	private lastInterimTranscript = "";
+	private lastInterimConfidence = 0;
+	private readonly targetSampleRate = 16000;
 	private inputSampleRate = 16000;
 	private numChannels = 1;
-	private readonly targetSampleRate = 16000;
 	private languageCode = "en"; // Default to English
 
 	private reconnectAttempts = 0;
@@ -101,7 +103,6 @@ export class DeepgramStreamingSTT extends EventEmitter {
 	// audio loss under backpressure becomes visible in observability.
 	private dropMetric = new DropFrameMetric({ provider: "deepgram" });
 	private isConnecting = false;
-	private lastInterimTranscript = "";
 	private lastInboundActivityAt = 0;
 	private lastAudioActivityAt = 0;
 

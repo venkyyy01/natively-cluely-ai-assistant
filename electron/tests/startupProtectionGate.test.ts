@@ -12,6 +12,7 @@ describe("StartupProtectionGate", () => {
 			isStrictProtectionEnabled: () => false,
 			recordProtectionEvent: (type) => {
 				events.push(type);
+				return undefined;
 			},
 			onBlocked: () => {
 				blocked += 1;
@@ -39,6 +40,7 @@ describe("StartupProtectionGate", () => {
 			isStrictProtectionEnabled: () => true,
 			recordProtectionEvent: (type) => {
 				events.push(type);
+				return undefined;
 			},
 			onBlocked: (decision) => {
 				blockedReason = decision.reason;
@@ -65,6 +67,7 @@ describe("StartupProtectionGate", () => {
 			isStrictProtectionEnabled: () => true,
 			recordProtectionEvent: (type) => {
 				events.push(type);
+				return undefined;
 			},
 			logger: { log() {}, warn() {}, error() {} },
 		});

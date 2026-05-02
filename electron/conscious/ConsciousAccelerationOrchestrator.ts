@@ -95,6 +95,8 @@ export class ConsciousAccelerationOrchestrator {
 	>();
 	private prefetchedIntentInflight = new Map<string, Promise<void>>();
 	private intentPrefetchAbortController: AbortController | null = null;
+	private currentPhase: InterviewPhase = "requirements_gathering";
+	private prefetchTriggeredForCurrentPause = false;
 
 	constructor(options: ConsciousAccelerationOptions = {}) {
 		this.classifierLane = options.classifierLane;
