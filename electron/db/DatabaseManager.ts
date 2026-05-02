@@ -52,7 +52,7 @@ export interface Meeting {
         timestamp: number;
         question?: string;
         answer?: string;
-        items?: string[];
+        items?: unknown;
     }>;
     calendarEventId?: string;
     source?: 'manual' | 'calendar';
@@ -473,6 +473,48 @@ export class DatabaseManager {
                 throw e;
             }
             this.db.pragma('user_version = 10');
+        }
+
+        // Version 10 → 11: Clean orphaned embedding_queue entries and backfill meeting embeddings metadata
+        if (version < 11) {
+            console.log('[DatabaseManager] Applying migration v10 → v11: Clean orphaned embedding queue + backfill meeting embeddings');
+
+            try {
+                this.createMigrationBackup();
+                const migrate = this.db.transaction(() => {
+                    // 1. Delete embedding_queue entries that reference non-existent chunks
+                    const orphaned = this.db!.prepare(`
+                        DELETE FROM embedding_queue
+                        WHERE chunk_id IS NOT NULL
+                          AND chunk_id NOT IN (SELECT id FROM chunks)
+                    `).run();
+                    console.log(`[DatabaseManager] v11: Cleaned ${orphaned.changes} orphaned embedding_queue entries`);
+
+                    // 2. Delete embedding_queue entries with NULL chunk_id older than 24h
+                    const stale = this.db!.prepare(`
+                        DELETE FROM embedding_queue
+                        WHERE chunk_id IS NULL
+                          AND created_at < datetime('now', '-1 day')
+                    `).run();
+                    console.log(`[DatabaseManager] v11: Cleaned ${stale.changes} stale NULL-chunk embedding_queue entries`);
+
+                    // 3. Backfill embedding_provider for ALL meetings (use last_embedding_provider from app_state or default to openai)
+                    const provider = (this.db!.prepare("SELECT value FROM app_state WHERE key = 'last_embedding_provider'").get() as any)?.value || 'openai';
+                    const backfilled = this.db!.prepare(`
+                        UPDATE meetings
+                        SET embedding_provider = ?, embedding_dimensions = 1536
+                        WHERE (embedding_provider IS NULL OR embedding_provider = '')
+                    `).run(provider);
+                    console.log(`[DatabaseManager] v11: Backfilled embedding_provider='${provider}' for ${backfilled.changes} meetings`);
+                });
+                migrate();
+                this.removeMigrationBackup();
+                console.log('[DatabaseManager] v11 migration completed ✓');
+            } catch (e) {
+                console.error('[DatabaseManager] v11 migration failed:', e);
+                this.restoreMigrationBackup();
+            }
+            this.db.pragma('user_version = 11');
         }
 
         console.log('[DatabaseManager] Migrations completed.');
@@ -1057,16 +1099,14 @@ export class DatabaseManager {
         }));
 
         const usage = usageRows.map(row => {
-            let items: string[] | undefined;
+            let items: unknown;
             let answer = row.ai_response;
 
             if (row.metadata_json) {
                 try {
                     const parsed = JSON.parse(row.metadata_json);
-                    if (Array.isArray(parsed)) {
+                    if (parsed && typeof parsed === 'object') {
                         items = parsed;
-                        // Special case: for 'followup_questions', earlier we treated 'answer' as the array in memory
-                        // UI expects appropriate field. If type is 'followup_questions', usually answer is null and items has the questions.
                     }
                 } catch (e) { console.warn('[DatabaseManager] Failed to parse metadata_json for interaction:', row?.id, e); }
             }

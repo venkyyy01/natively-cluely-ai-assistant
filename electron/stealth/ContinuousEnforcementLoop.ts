@@ -1,6 +1,7 @@
 import type { StealthManager } from './StealthManager';
 import type { MonitoringDetector, DetectedThreat } from './MonitoringDetector';
 import type { SupervisorBus } from '../runtime/SupervisorBus';
+import { gracefulShutdown } from '../GracefulShutdownManager';
 
 export interface EnforcementLoopIntervals {
   windowProtectionMs: number; // 250ms
@@ -14,7 +15,7 @@ export interface EnforcementLoopOptions {
   bus: SupervisorBus;
   intervals: EnforcementLoopIntervals;
   logger?: Pick<Console, 'log' | 'warn' | 'error'>;
-  exitFn?: (code: number) => void;
+  exitFn?: (code: number, reason: string) => void;
 }
 
 interface ViolationRecord {
@@ -28,7 +29,7 @@ export class ContinuousEnforcementLoop {
   private readonly bus: SupervisorBus;
   private readonly intervals: EnforcementLoopIntervals;
   private readonly logger: Pick<Console, 'log' | 'warn' | 'error'>;
-  private readonly exitFn: (code: number) => void;
+  private readonly exitFn: (code: number, reason: string) => void;
 
   private windowProtectionTimer: NodeJS.Timeout | null = null;
   private processDetectionTimer: NodeJS.Timeout | null = null;
@@ -49,7 +50,11 @@ export class ContinuousEnforcementLoop {
     this.bus = options.bus;
     this.intervals = options.intervals;
     this.logger = options.logger ?? console;
-    this.exitFn = options.exitFn ?? ((code: number) => process.exit(code));
+    this.exitFn = options.exitFn ?? ((code: number, reason: string) => {
+      gracefulShutdown.shutdown(code, reason).catch(() => {
+        setTimeout(() => process.exit(code), 3000);
+      });
+    });
   }
 
   start(): void {
@@ -161,7 +166,7 @@ export class ContinuousEnforcementLoop {
     });
 
     // Kill switch: exit within 1 second
-    this.exitFn(1);
+    this.exitFn(1, `monitoring-tool-detected:${threat.name}`);
   }
 
   private async handleWarningThreat(threat: DetectedThreat): Promise<void> {
@@ -201,7 +206,7 @@ export class ContinuousEnforcementLoop {
     // Check if we exceed max violations
     if (this.violations.length >= ContinuousEnforcementLoop.MAX_VIOLATIONS) {
       this.logger.error('[ContinuousEnforcementLoop] Maximum violations exceeded, triggering kill switch');
-      this.exitFn(1);
+      this.exitFn(1, 'max-violations-exceeded');
     }
   }
 

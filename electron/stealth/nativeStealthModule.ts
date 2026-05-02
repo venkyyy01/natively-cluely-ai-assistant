@@ -2,66 +2,91 @@ import path from 'node:path';
 
 import type { NativeStealthBindings } from './StealthManager';
 
+// ============================================================================
+// T-019: Stealth health tracking for mission-critical reliability
+// ============================================================================
+
+export type StealthHealthStatus = 'healthy' | 'degraded' | 'unavailable' | 'unknown';
+
+export interface StealthHealth {
+  status: StealthHealthStatus;
+  lastError: string | null;
+  lastCheckTimestamp: number;
+  failureCount: number;
+  successCount: number;
+}
+
+let _health: StealthHealth = {
+  status: 'unknown',
+  lastError: null,
+  lastCheckTimestamp: 0,
+  failureCount: 0,
+  successCount: 0,
+};
+
+export function getStealthHealth(): Readonly<StealthHealth> {
+  return _health;
+}
+
+// ============================================================================
+// Module loading with TTL-based cache and attempt tracking
+// ============================================================================
+
 interface CachedModuleInfo {
   module: NativeStealthBindings | null;
   timestamp: number;
   attempts: number;
 }
 
-// HIGH RELIABILITY FIX: TTL-based cache invalidation instead of permanent caching
 let cacheInfo: CachedModuleInfo | undefined;
-const CACHE_TTL_SUCCESS_MS = 5 * 60 * 1000; // 5 minutes for successful loads
-const CACHE_TTL_FAILURE_MS = 30 * 1000; // 30 seconds for failed loads
+const CACHE_TTL_SUCCESS_MS = 5 * 60 * 1000;
+const CACHE_TTL_FAILURE_MS = 30 * 1000;
 const MAX_LOAD_ATTEMPTS = 3;
 
-export function loadNativeStealthModule(options?: { retryOnFailure?: boolean }): NativeStealthBindings | null {
+export function loadNativeStealthModule(options?: {
+  retryOnFailure?: boolean;
+}): NativeStealthBindings | null {
   const now = Date.now();
-  
-  // HIGH RELIABILITY FIX: Check if cached result is still valid
+  const retry = options?.retryOnFailure ?? true;
+
+  // Check TTL cache
   if (cacheInfo) {
-    const isSuccessfulLoad = cacheInfo.module !== null;
-    const ttl = isSuccessfulLoad ? CACHE_TTL_SUCCESS_MS : CACHE_TTL_FAILURE_MS;
-    const isExpired = (now - cacheInfo.timestamp) > ttl;
-    
-    if (!isExpired) {
-      // Cache is still valid
-      if (isSuccessfulLoad) {
+    const ttl =
+      cacheInfo.module !== null ? CACHE_TTL_SUCCESS_MS : CACHE_TTL_FAILURE_MS;
+    const expired = now - cacheInfo.timestamp > ttl;
+
+    if (!expired) {
+      if (cacheInfo.module !== null) {
         return cacheInfo.module;
       }
-      
-      // Failed load is still within TTL
-      if (options?.retryOnFailure && cacheInfo.attempts >= MAX_LOAD_ATTEMPTS) {
-        console.warn(`[NativeStealthModule] Max retry attempts (${MAX_LOAD_ATTEMPTS}) reached within TTL, waiting for cache expiry`);
+
+      // Failed load within TTL — only retry if caller explicitly wants to and
+      // we haven't exceeded per-window attempt cap.
+      if (retry && cacheInfo.attempts < MAX_LOAD_ATTEMPTS) {
+        cacheInfo = undefined;
+      } else {
         return null;
       }
     } else {
-      // Cache expired, clear it
-      console.log(`[NativeStealthModule] Cache expired (${isSuccessfulLoad ? 'success' : 'failure'} TTL), retrying load`);
+      // TTL expired — clear cache to force re-attempt
       cacheInfo = undefined;
     }
   }
-  
-  if (!options?.retryOnFailure && cacheInfo && cacheInfo.module === null) {
-    return null;
-  }
-  
-  if (options?.retryOnFailure && cacheInfo && cacheInfo.attempts >= MAX_LOAD_ATTEMPTS) {
-    console.warn(`[NativeStealthModule] Max retry attempts (${MAX_LOAD_ATTEMPTS}) reached, giving up. Privacy protection is operating in Layer 0 mode only (setContentProtection).`);
-    return cacheInfo?.module || null;
-  }
-  
-  if (options?.retryOnFailure && cacheInfo.attempts >= MAX_LOAD_ATTEMPTS) {
-    console.warn(`[NativeStealthModule] Max retry attempts (${MAX_LOAD_ATTEMPTS}) reached, giving up until cache expires`);
-    return null;
-  }
-  
+
+  // Fresh attempt
   if (!cacheInfo) {
     cacheInfo = { module: null, timestamp: now, attempts: 0 };
   }
+
+  if (cacheInfo.attempts >= MAX_LOAD_ATTEMPTS) {
+    _health.status = 'unavailable';
+    _health.lastError = 'Max load attempts exceeded within failure TTL';
+    _health.lastCheckTimestamp = now;
+    return null;
+  }
+
   cacheInfo.attempts++;
   cacheInfo.timestamp = now;
-  
-  console.log(`[NativeStealthModule] Loading attempt #${cacheInfo.attempts}`);
 
   const candidates = [
     () => require('natively-audio'),
@@ -69,9 +94,7 @@ export function loadNativeStealthModule(options?: { retryOnFailure?: boolean }):
       try {
         const electronModule = require('electron');
         const appPath = electronModule?.app?.getAppPath?.();
-        if (!appPath) {
-          return null;
-        }
+        if (!appPath) return null;
         return require(path.join(appPath, 'native-module'));
       } catch {
         return null;
@@ -84,31 +107,30 @@ export function loadNativeStealthModule(options?: { retryOnFailure?: boolean }):
     try {
       const mod = candidate();
       if (mod) {
-        console.log('[NativeStealthModule] Successfully loaded native module');
         cacheInfo.module = mod as NativeStealthBindings;
+        _health.status = 'healthy';
+        _health.lastError = null;
+        _health.lastCheckTimestamp = now;
+        _health.successCount++;
         return cacheInfo.module;
       }
     } catch (error) {
-      console.warn('[NativeStealthModule] Candidate failed:', error);
+      // Individual candidate failed — try next
     }
   }
 
-  if (!cacheInfo) {
-    cacheInfo = { module: null, timestamp: now, attempts: 0 };
-  }
   cacheInfo.module = null;
-  console.warn('[NativeStealthModule] All candidates failed. Privacy protection is DEGRADED - operating in Layer 0 mode only (setContentProtection). Native stealth APIs are unavailable.');
-  return cacheInfo.module;
+  _health.status = 'unavailable';
+  _health.lastError = 'All candidates failed — native module unavailable';
+  _health.lastCheckTimestamp = now;
+  _health.failureCount++;
+  return null;
 }
 
 export function clearNativeStealthModuleCache(): void {
   cacheInfo = undefined;
-  console.log('[NativeStealthModule] Cache cleared');
 }
 
-/**
- * HIGH RELIABILITY FIX: Get current cache status for debugging
- */
 export function getNativeStealthModuleCacheStatus(): {
   cached: boolean;
   successful: boolean;
@@ -117,18 +139,98 @@ export function getNativeStealthModuleCacheStatus(): {
   ttlRemainingMs: number;
 } | null {
   if (!cacheInfo) return null;
-  
+
   const now = Date.now();
   const ageMs = now - cacheInfo.timestamp;
   const isSuccessfulLoad = cacheInfo.module !== null;
   const ttl = isSuccessfulLoad ? CACHE_TTL_SUCCESS_MS : CACHE_TTL_FAILURE_MS;
   const ttlRemainingMs = Math.max(0, ttl - ageMs);
-  
+
   return {
     cached: true,
     successful: isSuccessfulLoad,
     attempts: cacheInfo.attempts,
     ageMs,
-    ttlRemainingMs
+    ttlRemainingMs,
+  };
+}
+
+// ============================================================================
+// T-020: Health-aware native process list provider
+// ============================================================================
+
+export interface ProcessInfo {
+  pid: number;
+  ppid: number;
+  name: string;
+}
+
+/**
+ * Creates a cached, health-aware process-list provider.
+ *
+ * - Loads the native module once and caches the reference.
+ * - Re-validates on each call: if the module becomes unavailable, the cached
+ *   reference is cleared so a retry is attempted after the failure TTL expires.
+ * - Logs degradation clearly when the native module is unavailable.
+ * - Returns empty array on failure (detectors treat this as "no data", not
+ *   "all clear" — combine with `getStealthHealth()` for health awareness).
+ */
+export function createNativeProcessesProvider(options?: {
+  logger?: Pick<Console, 'warn'>;
+  label?: string;
+}): () => ProcessInfo[] {
+  const logger = options?.logger ?? console;
+  const label = options?.label ?? 'NativeProcesses';
+
+  let moduleRef: NativeStealthBindings | null | undefined;
+  let lastHealthLog: StealthHealthStatus = 'unknown';
+
+  return () => {
+    const now = Date.now();
+
+    // Load or refresh module reference
+    if (moduleRef === undefined) {
+      moduleRef = loadNativeStealthModule({ retryOnFailure: false });
+    }
+
+    const health = getStealthHealth();
+
+    // If the module was previously available but health now says unavailable
+    // (cache expired and reload failed), clear reference so we retry later.
+    if (moduleRef !== null && health.status === 'unavailable') {
+      moduleRef = undefined;
+    }
+
+    // Re-check if reference was cleared
+    if (moduleRef === undefined) {
+      moduleRef = loadNativeStealthModule({ retryOnFailure: false });
+    }
+
+    if (health.status !== lastHealthLog) {
+      lastHealthLog = health.status;
+      if (health.status === 'unavailable') {
+        logger.warn(
+          `[${label}] Native module unavailable — process detection degraded. ` +
+            `Failure #${health.failureCount}. Last error: ${health.lastError}`,
+        );
+      } else if (health.status === 'healthy') {
+        logger.warn(
+          `[${label}] Native module recovered — process detection restored`,
+        );
+      }
+    }
+
+    if (!moduleRef || !moduleRef.getRunningProcesses) {
+      return [];
+    }
+
+    try {
+      return moduleRef.getRunningProcesses();
+    } catch (error) {
+      _health.status = 'degraded';
+      _health.lastError = `getRunningProcesses() threw: ${String(error)}`;
+      _health.lastCheckTimestamp = now;
+      return [];
+    }
   };
 }

@@ -39,20 +39,25 @@ const CRITICAL_EVENTS = new Set<SupervisorEventType>([
   'lifecycle:meeting-stopping',
 ]);
 
-export const LISTENER_FAILURE_THRESHOLD = 3;
+const LISTENER_FAILURE_THRESHOLD = 3;
+export { LISTENER_FAILURE_THRESHOLD };
 export const LISTENER_FAILURE_WINDOW_MS = 30_000;
 
 interface ListenerEntry {
   fn: InternalListener;
   failures: number[]; // monotonic timestamps of recent failures
   tripped: boolean;
+  trippedAt: number | null;
 }
 
 interface AnyListenerEntry {
   fn: SupervisorEventAnyListener;
   failures: number[];
   tripped: boolean;
+  trippedAt: number | null;
 }
+
+const CIRCUIT_BREAKER_RESET_MS = 60_000;
 
 export class SupervisorBus {
   private readonly listeners = new Map<SupervisorEventType, ListenerEntry[]>();
@@ -73,6 +78,7 @@ export class SupervisorBus {
       fn: (event) => listener(event as Extract<SupervisorEvent, { type: TType }>),
       failures: [],
       tripped: false,
+      trippedAt: null,
     };
     const typedEntries = this.listeners.get(type) ?? [];
     typedEntries.push(entry);
@@ -91,7 +97,7 @@ export class SupervisorBus {
   }
 
   subscribeAll(listener: SupervisorEventAnyListener): () => void {
-    const entry: AnyListenerEntry = { fn: listener, failures: [], tripped: false };
+    const entry: AnyListenerEntry = { fn: listener, failures: [], tripped: false, trippedAt: null };
     this.anyListeners.push(entry);
     return () => {
       const index = this.anyListeners.indexOf(entry);
@@ -117,29 +123,53 @@ export class SupervisorBus {
     const isCriticalEvent = CRITICAL_EVENTS.has(event.type);
     const tripped: Array<{ scope: 'exact' | 'any'; entry: ListenerEntry | AnyListenerEntry; lastError: string }> = [];
 
+    const now = this.now();
+
     for (const entry of exactEntries) {
-      if (entry.tripped) continue;
+      if (entry.tripped) {
+        // Half-open: allow single test call after reset window
+        if (entry.trippedAt && (now - entry.trippedAt) >= CIRCUIT_BREAKER_RESET_MS) {
+          entry.tripped = false;
+          entry.trippedAt = null;
+          entry.failures = [];
+          const warn = this.logger.warn?.bind(this.logger) ?? console.warn.bind(console);
+          warn(`[SupervisorBus] Circuit breaker reset for ${event.type}`);
+        } else {
+          continue;
+        }
+      }
       try {
         await entry.fn(event);
       } catch (error) {
         const message = errorMessage(error);
         this.logger.error(`[SupervisorBus] Listener failed for event ${event.type}:`, error);
         errors.push(error);
-        if (this.recordFailure(entry, this.now())) {
+        if (this.recordFailure(entry, now)) {
           tripped.push({ scope: 'exact', entry, lastError: message });
         }
       }
     }
 
     for (const entry of anyEntries) {
-      if (entry.tripped) continue;
+      if (entry.tripped) {
+        // Half-open: allow single test call after reset window
+        if (entry.trippedAt && (now - entry.trippedAt) >= CIRCUIT_BREAKER_RESET_MS) {
+          entry.tripped = false;
+          entry.trippedAt = null;
+          entry.failures = [];
+          const warn = this.logger.warn?.bind(this.logger) ?? console.warn.bind(console);
+          warn(`[SupervisorBus] Circuit breaker reset for global listener`);
+        } else {
+          continue;
+        }
+      }
       try {
         await entry.fn(event);
       } catch (error) {
         const message = errorMessage(error);
         this.logger.error(`[SupervisorBus] Global listener failed for event ${event.type}:`, error);
         errors.push(error);
-        if (this.recordFailure(entry, this.now())) {
+        if (this.recordFailure(entry, now)) {
           tripped.push({ scope: 'any', entry, lastError: message });
         }
       }
@@ -182,6 +212,7 @@ export class SupervisorBus {
     entry.failures.push(ts);
     if (entry.failures.length >= LISTENER_FAILURE_THRESHOLD) {
       entry.tripped = true;
+      entry.trippedAt = ts;
       return true;
     }
     return false;

@@ -20,6 +20,15 @@ export interface WindowInfo {
   sharingState: number
   alpha: number
 }
+/**
+ * T-001: Process information for native process enumeration.
+ * Replaces pgrep/ps/tasklist child process spawns.
+ */
+export interface ProcessInfo {
+  pid: number
+  ppid: number
+  name: string
+}
 export declare function applyMacosWindowStealth(windowNumber: number): void
 export declare function removeMacosWindowStealth(windowNumber: number): void
 export declare function applyMacosPrivateWindowStealth(windowNumber: number): void
@@ -39,6 +48,7 @@ export declare function listVisibleWindows(): Array<WindowInfo>
  * Combines the Quartz window enumeration + browser check in a single native call.
  */
 export declare function checkBrowserCaptureWindows(): boolean
+export declare function getRunningProcesses(): Array<ProcessInfo>
 export interface AudioDeviceInfo {
   id: string
   name: string

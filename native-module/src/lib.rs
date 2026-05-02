@@ -649,7 +649,7 @@ impl MicrophoneCapture {
     pub fn stop(&mut self) {
         self.stop_signal.store(true, Ordering::SeqCst);
         if let Some(handle) = self.capture_thread.take() {
-            let _ = handle.join();
+            join_thread_with_timeout(handle, Duration::from_secs(2), "MicrophoneCapture");
         }
         // Pause and destroy the CPAL stream so start() recreates it fresh.
         if let Some(ref input) = self.input {

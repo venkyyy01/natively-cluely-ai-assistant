@@ -16,4 +16,6 @@ This is the project-level task tracker for resolving the architectural issues id
   - [x] CM-04: Add mode enum to retrieval to prevent caching pseudo embeddings
 - [x] **Phase 3: Fault-Injection Tests**
   - [x] Prove renderer-hang scenario retains native lock-in
-  - [x] Prove missed heartbeat scenario transitions securely
+  - [ ] **Phase 4: Infrastructure & Git Maintenance**
+    - [ ] Resolve git pull divergence (rebase `FoundationModel-silicon` onto `origin/FoundationModel-silicon`)
+    - [ ] Verify linear history and system stability

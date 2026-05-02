@@ -106,6 +106,9 @@ export class AnswerLLM {
         }
     }
 
+    /**
+     * @deprecated Use generateReasoningFirst() with Result handling instead
+     */
     async generateReasoningFirstLegacy(question: string, context?: string): Promise<ConsciousModeStructuredResponse> {
         try {
             const message = [

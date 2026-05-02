@@ -4,7 +4,6 @@ import { EventEmitter } from 'events';
 import type { VirtualDisplayCoordinator } from './MacosVirtualDisplayClient';
 
 import { loadNativeStealthModule } from './nativeStealthModule';
-import { execFile } from 'node:child_process';
 import { ChromiumCaptureDetector } from './ChromiumCaptureDetector';
 import { MacosStealthEnhancer } from './MacosStealthEnhancer';
 import { TCCMonitor } from './TCCMonitor';
@@ -12,7 +11,6 @@ import { decideStealthFallback } from './StealthFallbackPolicy';
 import {
   getOptionalPythonFallbackReason,
   getProcessErrorSummary,
-  withStderr,
 } from './pythonFallback';
 import type {
   StealthManagerDependencies,
@@ -77,6 +75,8 @@ export interface NativeStealthBindings {
   // S-8: CGWindow native functions
   listVisibleWindows?: () => WindowInfo[];
   checkBrowserCaptureWindows?: () => boolean;
+  // T-001: Native process enumeration (replaces pgrep/ps/tasklist)
+  getRunningProcesses?: () => Array<{ pid: number; ppid: number; name: string }>;
 }
 
 export interface StealthFeatureFlags {
@@ -188,25 +188,6 @@ function scheduleUnrefTimeout(callback: () => void, delayMs: number): NodeJS.Tim
   return handle;
 }
 
-function defaultProcessEnumerator(command: string, args: string[]): Promise<string> {
-  return new Promise((resolve, reject) => {
-    execFile(command, args, (error, stdout, stderr) => {
-      if (!error) {
-        resolve(stdout);
-        return;
-      }
-
-      const err = withStderr(error, stderr);
-      if (command === 'pgrep' && String(err.code) === '1') {
-        resolve('');
-        return;
-      }
-
-      reject(err);
-    });
-  });
-}
-
 export class StealthManager extends EventEmitter {
   private config: StealthConfig;
   private stealthDegradationWarnings = new Set<string>();
@@ -249,7 +230,6 @@ export class StealthManager extends EventEmitter {
   private readonly timeoutScheduler: (callback: () => void, delayMs: number) => unknown;
   private readonly virtualDisplayCoordinator: VirtualDisplayCoordinator | null;
   private readonly captureToolPatterns: RegExp[];
-  private readonly processEnumerator: (command: string, args: string[]) => Promise<string>;
   private readonly protectionStateMachine: ProtectionStateMachine;
   private readonly visibilityController: VisibilityController;
   private readonly managedWindows = new Set<ManagedWindowRecord>();
@@ -278,6 +258,8 @@ export class StealthManager extends EventEmitter {
   private opacityFlickerController: OpacityFlickerController | null = null;
   private virtualDisplayTaskQueue: Promise<void> | null = null;
 
+  private readonly execFileFn: (file: string, args: readonly string[], options: { timeout?: number }, callback: (error: Error | null, stdout: string, stderr: string) => void) => void;
+
   constructor(config: StealthConfig, deps: StealthManagerDependencies = {}) {
     super();
     this.config = config;
@@ -292,13 +274,16 @@ export class StealthManager extends EventEmitter {
     this.timeoutScheduler = deps.timeoutScheduler ?? scheduleUnrefTimeout;
     this.virtualDisplayCoordinator = deps.virtualDisplayCoordinator ?? null;
     this.captureToolPatterns = deps.captureToolPatterns ?? KNOWN_CAPTURE_TOOL_PATTERNS;
-    this.processEnumerator = deps.processEnumerator ?? defaultProcessEnumerator;
     this.protectionStateMachine = deps.protectionStateMachine ?? new ProtectionStateMachine({ logger: this.logger });
     this.visibilityController = deps.visibilityController ?? new VisibilityController({
       logger: this.logger,
       recordProtectionEvent: (type, context) => this.recordProtectionEvent(type, context),
     });
     this.nativeModule = deps.nativeModule;
+    this.execFileFn = deps.execFileFn ?? (async (file, args, options, callback) => {
+      const { execFile } = await import('node:child_process');
+      execFile(file, args, options, callback);
+    });
     this.detectMacOSVersion();
   }
 
@@ -1264,56 +1249,15 @@ export class StealthManager extends EventEmitter {
   }
 
   private async detectCaptureProcesses(): Promise<RegExp[]> {
-    if (this.platform === 'win32') {
-      const stdout = await this.processEnumerator('tasklist', ['/FO', 'CSV', '/NH']);
-      return this.captureToolPatterns.filter((pattern) => pattern.test(stdout));
+    const nativeModule = this.getNativeModule();
+    const procs = nativeModule?.getRunningProcesses?.() ?? [];
+    const processNames = procs.map(p => p.name.toLowerCase()).join(' ');
+
+    if (!processNames) {
+      return [];
     }
 
-    if (this.platform === 'darwin') {
-      const processSnapshot = await this.readDarwinProcessSnapshot();
-      if (processSnapshot !== null) {
-        return this.captureToolPatterns.filter((pattern) => pattern.test(processSnapshot));
-      }
-
-      const matches: RegExp[] = [];
-      const browserPatterns = this.getBrowserCapturePatterns();
-      const nonBrowserPatterns = this.captureToolPatterns.filter((p) => !browserPatterns.includes(p));
-
-      for (const pattern of nonBrowserPatterns) {
-        const stdout = await this.processEnumerator('pgrep', ['-lif', pattern.source]);
-        if (pattern.test(stdout)) {
-          matches.push(pattern);
-        }
-      }
-
-      const browserStdout = await this.processEnumerator('pgrep', ['-lif', 'chrome|chromium|msedge|brave']);
-      if (browserStdout) {
-        const browserLines = browserStdout.trim().split('\n').filter(Boolean);
-        for (const line of browserLines) {
-          const appPathMatch = line.match(/\/(Chrome|Chromium|Microsoft Edge|Brave Browser)\.app\//i);
-          if (appPathMatch) {
-            const appName = appPathMatch[1].toLowerCase();
-            for (const pattern of browserPatterns) {
-              if (pattern.test(appName) && !matches.includes(pattern)) {
-                matches.push(pattern);
-              }
-            }
-          }
-        }
-      }
-
-      return matches;
-    }
-
-    return [];
-  }
-
-  private async readDarwinProcessSnapshot(): Promise<string | null> {
-    try {
-      return await this.processEnumerator('ps', ['-A', '-o', 'command=']);
-    } catch {
-      return null;
-    }
+    return this.captureToolPatterns.filter((pattern) => pattern.test(processNames));
   }
 
   private getBrowserCapturePatterns(): RegExp[] {
@@ -1332,17 +1276,16 @@ export class StealthManager extends EventEmitter {
     }
 
     try {
-      const stdout = await this.processEnumerator('pgrep', ['-lf', 'ScreenCaptureAgent']);
-      if (stdout && stdout.trim()) {
+      const nativeModule = this.getNativeModule();
+      const procs = nativeModule?.getRunningProcesses?.() ?? [];
+      const processNames = procs.map(p => p.name.toLowerCase()).join(' ');
+
+      if (/screencaptureagent/i.test(processNames)) {
         return true;
       }
 
-      const stdout2 = await this.processEnumerator('pgrep', ['-lf', 'controlcenter']);
-      if (stdout2 && stdout2.trim()) {
-        const controlCenterOutput = stdout2.toLowerCase();
-        if (controlCenterOutput.includes('screen') || controlCenterOutput.includes('capture')) {
-          return true;
-        }
+      if (/controlcenter/i.test(processNames) && (/screen/i.test(processNames) || /capture/i.test(processNames))) {
+        return true;
       }
 
       return false;
@@ -1503,7 +1446,8 @@ export class StealthManager extends EventEmitter {
     );
 
     try {
-      const stdout = await this.processEnumerator('python3', ['-c', `
+      const stdout = await new Promise<string>((resolve, reject) => {
+        this.execFileFn('python3', ['-c', `
 import Quartz
 import sys
 
@@ -1519,7 +1463,14 @@ for window in windows:
 
     if window_number > 0 and alpha > 0 and sharing_state > 0:
         print(window_number)
-`]);
+`], { timeout: 5000 }, (error, stdout) => {
+          if (error && (error as NodeJS.ErrnoException).code !== '1') {
+            reject(error);
+          } else {
+            resolve(stdout ?? '');
+          }
+        });
+      });
 
       if (stdout && stdout.trim()) {
         for (const line of stdout.trim().split('\n').filter(Boolean)) {

@@ -516,7 +516,7 @@ export class ConsciousOrchestrator {
       });
       const evidenceContextBlock = this.session.getConsciousEvidenceContext();
 
-      const structuredResponse = await input.followUpLLM.generateReasoningFirstFollowUp(
+      const followUpResult = await input.followUpLLM.generateReasoningFirstFollowUp(
         input.activeReasoningThread,
         input.resolvedQuestion,
         [
@@ -529,6 +529,7 @@ export class ConsciousOrchestrator {
           retrievalPack.combinedContext,
         ].filter(Boolean).join('\n\n')
       );
+      const structuredResponse = followUpResult.success ? followUpResult.data : null;
 
       if (input.isStale() || !isValidConsciousModeResponse(structuredResponse)) {
         return this.fallback('continuation_invalid_or_stale');
@@ -638,7 +639,7 @@ export class ConsciousOrchestrator {
           }
         );
       } else if (input.answerLLM) {
-        const reasoningResult = await input.answerLLM.generateReasoningFirst(
+        structuredResponse = await input.answerLLM.generateReasoningFirstLegacy(
           input.question,
           this.session.getFormattedContext(600)
         );

@@ -9,21 +9,22 @@ export type DisplayEventSource = { on: (event: string, listener: () => void) => 
 export type ScreenApi = DisplayEventSource & { getAllDisplays: () => DisplayInfo[] };
 
 export interface StealthManagerDependencies {
-  nativeModule?: NativeStealthBindings | null;
   platform?: string;
-  powerMonitor?: { on: (event: string, listener: () => void) => void } | null;
-  displayEvents?: DisplayEventSource | null;
-  screenApi?: ScreenApi | null;
   logger?: Pick<Console, 'log' | 'warn' | 'error'>;
-  featureFlags?: StealthFeatureFlags;
+  powerMonitor?: { on: (event: string, listener: () => void) => void } | null;
+  screenApi?: ScreenApi | null;
+  displayEvents?: DisplayEventSource | null;
+  featureFlags?: import('./StealthManager').StealthFeatureFlags;
   intervalScheduler?: (callback: () => Promise<void> | void, intervalMs: number) => unknown;
   clearIntervalScheduler?: (handle: unknown) => void;
   timeoutScheduler?: (callback: () => void, delayMs: number) => unknown;
-  virtualDisplayCoordinator?: VirtualDisplayCoordinator | null;
+  virtualDisplayCoordinator?: import('./MacosVirtualDisplayClient').VirtualDisplayCoordinator | null;
   captureToolPatterns?: RegExp[];
-  processEnumerator?: (command: string, args: string[]) => Promise<string>;
-  protectionStateMachine?: ProtectionStateMachine;
-  visibilityController?: VisibilityController;
+  protectionStateMachine?: import('./ProtectionStateMachine').ProtectionStateMachine;
+  visibilityController?: import('./VisibilityController').VisibilityController;
+  nativeModule?: import('./StealthManager').NativeStealthBindings | null;
+  /** Optional execFile for python fallback path (testing only). */
+  execFileFn?: (file: string, args: readonly string[], options: { timeout?: number }, callback: (error: Error | null, stdout: string, stderr: string) => void) => void;
 }
 
 export interface StealthCapableWindow {

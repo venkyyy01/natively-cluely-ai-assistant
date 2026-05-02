@@ -14,6 +14,16 @@ pub struct WindowInfo {
     pub alpha: f64,
 }
 
+/// T-001: Process information for native process enumeration.
+/// Replaces pgrep/ps/tasklist child process spawns.
+#[derive(Debug)]
+#[napi(object)]
+pub struct ProcessInfo {
+    pub pid: u32,
+    pub ppid: u32,
+    pub name: String,
+}
+
 const BROWSER_OWNER_PATTERNS: &[&str] = &[
     "google chrome",
     "chromium",
@@ -51,7 +61,7 @@ fn is_browser_capture_window(window: &WindowInfo) -> bool {
 #[cfg(target_os = "macos")]
 #[allow(unexpected_cfgs, deprecated)]
 mod macos {
-    use super::{is_browser_capture_window, WindowInfo};
+    use super::{is_browser_capture_window, ProcessInfo, WindowInfo};
     use cidre::{arc, ns, objc};
     use core_foundation::base::{CFType, TCFType};
     use core_foundation::boolean::CFBoolean;
@@ -296,11 +306,133 @@ mod macos {
             .map(|string| string.to_string())
             .unwrap_or_default()
     }
+
+    // ============================================================================
+    // T-001: macOS process enumeration via libproc (replaces pgrep/ps)
+    // ============================================================================
+    pub fn get_running_processes() -> napi::Result<Vec<ProcessInfo>> {
+        use libc::{c_char, c_int, c_void, pid_t};
+        use std::mem;
+
+        const PROC_ALL_PIDS: u32 = 1;
+        const PROC_PIDPATHINFO_MAXSIZE: usize = 4096;
+        const PROC_PIDTBSDINFO: c_int = 3;
+
+        #[repr(C)]
+        #[derive(Copy, Clone)]
+        struct ProcBsdInfo {
+            pbi_flags: u32,
+            pbi_status: u32,
+            pbi_xstatus: u32,
+            pbi_pid: u32,
+            pbi_ppid: u32,
+            pbi_uid: u32,
+            pbi_gid: u32,
+            pbi_ruid: u32,
+            pbi_rgid: u32,
+            pbi_svuid: u32,
+            pbi_svgid: u32,
+            rfu_1: u32,
+            pbi_comm: [c_char; 16],
+            pbi_name: [c_char; 32],
+            pbi_nfiles: u32,
+            pbi_pgid: u32,
+            pbi_pjobc: u32,
+            e_tdev: u32,
+            e_tpgid: u32,
+            pbi_nice: i32,
+            pbi_start_tvsec: u64,
+            pbi_start_tvusec: i64,
+        }
+
+        extern "C" {
+            fn proc_listpids(
+                dtype: u32,
+                typeinfo: u32,
+                buffer: *mut c_void,
+                buffersize: c_int,
+            ) -> c_int;
+            fn proc_pidinfo(
+                pid: c_int,
+                flavor: c_int,
+                arg: u64,
+                buffer: *mut c_void,
+                buffersize: c_int,
+            ) -> c_int;
+            fn proc_pidpath(pid: c_int, buffer: *mut c_char, buffersize: u32) -> c_int;
+        }
+
+        // First call to get the number of PIDs
+        let pid_count = unsafe { proc_listpids(PROC_ALL_PIDS, 0, std::ptr::null_mut(), 0) };
+        if pid_count <= 0 {
+            return Ok(Vec::new());
+        }
+
+        let mut pids: Vec<pid_t> = vec![0; pid_count as usize];
+        let returned = unsafe {
+            proc_listpids(
+                PROC_ALL_PIDS,
+                0,
+                pids.as_mut_ptr() as *mut c_void,
+                (pid_count as usize * mem::size_of::<pid_t>()) as c_int,
+            )
+        };
+        if returned <= 0 {
+            return Ok(Vec::new());
+        }
+
+        let actual_count = returned as usize;
+        let mut results = Vec::with_capacity(actual_count);
+
+        for i in 0..actual_count {
+            let pid = pids[i];
+            if pid <= 0 {
+                continue;
+            }
+
+            let mut info: ProcBsdInfo = unsafe { mem::zeroed() };
+            let info_size = mem::size_of::<ProcBsdInfo>() as c_int;
+            let got = unsafe { proc_pidinfo(pid as c_int, PROC_PIDTBSDINFO, 0, &mut info as *mut _ as *mut c_void, info_size) };
+
+            if got != info_size {
+                continue;
+            }
+
+            let ppid = info.pbi_ppid;
+
+            // Try to get the full path first
+            let mut path_buf: Vec<c_char> = vec![0; PROC_PIDPATHINFO_MAXSIZE];
+            let path_len = unsafe { proc_pidpath(pid as c_int, path_buf.as_mut_ptr(), PROC_PIDPATHINFO_MAXSIZE as u32) };
+
+            let name = if path_len > 0 {
+                unsafe {
+                    std::ffi::CStr::from_ptr(path_buf.as_ptr())
+                        .to_string_lossy()
+                        .into_owned()
+                }
+            } else {
+                // Fallback to comm (short name)
+                unsafe {
+                    std::ffi::CStr::from_ptr(info.pbi_comm.as_ptr())
+                        .to_string_lossy()
+                        .into_owned()
+                }
+            };
+
+            results.push(ProcessInfo {
+                pid: pid as u32,
+                ppid,
+                name,
+            });
+        }
+
+        Ok(results)
+    }
 }
 
 #[cfg(not(target_os = "macos"))]
 mod macos {
-    use super::WindowInfo;
+    use super::{ProcessInfo, WindowInfo};
 
     pub fn apply(_window_number: u32) -> napi::Result<()> {
         Ok(())
@@ -333,12 +465,20 @@ mod macos {
     pub fn check_browser_capture_windows() -> napi::Result<bool> {
         Ok(false)
     }
+
+    pub fn get_running_processes() -> napi::Result<Vec<ProcessInfo>> {
+        Ok(Vec::new())
+    }
 }
 
 #[cfg(target_os = "windows")]
 mod windows_impl {
-    use super::Buffer;
+    use super::{Buffer, ProcessInfo};
     use windows::Win32::Foundation::{GetLastError, HWND};
+    use windows::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, Process32First, Process32Next, TH32CS_SNAPPROCESS,
+        PROCESSENTRY32,
+    };
     use windows::Win32::UI::WindowsAndMessaging::{
         GetWindowDisplayAffinity, SetWindowDisplayAffinity, WDA_MONITOR, WDA_NONE,
         WINDOW_DISPLAY_AFFINITY,
@@ -409,11 +549,49 @@ mod windows_impl {
         raw.copy_from_slice(&buffer[..pointer_size]);
         Ok(HWND(isize::from_le_bytes(raw)))
     }
+
+    // ============================================================================
+    // T-001: Windows process enumeration via Toolhelp32 (replaces tasklist)
+    // ============================================================================
+    pub fn get_running_processes() -> napi::Result<Vec<ProcessInfo>> {
+        unsafe {
+            let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
+                .map_err(|e| napi::Error::from_reason(format!("CreateToolhelp32Snapshot failed: {}", e)))?;
+
+            let mut entry = PROCESSENTRY32 {
+                dwSize: std::mem::size_of::<PROCESSENTRY32>() as u32,
+                ..std::mem::zeroed()
+            };
+
+            let mut results = Vec::new();
+
+            if Process32First(snapshot, &mut entry).as_bool() {
+                loop {
+                    let name = std::ffi::CStr::from_ptr(entry.szExeFile.as_ptr() as *const i8)
+                        .to_string_lossy()
+                        .into_owned();
+                    results.push(ProcessInfo {
+                        pid: entry.th32ProcessID,
+                        ppid: entry.th32ParentProcessID,
+                        name,
+                    });
+
+                    if !Process32Next(snapshot, &mut entry).as_bool() {
+                        break;
+                    }
+                }
+            }
+
+            let _ = windows::Win32::Foundation::CloseHandle(snapshot);
+            Ok(results)
+        }
+    }
 }
 
 #[cfg(not(target_os = "windows"))]
 mod windows_impl {
     use super::Buffer;
+    use super::ProcessInfo;
 
     pub fn apply(_hwnd_buffer: Buffer) -> napi::Result<()> {
         Ok(())
@@ -425,6 +603,10 @@ mod windows_impl {
 
     pub fn verify(_hwnd_buffer: Buffer) -> napi::Result<i32> {
         Ok(-1)
+    }
+
+    pub fn get_running_processes() -> napi::Result<Vec<ProcessInfo>> {
+        Ok(Vec::new())
     }
 }
 
@@ -489,6 +671,26 @@ pub fn list_visible_windows() -> napi::Result<Vec<WindowInfo>> {
 #[napi]
 pub fn check_browser_capture_windows() -> napi::Result<bool> {
     macos::check_browser_capture_windows()
+}
+
+// ============================================================================
+// T-001: Native process enumeration (replaces pgrep/ps/tasklist)
+// ============================================================================
+
+#[napi]
+pub fn get_running_processes() -> napi::Result<Vec<ProcessInfo>> {
+    #[cfg(target_os = "macos")]
+    {
+        macos::get_running_processes()
+    }
+    #[cfg(target_os = "windows")]
+    {
+        windows_impl::get_running_processes()
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        Ok(Vec::new())
+    }
 }
 
 #[cfg(test)]

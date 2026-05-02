@@ -310,7 +310,7 @@ if (!nativeBinding) {
   throw new Error(`Failed to load native binding`)
 }
 
-const { getHardwareId, verifyGumroadKey, applyMacosWindowStealth, removeMacosWindowStealth, applyMacosPrivateWindowStealth, removeMacosPrivateWindowStealth, setMacosWindowLevel, verifyMacosStealthState, applyWindowsWindowStealth, removeWindowsWindowStealth, verifyWindowsStealthState, listVisibleWindows, checkBrowserCaptureWindows, SystemAudioCapture, MicrophoneCapture, getInputDevices, getOutputDevices } = nativeBinding
+const { getHardwareId, verifyGumroadKey, applyMacosWindowStealth, removeMacosWindowStealth, applyMacosPrivateWindowStealth, removeMacosPrivateWindowStealth, setMacosWindowLevel, verifyMacosStealthState, applyWindowsWindowStealth, removeWindowsWindowStealth, verifyWindowsStealthState, listVisibleWindows, checkBrowserCaptureWindows, getRunningProcesses, SystemAudioCapture, MicrophoneCapture, getInputDevices, getOutputDevices } = nativeBinding
 
 module.exports.getHardwareId = getHardwareId
 module.exports.verifyGumroadKey = verifyGumroadKey
@@ -325,6 +325,7 @@ module.exports.removeWindowsWindowStealth = removeWindowsWindowStealth
 module.exports.verifyWindowsStealthState = verifyWindowsStealthState
 module.exports.listVisibleWindows = listVisibleWindows
 module.exports.checkBrowserCaptureWindows = checkBrowserCaptureWindows
+module.exports.getRunningProcesses = getRunningProcesses
 module.exports.SystemAudioCapture = SystemAudioCapture
 module.exports.MicrophoneCapture = MicrophoneCapture
 module.exports.getInputDevices = getInputDevices

@@ -26,7 +26,8 @@ export type IntelligenceManagerLike = {
   addAssistantMessage: (message: string) => void;
   getLastAssistantMessage: () => string | null;
   getFormattedContext: (lastSeconds?: number) => string;
-  logUsage: (type: string, input: string, output: string) => void;
+  logUsage: (type: string, input: string, output: string, items?: Record<string, unknown>) => void;
+  isConsciousModeEnabled: () => boolean;
   initializeLLMs: () => void | Promise<void>;
 };
 

@@ -1,8 +1,9 @@
 import { DatabaseManager, Meeting } from "./db/DatabaseManager";
 import { SessionTracker } from "./SessionTracker";
 import { EventEmitter } from "events";
-import * as fs from "node:fs/promises";
-import * as path from "node:path";
+import fs from "fs/promises";
+import path from "path";
+import os from "os";
 
 const CHECKPOINT_INTERVAL_MS = 60000; // 60 seconds
 const MAX_RETRY_ATTEMPTS = 3;
@@ -16,14 +17,20 @@ interface CheckpointResult {
     error?: string;
 }
 
-type CheckpointError = { meetingId: string | null; error: Error; retryCount: number; usedFallback: boolean; fallbackPath?: string };
+interface CheckpointError {
+    meetingId: string | null;
+    error: Error;
+    retryCount: number;
+    usedFallback: boolean;
+    fallbackPath?: string;
+}
 
 export class MeetingCheckpointer extends EventEmitter {
     private interval: NodeJS.Timeout | null = null;
     private meetingId: string | null = null;
     private lastCheckpointAt: number = 0;
     private lastTranscriptTimestamp: number = 0;
-    private checkpointInProgress = false;
+    private checkpointInProgress: boolean = false;
     private tempDir: string;
 
     constructor(
@@ -32,7 +39,7 @@ export class MeetingCheckpointer extends EventEmitter {
         private readonly onCheckpointWritten?: (checkpointId: string) => void | Promise<void>,
     ) {
         super();
-        this.tempDir = path.join(process.cwd(), 'checkpoints');
+        this.tempDir = path.join(os.tmpdir(), 'meeting-checkpoints');
     }
 
     public start(meetingId: string): void {
@@ -94,10 +101,23 @@ export class MeetingCheckpointer extends EventEmitter {
                 return; // Nothing to save yet
             }
 
+            // NAT-061: idle detection — skip checkpoint if no new transcript since last checkpoint
+            const latestTranscriptTimestamp = snapshot.transcript.length > 0
+                ? Math.max(...snapshot.transcript.map(t => t.timestamp ?? 0))
+                : 0;
+            if (latestTranscriptTimestamp > 0) {
+                this.lastTranscriptTimestamp = latestTranscriptTimestamp;
+            }
+            if (this.lastCheckpointAt > 0 && this.lastTranscriptTimestamp <= this.lastCheckpointAt) {
+                console.log(`[MeetingCheckpointer] Idle stretch detected for ${this.meetingId}; skipping checkpoint.`);
+                return;
+            }
+
             const result = await this.saveCheckpointWithRetry(snapshot);
             
             // Emit events based on result
             if (result.success) {
+                this.emit('checkpoint', this.meetingId);
                 this.emit('checkpoint-saved', { 
                     meetingId: this.meetingId, 
                     usedFallback: result.usedFallback,
@@ -146,19 +166,25 @@ export class MeetingCheckpointer extends EventEmitter {
             }
         }
 
-        // NAT-061: idle detection — skip checkpoint if no new transcript since last checkpoint
-        const latestTranscriptTimestamp = snapshot.transcript.length > 0
-            ? Math.max(...snapshot.transcript.map((t: any) => t.timestamp ?? 0))
-            : 0;
-        if (latestTranscriptTimestamp > 0) {
-            this.lastTranscriptTimestamp = latestTranscriptTimestamp;
+        // All retries exhausted — save to fallback file
+        await this.ensureTempDir();
+        try {
+            const fallbackPath = await this.saveFallbackFile(meetingData, snapshot);
+            return {
+                success: true,
+                retryCount: MAX_RETRY_ATTEMPTS,
+                usedFallback: true,
+                fallbackPath,
+                error: 'All database retries failed'
+            };
+        } catch (fallbackError) {
+            return {
+                success: false,
+                retryCount: MAX_RETRY_ATTEMPTS,
+                usedFallback: false,
+                error: `Fallback save also failed: ${fallbackError instanceof Error ? fallbackError.message : String(fallbackError)}`
+            };
         }
-        if (this.lastCheckpointAt > 0 && this.lastTranscriptTimestamp <= this.lastCheckpointAt) {
-            console.log(`[MeetingCheckpointer] Idle stretch detected for ${this.meetingId}; skipping checkpoint.`);
-            return { success: false, retryCount: MAX_RETRY_ATTEMPTS, usedFallback: false, error: 'Idle stretch - no new transcript' };
-        }
-
-        return { success: false, retryCount: MAX_RETRY_ATTEMPTS, usedFallback: false, error: 'All database save attempts failed' };
     }
 
     private createMeetingData(snapshot: any): Meeting {
@@ -202,14 +228,10 @@ export class MeetingCheckpointer extends EventEmitter {
     }
 
     private async notifyFrontend(event: string, data: any): Promise<void> {
-        try {
-            this.emit(event, data);
-            this.lastCheckpointAt = Date.now();
-            if (this.onCheckpointWritten) {
-                await this.onCheckpointWritten(this.meetingId!);
-            }
-        } catch (e) {
-            console.error('[MeetingCheckpointer] Failed to notify frontend:', e);
+        this.emit(event, data);
+        this.lastCheckpointAt = Date.now();
+        if (this.onCheckpointWritten) {
+            await this.onCheckpointWritten(this.meetingId!);
         }
     }
 

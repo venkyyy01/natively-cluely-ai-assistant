@@ -59,6 +59,13 @@ const STEALTH_SUBSTRING_PATTERNS: ReadonlyArray<RegExp> = [
   /Application Support\/Cluely/gi,
   /\.natively/gi,
   /processFailure/gi,
+  // T-004: Additional stealth-revealing patterns
+  /\[AudioHealth\]/gi,
+  /\[MicrophoneCapture\]/gi,
+  /\[SystemAudioCapture\]/gi,
+  /pgrep/gi,
+  /tasklist/gi,
+  /CGS\w*/gi,
 ];
 
 /**

@@ -817,12 +817,13 @@ export class SessionTracker {
   /**
    * Public method to log usage from external sources (e.g. IPC direct chat)
    */
-  logUsage(type: UsageInteraction['type'], question: string, answer: string): void {
+  logUsage(type: UsageInteraction['type'], question: string, answer: string, items?: Record<string, unknown>): void {
     this.fullUsage.push({
       type,
       timestamp: Date.now(),
       question,
-      answer
+      answer,
+      items,
     });
   }
 
@@ -1068,7 +1069,7 @@ export class SessionTracker {
             const epochSummary = await this.recapLLM.generate(
               `Summarize this conversation segment into 3-5 concise bullet points preserving key topics, decisions, and questions:\n\n${summaryInput}`
             );
-            if (epochSummary && epochSummary.success && epochSummary.data.trim().length > 0) {
+            if (epochSummary.success && epochSummary.data.trim().length > 0) {
               this.transcriptEpochSummaries.push(epochSummary.data.trim());
               console.log(`[SessionTracker] Epoch summary created (${this.transcriptEpochSummaries.length} total)`);
             }

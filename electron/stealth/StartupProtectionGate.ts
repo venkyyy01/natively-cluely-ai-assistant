@@ -63,7 +63,7 @@ export class StartupProtectionGate {
     this.isStrictProtectionEnabled = options.isStrictProtectionEnabled ?? (() => false);
     this.recordProtectionEvent = options.recordProtectionEvent;
     this.onBlocked = options.onBlocked;
-    this.timeoutMs = options.timeoutMs ?? 750;
+    this.timeoutMs = options.timeoutMs ?? parseInt(process.env.NATIVELY_STARTUP_GATE_TIMEOUT_MS || '1500', 10);
     this.logger = options.logger ?? console;
     this.now = options.now ?? (() => Date.now());
   }

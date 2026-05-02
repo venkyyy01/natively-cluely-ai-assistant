@@ -134,7 +134,7 @@ export interface UsageInteraction {
   timestamp: number;
   question?: string;
   answer?: string;
-  items?: string[];
+  items?: unknown;
 }
 
 export function mapSpeakerToRole(speaker: string): 'interviewer' | 'user' | 'assistant' {

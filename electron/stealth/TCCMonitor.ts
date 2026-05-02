@@ -1,41 +1,21 @@
-import { execFile } from 'node:child_process';
 import { EventEmitter } from 'events';
-
-interface EnterpriseToolInfo {
-  name: string;
-  bundleId: string;
-  category: 'monitoring' | 'proctoring' | 'remote-desktop' | 'screen-capture';
-}
+import { createNativeProcessesProvider } from './nativeStealthModule';
+import { KNOWN_ENTERPRISE_TOOLS } from './enterpriseToolRegistry';
 
 interface TCCMonitorOptions {
   platform?: string;
   checkIntervalMs?: number;
   logger?: Pick<Console, 'log' | 'warn' | 'error'>;
+  getProcessList?: () => Array<{ pid: number; ppid: number; name: string }>;
 }
 
-const KNOWN_ENTERPRISE_TOOLS: EnterpriseToolInfo[] = [
-  { name: 'Teramind', bundleId: 'com.teramind.agent', category: 'monitoring' },
-  { name: 'ActivTrak', bundleId: 'com.activtrak.agent', category: 'monitoring' },
-  { name: 'Hubstaff', bundleId: 'com.hubstaff.desktop', category: 'monitoring' },
-  { name: 'Time Doctor', bundleId: 'com.timedoctor.mac', category: 'monitoring' },
-  { name: 'Veriato', bundleId: 'com.veriato.recorder', category: 'monitoring' },
-  { name: 'ProctorU', bundleId: 'com.proctoru.app', category: 'proctoring' },
-  { name: 'Proctorio', bundleId: 'com.proctorio.extension', category: 'proctoring' },
-  { name: 'ExamSoft', bundleId: 'com.examsoft.examplanner', category: 'proctoring' },
-  { name: 'Respondus LockDown', bundleId: 'com.respondus.lockdownbrowser', category: 'proctoring' },
-  { name: 'TeamViewer', bundleId: 'com.teamviewer.TeamViewer', category: 'remote-desktop' },
-  { name: 'AnyDesk', bundleId: 'com.anydesk.AnyDesk', category: 'remote-desktop' },
-  { name: 'VNC', bundleId: 'com.realvnc.VNCServer', category: 'remote-desktop' },
-  { name: 'Zoom', bundleId: 'us.zoom.xos', category: 'screen-capture' },
-  { name: 'OBS', bundleId: 'com.obsproject.obs-studio', category: 'screen-capture' },
-  { name: 'QuickTime', bundleId: 'com.apple.QuickTimePlayerX', category: 'screen-capture' },
-  { name: 'Loom', bundleId: 'com.loom.desktop', category: 'screen-capture' },
-];
+const TCC_DB_PATH = '/Library/Application Support/com.apple.TCC/TCC.db';
 
 export class TCCMonitor extends EventEmitter {
   private readonly platform: string;
   private readonly checkIntervalMs: number;
   private readonly logger: Pick<Console, 'log' | 'warn' | 'error'>;
+  private readonly getProcessList: () => Array<{ pid: number; ppid: number; name: string }>;
   private checkHandle: unknown = null;
   private running = false;
   private grantedApps = new Map<string, string>();
@@ -46,6 +26,10 @@ export class TCCMonitor extends EventEmitter {
     this.platform = options.platform ?? process.platform;
     this.checkIntervalMs = options.checkIntervalMs ?? 2000;
     this.logger = options.logger ?? console;
+    this.getProcessList = options.getProcessList ?? createNativeProcessesProvider({
+      logger: this.logger,
+      label: 'TCCMonitor',
+    });
   }
 
   start(): void {
@@ -93,57 +77,60 @@ export class TCCMonitor extends EventEmitter {
 
   private async checkTCCDatabase(): Promise<void> {
     try {
-      const stdout = await this.execPromise('sqlite3', [
-        '/Library/Application Support/com.apple.TCC/TCC.db',
-        "SELECT client, auth_value FROM access WHERE service == 'kTCCServiceScreenCapture' AND auth_value > 0;",
-      ]);
+      // T-001: Use better-sqlite3 instead of spawning sqlite3 child process
+      const Database = require('better-sqlite3');
+      const db = new Database(TCC_DB_PATH, { readonly: true, fileMustExist: true });
+      try {
+        const rows = db.prepare(
+          "SELECT client, auth_value FROM access WHERE service == 'kTCCServiceScreenCapture' AND auth_value > 0;"
+        ).all() as Array<{ client: string; auth_value: number }>;
 
-      const newGrantedApps = new Map<string, string>();
+        const newGrantedApps = new Map<string, string>();
 
-      if (stdout && stdout.trim()) {
-        for (const line of stdout.trim().split('\n').filter(Boolean)) {
-          const parts = line.split('|');
-          if (parts.length >= 2) {
-            const bundleId = parts[0].trim();
-            const authValue = parts[1].trim();
-            newGrantedApps.set(bundleId, authValue);
+        for (const row of rows) {
+          const bundleId = row.client?.trim();
+          const authValue = String(row.auth_value);
+          if (!bundleId) continue;
+          newGrantedApps.set(bundleId, authValue);
 
-            if (!this.grantedApps.has(bundleId)) {
-              this.logger.log(`[TCCMonitor] New ScreenCapture grant: ${bundleId}`);
-              this.emit('permission-granted', { bundleId, authValue });
-            }
+          if (!this.grantedApps.has(bundleId)) {
+            this.logger.log(`[TCCMonitor] New ScreenCapture grant: ${bundleId}`);
+            this.emit('permission-granted', { bundleId, authValue });
           }
         }
-      }
 
-      for (const bundleId of this.grantedApps.keys()) {
-        if (!newGrantedApps.has(bundleId)) {
-          this.logger.log(`[TCCMonitor] ScreenCapture revoked: ${bundleId}`);
-          this.emit('permission-revoked', { bundleId });
+        for (const bundleId of this.grantedApps.keys()) {
+          if (!newGrantedApps.has(bundleId)) {
+            this.logger.log(`[TCCMonitor] ScreenCapture revoked: ${bundleId}`);
+            this.emit('permission-revoked', { bundleId });
+          }
         }
-      }
 
-      this.grantedApps = newGrantedApps;
+        this.grantedApps = newGrantedApps;
+      } finally {
+        db.close();
+      }
     } catch {
-      // TCC.db may be inaccessible due to SIP
+      // TCC.db may be inaccessible due to SIP, or better-sqlite3 unavailable
     }
   }
 
   private async checkEnterpriseTools(): Promise<void> {
     const newSuspicious = new Set<string>();
+    const procs = this.getProcessList();
 
     for (const tool of KNOWN_ENTERPRISE_TOOLS) {
       try {
-        const stdout = await this.execPromise('pgrep', ['-lf', tool.bundleId]);
-        if (stdout && stdout.trim()) {
+        const match = procs.find(p => p.name.includes(tool.bundleId) || p.name.includes(tool.name));
+        if (match) {
           newSuspicious.add(tool.name);
           if (!this.suspiciousToolsDetected.has(tool.name)) {
             this.logger.log(`[TCCMonitor] Enterprise tool detected: ${tool.name} (${tool.category})`);
-            this.emit('tool-detected', { ...tool, pid: stdout.trim().split(/\s+/)[0] });
+            this.emit('tool-detected', { ...tool, pid: String(match.pid) });
           }
         }
       } catch {
-        // pgrep returns non-zero when no matches
+        // Process not found
       }
     }
 
@@ -155,18 +142,5 @@ export class TCCMonitor extends EventEmitter {
     }
 
     this.suspiciousToolsDetected = newSuspicious;
-  }
-
-  private execPromise(command: string, args: string[]): Promise<string> {
-    return new Promise((resolve, reject) => {
-      execFile(command, args, { timeout: 5000 }, (error, stdout) => {
-        const err = error as NodeJS.ErrnoException | null;
-        if (err && err.code !== '1') {
-          reject(error);
-          return;
-        }
-        resolve(stdout);
-      });
-    });
   }
 }

@@ -101,6 +101,8 @@ const MeetingAudioBanner: React.FC<MeetingAudioBannerProps> = ({ message, title,
   )
 }
 
+const MemoizedMeetingAudioBanner = memo(MeetingAudioBanner)
+
 export const PrivacyShieldWindowContent: React.FC<PrivacyShieldWindowContentProps> = ({ variant, onEndMeeting }) => {
   const isOverlay = variant === 'overlay'
 

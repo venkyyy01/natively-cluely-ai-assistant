@@ -176,8 +176,8 @@ export class IntelligenceManager extends EventEmitter {
         return this.session.getLastInterviewerTurn();
     }
 
-    logUsage(type: 'assist' | 'followup' | 'chat' | 'followup_questions', question: string, answer: string): void {
-        this.session.logUsage(type, question, answer);
+    logUsage(type: 'assist' | 'followup' | 'chat' | 'followup_questions', question: string, answer: string, items?: Record<string, unknown>): void {
+        this.session.logUsage(type, question, answer, items);
     }
 
     // ============================================

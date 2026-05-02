@@ -315,19 +315,20 @@ export async function chatWithGemini(helper: LLMHelper, message: string, imagePa
         return await helper.generateWithOpenai(openaiUserContent, openaiSystemPrompt, imagePaths);
       }
       if (helper.isClaudeModel(helper.currentModelId) && helper.claudeClient) {
+        const claudeModelId = helper.currentModelId;
         if (isMultimodal && imagePaths?.length) {
           return await helper.runWithScreenshotOcrFallback(
-            `Claude (${CLAUDE_MODEL})`,
+            `Claude (${claudeModelId})`,
             imagePaths,
             effectiveMessage,
-            () => helper.generateWithClaude(claudeUserContent, claudeSystemPrompt, imagePaths),
+            () => helper.generateWithClaude(claudeUserContent, claudeSystemPrompt, imagePaths, claudeModelId),
             (fallbackMessage) => {
-              const fallbackUserContent = helper.prepareUserContentForModel('claude', CLAUDE_MODEL, fallbackMessage, context);
-              return helper.generateWithClaude(fallbackUserContent, claudeSystemPrompt);
+              const fallbackUserContent = helper.prepareUserContentForModel('claude', claudeModelId, fallbackMessage, context);
+              return helper.generateWithClaude(fallbackUserContent, claudeSystemPrompt, undefined, claudeModelId);
             },
           );
         }
-        return await helper.generateWithClaude(claudeUserContent, claudeSystemPrompt, imagePaths);
+        return await helper.generateWithClaude(claudeUserContent, claudeSystemPrompt, imagePaths, claudeModelId);
       }
       if (helper.isGroqModel(helper.currentModelId) && helper.groqClient) {
         if (isMultimodal && imagePaths) {

@@ -2269,7 +2269,7 @@ ANSWER DIRECTLY:`;
   /**
    * Non-streaming Claude generation with proper system/user separation
    */
-  public async generateWithClaude(userMessage: string, systemPrompt?: string, imagePaths?: string[]): Promise<string> {
+  public async generateWithClaude(userMessage: string, systemPrompt?: string, imagePaths?: string[], modelOverride?: string): Promise<string> {
     if (!this.claudeClient) throw new Error("Claude client not initialized");
 
     const targetModel = CLAUDE_MODEL;
@@ -2692,7 +2692,7 @@ ANSWER DIRECTLY:`;
   /**
    * Non-streaming multimodal response from Groq using Llama 4 Scout
    */
-  public async generateWithGroqMultimodal(userMessage: string, imagePaths: string[], systemPrompt?: string): Promise<string> {
+  public async generateWithGroqMultimodal(userMessage: string, imagePaths: string[], systemPrompt?: string, modelOverride?: string): Promise<string> {
     if (!this.groqClient) throw new Error("Groq client not initialized");
 
     const messages: any[] = [];
@@ -2920,6 +2920,7 @@ ANSWER DIRECTLY:`;
 
     if (this.activeCurlProvider && !this.customProvider) {
       const curlProviderAcceptsImages = !isMultimodal || this.curlLikelyAcceptsImages(this.activeCurlProvider.curlCommand || '');
+      if (isMultimodal) console.log(`[LLMHelper] cURL provider "${this.activeCurlProvider.name}": image support = ${curlProviderAcceptsImages}`);
       localProviders.push({
         name: `cURL Provider (${this.activeCurlProvider.name})`,
         execute: async () => {
@@ -3066,6 +3067,8 @@ ANSWER DIRECTLY:`;
       prompt === SCREENSHOT_EVENT_PROMPT ? prompt : this.injectLanguageInstruction(prompt)
     );
     const initialBaseSystemPrompt = systemPromptOverride || HARD_SYSTEM_PROMPT;
+    let excludedVisionTier1Family: ModelFamily | undefined;
+    let excludedTextTier1Family: TextModelFamily | undefined;
 
     // NAT-037: start TTFT blockers concurrently — screenshot/knowledge prep,
     // system prompt warm, and provider warmup.
@@ -3343,6 +3346,7 @@ ANSWER DIRECTLY:`;
       } else {
         yield* this.streamWithOpenai(userContent, finalOpenAiSystem, options?.abortSignal);
       }
+      return;
     }
 
     if (this.isClaudeModel(this.currentModelId) && this.claudeClient) {
@@ -3360,6 +3364,7 @@ ANSWER DIRECTLY:`;
       } else {
         yield* this.streamWithClaude(userContent, finalClaudeSystem, options?.abortSignal);
       }
+      return;
     }
 
     if (this.isGroqModel(this.currentModelId) && this.groqClient) {
@@ -3382,12 +3387,6 @@ ANSWER DIRECTLY:`;
           );
           return;
         }
-        // Text-only Groq
-        const groqSystem = systemPromptOverride ? baseSystemPrompt : GROQ_SYSTEM_PROMPT;
-        const finalGroqSystem = prepareStreamSystemPrompt(groqSystem);
-        const groqFullMessage = this.joinPrompt(finalGroqSystem, userContent);
-        yield* this.streamWithGroq(groqFullMessage, GROQ_MODEL, options?.abortSignal);
-        return;
       } catch (error: any) {
         if (error?.streamHadOutput) {
           throw error;
@@ -3403,9 +3402,9 @@ ANSWER DIRECTLY:`;
 
     // 4. Gemini Routing & Fallback
     if (this.client) {
-      // Direct model use if specified
-      if (this.isGeminiModel(this.currentModelId)) {
-        try {
+      try {
+        // Direct model use if specified
+        if (this.isGeminiModel(this.currentModelId)) {
           const fullMsg = this.joinPrompt(finalSystemPrompt, userContent);
           if (isMultimodal && imagePaths?.length) {
             yield* this.streamWithScreenshotOcrFallback(
@@ -3436,6 +3435,16 @@ ANSWER DIRECTLY:`;
           }
           console.warn(`[LLMHelper] Selected Gemini stream failed. Falling back across providers: ${error.message}`);
         }
+      } catch (error: any) {
+        if (error?.streamHadOutput) {
+          throw error;
+        }
+        if (isMultimodal) {
+          excludedVisionTier1Family = this.currentModelId.includes('pro') ? ModelFamily.GEMINI_PRO : ModelFamily.GEMINI_FLASH;
+        } else {
+          excludedTextTier1Family = this.currentModelId.includes('pro') ? TextModelFamily.GEMINI_PRO : TextModelFamily.GEMINI_FLASH;
+        }
+        console.warn(`[LLMHelper] Selected Gemini stream failed. Falling back across providers: ${error.message}`);
       }
     }
 
