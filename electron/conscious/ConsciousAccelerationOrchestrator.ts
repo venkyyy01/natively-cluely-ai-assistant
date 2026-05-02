@@ -59,6 +59,7 @@ export class ConsciousAccelerationOrchestrator {
   private readonly pauseThresholdTuner: PauseThresholdTuner;
   private currentPhase: InterviewPhase = 'requirements_gathering';
   private enabled = false;
+  private deepMode = false;
   private latestTranscriptTexts: string[] = [];
   private prefetchTriggeredForCurrentPause = false;
   private latestTranscriptRevision = 0;
@@ -121,7 +122,11 @@ export class ConsciousAccelerationOrchestrator {
         // fires before it completes, we must await the in-flight prefetch here to
         // avoid a race where speculative answer starts with no prefetched intent.
         await this.maybePrefetchIntent();
-        void this.maybeStartSpeculativeAnswer();
+        // Deep Mode: skip speculative answer generation — deep mode generates
+        // full conscious answers on every turn, making speculation redundant.
+        if (!this.deepMode) {
+          void this.maybeStartSpeculativeAnswer();
+        }
       }
   }
 
@@ -132,6 +137,10 @@ export class ConsciousAccelerationOrchestrator {
       this.pauseDetector.updateConfig(this.pauseThresholdTuner.getConfig());
       this.clearState();
     }
+  }
+
+  setDeepMode(enabled: boolean): void {
+    this.deepMode = enabled;
   }
 
   isEnabled(): boolean {

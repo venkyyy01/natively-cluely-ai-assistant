@@ -10,6 +10,7 @@ isUndetectable?: boolean;
 disguiseMode?: 'terminal' | 'settings' | 'activity' | 'none';
 consciousModeEnabled?: boolean;
 accelerationModeEnabled?: boolean;
+deepModeEnabled?: boolean;
 enablePrivateMacosStealthApi?: boolean;
 enableCaptureDetectionWatchdog?: boolean;
 enableVirtualDisplayIsolation?: boolean;
@@ -36,6 +37,10 @@ sanitized.consciousModeEnabled = raw.consciousModeEnabled;
 
 if (typeof raw.accelerationModeEnabled === 'boolean') {
     sanitized.accelerationModeEnabled = raw.accelerationModeEnabled;
+  }
+
+  if (typeof raw.deepModeEnabled === 'boolean') {
+    sanitized.deepModeEnabled = raw.deepModeEnabled;
   }
 
   if (typeof raw.enablePrivateMacosStealthApi === 'boolean') {

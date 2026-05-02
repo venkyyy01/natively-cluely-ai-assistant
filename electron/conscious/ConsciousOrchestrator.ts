@@ -2,6 +2,8 @@ import {
   classifyConsciousModeQuestion,
   formatConsciousModeResponse,
   isValidConsciousModeResponse,
+  parseConsciousModeResponse,
+  tryParseConsciousModeOpeningReasoning,
   type ConsciousModeQuestionRoute,
   type ConsciousModeStructuredResponse,
   type ReasoningThread,
@@ -30,6 +32,32 @@ import { FlexibleResponseRouter, type ConsciousTurnPlan } from './FlexibleRespon
 import { HumanLikeConversationEngine } from './HumanLikeConversationEngine';
 import { ConsciousRefinementOrchestrator } from './ConsciousRefinementOrchestrator';
 import { AdaptiveVerificationGate } from './AdaptiveVerificationGate';
+import { extractClaims, type BackgroundVerificationOutcome, type Claim } from './DeepMode';
+import { CONSCIOUS_DEEP_IDENTITY, CONSCIOUS_DEEP_CONTRACT } from '../llm/prompts';
+
+interface DeepModeLLMHelper {
+  streamChat(
+    message: string,
+    imagePaths?: string[],
+    context?: string,
+    systemPromptOverride?: string,
+    options?: { skipKnowledgeInterception?: boolean; qualityTier?: string; abortSignal?: AbortSignal },
+  ): AsyncGenerator<string, void, unknown>;
+  chat?(
+    message: string,
+    imagePaths?: string[],
+    context?: string,
+    systemPromptOverride?: string,
+  ): Promise<string>;
+  verifyClaimsInBackground?(
+    claims: { text: string }[],
+    fullContext: string,
+  ): Promise<BackgroundVerificationOutcome>;
+  executeDeepWithAdaptiveContext?(
+    fullContext: string,
+    generateFn: (context: string) => Promise<string>,
+  ): Promise<string>;
+}
 
 interface KnowledgeStatusLike {
   activeMode?: unknown;
@@ -492,9 +520,149 @@ export class ConsciousOrchestrator {
     }
   }
 
+  // Deep Mode LLM interface — avoids circular dependency on LLMHelper
+  private deepLlmHelper?: DeepModeLLMHelper;
+
+  setDeepLlmHelper(helper: DeepModeLLMHelper | undefined): void {
+    this.deepLlmHelper = helper;
+  }
+
+  /**
+   * Deep Mode execution: streaming-first, background-verify, never-block.
+   *
+   * Pipeline:
+   *   1. Assemble deep prompt + full context
+   *   2. Stream via cURL → parse openingReasoning early → emit immediately
+   *   3. Parse full JSON response on stream completion
+   *   4. Launch background claim verification (non-blocking Promise)
+   *   5. Record response and return
+   *
+   * No circuit breaker. No blocking verification. No fallback — the caller
+   * (IntelligenceEngine) handles deep → conscious → standard fallback chain.
+   */
+  async executeDeep(input: {
+    question: string;
+    fullContext: string;
+    answerHistory: string;
+    intentResult: IntentResult;
+    onEarlyReasoning?: (text: string) => void;
+    abortSignal?: AbortSignal;
+  }): Promise<ConsciousExecutionResult> {
+    if (!this.deepLlmHelper) {
+      return this.fallback('deep_no_llm_helper');
+    }
+
+    try {
+      const contextParts: string[] = [
+        `QUESTION: ${input.question}`,
+      ];
+
+      if (input.answerHistory) {
+        contextParts.push(`PREVIOUS ANSWERS (do NOT repeat these):\n${input.answerHistory}`);
+      }
+
+      contextParts.push(`FULL CONVERSATION CONTEXT:\n${input.fullContext}`);
+
+      const message = contextParts.join('\n\n');
+      const systemPrompt = CONSCIOUS_DEEP_IDENTITY + '\n\n' + CONSCIOUS_DEEP_CONTRACT;
+
+      let full = '';
+      let earlyReasoningEmitted = false;
+
+      // Primary path: streaming with full context for early token emission
+      try {
+        const stream = this.deepLlmHelper.streamChat(
+          message,
+          undefined, // no image paths in deep mode
+          undefined, // context already in message
+          systemPrompt,
+          { skipKnowledgeInterception: true, qualityTier: 'quality' as const, abortSignal: input.abortSignal },
+        );
+
+        for await (const chunk of stream) {
+          full += chunk;
+
+          if (!earlyReasoningEmitted && input.onEarlyReasoning && full.length > 30) {
+            const early = tryParseConsciousModeOpeningReasoning(full);
+            if (early) {
+              input.onEarlyReasoning(early);
+              earlyReasoningEmitted = true;
+            }
+          }
+        }
+      } catch (streamError: any) {
+        // Adaptive context fallback: if the stream failed with context overflow,
+        // retry with halved context sizes via the non-streaming chat path.
+        if (
+          this.deepLlmHelper.executeDeepWithAdaptiveContext &&
+          this.deepLlmHelper.chat
+        ) {
+          console.warn('[DeepMode] Streaming failed, trying adaptive context:', streamError.message);
+          full = await this.deepLlmHelper.executeDeepWithAdaptiveContext(
+            message,
+            (ctx: string) => this.deepLlmHelper!.chat!(ctx, undefined, undefined, systemPrompt),
+          );
+        } else {
+          throw streamError;
+        }
+      }
+
+      return this.finalizeDeepResponse(full, input);
+    } catch (error) {
+      console.warn('[DeepMode] executeDeep failed:', error);
+      return this.fallback('deep_execution_error');
+    }
+  }
+
   private skip(): ConsciousExecutionResult {
     this.consecutiveFailures = 0;
     return { kind: 'skip' };
+  }
+
+  private finalizeDeepResponse(
+    full: string,
+    input: { question: string; fullContext: string },
+  ): ConsciousExecutionResult {
+    const structuredResponse = parseConsciousModeResponse(full);
+
+    if (!isValidConsciousModeResponse(structuredResponse)) {
+      return this.fallback('deep_invalid_response');
+    }
+
+    // BACKGROUND: launch claim verification (do NOT await)
+    const claims = extractClaims(structuredResponse);
+    if (claims.length > 0 && this.deepLlmHelper?.verifyClaimsInBackground) {
+      const verifyPromise = this.deepLlmHelper
+        .verifyClaimsInBackground(claims, input.fullContext)
+        .then((outcome: BackgroundVerificationOutcome) => {
+          if (!outcome.supported) {
+            console.warn('[DeepMode] Unsupported claims:', outcome.unsupportedClaims);
+            Metrics.counter('deep.unsupported_claims', outcome.unsupportedClaims.length);
+          }
+        })
+        .catch((err: unknown) => {
+          console.warn('[DeepMode] Background verification error:', err);
+        });
+      void verifyPromise;
+    }
+
+    if (input.question) {
+      this.session.recordConsciousResponse(input.question, structuredResponse, 'start');
+    }
+
+    this.recordExecutionSuccess();
+
+    return {
+      kind: 'handled',
+      structuredResponse,
+      fullAnswer: formatConsciousModeResponse(structuredResponse),
+      verification: {
+        deterministic: 'skipped',
+        judge: 'skipped',
+        provenance: 'skipped',
+        reasons: ['verification_running_in_background'],
+      },
+    };
   }
 
   async continueThread(input: {

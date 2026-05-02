@@ -20,6 +20,8 @@ setConsciousModeEnabled?: (enabled: boolean) => boolean;
 getConsciousModeEnabled?: () => boolean;
 setAccelerationModeEnabled?: (enabled: boolean) => boolean;
 getAccelerationModeEnabled?: () => boolean;
+setDeepModeEnabled?: (enabled: boolean) => boolean;
+getDeepModeEnabled?: () => boolean;
 setDisguise?: (mode: 'terminal' | 'settings' | 'activity' | 'none') => void;
 getDisguise?: () => string;
 getUndetectable?: () => boolean;
@@ -246,6 +248,36 @@ return settingsSuccess({ enabled });
 console.error('Error getting Acceleration Mode state:', error);
 return settingsError('SETTINGS_READ_FAILED', error?.message || 'Unable to read Acceleration Mode');
 }
+});
+
+safeHandleValidated('set-deep-mode', (args) => [parseIpcInput(ipcSchemas.booleanFlag, args[0], 'set-deep-mode')] as const, async (_event, enabled) => {
+  try {
+    const settingsFacade = getSettingsFacade(appState);
+    const result = settingsFacade?.setDeepModeEnabled
+      ? settingsFacade.setDeepModeEnabled(enabled)
+      : appState.setDeepModeEnabled(enabled);
+    if (result === false) {
+      return settingsError('SETTINGS_PERSIST_FAILED', 'Unable to persist Deep Mode');
+    }
+
+    return settingsSuccess({ enabled });
+  } catch (error: any) {
+    console.error('Error setting Deep Mode state:', error);
+    return settingsError('SETTINGS_PERSIST_FAILED', error?.message || 'Unable to persist Deep Mode');
+  }
+});
+
+safeHandle('get-deep-mode', async () => {
+  try {
+    const settingsFacade = getSettingsFacade(appState);
+    const enabled = settingsFacade?.getDeepModeEnabled
+      ? settingsFacade.getDeepModeEnabled()
+      : appState.getDeepModeEnabled();
+    return settingsSuccess({ enabled });
+  } catch (error: any) {
+    console.error('Error getting Deep Mode state:', error);
+    return settingsError('SETTINGS_READ_FAILED', error?.message || 'Unable to read Deep Mode');
+  }
 });
 
 safeHandleValidated('set-disguise', (args) => [parseIpcInput(ipcSchemas.disguiseMode, args[0], 'set-disguise')] as const, async (_event, mode) => {

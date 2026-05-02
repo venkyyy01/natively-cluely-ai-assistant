@@ -313,6 +313,7 @@ export class LLMHelper {
   private geminiModel: string = GEMINI_FLASH_MODEL
   public customProvider: CustomProvider | null = null;
   public activeCurlProvider: CurlProvider | null = null;
+  private deepMode = false;
   private fastResponseConfig: FastResponseConfig = { ...DEFAULT_FAST_RESPONSE_CONFIG };
   public knowledgeOrchestrator: any = null;
   private aiResponseLanguage: string = 'English';
@@ -688,6 +689,15 @@ export class LLMHelper {
     this.customProvider = null;
     this.activeCurlProvider = provider;
     console.log(`[LLMHelper] Switched to cURL provider: ${provider.name}`);
+  }
+
+  public setDeepMode(enabled: boolean): void {
+    this.deepMode = enabled;
+    console.log(`[LLMHelper] Deep Mode: ${enabled ? 'ENABLED' : 'DISABLED'}`);
+  }
+
+  public isDeepModeActive(): boolean {
+    return this.deepMode;
   }
 
   private restoreStandardProviderClientsForFallback(): void {
@@ -3309,6 +3319,12 @@ ANSWER DIRECTLY:`;
         console.warn(`[LLMHelper] cURL provider (${this.activeCurlProvider.name}) failed after ${CURL_PROVIDER_TIMEOUT_MS}ms timeout window. Falling back to standard routing:`, error.message);
       }
 
+      // Deep Mode: do NOT fall back to standard providers — let the caller
+      // handle the failure via the deep → conscious → standard fallback chain.
+      if (this.deepMode) {
+        throw new Error(`Deep mode cURL provider (${this.activeCurlProvider.name}) exhausted`);
+      }
+
       yield* this.streamWithProviderFallbackBypass(() => this.streamChat(
         message,
         originalImagePaths,
@@ -4369,6 +4385,91 @@ ANSWER DIRECTLY:`;
       return { success: false, error: error.message };
     }
   }
+  /**
+   * Deep Mode: Execute cURL with adaptive context window.
+   * Starts with full context, halves on likely context-overflow errors,
+   * and returns the first successful result.
+   */
+  public async executeDeepWithAdaptiveContext(
+    fullContext: string,
+    generateFn: (context: string) => Promise<string>,
+  ): Promise<string> {
+    const maxAttempts = 4;
+    const minBudget = 2048;
+
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      try {
+        const context = attempt === 0
+          ? fullContext
+          : this.trimContextToTokenBudget(fullContext, Math.max(minBudget, 32768 >> attempt));
+        const result = await generateFn(context);
+        if (attempt > 0) {
+          console.log(`[LLMHelper] Deep Mode adaptive context succeeded at attempt ${attempt + 1}`);
+        }
+        return result;
+      } catch (e: any) {
+        if (this.isLikelyContextOverflowError(e)) {
+          const nextBudget = attempt === 0 ? 32768 : 32768 >> attempt;
+          if (nextBudget < minBudget) {
+            throw e;
+          }
+          console.warn(`[LLMHelper] Deep Mode context overflow, retrying at ~${nextBudget} tokens`);
+          continue;
+        }
+        throw e;
+      }
+    }
+
+    throw new Error('Deep mode: all adaptive context sizes exhausted');
+  }
+
+  private isLikelyContextOverflowError(error: any): boolean {
+    const message = String(error?.message || error || '').toLowerCase();
+    return (
+      message.includes('context length') ||
+      message.includes('too long') ||
+      message.includes('max context') ||
+      message.includes('maximum context') ||
+      message.includes('context window') ||
+      message.includes('too many tokens') ||
+      message.includes('token limit') ||
+      message.includes('reduce the length') ||
+      message.includes('truncat')
+    );
+  }
+
+  /**
+   * Deep Mode: Verify claims against context in background.
+   * Launches parallel mini-LLM calls via cURL to check each claim.
+   */
+  public async verifyClaimsInBackground(
+    claims: { text: string }[],
+    fullContext: string,
+  ): Promise<{ supported: boolean; unsupportedClaims: string[] }> {
+    if (!this.activeCurlProvider || claims.length === 0) {
+      return { supported: true, unsupportedClaims: [] };
+    }
+
+    const truncatedContext = fullContext.slice(0, 16000);
+
+    const results = await Promise.all(
+      claims.map(async (claim) => {
+        try {
+          const response = await this.chatWithCurl(
+            `CLAIM: "${claim.text}"\n\nCONTEXT:\n${truncatedContext}\n\nIs this claim supported by the context above? Answer ONLY "YES" or "NO" followed by one sentence explaining why.`,
+            'You verify whether claims are supported by context. Answer ONLY YES or NO, then one sentence why.',
+          );
+          return { claim: claim.text, supported: response.trim().toUpperCase().startsWith('YES') };
+        } catch {
+          return { claim: claim.text, supported: true };
+        }
+      }),
+    );
+
+    const unsupported = results.filter((r) => !r.supported).map((r) => r.claim);
+    return { supported: unsupported.length === 0, unsupportedClaims: unsupported };
+  }
+
   /**
    * Universal Chat (Non-streaming)
    */

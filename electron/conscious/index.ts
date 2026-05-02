@@ -50,6 +50,7 @@ export {
   type ConsciousReplayTrace,
 } from './ConsciousEvalHarness';
 export { FallbackExecutor } from './FallbackExecutor';
+export { classifyDeepModeQuestion, extractClaims, createDefaultDeepModeState, type DeepModeState, type DeepModeConfig, type Claim, type ClaimCategory, type ClaimVerificationResult, type BackgroundVerificationOutcome } from './DeepMode';
 export { extractConstraints, type ExtractedConstraint, type ConstraintType } from './ConstraintExtractor';
 export { detectQuestion, type QuestionDetection, type QuestionType } from './QuestionDetector';
 export { ResponseFingerprinter, type DuplicateCheckResult, type ResponseFingerprintEntry } from './ResponseFingerprint';

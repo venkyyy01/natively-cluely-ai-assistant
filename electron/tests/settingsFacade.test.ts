@@ -23,6 +23,14 @@ getAccelerationModeEnabled: () => {
 calls.push('getAcceleration');
 return true;
 },
+setDeepModeEnabled: (enabled: boolean) => {
+calls.push(`setDeep:${enabled}`);
+return true;
+},
+getDeepModeEnabled: () => {
+calls.push('getDeep');
+return false;
+},
 setDisguise: (mode: 'terminal' | 'settings' | 'activity' | 'none') => {
       calls.push(`setDisguise:${mode}`);
     },
@@ -51,6 +59,8 @@ assert.equal(facade.setConsciousModeEnabled(true), true);
 assert.equal(facade.getConsciousModeEnabled(), false);
 assert.equal(facade.setAccelerationModeEnabled(false), true);
 assert.equal(facade.getAccelerationModeEnabled(), true);
+assert.equal(facade.setDeepModeEnabled(true), true);
+assert.equal(facade.getDeepModeEnabled(), false);
 facade.setDisguise('terminal');
   assert.equal(facade.getDisguise(), 'activity');
   assert.equal(facade.getUndetectable(), true);
@@ -63,6 +73,8 @@ assert.deepEqual(calls, [
 'getConscious',
 'setAcceleration:false',
 'getAcceleration',
+'setDeep:true',
+'getDeep',
 'setDisguise:terminal',
 'getDisguise',
 'getUndetectable',

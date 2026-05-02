@@ -31,6 +31,7 @@ type BucketName = keyof TokenBudgetAllocations;
 export class TokenBudgetManager {
   private budget: TokenBudget;
   private tokenCounter: TokenCounter;
+  private deepMode = false;
 
   constructor(provider: LLMProvider = 'openai') {
     const totalBudget = PROVIDER_BUDGETS[provider];
@@ -57,6 +58,7 @@ export class TokenBudgetManager {
   }
 
   getTotalBudget(): number {
+    if (this.deepMode) return Infinity;
     return this.budget.totalBudget;
   }
 
@@ -69,6 +71,7 @@ export class TokenBudgetManager {
   }
 
   canAdd(bucket: BucketName, tokens: number): boolean {
+    if (this.deepMode) return true;
     const allocation = this.budget.allocations[bucket];
     return allocation.current + tokens <= allocation.max;
   }
@@ -87,10 +90,12 @@ export class TokenBudgetManager {
   }
 
   getAvailableSpace(): number {
+    if (this.deepMode) return Infinity;
     return this.budget.totalBudget - this.getCurrentUsage();
   }
 
   rebalance(): void {
+    if (this.deepMode) return;
     const allocations = this.budget.allocations;
     const total = this.budget.totalBudget;
     
@@ -143,5 +148,13 @@ export class TokenBudgetManager {
       totalBudget,
       allocations: this.initializeAllocations(totalBudget),
     };
+  }
+
+  setDeepMode(enabled: boolean): void {
+    this.deepMode = enabled;
+  }
+
+  isDeepModeActive(): boolean {
+    return this.deepMode;
   }
 }

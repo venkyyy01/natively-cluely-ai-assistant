@@ -88,6 +88,10 @@ export class AccelerationManager {
     this.consciousOrchestrator.setEnabled(enabled);
   }
 
+  setDeepMode(enabled: boolean): void {
+    this.consciousOrchestrator.setDeepMode(enabled);
+  }
+
   isConsciousModeEnabled(): boolean {
     return this.consciousOrchestrator.isEnabled();
   }

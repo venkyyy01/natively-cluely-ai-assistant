@@ -5,6 +5,8 @@ setConsciousModeEnabled: (enabled: boolean) => boolean;
 getConsciousModeEnabled: () => boolean;
 setAccelerationModeEnabled: (enabled: boolean) => boolean;
 getAccelerationModeEnabled: () => boolean;
+setDeepModeEnabled: (enabled: boolean) => boolean;
+getDeepModeEnabled: () => boolean;
 setDisguise: (mode: DisguiseMode) => void;
 getDisguise: () => string;
 getUndetectable: () => boolean;
@@ -30,6 +32,14 @@ return this.deps.setAccelerationModeEnabled(enabled);
 
 getAccelerationModeEnabled(): boolean {
 return this.deps.getAccelerationModeEnabled();
+}
+
+setDeepModeEnabled(enabled: boolean): boolean {
+  return this.deps.setDeepModeEnabled(enabled);
+}
+
+getDeepModeEnabled(): boolean {
+  return this.deps.getDeepModeEnabled();
 }
 
 setDisguise(mode: DisguiseMode): void {

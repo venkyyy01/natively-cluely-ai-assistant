@@ -493,7 +493,7 @@ function isSubstantialConversationTurn(lower: string): boolean {
 function isBroadConsciousSeed(lower: string): boolean {
   // Strip trailing punctuation so "limiters?" matches "limiters" word boundary
   const clean = stripTrailingPunctuation(lower);
-  return /\b(design|architecture|component|components|service|services|database|databases|api|apis|scale|scaling|throughput|latency|tradeoff|tradeoffs|failure|retry|cache|caching|queue|queues|shard|sharding|replica|replication|microservice|microservices|monolith|algorithm|algorithms|complexity|optimization|optimisation|optimize|optimise|partition|partitioning|failover|bottleneck|consistency|availability|backpressure|hotspot|ledger|distributed)\b|\b(data structure|data structures|rate limiter|rate limiters|data model|notification system|streaming system)\b/i.test(clean);
+  return /\b(design|architecture|component|components|service|services|database|databases|api|apis|scale|scaling|throughput|latency|tradeoff|tradeoffs|failure|retry|cache|caching|queue|queues|shard|sharding|replica|replication|microservice|microservices|monolith|algorithm|algorithms|complexity|optimization|optimisation|optimize|optimise|partition|partitioning|failover|bottleneck|consistency|availability|backpressure|hotspot|ledger|distributed|testing|deployment|monitoring|observability|ci.?cd|data pipeline|state management|authentication|authorization|security|performance|reliability|error handling|logging|tracing|load balanc|rate limit|circuit breaker|message queue|event sourc|CQRS|saga|workflow|orchestrat|choreograph)\b|\b(data structure|data structures|rate limiter|rate limiters|data model|notification system|streaming system)\b/i.test(clean);
 }
 
 function isBehavioralPrompt(lower: string): boolean {
@@ -509,7 +509,7 @@ function isSystemDesignQuestion(lower: string): boolean {
   // Added \b word boundaries to prevent false positives.
   // Strip trailing punctuation so "limiter?" matches "limiter" word boundary
   const clean = stripTrailingPunctuation(lower);
-  return /(\bhow would you design\b|\bsystem design\b|\barchitect\b|\bhigh[- ]level design\b|\bdistributed system\b|\brate limiter\b|\bpartition\b|\bmonolith to microservices\b|\bmigrate a monolith\b|\bdesign the data model\b|\bdesign a .*system\b|\bdesign an .*system\b|\bdesign the .*system\b|\bdesign a .*service\b|\bdesign an .*service\b|\bdesign the .*service\b|\bdesign this\b|\bdesign that\b)/i.test(clean);
+  return /(\bhow would you design\b|\bsystem design\b|\barchitect\b|\bhigh[- ]level design\b|\bdistributed system\b|\brate limiter\b|\bpartition\b|\bmonolith to microservices\b|\bmigrate a monolith\b|\bdesign the data model\b|\bdesign a .*system\b|\bdesign an .*system\b|\bdesign the .*system\b|\bdesign a .*service\b|\bdesign an .*service\b|\bdesign the .*service\b|\bdesign this\b|\bdesign that\b|\bwhat(?:'s| is) your approach\b|\bwhat(?:'s| is) the best way\b|\bhow (?:do|would) you approach\b|\bhow (?:do|would) you handle\b|\bhow (?:do|would) you solve\b|\bhow (?:do|would) you build\b|\bhow (?:do|would) you implement\b|\bhow (?:do|would) you structure\b|\bhow (?:do|would) you organize\b|\bhow should (?:I|we)\b|\bwalk (?:me )?through (?:your |how )?\b|\bdescribe your approach\b|\bwhat .*(?:approach|strategy) would\b|\bdesign decision\b|\byour approach for\b|\bgiven.*how would\b|\bif you were.*how\b|\bwhat would you\b|\btrade[ -]?offs?\b.*\bdesign\b|\bhow do I choose\b)/i.test(clean);
 }
 
 function isQuestionContinuationPhrase(lower: string): boolean {

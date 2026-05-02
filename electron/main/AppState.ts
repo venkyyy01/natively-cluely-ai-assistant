@@ -99,6 +99,7 @@ export class AppState {
   private tray: Tray | null = null
 private disguiseMode: 'terminal' | 'settings' | 'activity' | 'none' = 'none'
 private consciousModeEnabled: boolean = false
+private deepModeEnabled: boolean = false
 
   // View management
   private view: "queue" | "solutions" = "queue"
@@ -207,12 +208,13 @@ this.isUndetectable = settingsManager.get('isUndetectable') ?? false;
 this.visibilityIntent = this.isUndetectable ? 'visible_safe_controls' : 'visible_app';
 this.disguiseMode = settingsManager.get('disguiseMode') ?? 'none';
 this.consciousModeEnabled = settingsManager.get('consciousModeEnabled') ?? false;
+this.deepModeEnabled = settingsManager.get('deepModeEnabled') ?? false;
 
 // 1a. Sync acceleration optimization flags from settings
 const accelerationModeEnabled = settingsManager.getAccelerationModeEnabled();
 syncOptimizationFlagsFromSettings(accelerationModeEnabled);
 
-console.log(`[AppState] Initialized with isUndetectable=${this.isUndetectable}, disguiseMode=${this.disguiseMode}, consciousModeEnabled=${this.consciousModeEnabled}, accelerationModeEnabled=${accelerationModeEnabled}`);
+console.log(`[AppState] Initialized with isUndetectable=${this.isUndetectable}, disguiseMode=${this.disguiseMode}, consciousModeEnabled=${this.consciousModeEnabled}, deepModeEnabled=${this.deepModeEnabled}, accelerationModeEnabled=${accelerationModeEnabled}`);
 
 // 2. Initialize Helpers with loaded state
 // Feature flags default to ON with safe fallback to Layer 0 if broken
@@ -443,6 +445,11 @@ this.modelSelectorWindowHelper.setWindowHelper(this.windowHelper);
 this.intelligenceManager = new IntelligenceManager(this.processingHelper.getLLMHelper())
 this.intelligenceManager.setSupervisorBus(this.runtimeCoordinator.getBus())
 this.intelligenceManager.setConsciousModeEnabled(this.consciousModeEnabled)
+if (this.deepModeEnabled) {
+  this.processingHelper.getLLMHelper().setDeepMode(true)
+  this.accelerationManager?.setDeepMode?.(true)
+  console.log('[AppState] Deep Mode restored from settings')
+}
 if (this.isUndetectable) {
   this.setContainmentActive(true, 'protected_startup')
 }
@@ -2543,6 +2550,8 @@ setConsciousModeEnabled: (enabled) => this.setConsciousModeEnabled(enabled),
 getConsciousModeEnabled: () => this.getConsciousModeEnabled(),
 setAccelerationModeEnabled: (enabled) => this.setAccelerationModeEnabled(enabled),
 getAccelerationModeEnabled: () => this.getAccelerationModeEnabled(),
+setDeepModeEnabled: (enabled) => this.setDeepModeEnabled(enabled),
+getDeepModeEnabled: () => this.getDeepModeEnabled(),
 setDisguise: (mode) => this.setDisguise(mode),
 getDisguise: () => this.getDisguise(),
 getUndetectable: () => this.getUndetectable(),
@@ -3180,6 +3189,15 @@ setThemeMode: (mode) => this.themeManager.setMode(mode as import('../ThemeManage
       return
     }
 
+    // Deep Mode / Privacy Shield fix:
+    // Suppress stealth-degraded fault when the user is explicitly toggling
+    // undetectable OFF (pendingUndetectableState === false). Without this guard,
+    // stealth-degraded fires while isUndetectable is still true during the
+    // transition, causing a false FAULT + containment activation.
+    if (this.pendingUndetectableState === false) {
+      return
+    }
+
     const shouldFault = hasCaptureRiskWarnings(warnings)
 
     if (!shouldFault) {
@@ -3387,6 +3405,28 @@ setThemeMode: (mode) => this.themeManager.setMode(mode as import('../ThemeManage
 
 public getConsciousModeEnabled(): boolean {
 return this.consciousModeEnabled
+}
+
+public setDeepModeEnabled(enabled: boolean): boolean {
+  if (this.deepModeEnabled === enabled) {
+    return true
+  }
+
+  const persisted = SettingsManager.getInstance().set('deepModeEnabled', enabled)
+  if (!persisted) {
+    throw new Error('Unable to persist Deep Mode')
+  }
+
+  this.deepModeEnabled = enabled
+  this.processingHelper.getLLMHelper().setDeepMode(enabled)
+  this.accelerationManager?.setDeepMode?.(enabled)
+  this._broadcastToAllWindows('deep-mode-changed', enabled)
+  console.log(`[AppState] Deep Mode: ${enabled ? 'ENABLED' : 'DISABLED'}`)
+  return true
+}
+
+public getDeepModeEnabled(): boolean {
+  return this.deepModeEnabled
 }
 
 public setAccelerationModeEnabled(enabled: boolean): boolean {

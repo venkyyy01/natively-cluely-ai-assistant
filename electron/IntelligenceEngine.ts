@@ -30,6 +30,8 @@ import { getActiveAccelerationManager } from './services/AccelerationManager';
 import type { AccelerationManager } from './services/AccelerationManager';
 import type { SessionEvent } from './memory/SessionPersistence';
 import { getDefaultTriggerAuditLog } from './observability/TriggerAuditLog';
+import { classifyDeepModeQuestion } from './conscious/DeepMode';
+import type { IntentResult } from './llm/IntentClassifier';
 
 // Mode types
 export type IntelligenceMode = 'idle' | 'assist' | 'what_to_say' | 'follow_up' | 'recap' | 'manual' | 'follow_up_questions' | 'reasoning_first';
@@ -762,12 +764,117 @@ export class IntelligenceEngine extends EventEmitter {
         if (trigger.confidence < 0.5) {
             return;
         }
+
+        // Deep Mode: route to deep-mode pipeline if enabled and cURL is active
+        if (this.llmHelper.isDeepModeActive() && this.llmHelper.activeCurlProvider) {
+            await this.runDeepModeAnswer(trigger);
+            return;
+        }
+
         await this.runWhatShouldISay(trigger.lastQuestion, trigger.confidence, undefined, 0, undefined, trigger.sourceUtteranceId);
     }
 
     // ============================================
     // Mode Executors
     // ============================================
+
+    /**
+     * Deep Mode Answer Pipeline
+     *
+     * Uses the cURL provider with full context, immediate streaming,
+     * and background verification. Falls back gracefully:
+     *   deep → conscious (normal) → standard fast answer.
+     */
+    async runDeepModeAnswer(trigger: SuggestionTrigger): Promise<string | null> {
+        const question = trigger.lastQuestion;
+        console.log('[DeepMode] runDeepModeAnswer triggered:', {
+            question: question.substring(0, 80),
+            cUrlActive: !!this.llmHelper.activeCurlProvider,
+        });
+
+        // 1. Classify — deep mode qualifies everything except admin
+        if (!classifyDeepModeQuestion(question)) {
+            console.log('[DeepMode] Question classified as admin/trivial, skipping');
+            return null;
+        }
+
+        // 2. Assemble full context
+        const fullTranscript = this.session.getContext(99999)
+            .map((item: ContextItem) => `${item.role}: ${item.text}`)
+            .join('\n');
+        const answerHistory = this.session.getAssistantResponseHistory()
+            .map((r) => `Q: ${r.questionContext}\nA: ${r.text}`)
+            .join('\n\n');
+        const semanticContext = this.session.getConsciousSemanticContext();
+        const evidenceContext = this.session.getConsciousEvidenceContext();
+        const longMemoryContext = this.session.getConsciousLongMemoryContext(question);
+
+        const fullContext = [
+            fullTranscript ? `TRANSCRIPT:\n${fullTranscript}` : '',
+            longMemoryContext ? `LONG MEMORY:\n${longMemoryContext}` : '',
+            semanticContext ? `PROFILE:\n${semanticContext}` : '',
+            evidenceContext ? `EVIDENCE:\n${evidenceContext}` : '',
+        ].filter(Boolean).join('\n\n');
+
+        // 3. Set up deep mode on LLMHelper
+        this.llmHelper.setDeepMode(true);
+        this.consciousOrchestrator.setDeepLlmHelper({
+            streamChat: this.llmHelper.streamChat.bind(this.llmHelper),
+            chat: this.llmHelper.chat.bind(this.llmHelper),
+            verifyClaimsInBackground: this.llmHelper.verifyClaimsInBackground.bind(this.llmHelper),
+            executeDeepWithAdaptiveContext: this.llmHelper.executeDeepWithAdaptiveContext.bind(this.llmHelper),
+        });
+
+        try {
+            // 4. Intent classify — use default deep_dive for deep mode
+            // Deep mode always routes to conscious; the exact intent classification
+            // matters less than in normal mode since we use full context.
+            const intentResult: IntentResult = { intent: 'deep_dive', confidence: 0.9, answerShape: 'reasoning_first' };
+
+            // 5. Execute deep mode
+            const result = await this.consciousOrchestrator.executeDeep({
+                question,
+                fullContext,
+                answerHistory,
+                intentResult,
+                onEarlyReasoning: (text: string) => {
+                    this.emit('suggested_answer_token', text, question, 0.95);
+                },
+                abortSignal: this.whatToSayAbortController?.signal,
+            });
+
+            if (result.kind === 'handled') {
+                // Emit final answer
+                this.session.addAssistantMessage(result.fullAnswer);
+                this.emit('suggested_answer', result.fullAnswer, question, 0.95, {
+                    route: 'conscious_answer',
+                    attemptedRoute: 'conscious_answer',
+                    fallbackOccurred: false,
+                    schemaVersion: 'conscious_mode_v1',
+                    evidenceHash: createHash('sha256').update(question).digest('hex').slice(0, 8),
+                    transcriptRevision: this.session.getTranscriptRevision(),
+                    threadAction: 'start',
+                    ...(result.verification.reasons.length ? { verifierReasons: result.verification.reasons } : {}),
+                });
+                this.consciousResponseFingerprinter.record(result.fullAnswer);
+                return result.fullAnswer;
+            }
+
+            // 6. Deep mode returned fallback → try conscious (normal)
+            console.warn('[DeepMode] executeDeep returned', result.kind, '→ falling back to conscious mode');
+            return await this.runWhatShouldISay(question, trigger.confidence, undefined, 0, undefined, trigger.sourceUtteranceId);
+        } catch (error: any) {
+            console.error('[DeepMode] Fatal error:', error?.message || error);
+            // Last resort: standard conscious (do NOT disable deep mode globally —
+            // one call failure should not turn off the feature for the whole session)
+            try {
+                return await this.runWhatShouldISay(question, trigger.confidence, undefined, 0, undefined, trigger.sourceUtteranceId);
+            } catch (e2) {
+                console.error('[DeepMode] Even fallback failed:', e2);
+                return null;
+            }
+        }
+    }
 
     /**
      * MODE 1: Assist (Passive)
