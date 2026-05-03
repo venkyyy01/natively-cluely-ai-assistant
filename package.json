@@ -272,7 +272,7 @@
 		"screenshot-desktop": "^1.15.0",
 		"sharp": "^0.33.5",
 		"sqlite-vec": "^0.1.7-alpha.2",
-		"sqlite3": "^6.0.1",
+		"sqlite3": "^5.1.7",
 		"tailwind-merge": "^2.5.4",
 		"tesseract.js": "^5.0.5",
 		"three": "^0.182.0",
@@ -284,11 +284,11 @@
 	"optionalDependencies": {
 		"natively-audio": "file:./native-module",
 		"onnxruntime-node": "^1.18.0",
-		"onnxruntime-node-win32-x64": "^1.18.0",
 		"onnxruntime-node-win32-ia32": "^1.18.0",
+		"onnxruntime-node-win32-x64": "^1.18.0",
 		"sqlite-vec-darwin-arm64": "^0.1.7-alpha.2",
 		"sqlite-vec-darwin-x64": "^0.1.7-alpha.2",
-		"sqlite-vec-win32-x64": "^0.1.7-alpha.2",
-		"sqlite-vec-win32-ia32": "^0.1.7-alpha.2"
+		"sqlite-vec-win32-ia32": "^0.1.7-alpha.2",
+		"sqlite-vec-win32-x64": "^0.1.7-alpha.2"
 	}
 }
