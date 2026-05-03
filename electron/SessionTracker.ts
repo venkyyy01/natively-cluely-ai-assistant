@@ -26,6 +26,7 @@ import {
 	TokenBudgetManager,
 } from "./conscious";
 import type { RecapLLM } from "./llm";
+import { TokenCounter } from "./shared/TokenCounter";
 import { SessionPersistence } from "./memory/SessionPersistence";
 import type { RuntimeBudgetScheduler } from "./runtime/RuntimeBudgetScheduler";
 import type { SupervisorEvent } from "./runtime/types";
@@ -156,6 +157,7 @@ export class SessionTracker {
 	private phaseDetector: InterviewPhaseDetector = new InterviewPhaseDetector({
 		classifierLane: resolveClassifierLane(),
 	});
+	private readonly tokenCounter: TokenCounter = new TokenCounter("openai");
 	private tokenBudgetManager: TokenBudgetManager = new TokenBudgetManager(
 		"openai",
 	);

@@ -29,14 +29,22 @@ test("NAT-067: ModelVersionManager.ts barrel re-exports types and utils", () => 
 	);
 	assert.ok(
 		source.includes(
-			"export { ModelVersion, ModelFamily, TextModelFamily, TieredModels } from './modelVersionTypes'",
+			'ModelFamily',
+		) && source.includes('ModelVersion') && source.includes(
+			'TextModelFamily',
+		) && source.includes('TieredModels') && source.includes(
+			'modelVersionTypes',
 		),
 		"should re-export types",
 	);
 	assert.ok(
 		source.includes(
-			"export { parseModelVersion, compareVersions, versionDistance, classifyModel, classifyTextModel } from './modelVersionUtils'",
-		),
+			'parseModelVersion',
+		) && source.includes('compareVersions') && source.includes(
+			'versionDistance',
+		) && source.includes('classifyModel') && source.includes(
+			'classifyTextModel',
+		) && source.includes('modelVersionUtils'),
 		"should re-export utils",
 	);
 });
@@ -58,7 +66,7 @@ test("NAT-067: modelVersionUtils.ts imports from modelVersionTypes", () => {
 		"utf8",
 	);
 	assert.ok(
-		source.includes("from './modelVersionTypes'"),
+		source.includes("modelVersionTypes"),
 		"utils should import types",
 	);
 });

@@ -250,11 +250,19 @@ test("MacosScreenCaptureKitAdapter is explicit opt-in and otherwise skips", asyn
 	const outputRoot = await mkdtemp(
 		path.join(os.tmpdir(), "capture-matrix-sck-"),
 	);
-	const rows = createDefaultMacosScreencaptureRows({
+	const row: CaptureMatrixRow = {
+		id: "macos-sck-control",
 		platform: "darwin",
-	});
-	const row = rows[0];
-	if (!row) throw new Error("No row created");
+		osVersion: "Darwin 24.0",
+		appVersion: "local-dev",
+		captureTool: "macos-screencapture",
+		mode: "video",
+		monitors: 1,
+		strict: false,
+		surface: "unprotected-canary-control",
+		expectedResult: "visible",
+		canaryToken: "NATIVELY_CAPTURE_CANARY_CONTROL",
+	};
 	const result = await runCaptureMatrix({
 		rows: [row],
 		adapter: new MacosScreenCaptureKitAdapter({

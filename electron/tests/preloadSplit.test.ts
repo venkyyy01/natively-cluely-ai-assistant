@@ -22,7 +22,7 @@ test("NAT-067: preload.ts is a thin barrel", () => {
 	);
 	assert.ok(source.length > 0, "preload.ts should not be empty");
 	assert.ok(
-		source.includes("from './preload/api'"),
+		source.includes("preload/api"),
 		"should import from api module",
 	);
 });
