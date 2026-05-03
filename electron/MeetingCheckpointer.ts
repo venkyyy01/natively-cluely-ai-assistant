@@ -138,7 +138,7 @@ export class MeetingCheckpointer extends EventEmitter {
 				});
 
 				// Notify frontend
-				this.notifyFrontend("meeting-checkpointed", this.meetingId);
+				await this.notifyFrontend("meeting-checkpointed", this.meetingId);
 			} else {
 				this.emit("checkpoint-failed", {
 					meetingId: this.meetingId,

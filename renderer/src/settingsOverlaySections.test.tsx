@@ -12,7 +12,7 @@ test("keeps the extracted speech provider section wired into the audio tab", () 
 	const source = readSettingsOverlay();
 
 	expect(source).toContain(
-		"import { SpeechProviderSection } from './settings/SpeechProviderSection';",
+		"import { SpeechProviderSection } from \"./settings/SpeechProviderSection\";",
 	);
 	expect(source).toContain("<SpeechProviderSection");
 });
@@ -21,7 +21,7 @@ test("wires the general tab through the extracted general settings section", () 
 	const source = readSettingsOverlay();
 
 	expect(source).toContain(
-		"import { GeneralSettingsSection } from './settings/GeneralSettingsSection';",
+		"import { GeneralSettingsSection } from \"./settings/GeneralSettingsSection\";",
 	);
 	expect(source).toContain("<GeneralSettingsSection");
 });

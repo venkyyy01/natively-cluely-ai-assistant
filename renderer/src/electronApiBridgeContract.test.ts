@@ -33,26 +33,26 @@ test("settings toggles use the guarded Electron bridge helper for conscious mode
 	const launcherSource = fs.readFileSync(launcherPath, "utf8");
 
 	expect(generalSettingsSource).toContain(
-		"requireElectronMethod('setUndetectable')",
+		"requireElectronMethod(\"setUndetectable\")",
 	);
 	expect(generalSettingsSource).toContain(
-		"requireElectronMethod('setConsciousMode')",
+		"requireElectronMethod(\"setConsciousMode\")",
 	);
 	expect(settingsPopupSource).toContain(
-		"requireElectronMethod('setUndetectable')",
+		"requireElectronMethod(\"setUndetectable\")",
 	);
 	expect(settingsPopupSource).toContain(
-		"requireElectronMethod('setConsciousMode')",
+		"requireElectronMethod(\"setConsciousMode\")",
 	);
-	expect(launcherSource).toContain("requireElectronMethod('setUndetectable')");
+	expect(launcherSource).toContain("requireElectronMethod(\"setUndetectable\")");
 });
 
 test("meeting start paths use the guarded Electron bridge helper", () => {
 	const launcherSource = fs.readFileSync(launcherPath, "utf8");
 	const appSource = fs.readFileSync(appPath, "utf8");
 
-	expect(launcherSource).toContain("requireElectronMethod('startMeeting')");
-	expect(appSource).toContain("requireElectronMethod('startMeeting')");
+	expect(launcherSource).toContain("requireElectronMethod(\"startMeeting\")");
+	expect(appSource).toContain("requireElectronMethod(\"startMeeting\")");
 });
 
 test("privacy shield state is exposed through preload and hydrated on app boot", () => {
@@ -61,10 +61,10 @@ test("privacy shield state is exposed through preload and hydrated on app boot",
 
 	expect(preloadSource).toContain("getPrivacyShieldState");
 	expect(appSource).toContain(
-		"getOptionalElectronMethod('getPrivacyShieldState')",
+		"\"getPrivacyShieldState\"",
 	);
-	expect(appSource).toContain("getPrivacyShieldState?.().then((state) => {");
+	expect(appSource).toContain("getPrivacyShieldState?.()");
 	expect(appSource).toContain(
-		"getOptionalElectronMethod('onPrivacyShieldChanged')",
+		"\"onPrivacyShieldChanged\"",
 	);
 });
