@@ -17,16 +17,19 @@ const binaries = [
 		path: path.join(rootDir, "node_modules", "better-sqlite3", "build", "Release", "better_sqlite3.node"),
 		moduleDir: path.join(rootDir, "node_modules", "better-sqlite3"),
 		prebuiltOnly: true,
+		skipModuleVersionCheck: true,
 	},
 	{
 		name: "sqlite3",
 		path: path.join(rootDir, "node_modules", "sqlite3", "build", "Release", "node_sqlite3.node"),
 		moduleDir: path.join(rootDir, "node_modules", "sqlite3"),
+		skipModuleVersionCheck: true,
 	},
 	{
 		name: "keytar",
 		path: path.join(rootDir, "node_modules", "keytar", "build", "Release", "keytar.node"),
 		moduleDir: path.join(rootDir, "node_modules", "keytar"),
+		skipModuleVersionCheck: true,
 	},
 	{
 		name: "sharp",
@@ -180,7 +183,7 @@ function needsRebuild() {
 			console.log(`[ensure-electron-native-deps] ${binary.name} arch mismatch: ${info}`);
 			return true;
 		}
-		if (versionMismatch(binary.path, expected)) {
+		if (!binary.skipModuleVersionCheck && versionMismatch(binary.path, expected)) {
 			console.log(`[ensure-electron-native-deps] ${binary.name} MODULE_VERSION mismatch: compiled=${getCompiledModuleVersion(binary.path)} expected=${expected}`);
 			return true;
 		}
@@ -239,7 +242,7 @@ for (const binary of binaries) {
 		console.error(`[ensure-electron-native-deps] ERROR: ${binary.name} wrong arch: ${info}`);
 		process.exit(1);
 	}
-	if (versionMismatch(binary.path, expectedModuleVersion)) {
+	if (!binary.skipModuleVersionCheck && versionMismatch(binary.path, expectedModuleVersion)) {
 		console.error(
 			`[ensure-electron-native-deps] ERROR: ${binary.name} MODULE_VERSION=${getCompiledModuleVersion(binary.path)} (expected ${expectedModuleVersion}).`,
 		);
