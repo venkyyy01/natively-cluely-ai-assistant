@@ -342,7 +342,6 @@ export class WindowHelper {
 			console.warn(
 				`[WindowHelper] ${source}: startup gate blocked capture verification, revealing local protected UI`,
 			);
-			this.handleStartupRevealBlocked(decision);
 			return;
 		}
 
