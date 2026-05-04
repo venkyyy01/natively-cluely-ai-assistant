@@ -44,20 +44,23 @@ export async function initializeApp() {
 	}
 
 	// 3. Set Content Security Policy headers for XSS protection
+	// NOTE: These headers augment the meta-tag CSP in index.html.
+	// For file:// loaded pages the meta tag is the only effective one.
+	// Keep both in sync so the effective policy is the same regardless of loading scheme.
 	session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
 		const connectSrc =
 			process.env.NODE_ENV === "development"
 				? "connect-src 'self' https: wss: ws:; "
-				: "connect-src 'self'; ";
+				: "connect-src 'self' https://generativelanguage.googleapis.com https://api.groq.com https://www.google-analytics.com https://analytics.google.com https://www.googletagmanager.com; ";
 		callback({
 			responseHeaders: {
 				...details.responseHeaders,
 				"Content-Security-Policy":
 					"default-src 'self'; " +
-					"script-src 'self' 'unsafe-inline' 'unsafe-eval' wasm-unsafe-eval; " +
-					"style-src 'self' 'unsafe-inline'; " +
+					"script-src 'self' 'unsafe-inline' 'unsafe-eval' wasm-unsafe-eval https://www.googletagmanager.com; " +
+					"style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; " +
 					"img-src 'self' data: blob: https:; " +
-					"font-src 'self' data:; " +
+					"font-src 'self' data: https://fonts.gstatic.com; " +
 					connectSrc +
 					"media-src 'self' blob:; " +
 					"object-src 'none'; " +

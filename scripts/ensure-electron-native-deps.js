@@ -17,7 +17,6 @@ const binaries = [
 		path: path.join(rootDir, "node_modules", "better-sqlite3", "build", "Release", "better_sqlite3.node"),
 		moduleDir: path.join(rootDir, "node_modules", "better-sqlite3"),
 		prebuiltOnly: true,
-		skipModuleVersionCheck: true,
 	},
 	{
 		name: "sqlite3",

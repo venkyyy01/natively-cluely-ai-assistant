@@ -408,10 +408,7 @@ const App: React.FC = () => {
 
 	const startsShielded = useMemo(() => {
 		const params = new URLSearchParams(window.location.search);
-		return (
-			params.get("privacyShield") === "1" ||
-			localStorage.getItem("natively_undetectable") === "true"
-		);
+		return params.get("privacyShield") === "1";
 	}, []);
 	const [showStartup, setShowStartup] = useState(() => !startsShielded);
 	const [isSettingsOpen, setIsSettingsOpen] = useState(false);
