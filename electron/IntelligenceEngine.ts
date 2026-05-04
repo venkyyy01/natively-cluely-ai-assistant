@@ -1194,6 +1194,8 @@ export class IntelligenceEngine extends EventEmitter {
 		let totalCooldownSuppressedMs = priorCooldownSuppressedMs;
 		let cooldownReason = priorCooldownReason;
 		let cooldownDeferDepth = 0;
+		let cooldownDeferredEventEmitted =
+			priorCooldownSuppressedMs > 0 && priorCooldownReason !== undefined;
 		let activeLatencyRequestId: string | null = null;
 		let activeProfileEnrichmentRoute = false;
 		let profileEnrichmentFailed = false;
@@ -1251,12 +1253,15 @@ export class IntelligenceEngine extends EventEmitter {
 			console.log(
 				`[INTELLIGENCE] ⏳ Duplicate trigger debounce active (${cooldownRemaining}ms). Queuing request to avoid drop.`,
 			);
-			this.emit(
-				"cooldown_deferred",
-				cooldownRemaining,
-				cooldownQuestion,
-				deferReason,
-			);
+			if (!cooldownDeferredEventEmitted) {
+				this.emit(
+					"cooldown_deferred",
+					cooldownRemaining,
+					cooldownQuestion,
+					deferReason,
+				);
+				cooldownDeferredEventEmitted = true;
+			}
 
 			if (this.whatToSayAbortController) {
 				return null;
