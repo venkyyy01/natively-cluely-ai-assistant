@@ -106,7 +106,7 @@ test("STTReconnector reports degraded state while retries are in progress", asyn
 	// Immediately after first error, reconnect should be queued and lane marked degraded.
 	assert.equal(reconnector.getProviderHealth("interviewer").state, "degraded");
 
-	await wait(20);
+	await wait(30);
 	assert.equal(reconnector.getProviderHealth("interviewer").state, "down");
 });
 

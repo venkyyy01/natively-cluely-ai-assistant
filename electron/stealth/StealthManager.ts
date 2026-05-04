@@ -1834,7 +1834,7 @@ for window in windows:
 		restoreWithOpacity: boolean;
 	}> = [];
 	private static readonly MAX_RESTORE_ATTEMPTS = 5;
-	private static readonly RESTORE_RETRY_INTERVAL_MS = 5000;
+	private static readonly RESTORE_RETRY_INTERVAL_MS = 500;
 
 	private reapplyProtectionToVisibleWindows(): void {
 		// Clear any existing retry timer when new hide is triggered
@@ -1859,19 +1859,22 @@ for window in windows:
 
 			this.applyLayer0(win, true);
 			this.applyNativeStealth(win);
-			if (typeof win.setOpacity === "function") {
-				this.setWindowOpacity(win, 1, {
+			const restoreWithOpacity = typeof win.setOpacity === "function";
+			if (restoreWithOpacity) {
+				this.setWindowOpacity(win, 0, {
 					source: "StealthManager.reapplyProtectionToVisibleWindows",
 					windowRole: record.role,
 				});
-			}
-			if (typeof win.show === "function") {
-				this.requestWindowShow(win, {
+			} else if (typeof win.hide === "function") {
+				this.requestWindowHide(win, {
 					source: "StealthManager.reapplyProtectionToVisibleWindows",
 					windowRole: record.role,
 				});
 			}
 			this.reapplyAfterShow(win);
+
+			// Track windows for later restoration
+			this.windowsToRestore.push({ win, restoreWithOpacity });
 		}
 
 		if (this.windowsToRestore.length === 0) {
