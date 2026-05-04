@@ -1445,7 +1445,7 @@ export class StealthManager extends EventEmitter {
 				this.logger.log(
 					`[StealthManager] Capture watchdog detected suspicious tools running. Patterns triggered: ${suspiciousToolMatches.length}`,
 				);
-				this.hideAndRestoreVisibleWindows();
+				this.reapplyProtectionToVisibleWindows();
 			}
 		} catch (error) {
 			this.logger.warn("[StealthManager] Capture watchdog poll failed:", error);
@@ -1741,17 +1741,6 @@ for window in windows:
 			return;
 		}
 
-		this.setWindowOpacity(win, 0, {
-			source: "StealthManager.applyEmergencyProtection",
-			windowRole:
-				this.managedWindowLookup.get(win as object)?.role ?? "unknown",
-		});
-		this.requestWindowHide(win, {
-			source: "StealthManager.applyEmergencyProtection",
-			windowRole:
-				this.managedWindowLookup.get(win as object)?.role ?? "unknown",
-		});
-
 		this.applyLayer0(win, true);
 		this.applyNativeStealth(win);
 
@@ -1767,6 +1756,18 @@ for window in windows:
 		if (windowNumber !== null) {
 			void this.stealthEnhancer.enhanceWindowProtection(windowNumber);
 		}
+		const windowRole =
+			this.managedWindowLookup.get(win as object)?.role ?? "unknown";
+		if (typeof win.setOpacity === "function") {
+			this.setWindowOpacity(win, 1, {
+				source: "StealthManager.applyEmergencyProtection",
+				windowRole,
+			});
+		}
+		this.requestWindowShow(win, {
+			source: "StealthManager.applyEmergencyProtection",
+			windowRole,
+		});
 	}
 
 	private ensureTCCMonitor(): void {
@@ -1835,7 +1836,7 @@ for window in windows:
 	private static readonly MAX_RESTORE_ATTEMPTS = 5;
 	private static readonly RESTORE_RETRY_INTERVAL_MS = 5000;
 
-	private hideAndRestoreVisibleWindows(): void {
+	private reapplyProtectionToVisibleWindows(): void {
 		// Clear any existing retry timer when new hide is triggered
 		if (this.restoreRetryHandle) {
 			clearTimeout(this.restoreRetryHandle);
@@ -1856,23 +1857,21 @@ for window in windows:
 				continue;
 			}
 
+			this.applyLayer0(win, true);
+			this.applyNativeStealth(win);
 			if (typeof win.setOpacity === "function") {
-				this.setWindowOpacity(win, 0, {
-					source: "StealthManager.hideAndRestoreVisibleWindows",
+				this.setWindowOpacity(win, 1, {
+					source: "StealthManager.reapplyProtectionToVisibleWindows",
 					windowRole: record.role,
 				});
-				this.reapplyAfterShow(win);
-				this.windowsToRestore.push({ win, restoreWithOpacity: true });
-			} else if (
-				typeof win.hide === "function" &&
-				typeof win.show === "function"
-			) {
-				this.requestWindowHide(win, {
-					source: "StealthManager.hideAndRestoreVisibleWindows",
-					windowRole: record.role,
-				});
-				this.windowsToRestore.push({ win, restoreWithOpacity: false });
 			}
+			if (typeof win.show === "function") {
+				this.requestWindowShow(win, {
+					source: "StealthManager.reapplyProtectionToVisibleWindows",
+					windowRole: record.role,
+				});
+			}
+			this.reapplyAfterShow(win);
 		}
 
 		if (this.windowsToRestore.length === 0) {

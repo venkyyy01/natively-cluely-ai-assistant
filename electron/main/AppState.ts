@@ -3278,12 +3278,7 @@ export class AppState {
 
 	public toggleMainWindow(): void {
 		if (this.isUndetectable && this.visibilityIntent !== "visible_app") {
-			void this.setUndetectableAsync(false).catch((error) => {
-				console.error(
-					"[Main] Failed to reveal app by disabling privacy mode:",
-					error,
-				);
-			});
+			this.requestVisibilityIntent("visible_safe_controls", "toggle_visibility");
 			return;
 		}
 
@@ -3459,7 +3454,10 @@ export class AppState {
 		// Double-click to show window
 		this.tray.on("double-click", () => {
 			if (this.isUndetectable && this.visibilityIntent !== "visible_app") {
-				void this.setUndetectableAsync(false);
+				this.requestVisibilityIntent(
+					"visible_safe_controls",
+					"tray_double_click",
+				);
 				return;
 			}
 			this.centerAndShowWindow();
@@ -3503,7 +3501,10 @@ export class AppState {
 				label: `Show ${process.title.trim()}`,
 				click: () => {
 					if (this.isUndetectable && this.visibilityIntent !== "visible_app") {
-						void this.setUndetectableAsync(false);
+						this.requestVisibilityIntent(
+							"visible_safe_controls",
+							"tray_show_menu",
+						);
 						return;
 					}
 					this.centerAndShowWindow();
@@ -3593,8 +3594,8 @@ export class AppState {
 				}
 
 				if (state) {
-					this.hideForUndetectableEnable();
 					this.syncWindowStealthProtection(true);
+					this.showProtectedForUndetectableEnable();
 				}
 
 				await stealthSupervisor.setEnabled(state);
@@ -3624,15 +3625,13 @@ export class AppState {
 		return process.env.NATIVELY_STRICT_PROTECTION === "1";
 	}
 
-	private hideForUndetectableEnable(): void {
-		this.stealthManager.recordProtectionEvent("hide-requested", {
-			source: "AppState.hideForUndetectableEnable",
+	private showProtectedForUndetectableEnable(): void {
+		this.stealthManager.recordProtectionEvent("show-requested", {
+			source: "AppState.showProtectedForUndetectableEnable",
 			reason: "undetectable_enable",
 			windowRole: "unknown",
 		});
-		this.windowHelper.hideMainWindow();
-		this.settingsWindowHelper.closeWindow();
-		this.modelSelectorWindowHelper.hideWindow();
+		this.showMainWindow();
 	}
 
 	private verifyUndetectableEnableProtection(): void {
@@ -3967,7 +3966,7 @@ export class AppState {
 		const abortedStreamCount =
 			this.abortActiveInferenceStreams(normalizedReason);
 		this.syncWindowStealthProtection(true);
-		this.windowHelper.hideMainWindow();
+		this.showMainWindow();
 		this.syncPrivacyShieldState();
 		this.privacyShieldRecoveryController?.update();
 		this.performanceInstrumentation.recordEvent("stealth.fault.containment", {
@@ -4008,7 +4007,7 @@ export class AppState {
 		}
 
 		this.setContainmentActive(true, source);
-		this.stealthManager.recordProtectionEvent("hide-requested", {
+		this.stealthManager.recordProtectionEvent("show-requested", {
 			source: `AppState.requestVisibilityIntent:${source}`,
 			reason: intent,
 			windowRole: "unknown",
@@ -4016,7 +4015,7 @@ export class AppState {
 		this.abortActiveInferenceStreams(source);
 		this.syncWindowStealthProtection(true);
 		this.syncPrivacyShieldState();
-		this.windowHelper.hideMainWindow();
+		this.showMainWindow();
 		this._broadcastToAllWindows("visibility-intent-changed", {
 			from: previous,
 			to: intent,

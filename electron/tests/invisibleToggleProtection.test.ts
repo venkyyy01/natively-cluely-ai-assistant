@@ -55,7 +55,7 @@ function installElectronMock(): () => void {
 	};
 }
 
-test("AppState strict invisible enable hides, protects, verifies, and does not commit on failed verification", async () => {
+test("AppState strict invisible enable protects, shows, verifies, and does not commit on failed verification", async () => {
 	const restoreElectron = installElectronMock();
 	const originalNodeEnv = process.env.NODE_ENV;
 	const previousStrict = process.env.NATIVELY_STRICT_PROTECTION;
@@ -69,7 +69,7 @@ test("AppState strict invisible enable hides, protects, verifies, and does not c
 			this: any,
 			state: boolean,
 		) => Promise<void>;
-		const hideForUndetectableEnable = prototype.hideForUndetectableEnable as (
+		const showProtectedForUndetectableEnable = prototype.showProtectedForUndetectableEnable as (
 			this: any,
 		) => void;
 		const verifyUndetectableEnableProtection =
@@ -98,6 +98,9 @@ test("AppState strict invisible enable hides, protects, verifies, and does not c
 					calls.push(`event:${type}:${context?.source ?? "unknown"}`);
 				},
 			},
+			showMainWindow() {
+				calls.push("showMainWindow");
+			},
 			windowHelper: {
 				hideMainWindow() {
 					calls.push("hideMainWindow");
@@ -124,8 +127,8 @@ test("AppState strict invisible enable hides, protects, verifies, and does not c
 			setPrivacyShieldFault(key: string) {
 				calls.push(`privacyFault:${key}`);
 			},
-			hideForUndetectableEnable() {
-				return hideForUndetectableEnable.call(this);
+			showProtectedForUndetectableEnable() {
+				return showProtectedForUndetectableEnable.call(this);
 			},
 			verifyUndetectableEnableProtection() {
 				return verifyUndetectableEnableProtection.call(this);
@@ -144,11 +147,9 @@ test("AppState strict invisible enable hides, protects, verifies, and does not c
 		);
 
 		assert.deepEqual(calls, [
-			"event:hide-requested:AppState.hideForUndetectableEnable",
-			"hideMainWindow",
-			"hideSettings",
-			"hideModelSelector",
 			"syncProtection:true",
+			"event:show-requested:AppState.showProtectedForUndetectableEnable",
+			"showMainWindow",
 			"setEnabled:true",
 			"verifyProtection",
 			"event:verification-failed:AppState.verifyUndetectableEnableProtection",
@@ -430,8 +431,8 @@ test("AppState serializes opposite invisible toggle targets without interleaving
 					};
 				},
 			},
-			hideForUndetectableEnable() {
-				calls.push("hideForEnable");
+			showProtectedForUndetectableEnable() {
+				calls.push("showForEnable");
 			},
 			syncWindowStealthProtection(state: boolean) {
 				calls.push(`syncProtection:${state}`);
@@ -453,8 +454,8 @@ test("AppState serializes opposite invisible toggle targets without interleaving
 		await new Promise((resolve) => setImmediate(resolve));
 
 		assert.deepEqual(calls, [
-			"hideForEnable",
 			"syncProtection:true",
+			"showForEnable",
 			"setEnabled:true:start",
 		]);
 
@@ -462,8 +463,8 @@ test("AppState serializes opposite invisible toggle targets without interleaving
 		await Promise.all([enablePromise, disablePromise]);
 
 		assert.deepEqual(calls, [
-			"hideForEnable",
 			"syncProtection:true",
+			"showForEnable",
 			"setEnabled:true:start",
 			"setEnabled:true:end",
 			"verifyEnable",

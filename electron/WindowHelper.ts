@@ -332,14 +332,6 @@ export class WindowHelper {
 	}
 
 	private async revealLauncherAfterStartupGate(source: string): Promise<void> {
-		if (this.shouldStartRendererShielded()) {
-			console.warn(
-				`[WindowHelper] ${source}: staying protected instead of revealing launcher`,
-			);
-			this.hideMainWindow();
-			return;
-		}
-
 		const decision = await this.startupProtectionGate.evaluateReveal({
 			source,
 			windowRole: "primary",
@@ -347,7 +339,9 @@ export class WindowHelper {
 		});
 
 		if (!decision.allowReveal) {
-			return;
+			console.warn(
+				`[WindowHelper] ${source}: startup gate blocked capture verification, revealing local protected UI`,
+			);
 		}
 
 		this.switchToLauncher();
@@ -488,6 +482,7 @@ export class WindowHelper {
 		const topMargin = Math.round(workArea.height * 0.05);
 		const y = Math.round(workArea.y + topMargin);
 		const useStealthRuntime = this.shouldUseStealthRuntime();
+		console.log(`[WindowHelper] useStealthRuntime=${useStealthRuntime}, platform=${process.platform}`);
 
 		// --- 1. Create Launcher Window ---
 		const launcherSettings: Electron.BrowserWindowConstructorOptions = {
@@ -604,16 +599,18 @@ export class WindowHelper {
 			this.detachDirectLauncherBridgeMonitor?.();
 			this.detachDirectLauncherBridgeMonitor = null;
 			this.launcherWindow = this.createDirectWindow(launcherSettings);
+			console.log("[WindowHelper] Window created, showing local protected UI");
+			this.launcherContentWindow = this.launcherWindow;
 			this.setWindowOpacity(
 				this.launcherWindow,
-				0,
+				1,
 				"WindowHelper.createWindow.launcherInitial",
 			);
-			this.requestWindowHide(
-				this.launcherWindow,
-				"WindowHelper.createWindow.launcherInitial",
-			);
-			this.launcherContentWindow = this.launcherWindow;
+			this.applyLauncherSurfaceProtection();
+			this.launcherWindow.show();
+			this.launcherWindow.focus();
+			this.isWindowVisible = true;
+			console.log("[WindowHelper] Local protected UI should be visible now");
 
 			// NAT-SELF-HEAL: safety net — if bridge never settles, force reveal anyway
 			const revealSafetyNet = attachRevealSafetyNet(
