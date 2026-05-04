@@ -482,7 +482,6 @@ export class WindowHelper {
 		const topMargin = Math.round(workArea.height * 0.05);
 		const y = Math.round(workArea.y + topMargin);
 		const useStealthRuntime = this.shouldUseStealthRuntime();
-		console.log(`[WindowHelper] useStealthRuntime=${useStealthRuntime}, platform=${process.platform}`);
 
 		// --- 1. Create Launcher Window ---
 		const launcherSettings: Electron.BrowserWindowConstructorOptions = {
@@ -599,18 +598,17 @@ export class WindowHelper {
 			this.detachDirectLauncherBridgeMonitor?.();
 			this.detachDirectLauncherBridgeMonitor = null;
 			this.launcherWindow = this.createDirectWindow(launcherSettings);
-			console.log("[WindowHelper] Window created, showing local protected UI");
 			this.launcherContentWindow = this.launcherWindow;
 			this.setWindowOpacity(
 				this.launcherWindow,
-				1,
+				0,
+				"WindowHelper.createWindow.launcherInitial",
+			);
+			this.requestWindowHide(
+				this.launcherWindow,
 				"WindowHelper.createWindow.launcherInitial",
 			);
 			this.applyLauncherSurfaceProtection();
-			this.launcherWindow.show();
-			this.launcherWindow.focus();
-			this.isWindowVisible = true;
-			console.log("[WindowHelper] Local protected UI should be visible now");
 
 			// NAT-SELF-HEAL: safety net — if bridge never settles, force reveal anyway
 			const revealSafetyNet = attachRevealSafetyNet(
