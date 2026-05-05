@@ -630,14 +630,14 @@ if [[ "${SKIP_QUALITY_GATES:-0}" == "0" ]]; then
         QUALITY_GATE_FOUNDATION_LABEL=""
     fi
 
-    run_logged_command "$QUALITY_GATE_TEST_LABEL" npm run test:electron
+    run_with_spinner "$QUALITY_GATE_TEST_LABEL" 900 npm run test:electron
     success "Electron tests passed"
 
-    run_logged_command "$QUALITY_GATE_VERIFY_LABEL" npm run verify:production
+    run_with_spinner "$QUALITY_GATE_VERIFY_LABEL" 300 npm run verify:production
     success "Production verification passed"
 
     if [[ "$FOUNDATION_RELEASE_VERIFY_ENABLED" == "true" ]]; then
-        run_logged_command "$QUALITY_GATE_FOUNDATION_LABEL" npm run verify:foundation-intent-release
+        run_with_spinner "$QUALITY_GATE_FOUNDATION_LABEL" 300 npm run verify:foundation-intent-release
         success "Apple Silicon Foundation intent release verification passed"
     else
         info "Skipping Apple Silicon Foundation intent release verification (requires arm64 build host; set SKIP_FOUNDATION_INTENT_RELEASE_VERIFY=1 to silence this message on Apple Silicon)"
