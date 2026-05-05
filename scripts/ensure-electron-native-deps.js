@@ -212,6 +212,11 @@ for (const binary of binaries) {
 
 	if (binary.prebuiltOnly) {
 		rebuildPrebuiltOnly(binary.moduleDir);
+		// Verify the rebuild worked; if MODULE_VERSION is still wrong, fall back to source rebuild
+		if (versionMismatch(binary.path, expectedModuleVersion)) {
+			console.log(`[ensure-electron-native-deps] prebuild-install did not fix MODULE_VERSION for ${binary.name}, falling back to source rebuild...`);
+			rebuildFromSource(binary.moduleDir);
+		}
 	} else {
 		// prebuilt-install first (often gets the right binary if available),
 		// fall back to source rebuild.
