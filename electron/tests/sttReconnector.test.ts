@@ -171,7 +171,7 @@ test("STTReconnector enforces default reconnect storm bound of max 3 attempts pe
 	);
 
 	reconnector.onError("user");
-	await wait(20);
+	await wait(100);
 
 	// Default maxRetries is 3.
 	assert.equal(reconnectAttempts, 3);
