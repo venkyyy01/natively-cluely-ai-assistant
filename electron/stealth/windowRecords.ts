@@ -45,7 +45,7 @@ export function createManagedWindowRecord(
 		hideFromSwitcher:
 			options.hideFromSwitcher ??
 			defaultHideFromSwitcher(options.role ?? "primary"),
-		allowVirtualDisplayIsolation: options.allowVirtualDisplayIsolation ?? false,
+		allowVirtualDisplayIsolation: options.allowVirtualDisplayIsolation ?? true,
 		listenersAttached: false,
 		virtualDisplayRequestId: 0,
 		virtualDisplayIsolationStarted: false,

@@ -358,10 +358,14 @@ export class KeybindManager {
 						click: () => this.windowHelper?.moveWindowRight(),
 					},
 					{ type: "separator" },
-					{ role: "reload" },
-					{ role: "forceReload" },
-					{ role: "toggleDevTools" },
-					{ type: "separator" },
+					...(app.isPackaged
+						? []
+						: [
+								{ role: "reload" },
+								{ role: "forceReload" },
+								{ role: "toggleDevTools" },
+								{ type: "separator" },
+							]),
 					{ role: "resetZoom" },
 					{ role: "zoomIn" },
 					{ role: "zoomOut" },
