@@ -44,6 +44,20 @@ warn()    { echo -e "${NEON_ORANGE}[WARN]${NC}  ${WHITE}$1${NC}"; }
 fail()    { echo -e "${RED}[FAIL]${NC}  ${WHITE}$1${NC}"; exit 1; }
 step()    { echo -e "\n${NEON_VIOLET}${BOLD}################################################################${NC}"; echo -e "${NEON_PINK}${BOLD}##${NC} ${NEON_CYAN}${BOLD}$1${NC}"; echo -e "${NEON_VIOLET}${BOLD}################################################################${NC}"; }
 
+# ── Signal Handling ──
+cleanup() {
+    local exit_code=$?
+    if [[ $exit_code -ne 0 ]]; then
+        echo -e "\n${RED}${BOLD}--- Build interrupted or failed ---${NC}"
+        # Kill any child processes
+        pkill -P $$ 2>/dev/null || true
+        wait 2>/dev/null || true
+    fi
+    exit $exit_code
+}
+
+trap cleanup EXIT INT TERM HUP
+
 boot_line() {
     local color="$1"
     local label="$2"
@@ -66,8 +80,10 @@ boot_sequence() {
 spinner() {
     local pid="$1"
     local label="$2"
+    local timeout_seconds="${3:-600}"  # Default 10 min timeout
     local frames=('⠋' '⠙' '⠹' '⠸' '⠼' '⠴' '⠦' '⠧' '⠇' '⠏')
     local i=0
+    local start_time=$(date +%s)
 
     if [[ "$IS_TTY" != true ]]; then
         wait "$pid"
@@ -75,6 +91,24 @@ spinner() {
     fi
 
     while kill -0 "$pid" 2>/dev/null; do
+        # Check if process is suspended (T state)
+        local proc_state=$(ps -o state= -p "$pid" 2>/dev/null | tr -d ' ')
+        if [[ "$proc_state" == "T" ]]; then
+            printf "\r${RED}${BOLD}[STALLED]${NC} ${WHITE}%s${NC} (process suspended - killing)${NC}\n" "$label"
+            kill -9 "$pid" 2>/dev/null || true
+            wait "$pid" 2>/dev/null || true
+            return 1
+        fi
+
+        # Check timeout
+        local elapsed=$(( $(date +%s) - start_time ))
+        if [[ $elapsed -gt $timeout_seconds ]]; then
+            printf "\r${RED}${BOLD}[TIMEOUT]${NC} ${WHITE}%s${NC} (exceeded ${timeout_seconds}s - killing)${NC}\n" "$label"
+            kill -9 "$pid" 2>/dev/null || true
+            wait "$pid" 2>/dev/null || true
+            return 1
+        fi
+
         printf "\r${NEON_VIOLET}${BOLD}[${frames[i]}]${NC} ${NEON_CYAN}${BOLD}%s${NC} ${STEEL}...${NC}" "$label"
         i=$(( (i + 1) % ${#frames[@]} ))
         sleep 0.08
@@ -92,14 +126,15 @@ spinner() {
 
 run_with_spinner() {
     local label="$1"
-    shift
+    local timeout_seconds="${2:-600}"
+    shift 2
     local log_file
     log_file=$(mktemp)
 
     if [[ "$IS_TTY" == true ]]; then
         "$@" >"$log_file" 2>&1 &
         local pid=$!
-        if ! spinner "$pid" "$label"; then
+        if ! spinner "$pid" "$label" "$timeout_seconds"; then
             echo -e "${RED}${BOLD}--- command output -------------------------------------------------------${NC}"
             sed -n '1,200p' "$log_file"
             rm -f "$log_file"
@@ -563,12 +598,12 @@ else
         info "Fresh install — this may take a few minutes..."
     fi
 
-  run_with_spinner "syncing npm dependency matrix" "${INSTALL_COMMAND[@]}"
+  run_with_spinner "syncing npm dependency matrix" 600 "${INSTALL_COMMAND[@]}"
   success "Dependencies installed"
 fi
 
 # Ensure native dependencies match the target architecture
-run_with_spinner "verifying native dependencies for ${BUILD_ARCH}" node scripts/ensure-electron-native-deps.js
+run_with_spinner "verifying native dependencies for ${BUILD_ARCH}" 120 node scripts/ensure-electron-native-deps.js
 success "Native dependencies ready for ${BUILD_ARCH}"
 
 # ╔═══════════════════════════════════════════════════════════════════╗
@@ -622,9 +657,9 @@ step "Step 5/8 — Building & Packaging (${ARCH_LABEL})"
 
 info "Running ${BUILD_ARCH}-only build pipeline (renderer, native addon, electron, packaging)..."
 if [[ "$QUALITY_GATES_RAN" == "true" ]]; then
-    run_with_spinner "building and packaging ${BUILD_ARCH} release" env SKIP_PRODUCTION_VERIFY=1 "${BUILD_COMMAND[@]}"
+    run_with_spinner "building and packaging ${BUILD_ARCH} release" 1200 env SKIP_PRODUCTION_VERIFY=1 "${BUILD_COMMAND[@]}"
 else
-    run_with_spinner "building and packaging ${BUILD_ARCH} release" "${BUILD_COMMAND[@]}"
+    run_with_spinner "building and packaging ${BUILD_ARCH} release" 1200 "${BUILD_COMMAND[@]}"
 fi
 
 success "Build & packaging complete"
@@ -656,11 +691,11 @@ PACKAGED_FULL_STEALTH_XPC="$APP_GLOB/Contents/XPCServices/macos-full-stealth-hel
 if [[ -f "$PACKAGED_HELPER" ]]; then
     if [[ -f "$HELPER_ENTITLEMENTS" ]]; then
         info "Signing packaged macOS virtual display helper with helper entitlements: $HELPER_ENTITLEMENTS"
-        run_with_spinner "signing packaged virtual display helper" codesign --force --options runtime --entitlements "$HELPER_ENTITLEMENTS" --sign - "$PACKAGED_HELPER"
+        run_with_spinner "signing packaged virtual display helper" 60 codesign --force --options runtime --entitlements "$HELPER_ENTITLEMENTS" --sign - "$PACKAGED_HELPER"
         success "Packaged macOS virtual display helper signed"
     else
         warn "Helper entitlements file not found, signing packaged helper without helper entitlements"
-        run_with_spinner "signing packaged virtual display helper" codesign --force --sign - "$PACKAGED_HELPER"
+        run_with_spinner "signing packaged virtual display helper" 60 codesign --force --sign - "$PACKAGED_HELPER"
         success "Packaged macOS virtual display helper signed (ad-hoc, no helper entitlements)"
     fi
 else
@@ -670,11 +705,11 @@ fi
 if [[ -f "$PACKAGED_FOUNDATION_INTENT_HELPER" ]]; then
     if [[ -f "$ENTITLEMENTS" ]]; then
         info "Signing packaged foundation intent helper with app entitlements: $ENTITLEMENTS"
-        run_with_spinner "signing packaged foundation intent helper" codesign --force --options runtime --entitlements "$ENTITLEMENTS" --sign - "$PACKAGED_FOUNDATION_INTENT_HELPER"
+        run_with_spinner "signing packaged foundation intent helper" 60 codesign --force --options runtime --entitlements "$ENTITLEMENTS" --sign - "$PACKAGED_FOUNDATION_INTENT_HELPER"
         success "Packaged foundation intent helper signed"
     else
         warn "App entitlements file not found, signing packaged foundation intent helper without entitlements"
-        run_with_spinner "signing packaged foundation intent helper" codesign --force --sign - "$PACKAGED_FOUNDATION_INTENT_HELPER"
+        run_with_spinner "signing packaged foundation intent helper" 60 codesign --force --sign - "$PACKAGED_FOUNDATION_INTENT_HELPER"
         success "Packaged foundation intent helper signed (ad-hoc, no entitlements)"
     fi
 else
@@ -684,11 +719,11 @@ fi
 if [[ -d "$PACKAGED_FULL_STEALTH_XPC" ]]; then
     if [[ -f "$ENTITLEMENTS" ]]; then
         info "Signing packaged macOS full stealth XPC bundle with app entitlements: $ENTITLEMENTS"
-        run_with_spinner "signing packaged full stealth xpc bundle" codesign --force --options runtime --entitlements "$ENTITLEMENTS" --sign - "$PACKAGED_FULL_STEALTH_XPC"
+        run_with_spinner "signing packaged full stealth xpc bundle" 60 codesign --force --options runtime --entitlements "$ENTITLEMENTS" --sign - "$PACKAGED_FULL_STEALTH_XPC"
         success "Packaged macOS full stealth XPC bundle signed"
     else
         warn "App entitlements file not found, signing packaged XPC bundle without entitlements"
-        run_with_spinner "signing packaged full stealth xpc bundle" codesign --force --sign - "$PACKAGED_FULL_STEALTH_XPC"
+        run_with_spinner "signing packaged full stealth xpc bundle" 60 codesign --force --sign - "$PACKAGED_FULL_STEALTH_XPC"
         success "Packaged macOS full stealth XPC bundle signed (ad-hoc, no entitlements)"
     fi
 else
@@ -697,11 +732,11 @@ fi
 
 if [[ -f "$ENTITLEMENTS" ]]; then
     info "Signing with entitlements: $ENTITLEMENTS"
-    run_with_spinner "engraving ad-hoc signature lattice" codesign --force --deep --entitlements "$ENTITLEMENTS" --sign - "$APP_GLOB"
+    run_with_spinner "engraving ad-hoc signature lattice" 60 codesign --force --deep --entitlements "$ENTITLEMENTS" --sign - "$APP_GLOB"
     success "Signed with entitlements (JIT, audio, dylib, Apple Events)"
 else
     warn "Entitlements file not found, signing without entitlements"
-    run_with_spinner "engraving ad-hoc signature lattice" codesign --force --deep --sign - "$APP_GLOB"
+    run_with_spinner "engraving ad-hoc signature lattice" 60 codesign --force --deep --sign - "$APP_GLOB"
     success "Signed (ad-hoc, no entitlements)"
 fi
 
@@ -783,10 +818,10 @@ fi
 # Copy to Applications
 info "Copying to ${INSTALL_DIR}/${APP_NAME}.app ..."
 if [[ -w "$INSTALL_DIR" ]]; then
-    run_with_spinner "transferring vessel into /Applications" ditto "$APP_GLOB" "${INSTALL_DIR}/${APP_NAME}.app"
+    run_with_spinner "transferring vessel into /Applications" 120 ditto "$APP_GLOB" "${INSTALL_DIR}/${APP_NAME}.app"
 else
     info "Administrator access required to install into ${INSTALL_DIR}"
-    run_with_spinner "transferring vessel into /Applications" sudo ditto "$APP_GLOB" "${INSTALL_DIR}/${APP_NAME}.app"
+    run_with_spinner "transferring vessel into /Applications" 120 sudo ditto "$APP_GLOB" "${INSTALL_DIR}/${APP_NAME}.app"
 fi
 
 # Remove quarantine flag (bypass Gatekeeper)
