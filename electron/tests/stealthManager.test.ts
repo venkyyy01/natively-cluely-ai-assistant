@@ -1249,9 +1249,9 @@ describe("StealthManager", () => {
 		} as any);
 		const win = new FakeWindow();
 
-		manager.applyToWindow(win as any, true, { role: "primary" });
+		manager.applyToWindow(win as any, true, { role: "primary", allowVirtualDisplayIsolation: false });
 		await Promise.resolve();
-		manager.applyToWindow(win as any, false, { role: "primary" });
+		manager.applyToWindow(win as any, false, { role: "primary", allowVirtualDisplayIsolation: false });
 
 		assert.deepStrictEqual(calls, []);
 	});
