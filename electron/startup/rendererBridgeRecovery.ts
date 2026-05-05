@@ -79,26 +79,38 @@ export function attachRevealSafetyNet(
  * Attach an auto-recreate handler for render-process-gone / crashed events.
  */
 export function attachWindowCrashRecovery(
-	label: string,
-	window: BrowserWindow,
-	onRecreate: () => void,
+  label: string,
+  window: BrowserWindow,
+  onRecreate: () => void,
 ): () => void {
-	const handleCrashed = (_event: Event, killed: boolean) => {
-		console.error(
-			`[WindowCrashRecovery] ${label} crashed (killed=${killed}). Recreating...`,
-		);
-		onRecreate();
-	};
+  const handleCrashed = (_event: Event, killed: boolean) => {
+    if (killed) {
+      console.warn(
+        `[WindowCrashRecovery] ${label} renderer killed (likely app quit). Skipping recreation.`,
+      );
+      return;
+    }
+    console.error(
+      `[WindowCrashRecovery] ${label} crashed (killed=${killed}). Recreating...`,
+    );
+    onRecreate();
+  };
 
-	const handleGone = (
-		_event: Event,
-		details: Electron.RenderProcessGoneDetails,
-	) => {
-		console.error(
-			`[WindowCrashRecovery] ${label} render process gone: reason=${details.reason} exitCode=${details.exitCode}. Recreating...`,
-		);
-		onRecreate();
-	};
+  const handleGone = (
+    _event: Event,
+    details: Electron.RenderProcessGoneDetails,
+  ) => {
+    if (details.reason === "clean-exit" || details.reason === "oom") {
+      console.warn(
+        `[WindowCrashRecovery] ${label} render process gone: reason=${details.reason} exitCode=${details.exitCode}. Skipping recreation (app likely quitting).`,
+      );
+      return;
+    }
+    console.error(
+      `[WindowCrashRecovery] ${label} render process gone: reason=${details.reason} exitCode=${details.exitCode}. Recreating...`,
+    );
+    onRecreate();
+  };
 
 	const crashEvents = window.webContents as unknown as {
 		on(

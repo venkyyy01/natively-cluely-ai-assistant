@@ -715,12 +715,7 @@ export class WindowHelper {
 			});
 		}
 
-		// DEBUG: Uncomment to inspect renderer
-		if (true) {
-			this.launcherWindow.webContents.openDevTools({ mode: 'detach' });
-		}
-
-		// --- 2. Create Overlay Window (Hidden initially) ---
+  // --- 2. Create Overlay Window (Hidden initially) ---
 		const overlaySettings: Electron.BrowserWindowConstructorOptions = {
 			width: 600,
 			height: 1,

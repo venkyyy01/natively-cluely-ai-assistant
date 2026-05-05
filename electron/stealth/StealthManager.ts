@@ -109,73 +109,68 @@ const DISPLAY_MOVE_RETRY_DELAY_MS = 100;
 const DISPLAY_MOVE_MAX_RETRIES = 10;
 const SCSTREAM_CHECK_INTERVAL_MS = 500;
 const CGWINDOW_VISIBILITY_CHECK_MS = 500;
-const KNOWN_CAPTURE_TOOL_PATTERNS = [
-	/obs/i,
-	/zoom\.us/i,
-	/zoom/i,
-	/microsoft teams/i,
-	/teams2/i,
-	/teams for enterprise/i,
-	/meet/i,
-	/webex/i,
-	/snipping/i,
-	/screen ?studio/i,
-	/quicktime/i,
-	/loom/i,
-	/capture/i,
-	/sharex/i,
-	/greenshot/i,
-	/flameshot/i,
-	/discord/i,
-	/slack/i,
-	/ffmpeg/i,
-	/screencapture/i,
-	/vnc/i,
-	/anydesk/i,
-	/teamviewer/i,
-	/screen ?recorder/i,
-	/camtasia/i,
-	/bandicam/i,
-	/printwindow/i,
-	/chrome/i,
-	/chromium/i,
-	/msedge/i,
-	/microsoft edge/i,
-	/brave/i,
-	/nvidia/i,
-	/shadowplay/i,
-	/geforce/i,
-	/gamebar/i,
-	/xbox/i,
-	/skype/i,
-	/gotomeeting/i,
-	/goto/i,
-	/bluejeans/i,
-	/jitsi/i,
-	/screenshot/i,
-	/parallels/i,
-	/vmware/i,
-	/rdpclip/i,
-	/mstsc/i,
-	/remote desktop/i,
-	/parsec/i,
-	/nomachine/i,
-	/distant/i,
-	/screenrecording/i,
-	/screencasting/i,
-	/airplay/i,
-	/coreaudiod/i,
-	/facet/i,
-	/gather/i,
-	/teramind/i,
-	/activtrak/i,
-	/time doctor/i,
-	/hubstaff/i,
-	/workpuls/i,
-	/idletime/i,
-	/screencastify/i,
-	/vidyard/i,
-	/wistia/i,
+const DEDICATED_CAPTURE_TOOL_PATTERNS = [
+  /obs/i,
+  /screen ?studio/i,
+  /loom/i,
+  /sharex/i,
+  /greenshot/i,
+  /flameshot/i,
+  /screen ?recorder/i,
+  /camtasia/i,
+  /bandicam/i,
+  /screencastify/i,
+  /vidyard/i,
+  /snipping/i,
+  /printwindow/i,
+  /nvidia.*shadowplay/i,
+  /geforce.*experience/i,
+  /xbox.*gamebar/i,
+  /gamebar/i,
+  /teramind/i,
+  /activtrak/i,
+  /time ?doctor/i,
+  /hubstaff/i,
+  /workpuls/i,
+  /idletime/i,
+  /anydesk/i,
+  /teamviewer/i,
+  /vnc/i,
+  /rdpclip/i,
+  /mstsc/i,
+  /remote desktop/i,
+  /parsec/i,
+  /nomachine/i,
+  /distant/i,
+  /screencast/i,
+  /screenrecording/i,
+];
+const POTENTIAL_CAPTURE_TOOL_PATTERNS = [
+  /zoom\.us/i,
+  /zoom/i,
+  /microsoft teams/i,
+  /teams2/i,
+  /webex/i,
+  /skype/i,
+  /gotomeeting/i,
+  /bluejeans/i,
+  /jitsi/i,
+  /discord/i,
+  /slack/i,
+  /meet/i,
+  /gather/i,
+  /chrome/i,
+  /chromium/i,
+  /msedge/i,
+  /microsoft edge/i,
+  /brave/i,
+  /firefox/i,
+  /safari/i,
+  /quicktime player/i,
+  /parallels/i,
+  /vmware/i,
+  /facet/i,
+  /airplay/i,
 ];
 
 function scheduleUnrefInterval(
@@ -300,8 +295,11 @@ export class StealthManager extends EventEmitter {
 			((handle) => clearInterval(handle as NodeJS.Timeout));
 		this.timeoutScheduler = deps.timeoutScheduler ?? scheduleUnrefTimeout;
 		this.virtualDisplayCoordinator = deps.virtualDisplayCoordinator ?? null;
-		this.captureToolPatterns =
-			deps.captureToolPatterns ?? KNOWN_CAPTURE_TOOL_PATTERNS;
+    this.captureToolPatterns =
+      deps.captureToolPatterns ?? [
+        ...DEDICATED_CAPTURE_TOOL_PATTERNS,
+        ...POTENTIAL_CAPTURE_TOOL_PATTERNS,
+      ];
 		this.protectionStateMachine =
 			deps.protectionStateMachine ??
 			new ProtectionStateMachine({ logger: this.logger });
@@ -1454,46 +1452,96 @@ export class StealthManager extends EventEmitter {
 		}
 	}
 
-	private async detectCaptureProcesses(): Promise<RegExp[]> {
-		const nativeModule = this.getNativeModule();
-		const procs = nativeModule?.getRunningProcesses?.() ?? [];
-		const processNames = procs.map((p) => p.name.toLowerCase()).join(" ");
+  private async detectCaptureProcesses(): Promise<RegExp[]> {
+    const nativeModule = this.getNativeModule();
+    const procs = nativeModule?.getRunningProcesses?.() ?? [];
+    const processNames = procs.map((p) => p.name.toLowerCase()).join(" ");
 
-		if (!processNames) {
-			return [];
-		}
+    if (!processNames) {
+      return [];
+    }
 
-		return this.captureToolPatterns.filter((pattern) =>
-			pattern.test(processNames),
-		);
-	}
+    const dedicatedMatches = DEDICATED_CAPTURE_TOOL_PATTERNS.filter(
+      (pattern) => pattern.test(processNames),
+    );
 
-	private async checkSCStreamActive(): Promise<boolean> {
-		if (this.platform !== "darwin") {
-			return false;
-		}
+    const potentialMatches = POTENTIAL_CAPTURE_TOOL_PATTERNS.filter(
+      (pattern) => pattern.test(processNames),
+    );
 
-		try {
-			const nativeModule = this.getNativeModule();
-			const procs = nativeModule?.getRunningProcesses?.() ?? [];
-			const processNames = procs.map((p) => p.name.toLowerCase()).join(" ");
+    if (dedicatedMatches.length > 0) {
+      return dedicatedMatches;
+    }
 
-			if (/screencaptureagent/i.test(processNames)) {
-				return true;
-			}
+    if (potentialMatches.length > 0 && nativeModule?.checkBrowserCaptureWindows?.()) {
+      return potentialMatches;
+    }
 
-			if (
-				/controlcenter/i.test(processNames) &&
-				(/screen/i.test(processNames) || /capture/i.test(processNames))
-			) {
-				return true;
-			}
+    return [];
+  }
 
-			return false;
-		} catch {
-			return false;
-		}
-	}
+  private async checkSCStreamActive(): Promise<boolean> {
+    if (this.platform !== "darwin") {
+      return false;
+    }
+
+    try {
+      const nativeModule = this.getNativeModule();
+
+      if (nativeModule?.checkBrowserCaptureWindows?.()) {
+        return true;
+      }
+
+      const procs = nativeModule?.getRunningProcesses?.() ?? [];
+      const procMap = new Map<number, { name: string; ppid: number }>();
+      for (const p of procs) {
+        procMap.set(p.pid, { name: p.name.toLowerCase(), ppid: p.ppid });
+      }
+
+      const RECORDING_APP_PATTERNS = [
+        /screen ?studio/i,
+        /obs/i,
+        /camtasia/i,
+        /bandicam/i,
+        /loom/i,
+        /screen ?recorder/i,
+        /kapt/i,
+        /recordit/i,
+        /sharex/i,
+        /greenshot/i,
+        /flameshot/i,
+        /vidyard/i,
+        /screencastify/i,
+        /wistia/i,
+        /quicktime/i,
+      ];
+
+      for (const [pid, info] of procMap) {
+        if (!/screencaptureagent/i.test(info.name)) {
+          continue;
+        }
+
+        let parentPid = info.ppid;
+        let depth = 0;
+        while (parentPid && depth < 10) {
+          const parent = procMap.get(parentPid);
+          if (!parent) break;
+          if (RECORDING_APP_PATTERNS.some((p) => p.test(parent.name))) {
+            this.logger.log(
+              `[StealthManager] screencaptureagent (PID ${pid}) parented by recording app: ${parent.name} (PID ${parentPid})`,
+            );
+            return true;
+          }
+          parentPid = parent.ppid;
+          depth++;
+        }
+      }
+
+      return false;
+    } catch {
+      return false;
+    }
+  }
 
 	private ensureSCStreamMonitor(): void {
 		if (

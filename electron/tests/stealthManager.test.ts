@@ -605,30 +605,71 @@ describe("StealthManager", () => {
 		win.destroy();
 	});
 
-	it("uses native process list for capture detection", async () => {
-		const manager = new StealthManager(
-			{ enabled: true },
-			{
-				platform: "darwin",
-				logger: silentLogger,
-				nativeModule: {
-					getRunningProcesses: () => [
-						{
-							pid: 1,
-							ppid: 1,
-							name: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-						},
-						{ pid: 2, ppid: 1, name: "/usr/bin/obs" },
-					],
-				},
-			},
-		);
+  it("uses native process list for capture detection", async () => {
+    const manager = new StealthManager(
+      { enabled: true },
+      {
+        platform: "darwin",
+        logger: silentLogger,
+        nativeModule: {
+          getRunningProcesses: () => [
+            {
+              pid: 1,
+              ppid: 1,
+              name: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+            },
+            { pid: 2, ppid: 1, name: "/usr/bin/obs" },
+          ],
+        },
+      },
+    );
 
-		const matches = await (manager as any).detectCaptureProcesses();
+    const matches = await (manager as any).detectCaptureProcesses();
 
-		assert.ok(matches.some((pattern: RegExp) => pattern.test("chrome")));
-		assert.ok(matches.some((pattern: RegExp) => pattern.test("obs")));
-	});
+    assert.ok(matches.some((pattern: RegExp) => pattern.test("obs")));
+
+    const managerNoDedicated = new StealthManager(
+      { enabled: true },
+      {
+        platform: "darwin",
+        logger: silentLogger,
+        nativeModule: {
+          getRunningProcesses: () => [
+            {
+              pid: 1,
+              ppid: 1,
+              name: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+            },
+          ],
+          checkBrowserCaptureWindows: () => true,
+        },
+      },
+    );
+
+    const matchesBrowser = await (managerNoDedicated as any).detectCaptureProcesses();
+    assert.ok(matchesBrowser.some((pattern: RegExp) => pattern.test("chrome")));
+
+    const managerBrowserNoCapture = new StealthManager(
+      { enabled: true },
+      {
+        platform: "darwin",
+        logger: silentLogger,
+        nativeModule: {
+          getRunningProcesses: () => [
+            {
+              pid: 1,
+              ppid: 1,
+              name: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+            },
+          ],
+          checkBrowserCaptureWindows: () => false,
+        },
+      },
+    );
+
+    const matchesBrowserNoCapture = await (managerBrowserNoCapture as any).detectCaptureProcesses();
+    assert.strictEqual(matchesBrowserNoCapture.length, 0);
+  });
 
 	it("verifies applied stealth state through native bindings", () => {
 		const win = new FakeWindow();
