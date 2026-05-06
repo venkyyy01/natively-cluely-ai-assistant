@@ -32,10 +32,10 @@
  * ================================================================================
  */
 
-import { app } from 'electron';
-import fs from 'fs';
-import path from 'path';
-import { v4 as uuidv4 } from 'uuid';
+import { app } from "electron";
+import fs from "fs";
+import path from "path";
+import { v4 as uuidv4 } from "uuid";
 
 // ============================================================================
 // Configuration
@@ -45,11 +45,14 @@ import { v4 as uuidv4 } from 'uuid';
  * Anonymous install ping endpoint.
  * Replace this URL with your actual Cloudflare Worker endpoint.
  */
-const INSTALL_PING_URL = 'https://divine-sun-927d.natively.workers.dev';
+const INSTALL_PING_URL = "https://divine-sun-927d.natively.workers.dev";
 
 // Local storage paths (inside user data directory)
-const INSTALL_ID_PATH = path.join(app.getPath('userData'), 'install_id.txt');
-const INSTALL_PING_SENT_PATH = path.join(app.getPath('userData'), 'install_ping_sent.txt');
+const INSTALL_ID_PATH = path.join(app.getPath("userData"), "install_id.txt");
+const INSTALL_PING_SENT_PATH = path.join(
+	app.getPath("userData"),
+	"install_ping_sent.txt",
+);
 
 // ============================================================================
 // Helper Functions
@@ -61,52 +64,52 @@ const INSTALL_PING_SENT_PATH = path.join(app.getPath('userData'), 'install_ping_
  * Once created, it never changes.
  */
 export function getOrCreateInstallId(): string {
-    try {
-        // Check if install ID already exists
-        if (fs.existsSync(INSTALL_ID_PATH)) {
-            const existingId = fs.readFileSync(INSTALL_ID_PATH, 'utf-8').trim();
-            if (existingId && existingId.length > 0) {
-                return existingId;
-            }
-        }
+	try {
+		// Check if install ID already exists
+		if (fs.existsSync(INSTALL_ID_PATH)) {
+			const existingId = fs.readFileSync(INSTALL_ID_PATH, "utf-8").trim();
+			if (existingId && existingId.length > 0) {
+				return existingId;
+			}
+		}
 
-        // Generate new UUID
-        const newId = uuidv4();
-        fs.writeFileSync(INSTALL_ID_PATH, newId, 'utf-8');
-        console.log('[InstallPingManager] Generated new install ID');
-        return newId;
-    } catch (error) {
-        console.error('[InstallPingManager] Error managing install ID:', error);
-        // Return a temporary ID if we can't persist (ping may repeat, but that's fine)
-        return uuidv4();
-    }
+		// Generate new UUID
+		const newId = uuidv4();
+		fs.writeFileSync(INSTALL_ID_PATH, newId, "utf-8");
+		console.log("[InstallPingManager] Generated new install ID");
+		return newId;
+	} catch (error) {
+		console.error("[InstallPingManager] Error managing install ID:", error);
+		// Return a temporary ID if we can't persist (ping may repeat, but that's fine)
+		return uuidv4();
+	}
 }
 
 /**
  * Check if the install ping has already been sent.
  */
 function hasInstallPingBeenSent(): boolean {
-    try {
-        if (fs.existsSync(INSTALL_PING_SENT_PATH)) {
-            const value = fs.readFileSync(INSTALL_PING_SENT_PATH, 'utf-8').trim();
-            return value === 'true';
-        }
-        return false;
-    } catch {
-        return false;
-    }
+	try {
+		if (fs.existsSync(INSTALL_PING_SENT_PATH)) {
+			const value = fs.readFileSync(INSTALL_PING_SENT_PATH, "utf-8").trim();
+			return value === "true";
+		}
+		return false;
+	} catch {
+		return false;
+	}
 }
 
 /**
  * Mark the install ping as sent.
  */
 function markInstallPingSent(): void {
-    try {
-        fs.writeFileSync(INSTALL_PING_SENT_PATH, 'true', 'utf-8');
-        console.log('[InstallPingManager] Install ping marked as sent');
-    } catch (error) {
-        console.error('[InstallPingManager] Error marking ping as sent:', error);
-    }
+	try {
+		fs.writeFileSync(INSTALL_PING_SENT_PATH, "true", "utf-8");
+		console.log("[InstallPingManager] Install ping marked as sent");
+	} catch (error) {
+		console.error("[InstallPingManager] Error marking ping as sent:", error);
+	}
 }
 
 // ============================================================================
@@ -124,59 +127,64 @@ function markInstallPingSent(): void {
  * - Fails silently on any error
  */
 export async function sendAnonymousInstallPing(): Promise<void> {
-    try {
-        // Early exit if ping already sent
-        if (hasInstallPingBeenSent()) {
-            console.log('[InstallPingManager] Install ping already sent, skipping');
-            return;
-        }
+	try {
+		// Early exit if ping already sent
+		if (hasInstallPingBeenSent()) {
+			console.log("[InstallPingManager] Install ping already sent, skipping");
+			return;
+		}
 
-        const installId = getOrCreateInstallId();
-        const version = app.getVersion();
-        const platform = process.platform; // 'darwin' | 'win32' | 'linux'
+		const installId = getOrCreateInstallId();
+		const version = app.getVersion();
+		const platform = process.platform; // 'darwin' | 'win32' | 'linux'
 
-        const payload = {
-            app: 'natively',
-            install_id: installId,
-            version: version,
-            platform: platform
-        };
+		const payload = {
+			app: "natively",
+			install_id: installId,
+			version: version,
+			platform: platform,
+		};
 
-        console.log('[InstallPingManager] Sending anonymous install ping...');
+		console.log("[InstallPingManager] Sending anonymous install ping...");
 
-        // Non-blocking fetch with timeout
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 5000); // 5 second timeout
+		// Non-blocking fetch with timeout
+		const controller = new AbortController();
+		const timeoutId = setTimeout(() => controller.abort(), 5000); // 5 second timeout
 
-        const response = await fetch(INSTALL_PING_URL, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify(payload),
-            signal: controller.signal
-        });
+		const response = await fetch(INSTALL_PING_URL, {
+			method: "POST",
+			headers: {
+				"Content-Type": "application/json",
+			},
+			body: JSON.stringify(payload),
+			signal: controller.signal,
+		});
 
-        clearTimeout(timeoutId);
+		clearTimeout(timeoutId);
 
-        if (response.ok) {
-            markInstallPingSent();
-            console.log('[InstallPingManager] Install ping sent successfully');
-        } else {
-            // Don't mark as sent on failure - will retry on next launch
-            console.log(`[InstallPingManager] Install ping failed with status: ${response.status}`);
-        }
-    } catch (error) {
-        // Silently fail - this is non-critical functionality
-        // Common reasons: no network, endpoint doesn't exist yet, timeout
-        console.log('[InstallPingManager] Install ping failed (silent):', error instanceof Error ? error.message : 'Unknown error');
-    }
+		if (response.ok) {
+			markInstallPingSent();
+			console.log("[InstallPingManager] Install ping sent successfully");
+		} else {
+			// Don't mark as sent on failure - will retry on next launch
+			console.log(
+				`[InstallPingManager] Install ping failed with status: ${response.status}`,
+			);
+		}
+	} catch (error) {
+		// Silently fail - this is non-critical functionality
+		// Common reasons: no network, endpoint doesn't exist yet, timeout
+		console.log(
+			"[InstallPingManager] Install ping failed (silent):",
+			error instanceof Error ? error.message : "Unknown error",
+		);
+	}
 }
 
 /**
  * Namespace export for compatibility with require() pattern
  */
 export const InstallPingManager = {
-    getOrCreateInstallId,
-    sendAnonymousInstallPing
+	getOrCreateInstallId,
+	sendAnonymousInstallPing,
 };

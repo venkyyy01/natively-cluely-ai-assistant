@@ -1,157 +1,217 @@
-import test from 'node:test';
-import assert from 'node:assert/strict';
-import { ipcSchemas, parseIpcInput } from '../ipcValidation';
+import assert from "node:assert/strict";
+import test from "node:test";
+import { ipcSchemas, parseIpcInput } from "../ipcValidation";
 
-test('gemini chat args validation accepts bounded valid payload', () => {
-  const parsed = parseIpcInput(
-    ipcSchemas.geminiChatArgs,
-    ['hello', ['a.png'], 'ctx', { skipSystemPrompt: true }],
-    'gemini-chat',
-  );
+test("gemini chat args validation accepts bounded valid payload", () => {
+	const parsed = parseIpcInput(
+		ipcSchemas.geminiChatArgs,
+		["hello", ["a.png"], "ctx", { skipSystemPrompt: true }],
+		"gemini-chat",
+	);
 
-  assert.equal(parsed[0], 'hello');
-  assert.equal(parsed[1]?.[0], 'a.png');
-  assert.equal(parsed[2], 'ctx');
-  assert.equal(parsed[3]?.skipSystemPrompt, true);
+	assert.equal(parsed[0], "hello");
+	assert.equal(parsed[1]?.[0], "a.png");
+	assert.equal(parsed[2], "ctx");
+	assert.equal(parsed[3]?.skipSystemPrompt, true);
 });
 
-test('follow-up email validation rejects malformed meeting type', () => {
-  assert.throws(() => {
-    parseIpcInput(
-      ipcSchemas.followUpEmailInput,
-      { meeting_type: 'weird', title: 't' },
-      'generate-followup-email',
-    );
-  }, /Invalid IPC payload/);
+test("follow-up email validation rejects malformed meeting type", () => {
+	assert.throws(() => {
+		parseIpcInput(
+			ipcSchemas.followUpEmailInput,
+			{ meeting_type: "weird", title: "t" },
+			"generate-followup-email",
+		);
+	}, /Invalid IPC payload/);
 });
 
-test('ipc schemas validate additional accepted shapes', () => {
-  const provider = parseIpcInput(
-    ipcSchemas.customProvider,
-    {
-      id: 'provider-1',
-      name: 'Provider 1',
-      curlCommand: 'curl https://example.com -d "{{TEXT}}"',
-      responsePath: 'choices[0].message.content',
-    },
-    'save-custom-provider',
-  );
-  assert.equal(provider.id, 'provider-1');
+test("ipc schemas validate additional accepted shapes", () => {
+	const provider = parseIpcInput(
+		ipcSchemas.customProvider,
+		{
+			id: "provider-1",
+			name: "Provider 1",
+			curlCommand: 'curl https://example.com -d "{{TEXT}}"',
+			responsePath: "choices[0].message.content",
+		},
+		"save-custom-provider",
+	);
+	assert.equal(provider.id, "provider-1");
 
-  const transcript = parseIpcInput(
-    ipcSchemas.transcriptEntries,
-    [{ text: 'hello' }, { text: 'world' }],
-    'transcript-entries',
-  );
-  assert.equal(transcript.length, 2);
+	const transcript = parseIpcInput(
+		ipcSchemas.transcriptEntries,
+		[{ text: "hello" }, { text: "world" }],
+		"transcript-entries",
+	);
+	assert.equal(transcript.length, 2);
 
-  const mailto = parseIpcInput(
-    ipcSchemas.openMailtoInput,
-    { to: 'test@example.com', subject: 'hello', body: 'body' },
-    'open-mailto',
-  );
-  assert.equal(mailto.to, 'test@example.com');
+	const mailto = parseIpcInput(
+		ipcSchemas.openMailtoInput,
+		{ to: "test@example.com", subject: "hello", body: "body" },
+		"open-mailto",
+	);
+	assert.equal(mailto.to, "test@example.com");
 
-  assert.equal(parseIpcInput(ipcSchemas.audioDeviceId, 'mic-1', 'start-audio-test'), 'mic-1');
-  assert.equal(parseIpcInput(ipcSchemas.meetingId, 'meeting-1', 'get-meeting-details'), 'meeting-1');
-  assert.equal(parseIpcInput(ipcSchemas.externalUrl, 'https://example.com', 'open-external'), 'https://example.com');
+	assert.equal(
+		parseIpcInput(ipcSchemas.audioDeviceId, "mic-1", "start-audio-test"),
+		"mic-1",
+	);
+	assert.equal(
+		parseIpcInput(ipcSchemas.meetingId, "meeting-1", "get-meeting-details"),
+		"meeting-1",
+	);
+	assert.equal(
+		parseIpcInput(
+			ipcSchemas.externalUrl,
+			"https://example.com",
+			"open-external",
+		),
+		"https://example.com",
+	);
 
-  const longGmailUrl = `https://mail.google.com/mail/?view=cm&fs=1&body=${encodeURIComponent('x'.repeat(12000))}`;
-  assert.equal(parseIpcInput(ipcSchemas.externalUrl, longGmailUrl, 'open-external'), longGmailUrl);
+	const longGmailUrl = `https://mail.google.com/mail/?view=cm&fs=1&body=${encodeURIComponent("x".repeat(12000))}`;
+	assert.equal(
+		parseIpcInput(ipcSchemas.externalUrl, longGmailUrl, "open-external"),
+		longGmailUrl,
+	);
 });
 
-test('parseIpcInput reports joined zod issue paths', () => {
-  assert.throws(() => {
-    parseIpcInput(
-      ipcSchemas.customProvider,
-      {
-        id: 'provider-1',
-        name: 'Provider 1',
-        curlCommand: 'curl https://example.com -d "{{TEXT}}"',
-      },
-      'save-custom-provider',
-    );
-  }, /responsePath: Required/);
+test("parseIpcInput reports joined zod issue paths", () => {
+	assert.throws(() => {
+		parseIpcInput(
+			ipcSchemas.customProvider,
+			{
+				id: "provider-1",
+				name: "Provider 1",
+				curlCommand: 'curl https://example.com -d "{{TEXT}}"',
+			},
+			"save-custom-provider",
+		);
+	}, /responsePath: Required/);
 
-  assert.throws(() => {
-    parseIpcInput(ipcSchemas.openMailtoInput, null, 'open-mailto');
-  }, /root:/);
+	assert.throws(() => {
+		parseIpcInput(ipcSchemas.openMailtoInput, null, "open-mailto");
+	}, /root:/);
 
-  assert.throws(() => {
-    parseIpcInput(ipcSchemas.externalUrl, 'file:///tmp/test', 'open-external');
-  }, /Expected a valid http, https, or mailto URL/);
+	assert.throws(() => {
+		parseIpcInput(ipcSchemas.externalUrl, "file:///tmp/test", "open-external");
+	}, /Expected a valid http, https, or mailto URL/);
 });
 
-test('generate suggestion args validation accepts bounded valid payload', () => {
-  const parsed = parseIpcInput(
-    ipcSchemas.generateSuggestionArgs,
-    ['context', 'last question'],
-    'generate-suggestion',
-  );
+test("generate suggestion args validation accepts bounded valid payload", () => {
+	const parsed = parseIpcInput(
+		ipcSchemas.generateSuggestionArgs,
+		["context", "last question"],
+		"generate-suggestion",
+	);
 
-  assert.deepEqual(parsed, ['context', 'last question']);
+	assert.deepEqual(parsed, ["context", "last question"]);
 });
 
-test('overlay opacity validation rejects non-finite values', () => {
-  assert.throws(() => {
-    parseIpcInput(ipcSchemas.overlayOpacity, Number.NaN, 'set-overlay-opacity');
-  }, /Invalid IPC payload/);
+test("overlay opacity validation rejects non-finite values", () => {
+	assert.throws(() => {
+		parseIpcInput(ipcSchemas.overlayOpacity, Number.NaN, "set-overlay-opacity");
+	}, /Invalid IPC payload/);
 
-  assert.equal(parseIpcInput(ipcSchemas.booleanFlag, true, 'set-overlay-clickthrough'), true);
-  assert.throws(() => {
-    parseIpcInput(ipcSchemas.booleanFlag, 'yes', 'set-overlay-clickthrough');
-  }, /Invalid IPC payload/);
+	assert.equal(
+		parseIpcInput(ipcSchemas.booleanFlag, true, "set-overlay-clickthrough"),
+		true,
+	);
+	assert.throws(() => {
+		parseIpcInput(ipcSchemas.booleanFlag, "yes", "set-overlay-clickthrough");
+	}, /Invalid IPC payload/);
 });
 
-test('settings, profile, and rag validation schemas accept bounded payloads', () => {
-  assert.equal(parseIpcInput(ipcSchemas.disguiseMode, 'activity', 'set-disguise'), 'activity');
-  assert.equal(parseIpcInput(ipcSchemas.profileFilePath, '/tmp/resume.pdf', 'profile:upload-resume'), '/tmp/resume.pdf');
-  assert.equal(parseIpcInput(ipcSchemas.profileCompanyName, 'Acme', 'profile:research-company'), 'Acme');
-  assert.deepEqual(
-    parseIpcInput(ipcSchemas.llmConnectionArgs, ['cerebras', 'test-key'], 'test-llm-connection'),
-    ['cerebras', 'test-key'],
-  );
-  assert.deepEqual(
-    parseIpcInput(ipcSchemas.fastResponseConfig, { enabled: true, provider: 'cerebras', model: 'gpt-oss-120b' }, 'set-fast-response-config'),
-    { enabled: true, provider: 'cerebras', model: 'gpt-oss-120b' },
-  );
+test("settings, profile, and rag validation schemas accept bounded payloads", () => {
+	assert.equal(
+		parseIpcInput(ipcSchemas.disguiseMode, "activity", "set-disguise"),
+		"activity",
+	);
+	assert.equal(
+		parseIpcInput(
+			ipcSchemas.profileFilePath,
+			"/tmp/resume.pdf",
+			"profile:upload-resume",
+		),
+		"/tmp/resume.pdf",
+	);
+	assert.equal(
+		parseIpcInput(
+			ipcSchemas.profileCompanyName,
+			"Acme",
+			"profile:research-company",
+		),
+		"Acme",
+	);
+	assert.deepEqual(
+		parseIpcInput(
+			ipcSchemas.llmConnectionArgs,
+			["cerebras", "test-key"],
+			"test-llm-connection",
+		),
+		["cerebras", "test-key"],
+	);
+	assert.deepEqual(
+		parseIpcInput(
+			ipcSchemas.fastResponseConfig,
+			{ enabled: true, provider: "cerebras", model: "gpt-oss-120b" },
+			"set-fast-response-config",
+		),
+		{ enabled: true, provider: "cerebras", model: "gpt-oss-120b" },
+	);
 
-  assert.deepEqual(
-    parseIpcInput(ipcSchemas.ragMeetingQuery, { meetingId: 'meeting-1', query: 'summarize blockers' }, 'rag:query-meeting'),
-    { meetingId: 'meeting-1', query: 'summarize blockers' },
-  );
-  assert.deepEqual(
-    parseIpcInput(ipcSchemas.ragCancelQuery, { global: true }, 'rag:cancel-query'),
-    { global: true },
-  );
+	assert.deepEqual(
+		parseIpcInput(
+			ipcSchemas.ragMeetingQuery,
+			{ meetingId: "meeting-1", query: "summarize blockers" },
+			"rag:query-meeting",
+		),
+		{ meetingId: "meeting-1", query: "summarize blockers" },
+	);
+	assert.deepEqual(
+		parseIpcInput(
+			ipcSchemas.ragCancelQuery,
+			{ global: true },
+			"rag:cancel-query",
+		),
+		{ global: true },
+	);
 });
 
-test('settings, profile, and rag validation schemas reject malformed payloads', () => {
-  assert.throws(() => {
-    parseIpcInput(ipcSchemas.disguiseMode, 'spaceship', 'set-disguise');
-  }, /Invalid IPC payload/);
+test("settings, profile, and rag validation schemas reject malformed payloads", () => {
+	assert.throws(() => {
+		parseIpcInput(ipcSchemas.disguiseMode, "spaceship", "set-disguise");
+	}, /Invalid IPC payload/);
 
-  assert.throws(() => {
-    parseIpcInput(ipcSchemas.profileFilePath, '   ', 'profile:upload-resume');
-  }, /Invalid IPC payload/);
+	assert.throws(() => {
+		parseIpcInput(ipcSchemas.profileFilePath, "   ", "profile:upload-resume");
+	}, /Invalid IPC payload/);
 
-  assert.throws(() => {
-    parseIpcInput(ipcSchemas.ragMeetingQuery, { meetingId: '', query: 'hello' }, 'rag:query-meeting');
-  }, /Invalid IPC payload/);
+	assert.throws(() => {
+		parseIpcInput(
+			ipcSchemas.ragMeetingQuery,
+			{ meetingId: "", query: "hello" },
+			"rag:query-meeting",
+		);
+	}, /Invalid IPC payload/);
 
-  assert.throws(() => {
-    parseIpcInput(ipcSchemas.fastResponseConfig, { enabled: true, provider: 'openai', model: 'gpt-5' }, 'set-fast-response-config');
-  }, /Invalid IPC payload/);
+	assert.throws(() => {
+		parseIpcInput(
+			ipcSchemas.fastResponseConfig,
+			{ enabled: true, provider: "openai", model: "gpt-5" },
+			"set-fast-response-config",
+		);
+	}, /Invalid IPC payload/);
 
-  assert.throws(() => {
-    parseIpcInput(ipcSchemas.ragCancelQuery, {}, 'rag:cancel-query');
-  }, /Invalid IPC payload/);
+	assert.throws(() => {
+		parseIpcInput(ipcSchemas.ragCancelQuery, {}, "rag:cancel-query");
+	}, /Invalid IPC payload/);
 
-  assert.throws(() => {
-    parseIpcInput(ipcSchemas.audioDeviceId, '   ', 'start-audio-test');
-  }, /Invalid IPC payload/);
+	assert.throws(() => {
+		parseIpcInput(ipcSchemas.audioDeviceId, "   ", "start-audio-test");
+	}, /Invalid IPC payload/);
 
-  assert.throws(() => {
-    parseIpcInput(ipcSchemas.meetingId, '', 'get-meeting-details');
-  }, /Invalid IPC payload/);
+	assert.throws(() => {
+		parseIpcInput(ipcSchemas.meetingId, "", "get-meeting-details");
+	}, /Invalid IPC payload/);
 });

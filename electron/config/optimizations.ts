@@ -4,106 +4,106 @@
 // When disabled, the system falls back to the original implementation.
 
 export interface OptimizationFlags {
-  /** Master toggle - enables/disables all acceleration features */
-  accelerationEnabled: boolean;
+	/** Master toggle - enables/disables all acceleration features */
+	accelerationEnabled: boolean;
 
-  /** Phase 1: Quick Wins */
-  usePromptCompiler: boolean;
-  useStreamManager: boolean;
-  useEnhancedCache: boolean;
+	/** Phase 1: Quick Wins */
+	usePromptCompiler: boolean;
+	useStreamManager: boolean;
+	useEnhancedCache: boolean;
 
-  /** Phase 2: Neural Acceleration (Apple Silicon only) */
-  useANEEmbeddings: boolean;
-  useParallelContext: boolean;
+	/** Phase 2: Neural Acceleration (Apple Silicon only) */
+	useANEEmbeddings: boolean;
+	useParallelContext: boolean;
 
-  /** Phase 3: Intelligent Context */
-  useAdaptiveWindow: boolean;
-  usePrefetching: boolean;
+	/** Phase 3: Intelligent Context */
+	useAdaptiveWindow: boolean;
+	usePrefetching: boolean;
 
-  /** Phase 4: Stealth & Process Isolation */
-  useStealthMode: boolean;
+	/** Phase 4: Stealth & Process Isolation */
+	useStealthMode: boolean;
 
-  /** Worker thread configuration */
-  workerThreadCount: number;
+	/** Worker thread configuration */
+	workerThreadCount: number;
 
-  /** Cache configuration */
-  maxCacheMemoryMB: number;
-  semanticCacheThreshold: number;
+	/** Cache configuration */
+	maxCacheMemoryMB: number;
+	semanticCacheThreshold: number;
 
-  /** Prefetch configuration */
-  maxPrefetchPredictions: number;
+	/** Prefetch configuration */
+	maxPrefetchPredictions: number;
 
-  /** Runtime lane budgets */
-  laneBudgets: Record<RuntimeLane, LaneBudgetConfig>;
+	/** Runtime lane budgets */
+	laneBudgets: Record<RuntimeLane, LaneBudgetConfig>;
 }
 
 export type RuntimeLane =
-  | 'realtime'
-  | 'local-inference'
-  | 'semantic'
-  | 'background';
+	| "realtime"
+	| "local-inference"
+	| "semantic"
+	| "background";
 
 export interface LaneBudgetConfig {
-  deadlineMs: number;
-  maxConcurrent: number;
-  memoryCeilingMb: number;
+	deadlineMs: number;
+	maxConcurrent: number;
+	memoryCeilingMb: number;
 }
 
 export const DEFAULT_LANE_BUDGETS: Record<RuntimeLane, LaneBudgetConfig> = {
-  realtime: {
-    deadlineMs: 20,
-    maxConcurrent: 1,
-    memoryCeilingMb: 64,
-  },
-  'local-inference': {
-    deadlineMs: 2000,
-    maxConcurrent: 1,
-    memoryCeilingMb: 256,
-  },
-  semantic: {
-    deadlineMs: 100,
-    maxConcurrent: 2,
-    memoryCeilingMb: 128,
-  },
-  background: {
-    deadlineMs: 5000,
-    maxConcurrent: 4,
-    memoryCeilingMb: 128,
-  },
+	realtime: {
+		deadlineMs: 20,
+		maxConcurrent: 1,
+		memoryCeilingMb: 64,
+	},
+	"local-inference": {
+		deadlineMs: 2000,
+		maxConcurrent: 1,
+		memoryCeilingMb: 256,
+	},
+	semantic: {
+		deadlineMs: 100,
+		maxConcurrent: 2,
+		memoryCeilingMb: 128,
+	},
+	background: {
+		deadlineMs: 5000,
+		maxConcurrent: 4,
+		memoryCeilingMb: 128,
+	},
 };
 
 /** Default optimization flags - acceleration enabled for realtime context reliability */
 export const DEFAULT_OPTIMIZATION_FLAGS: OptimizationFlags = {
-  accelerationEnabled: true,
+	accelerationEnabled: true,
 
-  // Phase 1
-  usePromptCompiler: true,
-  useStreamManager: true,
-  useEnhancedCache: true,
+	// Phase 1
+	usePromptCompiler: true,
+	useStreamManager: true,
+	useEnhancedCache: true,
 
-  // Phase 2
-  useANEEmbeddings: true,
-  useParallelContext: true,
+	// Phase 2
+	useANEEmbeddings: true,
+	useParallelContext: true,
 
-  // Phase 3
-  useAdaptiveWindow: true,
-  usePrefetching: true,
+	// Phase 3
+	useAdaptiveWindow: true,
+	usePrefetching: true,
 
-  // Phase 4
-  useStealthMode: true,
+	// Phase 4
+	useStealthMode: true,
 
-  // Worker config (6 cores default, user-adjustable)
-  workerThreadCount: 6,
+	// Worker config (6 cores default, user-adjustable)
+	workerThreadCount: 6,
 
-  // Cache config
-  maxCacheMemoryMB: 100,
-  semanticCacheThreshold: 0.85,
+	// Cache config
+	maxCacheMemoryMB: 100,
+	semanticCacheThreshold: 0.85,
 
-  // Prefetch config
-  maxPrefetchPredictions: 5,
+	// Prefetch config
+	maxPrefetchPredictions: 5,
 
-  // Runtime budget config
-  laneBudgets: DEFAULT_LANE_BUDGETS,
+	// Runtime budget config
+	laneBudgets: DEFAULT_LANE_BUDGETS,
 };
 
 /** Runtime optimization state */
@@ -116,58 +116,72 @@ let cachedCpuCount: number | null = null;
  * Get current optimization flags
  */
 export function getOptimizationFlags(): Readonly<OptimizationFlags> {
-  return currentFlags;
+	return currentFlags;
 }
 
 /**
  * Update optimization flags from settings
  */
-export function syncOptimizationFlagsFromSettings(accelerationEnabled: boolean): void {
-  if (currentFlags.accelerationEnabled !== accelerationEnabled) {
-    currentFlags = { ...currentFlags, accelerationEnabled };
-  }
+export function syncOptimizationFlagsFromSettings(
+	accelerationEnabled: boolean,
+): void {
+	if (currentFlags.accelerationEnabled !== accelerationEnabled) {
+		currentFlags = { ...currentFlags, accelerationEnabled };
+	}
 }
 
 /**
  * Update optimization flags (partial update supported)
  */
 export function setOptimizationFlags(flags: Partial<OptimizationFlags>): void {
-  currentFlags = { ...currentFlags, ...flags };
+	currentFlags = { ...currentFlags, ...flags };
 }
 
 /**
  * Set optimization flags for testing purposes
  */
-export function setOptimizationFlagsForTesting(flags: Partial<OptimizationFlags>): void {
-  currentFlags = { ...DEFAULT_OPTIMIZATION_FLAGS, ...flags };
+export function setOptimizationFlagsForTesting(
+	flags: Partial<OptimizationFlags>,
+): void {
+	currentFlags = { ...DEFAULT_OPTIMIZATION_FLAGS, ...flags };
 }
 
 /**
  * Check if a specific optimization is active
  * Returns false if master toggle is off, regardless of individual flag
  */
-export function isOptimizationActive(key: keyof Omit<OptimizationFlags, 'accelerationEnabled' | 'workerThreadCount' | 'maxCacheMemoryMB' | 'semanticCacheThreshold' | 'maxPrefetchPredictions' | 'laneBudgets'>): boolean {
-  return currentFlags.accelerationEnabled && currentFlags[key];
+export function isOptimizationActive(
+	key: keyof Omit<
+		OptimizationFlags,
+		| "accelerationEnabled"
+		| "workerThreadCount"
+		| "maxCacheMemoryMB"
+		| "semanticCacheThreshold"
+		| "maxPrefetchPredictions"
+		| "laneBudgets"
+	>,
+): boolean {
+	return currentFlags.accelerationEnabled && currentFlags[key];
 }
 
 /**
  * Check if running on Apple Silicon (M1+)
  */
 export function isAppleSilicon(): boolean {
-  return process.platform === 'darwin' && process.arch === 'arm64';
+	return process.platform === "darwin" && process.arch === "arm64";
 }
 
 /**
  * Get effective worker thread count
  */
 export function getEffectiveWorkerCount(): number {
-  if (cachedCpuCount === null) {
-    try {
-      const os = require('os');
-      cachedCpuCount = os.cpus().length;
-    } catch {
-      cachedCpuCount = 4;
-    }
-  }
-  return Math.min(currentFlags.workerThreadCount, cachedCpuCount);
+	if (cachedCpuCount === null) {
+		try {
+			const os = require("os");
+			cachedCpuCount = os.cpus().length;
+		} catch {
+			cachedCpuCount = 4;
+		}
+	}
+	return Math.min(currentFlags.workerThreadCount, cachedCpuCount);
 }

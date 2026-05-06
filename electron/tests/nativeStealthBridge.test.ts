@@ -1,808 +1,854 @@
-import test from 'node:test';
-import assert from 'node:assert/strict';
+import assert from "node:assert/strict";
+import test from "node:test";
 
-import { NativeStealthBridge } from '../stealth/NativeStealthBridge';
+import { NativeStealthBridge } from "../stealth/NativeStealthBridge";
 
-test('NativeStealthBridge gracefully degrades when helper is unavailable', async () => {
-  const bridge = new NativeStealthBridge({
-    helperPathResolver: () => null,
-  });
+test("NativeStealthBridge gracefully degrades when helper is unavailable", async () => {
+	const bridge = new NativeStealthBridge({
+		helperPathResolver: () => null,
+	});
 
-  assert.equal(bridge.isConnected(), false);
+	assert.equal(bridge.isConnected(), false);
 
-  const arm = await bridge.arm();
-  assert.deepEqual(arm, {
-    connected: false,
-    sessionId: null,
-    surfaceId: null,
-  });
+	const arm = await bridge.arm();
+	assert.deepEqual(arm, {
+		connected: false,
+		sessionId: null,
+		surfaceId: null,
+	});
 
-  const heartbeat = await bridge.heartbeat();
-  assert.deepEqual(heartbeat, {
-    connected: false,
-    healthy: false,
-  });
+	const heartbeat = await bridge.heartbeat();
+	assert.deepEqual(heartbeat, {
+		connected: false,
+		healthy: false,
+	});
 });
 
-test('NativeStealthBridge arms session and verifies healthy heartbeat', async () => {
-  const calls: string[] = [];
-  const bridge = new NativeStealthBridge({
-    helperPathResolver: () => '/tmp/helper',
-    sessionIdFactory: () => 'session-1',
-    clientFactory: () => ({
-      async createProtectedSession(request) {
-        calls.push(`create:${request.sessionId}`);
-        return {
-          outcome: 'ok',
-          failClosed: false,
-          presentationAllowed: true,
-          blockers: [],
-          data: {
-            sessionId: request.sessionId,
-            state: 'creating',
-          },
-        };
-      },
-      async attachSurface(request) {
-        calls.push(`attach:${request.surfaceId}`);
-        return {
-          outcome: 'ok',
-          failClosed: false,
-          presentationAllowed: true,
-          blockers: [],
-          data: {
-            sessionId: request.sessionId,
-            state: 'attached',
-            surfaceAttached: true,
-            presenting: false,
-            recoveryPending: false,
-            blockers: [],
-            lastTransitionAt: new Date(0).toISOString(),
-          },
-        };
-      },
-      async present(request) {
-        calls.push(`present:${request.activate}`);
-        return {
-          outcome: 'ok',
-          failClosed: false,
-          presentationAllowed: true,
-          blockers: [],
-          data: {
-            sessionId: request.sessionId,
-            state: request.activate ? 'presenting' : 'attached',
-            surfaceAttached: true,
-            presenting: request.activate,
-            recoveryPending: false,
-            blockers: [],
-            lastTransitionAt: new Date(0).toISOString(),
-          },
-        };
-      },
-      async getHealth(sessionId) {
-        calls.push(`health:${sessionId}`);
-        return {
-          outcome: 'ok',
-          failClosed: false,
-          presentationAllowed: true,
-          blockers: [],
-          data: {
-            sessionId,
-            state: 'presenting',
-            surfaceAttached: true,
-            presenting: true,
-            recoveryPending: false,
-            blockers: [],
-            lastTransitionAt: new Date(0).toISOString(),
-          },
-        };
-      },
-      async teardownSession(sessionId) {
-        calls.push(`teardown:${sessionId}`);
-        return {
-          outcome: 'ok',
-          failClosed: false,
-          presentationAllowed: false,
-          blockers: [],
-          data: { released: true },
-        };
-      },
-      dispose() {},
-    }),
-  });
+test("NativeStealthBridge arms session and verifies healthy heartbeat", async () => {
+	const calls: string[] = [];
+	const bridge = new NativeStealthBridge({
+		helperPathResolver: () => "/tmp/helper",
+		sessionIdFactory: () => "session-1",
+		clientFactory: () => ({
+			async createProtectedSession(request) {
+				calls.push(`create:${request.sessionId}`);
+				return {
+					outcome: "ok",
+					failClosed: false,
+					presentationAllowed: true,
+					blockers: [],
+					data: {
+						sessionId: request.sessionId,
+						state: "creating",
+					},
+				};
+			},
+			async attachSurface(request) {
+				calls.push(`attach:${request.surfaceId}`);
+				return {
+					outcome: "ok",
+					failClosed: false,
+					presentationAllowed: true,
+					blockers: [],
+					data: {
+						sessionId: request.sessionId,
+						state: "attached",
+						surfaceAttached: true,
+						presenting: false,
+						recoveryPending: false,
+						blockers: [],
+						lastTransitionAt: new Date(0).toISOString(),
+					},
+				};
+			},
+			async present(request) {
+				calls.push(`present:${request.activate}`);
+				return {
+					outcome: "ok",
+					failClosed: false,
+					presentationAllowed: true,
+					blockers: [],
+					data: {
+						sessionId: request.sessionId,
+						state: request.activate ? "presenting" : "attached",
+						surfaceAttached: true,
+						presenting: request.activate,
+						recoveryPending: false,
+						blockers: [],
+						lastTransitionAt: new Date(0).toISOString(),
+					},
+				};
+			},
+			async getHealth(sessionId) {
+				calls.push(`health:${sessionId}`);
+				return {
+					outcome: "ok",
+					failClosed: false,
+					presentationAllowed: true,
+					blockers: [],
+					data: {
+						sessionId,
+						state: "presenting",
+						surfaceAttached: true,
+						presenting: true,
+						recoveryPending: false,
+						blockers: [],
+						lastTransitionAt: new Date(0).toISOString(),
+					},
+				};
+			},
+			async teardownSession(sessionId) {
+				calls.push(`teardown:${sessionId}`);
+				return {
+					outcome: "ok",
+					failClosed: false,
+					presentationAllowed: false,
+					blockers: [],
+					data: { released: true },
+				};
+			},
+			dispose() {},
+		}),
+	});
 
-  const arm = await bridge.arm({ width: 1920, height: 1080 });
-  assert.equal(arm.connected, true);
-  assert.equal(arm.sessionId, 'session-1');
-  assert.equal(arm.surfaceId, 'surface-session-1');
-  assert.equal(bridge.getActiveSessionId(), 'session-1');
+	const arm = await bridge.arm({ width: 1920, height: 1080 });
+	assert.equal(arm.connected, true);
+	assert.equal(arm.sessionId, "session-1");
+	assert.equal(arm.surfaceId, "surface-session-1");
+	assert.equal(bridge.getActiveSessionId(), "session-1");
 
-  const heartbeat = await bridge.heartbeat();
-  assert.deepEqual(heartbeat, { connected: true, healthy: true });
+	const heartbeat = await bridge.heartbeat();
+	assert.deepEqual(heartbeat, { connected: true, healthy: true });
 
-  const frameResult = await bridge.submitFrame('surface-session-1', {
-    x: 0,
-    y: 0,
-    width: 100,
-    height: 50,
-  });
-  assert.deepEqual(frameResult, { connected: true, accepted: true });
+	const frameResult = await bridge.submitFrame("surface-session-1", {
+		x: 0,
+		y: 0,
+		width: 100,
+		height: 50,
+	});
+	assert.deepEqual(frameResult, { connected: true, accepted: true });
 
-  await bridge.fault('test');
-  assert.equal(bridge.getActiveSessionId(), null);
+	await bridge.fault("test");
+	assert.equal(bridge.getActiveSessionId(), null);
 
-  assert.deepEqual(calls, [
-    'create:session-1',
-    'attach:surface-session-1',
-    'present:true',
-    'health:session-1',
-    'health:session-1',
-    'present:false',
-    'teardown:session-1',
-  ]);
+	assert.deepEqual(calls, [
+		"create:session-1",
+		"attach:surface-session-1",
+		"present:true",
+		"health:session-1",
+		"health:session-1",
+		"present:false",
+		"teardown:session-1",
+	]);
 });
 
-test('NativeStealthBridge reports unhealthy heartbeat and reject invalid frame submissions', async () => {
-  const bridge = new NativeStealthBridge({
-    helperPathResolver: () => '/tmp/helper',
-    sessionIdFactory: () => 'session-2',
-    clientFactory: () => ({
-      async createProtectedSession(request) {
-        return {
-          outcome: 'ok',
-          failClosed: false,
-          presentationAllowed: true,
-          blockers: [],
-          data: { sessionId: request.sessionId, state: 'creating' },
-        };
-      },
-      async attachSurface(request) {
-        return {
-          outcome: 'ok',
-          failClosed: false,
-          presentationAllowed: true,
-          blockers: [],
-          data: {
-            sessionId: request.sessionId,
-            state: 'attached',
-            surfaceAttached: true,
-            presenting: false,
-            recoveryPending: false,
-            blockers: [],
-            lastTransitionAt: new Date(0).toISOString(),
-          },
-        };
-      },
-      async present(request) {
-        return {
-          outcome: 'ok',
-          failClosed: false,
-          presentationAllowed: true,
-          blockers: [],
-          data: {
-            sessionId: request.sessionId,
-            state: 'presenting',
-            surfaceAttached: true,
-            presenting: true,
-            recoveryPending: false,
-            blockers: [],
-            lastTransitionAt: new Date(0).toISOString(),
-          },
-        };
-      },
-      async getHealth(sessionId) {
-        return {
-          outcome: 'degraded',
-          failClosed: true,
-          presentationAllowed: false,
-          blockers: [{ code: 'surface-not-attached', message: 'missing', retryable: true }],
-          data: {
-            sessionId,
-            state: 'failed',
-            surfaceAttached: false,
-            presenting: false,
-            recoveryPending: true,
-            blockers: [{ code: 'surface-not-attached', message: 'missing', retryable: true }],
-            lastTransitionAt: new Date(0).toISOString(),
-          },
-        };
-      },
-      async teardownSession() {
-        return {
-          outcome: 'ok',
-          failClosed: false,
-          presentationAllowed: false,
-          blockers: [],
-          data: { released: true },
-        };
-      },
-      dispose() {},
-    }),
-  });
+test("NativeStealthBridge reports unhealthy heartbeat and reject invalid frame submissions", async () => {
+	const bridge = new NativeStealthBridge({
+		helperPathResolver: () => "/tmp/helper",
+		sessionIdFactory: () => "session-2",
+		clientFactory: () => ({
+			async createProtectedSession(request) {
+				return {
+					outcome: "ok",
+					failClosed: false,
+					presentationAllowed: true,
+					blockers: [],
+					data: { sessionId: request.sessionId, state: "creating" },
+				};
+			},
+			async attachSurface(request) {
+				return {
+					outcome: "ok",
+					failClosed: false,
+					presentationAllowed: true,
+					blockers: [],
+					data: {
+						sessionId: request.sessionId,
+						state: "attached",
+						surfaceAttached: true,
+						presenting: false,
+						recoveryPending: false,
+						blockers: [],
+						lastTransitionAt: new Date(0).toISOString(),
+					},
+				};
+			},
+			async present(request) {
+				return {
+					outcome: "ok",
+					failClosed: false,
+					presentationAllowed: true,
+					blockers: [],
+					data: {
+						sessionId: request.sessionId,
+						state: "presenting",
+						surfaceAttached: true,
+						presenting: true,
+						recoveryPending: false,
+						blockers: [],
+						lastTransitionAt: new Date(0).toISOString(),
+					},
+				};
+			},
+			async getHealth(sessionId) {
+				return {
+					outcome: "degraded",
+					failClosed: true,
+					presentationAllowed: false,
+					blockers: [
+						{
+							code: "surface-not-attached",
+							message: "missing",
+							retryable: true,
+						},
+					],
+					data: {
+						sessionId,
+						state: "failed",
+						surfaceAttached: false,
+						presenting: false,
+						recoveryPending: true,
+						blockers: [
+							{
+								code: "surface-not-attached",
+								message: "missing",
+								retryable: true,
+							},
+						],
+						lastTransitionAt: new Date(0).toISOString(),
+					},
+				};
+			},
+			async teardownSession() {
+				return {
+					outcome: "ok",
+					failClosed: false,
+					presentationAllowed: false,
+					blockers: [],
+					data: { released: true },
+				};
+			},
+			dispose() {},
+		}),
+	});
 
-  await bridge.arm();
+	await bridge.arm();
 
-  const invalidSurface = await bridge.submitFrame('wrong-surface', {
-    x: 0,
-    y: 0,
-    width: 10,
-    height: 10,
-  });
-  assert.deepEqual(invalidSurface, { connected: true, accepted: false });
+	const invalidSurface = await bridge.submitFrame("wrong-surface", {
+		x: 0,
+		y: 0,
+		width: 10,
+		height: 10,
+	});
+	assert.deepEqual(invalidSurface, { connected: true, accepted: false });
 
-  const invalidRegion = await bridge.submitFrame('surface-session-2', {
-    x: 0,
-    y: 0,
-    width: 0,
-    height: 10,
-  });
-  assert.deepEqual(invalidRegion, { connected: true, accepted: false });
+	const invalidRegion = await bridge.submitFrame("surface-session-2", {
+		x: 0,
+		y: 0,
+		width: 0,
+		height: 10,
+	});
+	assert.deepEqual(invalidRegion, { connected: true, accepted: false });
 
-  const heartbeat = await bridge.heartbeat();
-  assert.deepEqual(heartbeat, { connected: true, healthy: false });
+	const heartbeat = await bridge.heartbeat();
+	assert.deepEqual(heartbeat, { connected: true, healthy: false });
 });
 
-test('NativeStealthBridge forwards helper fault events for the active session', async () => {
-  const faultReasons: string[] = [];
-  let eventHandler: ((event: { type: 'helper-fault'; sessionId: string; reason: string; failClosed: boolean }) => void) | undefined;
+test("NativeStealthBridge forwards helper fault events for the active session", async () => {
+	const faultReasons: string[] = [];
+	let eventHandler:
+		| ((event: {
+				type: "helper-fault";
+				sessionId: string;
+				reason: string;
+				failClosed: boolean;
+		  }) => void)
+		| undefined;
 
-  const bridge = new NativeStealthBridge({
-    helperPathResolver: () => '/tmp/helper',
-    sessionIdFactory: () => 'session-fault-event',
-    clientFactory: () => ({
-      async createProtectedSession(request) {
-        return {
-          outcome: 'ok',
-          failClosed: false,
-          presentationAllowed: true,
-          blockers: [],
-          data: { sessionId: request.sessionId, state: 'creating' },
-        };
-      },
-      async attachSurface(request) {
-        return {
-          outcome: 'ok',
-          failClosed: false,
-          presentationAllowed: true,
-          blockers: [],
-          data: {
-            sessionId: request.sessionId,
-            state: 'attached',
-            surfaceAttached: true,
-            presenting: false,
-            recoveryPending: false,
-            blockers: [],
-            lastTransitionAt: new Date(0).toISOString(),
-          },
-        };
-      },
-      async present(request) {
-        return {
-          outcome: 'ok',
-          failClosed: false,
-          presentationAllowed: true,
-          blockers: [],
-          data: {
-            sessionId: request.sessionId,
-            state: request.activate ? 'presenting' : 'attached',
-            surfaceAttached: true,
-            presenting: request.activate,
-            recoveryPending: false,
-            blockers: [],
-            lastTransitionAt: new Date(0).toISOString(),
-          },
-        };
-      },
-      async getHealth(sessionId) {
-        return {
-          outcome: 'ok',
-          failClosed: false,
-          presentationAllowed: true,
-          blockers: [],
-          data: {
-            sessionId,
-            state: 'presenting',
-            surfaceAttached: true,
-            presenting: true,
-            recoveryPending: false,
-            blockers: [],
-            lastTransitionAt: new Date(0).toISOString(),
-          },
-        };
-      },
-      async teardownSession() {
-        return {
-          outcome: 'ok',
-          failClosed: false,
-          presentationAllowed: false,
-          blockers: [],
-          data: { released: true },
-        };
-      },
-      setEventHandler(handler) {
-        eventHandler = handler;
-      },
-      dispose() {},
-    }),
-  });
+	const bridge = new NativeStealthBridge({
+		helperPathResolver: () => "/tmp/helper",
+		sessionIdFactory: () => "session-fault-event",
+		clientFactory: () => ({
+			async createProtectedSession(request) {
+				return {
+					outcome: "ok",
+					failClosed: false,
+					presentationAllowed: true,
+					blockers: [],
+					data: { sessionId: request.sessionId, state: "creating" },
+				};
+			},
+			async attachSurface(request) {
+				return {
+					outcome: "ok",
+					failClosed: false,
+					presentationAllowed: true,
+					blockers: [],
+					data: {
+						sessionId: request.sessionId,
+						state: "attached",
+						surfaceAttached: true,
+						presenting: false,
+						recoveryPending: false,
+						blockers: [],
+						lastTransitionAt: new Date(0).toISOString(),
+					},
+				};
+			},
+			async present(request) {
+				return {
+					outcome: "ok",
+					failClosed: false,
+					presentationAllowed: true,
+					blockers: [],
+					data: {
+						sessionId: request.sessionId,
+						state: request.activate ? "presenting" : "attached",
+						surfaceAttached: true,
+						presenting: request.activate,
+						recoveryPending: false,
+						blockers: [],
+						lastTransitionAt: new Date(0).toISOString(),
+					},
+				};
+			},
+			async getHealth(sessionId) {
+				return {
+					outcome: "ok",
+					failClosed: false,
+					presentationAllowed: true,
+					blockers: [],
+					data: {
+						sessionId,
+						state: "presenting",
+						surfaceAttached: true,
+						presenting: true,
+						recoveryPending: false,
+						blockers: [],
+						lastTransitionAt: new Date(0).toISOString(),
+					},
+				};
+			},
+			async teardownSession() {
+				return {
+					outcome: "ok",
+					failClosed: false,
+					presentationAllowed: false,
+					blockers: [],
+					data: { released: true },
+				};
+			},
+			setEventHandler(handler) {
+				eventHandler = handler;
+			},
+			dispose() {},
+		}),
+	});
 
-  bridge.setHelperFaultHandler((reason) => {
-    faultReasons.push(reason);
-  });
+	bridge.setHelperFaultHandler((reason) => {
+		faultReasons.push(reason);
+	});
 
-  await bridge.arm();
-  eventHandler?.({ type: 'helper-fault', sessionId: 'other-session', reason: 'ignored', failClosed: true });
-  eventHandler?.({ type: 'helper-fault', sessionId: 'session-fault-event', reason: 'stealth-heartbeat-missed', failClosed: true });
-  await new Promise((resolve) => setImmediate(resolve));
+	await bridge.arm();
+	eventHandler?.({
+		type: "helper-fault",
+		sessionId: "other-session",
+		reason: "ignored",
+		failClosed: true,
+	});
+	eventHandler?.({
+		type: "helper-fault",
+		sessionId: "session-fault-event",
+		reason: "stealth-heartbeat-missed",
+		failClosed: true,
+	});
+	await new Promise((resolve) => setImmediate(resolve));
 
-  assert.deepEqual(faultReasons, ['stealth-heartbeat-missed']);
+	assert.deepEqual(faultReasons, ["stealth-heartbeat-missed"]);
 });
 
-test('NativeStealthBridge fails arm when helper control-plane is blocked', async () => {
-  const bridge = new NativeStealthBridge({
-    helperPathResolver: () => '/tmp/helper',
-    sessionIdFactory: () => 'session-3',
-    clientFactory: () => ({
-      async createProtectedSession() {
-        return {
-          outcome: 'blocked',
-          failClosed: true,
-          presentationAllowed: false,
-          blockers: [{ code: 'physical-display-mechanism-unproven', message: 'blocked', retryable: false }],
-          data: { sessionId: 'session-3', state: 'blocked' },
-        };
-      },
-      async attachSurface() {
-        throw new Error('unreachable');
-      },
-      async present() {
-        throw new Error('unreachable');
-      },
-      async getHealth() {
-        throw new Error('unreachable');
-      },
-      async teardownSession() {
-        return {
-          outcome: 'ok',
-          failClosed: false,
-          presentationAllowed: false,
-          blockers: [],
-          data: { released: true },
-        };
-      },
-      dispose() {},
-    }),
-  });
+test("NativeStealthBridge fails arm when helper control-plane is blocked", async () => {
+	const bridge = new NativeStealthBridge({
+		helperPathResolver: () => "/tmp/helper",
+		sessionIdFactory: () => "session-3",
+		clientFactory: () => ({
+			async createProtectedSession() {
+				return {
+					outcome: "blocked",
+					failClosed: true,
+					presentationAllowed: false,
+					blockers: [
+						{
+							code: "physical-display-mechanism-unproven",
+							message: "blocked",
+							retryable: false,
+						},
+					],
+					data: { sessionId: "session-3", state: "blocked" },
+				};
+			},
+			async attachSurface() {
+				throw new Error("unreachable");
+			},
+			async present() {
+				throw new Error("unreachable");
+			},
+			async getHealth() {
+				throw new Error("unreachable");
+			},
+			async teardownSession() {
+				return {
+					outcome: "ok",
+					failClosed: false,
+					presentationAllowed: false,
+					blockers: [],
+					data: { released: true },
+				};
+			},
+			dispose() {},
+		}),
+	});
 
-  await assert.rejects(() => bridge.arm(), /create-protected-session failed/);
-  assert.equal(bridge.getActiveSessionId(), null);
+	await assert.rejects(() => bridge.arm(), /create-protected-session failed/);
+	assert.equal(bridge.getActiveSessionId(), null);
 });
 
-test('NativeStealthBridge attempts one restart after helper disconnect without emitting a terminal disconnect event when recovery succeeds', async () => {
-  const calls: string[] = [];
-  const disconnects: string[] = [];
-  let healthCalls = 0;
+test("NativeStealthBridge attempts one restart after helper disconnect without emitting a terminal disconnect event when recovery succeeds", async () => {
+	const calls: string[] = [];
+	const disconnects: string[] = [];
+	let healthCalls = 0;
 
-  const bridge = new NativeStealthBridge({
-    helperPathResolver: () => '/tmp/helper',
-    sessionIdFactory: () => 'session-restart',
-    waitForRestartBackoff: async () => {},
-    onHelperDisconnect: (reason) => {
-      disconnects.push(reason);
-    },
-    clientFactory: () => ({
-      async createProtectedSession(request) {
-        calls.push(`create:${request.sessionId}`);
-        return {
-          outcome: 'ok',
-          failClosed: false,
-          presentationAllowed: true,
-          blockers: [],
-          data: { sessionId: request.sessionId, state: 'creating' },
-        };
-      },
-      async attachSurface(request) {
-        calls.push(`attach:${request.surfaceId}`);
-        return {
-          outcome: 'ok',
-          failClosed: false,
-          presentationAllowed: true,
-          blockers: [],
-          data: {
-            sessionId: request.sessionId,
-            state: 'attached',
-            surfaceAttached: true,
-            presenting: false,
-            recoveryPending: false,
-            blockers: [],
-            lastTransitionAt: new Date(0).toISOString(),
-          },
-        };
-      },
-      async present(request) {
-        calls.push(`present:${request.activate}`);
-        return {
-          outcome: 'ok',
-          failClosed: false,
-          presentationAllowed: true,
-          blockers: [],
-          data: {
-            sessionId: request.sessionId,
-            state: request.activate ? 'presenting' : 'attached',
-            surfaceAttached: true,
-            presenting: request.activate,
-            recoveryPending: false,
-            blockers: [],
-            lastTransitionAt: new Date(0).toISOString(),
-          },
-        };
-      },
-      async getHealth(sessionId) {
-        healthCalls += 1;
-        calls.push(`health:${sessionId}:${healthCalls}`);
-        if (healthCalls === 1) {
-          throw new Error('helper-exit');
-        }
+	const bridge = new NativeStealthBridge({
+		helperPathResolver: () => "/tmp/helper",
+		sessionIdFactory: () => "session-restart",
+		waitForRestartBackoff: async () => {},
+		onHelperDisconnect: (reason) => {
+			disconnects.push(reason);
+		},
+		clientFactory: () => ({
+			async createProtectedSession(request) {
+				calls.push(`create:${request.sessionId}`);
+				return {
+					outcome: "ok",
+					failClosed: false,
+					presentationAllowed: true,
+					blockers: [],
+					data: { sessionId: request.sessionId, state: "creating" },
+				};
+			},
+			async attachSurface(request) {
+				calls.push(`attach:${request.surfaceId}`);
+				return {
+					outcome: "ok",
+					failClosed: false,
+					presentationAllowed: true,
+					blockers: [],
+					data: {
+						sessionId: request.sessionId,
+						state: "attached",
+						surfaceAttached: true,
+						presenting: false,
+						recoveryPending: false,
+						blockers: [],
+						lastTransitionAt: new Date(0).toISOString(),
+					},
+				};
+			},
+			async present(request) {
+				calls.push(`present:${request.activate}`);
+				return {
+					outcome: "ok",
+					failClosed: false,
+					presentationAllowed: true,
+					blockers: [],
+					data: {
+						sessionId: request.sessionId,
+						state: request.activate ? "presenting" : "attached",
+						surfaceAttached: true,
+						presenting: request.activate,
+						recoveryPending: false,
+						blockers: [],
+						lastTransitionAt: new Date(0).toISOString(),
+					},
+				};
+			},
+			async getHealth(sessionId) {
+				healthCalls += 1;
+				calls.push(`health:${sessionId}:${healthCalls}`);
+				if (healthCalls === 1) {
+					throw new Error("helper-exit");
+				}
 
-        return {
-          outcome: 'ok',
-          failClosed: false,
-          presentationAllowed: true,
-          blockers: [],
-          data: {
-            sessionId,
-            state: 'presenting',
-            surfaceAttached: true,
-            presenting: true,
-            recoveryPending: false,
-            blockers: [],
-            lastTransitionAt: new Date(0).toISOString(),
-          },
-        };
-      },
-      async teardownSession() {
-        return {
-          outcome: 'ok',
-          failClosed: false,
-          presentationAllowed: false,
-          blockers: [],
-          data: { released: true },
-        };
-      },
-      dispose() {},
-    }),
-  });
+				return {
+					outcome: "ok",
+					failClosed: false,
+					presentationAllowed: true,
+					blockers: [],
+					data: {
+						sessionId,
+						state: "presenting",
+						surfaceAttached: true,
+						presenting: true,
+						recoveryPending: false,
+						blockers: [],
+						lastTransitionAt: new Date(0).toISOString(),
+					},
+				};
+			},
+			async teardownSession() {
+				return {
+					outcome: "ok",
+					failClosed: false,
+					presentationAllowed: false,
+					blockers: [],
+					data: { released: true },
+				};
+			},
+			dispose() {},
+		}),
+	});
 
-  await bridge.arm();
-  const heartbeat = await bridge.heartbeat();
+	await bridge.arm();
+	const heartbeat = await bridge.heartbeat();
 
-  assert.deepEqual(heartbeat, { connected: true, healthy: true });
-  assert.equal(bridge.getActiveSessionId(), 'session-restart');
-  assert.equal(disconnects.length, 0);
-  assert.ok(calls.filter((call) => call === 'create:session-restart').length >= 2);
+	assert.deepEqual(heartbeat, { connected: true, healthy: true });
+	assert.equal(bridge.getActiveSessionId(), "session-restart");
+	assert.equal(disconnects.length, 0);
+	assert.ok(
+		calls.filter((call) => call === "create:session-restart").length >= 2,
+	);
 });
 
-test('NativeStealthBridge allows a second restart attempt after a later helper disconnect within the restart budget', async () => {
-  const disconnects: string[] = [];
-  let clientGeneration = 0;
+test("NativeStealthBridge allows a second restart attempt after a later helper disconnect within the restart budget", async () => {
+	const disconnects: string[] = [];
+	let clientGeneration = 0;
 
-  const bridge = new NativeStealthBridge({
-    helperPathResolver: () => '/tmp/helper',
-    sessionIdFactory: () => 'session-restart-budget',
-    waitForRestartBackoff: async () => {},
-    onHelperDisconnect: (reason) => {
-      disconnects.push(reason);
-    },
-    logger: { warn() {} },
-    clientFactory: () => {
-      clientGeneration += 1;
-      let healthCalls = 0;
+	const bridge = new NativeStealthBridge({
+		helperPathResolver: () => "/tmp/helper",
+		sessionIdFactory: () => "session-restart-budget",
+		waitForRestartBackoff: async () => {},
+		onHelperDisconnect: (reason) => {
+			disconnects.push(reason);
+		},
+		logger: { warn() {} },
+		clientFactory: () => {
+			clientGeneration += 1;
+			let healthCalls = 0;
 
-      return {
-        async createProtectedSession(request) {
-          return {
-            outcome: 'ok',
-            failClosed: false,
-            presentationAllowed: true,
-            blockers: [],
-            data: { sessionId: request.sessionId, state: 'creating' },
-          };
-        },
-        async attachSurface(request) {
-          return {
-            outcome: 'ok',
-            failClosed: false,
-            presentationAllowed: true,
-            blockers: [],
-            data: {
-              sessionId: request.sessionId,
-              state: 'attached',
-              surfaceAttached: true,
-              presenting: false,
-              recoveryPending: false,
-              blockers: [],
-              lastTransitionAt: new Date(0).toISOString(),
-            },
-          };
-        },
-        async present(request) {
-          return {
-            outcome: 'ok',
-            failClosed: false,
-            presentationAllowed: true,
-            blockers: [],
-            data: {
-              sessionId: request.sessionId,
-              state: request.activate ? 'presenting' : 'attached',
-              surfaceAttached: true,
-              presenting: request.activate,
-              recoveryPending: false,
-              blockers: [],
-              lastTransitionAt: new Date(0).toISOString(),
-            },
-          };
-        },
-        async getHealth() {
-          healthCalls += 1;
-          if (clientGeneration === 1 && healthCalls === 1) {
-            throw new Error('sleep-wake-disconnect');
-          }
-          if (clientGeneration === 2 && healthCalls === 2) {
-            throw new Error('display-hotplug-disconnect');
-          }
+			return {
+				async createProtectedSession(request) {
+					return {
+						outcome: "ok",
+						failClosed: false,
+						presentationAllowed: true,
+						blockers: [],
+						data: { sessionId: request.sessionId, state: "creating" },
+					};
+				},
+				async attachSurface(request) {
+					return {
+						outcome: "ok",
+						failClosed: false,
+						presentationAllowed: true,
+						blockers: [],
+						data: {
+							sessionId: request.sessionId,
+							state: "attached",
+							surfaceAttached: true,
+							presenting: false,
+							recoveryPending: false,
+							blockers: [],
+							lastTransitionAt: new Date(0).toISOString(),
+						},
+					};
+				},
+				async present(request) {
+					return {
+						outcome: "ok",
+						failClosed: false,
+						presentationAllowed: true,
+						blockers: [],
+						data: {
+							sessionId: request.sessionId,
+							state: request.activate ? "presenting" : "attached",
+							surfaceAttached: true,
+							presenting: request.activate,
+							recoveryPending: false,
+							blockers: [],
+							lastTransitionAt: new Date(0).toISOString(),
+						},
+					};
+				},
+				async getHealth() {
+					healthCalls += 1;
+					if (clientGeneration === 1 && healthCalls === 1) {
+						throw new Error("sleep-wake-disconnect");
+					}
+					if (clientGeneration === 2 && healthCalls === 2) {
+						throw new Error("display-hotplug-disconnect");
+					}
 
-          return {
-            outcome: 'ok',
-            failClosed: false,
-            presentationAllowed: true,
-            blockers: [],
-            data: {
-              sessionId: 'session-restart-budget',
-              state: 'presenting',
-              surfaceAttached: true,
-              presenting: true,
-              recoveryPending: false,
-              blockers: [],
-              lastTransitionAt: new Date(0).toISOString(),
-            },
-          };
-        },
-        async teardownSession() {
-          return {
-            outcome: 'ok',
-            failClosed: false,
-            presentationAllowed: false,
-            blockers: [],
-            data: { released: true },
-          };
-        },
-        dispose() {},
-      };
-    },
-  });
+					return {
+						outcome: "ok",
+						failClosed: false,
+						presentationAllowed: true,
+						blockers: [],
+						data: {
+							sessionId: "session-restart-budget",
+							state: "presenting",
+							surfaceAttached: true,
+							presenting: true,
+							recoveryPending: false,
+							blockers: [],
+							lastTransitionAt: new Date(0).toISOString(),
+						},
+					};
+				},
+				async teardownSession() {
+					return {
+						outcome: "ok",
+						failClosed: false,
+						presentationAllowed: false,
+						blockers: [],
+						data: { released: true },
+					};
+				},
+				dispose() {},
+			};
+		},
+	});
 
-  await bridge.arm();
+	await bridge.arm();
 
-  const firstHeartbeat = await bridge.heartbeat();
-  const secondHeartbeat = await bridge.heartbeat();
+	const firstHeartbeat = await bridge.heartbeat();
+	const secondHeartbeat = await bridge.heartbeat();
 
-  assert.deepEqual(firstHeartbeat, { connected: true, healthy: true });
-  assert.deepEqual(secondHeartbeat, { connected: true, healthy: true });
-  assert.equal(bridge.getActiveSessionId(), 'session-restart-budget');
-  assert.deepEqual(disconnects, []);
+	assert.deepEqual(firstHeartbeat, { connected: true, healthy: true });
+	assert.deepEqual(secondHeartbeat, { connected: true, healthy: true });
+	assert.equal(bridge.getActiveSessionId(), "session-restart-budget");
+	assert.deepEqual(disconnects, []);
 });
 
-test('NativeStealthBridge emits a terminal disconnect event when restart after helper disconnect fails', async () => {
-  const disconnects: string[] = [];
-  let createCalls = 0;
-  let healthCalls = 0;
+test("NativeStealthBridge emits a terminal disconnect event when restart after helper disconnect fails", async () => {
+	const disconnects: string[] = [];
+	let createCalls = 0;
+	let healthCalls = 0;
 
-  const bridge = new NativeStealthBridge({
-    helperPathResolver: () => '/tmp/helper',
-    sessionIdFactory: () => 'session-restart-fail',
-    waitForRestartBackoff: async () => {},
-    onHelperDisconnect: (reason) => {
-      disconnects.push(reason);
-    },
-    logger: { warn() {} },
-    clientFactory: () => ({
-      async createProtectedSession(request) {
-        createCalls += 1;
-        if (createCalls > 1) {
-          throw new Error('restart-unavailable');
-        }
+	const bridge = new NativeStealthBridge({
+		helperPathResolver: () => "/tmp/helper",
+		sessionIdFactory: () => "session-restart-fail",
+		waitForRestartBackoff: async () => {},
+		onHelperDisconnect: (reason) => {
+			disconnects.push(reason);
+		},
+		logger: { warn() {} },
+		clientFactory: () => ({
+			async createProtectedSession(request) {
+				createCalls += 1;
+				if (createCalls > 1) {
+					throw new Error("restart-unavailable");
+				}
 
-        return {
-          outcome: 'ok',
-          failClosed: false,
-          presentationAllowed: true,
-          blockers: [],
-          data: { sessionId: request.sessionId, state: 'creating' },
-        };
-      },
-      async attachSurface(request) {
-        return {
-          outcome: 'ok',
-          failClosed: false,
-          presentationAllowed: true,
-          blockers: [],
-          data: {
-            sessionId: request.sessionId,
-            state: 'attached',
-            surfaceAttached: true,
-            presenting: false,
-            recoveryPending: false,
-            blockers: [],
-            lastTransitionAt: new Date(0).toISOString(),
-          },
-        };
-      },
-      async present(request) {
-        return {
-          outcome: 'ok',
-          failClosed: false,
-          presentationAllowed: true,
-          blockers: [],
-          data: {
-            sessionId: request.sessionId,
-            state: request.activate ? 'presenting' : 'attached',
-            surfaceAttached: true,
-            presenting: request.activate,
-            recoveryPending: false,
-            blockers: [],
-            lastTransitionAt: new Date(0).toISOString(),
-          },
-        };
-      },
-      async getHealth() {
-        healthCalls += 1;
-        if (healthCalls === 1) {
-          throw new Error('helper-exit');
-        }
+				return {
+					outcome: "ok",
+					failClosed: false,
+					presentationAllowed: true,
+					blockers: [],
+					data: { sessionId: request.sessionId, state: "creating" },
+				};
+			},
+			async attachSurface(request) {
+				return {
+					outcome: "ok",
+					failClosed: false,
+					presentationAllowed: true,
+					blockers: [],
+					data: {
+						sessionId: request.sessionId,
+						state: "attached",
+						surfaceAttached: true,
+						presenting: false,
+						recoveryPending: false,
+						blockers: [],
+						lastTransitionAt: new Date(0).toISOString(),
+					},
+				};
+			},
+			async present(request) {
+				return {
+					outcome: "ok",
+					failClosed: false,
+					presentationAllowed: true,
+					blockers: [],
+					data: {
+						sessionId: request.sessionId,
+						state: request.activate ? "presenting" : "attached",
+						surfaceAttached: true,
+						presenting: request.activate,
+						recoveryPending: false,
+						blockers: [],
+						lastTransitionAt: new Date(0).toISOString(),
+					},
+				};
+			},
+			async getHealth() {
+				healthCalls += 1;
+				if (healthCalls === 1) {
+					throw new Error("helper-exit");
+				}
 
-        return {
-          outcome: 'ok',
-          failClosed: false,
-          presentationAllowed: true,
-          blockers: [],
-          data: {
-            sessionId: 'session-restart-fail',
-            state: 'presenting',
-            surfaceAttached: true,
-            presenting: true,
-            recoveryPending: false,
-            blockers: [],
-            lastTransitionAt: new Date(0).toISOString(),
-          },
-        };
-      },
-      async teardownSession() {
-        return {
-          outcome: 'ok',
-          failClosed: false,
-          presentationAllowed: false,
-          blockers: [],
-          data: { released: true },
-        };
-      },
-      dispose() {},
-    }),
-  });
+				return {
+					outcome: "ok",
+					failClosed: false,
+					presentationAllowed: true,
+					blockers: [],
+					data: {
+						sessionId: "session-restart-fail",
+						state: "presenting",
+						surfaceAttached: true,
+						presenting: true,
+						recoveryPending: false,
+						blockers: [],
+						lastTransitionAt: new Date(0).toISOString(),
+					},
+				};
+			},
+			async teardownSession() {
+				return {
+					outcome: "ok",
+					failClosed: false,
+					presentationAllowed: false,
+					blockers: [],
+					data: { released: true },
+				};
+			},
+			dispose() {},
+		}),
+	});
 
-  await bridge.arm();
-  const heartbeat = await bridge.heartbeat();
+	await bridge.arm();
+	const heartbeat = await bridge.heartbeat();
 
-  assert.deepEqual(heartbeat, { connected: true, healthy: false });
-  assert.equal(createCalls, 2);
-  assert.deepEqual(disconnects, ['heartbeat:helper-exit']);
+	assert.deepEqual(heartbeat, { connected: true, healthy: false });
+	assert.equal(createCalls, 2);
+	assert.deepEqual(disconnects, ["heartbeat:helper-exit"]);
 });
 
-test('NativeStealthBridge emits a terminal disconnect event after exhausting the restart budget', async () => {
-  const disconnects: string[] = [];
-  let clientGeneration = 0;
+test("NativeStealthBridge emits a terminal disconnect event after exhausting the restart budget", async () => {
+	const disconnects: string[] = [];
+	let clientGeneration = 0;
 
-  const bridge = new NativeStealthBridge({
-    helperPathResolver: () => '/tmp/helper',
-    sessionIdFactory: () => 'session-restart-exhausted',
-    waitForRestartBackoff: async () => {},
-    onHelperDisconnect: (reason) => {
-      disconnects.push(reason);
-    },
-    logger: { warn() {} },
-    clientFactory: () => {
-      clientGeneration += 1;
-      let healthCalls = 0;
+	const bridge = new NativeStealthBridge({
+		helperPathResolver: () => "/tmp/helper",
+		sessionIdFactory: () => "session-restart-exhausted",
+		waitForRestartBackoff: async () => {},
+		onHelperDisconnect: (reason) => {
+			disconnects.push(reason);
+		},
+		logger: { warn() {} },
+		clientFactory: () => {
+			clientGeneration += 1;
+			let healthCalls = 0;
 
-      return {
-        async createProtectedSession(request) {
-          return {
-            outcome: 'ok',
-            failClosed: false,
-            presentationAllowed: true,
-            blockers: [],
-            data: { sessionId: request.sessionId, state: 'creating' },
-          };
-        },
-        async attachSurface(request) {
-          return {
-            outcome: 'ok',
-            failClosed: false,
-            presentationAllowed: true,
-            blockers: [],
-            data: {
-              sessionId: request.sessionId,
-              state: 'attached',
-              surfaceAttached: true,
-              presenting: false,
-              recoveryPending: false,
-              blockers: [],
-              lastTransitionAt: new Date(0).toISOString(),
-            },
-          };
-        },
-        async present(request) {
-          return {
-            outcome: 'ok',
-            failClosed: false,
-            presentationAllowed: true,
-            blockers: [],
-            data: {
-              sessionId: request.sessionId,
-              state: request.activate ? 'presenting' : 'attached',
-              surfaceAttached: true,
-              presenting: request.activate,
-              recoveryPending: false,
-              blockers: [],
-              lastTransitionAt: new Date(0).toISOString(),
-            },
-          };
-        },
-        async getHealth() {
-          healthCalls += 1;
-          if (clientGeneration === 1 && healthCalls === 1) {
-            throw new Error('sleep-wake-disconnect');
-          }
-          if (clientGeneration === 2 && healthCalls === 2) {
-            throw new Error('display-hotplug-disconnect');
-          }
-          if (clientGeneration === 3 && healthCalls === 2) {
-            throw new Error('third-disconnect');
-          }
+			return {
+				async createProtectedSession(request) {
+					return {
+						outcome: "ok",
+						failClosed: false,
+						presentationAllowed: true,
+						blockers: [],
+						data: { sessionId: request.sessionId, state: "creating" },
+					};
+				},
+				async attachSurface(request) {
+					return {
+						outcome: "ok",
+						failClosed: false,
+						presentationAllowed: true,
+						blockers: [],
+						data: {
+							sessionId: request.sessionId,
+							state: "attached",
+							surfaceAttached: true,
+							presenting: false,
+							recoveryPending: false,
+							blockers: [],
+							lastTransitionAt: new Date(0).toISOString(),
+						},
+					};
+				},
+				async present(request) {
+					return {
+						outcome: "ok",
+						failClosed: false,
+						presentationAllowed: true,
+						blockers: [],
+						data: {
+							sessionId: request.sessionId,
+							state: request.activate ? "presenting" : "attached",
+							surfaceAttached: true,
+							presenting: request.activate,
+							recoveryPending: false,
+							blockers: [],
+							lastTransitionAt: new Date(0).toISOString(),
+						},
+					};
+				},
+				async getHealth() {
+					healthCalls += 1;
+					if (clientGeneration === 1 && healthCalls === 1) {
+						throw new Error("sleep-wake-disconnect");
+					}
+					if (clientGeneration === 2 && healthCalls === 2) {
+						throw new Error("display-hotplug-disconnect");
+					}
+					if (clientGeneration === 3 && healthCalls === 2) {
+						throw new Error("third-disconnect");
+					}
 
-          return {
-            outcome: 'ok',
-            failClosed: false,
-            presentationAllowed: true,
-            blockers: [],
-            data: {
-              sessionId: 'session-restart-exhausted',
-              state: 'presenting',
-              surfaceAttached: true,
-              presenting: true,
-              recoveryPending: false,
-              blockers: [],
-              lastTransitionAt: new Date(0).toISOString(),
-            },
-          };
-        },
-        async teardownSession() {
-          return {
-            outcome: 'ok',
-            failClosed: false,
-            presentationAllowed: false,
-            blockers: [],
-            data: { released: true },
-          };
-        },
-        dispose() {},
-      };
-    },
-  });
+					return {
+						outcome: "ok",
+						failClosed: false,
+						presentationAllowed: true,
+						blockers: [],
+						data: {
+							sessionId: "session-restart-exhausted",
+							state: "presenting",
+							surfaceAttached: true,
+							presenting: true,
+							recoveryPending: false,
+							blockers: [],
+							lastTransitionAt: new Date(0).toISOString(),
+						},
+					};
+				},
+				async teardownSession() {
+					return {
+						outcome: "ok",
+						failClosed: false,
+						presentationAllowed: false,
+						blockers: [],
+						data: { released: true },
+					};
+				},
+				dispose() {},
+			};
+		},
+	});
 
-  await bridge.arm();
+	await bridge.arm();
 
-  assert.deepEqual(await bridge.heartbeat(), { connected: true, healthy: true });
-  assert.deepEqual(await bridge.heartbeat(), { connected: true, healthy: true });
-  assert.deepEqual(await bridge.heartbeat(), { connected: true, healthy: false });
-  assert.deepEqual(disconnects, ['heartbeat:third-disconnect']);
+	assert.deepEqual(await bridge.heartbeat(), {
+		connected: true,
+		healthy: true,
+	});
+	assert.deepEqual(await bridge.heartbeat(), {
+		connected: true,
+		healthy: true,
+	});
+	assert.deepEqual(await bridge.heartbeat(), {
+		connected: true,
+		healthy: false,
+	});
+	assert.deepEqual(disconnects, ["heartbeat:third-disconnect"]);
 });

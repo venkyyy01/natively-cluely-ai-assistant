@@ -1,30 +1,23 @@
 {
-  "compilerOptions": {
-    "target": "ESNext",
-    "module": "CommonJS",
-    "allowJs": true,
-    "skipLibCheck": true,
-    "esModuleInterop": true,
-    "noImplicitAny": true,
-    "noImplicitOverride": true,
-    "noImplicitReturns": true,
-    "noUncheckedIndexedAccess": true,
-    "noFallthroughCasesInSwitch": true,
-    "sourceMap": true,
-    "useUnknownInCatchVariables": true,
-    "jsx": "react-jsx",
-    "baseUrl": ".",
-    "outDir": "../dist-electron",
-    "moduleResolution": "node",
-    "resolveJsonModule": true
-  },
-  "include": [
-    "**/*.ts",
-    "**/*.js",
-    "../premium/electron/**/*.ts"
-  ],
-  "exclude": [
-    "db/seedDemo.ts",
-    "db/test-db.ts"
-  ]
+	"compilerOptions": {
+		"target": "ESNext",
+		"module": "CommonJS",
+		"allowJs": true,
+		"skipLibCheck": true,
+		"esModuleInterop": true,
+		"noImplicitAny": true,
+		"noImplicitOverride": true,
+		"noImplicitReturns": true,
+		"noUncheckedIndexedAccess": true,
+		"noFallthroughCasesInSwitch": true,
+		"sourceMap": true,
+		"useUnknownInCatchVariables": true,
+		"jsx": "react-jsx",
+		"baseUrl": ".",
+		"outDir": "../dist-electron",
+		"moduleResolution": "node",
+		"resolveJsonModule": true
+	},
+	"include": ["**/*.ts", "**/*.js", "../premium/electron/**/*.ts"],
+	"exclude": ["db/seedDemo.ts", "db/test-db.ts"]
 }

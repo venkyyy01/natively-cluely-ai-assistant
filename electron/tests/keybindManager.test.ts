@@ -157,12 +157,12 @@ test("global shortcut registration includes alternate function-key accelerators 
 		const manager = KeybindManager.getInstance();
 		manager.setWindowHelper({});
 
+		assert.ok(registered.includes("CommandOrControl+B"));
 		assert.ok(registered.includes("Command+Alt+Shift+V"));
-		assert.ok(registered.includes("F13"));
+		assert.ok(registered.includes("CommandOrControl+Shift+S"));
 		assert.ok(registered.includes("Command+Alt+Shift+S"));
-		assert.ok(registered.includes("F14"));
-		assert.ok(registered.includes("Command+Alt+Shift+A"));
 		assert.ok(registered.includes("F15"));
+		assert.ok(registered.includes("Command+Alt+Shift+A"));
 		assert.ok(registered.includes("Shift+Esc"));
 		assert.ok(registered.includes("Command+Shift+M"));
 		assert.ok(registered.includes("Command+Alt+Shift+M"));

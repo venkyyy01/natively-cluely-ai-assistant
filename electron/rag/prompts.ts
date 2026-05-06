@@ -2,18 +2,22 @@
 // RAG-specific system prompts for meeting Q&A
 // Natural spoken tone, concise, never mentions "context" or "retrieval"
 
-import { QueryIntent } from './RAGRetriever';
+import type { QueryIntent } from "./RAGRetriever";
 
 /**
  * Intent-specific hints to append to prompts
  * These guide the LLM to respond appropriately based on query type
  */
 const INTENT_HINTS: Record<QueryIntent, string> = {
-    decision_recall: '\nFOCUS: Look for decisions, agreements, conclusions, or what was settled.',
-    speaker_lookup: '\nFOCUS: Identify who said what. Attribute statements clearly to speakers.',
-    action_items: '\nFOCUS: List action items, tasks, next steps, or assignments. Be specific about who and what.',
-    summary: '\nFOCUS: Provide a brief overview of the key points. Keep it high-level.',
-    open_question: '' // No special hint for open questions
+	decision_recall:
+		"\nFOCUS: Look for decisions, agreements, conclusions, or what was settled.",
+	speaker_lookup:
+		"\nFOCUS: Identify who said what. Attribute statements clearly to speakers.",
+	action_items:
+		"\nFOCUS: List action items, tasks, next steps, or assignments. Be specific about who and what.",
+	summary:
+		"\nFOCUS: Provide a brief overview of the key points. Keep it high-level.",
+	open_question: "", // No special hint for open questions
 };
 
 /**
@@ -80,19 +84,18 @@ export const PARTIAL_CONTEXT_FALLBACK = `I found some related discussion, but I'
  * Build the final RAG prompt with intent hints
  */
 export function buildRAGPrompt(
-    query: string,
-    context: string,
-    scope: 'meeting' | 'global',
-    intent: QueryIntent = 'open_question'
+	query: string,
+	context: string,
+	scope: "meeting" | "global",
+	intent: QueryIntent = "open_question",
 ): string {
-    const systemPrompt = scope === 'meeting'
-        ? MEETING_RAG_SYSTEM_PROMPT
-        : GLOBAL_RAG_SYSTEM_PROMPT;
+	const systemPrompt =
+		scope === "meeting" ? MEETING_RAG_SYSTEM_PROMPT : GLOBAL_RAG_SYSTEM_PROMPT;
 
-    const intentHint = INTENT_HINTS[intent] || '';
+	const intentHint = INTENT_HINTS[intent] || "";
 
-    return systemPrompt
-        .replace('{intentHint}', intentHint)
-        .replace('{context}', context)
-        .replace('{query}', query);
+	return systemPrompt
+		.replace("{intentHint}", intentHint)
+		.replace("{context}", context)
+		.replace("{query}", query);
 }

@@ -1,113 +1,133 @@
 type WindowLike = {
-  isDestroyed: () => boolean;
-  webContents: {
-    id: number;
-  };
+	isDestroyed: () => boolean;
+	webContents: {
+		id: number;
+	};
 };
 
 export interface WindowFacadeDeps {
-  getSettingsWindow: () => WindowLike | null;
-  setSettingsWindowDimensions: (window: WindowLike, width: number, height: number) => void;
-  getOverlayWindow: () => WindowLike | null;
-  getLauncherContentWindow: () => WindowLike | null;
-  setOverlayDimensions: (width: number, height: number) => void;
-  setWindowMode: (mode: 'launcher' | 'overlay') => void;
-  setOverlayClickthrough: (enabled: boolean) => void;
-  toggleMainWindow: () => void;
-  showMainWindow: () => void;
-  hideMainWindow: () => void;
-  moveWindowLeft: () => void;
-  moveWindowRight: () => void;
-  moveWindowUp: () => void;
-  moveWindowDown: () => void;
-  centerAndShowWindow: () => void;
-  toggleSettingsWindow: (x?: number, y?: number) => void;
-  closeSettingsWindow: () => void;
-  showModelSelectorWindow: (x: number, y: number) => void;
-  hideModelSelectorWindow: () => void;
-  toggleModelSelectorWindow: (x: number, y: number) => void;
+	getSettingsWindow: () => WindowLike | null;
+	setSettingsWindowDimensions: (
+		window: WindowLike,
+		width: number,
+		height: number,
+	) => void;
+	getOverlayWindow: () => WindowLike | null;
+	getLauncherContentWindow: () => WindowLike | null;
+	setOverlayDimensions: (width: number, height: number) => void;
+	setWindowMode: (mode: "launcher" | "overlay") => void;
+	setOverlayClickthrough: (enabled: boolean) => void;
+	toggleMainWindow: () => void;
+	showMainWindow: () => void;
+	hideMainWindow: () => void;
+	moveWindowLeft: () => void;
+	moveWindowRight: () => void;
+	moveWindowUp: () => void;
+	moveWindowDown: () => void;
+	centerAndShowWindow: () => void;
+	toggleSettingsWindow: (x?: number, y?: number) => void;
+	closeSettingsWindow: () => void;
+	showModelSelectorWindow: (x: number, y: number) => void;
+	hideModelSelectorWindow: () => void;
+	toggleModelSelectorWindow: (x: number, y: number) => void;
 }
 
 export class WindowFacade {
-  constructor(private readonly deps: WindowFacadeDeps) {}
+	constructor(private readonly deps: WindowFacadeDeps) {}
 
-  updateContentDimensions(senderWebContentsId: number, width: number, height: number): void {
-    const settingsWin = this.deps.getSettingsWindow();
-    const overlayWin = this.deps.getOverlayWindow();
-    const launcherWin = this.deps.getLauncherContentWindow();
+	updateContentDimensions(
+		senderWebContentsId: number,
+		width: number,
+		height: number,
+	): void {
+		const settingsWin = this.deps.getSettingsWindow();
+		const overlayWin = this.deps.getOverlayWindow();
+		const launcherWin = this.deps.getLauncherContentWindow();
 
-    if (settingsWin && !settingsWin.isDestroyed() && settingsWin.webContents.id === senderWebContentsId) {
-      this.deps.setSettingsWindowDimensions(settingsWin, width, height);
-      return;
-    }
+		if (
+			settingsWin &&
+			!settingsWin.isDestroyed() &&
+			settingsWin.webContents.id === senderWebContentsId
+		) {
+			this.deps.setSettingsWindowDimensions(settingsWin, width, height);
+			return;
+		}
 
-    if (overlayWin && !overlayWin.isDestroyed() && overlayWin.webContents.id === senderWebContentsId) {
-      this.deps.setOverlayDimensions(width, height);
-      return;
-    }
+		if (
+			overlayWin &&
+			!overlayWin.isDestroyed() &&
+			overlayWin.webContents.id === senderWebContentsId
+		) {
+			this.deps.setOverlayDimensions(width, height);
+			return;
+		}
 
-    if (launcherWin && !launcherWin.isDestroyed() && launcherWin.webContents.id === senderWebContentsId) {
-      return;
-    }
-  }
+		if (
+			launcherWin &&
+			!launcherWin.isDestroyed() &&
+			launcherWin.webContents.id === senderWebContentsId
+		) {
+			return;
+		}
+	}
 
-  setWindowMode(mode: 'launcher' | 'overlay'): void {
-    this.deps.setWindowMode(mode);
-  }
+	setWindowMode(mode: "launcher" | "overlay"): void {
+		this.deps.setWindowMode(mode);
+	}
 
-  setOverlayClickthrough(enabled: boolean): void {
-    this.deps.setOverlayClickthrough(enabled);
-  }
+	setOverlayClickthrough(enabled: boolean): void {
+		this.deps.setOverlayClickthrough(enabled);
+	}
 
-  toggleMainWindow(): void {
-    this.deps.toggleMainWindow();
-  }
+	toggleMainWindow(): void {
+		this.deps.toggleMainWindow();
+	}
 
-  showMainWindow(): void {
-    this.deps.showMainWindow();
-  }
+	showMainWindow(): void {
+		this.deps.showMainWindow();
+	}
 
-  hideMainWindow(): void {
-    this.deps.hideMainWindow();
-  }
+	hideMainWindow(): void {
+		this.deps.hideMainWindow();
+	}
 
-  moveWindowLeft(): void {
-    this.deps.moveWindowLeft();
-  }
+	moveWindowLeft(): void {
+		this.deps.moveWindowLeft();
+	}
 
-  moveWindowRight(): void {
-    this.deps.moveWindowRight();
-  }
+	moveWindowRight(): void {
+		this.deps.moveWindowRight();
+	}
 
-  moveWindowUp(): void {
-    this.deps.moveWindowUp();
-  }
+	moveWindowUp(): void {
+		this.deps.moveWindowUp();
+	}
 
-  moveWindowDown(): void {
-    this.deps.moveWindowDown();
-  }
+	moveWindowDown(): void {
+		this.deps.moveWindowDown();
+	}
 
-  centerAndShowWindow(): void {
-    this.deps.centerAndShowWindow();
-  }
+	centerAndShowWindow(): void {
+		this.deps.centerAndShowWindow();
+	}
 
-  toggleSettingsWindow(x?: number, y?: number): void {
-    this.deps.toggleSettingsWindow(x, y);
-  }
+	toggleSettingsWindow(x?: number, y?: number): void {
+		this.deps.toggleSettingsWindow(x, y);
+	}
 
-  closeSettingsWindow(): void {
-    this.deps.closeSettingsWindow();
-  }
+	closeSettingsWindow(): void {
+		this.deps.closeSettingsWindow();
+	}
 
-  showModelSelectorWindow(x: number, y: number): void {
-    this.deps.showModelSelectorWindow(x, y);
-  }
+	showModelSelectorWindow(x: number, y: number): void {
+		this.deps.showModelSelectorWindow(x, y);
+	}
 
-  hideModelSelectorWindow(): void {
-    this.deps.hideModelSelectorWindow();
-  }
+	hideModelSelectorWindow(): void {
+		this.deps.hideModelSelectorWindow();
+	}
 
-  toggleModelSelectorWindow(x: number, y: number): void {
-    this.deps.toggleModelSelectorWindow(x, y);
-  }
+	toggleModelSelectorWindow(x: number, y: number): void {
+		this.deps.toggleModelSelectorWindow(x, y);
+	}
 }

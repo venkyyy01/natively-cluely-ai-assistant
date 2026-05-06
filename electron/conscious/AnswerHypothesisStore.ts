@@ -1,217 +1,263 @@
-import type { ConsciousModeStructuredResponse } from '../ConsciousMode';
-import type { QuestionReaction } from './QuestionReactionClassifier';
+import type { ConsciousModeStructuredResponse } from "../ConsciousMode";
+import type { QuestionReaction } from "./QuestionReactionClassifier";
 
 export interface AnswerHypothesis {
-  sourceQuestion: string;
-  latestSuggestedAnswer: string;
-  likelyThemes: string[];
-  confidence: number;
-  evidence: Array<'suggested' | 'inferred'>;
-  reactionKind?: QuestionReaction['kind'];
-  targetFacets: string[];
-  updatedAt: number;
+	sourceQuestion: string;
+	latestSuggestedAnswer: string;
+	likelyThemes: string[];
+	confidence: number;
+	evidence: Array<"suggested" | "inferred">;
+	reactionKind?: QuestionReaction["kind"];
+	targetFacets: string[];
+	updatedAt: number;
 }
 
 export interface PersistedAnswerHypothesisState {
-  latestHypothesis: AnswerHypothesis | null;
-  latestReaction: QuestionReaction | null;
+	latestHypothesis: AnswerHypothesis | null;
+	latestReaction: QuestionReaction | null;
 }
 
 function mergeUnique(values: string[]): string[] {
-  return Array.from(new Set(values.map((value) => value.trim()).filter(Boolean)));
+	return Array.from(
+		new Set(values.map((value) => value.trim()).filter(Boolean)),
+	);
 }
 
 function extractThemes(response: ConsciousModeStructuredResponse): string[] {
-  return mergeUnique([
-    response.openingReasoning,
-    ...response.implementationPlan,
-    ...response.tradeoffs,
-    ...response.edgeCases,
-    ...response.scaleConsiderations,
-    ...response.pushbackResponses,
-    response.codeTransition,
-  ]).slice(0, 8);
+	return mergeUnique([
+		response.openingReasoning,
+		...response.implementationPlan,
+		...response.tradeoffs,
+		...response.edgeCases,
+		...response.scaleConsiderations,
+		...response.pushbackResponses,
+		response.codeTransition,
+	]).slice(0, 8);
 }
 
 function summarizeResponse(response: ConsciousModeStructuredResponse): string {
-  const parts = [
-    response.openingReasoning,
-    response.implementationPlan[0],
-    response.tradeoffs[0],
-    response.scaleConsiderations[0],
-    response.pushbackResponses[0],
-  ].filter(Boolean);
+	const parts = [
+		response.openingReasoning,
+		response.implementationPlan[0],
+		response.tradeoffs[0],
+		response.scaleConsiderations[0],
+		response.pushbackResponses[0],
+	].filter(Boolean);
 
-  return parts.join(' ');
+	return parts.join(" ");
 }
 
 function sanitizeLikelyAnswerSummary(value: string): string {
-  const lowered = value.toLowerCase();
-  const disallowed = [
-    'i can\'t',
-    'i cant',
-    'i cannot',
-    "can't share that information",
-    'cannot share that information',
-    'not sure',
-    'could you repeat',
-    'do not know',
-    'don\'t know',
-    'fallback',
-  ];
+	const lowered = value.toLowerCase();
+	const disallowed = [
+		"i can't",
+		"i cant",
+		"i cannot",
+		"can't share that information",
+		"cannot share that information",
+		"not sure",
+		"could you repeat",
+		"do not know",
+		"don't know",
+		"fallback",
+	];
 
-  for (const marker of disallowed) {
-    if (lowered.includes(marker)) {
-      return '';
-    }
-  }
+	for (const marker of disallowed) {
+		if (lowered.includes(marker)) {
+			return "";
+		}
+	}
 
-  return value.trim();
+	return value.trim();
 }
 
-function shouldPromoteStructuredSuggestion(response: ConsciousModeStructuredResponse, summary: string): boolean {
-  if (response.mode !== 'reasoning_first') {
-    return false;
-  }
+function shouldPromoteStructuredSuggestion(
+	response: ConsciousModeStructuredResponse,
+	summary: string,
+): boolean {
+	if (response.mode !== "reasoning_first") {
+		return false;
+	}
 
-  if (!summary) {
-    return false;
-  }
+	if (!summary) {
+		return false;
+	}
 
-  return Boolean(
-    response.openingReasoning.trim()
-    || response.implementationPlan.length > 0
-    || response.tradeoffs.length > 0
-    || response.edgeCases.length > 0
-    || response.scaleConsiderations.length > 0
-    || response.pushbackResponses.length > 0
-  );
+	return Boolean(
+		response.openingReasoning.trim() ||
+			response.implementationPlan.length > 0 ||
+			response.tradeoffs.length > 0 ||
+			response.edgeCases.length > 0 ||
+			response.scaleConsiderations.length > 0 ||
+			response.pushbackResponses.length > 0,
+	);
 }
 
 const HYPOTHESIS_RECALIBRATION_THRESHOLD = 0.7;
 const HYPOTHESIS_RECALIBRATION_DECAY = 0.6;
 
 export class AnswerHypothesisStore {
-  private latestHypothesis: AnswerHypothesis | null = null;
-  private latestReaction: QuestionReaction | null = null;
+	private latestHypothesis: AnswerHypothesis | null = null;
+	private latestReaction: QuestionReaction | null = null;
 
-  private recalibrateConfidenceForThreadBreak(question: string, reaction: QuestionReaction): void {
-    if (!this.latestHypothesis || this.latestHypothesis.confidence <= HYPOTHESIS_RECALIBRATION_THRESHOLD) {
-      return;
-    }
+	private recalibrateConfidenceForThreadBreak(
+		question: string,
+		reaction: QuestionReaction,
+	): void {
+		if (
+			!this.latestHypothesis ||
+			this.latestHypothesis.confidence <= HYPOTHESIS_RECALIBRATION_THRESHOLD
+		) {
+			return;
+		}
 
-    this.latestHypothesis = {
-      ...this.latestHypothesis,
-      sourceQuestion: question,
-      confidence: Math.max(0.2, this.latestHypothesis.confidence * HYPOTHESIS_RECALIBRATION_DECAY),
-      reactionKind: reaction.kind,
-      targetFacets: mergeUnique([...this.latestHypothesis.targetFacets, ...reaction.targetFacets]),
-      updatedAt: Date.now(),
-    };
-  }
+		this.latestHypothesis = {
+			...this.latestHypothesis,
+			sourceQuestion: question,
+			confidence: Math.max(
+				0.2,
+				this.latestHypothesis.confidence * HYPOTHESIS_RECALIBRATION_DECAY,
+			),
+			reactionKind: reaction.kind,
+			targetFacets: mergeUnique([
+				...this.latestHypothesis.targetFacets,
+				...reaction.targetFacets,
+			]),
+			updatedAt: Date.now(),
+		};
+	}
 
-  recordStructuredSuggestion(question: string, response: ConsciousModeStructuredResponse, threadAction: 'start' | 'continue' | 'reset'): void {
-    const likelyThemes = extractThemes(response);
-    const latestSuggestedAnswer = sanitizeLikelyAnswerSummary(summarizeResponse(response));
-    if (!shouldPromoteStructuredSuggestion(response, latestSuggestedAnswer)) {
-      return;
-    }
-    const baseConfidence = threadAction === 'continue' ? 0.74 : 0.62;
+	recordStructuredSuggestion(
+		question: string,
+		response: ConsciousModeStructuredResponse,
+		threadAction: "start" | "continue" | "reset",
+	): void {
+		const likelyThemes = extractThemes(response);
+		const latestSuggestedAnswer = sanitizeLikelyAnswerSummary(
+			summarizeResponse(response),
+		);
+		if (!shouldPromoteStructuredSuggestion(response, latestSuggestedAnswer)) {
+			return;
+		}
+		const baseConfidence = threadAction === "continue" ? 0.74 : 0.62;
 
-    if (threadAction === 'continue' && this.latestHypothesis) {
-      this.latestHypothesis = {
-        ...this.latestHypothesis,
-        sourceQuestion: question,
-        latestSuggestedAnswer: latestSuggestedAnswer || this.latestHypothesis.latestSuggestedAnswer,
-        likelyThemes: mergeUnique([...this.latestHypothesis.likelyThemes, ...likelyThemes]).slice(0, 10),
-        confidence: Math.min(0.9, Math.max(this.latestHypothesis.confidence, baseConfidence)),
-        evidence: mergeUnique([...this.latestHypothesis.evidence, 'suggested']) as Array<'suggested' | 'inferred'>,
-        updatedAt: Date.now(),
-      };
-      return;
-    }
+		if (threadAction === "continue" && this.latestHypothesis) {
+			this.latestHypothesis = {
+				...this.latestHypothesis,
+				sourceQuestion: question,
+				latestSuggestedAnswer:
+					latestSuggestedAnswer || this.latestHypothesis.latestSuggestedAnswer,
+				likelyThemes: mergeUnique([
+					...this.latestHypothesis.likelyThemes,
+					...likelyThemes,
+				]).slice(0, 10),
+				confidence: Math.min(
+					0.9,
+					Math.max(this.latestHypothesis.confidence, baseConfidence),
+				),
+				evidence: mergeUnique([
+					...this.latestHypothesis.evidence,
+					"suggested",
+				]) as Array<"suggested" | "inferred">,
+				updatedAt: Date.now(),
+			};
+			return;
+		}
 
-    this.latestHypothesis = {
-      sourceQuestion: question,
-      latestSuggestedAnswer,
-      likelyThemes,
-      confidence: baseConfidence,
-      evidence: ['suggested'],
-      targetFacets: [],
-      updatedAt: Date.now(),
-    };
-  }
+		this.latestHypothesis = {
+			sourceQuestion: question,
+			latestSuggestedAnswer,
+			likelyThemes,
+			confidence: baseConfidence,
+			evidence: ["suggested"],
+			targetFacets: [],
+			updatedAt: Date.now(),
+		};
+	}
 
-  noteObservedReaction(question: string, reaction: QuestionReaction): void {
-    this.latestReaction = reaction;
-    if (!this.latestHypothesis) {
-      return;
-    }
+	noteObservedReaction(question: string, reaction: QuestionReaction): void {
+		this.latestReaction = reaction;
+		if (!this.latestHypothesis) {
+			return;
+		}
 
-    if (!reaction.shouldContinueThread) {
-      this.recalibrateConfidenceForThreadBreak(question, reaction);
-      return;
-    }
+		if (!reaction.shouldContinueThread) {
+			this.recalibrateConfidenceForThreadBreak(question, reaction);
+			return;
+		}
 
-    const inferredConfidence = Math.min(0.96, this.latestHypothesis.confidence + (reaction.confidence * 0.12));
-    this.latestHypothesis = {
-      ...this.latestHypothesis,
-      sourceQuestion: question,
-      confidence: inferredConfidence,
-      evidence: mergeUnique([...this.latestHypothesis.evidence, 'inferred']) as Array<'suggested' | 'inferred'>,
-      reactionKind: reaction.kind,
-      targetFacets: mergeUnique([...this.latestHypothesis.targetFacets, ...reaction.targetFacets]),
-      updatedAt: Date.now(),
-    };
-  }
+		const inferredConfidence = Math.min(
+			0.96,
+			this.latestHypothesis.confidence + reaction.confidence * 0.12,
+		);
+		this.latestHypothesis = {
+			...this.latestHypothesis,
+			sourceQuestion: question,
+			confidence: inferredConfidence,
+			evidence: mergeUnique([
+				...this.latestHypothesis.evidence,
+				"inferred",
+			]) as Array<"suggested" | "inferred">,
+			reactionKind: reaction.kind,
+			targetFacets: mergeUnique([
+				...this.latestHypothesis.targetFacets,
+				...reaction.targetFacets,
+			]),
+			updatedAt: Date.now(),
+		};
+	}
 
-  getLatestHypothesis(): AnswerHypothesis | null {
-    return this.latestHypothesis;
-  }
+	getLatestHypothesis(): AnswerHypothesis | null {
+		return this.latestHypothesis;
+	}
 
-  getLatestReaction(): QuestionReaction | null {
-    return this.latestReaction;
-  }
+	getLatestReaction(): QuestionReaction | null {
+		return this.latestReaction;
+	}
 
-  buildContextBlock(): string {
-    if (!this.latestHypothesis) {
-      return '';
-    }
+	buildContextBlock(): string {
+		if (!this.latestHypothesis) {
+			return "";
+		}
 
-    const lines = [
-      '<conscious_evidence>',
-      'The interviewer side is confirmed. The user answer state below is inferred from prior suggestions and reactions.',
-      `LIKELY_USER_ANSWER_CONFIDENCE: ${this.latestHypothesis.confidence.toFixed(2)}`,
-      `LATEST_SUGGESTED_ANSWER: ${this.latestHypothesis.latestSuggestedAnswer || 'n/a'}`,
-      `LIKELY_THEMES: ${this.latestHypothesis.likelyThemes.join(' | ') || 'n/a'}`,
-      `EVIDENCE: ${this.latestHypothesis.evidence.join(', ')}`,
-    ];
+		const lines = [
+			"<conscious_evidence>",
+			"The interviewer side is confirmed. The user answer state below is inferred from prior suggestions and reactions.",
+			`LIKELY_USER_ANSWER_CONFIDENCE: ${this.latestHypothesis.confidence.toFixed(2)}`,
+			`LATEST_SUGGESTED_ANSWER: ${this.latestHypothesis.latestSuggestedAnswer || "n/a"}`,
+			`LIKELY_THEMES: ${this.latestHypothesis.likelyThemes.join(" | ") || "n/a"}`,
+			`EVIDENCE: ${this.latestHypothesis.evidence.join(", ")}`,
+		];
 
-    if (this.latestHypothesis.reactionKind) {
-      lines.push(`INTERVIEWER_REACTION: ${this.latestHypothesis.reactionKind}`);
-    }
-    if (this.latestHypothesis.targetFacets.length > 0) {
-      lines.push(`REACTION_TARGETS: ${this.latestHypothesis.targetFacets.join(', ')}`);
-    }
+		if (this.latestHypothesis.reactionKind) {
+			lines.push(`INTERVIEWER_REACTION: ${this.latestHypothesis.reactionKind}`);
+		}
+		if (this.latestHypothesis.targetFacets.length > 0) {
+			lines.push(
+				`REACTION_TARGETS: ${this.latestHypothesis.targetFacets.join(", ")}`,
+			);
+		}
 
-    lines.push('</conscious_evidence>');
-    return lines.join('\n');
-  }
+		lines.push("</conscious_evidence>");
+		return lines.join("\n");
+	}
 
-  reset(): void {
-    this.latestHypothesis = null;
-    this.latestReaction = null;
-  }
+	reset(): void {
+		this.latestHypothesis = null;
+		this.latestReaction = null;
+	}
 
-  getPersistenceSnapshot(): PersistedAnswerHypothesisState {
-    return {
-      latestHypothesis: this.latestHypothesis,
-      latestReaction: this.latestReaction,
-    };
-  }
+	getPersistenceSnapshot(): PersistedAnswerHypothesisState {
+		return {
+			latestHypothesis: this.latestHypothesis,
+			latestReaction: this.latestReaction,
+		};
+	}
 
-  restorePersistenceSnapshot(snapshot: PersistedAnswerHypothesisState | null | undefined): void {
-    this.latestHypothesis = snapshot?.latestHypothesis ?? null;
-    this.latestReaction = snapshot?.latestReaction ?? null;
-  }
+	restorePersistenceSnapshot(
+		snapshot: PersistedAnswerHypothesisState | null | undefined,
+	): void {
+		this.latestHypothesis = snapshot?.latestHypothesis ?? null;
+		this.latestReaction = snapshot?.latestReaction ?? null;
+	}
 }

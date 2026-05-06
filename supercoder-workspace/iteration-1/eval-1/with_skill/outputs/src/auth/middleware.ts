@@ -1,51 +1,51 @@
-import { Request, Response, NextFunction } from 'express';
-import { verifyAccessToken, TokenPayload } from './jwt';
+import type { NextFunction, Request, Response } from "express";
+import { type TokenPayload, verifyAccessToken } from "./jwt";
 
 export interface AuthenticatedRequest extends Request {
-  user?: TokenPayload;
+	user?: TokenPayload;
 }
 
 export function authMiddleware(
-  req: AuthenticatedRequest,
-  res: Response,
-  next: NextFunction
+	req: AuthenticatedRequest,
+	res: Response,
+	next: NextFunction,
 ) {
-  const authHeader = req.headers.authorization;
+	const authHeader = req.headers.authorization;
 
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    return res.status(401).json({ error: 'No token provided' });
-  }
+	if (!authHeader || !authHeader.startsWith("Bearer ")) {
+		return res.status(401).json({ error: "No token provided" });
+	}
 
-  const token = authHeader.substring(7);
+	const token = authHeader.substring(7);
 
-  try {
-    const payload = verifyAccessToken(token);
-    req.user = payload;
-    next();
-  } catch (error) {
-    return res.status(401).json({ error: 'Invalid token' });
-  }
+	try {
+		const payload = verifyAccessToken(token);
+		req.user = payload;
+		next();
+	} catch (error) {
+		return res.status(401).json({ error: "Invalid token" });
+	}
 }
 
 export function optionalAuthMiddleware(
-  req: AuthenticatedRequest,
-  res: Response,
-  next: NextFunction
+	req: AuthenticatedRequest,
+	res: Response,
+	next: NextFunction,
 ) {
-  const authHeader = req.headers.authorization;
+	const authHeader = req.headers.authorization;
 
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    return next();
-  }
+	if (!authHeader || !authHeader.startsWith("Bearer ")) {
+		return next();
+	}
 
-  const token = authHeader.substring(7);
+	const token = authHeader.substring(7);
 
-  try {
-    const payload = verifyAccessToken(token);
-    req.user = payload;
-  } catch {
-    // Silently continue without auth
-  }
+	try {
+		const payload = verifyAccessToken(token);
+		req.user = payload;
+	} catch {
+		// Silently continue without auth
+	}
 
-  next();
+	next();
 }
