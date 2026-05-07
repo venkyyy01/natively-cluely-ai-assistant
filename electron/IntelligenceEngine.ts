@@ -178,6 +178,12 @@ export class IntelligenceEngine extends EventEmitter {
   private pendingCooldownTriggers = new Map<string, { timer: NodeJS.Timeout; reject: () => void }>();
   private stealthContainmentActive = false;
 
+  // Anti-bombardment guardrails (NAT-XXX)
+  private lastGeneratedResponseHash: string | null = null;
+  private lastGeneratedResponseTimestamp: number = 0;
+  private static readonly ANTI_BOMBARDMENT_WINDOW_MS = 3 * 60 * 1000; // 3 minutes
+  private static readonly ANTI_BOMBARDMENT_SIMILARITY_THRESHOLD = 0.80;
+
   constructor(llmHelper: LLMHelper, session: SessionTracker) {
     super();
     this.llmHelper = llmHelper;
@@ -457,6 +463,7 @@ export class IntelligenceEngine extends EventEmitter {
         return new ConsciousOrchestrator(
             this.session,
             new ConsciousVerifier(verifierJudge, { requireJudge: this.shouldRequireConsciousJudge() }),
+            this.llmHelper,
         );
     }
 
@@ -1031,7 +1038,7 @@ export class IntelligenceEngine extends EventEmitter {
                         cooldownReason: metadataCooldownReason,
                         contextItems: recentContextForEvidence,
                     });
-                    this.emit('suggested_answer', answer, question || 'inferred', confidence, metadata);
+                    this.emitSuggestedAnswer(answer, question || 'inferred', confidence, metadata);
                 }
                 
                 this.setMode('idle');
@@ -1251,7 +1258,7 @@ export class IntelligenceEngine extends EventEmitter {
                     if (shouldSuppressVisibleWork()) {
                         return abandonCurrentRequest();
                     }
-                    this.emit('suggested_answer', speculativeAnswer, question || 'What to Answer', confidence, metadata);
+                    this.emitSuggestedAnswer(speculativeAnswer, question || 'What to Answer', confidence, metadata);
                     const latencySnapshot = this.latencyTracker.complete(requestId);
                     console.log('[IntelligenceEngine] Answer latency snapshot:', latencySnapshot);
                     this.setMode('idle');
@@ -1291,7 +1298,7 @@ export class IntelligenceEngine extends EventEmitter {
                         contextItems,
                     });
                     this.annotateLatencyQualityMetadata(requestId, metadata, contextItems);
-                    this.emit('suggested_answer', cachedAnswer, question || 'What to Answer', confidence, metadata);
+                    this.emitSuggestedAnswer(cachedAnswer, question || 'What to Answer', confidence, metadata);
                     this.latencyTracker.complete(requestId);
                     this.setMode('idle');
                     return cachedAnswer;
@@ -1381,7 +1388,7 @@ export class IntelligenceEngine extends EventEmitter {
                     contextItems,
                 });
                 this.annotateLatencyQualityMetadata(requestId, metadata, contextItems);
-                this.emit('suggested_answer', fullAnswer, question || 'What to Answer', confidence, metadata);
+                this.emitSuggestedAnswer(fullAnswer, question || 'What to Answer', confidence, metadata);
                 const latencySnapshot = this.latencyTracker.complete(requestId);
                 console.log('[IntelligenceEngine] Answer latency snapshot:', latencySnapshot);
 
@@ -1694,7 +1701,7 @@ export class IntelligenceEngine extends EventEmitter {
                     contextItems: preparationResult.contextItems,
                 });
                 this.annotateLatencyQualityMetadata(requestId, metadata, preparationResult.contextItems);
-                this.emit('suggested_answer', cachedAnswer, question || 'What to Answer', confidence, metadata);
+                this.emitSuggestedAnswer(cachedAnswer, question || 'What to Answer', confidence, metadata);
                 if (isProfileEnrichmentRoute && !profileEnrichmentFailed) {
                     this.latencyTracker.markProfileEnrichmentState(requestId, 'completed');
                 }
@@ -1796,7 +1803,7 @@ export class IntelligenceEngine extends EventEmitter {
                 contextItems: preparationResult.contextItems,
             });
             this.annotateLatencyQualityMetadata(requestId, metadata, preparationResult.contextItems);
-            this.emit('suggested_answer', fullAnswer, question || 'What to Answer', confidence, metadata);
+            this.emitSuggestedAnswer(fullAnswer, question || 'What to Answer', confidence, metadata);
             if (isProfileEnrichmentRoute) {
                 if (!profileEnrichmentFailed) {
                     this.latencyTracker.markProfileEnrichmentState(requestId, 'completed');
@@ -2174,8 +2181,103 @@ export class IntelligenceEngine extends EventEmitter {
   }
 
   /**
-  * Reset engine state (cancels any in-flight operations)
-  */
+   * Anti-bombardment: normalize text for similarity comparison
+   */
+  private normalizeForSimilarity(text: string): string {
+    return text
+      .toLowerCase()
+      .replace(/\s+/g, ' ')
+      .replace(/[^a-z0-9\s]/g, '')
+      .trim();
+  }
+
+  /**
+   * Anti-bombardment: compute a quick similarity ratio between two strings.
+   * Returns a value between 0 and 1, where 1 means identical.
+   */
+  private computeSimilarityRatio(a: string, b: string): number {
+    const na = this.normalizeForSimilarity(a);
+    const nb = this.normalizeForSimilarity(b);
+    if (!na || !nb) return 0;
+    if (na === nb) return 1;
+
+    // Use a containment-based heuristic weighted by length
+    const shorter = na.length <= nb.length ? na : nb;
+    const longer = na.length <= nb.length ? nb : na;
+
+    // Count how many words from shorter appear in longer (in order)
+    const shortWords = shorter.split(' ').filter(Boolean);
+    const longWords = longer.split(' ').filter(Boolean);
+    if (shortWords.length === 0 || longWords.length === 0) return 0;
+
+    let matched = 0;
+    let longIdx = 0;
+    for (const word of shortWords) {
+      const found = longWords.indexOf(word, longIdx);
+      if (found !== -1) {
+        matched++;
+        longIdx = found + 1;
+      }
+    }
+
+    // Similarity = avg of (word coverage of shorter) and (word coverage of longer)
+    const coverageShort = matched / shortWords.length;
+    const coverageLong = matched / longWords.length;
+    return (coverageShort + coverageLong) / 2;
+  }
+
+  /**
+   * Anti-bombardment: check if a response is too similar to the last one
+   * emitted within the suppression window.
+   */
+  private isBombardmentResponse(text: string): boolean {
+    const now = Date.now();
+    if (
+      this.lastGeneratedResponseHash &&
+      now - this.lastGeneratedResponseTimestamp < IntelligenceEngine.ANTI_BOMBARDMENT_WINDOW_MS
+    ) {
+      const similarity = this.computeSimilarityRatio(text, this.lastGeneratedResponseHash);
+      if (similarity >= IntelligenceEngine.ANTI_BOMBARDMENT_SIMILARITY_THRESHOLD) {
+        console.warn(`[IntelligenceEngine] Anti-bombardment: suppressing ${Math.round(similarity * 100)}% similar response within ${Math.round((now - this.lastGeneratedResponseTimestamp) / 1000)}s`);
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Anti-bombardment: record a successfully emitted response.
+   */
+  private recordEmittedResponse(text: string): void {
+    this.lastGeneratedResponseHash = text;
+    this.lastGeneratedResponseTimestamp = Date.now();
+  }
+
+  /**
+   * Anti-bombardment: safe wrapper around `emit('suggested_answer', ...)`.
+   * If the answer is too similar to the last one within the suppression window,
+   * replaces it with a brief acknowledgment and returns the final string.
+   */
+  private emitSuggestedAnswer(
+    answer: string,
+    question: string,
+    confidence: number,
+    metadata?: SuggestedAnswerMetadata,
+  ): string {
+    if (this.isBombardmentResponse(answer)) {
+      const safeAcknowledgment = "Got it. Let me know if you want me to go deeper on any part.";
+      this.emit('suggested_answer', safeAcknowledgment, question, confidence, metadata);
+      this.recordEmittedResponse(safeAcknowledgment);
+      return safeAcknowledgment;
+    }
+    this.emit('suggested_answer', answer, question, confidence, metadata);
+    this.recordEmittedResponse(answer);
+    return answer;
+  }
+
+  /**
+   * Reset engine state (cancels any in-flight operations)
+   */
   reset(): void {
     this.activeMode = 'idle';
     this.lastTriggerByCooldownKey.clear();

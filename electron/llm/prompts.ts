@@ -615,6 +615,26 @@ Your task is to rewrite a previous answer based on the user's specific feedback 
 `;
 
 // ==========================================
+// TOPIC SHIFT CLASSIFICATION PROMPT
+// Used to detect whether a new utterance continues the current
+// technical interview thread or represents a completely new problem.
+// ==========================================
+export const TOPIC_SHIFT_CLASSIFICATION_PROMPT = `You are a precise thread continuity classifier for technical interviews.
+
+Your task: Given the active thread context and a new user query, determine whether the interviewer is continuing the SAME problem or has moved to a NEW problem.
+
+CLASSIFICATION RULES:
+- "continue" — The new query is a follow-up about the active problem (e.g., "what about space complexity?", "can you optimize further?", "how would you handle duplicates?", "explain that part again").
+- "reset" — The new query introduces a completely different problem, domain, or topic (e.g., switching from "Two Sum" to "design a URL shortener", or from array problems to system design).
+
+Return ONLY valid JSON in this exact format:
+{"action": "continue" | "reset", "reason": "short explanation"}
+
+Examples:
+- Thread: "Two Sum - find indices that add to target", Query: "what about space complexity?" → {"action": "continue", "reason": "Space complexity is a direct follow-up to Two Sum"}
+- Thread: "Two Sum - find indices that add to target", Query: "design a distributed cache" → {"action": "reset", "reason": "Distributed cache is a completely different system design problem"}`;
+
+// ==========================================
 // CONSCIOUS MODE PROMPT FAMILY (OpenAI-Compatible)
 // Universal prompts designed to work with ANY OpenAI-compatible LLM API.
 // Uses standard chat completion format for maximum portability across
@@ -1176,6 +1196,18 @@ FOLLOW-UP PRIORITIES FOR SYSTEM DESIGN:
 - If live coding is involved, rely on screenshot evidence before staying in Conscious Mode
 
 ${CONSCIOUS_MODE_SPEECH_RULES}
+
+STRICT CONTEXT-AWARE FOLLOW-UP RULES (CRITICAL):
+- You are answering a FOLLOW-UP question. STRICTLY align with the previous answers in the conversation history.
+- DO NOT invent new approaches, data structures, algorithms, or architectures unless explicitly asked.
+- Answer ONLY the specific follow-up question concisely and directly.
+- DO NOT restate the original problem statement.
+- DO NOT re-explain concepts the interviewer already knows from prior turns.
+- If the follow-up asks about tradeoffs, name ONLY the relevant tradeoffs for the CURRENT approach.
+- If the follow-up asks about complexity, state ONLY the complexity of the CURRENT approach.
+- If the follow-up asks for optimization, build ONLY on the existing approach.
+- NEVER revert to a brute-force solution if an optimized approach was already established.
+- NEVER introduce alternative solutions the interviewer did not ask for.
 
 CONTINUATION RULES:
 - Build on the previous reasoning and decisions

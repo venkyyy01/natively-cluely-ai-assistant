@@ -30,6 +30,11 @@ import { FlexibleResponseRouter, type ConsciousTurnPlan } from './FlexibleRespon
 import { HumanLikeConversationEngine } from './HumanLikeConversationEngine';
 import { ConsciousRefinementOrchestrator } from './ConsciousRefinementOrchestrator';
 import { AdaptiveVerificationGate } from './AdaptiveVerificationGate';
+import { TOPIC_SHIFT_CLASSIFICATION_PROMPT } from '../llm/prompts';
+
+interface StructuredGenerationClient {
+  generateContentStructured(message: string): Promise<string>;
+}
 
 interface KnowledgeStatusLike {
   activeMode?: unknown;
@@ -96,7 +101,11 @@ export class ConsciousOrchestrator {
   private consecutiveFailures = 0;
   private circuitOpenUntil = 0;
 
-  constructor(private readonly session: ConsciousSession, verifier?: ConsciousVerifier) {
+  constructor(
+    private readonly session: ConsciousSession,
+    verifier?: ConsciousVerifier,
+    private readonly structuredClient?: StructuredGenerationClient,
+  ) {
     if (verifier) {
       this.verifier = verifier;
     }
@@ -261,28 +270,71 @@ export class ConsciousOrchestrator {
     }
 
     const loweredQuestion = normalizedQuestion.toLowerCase();
+    // Fast-path 1: obvious follow-up phrasing that never needs an LLM
     if (this.isDeterministicContinuationPhrase(loweredQuestion)) {
       return true;
     }
 
-    // Use semantic thread matcher if flag is enabled
+    // Fast-path 2: short referential follow-ups (e.g., "what about space?")
+    if (this.isShortReferentialFollowUp(loweredQuestion)) {
+      return true;
+    }
+
+    // Tier 1: LLM-based topic shift detection (respects user provider config)
+    if (this.structuredClient) {
+      try {
+        const threadContext = [
+          `Root question: ${thread.rootQuestion}`,
+          `Last question: ${thread.lastQuestion}`,
+          `Previous follow-ups: ${thread.response.likelyFollowUps.join('; ')}`,
+        ].join('\n');
+        const prompt = `${TOPIC_SHIFT_CLASSIFICATION_PROMPT}\n\nACTIVE THREAD CONTEXT:\n${threadContext}\n\nNEW QUERY:\n${normalizedQuestion}\n\nCLASSIFICATION:`;
+        const TOPIC_SHIFT_TIMEOUT_MS = 1200;
+        const timeoutSentinel = Symbol('topic-shift-timeout');
+        const raw = await Promise.race([
+          this.structuredClient.generateContentStructured(prompt),
+          new Promise<symbol>((resolve) => setTimeout(() => resolve(timeoutSentinel), TOPIC_SHIFT_TIMEOUT_MS)),
+        ]);
+        if (raw !== timeoutSentinel) {
+          const cleaned = (raw as string)
+            .trim()
+            .replace(/^```json\s*/i, '')
+            .replace(/^```\s*/i, '')
+            .replace(/```$/i, '')
+            .trim();
+          try {
+            const parsed = JSON.parse(cleaned) as { action?: string; reason?: string };
+            if (parsed.action === 'continue') {
+              console.log('[ConsciousOrchestrator] LLM topic-shift: continue —', parsed.reason);
+              return true;
+            }
+            if (parsed.action === 'reset') {
+              console.log('[ConsciousOrchestrator] LLM topic-shift: reset —', parsed.reason);
+              return false;
+            }
+          } catch {
+            // malformed JSON — fall through to stopword fallback
+          }
+        }
+      } catch (error) {
+        console.warn('[ConsciousOrchestrator] LLM topic-shift detection failed, falling back:', error);
+      }
+    }
+
+    // Tier 2: semantic thread matcher (if enabled) as secondary signal
     const useSemantic = isVerifierOptimizationActive('useSemanticThreadContinuation');
     if (useSemantic) {
       try {
         const semanticCompatible = await this.semanticThreadMatcher.isCompatible(question, thread);
-        // If semantic matcher returns a definitive result, use it
-        // If it returns false (e.g., model load failed or low similarity), fall back to original method
         if (semanticCompatible) {
           return true;
         }
-        // Fall through to original method if semantic matcher returned false
       } catch (error) {
         console.warn('[ConsciousOrchestrator] Semantic thread matcher failed, falling back to stopword method:', error);
-        // Fall through to original method
       }
     }
 
-    // Original stopword-based method (fallback or when flag is disabled)
+    // Tier 3: deterministic stopword overlap (last-resort fallback, no network)
     const questionTokens = this.tokenizeForThreadCompatibility(normalizedQuestion);
     const referentialFollowUp = this.hasReferentialFollowUpCue(loweredQuestion);
 

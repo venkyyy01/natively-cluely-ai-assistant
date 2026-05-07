@@ -91,6 +91,17 @@ export class FollowUpLLM {
                     `LAST_QUESTION: ${reasoningThread.lastQuestion}`,
                     `CURRENT_RESPONSE: ${JSON.stringify(reasoningThread.response)}`,
                     `FOLLOW_UP_QUESTION: ${followUpQuestion}`,
+                    'STRICT FOLLOW-UP RULES (MUST OBEY):',
+                    '- You are answering a FOLLOW-UP. STRICTLY align with the previous answers in the conversation history.',
+                    '- DO NOT invent new approaches, data structures, algorithms, or architectures unless explicitly asked.',
+                    '- Answer ONLY the specific follow-up question concisely and directly.',
+                    '- DO NOT restate the original problem statement.',
+                    '- DO NOT re-explain concepts the interviewer already knows from prior turns.',
+                    '- If asked about tradeoffs, name ONLY the relevant tradeoffs for the CURRENT approach.',
+                    '- If asked about complexity, state ONLY the complexity of the CURRENT approach.',
+                    '- NEVER revert to a brute-force solution if an optimized approach was already established.',
+                    '- NEVER introduce alternative solutions the interviewer did not ask for.',
+                    '- Keep "spokenResponse" short and conversational. Leave implementationPlan, edgeCases, scaleConsiderations, and pushbackResponses EMPTY unless explicitly asked.',
                     CONSCIOUS_MODE_JSON_RESPONSE_INSTRUCTIONS,
                 ].join('\n\n');
                 const stream = this.llmHelper.streamChat(message, undefined, context, CONSCIOUS_REASONING_SYSTEM_PROMPT, {

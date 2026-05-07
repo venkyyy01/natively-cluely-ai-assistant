@@ -1781,35 +1781,55 @@ ANSWER DIRECTLY:`;
   }
 
   /**
+   * Determine the best Gemini model for structured generation.
+   * Respects the user's current selection if it's a Gemini model;
+   * otherwise falls back to the configured geminiModel or Gemini Pro.
+   */
+  private getGeminiModelForStructuredGeneration(): string {
+    // If user has explicitly selected a Gemini model, honor that choice
+    if (this.isGeminiModel(this.currentModelId)) {
+      return this.currentModelId;
+    }
+    // Otherwise use the configured geminiModel (may be Flash or Pro)
+    if (this.geminiModel && this.geminiModel.includes('gemini')) {
+      return this.geminiModel;
+    }
+    // Ultimate fallback to Pro for reasoning tasks
+    return GEMINI_PRO_MODEL;
+  }
+
+  /**
    * Generate content using only reasoning-capable models.
-   * Priority: OpenAI → Claude → Gemini Pro → Groq (last resort).
+   * Priority: OpenAI → Claude → Gemini → Groq (last resort).
    * Used for structured JSON output tasks (resume/JD/company research).
-   * NOTE: Does NOT mutate this.geminiModel — calls Gemini Pro directly to avoid race conditions.
+   * NOTE: Dynamically respects the user's active provider configuration.
    */
   public async generateContentStructured(message: string): Promise<string> {
     type ProviderAttempt = { name: string; execute: () => Promise<string> };
     const providers: ProviderAttempt[] = [];
 
-    // Priority 1: OpenAI
+    // Priority 1: OpenAI (respect user's selected OpenAI model if active)
     if (this.openaiClient) {
-      providers.push({ name: `OpenAI (${OPENAI_MODEL})`, execute: () => this.generateWithOpenai(message) });
+      const openaiModel = this.isOpenAiModel(this.currentModelId) ? this.currentModelId : OPENAI_MODEL;
+      providers.push({ name: `OpenAI (${openaiModel})`, execute: () => this.generateWithOpenai(message, undefined, undefined, openaiModel) });
     }
 
-    // Priority 2: Claude
+    // Priority 2: Claude (respect user's selected Claude model if active)
     if (this.claudeClient) {
-      providers.push({ name: `Claude (${CLAUDE_MODEL})`, execute: () => this.generateWithClaude(message) });
+      const claudeModel = this.isClaudeModel(this.currentModelId) ? this.currentModelId : CLAUDE_MODEL;
+      providers.push({ name: `Claude (${claudeModel})`, execute: () => this.generateWithClaude(message, undefined, undefined, claudeModel) });
     }
 
-    // Priority 3: Gemini Pro (Skip Flash, and don't mutate this.geminiModel to avoid race conditions)
+    // Priority 3: Gemini (respect user's selected Gemini model or configured fallback)
     if (this.client) {
+      const geminiModel = this.getGeminiModelForStructuredGeneration();
       providers.push({
-        name: `Gemini Pro (${GEMINI_PRO_MODEL})`,
+        name: `Gemini (${geminiModel})`,
         execute: async () => {
-          // Call the API directly with the Pro model instead of touching shared state
           const response = await this.withRetry(async () => {
             // @ts-ignore
             const res = await this.client!.models.generateContent({
-              model: GEMINI_PRO_MODEL,
+              model: geminiModel,
               contents: [{ role: 'user', parts: [{ text: message }] }],
               config: { maxOutputTokens: MAX_OUTPUT_TOKENS, temperature: 0.4 }
             });
