@@ -512,8 +512,10 @@ export class WindowHelper {
       this.detachDirectLauncherBridgeMonitor?.()
       this.detachDirectLauncherBridgeMonitor = null
       this.launcherWindow = this.createDirectWindow(launcherSettings)
-      this.setWindowOpacity(this.launcherWindow, 0, 'WindowHelper.createWindow.launcherInitial')
-      this.requestWindowHide(this.launcherWindow, 'WindowHelper.createWindow.launcherInitial')
+      // FIX: Show window immediately to prevent invisible window issue
+      // this.setWindowOpacity(this.launcherWindow, 0, 'WindowHelper.createWindow.launcherInitial')
+      // this.requestWindowHide(this.launcherWindow, 'WindowHelper.createWindow.launcherInitial')
+      this.launcherWindow.show()
       this.launcherContentWindow = this.launcherWindow
 
       // NAT-SELF-HEAL: safety net — if bridge never settles, force reveal anyway
