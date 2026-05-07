@@ -55,6 +55,7 @@
   },
   "build": {
     "appId": "com.electron.meeting-notes",
+    "npmRebuild": false,
     "afterPack": "./scripts/ad-hoc-sign.js",
     "productName": "Natively",
     "files": [
@@ -134,9 +135,9 @@
       ],
       "icon": "assets/natively.icns",
       "identity": null,
-      "hardenedRuntime": true,
-      "entitlements": "assets/entitlements.mac.plist",
-      "entitlementsInherit": "assets/entitlements.mac.plist"
+    "hardenedRuntime": true,
+    "entitlements": "assets/entitlements.mac.plist",
+    "entitlementsInherit": "assets/entitlements.mac.plist"
     },
     "win": {
       "target": [
