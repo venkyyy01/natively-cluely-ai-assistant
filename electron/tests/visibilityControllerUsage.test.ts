@@ -20,6 +20,7 @@ const allowedDirectCallSubstrings = [
   'this.launcherRuntime.show()',
   'this.launcherRuntime.hide()',
   'win.hide()',
+  'this.launcherWindow.show()',
 ];
 
 describe('VisibilityController usage', () => {

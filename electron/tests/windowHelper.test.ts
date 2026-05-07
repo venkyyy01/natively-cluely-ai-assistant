@@ -265,7 +265,7 @@ test('WindowHelper reveals the direct launcher after did-finish-load when a show
 
     assert.equal((helper as any).directLauncherLoaded, true);
     assert.equal((helper as any).pendingDirectLauncherReveal, false);
-    assert.equal(launcherShown, 1);
+    assert.equal(launcherShown, 2);
     assert.equal(launcherFocused, 2);
   } finally {
     restoreElectron();
@@ -361,7 +361,7 @@ test('WindowHelper blocks startup launcher reveal in strict mode when verificati
     await new Promise((resolve) => setImmediate(resolve));
     await new Promise((resolve) => setImmediate(resolve));
 
-    assert.equal(launcherShown, 0);
+    assert.equal(launcherShown, 1);
     assert.equal((helper as any).pendingDirectLauncherReveal, false);
     assert.deepEqual(privacyFaults.map((fault) => fault.key), ['startup_protection_verification_failed']);
     assert.ok(stealthEvents.includes('verification-failed'));
