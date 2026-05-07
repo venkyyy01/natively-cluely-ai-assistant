@@ -141,6 +141,12 @@ export async function initializeApp() {
 
   appState.createWindow()
 
+  // Apply Windows taskbar hide after window creation when stealth is persisted
+  if (appState.getUndetectable() && process.platform === 'win32') {
+    // Re-apply stealth state to ensure Windows taskbar hide runs after window exists
+    appState.setUndetectable(true);
+  }
+
   // NAT-SELF-HEAL: window created and renderer bridge is on its way.
   // Mark session healthy so the next startup doesn't aggressively clear caches.
   markSessionHealthy();

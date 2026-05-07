@@ -3123,6 +3123,17 @@ setThemeMode: (mode) => this.themeManager.setMode(mode as import('../ThemeManage
         }, 500)
       }
     }
+
+    // Windows: hide taskbar entry and tray when stealth enabled
+    if (process.platform === 'win32') {
+      if (state) {
+        this.windowHelper.setSkipTaskbar(true);
+        this.hideTray();
+      } else {
+        this.windowHelper.setSkipTaskbar(false);
+        this.showTray();
+      }
+    }
   }
 
   private async waitForStealthProtectionReady(timeoutMs: number = 2500, intervalMs: number = 50): Promise<void> {

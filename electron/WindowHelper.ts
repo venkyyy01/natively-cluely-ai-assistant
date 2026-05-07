@@ -304,6 +304,7 @@ export class WindowHelper {
 
   public setSkipTaskbar(enable: boolean): void {
     this.launcherWindow?.setSkipTaskbar(enable);
+    this.overlayWindow?.setSkipTaskbar(enable);
   }
 
   private applyStealth(win: BrowserWindow, enable: boolean, role: 'primary' | 'auxiliary', hideFromSwitcher: boolean): void {

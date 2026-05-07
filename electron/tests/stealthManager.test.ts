@@ -167,7 +167,7 @@ describe('StealthManager', () => {
   it('records observe-only protection violations without blocking application', () => {
     const win = new FakeWindow();
     win.visible = true;
-    const manager = new StealthManager({ enabled: true }, { platform: 'darwin', logger: silentLogger, nativeModule: null });
+    const manager = new StealthManager({ enabled: true }, { platform: 'darwin', logger: silentLogger, nativeModule: null, macosVersion: { major: 14, minor: 5 } });
 
     manager.applyToWindow(win as any, true, { role: 'primary' });
 
@@ -183,7 +183,7 @@ describe('StealthManager', () => {
       },
     };
     const win = new FakeWindow();
-    const manager = new StealthManager({ enabled: true }, { nativeModule, platform: 'darwin', logger: silentLogger });
+    const manager = new StealthManager({ enabled: true }, { nativeModule, platform: 'darwin', logger: silentLogger, macosVersion: { major: 14, minor: 5 } });
 
     manager.applyToWindow(win as any, true, { role: 'auxiliary' });
 
@@ -331,6 +331,7 @@ describe('StealthManager', () => {
           },
         },
         logger: silentLogger,
+        macosVersion: { major: 14, minor: 5 },
       } as any,
     );
     const win = new FakeWindow();
@@ -356,7 +357,7 @@ describe('StealthManager', () => {
 
     const disabledManager = new StealthManager(
       { enabled: true },
-      { nativeModule, platform: 'darwin', logger: silentLogger }
+      { nativeModule, platform: 'darwin', logger: silentLogger, macosVersion: { major: 14, minor: 5 } }
     );
     disabledManager.applyToWindow(win as any, true, { role: 'primary' });
 
@@ -367,6 +368,7 @@ describe('StealthManager', () => {
         platform: 'darwin',
         logger: silentLogger,
         featureFlags: { enablePrivateMacosStealthApi: true },
+        macosVersion: { major: 14, minor: 5 },
       }
     );
     enabledManager.applyToWindow(win as any, true, { role: 'primary' });
@@ -579,6 +581,7 @@ describe('StealthManager', () => {
             return 0;
           },
         },
+        macosVersion: { major: 14, minor: 5 },
       },
     );
 
@@ -627,6 +630,7 @@ describe('StealthManager', () => {
             return 0;
           },
         },
+        macosVersion: { major: 14, minor: 5 },
       },
     );
 
@@ -652,6 +656,7 @@ describe('StealthManager', () => {
             return 0;
           },
         },
+        macosVersion: { major: 14, minor: 5 },
       },
     );
 
@@ -675,6 +680,7 @@ describe('StealthManager', () => {
         platform: 'darwin',
         logger: silentLogger,
         nativeModule: null,
+        macosVersion: { major: 14, minor: 5 },
       },
     );
 
@@ -861,6 +867,7 @@ describe('StealthManager', () => {
             return 0;
           },
         },
+        macosVersion: { major: 14, minor: 5 },
       },
     );
 
@@ -882,6 +889,7 @@ describe('StealthManager', () => {
       {
         platform: 'darwin',
         logger: silentLogger,
+        macosVersion: { major: 14, minor: 5 },
       },
     );
 
@@ -920,6 +928,7 @@ describe('StealthManager', () => {
             return Promise.resolve();
           },
         },
+        macosVersion: { major: 14, minor: 5 },
       } as any
     );
     const win = new FakeWindow();
@@ -963,6 +972,7 @@ describe('StealthManager', () => {
             return Promise.resolve();
           },
         },
+        macosVersion: { major: 14, minor: 5 },
       } as any
     );
     const win = new FakeWindow();
@@ -1022,6 +1032,7 @@ describe('StealthManager', () => {
             return Promise.resolve();
           },
         },
+        macosVersion: { major: 14, minor: 5 },
       } as any,
     );
     const first = new FakeWindow();
@@ -1059,6 +1070,7 @@ describe('StealthManager', () => {
             return Promise.resolve();
           },
         },
+        macosVersion: { major: 14, minor: 5 },
       } as any
     );
     const win = new FakeWindow();
@@ -1096,6 +1108,7 @@ describe('StealthManager', () => {
             return Promise.resolve();
           },
         },
+        macosVersion: { major: 14, minor: 5 },
       } as any
     );
     const win = new FakeWindow();
@@ -1334,5 +1347,109 @@ describe('StealthManager', () => {
 
     (manager as any).macOSMinor = 4;
     assert.strictEqual((manager as any).isMacOSVersionCompatible('15.4'), true);
+  });
+
+  // macOS 15+ dedicated tests
+  it('skips native stealth on macOS 15.4+ and relies on Layer 0', () => {
+    const nativeCalls: string[] = [];
+    const nativeModule: NativeStealthBindings = {
+      applyMacosWindowStealth() {
+        nativeCalls.push('apply');
+      },
+    };
+    const win = new FakeWindow();
+    const manager = new StealthManager(
+      { enabled: true },
+      { nativeModule, platform: 'darwin', logger: silentLogger, macosVersion: { major: 15, minor: 4 } }
+    );
+
+    manager.applyToWindow(win as any, true, { role: 'primary' });
+
+    // On macOS 15+, native stealth is skipped
+    assert.deepStrictEqual(nativeCalls, []);
+    // Layer 0 is still applied
+    assert.deepStrictEqual(win.contentProtectionCalls, []);
+    assert.deepStrictEqual(win.excludeFromCaptureCalls, [true]);
+  });
+
+  it('verifyStealth returns true on macOS 15+ when virtual display isolation is ready', async () => {
+    const win = new FakeWindow();
+    const manager = new StealthManager(
+      { enabled: true },
+      {
+        platform: 'darwin',
+        logger: silentLogger,
+        featureFlags: { enableVirtualDisplayIsolation: true },
+        macosVersion: { major: 15, minor: 4 },
+        screenApi: {
+          getAllDisplays() {
+            return [{ id: 777, workArea: { x: 200, y: 100, width: 1600, height: 900 } }];
+          },
+        },
+        virtualDisplayCoordinator: {
+          ensureIsolationForWindow({ windowId }: { windowId: string }) {
+            return Promise.resolve({ ready: true, sessionId: windowId, mode: 'virtual-display' as const, surfaceToken: 'display-777' });
+          },
+          releaseIsolationForWindow() {
+            return Promise.resolve();
+          },
+        },
+      } as any
+    );
+
+    manager.applyToWindow(win as any, true, { role: 'primary', allowVirtualDisplayIsolation: true });
+    await Promise.resolve();
+
+    assert.strictEqual(manager.verifyStealth(win as any), true);
+    assert.ok(!manager.getStealthDegradationWarnings().includes('stealth_verification_failed'));
+  });
+
+  it('verifyStealth returns false on macOS 15+ when virtual display isolation not set up', async () => {
+    const win = new FakeWindow();
+    const manager = new StealthManager(
+      { enabled: true },
+      {
+        platform: 'darwin',
+        logger: silentLogger,
+        macosVersion: { major: 15, minor: 4 },
+        nativeModule: {
+          applyMacosWindowStealth() {},
+          verifyMacosStealthState() {
+            return 0;
+          },
+        },
+      }
+    );
+
+    manager.applyToWindow(win as any, true, { role: 'primary' });
+
+    assert.strictEqual(manager.verifyStealth(win as any), false);
+    assert.ok(manager.getStealthDegradationWarnings().includes('stealth_verification_failed'));
+  });
+
+  // Windows taskbar toggle tests
+  it('hides taskbar entry on Windows when stealth enabled', () => {
+    const win = new FakeWindow();
+    const manager = new StealthManager(
+      { enabled: true },
+      { platform: 'win32', logger: silentLogger }
+    );
+
+    manager.applyToWindow(win as any, true, { role: 'primary', hideFromSwitcher: true });
+
+    assert.deepStrictEqual(win.skipTaskbarCalls, [true]);
+  });
+
+  it('restores taskbar entry on Windows when stealth disabled', () => {
+    const win = new FakeWindow();
+    const manager = new StealthManager(
+      { enabled: true },
+      { platform: 'win32', logger: silentLogger }
+    );
+
+    manager.applyToWindow(win as any, true, { role: 'primary', hideFromSwitcher: true });
+    manager.applyToWindow(win as any, false, { role: 'primary', hideFromSwitcher: true });
+
+    assert.deepStrictEqual(win.skipTaskbarCalls, [true, false]);
   });
 });

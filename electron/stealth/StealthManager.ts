@@ -255,6 +255,7 @@ export class StealthManager extends EventEmitter {
   private isMacOS15Plus = false;
   private macOSMajor: number = 0;
   private macOSMinor: number = 0;
+  private readonly macosVersion: { major: number; minor: number } | undefined;
   private opacityFlickerController: OpacityFlickerController | null = null;
   private virtualDisplayTaskQueue: Promise<void> | null = null;
 
@@ -280,6 +281,7 @@ export class StealthManager extends EventEmitter {
       recordProtectionEvent: (type, context) => this.recordProtectionEvent(type, context),
     });
     this.nativeModule = deps.nativeModule;
+    this.macosVersion = deps.macosVersion;
     this.execFileFn = deps.execFileFn ?? (async (file, args, options, callback) => {
       const { execFile } = await import('node:child_process');
       execFile(file, args, options, callback);
@@ -341,6 +343,15 @@ export class StealthManager extends EventEmitter {
 
   private detectMacOSVersion(): void {
     if (this.platform !== 'darwin') {
+      return;
+    }
+
+    // Use injected version for test determinism if provided
+    if (this.macosVersion) {
+      this.macOSMajor = this.macosVersion.major;
+      this.macOSMinor = this.macosVersion.minor;
+      this.isMacOS15Plus = this.macOSMajor > 15 || (this.macOSMajor === 15 && this.macOSMinor >= 4);
+      this.logger.log(`[StealthManager] macOS version (injected): ${this.macOSMajor}.${this.macOSMinor}, 15.4+ screen capture bypass: ${this.isMacOS15Plus}`);
       return;
     }
 
@@ -444,7 +455,14 @@ export class StealthManager extends EventEmitter {
       this.disableVirtualDisplayIsolation(record);
       // Layer 0 (setContentProtection + setExcludeFromCapture) is never disabled
       // once applied — it remains active regardless of stealth enable state.
-      this.applyUiHardening(win, record.hideFromSwitcher);
+      // Windows: restore taskbar entry when stealth is disabled
+      if (this.platform === 'win32') {
+        if (typeof win.setSkipTaskbar === 'function') {
+          win.setSkipTaskbar(false);
+        }
+      } else {
+        this.applyUiHardening(win, record.hideFromSwitcher);
+      }
       return;
     }
 
@@ -455,10 +473,10 @@ export class StealthManager extends EventEmitter {
     const record = createManagedWindowRecord(win, options, this.managedWindows, this.managedWindowLookup);
     record.role = options.role ?? record.role;
     record.hideFromSwitcher = options.hideFromSwitcher ?? defaultHideFromSwitcher(record.role);
-    const defaultVirtualDisplayIsolation = this.platform === 'darwin' && Boolean(this.featureFlags.enableVirtualDisplayIsolation);
-    record.allowVirtualDisplayIsolation = options.allowVirtualDisplayIsolation !== undefined
-      ? options.allowVirtualDisplayIsolation
-      : record.allowVirtualDisplayIsolation || defaultVirtualDisplayIsolation;
+    // Only auto-enable virtual display isolation when explicitly opted in (allowVirtualDisplayIsolation === true)
+    record.allowVirtualDisplayIsolation = options.allowVirtualDisplayIsolation === true
+      ? true
+      : record.allowVirtualDisplayIsolation;
 
     this.applyLayer0(win, true);
     this.applyUiHardening(win, record.hideFromSwitcher);
