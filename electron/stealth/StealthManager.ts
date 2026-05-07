@@ -455,7 +455,10 @@ export class StealthManager extends EventEmitter {
     const record = createManagedWindowRecord(win, options, this.managedWindows, this.managedWindowLookup);
     record.role = options.role ?? record.role;
     record.hideFromSwitcher = options.hideFromSwitcher ?? defaultHideFromSwitcher(record.role);
-    record.allowVirtualDisplayIsolation = options.allowVirtualDisplayIsolation ?? record.allowVirtualDisplayIsolation;
+    const defaultVirtualDisplayIsolation = this.platform === 'darwin' && Boolean(this.featureFlags.enableVirtualDisplayIsolation);
+    record.allowVirtualDisplayIsolation = options.allowVirtualDisplayIsolation !== undefined
+      ? options.allowVirtualDisplayIsolation
+      : record.allowVirtualDisplayIsolation || defaultVirtualDisplayIsolation;
 
     this.applyLayer0(win, true);
     this.applyUiHardening(win, record.hideFromSwitcher);
@@ -685,12 +688,22 @@ export class StealthManager extends EventEmitter {
   }
 
   private applyLayer0(win: StealthCapableWindow, enable: boolean): void {
-    try {
-      win.setContentProtection(enable);
-    } catch (error) {
-      this.logger.warn('[StealthManager] setContentProtection failed:', error);
+    // On macOS 15+ (Sequoia), setContentProtection makes the window
+    // completely black to the user.  Only setExcludeFromCapture works.
+    // setContentProtection is safe for capture tool windows though.
+    const isMacOS15Plus = this.isMacOSVersionCompatible('15.0');
+    const isCaptureTool = (win as any)._isCaptureToolWindow === true;
+    if (!isMacOS15Plus || isCaptureTool) {
+      try {
+        win.setContentProtection(enable);
+      } catch (error) {
+        this.logger.warn('[StealthManager] setContentProtection failed:', error);
+      }
+    } else {
+      this.logger.log('[StealthManager] macOS 15+ — skipping setContentProtection on primary UI window to avoid black screen');
     }
 
+    // setExcludeFromCapture is safe on all platforms.
     if (typeof win.setExcludeFromCapture === 'function') {
       try {
         win.setExcludeFromCapture(enable);
@@ -750,31 +763,46 @@ export class StealthManager extends EventEmitter {
         return;
       }
 
-      if (this.platform === 'darwin' && nativeModule.applyMacosWindowStealth) {
+        if (this.platform === 'darwin') {
         const windowNumber = this.getMacosWindowNumber(win);
         if (windowNumber !== null) {
           if (record) {
             record.privateMacosStealthApplied = false;
           }
-          nativeModule.applyMacosWindowStealth(windowNumber);
-          
-          if (this.featureFlags.enablePrivateMacosStealthApi && nativeModule.applyMacosPrivateWindowStealth) {
-            if (this.isMacOSVersionCompatible('15.0')) {
+
+          // On macOS 15+ (Sequoia), both NSWindow.setSharingType: and
+          // CGSSetWindowSharingState(kCGSDoNotShare) hide the window entirely
+          // from the user — not just from screen capture.  Skip all native
+          // stealth and rely on Electron's setContentProtection (Layer 0)
+          // which uses the modern ScreenCaptureKit API.
+          //
+          // The native Rust module also guards this, but the TS-side guard
+          // avoids even touching the native code path on incompatible systems.
+          const isMacOS15Plus = this.isMacOSVersionCompatible('15.0');
+
+          if (!isMacOS15Plus) {
+            if (nativeModule.applyMacosWindowStealth) {
+              nativeModule.applyMacosWindowStealth(windowNumber);
+            }
+
+            if (this.featureFlags.enablePrivateMacosStealthApi && nativeModule.applyMacosPrivateWindowStealth) {
               try {
                 nativeModule.applyMacosPrivateWindowStealth(windowNumber);
                 if (record) {
                   record.privateMacosStealthApplied = true;
                 }
               } catch (privateError) {
-                this.logger.warn('[StealthManager] Private macOS stealth API failed (incompatible version), falling back to Layer 0:', privateError);
+                this.logger.warn('[StealthManager] macOS private stealth failed:', privateError);
                 this.addWarning('private_api_failed');
               }
-            } else {
-              this.logger.warn('[StealthManager] macOS version < 15.0, skipping private API');
             }
+          } else {
+            this.logger.log('[StealthManager] macOS 15+ — native window stealth skipped while stronger isolation is applied separately');
           }
-          
-          this.verifyStealth(win);
+
+          if (!isMacOS15Plus) {
+            this.verifyStealth(win);
+          }
         }
       }
     } catch (error) {
@@ -802,12 +830,19 @@ export class StealthManager extends EventEmitter {
         return;
       }
 
-      if (this.platform === 'darwin' && nativeModule.removeMacosWindowStealth) {
+      if (this.platform === 'darwin') {
         const windowNumber = this.getMacosWindowNumber(win);
         if (windowNumber !== null) {
-          nativeModule.removeMacosWindowStealth(windowNumber);
-          if (this.featureFlags.enablePrivateMacosStealthApi && nativeModule.removeMacosPrivateWindowStealth) {
-            nativeModule.removeMacosPrivateWindowStealth(windowNumber);
+          const isMacOS15Plus = this.isMacOSVersionCompatible('15.0');
+
+          if (!isMacOS15Plus) {
+            if (nativeModule.removeMacosWindowStealth) {
+              nativeModule.removeMacosWindowStealth(windowNumber);
+            }
+
+            if (this.featureFlags.enablePrivateMacosStealthApi && nativeModule.removeMacosPrivateWindowStealth) {
+              nativeModule.removeMacosPrivateWindowStealth(windowNumber);
+            }
           }
         }
       }
@@ -856,6 +891,7 @@ export class StealthManager extends EventEmitter {
     const requestId = record.virtualDisplayRequestId + 1;
     record.virtualDisplayRequestId = requestId;
     record.virtualDisplayIsolationStarted = true;
+    record.virtualDisplayIsolationReady = false;
 
     this.enqueueVirtualDisplayTask(async () => {
       if (!this.isCurrentVirtualDisplayRequest(record, requestId) || isWindowDestroyed(win)) {
@@ -876,6 +912,7 @@ export class StealthManager extends EventEmitter {
 
         if (!response.ready || !response.surfaceToken) {
           record.virtualDisplayIsolationStarted = false;
+          record.virtualDisplayIsolationReady = false;
           this.logger.warn('[StealthManager] Virtual display isolation not ready, falling back to Layer 0+1');
           if (this.isEnabled()) this.addWarning('virtual_display_failed');
           return;
@@ -888,6 +925,7 @@ export class StealthManager extends EventEmitter {
       } catch (error) {
         if (this.isCurrentVirtualDisplayRequest(record, requestId)) {
           record.virtualDisplayIsolationStarted = false;
+          record.virtualDisplayIsolationReady = false;
         }
         this.logger.warn('[StealthManager] Virtual display isolation failed, falling back to Layer 0+1:', error);
         if (this.isEnabled()) {
@@ -921,6 +959,7 @@ export class StealthManager extends EventEmitter {
 
   private disableVirtualDisplayIsolation(record: ManagedWindowRecord): void {
     record.virtualDisplayRequestId += 1;
+    record.virtualDisplayIsolationReady = false;
     if (!record.virtualDisplayIsolationStarted) {
       return;
     }
@@ -1103,6 +1142,7 @@ export class StealthManager extends EventEmitter {
     if (!surfaceToken || !this.screenApi || typeof win.setBounds !== 'function' || typeof win.getBounds !== 'function') {
       if (this.isCurrentVirtualDisplayRequest(record, requestId)) {
         record.virtualDisplayIsolationStarted = false;
+        record.virtualDisplayIsolationReady = false;
         this.releaseVirtualDisplayIsolation(win);
       }
       return;
@@ -1112,6 +1152,7 @@ export class StealthManager extends EventEmitter {
     if (!match) {
       if (this.isCurrentVirtualDisplayRequest(record, requestId)) {
         record.virtualDisplayIsolationStarted = false;
+        record.virtualDisplayIsolationReady = false;
         this.releaseVirtualDisplayIsolation(win);
       }
       return;
@@ -1135,6 +1176,7 @@ export class StealthManager extends EventEmitter {
     if (!targetDisplay) {
       if (attempt >= DISPLAY_MOVE_MAX_RETRIES) {
         record.virtualDisplayIsolationStarted = false;
+        record.virtualDisplayIsolationReady = false;
         this.releaseVirtualDisplayIsolation(win);
         this.logger.warn(`[StealthManager] Virtual display ${displayId} was not reported by Electron after ${DISPLAY_MOVE_MAX_RETRIES} retries`);
         return;
@@ -1153,6 +1195,7 @@ export class StealthManager extends EventEmitter {
       width: bounds.width,
       height: bounds.height,
     });
+    record.virtualDisplayIsolationReady = true;
   }
 
   private isCurrentVirtualDisplayRequest(record: ManagedWindowRecord, requestId: number): boolean {
@@ -1726,14 +1769,21 @@ for window in windows:
           return false;
         }
 
+        const isMacOS15Plus = this.isMacOSVersionCompatible('15.0');
         const sharingType = nativeModule.verifyMacosStealthState(windowNumber);
-        // The private CGS path does not reliably reflect through NSWindow.sharingType.
         const privatePathVerified = Boolean(
           this.featureFlags.enablePrivateMacosStealthApi &&
-          this.isMacOSVersionCompatible('15.0') &&
           record?.privateMacosStealthApplied
         );
-        const verified = sharingType === 0 || privatePathVerified;
+        const virtualDisplayVerified = Boolean(
+          isMacOS15Plus &&
+          this.featureFlags.enableVirtualDisplayIsolation &&
+          record?.allowVirtualDisplayIsolation &&
+          record?.virtualDisplayIsolationReady
+        );
+        const verified = isMacOS15Plus
+          ? virtualDisplayVerified
+          : sharingType === 0 || privatePathVerified;
         if (!verified && this.isEnabled()) {
           this.addWarning('stealth_verification_failed');
           this.logger.warn('[StealthManager] macOS stealth verification failed, maintaining Layer 0 protection');
@@ -1742,7 +1792,7 @@ for window in windows:
         }
         this.recordProtectionEvent(verified ? 'verification-passed' : 'verification-failed', {
           ...this.getProtectionEventContext(win, {}, 'StealthManager.verifyStealth'),
-          metadata: { platform: 'darwin', sharingType, privatePathVerified },
+          metadata: { platform: 'darwin', sharingType, privatePathVerified, virtualDisplayVerified, isMacOS15Plus },
         });
         return verified;
       }

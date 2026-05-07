@@ -598,9 +598,12 @@ this.setupIntelligenceEvents()
 
 this.runtimeCoordinator.registerSupervisor(new StealthSupervisor(
       {
-        setEnabled: (enabled) => {
+        setEnabled: async (enabled) => {
           this.stealthManager.setEnabled(enabled)
           this.syncWindowStealthProtection(enabled)
+          if (enabled) {
+            await this.waitForStealthProtectionReady()
+          }
         },
         isEnabled: () => this.stealthManager.isEnabled(),
         verifyStealthState: () => this.verifyStealthProtection(),
@@ -609,7 +612,7 @@ this.runtimeCoordinator.registerSupervisor(new StealthSupervisor(
       {
       logger: { log: console.log, warn: console.warn, error: console.error },
       nativeBridge: this.nativeStealthBridge ?? undefined,
-        requireNativeStealth: () => Boolean(this.nativeStealthBridge),
+        requireNativeStealth: () => process.platform === 'darwin' || Boolean(this.nativeStealthBridge),
         nativeArmGuard: async () => {
           try {
             const snapshot = await detectExternalScreenShare()
@@ -2925,6 +2928,8 @@ setThemeMode: (mode) => this.themeManager.setMode(mode as import('../ThemeManage
     return this.hasDebugged
   }
 
+  private stealthVerificationTimeout: NodeJS.Timeout | null = null;
+  private stealthVerificationGeneration = 0;
   private pendingUndetectableState: boolean | null = null;
   private undetectableToggleMutex: Promise<void> = Promise.resolve();
 
@@ -2950,7 +2955,6 @@ setThemeMode: (mode) => this.themeManager.setMode(mode as import('../ThemeManage
 
         if (state) {
           this.hideForUndetectableEnable()
-          this.syncWindowStealthProtection(true)
         }
 
         await stealthSupervisor.setEnabled(state)
@@ -2964,6 +2968,13 @@ setThemeMode: (mode) => this.themeManager.setMode(mode as import('../ThemeManage
         this.applyUndetectableState(state, startedAt, {
           runtime: 'coordinator',
         })
+      } catch (error) {
+        if (state) {
+          this.stealthManager.setEnabled(false)
+          this.syncWindowStealthProtection(false)
+          this.centerAndShowWindow()
+        }
+        throw error
       } finally {
         if (this.pendingUndetectableState === state) {
           this.pendingUndetectableState = null;
@@ -3114,22 +3125,50 @@ setThemeMode: (mode) => this.themeManager.setMode(mode as import('../ThemeManage
     }
   }
 
-  private syncWindowStealthProtection(state: boolean): void {
-  console.log(`[Stealth] syncWindowStealthProtection: applying contentProtection=${state}`)
-  this.windowHelper.setContentProtection(state)
-  this.settingsWindowHelper.setContentProtection(state)
-  this.modelSelectorWindowHelper.setContentProtection(state)
-
-  // Verify stealth was applied
-  setTimeout(() => {
-    const verified = this.verifyStealthProtection()
-    console.log(`[Stealth] Verification result: ${verified ? 'PASS' : 'FAIL'}`)
-    if (!verified) {
-      const warnings = this.stealthManager.getStealthDegradationWarnings()
-      console.warn(`[Stealth] Verification failed. Current warnings: ${warnings.join(', ') || 'none'}`)
+  private async waitForStealthProtectionReady(timeoutMs: number = 2500, intervalMs: number = 50): Promise<void> {
+    const startedAt = Date.now()
+    while ((Date.now() - startedAt) < timeoutMs) {
+      if (this.verifyStealthProtection()) {
+        return
       }
-    }, 500)
-}
+      await new Promise<void>((resolve) => setTimeout(resolve, intervalMs))
+    }
+
+    const warnings = this.stealthManager.getStealthDegradationWarnings()
+    throw new Error(`Timed out waiting for stealth protection readiness${warnings.length > 0 ? `: ${warnings.join(', ')}` : ''}`)
+  }
+
+  private syncWindowStealthProtection(state: boolean): void {
+    console.log(`[Stealth] syncWindowStealthProtection: applying contentProtection=${state}`)
+    this.windowHelper.setContentProtection(state)
+    this.settingsWindowHelper.setContentProtection(state)
+    this.modelSelectorWindowHelper.setContentProtection(state)
+
+    this.stealthVerificationGeneration += 1
+    const generation = this.stealthVerificationGeneration
+
+    if (this.stealthVerificationTimeout) {
+      clearTimeout(this.stealthVerificationTimeout)
+      this.stealthVerificationTimeout = null
+    }
+
+    if (!state) {
+      return
+    }
+
+    this.stealthVerificationTimeout = setTimeout(() => {
+      if (generation !== this.stealthVerificationGeneration || !this.stealthManager.isEnabled()) {
+        return
+      }
+
+      const verified = this.verifyStealthProtection()
+      console.log(`[Stealth] Verification result: ${verified ? 'PASS' : 'FAIL'}`)
+      if (!verified) {
+        const warnings = this.stealthManager.getStealthDegradationWarnings()
+        console.warn(`[Stealth] Verification failed. Current warnings: ${warnings.join(', ') || 'none'}`)
+      }
+    }, 1500)
+  }
 
   private getStealthSupervisorOrNull(): StealthSupervisor | null {
     try {

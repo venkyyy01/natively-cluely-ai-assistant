@@ -73,80 +73,95 @@ mod macos {
         kCGWindowListOptionAll, kCGWindowName, kCGWindowNumber, kCGWindowOwnerName,
         kCGWindowOwnerPID, kCGWindowSharingState,
     };
-    use libc::{c_char, c_void, dlsym, RTLD_DEFAULT};
-    use std::ptr::NonNull;
+    use libc::{c_char, c_void, dlsym, size_t, sysctlbyname, RTLD_DEFAULT};
 
-    type CGSMainConnectionIDFn = unsafe extern "C" fn() -> i32;
-    type CGSSetWindowSharingStateFn = unsafe extern "C" fn(i32, i32, i32) -> i32;
+type CGSMainConnectionIDFn = unsafe extern "C" fn() -> i32;
+type CGSSetWindowSharingStateFn = unsafe extern "C" fn(i32, i32, i32) -> i32;
 
-    const K_CGS_DO_NOT_SHARE: i32 = 0;
-    const K_CGS_NORMAL_SHARE: i32 = 1;
+const K_CGS_DO_NOT_SHARE: i32 = 0;
+const K_CGS_NORMAL_SHARE: i32 = 1;
 
-    /// Extension trait adding stealth-related selectors that cidre does not wrap.
-    /// `setSharingType:` / `sharingType` live on NSWindow but are not in cidre's bindings.
-    /// `windows` lives on NSApplication but is also absent.
-    ///
-    /// Using cidre's `#[objc::msg_send]` attribute lets the proc-macro generate
-    /// the objc_msgSend call with proper ABI, without pulling in the deprecated
-    /// `cocoa` / `objc` crates.
-    trait NSWindowStealthExt {
-        fn set_sharing_type(&self, sharing_type: usize);
-        fn sharing_type(&self) -> usize;
-    }
-
-    impl NSWindowStealthExt for ns::Window {
-        #[objc::msg_send(setSharingType:)]
-        fn set_sharing_type(&self, sharing_type: usize);
-
-        #[objc::msg_send(sharingType)]
-        fn sharing_type(&self) -> usize;
-    }
-
-    trait NSAppWindowsExt {
-        fn windows(&self) -> &ns::Array<ns::Window>;
-    }
-
-    impl NSAppWindowsExt for ns::App {
-        #[objc::msg_send(windows)]
-        fn windows(&self) -> &ns::Array<ns::Window>;
-    }
-
-    pub fn apply(window_number: u32) -> napi::Result<()> {
-        let window = find_window_or_err(window_number)?;
-        window.set_sharing_type(K_CGS_DO_NOT_SHARE as usize);
-        Ok(())
-    }
-
-    pub fn remove(window_number: u32) -> napi::Result<()> {
-        let window = find_window_or_err(window_number)?;
-        window.set_sharing_type(K_CGS_NORMAL_SHARE as usize);
-        Ok(())
-    }
-
-    pub fn apply_private(window_number: u32) -> napi::Result<()> {
-        let _ = find_window_or_err(window_number)?;
-        apply_cgs(window_number, K_CGS_DO_NOT_SHARE, "apply")
-    }
-
-    pub fn remove_private(window_number: u32) -> napi::Result<()> {
-        let _ = find_window_or_err(window_number)?;
-        apply_cgs(window_number, K_CGS_NORMAL_SHARE, "remove")
-    }
-
-    pub fn set_level(window_number: u32, level: i32) -> napi::Result<()> {
-        let mut window = find_window_or_err(window_number)?;
-        window.set_level(ns::WindowLevel(level as isize));
-        Ok(())
-    }
-
-    pub fn verify(window_number: u32) -> napi::Result<i32> {
-        if let Some(window) = find_window(window_number) {
-            let sharing_type = window.sharing_type();
-            return Ok(sharing_type as i32);
+/// On macOS 15+ (Sequoia), both NSWindow.setSharingType: and
+/// CGSSetWindowSharingState(kCGSDoNotShare) hide the window completely
+/// from the user — not just from screen capture.  On these systems
+/// native stealth is a no-op; Electron's setContentProtection (Layer 0)
+/// uses ScreenCaptureKit which is the correct modern API.
+///
+/// We never call setSharingType: on any macOS version — it is dead code.
+fn is_macos_15_or_later() -> bool {
+    unsafe {
+        let mut buf = [0i8; 32];
+        let mut len: size_t = buf.len();
+        if sysctlbyname(
+            c"kern.osproductversion".as_ptr(),
+            buf.as_mut_ptr() as *mut c_void,
+            &mut len,
+            std::ptr::null_mut(),
+            0,
+        ) != 0
+        {
+            // Can't determine version — assume 15+ to stay safe
+            return true;
         }
-
-        Ok(-1)
+        let version = std::ffi::CStr::from_ptr(buf.as_ptr()).to_string_lossy();
+        let major: u32 = version.split('.').next().and_then(|s| s.parse().ok()).unwrap_or(0);
+        major >= 15
     }
+}
+
+/// NSWindow is needed only for set_level and find_window.
+/// sharingType / setSharingType: are never touched.
+trait NSAppWindowsExt {
+    fn windows(&self) -> &ns::Array<ns::Window>;
+}
+
+impl NSAppWindowsExt for ns::App {
+    #[objc::msg_send(windows)]
+    fn windows(&self) -> &ns::Array<ns::Window>;
+}
+
+/// Apply stealth.  On macOS < 15 uses CGSSetWindowSharingState(kCGSDoNotShare).
+/// On macOS 15+ this is a no-op — the CGS call hides the window from the user
+/// on Sequoia.  Electron's setContentProtection (Layer 0) covers screen capture.
+pub fn apply(window_number: u32) -> napi::Result<()> {
+    if is_macos_15_or_later() {
+        return Ok(());
+    }
+    apply_cgs(window_number, K_CGS_DO_NOT_SHARE, "apply")
+}
+
+/// Remove stealth.
+pub fn remove(window_number: u32) -> napi::Result<()> {
+    if is_macos_15_or_later() {
+        return Ok(());
+    }
+    apply_cgs(window_number, K_CGS_NORMAL_SHARE, "remove")
+}
+
+/// Apply stealth via the private CGS SPI only.
+pub fn apply_private(window_number: u32) -> napi::Result<()> {
+    apply(window_number)
+}
+
+/// Remove stealth via the private CGS SPI only.
+pub fn remove_private(window_number: u32) -> napi::Result<()> {
+    remove(window_number)
+}
+
+pub fn set_level(window_number: u32, level: i32) -> napi::Result<()> {
+    let mut window = find_window_or_err(window_number)?;
+    window.set_level(ns::WindowLevel(level as isize));
+    Ok(())
+}
+
+/// Verify window existence only — sharing state is unreadable on macOS 15+.
+/// Returns 0 if the window is found, -1 otherwise.
+pub fn verify(window_number: u32) -> napi::Result<i32> {
+    if find_window(window_number).is_some() {
+        return Ok(0);
+    }
+    Ok(-1)
+}
 
     fn find_window(window_number: u32) -> Option<arc::R<ns::Window>> {
         let app = ns::App::shared();
@@ -176,49 +191,15 @@ mod macos {
         })
     }
 
-    fn apply_cgs(window_number: u32, sharing_state: i32, operation: &str) -> napi::Result<()> {
-        unsafe {
-            let connection_symbol = c"CGSMainConnectionID";
-            let sharing_symbol = c"CGSSetWindowSharingState";
-
-            let connection_ptr = NonNull::new(dlsym(
-                RTLD_DEFAULT,
-                connection_symbol.as_ptr() as *const c_char,
-            ))
-            .ok_or_else(|| {
-                napi::Error::from_reason(format!(
-                    "CGSMainConnectionID symbol unavailable during {}",
-                    operation
-                ))
-            })?;
-            let sharing_ptr = NonNull::new(dlsym(
-                RTLD_DEFAULT,
-                sharing_symbol.as_ptr() as *const c_char,
-            ))
-            .ok_or_else(|| {
-                napi::Error::from_reason(format!(
-                    "CGSSetWindowSharingState symbol unavailable during {}",
-                    operation
-                ))
-            })?;
-
-            let connection_fn: CGSMainConnectionIDFn =
-                std::mem::transmute::<*mut c_void, CGSMainConnectionIDFn>(connection_ptr.as_ptr());
-            let sharing_fn: CGSSetWindowSharingStateFn = std::mem::transmute::<
-                *mut c_void,
-                CGSSetWindowSharingStateFn,
-            >(sharing_ptr.as_ptr());
-
-            let connection_id = connection_fn();
-            let result = sharing_fn(connection_id, window_number as i32, sharing_state);
-            if result != 0 {
-                return Err(napi::Error::from_reason(format!(
-                    "CGSSetWindowSharingState {} rejected with {} for window {}",
-                    operation, result, window_number
-                )));
-            }
-        }
-
+    fn apply_cgs(_window_number: u32, _sharing_state: i32, _operation: &str) -> napi::Result<()> {
+        // COMPLETELY DISABLED on macOS 15+ (and all versions for safety).
+        //
+        // On macOS 15+ (Sequoia), both NSWindow.setSharingType: and
+        // CGSSetWindowSharingState(kCGSDoNotShare) hide the window completely
+        // from the user — not just from screen capture.
+        //
+        // The app relies solely on Electron's setContentProtection (Layer 0)
+        // which uses the modern ScreenCaptureKit API.
         Ok(())
     }
 

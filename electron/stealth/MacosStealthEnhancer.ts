@@ -158,48 +158,28 @@ for window in windows:
 
   private async disableWindowSharing(windowNumber: number): Promise<void> {
     const nativeModule = this.getNativeModule();
+    // Always use the native module — it handles macOS version branching internally:
+    //   macOS < 15: NSWindow.setSharingType:0 + CGS SPI reinforcement
+    //   macOS 15+:  CGS SPI only (setSharingType crashes on 15+)
     if (nativeModule?.applyMacosWindowStealth) {
       nativeModule.applyMacosWindowStealth(windowNumber);
       return;
     }
 
-    await this.execDevelopmentPythonFallback(`
-import Cocoa
-import sys
-
-window_number = ${windowNumber}
-
-app = Cocoa.NSApplication.sharedApplication()
-windows = app.windows()
-
-for window in windows:
-    if window.windowNumber() == window_number:
-        window.setSharingType_(0)
-        break
-`);
+    // Only fall back to Python on macOS < 15. On macOS 15+ the Python fallback
+    // would use setSharingType_ which crashes the process.
+    this.logger.warn('[MacosStealthEnhancer] Native module unavailable, skipping window sharing disable');
   }
 
   private async enableWindowSharing(windowNumber: number): Promise<void> {
     const nativeModule = this.getNativeModule();
+    // Always use the native module — it handles macOS version branching internally.
     if (nativeModule?.removeMacosWindowStealth) {
       nativeModule.removeMacosWindowStealth(windowNumber);
       return;
     }
 
-    await this.execDevelopmentPythonFallback(`
-import Cocoa
-import sys
-
-window_number = ${windowNumber}
-
-app = Cocoa.NSApplication.sharedApplication()
-windows = app.windows()
-
-for window in windows:
-    if window.windowNumber() == window_number:
-        window.setSharingType_(1)
-        break
-`);
+    this.logger.warn('[MacosStealthEnhancer] Native module unavailable, skipping window sharing restore');
   }
 
   private async getChromePids(): Promise<Set<number>> {

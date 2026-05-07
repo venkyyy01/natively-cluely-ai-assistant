@@ -53,5 +53,6 @@ export interface ManagedWindowRecord {
   listenersAttached: boolean;
   virtualDisplayRequestId: number;
   virtualDisplayIsolationStarted: boolean;
+  virtualDisplayIsolationReady: boolean;
   privateMacosStealthApplied: boolean;
 }
