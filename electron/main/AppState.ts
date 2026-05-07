@@ -2955,6 +2955,7 @@ setThemeMode: (mode) => this.themeManager.setMode(mode as import('../ThemeManage
 
         if (state) {
           this.hideForUndetectableEnable()
+          this.stealthManager.setEnabled(true)
         }
 
         await stealthSupervisor.setEnabled(state)

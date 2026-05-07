@@ -87,6 +87,9 @@ test('AppState strict invisible enable hides, protects, verifies, and does not c
         recordProtectionEvent(type: string, context?: { source?: string }) {
           calls.push(`event:${type}:${context?.source ?? 'unknown'}`);
         },
+        setEnabled(state: boolean) {
+          calls.push(`syncProtection:${state}`);
+        },
       },
       windowHelper: {
         hideMainWindow() {
@@ -113,6 +116,9 @@ test('AppState strict invisible enable hides, protects, verifies, and does not c
       isStrictProtectionEnabled: () => true,
       setPrivacyShieldFault(key: string) {
         calls.push(`privacyFault:${key}`);
+      },
+      centerAndShowWindow() {
+        calls.push('centerAndShow');
       },
       hideForUndetectableEnable() {
         return hideForUndetectableEnable.call(this);
@@ -143,6 +149,9 @@ test('AppState strict invisible enable hides, protects, verifies, and does not c
       'verifyProtection',
       'event:verification-failed:AppState.verifyUndetectableEnableProtection',
       'privacyFault:undetectable_enable_verification_failed',
+      'syncProtection:false',
+      'syncProtection:false',
+      'centerAndShow',
     ]);
     assert.equal(fakeState.isUndetectable, false);
     assert.equal(fakeState.pendingUndetectableState, null);
@@ -411,12 +420,18 @@ test('AppState serializes opposite invisible toggle targets without interleaving
           };
         },
       },
+      stealthManager: {
+        setEnabled(state: boolean) {
+          calls.push(`syncProtection:${state}`);
+        },
+      },
       hideForUndetectableEnable() {
         calls.push('hideForEnable');
       },
       syncWindowStealthProtection(state: boolean) {
-        calls.push(`syncProtection:${state}`);
+        calls.push(`syncWindowProtection:${state}`);
       },
+      centerAndShowWindow() {},
       verifyUndetectableEnableProtection() {
         calls.push('verifyEnable');
       },

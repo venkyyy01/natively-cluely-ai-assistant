@@ -123,6 +123,9 @@ test('AppState setUndetectableAsync clears the pending target state after a fail
       pendingUndetectableState: boolean | null;
       runtimeCoordinator: { getSupervisor: () => { getState: () => string; start: () => Promise<void>; setEnabled: (state: boolean) => Promise<void>; }; };
       applyUndetectableState: () => void;
+      stealthManager: { setEnabled: (state: boolean) => void };
+      syncWindowStealthProtection: () => void;
+      centerAndShowWindow: () => void;
     } = {
       isUndetectable: false,
       pendingUndetectableState: null,
@@ -145,12 +148,19 @@ test('AppState setUndetectableAsync clears the pending target state after a fail
       applyUndetectableState() {
         attempts.push('apply');
       },
+      stealthManager: {
+        setEnabled(state: boolean) {
+          attempts.push(`syncProtection:${state}`);
+        },
+      },
+      syncWindowStealthProtection() {},
+      centerAndShowWindow() {},
     };
 
     await assert.rejects(() => setUndetectableAsync.call(fakeState, true), /stealth helper unavailable/);
     await assert.rejects(() => setUndetectableAsync.call(fakeState, true), /stealth helper unavailable/);
 
-    assert.deepEqual(attempts, ['start', 'start']);
+    assert.deepEqual(attempts, ['start', 'syncProtection:false', 'start', 'syncProtection:false']);
     assert.equal((fakeState as { pendingUndetectableState: boolean | null }).pendingUndetectableState, null);
   } finally {
     restoreElectron();

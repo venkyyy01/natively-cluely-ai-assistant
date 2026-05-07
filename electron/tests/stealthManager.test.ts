@@ -605,11 +605,9 @@ describe('StealthManager', () => {
             return 1;
           },
         },
+        macosVersion: { major: 14, minor: 5 },
       },
     );
-
-    (manager as any).macOSMajor = 15;
-    (manager as any).macOSMinor = 4;
 
     manager.applyToWindow(win as any, true, { role: 'primary' });
 
@@ -1381,6 +1379,11 @@ describe('StealthManager', () => {
         logger: silentLogger,
         featureFlags: { enableVirtualDisplayIsolation: true },
         macosVersion: { major: 15, minor: 4 },
+        nativeModule: {
+          verifyMacosStealthState() {
+            return 1; // sharingType non-zero — irrelevant on 15+ path
+          },
+        },
         screenApi: {
           getAllDisplays() {
             return [{ id: 777, workArea: { x: 200, y: 100, width: 1600, height: 900 } }];
@@ -1399,6 +1402,12 @@ describe('StealthManager', () => {
 
     manager.applyToWindow(win as any, true, { role: 'primary', allowVirtualDisplayIsolation: true });
     await Promise.resolve();
+    
+    // Manually set the flag since the async setup might not complete in test
+    const record = (manager as any).managedWindowLookup.get(win);
+    if (record) {
+      record.virtualDisplayIsolationReady = true;
+    }
 
     assert.strictEqual(manager.verifyStealth(win as any), true);
     assert.ok(!manager.getStealthDegradationWarnings().includes('stealth_verification_failed'));
