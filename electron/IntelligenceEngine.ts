@@ -684,11 +684,15 @@ export class IntelligenceEngine extends EventEmitter {
     }
 
     private isLiveCodingQuestion(question: string): boolean {
-        return /(write|implement|debug|fix|refactor|code|function|typescript|javascript|python|java|bug)/i.test(question);
+        return /(write|implement|debug|fix|refactor|solve|code|function|typescript|javascript|python|java|sql|query|algorithm|bug|error|test case|complexity)/i.test(question);
+    }
+
+    private isAmbiguousScreenshotCodingPrompt(question: string): boolean {
+        return /(solve this|approach this|show me how|what'?s wrong|why is this failing|look at this|this screenshot|screen|editor|terminal|leetcode|coding problem|test cases?)/i.test(question);
     }
 
     private isScreenshotBackedLiveCodingTurn(question: string, imagePaths?: string[]): boolean {
-        return !!imagePaths?.length && this.isLiveCodingQuestion(question);
+        return !!imagePaths?.length && (this.isLiveCodingQuestion(question) || this.isAmbiguousScreenshotCodingPrompt(question));
     }
 
     getRecapLLM(): RecapLLM | null {
@@ -1532,6 +1536,7 @@ export class IntelligenceEngine extends EventEmitter {
                 contextAssemblyStart,
                 classifyIntent: this.classifyIntentForRoute.bind(this),
                 prefetchedIntent,
+                screenshotBackedLiveCodingTurn: this.isScreenshotBackedLiveCodingTurn(resolvedQuestion, imagePaths),
                 onInterimInjected: (text) => {
                     console.log(`[IntelligenceEngine] Injecting interim transcript: "${text.substring(0, 50)}..."`);
                 },

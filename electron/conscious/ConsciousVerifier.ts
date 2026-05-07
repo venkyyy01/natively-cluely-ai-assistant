@@ -46,6 +46,9 @@ function hasSubstance(response: ConsciousModeStructuredResponse): boolean {
     response.scaleConsiderations.length ||
     response.pushbackResponses.length ||
     response.codeTransition.trim() ||
+    response.codingInterviewAnswer?.problemUnderstanding.task ||
+    response.codingInterviewAnswer?.bruteForceApproach.code ||
+    response.codingInterviewAnswer?.optimizedApproach.code ||
     response.behavioralAnswer?.headline ||
     response.behavioralAnswer?.action ||
     response.behavioralAnswer?.result
@@ -54,6 +57,10 @@ function hasSubstance(response: ConsciousModeStructuredResponse): boolean {
 
 function isBehavioralQuestion(question: string): boolean {
   return isBehavioralQuestionText(question);
+}
+
+function isCodingQuestion(question: string): boolean {
+  return /(write|implement|debug|fix|refactor|function|typescript|javascript|python|java|sql|query|code|snippet|algorithm|console|output)/i.test(question);
 }
 
 function wordCount(value: string | null | undefined): number {
@@ -114,7 +121,38 @@ function hasStrongBehavioralDepth(response: ConsciousModeStructuredResponse): bo
     && hasBehavioralImpactCue(behavioral.result);
 }
 
+function hasCompleteCodingInterviewAnswer(response: ConsciousModeStructuredResponse): boolean {
+  const coding = response.codingInterviewAnswer;
+  return Boolean(
+    coding?.problemUnderstanding.task
+    && coding.problemUnderstanding.inputsOutputsConstraints
+    && coding.problemUnderstanding.trickyCases.length > 0
+    && coding.problemUnderstanding.hiddenAssumptions.length > 0
+    && coding.problemUnderstanding.interviewerEvaluation
+    && coding.bruteForceApproach.intuition
+    && coding.bruteForceApproach.whyItWorks
+    && coding.bruteForceApproach.code
+    && coding.bruteForceApproach.timeComplexity
+    && coding.bruteForceApproach.timeComplexityReasoning
+    && coding.bruteForceApproach.spaceComplexity
+    && coding.bruteForceApproach.spaceComplexityReasoning
+    && coding.optimizedApproach.whyBruteForceInsufficient
+    && coding.optimizedApproach.optimizationInsight
+    && coding.optimizedApproach.dataStructureChoice
+    && coding.optimizedApproach.code
+    && coding.optimizedApproach.timeComplexity
+    && coding.optimizedApproach.timeComplexityReasoning
+    && coding.optimizedApproach.spaceComplexity
+    && coding.optimizedApproach.spaceComplexityReasoning
+    && coding.tradeoffsAndInterviewReasoning.whyPreferred
+    && coding.tradeoffsAndInterviewReasoning.alternatives.length > 0
+    && coding.tradeoffsAndInterviewReasoning.dataStructureRationale
+    && coding.tradeoffsAndInterviewReasoning.commonFollowUps.length > 0
+  );
+}
+
 function summaryText(response: ConsciousModeStructuredResponse): string {
+  const coding = response.codingInterviewAnswer;
   return [
     response.openingReasoning,
     ...response.implementationPlan,
@@ -122,6 +160,31 @@ function summaryText(response: ConsciousModeStructuredResponse): string {
     ...response.edgeCases,
     ...response.scaleConsiderations,
     ...response.pushbackResponses,
+    coding?.language,
+    coding?.problemUnderstanding.task,
+    coding?.problemUnderstanding.inputsOutputsConstraints,
+    ...(coding?.problemUnderstanding.trickyCases || []),
+    ...(coding?.problemUnderstanding.hiddenAssumptions || []),
+    coding?.problemUnderstanding.interviewerEvaluation,
+    coding?.bruteForceApproach.intuition,
+    coding?.bruteForceApproach.whyItWorks,
+    coding?.bruteForceApproach.code,
+    coding?.bruteForceApproach.timeComplexity,
+    coding?.bruteForceApproach.timeComplexityReasoning,
+    coding?.bruteForceApproach.spaceComplexity,
+    coding?.bruteForceApproach.spaceComplexityReasoning,
+    coding?.optimizedApproach.whyBruteForceInsufficient,
+    coding?.optimizedApproach.optimizationInsight,
+    coding?.optimizedApproach.dataStructureChoice,
+    coding?.optimizedApproach.code,
+    coding?.optimizedApproach.timeComplexity,
+    coding?.optimizedApproach.timeComplexityReasoning,
+    coding?.optimizedApproach.spaceComplexity,
+    coding?.optimizedApproach.spaceComplexityReasoning,
+    coding?.tradeoffsAndInterviewReasoning.whyPreferred,
+    ...(coding?.tradeoffsAndInterviewReasoning.alternatives || []),
+    coding?.tradeoffsAndInterviewReasoning.dataStructureRationale,
+    ...(coding?.tradeoffsAndInterviewReasoning.commonFollowUps || []),
     response.behavioralAnswer?.question,
     response.behavioralAnswer?.headline,
     response.behavioralAnswer?.situation,
@@ -418,6 +481,10 @@ export class ConsciousVerifier {
 
     if (isBehavioralQuestion(input.question) && !hasStrongBehavioralDepth(input.response)) {
       return { ok: false, reason: 'weak_behavioral_depth', deterministic: 'fail', judge: 'skipped' };
+    }
+
+    if (isCodingQuestion(input.question) && input.route.threadAction !== 'continue' && !hasCompleteCodingInterviewAnswer(input.response)) {
+      return { ok: false, reason: 'missing_coding_interview_structure', deterministic: 'fail', judge: 'skipped' };
     }
 
     if (reaction?.kind === 'tradeoff_probe' && input.response.tradeoffs.length === 0 && input.response.pushbackResponses.length === 0) {

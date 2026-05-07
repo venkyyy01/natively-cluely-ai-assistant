@@ -225,6 +225,7 @@ export class ConsciousPreparationCoordinator {
       assistantResponseCount: number,
     ) => Promise<IntentResult>;
     prefetchedIntent?: CoordinatedIntentResult | null;
+    screenshotBackedLiveCodingTurn?: boolean;
     onInterimInjected?: (text: string) => void;
   }): Promise<ConsciousPreparationResult> {
     let contextItems = input.contextItems;
@@ -271,6 +272,7 @@ export class ConsciousPreparationCoordinator {
       hypothesis,
       preferenceSummary,
       intentResult: input.prefetchedIntent ?? null,
+      forceLiveCoding: input.screenshotBackedLiveCodingTurn,
     });
     if (answerPlan.questionMode !== detectConsciousQuestionMode(planningQuestion)) {
       preferenceSummary = this.session.getConsciousResponsePreferenceSummary(answerPlan.questionMode);
@@ -280,6 +282,7 @@ export class ConsciousPreparationCoordinator {
         hypothesis,
         preferenceSummary,
         intentResult: input.prefetchedIntent ?? null,
+        forceLiveCoding: input.screenshotBackedLiveCodingTurn,
       });
     }
     const semanticBlock = this.semanticFactStore.buildContextBlock({
@@ -325,6 +328,7 @@ export class ConsciousPreparationCoordinator {
       hypothesis,
       preferenceSummary: resolvedPreferenceSummary,
       intentResult,
+      forceLiveCoding: input.screenshotBackedLiveCodingTurn,
     });
     if (resolvedAnswerPlan.questionMode !== answerPlan.questionMode) {
       resolvedPreferenceSummary = this.session.getConsciousResponsePreferenceSummary(resolvedAnswerPlan.questionMode);
@@ -334,6 +338,7 @@ export class ConsciousPreparationCoordinator {
         hypothesis,
         preferenceSummary: resolvedPreferenceSummary,
         intentResult,
+        forceLiveCoding: input.screenshotBackedLiveCodingTurn,
       });
     }
     if (this.shouldRebuildPreparedTranscript(answerPlan, resolvedAnswerPlan)) {

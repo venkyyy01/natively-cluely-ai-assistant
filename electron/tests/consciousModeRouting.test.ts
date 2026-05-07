@@ -526,6 +526,41 @@ test('Conscious Mode routes screenshot-backed live-coding turns but keeps the sa
           pushbackResponses: [],
           likelyFollowUps: [],
           codeTransition: '',
+          codingInterviewAnswer: {
+            language: 'typescript',
+            problemUnderstanding: {
+              task: 'Implement debounce in TypeScript.',
+              inputsOutputsConstraints: 'Input is a callback and delay; output is a wrapped function that delays execution.',
+              trickyCases: ['Rapid repeated calls should only run once'],
+              hiddenAssumptions: ['The timer can be stored in closure state'],
+              interviewerEvaluation: 'They are checking closures, timers, and cleanup reasoning.',
+            },
+            bruteForceApproach: {
+              intuition: 'Call the function after every delay.',
+              whyItWorks: 'Each call eventually invokes the callback.',
+              code: 'function debounce(fn: Function, delay: number) { return (...args: any[]) => setTimeout(() => fn(...args), delay); }',
+              timeComplexity: 'O(1) per call',
+              timeComplexityReasoning: 'Each wrapper call schedules one timer.',
+              spaceComplexity: 'O(k)',
+              spaceComplexityReasoning: 'Rapid calls can leave k pending timers.',
+            },
+            optimizedApproach: {
+              whyBruteForceInsufficient: 'It does not cancel older calls.',
+              optimizationInsight: 'Keep one timer and clear it before scheduling the next.',
+              dataStructureChoice: 'A closure variable is enough because we only track one timer.',
+              code: 'function debounce<T extends (...args: any[]) => void>(fn: T, delay: number) { let timer: ReturnType<typeof setTimeout> | null = null; return (...args: Parameters<T>) => { if (timer) clearTimeout(timer); timer = setTimeout(() => fn(...args), delay); }; }',
+              timeComplexity: 'O(1) per call',
+              timeComplexityReasoning: 'Each call clears at most one timer and schedules one timer.',
+              spaceComplexity: 'O(1)',
+              spaceComplexityReasoning: 'Only one timer handle is retained.',
+            },
+            tradeoffsAndInterviewReasoning: {
+              whyPreferred: 'It matches debounce semantics and keeps state minimal.',
+              alternatives: ['Throttle if we want periodic execution instead of delayed final execution'],
+              dataStructureRationale: 'A single closure variable is simpler than a map because there is one debounced stream.',
+              commonFollowUps: ['How would you preserve this binding?', 'How would you add cancel or flush?'],
+            },
+          },
         });
         return;
       }
@@ -554,9 +589,14 @@ test('Conscious Mode routes screenshot-backed live-coding turns but keeps the sa
   addInterviewerTurn(screenshotSession, question, Date.now());
 
   const consciousAnswer = await screenshotEngine.runWhatShouldISay(undefined, 0.9, ['/tmp/editor.png']);
-  assert.match(consciousAnswer || '', /read the failing state/);
+  assert.match(consciousAnswer || '', /A\. Problem Understanding/);
+  assert.match(consciousAnswer || '', /B\. Brute Force Approach/);
+  assert.match(consciousAnswer || '', /C\. Optimized Approach/);
+  assert.match(consciousAnswer || '', /D\. Tradeoffs & Interview Reasoning/);
   assert.equal(screenshotSession.getLatestConsciousResponse()?.mode, 'reasoning_first');
+  assert.ok(screenshotSession.getLatestConsciousResponse()?.codingInterviewAnswer);
   assert.match(screenshotHelper.calls[0]?.message || '', /STRUCTURED_REASONING_RESPONSE/);
+  assert.match(screenshotHelper.calls[0]?.message || '', /LIVE_CODING_SCREENSHOT_TURN: true/);
 });
 
 test('Non-Conscious transcript-trigger path preserves the existing actionable heuristic', async () => {

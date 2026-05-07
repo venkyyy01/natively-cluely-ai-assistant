@@ -17,6 +17,7 @@ export const CONSCIOUS_MODE_RESPONSE_FIELDS = [
   'pushbackResponses',
   'likelyFollowUps',
   'codeTransition',
+  'codingInterviewAnswer',
   'behavioralAnswer',
 ] as const;
 
@@ -34,6 +35,41 @@ Return ONLY valid JSON with these canonical keys:
   "pushbackResponses": ["string"],
   "likelyFollowUps": ["string"],
   "codeTransition": "string",
+  "codingInterviewAnswer": {
+    "language": "string",
+    "problemUnderstanding": {
+      "task": "string",
+      "inputsOutputsConstraints": "string",
+      "trickyCases": ["string"],
+      "hiddenAssumptions": ["string"],
+      "interviewerEvaluation": "string"
+    },
+    "bruteForceApproach": {
+      "intuition": "string",
+      "whyItWorks": "string",
+      "code": "string",
+      "timeComplexity": "string",
+      "timeComplexityReasoning": "string",
+      "spaceComplexity": "string",
+      "spaceComplexityReasoning": "string"
+    },
+    "optimizedApproach": {
+      "whyBruteForceInsufficient": "string",
+      "optimizationInsight": "string",
+      "dataStructureChoice": "string",
+      "code": "string",
+      "timeComplexity": "string",
+      "timeComplexityReasoning": "string",
+      "spaceComplexity": "string",
+      "spaceComplexityReasoning": "string"
+    },
+    "tradeoffsAndInterviewReasoning": {
+      "whyPreferred": "string",
+      "alternatives": ["string"],
+      "dataStructureRationale": "string",
+      "commonFollowUps": ["string"]
+    }
+  },
   "behavioralAnswer": {
     "question": "string",
     "headline": "string",
@@ -55,6 +91,15 @@ CRITICAL RULES — MOST FIELDS SHOULD BE EMPTY:
 - pushbackResponses: [] unless they challenged your approach.
 - likelyFollowUps: 0-2 max. What they might ask next, not a list of everything you know.
 - codeTransition: "" unless it's a coding question.
+- codingInterviewAnswer: REQUIRED for a fresh live-coding/coding problem, especially when an image/screenshot is provided. Otherwise set it to null.
+
+FRESH LIVE-CODING / CODE-SCREENSHOT RULES — STRICT:
+- Before code, explicitly explain the task, inputs, outputs, constraints, edge cases, hidden assumptions, and what the interviewer is evaluating.
+- Always include BOTH bruteForceApproach and optimizedApproach with full working code.
+- For BOTH approaches, include time complexity, why that time occurs, space complexity, and why that space occurs.
+- In optimizedApproach, explain why brute force is insufficient, the optimization insight, and why the selected data structure/algorithm fits.
+- In tradeoffsAndInterviewReasoning, explain why the optimized approach is preferred, alternatives, data-structure choices, and common follow-ups.
+- For follow-up questions about an existing solution, do NOT dump the full A/B/C/D structure again unless the interviewer asks for the whole solution.
 
 SPEECH STYLE — TALK LIKE A REAL PERSON:
 - Write like someone actually talking, not writing an essay
@@ -78,6 +123,42 @@ export interface ConsciousBehavioralAnswer {
   whyThisAnswerWorks: string[];
 }
 
+export interface ConsciousCodingProblemUnderstanding {
+  task: string;
+  inputsOutputsConstraints: string;
+  trickyCases: string[];
+  hiddenAssumptions: string[];
+  interviewerEvaluation: string;
+}
+
+export interface ConsciousCodingApproach {
+  intuition?: string;
+  whyItWorks?: string;
+  whyBruteForceInsufficient?: string;
+  optimizationInsight?: string;
+  dataStructureChoice?: string;
+  code: string;
+  timeComplexity: string;
+  timeComplexityReasoning: string;
+  spaceComplexity: string;
+  spaceComplexityReasoning: string;
+}
+
+export interface ConsciousCodingInterviewReasoning {
+  whyPreferred: string;
+  alternatives: string[];
+  dataStructureRationale: string;
+  commonFollowUps: string[];
+}
+
+export interface ConsciousCodingInterviewAnswer {
+  language: string;
+  problemUnderstanding: ConsciousCodingProblemUnderstanding;
+  bruteForceApproach: ConsciousCodingApproach;
+  optimizedApproach: ConsciousCodingApproach;
+  tradeoffsAndInterviewReasoning: ConsciousCodingInterviewReasoning;
+}
+
 export interface ConsciousModeStructuredResponse {
   mode: ConsciousModeResponseMode;
   openingReasoning: string;
@@ -88,6 +169,7 @@ export interface ConsciousModeStructuredResponse {
   pushbackResponses: string[];
   likelyFollowUps: string[];
   codeTransition: string;
+  codingInterviewAnswer?: ConsciousCodingInterviewAnswer | null;
   behavioralAnswer?: ConsciousBehavioralAnswer | null;
 }
 
@@ -231,6 +313,91 @@ function hasBehavioralAnswerSubstance(value: ConsciousBehavioralAnswer | null | 
   );
 }
 
+function normalizeCodingProblemUnderstanding(value: unknown): ConsciousCodingProblemUnderstanding {
+  const source = value && typeof value === 'object' ? value as Record<string, unknown> : {};
+  return {
+    task: normalizeText(source.task),
+    inputsOutputsConstraints: normalizeText(source.inputsOutputsConstraints),
+    trickyCases: normalizeList(source.trickyCases),
+    hiddenAssumptions: normalizeList(source.hiddenAssumptions),
+    interviewerEvaluation: normalizeText(source.interviewerEvaluation),
+  };
+}
+
+function normalizeCodingApproach(value: unknown): ConsciousCodingApproach {
+  const source = value && typeof value === 'object' ? value as Record<string, unknown> : {};
+  return {
+    intuition: normalizeText(source.intuition),
+    whyItWorks: normalizeText(source.whyItWorks),
+    whyBruteForceInsufficient: normalizeText(source.whyBruteForceInsufficient),
+    optimizationInsight: normalizeText(source.optimizationInsight),
+    dataStructureChoice: normalizeText(source.dataStructureChoice),
+    code: normalizeText(source.code),
+    timeComplexity: normalizeText(source.timeComplexity),
+    timeComplexityReasoning: normalizeText(source.timeComplexityReasoning),
+    spaceComplexity: normalizeText(source.spaceComplexity),
+    spaceComplexityReasoning: normalizeText(source.spaceComplexityReasoning),
+  };
+}
+
+function normalizeCodingInterviewReasoning(value: unknown): ConsciousCodingInterviewReasoning {
+  const source = value && typeof value === 'object' ? value as Record<string, unknown> : {};
+  return {
+    whyPreferred: normalizeText(source.whyPreferred),
+    alternatives: normalizeList(source.alternatives),
+    dataStructureRationale: normalizeText(source.dataStructureRationale),
+    commonFollowUps: normalizeList(source.commonFollowUps),
+  };
+}
+
+function hasCodingApproachSubstance(value: ConsciousCodingApproach | null | undefined): boolean {
+  return Boolean(
+    value?.intuition
+    || value?.whyItWorks
+    || value?.whyBruteForceInsufficient
+    || value?.optimizationInsight
+    || value?.dataStructureChoice
+    || value?.code
+    || value?.timeComplexity
+    || value?.timeComplexityReasoning
+    || value?.spaceComplexity
+    || value?.spaceComplexityReasoning
+  );
+}
+
+function hasCodingInterviewAnswerSubstance(value: ConsciousCodingInterviewAnswer | null | undefined): boolean {
+  return Boolean(
+    value?.problemUnderstanding.task
+    || value?.problemUnderstanding.inputsOutputsConstraints
+    || value?.problemUnderstanding.trickyCases.length
+    || value?.problemUnderstanding.hiddenAssumptions.length
+    || value?.problemUnderstanding.interviewerEvaluation
+    || hasCodingApproachSubstance(value?.bruteForceApproach)
+    || hasCodingApproachSubstance(value?.optimizedApproach)
+    || value?.tradeoffsAndInterviewReasoning.whyPreferred
+    || value?.tradeoffsAndInterviewReasoning.alternatives.length
+    || value?.tradeoffsAndInterviewReasoning.dataStructureRationale
+    || value?.tradeoffsAndInterviewReasoning.commonFollowUps.length
+  );
+}
+
+function normalizeCodingInterviewAnswer(value: unknown): ConsciousCodingInterviewAnswer | null {
+  if (!value || typeof value !== 'object') {
+    return null;
+  }
+
+  const source = value as Record<string, unknown>;
+  const normalized: ConsciousCodingInterviewAnswer = {
+    language: normalizeText(source.language),
+    problemUnderstanding: normalizeCodingProblemUnderstanding(source.problemUnderstanding),
+    bruteForceApproach: normalizeCodingApproach(source.bruteForceApproach),
+    optimizedApproach: normalizeCodingApproach(source.optimizedApproach),
+    tradeoffsAndInterviewReasoning: normalizeCodingInterviewReasoning(source.tradeoffsAndInterviewReasoning),
+  };
+
+  return hasCodingInterviewAnswerSubstance(normalized) ? normalized : null;
+}
+
 export function createEmptyConsciousModeResponse(mode: ConsciousModeResponseMode = 'reasoning_first'): ConsciousModeStructuredResponse {
   return {
     mode,
@@ -242,6 +409,7 @@ export function createEmptyConsciousModeResponse(mode: ConsciousModeResponseMode
     pushbackResponses: [],
     likelyFollowUps: [],
     codeTransition: '',
+    codingInterviewAnswer: null,
     behavioralAnswer: null,
   };
 }
@@ -296,13 +464,16 @@ export function normalizeConsciousModeResponse(value: (Partial<ConsciousModeStru
     normalizeList(value?.implementationPlan).length ||
     normalizeList(value?.tradeoffs).length ||
     normalizeCodeTransition(value?.codeTransition, value?.codeBlock) ||
+    hasCodingInterviewAnswerSubstance(normalizeCodingInterviewAnswer((value as Record<string, unknown> | undefined)?.codingInterviewAnswer)) ||
     hasBehavioralAnswerSubstance(normalizeBehavioralAnswer((value as Record<string, unknown> | undefined)?.behavioralAnswer))
   );
   const mode = hasCanonicalMode || hasAdaptableLegacyPayload ? 'reasoning_first' : 'invalid';
   const behavioralAnswer = normalizeBehavioralAnswer((value as Record<string, unknown> | undefined)?.behavioralAnswer);
+  const codingInterviewAnswer = normalizeCodingInterviewAnswer((value as Record<string, unknown> | undefined)?.codingInterviewAnswer);
   const openingReasoning = normalizeText(value?.openingReasoning)
     || normalizeText(value?.spokenResponse)
     || behavioralAnswer?.headline
+    || codingInterviewAnswer?.problemUnderstanding.task
     || '';
   return {
     mode,
@@ -314,6 +485,7 @@ export function normalizeConsciousModeResponse(value: (Partial<ConsciousModeStru
     pushbackResponses: normalizePushbackResponses(value?.pushbackResponses),
     likelyFollowUps: normalizeList(value?.likelyFollowUps),
     codeTransition: normalizeCodeTransition(value?.codeTransition, value?.codeBlock),
+    codingInterviewAnswer,
     behavioralAnswer,
   };
 }
@@ -332,6 +504,7 @@ export function isValidConsciousModeResponse(response: ConsciousModeStructuredRe
     response.pushbackResponses.length ||
     response.likelyFollowUps.length ||
     response.codeTransition ||
+    hasCodingInterviewAnswerSubstance(response.codingInterviewAnswer) ||
     hasBehavioralAnswerSubstance(response.behavioralAnswer)
   );
 }
@@ -376,6 +549,7 @@ export function mergeConsciousModeResponses(
     pushbackResponses: mergeList(base.pushbackResponses, incoming.pushbackResponses),
     likelyFollowUps: mergeList(base.likelyFollowUps, incoming.likelyFollowUps),
     codeTransition: incoming.codeTransition || base.codeTransition,
+    codingInterviewAnswer: incoming.codingInterviewAnswer || base.codingInterviewAnswer || null,
     behavioralAnswer: incoming.behavioralAnswer || base.behavioralAnswer || null,
   };
 }
@@ -417,7 +591,71 @@ function formatBehavioralAnswer(answer: ConsciousBehavioralAnswer): string[] {
   return parts.filter(Boolean);
 }
 
+function fallbackText(value: string | null | undefined): string {
+  return value?.trim() || 'Not specified.';
+}
+
+function formatInlineList(values: string[]): string {
+  return values.length > 0 ? values.join('; ') : 'Not specified.';
+}
+
+function formatCodeBlock(language: string, code: string): string {
+  const lang = language.trim() || 'text';
+  return code.trim() ? `\`\`\`${lang}\n${code.trim()}\n\`\`\`` : 'Not provided.';
+}
+
+function formatCodingInterviewAnswer(answer: ConsciousCodingInterviewAnswer): string[] {
+  const language = answer.language || 'text';
+  const understanding = answer.problemUnderstanding;
+  const brute = answer.bruteForceApproach;
+  const optimized = answer.optimizedApproach;
+  const reasoning = answer.tradeoffsAndInterviewReasoning;
+
+  return [
+    [
+      'A. Problem Understanding',
+      `Task: ${fallbackText(understanding.task)}`,
+      `Inputs / outputs / constraints: ${fallbackText(understanding.inputsOutputsConstraints)}`,
+      `Tricky cases: ${formatInlineList(understanding.trickyCases)}`,
+      `Hidden assumptions / ambiguity: ${formatInlineList(understanding.hiddenAssumptions)}`,
+      `What the interviewer is evaluating: ${fallbackText(understanding.interviewerEvaluation)}`,
+    ].join('\n'),
+    [
+      'B. Brute Force Approach',
+      `Naive intuition: ${fallbackText(brute.intuition)}`,
+      `Why it works: ${fallbackText(brute.whyItWorks)}`,
+      `Code:\n${formatCodeBlock(language, brute.code)}`,
+      `Time Complexity: ${fallbackText(brute.timeComplexity)}`,
+      `Why that time occurs: ${fallbackText(brute.timeComplexityReasoning)}`,
+      `Space Complexity: ${fallbackText(brute.spaceComplexity)}`,
+      `Why that space occurs: ${fallbackText(brute.spaceComplexityReasoning)}`,
+    ].join('\n'),
+    [
+      'C. Optimized Approach',
+      `Why brute force is insufficient: ${fallbackText(optimized.whyBruteForceInsufficient)}`,
+      `Optimization insight: ${fallbackText(optimized.optimizationInsight)}`,
+      `Data structure / algorithm choice: ${fallbackText(optimized.dataStructureChoice)}`,
+      `Code:\n${formatCodeBlock(language, optimized.code)}`,
+      `Time Complexity: ${fallbackText(optimized.timeComplexity)}`,
+      `Why that time occurs: ${fallbackText(optimized.timeComplexityReasoning)}`,
+      `Space Complexity: ${fallbackText(optimized.spaceComplexity)}`,
+      `Why that space occurs: ${fallbackText(optimized.spaceComplexityReasoning)}`,
+    ].join('\n'),
+    [
+      'D. Tradeoffs & Interview Reasoning',
+      `Why this approach is preferred: ${fallbackText(reasoning.whyPreferred)}`,
+      `Alternative approaches: ${formatInlineList(reasoning.alternatives)}`,
+      `Data structure rationale: ${fallbackText(reasoning.dataStructureRationale)}`,
+      `Common interviewer follow-ups: ${formatInlineList(reasoning.commonFollowUps)}`,
+    ].join('\n'),
+  ];
+}
+
 export function formatConsciousModeResponseChunks(response: ConsciousModeStructuredResponse): string[] {
+  if (response.codingInterviewAnswer && hasCodingInterviewAnswerSubstance(response.codingInterviewAnswer)) {
+    return formatCodingInterviewAnswer(response.codingInterviewAnswer);
+  }
+
   if (response.behavioralAnswer && hasBehavioralAnswerSubstance(response.behavioralAnswer)) {
     return formatBehavioralAnswer(response.behavioralAnswer);
   }

@@ -150,6 +150,12 @@ ANSWER SHAPE: ${intentResult.answerShape}
         const behavioralPromptRequested = intentResult?.intent === 'behavioral'
             || /QUESTION_MODE:\s*behavioral/i.test(cleanedTranscript)
             || isBehavioralQuestionText(question);
+        const liveCodingPromptRequested = Boolean(imagePaths?.length)
+            && (
+                intentResult?.intent === 'coding'
+                || /QUESTION_MODE:\s*live_coding/i.test(cleanedTranscript)
+                || /(write|implement|debug|fix|refactor|function|typescript|javascript|python|java|sql|query|code|snippet|algorithm|console|output)/i.test(question)
+            );
 
         const contextParts: string[] = [
             `QUESTION: ${question}`,
@@ -162,7 +168,7 @@ ANSWER SHAPE: ${intentResult.answerShape}
                     intentHint = 'This is a behavioral question. Tell one concrete story, own it with "I".';
                     break;
                 case 'coding':
-                    intentHint = 'This is a coding question. Code first, explain briefly after.';
+                    intentHint = 'This is a coding question. For a fresh problem, use the mandatory A/B/C/D interview structure with brute force and optimized code.';
                     break;
                 case 'deep_dive':
                     intentHint = 'They want more detail on the same topic. Go deeper, don\'t start a new topic.';
@@ -174,6 +180,18 @@ ANSWER SHAPE: ${intentResult.answerShape}
                     intentHint = 'Answer directly. Keep it short and conversational.';
             }
             contextParts.push(intentHint);
+        }
+
+        if (liveCodingPromptRequested) {
+            contextParts.push([
+                'LIVE_CODING_SCREENSHOT_TURN: true',
+                'STRICT LIVE-CODING OUTPUT CONTRACT:',
+                '- Return codingInterviewAnswer with all required nested fields.',
+                '- The visible answer must follow exactly: A. Problem Understanding, B. Brute Force Approach, C. Optimized Approach, D. Tradeoffs & Interview Reasoning.',
+                '- Include full brute force code and full optimized code.',
+                '- Include time and space complexity plus reasoning for both approaches.',
+                '- Use prior conversation context to avoid contradicting earlier solutions.',
+            ].join('\n'));
         }
 
         if (temporalContext?.hasRecentResponses) {

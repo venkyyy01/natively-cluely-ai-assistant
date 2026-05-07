@@ -38,7 +38,7 @@ test('ConsciousAnswerPlanner selects metric_backed_answer for metric probes', ()
   assert.equal(plan.answerShape, 'metric_backed_answer');
 });
 
-test('ConsciousAnswerPlanner emits code-first delivery hints for live coding questions', () => {
+test('ConsciousAnswerPlanner emits mandatory interview structure for live coding questions', () => {
   const planner = new ConsciousAnswerPlanner();
   const plan = planner.plan({
     question: 'Write the debounce function in TypeScript.',
@@ -47,12 +47,14 @@ test('ConsciousAnswerPlanner emits code-first delivery hints for live coding que
   });
 
   assert.equal(plan.questionMode, 'live_coding');
-  assert.equal(plan.deliveryFormat, 'code_first_or_short_steps');
-  assert.equal(plan.deliveryStyle, 'compact_technical');
-  assert.ok(plan.maxWords <= 70);
+  assert.equal(plan.deliveryFormat, 'mandatory_interview_coding_structure');
+  assert.equal(plan.deliveryStyle, 'structured_senior_candidate');
+  assert.ok(plan.maxWords >= 260);
+  assert.ok(plan.focalFacets.includes('codingInterviewAnswer'));
   assert.ok(plan.focalFacets.includes('codeTransition'));
   assert.match(planner.buildContextBlock(plan), /QUESTION_MODE: live_coding/);
-  assert.match(planner.buildContextBlock(plan), /DELIVERY_FORMAT: code_first_or_short_steps/);
+  assert.match(planner.buildContextBlock(plan), /DELIVERY_FORMAT: mandatory_interview_coding_structure/);
+  assert.match(planner.buildContextBlock(plan), /A\/B\/C\/D interview structure/);
 });
 
 test('ConsciousAnswerPlanner converts behavioral questions into short grounded narrative hints', () => {
@@ -85,7 +87,20 @@ test('ConsciousAnswerPlanner uses strong coding intent to force live-coding mode
   });
 
   assert.equal(plan.questionMode, 'live_coding');
-  assert.equal(plan.deliveryFormat, 'code_first_or_short_steps');
+  assert.equal(plan.deliveryFormat, 'mandatory_interview_coding_structure');
+});
+
+test('ConsciousAnswerPlanner uses screenshot-backed live coding to force live-coding mode', () => {
+  const planner = new ConsciousAnswerPlanner();
+  const plan = planner.plan({
+    question: 'Can you show me how you would approach this?',
+    reaction: null,
+    hypothesis: null,
+    forceLiveCoding: true,
+  });
+
+  assert.equal(plan.questionMode, 'live_coding');
+  assert.equal(plan.deliveryFormat, 'mandatory_interview_coding_structure');
 });
 
 test('ConsciousAnswerPlanner uses strong deep-dive intent to force system-design mode', () => {

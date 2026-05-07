@@ -57,8 +57,7 @@ export class AnswerLLM {
             async () => {
                 const message = [
                     'STRUCTURED_REASONING_RESPONSE',
-                    'Return JSON with keys: mode, openingReasoning, implementationPlan, tradeoffs, edgeCases, scaleConsiderations, pushbackResponses, likelyFollowUps, codeTransition.',
-                    'Set mode to reasoning_first.',
+                    CONSCIOUS_MODE_JSON_RESPONSE_INSTRUCTIONS,
                     `QUESTION: ${question}`,
                 ].join('\n\n');
                 

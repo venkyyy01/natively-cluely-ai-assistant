@@ -83,10 +83,13 @@ export class ConsciousAnswerPlanner {
     hypothesis?: AnswerHypothesis | null;
     preferenceSummary?: ConsciousPlannerPreferenceSummary | null;
     intentResult?: IntentResult | null;
+    forceLiveCoding?: boolean;
   }): ConsciousAnswerPlan {
     const reaction = input.reaction;
     const focalFacets = reaction?.targetFacets?.length ? reaction.targetFacets : input.hypothesis?.targetFacets || [];
-    const questionMode = detectQuestionModeFromIntent(input.intentResult) ?? detectConsciousQuestionMode(input.question);
+    const questionMode = input.forceLiveCoding
+      ? 'live_coding'
+      : detectQuestionModeFromIntent(input.intentResult) ?? detectConsciousQuestionMode(input.question);
     const buildPlan = (plan: Omit<ConsciousAnswerPlan, 'questionMode' | 'deliveryFormat' | 'deliveryStyle' | 'groundingHint'>): ConsciousAnswerPlan => {
       const modeAdjusted: ConsciousAnswerPlan = {
         ...plan,
@@ -101,12 +104,12 @@ export class ConsciousAnswerPlanner {
         case 'live_coding':
           return {
             ...modeAdjusted,
-            focalFacets: uniqueFacets([...modeAdjusted.focalFacets, 'implementationPlan', 'codeTransition']),
-            maxWords: Math.min(modeAdjusted.maxWords, 50),
-            deliveryFormat: 'code_first_or_short_steps',
-            deliveryStyle: 'compact_technical',
-            groundingHint: 'Keep it short. Show the code, explain briefly. Don\'t narrate every line.',
-            rationale: `${modeAdjusted.rationale} Live-coding — code-first, stay compact, no lectures.`,
+            focalFacets: uniqueFacets([...modeAdjusted.focalFacets, 'codingInterviewAnswer', 'implementationPlan', 'codeTransition']),
+            maxWords: Math.max(modeAdjusted.maxWords, 900),
+            deliveryFormat: 'mandatory_interview_coding_structure',
+            deliveryStyle: 'structured_senior_candidate',
+            groundingHint: 'For a fresh coding problem, use exactly A. Problem Understanding, B. Brute Force Approach, C. Optimized Approach, D. Tradeoffs & Interview Reasoning. Include full brute force and optimized code plus time and space reasoning for both. For follow-ups, answer only the follow-up and reuse prior context.',
+            rationale: `${modeAdjusted.rationale} Live-coding — mandatory interview structure with problem understanding, brute force, optimized solution, and tradeoffs.`,
           };
         case 'system_design':
           return {
@@ -228,7 +231,7 @@ export class ConsciousAnswerPlanner {
           maxWords = Math.min(maxWords, 60);
           break;
         case 'live_coding':
-          maxWords = Math.min(maxWords, 40);
+          maxWords = Math.max(maxWords, 900);
           break;
         default:
           maxWords = Math.min(maxWords, 45);
@@ -302,7 +305,7 @@ export class ConsciousAnswerPlanner {
 
   private describeMode(mode: ConsciousAnswerPlan['questionMode']): string {
     switch (mode) {
-      case 'live_coding': return 'Live coding — give code first, explain after. Stay compact.';
+      case 'live_coding': return 'Live coding — for a fresh problem, use the exact A/B/C/D interview structure with full brute-force and optimized code. For follow-ups, reuse prior context and answer only the probe.';
       case 'system_design': return 'System design — talk through your thinking like you\'re whiteboarding with a friend.';
       case 'behavioral': return 'Behavioral — tell one real story, own your work, don\'t just list achievements.';
       default: return '';
@@ -311,6 +314,7 @@ export class ConsciousAnswerPlanner {
 
   private describeStyle(style: string): string {
     switch (style) {
+      case 'structured_senior_candidate': return 'Structured, senior, interview-ready. Explain before coding, then compare brute force and optimized approaches.';
       case 'compact_technical': return 'Short, technical, code-first. Like talking to a teammate at your desk.';
       case 'conversational_architect': return 'Think out loud. Like explaining to a colleague over coffee, not presenting slides.';
       case 'conversational_first_person': return 'Natural first-person. Like you\'re actually in the room talking.';
