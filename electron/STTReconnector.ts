@@ -119,7 +119,7 @@ export class STTReconnector extends EventEmitter {
     }
 
     const attempt = retryCount + 1;
-    const delayMs = this.baseDelayMs * (2 ** retryCount);
+    const delayMs = retryCount === 0 ? 0 : this.baseDelayMs * (2 ** (retryCount - 1));
     this.retryCounts.set(speaker, attempt);
     this.emit('reconnecting', { speaker, attempt, delayMs });
 

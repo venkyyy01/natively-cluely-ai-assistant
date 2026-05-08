@@ -474,7 +474,7 @@ export class ConsciousOrchestrator {
     const hasReliableIntent = routedIntentResult ? isReliableIntent(routedIntentResult) : false;
     const shouldForceStandardRoute = Boolean(
       routedIntentResult
-      && preRouteDecision.threadAction !== 'continue'
+      && !preRouteDecision.qualifies
       && !hasReliableIntent
       && !circuitOpen
     );
