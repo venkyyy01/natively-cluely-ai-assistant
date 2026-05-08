@@ -23,6 +23,7 @@ if (process.env.NATIVELY_DEFAULT_STEALTH === '1') {
 /** @type {import('electron-builder').Configuration} */
 module.exports = {
   appId: 'com.electron.meeting-notes',
+  npmRebuild: true,
   afterPack: './scripts/ad-hoc-sign.js',
   productName: baseProductName,
   files: [

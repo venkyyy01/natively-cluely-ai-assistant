@@ -66,6 +66,7 @@ export class DatabaseManager {
     private dbPath: string;
     private migrationBackupPath: string;
     private resolvedExtPath: string = '';
+    private initError: Error | null = null;
 
     private constructor() {
         const userDataPath = app.getPath('userData');
@@ -86,8 +87,17 @@ export class DatabaseManager {
         return this.dbPath;
     }
 
+    public isAvailable(): boolean {
+        return this.db !== null;
+    }
+
+    public getInitializationError(): Error | null {
+        return this.initError;
+    }
+
     private init() {
         try {
+            this.initError = null;
             console.log(`[DatabaseManager] Initializing database at ${this.dbPath}`);
             // Ensure directory exists (though userData usually does)
             const dir = path.dirname(this.dbPath);
@@ -148,7 +158,16 @@ export class DatabaseManager {
             this.runMigrations();
         } catch (error) {
             console.error('[DatabaseManager] Failed to initialize database:', error);
-            throw error;
+            if (this.db) {
+                try {
+                    this.db.close();
+                } catch (closeError) {
+                    console.error('[DatabaseManager] Failed to close partially initialized database:', closeError);
+                }
+            }
+            this.db = null;
+            this.resolvedExtPath = '';
+            this.initError = error instanceof Error ? error : new Error(String(error));
         }
     }
 

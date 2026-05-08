@@ -45,9 +45,19 @@ export function buildLogFilePath(): string {
     : path.join(os.tmpdir(), 'natively-preflight');
   return path.join(baseDir, 'Logs', `natively-${date}.log`);
 }
-const logFile = buildLogFilePath();
+let logFile = buildLogFilePath();
 export const LOG_MAX_SIZE_BYTES = 10 * 1024 * 1024; // 10MB
 export const LOG_ROTATION_COUNT = 3; // Keep 3 rotated files
+
+export function refreshLogFilePath(): void {
+  const nextLogFile = buildLogFilePath();
+  if (nextLogFile === logFile) {
+    return;
+  }
+
+  logFile = nextLogFile;
+  logDirEnsured = false;
+}
 
 const originalLog = console.log;
 const originalWarn = console.warn;

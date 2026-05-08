@@ -55,7 +55,7 @@
   },
   "build": {
     "appId": "com.electron.meeting-notes",
-    "npmRebuild": false,
+    "npmRebuild": true,
     "afterPack": "./scripts/ad-hoc-sign.js",
     "productName": "Natively",
     "files": [

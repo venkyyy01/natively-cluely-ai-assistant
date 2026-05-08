@@ -4,6 +4,7 @@ import { initializeIpcHandlers } from "../ipcHandlers"
 import { CredentialsManager } from "../services/CredentialsManager"
 import { OllamaManager } from '../services/OllamaManager'
 import { KeybindManager } from "../services/KeybindManager"
+import { refreshLogFilePath } from './logging'
 import { initRedactorWithUserDataPath } from '../stealth/logRedactor'
 import { installConsoleRedactor } from '../stealth/consoleRedactor'
 import {
@@ -33,6 +34,8 @@ export async function initializeApp() {
 
   // 2. Wait for app to be ready
   await app.whenReady()
+
+  refreshLogFilePath()
 
   // S-7: Initialize log redactor with userData path for dynamic redaction
   try {
