@@ -1154,7 +1154,7 @@ export class IntelligenceEngine extends EventEmitter {
                         }
 
                         this.emit('suggested_answer_token', chunk, question || 'inferred', confidence);
-                        return true;
+                        return !shouldSuppressVisibleWork();
                     };
                     let speculativeAnswer = speculativePreview.text;
                     for (const [index, chunk] of speculativePreview.chunks.entries()) {
@@ -1822,7 +1822,7 @@ export class IntelligenceEngine extends EventEmitter {
             };
 
             if (isRouteDirectorEnabled()) {
-                return await getRouteDirector().runTurn(
+                const result = await getRouteDirector().runTurn(
                     {
                         turnId: `wts-${requestSequence}`,
                         transcriptRevision: transcriptRevisionAtStart,
@@ -1832,8 +1832,16 @@ export class IntelligenceEngine extends EventEmitter {
                     },
                     executeWhatToSay,
                 );
+                if (result) {
+                    this.lastTriggerByCooldownKey.set(cooldownKey, Date.now());
+                }
+                return result;
             }
-            return await executeWhatToSay();
+            const result = await executeWhatToSay();
+            if (result) {
+                this.lastTriggerByCooldownKey.set(cooldownKey, Date.now());
+            }
+            return result;
 
         } catch (error) {
             if (whatToSayAbortController.signal.aborted || requestSequence !== this.activeWhatToSayRequestId) {

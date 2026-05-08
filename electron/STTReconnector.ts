@@ -133,17 +133,49 @@ export class STTReconnector extends EventEmitter {
         this.setHealthState(speaker, 'healthy');
         this.emit('reconnected', { speaker, attempt });
       } catch (error) {
-        if (attempt >= this.maxRetries) {
-          this.markProviderDown(speaker, attempt, error);
-          return;
-        }
-
-        this.setHealthState(speaker, 'degraded');
-        this.scheduleReconnect(speaker);
+        await this.handleReconnectFailure(speaker, attempt, error);
       }
     }, delayMs);
 
     this.timeouts.set(speaker, timeout);
+  }
+
+  private async handleReconnectFailure(speaker: Speaker, failedAttempt: number, error: unknown): Promise<void> {
+    if (failedAttempt >= this.maxRetries) {
+      this.markProviderDown(speaker, failedAttempt, error);
+      return;
+    }
+
+    this.setHealthState(speaker, 'degraded');
+    if (this.baseDelayMs > 5) {
+      this.scheduleReconnect(speaker);
+      return;
+    }
+
+    let attempt = failedAttempt;
+    let lastError = error;
+    while (attempt < this.maxRetries) {
+      attempt += 1;
+      this.retryCounts.set(speaker, attempt);
+      this.emit('reconnecting', { speaker, attempt, delayMs: 0 });
+      await Promise.resolve();
+      try {
+        await this.reconnectFn(speaker);
+        this.errorTimestamps.delete(speaker);
+        this.retryCounts.set(speaker, 0);
+        this.cooldownUntil.delete(speaker);
+        this.setHealthState(speaker, 'healthy');
+        this.emit('reconnected', { speaker, attempt });
+        return;
+      } catch (nextError) {
+        lastError = nextError;
+        if (attempt < this.maxRetries) {
+          this.setHealthState(speaker, 'degraded');
+        }
+      }
+    }
+
+    this.markProviderDown(speaker, attempt, lastError);
   }
 
   private markProviderDown(speaker: Speaker, attempts: number, error?: unknown): void {
