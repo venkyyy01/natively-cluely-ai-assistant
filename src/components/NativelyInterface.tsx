@@ -2106,6 +2106,9 @@ Provide only the answer, nothing else.`;
                 scrollContainerRef.current?.scrollBy({ top: -100, behavior: 'smooth' });
             } else if (actionId === 'chat:scrollDown') {
                 scrollContainerRef.current?.scrollBy({ top: 100, behavior: 'smooth' });
+            } else if (actionId === 'general:process-screenshots') {
+                // STEALTH: Cmd+Enter is now a global shortcut — handle it here
+                handlersRef.current.handleWhatToSay();
             }
         });
 

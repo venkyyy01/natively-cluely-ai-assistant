@@ -17,9 +17,9 @@ export const DEFAULT_KEYBINDS: KeybindConfig[] = [
   { id: 'general:toggle-visibility', label: 'Toggle Visibility', accelerator: 'Command+Alt+Shift+V', alternateAccelerators: ['F13'], isGlobal: true, defaultAccelerator: 'Command+Alt+Shift+V' },
   { id: 'general:toggle-clickthrough', label: 'Toggle Clickthrough', accelerator: 'Command+Shift+M', alternateAccelerators: ['Command+Alt+Shift+M'], isGlobal: true, defaultAccelerator: 'Command+Shift+M' },
   { id: 'general:restore-full-stealth', label: 'Restore Full Stealth', accelerator: 'Shift+Esc', isGlobal: true, defaultAccelerator: 'Shift+Esc' },
-    { id: 'general:process-screenshots', label: 'Process Screenshots', accelerator: 'CommandOrControl+Enter', isGlobal: false, defaultAccelerator: 'CommandOrControl+Enter' },
+    { id: 'general:process-screenshots', label: 'Process Screenshots', accelerator: 'CommandOrControl+Enter', isGlobal: true, defaultAccelerator: 'CommandOrControl+Enter' },
     { id: 'general:reset-cancel', label: 'Reset / Cancel', accelerator: 'CommandOrControl+R', isGlobal: false, defaultAccelerator: 'CommandOrControl+R' },
-    { id: 'general:take-screenshot', label: 'Take Screenshot', accelerator: 'Command+Alt+Shift+S', alternateAccelerators: ['F14'], isGlobal: true, defaultAccelerator: 'Command+Alt+Shift+S' },
+    { id: 'general:take-screenshot', label: 'Take Screenshot', accelerator: 'Command+Alt+Shift+S', alternateAccelerators: ['F14', 'Command+Shift+S'], isGlobal: true, defaultAccelerator: 'Command+Alt+Shift+S' },
     { id: 'general:selective-screenshot', label: 'Selective Screenshot', accelerator: 'Command+Alt+Shift+A', alternateAccelerators: ['F15'], isGlobal: true, defaultAccelerator: 'Command+Alt+Shift+A' },
 
     // Chat - Window Local (Handled via Menu or Renderer logic, but centralized here)

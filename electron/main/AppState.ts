@@ -421,6 +421,13 @@ keybindManager.onShortcutTriggered(async (actionId) => {
               preview
             });
           }
+        } else if (actionId === 'general:process-screenshots') {
+          // STEALTH: Cmd+Enter is now a global shortcut so it never reaches browsers.
+          // Forward to renderer to trigger the existing processing logic.
+          const mainWindow = this.getMainWindow();
+          if (mainWindow) {
+            mainWindow.webContents.send('global-shortcut-action', actionId);
+          }
         } else if (actionId === 'chat:scrollUp' || actionId === 'chat:scrollDown') {
           const mainWindow = this.getMainWindow();
           if (mainWindow) {
