@@ -81,6 +81,7 @@ test('WindowHelper centers overlay using the overlay height', async () => {
       setFocusable() {},
       blur() {},
       show() {},
+      showInactive() {},
       focus() {},
       setAlwaysOnTop() {},
     };
@@ -209,6 +210,7 @@ test('WindowHelper reveals the direct launcher after did-finish-load when a show
       setOpacity(): void {}
       hide(): void {}
       show(): void {}
+      showInactive(): void {}
       focus(): void {}
       setIgnoreMouseEvents(): void {}
       setFocusable(): void {}
@@ -236,6 +238,7 @@ test('WindowHelper reveals the direct launcher after did-finish-load when a show
 
     const overlayWindow = new FakeWindow();
     overlayWindow.show = () => {};
+    overlayWindow.showInactive = () => {};
     overlayWindow.focus = () => {};
     overlayWindow.setBounds = () => {};
     overlayWindow.hide = () => {};
@@ -300,6 +303,7 @@ test('WindowHelper blocks startup launcher reveal in strict mode when verificati
       setOpacity(): void {}
       hide(): void {}
       show(): void {}
+      showInactive(): void {}
       focus(): void {}
       setIgnoreMouseEvents(): void {}
       setFocusable(): void {}

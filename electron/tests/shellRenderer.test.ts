@@ -108,6 +108,7 @@ test('mountStealthShell hides loading indicator after the first frame', () => {
         notifyHeartbeat() {
           heartbeatCount += 1;
         },
+        sendShortcutAction() {},
       },
       {
         getElementById(id: string) {

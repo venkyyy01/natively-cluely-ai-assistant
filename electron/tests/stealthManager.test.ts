@@ -167,7 +167,7 @@ describe('StealthManager', () => {
   it('records observe-only protection violations without blocking application', () => {
     const win = new FakeWindow();
     win.visible = true;
-    const manager = new StealthManager({ enabled: true }, { platform: 'darwin', logger: silentLogger, nativeModule: null, macosVersion: { major: 14, minor: 5 } });
+    const manager = new StealthManager({ enabled: true }, { platform: 'win32', logger: silentLogger, nativeModule: null });
 
     manager.applyToWindow(win as any, true, { role: 'primary' });
 
@@ -187,7 +187,7 @@ describe('StealthManager', () => {
 
     manager.applyToWindow(win as any, true, { role: 'auxiliary' });
 
-    assert.deepStrictEqual(win.contentProtectionCalls, [true]);
+    assert.deepStrictEqual(win.contentProtectionCalls, []);
     assert.deepStrictEqual(win.skipTaskbarCalls, [true]);
     assert.deepStrictEqual(win.hiddenInMissionControlCalls, [true]);
     assert.deepStrictEqual(win.excludedFromShownWindowsMenuCalls, [true]);

@@ -18,6 +18,9 @@ const bridge: StealthShellBridge = {
   notifyHeartbeat() {
     ipcRenderer.send('stealth-shell:heartbeat');
   },
+  sendShortcutAction(actionId: string) {
+    ipcRenderer.send('stealth-shell:shortcut', actionId);
+  },
 };
 
 contextBridge.exposeInMainWorld('stealthShell', bridge);

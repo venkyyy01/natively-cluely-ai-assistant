@@ -711,14 +711,18 @@ export class StealthManager extends EventEmitter {
     // setContentProtection is safe for capture tool windows though.
     const isMacOS15Plus = this.isMacOSVersionCompatible('15.0');
     const isCaptureTool = (win as any)._isCaptureToolWindow === true;
-    if (!isMacOS15Plus || isCaptureTool) {
+    // WindowType is an internal property on the wrapper, or we can look at win.constructor.name but
+    // a simpler check is to just skip setContentProtection completely on macOS for the primary UI
+    // since setExcludeFromCapture + native CGS isolation handles the stealth without the black screen bug.
+    // The black screen bug affects macOS 15+ generally, and ALL versions if type: 'panel' is used.
+    if (this.platform !== 'darwin' || isCaptureTool) {
       try {
         win.setContentProtection(enable);
       } catch (error) {
         this.logger.warn('[StealthManager] setContentProtection failed:', error);
       }
     } else {
-      this.logger.log('[StealthManager] macOS 15+ — skipping setContentProtection on primary UI window to avoid black screen');
+      this.logger.log('[StealthManager] macOS — skipping setContentProtection on primary UI window to avoid black screen (using excludeFromCapture + native layers)');
     }
 
     // setExcludeFromCapture is safe on all platforms.

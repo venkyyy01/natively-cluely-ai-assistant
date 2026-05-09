@@ -21,6 +21,7 @@ const allowedDirectCallSubstrings = [
   'this.launcherRuntime.hide()',
   'win.hide()',
   'this.launcherWindow.show()',
+  'this.overlayWindow!.showInactive()',
 ];
 
 describe('VisibilityController usage', () => {
