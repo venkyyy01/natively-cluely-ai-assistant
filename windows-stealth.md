@@ -26,9 +26,12 @@ Since the Electron renderer won't receive native focus events, we must manually 
 2. The Main Process forwards these keys to the React renderer via `webContents.send('injected-keystroke', key)`.
 3. A React hook listens for these IPC messages and manually appends the characters to our chat/input state, completely bypassing DOM focus mechanics.
 
-### Phase 4: Invisible Cursor (Optional but Recommended)
-When interacting with the overlay, the user's cursor technically still belongs to the browser.
-1. When the mouse enters the overlay bounds, the native hook can temporarily hide the OS cursor and render a fake "software cursor" inside the React app. This prevents the browser from detecting hovering over non-browser elements.
+### Phase 4: Invisible Cursor & Software Cursor (Mandatory for Screen Share Stealth)
+When interacting with the overlay via mouse, the user's hardware cursor technically still belongs to the OS and is captured in screen shares, which looks highly suspicious (cursor moving and clicking on empty space).
+1. When the native hook detects the mouse entering the overlay bounds, it uses OS APIs (`SetCursor(NULL)` or equivalent) to hide the hardware cursor.
+2. The hook constantly sends the X/Y coordinates to the Electron Main Process via IPC.
+3. The React app reads the coordinates and renders a fake "Software Cursor" (an SVG or image).
+4. Because the Natively overlay is excluded from capture, the Software Cursor is completely invisible to the proctor, and the hardware cursor appears frozen outside the bounds!
 
 ---
 

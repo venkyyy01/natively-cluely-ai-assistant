@@ -163,3 +163,26 @@ React `onChange` events on `<input>` elements do not fire if the element isn't f
 - [ ] User can type into the Natively overlay on Windows 11.
 - [ ] Text renders correctly.
 - [ ] Browser completely ignores the typing and maintains focus.
+
+---
+
+## 3. Sprint C — Visual Mouse Stealth (1 Week)
+
+### TWS-005 — Full Stack: Invisible Hardware Cursor & Software Cursor
+- **Severity**: P1
+- **Subsystem**: full-stack
+- **Owner**: agentic_worker
+- **Order**: depends on TWS-003 and TWS-004
+
+#### Problem
+If the user moves the mouse into the overlay, the native OS hardware cursor is composite-rendered in screen captures, looking like the user is clicking empty space.
+
+#### Proposed change
+1. **Native (`windowsNativeBindings.rs`)**: When `WH_MOUSE_LL` detects the mouse entering the overlay bounds, hide the system cursor using `SetCursor(NULL)` or by confining it / sending invisible cursor handles. Send X/Y coordinates over IPC.
+2. **Electron (`WindowHelper.ts`)**: Route the X/Y coordinates to the React frontend.
+3. **Frontend (`SyntheticCursor.tsx`)**: Render a CSS/SVG cursor at the given X/Y coordinates. Ensure it has `pointer-events: none`.
+
+#### Acceptance criteria
+- [ ] When the mouse enters the overlay, the OS hardware cursor disappears.
+- [ ] A fake React cursor appears and tracks perfectly with the mouse movement.
+- [ ] Screen recordings only show the hardware cursor freezing at the edge of the overlay bounds.
