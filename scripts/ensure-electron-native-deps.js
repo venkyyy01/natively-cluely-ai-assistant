@@ -64,12 +64,10 @@ function getExpectedForgeMeta() {
   try {
     const electronPkg = require(path.join(rootDir, 'node_modules', 'electron', 'package.json'));
     const version = electronPkg.version || '';
-    const majorVersion = parseInt(version.split('.')[0], 10);
+    const nodeAbi = require('node-abi');
+    const abi = nodeAbi.getAbi(version, 'electron');
 
-    if (majorVersion >= 33) return `${osArch}--145`;
-    if (majorVersion >= 30) return `${osArch}--131`;
-    if (majorVersion >= 28) return `${osArch}--114`;
-    return null;
+    return `${osArch}--${abi}`;
   } catch {
     return null;
   }

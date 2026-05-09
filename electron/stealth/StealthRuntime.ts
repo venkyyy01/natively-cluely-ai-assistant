@@ -1,4 +1,5 @@
 import { BrowserWindow, app, ipcMain, type IpcMainEvent } from 'electron';
+import os from 'node:os';
 import path from 'node:path';
 
 import { FrameBridge } from './frameBridge';
@@ -106,6 +107,15 @@ export class StealthRuntime {
   private contentCrashWindowStart = 0;
   private static readonly MAX_CRASHES_PER_WINDOW = 3;
   private static readonly CRASH_WINDOW_MS = 60_000;
+
+  private isMacOS15OrNewer(): boolean {
+    if (process.platform !== 'darwin') {
+      return false;
+    }
+
+    const darwinMajor = Number.parseInt(os.release().split('.')[0] ?? '', 10);
+    return Number.isFinite(darwinMajor) && darwinMajor >= 24;
+  }
 
   constructor(options: StealthRuntimeOptions) {
     this.stealthManager = options.stealthManager;
@@ -242,12 +252,14 @@ export class StealthRuntime {
     // NAT-025: apply content protection before any load on both shell and content windows
     for (const win of [this.contentWindow, this.shellWindow]) {
       this.recordProtectionEvent('protection-apply-started', win, 'StealthRuntime.createPrimaryStealthSurface');
-      if (win && typeof (win as any).setContentProtection === 'function') {
+      if (win && typeof (win as any).setContentProtection === 'function' && !this.isMacOS15OrNewer()) {
         try {
           (win as any).setContentProtection(true);
         } catch (err) {
           this.logger.warn('[StealthRuntime] setContentProtection failed:', err);
         }
+      } else if (win && this.isMacOS15OrNewer()) {
+        this.logger.log('[StealthRuntime] macOS 15+ — skipping setContentProtection to avoid black UI surface');
       }
       if (win && typeof (win as any).setExcludeFromCapture === 'function') {
         try {
