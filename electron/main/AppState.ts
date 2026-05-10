@@ -241,7 +241,7 @@ const enableVirtualDisplayIsolation =
   !(process as NodeJS.Process & { mas?: boolean }).mas &&
   (
     isEnvFlagEnabled(process.env.NATIVELY_ENABLE_VIRTUAL_DISPLAY_ISOLATION) ??
-    (settingsManager.get('enableVirtualDisplayIsolation') ?? false)
+    (settingsManager.get('enableVirtualDisplayIsolation') ?? true)
   )
 
 this.virtualDisplayCoordinator =

@@ -9,7 +9,7 @@ function installElectronMock(): () => void {
   (Module as any)._load = function patchedLoad(request: string, parent: unknown, isMain: boolean) {
     if (request === 'electron') {
       return {
-        BrowserWindow: class BrowserWindow {},
+        BrowserWindow: class BrowserWindow { },
         screen: {
           getPrimaryDisplay: () => ({ workAreaSize: { width: 1440, height: 900 }, workArea: { x: 0, y: 0, width: 1440, height: 900 } }),
         },
@@ -17,7 +17,7 @@ function installElectronMock(): () => void {
           isPackaged: false,
           getAppPath: () => '/tmp/app',
         },
-        ipcMain: { on() {}, removeListener() {} },
+        ipcMain: { on() { }, removeListener() { } },
       };
     }
 
@@ -68,7 +68,7 @@ test('WindowHelper centers overlay using the overlay height', async () => {
 
   try {
     const { WindowHelper } = await import('../WindowHelper');
-    const helper = new WindowHelper({} as never, { applyToWindow() {}, reapplyAfterShow() {} } as never);
+    const helper = new WindowHelper({} as never, { applyToWindow() { }, reapplyAfterShow() { } } as never);
     let appliedBounds: { x: number; y: number; width: number; height: number } | null = null;
 
     (helper as any).overlayWindow = {
@@ -77,20 +77,20 @@ test('WindowHelper centers overlay using the overlay height', async () => {
       setBounds: (bounds: { x: number; y: number; width: number; height: number }) => {
         appliedBounds = bounds;
       },
-      setIgnoreMouseEvents() {},
-      setFocusable() {},
-      blur() {},
-      show() {},
-      showInactive() {},
-      focus() {},
-      setAlwaysOnTop() {},
+      setIgnoreMouseEvents() { },
+      setFocusable() { },
+      blur() { },
+      show() { },
+      showInactive() { },
+      focus() { },
+      setAlwaysOnTop() { },
     };
     (helper as any).overlayRuntime = {
-      applyStealth() {},
+      applyStealth() { },
     };
     (helper as any).launcherWindow = {
       isDestroyed: () => false,
-      hide() {},
+      hide() { },
     };
 
     helper.switchToOverlay();
@@ -113,7 +113,7 @@ test('WindowHelper can show and hide a direct launcher window when StealthRuntim
       applyToWindow(_win: unknown, enable: boolean, options: { role?: string }) {
         stealthCalls.push({ enable, role: options.role });
       },
-      reapplyAfterShow() {},
+      reapplyAfterShow() { },
     } as never);
 
     let launcherShown = 0;
@@ -128,7 +128,7 @@ test('WindowHelper can show and hide a direct launcher window when StealthRuntim
       show() { launcherShown += 1; },
       hide() { launcherHidden += 1; },
       focus() { launcherFocused += 1; },
-      setOpacity() {},
+      setOpacity() { },
     };
     (helper as any).overlayWindow = {
       isDestroyed: () => false,
@@ -155,7 +155,7 @@ test('WindowHelper defers direct launcher show requests until the renderer load 
 
   try {
     const { WindowHelper } = await import('../WindowHelper');
-    const helper = new WindowHelper({} as never, { applyToWindow() {}, reapplyAfterShow() {} } as never);
+    const helper = new WindowHelper({} as never, { applyToWindow() { }, reapplyAfterShow() { } } as never);
 
     let launcherShown = 0;
 
@@ -164,13 +164,13 @@ test('WindowHelper defers direct launcher show requests until the renderer load 
     (helper as any).launcherWindow = {
       isDestroyed: () => false,
       show() { launcherShown += 1; },
-      focus() {},
-      setOpacity() {},
-      hide() {},
+      focus() { },
+      setOpacity() { },
+      hide() { },
     };
     (helper as any).overlayWindow = {
       isDestroyed: () => false,
-      hide() {},
+      hide() { },
     };
 
     helper.switchToLauncher();
@@ -190,14 +190,14 @@ test('WindowHelper reveals the direct launcher after did-finish-load when a show
 
   try {
     const { WindowHelper } = await import('../WindowHelper');
-    const helper = new WindowHelper({} as never, { applyToWindow() {}, reapplyAfterShow() {} } as never);
+    const helper = new WindowHelper({} as never, { applyToWindow() { }, reapplyAfterShow() { } } as never);
 
     class FakeWebContents extends EventEmitter {
       executeJavaScript(): Promise<boolean> {
         return Promise.resolve(true);
       }
 
-      reloadIgnoringCache(): void {}
+      reloadIgnoringCache(): void { }
     }
 
     class FakeWindow extends EventEmitter {
@@ -207,23 +207,23 @@ test('WindowHelper reveals the direct launcher after did-finish-load when a show
         return false;
       }
 
-      setOpacity(): void {}
-      hide(): void {}
-      show(): void {}
-      showInactive(): void {}
-      focus(): void {}
-      setIgnoreMouseEvents(): void {}
-      setFocusable(): void {}
-      blur(): void {}
-      setVisibleOnAllWorkspaces(): void {}
-      setAlwaysOnTop(): void {}
-      setBounds(): void {}
+      setOpacity(): void { }
+      hide(): void { }
+      show(): void { }
+      showInactive(): void { }
+      focus(): void { }
+      setIgnoreMouseEvents(): void { }
+      setFocusable(): void { }
+      blur(): void { }
+      setVisibleOnAllWorkspaces(): void { }
+      setAlwaysOnTop(): void { }
+      setBounds(): void { }
 
       getBounds() {
         return { x: 0, y: 0, width: 600, height: 300 };
       }
 
-      close(): void {}
+      close(): void { }
     }
 
     let launcherShown = 0;
@@ -237,16 +237,16 @@ test('WindowHelper reveals the direct launcher after did-finish-load when a show
     };
 
     const overlayWindow = new FakeWindow();
-    overlayWindow.show = () => {};
-    overlayWindow.showInactive = () => {};
-    overlayWindow.focus = () => {};
-    overlayWindow.setBounds = () => {};
-    overlayWindow.hide = () => {};
+    overlayWindow.show = () => { };
+    overlayWindow.showInactive = () => { };
+    overlayWindow.focus = () => { };
+    overlayWindow.setBounds = () => { };
+    overlayWindow.hide = () => { };
 
     const appState = {
       getDisguise: () => 'none',
-      handleStealthRuntimeFault() {},
-      settingsWindowHelper: { reposition() {} },
+      handleStealthRuntimeFault() { },
+      settingsWindowHelper: { reposition() { } },
     };
 
     (helper as any).appState = appState;
@@ -255,7 +255,7 @@ test('WindowHelper reveals the direct launcher after did-finish-load when a show
       windowCreationCount += 1;
       return windowCreationCount === 1 ? launcherWindow : overlayWindow;
     };
-    (helper as any).loadDirectWindow = () => {};
+    (helper as any).loadDirectWindow = () => { };
     (helper as any).currentWindowMode = 'launcher';
 
     helper.createWindow();
@@ -290,7 +290,7 @@ test('WindowHelper blocks startup launcher reveal in strict mode when verificati
         return Promise.resolve(true);
       }
 
-      reloadIgnoringCache(): void {}
+      reloadIgnoringCache(): void { }
     }
 
     class FakeWindow extends EventEmitter {
@@ -300,23 +300,23 @@ test('WindowHelper blocks startup launcher reveal in strict mode when verificati
         return false;
       }
 
-      setOpacity(): void {}
-      hide(): void {}
-      show(): void {}
-      showInactive(): void {}
-      focus(): void {}
-      setIgnoreMouseEvents(): void {}
-      setFocusable(): void {}
-      blur(): void {}
-      setVisibleOnAllWorkspaces(): void {}
-      setAlwaysOnTop(): void {}
-      setBounds(): void {}
+      setOpacity(): void { }
+      hide(): void { }
+      show(): void { }
+      showInactive(): void { }
+      focus(): void { }
+      setIgnoreMouseEvents(): void { }
+      setFocusable(): void { }
+      blur(): void { }
+      setVisibleOnAllWorkspaces(): void { }
+      setAlwaysOnTop(): void { }
+      setBounds(): void { }
 
       getBounds() {
         return { x: 0, y: 0, width: 600, height: 300 };
       }
 
-      close(): void {}
+      close(): void { }
     }
 
     let launcherShown = 0;
@@ -332,8 +332,8 @@ test('WindowHelper blocks startup launcher reveal in strict mode when verificati
 
     const appState = {
       getDisguise: () => 'none',
-      handleStealthRuntimeFault() {},
-      settingsWindowHelper: { reposition() {} },
+      handleStealthRuntimeFault() { },
+      settingsWindowHelper: { reposition() { } },
       shouldStartRendererShielded: () => false,
       getVisibilityIntent: () => 'visible_app',
       setPrivacyShieldFault(key: string, reason: string) {
@@ -342,8 +342,8 @@ test('WindowHelper blocks startup launcher reveal in strict mode when verificati
     };
 
     const helper = new WindowHelper(appState as never, {
-      applyToWindow() {},
-      reapplyAfterShow() {},
+      applyToWindow() { },
+      reapplyAfterShow() { },
       verifyManagedWindows() {
         return false;
       },
@@ -356,7 +356,7 @@ test('WindowHelper blocks startup launcher reveal in strict mode when verificati
       windowCreationCount += 1;
       return windowCreationCount === 1 ? launcherWindow : overlayWindow;
     };
-    (helper as any).loadDirectWindow = () => {};
+    (helper as any).loadDirectWindow = () => { };
     (helper as any).currentWindowMode = 'launcher';
 
     helper.createWindow();
@@ -386,7 +386,7 @@ test('WindowHelper forwards stealth runtime heartbeat events to the registered l
 
   try {
     const { WindowHelper } = await import('../WindowHelper');
-    const helper = new WindowHelper({} as never, { applyToWindow() {}, reapplyAfterShow() {} } as never);
+    const helper = new WindowHelper({} as never, { applyToWindow() { }, reapplyAfterShow() { } } as never);
     let heartbeatCount = 0;
 
     helper.setStealthRuntimeHeartbeatListener(() => {
