@@ -614,10 +614,6 @@ export class WindowHelper {
     movable: true,
     skipTaskbar: this.overlayContentProtection, // CRITICAL: Hide from taskbar when privacy protection is active
     hasShadow: false, // Prevent shadow from adding perceived size/artifacts
-    // STEALTH: On macOS, NSPanel ('panel') does NOT activate the owning application
-    // when clicked or focused. This means Chrome/HackerRank never receive blur/focus
-    // events and proctoring scripts cannot detect overlay interaction.
-    ...(process.platform === 'darwin' ? { type: 'panel' as const } : {}),
   }
 
     if (useStealthRuntime) {
