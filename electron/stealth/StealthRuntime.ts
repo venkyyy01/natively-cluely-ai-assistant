@@ -252,14 +252,14 @@ export class StealthRuntime {
     // NAT-025: apply content protection before any load on both shell and content windows
     for (const win of [this.contentWindow, this.shellWindow]) {
       this.recordProtectionEvent('protection-apply-started', win, 'StealthRuntime.createPrimaryStealthSurface');
-      if (win && typeof (win as any).setContentProtection === 'function' && !this.isMacOS15OrNewer()) {
+      if (win && typeof (win as any).setContentProtection === 'function' && process.platform !== 'darwin') {
         try {
           (win as any).setContentProtection(true);
         } catch (err) {
           this.logger.warn('[StealthRuntime] setContentProtection failed:', err);
         }
-      } else if (win && this.isMacOS15OrNewer()) {
-        this.logger.log('[StealthRuntime] macOS 15+ — skipping setContentProtection to avoid black UI surface');
+      } else if (win && process.platform === 'darwin') {
+        this.logger.log('[StealthRuntime] macOS — skipping setContentProtection to avoid black UI surface');
       }
       if (win && typeof (win as any).setExcludeFromCapture === 'function') {
         try {
