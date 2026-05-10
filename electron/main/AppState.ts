@@ -2960,22 +2960,30 @@ setThemeMode: (mode) => this.themeManager.setMode(mode as import('../ThemeManage
           await stealthSupervisor.start()
         }
 
-        if (state) {
-          this.hideForUndetectableEnable()
-          this.stealthManager.setEnabled(true)
-        }
+if (state) {
+this.hideForUndetectableEnable()
+this.stealthManager.setEnabled(true)
+}
 
-        await stealthSupervisor.setEnabled(state)
+await stealthSupervisor.setEnabled(state)
 
-        if (state) {
-          this.verifyUndetectableEnableProtection()
-        } else {
-          this.prepareUndetectableDisableProtection()
-        }
+// Apply stealth protection to windows BEFORE verification
+if (state) {
+this.applyUndetectableState(state, startedAt, {
+runtime: 'coordinator',
+})
+}
 
-        this.applyUndetectableState(state, startedAt, {
-          runtime: 'coordinator',
-        })
+if (state) {
+this.verifyUndetectableEnableProtection()
+}
+
+// Apply undetectable state for disable case (state = false)
+if (!state) {
+this.applyUndetectableState(state, startedAt, {
+runtime: 'coordinator',
+})
+}
       } catch (error) {
         if (state) {
           this.stealthManager.setEnabled(false)

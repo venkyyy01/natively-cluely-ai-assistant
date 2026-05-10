@@ -506,18 +506,17 @@ export class WindowHelper {
         console.error('[WindowHelper] Failed to create BrowserWindow:', err);
         return;
       }
-    } else {
-      this.launcherRuntime = null
-      this.directLauncherLoaded = false
-      this.pendingDirectLauncherReveal = true
-      this.detachDirectLauncherBridgeMonitor?.()
-      this.detachDirectLauncherBridgeMonitor = null
-      this.launcherWindow = this.createDirectWindow(launcherSettings)
-      // FIX: Show window immediately to prevent invisible window issue
-      // this.setWindowOpacity(this.launcherWindow, 0, 'WindowHelper.createWindow.launcherInitial')
-      // this.requestWindowHide(this.launcherWindow, 'WindowHelper.createWindow.launcherInitial')
-      this.launcherWindow.show()
-      this.launcherContentWindow = this.launcherWindow
+} else {
+this.launcherRuntime = null
+this.directLauncherLoaded = false
+this.pendingDirectLauncherReveal = true
+this.detachDirectLauncherBridgeMonitor?.()
+this.detachDirectLauncherBridgeMonitor = null
+this.launcherWindow = this.createDirectWindow(launcherSettings)
+// Start hidden to prevent black screen - show after content loads
+this.setWindowOpacity(this.launcherWindow, 0, 'WindowHelper.createWindow.launcherInitial')
+this.requestWindowHide(this.launcherWindow, 'WindowHelper.createWindow.launcherInitial')
+this.launcherContentWindow = this.launcherWindow
 
       // NAT-SELF-HEAL: safety net — if bridge never settles, force reveal anyway
       let revealSafetyNet = attachRevealSafetyNet('Launcher', this.launcherWindow, () => {

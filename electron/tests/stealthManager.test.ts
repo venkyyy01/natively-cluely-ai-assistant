@@ -187,7 +187,7 @@ describe('StealthManager', () => {
 
     manager.applyToWindow(win as any, true, { role: 'auxiliary' });
 
-    assert.deepStrictEqual(win.contentProtectionCalls, []);
+    assert.deepStrictEqual(win.contentProtectionCalls, [true]);
     assert.deepStrictEqual(win.skipTaskbarCalls, [true]);
     assert.deepStrictEqual(win.hiddenInMissionControlCalls, [true]);
     assert.deepStrictEqual(win.excludedFromShownWindowsMenuCalls, [true]);
