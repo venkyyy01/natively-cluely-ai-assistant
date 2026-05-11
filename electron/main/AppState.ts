@@ -2682,6 +2682,12 @@ setThemeMode: (mode) => this.themeManager.setMode(mode as import('../ThemeManage
       return
     }
 
+    // If the window is not visible, show it first instead of sending toggle-expand to a hidden renderer
+    if (!this.isVisible()) {
+      this.showMainWindow()
+      return
+    }
+
     console.log(
       "Screenshots: ",
       this.screenshotHelper.getScreenshotQueue().length,
@@ -2963,34 +2969,43 @@ setThemeMode: (mode) => this.themeManager.setMode(mode as import('../ThemeManage
         }
 
         const stealthSupervisor = this.runtimeCoordinator.getSupervisor<StealthSupervisor>('stealth')
+
+        // Pre-disable stealthManager before starting supervisor on disable path.
+        // This prevents syncDelegateWithState() from auto-arming when the
+        // supervisor is idle but the delegate still reports enabled (e.g. after
+        // a prior fault left stealthManager in an inconsistent state).
+        if (!state) {
+          this.stealthManager.setEnabled(false)
+        }
+
         if (stealthSupervisor.getState() === 'idle') {
           await stealthSupervisor.start()
         }
 
-if (state) {
-this.hideForUndetectableEnable()
-this.stealthManager.setEnabled(true)
-}
+        if (state) {
+          this.hideForUndetectableEnable()
+          this.stealthManager.setEnabled(true)
+        }
 
-await stealthSupervisor.setEnabled(state)
+        await stealthSupervisor.setEnabled(state)
 
-if (state) {
-this.verifyUndetectableEnableProtection()
-}
+        if (state) {
+          this.verifyUndetectableEnableProtection()
+        }
 
-if (state) {
-this.applyUndetectableState(state, startedAt, {
-runtime: 'coordinator',
-})
-}
+        if (state) {
+          this.applyUndetectableState(state, startedAt, {
+            runtime: 'coordinator',
+          })
+        }
 
-// Apply undetectable state for disable case (state = false)
-if (!state) {
-this.prepareUndetectableDisableProtection()
-this.applyUndetectableState(state, startedAt, {
-runtime: 'coordinator',
-})
-}
+        // Apply undetectable state for disable case (state = false)
+        if (!state) {
+          this.prepareUndetectableDisableProtection()
+          this.applyUndetectableState(state, startedAt, {
+            runtime: 'coordinator',
+          })
+        }
       } catch (error) {
         if (state) {
           this.stealthManager.setEnabled(false)
@@ -3020,7 +3035,10 @@ runtime: 'coordinator',
       reason: 'undetectable_enable',
       windowRole: 'unknown',
     })
-    this.windowHelper.hideMainWindow()
+    // NOTE: We intentionally do NOT hide the main window here.
+    // Invisible mode means the window is invisible to screen shares and
+    // the dock (via setExcludeFromCapture + app.dock.hide), but it remains
+    // visible to the user so they can continue interacting with it.
     this.settingsWindowHelper.closeWindow()
     this.modelSelectorWindowHelper.hideWindow()
   }
@@ -3132,6 +3150,9 @@ runtime: 'coordinator',
         if (targetFocusWindow && !targetFocusWindow.isDestroyed() && targetFocusWindow.isVisible()) {
           targetFocusWindow.focus();
         }
+
+        // Ensure the main window is actually shown after exiting invisible mode
+        this.showMainWindow()
       }
 
       // Re-enable blur handling after the transition logic has settled

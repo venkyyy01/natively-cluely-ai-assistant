@@ -115,7 +115,8 @@
       "extendInfo": {
         "NSMicrophoneUsageDescription": "Natively needs microphone access to capture meeting audio and voice input.",
         "NSScreenCaptureUsageDescription": "Natively needs screen recording access so you can capture screenshots and analyze on-screen meeting content.",
-        "NSAppleEventsUsageDescription": "Natively needs automation access for desktop integrations you trigger from the app."
+        "NSAppleEventsUsageDescription": "Natively needs automation access for desktop integrations you trigger from the app.",
+        "LSMinimumSystemVersion": "15.0"
       },
       "target": [
         {

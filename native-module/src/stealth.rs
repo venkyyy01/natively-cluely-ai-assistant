@@ -73,10 +73,7 @@ mod macos {
         kCGWindowListOptionAll, kCGWindowName, kCGWindowNumber, kCGWindowOwnerName,
         kCGWindowOwnerPID, kCGWindowSharingState,
     };
-    use libc::{c_char, c_void, dlsym, size_t, sysctlbyname, RTLD_DEFAULT};
-
-type CGSMainConnectionIDFn = unsafe extern "C" fn() -> i32;
-type CGSSetWindowSharingStateFn = unsafe extern "C" fn(i32, i32, i32) -> i32;
+    use libc::{c_void, size_t, sysctlbyname};
 
 const K_CGS_DO_NOT_SHARE: i32 = 0;
 const K_CGS_NORMAL_SHARE: i32 = 1;
@@ -161,6 +158,28 @@ pub fn verify(window_number: u32) -> napi::Result<i32> {
         return Ok(0);
     }
     Ok(-1)
+}
+
+/// Verify the modern macOS capture-exclusion path.
+///
+/// Electron's BrowserWindow.setExcludeFromCapture(true) keeps the window
+/// visible locally while excluding it from ScreenCaptureKit captures. We
+/// verify the owning NSWindow still exists, then require CoreGraphics to
+/// either omit it from the shareable window list or report sharingState=0.
+pub fn verify_capture_exclusion(window_number: u32) -> napi::Result<bool> {
+    if find_window(window_number).is_none() {
+        return Ok(false);
+    }
+
+    let window_number_i32 = window_number as i32;
+    let matching_window = list_window_info()?
+        .into_iter()
+        .find(|window| window.window_number == window_number_i32);
+
+    Ok(match matching_window {
+        Some(window) => !window.is_on_screen || window.alpha <= 0.0 || window.sharing_state == 0,
+        None => true,
+    })
 }
 
     fn find_window(window_number: u32) -> Option<arc::R<ns::Window>> {
@@ -439,6 +458,10 @@ mod macos {
         Ok(-1)
     }
 
+    pub fn verify_capture_exclusion(_window_number: u32) -> napi::Result<bool> {
+        Ok(false)
+    }
+
     pub fn list_visible_windows() -> napi::Result<Vec<WindowInfo>> {
         Ok(Vec::new())
     }
@@ -447,6 +470,7 @@ mod macos {
         Ok(false)
     }
 
+    #[allow(dead_code)]
     pub fn get_running_processes() -> napi::Result<Vec<ProcessInfo>> {
         Ok(Vec::new())
     }
@@ -586,6 +610,7 @@ mod windows_impl {
         Ok(-1)
     }
 
+    #[allow(dead_code)]
     pub fn get_running_processes() -> napi::Result<Vec<ProcessInfo>> {
         Ok(Vec::new())
     }
@@ -619,6 +644,11 @@ pub fn set_macos_window_level(window_number: u32, level: i32) -> napi::Result<()
 #[napi]
 pub fn verify_macos_stealth_state(window_number: u32) -> napi::Result<i32> {
     macos::verify(window_number)
+}
+
+#[napi]
+pub fn verify_macos_capture_exclusion(window_number: u32) -> napi::Result<bool> {
+    macos::verify_capture_exclusion(window_number)
 }
 
 #[napi]

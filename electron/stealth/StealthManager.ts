@@ -69,6 +69,7 @@ export interface NativeStealthBindings {
   removeMacosPrivateWindowStealth?: (windowNumber: number) => void;
   setMacosWindowLevel?: (windowNumber: number, level: number) => void;
   verifyMacosStealthState?: (windowNumber: number) => number;
+  verifyMacosCaptureExclusion?: (windowNumber: number) => boolean;
   applyWindowsWindowStealth?: (handle: Buffer) => void;
   removeWindowsWindowStealth?: (handle: Buffer) => void;
   verifyWindowsStealthState?: (handle: Buffer) => number;
@@ -350,8 +351,8 @@ export class StealthManager extends EventEmitter {
     if (this.macosVersion) {
       this.macOSMajor = this.macosVersion.major;
       this.macOSMinor = this.macosVersion.minor;
-      this.isMacOS15Plus = this.macOSMajor > 15 || (this.macOSMajor === 15 && this.macOSMinor >= 4);
-      this.logger.log(`[StealthManager] macOS version (injected): ${this.macOSMajor}.${this.macOSMinor}, 15.4+ screen capture bypass: ${this.isMacOS15Plus}`);
+      this.isMacOS15Plus = this.isMacOSVersionCompatible('15.0');
+      this.logger.log(`[StealthManager] macOS version (injected): ${this.macOSMajor}.${this.macOSMinor}, 15+ capture exclusion: ${this.isMacOS15Plus}`);
       return;
     }
 
@@ -359,12 +360,11 @@ export class StealthManager extends EventEmitter {
       const { execSync } = require('child_process');
       const version = execSync('sw_vers -productVersion', { encoding: 'utf8' }).trim();
       const [major, minor = 0] = version.split('.').map((part: string) => Number.parseInt(part, 10) || 0);
-      this.isMacOS15Plus = major > 15 || (major === 15 && minor >= 4);
-      this.logger.log(`[StealthManager] macOS version: ${version}, 15.4+ screen capture bypass: ${this.isMacOS15Plus}`);
-      
       // Store parsed version for later checks
       this.macOSMajor = major;
       this.macOSMinor = minor;
+      this.isMacOS15Plus = this.isMacOSVersionCompatible('15.0');
+      this.logger.log(`[StealthManager] macOS version: ${version}, 15+ capture exclusion: ${this.isMacOS15Plus}`);
     } catch (error) {
       this.logger.warn('[StealthManager] Failed to detect macOS version:', error);
       this.isMacOS15Plus = false;
@@ -723,16 +723,32 @@ export class StealthManager extends EventEmitter {
       this.logger.log('[StealthManager] macOS 15+ — skipping setContentProtection on primary UI window to avoid black screen');
     }
 
-    // setExcludeFromCapture is safe on all platforms.
-    if (typeof win.setExcludeFromCapture === 'function') {
-      try {
-        win.setExcludeFromCapture(enable);
-        if (record) {
-          record.excludeFromCaptureApplied = enable;
-        }
-      } catch (error) {
-        this.logger.warn('[StealthManager] setExcludeFromCapture failed:', error);
+    if (record) {
+      record.excludeFromCaptureApplied = false;
+    }
+
+    if (typeof win.setExcludeFromCapture !== 'function') {
+      if (enable && isMacOS15Plus) {
+        this.addWarning('electron_capture_exclusion_unavailable');
       }
+      return;
+    }
+
+    try {
+      win.setExcludeFromCapture(enable);
+      if (record) {
+        record.excludeFromCaptureApplied = enable;
+      }
+      this.clearWarning('electron_capture_exclusion_unavailable');
+      this.clearWarning('electron_capture_exclusion_failed');
+    } catch (error) {
+      if (record) {
+        record.excludeFromCaptureApplied = false;
+      }
+      if (enable && isMacOS15Plus) {
+        this.addWarning('electron_capture_exclusion_failed');
+      }
+      this.logger.warn('[StealthManager] setExcludeFromCapture failed:', error);
     }
   }
 
@@ -1793,25 +1809,57 @@ for window in windows:
   verifyStealth(win: StealthCapableWindow): boolean {
     const record = this.managedWindowLookup.get(win as object);
     const isMacOS15Plus = this.platform === 'darwin' && this.isMacOSVersionCompatible('15.0');
-    if (isMacOS15Plus && record?.excludeFromCaptureApplied) {
+    if (isMacOS15Plus) {
+      const windowNumber = this.getMacosWindowNumber(win);
+      const nativeModule = this.getNativeModule();
       const virtualDisplayVerified = Boolean(
         this.featureFlags.enableVirtualDisplayIsolation &&
-        record.allowVirtualDisplayIsolation &&
-        record.virtualDisplayIsolationReady
+        record?.allowVirtualDisplayIsolation &&
+        record?.virtualDisplayIsolationReady
       );
-      this.clearWarning('stealth_verification_failed');
-      this.recordProtectionEvent('verification-passed', {
+      let nativeCaptureExclusionVerified = false;
+
+      if (typeof nativeModule?.verifyMacosCaptureExclusion !== 'function') {
+        if (this.isEnabled()) {
+          this.addWarning('native_capture_verifier_unavailable');
+        }
+      } else if (windowNumber !== null) {
+        try {
+          nativeCaptureExclusionVerified = nativeModule.verifyMacosCaptureExclusion(windowNumber);
+          this.clearWarning('native_capture_verifier_unavailable');
+          this.clearWarning('native_capture_verification_failed');
+        } catch (error) {
+          this.addWarning('native_capture_verification_failed');
+          this.logger.warn('[StealthManager] macOS capture-exclusion native verifier failed:', error);
+        }
+      }
+
+      const verified = Boolean(
+        record?.excludeFromCaptureApplied &&
+        windowNumber !== null &&
+        nativeCaptureExclusionVerified
+      );
+
+      if (!verified && this.isEnabled()) {
+        this.addWarning('stealth_verification_failed');
+        this.logger.warn('[StealthManager] macOS capture exclusion verification failed');
+      } else {
+        this.clearWarning('stealth_verification_failed');
+      }
+
+      this.recordProtectionEvent(verified ? 'verification-passed' : 'verification-failed', {
         ...this.getProtectionEventContext(win, {}, 'StealthManager.verifyStealth'),
         metadata: {
           platform: 'darwin',
-          sharingType: null,
+          windowNumber,
           privatePathVerified: false,
           virtualDisplayVerified,
-          electronCaptureExclusionVerified: true,
+          electronCaptureExclusionApplied: Boolean(record?.excludeFromCaptureApplied),
+          nativeCaptureExclusionVerified: verified,
           isMacOS15Plus,
         },
       });
-      return true;
+      return verified;
     }
 
     const nativeModule = this.getNativeModule();

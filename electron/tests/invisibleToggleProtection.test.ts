@@ -141,7 +141,6 @@ test('AppState strict invisible enable hides, protects, verifies, and does not c
 
     assert.deepEqual(calls, [
       'event:hide-requested:AppState.hideForUndetectableEnable',
-      'hideMainWindow',
       'hideSettings',
       'hideModelSelector',
       'syncProtection:true',
@@ -464,6 +463,7 @@ test('AppState serializes opposite invisible toggle targets without interleaving
       'setEnabled:true:end',
       'verifyEnable',
       'apply:true',
+      'syncProtection:false',
       'setEnabled:false:start',
       'setEnabled:false:end',
       'prepareDisable',

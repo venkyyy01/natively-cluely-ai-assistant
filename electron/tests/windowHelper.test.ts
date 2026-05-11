@@ -269,7 +269,7 @@ test('WindowHelper reveals the direct launcher after did-finish-load when a show
     assert.equal((helper as any).directLauncherLoaded, true);
     assert.equal((helper as any).pendingDirectLauncherReveal, false);
     assert.equal(launcherShown, 1);
-    assert.equal(launcherFocused, 1);
+    assert.equal(launcherFocused, 2);
   } finally {
     restoreElectron();
   }

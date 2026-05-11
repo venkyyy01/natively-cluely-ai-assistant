@@ -35,6 +35,7 @@ export declare function applyMacosPrivateWindowStealth(windowNumber: number): vo
 export declare function removeMacosPrivateWindowStealth(windowNumber: number): void
 export declare function setMacosWindowLevel(windowNumber: number, level: number): void
 export declare function verifyMacosStealthState(windowNumber: number): number
+export declare function verifyMacosCaptureExclusion(windowNumber: number): boolean
 export declare function applyWindowsWindowStealth(hwndBuffer: Buffer): void
 export declare function removeWindowsWindowStealth(hwndBuffer: Buffer): void
 export declare function verifyWindowsStealthState(hwndBuffer: Buffer): number

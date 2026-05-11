@@ -58,7 +58,15 @@ export function derivePrivacyShieldState(options: DerivePrivacyShieldStateOption
   }
 
   const warnings = options.warnings ?? [];
-  if ((options.captureProtectionEnabled ?? true) && hasCaptureRiskWarnings(warnings)) {
+  // When the user intentionally enables invisible mode (visible_safe_controls),
+  // setExcludeFromCapture already protects the window from screen capture.
+  // Rendering a black privacy shield in the renderer is redundant and makes
+  // the app unusable for the user.
+  if (
+    (options.captureProtectionEnabled ?? true) &&
+    hasCaptureRiskWarnings(warnings) &&
+    visibilityIntent !== 'visible_safe_controls'
+  ) {
     return {
       active: true,
       reason: CAPTURE_RISK_REASON,

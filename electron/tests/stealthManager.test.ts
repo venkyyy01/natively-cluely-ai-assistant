@@ -1397,6 +1397,9 @@ describe('StealthManager', () => {
           verifyMacosStealthState() {
             return 1; // sharingType non-zero — irrelevant on 15+ path
           },
+          verifyMacosCaptureExclusion() {
+            return true;
+          },
         },
         screenApi: {
           getAllDisplays() {
@@ -1440,6 +1443,9 @@ describe('StealthManager', () => {
           verifyMacosStealthState() {
             return 0;
           },
+          verifyMacosCaptureExclusion() {
+            return true;
+          },
         },
       }
     );
@@ -1450,7 +1456,7 @@ describe('StealthManager', () => {
     assert.ok(!manager.getStealthDegradationWarnings().includes('stealth_verification_failed'));
   });
 
-  it('does not require the native module for macOS 15+ Electron capture exclusion', () => {
+  it('requires native capture-exclusion verification on macOS 15+', () => {
     const win = new FakeWindow();
     const manager = new StealthManager(
       { enabled: true },
@@ -1464,10 +1470,33 @@ describe('StealthManager', () => {
 
     manager.applyToWindow(win as any, true, { role: 'primary' });
 
-    assert.strictEqual(manager.verifyStealth(win as any), true);
+    assert.strictEqual(manager.verifyStealth(win as any), false);
     assert.deepStrictEqual(win.contentProtectionCalls, []);
     assert.deepStrictEqual(win.excludeFromCaptureCalls, [true]);
-    assert.ok(!manager.getStealthDegradationWarnings().includes('native_module_unavailable'));
+    assert.ok(manager.getStealthDegradationWarnings().includes('native_module_unavailable'));
+    assert.ok(manager.getStealthDegradationWarnings().includes('stealth_verification_failed'));
+  });
+
+  it('fails macOS 15+ verification when capture exclusion is not active', () => {
+    const win = new FakeWindow();
+    const manager = new StealthManager(
+      { enabled: true },
+      {
+        platform: 'darwin',
+        logger: silentLogger,
+        macosVersion: { major: 15, minor: 4 },
+        nativeModule: {
+          verifyMacosCaptureExclusion() {
+            return false;
+          },
+        },
+      }
+    );
+
+    manager.applyToWindow(win as any, true, { role: 'primary' });
+
+    assert.strictEqual(manager.verifyStealth(win as any), false);
+    assert.ok(manager.getStealthDegradationWarnings().includes('stealth_verification_failed'));
   });
 
   // Windows taskbar toggle tests
