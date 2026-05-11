@@ -219,6 +219,12 @@ export class WindowHelper {
 
   private createDirectWindow(options: Electron.BrowserWindowConstructorOptions): BrowserWindow {
     const win = new BrowserWindow(options)
+    // S-RACE-1: apply Layer-0 capture protection synchronously, before any
+    // loadURL or show call can run. This closes the "born unprotected" race
+    // where the window briefly existed in the OS window list without
+    // setContentProtection / sharingType=.none. Subsequent applyStealth /
+    // applyContentProtection calls re-assert the same state idempotently.
+    this.stealthManager.applyInitialStealth(win, { role: 'primary', hideFromSwitcher: false })
     this.recordProtectionEvent('window-created', win, 'WindowHelper.createDirectWindow', 'unknown')
     return win
   }

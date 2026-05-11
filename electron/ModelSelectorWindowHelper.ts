@@ -176,6 +176,13 @@ private createWindow(x?: number, y?: number, showWhenReady: boolean = true): voi
         }
 
         this.window = new BrowserWindow(windowSettings)
+        // S-RACE-1: apply Layer-0 capture protection synchronously before any
+        // loadURL / setHiddenInMissionControl call so the window is born
+        // protected.
+        this.stealthManager.applyInitialStealth(this.window, {
+            role: 'auxiliary',
+            hideFromSwitcher: true,
+        })
         this.stealthManager.recordProtectionEvent('window-created', {
             source: 'ModelSelectorWindowHelper.createWindow',
             windowRole: 'auxiliary',

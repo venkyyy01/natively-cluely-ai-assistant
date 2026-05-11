@@ -249,23 +249,19 @@ export class StealthRuntime {
     this.frameBridge.attach(this.contentWindow.webContents as unknown as Parameters<FrameBridge['attach']>[0]);
     this.bindShellEvents();
 
-    // NAT-025: apply content protection before any load on both shell and content windows
+    // NAT-025: apply content protection before any load on both shell and content windows.
+    // setContentProtection maps to NSWindow.sharingType = .none on macOS (does
+    // NOT cause black UI — that was a misdiagnosis of a separate renderer
+    // PrivacyShield bug) and SetWindowDisplayAffinity on Windows.
+    // setExcludeFromCapture is not a real Electron BrowserWindow API so we
+    // only call setContentProtection.
     for (const win of [this.contentWindow, this.shellWindow]) {
       this.recordProtectionEvent('protection-apply-started', win, 'StealthRuntime.createPrimaryStealthSurface');
-      if (win && typeof (win as any).setContentProtection === 'function' && process.platform !== 'darwin') {
+      if (win && typeof (win as any).setContentProtection === 'function') {
         try {
           (win as any).setContentProtection(true);
         } catch (err) {
           this.logger.warn('[StealthRuntime] setContentProtection failed:', err);
-        }
-      } else if (win && process.platform === 'darwin') {
-        this.logger.log('[StealthRuntime] macOS — skipping setContentProtection to avoid black UI surface');
-      }
-      if (win && typeof (win as any).setExcludeFromCapture === 'function') {
-        try {
-          (win as any).setExcludeFromCapture(true);
-        } catch (err) {
-          this.logger.warn('[StealthRuntime] setExcludeFromCapture failed:', err);
         }
       }
       this.recordProtectionEvent('protection-apply-finished', win, 'StealthRuntime.createPrimaryStealthSurface');

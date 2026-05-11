@@ -160,7 +160,13 @@ test('AppState setUndetectableAsync clears the pending target state after a fail
     await assert.rejects(() => setUndetectableAsync.call(fakeState, true), /stealth helper unavailable/);
     await assert.rejects(() => setUndetectableAsync.call(fakeState, true), /stealth helper unavailable/);
 
-    assert.deepEqual(attempts, ['start', 'syncProtection:false', 'start', 'syncProtection:false']);
+    // S-CONCURRENCY-2: rollback now also calls applyUndetectableState(false,...)
+    // to walk AppState back to a consistent disabled state when invisible-mode
+    // enable fails.
+    assert.deepEqual(attempts, [
+      'start', 'syncProtection:false', 'apply',
+      'start', 'syncProtection:false', 'apply',
+    ]);
     assert.equal((fakeState as { pendingUndetectableState: boolean | null }).pendingUndetectableState, null);
   } finally {
     restoreElectron();

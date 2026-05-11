@@ -3008,8 +3008,25 @@ setThemeMode: (mode) => this.themeManager.setMode(mode as import('../ThemeManage
         }
       } catch (error) {
         if (state) {
+          // S-CONCURRENCY-2: rollback path for failed enable. Drop stealth,
+          // disable Layer-0 on all windows, and walk the AppState back to
+          // `isUndetectable=false` so persisted settings, privacy-shield
+          // state, and renderer broadcasts all agree the toggle was rejected.
+          // Without this, the AppState could be left believing invisible
+          // mode was on while every other surface said it was off.
           this.stealthManager.setEnabled(false)
-          this.syncWindowStealthProtection(false)
+          try {
+            this.applyUndetectableState(false, startedAt, {
+              runtime: 'coordinator',
+              rollback: true,
+              error: error instanceof Error ? error.message : String(error),
+            })
+          } catch (rollbackError) {
+            console.error('[Stealth] applyUndetectableState rollback failed:', rollbackError)
+            // Even if applyUndetectableState fails, ensure windows are not
+            // left in a half-protected state.
+            this.syncWindowStealthProtection(false)
+          }
           this.centerAndShowWindow()
         }
         throw error
@@ -3036,9 +3053,11 @@ setThemeMode: (mode) => this.themeManager.setMode(mode as import('../ThemeManage
       windowRole: 'unknown',
     })
     // NOTE: We intentionally do NOT hide the main window here.
-    // Invisible mode means the window is invisible to screen shares and
-    // the dock (via setExcludeFromCapture + app.dock.hide), but it remains
-    // visible to the user so they can continue interacting with it.
+    // Invisible mode means the window is invisible to screen capture
+    // (via setContentProtection -> NSWindowSharingNone on macOS, or
+    // SetWindowDisplayAffinity on Windows) and hidden from the dock /
+    // app switcher (via app.dock.hide() and Layer-1 UI hardening), but
+    // it remains fully visible to the user so they can keep interacting.
     this.settingsWindowHelper.closeWindow()
     this.modelSelectorWindowHelper.hideWindow()
   }

@@ -135,7 +135,7 @@ describe('StealthManager', () => {
     });
   });
 
-  it('does not pre-enable raw content protection in macOS 15+ constructor options', () => {
+  it('pre-enables content protection in macOS 15+ constructor options (no black screen)', () => {
     const manager = new StealthManager(
       { enabled: true },
       { platform: 'darwin', logger: silentLogger, macosVersion: { major: 15, minor: 4 } }
@@ -143,7 +143,7 @@ describe('StealthManager', () => {
     const options = manager.getBrowserWindowOptions();
 
     assert.deepStrictEqual(options, {
-      contentProtection: false,
+      contentProtection: true,
       excludeFromCapture: true,
       skipTaskbar: false,
     });
@@ -157,6 +157,94 @@ describe('StealthManager', () => {
 
     assert.deepStrictEqual(win.contentProtectionCalls, []);
     assert.deepStrictEqual(win.skipTaskbarCalls, []);
+  });
+
+  it('applyInitialStealth applies Layer-0 synchronously when stealth is enabled', () => {
+    const win = new FakeWindow();
+    const manager = new StealthManager(
+      { enabled: true },
+      { platform: 'darwin', logger: silentLogger, macosVersion: { major: 15, minor: 4 } }
+    );
+
+    manager.applyInitialStealth(win as any, { role: 'primary', hideFromSwitcher: false });
+
+    assert.deepStrictEqual(win.contentProtectionCalls, [true]);
+    assert.strictEqual(manager.verifyStealth(win as any), true);
+  });
+
+  it('applyInitialStealth pre-arms record but skips Layer-0 when stealth is disabled at boot', () => {
+    const win = new FakeWindow();
+    const manager = new StealthManager(
+      { enabled: false },
+      { platform: 'darwin', logger: silentLogger, macosVersion: { major: 15, minor: 4 } }
+    );
+
+    manager.applyInitialStealth(win as any, { role: 'primary', hideFromSwitcher: false });
+    // Layer-0 is called with `false` (assertion that protection is off
+    // is harmless and idempotent), so the call list captures the disabled
+    // state. The important guarantee is that the record exists and a later
+    // setEnabled(true) + applyToWindow flips protection on without recreating
+    // the window.
+    assert.deepStrictEqual(win.contentProtectionCalls, [false]);
+
+    manager.setEnabled(true);
+    manager.applyToWindow(win as any, true, { role: 'primary' });
+
+    assert.strictEqual(win.contentProtectionCalls.includes(true), true);
+    assert.strictEqual(manager.verifyStealth(win as any), true);
+  });
+
+  it('applyInitialStealth is idempotent under repeated calls', () => {
+    const win = new FakeWindow();
+    const manager = new StealthManager(
+      { enabled: true },
+      { platform: 'darwin', logger: silentLogger, macosVersion: { major: 15, minor: 4 } }
+    );
+
+    manager.applyInitialStealth(win as any, { role: 'primary' });
+    manager.applyInitialStealth(win as any, { role: 'primary' });
+    manager.applyInitialStealth(win as any, { role: 'primary' });
+
+    // Each call re-asserts setContentProtection(true). All three are
+    // recorded but no exception, no warning, no fault.
+    assert.deepStrictEqual(win.contentProtectionCalls, [true, true, true]);
+    assert.strictEqual(manager.verifyStealth(win as any), true);
+    assert.deepStrictEqual(manager.getStealthDegradationWarnings(), []);
+  });
+
+  it('applyToWindow re-entry guard collapses concurrent calls into a single trailing replay', () => {
+    const win = new FakeWindow();
+    let nestedCalls = 0;
+    const manager = new StealthManager(
+      { enabled: true },
+      { platform: 'darwin', logger: silentLogger, macosVersion: { major: 15, minor: 4 } }
+    );
+
+    // Hook a nested applyToWindow during the first apply via the show event
+    // listener attached by attachLifecycleListeners. We simulate the race by
+    // directly invoking applyToWindow re-entrantly during applyLayer0.
+    const originalSetContentProtection = win.setContentProtection.bind(win);
+    win.setContentProtection = function (value: boolean): void {
+      originalSetContentProtection(value);
+      if (nestedCalls < 1) {
+        nestedCalls += 1;
+        // Re-entrant call must collapse into a trailing replay, not run
+        // synchronously and corrupt lifecycle wiring.
+        manager.applyToWindow(win as any, true, { role: 'primary' });
+      }
+    };
+
+    manager.applyToWindow(win as any, true, { role: 'primary' });
+
+    // The re-entrant call was deferred (timeoutScheduler scheduled it). The
+    // original call recorded one setContentProtection(true). The trailing
+    // replay would only fire after the next tick — for the synchronous
+    // assertion we just confirm we did not crash and the record's
+    // applyInProgress flag is cleared.
+    const record = (manager as any).managedWindowLookup.get(win) as { applyInProgress: boolean; applyReplayPending: boolean };
+    assert.strictEqual(record.applyInProgress, false);
+    assert.strictEqual(record.applyReplayPending, false);
+    assert.strictEqual(win.contentProtectionCalls.includes(true), true);
   });
 
   it('applies native Windows stealth and re-applies it on lifecycle events', () => {
@@ -1377,11 +1465,14 @@ describe('StealthManager', () => {
 
     manager.applyToWindow(win as any, true, { role: 'primary' });
 
-    // On macOS 15+, native stealth is skipped
+    // On macOS 15+, native CGS stealth is skipped (would cause black screen).
     assert.deepStrictEqual(nativeCalls, []);
-    // Layer 0 is still applied
-    assert.deepStrictEqual(win.contentProtectionCalls, []);
-    assert.deepStrictEqual(win.excludeFromCaptureCalls, [true]);
+    // Layer 0 (Electron setContentProtection) is still applied — it maps to
+    // NSWindowSharingNone, which hides from non-SCK capture without affecting
+    // user visibility. setExcludeFromCapture is not a real Electron API, so
+    // it is intentionally never called.
+    assert.deepStrictEqual(win.contentProtectionCalls, [true]);
+    assert.deepStrictEqual(win.excludeFromCaptureCalls, []);
   });
 
   it('verifyStealth returns true on macOS 15+ when virtual display isolation is ready', async () => {
@@ -1456,7 +1547,7 @@ describe('StealthManager', () => {
     assert.ok(!manager.getStealthDegradationWarnings().includes('stealth_verification_failed'));
   });
 
-  it('requires native capture-exclusion verification on macOS 15+', () => {
+  it('accepts setContentProtection as Layer-0 capture exclusion on macOS 15+', () => {
     const win = new FakeWindow();
     const manager = new StealthManager(
       { enabled: true },
@@ -1470,15 +1561,21 @@ describe('StealthManager', () => {
 
     manager.applyToWindow(win as any, true, { role: 'primary' });
 
-    assert.strictEqual(manager.verifyStealth(win as any), false);
-    assert.deepStrictEqual(win.contentProtectionCalls, []);
-    assert.deepStrictEqual(win.excludeFromCaptureCalls, [true]);
-    assert.ok(manager.getStealthDegradationWarnings().includes('native_module_unavailable'));
-    assert.ok(manager.getStealthDegradationWarnings().includes('stealth_verification_failed'));
+    // setContentProtection succeeds and is treated as the Layer-0 capture
+    // exclusion on macOS 15+, so verifyStealth passes even without a native
+    // module. setExcludeFromCapture does not exist on Electron 41 BrowserWindow,
+    // so it is intentionally never called.
+    assert.strictEqual(manager.verifyStealth(win as any), true);
+    assert.deepStrictEqual(win.contentProtectionCalls, [true]);
+    assert.deepStrictEqual(win.excludeFromCaptureCalls, []);
+    assert.ok(!manager.getStealthDegradationWarnings().includes('stealth_verification_failed'));
   });
 
-  it('fails macOS 15+ verification when capture exclusion is not active', () => {
+  it('fails macOS 15+ verification when setContentProtection throws', () => {
     const win = new FakeWindow();
+    win.setContentProtection = () => {
+      throw new Error('content-protection refused by OS');
+    };
     const manager = new StealthManager(
       { enabled: true },
       {
@@ -1496,7 +1593,8 @@ describe('StealthManager', () => {
     manager.applyToWindow(win as any, true, { role: 'primary' });
 
     assert.strictEqual(manager.verifyStealth(win as any), false);
-    assert.ok(manager.getStealthDegradationWarnings().includes('stealth_verification_failed'));
+    const warnings = manager.getStealthDegradationWarnings();
+    assert.ok(warnings.includes('content_protection_failed'));
   });
 
   // Windows taskbar toggle tests

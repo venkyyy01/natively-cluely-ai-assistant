@@ -58,4 +58,8 @@ export interface ManagedWindowRecord {
   virtualDisplayIsolationReady: boolean;
   excludeFromCaptureApplied: boolean;
   privateMacosStealthApplied: boolean;
+  // Concurrency guards (S-CONCURRENCY-1): collapse re-entrant applyToWindow
+  // calls into a single trailing replay so lifecycle wiring can't race.
+  applyInProgress: boolean;
+  applyReplayPending: boolean;
 }

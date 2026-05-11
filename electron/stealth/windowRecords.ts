@@ -47,6 +47,8 @@ export function createManagedWindowRecord(
     virtualDisplayIsolationReady: false,
     excludeFromCaptureApplied: false,
     privateMacosStealthApplied: false,
+    applyInProgress: false,
+    applyReplayPending: false,
   };
   managedWindows.add(record);
   managedWindowLookup.set(win as object, record);

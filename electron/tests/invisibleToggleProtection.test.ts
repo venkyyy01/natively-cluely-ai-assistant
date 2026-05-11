@@ -148,8 +148,12 @@ test('AppState strict invisible enable hides, protects, verifies, and does not c
       'verifyProtection',
       'event:verification-failed:AppState.verifyUndetectableEnableProtection',
       'privacyFault:undetectable_enable_verification_failed',
+      // S-CONCURRENCY-2: rollback now goes through applyUndetectableState(false)
+      // for state consistency, replacing the second direct syncProtection
+      // call. The prior `syncWindowStealthProtection(false)` is only a
+      // fallback if applyUndetectableState itself throws.
       'syncProtection:false',
-      'syncProtection:false',
+      'apply:false',
       'centerAndShow',
     ]);
     assert.equal(fakeState.isUndetectable, false);
