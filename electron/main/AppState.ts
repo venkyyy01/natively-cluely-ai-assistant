@@ -23,7 +23,7 @@ import {
   detectExternalScreenShare,
   resolveSafeSystemAudioDeviceId,
 } from "../stealth/screenShareInterruptionGuard"
-import { derivePrivacyShieldState, hasCaptureRiskWarnings, type PrivacyShieldState, type VisibilityIntent } from "../stealth/privacyShieldState"
+import { derivePrivacyShieldState, hasStealthFaultWarnings, type PrivacyShieldState, type VisibilityIntent } from "../stealth/privacyShieldState"
 import { PrivacyShieldRecoveryController } from "../stealth/PrivacyShieldRecoveryController"
 import { isEnvFlagEnabled } from './logging'
 import { gracefulShutdown } from '../GracefulShutdownManager'
@@ -677,7 +677,12 @@ this.runtimeCoordinator.registerSupervisor(new StealthSupervisor(
     bus.subscribe('stealth:state-changed', async (event) => {
       if (event.to === 'FULL_STEALTH') {
         this.privacyShieldFaultReason = null
-        if (this.visibilityIntent === 'visible_app' || this.visibilityIntent === 'visible_safe_controls') {
+        if (this.isUndetectable) {
+          this.visibilityIntent = 'visible_safe_controls'
+          this.setContainmentActive(false, 'stealth_recovered')
+          this.syncWindowStealthProtection(true)
+          this.ensureVisibleSafeControls('stealth_recovered')
+        } else if (this.visibilityIntent === 'visible_app' || this.visibilityIntent === 'visible_safe_controls') {
           this.setContainmentActive(false, 'stealth_recovered')
         }
         this.syncPrivacyShieldState()
@@ -3062,6 +3067,36 @@ setThemeMode: (mode) => this.themeManager.setMode(mode as import('../ThemeManage
     this.modelSelectorWindowHelper.hideWindow()
   }
 
+  private ensureVisibleSafeControls(source: string, retries: number = 2): void {
+    if (!this.isUndetectable || this.visibilityIntent !== 'visible_safe_controls') {
+      return
+    }
+
+    this.syncWindowStealthProtection(true)
+    const visibleMainWindow = this.windowHelper.getVisibleMainWindow()
+    if (visibleMainWindow && !visibleMainWindow.isDestroyed() && visibleMainWindow.isVisible()) {
+      if (typeof visibleMainWindow.focus === 'function') {
+        visibleMainWindow.focus()
+      }
+      return
+    }
+
+    this.stealthManager.recordProtectionEvent('show-requested', {
+      source: `AppState.ensureVisibleSafeControls:${source}`,
+      reason: 'visible_safe_controls',
+      windowRole: 'primary',
+    })
+    this.centerAndShowWindow()
+
+    if (retries <= 0) {
+      return
+    }
+
+    this.scheduleDisguiseTimer(() => {
+      this.ensureVisibleSafeControls(source, retries - 1)
+    }, 100)
+  }
+
   private verifyUndetectableEnableProtection(): void {
     const verified = this.verifyStealthProtection()
     if (verified) {
@@ -3106,7 +3141,9 @@ setThemeMode: (mode) => this.themeManager.setMode(mode as import('../ThemeManage
   ): void {
     this.isUndetectable = state
     this.syncWindowStealthProtection(state || (!state && this.isStrictProtectionEnabled()))
-    if (!state) {
+    if (state) {
+      this.privacyShieldFaultReason = null
+    } else {
       this.clearPrivacyShieldFault()
     }
 
@@ -3196,6 +3233,10 @@ setThemeMode: (mode) => this.themeManager.setMode(mode as import('../ThemeManage
         this.windowHelper.setSkipTaskbar(false);
         this.showTray();
       }
+    }
+
+    if (state) {
+      this.ensureVisibleSafeControls('undetectable_enabled')
     }
   }
 
@@ -3293,9 +3334,10 @@ setThemeMode: (mode) => this.themeManager.setMode(mode as import('../ThemeManage
       return
     }
 
-    const shouldFault = hasCaptureRiskWarnings(warnings)
+    const shouldFault = hasStealthFaultWarnings(warnings)
 
     if (!shouldFault) {
+      this.syncWindowStealthProtection(true)
       return
     }
 

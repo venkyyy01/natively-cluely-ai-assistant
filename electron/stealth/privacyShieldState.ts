@@ -33,12 +33,28 @@ const CAPTURE_RISK_WARNINGS = new Set([
   'window_visible_to_capture',
 ]);
 
+const STEALTH_FAULT_WARNINGS = new Set([
+  'content_protection_failed',
+  'electron_capture_exclusion_failed',
+  'electron_capture_exclusion_unavailable',
+  'native_stealth_failed',
+  'private_api_failed',
+  'stealth_verification_failed',
+  'virtual_display_failed',
+  'virtual_display_exhausted',
+  'window_visible_to_capture',
+]);
+
 const CAPTURE_RISK_REASON = 'Sensitive content hidden while capture risk is detected.';
 const PROTECTION_FAULT_REASON = 'Sensitive content hidden until privacy protection is restored.';
 const PROTECTED_INTENT_REASON = 'Sensitive content hidden while privacy mode is active.';
 
 export function hasCaptureRiskWarnings(warnings: readonly string[] = []): boolean {
   return warnings.some((warning) => CAPTURE_RISK_WARNINGS.has(warning));
+}
+
+export function hasStealthFaultWarnings(warnings: readonly string[] = []): boolean {
+  return warnings.some((warning) => STEALTH_FAULT_WARNINGS.has(warning));
 }
 
 export function derivePrivacyShieldState(options: DerivePrivacyShieldStateOptions = {}): PrivacyShieldState {
@@ -59,7 +75,7 @@ export function derivePrivacyShieldState(options: DerivePrivacyShieldStateOption
 
   const warnings = options.warnings ?? [];
   // When the user intentionally enables invisible mode (visible_safe_controls),
-  // setExcludeFromCapture already protects the window from screen capture.
+  // setContentProtection already applies Layer-0 capture protection.
   // Rendering a black privacy shield in the renderer is redundant and makes
   // the app unusable for the user.
   if (

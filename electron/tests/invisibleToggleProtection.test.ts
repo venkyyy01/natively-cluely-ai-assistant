@@ -196,6 +196,7 @@ test('AppState invisible enable commits to local-visible protected controls', as
 
     const fakeState: any = {
       isUndetectable: false,
+      privacyShieldFaultReason: 'stale-fault',
       syncWindowStealthProtection(state: boolean) {
         calls.push(`syncProtection:${state}`);
       },
@@ -207,6 +208,9 @@ test('AppState invisible enable commits to local-visible protected controls', as
       },
       requestVisibilityIntent(intent: string, source: string) {
         calls.push(`intent:${intent}:${source}`);
+      },
+      ensureVisibleSafeControls(source: string) {
+        calls.push(`ensureVisibleSafeControls:${source}`);
       },
       _broadcastToAllWindows(channel: string, payload: unknown) {
         calls.push(`broadcast:${channel}:${payload}`);
@@ -251,9 +255,11 @@ test('AppState invisible enable commits to local-visible protected controls', as
     }
 
     assert.equal(fakeState.isUndetectable, true);
+    assert.equal(fakeState.privacyShieldFaultReason, null);
     assert.ok(calls.includes('syncProtection:true'));
     assert.ok(calls.includes('persist:isUndetectable:true'));
     assert.ok(calls.includes('intent:visible_safe_controls:undetectable_enabled'));
+    assert.ok(calls.includes('ensureVisibleSafeControls:undetectable_enabled'));
     assert.ok(!calls.some((call) => call.includes('intent:protected_shield')));
   } finally {
     restoreElectron();
@@ -325,6 +331,55 @@ test('AppState visible_safe_controls intent shows the protected local UI instead
   }
 });
 
+test('AppState ensureVisibleSafeControls restores a hidden protected main window', async () => {
+  const restoreElectron = installElectronMock();
+  const originalNodeEnv = process.env.NODE_ENV;
+  process.env.NODE_ENV = 'test';
+
+  try {
+    const { AppState } = await import('../main');
+    const ensureVisibleSafeControls = (AppState.prototype as any).ensureVisibleSafeControls as (
+      this: any,
+      source: string,
+      retries?: number,
+    ) => void;
+
+    const calls: string[] = [];
+    const fakeState: any = {
+      isUndetectable: true,
+      visibilityIntent: 'visible_safe_controls',
+      syncWindowStealthProtection(state: boolean) {
+        calls.push(`syncProtection:${state}`);
+      },
+      windowHelper: {
+        getVisibleMainWindow: (): null => null,
+      },
+      stealthManager: {
+        recordProtectionEvent(type: string, context: { source: string; reason: string }) {
+          calls.push(`event:${type}:${context.source}:${context.reason}`);
+        },
+      },
+      centerAndShowWindow() {
+        calls.push('centerAndShowWindow');
+      },
+      scheduleDisguiseTimer() {
+        calls.push('scheduleRetry');
+      },
+    };
+
+    ensureVisibleSafeControls.call(fakeState, 'test', 0);
+
+    assert.deepEqual(calls, [
+      'syncProtection:true',
+      'event:show-requested:AppState.ensureVisibleSafeControls:test:visible_safe_controls',
+      'centerAndShowWindow',
+    ]);
+  } finally {
+    restoreElectron();
+    process.env.NODE_ENV = originalNodeEnv;
+  }
+});
+
 test('AppState startup stealth recovery clears containment for visible safe controls', async () => {
   const restoreElectron = installElectronMock();
   const originalNodeEnv = process.env.NODE_ENV;
@@ -380,6 +435,41 @@ test('AppState startup stealth recovery clears containment for visible safe cont
       'broadcast:stealth-state-changed:FULL_STEALTH',
       'metric:stealth.state:FULL_STEALTH',
     ]);
+  } finally {
+    restoreElectron();
+    process.env.NODE_ENV = originalNodeEnv;
+  }
+});
+
+test('AppState capture-environment warnings reapply protection without entering fault containment', async () => {
+  const restoreElectron = installElectronMock();
+  const originalNodeEnv = process.env.NODE_ENV;
+  process.env.NODE_ENV = 'test';
+
+  try {
+    const { AppState } = await import('../main');
+    const handleStealthDegradation = (AppState.prototype as any).handleStealthDegradation as (
+      this: any,
+      warnings: string[],
+    ) => void;
+
+    const calls: string[] = [];
+    const fakeState: any = {
+      isUndetectable: true,
+      syncWindowStealthProtection(state: boolean) {
+        calls.push(`syncProtection:${state}`);
+      },
+      runtimeCoordinator: {
+        getSupervisor() {
+          calls.push('getSupervisor');
+          throw new Error('capture warnings must not fault supervisor');
+        },
+      },
+    };
+
+    handleStealthDegradation.call(fakeState, ['scstream_capture_detected', 'chromium_capture_active']);
+
+    assert.deepEqual(calls, ['syncProtection:true']);
   } finally {
     restoreElectron();
     process.env.NODE_ENV = originalNodeEnv;
