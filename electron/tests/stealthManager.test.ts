@@ -125,11 +125,25 @@ describe('StealthManager', () => {
   }
 
   it('returns stealth-ready window defaults when enabled', () => {
-    const manager = new StealthManager({ enabled: true });
+    const manager = new StealthManager({ enabled: true }, { platform: 'win32' });
     const options = manager.getBrowserWindowOptions();
 
     assert.deepStrictEqual(options, {
       contentProtection: true,
+      excludeFromCapture: true,
+      skipTaskbar: false,
+    });
+  });
+
+  it('does not pre-enable raw content protection in macOS 15+ constructor options', () => {
+    const manager = new StealthManager(
+      { enabled: true },
+      { platform: 'darwin', logger: silentLogger, macosVersion: { major: 15, minor: 4 } }
+    );
+    const options = manager.getBrowserWindowOptions();
+
+    assert.deepStrictEqual(options, {
+      contentProtection: false,
       excludeFromCapture: true,
       skipTaskbar: false,
     });
@@ -1413,7 +1427,7 @@ describe('StealthManager', () => {
     assert.ok(!manager.getStealthDegradationWarnings().includes('stealth_verification_failed'));
   });
 
-  it('verifyStealth returns false on macOS 15+ when virtual display isolation not set up', async () => {
+  it('verifyStealth accepts Electron capture exclusion on macOS 15+ when virtual display isolation is not ready', async () => {
     const win = new FakeWindow();
     const manager = new StealthManager(
       { enabled: true },
@@ -1432,8 +1446,28 @@ describe('StealthManager', () => {
 
     manager.applyToWindow(win as any, true, { role: 'primary' });
 
-    assert.strictEqual(manager.verifyStealth(win as any), false);
-    assert.ok(manager.getStealthDegradationWarnings().includes('stealth_verification_failed'));
+    assert.strictEqual(manager.verifyStealth(win as any), true);
+    assert.ok(!manager.getStealthDegradationWarnings().includes('stealth_verification_failed'));
+  });
+
+  it('does not require the native module for macOS 15+ Electron capture exclusion', () => {
+    const win = new FakeWindow();
+    const manager = new StealthManager(
+      { enabled: true },
+      {
+        platform: 'darwin',
+        logger: silentLogger,
+        macosVersion: { major: 15, minor: 4 },
+        nativeModule: null,
+      }
+    );
+
+    manager.applyToWindow(win as any, true, { role: 'primary' });
+
+    assert.strictEqual(manager.verifyStealth(win as any), true);
+    assert.deepStrictEqual(win.contentProtectionCalls, []);
+    assert.deepStrictEqual(win.excludeFromCaptureCalls, [true]);
+    assert.ok(!manager.getStealthDegradationWarnings().includes('native_module_unavailable'));
   });
 
   // Windows taskbar toggle tests

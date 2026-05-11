@@ -45,6 +45,7 @@ export function createManagedWindowRecord(
     virtualDisplayRequestId: 0,
     virtualDisplayIsolationStarted: false,
     virtualDisplayIsolationReady: false,
+    excludeFromCaptureApplied: false,
     privateMacosStealthApplied: false,
   };
   managedWindows.add(record);

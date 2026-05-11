@@ -24,14 +24,24 @@ export class StealthArmController {
       }
     }
 
-    await this.delegate.setEnabled(true);
+    try {
+      await this.delegate.setEnabled(true);
 
-    const verified = await this.delegate.verifyStealthState();
-    if (!verified) {
-      throw new Error('stealth verification failed');
+      const verified = await this.delegate.verifyStealthState();
+      if (!verified) {
+        throw new Error('stealth verification failed');
+      }
+
+      await this.delegate.startHeartbeat?.();
+    } catch (error) {
+      if (nativeArmed) {
+        try {
+          await this.delegate.faultNativeStealth?.('stealth arm failed');
+        } catch {
+        }
+      }
+      throw error;
     }
-
-    await this.delegate.startHeartbeat?.();
   }
 
   async disarm(): Promise<void> {

@@ -408,9 +408,10 @@ export class StealthManager extends EventEmitter {
 
   getBrowserWindowOptions(): StealthWindowOptions {
     const enabled = this.isEnabled();
+    const contentProtection = enabled && !(this.platform === 'darwin' && this.isMacOSVersionCompatible('15.0'));
 
     return {
-      contentProtection: enabled,
+      contentProtection,
       skipTaskbar: false,
       excludeFromCapture: enabled,
     };
@@ -711,6 +712,7 @@ export class StealthManager extends EventEmitter {
     // setContentProtection is safe for capture tool windows though.
     const isMacOS15Plus = this.isMacOSVersionCompatible('15.0');
     const isCaptureTool = (win as any)._isCaptureToolWindow === true;
+    const record = this.managedWindowLookup.get(win as object);
     if (!isMacOS15Plus || isCaptureTool) {
       try {
         win.setContentProtection(enable);
@@ -725,6 +727,9 @@ export class StealthManager extends EventEmitter {
     if (typeof win.setExcludeFromCapture === 'function') {
       try {
         win.setExcludeFromCapture(enable);
+        if (record) {
+          record.excludeFromCaptureApplied = enable;
+        }
       } catch (error) {
         this.logger.warn('[StealthManager] setExcludeFromCapture failed:', error);
       }
@@ -762,8 +767,16 @@ export class StealthManager extends EventEmitter {
   }
 
   private applyNativeStealth(win: StealthCapableWindow): void {
-    const nativeModule = this.getNativeModule();
     const record = this.managedWindowLookup.get(win as object);
+    if (this.platform === 'darwin' && this.isMacOSVersionCompatible('15.0')) {
+      if (record) {
+        record.privateMacosStealthApplied = false;
+      }
+      this.logger.log('[StealthManager] macOS 15+ — native window stealth skipped while stronger isolation is applied separately');
+      return;
+    }
+
+    const nativeModule = this.getNativeModule();
     if (!nativeModule) {
       if (record) {
         record.privateMacosStealthApplied = false;
@@ -830,11 +843,15 @@ export class StealthManager extends EventEmitter {
   }
 
   private removeNativeStealth(win: StealthCapableWindow): void {
-    const nativeModule = this.getNativeModule();
     const record = this.managedWindowLookup.get(win as object);
     if (record) {
       record.privateMacosStealthApplied = false;
     }
+    if (this.platform === 'darwin' && this.isMacOSVersionCompatible('15.0')) {
+      return;
+    }
+
+    const nativeModule = this.getNativeModule();
     if (!nativeModule) {
       return;
     }
@@ -1774,8 +1791,30 @@ for window in windows:
   }
 
   verifyStealth(win: StealthCapableWindow): boolean {
-    const nativeModule = this.getNativeModule();
     const record = this.managedWindowLookup.get(win as object);
+    const isMacOS15Plus = this.platform === 'darwin' && this.isMacOSVersionCompatible('15.0');
+    if (isMacOS15Plus && record?.excludeFromCaptureApplied) {
+      const virtualDisplayVerified = Boolean(
+        this.featureFlags.enableVirtualDisplayIsolation &&
+        record.allowVirtualDisplayIsolation &&
+        record.virtualDisplayIsolationReady
+      );
+      this.clearWarning('stealth_verification_failed');
+      this.recordProtectionEvent('verification-passed', {
+        ...this.getProtectionEventContext(win, {}, 'StealthManager.verifyStealth'),
+        metadata: {
+          platform: 'darwin',
+          sharingType: null,
+          privatePathVerified: false,
+          virtualDisplayVerified,
+          electronCaptureExclusionVerified: true,
+          isMacOS15Plus,
+        },
+      });
+      return true;
+    }
+
+    const nativeModule = this.getNativeModule();
     if (!nativeModule) {
       return false;
     }
@@ -1787,7 +1826,6 @@ for window in windows:
           return false;
         }
 
-        const isMacOS15Plus = this.isMacOSVersionCompatible('15.0');
         const sharingType = nativeModule.verifyMacosStealthState(windowNumber);
         const privatePathVerified = Boolean(
           this.featureFlags.enablePrivateMacosStealthApi &&

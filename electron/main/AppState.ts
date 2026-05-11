@@ -619,8 +619,15 @@ this.runtimeCoordinator.registerSupervisor(new StealthSupervisor(
       {
       logger: { log: console.log, warn: console.warn, error: console.error },
       nativeBridge: this.nativeStealthBridge ?? undefined,
-        requireNativeStealth: () => process.platform === 'darwin' || Boolean(this.nativeStealthBridge),
+        requireNativeStealth: () => (isEnvFlagEnabled(process.env.NATIVELY_REQUIRE_NATIVE_STEALTH) ?? false) && Boolean(this.nativeStealthBridge),
         nativeArmGuard: async () => {
+          if (!(isEnvFlagEnabled(process.env.NATIVELY_ENABLE_NATIVE_STEALTH_PRESENTER) ?? false)) {
+            return {
+              allowed: false,
+              reason: 'native-presenter-disabled',
+            }
+          }
+
           try {
             const snapshot = await detectExternalScreenShare()
             if (!snapshot.active) {
@@ -2967,19 +2974,19 @@ this.stealthManager.setEnabled(true)
 
 await stealthSupervisor.setEnabled(state)
 
-// Apply stealth protection to windows BEFORE verification
+if (state) {
+this.verifyUndetectableEnableProtection()
+}
+
 if (state) {
 this.applyUndetectableState(state, startedAt, {
 runtime: 'coordinator',
 })
 }
 
-if (state) {
-this.verifyUndetectableEnableProtection()
-}
-
 // Apply undetectable state for disable case (state = false)
 if (!state) {
+this.prepareUndetectableDisableProtection()
 this.applyUndetectableState(state, startedAt, {
 runtime: 'coordinator',
 })

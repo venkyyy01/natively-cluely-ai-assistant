@@ -39,6 +39,29 @@ test('StealthArmController rejects arm when verification fails', async () => {
   await assert.rejects(() => controller.arm(), /stealth verification failed/);
 });
 
+test('StealthArmController faults native stealth when arm validation fails after native arm', async () => {
+  const calls: string[] = [];
+  const controller = new StealthArmController({
+    armNativeStealth: async () => {
+      calls.push('armNativeStealth');
+      return true;
+    },
+    setEnabled: async (enabled: boolean) => {
+      calls.push(`setEnabled:${enabled}`);
+    },
+    verifyStealthState: async () => {
+      calls.push('verify');
+      return false;
+    },
+    faultNativeStealth: async (reason: string) => {
+      calls.push(`faultNativeStealth:${reason}`);
+    },
+  });
+
+  await assert.rejects(() => controller.arm(), /stealth verification failed/);
+  assert.deepEqual(calls, ['armNativeStealth', 'setEnabled:true', 'verify', 'faultNativeStealth:stealth arm failed']);
+});
+
 test('StealthArmController falls back to Electron-only stealth when native helper is unavailable', async () => {
   const calls: string[] = [];
   const controller = new StealthArmController({

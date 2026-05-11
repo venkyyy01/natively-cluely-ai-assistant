@@ -154,40 +154,48 @@ export class NativeStealthBridge {
       reason: request.reason ?? 'policy-required',
     };
 
-    const createResponse = await client.createProtectedSession({
-      sessionId: normalizedRequest.sessionId,
-      presentationMode: 'native-fullscreen-presenter',
-      displayPreference: normalizedRequest.displayPreference,
-      reason: normalizedRequest.reason,
-    });
-    this.assertArmResponse('create-protected-session', createResponse);
+    let sessionCreated = false;
 
-    const attachResponse = await client.attachSurface({
-      sessionId,
-      surfaceSource: 'native-ui-host',
-      surfaceId,
-      width: normalizedRequest.width!,
-      height: normalizedRequest.height!,
-      hiDpi: normalizedRequest.hiDpi!,
-    });
-    this.assertArmResponse('attach-surface', attachResponse);
+    try {
+      const createResponse = await client.createProtectedSession({
+        sessionId: normalizedRequest.sessionId,
+        presentationMode: 'native-fullscreen-presenter',
+        displayPreference: normalizedRequest.displayPreference,
+        reason: normalizedRequest.reason,
+      });
+      this.assertArmResponse('create-protected-session', createResponse);
+      sessionCreated = true;
 
-    const presentResponse = await client.present({ sessionId, activate: true });
-    this.assertArmResponse('present', presentResponse);
+      const attachResponse = await client.attachSurface({
+        sessionId,
+        surfaceSource: 'native-ui-host',
+        surfaceId,
+        width: normalizedRequest.width!,
+        height: normalizedRequest.height!,
+        hiDpi: normalizedRequest.hiDpi!,
+      });
+      this.assertArmResponse('attach-surface', attachResponse);
 
-    this.activeSessionId = sessionId;
-    this.activeSurfaceId = surfaceId;
-    this.lastArmRequest = normalizedRequest;
-    this.lastDisconnectReason = null;
-    if (!request.sessionId) {
-      this.restartAttemptsForActiveSession = 0;
+      const presentResponse = await client.present({ sessionId, activate: true });
+      this.assertArmResponse('present', presentResponse);
+
+      this.activeSessionId = sessionId;
+      this.activeSurfaceId = surfaceId;
+      this.lastArmRequest = normalizedRequest;
+      this.lastDisconnectReason = null;
+      if (!request.sessionId) {
+        this.restartAttemptsForActiveSession = 0;
+      }
+
+      return {
+        connected: true,
+        sessionId,
+        surfaceId,
+      };
+    } catch (error) {
+      await this.cleanupFailedArm(client, sessionId, sessionCreated, error);
+      throw error;
     }
-
-    return {
-      connected: true,
-      sessionId,
-      surfaceId,
-    };
   }
 
   async submitFrame(surfaceId: string, region: NativeStealthFrameRegion): Promise<NativeStealthSubmitFrameResult> {
@@ -309,6 +317,35 @@ export class NativeStealthBridge {
       await client.teardownSession(sessionId);
     } catch (error) {
       this.logger.warn(`[NativeStealthBridge] Failed to teardown native session (${reason}):`, error);
+    }
+  }
+
+  private async cleanupFailedArm(
+    client: NativeStealthBridgeClient,
+    sessionId: string,
+    sessionCreated: boolean,
+    reason: unknown,
+  ): Promise<void> {
+    this.activeSessionId = null;
+    this.activeSurfaceId = null;
+    this.lastArmRequest = null;
+
+    if (!sessionCreated) {
+      return;
+    }
+
+    const cleanupReason = reason instanceof Error ? reason.message : String(reason);
+
+    try {
+      await client.present({ sessionId, activate: false });
+    } catch (error) {
+      this.logger.warn(`[NativeStealthBridge] Failed to deactivate failed native arm (${cleanupReason}):`, error);
+    }
+
+    try {
+      await client.teardownSession(sessionId);
+    } catch (error) {
+      this.logger.warn(`[NativeStealthBridge] Failed to teardown failed native arm (${cleanupReason}):`, error);
     }
   }
 
