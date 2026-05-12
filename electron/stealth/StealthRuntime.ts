@@ -397,7 +397,7 @@ export class StealthRuntime {
     this.stealthManager.applyToWindow(this.shellWindow, enabled, {
       role: 'primary',
       hideFromSwitcher: false,
-      allowVirtualDisplayIsolation: false,
+      allowVirtualDisplayIsolation: true,
     });
   }
 

@@ -43,6 +43,7 @@ export class SettingsWindowHelper {
         this.stealthManager.applyToWindow(this.settingsWindow, enable, {
             role: 'auxiliary',
             hideFromSwitcher: true,
+            allowVirtualDisplayIsolation: true,
         });
     }
 
@@ -204,6 +205,7 @@ private createWindow(x?: number, y?: number, showWhenReady: boolean = true): voi
         this.stealthManager.applyInitialStealth(this.settingsWindow, {
             role: 'auxiliary',
             hideFromSwitcher: true,
+            allowVirtualDisplayIsolation: true,
         })
         this.stealthManager.recordProtectionEvent('window-created', {
             source: 'SettingsWindowHelper.createWindow',

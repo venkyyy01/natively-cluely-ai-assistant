@@ -38,10 +38,15 @@ test('WindowHelper treats overlay as a primary stealth surface', async () => {
 
   try {
     const { WindowHelper } = await import('../WindowHelper');
-    const calls: Array<{ enable: boolean; role?: string; hideFromSwitcher?: boolean }> = [];
+    const calls: Array<{ enable: boolean; role?: string; hideFromSwitcher?: boolean; allowVirtualDisplayIsolation?: boolean }> = [];
     const fakeStealthManager = {
-      applyToWindow(_win: unknown, enable: boolean, options: { role?: string; hideFromSwitcher?: boolean }) {
-        calls.push({ enable, role: options.role, hideFromSwitcher: options.hideFromSwitcher });
+      applyToWindow(_win: unknown, enable: boolean, options: { role?: string; hideFromSwitcher?: boolean; allowVirtualDisplayIsolation?: boolean }) {
+        calls.push({
+          enable,
+          role: options.role,
+          hideFromSwitcher: options.hideFromSwitcher,
+          allowVirtualDisplayIsolation: options.allowVirtualDisplayIsolation,
+        });
       },
     };
 
@@ -52,8 +57,8 @@ test('WindowHelper treats overlay as a primary stealth surface', async () => {
     helper.setContentProtection(true);
 
     assert.deepEqual(calls, [
-      { enable: true, role: 'primary', hideFromSwitcher: false },
-      { enable: true, role: 'primary', hideFromSwitcher: false },
+      { enable: true, role: 'primary', hideFromSwitcher: false, allowVirtualDisplayIsolation: true },
+      { enable: true, role: 'primary', hideFromSwitcher: false, allowVirtualDisplayIsolation: true },
     ]);
   } finally {
     (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath = originalResourcesPath;

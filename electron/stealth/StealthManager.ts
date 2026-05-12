@@ -448,6 +448,9 @@ export class StealthManager extends EventEmitter {
     const record = createManagedWindowRecord(win, options, this.managedWindows, this.managedWindowLookup);
     record.role = options.role ?? record.role;
     record.hideFromSwitcher = options.hideFromSwitcher ?? defaultHideFromSwitcher(record.role);
+    record.allowVirtualDisplayIsolation = options.allowVirtualDisplayIsolation === true
+      ? true
+      : record.allowVirtualDisplayIsolation;
 
     this.applyLayer0(win, this.isEnabled());
     this.applyUiHardening(win, record.hideFromSwitcher);
@@ -1884,15 +1887,35 @@ for window in windows:
     const record = this.managedWindowLookup.get(win as object);
     const isMacOS15Plus = this.platform === 'darwin' && this.isMacOSVersionCompatible('15.0');
     if (isMacOS15Plus && record?.excludeFromCaptureApplied) {
-      // On macOS 15+, applyLayer0 records `excludeFromCaptureApplied = true`
-      // only after a successful setContentProtection(true) call. That maps to
-      // NSWindow.sharingType = .none, which is the strongest documented
-      // capture-exclusion API exposed by Electron 41 on macOS.
+      // On macOS 15+, Layer 0 alone is not enough for the product invariant:
+      // ScreenCaptureKit-based apps can still capture windows unless the
+      // native virtual-display isolation path is armed and ready.
       const virtualDisplayVerified = Boolean(
         this.featureFlags.enableVirtualDisplayIsolation &&
         record.allowVirtualDisplayIsolation &&
         record.virtualDisplayIsolationReady
       );
+      if (!virtualDisplayVerified) {
+        if (this.isEnabled()) {
+          this.addWarning('virtual_display_required');
+          this.addWarning('stealth_verification_failed');
+          this.logger.warn('[StealthManager] macOS 15+ stealth verification failed: virtual display isolation is required for ScreenCaptureKit invisibility');
+        }
+        this.recordProtectionEvent('verification-failed', {
+          ...this.getProtectionEventContext(win, {}, 'StealthManager.verifyStealth'),
+          metadata: {
+            platform: 'darwin',
+            sharingType: null,
+            privatePathVerified: false,
+            virtualDisplayVerified,
+            electronCaptureExclusionVerified: true,
+            isMacOS15Plus,
+          },
+        });
+        return false;
+      }
+
+      this.clearWarning('virtual_display_required');
       this.clearWarning('stealth_verification_failed');
       this.recordProtectionEvent('verification-passed', {
         ...this.getProtectionEventContext(win, {}, 'StealthManager.verifyStealth'),

@@ -27,6 +27,7 @@ export class ModelSelectorWindowHelper {
         this.stealthManager.applyToWindow(this.window, enable, {
             role: 'auxiliary',
             hideFromSwitcher: true,
+            allowVirtualDisplayIsolation: true,
         });
     }
 
@@ -182,6 +183,7 @@ private createWindow(x?: number, y?: number, showWhenReady: boolean = true): voi
         this.stealthManager.applyInitialStealth(this.window, {
             role: 'auxiliary',
             hideFromSwitcher: true,
+            allowVirtualDisplayIsolation: true,
         })
         this.stealthManager.recordProtectionEvent('window-created', {
             source: 'ModelSelectorWindowHelper.createWindow',

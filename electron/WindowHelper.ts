@@ -224,7 +224,11 @@ export class WindowHelper {
     // where the window briefly existed in the OS window list without
     // setContentProtection / sharingType=.none. Subsequent applyStealth /
     // applyContentProtection calls re-assert the same state idempotently.
-    this.stealthManager.applyInitialStealth(win, { role: 'primary', hideFromSwitcher: false })
+    this.stealthManager.applyInitialStealth(win, {
+      role: 'primary',
+      hideFromSwitcher: false,
+      allowVirtualDisplayIsolation: true,
+    })
     this.recordProtectionEvent('window-created', win, 'WindowHelper.createDirectWindow', 'unknown')
     return win
   }
@@ -314,7 +318,11 @@ export class WindowHelper {
   }
 
   private applyStealth(win: BrowserWindow, enable: boolean, role: 'primary' | 'auxiliary', hideFromSwitcher: boolean): void {
-    this.stealthManager.applyToWindow(win, enable, { role, hideFromSwitcher });
+    this.stealthManager.applyToWindow(win, enable, {
+      role,
+      hideFromSwitcher,
+      allowVirtualDisplayIsolation: true,
+    });
   }
 
   private applyContentProtection(enable: boolean): void {

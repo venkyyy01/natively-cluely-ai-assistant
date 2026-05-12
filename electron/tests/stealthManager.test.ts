@@ -159,7 +159,7 @@ describe('StealthManager', () => {
     assert.deepStrictEqual(win.skipTaskbarCalls, []);
   });
 
-  it('applyInitialStealth applies Layer-0 synchronously when stealth is enabled', () => {
+  it('applyInitialStealth applies Layer-0 synchronously but does not verify macOS 15+ without virtual display isolation', () => {
     const win = new FakeWindow();
     const manager = new StealthManager(
       { enabled: true },
@@ -169,7 +169,8 @@ describe('StealthManager', () => {
     manager.applyInitialStealth(win as any, { role: 'primary', hideFromSwitcher: false });
 
     assert.deepStrictEqual(win.contentProtectionCalls, [true]);
-    assert.strictEqual(manager.verifyStealth(win as any), true);
+    assert.strictEqual(manager.verifyStealth(win as any), false);
+    assert.ok(manager.getStealthDegradationWarnings().includes('virtual_display_required'));
   });
 
   it('applyInitialStealth pre-arms record but skips Layer-0 when stealth is disabled at boot', () => {
@@ -191,7 +192,8 @@ describe('StealthManager', () => {
     manager.applyToWindow(win as any, true, { role: 'primary' });
 
     assert.strictEqual(win.contentProtectionCalls.includes(true), true);
-    assert.strictEqual(manager.verifyStealth(win as any), true);
+    assert.strictEqual(manager.verifyStealth(win as any), false);
+    assert.ok(manager.getStealthDegradationWarnings().includes('virtual_display_required'));
   });
 
   it('applyInitialStealth is idempotent under repeated calls', () => {
@@ -208,8 +210,8 @@ describe('StealthManager', () => {
     // Each call re-asserts setContentProtection(true). All three are
     // recorded but no exception, no warning, no fault.
     assert.deepStrictEqual(win.contentProtectionCalls, [true, true, true]);
-    assert.strictEqual(manager.verifyStealth(win as any), true);
-    assert.deepStrictEqual(manager.getStealthDegradationWarnings(), []);
+    assert.strictEqual(manager.verifyStealth(win as any), false);
+    assert.ok(manager.getStealthDegradationWarnings().includes('virtual_display_required'));
   });
 
   it('applyToWindow re-entry guard collapses concurrent calls into a single trailing replay', () => {
@@ -1521,7 +1523,7 @@ describe('StealthManager', () => {
     assert.ok(!manager.getStealthDegradationWarnings().includes('stealth_verification_failed'));
   });
 
-  it('verifyStealth accepts Electron capture exclusion on macOS 15+ when virtual display isolation is not ready', async () => {
+  it('verifyStealth rejects Electron capture exclusion alone on macOS 15+', async () => {
     const win = new FakeWindow();
     const manager = new StealthManager(
       { enabled: true },
@@ -1543,11 +1545,12 @@ describe('StealthManager', () => {
 
     manager.applyToWindow(win as any, true, { role: 'primary' });
 
-    assert.strictEqual(manager.verifyStealth(win as any), true);
-    assert.ok(!manager.getStealthDegradationWarnings().includes('stealth_verification_failed'));
+    assert.strictEqual(manager.verifyStealth(win as any), false);
+    assert.ok(manager.getStealthDegradationWarnings().includes('virtual_display_required'));
+    assert.ok(manager.getStealthDegradationWarnings().includes('stealth_verification_failed'));
   });
 
-  it('accepts setContentProtection as Layer-0 capture exclusion on macOS 15+', () => {
+  it('requires virtual display isolation in addition to Layer-0 capture exclusion on macOS 15+', () => {
     const win = new FakeWindow();
     const manager = new StealthManager(
       { enabled: true },
@@ -1561,14 +1564,13 @@ describe('StealthManager', () => {
 
     manager.applyToWindow(win as any, true, { role: 'primary' });
 
-    // setContentProtection succeeds and is treated as the Layer-0 capture
-    // exclusion on macOS 15+, so verifyStealth passes even without a native
-    // module. setExcludeFromCapture does not exist on Electron 41 BrowserWindow,
-    // so it is intentionally never called.
-    assert.strictEqual(manager.verifyStealth(win as any), true);
+    // setContentProtection still applies Layer 0, but macOS 15+ full
+    // invisibility requires the virtual-display path for ScreenCaptureKit.
+    assert.strictEqual(manager.verifyStealth(win as any), false);
     assert.deepStrictEqual(win.contentProtectionCalls, [true]);
     assert.deepStrictEqual(win.excludeFromCaptureCalls, []);
-    assert.ok(!manager.getStealthDegradationWarnings().includes('stealth_verification_failed'));
+    assert.ok(manager.getStealthDegradationWarnings().includes('virtual_display_required'));
+    assert.ok(manager.getStealthDegradationWarnings().includes('stealth_verification_failed'));
   });
 
   it('fails macOS 15+ verification when setContentProtection throws', () => {
