@@ -1587,6 +1587,7 @@ export class IntelligenceEngine extends EventEmitter {
                     imagePaths,
                     whatToAnswerLLM: this.whatToAnswerLLM,
                     answerLLM: this.answerLLM,
+                    codingProblem: this.session.getCodingProblem(),
                     onEarlyReasoning: (text) => {
                         if (!shouldSuppressVisibleWork()) {
                             this.latencyTracker.markFirstStreamingUpdate(requestId);

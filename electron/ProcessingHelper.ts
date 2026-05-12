@@ -210,6 +210,10 @@ export class ProcessingHelper {
             mainWindow.webContents.send(this.appState.PROCESSING_EVENTS.PROBLEM_EXTRACTED, problemInfo);
           }
           this.appState.setProblemInfo(problemInfo);
+          // NAT-303: Push structured CodingProblem into SessionTracker for Tier-A prompt injection.
+          // Only store complete problems — partial OCR-only results skip injection.
+          const session = this.appState.getIntelligenceManager().getSessionTracker();
+          session.setCodingProblem(isCodingProblemComplete(codingProblem) ? codingProblem : null);
         } else {
           const imageResult = await this.llmHelper.analyzeImageFiles(allPaths, this.currentProcessingAbortController.signal);
           if (this.currentProcessingAbortController.signal.aborted) {

@@ -27,6 +27,7 @@ import type { IntentClassificationCoordinator } from '../llm/providers/IntentCla
 import { isVerifierOptimizationActive, isConsciousOptimizationActive } from '../config/optimizations';
 import { classifyProbeType, isBehavioralReask } from './ProbeTypeClassifier';
 import type { ProbeAnswer, CodingProblem } from '../coding/types';
+import { isCodingProblemComplete } from '../coding/ProblemExtractor';
 import { logEvent } from '../runtime/ObservabilityLogger';
 import { Metrics } from '../runtime/Metrics';
 import { FlexibleResponseRouter, type ConsciousTurnPlan } from './FlexibleResponseRouter';
@@ -714,8 +715,9 @@ export class ConsciousOrchestrator {
 
     const degradedMode = this.isCircuitOpen();
 
-    // NAT-304: Prepend problem context to transcript when a CodingProblem is present.
-    const problemContextBlock = input.codingProblem
+    // NAT-304: Prepend problem context only when extraction is complete (has examples).
+    // Guards against injecting the A/B/C/D coding protocol for theory/generic screenshots.
+    const problemContextBlock = input.codingProblem && isCodingProblemComplete(input.codingProblem)
       ? this.answerPlanner.buildProblemContextBlock(input.codingProblem)
       : '';
     const transcriptWithContext = problemContextBlock

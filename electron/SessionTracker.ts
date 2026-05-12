@@ -8,7 +8,7 @@ import {
   ConsciousModeStructuredResponse,
   ReasoningThread,
 } from './ConsciousMode';
-import type { ProbeAnswer } from './coding/types';
+import type { ProbeAnswer, CodingProblem } from './coding/types';
 import {
   ThreadManager,
   InterviewPhaseDetector,
@@ -577,7 +577,19 @@ export class SessionTracker {
     this.answerHypothesisStore.reset();
     this.responsePreferenceStore.reset();
     this.designStateStore.reset();
+    this._codingProblem = null;
     persistState(this);
+  }
+
+  // ─── NAT-303: Coding problem store ────────────────────────────────────────
+  private _codingProblem: CodingProblem | null = null;
+
+  setCodingProblem(problem: CodingProblem | null): void {
+    this._codingProblem = problem;
+  }
+
+  getCodingProblem(): CodingProblem | null {
+    return this._codingProblem;
   }
 
   appendProbe(probe: ProbeAnswer): void {
