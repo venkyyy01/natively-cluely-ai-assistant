@@ -35,6 +35,7 @@ import type {
   ProtectionSnapshot,
 } from './protectionStateTypes';
 import type { VisibilityOperationContext } from './VisibilityController';
+import type { StealthTickCoordinator } from './StealthTickCoordinator';
 
 export interface StealthConfig {
   enabled: boolean;
@@ -263,6 +264,7 @@ export class StealthManager extends EventEmitter {
   private readonly macosVersion: { major: number; minor: number } | undefined;
   private opacityFlickerController: OpacityFlickerController | null = null;
   private virtualDisplayTaskQueue: Promise<void> | null = null;
+  private readonly tickCoordinator: StealthTickCoordinator | null;
 
   private readonly execFileFn: (file: string, args: readonly string[], options: { timeout?: number }, callback: (error: Error | null, stdout: string, stderr: string) => void) => void;
 
@@ -287,6 +289,7 @@ export class StealthManager extends EventEmitter {
     });
     this.nativeModule = deps.nativeModule;
     this.macosVersion = deps.macosVersion;
+    this.tickCoordinator = deps.tickCoordinator ?? null;
     this.execFileFn = deps.execFileFn ?? (async (file, args, options, callback) => {
       const { execFile } = await import('node:child_process');
       execFile(file, args, options, callback);
@@ -614,6 +617,7 @@ export class StealthManager extends EventEmitter {
         platform: this.platform,
         checkIntervalMs: 500,
         logger: this.logger,
+        tickCoordinator: this.tickCoordinator ?? undefined,
       });
 
       this.chromiumDetector.on('browser-detected', (info) => {
@@ -1207,22 +1211,38 @@ export class StealthManager extends EventEmitter {
     }
 
     if (this.watchdogHandle) {
-      this.clearIntervalScheduler(this.watchdogHandle);
+      if (this.tickCoordinator && this.watchdogHandle === 'tick-coordinator') {
+        this.tickCoordinator.deregister('stealth-watchdog');
+      } else {
+        this.clearIntervalScheduler(this.watchdogHandle);
+      }
       this.watchdogHandle = null;
     }
 
     if (this.windowsAffinityHandle) {
-      this.clearIntervalScheduler(this.windowsAffinityHandle);
+      if (this.tickCoordinator && this.windowsAffinityHandle === 'tick-coordinator') {
+        this.tickCoordinator.deregister('stealth-windows-affinity');
+      } else {
+        this.clearIntervalScheduler(this.windowsAffinityHandle);
+      }
       this.windowsAffinityHandle = null;
     }
 
     if (this.scStreamMonitorHandle) {
-      this.clearIntervalScheduler(this.scStreamMonitorHandle);
+      if (this.tickCoordinator && this.scStreamMonitorHandle === 'tick-coordinator') {
+        this.tickCoordinator.deregister('stealth-scstream-monitor');
+      } else {
+        this.clearIntervalScheduler(this.scStreamMonitorHandle);
+      }
       this.scStreamMonitorHandle = null;
     }
 
     if (this.cgWindowMonitorHandle) {
-      this.clearIntervalScheduler(this.cgWindowMonitorHandle);
+      if (this.tickCoordinator && this.cgWindowMonitorHandle === 'tick-coordinator') {
+        this.tickCoordinator.deregister('stealth-cgwindow-monitor');
+      } else {
+        this.clearIntervalScheduler(this.cgWindowMonitorHandle);
+      }
       this.cgWindowMonitorHandle = null;
     }
 
@@ -1255,22 +1275,38 @@ export class StealthManager extends EventEmitter {
   private stopAllBackgroundMonitors(): void {
     // Unconditionally stop all background monitors regardless of window state
     if (this.watchdogHandle) {
-      this.clearIntervalScheduler(this.watchdogHandle);
+      if (this.tickCoordinator && this.watchdogHandle === 'tick-coordinator') {
+        this.tickCoordinator.deregister('stealth-watchdog');
+      } else {
+        this.clearIntervalScheduler(this.watchdogHandle);
+      }
       this.watchdogHandle = null;
     }
 
     if (this.windowsAffinityHandle) {
-      this.clearIntervalScheduler(this.windowsAffinityHandle);
+      if (this.tickCoordinator && this.windowsAffinityHandle === 'tick-coordinator') {
+        this.tickCoordinator.deregister('stealth-windows-affinity');
+      } else {
+        this.clearIntervalScheduler(this.windowsAffinityHandle);
+      }
       this.windowsAffinityHandle = null;
     }
 
     if (this.scStreamMonitorHandle) {
-      this.clearIntervalScheduler(this.scStreamMonitorHandle);
+      if (this.tickCoordinator && this.scStreamMonitorHandle === 'tick-coordinator') {
+        this.tickCoordinator.deregister('stealth-scstream-monitor');
+      } else {
+        this.clearIntervalScheduler(this.scStreamMonitorHandle);
+      }
       this.scStreamMonitorHandle = null;
     }
 
     if (this.cgWindowMonitorHandle) {
-      this.clearIntervalScheduler(this.cgWindowMonitorHandle);
+      if (this.tickCoordinator && this.cgWindowMonitorHandle === 'tick-coordinator') {
+        this.tickCoordinator.deregister('stealth-cgwindow-monitor');
+      } else {
+        this.clearIntervalScheduler(this.cgWindowMonitorHandle);
+      }
       this.cgWindowMonitorHandle = null;
     }
 
@@ -1439,10 +1475,34 @@ export class StealthManager extends EventEmitter {
       return;
     }
 
-    this.watchdogHandle = this.intervalScheduler(() => this.pollCaptureTools(), WATCHDOG_INTERVAL_MS);
+    if (this.tickCoordinator) {
+      // Register with tick coordinator: 1000ms = cadence 4 (4 × 250ms)
+      // The pollCaptureTools method already has its own re-entry guard (watchdogRunning)
+      // and pause-token mechanism (watchdogPauseTokens) which are preserved.
+      this.tickCoordinator.register({
+        id: 'stealth-watchdog',
+        cadence: 4,
+        lane: 'background',
+        fn: () => this.pollCaptureTools(),
+      });
+      // Use a sentinel value to indicate registration with tick coordinator
+      this.watchdogHandle = 'tick-coordinator';
+    } else {
+      this.watchdogHandle = this.intervalScheduler(() => this.pollCaptureTools(), WATCHDOG_INTERVAL_MS);
+    }
 
     if (this.platform === 'win32' && !this.windowsAffinityHandle) {
-      this.windowsAffinityHandle = this.intervalScheduler(() => this.verifyWindowsAffinity(), 1000);
+      if (this.tickCoordinator) {
+        this.tickCoordinator.register({
+          id: 'stealth-windows-affinity',
+          cadence: 4,
+          lane: 'background',
+          fn: () => this.verifyWindowsAffinity(),
+        });
+        this.windowsAffinityHandle = 'tick-coordinator';
+      } else {
+        this.windowsAffinityHandle = this.intervalScheduler(() => this.verifyWindowsAffinity(), 1000);
+      }
     }
   }
 
@@ -1561,10 +1621,22 @@ export class StealthManager extends EventEmitter {
       return;
     }
 
-    this.scStreamMonitorHandle = this.intervalScheduler(
-      () => this.pollSCStreamState(),
-      SCSTREAM_CHECK_INTERVAL_MS
-    );
+    if (this.tickCoordinator) {
+      // Register with tick coordinator: 500ms = cadence 2 (2 × 250ms)
+      // The pollSCStreamState method already has its own re-entry guard (scStreamMonitorRunning).
+      this.tickCoordinator.register({
+        id: 'stealth-scstream-monitor',
+        cadence: 2,
+        lane: 'background',
+        fn: () => this.pollSCStreamState(),
+      });
+      this.scStreamMonitorHandle = 'tick-coordinator';
+    } else {
+      this.scStreamMonitorHandle = this.intervalScheduler(
+        () => this.pollSCStreamState(),
+        SCSTREAM_CHECK_INTERVAL_MS
+      );
+    }
     this.logger.log('[StealthManager] SCStream capture monitor started');
   }
 
@@ -1616,10 +1688,22 @@ export class StealthManager extends EventEmitter {
       return;
     }
 
-    this.cgWindowMonitorHandle = this.intervalScheduler(
-      () => this.pollCGWindowVisibility(),
-      CGWINDOW_VISIBILITY_CHECK_MS
-    );
+    if (this.tickCoordinator) {
+      // Register with tick coordinator: 500ms = cadence 2 (2 × 250ms)
+      // The pollCGWindowVisibility method already has its own re-entry guard (cgWindowMonitorRunning).
+      this.tickCoordinator.register({
+        id: 'stealth-cgwindow-monitor',
+        cadence: 2,
+        lane: 'background',
+        fn: () => this.pollCGWindowVisibility(),
+      });
+      this.cgWindowMonitorHandle = 'tick-coordinator';
+    } else {
+      this.cgWindowMonitorHandle = this.intervalScheduler(
+        () => this.pollCGWindowVisibility(),
+        CGWINDOW_VISIBILITY_CHECK_MS
+      );
+    }
     this.logger.log('[StealthManager] CGWindow visibility monitor started');
   }
 
@@ -1806,6 +1890,7 @@ for window in windows:
         platform: this.platform,
         checkIntervalMs: 2000,
         logger: this.logger,
+        tickCoordinator: this.tickCoordinator ?? undefined,
       });
 
       this.tccMonitor.on('tool-detected', (info) => {

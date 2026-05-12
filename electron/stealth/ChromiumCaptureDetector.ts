@@ -1,6 +1,7 @@
 import { EventEmitter } from 'events';
 import { createNativeProcessesProvider, loadNativeStealthModule } from './nativeStealthModule';
 import type { NativeStealthBindings } from './StealthManager';
+import type { StealthTickCoordinator } from './StealthTickCoordinator';
 
 interface ChromiumProcessInfo {
   pid: number;
@@ -14,6 +15,8 @@ interface ChromiumCaptureDetectorOptions {
   checkIntervalMs?: number;
   logger?: Pick<Console, 'log' | 'warn' | 'error'>;
   getProcessList?: () => Array<{ pid: number; ppid: number; name: string }>;
+  /** Optional StealthTickCoordinator for centralized tick scheduling. When provided, registers as a tick handler instead of using its own setInterval. */
+  tickCoordinator?: StealthTickCoordinator;
 }
 
 const BROWSER_PATTERNS = [
@@ -34,6 +37,7 @@ export class ChromiumCaptureDetector extends EventEmitter {
   private readonly logger: Pick<Console, 'log' | 'warn' | 'error'>;
   private readonly getProcessList: () => Array<{ pid: number; ppid: number; name: string }>;
   private readonly nativeModule: NativeStealthBindings | null;
+  private readonly tickCoordinator: StealthTickCoordinator | null;
   private checkHandle: unknown = null;
   private running = false;
   private detectedBrowsers = new Map<string, ChromiumProcessInfo>();
@@ -51,6 +55,7 @@ export class ChromiumCaptureDetector extends EventEmitter {
       label: 'ChromiumCaptureDetector',
     });
     this.nativeModule = loadNativeStealthModule({ retryOnFailure: false });
+    this.tickCoordinator = options.tickCoordinator ?? null;
   }
 
   start(): void {
@@ -58,15 +63,31 @@ export class ChromiumCaptureDetector extends EventEmitter {
       return;
     }
 
-    const handle = setInterval(() => this.check(), this.checkIntervalMs);
-    handle.unref?.();
-    this.checkHandle = handle;
+    if (this.tickCoordinator) {
+      // Register with tick coordinator: 500ms = cadence 2 (2 × 250ms)
+      // The check() method already has its own re-entry guard (running flag).
+      this.tickCoordinator.register({
+        id: 'stealth-chromium-capture-detector',
+        cadence: 2,
+        lane: 'background',
+        fn: () => this.check(),
+      });
+      this.checkHandle = 'tick-coordinator';
+    } else {
+      const handle = setInterval(() => this.check(), this.checkIntervalMs);
+      handle.unref?.();
+      this.checkHandle = handle;
+    }
     this.logger.log('[ChromiumCaptureDetector] Monitor started');
   }
 
   stop(): void {
     if (this.checkHandle) {
-      clearInterval(this.checkHandle as NodeJS.Timeout);
+      if (this.tickCoordinator && this.checkHandle === 'tick-coordinator') {
+        this.tickCoordinator.deregister('stealth-chromium-capture-detector');
+      } else {
+        clearInterval(this.checkHandle as NodeJS.Timeout);
+      }
       this.checkHandle = null;
       this.logger.log('[ChromiumCaptureDetector] Monitor stopped');
     }

@@ -2,6 +2,7 @@ import type { VirtualDisplayCoordinator } from './MacosVirtualDisplayClient';
 import type { NativeStealthBindings, StealthFeatureFlags, StealthWindowRole } from './StealthManager';
 import type { ProtectionStateMachine } from './ProtectionStateMachine';
 import type { VisibilityController } from './VisibilityController';
+import type { StealthTickCoordinator } from './StealthTickCoordinator';
 
 export type DisplayBounds = { x: number; y: number; width: number; height: number };
 export type DisplayInfo = { id: number; workArea: DisplayBounds };
@@ -27,6 +28,8 @@ export interface StealthManagerDependencies {
   execFileFn?: (file: string, args: readonly string[], options: { timeout?: number }, callback: (error: Error | null, stdout: string, stderr: string) => void) => void;
   /** Optional macOS version override for test determinism ONLY. Never pass in production. */
   macosVersion?: { major: number; minor: number };
+  /** Optional StealthTickCoordinator for centralized tick scheduling. When provided, monitors register as tick handlers instead of using independent setInterval calls. */
+  tickCoordinator?: StealthTickCoordinator | null;
 }
 
 export interface StealthCapableWindow {

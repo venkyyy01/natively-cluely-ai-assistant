@@ -1,6 +1,7 @@
 import type { StealthManager } from './StealthManager';
 import type { MonitoringDetector, DetectedThreat } from './MonitoringDetector';
 import type { SupervisorBus } from '../runtime/SupervisorBus';
+import type { StealthTickCoordinator } from './StealthTickCoordinator';
 import { gracefulShutdown } from '../GracefulShutdownManager';
 import { loadNativeStealthModule } from './nativeStealthModule';
 
@@ -11,6 +12,17 @@ export interface EnforcementLoopIntervals {
   sckExclusionMs?: number; // 2000ms (default)
 }
 
+export interface KillSwitchOptions {
+  /** If true, quit the app. If false, hide all windows and warn. */
+  strictMode: boolean;
+  /** Function to hide all windows */
+  hideAllWindows: () => void;
+  /** Function to show warning to user */
+  showWarning: (reason: string) => void;
+  /** Function to quit the app */
+  quit: (code: number, reason: string) => void;
+}
+
 export interface EnforcementLoopOptions {
   stealthManager: StealthManager;
   monitoringDetector: MonitoringDetector;
@@ -18,6 +30,10 @@ export interface EnforcementLoopOptions {
   intervals: EnforcementLoopIntervals;
   logger?: Pick<Console, 'log' | 'warn' | 'error'>;
   exitFn?: (code: number, reason: string) => void;
+  /** Kill switch configuration. If not provided, defaults are derived from environment. */
+  killSwitch?: Partial<KillSwitchOptions>;
+  /** Optional StealthTickCoordinator for centralized tick scheduling. When provided, registers handlers instead of using independent setInterval calls. */
+  tickCoordinator?: StealthTickCoordinator;
 }
 
 interface ViolationRecord {
@@ -38,11 +54,15 @@ export class ContinuousEnforcementLoop {
   private readonly intervals: EnforcementLoopIntervals;
   private readonly logger: Pick<Console, 'log' | 'warn' | 'error'>;
   private readonly exitFn: (code: number, reason: string) => void;
+  private readonly killSwitch: KillSwitchOptions;
+  private readonly tickCoordinator: StealthTickCoordinator | null;
 
   private windowProtectionTimer: NodeJS.Timeout | null = null;
   private processDetectionTimer: NodeJS.Timeout | null = null;
   private disguiseValidationTimer: NodeJS.Timeout | null = null;
   private sckExclusionTimer: NodeJS.Timeout | null = null;
+  /** Indicates whether handlers are registered with the tick coordinator */
+  private usingTickCoordinator = false;
   private running = false;
   private windowProtectionRunning = false;
   private processDetectionRunning = false;
@@ -59,17 +79,52 @@ export class ContinuousEnforcementLoop {
   private sckExclusionFailureCount = 0;
   private sckExclusionReapplyCount = 0;
 
+  /**
+   * Monotonic enforcement-epoch counter.
+   * Incremented each time the kill-switch triggers a hide-all-windows action.
+   * Used to ensure hide operations take precedence over user-initiated show
+   * operations that may race with the kill-switch response.
+   */
+  private enforcementEpoch = 0;
+
   constructor(options: EnforcementLoopOptions) {
     this.stealthManager = options.stealthManager;
     this.monitoringDetector = options.monitoringDetector;
     this.bus = options.bus;
     this.intervals = options.intervals;
     this.logger = options.logger ?? console;
-    this.exitFn = options.exitFn ?? ((code: number, reason: string) => {
+    this.tickCoordinator = options.tickCoordinator ?? null;
+
+    // Resolve kill-switch configuration
+    const strictMode = options.killSwitch?.strictMode ??
+      (process.env.NATIVELY_STRICT_KILL_SWITCH === '1');
+
+    const defaultQuit = (code: number, reason: string) => {
       gracefulShutdown.shutdown(code, reason).catch(() => {
         setTimeout(() => process.exit(code), 3000);
       });
-    });
+    };
+
+    this.killSwitch = {
+      strictMode,
+      hideAllWindows: options.killSwitch?.hideAllWindows ?? (() => {
+        // Default: hide all managed windows via stealth manager
+        const managedWindows = this.stealthManager.getManagedWindowNumbers();
+        for (const { win } of managedWindows) {
+          this.stealthManager.requestWindowHide(win, {
+            source: 'ContinuousEnforcementLoop.killSwitch',
+            windowRole: 'primary',
+          });
+        }
+      }),
+      showWarning: options.killSwitch?.showWarning ?? ((reason: string) => {
+        this.logger.warn(`[ContinuousEnforcementLoop] Kill-switch warning: ${reason}`);
+      }),
+      quit: options.killSwitch?.quit ?? defaultQuit,
+    };
+
+    // Preserve legacy exitFn for backward compatibility
+    this.exitFn = options.exitFn ?? defaultQuit;
   }
 
   start(): void {
@@ -78,31 +133,75 @@ export class ContinuousEnforcementLoop {
     }
     this.running = true;
 
-    // Window protection loop (250ms)
-    this.windowProtectionTimer = setInterval(() => {
-      void this.runWindowProtection();
-    }, this.intervals.windowProtectionMs);
-    this.windowProtectionTimer.unref?.();
+    if (this.tickCoordinator) {
+      // Register all handlers with the tick coordinator using calculated cadences.
+      // Per-handler "is-running" guards are preserved as an additional layer of
+      // protection alongside the coordinator's per-id serialization.
 
-    // Process detection loop (3s)
-    this.processDetectionTimer = setInterval(() => {
-      void this.runProcessDetection();
-    }, this.intervals.processDetectionMs);
-    this.processDetectionTimer.unref?.();
+      // Window protection: 250ms / 250ms base = cadence 1
+      this.tickCoordinator.register({
+        id: 'enforcement-window-protection',
+        cadence: 1,
+        lane: 'background',
+        fn: () => this.runWindowProtection(),
+      });
 
-    // Disguise validation loop (15s)
-    this.disguiseValidationTimer = setInterval(() => {
-      void this.runDisguiseValidation();
-    }, this.intervals.disguiseValidationMs);
-    this.disguiseValidationTimer.unref?.();
+      // Process detection: 3000ms / 250ms base = cadence 12
+      this.tickCoordinator.register({
+        id: 'enforcement-process-detection',
+        cadence: 12,
+        lane: 'background',
+        fn: () => this.runProcessDetection(),
+      });
 
-    // SCK exclusion verification loop (2s default, macOS 15+ only)
-    if (this.stealthManager.isMacOS15PlusCapable()) {
-      const sckInterval = this.intervals.sckExclusionMs ?? DEFAULT_SCK_EXCLUSION_INTERVAL_MS;
-      this.sckExclusionTimer = setInterval(() => {
-        void this.pollSckExclusion();
-      }, sckInterval);
-      this.sckExclusionTimer.unref?.();
+      // Disguise validation: 15000ms / 250ms base = cadence 60
+      this.tickCoordinator.register({
+        id: 'enforcement-disguise-validation',
+        cadence: 60,
+        lane: 'background',
+        fn: () => this.runDisguiseValidation(),
+      });
+
+      // SCK exclusion: 2000ms / 250ms base = cadence 8 (macOS 15+ only)
+      if (this.stealthManager.isMacOS15PlusCapable()) {
+        this.tickCoordinator.register({
+          id: 'enforcement-sck-exclusion',
+          cadence: 8,
+          lane: 'background',
+          fn: () => this.pollSckExclusion(),
+        });
+      }
+
+      this.usingTickCoordinator = true;
+    } else {
+      // Fallback: use independent setInterval calls
+
+      // Window protection loop (250ms)
+      this.windowProtectionTimer = setInterval(() => {
+        void this.runWindowProtection();
+      }, this.intervals.windowProtectionMs);
+      this.windowProtectionTimer.unref?.();
+
+      // Process detection loop (3s)
+      this.processDetectionTimer = setInterval(() => {
+        void this.runProcessDetection();
+      }, this.intervals.processDetectionMs);
+      this.processDetectionTimer.unref?.();
+
+      // Disguise validation loop (15s)
+      this.disguiseValidationTimer = setInterval(() => {
+        void this.runDisguiseValidation();
+      }, this.intervals.disguiseValidationMs);
+      this.disguiseValidationTimer.unref?.();
+
+      // SCK exclusion verification loop (2s default, macOS 15+ only)
+      if (this.stealthManager.isMacOS15PlusCapable()) {
+        const sckInterval = this.intervals.sckExclusionMs ?? DEFAULT_SCK_EXCLUSION_INTERVAL_MS;
+        this.sckExclusionTimer = setInterval(() => {
+          void this.pollSckExclusion();
+        }, sckInterval);
+        this.sckExclusionTimer.unref?.();
+      }
     }
 
     this.logger.log('[ContinuousEnforcementLoop] Started');
@@ -111,21 +210,31 @@ export class ContinuousEnforcementLoop {
   stop(): void {
     this.running = false;
 
-    if (this.windowProtectionTimer) {
-      clearInterval(this.windowProtectionTimer);
-      this.windowProtectionTimer = null;
-    }
-    if (this.processDetectionTimer) {
-      clearInterval(this.processDetectionTimer);
-      this.processDetectionTimer = null;
-    }
-    if (this.disguiseValidationTimer) {
-      clearInterval(this.disguiseValidationTimer);
-      this.disguiseValidationTimer = null;
-    }
-    if (this.sckExclusionTimer) {
-      clearInterval(this.sckExclusionTimer);
-      this.sckExclusionTimer = null;
+    if (this.usingTickCoordinator && this.tickCoordinator) {
+      // Deregister all handlers from the tick coordinator
+      this.tickCoordinator.deregister('enforcement-window-protection');
+      this.tickCoordinator.deregister('enforcement-process-detection');
+      this.tickCoordinator.deregister('enforcement-disguise-validation');
+      this.tickCoordinator.deregister('enforcement-sck-exclusion');
+      this.usingTickCoordinator = false;
+    } else {
+      // Clear independent setInterval timers
+      if (this.windowProtectionTimer) {
+        clearInterval(this.windowProtectionTimer);
+        this.windowProtectionTimer = null;
+      }
+      if (this.processDetectionTimer) {
+        clearInterval(this.processDetectionTimer);
+        this.processDetectionTimer = null;
+      }
+      if (this.disguiseValidationTimer) {
+        clearInterval(this.disguiseValidationTimer);
+        this.disguiseValidationTimer = null;
+      }
+      if (this.sckExclusionTimer) {
+        clearInterval(this.sckExclusionTimer);
+        this.sckExclusionTimer = null;
+      }
     }
 
     this.logger.log('[ContinuousEnforcementLoop] Stopped');
@@ -281,13 +390,8 @@ export class ContinuousEnforcementLoop {
   private async handleCriticalThreat(threat: DetectedThreat): Promise<void> {
     this.logger.error(`[ContinuousEnforcementLoop] CRITICAL threat detected: ${threat.name} (PID: ${threat.pid})`);
 
-    await this.bus.emit({
-      type: 'stealth:fault',
-      reason: `monitoring-tool-detected:${threat.name}`,
-    });
-
-    // Kill switch: exit within 1 second
-    this.exitFn(1, `monitoring-tool-detected:${threat.name}`);
+    const reason = `monitoring-tool-detected:${threat.name}`;
+    await this.triggerKillSwitch(reason);
   }
 
   private async handleWarningThreat(threat: DetectedThreat): Promise<void> {
@@ -327,12 +431,65 @@ export class ContinuousEnforcementLoop {
     // Check if we exceed max violations
     if (this.violations.length >= ContinuousEnforcementLoop.MAX_VIOLATIONS) {
       this.logger.error('[ContinuousEnforcementLoop] Maximum violations exceeded, triggering kill switch');
-      this.exitFn(1, 'max-violations-exceeded');
+      void this.triggerKillSwitch('max-violations-exceeded');
     }
   }
 
   isRunning(): boolean {
     return this.running;
+  }
+
+  /**
+   * Triggers the kill-switch response based on the configured mode.
+   *
+   * Non-strict (default): hide all windows → emit `stealth:fault` → show user warning.
+   * Strict (`NATIVELY_STRICT_KILL_SWITCH=1`): call gracefulShutdown.shutdown(1, reason).
+   *
+   * In non-strict mode, increments the enforcement-epoch counter so that
+   * any racing user-initiated window-show operations are overridden.
+   */
+  async triggerKillSwitch(reason: string): Promise<void> {
+    if (this.killSwitch.strictMode) {
+      this.logger.error(`[ContinuousEnforcementLoop] Kill-switch (strict): shutting down — ${reason}`);
+      this.killSwitch.quit(1, reason);
+      return;
+    }
+
+    // Non-strict mode: hide all windows → emit stealth:fault → show warning
+    this.logger.warn(`[ContinuousEnforcementLoop] Kill-switch (non-strict): hiding windows — ${reason}`);
+
+    // Increment enforcement epoch to establish hide precedence
+    this.enforcementEpoch++;
+
+    this.killSwitch.hideAllWindows();
+
+    await this.bus.emit({
+      type: 'stealth:fault',
+      reason,
+    });
+
+    this.killSwitch.showWarning(reason);
+  }
+
+  /**
+   * Returns the current enforcement epoch.
+   * Used by window-show logic to determine if a hide operation
+   * should take precedence over a user-initiated show.
+   */
+  getEnforcementEpoch(): number {
+    return this.enforcementEpoch;
+  }
+
+  /**
+   * Checks whether a window-show operation should be suppressed
+   * because a kill-switch hide is active at a newer epoch.
+   *
+   * @param showEpoch - The epoch at which the show was initiated.
+   *   If the current enforcement epoch is greater than showEpoch,
+   *   the hide takes precedence and the show should be suppressed.
+   */
+  shouldSuppressShow(showEpoch: number): boolean {
+    return this.enforcementEpoch > showEpoch;
   }
 
   /** Returns the total number of SCK exclusion failures detected since start. */

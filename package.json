@@ -136,9 +136,9 @@
       ],
       "icon": "assets/natively.icns",
       "identity": null,
-    "hardenedRuntime": true,
-    "entitlements": "assets/entitlements.mac.plist",
-    "entitlementsInherit": "assets/entitlements.mac.plist"
+      "hardenedRuntime": true,
+      "entitlements": "assets/entitlements.mac.plist",
+      "entitlementsInherit": "assets/entitlements.mac.plist"
     },
     "win": {
       "target": [
@@ -221,6 +221,7 @@
     "electron-builder": "^26.8.1",
     "electron-is-dev": "^3.0.1",
     "electron-rebuild": "^2.0.3",
+    "fast-check": "^3.23.2",
     "postcss": "^8.4.49",
     "rimraf": "^6.0.1",
     "tailwindcss": "^3.4.15",
@@ -286,11 +287,11 @@
   "optionalDependencies": {
     "natively-audio": "file:./native-module",
     "onnxruntime-node": "^1.18.0",
-    "onnxruntime-node-win32-x64": "^1.18.0",
     "onnxruntime-node-win32-ia32": "^1.18.0",
+    "onnxruntime-node-win32-x64": "^1.18.0",
     "sqlite-vec-darwin-arm64": "^0.1.7-alpha.2",
     "sqlite-vec-darwin-x64": "^0.1.7-alpha.2",
-    "sqlite-vec-win32-x64": "^0.1.7-alpha.2",
-    "sqlite-vec-win32-ia32": "^0.1.7-alpha.2"
+    "sqlite-vec-win32-ia32": "^0.1.7-alpha.2",
+    "sqlite-vec-win32-x64": "^0.1.7-alpha.2"
   }
 }

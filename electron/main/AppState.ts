@@ -17,6 +17,8 @@ import { AudioFacade } from "../runtime/AudioFacade"
 import { getPerformanceInstrumentation, type PerformanceInstrumentation } from "../runtime/PerformanceInstrumentation"
 import { RuntimeCoordinator } from "../runtime/RuntimeCoordinator"
 import { StealthManager } from "../stealth/StealthManager"
+import { ContinuousEnforcementLoop } from "../stealth/ContinuousEnforcementLoop"
+import { MonitoringDetector } from "../stealth/MonitoringDetector"
 import { createMacosVirtualDisplayCoordinator, resolveMacosVirtualDisplayHelperPath } from "../stealth/macosVirtualDisplayIntegration"
 import { NativeStealthBridge } from "../stealth/NativeStealthBridge"
 import {
@@ -82,6 +84,9 @@ export class AppState {
   public settingsWindowHelper: SettingsWindowHelper
   public modelSelectorWindowHelper: ModelSelectorWindowHelper
   private stealthManager: StealthManager
+  private enforcementLoop: ContinuousEnforcementLoop | null = null
+  private enforcementLoopRunning = false
+  private enforcementLoopTransition: Promise<void> = Promise.resolve()
   private screenshotHelper: ScreenshotHelper
   public processingHelper: ProcessingHelper
   private accelerationManager: import('../services/AccelerationManager').AccelerationManager | null = null
@@ -2190,6 +2195,9 @@ try {
   }
 
   public async cleanupForQuit(): Promise<void> {
+    // Stop the ContinuousEnforcementLoop on application quit
+    this.stopEnforcementLoop()
+
     await this.intelligenceManager.waitForPendingSaves(10000);
     this.meetingStartSequence += 1
     this.meetingLifecycleState = 'idle'
@@ -3027,10 +3035,14 @@ setThemeMode: (mode) => this.themeManager.setMode(mode as import('../ThemeManage
           this.applyUndetectableState(state, startedAt, {
             runtime: 'coordinator',
           })
+          // Start the ContinuousEnforcementLoop when stealth is enabled
+          this.startEnforcementLoop()
         }
 
         // Apply undetectable state for disable case (state = false)
         if (!state) {
+          // Stop the ContinuousEnforcementLoop when stealth is disabled
+          this.stopEnforcementLoop()
           this.prepareUndetectableDisableProtection()
           this.applyUndetectableState(state, startedAt, {
             runtime: 'coordinator',
@@ -3045,6 +3057,8 @@ setThemeMode: (mode) => this.themeManager.setMode(mode as import('../ThemeManage
           // Without this, the AppState could be left believing invisible
           // mode was on while every other surface said it was off.
           this.stealthManager.setEnabled(false)
+          // Stop enforcement loop on failed enable rollback
+          this.stopEnforcementLoop()
           try {
             this.applyUndetectableState(false, startedAt, {
               runtime: 'coordinator',
@@ -3328,6 +3342,70 @@ setThemeMode: (mode) => this.themeManager.setMode(mode as import('../ThemeManage
     void this.setUndetectableAsync(state).catch((error) => {
       console.error('[Stealth] Failed to update undetectable state:', error)
     })
+  }
+
+  /**
+   * Start the ContinuousEnforcementLoop.
+   * Serialized: if a transition is already in progress, this waits for it.
+   * Uses a single `enforcementLoopRunning` flag with atomic transitions to
+   * prevent double-start on rapid enable/disable toggling.
+   */
+  private startEnforcementLoop(): void {
+    const transition = this.enforcementLoopTransition.then(async () => {
+      if (this.enforcementLoopRunning) {
+        return;
+      }
+      this.enforcementLoopRunning = true;
+
+      if (!this.enforcementLoop) {
+        const bus = this.runtimeCoordinator.getBus();
+        this.enforcementLoop = new ContinuousEnforcementLoop({
+          stealthManager: this.stealthManager,
+          monitoringDetector: new MonitoringDetector({
+            platform: process.platform,
+            logger: console,
+          }),
+          bus,
+          intervals: {
+            windowProtectionMs: 250,
+            processDetectionMs: 3000,
+            disguiseValidationMs: 15000,
+          },
+          logger: console,
+        });
+      }
+
+      this.enforcementLoop.start();
+      console.log('[AppState] ContinuousEnforcementLoop started');
+    });
+
+    this.enforcementLoopTransition = transition.catch((error) => {
+      console.error('[AppState] Failed to start ContinuousEnforcementLoop:', error);
+      this.enforcementLoopRunning = false;
+    });
+  }
+
+  /**
+   * Stop the ContinuousEnforcementLoop.
+   * Serialized: if a start transition is still in progress, this waits for it
+   * to complete before stopping, ensuring no orphaned timers.
+   */
+  private stopEnforcementLoop(): void {
+    const transition = this.enforcementLoopTransition.then(async () => {
+      if (!this.enforcementLoopRunning) {
+        return;
+      }
+      this.enforcementLoopRunning = false;
+
+      if (this.enforcementLoop) {
+        this.enforcementLoop.stop();
+        console.log('[AppState] ContinuousEnforcementLoop stopped');
+      }
+    });
+
+    this.enforcementLoopTransition = transition.catch((error) => {
+      console.error('[AppState] Failed to stop ContinuousEnforcementLoop:', error);
+    });
   }
 
   public handleStealthRuntimeFault(reason: string): void {

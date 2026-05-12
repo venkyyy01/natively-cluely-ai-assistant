@@ -1,12 +1,15 @@
 import { EventEmitter } from 'events';
 import { createNativeProcessesProvider } from './nativeStealthModule';
 import { KNOWN_ENTERPRISE_TOOLS } from './enterpriseToolRegistry';
+import type { StealthTickCoordinator } from './StealthTickCoordinator';
 
 interface TCCMonitorOptions {
   platform?: string;
   checkIntervalMs?: number;
   logger?: Pick<Console, 'log' | 'warn' | 'error'>;
   getProcessList?: () => Array<{ pid: number; ppid: number; name: string }>;
+  /** Optional StealthTickCoordinator for centralized tick scheduling. When provided, registers as a tick handler instead of using its own setInterval. */
+  tickCoordinator?: StealthTickCoordinator;
 }
 
 const TCC_DB_PATH = '/Library/Application Support/com.apple.TCC/TCC.db';
@@ -16,6 +19,7 @@ export class TCCMonitor extends EventEmitter {
   private readonly checkIntervalMs: number;
   private readonly logger: Pick<Console, 'log' | 'warn' | 'error'>;
   private readonly getProcessList: () => Array<{ pid: number; ppid: number; name: string }>;
+  private readonly tickCoordinator: StealthTickCoordinator | null;
   private checkHandle: unknown = null;
   private running = false;
   private grantedApps = new Map<string, string>();
@@ -30,6 +34,7 @@ export class TCCMonitor extends EventEmitter {
       logger: this.logger,
       label: 'TCCMonitor',
     });
+    this.tickCoordinator = options.tickCoordinator ?? null;
   }
 
   start(): void {
@@ -37,15 +42,31 @@ export class TCCMonitor extends EventEmitter {
       return;
     }
 
-    const handle = setInterval(() => this.check(), this.checkIntervalMs);
-    handle.unref?.();
-    this.checkHandle = handle;
+    if (this.tickCoordinator) {
+      // Register with tick coordinator: 2000ms = cadence 8 (8 × 250ms)
+      // The check() method already has its own re-entry guard (running flag).
+      this.tickCoordinator.register({
+        id: 'stealth-tcc-monitor',
+        cadence: 8,
+        lane: 'background',
+        fn: () => this.check(),
+      });
+      this.checkHandle = 'tick-coordinator';
+    } else {
+      const handle = setInterval(() => this.check(), this.checkIntervalMs);
+      handle.unref?.();
+      this.checkHandle = handle;
+    }
     this.logger.log('[TCCMonitor] Started monitoring ScreenCapture permissions');
   }
 
   stop(): void {
     if (this.checkHandle) {
-      clearInterval(this.checkHandle as NodeJS.Timeout);
+      if (this.tickCoordinator && this.checkHandle === 'tick-coordinator') {
+        this.tickCoordinator.deregister('stealth-tcc-monitor');
+      } else {
+        clearInterval(this.checkHandle as NodeJS.Timeout);
+      }
       this.checkHandle = null;
       this.logger.log('[TCCMonitor] Stopped monitoring');
     }
