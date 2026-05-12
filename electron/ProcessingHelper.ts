@@ -4,6 +4,8 @@ import { AppState } from "./main"
 import { LLMHelper } from "./LLMHelper"
 import { CredentialsManager } from "./services/CredentialsManager"
 import { app, BrowserWindow } from "electron"
+import { extractCodingProblem, isCodingProblemComplete } from "./coding/ProblemExtractor"
+import { isConsciousOptimizationActive } from "./config/optimizations"
 // import dotenv from "dotenv" // Removed static import
 
 if (!app.isPackaged) {
@@ -179,23 +181,54 @@ export class ProcessingHelper {
       this.currentProcessingAbortController?.abort()
       this.currentProcessingAbortController = new AbortController()
       try {
-        const imageResult = await this.llmHelper.analyzeImageFiles(allPaths, this.currentProcessingAbortController.signal);
-        if (this.currentProcessingAbortController.signal.aborted) {
-          return
+        // NAT-303: Route through ProblemExtractor when flag is ON.
+        const useExtractor = isConsciousOptimizationActive('useStructuredProblemExtractor');
+        if (useExtractor) {
+          const codingProblem = await extractCodingProblem(allPaths, {
+            signal: this.currentProcessingAbortController.signal,
+            visionCall: async (paths, prompt, sig) => {
+              const result = await this.llmHelper.analyzeImageFiles(paths, sig);
+              return result.text;
+            },
+          });
+          if (this.currentProcessingAbortController.signal.aborted) return;
+
+          // Back-compat legacy problemInfo shape for existing consumers.
+          const problemInfo = {
+            problem_statement: codingProblem.problemStatement || codingProblem.rawOcr || '',
+            input_format: { description: codingProblem.inputSpec || 'N/A', parameters: [] as any[] },
+            output_format: { description: codingProblem.outputSpec || 'N/A', type: 'string', subtype: 'text' },
+            complexity: { time: 'N/A', space: 'N/A' },
+            test_cases: codingProblem.examples.map((e) => ({ input: e.input, output: e.output })),
+            validation_type: 'manual',
+            difficulty: codingProblem.difficulty,
+            // Additive enrichment
+            codingProblem,
+            extraction_partial: !isCodingProblemComplete(codingProblem),
+          };
+          if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.webContents.send(this.appState.PROCESSING_EVENTS.PROBLEM_EXTRACTED, problemInfo);
+          }
+          this.appState.setProblemInfo(problemInfo);
+        } else {
+          const imageResult = await this.llmHelper.analyzeImageFiles(allPaths, this.currentProcessingAbortController.signal);
+          if (this.currentProcessingAbortController.signal.aborted) {
+            return
+          }
+          const problemInfo = {
+            problem_statement: imageResult.text,
+            input_format: { description: "Generated from screenshot", parameters: [] as any[] },
+            output_format: { description: "Generated from screenshot", type: "string", subtype: "text" },
+            complexity: { time: "N/A", space: "N/A" },
+            test_cases: [] as any[],
+            validation_type: "manual",
+            difficulty: "custom"
+          };
+          if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.webContents.send(this.appState.PROCESSING_EVENTS.PROBLEM_EXTRACTED, problemInfo);
+          }
+          this.appState.setProblemInfo(problemInfo);
         }
-        const problemInfo = {
-          problem_statement: imageResult.text,
-          input_format: { description: "Generated from screenshot", parameters: [] as any[] },
-          output_format: { description: "Generated from screenshot", type: "string", subtype: "text" },
-          complexity: { time: "N/A", space: "N/A" },
-          test_cases: [] as any[],
-          validation_type: "manual",
-          difficulty: "custom"
-        };
-        if (mainWindow && !mainWindow.isDestroyed()) {
-          mainWindow.webContents.send(this.appState.PROCESSING_EVENTS.PROBLEM_EXTRACTED, problemInfo);
-        }
-        this.appState.setProblemInfo(problemInfo);
       } catch (error: any) {
         if (this.currentProcessingAbortController?.signal.aborted) {
           return

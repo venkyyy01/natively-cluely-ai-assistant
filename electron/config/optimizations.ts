@@ -83,6 +83,21 @@ export interface OptimizationFlags {
   /** Triggering: allow user microphone transcripts to request suggestions */
   useMicTranscriptTriggers: boolean;
 
+  /** NAT-206: Two-Tier Answer Contract — Tier-B probe path for non-behavioral follow-ups. Default OFF. */
+  useTwoTierAnswerContract: boolean;
+
+  /** NAT-307: Structured problem extractor pipeline. Default OFF. */
+  useStructuredProblemExtractor: boolean;
+
+  /** NAT-405: Code editor capture via region-bound Tesseract polling. Default OFF. */
+  useCodeEditorCapture: boolean;
+
+  /** NAT-506: Continuous on-screen RAG via pHash+OCR. Default OFF. */
+  useContinuousScreenRAG: boolean;
+
+  /** NAT-701: Incremental JSON stream parser state machine. Default OFF. */
+  useRobustJsonStreamParser: boolean;
+
   /** Worker thread configuration */
   workerThreadCount: number;
 
@@ -148,9 +163,10 @@ export const DEFAULT_OPTIMIZATION_FLAGS: OptimizationFlags = {
   useEnhancedCache: true,
 
   // Phase 2
-  // Disabled by default until packaged macOS builds stop crashing inside
-  // onnxruntime-node / CoreML session teardown.
-  useANEEmbeddings: false,
+  // NAT-101: Re-enabled — dispose() now calls SafeOnnxSession.release() which swallows
+  // EXC_BAD_ACCESS in OrtApis::ReleaseIoBinding so teardown can't crash the main process.
+  // Falls back to LocalEmbeddingProvider on non-arm64 or after 3 consecutive ONNX failures.
+  useANEEmbeddings: true,
   useParallelContext: true,
 
   // Phase 3
@@ -169,47 +185,63 @@ export const DEFAULT_OPTIMIZATION_FLAGS: OptimizationFlags = {
   // Conscious mode verifier
   useDegradedProvenanceCheck: true,
 
-  // Conscious mode verifier
-  useTighterNumericClaimRegex: false,
+  // NAT-600: Accuracy flip-on — tighter numeric regex + expanded tech allowlist now ON.
+  // Reduces false-positive star ratings on claims like "100ms" being confused with percentages.
+  useTighterNumericClaimRegex: true,
 
-  // Conscious mode verifier
-  useExpandedTechAllowlist: false,
+  // NAT-600: Expanded technology allowlist ON — covers modern stack (Rust, Kafka, k8s, etc.).
+  useExpandedTechAllowlist: true,
 
-  // Conscious mode orchestrator
-  useSemanticThreadContinuation: false,
+  // NAT-600: Semantic thread continuation ON — SBERT-based compatibility check.
+  useSemanticThreadContinuation: true,
 
-  // Conscious mode confidence
+  // Conscious mode confidence calibration — still OFF pending isotonic regression eval.
   useConfidenceCalibration: false,
 
-  // Conscious mode verifier
+  // Conscious mode verifier — NLI semantic entailment (high latency, stay OFF).
   useSemanticEntailment: false,
 
-  // Conscious mode verifier
+  // Conscious mode verifier — probabilistic STAR scorer (pending A/B).
   useProbabilisticStar: false,
 
-  // Conscious mode reaction
+  // Conscious mode reaction — SetFit reactions (pending model upload).
   useSetFitReactions: false,
 
-  // Pause detection
+  // Pause detection — adaptive pause (pending latency eval).
   useAdaptivePause: false,
 
-  // Acceleration
+  // Acceleration — fuzzy speculation (pending recall eval).
   useFuzzySpeculation: false,
 
-  // Verifier
+  // NAT-600: Verification logging ON — needed for ongoing accuracy telemetry.
   useBayesianAggregation: false,
   useRAGVerification: false,
-  useVerificationLogging: false,
+  useVerificationLogging: true,
 
-  // Conscious
-  useFlexibleConsciousResponse: false,
+  // Conscious — NAT-104: free-form fallback ON by default so parse failures show text, not empty UI
+  useFlexibleConsciousResponse: true,
   useHumanLikeConsciousMode: false,
   useConsciousRefinement: false,
   useUtteranceLevelTriggering: true,
   useMicTranscriptTriggers: false,
 
-  // Worker config (6 cores default, user-adjustable)
-  workerThreadCount: 6,
+  // Phase 1 flags — NAT-206..506 (all default OFF, promoted after shadow eval)
+  useTwoTierAnswerContract: process.env['NATIVELY_FORCE_TWO_TIER'] === '1',
+  useStructuredProblemExtractor: false,
+  useCodeEditorCapture: false,
+  useContinuousScreenRAG: false,
+  useRobustJsonStreamParser: false,
+
+  // NAT-103: default derived at startup; overridden by user setting.
+  // Computed lazily here so this module is safe to import in tests without `os`.
+  workerThreadCount: (() => {
+    try {
+      const os = require('os');
+      return Math.max(2, Math.min(os.cpus().length - 2, 12));
+    } catch {
+      return 4;
+    }
+  })(),
 
   // Cache config
   maxCacheMemoryMB: 100,
@@ -282,7 +314,7 @@ export function isVerifierOptimizationActive(key: 'useConsciousVerifierWordBound
  * Check if a conscious mode optimization is active
  * These run independently of the acceleration master toggle
  */
-export function isConsciousOptimizationActive(key: 'useFlexibleConsciousResponse' | 'useHumanLikeConsciousMode' | 'useConsciousRefinement' | 'useUtteranceLevelTriggering' | 'useMicTranscriptTriggers'): boolean {
+export function isConsciousOptimizationActive(key: 'useFlexibleConsciousResponse' | 'useHumanLikeConsciousMode' | 'useConsciousRefinement' | 'useUtteranceLevelTriggering' | 'useMicTranscriptTriggers' | 'useTwoTierAnswerContract' | 'useStructuredProblemExtractor' | 'useCodeEditorCapture' | 'useContinuousScreenRAG' | 'useRobustJsonStreamParser'): boolean {
   return currentFlags[key];
 }
 
@@ -294,7 +326,9 @@ export function isAppleSilicon(): boolean {
 }
 
 /**
- * Get effective worker thread count
+ * Get effective worker thread count.
+ * NAT-103: default is now dynamic (os.cpus() - 2, clamped [2,12]).
+ * This function additionally guards against user setting exceeding physical core count.
  */
 export function getEffectiveWorkerCount(): number {
   if (cachedCpuCount === null) {

@@ -70,6 +70,7 @@ function createSession(overrides?: {
     },
     getLatestAnswerHypothesis: (): AnswerHypothesis | null => null,
     recordConsciousResponse: (): void => {},
+    appendProbe: (): void => {},
   };
 
   return {

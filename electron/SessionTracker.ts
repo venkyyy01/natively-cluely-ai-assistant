@@ -8,6 +8,7 @@ import {
   ConsciousModeStructuredResponse,
   ReasoningThread,
 } from './ConsciousMode';
+import type { ProbeAnswer } from './coding/types';
 import {
   ThreadManager,
   InterviewPhaseDetector,
@@ -577,6 +578,10 @@ export class SessionTracker {
     this.responsePreferenceStore.reset();
     this.designStateStore.reset();
     persistState(this);
+  }
+
+  appendProbe(probe: ProbeAnswer): void {
+    this.consciousThreadStore.appendProbe(probe);
   }
 
   recordConsciousResponse(question: string, response: ConsciousModeStructuredResponse, threadAction: 'start' | 'continue' | 'reset'): void {

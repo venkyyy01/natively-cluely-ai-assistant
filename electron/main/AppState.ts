@@ -2292,6 +2292,31 @@ try {
     this.nativeStealthBridge = null;
     this.virtualDisplayCoordinator?.dispose?.();
 
+    // NAT-401: Stop code editor capture polling before exit.
+    try {
+      const { disposeCodeEditorCapture } = await import('../coding/CodeEditorCapture');
+      disposeCodeEditorCapture();
+    } catch {
+      // optional — only active when flag is ON
+    }
+
+    // NAT-501: Stop screen RAG snapshot loop before exit.
+    try {
+      const { disposeScreenRAGManager } = await import('../rag/ScreenRAGManager');
+      disposeScreenRAGManager();
+    } catch {
+      // optional — only active when flag is ON
+    }
+
+    // NAT-101: release ANE/ONNX session before process exits to prevent
+    // EXC_BAD_ACCESS in OrtApis::ReleaseIoBinding on next cold start.
+    try {
+      await this.accelerationManager?.dispose();
+      this.accelerationManager = null;
+    } catch (err) {
+      console.warn('[Main] AccelerationManager dispose error (swallowed):', err);
+    }
+
     // Close SQLite last so all upstream consumers (intelligenceManager,
     // checkpointer, ragManager) finish writing first. better-sqlite3 runs a
     // PRAGMA wal_checkpoint(TRUNCATE) on close; without this the WAL/SHM

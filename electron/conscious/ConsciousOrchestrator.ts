@@ -25,6 +25,9 @@ import { ConsciousVerifier } from './ConsciousVerifier';
 import { LayeredIntentRouter, isReliableIntent } from '../llm/LayeredIntentRouter';
 import type { IntentClassificationCoordinator } from '../llm/providers/IntentClassificationCoordinator';
 import { isVerifierOptimizationActive, isConsciousOptimizationActive } from '../config/optimizations';
+import { classifyProbeType, isBehavioralReask } from './ProbeTypeClassifier';
+import type { ProbeAnswer, CodingProblem } from '../coding/types';
+import { logEvent } from '../runtime/ObservabilityLogger';
 import { Metrics } from '../runtime/Metrics';
 import { FlexibleResponseRouter, type ConsciousTurnPlan } from './FlexibleResponseRouter';
 import { HumanLikeConversationEngine } from './HumanLikeConversationEngine';
@@ -58,6 +61,8 @@ interface ConsciousSession {
     response: ConsciousModeStructuredResponse,
     threadAction: 'start' | 'continue' | 'reset'
   ): void;
+  /** NAT-202: Append a Tier-B probe to the active reasoning thread. */
+  appendProbe(probe: ProbeAnswer): void;
 }
 
 export interface PreparedConsciousRoute {
@@ -76,6 +81,8 @@ export type ConsciousExecutionResult =
       structuredResponse: ConsciousModeStructuredResponse;
       fullAnswer: string;
       verification: ConsciousVerificationMetadata;
+      /** NAT-204: Present only for Tier-B probe answers. */
+      probeAnswer?: ProbeAnswer;
     };
 
 export interface ConsciousVerificationMetadata {
@@ -561,6 +568,41 @@ export class ConsciousOrchestrator {
 
     const degradedMode = this.isCircuitOpen();
 
+    // NAT-204: Two-Tier routing — use Tier-B probe for non-behavioral follow-ups.
+    const useTwoTier = isConsciousOptimizationActive('useTwoTierAnswerContract');
+    if (useTwoTier && !isBehavioralReask(input.resolvedQuestion)) {
+      try {
+        const probeType = classifyProbeType(input.resolvedQuestion);
+        const probeResult = await input.followUpLLM.generateProbeAnswer(
+          input.activeReasoningThread,
+          input.resolvedQuestion,
+          probeType,
+          { context: this.session.getConsciousSemanticContext() },
+        );
+        if (probeResult.success) {
+          if (input.isStale()) return this.fallback('probe_stale');
+          this.session.appendProbe(probeResult.data);
+          const rootResponse = this.session.getActiveReasoningThread()?.response
+            ?? input.activeReasoningThread.response;
+          this.recordExecutionSuccess();
+          logEvent('probe:generated', { probeType: probeResult.data.probeType, confidence: probeResult.data.confidence });
+          return {
+            kind: 'handled',
+            structuredResponse: rootResponse,
+            fullAnswer: formatConsciousModeResponse(rootResponse),
+            probeAnswer: probeResult.data,
+            verification: this.buildVerificationMetadata({
+              provenanceOk: true, verificationOk: true, deterministic: 'pass',
+            }),
+          };
+        }
+        logEvent('probe:fallback', { reason: 'generation_failed' });
+        console.warn('[ConsciousOrchestrator] Probe generation failed, falling back to Tier-A:', probeResult);
+      } catch (probeErr) {
+        console.warn('[ConsciousOrchestrator] Probe error, falling back to Tier-A:', probeErr);
+      }
+    }
+
     try {
       const retrievalPack = this.retrievalOrchestrator.buildPack({
         question: input.resolvedQuestion,
@@ -663,6 +705,8 @@ export class ConsciousOrchestrator {
      * matches the conversational kind.
      */
     turnPlan?: ConsciousTurnPlan;
+    /** NAT-304: When set, prepends <problem_context> block to the Tier-A prompt. */
+    codingProblem?: CodingProblem | null;
   }): Promise<ConsciousExecutionResult> {
     if (!input.route.qualifies) {
       return this.skip();
@@ -670,12 +714,20 @@ export class ConsciousOrchestrator {
 
     const degradedMode = this.isCircuitOpen();
 
+    // NAT-304: Prepend problem context to transcript when a CodingProblem is present.
+    const problemContextBlock = input.codingProblem
+      ? this.answerPlanner.buildProblemContextBlock(input.codingProblem)
+      : '';
+    const transcriptWithContext = problemContextBlock
+      ? `${problemContextBlock}\n\n${input.preparedTranscript}`
+      : input.preparedTranscript;
+
     try {
       let structuredResponse: ConsciousModeStructuredResponse | null = null;
 
       if (input.whatToAnswerLLM) {
         structuredResponse = await input.whatToAnswerLLM!.generateReasoningFirst(
-          input.preparedTranscript,
+          transcriptWithContext,
           input.question,
           input.temporalContext,
           input.intentResult,

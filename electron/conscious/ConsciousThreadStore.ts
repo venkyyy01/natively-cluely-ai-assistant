@@ -5,6 +5,10 @@ import {
 } from '../ConsciousMode';
 import { ThreadManager } from './ThreadManager';
 import { InterviewPhase, RESUME_THRESHOLD } from './types';
+import type { ProbeAnswer } from '../coding/types';
+import { isConsciousOptimizationActive } from '../config/optimizations';
+
+const MAX_PROBES = 8;
 
 export interface PersistedActiveThreadSnapshot {
   id: string;
@@ -103,6 +107,41 @@ export class ConsciousThreadStore {
     this.activeReasoningThread = null;
   }
 
+  /**
+   * NAT-202: Append a Tier-B probe to the active thread.
+   * Root response stays immutable. Probes are capped at MAX_PROBES (LRU eviction).
+   * The optional delta.fact is applied exactly once (dedup by text).
+   */
+  appendProbe(probe: ProbeAnswer): void {
+    if (!this.activeReasoningThread) {
+      return;
+    }
+    const existing = this.activeReasoningThread.probes ?? [];
+    const updated = existing.length >= MAX_PROBES ? existing.slice(1) : existing;
+    updated.push(probe);
+
+    let updatedRoot = this.activeReasoningThread.response;
+    if (probe.delta) {
+      const { fact, attachTo } = probe.delta;
+      const arr: string[] = [...(updatedRoot[attachTo] ?? [])];
+      if (!arr.includes(fact)) {
+        const capped = arr.length >= 8 ? arr.slice(1) : arr;
+        capped.push(fact);
+        updatedRoot = { ...updatedRoot, [attachTo]: capped };
+      }
+    }
+
+    this.activeReasoningThread = {
+      ...this.activeReasoningThread,
+      response: updatedRoot,
+      probes: updated,
+      followUpCount: this.activeReasoningThread.followUpCount + 1,
+      lastQuestion: probe.question,
+      updatedAt: Date.now(),
+    };
+    this.latestConsciousResponse = this.activeReasoningThread.response;
+  }
+
   recordConsciousResponse(
     question: string,
     response: ConsciousModeStructuredResponse,
@@ -112,12 +151,18 @@ export class ConsciousThreadStore {
     const designThreadId = this.threadManager.getActiveThread()?.id;
 
     if (threadAction === 'continue' && this.activeReasoningThread) {
+      // NAT-202: When Two-Tier is ON, probe answers are appended via appendProbe().
+      // The full mergeConsciousModeResponses path is only used in legacy (flag OFF) mode.
+      const useTwoTier = isConsciousOptimizationActive('useTwoTierAnswerContract');
+      const mergedResponse = useTwoTier
+        ? this.activeReasoningThread.response
+        : mergeConsciousModeResponses(this.activeReasoningThread.response, response);
       this.activeReasoningThread = {
         ...this.activeReasoningThread,
         threadId: designThreadId ?? this.activeReasoningThread.threadId,
         lastQuestion: question,
         followUpCount: this.activeReasoningThread.followUpCount + 1,
-        response: mergeConsciousModeResponses(this.activeReasoningThread.response, response),
+        response: mergedResponse,
         updatedAt: Date.now(),
       };
       this.latestConsciousResponse = this.activeReasoningThread.response;

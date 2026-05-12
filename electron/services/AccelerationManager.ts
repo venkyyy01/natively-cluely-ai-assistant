@@ -186,6 +186,19 @@ export class AccelerationManager {
     this.consciousOrchestrator.clearState();
   }
 
+  /**
+   * NAT-101: Full teardown — deactivate + release ANE ONNX session.
+   * Called from AppState.cleanupForQuit() via before-quit hook.
+   */
+  async dispose(): Promise<void> {
+    this.deactivate();
+    try {
+      await this.aneProvider.dispose();
+    } catch (err) {
+      console.warn('[AccelerationManager] ANE dispose error (swallowed):', err);
+    }
+  }
+
   getModules(): AccelerationModules {
     return {
       promptCompiler: this.promptCompiler,

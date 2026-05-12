@@ -183,6 +183,8 @@ export interface ReasoningThread {
   updatedAt: number;
   /** Cached embedding for semantic thread continuation compatibility checks */
   embedding?: number[];
+  /** NAT-202: Two-Tier probe answers. Capped at MAX_PROBES (8), LRU eviction. rootResponse is immutable after Tier-A commit. */
+  probes?: import('./coding/types').ProbeAnswer[];
 }
 
 export type ConsciousModeThreadAction = 'start' | 'continue' | 'reset' | 'ignore';

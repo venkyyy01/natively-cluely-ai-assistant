@@ -18,6 +18,10 @@ import { registerWindowHandlers } from "./ipc/registerWindowHandlers";
 import { registerGeminiStreamIpcHandlers } from "./ipc/registerGeminiStreamIpcHandlers";
 import { registerLlmCredentialsIpcHandlers } from "./ipc/registerLlmCredentialsIpcHandlers";
 import { registerProviderSttAndTestIpcHandlers } from "./ipc/registerProviderSttAndTestIpcHandlers";
+import { registerEngineHealthHandlers } from "./ipc/registerEngineHealthHandlers";
+import { registerCodeEditorCaptureHandlers } from "./ipc/registerCodeEditorCaptureHandlers";
+import { registerScreenRAGHandlers } from "./ipc/registerScreenRAGHandlers";
+import { registerObservabilityHandlers } from "./ipc/registerObservabilityHandlers";
 
 import {
   type ScreenshotFacadeLike,
@@ -501,6 +505,26 @@ safeHandleValidated("renderer:log-error", (args) => [parseIpcInput(ipcSchemas.re
     }
     return { success: true };
   });
+
+  // ==========================================
+  // NAT-105: Engine Health
+  // ==========================================
+  registerEngineHealthHandlers({ appState, safeHandle });
+
+  // ==========================================
+  // NAT-401: Code Editor Capture
+  // ==========================================
+  registerCodeEditorCaptureHandlers(() => BrowserWindow.getAllWindows().find(w => !w.isDestroyed()) ?? null);
+
+  // ==========================================
+  // NAT-501: Screen RAG
+  // ==========================================
+  registerScreenRAGHandlers();
+
+  // ==========================================
+  // NAT-801: Observability diagnostics
+  // ==========================================
+  registerObservabilityHandlers();
 
   // ==========================================
   // Overlay Opacity (Stealth Mode)

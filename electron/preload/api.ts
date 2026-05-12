@@ -265,6 +265,27 @@ onAccelerationModeChanged: (callback: (enabled: boolean) => void) => () => void
 
   // Diagnostics
   logErrorToMain: (payload: any) => Promise<{ success: boolean; error?: string }>;
+
+  // NAT-105: Engine Health
+  getEngineHealth: () => Promise<{
+    ane: 'ok' | 'disabled' | 'error';
+    foundationIntent: 'ok' | 'disabled' | 'unavailable';
+    stealth: 'ok' | 'degraded' | 'off';
+    ollamaMetal: 'ok' | 'unavailable' | 'unknown';
+    workerThreadCount: number;
+    timestamp: number;
+  }>;
+
+  // NAT-401: Code Editor Capture
+  startCodeEditorCapture: () => Promise<{ ok: boolean; reason?: string }>;
+  stopCodeEditorCapture: () => Promise<{ ok: boolean }>;
+  getCodeEditorText: () => Promise<{ text: string }>;
+  onCodeEditorChange: (callback: (data: { text: string; timestamp: number }) => void) => () => void;
+
+  // NAT-801: Observability
+  getObsEvents: (limit?: number) => Promise<{ events: unknown[] }>;
+  getObsStats: () => Promise<{ stats: Record<string, number> }>;
+  clearObsEvents: () => Promise<{ ok: boolean }>;
 }
 
 export const PROCESSING_EVENTS = {
@@ -1024,5 +1045,21 @@ setOpenAtLogin: (open: boolean) => invokeStatus("set-open-at-login", open),
   },
 
   // Diagnostics
-  logErrorToMain: (payload: any) => ipcRenderer.invoke('renderer:log-error', payload),
+  logErrorToMain: (payload: any) => invokeAndUnwrap<{ success: boolean; error?: string }>('renderer:log-error', payload),
+  getEngineHealth: () => ipcRenderer.invoke('get-engine-health'),
+
+  // NAT-401: Code Editor Capture
+  startCodeEditorCapture: () => ipcRenderer.invoke('code-editor-capture:start'),
+  stopCodeEditorCapture: () => ipcRenderer.invoke('code-editor-capture:stop'),
+  getCodeEditorText: () => ipcRenderer.invoke('code-editor-capture:get'),
+  onCodeEditorChange: (callback: (data: { text: string; timestamp: number }) => void) => {
+    const sub = (_: any, data: { text: string; timestamp: number }) => callback(data);
+    ipcRenderer.on('code-editor-capture:change', sub);
+    return () => ipcRenderer.removeListener('code-editor-capture:change', sub);
+  },
+
+  // NAT-801: Observability
+  getObsEvents: (limit?: number) => ipcRenderer.invoke('obs:events', limit),
+  getObsStats: () => ipcRenderer.invoke('obs:stats'),
+  clearObsEvents: () => ipcRenderer.invoke('obs:clear'),
 } as ElectronAPI)

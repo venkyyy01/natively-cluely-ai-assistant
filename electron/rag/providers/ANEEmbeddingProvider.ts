@@ -224,4 +224,27 @@ export class ANEEmbeddingProvider implements IEmbeddingProvider {
   supportsANE(): boolean {
     return this.useANE;
   }
+
+  /**
+   * NAT-101: Release the ONNX/CoreML session and clear all state.
+   * Called on app before-quit via AccelerationManager.dispose().
+   * Uses try/finally so teardown errors (EXC_BAD_ACCESS in OrtApis::ReleaseIoBinding)
+   * are swallowed — the SafeOnnxSession.release() wrapper already absorbs them.
+   */
+  async dispose(): Promise<void> {
+    if (!this.session) {
+      return;
+    }
+    const session = this.session;
+    this.session = null;
+    this.initialized = false;
+    this.warmedUp = false;
+    this.tokenizer = null;
+    try {
+      await session.release();
+      console.log('[ANEEmbeddingProvider] Session released cleanly.');
+    } catch (err) {
+      console.warn('[ANEEmbeddingProvider] Session release error (swallowed):', err);
+    }
+  }
 }

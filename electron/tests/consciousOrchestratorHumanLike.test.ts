@@ -31,6 +31,7 @@ function createSession() {
     getLatestQuestionReaction: (): QuestionReaction | null => null,
     getLatestAnswerHypothesis: (): AnswerHypothesis | null => null,
     recordConsciousResponse: (): void => {},
+    appendProbe: (): void => {},
   };
   return session;
 }

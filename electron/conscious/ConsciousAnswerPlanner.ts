@@ -4,6 +4,7 @@ import type { ConsciousPlannerPreferenceSummary, ConsciousResponseQuestionMode }
 import type { QuestionReaction } from './QuestionReactionClassifier';
 import type { IntentResult } from '../llm/IntentClassifier';
 import { isStrongConsciousIntent } from './ConsciousIntentService';
+import type { CodingProblem } from '../coding/types';
 
 export type ConsciousAnswerShape =
   | 'direct_answer'
@@ -260,6 +261,37 @@ export class ConsciousAnswerPlanner {
       groundingHint: dedupeSentences(groundingHints).join(' '),
       rationale: dedupeSentences(rationaleParts).join(' '),
     };
+  }
+
+  /**
+   * NAT-304: Build a <problem_context> XML block for Tier-A prompt injection.
+   * Prepended before <conscious_answer_plan> when a CodingProblem is present.
+   * Matches the Core Objective A/B/C/D protocol verbatim.
+   */
+  buildProblemContextBlock(problem: CodingProblem): string {
+    const examples = problem.examples
+      .slice(0, 3)
+      .map((e, i) => `  Example ${i + 1}: Input=${e.input}, Output=${e.output}${e.explanation ? `, Explanation=${e.explanation}` : ''}`)
+      .join('\n');
+    const constraints = problem.constraints.slice(0, 8).map((c) => `  - ${c}`).join('\n');
+    return [
+      '<problem_context>',
+      `TITLE: ${problem.title}`,
+      `DIFFICULTY: ${problem.difficulty}`,
+      `TYPE: ${problem.problemType}`,
+      '',
+      'PROBLEM STATEMENT:',
+      problem.problemStatement.slice(0, 2000),
+      examples ? `\nEXAMPLES:\n${examples}` : '',
+      constraints ? `\nCONSTRAINTS:\n${constraints}` : '',
+      '',
+      'REQUIRED ANSWER STRUCTURE (A/B/C/D):',
+      'A. Problem Understanding — task, inputs/outputs, constraints, tricky cases, what the interviewer is evaluating',
+      'B. Brute-Force — intuition, why it works, full working code, time/space complexity + reasoning',
+      'C. Optimized — why brute force insufficient, optimization insight, data structure choice, full working code, time/space complexity + reasoning',
+      'D. Tradeoffs & Interview Reasoning — why optimized is preferred, alternatives, data-structure rationale, 2 common follow-ups',
+      '</problem_context>',
+    ].filter((l) => l !== null).join('\n');
   }
 
   buildContextBlock(plan: ConsciousAnswerPlan): string {
