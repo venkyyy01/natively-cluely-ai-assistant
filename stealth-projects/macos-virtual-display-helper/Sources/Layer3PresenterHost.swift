@@ -196,11 +196,15 @@ private final class AppKitLayer3PresenterWindow: Layer3PresenterWindow {
         let window = NSWindow(contentRect: rect, styleMask: styleMask, backing: .buffered, defer: false)
         window.isOpaque = true
         window.backgroundColor = .black
-        window.title = "Layer3Presenter-\(sessionId)-\(surfaceId)"
+        // Use an empty title to avoid fingerprinting via CGWindowListCopyWindowInfo
+        // or SCShareableContent window enumeration.
+        window.title = ""
         window.level = .screenSaver
-        window.collectionBehavior = [.fullScreenAuxiliary, .moveToActiveSpace, .stationary]
+        window.collectionBehavior = [.fullScreenAuxiliary, .moveToActiveSpace, .stationary, .ignoresCycle]
         window.sharingType = .none
         window.ignoresMouseEvents = true
+        window.isExcludedFromWindowsMenu = true
+        window.hidesOnDeactivate = false
         let resolvedScreen = try AppKitLayer3PresenterWindow.resolveScreen(displayToken: displayToken)
         if let screen = resolvedScreen {
             window.setFrame(screen.frame, display: false)

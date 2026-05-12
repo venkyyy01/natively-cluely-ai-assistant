@@ -35,6 +35,11 @@ export function resolveMacosVirtualDisplayHelperPath(options: ResolveOptions = {
   }
   const allowEnumerableVirtualDisplayHelper = isEnvFlagEnabled(env.NATIVELY_ALLOW_ENUMERABLE_VIRTUAL_DISPLAY_HELPER);
 
+  // Priority 1: Full-stealth-helper — uses in-process NSWindow with
+  // sharingType=.none. Does NOT create a CGVirtualDisplay, so it is
+  // completely invisible to display enumeration APIs (CGGetActiveDisplayList,
+  // CGGetOnlineDisplayList) and SCShareableContent.displays. This is the
+  // production path.
   const fullStealthCandidates = [
     ...(resourcesPath
       ? [
@@ -50,6 +55,10 @@ export function resolveMacosVirtualDisplayHelperPath(options: ResolveOptions = {
     path.join(cwd, 'stealth-projects/macos-full-stealth-helper/.build/release/macos-full-stealth-helper'),
   ];
 
+  // Priority 2: Legacy virtual-display-helper — creates a CGVirtualDisplay
+  // which IS visible in display enumeration unless hidesDisplay is set (macOS 14+).
+  // Only used when explicitly opted in via NATIVELY_ALLOW_ENUMERABLE_VIRTUAL_DISPLAY_HELPER=1
+  // for validation/testing purposes. Never used in production.
   const enumerableVirtualDisplayCandidates = allowEnumerableVirtualDisplayHelper
     ? [
         ...(resourcesPath ? [path.join(resourcesPath, 'bin/macos/system-services-helper')] : []),
