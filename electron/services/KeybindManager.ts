@@ -2,6 +2,18 @@ import { app, globalShortcut, Menu, BrowserWindow, ipcMain } from 'electron';
 import path from 'path';
 import fs from 'fs';
 
+// Stealth key monitor — uses CGEventTap instead of globalShortcut to avoid
+// detection by proctoring software that enumerates registered hotkeys.
+let StealthKeyMonitor: any = null;
+try {
+    const nativeModule = require('natively-audio');
+    if (nativeModule?.StealthKeyMonitor) {
+        StealthKeyMonitor = nativeModule.StealthKeyMonitor;
+    }
+} catch {
+    // Native module unavailable — will fall back to globalShortcut
+}
+
 export interface KeybindConfig {
     id: string;
     label: string;
@@ -45,6 +57,8 @@ export class KeybindManager {
     private windowHelper: any; // Type avoided for circular dep, passed in init
     private onUpdateCallbacks: (() => void)[] = [];
     private onShortcutTriggeredCallbacks: ((actionId: string) => void)[] = [];
+    private stealthKeyMonitor: any = null;
+    private useStealthKeys: boolean = false;
 
     private constructor() {
         this.filePath = path.join(app.getPath('userData'), 'keybinds.json');
@@ -139,7 +153,16 @@ export class KeybindManager {
     public registerGlobalShortcuts() {
         globalShortcut.unregisterAll();
 
-        // Register global shortcuts
+        // In stealth mode, use CGEventTap-based monitor instead of globalShortcut.
+        // globalShortcut uses RegisterEventHotKey which is visible to proctoring
+        // software. CGEventTap is a passive listener that cannot be enumerated.
+        if (StealthKeyMonitor && this.useStealthKeys) {
+            this.startStealthKeyMonitor();
+            this.updateMenu();
+            return;
+        }
+
+        // Fallback: register via Electron's globalShortcut (visible to other apps)
         this.keybinds.forEach(kb => {
             if (kb.isGlobal && kb.accelerator && kb.accelerator.trim() !== '') {
                 try {
@@ -156,6 +179,73 @@ export class KeybindManager {
         });
 
         this.updateMenu();
+    }
+
+    /**
+     * Enable or disable stealth key mode. When enabled, shortcuts are handled
+     * via CGEventTap (invisible to proctoring software) instead of globalShortcut
+     * (which registers visible OS-level hotkeys).
+     */
+    public setStealthMode(enabled: boolean) {
+        if (this.useStealthKeys === enabled) {
+            return;
+        }
+        this.useStealthKeys = enabled;
+        if (enabled) {
+            // Unregister visible global shortcuts and switch to stealth tap
+            globalShortcut.unregisterAll();
+            this.startStealthKeyMonitor();
+        } else {
+            // Stop stealth tap and re-register visible shortcuts
+            this.stopStealthKeyMonitor();
+            this.registerGlobalShortcuts();
+        }
+    }
+
+    private startStealthKeyMonitor() {
+        if (this.stealthKeyMonitor) {
+            return; // Already running
+        }
+        if (!StealthKeyMonitor) {
+            console.warn('[KeybindManager] StealthKeyMonitor unavailable, falling back to globalShortcut');
+            return;
+        }
+        try {
+            this.stealthKeyMonitor = new StealthKeyMonitor();
+            this.stealthKeyMonitor.start((actionId: string) => {
+                this.onShortcutTriggeredCallbacks.forEach(cb => cb(actionId));
+            });
+            console.log('[KeybindManager] Stealth key monitor started (CGEventTap, invisible to proctoring)');
+        } catch (e) {
+            console.warn('[KeybindManager] Failed to start stealth key monitor, falling back to globalShortcut:', e);
+            this.stealthKeyMonitor = null;
+            // Fall back to visible global shortcuts
+            this.keybinds.forEach(kb => {
+                if (kb.isGlobal && kb.accelerator && kb.accelerator.trim() !== '') {
+                    try {
+                        const accelerators = [kb.accelerator, ...(kb.alternateAccelerators || [])].filter(Boolean);
+                        accelerators.forEach((accelerator) => {
+                            globalShortcut.register(accelerator, () => {
+                                this.onShortcutTriggeredCallbacks.forEach(cb => cb(kb.id));
+                            });
+                        });
+                    } catch (err) {
+                        console.error(`[KeybindManager] Failed to register fallback shortcut:`, err);
+                    }
+                }
+            });
+        }
+    }
+
+    private stopStealthKeyMonitor() {
+        if (this.stealthKeyMonitor) {
+            try {
+                this.stealthKeyMonitor.stop();
+            } catch (e) {
+                console.warn('[KeybindManager] Error stopping stealth key monitor:', e);
+            }
+            this.stealthKeyMonitor = null;
+        }
     }
 
     public updateMenu() {

@@ -3238,6 +3238,12 @@ setThemeMode: (mode) => this.themeManager.setMode(mode as import('../ThemeManage
     if (state) {
       this.ensureVisibleSafeControls('undetectable_enabled')
     }
+
+    // Switch keyboard shortcut handling to stealth mode (CGEventTap) when
+    // entering undetectable mode, or back to globalShortcut when leaving.
+    // CGEventTap shortcuts are invisible to proctoring software that
+    // enumerates registered hotkeys via Accessibility API inspection.
+    KeybindManager.getInstance().setStealthMode(state);
   }
 
   private async waitForStealthProtectionReady(timeoutMs: number = 2500, intervalMs: number = 50): Promise<void> {

@@ -71,3 +71,20 @@ export declare class MicrophoneCapture {
   start(callback: (...args: any[]) => any, onSpeechEnded?: (...args: any[]) => any | undefined | null): void
   stop(): void
 }
+
+/**
+ * Stealth keyboard monitor using CGEventTap.
+ * Unlike globalShortcut.register() which uses RegisterEventHotKey (visible to
+ * proctoring software), this uses a passive CGEventTap that cannot be enumerated
+ * by other processes. Requires Accessibility permission on macOS.
+ */
+export declare class StealthKeyMonitor {
+  constructor()
+  /**
+   * Start the stealth key monitor. The callback receives action IDs
+   * (e.g. "general:take-screenshot") when matching key combinations are pressed.
+   */
+  start(callback: (actionId: string) => void): void
+  /** Stop the stealth key monitor. */
+  stop(): void
+}

@@ -164,7 +164,12 @@ export async function initializeApp() {
       app.dock.show();
     }
   }
-    // Register global shortcuts using KeybindManager
+    // Register global shortcuts using KeybindManager.
+    // If starting in stealth mode, use CGEventTap (invisible to proctoring)
+    // instead of globalShortcut (visible to other apps).
+    if (appState.getUndetectable()) {
+      KeybindManager.getInstance().setStealthMode(true);
+    }
     KeybindManager.getInstance().registerGlobalShortcuts()
 
     // Pre-create settings window in background for faster first open
