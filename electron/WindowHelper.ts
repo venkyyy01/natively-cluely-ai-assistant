@@ -79,6 +79,8 @@ export class WindowHelper {
   private readonly stealthManager: StealthManager
   private readonly startupProtectionGate: StartupProtectionGate
   private stealthHeartbeatListener: (() => void) | null = null
+  private stealthReadyPromise: Promise<void>
+  private stealthReadyResolve: (() => void) | null = null
 
   constructor(appState: AppState, stealthManager: StealthManager) {
     this.appState = appState
@@ -92,7 +94,53 @@ export class WindowHelper {
         return recorder.recordProtectionEvent?.(type, context)
       },
       onBlocked: (decision) => this.handleStartupRevealBlocked(decision),
+      waitForStealthReady: () => this.waitForStealthReady(),
     })
+
+    // Gate: stealthReadyPromise resolves only after StealthManager has fully
+    // initialized and verified native module availability. If stealth is
+    // disabled (not in undetectable mode), resolve immediately.
+    if (!this.stealthManager.isEnabled()) {
+      this.stealthReadyPromise = Promise.resolve()
+    } else {
+      this.stealthReadyPromise = new Promise<void>((resolve) => {
+        this.stealthReadyResolve = resolve
+      })
+
+      // Safety timeout: don't block the app forever if stealth initialization
+      // takes too long. Resolve after 5 seconds with a warning log.
+      const timeoutMs = parseInt(process.env.NATIVELY_STEALTH_READY_TIMEOUT_MS || '5000', 10)
+      setTimeout(() => {
+        if (this.stealthReadyResolve) {
+          console.warn(
+            `[WindowHelper] stealthReadyPromise timed out after ${timeoutMs}ms — resolving anyway to avoid blocking the app`
+          )
+          this.stealthReadyResolve()
+          this.stealthReadyResolve = null
+        }
+      }, timeoutMs)
+    }
+  }
+
+  /**
+   * Called by bootstrap code after StealthManager has fully initialized and
+   * verified native module availability. Resolves the stealthReadyPromise gate
+   * so that window creation can proceed safely.
+   */
+  public markStealthReady(): void {
+    if (this.stealthReadyResolve) {
+      this.stealthReadyResolve()
+      this.stealthReadyResolve = null
+    }
+  }
+
+  /**
+   * Returns a promise that resolves once StealthManager is fully initialized.
+   * Used by window creation code to ensure stealth protection is ready before
+   * making windows visible.
+   */
+  public waitForStealthReady(): Promise<void> {
+    return this.stealthReadyPromise
   }
 
   public setStealthRuntimeHeartbeatListener(listener: (() => void) | null): void {
@@ -151,11 +199,50 @@ export class WindowHelper {
     })
   }
 
+  /**
+   * Verifies stealth protection on a window before allowing it to become visible.
+   * Returns true if the window is safe to show, false if it should remain hidden.
+   *
+   * When verification fails:
+   * - The window is kept hidden
+   * - A 'verification-failed' protection event is emitted
+   * - A fault event is recorded for diagnostics
+   */
+  private verifyProtectionBeforeShow(
+    win: BrowserWindow | null,
+    source: string,
+    windowRole: 'primary' | 'auxiliary' | 'unknown' = 'primary',
+  ): boolean {
+    // Skip verification if stealth is not enabled or window is invalid
+    if (!win || win.isDestroyed() || !this.stealthManager.isEnabled()) {
+      return true
+    }
+
+    // Verify stealth protection including SCK exclusion on the window
+    const verified = this.stealthManager.verifyStealth(win)
+    if (!verified) {
+      // Keep window hidden — do NOT show it
+      this.recordProtectionEvent('verification-failed', win, source, windowRole)
+      console.warn(
+        `[WindowHelper] Protection verification failed before show — window remains hidden (source: ${source})`
+      )
+      return false
+    }
+
+    return true
+  }
+
   private requestWindowShow(
     win: BrowserWindow | null,
     source: string,
     windowRole: 'primary' | 'auxiliary' | 'unknown' = 'primary',
   ): void {
+    // S-RACE-3: Verify stealth protection before allowing the window to become visible.
+    // If verification fails, the window stays hidden and a fault event is emitted.
+    if (!this.verifyProtectionBeforeShow(win, source, windowRole)) {
+      return
+    }
+
     const manager = this.stealthManager as ProtectionEventRecorder
     if (manager.requestWindowShow) {
       manager.requestWindowShow(win, { source, windowRole })
@@ -217,8 +304,22 @@ export class WindowHelper {
     this.requestWindowHide(this.launcherWindow, 'WindowHelper.hideLauncherSurface')
   }
 
+  /**
+   * Creates a BrowserWindow with stealth protection applied synchronously.
+   *
+   * IMPORTANT: The window is always created hidden (`show: false` is enforced
+   * regardless of the caller's options). Callers MUST await
+   * `waitForStealthReady()` before making the window visible (via `show()`,
+   * `setOpacity(1)`, or any other visibility mechanism). This ensures the
+   * StealthManager has fully initialized and applied all protection layers
+   * (Layer 0 + SCK exclusion on macOS 15+) before the window can be observed
+   * by screen-capture tools.
+   */
   private createDirectWindow(options: Electron.BrowserWindowConstructorOptions): BrowserWindow {
-    const win = new BrowserWindow(options)
+    // S-RACE-2: Force show: false to guarantee the window is born hidden.
+    // Even if callers pass show: true, we override it here to prevent any
+    // possibility of the window becoming visible before stealth is applied.
+    const win = new BrowserWindow({ ...options, show: false })
     // S-RACE-1: apply Layer-0 capture protection synchronously, before any
     // loadURL or show call can run. This closes the "born unprotected" race
     // where the window briefly existed in the OS window list without
@@ -425,6 +526,18 @@ export class WindowHelper {
     const useStealthRuntime = this.shouldUseStealthRuntime();
 
 // --- 1. Create Launcher Window ---
+    // S-RACE-3: createWindow() stealth ordering guarantee.
+    // Both launcher and overlay windows are created exclusively via
+    // createDirectWindow() (non-StealthRuntime path) or
+    // StealthRuntime.createPrimaryStealthSurface() (StealthRuntime path).
+    // createDirectWindow() enforces show:false and calls
+    // stealthManager.applyInitialStealth() synchronously before returning,
+    // ensuring Layer 0 + SCK exclusion are applied BEFORE any loadURL or
+    // show call. loadDirectWindow() (loadURL) is called only AFTER
+    // createDirectWindow() returns. Window visibility is gated by
+    // revealLauncherAfterStartupGate() which awaits StartupProtectionGate
+    // verification. No code path in createWindow() can make a window
+    // visible without stealth protection applied first.
     const launcherSettings: Electron.BrowserWindowConstructorOptions = {
     width: width,
     height: height,
@@ -605,6 +718,9 @@ this.launcherContentWindow = this.launcherWindow
     // }
 
 // --- 2. Create Overlay Window (Hidden initially) ---
+  // S-RACE-3: Same stealth ordering guarantee as launcher (see comment above).
+  // Overlay is created via createDirectWindow() or StealthRuntime, ensuring
+  // stealth is applied synchronously before loadURL or show.
   const overlaySettings: Electron.BrowserWindowConstructorOptions = {
     width: 600,
     height: 1,

@@ -36,6 +36,26 @@ export declare function removeMacosPrivateWindowStealth(windowNumber: number): v
 export declare function setMacosWindowLevel(windowNumber: number, level: number): void
 export declare function verifyMacosStealthState(windowNumber: number): number
 export declare function verifyMacosCaptureExclusion(windowNumber: number): boolean
+/**
+ * Exclude a window from ScreenCaptureKit capture enumeration.
+ * Combines NSWindow.sharingType = .none with CGSSetWindowTags on macOS 15+.
+ */
+export declare function excludeFromCapture(windowNumber: number): void
+/**
+ * Apply ONLY the CGS window tag for ScreenCaptureKit exclusion (no sharingType change).
+ * On macOS < 15, this is a graceful no-op.
+ */
+export declare function applySckExclusion(windowNumber: number): void
+/**
+ * Verify that the SCK exclusion tag is set on a window via CGSGetWindowTags.
+ * Returns true if the window is properly excluded from SCK enumeration.
+ */
+export declare function verifySckExclusion(windowNumber: number): boolean
+/**
+ * Returns the list of visible windows excluding Natively-owned windows.
+ * Used to verify that Natively windows are properly excluded from SCK enumeration.
+ */
+export declare function getFilteredDisplayList(): Array<WindowInfo>
 export declare function applyWindowsWindowStealth(hwndBuffer: Buffer): void
 export declare function removeWindowsWindowStealth(hwndBuffer: Buffer): void
 export declare function verifyWindowsStealthState(hwndBuffer: Buffer): number
@@ -77,14 +97,66 @@ export declare class MicrophoneCapture {
  * Unlike globalShortcut.register() which uses RegisterEventHotKey (visible to
  * proctoring software), this uses a passive CGEventTap that cannot be enumerated
  * by other processes. Requires Accessibility permission on macOS.
+ *
+ * Supports dual-binding mode where the CGEventTap can coexist with Electron's
+ * globalShortcut. When dual-binding is enabled, the tap suppresses matched key
+ * events so they don't propagate to the active app or globalShortcut.
  */
 export declare class StealthKeyMonitor {
   constructor()
   /**
    * Start the stealth key monitor. The callback receives action IDs
    * (e.g. "general:take-screenshot") when matching key combinations are pressed.
+   *
+   * By default, dual-binding mode is off — events pass through to the active
+   * application and Electron's globalShortcut. Call `setDualBindingMode(true)`
+   * to suppress matched events at the tap level.
    */
   start(callback: (actionId: string) => void): void
   /** Stop the stealth key monitor. */
   stop(): void
+  /**
+   * Enable or disable dual-binding mode at runtime.
+   *
+   * When enabled: the CGEventTap suppresses matched key events, preventing them
+   * from reaching the active app or Electron's globalShortcut handler.
+   *
+   * When disabled (default): events pass through unchanged, allowing globalShortcut
+   * to also handle the same shortcuts as a fallback.
+   *
+   * Can be toggled at any time, even while the tap is running.
+   */
+  setDualBindingMode(enabled: boolean): void
+  /** Query whether dual-binding mode is currently active. */
+  getDualBindingMode(): boolean
+  /**
+   * Update the shortcut configuration from the TypeScript layer.
+   *
+   * Accepts a JSON string representing an array of shortcut entries:
+   * ```json
+   * [{"actionId": "general:take-screenshot", "keycode": 1, "modifiers": 1048576}]
+   * ```
+   *
+   * Where:
+   * - `actionId`: The action identifier string (e.g., "general:take-screenshot")
+   * - `keycode`: The macOS virtual key code (u16)
+   * - `modifiers`: The CGEventFlags bitmask for modifier keys
+   *   - Command: 1 << 20 = 1048576
+   *   - Shift: 1 << 17 = 131072
+   *   - Alt/Option: 1 << 19 = 524288
+   *   - Control: 1 << 18 = 262144
+   *
+   * The dynamic config takes priority over hardcoded defaults when non-empty.
+   * Pass an empty array `"[]"` to clear the dynamic config and revert to defaults.
+   *
+   * This can be called at any time, including while the tap is running.
+   */
+  updateShortcutConfig(configJson: string): void
+  /**
+   * Health-check: returns whether the CGEventTap is currently active.
+   *
+   * The tap is considered active when `start()` has been called AND the
+   * stop signal has not been set (the tap thread is still running).
+   */
+  isTapActive(): boolean
 }

@@ -140,6 +140,7 @@ export class ProtectionStateMachine {
       updatedAtMs: this.updatedAtMs,
       eventCount: this.eventCount,
       violations: this.violations.map(cloneViolation),
+      sckExclusionActive: false,
     };
   }
 

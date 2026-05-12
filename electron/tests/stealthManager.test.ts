@@ -1624,4 +1624,96 @@ describe('StealthManager', () => {
 
     assert.deepStrictEqual(win.skipTaskbarCalls, [true, false]);
   });
+
+  it('verifyStealth returns false on macOS 15+ when verifySckExclusion returns false', () => {
+    const win = new FakeWindow();
+    // Make setContentProtection throw so excludeFromCaptureApplied stays false,
+    // allowing verifyStealth to reach the SCK exclusion check path.
+    win.setContentProtection = () => {
+      throw new Error('content-protection refused');
+    };
+    const manager = new StealthManager(
+      { enabled: true },
+      {
+        platform: 'darwin',
+        logger: silentLogger,
+        macosVersion: { major: 15, minor: 0 },
+        nativeModule: {
+          applyMacosWindowStealth() {},
+          verifyMacosStealthState() {
+            return 0;
+          },
+          verifySckExclusion() {
+            return false;
+          },
+        },
+      },
+    );
+
+    manager.applyToWindow(win as any, true, { role: 'primary' });
+
+    assert.strictEqual(manager.verifyStealth(win as any), false);
+    assert.ok(manager.getStealthDegradationWarnings().includes('sck_exclusion_unverified'));
+  });
+
+  it('verifyStealth passes SCK exclusion check on macOS 15+ when verifySckExclusion returns true', () => {
+    const win = new FakeWindow();
+    // Make setContentProtection throw so excludeFromCaptureApplied stays false,
+    // allowing verifyStealth to reach the SCK exclusion check path.
+    win.setContentProtection = () => {
+      throw new Error('content-protection refused');
+    };
+    const manager = new StealthManager(
+      { enabled: true },
+      {
+        platform: 'darwin',
+        logger: silentLogger,
+        macosVersion: { major: 15, minor: 0 },
+        nativeModule: {
+          applyMacosWindowStealth() {},
+          verifyMacosStealthState() {
+            return 0;
+          },
+          verifySckExclusion() {
+            return true;
+          },
+        },
+      },
+    );
+
+    manager.applyToWindow(win as any, true, { role: 'primary' });
+
+    // verifyStealth should pass the SCK exclusion check and continue to
+    // verifyMacosStealthState which returns 0 (verified).
+    assert.strictEqual(manager.verifyStealth(win as any), false);
+    assert.ok(!manager.getStealthDegradationWarnings().includes('sck_exclusion_unverified'));
+  });
+
+  it('verifyStealth skips SCK exclusion check on macOS < 15', () => {
+    const win = new FakeWindow();
+    let sckVerifyCalled = false;
+    const manager = new StealthManager(
+      { enabled: true },
+      {
+        platform: 'darwin',
+        logger: silentLogger,
+        macosVersion: { major: 14, minor: 5 },
+        nativeModule: {
+          applyMacosWindowStealth() {},
+          verifyMacosStealthState() {
+            return 0;
+          },
+          verifySckExclusion() {
+            sckVerifyCalled = true;
+            return false;
+          },
+        },
+      },
+    );
+
+    manager.applyToWindow(win as any, true, { role: 'primary' });
+
+    assert.strictEqual(manager.verifyStealth(win as any), true);
+    assert.strictEqual(sckVerifyCalled, false);
+  });
 });

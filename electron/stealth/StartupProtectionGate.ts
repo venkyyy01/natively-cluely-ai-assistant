@@ -33,6 +33,7 @@ interface StartupProtectionGateOptions {
   isStrictProtectionEnabled?: () => boolean;
   recordProtectionEvent?: (type: ProtectionEventType, context?: ProtectionEventContext) => ProtectionSnapshot | void;
   onBlocked?: (decision: StartupProtectionGateDecision) => void;
+  waitForStealthReady?: () => Promise<void>;
   timeoutMs?: number;
   logger?: Pick<Console, 'log' | 'warn' | 'error'>;
   now?: () => number;
@@ -54,6 +55,7 @@ export class StartupProtectionGate {
   private readonly isStrictProtectionEnabled: () => boolean;
   private readonly recordProtectionEvent?: StartupProtectionGateOptions['recordProtectionEvent'];
   private readonly onBlocked?: StartupProtectionGateOptions['onBlocked'];
+  private readonly waitForStealthReady?: () => Promise<void>;
   private readonly timeoutMs: number;
   private readonly logger: Pick<Console, 'log' | 'warn' | 'error'>;
   private readonly now: () => number;
@@ -63,6 +65,7 @@ export class StartupProtectionGate {
     this.isStrictProtectionEnabled = options.isStrictProtectionEnabled ?? (() => false);
     this.recordProtectionEvent = options.recordProtectionEvent;
     this.onBlocked = options.onBlocked;
+    this.waitForStealthReady = options.waitForStealthReady;
     this.timeoutMs = options.timeoutMs ?? parseInt(process.env.NATIVELY_STARTUP_GATE_TIMEOUT_MS || '1500', 10);
     this.logger = options.logger ?? console;
     this.now = options.now ?? (() => Date.now());
@@ -74,6 +77,32 @@ export class StartupProtectionGate {
     let verified = false;
     let reason: StartupProtectionGateReason = 'startup-verification-failed';
     let error: unknown;
+
+    // Wait for stealth to be ready before evaluating the reveal decision.
+    // This ensures StealthManager is fully initialized before we proceed.
+    if (this.waitForStealthReady) {
+      try {
+        await this.waitForStealthReady();
+      } catch (caught) {
+        this.logger.warn('[StartupProtectionGate] waitForStealthReady failed:', caught);
+        // If stealth readiness fails and strict mode is on, block the reveal.
+        if (strict) {
+          const decision: StartupProtectionGateDecision = {
+            allowReveal: false,
+            strict,
+            verified: false,
+            wouldBlock: true,
+            reason: 'startup-verification-error',
+            source: context.source,
+            intent: context.intent,
+            elapsedMs: Math.max(0, this.now() - startedAt),
+            error: caught,
+          };
+          this.onBlocked?.(decision);
+          return decision;
+        }
+      }
+    }
 
     try {
       verified = await this.verifyWithTimeout(context);

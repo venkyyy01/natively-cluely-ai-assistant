@@ -56,6 +56,7 @@ export interface ProtectionSnapshot {
   updatedAtMs: number;
   eventCount: number;
   violations: ProtectionViolation[];
+  sckExclusionActive: boolean;
 }
 
 export interface ProtectionStateMachineOptions {

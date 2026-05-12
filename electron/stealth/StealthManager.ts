@@ -78,6 +78,10 @@ export interface NativeStealthBindings {
   checkBrowserCaptureWindows?: () => boolean;
   // T-001: Native process enumeration (replaces pgrep/ps/tasklist)
   getRunningProcesses?: () => Array<{ pid: number; ppid: number; name: string }>;
+  // SCK exclusion: applies CGS window tag for ScreenCaptureKit exclusion on macOS 15+
+  applySckExclusion?: (windowNumber: number) => void;
+  // SCK exclusion verification: returns true if the SCK exclusion tag is set on the window
+  verifySckExclusion?: (windowNumber: number) => boolean;
 }
 
 export interface StealthFeatureFlags {
@@ -299,7 +303,16 @@ export class StealthManager extends EventEmitter {
   }
 
   public getProtectionStateSnapshot(): ProtectionSnapshot {
-    return this.protectionStateMachine.getSnapshot();
+    const snapshot = this.protectionStateMachine.getSnapshot();
+    // Determine SCK exclusion active status:
+    // - On macOS 15+, SCK exclusion is active if the 'sck_exclusion_failed' warning is NOT present
+    // - On non-macOS 15+ (or non-darwin), considered "active" by default (not applicable)
+    if (this.isMacOSVersionCompatible('15.0')) {
+      snapshot.sckExclusionActive = !this.stealthDegradationWarnings.has('sck_exclusion_failed');
+    } else {
+      snapshot.sckExclusionActive = true;
+    }
+    return snapshot;
   }
 
   public requestWindowShow(win: StealthCapableWindow | null | undefined, context: VisibilityOperationContext): void {
@@ -534,6 +547,8 @@ export class StealthManager extends EventEmitter {
         : record.allowVirtualDisplayIsolation;
 
       this.applyLayer0(win, true);
+      // SCK exclusion layer: exclude window from ScreenCaptureKit enumeration on macOS 15+
+      this.applySckExclusion(win);
       this.applyUiHardening(win, record.hideFromSwitcher);
       this.applyNativeStealth(win);
       if (record.allowVirtualDisplayIsolation) {
@@ -684,6 +699,7 @@ export class StealthManager extends EventEmitter {
 
       try {
         this.applyLayer0(record.win, true);
+        this.applySckExclusion(record.win);
       } catch (error) {
         this.logger.warn('[StealthManager] reapplyProtectionLayers failed for window:', error);
       }
@@ -692,6 +708,40 @@ export class StealthManager extends EventEmitter {
 
   public isEnabled(): boolean {
     return this.config.enabled;
+  }
+
+  /**
+   * Returns window numbers for all managed windows that are not destroyed.
+   * Used by ContinuousEnforcementLoop for SCK exclusion verification.
+   */
+  public getManagedWindowNumbers(): Array<{ windowNumber: number; win: StealthCapableWindow }> {
+    const result: Array<{ windowNumber: number; win: StealthCapableWindow }> = [];
+    for (const record of this.managedWindows) {
+      if (isWindowDestroyed(record.win)) {
+        continue;
+      }
+      const windowNumber = this.getMacosWindowNumber(record.win);
+      if (windowNumber !== null) {
+        result.push({ windowNumber, win: record.win });
+      }
+    }
+    return result;
+  }
+
+  /**
+   * Returns whether the current platform is macOS 15+ (Sequoia).
+   * Used by ContinuousEnforcementLoop to gate SCK exclusion checks.
+   */
+  public isMacOS15PlusCapable(): boolean {
+    return this.platform === 'darwin' && this.isMacOS15Plus;
+  }
+
+  /**
+   * Applies emergency protection to a window (hides it and reapplies all layers).
+   * Exposed for use by ContinuousEnforcementLoop when SCK exclusion repeatedly fails.
+   */
+  public triggerEmergencyProtection(win: StealthCapableWindow): void {
+    this.applyEmergencyProtection(win);
   }
 
   public setMeetingActive(active: boolean): void {
@@ -932,6 +982,42 @@ export class StealthManager extends EventEmitter {
     } catch (error) {
       this.logger.warn('[StealthManager] Native stealth application failed, falling back to Layer 0 (setContentProtection):', error);
       if (this.isEnabled()) this.addWarning('native_stealth_failed');
+    }
+  }
+
+  /**
+   * Apply SCK (ScreenCaptureKit) exclusion tag to a window on macOS 15+.
+   * This sets the CGS window tag that excludes the window from SCK enumeration,
+   * preventing ScreenCaptureKit-based apps (Zoom, Meet, OBS, browser getDisplayMedia)
+   * from seeing the window.
+   *
+   * Gracefully degrades: logs a warning on failure but does not throw.
+   * No-op on macOS < 15 or non-darwin platforms.
+   */
+  private applySckExclusion(win: StealthCapableWindow): void {
+    if (this.platform !== 'darwin' || !this.isMacOSVersionCompatible('15.0')) {
+      return;
+    }
+
+    const nativeModule = this.getNativeModule();
+    if (!nativeModule?.applySckExclusion) {
+      return;
+    }
+
+    const windowNumber = this.getMacosWindowNumber(win);
+    if (windowNumber === null) {
+      return;
+    }
+
+    try {
+      nativeModule.applySckExclusion(windowNumber);
+    } catch (error) {
+      this.logger.warn('[StealthManager] SCK exclusion failed:', error);
+      this.addWarning('sck_exclusion_failed');
+      this.logger.warn(
+        '[StealthManager] SCK exclusion degraded: Layer 0 (content protection) is still active but window may be visible to ScreenCaptureKit-based apps on macOS 15+. ' +
+        'Window content appears as a black rectangle, but window title and existence are visible to SCK enumeration (Zoom, Meet, OBS, browser getDisplayMedia).'
+      );
     }
   }
 
@@ -1937,6 +2023,30 @@ for window in windows:
     }
 
     try {
+      // SCK exclusion verification on macOS 15+: confirm the CGS exclusion tag is set
+      if (isMacOS15Plus && nativeModule.verifySckExclusion) {
+        const windowNumber = this.getMacosWindowNumber(win);
+        if (windowNumber === null) {
+          return false;
+        }
+
+        const sckExclusionVerified = nativeModule.verifySckExclusion(windowNumber);
+        if (!sckExclusionVerified) {
+          this.logger.warn('[StealthManager] macOS 15+ SCK exclusion verification failed: window is not excluded from ScreenCaptureKit enumeration');
+          this.addWarning('sck_exclusion_unverified');
+          this.recordProtectionEvent('verification-failed', {
+            ...this.getProtectionEventContext(win, {}, 'StealthManager.verifyStealth'),
+            metadata: {
+              platform: 'darwin',
+              sckExclusionVerified: false,
+              isMacOS15Plus,
+            },
+          });
+          return false;
+        }
+        this.clearWarning('sck_exclusion_unverified');
+      }
+
       if (this.platform === 'darwin' && nativeModule.verifyMacosStealthState) {
         const windowNumber = this.getMacosWindowNumber(win);
         if (windowNumber === null) {

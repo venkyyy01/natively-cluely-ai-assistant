@@ -105,4 +105,71 @@ describe('StartupProtectionGate', () => {
     assert.equal(decision.allowReveal, false);
     assert.equal(decision.reason, 'startup-verification-error');
   });
+
+  it('waits for stealth ready before evaluating reveal', async () => {
+    let stealthReadyResolved = false;
+    const gate = new StartupProtectionGate({
+      verifyProtection: () => {
+        // Verification should only run after stealth is ready
+        assert.equal(stealthReadyResolved, true);
+        return true;
+      },
+      isStrictProtectionEnabled: () => true,
+      waitForStealthReady: async () => {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        stealthReadyResolved = true;
+      },
+      logger: { log() {}, warn() {}, error() {} },
+    });
+
+    const decision = await gate.evaluateReveal({ source: 'test.stealth-ready', windowRole: 'primary' });
+
+    assert.equal(decision.allowReveal, true);
+    assert.equal(decision.verified, true);
+    assert.equal(stealthReadyResolved, true);
+  });
+
+  it('blocks strict reveal when waitForStealthReady rejects', async () => {
+    const gate = new StartupProtectionGate({
+      verifyProtection: () => true,
+      isStrictProtectionEnabled: () => true,
+      waitForStealthReady: () => Promise.reject(new Error('stealth init failed')),
+      logger: { log() {}, warn() {}, error() {} },
+    });
+
+    const decision = await gate.evaluateReveal({ source: 'test.stealth-fail', windowRole: 'primary' });
+
+    assert.equal(decision.allowReveal, false);
+    assert.equal(decision.reason, 'startup-verification-error');
+    assert.equal(decision.wouldBlock, true);
+  });
+
+  it('continues with verification when waitForStealthReady rejects in non-strict mode', async () => {
+    const gate = new StartupProtectionGate({
+      verifyProtection: () => true,
+      isStrictProtectionEnabled: () => false,
+      waitForStealthReady: () => Promise.reject(new Error('stealth init failed')),
+      logger: { log() {}, warn() {}, error() {} },
+    });
+
+    const decision = await gate.evaluateReveal({ source: 'test.stealth-fail-nonstrict', windowRole: 'primary' });
+
+    assert.equal(decision.allowReveal, true);
+    assert.equal(decision.verified, true);
+    assert.equal(decision.reason, 'protection-verified');
+  });
+
+  it('works without waitForStealthReady option (backward compatible)', async () => {
+    const gate = new StartupProtectionGate({
+      verifyProtection: () => true,
+      isStrictProtectionEnabled: () => true,
+      logger: { log() {}, warn() {}, error() {} },
+    });
+
+    const decision = await gate.evaluateReveal({ source: 'test.no-stealth-ready', windowRole: 'primary' });
+
+    assert.equal(decision.allowReveal, true);
+    assert.equal(decision.verified, true);
+    assert.equal(decision.reason, 'protection-verified');
+  });
 });

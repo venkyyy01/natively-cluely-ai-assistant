@@ -2,11 +2,13 @@ import type { StealthManager } from './StealthManager';
 import type { MonitoringDetector, DetectedThreat } from './MonitoringDetector';
 import type { SupervisorBus } from '../runtime/SupervisorBus';
 import { gracefulShutdown } from '../GracefulShutdownManager';
+import { loadNativeStealthModule } from './nativeStealthModule';
 
 export interface EnforcementLoopIntervals {
   windowProtectionMs: number; // 250ms
   processDetectionMs: number; // 3000ms
   disguiseValidationMs: number; // 15000ms
+  sckExclusionMs?: number; // 2000ms (default)
 }
 
 export interface EnforcementLoopOptions {
@@ -23,6 +25,12 @@ interface ViolationRecord {
   type: string;
 }
 
+/** Default SCK exclusion poll interval (2 seconds) */
+const DEFAULT_SCK_EXCLUSION_INTERVAL_MS = 2000;
+
+/** Number of consecutive failures before triggering emergency protection */
+const SCK_MAX_CONSECUTIVE_FAILURES = 3;
+
 export class ContinuousEnforcementLoop {
   private readonly stealthManager: StealthManager;
   private readonly monitoringDetector: MonitoringDetector;
@@ -34,15 +42,22 @@ export class ContinuousEnforcementLoop {
   private windowProtectionTimer: NodeJS.Timeout | null = null;
   private processDetectionTimer: NodeJS.Timeout | null = null;
   private disguiseValidationTimer: NodeJS.Timeout | null = null;
+  private sckExclusionTimer: NodeJS.Timeout | null = null;
   private running = false;
   private windowProtectionRunning = false;
   private processDetectionRunning = false;
   private disguiseValidationRunning = false;
+  private sckExclusionRunning = false;
 
   // Violation ring buffer: if 3+ violations within 60s, trigger immediate quit
   private violations: ViolationRecord[] = [];
   private static readonly MAX_VIOLATIONS = 3;
   private static readonly VIOLATION_WINDOW_MS = 60000;
+
+  // SCK exclusion: track consecutive failures per window number
+  private readonly sckConsecutiveFailures = new Map<number, number>();
+  private sckExclusionFailureCount = 0;
+  private sckExclusionReapplyCount = 0;
 
   constructor(options: EnforcementLoopOptions) {
     this.stealthManager = options.stealthManager;
@@ -81,6 +96,15 @@ export class ContinuousEnforcementLoop {
     }, this.intervals.disguiseValidationMs);
     this.disguiseValidationTimer.unref?.();
 
+    // SCK exclusion verification loop (2s default, macOS 15+ only)
+    if (this.stealthManager.isMacOS15PlusCapable()) {
+      const sckInterval = this.intervals.sckExclusionMs ?? DEFAULT_SCK_EXCLUSION_INTERVAL_MS;
+      this.sckExclusionTimer = setInterval(() => {
+        void this.pollSckExclusion();
+      }, sckInterval);
+      this.sckExclusionTimer.unref?.();
+    }
+
     this.logger.log('[ContinuousEnforcementLoop] Started');
   }
 
@@ -98,6 +122,10 @@ export class ContinuousEnforcementLoop {
     if (this.disguiseValidationTimer) {
       clearInterval(this.disguiseValidationTimer);
       this.disguiseValidationTimer = null;
+    }
+    if (this.sckExclusionTimer) {
+      clearInterval(this.sckExclusionTimer);
+      this.sckExclusionTimer = null;
     }
 
     this.logger.log('[ContinuousEnforcementLoop] Stopped');
@@ -157,6 +185,99 @@ export class ContinuousEnforcementLoop {
     }
   }
 
+  /**
+   * Polls SCK exclusion state for all managed windows.
+   * For each window, verifies the exclusion tag is still set.
+   * If verification fails, re-applies the exclusion and tracks consecutive failures.
+   * After SCK_MAX_CONSECUTIVE_FAILURES consecutive failures for a window,
+   * triggers emergency protection (hides the window).
+   */
+  private async pollSckExclusion(): Promise<void> {
+    if (this.sckExclusionRunning) {
+      return;
+    }
+    this.sckExclusionRunning = true;
+
+    try {
+      const nativeModule = loadNativeStealthModule({ retryOnFailure: false });
+      if (!nativeModule?.verifySckExclusion || !nativeModule?.applySckExclusion) {
+        return;
+      }
+
+      const managedWindows = this.stealthManager.getManagedWindowNumbers();
+      // Clean up failure tracking for windows that are no longer managed
+      const activeWindowNumbers = new Set(managedWindows.map(w => w.windowNumber));
+      for (const windowNumber of this.sckConsecutiveFailures.keys()) {
+        if (!activeWindowNumbers.has(windowNumber)) {
+          this.sckConsecutiveFailures.delete(windowNumber);
+        }
+      }
+
+      for (const { windowNumber, win } of managedWindows) {
+        try {
+          const isExcluded = nativeModule.verifySckExclusion(windowNumber);
+
+          if (isExcluded) {
+            // Verification passed — reset consecutive failure count
+            this.sckConsecutiveFailures.delete(windowNumber);
+            continue;
+          }
+
+          // Verification failed — re-apply exclusion
+          this.logger.warn(
+            `[ContinuousEnforcementLoop] SCK exclusion lost for window ${windowNumber}, re-applying`
+          );
+          this.sckExclusionReapplyCount++;
+
+          try {
+            nativeModule.applySckExclusion(windowNumber);
+          } catch (applyError) {
+            this.logger.warn(
+              `[ContinuousEnforcementLoop] SCK exclusion re-apply failed for window ${windowNumber}:`,
+              applyError
+            );
+          }
+
+          // Track consecutive failures
+          const failures = (this.sckConsecutiveFailures.get(windowNumber) ?? 0) + 1;
+          this.sckConsecutiveFailures.set(windowNumber, failures);
+          this.sckExclusionFailureCount++;
+
+          if (failures >= SCK_MAX_CONSECUTIVE_FAILURES) {
+            this.logger.error(
+              `[ContinuousEnforcementLoop] SCK exclusion failed ${failures} consecutive times for window ${windowNumber} — triggering emergency protection`
+            );
+            this.stealthManager.triggerEmergencyProtection(win);
+            this.sckConsecutiveFailures.delete(windowNumber);
+            this.recordViolation('sck-exclusion-emergency');
+          }
+        } catch (error) {
+          this.logger.warn(
+            `[ContinuousEnforcementLoop] SCK exclusion check error for window ${windowNumber}:`,
+            error
+          );
+          // Count as a failure for this window
+          const failures = (this.sckConsecutiveFailures.get(windowNumber) ?? 0) + 1;
+          this.sckConsecutiveFailures.set(windowNumber, failures);
+          this.sckExclusionFailureCount++;
+
+          if (failures >= SCK_MAX_CONSECUTIVE_FAILURES) {
+            this.logger.error(
+              `[ContinuousEnforcementLoop] SCK exclusion check failed ${failures} consecutive times for window ${windowNumber} — triggering emergency protection`
+            );
+            this.stealthManager.triggerEmergencyProtection(win);
+            this.sckConsecutiveFailures.delete(windowNumber);
+            this.recordViolation('sck-exclusion-emergency');
+          }
+        }
+      }
+    } catch (error) {
+      this.logger.warn('[ContinuousEnforcementLoop] SCK exclusion poll failed:', error);
+    } finally {
+      this.sckExclusionRunning = false;
+    }
+  }
+
   private async handleCriticalThreat(threat: DetectedThreat): Promise<void> {
     this.logger.error(`[ContinuousEnforcementLoop] CRITICAL threat detected: ${threat.name} (PID: ${threat.pid})`);
 
@@ -212,5 +333,15 @@ export class ContinuousEnforcementLoop {
 
   isRunning(): boolean {
     return this.running;
+  }
+
+  /** Returns the total number of SCK exclusion failures detected since start. */
+  getSckExclusionFailureCount(): number {
+    return this.sckExclusionFailureCount;
+  }
+
+  /** Returns the total number of SCK exclusion re-applications triggered since start. */
+  getSckExclusionReapplyCount(): number {
+    return this.sckExclusionReapplyCount;
   }
 }
