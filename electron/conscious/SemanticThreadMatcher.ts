@@ -105,7 +105,6 @@ export class SemanticThreadMatcher {
     const lowered = question.toLowerCase();
     return /\b(this|that|it|those|these|them|there|then)\b/.test(lowered)
       || /^(and|but|so)\b/.test(lowered)
-      || /\b(expand|clarify|explain|unpack|elaborate|deeper)\b/.test(lowered)
       || /\b(what if|how would that|how does that|why that|why this)\b/.test(lowered);
   }
 

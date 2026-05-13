@@ -49,13 +49,9 @@ export declare function applySckExclusion(windowNumber: number): void
 /**
  * Verify that the SCK exclusion tag is set on a window via CGSGetWindowTags.
  * Returns true if the window is properly excluded from SCK enumeration.
+ * On non-macOS, always returns true (window is considered excluded).
  */
 export declare function verifySckExclusion(windowNumber: number): boolean
-/**
- * Returns the list of visible windows excluding Natively-owned windows.
- * Used to verify that Natively windows are properly excluded from SCK enumeration.
- */
-export declare function getFilteredDisplayList(): Array<WindowInfo>
 export declare function applyWindowsWindowStealth(hwndBuffer: Buffer): void
 export declare function removeWindowsWindowStealth(hwndBuffer: Buffer): void
 export declare function verifyWindowsStealthState(hwndBuffer: Buffer): number
@@ -69,72 +65,81 @@ export declare function listVisibleWindows(): Array<WindowInfo>
  * Combines the Quartz window enumeration + browser check in a single native call.
  */
 export declare function checkBrowserCaptureWindows(): boolean
+/**
+ * Returns the list of visible windows excluding Natively-owned windows.
+ * Used by the TypeScript layer to compare against the full window list and
+ * verify that Natively windows are properly excluded from SCK enumeration.
+ */
+export declare function getFilteredDisplayList(): Array<WindowInfo>
 export declare function getRunningProcesses(): Array<ProcessInfo>
+/**
+ * Check whether a specific key event (keycode + modifier flags) would be
+ * suppressed by the stealth tap.
+ *
+ * This is a standalone query function that does not require the tap to be
+ * running. It checks if the given keycode and flags match any registered
+ * stealth shortcut.
+ *
+ * Returns `true` if the event matches a shortcut and should be suppressed
+ * (i.e., swallowed at the tap level before reaching the active application),
+ * `false` otherwise.
+ *
+ * Parameters:
+ * - `keycode`: Virtual key code (CGKeyCode, u16 on macOS)
+ * - `flags`: Modifier flags (CGEventFlags, passed as i64 to accommodate
+ *   JavaScript number type; internally cast to u64)
+ *
+ * On non-macOS platforms, always returns `false` (no suppression).
+ */
+export declare function suppressKeyEvent(keycode: number, flags: number): boolean
 export interface AudioDeviceInfo {
   id: string
   name: string
 }
 export declare function getInputDevices(): Array<AudioDeviceInfo>
 export declare function getOutputDevices(): Array<AudioDeviceInfo>
-export declare class SystemAudioCapture {
-  constructor(deviceId?: string | undefined | null, outputSampleRate?: number | undefined | null)
-  getSampleRate(): number
-  /** Sample rate of PCM buffers emitted to JS (after native polyphase resample). */
-  getOutputSampleRate(): number
-  start(callback: (...args: any[]) => any, onSpeechEnded?: (...args: any[]) => any | undefined | null): void
-  stop(): void
-}
-export declare class MicrophoneCapture {
-  constructor(deviceId?: string | undefined | null, outputSampleRate?: number | undefined | null)
-  getSampleRate(): number
-  getOutputSampleRate(): number
-  start(callback: (...args: any[]) => any, onSpeechEnded?: (...args: any[]) => any | undefined | null): void
-  stop(): void
-}
-
 /**
- * Stealth keyboard monitor using CGEventTap.
- * Unlike globalShortcut.register() which uses RegisterEventHotKey (visible to
- * proctoring software), this uses a passive CGEventTap that cannot be enumerated
- * by other processes. Requires Accessibility permission on macOS.
+ * A stealth keyboard monitor that uses CGEventTap instead of globalShortcut.
+ * This is invisible to proctoring software that enumerates registered hotkeys.
  *
- * Supports dual-binding mode where the CGEventTap can coexist with Electron's
- * globalShortcut. When dual-binding is enabled, the tap suppresses matched key
- * events so they don't propagate to the active app or globalShortcut.
+ * ## Dual-Binding Mode
+ *
+ * When dual-binding mode is enabled via `setDualBindingMode(true)`, the tap
+ * suppresses matched key events so they never reach the active application or
+ * Electron's `globalShortcut`. This allows the CGEventTap to take priority over
+ * globalShortcut when both are registered for the same keys.
+ *
+ * When dual-binding mode is disabled (default), the tap passes events through
+ * unchanged, allowing Electron's `globalShortcut` to also handle them as a
+ * fallback mechanism.
  */
 export declare class StealthKeyMonitor {
   constructor()
   /**
    * Start the stealth key monitor. The callback receives action IDs
    * (e.g. "general:take-screenshot") when matching key combinations are pressed.
+   * Unlike globalShortcut, this cannot be enumerated by other processes.
    *
    * By default, dual-binding mode is off — events pass through to the active
    * application and Electron's globalShortcut. Call `setDualBindingMode(true)`
    * to suppress matched events at the tap level.
+   *
+   * Returns an error if the CGEventTap cannot be created (e.g., Accessibility
+   * permission not granted). The TypeScript layer should catch this error and
+   * fall back to Electron's `globalShortcut` mechanism.
    */
-  start(callback: (actionId: string) => void): void
+  start(callback: (...args: any[]) => any): void
   /** Stop the stealth key monitor. */
   stop(): void
-  /**
-   * Enable or disable dual-binding mode at runtime.
-   *
-   * When enabled: the CGEventTap suppresses matched key events, preventing them
-   * from reaching the active app or Electron's globalShortcut handler.
-   *
-   * When disabled (default): events pass through unchanged, allowing globalShortcut
-   * to also handle the same shortcuts as a fallback.
-   *
-   * Can be toggled at any time, even while the tap is running.
-   */
-  setDualBindingMode(enabled: boolean): void
-  /** Query whether dual-binding mode is currently active. */
-  getDualBindingMode(): boolean
   /**
    * Update the shortcut configuration from the TypeScript layer.
    *
    * Accepts a JSON string representing an array of shortcut entries:
    * ```json
-   * [{"actionId": "general:take-screenshot", "keycode": 1, "modifiers": 1048576}]
+   * [
+   *   {"actionId": "general:take-screenshot", "keycode": 1, "modifiers": 1048576},
+   *   {"actionId": "general:toggle-visibility", "keycode": 9, "modifiers": 1966080}
+   * ]
    * ```
    *
    * Where:
@@ -150,13 +155,52 @@ export declare class StealthKeyMonitor {
    * Pass an empty array `"[]"` to clear the dynamic config and revert to defaults.
    *
    * This can be called at any time, including while the tap is running.
+   * The update is atomic — the tap callback will see the new config on its
+   * next key event.
    */
   updateShortcutConfig(configJson: string): void
   /**
+   * Enable or disable dual-binding mode at runtime.
+   *
+   * When enabled (`true`):
+   * - The CGEventTap suppresses matched key events (returns NULL from callback)
+   * - Keystrokes for registered shortcuts never reach the active app or globalShortcut
+   * - The tap takes full priority for shortcut handling
+   *
+   * When disabled (`false`, default):
+   * - The CGEventTap passes all events through unchanged
+   * - Electron's globalShortcut can still handle the same shortcuts as a fallback
+   * - Both the tap callback AND globalShortcut will fire for matched keys
+   *
+   * This can be toggled at any time, even while the tap is running.
+   */
+  setDualBindingMode(enabled: boolean): void
+  /** Query whether dual-binding mode is currently active. */
+  getDualBindingMode(): boolean
+  /**
    * Health-check: returns whether the CGEventTap is currently active.
    *
-   * The tap is considered active when `start()` has been called AND the
-   * stop signal has not been set (the tap thread is still running).
+   * The tap is considered active when:
+   * 1. `start()` has been called (started == true), AND
+   * 2. The stop signal has NOT been set (the tap thread is still running)
+   *
+   * This allows the TypeScript layer to verify the tap is healthy and
+   * decide whether to fall back to globalShortcut.
    */
   isTapActive(): boolean
+}
+export declare class SystemAudioCapture {
+  constructor(deviceId?: string | undefined | null, outputSampleRate?: number | undefined | null)
+  getSampleRate(): number
+  /** Sample rate of PCM buffers emitted to JS (after native polyphase resample). */
+  getOutputSampleRate(): number
+  start(callback: (...args: any[]) => any, onSpeechEnded?: (...args: any[]) => any | undefined | null): void
+  stop(): void
+}
+export declare class MicrophoneCapture {
+  constructor(deviceId?: string | undefined | null, outputSampleRate?: number | undefined | null)
+  getSampleRate(): number
+  getOutputSampleRate(): number
+  start(callback: (...args: any[]) => any, onSpeechEnded?: (...args: any[]) => any | undefined | null): void
+  stop(): void
 }

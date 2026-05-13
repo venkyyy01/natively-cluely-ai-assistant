@@ -39,15 +39,16 @@ export class RobustJsonStreamParser extends EventEmitter {
     if (this.state === 'complete' || this.state === 'error') return;
 
     for (const ch of chunk) {
-      this.buffer += ch;
-
       if (this.state === 'waiting') {
         if (ch === '{') {
+          this.buffer = '{';
           this.depth = 1;
           this.state = 'in_object';
         }
         continue;
       }
+
+      this.buffer += ch;
 
       if (this.state === 'in_string') {
         if (this.inEscape) {

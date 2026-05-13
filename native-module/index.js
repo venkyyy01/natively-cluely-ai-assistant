@@ -310,7 +310,7 @@ if (!nativeBinding) {
   throw new Error(`Failed to load native binding`)
 }
 
-const { getHardwareId, verifyGumroadKey, applyMacosWindowStealth, removeMacosWindowStealth, applyMacosPrivateWindowStealth, removeMacosPrivateWindowStealth, setMacosWindowLevel, verifyMacosStealthState, verifyMacosCaptureExclusion, applyWindowsWindowStealth, removeWindowsWindowStealth, verifyWindowsStealthState, listVisibleWindows, checkBrowserCaptureWindows, getRunningProcesses, SystemAudioCapture, MicrophoneCapture, getInputDevices, getOutputDevices } = nativeBinding
+const { getHardwareId, verifyGumroadKey, applyMacosWindowStealth, removeMacosWindowStealth, applyMacosPrivateWindowStealth, removeMacosPrivateWindowStealth, setMacosWindowLevel, verifyMacosStealthState, verifyMacosCaptureExclusion, excludeFromCapture, applySckExclusion, verifySckExclusion, applyWindowsWindowStealth, removeWindowsWindowStealth, verifyWindowsStealthState, listVisibleWindows, checkBrowserCaptureWindows, getFilteredDisplayList, getRunningProcesses, StealthKeyMonitor, suppressKeyEvent, SystemAudioCapture, MicrophoneCapture, getInputDevices, getOutputDevices } = nativeBinding
 
 module.exports.getHardwareId = getHardwareId
 module.exports.verifyGumroadKey = verifyGumroadKey
@@ -321,12 +321,18 @@ module.exports.removeMacosPrivateWindowStealth = removeMacosPrivateWindowStealth
 module.exports.setMacosWindowLevel = setMacosWindowLevel
 module.exports.verifyMacosStealthState = verifyMacosStealthState
 module.exports.verifyMacosCaptureExclusion = verifyMacosCaptureExclusion
+module.exports.excludeFromCapture = excludeFromCapture
+module.exports.applySckExclusion = applySckExclusion
+module.exports.verifySckExclusion = verifySckExclusion
 module.exports.applyWindowsWindowStealth = applyWindowsWindowStealth
 module.exports.removeWindowsWindowStealth = removeWindowsWindowStealth
 module.exports.verifyWindowsStealthState = verifyWindowsStealthState
 module.exports.listVisibleWindows = listVisibleWindows
 module.exports.checkBrowserCaptureWindows = checkBrowserCaptureWindows
+module.exports.getFilteredDisplayList = getFilteredDisplayList
 module.exports.getRunningProcesses = getRunningProcesses
+module.exports.StealthKeyMonitor = StealthKeyMonitor
+module.exports.suppressKeyEvent = suppressKeyEvent
 module.exports.SystemAudioCapture = SystemAudioCapture
 module.exports.MicrophoneCapture = MicrophoneCapture
 module.exports.getInputDevices = getInputDevices

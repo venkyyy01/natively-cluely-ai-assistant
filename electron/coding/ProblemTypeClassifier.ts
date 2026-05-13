@@ -10,8 +10,8 @@ const TYPE_RULES: Array<{ patterns: RegExp[]; type: ProblemType }> = [
   { patterns: [/\bdynamic\s+programming\b/i, /\bdp\b.*table/i, /\bmemoiz/i, /\btabulation\b/i], type: 'dynamic_programming' },
   { patterns: [/\bbacktrack/i, /\bpermutation\b.*recursi/i, /\bsubset\b.*recursi/i], type: 'backtracking' },
   { patterns: [/\bbinary\s+search\b/i, /\bsorted\s+array\b.*find\b/i], type: 'binary_search' },
+  { patterns: [/\bbinary\s+tree\b/i, /\btree\b.*\b(traversal|inorder|preorder|postorder|root|leaf|node)\b/i, /\binorder\b/i, /\bpreorder\b/i, /\bpostorder\b/i, /\bBST\b/i, /\broot\s*->\s*left\b/i], type: 'trees' },
   { patterns: [/\bgraph\b/i, /\bBFS\b/i, /\bDFS\b/i, /\badjacency\s+(list|matrix)\b/i, /\bshortest\s+path\b/i], type: 'graphs' },
-  { patterns: [/\btree\b/i, /\binorder\b/i, /\bpreorder\b/i, /\bpostorder\b/i, /\bBST\b/i, /\broot\s*->\s*left\b/i], type: 'trees' },
   { patterns: [/\blinked\s+list\b/i, /\bsingly\s+linked\b/i, /\bdoubly\s+linked\b/i, /\bListNode\b/i], type: 'linked_list' },
   { patterns: [/\bheap\b/i, /\bpriority\s+queue\b/i, /\bkth\s+largest\b/i, /\bkth\s+smallest\b/i], type: 'heap_priority_queue' },
   { patterns: [/\bhash\s*map\b/i, /\bhash\s*table\b/i, /\bfrequency\s+count\b/i, /\blookup\s+in\s+O\(1\)\b/i], type: 'hash_map' },
@@ -20,7 +20,7 @@ const TYPE_RULES: Array<{ patterns: RegExp[]; type: ProblemType }> = [
   { patterns: [/\bstack\b/i, /\bqueue\b/i, /\bbalanced\s+parenthes/i, /\bmonoton\b/i], type: 'stack_queue' },
   { patterns: [/\bgreedy\b/i, /\binterval\s+scheduling\b/i], type: 'greedy' },
   { patterns: [/\bsystem\s+design\b/i, /\bdesign\s+a\s+(scalable|distributed|real-time)\b/i], type: 'system_design' },
-  { patterns: [/\bdesign\b.*\bclass\b/i, /\bimplement\s+a\b.*\bclass\b/i], type: 'design' },
+  { patterns: [/\bdesign\b.*\b(class|data\s+structure|cache|lru|lfu)\b/i, /\bimplement\s+a\b.*\b(class|data\s+structure|cache)\b/i, /\bdesign\b.*\bimplement\b.*\bget\b.*\bput\b/i], type: 'design' },
   { patterns: [/\bpalindrome\b/i, /\banagram\b/i, /\bsubstring\b/i, /\bstring\s+compression\b/i], type: 'strings' },
   { patterns: [/\barray\b/i, /\bmatrix\b/i, /\bsubarray\b/i, /\brotate\s+array\b/i], type: 'arrays' },
 ];
