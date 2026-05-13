@@ -16,6 +16,18 @@ process.on('uncaughtException', (err: Error): void => {
     .finally((): void => { void gracefulShutdown.shutdown(1, `uncaughtException: ${err.message}`); });
 });
 
+// Route OS-level termination signals through gracefulShutdown so DB flushes,
+// ANE session release, and other cleanup hooks run before the process exits.
+// Without this, `kill <pid>` or system shutdown would terminate the process
+// while the InferenceSession is still alive, triggering destructor crashes.
+for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP'] as const) {
+  process.once(signal, (): void => {
+    void logToFileAsync(`[INFO] Received ${signal}, initiating graceful shutdown`)
+      .catch((): undefined => undefined)
+      .finally((): void => { void gracefulShutdown.shutdown(0, `signal:${signal}`); });
+  });
+}
+
 // Production reliability: unhandled promise rejections are USUALLY recoverable
 // transient errors (network timeouts, DB lock contention, fs ENOENT, etc.).
 // Terminating the entire app on every rejection caused work-loss in mid-meeting

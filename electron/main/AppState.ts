@@ -2546,6 +2546,60 @@ try {
     gracefulShutdown.register('db-flush', async () => {
       await this.checkpointer?.checkpointNow?.();
     });
+
+    // Production reliability: also release the ANE/ONNX session here so the
+    // crash-shutdown path (uncaughtException, unhandledRejection burst) does
+    // not leave a corrupted InferenceSession behind. process.exit() will
+    // otherwise trigger its V8 finalizer destructor and SIGTRAP the process.
+    gracefulShutdown.register('ane-release', async () => {
+      try {
+        await this.accelerationManager?.dispose();
+      } catch (err) {
+        console.warn('[AppState] ane-release hook error (swallowed):', err);
+      }
+    });
+
+    // Stop continuous capture loops so their setInterval timers don't keep
+    // firing during shutdown teardown.
+    gracefulShutdown.register('rag-stop', async () => {
+      try {
+        await this.ragManager?.stopLiveIndexing();
+      } catch (err) {
+        console.warn('[AppState] rag-stop hook error (swallowed):', err);
+      }
+      try {
+        const { disposeScreenRAGManager } = await import('../rag/ScreenRAGManager');
+        disposeScreenRAGManager();
+      } catch {
+        // optional — only active when flag is ON
+      }
+      try {
+        const { disposeCodeEditorCapture } = await import('../coding/CodeEditorCapture');
+        disposeCodeEditorCapture();
+      } catch {
+        // optional — only active when flag is ON
+      }
+    });
+
+    gracefulShutdown.register('native-stealth-dispose', async () => {
+      try {
+        this.nativeStealthBridge?.dispose();
+        this.nativeStealthBridge = null;
+        this.virtualDisplayCoordinator?.dispose?.();
+      } catch (err) {
+        console.warn('[AppState] native-stealth-dispose hook error (swallowed):', err);
+      }
+    });
+
+    // Close SQLite last so all upstream consumers finish writing first.
+    // better-sqlite3 runs PRAGMA wal_checkpoint(TRUNCATE) on close.
+    gracefulShutdown.register('db-close', async () => {
+      try {
+        DatabaseManager.closeIfOpen();
+      } catch (err) {
+        console.warn('[AppState] db-close hook error (swallowed):', err);
+      }
+    });
   }
 
   // Getters and Setters

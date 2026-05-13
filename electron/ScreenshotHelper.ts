@@ -139,28 +139,18 @@ export class ScreenshotHelper {
   }
 
   public clearQueues(): void {
-    // Clear screenshotQueue
-    this.screenshotQueue.forEach((screenshotPath) => {
-      fs.unlink(screenshotPath, (err) => {
-        if (err) {
-          // console.error(`Error deleting screenshot at ${screenshotPath}:`, err)
-        }
-      })
-    })
-    this.screenshotQueue = []
-
-    // Clear extraScreenshotQueue
-    this.extraScreenshotQueue.forEach((screenshotPath) => {
-      fs.unlink(screenshotPath, (err) => {
-        if (err) {
-          // console.error(
-          //   `Error deleting extra screenshot at ${screenshotPath}:`,
-          //   err
-          // )
-        }
-      })
-    })
-    this.extraScreenshotQueue = []
+    // Snapshot queue contents synchronously, then reset queues immediately so
+    // a concurrent takeScreenshot can't push into the array we are about to
+    // unlink. This is race-safe because JS is single-threaded — between the
+    // snapshot and reset there is no async point.
+    const toUnlink = [...this.screenshotQueue, ...this.extraScreenshotQueue];
+    this.screenshotQueue = [];
+    this.extraScreenshotQueue = [];
+    for (const screenshotPath of toUnlink) {
+      fs.unlink(screenshotPath, (_err) => {
+        // best-effort; file may already be gone or held by reader
+      });
+    }
   }
 
   public async takeScreenshot(
@@ -308,15 +298,14 @@ export class ScreenshotHelper {
   ): Promise<{ success: boolean; error?: string }> {
     try {
       await fs.promises.unlink(path)
-      if (this.view === "queue") {
-        this.screenshotQueue = this.screenshotQueue.filter(
-          (filePath) => filePath !== path
-        )
-      } else {
-        this.extraScreenshotQueue = this.extraScreenshotQueue.filter(
-          (filePath) => filePath !== path
-        )
-      }
+      // Scan both queues — this.view may have changed between push and delete,
+      // and a path could legitimately exist in either bucket.
+      this.screenshotQueue = this.screenshotQueue.filter(
+        (filePath) => filePath !== path
+      )
+      this.extraScreenshotQueue = this.extraScreenshotQueue.filter(
+        (filePath) => filePath !== path
+      )
       return { success: true }
     } catch (error) {
       // console.error("Error deleting file:", error)

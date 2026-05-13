@@ -33,6 +33,7 @@ export class VectorStore {
     private worker: Worker | null = null;
     private requestId = 0;
     private pendingRequests = new Map<number, { resolve: (v: any) => void; reject: (e: any) => void; timer: ReturnType<typeof setTimeout> }>();
+    private destroyed = false;
 
     private static readonly WORKER_TIMEOUT_MS = 30_000; // 30s deadman switch
 
@@ -98,6 +99,9 @@ export class VectorStore {
      * Returns a Promise with a timeout deadman switch.
      */
     private postToWorker<T>(message: any, transferList: ArrayBuffer[] = []): Promise<T> {
+        if (this.destroyed) {
+            return Promise.reject(new Error('[VectorStore] destroyed; cannot dispatch worker request'));
+        }
         // Safe requestId wrap-around
         this.requestId = (this.requestId + 1) % Number.MAX_SAFE_INTEGER;
         const id = this.requestId;
@@ -116,13 +120,24 @@ export class VectorStore {
 
     /**
      * Terminate the worker thread. Call this when the VectorStore is no longer needed.
+     * Race-safe: sets `destroyed` synchronously so concurrent postToWorker calls
+     * fail fast rather than dispatching to a dying worker or lazily spawning a
+     * fresh one mid-teardown.
      */
     async destroy(): Promise<void> {
-        if (this.worker) {
-            await this.worker.terminate();
-            this.worker = null;
-        }
+        if (this.destroyed) return;
+        this.destroyed = true;
+        const worker = this.worker;
+        this.worker = null;
+        // Reject pending FIRST so callers stop awaiting before terminate races them.
         this.rejectAllPending(new Error('VectorStore destroyed'));
+        if (worker) {
+            try {
+                await worker.terminate();
+            } catch (err) {
+                console.warn('[VectorStore] worker.terminate() error (swallowed):', err);
+            }
+        }
     }
 
     /**
