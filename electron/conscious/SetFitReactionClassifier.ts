@@ -1,5 +1,6 @@
 import { pipeline } from '@xenova/transformers';
 import type { QuestionReactionKind } from './QuestionReactionClassifier';
+import { registerEmbeddingPipeline } from './embeddingPipelineRegistry';
 
 interface ClassificationResult {
   kind: QuestionReactionKind;
@@ -110,9 +111,15 @@ export class SetFitReactionClassifier {
   };
 
   private prototypeEmbeddings: Map<QuestionReactionKind, number[][]> = new Map();
+  private disposed = false;
+  private readonly unregister: () => void;
 
   constructor() {
     // Lazy load model on first use
+    // Register for graceful shutdown so the xenova-bundled InferenceSession
+    // is released before V8 finalizers run (see embeddingPipelineRegistry.ts
+    // and crashreport.md incident FEBA7065 for context).
+    this.unregister = registerEmbeddingPipeline(this);
   }
 
   private async ensureModelLoaded(): Promise<void> {
@@ -224,5 +231,27 @@ export class SetFitReactionClassifier {
 
   hasLoadError(): boolean {
     return this.modelLoadError;
+  }
+
+  /**
+   * Release the underlying xenova pipeline (napi-v3 InferenceSession) and
+   * unregister from the disposable registry. Idempotent; errors swallowed.
+   */
+  async dispose(): Promise<void> {
+    if (this.disposed) return;
+    this.disposed = true;
+    this.unregister();
+    const embedder = this.embedder;
+    this.embedder = null;
+    this.modelLoadPromise = null;
+    this.prototypeEmbeddings.clear();
+    if (!embedder) return;
+    try {
+      if (typeof embedder.dispose === 'function') {
+        await embedder.dispose();
+      }
+    } catch (err) {
+      console.warn('[SetFitReactionClassifier] dispose error swallowed:', err);
+    }
   }
 }

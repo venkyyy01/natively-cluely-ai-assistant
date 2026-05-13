@@ -11,6 +11,7 @@
  */
 
 import { ConversationKind, RefinementIntent } from './ConsciousModeRouter';
+import { registerEmbeddingPipeline } from './embeddingPipelineRegistry';
 
 /**
  * Classification result from local embedding model.
@@ -43,6 +44,8 @@ export class LocalConsciousEmbeddingClassifier {
   private embeddingCache: Map<string, number[]> = new Map();
   private static readonly CACHE_MAX_SIZE = 512;
   private classEmbeddings: Map<ConversationKind, number[]> = new Map();
+  private disposed = false;
+  private readonly unregister: () => void;
 
   /**
    * Representative examples for each conversation kind.
@@ -112,6 +115,12 @@ export class LocalConsciousEmbeddingClassifier {
       modelPath: options.modelPath || 'models/bge-small-en-v1.5-quantized.onnx',
       useGPU: options.useGPU ?? true,
     };
+    // Register for graceful shutdown so the napi-v6 InferenceSession is
+    // released before V8 finalizers run (see embeddingPipelineRegistry.ts
+    // and crashreport.md incident FEBA7065 for context). The destructor of
+    // InferenceSessionWrap can SIGTRAP if it runs after the runtime has
+    // begun process tear-down.
+    this.unregister = registerEmbeddingPipeline(this);
   }
 
   /**
@@ -453,5 +462,33 @@ export class LocalConsciousEmbeddingClassifier {
    */
   isReady(): boolean {
     return this.modelLoaded;
+  }
+
+  /**
+   * Release the underlying onnxruntime-node InferenceSession and unregister
+   * from the disposable registry. Idempotent; all errors swallowed because
+   * the destructor path we are racing is exactly what we must avoid letting
+   * propagate.
+   */
+  async dispose(): Promise<void> {
+    if (this.disposed) return;
+    this.disposed = true;
+    this.unregister();
+    const model = this.model;
+    this.model = null;
+    this.modelLoaded = false;
+    this.ort = null;
+    this.embeddingCache.clear();
+    this.classEmbeddings.clear();
+    if (!model) return;
+    try {
+      if (typeof model.release === 'function') {
+        await model.release();
+      } else if (typeof model.dispose === 'function') {
+        await model.dispose();
+      }
+    } catch (err) {
+      console.warn('[LocalConsciousEmbeddingClassifier] dispose error swallowed:', err);
+    }
   }
 }

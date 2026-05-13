@@ -2559,6 +2559,30 @@ try {
       }
     });
 
+    // NAT-CRASH-FIX (incident FEBA7065): release every xenova/@xenova ONNX
+    // pipeline and direct onnxruntime-node InferenceSession registered via
+    // `embeddingPipelineRegistry`. Without this, V8 GC eventually drains its
+    // finalizer queue inside the `uv_check` phase (or during process.exit),
+    // and `~InferenceSessionWrap()` from the napi-v3 binding bundled with
+    // `@xenova/transformers` (libonnxruntime.1.14.0) SIGTRAPs while
+    // destroying a `std::variant<std::string, std::string_view>` member
+    // whose backing heap has already been torn down. Disposing them
+    // explicitly here drives the destructors while the runtime is still
+    // healthy.
+    gracefulShutdown.register('embedding-pipelines-dispose', async () => {
+      try {
+        const { disposeAllEmbeddingPipelines } = await import(
+          '../conscious/embeddingPipelineRegistry'
+        );
+        await disposeAllEmbeddingPipelines();
+      } catch (err) {
+        console.warn(
+          '[AppState] embedding-pipelines-dispose hook error (swallowed):',
+          err,
+        );
+      }
+    });
+
     // Stop continuous capture loops so their setInterval timers don't keep
     // firing during shutdown teardown.
     gracefulShutdown.register('rag-stop', async () => {

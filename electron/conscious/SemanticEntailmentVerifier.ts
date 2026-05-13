@@ -1,4 +1,5 @@
 import { pipeline } from '@xenova/transformers';
+import { registerEmbeddingPipeline } from './embeddingPipelineRegistry';
 
 export interface EntailmentResult {
   label: 'entailment' | 'contradiction' | 'neutral';
@@ -9,12 +10,18 @@ export class SemanticEntailmentVerifier {
   private model: any | null = null;
   private modelLoadPromise: Promise<void> | null = null;
   private modelLoadError = false;
+  private disposed = false;
+  private readonly unregister: () => void;
 
   private static readonly ENTAILMENT_THRESHOLD = 0.7;
   private static readonly MAX_TOKENS = 512;
 
   constructor() {
     // Lazy load model on first use
+    // Register for graceful shutdown so the xenova-bundled InferenceSession
+    // is released before V8 finalizers run (see embeddingPipelineRegistry.ts
+    // and crashreport.md incident FEBA7065 for context).
+    this.unregister = registerEmbeddingPipeline(this);
   }
 
   private async ensureModelLoaded(): Promise<void> {
@@ -148,5 +155,26 @@ export class SemanticEntailmentVerifier {
 
   hasLoadError(): boolean {
     return this.modelLoadError;
+  }
+
+  /**
+   * Release the underlying xenova pipeline (napi-v3 InferenceSession) and
+   * unregister from the disposable registry. Idempotent; errors swallowed.
+   */
+  async dispose(): Promise<void> {
+    if (this.disposed) return;
+    this.disposed = true;
+    this.unregister();
+    const model = this.model;
+    this.model = null;
+    this.modelLoadPromise = null;
+    if (!model) return;
+    try {
+      if (typeof model.dispose === 'function') {
+        await model.dispose();
+      }
+    } catch (err) {
+      console.warn('[SemanticEntailmentVerifier] dispose error swallowed:', err);
+    }
   }
 }

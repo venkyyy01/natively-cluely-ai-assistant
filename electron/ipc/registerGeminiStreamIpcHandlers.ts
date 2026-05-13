@@ -220,8 +220,14 @@ export function registerGeminiStreamIpcHandlers(deps: GeminiStreamIpcDeps): void
       console.error("[IPC] Error in gemini-chat-stream setup:", error);
       throw error;
     } finally {
-      activeChatControllers.delete(requestId);
-      streamChatStartedAt.delete(requestId);
+      // Race-safe: only delete if the registered entry is STILL ours.
+      // A second gemini-chat-stream with the same requestId could have
+      // aborted us and registered its own AbortController; we must not
+      // delete its registration in our finally block.
+      if (activeChatControllers.get(requestId) === controller) {
+        activeChatControllers.delete(requestId);
+        streamChatStartedAt.delete(requestId);
+      }
     }
   });
 

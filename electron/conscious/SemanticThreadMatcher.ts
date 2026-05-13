@@ -1,5 +1,6 @@
 import { pipeline } from '@xenova/transformers';
 import type { ReasoningThread } from '../ConsciousMode';
+import { registerEmbeddingPipeline } from './embeddingPipelineRegistry';
 
 export class SemanticThreadMatcher {
   private embedder: any | null = null;
@@ -7,12 +8,18 @@ export class SemanticThreadMatcher {
   private inFlightEmbeddings = new Map<string, Promise<number[]>>();
   private modelLoadPromise: Promise<void> | null = null;
   private modelLoadError = false;
+  private disposed = false;
+  private readonly unregister: () => void;
 
   private static readonly THRESHOLD = 0.62;
   private static readonly MIN_WORD_COUNT = 4;
 
   constructor() {
     // Lazy load model on first use
+    // Register for graceful shutdown so the xenova-bundled InferenceSession
+    // is released before V8 finalizers run (see embeddingPipelineRegistry.ts
+    // and crashreport.md incident FEBA7065 for context).
+    this.unregister = registerEmbeddingPipeline(this);
   }
 
   private async ensureModelLoaded(): Promise<void> {
@@ -172,5 +179,32 @@ export class SemanticThreadMatcher {
   clearCache(): void {
     this.embeddingCache.clear();
     this.inFlightEmbeddings.clear();
+  }
+
+  /**
+   * Release the underlying xenova pipeline (which owns a napi-v3
+   * InferenceSession) and unregister from the disposable registry.
+   *
+   * Idempotent. All errors are swallowed; the destructor crash this method
+   * prevents (EXC_BREAKPOINT inside ~InferenceSessionWrap) is exactly what
+   * we must not propagate during shutdown.
+   */
+  async dispose(): Promise<void> {
+    if (this.disposed) return;
+    this.disposed = true;
+    this.unregister();
+    const embedder = this.embedder;
+    this.embedder = null;
+    this.modelLoadPromise = null;
+    this.embeddingCache.clear();
+    this.inFlightEmbeddings.clear();
+    if (!embedder) return;
+    try {
+      if (typeof embedder.dispose === 'function') {
+        await embedder.dispose();
+      }
+    } catch (err) {
+      console.warn('[SemanticThreadMatcher] dispose error swallowed:', err);
+    }
   }
 }

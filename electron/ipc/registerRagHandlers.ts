@@ -70,6 +70,11 @@ export function registerRagHandlers({ appState, safeHandle, safeHandleValidated 
 
     const abortController = new AbortController();
     const queryKey = `meeting-${meetingId}`;
+    // If a previous query is still active for this meeting, abort it so the
+    // map entry we are about to overwrite is properly torn down. Without
+    // this, the predecessor's finally block would later delete OUR entry.
+    const previous = activeRAGQueries.get(queryKey);
+    if (previous) previous.abort();
     activeRAGQueries.set(queryKey, abortController);
 
     try {
@@ -88,7 +93,10 @@ export function registerRagHandlers({ appState, safeHandle, safeHandleValidated 
       }
       return ragError('RAG_QUERY_FAILED', error?.message || 'Unable to query meeting context');
     } finally {
-      activeRAGQueries.delete(queryKey);
+      // Race-safe: only delete if the registered entry is STILL ours.
+      if (activeRAGQueries.get(queryKey) === abortController) {
+        activeRAGQueries.delete(queryKey);
+      }
     }
   });
 
