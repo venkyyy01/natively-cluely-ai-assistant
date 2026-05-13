@@ -100,7 +100,7 @@ export class WindowHelper {
     // Gate: stealthReadyPromise resolves only after StealthManager has fully
     // initialized and verified native module availability. If stealth is
     // disabled (not in undetectable mode), resolve immediately.
-    if (!this.stealthManager.isEnabled()) {
+    if (!this.stealthManager.isEnabled?.()) {
       this.stealthReadyPromise = Promise.resolve()
     } else {
       this.stealthReadyPromise = new Promise<void>((resolve) => {
@@ -214,7 +214,7 @@ export class WindowHelper {
     windowRole: 'primary' | 'auxiliary' | 'unknown' = 'primary',
   ): boolean {
     // Skip verification if stealth is not enabled or window is invalid
-    if (!win || win.isDestroyed() || !this.stealthManager.isEnabled()) {
+    if (!win || win.isDestroyed() || !this.stealthManager.isEnabled?.()) {
       return true
     }
 

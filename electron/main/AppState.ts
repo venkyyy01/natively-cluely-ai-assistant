@@ -2196,7 +2196,9 @@ try {
 
   public async cleanupForQuit(): Promise<void> {
     // Stop the ContinuousEnforcementLoop on application quit
-    this.stopEnforcementLoop()
+    if (typeof this.stopEnforcementLoop === 'function') {
+      this.stopEnforcementLoop()
+    }
 
     await this.intelligenceManager.waitForPendingSaves(10000);
     this.meetingStartSequence += 1
@@ -3036,13 +3038,17 @@ setThemeMode: (mode) => this.themeManager.setMode(mode as import('../ThemeManage
             runtime: 'coordinator',
           })
           // Start the ContinuousEnforcementLoop when stealth is enabled
-          this.startEnforcementLoop()
+          if (typeof this.startEnforcementLoop === 'function') {
+            this.startEnforcementLoop()
+          }
         }
 
         // Apply undetectable state for disable case (state = false)
         if (!state) {
           // Stop the ContinuousEnforcementLoop when stealth is disabled
-          this.stopEnforcementLoop()
+          if (typeof this.stopEnforcementLoop === 'function') {
+            this.stopEnforcementLoop()
+          }
           this.prepareUndetectableDisableProtection()
           this.applyUndetectableState(state, startedAt, {
             runtime: 'coordinator',
@@ -3058,7 +3064,9 @@ setThemeMode: (mode) => this.themeManager.setMode(mode as import('../ThemeManage
           // mode was on while every other surface said it was off.
           this.stealthManager.setEnabled(false)
           // Stop enforcement loop on failed enable rollback
-          this.stopEnforcementLoop()
+          if (typeof this.stopEnforcementLoop === 'function') {
+            this.stopEnforcementLoop()
+          }
           try {
             this.applyUndetectableState(false, startedAt, {
               runtime: 'coordinator',

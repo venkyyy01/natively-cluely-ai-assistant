@@ -340,7 +340,9 @@ export class KeybindManager {
             // Transition: globalShortcut → CGEventTap
             // Unregister visible global shortcuts first (Requirement 4.4),
             // then start the stealth tap.
-            globalShortcut.unregisterAll();
+            if (typeof globalShortcut.unregisterAll === 'function') {
+                globalShortcut.unregisterAll();
+            }
             this.startStealthKeyMonitor();
         } else {
             // Transition: CGEventTap → globalShortcut
