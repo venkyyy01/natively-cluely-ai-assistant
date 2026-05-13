@@ -1,4 +1,4 @@
-import { app, session, systemPreferences, globalShortcut } from "electron"
+import { app, session, globalShortcut } from "electron"
 import { AppState } from "./AppState"
 import { initializeIpcHandlers } from "../ipcHandlers"
 import { CredentialsManager } from "../services/CredentialsManager"
@@ -13,6 +13,9 @@ import {
   markSessionEnding,
   wasPreviousSessionUnclean,
 } from '../startup/StartupHealer'
+import { validateIntegrity } from '../integrity/IntegrityValidator'
+import { applyAdaptiveAcceleration } from '../config/optimizations'
+import { createPermissionWizard } from '../permissions/PermissionWizard'
 
 // Application initialization
 
@@ -31,6 +34,24 @@ export async function initializeApp() {
   if (process.env.NATIVELY_STRICT_PROTECTION === '1') {
     installConsoleRedactor();
   }
+
+  // NAT-INTEGRITY: Validate native modules and critical TS imports before proceeding.
+  // Must run before app.whenReady() to detect corrupted installations early.
+  const integrity = await validateIntegrity();
+  if (!integrity.success) {
+    for (const err of integrity.errors) {
+      console.error(`[Integrity] ${err}`);
+    }
+    console.error('[Bootstrap] Integrity validation failed. Exiting.');
+    app.quit();
+    return;
+  }
+  console.log(`[Integrity] Validated ${integrity.moduleCount} modules in ${integrity.durationMs}ms`);
+
+  // NAT-ADAPTIVE: Apply hardware-based acceleration before Chromium init.
+  // Command-line switches must be appended before app.whenReady() to take effect.
+  const hardwareProfile = applyAdaptiveAcceleration();
+  console.log(`[Bootstrap] Adaptive acceleration applied: ${hardwareProfile.tier} tier (${hardwareProfile.cpuCores} cores, ${hardwareProfile.ramGB}GB RAM)`);
 
   // 2. Wait for app to be ready
   await app.whenReady()
@@ -104,19 +125,14 @@ export async function initializeApp() {
       console.warn('[Init] Failed to set generic user-agent:', uaError);
     }
 
-    // Check microphone permissions on macOS
+    // NAT-PERMISSIONS: Use PermissionWizard for first-launch flow and revocation detection.
+    // Replaces the standalone microphone check with a comprehensive sequential wizard.
     if (process.platform === 'darwin') {
-      console.log('[Init] 🎤 Checking microphone permissions...');
-      try {
-        const micAccess = await systemPreferences.askForMediaAccess('microphone');
-        console.log(`[Init] 🎤 Microphone access: ${micAccess ? '✅ GRANTED' : '❌ DENIED'}`);
-        
-        if (!micAccess) {
-          console.error('[Init] 🚨 Microphone access denied - audio transcription will not work!');
-          console.error('[Init] 🔧 Please enable microphone access in System Preferences > Security & Privacy > Privacy > Microphone');
-        }
-      } catch (error) {
-        console.error('[Init] 🎤 Failed to check microphone permissions:', error);
+      const wizard = createPermissionWizard();
+      if (wizard.shouldRunWizard()) {
+        await wizard.runWizard();
+      } else {
+        await wizard.checkRevocations();
       }
     }
     

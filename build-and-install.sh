@@ -298,6 +298,22 @@ clean_build_artifacts() {
         fi
     done
 
+    # Remove architecture-specific .node binaries from native-module directory
+    info "Removing architecture-specific .node binaries..."
+    while IFS= read -r node_binary; do
+        if ! rm -f "$node_binary"; then
+            fail "Permission denied removing .node binary: $node_binary"
+        fi
+    done < <(find "$SCRIPT_DIR/native-module" -name "*.node" -type f 2>/dev/null || true)
+
+    # Remove TypeScript incremental compilation caches
+    info "Removing TypeScript build info caches..."
+    while IFS= read -r tsbuildinfo_file; do
+        if ! rm -f "$tsbuildinfo_file"; then
+            fail "Permission denied removing tsbuildinfo: $tsbuildinfo_file"
+        fi
+    done < <(find "$SCRIPT_DIR" -name "*.tsbuildinfo" -type f 2>/dev/null || true)
+
     for path in "${optional_cache_paths[@]}"; do
         [[ -e "$path" ]] || continue
         if ! rm -rf "$path"; then
@@ -310,6 +326,81 @@ clean_build_artifacts() {
     rm -f "$RELEASE_DIR"/*.dmg "$RELEASE_DIR"/*.zip "$RELEASE_DIR"/*.blockmap "$RELEASE_DIR"/*.yml 2>/dev/null || true
 
     success "Fresh-build cleanup complete"
+}
+
+parallel_build() {
+    local log_dir
+    log_dir=$(mktemp -d)
+    local pids=()
+    local labels=()
+    local logs=()
+    local start_time
+    start_time=$(date +%s)
+
+    # Detect CPU cores: sysctl (macOS) → nproc (Linux) → fallback 4
+    local num_cores=4
+    if command -v sysctl &>/dev/null; then
+        num_cores=$(sysctl -n hw.ncpu 2>/dev/null || echo 4)
+    elif command -v nproc &>/dev/null; then
+        num_cores=$(nproc 2>/dev/null || echo 4)
+    fi
+    info "Detected $num_cores CPU cores for parallel compilation"
+
+    # Trap handler: kill sibling processes on failure
+    cleanup_parallel() {
+        local exit_pid="${1:-}"
+        for pid in "${pids[@]}"; do
+            [[ "$pid" == "$exit_pid" ]] && continue
+            kill "$pid" 2>/dev/null || true
+        done
+    }
+
+    # Task 1: Vite renderer build
+    info "Starting parallel compilation: Vite renderer, TypeScript electron, Rust native module"
+    NODE_OPTIONS="--max-old-space-size=4096" npm run build:renderer > "$log_dir/renderer.log" 2>&1 &
+    pids+=($!)
+    labels+=("Vite renderer build")
+    logs+=("$log_dir/renderer.log")
+
+    # Task 2: TypeScript electron compilation
+    NODE_OPTIONS="--max-old-space-size=4096" npx tsc -p tsconfig.electron.json > "$log_dir/tsc.log" 2>&1 &
+    pids+=($!)
+    labels+=("TypeScript electron compilation")
+    logs+=("$log_dir/tsc.log")
+
+    # Task 3: Rust native module (if cargo is available)
+    if [[ "$HAS_RUST" == "true" && -d "$SCRIPT_DIR/native-module" ]]; then
+        (cd "$SCRIPT_DIR/native-module" && cargo build --release --jobs="$num_cores") > "$log_dir/rust.log" 2>&1 &
+        pids+=($!)
+        labels+=("Rust native module compilation")
+        logs+=("$log_dir/rust.log")
+    fi
+
+    # Wait for all processes, cancel siblings on first failure
+    local failed=false
+    local failed_index=-1
+    for i in "${!pids[@]}"; do
+        if ! wait "${pids[$i]}"; then
+            failed=true
+            failed_index=$i
+            cleanup_parallel "${pids[$i]}"
+            break
+        fi
+    done
+
+    local end_time
+    end_time=$(date +%s)
+    local elapsed=$((end_time - start_time))
+
+    if [[ "$failed" == "true" ]]; then
+        echo -e "${RED}${BOLD}--- ${labels[$failed_index]} FAILED ---${NC}"
+        tail -50 "${logs[$failed_index]}" 2>/dev/null || true
+        rm -rf "$log_dir"
+        fail "Parallel compilation failed: ${labels[$failed_index]} (after ${elapsed}s)"
+    fi
+
+    rm -rf "$log_dir"
+    success "Parallel compilation completed in ${elapsed}s (${num_cores} cores)"
 }
 
 print_banner() {
@@ -421,7 +512,11 @@ run_packaged_launch_probe() {
     local disable_helper="$3"
     local log_file
     local pid
+    local start_time
+    local end_time
+    local boot_duration
 
+    start_time=$(date +%s)
     log_file=$(mktemp)
     if [[ "$disable_helper" == "1" ]]; then
         NATIVELY_DISABLE_MACOS_VIRTUAL_DISPLAY_HELPER=1 "$app_binary" >"$log_file" 2>&1 &
@@ -435,13 +530,33 @@ run_packaged_launch_probe() {
         echo -e "${RED}${BOLD}--- launch log (${mode_label}) -------------------------------------------------${NC}"
         sed -n '1,160p' "$log_file"
         rm -f "$log_file"
-        fail "Packaged launch probe failed (${mode_label})"
+        fail "Packaged launch probe failed (${mode_label}): app did not survive 4 seconds"
     fi
+
+    # Check for module loading errors in stdout/stderr
+    if grep -qE 'MODULE_NOT_FOUND|DLOPEN_FAILED|Cannot find module|dlopen.*failed' "$log_file"; then
+        local error_line
+        error_line=$(grep -E 'MODULE_NOT_FOUND|DLOPEN_FAILED|Cannot find module|dlopen.*failed' "$log_file" | head -1)
+        kill "$pid" 2>/dev/null || true
+        wait "$pid" 2>/dev/null || true
+        echo -e "${RED}${BOLD}--- launch log (${mode_label}) -------------------------------------------------${NC}"
+        sed -n '1,160p' "$log_file"
+        rm -f "$log_file"
+        fail "Packaged launch probe (${mode_label}): module loading error detected: $error_line"
+    fi
+
+    # Confirm native audio module loaded
+    if grep -qE 'natively-audio|Integrity.*Validated' "$log_file"; then
+        success "Launch probe (${mode_label}): native audio module confirmed loaded"
+    fi
+
+    end_time=$(date +%s)
+    boot_duration=$((end_time - start_time))
 
     kill "$pid" 2>/dev/null || true
     wait "$pid" 2>/dev/null || true
     rm -f "$log_file"
-    success "Packaged launch probe passed (${mode_label})"
+    success "Packaged launch probe passed (${mode_label}, boot duration: ${boot_duration}s)"
 }
 
 validate_packaged_helper_launch_modes() {
@@ -453,6 +568,130 @@ validate_packaged_helper_launch_modes() {
     run_packaged_launch_probe "with-helper" "$app_binary" "0"
     run_packaged_launch_probe "without-helper" "$app_binary" "1"
     success "Packaged helper launch validation passed (with and without helper)"
+}
+
+generate_checksums() {
+    local release_dir="$1"
+    local checksum_file="$release_dir/checksums.sha256"
+
+    info "Generating SHA-256 checksums for release artifacts..."
+    > "$checksum_file"  # Always overwrite existing checksum file
+
+    local found_artifacts=false
+    for artifact in "$release_dir"/*.dmg "$release_dir"/*.zip; do
+        [[ -e "$artifact" ]] || continue
+        found_artifacts=true
+        if ! shasum -a 256 "$artifact" >> "$checksum_file"; then
+            fail "Checksum generation failed for: $artifact"
+        fi
+    done
+
+    if [[ "$found_artifacts" == "true" ]]; then
+        success "Checksums written to $checksum_file"
+    else
+        warn "No .dmg or .zip artifacts found in $release_dir for checksum generation"
+    fi
+}
+
+validate_wiring() {
+    local app_asar="$1"
+    local unpacked_dir="$2"
+    local arch="$3"
+    local count=0
+
+    info "Running wiring validation on packaged app..."
+
+    # Check native audio module index in asar
+    if ! npx asar list "$app_asar" | grep -Fxq "/node_modules/natively-audio/index.js"; then
+        fail "Wiring validation failed: natively-audio index file missing from app.asar"
+    fi
+    ((count++))
+
+    # Check preload script in unpacked
+    if [[ ! -f "$unpacked_dir/dist-electron/electron/preload.js" ]]; then
+        fail "Wiring validation failed: preload.js missing from asar-unpacked directory"
+    fi
+    ((count++))
+
+    # Check stealth shell preload in unpacked
+    if [[ ! -f "$unpacked_dir/dist-electron/electron/stealth/shellPreload.js" ]]; then
+        fail "Wiring validation failed: stealth/shellPreload.js missing from asar-unpacked directory"
+    fi
+    ((count++))
+
+    # Check better-sqlite3 native binary in unpacked
+    if [[ ! -f "$unpacked_dir/node_modules/better-sqlite3/build/Release/better_sqlite3.node" ]]; then
+        fail "Wiring validation failed: better-sqlite3 native binary missing from asar-unpacked for $arch"
+    fi
+    ((count++))
+
+    # Check sqlite3 native binary in unpacked
+    if [[ ! -f "$unpacked_dir/node_modules/sqlite3/build/Release/node_sqlite3.node" ]]; then
+        fail "Wiring validation failed: sqlite3 native binary missing from asar-unpacked for $arch"
+    fi
+    ((count++))
+
+    success "Wiring validation passed: $count entries verified"
+}
+
+verify_dependencies() {
+    local missing=()
+
+    info "Verifying critical dependencies after installation..."
+
+    # Verify electron binary
+    if [[ ! -f "$SCRIPT_DIR/node_modules/.bin/electron" ]]; then
+        missing+=("electron")
+    fi
+
+    # Verify electron-builder binary
+    if [[ ! -f "$SCRIPT_DIR/node_modules/.bin/electron-builder" ]]; then
+        missing+=("electron-builder")
+    fi
+
+    # Verify tsc binary
+    if [[ ! -f "$SCRIPT_DIR/node_modules/.bin/tsc" ]]; then
+        missing+=("tsc")
+    fi
+
+    # Verify better-sqlite3 native binary
+    if [[ ! -f "$SCRIPT_DIR/node_modules/better-sqlite3/build/Release/better_sqlite3.node" ]]; then
+        missing+=("better-sqlite3 native binary")
+    fi
+
+    # Verify sqlite3 native binary
+    if [[ ! -f "$SCRIPT_DIR/node_modules/sqlite3/build/Release/node_sqlite3.node" ]]; then
+        missing+=("sqlite3 native binary")
+    fi
+
+    # Verify native audio .node binary matches target architecture
+    local native_audio_binary=""
+    if [[ "$BUILD_ARCH" == "arm64" ]]; then
+        native_audio_binary="$SCRIPT_DIR/node_modules/natively-audio/index.darwin-arm64.node"
+    else
+        native_audio_binary="$SCRIPT_DIR/node_modules/natively-audio/index.darwin-x64.node"
+    fi
+
+    if [[ ! -f "$native_audio_binary" ]]; then
+        missing+=("natively-audio native binary for $BUILD_ARCH")
+    else
+        # Verify architecture matches via file command
+        local file_output
+        file_output=$(file "$native_audio_binary")
+        if ! echo "$file_output" | grep -qi "$BUILD_ARCH"; then
+            missing+=("natively-audio binary architecture mismatch (expected $BUILD_ARCH)")
+        fi
+    fi
+
+    if [[ ${#missing[@]} -gt 0 ]]; then
+        echo -e "${RED}${BOLD}Missing dependencies:${NC}"
+        for dep in "${missing[@]}"; do
+            echo -e "  ${RED}✗${NC} $dep"
+        done
+        fail "Dependency verification failed: ${missing[*]}"
+    fi
+
+    success "All critical dependencies verified for ${BUILD_ARCH}"
 }
 
 if [[ "${BUILD_AND_INSTALL_LIB:-0}" == "1" ]]; then
@@ -534,42 +773,17 @@ step "Step 3/8 — Installing Dependencies"
 
 cd "$SCRIPT_DIR"
 
-DEPENDENCY_TOOLCHAIN_COMPLETE=true
-if [[ -d "node_modules" ]]; then
-    for required_path in \
-        "node_modules/electron/package.json" \
-        "node_modules/electron-builder/package.json" \
-        "node_modules/.bin/tsc"; do
-        if [[ ! -e "$required_path" ]]; then
-            DEPENDENCY_TOOLCHAIN_COMPLETE=false
-            break
-        fi
-    done
-else
-    DEPENDENCY_TOOLCHAIN_COMPLETE=false
-fi
-
-INSTALL_COMMAND=(npm install)
-if [[ -f "package-lock.json" && ( ! -d "node_modules" || "${FORCE_DEPENDENCY_SYNC:-0}" == "1" ) ]]; then
-    INSTALL_COMMAND=(npm ci)
-fi
-
-if [[ -d "node_modules" && "$DEPENDENCY_TOOLCHAIN_COMPLETE" == true && "${FORCE_DEPENDENCY_SYNC:-0}" != "1" ]]; then
-    info "Using existing node_modules; set FORCE_DEPENDENCY_SYNC=1 to force a clean dependency reinstall."
-else
-    if [[ -d "node_modules" ]]; then
-        info "node_modules exists but the build toolchain is incomplete, syncing dependencies with ${INSTALL_COMMAND[*]}..."
-    else
-        info "Fresh install — this may take a few minutes..."
-    fi
-
-  run_with_spinner "syncing npm dependency matrix" "${INSTALL_COMMAND[@]}"
-  success "Dependencies installed"
-fi
+# Always use npm ci --prefer-offline for reproducible fresh dependency tree
+info "Running npm ci --prefer-offline for reproducible dependency installation..."
+run_with_spinner "syncing npm dependency matrix" npm ci --prefer-offline
+success "Dependencies installed (fresh lockfile-based install)"
 
 # Ensure native dependencies match the target architecture
 run_with_spinner "verifying native dependencies for ${BUILD_ARCH}" node scripts/ensure-electron-native-deps.js
 success "Native dependencies ready for ${BUILD_ARCH}"
+
+# Verify critical dependencies are present and correctly linked
+verify_dependencies
 
 # ╔═══════════════════════════════════════════════════════════════════╗
 # ║ Step 4: Run Quality Gates                                        
@@ -713,6 +927,9 @@ else
     info "Ad-hoc signature applied (codesign verify may show warnings — this is normal)"
 fi
 
+# Generate SHA-256 checksums for release artifacts
+generate_checksums "$RELEASE_DIR"
+
 step "Step 7/8 — Verifying macOS Permission Manifest"
 
 APP_PLIST="$APP_GLOB/Contents/Info.plist"
@@ -752,6 +969,9 @@ else
 fi
 
 success "Permission manifest verified"
+
+# Run wiring validation after manifest verification
+validate_wiring "$APP_ASAR_PATH" "$APP_ASAR_UNPACKED_DIR" "$BUILD_ARCH"
 
 if [[ "${SKIP_INSTALL:-0}" == "1" ]]; then
     info "SKIP_INSTALL=1 set; install skipped after packaging verification"
