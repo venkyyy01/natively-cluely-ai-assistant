@@ -664,23 +664,13 @@ verify_dependencies() {
         missing+=("sqlite3 native binary")
     fi
 
-    # Verify native audio .node binary matches target architecture
-    local native_audio_binary=""
-    if [[ "$BUILD_ARCH" == "arm64" ]]; then
-        native_audio_binary="$SCRIPT_DIR/node_modules/natively-audio/index.darwin-arm64.node"
-    else
-        native_audio_binary="$SCRIPT_DIR/node_modules/natively-audio/index.darwin-x64.node"
-    fi
-
-    if [[ ! -f "$native_audio_binary" ]]; then
-        missing+=("natively-audio native binary for $BUILD_ARCH")
-    else
-        # Verify architecture matches via file command
-        local file_output
-        file_output=$(file "$native_audio_binary")
-        if ! echo "$file_output" | grep -qi "$BUILD_ARCH"; then
-            missing+=("natively-audio binary architecture mismatch (expected $BUILD_ARCH)")
-        fi
+    # Note: natively-audio native binary (.node) is built from source during the
+    # parallel_build() step (Rust/cargo compilation). It does not exist in
+    # node_modules after npm ci — only .node.abi stubs are present.
+    # The actual binary is verified later in validate_wiring() after packaging.
+    local native_audio_js="$SCRIPT_DIR/node_modules/natively-audio/index.js"
+    if [[ ! -f "$native_audio_js" ]]; then
+        missing+=("natively-audio package (index.js loader)")
     fi
 
     if [[ ${#missing[@]} -gt 0 ]]; then

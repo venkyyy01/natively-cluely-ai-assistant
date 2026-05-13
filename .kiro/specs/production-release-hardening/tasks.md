@@ -169,7 +169,7 @@ This plan implements five hardening areas for the Natively macOS Electron app: b
     - _Requirements: 3.1 (install replaces existing)_
 
 - [ ] 9. Add dependency verification and Rust cache invalidation
-  - [ ] 9.1 Add dependency verification to `build-and-install.sh`
+  - [x] 9.1 Add dependency verification to `build-and-install.sh`
     - After `npm ci`, verify `electron`, `electron-builder`, and `tsc` binaries present
     - Verify native audio `.node` binary matches target architecture
     - Verify `better-sqlite3` and `sqlite3` native binaries present and loadable
