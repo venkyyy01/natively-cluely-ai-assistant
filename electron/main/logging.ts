@@ -16,11 +16,40 @@ process.on('uncaughtException', (err: Error): void => {
     .finally((): void => { void gracefulShutdown.shutdown(1, `uncaughtException: ${err.message}`); });
 });
 
+// Production reliability: unhandled promise rejections are USUALLY recoverable
+// transient errors (network timeouts, DB lock contention, fs ENOENT, etc.).
+// Terminating the entire app on every rejection caused work-loss in mid-meeting
+// scenarios. Instead, log every rejection and only shutdown when we observe a
+// runaway loop (high burst rate) which indicates real corruption. Strict mode
+// can be re-enabled for debugging via NATIVELY_STRICT_REJECTIONS=1.
+const REJECTION_BURST_WINDOW_MS = 10_000;
+const REJECTION_BURST_THRESHOLD = 10;
+const rejectionTimestamps: number[] = [];
+const strictRejectionsEnabled = process.env.NATIVELY_STRICT_REJECTIONS === '1';
+
 process.on('unhandledRejection', (reason: unknown, promise: Promise<unknown>): void => {
   const msg = reason instanceof Error ? reason.stack : String(reason);
-  void logToFileAsync('[CRITICAL] Unhandled Rejection at: ' + promise + ' reason: ' + msg)
-    .catch((): undefined => undefined)
-    .finally((): void => { void gracefulShutdown.shutdown(1, `unhandledRejection: ${msg}`); });
+  void logToFileAsync('[WARN] Unhandled Rejection at: ' + promise + ' reason: ' + msg)
+    .catch((): undefined => undefined);
+
+  if (strictRejectionsEnabled) {
+    void gracefulShutdown.shutdown(1, `unhandledRejection (strict mode): ${msg}`);
+    return;
+  }
+
+  // Rate-limit: only escalate to shutdown if we see a burst (runaway loop).
+  const now = Date.now();
+  rejectionTimestamps.push(now);
+  while (rejectionTimestamps.length > 0 && rejectionTimestamps[0] < now - REJECTION_BURST_WINDOW_MS) {
+    rejectionTimestamps.shift();
+  }
+  if (rejectionTimestamps.length >= REJECTION_BURST_THRESHOLD) {
+    rejectionTimestamps.length = 0;
+    void gracefulShutdown.shutdown(
+      1,
+      `unhandledRejection burst (${REJECTION_BURST_THRESHOLD}+ in ${REJECTION_BURST_WINDOW_MS}ms): ${msg}`
+    );
+  }
 });
 
 // NAT-011 / audit S-5: do NOT write logs to ~/Documents in release builds

@@ -1,6 +1,7 @@
 import { IEmbeddingProvider } from './IEmbeddingProvider';
 import { isAppleSilicon, isOptimizationActive } from '../../config/optimizations';
 import { safeCreateOnnxSession, type SafeOnnxSession } from '../../startup/onnxCrashGuard';
+import { incrementOnnxFailureCount } from '../../startup/StartupHealer';
 import path from 'path';
 import { resolveBundledModelsPath } from '../../utils/modelPaths';
 
@@ -157,6 +158,10 @@ export class ANEEmbeddingProvider implements IEmbeddingProvider {
 
     const tokens = this.normalizeTokenization(this.tokenizer.encode(text));
 
+    if (tokens.ids.length === 0) {
+      throw new Error('ANEEmbeddingProvider: tokenizer produced zero tokens — CoreML cannot process empty sequence');
+    }
+
     const runtime = await loadOnnxRuntime();
     
     const inputIds = new runtime.Tensor(
@@ -177,14 +182,32 @@ export class ANEEmbeddingProvider implements IEmbeddingProvider {
       [1, tokens.ids.length]
     );
 
-    const results = await this.session.run({
-      input_ids: inputIds,
-      attention_mask: attentionMask,
-      token_type_ids: tokenTypeIds,
-    });
+    try {
+      const results = await this.session.run({
+        input_ids: inputIds,
+        attention_mask: attentionMask,
+        token_type_ids: tokenTypeIds,
+      });
 
-    const embeddings = results['last_hidden_state'].data as Float32Array;
-    return this.meanPool(embeddings, tokens.attentionMask);
+      const embeddings = results['last_hidden_state'].data as Float32Array;
+      return this.meanPool(embeddings, tokens.attentionMask);
+    } catch (err) {
+      const count = incrementOnnxFailureCount();
+      console.error(`[ANEEmbeddingProvider] CoreML run error (failure #${count}), marking session as broken:`, err);
+      // Eagerly release the broken session under controlled error-swallowing
+      // (SafeOnnxSession.release() already wraps in try/catch). If we just null
+      // the ref, V8 GC will finalize InferenceSessionWrap later on the main
+      // thread, where its destructor can SIGTRAP from a corrupted internal
+      // state — exactly the EXC_BREAKPOINT crash we observed in production.
+      const brokenSession = this.session;
+      this.session = null;
+      this.initialized = false;
+      this.warmedUp = false;
+      if (brokenSession) {
+        void brokenSession.release().catch(() => { /* SafeOnnxSession swallows internally */ });
+      }
+      throw err;
+    }
   }
 
   async embedQuery(text: string): Promise<number[]> {
