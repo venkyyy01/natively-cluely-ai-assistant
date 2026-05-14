@@ -1556,7 +1556,10 @@ export class StealthManager extends EventEmitter {
         this.logger.log(
           `[StealthManager] Capture watchdog detected suspicious tools running. Patterns triggered: ${suspiciousToolMatches.length}`
         );
-        this.hideAndRestoreVisibleWindows();
+        this.reapplyProtectionForCaptureProcesses();
+        this.addWarning('capture_tools_still_running');
+      } else {
+        this.clearWarning('capture_tools_still_running');
       }
     } catch (error) {
       this.logger.warn('[StealthManager] Capture watchdog poll failed:', error);
@@ -1575,6 +1578,20 @@ export class StealthManager extends EventEmitter {
     }
 
     return this.captureToolPatterns.filter((pattern) => pattern.test(processNames));
+  }
+
+  private reapplyProtectionForCaptureProcesses(): void {
+    for (const record of this.managedWindows) {
+      const win = record.win;
+      if (isWindowDestroyed(win)) {
+        continue;
+      }
+
+      this.applyLayer0(win, true);
+      this.applySckExclusion(win);
+      this.applyNativeStealth(win);
+      this.applyUiHardening(win, record.hideFromSwitcher);
+    }
   }
 
   private getBrowserCapturePatterns(): RegExp[] {

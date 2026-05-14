@@ -493,10 +493,15 @@ this.initializeAccelerationManager().catch(err => console.warn('[AppState] Accel
 
 this.setupIntelligenceEvents()
 
-    // Pre-warm the fine-tuned intent classifier in background.
-    // Runs in both dev and packaged builds — local inference, no network cost,
-    // eliminates 500ms–2s cold-start on the first question.
-    warmupIntentClassifier();
+    const allowIntentWarmup =
+      !app.isPackaged ||
+      isEnvFlagEnabled(process.env.NATIVELY_ENABLE_INTENT_WARMUP) === true
+
+    if (allowIntentWarmup) {
+      warmupIntentClassifier();
+    } else {
+      console.log('[AppState] Skipping intent classifier warmup in packaged build');
+    }
 
     // Setup Ollama IPC
     this.setupOllamaIpcHandlers()

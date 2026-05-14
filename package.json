@@ -100,7 +100,8 @@
         "from": "assets/bin/macos",
         "to": "bin/macos",
         "filter": [
-          "foundation-intent-helper"
+          "foundation-intent-helper",
+          "stealth-virtual-display-helper"
         ]
       }
     ],

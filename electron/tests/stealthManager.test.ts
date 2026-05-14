@@ -480,10 +480,9 @@ describe('StealthManager', () => {
     assert.deepStrictEqual(nativeCalls, ['base', 'base', 'private']);
   });
 
-  it('starts the capture watchdog and hides then restores visible windows on detection', async () => {
+  it('starts the capture watchdog and keeps local windows visible while reapplying protection on detection', async () => {
         const powerMonitor = new EventEmitter();
         const intervals: Array<() => Promise<void> | void> = [];
-        const timeouts: Array<() => void> = [];
         let enumeratorCallCount = 0;
         const manager = new StealthManager(
             { enabled: true },
@@ -497,11 +496,9 @@ describe('StealthManager', () => {
                     return intervals.length;
                 },
                 clearIntervalScheduler() {},
-                timeoutScheduler: (fn: () => void) => {
-                    timeouts.push(fn);
-                    return timeouts.length;
-                },
+                timeoutScheduler: () => 1,
                 nativeModule: {
+                    applyMacosWindowStealth() {},
                     getRunningProcesses: () => {
                         enumeratorCallCount++;
                         return enumeratorCallCount <= 1 ? [{ pid: 1, ppid: 1, name: 'obs' }] : [];
@@ -515,11 +512,13 @@ describe('StealthManager', () => {
         assert.ok(intervals.length >= 1);
 
         await intervals[0]();
-        assert.deepStrictEqual(win.setOpacityCalls, [0]);
+        assert.deepStrictEqual(win.setOpacityCalls, []);
+        assert.strictEqual(win.hideCalls, 0);
+        assert.strictEqual(win.isVisible(), true);
+        assert.ok(manager.getStealthDegradationWarnings().includes('capture_tools_still_running'));
 
-        timeouts[0]();
-        await new Promise((r) => setTimeout(r, 0));
-        assert.deepStrictEqual(win.setOpacityCalls, [0, 1]);
+        await intervals[0]();
+        assert.ok(!manager.getStealthDegradationWarnings().includes('capture_tools_still_running'));
         win.destroy();
     });
 
@@ -616,7 +615,7 @@ describe('StealthManager', () => {
         win.destroy();
     });
 
-  it('logs capture detections when the watchdog hides windows', async () => {
+  it('logs capture detections when the watchdog reapplies protection', async () => {
         const intervals: Array<() => Promise<void> | void> = [];
         const logs: string[] = [];
         const manager = new StealthManager(
@@ -815,9 +814,8 @@ describe('StealthManager', () => {
     assert.ok(manager.getStealthDegradationWarnings().includes('capture_visibility_unknown'));
   });
 
-  it('falls back to hide and show when opacity APIs are unavailable', async () => {
+  it('keeps windows visible when opacity APIs are unavailable during capture-process detection', async () => {
     const intervals: Array<() => Promise<void> | void> = [];
-    const timeouts: Array<() => void> = [];
     let enumeratorCallCount = 0;
     const manager = new StealthManager(
       { enabled: true },
@@ -830,10 +828,7 @@ describe('StealthManager', () => {
           return intervals.length;
         },
         clearIntervalScheduler() {},
-        timeoutScheduler: (fn: () => void) => {
-          timeouts.push(fn);
-          return timeouts.length;
-        },
+        timeoutScheduler: () => 1,
         nativeModule: {
           getRunningProcesses: () => {
             enumeratorCallCount++;
@@ -846,13 +841,13 @@ describe('StealthManager', () => {
     (win as any).setOpacity = undefined;
 
     manager.applyToWindow(win as any, true, { role: 'primary' });
+    const contentProtectionCallsBeforeDetection = win.contentProtectionCalls.length;
     await intervals[0]();
 
-    timeouts[0]();
-    await new Promise((r) => setTimeout(r, 0));
-
-    assert.strictEqual(win.hideCalls, 1);
-    assert.strictEqual(win.showCalls, 1);
+    assert.strictEqual(win.hideCalls, 0);
+    assert.strictEqual(win.showCalls, 0);
+    assert.strictEqual(win.isVisible(), true);
+    assert.ok(win.contentProtectionCalls.length > contentProtectionCallsBeforeDetection);
   });
 
   it('ignores stale capture detections when the watchdog is paused after a poll has already started', async () => {

@@ -353,12 +353,10 @@ export class ContinuousEnforcementLoop {
           this.sckExclusionFailureCount++;
 
           if (failures >= SCK_MAX_CONSECUTIVE_FAILURES) {
-            this.logger.error(
-              `[ContinuousEnforcementLoop] SCK exclusion failed ${failures} consecutive times for window ${windowNumber} — triggering emergency protection`
+            this.logger.warn(
+              `[ContinuousEnforcementLoop] SCK exclusion failed ${failures} consecutive times for window ${windowNumber} — degrading without hiding windows`
             );
-            this.stealthManager.triggerEmergencyProtection(win);
             this.sckConsecutiveFailures.delete(windowNumber);
-            this.recordViolation('sck-exclusion-emergency');
           }
         } catch (error) {
           this.logger.warn(
@@ -371,12 +369,10 @@ export class ContinuousEnforcementLoop {
           this.sckExclusionFailureCount++;
 
           if (failures >= SCK_MAX_CONSECUTIVE_FAILURES) {
-            this.logger.error(
-              `[ContinuousEnforcementLoop] SCK exclusion check failed ${failures} consecutive times for window ${windowNumber} — triggering emergency protection`
+            this.logger.warn(
+              `[ContinuousEnforcementLoop] SCK exclusion check failed ${failures} consecutive times for window ${windowNumber} — degrading without hiding windows`
             );
-            this.stealthManager.triggerEmergencyProtection(win);
             this.sckConsecutiveFailures.delete(windowNumber);
-            this.recordViolation('sck-exclusion-emergency');
           }
         }
       }

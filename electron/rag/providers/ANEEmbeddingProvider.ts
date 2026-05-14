@@ -59,6 +59,11 @@ export class ANEEmbeddingProvider implements IEmbeddingProvider {
       return;
     }
 
+    // TEMPORARY: Disable ANE embeddings entirely due to SIGTRAP crash in InferenceSessionWrap::FinalizeCallback
+    // The crash guard doesn't prevent GC finalizer crashes. Re-enable once the native binding issue is fixed.
+    console.warn('[ANEEmbeddingProvider] Disabled due to SIGTRAP crash in ONNX session finalizer (GC cleanup). Re-enable after native binding fix.');
+    return;
+
     const runtime = await loadOnnxRuntime();
     if (!runtime) {
       console.warn('[ANEEmbeddingProvider] ONNX Runtime failed to load, embeddings will fall back to existing provider');
