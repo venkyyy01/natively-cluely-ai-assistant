@@ -47,6 +47,7 @@ export class LocalConsciousEmbeddingClassifier {
   private classEmbeddings: Map<ConversationKind, number[]> = new Map();
   private disposed = false;
   private initializePromise: Promise<void> | null = null;
+  private initPermanentlyFailed = false;
   private readonly unregister: () => void;
 
   /**
@@ -137,6 +138,9 @@ export class LocalConsciousEmbeddingClassifier {
     if (this.disposed) {
       throw new Error('LocalConsciousEmbeddingClassifier: disposed');
     }
+    if (this.initPermanentlyFailed) {
+      throw new Error('LocalConsciousEmbeddingClassifier: init permanently failed');
+    }
     if (this.modelLoaded) {
       return;
     }
@@ -187,7 +191,8 @@ export class LocalConsciousEmbeddingClassifier {
 
         console.log('[LocalConsciousEmbeddingClassifier] Model loaded successfully');
       } catch (error) {
-        console.error('[LocalConsciousEmbeddingClassifier] Failed to load model:', error);
+        console.error('[LocalConsciousEmbeddingClassifier] Failed to load model (permanently marking as failed):', error);
+        this.initPermanentlyFailed = true;
         throw error;
       }
     })();

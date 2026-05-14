@@ -406,25 +406,33 @@ keybindManager.onShortcutTriggered(async (actionId) => {
         console.warn('[Stealth] Full stealth recovery shortcut ignored because capture risk is still active or stealth is not faulted')
       }
     } else if (actionId === 'general:take-screenshot') {
-          const screenshotPath = await this.takeScreenshot();
-          const preview = await this.getImagePreview(screenshotPath);
-          const mainWindow = this.getMainWindow();
-          if (mainWindow) {
-            mainWindow.webContents.send("screenshot-taken", {
-              path: screenshotPath,
-              preview
-            });
+          if (this.containmentActive) {
+            console.warn('[Main] Suppressing take-screenshot: stealth containment is active');
+          } else {
+            const screenshotPath = await this.takeScreenshot();
+            const preview = await this.getImagePreview(screenshotPath);
+            const mainWindow = this.getMainWindow();
+            if (mainWindow) {
+              mainWindow.webContents.send("screenshot-taken", {
+                path: screenshotPath,
+                preview
+              });
+            }
           }
         } else if (actionId === 'general:selective-screenshot') {
-          const screenshotPath = await this.takeSelectiveScreenshot();
-          const preview = await this.getImagePreview(screenshotPath);
-          const mainWindow = this.getMainWindow();
-          if (mainWindow) {
-            // preload.ts maps 'screenshot-attached' to onScreenshotAttached
-            mainWindow.webContents.send("screenshot-attached", {
-              path: screenshotPath,
-              preview
-            });
+          if (this.containmentActive) {
+            console.warn('[Main] Suppressing selective-screenshot: stealth containment is active');
+          } else {
+            const screenshotPath = await this.takeSelectiveScreenshot();
+            const preview = await this.getImagePreview(screenshotPath);
+            const mainWindow = this.getMainWindow();
+            if (mainWindow) {
+              // preload.ts maps 'screenshot-attached' to onScreenshotAttached
+              mainWindow.webContents.send("screenshot-attached", {
+                path: screenshotPath,
+                preview
+              });
+            }
           }
         } else if (actionId === 'general:process-screenshots') {
           // STEALTH: Cmd+Enter is now a global shortcut so it never reaches browsers.
@@ -1623,20 +1631,7 @@ try {
       const rate = this.systemAudioCapture.getOutputSampleRate();
       console.log(`[Main] SystemAudioCapture PCM rate: ${rate}Hz`);
       this.googleSTT?.setSampleRate(rate);
-
-        this.systemAudioCapture.on('data', (chunk: Buffer) => {
-          // console.log('[Main] SysAudio chunk', chunk.length);
-          this.noteAudioChunk('system');
-          this.noteInterviewerAudioActivity(chunk);
-          this.googleSTT?.write(chunk);
-        });
-        this.systemAudioCapture.on('speech_ended', () => {
-          this.accelerationManager?.getConsciousOrchestrator().onSilenceStart(this.latestTranscriptBySpeaker.interviewer);
-          safeNotifySpeechEnded(this.googleSTT);
-        });
-      this.systemAudioCapture.on('error', (err: Error) => {
-        void this.handleAudioCaptureError('system', err);
-      });
+      this.attachSystemAudioCaptureListeners();
       console.log('[Main] SystemAudioCapture initialized.');
     } catch (err) {
       console.warn('[Main] Failed to initialize SystemAudioCapture with preferred ID. Falling back to default.', err);
@@ -1645,19 +1640,7 @@ try {
         const rate = this.systemAudioCapture.getOutputSampleRate();
         console.log(`[Main] SystemAudioCapture (Default) PCM rate: ${rate}Hz`);
         this.googleSTT?.setSampleRate(rate);
-
-        this.systemAudioCapture.on('data', (chunk: Buffer) => {
-          this.noteAudioChunk('system');
-          this.noteInterviewerAudioActivity(chunk);
-          this.googleSTT?.write(chunk);
-        });
-        this.systemAudioCapture.on('speech_ended', () => {
-          this.accelerationManager?.getConsciousOrchestrator().onSilenceStart(this.latestTranscriptBySpeaker.interviewer);
-          safeNotifySpeechEnded(this.googleSTT);
-        });
-        this.systemAudioCapture.on('error', (err: Error) => {
-          void this.handleAudioCaptureError('system', err);
-        });
+        this.attachSystemAudioCaptureListeners();
       } catch (err2) {
         console.error('[Main] Failed to initialize SystemAudioCapture (Default):', err2);
         // Both preferred and default failed — propagate so the recovery loop
@@ -1683,25 +1666,7 @@ try {
       console.log(`[Main] 🎤 STT User ready: ${!!this.googleSTT_User}`);
       
       this.googleSTT_User?.setSampleRate(rate);
-
-      this.microphoneCapture.on('data', (chunk: Buffer) => {
-        // Enhanced debugging - log periodically (only when debug flag is set)
-        if (process.env.NATIVELY_DEBUG_AUDIO === '1' && Math.random() < 0.01) { // Log ~1% of chunks
-          console.log(`[Main] Audio chunk: ${chunk.length}B → STT: ${!!this.googleSTT_User}`);
-        }
-        this.noteAudioChunk('microphone');
-        this.googleSTT_User?.write(chunk);
-      });
-      
-      this.microphoneCapture.on('speech_ended', () => {
-        console.log('[Main] 🎤 Speech ended detected');
-        safeNotifySpeechEnded(this.googleSTT_User);
-      });
-      
-      this.microphoneCapture.on('error', (err: Error) => {
-        console.error('[Main] 🎤 Microphone error:', err);
-        void this.handleAudioCaptureError('microphone', err);
-      });
+      this.attachMicrophoneCaptureListeners();
       
       console.log('[Main] ✅ MicrophoneCapture initialized successfully.');
     } catch (err) {
@@ -1713,24 +1678,7 @@ try {
         const rate = this.microphoneCapture.getOutputSampleRate();
         console.log(`[Main] 🎤 MicrophoneCapture (Default) PCM rate: ${rate}Hz`);
         this.googleSTT_User?.setSampleRate(rate);
-
-        this.microphoneCapture.on('data', (chunk: Buffer) => {
-          if (process.env.NATIVELY_DEBUG_AUDIO === '1' && Math.random() < 0.01) { // Log ~1% of chunks
-            console.log(`[Main] Audio chunk (fallback): ${chunk.length}B → STT: ${!!this.googleSTT_User}`);
-          }
-          this.noteAudioChunk('microphone');
-          this.googleSTT_User?.write(chunk);
-        });
-        
-        this.microphoneCapture.on('speech_ended', () => {
-          console.log('[Main] 🎤 Speech ended detected (fallback)');
-          this.googleSTT_User?.notifySpeechEnded?.();
-        });
-        
-        this.microphoneCapture.on('error', (err: Error) => {
-          console.error('[Main] 🎤 Microphone error (fallback):', err);
-          void this.handleAudioCaptureError('microphone', err);
-        });
+        this.attachMicrophoneCaptureListeners();
         
         console.log('[Main] ✅ MicrophoneCapture (Default) initialized successfully.');
       } catch (err2) {

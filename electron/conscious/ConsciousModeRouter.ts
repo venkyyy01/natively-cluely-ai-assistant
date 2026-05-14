@@ -1,4 +1,5 @@
 import { LocalConsciousEmbeddingClassifier } from './LocalConsciousEmbeddingClassifier';
+import { Metrics } from '../runtime/Metrics';
 
 /**
  * ConsciousModeRouter
@@ -35,7 +36,7 @@ export type VerificationLevel = 'strict' | 'moderate' | 'relaxed' | 'skip';
 
 export type ResponseShape = 'structured' | 'free_form';
 
-export interface ConsciousTurnPlan {
+export interface ClassificationTurnPlan {
   /** The classified conversation kind. */
   kind: ConversationKind;
   /** Confidence score (0-1). */
@@ -160,8 +161,9 @@ const REFINEMENT_PATTERNS: { pattern: RegExp; intent: RefinementIntent }[] = [
 
 export class ConsciousModeRouter {
   private localEmbeddingClassifier: LocalConsciousEmbeddingClassifier;
-  private classificationCache: Map<string, ConsciousTurnPlan> = new Map();
+  private classificationCache: Map<string, ClassificationTurnPlan> = new Map();
   private modelInitialized = false;
+  private initPermanentlyFailed = false;
   private initializationPromise: Promise<void> | null = null;
   private static readonly CACHE_MAX_SIZE = 256;
 
@@ -174,7 +176,7 @@ export class ConsciousModeRouter {
    * Should be called when the app starts or when ConsciousMode initializes.
    */
   async initialize(): Promise<void> {
-    if (this.modelInitialized) {
+    if (this.modelInitialized || this.initPermanentlyFailed) {
       return;
     }
 
@@ -189,7 +191,8 @@ export class ConsciousModeRouter {
         this.modelInitialized = true;
         console.log('[ConsciousModeRouter] Local embedding model initialized');
       } catch (error) {
-        console.error('[ConsciousModeRouter] Failed to initialize local embedding model:', error);
+        console.error('[ConsciousModeRouter] Failed to initialize local embedding model (will not retry):', error);
+        this.initPermanentlyFailed = true;
         // Continue without local embeddings - LLM fallback will handle classification
       } finally {
         this.initializationPromise = null;
@@ -205,13 +208,13 @@ export class ConsciousModeRouter {
    * This is the single entry point for all conscious mode routing decisions.
    * Uses hybrid classification: fast embedding-based matching + LLM fallback for low confidence.
    */
-  async plan(utterance: string, options: RouterOptions = { enabled: false }): Promise<ConsciousTurnPlan> {
+  async plan(utterance: string, options: RouterOptions = { enabled: false }): Promise<ClassificationTurnPlan> {
     if (!options.enabled) {
       return this.legacyPlan();
     }
 
-    // Initialize local embedding model if not already done
-    if (!this.modelInitialized) {
+    // Initialize local embedding model if not already done (skip if permanently failed)
+    if (!this.modelInitialized && !this.initPermanentlyFailed) {
       await this.initialize();
     }
 
@@ -287,7 +290,7 @@ export class ConsciousModeRouter {
    * Legacy plan: always structured, always strict verification.
    * Used when feature flag is OFF for backward compatibility.
    */
-  private legacyPlan(): ConsciousTurnPlan {
+  private legacyPlan(): ClassificationTurnPlan {
     return {
       kind: 'technical',
       confidence: 1.0,
@@ -303,7 +306,7 @@ export class ConsciousModeRouter {
    * LLM-based plan: classify utterance using LLM for real-world accuracy.
    * Uses existing LLMHelper infrastructure with fast models.
    */
-  private async llmBasedPlan(utterance: string, options: RouterOptions): Promise<ConsciousTurnPlan> {
+  private async llmBasedPlan(utterance: string, options: RouterOptions): Promise<ClassificationTurnPlan> {
     if (!options.llmHelper) {
       // Fallback to technical plan if no LLMHelper available
       console.warn('[ConsciousModeRouter] No LLMHelper provided, falling back to technical plan');
@@ -357,8 +360,10 @@ Return JSON with keys: kind (one of the categories above), confidence (0-1), ref
       const kind: ConversationKind = validKinds.includes(parsed.kind) ? parsed.kind : 'technical';
       const confidence = typeof parsed.confidence === 'number' && parsed.confidence >= 0 && parsed.confidence <= 1
         ? parsed.confidence : 0.7;
+      Metrics.counter('conscious_router.llm_classification_success');
       return { kind, confidence, refinementIntent: parsed.refinementIntent };
     } catch (error) {
+      Metrics.counter('conscious_router.llm_classification_parse_failure');
       console.error('[ConsciousModeRouter] Failed to parse LLM classification response:', error);
       return { kind: 'technical', confidence: 0.5 };
     }
@@ -397,7 +402,7 @@ Return JSON with keys: kind (one of the categories above), confidence (0-1), ref
     utterance: string,
     options: RouterOptions,
     reason: string = 'llm_classification',
-  ): ConsciousTurnPlan {
+  ): ClassificationTurnPlan {
     if (classification.kind === 'technical') {
       return this.technicalPlan(utterance, options);
     }
@@ -428,7 +433,7 @@ Return JSON with keys: kind (one of the categories above), confidence (0-1), ref
   /**
    * Build a plan for technical questions.
    */
-  private technicalPlan(utterance: string, options: RouterOptions): ConsciousTurnPlan {
+  private technicalPlan(utterance: string, options: RouterOptions): ClassificationTurnPlan {
     let verificationLevel: VerificationLevel = 'strict';
     let strategyHint: string | undefined;
 
@@ -474,7 +479,7 @@ Return JSON with keys: kind (one of the categories above), confidence (0-1), ref
     };
   }
 
-  private behavioralPlan(confidence: number, reason: string, options: RouterOptions): ConsciousTurnPlan {
+  private behavioralPlan(confidence: number, reason: string, options: RouterOptions): ClassificationTurnPlan {
     const verificationLevel: VerificationLevel = 'moderate';
     const verification = this.getVerificationPlan(verificationLevel, options.isDegraded ?? false, options.useDegradedProvenanceCheck ?? false);
     return {
@@ -490,7 +495,7 @@ Return JSON with keys: kind (one of the categories above), confidence (0-1), ref
     };
   }
 
-  private pushbackPlan(confidence: number, reason: string, options: RouterOptions): ConsciousTurnPlan {
+  private pushbackPlan(confidence: number, reason: string, options: RouterOptions): ClassificationTurnPlan {
     const verificationLevel: VerificationLevel = 'strict';
     const verification = this.getVerificationPlan(verificationLevel, options.isDegraded ?? false, options.useDegradedProvenanceCheck ?? false);
     return {

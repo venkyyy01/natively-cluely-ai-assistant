@@ -332,6 +332,10 @@ export class LLMHelper {
   // Self-improving model version manager for vision analysis
   public modelVersionManager: ModelVersionManager;
 
+  // Per-provider short-term cooldown: skip providers that failed recently
+  private static readonly PROVIDER_COOLDOWN_MS = 30_000;
+  private providerCooldowns = new Map<string, number>();
+
   constructor(apiKey?: string, useOllama: boolean = false, ollamaModel?: string, ollamaUrl?: string, groqApiKey?: string, openaiApiKey?: string, claudeApiKey?: string, cerebrasApiKey?: string) {
     this.useOllama = useOllama
 
@@ -2981,18 +2985,33 @@ ANSWER DIRECTLY:`;
         await new Promise(resolve => setTimeout(resolve, backoffMs));
       }
 
-      for (const provider of tier.providers) {
+      // Sort providers: cooled-down providers go to end of list
+      const now = Date.now();
+      const sortedProviders = [...tier.providers].sort((a, b) => {
+        const aCooled = (this.providerCooldowns.get(a.name) ?? 0) > now ? 1 : 0;
+        const bCooled = (this.providerCooldowns.get(b.name) ?? 0) > now ? 1 : 0;
+        return aCooled - bCooled;
+      });
+
+      for (const provider of sortedProviders) {
         try {
           const emoji = tierIndex === 0 ? '🚀' : tierIndex === 1 ? '🔁' : '🆘';
-          console.log(`[LLMHelper] ${emoji} [${tier.label}] Attempting ${provider.name}...`);
+          const cooledDown = (this.providerCooldowns.get(provider.name) ?? 0) > now;
+          if (cooledDown) {
+            console.log(`[LLMHelper] ${emoji} [${tier.label}] ${provider.name} is cooling down, trying anyway as last resort...`);
+          } else {
+            console.log(`[LLMHelper] ${emoji} [${tier.label}] Attempting ${provider.name}...`);
+          }
           const result = await provider.execute();
           if (result && result.trim().length > 0) {
             console.log(`[LLMHelper] ✅ [${tier.label}] ${provider.name} succeeded.`);
+            this.providerCooldowns.delete(provider.name);
             return result;
           }
           console.warn(`[LLMHelper] ⚠️ [${tier.label}] ${provider.name} returned empty response`);
         } catch (err: any) {
           console.warn(`[LLMHelper] ⚠️ [${tier.label}] ${provider.name} failed: ${err.message}`);
+          this.providerCooldowns.set(provider.name, Date.now() + LLMHelper.PROVIDER_COOLDOWN_MS);
 
           // Event-driven discovery: trigger on 404 / model-not-found errors
           const errMsg = (err.message || '').toLowerCase();
