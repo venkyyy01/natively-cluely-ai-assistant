@@ -18,6 +18,7 @@ import {
   type IntentClassificationInput,
   type IntentInferenceProvider,
 } from './IntentInferenceProvider';
+import { registerEmbeddingPipeline } from '../../conscious/embeddingPipelineRegistry';
 import { traceLogger } from '../../tracing';
 
 export interface SetFitIntentProviderOptions {
@@ -49,11 +50,13 @@ export class SetFitIntentProvider implements IntentInferenceProvider {
   private pipe: any = null;
   private loadingPromise: Promise<void> | null = null;
   private loadFailed = false;
+  private disposed = false;
   private modelName: string;
   private minConfidence: number;
   private inferenceTimeoutMs: number;
   private quantized: boolean;
   private pythonPath: string;
+  private unregister: (() => void) | null = null;
 
   // Python subprocess state
   private pythonProc: child_process.ChildProcess | null = null;
@@ -68,6 +71,7 @@ export class SetFitIntentProvider implements IntentInferenceProvider {
     this.inferenceTimeoutMs = options.inferenceTimeoutMs ?? DEFAULT_INFERENCE_TIMEOUT_MS;
     this.quantized = options.quantized ?? true;
     this.pythonPath = options.pythonPath ?? 'python3';
+    this.unregister = registerEmbeddingPipeline(this);
   }
 
   async isAvailable(): Promise<boolean> {
@@ -393,10 +397,20 @@ export class SetFitIntentProvider implements IntentInferenceProvider {
     for (const model of modelsToTry) {
       try {
         console.log(`[SetFitIntentProvider] Loading Xenova model: ${model}...`);
-        this.pipe = await pipeline('text-classification', model, {
+        const pipe = await pipeline('text-classification', model, {
           local_files_only: isElectronAppPackaged(),
           quantized: this.quantized,
         });
+        // R1: dispose-race
+        if (this.disposed) {
+          try {
+            if (typeof (pipe as any)?.dispose === 'function') {
+              await (pipe as any).dispose();
+            }
+          } catch { /* ignore */ }
+          return;
+        }
+        this.pipe = pipe;
         console.log(`[SetFitIntentProvider] Xenova model loaded: ${model}`);
         return;
       } catch (e) {
@@ -412,12 +426,33 @@ export class SetFitIntentProvider implements IntentInferenceProvider {
     this.ensureLoaded().catch(() => {});
   }
 
-  /** Shut down the Python subprocess. Call on app exit. */
-  dispose(): void {
+  /** Shut down the Python subprocess and release xenova pipeline. Call on app exit. */
+  async dispose(): Promise<void> {
+    if (this.disposed) return;
+    this.disposed = true;
+    if (this.unregister) {
+      this.unregister();
+      this.unregister = null;
+    }
     if (this.pythonProc && !this.pythonProc.killed) {
       this.pythonProc.kill('SIGTERM');
     }
     this.pythonProc = null;
     this.pythonReady = false;
+    // Await in-flight load so a late-resolving pipeline doesn't leak
+    if (this.loadingPromise) {
+      try { await this.loadingPromise; } catch { /* load failure is fine */ }
+    }
+    const pipe = this.pipe;
+    this.pipe = null;
+    this.loadingPromise = null;
+    if (!pipe) return;
+    try {
+      if (typeof pipe.dispose === 'function') {
+        await pipe.dispose();
+      }
+    } catch (err) {
+      console.warn('[SetFitIntentProvider] pipeline dispose error swallowed:', err);
+    }
   }
 }

@@ -12,6 +12,7 @@
 
 import { ConversationKind, RefinementIntent } from './ConsciousModeRouter';
 import { registerEmbeddingPipeline } from './embeddingPipelineRegistry';
+import { markOnnxSessionActive, clearOnnxSessionSentinel } from '../startup/StartupHealer';
 
 /**
  * Classification result from local embedding model.
@@ -178,6 +179,8 @@ export class LocalConsciousEmbeddingClassifier {
         this.ort = ort;
         this.model = model;
         this.modelLoaded = true;
+        // Write sentinel so a SIGTRAP crash is detectable on next startup
+        markOnnxSessionActive();
 
         // Pre-compute embeddings for each conversation kind
         await this.precomputeClassEmbeddings();
@@ -534,6 +537,7 @@ export class LocalConsciousEmbeddingClassifier {
       } else if (typeof model.dispose === 'function') {
         await model.dispose();
       }
+      clearOnnxSessionSentinel();
     } catch (err) {
       console.warn('[LocalConsciousEmbeddingClassifier] dispose error swallowed:', err);
     }

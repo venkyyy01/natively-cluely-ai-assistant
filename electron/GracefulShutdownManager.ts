@@ -42,7 +42,16 @@ class GracefulShutdownManager {
   private async _runShutdown(code: number, reason: string): Promise<never> {
     console.error(`[GracefulShutdown] Initiating (code=${code}): ${reason}`);
 
-    const HOOK_TIMEOUT_MS = 2000;
+    const HOOK_TIMEOUT_MS = 4000;
+    const HARD_DEADLINE_MS = 15000;
+
+    // Hard deadline: if all hooks collectively take too long, force exit.
+    const hardTimer = setTimeout(() => {
+      console.error(`[GracefulShutdown] Hard deadline (${HARD_DEADLINE_MS}ms) reached, forcing exit`);
+      process.exit(code);
+    }, HARD_DEADLINE_MS);
+    hardTimer.unref(); // don't keep the event loop alive just for this
+
     for (const hook of this.hooks) {
       try {
         await Promise.race([
@@ -57,6 +66,7 @@ class GracefulShutdownManager {
       }
     }
 
+    clearTimeout(hardTimer);
     console.error(`[GracefulShutdown] Exiting with code ${code}`);
     process.exit(code);
   }

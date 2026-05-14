@@ -259,6 +259,16 @@ export async function initializeApp() {
     e.preventDefault();
     console.log("[Main] App quitting, preventing default to ensure pending saves complete...");
 
+    // Hard deadline: if cleanup hangs (e.g. endMeeting() or waitForPendingSaves),
+    // force-exit so ONNX sessions are not left alive for the system to SIGKILL.
+    const QUIT_DEADLINE_MS = 12000;
+    const quitDeadline = setTimeout(() => {
+      console.error(`[Main] Quit cleanup exceeded ${QUIT_DEADLINE_MS}ms hard deadline, forcing exit`);
+      isForceQuitting = true;
+      app.exit();
+    }, QUIT_DEADLINE_MS);
+    quitDeadline.unref();
+
     if (appState.getIsMeetingActive()) {
       console.log("[Main] Meeting active during quit, ending meeting before exit...");
       try {
@@ -295,6 +305,7 @@ export async function initializeApp() {
       console.error('[Main] Failed to scrub credentials on quit:', err);
     }
 
+    clearTimeout(quitDeadline);
     isForceQuitting = true;
     app.exit();
   })

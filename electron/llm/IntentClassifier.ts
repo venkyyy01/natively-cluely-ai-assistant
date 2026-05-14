@@ -11,6 +11,7 @@
 import { isElectronAppPackaged, resolveBundledModelsPath } from '../utils/modelPaths';
 import { getIntentConfidenceService } from './IntentConfidenceService';
 import { traceLogger } from '../tracing';
+import { registerEmbeddingPipeline } from '../conscious/embeddingPipelineRegistry';
 const { loadTransformers } = require('../utils/transformersLoader');
 
 export type ConversationIntent =
@@ -168,8 +169,12 @@ class FineTunedClassifier {
   private pipe: any = null;
   private loadingPromise: Promise<void> | null = null;
   private loadFailed = false;
+  private disposed = false;
+  private unregister: (() => void) | null = null;
 
-  private constructor() {}
+  private constructor() {
+    this.unregister = registerEmbeddingPipeline(this);
+  }
 
   static getInstance(): FineTunedClassifier {
     if (!FineTunedClassifier.instance) {
@@ -179,6 +184,7 @@ class FineTunedClassifier {
   }
 
   private async ensureLoaded(): Promise<void> {
+    if (this.disposed) return;
     if (this.pipe) return;
     if (this.loadFailed) return;
 
@@ -195,11 +201,22 @@ class FineTunedClassifier {
         env.localModelPath = resolveBundledModelsPath();
 
         console.log('[IntentClassifier] Loading fine-tuned classifier (nli-deberta-v3-small)...');
-        this.pipe = await pipeline(
+        const pipe = await pipeline(
           'text-classification',
           'Xenova/nli-deberta-v3-small',
           { local_files_only: isElectronAppPackaged(), quantized: true }
         );
+        // R1: dispose-race — if dispose() ran while pipeline was loading,
+        // release immediately rather than installing on a dead instance.
+        if (this.disposed) {
+          try {
+            if (typeof (pipe as any)?.dispose === 'function') {
+              await (pipe as any).dispose();
+            }
+          } catch { /* ignore */ }
+          return;
+        }
+        this.pipe = pipe;
         console.log('[IntentClassifier] Fine-tuned classifier loaded successfully.');
       } catch (e) {
         console.warn('[IntentClassifier] Failed to load fine-tuned model, regex-only fallback:', e);
@@ -212,6 +229,32 @@ class FineTunedClassifier {
       await this.loadingPromise;
     } catch {
       this.loadingPromise = null;
+    }
+  }
+
+  async dispose(): Promise<void> {
+    if (this.disposed) return;
+    this.disposed = true;
+    if (this.unregister) {
+      this.unregister();
+      this.unregister = null;
+    }
+    if (this.loadingPromise) {
+      try { await this.loadingPromise; } catch { /* load failure is fine */ }
+    }
+    const pipe = this.pipe;
+    this.pipe = null;
+    this.loadingPromise = null;
+    if (!pipe) return;
+    try {
+      if (typeof pipe.dispose === 'function') {
+        await pipe.dispose();
+      }
+    } catch (err) {
+      console.warn('[IntentClassifier] FineTunedClassifier dispose error swallowed:', err);
+    }
+    if (FineTunedClassifier.instance === this) {
+      FineTunedClassifier.instance = null;
     }
   }
 
