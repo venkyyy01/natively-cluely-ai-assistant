@@ -865,10 +865,10 @@ fi
 # Copy to Applications
 info "Copying to ${INSTALL_DIR}/${APP_NAME}.app ..."
 if [[ -w "$INSTALL_DIR" ]]; then
-    run_with_spinner "transferring vessel into /Applications" ditto "$APP_GLOB" "${INSTALL_DIR}/${APP_NAME}.app"
+    run_with_spinner "transferring vessel into /Applications" cp -R "$APP_GLOB" "${INSTALL_DIR}/${APP_NAME}.app"
 else
     info "Administrator access required to install into ${INSTALL_DIR}"
-    run_with_spinner "transferring vessel into /Applications" sudo ditto "$APP_GLOB" "${INSTALL_DIR}/${APP_NAME}.app"
+    run_with_spinner "transferring vessel into /Applications" sudo cp -R "$APP_GLOB" "${INSTALL_DIR}/${APP_NAME}.app"
 fi
 
 # Remove quarantine flag (bypass Gatekeeper)

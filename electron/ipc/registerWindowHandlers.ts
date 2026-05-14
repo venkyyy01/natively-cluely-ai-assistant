@@ -10,6 +10,7 @@ type RegisterWindowHandlersDeps = {
 
 type WindowFacadeLike = {
   updateContentDimensions: (senderWebContentsId: number, width: number, height: number) => void;
+  setOverlayBounds: (bounds: { width: number; height: number; x?: number; y?: number }) => void;
   setWindowMode: (mode: 'launcher' | 'overlay') => void;
   setOverlayClickthrough: (enabled: boolean) => void;
   toggleMainWindow: () => void;
@@ -57,6 +58,29 @@ export function registerWindowHandlers({ appState, safeHandle, safeHandleValidat
       } else if (launcherWin && !launcherWin.isDestroyed() && launcherWin.webContents.id === senderWebContents.id) {
         // No-op for launcher requests; launcher content is fixed-size.
       }
+    },
+  );
+
+  safeHandleValidated(
+    'set-overlay-bounds',
+    (args) => [parseIpcInput(ipcSchemas.overlayBounds, args[0], 'set-overlay-bounds')] as const,
+    async (_event, bounds) => {
+      if (typeof bounds.width !== 'number' || typeof bounds.height !== 'number') {
+        throw new Error('Invalid IPC payload for set-overlay-bounds: width and height are required');
+      }
+      const overlayBounds = {
+        width: bounds.width,
+        height: bounds.height,
+        x: bounds.x,
+        y: bounds.y,
+      };
+      const windowFacade = getWindowFacade(appState);
+      if (windowFacade) {
+        windowFacade.setOverlayBounds(overlayBounds);
+      } else {
+        appState.getWindowHelper().setOverlayBounds(overlayBounds);
+      }
+      return ok(null);
     },
   );
 

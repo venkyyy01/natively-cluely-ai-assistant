@@ -2605,6 +2605,9 @@ try {
       setOverlayDimensions: (width, height) => {
         this.windowHelper.setOverlayDimensions(width, height)
       },
+      setOverlayBounds: (bounds) => {
+        this.windowHelper.setOverlayBounds(bounds)
+      },
       setWindowMode: (mode) => {
         this.windowHelper.setWindowMode(mode)
       },

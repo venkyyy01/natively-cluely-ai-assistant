@@ -67,6 +67,7 @@ export class WindowHelper {
   private pendingDirectLauncherReveal: boolean = false
   private detachDirectLauncherBridgeMonitor: (() => void) | null = null
   private detachDirectOverlayBridgeMonitor: (() => void) | null = null
+  private overlayPositionInitialized: boolean = false
 
   // Initialize with explicit number type and 0 value
   private screenWidth: number = 0
@@ -523,6 +524,27 @@ export class WindowHelper {
 
     this.overlayWindow.setContentSize(newWidth, newHeight)
     this.overlayWindow.setPosition(newX, newY)
+  }
+
+  public setOverlayBounds(bounds: { width: number; height: number; x?: number; y?: number }): void {
+    if (!this.overlayWindow || this.overlayWindow.isDestroyed()) return
+
+    const primaryDisplay = screen.getPrimaryDisplay()
+    const workArea = primaryDisplay.workArea
+    const maxAllowedWidth = Math.floor(workArea.width * 0.9)
+    const maxAllowedHeight = Math.floor(workArea.height * 0.9)
+    const width = Math.min(Math.max(bounds.width, 300), maxAllowedWidth)
+    const height = Math.min(Math.max(bounds.height, 1), maxAllowedHeight)
+    const currentBounds = this.overlayWindow.getBounds()
+    const minX = workArea.x
+    const minY = workArea.y
+    const maxX = workArea.x + Math.max(0, workArea.width - width)
+    const maxY = workArea.y + Math.max(0, workArea.height - height)
+    const x = Math.min(Math.max(bounds.x ?? currentBounds.x, minX), maxX)
+    const y = Math.min(Math.max(bounds.y ?? currentBounds.y, minY), maxY)
+
+    this.overlayWindow.setBounds({ x, y, width, height })
+    this.overlayPositionInitialized = true
   }
 
   public setOverlayClickthrough(enabled: boolean): void {
@@ -982,21 +1004,22 @@ this.launcherContentWindow = this.launcherWindow
 
     // Show Overlay FIRST
     if (this.overlayWindow && !this.overlayWindow.isDestroyed()) {
-      // Reset overlay position to center or last known? 
-      // For now, center it nicely
       const primaryDisplay = screen.getPrimaryDisplay()
       const workArea = primaryDisplay.workArea;
       const currentBounds = this.overlayWindow.getBounds();
       const targetWidth = Math.max(currentBounds.width, 600);
       const targetHeight = Math.max(currentBounds.height, 216);
-      const centeredX = Math.floor(workArea.x + (workArea.width - targetWidth) / 2)
-      const centeredY = Math.floor(workArea.y + (workArea.height - targetHeight) / 2)
       const maxX = workArea.x + Math.max(0, workArea.width - targetWidth)
       const maxY = workArea.y + Math.max(0, workArea.height - targetHeight)
-      const x = Math.min(Math.max(centeredX, workArea.x), maxX)
-      const y = Math.min(Math.max(centeredY, workArea.y), maxY)
+      const centeredX = Math.floor(workArea.x + (workArea.width - targetWidth) / 2)
+      const centeredY = Math.floor(workArea.y + (workArea.height - targetHeight) / 2)
+      const desiredX = this.overlayPositionInitialized ? currentBounds.x : centeredX
+      const desiredY = this.overlayPositionInitialized ? currentBounds.y : centeredY
+      const x = Math.min(Math.max(desiredX, workArea.x), maxX)
+      const y = Math.min(Math.max(desiredY, workArea.y), maxY)
 
       this.overlayWindow.setBounds({ x, y, width: targetWidth, height: targetHeight });
+      this.overlayPositionInitialized = true
 
       if (process.platform === 'win32' && this.contentProtection) {
         // Opacity Shield: Show at 0 opacity first to prevent frame leak

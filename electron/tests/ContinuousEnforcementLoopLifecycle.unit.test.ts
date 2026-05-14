@@ -256,6 +256,35 @@ test('kill switch in non-strict mode emits stealth:fault event', async () => {
   loop.stop();
 });
 
+test('warning screen-capture threats reapply protection without emitting stealth fault', async () => {
+  const bus = createMockBus();
+  let pollCaptureToolsCalled = 0;
+  const stealthManager = {
+    ...createMockStealthManager(),
+    pollCaptureTools() {
+      pollCaptureToolsCalled += 1;
+    },
+  };
+
+  const loop = new ContinuousEnforcementLoop({
+    stealthManager: stealthManager as never,
+    monitoringDetector: createMockMonitoringDetector() as never,
+    bus: bus as never,
+    intervals: createDefaultIntervals(),
+    logger: silentLogger,
+  });
+
+  await (loop as any).handleWarningThreat({
+    name: 'Zoom',
+    pid: '123',
+    category: 'screen-capture',
+    severity: 'warning',
+  });
+
+  assert.equal(pollCaptureToolsCalled, 1);
+  assert.equal(bus.getEmittedEvents().filter(e => e.type === 'stealth:fault').length, 0);
+});
+
 test('kill switch in non-strict mode does NOT call quit', async () => {
   let quitCalled = false;
 

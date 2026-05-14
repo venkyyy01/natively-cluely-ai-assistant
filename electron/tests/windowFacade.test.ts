@@ -19,6 +19,9 @@ test('WindowFacade routes content dimension updates by sender and delegates wind
     setOverlayDimensions: (width: number, height: number) => {
       calls.push(`overlay:${width}x${height}`);
     },
+    setOverlayBounds: ({ width, height, x, y }) => {
+      calls.push(`overlayBounds:${width}x${height}@${x ?? 'same'},${y ?? 'same'}`);
+    },
     setWindowMode: (mode: string) => {
       calls.push(`mode:${mode}`);
     },
@@ -70,6 +73,7 @@ test('WindowFacade routes content dimension updates by sender and delegates wind
   facade.updateContentDimensions(202, 720, 360);
   facade.updateContentDimensions(303, 999, 999);
   facade.updateContentDimensions(404, 111, 222);
+  facade.setOverlayBounds({ width: 800, height: 300, x: 12, y: 24 });
   facade.setWindowMode('overlay');
   facade.setOverlayClickthrough(true);
   facade.toggleMainWindow();
@@ -89,6 +93,7 @@ test('WindowFacade routes content dimension updates by sender and delegates wind
   assert.deepEqual(calls, [
     'settings:640x480',
     'overlay:720x360',
+    'overlayBounds:800x300@12,24',
     'mode:overlay',
     'clickthrough:true',
     'toggle',

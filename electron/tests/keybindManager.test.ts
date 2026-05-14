@@ -36,7 +36,7 @@ test('default keybinds include overlay clickthrough toggle shortcut', async () =
     assert.deepEqual(shortcut?.alternateAccelerators, ['Command+Alt+Shift+M']);
 
     assert.equal(DEFAULT_KEYBINDS.find((item) => item.id === 'general:toggle-visibility')?.accelerator, 'Command+Alt+Shift+V');
-    assert.deepEqual(DEFAULT_KEYBINDS.find((item) => item.id === 'general:toggle-visibility')?.alternateAccelerators, ['F13']);
+    assert.deepEqual(DEFAULT_KEYBINDS.find((item) => item.id === 'general:toggle-visibility')?.alternateAccelerators, ['Command+B', 'F13']);
     assert.equal(DEFAULT_KEYBINDS.find((item) => item.id === 'general:take-screenshot')?.accelerator, 'Command+Alt+Shift+S');
     assert.deepEqual(DEFAULT_KEYBINDS.find((item) => item.id === 'general:take-screenshot')?.alternateAccelerators, ['F14', 'Command+Shift+S']);
     assert.equal(DEFAULT_KEYBINDS.find((item) => item.id === 'general:selective-screenshot')?.accelerator, 'Command+Alt+Shift+A');
@@ -71,6 +71,7 @@ test('default keybinds include overlay clickthrough toggle shortcut', async () =
     manager.setWindowHelper({});
 
     assert.ok(registered.includes('Command+Alt+Shift+V'));
+    assert.ok(registered.includes('Command+B'));
     assert.ok(registered.includes('F13'));
     assert.ok(registered.includes('Command+Alt+Shift+S'));
     assert.ok(registered.includes('F14'));

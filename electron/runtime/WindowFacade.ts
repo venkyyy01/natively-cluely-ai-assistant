@@ -11,6 +11,7 @@ export interface WindowFacadeDeps {
   getOverlayWindow: () => WindowLike | null;
   getLauncherContentWindow: () => WindowLike | null;
   setOverlayDimensions: (width: number, height: number) => void;
+  setOverlayBounds: (bounds: { width: number; height: number; x?: number; y?: number }) => void;
   setWindowMode: (mode: 'launcher' | 'overlay') => void;
   setOverlayClickthrough: (enabled: boolean) => void;
   toggleMainWindow: () => void;
@@ -57,6 +58,10 @@ export class WindowFacade {
 
   setOverlayClickthrough(enabled: boolean): void {
     this.deps.setOverlayClickthrough(enabled);
+  }
+
+  setOverlayBounds(bounds: { width: number; height: number; x?: number; y?: number }): void {
+    this.deps.setOverlayBounds(bounds);
   }
 
   toggleMainWindow(): void {

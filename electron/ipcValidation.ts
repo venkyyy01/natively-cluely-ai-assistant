@@ -96,6 +96,12 @@ export const ipcSchemas = {
     width: z.number().finite().positive().max(4000),
     height: z.number().finite().positive().max(4000),
   }).strict(),
+  overlayBounds: z.object({
+    width: z.number().finite().positive().max(4000),
+    height: z.number().finite().positive().max(4000),
+    x: z.number().finite().optional(),
+    y: z.number().finite().optional(),
+  }).strict(),
   windowMode: z.enum(['launcher', 'overlay']),
   absoluteUserDataPath: z.string().trim().min(1).max(2000),
   modelSelectorCoords: z.object({

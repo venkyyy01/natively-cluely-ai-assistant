@@ -1,5 +1,7 @@
+import { useRef, type PointerEvent } from "react";
 import { ChevronUp, ChevronDown } from "lucide-react";
 import icon from "../icon.png";
+import { getOptionalElectronMethod } from "../../lib/electronApi";
 
 interface TopPillProps {
     expanded: boolean;
@@ -12,11 +14,65 @@ export default function TopPill({
     onToggle,
     onQuit,
 }: TopPillProps) {
+    const dragStartRef = useRef<{
+        pointerId: number;
+        offsetX: number;
+        offsetY: number;
+        width: number;
+        height: number;
+    } | null>(null);
+
+    const handlePointerDown = (event: PointerEvent<HTMLDivElement>) => {
+        if (event.button !== 0) return;
+        if ((event.target as HTMLElement).closest('button,a,input,select,textarea,[role="button"]')) {
+            return;
+        }
+
+        dragStartRef.current = {
+            pointerId: event.pointerId,
+            offsetX: event.screenX - window.screenX,
+            offsetY: event.screenY - window.screenY,
+            width: window.outerWidth || document.documentElement.clientWidth,
+            height: window.outerHeight || document.documentElement.clientHeight,
+        };
+        event.currentTarget.setPointerCapture(event.pointerId);
+        event.preventDefault();
+    };
+
+    const handlePointerMove = (event: PointerEvent<HTMLDivElement>) => {
+        const dragStart = dragStartRef.current;
+        if (!dragStart || dragStart.pointerId !== event.pointerId) return;
+
+        const setOverlayBounds = getOptionalElectronMethod('setOverlayBounds');
+        if (!setOverlayBounds) return;
+
+        void setOverlayBounds({
+            width: dragStart.width,
+            height: dragStart.height,
+            x: event.screenX - dragStart.offsetX,
+            y: event.screenY - dragStart.offsetY,
+        }).catch(() => {});
+    };
+
+    const stopDrag = (event: PointerEvent<HTMLDivElement>) => {
+        const dragStart = dragStartRef.current;
+        if (!dragStart || dragStart.pointerId !== event.pointerId) return;
+
+        dragStartRef.current = null;
+        if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+            event.currentTarget.releasePointerCapture(event.pointerId);
+        }
+    };
+
     return (
         <div className="flex justify-center mt-2 select-none z-50">
             <div
+                onPointerDown={handlePointerDown}
+                onPointerMove={handlePointerMove}
+                onPointerUp={stopDrag}
+                onPointerCancel={stopDrag}
                 className="
-          draggable-area
+          no-drag
           flex items-center gap-2
           rounded-full
           bg-[#1E1E1E]/80
@@ -24,6 +80,7 @@ export default function TopPill({
           border border-white/10
           shadow-lg shadow-black/20
           pl-1.5 pr-1.5 py-1.5
+          cursor-move
           transition-all duration-300 ease-sculpted
           hover:bg-[#1E1E1E]/90 hover:border-white/15 hover:shadow-xl
         "

@@ -393,13 +393,10 @@ export class ContinuousEnforcementLoop {
   private async handleWarningThreat(threat: DetectedThreat): Promise<void> {
     this.logger.warn(`[ContinuousEnforcementLoop] Warning threat detected: ${threat.name} (PID: ${threat.pid})`);
 
-    // Emit event that StealthManager handles for hiding windows
-    await this.bus.emit({
-      type: 'stealth:fault',
-      reason: `screen-capture-tool-detected:${threat.name}`,
-    });
-
-    // Trigger window protection via stealth manager's internal watchdog mechanism
+    // Warning-level screen-share tools should not enter fault containment.
+    // Older stealth behavior kept the user surface visible and simply
+    // re-applied capture protection; emitting stealth:fault here activates the
+    // renderer privacy shield and creates the black blink loop under Zoom.
     void this.stealthManager.pollCaptureTools?.();
   }
 
