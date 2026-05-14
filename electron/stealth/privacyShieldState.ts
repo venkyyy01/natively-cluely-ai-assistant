@@ -39,7 +39,6 @@ const STEALTH_FAULT_WARNINGS = new Set([
   'electron_capture_exclusion_unavailable',
   'native_stealth_failed',
   'private_api_failed',
-  'stealth_verification_failed',
   'virtual_display_failed',
   'virtual_display_exhausted',
   'window_visible_to_capture',

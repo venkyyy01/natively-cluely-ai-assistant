@@ -384,6 +384,60 @@ test('WindowHelper blocks startup launcher reveal in strict mode when verificati
   }
 });
 
+test('WindowHelper allows observe-only visible safe controls reveal when protection verification fails', async () => {
+  const restoreElectron = installElectronMock();
+  const windowHelperPath = require.resolve('../WindowHelper');
+  delete require.cache[windowHelperPath];
+  const previousStrict = process.env.NATIVELY_STRICT_PROTECTION;
+  delete process.env.NATIVELY_STRICT_PROTECTION;
+
+  try {
+    const { WindowHelper } = await import('../WindowHelper');
+
+    class FakeWindow extends EventEmitter {
+      public shown = 0;
+
+      isDestroyed(): boolean {
+        return false;
+      }
+
+      show(): void {
+        this.shown += 1;
+      }
+    }
+
+    const appState = {
+      getVisibilityIntent: () => 'visible_safe_controls',
+    };
+    const stealthEvents: string[] = [];
+
+    const helper = new WindowHelper(appState as never, {
+      isEnabled: () => true,
+      applyToWindow() { },
+      reapplyAfterShow() { },
+      verifyStealth() {
+        return false;
+      },
+      recordProtectionEvent(type: string) {
+        stealthEvents.push(type);
+      },
+    } as never);
+    const launcherWindow = new FakeWindow();
+
+    (helper as any).requestWindowShow(launcherWindow, 'test.observe-only', 'primary');
+
+    assert.equal(launcherWindow.shown, 1);
+    assert.ok(stealthEvents.includes('verification-failed'));
+  } finally {
+    if (previousStrict === undefined) {
+      delete process.env.NATIVELY_STRICT_PROTECTION;
+    } else {
+      process.env.NATIVELY_STRICT_PROTECTION = previousStrict;
+    }
+    restoreElectron();
+  }
+});
+
 test('WindowHelper forwards stealth runtime heartbeat events to the registered listener', async () => {
   const restoreElectron = installElectronMock();
   const windowHelperPath = require.resolve('../WindowHelper');

@@ -221,8 +221,15 @@ export class WindowHelper {
     // Verify stealth protection including SCK exclusion on the window
     const verified = this.stealthManager.verifyStealth(win)
     if (!verified) {
-      // Keep window hidden — do NOT show it
       this.recordProtectionEvent('verification-failed', win, source, windowRole)
+      if (this.canRevealAfterObserveOnlyProtectionFailure()) {
+        console.warn(
+          `[WindowHelper] Protection verification failed before show — observe-only reveal allowed for visible controls (source: ${source})`
+        )
+        return true
+      }
+
+      // Keep window hidden — do NOT show it in strict/faulted shield states.
       console.warn(
         `[WindowHelper] Protection verification failed before show — window remains hidden (source: ${source})`
       )
@@ -230,6 +237,19 @@ export class WindowHelper {
     }
 
     return true
+  }
+
+  private canRevealAfterObserveOnlyProtectionFailure(): boolean {
+    if (process.env.NATIVELY_STRICT_PROTECTION === '1') {
+      return false
+    }
+
+    const appState = this.appState as unknown as { getVisibilityIntent?: () => VisibilityIntent }
+    const intent = typeof appState.getVisibilityIntent === 'function'
+      ? appState.getVisibilityIntent()
+      : 'visible_app'
+
+    return intent === 'visible_app' || intent === 'visible_safe_controls'
   }
 
   private requestWindowShow(

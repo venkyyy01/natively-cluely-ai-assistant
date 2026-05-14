@@ -476,6 +476,53 @@ test('AppState capture-environment warnings reapply protection without entering 
   }
 });
 
+test('AppState stealth verification warning stays visible in normal invisible mode', async () => {
+  const restoreElectron = installElectronMock();
+  const originalNodeEnv = process.env.NODE_ENV;
+  process.env.NODE_ENV = 'test';
+
+  try {
+    const { AppState } = await import('../main');
+    const handleStealthDegradation = (AppState.prototype as any).handleStealthDegradation as (
+      this: any,
+      warnings: string[],
+    ) => void;
+
+    const calls: string[] = [];
+    const fakeState: any = {
+      isUndetectable: true,
+      visibilityIntent: 'visible_safe_controls',
+      privacyShieldFaultReason: null,
+      setContainmentActive(active: boolean, source: string) {
+        calls.push(`containment:${active}:${source}`);
+      },
+      syncPrivacyShieldState() {
+        calls.push('syncPrivacyShield');
+      },
+      syncWindowStealthProtection(state: boolean) {
+        calls.push(`syncProtection:${state}`);
+      },
+      runtimeCoordinator: {
+        getSupervisor() {
+          calls.push('getSupervisor');
+          throw new Error('verification warning must not fault supervisor');
+        },
+      },
+    };
+
+    handleStealthDegradation.call(fakeState, ['stealth_verification_failed', 'virtual_display_required']);
+
+    assert.deepEqual(calls, [
+      'containment:false:stealth_degraded_observe_only',
+      'syncPrivacyShield',
+      'syncProtection:true',
+    ]);
+  } finally {
+    restoreElectron();
+    process.env.NODE_ENV = originalNodeEnv;
+  }
+});
+
 test('AppState serializes opposite invisible toggle targets without interleaving', async () => {
   const restoreElectron = installElectronMock();
   const originalNodeEnv = process.env.NODE_ENV;

@@ -2077,17 +2077,20 @@ for window in windows:
     if (isMacOS15Plus && record?.excludeFromCaptureApplied) {
       // On macOS 15+, Layer 0 alone is not enough for the product invariant:
       // ScreenCaptureKit-based apps can still capture windows unless the
-      // native virtual-display isolation path is armed and ready.
+      // native SCK exclusion tag verifies or the virtual-display isolation
+      // path is armed and ready.
       const virtualDisplayVerified = Boolean(
         this.featureFlags.enableVirtualDisplayIsolation &&
         record.allowVirtualDisplayIsolation &&
         record.virtualDisplayIsolationReady
       );
-      if (!virtualDisplayVerified) {
+      const sckExclusionVerified = this.verifySckExclusionForWindow(win);
+      const macos15ProtectionVerified = sckExclusionVerified || virtualDisplayVerified;
+      if (!macos15ProtectionVerified) {
         if (this.isEnabled()) {
           this.addWarning('virtual_display_required');
           this.addWarning('stealth_verification_failed');
-          this.logger.warn('[StealthManager] macOS 15+ stealth verification failed: virtual display isolation is required for ScreenCaptureKit invisibility');
+          this.logger.warn('[StealthManager] macOS 15+ stealth verification failed: SCK exclusion or virtual display isolation is required for ScreenCaptureKit invisibility');
         }
         this.recordProtectionEvent('verification-failed', {
           ...this.getProtectionEventContext(win, {}, 'StealthManager.verifyStealth'),
@@ -2096,6 +2099,7 @@ for window in windows:
             sharingType: null,
             privatePathVerified: false,
             virtualDisplayVerified,
+            sckExclusionVerified,
             electronCaptureExclusionVerified: true,
             isMacOS15Plus,
           },
@@ -2112,6 +2116,7 @@ for window in windows:
           sharingType: null,
           privatePathVerified: false,
           virtualDisplayVerified,
+          sckExclusionVerified,
           electronCaptureExclusionVerified: true,
           isMacOS15Plus,
         },
@@ -2208,6 +2213,25 @@ for window in windows:
 
     this.recordProtectionEvent('verification-failed', this.getProtectionEventContext(win, {}, 'StealthManager.verifyStealth'));
     return false;
+  }
+
+  private verifySckExclusionForWindow(win: StealthCapableWindow): boolean {
+    const nativeModule = this.getNativeModule();
+    if (!nativeModule?.verifySckExclusion) {
+      return false;
+    }
+
+    const windowNumber = this.getMacosWindowNumber(win);
+    if (windowNumber === null) {
+      return false;
+    }
+
+    try {
+      return nativeModule.verifySckExclusion(windowNumber);
+    } catch (error) {
+      this.logger.warn('[StealthManager] SCK exclusion verification failed:', error);
+      return false;
+    }
   }
 
   private getNativeModule(): NativeStealthBindings | null {

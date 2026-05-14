@@ -1518,6 +1518,30 @@ describe('StealthManager', () => {
     assert.ok(!manager.getStealthDegradationWarnings().includes('stealth_verification_failed'));
   });
 
+  it('verifyStealth returns true on macOS 15+ when SCK exclusion verifies', () => {
+    const win = new FakeWindow();
+    const manager = new StealthManager(
+      { enabled: true },
+      {
+        platform: 'darwin',
+        logger: silentLogger,
+        macosVersion: { major: 15, minor: 4 },
+        nativeModule: {
+          applySckExclusion() {},
+          verifySckExclusion() {
+            return true;
+          },
+        },
+      } as any
+    );
+
+    manager.applyToWindow(win as any, true, { role: 'primary', allowVirtualDisplayIsolation: true });
+
+    assert.strictEqual(manager.verifyStealth(win as any), true);
+    assert.ok(!manager.getStealthDegradationWarnings().includes('stealth_verification_failed'));
+    assert.ok(!manager.getStealthDegradationWarnings().includes('virtual_display_required'));
+  });
+
   it('verifyStealth rejects Electron capture exclusion alone on macOS 15+', async () => {
     const win = new FakeWindow();
     const manager = new StealthManager(

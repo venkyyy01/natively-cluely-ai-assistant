@@ -3479,6 +3479,10 @@ setThemeMode: (mode) => this.themeManager.setMode(mode as import('../ThemeManage
     const shouldFault = hasStealthFaultWarnings(warnings)
 
     if (!shouldFault) {
+      if (!this.privacyShieldFaultReason && (this.visibilityIntent === 'visible_app' || this.visibilityIntent === 'visible_safe_controls')) {
+        this.setContainmentActive(false, 'stealth_degraded_observe_only')
+        this.syncPrivacyShieldState()
+      }
       this.syncWindowStealthProtection(true)
       return
     }
