@@ -360,6 +360,7 @@ test('NAT-002: speculative selection refuses semantic hedging when the finalized
     accelerationEnabled: true,
     usePrefetching: true,
     useANEEmbeddings: false,
+    useFuzzySpeculation: false, // NAT-002: this test guards exact-match-only contract; fuzzy must be off
   });
   installTestEmbeddingProvider();
   const orchestrator = new AccelerationManager().getConsciousOrchestrator();
