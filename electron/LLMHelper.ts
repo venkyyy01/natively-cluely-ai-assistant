@@ -441,6 +441,19 @@ export class LLMHelper {
     });
     await this.modelVersionManager.initialize();
     console.log(this.modelVersionManager.getSummary());
+
+    // After discovery, sync currentModelId to tier1 for the active family
+    // if the user hasn't explicitly called setModel yet (still on baseline).
+    const activeFamily = this.getSelectedVisionFamily();
+    if (activeFamily !== null) {
+      const tier1 = this.modelVersionManager.getTieredModels(activeFamily).tier1;
+      if (tier1 && tier1 !== this.currentModelId) {
+        console.log(`[LLMHelper] Post-discovery: updating default model ${this.currentModelId} → ${tier1}`);
+        this.currentModelId = tier1;
+        if (tier1.includes('gemini') && tier1.includes('pro')) this.geminiModel = tier1;
+        else if (tier1.includes('gemini')) this.geminiModel = tier1;
+      }
+    }
   }
 
   /**
@@ -585,13 +598,14 @@ export class LLMHelper {
   }
 
   public setModel(modelId: string, customProviders: (CustomProvider | CurlProvider)[] = []) {
-    // Map UI short codes to internal Model IDs
+    // Map UI short codes to the best available model via ModelVersionManager (tier1 = proven stable).
+    // Falls back to hardcoded baseline when discovery hasn't run yet.
     let targetModelId = modelId;
-    if (modelId === 'gemini') targetModelId = GEMINI_FLASH_MODEL;
-    if (modelId === 'gemini-pro') targetModelId = GEMINI_PRO_MODEL;
-    if (modelId === 'gpt-4o') targetModelId = OPENAI_MODEL;
-    if (modelId === 'claude') targetModelId = CLAUDE_MODEL;
-    if (modelId === 'llama') targetModelId = GROQ_MODEL;
+    if (modelId === 'gemini') targetModelId = this.modelVersionManager.getTieredModels(ModelFamily.GEMINI_FLASH).tier1;
+    if (modelId === 'gemini-pro') targetModelId = this.modelVersionManager.getTieredModels(ModelFamily.GEMINI_PRO).tier1;
+    if (modelId === 'gpt-4o') targetModelId = this.modelVersionManager.getTextTieredModels(TextModelFamily.OPENAI).tier1;
+    if (modelId === 'claude') targetModelId = this.modelVersionManager.getTextTieredModels(TextModelFamily.CLAUDE).tier1;
+    if (modelId === 'llama') targetModelId = this.modelVersionManager.getTextTieredModels(TextModelFamily.GROQ).tier1;
 
     if (targetModelId.startsWith('ollama-')) {
       this.useOllama = true;
@@ -618,9 +632,9 @@ export class LLMHelper {
     this.activeCurlProvider = null;
     this.currentModelId = targetModelId;
 
-    // Update specific model props if needed
-    if (targetModelId === GEMINI_PRO_MODEL) this.geminiModel = GEMINI_PRO_MODEL;
-    if (targetModelId === GEMINI_FLASH_MODEL) this.geminiModel = GEMINI_FLASH_MODEL;
+    // Sync geminiModel to the active Gemini variant
+    if (targetModelId.includes('gemini') && targetModelId.includes('pro')) this.geminiModel = targetModelId;
+    else if (targetModelId.includes('gemini')) this.geminiModel = targetModelId;
 
     console.log(`[LLMHelper] Switched to Cloud Model: ${targetModelId}`);
   }
@@ -630,7 +644,9 @@ export class LLMHelper {
   }
 
   public getActiveOpenAiModel(): string {
-    return this.isOpenAiModel(this.currentModelId) ? this.currentModelId : OPENAI_MODEL;
+    return this.isOpenAiModel(this.currentModelId)
+      ? this.currentModelId
+      : this.modelVersionManager.getTextTieredModels(TextModelFamily.OPENAI).tier1;
   }
 
   public isModelNotFoundError(error: any): boolean {

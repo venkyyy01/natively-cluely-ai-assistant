@@ -4,8 +4,7 @@ import path from "node:path"
 import fs from "node:fs"
 import { app } from "electron"
 import { v4 as uuidv4 } from "uuid"
-import screenshot from "screenshot-desktop"
-import util from "util"
+import { exec as cpExec } from "node:child_process"
 export class ScreenshotHelper {
   private screenshotQueue: string[] = []
   private extraScreenshotQueue: string[] = []
@@ -43,16 +42,21 @@ export class ScreenshotHelper {
     await new Promise(resolve => setTimeout(resolve, process.platform === 'darwin' ? 180 : 120))
   }
 
-  private async withTimeout<T>(promise: Promise<T>, timeoutMs: number, errorMessage: string): Promise<T> {
-    let timeoutId: NodeJS.Timeout
-    const timeoutPromise = new Promise<never>((_, reject) => {
-      timeoutId = setTimeout(() => reject(new Error(errorMessage)), timeoutMs)
+  private execWithKillOnTimeout(cmd: string): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const child = cpExec(cmd, (error) => {
+        if (error) {
+          reject(error)
+        } else {
+          resolve()
+        }
+      })
+      const timer = setTimeout(() => {
+        try { child.kill() } catch { /* ignore kill errors */ }
+        reject(new Error(`Screenshot timed out after ${this.SCREENSHOT_TIMEOUT_MS}ms`))
+      }, this.SCREENSHOT_TIMEOUT_MS)
+      child.on('exit', () => clearTimeout(timer))
     })
-    try {
-      return await Promise.race([promise, timeoutPromise])
-    } finally {
-      clearTimeout(timeoutId!)
-    }
   }
 
   private async withQueueLock<T>(operation: () => Promise<T>): Promise<T> {
@@ -164,20 +168,13 @@ export class ScreenshotHelper {
 
       let screenshotPath = ""
 
-      const exec = util.promisify(require('child_process').exec)
-      const execWithTimeout = (cmd: string) => this.withTimeout(
-        Promise.resolve(exec(cmd)),
-        this.SCREENSHOT_TIMEOUT_MS,
-        `Screenshot timed out after ${this.SCREENSHOT_TIMEOUT_MS}ms`
-      )
-
       if (this.view === "queue") {
         screenshotPath = path.join(this.screenshotDir, `${uuidv4()}.png`)
         // Use native screencapture for reliability on macOS
         // -x: do not play sound
         // -C: capture cursor
         try {
-          await execWithTimeout(this.getScreenshotCommand(screenshotPath, false))
+          await this.execWithKillOnTimeout(this.getScreenshotCommand(screenshotPath, false))
         } catch (e: any) {
           if (e.message?.includes('timed out')) throw e
           const errorMsg = e.message || String(e)
@@ -193,7 +190,7 @@ export class ScreenshotHelper {
       } else {
         screenshotPath = path.join(this.extraScreenshotDir, `${uuidv4()}.png`)
         try {
-          await execWithTimeout(this.getScreenshotCommand(screenshotPath, false))
+          await this.execWithKillOnTimeout(this.getScreenshotCommand(screenshotPath, false))
         } catch (e: any) {
           if (e.message?.includes('timed out')) throw e
           const errorMsg = e.message || String(e)
@@ -228,12 +225,6 @@ export class ScreenshotHelper {
       await this.waitForWindowHide()
 
       let screenshotPath = ""
-      const exec = util.promisify(require('child_process').exec)
-      const execWithTimeout = (cmd: string) => this.withTimeout(
-        Promise.resolve(exec(cmd)),
-        this.SCREENSHOT_TIMEOUT_MS,
-        `Screenshot timed out after ${this.SCREENSHOT_TIMEOUT_MS}ms`
-      )
 
       // Always use the standard queue directory for this temporary context
       screenshotPath = path.join(this.screenshotDir, `selective-${uuidv4()}.png`)
@@ -241,7 +232,7 @@ export class ScreenshotHelper {
       // -i: interactive mode (selection)
       // -x: do not play sound
       try {
-        await execWithTimeout(this.getScreenshotCommand(screenshotPath, true))
+        await this.execWithKillOnTimeout(this.getScreenshotCommand(screenshotPath, true))
       } catch (e: any) {
         if (e.message?.includes('timed out')) throw e
         const errorMsg = e.message || String(e)
