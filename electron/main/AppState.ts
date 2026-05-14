@@ -621,11 +621,19 @@ this.runtimeCoordinator.registerSupervisor(new StealthSupervisor(
           this.stealthManager.setEnabled(enabled)
           this.syncWindowStealthProtection(enabled)
           if (enabled) {
-            await this.waitForStealthProtectionReady()
+            try {
+              await this.waitForStealthProtectionReady()
+            } catch (error) {
+              if (this.isStrictProtectionEnabled()) {
+                throw error
+              }
+
+              console.warn('[Stealth] Observe-only: stealth readiness did not verify during enable; keeping local controls visible:', error)
+            }
           }
         },
         isEnabled: () => this.stealthManager.isEnabled(),
-        verifyStealthState: () => this.verifyStealthProtection(),
+        verifyStealthState: () => this.verifyStealthProtectionForSupervisor(),
       },
       bus,
       {
@@ -3557,7 +3565,11 @@ setThemeMode: (mode) => this.themeManager.setMode(mode as import('../ThemeManage
     this.setContainmentActive(true, normalizedReason)
     const abortedStreamCount = this.abortActiveInferenceStreams(normalizedReason)
     this.syncWindowStealthProtection(true)
-    this.windowHelper.hideMainWindow()
+    if (this.isUndetectable) {
+      this.windowHelper.showMainWindow()
+    } else {
+      this.windowHelper.hideMainWindow()
+    }
     this.syncPrivacyShieldState()
     this.privacyShieldRecoveryController?.update()
     this.performanceInstrumentation.recordEvent('stealth.fault.containment', {
@@ -3653,6 +3665,16 @@ setThemeMode: (mode) => this.themeManager.setMode(mode as import('../ThemeManage
     }
 
     return verificationWindows.every((win) => this.stealthManager.verifyStealth(win))
+  }
+
+  private verifyStealthProtectionForSupervisor(): boolean {
+    const verified = this.verifyStealthProtection()
+    if (verified || this.isStrictProtectionEnabled()) {
+      return verified
+    }
+
+    console.warn('[Stealth] Observe-only: supervisor arm continuing while stealth verification is degraded')
+    return true
   }
 
   public getUndetectable(): boolean {

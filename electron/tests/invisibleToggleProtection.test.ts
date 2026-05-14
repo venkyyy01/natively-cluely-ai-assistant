@@ -523,6 +523,103 @@ test('AppState stealth verification warning stays visible in normal invisible mo
   }
 });
 
+test('AppState supervisor verification is observe-only outside strict invisible mode', async () => {
+  const restoreElectron = installElectronMock();
+  const originalNodeEnv = process.env.NODE_ENV;
+  process.env.NODE_ENV = 'test';
+
+  try {
+    const { AppState } = await import('../main');
+    const verifyStealthProtectionForSupervisor = (AppState.prototype as any).verifyStealthProtectionForSupervisor as (
+      this: any,
+    ) => boolean;
+
+    const calls: string[] = [];
+    const fakeState: any = {
+      verifyStealthProtection() {
+        calls.push('verifyProtection');
+        return false;
+      },
+      isStrictProtectionEnabled() {
+        return false;
+      },
+    };
+
+    assert.equal(verifyStealthProtectionForSupervisor.call(fakeState), true);
+    assert.deepEqual(calls, ['verifyProtection']);
+  } finally {
+    restoreElectron();
+    process.env.NODE_ENV = originalNodeEnv;
+  }
+});
+
+test('AppState containment keeps invisible local controls visible', async () => {
+  const restoreElectron = installElectronMock();
+  const originalNodeEnv = process.env.NODE_ENV;
+  process.env.NODE_ENV = 'test';
+
+  try {
+    const { AppState } = await import('../main');
+    const activateContainment = (AppState.prototype as any).activateContainment as (
+      this: any,
+      source: string,
+      reason: string,
+    ) => void;
+
+    const calls: string[] = [];
+    const fakeState: any = {
+      isUndetectable: true,
+      activeInferenceStreamControllers: new Map(),
+      streamChatStartedAt: new Map(),
+      stealthManager: {
+        recordProtectionEvent(type: string, context?: { source?: string }) {
+          calls.push(`event:${type}:${context?.source ?? 'unknown'}`);
+        },
+      },
+      setContainmentActive(active: boolean, reason: string) {
+        calls.push(`containment:${active}:${reason}`);
+      },
+      abortActiveInferenceStreams() {
+        calls.push('abortStreams');
+        return 0;
+      },
+      syncWindowStealthProtection(state: boolean) {
+        calls.push(`syncProtection:${state}`);
+      },
+      windowHelper: {
+        showMainWindow() {
+          calls.push('showMainWindow');
+        },
+        hideMainWindow() {
+          calls.push('hideMainWindow');
+        },
+      },
+      syncPrivacyShieldState() {
+        calls.push('syncPrivacyShield');
+      },
+      privacyShieldRecoveryController: {
+        update() {
+          calls.push('recoveryUpdate');
+        },
+      },
+      performanceInstrumentation: {
+        recordEvent(metric: string) {
+          calls.push(`metric:${metric}`);
+        },
+      },
+    };
+
+    activateContainment.call(fakeState, 'test', 'verification degraded');
+
+    assert.equal(fakeState.visibilityIntent, 'faulted_shield');
+    assert.ok(calls.includes('showMainWindow'));
+    assert.ok(!calls.includes('hideMainWindow'));
+  } finally {
+    restoreElectron();
+    process.env.NODE_ENV = originalNodeEnv;
+  }
+});
+
 test('AppState serializes opposite invisible toggle targets without interleaving', async () => {
   const restoreElectron = installElectronMock();
   const originalNodeEnv = process.env.NODE_ENV;

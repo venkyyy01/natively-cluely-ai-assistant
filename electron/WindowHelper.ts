@@ -158,7 +158,7 @@ export class WindowHelper {
     }
 
     if (this.launcherWindow && !this.launcherWindow.isDestroyed()) {
-      this.applyStealth(this.launcherWindow, this.contentProtection, 'primary', false)
+      this.applyStealth(this.launcherWindow, this.contentProtection, 'primary', this.shouldHidePrimaryFromSwitcher(this.contentProtection))
     }
   }
 
@@ -169,8 +169,13 @@ export class WindowHelper {
     }
 
     if (this.overlayWindow && !this.overlayWindow.isDestroyed()) {
-      this.applyStealth(this.overlayWindow, this.contentProtection, 'primary', false)
+      this.applyStealth(this.overlayWindow, this.contentProtection, 'primary', this.shouldHidePrimaryFromSwitcher(this.contentProtection))
     }
+  }
+
+  private shouldHidePrimaryFromSwitcher(enable: boolean = this.contentProtection): boolean {
+    const appState = this.appState as unknown as { getUndetectable?: () => boolean }
+    return enable || appState.getUndetectable?.() === true
   }
 
   private recordProtectionEvent(
@@ -244,12 +249,22 @@ export class WindowHelper {
       return false
     }
 
-    const appState = this.appState as unknown as { getVisibilityIntent?: () => VisibilityIntent }
+    const appState = this.appState as unknown as {
+      getUndetectable?: () => boolean
+      getVisibilityIntent?: () => VisibilityIntent
+    }
     const intent = typeof appState.getVisibilityIntent === 'function'
       ? appState.getVisibilityIntent()
       : 'visible_app'
 
-    return intent === 'visible_app' || intent === 'visible_safe_controls'
+    if (intent === 'visible_app' || intent === 'visible_safe_controls') {
+      return true
+    }
+
+    // A faulted privacy shield should hide sensitive renderer content, not the
+    // whole local control surface. Keeping the window visible lets the user
+    // recover/disable stealth while strict mode still fails closed above.
+    return intent === 'faulted_shield' && appState.getUndetectable?.() === true
   }
 
   private requestWindowShow(
@@ -339,7 +354,11 @@ export class WindowHelper {
     // S-RACE-2: Force show: false to guarantee the window is born hidden.
     // Even if callers pass show: true, we override it here to prevent any
     // possibility of the window becoming visible before stealth is applied.
-    const win = new BrowserWindow({ ...options, show: false })
+    const win = new BrowserWindow({
+      ...options,
+      show: false,
+      skipTaskbar: Boolean(options.skipTaskbar) || this.shouldHidePrimaryFromSwitcher(this.contentProtection),
+    })
     // S-RACE-1: apply Layer-0 capture protection synchronously, before any
     // loadURL or show call can run. This closes the "born unprotected" race
     // where the window briefly existed in the OS window list without
@@ -347,7 +366,7 @@ export class WindowHelper {
     // applyContentProtection calls re-assert the same state idempotently.
     this.stealthManager.applyInitialStealth(win, {
       role: 'primary',
-      hideFromSwitcher: false,
+      hideFromSwitcher: this.shouldHidePrimaryFromSwitcher(this.contentProtection),
       allowVirtualDisplayIsolation: true,
     })
     this.recordProtectionEvent('window-created', win, 'WindowHelper.createDirectWindow', 'unknown')
@@ -441,7 +460,7 @@ export class WindowHelper {
   private applyStealth(win: BrowserWindow, enable: boolean, role: 'primary' | 'auxiliary', hideFromSwitcher: boolean): void {
     this.stealthManager.applyToWindow(win, enable, {
       role,
-      hideFromSwitcher,
+      hideFromSwitcher: role === 'primary' ? this.shouldHidePrimaryFromSwitcher(enable) : hideFromSwitcher,
       allowVirtualDisplayIsolation: true,
     });
   }
@@ -575,7 +594,7 @@ export class WindowHelper {
     },
     show: false,
     paintWhenInitiallyHidden: true,
-    skipTaskbar: this.contentProtection,
+    skipTaskbar: this.shouldHidePrimaryFromSwitcher(this.contentProtection),
       titleBarStyle: 'hiddenInset',
       trafficLightPosition: { x: 14, y: 14 },
       hasShadow: true,

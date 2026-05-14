@@ -3,13 +3,21 @@ import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import Module from 'node:module';
 
-function installElectronMock(): () => void {
+function installElectronMock(createdBrowserWindowOptions: Array<Record<string, unknown>> = []): () => void {
   const originalLoad = (Module as any)._load;
 
   (Module as any)._load = function patchedLoad(request: string, parent: unknown, isMain: boolean) {
     if (request === 'electron') {
       return {
-        BrowserWindow: class BrowserWindow { },
+        BrowserWindow: class BrowserWindow {
+          constructor(options: Record<string, unknown>) {
+            createdBrowserWindowOptions.push(options);
+          }
+
+          isDestroyed(): boolean {
+            return false;
+          }
+        },
         screen: {
           getPrimaryDisplay: () => ({ workAreaSize: { width: 1440, height: 900 }, workArea: { x: 0, y: 0, width: 1440, height: 900 } }),
         },
@@ -57,11 +65,37 @@ test('WindowHelper treats overlay as a primary stealth surface', async () => {
     helper.setContentProtection(true);
 
     assert.deepEqual(calls, [
-      { enable: true, role: 'primary', hideFromSwitcher: false, allowVirtualDisplayIsolation: true },
-      { enable: true, role: 'primary', hideFromSwitcher: false, allowVirtualDisplayIsolation: true },
+      { enable: true, role: 'primary', hideFromSwitcher: true, allowVirtualDisplayIsolation: true },
+      { enable: true, role: 'primary', hideFromSwitcher: true, allowVirtualDisplayIsolation: true },
     ]);
   } finally {
     (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath = originalResourcesPath;
+    restoreElectron();
+  }
+});
+
+test('WindowHelper creates persisted invisible launcher hidden from taskbar at birth', async () => {
+  const createdBrowserWindowOptions: Array<Record<string, unknown>> = [];
+  const restoreElectron = installElectronMock(createdBrowserWindowOptions);
+  const windowHelperPath = require.resolve('../WindowHelper');
+  delete require.cache[windowHelperPath];
+
+  try {
+    const { WindowHelper } = await import('../WindowHelper');
+    const helper = new WindowHelper({ getUndetectable: () => true } as never, {
+      applyInitialStealth() { },
+      recordProtectionEvent() { },
+    } as never);
+
+    (helper as any).createDirectWindow({
+      show: true,
+      skipTaskbar: false,
+    });
+
+    assert.equal(createdBrowserWindowOptions.length, 1);
+    assert.equal(createdBrowserWindowOptions[0].show, false);
+    assert.equal(createdBrowserWindowOptions[0].skipTaskbar, true);
+  } finally {
     restoreElectron();
   }
 });
@@ -425,6 +459,61 @@ test('WindowHelper allows observe-only visible safe controls reveal when protect
     const launcherWindow = new FakeWindow();
 
     (helper as any).requestWindowShow(launcherWindow, 'test.observe-only', 'primary');
+
+    assert.equal(launcherWindow.shown, 1);
+    assert.ok(stealthEvents.includes('verification-failed'));
+  } finally {
+    if (previousStrict === undefined) {
+      delete process.env.NATIVELY_STRICT_PROTECTION;
+    } else {
+      process.env.NATIVELY_STRICT_PROTECTION = previousStrict;
+    }
+    restoreElectron();
+  }
+});
+
+test('WindowHelper keeps faulted invisible mode controls visible outside strict mode', async () => {
+  const restoreElectron = installElectronMock();
+  const windowHelperPath = require.resolve('../WindowHelper');
+  delete require.cache[windowHelperPath];
+  const previousStrict = process.env.NATIVELY_STRICT_PROTECTION;
+  delete process.env.NATIVELY_STRICT_PROTECTION;
+
+  try {
+    const { WindowHelper } = await import('../WindowHelper');
+
+    class FakeWindow extends EventEmitter {
+      public shown = 0;
+
+      isDestroyed(): boolean {
+        return false;
+      }
+
+      show(): void {
+        this.shown += 1;
+      }
+    }
+
+    const appState = {
+      getUndetectable: () => true,
+      getVisibilityIntent: () => 'faulted_shield',
+    };
+    const stealthEvents: string[] = [];
+
+    const helper = new WindowHelper(appState as never, {
+      isEnabled: () => true,
+      applyToWindow() { },
+      reapplyAfterShow() { },
+      verifyStealth() {
+        return false;
+      },
+      recordProtectionEvent(type: string) {
+        stealthEvents.push(type);
+      },
+    } as never);
+    const launcherWindow = new FakeWindow();
+
+    (helper as any).requestWindowShow(launcherWindow, 'test.faulted-local-controls', 'primary');
 
     assert.equal(launcherWindow.shown, 1);
     assert.ok(stealthEvents.includes('verification-failed'));
