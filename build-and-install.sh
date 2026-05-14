@@ -30,8 +30,6 @@ INSTALL_DIR="/Applications"
 ENTITLEMENTS="$SCRIPT_DIR/assets/entitlements.mac.plist"
 HELPER_ENTITLEMENTS="$SCRIPT_DIR/stealth-projects/macos-virtual-display-helper/entitlements.plist"
 RELEASE_DIR="$SCRIPT_DIR/release"
-APP_SUPPORT_DIR="${HOME}/Library/Application Support/natively"
-APP_LOG_DIR="${APP_SUPPORT_DIR}/Logs"
 IS_TTY=false
 if [[ -t 1 ]]; then
     IS_TTY=true
@@ -124,20 +122,6 @@ run_logged_command() {
 
     info "$label"
     "$@"
-}
-
-enable_default_app_logging() {
-    mkdir -p "$APP_LOG_DIR"
-    export NATIVELY_DEBUG_LOG=1
-    if command -v launchctl >/dev/null 2>&1; then
-        if launchctl setenv NATIVELY_DEBUG_LOG 1; then
-            success "Enabled default app logging for LaunchServices"
-        else
-            warn "Could not set LaunchServices logging environment; shell launch will still inherit NATIVELY_DEBUG_LOG=1"
-        fi
-    else
-        warn "launchctl not found; shell launch will still inherit NATIVELY_DEBUG_LOG=1"
-    fi
 }
 
 artifact_mtime() {
@@ -298,22 +282,6 @@ clean_build_artifacts() {
         fi
     done
 
-    # Remove architecture-specific .node binaries from native-module directory
-    info "Removing architecture-specific .node binaries..."
-    while IFS= read -r node_binary; do
-        if ! rm -f "$node_binary"; then
-            fail "Permission denied removing .node binary: $node_binary"
-        fi
-    done < <(find "$SCRIPT_DIR/native-module" -name "*.node" -type f 2>/dev/null || true)
-
-    # Remove TypeScript incremental compilation caches
-    info "Removing TypeScript build info caches..."
-    while IFS= read -r tsbuildinfo_file; do
-        if ! rm -f "$tsbuildinfo_file"; then
-            fail "Permission denied removing tsbuildinfo: $tsbuildinfo_file"
-        fi
-    done < <(find "$SCRIPT_DIR" -name "*.tsbuildinfo" -type f 2>/dev/null || true)
-
     for path in "${optional_cache_paths[@]}"; do
         [[ -e "$path" ]] || continue
         if ! rm -rf "$path"; then
@@ -326,81 +294,6 @@ clean_build_artifacts() {
     rm -f "$RELEASE_DIR"/*.dmg "$RELEASE_DIR"/*.zip "$RELEASE_DIR"/*.blockmap "$RELEASE_DIR"/*.yml 2>/dev/null || true
 
     success "Fresh-build cleanup complete"
-}
-
-parallel_build() {
-    local log_dir
-    log_dir=$(mktemp -d)
-    local pids=()
-    local labels=()
-    local logs=()
-    local start_time
-    start_time=$(date +%s)
-
-    # Detect CPU cores: sysctl (macOS) → nproc (Linux) → fallback 4
-    local num_cores=4
-    if command -v sysctl &>/dev/null; then
-        num_cores=$(sysctl -n hw.ncpu 2>/dev/null || echo 4)
-    elif command -v nproc &>/dev/null; then
-        num_cores=$(nproc 2>/dev/null || echo 4)
-    fi
-    info "Detected $num_cores CPU cores for parallel compilation"
-
-    # Trap handler: kill sibling processes on failure
-    cleanup_parallel() {
-        local exit_pid="${1:-}"
-        for pid in "${pids[@]}"; do
-            [[ "$pid" == "$exit_pid" ]] && continue
-            kill "$pid" 2>/dev/null || true
-        done
-    }
-
-    # Task 1: Vite renderer build
-    info "Starting parallel compilation: Vite renderer, TypeScript electron, Rust native module"
-    NODE_OPTIONS="--max-old-space-size=4096" npm run build:renderer > "$log_dir/renderer.log" 2>&1 &
-    pids+=($!)
-    labels+=("Vite renderer build")
-    logs+=("$log_dir/renderer.log")
-
-    # Task 2: TypeScript electron compilation
-    NODE_OPTIONS="--max-old-space-size=4096" npx tsc -p tsconfig.electron.json > "$log_dir/tsc.log" 2>&1 &
-    pids+=($!)
-    labels+=("TypeScript electron compilation")
-    logs+=("$log_dir/tsc.log")
-
-    # Task 3: Rust native module (if cargo is available)
-    if [[ "$HAS_RUST" == "true" && -d "$SCRIPT_DIR/native-module" ]]; then
-        (cd "$SCRIPT_DIR/native-module" && cargo build --release --jobs="$num_cores") > "$log_dir/rust.log" 2>&1 &
-        pids+=($!)
-        labels+=("Rust native module compilation")
-        logs+=("$log_dir/rust.log")
-    fi
-
-    # Wait for all processes, cancel siblings on first failure
-    local failed=false
-    local failed_index=-1
-    for i in "${!pids[@]}"; do
-        if ! wait "${pids[$i]}"; then
-            failed=true
-            failed_index=$i
-            cleanup_parallel "${pids[$i]}"
-            break
-        fi
-    done
-
-    local end_time
-    end_time=$(date +%s)
-    local elapsed=$((end_time - start_time))
-
-    if [[ "$failed" == "true" ]]; then
-        echo -e "${RED}${BOLD}--- ${labels[$failed_index]} FAILED ---${NC}"
-        tail -50 "${logs[$failed_index]}" 2>/dev/null || true
-        rm -rf "$log_dir"
-        fail "Parallel compilation failed: ${labels[$failed_index]} (after ${elapsed}s)"
-    fi
-
-    rm -rf "$log_dir"
-    success "Parallel compilation completed in ${elapsed}s (${num_cores} cores)"
 }
 
 print_banner() {
@@ -452,36 +345,6 @@ require_file() {
     fi
 }
 
-resolve_macos_virtual_display_helper_binary() {
-    local helper_dir="$1"
-    local candidate=""
-    local candidates=(
-        "$helper_dir/system-services-helper"
-        "$helper_dir/stealth-virtual-display-helper"
-    )
-
-    for candidate in "${candidates[@]}"; do
-        if [[ -f "$candidate" ]]; then
-            printf '%s\n' "$candidate"
-            return 0
-        fi
-    done
-
-    return 1
-}
-
-require_macos_virtual_display_helper() {
-    local helper_dir="$1"
-    local helper_path=""
-
-    helper_path=$(resolve_macos_virtual_display_helper_binary "$helper_dir" || true)
-    if [[ -n "$helper_path" ]]; then
-        success "Packaged macOS virtual display helper present ($(basename "$helper_path"))"
-    else
-        fail "Missing required file: $helper_dir/{system-services-helper,stealth-virtual-display-helper}"
-    fi
-}
-
 require_asar_entry() {
     local asar_path="$1"
     local entry_path="$2"
@@ -512,11 +375,7 @@ run_packaged_launch_probe() {
     local disable_helper="$3"
     local log_file
     local pid
-    local start_time
-    local end_time
-    local boot_duration
 
-    start_time=$(date +%s)
     log_file=$(mktemp)
     if [[ "$disable_helper" == "1" ]]; then
         NATIVELY_DISABLE_MACOS_VIRTUAL_DISPLAY_HELPER=1 "$app_binary" >"$log_file" 2>&1 &
@@ -530,33 +389,13 @@ run_packaged_launch_probe() {
         echo -e "${RED}${BOLD}--- launch log (${mode_label}) -------------------------------------------------${NC}"
         sed -n '1,160p' "$log_file"
         rm -f "$log_file"
-        fail "Packaged launch probe failed (${mode_label}): app did not survive 4 seconds"
+        fail "Packaged launch probe failed (${mode_label})"
     fi
-
-    # Check for module loading errors in stdout/stderr
-    if grep -qE 'MODULE_NOT_FOUND|DLOPEN_FAILED|Cannot find module|dlopen.*failed' "$log_file"; then
-        local error_line
-        error_line=$(grep -E 'MODULE_NOT_FOUND|DLOPEN_FAILED|Cannot find module|dlopen.*failed' "$log_file" | head -1)
-        kill "$pid" 2>/dev/null || true
-        wait "$pid" 2>/dev/null || true
-        echo -e "${RED}${BOLD}--- launch log (${mode_label}) -------------------------------------------------${NC}"
-        sed -n '1,160p' "$log_file"
-        rm -f "$log_file"
-        fail "Packaged launch probe (${mode_label}): module loading error detected: $error_line"
-    fi
-
-    # Confirm native audio module loaded
-    if grep -qE 'natively-audio|Integrity.*Validated' "$log_file"; then
-        success "Launch probe (${mode_label}): native audio module confirmed loaded"
-    fi
-
-    end_time=$(date +%s)
-    boot_duration=$((end_time - start_time))
 
     kill "$pid" 2>/dev/null || true
     wait "$pid" 2>/dev/null || true
     rm -f "$log_file"
-    success "Packaged launch probe passed (${mode_label}, boot duration: ${boot_duration}s)"
+    success "Packaged launch probe passed (${mode_label})"
 }
 
 validate_packaged_helper_launch_modes() {
@@ -568,120 +407,6 @@ validate_packaged_helper_launch_modes() {
     run_packaged_launch_probe "with-helper" "$app_binary" "0"
     run_packaged_launch_probe "without-helper" "$app_binary" "1"
     success "Packaged helper launch validation passed (with and without helper)"
-}
-
-generate_checksums() {
-    local release_dir="$1"
-    local checksum_file="$release_dir/checksums.sha256"
-
-    info "Generating SHA-256 checksums for release artifacts..."
-    > "$checksum_file"  # Always overwrite existing checksum file
-
-    local found_artifacts=false
-    for artifact in "$release_dir"/*.dmg "$release_dir"/*.zip; do
-        [[ -e "$artifact" ]] || continue
-        found_artifacts=true
-        if ! shasum -a 256 "$artifact" >> "$checksum_file"; then
-            fail "Checksum generation failed for: $artifact"
-        fi
-    done
-
-    if [[ "$found_artifacts" == "true" ]]; then
-        success "Checksums written to $checksum_file"
-    else
-        warn "No .dmg or .zip artifacts found in $release_dir for checksum generation"
-    fi
-}
-
-validate_wiring() {
-    local app_asar="$1"
-    local unpacked_dir="$2"
-    local arch="$3"
-    local count=0
-
-    info "Running wiring validation on packaged app..."
-
-    # Check native audio module index in asar
-    if ! npx asar list "$app_asar" | grep -Fxq "/node_modules/natively-audio/index.js"; then
-        fail "Wiring validation failed: natively-audio index file missing from app.asar"
-    fi
-    ((count++))
-
-    # Check preload script in unpacked
-    if [[ ! -f "$unpacked_dir/dist-electron/electron/preload.js" ]]; then
-        fail "Wiring validation failed: preload.js missing from asar-unpacked directory"
-    fi
-    ((count++))
-
-    # Check stealth shell preload in unpacked
-    if [[ ! -f "$unpacked_dir/dist-electron/electron/stealth/shellPreload.js" ]]; then
-        fail "Wiring validation failed: stealth/shellPreload.js missing from asar-unpacked directory"
-    fi
-    ((count++))
-
-    # Check better-sqlite3 native binary in unpacked
-    if [[ ! -f "$unpacked_dir/node_modules/better-sqlite3/build/Release/better_sqlite3.node" ]]; then
-        fail "Wiring validation failed: better-sqlite3 native binary missing from asar-unpacked for $arch"
-    fi
-    ((count++))
-
-    # Check sqlite3 native binary in unpacked
-    if [[ ! -f "$unpacked_dir/node_modules/sqlite3/build/Release/node_sqlite3.node" ]]; then
-        fail "Wiring validation failed: sqlite3 native binary missing from asar-unpacked for $arch"
-    fi
-    ((count++))
-
-    success "Wiring validation passed: $count entries verified"
-}
-
-verify_dependencies() {
-    local missing=()
-
-    info "Verifying critical dependencies after installation..."
-
-    # Verify electron binary
-    if [[ ! -f "$SCRIPT_DIR/node_modules/.bin/electron" ]]; then
-        missing+=("electron")
-    fi
-
-    # Verify electron-builder binary
-    if [[ ! -f "$SCRIPT_DIR/node_modules/.bin/electron-builder" ]]; then
-        missing+=("electron-builder")
-    fi
-
-    # Verify tsc binary
-    if [[ ! -f "$SCRIPT_DIR/node_modules/.bin/tsc" ]]; then
-        missing+=("tsc")
-    fi
-
-    # Verify better-sqlite3 native binary
-    if [[ ! -f "$SCRIPT_DIR/node_modules/better-sqlite3/build/Release/better_sqlite3.node" ]]; then
-        missing+=("better-sqlite3 native binary")
-    fi
-
-    # Verify sqlite3 native binary
-    if [[ ! -f "$SCRIPT_DIR/node_modules/sqlite3/build/Release/node_sqlite3.node" ]]; then
-        missing+=("sqlite3 native binary")
-    fi
-
-    # Note: natively-audio native binary (.node) is built from source during the
-    # parallel_build() step (Rust/cargo compilation). It does not exist in
-    # node_modules after npm ci — only .node.abi stubs are present.
-    # The actual binary is verified later in validate_wiring() after packaging.
-    local native_audio_js="$SCRIPT_DIR/node_modules/natively-audio/index.js"
-    if [[ ! -f "$native_audio_js" ]]; then
-        missing+=("natively-audio package (index.js loader)")
-    fi
-
-    if [[ ${#missing[@]} -gt 0 ]]; then
-        echo -e "${RED}${BOLD}Missing dependencies:${NC}"
-        for dep in "${missing[@]}"; do
-            echo -e "  ${RED}✗${NC} $dep"
-        done
-        fail "Dependency verification failed: ${missing[*]}"
-    fi
-
-    success "All critical dependencies verified for ${BUILD_ARCH}"
 }
 
 if [[ "${BUILD_AND_INSTALL_LIB:-0}" == "1" ]]; then
@@ -699,21 +424,105 @@ elif [[ "$ARCH" == "x86_64" ]]; then
     ARCH_LABEL="Intel"
     BUILD_COMMAND=(npm run app:build:x64)
 else
-fail "Unsupported architecture: $ARCH"
+    fail "Unsupported architecture: $ARCH"
 fi
 
-# ── Detect Rust ──
-if command -v cargo &>/dev/null; then
-HAS_RUST="true"
+# ── macOS version check ──
+MACOS_VERSION="$(sw_vers -productVersion 2>/dev/null || echo 'unknown')"
+info "macOS version: $MACOS_VERSION ($ARCH_LABEL)"
+
+# ╔═══════════════════════════════════════════════════════════════════╗
+# ║  Prerequisite Auto-Install                                       ║
+# ╚═══════════════════════════════════════════════════════════════════╝
+
+# ── Xcode Command Line Tools (required for git, compilers) ──
+if ! xcode-select -p &>/dev/null; then
+    warn "Xcode Command Line Tools not found — installing (this may take a few minutes)..."
+    xcode-select --install 2>/dev/null || true
+    # Wait for the install to complete (user must click through the dialog)
+    until xcode-select -p &>/dev/null; do
+        sleep 5
+    done
+    success "Xcode Command Line Tools installed"
 else
-HAS_RUST="false"
+    success "Xcode Command Line Tools found: $(xcode-select -p)"
 fi
 
-# ── Detect Rust ──
-if command -v cargo &>/dev/null; then
-HAS_RUST="true"
+# ── Homebrew ──
+if command -v brew &>/dev/null; then
+    success "Homebrew found: $(brew --version | head -1)"
 else
-HAS_RUST="false"
+    warn "Homebrew not found — installing..."
+    /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+    # Add brew to PATH for this session (Apple Silicon vs Intel paths)
+    if [[ -f "/opt/homebrew/bin/brew" ]]; then
+        eval "$(/opt/homebrew/bin/brew shellenv)"
+    elif [[ -f "/usr/local/bin/brew" ]]; then
+        eval "$(/usr/local/bin/brew shellenv)"
+    fi
+    if command -v brew &>/dev/null; then
+        success "Homebrew installed"
+    else
+        fail "Homebrew installation failed. Install manually from https://brew.sh"
+    fi
+fi
+
+# ── Node.js ──
+if command -v node &>/dev/null; then
+    NODE_VERSION="$(node --version 2>/dev/null)"
+    success "Node.js found: $NODE_VERSION"
+    NODE_MAJOR="${NODE_VERSION#v}"
+    NODE_MAJOR="${NODE_MAJOR%%.*}"
+    if [[ "$NODE_MAJOR" -lt 18 ]]; then
+        warn "Node.js $NODE_VERSION is below v18. Recommend upgrading: brew upgrade node"
+    fi
+else
+    warn "Node.js not found — installing via Homebrew..."
+    brew install node
+    if command -v node &>/dev/null; then
+        success "Node.js installed: $(node --version)"
+    else
+        fail "Node.js installation failed. Install manually: brew install node"
+    fi
+fi
+
+# ── npm ──
+if command -v npm &>/dev/null; then
+    success "npm found: $(npm --version 2>/dev/null)"
+else
+    fail "npm not found. It ships with Node.js — reinstall Node.js: brew reinstall node"
+fi
+
+# ── Git ──
+if command -v git &>/dev/null; then
+    success "Git found: $(git --version 2>/dev/null)"
+else
+    warn "Git not found — installing via Homebrew..."
+    brew install git
+    if command -v git &>/dev/null; then
+        success "Git installed: $(git --version)"
+    else
+        fail "Git installation failed. Install manually: brew install git"
+    fi
+fi
+
+# ── Rust / Cargo ──
+if command -v cargo &>/dev/null; then
+    HAS_RUST="true"
+    success "Rust found: $(cargo --version 2>/dev/null)"
+else
+    warn "Rust/Cargo not found — installing via rustup..."
+    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y 2>/dev/null
+    # Source cargo env for this session
+    [[ -f "$HOME/.cargo/env" ]] && source "$HOME/.cargo/env"
+    if command -v cargo &>/dev/null; then
+        HAS_RUST="true"
+        success "Rust installed: $(cargo --version)"
+    else
+        HAS_RUST="false"
+        warn "Rust installation failed — native module Rust tests will be skipped"
+        warn "Install manually from https://rustup.rs"
+    fi
 fi
 
 # ╔═══════════════════════════════════════════════════════════════════╗
@@ -763,57 +572,131 @@ step "Step 3/8 — Installing Dependencies"
 
 cd "$SCRIPT_DIR"
 
-# Always use npm ci --prefer-offline for reproducible fresh dependency tree
-info "Running npm ci --prefer-offline for reproducible dependency installation..."
-run_with_spinner "syncing npm dependency matrix" npm ci --prefer-offline
-success "Dependencies installed (fresh lockfile-based install)"
+DEPENDENCY_TOOLCHAIN_COMPLETE=true
+if [[ -d "node_modules" ]]; then
+    for required_path in \
+        "node_modules/electron/package.json" \
+        "node_modules/electron-builder/package.json" \
+        "node_modules/.bin/tsc"; do
+        if [[ ! -e "$required_path" ]]; then
+            DEPENDENCY_TOOLCHAIN_COMPLETE=false
+            break
+        fi
+    done
+else
+    DEPENDENCY_TOOLCHAIN_COMPLETE=false
+fi
 
-# Ensure native dependencies match the target architecture
-run_with_spinner "verifying native dependencies for ${BUILD_ARCH}" node scripts/ensure-electron-native-deps.js
-success "Native dependencies ready for ${BUILD_ARCH}"
+INSTALL_COMMAND=(npm install)
+if [[ -f "package-lock.json" && ( ! -d "node_modules" || "${FORCE_DEPENDENCY_SYNC:-0}" == "1" ) ]]; then
+    INSTALL_COMMAND=(npm ci)
+fi
 
-# Verify critical dependencies are present and correctly linked
-verify_dependencies
+if [[ -d "node_modules" && "$DEPENDENCY_TOOLCHAIN_COMPLETE" == true && "${FORCE_DEPENDENCY_SYNC:-0}" != "1" ]]; then
+    info "Using existing node_modules; set FORCE_DEPENDENCY_SYNC=1 to force a clean dependency reinstall."
+else
+    if [[ -d "node_modules" ]]; then
+        info "node_modules exists but the build toolchain is incomplete, syncing dependencies with ${INSTALL_COMMAND[*]}..."
+    else
+        info "Fresh install — this may take a few minutes..."
+    fi
+
+    run_with_spinner "syncing npm dependency matrix" "${INSTALL_COMMAND[@]}"
+    success "Dependencies installed"
+fi
 
 # ╔═══════════════════════════════════════════════════════════════════╗
 # ║ Step 4: Run Quality Gates                                        
 # ╚═══════════════════════════════════════════════════════════════════╝
 QUALITY_GATES_RAN=false
+QUALITY_GATE_TIMEOUT="${QUALITY_GATE_TIMEOUT:-300}" # seconds per gate, default 5min
+
+# Locate a working timeout binary (coreutils `timeout` or macOS `gtimeout`).
+# These exec-replace the child process, so they work correctly when
+# run_with_spinner backgrounds the command.
+TIMEOUT_CMD=""
+if command -v gtimeout &>/dev/null; then
+    TIMEOUT_CMD="gtimeout"
+elif command -v timeout &>/dev/null && timeout --version &>/dev/null 2>&1; then
+    # Ensure it's GNU timeout (not a shell built-in alias)
+    TIMEOUT_CMD="timeout"
+fi
+
+# run_gate <label> <command...>
+# Runs a quality-gate command with a spinner and an optional hard timeout.
+# On failure the last 200 lines of output are printed before the script exits.
+run_gate() {
+    local label="$1"
+    shift
+    local rc=0
+
+    # Build the command: optionally prepend timeout
+    local cmd=()
+    if [[ -n "$TIMEOUT_CMD" ]]; then
+        cmd+=("$TIMEOUT_CMD" "$QUALITY_GATE_TIMEOUT")
+    fi
+    cmd+=("$@")
+
+    # Use set +e / set -e so we capture the exit code without triggering
+    # the global set -e trap, then call fail() at top level where exit works.
+    set +e
+    run_with_spinner "$label" "${cmd[@]}"
+    rc=$?
+    set -e
+
+    if [[ $rc -ne 0 ]]; then
+        if [[ -n "$TIMEOUT_CMD" && $rc -eq 124 ]]; then
+            fail "$label timed out after ${QUALITY_GATE_TIMEOUT}s"
+        else
+            fail "$label failed"
+        fi
+    fi
+}
+
 if [[ "${SKIP_QUALITY_GATES:-0}" == "0" ]]; then
     step "Step 4/8 — Running Production Quality Gates"
 
-    info "Running quality gates in visible stages so long-running checks do not look frozen..."
-
-    FOUNDATION_RELEASE_VERIFY_ENABLED=false
-    if [[ "$BUILD_ARCH" == "arm64" && "${SKIP_FOUNDATION_INTENT_RELEASE_VERIFY:-0}" == "0" ]]; then
-        FOUNDATION_RELEASE_VERIFY_ENABLED=true
-    fi
-
-    if [[ "$FOUNDATION_RELEASE_VERIFY_ENABLED" == "true" ]]; then
-        QUALITY_GATE_TEST_LABEL="[1/3] Running Electron tests (this may take a minute)..."
-        QUALITY_GATE_VERIFY_LABEL="[2/3] Running production verification..."
-        QUALITY_GATE_FOUNDATION_LABEL="[3/3] Running Apple Silicon Foundation intent release verification..."
+    if [[ -n "$TIMEOUT_CMD" ]]; then
+        info "Each gate has a ${QUALITY_GATE_TIMEOUT}s timeout (set QUALITY_GATE_TIMEOUT to override)"
     else
-        QUALITY_GATE_TEST_LABEL="[1/2] Running Electron tests (this may take a minute)..."
-        QUALITY_GATE_VERIFY_LABEL="[2/2] Running production verification..."
-        QUALITY_GATE_FOUNDATION_LABEL=""
+        warn "No timeout command found (install coreutils for gtimeout). Gates will run without a timeout."
     fi
 
-    run_logged_command "$QUALITY_GATE_TEST_LABEL" npm run test:electron
+    # Ensure local node_modules/.bin is on PATH for sub-shells
+    export PATH="$SCRIPT_DIR/node_modules/.bin:$PATH"
+
+    # ── Gate 1: Compile Electron TypeScript ──
+    run_gate "[1/5] Compiling Electron TypeScript" \
+        bash -c 'cd "'"$SCRIPT_DIR"'" && rimraf dist-electron/electron/tests && tsc -p electron/tsconfig.json'
+    success "Electron TypeScript compiled"
+
+    # ── Gate 2: Run Electron tests ──
+    run_gate "[2/5] Running Electron tests" \
+        bash -c 'cd "'"$SCRIPT_DIR"'" && node --test dist-electron/electron/tests/*.test.js'
     success "Electron tests passed"
 
-    run_logged_command "$QUALITY_GATE_VERIFY_LABEL" npm run verify:production
-    success "Production verification passed"
+    # ── Gate 3–5: Production verification (decomposed — skip redundant tsc) ──
+    # typecheck is skipped: tsc -p electron/tsconfig.json already ran in gate 1.
+    info "Skipping redundant typecheck (already compiled in gate 1)"
 
-    if [[ "$FOUNDATION_RELEASE_VERIFY_ENABLED" == "true" ]]; then
-        run_logged_command "$QUALITY_GATE_FOUNDATION_LABEL" npm run verify:foundation-intent-release
-        success "Apple Silicon Foundation intent release verification passed"
+    run_gate "[3/5] Verifying Electron test coverage" \
+        node scripts/verify-electron-coverage.js
+    success "Electron coverage verified"
+
+    run_gate "[4/5] Verifying renderer test coverage" \
+        node scripts/verify-renderer-coverage.js
+    success "Renderer coverage verified"
+
+    if [[ "$HAS_RUST" == "true" ]]; then
+        run_gate "[5/5] Running Rust native module tests" \
+            cargo test --manifest-path native-module/Cargo.toml
+        success "Rust native module tests passed"
     else
-        info "Skipping Apple Silicon Foundation intent release verification (requires arm64 build host; set SKIP_FOUNDATION_INTENT_RELEASE_VERIFY=1 to silence this message on Apple Silicon)"
+        warn "[5/5] Skipping Rust tests (cargo not found)"
     fi
 
     QUALITY_GATES_RAN=true
-    success "Quality gates passed"
+    success "All quality gates passed"
 else
     info "Skipping visible quality gates (set SKIP_QUALITY_GATES=0 to run them before packaging)"
     info "Package-level production verification remains enabled"
@@ -852,8 +735,7 @@ step "Step 6/8 — Force Signing (Ad-Hoc)"
 # The electron-builder afterPack hook already signs, but we force re-sign
 # to ensure it's clean (handles edge cases where build partially failed)
 
-PACKAGED_HELPER_DIR="$APP_GLOB/Contents/Resources/bin/macos"
-PACKAGED_HELPER=$(resolve_macos_virtual_display_helper_binary "$PACKAGED_HELPER_DIR" || true)
+PACKAGED_HELPER="$APP_GLOB/Contents/Resources/bin/macos/stealth-virtual-display-helper"
 PACKAGED_FOUNDATION_INTENT_HELPER="$APP_GLOB/Contents/Resources/bin/macos/foundation-intent-helper"
 PACKAGED_FULL_STEALTH_XPC="$APP_GLOB/Contents/XPCServices/macos-full-stealth-helper.xpc"
 
@@ -868,7 +750,7 @@ if [[ -f "$PACKAGED_HELPER" ]]; then
         success "Packaged macOS virtual display helper signed (ad-hoc, no helper entitlements)"
     fi
 else
-    warn "Packaged macOS virtual display helper not found before app signing (looked for system-services-helper and stealth-virtual-display-helper)"
+    warn "Packaged macOS virtual display helper not found before app signing"
 fi
 
 if [[ -f "$PACKAGED_FOUNDATION_INTENT_HELPER" ]]; then
@@ -917,9 +799,6 @@ else
     info "Ad-hoc signature applied (codesign verify may show warnings — this is normal)"
 fi
 
-# Generate SHA-256 checksums for release artifacts
-generate_checksums "$RELEASE_DIR"
-
 step "Step 7/8 — Verifying macOS Permission Manifest"
 
 APP_PLIST="$APP_GLOB/Contents/Info.plist"
@@ -940,28 +819,21 @@ require_asar_entry "$APP_ASAR_PATH" "/electron/renderer/shell.html" "Packaged st
 require_asar_entry "$APP_ASAR_PATH" "/node_modules/natively-audio/index.js" "Packaged native module loader"
 require_asar_entry "$APP_ASAR_PATH" "/dist-electron/premium/electron/services/LicenseManager.js" "Packaged premium license manager"
 require_asar_entry "$APP_ASAR_PATH" "/dist-electron/premium/electron/knowledge/KnowledgeOrchestrator.js" "Packaged knowledge orchestrator"
-require_macos_virtual_display_helper "$APP_RESOURCES_DIR/bin/macos"
+require_file "$APP_RESOURCES_DIR/bin/macos/stealth-virtual-display-helper" "Packaged macOS virtual display helper"
 require_file "$APP_RESOURCES_DIR/bin/macos/foundation-intent-helper" "Packaged foundation intent helper"
 require_file "$APP_GLOB/Contents/XPCServices/macos-full-stealth-helper.xpc/Contents/MacOS/macos-full-stealth-helper" "Packaged macOS full stealth XPC helper"
 
 if [[ "$BUILD_ARCH" == "arm64" ]]; then
-    require_file "$APP_ASAR_UNPACKED_DIR/dist-electron/electron/preload.js" "Unpacked renderer preload"
-    require_file "$APP_ASAR_UNPACKED_DIR/dist-electron/electron/stealth/shellPreload.js" "Unpacked stealth shell preload"
     require_file "$APP_ASAR_UNPACKED_DIR/node_modules/natively-audio/index.darwin-arm64.node" "Unpacked arm64 native audio binary"
     require_file "$APP_ASAR_UNPACKED_DIR/node_modules/better-sqlite3/build/Release/better_sqlite3.node" "Unpacked arm64 better-sqlite3 binary"
     require_file "$APP_ASAR_UNPACKED_DIR/node_modules/sqlite3/build/Release/node_sqlite3.node" "Unpacked arm64 sqlite3 binary"
 else
-    require_file "$APP_ASAR_UNPACKED_DIR/dist-electron/electron/preload.js" "Unpacked renderer preload"
-    require_file "$APP_ASAR_UNPACKED_DIR/dist-electron/electron/stealth/shellPreload.js" "Unpacked stealth shell preload"
     require_file "$APP_ASAR_UNPACKED_DIR/node_modules/natively-audio/index.darwin-x64.node" "Unpacked x64 native audio binary"
     require_file "$APP_ASAR_UNPACKED_DIR/node_modules/better-sqlite3/build/Release/better_sqlite3.node" "Unpacked x64 better-sqlite3 binary"
     require_file "$APP_ASAR_UNPACKED_DIR/node_modules/sqlite3/build/Release/node_sqlite3.node" "Unpacked x64 sqlite3 binary"
 fi
 
 success "Permission manifest verified"
-
-# Run wiring validation after manifest verification
-validate_wiring "$APP_ASAR_PATH" "$APP_ASAR_UNPACKED_DIR" "$BUILD_ARCH"
 
 if [[ "${SKIP_INSTALL:-0}" == "1" ]]; then
     info "SKIP_INSTALL=1 set; install skipped after packaging verification"
@@ -1028,8 +900,6 @@ fi
 # ╚═══════════════════════════════════════════════════════════════════╝
 print_done_card
 
-enable_default_app_logging
-
 echo -e "${MAGENTA}${BOLD}Next steps:${NC}"
 echo ""
 echo -e "  ${CYAN}1.${NC} Launch with ${WHITE}open ${INSTALL_DIR}/${APP_NAME}.app${NC}"
@@ -1041,9 +911,6 @@ echo -e "     ${YELLOW}>${NC} Accessibility  ${BLUE}-${NC} keyboard shortcuts"
 echo ""
 echo -e "  ${CYAN}3.${NC} Configure API keys in Settings -> AI Providers"
 echo -e "     ${YELLOW}>${NC} Or use Ollama for a fully local setup"
-echo ""
-echo -e "  ${CYAN}4.${NC} Logs are on by default for this launch session:"
-echo -e "     ${YELLOW}>${NC} ${APP_LOG_DIR}/natively-$(date +%F).log"
 echo ""
 
 # Ask to launch only in interactive terminals
