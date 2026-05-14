@@ -25,6 +25,11 @@ export class SemanticEntailmentVerifier {
   }
 
   private async ensureModelLoaded(): Promise<void> {
+    // R2: refuse to (re)start model load after dispose.
+    if (this.disposed) {
+      throw new Error('SemanticEntailmentVerifier: disposed');
+    }
+
     if (this.model) {
       return;
     }
@@ -40,7 +45,20 @@ export class SemanticEntailmentVerifier {
     this.modelLoadPromise = (async () => {
       try {
         // Use the correct NLI model - cross-encoder for NLI tasks
-        this.model = await pipeline('text-classification', 'Xenova/cross-encoder-nli-deberta-v3-small');
+        const model = await pipeline('text-classification', 'Xenova/cross-encoder-nli-deberta-v3-small');
+        // R1: dispose-race — drop the freshly-created pipeline if dispose()
+        // ran while we were loading.
+        if (this.disposed) {
+          try {
+            if (typeof (model as any)?.dispose === 'function') {
+              await (model as any).dispose();
+            }
+          } catch {
+            // ignore
+          }
+          return;
+        }
+        this.model = model;
       } catch (error) {
         console.warn('[SemanticEntailmentVerifier] Failed to load NLI model:', error);
         this.modelLoadError = true;
@@ -165,6 +183,16 @@ export class SemanticEntailmentVerifier {
     if (this.disposed) return;
     this.disposed = true;
     this.unregister();
+    // R1: await in-flight load so the late-resolving pipeline disposes
+    // through the race-handler branch above.
+    const inFlight = this.modelLoadPromise;
+    if (inFlight) {
+      try {
+        await inFlight;
+      } catch {
+        // ignore
+      }
+    }
     const model = this.model;
     this.model = null;
     this.modelLoadPromise = null;

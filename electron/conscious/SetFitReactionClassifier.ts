@@ -123,6 +123,13 @@ export class SetFitReactionClassifier {
   }
 
   private async ensureModelLoaded(): Promise<void> {
+    // R2: refuse to (re)start model load after dispose. A stale orchestrator
+    // callback that fires post-shutdown must not spawn an unregistered
+    // pipeline that would leak past the registry.
+    if (this.disposed) {
+      throw new Error('SetFitReactionClassifier: disposed');
+    }
+
     if (this.embedder) {
       return;
     }
@@ -137,7 +144,20 @@ export class SetFitReactionClassifier {
 
     this.modelLoadPromise = (async () => {
       try {
-        this.embedder = await pipeline('feature-extraction', SetFitReactionClassifier.EMBEDDING_MODEL);
+        const embedder = await pipeline('feature-extraction', SetFitReactionClassifier.EMBEDDING_MODEL);
+        // R1: dispose-race — if dispose() ran while the pipeline was loading,
+        // release the freshly-created pipeline rather than installing it.
+        if (this.disposed) {
+          try {
+            if (typeof (embedder as any)?.dispose === 'function') {
+              await (embedder as any).dispose();
+            }
+          } catch {
+            // ignore
+          }
+          return;
+        }
+        this.embedder = embedder;
         await this.cachePrototypeEmbeddings();
       } catch (error) {
         console.warn('[SetFitReactionClassifier] Failed to load embedding model:', error);
@@ -241,6 +261,16 @@ export class SetFitReactionClassifier {
     if (this.disposed) return;
     this.disposed = true;
     this.unregister();
+    // R1: await in-flight model load before nulling refs so a late-resolving
+    // pipeline cannot leak past the registry.
+    const inFlight = this.modelLoadPromise;
+    if (inFlight) {
+      try {
+        await inFlight;
+      } catch {
+        // load failure is fine — just need it to settle
+      }
+    }
     const embedder = this.embedder;
     this.embedder = null;
     this.modelLoadPromise = null;

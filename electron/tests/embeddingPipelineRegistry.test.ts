@@ -26,14 +26,14 @@ import {
   registerEmbeddingPipeline,
   disposeAllEmbeddingPipelines,
   _getRegistrySizeForTest,
+  _resetRegistryForTest,
 } from '../conscious/embeddingPipelineRegistry';
 import { SemanticThreadMatcher } from '../conscious/SemanticThreadMatcher';
 
 describe('embeddingPipelineRegistry', () => {
-  beforeEach(async () => {
-    // Drain the registry between tests so we observe only the disposables
-    // each test registers itself.
-    await disposeAllEmbeddingPipelines();
+  beforeEach(() => {
+    // Full reset including shuttingDown flag so each test starts clean.
+    _resetRegistryForTest();
   });
 
   it('registers a disposable and returns a working unregister handle', () => {
@@ -88,14 +88,47 @@ describe('embeddingPipelineRegistry', () => {
   it('disposeAll is safe to call twice without error', async () => {
     registerEmbeddingPipeline({ dispose: async () => {} });
     await disposeAllEmbeddingPipelines();
+    _resetRegistryForTest(); // reset shuttingDown so second call can register
+    registerEmbeddingPipeline({ dispose: async () => {} });
     await disposeAllEmbeddingPipelines();
+    assert.equal(_getRegistrySizeForTest(), 0);
+  });
+
+  it('R3: late registration after shutdown auto-disposes immediately', async () => {
+    // Trigger shutdown so shuttingDown flag is set
+    await disposeAllEmbeddingPipelines();
+    let lateDisposed = false;
+    registerEmbeddingPipeline({
+      dispose: async () => {
+        lateDisposed = true;
+      },
+    });
+    // The registry must NOT hold the late disposable
+    assert.equal(_getRegistrySizeForTest(), 0);
+    // Give the detached promise a tick to resolve
+    await new Promise((r) => setTimeout(r, 10));
+    assert.equal(lateDisposed, true, 'late-registered disposable must auto-dispose');
+  });
+
+  it('R4/R5: per-disposable timeout prevents a hung dispose from blocking', async () => {
+    let fastRan = false;
+    registerEmbeddingPipeline({
+      dispose: () => new Promise(() => {}), // never resolves
+    });
+    registerEmbeddingPipeline({
+      dispose: async () => {
+        fastRan = true;
+      },
+    });
+    await disposeAllEmbeddingPipelines();
+    assert.equal(fastRan, true, 'fast disposable must run despite hung sibling');
     assert.equal(_getRegistrySizeForTest(), 0);
   });
 });
 
 describe('SemanticThreadMatcher disposable contract', () => {
-  beforeEach(async () => {
-    await disposeAllEmbeddingPipelines();
+  beforeEach(() => {
+    _resetRegistryForTest();
   });
 
   it('registers itself in the registry on construction', () => {

@@ -23,6 +23,14 @@ export class SemanticThreadMatcher {
   }
 
   private async ensureModelLoaded(): Promise<void> {
+    // R2: refuse to (re)start model load after dispose. Without this guard a
+    // stale audio callback that fires after `dispose()` can spawn a fresh
+    // pipeline that is NOT in the registry, leak past the shutdown hook, and
+    // re-introduce the destructor SIGTRAP we were trying to eliminate.
+    if (this.disposed) {
+      throw new Error('SemanticThreadMatcher: disposed');
+    }
+
     if (this.embedder) {
       return;
     }
@@ -37,7 +45,21 @@ export class SemanticThreadMatcher {
 
     this.modelLoadPromise = (async () => {
       try {
-        this.embedder = await pipeline('feature-extraction', 'Xenova/all-MiniLM-L6-v2');
+        const embedder = await pipeline('feature-extraction', 'Xenova/all-MiniLM-L6-v2');
+        // If `dispose()` raced us, drop the freshly-created pipeline rather
+        // than installing it on a tombstoned instance (R1). Dispose it
+        // inline so its native session is released immediately.
+        if (this.disposed) {
+          try {
+            if (typeof (embedder as any)?.dispose === 'function') {
+              await (embedder as any).dispose();
+            }
+          } catch {
+            // already-disposed instance, nothing to do
+          }
+          return;
+        }
+        this.embedder = embedder;
       } catch (error) {
         console.warn('[SemanticThreadMatcher] Failed to load SBERT model:', error);
         this.modelLoadError = true;
@@ -193,6 +215,21 @@ export class SemanticThreadMatcher {
     if (this.disposed) return;
     this.disposed = true;
     this.unregister();
+    // R1: if a pipeline() load is in flight, wait for it to settle so we can
+    // dispose whatever it produced. Without this await, the late-resolving
+    // pipeline would assign to `this.embedder` after we nulled it, leak past
+    // the registry, and re-introduce the destructor crash. The race-handling
+    // branch inside `ensureModelLoaded` already disposes its own embedder
+    // when it sees `this.disposed`; we still grab whatever ended up on the
+    // instance below as a belt-and-braces second pass.
+    const inFlight = this.modelLoadPromise;
+    if (inFlight) {
+      try {
+        await inFlight;
+      } catch {
+        // swallow: load failure is fine, we just need it resolved
+      }
+    }
     const embedder = this.embedder;
     this.embedder = null;
     this.modelLoadPromise = null;

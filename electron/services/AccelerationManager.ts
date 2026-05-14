@@ -77,7 +77,7 @@ export class AccelerationManager {
       budgetScheduler: this.runtimeBudgetScheduler,
       classifierLane: this.runtimeBudgetScheduler,
     });
-    this.aneProvider = new ANEEmbeddingProvider();
+    this.aneProvider = ANEEmbeddingProvider.getSharedInstance();
     if (!AccelerationManager.sharedLocalEmbeddingProvider) {
       AccelerationManager.sharedLocalEmbeddingProvider = new LocalEmbeddingProvider();
     }

@@ -1,7 +1,8 @@
 import { IEmbeddingProvider } from './IEmbeddingProvider';
 import { isAppleSilicon, isOptimizationActive } from '../../config/optimizations';
 import { safeCreateOnnxSession, type SafeOnnxSession } from '../../startup/onnxCrashGuard';
-import { incrementOnnxFailureCount } from '../../startup/StartupHealer';
+import { incrementOnnxFailureCount, clearOnnxSessionSentinel } from '../../startup/StartupHealer';
+import { registerEmbeddingPipeline } from '../../conscious/embeddingPipelineRegistry';
 import path from 'path';
 import { resolveBundledModelsPath } from '../../utils/modelPaths';
 
@@ -21,6 +22,8 @@ async function loadOnnxRuntime() {
   }
 }
 
+let singletonInstance: ANEEmbeddingProvider | null = null;
+
 export class ANEEmbeddingProvider implements IEmbeddingProvider {
   readonly name = 'ane-embedding';
   readonly dimensions = 384;
@@ -30,6 +33,19 @@ export class ANEEmbeddingProvider implements IEmbeddingProvider {
   private useANE: boolean = false;
   private initialized: boolean = false;
   private warmedUp: boolean = false;
+  private unregister: (() => void) | null = null;
+
+  /**
+   * Returns the shared singleton instance. Multiple callers (AccelerationManager,
+   * EmbeddingProviderResolver) share one ONNX session to avoid duplicate native
+   * resources and the GC destructor SIGTRAP on orphaned sessions.
+   */
+  static getSharedInstance(): ANEEmbeddingProvider {
+    if (!singletonInstance) {
+      singletonInstance = new ANEEmbeddingProvider();
+    }
+    return singletonInstance;
+  }
 
   async initialize(): Promise<void> {
     if (!isOptimizationActive('useANEEmbeddings')) {
@@ -67,6 +83,11 @@ export class ANEEmbeddingProvider implements IEmbeddingProvider {
         this.initialized = false;
         return;
       }
+
+      // Register with the embedding pipeline registry so the session is
+      // explicitly released during graceful shutdown — preventing the V8
+      // finalizer queue from triggering ~InferenceSessionWrap() SIGTRAP.
+      this.unregister = registerEmbeddingPipeline(this);
 
       this.useANE = executionProviders[0] === 'coreml';
       this.tokenizer = await this.loadTokenizer();
@@ -106,8 +127,14 @@ export class ANEEmbeddingProvider implements IEmbeddingProvider {
 
   private async loadTokenizer(): Promise<any> {
     try {
-      const { AutoTokenizer } = await import('@xenova/transformers');
-      return await AutoTokenizer.from_pretrained('Xenova/all-MiniLM-L6-v2');
+      const { AutoTokenizer, env } = await import('@xenova/transformers');
+      // Point transformers.js at the bundled models directory and disable
+      // remote downloads / cache writes that fail inside app.asar (ENOTDIR).
+      env.allowRemoteModels = false;
+      env.localModelPath = resolveBundledModelsPath();
+      return await AutoTokenizer.from_pretrained('Xenova/all-MiniLM-L6-v2', {
+        local_files_only: true,
+      });
     } catch (error) {
       console.warn('[ANEEmbeddingProvider] @xenova/transformers not available, using fallback tokenizer');
       const vocabPath = path.join(this.getModelDirectory(), 'tokenizer.json');
@@ -263,11 +290,22 @@ export class ANEEmbeddingProvider implements IEmbeddingProvider {
     this.initialized = false;
     this.warmedUp = false;
     this.tokenizer = null;
+    // Unregister from the pipeline registry so we don't double-dispose
+    if (this.unregister) {
+      this.unregister();
+      this.unregister = null;
+    }
     try {
       await session.release();
+      // Clear the ONNX sentinel — session released cleanly, no crash
+      clearOnnxSessionSentinel();
       console.log('[ANEEmbeddingProvider] Session released cleanly.');
     } catch (err) {
       console.warn('[ANEEmbeddingProvider] Session release error (swallowed):', err);
+    }
+    // Clear singleton reference so a fresh instance can be created if needed
+    if (singletonInstance === this) {
+      singletonInstance = null;
     }
   }
 }

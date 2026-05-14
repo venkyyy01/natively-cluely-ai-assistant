@@ -45,6 +45,7 @@ export class LocalConsciousEmbeddingClassifier {
   private static readonly CACHE_MAX_SIZE = 512;
   private classEmbeddings: Map<ConversationKind, number[]> = new Map();
   private disposed = false;
+  private initializePromise: Promise<void> | null = null;
   private readonly unregister: () => void;
 
   /**
@@ -128,33 +129,67 @@ export class LocalConsciousEmbeddingClassifier {
    * Should be called when the app starts or when ConsciousMode initializes.
    */
   async initialize(): Promise<void> {
+    // R2: refuse to (re)initialize after dispose. Without this, a stale
+    // classify() call from an audio callback would spawn a fresh
+    // InferenceSession that is NOT tracked by the registry, leak past the
+    // shutdown hook, and re-introduce the destructor SIGTRAP.
+    if (this.disposed) {
+      throw new Error('LocalConsciousEmbeddingClassifier: disposed');
+    }
     if (this.modelLoaded) {
       return;
     }
-
-    try {
-      // Import onnxruntime-node dynamically
-      this.ort = await import('onnxruntime-node');
-      
-      // Load the model - try Metal on macOS, DirectML on Windows, fallback to CPU
-      const executionProviders = this.options.useGPU
-        ? (['coreml', 'cuda', 'dml', 'cpu'] as any[])
-        : (['cpu'] as any[]);
-
-      this.model = await this.ort.InferenceSession.create(this.options.modelPath!, {
-        executionProviders,
-      });
-
-      this.modelLoaded = true;
-      
-      // Pre-compute embeddings for each conversation kind
-      await this.precomputeClassEmbeddings();
-      
-      console.log('[LocalConsciousEmbeddingClassifier] Model loaded successfully');
-    } catch (error) {
-      console.error('[LocalConsciousEmbeddingClassifier] Failed to load model:', error);
-      throw error;
+    if (this.initializePromise) {
+      return this.initializePromise;
     }
+
+    this.initializePromise = (async () => {
+      try {
+        // Import onnxruntime-node dynamically
+        const ort = await import('onnxruntime-node');
+
+        // Load the model - try Metal on macOS, DirectML on Windows, fallback to CPU
+        const executionProviders = this.options.useGPU
+          ? (['coreml', 'cuda', 'dml', 'cpu'] as any[])
+          : (['cpu'] as any[]);
+
+        const model = await ort.InferenceSession.create(this.options.modelPath!, {
+          executionProviders,
+        });
+
+        // R1: dispose-race — if dispose() ran while InferenceSession.create()
+        // was in flight, release the freshly-created session immediately
+        // rather than installing it on a tombstoned instance. The session
+        // would otherwise leak past the registry and crash at GC.
+        if (this.disposed) {
+          try {
+            const anyModel = model as any;
+            if (typeof anyModel.release === 'function') {
+              await anyModel.release();
+            } else if (typeof anyModel.dispose === 'function') {
+              await anyModel.dispose();
+            }
+          } catch {
+            // ignore
+          }
+          return;
+        }
+
+        this.ort = ort;
+        this.model = model;
+        this.modelLoaded = true;
+
+        // Pre-compute embeddings for each conversation kind
+        await this.precomputeClassEmbeddings();
+
+        console.log('[LocalConsciousEmbeddingClassifier] Model loaded successfully');
+      } catch (error) {
+        console.error('[LocalConsciousEmbeddingClassifier] Failed to load model:', error);
+        throw error;
+      }
+    })();
+
+    return this.initializePromise;
   }
 
   /**
@@ -474,10 +509,22 @@ export class LocalConsciousEmbeddingClassifier {
     if (this.disposed) return;
     this.disposed = true;
     this.unregister();
+    // R1: await in-flight init so a late-resolving InferenceSession.create()
+    // disposes through the race-handler branch in initialize() rather than
+    // leaking past the registry.
+    const inFlight = this.initializePromise;
+    if (inFlight) {
+      try {
+        await inFlight;
+      } catch {
+        // load failure is fine — we just need it settled
+      }
+    }
     const model = this.model;
     this.model = null;
     this.modelLoaded = false;
     this.ort = null;
+    this.initializePromise = null;
     this.embeddingCache.clear();
     this.classEmbeddings.clear();
     if (!model) return;

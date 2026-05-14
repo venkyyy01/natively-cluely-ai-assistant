@@ -15,6 +15,7 @@ import { execSync } from 'child_process';
 const HEALTH_MARKER_FILE = 'last_session_healthy';
 const CRASH_COUNT_FILE = 'startup_crash_count.json';
 const ONNX_FAILURE_FILE = 'onnx_failure_count.json';
+const ONNX_SESSION_SENTINEL = 'onnx_session_active';
 const MAX_CACHE_CLEAR_CRASH_THRESHOLD = 2;
 const MAX_ONNX_FAILURES_BEFORE_DISABLE = 3;
 
@@ -90,6 +91,46 @@ export function shouldDisableOnnx(): boolean {
 }
 
 /**
+ * Write a sentinel file indicating an ONNX session is currently live.
+ * If the process crashes (SIGTRAP) before this is cleared, the next startup
+ * can detect the unclean exit and bump the failure counter.
+ */
+export function markOnnxSessionActive(): void {
+  try {
+    const sentinelPath = path.join(getUserDataPath(), ONNX_SESSION_SENTINEL);
+    fs.writeFileSync(sentinelPath, Date.now().toString());
+  } catch {
+    // Best effort
+  }
+}
+
+/**
+ * Remove the ONNX session sentinel on clean dispose.
+ */
+export function clearOnnxSessionSentinel(): void {
+  try {
+    const sentinelPath = path.join(getUserDataPath(), ONNX_SESSION_SENTINEL);
+    fs.unlinkSync(sentinelPath);
+  } catch {
+    // Best effort — file may not exist
+  }
+}
+
+/**
+ * Check if a previous ONNX session was active during an unclean exit.
+ * Returns true if the sentinel exists (indicating SIGTRAP / crash).
+ */
+function wasOnnxSessionActiveOnCrash(): boolean {
+  try {
+    const sentinelPath = path.join(getUserDataPath(), ONNX_SESSION_SENTINEL);
+    fs.accessSync(sentinelPath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Clear Electron caches known to cause black-screen / renderer compositor issues.
  */
 function clearElectronCaches(): boolean {
@@ -155,6 +196,20 @@ export function runPreReadyHealing(): StartupHealth {
   const shouldClearCaches = crashCount >= MAX_CACHE_CLEAR_CRASH_THRESHOLD;
   const clearedCaches = shouldClearCaches ? clearElectronCaches() : false;
   const killedZombies = killZombieProcesses();
+
+  // NAT-CRASH-FIX: If the previous session crashed with a live ONNX session
+  // (sentinel file present + unclean exit), bump the ONNX failure counter.
+  // This ensures the self-heal logic eventually disables ANE after repeated
+  // SIGTRAP crashes that kill the process before JS can run.
+  if (wasOnnxSessionActiveOnCrash()) {
+    const count = incrementOnnxFailureCount();
+    console.warn(
+      `[StartupHealer] Detected ONNX session crash (sentinel present after unclean exit). ` +
+      `ONNX failure count bumped to ${count}.`,
+    );
+    // Clear the sentinel so we don't double-count on the next startup
+    clearOnnxSessionSentinel();
+  }
 
   if (shouldDisableOnnx()) {
     console.warn(

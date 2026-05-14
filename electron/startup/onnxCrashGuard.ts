@@ -2,6 +2,7 @@ import {
   incrementOnnxFailureCount,
   resetOnnxFailureCount,
   shouldDisableOnnx,
+  markOnnxSessionActive,
 } from './StartupHealer';
 
 /**
@@ -62,6 +63,8 @@ export async function safeCreateOnnxSession(
   try {
     const session = await runtime.InferenceSession.create(modelPath, options);
     onnxSuccessTimestamp = Date.now();
+    // Write sentinel so a SIGTRAP crash is detectable on next startup
+    markOnnxSessionActive();
     console.log('[OnnxCrashGuard] ONNX session created successfully.');
 
     // If we've had enough consecutive successes, reset the failure counter
