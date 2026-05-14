@@ -209,30 +209,36 @@ export const DEFAULT_OPTIMIZATION_FLAGS: OptimizationFlags = {
   // Conscious mode reaction — SetFit reactions (pending model upload).
   useSetFitReactions: false,
 
-  // Pause detection — adaptive pause (pending latency eval).
-  useAdaptivePause: false,
+  // Pause detection — adaptive pause ON: tuner learns false-positive/success rates and
+  // updates PauseDetector thresholds in real time, reducing stale speculation aborts.
+  useAdaptivePause: true,
 
-  // Acceleration — fuzzy speculation (pending recall eval).
-  useFuzzySpeculation: false,
+  // Acceleration — fuzzy speculation ON: cosine threshold 0.92 is conservative enough
+  // to prevent wrong-answer injection while catching minor rephrasing of the same question.
+  useFuzzySpeculation: true,
 
-  // NAT-600: Verification logging ON — needed for ongoing accuracy telemetry.
-  useBayesianAggregation: false,
-  useRAGVerification: false,
+  // NAT-600: Bayesian aggregation ON — verifier votes are weighted by historical accuracy
+  // instead of worst-case OR. RAG verification ON — cross-checks LLM claims against
+  // session transcript to catch hallucinations. Logging stays ON for telemetry.
+  useBayesianAggregation: true,
+  useRAGVerification: true,
   useVerificationLogging: true,
 
   // Conscious — NAT-104: free-form fallback ON by default so parse failures show text, not empty UI
   useFlexibleConsciousResponse: true,
-  useHumanLikeConsciousMode: false,
+  useHumanLikeConsciousMode: true,
   useConsciousRefinement: false,
   useUtteranceLevelTriggering: true,
   useMicTranscriptTriggers: false,
 
-  // Phase 1 flags — NAT-206..506 (all default OFF, promoted after shadow eval)
+  // Phase 1 flags — NAT-206..506
   useTwoTierAnswerContract: process.env['NATIVELY_FORCE_TWO_TIER'] === '1',
   useStructuredProblemExtractor: false,
   useCodeEditorCapture: false,
   useContinuousScreenRAG: false,
-  useRobustJsonStreamParser: false,
+  // NAT-701: Robust incremental JSON stream parser ON — recovers partial structure from
+  // malformed mid-stream JSON (common with Gemini v1alpha), preventing silent empty responses.
+  useRobustJsonStreamParser: true,
 
   // NAT-103: default derived at startup; overridden by user setting.
   // Computed lazily here so this module is safe to import in tests without `os`.
@@ -247,7 +253,9 @@ export const DEFAULT_OPTIMIZATION_FLAGS: OptimizationFlags = {
 
   // Cache config
   maxCacheMemoryMB: 100,
-  semanticCacheThreshold: 0.85,
+  // Lowered from 0.85 → 0.80: interview questions vary in phrasing but share identical
+  // semantics; the TTL + transcript-revision binding (NAT-003) already guard stale hits.
+  semanticCacheThreshold: 0.80,
 
   // Prefetch config
   maxPrefetchPredictions: 5,
@@ -504,10 +512,14 @@ export function applyAdaptiveAcceleration(
       ? userOverrides.maxCacheMemoryMB
       : computedCacheMemory;
 
+  // Scale prefetch predictions on high-capacity machines: more silence-window pre-warming
+  const effectivePrefetchPredictions = profile.tier === 'high-capacity' ? 8 : DEFAULT_OPTIMIZATION_FLAGS.maxPrefetchPredictions;
+
   // Update optimization flags
   setOptimizationFlags({
     workerThreadCount: effectiveWorkerCount,
     maxCacheMemoryMB: effectiveCacheMemory,
+    maxPrefetchPredictions: effectivePrefetchPredictions,
   });
 
   // Apply V8 heap size via command-line switch
