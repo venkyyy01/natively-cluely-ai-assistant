@@ -2743,26 +2743,17 @@ setThemeMode: (mode) => this.themeManager.setMode(mode as import('../ThemeManage
   }
 
   public hideMainWindow(): void {
+    this.reassertUndetectableShellHiding('hideMainWindow')
     this.windowHelper.hideMainWindow()
   }
 
   public showMainWindow(): void {
+    this.reassertUndetectableShellHiding('showMainWindow')
     this.windowHelper.showMainWindow()
   }
 
   public toggleMainWindow(): void {
-    if (this.isUndetectable && this.visibilityIntent !== 'visible_app') {
-      void this.setUndetectableAsync(false).catch((error) => {
-        console.error('[Main] Failed to reveal app by disabling privacy mode:', error)
-      })
-      return
-    }
-
-    // If the window is not visible, show it first instead of sending toggle-expand to a hidden renderer
-    if (!this.isVisible()) {
-      this.showMainWindow()
-      return
-    }
+    this.reassertUndetectableShellHiding('toggleMainWindow')
 
     console.log(
       "Screenshots: ",
@@ -2780,6 +2771,31 @@ setThemeMode: (mode) => this.themeManager.setMode(mode as import('../ThemeManage
     if (targetWindow && !targetWindow.isDestroyed()) {
       targetWindow.webContents.send('toggle-expand');
     }
+  }
+
+  private reassertUndetectableShellHiding(source: string): void {
+    if (!this.isUndetectable) {
+      return
+    }
+
+    this.stealthManager.recordProtectionEvent('protection-apply-started', {
+      source: `AppState.reassertUndetectableShellHiding:${source}`,
+      reason: 'undetectable_shell_hiding',
+      windowRole: 'unknown',
+    })
+    this.syncWindowStealthProtection(true)
+    this.hideTray()
+    this.windowHelper.setSkipTaskbar(true)
+
+    if (process.platform === 'darwin') {
+      try {
+        app.dock.hide()
+      } catch (error) {
+        console.warn('[Stealth] Failed to re-hide Dock while toggling local controls:', error)
+      }
+    }
+
+    KeybindManager.getInstance().setStealthMode(true)
   }
 
   public setWindowDimensions(width: number, height: number): void {

@@ -331,6 +331,72 @@ test('AppState visible_safe_controls intent shows the protected local UI instead
   }
 });
 
+test('AppState Command+B toggles overlay expansion without disabling invisible mode', async () => {
+  const restoreElectron = installElectronMock();
+  const originalNodeEnv = process.env.NODE_ENV;
+  process.env.NODE_ENV = 'test';
+
+  try {
+    const { AppState } = await import('../main');
+    const toggleMainWindow = (AppState.prototype as any).toggleMainWindow as (this: any) => void;
+
+    const calls: string[] = [];
+    const overlayContentWindow = {
+      isDestroyed: () => false,
+      webContents: {
+        send(channel: string) {
+          calls.push(`send:${channel}`);
+        },
+      },
+    };
+
+    const fakeState: any = {
+      isUndetectable: true,
+      visibilityIntent: 'visible_safe_controls',
+      reassertUndetectableShellHiding(source: string) {
+        calls.push(`reassert:${source}`);
+      },
+      setUndetectableAsync() {
+        calls.push('disableInvisibleMode');
+        return Promise.resolve();
+      },
+      screenshotHelper: {
+        getScreenshotQueue: (): unknown[] => [],
+        getExtraScreenshotQueue: (): unknown[] => [],
+      },
+      windowHelper: {
+        getCurrentWindowMode() {
+          calls.push('mode:overlay');
+          return 'overlay';
+        },
+        getOverlayContentWindow() {
+          return overlayContentWindow;
+        },
+        getLauncherContentWindow() {
+          throw new Error('overlay mode should not target the launcher');
+        },
+        hideMainWindow() {
+          calls.push('hideMainWindow');
+        },
+        showMainWindow() {
+          calls.push('showMainWindow');
+        },
+      },
+    };
+
+    toggleMainWindow.call(fakeState);
+
+    assert.deepEqual(calls, [
+      'reassert:toggleMainWindow',
+      'mode:overlay',
+      'send:toggle-expand',
+    ]);
+  } finally {
+    restoreElectron();
+    process.env.NODE_ENV = originalNodeEnv;
+  }
+});
+
 test('AppState ensureVisibleSafeControls restores a hidden protected main window', async () => {
   const restoreElectron = installElectronMock();
   const originalNodeEnv = process.env.NODE_ENV;
