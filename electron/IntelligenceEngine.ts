@@ -19,7 +19,20 @@ import {
   SetFitIntentProvider,
   type CoordinatedIntentResult,
 } from './llm/providers';
-import { ConsciousContextComposer, ConsciousIntentService, ConsciousOrchestrator, ConsciousPreparationCoordinator, ConsciousResponseCoordinator, ConsciousVerifier, ConsciousVerifierLLM, FallbackExecutor, ResponseFingerprinter, sanitizeProfileData } from './conscious';
+import {
+  ConsciousContextComposer,
+  ConsciousIntentService,
+  ConsciousOrchestrator,
+  ConsciousPreparationCoordinator,
+  ConsciousResponseCoordinator,
+  ConsciousVerifier,
+  ConsciousVerifierLLM,
+  FallbackExecutor,
+  ResponseFingerprinter,
+  resolveConsciousQuestion,
+  sanitizeProfileData,
+  validateConsciousCandidate,
+} from './conscious';
 import { ParallelContextAssembler, ContextAssemblyInput, ContextAssemblyOutput } from './cache/ParallelContextAssembler';
 import { getOptimizationFlags, isOptimizationActive } from './config/optimizations';
 import { Metrics } from './runtime/Metrics';
@@ -443,6 +456,11 @@ export class IntelligenceEngine extends EventEmitter {
             this,
             this.setMode.bind(this),
             this.consciousResponseFingerprinter,
+            ({ answer, question, metadata }) => this.validateWhatToSayAnswerForEmission(
+                answer,
+                question,
+                metadata?.route ?? 'conscious_answer',
+            ),
         );
     }
 
@@ -486,6 +504,53 @@ export class IntelligenceEngine extends EventEmitter {
             turns.push(`[INTERVIEWER]: ${latestQuestion.trim()}`);
         }
         return turns.join('\n');
+    }
+
+    private resolveWhatToSayQuestion(explicitQuestion?: string): string | null {
+        const lastInterim = this.session.getLastInterimInterviewer()?.text;
+        const activeThread = this.session.getActiveReasoningThread();
+        const latestReaction = this.session.getLatestQuestionReaction() as { question?: string } | null | undefined;
+        const latestHypothesis = this.session.getLatestAnswerHypothesis() as { question?: string } | null | undefined;
+        const resolution = resolveConsciousQuestion([
+            explicitQuestion,
+            lastInterim,
+            this.session.getLastInterviewerTurn(),
+            latestReaction?.question,
+            latestHypothesis?.question,
+            activeThread?.lastQuestion,
+        ]);
+
+        return resolution.question;
+    }
+
+    private validateWhatToSayAnswerForEmission(
+        answer: string,
+        question: string,
+        route: AnswerRoute,
+        imagePaths?: string[],
+    ): { ok: boolean; reasons: string[] } {
+        const verdict = validateConsciousCandidate({
+            answer,
+            question,
+            route,
+            imagePaths,
+        });
+
+        if (!verdict.ok) {
+            this.recordSessionEvent('conscious_verifier_result', {
+                question,
+                route,
+                verifier: {
+                    deterministic: 'fail',
+                    provenance: 'skipped',
+                    reasons: verdict.reasons,
+                },
+                suppressed: true,
+            });
+            return { ok: false, reasons: verdict.reasons };
+        }
+
+        return { ok: true, reasons: [] };
     }
 
     private computeEvidenceHash(input: {
@@ -851,10 +916,23 @@ export class IntelligenceEngine extends EventEmitter {
         priorCooldownReason?: CooldownSuppressionReason,
         sourceUtteranceId?: string,
     ): Promise<string | null> {
-        const cooldownQuestion = question?.trim()
-            || this.session.getLastInterimInterviewer()?.text?.trim()
-            || this.session.getLastInterviewerTurn()
-            || undefined;
+        const initialResolvedQuestion = this.resolveWhatToSayQuestion(question);
+        if (!initialResolvedQuestion) {
+            console.warn('[INTELLIGENCE] Suppressing what-to-say: no resolved interviewer question available.', {
+                explicitQuestion: question,
+                hasInterim: !!this.session.getLastInterimInterviewer()?.text?.trim(),
+                hasLastInterviewerTurn: !!this.session.getLastInterviewerTurn(),
+            });
+            this.recordSessionEvent('conscious_route_decision', {
+                question: null,
+                selectedRoute: 'suppressed',
+                effectiveRoute: 'suppressed',
+                reason: 'missing_resolved_question',
+                transcriptRevision: this.session.getTranscriptRevision(),
+            });
+            return null;
+        }
+        const cooldownQuestion = initialResolvedQuestion;
         let totalCooldownSuppressedMs = priorCooldownSuppressedMs;
         let cooldownReason = priorCooldownReason;
         let cooldownDeferDepth = 0;
@@ -1017,13 +1095,25 @@ export class IntelligenceEngine extends EventEmitter {
                     return "Please configure your API Keys in Settings to use this feature.";
                 }
                 console.log('[INTELLIGENCE] 🔄 Using fallback answerLLM');
+                const fallbackQuestion = this.resolveWhatToSayQuestion(question) ?? initialResolvedQuestion;
                 const context = this.session.getFormattedContext(180);
-                let answerResult = await this.answerLLM.generate(question || '', context);
+                let answerResult = await this.answerLLM.generate(fallbackQuestion, context);
                 
                 let answer: string | null = null;
                 if (answerResult.success && answerResult.data) {
                     answer = answerResult.data;
                     // No clamping - prompt enforces brevity
+                    const qualityVerdict = this.validateWhatToSayAnswerForEmission(
+                        answer,
+                        fallbackQuestion,
+                        'fast_standard_answer',
+                        imagePaths,
+                    );
+                    if (!qualityVerdict.ok) {
+                        console.warn('[INTELLIGENCE] Suppressing fallback answer that failed quality gate:', qualityVerdict.reasons);
+                        this.setMode('idle');
+                        return null;
+                    }
                     this.session.addAssistantMessage(answer);
                     const metadata = this.buildSuggestedAnswerMetadata({
                         route: 'fast_standard_answer',
@@ -1031,7 +1121,7 @@ export class IntelligenceEngine extends EventEmitter {
                         fallbackOccurred: false,
                         schemaVersion: 'standard_answer_v1',
                         evidenceHash: this.computeEvidenceHash({
-                            question: question || 'inferred',
+                            question: fallbackQuestion,
                             contextItems: recentContextForEvidence,
                             route: 'fast_standard_answer',
                             threadAction: 'ignore',
@@ -1042,7 +1132,7 @@ export class IntelligenceEngine extends EventEmitter {
                         cooldownReason: metadataCooldownReason,
                         contextItems: recentContextForEvidence,
                     });
-                    this.emitSuggestedAnswer(answer, question || 'inferred', confidence, metadata);
+                    this.emitSuggestedAnswer(answer, fallbackQuestion, confidence, metadata);
                 }
                 
                 this.setMode('idle');
@@ -1051,9 +1141,9 @@ export class IntelligenceEngine extends EventEmitter {
 
             const contextItems = this.session.getContext(180);
             const lastInterim = this.session.getLastInterimInterviewer();
-            const interimQuestion = lastInterim?.text?.trim() || '';
-            const baseQuestion = question || interimQuestion || this.session.getLastInterviewerTurn() || '';
-            const resolvedQuestion = baseQuestion;
+            const resolvedQuestion = this.resolveWhatToSayQuestion(question) ?? initialResolvedQuestion;
+            const baseQuestion = resolvedQuestion;
+            const questionLabel = resolvedQuestion;
             const knowledgeOrchestrator = this.llmHelper.getKnowledgeOrchestrator?.();
             const knowledgeStatus = knowledgeOrchestrator?.getStatus?.();
             const rawProfileData = knowledgeOrchestrator?.getProfileData?.();
@@ -1112,7 +1202,7 @@ export class IntelligenceEngine extends EventEmitter {
             const requestId = this.latencyTracker.start(effectiveRoute, capability, {
                 transcriptRevision: this.session.getTranscriptRevision(),
                 fallbackOccurred: false,
-                interimQuestionSubstitutionOccurred: !question && !!interimQuestion,
+                interimQuestionSubstitutionOccurred: !question && !!lastInterim?.text?.trim(),
                 profileEnrichmentState: isProfileEnrichmentRoute ? 'attempted' : undefined,
                 consciousPath: effectiveRoute === 'conscious_answer'
                     ? preRouteConsciousDecision.threadAction === 'continue'
@@ -1153,7 +1243,7 @@ export class IntelligenceEngine extends EventEmitter {
                             this.latencyTracker.markFirstStreamingUpdate(requestId);
                         }
 
-                        this.emit('suggested_answer_token', chunk, question || 'inferred', confidence);
+                        this.emit('suggested_answer_token', chunk, questionLabel, confidence);
                         return !shouldSuppressVisibleWork();
                     };
                     let speculativeAnswer = speculativePreview.text;
@@ -1230,11 +1320,23 @@ export class IntelligenceEngine extends EventEmitter {
                         return null;
                     }
 
+                    const speculativeVerdict = this.validateWhatToSayAnswerForEmission(
+                        speculativeAnswer,
+                        questionLabel,
+                        currentRouteForMetadata,
+                        imagePaths,
+                    );
+                    if (!speculativeVerdict.ok) {
+                        console.warn('[INTELLIGENCE] Suppressing speculative answer that failed quality gate:', speculativeVerdict.reasons);
+                        this.latencyTracker.completeSuppressed(requestId, speculativeVerdict.reasons.join(',') || 'quality_gate');
+                        this.setMode('idle');
+                        return null;
+                    }
                     this.session.addAssistantMessage(speculativeAnswer);
                     this.session.pushUsage({
                         type: 'assist',
                         timestamp: Date.now(),
-                        question: question || 'What to Answer',
+                        question: questionLabel,
                         answer: speculativeAnswer,
                     });
                     const metadata = this.buildSuggestedAnswerMetadata({
@@ -1243,7 +1345,7 @@ export class IntelligenceEngine extends EventEmitter {
                         fallbackOccurred: false,
                         schemaVersion: 'standard_answer_v1',
                         evidenceHash: this.computeEvidenceHash({
-                            question: question || 'What to Answer',
+                            question: questionLabel,
                             contextItems: contextItems,
                             route: currentRouteForMetadata,
                             threadAction: activeThreadAction,
@@ -1262,7 +1364,7 @@ export class IntelligenceEngine extends EventEmitter {
                     if (shouldSuppressVisibleWork()) {
                         return abandonCurrentRequest();
                     }
-                    this.emitSuggestedAnswer(speculativeAnswer, question || 'What to Answer', confidence, metadata);
+                    this.emitSuggestedAnswer(speculativeAnswer, questionLabel, confidence, metadata);
                     const latencySnapshot = this.latencyTracker.complete(requestId);
                     console.log('[IntelligenceEngine] Answer latency snapshot:', latencySnapshot);
                     this.setMode('idle');
@@ -1277,11 +1379,23 @@ export class IntelligenceEngine extends EventEmitter {
                     return abandonCurrentRequest();
                 }
                 if (cachedAnswer) {
+                    const cachedVerdict = this.validateWhatToSayAnswerForEmission(
+                        cachedAnswer,
+                        questionLabel,
+                        currentRouteForMetadata,
+                        imagePaths,
+                    );
+                    if (!cachedVerdict.ok) {
+                        console.warn('[INTELLIGENCE] Suppressing cached answer that failed quality gate:', cachedVerdict.reasons);
+                        this.latencyTracker.completeSuppressed(requestId, cachedVerdict.reasons.join(',') || 'quality_gate');
+                        this.setMode('idle');
+                        return null;
+                    }
                     this.session.addAssistantMessage(cachedAnswer);
                     this.session.pushUsage({
                         type: 'assist',
                         timestamp: Date.now(),
-                        question: question || 'What to Answer',
+                        question: questionLabel,
                         answer: cachedAnswer,
                     });
                     const metadata = this.buildSuggestedAnswerMetadata({
@@ -1290,7 +1404,7 @@ export class IntelligenceEngine extends EventEmitter {
                         fallbackOccurred: false,
                         schemaVersion: 'standard_answer_v1',
                         evidenceHash: this.computeEvidenceHash({
-                            question: question || 'What to Answer',
+                            question: questionLabel,
                             contextItems: contextItems,
                             route: currentRouteForMetadata,
                             threadAction: activeThreadAction,
@@ -1302,7 +1416,7 @@ export class IntelligenceEngine extends EventEmitter {
                         contextItems,
                     });
                     this.annotateLatencyQualityMetadata(requestId, metadata, contextItems);
-                    this.emitSuggestedAnswer(cachedAnswer, question || 'What to Answer', confidence, metadata);
+                    this.emitSuggestedAnswer(cachedAnswer, questionLabel, confidence, metadata);
                     this.latencyTracker.complete(requestId);
                     this.setMode('idle');
                     return cachedAnswer;
@@ -1350,7 +1464,7 @@ export class IntelligenceEngine extends EventEmitter {
                             this.latencyTracker.markFirstStreamingUpdate(requestId);
                         }
                     }
-                    this.emit('suggested_answer_token', token, question || 'inferred', confidence);
+                    this.emit('suggested_answer_token', token, questionLabel, confidence);
                     fullAnswer += token;
                 }
 
@@ -1362,6 +1476,19 @@ export class IntelligenceEngine extends EventEmitter {
                     fullAnswer = "Could you repeat that? I want to make sure I address your question properly.";
                 }
 
+                const fullAnswerVerdict = this.validateWhatToSayAnswerForEmission(
+                    fullAnswer,
+                    questionLabel,
+                    currentRouteForMetadata,
+                    imagePaths,
+                );
+                if (!fullAnswerVerdict.ok) {
+                    console.warn('[INTELLIGENCE] Suppressing generated answer that failed quality gate:', fullAnswerVerdict.reasons);
+                    this.latencyTracker.completeSuppressed(requestId, fullAnswerVerdict.reasons.join(',') || 'quality_gate');
+                    this.setMode('idle');
+                    return null;
+                }
+
                 if (useConsciousAcceleration) {
                     accelerationManager!.getEnhancedCache().set(cacheKey, fullAnswer);
                 }
@@ -1370,7 +1497,7 @@ export class IntelligenceEngine extends EventEmitter {
                 this.session.pushUsage({
                     type: 'assist',
                     timestamp: Date.now(),
-                    question: question || 'What to Answer',
+                    question: questionLabel,
                     answer: fullAnswer
                 });
 
@@ -1380,7 +1507,7 @@ export class IntelligenceEngine extends EventEmitter {
                     fallbackOccurred: false,
                     schemaVersion: 'standard_answer_v1',
                     evidenceHash: this.computeEvidenceHash({
-                        question: question || 'What to Answer',
+                        question: questionLabel,
                         contextItems: contextItems,
                         route: currentRouteForMetadata,
                         threadAction: activeThreadAction,
@@ -1392,7 +1519,7 @@ export class IntelligenceEngine extends EventEmitter {
                     contextItems,
                 });
                 this.annotateLatencyQualityMetadata(requestId, metadata, contextItems);
-                this.emitSuggestedAnswer(fullAnswer, question || 'What to Answer', confidence, metadata);
+                this.emitSuggestedAnswer(fullAnswer, questionLabel, confidence, metadata);
                 const latencySnapshot = this.latencyTracker.complete(requestId);
                 console.log('[IntelligenceEngine] Answer latency snapshot:', latencySnapshot);
 
@@ -1485,7 +1612,7 @@ export class IntelligenceEngine extends EventEmitter {
                         fallbackOccurred: false,
                         schemaVersion: 'conscious_mode_v1',
                         evidenceHash: this.computeEvidenceHash({
-                            question: question || 'What to Answer',
+                            question: questionLabel,
                             contextItems: contextItems,
                             route: currentRouteForMetadata,
                             threadAction: activeThreadAction,
@@ -1510,7 +1637,7 @@ export class IntelligenceEngine extends EventEmitter {
                     });
                     return consciousResponseCoordinator.completeStructuredAnswer({
                         requestId,
-                        questionLabel: question || 'What to Answer',
+                        questionLabel,
                         confidence,
                         fullAnswer: continuationResult.fullAnswer,
                         structuredResponse: continuationResult.structuredResponse,
@@ -1591,7 +1718,7 @@ export class IntelligenceEngine extends EventEmitter {
                     onEarlyReasoning: (text) => {
                         if (!shouldSuppressVisibleWork()) {
                             this.latencyTracker.markFirstStreamingUpdate(requestId);
-                            this.emit('suggested_answer_token', text, resolvedQuestion || 'inferred', intentConfidence);
+                            this.emit('suggested_answer_token', text, questionLabel, intentConfidence);
                         }
                     },
                 });
@@ -1612,7 +1739,7 @@ export class IntelligenceEngine extends EventEmitter {
                         prefetchedIntentUsed: preparationResult.prefetchedIntentUsed,
                         schemaVersion: 'conscious_mode_v1',
                         evidenceHash: this.computeEvidenceHash({
-                            question: question || 'What to Answer',
+                            question: questionLabel,
                             contextItems: preparationResult.contextItems,
                             route: currentRouteForMetadata,
                             threadAction: activeThreadAction,
@@ -1637,7 +1764,7 @@ export class IntelligenceEngine extends EventEmitter {
                     });
                     return consciousResponseCoordinator.completeStructuredAnswer({
                         requestId,
-                        questionLabel: question || 'What to Answer',
+                        questionLabel,
                         confidence,
                         fullAnswer: consciousResult.fullAnswer,
                         structuredResponse: consciousResult.structuredResponse,
@@ -1676,11 +1803,23 @@ export class IntelligenceEngine extends EventEmitter {
                 return abandonCurrentRequest();
             }
             if (cachedAnswer) {
+                const cachedVerdict = this.validateWhatToSayAnswerForEmission(
+                    cachedAnswer,
+                    questionLabel,
+                    currentRouteForMetadata,
+                    imagePaths,
+                );
+                if (!cachedVerdict.ok) {
+                    console.warn('[INTELLIGENCE] Suppressing cached answer that failed quality gate:', cachedVerdict.reasons);
+                    this.latencyTracker.completeSuppressed(requestId, cachedVerdict.reasons.join(',') || 'quality_gate');
+                    this.setMode('idle');
+                    return null;
+                }
                 this.session.addAssistantMessage(cachedAnswer);
                 this.session.pushUsage({
                     type: 'assist',
                     timestamp: Date.now(),
-                    question: question || 'What to Answer',
+                    question: questionLabel,
                     answer: cachedAnswer,
                 });
                 const metadata = this.buildSuggestedAnswerMetadata({
@@ -1695,7 +1834,7 @@ export class IntelligenceEngine extends EventEmitter {
                     prefetchedIntentUsed: preparationResult.prefetchedIntentUsed,
                     schemaVersion: currentRouteForMetadata === 'conscious_answer' ? 'conscious_mode_v1' : 'standard_answer_v1',
                     evidenceHash: this.computeEvidenceHash({
-                        question: question || 'What to Answer',
+                        question: questionLabel,
                         contextItems: preparationResult.contextItems,
                         route: currentRouteForMetadata,
                         threadAction: activeThreadAction,
@@ -1707,7 +1846,7 @@ export class IntelligenceEngine extends EventEmitter {
                     contextItems: preparationResult.contextItems,
                 });
                 this.annotateLatencyQualityMetadata(requestId, metadata, preparationResult.contextItems);
-                this.emitSuggestedAnswer(cachedAnswer, question || 'What to Answer', confidence, metadata);
+                this.emitSuggestedAnswer(cachedAnswer, questionLabel, confidence, metadata);
                 if (isProfileEnrichmentRoute && !profileEnrichmentFailed) {
                     this.latencyTracker.markProfileEnrichmentState(requestId, 'completed');
                 }
@@ -1759,7 +1898,7 @@ export class IntelligenceEngine extends EventEmitter {
                         this.latencyTracker.markFirstStreamingUpdate(requestId);
                     }
                 }
-                this.emit('suggested_answer_token', token, question || 'inferred', confidence);
+                this.emit('suggested_answer_token', token, questionLabel, confidence);
                 fullAnswer += token;
             }
 
@@ -1773,6 +1912,19 @@ export class IntelligenceEngine extends EventEmitter {
 
             // No post-processing - prompt enforces brevity, code blocks preserved
 
+            const fullAnswerVerdict = this.validateWhatToSayAnswerForEmission(
+                fullAnswer,
+                questionLabel,
+                currentRouteForMetadata,
+                imagePaths,
+            );
+            if (!fullAnswerVerdict.ok) {
+                console.warn('[INTELLIGENCE] Suppressing generated answer that failed quality gate:', fullAnswerVerdict.reasons);
+                this.latencyTracker.completeSuppressed(requestId, fullAnswerVerdict.reasons.join(',') || 'quality_gate');
+                this.setMode('idle');
+                return null;
+            }
+
             if (useConsciousAcceleration) {
                 accelerationManager!.getEnhancedCache().set(answerCacheKey, fullAnswer);
             }
@@ -1781,7 +1933,7 @@ export class IntelligenceEngine extends EventEmitter {
             this.session.pushUsage({
                 type: 'assist',
                 timestamp: Date.now(),
-                question: question || 'What to Answer',
+                question: questionLabel,
                 answer: fullAnswer
             });
 
@@ -1797,7 +1949,7 @@ export class IntelligenceEngine extends EventEmitter {
                 prefetchedIntentUsed: preparationResult.prefetchedIntentUsed,
                 schemaVersion: currentRouteForMetadata === 'conscious_answer' ? 'conscious_mode_v1' : 'standard_answer_v1',
                 evidenceHash: this.computeEvidenceHash({
-                    question: question || 'What to Answer',
+                    question: questionLabel,
                     contextItems: preparationResult.contextItems,
                     route: currentRouteForMetadata,
                     threadAction: activeThreadAction,
@@ -1809,7 +1961,7 @@ export class IntelligenceEngine extends EventEmitter {
                 contextItems: preparationResult.contextItems,
             });
             this.annotateLatencyQualityMetadata(requestId, metadata, preparationResult.contextItems);
-            this.emitSuggestedAnswer(fullAnswer, question || 'What to Answer', confidence, metadata);
+            this.emitSuggestedAnswer(fullAnswer, questionLabel, confidence, metadata);
             if (isProfileEnrichmentRoute) {
                 if (!profileEnrichmentFailed) {
                     this.latencyTracker.markProfileEnrichmentState(requestId, 'completed');

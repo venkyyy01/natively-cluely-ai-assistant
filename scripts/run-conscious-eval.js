@@ -33,7 +33,7 @@ async function main() {
   const verifier = buildVerifier();
   const { results, summary } = await runConsciousEvalHarness({ verifier });
   const replay = await runConsciousReplayHarness({ verifier });
-  const e2e = runConsciousE2EHarness({});
+  const e2e = await runConsciousE2EHarness({});
 
   const printFamilyBreakdown = (byFamily) => {
     const families = Object.keys(byFamily).sort();
@@ -94,12 +94,11 @@ async function main() {
     console.log(`Qualifies: ${result.route.preRouteDecision.qualifies}`);
   }
 
-  if (summary.failed > 0 || replay.summary.failed > 0 || e2e.summary.failed > 0) {
-    process.exitCode = 1;
-  }
+  const failed = summary.failed > 0 || replay.summary.failed > 0 || e2e.summary.failed > 0;
+  process.exit(failed ? 1 : 0);
 }
 
 main().catch((error) => {
   console.error('Conscious eval failed:', error);
-  process.exitCode = 1;
+  process.exit(1);
 });

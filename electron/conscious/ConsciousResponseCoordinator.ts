@@ -11,6 +11,11 @@ type EventEmitterLike = {
   emit(event: 'suggested_answer_token', answer: string, question: string, confidence: number): boolean;
   emit(event: 'suggested_answer', answer: string, question: string, confidence: number, metadata?: SuggestedAnswerMetadata): boolean;
 };
+type AnswerEmissionGuard = (input: {
+  answer: string;
+  question: string;
+  metadata?: SuggestedAnswerMetadata;
+}) => { ok: boolean; reasons: string[] };
 
 interface ConsciousSessionLike {
   addAssistantMessage(answer: string): void;
@@ -32,6 +37,7 @@ export class ConsciousResponseCoordinator {
     private readonly emitter: EventEmitterLike,
     private readonly setMode: IntelligenceModeSetter,
     private readonly fingerprinter?: ResponseFingerprinter,
+    private readonly answerEmissionGuard?: AnswerEmissionGuard,
   ) {}
 
   completeStructuredAnswer(input: {
@@ -42,6 +48,19 @@ export class ConsciousResponseCoordinator {
     structuredResponse?: ConsciousModeStructuredResponse;
     metadata?: SuggestedAnswerMetadata;
   }): string {
+    const guardVerdict = this.answerEmissionGuard?.({
+      answer: input.fullAnswer,
+      question: input.questionLabel,
+      metadata: input.metadata,
+    });
+    if (guardVerdict && !guardVerdict.ok) {
+      this.latencyTracker.mark(input.requestId, 'response.quality_suppressed');
+      this.latencyTracker.completeSuppressed(input.requestId, guardVerdict.reasons.join(',') || 'quality_gate');
+      console.warn('[ConsciousResponseCoordinator] Suppressing answer that failed quality gate:', guardVerdict.reasons);
+      this.setMode('idle');
+      return input.fullAnswer;
+    }
+
     // NAT-048: enforce response dedupe at the emit boundary. We check
     // BEFORE switching modes / firing tokens so a suppressed duplicate
     // never leaks a partial UI state. The first answer of a turn won't

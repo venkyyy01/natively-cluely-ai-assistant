@@ -1,4 +1,5 @@
 import { app } from 'electron';
+import os from 'os';
 import path from 'path';
 import {
   ModelVersion,
@@ -30,6 +31,19 @@ import {
 export { ModelVersion, ModelFamily, TextModelFamily, TieredModels } from './modelVersionTypes';
 export { parseModelVersion, compareVersions, versionDistance, classifyModel, classifyTextModel } from './modelVersionUtils';
 
+function resolveModelVersionPersistPath(): string {
+  const getPath = app?.getPath;
+  if (typeof getPath === 'function') {
+    try {
+      return path.join(getPath.call(app, 'userData'), PERSISTENCE_FILENAME);
+    } catch (error) {
+      console.warn('[ModelVersionManager] Electron app.getPath unavailable, using temp persistence path:', error);
+    }
+  }
+
+  return path.join(os.tmpdir(), 'natively-model-versions', PERSISTENCE_FILENAME);
+}
+
 export class ModelVersionManager {
   private state: PersistedState;
   private persistPath: string;
@@ -42,7 +56,7 @@ export class ModelVersionManager {
   private groqApiKey: string | null = null;
 
   constructor() {
-    this.persistPath = path.join(app.getPath('userData'), PERSISTENCE_FILENAME);
+    this.persistPath = resolveModelVersionPersistPath();
     this.state = loadPersistedState(this.persistPath);
   }
 

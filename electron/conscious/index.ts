@@ -33,6 +33,14 @@ export { ConsciousContextComposer, type ConsciousContextComposition } from './Co
 export { ConsciousIntentService, type ResolvedIntentResult, type ConsciousIntentResolution } from './ConsciousIntentService';
 export { ConsciousPreparationCoordinator, type ConsciousPreparationResult } from './ConsciousPreparationCoordinator';
 export { ConsciousResponseCoordinator } from './ConsciousResponseCoordinator';
+export {
+  normalizeConsciousQuestionCandidate,
+  resolveConsciousQuestion,
+  validateConsciousCandidate,
+  type ConsciousCandidateValidationInput,
+  type ConsciousCandidateValidationResult,
+  type ConsciousQuestionResolution,
+} from './ConsciousQualityGate';
 export { ConsciousProvenanceVerifier, type ConsciousProvenanceVerdict } from './ConsciousProvenanceVerifier';
 export { ConsciousVerifier, type ConsciousVerificationResult } from './ConsciousVerifier';
 export { ConsciousVerifierLLM } from './ConsciousVerifierLLM';

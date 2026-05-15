@@ -91,6 +91,17 @@ class ImmediateStreamingLLMHelper {
   }
 }
 
+class StaticStreamingLLMHelper {
+  public calls = 0;
+
+  constructor(private readonly answer: string) {}
+
+  async *streamChat(_message: string, _imagePaths?: string[], _context?: string, _prompt?: string): AsyncGenerator<string> {
+    this.calls += 1;
+    yield this.answer;
+  }
+}
+
 function addTurn(session: SessionTracker, speaker: 'interviewer' | 'assistant', text: string, timestamp: number): void {
   session.handleTranscript({ speaker, text, timestamp, final: true });
 }
@@ -258,6 +269,87 @@ test('stealth containment blocks new what-to-say generation while containment is
   assert.equal(result, null);
   assert.equal(llmHelper.calls, 0);
   assert.equal(session.getLastAssistantMessage(), null);
+});
+
+test('what-to-say suppresses unresolved manual triggers instead of emitting placeholder answers', async () => {
+  const session = new SessionTracker();
+  const llmHelper = new ImmediateStreamingLLMHelper();
+  const engine = new IntelligenceEngine(llmHelper as any, session);
+  const finalAnswers: string[] = [];
+
+  engine.on('suggested_answer', (answer: string) => {
+    finalAnswers.push(answer);
+  });
+
+  const result = await engine.runWhatShouldISay(undefined, 0.9);
+
+  assert.equal(result, null);
+  assert.equal(llmHelper.calls, 0);
+  assert.deepEqual(finalAnswers, []);
+  assert.equal(session.getLastAssistantMessage(), null);
+});
+
+test('what-to-say uses the resolved transcript question as the display and usage label', async () => {
+  const session = new SessionTracker();
+  const llmHelper = new ImmediateStreamingLLMHelper();
+  const engine = new IntelligenceEngine(llmHelper as any, session);
+  const labels: string[] = [];
+
+  engine.on('suggested_answer', (_answer: string, question: string) => {
+    labels.push(question);
+  });
+
+  addTurn(session, 'interviewer', 'How should we handle retries?', Date.now());
+  const result = await engine.runWhatShouldISay(undefined, 0.9);
+
+  assert.equal(result, 'immediate answer');
+  assert.deepEqual(labels, ['How should we handle retries?']);
+  assert.equal(session.getFullUsage().at(-1)?.question, 'How should we handle retries?');
+});
+
+test('what-to-say suppresses persona leakage before final answer persistence', async () => {
+  const session = new SessionTracker();
+  const llmHelper = new StaticStreamingLLMHelper("I'm ChatGPT, an OpenAI model, and I would answer this generally.");
+  const engine = new IntelligenceEngine(llmHelper as any, session);
+  const finalAnswers: string[] = [];
+
+  engine.on('suggested_answer', (answer: string) => {
+    finalAnswers.push(answer);
+  });
+
+  addTurn(session, 'interviewer', 'Tell me about yourself.', Date.now());
+  const result = await engine.runWhatShouldISay(undefined, 0.9);
+
+  assert.equal(result, null);
+  assert.deepEqual(finalAnswers, []);
+  assert.equal(session.getLastAssistantMessage(), null);
+  assert.equal(session.getFullUsage().length, 0);
+});
+
+test('what-to-say suppresses coding-shaped answers for non-coding questions', async () => {
+  const session = new SessionTracker();
+  const llmHelper = new StaticStreamingLLMHelper([
+    '```python',
+    'class Solution:',
+    '    def solve(self):',
+    '        pass',
+    '```',
+    'Time complexity is O(n). Space complexity is O(1).',
+  ].join('\n'));
+  const engine = new IntelligenceEngine(llmHelper as any, session);
+  const finalAnswers: string[] = [];
+
+  engine.on('suggested_answer', (answer: string) => {
+    finalAnswers.push(answer);
+  });
+
+  addTurn(session, 'interviewer', 'Tell me about yourself.', Date.now());
+  const result = await engine.runWhatShouldISay(undefined, 0.9);
+
+  assert.equal(result, null);
+  assert.deepEqual(finalAnswers, []);
+  assert.equal(session.getLastAssistantMessage(), null);
+  assert.equal(session.getFullUsage().length, 0);
 });
 
 test('stealth containment cancels in-flight what-to-say work before any answer is emitted', async () => {
