@@ -1,4 +1,4 @@
-import type { StealthManager } from './StealthManager';
+import type { NativeStealthBindings, StealthManager } from './StealthManager';
 import type { MonitoringDetector, DetectedThreat } from './MonitoringDetector';
 import type { SupervisorBus } from '../runtime/SupervisorBus';
 import type { StealthTickCoordinator } from './StealthTickCoordinator';
@@ -34,6 +34,8 @@ export interface EnforcementLoopOptions {
   killSwitch?: Partial<KillSwitchOptions>;
   /** Optional StealthTickCoordinator for centralized tick scheduling. When provided, registers handlers instead of using independent setInterval calls. */
   tickCoordinator?: StealthTickCoordinator;
+  /** Optional native module override for deterministic tests. Runtime uses the cached loader. */
+  nativeModule?: NativeStealthBindings | null;
 }
 
 interface ViolationRecord {
@@ -47,6 +49,9 @@ const DEFAULT_SCK_EXCLUSION_INTERVAL_MS = 2000;
 /** Number of consecutive failures before triggering emergency protection */
 const SCK_MAX_CONSECUTIVE_FAILURES = 3;
 
+/** Back off after repeated permanent SCK verification failures to avoid hammering WindowServer. */
+const SCK_PERSISTENT_FAILURE_BACKOFF_MS = 15_000;
+
 export class ContinuousEnforcementLoop {
   private readonly stealthManager: StealthManager;
   private readonly monitoringDetector: MonitoringDetector;
@@ -56,6 +61,7 @@ export class ContinuousEnforcementLoop {
   private readonly exitFn: (code: number, reason: string) => void;
   private readonly killSwitch: KillSwitchOptions;
   private readonly tickCoordinator: StealthTickCoordinator | null;
+  private readonly nativeModuleOverride: NativeStealthBindings | null | undefined;
 
   private windowProtectionTimer: NodeJS.Timeout | null = null;
   private processDetectionTimer: NodeJS.Timeout | null = null;
@@ -76,6 +82,7 @@ export class ContinuousEnforcementLoop {
 
   // SCK exclusion: track consecutive failures per window number
   private readonly sckConsecutiveFailures = new Map<number, number>();
+  private readonly sckBackoffUntil = new Map<number, number>();
   private sckExclusionFailureCount = 0;
   private sckExclusionReapplyCount = 0;
 
@@ -94,6 +101,7 @@ export class ContinuousEnforcementLoop {
     this.intervals = options.intervals;
     this.logger = options.logger ?? console;
     this.tickCoordinator = options.tickCoordinator ?? null;
+    this.nativeModuleOverride = options.nativeModule;
 
     // Resolve kill-switch configuration
     const strictMode = options.killSwitch?.strictMode ??
@@ -308,11 +316,12 @@ export class ContinuousEnforcementLoop {
     this.sckExclusionRunning = true;
 
     try {
-      const nativeModule = loadNativeStealthModule({ retryOnFailure: false });
+      const nativeModule = this.getNativeModule();
       if (!nativeModule?.verifySckExclusion || !nativeModule?.applySckExclusion) {
         return;
       }
 
+      const now = Date.now();
       const managedWindows = this.stealthManager.getManagedWindowNumbers();
       // Clean up failure tracking for windows that are no longer managed
       const activeWindowNumbers = new Set(managedWindows.map(w => w.windowNumber));
@@ -321,14 +330,25 @@ export class ContinuousEnforcementLoop {
           this.sckConsecutiveFailures.delete(windowNumber);
         }
       }
+      for (const windowNumber of this.sckBackoffUntil.keys()) {
+        if (!activeWindowNumbers.has(windowNumber)) {
+          this.sckBackoffUntil.delete(windowNumber);
+        }
+      }
 
-      for (const { windowNumber, win } of managedWindows) {
+      for (const { windowNumber } of managedWindows) {
         try {
+          const backoffUntil = this.sckBackoffUntil.get(windowNumber) ?? 0;
+          if (backoffUntil > now) {
+            continue;
+          }
+
           const isExcluded = nativeModule.verifySckExclusion(windowNumber);
 
           if (isExcluded) {
-            // Verification passed — reset consecutive failure count
+            // Verification passed — reset consecutive failure/backoff state.
             this.sckConsecutiveFailures.delete(windowNumber);
+            this.sckBackoffUntil.delete(windowNumber);
             continue;
           }
 
@@ -340,6 +360,11 @@ export class ContinuousEnforcementLoop {
 
           try {
             nativeModule.applySckExclusion(windowNumber);
+            if (nativeModule.verifySckExclusion(windowNumber)) {
+              this.sckConsecutiveFailures.delete(windowNumber);
+              this.sckBackoffUntil.delete(windowNumber);
+              continue;
+            }
           } catch (applyError) {
             this.logger.warn(
               `[ContinuousEnforcementLoop] SCK exclusion re-apply failed for window ${windowNumber}:`,
@@ -353,8 +378,9 @@ export class ContinuousEnforcementLoop {
           this.sckExclusionFailureCount++;
 
           if (failures >= SCK_MAX_CONSECUTIVE_FAILURES) {
+            this.sckBackoffUntil.set(windowNumber, now + SCK_PERSISTENT_FAILURE_BACKOFF_MS);
             this.logger.warn(
-              `[ContinuousEnforcementLoop] SCK exclusion failed ${failures} consecutive times for window ${windowNumber} — degrading without hiding windows`
+              `[ContinuousEnforcementLoop] SCK exclusion failed ${failures} consecutive times for window ${windowNumber} — backing off ${SCK_PERSISTENT_FAILURE_BACKOFF_MS}ms without hiding windows`
             );
             this.sckConsecutiveFailures.delete(windowNumber);
           }
@@ -369,8 +395,9 @@ export class ContinuousEnforcementLoop {
           this.sckExclusionFailureCount++;
 
           if (failures >= SCK_MAX_CONSECUTIVE_FAILURES) {
+            this.sckBackoffUntil.set(windowNumber, now + SCK_PERSISTENT_FAILURE_BACKOFF_MS);
             this.logger.warn(
-              `[ContinuousEnforcementLoop] SCK exclusion check failed ${failures} consecutive times for window ${windowNumber} — degrading without hiding windows`
+              `[ContinuousEnforcementLoop] SCK exclusion check failed ${failures} consecutive times for window ${windowNumber} — backing off ${SCK_PERSISTENT_FAILURE_BACKOFF_MS}ms without hiding windows`
             );
             this.sckConsecutiveFailures.delete(windowNumber);
           }
@@ -381,6 +408,14 @@ export class ContinuousEnforcementLoop {
     } finally {
       this.sckExclusionRunning = false;
     }
+  }
+
+  private getNativeModule(): NativeStealthBindings | null {
+    if (this.nativeModuleOverride !== undefined) {
+      return this.nativeModuleOverride;
+    }
+
+    return loadNativeStealthModule({ retryOnFailure: false });
   }
 
   private async handleCriticalThreat(threat: DetectedThreat): Promise<void> {

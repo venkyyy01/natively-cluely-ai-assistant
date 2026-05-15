@@ -203,11 +203,13 @@ export class StealthManager extends EventEmitter {
     return Array.from(this.stealthDegradationWarnings);
   }
 
-  private addWarning(warning: string): void {
+  private addWarning(warning: string): boolean {
     if (!this.stealthDegradationWarnings.has(warning)) {
       this.stealthDegradationWarnings.add(warning);
       this.emit('stealth-degraded', this.getStealthDegradationWarnings());
+      return true;
     }
+    return false;
   }
 
   private clearWarning(warning: string): void {
@@ -703,7 +705,6 @@ export class StealthManager extends EventEmitter {
 
       try {
         this.applyLayer0(record.win, true);
-        this.applySckExclusion(record.win);
       } catch (error) {
         this.logger.warn('[StealthManager] reapplyProtectionLayers failed for window:', error);
       }
@@ -1015,6 +1016,7 @@ export class StealthManager extends EventEmitter {
 
     try {
       nativeModule.applySckExclusion(windowNumber);
+      this.clearWarning('sck_exclusion_failed');
     } catch (error) {
       this.logger.warn('[StealthManager] SCK exclusion failed:', error);
       this.addWarning('sck_exclusion_failed');
@@ -2088,9 +2090,11 @@ for window in windows:
       const macos15ProtectionVerified = sckExclusionVerified || virtualDisplayVerified;
       if (!macos15ProtectionVerified) {
         if (this.isEnabled()) {
-          this.addWarning('virtual_display_required');
-          this.addWarning('stealth_verification_failed');
-          this.logger.warn('[StealthManager] macOS 15+ stealth verification failed: SCK exclusion or virtual display isolation is required for ScreenCaptureKit invisibility');
+          const addedVirtualDisplayWarning = this.addWarning('virtual_display_required');
+          const addedStealthWarning = this.addWarning('stealth_verification_failed');
+          if (addedVirtualDisplayWarning || addedStealthWarning) {
+            this.logger.warn('[StealthManager] macOS 15+ stealth verification failed: SCK exclusion or virtual display isolation is required for ScreenCaptureKit invisibility');
+          }
         }
         this.recordProtectionEvent('verification-failed', {
           ...this.getProtectionEventContext(win, {}, 'StealthManager.verifyStealth'),
@@ -2139,8 +2143,9 @@ for window in windows:
 
         const sckExclusionVerified = nativeModule.verifySckExclusion(windowNumber);
         if (!sckExclusionVerified) {
-          this.logger.warn('[StealthManager] macOS 15+ SCK exclusion verification failed: window is not excluded from ScreenCaptureKit enumeration');
-          this.addWarning('sck_exclusion_unverified');
+          if (this.addWarning('sck_exclusion_unverified')) {
+            this.logger.warn('[StealthManager] macOS 15+ SCK exclusion verification failed: window is not excluded from ScreenCaptureKit enumeration');
+          }
           this.recordProtectionEvent('verification-failed', {
             ...this.getProtectionEventContext(win, {}, 'StealthManager.verifyStealth'),
             metadata: {
@@ -2175,8 +2180,9 @@ for window in windows:
           ? virtualDisplayVerified
           : sharingType === 0 || privatePathVerified;
         if (!verified && this.isEnabled()) {
-          this.addWarning('stealth_verification_failed');
-          this.logger.warn('[StealthManager] macOS stealth verification failed, maintaining Layer 0 protection');
+          if (this.addWarning('stealth_verification_failed')) {
+            this.logger.warn('[StealthManager] macOS stealth verification failed, maintaining Layer 0 protection');
+          }
         } else {
           this.clearWarning('stealth_verification_failed');
         }
@@ -2196,8 +2202,9 @@ for window in windows:
         const affinity = nativeModule.verifyWindowsStealthState(handle);
         const verified = affinity === 0x11 || affinity === 0x01;
         if (!verified && this.isEnabled()) {
-          this.addWarning('stealth_verification_failed');
-          this.logger.warn('[StealthManager] Windows stealth verification failed, maintaining Layer 0 protection');
+          if (this.addWarning('stealth_verification_failed')) {
+            this.logger.warn('[StealthManager] Windows stealth verification failed, maintaining Layer 0 protection');
+          }
         } else {
           this.clearWarning('stealth_verification_failed');
         }

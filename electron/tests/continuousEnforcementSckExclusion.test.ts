@@ -232,3 +232,78 @@ test('getSckExclusionFailureCount returns 0 initially', () => {
   assert.equal(loop.getSckExclusionFailureCount(), 0);
   assert.equal(loop.getSckExclusionReapplyCount(), 0);
 });
+
+test('SCK poll verifies re-apply before counting a failure', async () => {
+  const win1 = createMockWindow(1);
+  const stealthManager = createMockStealthManager({
+    isMacOS15Plus: true,
+    managedWindows: [{ windowNumber: 100, win: win1 }],
+  });
+  let verifyCalls = 0;
+  let applyCalls = 0;
+
+  const loop = new ContinuousEnforcementLoop({
+    stealthManager: stealthManager as never,
+    monitoringDetector: createMockMonitoringDetector() as never,
+    bus: createMockBus() as never,
+    intervals: {
+      windowProtectionMs: 100000,
+      processDetectionMs: 100000,
+      disguiseValidationMs: 100000,
+    },
+    logger: silentLogger,
+    nativeModule: {
+      verifySckExclusion() {
+        verifyCalls += 1;
+        return verifyCalls > 1;
+      },
+      applySckExclusion() {
+        applyCalls += 1;
+      },
+    },
+  });
+
+  await (loop as any).pollSckExclusion();
+
+  assert.equal(applyCalls, 1);
+  assert.equal(loop.getSckExclusionReapplyCount(), 1);
+  assert.equal(loop.getSckExclusionFailureCount(), 0);
+});
+
+test('SCK poll backs off after repeated permanent verification failures', async () => {
+  const win1 = createMockWindow(1);
+  const stealthManager = createMockStealthManager({
+    isMacOS15Plus: true,
+    managedWindows: [{ windowNumber: 100, win: win1 }],
+  });
+  let applyCalls = 0;
+
+  const loop = new ContinuousEnforcementLoop({
+    stealthManager: stealthManager as never,
+    monitoringDetector: createMockMonitoringDetector() as never,
+    bus: createMockBus() as never,
+    intervals: {
+      windowProtectionMs: 100000,
+      processDetectionMs: 100000,
+      disguiseValidationMs: 100000,
+    },
+    logger: silentLogger,
+    nativeModule: {
+      verifySckExclusion() {
+        return false;
+      },
+      applySckExclusion() {
+        applyCalls += 1;
+      },
+    },
+  });
+
+  await (loop as any).pollSckExclusion();
+  await (loop as any).pollSckExclusion();
+  await (loop as any).pollSckExclusion();
+  await (loop as any).pollSckExclusion();
+
+  assert.equal(applyCalls, 3);
+  assert.equal(loop.getSckExclusionReapplyCount(), 3);
+  assert.equal(loop.getSckExclusionFailureCount(), 3);
+});

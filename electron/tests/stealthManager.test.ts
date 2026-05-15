@@ -1542,6 +1542,34 @@ describe('StealthManager', () => {
     assert.ok(!manager.getStealthDegradationWarnings().includes('virtual_display_required'));
   });
 
+  it('keeps high-frequency reapplyProtectionLayers off the SCK native tag path', () => {
+    const win = new FakeWindow();
+    let sckApplyCalls = 0;
+    const manager = new StealthManager(
+      { enabled: true },
+      {
+        platform: 'darwin',
+        logger: silentLogger,
+        macosVersion: { major: 15, minor: 4 },
+        nativeModule: {
+          applySckExclusion() {
+            sckApplyCalls += 1;
+          },
+          verifySckExclusion() {
+            return true;
+          },
+        },
+      } as any
+    );
+
+    manager.applyToWindow(win as any, true, { role: 'primary' });
+    manager.reapplyProtectionLayers();
+    manager.reapplyProtectionLayers();
+
+    assert.strictEqual(sckApplyCalls, 1);
+    assert.deepStrictEqual(win.contentProtectionCalls, [true, true, true]);
+  });
+
   it('verifyStealth rejects Electron capture exclusion alone on macOS 15+', async () => {
     const win = new FakeWindow();
     const manager = new StealthManager(
@@ -1567,6 +1595,40 @@ describe('StealthManager', () => {
     assert.strictEqual(manager.verifyStealth(win as any), false);
     assert.ok(manager.getStealthDegradationWarnings().includes('virtual_display_required'));
     assert.ok(manager.getStealthDegradationWarnings().includes('stealth_verification_failed'));
+  });
+
+  it('logs repeated macOS 15+ verification failures only on degradation state change', () => {
+    const win = new FakeWindow();
+    const warnings: string[] = [];
+    const manager = new StealthManager(
+      { enabled: true },
+      {
+        platform: 'darwin',
+        logger: {
+          log() {},
+          error() {},
+          warn(message: unknown) {
+            warnings.push(String(message));
+          },
+        },
+        macosVersion: { major: 15, minor: 4 },
+        nativeModule: {
+          applySckExclusion() {},
+          verifySckExclusion() {
+            return false;
+          },
+        },
+      } as any
+    );
+
+    manager.applyToWindow(win as any, true, { role: 'primary' });
+    manager.verifyStealth(win as any);
+    manager.verifyStealth(win as any);
+
+    assert.equal(
+      warnings.filter((message) => message.includes('macOS 15+ stealth verification failed')).length,
+      1,
+    );
   });
 
   it('requires virtual display isolation in addition to Layer-0 capture exclusion on macOS 15+', () => {
