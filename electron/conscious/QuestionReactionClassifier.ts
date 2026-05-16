@@ -145,7 +145,7 @@ export class QuestionReactionClassifier {
   private classifyWithRegex(normalized: string, lower: string, targetFacets: string[]): QuestionReaction {
     const cues: string[] = [];
 
-    if (includesAny(lower, [/(switch gears|different topic|move on to|new topic|something else|let(?:'s| us) talk about)/i])) {
+    if (includesAny(lower, [/(switch gears|different topic|move on to|new topic|something else|let(?:'s| us) talk about|next question|moving on)/i])) {
       return {
         kind: 'topic_shift',
         confidence: 0.94,
@@ -155,7 +155,7 @@ export class QuestionReactionClassifier {
       };
     }
 
-    if (includesAny(lower, [/(repeat that|say that again|can you repeat)/i])) {
+    if (includesAny(lower, [/(repeat that|say that again|can you repeat|one more time|come again)/i])) {
       return {
         kind: 'repeat_request',
         confidence: 0.96,
@@ -165,7 +165,7 @@ export class QuestionReactionClassifier {
       };
     }
 
-    if (includesAny(lower, [/(tradeoff|pros and cons|downside|upside)/i])) {
+    if (includesAny(lower, [/(tradeoff|trade-off|pros and cons|downside|upside|disadvantage|advantage|cost of|what do you lose|what do you give up)/i])) {
       cues.push('tradeoff_language');
       return {
         kind: 'tradeoff_probe',
@@ -176,7 +176,7 @@ export class QuestionReactionClassifier {
       };
     }
 
-    if (includesAny(lower, [/(metric|measure|latency|throughput|success|kpi|watch first|monitor)/i])) {
+    if (includesAny(lower, [/(metric|measure|latency|throughput|success|kpi|watch first|monitor|slo|sla|p99|p95|how would you know|how do you tell|alert|dashboard)/i])) {
       cues.push('metric_language');
       return {
         kind: 'metric_probe',
@@ -187,7 +187,7 @@ export class QuestionReactionClassifier {
       };
     }
 
-    if (includesAny(lower, [/(for example|give me an example|example|walk me through a specific)/i])) {
+    if (includesAny(lower, [/(for example|give me an example|example|walk me through a specific|concrete case|real scenario|in practice)/i])) {
       cues.push('example_language');
       return {
         kind: 'example_request',
@@ -198,7 +198,7 @@ export class QuestionReactionClassifier {
       };
     }
 
-    if (includesAny(lower, [/(why|why not|why this|why that|why .* over .*|defend|justify)/i])) {
+    if (includesAny(lower, [/(why|why not|why this|why that|why .* over .*|defend|justify|convince me|what made you choose|what's your reasoning)/i])) {
       cues.push('challenge_language');
       return {
         kind: 'challenge',
@@ -209,7 +209,7 @@ export class QuestionReactionClassifier {
       };
     }
 
-    if (includesAny(lower, [/(what if|how would that change|and then|what happens|how would you handle|edge case)/i])) {
+    if (includesAny(lower, [/(what if|how would that change|and then|what happens|how would you handle|edge case|failure|goes wrong|breaks|crash|timeout|overload|spike|burst)/i])) {
       cues.push('deep_dive_language');
       return {
         kind: 'deep_dive',
@@ -220,7 +220,7 @@ export class QuestionReactionClassifier {
       };
     }
 
-    if (includesAny(lower, [/(what do you mean|clarify|can you explain|can you unpack|how so)/i])) {
+    if (includesAny(lower, [/(what do you mean|clarify|can you explain|can you unpack|how so|what exactly|be more specific|which part)/i])) {
       cues.push('clarification_language');
       return {
         kind: 'clarification',
@@ -231,8 +231,13 @@ export class QuestionReactionClassifier {
       };
     }
 
+    // Enhanced generic follow-up detection: also check for implicit continuation signals
     const wordCount = normalized.split(/\s+/).filter(Boolean).length;
-    const shouldContinueThread = wordCount >= 3 && hasGenericFollowUpCue(lower);
+    const hasImplicitContinuation = includesAny(lower, [
+      /\b(and|but|so|also|what about|how about|regarding|concerning)\b/i,
+      /\b(still|also|instead|too|another|more|further|additionally)\b/i,
+    ]);
+    const shouldContinueThread = (wordCount >= 3 && hasGenericFollowUpCue(lower)) || hasImplicitContinuation;
 
     return {
       kind: 'generic_follow_up',

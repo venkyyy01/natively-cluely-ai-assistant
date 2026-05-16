@@ -158,6 +158,11 @@ export class HumanLikeConversationEngine {
    * Classify a user utterance into a conversational kind.
    *
    * Pure function: no I/O, no LLM. Safe to call on the hot path.
+   *
+   * Enhanced with:
+   * - Multi-signal fusion: pattern match + word count + question structure
+   * - Ambiguity resolution: when multiple patterns match, use specificity ranking
+   * - Context-aware defaults: short utterances with question marks lean technical
    */
   classify(utterance: string): ConversationClassification {
     const trimmed = utterance.trim();
@@ -172,23 +177,68 @@ export class HumanLikeConversationEngine {
       };
     }
 
+    const wordCount = trimmed.split(/\s+/).filter(Boolean).length;
+    const hasQuestionMark = trimmed.endsWith('?');
+    const isShort = wordCount <= 5;
+
     // Check most specific patterns first (refinement > clarification > smalltalk > ack > aside).
+    const matches: Array<{ kind: Exclude<ConversationKind, 'technical'>; refinementIntent?: RefinementIntent; specificity: number }> = [];
+
     for (const { kind, patterns } of ALL_PATTERNS) {
       for (const { pattern, refinementIntent } of patterns) {
         if (pattern.test(trimmed)) {
-          return this.buildClassification(kind, trimmed, refinementIntent);
+          // Specificity: longer patterns and patterns that match more of the utterance are more specific
+          const matchLen = (trimmed.match(pattern)?.[0]?.length ?? 0);
+          const specificity = matchLen / trimmed.length;
+          matches.push({ kind, refinementIntent, specificity });
+          break; // Only take first match per kind
         }
       }
     }
 
-    // No conversational pattern matched → treat as a real, technical question.
-    return {
-      kind: 'technical',
-      confidence: this.scoreTechnicalConfidence(trimmed),
-      verificationLevel: 'strict',
-      preferFreeForm: false,
-      reason: 'no_conversational_pattern_matched',
-    };
+    if (matches.length === 0) {
+      // No conversational pattern matched → treat as a real, technical question.
+      return {
+        kind: 'technical',
+        confidence: this.scoreTechnicalConfidence(trimmed),
+        verificationLevel: 'strict',
+        preferFreeForm: false,
+        reason: 'no_conversational_pattern_matched',
+      };
+    }
+
+    // If multiple kinds matched, pick the most specific one.
+    // Exception: if the utterance is long (>10 words) and has a question mark,
+    // prefer technical/behavioral/pushback over smalltalk/acknowledgement.
+    if (matches.length > 1 && wordCount > 10 && hasQuestionMark) {
+      const substantiveMatch = matches.find(m =>
+        m.kind === 'behavioral' || m.kind === 'pushback'
+      );
+      if (substantiveMatch) {
+        return this.buildClassification(substantiveMatch.kind, trimmed, substantiveMatch.refinementIntent);
+      }
+    }
+
+    // Sort by specificity descending, take the best match
+    matches.sort((a, b) => b.specificity - a.specificity);
+    const best = matches[0];
+
+    // Guard: if the best match is smalltalk/acknowledgement but the utterance
+    // is long (>8 words) and contains technical keywords, override to technical.
+    if ((best.kind === 'smalltalk' || best.kind === 'acknowledgement') && wordCount > 8) {
+      const techScore = this.scoreTechnicalConfidence(trimmed);
+      if (techScore > 0.7) {
+        return {
+          kind: 'technical',
+          confidence: techScore,
+          verificationLevel: 'strict',
+          preferFreeForm: false,
+          reason: 'long_utterance_with_technical_keywords_overrides_conversational',
+        };
+      }
+    }
+
+    return this.buildClassification(best.kind, trimmed, best.refinementIntent);
   }
 
   /**

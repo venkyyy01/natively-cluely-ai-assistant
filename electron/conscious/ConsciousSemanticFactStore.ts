@@ -1,4 +1,5 @@
 import type { QuestionReaction } from './QuestionReactionClassifier';
+import { isBehavioralQuestionText } from '../ConsciousMode';
 
 export interface ConsciousSemanticFact {
   category: 'project' | 'experience' | 'skill' | 'requirement' | 'company_context' | 'identity';
@@ -6,7 +7,18 @@ export interface ConsciousSemanticFact {
   text: string;
   tags: string[];
   score?: number;
+  /** Inverse document frequency weight — rarer facts score higher when matched. */
+  idfWeight?: number;
 }
+
+/** Stopwords excluded from scoring to reduce noise. */
+const SCORING_STOPWORDS = new Set([
+  'the', 'and', 'for', 'with', 'that', 'this', 'from', 'have', 'your', 'about',
+  'would', 'what', 'when', 'where', 'which', 'into', 'while', 'there', 'their',
+  'then', 'than', 'been', 'were', 'will', 'could', 'should', 'does', 'did',
+  'are', 'how', 'why', 'can', 'you', 'our', 'but', 'not', 'use', 'using',
+  'also', 'just', 'like', 'make', 'need', 'want', 'work', 'working',
+]);
 
 function tokenize(value: string): string[] {
   return Array.from(new Set(
@@ -14,23 +26,49 @@ function tokenize(value: string): string[] {
       .toLowerCase()
       .replace(/[^a-z0-9\s]/g, ' ')
       .split(/\s+/)
-      .filter((token) => token.length >= 3)
+      .filter((token) => token.length >= 3 && !SCORING_STOPWORDS.has(token))
   ));
 }
 
-function overlapScore(tokens: string[], text: string, tags: string[]): number {
+/**
+ * TF-IDF-inspired scoring: tokens that appear in fewer facts are weighted higher.
+ * This prevents common terms (e.g. "system", "design") from dominating retrieval
+ * and surfaces genuinely relevant facts.
+ */
+function tfidfScore(tokens: string[], text: string, tags: string[], idfWeights: Map<string, number>): number {
   const haystack = `${text} ${tags.join(' ')}`.toLowerCase();
   let score = 0;
   for (const token of tokens) {
     if (haystack.includes(token)) {
-      score += 1;
+      score += idfWeights.get(token) ?? 1;
     }
   }
   return score;
 }
 
+/**
+ * Bigram overlap bonus: consecutive token pairs that match get extra weight.
+ * This captures phrase-level relevance (e.g. "rate limiter" vs just "rate" + "limiter" separately).
+ */
+function bigramBonus(tokens: string[], text: string): number {
+  if (tokens.length < 2) return 0;
+  const lowered = text.toLowerCase();
+  let bonus = 0;
+  for (let i = 0; i < tokens.length - 1; i++) {
+    const bigram = `${tokens[i]} ${tokens[i + 1]}`;
+    if (lowered.includes(bigram)) {
+      bonus += 1.5;
+    }
+  }
+  return bonus;
+}
+
 function isBehavioralQuestion(question: string): boolean {
   return isBehavioralQuestionText(question);
+}
+
+function isSystemDesignQuestion(question: string): boolean {
+  return /(design|architecture|distributed|cache|queue|throughput|latency|database|api|microservice|scal(?:e|ing)|rate limiter|failover|partition)/i.test(question);
 }
 
 function fallbackCategoryPriority(category: ConsciousSemanticFact['category']): number {
@@ -52,8 +90,35 @@ function fallbackCategoryPriority(category: ConsciousSemanticFact['category']): 
   }
 }
 
+/**
+ * Category relevance boost based on question type.
+ * System design questions boost project/skill facts; behavioral boosts experience.
+ */
+function categoryRelevanceBoost(category: ConsciousSemanticFact['category'], question: string): number {
+  if (isBehavioralQuestion(question)) {
+    switch (category) {
+      case 'experience': return 2.0;
+      case 'project': return 1.5;
+      case 'identity': return 1.2;
+      default: return 1.0;
+    }
+  }
+  if (isSystemDesignQuestion(question)) {
+    switch (category) {
+      case 'project': return 1.8;
+      case 'skill': return 1.5;
+      case 'company_context': return 1.3;
+      case 'requirement': return 1.2;
+      default: return 1.0;
+    }
+  }
+  return 1.0;
+}
+
 export class ConsciousSemanticFactStore {
   private facts: ConsciousSemanticFact[] = [];
+  /** IDF weights computed once at seed time for efficient retrieval. */
+  private idfWeights: Map<string, number> = new Map();
 
   seedFromProfileData(profileData: any): void {
     const facts: ConsciousSemanticFact[] = [];
@@ -115,13 +180,43 @@ export class ConsciousSemanticFactStore {
     }
 
     this.facts = facts;
+    this.computeIdfWeights();
+  }
+
+  /**
+   * Compute IDF weights across all facts. Tokens that appear in fewer facts
+   * get higher weight, making retrieval more discriminative.
+   */
+  private computeIdfWeights(): void {
+    const docFrequency = new Map<string, number>();
+    const totalDocs = this.facts.length || 1;
+
+    for (const fact of this.facts) {
+      const allTokens = new Set([...tokenize(fact.text), ...fact.tags]);
+      for (const token of allTokens) {
+        docFrequency.set(token, (docFrequency.get(token) || 0) + 1);
+      }
+    }
+
+    this.idfWeights = new Map();
+    for (const [token, df] of docFrequency) {
+      // Standard IDF: log(N / df) + 1 (smoothed)
+      this.idfWeights.set(token, Math.log(totalDocs / df) + 1);
+    }
   }
 
   getTopFacts(input: { question: string; reaction?: QuestionReaction | null; limit?: number }): ConsciousSemanticFact[] {
     const limit = input.limit || 5;
-    const tokens = tokenize(`${input.question} ${(input.reaction?.targetFacets || []).join(' ')} ${input.reaction?.kind || ''}`);
+    const queryText = `${input.question} ${(input.reaction?.targetFacets || []).join(' ')} ${input.reaction?.kind || ''}`;
+    const tokens = tokenize(queryText);
+
     const scored = this.facts
-      .map((fact) => ({ ...fact, score: overlapScore(tokens, fact.text, fact.tags) }))
+      .map((fact) => {
+        const baseScore = tfidfScore(tokens, fact.text, fact.tags, this.idfWeights);
+        const bigram = bigramBonus(tokens, fact.text);
+        const categoryBoost = categoryRelevanceBoost(fact.category, input.question);
+        return { ...fact, score: (baseScore + bigram) * categoryBoost };
+      })
       .filter((fact) => (fact.score || 0) > 0)
       .sort((a, b) => (b.score || 0) - (a.score || 0));
 
@@ -168,4 +263,3 @@ export class ConsciousSemanticFactStore {
     return lines.join('\n');
   }
 }
-import { isBehavioralQuestionText } from '../ConsciousMode';
