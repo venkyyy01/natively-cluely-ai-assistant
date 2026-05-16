@@ -374,7 +374,7 @@ require_packaged_native_ocr_exports() {
     local probe_script
     probe_script='
         const path = require("path");
-        const bin = path.resolve(process.argv[2]);
+        const bin = path.resolve(process.argv[1]);
         const native = require(bin);
         const want = ["recognizeTextMacos", "recognizeTextWindows"];
         for (const name of want) {
