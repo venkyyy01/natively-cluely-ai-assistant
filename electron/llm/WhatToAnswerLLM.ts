@@ -143,6 +143,13 @@ ANSWER SHAPE: ${intentResult.answerShape}
           /** Called when openingReasoning is extractable from partial JSON.
            *  Enables early display before full response is parsed. */
           onEarlyReasoning?: (text: string) => void;
+          /**
+           * Optional abort signal threaded through the OCR cascade so a
+           * cancelled conscious-mode turn doesn't keep paying ~15 s of
+           * Tesseract CPU per image after the user has moved on. The
+           * signal is also forwarded to the underlying streamChat call.
+           */
+          abortSignal?: AbortSignal;
         }
     ): Promise<ConsciousModeStructuredResponse> {
         let full = "";
@@ -174,13 +181,21 @@ ANSWER SHAPE: ${intentResult.answerShape}
         let ocrUsed = false;
         if (imagePaths?.length) {
             try {
-                const resolved = await this.llmHelper.resolveScreenshotTextForNonVision(imagePaths);
+                const resolved = await this.llmHelper.resolveScreenshotTextForNonVision(
+                    imagePaths,
+                    options?.abortSignal,
+                );
                 if (resolved.requiresOcr) {
                     ocrUsed = true;
                     ocrText = resolved.text;
                     effectiveImagePaths = [];
                 }
             } catch (err) {
+                if (options?.abortSignal?.aborted) {
+                    // Caller already cancelled — propagate so the orchestrator
+                    // can short-circuit the rest of the turn cleanly.
+                    throw err;
+                }
                 console.warn('[WhatToAnswerLLM] OCR resolution failed; falling back to vision path:', err);
             }
         }
@@ -277,9 +292,13 @@ ANSWER SHAPE: ${intentResult.answerShape}
             {
             skipKnowledgeInterception: true,
             qualityTier: 'verify',
+            abortSignal: options?.abortSignal,
         });
 
         for await (const chunk of stream) {
+            if (options?.abortSignal?.aborted) {
+                break;
+            }
             full += chunk;
 
             // NAT-L4: Try to extract openingReasoning from partial JSON

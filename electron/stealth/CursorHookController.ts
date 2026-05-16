@@ -171,14 +171,20 @@ export class CursorHookController {
       const Ctor = native?.CursorHook ?? native?.MacosCursorHook;
       if (!Ctor) {
         console.warn('[CursorHookController] Native CursorHook export missing — feature unavailable');
-        this.nativeUnavailable = true;
+        // Native module loaded but the symbol is missing — that's a build/version
+        // mismatch, not a permission issue. Mark sticky so we don't keep re-probing
+        // a binding that fundamentally can't expose what we need.
+        this.unavailability = 'module-missing';
         return null;
       }
       this.hook = new Ctor();
       return this.hook;
     } catch (err) {
+      // require('natively-audio') threw or `new Ctor()` threw. Either way the
+      // binding is broken in this build; mark sticky so we don't keep paying
+      // the require() cost on every enable() call.
       console.warn('[CursorHookController] Failed to load native module:', err);
-      this.nativeUnavailable = true;
+      this.unavailability = 'module-missing';
       return null;
     }
   }

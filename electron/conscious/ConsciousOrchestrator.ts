@@ -782,6 +782,14 @@ export class ConsciousOrchestrator {
     turnPlan?: ConsciousTurnPlan;
     /** NAT-304: When set, prepends <problem_context> block to the Tier-A prompt. */
     codingProblem?: CodingProblem | null;
+    /**
+     * Caller-provided abort signal so a cancelled what-to-say turn
+     * shortcircuits the OCR cascade and the structured-reasoning stream
+     * instead of running them to completion off-thread. Optional for
+     * backwards compatibility with test fixtures that hand-roll the
+     * orchestrator.
+     */
+    abortSignal?: AbortSignal;
   }): Promise<ConsciousExecutionResult> {
     if (!input.route.qualifies) {
       return this.skip();
@@ -828,6 +836,7 @@ export class ConsciousOrchestrator {
               console.log(`[ConsciousOrchestrator] Early reasoning: "${text.substring(0, 60)}..."`);
               input.onEarlyReasoning?.(text);
             },
+            abortSignal: input.abortSignal,
           }
         );
       } else if (input.answerLLM) {

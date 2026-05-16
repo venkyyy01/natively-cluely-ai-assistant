@@ -1742,6 +1742,7 @@ export class IntelligenceEngine extends EventEmitter {
                     answerLLM: this.answerLLM,
                     codingProblem: this.session.getCodingProblem(),
                     turnPlan: consciousTurnPlan,
+                    abortSignal: whatToSayAbortController.signal,
                     onEarlyReasoning: (text) => {
                         if (!shouldSuppressVisibleWork()) {
                             this.latencyTracker.markFirstStreamingUpdate(requestId);
