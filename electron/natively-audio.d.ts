@@ -10,4 +10,12 @@ declare module 'natively-audio' {
     export function removeWindowsWindowStealth(handle: Buffer): void;
     export function applyWindowsNoActivate(handle: Buffer): void;
     export function clearWindowsNoActivate(handle: Buffer): void;
+    export class MacosCursorHook {
+        constructor();
+        setOverlayBounds(x: number, y: number, width: number, height: number): void;
+        setActive(active: boolean): void;
+        start(callback: (jsonPayload: string) => void): void;
+        stop(): void;
+        isActive(): boolean;
+    }
 }

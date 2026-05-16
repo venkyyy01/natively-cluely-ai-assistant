@@ -208,6 +208,42 @@ export declare class StealthKeyMonitor {
    */
   isTapActive(): boolean
 }
+/**
+ * JS-facing macOS cursor hook controller.
+ *
+ * Lifecycle:
+ *   const hook = new MacosCursorHook();
+ *   hook.setOverlayBounds(x, y, width, height);
+ *   hook.setActive(true);                    // arms the tap (overlay visible)
+ *   hook.start(event => { ... });            // creates tap, throws if Accessibility denied
+ *   ...
+ *   hook.setActive(false);                   // disarms tap (overlay hidden)
+ *   hook.stop();                             // tears tap down
+ */
+export declare class MacosCursorHook {
+  constructor()
+  /**
+   * Update the overlay bounding rectangle in global screen coordinates.
+   * Called whenever the overlay moves, resizes, or changes display.
+   */
+  setOverlayBounds(x: number, y: number, width: number, height: number): void
+  /**
+   * Toggle whether the hook should suppress events when the cursor enters
+   * the overlay. The tap stays installed either way; setActive=false just
+   * makes the hot path a passthrough so we don't pay the round-trip cost
+   * of starting / stopping the tap on every overlay show/hide.
+   */
+  setActive(active: boolean): void
+  /**
+   * Start the cursor tap. Returns an error if Accessibility permission is
+   * not granted — the JS layer should treat this as "feature unavailable"
+   * and fall back gracefully.
+   */
+  start(callback: (...args: any[]) => any): void
+  stop(): void
+  /** Whether the tap is currently running. */
+  isActive(): boolean
+}
 export declare class SystemAudioCapture {
   constructor(deviceId?: string | undefined | null, outputSampleRate?: number | undefined | null)
   getSampleRate(): number

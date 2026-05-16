@@ -4,6 +4,7 @@ import { AppState } from "./main"
 import path from "node:path"
 import { StealthManager } from "./stealth/StealthManager"
 import { StealthRuntime } from "./stealth/StealthRuntime"
+import { MacosCursorController } from "./stealth/MacosCursorController"
 import { attachRendererBridgeMonitor } from "./runtime/rendererBridgeHealth"
 import { resolveRendererPreloadPath, resolveRendererStartUrl } from "./runtime/windowAssetPaths"
 import { attachRevealSafetyNet, attachWindowCrashRecovery } from "./startup/rendererBridgeRecovery"
@@ -77,6 +78,11 @@ export class WindowHelper {
   // Cached HWND buffer so we can clear the WS_EX_NOACTIVATE bits on dispose
   // without having to read getNativeWindowHandle on a destroyed BrowserWindow.
   private overlayHwndBuffer: Buffer | null = null
+  // CURSOR-FREEZE (macOS only): controls the CGEventTap-based hardware
+  // cursor freeze. Lifecycle: created lazily on the first enable call after
+  // the overlay window exists. Persists across overlay show/hide cycles.
+  private cursorController: MacosCursorController | null = null
+  private cursorHookEnabled: boolean = false
 
   // Initialize with explicit number type and 0 value
   private screenWidth: number = 0
@@ -711,6 +717,46 @@ export class WindowHelper {
     return this.overlayInteractive
   }
 
+  /**
+   * Enable or disable the macOS cursor freeze hook. When enabled and the
+   * overlay is visible, the OS hardware cursor is frozen at the overlay's
+   * boundary by a CGEventTap and the renderer paints a software cursor in
+   * its place. The software cursor lives entirely inside the
+   * capture-excluded overlay surface, so screen-share captures only see
+   * the frozen hardware cursor at the overlay edge.
+   *
+   * No-op on non-macOS platforms.
+   *
+   * Returns true if the controller is now installed (or was already);
+   * false if Accessibility permission is denied or the native binding
+   * is unavailable. Callers should surface that to the user with a
+   * clear message ("Grant Accessibility permission to enable cursor
+   * stealth") rather than silently re-trying.
+   */
+  public setCursorHookEnabled(enabled: boolean): boolean {
+    if (process.platform !== 'darwin') return false
+    this.cursorHookEnabled = enabled
+    if (!enabled) {
+      this.cursorController?.disable()
+      return false
+    }
+
+    if (!this.overlayWindow || this.overlayWindow.isDestroyed()) {
+      // Defer until the overlay window is created. createWindow() will pick
+      // up the cursorHookEnabled flag and call enable() then.
+      return true
+    }
+
+    if (!this.cursorController) {
+      this.cursorController = new MacosCursorController(this.overlayWindow)
+    }
+    return this.cursorController.enable()
+  }
+
+  public isCursorHookEnabled(): boolean {
+    return this.cursorHookEnabled && (this.cursorController?.isEnabled() ?? false)
+  }
+
   public createWindow(): void {
     if (this.launcherWindow !== null) return // Already created
 
@@ -1049,6 +1095,17 @@ this.launcherContentWindow = this.launcherWindow
     }
 
     this.setOverlayClickthrough(this.overlayClickthroughEnabled)
+
+    // CURSOR-FREEZE: if the user enabled the cursor hook before the overlay
+    // existed, install it now. Otherwise the controller is created lazily on
+    // the first setCursorHookEnabled(true) call.
+    if (process.platform === 'darwin' && this.cursorHookEnabled && !this.overlayWindow.isDestroyed()) {
+      if (!this.cursorController) {
+        this.cursorController = new MacosCursorController(this.overlayWindow)
+      }
+      this.cursorController.enable()
+    }
+
     if (this.launcherRuntime) {
       console.log('[WindowHelper] Waiting for first launcher frame before showing stealth shell');
     }
@@ -1095,6 +1152,11 @@ this.launcherContentWindow = this.launcherWindow
         this.overlayWindow.close()
       }
       this.overlayHwndBuffer = null
+      // Tear down the cursor controller — its CGEventTap holds a reference
+      // to the overlay window via the bounds-listeners. Calling disable()
+      // detaches listeners and stops the tap thread cleanly.
+      this.cursorController?.disable()
+      this.cursorController = null
       this.overlayRuntime?.destroy()
       this.overlayRuntime = null
       this.overlayContentWindow = null

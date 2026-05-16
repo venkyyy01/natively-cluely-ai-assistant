@@ -96,6 +96,7 @@ mod macos_tap {
     const K_VK_A: CGKeyCode = 0;       // A
     const K_VK_X: CGKeyCode = 7;       // X
     const K_VK_ESCAPE: CGKeyCode = 53; // Escape
+    const K_VK_SLASH: CGKeyCode = 44;  // / (Cmd+Shift+/ produces "?" on US layouts)
 
     #[repr(C)]
     struct __CGEvent(c_void);
@@ -207,6 +208,9 @@ mod macos_tap {
 
             // Cmd+Shift+M — Toggle Clickthrough
             (true, true, false, K_VK_M) => Some(StealthAction::ToggleClickthrough),
+            // Cmd+Shift+/ ("?") — Toggle Clickthrough (alternate, comparable
+            // stealth to Cmd+Shift+S — handled by the same CGEventTap path).
+            (true, true, false, K_VK_SLASH) => Some(StealthAction::ToggleClickthrough),
 
             // Cmd+Alt+Shift+A — Selective Screenshot
             (true, true, true, K_VK_A) => Some(StealthAction::SelectiveScreenshot),

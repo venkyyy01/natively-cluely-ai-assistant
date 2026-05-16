@@ -33,7 +33,7 @@ test('default keybinds include overlay clickthrough toggle shortcut', async () =
     assert.ok(shortcut);
     assert.equal(shortcut?.isGlobal, true);
     assert.equal(shortcut?.accelerator, 'Command+Shift+M');
-    assert.deepEqual(shortcut?.alternateAccelerators, ['Command+Alt+Shift+M']);
+    assert.deepEqual(shortcut?.alternateAccelerators, ['Command+Alt+Shift+M', 'Command+Shift+/']);
 
     assert.equal(DEFAULT_KEYBINDS.find((item) => item.id === 'general:toggle-visibility')?.accelerator, 'Command+Alt+Shift+V');
     assert.deepEqual(DEFAULT_KEYBINDS.find((item) => item.id === 'general:toggle-visibility')?.alternateAccelerators, ['Command+B', 'F13']);
@@ -81,6 +81,7 @@ test('default keybinds include overlay clickthrough toggle shortcut', async () =
     assert.ok(registered.includes('Shift+Esc'));
     assert.ok(registered.includes('Command+Shift+M'));
     assert.ok(registered.includes('Command+Alt+Shift+M'));
+    assert.ok(registered.includes('Command+Shift+/'));
     assert.ok(registered.includes('Command+Up'));
     assert.ok(registered.includes('Command+Down'));
     assert.ok(registered.includes('CommandOrControl+Enter'));

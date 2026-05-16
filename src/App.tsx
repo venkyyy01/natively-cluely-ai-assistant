@@ -9,6 +9,7 @@ import NativelyInterface from './components/NativelyInterface'
 import SettingsOverlay from './components/SettingsOverlay'
 import SettingsPopup from './components/SettingsPopup'
 import StartupSequence from './components/StartupSequence'
+import SyntheticCursor from './components/SyntheticCursor'
 import { ToastProvider, ToastViewport } from './components/ui/toast'
 import {
   getCurrentEnvironment,
@@ -206,6 +207,13 @@ const OverlayWindowContent: React.FC<OverlayWindowContentProps> = ({
           <div style={{ opacity: overlayOpacity, transition: 'opacity 75ms ease' }}>
             <NativelyInterface onEndMeeting={onEndMeeting} />
           </div>
+          {/*
+            Software cursor — mounted last so it sits above all overlay
+            content. Only renders something when the macOS cursor hook is
+            actually installed; otherwise it is a no-op and the OS cursor
+            handles input as usual.
+          */}
+          <SyntheticCursor />
         </AppProviders>
       </div>
     </ErrorBoundary>

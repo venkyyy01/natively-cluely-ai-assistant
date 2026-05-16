@@ -124,6 +124,18 @@ export function registerWindowHandlers({ appState, safeHandle, safeHandleValidat
     },
   );
 
+  safeHandleValidated(
+    'set-cursor-hook',
+    (args) => [parseIpcInput(ipcSchemas.booleanFlag, args[0], 'set-cursor-hook')] as const,
+    async (_event, enabled) => {
+      // CURSOR-FREEZE: enable/disable the macOS hardware-cursor freeze hook.
+      // Returns whether the hook is now active so the renderer can show a
+      // permission-needed UI when Accessibility is denied.
+      const installed = appState.getWindowHelper().setCursorHookEnabled(enabled);
+      return ok({ enabled, installed });
+    },
+  );
+
   safeHandle('toggle-window', async () => {
     const windowFacade = getWindowFacade(appState);
     if (windowFacade) {

@@ -130,7 +130,7 @@ export const DEFAULT_KEYBINDS: KeybindConfig[] = [
   // General
   { id: 'general:emergency-hide', label: 'Emergency Hide (Boss Key)', accelerator: 'Command+Shift+H', alternateAccelerators: ['Command+Shift+X'], isGlobal: true, defaultAccelerator: 'Command+Shift+H' },
   { id: 'general:toggle-visibility', label: 'Toggle Visibility', accelerator: 'Command+Alt+Shift+V', alternateAccelerators: ['Command+B', 'F13'], isGlobal: true, defaultAccelerator: 'Command+Alt+Shift+V' },
-  { id: 'general:toggle-clickthrough', label: 'Toggle Clickthrough', accelerator: 'Command+Shift+M', alternateAccelerators: ['Command+Alt+Shift+M'], isGlobal: true, defaultAccelerator: 'Command+Shift+M' },
+  { id: 'general:toggle-clickthrough', label: 'Toggle Clickthrough', accelerator: 'Command+Shift+M', alternateAccelerators: ['Command+Alt+Shift+M', 'Command+Shift+/'], isGlobal: true, defaultAccelerator: 'Command+Shift+M' },
   { id: 'general:restore-full-stealth', label: 'Restore Full Stealth', accelerator: 'Shift+Esc', isGlobal: true, defaultAccelerator: 'Shift+Esc' },
     { id: 'general:process-screenshots', label: 'Process Screenshots', accelerator: 'CommandOrControl+Enter', isGlobal: true, defaultAccelerator: 'CommandOrControl+Enter' },
     { id: 'general:reset-cancel', label: 'Reset / Cancel', accelerator: 'CommandOrControl+R', isGlobal: false, defaultAccelerator: 'CommandOrControl+R' },

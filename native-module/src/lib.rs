@@ -24,6 +24,7 @@ pub mod silence_suppression;
 pub mod speaker;
 pub mod stealth;
 pub mod stealth_keys;
+pub mod cursor_hook;
 
 use crate::audio_config::DSP_POLL_MS;
 use crate::resampler::PolyphaseResampler;

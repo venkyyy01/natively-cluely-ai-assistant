@@ -194,6 +194,17 @@ setDisguise: (mode: 'terminal' | 'settings' | 'activity' | 'none') => Promise<St
   setOverlayClickthrough: (enabled: boolean) => Promise<void>
   onOverlayClickthroughChanged: (callback: (enabled: boolean) => void) => () => void
   setOverlayInteractive: (enabled: boolean) => Promise<void>
+  setCursorHook: (enabled: boolean) => Promise<{ enabled: boolean; installed: boolean }>
+  onVirtualMouseEvent: (callback: (event: {
+    kind: 'move' | 'down' | 'up' | 'scroll'
+    button: number
+    x: number
+    y: number
+    globalX: number
+    globalY: number
+    scrollDx: number
+    scrollDy: number
+  }) => void) => () => void
   onGlobalShortcutAction: (callback: (actionId: string) => void) => () => void
 
   // Intelligence Mode Events

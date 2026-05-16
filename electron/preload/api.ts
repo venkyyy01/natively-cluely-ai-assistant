@@ -2,6 +2,22 @@ import { contextBridge, ipcRenderer } from "electron"
 import type { CustomProviderPayload, FastResponseConfig, FollowUpEmailInput, GeminiChatOptions, OverlayBounds, TranscriptTextEntry } from "../../shared/ipc"
 import { isIpcResult, getErrorMessage, invokeAndUnwrap, invokeVoid, invokeStatus, type StatusResult, type IntelligenceSuggestedAnswerEvent } from './types'
 
+/**
+ * Virtual mouse event emitted by the macOS cursor hook. Coordinates are in
+ * overlay-local CSS pixels (top-left = 0,0). `globalX`/`globalY` carry the
+ * original screen-global coords for diagnostics.
+ */
+export interface VirtualMouseEvent {
+  kind: 'move' | 'down' | 'up' | 'scroll'
+  button: number
+  x: number
+  y: number
+  globalX: number
+  globalY: number
+  scrollDx: number
+  scrollDy: number
+}
+
 // Types for the exposed Electron API
 export interface ElectronAPI {
   updateContentDimensions: (dimensions: {
@@ -265,6 +281,10 @@ onAccelerationModeChanged: (callback: (enabled: boolean) => void) => () => void
   // required for HTML <input> focus). Renderer should flip true on input
   // focus and false on input blur / Esc / submit.
   setOverlayInteractive: (enabled: boolean) => Promise<void>;
+  // CURSOR-FREEZE: enable/disable the macOS CGEventTap that freezes the
+  // hardware cursor at the overlay boundary and emits virtual mouse events.
+  setCursorHook: (enabled: boolean) => Promise<{ enabled: boolean; installed: boolean }>;
+  onVirtualMouseEvent: (callback: (event: VirtualMouseEvent) => void) => () => void;
   onGlobalShortcutAction: (callback: (actionId: string) => void) => () => void;
   onOverlayOpacityChanged: (callback: (opacity: number) => void) => () => void;
 
@@ -638,6 +658,14 @@ setOpenAtLogin: (open: boolean) => invokeStatus("set-open-at-login", open),
     }
   },
   setOverlayInteractive: (enabled: boolean) => invokeVoid('set-overlay-interactive', enabled),
+  setCursorHook: (enabled: boolean) => invokeAndUnwrap<{ enabled: boolean; installed: boolean }>('set-cursor-hook', enabled),
+  onVirtualMouseEvent: (callback: (event: VirtualMouseEvent) => void) => {
+    const subscription = (_: any, event: VirtualMouseEvent) => callback(event)
+    ipcRenderer.on('virtual-mouse-event', subscription)
+    return () => {
+      ipcRenderer.removeListener('virtual-mouse-event', subscription)
+    }
+  },
 
   onGlobalShortcutAction: (callback: (actionId: string) => void) => {
     const subscription = (_: any, actionId: string) => callback(actionId)
