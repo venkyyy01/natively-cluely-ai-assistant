@@ -629,9 +629,25 @@ export class WindowHelper {
     if (!this.overlayWindow || this.overlayWindow.isDestroyed()) return
 
     this.overlayWindow.setIgnoreMouseEvents(enabled, enabled ? { forward: true } : undefined)
-    this.overlayWindow.setFocusable(!enabled)
+    // BLUR-PROOF: focusability is owned by `overlayInteractive`, NOT by
+    // clickthrough state. Forcing setFocusable(true) when clickthrough is
+    // turned off would drop WS_EX_NOACTIVATE on Windows and re-enable
+    // foreground activation on macOS NSPanel — both of which would fire
+    // `blur` in the underlying browser. When clickthrough is enabled we
+    // explicitly drop focusability (since clicks pass through anyway);
+    // when it is disabled we honour `overlayInteractive`.
+    if (enabled) {
+      this.overlayWindow.setFocusable(false)
+    } else {
+      this.overlayWindow.setFocusable(this.overlayInteractive)
+    }
     if (enabled) {
       this.overlayWindow.blur()
+    }
+    // Re-assert WS_EX_NOACTIVATE on Windows whenever clickthrough flips —
+    // setIgnoreMouseEvents and setFocusable both touch the EX style.
+    if (process.platform === 'win32' && !this.overlayInteractive) {
+      this.applyWindowsOverlayNoActivate()
     }
   }
 
