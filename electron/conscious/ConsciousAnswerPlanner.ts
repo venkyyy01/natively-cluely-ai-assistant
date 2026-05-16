@@ -31,6 +31,31 @@ function uniqueFacets(values: string[]): string[] {
   return Array.from(new Set(values.filter(Boolean)));
 }
 
+const FOCAL_NOUN_STOPWORDS = new Set([
+  'the', 'and', 'for', 'with', 'that', 'this', 'from', 'have', 'your', 'about',
+  'would', 'what', 'when', 'where', 'which', 'into', 'while', 'there', 'their',
+  'then', 'than', 'been', 'were', 'will', 'could', 'should', 'does', 'did',
+  'are', 'how', 'why', 'can', 'you', 'our', 'but', 'not', 'just', 'tell',
+  'me', 'us', 'walk', 'through', 'describe', 'explain', 'give', 'example',
+  'one', 'two', 'three', 'time', 'times', 'thing', 'things',
+]);
+
+/**
+ * NAT-CM-AUDIT: extract content noun-ish tokens from the question to seed
+ * `focalFacets` so the LLM prompt actually targets what was asked, not a
+ * fixed shape inferred only from the reaction kind. Bounded to 5 tokens so
+ * we never crowd out reaction-derived facets.
+ */
+function extractFocalNouns(question: string): string[] {
+  if (!question) return [];
+  const tokens = question
+    .toLowerCase()
+    .replace(/[^a-z0-9\s-]/g, ' ')
+    .split(/\s+/)
+    .filter((t) => t.length >= 4 && !FOCAL_NOUN_STOPWORDS.has(t));
+  return Array.from(new Set(tokens)).slice(0, 5);
+}
+
 function isLiveCodingQuestion(question: string): boolean {
   return /(write|implement|debug|fix|refactor|function|typescript|javascript|python|java|sql|query|code|snippet|algorithm|console|output)/i.test(question);
 }
@@ -85,9 +110,26 @@ export class ConsciousAnswerPlanner {
     preferenceSummary?: ConsciousPlannerPreferenceSummary | null;
     intentResult?: IntentResult | null;
     forceLiveCoding?: boolean;
+    /**
+     * NAT-CM-AUDIT: optional thread context. When the active thread has
+     * follow-ups recorded, the planner treats this as a probe and keeps the
+     * answer tight; on a fresh design (count 0) the answer needs room to
+     * breathe (requirements → high-level → deep dive → tradeoffs).
+     */
+    threadFollowUpCount?: number;
+    /**
+     * NAT-CM-AUDIT: optional interview phase signal. Planner uses this to
+     * pick the right answer shape — `requirements_gathering` should clarify,
+     * `scaling_discussion` should lean on capacity numbers, etc.
+     */
+    interviewPhase?: 'requirements_gathering' | 'high_level_design' | 'deep_dive' | 'implementation' | 'complexity_analysis' | 'scaling_discussion' | 'failure_handling' | 'behavioral_story' | 'wrap_up';
   }): ConsciousAnswerPlan {
     const reaction = input.reaction;
-    const focalFacets = reaction?.targetFacets?.length ? reaction.targetFacets : input.hypothesis?.targetFacets || [];
+    const reactionFacets = reaction?.targetFacets?.length ? reaction.targetFacets : input.hypothesis?.targetFacets || [];
+    // NAT-CM-AUDIT: blend in question-derived nouns so the prompt focuses on what
+    // was asked (e.g. "rate limiter", "sharding") rather than only the reaction kind.
+    // Reaction facets stay first to preserve existing test fixtures.
+    const focalFacets = uniqueFacets([...reactionFacets, ...extractFocalNouns(input.question)]).slice(0, 8);
     const questionMode = input.forceLiveCoding
       ? 'live_coding'
       : detectQuestionModeFromIntent(input.intentResult) ?? detectConsciousQuestionMode(input.question);
@@ -112,16 +154,91 @@ export class ConsciousAnswerPlanner {
             groundingHint: 'For a fresh coding problem, use exactly A. Problem Understanding, B. Brute Force Approach, C. Optimized Approach, D. Tradeoffs & Interview Reasoning. Include full brute force and optimized code plus time and space reasoning for both. For follow-ups, answer only the follow-up and reuse prior context.',
             rationale: `${modeAdjusted.rationale} Live-coding — mandatory interview structure with problem understanding, brute force, optimized solution, and tradeoffs.`,
           };
-        case 'system_design':
+        case 'system_design': {
+          // NAT-CM-AUDIT: phase- and freshness-aware system-design planning.
+          // - Fresh design (no follow-ups yet): give the candidate space to walk
+          //   requirements → high-level → 1-2 deep dives → tradeoffs.
+          // - Probe / follow-up: keep tight.
+          // - Phase=requirements_gathering: ask back, don't design yet.
+          // - Phase=scaling_discussion: lean on capacity numbers (RPS, storage,
+          //   bandwidth) instead of vague "scales horizontally".
+          // - Phase=failure_handling: failure modes, blast radius, recovery.
+          const isFresh = !input.threadFollowUpCount || input.threadFollowUpCount === 0;
+          const phase = input.interviewPhase;
+          const designFacets = [
+            ...modeAdjusted.focalFacets,
+            'tradeoffs',
+            'scaleConsiderations',
+            'capacity',
+            'consistency',
+            'partitioning',
+            'failureModes',
+            'cacheStrategy',
+          ];
+
+          if (phase === 'requirements_gathering') {
+            return {
+              ...modeAdjusted,
+              answerShape: 'clarification_answer',
+              focalFacets: uniqueFacets([...modeAdjusted.focalFacets, 'requirements', 'scope', 'constraints']),
+              maxWords: 80,
+              deliveryFormat: 'requirements_clarification',
+              deliveryStyle: 'conversational_architect',
+              groundingHint: 'Before designing, surface the 2-3 unknowns that change the architecture: scale targets, read/write ratio, consistency tolerance. Ask back if anything is ambiguous. Don\'t over-build before scope is set.',
+              rationale: `${modeAdjusted.rationale} System design — requirements phase, clarify scope before architecting.`,
+            };
+          }
+
+          if (phase === 'scaling_discussion') {
+            return {
+              ...modeAdjusted,
+              focalFacets: uniqueFacets([...designFacets, 'capacity', 'hotspots', 'backpressure']),
+              maxWords: isFresh ? 180 : 120,
+              deliveryFormat: 'capacity_then_strategy',
+              deliveryStyle: 'conversational_architect',
+              groundingHint: 'Lead with rough capacity math (RPS, storage, bandwidth) when reasonable, then the strategy that follows from those numbers. Sharding, replication, hot keys, backpressure. No "it scales horizontally" handwave.',
+              rationale: `${modeAdjusted.rationale} System design — scaling phase, anchor in capacity numbers.`,
+            };
+          }
+
+          if (phase === 'failure_handling') {
+            return {
+              ...modeAdjusted,
+              focalFacets: uniqueFacets([...designFacets, 'failureModes', 'blastRadius', 'recovery']),
+              maxWords: isFresh ? 160 : 110,
+              deliveryFormat: 'failure_modes_then_recovery',
+              deliveryStyle: 'conversational_architect',
+              groundingHint: 'Walk the failure modes the design actually has — node failure, partition, dependency timeout, cascading retries. For each, name the blast radius and the recovery path. Don\'t list every theoretical failure.',
+              rationale: `${modeAdjusted.rationale} System design — failure handling phase, name modes and recovery.`,
+            };
+          }
+
+          if (phase === 'deep_dive' || phase === 'implementation') {
+            return {
+              ...modeAdjusted,
+              focalFacets: uniqueFacets([...designFacets, 'edgeCases', 'consistency', 'cacheStrategy']),
+              maxWords: isFresh ? 170 : 110,
+              deliveryFormat: 'deep_component_walkthrough',
+              deliveryStyle: 'conversational_architect',
+              groundingHint: 'Pick the component the interviewer pointed at. Walk data path, write path, read path, edge cases. Concrete, not abstract.',
+              rationale: `${modeAdjusted.rationale} System design — deep dive on the targeted component.`,
+            };
+          }
+
+          // Default: high_level_design or unspecified phase.
           return {
             ...modeAdjusted,
-            focalFacets: uniqueFacets([...modeAdjusted.focalFacets, 'tradeoffs', 'scaleConsiderations']),
-            maxWords: Math.min(modeAdjusted.maxWords, 80),
-            deliveryFormat: 'architecture_then_tradeoffs',
+            focalFacets: uniqueFacets(designFacets),
+            // Fresh designs need real room. Probes and follow-ups stay tight.
+            maxWords: isFresh ? 220 : 90,
+            deliveryFormat: isFresh ? 'requirements_then_architecture_then_tradeoffs' : 'architecture_then_tradeoffs',
             deliveryStyle: 'conversational_architect',
-            groundingHint: 'Speak like you\'re whiteboarding with a colleague. One or two key tradeoffs, not a slide deck.',
-            rationale: `${modeAdjusted.rationale} System design — cover architecture then tradeoffs, but stay conversational.`,
+            groundingHint: isFresh
+              ? 'Fresh design — sketch the path: name the 2-3 hard requirements, the high-level shape (write path, read path, storage, async), 1-2 deep dives on the riskiest parts, then the tradeoff that defines the choice. Whiteboarding voice, not slide deck.'
+              : 'Probe — answer the specific dimension they asked about. One tradeoff, not five. Stay anchored to what was already discussed.',
+            rationale: `${modeAdjusted.rationale} System design — ${isFresh ? 'fresh design, walk the full path' : 'follow-up, stay anchored and tight'}.`,
           };
+        }
         case 'behavioral':
           return {
             ...modeAdjusted,
@@ -229,7 +346,9 @@ export class ConsciousAnswerPlanner {
           maxWords = Math.min(maxWords, 160);
           break;
         case 'system_design':
-          maxWords = Math.min(maxWords, 60);
+          // NAT-CM-AUDIT: respect concise preference but never crush a fresh
+          // design below the floor it needs to actually answer well.
+          maxWords = Math.min(maxWords, Math.max(120, Math.floor(maxWords * 0.75)));
           break;
         case 'live_coding':
           maxWords = Math.max(maxWords, 900);
@@ -301,6 +420,10 @@ export class ConsciousAnswerPlanner {
       ? `Focus on: ${plan.focalFacets.join(', ')}.`
       : '';
     const styleGuide = this.describeStyle(plan.deliveryStyle);
+    // NAT-CM-AUDIT: defend against partial plan inputs (test fixtures and
+    // legacy callers sometimes hand-roll the plan and skip optional fields).
+    const safeConfidence = typeof plan.confidence === 'number' ? plan.confidence : 0;
+    const safeRationale = plan.rationale || '';
 
     return [
       '<conscious_answer_plan>',
@@ -311,15 +434,15 @@ export class ConsciousAnswerPlanner {
       `FOCAL_FACETS: ${plan.focalFacets.join(', ') || 'none'}`,
       `GROUNDING_HINT: ${plan.groundingHint}`,
       `MAX_WORDS: ${plan.maxWords}`,
-      `CONFIDENCE: ${plan.confidence.toFixed(2)}`,
-      `RATIONALE: ${plan.rationale}`,
+      `CONFIDENCE: ${safeConfidence.toFixed(2)}`,
+      `RATIONALE: ${safeRationale}`,
       '',
       `How to answer: ${shapeGuide}`,
       plan.questionMode !== 'general' ? `Question type: ${modeGuide}` : '',
       facetsGuide,
       `Speak like: ${styleGuide}`,
       `Keep it under ${plan.maxWords} words. Less is more.`,
-      `Why this approach: ${plan.rationale}`,
+      `Why this approach: ${safeRationale}`,
       '',
       'COHERENCE CHECKLIST (verify before responding):',
       '- Does this answer build on what was already discussed?',
@@ -347,7 +470,7 @@ export class ConsciousAnswerPlanner {
   private describeMode(mode: ConsciousAnswerPlan['questionMode']): string {
     switch (mode) {
       case 'live_coding': return 'Live coding — for a fresh problem, use the exact A/B/C/D interview structure with full brute-force and optimized code. For follow-ups, reuse prior context and answer only the probe.';
-      case 'system_design': return 'System design — talk through your thinking like you\'re whiteboarding with a friend.';
+      case 'system_design': return 'System design — fresh design walks requirements → high-level → 1-2 deep dives → tradeoffs. Probes stay anchored. Lean on capacity numbers when scale is in scope.';
       case 'behavioral': return 'Behavioral — tell one real story, own your work, don\'t just list achievements.';
       default: return '';
     }

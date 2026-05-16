@@ -256,7 +256,9 @@ export class HumanLikeConversationEngine {
    * For a given conversation kind, what verification rigor is appropriate?
    *
    * - smalltalk / acknowledgement: skip provenance entirely (no factual claims).
-   * - clarification / refinement: relaxed (the previous turn already passed).
+   * - clarification: moderate (the user might be asking us to be more specific,
+   *   which often introduces new technology/metric claims that need grounding).
+   * - refinement: relaxed (re-shaping a previously-passed answer; deterministic only).
    * - off_topic_aside: moderate (might still be a real question).
    * - technical: strict (full pipeline).
    */
@@ -266,6 +268,10 @@ export class HumanLikeConversationEngine {
       case 'acknowledgement':
         return 'skip';
       case 'clarification':
+        // NAT-CM-AUDIT: clarification answers commonly introduce specifics
+        // ("by 'cache' I mean Redis with TTL=60s"). Run provenance to keep
+        // those grounded. Skip judge to keep latency low.
+        return 'moderate';
       case 'refinement':
         return 'relaxed';
       case 'off_topic_aside':

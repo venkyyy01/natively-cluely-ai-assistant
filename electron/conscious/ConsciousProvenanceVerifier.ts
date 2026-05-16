@@ -7,6 +7,12 @@ import { TranscriptIndex, type SearchResult } from './TranscriptIndex';
 export interface ConsciousProvenanceVerdict {
   ok: boolean;
   reason?: string;
+  /**
+   * NAT-CM-AUDIT: when verification failed because of unsupported tokens,
+   * these are the tokens the response should drop. Callers can use them
+   * to salvage a relevant answer instead of throwing the whole thing away.
+   */
+  unsupportedTokens?: string[];
 }
 
 const KNOWN_TECH_TERMS = [
@@ -325,6 +331,9 @@ export class ConsciousProvenanceVerifier {
       // judge still provide quality gates.
       if (this.responseHasTechnologyOrMetricClaim(input.response)) {
         console.log('[ConsciousProvenanceVerifier] No grounding context available; passing through technology/metric claims (unverifiable, not rejected)');
+        // NAT-CM-AUDIT: surface unverifiable so callers can tag answer metadata
+        // and the UI can reflect "not grounded" instead of silently passing.
+        return { ok: true, reason: 'unverifiable_no_grounding' };
       }
       return { ok: true };
     }
@@ -338,7 +347,7 @@ export class ConsciousProvenanceVerifier {
       grounding.strict,
     );
     if (unsupportedTech.length > 0) {
-      return { ok: false, reason: 'unsupported_technology_claim' };
+      return { ok: false, reason: 'unsupported_technology_claim', unsupportedTokens: unsupportedTech };
     }
 
     const unsupportedNumbers = await this.findUnsupportedTerms(
@@ -346,7 +355,7 @@ export class ConsciousProvenanceVerifier {
       grounding.strict,
     );
     if (unsupportedNumbers.length > 0) {
-      return { ok: false, reason: 'unsupported_metric_claim' };
+      return { ok: false, reason: 'unsupported_metric_claim', unsupportedTokens: unsupportedNumbers };
     }
 
     return { ok: true };

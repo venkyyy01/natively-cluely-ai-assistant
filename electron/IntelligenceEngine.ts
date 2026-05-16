@@ -209,6 +209,11 @@ export class IntelligenceEngine extends EventEmitter {
       this.consciousOrchestrator,
       this.consciousContextComposer,
       this.consciousIntentService,
+      undefined,
+      undefined,
+      // NAT-CM-AUDIT: pass llmHelper as the structured client so the semantic
+      // question classifier can refine ambiguous regex classifications.
+      this.llmHelper,
     );
     this.initializeLLMs();
     const optimizationFlags = getOptimizationFlags();
@@ -437,6 +442,9 @@ export class IntelligenceEngine extends EventEmitter {
             this.consciousOrchestrator,
             this.consciousContextComposer,
             this.consciousIntentService,
+            undefined,
+            undefined,
+            this.llmHelper,
         );
         // NAT-048: clear fingerprint history on session switch — answers
         // emitted to a previous user must not suppress identical-looking
@@ -2477,6 +2485,9 @@ export class IntelligenceEngine extends EventEmitter {
       this.consciousOrchestrator,
       this.consciousContextComposer,
       this.consciousIntentService,
+      undefined,
+      undefined,
+      this.llmHelper,
     );
     this.consciousResponseFingerprinter.clear();
     this.cancelActiveWhatToSay('reset');

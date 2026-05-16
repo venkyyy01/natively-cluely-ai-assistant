@@ -35,8 +35,10 @@ function tokenize(value: string): string[] {
  * This prevents common terms (e.g. "system", "design") from dominating retrieval
  * and surfaces genuinely relevant facts.
  */
-function tfidfScore(tokens: string[], text: string, tags: string[], idfWeights: Map<string, number>): number {
-  const haystack = `${text} ${tags.join(' ')}`.toLowerCase();
+function tfidfScore(tokens: string[], text: string, tags: string[], idfWeights: Map<string, number>, title: string = ''): number {
+  // NAT-CM-AUDIT: include title in the haystack — title is the densest signal
+  // for "is this fact about what the interviewer is asking?". Previously dropped.
+  const haystack = `${title} ${text} ${tags.join(' ')}`.toLowerCase();
   let score = 0;
   for (const token of tokens) {
     if (haystack.includes(token)) {
@@ -65,6 +67,50 @@ function bigramBonus(tokens: string[], text: string): number {
 
 function isBehavioralQuestion(question: string): boolean {
   return isBehavioralQuestionText(question);
+}
+
+/**
+ * NAT-CM-AUDIT: Maximal Marginal Relevance — iteratively pick the next fact
+ * that best balances relevance with diversity from already-picked facts.
+ * Similarity uses Jaccard over tag sets (cheap, deterministic, no embeddings).
+ */
+function applyMmrDiversity<T extends { score?: number; tags: string[]; title: string; category: string }>(
+  ranked: T[],
+  limit: number,
+  lambda: number,
+): T[] {
+  if (ranked.length <= 1) return ranked.slice(0, limit);
+  const selected: T[] = [];
+  const remaining = [...ranked];
+
+  // Take the top-scored item first.
+  selected.push(remaining.shift()!);
+
+  while (selected.length < limit && remaining.length > 0) {
+    let bestIdx = 0;
+    let bestScore = -Infinity;
+    for (let i = 0; i < remaining.length; i++) {
+      const cand = remaining[i];
+      let maxSim = 0;
+      const candTags = new Set([...cand.tags, cand.title.toLowerCase(), cand.category]);
+      for (const sel of selected) {
+        const selTags = new Set([...sel.tags, sel.title.toLowerCase(), sel.category]);
+        let inter = 0;
+        for (const t of candTags) if (selTags.has(t)) inter++;
+        const union = candTags.size + selTags.size - inter;
+        const sim = union > 0 ? inter / union : 0;
+        if (sim > maxSim) maxSim = sim;
+      }
+      const mmr = (1 - lambda) * (cand.score ?? 0) - lambda * maxSim * (cand.score ?? 0);
+      if (mmr > bestScore) {
+        bestScore = mmr;
+        bestIdx = i;
+      }
+    }
+    selected.push(remaining.splice(bestIdx, 1)[0]);
+  }
+
+  return selected;
 }
 
 function isSystemDesignQuestion(question: string): boolean {
@@ -212,19 +258,25 @@ export class ConsciousSemanticFactStore {
 
     const scored = this.facts
       .map((fact) => {
-        const baseScore = tfidfScore(tokens, fact.text, fact.tags, this.idfWeights);
-        const bigram = bigramBonus(tokens, fact.text);
+        const baseScore = tfidfScore(tokens, fact.text, fact.tags, this.idfWeights, fact.title);
+        const bigram = bigramBonus(tokens, `${fact.title} ${fact.text}`);
         const categoryBoost = categoryRelevanceBoost(fact.category, input.question);
         return { ...fact, score: (baseScore + bigram) * categoryBoost };
       })
       .filter((fact) => (fact.score || 0) > 0)
       .sort((a, b) => (b.score || 0) - (a.score || 0));
 
+    // NAT-CM-AUDIT: MMR-style diversity. Without this, the top-k can all come from
+    // the same project, starving prompts of variety. We pick the top-scored fact
+    // first, then iteratively add facts that maximise (relevance - lambda*similarity)
+    // against already-selected facts. lambda is conservative so relevance still wins.
+    const diversified = applyMmrDiversity(scored, limit, 0.35);
+
     if (!isBehavioralQuestion(input.question)) {
-      return scored.slice(0, limit).map(({ score, ...fact }) => fact);
+      return diversified.slice(0, limit).map(({ score, ...fact }) => fact);
     }
 
-    const selected: ConsciousSemanticFact[] = scored.slice(0, limit).map(({ score, ...fact }) => fact);
+    const selected: ConsciousSemanticFact[] = diversified.slice(0, limit).map(({ score, ...fact }) => fact);
     if (selected.length >= limit) {
       return selected;
     }

@@ -212,9 +212,12 @@ export class ConsciousRetrievalOrchestrator {
         }
         const bigramBonus = queryBigrams.length > 0 ? (bigramHits / queryBigrams.length) * 0.15 : 0;
 
-        // Length penalty: very short items (< 5 words) are less informative
+        // NAT-CM-AUDIT: short turns are noise (acks, fillers); long turns from
+        // the interviewer are usually signal-dense (multi-part questions, scenarios).
+        // Penalize short items (<5 words) but DO NOT cap long items — those are
+        // exactly the ones a human-IQ listener would lean on most.
         const wordCount = item.sanitizedText.split(/\s+/).length;
-        const lengthFactor = wordCount < 5 ? 0.7 : wordCount > 50 ? 0.85 : 1.0;
+        const lengthFactor = wordCount < 5 ? 0.7 : 1.0;
 
         return {
           item,
