@@ -59,8 +59,7 @@ test('NAT-083: circuit-breaker-open forces standard route', async () => {
   const result = results.find((r) => r.scenario.id === 'circuit-breaker-open');
   assert.ok(result, 'scenario should exist');
   assert.equal(result!.route.preRouteDecision.qualifies, true);
-  // When circuit is open, the orchestrator should still qualify but the effective
-  // route determined by the harness should be standard
+  assert.equal(result!.route.effectiveRoute, 'fast_standard_answer');
 });
 
 test('NAT-083: topical-compatibility-reset resets on off-topic question', async () => {

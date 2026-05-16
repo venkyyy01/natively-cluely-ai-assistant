@@ -60,3 +60,30 @@ test('routeFast gives a reliable SLM result authority over conflicting regex cue
     LayeredIntentRouter.resetForTesting();
   }
 });
+
+test('routeFast ignores unsupported model labels before choosing fallback intent', async () => {
+  const originalIsAvailable = SetFitIntentProvider.prototype.isAvailable;
+  SetFitIntentProvider.prototype.isAvailable = async () => false;
+
+  __setSlmIntentClassifierForTesting(async () => ({
+    intent: 'contradiction' as never,
+    confidence: 0.97,
+    answerShape: 'unsupported label',
+  }));
+  LayeredIntentRouter.resetForTesting();
+
+  try {
+    const decision = await LayeredIntentRouter.getInstance().routeFast({
+      question: CONFLICTING_TECHNICAL_QUESTION,
+      transcript: '',
+      assistantResponseCount: 0,
+    });
+
+    assert.notEqual(decision.intentResult.intent, 'contradiction');
+    assert.equal(decision.intentResult.intent, 'deep_dive');
+  } finally {
+    __setSlmIntentClassifierForTesting(null);
+    SetFitIntentProvider.prototype.isAvailable = originalIsAvailable;
+    LayeredIntentRouter.resetForTesting();
+  }
+});

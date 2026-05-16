@@ -487,14 +487,12 @@ export class ConsciousOrchestrator {
       && !circuitOpen
     );
 
-    // When circuit breaker is open, still allow conscious mode via regex-based
-    // classification (preRouteDecision.qualifies) — only skip the expensive
-    // intent-based path. This prevents the circuit breaker from completely
-    // killing conscious mode when the intent router is flaky.
+    // When the circuit breaker is open, keep qualification/thread decisions for
+    // observability but do not enter the conscious generation path.
     let selectedRoute = selectAnswerRoute({
       explicitManual: false,
       explicitFollowUp: false,
-      consciousModeEnabled: this.session.isConsciousModeEnabled() && !shouldForceStandardRoute,
+      consciousModeEnabled: this.session.isConsciousModeEnabled() && !shouldForceStandardRoute && !circuitOpen,
       profileModeEnabled: !!input.knowledgeStatus?.activeMode,
       hasProfile: !!input.knowledgeStatus?.hasResume,
       hasKnowledgeData: !!input.knowledgeStatus?.hasResume || !!input.knowledgeStatus?.hasActiveJD,
@@ -518,13 +516,14 @@ export class ConsciousOrchestrator {
       selectedRoute = 'conscious_answer';
     }
 
-    const effectiveRoute: AnswerRoute = input.screenshotBackedLiveCodingTurn
+    const preCircuitEffectiveRoute: AnswerRoute = input.screenshotBackedLiveCodingTurn
       && this.session.isConsciousModeEnabled()
+      && !circuitOpen
       && !preRouteDecision.qualifies
       ? 'conscious_answer'
       : selectedRoute;
 
-    const standardRouteAfterConsciousFallback = effectiveRoute === 'conscious_answer'
+    const standardRouteAfterConsciousFallback = preCircuitEffectiveRoute === 'conscious_answer'
       ? selectAnswerRoute({
           explicitManual: false,
           explicitFollowUp: false,
@@ -535,7 +534,11 @@ export class ConsciousOrchestrator {
           latestQuestion: input.question,
           activeReasoningThread: null,
         })
-      : effectiveRoute;
+      : preCircuitEffectiveRoute;
+
+    const effectiveRoute: AnswerRoute = circuitOpen && preCircuitEffectiveRoute === 'conscious_answer'
+      ? standardRouteAfterConsciousFallback
+      : preCircuitEffectiveRoute;
 
     return {
       preRouteDecision,

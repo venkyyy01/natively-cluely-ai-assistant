@@ -60,8 +60,17 @@ const RELIABLE_INTENTS = new Set<ConversationIntent>([
   'follow_up', 'example_request', 'summary_probe'
 ]);
 
+function isKnownConversationIntent(intent: string): intent is ConversationIntent {
+  return intent === 'general' || RELIABLE_INTENTS.has(intent as ConversationIntent);
+}
+
+function hasKnownIntentResult(result: IntentResult | null): result is IntentResult {
+  return result !== null && isKnownConversationIntent(result.intent);
+}
+
 export function isReliableIntent(result: IntentResult): boolean {
   if (!result || result.intent === 'general') return false;
+  if (!isKnownConversationIntent(result.intent)) return false;
   if (!RELIABLE_INTENTS.has(result.intent)) return false;
   const cal = getIntentConfidenceService().getCalibration(result.intent);
   return result.confidence >= cal.minReliableConfidence;
@@ -512,7 +521,7 @@ export class LayeredIntentRouter {
    */
   private resolveEnsemble(results: FastClassifierResult[]): IntentResult | null {
     const validResults = results
-      .filter((r): r is FastClassifierResult & { result: IntentResult } => r.result !== null);
+      .filter((r): r is FastClassifierResult & { result: IntentResult } => hasKnownIntentResult(r.result));
 
     if (validResults.length === 0) return null;
 
@@ -624,7 +633,7 @@ export class LayeredIntentRouter {
    */
   private pickBestFastResult(results: FastClassifierResult[]): IntentResult | null {
     const validResults = results
-      .filter((r): r is FastClassifierResult & { result: IntentResult } => r.result !== null);
+      .filter((r): r is FastClassifierResult & { result: IntentResult } => hasKnownIntentResult(r.result));
 
     if (validResults.length === 0) return null;
 

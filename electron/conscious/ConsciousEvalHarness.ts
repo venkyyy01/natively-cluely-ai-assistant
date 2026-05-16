@@ -640,12 +640,11 @@ export async function runConsciousE2EHarness(options: {
       prefetchedIntent: scenario.prefetchedIntent as never ?? null,
     });
 
-    const effectiveRouteTag
-      = !scenario.consciousModeEnabled
-        ? 'skip'
-        : scenario.circuitOpen
-          ? 'standard'
-          : 'conscious';
+    const effectiveRouteTag = !scenario.consciousModeEnabled || !route.preRouteDecision.qualifies
+      ? 'skip'
+      : route.effectiveRoute === 'conscious_answer'
+        ? 'conscious'
+        : 'standard';
 
     const passed
       = route.preRouteDecision.threadAction === scenario.expected.threadAction

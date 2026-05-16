@@ -1179,24 +1179,42 @@ export class IntelligenceEngine extends EventEmitter {
                 coordinator: this.intentCoordinator,
                 transcriptRevision: transcriptRevisionAtRoute,
             });
-            this.recordSessionEvent('conscious_route_decision', {
-                question: resolvedQuestion,
-                selectedRoute: routePreparation.preparedRoute.selectedRoute,
-                effectiveRoute: routePreparation.preparedRoute.effectiveRoute,
-                threadAction: routePreparation.preparedRoute.preRouteDecision.threadAction,
-                qualifies: routePreparation.preparedRoute.preRouteDecision.qualifies,
-                transcriptRevision: transcriptRevisionAtRoute,
-            });
-            this.consciousOrchestrator.applyRouteSideEffects(routePreparation.preparedRoute);
             const {
                 preRouteDecision: preRouteConsciousDecision,
                 activeReasoningThread,
                 standardRouteAfterConsciousFallback,
             } = routePreparation.preparedRoute;
             let effectiveRoute: AnswerRoute = routePreparation.preparedRoute.effectiveRoute;
+            const consciousTurnPlan = this.session.isConsciousModeEnabled() && effectiveRoute === 'conscious_answer'
+                ? this.consciousOrchestrator.planTurn(resolvedQuestion)
+                : undefined;
+            let consciousBypassRequested = false;
+            if (consciousTurnPlan?.shouldBypassConscious) {
+                consciousBypassRequested = true;
+                effectiveRoute = standardRouteAfterConsciousFallback;
+                lastFallbackReason = `conscious_bypass:${consciousTurnPlan.conversationKind}`;
+            }
+            this.recordSessionEvent('conscious_route_decision', {
+                question: resolvedQuestion,
+                selectedRoute: routePreparation.preparedRoute.selectedRoute,
+                effectiveRoute,
+                threadAction: consciousBypassRequested ? 'ignore' : routePreparation.preparedRoute.preRouteDecision.threadAction,
+                qualifies: routePreparation.preparedRoute.preRouteDecision.qualifies,
+                transcriptRevision: transcriptRevisionAtRoute,
+                consciousTurnPlan: consciousTurnPlan
+                    ? {
+                        kind: consciousTurnPlan.conversationKind,
+                        verificationLevel: consciousTurnPlan.verificationLevel,
+                        bypass: consciousTurnPlan.shouldBypassConscious,
+                    }
+                    : undefined,
+            });
+            if (!consciousBypassRequested) {
+                this.consciousOrchestrator.applyRouteSideEffects(routePreparation.preparedRoute);
+            }
             attemptedRoute = routePreparation.preparedRoute.selectedRoute;
             currentRouteForMetadata = effectiveRoute;
-            activeThreadAction = preRouteConsciousDecision.threadAction;
+            activeThreadAction = consciousBypassRequested ? 'ignore' : preRouteConsciousDecision.threadAction;
             let isProfileEnrichmentRoute = effectiveRoute === 'enriched_standard_answer';
             activeProfileEnrichmentRoute = isProfileEnrichmentRoute;
             const requestId = this.latencyTracker.start(effectiveRoute, capability, {
@@ -1715,6 +1733,7 @@ export class IntelligenceEngine extends EventEmitter {
                     whatToAnswerLLM: this.whatToAnswerLLM,
                     answerLLM: this.answerLLM,
                     codingProblem: this.session.getCodingProblem(),
+                    turnPlan: consciousTurnPlan,
                     onEarlyReasoning: (text) => {
                         if (!shouldSuppressVisibleWork()) {
                             this.latencyTracker.markFirstStreamingUpdate(requestId);
