@@ -1,13 +1,25 @@
 import React, { useState, useEffect } from 'react';
 import { Info, Monitor, Globe } from 'lucide-react';
+import { getOptionalElectronMethod } from '../../lib/electronApi';
 
 interface GeneralSettingsProps { }
 
 export const GeneralSettings: React.FC<GeneralSettingsProps> = () => {
+    const getStoredCredentials = getOptionalElectronMethod('getStoredCredentials');
+    const getRecognitionLanguages = getOptionalElectronMethod('getRecognitionLanguages');
+    const getSttLanguage = getOptionalElectronMethod('getSttLanguage');
+    const getAiResponseLanguages = getOptionalElectronMethod('getAiResponseLanguages');
+    const getAiResponseLanguage = getOptionalElectronMethod('getAiResponseLanguage');
+    const setRecognitionLanguageInMain = getOptionalElectronMethod('setRecognitionLanguage');
+    const setAiResponseLanguageInMain = getOptionalElectronMethod('setAiResponseLanguage');
+    const selectServiceAccount = getOptionalElectronMethod('selectServiceAccount');
     // Recognition Language
-    const [recognitionLanguage, setRecognitionLanguage] = useState('');
+    const [recognitionLanguage, setRecognitionLanguage] = useState('english-us');
     const [availableLanguages, setAvailableLanguages] = useState<Record<string, any>>({});
-    const [languageOptions, setLanguageOptions] = useState<any[]>([]);
+    
+    // AI Response Language
+    const [aiResponseLanguage, setAiResponseLanguage] = useState('English');
+    const [availableAiLanguages, setAvailableAiLanguages] = useState<any[]>([]);
 
     // Google Service Account
     const [serviceAccountPath, setServiceAccountPath] = useState('');
@@ -16,8 +28,7 @@ export const GeneralSettings: React.FC<GeneralSettingsProps> = () => {
         const loadInitialData = async () => {
             // Load Credentials
             try {
-                // @ts-ignore  
-                const creds = await window.electronAPI?.getStoredCredentials?.();
+                const creds = await getStoredCredentials?.();
                 if (creds && creds.googleServiceAccountPath) {
                     setServiceAccountPath(creds.googleServiceAccountPath);
                 }
@@ -25,79 +36,45 @@ export const GeneralSettings: React.FC<GeneralSettingsProps> = () => {
                 console.error("Failed to load stored credentials:", e);
             }
 
-            // Load Languages
-            if (window.electronAPI?.getRecognitionLanguages) {
-                const langs = await window.electronAPI.getRecognitionLanguages();
+            // Load STT Languages
+            if (getRecognitionLanguages && getSttLanguage) {
+                const langs = await getRecognitionLanguages();
                 setAvailableLanguages(langs);
 
-                const desiredOrder = [
-                    { key: 'english-india', label: 'English (India)' },
-                    { key: 'english-us', label: 'English (United States)' },
-                    { key: 'english-uk', label: 'English (United Kingdom)' },
-                    { key: 'english-au', label: 'English (Australia)' },
-                    { key: 'english-ca', label: 'English (Canada)' },
-                ];
+                const storedStt = await getSttLanguage();
+                setRecognitionLanguage(storedStt || 'english-us');
+            }
 
-                const options = [
-                    { value: 'auto', label: 'Auto (Recommended)' }
-                ];
+            // Load AI Response Languages
+            if (getAiResponseLanguages && getAiResponseLanguage) {
+                const aiLangs = await getAiResponseLanguages();
+                setAvailableAiLanguages(aiLangs);
 
-                desiredOrder.forEach(({ key, label }) => {
-                    if (langs[key]) {
-                        options.push({ value: key, label: label });
-                    }
-                });
-
-                setLanguageOptions(options);
-
-                const stored = localStorage.getItem('natively_recognition_language');
-                if (!stored || stored === 'auto') {
-                    setRecognitionLanguage('auto');
-                    applyAutoLanguage(langs);
-                } else if (langs[stored]) {
-                    setRecognitionLanguage(stored);
-                } else {
-                    setRecognitionLanguage('auto');
-                    applyAutoLanguage(langs);
-                }
+                const storedAi = await getAiResponseLanguage();
+                setAiResponseLanguage(storedAi || 'English');
             }
         };
         loadInitialData();
     }, []);
 
-    const applyAutoLanguage = (langs: any) => {
-        const systemLocale = navigator.language;
-        let match = 'english-us';
-        for (const [key, config] of Object.entries(langs)) {
-            if ((config as any).primary === systemLocale || (config as any).alternates.includes(systemLocale)) {
-                match = key;
-                break;
-            }
-        }
-        if (systemLocale === 'en-IN') match = 'english-india';
-
-        if (window.electronAPI?.setRecognitionLanguage) {
-            window.electronAPI.setRecognitionLanguage(match);
+    const handleLanguageChange = async (key: string) => {
+        setRecognitionLanguage(key);
+        if (setRecognitionLanguageInMain) {
+            await setRecognitionLanguageInMain(key);
         }
     };
 
-    const handleLanguageChange = (key: string) => {
-        setRecognitionLanguage(key);
-        localStorage.setItem('natively_recognition_language', key);
-
-        if (key === 'auto') {
-            applyAutoLanguage(availableLanguages);
-        } else {
-            if (window.electronAPI?.setRecognitionLanguage) {
-                window.electronAPI.setRecognitionLanguage(key);
-            }
+    const handleAiLanguageChange = async (key: string) => {
+        setAiResponseLanguage(key);
+        if (setAiResponseLanguageInMain) {
+            await setAiResponseLanguageInMain(key);
         }
     };
 
     const handleSelectServiceAccount = async () => {
         try {
-            const result = await window.electronAPI.selectServiceAccount();
-            if (result.success && result.path) {
+            const result = await selectServiceAccount?.();
+            if (result?.success && result.path) {
                 setServiceAccountPath(result.path);
             }
         } catch (error) {
@@ -131,22 +108,42 @@ export const GeneralSettings: React.FC<GeneralSettingsProps> = () => {
 
                     {/* Recognition Language */}
                     <div className="bg-bg-item-surface rounded-xl p-5 border border-border-subtle">
-                        <label className="block text-xs font-medium text-text-secondary uppercase tracking-wide mb-2">Recognition Language</label>
-                        <div className="relative">
+                        <label className="block text-xs font-medium text-text-secondary uppercase tracking-wide mb-2">Recognition Language (STT)</label>
+                        <div className="relative inline-block">
                             <select
                                 value={recognitionLanguage}
                                 onChange={(e) => handleLanguageChange(e.target.value)}
-                                className="w-full appearance-none bg-bg-input border border-border-subtle rounded-lg px-4 py-2.5 text-xs text-text-primary focus:outline-none focus:border-accent-primary transition-colors cursor-pointer"
+                                className="appearance-none bg-bg-input border border-border-subtle rounded-lg pl-5 pr-10 py-2.5 text-xs text-text-primary focus:outline-none focus:border-accent-primary transition-colors cursor-pointer"
                             >
-                                {languageOptions.map((opt) => (
-                                    <option key={opt.value} value={opt.value}>
-                                        {opt.label}
+                                {Object.entries(availableLanguages).map(([key, lang]) => (
+                                    <option key={key} value={key}>
+                                        {lang.label}
                                     </option>
                                 ))}
                             </select>
                             <Globe size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-text-secondary pointer-events-none" />
                         </div>
-                        <p className="text-xs text-text-tertiary mt-2">Select your preferred accent for better recognition accuracy.</p>
+                        <p className="text-xs text-text-tertiary mt-2">The language you and the interviewer are speaking.</p>
+                    </div>
+
+                    {/* AI Response Language */}
+                    <div className="bg-bg-item-surface rounded-xl p-5 border border-border-subtle">
+                        <label className="block text-xs font-medium text-text-secondary uppercase tracking-wide mb-2">AI Response Language</label>
+                        <div className="relative inline-block">
+                            <select
+                                value={aiResponseLanguage}
+                                onChange={(e) => handleAiLanguageChange(e.target.value)}
+                                className="appearance-none bg-bg-input border border-border-subtle rounded-lg pl-5 pr-10 py-2.5 text-xs text-text-primary focus:outline-none focus:border-accent-primary transition-colors cursor-pointer"
+                            >
+                                {availableAiLanguages.map((lang) => (
+                                    <option key={lang.code} value={lang.code}>
+                                        {lang.label}
+                                    </option>
+                                ))}
+                            </select>
+                            <Info size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-text-secondary pointer-events-none" />
+                        </div>
+                        <p className="text-xs text-text-tertiary mt-2">The language in which the AI will provide its suggestions.</p>
                     </div>
                 </div>
             </div>

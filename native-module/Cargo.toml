@@ -4,29 +4,37 @@ name = "natively-audio"
 version = "0.1.0"
 edition = "2021"
 
+# Suppress warnings from deprecated cocoa/objc dependencies
+[lints.rust]
+unexpected_cfgs = "allow"
+deprecated = "allow"
+
 [lib]
 crate-type = ["cdylib"]
 
-<<<<<<< HEAD
-[target.'cfg(target_os = "macos")'.dependencies]
-cidre = { version = "0.11.10", features = ["ca", "cm", "av", "cat", "dispatch", "ns", "sc", "cf", "blocks", "objc"] }
-
 [dependencies]
 napi = { version = "2.12.2", features = ["napi4"] }
 napi-derive = "2.9.3"
-wasapi = { version = "0.19.0", platform = "windows" }
-=======
-[dependencies]
-napi = { version = "2.12.2", features = ["napi4"] }
-napi-derive = "2.9.3"
-cidre = { version = "0.11.10", features = ["ca", "cm", "av", "cat", "dispatch", "ns", "sc", "cf", "blocks", "objc"] }
-wasapi = { version = "0.13.0", platform = "windows" }
->>>>>>> main
-windows = { version = "0.52.0", platform = "windows", features = ["Win32_Media_Audio", "Win32_System_Com", "Win32_System_Threading"] }
 cpal = "0.15.2"
 ringbuf = "0.4"
 anyhow = "1.0"
 once_cell = "1.18.0"
 rubato = "0.16"
 rand = "0.8"
+sha2 = "0.10"
+machine-uid = "0.5"
+reqwest = { version = "0.12", features = ["blocking"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+webrtc-vad = "0.4"
+libc = "0.2"
 
+[target.'cfg(target_os = "macos")'.dependencies]
+cidre = { version = "0.11.10", features = ["ca", "cm", "av", "cat", "dispatch", "ns", "sc", "cf", "blocks", "objc"] }
+core-foundation = "0.10"
+core-graphics = "0.24"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+wasapi = "0.13.0"
+windows = { version = "0.52.0", features = ["Win32_Foundation", "Win32_Media_Audio", "Win32_System_Com", "Win32_System_Diagnostics_ToolHelp", "Win32_System_Threading", "Win32_UI_WindowsAndMessaging"] }
+tracing = "0.1.44"

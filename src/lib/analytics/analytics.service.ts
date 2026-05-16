@@ -2,6 +2,8 @@
 // Works in Electron by dynamically loading the gtag script into the renderer DOM
 // Only requires the public Measurement ID — no API secrets needed
 
+import { buildConsciousModeModeSelectedPayload } from '../consciousModeSettings';
+
 // --- Types ---
 
 export type ModelProviderType = 'cloud' | 'local';
@@ -29,7 +31,14 @@ export type AnalyticsEventName =
     | 'session_duration'
     // Engagement
     | 'command_executed'
-    | 'conversation_started';
+    | 'conversation_started'
+    | 'interview_assist_rendered';
+
+interface InterviewAssistRenderedPayload {
+    output_variant: 'conscious_mode' | 'standard_interview_assist';
+    thread_type: 'fresh_reasoning_thread' | 'follow_up_extension' | 'fresh_answer';
+    source_intent: string;
+}
 
 interface ModelUsedPayload {
     model_name: string;
@@ -48,6 +57,7 @@ interface SessionDurationPayload {
 
 const GA4_MEASUREMENT_ID = "G-494RMJ2G6E";
 const APP_VERSION = "1.1.3";
+const ANALYTICS_ENABLED = import.meta.env.DEV || import.meta.env.VITE_ENABLE_ANALYTICS === '1';
 
 // Extend window to include gtag/dataLayer
 declare global {
@@ -99,7 +109,7 @@ class AnalyticsService {
     }
 
     public initAnalytics(): void {
-        if (this.initialized) return;
+        if (this.initialized || !ANALYTICS_ENABLED) return;
 
         try {
             // 1. Initialize dataLayer
@@ -178,6 +188,12 @@ class AnalyticsService {
         this.trackEvent('mode_selected', { mode });
     }
 
+    public trackConsciousModeSelected(enabled: boolean): void {
+        if (!this.initialized) return;
+
+        this.trackEvent('mode_selected', buildConsciousModeModeSelectedPayload(enabled));
+    }
+
     public trackModelUsed(payload: ModelUsedPayload): void {
         if (!this.initialized) return;
 
@@ -197,6 +213,11 @@ class AnalyticsService {
     public trackConversationStarted(): void {
         if (!this.initialized) return;
         this.trackEvent('conversation_started');
+    }
+
+    public trackInterviewAssistRendered(payload: InterviewAssistRenderedPayload): void {
+        if (!this.initialized) return;
+        this.trackEvent('interview_assist_rendered', payload);
     }
 
     public trackCalendarConnected(): void {

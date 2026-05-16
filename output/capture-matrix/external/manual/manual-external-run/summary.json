@@ -1,0 +1,272 @@
+{
+  "runId": "manual-external-run",
+  "generatedAt": "2026-04-25T03:51:55.678Z",
+  "outputRoot": "/Users/venkatasai/Downloads/natively-cluely-ai-assistant/.worktrees/todo-completion/output/capture-matrix/external/manual/manual-external-run",
+  "passed": false,
+  "results": [
+    {
+      "row": {
+        "id": "zoom-protected",
+        "platform": "darwin",
+        "osVersion": "Darwin 25.3.0",
+        "appVersion": "local-dev",
+        "captureTool": "zoom-screen-share",
+        "mode": "manual",
+        "monitors": 1,
+        "strict": true,
+        "surface": "protected-canary-surface",
+        "expectedResult": "hidden",
+        "canaryToken": "NATIVELY_CAPTURE_CANARY_PROTECTED",
+        "externalAppName": "Zoom",
+        "externalAppVersion": "unknown",
+        "externalCaptureMode": "screen-share"
+      },
+      "adapter": "manual-external-capture",
+      "actualResult": "skipped",
+      "passed": false,
+      "reason": "manual external capture artifact is missing",
+      "artifactPaths": {
+        "metadata": "/Users/venkatasai/Downloads/natively-cluely-ai-assistant/.worktrees/todo-completion/output/capture-matrix/external/manual/manual-external-run/zoom-protected/metadata.json",
+        "log": "/Users/venkatasai/Downloads/natively-cluely-ai-assistant/.worktrees/todo-completion/output/capture-matrix/external/manual/manual-external-run/zoom-protected/capture.log"
+      },
+      "artifactMetadata": {
+        "platform": "darwin",
+        "externalAppName": "Zoom",
+        "externalAppVersion": "unknown",
+        "externalCaptureMode": "screen-share",
+        "artifactProvided": false
+      }
+    },
+    {
+      "row": {
+        "id": "zoom-control",
+        "platform": "darwin",
+        "osVersion": "Darwin 25.3.0",
+        "appVersion": "local-dev",
+        "captureTool": "zoom-screen-share",
+        "mode": "manual",
+        "monitors": 1,
+        "strict": false,
+        "surface": "unprotected-canary-control",
+        "expectedResult": "visible",
+        "canaryToken": "NATIVELY_CAPTURE_CANARY_CONTROL",
+        "externalAppName": "Zoom",
+        "externalAppVersion": "unknown",
+        "externalCaptureMode": "screen-share"
+      },
+      "adapter": "manual-external-capture",
+      "actualResult": "skipped",
+      "passed": false,
+      "reason": "manual external capture artifact is missing",
+      "artifactPaths": {
+        "metadata": "/Users/venkatasai/Downloads/natively-cluely-ai-assistant/.worktrees/todo-completion/output/capture-matrix/external/manual/manual-external-run/zoom-control/metadata.json",
+        "log": "/Users/venkatasai/Downloads/natively-cluely-ai-assistant/.worktrees/todo-completion/output/capture-matrix/external/manual/manual-external-run/zoom-control/capture.log"
+      },
+      "artifactMetadata": {
+        "platform": "darwin",
+        "externalAppName": "Zoom",
+        "externalAppVersion": "unknown",
+        "externalCaptureMode": "screen-share",
+        "artifactProvided": false
+      }
+    },
+    {
+      "row": {
+        "id": "google-meet-protected",
+        "platform": "darwin",
+        "osVersion": "Darwin 25.3.0",
+        "appVersion": "local-dev",
+        "captureTool": "google-meet-screen-share",
+        "mode": "manual",
+        "monitors": 1,
+        "strict": true,
+        "surface": "protected-canary-surface",
+        "expectedResult": "hidden",
+        "canaryToken": "NATIVELY_CAPTURE_CANARY_PROTECTED",
+        "externalAppName": "Google Meet",
+        "externalAppVersion": "unknown",
+        "externalCaptureMode": "browser-screen-share"
+      },
+      "adapter": "manual-external-capture",
+      "actualResult": "skipped",
+      "passed": false,
+      "reason": "manual external capture artifact is missing",
+      "artifactPaths": {
+        "metadata": "/Users/venkatasai/Downloads/natively-cluely-ai-assistant/.worktrees/todo-completion/output/capture-matrix/external/manual/manual-external-run/google-meet-protected/metadata.json",
+        "log": "/Users/venkatasai/Downloads/natively-cluely-ai-assistant/.worktrees/todo-completion/output/capture-matrix/external/manual/manual-external-run/google-meet-protected/capture.log"
+      },
+      "artifactMetadata": {
+        "platform": "darwin",
+        "externalAppName": "Google Meet",
+        "externalAppVersion": "unknown",
+        "externalCaptureMode": "browser-screen-share",
+        "artifactProvided": false
+      }
+    },
+    {
+      "row": {
+        "id": "google-meet-control",
+        "platform": "darwin",
+        "osVersion": "Darwin 25.3.0",
+        "appVersion": "local-dev",
+        "captureTool": "google-meet-screen-share",
+        "mode": "manual",
+        "monitors": 1,
+        "strict": false,
+        "surface": "unprotected-canary-control",
+        "expectedResult": "visible",
+        "canaryToken": "NATIVELY_CAPTURE_CANARY_CONTROL",
+        "externalAppName": "Google Meet",
+        "externalAppVersion": "unknown",
+        "externalCaptureMode": "browser-screen-share"
+      },
+      "adapter": "manual-external-capture",
+      "actualResult": "skipped",
+      "passed": false,
+      "reason": "manual external capture artifact is missing",
+      "artifactPaths": {
+        "metadata": "/Users/venkatasai/Downloads/natively-cluely-ai-assistant/.worktrees/todo-completion/output/capture-matrix/external/manual/manual-external-run/google-meet-control/metadata.json",
+        "log": "/Users/venkatasai/Downloads/natively-cluely-ai-assistant/.worktrees/todo-completion/output/capture-matrix/external/manual/manual-external-run/google-meet-control/capture.log"
+      },
+      "artifactMetadata": {
+        "platform": "darwin",
+        "externalAppName": "Google Meet",
+        "externalAppVersion": "unknown",
+        "externalCaptureMode": "browser-screen-share",
+        "artifactProvided": false
+      }
+    },
+    {
+      "row": {
+        "id": "microsoft-teams-protected",
+        "platform": "darwin",
+        "osVersion": "Darwin 25.3.0",
+        "appVersion": "local-dev",
+        "captureTool": "microsoft-teams-screen-share",
+        "mode": "manual",
+        "monitors": 1,
+        "strict": true,
+        "surface": "protected-canary-surface",
+        "expectedResult": "hidden",
+        "canaryToken": "NATIVELY_CAPTURE_CANARY_PROTECTED",
+        "externalAppName": "Microsoft Teams",
+        "externalAppVersion": "unknown",
+        "externalCaptureMode": "screen-share"
+      },
+      "adapter": "manual-external-capture",
+      "actualResult": "skipped",
+      "passed": false,
+      "reason": "manual external capture artifact is missing",
+      "artifactPaths": {
+        "metadata": "/Users/venkatasai/Downloads/natively-cluely-ai-assistant/.worktrees/todo-completion/output/capture-matrix/external/manual/manual-external-run/microsoft-teams-protected/metadata.json",
+        "log": "/Users/venkatasai/Downloads/natively-cluely-ai-assistant/.worktrees/todo-completion/output/capture-matrix/external/manual/manual-external-run/microsoft-teams-protected/capture.log"
+      },
+      "artifactMetadata": {
+        "platform": "darwin",
+        "externalAppName": "Microsoft Teams",
+        "externalAppVersion": "unknown",
+        "externalCaptureMode": "screen-share",
+        "artifactProvided": false
+      }
+    },
+    {
+      "row": {
+        "id": "microsoft-teams-control",
+        "platform": "darwin",
+        "osVersion": "Darwin 25.3.0",
+        "appVersion": "local-dev",
+        "captureTool": "microsoft-teams-screen-share",
+        "mode": "manual",
+        "monitors": 1,
+        "strict": false,
+        "surface": "unprotected-canary-control",
+        "expectedResult": "visible",
+        "canaryToken": "NATIVELY_CAPTURE_CANARY_CONTROL",
+        "externalAppName": "Microsoft Teams",
+        "externalAppVersion": "unknown",
+        "externalCaptureMode": "screen-share"
+      },
+      "adapter": "manual-external-capture",
+      "actualResult": "skipped",
+      "passed": false,
+      "reason": "manual external capture artifact is missing",
+      "artifactPaths": {
+        "metadata": "/Users/venkatasai/Downloads/natively-cluely-ai-assistant/.worktrees/todo-completion/output/capture-matrix/external/manual/manual-external-run/microsoft-teams-control/metadata.json",
+        "log": "/Users/venkatasai/Downloads/natively-cluely-ai-assistant/.worktrees/todo-completion/output/capture-matrix/external/manual/manual-external-run/microsoft-teams-control/capture.log"
+      },
+      "artifactMetadata": {
+        "platform": "darwin",
+        "externalAppName": "Microsoft Teams",
+        "externalAppVersion": "unknown",
+        "externalCaptureMode": "screen-share",
+        "artifactProvided": false
+      }
+    },
+    {
+      "row": {
+        "id": "obs-studio-protected",
+        "platform": "darwin",
+        "osVersion": "Darwin 25.3.0",
+        "appVersion": "local-dev",
+        "captureTool": "obs-display-capture",
+        "mode": "manual",
+        "monitors": 1,
+        "strict": true,
+        "surface": "protected-canary-surface",
+        "expectedResult": "hidden",
+        "canaryToken": "NATIVELY_CAPTURE_CANARY_PROTECTED",
+        "externalAppName": "OBS Studio",
+        "externalAppVersion": "unknown",
+        "externalCaptureMode": "display-capture"
+      },
+      "adapter": "manual-external-capture",
+      "actualResult": "skipped",
+      "passed": false,
+      "reason": "manual external capture artifact is missing",
+      "artifactPaths": {
+        "metadata": "/Users/venkatasai/Downloads/natively-cluely-ai-assistant/.worktrees/todo-completion/output/capture-matrix/external/manual/manual-external-run/obs-studio-protected/metadata.json",
+        "log": "/Users/venkatasai/Downloads/natively-cluely-ai-assistant/.worktrees/todo-completion/output/capture-matrix/external/manual/manual-external-run/obs-studio-protected/capture.log"
+      },
+      "artifactMetadata": {
+        "platform": "darwin",
+        "externalAppName": "OBS Studio",
+        "externalAppVersion": "unknown",
+        "externalCaptureMode": "display-capture",
+        "artifactProvided": false
+      }
+    },
+    {
+      "row": {
+        "id": "obs-studio-control",
+        "platform": "darwin",
+        "osVersion": "Darwin 25.3.0",
+        "appVersion": "local-dev",
+        "captureTool": "obs-display-capture",
+        "mode": "manual",
+        "monitors": 1,
+        "strict": false,
+        "surface": "unprotected-canary-control",
+        "expectedResult": "visible",
+        "canaryToken": "NATIVELY_CAPTURE_CANARY_CONTROL",
+        "externalAppName": "OBS Studio",
+        "externalAppVersion": "unknown",
+        "externalCaptureMode": "display-capture"
+      },
+      "adapter": "manual-external-capture",
+      "actualResult": "skipped",
+      "passed": false,
+      "reason": "manual external capture artifact is missing",
+      "artifactPaths": {
+        "metadata": "/Users/venkatasai/Downloads/natively-cluely-ai-assistant/.worktrees/todo-completion/output/capture-matrix/external/manual/manual-external-run/obs-studio-control/metadata.json",
+        "log": "/Users/venkatasai/Downloads/natively-cluely-ai-assistant/.worktrees/todo-completion/output/capture-matrix/external/manual/manual-external-run/obs-studio-control/capture.log"
+      },
+      "artifactMetadata": {
+        "platform": "darwin",
+        "externalAppName": "OBS Studio",
+        "externalAppVersion": "unknown",
+        "externalCaptureMode": "display-capture",
+        "artifactProvided": false
+      }
+    }
+  ]
+}

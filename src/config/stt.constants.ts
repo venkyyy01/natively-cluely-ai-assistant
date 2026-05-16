@@ -67,10 +67,10 @@ export const STT_PROVIDERS: Record<SttProviderId, SttProviderConfig> = {
     },
     deepgram: {
         id: 'deepgram',
-        name: 'Deepgram Nova-2',
+        name: 'Deepgram Nova-3',
         description: 'Real-time streaming transcription via Deepgram WebSocket',
         endpoint: 'wss://api.deepgram.com/v1/listen',
-        model: 'nova-2',
+        model: 'nova-3',
         uploadType: 'websocket',
         authHeader: (apiKey: string) => ({
             Authorization: `Token ${apiKey}`,
@@ -80,9 +80,9 @@ export const STT_PROVIDERS: Record<SttProviderId, SttProviderConfig> = {
     elevenlabs: {
         id: 'elevenlabs',
         name: 'ElevenLabs Scribe',
-        description: 'High-quality STT via ElevenLabs Scribe API',
+        description: 'Scribe v2 Realtime API',
         endpoint: 'https://api.elevenlabs.io/v1/speech-to-text',
-        model: 'scribe_v1',
+        model: 'scribe_v2',
         uploadType: 'multipart',
         authHeader: (apiKey: string) => ({
             'xi-api-key': apiKey,
@@ -118,4 +118,3 @@ export const STT_PROVIDERS: Record<SttProviderId, SttProviderConfig> = {
 export const STT_PROVIDER_OPTIONS = Object.values(STT_PROVIDERS);
 
 export const DEFAULT_STT_PROVIDER: SttProviderId = 'google';
-

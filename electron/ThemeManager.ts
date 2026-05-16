@@ -11,12 +11,14 @@ interface ThemeConfig {
 
 export class ThemeManager {
     private static instance: ThemeManager;
-    private mode: ThemeMode = 'system';
+    // Dark is the safe default until the light launcher surfaces are fully tokenized.
+    private mode: ThemeMode = 'dark';
     private configPath: string;
 
     private constructor() {
         this.configPath = path.join(app.getPath('userData'), 'theme-config.json');
         this.loadConfig();
+        this.applyNativeThemeSource();
         this.setupListeners();
     }
 
@@ -44,10 +46,16 @@ export class ThemeManager {
     private saveConfig() {
         try {
             const config: ThemeConfig = { mode: this.mode };
-            fs.writeFileSync(this.configPath, JSON.stringify(config, null, 2));
+            const tmpPath = this.configPath + '.tmp';
+            fs.writeFileSync(tmpPath, JSON.stringify(config, null, 2));
+            fs.renameSync(tmpPath, this.configPath);
         } catch (error) {
-            console.error('Failed to save theme config:', error);
+            console.error('[ThemeManager] Failed to save config:', error);
         }
+    }
+
+    private applyNativeThemeSource() {
+        nativeTheme.themeSource = this.mode;
     }
 
     private setupListeners() {
@@ -65,16 +73,7 @@ export class ThemeManager {
     public setMode(mode: ThemeMode) {
         this.mode = mode;
         this.saveConfig();
-
-        // Force native theme update if not system, so electron internal UI matches if possible
-        if (mode === 'dark') {
-            nativeTheme.themeSource = 'dark';
-        } else if (mode === 'light') {
-            nativeTheme.themeSource = 'light';
-        } else {
-            nativeTheme.themeSource = 'system';
-        }
-
+        this.applyNativeThemeSource();
         this.broadcastThemeChange();
     }
 

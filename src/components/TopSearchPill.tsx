@@ -30,7 +30,6 @@ interface TopSearchPillProps {
     onLiteralSearch: (query: string) => void;
     onOpenMeeting: (meetingId: string) => void;
     onExpansionChange?: (isExpanded: boolean) => void;
-    className?: string;
 }
 
 // ============================================
@@ -44,7 +43,9 @@ function fuzzyMatch(text: string, query: string): boolean {
     // Simple contains match for now
     if (normalizedText.includes(normalizedQuery)) return true;
 
+    // Fuzzy character match
     // Fuzzy match removed for stricter accuracy
+    // Only return true if exact substring match (already checked above)
     return false;
 }
 
@@ -90,8 +91,7 @@ const TopSearchPill: React.FC<TopSearchPillProps> = ({
     onAIQuery,
     onLiteralSearch,
     onOpenMeeting,
-    onExpansionChange,
-    className
+    onExpansionChange
 }) => {
     const [state, setState] = useState<PillState>('idle');
     const [query, setQuery] = useState('');
@@ -250,7 +250,7 @@ const TopSearchPill: React.FC<TopSearchPillProps> = ({
             {/* Search Pill Container */}
             <div
                 ref={containerRef}
-                className={`absolute left-1/2 -translate-x-1/2 top-[7px] no-drag z-40 ${className || ''}`}
+                className="absolute left-1/2 -translate-x-1/2 top-[7px] no-drag z-40"
             >
                 <div className="relative">
                     <motion.div
@@ -296,7 +296,7 @@ const TopSearchPill: React.FC<TopSearchPillProps> = ({
                                         text-[13px] text-text-primary
                                         placeholder-text-tertiary dark:placeholder-[#7C7C7E]
                                         focus:outline-none
-                                        ${state === 'idle' ? 'cursor-pointer' : 'cursor-text'}
+                                        ${state === 'idle' ? 'cursor-default' : 'cursor-text'}
                                     `}
                                         placeholder="Search or ask anything..."
                                     />

@@ -1,814 +1,273 @@
-<<<<<<< HEAD
-# Natively  -  Trusted by 1000+ users
+# Natively
 
+**Free, open-source AI interview copilot and meeting assistant.**
 
+Real-time answers, rolling conversational context, screenshot understanding, speech-to-text transcription, and smart follow-up suggestions — all in an invisible, always-on-top overlay that stays private and runs entirely on your machine.
 
-Natively - The invisible desktop assistant that provides real-time insights, answers, and support during meetings, interviews, presentations, and professional conversations.
-
-## 🎬 Demo
-
-![Natively Demo](demo.gif)
-
-## 🚀 Quick Start Guide
-**For Personal Use:**
-Download the latest version from [Releases](https://github.com/evinjohnn/natively-cluely-ai-assistant/releases)
-
-### Prerequisites (For Development)
-- **Node.js**: Installed on your computer (v20+ recommended)
-- **Git**: Installed on your computer
-- **Rust**: Required for building the native audio capture module
-
-- **AI Credentials**:
-  - **Gemini API Key**: Get it from [Google AI Studio](https://makersuite.google.com/app/apikey)
-  - **Google Service Account**: Required for real-time speech-to-text accuracy.
-### Bring Your Own Google Speech-to-Text (BYOK)
-
-**CRITICAL: Google Service Account is REQUIRED for transcription.**
-Natively relies on Google Speech-to-Text for real-time transcription. Without a valid Google Service Account, the application's core transcription features will NOT function.
-
-You must provide your own Google Cloud Service Account JSON key.
-**Your credentials never leave your machine and are used only locally.** We do not proxy, log, upload, or store your keys — ever.
-
-#### Why BYOK?
-- You control billing & quotas
-- No shared keys, no rate limits
-- No hidden usage or tracking
-- Works offline (except for Google STT calls)
-
-#### What You Need
-- A Google Cloud account
-- Billing enabled
-- A Service Account with Speech-to-Text access
-- A JSON key file
-
-#### Create a Google STT Service Account
-
-**1. Create / Select a Google Cloud Project**
-- Go to [Google Cloud Console](https://console.cloud.google.com/)
-- Create a new project or select an existing one
-- Enable billing
-
-**2. Enable Speech-to-Text API**
-- Go to **APIs & Services** -> **Library**
-- Search for and enable **Cloud Speech-to-Text API**
-
-**3. Create a Service Account**
-- Go to **IAM & Admin** -> **Service Accounts** -> **Create Service Account**
-- Name: `natively-stt` (or similar)
-- Description: Optional
-
-**4. Assign Permission**
-- Add this specific role: **Speech-to-Text User** (`roles/speech.client`)
-- *Do NOT use Owner or Editor roles unless testing*
-
-**5. Create a JSON Key**
-- Open the newly created service account
-- Go to **Keys** -> **Add Key** -> **Create new key**
-- Choose **JSON**
-- Download the file and save it safely.
-- **Action**: Set the Service Account location in the Natively settings to this file.
-
-#### How to Claim the $300 Credit
-
-1. Go to [cloud.google.com](https://cloud.google.com)
-2. Click "Get started for free"
-3. Sign in with a Google account
-4. Enter billing details (card required for verification)
-5. Accept the free trial
-6. You will instantly receive $300 credit valid for 90 days
-
-### Installation Steps
-
-1. Clone the repository:
-=======
-<div align="center">
-  <img src="assets/icon.png" width="150" alt="Natively AI Assistant Logo">
-
-  # Natively – Open Source AI Meeting Assistant & Cluely Alternative
-
-  [![License](https://img.shields.io/badge/License-AGPL--3.0-blue?style=flat-square)](LICENSE)
-  [![Platform](https://img.shields.io/badge/Platform-macOS%20%7C%20Windows-lightgrey?style=flat-square)](https://github.com/evinjohnn/natively-cluely-ai-assistant/releases)
-  [![Downloads](https://img.shields.io/github/downloads/evinjohnn/natively-cluely-ai-assistant/total?style=flat-square&color=success)](https://github.com/evinjohnn/natively-cluely-ai-assistant/releases)
-  ![Repo Views](https://img.shields.io/badge/Views-13.4k-lightgrey?style=flat-square)
-  [![Stars](https://img.shields.io/github/stars/evinjohnn/natively-cluely-ai-assistant?style=flat-square)](https://github.com/evinjohnn/natively-cluely-ai-assistant)
-  ![Status](https://img.shields.io/badge/Status-active-success?style=flat-square)
-
-</div>
+[![License](https://img.shields.io/badge/License-AGPL--3.0-blue?style=flat-square)](LICENSE)
+[![Platform](https://img.shields.io/badge/Platform-macOS%20%7C%20Windows-blueviolet?style=flat-square)](https://github.com/evinjohnn/natively-cluely-ai-assistant/releases)
+[![Stars](https://img.shields.io/github/stars/evinjohnn/natively-cluely-ai-assistant?style=flat-square&color=gold)](https://github.com/evinjohnn/natively-cluely-ai-assistant)
 
 ---
 
-<div align="center">
+## What Natively Does
 
-> **Natively** is a **free, privacy-first AI Copilot** for **Google Meet, Zoom, and Teams**. It serves as an open-source alternative to Cluely, providing **real-time transcription**, **interview assistance**, and **automated meeting notes** completely locally.
+- **Live interview copilot** — Real-time speech-to-text with sub-500ms latency. Get instant, context-aware answers as questions are asked.
+- **Screenshot problem capture** — OCR any visible coding problem (LeetCode, HackerRank, CoderPad, etc.) and receive full solutions through the overlay.
+- **Rolling context memory** — A sliding context window keeps the AI aware of the full conversation. Local RAG (via SQLite + sqlite-vec) lets you ask questions across all past meetings.
+- **Dual audio channels** — System audio captures what colleagues say; a separate microphone channel handles your voice commands.
+- **Stealth mode** — Instantly hide from the dock/taskbar, disguise the process as a harmless system utility, and stay invisible during screen sharing.
+- **Meetings dashboard** — Search, review, and export full transcripts from every meeting to Markdown, JSON, or plain text.
 
-Unlike cloud-only tools, Natively uses **Local RAG (Retrieval Augmented Generation)** to remember past conversations, giving you instant answers during **technical interviews**, **sales calls**, and **daily standups**.
-
-</div>
-
----
-
-## Why Natively?
-
-While other tools focus on being "lightweight" wrappers, Natively is a complete intelligence system.
-
-- **Local Vector Database (RAG):** We embed your meetings locally so you can ask, "What did John say about the API last week?"
-- **Rich Dashboard:** A full UI to manage, search, and export your history—not just a floating window.
-- **Rolling Context:** We don't just transcribe; we maintain a "memory window" of the conversation for smarter answers.
+Natively is a direct replacement for Final Round AI ($149/mo), LockedIn AI ($70/mo), and Cluely ($20/mo, breached 83k users in 2025) — at $0, open-source, and with zero data breaches.
 
 ---
 
-<div align="center">
+## Quick Start
 
-[![Portfolio](https://img.shields.io/badge/Portfolio-evinjohn.vercel.app-blueviolet?style=flat-square&logo=vercel&logoColor=white)](https://evinjohn.vercel.app/)
-[![LinkedIn](https://img.shields.io/badge/LinkedIn-Connect-0077B5?style=flat-square&logo=linkedin&logoColor=white)](https://www.linkedin.com/in/evinjohn/)
-[![X](https://img.shields.io/badge/X-@evinjohnn-black?style=flat-square&logo=x&logoColor=white)](https://x.com/evinjohnn)
-[![Hire Me](https://img.shields.io/badge/Hire_Me-Contact-success?style=flat-square&logo=gmail&logoColor=white)](mailto:evinjohnn@gmail.com?subject=Natively%20-%20Hiring%20Inquiry)
-[![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20A%20Coffee-Support-FFDD00?style=flat-square&logo=buy-me-a-coffee&logoColor=black)](https://www.buymeacoffee.com/evinjohnn)
+### 1. Download
 
-</div>
+| Platform | Download |
+|----------|----------|
+| macOS (Apple Silicon) | [Natively-2.0.9-arm64.dmg](https://github.com/evinjohnn/natively-cluely-ai-assistant/releases/latest) |
+| macOS (Intel) | [Natively-2.0.9-x64.dmg](https://github.com/evinjohnn/natively-cluely-ai-assistant/releases/latest) |
+| Windows | [Natively Setup 2.0.9.exe](https://github.com/evinjohnn/natively-cluely-ai-assistant/releases/tag/v2.0.5) |
 
-## Demo
+Requires macOS 12+ or Windows 10/11.
 
-![Natively AI Assistant Demo - Real-time Interview Helper and Transcription](assets/natively-ai-meeting-assistant-demo.gif)
+### 2. Install
 
-This demo shows **a complete live meeting scenario**:
-- Real-time transcription as the meeting happens  
-- Rolling context awareness across multiple speakers  
-- Screenshot analysis of shared slides  
-- Instant generation of what to say next  
-- Follow-up questions and concise responses  
-- All happening live, without recording or post-processing  
+**macOS:** Open the DMG, drag Natively into Applications. On first launch, right-click the app and choose Open (or run `xattr -cr /Applications/Natively.app` in Terminal).
 
----
+**Windows:** Run the installer or use the portable `.exe`.
 
-<div align="center">
+### 3. Configure
 
-### Download Natively
-*The privacy-first AI assistant for meetings.*
+On first launch, enter your API keys in Settings. You only need **one** provider to start.
 
-[![Download for macOS](https://img.shields.io/badge/Download_for-macOS-white?style=for-the-badge&logo=apple&logoColor=black)](https://github.com/evinjohnn/natively-cluely-ai-assistant/releases/latest)
-[![Download for Windows](https://img.shields.io/badge/Download_for-Windows-0078D4?style=for-the-badge&logo=windows&logoColor=white)](https://github.com/evinjohnn/natively-cluely-ai-assistant/releases/tag/v1.1.2)
+**AI Providers** (you need one):
 
-<small>Requires macOS 12+ or Windows 10/11</small>
-</div>
+| Provider | Recommended Model | Notes |
+|----------|-------------------|-------|
+| Google Gemini | `gemini-3.1-flash-lite-preview` | Best speed/cost balance |
+| OpenAI | `gpt-4.5` or `o3` | High reasoning |
+| Anthropic | `claude-sonnet-4-6` | Coding & nuance |
+| Groq | `llama-3.3-70b` | Fastest inference |
+| Ollama (local) | `llama3.2` | 100% offline — no API needed |
+| Custom | Any OpenAI-compatible endpoint | OpenRouter, LM Studio, vLLM, etc. |
 
-> [!NOTE]
-> **macOS Users:**
-> 
-> 1.  **"Unidentified Developer"**: If you see this, Right-click the app > Select **Open** > Click **Open**.
-> 2.  **"App is Damaged"**: If you see this (common with DMGs), run this in Terminal:
->     ```bash
->     xattr -cr /Applications/Natively.app
->     ```
->     *(Or point to wherever you installed the app)*
+**Speech Providers** (you need one):
 
-### What's New in v1.1.6
-- **Expanded Speech Providers:** First-class support for **Google, Groq, OpenAI, Deepgram, ElevenLabs, Azure, and IBM Watson**.
-- **Custom Key Bindings:** Fully customizable global shortcuts for window actions.
-- **Stealth Mode 2.0:** Enhanced masquerading (Terminal, Activity Monitor) and "undetectable" dock mode.
-- **Markdown Rendering:** Improved formatting and code highlighting in the Usage View.
-- **Performance:** Optimized image analysis with `sharp` and lower latency interactions.
-- **Models:** Support for **Gemini 3**, **GPT-5.2**, **Groq Llama 3.3**, **Claude 4.5** or any other LLM provider.
+| Provider | Notes |
+|----------|-------|
+| Google STT | Recommended for real-time performance |
+| Deepgram | Fast streaming |
+| Groq | Whisper-based, very fast |
+| OpenAI Whisper | High accuracy |
+| ElevenLabs | Voice-grade accuracy |
 
----
+### 4. Use
 
+| Action | Shortcut |
+|--------|----------|
+| Toggle overlay | `Cmd+Option+Shift+V` |
+| Full screenshot | `Cmd+Option+Shift+S` |
+| Selective screenshot | `Cmd+Option+Shift+A` |
+| Click-through mode | `Cmd+Shift+M` |
 
-## Table of Contents
-
-- [Why Natively?](#why-natively)
-- [Privacy & Security](#privacy--security-core-design-principle)
-- [Quick Start (End Users)](#quick-start-end-users)
-- [Installation (Developers)](#installation-developers--contributors)
-- [AI Providers](#ai-providers)
-- [Key Features](#key-features)
-- [Meeting Intelligence Dashboard](#meeting-intelligence-dashboard)
-- [Use Cases](#use-cases)
-- [Comparison](#comparison)
-- [FAQ](#faq)
-- [Architecture Overview](#architecture-overview)
-- [Technical Details](#technical-details)
-- [Known Limitations](#known-limitations)
-- [Responsible Use](#responsible-use)
-- [Contributing](#contributing)
-- [License](#license)
+Default shortcuts are chosen to avoid collisions with Zoom, Teams, Meet, and browser shortcuts.
 
 ---
 
-## What Is Natively?
+## Key Features
 
-**Natively** is a **desktop AI assistant for live situations**:
-- Meetings
-- Interviews
-- Presentations
-- Classes
-- Professional conversations
+### Interview & Meeting Copilot
+- Real-time speech-to-text with rolling context window and epoch summarization
+- Context-aware answers using profile data (resume, job description, company dossier)
+- Provenance-verified answers that reject unsupported claims before delivery
+- Answer shape planner — chooses the right response structure (direct, tradeoff defense, metric-backed, example, etc.) before generation
 
-It provides:
-- Live answers
-- Rolling conversational context
-- Screenshot and document understanding
-- Real-time speech-to-text
-- Instant suggestions for what to say next
+### Coding Interview Mode
+- Screenshot + OCR captures problems from LeetCode, HackerRank, CoderPad, Codility, HackerEarth, Karat, and any browser-based coding environment
+- Smart fallback to Groq Llama 4 Scout if the primary vision model fails
+- Multi-screenshot support for multi-part problems
 
-All while remaining **invisible, fast, and privacy-first**.
+### Stealth & Privacy
+- **Undetectable mode** — hide from dock/taskbar with a visually locked selector
+- **Process disguise** — rename the app to Terminal, System Settings, Activity Monitor, or other utilities to evade screen-share detection
+- API keys stored in the system keychain, scrubbed from memory on quit
+- 100% local data — transcripts and embeddings stay on your machine (SQLite + sqlite-vec)
+- Zero backend servers, zero data breaches
 
----
-
-## Privacy & Security (Core Design Principle)
-
-- 100% open source (AGPL-3.0)
-- Bring Your Own Keys (BYOK)
-- Local AI option (Ollama)
-- All data stored locally
-- No telemetry
-- No tracking
-- No hidden uploads
-
-You explicitly control:
-- What runs locally
-- What uses cloud AI
-- Which providers are enabled
+### Meeting Intelligence Dashboard
+- Full transcript archive with semantic search across all past meetings
+- One-click export to Markdown, JSON, or plain text
+- Usage statistics and token cost tracking
+- Separate volume controls for system audio and microphone input
 
 ---
 
-## Installation (Developers & Contributors)
+## Architecture
+
+```
+┌─────────────────────────────────────────────────────────┐
+│  Inputs                                                  │
+│  System audio + mic ─► Rust native module (napi-rs)     │
+│  Screenshots ─► Sharp + Tesseract OCR                   │
+│  Global shortcuts, tray, IPC ─► electron main           │
+└──────────────────────────┬──────────────────────────────┘
+                           │
+┌──────────────────────────▼──────────────────────────────┐
+│  Electron Main Process                                   │
+│  AppState · WindowFacade · RuntimeCoordinator           │
+│  SessionTracker (rolling context, phase detection)      │
+│  ProcessingHelper + IntelligenceManager                 │
+│  MeetingPersistence + RAGManager                        │
+│  StealthManager (dock hide, process disguise, watchdogs)│
+└──────────────────────────┬──────────────────────────────┘
+                           │
+┌──────────────────────────▼──────────────────────────────┐
+│  Stealth Surface Runtime                                 │
+│  Offscreen content window (React UI)                     │
+│  FrameBridge → visible shell window (paint forwarding)  │
+│  InputBridge ← shell input routing back                 │
+└──────────────────────────┬──────────────────────────────┘
+                           │
+┌──────────────────────────▼──────────────────────────────┐
+│  Providers & Storage                                     │
+│  STT: Deepgram, Google, Groq, Whisper, Soniox           │
+│  LLM: OpenAI, Anthropic, Gemini, Groq, Ollama, Custom   │
+│  DB: SQLite + sqlite-vec (local RAG)                    │
+└─────────────────────────────────────────────────────────┘
+```
+
+### Tech Stack
+
+| Layer | Technology |
+|-------|------------|
+| Frontend | React 18, Vite, TypeScript, TailwindCSS, Radix UI, Framer Motion |
+| Desktop | Electron 41 |
+| Native audio | Rust (`napi-rs`, zero-copy ABI via `napi::Buffer`) |
+| Database | SQLite (`better-sqlite3`) + `sqlite-vec` for vector search |
+| OCR | Tesseract.js + Sharp |
+| State | React Query, electron-store |
+
+---
+
+## Building from Source
 
 ### Prerequisites
-- Node.js (v20+ recommended)
-- Git
-- Rust (required for native audio capture)
 
-### AI Credentials & Speech Providers
+- Node.js 20+
+- Rust (optional — only needed to rebuild the native audio module; pre-built binaries included)
+- macOS: Xcode CLI tools (`xcode-select --install`)
+- Windows: Visual Studio Build Tools with "Desktop development with C++"
 
-**Natively is 100% free to use with your own keys.**  
-Connect **any** speech provider and **any** LLM. No subscriptions, no markups, no hidden fees. All keys are stored locally.
+### Build
 
-### Unlimited Free Transcription (Whisper, Google, Deepgram)
-- **Google Cloud Speech-to-Text** (Service Account)
-- **Groq** (API Key)
-- **OpenAI Whisper** (API Key)
-- **Deepgram** (API Key)
-- **ElevenLabs** (API Key)
-- **Azure Speech Services** (API Key + Region)
-- **IBM Watson** (API Key + Region)
-
-### AI Engine Support (Bring Your Own Key)
-Connect Natively to **any** leading model or local inference engine.
-
-| Provider | Best For |
-| :--- | :--- |
-| **Gemini 3 Pro/Flash** | Recommended: Massive context window (2M tokens) & low cost. |
-| **OpenAI (GPT-5.2)** | High reasoning capabilities. |
-| **Anthropic (Claude 4.5)** | Coding & complex nuanced tasks. |
-| **Groq / Llama 3** | insane speed (near-instant answers). |
-| **Ollama / LocalAI** | 100% Offline & Private (No API keys needed). |
-| **OpenAI-Compatible** | Connect to *any* custom endpoint (vLLM, LM Studio, etc.) |
-
-> **Note:** You only need ONE speech provider to get started. We recommend **Google STT** ,**Groq** or **Deepgram** for the fastest real-time performance.  
-
----
-#### To Use Google Speech-to-Text (Optional)
-
-Your credentials:
-- Never leave your machine
-- Are not logged, proxied, or stored remotely
-- Are used only locally by the app
-
-What You Need:
-- Google Cloud account
-- Billing enabled
-- Speech-to-Text API enabled
-- Service Account JSON key
-
-Setup Summary:
-1. Create or select a Google Cloud project  
-2. Enable Speech-to-Text API  
-3. Create a Service Account  
-4. Assign role: `roles/speech.client`  
-5. Generate and download a JSON key  
-6. Point Natively to the JSON file in settings 
-
----
-
-## Development Setup
-
-### Clone the Repository
->>>>>>> main
 ```bash
 git clone https://github.com/evinjohnn/natively-cluely-ai-assistant.git
 cd natively-cluely-ai-assistant
-```
-
-<<<<<<< HEAD
-2. Install dependencies:
-```bash
 npm install
-# Note: This automatically builds the Rust native audio module
-```
 
-3. Set up environment variables:
-   - Create a file named `.env` in the root folder
-   
-   **For Gemini (Cloud AI) & Speech-to-Text:**
-   ```env
-   GEMINI_API_KEY=your_api_key_here
-   GROQ_API_KEY=your_groq_key_here
-   GOOGLE_APPLICATION_CREDENTIALS=/absolute/path/to/your-service-account.json
-   ```
-   
-   **For Ollama (Local/Private AI):**
-   ```env
-   USE_OLLAMA=true
-   OLLAMA_MODEL=llama3.2
-   OLLAMA_URL=http://localhost:11434
-   ```
-   
-   - Save the file
+# Create .env with at least one AI provider key
+echo "GEMINI_API_KEY=your_key_here" > .env
+echo "DEFAULT_MODEL=gemini-3.1-flash-lite-preview" >> .env
 
-### Running the App
-
-#### Method 1: Development Mode (Recommended for first run)
-1. Start the development server:
-=======
-### Install Dependencies
-```bash
-npm install
-```
-
-### Environment Variables
-Create a `.env` file:
-
-```env
-# Cloud AI
-GEMINI_API_KEY=your_key
-GROQ_API_KEY=your_key
-OPENAI_API_KEY=your_key
-CLAUDE_API_KEY=your_key
-GOOGLE_APPLICATION_CREDENTIALS=/absolute/path/to/service-account.json
-
-# Speech Providers (Optional - only one needed)
-DEEPGRAM_API_KEY=your_key
-ELEVENLABS_API_KEY=your_key
-AZURE_SPEECH_KEY=your_key
-AZURE_SPEECH_REGION=eastus
-IBM_WATSON_API_KEY=your_key
-IBM_WATSON_REGION=us-south
-
-# Local AI (Ollama)
-USE_OLLAMA=true
-OLLAMA_MODEL=llama3.2
-OLLAMA_URL=http://localhost:11434
-
-# Default Model Configuration
-DEFAULT_MODEL=gemini-3-flash-preview
-```
-
-### Run (Development)
->>>>>>> main
-```bash
+# Development
 npm start
-```
 
-<<<<<<< HEAD
-This command automatically:
-- Starts the Vite dev server on port 5180
-- Waits for the server to be ready
-- Launches the Electron app
-
-#### Method 2: Production Build
-```bash
-npm run dist
-```
-The built app will be in the `release` folder.
-
-## 🤖 AI Provider Options
-
-### Ollama (Recommended for Privacy)
-**Pros:**
-- 100% private - data never leaves your computer
-- No API costs
-- Works offline
-- Supports many models: `llama3.2`, `codellama`, `mistral`, etc.
-
-**Setup:**
-1. Install Ollama from [ollama.ai](https://ollama.ai)
-2. Pull a model: `ollama pull llama3.2`
-3. Set environment variables as shown above
-
-### Google Gemini
-**Pros:**
-- Latest AI technology (Gemini 3.0 Flash/Pro)
-- Fast responses
-- Best accuracy for complex tasks and multimodal analysis
-
-**Cons:**
-- Requires API key and internet
-- Data sent to Google servers
-- Usage costs may apply (though free tier is generous)
-
-### Groq
-**Pros:**
-- Super fast inference
-- Free tier available
-
-**Cons:**
-- No multimodal (vision) responses via Groq directly in this implementation context (usually text-only)
-
-## ⚠️ Important Notes
-
-1. **Closing the App**: 
-   - Press `Cmd + Q` (Mac) or `Ctrl + Q` (Windows/Linux) to quit
-   - Or use Activity Monitor/Task Manager to close `Natively`
-   - The X button currently doesn't work (known issue)
-
-2. **If the app doesn't start**:
-   - Make sure no other app is using port 5180
-   - Try killing existing processes:
-     ```bash
-     # Find processes using port 5180
-     lsof -i :5180
-     # Kill them (replace [PID] with the process ID)
-     kill [PID]
-     ```
-   - For Ollama users: Make sure Ollama is running (`ollama serve`)
-
-3. **Keyboard Shortcuts**:
-   - `Cmd/Ctrl + B`: Toggle window visibility
-   - `Cmd/Ctrl + H`: Take screenshot (Smart Analysis)
-   - `Cmd/Ctrl + Shift + H`: Take selective screenshot
-   - `Cmd + Enter`: Get solution / Send message
-   - `Cmd/Ctrl + Arrow Keys`: Move window
-
-#### General Installation Issues
-If you see other errors:
-1. Delete the `node_modules` folder
-2. Delete `package-lock.json` 
-3. Run `npm install` again
-4. Try running with `npm start`
-
-### Platform-Specific Notes
-- **Windows**: Looking for maintainers
-- **Ubuntu/Linux**: Looking for maintainers
-- **macOS**: Native support with proper window management
-
-## Key Features
-
-### **Invisible AI Assistant**
-- Translucent, always-on-top window that's barely noticeable
-- Hide/show instantly with global hotkeys
-- Works seamlessly across all applications
-
-### **Smart Screenshot Analysis** 
-- Take screenshots of any content with `Cmd/Ctrl + H`
-- AI analyzes images, documents, presentations, or problems
-- Get instant explanations, answers, and solutions
-
-### **Audio Intelligence**
-- **Native Rust Module**: High-performance, low-latency audio capture
-- Process audio files and recordings
-- Real-time transcription and analysis
-- Perfect for meeting notes and content review
-
-### **Contextual Chat**
-- Chat with AI about anything you see on screen
-- Maintains conversation context
-- Ask follow-up questions for deeper insights
-
-### **Interface Features (Quick Actions)**
-Control your interactions instantly with 5 powerful tools:
-- **✏️ What to answer?**: Instantly generates a context-aware response to the current topic.
-- **💬 Shorten**: Refines the last suggested answer to be more concise and natural.
-- **🔄 Recap**: Generates a comprehensive summary of the conversation so far.
-- **❓ Follow Up Question**: Suggests strategic questions you can ask to drive the conversation.
-- **⚡ Answer**: Manually trigger a response or use voice input to ask specific questions.
-
-### **Live Meeting Intelligence**
-- **🧠 Rolling Context Window**: Maintains a smart, sliding window of conversation history. This allows the AI to "remember" what was just said, enabling instant, highly relevant answers as soon as a question is asked.
-- **Rolling Transcript**: View real-time speech-to-text as the meeting progresses.
-- **Smart Note Taking**: Automatically captures key points and summaries (via Recap).
-- **Usage Tracking**: Monitor your interaction history and AI usage.
-
-### **Privacy-First Design**
-- **Local AI Option**: Use Ollama for 100% private processing
-- **Cloud Option**: Google Gemini for maximum performance
-- **Data Control**: All data stored locally in SQLite
-- No data tracking or storage on external servers (unless using Cloud AI)
-
-## Use Cases
-
-### **Academic & Learning**
-```
-✓ Live presentation support during classes
-✓ Quick research during online exams  
-✓ Language translation and explanations
-✓ Math and science problem solving
-```
-
-### **Professional Meetings**
-```
-✓ Sales call preparation and objection handling
-✓ Technical interview coaching
-✓ Client presentation support
-✓ Real-time fact-checking and data lookup
-```
-
-### **Development & Tech**
-```
-✓ Debug error messages instantly
-✓ Code explanation and optimization
-✓ Documentation and API references
-✓ Algorithm and architecture guidance
-```
-
-## Why Choose Natively?
-
-| Feature | Natively | Commercial Alternatives |
-|---------|-------------|------------------------|
-| **Cost** | 100% Free | $29-99/month |
-| **Privacy** | Local AI Option | Cloud-only |
-| **Open Source** | Full transparency | Closed source |
-| **Customization** | Fully customizable | Limited options |
-| **Data Control** | You own your data | Third-party servers |
-| **Offline Mode** | Yes (with Ollama) | No |
-
-## Technical Details
-
-### **Tech Stack**
-- **Frontend**: [React](https://react.dev/), [Vite](https://vitejs.dev/), [TypeScript](https://www.typescriptlang.org/), [TailwindCSS](https://tailwindcss.com/)
-- **Backend/Desktop**: [Electron](https://www.electronjs.org/)
-- **Native Performance**: **Rust** (via N-API) for system audio capture
-- **Database**: [Better-SQLite3](https://github.com/WiseLibs/better-sqlite3) for local storage
-- **State Management**: React Query
-
-### **AI Models Supported**
-- **Google Gemini**: `gemini-3-flash-preview` (Fast, Multimodal), `gemini-3-pro-preview` (Reasoning)
-- **Ollama (Local)**: `llama3.2`, `mistral`, `codellama`, etc.
-- **Groq**: High-speed inference for open models (Llama 3, Mixtral)
-
-### **System Requirements**
-```bash
-Minimum:  4GB RAM, Dual-core CPU, 2GB storage
-Recommended: 8GB+ RAM, Quad-core CPU, 5GB+ storage
-Optimal: 16GB+ RAM (Apple Silicon M1/M2/M3) for local AI models
-```
-
-## 🤝 Contributing
-
-This project welcomes contributions! While I have limited time for active maintenance, I'll review and merge quality PRs.
-
-**Ways to contribute:**
-- 🐛 Bug fixes and stability improvements
-- ✨ New features and AI model integrations  
-- 📚 Documentation and tutorial improvements
-- 🌍 Translations and internationalization
-- 🎨 UI/UX enhancements
-
-For commercial integrations or custom development, reach out.
-
-## 📄 License
-
-This project is licensed under the GNU Affero General Public License v3.0 (AGPL-3.0).
-
-If you use, modify, or run this software as a service over a network,
-you must make the complete source code available under the same license.
-
----
-
-**⭐ Star this repo if Natively helps you succeed in meetings, interviews, or presentations!**
-
-### 🏷️ Tags
-`ai-assistant` `meeting-notes` `interview-helper` `presentation-support` `ollama` `gemini-ai` `electron-app` `cross-platform` `privacy-focused` `open-source` `local-ai` `screenshot-analysis` `academic-helper` `sales-assistant` `coding-companion`
-=======
-### Build (Production)
-```bash
+# Production build → ./release/
 npm run dist
 ```
 
----
-
-### AI Providers
-- **Custom (BYO Endpoint):** Paste any cURL command to use OpenRouter, DeepSeek, or private endpoints.
-- **Ollama (Local):** Zero-setup detection of local models (Llama 3, Mistral, Gemma).
-- **Google Gemini:** First-class support for Gemini 3.0 Pro/Flash.
-- **OpenAI:** GPT-5.2 support with optimized system prompts.
-- **Anthropic:** Claude 4.5 Sonnet support for complex reasoning.
-- **Groq:** Ultra-fast inference with Llama 3 models.
-
----
-
-## Key Features
-
-### Invisible Desktop Assistant
-- Always-on-top translucent overlay
-- Instantly hide/show with shortcuts
-- Works across all applications
-
-### Real-time Interview Copilot & Coding Help
-- Real-time speech-to-text
-- Context-aware Memory (RAG) for Past Meetings
-- Instant answers as questions are asked
-- Smart recap and summaries
-
-### Instant Screen & Slide Analysis (OCR)
-- Capture any screen content
-- Analyze slides, documents, code, or problems
-- Immediate explanations and solutions
-
-### Contextual Actions
-- What should I answer?
-- Shorten response
-- Recap conversation
-- Suggest follow-up questions
-- Manual or voice-triggered prompts
-
-### Dual-Channel Audio Intelligence
-Natively understands that *listening* to a meeting and *talking* to an AI are different tasks. We treat them separately:
-
-- **System Audio (The Meeting):** Captures high-fidelity audio directly from your OS (Zoom, Teams, Meet). It "hears" what your colleagues are saying without interference from your room noise.
-- **Microphone Input (Your Voice):** A dedicated channel for your voice commands and dictation. Toggle it instantly to ask Natively a private question without muting your meeting software.
-
-### Spotlight Search & Calendar
-- Global activation shortcut
-- Instant answer overlay
-- Upcoming meeting readiness
-
-### Local RAG & Long-Term Memory
-- **Full Offline RAG:** All vector embeddings and retrieval happen locally (SQLite).
-- **Semantic Search:** innovative "Smart Scope" detects if you are asking about the current meeting or a past one.
-- **Global Knowledge:** Ask questions across *all* your past meetings ("What did we decide about the API last month?").
-- **Automatic Indexing:** Meetings are automatically chunked, embedded, and indexed in the background.
-
-### Advanced Privacy & Stealth
-- **Undetectable Mode:** Instantly hide from dock/taskbar.
-- **Masquerading:** Disguise process names and window titles as harmless system utilities.
-- **Local-Only Processing:** All data stays on your machine.
-
----
-
-## Meeting Intelligence Dashboard
-Natively includes a powerful, local-first meeting management system to review, search, and manage your entire conversation history.
-
-![Dashboard Preview](assets/dashboard-preview.png)
-
-- **Meeting Archives:** Access full transcripts of every past meeting, searchable by keywords or dates.
-- **Smart Export:** One-click export of transcripts and AI summaries to **Markdown, JSON, or Text**—perfect for pasting into Notion, Obsidian, or Slack.
-- **Usage Statistics:** Track your token usage and API costs in real-time. Know exactly how much you are spending on Gemini, OpenAI, or Claude.
-- **Audio Separation:** Distinct controls for **System Audio** (what they say) vs. **Microphone** (what you dictate).
-- **Session Management:** Rename, organize, or delete past sessions to keep your workspace clean.
-
----
-
-## Use Cases
-
-### Academic & Learning
-- **Live Assistance:** Get explanations for complex lecture topics in real-time.
-- **Translation:** Instant language translation during international classes.
-- **Problem Solving:** Immediate help with coding or mathematical problems.
-
-### Professional Meetings
-- **Interview Support:** Context-aware prompts to help you navigate technical questions.
-- **Sales & Client Calls:** Real-time clarification of technical specs or previous discussion points.
-- **Meeting Summaries:** Automatically extract action items and core decisions.
-
-### Development & Technical Work
-- **Code Insight:** Explain unfamiliar blocks of code or logic on your screen.
-- **Debugging:** Context-aware assistance for resolving logs or terminal errors.
-- **Architecture:** Guidance on system design and integration patterns.
+See the [full build documentation](https://github.com/evinjohnn/natively-cluely-ai-assistant#building-from-source) for Windows details, entitlements, code signing, and troubleshooting.
 
 ---
 
 ## Comparison
 
-**Natively is built on a simple promise: Any speech provider, any API key, 100% free to use, and universally compatible.**
-
-| Feature | Natively | Commercial Tools (Cluely, etc.) | Other OSS |
-| :--- | :--- | :--- | :--- |
-| **Price** | **Free (BYOK)** | $20 - $50 / month | Free |
-| **Speech Providers** | **Any (Google, Groq, Deepgram, etc.)** | Locked to Vendor | Limited |
-| **LLM Choice** | **Any (Local or Cloud)** | Locked to Vendor | Limited |
-| **Privacy** | **Local-First & Private** | Data stored on servers | Depends |
-| **Latency** | **Real-Time (<500ms)** | Variable | Often Slow |
-| **Universal Mode** | **Works over ANY app** | often limited to browser | No |
-| **Meeting History** | **Full Dashboard & Search** | Limited | None |
-| **Data Export** | **JSON / Markdown / Text** | Proprietary Format | None |
-| **Audio Channels** | **Dual (System + Mic)** | Single Stream | Single Stream |
-| **Screenshot Analysis** | **Yes (Native)** | Limited | Rare |
-| **Stealth Mode** | **Yes (Undetectable)** | No | No |
+| | Natively | Cluely | Final Round AI | LockedIn AI |
+|-|----------|--------|----------------|-------------|
+| Price | **Free** (BYOK) | $20/mo | $149/mo | $55–70/mo |
+| Open source | **Yes** | No | No | No |
+| Data stored | **Local** | Cloud | Cloud | Cloud |
+| Any LLM | **Yes** | No | No | No |
+| Local AI (offline) | **Ollama** | No | No | No |
+| Real-time latency | **<500ms** | 5–90s | Slowest | ~116ms |
+| Dual audio channels | **Yes** | No | No | No |
+| Local RAG memory | **Yes** | No | No | No |
+| Stealth mode | **Yes** | No | Visible | No |
+| Data breach history | **None** | 83k users exposed | None | None |
 
 ---
 
-## Architecture Overview
+## Privacy
 
-Natively processes audio, screen context, and user input locally, maintains a rolling context window, and sends only the required prompt data to the selected AI provider (local or cloud).
-
-No raw audio, screenshots, or transcripts are stored or transmitted unless explicitly enabled by the user. 
-
----
-
-## Technical Details
-
-### Tech Stack
-- **React, Vite, TypeScript, TailwindCSS**
-- **Electron**
-- **Rust** (native audio)
-- **SQLite** (local storage)
-
-### Supported Models
-- **Gemini 3** (Flash / Pro)
-- **OpenAI** (GPT-5.2)
-- **Claude** (Sonnet 4.5)
-- **Ollama** (Llama, Mistral, CodeLlama)
-- **Groq** (Llama, Mixtral)
-
-### System Requirements
-- **Minimum:** 4GB RAM
-- **Recommended:** 8GB+ RAM
-- **Optimal:** 16GB+ RAM for local AI
+- AGPL-3.0 open source — entire codebase auditable
+- Bring your own API keys — keys never leave your machine
+- All data stored locally — SQLite on your machine, no cloud servers
+- Optional Ollama mode — 100% offline, zero network calls
+- API keys scrubbed from memory on app quit
+- No backend, no server to breach
 
 ---
 
-## Responsible Use
+## Project Structure
 
-Natively is intended for:
-- Learning
-- Productivity
-- Accessibility
-- Professional assistance
+```
+natively-cluely-ai-assistant/
+├── electron/                  # Electron main process
+│   ├── main.ts                # Entry point, supervisors, IPC wiring
+│   ├── stealth/               # StealthManager, process disguise, dock hide
+│   ├── conscious/             # Rolling context, answer planner, provenance verifier
+│   ├── rag/                   # RAG system (chunking, embedding, vector search)
+│   ├── db/                    # SQLite + sqlite-vec layer
+│   ├── llm/                   # Multi-provider LLM routing
+│   ├── runtime/               # Audio, STT, Inference, Window, Settings facades
+│   └── services/              # Settings, credentials, calendar managers
+├── native-module/             # Rust native audio capture (napi-rs)
+├── src/                       # React frontend (renderer)
+│   ├── components/            # UI components
+│   ├── hooks/                 # React hooks
+│   ├── lib/                   # Utilities, feature flags
+│   └── types/                 # TypeScript types
+├── renderer/                  # Renderer-side tests
+├── scripts/                   # Build, model download, verification scripts
+├── shared/                    # Shared types/utilities
+└── package.json               # Dependencies and scripts
+```
 
-Users are responsible for complying with:
-- Workplace policies
-- Academic rules
-- Local laws and regulations
+---
 
-This project does not encourage misuse or deception.
+## Available Scripts
+
+| Script | Description |
+|--------|-------------|
+| `npm start` | Start dev server + Electron |
+| `npm run dev` | Vite dev server only |
+| `npm run dist` | Production build |
+| `npm run typecheck` | TypeScript checking |
+| `npm run test` | Electron + Rust tests |
+| `npm run eval:conscious` | Conscious mode evaluation |
+| `npm run verify:production` | Full production verification gate |
 
 ---
 
 ## Known Limitations
-- Linux support is limited and looking for maintainers
 
----
-
-## Contributing
-
-Contributions are welcome:
-- Bug fixes
-- Feature improvements
-- Documentation
-- UI/UX enhancements
-- New AI integrations
-
-Quality pull requests will be reviewed and merged.
+- No Linux support yet
+- Full desktop screen share: stealth is best-effort; prefer window or browser tab share for strongest coverage
+- Not designed to bypass dedicated proctoring software (Pearson VUE, ProctorU, Respondus Lockdown Browser)
 
 ---
 
 ## License
 
-Licensed under the GNU Affero General Public License v3.0 (AGPL-3.0).
-
-If you run or modify this software over a network, you must provide the full source code under the same license.
-
-> **Note:** This project is available for sponsorships, ads, or partnerships – perfect for companies in the AI, productivity, or developer tools space.
+[GNU Affero General Public License v3.0](LICENSE)
 
 ---
 
-**Star this repo if Natively helps you succeed in meetings, interviews, or presentations!**
+## Contributing
 
----
-
----
-
-## FAQ
-
-#### Is Natively really free?
-Yes. Natively is an open-source project. You only pay for what you use by bringing your own API keys (Gemini, OpenAI, Anthropic, etc.), or use it **100% free** by connecting to a local Ollama instance.
-
-#### Does Natively work with Zoom, Teams, and Google Meet?
-Yes. Natively uses a Rust-based system audio capture that works universally across any desktop application, including Zoom, Microsoft Teams, Google Meet, Slack, and Discord.
-
-#### Is my data safe?
-Natively is built on **Privacy-by-Design**. All transcripts, vector embeddings (Local RAG), and keys are stored locally on your machine. We have no backend and collect zero telemetry.
-
-#### Can I use it for technical interviews?
-Natively is a powerful assistant for any professional situation. However, users are responsible for complying with their company policies and interview guidelines.
-
-#### How do I use local models?
-Simply install **Ollama**, run a model (e.g., `ollama run llama3`), and Natively will automatically detect it. Enable "Ollama" in the AI Providers settings to switch to offline mode.
-
----
-
-### Tags
-`ai-assistant` `meeting-notes` `interview-helper` `presentation-support` `ollama` `gemini-ai` `electron-app` `cross-platform` `privacy-focused` `open-source` `local-ai` `screenshot-analysis` `academic-helper` `sales-assistant` `coding-companion` `cluely` `cluely alternative` `interview coder` `final round ai` `claude skills` `moltbot`
-
----
-
-## Star History
-
-<a href="https://star-history.com/#evinjohnn/natively-cluely-ai-assistant&Date">
- <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=evinjohnn/natively-cluely-ai-assistant&type=Date&theme=dark" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=evinjohnn/natively-cluely-ai-assistant&type=Date" />
-   <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=evinjohnn/natively-cluely-ai-assistant&type=Date" />
- </picture>
-</a>
->>>>>>> main
+Contributions welcome — bug fixes, features, documentation, UI/UX, new AI integrations. See [CONTRIBUTING.md](CONTRIBUTING.md).

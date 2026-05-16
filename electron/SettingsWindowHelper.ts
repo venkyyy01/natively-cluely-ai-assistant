@@ -1,25 +1,20 @@
-import { BrowserWindow, screen } from "electron"
+import { BrowserWindow, screen, app } from "electron"
 import { WindowHelper } from "./WindowHelper"
 import path from "node:path"
-
-const isDev = process.env.NODE_ENV === "development"
-
-const startUrl = isDev
-    ? "http://localhost:5180"
-    : `file://${path.join(__dirname, "../dist/index.html")}`
+import { StealthManager } from "./stealth/StealthManager"
+import { attachRendererBridgeMonitor } from "./runtime/rendererBridgeHealth"
+import { resolveRendererPreloadPath, resolveRendererStartUrl } from "./runtime/windowAssetPaths"
 
 export class SettingsWindowHelper {
     private settingsWindow: BrowserWindow | null = null
-    private advancedWindow: BrowserWindow | null = null
     private windowHelper: WindowHelper | null = null;
+    private opacityTimeout: NodeJS.Timeout | null = null;
+    private readonly stealthManager: StealthManager;
 
     public getSettingsWindow(): BrowserWindow | null {
         return this.settingsWindow
     }
 
-    public getAdvancedWindow(): BrowserWindow | null {
-        return this.advancedWindow
-    }
     public setWindowDimensions(win: BrowserWindow, width: number, height: number): void {
         if (!win || win.isDestroyed() || !win.isVisible()) return
 
@@ -36,8 +31,21 @@ export class SettingsWindowHelper {
 
     private lastBlurTime: number = 0
     private ignoreBlur: boolean = false;
+    private detachRendererBridgeMonitor: (() => void) | null = null
 
-    constructor() { }
+    constructor(stealthManager: StealthManager) {
+        this.stealthManager = stealthManager;
+    }
+
+    private applyStealth(enable: boolean): void {
+        if (!this.settingsWindow || this.settingsWindow.isDestroyed()) return;
+
+        this.stealthManager.applyToWindow(this.settingsWindow, enable, {
+            role: 'auxiliary',
+            hideFromSwitcher: true,
+            allowVirtualDisplayIsolation: true,
+        });
+    }
 
     public setIgnoreBlur(ignore: boolean): void {
         this.ignoreBlur = ignore;
@@ -58,7 +66,7 @@ export class SettingsWindowHelper {
     }
 
     public toggleWindow(x?: number, y?: number): void {
-        const mainWindow = BrowserWindow.getAllWindows().find(w => !w.isDestroyed() && w !== this.settingsWindow && w !== this.advancedWindow);
+        const mainWindow = BrowserWindow.getAllWindows().find(w => !w.isDestroyed() && w !== this.settingsWindow);
         if (mainWindow && x !== undefined && y !== undefined) {
             const bounds = mainWindow.getBounds();
             this.offsetX = x - bounds.x;
@@ -88,18 +96,50 @@ export class SettingsWindowHelper {
         }
 
         // Set parent to ensure it stays on top of the correct window
-        const mainWin = this.windowHelper?.getMainWindow();
+        const mainWin = this.windowHelper?.getVisibleMainWindow();
         if (mainWin && !mainWin.isDestroyed()) {
             this.settingsWindow.setParentWindow(mainWin);
         }
+
         if (x !== undefined && y !== undefined) {
             this.settingsWindow.setPosition(Math.round(x), Math.round(y))
         }
 
         // Ensure fully visible on screen
         this.ensureVisibleOnScreen();
-        this.settingsWindow.show()
-        this.settingsWindow.focus()
+
+        if (process.platform === 'win32' && this.contentProtection) {
+            this.stealthManager.setWindowOpacity(this.settingsWindow, 0, {
+                source: 'SettingsWindowHelper.showWindow.win32',
+                windowRole: 'auxiliary',
+            });
+            this.stealthManager.requestWindowShow(this.settingsWindow, {
+                source: 'SettingsWindowHelper.showWindow.win32',
+                windowRole: 'auxiliary',
+            });
+            this.applyStealth(true);
+            
+            if (this.opacityTimeout) clearTimeout(this.opacityTimeout);
+            this.opacityTimeout = setTimeout(() => {
+                if (this.settingsWindow && !this.settingsWindow.isDestroyed()) {
+                    this.stealthManager.setWindowOpacity(this.settingsWindow, 1, {
+                        source: 'SettingsWindowHelper.showWindow.win32.restore',
+                        windowRole: 'auxiliary',
+                    });
+                    this.stealthManager.reapplyAfterShow(this.settingsWindow);
+                    this.settingsWindow.focus();
+                }
+            }, 60);
+        } else {
+            this.applyStealth(this.contentProtection);
+            this.stealthManager.requestWindowShow(this.settingsWindow, {
+                source: 'SettingsWindowHelper.showWindow',
+                windowRole: 'auxiliary',
+            });
+            this.stealthManager.reapplyAfterShow(this.settingsWindow);
+            this.settingsWindow.focus();
+        }
+        
         this.emitVisibilityChange(true);
     }
 
@@ -110,83 +150,48 @@ export class SettingsWindowHelper {
         const newY = mainBounds.y + mainBounds.height + this.offsetY;
 
         this.settingsWindow.setPosition(Math.round(newX), Math.round(newY));
-        // Also update advanced window if visible
-        if (this.advancedWindow && this.advancedWindow.isVisible()) {
-            const { width } = this.settingsWindow.getBounds();
-            this.advancedWindow.setPosition(Math.round(newX + width + 10), Math.round(newY));
-        }
     }
 
     public closeWindow(): void {
         if (this.settingsWindow && !this.settingsWindow.isDestroyed()) {
-            this.settingsWindow.hide()
+            this.stealthManager.requestWindowHide(this.settingsWindow, {
+                source: 'SettingsWindowHelper.closeWindow',
+                windowRole: 'auxiliary',
+            })
             this.emitVisibilityChange(false);
-        }
-        this.closeAdvancedWindow();
-        if (this.windowHelper) {
-            this.windowHelper.restoreFocusToMainWindow();
-        }
-    }
-
-    public toggleAdvancedWindow(): void {
-        if (this.advancedWindow && !this.advancedWindow.isDestroyed()) {
-            if (this.advancedWindow.isVisible()) {
-                this.advancedWindow.hide();
-            } else {
-                this.showAdvancedWindow();
-            }
-        } else {
-            this.createAdvancedWindow();
-        }
-    }
-
-    public showAdvancedWindow(): void {
-        if (!this.settingsWindow || !this.settingsWindow.isVisible()) return;
-
-        if (!this.advancedWindow || this.advancedWindow.isDestroyed()) {
-            this.createAdvancedWindow();
-            return;
-        }
-
-        const { x, y, width } = this.settingsWindow.getBounds();
-        this.advancedWindow.setPosition(x + width + 10, y);
-        this.advancedWindow.show();
-        this.advancedWindow.focus();
-    }
-
-    public closeAdvancedWindow(): void {
-        if (this.advancedWindow && !this.advancedWindow.isDestroyed()) {
-            this.advancedWindow.hide();
         }
     }
 
     private emitVisibilityChange(isVisible: boolean): void {
-        const mainWindow = BrowserWindow.getAllWindows().find(w => !w.isDestroyed() && w !== this.settingsWindow && w !== this.advancedWindow);
+        const mainWindow = BrowserWindow.getAllWindows().find(w => !w.isDestroyed() && w !== this.settingsWindow);
         if (mainWindow) {
             mainWindow.webContents.send('settings-visibility-changed', isVisible);
         }
     }
 
-    private createWindow(x?: number, y?: number, showWhenReady: boolean = true): void {
-        const windowSettings: Electron.BrowserWindowConstructorOptions = {
-            width: 225, // Match React component width
-            height: 238, // Increased to accommodate new Transcript toggle
-            frame: false,
-            transparent: true,
-            resizable: false,
-            fullscreenable: false,
-            hasShadow: false,
-            alwaysOnTop: true,
-            backgroundColor: "#00000000",
-            show: false,
-            skipTaskbar: true,
-            webPreferences: {
-                nodeIntegration: false,
-                contextIsolation: true,
-                preload: path.join(__dirname, "preload.js"),
-                backgroundThrottling: false // Keep window ready even when hidden
-            }
-        }
+private createWindow(x?: number, y?: number, showWhenReady: boolean = true): void {
+  const startUrl = resolveRendererStartUrl({ electronDir: __dirname })
+  const preloadPath = resolveRendererPreloadPath({ electronDir: __dirname })
+  const windowSettings: Electron.BrowserWindowConstructorOptions = {
+    width: 200, // Match React component width
+    height: 238, // Increased to accommodate new Transcript toggle
+    frame: false,
+    transparent: true,
+    resizable: false,
+    fullscreenable: false,
+    hasShadow: false,
+    alwaysOnTop: true,
+    backgroundColor: "#00000000",
+    show: false,
+    skipTaskbar: true,
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true,
+      sandbox: false,
+      preload: preloadPath,
+      backgroundThrottling: false // Keep window ready even when hidden
+    }
+  }
 
         if (x !== undefined && y !== undefined) {
             windowSettings.x = Math.round(x)
@@ -194,6 +199,24 @@ export class SettingsWindowHelper {
         }
 
         this.settingsWindow = new BrowserWindow(windowSettings)
+        // S-RACE-1: apply Layer-0 capture protection synchronously before any
+        // loadURL / setVisibleOnAllWorkspaces call so the window is born
+        // protected.
+        this.stealthManager.applyInitialStealth(this.settingsWindow, {
+            role: 'auxiliary',
+            hideFromSwitcher: true,
+            allowVirtualDisplayIsolation: true,
+        })
+        this.stealthManager.recordProtectionEvent('window-created', {
+            source: 'SettingsWindowHelper.createWindow',
+            windowRole: 'auxiliary',
+            visible: false,
+        })
+        this.detachRendererBridgeMonitor?.()
+        this.detachRendererBridgeMonitor = attachRendererBridgeMonitor('Settings', this.settingsWindow, {
+            expectedPreloadPath: preloadPath,
+            url: `${startUrl}?window=settings`,
+        })
 
         if (process.platform === "darwin") {
             this.settingsWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
@@ -202,18 +225,17 @@ export class SettingsWindowHelper {
         }
 
         console.log(`[SettingsWindowHelper] Creating Settings Window with Content Protection: ${this.contentProtection}`);
-        this.settingsWindow.setContentProtection(this.contentProtection);
+        this.applyStealth(this.contentProtection);
 
-        // Load with query param
-        const settingsUrl = isDev
-            ? `${startUrl}?window=settings`
-            : `${startUrl}?window=settings` // file url also works with search params in modern Electron
+        const settingsUrl = `${startUrl}?window=settings`
 
-        this.settingsWindow.loadURL(settingsUrl)
+        this.settingsWindow.loadURL(settingsUrl).catch(e => {
+            console.error('[SettingsWindowHelper] Failed to load URL:', e);
+        });
 
         this.settingsWindow.once('ready-to-show', () => {
             if (showWhenReady) {
-                this.settingsWindow?.show()
+                this.showWindow(this.settingsWindow?.getBounds().x || 0, this.settingsWindow?.getBounds().y || 0)
             }
         })
 
@@ -224,58 +246,19 @@ export class SettingsWindowHelper {
         // For now, let it stay open until toggled or ESC.
         this.settingsWindow.on('blur', () => {
             if (this.ignoreBlur) return;
-            // Check if focus moved to advanced window
-            if (this.advancedWindow && this.advancedWindow.isFocused()) return;
             this.lastBlurTime = Date.now();
             this.closeWindow();
+        })
+
+        this.settingsWindow.on('closed', () => {
+            this.detachRendererBridgeMonitor?.();
+            this.detachRendererBridgeMonitor = null;
         })
 
 
     }
 
-    private createAdvancedWindow(): void {
-        if (!this.settingsWindow) return; // Must have main settings first relative positioning
 
-        const { x, y, width } = this.settingsWindow.getBounds();
-
-        this.advancedWindow = new BrowserWindow({
-            width: 320, // Slightly wider for inputs
-            height: 400,
-            x: x + width + 10,
-            y: y,
-            frame: false,
-            transparent: true,
-            resizable: false,
-            fullscreenable: false,
-            hasShadow: false,
-            alwaysOnTop: true,
-            backgroundColor: "#00000000",
-            show: false,
-            skipTaskbar: true,
-            parent: this.settingsWindow, // Make it a child of settings? Or independent? Independent is safer for now.
-            webPreferences: {
-                nodeIntegration: false,
-                contextIsolation: true,
-                preload: path.join(__dirname, "preload.js")
-            }
-        });
-
-        if (process.platform === "darwin") {
-            this.advancedWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
-            this.advancedWindow.setHiddenInMissionControl(true)
-            this.advancedWindow.setAlwaysOnTop(true, "floating")
-        }
-
-        const advancedUrl = isDev
-            ? `${startUrl}?window=advanced`
-            : `${startUrl}?window=advanced`
-
-        this.advancedWindow.loadURL(advancedUrl);
-
-        this.advancedWindow.once('ready-to-show', () => {
-            this.advancedWindow?.show();
-        });
-    }
 
     private ensureVisibleOnScreen() {
         if (!this.settingsWindow) return;
@@ -300,12 +283,6 @@ export class SettingsWindowHelper {
     public setContentProtection(enable: boolean): void {
         console.log(`[SettingsWindowHelper] Setting content protection to: ${enable}`);
         this.contentProtection = enable;
-
-        if (this.settingsWindow && !this.settingsWindow.isDestroyed()) {
-            this.settingsWindow.setContentProtection(enable);
-        }
-        if (this.advancedWindow && !this.advancedWindow.isDestroyed()) {
-            this.advancedWindow.setContentProtection(enable);
-        }
+        this.applyStealth(enable);
     }
 }

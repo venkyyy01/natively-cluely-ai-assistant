@@ -6,14 +6,11 @@
 import { app, safeStorage } from 'electron';
 import fs from 'fs';
 import path from 'path';
+import type { CustomProviderPayload, FastResponseConfig, ProviderKind } from '../../shared/ipc';
 
 const CREDENTIALS_PATH = path.join(app.getPath('userData'), 'credentials.enc');
 
-export interface CustomProvider {
-    id: string;
-    name: string;
-    curlCommand: string;
-}
+export interface CustomProvider extends CustomProviderPayload {}
 
 export interface CurlProvider {
     id: string;
@@ -25,6 +22,7 @@ export interface CurlProvider {
 export interface StoredCredentials {
     geminiApiKey?: string;
     groqApiKey?: string;
+    cerebrasApiKey?: string;
     openaiApiKey?: string;
     claudeApiKey?: string;
     googleServiceAccountPath?: string;
@@ -32,7 +30,7 @@ export interface StoredCredentials {
     curlProviders?: CurlProvider[];
     defaultModel?: string;
     // STT Provider settings
-    sttProvider?: 'google' | 'groq' | 'openai' | 'deepgram' | 'elevenlabs' | 'azure' | 'ibmwatson';
+    sttProvider?: 'google' | 'groq' | 'openai' | 'deepgram' | 'elevenlabs' | 'azure' | 'ibmwatson' | 'soniox';
     groqSttApiKey?: string;
     groqSttModel?: string;
     openAiSttApiKey?: string;
@@ -42,7 +40,26 @@ export interface StoredCredentials {
     azureRegion?: string;
     ibmWatsonApiKey?: string;
     ibmWatsonRegion?: string;
+    sonioxApiKey?: string;
+    sttLanguage?: string;
+    aiResponseLanguage?: string;
+    // Google Custom Search
+    googleSearchApiKey?: string;
+    googleSearchCseId?: string;
+    // Dynamic Model Discovery – preferred models per provider
+    geminiPreferredModel?: string;
+    groqPreferredModel?: string;
+    cerebrasPreferredModel?: string;
+    openaiPreferredModel?: string;
+    claudePreferredModel?: string;
+    fastResponseConfig?: FastResponseConfig;
 }
+
+const DEFAULT_FAST_RESPONSE_CONFIG: FastResponseConfig = {
+    enabled: false,
+    provider: 'groq',
+    model: '',
+};
 
 export class CredentialsManager {
     private static instance: CredentialsManager;
@@ -80,6 +97,10 @@ export class CredentialsManager {
         return this.credentials.groqApiKey;
     }
 
+    public getCerebrasApiKey(): string | undefined {
+        return this.credentials.cerebrasApiKey;
+    }
+
     public getOpenaiApiKey(): string | undefined {
         return this.credentials.openaiApiKey;
     }
@@ -96,7 +117,7 @@ export class CredentialsManager {
         return this.credentials.customProviders || [];
     }
 
-    public getSttProvider(): 'google' | 'groq' | 'openai' | 'deepgram' | 'elevenlabs' | 'azure' | 'ibmwatson' {
+    public getSttProvider(): 'google' | 'groq' | 'openai' | 'deepgram' | 'elevenlabs' | 'azure' | 'ibmwatson' | 'soniox' {
         return this.credentials.sttProvider || 'google';
     }
 
@@ -136,12 +157,44 @@ export class CredentialsManager {
         return this.credentials.ibmWatsonRegion || 'us-south';
     }
 
+    public getSonioxApiKey(): string | undefined {
+        return this.credentials.sonioxApiKey;
+    }
+
+    public getGoogleSearchApiKey(): string | undefined {
+        return this.credentials.googleSearchApiKey;
+    }
+
+    public getGoogleSearchCseId(): string | undefined {
+        return this.credentials.googleSearchCseId;
+    }
+
+    public getSttLanguage(): string {
+        return this.credentials.sttLanguage || 'english-us';
+    }
+
+    public getAiResponseLanguage(): string {
+        return this.credentials.aiResponseLanguage || 'English';
+    }
     public getDefaultModel(): string {
-        return this.credentials.defaultModel || 'gemini-3-flash-preview';
+        return this.credentials.defaultModel || 'gemini-3.1-flash-lite-preview';
     }
 
     public getAllCredentials(): StoredCredentials {
         return { ...this.credentials };
+    }
+
+    public getFastResponseConfig(): FastResponseConfig {
+        const saved = this.credentials.fastResponseConfig;
+        if (!saved) {
+            return { ...DEFAULT_FAST_RESPONSE_CONFIG };
+        }
+
+        return {
+            enabled: saved.enabled === true,
+            provider: saved.provider === 'cerebras' ? 'cerebras' : 'groq',
+            model: saved.model || '',
+        };
     }
 
     // =========================================================================
@@ -158,6 +211,12 @@ export class CredentialsManager {
         this.credentials.groqApiKey = key;
         this.saveCredentials();
         console.log('[CredentialsManager] Groq API Key updated');
+    }
+
+    public setCerebrasApiKey(key: string): void {
+        this.credentials.cerebrasApiKey = key;
+        this.saveCredentials();
+        console.log('[CredentialsManager] Cerebras API Key updated');
     }
 
     public setOpenaiApiKey(key: string): void {
@@ -178,7 +237,7 @@ export class CredentialsManager {
         console.log('[CredentialsManager] Google Service Account path updated');
     }
 
-    public setSttProvider(provider: 'google' | 'groq' | 'openai' | 'deepgram' | 'elevenlabs' | 'azure' | 'ibmwatson'): void {
+    public setSttProvider(provider: 'google' | 'groq' | 'openai' | 'deepgram' | 'elevenlabs' | 'azure' | 'ibmwatson' | 'soniox'): void {
         this.credentials.sttProvider = provider;
         this.saveCredentials();
         console.log(`[CredentialsManager] STT Provider set to: ${provider}`);
@@ -238,10 +297,61 @@ export class CredentialsManager {
         console.log(`[CredentialsManager] IBM Watson Region set to: ${region}`);
     }
 
+    public setSonioxApiKey(key: string): void {
+        this.credentials.sonioxApiKey = key;
+        this.saveCredentials();
+        console.log('[CredentialsManager] Soniox API Key updated');
+    }
+
+    public setGoogleSearchApiKey(key: string): void {
+        this.credentials.googleSearchApiKey = key;
+        this.saveCredentials();
+        console.log('[CredentialsManager] Google Search API Key updated');
+    }
+
+    public setGoogleSearchCseId(cseId: string): void {
+        this.credentials.googleSearchCseId = cseId;
+        this.saveCredentials();
+        console.log('[CredentialsManager] Google Search CSE ID updated');
+    }
+
+    public setSttLanguage(language: string): void {
+        this.credentials.sttLanguage = language;
+        this.saveCredentials();
+        console.log(`[CredentialsManager] STT Language set to: ${language}`);
+    }
+
+    public setAiResponseLanguage(language: string): void {
+        this.credentials.aiResponseLanguage = language;
+        this.saveCredentials();
+        console.log(`[CredentialsManager] AI Response Language set to: ${language}`);
+    }
     public setDefaultModel(model: string): void {
         this.credentials.defaultModel = model;
         this.saveCredentials();
         console.log(`[CredentialsManager] Default Model set to: ${model}`);
+    }
+
+    public getPreferredModel(provider: ProviderKind): string | undefined {
+        const key = `${provider}PreferredModel` as keyof StoredCredentials;
+        return this.credentials[key] as string | undefined;
+    }
+
+    public setPreferredModel(provider: ProviderKind, modelId: string): void {
+        const key = `${provider}PreferredModel` as keyof StoredCredentials;
+        (this.credentials as any)[key] = modelId;
+        this.saveCredentials();
+        console.log(`[CredentialsManager] ${provider} preferred model set to: ${modelId}`);
+    }
+
+    public setFastResponseConfig(config: FastResponseConfig): void {
+        this.credentials.fastResponseConfig = {
+            enabled: config.enabled === true,
+            provider: config.provider === 'cerebras' ? 'cerebras' : 'groq',
+            model: config.model || '',
+        };
+        this.saveCredentials();
+        console.log(`[CredentialsManager] Fast response config updated: ${this.credentials.fastResponseConfig.provider} (${this.credentials.fastResponseConfig.model || 'auto'}) enabled=${this.credentials.fastResponseConfig.enabled}`);
     }
 
     public saveCustomProvider(provider: CustomProvider): void {
@@ -292,11 +402,34 @@ export class CredentialsManager {
     }
 
     public clearAll(): void {
-        this.credentials = {};
+        this.scrubMemory();
         if (fs.existsSync(CREDENTIALS_PATH)) {
             fs.unlinkSync(CREDENTIALS_PATH);
         }
+        const plaintextPath = CREDENTIALS_PATH + '.json';
+        if (fs.existsSync(plaintextPath)) {
+            fs.unlinkSync(plaintextPath);
+        }
         console.log('[CredentialsManager] All credentials cleared');
+    }
+
+    /**
+     * Scrub all API keys from memory to minimize exposure window.
+     * Called on app quit and credential clear.
+     */
+    public scrubMemory(): void {
+        const scrubValue = (value: unknown): unknown => {
+            if (typeof value === 'string') return '';
+            if (Array.isArray(value)) return value.map(scrubValue);
+            if (value && typeof value === 'object') {
+                return Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([key, nested]) => [key, scrubValue(nested)]));
+            }
+            return value;
+        };
+
+        this.credentials = scrubValue(this.credentials) as StoredCredentials;
+        this.credentials = {};
+        console.log('[CredentialsManager] Memory scrubbed');
     }
 
     // =========================================================================
@@ -306,15 +439,14 @@ export class CredentialsManager {
     private saveCredentials(): void {
         try {
             if (!safeStorage.isEncryptionAvailable()) {
-                console.warn('[CredentialsManager] Encryption not available, falling back to plaintext');
-                // Fallback: save as plaintext (less secure, but functional)
-                fs.writeFileSync(CREDENTIALS_PATH + '.json', JSON.stringify(this.credentials));
-                return;
+                throw new Error('OS encryption is unavailable; refusing to persist credentials in plaintext');
             }
 
             const data = JSON.stringify(this.credentials);
             const encrypted = safeStorage.encryptString(data);
-            fs.writeFileSync(CREDENTIALS_PATH, encrypted);
+            const tmpEnc = CREDENTIALS_PATH + '.tmp';
+            fs.writeFileSync(tmpEnc, encrypted);
+            fs.renameSync(tmpEnc, CREDENTIALS_PATH);
         } catch (error) {
             console.error('[CredentialsManager] Failed to save credentials:', error);
         }
@@ -331,18 +463,40 @@ export class CredentialsManager {
 
                 const encrypted = fs.readFileSync(CREDENTIALS_PATH);
                 const decrypted = safeStorage.decryptString(encrypted);
-                this.credentials = JSON.parse(decrypted);
-                console.log('[CredentialsManager] Loaded encrypted credentials');
+                try {
+                    const parsed = JSON.parse(decrypted);
+                    if (typeof parsed === 'object' && parsed !== null) {
+                        this.credentials = parsed;
+                        console.log('[CredentialsManager] Loaded encrypted credentials');
+                    } else {
+                        throw new Error('Decrypted credentials is not a valid object');
+                    }
+                } catch (parseError) {
+                    console.error('[CredentialsManager] Failed to parse decrypted credentials — file may be corrupted. Starting fresh:', parseError);
+                    this.credentials = {};
+                }
+
+                // Clean up any leftover plaintext fallback file to eliminate the data leak
+                const plaintextPath = CREDENTIALS_PATH + '.json';
+                if (fs.existsSync(plaintextPath)) {
+                    try {
+                        fs.unlinkSync(plaintextPath);
+                        console.log('[CredentialsManager] Removed stale plaintext credential file');
+                    } catch (cleanupErr) {
+                        console.warn('[CredentialsManager] Could not remove stale plaintext file:', cleanupErr);
+                    }
+                }
                 return;
             }
 
-            // Fallback: try plaintext file
             const plaintextPath = CREDENTIALS_PATH + '.json';
             if (fs.existsSync(plaintextPath)) {
-                const data = fs.readFileSync(plaintextPath, 'utf-8');
-                this.credentials = JSON.parse(data);
-                console.log('[CredentialsManager] Loaded plaintext credentials');
-                return;
+                try {
+                    fs.unlinkSync(plaintextPath);
+                    console.warn('[CredentialsManager] Removed insecure plaintext credential file');
+                } catch (cleanupErr) {
+                    console.warn('[CredentialsManager] Could not remove insecure plaintext credential file:', cleanupErr);
+                }
             }
 
             console.log('[CredentialsManager] No stored credentials found');

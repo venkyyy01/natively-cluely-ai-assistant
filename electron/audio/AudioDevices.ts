@@ -1,11 +1,9 @@
-import path from 'path';
+import { getNativeAudioLoadError, loadNativeAudioModule } from './nativeModule';
 
-let NativeModule: any = null;
+const NativeModule = loadNativeAudioModule();
 
-try {
-    NativeModule = require('natively-audio');
-} catch (e) {
-    console.error('[AudioDevices] Failed to load native module:', e);
+if (!NativeModule) {
+    console.error('[AudioDevices] Failed to load native module:', getNativeAudioLoadError());
 }
 
 const { getInputDevices, getOutputDevices } = NativeModule || {};

@@ -2,6 +2,9 @@
 // Hard post-processing clamp to enforce constraints
 // Even if Gemini misbehaves, this ensures clean output
 
+import { ValidationResult, ResponseQuality } from './types';
+import { LLM_SPEAK_BLOCKLIST } from './prompts';
+
 /**
  * Filler phrases to strip from end of responses
  */
@@ -87,10 +90,19 @@ function stripMarkdown(text: string): string {
     const codeBlocks: string[] = [];
     let result = text;
 
+    // NAT-047 follow-up: the previous placeholder `__CODE_BLOCK_${i}__`
+    // looked like markdown bold/italic and was being mangled by the
+    // italic-stripping regex below (the underscores around BLOCK and N
+    // matched `_text_`), producing things like `_CODEBLOCK0_` and
+    // permanently dropping the code fence on restore. Use a non-printable
+    // ASCII control-character sentinel pair (\u0002 ... \u0003) that no
+    // markdown rule will ever touch.
+    const codeBlockSentinel = (i: number): string => `\u0002CODEBLOCK${i}\u0003`;
+
     // Extract code blocks to protect them
     result = result.replace(/```[\s\S]*?```/g, (match) => {
         codeBlocks.push(match);
-        return `__CODE_BLOCK_${codeBlocks.length - 1}__`;
+        return codeBlockSentinel(codeBlocks.length - 1);
     });
 
     // Remove headers (# ## ### etc.)
@@ -122,17 +134,36 @@ function stripMarkdown(text: string): string {
     // Remove links [text](url) -> text
     result = result.replace(/\[([^\]]+)\]\([^)]+\)/g, "$1");
 
-    // Collapse multiple newlines to single space (but preserve structure around blocks later?)
-    // We should be careful collapsing newlines around placeholders
-    result = result.replace(/\n+/g, " ");
+    // NAT-047 / audit A-13: previously this branch ran
+    //   result = result.replace(/\n+/g, " ");
+    //   result = result.replace(/\s+/g, " ");
+    // which collapsed *every* newline into a single space, destroying
+    // paragraph structure for prose answers and producing wall-of-text
+    // output. The fix preserves blank-line paragraph breaks while still
+    // collapsing wrap-induced single newlines (and trailing whitespace)
+    // into spaces. Code fences are already extracted to placeholders
+    // above, so this transformation never touches code formatting.
+    //
+    // Algorithm:
+    //   1. Normalize CRLF and strip trailing whitespace per line, so
+    //      "foo  \nbar" doesn't get treated as a structural break.
+    //   2. Hold paragraph breaks (>=2 newlines) in a sentinel.
+    //   3. Replace remaining single newlines with a space (line wrap).
+    //   4. Restore the sentinel as exactly one blank line.
+    //   5. Collapse runs of in-line whitespace (spaces/tabs only) so we
+    //      never re-collapse paragraph breaks.
+    result = result.replace(/\r\n/g, "\n");
+    result = result.replace(/[ \t]+\n/g, "\n");
+    const PARAGRAPH_SENTINEL = "\u0001PARA\u0001";
+    result = result.replace(/\n{2,}/g, PARAGRAPH_SENTINEL);
+    result = result.replace(/\n/g, " ");
+    result = result.replace(new RegExp(PARAGRAPH_SENTINEL, "g"), "\n\n");
+    result = result.replace(/[ \t]+/g, " ");
 
-    // Collapse multiple spaces
-    result = result.replace(/\s+/g, " ");
-
-    // Restore code blocks
-    // Add newlines around them for better formatting
+    // Restore code blocks (using markdown-inert sentinel from above).
+    // Add newlines around them for better formatting.
     codeBlocks.forEach((block, index) => {
-        result = result.replace(`__CODE_BLOCK_${index}__`, `\n${block}\n`);
+        result = result.replace(codeBlockSentinel(index), `\n${block}\n`);
     });
 
     return result.trim();
@@ -197,6 +228,49 @@ function limitWords(text: string, maxWords: number): string {
 }
 
 /**
+ * Clamp response length but PRESERVE markdown formatting.
+ * The UI renders markdown, so we only enforce sentence/word limits.
+ * For non-code responses only - code blocks skip clamping.
+ */
+export function clampProseResponse(
+    text: string,
+    maxSentences: number = 8,
+    maxWords: number = 200
+): string {
+    if (!text || typeof text !== "string") {
+        return "";
+    }
+
+    let result = text.trim();
+
+    // Strip prefixes
+    result = stripPrefixes(result);
+
+    // Remove filler phrases from end
+    result = stripFillerPhrases(result);
+
+    // If code blocks present, don't clamp length
+    const hasCodeBlocks = /```[\s\S]*?```/.test(result);
+    if (hasCodeBlocks) {
+        return result.trim();
+    }
+
+    // Sentence limit (operates on markdown text directly - fine for cutting)
+    const sentences = result.match(/[^.!?]+[.!?]+/g) || [result];
+    if (sentences.length > maxSentences) {
+        result = sentences.slice(0, maxSentences).join(' ').trim();
+    }
+
+    // Word limit (approximate - markdown tokens add ~10% overhead, acceptable)
+    const words = result.split(/\s+/);
+    if (words.length > maxWords) {
+        result = words.slice(0, maxWords).join(' ').replace(/[,;:]?\s*$/, '...');
+    }
+
+    return result.trim();
+}
+
+/**
  * Validate response meets constraints
  * Returns true if valid, false if clamping was needed
  */
@@ -244,4 +318,95 @@ function stripPrefixes(text: string): string {
     result = result.replace(/^Refined \([^)]+\):\s*/i, "");
 
     return result.trim();
+}
+
+/**
+ * Validate response quality against MIT Pyramid structure and constraints
+ */
+export function validateResponseQuality(response: string): ValidationResult {
+  const sentences = splitIntoSentences(response);
+  const violations: string[] = [];
+  
+  // Sentence limit check
+  if (sentences.length > 2) {
+    violations.push(`Too many sentences: ${sentences.length}/2`);
+  }
+  
+  // Word limit per sentence
+  let maxWordsPerSentence = 0;
+  sentences.forEach((sentence, i) => {
+    const wordCount = sentence.trim().split(/\s+/).length;
+    maxWordsPerSentence = Math.max(maxWordsPerSentence, wordCount);
+    if (wordCount > 25) {
+      violations.push(`Sentence ${i+1} too long: ${wordCount}/25 words`);
+    }
+  });
+  
+  // Anti-pattern check
+  const blockedPhrases = LLM_SPEAK_BLOCKLIST.filter(phrase => 
+    response.toLowerCase().includes(phrase.toLowerCase())
+  );
+  if (blockedPhrases.length > 0) {
+    violations.push(`Contains AI-speak: ${blockedPhrases.slice(0, 2).join(', ')}`);
+  }
+  
+  // Estimate speaking time (150 words per minute average)
+  const totalWords = response.split(/\s+/).length;
+  const estimatedSpeakingTime = (totalWords / 150) * 60; // seconds
+  
+  return {
+    isValid: violations.length === 0,
+    violations,
+    regenerationHint: violations.length > 0 ? generateRewriteHint(violations) : undefined,
+    metrics: {
+      sentenceCount: sentences.length,
+      maxWordsPerSentence,
+      estimatedSpeakingTime
+    }
+  };
+}
+
+function splitIntoSentences(text: string): string[] {
+  // Simple sentence splitting - can be enhanced
+  return text.split(/[.!?]+/).filter(s => s.trim().length > 0);
+}
+
+function generateRewriteHint(violations: string[]): string {
+  const hints = [];
+  
+  if (violations.some(v => v.includes('Too many sentences'))) {
+    hints.push('Combine or remove sentences');
+  }
+  
+  if (violations.some(v => v.includes('too long'))) {
+    hints.push('Shorten sentences to under 25 words each');
+  }
+  
+  if (violations.some(v => v.includes('AI-speak'))) {
+    hints.push('Remove conversational fluff phrases');
+  }
+  
+  return `Rewrite to fix: ${hints.join(', ')}`;
+}
+
+/**
+ * Log validation metrics for monitoring and debugging
+ */
+export function logValidationMetrics(validation: ValidationResult, prompt: string): void {
+  if (process.env.NODE_ENV === 'development') {
+    console.log('Response Validation Metrics:', {
+      isValid: validation.isValid,
+      violations: validation.violations,
+      sentenceCount: validation.metrics.sentenceCount,
+      maxWordsPerSentence: validation.metrics.maxWordsPerSentence,
+      speakingTime: `${validation.metrics.estimatedSpeakingTime.toFixed(1)}s`,
+      promptType: detectPromptType(prompt)
+    });
+  }
+}
+
+function detectPromptType(prompt: string): string {
+  if (prompt.includes('coding') || prompt.includes('algorithm')) return 'technical';
+  if (prompt.includes('define') || prompt.includes('what is')) return 'definition';
+  return 'general';
 }

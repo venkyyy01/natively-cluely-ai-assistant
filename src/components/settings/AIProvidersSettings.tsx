@@ -1,13 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import { Plus, Trash2, Edit2, AlertCircle, CheckCircle, Save, ChevronDown, Check, RefreshCw, ExternalLink, Loader2 } from 'lucide-react';
+import { STANDARD_CLOUD_MODELS, prettifyModelId } from '../../utils/modelUtils';
 import { validateCurl } from '../../lib/curl-validator';
+import { getOptionalElectronMethod } from '../../lib/electronApi';
+import { ProviderCard } from './ProviderCard';
+import type { CustomProviderPayload, FastResponseConfig } from '../../../shared/ipc';
 
-interface CustomProvider {
-    id: string;
-    name: string;
-    curlCommand: string;
-    responsePath: string;
-}
+type CustomProvider = CustomProviderPayload;
+type FastProvider = FastResponseConfig['provider'];
 
 interface ModelOption {
     id: string;
@@ -76,9 +76,21 @@ const ModelSelect: React.FC<ModelSelectProps> = ({ value, options, onChange, pla
 };
 
 export const AIProvidersSettings: React.FC = () => {
+    const getFastResponseConfig = getOptionalElectronMethod('getFastResponseConfig');
+    const getStoredCredentials = getOptionalElectronMethod('getStoredCredentials');
+    const getCustomProviders = getOptionalElectronMethod('getCustomProviders');
+    const getDefaultModel = getOptionalElectronMethod('getDefaultModel');
+    const onFastResponseConfigChanged = getOptionalElectronMethod('onFastResponseConfigChanged');
+    const setFastResponseConfigInMain = getOptionalElectronMethod('setFastResponseConfig');
+    const openExternal = getOptionalElectronMethod('openExternal');
+    const fetchProviderModels = getOptionalElectronMethod('fetchProviderModels');
+    const saveCustomProvider = getOptionalElectronMethod('saveCustomProvider');
+    const deleteCustomProvider = getOptionalElectronMethod('deleteCustomProvider');
+    const setDefaultModelInMain = getOptionalElectronMethod('setDefaultModel');
     // --- Standard Providers ---
     const [apiKey, setApiKey] = useState('');
     const [groqApiKey, setGroqApiKey] = useState('');
+    const [cerebrasApiKey, setCerebrasApiKey] = useState('');
     const [openaiApiKey, setOpenaiApiKey] = useState('');
     const [claudeApiKey, setClaudeApiKey] = useState('');
 
@@ -105,36 +117,48 @@ export const AIProvidersSettings: React.FC = () => {
     const [isRefreshingOllama, setIsRefreshingOllama] = useState(false);
 
     // --- Default Model ---
-    const [defaultModel, setDefaultModel] = useState<string>('gemini-3-flash-preview');
-    const [fastResponseMode, setFastResponseMode] = useState(false);
+    const [defaultModel, setDefaultModel] = useState<string>('gemini-3.1-flash-lite-preview');
+    const [fastResponseConfig, setFastResponseConfig] = useState<FastResponseConfig>({ enabled: false, provider: 'groq', model: '' });
+    const [fastResponseModels, setFastResponseModels] = useState<Record<FastProvider, ModelOption[]>>({ groq: [], cerebras: [] });
+    const [isFetchingFastResponseModels, setIsFetchingFastResponseModels] = useState<Record<FastProvider, boolean>>({ groq: false, cerebras: false });
+    const [fastResponseFetchError, setFastResponseFetchError] = useState<Record<FastProvider, string | null>>({ groq: null, cerebras: null });
+
+    // --- Dynamic Model Discovery ---
+    const [preferredModels, setPreferredModels] = useState<Record<string, string>>({});
 
     // Load Initial Data
     useEffect(() => {
         const loadCredentials = async () => {
             try {                // @ts-ignore
-                const fastMode = await window.electronAPI?.invoke('get-groq-fast-text-mode');
-                if (fastMode) setFastResponseMode(fastMode.enabled);
+                const fastConfig = await getFastResponseConfig?.();
+                if (fastConfig) setFastResponseConfig(fastConfig);
 
-                // @ts-ignore
-                const creds = await window.electronAPI?.getStoredCredentials?.();
+                const creds = await getStoredCredentials?.();
                 if (creds) {
                     setHasStoredKey({
                         gemini: creds.hasGeminiKey,
                         groq: creds.hasGroqKey,
+                        cerebras: creds.hasCerebrasKey,
                         openai: creds.hasOpenaiKey,
                         claude: creds.hasClaudeKey
                     });
+                    // Load preferred models
+                    const pm: Record<string, string> = {};
+                    if (creds.geminiPreferredModel) pm.gemini = creds.geminiPreferredModel;
+                    if (creds.groqPreferredModel) pm.groq = creds.groqPreferredModel;
+                    if (creds.cerebrasPreferredModel) pm.cerebras = creds.cerebrasPreferredModel;
+                    if (creds.openaiPreferredModel) pm.openai = creds.openaiPreferredModel;
+                    if (creds.claudePreferredModel) pm.claude = creds.claudePreferredModel;
+                    setPreferredModels(pm);
                 }
 
-                // @ts-ignore
-                const custom = await window.electronAPI?.invoke('get-custom-providers');
+                const custom = await getCustomProviders?.();
                 if (custom) {
                     setCustomProviders(custom);
                 }
 
                 // Load persisted default model
-                // @ts-ignore
-                const result = await window.electronAPI?.invoke('get-default-model');
+                const result = await getDefaultModel?.();
                 if (result && result.model) {
                     setDefaultModel(result.model);
                 }
@@ -149,15 +173,23 @@ export const AIProvidersSettings: React.FC = () => {
         loadCredentials();
 
         // Listen for changes from other windows (2-way sync)
-        if (window.electronAPI?.onGroqFastTextChanged) {
-            // @ts-ignore
-            const unsubscribe = window.electronAPI.onGroqFastTextChanged((enabled: boolean) => {
-                setFastResponseMode(enabled);
-                localStorage.setItem('natively_groq_fast_text', String(enabled));
+        if (onFastResponseConfigChanged) {
+            const unsubscribe = onFastResponseConfigChanged((config: FastResponseConfig) => {
+                setFastResponseConfig(config);
             });
             return () => unsubscribe();
         }
     }, []);
+
+    // Effect to enforce fast mode disabled if the selected provider is not configured
+    useEffect(() => {
+        const providerHasKey = !!hasStoredKey[fastResponseConfig.provider];
+        if (!providerHasKey && fastResponseConfig.enabled) {
+            const nextConfig = { ...fastResponseConfig, enabled: false };
+            setFastResponseConfig(nextConfig);
+            void setFastResponseConfigInMain?.(nextConfig);
+        }
+    }, [hasStoredKey, fastResponseConfig]);
 
     // Poll for Ollama status every 3 seconds requesting smart start on mount
     useEffect(() => {
@@ -175,7 +207,7 @@ export const AIProvidersSettings: React.FC = () => {
         setOllamaStatus('checking');
         try {
             // @ts-ignore
-            const result = await window.electronAPI?.invoke('ensure-ollama-running');
+            const result = await window.electronAPI?.invoke?.('ensure-ollama-running');
             if (result && result.success) {
                 // It's running (or just started), now fetch models
                 checkOllama(true);
@@ -194,7 +226,7 @@ export const AIProvidersSettings: React.FC = () => {
 
         try {
             // @ts-ignore
-            const models = await window.electronAPI?.invoke('get-available-ollama-models');
+            const models = await window.electronAPI?.getAvailableOllamaModels?.();
             if (models && models.length > 0) {
                 setOllamaModels(models);
                 setOllamaStatus('detected');
@@ -217,7 +249,7 @@ export const AIProvidersSettings: React.FC = () => {
         setOllamaStatus('fixing');
         try {
             // @ts-ignore
-            const result = await window.electronAPI?.invoke('force-restart-ollama');
+            const result = await window.electronAPI?.invoke?.('force-restart-ollama');
             if (result && result.success) {
                 setOllamaRestarted(true);
                 // Wait for server to be ready
@@ -240,6 +272,8 @@ export const AIProvidersSettings: React.FC = () => {
             if (provider === 'gemini') result = await window.electronAPI.setGeminiApiKey(key);
             // @ts-ignore
             if (provider === 'groq') result = await window.electronAPI.setGroqApiKey(key);
+            // @ts-ignore
+            if (provider === 'cerebras') result = await window.electronAPI.setCerebrasApiKey(key);
             // @ts-ignore
             if (provider === 'openai') result = await window.electronAPI.setOpenaiApiKey(key);
             // @ts-ignore
@@ -266,6 +300,8 @@ export const AIProvidersSettings: React.FC = () => {
             if (provider === 'gemini') result = await window.electronAPI.setGeminiApiKey('');
             // @ts-ignore
             if (provider === 'groq') result = await window.electronAPI.setGroqApiKey('');
+            // @ts-ignore
+            if (provider === 'cerebras') result = await window.electronAPI.setCerebrasApiKey('');
             // @ts-ignore
             if (provider === 'openai') result = await window.electronAPI.setOpenaiApiKey('');
             // @ts-ignore
@@ -308,11 +344,83 @@ export const AIProvidersSettings: React.FC = () => {
         const urls: Record<string, string> = {
             gemini: 'https://aistudio.google.com/app/apikey',
             groq: 'https://console.groq.com/keys',
+            cerebras: 'https://cloud.cerebras.ai',
             openai: 'https://platform.openai.com/api-keys',
             claude: 'https://console.anthropic.com/settings/keys'
         };
-        // @ts-ignore
-        window.electronAPI?.openExternal(urls[provider]);
+        if (openExternal) {
+            void openExternal(urls[provider]);
+        } else {
+            window.open(urls[provider], '_blank');
+        }
+    };
+
+    const persistFastResponseConfig = async (nextConfig: FastResponseConfig) => {
+        setFastResponseConfig(nextConfig);
+        try {
+            await setFastResponseConfigInMain?.(nextConfig);
+        } catch (e) {
+            console.error('Failed to persist fast response config:', e);
+        }
+    };
+
+    const buildFastResponseModelOptions = (provider: FastProvider): ModelOption[] => {
+        const options = [...(fastResponseModels[provider] || [])];
+        const selectedModel = fastResponseConfig.provider === provider ? fastResponseConfig.model : '';
+        const preferredModel = preferredModels[provider];
+
+        if (selectedModel && !options.some(option => option.id === selectedModel)) {
+            options.unshift({ id: selectedModel, name: prettifyModelId(selectedModel) });
+        }
+
+        if (preferredModel && !options.some(option => option.id === preferredModel)) {
+            options.unshift({ id: preferredModel, name: prettifyModelId(preferredModel) });
+        }
+
+        return options;
+    };
+
+    const fetchFastResponseModels = async (provider: FastProvider) => {
+        setIsFetchingFastResponseModels(prev => ({ ...prev, [provider]: true }));
+        setFastResponseFetchError(prev => ({ ...prev, [provider]: null }));
+
+        try {
+            const result = await fetchProviderModels?.(provider, '');
+            if (!result?.success || !result.models) {
+                setFastResponseFetchError(prev => ({ ...prev, [provider]: result?.error || 'Failed to fetch models' }));
+                return;
+            }
+
+            const models = result.models.map((model: { id: string; label: string }) => ({ id: model.id, name: model.label }));
+            setFastResponseModels(prev => ({ ...prev, [provider]: models }));
+
+            if (fastResponseConfig.provider === provider) {
+                const preferredModel = preferredModels[provider];
+                const candidate = [
+                    fastResponseConfig.model,
+                    preferredModel,
+                    models[0]?.id,
+                ].find((value): value is string => !!value && models.some(model => model.id === value));
+
+                if (candidate && candidate !== fastResponseConfig.model) {
+                    await persistFastResponseConfig({ ...fastResponseConfig, provider, model: candidate });
+                }
+            }
+        } catch (e: any) {
+            setFastResponseFetchError(prev => ({ ...prev, [provider]: e.message || 'Failed to fetch models' }));
+        } finally {
+            setIsFetchingFastResponseModels(prev => ({ ...prev, [provider]: false }));
+        }
+    };
+
+    const handleFastResponseProviderChange = async (provider: FastProvider) => {
+        const nextOptions = buildFastResponseModelOptions(provider);
+        const nextModel = preferredModels[provider] || nextOptions[0]?.id || '';
+        await persistFastResponseConfig({
+            ...fastResponseConfig,
+            provider,
+            model: nextModel,
+        });
     };
 
 
@@ -357,16 +465,16 @@ export const AIProvidersSettings: React.FC = () => {
         };
 
         try {
-            // @ts-ignore
-            const result = await window.electronAPI.invoke('save-custom-provider', newProvider);
-            if (result.success) {
+            const result = await saveCustomProvider?.(newProvider);
+            if (result?.success) {
                 // Refresh list
-                // @ts-ignore
-                const updated = await window.electronAPI.invoke('get-custom-providers');
-                setCustomProviders(updated);
+                const updated = await getCustomProviders?.();
+                if (updated) {
+                    setCustomProviders(updated);
+                }
                 setIsEditingCustom(false);
             } else {
-                setCurlError(result.error);
+                setCurlError(result?.error ?? 'Custom provider bridge unavailable.');
             }
         } catch (e: any) {
             setCurlError(e.message);
@@ -376,12 +484,12 @@ export const AIProvidersSettings: React.FC = () => {
     const handleDeleteCustom = async (id: string) => {
         if (!confirm("Are you sure you want to delete this provider?")) return;
         try {
-            // @ts-ignore
-            const result = await window.electronAPI.invoke('delete-custom-provider', id);
-            if (result.success) {
-                // @ts-ignore
-                const updated = await window.electronAPI.invoke('get-custom-providers');
-                setCustomProviders(updated);
+            const result = await deleteCustomProvider?.(id);
+            if (result?.success) {
+                const updated = await getCustomProviders?.();
+                if (updated) {
+                    setCustomProviders(updated);
+                }
             }
         } catch (e) {
             console.error("Failed to delete provider:", e);
@@ -404,43 +512,111 @@ export const AIProvidersSettings: React.FC = () => {
                     </div>
                     <ModelSelect
                         value={defaultModel}
-                        options={[
-                            ...(hasStoredKey.gemini ? [{ id: 'gemini-3-flash-preview', name: 'Gemini 3 Flash' }] : []),
-                            ...(hasStoredKey.openai ? [{ id: 'gpt-5.2-chat-latest', name: 'GPT 5.2' }] : []),
-                            ...(hasStoredKey.claude ? [{ id: 'claude-sonnet-4-5', name: 'Sonnet 4.5' }] : []),
-                            ...(hasStoredKey.groq ? [{ id: 'llama-3.3-70b-versatile', name: 'Groq Llama 3.3' }] : []),
-                            ...customProviders.map(p => ({ id: p.id, name: p.name })),
-                            ...ollamaModels.map(m => ({ id: `ollama-${m}`, name: `${m} (Local)` }))
-                        ]}
+                        options={(() => {
+                            const opts: { id: string; name: string }[] = [];
+                            for (const [prov, cfg] of Object.entries(STANDARD_CLOUD_MODELS)) {
+                                if (!hasStoredKey[prov as keyof typeof hasStoredKey]) continue;
+                                cfg.ids.forEach((id, i) => opts.push({ id, name: cfg.names[i] }));
+                                const pm = preferredModels[prov as keyof typeof preferredModels];
+                                if (pm && !cfg.ids.includes(pm)) {
+                                    opts.push({ id: pm, name: prettifyModelId(pm) });
+                                }
+                            }
+                            customProviders.forEach(p => opts.push({ id: p.id, name: p.name }));
+                            ollamaModels.forEach(m => opts.push({ id: `ollama-${m}`, name: `${m} (Local)` }));
+                            // Ensure current default model always appears
+                            if (defaultModel && !opts.find(o => o.id === defaultModel)) {
+                                opts.unshift({ id: defaultModel, name: prettifyModelId(defaultModel) });
+                            }
+                            return opts;
+                        })()}
                         onChange={(val) => {
                             setDefaultModel(val);
-                            // @ts-ignore - persist as default + update runtime + broadcast
-                            window.electronAPI?.invoke('set-default-model', val).catch(console.error);
+                            if (setDefaultModelInMain) {
+                                void setDefaultModelInMain(val).catch(console.error);
+                            }
                         }}
                     />
                 </div>
 
                 {/* Fast Response Mode */}
-                <div className="bg-bg-item-surface rounded-xl p-5 border border-border-subtle flex items-center justify-between">
-                    <div>
-                        <div className="flex items-center gap-2">
-                            <label className="block text-xs font-medium text-text-primary uppercase tracking-wide mb-0">Fast Response Mode</label>
-                            <span className="bg-orange-500/10 text-orange-500 text-[9px] font-bold px-1.5 py-0.5 rounded border border-orange-500/20">NEW</span>
+                <div className="bg-bg-item-surface rounded-xl p-5 border border-border-subtle space-y-4">
+                    <div className="flex items-start justify-between gap-4">
+                        <div>
+                            <div className="flex items-center gap-2">
+                                <label className="block text-xs font-medium text-text-primary uppercase tracking-wide mb-0">Fast Response Mode</label>
+                                <span className="bg-orange-500/10 text-orange-500 text-[9px] font-bold px-1.5 py-0.5 rounded border border-orange-500/20">NEW</span>
+                            </div>
+                            <p className="text-[10px] text-text-secondary mt-0.5">Route text-only fast answers through Groq or Cerebras. Multimodal requests still use your Default Model.</p>
+                            {!hasStoredKey[fastResponseConfig.provider] && (
+                                <p className="text-[10px] text-orange-500 mt-0.5 font-medium">Requires a saved {fastResponseConfig.provider === 'cerebras' ? 'Cerebras' : 'Groq'} API key.</p>
+                            )}
                         </div>
-                        <p className="text-[10px] text-text-secondary mt-0.5">Super fast responses using Groq Llama 3 for text. Multimodal requests still use your Default Model.</p>
+                        <button
+                            onClick={async () => {
+                                if (!hasStoredKey[fastResponseConfig.provider]) {
+                                    alert(`Please configure a ${fastResponseConfig.provider === 'cerebras' ? 'Cerebras' : 'Groq'} API Key first to enable Fast Response Mode.`);
+                                    return;
+                                }
+                                await persistFastResponseConfig({
+                                    ...fastResponseConfig,
+                                    enabled: !fastResponseConfig.enabled,
+                                });
+                            }}
+                            className={`w-10 h-6 rounded-full p-1 transition-colors ${!hasStoredKey[fastResponseConfig.provider] ? 'cursor-not-allowed bg-bg-input border border-border-subtle' : fastResponseConfig.enabled ? 'bg-orange-500' : 'bg-bg-input border border-border-subtle'}`}
+                            type="button"
+                        >
+                            <div className={`w-4 h-4 rounded-full bg-white shadow-sm transition-transform ${fastResponseConfig.enabled ? 'translate-x-4' : 'translate-x-0'}`} />
+                        </button>
                     </div>
-                    <div
-                        onClick={async () => {
-                            const newState = !fastResponseMode;
-                            setFastResponseMode(newState);
-                            localStorage.setItem('natively_groq_fast_text', String(newState));
-                            // @ts-ignore
-                            await window.electronAPI?.invoke('set-groq-fast-text-mode', newState);
-                        }}
-                        className={`w-10 h-6 rounded-full p-1 cursor-pointer transition-colors ${fastResponseMode ? 'bg-orange-500' : 'bg-bg-input border border-border-subtle'}`}
-                    >
-                        <div className={`w-4 h-4 rounded-full bg-white shadow-sm transition-transform ${fastResponseMode ? 'translate-x-4' : 'translate-x-0'}`} />
+
+                    <div className="flex items-center justify-between gap-3 flex-wrap">
+                        <div>
+                            <label className="block text-[10px] font-medium text-text-primary uppercase tracking-wide mb-1">Endpoint</label>
+                            <ModelSelect
+                                value={fastResponseConfig.provider}
+                                options={[
+                                    { id: 'groq', name: 'Groq' },
+                                    { id: 'cerebras', name: 'Cerebras' },
+                                ]}
+                                onChange={(value) => {
+                                    void handleFastResponseProviderChange(value as FastProvider);
+                                }}
+                                placeholder="Select provider"
+                            />
+                        </div>
+
+                        <div>
+                            <label className="block text-[10px] font-medium text-text-primary uppercase tracking-wide mb-1">Model</label>
+                            <ModelSelect
+                                value={fastResponseConfig.model}
+                                options={buildFastResponseModelOptions(fastResponseConfig.provider)}
+                                onChange={(value) => {
+                                    void persistFastResponseConfig({ ...fastResponseConfig, model: value });
+                                }}
+                                placeholder="Fetch latest models"
+                            />
+                        </div>
+
+                        <div className="self-end">
+                            <button
+                                onClick={() => { void fetchFastResponseModels(fastResponseConfig.provider); }}
+                                className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors border border-border-subtle flex items-center gap-2 ${!hasStoredKey[fastResponseConfig.provider] ? 'opacity-50 cursor-not-allowed bg-bg-input text-text-secondary' : isFetchingFastResponseModels[fastResponseConfig.provider] ? 'bg-bg-input text-text-secondary' : 'bg-accent-primary/10 text-accent-primary border-accent-primary/20 hover:bg-accent-primary/20'}`}
+                                disabled={!hasStoredKey[fastResponseConfig.provider] || isFetchingFastResponseModels[fastResponseConfig.provider]}
+                                type="button"
+                            >
+                                {isFetchingFastResponseModels[fastResponseConfig.provider] ? (
+                                    <><Loader2 size={12} className="animate-spin" /> Fetching...</>
+                                ) : (
+                                    <><RefreshCw size={12} /> Fetch Latest Models</>
+                                )}
+                            </button>
+                        </div>
                     </div>
+
+                    {fastResponseFetchError[fastResponseConfig.provider] && (
+                        <p className="text-[10px] text-red-400">{fastResponseFetchError[fastResponseConfig.provider]}</p>
+                    )}
                 </div>
             </div>
 
@@ -454,252 +630,104 @@ export const AIProvidersSettings: React.FC = () => {
                 <div className="space-y-4">
 
                     {/* Gemini */}
-                    <div className="bg-bg-item-surface rounded-xl p-5 border border-border-subtle">
-                        <div className="mb-2">
-                            <label className="block text-xs font-medium text-text-primary uppercase tracking-wide">
-                                Gemini API Key
-                                {hasStoredKey.gemini && <span className="ml-2 text-green-500 normal-case">✓ Saved</span>}
-                            </label>
-                        </div>
-                        <div className="flex gap-2 mb-3">
-                            <input
-                                type="password"
-                                value={apiKey}
-                                onChange={(e) => setApiKey(e.target.value)}
-                                placeholder={hasStoredKey.gemini ? "••••••••••••" : "AIzaSy..."}
-                                className="flex-1 bg-bg-input border border-border-subtle rounded-lg px-4 py-2.5 text-xs text-text-primary focus:outline-none focus:border-accent-primary transition-colors"
-                            />
-                            <button
-                                onClick={() => handleSaveKey('gemini', apiKey, setApiKey)}
-                                disabled={savingStatus.gemini || !apiKey.trim()}
-                                className={`px-5 py-2.5 rounded-lg text-xs font-medium transition-colors ${savedStatus.gemini
-                                    ? 'bg-green-500/20 text-green-400'
-                                    : 'bg-bg-input hover:bg-bg-secondary border border-border-subtle text-text-primary disabled:opacity-50'
-                                    }`}
-                            >
-                                {savingStatus.gemini ? 'Saving...' : savedStatus.gemini ? 'Saved!' : 'Save'}
-                            </button>
-                            {hasStoredKey.gemini && (
-                                <button
-                                    onClick={() => handleRemoveKey('gemini', setApiKey)}
-                                    className="px-2.5 py-2.5 rounded-lg text-xs font-medium text-text-tertiary hover:text-red-500 hover:bg-red-500/10 transition-all"
-                                    title="Remove API Key"
-                                >
-                                    <Trash2 size={16} strokeWidth={1.5} />
-                                </button>
-                            )}
-                        </div>
-                        <div className="flex items-center gap-3">
-                            <button
-                                onClick={() => handleTestConnection('gemini', apiKey)}
-                                disabled={(!apiKey.trim() && !hasStoredKey.gemini) || testStatus.gemini === 'testing'}
-                                className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors border border-border-subtle flex items-center gap-2 ${testStatus.gemini === 'success' ? 'bg-green-500/10 text-green-500 border-green-500/20' :
-                                    testStatus.gemini === 'error' ? 'bg-red-500/10 text-red-500 border-red-500/20' :
-                                        'bg-bg-input hover:bg-bg-elevated text-text-primary'
-                                    }`}
-                                title={testError.gemini || "Test Connection"}
-                            >
-                                {testStatus.gemini === 'testing' ? <><Loader2 size={12} className="animate-spin" /> Testing...</> :
-                                    testStatus.gemini === 'success' ? <><CheckCircle size={12} /> Connected</> :
-                                        testStatus.gemini === 'error' ? <><AlertCircle size={12} /> Error</> :
-                                            <>{/* No Icon */} Test Connection</>}
-                            </button>
-                            <button
-                                onClick={() => openKeyUrl('gemini')}
-                                className="text-xs text-text-tertiary hover:text-text-primary flex items-center gap-1 transition-colors"
-                                title="Get API Key"
-                            >
-                                <ExternalLink size={12} />
-                            </button>
-                        </div>
-                        {testError.gemini && <p className="text-[10px] text-red-400 mt-1.5">{testError.gemini}</p>}
-                    </div>
+                    <ProviderCard
+                        providerId="gemini"
+                        providerName="Gemini"
+                        apiKey={apiKey}
+                        preferredModel={preferredModels.gemini}
+                        hasStoredKey={!!hasStoredKey.gemini}
+                        onKeyChange={setApiKey}
+                        onSaveKey={async () => { await handleSaveKey('gemini', apiKey, setApiKey); }}
+                        onRemoveKey={() => handleRemoveKey('gemini', setApiKey)}
+                        onTestConnection={() => handleTestConnection('gemini', apiKey)}
+                        testStatus={testStatus.gemini || 'idle'}
+                        testError={testError.gemini}
+                        savingStatus={!!savingStatus.gemini}
+                        savedStatus={!!savedStatus.gemini}
+                        keyPlaceholder="AIzaSy..."
+                        keyUrl="https://aistudio.google.com/app/apikey"
+                        onPreferredModelChange={(model) => setPreferredModels(prev => ({ ...prev, gemini: model }))}
+                    />
 
                     {/* Groq */}
-                    <div className="bg-bg-item-surface rounded-xl p-5 border border-border-subtle">
-                        <div className="mb-2">
-                            <label className="block text-xs font-medium text-text-primary uppercase tracking-wide">
-                                Groq API Key
-                                {hasStoredKey.groq && <span className="ml-2 text-green-500 normal-case">✓ Saved</span>}
-                            </label>
-                        </div>
-                        <div className="flex gap-2 mb-3">
-                            <input
-                                type="password"
-                                value={groqApiKey}
-                                onChange={(e) => setGroqApiKey(e.target.value)}
-                                placeholder={hasStoredKey.groq ? "••••••••••••" : "gsk_..."}
-                                className="flex-1 bg-bg-input border border-border-subtle rounded-lg px-4 py-2.5 text-xs text-text-primary focus:outline-none focus:border-accent-primary transition-colors"
-                            />
-                            <button
-                                onClick={() => handleSaveKey('groq', groqApiKey, setGroqApiKey)}
-                                disabled={savingStatus.groq || !groqApiKey.trim()}
-                                className={`px-5 py-2.5 rounded-lg text-xs font-medium transition-colors ${savedStatus.groq
-                                    ? 'bg-green-500/20 text-green-400'
-                                    : 'bg-bg-input hover:bg-bg-secondary border border-border-subtle text-text-primary disabled:opacity-50'
-                                    }`}
-                            >
-                                {savingStatus.groq ? 'Saving...' : savedStatus.groq ? 'Saved!' : 'Save'}
-                            </button>
-                            {hasStoredKey.groq && (
-                                <button
-                                    onClick={() => handleRemoveKey('groq', setGroqApiKey)}
-                                    className="px-2.5 py-2.5 rounded-lg text-xs font-medium text-text-tertiary hover:text-red-500 hover:bg-red-500/10 transition-all"
-                                    title="Remove API Key"
-                                >
-                                    <Trash2 size={16} strokeWidth={1.5} />
-                                </button>
-                            )}
-                        </div>
-                        <div className="flex items-center gap-3">
-                            <button
-                                onClick={() => handleTestConnection('groq', groqApiKey)}
-                                disabled={(!groqApiKey.trim() && !hasStoredKey.groq) || testStatus.groq === 'testing'}
-                                className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors border border-border-subtle flex items-center gap-2 ${testStatus.groq === 'success' ? 'bg-green-500/10 text-green-500 border-green-500/20' :
-                                    testStatus.groq === 'error' ? 'bg-red-500/10 text-red-500 border-red-500/20' :
-                                        'bg-bg-input hover:bg-bg-elevated text-text-primary'
-                                    }`}
-                                title={testError.groq || "Test Connection"}
-                            >
-                                {testStatus.groq === 'testing' ? <><Loader2 size={12} className="animate-spin" /> Testing...</> :
-                                    testStatus.groq === 'success' ? <><CheckCircle size={12} /> Connected</> :
-                                        testStatus.groq === 'error' ? <><AlertCircle size={12} /> Error</> :
-                                            <>{/* No Icon */} Test Connection</>}
-                            </button>
-                            <button
-                                onClick={() => openKeyUrl('groq')}
-                                className="text-xs text-text-tertiary hover:text-text-primary flex items-center gap-1 transition-colors"
-                                title="Get API Key"
-                            >
-                                <ExternalLink size={12} />
-                            </button>
-                        </div>
-                        {testError.groq && <p className="text-[10px] text-red-400 mt-1.5">{testError.groq}</p>}
-                    </div>
+                    <ProviderCard
+                        providerId="groq"
+                        providerName="Groq"
+                        apiKey={groqApiKey}
+                        preferredModel={preferredModels.groq}
+                        hasStoredKey={!!hasStoredKey.groq}
+                        onKeyChange={setGroqApiKey}
+                        onSaveKey={async () => { await handleSaveKey('groq', groqApiKey, setGroqApiKey); }}
+                        onRemoveKey={() => handleRemoveKey('groq', setGroqApiKey)}
+                        onTestConnection={() => handleTestConnection('groq', groqApiKey)}
+                        testStatus={testStatus.groq || 'idle'}
+                        testError={testError.groq}
+                        savingStatus={!!savingStatus.groq}
+                        savedStatus={!!savedStatus.groq}
+                        keyPlaceholder="gsk_..."
+                        keyUrl="https://console.groq.com/keys"
+                        onPreferredModelChange={(model) => setPreferredModels(prev => ({ ...prev, groq: model }))}
+                    />
+
+                    {/* Cerebras */}
+                    <ProviderCard
+                        providerId="cerebras"
+                        providerName="Cerebras"
+                        apiKey={cerebrasApiKey}
+                        preferredModel={preferredModels.cerebras}
+                        hasStoredKey={!!hasStoredKey.cerebras}
+                        onKeyChange={setCerebrasApiKey}
+                        onSaveKey={async () => { await handleSaveKey('cerebras', cerebrasApiKey, setCerebrasApiKey); }}
+                        onRemoveKey={() => handleRemoveKey('cerebras', setCerebrasApiKey)}
+                        onTestConnection={() => handleTestConnection('cerebras', cerebrasApiKey)}
+                        testStatus={testStatus.cerebras || 'idle'}
+                        testError={testError.cerebras}
+                        savingStatus={!!savingStatus.cerebras}
+                        savedStatus={!!savedStatus.cerebras}
+                        keyPlaceholder="csk_..."
+                        keyUrl="https://cloud.cerebras.ai"
+                        onPreferredModelChange={(model) => setPreferredModels(prev => ({ ...prev, cerebras: model }))}
+                    />
 
                     {/* OpenAI */}
-                    <div className="bg-bg-item-surface rounded-xl p-5 border border-border-subtle">
-                        <div className="mb-2">
-                            <label className="block text-xs font-medium text-text-primary uppercase tracking-wide">
-                                OpenAI API Key
-                                {hasStoredKey.openai && <span className="ml-2 text-green-500 normal-case">✓ Saved</span>}
-                            </label>
-                        </div>
-                        <div className="flex gap-2 mb-3">
-                            <input
-                                type="password"
-                                value={openaiApiKey}
-                                onChange={(e) => setOpenaiApiKey(e.target.value)}
-                                placeholder={hasStoredKey.openai ? "••••••••••••" : "sk-..."}
-                                className="flex-1 bg-bg-input border border-border-subtle rounded-lg px-4 py-2.5 text-xs text-text-primary focus:outline-none focus:border-accent-primary transition-colors"
-                            />
-                            <button
-                                onClick={() => handleSaveKey('openai', openaiApiKey, setOpenaiApiKey)}
-                                disabled={savingStatus.openai || !openaiApiKey.trim()}
-                                className={`px-5 py-2.5 rounded-lg text-xs font-medium transition-colors ${savedStatus.openai
-                                    ? 'bg-green-500/20 text-green-400'
-                                    : 'bg-bg-input hover:bg-bg-secondary border border-border-subtle text-text-primary disabled:opacity-50'
-                                    }`}
-                            >
-                                {savingStatus.openai ? 'Saving...' : savedStatus.openai ? 'Saved!' : 'Save'}
-                            </button>
-                            {hasStoredKey.openai && (
-                                <button
-                                    onClick={() => handleRemoveKey('openai', setOpenaiApiKey)}
-                                    className="px-2.5 py-2.5 rounded-lg text-xs font-medium text-text-tertiary hover:text-red-500 hover:bg-red-500/10 transition-all"
-                                    title="Remove API Key"
-                                >
-                                    <Trash2 size={16} strokeWidth={1.5} />
-                                </button>
-                            )}
-                        </div>
-                        <div className="flex items-center gap-3">
-                            <button
-                                onClick={() => handleTestConnection('openai', openaiApiKey)}
-                                disabled={(!openaiApiKey.trim() && !hasStoredKey.openai) || testStatus.openai === 'testing'}
-                                className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors border border-border-subtle flex items-center gap-2 ${testStatus.openai === 'success' ? 'bg-green-500/10 text-green-500 border-green-500/20' :
-                                    testStatus.openai === 'error' ? 'bg-red-500/10 text-red-500 border-red-500/20' :
-                                        'bg-bg-input hover:bg-bg-elevated text-text-primary'
-                                    }`}
-                                title={testError.openai || "Test Connection"}
-                            >
-                                {testStatus.openai === 'testing' ? <><Loader2 size={12} className="animate-spin" /> Testing...</> :
-                                    testStatus.openai === 'success' ? <><CheckCircle size={12} /> Connected</> :
-                                        testStatus.openai === 'error' ? <><AlertCircle size={12} /> Error</> :
-                                            <>{/* No Icon */} Test Connection</>}
-                            </button>
-                            <button
-                                onClick={() => openKeyUrl('openai')}
-                                className="text-xs text-text-tertiary hover:text-text-primary flex items-center gap-1 transition-colors"
-                                title="Get API Key"
-                            >
-                                <ExternalLink size={12} />
-                            </button>
-                        </div>
-                        {testError.openai && <p className="text-[10px] text-red-400 mt-1.5">{testError.openai}</p>}
-                    </div>
+                    <ProviderCard
+                        providerId="openai"
+                        providerName="OpenAI"
+                        apiKey={openaiApiKey}
+                        preferredModel={preferredModels.openai}
+                        hasStoredKey={!!hasStoredKey.openai}
+                        onKeyChange={setOpenaiApiKey}
+                        onSaveKey={async () => { await handleSaveKey('openai', openaiApiKey, setOpenaiApiKey); }}
+                        onRemoveKey={() => handleRemoveKey('openai', setOpenaiApiKey)}
+                        onTestConnection={() => handleTestConnection('openai', openaiApiKey)}
+                        testStatus={testStatus.openai || 'idle'}
+                        testError={testError.openai}
+                        savingStatus={!!savingStatus.openai}
+                        savedStatus={!!savedStatus.openai}
+                        keyPlaceholder="sk-..."
+                        keyUrl="https://platform.openai.com/api-keys"
+                        onPreferredModelChange={(model) => setPreferredModels(prev => ({ ...prev, openai: model }))}
+                    />
 
                     {/* Claude */}
-                    <div className="bg-bg-item-surface rounded-xl p-5 border border-border-subtle">
-                        <div className="mb-2">
-                            <label className="block text-xs font-medium text-text-primary uppercase tracking-wide">
-                                Claude API Key
-                                {hasStoredKey.claude && <span className="ml-2 text-green-500 normal-case">✓ Saved</span>}
-                            </label>
-                        </div>
-                        <div className="flex gap-2 mb-3">
-                            <input
-                                type="password"
-                                value={claudeApiKey}
-                                onChange={(e) => setClaudeApiKey(e.target.value)}
-                                placeholder={hasStoredKey.claude ? "••••••••••••" : "sk-ant-..."}
-                                className="flex-1 bg-bg-input border border-border-subtle rounded-lg px-4 py-2.5 text-xs text-text-primary focus:outline-none focus:border-accent-primary transition-colors"
-                            />
-                            <button
-                                onClick={() => handleSaveKey('claude', claudeApiKey, setClaudeApiKey)}
-                                disabled={savingStatus.claude || !claudeApiKey.trim()}
-                                className={`px-5 py-2.5 rounded-lg text-xs font-medium transition-colors ${savedStatus.claude
-                                    ? 'bg-green-500/20 text-green-400'
-                                    : 'bg-bg-input hover:bg-bg-secondary border border-border-subtle text-text-primary disabled:opacity-50'
-                                    }`}
-                            >
-                                {savingStatus.claude ? 'Saving...' : savedStatus.claude ? 'Saved!' : 'Save'}
-                            </button>
-                            {hasStoredKey.claude && (
-                                <button
-                                    onClick={() => handleRemoveKey('claude', setClaudeApiKey)}
-                                    className="px-2.5 py-2.5 rounded-lg text-xs font-medium text-text-tertiary hover:text-red-500 hover:bg-red-500/10 transition-all"
-                                    title="Remove API Key"
-                                >
-                                    <Trash2 size={16} strokeWidth={1.5} />
-                                </button>
-                            )}
-                        </div>
-                        <div className="flex items-center gap-3">
-                            <button
-                                onClick={() => handleTestConnection('claude', claudeApiKey)}
-                                disabled={(!claudeApiKey.trim() && !hasStoredKey.claude) || testStatus.claude === 'testing'}
-                                className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors border border-border-subtle flex items-center gap-2 ${testStatus.claude === 'success' ? 'bg-green-500/10 text-green-500 border-green-500/20' :
-                                    testStatus.claude === 'error' ? 'bg-red-500/10 text-red-500 border-red-500/20' :
-                                        'bg-bg-input hover:bg-bg-elevated text-text-primary'
-                                    }`}
-                                title={testError.claude || "Test Connection"}
-                            >
-                                {testStatus.claude === 'testing' ? <><Loader2 size={12} className="animate-spin" /> Testing...</> :
-                                    testStatus.claude === 'success' ? <><CheckCircle size={12} /> Connected</> :
-                                        testStatus.claude === 'error' ? <><AlertCircle size={12} /> Error</> :
-                                            <>{/* No Icon */} Test Connection</>}
-                            </button>
-                            <button
-                                onClick={() => openKeyUrl('claude')}
-                                className="text-xs text-text-tertiary hover:text-text-primary flex items-center gap-1 transition-colors"
-                                title="Get API Key"
-                            >
-                                <ExternalLink size={12} />
-                            </button>
-                        </div>
-                        {testError.claude && <p className="text-[10px] text-red-400 mt-1.5">{testError.claude}</p>}
-                    </div>
+                    <ProviderCard
+                        providerId="claude"
+                        providerName="Claude"
+                        apiKey={claudeApiKey}
+                        preferredModel={preferredModels.claude}
+                        hasStoredKey={!!hasStoredKey.claude}
+                        onKeyChange={setClaudeApiKey}
+                        onSaveKey={async () => { await handleSaveKey('claude', claudeApiKey, setClaudeApiKey); }}
+                        onRemoveKey={() => handleRemoveKey('claude', setClaudeApiKey)}
+                        onTestConnection={() => handleTestConnection('claude', claudeApiKey)}
+                        testStatus={testStatus.claude || 'idle'}
+                        testError={testError.claude}
+                        savingStatus={!!savingStatus.claude}
+                        savedStatus={!!savedStatus.claude}
+                        keyPlaceholder="sk-ant-..."
+                        keyUrl="https://console.anthropic.com/settings/keys"
+                        onPreferredModelChange={(model) => setPreferredModels(prev => ({ ...prev, claude: model }))}
+                    />
 
                 </div>
             </div>
@@ -861,13 +889,54 @@ export const AIProvidersSettings: React.FC = () => {
                                         <div className="grid grid-cols-1 gap-2">
                                             <div className="flex items-center gap-2 text-xs">
                                                 <code className="bg-bg-input px-1.5 py-0.5 rounded text-text-primary font-mono border border-border-subtle">{"{{TEXT}}"}</code>
-                                                <span className="text-text-tertiary">Combined System + Context + Message (Recommended)</span>
+                                                <span className="text-text-tertiary">Combined System + Context + Message</span>
+                                            </div>
+                                            <div className="flex items-center gap-2 text-xs">
+                                                <code className="bg-bg-input px-1.5 py-0.5 rounded text-text-primary font-mono border border-border-subtle">{"{{PROMPT}}"}</code>
+                                                <span className="text-text-tertiary">Alias of {"{{TEXT}}"}</span>
+                                            </div>
+                                            <div className="flex items-center gap-2 text-xs">
+                                                <code className="bg-bg-input px-1.5 py-0.5 rounded text-text-primary font-mono border border-border-subtle">{"{{USER_MESSAGE}}"}</code>
+                                                <span className="text-text-tertiary">Raw user message only</span>
+                                            </div>
+                                            <div className="flex items-center gap-2 text-xs">
+                                                <code className="bg-bg-input px-1.5 py-0.5 rounded text-text-primary font-mono border border-border-subtle">{"{{SYSTEM_PROMPT}}"}</code>
+                                                <span className="text-text-tertiary">Injected system instruction</span>
+                                            </div>
+                                            <div className="flex items-center gap-2 text-xs">
+                                                <code className="bg-bg-input px-1.5 py-0.5 rounded text-text-primary font-mono border border-border-subtle">{"{{CONTEXT}}"}</code>
+                                                <span className="text-text-tertiary">Conversation context (if available)</span>
                                             </div>
                                             <div className="flex items-center gap-2 text-xs">
                                                 <code className="bg-bg-input px-1.5 py-0.5 rounded text-text-primary font-mono border border-border-subtle">{"{{IMAGE_BASE64}}"}</code>
-                                                <span className="text-text-tertiary">Screenshot data (if available)</span>
+                                                <span className="text-text-tertiary">First screenshot as base64</span>
+                                            </div>
+                                            <div className="flex items-center gap-2 text-xs">
+                                                <code className="bg-bg-input px-1.5 py-0.5 rounded text-text-primary font-mono border border-border-subtle">{"{{IMAGE_BASE64S}}"}</code>
+                                                <span className="text-text-tertiary">JSON array of all screenshots (base64)</span>
+                                            </div>
+                                            <div className="flex items-center gap-2 text-xs">
+                                                <code className="bg-bg-input px-1.5 py-0.5 rounded text-text-primary font-mono border border-border-subtle">{"{{IMAGE_COUNT}}"}</code>
+                                                <span className="text-text-tertiary">Number of attached screenshots</span>
+                                            </div>
+                                            <div className="flex items-center gap-2 text-xs">
+                                                <code className="bg-bg-input px-1.5 py-0.5 rounded text-text-primary font-mono border border-border-subtle">{"{{OPENAI_USER_CONTENT}}"}</code>
+                                                <span className="text-text-tertiary">OpenAI-compatible user content array (text + images)</span>
+                                            </div>
+                                            <div className="flex items-center gap-2 text-xs">
+                                                <code className="bg-bg-input px-1.5 py-0.5 rounded text-text-primary font-mono border border-border-subtle">{"{{OPENAI_MESSAGES}}"}</code>
+                                                <span className="text-text-tertiary">OpenAI-compatible messages array (system + user multimodal)</span>
+                                            </div>
+                                            <div className="flex items-center gap-2 text-xs">
+                                                <code className="bg-bg-input px-1.5 py-0.5 rounded text-text-primary font-mono border border-border-subtle">{"{{API_KEY}}"}</code>
+                                                <span className="text-text-tertiary">Best-available configured LLM API key</span>
+                                            </div>
+                                            <div className="flex items-center gap-2 text-xs">
+                                                <code className="bg-bg-input px-1.5 py-0.5 rounded text-text-primary font-mono border border-border-subtle">{"{{OPENAI_API_KEY}}"}</code>
+                                                <span className="text-text-tertiary">Provider-specific key placeholders are also supported</span>
                                             </div>
                                         </div>
+                                        <p className="text-[10px] text-text-tertiary mt-2">Tip: include at least one text or image placeholder so input can flow through in text-only, image-only, and mixed scenarios.</p>
                                     </div>
 
                                     <div>
@@ -890,13 +959,10 @@ export const AIProvidersSettings: React.FC = () => {
                                                     <code className="font-mono text-[10px] text-text-primary whitespace-pre block">
                                                         {`curl https://api.openai.com/v1/chat/completions \\
   -H "Content-Type: application/json" \\
-  -H "Authorization: Bearer YOUR_API_KEY" \\
+  -H "Authorization: Bearer {{OPENAI_API_KEY}}" \\
   -d '{
     "model": "gpt-4o-mini",
-    "messages": [
-      {"role": "system", "content": "You are a helpful assistant."},
-      {"role": "user", "content": "{{TEXT}}"}
-    ],
+    "messages": {{OPENAI_MESSAGES}},
     "temperature": 0.7
   }'`}
                                                     </code>

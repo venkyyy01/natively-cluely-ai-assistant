@@ -6,147 +6,193 @@ import { GEMINI_FLASH_MODEL } from "./IntelligenceManager"
 import { DatabaseManager } from "./db/DatabaseManager"; // Import Database Manager
 import * as path from "path";
 import * as fs from "fs";
-import { AudioDevices } from "./audio/AudioDevices";
-import { ENGLISH_VARIANTS } from "./config/languages"
-import { CalendarManager } from "./services/CalendarManager";
-import { ThemeManager } from "./ThemeManager";
-import { RAGManager } from "./rag/RAGManager";
-import Store from 'electron-store';
+import { ipcSchemas, parseIpcInput } from "./ipcValidation";
+import { registerMeetingHandlers } from "./ipc/registerMeetingHandlers";
+import { registerSettingsHandlers } from "./ipc/registerSettingsHandlers";
+import { registerCalendarHandlers } from "./ipc/registerCalendarHandlers";
+import { registerRagHandlers } from "./ipc/registerRagHandlers";
+import { registerEmailHandlers } from "./ipc/registerEmailHandlers";
+import { registerProfileHandlers } from "./ipc/registerProfileHandlers";
+import { registerIntelligenceHandlers } from "./ipc/registerIntelligenceHandlers";
+import { registerWindowHandlers } from "./ipc/registerWindowHandlers";
+import { registerGeminiStreamIpcHandlers } from "./ipc/registerGeminiStreamIpcHandlers";
+import { registerLlmCredentialsIpcHandlers } from "./ipc/registerLlmCredentialsIpcHandlers";
+import { registerProviderSttAndTestIpcHandlers } from "./ipc/registerProviderSttAndTestIpcHandlers";
+import { registerEngineHealthHandlers } from "./ipc/registerEngineHealthHandlers";
+import { registerCodeEditorCaptureHandlers } from "./ipc/registerCodeEditorCaptureHandlers";
+import { registerScreenRAGHandlers } from "./ipc/registerScreenRAGHandlers";
+import { registerObservabilityHandlers } from "./ipc/registerObservabilityHandlers";
+
+import {
+  type ScreenshotFacadeLike,
+  type RuntimeCoordinatorLike,
+  type SttSupervisorLike,
+  type IntelligenceManagerLike,
+  type InferenceSupervisorLike,
+  type WindowFacadeLike,
+  type SettingsFacadeLike,
+  type AudioFacadeLike,
+} from "./ipc/handlerTypes";
+import { createHandlerContext } from "./ipc/handlerContext";
 
 export function initializeIpcHandlers(appState: AppState): void {
-  const safeHandle = (channel: string, listener: (event: any, ...args: any[]) => Promise<any> | any) => {
-    ipcMain.removeHandler(channel);
-    ipcMain.handle(channel, listener);
-  };
+  const {
+    safeHandle,
+    safeHandleValidated,
+    ok,
+    fail,
+    getInferenceLlmHelper,
+    getRuntimeCoordinator,
+    getSttSupervisor,
+    getInferenceSupervisor,
+    getWindowFacade,
+    getSettingsFacade,
+    getAudioFacade,
+    getIntelligenceManager,
+    initializeInferenceLLMs,
+    getScreenshotFacade,
+    activeChatControllers,
+    streamChatStartedAt,
+  } = createHandlerContext(appState);
 
-  // --- NEW Test Helper ---
-  safeHandle("test-release-fetch", async () => {
+safeHandleValidated("renderer:log-error", (args) => [parseIpcInput(ipcSchemas.rendererLogPayload, args[0], 'renderer:log-error')] as const, async (_, payload) => {
     try {
-      console.log("[IPC] Manual Test Fetch triggered (forcing refresh)...");
-      const { ReleaseNotesManager } = require('./update/ReleaseNotesManager');
-      const notes = await ReleaseNotesManager.getInstance().fetchReleaseNotes('latest', true);
-
-      if (notes) {
-        console.log("[IPC] Notes fetched for:", notes.version);
-        const info = {
-          version: notes.version || 'latest',
-          files: [] as any[],
-          path: '',
-          sha512: '',
-          releaseName: notes.summary,
-          releaseNotes: notes.fullBody,
-          parsedNotes: notes
-        };
-        // Send to renderer
-        appState.getMainWindow()?.webContents.send("update-available", info);
-        return { success: true };
-      }
-      return { success: false, error: "No notes returned" };
+      console.error('[RendererError]', JSON.stringify(payload));
+      return { success: true };
     } catch (err: any) {
-      console.error("[IPC] test-release-fetch failed:", err);
-      return { success: false, error: err.message };
+      console.error('[RendererError] Failed to log payload:', err);
+      return { success: false, error: err?.message || 'Failed to log renderer error' };
     }
   });
 
-  safeHandle("get-recognition-languages", async () => {
-    return ENGLISH_VARIANTS;
-  });
-
-  safeHandle(
-    "update-content-dimensions",
-    async (event, { width, height }: { width: number; height: number }) => {
-      if (!width || !height) return
-
-      const senderWebContents = event.sender
-      const settingsWin = appState.settingsWindowHelper.getSettingsWindow()
-      const overlayWin = appState.getWindowHelper().getOverlayWindow()
-      const launcherWin = appState.getWindowHelper().getLauncherWindow()
-
-      if (settingsWin && !settingsWin.isDestroyed() && settingsWin.webContents.id === senderWebContents.id) {
-        appState.settingsWindowHelper.setWindowDimensions(settingsWin, width, height)
-      } else if (
-        overlayWin && !overlayWin.isDestroyed() && overlayWin.webContents.id === senderWebContents.id
-      ) {
-        // NativelyInterface logic - Resize ONLY the overlay window using dedicated method
-        appState.getWindowHelper().setOverlayDimensions(width, height)
-      }
-    }
-  )
-
-  safeHandle("set-window-mode", async (event, mode: 'launcher' | 'overlay') => {
-    appState.getWindowHelper().setWindowMode(mode);
+  safeHandle("license:activate", async (event, key: string) => {
     return { success: true };
-  })
+  });
+  safeHandle("license:check-premium", async () => {
+    return true;
+  });
+  safeHandle("license:deactivate", async () => {
+    return { success: true };
+  });
+  safeHandle("license:get-hardware-id", async () => {
+    return 'open-build';
+  });
 
-  safeHandle("delete-screenshot", async (event, path: string) => {
-    await appState.deleteScreenshot(path)
-    return { success: true }
+  registerSettingsHandlers({ appState, safeHandle, safeHandleValidated });
+  registerCalendarHandlers({ appState, safeHandle, safeHandleValidated });
+  registerEmailHandlers({ appState, safeHandleValidated });
+  registerRagHandlers({ appState, safeHandle, safeHandleValidated });
+  registerProfileHandlers({ appState, safeHandle, safeHandleValidated });
+  registerIntelligenceHandlers({ appState, safeHandle, safeHandleValidated });
+  registerWindowHandlers({ appState, safeHandle, safeHandleValidated });
+
+  registerGeminiStreamIpcHandlers({
+    safeHandle,
+    safeHandleValidated,
+    getInferenceLlmHelper,
+    getIntelligenceManager,
+    activeChatControllers,
+    streamChatStartedAt,
+    appState,
+  });
+
+  safeHandleValidated("delete-screenshot", (args) => [parseIpcInput(ipcSchemas.absoluteUserDataPath, args[0], 'delete-screenshot')] as const, async (event, filePath) => {
+    // Guard: only allow deletion of files within the app's own userData directory
+    const userDataDir = app.getPath('userData');
+    const resolved = path.resolve(filePath);
+    if (!resolved.startsWith(userDataDir + path.sep)) {
+      console.warn('[IPC] delete-screenshot: path outside userData rejected:', filePath);
+      return { success: false, error: 'Path not allowed' };
+    }
+    const screenshotFacade = getScreenshotFacade();
+    if (screenshotFacade?.deleteScreenshot) {
+      return screenshotFacade.deleteScreenshot(resolved);
+    }
+    return appState.deleteScreenshot(resolved);
   })
 
   safeHandle("take-screenshot", async () => {
     try {
-      const screenshotPath = await appState.takeScreenshot()
-      const preview = await appState.getImagePreview(screenshotPath)
-      return { path: screenshotPath, preview }
+      const screenshotFacade = getScreenshotFacade();
+      const screenshotPath = screenshotFacade?.takeScreenshot
+        ? await screenshotFacade.takeScreenshot()
+        : await appState.takeScreenshot();
+      const preview = screenshotFacade?.getImagePreview
+        ? await screenshotFacade.getImagePreview(screenshotPath)
+        : await appState.getImagePreview(screenshotPath);
+      return ok({ path: screenshotPath, preview })
     } catch (error) {
-      throw error
+      return fail('SCREENSHOT_CAPTURE_FAILED', error, 'Failed to take screenshot')
     }
   })
 
   safeHandle("take-selective-screenshot", async () => {
     try {
-      const screenshotPath = await appState.takeSelectiveScreenshot()
-      const preview = await appState.getImagePreview(screenshotPath)
-      return { path: screenshotPath, preview }
-    } catch (error) {
-      if (error.message === "Selection cancelled") {
-        return { cancelled: true }
+      const screenshotFacade = getScreenshotFacade();
+      const screenshotPath = screenshotFacade?.takeSelectiveScreenshot
+        ? await screenshotFacade.takeSelectiveScreenshot()
+        : await appState.takeSelectiveScreenshot();
+      const preview = screenshotFacade?.getImagePreview
+        ? await screenshotFacade.getImagePreview(screenshotPath)
+        : await appState.getImagePreview(screenshotPath);
+      return ok({ path: screenshotPath, preview })
+    } catch (error: any) {
+      if (error?.message === "Selection cancelled") {
+        return ok({ cancelled: true })
       }
-      throw error
+      return fail('SELECTIVE_SCREENSHOT_FAILED', error, 'Failed to take selective screenshot')
     }
   })
 
   safeHandle("get-screenshots", async () => {
+    // console.log({ view: appState.getView() })
     try {
-      let previews = []
-      if (appState.getView() === "queue") {
+      const screenshotFacade = getScreenshotFacade();
+      const view = screenshotFacade?.getView ? screenshotFacade.getView() : appState.getView();
+      const getPreview = screenshotFacade?.getImagePreview
+        ? (filePath: string) => screenshotFacade.getImagePreview!(filePath)
+        : (filePath: string) => appState.getImagePreview(filePath);
+      let previews: Array<{ path: string; preview: string }> = []
+      if (view === "queue") {
+        const screenshotQueue = screenshotFacade?.getScreenshotQueue
+          ? screenshotFacade.getScreenshotQueue()
+          : appState.getScreenshotQueue();
         previews = await Promise.all(
-          appState.getScreenshotQueue().map(async (path) => ({
+          screenshotQueue.map(async (path) => ({
             path,
-            preview: await appState.getImagePreview(path)
+            preview: await getPreview(path)
           }))
         )
       } else {
+        const extraScreenshotQueue = screenshotFacade?.getExtraScreenshotQueue
+          ? screenshotFacade.getExtraScreenshotQueue()
+          : appState.getExtraScreenshotQueue();
         previews = await Promise.all(
-          appState.getExtraScreenshotQueue().map(async (path) => ({
+          extraScreenshotQueue.map(async (path) => ({
             path,
-            preview: await appState.getImagePreview(path)
+            preview: await getPreview(path)
           }))
         )
       }
-      return previews
+      // previews.forEach((preview: any) => console.log(preview.path))
+      return ok(previews)
     } catch (error) {
-      throw error
+      return fail('SCREENSHOT_LIST_FAILED', error, 'Failed to load screenshots')
     }
-  })
-
-  safeHandle("toggle-window", async () => {
-    appState.toggleMainWindow()
-  })
-
-  safeHandle("show-window", async () => {
-    appState.showMainWindow()
-  })
-
-  safeHandle("hide-window", async () => {
-    appState.hideMainWindow()
   })
 
   safeHandle("reset-queues", async () => {
     try {
-      appState.clearQueues()
+      const screenshotFacade = getScreenshotFacade();
+      if (screenshotFacade?.clearQueues) {
+        screenshotFacade.clearQueues();
+      } else {
+        appState.clearQueues()
+      }
+      // console.log("Screenshot queues have been cleared.")
       return { success: true }
     } catch (error: any) {
+      // console.error("Error resetting queues:", error)
       return { success: false, error: error.message }
     }
   })
@@ -174,808 +220,325 @@ export function initializeIpcHandlers(appState: AppState): void {
     return { success: true };
   });
 
+
   // Generate suggestion from transcript - Natively-style text-only reasoning
-  safeHandle("generate-suggestion", async (event, context: string, lastQuestion: string) => {
+  safeHandleValidated("generate-suggestion", (args) => parseIpcInput(ipcSchemas.generateSuggestionArgs, args, 'generate-suggestion'), async (_event, context, lastQuestion) => {
     try {
-      const suggestion = await appState.processingHelper.getLLMHelper().generateSuggestion(context, lastQuestion)
-      return { suggestion }
+      const suggestion = await getInferenceLlmHelper().generateSuggestion(context, lastQuestion)
+      return ok({ suggestion })
     } catch (error: any) {
-      throw error
+      return fail('SUGGESTION_GENERATION_FAILED', error, 'Failed to generate suggestion')
     }
   })
+
+  safeHandle("finalize-mic-stt", async () => {
+    const sttSupervisor = getSttSupervisor();
+    if (sttSupervisor?.finalizeMicrophone) {
+      await sttSupervisor.finalizeMicrophone();
+    } else {
+      appState.finalizeMicSTT();
+    }
+    return ok(null);
+  });
 
   // IPC handler for analyzing image from file path
-  safeHandle("analyze-image-file", async (event, path: string) => {
+  safeHandleValidated("analyze-image-file", (args) => [parseIpcInput(ipcSchemas.absoluteUserDataPath, args[0], 'analyze-image-file')] as const, async (_event, filePath) => {
+    // Guard: only allow reading files within the app's own userData directory
+    const userDataDir = app.getPath('userData');
+    const resolved = path.resolve(filePath);
+    if (!resolved.startsWith(userDataDir + path.sep)) {
+      console.warn('[IPC] analyze-image-file: path outside userData rejected:', filePath);
+      return fail('PATH_NOT_ALLOWED', new Error('Path not allowed'), 'Path not allowed');
+    }
     try {
-      const result = await appState.processingHelper.getLLMHelper().analyzeImageFile(path)
-      return result
+      const result = await getInferenceLlmHelper().analyzeImageFiles([resolved])
+      return ok(result)
     } catch (error: any) {
-      throw error
+      return fail('IMAGE_ANALYSIS_FAILED', error, 'Failed to analyze image file')
     }
   })
-
-  safeHandle("gemini-chat", async (event, message: string, imagePath?: string, context?: string, options?: { skipSystemPrompt?: boolean }) => {
-    try {
-      const result = await appState.processingHelper.getLLMHelper().chatWithGemini(message, imagePath, context, options?.skipSystemPrompt);
-
-      console.log(`[IPC] gemini - chat response: `, result ? result.substring(0, 50) : "(empty)");
-
-      if (!result || result.trim().length === 0) {
-        return "I apologize, but I couldn't generate a response. Please try again.";
-      }
-
-      const intelligenceManager = appState.getIntelligenceManager();
-      intelligenceManager.addTranscript({
-        text: message,
-        speaker: 'user',
-        timestamp: Date.now(),
-        final: true
-      }, true);
-
-      intelligenceManager.addAssistantMessage(result);
-      intelligenceManager.logUsage('chat', message, result);
-
-      return result;
-    } catch (error: any) {
-      throw error;
-    }
-  });
-
-  // Streaming IPC Handler
-  safeHandle("gemini-chat-stream", async (event, message: string, imagePath?: string, context?: string, options?: { skipSystemPrompt?: boolean }) => {
-    try {
-      console.log("[IPC] gemini-chat-stream started using LLMHelper.streamChat");
-      const llmHelper = appState.processingHelper.getLLMHelper();
-      const intelligenceManager = appState.getIntelligenceManager();
-
-      intelligenceManager.addTranscript({
-        text: message,
-        speaker: 'user',
-        timestamp: Date.now(),
-        final: true
-      }, true);
-
-      let fullResponse = "";
-
-      if (!context) {
-        try {
-          const autoContext = intelligenceManager.getFormattedContext(100);
-          if (autoContext && autoContext.trim().length > 0) {
-            context = autoContext;
-            console.log(`[IPC] Auto - injected 100s context for gemini - chat - stream(${context.length} chars)`);
-          }
-        } catch (ctxErr) {
-          console.warn("[IPC] Failed to auto-inject context:", ctxErr);
-        }
-      }
-
-      try {
-        const stream = llmHelper.streamChat(message, imagePath, context, options?.skipSystemPrompt ? "" : undefined);
-
-        for await (const token of stream) {
-          event.sender.send("gemini-stream-token", token);
-          fullResponse += token;
-        }
-
-        event.sender.send("gemini-stream-done");
-
-        if (fullResponse.trim().length > 0) {
-          intelligenceManager.addAssistantMessage(fullResponse);
-          intelligenceManager.logUsage('chat', message, fullResponse);
-        }
-
-      } catch (streamError: any) {
-        console.error("[IPC] Streaming error:", streamError);
-        event.sender.send("gemini-stream-error", streamError.message || "Unknown streaming error");
-      }
-
-      return null;
-    } catch (error: any) {
-      console.error("[IPC] Error in gemini-chat-stream setup:", error);
-      throw error;
-    }
-  });
 
   safeHandle("quit-app", () => {
     app.quit()
+    return ok(null)
   })
 
-  safeHandle("quit-and-install-update", () => {
-    console.log('[IPC] quit-and-install-update handler called')
-    appState.quitAndInstallUpdate()
-  })
-
-  safeHandle("delete-meeting", async (_, id: string) => {
+  safeHandleValidated("delete-meeting", (args) => [parseIpcInput(ipcSchemas.providerId, args[0], 'delete-meeting')] as const, async (_, id) => {
     return DatabaseManager.getInstance().deleteMeeting(id);
   });
 
-  safeHandle("check-for-updates", async () => {
-    await appState.checkForUpdates()
-  })
-
-  safeHandle("download-update", async () => {
-    appState.downloadUpdate()
-  })
-
-  // Window movement handlers
-  safeHandle("move-window-left", async () => {
-    appState.moveWindowLeft()
-  })
-
-  safeHandle("move-window-right", async () => {
-    appState.moveWindowRight()
-  })
-
-  safeHandle("move-window-up", async () => {
-    appState.moveWindowUp()
-  })
-
-  safeHandle("move-window-down", async () => {
-    appState.moveWindowDown()
-  })
-
-  safeHandle("center-and-show-window", async () => {
-    appState.centerAndShowWindow()
-  })
-
-  // Settings Window
-  safeHandle("toggle-settings-window", (event, { x, y } = {}) => {
-    appState.settingsWindowHelper.toggleWindow(x, y)
-  })
-
-  // --- Settings Store ---
-  const store = new Store();
-
-  safeHandle("get-settings", async () => {
-    return store.get('settings', {});
+  registerLlmCredentialsIpcHandlers({
+    safeHandle,
+    safeHandleValidated,
+    ok,
+    fail,
+    getInferenceLlmHelper,
+    initializeInferenceLLMs,
   });
 
-  safeHandle("save-settings", (event, settings) => {
-    store.set('settings', settings);
-    // Also notify main process or apply immediate changes if needed
-    if (settings.sttProvider) {
-      // We might want to trigger reconfig if changed, but we have set-stt-provider for that
-    }
-    return { success: true }
-  })
-
-
-
-  safeHandle("close-settings-window", () => {
-    appState.settingsWindowHelper.closeWindow()
-  })
-
-  safeHandle("set-undetectable", async (_, state: boolean) => {
-    appState.setUndetectable(state)
-    return { success: true }
-  })
-
-  safeHandle("set-disguise", async (_, mode: 'terminal' | 'settings' | 'activity' | 'none') => {
-    appState.setDisguise(mode)
-    return { success: true }
-  })
-
-  safeHandle("get-undetectable", async () => {
-    return appState.getUndetectable()
-  })
-
-  safeHandle("set-open-at-login", async (_, openAtLogin: boolean) => {
-    app.setLoginItemSettings({
-      openAtLogin,
-      openAsHidden: false,
-      path: app.getPath('exe')
-    });
-    return { success: true };
+  registerProviderSttAndTestIpcHandlers({
+    appState,
+    safeHandle,
+    safeHandleValidated,
+    ok,
+    fail,
+    getInferenceLlmHelper,
+    getSttSupervisor,
   });
 
-  safeHandle("get-open-at-login", async () => {
-    const settings = app.getLoginItemSettings();
-    return settings.openAtLogin;
-  });
-
-  // LLM Model Management Handlers
-  safeHandle("get-current-llm-config", async () => {
+  safeHandle("get-fast-response-config", () => {
     try {
-      const llmHelper = appState.processingHelper.getLLMHelper();
-      return {
-        provider: llmHelper.getCurrentProvider(),
-        model: llmHelper.getCurrentModel(),
-        isOllama: llmHelper.isUsingOllama()
-      };
+      const llmHelper = getInferenceLlmHelper();
+      return ok(llmHelper.getFastResponseConfig());
     } catch (error: any) {
-      throw error;
+      return fail('FAST_RESPONSE_CONFIG_READ_FAILED', error, 'Failed to get Fast Response config');
     }
   });
 
-  safeHandle("get-available-ollama-models", async () => {
+  safeHandleValidated("set-fast-response-config", (args) => [parseIpcInput(ipcSchemas.fastResponseConfig, args[0], 'set-fast-response-config')] as const, (_, config) => {
     try {
-      const llmHelper = appState.processingHelper.getLLMHelper();
-      const models = await llmHelper.getOllamaModels();
-      return models;
-    } catch (error: any) {
-      throw error;
-    }
-  });
+      const { CredentialsManager } = require('./services/CredentialsManager');
+      const llmHelper = getInferenceLlmHelper();
+      llmHelper.setFastResponseConfig(config as any);
+      CredentialsManager.getInstance().setFastResponseConfig(config as any);
 
-  safeHandle("switch-to-ollama", async (_, model?: string, url?: string) => {
-    try {
-      const llmHelper = appState.processingHelper.getLLMHelper();
-      await llmHelper.switchToOllama(model, url);
+      BrowserWindow.getAllWindows().forEach(win => {
+        if (!win.isDestroyed()) {
+          win.webContents.send('fast-response-config-changed', llmHelper.getFastResponseConfig());
+        }
+      });
+
       return { success: true };
     } catch (error: any) {
-      return { success: false, error: error.message };
+      return fail('IPC_ERROR', error, 'Operation failed');
     }
   });
 
-  safeHandle("force-restart-ollama", async () => {
+  safeHandleValidated("set-model", (args) => [parseIpcInput(ipcSchemas.modelId, args[0], 'set-model')] as const, async (_, modelId) => {
     try {
-      const llmHelper = appState.processingHelper.getLLMHelper();
-      const success = await llmHelper.forceRestartOllama();
-      return { success };
-    } catch (error: any) {
-      return { success: false, error: error.message };
-    }
-  });
+      const llmHelper = getInferenceLlmHelper();
+      const { CredentialsManager } = require('./services/CredentialsManager');
+      const cm = CredentialsManager.getInstance();
 
-  safeHandle("ensure-ollama-running", async () => {
-    try {
-      const llmHelper = appState.processingHelper.getLLMHelper();
-      const result = await llmHelper.ensureOllamaRunning();
-      return result;
-    } catch (error: any) {
-      return { success: false, message: error.message };
-    }
-  });
+      // Get all providers (Curl + Custom)
+      const curlProviders = cm.getCurlProviders();
+      const legacyProviders = cm.getCustomProviders() || [];
+      const allProviders = [...curlProviders, ...legacyProviders];
 
-  safeHandle("switch-to-gemini", async (_, apiKey?: string, modelId?: string) => {
-    try {
-      const llmHelper = appState.processingHelper.getLLMHelper();
-      await llmHelper.switchToGemini(apiKey, modelId);
+      appState.getIntelligenceManager().cancelActiveWhatToSay?.('model_changed');
+      llmHelper.setModel(modelId, allProviders);
 
-      if (apiKey) {
-        const { CredentialsManager } = require('./services/CredentialsManager');
-        CredentialsManager.getInstance().setGeminiApiKey(apiKey);
+      // Close the selector window if open
+      const windowFacade = getWindowFacade();
+      if (windowFacade?.hideModelSelectorWindow) {
+        windowFacade.hideModelSelectorWindow();
+      } else {
+        appState.modelSelectorWindowHelper.hideWindow();
       }
 
-      return { success: true };
-    } catch (error: any) {
-      return { success: false, error: error.message };
-    }
-  });
-
-  safeHandle("set-gemini-api-key", async (_, apiKey: string) => {
-    try {
-      const { CredentialsManager } = require('./services/CredentialsManager');
-      CredentialsManager.getInstance().setGeminiApiKey(apiKey);
-
-      const llmHelper = appState.processingHelper.getLLMHelper();
-      llmHelper.setApiKey(apiKey);
-
-      appState.getIntelligenceManager().initializeLLMs();
+      // Broadcast to all windows so NativelyInterface can update its selector (session-only update)
+      BrowserWindow.getAllWindows().forEach(win => {
+        if (!win.isDestroyed()) {
+          win.webContents.send('model-changed', modelId);
+        }
+      });
 
       return { success: true };
     } catch (error: any) {
-      console.error("Error saving Gemini API key:", error);
-      return { success: false, error: error.message };
+      console.error("Error setting model:", error);
+      return fail('IPC_ERROR', error, 'Operation failed');
     }
   });
 
-  safeHandle("set-groq-api-key", async (_, apiKey: string) => {
-    try {
-      const { CredentialsManager } = require('./services/CredentialsManager');
-      CredentialsManager.getInstance().setGroqApiKey(apiKey);
-
-      const llmHelper = appState.processingHelper.getLLMHelper();
-      llmHelper.setGroqApiKey(apiKey);
-
-      appState.getIntelligenceManager().initializeLLMs();
-
-      return { success: true };
-    } catch (error: any) {
-      console.error("Error saving Groq API key:", error);
-      return { success: false, error: error.message };
-    }
-  });
-
-  safeHandle("set-openai-api-key", async (_, apiKey: string) => {
-    try {
-      const { CredentialsManager } = require('./services/CredentialsManager');
-      CredentialsManager.getInstance().setOpenaiApiKey(apiKey);
-
-      const llmHelper = appState.processingHelper.getLLMHelper();
-      llmHelper.setOpenaiApiKey(apiKey);
-
-      appState.getIntelligenceManager().initializeLLMs();
-
-      return { success: true };
-    } catch (error: any) {
-      console.error("Error saving OpenAI API key:", error);
-      return { success: false, error: error.message };
-    }
-  });
-
-  safeHandle("set-claude-api-key", async (_, apiKey: string) => {
-    try {
-      const { CredentialsManager } = require('./services/CredentialsManager');
-      CredentialsManager.getInstance().setClaudeApiKey(apiKey);
-
-      const llmHelper = appState.processingHelper.getLLMHelper();
-      llmHelper.setClaudeApiKey(apiKey);
-
-      appState.getIntelligenceManager().initializeLLMs();
-
-      return { success: true };
-    } catch (error: any) {
-      console.error("Error saving Claude API key:", error);
-      return { success: false, error: error.message };
-    }
-  });
-
-  safeHandle("get-custom-providers", async () => {
+  // Persist default model (from Settings) + update runtime + broadcast to all windows
+  safeHandleValidated("set-default-model", (args) => [parseIpcInput(ipcSchemas.modelId, args[0], 'set-default-model')] as const, async (_, modelId) => {
     try {
       const { CredentialsManager } = require('./services/CredentialsManager');
       const cm = CredentialsManager.getInstance();
+      cm.setDefaultModel(modelId);
+
+      // Also update the runtime model
+      const llmHelper = getInferenceLlmHelper();
       const curlProviders = cm.getCurlProviders();
       const legacyProviders = cm.getCustomProviders() || [];
-      return [...curlProviders, ...legacyProviders];
-    } catch (error: any) {
-      console.error("Error getting custom providers:", error);
-      return [];
-    }
-  });
+      const allProviders = [...curlProviders, ...legacyProviders];
+      appState.getIntelligenceManager().cancelActiveWhatToSay?.('default_model_changed');
+      llmHelper.setModel(modelId, allProviders);
 
-  safeHandle("save-custom-provider", async (_, provider: any) => {
-    try {
-      const { CredentialsManager } = require('./services/CredentialsManager');
-      CredentialsManager.getInstance().saveCurlProvider(provider);
-      return { success: true };
-    } catch (error: any) {
-      console.error("Error saving custom provider:", error);
-      return { success: false, error: error.message };
-    }
-  });
-
-  safeHandle("delete-custom-provider", async (_, id: string) => {
-    try {
-      const { CredentialsManager } = require('./services/CredentialsManager');
-      CredentialsManager.getInstance().deleteCurlProvider(id);
-      CredentialsManager.getInstance().deleteCustomProvider(id);
-      return { success: true };
-    } catch (error: any) {
-      console.error("Error deleting custom provider:", error);
-      return { success: false, error: error.message };
-    }
-  });
-
-  safeHandle("switch-to-custom-provider", async (_, providerId: string) => {
-    try {
-      const { CredentialsManager } = require('./services/CredentialsManager');
-      const providers = [...CredentialsManager.getInstance().getCurlProviders(), ...CredentialsManager.getInstance().getCustomProviders()];
-      const provider = providers.find((p: any) => p.id === providerId);
-
-      if (!provider) {
-        throw new Error("Provider not found");
+      // Close the selector window if open
+      const windowFacade = getWindowFacade();
+      if (windowFacade?.hideModelSelectorWindow) {
+        windowFacade.hideModelSelectorWindow();
+      } else {
+        appState.modelSelectorWindowHelper.hideWindow();
       }
 
-      const llmHelper = appState.processingHelper.getLLMHelper();
-      await llmHelper.switchToCustom(provider);
-
-      appState.getIntelligenceManager().initializeLLMs();
+      // Broadcast to all windows so NativelyInterface can update its selector
+      BrowserWindow.getAllWindows().forEach(win => {
+        if (!win.isDestroyed()) {
+          win.webContents.send('model-changed', modelId);
+        }
+      });
 
       return { success: true };
     } catch (error: any) {
-      console.error("Error switching to custom provider:", error);
-      return { success: false, error: error.message };
+      console.error("Error setting default model:", error);
+      return fail('IPC_ERROR', error, 'Operation failed');
     }
   });
 
-  // Need to handle missing handlers properly
-  safeHandle("get-credentials", async () => {
-    const { CredentialsManager } = require('./services/CredentialsManager');
-    return CredentialsManager.getInstance().getAllCredentials();
+  // Read the persisted default model
+  safeHandle("get-default-model", async () => {
+    try {
+      const { CredentialsManager } = require('./services/CredentialsManager');
+      const cm = CredentialsManager.getInstance();
+      return ok({ model: cm.getDefaultModel() });
+    } catch (error: any) {
+      console.error("Error getting default model:", error);
+      return fail('DEFAULT_MODEL_READ_FAILED', error, 'Failed to get default model');
+    }
   });
 
-  safeHandle("save-credentials", async (_, creds: any) => {
-    const { CredentialsManager } = require('./services/CredentialsManager');
-    const manager = CredentialsManager.getInstance();
+  // --- Model Selector Window IPC ---
 
-    // Core LLM keys
-    if (creds.geminiApiKey !== undefined) manager.setGeminiApiKey(creds.geminiApiKey);
-    if (creds.groqApiKey !== undefined) manager.setGroqApiKey(creds.groqApiKey);
-    if (creds.openaiApiKey !== undefined) manager.setOpenaiApiKey(creds.openaiApiKey);
-    if (creds.claudeApiKey !== undefined) manager.setClaudeApiKey(creds.claudeApiKey);
-
-    // STT Provider & Keys
-    if (creds.sttProvider !== undefined) manager.setSttProvider(creds.sttProvider);
-    if (creds.groqSttApiKey !== undefined) manager.setGroqSttApiKey(creds.groqSttApiKey);
-    if (creds.groqSttModel !== undefined) manager.setGroqSttModel(creds.groqSttModel);
-    if (creds.openAiSttApiKey !== undefined) manager.setOpenAiSttApiKey(creds.openAiSttApiKey);
-    if (creds.deepgramApiKey !== undefined) manager.setDeepgramApiKey(creds.deepgramApiKey);
-    if (creds.elevenLabsApiKey !== undefined) manager.setElevenLabsApiKey(creds.elevenLabsApiKey);
-    if (creds.azureApiKey !== undefined) manager.setAzureApiKey(creds.azureApiKey);
-    if (creds.azureRegion !== undefined) manager.setAzureRegion(creds.azureRegion);
-    if (creds.ibmWatsonApiKey !== undefined) manager.setIbmWatsonApiKey(creds.ibmWatsonApiKey);
-    if (creds.ibmWatsonRegion !== undefined) manager.setIbmWatsonRegion(creds.ibmWatsonRegion);
-
-    // Other
-    if (creds.defaultModel !== undefined) manager.setDefaultModel(creds.defaultModel);
-
-    // Initialize LLMs with new keys
-    appState.getIntelligenceManager().initializeLLMs();
-
-    return true;
+  safeHandleValidated("show-model-selector", (args) => [parseIpcInput(ipcSchemas.modelSelectorCoords, args[0], 'show-model-selector')] as const, (_, coords) => {
+    const windowFacade = getWindowFacade();
+    if (windowFacade?.showModelSelectorWindow) {
+      windowFacade.showModelSelectorWindow(coords.x, coords.y);
+    } else {
+      appState.modelSelectorWindowHelper.showWindow(coords.x, coords.y);
+    }
   });
 
-  safeHandle("get-credentials-status", async () => {
-    const { CredentialsManager } = require('./services/CredentialsManager');
-    const creds = CredentialsManager.getInstance().getAllCredentials();
-    return {
-      hasGemini: !!creds.geminiApiKey,
-      hasGroq: !!creds.groqApiKey,
-      hasStt: !!(creds.googleServiceAccountPath || creds.groqSttApiKey || creds.deepgramApiKey)
-    };
+  safeHandle("hide-model-selector", () => {
+    const windowFacade = getWindowFacade();
+    if (windowFacade?.hideModelSelectorWindow) {
+      windowFacade.hideModelSelectorWindow();
+    } else {
+      appState.modelSelectorWindowHelper.hideWindow();
+    }
+    return ok(null);
   });
 
+  safeHandleValidated("toggle-model-selector", (args) => [parseIpcInput(ipcSchemas.modelSelectorCoords, args[0], 'toggle-model-selector')] as const, (_, coords) => {
+    const windowFacade = getWindowFacade();
+    if (windowFacade?.toggleModelSelectorWindow) {
+      windowFacade.toggleModelSelectorWindow(coords.x, coords.y);
+    } else {
+      appState.modelSelectorWindowHelper.toggleWindow(coords.x, coords.y);
+    }
+  });
+
+
+
+  // Native Audio Service Handlers
+  safeHandle("native-audio-status", async () => {
+    try {
+      const audioFacade = getAudioFacade();
+      return ok(audioFacade?.getNativeAudioStatus ? audioFacade.getNativeAudioStatus() : appState.getNativeAudioStatus());
+    } catch (error) {
+      return fail('NATIVE_AUDIO_STATUS_FAILED', error, 'Failed to get native audio status');
+    }
+  });
+  registerMeetingHandlers({ appState, safeHandle, safeHandleValidated });
+
+  
+
+
+  // Service Account Selection
   safeHandle("select-service-account", async () => {
-    const result: any = await dialog.showOpenDialog({
-      properties: ['openFile'],
-      filters: [{ name: 'JSON', extensions: ['json'] }]
-    });
+    try {
+      const result: any = await dialog.showOpenDialog({
+        properties: ['openFile'],
+        filters: [{ name: 'JSON', extensions: ['json'] }]
+      });
 
-    if (!result.canceled && result.filePaths.length > 0) {
+      if (result.canceled || result.filePaths.length === 0) {
+        return ok({ cancelled: true });
+      }
+
       const filePath = result.filePaths[0];
-      appState.updateGoogleCredentials(filePath);
+
+      // Update backend state immediately
+      const sttSupervisor = getSttSupervisor();
+      if (sttSupervisor?.updateGoogleCredentials) {
+        await sttSupervisor.updateGoogleCredentials(filePath);
+      } else {
+        appState.updateGoogleCredentials(filePath);
+      }
+
+      // Persist the path for future sessions
       const { CredentialsManager } = require('./services/CredentialsManager');
       CredentialsManager.getInstance().setGoogleServiceAccountPath(filePath);
-      return { path: filePath, success: true };
+
+      return ok({ path: filePath });
+    } catch (error: any) {
+      console.error("Error selecting service account:", error);
+      return fail('SERVICE_ACCOUNT_SELECTION_FAILED', error, 'Failed to select service account');
     }
-    return { path: null, success: false };
   });
 
-  safeHandle("reset-intelligence", async () => {
-    appState.getIntelligenceManager().clearQueues();
-    return true;
+  // ==========================================
+  // Theme System Handlers
+  // ==========================================
+
+  safeHandle("theme:get-mode", () => {
+    try {
+      const settingsFacade = getSettingsFacade();
+      const mode = settingsFacade?.getThemeMode ? settingsFacade.getThemeMode() : appState.getThemeManager().getMode();
+      const resolved = settingsFacade?.getResolvedTheme ? settingsFacade.getResolvedTheme() : appState.getThemeManager().getResolvedTheme();
+      return ok({
+        mode,
+        resolved,
+      });
+    } catch (error) {
+      return fail('THEME_MODE_READ_FAILED', error, 'Failed to get theme mode');
+    }
   });
 
-  safeHandle("set-recognition-language", async (_, lang: string) => {
-    store.set('recognitionLanguage', lang);
-    return true;
+  safeHandleValidated("theme:set-mode", (args) => [parseIpcInput(ipcSchemas.themeMode, args[0], 'theme:set-mode')] as const, (_, mode) => {
+    const settingsFacade = getSettingsFacade();
+    if (settingsFacade?.setThemeMode) {
+      settingsFacade.setThemeMode(mode);
+    } else {
+      appState.getThemeManager().setMode(mode);
+    }
+    return { success: true };
   });
 
-  safeHandle("get-stt-config", async () => {
-    const currentSettings: any = store.get('settings', {});
-    // Fallback/Default logic if not in store, or delegate to CredentialsManager
-    const { CredentialsManager } = require('./services/CredentialsManager');
-    const mgr = CredentialsManager.getInstance();
-    const creds = mgr.getAllCredentials();
+  // ==========================================
+  // NAT-105: Engine Health
+  // ==========================================
+  registerEngineHealthHandlers({ appState, safeHandle });
 
-    return {
-      provider: currentSettings.sttProvider || creds.sttProvider || 'native',
-      language: store.get('recognitionLanguage', 'en-US'),
-      // Add other STT config fields if needed by frontend
-    };
-  });
+  // ==========================================
+  // NAT-401: Code Editor Capture
+  // ==========================================
+  registerCodeEditorCaptureHandlers(() => BrowserWindow.getAllWindows().find(w => !w.isDestroyed()) ?? null);
 
-  // Groq Fast Text Mode
-  safeHandle("get-groq-fast-text-mode", async () => {
-    const enabled = store.get('groqFastTextMode', false);
-    return { enabled };
-  });
+  // ==========================================
+  // NAT-501: Screen RAG
+  // ==========================================
+  registerScreenRAGHandlers();
 
-  safeHandle("set-groq-fast-text-mode", async (_, enabled: boolean) => {
-    store.set('groqFastTextMode', enabled);
-    // Notify windows
+  // ==========================================
+  // NAT-801: Observability diagnostics
+  // ==========================================
+  registerObservabilityHandlers();
+
+  // ==========================================
+  // Overlay Opacity (Stealth Mode)
+  // ==========================================
+
+  safeHandleValidated("set-overlay-opacity", (args) => [parseIpcInput(ipcSchemas.overlayOpacity, args[0], 'set-overlay-opacity')] as const, async (_, opacity) => {
+    // Clamp to valid range
+    const clamped = Math.min(1.0, Math.max(0.15, opacity));
+    // Broadcast to all renderer windows so the overlay picks it up in real-time
     BrowserWindow.getAllWindows().forEach(win => {
-      win.webContents.send('groq-fast-text-changed', enabled);
+      if (!win.isDestroyed()) {
+        win.webContents.send('overlay-opacity-changed', clamped);
+      }
     });
-    return { success: true };
-  });
-
-  safeHandle("test-llm-connection", async (_, provider: string, key: string) => {
-    try {
-      const llmHelper = appState.processingHelper.getLLMHelper();
-      const result = await llmHelper.testProviderConnection(provider, key);
-      return result;
-    } catch (err: any) {
-      return { success: false, error: err.message };
-    }
-  });
-
-  safeHandle("seed-demo", async () => {
-    // Placeholder for demo seeding if actual logic isn't available in Windows yet
-    // or implement basic preference setting
-    store.set('isDemoMode', true);
-    return { success: true };
-  });
-
-  safeHandle("set-stt-provider", async (_, provider: string) => {
-    // Save to store first
-    const currentSettings: any = store.get('settings', {});
-    currentSettings.sttProvider = provider;
-    store.set('settings', currentSettings);
-
-    // Reconfigure
-    // We need to update credentials manager too?
-    // appState.reconfigureSttProvider reads from CredentialsManager.
-    // So usually user saves credentials separately.
-    // But if this is just switching the active provider preference:
-    const { CredentialsManager } = require('./services/CredentialsManager');
-    CredentialsManager.getInstance().setSttProvider(provider);
-
-    await appState.reconfigureSttProvider();
-    return { success: true };
-  });
-
-  safeHandle("get-audio-status", async () => {
-    return { connected: true };
-  });
-
-  safeHandle("get-undetectable", async () => {
-    return appState.getUndetectable();
-  });
-
-  safeHandle("set-undetectable", async (_, state: boolean) => {
-    appState.setUndetectable(state);
-    return { success: true };
-  });
-
-  safeHandle("get-disguise", async () => {
-    return appState.getDisguise();
-  });
-
-  safeHandle("set-disguise", async (_, mode: any) => {
-    appState.setDisguise(mode);
-    return { success: true };
-  });
-
-  safeHandle("open-url", async (_, url: string) => {
-    await shell.openExternal(url);
-    return { success: true };
-  });
-
-  safeHandle("get-app-version", async () => {
-    return app.getVersion();
-  });
-
-  safeHandle("quit-app", async () => {
-    app.quit();
-  });
-
-  safeHandle("get-open-at-login", async () => {
-    return app.getLoginItemSettings().openAtLogin;
-  });
-
-  safeHandle("set-open-at-login", async (_, open: boolean) => {
-    app.setLoginItemSettings({ openAtLogin: open });
-    return { success: true };
-  });
-
-  // --- Calendar Handlers ---
-  safeHandle("get-upcoming-events", async () => {
-    return CalendarManager.getInstance().getUpcomingEvents();
-  });
-
-  safeHandle("get-calendar-status", async () => {
-    return CalendarManager.getInstance().getConnectionStatus();
-  });
-
-  safeHandle("calendar-connect", async () => {
-    await CalendarManager.getInstance().startAuthFlow();
-    return { success: true };
-  });
-
-  // --- Session Management ---
-  safeHandle("start-session", async (event, metadata) => {
-    try {
-      console.log("[IPC] start-session triggered with metadata:", metadata);
-      await appState.startMeeting(metadata);
-      // Wait a brief moment to ensure meeting ID is set
-      const meetingId = appState.getIntelligenceManager()?.getCurrentMeetingId();
-      return { success: true, meetingId };
-    } catch (error: any) {
-      console.error("[IPC] start-session failed:", error);
-      return { success: false, error: error.message };
-    }
-  });
-
-  safeHandle("stop-session", async () => {
-    try {
-      console.log("[IPC] stop-session triggered");
-      await appState.endMeeting();
-      return { success: true };
-    } catch (error: any) {
-      console.error("[IPC] stop-session failed:", error);
-      return { success: false, error: error.message };
-    }
-  });
-
-  // --- Global RAG ---
-  safeHandle("rag-query-global", async (event, query: string) => {
-    try {
-      const ragManager = appState.getRAGManager();
-      if (!ragManager) {
-        return { fallback: true, error: "RAG Manager not initialized" };
-      }
-
-      console.log("[IPC] rag-query-global triggered for:", query);
-
-      // We need to stream the response back.
-      // Since this is a `handle` (invoke), we can't easily stream the return value 
-      // in the way the generator works without some bridging.
-      // However, the frontend expects a stream. 
-      // The `preload.ts` defines `onRAGStreamChunk`, so we should probably use `event.sender.send`.
-
-      // BUT, ipcMain.handle expects a promise return.
-      // We will perform the streaming via `event.sender.send` and return a "stream started" object
-      // or just wait for it to finish?
-      // Best practice for streaming from main to renderer is to use `event.sender.send`.
-
-      (async () => {
-        try {
-          const iterator = ragManager.queryGlobal(query);
-          for await (const chunk of iterator) {
-            event.sender.send('rag-stream-chunk', { chunk });
-          }
-          event.sender.send('rag-stream-complete');
-        } catch (err: any) {
-          console.error("[IPC] Global RAG stream error:", err);
-          event.sender.send('rag-stream-error', { error: err.message || String(err) });
-        }
-      })();
-
-      return { success: true, streaming: true };
-
-    } catch (error: any) {
-      console.error("[IPC] rag-query-global startup failed:", error);
-      return { fallback: true, error: error.message };
-    }
-  });
-
-  // --- Calendar Refresh ---
-  safeHandle("calendar-refresh", async () => {
-    try {
-      console.log("[IPC] calendar-refresh triggered");
-      const calendarManager = CalendarManager.getInstance();
-      // In the updated CalendarManager (implied), there might be a refreshState method 
-      // or we just call getUpcomingEvents(true) to force refresh.
-      // Based on my read, I didn't see explicit refreshState exposed public in the snippet I saw,
-      // but I'll assume getUpcomingEvents is the standard way or logic I saw in 'Refresh Logic' section.
-      // Wait, I saw `public async refreshState(): Promise<void>` in lines 155!
-
-      if ((calendarManager as any).refreshState) {
-        await (calendarManager as any).refreshState();
-      } else {
-        // Fallback
-        await calendarManager.getUpcomingEvents();
-      }
-      return { success: true };
-    } catch (error: any) {
-      console.error("[IPC] calendar-refresh failed:", error);
-      return { success: false, error: error.message };
-    }
-  });
-
-  // --- Meeting History Handlers ---
-  safeHandle("get-recent-meetings", async (_, limit?: number) => {
-    return DatabaseManager.getInstance().getRecentMeetings(limit);
-  });
-
-  safeHandle("get-meeting-details", async (_, id: string) => {
-    return DatabaseManager.getInstance().getMeetingDetails(id);
-  });
-
-  safeHandle("update-meeting-title", async (_, id: string, title: string) => {
-    return DatabaseManager.getInstance().updateMeetingTitle(id, title);
-  });
-
-  safeHandle("clear-all-data", async () => {
-    return DatabaseManager.getInstance().clearAllData();
-  });
-
-  // --- Search / RAG Handlers ---
-  safeHandle("search-meetings", async (_, query: string) => {
-    const rag = appState.getRAGManager();
-    if (!rag) return { error: "RAG Manager not initialized" };
-    // Assuming search method exists and handles everything
-    return (rag as any).search(query);
-  });
-
-  // --- Theme Handlers ---
-  safeHandle("get-theme-mode", async () => {
-    const tm = ThemeManager.getInstance();
-    return {
-      mode: tm.getMode(),
-      resolved: tm.getResolvedTheme()
-    };
-  });
-
-  safeHandle("set-theme-mode", async (_, mode: any) => {
-    ThemeManager.getInstance().setMode(mode);
-    return { success: true };
-  });
-
-  // --- Intelligence Generation Handlers ---
-  safeHandle("generate-what-to-say", async (event, question?: string, imagePath?: string) => {
-    try {
-      const im = appState.getIntelligenceManager();
-      if (!im) throw new Error("Intelligence Manager not available");
-      // runWhatShouldISay returns Promise<string | null>
-      const result = await im.runWhatShouldISay(question, 0.8, imagePath);
-      return { success: true, result };
-    } catch (error: any) {
-      console.error("[IPC] generate-what-to-say failed:", error);
-      throw error;
-    }
-  });
-
-  safeHandle("generate-follow-up", async (event, intent: string) => {
-    try {
-      const im = appState.getIntelligenceManager();
-      if (!im) throw new Error("Intelligence Manager not available");
-      const result = await im.runFollowUp(intent);
-      return { success: true, result };
-    } catch (error: any) {
-      console.error("[IPC] generate-follow-up failed:", error);
-      throw error;
-    }
-  });
-
-  safeHandle("generate-recap", async () => {
-    try {
-      const im = appState.getIntelligenceManager();
-      if (!im) throw new Error("Intelligence Manager not available");
-      const result = await im.runRecap();
-      return { success: true, result };
-    } catch (error: any) {
-      console.error("[IPC] generate-recap failed:", error);
-      throw error;
-    }
-  });
-
-  safeHandle("generate-follow-up-questions", async () => {
-    try {
-      const im = appState.getIntelligenceManager();
-      if (!im) throw new Error("Intelligence Manager not available");
-      const result = await im.runFollowUpQuestions();
-      return { success: true, result };
-    } catch (error: any) {
-      console.error("[IPC] generate-follow-up-questions failed:", error);
-      throw error;
-    }
-  });
-
-  // --- RAG Handlers ---
-  safeHandle("rag-query-global", async (event, query: string) => {
-    try {
-      const rag = appState.getRAGManager();
-      if (!rag) throw new Error("RAG Manager not initialized");
-      const generator = rag.queryGlobal(query);
-      for await (const chunk of generator) {
-        event.sender.send('rag-stream-chunk', { chunk });
-      }
-      event.sender.send('rag-stream-complete');
-      return { success: true };
-    } catch (error: any) {
-      console.error('[IPC] rag-query-global error:', error);
-      event.sender.send('rag-stream-error', { error: error.message });
-      return { success: false, error: error.message };
-    }
-  });
-
-  safeHandle("rag-query-meeting", async (event, meetingId: string, query: string) => {
-    try {
-      const rag = appState.getRAGManager();
-      if (!rag) throw new Error("RAG Manager not initialized");
-      const generator = rag.queryMeeting(meetingId, query);
-      for await (const chunk of generator) {
-        event.sender.send('rag-stream-chunk', { chunk });
-      }
-      event.sender.send('rag-stream-complete');
-      return { success: true };
-    } catch (error: any) {
-      console.error('[IPC] rag-query-meeting error:', error);
-      event.sender.send('rag-stream-error', { error: error.message });
-      return { success: false, error: error.message };
-    }
+    return ok({ opacity: clamped });
   });
 }

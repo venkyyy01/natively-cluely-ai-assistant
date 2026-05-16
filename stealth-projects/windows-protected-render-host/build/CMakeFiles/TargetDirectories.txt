@@ -1,0 +1,3 @@
+/Users/venkatasai/Downloads/natively-cluely-ai-assistant/.worktrees/todo-completion/stealth-projects/windows-protected-render-host/build/CMakeFiles/stealth_protected_render_host.dir
+/Users/venkatasai/Downloads/natively-cluely-ai-assistant/.worktrees/todo-completion/stealth-projects/windows-protected-render-host/build/CMakeFiles/edit_cache.dir
+/Users/venkatasai/Downloads/natively-cluely-ai-assistant/.worktrees/todo-completion/stealth-projects/windows-protected-render-host/build/CMakeFiles/rebuild_cache.dir

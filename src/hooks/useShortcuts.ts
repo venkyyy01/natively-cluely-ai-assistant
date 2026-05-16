@@ -29,17 +29,17 @@ export const DEFAULT_SHORTCUTS: ShortcutConfig = {
     followUp: ['⌘', '3'],
     recap: ['⌘', '4'],
     answer: ['⌘', '5'],
-    scrollUp: ['↑'],
-    scrollDown: ['↓'],
-    moveWindowUp: ['⌘', '↑'],
-    moveWindowDown: ['⌘', '↓'],
-    moveWindowLeft: ['⌘', '←'],
-    moveWindowRight: ['⌘', '→'],
-    toggleVisibility: ['⌘', 'B'],
+    scrollUp: ['⌘', '↑'],
+    scrollDown: ['⌘', '↓'],
+    moveWindowUp: ['⌘', '⌥', '↑'],
+    moveWindowDown: ['⌘', '⌥', '↓'],
+    moveWindowLeft: ['⌘', '⌥', '←'],
+    moveWindowRight: ['⌘', '⌥', '→'],
+    toggleVisibility: ['⌘', '⌥', '⇧', 'V'],
     processScreenshots: ['⌘', 'Enter'],
     resetCancel: ['⌘', 'R'],
-    takeScreenshot: ['⌘', 'H'],
-    selectiveScreenshot: ['⌘', 'Shift', 'H']
+    takeScreenshot: ['⌘', '⌥', '⇧', 'S'],
+    selectiveScreenshot: ['⌘', '⌥', '⇧', 'A']
 };
 
 export const useShortcuts = () => {

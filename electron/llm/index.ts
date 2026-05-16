@@ -7,12 +7,13 @@ export { FollowUpLLM } from "./FollowUpLLM";
 export { FollowUpQuestionsLLM } from "./FollowUpQuestionsLLM";
 export { RecapLLM } from "./RecapLLM";
 export { WhatToAnswerLLM } from "./WhatToAnswerLLM";
-export { clampResponse, validateResponse } from "./postProcessor";
+export { clampResponse, clampProseResponse, validateResponse } from "./postProcessor";
 export {
     cleanTranscript,
     sparsifyTranscript,
     formatTranscriptForLLM,
-    prepareTranscriptForWhatToAnswer
+    prepareTranscriptForWhatToAnswer,
+    prepareTranscriptForReasoning
 } from "./transcriptCleaner";
 export type { TranscriptTurn } from "./transcriptCleaner";
 export {
@@ -22,9 +23,30 @@ export {
 export type { TemporalContext, AssistantResponse } from "./TemporalContextBuilder";
 export {
     classifyIntent,
-    getAnswerShapeGuidance
+    getAnswerShapeGuidance,
+    warmupIntentClassifier
 } from "./IntentClassifier";
 export type { ConversationIntent, IntentResult } from "./IntentClassifier";
+export {
+    IntentClassificationCoordinator,
+    FoundationModelsIntentProvider,
+    LegacyIntentProvider,
+    FOUNDATION_INTENT_ALLOWED_INTENTS,
+    FOUNDATION_INTENT_PROMPT_VERSION,
+    FOUNDATION_INTENT_SCHEMA_VERSION,
+    resolveFoundationModelsIntentHelperPath,
+    createIntentProviderError,
+    getIntentProviderErrorCode,
+} from './providers';
+export type {
+    CoordinatedIntentResult,
+    IntentClassificationCoordinatorOptions,
+    IntentClassificationInput,
+    IntentInferenceProvider,
+    IntentProviderError,
+    IntentProviderErrorType,
+    FoundationIntentLabel,
+} from './providers';
 export { MODE_CONFIGS } from "./types";
 export type { GenerationConfig, GeminiContent, LLMClient } from "./types";
 export {

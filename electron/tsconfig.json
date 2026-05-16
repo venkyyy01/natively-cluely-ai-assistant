@@ -6,7 +6,12 @@
     "skipLibCheck": true,
     "esModuleInterop": true,
     "noImplicitAny": true,
+    "noImplicitOverride": true,
+    "noImplicitReturns": true,
+    "noUncheckedIndexedAccess": true,
+    "noFallthroughCasesInSwitch": true,
     "sourceMap": true,
+    "useUnknownInCatchVariables": true,
     "jsx": "react-jsx",
     "baseUrl": ".",
     "outDir": "../dist-electron",
@@ -14,7 +19,9 @@
     "resolveJsonModule": true
   },
   "include": [
-    "**/*.ts"
+    "**/*.ts",
+    "**/*.js",
+    "../premium/electron/**/*.ts"
   ],
   "exclude": [
     "db/seedDemo.ts",

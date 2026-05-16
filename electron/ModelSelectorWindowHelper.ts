@@ -1,22 +1,39 @@
 import { BrowserWindow, screen, app } from "electron"
 import path from "node:path"
-
-const isDev = process.env.NODE_ENV === "development"
-
-const startUrl = isDev
-    ? "http://localhost:5180"
-    : `file://${path.join(__dirname, "../dist/index.html")}`
+import { StealthManager } from "./stealth/StealthManager"
+import { attachRendererBridgeMonitor } from "./runtime/rendererBridgeHealth"
+import { resolveRendererPreloadPath, resolveRendererStartUrl } from "./runtime/windowAssetPaths"
 
 import type { WindowHelper } from "./WindowHelper"
 
 export class ModelSelectorWindowHelper {
     private window: BrowserWindow | null = null
+    private contentProtection: boolean = false
+    private opacityTimeout: NodeJS.Timeout | null = null;
+    private readonly stealthManager: StealthManager;
 
     // Store offsets relative to main window if needed, but absolute positioning is simpler for dropdowns
     private lastBlurTime: number = 0
     private ignoreBlur: boolean = false;
+    private detachRendererBridgeMonitor: (() => void) | null = null
 
-    constructor() { }
+    constructor(stealthManager: StealthManager) {
+        this.stealthManager = stealthManager;
+    }
+
+    private applyStealth(enable: boolean): void {
+        if (!this.window || this.window.isDestroyed()) return;
+
+        this.stealthManager.applyToWindow(this.window, enable, {
+            role: 'auxiliary',
+            hideFromSwitcher: true,
+            allowVirtualDisplayIsolation: true,
+        });
+    }
+
+    public setIgnoreBlur(ignore: boolean): void {
+        this.ignoreBlur = ignore;
+    }
 
     private windowHelper: WindowHelper | null = null;
 
@@ -41,7 +58,7 @@ export class ModelSelectorWindowHelper {
         }
 
         // Set parent and align window settings
-        const mainWin = this.windowHelper?.getMainWindow();
+        const mainWin = this.windowHelper?.getVisibleMainWindow();
         const isOverlay = mainWin === this.windowHelper?.getOverlayWindow();
 
         if (mainWin && !mainWin.isDestroyed()) {
@@ -58,19 +75,51 @@ export class ModelSelectorWindowHelper {
 
         // Standard dropdown positioning
         this.window.setPosition(Math.round(x), Math.round(y))
-
         this.ensureVisibleOnScreen();
-        this.window.show()
-        this.window.focus()
+
+        if (process.platform === 'win32' && this.contentProtection) {
+            this.stealthManager.setWindowOpacity(this.window, 0, {
+                source: 'ModelSelectorWindowHelper.showWindow.win32',
+                windowRole: 'auxiliary',
+            });
+            this.stealthManager.requestWindowShow(this.window, {
+                source: 'ModelSelectorWindowHelper.showWindow.win32',
+                windowRole: 'auxiliary',
+            });
+            this.applyStealth(true);
+            
+            if (this.opacityTimeout) clearTimeout(this.opacityTimeout);
+            this.opacityTimeout = setTimeout(() => {
+                if (this.window && !this.window.isDestroyed()) {
+                    this.stealthManager.setWindowOpacity(this.window, 1, {
+                        source: 'ModelSelectorWindowHelper.showWindow.win32.restore',
+                        windowRole: 'auxiliary',
+                    });
+                    this.stealthManager.reapplyAfterShow(this.window);
+                    this.window.focus();
+                }
+            }, 60);
+        } else {
+            this.applyStealth(this.contentProtection);
+            this.stealthManager.requestWindowShow(this.window, {
+                source: 'ModelSelectorWindowHelper.showWindow',
+                windowRole: 'auxiliary',
+            });
+            this.stealthManager.reapplyAfterShow(this.window);
+            this.window.focus();
+        }
     }
 
     public hideWindow(): void {
         if (this.window && !this.window.isDestroyed()) {
             this.window.setParentWindow(null);
-            this.window.hide()
+            this.stealthManager.requestWindowHide(this.window, {
+                source: 'ModelSelectorWindowHelper.hideWindow',
+                windowRole: 'auxiliary',
+            })
 
             // Restore focus
-            const mainWin = this.windowHelper?.getMainWindow();
+            const mainWin = this.windowHelper?.getVisibleMainWindow();
             if (mainWin && !mainWin.isDestroyed() && mainWin.isVisible()) {
                 mainWin.focus();
             }
@@ -98,26 +147,29 @@ export class ModelSelectorWindowHelper {
         this.hideWindow();
     }
 
-    private createWindow(x?: number, y?: number, showWhenReady: boolean = true): void {
-        const windowSettings: Electron.BrowserWindowConstructorOptions = {
-            width: 140,
-            height: 200,
-            frame: false,
-            transparent: true,
-            resizable: false,
-            fullscreenable: false,
-            hasShadow: false,
-            alwaysOnTop: true,
-            backgroundColor: "#00000000",
-            show: false,
-            skipTaskbar: true,
-            webPreferences: {
-                nodeIntegration: false,
-                contextIsolation: true,
-                preload: path.join(__dirname, "preload.js"),
-                backgroundThrottling: false
-            }
-        }
+private createWindow(x?: number, y?: number, showWhenReady: boolean = true): void {
+  const startUrl = resolveRendererStartUrl({ electronDir: __dirname })
+  const preloadPath = resolveRendererPreloadPath({ electronDir: __dirname })
+  const windowSettings: Electron.BrowserWindowConstructorOptions = {
+    width: 140,
+    height: 200,
+    frame: false,
+    transparent: true,
+    resizable: false,
+    fullscreenable: false,
+    hasShadow: false,
+    alwaysOnTop: true,
+    backgroundColor: "#00000000",
+    show: false,
+    skipTaskbar: true,
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true,
+      sandbox: false,
+      preload: preloadPath,
+      backgroundThrottling: false
+    }
+  }
 
         if (x !== undefined && y !== undefined) {
             windowSettings.x = Math.round(x)
@@ -125,22 +177,44 @@ export class ModelSelectorWindowHelper {
         }
 
         this.window = new BrowserWindow(windowSettings)
+        // S-RACE-1: apply Layer-0 capture protection synchronously before any
+        // loadURL / setHiddenInMissionControl call so the window is born
+        // protected.
+        this.stealthManager.applyInitialStealth(this.window, {
+            role: 'auxiliary',
+            hideFromSwitcher: true,
+            allowVirtualDisplayIsolation: true,
+        })
+        this.stealthManager.recordProtectionEvent('window-created', {
+            source: 'ModelSelectorWindowHelper.createWindow',
+            windowRole: 'auxiliary',
+            visible: false,
+        })
+        this.detachRendererBridgeMonitor?.()
+        this.detachRendererBridgeMonitor = attachRendererBridgeMonitor('Model selector', this.window, {
+            expectedPreloadPath: preloadPath,
+            url: `${startUrl}?window=model-selector`,
+        })
 
         if (process.platform === "darwin") {
             // Initial defaults - will be updated in showWindow
             this.window.setHiddenInMissionControl(true)
         }
 
-        // Load with query param for routing
-        const url = isDev
-            ? `${startUrl}?window=model-selector`
-            : `${startUrl}?window=model-selector`
+        // Apply content protection for Undetectable Mode
+        console.log(`[ModelSelectorWindowHelper] Creating window with Content Protection: ${this.contentProtection}`);
+        this.applyStealth(this.contentProtection)
 
-        this.window.loadURL(url)
+        // Load with query param for routing
+        const url = `${startUrl}?window=model-selector`
+
+        this.window.loadURL(url).catch(e => {
+            console.error('[ModelSelectorWindowHelper] Failed to load URL:', e);
+        });
 
         this.window.once('ready-to-show', () => {
             if (showWhenReady) {
-                this.window?.show()
+                this.showWindow(this.window?.getBounds().x || 0, this.window?.getBounds().y || 0)
             }
         })
 
@@ -149,6 +223,11 @@ export class ModelSelectorWindowHelper {
             if (this.ignoreBlur) return;
             this.lastBlurTime = Date.now();
             this.hideWindow();
+        })
+
+        this.window.on('closed', () => {
+            this.detachRendererBridgeMonitor?.();
+            this.detachRendererBridgeMonitor = null;
         })
     }
 
@@ -178,5 +257,11 @@ export class ModelSelectorWindowHelper {
         }
 
         this.window.setPosition(newX, newY);
+    }
+
+    public setContentProtection(enable: boolean): void {
+        console.log(`[ModelSelectorWindowHelper] Setting content protection to: ${enable}`);
+        this.contentProtection = enable;
+        this.applyStealth(enable);
     }
 }

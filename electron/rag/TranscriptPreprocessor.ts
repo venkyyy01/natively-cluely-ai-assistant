@@ -2,6 +2,8 @@
 // Enhanced transcript cleaning for RAG - extends existing transcriptCleaner.ts patterns
 // Adds semantic detection (questions, decisions, action items)
 
+import { TokenCounter } from '../shared/TokenCounter';
+
 export interface RawSegment {
     speaker: string;
     text: string;
@@ -45,6 +47,8 @@ const ACTION_PATTERNS = [
     /\b(will|going to|need to|should|must|action item|todo|follow up|follow-up)\b/i,
     /\b(by|before|deadline|next week|tomorrow|end of day|eod)\b/i
 ];
+
+const TOKEN_COUNTER = new TokenCounter('generic');
 
 /**
  * Clean a single text segment - remove fillers and normalize
@@ -152,6 +156,10 @@ function mergeConsecutiveSpeakerSegments(
     return merged;
 }
 
+export const __testUtils = {
+    mergeConsecutiveSpeakerSegments
+};
+
 /**
  * Main preprocessing pipeline
  * Takes raw transcript segments and returns cleaned, annotated segments
@@ -168,18 +176,22 @@ export function preprocessTranscript(segments: RawSegment[]): CleanedSegment[] {
     for (const seg of merged) {
         const text = cleanText(seg.text);
 
-        // Skip if too short after cleaning (less than 3 words)
+        const isQuestion = detectQuestion(text);
+        const isDecision = detectDecision(text);
+        const isActionItem = detectActionItem(text);
+
+        // Skip filler fragments, but keep compact semantic turns like "Why Redis?"
         const wordCount = text.split(/\s+/).filter(w => w.length > 0).length;
-        if (wordCount < 3) continue;
+        if (wordCount < 3 && !isQuestion && !isDecision && !isActionItem) continue;
 
         cleaned.push({
             speaker: normalizeSpeaker(seg.speaker),
             text,
             startMs: seg.startMs,
             endMs: seg.endMs,
-            isQuestion: detectQuestion(text),
-            isDecision: detectDecision(text),
-            isActionItem: detectActionItem(text)
+            isQuestion,
+            isDecision,
+            isActionItem
         });
     }
 
@@ -188,8 +200,10 @@ export function preprocessTranscript(segments: RawSegment[]): CleanedSegment[] {
 
 /**
  * Estimate token count for a text string
- * Rough estimate: 1 token ≈ 4 characters for English
+ * Heuristic: blend word and character counts for better cross-language behavior.
  */
 export function estimateTokens(text: string): number {
-    return Math.ceil(text.length / 4);
+    const trimmed = text.trim();
+    if (!trimmed) return 0;
+    return TOKEN_COUNTER.count(trimmed, 'generic');
 }

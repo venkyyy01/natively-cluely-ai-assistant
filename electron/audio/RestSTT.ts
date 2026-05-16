@@ -14,6 +14,8 @@
 import { EventEmitter } from 'events';
 import axios from 'axios';
 import FormData from 'form-data';
+import { RECOGNITION_LANGUAGES } from '../config/languages';
+import { resampleToMonoPcm16 } from './pcm';
 
 export type RestSttProvider = 'groq' | 'openai' | 'elevenlabs' | 'azure' | 'ibmwatson';
 
@@ -27,74 +29,100 @@ interface RestSttProviderConfig {
     extractTranscript: (data: any) => string;
 }
 
-type ProviderConfigFactory = (apiKey: string, region?: string) => RestSttProviderConfig;
+type ProviderConfigFactory = (apiKey: string, region?: string, languageKey?: string) => RestSttProviderConfig;
 
 const PROVIDER_CONFIGS: Record<RestSttProvider, ProviderConfigFactory> = {
-    groq: (apiKey) => ({
-        endpoint: 'https://api.groq.com/openai/v1/audio/transcriptions',
-        model: 'whisper-large-v3-turbo',
-        authHeader: { Authorization: `Bearer ${apiKey}` },
-        uploadType: 'multipart',
-        extraFormFields: {
-            temperature: '0',
-            response_format: 'json',
-            language: 'en',
-        },
-        extractTranscript: (data: any) => {
-            if (typeof data === 'string') return data;
-            return data?.text ?? '';
-        },
-    }),
-    openai: (apiKey) => ({
-        endpoint: 'https://api.openai.com/v1/audio/transcriptions',
-        model: 'whisper-1',
-        authHeader: { Authorization: `Bearer ${apiKey}` },
-        uploadType: 'multipart',
-        extractTranscript: (data: any) => {
-            if (typeof data === 'string') return data;
-            return data?.text ?? '';
-        },
-    }),
-    elevenlabs: (apiKey) => ({
-        endpoint: 'https://api.elevenlabs.io/v1/speech-to-text',
-        model: 'scribe_v1',
-        authHeader: { 'xi-api-key': apiKey },
-        uploadType: 'multipart',
-        extractTranscript: (data: any) => {
-            if (typeof data === 'string') return data;
-            return data?.text ?? '';
-        },
-    }),
-    azure: (apiKey, region = 'eastus') => ({
-        endpoint: `https://${region}.stt.speech.microsoft.com/speech/recognition/conversation/cognitiveservices/v1?language=en-US`,
-        model: '',
-        authHeader: { 'Ocp-Apim-Subscription-Key': apiKey },
-        uploadType: 'binary',
-        extractTranscript: (data: any) => {
-            return data?.DisplayText ?? '';
-        },
-    }),
-    ibmwatson: (apiKey, region = 'us-south') => ({
-        endpoint: `https://api.${region}.speech-to-text.watson.cloud.ibm.com/v1/recognize`,
-        model: '',
-        authHeader: { Authorization: `Basic ${Buffer.from(`apikey:${apiKey}`).toString('base64')}` },
-        uploadType: 'binary',
-        extractTranscript: (data: any) => {
-            try {
-                return data?.results?.[0]?.alternatives?.[0]?.transcript ?? '';
-            } catch {
-                return '';
-            }
-        },
-    }),
+    groq: (apiKey, region, languageKey) => {
+        const lang = languageKey ? RECOGNITION_LANGUAGES[languageKey]?.iso639 : undefined;
+        return {
+            endpoint: 'https://api.groq.com/openai/v1/audio/transcriptions',
+            model: 'whisper-large-v3-turbo',
+            authHeader: { Authorization: `Bearer ${apiKey}` },
+            uploadType: 'multipart',
+            extraFormFields: {
+                temperature: '0',
+                response_format: 'json',
+                ...(lang ? { language: lang } : {})
+            },
+            extractTranscript: (data: any) => {
+                if (typeof data === 'string') return data;
+                return data?.text ?? '';
+            },
+        };
+    },
+    openai: (apiKey, region, languageKey) => {
+        const lang = languageKey ? RECOGNITION_LANGUAGES[languageKey]?.iso639 : undefined;
+        return {
+            endpoint: 'https://api.openai.com/v1/audio/transcriptions',
+            model: 'whisper-1',
+            authHeader: { Authorization: `Bearer ${apiKey}` },
+            uploadType: 'multipart',
+            extraFormFields: {
+                ...(lang ? { language: lang } : {})
+            },
+            extractTranscript: (data: any) => {
+                if (typeof data === 'string') return data;
+                return data?.text ?? '';
+            },
+        };
+    },
+    elevenlabs: (apiKey, region, languageKey) => {
+        const lang = languageKey ? RECOGNITION_LANGUAGES[languageKey]?.iso639 : undefined;
+        return {
+            endpoint: 'https://api.elevenlabs.io/v1/speech-to-text',
+            model: 'scribe_v2',
+            authHeader: { 'xi-api-key': apiKey },
+            uploadType: 'multipart',
+            extraFormFields: {
+                ...(lang ? { language_code: lang } : {})
+            },
+            extractTranscript: (data: any) => {
+                if (typeof data === 'string') return data;
+                return data?.text ?? '';
+            },
+        };
+    },
+    azure: (apiKey, region = 'eastus', languageKey) => {
+        const lang = languageKey ? RECOGNITION_LANGUAGES[languageKey]?.bcp47 : undefined;
+        const finalLang = lang || 'en-US';
+        return {
+            endpoint: `https://${region}.stt.speech.microsoft.com/speech/recognition/conversation/cognitiveservices/v1?language=${finalLang}`,
+            model: '',
+            authHeader: { 'Ocp-Apim-Subscription-Key': apiKey },
+            uploadType: 'binary',
+            extractTranscript: (data: any) => {
+                return data?.DisplayText ?? '';
+            },
+        };
+    },
+    ibmwatson: (apiKey, region = 'us-south', languageKey) => {
+        const lang = languageKey ? RECOGNITION_LANGUAGES[languageKey]?.bcp47 : undefined;
+        const finalLang = lang || 'en-US';
+        return {
+            endpoint: `https://api.${region}.speech-to-text.watson.cloud.ibm.com/v1/recognize?language=${finalLang}`,
+            model: '',
+            authHeader: { Authorization: `Basic ${Buffer.from(`apikey:${apiKey}`).toString('base64')}` },
+            uploadType: 'binary',
+            extractTranscript: (data: any) => {
+                try {
+                    return data?.results?.[0]?.alternatives?.[0]?.transcript ?? '';
+                } catch {
+                    return '';
+                }
+            },
+        };
+    },
 };
 
 // Minimum buffer size before sending (avoid sending tiny fragments)
-// 16kHz * 2 bytes/sample * 1 channel * 0.5 seconds = 16000 bytes
-const MIN_BUFFER_BYTES = 16000;
+// 16kHz * 2 bytes/sample * 1 channel * 0.125 seconds = 4000 bytes
+// Lowered from 16000 to allow short command utterances ("Yes", "Stop") to flush instantly.
+const MIN_BUFFER_BYTES = 4000;
 
-// Upload interval in milliseconds
-const UPLOAD_INTERVAL_MS = 3000;
+// Safety-net upload interval (ms). Primary flush is triggered by speech_ended events.
+// This fires as a backstop if someone talks continuously for >10s without any pause,
+// preventing unbounded buffer growth and Whisper API timeouts.
+const SAFETY_NET_INTERVAL_MS = 10000;
 
 // Silence threshold - if RMS is below this, skip the upload
 const SILENCE_RMS_THRESHOLD = 50;
@@ -107,14 +135,16 @@ export class RestSTT extends EventEmitter {
 
     private chunks: Buffer[] = [];
     private totalBufferedBytes = 0;
-    private uploadTimer: NodeJS.Timeout | null = null;
+    private safetyNetTimer: NodeJS.Timeout | null = null;
     private isActive = false;
     private isUploading = false;
+    private flushPending = false;  // Bug #2 fix: queue flush when upload in progress
 
     // Audio config (must match SystemAudioCapture output)
     private sampleRate = 16000;
     private numChannels = 1;
     private bitsPerSample = 16;
+    private readonly targetSampleRate = 16000;
 
     constructor(provider: RestSttProvider, apiKey: string, modelOverride?: string, region?: string) {
         super();
@@ -156,11 +186,11 @@ export class RestSTT extends EventEmitter {
     }
 
     /**
-     * No-op for RestSTT (language is handled by the REST API)
+     * Update recognition language
      */
-    public setRecognitionLanguage(_key: string): void {
-        // REST providers handle language automatically or via config
-        console.log(`[RestSTT] setRecognitionLanguage called (no-op for REST)`);
+    public setRecognitionLanguage(key: string): void {
+        console.log(`[RestSTT] Updating recognition language to: ${key}`);
+        this.config = PROVIDER_CONFIGS[this.provider](this.apiKey, this.region, key);
     }
 
     /**
@@ -181,9 +211,12 @@ export class RestSTT extends EventEmitter {
         this.chunks = [];
         this.totalBufferedBytes = 0;
 
-        this.uploadTimer = setInterval(() => {
+        // Safety-net timer: flush even during continuous speech to prevent
+        // unbounded buffer growth and Whisper API file-size/timeout errors.
+        // Primary flush is driven by Rust speech_ended events.
+        this.safetyNetTimer = setInterval(() => {
             this.flushAndUpload();
-        }, UPLOAD_INTERVAL_MS);
+        }, SAFETY_NET_INTERVAL_MS);
     }
 
     /**
@@ -195,9 +228,9 @@ export class RestSTT extends EventEmitter {
         console.log(`[RestSTT] Stopping (${this.provider})...`);
         this.isActive = false;
 
-        if (this.uploadTimer) {
-            clearInterval(this.uploadTimer);
-            this.uploadTimer = null;
+        if (this.safetyNetTimer) {
+            clearInterval(this.safetyNetTimer);
+            this.safetyNetTimer = null;
         }
 
         // Flush remaining audio
@@ -209,17 +242,44 @@ export class RestSTT extends EventEmitter {
      */
     public write(audioData: Buffer): void {
         if (!this.isActive) return;
-        this.chunks.push(audioData);
-        this.totalBufferedBytes += audioData.length;
+        const pcm16 = resampleToMonoPcm16(audioData, this.sampleRate, this.numChannels, this.targetSampleRate);
+        if (pcm16.length === 0) return;
+        this.chunks.push(pcm16);
+        this.totalBufferedBytes += pcm16.length;
+    }
+
+    /**
+     * Called when the native SilenceSuppressor detects speech has ended.
+     * The internal Rust engine already applies a 150-200ms VAD hangover to avoid
+     * word-breaks, so we flush immediately without adding redundant TS debouncing.
+     */
+    public notifySpeechEnded(): void {
+        if (!this.isActive) return;
+
+        console.log(`[RestSTT] Speech ended detected by native VAD — flushing buffer immediately`);
+        this.flushAndUpload();
     }
 
     /**
      * Concatenate buffered chunks, add WAV header, and upload to REST API
      */
     private async flushAndUpload(): Promise<void> {
-        // Skip if no data or already uploading
+        // Skip if no data
         if (this.chunks.length === 0 || this.totalBufferedBytes < MIN_BUFFER_BYTES) return;
-        if (this.isUploading) return;
+
+        // Bug #2 fix: if currently uploading, queue a flush for when it completes
+        if (this.isUploading) {
+            this.flushPending = true;
+            return;
+        }
+
+        // Reset safety-net timer to prevent double-flush
+        if (this.safetyNetTimer) {
+            clearInterval(this.safetyNetTimer);
+            this.safetyNetTimer = setInterval(() => {
+                this.flushAndUpload();
+            }, SAFETY_NET_INTERVAL_MS);
+        }
 
         // Grab current buffer and reset
         const currentChunks = this.chunks;
@@ -239,7 +299,7 @@ export class RestSTT extends EventEmitter {
         }
 
         // Add WAV header
-        const wavBuffer = this.addWavHeader(rawPcm, this.sampleRate);
+        const wavBuffer = this.addWavHeader(rawPcm, this.targetSampleRate);
 
         this.isUploading = true;
 
@@ -259,6 +319,12 @@ export class RestSTT extends EventEmitter {
             this.emit('error', err instanceof Error ? err : new Error(String(err)));
         } finally {
             this.isUploading = false;
+
+            // Bug #2 fix: if a flush was requested while we were uploading, process it now
+            if (this.flushPending) {
+                this.flushPending = false;
+                this.flushAndUpload();
+            }
         }
     }
 

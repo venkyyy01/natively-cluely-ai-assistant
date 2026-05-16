@@ -15,6 +15,8 @@ import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
 import 'katex/dist/katex.min.css';
+import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
+import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
 
 interface QueueProps {
   setView: React.Dispatch<React.SetStateAction<"queue" | "solutions" | "debug">>
@@ -39,7 +41,7 @@ const Queue: React.FC<QueueProps> = ({ setView }) => {
   const chatInputRef = useRef<HTMLInputElement>(null)
 
   const [isSettingsOpen, setIsSettingsOpen] = useState(false)
-  const [currentModel, setCurrentModel] = useState<string>('gemini-3-flash-preview')
+  const [currentModel, setCurrentModel] = useState<string>('gemini-3.1-flash-lite-preview')
 
   const barRef = useRef<HTMLDivElement>(null)
 
@@ -57,7 +59,6 @@ const Queue: React.FC<QueueProps> = ({ setView }) => {
     },
     {
       staleTime: Infinity,
-      // @ts-ignore
       cacheTime: Infinity,
       refetchOnWindowFocus: true,
       refetchOnMount: true
@@ -92,12 +93,19 @@ const Queue: React.FC<QueueProps> = ({ setView }) => {
     }
   }
 
-  // Setup Streaming Listeners
-  useEffect(() => {
-    const cleanups: (() => void)[] = [];
+  const handleChatSend = async () => {
+    if (!chatInput.trim()) return
+    setChatMessages((msgs) => [...msgs, { role: "user", text: chatInput }])
 
-    // Stream Token
-    cleanups.push(window.electronAPI.onGeminiStreamToken((token) => {
+    // Add placeholder
+    setChatMessages((msgs) => [...msgs, { role: "gemini", text: "..." }])
+
+    setChatLoading(true)
+    const message = chatInput; // Capture value
+    setChatInput("")
+
+    const requestId = crypto.randomUUID();
+    const tokenCleanup = window.electronAPI.onGeminiStreamToken(requestId, (token) => {
       setChatMessages(prev => {
         const lastMsg = prev[prev.length - 1];
         if (lastMsg && lastMsg.role === 'gemini') {
@@ -110,54 +118,39 @@ const Queue: React.FC<QueueProps> = ({ setView }) => {
         }
         return prev;
       });
-    }));
-
-    // Stream Done
-    cleanups.push(window.electronAPI.onGeminiStreamDone(() => {
+    });
+    const doneCleanup = window.electronAPI.onGeminiStreamDone(requestId, () => {
       setChatLoading(false);
-    }));
-
-    // Stream Error
-    cleanups.push(window.electronAPI.onGeminiStreamError((error) => {
+    });
+    const errorCleanup = window.electronAPI.onGeminiStreamError(requestId, (error) => {
       setChatLoading(false);
       setChatMessages((msgs) => [...msgs, { role: "gemini", text: "Error: " + String(error) }]);
-    }));
-
-    return () => cleanups.forEach(fn => fn());
-  }, []);
-
-  const handleChatSend = async () => {
-    if (!chatInput.trim()) return
-    setChatMessages((msgs) => [...msgs, { role: "user", text: chatInput }])
-
-    // Add placeholder
-    setChatMessages((msgs) => [...msgs, { role: "gemini", text: "..." }])
-
-    setChatLoading(true)
-    const message = chatInput; // Capture value
-    setChatInput("")
+    });
 
     try {
-      await window.electronAPI.streamGeminiChat(message)
+      await window.electronAPI.streamGeminiChat(message, undefined, undefined, { requestId })
     } catch (err) {
       setChatLoading(false)
       setChatMessages((msgs) => [...msgs, { role: "gemini", text: "Error: " + String(err) }])
     } finally {
+      tokenCleanup();
+      doneCleanup();
+      errorCleanup();
       chatInputRef.current?.focus()
     }
   }
 
-  // Load persisted default model on mount
+  // Load persisted default model on mount (each session starts with the default)
   useEffect(() => {
     const loadDefaultModel = async () => {
       try {
         // @ts-ignore
-        const result = await window.electronAPI.invoke('get-default-model');
+        const result = await window.electronAPI.getDefaultModel();
         if (result && result.model) {
           setCurrentModel(result.model);
           // Set runtime model to the default
           // @ts-ignore
-          window.electronAPI.invoke('set-model', result.model).catch(() => { });
+          window.electronAPI.setModel(result.model).catch(() => { });
         }
       } catch (error) {
         console.error('Error loading default model:', error);
@@ -199,7 +192,6 @@ const Queue: React.FC<QueueProps> = ({ setView }) => {
     updateDimensions()
 
     const cleanupFunctions = [
-      window.electronAPI.onScreenshotTaken(() => refetch()),
       window.electronAPI.onResetView(() => refetch()),
       window.electronAPI.onSolutionError((error: string) => {
         showToast(
@@ -223,25 +215,61 @@ const Queue: React.FC<QueueProps> = ({ setView }) => {
       resizeObserver.disconnect()
       cleanupFunctions.forEach((cleanup) => cleanup())
     }
-  }, [isTooltipVisible, tooltipHeight, refetch, setView])
+  }, [isTooltipVisible, tooltipHeight])
 
   // Seamless screenshot-to-LLM flow
   useEffect(() => {
     // Listen for screenshot taken event
-    const unsubscribe = window.electronAPI.onScreenshotTaken(async (data: any) => {
+    const unsubscribe = window.electronAPI.onScreenshotTaken(async () => {
       // Refetch screenshots to update the queue
-      await refetch();
+      const updatedScreenshots = await refetch();
       // Show loading in chat
       setChatLoading(true);
       try {
-        // Get the latest screenshot path
-        const latest = data?.path || (Array.isArray(data) && data.length > 0 && data[data.length - 1]?.path);
-        if (latest) {
-          // Call the LLM to process the screenshot
-          setChatMessages((msgs) => [...msgs, { role: "user", text: "📷 Analyzing screenshot..." }]);
+        // Gather all screenshot paths
+        const allScreenshots = updatedScreenshots.data || [];
+        const allPaths = allScreenshots.map((s: { path: string }) => s.path);
+        if (allPaths.length > 0) {
+          // Call the LLM to process all screenshots
+          const count = allPaths.length;
+          setChatMessages((msgs) => [...msgs, { role: "user", text: `📷 Analyzing ${count} screenshot${count > 1 ? 's' : ''}...` }]);
           setChatMessages((msgs) => [...msgs, { role: "gemini", text: "..." }]);
 
-          await window.electronAPI.streamGeminiChat("Describe this image and solve any problem in it.", latest);
+          const requestId = crypto.randomUUID();
+          const tokenCleanup = window.electronAPI.onGeminiStreamToken(requestId, (token) => {
+            setChatMessages(prev => {
+              const lastMsg = prev[prev.length - 1];
+              if (lastMsg && lastMsg.role === 'gemini') {
+                const updated = [...prev];
+                updated[prev.length - 1] = {
+                  ...lastMsg,
+                  text: (lastMsg.text === "..." ? "" : lastMsg.text) + token
+                };
+                return updated;
+              }
+              return prev;
+            });
+          });
+          const doneCleanup = window.electronAPI.onGeminiStreamDone(requestId, () => {
+            setChatLoading(false);
+          });
+          const errorCleanup = window.electronAPI.onGeminiStreamError(requestId, (error) => {
+            setChatLoading(false);
+            setChatMessages((msgs) => [...msgs, { role: "gemini", text: "Error: " + String(error) }]);
+          });
+
+          try {
+            await window.electronAPI.streamGeminiChat(
+              `Describe ${count > 1 ? 'these images' : 'this image'} and solve any problem in ${count > 1 ? 'them' : 'it'}.`,
+              allPaths,
+              undefined,
+              { requestId }
+            );
+          } finally {
+            tokenCleanup();
+            doneCleanup();
+            errorCleanup();
+          }
         }
       } catch (err) {
         setChatMessages((msgs) => [...msgs, { role: "gemini", text: "Error: " + String(err) }]);
@@ -268,8 +296,7 @@ const Queue: React.FC<QueueProps> = ({ setView }) => {
 
   const handleModelChange = (modelId: string) => {
     setCurrentModel(modelId)
-    // @ts-ignore
-    window.electronAPI.invoke('set-model', modelId).catch(console.error);
+    window.electronAPI.setModel(modelId).catch(console.error);
     setChatMessages((msgs) => [...msgs, {
       role: "gemini",
       text: `🔄 Switched to ${modelId}. Ready for your questions!`
@@ -298,7 +325,7 @@ const Queue: React.FC<QueueProps> = ({ setView }) => {
             <ToastTitle>{toastMessage.title}</ToastTitle>
             <ToastDescription>{toastMessage.description}</ToastDescription>
           </Toast>
-          <div className="w-fit" ref={contentRef}>
+          <div className="w-fit">
             <QueueCommands
               screenshots={screenshots}
               onTooltipVisibilityChange={handleTooltipVisibilityChange}
@@ -316,12 +343,12 @@ const Queue: React.FC<QueueProps> = ({ setView }) => {
           {/* Conditional Chat Interface */}
           {isChatOpen && (
             <div className="mt-4 w-full mx-auto liquid-glass chat-container p-4 flex flex-col">
-              <div className="flex-1 overflow-y-auto mb-3 p-3 rounded-lg bg-white/10 backdrop-blur-md max-h-64 min-h-[120px] glass-content border border-white/20 shadow-lg custom-scrollbar">
+              <div className="flex-1 overflow-y-auto mb-3 p-3 rounded-lg bg-white/10 backdrop-blur-md max-h-64 min-h-[120px] glass-content border border-white/20 shadow-lg">
                 {chatMessages.length === 0 ? (
                   <div className="text-sm text-gray-600 text-center mt-8">
                     💬 Chat with {currentModel}
                     <br />
-                    <span className="text-xs text-gray-500">Take a screenshot (Cmd+H) for automatic analysis</span>
+                    <span className="text-xs text-gray-500">Take a screenshot (Cmd+Option+Shift+S or F14) for automatic analysis</span>
                     <br />
                     <span className="text-xs text-gray-500">Click ⚙️ Models to switch AI providers</span>
                   </div>
@@ -342,12 +369,49 @@ const Queue: React.FC<QueueProps> = ({ setView }) => {
                           remarkPlugins={[remarkGfm, remarkMath]}
                           rehypePlugins={[rehypeKatex]}
                           components={{
-                            // @ts-ignore
                             p: ({ node, ...props }: any) => <p className="mb-2 last:mb-0 whitespace-pre-wrap" {...props} />,
-                            // @ts-ignore
                             a: ({ node, ...props }: any) => <a className="underline hover:opacity-80" target="_blank" rel="noopener noreferrer" {...props} />,
-                            // @ts-ignore
-                            code: ({ node, ...props }: any) => <code className="bg-black/20 rounded px-1 py-0.5 text-xs font-mono" {...props} />,
+                            pre: ({ children }: any) => <div className="not-prose mb-4">{children}</div>,
+                            code: ({ node, inline, className, children, ...props }: any) => {
+                              const match = /language-(\w+)/.exec(className || '');
+                              const isInline = inline ?? false;
+                              const lang = match ? match[1] : '';
+
+                              return !isInline ? (
+                                <div className="my-3 rounded-xl overflow-hidden border border-white/[0.08] shadow-lg bg-zinc-800/60 backdrop-blur-md">
+                                  <div className="bg-white/[0.04] px-3 py-1.5 border-b border-white/[0.08]">
+                                    <span className="text-[10px] uppercase tracking-widest font-semibold text-white/40 font-mono">
+                                      {lang || 'CODE'}
+                                    </span>
+                                  </div>
+                                  <div className="bg-transparent">
+                                    <SyntaxHighlighter
+                                      language={lang || 'text'}
+                                      style={vscDarkPlus}
+                                      customStyle={{
+                                        margin: 0,
+                                        borderRadius: 0,
+                                        fontSize: '13px',
+                                        lineHeight: '1.6',
+                                        background: 'transparent',
+                                        padding: '16px',
+                                        fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace'
+                                      }}
+                                      wrapLongLines={true}
+                                      showLineNumbers={true}
+                                      lineNumberStyle={{ minWidth: '2.5em', paddingRight: '1.2em', color: 'rgba(255,255,255,0.2)', textAlign: 'right', fontSize: '11px' }}
+                                      {...props}
+                                    >
+                                      {String(children).replace(/\n$/, '')}
+                                    </SyntaxHighlighter>
+                                  </div>
+                                </div>
+                              ) : (
+                                <code className="bg-black/20 rounded px-1.5 py-0.5 text-[13px] font-mono border border-white/10" {...props}>
+                                  {children}
+                                </code>
+                              );
+                            },
                           }}
                         >
                           {msg.text}

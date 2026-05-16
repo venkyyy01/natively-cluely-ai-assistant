@@ -61,3 +61,26 @@ export interface GeminiContent {
 export interface LLMClient {
     getGeminiClient(): GoogleGenAI | null;
 }
+
+/**
+ * Response quality validation result
+ */
+export interface ValidationResult {
+  isValid: boolean;
+  violations: string[];
+  regenerationHint?: string;
+  metrics: {
+    sentenceCount: number;
+    maxWordsPerSentence: number;
+    estimatedSpeakingTime: number;
+  };
+}
+
+/**
+ * Response quality analysis
+ */
+export interface ResponseQuality {
+  followsPyramid: boolean;
+  hasAiSpeak: string[];
+  isWithinLimits: boolean;
+}

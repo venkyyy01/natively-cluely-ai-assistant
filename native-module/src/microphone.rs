@@ -1,5 +1,5 @@
 // Microphone Capture - Lock-Free Real-Time Compliant
-// 
+//
 // Architecture:
 // 1. CPAL callback: ONLY pushes to lock-free ring buffer
 // 2. No mutexes, allocations, or DSP in callback
@@ -8,9 +8,12 @@
 use anyhow::Result;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{SampleFormat, Stream};
-use ringbuf::{traits::{Producer, Consumer, Split}, HeapRb, HeapProd, HeapCons};
-use std::sync::Arc;
+use ringbuf::{
+    traits::{Producer, Split},
+    HeapCons, HeapProd, HeapRb,
+};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 use crate::audio_config::RING_BUFFER_SAMPLES;
 
@@ -19,7 +22,7 @@ pub fn list_input_devices() -> Result<Vec<(String, String)>> {
     let host = cpal::default_host();
     let mut list = Vec::new();
     list.push(("default".to_string(), "Default Microphone".to_string()));
-    
+
     if let Ok(devices) = host.input_devices() {
         for device in devices {
             if let Ok(name) = device.name() {
@@ -31,7 +34,7 @@ pub fn list_input_devices() -> Result<Vec<(String, String)>> {
 }
 
 /// Lock-free microphone stream
-/// 
+///
 /// Callback pushes raw f32 samples to ring buffer.
 /// Consumer is polled by DSP thread.
 pub struct MicrophoneStream {
@@ -39,56 +42,65 @@ pub struct MicrophoneStream {
     consumer: Option<HeapCons<f32>>,
     sample_rate: u32,
     is_running: Arc<AtomicBool>,
+    /// Non-blocking wake flag for the DSP loop.
+    data_ready: Arc<AtomicBool>,
 }
 
 impl MicrophoneStream {
-    pub fn new(_device_id: Option<String>) -> Result<Self> {
+    pub fn new(device_id: Option<String>) -> Result<Self> {
         let host = cpal::default_host();
-        let device = host.default_input_device()
-            .ok_or_else(|| anyhow::anyhow!("No input device found"))?;
-        
-        let config = device.default_input_config()
+        let device = resolve_input_device(&host, device_id.as_deref())?;
+
+        let config = device
+            .default_input_config()
             .map_err(|e| anyhow::anyhow!("Failed to get config: {}", e))?;
-        
+
         let sample_rate = config.sample_rate().0;
         let channels = config.channels() as usize;
-        
+
         println!(
-            "[Microphone] Device: {}, Rate: {}Hz, Channels: {}, Format: {:?}", 
-            device.name().unwrap_or_default(), 
-            sample_rate, 
+            "[Microphone] Device: {}, Rate: {}Hz, Channels: {}, Format: {:?}",
+            device.name().unwrap_or_default(),
+            sample_rate,
             channels,
             config.sample_format()
         );
-        
+
         // Create lock-free SPSC ring buffer
         let rb = HeapRb::<f32>::new(RING_BUFFER_SAMPLES);
         let (producer, consumer) = rb.split();
-        
+
         let is_running = Arc::new(AtomicBool::new(false));
         let is_running_clone = is_running.clone();
-        
+
+        let data_ready = Arc::new(AtomicBool::new(false));
+        let data_ready_clone = data_ready.clone();
+
         // Build the stream with minimal callback
         let stream = build_input_stream(
-            &device, 
-            &config, 
-            producer, 
-            channels, 
-            is_running_clone
+            &device,
+            &config,
+            producer,
+            channels,
+            is_running_clone,
+            data_ready_clone,
         )?;
-        
+
         Ok(Self {
             stream: Some(stream),
             consumer: Some(consumer),
             sample_rate,
             is_running,
+            data_ready,
         })
     }
 
     /// Start capturing audio
     pub fn play(&self) -> Result<()> {
         if let Some(ref stream) = self.stream {
-            stream.play().map_err(|e| anyhow::anyhow!("Failed to start stream: {}", e))?;
+            stream
+                .play()
+                .map_err(|e| anyhow::anyhow!("Failed to start stream: {}", e))?;
             self.is_running.store(true, Ordering::SeqCst);
             println!("[Microphone] Stream started");
         }
@@ -98,7 +110,9 @@ impl MicrophoneStream {
     /// Pause capturing
     pub fn pause(&self) -> Result<()> {
         if let Some(ref stream) = self.stream {
-            stream.pause().map_err(|e| anyhow::anyhow!("Failed to pause stream: {}", e))?;
+            stream
+                .pause()
+                .map_err(|e| anyhow::anyhow!("Failed to pause stream: {}", e))?;
             self.is_running.store(false, Ordering::SeqCst);
             println!("[Microphone] Stream paused");
         }
@@ -114,15 +128,44 @@ impl MicrophoneStream {
     pub fn take_consumer(&mut self) -> Option<HeapCons<f32>> {
         self.consumer.take()
     }
-    
+
     /// Check if stream is running
     pub fn is_running(&self) -> bool {
         self.is_running.load(Ordering::SeqCst)
     }
+
+    /// Get the non-blocking wake flag for the DSP thread.
+    pub fn data_ready_signal(&self) -> Arc<AtomicBool> {
+        self.data_ready.clone()
+    }
+}
+
+fn resolve_input_device(host: &cpal::Host, device_id: Option<&str>) -> Result<cpal::Device> {
+    match device_id {
+        Some(id) if !id.is_empty() && id != "default" => {
+            let devices = host
+                .input_devices()
+                .map_err(|e| anyhow::anyhow!("Failed to enumerate input devices: {}", e))?;
+
+            for device in devices {
+                if let Ok(name) = device.name() {
+                    if name == id {
+                        println!("[Microphone] Using requested input device: {}", name);
+                        return Ok(device);
+                    }
+                }
+            }
+
+            Err(anyhow::anyhow!("Requested input device not found: {}", id))
+        }
+        _ => host
+            .default_input_device()
+            .ok_or_else(|| anyhow::anyhow!("No input device found")),
+    }
 }
 
 /// Build input stream with lock-free callback
-/// 
+///
 /// The callback ONLY pushes to the ring buffer.
 /// No mutexes, allocations, or DSP.
 fn build_input_stream(
@@ -131,11 +174,13 @@ fn build_input_stream(
     mut producer: HeapProd<f32>,
     channels: usize,
     is_running: Arc<AtomicBool>,
+    data_ready: Arc<AtomicBool>,
 ) -> Result<Stream> {
     let err_fn = |err| eprintln!("[Microphone] Stream error: {}", err);
-    
+
     let stream = match config.sample_format() {
         SampleFormat::F32 => {
+            let data_ready_f32 = data_ready.clone();
             device.build_input_stream(
                 &config.clone().into(),
                 move |data: &[f32], _: &cpal::InputCallbackInfo| {
@@ -143,21 +188,22 @@ fn build_input_stream(
                         return;
                     }
                     // REAL-TIME SAFE: Only lock-free push
-                    // Convert stereo to mono if needed, then push
                     if channels > 1 {
-                        // Take first channel only (interleaved)
                         for chunk in data.chunks(channels) {
                             let _ = producer.try_push(chunk[0]);
                         }
                     } else {
                         let _ = producer.push_slice(data);
                     }
+                    // Signal DSP thread without blocking the callback.
+                    data_ready_f32.store(true, Ordering::Release);
                 },
                 err_fn,
                 None,
             )?
         }
         SampleFormat::I16 => {
+            let data_ready_i16 = data_ready.clone();
             device.build_input_stream(
                 &config.clone().into(),
                 move |data: &[i16], _: &cpal::InputCallbackInfo| {
@@ -175,12 +221,15 @@ fn build_input_stream(
                             let _ = producer.try_push(sample as f32 / 32768.0);
                         }
                     }
+                    // Signal DSP thread without blocking the callback.
+                    data_ready_i16.store(true, Ordering::Release);
                 },
                 err_fn,
                 None,
             )?
         }
         SampleFormat::I32 => {
+            let data_ready_i32 = data_ready;
             device.build_input_stream(
                 &config.clone().into(),
                 move |data: &[i32], _: &cpal::InputCallbackInfo| {
@@ -198,6 +247,8 @@ fn build_input_stream(
                             let _ = producer.try_push(sample as f32 / 2147483648.0);
                         }
                     }
+                    // Signal DSP thread without blocking the callback.
+                    data_ready_i32.store(true, Ordering::Release);
                 },
                 err_fn,
                 None,
@@ -207,7 +258,7 @@ fn build_input_stream(
             return Err(anyhow::anyhow!("Unsupported sample format: {:?}", format));
         }
     };
-    
+
     Ok(stream)
 }
 
