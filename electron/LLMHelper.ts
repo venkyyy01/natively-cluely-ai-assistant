@@ -2,7 +2,6 @@ import { GoogleGenAI } from "@google/genai"
 import Groq from "groq-sdk"
 import OpenAI from "openai"
 import Anthropic from "@anthropic-ai/sdk"
-import Tesseract from "tesseract.js"
 import { createOcrService, type OcrService } from "./ocr"
 import fs from "fs"
 import sharp from "sharp"
@@ -1686,29 +1685,29 @@ ANSWER DIRECTLY:`;
         continue;
       }
 
+      // The OcrService cascade handles native → Tesseract internally and
+      // never throws — failures surface as `text: ''`. We don't run a
+      // second Tesseract pass when the cascade returned empty: that
+      // would just repeat the same call the cascade already made (and
+      // already failed) and double the latency on a stuck image.
+      let result;
       try {
-        const result = await ocr.recognize(imagePath);
-        throwIfAborted(signal);
-        const text = result.text.trim();
-        if (text.length > 0) {
-          chunks.push(`${label} [${result.provider}, ${result.durationMs}ms]:\n${text}`);
-        } else {
-          chunks.push(`${label}: [no text extracted]`);
-        }
+        result = await ocr.recognize(imagePath, { signal });
       } catch (error) {
-        // Tesseract or native call may still throw on truly unreadable
-        // images. Fall back to the previous Tesseract-only behaviour as a
-        // last resort so we never silently lose an OCR opportunity.
-        try {
-          const fallback = await Tesseract.recognize(imagePath, 'eng');
-          throwIfAborted(signal);
-          const text = (fallback?.data?.text || '').trim();
-          chunks.push(text ? `${label} [tesseract-direct]:\n${text}` : `${label}: [no text extracted]`);
-        } catch (innerError) {
-          const reason = innerError instanceof Error ? innerError.message : String(innerError);
-          const outerReason = error instanceof Error ? error.message : String(error);
-          chunks.push(`${label}: [ocr failed: ${outerReason}; tesseract failed: ${reason}]`);
-        }
+        // OcrService.recognize is documented as never throwing; treat
+        // any escape as a hard failure for this image and keep the
+        // batch moving.
+        const reason = error instanceof Error ? error.message : String(error);
+        chunks.push(`${label}: [ocr failed: ${reason}]`);
+        continue;
+      }
+      throwIfAborted(signal);
+
+      const text = result.text.trim();
+      if (text.length > 0) {
+        chunks.push(`${label} [${result.provider}, ${result.durationMs}ms]:\n${text}`);
+      } else {
+        chunks.push(`${label}: [no text extracted]`);
       }
     }
 

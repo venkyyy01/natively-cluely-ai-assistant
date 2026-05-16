@@ -14,7 +14,7 @@ import { app } from 'electron';
 import path from 'path';
 import fs from 'fs';
 import screenshot from 'screenshot-desktop';
-import Tesseract from 'tesseract.js';
+import { createOcrService, type OcrService } from '../ocr';
 import { createHash } from 'crypto';
 
 const POLL_MS = Number(process.env['NATIVELY_CODE_EDITOR_POLL_MS'] ?? 3000);
@@ -44,6 +44,9 @@ export class CodeEditorCapture extends EventEmitter {
   private lastText = '';
   private readonly tmpDir: string;
   private captureCount = 0;
+  /** OCR cascade — native provider on macOS/Windows, Tesseract elsewhere.
+   *  Initialised lazily so the WASM bundle isn't paid for in tests. */
+  private ocrService: OcrService | null = null;
 
   constructor(private readonly region?: EditorRegion) {
     super();
@@ -86,8 +89,14 @@ export class CodeEditorCapture extends EventEmitter {
 
       this.lastHash = hash;
 
-      const result = await Tesseract.recognize(tmpPath, 'eng');
-      const text = (result?.data?.text ?? '').trim();
+      // Use the OCR cascade — Apple Vision / Windows OCR finish in ~100 ms,
+      // Tesseract takes 3-10 s. The cascade keeps the polling cadence
+      // compatible with the configured POLL_MS interval on every platform.
+      if (!this.ocrService) {
+        this.ocrService = createOcrService();
+      }
+      const result = await this.ocrService.recognize(tmpPath);
+      const text = result.text.trim();
       if (!text || text === this.lastText) return;
 
       this.lastText = text;

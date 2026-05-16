@@ -15,7 +15,6 @@
  * resort fallback when native providers fail.
  */
 import crypto from 'crypto';
-import Tesseract from 'tesseract.js';
 import fs from 'fs';
 import { createOcrService, type OcrService } from '../ocr';
 import {
@@ -262,9 +261,11 @@ function getOcrServiceLazily(): OcrService {
  * Tesseract — it walks the OcrService cascade (Apple Vision on macOS,
  * Windows OCR on Windows, then Tesseract.js as the universal fallback).
  *
- * Tesseract is invoked as a per-image last-resort if the cascade returns
- * empty text for that image, so even on a machine where the native
- * provider misfires we never silently lose OCR coverage.
+ * The cascade itself walks all providers internally and never throws,
+ * so we don't run an extra Tesseract pass after it returns empty —
+ * that would just repeat the call the cascade already attempted and
+ * doubles latency on a stuck image. Per-image errors surface as empty
+ * strings; we simply skip those chunks and keep the batch moving.
  */
 async function runTesseract(imagePaths: string[], signal?: AbortSignal): Promise<string> {
   const chunks: string[] = [];
@@ -275,21 +276,13 @@ async function runTesseract(imagePaths: string[], signal?: AbortSignal): Promise
 
     let extracted = '';
     try {
-      const result = await ocr.recognize(imagePaths[i]);
+      const result = await ocr.recognize(imagePaths[i], { signal });
       extracted = result.text.trim();
     } catch (err) {
-      console.warn('[ProblemExtractor] OCR cascade failed:', err);
-    }
-
-    if (!extracted) {
-      // Hard fallback to direct Tesseract.js so behaviour matches the
-      // pre-cascade extractor on any pathological image.
-      try {
-        const result = await Tesseract.recognize(imagePaths[i], 'eng');
-        extracted = (result?.data?.text ?? '').trim();
-      } catch {
-        // Best effort — leave extracted empty.
-      }
+      // OcrService.recognize is documented as never throwing; defend
+      // against future regressions by treating an escape as "skip this
+      // image" rather than aborting the whole extraction.
+      console.warn('[ProblemExtractor] OCR cascade threw unexpectedly:', err);
     }
 
     if (extracted) chunks.push(extracted);

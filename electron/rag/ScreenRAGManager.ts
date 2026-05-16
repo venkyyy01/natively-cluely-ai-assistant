@@ -32,7 +32,7 @@ import fs from 'fs';
 import os from 'os';
 import { app } from 'electron';
 import screenshot from 'screenshot-desktop';
-import Tesseract from 'tesseract.js';
+import { createOcrService, type OcrService } from '../ocr';
 import { createHash, randomBytes } from 'crypto';
 
 const POLL_MS = Number(process.env['NATIVELY_SCREEN_RAG_POLL_MS'] ?? 5000);
@@ -91,6 +91,17 @@ export class ScreenRAGManager extends EventEmitter {
   private windowHidden = false;
   private screenLocked = false;
   private screenShareActive = false;
+
+  /** OCR cascade — Apple Vision / Windows OCR / Tesseract. Created lazily
+   *  so the WASM bundle isn't paid for until the first sample. */
+  private ocrService: OcrService | null = null;
+
+  private getOcrService(): OcrService {
+    if (!this.ocrService) {
+      this.ocrService = createOcrService();
+    }
+    return this.ocrService;
+  }
 
   constructor(options?: ScreenRAGManagerOptions) {
     super();
@@ -337,9 +348,9 @@ export class ScreenRAGManager extends EventEmitter {
 
     const ocrPromise = (async () => {
       try {
-        const result = await Tesseract.recognize(filePath, 'eng');
+        const result = await this.getOcrService().recognize(filePath, { timeoutMs: this.ocrTimeoutMs });
         if (timedOut) return null; // Discard result if we already timed out
-        return result?.data?.text ?? null;
+        return result.text || null;
       } catch {
         return null;
       }
@@ -383,8 +394,8 @@ export class ScreenRAGManager extends EventEmitter {
       }
       this.lastHash = hash;
 
-      const result = await Tesseract.recognize(tmpPath, 'eng');
-      const text = (result?.data?.text ?? '').trim();
+      const result = await this.getOcrService().recognize(tmpPath, { timeoutMs: this.ocrTimeoutMs });
+      const text = result.text.trim();
 
       // OCR complete — unlink immediately (zero on-disk artifacts at rest)
       this.activeFiles.delete(tmpPath);

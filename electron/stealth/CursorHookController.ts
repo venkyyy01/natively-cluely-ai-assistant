@@ -15,19 +15,33 @@ import { BrowserWindow, screen } from 'electron';
  *      thread-safe N-API callback; we forward them to the overlay renderer
  *      as `virtual-mouse-event` IPC messages so React can paint a software
  *      cursor and synthesize hover / click hits inside the DOM.
- *   4. Permission denial does not crash anything — we log a warning, keep
- *      the controller in a permanent "unavailable" state, and the renderer
- *      falls back to displaying the OS cursor as before.
+ *   4. Permission denial does not crash anything — we log a warning, mark
+ *      the controller as "permission-denied" (recoverable), and the
+ *      renderer falls back to displaying the OS cursor as before. A
+ *      subsequent `enable()` after the user grants the permission retries
+ *      the start path.
  *
  * Compatibility:
  *   - macOS 10.14+ and Windows 10+. On other platforms `enable()` is a no-op.
  *   - Hook is created lazily on the first enable() call so we don't grab the
  *     OS permission prompt at app startup.
  */
+type Unavailability = 'never-tried' | 'module-missing' | 'permission-denied';
+
 export class CursorHookController {
   private readonly overlayWindow: BrowserWindow;
   private hook: NativeCursorHook | null = null;
-  private nativeUnavailable = false;
+  /**
+   * Tri-state availability cache.
+   *   - 'never-tried'      → next enable() will probe the native module.
+   *   - 'module-missing'   → require('natively-audio') failed or symbol
+   *     absent; the binary is mismatched / not bundled. STICKY for
+   *     process lifetime — re-trying never recovers.
+   *   - 'permission-denied' → module loaded but `start()` rejected (most
+   *     commonly Accessibility on macOS). RECOVERABLE — once the user
+   *     grants the permission, the next `enable()` retries cleanly.
+   */
+  private unavailability: Unavailability = 'never-tried';
   private boundsListenersAttached = false;
   private displayListenersAttached = false;
   private overlayShowListener: (() => void) | null = null;
@@ -36,6 +50,8 @@ export class CursorHookController {
   private overlayResizeListener: (() => void) | null = null;
   private overlayClosedListener: (() => void) | null = null;
   private displayMetricsListener: (() => void) | null = null;
+  private displayAddedListener: (() => void) | null = null;
+  private displayRemovedListener: (() => void) | null = null;
   private enabled = false;
   private active = false;
 
@@ -48,10 +64,15 @@ export class CursorHookController {
    * Returns true if the hook is now installed (or was already installed),
    * false if the OS permission was denied or the native binding
    * is unavailable in the current build.
+   *
+   * If the previous attempt failed with "permission denied" (recoverable),
+   * a subsequent call will retry the native start so a freshly-granted
+   * Accessibility permission takes effect without an app restart.
+   * "Module missing" is sticky for the process lifetime.
    */
   public enable(): boolean {
     if (process.platform !== 'darwin' && process.platform !== 'win32') return false;
-    if (this.nativeUnavailable) return false;
+    if (this.unavailability === 'module-missing') return false;
     if (this.enabled) return true;
 
     const hook = this.ensureHook();
@@ -68,16 +89,20 @@ export class CursorHookController {
       // Most common failures:
       //   * macOS: Accessibility permission not granted.
       //   * Windows: SetWindowsHookExW denied (rare; usually elevated apps).
-      // We do not retry here — the user has to grant permission and
-      // re-toggle, or the controller stays disabled. Log once and back off.
+      // We classify as "permission-denied" so a subsequent enable()
+      // (after the user grants the OS permission) retries cleanly.
+      const reason = err instanceof Error ? err.message : String(err);
       console.warn(
         '[CursorHookController] Failed to start native cursor hook (likely permission denied):',
-        err
+        reason
       );
-      this.nativeUnavailable = true;
+      this.unavailability = 'permission-denied';
+      // Drop the hook instance so the next enable() rebuilds a fresh one.
+      this.hook = null;
       return false;
     }
 
+    this.unavailability = 'never-tried';
     this.enabled = true;
     this.attachOverlayLifecycle();
     // If the overlay is already visible, arm immediately.
@@ -89,9 +114,15 @@ export class CursorHookController {
 
   /**
    * Disable the cursor hook. Tears down the CGEventTap and detaches
-   * lifecycle listeners. Idempotent.
+   * lifecycle listeners. Idempotent. Resets the recoverable
+   * "permission-denied" state so the next `enable()` will retry the
+   * native start path.
    */
   public disable(): void {
+    if (this.unavailability === 'permission-denied') {
+      // Allow recovery on next enable.
+      this.unavailability = 'never-tried';
+    }
     if (!this.enabled) return;
     this.enabled = false;
     this.disarm();
