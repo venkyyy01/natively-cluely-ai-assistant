@@ -2498,6 +2498,53 @@ export class IntelligenceEngine extends EventEmitter {
   }
 
   /**
+   * NAT-CM-AUDIT: called by IntelligenceManager when the user toggles
+   * conscious mode (off→on or on→off). Wipes engine-side conscious-mode
+   * caches that don't live on the session: the orchestrator's topic
+   * compatibility cache and circuit-breaker state, cooldown queues,
+   * response fingerprint history, and any in-flight assist request that
+   * was generated under the previous toggle state.
+   *
+   * Intentionally narrower than `reset()`:
+   *   - leaves `activeMode` alone (mode is independent of conscious toggle)
+   *   - leaves `stealthContainmentActive` alone (containment is independent)
+   *   - leaves `activeAuxiliaryRequestId` alone (auxiliary requests are
+   *     not conscious-mode specific)
+   * This keeps the toggle reset surgical and avoids cascading side effects
+   * into unrelated subsystems.
+   */
+  onConsciousModeToggled(): void {
+    this.lastTriggerByCooldownKey.clear();
+    this.pendingCooldownTriggers.clear();
+    // Rebuild the conscious orchestrator so its topic-compatibility cache,
+    // circuit-breaker counters, and per-orchestrator fingerprinters get a
+    // clean slate. The new instance is wired with the same dependencies as
+    // before, so it's safe to drop in.
+    this.consciousOrchestrator = this.buildConsciousOrchestrator();
+    this.consciousContextComposer = new ConsciousContextComposer();
+    this.consciousIntentService = new ConsciousIntentService();
+    this.consciousPreparationCoordinator = new ConsciousPreparationCoordinator(
+      this.session,
+      this.consciousOrchestrator,
+      this.consciousContextComposer,
+      this.consciousIntentService,
+      undefined,
+      undefined,
+      this.llmHelper,
+    );
+    this.consciousResponseFingerprinter.clear();
+    // Cancel any in-flight assist so an answer generated under the prior
+    // toggle state can't land after the toggle. We use a dedicated reason
+    // string so latency telemetry can distinguish it from session-switch
+    // cancellations.
+    this.cancelActiveWhatToSay('conscious-mode-toggled');
+    if (this.assistCancellationToken) {
+      this.assistCancellationToken.abort();
+      this.assistCancellationToken = null;
+    }
+  }
+
+  /**
   * Clean up all event listeners for garbage collection
   */
   override removeAllListeners(): this {
