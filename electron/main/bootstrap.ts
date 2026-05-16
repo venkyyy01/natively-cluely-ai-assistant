@@ -16,7 +16,6 @@ import {
 } from '../startup/StartupHealer'
 import { validateIntegrity } from '../integrity/IntegrityValidator'
 import { applyAdaptiveAcceleration } from '../config/optimizations'
-import { createPermissionWizard } from '../permissions/PermissionWizard'
 
 // Application initialization
 
@@ -128,13 +127,18 @@ export async function initializeApp() {
 
     // NAT-PERMISSIONS: Use PermissionWizard for first-launch flow and revocation detection.
     // Replaces the standalone microphone check with a comprehensive sequential wizard.
+    // The wizard instance lives on AppState so the IPC handlers and the
+    // browser-window-focus re-check below share its state file and cache.
     if (process.platform === 'darwin') {
-      const wizard = createPermissionWizard();
+      const wizard = appState.getPermissionWizard();
       if (wizard.shouldRunWizard()) {
         await wizard.runWizard();
       } else {
         await wizard.checkRevocations();
       }
+      // Re-check on every focus so a permission granted in System Settings
+      // mid-session lights up the dependent feature without an app restart.
+      appState.installPermissionFocusListener();
     }
     
     // Start the Ollama lifecycle manager

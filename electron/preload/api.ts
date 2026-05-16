@@ -18,6 +18,22 @@ export interface VirtualMouseEvent {
   scrollDy: number
 }
 
+/**
+ * NAT-PERMISSIONS: lightweight, renderer-safe view of the macOS permission
+ * wizard's persisted state. Mirrors the main-process `PermissionSnapshot`
+ * but lives here so the preload bridge has a single place for both the type
+ * and the IPC binding.
+ */
+export type PermissionKey = 'microphone' | 'screenRecording' | 'accessibility'
+export type PermissionStatus = 'granted' | 'denied' | 'unknown'
+export interface PermissionStateSnapshot {
+  microphone: PermissionStatus
+  screenRecording: PermissionStatus
+  accessibility: PermissionStatus
+  lastChecked: string
+  platform: NodeJS.Platform
+}
+
 // Types for the exposed Electron API
 export interface ElectronAPI {
   updateContentDimensions: (dimensions: {
@@ -286,6 +302,18 @@ onAccelerationModeChanged: (callback: (enabled: boolean) => void) => () => void
   setCursorHook: (enabled: boolean) => Promise<{ enabled: boolean; installed: boolean }>;
   getCursorHookStatus: () => Promise<{ enabled: boolean; installed: boolean }>;
   onCursorHookStatus: (callback: (status: { enabled: boolean; installed: boolean }) => void) => () => void;
+  // NAT-PERMISSIONS: macOS TCC state inspection + targeted re-prompt.
+  // - getPermissionState: returns the latest snapshot (re-probes the OS).
+  // - requestPermission: triggers the OS prompt for one key, then returns the
+  //   post-prompt status. Returns 'unknown' on non-darwin builds.
+  // - openPermissionSettings: deep-links the System Settings privacy pane
+  //   when the OS won't re-prompt (post-deny path).
+  // - onPermissionStateChanged: fires whenever the wizard re-checks (focus
+  //   regain or explicit refresh), so the Settings UI updates without polling.
+  getPermissionState: () => Promise<PermissionStateSnapshot>;
+  requestPermission: (key: PermissionKey) => Promise<{ key: PermissionKey; status: PermissionStatus }>;
+  openPermissionSettings: (key: PermissionKey) => Promise<{ opened: boolean }>;
+  onPermissionStateChanged: (callback: (snapshot: PermissionStateSnapshot) => void) => () => void;
   onVirtualMouseEvent: (callback: (event: VirtualMouseEvent) => void) => () => void;
   onGlobalShortcutAction: (callback: (actionId: string) => void) => () => void;
   onOverlayOpacityChanged: (callback: (opacity: number) => void) => () => void;
@@ -667,6 +695,19 @@ setOpenAtLogin: (open: boolean) => invokeStatus("set-open-at-login", open),
     ipcRenderer.on('cursor-hook-status', subscription)
     return () => {
       ipcRenderer.removeListener('cursor-hook-status', subscription)
+    }
+  },
+  // NAT-PERMISSIONS: bridge the macOS permission wizard to the renderer.
+  getPermissionState: () => invokeAndUnwrap<PermissionStateSnapshot>('permissions:get-state'),
+  requestPermission: (key: PermissionKey) =>
+    invokeAndUnwrap<{ key: PermissionKey; status: PermissionStatus }>('permissions:request', key),
+  openPermissionSettings: (key: PermissionKey) =>
+    invokeAndUnwrap<{ opened: boolean }>('permissions:open-settings', key),
+  onPermissionStateChanged: (callback: (snapshot: PermissionStateSnapshot) => void) => {
+    const subscription = (_: any, snapshot: PermissionStateSnapshot) => callback(snapshot)
+    ipcRenderer.on('permissions:state-changed', subscription)
+    return () => {
+      ipcRenderer.removeListener('permissions:state-changed', subscription)
     }
   },
   onVirtualMouseEvent: (callback: (event: VirtualMouseEvent) => void) => {

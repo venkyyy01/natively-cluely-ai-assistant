@@ -15,6 +15,7 @@ import { registerEmailHandlers } from "./ipc/registerEmailHandlers";
 import { registerProfileHandlers } from "./ipc/registerProfileHandlers";
 import { registerIntelligenceHandlers } from "./ipc/registerIntelligenceHandlers";
 import { registerWindowHandlers } from "./ipc/registerWindowHandlers";
+import { registerPermissionHandlers } from "./ipc/registerPermissionHandlers";
 import { registerGeminiStreamIpcHandlers } from "./ipc/registerGeminiStreamIpcHandlers";
 import { registerLlmCredentialsIpcHandlers } from "./ipc/registerLlmCredentialsIpcHandlers";
 import { registerProviderSttAndTestIpcHandlers } from "./ipc/registerProviderSttAndTestIpcHandlers";
@@ -85,6 +86,7 @@ safeHandleValidated("renderer:log-error", (args) => [parseIpcInput(ipcSchemas.re
   registerProfileHandlers({ appState, safeHandle, safeHandleValidated });
   registerIntelligenceHandlers({ appState, safeHandle, safeHandleValidated });
   registerWindowHandlers({ appState, safeHandle, safeHandleValidated });
+  registerPermissionHandlers({ appState, safeHandle, safeHandleValidated });
 
   registerGeminiStreamIpcHandlers({
     safeHandle,

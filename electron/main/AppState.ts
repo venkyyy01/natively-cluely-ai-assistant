@@ -99,6 +99,13 @@ export class AppState {
    * after the user already settled on a different state.
    */
   private accelerationManagerInitInFlight: Promise<void> | null = null
+  /**
+   * Lazily-initialised handle to the macOS permission wizard. Reused across
+   * IPC permission requests, focus re-checks, and revocation broadcasts so
+   * the renderer always sees the same persisted state machine.
+   */
+  private permissionWizardInstance: import('../permissions/PermissionWizard').PermissionWizard | null = null
+  private permissionWizardFocusListener: (() => void) | null = null
   private readonly performanceInstrumentation: PerformanceInstrumentation
   private readonly runtimeCoordinator: RuntimeCoordinator
 
@@ -2184,6 +2191,10 @@ try {
       this.stopEnforcementLoop()
     }
 
+    // Detach focus-driven permission re-checks before the app starts
+    // unwinding event listeners. Safe no-op if never installed.
+    this.removePermissionFocusListener()
+
     await this.intelligenceManager.waitForPendingSaves(10000);
     this.meetingStartSequence += 1
     this.meetingLifecycleState = 'idle'
@@ -3814,6 +3825,71 @@ public setAccelerationModeEnabled(enabled: boolean): boolean {
 
   public getAccelerationModeEnabled(): boolean {
   return SettingsManager.getInstance().getAccelerationModeEnabled()
+  }
+
+  /**
+   * Lazily get the singleton PermissionWizard. Created on first request so
+   * `app.getPath('userData')` is available (the wizard's state file lives
+   * there). Reused for IPC, focus re-checks, and revocation broadcasts.
+   */
+  public getPermissionWizard(): import('../permissions/PermissionWizard').PermissionWizard {
+    if (!this.permissionWizardInstance) {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const { createPermissionWizard } = require('../permissions/PermissionWizard') as typeof import('../permissions/PermissionWizard');
+      this.permissionWizardInstance = createPermissionWizard();
+    }
+    return this.permissionWizardInstance;
+  }
+
+  /**
+   * Re-check all permissions and broadcast the result to every renderer.
+   * Designed to be safe to call from a focus event — saves to disk only
+   * when state actually changed.
+   *
+   * Triggered by the focus listener installed in `bootstrap.ts` so a user
+   * who flips a permission in System Settings while the app is running
+   * sees the feature come online without restarting.
+   */
+  public refreshPermissionState(): void {
+    if (process.platform !== 'darwin') {
+      // Other platforms have no runtime-recheckable TCC equivalent.
+      return;
+    }
+    try {
+      const snapshot = this.getPermissionWizard().checkAndUpdate();
+      this._broadcastToAllWindows('permissions:state-changed', snapshot);
+    } catch (err) {
+      console.warn('[AppState] refreshPermissionState failed:', err);
+    }
+  }
+
+  /**
+   * Install a `browser-window-focus` listener that re-checks permissions
+   * whenever the app regains focus. Called once during bootstrap. Stores
+   * the listener handle so `cleanupForQuit` can detach it.
+   */
+  public installPermissionFocusListener(): void {
+    if (this.permissionWizardFocusListener) {
+      return;
+    }
+    if (process.platform !== 'darwin') {
+      return;
+    }
+    const listener = () => {
+      this.refreshPermissionState();
+    };
+    this.permissionWizardFocusListener = listener;
+    app.on('browser-window-focus', listener);
+  }
+
+  private removePermissionFocusListener(): void {
+    if (!this.permissionWizardFocusListener) return;
+    try {
+      app.removeListener('browser-window-focus', this.permissionWizardFocusListener);
+    } catch {
+      // ignore — process may already be tearing down
+    }
+    this.permissionWizardFocusListener = null;
   }
 
   public getPrivacyShieldState(): PrivacyShieldState {
