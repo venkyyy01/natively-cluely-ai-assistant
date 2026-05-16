@@ -46,6 +46,12 @@ import {
   streamWithClaudeMultimodal as _streamWithClaudeMultimodal,
 } from './llm/providers/claudeProvider';
 import {
+  buildPromptCacheKey,
+  buildClaudeSystemParam,
+  logOpenAiCacheUsage,
+  logClaudeCacheUsage,
+} from './llm/providers/cacheTelemetry';
+import {
   chatWithGemini as _chatWithGemini,
   generateWithPro as _generateWithPro,
   generateWithFlash as _generateWithFlash,
@@ -59,6 +65,49 @@ const execAsync = promisify(exec);
 export const LLM_API_TIMEOUT_MS = 30000; // 30 seconds
 const CURL_PROVIDER_TIMEOUT_MS = 60000; // Some cURL providers are materially slower
 const CUSTOM_PROVIDER_MAX_RESPONSE_BYTES = 2 * 1024 * 1024; // 2 MiB
+
+/**
+ * NAT-CACHE-AUDIT: explicit SDK construction options for OpenAI / Anthropic /
+ * OpenAI-compatible clients (Cerebras, etc.). Both SDKs default to a 600s
+ * timeout and 2 retries, and they retry transparently on top of our own
+ * `LLM_API_TIMEOUT_MS` abort path. That can produce a 60s+ tail on a single
+ * request when our user has already moved on. We pin both to small values
+ * matching our own request budget so the SDK never holds a request open
+ * longer than we expect, and we never quietly retry under the hood — our
+ * orchestration layer (RouteDirector, SpeculativeFallback) handles retries
+ * with the right context awareness.
+ */
+const LLM_SDK_TIMEOUT_MS = LLM_API_TIMEOUT_MS;
+const LLM_SDK_MAX_RETRIES = 0;
+
+export function buildOpenAiCompatibleClientOptions(extras: { apiKey: string; baseURL?: string }): {
+  apiKey: string;
+  baseURL?: string;
+  timeout: number;
+  maxRetries: number;
+} {
+  const opts: { apiKey: string; baseURL?: string; timeout: number; maxRetries: number } = {
+    apiKey: extras.apiKey,
+    timeout: LLM_SDK_TIMEOUT_MS,
+    maxRetries: LLM_SDK_MAX_RETRIES,
+  };
+  if (extras.baseURL) {
+    opts.baseURL = extras.baseURL;
+  }
+  return opts;
+}
+
+export function buildAnthropicClientOptions(apiKey: string): {
+  apiKey: string;
+  timeout: number;
+  maxRetries: number;
+} {
+  return {
+    apiKey,
+    timeout: LLM_SDK_TIMEOUT_MS,
+    maxRetries: LLM_SDK_MAX_RETRIES,
+  };
+}
 
 /**
  * Create an AbortSignal that times out after the specified duration
@@ -356,21 +405,21 @@ export class LLMHelper {
 
     if (cerebrasApiKey) {
       this.cerebrasApiKey = cerebrasApiKey
-      this.cerebrasClient = new OpenAI({ apiKey: cerebrasApiKey, baseURL: CEREBRAS_BASE_URL })
+      this.cerebrasClient = new OpenAI(buildOpenAiCompatibleClientOptions({ apiKey: cerebrasApiKey, baseURL: CEREBRAS_BASE_URL }))
       console.log(`[LLMHelper] Cerebras client initialized with model: ${CEREBRAS_FAST_MODEL}`)
     }
 
     // Initialize OpenAI client if API key provided
     if (openaiApiKey) {
       this.openaiApiKey = openaiApiKey
-      this.openaiClient = new OpenAI({ apiKey: openaiApiKey })
+      this.openaiClient = new OpenAI(buildOpenAiCompatibleClientOptions({ apiKey: openaiApiKey }))
       console.log(`[LLMHelper] OpenAI client initialized with model: ${OPENAI_MODEL}`)
     }
 
     // Initialize Claude client if API key provided
     if (claudeApiKey) {
       this.claudeApiKey = claudeApiKey
-      this.claudeClient = new Anthropic({ apiKey: claudeApiKey })
+      this.claudeClient = new Anthropic(buildAnthropicClientOptions(claudeApiKey))
       console.log(`[LLMHelper] Claude client initialized with model: ${CLAUDE_MODEL}`)
     }
 
@@ -411,19 +460,19 @@ export class LLMHelper {
 
   public setCerebrasApiKey(apiKey: string) {
     this.cerebrasApiKey = apiKey || null;
-    this.cerebrasClient = apiKey ? new OpenAI({ apiKey, baseURL: CEREBRAS_BASE_URL }) : null;
+    this.cerebrasClient = apiKey ? new OpenAI(buildOpenAiCompatibleClientOptions({ apiKey, baseURL: CEREBRAS_BASE_URL })) : null;
     console.log("[LLMHelper] Cerebras API Key updated.");
   }
 
   public setOpenaiApiKey(apiKey: string) {
     this.openaiApiKey = apiKey || null;
-    this.openaiClient = apiKey ? new OpenAI({ apiKey }) : null;
+    this.openaiClient = apiKey ? new OpenAI(buildOpenAiCompatibleClientOptions({ apiKey })) : null;
     console.log("[LLMHelper] OpenAI API Key updated.");
   }
 
   public setClaudeApiKey(apiKey: string) {
     this.claudeApiKey = apiKey || null;
-    this.claudeClient = apiKey ? new Anthropic({ apiKey }) : null;
+    this.claudeClient = apiKey ? new Anthropic(buildAnthropicClientOptions(apiKey)) : null;
     console.log("[LLMHelper] Claude API Key updated.");
   }
 
@@ -1935,10 +1984,16 @@ ANSWER DIRECTLY:`;
             messages.push({ role: "user", content: userMessage });
           }
 
+          // NAT-CACHE-AUDIT: non-streaming path also benefits from a stable
+          // prompt_cache_key. This is the path used by the verifier LLM judge
+          // and the topic-shift classifier — exactly the high-frequency calls
+          // where the system prompt is identical every turn.
+          const promptCacheKey = buildPromptCacheKey(systemPrompt);
           return {
             model: targetModel,
             messages,
             max_completion_tokens: MAX_OUTPUT_TOKENS,
+            ...(promptCacheKey ? { prompt_cache_key: promptCacheKey } : {}),
           };
         },
       );
@@ -1948,6 +2003,18 @@ ANSWER DIRECTLY:`;
           this.openaiClient!.chat.completions.create(requestPayload as any),
           LLM_API_TIMEOUT_MS
         );
+        // NAT-CACHE-AUDIT: surface cache hit stats for observability. Non-
+        // streaming responses include `usage` directly without needing
+        // `stream_options.include_usage`.
+        const usage = (response as any)?.usage;
+        if (usage) {
+          logOpenAiCacheUsage(`generateWithOpenai model=${targetModel}`, {
+            promptTokens: usage.prompt_tokens,
+            cachedTokens: usage.prompt_tokens_details?.cached_tokens,
+            completionTokens: usage.completion_tokens,
+            totalTokens: usage.total_tokens,
+          });
+        }
         return response.choices[0]?.message?.content || "";
       } catch (error) {
         if (allowFallback && this.isModelNotFoundError(error)) {
@@ -2342,10 +2409,15 @@ ANSWER DIRECTLY:`;
           }
           content.push({ type: "text", text: userMessage });
 
+          // NAT-CACHE-AUDIT: opt the system prompt into Anthropic prompt
+          // caching when it's long enough to plausibly hit the model's
+          // minimum cache size. The breakpoint sits on the system block,
+          // which is the last block identical across requests in this path.
+          const systemParam = buildClaudeSystemParam(systemPrompt);
           return {
             model: targetModel,
             max_tokens: CLAUDE_MAX_OUTPUT_TOKENS,
-            ...(systemPrompt ? { system: systemPrompt } : {}),
+            ...(systemParam ? { system: systemParam } : {}),
             messages: [{ role: "user", content }],
           };
         },
@@ -2355,6 +2427,17 @@ ANSWER DIRECTLY:`;
         this.claudeClient!.messages.create(requestPayload as any),
         LLM_API_TIMEOUT_MS
       );
+      // NAT-CACHE-AUDIT: log cache hit stats so we can verify caching is
+      // actually engaging on this call path.
+      const usage = (response as any)?.usage;
+      if (usage) {
+        logClaudeCacheUsage(`generateWithClaude model=${targetModel}`, {
+          inputTokens: usage.input_tokens,
+          outputTokens: usage.output_tokens,
+          cacheReadInputTokens: usage.cache_read_input_tokens,
+          cacheCreationInputTokens: usage.cache_creation_input_tokens,
+        });
+      }
       const textBlock = response.content.find((block: any) => block.type === 'text') as any;
       return textBlock?.text || "";
     });
