@@ -3,6 +3,7 @@ import Groq from "groq-sdk"
 import OpenAI from "openai"
 import Anthropic from "@anthropic-ai/sdk"
 import Tesseract from "tesseract.js"
+import { createOcrService, type OcrService } from "./ocr"
 import fs from "fs"
 import sharp from "sharp"
 import { ModelVersionManager, ModelFamily, TextModelFamily, parseModelVersion, compareVersions, classifyTextModel, TieredModels } from './services/ModelVersionManager'
@@ -385,6 +386,18 @@ export class LLMHelper {
   private static readonly PROVIDER_COOLDOWN_MS = 30_000;
   private providerCooldowns = new Map<string, number>();
 
+  // OCR cascade for non-vision LLM paths (Apple Vision → Windows OCR → Tesseract).
+  // Lazy-initialised so non-OCR users never pay the cost of loading Tesseract's
+  // worker pool.
+  private ocrService: OcrService | null = null;
+
+  private getOcrService(): OcrService {
+    if (!this.ocrService) {
+      this.ocrService = createOcrService();
+    }
+    return this.ocrService;
+  }
+
   constructor(apiKey?: string, useOllama: boolean = false, ollamaModel?: string, ollamaUrl?: string, groqApiKey?: string, openaiApiKey?: string, claudeApiKey?: string, cerebrasApiKey?: string) {
     this.useOllama = useOllama
 
@@ -598,6 +611,19 @@ export class LLMHelper {
 
   public isGroqModel(modelId: string): boolean {
     return modelId.startsWith("llama-") || modelId.startsWith("mixtral-") || modelId.startsWith("gemma-");
+  }
+
+  /**
+   * Whether the given model id is served via the Cerebras inference cloud.
+   * Cerebras has no vision support, so screenshot prompts must go through
+   * native OCR before reaching the text endpoint.
+   */
+  public isCerebrasModel(modelId: string): boolean {
+    if (!modelId) return false;
+    if (modelId === CEREBRAS_FAST_MODEL) return true;
+    // Known Cerebras-served model id prefixes. Their catalog uses
+    // model ids like "gpt-oss-*" and "qwen-*-cerebras" — be liberal.
+    return modelId.startsWith("gpt-oss") || modelId.includes("cerebras");
   }
 
   private isGeminiModel(modelId: string): boolean {
@@ -1628,8 +1654,27 @@ ANSWER DIRECTLY:`;
     return sections.join('\n\n');
   }
 
+  /**
+   * Run OCR on each image and join results with the same format the legacy
+   * Tesseract-only path used.
+   *
+   * Despite the name, this no longer goes straight to Tesseract — it
+   * delegates to the OcrService cascade:
+   *   * macOS  → Apple Vision (VNRecognizeTextRequest)
+   *   * Windows → Windows.Media.Ocr (OcrEngine)
+   *   * Both → Tesseract.js as the universal fallback
+   *
+   * The method name is preserved so all existing call sites
+   * (`runWithScreenshotOcrFallback`, `streamWithScreenshotOcrFallback`,
+   * `prepareScreenshotEventRouting`, etc.) keep working without edits.
+   * That's important because the spec from the user is "screenshot →
+   * vision LLM path stays untouched" — those call sites only fire when
+   * the active model rejected images or is text-only, and now they get
+   * a faster + better OCR engine for free.
+   */
   private async extractImageTextWithTesseract(imagePaths: string[], signal?: AbortSignal): Promise<string> {
     const chunks: string[] = [];
+    const ocr = this.getOcrService();
 
     for (let i = 0; i < imagePaths.length; i++) {
       throwIfAborted(signal);
@@ -1642,13 +1687,28 @@ ANSWER DIRECTLY:`;
       }
 
       try {
-        const result = await Tesseract.recognize(imagePath, 'eng');
+        const result = await ocr.recognize(imagePath);
         throwIfAborted(signal);
-        const text = (result?.data?.text || '').trim();
-        chunks.push(text ? `${label}:\n${text}` : `${label}: [no text extracted]`);
+        const text = result.text.trim();
+        if (text.length > 0) {
+          chunks.push(`${label} [${result.provider}, ${result.durationMs}ms]:\n${text}`);
+        } else {
+          chunks.push(`${label}: [no text extracted]`);
+        }
       } catch (error) {
-        const reason = error instanceof Error ? error.message : String(error);
-        chunks.push(`${label}: [tesseract failed: ${reason}]`);
+        // Tesseract or native call may still throw on truly unreadable
+        // images. Fall back to the previous Tesseract-only behaviour as a
+        // last resort so we never silently lose an OCR opportunity.
+        try {
+          const fallback = await Tesseract.recognize(imagePath, 'eng');
+          throwIfAborted(signal);
+          const text = (fallback?.data?.text || '').trim();
+          chunks.push(text ? `${label} [tesseract-direct]:\n${text}` : `${label}: [no text extracted]`);
+        } catch (innerError) {
+          const reason = innerError instanceof Error ? innerError.message : String(innerError);
+          const outerReason = error instanceof Error ? error.message : String(error);
+          chunks.push(`${label}: [ocr failed: ${outerReason}; tesseract failed: ${reason}]`);
+        }
       }
     }
 
@@ -1674,6 +1734,52 @@ ANSWER DIRECTLY:`;
     return false;
   }
 
+  /**
+   * Public façade over the OCR cascade for non-vision LLM paths.
+   *
+   * The conscious-mode coding pipeline (`ConsciousOrchestrator`,
+   * `WhatToAnswerLLM.generateReasoningFirst`) calls this BEFORE building
+   * its structured prompt so it can decide whether to:
+   *   1. Inject OCR text into the prompt body and strip image paths
+   *      (Groq / Cerebras / Ollama / cURL-no-image / text-only models), or
+   *   2. Leave images intact and let the vision LLM see them
+   *      (Gemini / GPT-4o / Claude vision / Groq llama-4-scout).
+   *
+   * The decision is identical to what `streamChat` would have made via
+   * `prepareScreenshotEventRouting` later in the call chain — but
+   * surfacing it here lets the structured prompt builder write
+   * "OCR-aware" instructions instead of "read the screenshot" directives
+   * the model can't actually execute.
+   *
+   * Returns:
+   *   - `requiresOcr === false` → upstream caller should keep `imagePaths`
+   *     as-is. The vision LLM will receive them. Standard path.
+   *   - `requiresOcr === true` and `text` non-empty → upstream caller
+   *     should prepend the text into the transcript / context and pass
+   *     `imagePaths: []` to the LLM call.
+   *   - `requiresOcr === true` and `text` empty → OCR ran but found no
+   *     readable text (rare). Upstream should still drop image paths so
+   *     we don't ship them to a text-only endpoint.
+   */
+  public async resolveScreenshotTextForNonVision(
+    imagePaths: string[] | undefined,
+    signal?: AbortSignal,
+  ): Promise<{ requiresOcr: boolean; text: string }> {
+    const requiresOcr = this.shouldForceScreenshotTextFallback(imagePaths);
+    if (!requiresOcr || !imagePaths?.length) {
+      return { requiresOcr, text: '' };
+    }
+    try {
+      const text = await this.extractImageTextWithTesseract(imagePaths, signal);
+      return { requiresOcr: true, text };
+    } catch (err) {
+      console.warn('[LLMHelper] resolveScreenshotTextForNonVision OCR failed:', err);
+      // Even on OCR failure we return requiresOcr=true so the caller drops
+      // image paths and avoids sending them to a non-vision endpoint.
+      return { requiresOcr: true, text: '' };
+    }
+  }
+
   public shouldForceScreenshotTextFallback(imagePaths?: string[]): boolean {
     if (!imagePaths?.length) {
       return false;
@@ -1689,6 +1795,26 @@ ANSWER DIRECTLY:`;
 
     if (this.customProvider) {
       return !this.curlLikelyAcceptsImages(this.customProvider.curlCommand || '');
+    }
+
+    // Fast non-vision providers — the user explicitly wants screenshots
+    // routed through native OCR before going to Cerebras / Groq for the
+    // latency win. Even though Groq has one multimodal vision model
+    // (llama-4-scout) its TTFT and quality on UI screenshots is noticeably
+    // worse than Apple Vision OCR + a fast text completion. Cerebras has
+    // no vision support at all — sending images would error.
+    if (this.isCerebrasModel(this.currentModelId)) {
+      return true;
+    }
+    if (this.isGroqModel(this.currentModelId)) {
+      return true;
+    }
+
+    // If the selected model has no vision family at all (e.g. a text-only
+    // OpenAI/Claude variant the user picked), force OCR so we don't try to
+    // ship images to a text endpoint.
+    if (this.getSelectedVisionFamily() === null) {
+      return true;
     }
 
     return false;

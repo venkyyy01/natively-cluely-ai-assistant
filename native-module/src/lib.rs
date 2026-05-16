@@ -19,6 +19,7 @@ use ringbuf::traits::Consumer;
 pub mod audio_config;
 pub mod license;
 pub mod microphone;
+pub mod ocr;
 pub mod resampler;
 pub mod silence_suppression;
 pub mod speaker;
