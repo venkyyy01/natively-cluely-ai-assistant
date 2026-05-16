@@ -4,6 +4,14 @@ import fs from 'fs';
 import { buildPromptCacheKey, logOpenAiCacheUsage, type OpenAiCacheUsage } from './cacheTelemetry';
 
 /**
+ * NAT-ACCURACY: temperature for primary answer generation. Low enough to
+ * reduce hallucination and keep factual claims grounded; high enough to
+ * sound natural and conversational (not robotic). 0.4 is the sweet spot
+ * validated by the conscious-mode eval harness.
+ */
+const OPENAI_ANSWER_TEMPERATURE = 0.4;
+
+/**
  * NAT-CACHE-AUDIT: capture the final usage chunk from a streaming Chat
  * Completions response. OpenAI only emits `usage` in the terminal stream
  * event, and only when `stream_options: { include_usage: true }` is set on
@@ -54,6 +62,7 @@ export async function* streamWithOpenai(
       messages,
       stream: true,
       max_completion_tokens: MAX_OUTPUT_TOKENS,
+      temperature: OPENAI_ANSWER_TEMPERATURE,
       stream_options: { include_usage: true },
       ...(promptCacheKey ? { prompt_cache_key: promptCacheKey } : {}),
     }, { signal: requestControl.signal });
@@ -137,6 +146,7 @@ export async function* streamWithOpenaiMultimodal(
       messages,
       stream: true,
       max_completion_tokens: MAX_OUTPUT_TOKENS,
+      temperature: OPENAI_ANSWER_TEMPERATURE,
       stream_options: { include_usage: true },
       ...(promptCacheKey ? { prompt_cache_key: promptCacheKey } : {}),
     }, { signal: requestControl.signal });
@@ -201,6 +211,7 @@ export async function* streamWithOpenaiUsingModel(
     messages,
     stream: true,
     max_completion_tokens: MAX_OUTPUT_TOKENS,
+      temperature: OPENAI_ANSWER_TEMPERATURE,
     stream_options: { include_usage: true },
     ...(promptCacheKey ? { prompt_cache_key: promptCacheKey } : {}),
   }, { signal: requestControl.signal });
@@ -257,6 +268,7 @@ export async function* streamWithOpenaiMultimodalUsingModel(
     messages,
     stream: true,
     max_completion_tokens: MAX_OUTPUT_TOKENS,
+      temperature: OPENAI_ANSWER_TEMPERATURE,
     stream_options: { include_usage: true },
     ...(promptCacheKey ? { prompt_cache_key: promptCacheKey } : {}),
   }, { signal: requestControl.signal });

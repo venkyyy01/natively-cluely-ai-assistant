@@ -4,6 +4,13 @@ import fs from 'fs';
 import { buildClaudeSystemParam, logClaudeCacheUsage, type ClaudeCacheUsage } from './cacheTelemetry';
 
 /**
+ * NAT-ACCURACY: temperature for primary answer generation. Same rationale
+ * as OpenAI — low enough to reduce hallucination, high enough for natural
+ * conversational tone. Claude's temperature scale is identical to OpenAI's.
+ */
+const CLAUDE_ANSWER_TEMPERATURE = 0.4;
+
+/**
  * NAT-CACHE-AUDIT: aggregate Anthropic usage across the streaming events.
  * `message_start` carries the initial usage (input tokens + cache read/create),
  * `message_delta` carries the running output token count and cumulative
@@ -49,6 +56,7 @@ export async function* streamWithClaude(
   const stream = await helper.claudeClient.messages.stream({
     model: CLAUDE_MODEL,
     max_tokens: CLAUDE_MAX_OUTPUT_TOKENS,
+    temperature: CLAUDE_ANSWER_TEMPERATURE,
     ...(systemParam ? { system: systemParam } : {}),
     messages: [{ role: "user", content: userMessage }],
   } as any, { signal: requestControl.signal });
@@ -106,6 +114,7 @@ export async function* streamWithClaudeMultimodal(
   const stream = await helper.claudeClient.messages.stream({
     model: CLAUDE_MODEL,
     max_tokens: CLAUDE_MAX_OUTPUT_TOKENS,
+    temperature: CLAUDE_ANSWER_TEMPERATURE,
     ...(systemParam ? { system: systemParam } : {}),
     messages: [{
       role: "user",

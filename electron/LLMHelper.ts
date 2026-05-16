@@ -1993,6 +1993,10 @@ ANSWER DIRECTLY:`;
             model: targetModel,
             messages,
             max_completion_tokens: MAX_OUTPUT_TOKENS,
+            // NAT-ACCURACY: pin temperature for non-streaming OpenAI calls.
+            // These are used by the verifier judge and topic-shift classifier
+            // where determinism matters even more than in primary answers.
+            temperature: 0.3,
             ...(promptCacheKey ? { prompt_cache_key: promptCacheKey } : {}),
           };
         },
@@ -2417,6 +2421,8 @@ ANSWER DIRECTLY:`;
           return {
             model: targetModel,
             max_tokens: CLAUDE_MAX_OUTPUT_TOKENS,
+            // NAT-ACCURACY: pin temperature for non-streaming Claude calls.
+            temperature: 0.3,
             ...(systemParam ? { system: systemParam } : {}),
             messages: [{ role: "user", content }],
           };
