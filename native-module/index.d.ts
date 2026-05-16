@@ -56,6 +56,36 @@ export declare function applyWindowsWindowStealth(hwndBuffer: Buffer): void
 export declare function removeWindowsWindowStealth(hwndBuffer: Buffer): void
 export declare function verifyWindowsStealthState(hwndBuffer: Buffer): number
 /**
+ * Windows: hide the window from Alt-Tab via WS_EX_TOOLWINDOW.
+ * On non-Windows this is a no-op.
+ */
+export declare function applyWindowsAltTabExclusion(hwndBuffer: Buffer): void
+/**
+ * Windows: restore Alt-Tab visibility (clear WS_EX_TOOLWINDOW, set WS_EX_APPWINDOW).
+ * On non-Windows this is a no-op.
+ */
+export declare function removeWindowsAltTabExclusion(hwndBuffer: Buffer): void
+/**
+ * Windows: cloak the window from DWM composition (DWMWA_CLOAK).
+ * Adds a second layer over SetWindowDisplayAffinity. No-op on non-Windows.
+ */
+export declare function applyWindowsDwmCloak(hwndBuffer: Buffer): void
+/**
+ * Windows: uncloak the window from DWM composition.
+ * No-op on non-Windows.
+ */
+export declare function removeWindowsDwmCloak(hwndBuffer: Buffer): void
+/**
+ * Windows: returns true if the window is currently DWM-cloaked.
+ * On non-Windows always returns false.
+ */
+export declare function verifyWindowsDwmCloak(hwndBuffer: Buffer): boolean
+/**
+ * Windows: returns true if the window's display affinity is currently
+ * WDA_EXCLUDEFROMCAPTURE. Used by the enforcement loop.
+ */
+export declare function isWindowsCaptureProtected(hwndBuffer: Buffer): boolean
+/**
  * List all visible windows using Core Graphics.
  * This replaces the Python3 subprocess call to Quartz.CGWindowListCopyWindowInfo.
  */

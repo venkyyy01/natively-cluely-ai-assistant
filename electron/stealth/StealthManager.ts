@@ -74,6 +74,15 @@ export interface NativeStealthBindings {
   applyWindowsWindowStealth?: (handle: Buffer) => void;
   removeWindowsWindowStealth?: (handle: Buffer) => void;
   verifyWindowsStealthState?: (handle: Buffer) => number;
+  // Tier-1 Windows hardening
+  applyWindowsAltTabExclusion?: (handle: Buffer) => void;
+  removeWindowsAltTabExclusion?: (handle: Buffer) => void;
+  // Tier-2 Windows hardening (DWM cloak)
+  applyWindowsDwmCloak?: (handle: Buffer) => void;
+  removeWindowsDwmCloak?: (handle: Buffer) => void;
+  verifyWindowsDwmCloak?: (handle: Buffer) => boolean;
+  // Continuous enforcement check
+  isWindowsCaptureProtected?: (handle: Buffer) => boolean;
   // S-8: CGWindow native functions
   listVisibleWindows?: () => WindowInfo[];
   checkBrowserCaptureWindows?: () => boolean;
@@ -265,6 +274,7 @@ export class StealthManager extends EventEmitter {
   private macOSMinor: number = 0;
   private readonly macosVersion: { major: number; minor: number } | undefined;
   private opacityFlickerController: OpacityFlickerController | null = null;
+  private windowsCaptureEnforcementLoop: import('./WindowsCaptureEnforcementLoop').WindowsCaptureEnforcementLoop | null = null;
   private virtualDisplayTaskQueue: Promise<void> | null = null;
   private readonly tickCoordinator: StealthTickCoordinator | null;
 
@@ -414,6 +424,7 @@ export class StealthManager extends EventEmitter {
     if (!enabled) {
       // Unconditionally stop background monitors and remove native stealth
       this.stopAllBackgroundMonitors();
+      this.windowsCaptureEnforcementLoop?.stop();
       for (const record of this.managedWindows) {
         const win = record.win;
         if (isWindowDestroyed(win)) {
@@ -421,6 +432,30 @@ export class StealthManager extends EventEmitter {
         }
         this.removeNativeStealth(win);
       }
+    } else if (this.platform === 'win32') {
+      // Start the Windows capture enforcement loop. Mirrors the macOS SCK
+      // enforcement model — periodic verify + re-apply, fail-closed after
+      // persistent failures.
+      this.startWindowsCaptureEnforcement();
+    }
+  }
+
+  private startWindowsCaptureEnforcement(): void {
+    if (this.platform !== 'win32') {
+      return;
+    }
+    if (this.windowsCaptureEnforcementLoop) {
+      return;
+    }
+    try {
+      // Lazy-require to keep the import contained on non-Windows.
+      const { WindowsCaptureEnforcementLoop } = require('./WindowsCaptureEnforcementLoop');
+      this.windowsCaptureEnforcementLoop = new WindowsCaptureEnforcementLoop(this, {
+        logger: this.logger,
+      });
+      this.windowsCaptureEnforcementLoop?.start();
+    } catch (error) {
+      this.logger.warn('[StealthManager] Failed to start Windows capture enforcement loop:', error);
     }
   }
 
@@ -734,6 +769,52 @@ export class StealthManager extends EventEmitter {
   }
 
   /**
+   * Returns lightweight handles for all managed windows. Used by the
+   * Windows capture-enforcement loop, which keys on the BrowserWindow id
+   * (not the macOS CGS window number).
+   */
+  public getManagedWindowEntries(): Array<{
+    id: number;
+    win: StealthCapableWindow;
+    getNativeWindowHandle?: () => Buffer;
+  }> {
+    const result: Array<{
+      id: number;
+      win: StealthCapableWindow;
+      getNativeWindowHandle?: () => Buffer;
+    }> = [];
+    for (const record of this.managedWindows) {
+      if (isWindowDestroyed(record.win)) {
+        continue;
+      }
+      const win = record.win as StealthCapableWindow & {
+        id?: number;
+        getNativeWindowHandle?: () => Buffer;
+      };
+      const id = typeof win.id === 'number' ? win.id : -1;
+      result.push({
+        id,
+        win,
+        getNativeWindowHandle: win.getNativeWindowHandle?.bind(win),
+      });
+    }
+    return result;
+  }
+
+  /**
+   * Record a persistent capture-protection failure for a window. Triggers
+   * the same warning path used elsewhere so the privacy shield engages and
+   * downstream consumers can react.
+   */
+  public recordCaptureProtectionFailure(_windowId: number): void {
+    this.addWarning('window_visible_to_capture');
+    Metrics.counter('stealth.capture_protection_persistent_failure', 1);
+    this.logger.warn(
+      '[StealthManager] Persistent capture protection failure — privacy shield engaging',
+    );
+  }
+
+  /**
    * Returns whether the current platform is macOS 15+ (Sequoia).
    * Used by ContinuousEnforcementLoop to gate SCK exclusion checks.
    */
@@ -935,6 +1016,31 @@ export class StealthManager extends EventEmitter {
         const handle = win.getNativeWindowHandle?.();
         if (handle) {
           nativeModule.applyWindowsWindowStealth(handle);
+          // Tier-1: Alt-Tab exclusion via WS_EX_TOOLWINDOW.
+          // Removes the window from the task switcher list while keeping
+          // it interactive on the desktop.
+          if (typeof nativeModule.applyWindowsAltTabExclusion === 'function') {
+            try {
+              nativeModule.applyWindowsAltTabExclusion(handle);
+            } catch (altTabError) {
+              this.logger.warn('[StealthManager] Alt-Tab exclusion failed:', altTabError);
+              this.addWarning('alt_tab_exclusion_failed');
+            }
+          }
+          // Tier-2: DWM cloak for additional capture pipeline coverage.
+          // Gated by feature flag because cloaked windows can have reduced
+          // interaction reliability for drag-drop tools.
+          if (
+            this.featureFlags.enablePrivateMacosStealthApi &&
+            typeof nativeModule.applyWindowsDwmCloak === 'function'
+          ) {
+            try {
+              nativeModule.applyWindowsDwmCloak(handle);
+            } catch (cloakError) {
+              this.logger.warn('[StealthManager] DWM cloak failed:', cloakError);
+              this.addWarning('dwm_cloak_failed');
+            }
+          }
           this.verifyStealth(win);
         }
         return;
@@ -1046,6 +1152,21 @@ export class StealthManager extends EventEmitter {
         const handle = win.getNativeWindowHandle?.();
         if (handle) {
           nativeModule.removeWindowsWindowStealth(handle);
+          // Restore Alt-Tab visibility and uncloak from DWM if applicable.
+          if (typeof nativeModule.removeWindowsAltTabExclusion === 'function') {
+            try {
+              nativeModule.removeWindowsAltTabExclusion(handle);
+            } catch (altTabError) {
+              this.logger.warn('[StealthManager] Alt-Tab restore failed:', altTabError);
+            }
+          }
+          if (typeof nativeModule.removeWindowsDwmCloak === 'function') {
+            try {
+              nativeModule.removeWindowsDwmCloak(handle);
+            } catch (cloakError) {
+              this.logger.warn('[StealthManager] DWM uncloak failed:', cloakError);
+            }
+          }
         }
         return;
       }
@@ -1363,6 +1484,12 @@ export class StealthManager extends EventEmitter {
       this.powerMonitor.on('on-ac', reapplyAll);
       this.powerMonitor.on('on-battery', reapplyAll);
     }
+    // Windows 11: immediately re-apply capture protection on session events
+    // that can strip WDA_EXCLUDEFROMCAPTURE (display wake, session unlock).
+    if (this.platform === 'win32' && this.windowsCaptureEnforcementLoop) {
+      this.powerMonitor.on('unlock-screen', () => this.windowsCaptureEnforcementLoop?.forceReapply());
+      this.powerMonitor.on('resume', () => this.windowsCaptureEnforcementLoop?.forceReapply());
+    }
     this.powerMonitorBound = true;
   }
 
@@ -1385,6 +1512,13 @@ export class StealthManager extends EventEmitter {
     if (this.platform === 'darwin') {
       this.displayEvents.on('display-added', reapplyAll);
       this.displayEvents.on('display-removed', reapplyAll);
+    }
+    // Windows 11: monitor connect/disconnect can strip display affinity.
+    // Trigger immediate re-application via the enforcement loop.
+    if (this.platform === 'win32') {
+      this.displayEvents.on('display-added', () => this.windowsCaptureEnforcementLoop?.forceReapply());
+      this.displayEvents.on('display-removed', () => this.windowsCaptureEnforcementLoop?.forceReapply());
+      this.displayEvents.on('display-metrics-changed', () => this.windowsCaptureEnforcementLoop?.forceReapply());
     }
     this.displayEventsBound = true;
   }

@@ -115,6 +115,21 @@ export async function initializeApp() {
   // Apply the full disguise payload (names, dock icon, AUMID) early
   appState.applyInitialDisguise();
 
+  // Windows 11 shell integration cleanup: strip jump list, recent items,
+  // and user tasks so the app leaves no trace in the Start Menu or taskbar
+  // right-click context menus.
+  if (process.platform === 'win32') {
+    try {
+      app.clearRecentDocuments();
+      app.setUserTasks([]);
+      // Remove jump list categories entirely
+      app.setJumpList([{ type: 'custom', name: '', items: [] }]);
+      app.setJumpList(null as any); // Clear to system default (empty)
+    } catch (shellError) {
+      console.warn('[Init] Windows shell cleanup failed:', shellError);
+    }
+  }
+
   app.whenReady().then(async () => {
     // Set a generic user-agent so outbound HTTP does not announce "Electron"
     try {

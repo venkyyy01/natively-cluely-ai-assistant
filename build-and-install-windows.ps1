@@ -27,7 +27,9 @@ param(
     [switch]$SkipBuild,
     [switch]$SkipInstall,
     [switch]$SkipQualityGates,
-    [switch]$ForceDependencySync
+    [switch]$ForceDependencySync,
+    [ValidateSet('default', 'terminal', 'settings', 'system')]
+    [string]$DisguiseProfile = "default"
 )
 
 # ── Strict mode ──
@@ -36,7 +38,28 @@ $ProgressPreference = 'SilentlyContinue'  # Speed up Invoke-WebRequest
 
 # ── Constants ──
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$AppName = "Natively"
+
+# Disguise profile determines the install path and binary name
+# so the app blends into the Windows system process landscape.
+switch ($DisguiseProfile) {
+    'terminal' {
+        $AppName = "WindowsTerminalHelper"
+        $InstallSubDir = "Microsoft\WindowsTerminalHelper"
+    }
+    'settings' {
+        $AppName = "SettingsHelper"
+        $InstallSubDir = "Microsoft\SettingsHelper"
+    }
+    'system' {
+        $AppName = "WindowsHelper"
+        $InstallSubDir = "Microsoft\WindowsHelper"
+    }
+    default {
+        $AppName = "WindowsHelper"
+        $InstallSubDir = "Microsoft\WindowsHelper"
+    }
+}
+
 $ReleaseDir = Join-Path $ScriptDir $OutputDir
 $QualityGateTimeout = if ($env:QUALITY_GATE_TIMEOUT) { [int]$env:QUALITY_GATE_TIMEOUT } else { 300 }
 $BuildArch = "x64"
@@ -582,7 +605,7 @@ if ($SkipInstall) {
 
     # Run the installer
     # NSIS supports /S for silent install and /D= for install directory
-    $installDir = "C:\$AppName"
+    $installDir = Join-Path $env:LOCALAPPDATA $InstallSubDir
     Info "Running installer: $($installer.Name)"
     Info "Install location: $installDir"
 

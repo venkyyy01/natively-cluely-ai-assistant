@@ -662,14 +662,17 @@ mod macos {
 #[cfg(target_os = "windows")]
 mod windows_impl {
     use super::{Buffer, ProcessInfo};
-    use windows::Win32::Foundation::{GetLastError, HWND};
+    use windows::Win32::Foundation::{GetLastError, BOOL, HWND, LPARAM, WPARAM};
+    use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_CLOAK};
     use windows::Win32::System::Diagnostics::ToolHelp::{
         CreateToolhelp32Snapshot, Process32First, Process32Next, TH32CS_SNAPPROCESS,
         PROCESSENTRY32,
     };
     use windows::Win32::UI::WindowsAndMessaging::{
-        GetWindowDisplayAffinity, SetWindowDisplayAffinity, WDA_MONITOR, WDA_NONE,
-        WINDOW_DISPLAY_AFFINITY,
+        GetWindowDisplayAffinity, GetWindowLongPtrW, SetWindowDisplayAffinity,
+        SetWindowLongPtrW, SetWindowPos, GWL_EXSTYLE, HWND_TOPMOST, SWP_FRAMECHANGED,
+        SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, WDA_MONITOR, WDA_NONE,
+        WINDOW_DISPLAY_AFFINITY, WS_EX_TOOLWINDOW, WS_EX_APPWINDOW, WS_EX_NOACTIVATE,
     };
 
     const WDA_EXCLUDEFROMCAPTURE: WINDOW_DISPLAY_AFFINITY = WINDOW_DISPLAY_AFFINITY(0x00000011);
@@ -774,6 +777,143 @@ mod windows_impl {
             Ok(results)
         }
     }
+
+    // ============================================================================
+    // Tier-1: Alt-Tab exclusion via WS_EX_TOOLWINDOW
+    // Tool windows don't appear in the Alt-Tab list. This is the canonical
+    // Win32 way to make a window invisible to the task switcher without
+    // hiding it from the desktop.
+    // ============================================================================
+    pub fn apply_alt_tab_exclusion(hwnd_buffer: Buffer) -> napi::Result<()> {
+        let hwnd = hwnd_from_buffer(&hwnd_buffer)?;
+        unsafe {
+            let current = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+            // Add WS_EX_TOOLWINDOW (0x00000080), remove WS_EX_APPWINDOW (0x00040000)
+            let new_style = (current | WS_EX_TOOLWINDOW.0 as isize) & !(WS_EX_APPWINDOW.0 as isize);
+            let prev = SetWindowLongPtrW(hwnd, GWL_EXSTYLE, new_style);
+            if prev == 0 && GetLastError().0 != 0 {
+                return Err(napi::Error::from_reason(format!(
+                    "SetWindowLongPtrW failed for Alt-Tab exclusion: {:?}",
+                    GetLastError()
+                )));
+            }
+            // Force a frame change so the new style takes effect immediately
+            let _ = SetWindowPos(
+                hwnd,
+                HWND(0),
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_FRAMECHANGED,
+            );
+        }
+        Ok(())
+    }
+
+    pub fn remove_alt_tab_exclusion(hwnd_buffer: Buffer) -> napi::Result<()> {
+        let hwnd = hwnd_from_buffer(&hwnd_buffer)?;
+        unsafe {
+            let current = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+            let new_style =
+                (current & !(WS_EX_TOOLWINDOW.0 as isize)) | (WS_EX_APPWINDOW.0 as isize);
+            SetWindowLongPtrW(hwnd, GWL_EXSTYLE, new_style);
+            let _ = SetWindowPos(
+                hwnd,
+                HWND(0),
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_FRAMECHANGED,
+            );
+        }
+        Ok(())
+    }
+
+    // ============================================================================
+    // Tier-2: DWM cloak — additional layer hiding the window from DWM
+    // composition. Some screen capture pipelines that bypass
+    // SetWindowDisplayAffinity still respect DWMWA_CLOAK because it removes
+    // the window from the DWM render tree entirely.
+    //
+    // Trade-off: cloaked windows can have reduced interaction reliability
+    // for drag-drop and certain accessibility tools. Use only with capture
+    // protection on; remove before normal user interaction sessions.
+    // ============================================================================
+    pub fn apply_dwm_cloak(hwnd_buffer: Buffer) -> napi::Result<()> {
+        let hwnd = hwnd_from_buffer(&hwnd_buffer)?;
+        let value: BOOL = BOOL(1);
+        unsafe {
+            let result = DwmSetWindowAttribute(
+                hwnd,
+                DWMWA_CLOAK,
+                &value as *const _ as *const std::ffi::c_void,
+                std::mem::size_of::<BOOL>() as u32,
+            );
+            if result.is_err() {
+                return Err(napi::Error::from_reason(format!(
+                    "DwmSetWindowAttribute(DWMWA_CLOAK=true) failed: {:?}",
+                    result
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    pub fn remove_dwm_cloak(hwnd_buffer: Buffer) -> napi::Result<()> {
+        let hwnd = hwnd_from_buffer(&hwnd_buffer)?;
+        let value: BOOL = BOOL(0);
+        unsafe {
+            let result = DwmSetWindowAttribute(
+                hwnd,
+                DWMWA_CLOAK,
+                &value as *const _ as *const std::ffi::c_void,
+                std::mem::size_of::<BOOL>() as u32,
+            );
+            if result.is_err() {
+                return Err(napi::Error::from_reason(format!(
+                    "DwmSetWindowAttribute(DWMWA_CLOAK=false) failed: {:?}",
+                    result
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    pub fn verify_dwm_cloak(hwnd_buffer: Buffer) -> napi::Result<bool> {
+        let hwnd = hwnd_from_buffer(&hwnd_buffer)?;
+        let mut cloaked: u32 = 0;
+        unsafe {
+            let result = windows::Win32::Graphics::Dwm::DwmGetWindowAttribute(
+                hwnd,
+                windows::Win32::Graphics::Dwm::DWMWA_CLOAKED,
+                &mut cloaked as *mut _ as *mut std::ffi::c_void,
+                std::mem::size_of::<u32>() as u32,
+            );
+            if result.is_err() {
+                return Ok(false);
+            }
+        }
+        Ok(cloaked != 0)
+    }
+
+    // ============================================================================
+    // Tier-1: Foreground re-application after display/session events.
+    // Returns true if the window's display affinity is currently
+    // WDA_EXCLUDEFROMCAPTURE; called by the enforcement loop on the TS side
+    // to decide whether to re-apply.
+    // ============================================================================
+    pub fn is_capture_protected(hwnd_buffer: Buffer) -> napi::Result<bool> {
+        let hwnd = hwnd_from_buffer(&hwnd_buffer)?;
+        let mut affinity = WINDOW_DISPLAY_AFFINITY(0);
+        unsafe {
+            if GetWindowDisplayAffinity(hwnd, &mut affinity).as_bool() {
+                return Ok(affinity.0 == WDA_EXCLUDEFROMCAPTURE.0);
+            }
+        }
+        Ok(false)
+    }
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -791,6 +931,30 @@ mod windows_impl {
 
     pub fn verify(_hwnd_buffer: Buffer) -> napi::Result<i32> {
         Ok(-1)
+    }
+
+    pub fn apply_alt_tab_exclusion(_hwnd_buffer: Buffer) -> napi::Result<()> {
+        Ok(())
+    }
+
+    pub fn remove_alt_tab_exclusion(_hwnd_buffer: Buffer) -> napi::Result<()> {
+        Ok(())
+    }
+
+    pub fn apply_dwm_cloak(_hwnd_buffer: Buffer) -> napi::Result<()> {
+        Ok(())
+    }
+
+    pub fn remove_dwm_cloak(_hwnd_buffer: Buffer) -> napi::Result<()> {
+        Ok(())
+    }
+
+    pub fn verify_dwm_cloak(_hwnd_buffer: Buffer) -> napi::Result<bool> {
+        Ok(false)
+    }
+
+    pub fn is_capture_protected(_hwnd_buffer: Buffer) -> napi::Result<bool> {
+        Ok(false)
     }
 
     #[allow(dead_code)]
@@ -869,6 +1033,48 @@ pub fn remove_windows_window_stealth(hwnd_buffer: Buffer) -> napi::Result<()> {
 #[napi]
 pub fn verify_windows_stealth_state(hwnd_buffer: Buffer) -> napi::Result<i32> {
     windows_impl::verify(hwnd_buffer)
+}
+
+/// Windows: hide the window from Alt-Tab via WS_EX_TOOLWINDOW.
+/// On non-Windows this is a no-op.
+#[napi]
+pub fn apply_windows_alt_tab_exclusion(hwnd_buffer: Buffer) -> napi::Result<()> {
+    windows_impl::apply_alt_tab_exclusion(hwnd_buffer)
+}
+
+/// Windows: restore Alt-Tab visibility (clear WS_EX_TOOLWINDOW, set WS_EX_APPWINDOW).
+/// On non-Windows this is a no-op.
+#[napi]
+pub fn remove_windows_alt_tab_exclusion(hwnd_buffer: Buffer) -> napi::Result<()> {
+    windows_impl::remove_alt_tab_exclusion(hwnd_buffer)
+}
+
+/// Windows: cloak the window from DWM composition (DWMWA_CLOAK).
+/// Adds a second layer over SetWindowDisplayAffinity. No-op on non-Windows.
+#[napi]
+pub fn apply_windows_dwm_cloak(hwnd_buffer: Buffer) -> napi::Result<()> {
+    windows_impl::apply_dwm_cloak(hwnd_buffer)
+}
+
+/// Windows: uncloak the window from DWM composition.
+/// No-op on non-Windows.
+#[napi]
+pub fn remove_windows_dwm_cloak(hwnd_buffer: Buffer) -> napi::Result<()> {
+    windows_impl::remove_dwm_cloak(hwnd_buffer)
+}
+
+/// Windows: returns true if the window is currently DWM-cloaked.
+/// On non-Windows always returns false.
+#[napi]
+pub fn verify_windows_dwm_cloak(hwnd_buffer: Buffer) -> napi::Result<bool> {
+    windows_impl::verify_dwm_cloak(hwnd_buffer)
+}
+
+/// Windows: returns true if the window's display affinity is currently
+/// WDA_EXCLUDEFROMCAPTURE. Used by the enforcement loop on the TS side.
+#[napi]
+pub fn is_windows_capture_protected(hwnd_buffer: Buffer) -> napi::Result<bool> {
+    windows_impl::is_capture_protected(hwnd_buffer)
 }
 
 // ============================================================================
