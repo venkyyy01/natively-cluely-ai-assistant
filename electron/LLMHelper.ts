@@ -3006,7 +3006,7 @@ ANSWER DIRECTLY:`;
     // ──────────────────────────────────────────────────────────────────
     // Build 3-tier retry rotation from ModelVersionManager
     // ──────────────────────────────────────────────────────────────────
-    const allTiers = this.modelVersionManager.getAllVisionTiers();
+    const allTiers = this.getOrderedVisionTiers();
 
     const buildTierProviders = (tierKey: 'tier1' | 'tier2' | 'tier3'): ProviderAttempt[] => {
       const result: ProviderAttempt[] = [];
