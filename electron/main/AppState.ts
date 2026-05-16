@@ -2855,6 +2855,9 @@ setThemeMode: (mode) => this.themeManager.setMode(mode as import('../ThemeManage
   // Screenshot management methods
   public async takeScreenshot(): Promise<string> {
     if (!this.getMainWindow()) throw new Error("No main window available")
+    if (this.isStealthContainmentActive()) {
+      throw new Error("CONTAINMENT_ACTIVE")
+    }
 
     this.stealthManager.pauseWatchdog('screenshot')
 
@@ -2878,6 +2881,9 @@ setThemeMode: (mode) => this.themeManager.setMode(mode as import('../ThemeManage
 
   public async takeSelectiveScreenshot(): Promise<string> {
     if (!this.getMainWindow()) throw new Error("No main window available")
+    if (this.isStealthContainmentActive()) {
+      throw new Error("CONTAINMENT_ACTIVE")
+    }
 
     this.stealthManager.pauseWatchdog('selective-screenshot')
 

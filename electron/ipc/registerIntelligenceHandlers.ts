@@ -2,11 +2,13 @@ import type { AppState } from '../main';
 import { ipcSchemas, parseIpcInput } from '../ipcValidation';
 import type { SafeHandle, SafeHandleValidated } from './registerTypes';
 import { getDefaultTriggerAuditLog } from '../observability/TriggerAuditLog';
+import { resolveUserDataFilePaths } from './userDataPathGuard';
 
 type RegisterIntelligenceHandlersDeps = {
   appState: AppState;
   safeHandle: SafeHandle;
   safeHandleValidated: SafeHandleValidated;
+  getUserDataPath: () => string;
 };
 
 type RuntimeCoordinatorLike = {
@@ -48,7 +50,7 @@ function getIntelligenceFacade(appState: AppState): InferenceSupervisorLike {
   return appState.getIntelligenceManager();
 }
 
-export function registerIntelligenceHandlers({ appState, safeHandle, safeHandleValidated }: RegisterIntelligenceHandlersDeps): void {
+export function registerIntelligenceHandlers({ appState, safeHandle, safeHandleValidated, getUserDataPath }: RegisterIntelligenceHandlersDeps): void {
   safeHandle('generate-assist', async () => {
     const insight = await getIntelligenceFacade(appState).runAssistMode?.();
     return { insight };
@@ -65,13 +67,14 @@ export function registerIntelligenceHandlers({ appState, safeHandle, safeHandleV
   }, async (_event, question?: string, imagePaths?: string[]) => {
     const resolvedQuestion = question || 'inferred from context';
     const facade = getIntelligenceFacade(appState);
+    const safeImagePaths = resolveUserDataFilePaths(getUserDataPath(), imagePaths);
 
     // NAT-SELF-HEAL: helper that attempts the call with one retry on null.
     // Null usually means a transient race (cooldown, abort controller, or
     // stealth containment) — a single retry after a short delay recovers
     // the vast majority of cases.
     const tryGenerate = async (attempt: number): Promise<string | null> => {
-      const answer = await facade.runWhatShouldISay?.(question, 0.8, imagePaths);
+      const answer = await facade.runWhatShouldISay?.(question, 0.8, safeImagePaths);
       if (answer) return answer;
 
       if (attempt === 1) {

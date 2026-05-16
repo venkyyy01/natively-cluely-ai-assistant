@@ -161,7 +161,7 @@ export class ProcessingHelper {
     const view = this.appState.getView()
 
     if (view === "queue") {
-      const screenshotQueue = this.appState.getScreenshotHelper().getScreenshotQueue()
+      const screenshotQueue = [...this.appState.getScreenshotHelper().getScreenshotQueue()]
       if (screenshotQueue.length === 0) {
         if (mainWindow && !mainWindow.isDestroyed()) {
           mainWindow.webContents.send(this.appState.PROCESSING_EVENTS.NO_SCREENSHOTS)
@@ -169,9 +169,7 @@ export class ProcessingHelper {
         return
       }
 
-
-
-      const allPaths = this.appState.getScreenshotHelper().getScreenshotQueue();
+      const allPaths = screenshotQueue;
 
       // NEW: Handle screenshot as plain text (like audio)
       if (mainWindow && !mainWindow.isDestroyed()) {
@@ -254,7 +252,7 @@ export class ProcessingHelper {
       return;
     } else {
       // Debug mode
-      const extraScreenshotQueue = this.appState.getScreenshotHelper().getExtraScreenshotQueue()
+      const extraScreenshotQueue = [...this.appState.getScreenshotHelper().getExtraScreenshotQueue()]
       if (extraScreenshotQueue.length === 0) {
         // console.log("No extra screenshots to process")
         if (mainWindow && !mainWindow.isDestroyed()) {

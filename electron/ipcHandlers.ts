@@ -4,8 +4,6 @@ import { app, ipcMain, shell, dialog, desktopCapturer, systemPreferences, Browse
 import { AppState } from "./main"
 import { GEMINI_FLASH_MODEL } from "./IntelligenceManager"
 import { DatabaseManager } from "./db/DatabaseManager"; // Import Database Manager
-import * as path from "path";
-import * as fs from "fs";
 import { ipcSchemas, parseIpcInput } from "./ipcValidation";
 import { registerMeetingHandlers } from "./ipc/registerMeetingHandlers";
 import { registerSettingsHandlers } from "./ipc/registerSettingsHandlers";
@@ -23,6 +21,7 @@ import { registerEngineHealthHandlers } from "./ipc/registerEngineHealthHandlers
 import { registerCodeEditorCaptureHandlers } from "./ipc/registerCodeEditorCaptureHandlers";
 import { registerScreenRAGHandlers } from "./ipc/registerScreenRAGHandlers";
 import { registerObservabilityHandlers } from "./ipc/registerObservabilityHandlers";
+import { resolveUserDataFilePath } from "./ipc/userDataPathGuard";
 
 import {
   type ScreenshotFacadeLike,
@@ -84,7 +83,12 @@ safeHandleValidated("renderer:log-error", (args) => [parseIpcInput(ipcSchemas.re
   registerEmailHandlers({ appState, safeHandleValidated });
   registerRagHandlers({ appState, safeHandle, safeHandleValidated });
   registerProfileHandlers({ appState, safeHandle, safeHandleValidated });
-  registerIntelligenceHandlers({ appState, safeHandle, safeHandleValidated });
+  registerIntelligenceHandlers({
+    appState,
+    safeHandle,
+    safeHandleValidated,
+    getUserDataPath: () => app.getPath('userData'),
+  });
   registerWindowHandlers({ appState, safeHandle, safeHandleValidated });
   registerPermissionHandlers({ appState, safeHandle, safeHandleValidated });
 
@@ -96,13 +100,13 @@ safeHandleValidated("renderer:log-error", (args) => [parseIpcInput(ipcSchemas.re
     activeChatControllers,
     streamChatStartedAt,
     appState,
+    getUserDataPath: () => app.getPath('userData'),
   });
 
   safeHandleValidated("delete-screenshot", (args) => [parseIpcInput(ipcSchemas.absoluteUserDataPath, args[0], 'delete-screenshot')] as const, async (event, filePath) => {
     // Guard: only allow deletion of files within the app's own userData directory
-    const userDataDir = app.getPath('userData');
-    const resolved = path.resolve(filePath);
-    if (!resolved.startsWith(userDataDir + path.sep)) {
+    const resolved = resolveUserDataFilePath(app.getPath('userData'), filePath);
+    if (!resolved) {
       console.warn('[IPC] delete-screenshot: path outside userData rejected:', filePath);
       return { success: false, error: 'Path not allowed' };
     }
@@ -246,9 +250,8 @@ safeHandleValidated("renderer:log-error", (args) => [parseIpcInput(ipcSchemas.re
   // IPC handler for analyzing image from file path
   safeHandleValidated("analyze-image-file", (args) => [parseIpcInput(ipcSchemas.absoluteUserDataPath, args[0], 'analyze-image-file')] as const, async (_event, filePath) => {
     // Guard: only allow reading files within the app's own userData directory
-    const userDataDir = app.getPath('userData');
-    const resolved = path.resolve(filePath);
-    if (!resolved.startsWith(userDataDir + path.sep)) {
+    const resolved = resolveUserDataFilePath(app.getPath('userData'), filePath);
+    if (!resolved) {
       console.warn('[IPC] analyze-image-file: path outside userData rejected:', filePath);
       return fail('PATH_NOT_ALLOWED', new Error('Path not allowed'), 'Path not allowed');
     }
