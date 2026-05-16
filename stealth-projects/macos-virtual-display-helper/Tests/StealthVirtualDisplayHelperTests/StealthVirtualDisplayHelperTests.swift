@@ -658,6 +658,17 @@ final class StealthVirtualDisplayHelperTests: XCTestCase {
         XCTAssertEqual(factory.window.drawableSize.height, 720)
     }
 
+    func testAppKitPresenterHostRejectsWindowWithoutHiddenSharing() {
+        let factory = RecordingPresenterWindowFactory()
+        factory.window.hiddenSharingEnabled = false
+        let host = AppKitMetalPresenterHost(windowFactory: factory)
+
+        XCTAssertThrowsError(
+            try host.attachSurface(sessionId: "host-hidden-sharing", surfaceId: "surface-host", displayToken: nil, width: 1280, height: 720, hiDpi: true)
+        )
+        XCTAssertEqual(factory.window.closeCount, 1)
+    }
+
     func testAppKitPresenterHostRejectsUnresolvableDisplayToken() {
         let host = AppKitMetalPresenterHost()
 
@@ -821,6 +832,7 @@ private final class RecordingPresenterWindow: Layer3PresenterWindow {
     var hideCount = 0
     var closeCount = 0
     var drawableSize = CGSize.zero
+    var hiddenSharingEnabled = true
 
     func configureDrawableSize(width: Int, height: Int, hiDpi: Bool) throws {
         drawableSize = CGSize(width: width, height: height)
@@ -829,6 +841,8 @@ private final class RecordingPresenterWindow: Layer3PresenterWindow {
     func windowNumber() throws -> Int { 77 }
 
     func title() throws -> String { "Layer3Presenter-test" }
+
+    func usesHiddenWindowSharing() throws -> Bool { hiddenSharingEnabled }
 
     func show() throws {
         showCount += 1

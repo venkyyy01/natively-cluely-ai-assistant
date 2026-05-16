@@ -3,12 +3,17 @@ import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Heart, X, ExternalLink } from 'lucide-react';
 import { cn } from '../lib/utils';
+import { getOptionalElectronMethod } from '../lib/electronApi';
 
 interface SupportToasterProps {
     className?: string;
 }
 
 export const SupportToaster: React.FC<SupportToasterProps> = ({ className }) => {
+    const getDonationStatus = getOptionalElectronMethod('getDonationStatus');
+    const markDonationToastShown = getOptionalElectronMethod('markDonationToastShown');
+    const setDonationComplete = getOptionalElectronMethod('setDonationComplete');
+    const openExternal = getOptionalElectronMethod('openExternal');
     const [isVisible, setIsVisible] = useState(false);
     const [hasDonated, setHasDonated] = useState(false);
     const [isButtonHovered, setIsButtonHovered] = useState(false);
@@ -21,14 +26,14 @@ export const SupportToaster: React.FC<SupportToasterProps> = ({ className }) => 
             await new Promise(resolve => setTimeout(resolve, 10000));
 
             try {
-                if (!window.electronAPI?.getDonationStatus) return;
+                if (!getDonationStatus) return;
 
-                const status = await window.electronAPI.getDonationStatus();
+                const status = await getDonationStatus();
                 if (mounted) {
                     setHasDonated(status.hasDonated);
                     if (status.shouldShow) {
                         setIsVisible(true);
-                        window.electronAPI.markDonationToastShown();
+                        void markDonationToastShown?.();
                     }
                 }
             } catch (e) {
@@ -63,7 +68,7 @@ export const SupportToaster: React.FC<SupportToasterProps> = ({ className }) => 
                 const elapsed = Date.now() - clickTimeRef.current;
                 if (elapsed > 20000) { // 20 seconds
                     console.log("User returned from support link after >20s. Presuming donation.");
-                    await window.electronAPI?.setDonationComplete();
+                    await setDonationComplete?.();
                     setHasDonated(true);
                     setIsVisible(false);
                 }
@@ -80,8 +85,8 @@ export const SupportToaster: React.FC<SupportToasterProps> = ({ className }) => 
 
     const handleSupport = () => {
         clickTimeRef.current = Date.now();
-        if (window.electronAPI?.openExternal) {
-            window.electronAPI.openExternal('https://buymeacoffee.com/evinjohnn');
+        if (openExternal) {
+            void openExternal('https://buymeacoffee.com/evinjohnn');
         } else {
             window.open('https://buymeacoffee.com/evinjohnn', '_blank');
         }

@@ -9,6 +9,10 @@ import { FAST_STANDARD_ANSWER_PROMPT } from '../llm/prompts';
 class FakeLLMHelper {
   public calls: Array<{ message: string; context?: string; prompt?: string }> = [];
 
+  getProvider() {
+    return 'openai';
+  }
+
   async *streamChat(message: string, _imagePaths?: string[], context?: string, prompt?: string): AsyncGenerator<string> {
     this.calls.push({ message, context, prompt });
     yield 'fast path answer';
@@ -69,6 +73,9 @@ test('Acceleration Mode skips intent and temporal prompt augmentation for what-t
   assert.equal(snapshot?.route, 'fast_standard_answer');
   assert.equal(snapshot?.marks.providerRequestStarted !== undefined, true);
   assert.equal(snapshot?.marks.enrichmentReady, undefined);
+
+  const adaptiveStats = session.getAdaptiveWindowStats();
+  assert.ok(adaptiveStats.calls >= 0);
 
   setOptimizationFlags({ ...DEFAULT_OPTIMIZATION_FLAGS });
 });

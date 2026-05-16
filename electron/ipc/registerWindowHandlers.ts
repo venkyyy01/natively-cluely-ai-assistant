@@ -8,7 +8,30 @@ type RegisterWindowHandlersDeps = {
   safeHandleValidated: SafeHandleValidated;
 };
 
+type WindowFacadeLike = {
+  updateContentDimensions: (senderWebContentsId: number, width: number, height: number) => void;
+  setOverlayBounds: (bounds: { width: number; height: number; x?: number; y?: number }) => void;
+  setWindowMode: (mode: 'launcher' | 'overlay') => void;
+  setOverlayClickthrough: (enabled: boolean) => void;
+  toggleMainWindow: () => void;
+  showMainWindow: () => void;
+  hideMainWindow: () => void;
+  moveWindowLeft: () => void;
+  moveWindowRight: () => void;
+  moveWindowUp: () => void;
+  moveWindowDown: () => void;
+  centerAndShowWindow: () => void;
+};
+
 const ok = <T>(data: T) => ({ success: true as const, data });
+
+function getWindowFacade(appState: AppState): WindowFacadeLike | null {
+  if ('getWindowFacade' in appState && typeof appState.getWindowFacade === 'function') {
+    return appState.getWindowFacade() as WindowFacadeLike;
+  }
+
+  return null;
+}
 
 export function registerWindowHandlers({ appState, safeHandle, safeHandleValidated }: RegisterWindowHandlersDeps): void {
   safeHandleValidated(
@@ -16,6 +39,12 @@ export function registerWindowHandlers({ appState, safeHandle, safeHandleValidat
     (args) => [parseIpcInput(ipcSchemas.contentDimensions, args[0], 'update-content-dimensions')] as const,
     async (event, { width, height }) => {
       if (!width || !height) return;
+
+      const windowFacade = getWindowFacade(appState);
+      if (windowFacade) {
+        windowFacade.updateContentDimensions(event.sender.id, width, height);
+        return;
+      }
 
       const senderWebContents = event.sender;
       const settingsWin = appState.settingsWindowHelper.getSettingsWindow();
@@ -33,10 +62,38 @@ export function registerWindowHandlers({ appState, safeHandle, safeHandleValidat
   );
 
   safeHandleValidated(
+    'set-overlay-bounds',
+    (args) => [parseIpcInput(ipcSchemas.overlayBounds, args[0], 'set-overlay-bounds')] as const,
+    async (_event, bounds) => {
+      if (typeof bounds.width !== 'number' || typeof bounds.height !== 'number') {
+        throw new Error('Invalid IPC payload for set-overlay-bounds: width and height are required');
+      }
+      const overlayBounds = {
+        width: bounds.width,
+        height: bounds.height,
+        x: bounds.x,
+        y: bounds.y,
+      };
+      const windowFacade = getWindowFacade(appState);
+      if (windowFacade) {
+        windowFacade.setOverlayBounds(overlayBounds);
+      } else {
+        appState.getWindowHelper().setOverlayBounds(overlayBounds);
+      }
+      return ok(null);
+    },
+  );
+
+  safeHandleValidated(
     'set-window-mode',
     (args) => [parseIpcInput(ipcSchemas.windowMode, args[0], 'set-window-mode')] as const,
     async (_event, mode) => {
-      appState.getWindowHelper().setWindowMode(mode);
+      const windowFacade = getWindowFacade(appState);
+      if (windowFacade) {
+        windowFacade.setWindowMode(mode);
+      } else {
+        appState.getWindowHelper().setWindowMode(mode);
+      }
       return { success: true };
     },
   );
@@ -45,48 +102,148 @@ export function registerWindowHandlers({ appState, safeHandle, safeHandleValidat
     'set-overlay-clickthrough',
     (args) => [parseIpcInput(ipcSchemas.booleanFlag, args[0], 'set-overlay-clickthrough')] as const,
     async (_event, enabled) => {
-      appState.getWindowHelper().setOverlayClickthrough(enabled);
+      const windowFacade = getWindowFacade(appState);
+      if (windowFacade) {
+        windowFacade.setOverlayClickthrough(enabled);
+      } else {
+        appState.getWindowHelper().setOverlayClickthrough(enabled);
+      }
       return ok({ enabled });
     },
   );
 
+  safeHandleValidated(
+    'set-overlay-interactive',
+    (args) => [parseIpcInput(ipcSchemas.booleanFlag, args[0], 'set-overlay-interactive')] as const,
+    async (_event, enabled) => {
+      // BLUR-PROOF: routed straight to the WindowHelper. The renderer flips
+      // this on input focus/blur so the overlay only takes native foreground
+      // when the user is actively typing. Default state stays non-activating.
+      appState.getWindowHelper().setOverlayInteractive(enabled);
+      return ok({ enabled });
+    },
+  );
+
+  safeHandleValidated(
+    'set-cursor-hook',
+    (args) => [parseIpcInput(ipcSchemas.booleanFlag, args[0], 'set-cursor-hook')] as const,
+    async (_event, enabled) => {
+      // CURSOR-FREEZE: enable/disable the platform cursor freeze hook
+      // (CGEventTap on macOS, WH_MOUSE_LL on Windows). Returns whether
+      // the hook is now active so the renderer can show a permission-
+      // needed UI when Accessibility is denied. Persists the user's
+      // choice so the next launch boots in the same state.
+      const installed = appState.getWindowHelper().setCursorHookEnabled(enabled);
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        const { SettingsManager } = require('../services/SettingsManager');
+        SettingsManager.getInstance().set('cursorHookEnabled', enabled);
+      } catch (err) {
+        console.warn('[ipc] failed to persist cursorHookEnabled:', err);
+      }
+      // Broadcast the new status to all renderers so the overlay's
+      // SyntheticCursor and the Settings UI both pick up the change.
+      const status = { enabled, installed };
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        const electron = require('electron');
+        for (const win of electron.BrowserWindow.getAllWindows()) {
+          if (!win.isDestroyed()) {
+            win.webContents.send('cursor-hook-status', status);
+          }
+        }
+      } catch (err) {
+        console.warn('[ipc] failed to broadcast cursor-hook-status:', err);
+      }
+      return ok(status);
+    },
+  );
+
+  safeHandle('get-cursor-hook-status', async () => {
+    const helper = appState.getWindowHelper();
+    return ok({
+      enabled: helper.isCursorHookRequested(),
+      installed: helper.isCursorHookEnabled(),
+    });
+  });
+
   safeHandle('toggle-window', async () => {
-    appState.toggleMainWindow();
+    const windowFacade = getWindowFacade(appState);
+    if (windowFacade) {
+      windowFacade.toggleMainWindow();
+    } else {
+      appState.toggleMainWindow();
+    }
     return ok(null);
   });
 
   safeHandle('show-window', async () => {
-    appState.showMainWindow();
+    const windowFacade = getWindowFacade(appState);
+    if (windowFacade) {
+      windowFacade.showMainWindow();
+    } else {
+      appState.showMainWindow();
+    }
     return ok(null);
   });
 
   safeHandle('hide-window', async () => {
-    appState.hideMainWindow();
+    const windowFacade = getWindowFacade(appState);
+    if (windowFacade) {
+      windowFacade.hideMainWindow();
+    } else {
+      appState.hideMainWindow();
+    }
     return ok(null);
   });
 
   safeHandle('move-window-left', async () => {
-    appState.moveWindowLeft();
+    const windowFacade = getWindowFacade(appState);
+    if (windowFacade) {
+      windowFacade.moveWindowLeft();
+    } else {
+      appState.moveWindowLeft();
+    }
     return ok(null);
   });
 
   safeHandle('move-window-right', async () => {
-    appState.moveWindowRight();
+    const windowFacade = getWindowFacade(appState);
+    if (windowFacade) {
+      windowFacade.moveWindowRight();
+    } else {
+      appState.moveWindowRight();
+    }
     return ok(null);
   });
 
   safeHandle('move-window-up', async () => {
-    appState.moveWindowUp();
+    const windowFacade = getWindowFacade(appState);
+    if (windowFacade) {
+      windowFacade.moveWindowUp();
+    } else {
+      appState.moveWindowUp();
+    }
     return ok(null);
   });
 
   safeHandle('move-window-down', async () => {
-    appState.moveWindowDown();
+    const windowFacade = getWindowFacade(appState);
+    if (windowFacade) {
+      windowFacade.moveWindowDown();
+    } else {
+      appState.moveWindowDown();
+    }
     return ok(null);
   });
 
   safeHandle('center-and-show-window', async () => {
-    appState.centerAndShowWindow();
+    const windowFacade = getWindowFacade(appState);
+    if (windowFacade) {
+      windowFacade.centerAndShowWindow();
+    } else {
+      appState.centerAndShowWindow();
+    }
     return ok(null);
   });
 }

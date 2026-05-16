@@ -1,10 +1,12 @@
 import { EnhancedCache } from '../cache/EnhancedCache';
 import { InterviewPhase } from '../conscious/types';
 import { isOptimizationActive, getOptimizationFlags } from '../config/optimizations';
+import { computeBM25, getEmbeddingProvider } from '../cache/ParallelContextAssembler';
+import type { RuntimeBudgetScheduler } from '../runtime/RuntimeBudgetScheduler';
 
 export interface PrefetchedContext {
   context: {
-    relevantContext: Array<{ text: string; timestamp: number }>;
+    relevantContext: Array<{ role: 'interviewer' | 'user' | 'assistant'; text: string; timestamp: number }>;
     phase: InterviewPhase;
   };
   embedding: number[];
@@ -14,6 +16,11 @@ export interface PrefetchedContext {
 export interface PredictedFollowUp {
   query: string;
   embedding: number[];
+  confidence: number;
+}
+
+interface PredictedFollowUpDraft {
+  query: string;
   confidence: number;
 }
 
@@ -79,9 +86,20 @@ export class PredictivePrefetcher {
   private currentPhase: InterviewPhase = 'requirements_gathering';
   private predictions: PredictedFollowUp[] = [];
   private silenceStartTime: number = 0;
+  private transcriptSegments: Array<{ text: string; timestamp: number; speaker: string }> = [];
+  private transcriptRevision = 0;
+  private transcriptSignature = '';
+  private bm25Cache = new Map<string, Array<{ text: string; score: number; timestamp: number }>>();
+  private readonly MAX_BM25_CACHE_SIZE = 50;
+  private readonly budgetScheduler?: Pick<RuntimeBudgetScheduler, 'shouldAdmitSpeculation'>;
 
-  constructor(options: { maxPrefetchPredictions?: number; maxMemoryMB?: number }) {
+  constructor(options: {
+    maxPrefetchPredictions?: number;
+    maxMemoryMB?: number;
+    budgetScheduler?: Pick<RuntimeBudgetScheduler, 'shouldAdmitSpeculation'>;
+  }) {
     const flags = getOptimizationFlags();
+    this.budgetScheduler = options.budgetScheduler;
 
     this.prefetchCache = new EnhancedCache<string, PrefetchedContext>({
       maxMemoryMB: options.maxMemoryMB || flags.maxCacheMemoryMB,
@@ -89,6 +107,34 @@ export class PredictivePrefetcher {
       enableSemanticLookup: true,
       similarityThreshold: flags.semanticCacheThreshold,
     });
+  }
+
+  /**
+   * Update transcript segments for real context assembly
+   */
+  updateTranscriptSegments(segments: Array<{ text: string; timestamp: number; speaker: string }>, transcriptRevision?: number): void {
+    const trimmed = segments.slice(-50);
+    const signature = trimmed.map((segment) => `${segment.speaker}:${segment.timestamp}:${segment.text}`).join('\u0000');
+
+    if (typeof transcriptRevision === 'number') {
+      if (transcriptRevision !== this.transcriptRevision) {
+        this.transcriptRevision = transcriptRevision;
+        this.bm25Cache.clear();
+      }
+    } else if (signature !== this.transcriptSignature) {
+      this.transcriptRevision += 1;
+      this.bm25Cache.clear();
+    }
+
+    this.transcriptSignature = signature;
+    this.transcriptSegments = trimmed;
+  }
+
+  /**
+   * Clear transcript segments (e.g., on meeting end)
+   */
+  clearTranscriptSegments(): void {
+    this.transcriptSegments = [];
   }
 
   onSilenceStart(): void {
@@ -117,54 +163,112 @@ export class PredictivePrefetcher {
     return this.predictions;
   }
 
+  getCandidateQueries(seedQuery?: string, limit: number = 3): PredictedFollowUpDraft[] {
+    const drafts = this.predictFollowUpDrafts();
+    const deduped: PredictedFollowUpDraft[] = [];
+    const seen = new Set<string>();
+
+    const pushCandidate = (candidate?: PredictedFollowUpDraft) => {
+      if (!candidate) {
+        return;
+      }
+
+      const normalized = candidate.query.trim().toLowerCase();
+      if (!normalized || seen.has(normalized)) {
+        return;
+      }
+
+      seen.add(normalized);
+      deduped.push(candidate);
+    };
+
+    if (seedQuery?.trim()) {
+      pushCandidate({ query: seedQuery.trim(), confidence: 0.98 });
+    }
+
+    for (const draft of drafts) {
+      pushCandidate(draft);
+      if (deduped.length >= limit) {
+        break;
+      }
+    }
+
+    return deduped.slice(0, limit);
+  }
+
+  async getSemanticEmbedding(text: string): Promise<number[]> {
+    const provider = getEmbeddingProvider();
+    if (provider?.isInitialized()) {
+      try {
+        return await provider.embed(text);
+      } catch (error) {
+        console.warn('[PredictivePrefetcher] Real embedding provider failed, disabling semantic lookup for this query:', error);
+      }
+    }
+
+    return [];
+  }
+
   private async startPrefetching(): Promise<void> {
     if (this.isUserSpeaking) return;
 
-    const predictions = this.predictFollowUps();
+    const predictions = await this.predictFollowUps();
     const flags = getOptimizationFlags();
+    const admittedPredictions: PredictedFollowUp[] = [];
 
     for (const prediction of predictions.slice(0, flags.maxPrefetchPredictions)) {
       if (this.isUserSpeaking) break;
+      if (this.budgetScheduler && !this.budgetScheduler.shouldAdmitSpeculation(prediction.confidence, 1, 0.5)) {
+        continue;
+      }
+
+      admittedPredictions.push(prediction);
 
       try {
         const context = await this.assembleContext(prediction.query);
-        await this.prefetchCache.set(prediction.query, {
+        const semanticEmbedding = prediction.embedding.length > 0 ? prediction.embedding : undefined;
+        // NAT-003 / audit A-3: bind the cache key to the current transcript
+        // revision so a semantic match cannot return another revision's
+        // prefetched context. The matching key prefix is used by getContext().
+        await this.prefetchCache.set(this.bindKey(prediction.query), {
           context,
           embedding: prediction.embedding,
           confidence: prediction.confidence,
-        }, prediction.embedding);
+        }, semanticEmbedding);
       } catch (error) {
         console.warn('[PredictivePrefetcher] Failed to prefetch:', error);
       }
     }
 
-    this.predictions = predictions.slice(0, flags.maxPrefetchPredictions);
+    this.predictions = admittedPredictions;
   }
 
-  private predictFollowUps(): PredictedFollowUp[] {
+  private async predictFollowUps(): Promise<PredictedFollowUp[]> {
+    const drafts = this.predictFollowUpDrafts();
+
+    return Promise.all(drafts.slice(0, 10).map(async (draft) => ({
+      ...draft,
+      embedding: await this.getSemanticEmbedding(draft.query),
+    })));
+  }
+
+  private predictFollowUpDrafts(): PredictedFollowUpDraft[] {
     const phasePredictions = PHASE_FOLLOWUP_PATTERNS[this.currentPhase] || [];
 
-    const topicPredictions: string[] = [];
+    const transcriptText = this.transcriptSegments
+      .slice(-12)
+      .map((segment) => segment.text.toLowerCase())
+      .join(' ');
+    const topicPredictions = Object.entries(TOPIC_FOLLOWUPS)
+      .filter(([topic]) => transcriptText.includes(topic))
+      .flatMap(([, followUps]) => followUps.map((followUp) => `How does ${followUp} relate here?`));
 
     return [...phasePredictions, ...topicPredictions]
       .slice(0, 10)
       .map(query => ({
         query,
-        embedding: this.quickEmbed(query),
         confidence: this.estimateConfidence(query),
       }));
-  }
-
-  private quickEmbed(text: string): number[] {
-    const hash = this.simpleHash(text);
-    const embedding = new Array(384).fill(0);
-
-    for (let i = 0; i < 5; i++) {
-      embedding[(hash + i * 7) % 384] = Math.sin((hash + i) / 10);
-    }
-
-    const norm = Math.sqrt(embedding.reduce((s, v) => s + v * v, 0));
-    return norm > 0 ? embedding.map(v => v / norm) : embedding;
   }
 
   private simpleHash(str: string): number {
@@ -187,27 +291,88 @@ export class PredictivePrefetcher {
   }
 
   private async assembleContext(query: string): Promise<{
-    relevantContext: Array<{ text: string; timestamp: number }>;
+    relevantContext: Array<{ role: 'interviewer' | 'user' | 'assistant'; text: string; timestamp: number }>;
     phase: InterviewPhase;
   }> {
-    return {
-      relevantContext: [
-        { text: `Related to: ${query}`, timestamp: Date.now() },
-      ],
-      phase: this.currentPhase,
-    };
+    // Real context assembly: BM25 search over recent transcript segments
+    const docs = this.transcriptSegments
+      .filter(s => s.speaker !== 'assistant' && s.text.trim().length > 0)
+      .map(s => ({
+        role: s.speaker === 'user' ? 'user' as const : s.speaker === 'assistant' ? 'assistant' as const : 'interviewer' as const,
+        text: s.text,
+        timestamp: s.timestamp,
+      }));
+
+    if (docs.length === 0) {
+      return {
+        relevantContext: [],
+        phase: this.currentPhase,
+      };
+    }
+
+    try {
+      const cacheKey = `${this.transcriptRevision}:${query.trim().toLowerCase()}`;
+      let bm25Results = this.bm25Cache.get(cacheKey);
+      if (!bm25Results) {
+        bm25Results = await computeBM25(query, docs);
+        this.bm25Cache.set(cacheKey, bm25Results);
+        this.trimBm25Cache();
+      }
+      const relevantContext = bm25Results
+        .slice(0, 5)
+        .map(r => ({
+          role: docs.find((doc) => doc.text.trim().toLowerCase() === r.text.trim().toLowerCase())?.role ?? 'interviewer' as const,
+          text: r.text,
+          timestamp: r.timestamp,
+        }));
+
+      return {
+        relevantContext,
+        phase: this.currentPhase,
+      };
+    } catch (error) {
+      console.warn('[PredictivePrefetcher] BM25 search failed, returning empty context:', error);
+      return {
+        relevantContext: [],
+        phase: this.currentPhase,
+      };
+    }
   }
 
-  async getContext(query: string, embedding: number[]): Promise<{
-    relevantContext: Array<{ text: string; timestamp: number }>;
+  async getContext(query: string, embedding?: number[]): Promise<{
+    relevantContext: Array<{ role: 'interviewer' | 'user' | 'assistant'; text: string; timestamp: number }>;
     phase: InterviewPhase;
   } | null> {
-    const cached = await this.prefetchCache.get(query, embedding);
+    const computedEmbedding = embedding ?? await this.getSemanticEmbedding(query);
+    const effectiveEmbedding = computedEmbedding.length > 0 ? computedEmbedding : undefined;
+    // NAT-003 / audit A-3: lookups are partitioned by transcript revision so
+    // we never return a prefetch from a stale revision (or a different query
+    // that happens to embed close).
+    const cached = await this.prefetchCache.get(
+      this.bindKey(query),
+      effectiveEmbedding,
+      this.bindKeyPrefix(),
+    );
 
     if (cached) {
       return cached.context;
     }
 
     return null;
+  }
+
+  private bindKeyPrefix(): string {
+    return `prefetch:${this.transcriptRevision}:`;
+  }
+
+  private bindKey(query: string): string {
+    return `${this.bindKeyPrefix()}${query.trim().toLowerCase()}`;
+  }
+
+  private trimBm25Cache(): void {
+    while (this.bm25Cache.size > this.MAX_BM25_CACHE_SIZE) {
+      const oldestKey = this.bm25Cache.keys().next().value;
+      if (oldestKey) this.bm25Cache.delete(oldestKey);
+    }
   }
 }

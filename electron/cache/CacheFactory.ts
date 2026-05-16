@@ -1,3 +1,4 @@
+import { Metrics } from '../runtime/Metrics';
 import { isOptimizationActive, getOptimizationFlags } from '../config/optimizations';
 import { EnhancedCache } from './EnhancedCache';
 
@@ -71,6 +72,7 @@ class MapCache<K, V> implements OptimizedCache<K, V> {
   }
 
   clear(): void {
+    Metrics.counter('cache.global_clear_calls');
     this.cache.clear();
   }
 
@@ -130,10 +132,15 @@ class EnhancedCacheAdapter<K, V> implements OptimizedCache<K, V> {
   }
 
   delete(key: K): boolean {
+    // NAT-024 / audit P-14: previously this called `enhancedCache.clear()`,
+    // which evicted every other entry whenever any single key was
+    // invalidated. We now delegate to the per-key delete path so the rest
+    // of the cache is preserved. Callers that genuinely want a full wipe
+    // must use `clear()`.
     const stringKey = this.serializeKey(key);
-    this.syncCache.delete(stringKey);
-    this.enhancedCache.clear();
-    return true;
+    const hadSync = this.syncCache.delete(stringKey);
+    const hadEnhanced = this.enhancedCache.delete(key);
+    return hadSync || hadEnhanced;
   }
 
   has(key: K): boolean {

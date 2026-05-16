@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useLayoutEffect } from 'react';
+import React, { useState, useEffect, useRef, useLayoutEffect, useCallback, useMemo } from 'react';
 import {
     Sparkles,
     Pencil,
@@ -38,25 +38,29 @@ import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
 import 'katex/dist/katex.min.css';
-import { getElectronAPI } from '../lib/electronApi';
+import { getElectronAPI, getOptionalElectronMethod } from '../lib/electronApi';
 import { analytics, detectProviderType } from '../lib/analytics/analytics.service';
 import { useShortcuts } from '../hooks/useShortcuts';
 import { useHumanSpeedAutoScroll } from '../hooks/useHumanSpeedAutoScroll';
-import { useStreamBuffer } from '../hooks/useStreamBuffer';
 import {
     classifyAssistRender,
     ConsciousModeAnswer,
+    parseConsciousModeAnswer,
 } from '../lib/consciousMode';
 import {
-    classifyConsciousModeQuestion,
-    createEmptyConsciousModeResponse,
-    type ReasoningThread,
-} from '../../electron/ConsciousMode';
+    clearActiveStreamingIdsByMessageId,
+    createMessageId,
+    getActiveStreamingId,
+    setActiveStreamingIds,
+    updateMessageById,
+    updateOrPrependMessageById,
+} from '../lib/streamingMessageState';
 
 interface Message {
     id: string;
     role: 'user' | 'system' | 'interviewer';
     text: string;
+    createdAt: number;
     isStreaming?: boolean;
     hasScreenshot?: boolean;
     screenshotPreview?: string;
@@ -64,12 +68,29 @@ interface Message {
     intent?: string;
 }
 
+type ConsciousThreadView = {
+    rootQuestion: string;
+    lastQuestion: string;
+    followUpCount: number;
+    updatedAt: number;
+};
+
 const MAX_ROLLING_TRANSCRIPT_CHARS = 1200;
 const MIN_OVERLAY_WIDTH = 420;
 const MAX_OVERLAY_WIDTH = 960;
 const MIN_CHAT_HEIGHT = 260;
 const MAX_CHAT_HEIGHT = 760;
+const MANUAL_STT_FINALIZE_GRACE_MS = 350;
+const MANUAL_STT_FINALIZE_MAX_WAIT_MS = 1500;
+const MANUAL_STT_POLL_INTERVAL_MS = 75;
 type ResizeDirection = 'left' | 'right' | 'top' | 'bottom' | 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right';
+const WHAT_TO_SAY_STREAM_KEYS = ['what_to_answer', 'what_to_say'];
+const RECAP_STREAM_KEYS = ['recap'];
+const FOLLOW_UP_QUESTIONS_STREAM_KEYS = ['follow_up_questions'];
+
+function getFollowUpStreamKeys(intent: string): string[] {
+    return [intent, 'follow_up'];
+}
 
 function appendRollingTranscript(existing: string, nextSegment: string): string {
     const addition = nextSegment.trim();
@@ -83,16 +104,34 @@ function appendRollingTranscript(existing: string, nextSegment: string): string 
     return combined.slice(combined.length - MAX_ROLLING_TRANSCRIPT_CHARS);
 }
 
+function createMessage(message: Omit<Message, 'createdAt'>): Message {
+    return {
+        ...message,
+        createdAt: Date.now(),
+    };
+}
+
+function prependMessage(prev: Message[], message: Omit<Message, 'createdAt'>): Message[] {
+    return [createMessage(message), ...prev];
+}
+
 interface NativelyInterfaceProps {
     onEndMeeting?: () => void;
 }
 
-function createStreamRequestId(prefix: string): string {
-    return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-}
-
 const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) => {
     const electronAPI = getElectronAPI();
+    const getDefaultModel = getOptionalElectronMethod('getDefaultModel');
+    const setModel = getOptionalElectronMethod('setModel');
+    const onModelChanged = getOptionalElectronMethod('onModelChanged');
+    const onModelFallback = getOptionalElectronMethod('onModelFallback');
+    const getUndetectable = getOptionalElectronMethod('getUndetectable');
+    const onUndetectableChanged = getOptionalElectronMethod('onUndetectableChanged');
+    const onToggleExpand = getOptionalElectronMethod('onToggleExpand');
+    const onSessionReset = getOptionalElectronMethod('onSessionReset');
+    const onPrivacyShieldChanged = getOptionalElectronMethod('onPrivacyShieldChanged');
+    const setOverlayBounds = getOptionalElectronMethod('setOverlayBounds');
+    const onGlobalShortcutAction = getOptionalElectronMethod('onGlobalShortcutAction');
     const [isExpanded, setIsExpanded] = useState(true);
     const [inputValue, setInputValue] = useState('');
     const { shortcuts, isShortcutPressed } = useShortcuts();
@@ -100,9 +139,16 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
     const [isConnected, setIsConnected] = useState(false);
     const [isProcessing, setIsProcessing] = useState(false);
     const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-    const [conversationContext, setConversationContext] = useState<string>('');
+    const conversationContext = useMemo(() => {
+        return messages
+            .filter(m => m.role !== 'user' || !m.hasScreenshot)
+            .map(m => `${m.role === 'interviewer' ? 'Interviewer' : m.role === 'user' ? 'User' : 'Assistant'}: ${m.text}`)
+            .slice(-20)
+            .join('\n');
+    }, [messages]);
     const [isManualRecording, setIsManualRecording] = useState(false);
     const isRecordingRef = useRef(false);  // Ref to track recording state (avoids stale closure)
+    const manualFinalizeInFlightRef = useRef(false);
     const [manualTranscript, setManualTranscript] = useState('');
     const manualTranscriptRef = useRef<string>('');
     const [showTranscript, setShowTranscript] = useState(() => {
@@ -112,18 +158,16 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
 
     // Analytics State
     const requestStartTimeRef = useRef<number | null>(null);
-    const activeGeminiRequestIdRef = useRef<string | null>(null);
-    const activeRagRequestIdRef = useRef<string | null>(null);
-    const {
-        appendToken: appendGeminiStreamToken,
-        getBufferedContent: getBufferedGeminiContent,
-        reset: resetGeminiStreamBuffer,
-    } = useStreamBuffer();
-    const {
-        appendToken: appendRagStreamToken,
-        getBufferedContent: getBufferedRagContent,
-        reset: resetRagStreamBuffer,
-    } = useStreamBuffer();
+    const messageIdCounterRef = useRef(0);
+    const activeGeminiStreamingIdRef = useRef<string | null>(null);
+    const activeRagStreamingIdRef = useRef<string | null>(null);
+    const activeIntelligenceStreamingIdsRef = useRef<Record<string, string>>({});
+
+    const nextMessageId = useCallback((prefix: string) => {
+        const id = createMessageId(prefix, Date.now(), messageIdCounterRef.current);
+        messageIdCounterRef.current += 1;
+        return id;
+    }, []);
 
     // Sync transcript setting
     useEffect(() => {
@@ -135,55 +179,16 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
         return () => window.removeEventListener('storage', handleStorage);
     }, []);
 
-    useEffect(() => {
-        return () => {
-            if (rollingTranscriptRafRef.current !== null) {
-                cancelAnimationFrame(rollingTranscriptRafRef.current);
-            }
-            if (manualTranscriptRafRef.current !== null) {
-                cancelAnimationFrame(manualTranscriptRafRef.current);
-            }
-        };
-    }, []);
-
-    const scheduleRollingTranscriptUpdate = (nextValue: string) => {
-        pendingRollingTranscriptRef.current = nextValue;
-        if (rollingTranscriptRafRef.current !== null) {
-            return;
-        }
-
-        rollingTranscriptRafRef.current = requestAnimationFrame(() => {
-            rollingTranscriptRafRef.current = null;
-            setRollingTranscript(pendingRollingTranscriptRef.current);
-        });
-    };
-
-    const scheduleManualTranscriptUpdate = (nextValue: string) => {
-        pendingManualTranscriptRef.current = nextValue;
-        if (manualTranscriptRafRef.current !== null) {
-            return;
-        }
-
-        manualTranscriptRafRef.current = requestAnimationFrame(() => {
-            manualTranscriptRafRef.current = null;
-            setManualTranscript(pendingManualTranscriptRef.current);
-        });
-    };
-
     const [rollingTranscript, setRollingTranscript] = useState('');  // For interviewer rolling text bar
     const [isInterviewerSpeaking, setIsInterviewerSpeaking] = useState(false);  // Track if actively speaking
     const rollingTranscriptCommittedRef = useRef('');
-    const pendingRollingTranscriptRef = useRef('');
-    const rollingTranscriptRafRef = useRef<number | null>(null);
     const [voiceInput, setVoiceInput] = useState('');  // Accumulated user voice input
     const voiceInputRef = useRef<string>('');  // Ref for capturing in async handlers
     const textInputRef = useRef<HTMLInputElement>(null); // Ref for input focus
-    const pendingManualTranscriptRef = useRef('');
-    const manualTranscriptRafRef = useRef<number | null>(null);
 
     const contentRef = useRef<HTMLDivElement>(null);
     const scrollContainerRef = useRef<HTMLDivElement>(null);
-    const activeConsciousThreadRef = useRef<ReasoningThread | null>(null);
+    const activeConsciousThreadRef = useRef<ConsciousThreadView | null>(null);
     // const settingsButtonRef = useRef<HTMLButtonElement>(null);
 
     // Latent Context State (Screenshots attached but not sent)
@@ -215,13 +220,15 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
     useEffect(() => {
         // Load the persisted default model (not the runtime model)
         // Each new meeting starts with the default from settings
-        if (window.electronAPI?.getDefaultModel) {
-            window.electronAPI.getDefaultModel()
+        if (getDefaultModel) {
+            getDefaultModel()
                 .then((result: any) => {
                     if (result && result.model) {
                         setCurrentModel(result.model);
                         // Also set the runtime model to the default
-                        window.electronAPI.setModel(result.model).catch(() => { });
+                        if (setModel) {
+                            void setModel(result.model).catch(() => { });
+                        }
                     }
                 })
                 .catch((err: any) => console.error("Failed to fetch default model:", err));
@@ -231,22 +238,24 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
     const handleModelSelect = (modelId: string) => {
         setCurrentModel(modelId);
         // Session-only: update runtime but don't persist as default
-        window.electronAPI.setModel(modelId)
-            .catch((err: any) => console.error("Failed to set model:", err));
+        if (setModel) {
+            void setModel(modelId)
+                .catch((err: any) => console.error("Failed to set model:", err));
+        }
     };
 
     // Listen for default model changes from Settings
     useEffect(() => {
-        if (!window.electronAPI?.onModelChanged) return;
-        const unsubscribe = window.electronAPI.onModelChanged((modelId: string) => {
+        if (!onModelChanged) return;
+        const unsubscribe = onModelChanged((modelId: string) => {
             setCurrentModel(prev => prev === modelId ? prev : modelId);
         });
         return () => unsubscribe();
     }, []);
 
     useEffect(() => {
-        if (!window.electronAPI?.onModelFallback) return;
-        const unsubscribe = window.electronAPI.onModelFallback(({ previousModel, fallbackModel }) => {
+        if (!onModelFallback) return;
+        const unsubscribe = onModelFallback(({ previousModel, fallbackModel }) => {
             setCurrentModel(fallbackModel);
             setModelFallbackNotice(`Selected model unavailable. Switched from ${previousModel} to ${fallbackModel}.`);
         });
@@ -262,12 +271,12 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
     // Global State Sync
     useEffect(() => {
         // Fetch initial state
-        if (window.electronAPI?.getUndetectable) {
-            window.electronAPI.getUndetectable().then(setIsUndetectable);
+        if (getUndetectable) {
+            getUndetectable().then(setIsUndetectable);
         }
 
-        if (window.electronAPI?.onUndetectableChanged) {
-            const unsubscribe = window.electronAPI.onUndetectableChanged((state) => {
+        if (onUndetectableChanged) {
+            const unsubscribe = onUndetectableChanged((state) => {
                 setIsUndetectable(state);
             });
             return () => unsubscribe();
@@ -280,27 +289,32 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
         localStorage.setItem('natively_hideChatHidesWidget', String(hideChatHidesWidget));
     }, [isUndetectable, hideChatHidesWidget]);
 
+    const resizeRafRef = useRef<number | null>(null);
+
     // Auto-resize Window
     useLayoutEffect(() => {
         if (!contentRef.current) return;
 
-        const observer = new ResizeObserver((entries) => {
-            for (const entry of entries) {
-                // Use getBoundingClientRect to get the exact rendered size including padding
-                const rect = entry.target.getBoundingClientRect();
-
-                // Send exact dimensions to Electron
-                // Removed buffer to ensure tight fit
-                console.log('[NativelyInterface] ResizeObserver:', Math.ceil(rect.width), Math.ceil(rect.height));
+        const observer = new ResizeObserver(() => {
+            if (resizeRafRef.current !== null) return;
+            resizeRafRef.current = requestAnimationFrame(() => {
+                resizeRafRef.current = null;
+                if (!contentRef.current) return;
+                const rect = contentRef.current.getBoundingClientRect();
                 window.electronAPI?.updateContentDimensions({
                     width: Math.ceil(rect.width),
                     height: Math.ceil(rect.height)
                 });
-            }
+            });
         });
 
         observer.observe(contentRef.current);
-        return () => observer.disconnect();
+        return () => {
+            observer.disconnect();
+            if (resizeRafRef.current !== null) {
+                cancelAnimationFrame(resizeRafRef.current);
+            }
+        };
     }, []);
 
     // Force resize when attachedContext changes (screenshots added/removed)
@@ -331,7 +345,7 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
         return () => clearTimeout(timer);
     }, []);
 
-    const latestReadableMessage = [...messages].reverse().find(msg => msg.role === 'system') || null;
+    const latestReadableMessage = useMemo(() => messages.find(msg => msg.role === 'system') || null, [messages]);
 
     useHumanSpeedAutoScroll({
         enabled: isExpanded,
@@ -343,19 +357,9 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
             isStreaming: latestReadableMessage.isStreaming,
         } : null,
         eligibleRoles: ['system'],
-        getTargetElement: (container, messageId) => container.querySelector(`[data-autoscroll-message-id="${messageId}"]`) as HTMLElement | null,
     });
 
     // Build conversation context from messages
-    useEffect(() => {
-        const context = messages
-            .filter(m => m.role !== 'user' || !m.hasScreenshot)
-            .map(m => `${m.role === 'interviewer' ? 'Interviewer' : m.role === 'user' ? 'User' : 'Assistant'}: ${m.text}`)
-            .slice(-20)
-            .join('\n');
-        setConversationContext(context);
-    }, [messages]);
-
     // Listen for settings window visibility changes
     useEffect(() => {
         if (!electronAPI.onSettingsVisibilityChange) return;
@@ -363,24 +367,35 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
             setIsSettingsOpen(isVisible);
         });
         return () => unsubscribe();
-    }, [electronAPI]);
+    }, [electronAPI, nextMessageId]);
 
     // Sync Window Visibility with Expanded State
     useEffect(() => {
         if (isExpanded) {
             electronAPI.showWindow();
         } else {
-            // Slight delay to allow animation to clean up if needed, though immediate is safer for click-through
-            // Using setTimeout to ensure the render cycle completes first
-            // Increased to 400ms to allow "contract to bottom" exit animation to finish
-            setTimeout(() => electronAPI.hideWindow(), 400);
+            electronAPI.hideWindow();
         }
     }, [electronAPI, isExpanded]);
 
+    useEffect(() => {
+        if (!onPrivacyShieldChanged) return;
+        return onPrivacyShieldChanged((state) => {
+            if (!state.active) return;
+            setMessages([]);
+            setInputValue('');
+            setAttachedContext([]);
+            activeIntelligenceStreamingIdsRef.current = {};
+            activeGeminiStreamingIdRef.current = null;
+            activeRagStreamingIdRef.current = null;
+            setIsProcessing(false);
+        });
+    }, [onPrivacyShieldChanged]);
+
     // Keyboard shortcut to toggle expanded state (via Main Process)
     useEffect(() => {
-        if (!window.electronAPI?.onToggleExpand) return;
-        const unsubscribe = window.electronAPI.onToggleExpand(() => {
+        if (!onToggleExpand) return;
+        const unsubscribe = onToggleExpand(() => {
             setIsExpanded(prev => !prev);
         });
         return () => unsubscribe();
@@ -388,12 +403,18 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
 
     // Session Reset Listener - Clears UI when a NEW meeting starts
     useEffect(() => {
-        if (!window.electronAPI?.onSessionReset) return;
-        const unsubscribe = window.electronAPI.onSessionReset(() => {
+        if (!onSessionReset) return;
+        const unsubscribe = onSessionReset(() => {
             console.log('[NativelyInterface] Resetting session state...');
             setMessages([]);
             setInputValue('');
             setAttachedContext([]);
+            activeIntelligenceStreamingIdsRef.current = {};
+            activeGeminiStreamingIdRef.current = null;
+            activeRagStreamingIdRef.current = null;
+            isRecordingRef.current = false;
+            manualFinalizeInFlightRef.current = false;
+            setIsManualRecording(false);
             setManualTranscript('');
             setVoiceInput('');
             voiceInputRef.current = '';
@@ -423,11 +444,6 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
             return updated.slice(-5); // Keep last 5
         });
     };
-
-    useEffect(() => {
-        localStorage.setItem('natively_overlay_width', String(panelWidth));
-        localStorage.setItem('natively_overlay_chat_height', String(chatViewportHeight));
-    }, [panelWidth, chatViewportHeight]);
 
     useEffect(() => {
         const handlePointerMove = (event: MouseEvent) => {
@@ -466,12 +482,17 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
 
             setPanelWidth(nextWidth);
             setChatViewportHeight(nextHeight);
-            window.electronAPI?.setOverlayBounds({ width: nextWidth, height: nextHeight, x: nextX, y: nextY }).catch(() => { });
+            if (setOverlayBounds) {
+                void setOverlayBounds({ width: nextWidth, height: nextHeight, x: nextX, y: nextY }).catch(() => { });
+            }
         };
 
         const stopResize = () => {
             resizeStartRef.current = null;
             setIsResizing(false);
+            // Write to localStorage only when resize stops
+            localStorage.setItem('natively_overlay_width', String(panelWidth));
+            localStorage.setItem('natively_overlay_chat_height', String(chatViewportHeight));
         };
 
         window.addEventListener('mousemove', handlePointerMove);
@@ -526,11 +547,11 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
                         voiceInputRef.current = updated;
                         return updated;
                     });
-                    scheduleManualTranscriptUpdate('');  // Clear partial preview
+                    setManualTranscript('');  // Clear partial preview
                     manualTranscriptRef.current = '';
                 } else {
                     // Show live partial transcript
-                    scheduleManualTranscriptUpdate(transcript.text);
+                    setManualTranscript(transcript.text);
                     manualTranscriptRef.current = transcript.text;
                 }
                 return;  // Don't add to messages while recording
@@ -554,7 +575,7 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
                 // Append finalized text to accumulated transcript
                 const committed = appendRollingTranscript(rollingTranscriptCommittedRef.current, transcript.text);
                 rollingTranscriptCommittedRef.current = committed;
-                scheduleRollingTranscriptUpdate(committed);
+                setRollingTranscript(committed);
 
                 // Clear speaking indicator after pause
                 setTimeout(() => {
@@ -563,7 +584,7 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
             } else {
                 // For partial transcripts, show the active utterance without mutating finalized history
                 const committed = rollingTranscriptCommittedRef.current;
-                scheduleRollingTranscriptUpdate(committed ? `${committed}  ·  ${transcript.text}` : transcript.text);
+                setRollingTranscript(committed ? `${committed}  ·  ${transcript.text}` : transcript.text);
             }
         }));
 
@@ -575,56 +596,61 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
 
         cleanups.push(window.electronAPI.onSuggestionGenerated((data) => {
             setIsProcessing(false);
-            setMessages(prev => [...prev, {
+            setMessages(prev => prependMessage(prev, {
                 id: Date.now().toString(),
                 role: 'system',
                 text: data.suggestion
-            }]);
+            }));
         }));
 
         cleanups.push(window.electronAPI.onSuggestionError((err) => {
             setIsProcessing(false);
-            setMessages(prev => [...prev, {
+            setMessages(prev => prependMessage(prev, {
                 id: Date.now().toString(),
                 role: 'system',
                 text: `Error: ${err.error}`
-            }]);
+            }));
         }));
 
 
 
         cleanups.push(window.electronAPI.onIntelligenceSuggestedAnswerToken((data) => {
-            // Progressive update for 'what_to_answer' mode
-            setMessages(prev => {
-                const lastMsg = prev[prev.length - 1];
+            const targetId = getActiveStreamingId(activeIntelligenceStreamingIdsRef.current, WHAT_TO_SAY_STREAM_KEYS);
+            const fallbackId = nextMessageId('assistant');
 
-                // If we already have a streaming message for this intent, append
-                if (lastMsg && lastMsg.isStreaming && lastMsg.intent === 'what_to_answer') {
-                    const updated = [...prev];
-                    updated[prev.length - 1] = {
-                        ...lastMsg,
-                        text: lastMsg.text + data.token
-                    };
-                    return updated;
-                }
-
-                // Otherwise, start a new one (First token)
-                return [...prev, {
-                    id: Date.now().toString(),
+            setMessages(prev => updateOrPrependMessageById(
+                prev,
+                targetId,
+                message => ({
+                    ...message,
+                    text: message.text + data.token
+                }),
+                {
+                    id: fallbackId,
                     role: 'system',
                     text: data.token,
                     intent: 'what_to_answer',
-                    isStreaming: true
-                }];
-            });
+                    isStreaming: true,
+                    createdAt: Date.now()
+                }
+            ));
+
+            if (!targetId) {
+                activeIntelligenceStreamingIdsRef.current = setActiveStreamingIds(
+                    activeIntelligenceStreamingIdsRef.current,
+                    WHAT_TO_SAY_STREAM_KEYS,
+                    fallbackId,
+                );
+            }
         }));
 
         cleanups.push(window.electronAPI.onIntelligenceSuggestedAnswer((data) => {
             setIsProcessing(false);
-            const threadRoute = classifyConsciousModeQuestion(data.question, activeConsciousThreadRef.current);
+            const authoritativeThreadState = data.metadata?.threadState;
+            const threadAction = authoritativeThreadState?.threadAction ?? 'ignore';
             const assistRender = classifyAssistRender({
                 answerText: data.answer,
-                threadAction: threadRoute.threadAction,
+                threadAction,
             });
 
             analytics.trackInterviewAssistRendered({
@@ -632,133 +658,147 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
                 source_intent: 'what_to_answer',
             });
 
-            if (assistRender.output_variant === 'conscious_mode') {
-                const currentThread = activeConsciousThreadRef.current;
-                const continuesThread = Boolean(threadRoute.threadAction === 'continue' && currentThread);
+            activeConsciousThreadRef.current = authoritativeThreadState?.activeThread ?? null;
 
-                activeConsciousThreadRef.current = {
-                    rootQuestion: continuesThread && currentThread ? currentThread.rootQuestion : data.question,
-                    lastQuestion: data.question,
-                    response: createEmptyConsciousModeResponse(),
-                    followUpCount: continuesThread && currentThread ? currentThread.followUpCount + 1 : 0,
-                    updatedAt: Date.now(),
-                };
-            } else {
-                activeConsciousThreadRef.current = null;
-            }
+            const targetId = getActiveStreamingId(activeIntelligenceStreamingIdsRef.current, WHAT_TO_SAY_STREAM_KEYS);
 
-            setMessages(prev => {
-                const lastMsg = prev[prev.length - 1];
-
-                // If we were streaming, finalize it
-                if (lastMsg && lastMsg.isStreaming && lastMsg.intent === 'what_to_answer') {
-                    // Start new array to avoid mutation
-                    const updated = [...prev];
-                    updated[prev.length - 1] = {
-                        ...lastMsg,
-                        text: data.answer, // Ensure final consistency
-                        isStreaming: false
-                    };
-                    return updated;
-                }
-
-                // If we missed the stream (or not streaming), append fresh
-                return [...prev, {
-                    id: Date.now().toString(),
+            setMessages(prev => updateOrPrependMessageById(
+                prev,
+                targetId,
+                message => ({
+                    ...message,
+                    text: data.answer,
+                    isStreaming: false
+                }),
+                {
+                    id: nextMessageId('system'),
                     role: 'system',
-                    text: data.answer,  // Plain text, no markdown - ready to speak
-                    intent: 'what_to_answer'
-                }];
-            });
+                    text: data.answer,
+                    intent: 'what_to_answer',
+                    createdAt: Date.now()
+                }
+            ));
+
+            activeIntelligenceStreamingIdsRef.current = clearActiveStreamingIdsByMessageId(
+                activeIntelligenceStreamingIdsRef.current,
+                targetId,
+            );
         }));
 
         // STREAMING: Refinement
         cleanups.push(window.electronAPI.onIntelligenceRefinedAnswerToken((data) => {
-            setMessages(prev => {
-                const lastMsg = prev[prev.length - 1];
-                if (lastMsg && lastMsg.isStreaming && lastMsg.intent === data.intent) {
-                    const updated = [...prev];
-                    updated[prev.length - 1] = {
-                        ...lastMsg,
-                        text: lastMsg.text + data.token
-                    };
-                    return updated;
-                }
-                // New stream start (e.g. user clicked Shorten)
-                return [...prev, {
-                    id: Date.now().toString(),
+            const targetId = getActiveStreamingId(activeIntelligenceStreamingIdsRef.current, getFollowUpStreamKeys(data.intent));
+            const fallbackId = nextMessageId('assistant');
+
+            setMessages(prev => updateOrPrependMessageById(
+                prev,
+                targetId,
+                message => ({
+                    ...message,
+                    text: message.text + data.token
+                }),
+                {
+                    id: fallbackId,
                     role: 'system',
                     text: data.token,
                     intent: data.intent,
-                    isStreaming: true
-                }];
-            });
+                    isStreaming: true,
+                    createdAt: Date.now()
+                }
+            ));
+
+            if (!targetId) {
+                activeIntelligenceStreamingIdsRef.current = setActiveStreamingIds(
+                    activeIntelligenceStreamingIdsRef.current,
+                    getFollowUpStreamKeys(data.intent),
+                    fallbackId,
+                );
+            }
         }));
 
         cleanups.push(window.electronAPI.onIntelligenceRefinedAnswer((data) => {
             setIsProcessing(false);
-            setMessages(prev => {
-                const lastMsg = prev[prev.length - 1];
-                if (lastMsg && lastMsg.isStreaming && lastMsg.intent === data.intent) {
-                    const updated = [...prev];
-                    updated[prev.length - 1] = {
-                        ...lastMsg,
-                        text: data.answer,
-                        isStreaming: false
-                    };
-                    return updated;
-                }
-                return [...prev, {
-                    id: Date.now().toString(),
+            const targetId = getActiveStreamingId(activeIntelligenceStreamingIdsRef.current, getFollowUpStreamKeys(data.intent));
+
+            setMessages(prev => updateOrPrependMessageById(
+                prev,
+                targetId,
+                message => ({
+                    ...message,
+                    text: data.answer,
+                    isStreaming: false
+                }),
+                {
+                    id: nextMessageId('system'),
                     role: 'system',
                     text: data.answer,
-                    intent: data.intent
-                }];
-            });
+                    intent: data.intent,
+                    createdAt: Date.now()
+                }
+            ));
+
+            activeIntelligenceStreamingIdsRef.current = clearActiveStreamingIdsByMessageId(
+                activeIntelligenceStreamingIdsRef.current,
+                targetId,
+            );
         }));
 
         // STREAMING: Recap
         cleanups.push(window.electronAPI.onIntelligenceRecapToken((data) => {
-            setMessages(prev => {
-                const lastMsg = prev[prev.length - 1];
-                if (lastMsg && lastMsg.isStreaming && lastMsg.intent === 'recap') {
-                    const updated = [...prev];
-                    updated[prev.length - 1] = {
-                        ...lastMsg,
-                        text: lastMsg.text + data.token
-                    };
-                    return updated;
-                }
-                return [...prev, {
-                    id: Date.now().toString(),
+            const targetId = getActiveStreamingId(activeIntelligenceStreamingIdsRef.current, RECAP_STREAM_KEYS);
+            const fallbackId = nextMessageId('assistant');
+
+            setMessages(prev => updateOrPrependMessageById(
+                prev,
+                targetId,
+                message => ({
+                    ...message,
+                    text: message.text + data.token
+                }),
+                {
+                    id: fallbackId,
                     role: 'system',
                     text: data.token,
                     intent: 'recap',
-                    isStreaming: true
-                }];
-            });
+                    isStreaming: true,
+                    createdAt: Date.now()
+                }
+            ));
+
+            if (!targetId) {
+                activeIntelligenceStreamingIdsRef.current = setActiveStreamingIds(
+                    activeIntelligenceStreamingIdsRef.current,
+                    RECAP_STREAM_KEYS,
+                    fallbackId,
+                );
+            }
         }));
 
         cleanups.push(window.electronAPI.onIntelligenceRecap((data) => {
             setIsProcessing(false);
-            setMessages(prev => {
-                const lastMsg = prev[prev.length - 1];
-                if (lastMsg && lastMsg.isStreaming && lastMsg.intent === 'recap') {
-                    const updated = [...prev];
-                    updated[prev.length - 1] = {
-                        ...lastMsg,
-                        text: data.summary,
-                        isStreaming: false
-                    };
-                    return updated;
-                }
-                return [...prev, {
-                    id: Date.now().toString(),
+            const targetId = getActiveStreamingId(activeIntelligenceStreamingIdsRef.current, RECAP_STREAM_KEYS);
+
+            setMessages(prev => updateOrPrependMessageById(
+                prev,
+                targetId,
+                message => ({
+                    ...message,
+                    text: data.summary,
+                    isStreaming: false
+                }),
+                {
+                    id: nextMessageId('system'),
                     role: 'system',
                     text: data.summary,
-                    intent: 'recap'
-                }];
-            });
+                    intent: 'recap',
+                    createdAt: Date.now()
+                }
+            ));
+
+            activeIntelligenceStreamingIdsRef.current = clearActiveStreamingIdsByMessageId(
+                activeIntelligenceStreamingIdsRef.current,
+                targetId,
+            );
         }));
 
         // STREAMING: Follow-Up Questions (Rendered as message? Or specific UI?)
@@ -774,72 +814,114 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
         // Assuming it's a message for consistency with "Copilot" approach.
 
         cleanups.push(window.electronAPI.onIntelligenceFollowUpQuestionsToken((data) => {
-            setMessages(prev => {
-                const lastMsg = prev[prev.length - 1];
-                if (lastMsg && lastMsg.isStreaming && lastMsg.intent === 'follow_up_questions') {
-                    const updated = [...prev];
-                    updated[prev.length - 1] = {
-                        ...lastMsg,
-                        text: lastMsg.text + data.token
-                    };
-                    return updated;
-                }
-                return [...prev, {
-                    id: Date.now().toString(),
+            const targetId = getActiveStreamingId(activeIntelligenceStreamingIdsRef.current, FOLLOW_UP_QUESTIONS_STREAM_KEYS);
+            const fallbackId = nextMessageId('assistant');
+
+            setMessages(prev => updateOrPrependMessageById(
+                prev,
+                targetId,
+                message => ({
+                    ...message,
+                    text: message.text + data.token
+                }),
+                {
+                    id: fallbackId,
                     role: 'system',
                     text: data.token,
                     intent: 'follow_up_questions',
-                    isStreaming: true
-                }];
-            });
+                    isStreaming: true,
+                    createdAt: Date.now()
+                }
+            ));
+
+            if (!targetId) {
+                activeIntelligenceStreamingIdsRef.current = setActiveStreamingIds(
+                    activeIntelligenceStreamingIdsRef.current,
+                    FOLLOW_UP_QUESTIONS_STREAM_KEYS,
+                    fallbackId,
+                );
+            }
         }));
 
         cleanups.push(window.electronAPI.onIntelligenceFollowUpQuestionsUpdate((data) => {
             // This event name is slightly different ('update' vs 'answer')
             setIsProcessing(false);
-            setMessages(prev => {
-                const lastMsg = prev[prev.length - 1];
-                if (lastMsg && lastMsg.isStreaming && lastMsg.intent === 'follow_up_questions') {
-                    const updated = [...prev];
-                    updated[prev.length - 1] = {
-                        ...lastMsg,
-                        text: data.questions,
-                        isStreaming: false
-                    };
-                    return updated;
-                }
-                return [...prev, {
-                    id: Date.now().toString(),
+            const targetId = getActiveStreamingId(activeIntelligenceStreamingIdsRef.current, FOLLOW_UP_QUESTIONS_STREAM_KEYS);
+
+            setMessages(prev => updateOrPrependMessageById(
+                prev,
+                targetId,
+                message => ({
+                    ...message,
+                    text: data.questions,
+                    isStreaming: false
+                }),
+                {
+                    id: nextMessageId('system'),
                     role: 'system',
                     text: data.questions,
-                    intent: 'follow_up_questions'
-                }];
-            });
+                    intent: 'follow_up_questions',
+                    createdAt: Date.now()
+                }
+            ));
+
+            activeIntelligenceStreamingIdsRef.current = clearActiveStreamingIdsByMessageId(
+                activeIntelligenceStreamingIdsRef.current,
+                targetId,
+            );
         }));
 
         cleanups.push(window.electronAPI.onIntelligenceManualResult((data) => {
             setIsProcessing(false);
-            setMessages(prev => [...prev, {
+            setMessages(prev => prependMessage(prev, {
                 id: Date.now().toString(),
                 role: 'system',
                 text: `🎯 **Answer:**\n\n${data.answer}`
-            }]);
+            }));
         }));
 
         cleanups.push(window.electronAPI.onIntelligenceError((data) => {
             setIsProcessing(false);
-            setMessages(prev => [...prev, {
-                id: Date.now().toString(),
-                role: 'system',
-                text: `❌ Error (${data.mode}): ${data.error}`
-            }]);
+            const targetKeys = data.mode === 'what_to_say'
+                ? WHAT_TO_SAY_STREAM_KEYS
+                : data.mode === 'recap'
+                    ? RECAP_STREAM_KEYS
+                    : data.mode === 'follow_up_questions'
+                        ? FOLLOW_UP_QUESTIONS_STREAM_KEYS
+                        : data.mode === 'follow_up'
+                            ? ['follow_up']
+                            : [data.mode];
+            const targetId = getActiveStreamingId(activeIntelligenceStreamingIdsRef.current, targetKeys);
+            const errorText = `❌ Error (${data.mode}): ${data.error}`;
+
+            setMessages(prev => updateOrPrependMessageById(
+                prev,
+                targetId,
+                message => ({
+                    ...message,
+                    isStreaming: false,
+                    text: message.text ? `${message.text}\n\n${errorText}` : errorText
+                }),
+                {
+                    id: nextMessageId('system'),
+                    role: 'system',
+                    text: errorText,
+                    createdAt: Date.now()
+                }
+            ));
+
+            activeIntelligenceStreamingIdsRef.current = clearActiveStreamingIdsByMessageId(
+                activeIntelligenceStreamingIdsRef.current,
+                targetId,
+            );
         }));
         // Screenshot taken - attach to chat input instead of auto-analyzing
         cleanups.push(electronAPI.onScreenshotTaken(handleScreenshotAttach));
 
         // Selective Screenshot (Latent Context)
-        if (electronAPI.onScreenshotAttached) {
-            cleanups.push(electronAPI.onScreenshotAttached(handleScreenshotAttach));
+        const onScreenshotAttached = getOptionalElectronMethod('onScreenshotAttached');
+        if (onScreenshotAttached) {
+            cleanups.push(onScreenshotAttached(handleScreenshotAttach));
         }
 
         return () => cleanups.forEach(fn => fn());
@@ -847,358 +929,527 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({ onEndMeeting }) =
 
     // Quick Actions - Updated to use new Intelligence APIs
 
-    const handleCopy = (text: string) => {
+    const handleCopy = useCallback((text: string) => {
         navigator.clipboard.writeText(text);
         analytics.trackCopyAnswer();
         // Optional: Trigger a small toast or state change for visual feedback
-    };
+    }, [analytics]);
 
-    const handleWhatToSay = async () => {
+    const handleWhatToSay = useCallback(async () => {
         setIsExpanded(true);
         setIsProcessing(true);
         analytics.trackCommandExecuted('what_to_say');
+        const assistantMessageId = nextMessageId('assistant');
 
         // Capture and clear attached image context
         const currentAttachments = attachedContext;
         if (currentAttachments.length > 0) {
             setAttachedContext([]);
             // Show the attached image in chat
-            setMessages(prev => [...prev, {
-                id: Date.now().toString(),
+            setMessages(prev => prependMessage(prev, {
+                id: nextMessageId('user'),
                 role: 'user',
                 text: 'What should I say about this?',
                 hasScreenshot: true,
                 screenshotPreview: currentAttachments[0].preview
-            }]);
+            }));
         }
+
+        setMessages(prev => prependMessage(prev, {
+            id: assistantMessageId,
+            role: 'system',
+            text: '',
+            intent: 'what_to_answer',
+            isStreaming: true
+        }));
+        activeIntelligenceStreamingIdsRef.current = setActiveStreamingIds(
+            activeIntelligenceStreamingIdsRef.current,
+            WHAT_TO_SAY_STREAM_KEYS,
+            assistantMessageId,
+        );
 
         try {
             // Pass imagePath if attached
-            await window.electronAPI.generateWhatToSay(undefined, currentAttachments.length > 0 ? currentAttachments.map(s => s.path) : undefined);
+            const result = await window.electronAPI.generateWhatToSay(undefined, currentAttachments.length > 0 ? currentAttachments.map(s => s.path) : undefined);
+            if (result?.status === 'canceled') {
+                setMessages(prev => prev.filter(message => message.id !== assistantMessageId));
+                return;
+            }
+            setMessages(prev => updateOrPrependMessageById(
+                prev,
+                assistantMessageId,
+                message => ({
+                    ...message,
+                    text: result?.answer?.trim()
+                        ? result.answer
+                        : result?.status === 'error'
+                            ? `Error: ${result.error || 'Failed to generate response.'}`
+                            : result?.status === 'canceled'
+                                ? result.error || 'Response canceled before completion. Retry with the current settings.'
+                                : result?.error
+                                    ? `Error: ${result.error}`
+                                    : 'Response canceled before completion. Retry with the current settings.',
+                    isStreaming: false,
+                }),
+                {
+                    id: nextMessageId('system'),
+                    role: 'system',
+                    intent: 'what_to_answer',
+                    text: result?.answer?.trim()
+                        ? result.answer
+                        : result?.status === 'error'
+                            ? `Error: ${result.error || 'Failed to generate response.'}`
+                            : result?.status === 'canceled'
+                                ? result.error || 'Response canceled before completion. Retry with the current settings.'
+                                : result?.error
+                                    ? `Error: ${result.error}`
+                                    : 'Response canceled before completion. Retry with the current settings.',
+                    createdAt: Date.now()
+                }
+            ));
         } catch (err) {
-            setMessages(prev => [...prev, {
-                id: Date.now().toString(),
-                role: 'system',
-                text: `Error: ${err}`
-            }]);
+            if (String(err).includes('CONTAINMENT_ACTIVE')) {
+                setMessages(prev => prev.filter(message => message.id !== assistantMessageId));
+                return;
+            }
+            setMessages(prev => updateOrPrependMessageById(
+                prev,
+                assistantMessageId,
+                message => ({
+                    ...message,
+                    isStreaming: false,
+                    text: `Error: ${err}`,
+                    intent: 'what_to_answer'
+                }),
+                {
+                    id: nextMessageId('system'),
+                    role: 'system',
+                    text: `Error: ${err}`,
+                    intent: 'what_to_answer',
+                    createdAt: Date.now()
+                }
+            ));
         } finally {
+            activeIntelligenceStreamingIdsRef.current = clearActiveStreamingIdsByMessageId(
+                activeIntelligenceStreamingIdsRef.current,
+                assistantMessageId,
+            );
             setIsProcessing(false);
         }
-    };
+    }, [attachedContext, setIsExpanded, setIsProcessing, setMessages, setAttachedContext, analytics]);
 
-    const handleFollowUp = async (intent: string = 'rephrase') => {
+    const handleFollowUp = useCallback(async (intent: string = 'rephrase') => {
         setIsExpanded(true);
         setIsProcessing(true);
         analytics.trackCommandExecuted('follow_up_' + intent);
+        const assistantMessageId = nextMessageId('assistant');
+
+        setMessages(prev => prependMessage(prev, {
+            id: assistantMessageId,
+            role: 'system',
+            text: '',
+            intent,
+            isStreaming: true
+        }));
+        activeIntelligenceStreamingIdsRef.current = setActiveStreamingIds(
+            activeIntelligenceStreamingIdsRef.current,
+            getFollowUpStreamKeys(intent),
+            assistantMessageId,
+        );
 
         try {
             await window.electronAPI.generateFollowUp(intent);
         } catch (err) {
-            setMessages(prev => [...prev, {
-                id: Date.now().toString(),
-                role: 'system',
-                text: `Error: ${err}`
-            }]);
+            activeIntelligenceStreamingIdsRef.current = clearActiveStreamingIdsByMessageId(
+                activeIntelligenceStreamingIdsRef.current,
+                assistantMessageId,
+            );
+            setMessages(prev => updateOrPrependMessageById(
+                prev,
+                assistantMessageId,
+                message => ({
+                    ...message,
+                    isStreaming: false,
+                    text: `Error: ${err}`,
+                    intent,
+                }),
+                {
+                    id: nextMessageId('system'),
+                    role: 'system',
+                    text: `Error: ${err}`,
+                    intent,
+                    createdAt: Date.now(),
+                }
+            ));
         } finally {
             setIsProcessing(false);
         }
-    };
+    }, [setIsExpanded, setIsProcessing, setMessages, analytics]);
 
-    const handleRecap = async () => {
+    const handleRecap = useCallback(async () => {
         setIsExpanded(true);
         setIsProcessing(true);
         analytics.trackCommandExecuted('recap');
+        const assistantMessageId = nextMessageId('assistant');
+
+        setMessages(prev => prependMessage(prev, {
+            id: assistantMessageId,
+            role: 'system',
+            text: '',
+            intent: 'recap',
+            isStreaming: true
+        }));
+        activeIntelligenceStreamingIdsRef.current = setActiveStreamingIds(
+            activeIntelligenceStreamingIdsRef.current,
+            RECAP_STREAM_KEYS,
+            assistantMessageId,
+        );
 
         try {
             await window.electronAPI.generateRecap();
         } catch (err) {
-            setMessages(prev => [...prev, {
-                id: Date.now().toString(),
-                role: 'system',
-                text: `Error: ${err}`
-            }]);
+            activeIntelligenceStreamingIdsRef.current = clearActiveStreamingIdsByMessageId(
+                activeIntelligenceStreamingIdsRef.current,
+                assistantMessageId,
+            );
+            setMessages(prev => updateOrPrependMessageById(
+                prev,
+                assistantMessageId,
+                message => ({
+                    ...message,
+                    isStreaming: false,
+                    text: `Error: ${err}`,
+                }),
+                {
+                    id: nextMessageId('system'),
+                    role: 'system',
+                    text: `Error: ${err}`,
+                    intent: 'recap',
+                    createdAt: Date.now(),
+                }
+            ));
         } finally {
             setIsProcessing(false);
         }
-    };
+    }, [setIsExpanded, setIsProcessing, setMessages, analytics]);
 
-    const handleFollowUpQuestions = async () => {
+    const handleFollowUpQuestions = useCallback(async () => {
         setIsExpanded(true);
         setIsProcessing(true);
         analytics.trackCommandExecuted('suggest_questions');
+        const assistantMessageId = nextMessageId('assistant');
+
+        setMessages(prev => prependMessage(prev, {
+            id: assistantMessageId,
+            role: 'system',
+            text: '',
+            intent: 'follow_up_questions',
+            isStreaming: true
+        }));
+        activeIntelligenceStreamingIdsRef.current = setActiveStreamingIds(
+            activeIntelligenceStreamingIdsRef.current,
+            FOLLOW_UP_QUESTIONS_STREAM_KEYS,
+            assistantMessageId,
+        );
 
         try {
             await window.electronAPI.generateFollowUpQuestions();
         } catch (err) {
-            setMessages(prev => [...prev, {
-                id: Date.now().toString(),
-                role: 'system',
-                text: `Error: ${err}`
-            }]);
+            activeIntelligenceStreamingIdsRef.current = clearActiveStreamingIdsByMessageId(
+                activeIntelligenceStreamingIdsRef.current,
+                assistantMessageId,
+            );
+            setMessages(prev => updateOrPrependMessageById(
+                prev,
+                assistantMessageId,
+                message => ({
+                    ...message,
+                    isStreaming: false,
+                    text: `Error: ${err}`,
+                }),
+                {
+                    id: nextMessageId('system'),
+                    role: 'system',
+                    text: `Error: ${err}`,
+                    intent: 'follow_up_questions',
+                    createdAt: Date.now(),
+                }
+            ));
         } finally {
             setIsProcessing(false);
         }
-    };
+    }, [setIsExpanded, setIsProcessing, setMessages, analytics]);
 
 
     // Setup Streaming Listeners
     useEffect(() => {
         const cleanups: (() => void)[] = [];
 
-        // Stream Token
-        cleanups.push(window.electronAPI.onGeminiStreamToken(({ requestId, token }) => {
-            if (requestId && requestId !== activeGeminiRequestIdRef.current) {
-                return;
-            }
-            appendGeminiStreamToken(token, (content) => {
-                setMessages(prev => {
-                    const lastMsg = prev[prev.length - 1];
-                    if (lastMsg && lastMsg.isStreaming && lastMsg.role === 'system') {
-                        const updated = [...prev];
-                        updated[prev.length - 1] = {
-                            ...lastMsg,
-                            text: content,
-                            isCode: content.includes('```') || content.includes('def ') || content.includes('function ')
-                        };
-                        return updated;
-                    }
-                    return prev;
-                });
-            });
-        }));
+        // JIT RAG Stream listeners (for live meeting RAG responses)
+        if (window.electronAPI.onRAGStreamChunk) {
+            cleanups.push(window.electronAPI.onRAGStreamChunk((data: { chunk: string }) => {
+                const targetId = activeRagStreamingIdRef.current;
+                if (!targetId) {
+                    return;
+                }
 
-        // Stream Done
-        cleanups.push(window.electronAPI.onGeminiStreamDone(({ requestId }) => {
-            if (requestId && requestId !== activeGeminiRequestIdRef.current) {
-                return;
-            }
-            activeGeminiRequestIdRef.current = null;
-            const finalContent = getBufferedGeminiContent();
+                setMessages(prev => updateMessageById(
+                    prev,
+                    targetId,
+                    message => {
+                        const nextText = message.text + data.chunk;
+                        return {
+                            ...message,
+                            text: nextText,
+                            isCode: nextText.includes('```')
+                        };
+                    }
+                ));
+            }));
+        }
+
+        if (window.electronAPI.onRAGStreamComplete) {
+            cleanups.push(window.electronAPI.onRAGStreamComplete(() => {
+                const targetId = activeRagStreamingIdRef.current;
+                if (!targetId) {
+                    return;
+                }
+
+                setIsProcessing(false);
+                requestStartTimeRef.current = null;
+
+                setMessages(prev => updateMessageById(
+                    prev,
+                    targetId,
+                    message => ({
+                        ...message,
+                        isStreaming: false
+                    })
+                ));
+
+                activeRagStreamingIdRef.current = null;
+                if (activeGeminiStreamingIdRef.current === targetId) {
+                    activeGeminiStreamingIdRef.current = null;
+                }
+            }));
+        }
+
+        if (window.electronAPI.onRAGStreamError) {
+            cleanups.push(window.electronAPI.onRAGStreamError((data: { error: string }) => {
+                const targetId = activeRagStreamingIdRef.current;
+                if (!targetId) {
+                    return;
+                }
+
+                setIsProcessing(false);
+                requestStartTimeRef.current = null;
+
+                setMessages(prev => updateOrPrependMessageById(
+                    prev,
+                    targetId,
+                    message => ({
+                        ...message,
+                        isStreaming: false,
+                        text: message.text + `\n\n[RAG Error: ${data.error}]`
+                    }),
+                    {
+                        id: nextMessageId('system'),
+                        role: 'system',
+                        text: `❌ RAG Error: ${data.error}`,
+                        createdAt: Date.now()
+                    }
+                ));
+
+                activeRagStreamingIdRef.current = null;
+                if (targetId && activeGeminiStreamingIdRef.current === targetId) {
+                    activeGeminiStreamingIdRef.current = null;
+                }
+            }));
+        }
+
+        return () => cleanups.forEach(fn => fn());
+    }, [currentModel, nextMessageId]); // Ensure tracking captures correct model
+
+    // NAT-036: per-request Gemini stream listener setup
+    const subscribeGeminiStream = (requestId: string, assistantMessageId: string): (() => void) => {
+        const tokenCleanup = window.electronAPI.onGeminiStreamToken(requestId, (token) => {
+            setMessages(prev => updateMessageById(
+                prev,
+                assistantMessageId,
+                message => {
+                    const nextText = message.text + token;
+                    return {
+                        ...message,
+                        text: nextText,
+                        isCode: nextText.includes('```') || nextText.includes('def ') || nextText.includes('function ')
+                    };
+                }
+            ));
+        });
+
+        const doneCleanup = window.electronAPI.onGeminiStreamDone(requestId, () => {
             setIsProcessing(false);
 
-            // Calculate latency if we have a start time
             let latency = 0;
             if (requestStartTimeRef.current) {
                 latency = Date.now() - requestStartTimeRef.current;
                 requestStartTimeRef.current = null;
             }
 
-            // Track Usage
             analytics.trackModelUsed({
                 model_name: currentModel,
                 provider_type: detectProviderType(currentModel),
                 latency_ms: latency
             });
 
-            setMessages(prev => {
-                const lastMsg = prev[prev.length - 1];
-                if (lastMsg && lastMsg.isStreaming) {
-                    const updated = [...prev];
-                    updated[prev.length - 1] = {
-                        ...lastMsg,
-                        text: finalContent || lastMsg.text,
-                        isStreaming: false
-                    };
-                    return updated;
-                }
-                return prev;
-            });
-            resetGeminiStreamBuffer();
-        }));
+            setMessages(prev => updateMessageById(
+                prev,
+                assistantMessageId,
+                message => ({
+                    ...message,
+                    isStreaming: false
+                })
+            ));
 
-        // Stream Error
-        cleanups.push(window.electronAPI.onGeminiStreamError(({ requestId, error }) => {
-            if (requestId && requestId !== activeGeminiRequestIdRef.current) {
-                return;
+            activeGeminiStreamingIdRef.current = null;
+            if (activeRagStreamingIdRef.current === assistantMessageId) {
+                activeRagStreamingIdRef.current = null;
             }
-            activeGeminiRequestIdRef.current = null;
-            resetGeminiStreamBuffer();
+        });
+
+        const errorCleanup = window.electronAPI.onGeminiStreamError(requestId, (error) => {
             setIsProcessing(false);
-            requestStartTimeRef.current = null; // Clear timer on error
-            setMessages(prev => {
-                // Append error to the current message or add new one?
-                // Let's add a new error block if the previous one confusing,
-                // or just update status.
-                // Ideally we want to show the partial response AND the error.
-                const lastMsg = prev[prev.length - 1];
-                if (lastMsg && lastMsg.isStreaming) {
-                    const updated = [...prev];
-                    updated[prev.length - 1] = {
-                        ...lastMsg,
-                        isStreaming: false,
-                        text: lastMsg.text + `\n\n[Error: ${error}]`
-                    };
-                    return updated;
-                }
-                return [...prev, {
-                    id: Date.now().toString(),
+            requestStartTimeRef.current = null;
+
+            setMessages(prev => updateOrPrependMessageById(
+                prev,
+                assistantMessageId,
+                message => ({
+                    ...message,
+                    isStreaming: false,
+                    text: message.text + `\n\n[Error: ${error}]`
+                }),
+                {
+                    id: nextMessageId('system'),
                     role: 'system',
-                    text: `❌ Error: ${error}`
-                }];
-            });
-        }));
-
-        // JIT RAG Stream listeners (for live meeting RAG responses)
-        if (window.electronAPI.onRAGStreamChunk) {
-            cleanups.push(window.electronAPI.onRAGStreamChunk((data: { requestId?: string; chunk: string }) => {
-                if (data.requestId && data.requestId !== activeRagRequestIdRef.current) {
-                    return;
+                    text: `❌ Error: ${error}`,
+                    createdAt: Date.now()
                 }
-                appendRagStreamToken(data.chunk, (content) => {
-                    setMessages(prev => {
-                        const lastMsg = prev[prev.length - 1];
-                        if (lastMsg && lastMsg.isStreaming && lastMsg.role === 'system') {
-                            const updated = [...prev];
-                            updated[prev.length - 1] = {
-                                ...lastMsg,
-                                text: content,
-                                isCode: content.includes('```')
-                            };
-                            return updated;
-                        }
-                        return prev;
-                    });
-                });
-            }));
-        }
+            ));
 
-        if (window.electronAPI.onRAGStreamComplete) {
-            cleanups.push(window.electronAPI.onRAGStreamComplete((data: { requestId?: string }) => {
-                if (data.requestId && data.requestId !== activeRagRequestIdRef.current) {
-                    return;
-                }
-                activeRagRequestIdRef.current = null;
-                const finalContent = getBufferedRagContent();
-                setIsProcessing(false);
-                requestStartTimeRef.current = null;
-                setMessages(prev => {
-                    const lastMsg = prev[prev.length - 1];
-                    if (lastMsg && lastMsg.isStreaming) {
-                        const updated = [...prev];
-                        updated[prev.length - 1] = { ...lastMsg, text: finalContent || lastMsg.text, isStreaming: false };
-                        return updated;
-                    }
-                    return prev;
-                });
-                resetRagStreamBuffer();
-            }));
-        }
+            activeGeminiStreamingIdRef.current = null;
+            if (activeRagStreamingIdRef.current === assistantMessageId) {
+                activeRagStreamingIdRef.current = null;
+            }
+        });
 
-        if (window.electronAPI.onRAGStreamError) {
-            cleanups.push(window.electronAPI.onRAGStreamError((data: { requestId?: string; error: string }) => {
-                if (data.requestId && data.requestId !== activeRagRequestIdRef.current) {
-                    return;
-                }
-                activeRagRequestIdRef.current = null;
-                resetRagStreamBuffer();
-                setIsProcessing(false);
-                requestStartTimeRef.current = null;
-                setMessages(prev => {
-                    const lastMsg = prev[prev.length - 1];
-                    if (lastMsg && lastMsg.isStreaming) {
-                        const updated = [...prev];
-                        updated[prev.length - 1] = {
-                            ...lastMsg,
-                            isStreaming: false,
-                            text: lastMsg.text + `\n\n[RAG Error: ${data.error}]`
-                        };
-                        return updated;
-                    }
-                    return prev;
-                });
-            }));
-        }
-
-        return () => cleanups.forEach(fn => fn());
-    }, [
-        appendGeminiStreamToken,
-        appendRagStreamToken,
-        currentModel,
-        getBufferedGeminiContent,
-        getBufferedRagContent,
-        resetGeminiStreamBuffer,
-        resetRagStreamBuffer,
-    ]); // Ensure tracking captures correct model
-
+        return () => {
+            tokenCleanup();
+            doneCleanup();
+            errorCleanup();
+        };
+    };
 
     const handleAnswerNow = async () => {
+        if (manualFinalizeInFlightRef.current) {
+            return;
+        }
+
+        if (!isManualRecording && isProcessing) {
+            return;
+        }
+
         if (isManualRecording) {
-            // Stop recording - send accumulated voice input to Gemini
-            isRecordingRef.current = false;  // Update ref immediately
+            // Stop recording and give STT providers a short grace window to flush final tokens.
+            // Keep isRecordingRef true during this window so late "user" transcripts are still captured.
+            manualFinalizeInFlightRef.current = true;
             setIsManualRecording(false);
-            setManualTranscript('');  // Clear live preview
-
-            // Send manual finalization signal to STT Providers
-            window.electronAPI.finalizeMicSTT().catch(err => console.error('[NativelyInterface] Failed to send finalizeMicSTT:', err));
-            const nativeAudioStatus = await window.electronAPI.getNativeAudioStatus().catch(() => ({ connected: false }));
-
-            const currentAttachments = attachedContext;
-            setAttachedContext([]); // Clear context immediately on send
-
-            const question = (voiceInputRef.current + (manualTranscriptRef.current ? ' ' + manualTranscriptRef.current : '')).trim();
-            setVoiceInput('');
-            voiceInputRef.current = '';
             setManualTranscript('');
-            manualTranscriptRef.current = '';
-
-            if (!question && currentAttachments.length === 0) {
-                // No voice input and no image
-                setMessages(prev => [...prev, {
-                    id: Date.now().toString(),
-                    role: 'system',
-                    text: nativeAudioStatus.connected
-                        ? '⚠️ No speech detected. Try speaking closer to your microphone.'
-                        : '⚠️ Audio pipeline is disconnected. Start a meeting or fix audio setup before using Answer.'
-                }]);
-                return;
-            }
-
-            // Show user's spoken question
-            setMessages(prev => [...prev, {
-                id: Date.now().toString(),
-                role: 'user',
-                text: question,
-                hasScreenshot: currentAttachments.length > 0,
-                screenshotPreview: currentAttachments[0]?.preview
-            }]);
-
-            // Add placeholder for streaming response
-            setMessages(prev => [...prev, {
-                id: Date.now().toString(),
-                role: 'system',
-                text: '',
-                isStreaming: true
-            }]);
-
-            setIsProcessing(true);
 
             try {
-                let prompt = '';
+                await window.electronAPI.finalizeMicSTT().catch(err => {
+                    console.error('[NativelyInterface] Failed to send finalizeMicSTT:', err);
+                });
 
-                if (currentAttachments.length > 0) {
-                    // Image + Voice Context
-                    prompt = `You are a helper. The user has provided a screenshot and a spoken question/command.
+                await new Promise(resolve => setTimeout(resolve, MANUAL_STT_FINALIZE_GRACE_MS));
+
+                const waitStart = Date.now();
+                while (
+                    !voiceInputRef.current.trim() &&
+                    !manualTranscriptRef.current.trim() &&
+                    Date.now() - waitStart < MANUAL_STT_FINALIZE_MAX_WAIT_MS
+                ) {
+                    await new Promise(resolve => setTimeout(resolve, MANUAL_STT_POLL_INTERVAL_MS));
+                }
+
+                const nativeAudioStatus = await window.electronAPI.getNativeAudioStatus().catch(() => ({ connected: false }));
+
+                const currentAttachments = attachedContext;
+                setAttachedContext([]); // Clear context immediately on send
+
+                const question = (voiceInputRef.current + (manualTranscriptRef.current ? ' ' + manualTranscriptRef.current : '')).trim();
+                isRecordingRef.current = false;
+                setVoiceInput('');
+                voiceInputRef.current = '';
+                setManualTranscript('');
+                manualTranscriptRef.current = '';
+
+                if (!question && currentAttachments.length === 0) {
+                    // No voice input and no image
+                    setMessages(prev => prependMessage(prev, {
+                        id: Date.now().toString(),
+                        role: 'system',
+                        text: nativeAudioStatus.connected
+                            ? '⚠️ No speech detected. Try speaking closer to your microphone.'
+                            : '⚠️ Audio pipeline is disconnected. Start a meeting or fix audio setup before using Answer.'
+                    }));
+                    return;
+                }
+
+                // Show user's spoken question
+                const assistantMessageId = nextMessageId('assistant');
+                setMessages(prev => prependMessage(prev, {
+                    id: nextMessageId('user'),
+                    role: 'user',
+                    text: question,
+                    hasScreenshot: currentAttachments.length > 0,
+                    screenshotPreview: currentAttachments[0]?.preview
+                }));
+
+                // Add placeholder for streaming response
+                setMessages(prev => prependMessage(prev, {
+                    id: assistantMessageId,
+                    role: 'system',
+                    text: '',
+                    isStreaming: true
+                }));
+                activeGeminiStreamingIdRef.current = assistantMessageId;
+                activeRagStreamingIdRef.current = assistantMessageId;
+
+                setIsProcessing(true);
+
+                try {
+                    let prompt = '';
+
+                    if (currentAttachments.length > 0) {
+                        // Image + Voice Context
+                        prompt = `You are a helper. The user has provided a screenshot and a spoken question/command.
 User said: "${question}"
 
 Instructions:
 1. Analyze the screenshot in the context of what the user said.
 2. Provide a direct, helpful answer.
 3. Be concise.`;
-                } else {
-                    // JIT RAG pre-flight: try to use indexed meeting context first
-                    const ragRequestId = createStreamRequestId('rag-live');
-                    resetRagStreamBuffer();
-                    activeRagRequestIdRef.current = ragRequestId;
-                    activeGeminiRequestIdRef.current = null;
-                    const ragResult = await window.electronAPI.ragQueryLive?.(question, ragRequestId);
-                    if (ragResult?.success) {
-                        // JIT RAG handled it — response streamed via rag:stream-chunk events
-                        return;
-                    }
-                    activeRagRequestIdRef.current = null;
+                    } else {
+                        // JIT RAG pre-flight: try to use indexed meeting context first
+                        const ragResult = await window.electronAPI.ragQueryLive?.(question);
+                        if (ragResult?.success) {
+                            // JIT RAG handled it — response streamed via rag:stream-chunk events
+                            return;
+                        }
 
-                    // Voice Only (Smart Extract) — fallback
-                    prompt = `You are a real-time interview assistant. The user just repeated or paraphrased a question from their interviewer.
+                        // Voice Only (Smart Extract) — fallback
+                        prompt = `You are a real-time interview assistant. The user just repeated or paraphrased a question from their interviewer.
 Instructions:
 1. Extract the core question being asked
 2. Provide a clear, concise, and professional answer that the user can say out loud
@@ -1209,43 +1460,55 @@ Instructions:
 7. Format for speaking out loud, not for reading
 
 Provide only the answer, nothing else.`;
-                }
-
-                // Call Streaming API: message = question, context = instructions
-                requestStartTimeRef.current = Date.now();
-                const geminiRequestId = createStreamRequestId('gemini-answer');
-                resetGeminiStreamBuffer();
-                activeGeminiRequestIdRef.current = geminiRequestId;
-                await window.electronAPI.streamGeminiChat(question, currentAttachments.length > 0 ? currentAttachments.map(s => s.path) : undefined, prompt, { skipSystemPrompt: true, requestId: geminiRequestId });
-
-            } catch (err) {
-                // Initial invocation failing (e.g. IPC error before stream starts)
-                setIsProcessing(false);
-                setMessages(prev => {
-                    const last = prev[prev.length - 1];
-                    // If we just added the empty streaming placeholder, remove it or fill it with error
-                    if (last && last.isStreaming && last.text === '') {
-                        return prev.slice(0, -1).concat({
-                            id: Date.now().toString(),
-                            role: 'system',
-                            text: `❌ Error starting stream: ${err}`
-                        });
                     }
-                    return [...prev, {
-                        id: Date.now().toString(),
-                        role: 'system',
-                        text: `❌ Error: ${err}`
-                    }];
-                });
+
+// Call Streaming API: message = question, context = instructions
+      const answerRequestId = crypto.randomUUID();
+      const streamCleanup = subscribeGeminiStream(answerRequestId, assistantMessageId);
+      requestStartTimeRef.current = Date.now();
+      try {
+        await window.electronAPI.streamGeminiChat(question, currentAttachments.length > 0 ? currentAttachments.map(s => s.path) : undefined, prompt, { skipSystemPrompt: true, requestId: answerRequestId });
+      } finally {
+        streamCleanup();
+      }
+
+                } catch (err) {
+                    // Initial invocation failing (e.g. IPC error before stream starts)
+                    setIsProcessing(false);
+                    if (activeGeminiStreamingIdRef.current === assistantMessageId) {
+                        activeGeminiStreamingIdRef.current = null;
+                    }
+                    if (activeRagStreamingIdRef.current === assistantMessageId) {
+                        activeRagStreamingIdRef.current = null;
+                    }
+                    setMessages(prev => updateOrPrependMessageById(
+                        prev,
+                        assistantMessageId,
+                        message => ({
+                            ...message,
+                            isStreaming: false,
+                            text: `❌ Error starting stream: ${err}`
+                        }),
+                        {
+                            id: nextMessageId('system'),
+                            role: 'system',
+                            text: `❌ Error starting stream: ${err}`,
+                            createdAt: Date.now()
+                        }
+                    ));
+                }
+            } finally {
+                isRecordingRef.current = false;
+                manualFinalizeInFlightRef.current = false;
             }
         } else {
             const nativeAudioStatus = await window.electronAPI.getNativeAudioStatus().catch(() => ({ connected: false }));
             if (!nativeAudioStatus.connected) {
-                setMessages(prev => [...prev, {
+                setMessages(prev => prependMessage(prev, {
                     id: Date.now().toString(),
                     role: 'system',
                     text: '⚠️ Audio pipeline is disconnected. Start a meeting or fix audio setup before using Answer.'
-                }]);
+                }));
                 return;
             }
 
@@ -1268,30 +1531,33 @@ Provide only the answer, nothing else.`;
     };
 
     const handleManualSubmit = async () => {
-        if (!inputValue.trim() && attachedContext.length === 0) return;
+        if (isProcessing || (!inputValue.trim() && attachedContext.length === 0)) return;
 
         const userText = inputValue;
         const currentAttachments = attachedContext;
+        const assistantMessageId = nextMessageId('assistant');
 
         // Clear inputs immediately
         setInputValue('');
         setAttachedContext([]);
 
-        setMessages(prev => [...prev, {
-            id: Date.now().toString(),
+        setMessages(prev => prependMessage(prev, {
+            id: nextMessageId('user'),
             role: 'user',
             text: userText || (currentAttachments.length > 0 ? 'Analyze this screenshot' : ''),
             hasScreenshot: currentAttachments.length > 0,
             screenshotPreview: currentAttachments[0]?.preview
-        }]);
+        }));
 
         // Add placeholder for streaming response
-        setMessages(prev => [...prev, {
-            id: Date.now().toString(),
+        setMessages(prev => prependMessage(prev, {
+            id: assistantMessageId,
             role: 'system',
             text: '',
             isStreaming: true
-        }]);
+        }));
+        activeGeminiStreamingIdRef.current = assistantMessageId;
+        activeRagStreamingIdRef.current = assistantMessageId;
 
         setIsExpanded(true);
         setIsProcessing(true);
@@ -1299,47 +1565,50 @@ Provide only the answer, nothing else.`;
         try {
             // JIT RAG pre-flight: try to use indexed meeting context first
             if (currentAttachments.length === 0) {
-                const ragRequestId = createStreamRequestId('rag-manual');
-                resetRagStreamBuffer();
-                activeRagRequestIdRef.current = ragRequestId;
-                activeGeminiRequestIdRef.current = null;
-                const ragResult = await window.electronAPI.ragQueryLive?.(userText || '', ragRequestId);
+                const ragResult = await window.electronAPI.ragQueryLive?.(userText || '');
                 if (ragResult?.success) {
                     // JIT RAG handled it — response streamed via rag:stream-chunk events
                     return;
                 }
-                activeRagRequestIdRef.current = null;
             }
 
-            // Pass imagePath if attached, AND conversation context
-            requestStartTimeRef.current = Date.now();
-            const geminiRequestId = createStreamRequestId('gemini-manual');
-            resetGeminiStreamBuffer();
-            activeGeminiRequestIdRef.current = geminiRequestId;
-            await window.electronAPI.streamGeminiChat(
-                userText || 'Analyze this screenshot',
-                currentAttachments.length > 0 ? currentAttachments.map(s => s.path) : undefined,
-                conversationContext, // Pass context so "answer this" works
-                { requestId: geminiRequestId }
-            );
+// Pass imagePath if attached, AND conversation context
+      const chatRequestId = crypto.randomUUID();
+      const chatStreamCleanup = subscribeGeminiStream(chatRequestId, assistantMessageId);
+      requestStartTimeRef.current = Date.now();
+      try {
+        await window.electronAPI.streamGeminiChat(
+          userText || 'Analyze this screenshot',
+          currentAttachments.length > 0 ? currentAttachments.map(s => s.path) : undefined,
+          conversationContext,
+          { requestId: chatRequestId }
+        );
+      } finally {
+        chatStreamCleanup();
+      }
         } catch (err) {
             setIsProcessing(false);
-            setMessages(prev => {
-                const last = prev[prev.length - 1];
-                if (last && last.isStreaming && last.text === '') {
-                    // remove the empty placeholder
-                    return prev.slice(0, -1).concat({
-                        id: Date.now().toString(),
-                        role: 'system',
-                        text: `❌ Error starting stream: ${err}`
-                    });
-                }
-                return [...prev, {
-                    id: Date.now().toString(),
+            if (activeGeminiStreamingIdRef.current === assistantMessageId) {
+                activeGeminiStreamingIdRef.current = null;
+            }
+            if (activeRagStreamingIdRef.current === assistantMessageId) {
+                activeRagStreamingIdRef.current = null;
+            }
+            setMessages(prev => updateOrPrependMessageById(
+                prev,
+                assistantMessageId,
+                message => ({
+                    ...message,
+                    isStreaming: false,
+                    text: `❌ Error starting stream: ${err}`
+                }),
+                {
+                    id: nextMessageId('system'),
                     role: 'system',
-                    text: `❌ Error: ${err}`
-                }];
-            });
+                    text: `❌ Error starting stream: ${err}`,
+                    createdAt: Date.now()
+                }
+            ));
         }
     };
 
@@ -1350,9 +1619,17 @@ Provide only the answer, nothing else.`;
 
 
 
-    const renderMessageText = (msg: Message) => {
+    // 🚀 PERFORMANCE OPTIMIZATION: Memoize expensive message rendering to prevent unnecessary re-renders
+    const renderMessageText = useCallback((msg: Message) => {
         if (msg.intent === 'what_to_answer') {
-            return <ConsciousModeAnswer text={msg.text} isStreaming={msg.isStreaming} />;
+            const consciousModeAnswer = parseConsciousModeAnswer(msg.text);
+            if (consciousModeAnswer) {
+                return <ConsciousModeAnswer text={msg.text} isStreaming={msg.isStreaming} />;
+            }
+
+            if (msg.isStreaming) {
+                return <ConsciousModeAnswer text={msg.text} isStreaming />;
+            }
         }
 
         // Code-containing messages get special styling
@@ -1366,7 +1643,7 @@ Provide only the answer, nothing else.`;
                         <Code className="w-3.5 h-3.5" />
                         <span>Code Solution</span>
                     </div>
-                    <div className="space-y-2 text-slate-200 text-[13px] leading-relaxed">
+                    <div className="space-y-2 text-slate-200 text-[15.25px] leading-[1.72]">
                         {parts.map((part, i) => {
                             if (part.startsWith('```')) {
                                 const match = part.match(/```(\w+)?\n?([\s\S]*?)```/);
@@ -1388,15 +1665,15 @@ Provide only the answer, nothing else.`;
                                                     customStyle={{
                                                         margin: 0,
                                                         borderRadius: 0,
-                                                        fontSize: '13px',
-                                                        lineHeight: '1.6',
+                                                        fontSize: '15.25px',
+                                                        lineHeight: '1.72',
                                                         background: 'transparent',
                                                         padding: '16px',
                                                         fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace'
                                                     }}
                                                     wrapLongLines={true}
                                                     showLineNumbers={true}
-                                                    lineNumberStyle={{ minWidth: '2.5em', paddingRight: '1.2em', color: 'rgba(255,255,255,0.2)', textAlign: 'right', fontSize: '11px' }}
+                                                    lineNumberStyle={{ minWidth: '2.5em', paddingRight: '1.2em', color: 'rgba(255,255,255,0.2)', textAlign: 'right', fontSize: '12.75px' }}
                                                 >
                                                     {code}
                                                 </SyntaxHighlighter>
@@ -1421,7 +1698,7 @@ Provide only the answer, nothing else.`;
                                             h1: ({ node, ...props }: any) => <h1 className="text-lg font-bold text-white mb-2 mt-3" {...props} />,
                                             h2: ({ node, ...props }: any) => <h2 className="text-base font-bold text-white mb-2 mt-3" {...props} />,
                                             h3: ({ node, ...props }: any) => <h3 className="text-sm font-bold text-white mb-1 mt-2" {...props} />,
-                                            code: ({ node, ...props }: any) => <code className="bg-slate-700/50 rounded px-1 py-0.5 text-xs font-mono text-purple-200 whitespace-pre-wrap" {...props} />,
+                                            code: ({ node, ...props }: any) => <code className="bg-slate-700/50 rounded px-1 py-0.5 text-[15px] font-mono text-purple-200 whitespace-pre-wrap" {...props} />,
                                             blockquote: ({ node, ...props }: any) => <blockquote className="border-l-2 border-purple-500/50 pl-3 italic text-slate-400 my-2" {...props} />,
                                             a: ({ node, ...props }: any) => <a className="text-blue-400 hover:text-blue-300 hover:underline" target="_blank" rel="noopener noreferrer" {...props} />,
                                         }}
@@ -1444,15 +1721,18 @@ Provide only the answer, nothing else.`;
                         <MessageSquare className="w-3.5 h-3.5" />
                         <span>Shortened</span>
                     </div>
-                    <div className="text-slate-200 text-[13px] leading-relaxed markdown-content">
+                    <div className="text-slate-200 text-[15.25px] leading-[1.72] markdown-content">
                         <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]} components={{
                             p: ({ node, ...props }: any) => <p className="mb-2 last:mb-0" {...props} />,
                             strong: ({ node, ...props }: any) => <strong className="font-bold text-cyan-100" {...props} />,
                             ul: ({ node, ...props }: any) => <ul className="list-disc ml-4 mb-2" {...props} />,
                             li: ({ node, ...props }: any) => <li className="pl-1" {...props} />,
-                        }}>
-                            {msg.text}
-                        </ReactMarkdown>
+                            h1: ({ node, ...props }: any) => <h1 className="text-lg font-bold text-cyan-100 mb-2 mt-3" {...props} />,
+                            h2: ({ node, ...props }: any) => <h2 className="text-base font-bold text-cyan-100 mb-2 mt-3" {...props} />,
+                            h3: ({ node, ...props }: any) => <h3 className="text-sm font-bold text-cyan-100 mb-1 mt-2" {...props} />,
+                            code: ({ node, ...props }: any) => <code className="bg-cyan-700/30 rounded px-1 py-0.5 text-[15px] font-mono text-cyan-200" {...props} />,
+                            a: ({ node, ...props }: any) => <a className="underline hover:opacity-80" target="_blank" rel="noopener noreferrer" {...props} />,
+                        }}>{msg.text}</ReactMarkdown>
                     </div>
                 </div>
             );
@@ -1461,19 +1741,46 @@ Provide only the answer, nothing else.`;
         if (msg.intent === 'recap') {
             return (
                 <div className="bg-white/5 border border-white/10 rounded-lg p-3 my-1">
-                    <div className="flex items-center gap-2 mb-2 text-indigo-300 font-semibold text-xs uppercase tracking-wide">
+                    <div className="flex items-center gap-2 mb-2 text-emerald-300 font-semibold text-xs uppercase tracking-wide">
                         <RefreshCw className="w-3.5 h-3.5" />
                         <span>Recap</span>
                     </div>
-                    <div className="text-slate-200 text-[13px] leading-relaxed markdown-content">
+                    <div className="text-slate-200 text-[15.25px] leading-[1.72] markdown-content">
                         <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]} components={{
                             p: ({ node, ...props }: any) => <p className="mb-2 last:mb-0" {...props} />,
-                            strong: ({ node, ...props }: any) => <strong className="font-bold text-indigo-100" {...props} />,
+                            strong: ({ node, ...props }: any) => <strong className="font-bold text-emerald-100" {...props} />,
                             ul: ({ node, ...props }: any) => <ul className="list-disc ml-4 mb-2" {...props} />,
                             li: ({ node, ...props }: any) => <li className="pl-1" {...props} />,
-                        }}>
-                            {msg.text}
-                        </ReactMarkdown>
+                            h1: ({ node, ...props }: any) => <h1 className="text-lg font-bold text-emerald-100 mb-2 mt-3" {...props} />,
+                            h2: ({ node, ...props }: any) => <h2 className="text-base font-bold text-emerald-100 mb-2 mt-3" {...props} />,
+                            h3: ({ node, ...props }: any) => <h3 className="text-sm font-bold text-emerald-100 mb-1 mt-2" {...props} />,
+                            code: ({ node, ...props }: any) => <code className="bg-emerald-700/30 rounded px-1 py-0.5 text-[15px] font-mono text-emerald-200" {...props} />,
+                            a: ({ node, ...props }: any) => <a className="underline hover:opacity-80" target="_blank" rel="noopener noreferrer" {...props} />,
+                        }}>{msg.text}</ReactMarkdown>
+                    </div>
+                </div>
+            );
+        }
+
+        if (msg.intent === 'follow_up') {
+            return (
+                <div className="bg-white/5 border border-white/10 rounded-lg p-3 my-1">
+                    <div className="flex items-center gap-2 mb-2 text-yellow-300 font-semibold text-xs uppercase tracking-wide">
+                        <Sparkles className="w-3.5 h-3.5" />
+                        <span>Follow-Up</span>
+                    </div>
+                    <div className="text-slate-200 text-[15.25px] leading-[1.72] markdown-content">
+                        <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]} components={{
+                            p: ({ node, ...props }: any) => <p className="mb-2 last:mb-0" {...props} />,
+                            strong: ({ node, ...props }: any) => <strong className="font-bold text-yellow-100" {...props} />,
+                            ul: ({ node, ...props }: any) => <ul className="list-disc ml-4 mb-2" {...props} />,
+                            li: ({ node, ...props }: any) => <li className="pl-1" {...props} />,
+                            h1: ({ node, ...props }: any) => <h1 className="text-lg font-bold text-yellow-100 mb-2 mt-3" {...props} />,
+                            h2: ({ node, ...props }: any) => <h2 className="text-base font-bold text-yellow-100 mb-2 mt-3" {...props} />,
+                            h3: ({ node, ...props }: any) => <h3 className="text-sm font-bold text-yellow-100 mb-1 mt-2" {...props} />,
+                            code: ({ node, ...props }: any) => <code className="bg-yellow-700/30 rounded px-1 py-0.5 text-[15px] font-mono text-yellow-200" {...props} />,
+                            a: ({ node, ...props }: any) => <a className="underline hover:opacity-80" target="_blank" rel="noopener noreferrer" {...props} />,
+                        }}>{msg.text}</ReactMarkdown>
                     </div>
                 </div>
             );
@@ -1482,17 +1789,92 @@ Provide only the answer, nothing else.`;
         if (msg.intent === 'follow_up_questions') {
             return (
                 <div className="bg-white/5 border border-white/10 rounded-lg p-3 my-1">
-                    <div className="flex items-center gap-2 mb-2 text-[#FFD60A] font-semibold text-xs uppercase tracking-wide">
+                    <div className="flex items-center gap-2 mb-2 text-orange-300 font-semibold text-xs uppercase tracking-wide">
                         <HelpCircle className="w-3.5 h-3.5" />
-                        <span>Follow-Up Questions</span>
+                        <span>Questions</span>
                     </div>
-                    <div className="text-slate-200 text-[13px] leading-relaxed markdown-content">
-                        <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]} components={{
-                            p: ({ node, ...props }: any) => <p className="mb-2 last:mb-0" {...props} />,
-                            strong: ({ node, ...props }: any) => <strong className="font-bold text-[#FFF9C4]" {...props} />,
-                            ul: ({ node, ...props }: any) => <ul className="list-disc ml-4 mb-2" {...props} />,
-                            li: ({ node, ...props }: any) => <li className="pl-1" {...props} />,
-                        }}>
+                    <div className="text-slate-200 text-[15.25px] leading-[1.72]">
+                        {/* Extract bullet point list for questions */}
+                        {msg.text.split('\n').filter(line => line.trim().startsWith('•')).map((question, i) => (
+                            <div 
+                                key={i}
+                                className="mb-3 last:mb-0 p-2.5 bg-white/5 rounded-lg border border-white/5 hover:bg-white/10 cursor-pointer transition-colors"
+                                onClick={() => {
+                                    const questionText = question.replace(/^•\s*/, '');
+                                    // Handle question click
+                                    console.log('Question clicked:', questionText);
+                                }}
+                            >
+                                <div className="flex items-start gap-2">
+                                    <span className="text-orange-400 font-bold text-sm mt-0.5">Q:</span>
+                                    <span className="text-slate-200 text-[15px] leading-relaxed">{question.replace(/^•\s*/, '')}</span>
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            );
+        }
+
+        // Follow-up questions as clickable pills
+        if (msg.intent === 'follow_up_questions' && msg.role === 'system') {
+            // Extract individual questions
+            const questions = msg.text.split('\n').filter(line => line.trim().startsWith('•')).map(q => q.replace(/^•\s*/, ''));
+
+            return (
+                <div className="bg-white/5 border border-white/10 rounded-lg p-3 my-1">
+                    <div className="flex items-center gap-2 mb-2 text-orange-300 font-semibold text-xs uppercase tracking-wide">
+                        <HelpCircle className="w-3.5 h-3.5" />
+                        <span>Follow-up Questions</span>
+                    </div>
+                    <div className="space-y-2">
+                        {questions.map((question, i) => (
+                            <button
+                                key={i}
+                                className="w-full text-left p-2.5 bg-white/5 rounded-lg border border-white/5 hover:bg-white/10 transition-colors group"
+                                onClick={() => {
+                                    // Handle question click - trigger what to say with this question
+                                    console.log('Follow-up question clicked:', question);
+                                }}
+                            >
+                                <div className="flex items-start gap-2">
+                                    <span className="text-orange-400 font-bold text-sm mt-0.5">Q:</span>
+                                    <span className="text-slate-200 text-[15px] leading-relaxed group-hover:text-white">{question}</span>
+                                </div>
+                            </button>
+                        ))}
+                    </div>
+                </div>
+            );
+        }
+
+        if (msg.intent === 'answer_now') {
+            return (
+                <div className="bg-white/5 border border-white/10 rounded-lg p-3 my-1">
+                    <div className="flex items-center gap-2 mb-2 text-blue-300 font-semibold text-xs uppercase tracking-wide">
+                        <ArrowUp className="w-3.5 h-3.5" />
+                        <span>Answer Now</span>
+                    </div>
+
+                    <div className="text-slate-200 text-[15.25px] leading-[1.72] markdown-content">
+                        <ReactMarkdown
+                            remarkPlugins={[remarkGfm, remarkMath]}
+                            rehypePlugins={[rehypeKatex]}
+                            components={{
+                                p: ({ node, ...props }: any) => <p className="mb-2 last:mb-0" {...props} />,
+                                strong: ({ node, ...props }: any) => <strong className="font-bold text-emerald-100" {...props} />,
+                                em: ({ node, ...props }: any) => <em className="italic text-emerald-200/80" {...props} />,
+                                ul: ({ node, ...props }: any) => <ul className="list-disc ml-4 mb-2 space-y-1" {...props} />,
+                                ol: ({ node, ...props }: any) => <ol className="list-decimal ml-4 mb-2 space-y-1" {...props} />,
+                                li: ({ node, ...props }: any) => <li className="pl-1" {...props} />,
+                                h1: ({ node, ...props }: any) => <h1 className="text-lg font-bold text-emerald-100 mb-2 mt-3" {...props} />,
+                                h2: ({ node, ...props }: any) => <h2 className="text-base font-bold text-emerald-100 mb-2 mt-3" {...props} />,
+                                h3: ({ node, ...props }: any) => <h3 className="text-sm font-bold text-emerald-100 mb-1 mt-2" {...props} />,
+                                code: ({ node, ...props }: any) => <code className="bg-emerald-700/30 rounded px-1 py-0.5 text-[15px] font-mono text-emerald-200" {...props} />,
+                                blockquote: ({ node, ...props }: any) => <blockquote className="border-l-2 border-emerald-500/50 pl-3 italic text-emerald-300/70 my-2" {...props} />,
+                                a: ({ node, ...props }: any) => <a className="underline hover:opacity-80" target="_blank" rel="noopener noreferrer" {...props} />,
+                            }}
+                        >
                             {msg.text}
                         </ReactMarkdown>
                     </div>
@@ -1500,106 +1882,24 @@ Provide only the answer, nothing else.`;
             );
         }
 
-        if (msg.intent === 'what_to_answer') {
-            // Split text by code blocks (Handle unclosed blocks at EOF)
-            const parts = msg.text.split(/(```[\s\S]*?(?:```|$))/g);
-
-            return (
-                <div className="bg-white/5 border border-white/10 rounded-lg p-3 my-1">
-                    <div className="flex items-center gap-2 mb-2 text-emerald-400 font-semibold text-xs uppercase tracking-wide">
-                        <span>Say this</span>
-                    </div>
-                    <div className="text-slate-100 text-[14px] leading-relaxed">
-                        {parts.map((part, i) => {
-                            if (part.startsWith('```')) {
-                                // Robust matching: handles unclosed blocks for streaming (```...$)
-                                const match = part.match(/```(\w*)\s+([\s\S]*?)(?:```|$)/);
-
-                                // Fallback logic: if it starts with ticks, treat as code (even if unclosed)
-                                if (match || part.startsWith('```')) {
-                                    const lang = (match && match[1]) ? match[1] : 'python';
-                                    let code = '';
-
-                                    if (match && match[2]) {
-                                        code = match[2].trim();
-                                    } else {
-                                        // Manual strip if regex failed
-                                        code = part.replace(/^```\w*\s*/, '').replace(/```$/, '').trim();
-                                    }
-
-                                    return (
-                                        <div key={i} className="my-3 rounded-xl overflow-hidden border border-white/[0.08] shadow-lg bg-zinc-800/60 backdrop-blur-md">
-                                            {/* Minimalist Apple Header */}
-                                            <div className="bg-white/[0.04] px-3 py-1.5 border-b border-white/[0.08]">
-                                                <span className="text-[10px] uppercase tracking-widest font-semibold text-white/40 font-mono">
-                                                    {lang || 'CODE'}
-                                                </span>
-                                            </div>
-
-                                            <div className="bg-transparent">
-                                                <SyntaxHighlighter
-                                                    language={lang}
-                                                    style={vscDarkPlus}
-                                                    customStyle={{
-                                                        margin: 0,
-                                                        borderRadius: 0,
-                                                        fontSize: '13px',
-                                                        lineHeight: '1.6',
-                                                        background: 'transparent',
-                                                        padding: '16px',
-                                                        fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace'
-                                                    }}
-                                                    wrapLongLines={true}
-                                                    showLineNumbers={true}
-                                                    lineNumberStyle={{ minWidth: '2.5em', paddingRight: '1.2em', color: 'rgba(255,255,255,0.2)', textAlign: 'right', fontSize: '11px' }}
-                                                >
-                                                    {code}
-                                                </SyntaxHighlighter>
-                                            </div>
-                                        </div>
-                                    );
-                                }
-                            }
-                            // Regular text - Render Markdown
-                            return (
-                                <div key={i} className="markdown-content">
-                                    <ReactMarkdown
-                                        remarkPlugins={[remarkGfm, remarkMath]}
-                                        rehypePlugins={[rehypeKatex]}
-                                        components={{
-                                            p: ({ node, ...props }: any) => <p className="mb-2 last:mb-0" {...props} />,
-                                            strong: ({ node, ...props }: any) => <strong className="font-bold text-emerald-100" {...props} />,
-                                            em: ({ node, ...props }: any) => <em className="italic text-emerald-200/80" {...props} />,
-                                            ul: ({ node, ...props }: any) => <ul className="list-disc ml-4 mb-2 space-y-1" {...props} />,
-                                            ol: ({ node, ...props }: any) => <ol className="list-decimal ml-4 mb-2 space-y-1" {...props} />,
-                                            li: ({ node, ...props }: any) => <li className="pl-1" {...props} />,
-                                        }}
-                                    >
-                                        {part}
-                                    </ReactMarkdown>
-                                </div>
-                            );
-                        })}
-                    </div>
-                </div>
-            );
-        }
-
-        // Standard Text Messages (e.g. from User or Interviewer)
-        // We still want basic markdown support here too
+        // Regular messages with Markdown support
         return (
-            <div className="markdown-content">
+            <div className="text-slate-200 text-[15.25px] leading-[1.72] markdown-content">
                 <ReactMarkdown
                     remarkPlugins={[remarkGfm, remarkMath]}
                     rehypePlugins={[rehypeKatex]}
                     components={{
-                        p: ({ node, ...props }: any) => <p className="mb-2 last:mb-0 whitespace-pre-wrap" {...props} />,
-                        strong: ({ node, ...props }: any) => <strong className="font-bold opacity-100" {...props} />,
-                        em: ({ node, ...props }: any) => <em className="italic opacity-90" {...props} />,
+                        p: ({ node, ...props }: any) => <p className="mb-2 last:mb-0" {...props} />,
+                        strong: ({ node, ...props }: any) => <strong className="font-bold text-emerald-100" {...props} />,
+                        em: ({ node, ...props }: any) => <em className="italic text-emerald-200/80" {...props} />,
                         ul: ({ node, ...props }: any) => <ul className="list-disc ml-4 mb-2 space-y-1" {...props} />,
                         ol: ({ node, ...props }: any) => <ol className="list-decimal ml-4 mb-2 space-y-1" {...props} />,
                         li: ({ node, ...props }: any) => <li className="pl-1" {...props} />,
-                        code: ({ node, ...props }: any) => <code className="bg-black/20 rounded px-1 py-0.5 text-xs font-mono" {...props} />,
+                        h1: ({ node, ...props }: any) => <h1 className="text-lg font-bold text-emerald-100 mb-2 mt-3" {...props} />,
+                        h2: ({ node, ...props }: any) => <h2 className="text-base font-bold text-emerald-100 mb-2 mt-3" {...props} />,
+                        h3: ({ node, ...props }: any) => <h3 className="text-sm font-bold text-emerald-100 mb-1 mt-2" {...props} />,
+                        code: ({ node, ...props }: any) => <code className="bg-emerald-700/30 rounded px-1 py-0.5 text-[15px] font-mono text-emerald-200" {...props} />,
+                        blockquote: ({ node, ...props }: any) => <blockquote className="border-l-2 border-emerald-500/50 pl-3 italic text-emerald-300/70 my-2" {...props} />,
                         a: ({ node, ...props }: any) => <a className="underline hover:opacity-80" target="_blank" rel="noopener noreferrer" {...props} />,
                     }}
                 >
@@ -1607,7 +1907,7 @@ Provide only the answer, nothing else.`;
                 </ReactMarkdown>
             </div>
         );
-    };
+    }, []); // No dependencies - this function is pure and uses only its msg parameter
 
 
     // Keyboard Shortcuts
@@ -1697,11 +1997,11 @@ Provide only the answer, nothing else.`;
                     handleScreenshotAttach(data as { path: string; preview: string });
                 }
             } catch (err) {
-                setMessages(prev => [...prev, {
+                setMessages(prev => prependMessage(prev, {
                     id: Date.now().toString(),
                     role: 'system',
                     text: 'Unable to capture screenshot. Check Screen Recording permission in macOS Settings and try again.'
-                }]);
+                }));
                 console.error("Error triggering screenshot:", err);
             }
         },
@@ -1712,11 +2012,11 @@ Provide only the answer, nothing else.`;
                     handleScreenshotAttach(data as { path: string; preview: string });
                 }
             } catch (err) {
-                setMessages(prev => [...prev, {
+                setMessages(prev => prependMessage(prev, {
                     id: Date.now().toString(),
                     role: 'system',
                     text: 'Unable to capture area screenshot. Check Screen Recording permission in macOS Settings and try again.'
-                }]);
+                }));
                 console.error("Error triggering selective screenshot:", err);
             }
         }
@@ -1743,11 +2043,11 @@ Provide only the answer, nothing else.`;
                     handleScreenshotAttach(data as { path: string; preview: string });
                 }
             } catch (err) {
-                setMessages(prev => [...prev, {
+                setMessages(prev => prependMessage(prev, {
                     id: Date.now().toString(),
                     role: 'system',
                     text: 'Unable to capture screenshot. Check Screen Recording permission in macOS Settings and try again.'
-                }]);
+                }));
                 console.error("Error triggering screenshot:", err);
             }
         },
@@ -1758,11 +2058,11 @@ Provide only the answer, nothing else.`;
                     handleScreenshotAttach(data as { path: string; preview: string });
                 }
             } catch (err) {
-                setMessages(prev => [...prev, {
+                setMessages(prev => prependMessage(prev, {
                     id: Date.now().toString(),
                     role: 'system',
                     text: 'Unable to capture area screenshot. Check Screen Recording permission in macOS Settings and try again.'
-                }]);
+                }));
                 console.error("Error triggering selective screenshot:", err);
             }
         }
@@ -1801,11 +2101,14 @@ Provide only the answer, nothing else.`;
     }, [isShortcutPressed]);
 
     useEffect(() => {
-        const unsubscribe = window.electronAPI?.onGlobalShortcutAction?.((actionId) => {
+        const unsubscribe = onGlobalShortcutAction?.((actionId) => {
             if (actionId === 'chat:scrollUp') {
                 scrollContainerRef.current?.scrollBy({ top: -100, behavior: 'smooth' });
             } else if (actionId === 'chat:scrollDown') {
                 scrollContainerRef.current?.scrollBy({ top: 100, behavior: 'smooth' });
+            } else if (actionId === 'general:process-screenshots') {
+                // STEALTH: Cmd+Enter is now a global shortcut — handle it here
+                handlersRef.current.handleWhatToSay();
             }
         });
 
@@ -1854,49 +2157,64 @@ Provide only the answer, nothing else.`;
 
                             {/* Chat History - Only show if there are messages OR active states */}
                             {(messages.length > 0 || isManualRecording || isProcessing) && (
-                                <div ref={scrollContainerRef} className="flex-1 overflow-y-auto p-4 space-y-3 no-drag scroll-smooth custom-scrollbar" style={{ scrollbarWidth: 'thin', scrollBehavior: 'smooth', WebkitOverflowScrolling: 'touch', overscrollBehavior: 'contain', maxHeight: `${chatViewportHeight}px` }}>
-                                    {messages.map((msg) => (
-                                        <div key={msg.id} data-autoscroll-message-id={msg.id} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'} animate-fade-in-up`}>
-                                            <div className={`
-                      ${msg.role === 'user' ? 'max-w-[72.25%] px-[13.6px] py-[10.2px]' : 'max-w-[85%] px-4 py-3'} text-[14px] leading-relaxed relative group whitespace-pre-wrap
+                                <div ref={scrollContainerRef} className="flex-1 overflow-y-auto p-4 space-y-3 no-drag scroll-smooth custom-scrollbar flex flex-col" style={{ scrollbarWidth: 'thin', scrollBehavior: 'smooth', WebkitOverflowScrolling: 'touch', overscrollBehavior: 'contain', maxHeight: `${chatViewportHeight}px` }}>
+                                    <AnimatePresence initial={false}>
+                                        {messages.map((msg) => (
+                                            <motion.div
+                                                key={msg.id}
+                                                data-autoscroll-message-id={msg.id}
+                                                initial={{ opacity: 0, y: -8 }}
+                                                animate={{ opacity: 1, y: 0 }}
+                                                exit={{ opacity: 0, y: -4 }}
+                                                transition={{
+                                                    opacity: { duration: 0.12, ease: [0.22, 1, 0.36, 1] },
+                                                    y: { duration: 0.16, ease: [0.22, 1, 0.36, 1] },
+                                                    layout: { duration: 0.18, ease: [0.22, 1, 0.36, 1] }
+                                                }}
+                                                layout="position"
+                                                className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
+                                            >
+                                                <div className={`
+                      ${msg.role === 'user' ? 'max-w-[72.25%] px-[13.6px] py-[10.2px]' : 'max-w-[85%] px-4 py-3'} text-[16.5px] leading-[1.72] relative group whitespace-pre-wrap
                       ${msg.role === 'user'
-                                                    ? 'bg-blue-600/20 backdrop-blur-md border border-blue-500/30 text-blue-100 rounded-[20px] rounded-tr-[4px] shadow-sm font-medium'
-                                                    : ''
-                                                }
+                                                        ? 'bg-blue-600/20 backdrop-blur-md border border-blue-500/30 text-blue-100 rounded-[20px] rounded-tr-[4px] shadow-sm font-medium'
+                                                        : ''
+                                                    }
                       ${msg.role === 'system'
-                                                    ? 'text-slate-200 font-normal'
-                                                    : ''
-                                                }
+                                                        ? 'text-slate-200 font-normal'
+                                                        : ''
+                                                    }
                       ${msg.role === 'interviewer'
-                                                    ? 'text-white/40 italic pl-0 text-[13px]'
-                                                    : ''
-                                                }
+                                                        ? 'text-white/40 italic pl-0 text-[13px]'
+                                                        : ''
+                                                    }
                     `}>
-                                                {msg.role === 'interviewer' && (
-                                                    <div className="flex items-center gap-1.5 mb-1 text-[10px] text-slate-600 font-medium uppercase tracking-wider">
-                                                        Interviewer
-                                                        {msg.isStreaming && <span className="w-1 h-1 bg-green-500 rounded-full animate-pulse" />}
-                                                    </div>
-                                                )}
-                                                {msg.role === 'user' && msg.hasScreenshot && (
-                                                    <div className="flex items-center gap-1 text-[10px] opacity-70 mb-1 border-b border-white/10 pb-1">
-                                                        <Image className="w-2.5 h-2.5" />
-                                                        <span>Screenshot attached</span>
-                                                    </div>
-                                                )}
-                                                {msg.role === 'system' && !msg.isStreaming && (
-                                                    <button
-                                                        onClick={() => handleCopy(msg.text)}
-                                                        className="absolute top-2 right-2 p-1.5 bg-black/40 hover:bg-black/60 text-slate-400 hover:text-white rounded-md opacity-0 group-hover:opacity-100 transition-opacity"
-                                                        title="Copy to clipboard"
-                                                    >
-                                                        <Copy className="w-3.5 h-3.5" />
-                                                    </button>
-                                                )}
-                                                {renderMessageText(msg)}
-                                            </div>
-                                        </div>
-                                    ))}
+                                                    {msg.role === 'interviewer' && (
+                                                        <div className="flex items-center gap-1.5 mb-1 text-[10px] text-slate-600 font-medium uppercase tracking-wider">
+                                                            Interviewer
+                                                            {msg.isStreaming && <span className="w-1 h-1 bg-green-500 rounded-full animate-pulse" />}
+                                                        </div>
+                                                    )}
+                                                    {msg.role === 'user' && msg.hasScreenshot && (
+                                                        <div className="flex items-center gap-1 text-[10px] opacity-70 mb-1 border-b border-white/10 pb-1">
+                                                            <Image className="w-2.5 h-2.5" />
+                                                            <span>Screenshot attached</span>
+                                                        </div>
+                                                    )}
+                                                    {msg.role === 'system' && !msg.isStreaming && (
+                                                        <button
+                                                            onClick={() => handleCopy(msg.text)}
+                                                            className="absolute top-2 right-2 p-1.5 bg-black/40 hover:bg-black/60 text-slate-400 hover:text-white rounded-md opacity-0 group-hover:opacity-100 transition-opacity"
+                                                            title="Copy to clipboard"
+                                                        >
+                                                            <Copy className="w-3.5 h-3.5" />
+                                                        </button>
+                                                    )}
+                                                    {renderMessageText(msg)}
+                                                </div>
+                                            </motion.div>
+                                        ))}
+                                    </AnimatePresence>
 
                                     {/* Active Recording State with Live Transcription */}
                                     {isManualRecording && (

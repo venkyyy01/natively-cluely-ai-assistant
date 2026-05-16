@@ -18,6 +18,24 @@
 use std::time::{Duration, Instant};
 use webrtc_vad::{SampleRate as VadSampleRate, Vad, VadMode};
 
+fn vad_mode_label(mode: &VadMode) -> &'static str {
+    match mode {
+        VadMode::Quality => "Quality",
+        VadMode::LowBitrate => "LowBitrate",
+        VadMode::Aggressive => "Aggressive",
+        VadMode::VeryAggressive => "VeryAggressive",
+    }
+}
+
+fn vad_mode_value(mode: &VadMode) -> VadMode {
+    match mode {
+        VadMode::Quality => VadMode::Quality,
+        VadMode::LowBitrate => VadMode::LowBitrate,
+        VadMode::Aggressive => VadMode::Aggressive,
+        VadMode::VeryAggressive => VadMode::VeryAggressive,
+    }
+}
+
 /// Configuration for silence suppression
 /// Optimized for low latency with adaptive threshold
 pub struct SilenceSuppressionConfig {
@@ -44,6 +62,10 @@ pub struct SilenceSuppressionConfig {
     /// Native sample rate of the audio being processed (e.g. 48000)
     /// Used to calculate decimation ratio for 16kHz VAD input.
     pub native_sample_rate: u32,
+
+    /// WebRTC VAD aggressiveness. Remote/system audio needs a more permissive
+    /// mode than a live microphone to avoid dropping compressed speech.
+    pub vad_mode: VadMode,
 }
 
 impl Default for SilenceSuppressionConfig {
@@ -56,6 +78,7 @@ impl Default for SilenceSuppressionConfig {
             adaptive_min_floor: 20.0,
             ema_alpha: 0.02,
             native_sample_rate: 48000,
+            vad_mode: VadMode::Aggressive,
         }
     }
 }
@@ -71,6 +94,7 @@ impl SilenceSuppressionConfig {
             adaptive_min_floor: 10.0,
             ema_alpha: 0.02,
             native_sample_rate: 48000,
+            vad_mode: VadMode::LowBitrate,
         }
     }
 
@@ -84,6 +108,7 @@ impl SilenceSuppressionConfig {
             adaptive_min_floor: 20.0,
             ema_alpha: 0.02,
             native_sample_rate: 48000,
+            vad_mode: VadMode::Aggressive,
         }
     }
 }
@@ -133,17 +158,20 @@ impl SilenceSuppressor {
         let now = Instant::now();
         let initial_threshold = config.speech_threshold_rms;
         let decimation_factor = config.native_sample_rate as f64 / 16000.0;
+        let vad_mode_name = vad_mode_label(&config.vad_mode);
 
-        let vad = Vad::new_with_rate_and_mode(VadSampleRate::Rate16kHz, VadMode::Aggressive);
+        let vad =
+            Vad::new_with_rate_and_mode(VadSampleRate::Rate16kHz, vad_mode_value(&config.vad_mode));
 
         println!(
             "[SilenceSuppressor] Created: threshold={} (adaptive), hangover={}ms, \
-             keepalive={}ms, native_rate={}Hz, decimation={:.2}x, VAD=Aggressive",
+             keepalive={}ms, native_rate={}Hz, decimation={:.2}x, VAD={}",
             config.speech_threshold_rms,
             config.speech_hangover.as_millis(),
             config.silence_keepalive_interval.as_millis(),
             config.native_sample_rate,
             decimation_factor,
+            vad_mode_name,
         );
 
         Self {
@@ -364,6 +392,7 @@ mod tests {
             adaptive_min_floor: 20.0,
             ema_alpha: 0.02,
             native_sample_rate: 16000,
+            vad_mode: VadMode::Aggressive,
         });
 
         let silent_frame: Vec<i16> = vec![0; 320];
@@ -384,6 +413,7 @@ mod tests {
             adaptive_min_floor: 20.0,
             ema_alpha: 0.02,
             native_sample_rate: 16000,
+            vad_mode: VadMode::Aggressive,
         });
 
         // Send a loud speech-like frame

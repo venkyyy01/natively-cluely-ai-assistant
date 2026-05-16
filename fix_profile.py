@@ -1,4 +1,3 @@
-import re
 
 with open('src/components/SettingsOverlay.tsx', 'r') as f:
     code = f.read()

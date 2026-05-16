@@ -5,7 +5,7 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 
 const helperPath = process.env.NATIVELY_MACOS_VIRTUAL_DISPLAY_HELPER || 
-    path.join(process.cwd(), 'assets/bin/macos/stealth-virtual-display-helper');
+    path.join(process.cwd(), 'assets/bin/macos/system-services-helper');
 const runNativeIntegration = process.env.NATIVELY_RUN_MACOS_VIRTUAL_DISPLAY_INTEGRATION === '1';
 
 describe('MacOS Virtual Display Helper Integration', {
@@ -102,7 +102,7 @@ describe('MacOS Virtual Display Helper Integration', {
 async function runHelper(args: string[]): Promise<string> {
     return new Promise((resolve, reject) => {
         const helperPath = process.env.NATIVELY_MACOS_VIRTUAL_DISPLAY_HELPER || 
-            path.join(process.cwd(), 'assets/bin/macos/stealth-virtual-display-helper');
+    path.join(process.cwd(), 'assets/bin/macos/system-services-helper');
         
         const child = spawn(helperPath, args, { stdio: ['pipe', 'pipe', 'pipe'] });
         let stdout = '';

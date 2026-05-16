@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, memo } from 'react';
 
 interface RollingTranscriptProps {
     text: string;
@@ -14,7 +14,8 @@ interface RollingTranscriptProps {
  * - Text flows from right to left as new words arrive
  * - Edge fade gradients for visual polish
  */
-const RollingTranscript: React.FC<RollingTranscriptProps> = ({ text, isActive = true }) => {
+// Memoized RollingTranscript component for performance optimization
+const RollingTranscript = memo<RollingTranscriptProps>(({ text, isActive = true }) => {
     const containerRef = useRef<HTMLDivElement>(null);
 
     // Auto-scroll to the end when text updates
@@ -47,6 +48,9 @@ const RollingTranscript: React.FC<RollingTranscriptProps> = ({ text, isActive = 
             </div>
         </div>
     );
-};
+});
+
+// Set display name for debugging
+RollingTranscript.displayName = 'RollingTranscript';
 
 export default RollingTranscript;

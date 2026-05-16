@@ -2,6 +2,8 @@
 // Enhanced transcript cleaning for RAG - extends existing transcriptCleaner.ts patterns
 // Adds semantic detection (questions, decisions, action items)
 
+import { TokenCounter } from '../shared/TokenCounter';
+
 export interface RawSegment {
     speaker: string;
     text: string;
@@ -45,6 +47,8 @@ const ACTION_PATTERNS = [
     /\b(will|going to|need to|should|must|action item|todo|follow up|follow-up)\b/i,
     /\b(by|before|deadline|next week|tomorrow|end of day|eod)\b/i
 ];
+
+const TOKEN_COUNTER = new TokenCounter('generic');
 
 /**
  * Clean a single text segment - remove fillers and normalize
@@ -172,18 +176,22 @@ export function preprocessTranscript(segments: RawSegment[]): CleanedSegment[] {
     for (const seg of merged) {
         const text = cleanText(seg.text);
 
-        // Skip if too short after cleaning (less than 3 words)
+        const isQuestion = detectQuestion(text);
+        const isDecision = detectDecision(text);
+        const isActionItem = detectActionItem(text);
+
+        // Skip filler fragments, but keep compact semantic turns like "Why Redis?"
         const wordCount = text.split(/\s+/).filter(w => w.length > 0).length;
-        if (wordCount < 3) continue;
+        if (wordCount < 3 && !isQuestion && !isDecision && !isActionItem) continue;
 
         cleaned.push({
             speaker: normalizeSpeaker(seg.speaker),
             text,
             startMs: seg.startMs,
             endMs: seg.endMs,
-            isQuestion: detectQuestion(text),
-            isDecision: detectDecision(text),
-            isActionItem: detectActionItem(text)
+            isQuestion,
+            isDecision,
+            isActionItem
         });
     }
 
@@ -197,8 +205,5 @@ export function preprocessTranscript(segments: RawSegment[]): CleanedSegment[] {
 export function estimateTokens(text: string): number {
     const trimmed = text.trim();
     if (!trimmed) return 0;
-    const words = trimmed.split(/\s+/).filter(Boolean).length;
-    const charBased = Math.ceil(trimmed.length / 4);
-    const wordBased = Math.ceil(words * 1.33);
-    return Math.max(charBased, wordBased);
+    return TOKEN_COUNTER.count(trimmed, 'generic');
 }

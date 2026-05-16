@@ -4,6 +4,8 @@ import { AppState } from "./main"
 import { LLMHelper } from "./LLMHelper"
 import { CredentialsManager } from "./services/CredentialsManager"
 import { app, BrowserWindow } from "electron"
+import { extractCodingProblem, isCodingProblemComplete } from "./coding/ProblemExtractor"
+import { isConsciousOptimizationActive } from "./config/optimizations"
 // import dotenv from "dotenv" // Removed static import
 
 if (!app.isPackaged) {
@@ -37,13 +39,14 @@ export class ProcessingHelper {
       let groqApiKey = process.env.GROQ_API_KEY
       let openaiApiKey = process.env.OPENAI_API_KEY
       let claudeApiKey = process.env.CLAUDE_API_KEY
+      let cerebrasApiKey = process.env.CEREBRAS_API_KEY
 
       // Allow initializing without key (will be loaded in loadStoredCredentials or via Settings)
       if (!apiKey) {
         console.warn("[ProcessingHelper] GEMINI_API_KEY not found in env. Will try CredentialsManager after ready.")
       }
 
-      this.llmHelper = new LLMHelper(apiKey, false, undefined, undefined, groqApiKey, openaiApiKey, claudeApiKey)
+      this.llmHelper = new LLMHelper(apiKey, false, undefined, undefined, groqApiKey, openaiApiKey, claudeApiKey, cerebrasApiKey)
     }
 
     this.llmHelper.setModelFallbackHandler((event) => {
@@ -65,6 +68,7 @@ export class ProcessingHelper {
 
     const geminiKey = credManager.getGeminiApiKey();
     const groqKey = credManager.getGroqApiKey();
+    const cerebrasKey = credManager.getCerebrasApiKey();
     const openaiKey = credManager.getOpenaiApiKey();
     const claudeKey = credManager.getClaudeApiKey();
 
@@ -76,6 +80,11 @@ export class ProcessingHelper {
     if (groqKey) {
       console.log("[ProcessingHelper] Loading stored Groq API Key from CredentialsManager");
       this.llmHelper.setGroqApiKey(groqKey);
+    }
+
+    if (cerebrasKey) {
+      console.log("[ProcessingHelper] Loading stored Cerebras API Key from CredentialsManager");
+      this.llmHelper.setCerebrasApiKey(cerebrasKey);
     }
 
     if (openaiKey) {
@@ -130,6 +139,8 @@ export class ProcessingHelper {
       this.llmHelper.setModel(defaultModel, allProviders);
     }
 
+    this.llmHelper.setFastResponseConfig(credManager.getFastResponseConfig());
+
     // Load Languages
     const sttLanguage = credManager.getSttLanguage();
     const aiResponseLanguage = credManager.getAiResponseLanguage();
@@ -152,7 +163,9 @@ export class ProcessingHelper {
     if (view === "queue") {
       const screenshotQueue = this.appState.getScreenshotHelper().getScreenshotQueue()
       if (screenshotQueue.length === 0) {
-        mainWindow.webContents.send(this.appState.PROCESSING_EVENTS.NO_SCREENSHOTS)
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send(this.appState.PROCESSING_EVENTS.NO_SCREENSHOTS)
+        }
         return
       }
 
@@ -161,32 +174,73 @@ export class ProcessingHelper {
       const allPaths = this.appState.getScreenshotHelper().getScreenshotQueue();
 
       // NEW: Handle screenshot as plain text (like audio)
-      mainWindow.webContents.send(this.appState.PROCESSING_EVENTS.INITIAL_START)
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send(this.appState.PROCESSING_EVENTS.INITIAL_START)
+      }
       this.appState.setView("solutions")
       this.currentProcessingAbortController?.abort()
       this.currentProcessingAbortController = new AbortController()
       try {
-        const imageResult = await this.llmHelper.analyzeImageFiles(allPaths, this.currentProcessingAbortController.signal);
-        if (this.currentProcessingAbortController.signal.aborted) {
-          return
+        // NAT-303: Route through ProblemExtractor when flag is ON.
+        const useExtractor = isConsciousOptimizationActive('useStructuredProblemExtractor');
+        if (useExtractor) {
+          const codingProblem = await extractCodingProblem(allPaths, {
+            signal: this.currentProcessingAbortController.signal,
+            visionCall: async (paths, prompt, sig) => {
+              const result = await this.llmHelper.analyzeImageFiles(paths, sig);
+              return result.text;
+            },
+          });
+          if (this.currentProcessingAbortController.signal.aborted) return;
+
+          // Back-compat legacy problemInfo shape for existing consumers.
+          const problemInfo = {
+            problem_statement: codingProblem.problemStatement || codingProblem.rawOcr || '',
+            input_format: { description: codingProblem.inputSpec || 'N/A', parameters: [] as any[] },
+            output_format: { description: codingProblem.outputSpec || 'N/A', type: 'string', subtype: 'text' },
+            complexity: { time: 'N/A', space: 'N/A' },
+            test_cases: codingProblem.examples.map((e) => ({ input: e.input, output: e.output })),
+            validation_type: 'manual',
+            difficulty: codingProblem.difficulty,
+            // Additive enrichment
+            codingProblem,
+            extraction_partial: !isCodingProblemComplete(codingProblem),
+          };
+          if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.webContents.send(this.appState.PROCESSING_EVENTS.PROBLEM_EXTRACTED, problemInfo);
+          }
+          this.appState.setProblemInfo(problemInfo);
+          // NAT-303: Push structured CodingProblem into SessionTracker for Tier-A prompt injection.
+          // Only store complete problems — partial OCR-only results skip injection.
+          const session = this.appState.getIntelligenceManager().getSessionTracker();
+          session.setCodingProblem(isCodingProblemComplete(codingProblem) ? codingProblem : null);
+        } else {
+          const imageResult = await this.llmHelper.analyzeImageFiles(allPaths, this.currentProcessingAbortController.signal);
+          if (this.currentProcessingAbortController.signal.aborted) {
+            return
+          }
+          const problemInfo = {
+            problem_statement: imageResult.text,
+            input_format: { description: "Generated from screenshot", parameters: [] as any[] },
+            output_format: { description: "Generated from screenshot", type: "string", subtype: "text" },
+            complexity: { time: "N/A", space: "N/A" },
+            test_cases: [] as any[],
+            validation_type: "manual",
+            difficulty: "custom"
+          };
+          if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.webContents.send(this.appState.PROCESSING_EVENTS.PROBLEM_EXTRACTED, problemInfo);
+          }
+          this.appState.setProblemInfo(problemInfo);
         }
-        const problemInfo = {
-          problem_statement: imageResult.text,
-          input_format: { description: "Generated from screenshot", parameters: [] as any[] },
-          output_format: { description: "Generated from screenshot", type: "string", subtype: "text" },
-          complexity: { time: "N/A", space: "N/A" },
-          test_cases: [] as any[],
-          validation_type: "manual",
-          difficulty: "custom"
-        };
-        mainWindow.webContents.send(this.appState.PROCESSING_EVENTS.PROBLEM_EXTRACTED, problemInfo);
-        this.appState.setProblemInfo(problemInfo);
       } catch (error: any) {
         if (this.currentProcessingAbortController?.signal.aborted) {
           return
         }
         // console.error("Image processing error:", error)
-        mainWindow.webContents.send(this.appState.PROCESSING_EVENTS.INITIAL_SOLUTION_ERROR, error.message)
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send(this.appState.PROCESSING_EVENTS.INITIAL_SOLUTION_ERROR, error.message)
+        }
       } finally {
         this.currentProcessingAbortController = null
       }
@@ -196,11 +250,15 @@ export class ProcessingHelper {
       const extraScreenshotQueue = this.appState.getScreenshotHelper().getExtraScreenshotQueue()
       if (extraScreenshotQueue.length === 0) {
         // console.log("No extra screenshots to process")
-        mainWindow.webContents.send(this.appState.PROCESSING_EVENTS.NO_SCREENSHOTS)
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send(this.appState.PROCESSING_EVENTS.NO_SCREENSHOTS)
+        }
         return
       }
 
-      mainWindow.webContents.send(this.appState.PROCESSING_EVENTS.DEBUG_START)
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send(this.appState.PROCESSING_EVENTS.DEBUG_START)
+      }
       this.currentExtraProcessingAbortController?.abort()
       this.currentExtraProcessingAbortController = new AbortController()
 
@@ -230,20 +288,24 @@ export class ProcessingHelper {
         }
 
         this.appState.setHasDebugged(true)
-        mainWindow.webContents.send(
-          this.appState.PROCESSING_EVENTS.DEBUG_SUCCESS,
-          debugResult
-        )
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send(
+            this.appState.PROCESSING_EVENTS.DEBUG_SUCCESS,
+            debugResult
+          )
+        }
 
       } catch (error: any) {
         if (this.currentExtraProcessingAbortController?.signal.aborted) {
           return
         }
         // console.error("Debug processing error:", error)
-        mainWindow.webContents.send(
-          this.appState.PROCESSING_EVENTS.DEBUG_ERROR,
-          error.message
-        )
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send(
+            this.appState.PROCESSING_EVENTS.DEBUG_ERROR,
+            error.message
+          )
+        }
       } finally {
         this.currentExtraProcessingAbortController = null
       }

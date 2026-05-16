@@ -5,6 +5,7 @@ import {
   TokenBudgetAllocations,
   BucketAllocation,
 } from './types';
+import { TokenCounter } from '../shared/TokenCounter';
 
 const PROVIDER_BUDGETS: Record<LLMProvider, number> = {
   openai: 4000,
@@ -29,9 +30,11 @@ type BucketName = keyof TokenBudgetAllocations;
 
 export class TokenBudgetManager {
   private budget: TokenBudget;
+  private tokenCounter: TokenCounter;
 
   constructor(provider: LLMProvider = 'openai') {
     const totalBudget = PROVIDER_BUDGETS[provider];
+    this.tokenCounter = new TokenCounter(provider);
     this.budget = {
       provider,
       totalBudget,
@@ -119,13 +122,11 @@ export class TokenBudgetManager {
   }
 
   estimateTokens(text: string): number {
-    // Rough estimation: ~4 characters per token for English
-    return Math.ceil(text.length / 4);
+    return this.tokenCounter.count(text, this.budget.provider);
   }
 
   estimateCodeTokens(code: string): number {
-    // Code is more token-dense: ~3 characters per token
-    return Math.ceil(code.length / 3);
+    return this.tokenCounter.count(code, `${this.budget.provider}:code`);
   }
 
   reset(): void {
@@ -136,6 +137,7 @@ export class TokenBudgetManager {
 
   setProvider(provider: LLMProvider): void {
     const totalBudget = PROVIDER_BUDGETS[provider];
+    this.tokenCounter = new TokenCounter(provider);
     this.budget = {
       provider,
       totalBudget,

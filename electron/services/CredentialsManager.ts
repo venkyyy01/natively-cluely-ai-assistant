@@ -6,7 +6,7 @@
 import { app, safeStorage } from 'electron';
 import fs from 'fs';
 import path from 'path';
-import type { CustomProviderPayload } from '../../shared/ipc';
+import type { CustomProviderPayload, FastResponseConfig, ProviderKind } from '../../shared/ipc';
 
 const CREDENTIALS_PATH = path.join(app.getPath('userData'), 'credentials.enc');
 
@@ -22,6 +22,7 @@ export interface CurlProvider {
 export interface StoredCredentials {
     geminiApiKey?: string;
     groqApiKey?: string;
+    cerebrasApiKey?: string;
     openaiApiKey?: string;
     claudeApiKey?: string;
     googleServiceAccountPath?: string;
@@ -48,9 +49,17 @@ export interface StoredCredentials {
     // Dynamic Model Discovery – preferred models per provider
     geminiPreferredModel?: string;
     groqPreferredModel?: string;
+    cerebrasPreferredModel?: string;
     openaiPreferredModel?: string;
     claudePreferredModel?: string;
+    fastResponseConfig?: FastResponseConfig;
 }
+
+const DEFAULT_FAST_RESPONSE_CONFIG: FastResponseConfig = {
+    enabled: false,
+    provider: 'groq',
+    model: '',
+};
 
 export class CredentialsManager {
     private static instance: CredentialsManager;
@@ -86,6 +95,10 @@ export class CredentialsManager {
 
     public getGroqApiKey(): string | undefined {
         return this.credentials.groqApiKey;
+    }
+
+    public getCerebrasApiKey(): string | undefined {
+        return this.credentials.cerebrasApiKey;
     }
 
     public getOpenaiApiKey(): string | undefined {
@@ -171,6 +184,19 @@ export class CredentialsManager {
         return { ...this.credentials };
     }
 
+    public getFastResponseConfig(): FastResponseConfig {
+        const saved = this.credentials.fastResponseConfig;
+        if (!saved) {
+            return { ...DEFAULT_FAST_RESPONSE_CONFIG };
+        }
+
+        return {
+            enabled: saved.enabled === true,
+            provider: saved.provider === 'cerebras' ? 'cerebras' : 'groq',
+            model: saved.model || '',
+        };
+    }
+
     // =========================================================================
     // Setters (auto-save)
     // =========================================================================
@@ -185,6 +211,12 @@ export class CredentialsManager {
         this.credentials.groqApiKey = key;
         this.saveCredentials();
         console.log('[CredentialsManager] Groq API Key updated');
+    }
+
+    public setCerebrasApiKey(key: string): void {
+        this.credentials.cerebrasApiKey = key;
+        this.saveCredentials();
+        console.log('[CredentialsManager] Cerebras API Key updated');
     }
 
     public setOpenaiApiKey(key: string): void {
@@ -300,16 +332,26 @@ export class CredentialsManager {
         console.log(`[CredentialsManager] Default Model set to: ${model}`);
     }
 
-    public getPreferredModel(provider: 'gemini' | 'groq' | 'openai' | 'claude'): string | undefined {
+    public getPreferredModel(provider: ProviderKind): string | undefined {
         const key = `${provider}PreferredModel` as keyof StoredCredentials;
         return this.credentials[key] as string | undefined;
     }
 
-    public setPreferredModel(provider: 'gemini' | 'groq' | 'openai' | 'claude', modelId: string): void {
+    public setPreferredModel(provider: ProviderKind, modelId: string): void {
         const key = `${provider}PreferredModel` as keyof StoredCredentials;
         (this.credentials as any)[key] = modelId;
         this.saveCredentials();
         console.log(`[CredentialsManager] ${provider} preferred model set to: ${modelId}`);
+    }
+
+    public setFastResponseConfig(config: FastResponseConfig): void {
+        this.credentials.fastResponseConfig = {
+            enabled: config.enabled === true,
+            provider: config.provider === 'cerebras' ? 'cerebras' : 'groq',
+            model: config.model || '',
+        };
+        this.saveCredentials();
+        console.log(`[CredentialsManager] Fast response config updated: ${this.credentials.fastResponseConfig.provider} (${this.credentials.fastResponseConfig.model || 'auto'}) enabled=${this.credentials.fastResponseConfig.enabled}`);
     }
 
     public saveCustomProvider(provider: CustomProvider): void {

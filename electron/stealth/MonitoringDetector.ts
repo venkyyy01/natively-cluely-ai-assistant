@@ -1,269 +1,353 @@
-import { existsSync, readdirSync } from 'node:fs';
+import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import {
-  defaultExecCommand,
-  findCaseInsensitiveMatches,
-  getWindowEnumerationCommand,
-  type ExecCommand,
-} from './detectorUtils';
-import defaultSignatures from './signatures/monitoring-software.json';
+import { createNativeProcessesProvider } from './nativeStealthModule';
+import { KNOWN_ENTERPRISE_TOOLS } from './enterpriseToolRegistry';
 
-export interface MonitoringSoftwareSignature {
+export type ThreatCategory = 'monitoring' | 'proctoring' | 'remote-desktop' | 'screen-capture' | 'time-tracking' | 'remote-access';
+export type ThreatSeverity = 'critical' | 'warning';
+
+export interface DetectedThreat {
   name: string;
-  category: 'proctoring' | 'enterprise' | 'security' | 'parental';
-  processNames: string[];
-  windowTitles: string[];
-  installPaths: string[];
-  fileArtifacts: string[];
-  networkEndpoints: string[];
-  launchAgents?: string[];
-  registryKeys?: string[];
+  pid: string;
+  category: ThreatCategory;
+  severity: ThreatSeverity;
 }
 
-export interface ThreatInfo {
+export type DetectionLayer = 'process' | 'window-title' | 'filesystem' | 'launch-agent';
+
+export interface MonitoringSignature {
   name: string;
-  category: string;
-  confidence: 'high' | 'medium' | 'low';
-  vector: 'process' | 'window' | 'file' | 'launch-agent';
-  details: string;
+  bundleId: string;
+  category: ThreatCategory;
+  /** Process name patterns */
+  processPatterns: string[];
+  /** Window title patterns (optional) */
+  windowTitlePatterns?: string[];
+  /** Filesystem artifacts to check (optional) */
+  filesystemArtifacts?: string[];
+  /** Launch agent plist paths (optional, macOS) */
+  launchAgentPaths?: string[];
 }
 
-export interface DetectionResult {
-  detected: boolean;
-  threats: ThreatInfo[];
-  timestamp: number;
-  detectionMethod: string;
+export interface DetectedThreatV2 extends DetectedThreat {
+  detectionLayer: DetectionLayer;
+  confidence: number; // 0.0 - 1.0
 }
 
-interface MonitoringDetectorOptions {
+const CRITICAL_CATEGORIES: Set<ThreatCategory> = new Set(['monitoring', 'proctoring']);
+
+/** Confidence levels per detection layer */
+const LAYER_CONFIDENCE: Record<DetectionLayer, number> = {
+  'process': 0.9,
+  'window-title': 0.7,
+  'filesystem': 0.8,
+  'launch-agent': 0.85,
+};
+
+export interface MonitoringDetectorOptions {
   platform?: string;
   logger?: Pick<Console, 'log' | 'warn' | 'error'>;
-  signatures?: MonitoringSoftwareSignature[];
-  execCommand?: ExecCommand;
-  existsSync?: (candidatePath: string) => boolean;
-  readdirSync?: (candidatePath: string) => string[];
-  env?: NodeJS.ProcessEnv;
-  homeDir?: string;
-  now?: () => number;
+  getProcessList?: () => Array<{ pid: number; ppid: number; name: string }>;
+  timeoutMs?: number;
 }
 
-const MACOS_LAUNCH_AGENT_PATHS = [
-  '~/Library/LaunchAgents',
-  '/Library/LaunchAgents',
-  '/Library/LaunchDaemons',
-];
-
-function uniqueThreats(threats: ThreatInfo[]): ThreatInfo[] {
-  const seen = new Set<string>();
-  const unique: ThreatInfo[] = [];
-
-  for (const threat of threats) {
-    const key = `${threat.name}:${threat.vector}`;
-    if (seen.has(key)) {
-      continue;
-    }
-
-    seen.add(key);
-    unique.push(threat);
-  }
-
-  return unique;
+export interface MonitoringDetectorV2Options extends MonitoringDetectorOptions {
+  /** Path to JSON signature database */
+  signatureDatabasePath?: string;
+  /** Injected signatures (for testing) */
+  signatures?: MonitoringSignature[];
+  /** Window title provider (for testing) */
+  getWindowTitles?: () => string[];
+  /** Filesystem existence checker (for testing) */
+  fileExists?: (filePath: string) => boolean;
 }
 
 export class MonitoringDetector {
   private readonly platform: string;
   private readonly logger: Pick<Console, 'log' | 'warn' | 'error'>;
-  private readonly signatures: MonitoringSoftwareSignature[];
-  private readonly execCommand: ExecCommand;
-  private readonly pathExists: (candidatePath: string) => boolean;
-  private readonly readDirectory: (candidatePath: string) => string[];
-  private readonly env: NodeJS.ProcessEnv;
-  private readonly homeDir: string;
-  private readonly now: () => number;
+  private readonly getProcessList: () => Array<{ pid: number; ppid: number; name: string }>;
+  private readonly timeoutMs: number;
+  private readonly signatures: MonitoringSignature[];
+  private readonly getWindowTitles: () => string[];
+  private readonly fileExists: (filePath: string) => boolean;
+  private running = false;
 
-  constructor(options: MonitoringDetectorOptions = {}) {
+  constructor(options: MonitoringDetectorV2Options = {}) {
     this.platform = options.platform ?? process.platform;
     this.logger = options.logger ?? console;
-    this.signatures = options.signatures ?? (defaultSignatures as MonitoringSoftwareSignature[]);
-    this.execCommand = options.execCommand ?? defaultExecCommand;
-    this.pathExists = options.existsSync ?? existsSync;
-    this.readDirectory = options.readdirSync ?? ((candidatePath) => readdirSync(candidatePath, { encoding: 'utf8' }));
-    this.env = options.env ?? process.env;
-    this.homeDir = options.homeDir ?? os.homedir();
-    this.now = options.now ?? (() => Date.now());
-  }
-
-  async detectAll(): Promise<DetectionResult> {
-    const layerResults = await Promise.all([
-      this.runLayer('process', () => this.detectByProcess()),
-      this.runLayer('window', () => this.detectByWindow()),
-      this.runLayer('file', () => this.detectByFileSystem()),
-      this.runLayer('launch-agent', () => this.detectByLaunchAgents()),
-    ]);
-
-    const threats = uniqueThreats(layerResults.flatMap((result) => result.threats));
-    const detectionMethods = layerResults
-      .filter((result) => result.threats.length > 0)
-      .map((result) => result.name);
-
-    return {
-      detected: threats.length > 0,
-      threats,
-      timestamp: this.now(),
-      detectionMethod: detectionMethods.length > 0 ? detectionMethods.join(',') : 'none',
-    };
-  }
-
-  async detectByProcess(): Promise<ThreatInfo[]> {
-    const stdout = await this.readProcessList();
-    if (!stdout.trim()) {
-      return [];
-    }
-
-    return this.signatures.flatMap((signature) => {
-      const matches = findCaseInsensitiveMatches(stdout, signature.processNames);
-      if (matches.length === 0) {
-        return [];
-      }
-
-      return [{
-        name: signature.name,
-        category: signature.category,
-        confidence: 'high',
-        vector: 'process',
-        details: `Matched process names: ${matches.join(', ')}`,
-      }];
+    this.getProcessList = options.getProcessList ?? createNativeProcessesProvider({
+      logger: this.logger,
+      label: 'MonitoringDetector',
     });
-  }
-
-  async detectByWindow(): Promise<ThreatInfo[]> {
-    const command = getWindowEnumerationCommand(this.platform);
-    if (!command) {
-      return [];
-    }
-
-    const stdout = await this.execCommand(command.command, command.args);
-    if (!stdout.trim()) {
-      return [];
-    }
-
-    return this.signatures.flatMap((signature) => {
-      const matches = findCaseInsensitiveMatches(stdout, signature.windowTitles);
-      if (matches.length === 0) {
-        return [];
-      }
-
-      return [{
-        name: signature.name,
-        category: signature.category,
-        confidence: 'high',
-        vector: 'window',
-        details: `Matched window titles: ${matches.join(', ')}`,
-      }];
-    });
-  }
-
-  async detectByFileSystem(): Promise<ThreatInfo[]> {
-    return this.signatures.flatMap((signature) => {
-      const candidates = [...signature.installPaths, ...signature.fileArtifacts];
-      const matches = candidates
-        .map((candidate) => this.expandCandidatePath(candidate))
-        .filter((candidatePath) => candidatePath.length > 0 && this.safeExists(candidatePath));
-
-      if (matches.length === 0) {
-        return [];
-      }
-
-      return [{
-        name: signature.name,
-        category: signature.category,
-        confidence: 'medium',
-        vector: 'file',
-        details: `Matched filesystem artifacts: ${matches.join(', ')}`,
-      }];
-    });
-  }
-
-  async detectByLaunchAgents(): Promise<ThreatInfo[]> {
-    if (this.platform !== 'darwin') {
-      return [];
-    }
-
-    const discoveredAgents = new Set<string>();
-    for (const directory of MACOS_LAUNCH_AGENT_PATHS) {
-      const resolvedPath = this.expandCandidatePath(directory);
+    this.timeoutMs = options.timeoutMs ?? 5000;
+    this.signatures = this.loadSignatures(options);
+    this.getWindowTitles = options.getWindowTitles ?? (() => []);
+    this.fileExists = options.fileExists ?? ((filePath: string) => {
       try {
-        for (const entry of this.readDirectory(resolvedPath)) {
-          discoveredAgents.add(entry);
+        return fs.existsSync(filePath);
+      } catch {
+        return false;
+      }
+    });
+  }
+
+  private loadSignatures(options: MonitoringDetectorV2Options): MonitoringSignature[] {
+    // 1. Use injected signatures if provided (for testing)
+    if (options.signatures && options.signatures.length > 0) {
+      return options.signatures;
+    }
+
+    // 2. Try loading from signatureDatabasePath
+    if (options.signatureDatabasePath) {
+      try {
+        const content = fs.readFileSync(options.signatureDatabasePath, 'utf-8');
+        const db = JSON.parse(content);
+        if (db && Array.isArray(db.tools) && db.tools.length > 0) {
+          return db.tools as MonitoringSignature[];
+        }
+      } catch (error) {
+        this.logger.warn('[MonitoringDetector] Failed to load signature database from path, falling back to hardcoded:', error);
+      }
+    }
+
+    // 3. Try loading from default signatures.json location
+    try {
+      const defaultPath = path.join(__dirname, 'signatures.json');
+      const content = fs.readFileSync(defaultPath, 'utf-8');
+      const db = JSON.parse(content);
+      if (db && Array.isArray(db.tools) && db.tools.length > 0) {
+        return db.tools as MonitoringSignature[];
+      }
+    } catch {
+      // Fall through to hardcoded fallback
+    }
+
+    // 4. Fallback to hardcoded KNOWN_ENTERPRISE_TOOLS
+    return KNOWN_ENTERPRISE_TOOLS.map(tool => ({
+      name: tool.name,
+      bundleId: tool.bundleId,
+      category: tool.category as ThreatCategory,
+      processPatterns: [tool.name.toLowerCase(), tool.bundleId],
+    }));
+  }
+
+  async detect(): Promise<DetectedThreatV2[]> {
+    if (this.running) {
+      return [];
+    }
+
+    this.running = true;
+    try {
+      return await this.detectThreats();
+    } catch (error) {
+      this.logger.warn('[MonitoringDetector] Detection failed:', error);
+      return [];
+    } finally {
+      this.running = false;
+    }
+  }
+
+  private async detectThreats(): Promise<DetectedThreatV2[]> {
+    const allDetections: DetectedThreatV2[] = [];
+
+    // Layer 1: Process name matching
+    const processDetections = this.detectByProcess();
+    allDetections.push(...processDetections);
+
+    // Layer 2: Window title matching
+    const windowDetections = this.detectByWindowTitle();
+    allDetections.push(...windowDetections);
+
+    // Layer 3: Filesystem artifact scanning
+    const filesystemDetections = this.detectByFilesystem();
+    allDetections.push(...filesystemDetections);
+
+    // Layer 4: Launch agent inspection (macOS only)
+    if (this.platform === 'darwin') {
+      const launchAgentDetections = this.detectByLaunchAgent();
+      allDetections.push(...launchAgentDetections);
+    }
+
+    // Deduplicate: same tool from multiple layers appears once with highest confidence
+    return this.deduplicateThreats(allDetections);
+  }
+
+  private detectByProcess(): DetectedThreatV2[] {
+    const threats: DetectedThreatV2[] = [];
+    const procs = this.getProcessList();
+
+    for (const sig of this.signatures) {
+      try {
+        const patterns = sig.processPatterns;
+        if (!patterns || patterns.length === 0) continue;
+
+        const match = procs.find(p => {
+          const nameLower = p.name.toLowerCase();
+          return patterns.some(pattern => nameLower.includes(pattern.toLowerCase()));
+        });
+
+        if (match) {
+          const severity = CRITICAL_CATEGORIES.has(sig.category) ? 'critical' : 'warning';
+          threats.push({
+            name: sig.name,
+            pid: String(match.pid),
+            category: sig.category,
+            severity,
+            detectionLayer: 'process',
+            confidence: LAYER_CONFIDENCE['process'],
+          });
         }
       } catch {
-        // Missing directories are expected on many systems.
+        // Process not found - continue to next
       }
     }
 
-    if (discoveredAgents.size === 0) {
-      return [];
-    }
-
-    const haystack = Array.from(discoveredAgents).join('\n');
-    return this.signatures.flatMap((signature) => {
-      const matches = findCaseInsensitiveMatches(haystack, signature.launchAgents ?? []);
-      if (matches.length === 0) {
-        return [];
-      }
-
-      return [{
-        name: signature.name,
-        category: signature.category,
-        confidence: 'high',
-        vector: 'launch-agent',
-        details: `Matched launch agents: ${matches.join(', ')}`,
-      }];
-    });
+    return threats;
   }
 
-  private async runLayer(
-    name: string,
-    fn: () => Promise<ThreatInfo[]>,
-  ): Promise<{ name: string; threats: ThreatInfo[] }> {
+  private detectByWindowTitle(): DetectedThreatV2[] {
+    const threats: DetectedThreatV2[] = [];
+
+    let titles: string[];
     try {
-      return { name, threats: await fn() };
-    } catch (error) {
-      this.logger.warn(`[MonitoringDetector] ${name} detection failed:`, error);
-      return { name, threats: [] };
-    }
-  }
-
-  private async readProcessList(): Promise<string> {
-    if (this.platform === 'win32') {
-      return this.execCommand('tasklist', ['/FO', 'CSV', '/NH']);
-    }
-
-    if (this.platform === 'darwin') {
-      return this.execCommand('ps', ['-axo', 'pid,comm,args']);
-    }
-
-    return this.execCommand('ps', ['-A', '-o', 'pid,comm,args']);
-  }
-
-  private expandCandidatePath(candidate: string): string {
-    if (!candidate) {
-      return '';
-    }
-
-    let expanded = candidate;
-    expanded = expanded.replace(/^~(?=$|[\\/])/, this.homeDir);
-    expanded = expanded.replace(/%([^%]+)%/g, (_match, envName: string) => this.env[envName] ?? '');
-    return path.normalize(expanded);
-  }
-
-  private safeExists(candidatePath: string): boolean {
-    try {
-      return this.pathExists(candidatePath);
+      titles = this.getWindowTitles();
     } catch {
-      return false;
+      this.logger.warn('[MonitoringDetector] Window title enumeration failed');
+      return threats;
     }
+
+    if (titles.length === 0) return threats;
+
+    for (const sig of this.signatures) {
+      const patterns = sig.windowTitlePatterns;
+      if (!patterns || patterns.length === 0) continue;
+
+      const matched = titles.some(title => {
+        const titleLower = title.toLowerCase();
+        return patterns.some(pattern => titleLower.includes(pattern.toLowerCase()));
+      });
+
+      if (matched) {
+        const severity = CRITICAL_CATEGORIES.has(sig.category) ? 'critical' : 'warning';
+        threats.push({
+          name: sig.name,
+          pid: '0', // No PID available from window title detection
+          category: sig.category,
+          severity,
+          detectionLayer: 'window-title',
+          confidence: LAYER_CONFIDENCE['window-title'],
+        });
+      }
+    }
+
+    return threats;
+  }
+
+  private detectByFilesystem(): DetectedThreatV2[] {
+    const threats: DetectedThreatV2[] = [];
+
+    for (const sig of this.signatures) {
+      const artifacts = sig.filesystemArtifacts;
+      if (!artifacts || artifacts.length === 0) continue;
+
+      const found = artifacts.some(artifactPath => {
+        const resolvedPath = this.resolveHomePath(artifactPath);
+        try {
+          return this.fileExists(resolvedPath);
+        } catch {
+          return false;
+        }
+      });
+
+      if (found) {
+        const severity = CRITICAL_CATEGORIES.has(sig.category) ? 'critical' : 'warning';
+        threats.push({
+          name: sig.name,
+          pid: '0', // No PID available from filesystem detection
+          category: sig.category,
+          severity,
+          detectionLayer: 'filesystem',
+          confidence: LAYER_CONFIDENCE['filesystem'],
+        });
+      }
+    }
+
+    return threats;
+  }
+
+  private detectByLaunchAgent(): DetectedThreatV2[] {
+    const threats: DetectedThreatV2[] = [];
+
+    for (const sig of this.signatures) {
+      const agentPaths = sig.launchAgentPaths;
+      if (!agentPaths || agentPaths.length === 0) continue;
+
+      const found = agentPaths.some(agentPath => {
+        const resolvedPath = this.resolveHomePath(agentPath);
+        try {
+          return this.fileExists(resolvedPath);
+        } catch {
+          return false;
+        }
+      });
+
+      if (found) {
+        const severity = CRITICAL_CATEGORIES.has(sig.category) ? 'critical' : 'warning';
+        threats.push({
+          name: sig.name,
+          pid: '0', // No PID available from launch agent detection
+          category: sig.category,
+          severity,
+          detectionLayer: 'launch-agent',
+          confidence: LAYER_CONFIDENCE['launch-agent'],
+        });
+      }
+    }
+
+    return threats;
+  }
+
+  private resolveHomePath(filePath: string): string {
+    if (filePath.startsWith('~/')) {
+      return path.join(os.homedir(), filePath.slice(2));
+    }
+    return filePath;
+  }
+
+  private deduplicateThreats(threats: DetectedThreatV2[]): DetectedThreatV2[] {
+    const bestByTool = new Map<string, DetectedThreatV2>();
+
+    for (const threat of threats) {
+      const existing = bestByTool.get(threat.name);
+      if (!existing || threat.confidence > existing.confidence) {
+        bestByTool.set(threat.name, threat);
+      }
+    }
+
+    return Array.from(bestByTool.values());
+  }
+
+  isToolCritical(name: string): boolean {
+    const tool = this.signatures.find(t => t.name === name)
+      ?? KNOWN_ENTERPRISE_TOOLS.find(t => t.name === name);
+    if (!tool) return false;
+    return CRITICAL_CATEGORIES.has(tool.category as ThreatCategory);
+  }
+
+  getToolCategory(name: string): ThreatCategory | null {
+    const tool = this.signatures.find(t => t.name === name)
+      ?? KNOWN_ENTERPRISE_TOOLS.find(t => t.name === name);
+    return (tool?.category as ThreatCategory) ?? null;
+  }
+
+  /** Get loaded signatures (for testing) */
+  getSignatures(): MonitoringSignature[] {
+    return this.signatures;
+  }
+
+  static getKnownTools() {
+    return KNOWN_ENTERPRISE_TOOLS;
   }
 }

@@ -1,0 +1,1085 @@
+# SUPERCODEr - The Greatest Skill of All Time
+
+**VERSION 3.0 - MILITARY-GRADE AUTONOMOUS EXECUTION**
+
+> "A military knife that does EVERYTHING." — Execute with absolute precision, zero hesitation, infinite capability.
+
+---
+
+## Activation
+
+**EXPLICIT TRIGGER ONLY - DO NOT AUTO-ACTIVATE**
+
+This skill is TOKEN-INTENSIVE (1000+ lines). Only activate when explicitly requested:
+
+**Trigger phrases (MUST have ONE):**
+- "use supercoder skill"
+- "use autonomous-coder"  
+- "execute with supercoder"
+- "run with staff engineer"
+- "implement with supercoder"
+- "supercoder:"
+
+**DO NOT trigger on:**
+- Generic code requests ("implement feature X")
+- Normal debugging ("fix this bug")
+- Regular questions ("how do I...")
+- Any task WITHOUT supercoder mention
+
+**Token optimization:** This skill only loads when "supercoder" is explicitly in the prompt.
+
+---
+
+## AUTONOMY COMMANDMENTS (STRICT)
+
+1. **START IMMEDIATELY** — No prep work, no waiting
+2. **DECIDE YOURSELF** — No confirmation, no permission
+3. **EXECUTE FULLY** — Complete all phases, no partial work
+4. **NEVER ASK** — Just execute, never prompt
+5. **NEVER WAIT** — Work continuously until done
+6. **ALWAYS OWN** — Full accountability, no exceptions
+7. **IF BLOCKED** — Try 3 approaches, then continue
+8. **IF UNCERTAIN** — Best guess, document, proceed
+9. **NEVER REPORT MID-FLIGHT** — Only completion
+10. **OWN EVERY DECISION** — No excuses, no deflection
+
+---
+
+# CORE EXECUTION FRAMEWORK
+
+## Phase 1: Understand & Scope
+
+**Before ANY code:**
+- [ ] Read ALL surrounding code, interfaces, contracts
+- [ ] Identify ALL dependencies and side effects
+- [ ] Map blast radius — what breaks if this is wrong?
+- [ ] Identify ALL consumers/callers
+- [ ] Check existing tests and coverage
+- [ ] Find similar patterns in codebase
+- [ ] Find source of truth for behavior
+- [ ] Check for documented edge cases
+
+**Staff Engineer Questions:**
+- What invariant does this code maintain?
+- What is the contract with ALL callers?
+- What happens under partial failure?
+- What happens under concurrent access?
+- What happens with bad/empty/null input?
+- Where is state mutation?
+- What is persistent vs transient?
+
+---
+
+## Phase 2: Design
+
+**Before implementation:**
+- [ ] State EXACT problem in 1 sentence
+- [ ] Consider 3 alternative approaches
+- [ ] Choose: correctness > simplicity > performance > extensibility
+- [ ] Identify ALL edge cases and failure modes
+- [ ] Design for testability
+- [ ] Consider: storage, network, latency, memory, concurrency
+- [ ] Document design (ADR if significant)
+
+**Design Review:**
+- [ ] Minimal correct change?
+- [ ] Backward compatible?
+- [ ] Rollback strategy?
+- [ ] Concurrency pitfalls?
+- [ ] Memory/time complexity?
+- [ ] Failure mode?
+- [ ] Degraded state?
+- [ ] Race conditions?
+- [ ] Idempotent?
+- [ ] Thread-safe?
+
+---
+
+## Phase 3: TDD Implementation
+
+**STRICT Test-First:**
+1. Write failing test (red)
+2. Write minimal code to pass (green)
+3. Refactor
+4. Add edge case tests
+5. Add property-based tests
+6. Add fuzzing targets
+
+**Coverage Requirements:**
+- [ ] Happy path
+- [ ] Error paths (ALL types)
+- [ ] Boundary conditions (0, null, empty, max, negative, overflow)
+- [ ] Concurrent access
+- [ ] Partial failure
+- [ ] Cleanup paths
+- [ ] Invalid input
+- [ ] Timeout handling
+
+---
+
+## Phase 4: Production Hardening
+
+### Security Checklist (MANDATORY)
+- [ ] Input validation on ALL boundaries
+- [ ] SQL injection prevention (parameterized)
+- [ ] XSS prevention (output encoding)
+- [ ] CSRF protection
+- [ ] Authentication/authorization enforcement
+- [ ] Secrets NOT logged
+- [ ] Rate limiting
+- [ ] Input length/format limits
+- [ ] Path traversal prevention
+- [ ] Command injection prevention
+- [ ] XXE prevention
+- [ ] Deserialization safety
+- [ ] Business logic authorization
+
+### Concurrency Checklist (MANDATORY)
+- [ ] Race conditions identified
+- [ ] Locking strategy defined
+- [ ] Deadlock prevention
+- [ ] Atomicity boundaries clear
+- [ ] Idempotency guaranteed
+- [ ] Thread-safety verified
+- [ ] Lock ordering defined
+- [ ] Timeout on locks
+- [ ] Condition variables signaled
+- [ ] Memory barriers
+
+### Error Handling Checklist (MANDATORY)
+- [ ] ALL errors caught and handled
+- [ ] Errors logged with context
+- [ ] User-facing errors friendly
+- [ ] System errors include correlation IDs
+- [ ] Retry logic for transient failures
+- [ ] Circuit breaker pattern
+- [ ] Partial failure handling
+- [ ] Cleanup in error paths
+- [ ] Error recovery strategy
+- [ ] Graceful degradation
+
+### Performance Checklist (MANDATORY)
+- [ ] No N+1 queries
+- [ ] Appropriate indexes
+- [ ] Batch operations
+- [ ] Caching strategy
+- [ ] Memory bounded
+- [ ] Pagination
+- [ ] Lazy loading
+- [ ] Connection pooling
+- [ ] Resource cleanup
+- [ ] Query optimization
+
+### Observability Checklist (MANDATORY)
+- [ ] Key operations logged
+- [ ] Error logging with stack traces
+- [ ] Metrics for important operations
+- [ ] Tracing correlation
+- [ ] Health check endpoint
+- [ ] Debug endpoints (conditional)
+- [ ] Performance metrics
+- [ ] Business metrics
+
+---
+
+## Phase 5: Self-Review (The Gate)
+
+**Be Ruthless — Score Each Dimension:**
+
+### 1. Correctness (20 points)
+- Does it do what spec says?
+- Off-by-one errors?
+- Null/undefined issues?
+- Race conditions?
+- Type safety?
+
+### 2. Security (20 points)
+- ANY injection vectors?
+- ANY privilege escalations?
+- ANY data exposures?
+- ANY timing attacks?
+- ANY information leaks?
+
+### 3. Performance (15 points)
+- ANY unnecessary work?
+- ANY repeated work?
+- Memory leaks?
+- Unbounded growth?
+- Unoptimized queries?
+
+### 4. Maintainability (15 points)
+- Code readable?
+- Names descriptive?
+- Complexity justified?
+- Comments helpful?
+- Docs updated?
+
+### 5. Testability (10 points)
+- Testable in isolation?
+- Dependencies injectable?
+- Edge cases covered?
+- Fuzzable?
+
+### 6. Resilience (10 points)
+- Failure mode?
+- Dependency failure?
+- Degraded state?
+- Recovery?
+
+### 7. Observability (5 points)
+- Debuggable?
+- Measurable?
+- Traceable?
+
+### 8. Compatibility (5 points)
+- Backward compatible?
+- API stable?
+- Deprecation noticed?
+
+---
+
+## Phase 6: Integration Check
+
+- [ ] Run full test suite
+- [ ] Run lint and typecheck
+- [ ] Check for console.logs/debug
+- [ ] Verify build passes
+- [ ] Check diff size
+- [ ] Run integration tests
+- [ ] Run e2e tests (if applicable)
+
+---
+
+## Phase 7: Chaos Engineering
+
+**Test failure modes:**
+1. What if dependencies fail?
+2. What if timeout?
+3. What if network partition?
+4. What if memory pressure?
+5. What if disk full?
+6. What if partial data?
+7. What if bad input?
+8. What if under load?
+
+---
+
+## Phase 8: Formal Review
+
+**Contract verification:**
+- [ ] Preconditions documented
+- [ ] Postconditions documented
+- [ ] Invariants documented
+- [ ] Error conditions documented
+- [ ] Implementation matches contract
+
+---
+
+## Phase 9: Documentation
+
+- [ ] Update relevant docs
+- [ ] Add code comments
+- [ ] Update README
+- [ ] Document configuration
+- [ ] Document known limitations
+- [ ] Document expected behavior
+- [ ] Document error codes
+
+---
+
+## Phase 10: Complete
+
+**Verify ALL criteria:**
+- [ ] Tests passing
+- [ ] Lint passing
+- [ ] Typecheck passing
+- [ ] Build passing
+- [ ] Security checklist complete
+- [ ] Error handling complete
+- [ ] Performance acceptable
+- [ ] Observability added
+- [ ] Documentation updated
+
+---
+
+# 10-PASS SELF-IMPROVEMENT LOOP
+
+## The Supercoder Iteration Protocol
+
+Execute this 10-pass refinement loop on EVERY significant task:
+
+### PASS 1: Initial Implementation
+- Complete Phases 1-10 baseline
+- Score all dimensions
+
+### PASS 2: Security Deep Dive
+- Run OWASP checks
+- Review for injection vectors
+- Check authentication/authorization
+- Verify encryption
+- Test for IDOR
+
+### PASS 3: Concurrency Audit
+- Identify ALL race conditions
+- Check lock ordering
+- Verify atomicity
+- Test concurrent access
+- Check deadlock potential
+
+### PASS 4: Performance Analysis
+- Profile critical paths
+- Check query patterns (N+1)
+- Verify indexing
+- Check memory allocation
+- Verify caching strategy
+
+### PASS 5: Architecture Review
+- Verify Clean Architecture
+- Check dependency direction
+- Verify Single Responsibility
+- Check SOLID principles
+- Review domain boundaries
+
+### PASS 6: Testing Coverage
+- Verify edge cases
+- Add property-based tests
+- Add fuzzing tests
+- Check mutation coverage
+- Verify error paths
+
+### PASS 7: Observability Check
+- Verify logging completeness
+- Check metrics coverage
+- Verify tracing
+- Test health endpoints
+- Check debugging capability
+
+### PASS 8: Documentation Review
+- Verify API docs
+- Check code comments
+- Review README
+- Verify error messages
+- Check runbooks
+
+### PASS 9: Integration Testing
+- Test with real dependencies
+- Verify end-to-end flows
+- Test failure scenarios
+- Verify rollback capability
+- Check deployment
+
+### PASS 10: Final Polish
+- Code review self-check
+- Remove TODO comments
+- Clean up debug code
+- Verify naming consistency
+- Final confidence score
+
+---
+
+# INTEGRATED CAPABILITIES
+
+## 1. CLEAN CODE PRINCIPLES (Uncle Bob)
+
+### Meaningful Names
+- [ ] Use intention-revealing names
+- [ ] Avoid disinformation
+- [ ] Make meaningful distinctions
+- [ ] Use searchable names
+- [ ] Class names = nouns, Methods = verbs
+
+### Functions
+- [ ] SMALL (< 20 lines)
+- [ ] Do ONE thing
+- [ ] One level of abstraction
+- [ ] Descriptive names
+- [ ] Max 3 arguments (prefer 0-2)
+- [ ] No side effects
+
+### Comments
+- [ ] Don't comment bad code — rewrite it
+- [ ] Explain yourself in code
+- [ ] Good comments: legal, informative, TODO
+- [ ] Bad comments: mumbling, redundant, misleading
+
+### Objects & Data Structures
+- [ ] Hide implementation
+- [ ] Law of Demeter (no train wrecks)
+- [ ] Use DTOs appropriately
+
+### Error Handling
+- [ ] Use exceptions, not return codes
+- [ ] Write try-catch-finally first
+- [ ] Don't return null
+- [ ] Don't pass null
+
+---
+
+## 2. SYSTEMATIC DEBUGGING
+
+### Phase 1: Root Cause Investigation
+- [ ] Read ALL error messages carefully
+- [ ] Reproduce consistently
+- [ ] Check recent changes (git diff)
+- [ ] Gather evidence at component boundaries
+- [ ] Trace data flow backward
+
+### Phase 2: Pattern Analysis
+- [ ] Find working examples
+- [ ] Compare against references
+- [ ] Identify differences
+- [ ] Understand dependencies
+
+### Phase 3: Hypothesis & Testing
+- [ ] Form single hypothesis
+- [ ] Test minimally
+- [ ] Verify before continuing
+- [ ] If stuck: question architecture
+
+### Phase 4: Implementation
+- [ ] Create failing test first
+- [ ] Implement single fix
+- [ ] Verify fix works
+- [ ] If 3+ fixes failed: STOP, question architecture
+
+---
+
+## 3. BUG HUNTER
+
+### Debugging Techniques
+- [ ] Binary search (checkpoints)
+- [ ] Rubber duck debugging
+- [ ] Print debugging (strategic)
+- [ ] Diff debugging
+- [ ] Time travel (git bisect)
+
+### Common Bug Patterns
+- [ ] Null/undefined handling
+- [ ] Race conditions (async/await)
+- [ ] Off-by-one errors
+- [ ] Type coercion (use ===)
+- [ ] Async without await
+
+### Fix Quality
+- [ ] Fix ROOT CAUSE, not symptoms
+- [ ] Test fix thoroughly
+- [ ] Add regression tests
+
+---
+
+## 4. FIND BUGS (Security Focus)
+
+### Phase 1: Attack Surface Mapping
+- [ ] ALL user inputs identified
+- [ ] ALL database queries identified
+- [ ] ALL auth checks identified
+- [ ] ALL external calls identified
+
+### Phase 2: Security Checklist
+- [ ] SQL/Command/Template injection
+- [ ] XSS prevention
+- [ ] Authentication/Authorization
+- [ ] CSRF protection
+- [ ] Race conditions (TOCTOU)
+- [ ] Session management
+- [ ] Cryptography
+- [ ] Information disclosure
+- [ ] DoS prevention
+
+### Phase 3: Verification
+- [ ] Check if already handled elsewhere
+- [ ] Search for existing tests
+- [ ] Verify issue is real
+
+---
+
+## 5. CODE REVIEW CHECKLIST
+
+### Pre-Review
+- [ ] Read PR description
+- [ ] Understand problem
+- [ ] Check CI/CD status
+
+### Functionality
+- [ ] Code solves stated problem
+- [ ] Edge cases handled
+- [ ] Error handling appropriate
+- [ ] Input validation present
+
+### Security
+- [ ] No SQL injection
+- [ ] No XSS
+- [ ] Auth/authz correct
+- [ ] No hardcoded secrets
+
+### Performance
+- [ ] No N+1 queries
+- [ ] Efficient algorithms
+- [ ] No memory leaks
+
+### Code Quality
+- [ ] Readable, clear
+- [ ] Descriptive names
+- [ ] Functions focused
+- [ ] No duplication
+
+### Tests
+- [ ] Tests exist
+- [ ] Edge cases covered
+- [ ] All tests pass
+
+### Documentation
+- [ ] Comments explain WHY
+- [ ] API docs updated
+- [ ] Breaking changes noted
+
+---
+
+## 6. ERROR HANDLING PATTERNS
+
+### Exception Strategy
+- [ ] Use exceptions, not return codes
+- [ ] Try-catch-finally first
+- [ ] Fail fast with clear errors
+
+### Error Recovery
+- [ ] Retry transient failures
+- [ ] Circuit breaker pattern
+- [ ] Graceful degradation
+- [ ] Fallback strategies
+
+### Logging
+- [ ] Log with context
+- [ ] Include correlation IDs
+- [ ] Structured logging
+- [ ] No sensitive data
+
+### User Experience
+- [ ] Friendly error messages
+- [ ] No stack traces to users
+- [ ] Actionable guidance
+- [ ] Consistent error format
+
+---
+
+## 7. TESTING PATTERTS
+
+### TDD Workflow
+- [ ] Red: Write failing test
+- [ ] Green: Minimal code to pass
+- [ ] Refactor: Clean up
+
+### Test Structure
+```typescript
+describe('Feature', () => {
+  beforeEach(() => { jest.clearAllMocks() });
+  
+  describe('Happy path', () => {});
+  describe('Error cases', () => {});
+  describe('Edge cases', () => {});
+});
+```
+
+### Factory Pattern
+- [ ] Create mock factories
+- [ ] Sensible defaults
+- [ ] Allow overrides
+
+### Mocking
+- [ ] Mock external dependencies
+- [ ] Test behavior, not mocks
+- [ ] Clear mocks between tests
+
+---
+
+## 8. ARCHITECTURE PATTERNS
+
+### Clean Architecture
+- [ ] Dependencies point inward
+- [ ] Domain layer has no dependencies
+- [ ] Use cases orchestrate
+- [ ] Entities are pure
+
+### Hexagonal Architecture
+- [ ] Ports define interfaces
+- [ ] Adapters implement ports
+- [ ] No framework dependencies in core
+
+### DDD Concepts
+- [ ] Bounded contexts defined
+- [ ] Aggregates cluster related entities
+- [ ] Value objects are immutable
+- [ ] Domain events for state changes
+
+### For Workflows
+- [ ] Use durable execution
+- [ ] Implement saga pattern if needed
+- [ ] Design for failure recovery
+
+---
+
+## 9. ARCHITECTURE DECISION RECORDS
+
+### When to Write ADR
+- [ ] New framework adoption
+- [ ] Database technology choice
+- [ ] API design patterns
+- [ ] Security architecture
+- [ ] Integration patterns
+
+### ADR Structure
+- Context (why we needed decision)
+- Decision (what we decided)
+- Consequences (positive/negative/risks)
+- Related decisions
+
+---
+
+## 10. DATABASE DESIGN
+
+### Schema Design
+- [ ] Normalized appropriately
+- [ ] Primary keys defined
+- [ ] Foreign keys for relationships
+- [ ] Appropriate data types
+- [ ] Index strategy defined
+
+### ORM Usage
+- [ ] Choose ORM intentionally (not default)
+- [ ] Model relationships clearly
+- [ ] Use migrations
+- [ ] Handle N+1 with eager loading
+
+### Query Patterns
+- [ ] No SELECT * in production
+- [ ] Parameterized queries
+- [ ] Appropriate batching
+
+---
+
+## 11. DATABASE OPTIMIZATION
+
+### Query Optimization
+- [ ] Use EXPLAIN ANALYZE
+- [ ] Check query plans
+- [ ] Identify expensive queries
+
+### Indexing Strategy
+- [ ] Index foreign keys
+- [ ] Index frequently queried columns
+- [ ] Use composite indexes wisely
+- [ ] Consider covering indexes
+
+### N+1 Resolution
+- [ ] Detect N+1 patterns
+- [ ] Use eager loading
+- [ ] Batch queries where needed
+- [ ] Consider DataLoader for GraphQL
+
+### Caching
+- [ ] Multi-tier caching (L1/L2/L3)
+- [ ] Cache invalidation strategy
+- [ ] Write-through/write-behind
+
+---
+
+## 12. SECURITY BEST PRACTICES
+
+### Authentication
+- [ ] Strong password hashing (bcrypt)
+- [ ] JWT with short expiration
+- [ ] Secure session management
+- [ ] MFA consideration
+
+### Authorization
+- [ ] RBAC implementation
+- [ ] Check permissions on every operation
+- [ ] No privilege escalation
+
+### Input Validation
+- [ ] Validate ALL inputs
+- [ ] Sanitize for SQL/XSS
+- [ ] Use parameterized queries
+- [ ] Allowlists over blocklists
+
+### API Security
+- [ ] Rate limiting
+- [ ] CORS properly configured
+- [ ] Security headers (Helmet)
+- [ ] No sensitive data in URLs
+
+---
+
+## 13. API PATTERNS
+
+### REST Design
+- [ ] Nouns for resources
+- [ ] Proper HTTP methods
+- [ ] Consistent URL patterns
+- [ ] Proper status codes
+
+### Response Format
+- [ ] Consistent envelope
+- [ ] Error format standard
+- [ ] Pagination for lists
+- [ ] HATEOAS where appropriate
+
+### GraphQL (if used)
+- [ ] Schema-first design
+- [ ] N+1 prevention (DataLoader)
+- [ ] Query complexity limits
+
+### tRPC (if used)
+- [ ] Type-safe procedures
+- [ ] Input validation
+- [ ] Error handling
+
+### Versioning
+- [ ] Strategy defined (URI/header/query)
+- [ ] Backward compatibility
+
+---
+
+## 14. API SECURITY
+
+### OWASP API Top 10
+- [ ] Broken Object Level Authorization
+- [ ] Broken Authentication
+- [ ] Broken Object Property Level Authorization
+- [ ] Unrestricted Resource Consumption
+- [ ] Broken Function Level Authorization
+- [ ] Unrestricted Access to Sensitive Flows
+- [ ] Server Side Request Forgery
+- [ ] Security Misconfiguration
+- [ ] Improper Inventory Management
+- [ ] Unsafe API Consumption
+
+### Rate Limiting
+- [ ] Per-user limits
+- [ ] Stricter for auth endpoints
+- [ ] Use Redis for distributed
+- [ ] Return proper headers
+
+---
+
+## 15. OBSERVABILITY ENGINEER
+
+### Logging
+- [ ] Structured JSON logging
+- [ ] Appropriate log levels
+- [ ] Include correlation IDs
+- [ ] No sensitive data
+
+### Metrics
+- [ ] Key business metrics
+- [ ] Performance metrics
+- [ ] Error rates
+- [ ] Custom instrumentation
+
+### Tracing
+- [ ] Distributed tracing setup
+- [ ] Trace correlation
+- [ ] Span naming
+- [ ] Sampling strategy
+
+### Alerts
+- [ ] SLO-based alerts
+- [ ] Appropriate thresholds
+- [ ] Runbook for each alert
+- [ ] Alert fatigue prevention
+
+---
+
+## 16. INCIDENT RESPONDER
+
+### Immediate Actions (First 5 min)
+- [ ] Assess severity & impact
+- [ ] Establish incident command
+- [ ] Immediate stabilization
+
+### Investigation
+- [ ] Observability-driven investigation
+- [ ] SRE techniques applied
+- [ ] Advanced troubleshooting
+
+### Communication
+- [ ] Internal updates (15 min during SEV1)
+- [ ] Status page updates
+- [ ] Clear documentation
+
+### Recovery
+- [ ] Minimal viable fix
+- [ ] Staged rollout
+- [ ] Full validation
+
+### Post-Incident
+- [ ] Blameless postmortem
+- [ ] 5 whys analysis
+- [ ] Action items with owners
+
+---
+
+## 17. POSTMORTEM WRITING
+
+### Blameless Culture
+- [ ] Focus on systems, not people
+- [ ] Ask "what allowed this?" not "who caused this?"
+- [ ] Share learnings, don't hide
+
+### Postmortem Structure
+- Executive Summary
+- Timeline
+- Root Cause Analysis
+- Detection (what worked/didn't)
+- Response (what worked/could improve)
+- Impact (customer, business, technical)
+- Lessons Learned
+- Action Items with owners
+
+### Action Items
+- [ ] Specific, measurable
+- [ ] Owner assigned
+- [ ] Due date set
+- [ ] Tracked in ticketing
+
+---
+
+# RISK ASSESSMENT FRAMEWORK
+
+## Risk Categories
+
+### 1. Blast Radius
+- [ ] Systems affected
+- [ ] Failure impact
+- [ ] Recovery time
+- [ ] Data loss potential
+
+### 2. Deployment Risk
+- [ ] Rollback time
+- [ ] Blue-green possible?
+- [ ] Canary possible?
+- [ ] Feature flags?
+
+### 3. Data Risk
+- [ ] Schema migration?
+- [ ] Data migration?
+- [ ] Rollback capability?
+- [ ] Backup verification?
+
+### 4. Dependency Risk
+- [ ] New dependencies?
+- [ ] Dependency health?
+- [ ] Supply chain?
+- [ ] License?
+
+### 5. Security Risk
+- [ ] Attack surface?
+- [ ] Privilege required?
+- [ ] Data exposure?
+- [ ] Credential handling?
+
+### 6. Performance Risk
+- [ ] Scalability?
+- [ ] Resource usage?
+- [ ] Bottlenecks?
+- [ ] Cost impact?
+
+---
+
+# ADVANCED ENGINEERING PATTERNS
+
+## Property-Based Testing
+- [ ] Generate random inputs
+- [ ] Test invariants
+- [ ] Test commutativity
+- [ ] Test associativity
+- [ ] Test idempotency
+
+## Fuzzing
+- [ ] Random byte fuzzing
+- [ ] Grammar-based fuzzing
+- [ ] Mutation fuzzing
+- [ ] Coverage-guided fuzzing
+
+## Contract Programming
+- [ ] Preconditions checked
+- [ ] Postconditions verified
+- [ ] Invariants maintained
+
+## Stateful Testing
+- [ ] Sequence testing
+- [ ] State machine testing
+- [ ] Lifecycle testing
+
+## Concurrency Testing
+- [ ] Race condition detection
+- [ ] Deadlock detection
+- [ ] Starvation detection
+
+---
+
+# CONFIDENCE SCORING
+
+**REQUIRED: No single dimension < 70%, Average >= 98%**
+
+| Dimension | Weight | Min Threshold |
+|-----------|--------|--------------|
+| Tests passing | 20 | 95 |
+| Security hardened | 20 | 95 |
+| Edge cases handled | 15 | 90 |
+| Error handling | 15 | 90 |
+| Performance | 10 | 85 |
+| Code clarity | 10 | 90 |
+| Observability | 5 | 80 |
+| Compatibility | 5 | 90 |
+
+---
+
+# NON-NEGOTIABLE RULES
+
+- [ ] NEVER skip understanding phase
+- [ ] NEVER skip security hardening
+- [ ] NEVER skip error handling
+- [ ] NEVER skip concurrency review
+- [ ] NEVER skip performance review
+- [ ] NEVER deploy without verification
+- [ ] ALWAYS think systems-first
+- [ ] ALWAYS consider failure modes
+- [ ] ALWAYS document contracts
+- [ ] ALWAYS own full stack
+- [ ] NEVER assume input is valid
+- [ ] NEVER assume dependencies work
+- [ ] ALWAYS verify tests run
+- [ ] ALWAYS think about scale
+
+---
+
+# STAFF ENGINEER PRINCIPLES
+
+1. **Correctness First** — Wrong and slow beats wrong and fast
+2. **Simple is Hard** — Complexity is the enemy
+3. **Contracts Matter** — Define, document, enforce
+4. **Failure Inevitable** — Design for it
+5. **Observability Required** — You can't debug what you can't see
+6. **Security Table Stakes** — Never compromise
+7. **Test or Buggy** — Untested code is broken code
+8. **Review Your Own Work** — If you won't approve it, fix it
+9. **Think Full-Stack** — Downstream effects matter
+10. **Document for Next Engineer** — Write as if they'll be frustrated
+11. **Assume Nothing** — Question everything
+12. **Defensive Programming** — Trust but verify
+13. **Fail Fast, Fail Safe** — Clear failure modes
+14. **Single Source of Truth** — Don't duplicate
+15. **YAGNI vs YAAFAI** — But anticipate real needs
+
+---
+
+# COMPLETION CRITERIA (STRICT)
+
+**The task is complete ONLY when ALL of:**
+
+- [ ] All TODOs implemented
+- [ ] Tests cover ALL paths
+- [ ] ALL security checklist items addressed
+- [ ] ALL concurrency checklist items addressed
+- [ ] ALL error handling checklist items addressed
+- [ ] ALL performance checklist items addressed
+- [ ] ALL observability checklist items addressed
+- [ ] Self-review score >= 98%
+- [ ] No lint errors
+- [ ] No typecheck errors
+- [ ] Build passes
+- [ ] Integration tests pass
+- [ ] Fullstack implications considered
+- [ ] Blast radius assessed
+- [ ] Rollback strategy defined
+- [ ] Chaos testing passed
+- [ ] Documentation updated
+- [ ] 10-pass self-improvement COMPLETE
+
+---
+
+# AUTONOMOUS OUTPUT FORMAT
+
+**REPORT COMPLETION - NO PROMPTS, JUST OUTPUT:**
+
+```
+## Completed: [1-line summary]
+
+### Executed
+- Phase 1-10: COMPLETE
+- 10-Pass Loop: COMPLETE
+- Files: [count]
+- LOC: +[added]/-[removed]
+
+### Verified
+✓ Tests: [pass count]
+✓ Lint: [pass/fail]
+✓ Typecheck: [pass/fail]  
+✓ Build: [pass/fail]
+✓ Security: PASS
+✓ Concurrency: PASS
+✓ Performance: PASS
+
+### Checklists Done
+✓ Security ([count]/13)
+✓ Concurrency ([count]/10)
+✓ Error Handling ([count]/10)
+✓ Performance ([count]/10)
+✓ Observability ([count]/8)
+✓ Clean Code ([count]/12)
+✓ Testing ([count]/8)
+✓ Architecture ([count]/8)
+
+### Risk
+- Blast: [description]
+- Rollback: [strategy]
+
+### 10-Pass Loop Results
+- Pass 1 (Implementation): [score]
+- Pass 2 (Security): [score]
+- Pass 3 (Concurrency): [score]
+- Pass 4 (Performance): [score]
+- Pass 5 (Architecture): [score]
+- Pass 6 (Testing): [score]
+- Pass 7 (Observability): [score]
+- Pass 8 (Documentation): [score]
+- Pass 9 (Integration): [score]
+- Pass 10 (Final Polish): [score]
+
+### Final Score: [98-100]%
+
+### Done. [Any notes]
+```
+
+---
+
+# FINAL MANDATE
+
+**THIS SKILL IS YOUR SWISS ARMY KNIFE.**
+
+It integrates:
+- Clean Code (Uncle Bob)
+- Systematic Debugging
+- Bug Hunting
+- Security Finding
+- Code Review
+- Error Handling
+- Testing Patterns
+- TDD
+- Architecture Patterns
+- ADRs
+- Database Design
+- Database Optimization
+- Security Best Practices
+- API Patterns
+- API Security
+- Observability
+- Incident Response
+- Postmortem Writing
+
+**EXECUTE WITH ABSOLUTE PRECISION.**
+
+**NEVER ASK. JUST DO.**
+
+**DONE.**

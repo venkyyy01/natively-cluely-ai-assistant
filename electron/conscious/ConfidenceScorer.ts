@@ -6,6 +6,8 @@ import {
   InterviewPhase,
   RESUME_THRESHOLD 
 } from './types';
+import { IsotonicCalibrator } from './ConfidenceCalibrator';
+import { isVerifierOptimizationActive } from '../config/optimizations';
 
 const EXPLICIT_RESUME_MARKERS = [
   /back to/i,
@@ -31,11 +33,39 @@ const TOPIC_SHIFT_MARKERS = [
 ];
 
 export class ConfidenceScorer {
+  private calibrator: IsotonicCalibrator | null = null;
+  private profileId: string | null = null;
+
+  constructor(profileId?: string) {
+    if (profileId) {
+      this.profileId = profileId;
+      this.calibrator = IsotonicCalibrator.load(profileId);
+    }
+  }
+
+  private cosineSimilarity(a: number[], b: number[]): number {
+    if (a.length !== b.length) return 0;
+
+    let dot = 0;
+    let normA = 0;
+    let normB = 0;
+
+    for (let i = 0; i < a.length; i++) {
+      dot += a[i] * b[i];
+      normA += a[i] * a[i];
+      normB += b[i] * b[i];
+    }
+
+    if (normA === 0 || normB === 0) return 0;
+    return dot / (Math.sqrt(normA) * Math.sqrt(normB));
+  }
+
   calculateResumeConfidence(
     transcript: string,
     thread: ConversationThread,
     currentPhase: InterviewPhase,
-    sttConfidence: number = 0.9
+    sttConfidence: number = 0.9,
+    queryEmbedding?: number[]
   ): ConfidenceScore {
     const now = Date.now();
     const lowerTranscript = transcript.toLowerCase();
@@ -68,11 +98,13 @@ export class ConfidenceScorer {
       lowerTranscript.includes(thread.interruptedBy.toLowerCase());
     const interruptionRecency = recentInterruption ? 1.0 : 0.0;
     
-    // Embedding score placeholder (0 if not available)
-    const embeddingScore = 0;
+    // Embedding score (if available)
+    const embeddingScore = thread.embedding && queryEmbedding
+      ? this.cosineSimilarity(thread.embedding, queryEmbedding)
+      : 0;
     
     // Calculate weighted sum
-    const total = Math.max(0, Math.min(1,
+    const rawTotal = Math.max(0, Math.min(1,
       (bm25Score * CONFIDENCE_WEIGHTS.bm25) +
       (embeddingScore * CONFIDENCE_WEIGHTS.embedding) +
       (explicitMarkers * CONFIDENCE_WEIGHTS.explicitMarkers) +
@@ -82,6 +114,12 @@ export class ConfidenceScorer {
       (topicShiftPenalty * CONFIDENCE_WEIGHTS.topicShiftPenalty) +
       (interruptionRecency * CONFIDENCE_WEIGHTS.interruptionRecency)
     ));
+
+    // Apply calibration if flag is enabled
+    const useCalibration = isVerifierOptimizationActive('useConfidenceCalibration');
+    const calibratedTotal = useCalibration && this.calibrator
+      ? this.calibrator.calibrate(rawTotal)
+      : rawTotal;
     
     return {
       bm25Score,
@@ -92,7 +130,7 @@ export class ConfidenceScorer {
       sttQuality,
       topicShiftPenalty,
       interruptionRecency,
-      total,
+      total: calibratedTotal,
     };
   }
   
@@ -161,5 +199,24 @@ export class ConfidenceScorer {
   
   shouldResume(confidence: ConfidenceScore): boolean {
     return confidence.total >= RESUME_THRESHOLD;
+  }
+
+  addTrainingSample(rawScore: number, outcome: boolean): void {
+    if (!this.calibrator) return;
+    this.calibrator.addSample(rawScore, outcome);
+  }
+
+  fitCalibrator(): void {
+    if (!this.calibrator) return;
+    this.calibrator.fitFromSamples();
+  }
+
+  persistCalibration(): void {
+    if (!this.calibrator || !this.profileId) return;
+    this.calibrator.persist(this.profileId);
+  }
+
+  getCalibrationSampleCount(): number {
+    return this.calibrator?.getSampleCount() ?? 0;
   }
 }

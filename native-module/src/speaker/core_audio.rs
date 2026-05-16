@@ -48,11 +48,14 @@ impl SpeakerInput {
 
         let tap_desc = ca::TapDesc::with_mono_global_tap_excluding_processes(&ns::Array::new());
         let tap = tap_desc.create_process_tap()?;
-        println!("[CoreAudioTap] Tap created: {:?}", tap.uid());
+        let tap_uid = tap
+            .uid()
+            .map_err(|_| anyhow::anyhow!("Process tap did not provide a UID"))?;
+        println!("[CoreAudioTap] Tap created: {:?}", tap_uid);
 
         let sub_tap = cf::DictionaryOf::with_keys_values(
             &[ca::sub_device_keys::uid()],
-            &[tap.uid().unwrap().as_type_ref()],
+            &[tap_uid.as_type_ref()],
         );
 
         // 3. Create aggregate device descriptor
@@ -90,7 +93,10 @@ impl SpeakerInput {
         let asbd = tap
             .asbd()
             .map_err(|_| anyhow::anyhow!("Failed to get ASBD from tap"))?;
-        let format = av::AudioFormat::with_asbd(&asbd).unwrap();
+        let format = match av::AudioFormat::with_asbd(&asbd) {
+            Some(format) => format,
+            None => return Err(anyhow::anyhow!("Failed to create AudioFormat from ASBD")),
+        };
         let channels = asbd.channels_per_frame;
         println!(
             "[CoreAudioTap] Format: {}Hz, {}ch",
@@ -147,7 +153,10 @@ extern "C" fn proc(
     _output_time: &cat::AudioTimeStamp,
     ctx: Option<&mut Ctx>,
 ) -> os::Status {
-    let ctx = ctx.unwrap();
+    let ctx = match ctx {
+        Some(ctx) => ctx,
+        None => return os::Status::NO_ERR,
+    };
 
     ctx.current_sample_rate.store(
         device
@@ -157,10 +166,13 @@ extern "C" fn proc(
     );
 
     let _channels = ctx.channels;
+    let Some(first_buffer) = input_data.buffers.first() else {
+        return os::Status::NO_ERR;
+    };
 
     if let Some(view) = av::AudioPcmBuf::with_buf_list_no_copy(&ctx.format, input_data, None) {
         if let Some(data) = view.data_f32_at(0) {
-            let buffer_channels = input_data.buffers[0].number_channels;
+            let buffer_channels = first_buffer.number_channels;
             let actual_ch = if buffer_channels > 1 {
                 buffer_channels
             } else {
@@ -169,7 +181,6 @@ extern "C" fn proc(
             push_audio(ctx, data, actual_ch);
         }
     } else if ctx.format.common_format() == av::audio::CommonFormat::PcmF32 {
-        let first_buffer = &input_data.buffers[0];
         let byte_count = first_buffer.data_bytes_size as usize;
         let float_count = byte_count / std::mem::size_of::<f32>();
 

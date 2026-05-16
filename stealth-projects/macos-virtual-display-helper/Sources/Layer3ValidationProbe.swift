@@ -87,19 +87,26 @@ private struct DefaultLayer3ShareableContentProvider: Layer3ShareableContentProv
         let semaphore = DispatchSemaphore(value: 0)
         var windows: [Layer3WindowMetadata] = []
 
-        Task {
-            defer { semaphore.signal() }
+        let task = Task { () -> [Layer3WindowMetadata] in
             do {
                 let shareable = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
-                windows = shareable.windows.map { window in
+                return shareable.windows.map { window in
                     Layer3WindowMetadata(windowNumber: Int(window.windowID), title: window.title)
                 }
             } catch {
-                windows = []
+                return []
             }
         }
 
-        _ = semaphore.wait(timeout: .now() + 2)
+        Task {
+            windows = await task.value
+            semaphore.signal()
+        }
+
+        if semaphore.wait(timeout: .now() + 2) == .timedOut {
+            task.cancel()
+            return []
+        }
         return windows
         #else
         return []
@@ -124,10 +131,15 @@ public struct DefaultLayer3ValidationProbe: Layer3ValidationProbing {
     public func validate(snapshot: Layer3PresenterValidationSnapshot) -> Layer3ValidationReport {
         let windows = provider.currentWindows()
         let matchedWindowNumber = windows.contains { $0.windowNumber == snapshot.windowNumber }
-        let matchedWindowTitle = windows.contains { $0.title == snapshot.windowTitle }
+        // Only match on title if the snapshot has a non-empty title to avoid
+        // false positives from the many system windows with empty titles.
+        let matchedWindowTitle = !snapshot.windowTitle.isEmpty && windows.contains { $0.title == snapshot.windowTitle }
         let windowEnumerated = matchedWindowNumber || matchedWindowTitle
         let shareableWindows = shareableContentProvider.currentWindows()
-        let matchedShareableContentWindow = shareableWindows.contains { $0.windowNumber == snapshot.windowNumber || $0.title == snapshot.windowTitle }
+        let matchedShareableContentWindow = shareableWindows.contains {
+            $0.windowNumber == snapshot.windowNumber ||
+            (!snapshot.windowTitle.isEmpty && $0.title == snapshot.windowTitle)
+        }
         let screenCaptureKitEnumerated = matchedShareableContentWindow
 
         if windowEnumerated || screenCaptureKitEnumerated {

@@ -15,8 +15,11 @@ const bridge: StealthShellBridge = {
   notifyReady() {
     ipcRenderer.send('stealth-shell:ready');
   },
-  notifyFramePresented(frameId: number) {
-    ipcRenderer.send('stealth-shell:frame-presented', { frameId });
+  notifyHeartbeat() {
+    ipcRenderer.send('stealth-shell:heartbeat');
+  },
+  sendShortcutAction(actionId: string) {
+    ipcRenderer.send('stealth-shell:shortcut', actionId);
   },
 };
 

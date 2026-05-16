@@ -12,7 +12,8 @@ export {
     cleanTranscript,
     sparsifyTranscript,
     formatTranscriptForLLM,
-    prepareTranscriptForWhatToAnswer
+    prepareTranscriptForWhatToAnswer,
+    prepareTranscriptForReasoning
 } from "./transcriptCleaner";
 export type { TranscriptTurn } from "./transcriptCleaner";
 export {
@@ -26,6 +27,26 @@ export {
     warmupIntentClassifier
 } from "./IntentClassifier";
 export type { ConversationIntent, IntentResult } from "./IntentClassifier";
+export {
+    IntentClassificationCoordinator,
+    FoundationModelsIntentProvider,
+    LegacyIntentProvider,
+    FOUNDATION_INTENT_ALLOWED_INTENTS,
+    FOUNDATION_INTENT_PROMPT_VERSION,
+    FOUNDATION_INTENT_SCHEMA_VERSION,
+    resolveFoundationModelsIntentHelperPath,
+    createIntentProviderError,
+    getIntentProviderErrorCode,
+} from './providers';
+export type {
+    CoordinatedIntentResult,
+    IntentClassificationCoordinatorOptions,
+    IntentClassificationInput,
+    IntentInferenceProvider,
+    IntentProviderError,
+    IntentProviderErrorType,
+    FoundationIntentLabel,
+} from './providers';
 export { MODE_CONFIGS } from "./types";
 export type { GenerationConfig, GeminiContent, LLMClient } from "./types";
 export {

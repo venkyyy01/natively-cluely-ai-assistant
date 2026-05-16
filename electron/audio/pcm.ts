@@ -1,3 +1,8 @@
+/**
+ * Fast-path mono PCM rate conversion (nearest-neighbor). Prefer native `PolyphaseResampler`
+ * (NAT-043) when audio originates from `MicrophoneCapture` / `SystemAudioCapture`; keep this
+ * for fallbacks or non-native sources.
+ */
 export function resampleToMonoPcm16(chunk: Buffer, inputSampleRate: number, inputChannels: number, targetSampleRate: number): Buffer {
     const sampleCount = Math.floor(chunk.length / 2);
     if (sampleCount <= 0) {

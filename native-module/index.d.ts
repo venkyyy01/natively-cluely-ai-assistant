@@ -7,30 +7,259 @@
 export declare function getHardwareId(): string
 /** Open build compatibility shim - always resolves successfully. */
 export declare function verifyGumroadKey(licenseKey: string): Promise<unknown>
+/**
+ * Represents information about a visible window.
+ * Used by the Electron side for capture detection instead of spawning Python.
+ */
+export interface WindowInfo {
+  windowNumber: number
+  ownerName: string
+  ownerPid: number
+  windowTitle: string
+  isOnScreen: boolean
+  sharingState: number
+  alpha: number
+}
+/**
+ * T-001: Process information for native process enumeration.
+ * Replaces pgrep/ps/tasklist child process spawns.
+ */
+export interface ProcessInfo {
+  pid: number
+  ppid: number
+  name: string
+}
 export declare function applyMacosWindowStealth(windowNumber: number): void
 export declare function removeMacosWindowStealth(windowNumber: number): void
 export declare function applyMacosPrivateWindowStealth(windowNumber: number): void
 export declare function removeMacosPrivateWindowStealth(windowNumber: number): void
+export declare function setMacosWindowLevel(windowNumber: number, level: number): void
 export declare function verifyMacosStealthState(windowNumber: number): number
+export declare function verifyMacosCaptureExclusion(windowNumber: number): boolean
+/**
+ * Exclude a window from ScreenCaptureKit capture enumeration.
+ * Combines NSWindow.sharingType = .none with CGSSetWindowTags on macOS 15+.
+ */
+export declare function excludeFromCapture(windowNumber: number): void
+/**
+ * Apply ONLY the CGS window tag for ScreenCaptureKit exclusion (no sharingType change).
+ * On macOS < 15, this is a graceful no-op.
+ */
+export declare function applySckExclusion(windowNumber: number): void
+/**
+ * Verify that the SCK exclusion tag is set on a window via CGSGetWindowTags.
+ * Returns true if the window is properly excluded from SCK enumeration.
+ * On non-macOS, always returns true (window is considered excluded).
+ */
+export declare function verifySckExclusion(windowNumber: number): boolean
 export declare function applyWindowsWindowStealth(hwndBuffer: Buffer): void
 export declare function removeWindowsWindowStealth(hwndBuffer: Buffer): void
 export declare function verifyWindowsStealthState(hwndBuffer: Buffer): number
+/**
+ * Apply the WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW extended window styles to
+ * a Windows HWND. Prevents the OS from promoting the window to foreground
+ * on click — the analogue of macOS's NSPanel non-activating panel. Used by
+ * the overlay window to avoid sending `blur` events to the focused browser
+ * tab when the user interacts with the overlay.
+ *
+ * On non-Windows platforms this is a no-op.
+ */
+export declare function applyWindowsNoActivate(hwndBuffer: Buffer): void
+/**
+ * Reverse of `apply_windows_no_activate`. Restores the ability of the
+ * window to receive native foreground activation. Called when stealth
+ * mode is disabled or when the overlay needs to receive native focus on
+ * demand (e.g. while typing into an input field).
+ *
+ * On non-Windows platforms this is a no-op.
+ */
+export declare function clearWindowsNoActivate(hwndBuffer: Buffer): void
+/**
+ * List all visible windows using Core Graphics.
+ * This replaces the Python3 subprocess call to Quartz.CGWindowListCopyWindowInfo.
+ */
+export declare function listVisibleWindows(): Array<WindowInfo>
+/**
+ * Check if any browser-based capture is active based on window titles.
+ * Combines the Quartz window enumeration + browser check in a single native call.
+ */
+export declare function checkBrowserCaptureWindows(): boolean
+/**
+ * Returns the list of visible windows excluding Natively-owned windows.
+ * Used by the TypeScript layer to compare against the full window list and
+ * verify that Natively windows are properly excluded from SCK enumeration.
+ */
+export declare function getFilteredDisplayList(): Array<WindowInfo>
+export declare function getRunningProcesses(): Array<ProcessInfo>
+/**
+ * Check whether a specific key event (keycode + modifier flags) would be
+ * suppressed by the stealth tap.
+ *
+ * This is a standalone query function that does not require the tap to be
+ * running. It checks if the given keycode and flags match any registered
+ * stealth shortcut.
+ *
+ * Returns `true` if the event matches a shortcut and should be suppressed
+ * (i.e., swallowed at the tap level before reaching the active application),
+ * `false` otherwise.
+ *
+ * Parameters:
+ * - `keycode`: Virtual key code (CGKeyCode, u16 on macOS)
+ * - `flags`: Modifier flags (CGEventFlags, passed as i64 to accommodate
+ *   JavaScript number type; internally cast to u64)
+ *
+ * On non-macOS platforms, always returns `false` (no suppression).
+ */
+export declare function suppressKeyEvent(keycode: number, flags: number): boolean
 export interface AudioDeviceInfo {
   id: string
   name: string
 }
 export declare function getInputDevices(): Array<AudioDeviceInfo>
 export declare function getOutputDevices(): Array<AudioDeviceInfo>
+/**
+ * A stealth keyboard monitor that uses CGEventTap instead of globalShortcut.
+ * This is invisible to proctoring software that enumerates registered hotkeys.
+ *
+ * ## Dual-Binding Mode
+ *
+ * When dual-binding mode is enabled via `setDualBindingMode(true)`, the tap
+ * suppresses matched key events so they never reach the active application or
+ * Electron's `globalShortcut`. This allows the CGEventTap to take priority over
+ * globalShortcut when both are registered for the same keys.
+ *
+ * When dual-binding mode is disabled (default), the tap passes events through
+ * unchanged, allowing Electron's `globalShortcut` to also handle them as a
+ * fallback mechanism.
+ */
+export declare class StealthKeyMonitor {
+  constructor()
+  /**
+   * Start the stealth key monitor. The callback receives action IDs
+   * (e.g. "general:take-screenshot") when matching key combinations are pressed.
+   * Unlike globalShortcut, this cannot be enumerated by other processes.
+   *
+   * By default, dual-binding mode is off — events pass through to the active
+   * application and Electron's globalShortcut. Call `setDualBindingMode(true)`
+   * to suppress matched events at the tap level.
+   *
+   * Returns an error if the CGEventTap cannot be created (e.g., Accessibility
+   * permission not granted). The TypeScript layer should catch this error and
+   * fall back to Electron's `globalShortcut` mechanism.
+   */
+  start(callback: (...args: any[]) => any): void
+  /** Stop the stealth key monitor. */
+  stop(): void
+  /**
+   * Update the shortcut configuration from the TypeScript layer.
+   *
+   * Accepts a JSON string representing an array of shortcut entries:
+   * ```json
+   * [
+   *   {"actionId": "general:take-screenshot", "keycode": 1, "modifiers": 1048576},
+   *   {"actionId": "general:toggle-visibility", "keycode": 9, "modifiers": 1966080}
+   * ]
+   * ```
+   *
+   * Where:
+   * - `actionId`: The action identifier string (e.g., "general:take-screenshot")
+   * - `keycode`: The macOS virtual key code (u16)
+   * - `modifiers`: The CGEventFlags bitmask for modifier keys
+   *   - Command: 1 << 20 = 1048576
+   *   - Shift: 1 << 17 = 131072
+   *   - Alt/Option: 1 << 19 = 524288
+   *   - Control: 1 << 18 = 262144
+   *
+   * The dynamic config takes priority over hardcoded defaults when non-empty.
+   * Pass an empty array `"[]"` to clear the dynamic config and revert to defaults.
+   *
+   * This can be called at any time, including while the tap is running.
+   * The update is atomic — the tap callback will see the new config on its
+   * next key event.
+   */
+  updateShortcutConfig(configJson: string): void
+  /**
+   * Enable or disable dual-binding mode at runtime.
+   *
+   * When enabled (`true`):
+   * - The CGEventTap suppresses matched key events (returns NULL from callback)
+   * - Keystrokes for registered shortcuts never reach the active app or globalShortcut
+   * - The tap takes full priority for shortcut handling
+   *
+   * When disabled (`false`, default):
+   * - The CGEventTap passes all events through unchanged
+   * - Electron's globalShortcut can still handle the same shortcuts as a fallback
+   * - Both the tap callback AND globalShortcut will fire for matched keys
+   *
+   * This can be toggled at any time, even while the tap is running.
+   */
+  setDualBindingMode(enabled: boolean): void
+  /** Query whether dual-binding mode is currently active. */
+  getDualBindingMode(): boolean
+  /**
+   * Health-check: returns whether the CGEventTap is currently active.
+   *
+   * The tap is considered active when:
+   * 1. `start()` has been called (started == true), AND
+   * 2. The stop signal has NOT been set (the tap thread is still running)
+   *
+   * This allows the TypeScript layer to verify the tap is healthy and
+   * decide whether to fall back to globalShortcut.
+   */
+  isTapActive(): boolean
+}
+/**
+ * JS-facing cross-platform cursor hook controller.
+ *
+ * Backed by `CGEventTap` on macOS and `WH_MOUSE_LL` on Windows. Both
+ * implementations share the same JS API and event payload shape.
+ *
+ * Lifecycle:
+ *   const hook = new CursorHook();
+ *   hook.setOverlayBounds(x, y, width, height);
+ *   hook.setActive(true);                    // arms (overlay visible)
+ *   hook.start(event => { ... });            // installs hook, throws if perms denied / unsupported
+ *   ...
+ *   hook.setActive(false);                   // disarms (overlay hidden)
+ *   hook.stop();                             // tears the hook down
+ */
+export declare class CursorHook {
+  constructor()
+  /**
+   * Update the overlay bounding rectangle in global screen coordinates.
+   * Called whenever the overlay moves, resizes, or changes display.
+   */
+  setOverlayBounds(x: number, y: number, width: number, height: number): void
+  /**
+   * Toggle whether the hook should suppress events when the cursor enters
+   * the overlay. The hook stays installed either way; `setActive=false`
+   * just makes the hot path a passthrough so we don't pay the round-trip
+   * cost of starting / stopping it on every overlay show/hide.
+   */
+  setActive(active: boolean): void
+  /**
+   * Install the platform-specific hook. Errors when:
+   *   - macOS: Accessibility permission has not been granted.
+   *   - Windows: SetWindowsHookExW failed (rare, usually permission-related).
+   *   - Other platforms: returns Ok with no-op (hook is unsupported).
+   */
+  start(callback: (...args: any[]) => any): void
+  stop(): void
+  /** Whether the hook is currently running. */
+  isActive(): boolean
+}
 export declare class SystemAudioCapture {
-  constructor(deviceId?: string | undefined | null)
+  constructor(deviceId?: string | undefined | null, outputSampleRate?: number | undefined | null)
   getSampleRate(): number
-  isInitialized(): boolean
-  start(callback: (...args: any[]) => any, onSpeechEnded?: (...args: any[]) => any | undefined | null, onError?: (...args: any[]) => any | undefined | null): void
+  /** Sample rate of PCM buffers emitted to JS (after native polyphase resample). */
+  getOutputSampleRate(): number
+  start(callback: (...args: any[]) => any, onSpeechEnded?: (...args: any[]) => any | undefined | null): void
   stop(): void
 }
 export declare class MicrophoneCapture {
-  constructor(deviceId?: string | undefined | null)
+  constructor(deviceId?: string | undefined | null, outputSampleRate?: number | undefined | null)
   getSampleRate(): number
+  getOutputSampleRate(): number
   start(callback: (...args: any[]) => any, onSpeechEnded?: (...args: any[]) => any | undefined | null): void
   stop(): void
 }

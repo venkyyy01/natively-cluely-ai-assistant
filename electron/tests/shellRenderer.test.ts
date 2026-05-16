@@ -68,11 +68,13 @@ test('mountStealthShell hides loading indicator after the first frame', () => {
   const loadingIndicator = new FakeElement();
   let onFrame: ((payload: StealthFramePayload) => void) | null = null;
   let notifiedReady = false;
-  let presentedFrameId: number | null = null;
+  let heartbeatCount = 0;
+  let intervalCallback: (() => void) | null = null;
 
   const originalCanvas = globalThis.HTMLCanvasElement;
   const originalImage = globalThis.Image;
   const originalWindow = globalThis.window;
+  const originalSetInterval = globalThis.setInterval;
 
   class FakeImage {
     public onload: (() => void) | null = null;
@@ -86,6 +88,10 @@ test('mountStealthShell hides loading indicator after the first frame', () => {
     HTMLCanvasElement: FakeCanvas,
     Image: FakeImage,
     window: { addEventListener() {} },
+    setInterval(callback: () => void) {
+      intervalCallback = callback;
+      return { unref() {} } as unknown as ReturnType<typeof setInterval>;
+    },
   });
 
   try {
@@ -99,9 +105,10 @@ test('mountStealthShell hides loading indicator after the first frame', () => {
         notifyReady() {
           notifiedReady = true;
         },
-        notifyFramePresented(frameId: number) {
-          presentedFrameId = frameId;
+        notifyHeartbeat() {
+          heartbeatCount += 1;
         },
+        sendShortcutAction() {},
       },
       {
         getElementById(id: string) {
@@ -119,7 +126,11 @@ test('mountStealthShell hides loading indicator after the first frame', () => {
     );
 
     assert.equal(notifiedReady, true);
+    assert.equal(heartbeatCount, 1);
     assert.ok(onFrame);
+
+    intervalCallback?.();
+    assert.equal(heartbeatCount, 2);
 
     onFrame({
       dataUrl: 'data:image/png;base64,ZmFrZQ==',
@@ -127,19 +138,18 @@ test('mountStealthShell hides loading indicator after the first frame', () => {
       height: 80,
       scaleFactor: 1,
       dirtyRects: [],
-      frameId: 1,
     });
 
     assert.equal(canvas.width, 120);
     assert.equal(canvas.height, 80);
     assert.equal(canvas.getDrawCalls(), 1);
     assert.equal(loadingIndicator.classList.contains('hidden'), true);
-    assert.equal(presentedFrameId, 1);
   } finally {
     Object.assign(globalThis, {
       HTMLCanvasElement: originalCanvas,
       Image: originalImage,
       window: originalWindow,
+      setInterval: originalSetInterval,
     });
   }
 });

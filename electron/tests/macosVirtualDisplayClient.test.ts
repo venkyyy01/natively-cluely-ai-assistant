@@ -8,7 +8,7 @@ import { MacosVirtualDisplayClient } from '../stealth/MacosVirtualDisplayClient'
 test('MacosVirtualDisplayClient parses helper status output', async () => {
   const client = new MacosVirtualDisplayClient({
     helperPath: '/tmp/helper',
-    runHelper: async ({ command }: { command: 'status' | 'create-session' | 'release-session'; stdin?: string }) => {
+    runHelper: async ({ command }: { command: 'status' | 'create-session' | 'release-session' | 'heartbeat'; stdin?: string }) => {
       assert.equal(command, 'status');
       return {
         exitCode: 0,
@@ -26,7 +26,7 @@ test('MacosVirtualDisplayClient parses helper status output', async () => {
 test('MacosVirtualDisplayClient sends create-session payloads and returns parsed session results', async () => {
   const client = new MacosVirtualDisplayClient({
     helperPath: '/tmp/helper',
-    runHelper: async ({ command, stdin }: { command: 'status' | 'create-session' | 'release-session'; stdin?: string }) => {
+    runHelper: async ({ command, stdin }: { command: 'status' | 'create-session' | 'release-session' | 'heartbeat'; stdin?: string }) => {
       assert.equal(command, 'create-session');
       const payload = JSON.parse(stdin ?? '{}');
       assert.equal(payload.sessionId, 'session-1');
@@ -63,10 +63,37 @@ test('MacosVirtualDisplayClient returns structured helper failures', async () =>
   await assert.rejects(() => client.getStatus(), /boom/);
 });
 
+test('MacosVirtualDisplayClient rejects malformed request payloads before writing to stdin', async () => {
+  const client = new MacosVirtualDisplayClient({
+    helperPath: '/tmp/helper',
+  });
+
+  const internal = client as unknown as {
+    runHelperProcess: (request: { command: 'status'; stdin?: string }) => Promise<{ exitCode: number; stdout: string; stderr: string }>;
+    ensureServerProcess: () => Promise<{ stdin: { write: (chunk: string) => void } }>;
+  };
+
+  let wrote = false;
+  internal.ensureServerProcess = () =>
+    Promise.resolve({
+      stdin: {
+        write: () => {
+          wrote = true;
+        },
+      },
+    } as any);
+
+  await assert.rejects(
+    () => internal.runHelperProcess({ command: 'status', stdin: '{not-json' }),
+    /request payload for status was not valid JSON/
+  );
+  assert.equal(wrote, false);
+});
+
 test('MacosVirtualDisplayClient parses probe-capabilities output', async () => {
   const client = new MacosVirtualDisplayClient({
     helperPath: '/tmp/helper',
-    runHelper: async ({ command }: { command: 'status' | 'create-session' | 'release-session' | 'probe-capabilities' | 'create-protected-session' | 'attach-surface' | 'present' | 'teardown-session' | 'get-health' | 'get-telemetry'; stdin?: string }) => {
+    runHelper: async ({ command }: { command: 'status' | 'create-session' | 'release-session' | 'probe-capabilities' | 'create-protected-session' | 'attach-surface' | 'present' | 'heartbeat' | 'teardown-session' | 'get-health' | 'get-telemetry'; stdin?: string }) => {
       assert.equal(command, 'probe-capabilities');
       return {
         exitCode: 0,
@@ -99,7 +126,7 @@ test('MacosVirtualDisplayClient parses probe-capabilities output', async () => {
 test('MacosVirtualDisplayClient sends present payloads and parses health envelope', async () => {
   const client = new MacosVirtualDisplayClient({
     helperPath: '/tmp/helper',
-    runHelper: async ({ command, stdin }: { command: 'status' | 'create-session' | 'release-session' | 'probe-capabilities' | 'create-protected-session' | 'attach-surface' | 'present' | 'teardown-session' | 'get-health' | 'get-telemetry'; stdin?: string }) => {
+    runHelper: async ({ command, stdin }: { command: 'status' | 'create-session' | 'release-session' | 'probe-capabilities' | 'create-protected-session' | 'attach-surface' | 'present' | 'heartbeat' | 'teardown-session' | 'get-health' | 'get-telemetry'; stdin?: string }) => {
       assert.equal(command, 'present');
       const payload = JSON.parse(stdin ?? '{}');
       assert.equal(payload.sessionId, 'session-9');
@@ -132,10 +159,45 @@ test('MacosVirtualDisplayClient sends present payloads and parses health envelop
   assert.equal(response.data.presenting, true);
 });
 
+test('MacosVirtualDisplayClient sends heartbeat payloads and parses health envelope', async () => {
+  const client = new MacosVirtualDisplayClient({
+    helperPath: '/tmp/helper',
+    runHelper: async ({ command, stdin }: { command: 'status' | 'create-session' | 'release-session' | 'probe-capabilities' | 'create-protected-session' | 'attach-surface' | 'present' | 'heartbeat' | 'teardown-session' | 'get-health' | 'get-telemetry'; stdin?: string }) => {
+      assert.equal(command, 'heartbeat');
+      const payload = JSON.parse(stdin ?? '{}');
+      assert.equal(payload.sessionId, 'session-h');
+      return {
+        exitCode: 0,
+        stdout: JSON.stringify({
+          outcome: 'ok',
+          failClosed: false,
+          presentationAllowed: true,
+          blockers: [],
+          data: {
+            sessionId: 'session-h',
+            state: 'presenting',
+            surfaceAttached: true,
+            presenting: true,
+            recoveryPending: false,
+            blockers: [],
+            lastTransitionAt: '2026-03-30T12:00:00Z',
+          },
+        }),
+        stderr: '',
+      };
+    },
+  });
+
+  const response = await client.heartbeat('session-h');
+  assert.equal(response.outcome, 'ok');
+  assert.equal(response.data.sessionId, 'session-h');
+  assert.equal(response.data.presenting, true);
+});
+
 test('MacosVirtualDisplayClient parses validate-session output', async () => {
   const client = new MacosVirtualDisplayClient({
     helperPath: '/tmp/helper',
-    runHelper: async ({ command }: { command: 'status' | 'create-session' | 'release-session' | 'probe-capabilities' | 'create-protected-session' | 'attach-surface' | 'present' | 'teardown-session' | 'get-health' | 'get-telemetry' | 'validate-session'; stdin?: string }) => {
+    runHelper: async ({ command }: { command: 'status' | 'create-session' | 'release-session' | 'probe-capabilities' | 'create-protected-session' | 'attach-surface' | 'present' | 'heartbeat' | 'teardown-session' | 'get-health' | 'get-telemetry' | 'validate-session'; stdin?: string }) => {
       assert.equal(command, 'validate-session');
       return {
         exitCode: 0,
@@ -196,6 +258,41 @@ test('MacosVirtualDisplayClient drops invalid JSON lines without killing pending
   assert.equal(resolved, false);
 });
 
+test('MacosVirtualDisplayClient routes helper fault events without disturbing pending requests', async () => {
+  const events: Array<{ type: string; sessionId: string; reason: string; failClosed: boolean }> = [];
+  const client = new MacosVirtualDisplayClient({
+    helperPath: '/tmp/helper',
+    eventHandler: (event) => {
+      events.push(event);
+    },
+  });
+
+  const internal = client as unknown as {
+    pending: Map<string, { resolve: (result: unknown) => void; reject: (error: Error) => void; timeout: NodeJS.Timeout }>;
+    stdoutBuffer: string;
+    flushServerResponses: () => void;
+  };
+
+  let resolved = false;
+  internal.pending.set('req-1', {
+    resolve: () => { resolved = true; },
+    reject: () => { resolved = true; },
+    timeout: setTimeout(() => undefined, 1000),
+  });
+
+  internal.stdoutBuffer = `${JSON.stringify({ event: 'helper-fault', sessionId: 'session-1', reason: 'stealth-heartbeat-missed', failClosed: true })}\n${JSON.stringify({ id: 'req-1', ok: true, result: { ready: true } })}\n`;
+  internal.flushServerResponses();
+
+  assert.deepEqual(events, [{
+    type: 'helper-fault',
+    sessionId: 'session-1',
+    reason: 'stealth-heartbeat-missed',
+    failClosed: true,
+  }]);
+  assert.equal(resolved, true);
+  assert.equal(internal.pending.size, 0);
+});
+
 test('MacosVirtualDisplayClient reports exhaustion after repeated respawns', () => {
   const client = new MacosVirtualDisplayClient({ helperPath: '/tmp/helper' });
   const internal = client as unknown as { respawnTimestamps: number[]; isExhausted: () => boolean };
@@ -231,7 +328,7 @@ test('MacosVirtualDisplayClient dispose clears pending requests and nulls server
   assert.equal(internal.stdoutBuffer, '');
 });
 
-test('MacosVirtualDisplayClient serve mode works against the built helper when available', async (t) => {
+test('MacosVirtualDisplayClient serve mode works against the built helper when available', { concurrency: false }, async (t) => {
   if (process.platform !== 'darwin') {
     t.skip('macOS-only helper integration test');
     return;
@@ -256,6 +353,112 @@ test('MacosVirtualDisplayClient serve mode works against the built helper when a
     });
     assert.equal(typeof create.outcome, 'string');
   } finally {
+    client.dispose();
+  }
+});
+
+test('MacosVirtualDisplayClient serve mode works against the built macos-full-stealth-helper when available', { concurrency: false }, async (t) => {
+  if (process.platform !== 'darwin') {
+    t.skip('macOS-only helper integration test');
+    return;
+  }
+
+  const helperCandidates = [
+    path.join(process.cwd(), 'stealth-projects/macos-full-stealth-helper/.build/debug/macos-full-stealth-helper'),
+    path.join(process.cwd(), 'stealth-projects/macos-full-stealth-helper/.build/arm64-apple-macosx/debug/macos-full-stealth-helper'),
+  ];
+  const helperPath = helperCandidates.find((candidate: string): boolean => fs.existsSync(candidate));
+  if (!helperPath) {
+    t.skip('built macos-full-stealth-helper not available');
+    return;
+  }
+
+  const client = new MacosVirtualDisplayClient({ helperPath });
+  try {
+    const create = await client.createProtectedSession({
+      sessionId: 'full-stealth-serve-e2e',
+      presentationMode: 'native-fullscreen-presenter',
+      displayPreference: 'dedicated-display',
+      reason: 'validation-run',
+    });
+    assert.equal(create.outcome, 'ok');
+
+    const attach = await client.attachSurface({
+      sessionId: 'full-stealth-serve-e2e',
+      surfaceSource: 'native-ui-host',
+      surfaceId: 'surface-full-stealth-serve-e2e',
+      width: 1280,
+      height: 720,
+      hiDpi: true,
+    });
+    assert.equal(attach.outcome, 'ok');
+    assert.equal(attach.data.surfaceAttached, true);
+
+    const present = await client.present({ sessionId: 'full-stealth-serve-e2e', activate: true });
+    assert.equal(present.outcome, 'ok');
+    assert.equal(present.data.presenting, true);
+
+    const health = await client.getHealth('full-stealth-serve-e2e');
+    assert.equal(health.outcome, 'ok');
+    assert.equal(health.data.presenting, true);
+    assert.equal(health.data.surfaceAttached, true);
+  } finally {
+    await client.teardownSession('full-stealth-serve-e2e').catch((): void => undefined);
+    client.dispose();
+  }
+});
+
+test('MacosVirtualDisplayClient full stealth helper blocks after a missed heartbeat when available', { concurrency: false }, async (t) => {
+  if (process.platform !== 'darwin') {
+    t.skip('macOS-only helper integration test');
+    return;
+  }
+
+  const helperCandidates = [
+    path.join(process.cwd(), 'stealth-projects/macos-full-stealth-helper/.build/debug/macos-full-stealth-helper'),
+    path.join(process.cwd(), 'stealth-projects/macos-full-stealth-helper/.build/arm64-apple-macosx/debug/macos-full-stealth-helper'),
+  ];
+  const helperPath = helperCandidates.find((candidate: string): boolean => fs.existsSync(candidate));
+  if (!helperPath) {
+    t.skip('built macos-full-stealth-helper not available');
+    return;
+  }
+
+  const client = new MacosVirtualDisplayClient({
+    helperPath,
+    helperEnv: {
+      ...process.env,
+      FULL_STEALTH_HEARTBEAT_TIMEOUT_MS: '50',
+    },
+  });
+  try {
+    await client.createProtectedSession({
+      sessionId: 'full-stealth-heartbeat-timeout',
+      presentationMode: 'native-fullscreen-presenter',
+      displayPreference: 'dedicated-display',
+      reason: 'validation-run',
+    });
+
+    await client.attachSurface({
+      sessionId: 'full-stealth-heartbeat-timeout',
+      surfaceSource: 'native-ui-host',
+      surfaceId: 'surface-full-stealth-heartbeat-timeout',
+      width: 1280,
+      height: 720,
+      hiDpi: true,
+    });
+
+    await client.present({ sessionId: 'full-stealth-heartbeat-timeout', activate: true });
+    await new Promise((resolve) => setTimeout(resolve, 75));
+
+    const heartbeat = await client.heartbeat('full-stealth-heartbeat-timeout');
+    assert.equal(heartbeat.outcome, 'blocked');
+    assert.equal(heartbeat.failClosed, true);
+    assert.equal(heartbeat.data.presenting, false);
+    assert.equal(heartbeat.data.recoveryPending, true);
+    assert.equal(heartbeat.blockers[0]?.code, 'stealth-heartbeat-missed');
+  } finally {
+    await client.teardownSession('full-stealth-heartbeat-timeout').catch((): void => undefined);
     client.dispose();
   }
 });

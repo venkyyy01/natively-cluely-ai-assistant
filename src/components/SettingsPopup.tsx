@@ -3,31 +3,40 @@ import { Brain, MessageSquare, Camera, Zap, User } from 'lucide-react';
 import { useShortcuts } from '../hooks/useShortcuts';
 import { analytics } from '../lib/analytics/analytics.service';
 import { SESSION_MENU_TOGGLE_ORDER } from '../lib/consciousModeSettings';
+import { getOptionalElectronMethod, requireElectronMethod } from '../lib/electronApi';
+import type { FastResponseConfig } from '../../shared/ipc';
 
 const SettingsPopup = () => {
-    const { shortcuts } = useShortcuts();
-    const [isUndetectable, setIsUndetectable] = useState(false);
-    const [useGroqFastText, setUseGroqFastText] = useState(() => {
-        return localStorage.getItem('natively_groq_fast_text') === 'true';
-    });
-    const [profileMode, setProfileMode] = useState(false);
-    const [hasProfile, setHasProfile] = useState(false);
-    const [consciousModeEnabled, setConsciousModeEnabled] = useState(false);
-    const isPremium = true; // All features unlocked
-
-    const isFirstRender = React.useRef(true);
+const { shortcuts } = useShortcuts();
+const [isUndetectable, setIsUndetectable] = useState(false);
+const [fastResponseConfig, setFastResponseConfig] = useState<FastResponseConfig>({ enabled: false, provider: 'groq', model: '' });
+const [profileMode, setProfileMode] = useState(false);
+const [hasProfile, setHasProfile] = useState(false);
+const [consciousModeEnabled, setConsciousModeEnabled] = useState(false);
+const isPremium = true; // All features unlocked
+const getStoredCredentials = getOptionalElectronMethod('getStoredCredentials');
+const profileGetStatus = getOptionalElectronMethod('profileGetStatus');
+const getUndetectable = getOptionalElectronMethod('getUndetectable');
+const onUndetectableChanged = getOptionalElectronMethod('onUndetectableChanged');
+const onFastResponseConfigChanged = getOptionalElectronMethod('onFastResponseConfigChanged');
+const getFastResponseConfig = getOptionalElectronMethod('getFastResponseConfig');
+const getConsciousMode = getOptionalElectronMethod('getConsciousMode');
+const onConsciousModeChanged = getOptionalElectronMethod('onConsciousModeChanged');
+const updateContentDimensions = getOptionalElectronMethod('updateContentDimensions');
+const setFastResponseConfigInMain = getOptionalElectronMethod('setFastResponseConfig');
+const profileSetMode = getOptionalElectronMethod('profileSetMode');
 
     const [hasStoredKey, setHasStoredKey] = useState<Record<string, boolean>>({});
 
     // Load credentials func
     const loadCredentials = async () => {
         try {
-            // @ts-ignore
-            const creds = await window.electronAPI?.getStoredCredentials?.();
+            const creds = await getStoredCredentials?.();
             if (creds) {
                 setHasStoredKey({
                     gemini: creds.hasGeminiKey,
                     groq: creds.hasGroqKey,
+                    cerebras: creds.hasCerebrasKey,
                     openai: creds.hasOpenaiKey,
                     claude: creds.hasClaudeKey
                 });
@@ -46,8 +55,7 @@ const SettingsPopup = () => {
         // Load profile status
         const loadProfile = async () => {
             try {
-                // @ts-ignore
-                const status = await window.electronAPI?.profileGetStatus?.();
+                const status = await profileGetStatus?.();
                 if (status) {
                     setHasProfile(status.hasProfile);
                     setProfileMode(status.profileMode);
@@ -62,8 +70,8 @@ const SettingsPopup = () => {
 
     // Fetch initial undetectable state from main process (source of truth)
     useEffect(() => {
-        if (window.electronAPI?.getUndetectable) {
-            window.electronAPI.getUndetectable().then((state: boolean) => {
+        if (getUndetectable) {
+            getUndetectable().then((state: boolean) => {
                 setIsUndetectable(state);
             });
         }
@@ -71,8 +79,8 @@ const SettingsPopup = () => {
 
     // One-way listener: receive state changes from main process, never echo back
     useEffect(() => {
-        if (window.electronAPI?.onUndetectableChanged) {
-            const unsubscribe = window.electronAPI.onUndetectableChanged((newState: boolean) => {
+        if (onUndetectableChanged) {
+            const unsubscribe = onUndetectableChanged((newState: boolean) => {
                 setIsUndetectable(newState);
                 localStorage.setItem('natively_undetectable', String(newState));
             });
@@ -82,10 +90,9 @@ const SettingsPopup = () => {
 
     useEffect(() => {
         // Listen for changes from other windows (2-way sync)
-        if (window.electronAPI?.onGroqFastTextChanged) {
-            const unsubscribe = window.electronAPI.onGroqFastTextChanged((enabled: boolean) => {
-                setUseGroqFastText(enabled);
-                localStorage.setItem('natively_groq_fast_text', String(enabled));
+        if (onFastResponseConfigChanged) {
+            const unsubscribe = onFastResponseConfigChanged((config: FastResponseConfig) => {
+                setFastResponseConfig(config);
             });
             return () => unsubscribe();
         }
@@ -94,24 +101,14 @@ const SettingsPopup = () => {
     useEffect(() => {
         let cancelled = false;
 
-        if (window.electronAPI?.getConsciousMode) {
-            window.electronAPI.getConsciousMode().then((result) => {
-                if (!cancelled && result.success) {
-                    setConsciousModeEnabled(result.data.enabled);
+        if (getFastResponseConfig) {
+            getFastResponseConfig().then((config) => {
+                if (!cancelled) {
+                    setFastResponseConfig(config);
                 }
             }).catch((error) => {
-                console.warn('[SettingsPopup] Failed to load Conscious Mode:', error);
+                console.warn('[SettingsPopup] Failed to load Fast Response config:', error);
             });
-        }
-
-        if (window.electronAPI?.onConsciousModeChanged) {
-            const unsubscribe = window.electronAPI.onConsciousModeChanged((enabled: boolean) => {
-                setConsciousModeEnabled(enabled);
-            });
-            return () => {
-                cancelled = true;
-                unsubscribe();
-            };
         }
 
         return () => {
@@ -120,30 +117,34 @@ const SettingsPopup = () => {
     }, []);
 
     useEffect(() => {
-        // Skip initial render to avoid unnecessary IPC calls
-        if (isFirstRender.current) {
-            isFirstRender.current = false;
-            // Ensure backend is synced on mount (even if no change)
-            try {
-                // @ts-ignore
-                window.electronAPI?.invoke('set-groq-fast-text-mode', useGroqFastText);
-            } catch (e) {
-                console.error(e);
-            }
-            return;
+        let cancelled = false;
+
+        if (getConsciousMode) {
+            getConsciousMode().then((result) => {
+                if (!cancelled && result.success) {
+                    setConsciousModeEnabled(result.data.enabled);
+                }
+            }).catch((error) => {
+                console.warn('[SettingsPopup] Failed to load Conscious Mode:', error);
+            });
         }
 
-        // Apply Groq Text Mode
-        localStorage.setItem('natively_groq_fast_text', String(useGroqFastText));
-        try {
-            // @ts-ignore - electronAPI not typed in this file yet
-            window.electronAPI?.invoke('set-groq-fast-text-mode', useGroqFastText);
-        } catch (e) {
-            console.error(e);
+        if (onConsciousModeChanged) {
+            const unsubscribe = onConsciousModeChanged((enabled: boolean) => {
+                setConsciousModeEnabled(enabled);
+            });
+            return () => {
+                cancelled = true;
+                unsubscribe();
+            };
         }
-    }, [useGroqFastText]);
 
-    const [showTranscript, setShowTranscript] = useState(() => {
+return () => {
+cancelled = true;
+};
+}, []);
+
+const [showTranscript, setShowTranscript] = useState(() => {
         const stored = localStorage.getItem('natively_interviewer_transcript');
         return stored !== 'false'; // Default to true if not set
     });
@@ -169,8 +170,7 @@ const SettingsPopup = () => {
                 const rect = entry.target.getBoundingClientRect();
                 // Send exact dimensions to Electron
                 try {
-                    // @ts-ignore
-                    window.electronAPI?.updateContentDimensions({
+                    void updateContentDimensions?.({
                         width: Math.ceil(rect.width),
                         height: Math.ceil(rect.height)
                     });
@@ -197,14 +197,18 @@ const SettingsPopup = () => {
                             stroke={isUndetectable ? "none" : "currentColor"}
                             eyeColor={isUndetectable ? "black" : "white"}
                         />
-                        <span className={`text-[12px] font-medium transition-colors ${isUndetectable ? 'text-white' : 'text-slate-400 group-hover:text-slate-200'}`}>{isUndetectable ? 'Undetectable' : 'Detectable'}</span>
+                        <span className={`text-[12px] font-medium transition-colors ${isUndetectable ? 'text-white' : 'text-slate-400 group-hover:text-slate-200'}`}>{isUndetectable ? 'Privacy' : 'Visible'}</span>
                     </div>
                     <button
                         onClick={() => {
                             const newState = !isUndetectable;
                             setIsUndetectable(newState);
                             localStorage.setItem('natively_undetectable', String(newState));
-                            window.electronAPI?.setUndetectable(newState);
+                            const setUndetectable = requireElectronMethod('setUndetectable');
+                            void setUndetectable(newState).catch((error) => {
+                                console.error('[SettingsPopup] Failed to toggle undetectable mode:', error);
+                                setIsUndetectable(!newState);
+                            });
                         }}
                         className={`w-[30px] h-[18px] rounded-full p-[1.5px] transition-all duration-300 ease-spring active:scale-[0.92] ${isUndetectable ? 'bg-white shadow-[0_2px_8px_rgba(255,255,255,0.2)]' : 'bg-white/10'}`}
                     >
@@ -214,23 +218,30 @@ const SettingsPopup = () => {
 
 
                 {/* Groq (Fast Text) Toggle */}
-                <div className={`flex items-center justify-between px-3 py-2 rounded-lg transition-colors duration-200 group ${hasStoredKey.groq === false ? 'opacity-50 grayscale cursor-not-allowed' : 'hover:bg-white/5 cursor-default'}`} title={hasStoredKey.groq === false ? "Requires Groq API Key to be configured in Settings" : ""}>
+                <div className={`flex items-center justify-between px-3 py-2 rounded-lg transition-colors duration-200 group ${hasStoredKey[fastResponseConfig.provider] === false ? 'opacity-50 grayscale cursor-not-allowed' : 'hover:bg-white/5 cursor-default'}`} title={hasStoredKey[fastResponseConfig.provider] === false ? `Requires ${fastResponseConfig.provider === 'cerebras' ? 'Cerebras' : 'Groq'} API Key to be configured in Settings` : ""}>
                     <div className="flex items-center gap-3">
                         <Zap
-                            className={`w-4 h-4 transition-colors ${useGroqFastText ? 'text-orange-500' : 'text-slate-500 group-hover:text-slate-300'}`}
-                            fill={useGroqFastText ? "currentColor" : "none"}
+                            className={`w-4 h-4 transition-colors ${fastResponseConfig.enabled ? 'text-orange-500' : 'text-slate-500 group-hover:text-slate-300'}`}
+                            fill={fastResponseConfig.enabled ? "currentColor" : "none"}
                         />
-                        <span className={`text-[12px] font-medium transition-colors ${useGroqFastText ? 'text-white' : 'text-slate-400 group-hover:text-slate-200'}`}>{SESSION_MENU_TOGGLE_ORDER[0]}</span>
+                        <span className={`text-[12px] font-medium transition-colors ${fastResponseConfig.enabled ? 'text-white' : 'text-slate-400 group-hover:text-slate-200'}`}>{SESSION_MENU_TOGGLE_ORDER[0]}</span>
                     </div>
                     <button
-                        onClick={() => {
-                            if (hasStoredKey.groq === false) return; // Prevent clicking
-                            setUseGroqFastText(!useGroqFastText);
+                        onClick={async () => {
+                            if (hasStoredKey[fastResponseConfig.provider] === false) return;
+                            try {
+                                await setFastResponseConfigInMain?.({
+                                    ...fastResponseConfig,
+                                    enabled: !fastResponseConfig.enabled,
+                                });
+                            } catch (e) {
+                                console.error(e);
+                            }
                         }}
-                        className={`w-[30px] h-[18px] rounded-full p-[1.5px] transition-all duration-300 ease-spring active:scale-[0.92] ${useGroqFastText ? 'bg-orange-500 shadow-[0_2px_10px_rgba(249,115,22,0.3)]' : 'bg-white/10'}`}
-                        disabled={hasStoredKey.groq === false}
+                        className={`w-[30px] h-[18px] rounded-full p-[1.5px] transition-all duration-300 ease-spring active:scale-[0.92] ${fastResponseConfig.enabled ? 'bg-orange-500 shadow-[0_2px_10px_rgba(249,115,22,0.3)]' : 'bg-white/10'}`}
+                        disabled={hasStoredKey[fastResponseConfig.provider] === false}
                     >
-                        <div className={`w-[15px] h-[15px] rounded-full bg-black shadow-sm transition-transform duration-300 ease-spring ${useGroqFastText ? 'translate-x-[12px]' : 'translate-x-0'}`} />
+                        <div className={`w-[15px] h-[15px] rounded-full bg-black shadow-sm transition-transform duration-300 ease-spring ${fastResponseConfig.enabled ? 'translate-x-[12px]' : 'translate-x-0'}`} />
                     </button>
                 </div>
 
@@ -271,7 +282,8 @@ const SettingsPopup = () => {
                             setConsciousModeEnabled(nextState);
 
                             try {
-                                const result = await window.electronAPI?.setConsciousMode(nextState);
+                                const setConsciousMode = requireElectronMethod('setConsciousMode');
+                                const result = await setConsciousMode(nextState);
                                 if (!result?.success) {
                                     throw new Error(result?.error?.message || 'Unable to persist Conscious Mode');
                                 }
@@ -285,12 +297,12 @@ const SettingsPopup = () => {
                         }}
                         className={`w-[30px] h-[18px] rounded-full p-[1.5px] transition-all duration-300 ease-spring active:scale-[0.92] ${consciousModeEnabled ? 'bg-violet-500 shadow-[0_2px_10px_rgba(139,92,246,0.35)]' : 'bg-white/10'}`}
                     >
-                        <div className={`w-[15px] h-[15px] rounded-full bg-black shadow-sm transition-transform duration-300 ease-spring ${consciousModeEnabled ? 'translate-x-[12px]' : 'translate-x-0'}`} />
-                    </button>
-                </div>
+<div className={`w-[15px] h-[15px] rounded-full bg-black shadow-sm transition-transform duration-300 ease-spring ${consciousModeEnabled ? 'translate-x-[12px]' : 'translate-x-0'}`} />
+</button>
+</div>
 
-                {/* Profile Mode Toggle */}
-                {hasProfile && (
+{/* Profile Mode Toggle */}
+{hasProfile && (
                     <div className={`flex items-center justify-between px-3 py-2 rounded-lg transition-colors duration-200 group hover:bg-white/5 cursor-default`}>
                         <div className="flex items-center gap-3">
                             <User
@@ -304,8 +316,7 @@ const SettingsPopup = () => {
                                 const newState = !profileMode;
                                 setProfileMode(newState);
                                 try {
-                                    // @ts-ignore
-                                    await window.electronAPI?.profileSetMode?.(newState);
+                                    await profileSetMode?.(newState);
                                 } catch (e) { console.error(e); }
                             }}
                             className={`w-[30px] h-[18px] rounded-full p-[1.5px] transition-all duration-300 ease-spring active:scale-[0.92] ${profileMode ? 'bg-accent-primary shadow-[0_2px_10px_rgba(var(--color-accent-primary),0.3)]' : 'bg-white/10'}`}

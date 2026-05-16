@@ -1,8 +1,19 @@
 import { LLMHelper } from "../LLMHelper";
-import { FAST_STANDARD_ANSWER_PROMPT, UNIVERSAL_WHAT_TO_ANSWER_PROMPT } from "./prompts";
+import {
+    CONSCIOUS_BEHAVIORAL_REASONING_SYSTEM_PROMPT,
+    CONSCIOUS_REASONING_SYSTEM_PROMPT,
+    FAST_STANDARD_ANSWER_PROMPT,
+    UNIVERSAL_WHAT_TO_ANSWER_PROMPT,
+} from "./prompts";
 import { TemporalContext } from "./TemporalContextBuilder";
 import { IntentResult } from "./IntentClassifier";
-import { ConsciousModeStructuredResponse, parseConsciousModeResponse } from "../ConsciousMode";
+import {
+    CONSCIOUS_MODE_JSON_RESPONSE_INSTRUCTIONS,
+    ConsciousModeStructuredResponse,
+    isBehavioralQuestionText,
+    parseConsciousModeResponse,
+    tryParseConsciousModeOpeningReasoning,
+} from "../ConsciousMode";
 
 export interface StreamFailureDetails {
     error: unknown;
@@ -65,6 +76,7 @@ ANSWER SHAPE: ${intentResult.answerShape}
             latestQuestion?: string;
             onInitialStreamFailure?: (details: StreamFailureDetails) => void;
             onFallbackResponsePrepared?: (details: StreamFailureDetails & { hadVisibleOutput: boolean }) => void;
+            abortSignal?: AbortSignal;
         }
     ): AsyncGenerator<string> {
         let yieldedAnyChunk = false;
@@ -78,14 +90,27 @@ ANSWER SHAPE: ${intentResult.answerShape}
             const primaryQuestion = options?.latestQuestion?.trim() || cleanedTranscript;
 
             const prompt = options?.fastPath ? FAST_STANDARD_ANSWER_PROMPT : UNIVERSAL_WHAT_TO_ANSWER_PROMPT;
-            for await (const chunk of this.llmHelper.streamChat(primaryQuestion, imagePaths, conversationContext, prompt, {
+            if (typeof this.llmHelper.streamChat !== 'function') {
+                throw new TypeError('LLMHelper.streamChat is not available');
+            }
+
+            const stream = this.llmHelper.streamChat(primaryQuestion, imagePaths, conversationContext, prompt, {
                 skipKnowledgeInterception: !!options?.fastPath,
-            })) {
+                abortSignal: options?.abortSignal,
+            });
+            if (!stream || typeof (stream as AsyncIterable<string>)[Symbol.asyncIterator] !== 'function') {
+                throw new TypeError('LLMHelper.streamChat must return an async iterable');
+            }
+
+            for await (const chunk of stream) {
                 yieldedAnyChunk = true;
                 yield chunk;
             }
 
         } catch (error) {
+            if (options?.abortSignal?.aborted) {
+                return;
+            }
             const errorMessage = error instanceof Error
                 ? `${error.name}: ${error.message}`.toLowerCase()
                 : String(error).toLowerCase();
@@ -102,7 +127,9 @@ ANSWER SHAPE: ${intentResult.answerShape}
                 yield "Could you repeat that? I want to make sure I address your question properly.";
                 return;
             }
-            console.error("[WhatToAnswerLLM] Stream failed:", error);
+            // Stream yielded tokens then failed - signal truncation to consumer
+            console.error("[WhatToAnswerLLM] Stream failed after yielding tokens:", error);
+            yield "\n\n[Response truncated due to error. Please ask again.]";
         }
     }
 
@@ -112,38 +139,95 @@ ANSWER SHAPE: ${intentResult.answerShape}
         temporalContext?: TemporalContext,
         intentResult?: IntentResult,
         imagePaths?: string[],
-        sessionHistory: string[] = [],
+        options?: {
+          /** Called when openingReasoning is extractable from partial JSON.
+           *  Enables early display before full response is parsed. */
+          onEarlyReasoning?: (text: string) => void;
+        }
     ): Promise<ConsciousModeStructuredResponse> {
         let full = "";
+        let earlyReasoningEmitted = false;
+        const behavioralPromptRequested = intentResult?.intent === 'behavioral'
+            || /QUESTION_MODE:\s*behavioral/i.test(cleanedTranscript)
+            || isBehavioralQuestionText(question);
+        const liveCodingPromptRequested = Boolean(imagePaths?.length)
+            && (
+                intentResult?.intent === 'coding'
+                || /QUESTION_MODE:\s*live_coding/i.test(cleanedTranscript)
+                || /(write|implement|debug|fix|refactor|function|typescript|javascript|python|java|sql|query|code|snippet|algorithm|console|output)/i.test(question)
+            );
 
         const contextParts: string[] = [
-            'STRUCTURED_REASONING_RESPONSE',
-            'Return JSON with keys: mode, questionType, openingReasoning, spokenResponse, codeBlock, tradeoffs, likelyFollowUps.',
-            'Legacy compatibility keys implementationPlan, edgeCases, scaleConsiderations, pushbackResponses, and codeTransition are optional when they materially help follow-up continuity.',
-            'Set mode to reasoning_first.',
             `QUESTION: ${question}`,
         ];
 
         if (intentResult) {
-            contextParts.push(`INTENT: ${intentResult.intent}`);
-            contextParts.push(`ANSWER_SHAPE: ${intentResult.answerShape}`);
+            let intentHint: string;
+            switch (intentResult.intent) {
+                case 'behavioral':
+                    intentHint = 'This is a behavioral question. Tell one concrete story, own it with "I".';
+                    break;
+                case 'coding':
+                    intentHint = 'This is a coding question. For a fresh problem, use the mandatory A/B/C/D interview structure with brute force and optimized code.';
+                    break;
+                case 'deep_dive':
+                    intentHint = 'They want more detail on the same topic. Go deeper, don\'t start a new topic.';
+                    break;
+                case 'clarification':
+                    intentHint = 'They want clarification. Keep it short, answer what they actually asked.';
+                    break;
+                default:
+                    intentHint = 'Answer directly. Keep it short and conversational.';
+            }
+            contextParts.push(intentHint);
+        }
+
+        if (liveCodingPromptRequested) {
+            contextParts.push([
+                'LIVE_CODING_SCREENSHOT_TURN: true',
+                'STRICT LIVE-CODING OUTPUT CONTRACT:',
+                '- Return codingInterviewAnswer with all required nested fields.',
+                '- The visible answer must follow exactly: A. Problem Understanding, B. Brute Force Approach, C. Optimized Approach, D. Tradeoffs & Interview Reasoning.',
+                '- Include full brute force code and full optimized code.',
+                '- Include time and space complexity plus reasoning for both approaches.',
+                '- Use prior conversation context to avoid contradicting earlier solutions.',
+            ].join('\n'));
         }
 
         if (temporalContext?.hasRecentResponses) {
             contextParts.push(`PREVIOUS_RESPONSES: ${temporalContext.previousResponses.join(' | ')}`);
         }
 
-        if (sessionHistory.length > 0) {
-            contextParts.push(`SESSION_HISTORY:\n${sessionHistory.join('\n---\n')}`);
-        }
-
         contextParts.push(`CONVERSATION:\n${cleanedTranscript}`);
 
-        const message = contextParts.join('\n\n');
-        const stream = this.llmHelper.streamChat(message, imagePaths, undefined, UNIVERSAL_WHAT_TO_ANSWER_PROMPT);
+        const message = [
+            'STRUCTURED_REASONING_RESPONSE',
+            ...contextParts,
+        ].join('\n\n');
+        const stream = this.llmHelper.streamChat(
+            message,
+            imagePaths,
+            undefined,
+            behavioralPromptRequested
+                ? CONSCIOUS_BEHAVIORAL_REASONING_SYSTEM_PROMPT
+                : CONSCIOUS_REASONING_SYSTEM_PROMPT,
+            {
+            skipKnowledgeInterception: true,
+            qualityTier: 'verify',
+        });
 
         for await (const chunk of stream) {
             full += chunk;
+
+            // NAT-L4: Try to extract openingReasoning from partial JSON
+            // so the UI can show something while the rest accumulates.
+            if (!earlyReasoningEmitted && options?.onEarlyReasoning && full.length > 30) {
+                const early = tryParseConsciousModeOpeningReasoning(full);
+                if (early) {
+                    options.onEarlyReasoning(early);
+                    earlyReasoningEmitted = true;
+                }
+            }
         }
 
         return parseConsciousModeResponse(full);

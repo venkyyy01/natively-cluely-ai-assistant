@@ -11,17 +11,25 @@ test('validateCurl rejects empty commands and non-curl commands', () => {
   });
 });
 
-test('validateCurl rejects commands without text placeholder', () => {
+test('validateCurl rejects commands without supported placeholders', () => {
   assert.deepEqual(validateCurl('curl https://example.com'), {
     isValid: false,
-    message: 'Your cURL must contain {{TEXT}} placeholder for the prompt.',
+    message: 'Your cURL must include at least one supported placeholder (e.g. {{TEXT}} or {{IMAGE_BASE64}}).',
   });
 });
 
-test('validateCurl accepts parseable commands with placeholder and rejects bad syntax', () => {
+test('validateCurl accepts parseable commands with text or image placeholders and rejects bad syntax', () => {
   const valid = validateCurl("curl https://example.com -H 'Content-Type: application/json' -d '{\"prompt\":\"{{TEXT}}\"}'");
   assert.equal(valid.isValid, true);
   assert.ok(valid.json);
+
+  const imageOnlyValid = validateCurl("curl https://example.com -H 'Content-Type: application/json' -d '{\"image\":\"{{IMAGE_BASE64}}\"}'");
+  assert.equal(imageOnlyValid.isValid, true);
+  assert.ok(imageOnlyValid.json);
+
+  const openAiCompatibleValid = validateCurl("curl https://example.com -H 'Content-Type: application/json' -d '{\"messages\":{{OPENAI_MESSAGES}}}'");
+  assert.equal(openAiCompatibleValid.isValid, true);
+  assert.ok(openAiCompatibleValid.json);
 
   assert.deepEqual(validateCurl('curl "unterminated {{TEXT}}'), {
     isValid: false,
@@ -47,6 +55,24 @@ test('deepVariableReplacer replaces strings recursively and preserves primitives
     nested: {
       body: 'hello',
     },
+  });
+});
+
+test('deepVariableReplacer preserves non-string placeholder types when value is exact token', () => {
+  const replaced = deepVariableReplacer(
+    {
+      images: '{{IMAGE_BASE64S}}',
+      count: '{{IMAGE_COUNT}}',
+    },
+    {
+      IMAGE_BASE64S: ['a', 'b'],
+      IMAGE_COUNT: '2',
+    },
+  );
+
+  assert.deepEqual(replaced, {
+    images: ['a', 'b'],
+    count: '2',
   });
 });
 

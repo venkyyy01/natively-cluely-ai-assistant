@@ -1,0 +1,782 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import Module from 'node:module';
+
+function installElectronMock(): () => void {
+  const originalLoad = (Module as any)._load;
+
+  (Module as any)._load = function patchedLoad(request: string, parent: unknown, isMain: boolean): unknown {
+    if (request === 'electron') {
+      return {
+        app: {
+          isPackaged: true,
+          getAppPath(): string {
+            return '/tmp';
+          },
+          getPath(): string {
+            return '/tmp';
+          },
+          whenReady: async (): Promise<void> => undefined,
+          isReady: () => true,
+          on() {},
+          commandLine: {
+            appendSwitch() {},
+          },
+          dock: {
+            show() {},
+            hide() {},
+          },
+          quit() {},
+          exit() {},
+        },
+        BrowserWindow: {
+          getAllWindows: (): unknown[] => [],
+        },
+        Tray: class {},
+        Menu: {},
+        nativeImage: {},
+        ipcMain: {},
+        shell: {},
+        systemPreferences: {},
+        globalShortcut: {},
+        session: {},
+      };
+    }
+
+    return originalLoad.call(this, request, parent, isMain);
+  };
+
+  return () => {
+    (Module as any)._load = originalLoad;
+  };
+}
+
+test('AppState strict invisible enable hides, protects, verifies, and does not commit on failed verification', async () => {
+  const restoreElectron = installElectronMock();
+  const originalNodeEnv = process.env.NODE_ENV;
+  const previousStrict = process.env.NATIVELY_STRICT_PROTECTION;
+  process.env.NODE_ENV = 'test';
+  process.env.NATIVELY_STRICT_PROTECTION = '1';
+
+  try {
+    const { AppState } = await import('../main');
+    const prototype = AppState.prototype as any;
+    const setUndetectableAsync = prototype.setUndetectableAsync as (this: any, state: boolean) => Promise<void>;
+    const hideForUndetectableEnable = prototype.hideForUndetectableEnable as (this: any) => void;
+    const verifyUndetectableEnableProtection = prototype.verifyUndetectableEnableProtection as (this: any) => void;
+
+    const calls: string[] = [];
+    const fakeState: any = {
+      isUndetectable: false,
+      pendingUndetectableState: null,
+      undetectableToggleMutex: Promise.resolve(),
+      runtimeCoordinator: {
+        getSupervisor() {
+          return {
+            getState: () => 'running',
+            start: async () => {
+              calls.push('start');
+            },
+            setEnabled: async (state: boolean) => {
+              calls.push(`setEnabled:${state}`);
+            },
+          };
+        },
+      },
+      stealthManager: {
+        recordProtectionEvent(type: string, context?: { source?: string }) {
+          calls.push(`event:${type}:${context?.source ?? 'unknown'}`);
+        },
+        setEnabled(state: boolean) {
+          calls.push(`syncProtection:${state}`);
+        },
+      },
+      windowHelper: {
+        hideMainWindow() {
+          calls.push('hideMainWindow');
+        },
+      },
+      settingsWindowHelper: {
+        closeWindow() {
+          calls.push('hideSettings');
+        },
+      },
+      modelSelectorWindowHelper: {
+        hideWindow() {
+          calls.push('hideModelSelector');
+        },
+      },
+      syncWindowStealthProtection(state: boolean) {
+        calls.push(`syncProtection:${state}`);
+      },
+      verifyStealthProtection() {
+        calls.push('verifyProtection');
+        return false;
+      },
+      isStrictProtectionEnabled: () => true,
+      setPrivacyShieldFault(key: string) {
+        calls.push(`privacyFault:${key}`);
+      },
+      centerAndShowWindow() {
+        calls.push('centerAndShow');
+      },
+      hideForUndetectableEnable() {
+        return hideForUndetectableEnable.call(this);
+      },
+      verifyUndetectableEnableProtection() {
+        return verifyUndetectableEnableProtection.call(this);
+      },
+      prepareUndetectableDisableProtection() {
+        calls.push('prepareDisable');
+      },
+      applyUndetectableState(state: boolean) {
+        calls.push(`apply:${state}`);
+      },
+    };
+
+    await assert.rejects(
+      () => setUndetectableAsync.call(fakeState, true),
+      /Invisible mode protection could not be verified/,
+    );
+
+    assert.deepEqual(calls, [
+      'event:hide-requested:AppState.hideForUndetectableEnable',
+      'hideSettings',
+      'hideModelSelector',
+      'syncProtection:true',
+      'setEnabled:true',
+      'verifyProtection',
+      'event:verification-failed:AppState.verifyUndetectableEnableProtection',
+      'privacyFault:undetectable_enable_verification_failed',
+      // S-CONCURRENCY-2: rollback now goes through applyUndetectableState(false)
+      // for state consistency, replacing the second direct syncProtection
+      // call. The prior `syncWindowStealthProtection(false)` is only a
+      // fallback if applyUndetectableState itself throws.
+      'syncProtection:false',
+      'apply:false',
+      'centerAndShow',
+    ]);
+    assert.equal(fakeState.isUndetectable, false);
+    assert.equal(fakeState.pendingUndetectableState, null);
+  } finally {
+    restoreElectron();
+    process.env.NODE_ENV = originalNodeEnv;
+    if (previousStrict === undefined) {
+      delete process.env.NATIVELY_STRICT_PROTECTION;
+    } else {
+      process.env.NATIVELY_STRICT_PROTECTION = previousStrict;
+    }
+  }
+});
+
+test('AppState invisible enable commits to local-visible protected controls', async () => {
+  const restoreElectron = installElectronMock();
+  const originalNodeEnv = process.env.NODE_ENV;
+  process.env.NODE_ENV = 'test';
+
+  try {
+    const { AppState } = await import('../main');
+    const { SettingsManager } = await import('../services/SettingsManager');
+    const originalGetInstance = SettingsManager.getInstance;
+    const prototype = AppState.prototype as any;
+    const applyUndetectableState = prototype.applyUndetectableState as (
+      this: any,
+      state: boolean,
+      startedAt: number,
+      metadata?: Record<string, unknown>,
+    ) => void;
+
+    const calls: string[] = [];
+    (SettingsManager as any).getInstance = () => ({
+      set(key: string, value: unknown) {
+        calls.push(`persist:${key}:${value}`);
+        return true;
+      },
+    });
+
+    const fakeState: any = {
+      isUndetectable: false,
+      privacyShieldFaultReason: 'stale-fault',
+      syncWindowStealthProtection(state: boolean) {
+        calls.push(`syncProtection:${state}`);
+      },
+      clearPrivacyShieldFault() {
+        calls.push('clearFault');
+      },
+      clearDisguiseTimers() {
+        calls.push('clearDisguiseTimers');
+      },
+      requestVisibilityIntent(intent: string, source: string) {
+        calls.push(`intent:${intent}:${source}`);
+      },
+      ensureVisibleSafeControls(source: string) {
+        calls.push(`ensureVisibleSafeControls:${source}`);
+      },
+      _broadcastToAllWindows(channel: string, payload: unknown) {
+        calls.push(`broadcast:${channel}:${payload}`);
+      },
+      performanceInstrumentation: {
+        recordDuration(metric: string, startedAt: number, metadata: Record<string, unknown>) {
+          calls.push(`duration:${metric}:${startedAt}:${metadata.runtime}`);
+        },
+      },
+      windowHelper: {
+        getVisibleMainWindow: (): null => null,
+      },
+      settingsWindowHelper: {
+        getSettingsWindow: (): null => null,
+        closeWindow() {
+          calls.push('closeSettings');
+        },
+        setIgnoreBlur() {},
+      },
+      modelSelectorWindowHelper: {
+        getWindow: (): null => null,
+        hideWindow() {
+          calls.push('hideModelSelector');
+        },
+        setIgnoreBlur() {},
+      },
+      hideTray() {
+        calls.push('hideTray');
+      },
+      showTray() {
+        calls.push('showTray');
+      },
+      scheduleDisguiseTimer(callback: () => void) {
+        callback();
+      },
+    };
+
+    try {
+      applyUndetectableState.call(fakeState, true, 123, { runtime: 'test' });
+    } finally {
+      (SettingsManager as any).getInstance = originalGetInstance;
+    }
+
+    assert.equal(fakeState.isUndetectable, true);
+    assert.equal(fakeState.privacyShieldFaultReason, null);
+    assert.ok(calls.includes('syncProtection:true'));
+    assert.ok(calls.includes('persist:isUndetectable:true'));
+    assert.ok(calls.includes('intent:visible_safe_controls:undetectable_enabled'));
+    assert.ok(calls.includes('ensureVisibleSafeControls:undetectable_enabled'));
+    assert.ok(!calls.some((call) => call.includes('intent:protected_shield')));
+  } finally {
+    restoreElectron();
+    process.env.NODE_ENV = originalNodeEnv;
+  }
+});
+
+test('AppState visible_safe_controls intent shows the protected local UI instead of hiding it', async () => {
+  const restoreElectron = installElectronMock();
+  const originalNodeEnv = process.env.NODE_ENV;
+  process.env.NODE_ENV = 'test';
+
+  try {
+    const { AppState } = await import('../main');
+    const requestVisibilityIntent = (AppState.prototype as any).requestVisibilityIntent as (
+      this: any,
+      intent: string,
+      source: string,
+    ) => void;
+
+    const calls: string[] = [];
+    const fakeState: any = {
+      visibilityIntent: 'protected_hidden',
+      privacyShieldFaultReason: null,
+      stealthManager: {
+        recordProtectionEvent(type: string, context?: { reason?: string }) {
+          calls.push(`event:${type}:${context?.reason ?? 'unknown'}`);
+        },
+      },
+      setContainmentActive(active: boolean, source: string) {
+        calls.push(`containment:${active}:${source}`);
+      },
+      syncWindowStealthProtection(state: boolean) {
+        calls.push(`syncProtection:${state}`);
+      },
+      syncPrivacyShieldState() {
+        calls.push('syncPrivacyShield');
+      },
+      showMainWindow() {
+        calls.push('showMainWindow');
+      },
+      windowHelper: {
+        hideMainWindow() {
+          calls.push('hideMainWindow');
+        },
+      },
+      _broadcastToAllWindows(channel: string, payload: { to: string }) {
+        calls.push(`broadcast:${channel}:${payload.to}`);
+      },
+      abortActiveInferenceStreams(reason: string) {
+        calls.push(`abort:${reason}`);
+      },
+    };
+
+    requestVisibilityIntent.call(fakeState, 'visible_safe_controls', 'test');
+
+    assert.equal(fakeState.visibilityIntent, 'visible_safe_controls');
+    assert.deepEqual(calls, [
+      'event:show-requested:visible_safe_controls',
+      'containment:false:test',
+      'syncProtection:true',
+      'syncPrivacyShield',
+      'showMainWindow',
+      'broadcast:visibility-intent-changed:visible_safe_controls',
+    ]);
+  } finally {
+    restoreElectron();
+    process.env.NODE_ENV = originalNodeEnv;
+  }
+});
+
+test('AppState Command+B toggles overlay expansion without disabling invisible mode', async () => {
+  const restoreElectron = installElectronMock();
+  const originalNodeEnv = process.env.NODE_ENV;
+  process.env.NODE_ENV = 'test';
+
+  try {
+    const { AppState } = await import('../main');
+    const toggleMainWindow = (AppState.prototype as any).toggleMainWindow as (this: any) => void;
+
+    const calls: string[] = [];
+    const overlayContentWindow = {
+      isDestroyed: () => false,
+      webContents: {
+        send(channel: string) {
+          calls.push(`send:${channel}`);
+        },
+      },
+    };
+
+    const fakeState: any = {
+      isUndetectable: true,
+      visibilityIntent: 'visible_safe_controls',
+      reassertUndetectableShellHiding(source: string) {
+        calls.push(`reassert:${source}`);
+      },
+      setUndetectableAsync() {
+        calls.push('disableInvisibleMode');
+        return Promise.resolve();
+      },
+      screenshotHelper: {
+        getScreenshotQueue: (): unknown[] => [],
+        getExtraScreenshotQueue: (): unknown[] => [],
+      },
+      windowHelper: {
+        getCurrentWindowMode() {
+          calls.push('mode:overlay');
+          return 'overlay';
+        },
+        getOverlayContentWindow() {
+          return overlayContentWindow;
+        },
+        getLauncherContentWindow() {
+          throw new Error('overlay mode should not target the launcher');
+        },
+        hideMainWindow() {
+          calls.push('hideMainWindow');
+        },
+        showMainWindow() {
+          calls.push('showMainWindow');
+        },
+      },
+    };
+
+    toggleMainWindow.call(fakeState);
+
+    assert.deepEqual(calls, [
+      'reassert:toggleMainWindow',
+      'mode:overlay',
+      'send:toggle-expand',
+    ]);
+  } finally {
+    restoreElectron();
+    process.env.NODE_ENV = originalNodeEnv;
+  }
+});
+
+test('AppState ensureVisibleSafeControls restores a hidden protected main window', async () => {
+  const restoreElectron = installElectronMock();
+  const originalNodeEnv = process.env.NODE_ENV;
+  process.env.NODE_ENV = 'test';
+
+  try {
+    const { AppState } = await import('../main');
+    const ensureVisibleSafeControls = (AppState.prototype as any).ensureVisibleSafeControls as (
+      this: any,
+      source: string,
+      retries?: number,
+    ) => void;
+
+    const calls: string[] = [];
+    const fakeState: any = {
+      isUndetectable: true,
+      visibilityIntent: 'visible_safe_controls',
+      syncWindowStealthProtection(state: boolean) {
+        calls.push(`syncProtection:${state}`);
+      },
+      windowHelper: {
+        getVisibleMainWindow: (): null => null,
+      },
+      stealthManager: {
+        recordProtectionEvent(type: string, context: { source: string; reason: string }) {
+          calls.push(`event:${type}:${context.source}:${context.reason}`);
+        },
+      },
+      centerAndShowWindow() {
+        calls.push('centerAndShowWindow');
+      },
+      scheduleDisguiseTimer() {
+        calls.push('scheduleRetry');
+      },
+    };
+
+    ensureVisibleSafeControls.call(fakeState, 'test', 0);
+
+    assert.deepEqual(calls, [
+      'syncProtection:true',
+      'event:show-requested:AppState.ensureVisibleSafeControls:test:visible_safe_controls',
+      'centerAndShowWindow',
+    ]);
+  } finally {
+    restoreElectron();
+    process.env.NODE_ENV = originalNodeEnv;
+  }
+});
+
+test('AppState startup stealth recovery clears containment for visible safe controls', async () => {
+  const restoreElectron = installElectronMock();
+  const originalNodeEnv = process.env.NODE_ENV;
+  process.env.NODE_ENV = 'test';
+
+  try {
+    const { AppState } = await import('../main');
+    const bindRuntimeCoordinatorEvents = (AppState.prototype as any).bindRuntimeCoordinatorEvents as (this: any) => void;
+
+    const subscriptions = new Map<string, (event: any) => Promise<void>>();
+    const calls: string[] = [];
+    const fakeState: any = {
+      privacyShieldFaultReason: 'startup containment',
+      visibilityIntent: 'visible_safe_controls',
+      runtimeCoordinator: {
+        getBus() {
+          return {
+            subscribe(type: string, callback: (event: any) => Promise<void>) {
+              subscriptions.set(type, callback);
+            },
+          };
+        },
+      },
+      setContainmentActive(active: boolean, source: string) {
+        calls.push(`containment:${active}:${source}`);
+      },
+      syncPrivacyShieldState() {
+        calls.push('syncPrivacyShield');
+      },
+      privacyShieldRecoveryController: {
+        update() {
+          calls.push('recoveryUpdate');
+        },
+      },
+      _broadcastToAllWindows(channel: string, payload: { to: string }) {
+        calls.push(`broadcast:${channel}:${payload.to}`);
+      },
+      performanceInstrumentation: {
+        recordEvent(metric: string, payload: { to?: string }) {
+          calls.push(`metric:${metric}:${payload.to ?? 'unknown'}`);
+        },
+      },
+    };
+
+    bindRuntimeCoordinatorEvents.call(fakeState);
+    await subscriptions.get('stealth:state-changed')?.({ from: 'ARMING', to: 'FULL_STEALTH' });
+
+    assert.equal(fakeState.privacyShieldFaultReason, null);
+    assert.deepEqual(calls, [
+      'containment:false:stealth_recovered',
+      'syncPrivacyShield',
+      'recoveryUpdate',
+      'broadcast:stealth-state-changed:FULL_STEALTH',
+      'metric:stealth.state:FULL_STEALTH',
+    ]);
+  } finally {
+    restoreElectron();
+    process.env.NODE_ENV = originalNodeEnv;
+  }
+});
+
+test('AppState capture-environment warnings reapply protection without entering fault containment', async () => {
+  const restoreElectron = installElectronMock();
+  const originalNodeEnv = process.env.NODE_ENV;
+  process.env.NODE_ENV = 'test';
+
+  try {
+    const { AppState } = await import('../main');
+    const handleStealthDegradation = (AppState.prototype as any).handleStealthDegradation as (
+      this: any,
+      warnings: string[],
+    ) => void;
+
+    const calls: string[] = [];
+    const fakeState: any = {
+      isUndetectable: true,
+      syncWindowStealthProtection(state: boolean) {
+        calls.push(`syncProtection:${state}`);
+      },
+      runtimeCoordinator: {
+        getSupervisor() {
+          calls.push('getSupervisor');
+          throw new Error('capture warnings must not fault supervisor');
+        },
+      },
+    };
+
+    handleStealthDegradation.call(fakeState, ['scstream_capture_detected', 'chromium_capture_active']);
+
+    assert.deepEqual(calls, ['syncProtection:true']);
+  } finally {
+    restoreElectron();
+    process.env.NODE_ENV = originalNodeEnv;
+  }
+});
+
+test('AppState stealth verification warning stays visible in normal invisible mode', async () => {
+  const restoreElectron = installElectronMock();
+  const originalNodeEnv = process.env.NODE_ENV;
+  process.env.NODE_ENV = 'test';
+
+  try {
+    const { AppState } = await import('../main');
+    const handleStealthDegradation = (AppState.prototype as any).handleStealthDegradation as (
+      this: any,
+      warnings: string[],
+    ) => void;
+
+    const calls: string[] = [];
+    const fakeState: any = {
+      isUndetectable: true,
+      visibilityIntent: 'visible_safe_controls',
+      privacyShieldFaultReason: null,
+      setContainmentActive(active: boolean, source: string) {
+        calls.push(`containment:${active}:${source}`);
+      },
+      syncPrivacyShieldState() {
+        calls.push('syncPrivacyShield');
+      },
+      syncWindowStealthProtection(state: boolean) {
+        calls.push(`syncProtection:${state}`);
+      },
+      runtimeCoordinator: {
+        getSupervisor() {
+          calls.push('getSupervisor');
+          throw new Error('verification warning must not fault supervisor');
+        },
+      },
+    };
+
+    handleStealthDegradation.call(fakeState, ['stealth_verification_failed', 'virtual_display_required']);
+
+    assert.deepEqual(calls, [
+      'containment:false:stealth_degraded_observe_only',
+      'syncPrivacyShield',
+      'syncProtection:true',
+    ]);
+  } finally {
+    restoreElectron();
+    process.env.NODE_ENV = originalNodeEnv;
+  }
+});
+
+test('AppState supervisor verification is observe-only outside strict invisible mode', async () => {
+  const restoreElectron = installElectronMock();
+  const originalNodeEnv = process.env.NODE_ENV;
+  process.env.NODE_ENV = 'test';
+
+  try {
+    const { AppState } = await import('../main');
+    const verifyStealthProtectionForSupervisor = (AppState.prototype as any).verifyStealthProtectionForSupervisor as (
+      this: any,
+    ) => boolean;
+
+    const calls: string[] = [];
+    const fakeState: any = {
+      verifyStealthProtection() {
+        calls.push('verifyProtection');
+        return false;
+      },
+      isStrictProtectionEnabled() {
+        return false;
+      },
+    };
+
+    assert.equal(verifyStealthProtectionForSupervisor.call(fakeState), true);
+    assert.deepEqual(calls, ['verifyProtection']);
+  } finally {
+    restoreElectron();
+    process.env.NODE_ENV = originalNodeEnv;
+  }
+});
+
+test('AppState containment keeps invisible local controls visible', async () => {
+  const restoreElectron = installElectronMock();
+  const originalNodeEnv = process.env.NODE_ENV;
+  process.env.NODE_ENV = 'test';
+
+  try {
+    const { AppState } = await import('../main');
+    const activateContainment = (AppState.prototype as any).activateContainment as (
+      this: any,
+      source: string,
+      reason: string,
+    ) => void;
+
+    const calls: string[] = [];
+    const fakeState: any = {
+      isUndetectable: true,
+      activeInferenceStreamControllers: new Map(),
+      streamChatStartedAt: new Map(),
+      stealthManager: {
+        recordProtectionEvent(type: string, context?: { source?: string }) {
+          calls.push(`event:${type}:${context?.source ?? 'unknown'}`);
+        },
+      },
+      setContainmentActive(active: boolean, reason: string) {
+        calls.push(`containment:${active}:${reason}`);
+      },
+      abortActiveInferenceStreams() {
+        calls.push('abortStreams');
+        return 0;
+      },
+      syncWindowStealthProtection(state: boolean) {
+        calls.push(`syncProtection:${state}`);
+      },
+      windowHelper: {
+        showMainWindow() {
+          calls.push('showMainWindow');
+        },
+        hideMainWindow() {
+          calls.push('hideMainWindow');
+        },
+      },
+      syncPrivacyShieldState() {
+        calls.push('syncPrivacyShield');
+      },
+      privacyShieldRecoveryController: {
+        update() {
+          calls.push('recoveryUpdate');
+        },
+      },
+      performanceInstrumentation: {
+        recordEvent(metric: string) {
+          calls.push(`metric:${metric}`);
+        },
+      },
+    };
+
+    activateContainment.call(fakeState, 'test', 'verification degraded');
+
+    assert.equal(fakeState.visibilityIntent, 'faulted_shield');
+    assert.ok(calls.includes('showMainWindow'));
+    assert.ok(!calls.includes('hideMainWindow'));
+  } finally {
+    restoreElectron();
+    process.env.NODE_ENV = originalNodeEnv;
+  }
+});
+
+test('AppState serializes opposite invisible toggle targets without interleaving', async () => {
+  const restoreElectron = installElectronMock();
+  const originalNodeEnv = process.env.NODE_ENV;
+  process.env.NODE_ENV = 'test';
+
+  try {
+    const { AppState } = await import('../main');
+    const setUndetectableAsync = (AppState.prototype as any).setUndetectableAsync as (
+      this: any,
+      state: boolean,
+    ) => Promise<void>;
+
+    const calls: string[] = [];
+    let releaseFirstToggle: (() => void) | null = null;
+    const firstToggleStarted = new Promise<void>((resolve) => {
+      releaseFirstToggle = resolve;
+    });
+
+    const fakeState: any = {
+      isUndetectable: false,
+      pendingUndetectableState: null,
+      undetectableToggleMutex: Promise.resolve(),
+      runtimeCoordinator: {
+        getSupervisor() {
+          return {
+            getState: () => 'running',
+            start: async () => {},
+            setEnabled: async (state: boolean) => {
+              calls.push(`setEnabled:${state}:start`);
+              if (state) {
+                await firstToggleStarted;
+              }
+              calls.push(`setEnabled:${state}:end`);
+            },
+          };
+        },
+      },
+      stealthManager: {
+        setEnabled(state: boolean) {
+          calls.push(`syncProtection:${state}`);
+        },
+      },
+      hideForUndetectableEnable() {
+        calls.push('hideForEnable');
+      },
+      syncWindowStealthProtection(state: boolean) {
+        calls.push(`syncWindowProtection:${state}`);
+      },
+      centerAndShowWindow() {},
+      verifyUndetectableEnableProtection() {
+        calls.push('verifyEnable');
+      },
+      prepareUndetectableDisableProtection() {
+        calls.push('prepareDisable');
+      },
+      applyUndetectableState(state: boolean) {
+        calls.push(`apply:${state}`);
+        this.isUndetectable = state;
+      },
+    };
+
+    const enablePromise = setUndetectableAsync.call(fakeState, true);
+    const disablePromise = setUndetectableAsync.call(fakeState, false);
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.deepEqual(calls, [
+      'hideForEnable',
+      'syncProtection:true',
+      'setEnabled:true:start',
+    ]);
+
+    releaseFirstToggle?.();
+    await Promise.all([enablePromise, disablePromise]);
+
+    assert.deepEqual(calls, [
+      'hideForEnable',
+      'syncProtection:true',
+      'setEnabled:true:start',
+      'setEnabled:true:end',
+      'verifyEnable',
+      'apply:true',
+      'syncProtection:false',
+      'setEnabled:false:start',
+      'setEnabled:false:end',
+      'prepareDisable',
+      'apply:false',
+    ]);
+    assert.equal(fakeState.isUndetectable, false);
+    assert.equal(fakeState.pendingUndetectableState, null);
+  } finally {
+    restoreElectron();
+    process.env.NODE_ENV = originalNodeEnv;
+  }
+});

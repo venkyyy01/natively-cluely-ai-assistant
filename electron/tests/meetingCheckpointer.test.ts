@@ -6,8 +6,13 @@ import type { MeetingSnapshot } from '../SessionTracker';
 
 test('MeetingCheckpointer writes provisional snapshots', async () => {
   const writes: Array<{ id: string; durationMs: number }> = [];
+  const emittedCheckpointIds: string[] = [];
   const checkpointer = new MeetingCheckpointer(
-    {} as never,
+    {
+      createOrUpdateMeetingProcessingRecord(meeting: { id: string }, _startTime: number, durationMs: number) {
+        writes.push({ id: meeting.id, durationMs });
+      },
+    } as never,
     () => ({
       createSnapshot(): MeetingSnapshot {
         return {
@@ -20,19 +25,18 @@ test('MeetingCheckpointer writes provisional snapshots', async () => {
         };
       },
     }) as never,
-    {
-      async saveSnapshot(meetingId: string, snapshot: MeetingSnapshot) {
-        writes.push({ id: meetingId, durationMs: snapshot.durationMs });
-      },
-    } as never,
+    async (checkpointId) => {
+      emittedCheckpointIds.push(checkpointId);
+    },
   );
 
   checkpointer.start('meeting-1');
-  await (checkpointer as unknown as { checkpoint: () => Promise<void> }).checkpoint();
+  await checkpointer.checkpointNow();
   checkpointer.stop();
 
   assert.equal(writes.length, 1);
   assert.equal(writes[0].id, 'meeting-1');
+  assert.deepEqual(emittedCheckpointIds, ['meeting-1']);
 });
 
 test('MeetingCheckpointer destroy clears the active timer state', () => {
@@ -56,17 +60,16 @@ test('MeetingCheckpointer destroy clears the active timer state', () => {
 test('MeetingCheckpointer skips writes when the snapshot has no transcript', async () => {
   let writes = 0;
   const checkpointer = new MeetingCheckpointer(
-    {} as never,
+    { createOrUpdateMeetingProcessingRecord() { writes += 1; } } as never,
     () => ({
       createSnapshot(): MeetingSnapshot {
         return { transcript: [], usage: [], startTime: 0, durationMs: 0, context: '', meetingMetadata: null };
       },
     }) as never,
-    { async saveSnapshot() { writes += 1; } } as never,
   );
 
   checkpointer.start('meeting-3');
-  await (checkpointer as unknown as { checkpoint: () => Promise<void> }).checkpoint();
+  await checkpointer.checkpointNow();
   checkpointer.stop();
 
   assert.equal(writes, 0);
@@ -76,17 +79,16 @@ test('MeetingCheckpointer ignores checkpoint requests when no meeting is active'
   let snapshots = 0;
   let writes = 0;
   const checkpointer = new MeetingCheckpointer(
-    {} as never,
+    { createOrUpdateMeetingProcessingRecord() { writes += 1; } } as never,
     () => ({
       createSnapshot(): MeetingSnapshot {
         snapshots += 1;
         return { transcript: [], usage: [], startTime: 0, durationMs: 0, context: '', meetingMetadata: null };
       },
     }) as never,
-    { async saveSnapshot() { writes += 1; } } as never,
   );
 
-  await (checkpointer as unknown as { checkpoint: () => Promise<void> }).checkpoint();
+  await checkpointer.checkpointNow();
 
   assert.equal(snapshots, 0);
   assert.equal(writes, 0);
@@ -95,7 +97,15 @@ test('MeetingCheckpointer ignores checkpoint requests when no meeting is active'
 test('MeetingCheckpointer preserves metadata on provisional checkpoints', async () => {
   const writes: Array<{ title: string; source: string; calendarEventId: string | undefined }> = [];
   const checkpointer = new MeetingCheckpointer(
-    {} as never,
+    {
+      createOrUpdateMeetingProcessingRecord(meeting: { title: string; source: string; calendarEventId?: string }) {
+        writes.push({
+          title: meeting.title,
+          source: meeting.source,
+          calendarEventId: meeting.calendarEventId,
+        });
+      },
+    } as never,
     () => ({
       createSnapshot(): MeetingSnapshot {
         return {
@@ -112,19 +122,10 @@ test('MeetingCheckpointer preserves metadata on provisional checkpoints', async 
         };
       },
     }) as never,
-    {
-      async saveSnapshot(_meetingId: string, snapshot: MeetingSnapshot) {
-        writes.push({
-          title: snapshot.meetingMetadata?.title || '',
-          source: snapshot.meetingMetadata?.source || 'manual',
-          calendarEventId: snapshot.meetingMetadata?.calendarEventId,
-        });
-      },
-    } as never,
   );
 
   checkpointer.start('meeting-4');
-  await (checkpointer as unknown as { checkpoint: () => Promise<void> }).checkpoint();
+  await checkpointer.checkpointNow();
   checkpointer.stop();
 
   assert.deepEqual(writes, [
@@ -138,7 +139,11 @@ test('MeetingCheckpointer preserves metadata on provisional checkpoints', async 
 
 test('MeetingCheckpointer swallows database checkpoint errors', async () => {
   const checkpointer = new MeetingCheckpointer(
-    {} as never,
+    {
+      createOrUpdateMeetingProcessingRecord() {
+        throw new Error('write failed');
+      },
+    } as never,
     () => ({
       createSnapshot(): MeetingSnapshot {
         return {
@@ -151,16 +156,11 @@ test('MeetingCheckpointer swallows database checkpoint errors', async () => {
         };
       },
     }) as never,
-    {
-      async saveSnapshot() {
-        throw new Error('write failed');
-      },
-    } as never,
   );
 
   checkpointer.start('meeting-5');
   await assert.doesNotReject(async () => {
-    await (checkpointer as unknown as { checkpoint: () => Promise<void> }).checkpoint();
+    await checkpointer.checkpointNow();
   });
   checkpointer.stop();
 });

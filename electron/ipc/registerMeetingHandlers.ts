@@ -11,23 +11,95 @@ type RegisterMeetingHandlersDeps = {
   safeHandleValidated: SafeHandleValidated;
 };
 
+type RuntimeCoordinatorLike = {
+  activate?: (metadata?: unknown) => Promise<void>;
+  deactivate?: () => Promise<void>;
+  getSupervisor?: (name: string) => unknown;
+};
+
+type AudioSupervisorLike = {
+  startAudioTest?: (deviceId?: string) => Promise<void>;
+  stopAudioTest?: () => Promise<void>;
+};
+
+type SttSupervisorLike = {
+  setRecognitionLanguage?: (language: string) => Promise<void>;
+};
+
+type InferenceSupervisorLike = {
+  getRAGManager?: () => ReturnType<AppState['getRAGManager']>;
+};
+
+function getRuntimeCoordinator(appState: AppState): RuntimeCoordinatorLike | null {
+  if (!('getCoordinator' in appState) || typeof appState.getCoordinator !== 'function') {
+    return null;
+  }
+
+  return appState.getCoordinator() as RuntimeCoordinatorLike;
+}
+
+function getAudioSupervisor(appState: AppState): AudioSupervisorLike | null {
+  const coordinator = getRuntimeCoordinator(appState);
+  if (typeof coordinator?.getSupervisor !== 'function') {
+    return null;
+  }
+
+  return coordinator.getSupervisor('audio') as AudioSupervisorLike;
+}
+
+function getSttSupervisor(appState: AppState): SttSupervisorLike | null {
+  const coordinator = getRuntimeCoordinator(appState);
+  if (typeof coordinator?.getSupervisor !== 'function') {
+    return null;
+  }
+
+  return coordinator.getSupervisor('stt') as SttSupervisorLike;
+}
+
+function getInferenceRagManager(appState: AppState): ReturnType<AppState['getRAGManager']> {
+  const coordinator = getRuntimeCoordinator(appState);
+  if (typeof coordinator?.getSupervisor === 'function') {
+    const supervisor = coordinator.getSupervisor('inference') as InferenceSupervisorLike;
+    if (typeof supervisor?.getRAGManager === 'function') {
+      return supervisor.getRAGManager();
+    }
+  }
+
+  return appState.getRAGManager();
+}
+
 export function registerMeetingHandlers({ appState, safeHandle, safeHandleValidated }: RegisterMeetingHandlersDeps): void {
   safeHandle('get-input-devices', async () => AudioDevices.getInputDevices());
 
   safeHandle('get-output-devices', async () => AudioDevices.getOutputDevices());
 
-  safeHandle('start-audio-test', async (_event, deviceId?: string) => {
-    appState.startAudioTest(deviceId);
+  safeHandleValidated('start-audio-test', (args) => [parseIpcInput(ipcSchemas.audioDeviceId, args[0], 'start-audio-test')] as const, async (_event, deviceId?: string) => {
+    const audioSupervisor = getAudioSupervisor(appState);
+    if (audioSupervisor?.startAudioTest) {
+      await audioSupervisor.startAudioTest(deviceId);
+    } else {
+      appState.startAudioTest(deviceId);
+    }
     return { success: true };
   });
 
   safeHandle('stop-audio-test', async () => {
-    appState.stopAudioTest();
+    const audioSupervisor = getAudioSupervisor(appState);
+    if (audioSupervisor?.stopAudioTest) {
+      await audioSupervisor.stopAudioTest();
+    } else {
+      appState.stopAudioTest();
+    }
     return { success: true };
   });
 
   safeHandleValidated('set-recognition-language', (args) => [parseIpcInput(ipcSchemas.recognitionLanguage, args[0], 'set-recognition-language')] as const, async (_event, key) => {
-    appState.setRecognitionLanguage(key);
+    const sttSupervisor = getSttSupervisor(appState);
+    if (sttSupervisor?.setRecognitionLanguage) {
+      await sttSupervisor.setRecognitionLanguage(key);
+    } else {
+      appState.setRecognitionLanguage(key);
+    }
     return { success: true };
   });
 
@@ -53,7 +125,7 @@ export function registerMeetingHandlers({ appState, safeHandle, safeHandleValida
 
   safeHandle('get-recent-meetings', async () => DatabaseManager.getInstance().getRecentMeetings(50));
 
-  safeHandle('get-meeting-details', async (_event, id) => DatabaseManager.getInstance().getMeetingDetails(id));
+  safeHandleValidated('get-meeting-details', (args) => [parseIpcInput(ipcSchemas.meetingId, args[0], 'get-meeting-details')] as const, async (_event, id) => DatabaseManager.getInstance().getMeetingDetails(id));
 
   safeHandleValidated('update-meeting-title', (args) => [parseIpcInput(ipcSchemas.updateMeetingTitlePayload, args[0], 'update-meeting-title')] as const, async (_event, { id, title }) => {
     return DatabaseManager.getInstance().updateMeetingTitle(id, title);
@@ -65,7 +137,7 @@ export function registerMeetingHandlers({ appState, safeHandle, safeHandleValida
 
   safeHandle('seed-demo', async () => {
     DatabaseManager.getInstance().seedDemoMeeting();
-    const ragManager = appState.getRAGManager();
+    const ragManager = getInferenceRagManager(appState);
     if (ragManager && ragManager.isReady()) {
       ragManager.reprocessMeeting('demo-meeting').catch(console.error);
     }
@@ -77,7 +149,7 @@ export function registerMeetingHandlers({ appState, safeHandle, safeHandleValida
     return { success: result };
   });
 
-  safeHandle('open-external', async (_event, url: string) => {
+  safeHandleValidated('open-external', (args) => [parseIpcInput(ipcSchemas.externalUrl, args[0], 'open-external')] as const, async (_event, url: string) => {
     try {
       const parsed = new URL(url);
       if (['http:', 'https:', 'mailto:'].includes(parsed.protocol)) {

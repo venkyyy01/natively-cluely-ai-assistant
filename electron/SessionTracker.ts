@@ -2,167 +2,130 @@
 // Manages session state, transcript arrays, context windows, and epoch compaction.
 // Extracted from IntelligenceManager to decouple state management from LLM orchestration.
 
-/** Maximum transcript entries before forced eviction (prevents memory exhaustion) */
-const MAX_TRANSCRIPT_ENTRIES = 5000;
-
-/** Maximum assistant response history entries */
-const MAX_ASSISTANT_HISTORY = 100;
-
-/** Maximum context history entries (beyond time-based eviction) */
-const MAX_CONTEXT_HISTORY = 200;
-const TURN_MERGE_GAP_MS = 1_200;
-const TURN_OVERLAP_WINDOW_MS = 750;
-const TIMING_REPORT_SAMPLE_INTERVAL = 25;
-const PROVIDER_TIMESTAMP_ESCALATION_P95_MS = 500;
-
-/** Ring buffer for fixed-capacity context items */
-class RingBuffer<T> {
-  private buffer: (T | undefined)[];
-  private head: number = 0;
-  private tail: number = 0;
-  private count: number = 0;
-
-  constructor(private capacity: number) {
-    this.buffer = new Array(capacity);
-  }
-
-  push(item: T): void {
-    this.buffer[this.tail] = item;
-    this.tail = (this.tail + 1) % this.capacity;
-    if (this.count < this.capacity) {
-      this.count++;
-    } else {
-      this.head = (this.head + 1) % this.capacity;
-    }
-  }
-
-  toArray(): T[] {
-    const result: T[] = [];
-    for (let i = 0; i < this.count; i++) {
-      const item = this.buffer[(this.head + i) % this.capacity];
-      if (item !== undefined) {
-        result.push(item);
-      }
-    }
-    return result;
-  }
-
-  get length(): number {
-    return this.count;
-  }
-
-  clear(): void {
-    this.buffer = new Array(this.capacity);
-    this.head = 0;
-    this.tail = 0;
-    this.count = 0;
-  }
-}
-
 import { RecapLLM } from './llm';
+import { Result, LLMError } from './types/Result';
 import {
   ConsciousModeStructuredResponse,
   ReasoningThread,
-  getTranscriptSuggestionDecision,
-  mergeConsciousModeResponses,
 } from './ConsciousMode';
-import { ThreadManager, InterviewPhaseDetector, TokenBudgetManager, InterviewPhase } from './conscious';
-import { RESUME_THRESHOLD } from './conscious/types';
-import { AdaptiveContextWindow, ContextEntry, ContextSelectionConfig } from './conscious/AdaptiveContextWindow';
-import { isOptimizationActive } from './config/optimizations';
-import type { ConversationTurn, ConversationTurnSource, TimingVarianceStats } from './types/transcript';
+import type { ProbeAnswer, CodingProblem } from './coding/types';
+import {
+  ThreadManager,
+  InterviewPhaseDetector,
+  TokenBudgetManager,
+  InterviewPhase,
+  ConsciousThreadStore,
+  ThreadDirector,
+  isNativelyThreadDirectorEnabled,
+  DesignStateStore,
+  ObservedQuestionStore,
+  QuestionReactionClassifier,
+  AnswerHypothesisStore,
+  ConsciousResponsePreferenceStore,
+  type ConsciousPlannerPreferenceSummary,
+  type ConsciousResponseQuestionMode,
+} from './conscious';
+import { AdaptiveContextWindow } from './conscious/AdaptiveContextWindow';
+import { extractConstraints, ExtractedConstraint, ResponseFingerprinter } from './conscious';
+import { SessionPersistence } from './memory/SessionPersistence';
+import { TokenCounter } from './shared/TokenCounter';
+import { getActiveAccelerationManager } from './services/AccelerationManager';
+import type { RuntimeBudgetScheduler } from './runtime/RuntimeBudgetScheduler';
+import type { SupervisorEvent } from './runtime/types';
 
-export interface TranscriptSegment {
-    marker?: string;
-    speaker: string;
-    text: string;
-    timestamp: number;
-    final: boolean;
-    confidence?: number;
-}
+import {
+  MAX_TRANSCRIPT_ENTRIES,
+  MAX_ASSISTANT_HISTORY,
+  RingBuffer,
+  type SupervisorBusEmitter,
+  type TranscriptSegment,
+  type SuggestionTrigger,
+  type ContextItem,
+  type AssistantResponse,
+  type PinnedItem,
+  type MeetingMetadataSnapshot,
+  type MeetingSnapshot,
+  type UsageInteraction,
+  mapSpeakerToRole as mapSpeakerToRoleImpl,
+} from './session/sessionTypes';
 
-export interface SuggestionTrigger {
-    context: string;
-    lastQuestion: string;
-    confidence: number;
-}
+// Re-export types so existing consumers don't break
+export type {
+  TranscriptSegment,
+  SuggestionTrigger,
+  ContextItem,
+  AssistantResponse,
+  PinnedItem,
+  MeetingMetadataSnapshot,
+  MeetingSnapshot,
+  UsageInteraction,
+};
 
-// Context item matching Swift ContextManager structure
-export interface ContextItem {
-    role: 'interviewer' | 'user' | 'assistant';
-    text: string;
-    timestamp: number;
-    segmentReference?: string;
-    overlapGroupId?: string;
-}
+import {
+  buildPinnedContextSection,
+  buildPseudoEmbedding,
+  inferItemPhase,
+  getFormattedContext,
+  getCompactTranscriptSnapshot,
+  buildFullSessionContext,
+  getAdaptiveContext,
+  getConsciousRelevantContext,
+  getConsciousLongMemoryContext,
+} from './session/sessionContext';
 
-export interface AssistantResponse {
-    text: string;
-    timestamp: number;
-    questionContext: string;
-}
+import {
+  createSessionDisposedError,
+  rejectPendingWorkOnDispose,
+  getHotState,
+  getWarmState,
+  getColdState,
+  persistState,
+  appendTranscriptEvent,
+  restoreFromMeetingId,
+  ensureMeetingContext,
+  flushPersistenceNow,
+  appendSessionEvent,
+} from './session/sessionPersistence';
+import type { SessionEvent } from './memory/SessionPersistence';
 
-export interface TimingValidationResult {
-    stats: TimingVarianceStats;
-    thresholdMs: number;
-    shouldEscalateProviderTimestamps: boolean;
-}
-
-export interface MeetingMetadataSnapshot {
-    title?: string;
-    calendarEventId?: string;
-    source?: 'manual' | 'calendar';
-}
-
-export interface MeetingSnapshot {
-  transcript: TranscriptSegment[];
-  usage: UsageInteraction[];
-  startTime: number;
-  durationMs: number;
-  context: string;
-  meetingMetadata: MeetingMetadataSnapshot | null;
-}
-
-export interface UsageInteraction {
-  type: 'assist' | 'followup' | 'chat' | 'followup_questions';
-  timestamp: number;
-  question?: string;
-  answer?: string;
-  items?: string[];
+function resolveClassifierLane(): Pick<RuntimeBudgetScheduler, 'submit'> | undefined {
+  return getActiveAccelerationManager()?.getRuntimeBudgetScheduler();
 }
 
 export class SessionTracker {
   private static nextSessionId = 1;
+  private isRestoring = false;
+  private writeBuffer: Array<() => void> = [];
   // Context management (mirrors Swift ContextManager)
   private contextItemsBuffer = new RingBuffer<ContextItem>(500);
   private readonly contextWindowDuration: number = 120; // 120 seconds
   private readonly maxContextItems: number = 500;
-  
+
   private getContextItems(): ContextItem[] {
     return this.contextItemsBuffer.toArray();
   }
 
-    // Last assistant message for follow-up mode
-    private lastAssistantMessage: string | null = null;
+  // Last assistant message for follow-up mode
+  private lastAssistantMessage: string | null = null;
 
-    // Temporal RAG: Track all assistant responses in session for anti-repetition
-    private assistantResponseHistory: AssistantResponse[] = [];
+  // Temporal RAG: Track all assistant responses in session for anti-repetition
+  private assistantResponseHistory: AssistantResponse[] = [];
 
-    // Meeting metadata
-    private currentMeetingMetadata: {
-        title?: string;
-        calendarEventId?: string;
-        source?: 'manual' | 'calendar';
-    } | null = null;
+  // Meeting metadata
+  private currentMeetingMetadata: {
+    title?: string;
+    calendarEventId?: string;
+    source?: 'manual' | 'calendar';
+  } | null = null;
 
   // Full Session Tracking (Persisted)
   private fullTranscript: TranscriptSegment[] = [];
   private fullUsage: UsageInteraction[] = []; // UsageInteraction
   private sessionStartTime: number = Date.now();
 
-    // Rolling summarization: epoch summaries preserve early context when arrays are compacted
-    private static readonly MAX_EPOCH_SUMMARIES = 5;
-    private transcriptEpochSummaries: string[] = [];
+  // Rolling summarization: epoch summaries preserve early context when arrays are compacted
+  private static readonly MAX_EPOCH_SUMMARIES = 5;
+  private transcriptEpochSummaries: string[] = [];
   private isCompacting: boolean = false;
   private pendingCompactionPromise: Promise<void> | null = null;
   private compactionTimer: NodeJS.Timeout | null = null;
@@ -170,68 +133,144 @@ export class SessionTracker {
   private readonly COMPACTION_THRESHOLD = 2000;
 
   // Track interim interviewer segment
-    private lastInterimInterviewer: TranscriptSegment | null = null;
+  private lastInterimInterviewer: TranscriptSegment | null = null;
 
-    // Conscious Mode state
-    private consciousModeEnabled: boolean = false;
-    private latestConsciousResponse: ConsciousModeStructuredResponse | null = null;
-    private activeReasoningThread: ReasoningThread | null = null;
+  // Conscious Mode state
+  private consciousModeEnabled: boolean = false;
+  private consciousSemanticContext: string = '';
 
-    // Reference to RecapLLM for epoch summarization (injected later)
-    private recapLLM: RecapLLM | null = null;
+  // Reference to RecapLLM for epoch summarization (injected later)
+  private recapLLM: RecapLLM | null = null;
 
-// Conscious Mode Realtime components
-  private threadManager: ThreadManager = new ThreadManager();
-  private phaseDetector: InterviewPhaseDetector = new InterviewPhaseDetector();
+  // Conscious Mode Realtime components
+  private consciousThreadStore: ConsciousThreadStore = new ConsciousThreadStore();
+  private threadDirector: ThreadDirector | null = isNativelyThreadDirectorEnabled()
+    ? new ThreadDirector(this.consciousThreadStore)
+    : null;
+  private observedQuestionStore: ObservedQuestionStore = new ObservedQuestionStore();
+  private questionReactionClassifier: QuestionReactionClassifier = new QuestionReactionClassifier();
+  private answerHypothesisStore: AnswerHypothesisStore = new AnswerHypothesisStore();
+  private responsePreferenceStore: ConsciousResponsePreferenceStore = new ConsciousResponsePreferenceStore();
+  private designStateStore: DesignStateStore = new DesignStateStore();
+  private phaseDetector: InterviewPhaseDetector = new InterviewPhaseDetector({
+    classifierLane: resolveClassifierLane(),
+  });
   private tokenBudgetManager: TokenBudgetManager = new TokenBudgetManager('openai');
 
   // Adaptive context window for acceleration
   private adaptiveContextWindow: AdaptiveContextWindow | null = null;
   private sessionId: string = `session_${SessionTracker.nextSessionId++}`;
   private transcriptRevision: number = 0;
+  private utteranceRevisions = new Map<string, number>();
   private compactSnapshotCache = new Map<string, { revision: number; value: string }>();
-  private turnCache: ConversationTurn[] | null = null;
-  private timingGapSamplesMs: number[] = [];
+  private readonly persistence = new SessionPersistence();
+  private pendingRestorePromise: Promise<void> | null = null;
+  private restoreRequestId: number = 0;
+  private activeMeetingId: string = 'unspecified';
+  private pinnedItems: PinnedItem[] = [];
+  private readonly maxPinnedItems: number = 10;
+  private extractedConstraints: ExtractedConstraint[] = [];
+  private readonly fingerprinter: ResponseFingerprinter = new ResponseFingerprinter();
+  private readonly contextAssembleCache = new Map<string, { assembled: string; tokenCount: number; revision: number; createdAt: number }>();
+  private readonly contextCacheTTLms = 10000;
+  private readonly contextCacheMaxEntries = 20;
+  private readonly tokenCounter: TokenCounter = new TokenCounter('openai');
+  private readonly semanticEmbeddingCache = new Map<string, { embedding: number[]; createdAt: number }>();
+  private readonly semanticEmbeddingTTLms = 5 * 60 * 1000;
+  private supervisorBus?: SupervisorBusEmitter;
+  private eventCount = 0;
+  private readonly EVENT_SNAPSHOT_INTERVAL = 1000;
+  private adaptiveWindowStats = {
+    calls: 0,
+    totalMs: 0,
+    over50ms: 0,
+    timeouts: 0,
+  };
+  private readonly ADAPTIVE_WINDOW_TIMEOUT_MS = 300;
+  private readonly ADAPTIVE_QUERY_MAX_LEN = 220;
+  private disposed = false;
 
-    // ============================================
-    // Configuration
-    // ============================================
+  // ============================================
+  // Configuration
+  // ============================================
 
-    public setRecapLLM(recapLLM: RecapLLM | null): void {
-        this.recapLLM = recapLLM;
+  public setRecapLLM(recapLLM: RecapLLM | null): void {
+    this.recapLLM = recapLLM;
+  }
+
+  public setMeetingMetadata(metadata: any): void {
+    this.currentMeetingMetadata = metadata;
+    const inferredMeetingId = metadata?.meetingId || metadata?.calendarEventId || metadata?.title;
+    if (typeof inferredMeetingId === 'string' && inferredMeetingId.trim()) {
+      const normalizedMeetingId = inferredMeetingId.trim();
+      if (normalizedMeetingId !== this.activeMeetingId) {
+        return;
+      }
+      this.activeMeetingId = normalizedMeetingId;
+    }
+    persistState(this);
+  }
+
+  getActiveMeetingId(): string {
+    return this.activeMeetingId;
+  }
+
+  setSupervisorBus(bus?: SupervisorBusEmitter): void {
+    this.supervisorBus = bus;
+  }
+
+  private emitSupervisorEvent(event: SupervisorEvent): void {
+    if (this.disposed) {
+      return;
+    }
+    void this.supervisorBus?.emit(event).catch((error) => {
+      console.warn(`[SessionTracker] Failed to emit supervisor event ${event.type}:`, error);
+    });
+  }
+
+  noteUtteranceRevision(utteranceId: string | undefined): void {
+    if (!utteranceId) return;
+    this.utteranceRevisions.set(utteranceId, (this.utteranceRevisions.get(utteranceId) ?? 0) + 1);
+  }
+
+  public getMeetingMetadata() {
+    return this.currentMeetingMetadata;
+  }
+
+  public clearMeetingMetadata(): void {
+    this.currentMeetingMetadata = null;
+    persistState(this);
+  }
+
+  // ============================================
+  // Context Management
+  // ============================================
+
+  /**
+   * Add a transcript segment to context.
+   * Only stores FINAL transcripts.
+   * Returns { role, isRefinementCandidate } so the engine can decide whether to trigger follow-up.
+   */
+  addTranscript(segment: TranscriptSegment): { role: 'interviewer' | 'user' | 'assistant' } | null {
+    if (this.disposed) {
+      return null;
+    }
+    if (!segment.final) return null;
+
+    if (this.isRestoring) {
+      const capturedSegment = { ...segment };
+      let bufferedResult: { role: 'interviewer' | 'user' | 'assistant' } | null = null;
+      this.writeBuffer.push(() => {
+        bufferedResult = this.addTranscript(capturedSegment);
+      });
+      const role = mapSpeakerToRoleImpl(segment.speaker);
+      return role ? { role } : null;
     }
 
-    public setMeetingMetadata(metadata: any): void {
-        this.currentMeetingMetadata = metadata;
-    }
+    const role = mapSpeakerToRoleImpl(segment.speaker);
+    const text = segment.text.trim();
 
-    public getMeetingMetadata() {
-        return this.currentMeetingMetadata;
-    }
-
-    public clearMeetingMetadata(): void {
-        this.currentMeetingMetadata = null;
-    }
-
-    // ============================================
-    // Context Management
-    // ============================================
-
-    /**
-     * Add a transcript segment to context.
-     * Only stores FINAL transcripts.
-     * Returns { role, isRefinementCandidate } so the engine can decide whether to trigger follow-up.
-     */
-    addTranscript(segment: TranscriptSegment): { role: 'interviewer' | 'user' | 'assistant' } | null {
-        if (!segment.final) return null;
-
-        const role = this.mapSpeakerToRole(segment.speaker);
-        const text = segment.text.trim();
-        const segmentReference = segment.marker && segment.marker.trim().length > 0
-            ? segment.marker
-            : `segment:${this.sessionId}:${segment.speaker}:${segment.timestamp}:${this.transcriptRevision}`;
-
-        if (!text) return null;
+    if (!text) return null;
 
     // Deduplicate: check if this exact item already exists
     const contextItems = this.getContextItems();
@@ -243,17 +282,48 @@ export class SessionTracker {
       return null;
     }
 
+    // Consolidate: append to last item if same speaker within 300ms.
+    // This merges rapid transcript fragments without combining distinct turns.
+    if (lastItem &&
+      lastItem.role === role &&
+      Math.abs(lastItem.timestamp - segment.timestamp) < 300) {
+      const consolidatedText = `${lastItem.text} ${text}`;
+      lastItem.text = consolidatedText;
+      lastItem.embedding = buildPseudoEmbedding(consolidatedText);
+      this.transcriptRevision++;
+      this.noteUtteranceRevision(segment.utteranceId);
+      this.compactSnapshotCache.clear();
+      this.contextAssembleCache.clear();
+      return { role };
+    }
+
+    const itemPhase = inferItemPhase(this, role, text);
     this.contextItemsBuffer.push({
       role,
       text,
       timestamp: segment.timestamp,
-      segmentReference,
+      phase: itemPhase,
+      embedding: buildPseudoEmbedding(text),
     });
-        this.transcriptRevision++;
-        this.compactSnapshotCache.clear();
-        this.turnCache = null;
+    this.transcriptRevision++;
+    this.noteUtteranceRevision(segment.utteranceId);
+    this.compactSnapshotCache.clear();
+    this.contextAssembleCache.clear();
 
-        this.evictOldEntries();
+    // Extract and auto-pin constraints from interviewer/user turns only
+    if (this.shouldRunConstraintExtraction(role)) {
+      const constraints = extractConstraints(text);
+      if (constraints.length > 0) {
+        for (const constraint of constraints) {
+          if (!this.hasConstraint(constraint.normalized)) {
+            this.extractedConstraints.push(constraint);
+            this.pinItem(constraint.normalized, constraint.type, true);
+          }
+        }
+      }
+    }
+
+    this.evictOldEntries();
 
     // Filter out internal system prompts that might be passed via IPC
     const isInternalPrompt = text.startsWith("You are a real-time interview assistant") ||
@@ -261,589 +331,538 @@ export class SessionTracker {
       text.startsWith("CONTEXT:");
 
     if (!isInternalPrompt) {
-      this.logTimingVariance(segment);
-
       // Add to session transcript
-      this.fullTranscript.push({
-        ...segment,
-        marker: segmentReference,
-      });
+      this.fullTranscript.push(segment);
 
-      // Hard cap to prevent memory exhaustion in very long meetings
-      while (this.fullTranscript.length > MAX_TRANSCRIPT_ENTRIES) {
-        this.fullTranscript.shift(); // Remove oldest entries
+      if (this.fullTranscript.length > MAX_TRANSCRIPT_ENTRIES) {
+        this.fullTranscript.splice(0, this.fullTranscript.length - MAX_TRANSCRIPT_ENTRIES);
       }
 
       // Debounced compaction instead of immediate
       this.scheduleCompaction();
+
+      // NAT-059: append event to event-sourced log
+      appendTranscriptEvent(this, segment).catch((err) => {
+        console.warn('[SessionTracker] Event append failed:', err);
+      });
     }
 
-        return { role };
+    persistState(this);
+
+    return { role };
+  }
+
+  /**
+   * Add assistant-generated message to context
+   */
+  addAssistantMessage(text: string): void {
+    if (this.disposed) {
+      return;
+    }
+    console.log(`[SessionTracker] addAssistantMessage called with:`, text.substring(0, 50));
+
+    if (this.isRestoring) {
+      const capturedText = text;
+      this.writeBuffer.push(() => {
+        this.addAssistantMessage(capturedText);
+      });
+      return;
     }
 
-    /**
-     * Add assistant-generated message to context
-     */
-    addAssistantMessage(text: string): void {
-        console.log(`[SessionTracker] addAssistantMessage called with:`, text.substring(0, 50));
+    // Natively-style filtering
+    if (!text) return;
 
-        // Natively-style filtering
-        if (!text) return;
+    const cleanText = text.trim();
+    if (cleanText.length < 10) {
+      console.warn(`[SessionTracker] Ignored short message (<10 chars)`);
+      return;
+    }
 
-        const cleanText = text.trim();
-        if (cleanText.length < 10) {
-            console.warn(`[SessionTracker] Ignored short message (<10 chars)`);
-            return;
-        }
-
-        if (cleanText.includes("I'm not sure") || cleanText.includes("I can't answer")) {
-            console.warn(`[SessionTracker] Ignored fallback message`);
-            return;
-        }
+    if (cleanText.includes("I'm not sure") || cleanText.includes("I can't answer")) {
+      console.warn(`[SessionTracker] Ignored fallback message`);
+      return;
+    }
 
     this.contextItemsBuffer.push({
       role: 'assistant',
       text: cleanText,
-      timestamp: Date.now()
+      timestamp: Date.now(),
+      phase: this.phaseDetector.getCurrentPhase(),
+      embedding: buildPseudoEmbedding(cleanText),
     });
-        this.transcriptRevision++;
-        this.compactSnapshotCache.clear();
-        this.turnCache = null;
+    this.transcriptRevision++;
+    this.compactSnapshotCache.clear();
+    this.contextAssembleCache.clear();
 
-        // Also add to fullTranscript so it persists in the session history (and summaries)
-        this.fullTranscript.push({
-            speaker: 'assistant',
-            text: cleanText,
-            timestamp: Date.now(),
-            final: true,
-            confidence: 1.0
+    if (this.fingerprinter.isDuplicate(cleanText).isDupe) {
+      console.warn('[SessionTracker] Duplicate assistant response detected by fingerprint history');
+    }
+    this.fingerprinter.record(cleanText);
+
+    // Also add to fullTranscript so it persists in the session history (and summaries)
+    this.fullTranscript.push({
+      speaker: 'assistant',
+      text: cleanText,
+      timestamp: Date.now(),
+      final: true,
+      confidence: 1.0
+    });
+
+    // Hard cap to prevent memory exhaustion in very long meetings
+    if (this.fullTranscript.length > MAX_TRANSCRIPT_ENTRIES) {
+      this.fullTranscript.splice(0, this.fullTranscript.length - MAX_TRANSCRIPT_ENTRIES);
+    }
+
+    this.scheduleCompaction();
+
+    this.lastAssistantMessage = cleanText;
+
+    // Temporal RAG: Track response history for anti-repetition
+    this.assistantResponseHistory.push({
+      text: cleanText,
+      timestamp: Date.now(),
+      questionContext: this.getLastInterviewerTurn() || 'unknown'
+    });
+
+    // Keep history bounded
+    if (this.assistantResponseHistory.length > MAX_ASSISTANT_HISTORY) {
+      this.assistantResponseHistory = this.assistantResponseHistory.slice(-MAX_ASSISTANT_HISTORY);
+    }
+
+    console.log(`[SessionTracker] lastAssistantMessage updated, history size: ${this.assistantResponseHistory.length}`);
+    this.evictOldEntries();
+    persistState(this);
+  }
+
+  /**
+   * Handle incoming transcript from native audio service
+   */
+  handleTranscript(segment: TranscriptSegment): { role: 'interviewer' | 'user' | 'assistant' } | null {
+    if (this.disposed) {
+      return null;
+    }
+    if (this.isRestoring) {
+      const capturedSegment = { ...segment };
+      this.writeBuffer.push(() => {
+        this.handleTranscript(capturedSegment);
+      });
+      const role = mapSpeakerToRoleImpl(segment.speaker);
+      return role ? { role } : null;
+    }
+
+    // Track interim segments for interviewer to prevent data loss on stop
+    if (segment.speaker === 'interviewer') {
+      if (Math.random() < 0.05 || segment.final) {
+        console.log(`[SessionTracker] RX Interviewer Segment: Final=${segment.final} Text="${segment.text.substring(0, 50)}..."`);
+      }
+
+      if (!segment.final) {
+        this.lastInterimInterviewer = segment;
+      } else {
+        this.lastInterimInterviewer = null;
+      }
+    }
+
+    const result = this.addTranscript(segment);
+
+    if (segment.final && segment.speaker === 'interviewer') {
+      this.observedQuestionStore.noteQuestion(segment.text, segment.timestamp);
+      if (this.consciousModeEnabled) {
+        const reaction = this.questionReactionClassifier.classify({
+          question: segment.text,
+          activeThread: this.consciousThreadStore.getActiveReasoningThread(),
+          latestResponse: this.consciousThreadStore.getLatestConsciousResponse(),
+          latestHypothesis: this.answerHypothesisStore.getLatestHypothesis(),
         });
-
-        // Hard cap to prevent memory exhaustion in very long meetings
-        while (this.fullTranscript.length > MAX_TRANSCRIPT_ENTRIES) {
-            this.fullTranscript.shift(); // Remove oldest entries
-        }
-
-        this.scheduleCompaction();
-
-        this.lastAssistantMessage = cleanText;
-
-        // Temporal RAG: Track response history for anti-repetition
-        this.assistantResponseHistory.push({
-            text: cleanText,
-            timestamp: Date.now(),
-            questionContext: this.getLastInterviewerTurn() || 'unknown'
-        });
-
-        // Keep history bounded
-        if (this.assistantResponseHistory.length > MAX_ASSISTANT_HISTORY) {
-            this.assistantResponseHistory = this.assistantResponseHistory.slice(-MAX_ASSISTANT_HISTORY);
-        }
-
-        console.log(`[SessionTracker] lastAssistantMessage updated, history size: ${this.assistantResponseHistory.length}`);
-        this.evictOldEntries();
+        this.answerHypothesisStore.noteObservedReaction(segment.text, reaction);
+      }
     }
 
-    /**
-     * Handle incoming transcript from native audio service
-     */
-    handleTranscript(segment: TranscriptSegment): { role: 'interviewer' | 'user' | 'assistant' } | null {
-        // Track interim segments for interviewer to prevent data loss on stop
-        if (segment.speaker === 'interviewer') {
-            if (Math.random() < 0.05 || segment.final) {
-                console.log(`[SessionTracker] RX Interviewer Segment: Final=${segment.final} Text="${segment.text.substring(0, 50)}..."`);
-            }
-
-            if (!segment.final) {
-                this.lastInterimInterviewer = segment;
-            } else {
-                this.lastInterimInterviewer = null;
-            }
-        }
-
-        const result = this.addTranscript(segment);
-
-        const role = this.mapSpeakerToRole(segment.speaker);
-        if (segment.final && role !== 'assistant' && this.consciousModeEnabled) {
-            this.updateConsciousConversationState(segment.text, role);
-        }
-
-        return result;
+    if (segment.final && segment.speaker === 'interviewer' && this.consciousModeEnabled) {
+      this.updateConsciousConversationState(segment.text);
     }
 
-    private updateConsciousConversationState(transcript: string, role: ContextItem['role']): void {
-        const normalized = transcript.trim();
-        if (!normalized) {
-            return;
-        }
-
-        const phase = this.detectPhaseFromTranscript(normalized);
-        this.setCurrentPhase(phase);
-        this.threadManager.pruneExpired();
-
-        const activeThread = this.threadManager.getActiveThread();
-        const matchingThread = this.threadManager.findMatchingThread(normalized, phase);
-
-        if (!activeThread && matchingThread && matchingThread.confidence.total >= RESUME_THRESHOLD) {
-            this.threadManager.resumeThread(matchingThread.thread.id);
-        }
-
-        const currentThread = this.threadManager.getActiveThread();
-        const resumeKeywords = Array.from(new Set(
-            normalized
-                .toLowerCase()
-                .replace(/[^a-z0-9\s]/g, ' ')
-                .split(/\s+/)
-                .filter(word => word.length >= 4)
-        ));
-
-        if (!currentThread) {
-            const userCanOpenThread = role !== 'user' || getTranscriptSuggestionDecision(normalized, true, null, {
-                speaker: 'user',
-                enableConversationStateTrigger: true,
-            }).triggerType === 'conversation_state';
-
-            if (!userCanOpenThread) {
-                return;
-            }
-
-            if (resumeKeywords.length > 0 || normalized.split(/\s+/).length >= 4) {
-                this.threadManager.createThread(normalized, phase);
-                this.threadManager.addKeywordsToActive(resumeKeywords);
-            }
-            return;
-        }
-
-        const phaseShift = currentThread.phase !== phase;
-        const majorPhaseShift = phaseShift && (
-            phase === 'behavioral_story' ||
-            phase === 'wrap_up' ||
-            currentThread.phase === 'behavioral_story'
-        );
-
-        if (majorPhaseShift) {
-            this.threadManager.createThread(normalized, phase);
-            this.threadManager.addKeywordsToActive(resumeKeywords);
-            return;
-        }
-
-        this.threadManager.updateActiveThread({
-            phase,
-            turnCount: currentThread.turnCount + 1,
-        });
-        this.threadManager.addKeywordsToActive(resumeKeywords);
+    if (segment.final && segment.speaker === 'user' && this.consciousModeEnabled) {
+      const changed = this.responsePreferenceStore.noteUserTranscript(segment.text, segment.timestamp);
+      if (changed) {
+        persistState(this);
+      }
     }
 
-    // ============================================
-    // Context Accessors
-    // ============================================
-
-    /**
-     * Get context items within the last N seconds
-     */
-    getContext(lastSeconds: number = 120): ContextItem[] {
-        const cutoff = Date.now() - (lastSeconds * 1000);
-        return this.getContextItems().filter((item: ContextItem) => item.timestamp >= cutoff);
+    if (segment.final && this.consciousModeEnabled && (segment.speaker === 'interviewer' || segment.speaker === 'user')) {
+      this.designStateStore.noteInterviewerTurn({
+        transcript: segment.text,
+        timestamp: segment.timestamp,
+        phase: this.phaseDetector.getCurrentPhase(),
+        constraints: extractConstraints(segment.text),
+      });
     }
 
-    getLastAssistantMessage(): string | null {
-        return this.lastAssistantMessage;
-    }
+    return result;
+  }
 
-    getAssistantResponseHistory(): AssistantResponse[] {
-        return this.assistantResponseHistory;
+  private updateConsciousConversationState(transcript: string): void {
+    const detect = (value: string) => this.detectPhaseFromTranscript(value);
+    const setPhase = (phase: InterviewPhase) => this.phaseDetector.setPhase(phase);
+    if (this.threadDirector) {
+      this.threadDirector.handleObservedInterviewerTranscript(transcript, detect, setPhase);
+    } else {
+      this.consciousThreadStore.handleObservedInterviewerTranscript(transcript, detect, setPhase);
     }
+  }
 
-    getLastInterimInterviewer(): TranscriptSegment | null {
-        return this.lastInterimInterviewer;
+  // ============================================
+  // Context Accessors
+  // ============================================
+
+  /**
+   * Get context items within the last N seconds
+   */
+  getContext(lastSeconds: number = 120): ContextItem[] {
+    const cutoff = Date.now() - (lastSeconds * 1000);
+    return this.getContextItems().filter((item: ContextItem) => item.timestamp >= cutoff);
+  }
+
+  getLastAssistantMessage(): string | null {
+    return this.lastAssistantMessage;
+  }
+
+  getAssistantResponseHistory(): AssistantResponse[] {
+    return this.assistantResponseHistory;
+  }
+
+  getLastInterimInterviewer(): TranscriptSegment | null {
+    return this.lastInterimInterviewer;
+  }
+
+  setConsciousModeEnabled(enabled: boolean): void {
+    // NAT-CM-AUDIT: idempotent — same value is a no-op so a stray duplicate
+    // toggle from the renderer doesn't blow away state.
+    if (this.consciousModeEnabled === enabled) {
+      return;
     }
+    this.consciousModeEnabled = enabled;
 
-    setConsciousModeEnabled(enabled: boolean): void {
-        this.consciousModeEnabled = enabled;
-        if (!enabled) {
-            // Treat mode-off as a hard boundary for derived reasoning state so
-            // an OFF -> ON toggle cannot inherit stale Conscious threads/phases.
-            this.latestConsciousResponse = null;
-            this.activeReasoningThread = null;
-            this.threadManager.reset();
-            this.phaseDetector.reset();
-        }
+    // NAT-CM-AUDIT: full conscious-state wipe on EVERY transition (off→on AND
+    // on→off). Previously the OFF path cleared most stores but missed:
+    //   - `_codingProblem` (screenshot-extracted coding problem leaks across
+    //     toggles, so a prior coding screenshot still steers the next answer
+    //     toward A/B/C/D structure even when the user expects normal Q&A)
+    //   - `phaseDetector` (interview phase polluted from prior session)
+    //   - `threadDirector` reasoning thread (cleared via dedicated path)
+    //   - `tokenBudgetManager` allocations
+    //   - `adaptiveContextWindow` cached state
+    //   - response fingerprinter (prior answers blocking legitimate retries)
+    // Doing the wipe on ON as well guarantees a clean start regardless of
+    // whether OFF was reached cleanly. The transcript/audio context is
+    // preserved since it's session-level, not conscious-mode-level.
+    if (this.threadDirector) {
+      this.threadDirector.resetThread('toggle_conscious_mode');
+    } else {
+      this.consciousThreadStore.reset();
     }
+    this.observedQuestionStore.reset();
+    this.answerHypothesisStore.reset();
+    this.responsePreferenceStore.reset();
+    this.designStateStore.reset();
+    this.consciousSemanticContext = '';
+    this._codingProblem = null;
+    this.phaseDetector.reset();
+    this.tokenBudgetManager.reset();
+    this.adaptiveContextWindow = null;
+    this.fingerprinter.clear();
+    this.contextAssembleCache.clear();
+    this.compactSnapshotCache.clear();
 
-isConsciousModeEnabled(): boolean {
+    persistState(this);
+  }
+
+  isConsciousModeEnabled(): boolean {
     return this.consciousModeEnabled;
   }
 
-  private getAdaptiveContextWindow(): AdaptiveContextWindow {
-    if (!this.adaptiveContextWindow) {
-      this.adaptiveContextWindow = new AdaptiveContextWindow();
-    }
-    return this.adaptiveContextWindow;
+  isLikelyGeneralIntent(lastInterviewerTurn: string | null): boolean {
+    return this.observedQuestionStore.isLikelyGeneralIntent(lastInterviewerTurn);
   }
 
-  async getAdaptiveContext(
-    query: string,
-    queryEmbedding: number[],
-    tokenBudget: number = 500
-  ): Promise<ContextItem[]> {
-    if (!isOptimizationActive('useAdaptiveWindow')) {
-      return this.getContext(Math.floor(tokenBudget / 4));
+  // ============================================
+  // Conscious Mode Accessors
+  // ============================================
+
+  getLatestConsciousResponse(): ConsciousModeStructuredResponse | null {
+    return this.consciousThreadStore.getLatestConsciousResponse();
+  }
+
+  getActiveReasoningThread(): ReasoningThread | null {
+    return this.consciousThreadStore.getActiveReasoningThread();
+  }
+
+  clearConsciousModeThread(): void {
+    if (this.threadDirector) {
+      this.threadDirector.resetThread('clear_conscious_mode');
+    } else {
+      this.consciousThreadStore.reset();
+    }
+    this.answerHypothesisStore.reset();
+    this.responsePreferenceStore.reset();
+    this.designStateStore.reset();
+    this._codingProblem = null;
+    persistState(this);
+  }
+
+  // ─── NAT-303: Coding problem store ────────────────────────────────────────
+  private _codingProblem: CodingProblem | null = null;
+
+  setCodingProblem(problem: CodingProblem | null): void {
+    this._codingProblem = problem;
+  }
+
+  getCodingProblem(): CodingProblem | null {
+    return this._codingProblem;
+  }
+
+  appendProbe(probe: ProbeAnswer): void {
+    this.consciousThreadStore.appendProbe(probe);
+  }
+
+  recordConsciousResponse(question: string, response: ConsciousModeStructuredResponse, threadAction: 'start' | 'continue' | 'reset'): void {
+    if (this.threadDirector) {
+      this.threadDirector.recordConsciousResponse(question, response, threadAction);
+    } else {
+      this.consciousThreadStore.recordConsciousResponse(question, response, threadAction);
+    }
+    this.answerHypothesisStore.recordStructuredSuggestion(question, response, threadAction);
+    this.designStateStore.noteStructuredResponse({
+      question,
+      response,
+      timestamp: Date.now(),
+      phase: this.phaseDetector.getCurrentPhase(),
+    });
+    const activeThread = this.consciousThreadStore.getThreadManager().getActiveThread();
+    this.emitSupervisorEvent({
+      type: 'conscious:thread_action',
+      action: threadAction,
+      question,
+      phase: this.phaseDetector.getCurrentPhase(),
+      threadId: activeThread?.id ?? null,
+      topic: activeThread?.topic ?? null,
+    });
+    void this.recordSessionEvent('conscious_thread_action', {
+      action: threadAction,
+      question,
+      phase: this.phaseDetector.getCurrentPhase(),
+      threadId: activeThread?.id ?? null,
+      topic: activeThread?.topic ?? null,
+    });
+  }
+
+  getLatestQuestionReaction() {
+    return this.answerHypothesisStore.getLatestReaction();
+  }
+
+  getLatestAnswerHypothesis() {
+    return this.answerHypothesisStore.getLatestHypothesis();
+  }
+
+  getConsciousEvidenceContext(): string {
+    return this.answerHypothesisStore.buildContextBlock();
+  }
+
+  getConsciousResponsePreferenceContext(questionMode: ConsciousResponseQuestionMode): string {
+    return this.responsePreferenceStore.buildContextBlock(questionMode);
+  }
+
+  getConsciousResponsePreferenceSummary(questionMode: ConsciousResponseQuestionMode): ConsciousPlannerPreferenceSummary {
+    return this.responsePreferenceStore.getPlannerPreferenceSummary(questionMode);
+  }
+
+  setConsciousSemanticContext(block: string): void {
+    this.consciousSemanticContext = block || '';
+  }
+
+  getConsciousSemanticContext(): string {
+    return this.consciousSemanticContext;
+  }
+
+  getConsciousLongMemoryContext(query: string): string {
+    return getConsciousLongMemoryContext(this, query);
+  }
+
+  // ============================================
+  // Formatted Context
+  // ============================================
+
+  getFormattedContext(lastSeconds: number = 120): string {
+    return getFormattedContext(this, lastSeconds);
+  }
+
+  getSessionId(): string {
+    return this.sessionId;
+  }
+
+  getTranscriptRevision(): number {
+    return this.transcriptRevision;
+  }
+
+  getUtteranceRevision(utteranceId: string | null | undefined): number | undefined {
+    if (!utteranceId) return undefined;
+    return this.utteranceRevisions.get(utteranceId);
+  }
+
+  getCompactTranscriptSnapshot(maxTurns: number = 12, snapshotType: 'standard' | 'fast' = 'standard'): string {
+    return getCompactTranscriptSnapshot(this, maxTurns, snapshotType);
+  }
+
+  /**
+   * Get the last interviewer turn
+   */
+  getLastInterviewerTurn(): string | null {
+    const contextItems = this.getContextItems();
+    for (let i = contextItems.length - 1; i >= 0; i--) {
+      if (contextItems[i].role === 'interviewer') {
+        return contextItems[i].text;
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Get full session context from accumulated transcript (User + Interviewer + Assistant)
+   */
+  getFullSessionContext(): string {
+    return buildFullSessionContext(this.fullTranscript, this.transcriptEpochSummaries);
+  }
+
+  // ============================================
+  // Session Data Accessors (for MeetingPersistence)
+  // ============================================
+
+  getFullTranscript(): TranscriptSegment[] {
+    return this.fullTranscript;
+  }
+
+  getFullUsage(): UsageInteraction[] {
+    return this.fullUsage;
+  }
+
+  getHotState(now: number = Date.now()): import('./memory/SessionPersistence').PersistedSessionMemoryEntry[] {
+    return getHotState(this, now);
+  }
+
+  getWarmState(now: number = Date.now()): import('./memory/SessionPersistence').PersistedSessionMemoryEntry[] {
+    return getWarmState(this, now);
+  }
+
+  getColdState(now: number = Date.now()): import('./memory/SessionPersistence').PersistedSessionMemoryEntry[] {
+    return getColdState(this, now);
+  }
+
+  createSuccessorSession(): SessionTracker {
+    const next = new SessionTracker();
+    next.setRecapLLM(this.recapLLM);
+    next.setConsciousModeEnabled(this.consciousModeEnabled);
+    next.setSupervisorBus(this.supervisorBus);
+    return next;
+  }
+
+  getPinnedItems(): PinnedItem[] {
+    return [...this.pinnedItems];
+  }
+
+  pinItem(text: string, label?: string, skipPersist: boolean = false): void {
+    const trimmed = text.trim();
+    if (!trimmed) return;
+
+    if (this.pinnedItems.length >= this.maxPinnedItems) {
+      this.pinnedItems.shift();
     }
 
-    const candidates: ContextEntry[] = this.getContextItems().map((item: ContextItem) => ({
-      text: item.text,
-      timestamp: item.timestamp,
-      phase: undefined as InterviewPhase | undefined,
-    }));
+    this.pinnedItems.push({
+      id: `pin_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      text: trimmed,
+      pinnedAt: Date.now(),
+      label,
+    });
+    this.designStateStore.notePinnedItem(trimmed, label, Date.now(), this.phaseDetector.getCurrentPhase());
+    this.contextAssembleCache.clear();
 
-    const config: ContextSelectionConfig = {
-      tokenBudget,
-      recencyWeight: 0.4,
-      semanticWeight: 0.4,
-      phaseAlignmentWeight: 0.2,
+    if (!skipPersist) {
+      persistState(this);
+    }
+  }
+
+  unpinItem(id: string): void {
+    this.pinnedItems = this.pinnedItems.filter((item) => item.id !== id);
+    this.contextAssembleCache.clear();
+    persistState(this);
+  }
+
+  clearPinnedItems(): void {
+    this.pinnedItems = [];
+    this.contextAssembleCache.clear();
+    persistState(this);
+  }
+
+  hasConstraint(normalized: string): boolean {
+    const key = normalized.trim().toLowerCase();
+    return this.extractedConstraints.some((constraint) => constraint.normalized.toLowerCase() === key);
+  }
+
+  getConstraintSummary(): ExtractedConstraint[] {
+    return [...this.extractedConstraints];
+  }
+
+  getAdaptiveWindowStats(): { calls: number; avgMs: number; over50ms: number; timeouts: number } {
+    const avgMs = this.adaptiveWindowStats.calls > 0
+      ? this.adaptiveWindowStats.totalMs / this.adaptiveWindowStats.calls
+      : 0;
+    return {
+      calls: this.adaptiveWindowStats.calls,
+      avgMs,
+      over50ms: this.adaptiveWindowStats.over50ms,
+      timeouts: this.adaptiveWindowStats.timeouts,
     };
-
-    const window = this.getAdaptiveContextWindow();
-    const selected = await window.selectContext(query, queryEmbedding, candidates, config);
-
-    return selected.map(entry => ({
-      role: 'interviewer' as const,
-      text: entry.text,
-      timestamp: entry.timestamp,
-    }));
   }
 
-    getLatestConsciousResponse(): ConsciousModeStructuredResponse | null {
-        return this.latestConsciousResponse;
+  setActiveMeetingId(meetingId: string): void {
+    if (!meetingId.trim()) return;
+    this.activeMeetingId = meetingId.trim();
+    persistState(this);
+  }
+
+  getSessionStartTime(): number {
+    return this.sessionStartTime;
+  }
+
+  createSnapshot(now: number = Date.now()): MeetingSnapshot {
+    const transcript = this.fullTranscript.map(segment => ({ ...segment }));
+    const epochSummaries = [...this.transcriptEpochSummaries];
+    return {
+      transcript,
+      usage: this.fullUsage.map(entry => ({ ...entry })),
+      startTime: this.sessionStartTime,
+      durationMs: Math.max(0, now - this.sessionStartTime),
+      context: buildFullSessionContext(transcript, epochSummaries),
+      meetingMetadata: this.currentMeetingMetadata ? { ...this.currentMeetingMetadata } : null,
+    };
+  }
+
+  // ============================================
+  // Usage Tracking
+  // ============================================
+
+  /**
+   * Cap usage array with simple eviction (usage doesn't need summarization)
+   */
+  capUsageArray(): void {
+    if (this.fullUsage.length > 500) {
+      this.fullUsage = this.fullUsage.slice(-500);
     }
+  }
 
-    getActiveReasoningThread(): ReasoningThread | null {
-        return this.activeReasoningThread;
-    }
-
-    clearConsciousModeThread(): void {
-        this.latestConsciousResponse = null;
-        this.activeReasoningThread = null;
-    }
-
-    recordConsciousResponse(question: string, response: ConsciousModeStructuredResponse, threadAction: 'start' | 'continue' | 'reset'): void {
-        this.latestConsciousResponse = response;
-
-        if (threadAction === 'continue' && this.activeReasoningThread) {
-            this.activeReasoningThread = {
-                ...this.activeReasoningThread,
-                lastQuestion: question,
-                followUpCount: this.activeReasoningThread.followUpCount + 1,
-                response: mergeConsciousModeResponses(this.activeReasoningThread.response, response),
-                updatedAt: Date.now(),
-            };
-            this.latestConsciousResponse = this.activeReasoningThread.response;
-            return;
-        }
-
-        this.activeReasoningThread = {
-            rootQuestion: question,
-            lastQuestion: question,
-            response,
-            followUpCount: 0,
-            updatedAt: Date.now(),
-        };
-    }
-
-    /**
-     * Get formatted context string for LLM prompts
-     */
-    getPromptContextItems(lastSeconds: number = 120): ContextItem[] {
-        const cutoff = Date.now() - (lastSeconds * 1000);
-        const overlapGroups = this.getOverlapContextGroups(cutoff);
-        const emittedOverlapGroups = new Set<string>();
-        const promptItems: ContextItem[] = [];
-
-        for (const item of this.getContext(lastSeconds)) {
-            const overlapGroup = item.segmentReference
-                ? overlapGroups.find(({ turns }) => (
-                    turns.some((turn) => turn.mergedSegmentIds.includes(item.segmentReference!))
-                ))
-                : undefined;
-
-            if (!overlapGroup) {
-                promptItems.push(item);
-                continue;
-            }
-
-            if (emittedOverlapGroups.has(overlapGroup.id)) {
-                continue;
-            }
-
-            emittedOverlapGroups.add(overlapGroup.id);
-            promptItems.push(...overlapGroup.turns.map((turn) => ({
-                role: turn.speaker,
-                text: turn.text,
-                timestamp: turn.endedAt,
-                overlapGroupId: turn.overlapGroupId,
-            })));
-        }
-
-        return promptItems
-            .reduce<ContextItem[]>((accumulator, item) => {
-                const previousTurn = accumulator[accumulator.length - 1];
-                const canMergeWithPrevious = previousTurn
-                    && previousTurn.role === item.role
-                    && item.role !== 'assistant'
-                    && !previousTurn.overlapGroupId
-                    && !item.overlapGroupId
-                    && item.timestamp >= previousTurn.timestamp
-                    && item.timestamp - previousTurn.timestamp <= TURN_MERGE_GAP_MS;
-
-                if (canMergeWithPrevious) {
-                    previousTurn.text = `${previousTurn.text} ${item.text}`.trim();
-                    previousTurn.timestamp = item.timestamp;
-                    return accumulator;
-                }
-
-                accumulator.push({
-                    role: item.role,
-                    text: item.text,
-                    timestamp: item.timestamp,
-                    overlapGroupId: item.overlapGroupId,
-                });
-                return accumulator;
-            }, []);
-    }
-
-    getFormattedContext(lastSeconds: number = 120): string {
-        return this.getPromptContextItems(lastSeconds).map(item => {
-            const label = item.role === 'interviewer' ? 'INTERVIEWER' :
-                item.role === 'user' ? 'ME' :
-                    'ASSISTANT (PREVIOUS SUGGESTION)';
-            return `[${label}]: ${item.text}`;
-        }).join('\n');
-    }
-
-    getReasoningPromptContext(lastSeconds: number = 180): string {
-        const recentTurns = this.getFormattedContext(lastSeconds);
-        const epochSummaries = this.getTranscriptEpochSummaries();
-
-        if (!epochSummaries.length) {
-            return recentTurns;
-        }
-
-        const sections = [`[SESSION HISTORY - EARLIER DISCUSSION]\n${epochSummaries.join('\n---\n')}`];
-        if (recentTurns) {
-            sections.push(`[RECENT TURNS]\n${recentTurns}`);
-        }
-
-        return sections.join('\n\n');
-    }
-
-    getTranscriptEpochSummaries(): string[] {
-        return [...this.transcriptEpochSummaries];
-    }
-
-    getSessionId(): string {
-        return this.sessionId;
-    }
-
-    getTranscriptRevision(): number {
-        return this.transcriptRevision;
-    }
-
-    getConversationTurns(): ConversationTurn[] {
-        if (this.turnCache) {
-            return this.turnCache.map((turn) => ({
-                ...turn,
-                mergedSegmentIds: [...turn.mergedSegmentIds],
-            }));
-        }
-
-        let overlapGroupCounter = 0;
-        const turns: ConversationTurn[] = [];
-
-        this.fullTranscript.forEach((segment, index) => {
-            if (!segment.final) {
-                return;
-            }
-
-            const text = segment.text.trim();
-            if (!text) {
-                return;
-            }
-
-            const speaker = this.mapSpeakerToRole(segment.speaker);
-            const source = this.mapSpeakerToSource(segment.speaker);
-            const segmentReference = this.createSegmentReference(segment, index);
-            const previousTurn = turns[turns.length - 1];
-
-            if (previousTurn && this.shouldMergeTurnWithSegment(previousTurn, speaker, source, segment.timestamp)) {
-                previousTurn.text = `${previousTurn.text} ${text}`.trim();
-                previousTurn.endedAt = segment.timestamp;
-                previousTurn.final = previousTurn.final && segment.final;
-                previousTurn.mergedSegmentIds.push(segmentReference);
-
-                const nextConfidence = this.mergeTurnConfidence(previousTurn.confidence, segment.confidence, previousTurn.mergedSegmentIds.length);
-                if (nextConfidence != null) {
-                    previousTurn.confidence = nextConfidence;
-                }
-                return;
-            }
-
-            const nextTurn: ConversationTurn = {
-                id: `turn:${speaker}:${segment.timestamp}:${index}`,
-                speaker,
-                source,
-                text,
-                startedAt: segment.timestamp,
-                endedAt: segment.timestamp,
-                final: segment.final,
-                confidence: segment.confidence,
-                mergedSegmentIds: [segmentReference],
-            };
-
-            if (previousTurn && previousTurn.speaker !== nextTurn.speaker) {
-                const gapMs = Math.abs(nextTurn.startedAt - previousTurn.endedAt);
-                if (gapMs <= TURN_OVERLAP_WINDOW_MS) {
-                    const overlapGroupId = previousTurn.overlapGroupId ?? `overlap:${++overlapGroupCounter}`;
-                    previousTurn.overlapGroupId = overlapGroupId;
-                    nextTurn.overlapGroupId = overlapGroupId;
-                }
-            }
-
-            turns.push(nextTurn);
-        });
-
-        this.turnCache = turns;
-        return turns.map((turn) => ({
-            ...turn,
-            mergedSegmentIds: [...turn.mergedSegmentIds],
-        }));
-    }
-
-    getTimingVarianceStats(): TimingVarianceStats {
-        return this.buildTimingVarianceStats(this.timingGapSamplesMs);
-    }
-
-    getTimingValidation(): TimingValidationResult {
-        const stats = this.getTimingVarianceStats();
-        return {
-            stats,
-            thresholdMs: PROVIDER_TIMESTAMP_ESCALATION_P95_MS,
-            shouldEscalateProviderTimestamps: (stats.p95 ?? 0) > PROVIDER_TIMESTAMP_ESCALATION_P95_MS,
-        };
-    }
-
-    getCompactTranscriptSnapshot(maxTurns: number = 12, snapshotType: 'standard' | 'fast' = 'standard'): string {
-        const cacheKey = `${this.sessionId}:${snapshotType}:${maxTurns}`;
-        const cached = this.compactSnapshotCache.get(cacheKey);
-        if (cached && cached.revision === this.transcriptRevision) {
-            return cached.value;
-        }
-
-        const items = this.getContextItems().slice(-maxTurns);
-        const snapshot = items.map(item => ({
-            role: item.role,
-            text: item.text,
-            timestamp: item.timestamp,
-        })).map(item => {
-            const label = item.role === 'interviewer' ? 'INTERVIEWER' : item.role === 'assistant' ? 'ASSISTANT' : 'ME';
-            return `[${label}]: ${item.text}`;
-        }).join('\n');
-
-        this.compactSnapshotCache.set(cacheKey, {
-            revision: this.transcriptRevision,
-            value: snapshot,
-        });
-        return snapshot;
-    }
-
-    /**
-     * Get the last interviewer turn
-     */
-    getLastInterviewerTurn(): string | null {
-    const turns = this.getConversationTurns();
-    for (let i = turns.length - 1; i >= 0; i--) {
-      if (turns[i].speaker === 'interviewer') {
-        return turns[i].text;
-             }
-         }
-         return null;
-    }
-
-    /**
-     * Get full session context from accumulated transcript (User + Interviewer + Assistant)
-     */
-    getFullSessionContext(): string {
-        return this.buildFullSessionContext(this.fullTranscript, this.transcriptEpochSummaries);
-    }
-
-    private buildFullSessionContext(transcript: TranscriptSegment[], epochSummaries: string[]): string {
-        const recentTranscript = transcript.map(segment => {
-            const role = this.mapSpeakerToRole(segment.speaker);
-            const label = role === 'interviewer' ? 'INTERVIEWER' :
-                role === 'user' ? 'ME' :
-                    'ASSISTANT';
-            return `[${label}]: ${segment.text}`;
-        }).join('\n');
-
-        if (epochSummaries.length > 0) {
-            const epochContext = epochSummaries.join('\n---\n');
-            return `[SESSION HISTORY - EARLIER DISCUSSION]\n${epochContext}\n\n[RECENT TRANSCRIPT]\n${recentTranscript}`;
-        }
-
-        return recentTranscript;
-    }
-
-    // ============================================
-    // Session Data Accessors (for MeetingPersistence)
-    // ============================================
-
-    getFullTranscript(): TranscriptSegment[] {
-        return this.fullTranscript.map(segment => ({ ...segment }));
-    }
-
-    getFullUsage(): UsageInteraction[] {
-        return this.fullUsage;
-    }
-
-    createSuccessorSession(): SessionTracker {
-        const next = new SessionTracker();
-        next.setRecapLLM(this.recapLLM);
-        next.setConsciousModeEnabled(this.consciousModeEnabled);
-        return next;
-    }
-
-    getSessionStartTime(): number {
-        return this.sessionStartTime;
-    }
-
-    createSnapshot(now: number = Date.now()): MeetingSnapshot {
-        const transcript = this.fullTranscript.map(segment => ({ ...segment }));
-        const epochSummaries = [...this.transcriptEpochSummaries];
-        return {
-            transcript,
-            usage: this.fullUsage.map(entry => ({ ...entry })),
-            startTime: this.sessionStartTime,
-            durationMs: Math.max(0, now - this.sessionStartTime),
-            context: this.buildFullSessionContext(transcript, epochSummaries),
-            meetingMetadata: this.currentMeetingMetadata ? { ...this.currentMeetingMetadata } : null,
-        };
-    }
-
-    // ============================================
-    // Usage Tracking
-    // ============================================
-
-    /**
-     * Cap usage array with simple eviction (usage doesn't need summarization)
-     */
-    capUsageArray(): void {
-        if (this.fullUsage.length > 500) {
-            this.fullUsage = this.fullUsage.slice(-500);
-        }
-    }
-
-    /**
-     * Public method to log usage from external sources (e.g. IPC direct chat)
-     */
+  /**
+   * Public method to log usage from external sources (e.g. IPC direct chat)
+   */
   logUsage(type: UsageInteraction['type'], question: string, answer: string): void {
     this.fullUsage.push({
       type,
@@ -858,60 +877,81 @@ isConsciousModeEnabled(): boolean {
     this.capUsageArray();
   }
 
-    // ============================================
-    // Interim Transcript Flush
-    // ============================================
+  // ============================================
+  // Interim Transcript Flush
+  // ============================================
 
-    /**
-     * Force-save any pending interim transcript (called on meeting stop)
-     */
-    flushInterimTranscript(): void {
-        if (this.lastInterimInterviewer) {
-            console.log('[SessionTracker] Force-saving pending interim transcript:', this.lastInterimInterviewer.text);
-            const finalSegment = { ...this.lastInterimInterviewer, final: true };
-            this.addTranscript(finalSegment);
-            this.lastInterimInterviewer = null;
-        }
+  /**
+   * Force-save any pending interim transcript (called on meeting stop)
+   */
+  flushInterimTranscript(): void {
+    if (this.lastInterimInterviewer) {
+      console.log('[SessionTracker] Force-saving pending interim transcript:', this.lastInterimInterviewer.text);
+      const finalSegment = { ...this.lastInterimInterviewer, final: true };
+      this.addTranscript(finalSegment);
+      this.lastInterimInterviewer = null;
     }
+  }
 
-    // ============================================
-    // Conscious Mode Realtime Accessors
-    // ============================================
+  // ============================================
+  // Conscious Mode Realtime Accessors
+  // ============================================
 
-    getThreadManager(): ThreadManager {
-        return this.threadManager;
+  getThreadManager(): ThreadManager {
+    return this.consciousThreadStore.getThreadManager();
+  }
+
+  getPhaseDetector(): InterviewPhaseDetector {
+    return this.phaseDetector;
+  }
+
+  getTokenBudgetManager(): TokenBudgetManager {
+    return this.tokenBudgetManager;
+  }
+
+  getCurrentPhase(): InterviewPhase {
+    return this.phaseDetector.getCurrentPhase();
+  }
+
+  setCurrentPhase(phase: InterviewPhase, trigger: 'interviewer_transcript' | 'manual' = 'manual'): void {
+    const currentPhase = this.phaseDetector.getCurrentPhase();
+    this.phaseDetector.setPhase(phase);
+    if (currentPhase !== phase) {
+      this.emitSupervisorEvent({
+        type: 'conscious:phase_changed',
+        from: currentPhase,
+        to: phase,
+        trigger,
+      });
     }
+  }
 
-    getPhaseDetector(): InterviewPhaseDetector {
-        return this.phaseDetector;
+  detectPhaseFromTranscript(transcript: string): InterviewPhase {
+    const previousPhase = this.phaseDetector.getCurrentPhase();
+    const result = this.phaseDetector.detectPhase(
+      transcript,
+      this.phaseDetector.getCurrentPhase(),
+      this.getContextItems().slice(-5).map((item: ContextItem) => item.text)
+    );
+    if (previousPhase !== result.phase) {
+      this.emitSupervisorEvent({
+        type: 'conscious:phase_changed',
+        from: previousPhase,
+        to: result.phase,
+        trigger: 'interviewer_transcript',
+      });
     }
+    return result.phase;
+  }
 
-    getTokenBudgetManager(): TokenBudgetManager {
-        return this.tokenBudgetManager;
-    }
-
-    getCurrentPhase(): InterviewPhase {
-        return this.phaseDetector.getCurrentPhase();
-    }
-
-    setCurrentPhase(phase: InterviewPhase): void {
-        this.phaseDetector.setPhase(phase);
-    }
-
-    detectPhaseFromTranscript(transcript: string): InterviewPhase {
-        const result = this.phaseDetector.detectPhase(
-            transcript,
-            this.phaseDetector.getCurrentPhase(),
-            this.getContextItems().slice(-5).map((item: ContextItem) => item.text)
-        );
-        return result.phase;
-    }
-
-    // ============================================
-    // Reset
-    // ============================================
+  // ============================================
+  // Reset
+  // ============================================
 
   async reset(): Promise<void> {
+    if (this.disposed) {
+      return;
+    }
     if (this.pendingCompactionPromise) {
       try {
         await this.pendingCompactionPromise;
@@ -921,12 +961,13 @@ isConsciousModeEnabled(): boolean {
     }
 
     this.cancelCompactionTimer();
-    
+
     const consciousModeEnabled = this.consciousModeEnabled;
-    
+    const previousMeetingId = this.activeMeetingId;
+
     const freshSessionId = `session_${SessionTracker.nextSessionId++}`;
     const freshStartTime = Date.now();
-    
+
     this.contextItemsBuffer.clear();
     this.fullTranscript = [];
     this.fullUsage = [];
@@ -937,139 +978,74 @@ isConsciousModeEnabled(): boolean {
     this.assistantResponseHistory = [];
     this.lastInterimInterviewer = null;
     this.consciousModeEnabled = consciousModeEnabled;
-    this.latestConsciousResponse = null;
-    this.activeReasoningThread = null;
-    this.threadManager.reset();
+    this.consciousThreadStore.reset();
+    this.observedQuestionStore.reset();
+    this.answerHypothesisStore.reset();
+    this.responsePreferenceStore.reset();
+    this.designStateStore.reset();
+    this.consciousSemanticContext = '';
     this.phaseDetector.reset();
     this.tokenBudgetManager.reset();
     this.adaptiveContextWindow = null;
     this.transcriptRevision = 0;
+    this.utteranceRevisions.clear();
     this.compactSnapshotCache.clear();
-    this.turnCache = null;
-    this.timingGapSamplesMs = [];
+    this.contextAssembleCache.clear();
+    this.semanticEmbeddingCache.clear();
     this.sessionId = freshSessionId;
-    
+    this.pinnedItems = [];
+    this.extractedConstraints = [];
+    this.fingerprinter.clear();
+    this.adaptiveWindowStats = {
+      calls: 0,
+      totalMs: 0,
+      over50ms: 0,
+      timeouts: 0,
+    };
+
+    if (previousMeetingId && previousMeetingId !== 'unspecified') {
+      this.activeMeetingId = previousMeetingId;
+      persistState(this);
+      try {
+        await this.persistence.flushScheduledSave();
+      } catch {
+        // Ignore persistence flush errors during reset; the in-memory state is already clear.
+      }
+    }
+
     this.pendingCompactionPromise = null;
     this.isCompacting = false;
+    this.activeMeetingId = 'unspecified';
+    this.pendingRestorePromise = null;
+    this.restoreRequestId = 0;
   }
 
-    // ============================================
-    // Private Helpers
-    // ============================================
-
-    mapSpeakerToRole(speaker: string): 'interviewer' | 'user' | 'assistant' {
-        if (speaker === 'user') return 'user';
-        if (speaker === 'assistant') return 'assistant';
-        return 'interviewer'; // system audio = interviewer
-    }
-
-  private mapSpeakerToSource(speaker: string): ConversationTurnSource {
-    if (speaker === 'user') return 'microphone';
-    if (speaker === 'assistant') return 'assistant';
-    return 'system';
-  }
-
-  private createSegmentReference(segment: TranscriptSegment, index: number): string {
-    if (segment.marker && segment.marker.trim().length > 0) {
-      return segment.marker;
-    }
-
-    return `segment:${index}:${segment.speaker}:${segment.timestamp}`;
-  }
-
-  private getOverlapContextGroups(cutoff: number): Array<{ id: string; turns: ConversationTurn[] }> {
-    const turns = this.getConversationTurns();
-    const overlapGroups = new Map<string, ConversationTurn[]>();
-
-    for (const turn of turns) {
-      if (!turn.overlapGroupId) {
-        continue;
-      }
-
-      const groupTurns = overlapGroups.get(turn.overlapGroupId) ?? [];
-      groupTurns.push(turn);
-      overlapGroups.set(turn.overlapGroupId, groupTurns);
-    }
-
-    return [...overlapGroups.entries()]
-      .filter(([, groupTurns]) => (
-        groupTurns.some((turn) => turn.startedAt < cutoff || turn.endedAt < cutoff)
-        && groupTurns.some((turn) => turn.endedAt >= cutoff)
-      ))
-      .map(([id, groupTurns]) => ({ id, turns: groupTurns }));
-  }
-
-  private shouldMergeTurnWithSegment(
-    turn: ConversationTurn,
-    speaker: ConversationTurn['speaker'],
-    source: ConversationTurnSource,
-    timestamp: number,
-  ): boolean {
-    return (
-      turn.speaker === speaker &&
-      turn.source === source &&
-      timestamp >= turn.endedAt &&
-      (timestamp - turn.endedAt) <= TURN_MERGE_GAP_MS
-    );
-  }
-
-  private mergeTurnConfidence(
-    currentConfidence: number | undefined,
-    nextConfidence: number | undefined,
-    segmentCount: number,
-  ): number | undefined {
-    if (currentConfidence == null) {
-      return nextConfidence;
-    }
-
-    if (nextConfidence == null) {
-      return currentConfidence;
-    }
-
-    return ((currentConfidence * (segmentCount - 1)) + nextConfidence) / segmentCount;
-  }
-
-  private logTimingVariance(segment: TranscriptSegment): void {
-    const role = this.mapSpeakerToRole(segment.speaker);
-    if (role === 'assistant') {
+  async dispose(): Promise<void> {
+    if (this.disposed) {
       return;
     }
 
-    const ingestionLatencyMs = Math.max(0, Date.now() - segment.timestamp);
-    this.timingGapSamplesMs.push(ingestionLatencyMs);
-    if (this.timingGapSamplesMs.length % TIMING_REPORT_SAMPLE_INTERVAL === 0) {
-      console.log('[Timing] Transcript ingestion latency stats:', this.getTimingVarianceStats());
-    }
+    this.disposed = true;
+    this.cancelCompactionTimer();
+    rejectPendingWorkOnDispose(this);
+
+    await flushPersistenceNow(this);
   }
 
-  private buildTimingVarianceStats(samples: number[]): TimingVarianceStats {
-    if (samples.length === 0) {
-      return {
-        sampleCount: 0,
-        p50: null,
-        p95: null,
-        p99: null,
-        max: null,
-      };
-    }
+  // ============================================
+  // Public mapSpeakerToRole (preserved API)
+  // ============================================
 
-    const sorted = [...samples].sort((left, right) => left - right);
-    return {
-      sampleCount: sorted.length,
-      p50: this.percentile(sorted, 50),
-      p95: this.percentile(sorted, 95),
-      p99: this.percentile(sorted, 99),
-      max: sorted[sorted.length - 1] ?? null,
-    };
+  mapSpeakerToRole(speaker: string): 'interviewer' | 'user' | 'assistant' {
+    return mapSpeakerToRoleImpl(speaker);
   }
 
-  private percentile(sortedSamples: number[], percentile: number): number | null {
-    if (sortedSamples.length === 0) {
-      return null;
-    }
+  // ============================================
+  // Private Helpers
+  // ============================================
 
-    const rank = Math.max(0, Math.ceil((percentile / 100) * sortedSamples.length) - 1);
-    return sortedSamples[Math.min(rank, sortedSamples.length - 1)] ?? null;
+  private shouldRunConstraintExtraction(role: ContextItem['role']): boolean {
+    return role === 'interviewer' || role === 'user';
   }
 
   private evictOldEntries(): void {
@@ -1114,67 +1090,118 @@ isConsciousModeEnabled(): boolean {
    * Called instead of raw slice() to preserve early meeting context.
    */
   private async compactTranscriptIfNeeded(): Promise<void> {
+    if (this.disposed) {
+      throw createSessionDisposedError();
+    }
     if (this.fullTranscript.length <= 1800 || this.isCompacting) return;
 
     this.isCompacting = true;
     const promise = (async () => {
-    try {
-            // Take the oldest 500 entries to summarize
-            const summarizeCount = 500;
-            const oldEntries = this.fullTranscript.slice(0, summarizeCount);
-            const summaryInput = oldEntries.map(seg => {
-                const role = this.mapSpeakerToRole(seg.speaker);
-                const label = role === 'interviewer' ? 'INTERVIEWER' :
-                    role === 'user' ? 'ME' : 'ASSISTANT';
-                return `[${label}]: ${seg.text}`;
-            }).join('\n');
+      try {
+        // Take the oldest 500 entries to summarize
+        const summarizeCount = 500;
+        const oldEntries = this.fullTranscript.slice(0, summarizeCount);
+        const summaryInput = oldEntries.map(seg => {
+          const role = mapSpeakerToRoleImpl(seg.speaker);
+          const label = role === 'interviewer' ? 'INTERVIEWER' :
+            role === 'user' ? 'ME' : 'ASSISTANT';
+          return `[${label}]: ${seg.text}`;
+        }).join('\n');
 
-            // Fire-and-forget LLM summarization (non-blocking)
-            if (this.recapLLM) {
-                try {
-                    const epochSummary = await this.recapLLM.generate(
-                        `Summarize this conversation segment into 3-5 concise bullet points preserving key topics, decisions, and questions:\n\n${summaryInput}`
-                    );
-                    if (epochSummary && epochSummary.trim().length > 0) {
-                        this.transcriptEpochSummaries.push(epochSummary.trim());
-                        console.log(`[SessionTracker] Epoch summary created (${this.transcriptEpochSummaries.length} total)`);
-                    }
-                } catch (e) {
-                    // If summarization fails, store a simple marker
-                    const fallback = `[Earlier discussion: ${oldEntries.length} segments, topics: ${oldEntries.slice(0, 3).map(s => s.text.substring(0, 40)).join('; ')}...]`;
-                    this.transcriptEpochSummaries.push(fallback);
-                    console.warn('[SessionTracker] Epoch summarization failed, using fallback marker');
-                }
+        // Fire-and-forget LLM summarization (non-blocking)
+        if (this.recapLLM) {
+          try {
+            const epochSummary = await this.recapLLM.generate(
+              `Summarize this conversation segment into 3-5 concise bullet points preserving key topics, decisions, and questions:\n\n${summaryInput}`
+            );
+            if (epochSummary.success && epochSummary.data.trim().length > 0) {
+              this.transcriptEpochSummaries.push(epochSummary.data.trim());
+              console.log(`[SessionTracker] Epoch summary created (${this.transcriptEpochSummaries.length} total)`);
             }
+          } catch (e) {
+            // If summarization fails, store a simple marker
+            const fallback = `[Earlier discussion: ${oldEntries.length} segments, topics: ${oldEntries.slice(0, 3).map(s => s.text.substring(0, 40)).join('; ')}...]`;
+            this.transcriptEpochSummaries.push(fallback);
+            console.warn('[SessionTracker] Epoch summarization failed, using fallback marker');
+          }
+        }
 
-            // Cap epoch summaries to prevent LLM context window overflow
-            if (this.transcriptEpochSummaries.length > SessionTracker.MAX_EPOCH_SUMMARIES) {
-                this.transcriptEpochSummaries = this.transcriptEpochSummaries.slice(-SessionTracker.MAX_EPOCH_SUMMARIES);
-            }
+        // Cap epoch summaries to prevent LLM context window overflow
+        if (this.transcriptEpochSummaries.length > SessionTracker.MAX_EPOCH_SUMMARIES) {
+          this.transcriptEpochSummaries = this.transcriptEpochSummaries.slice(-SessionTracker.MAX_EPOCH_SUMMARIES);
+        }
 
-            // Evict ONLY the exact 500 oldest entries that we just summarized
-            this.fullTranscript = this.fullTranscript.slice(summarizeCount);
-            this.turnCache = null;
-        } catch (error) {
-            console.error('[SessionTracker] Error during transcript compaction:', error);
-            // Continue with compaction even if summarization fails
-            try {
-                // Fallback: create a simple marker without LLM summarization
-                const oldEntries = this.fullTranscript.slice(0, 500);
-                const fallback = `[Earlier discussion: ${oldEntries.length} segments, topics: ${oldEntries.slice(0, 3).map(s => s.text.substring(0, 40)).join('; ')}...]`;
-                this.transcriptEpochSummaries.push(fallback);
-                this.transcriptEpochSummaries = this.transcriptEpochSummaries.slice(-SessionTracker.MAX_EPOCH_SUMMARIES);
-                this.fullTranscript = this.fullTranscript.slice(500);
-                this.turnCache = null;
-                console.warn('[SessionTracker] Using fallback compaction due to error');
-            } catch (fallbackError) {
-                console.error('[SessionTracker] Fallback compaction also failed:', fallbackError);
-            }
-    } finally {
-      this.isCompacting = false;
-    }
+        // Evict ONLY the exact 500 oldest entries that we just summarized
+        this.fullTranscript = this.fullTranscript.slice(summarizeCount);
+      } catch (error) {
+        console.error('[SessionTracker] Error during transcript compaction:', error);
+        // Continue with compaction even if summarization fails
+        try {
+          // Fallback: create a simple marker without LLM summarization
+          const oldEntries = this.fullTranscript.slice(0, 500);
+          const fallback = `[Earlier discussion: ${oldEntries.length} segments, topics: ${oldEntries.slice(0, 3).map(s => s.text.substring(0, 40)).join('; ')}...]`;
+          this.transcriptEpochSummaries.push(fallback);
+          this.transcriptEpochSummaries = this.transcriptEpochSummaries.slice(-SessionTracker.MAX_EPOCH_SUMMARIES);
+          this.fullTranscript = this.fullTranscript.slice(500);
+          console.warn('[SessionTracker] Using fallback compaction due to error');
+        } catch (fallbackError) {
+          console.error('[SessionTracker] Fallback compaction also failed:', fallbackError);
+        }
+      } finally {
+        this.isCompacting = false;
+      }
     })();
     this.pendingCompactionPromise = promise;
     return promise;
+  }
+
+  // ============================================
+  // Persistence (delegated to sessionPersistence)
+  // ============================================
+
+  async restoreFromMeetingId(meetingId: string, requestId: number = this.restoreRequestId): Promise<boolean> {
+    return restoreFromMeetingId(this, meetingId, requestId);
+  }
+
+  ensureMeetingContext(meetingId?: string): void {
+    ensureMeetingContext(this, meetingId);
+  }
+
+  async waitForPendingRestore(): Promise<void> {
+    if (this.pendingRestorePromise) {
+      await this.pendingRestorePromise;
+    }
+  }
+
+  async flushPersistenceNow(): Promise<void> {
+    await flushPersistenceNow(this);
+  }
+
+  async recordSessionEvent(
+    type: SessionEvent['type'],
+    payload: Record<string, unknown>,
+    timestamp: number = Date.now(),
+  ): Promise<void> {
+    try {
+      await appendSessionEvent(this, type, payload, timestamp);
+    } catch (error) {
+      console.warn('[SessionTracker] Failed to append session event:', error);
+    }
+  }
+
+  // ============================================
+  // Adaptive Context (delegated to sessionContext)
+  // ============================================
+
+  async getAdaptiveContext(
+    query: string,
+    queryEmbedding: number[],
+    tokenBudget: number = 500
+  ): Promise<ContextItem[]> {
+    return getAdaptiveContext(this, query, queryEmbedding, tokenBudget);
+  }
+
+  async getConsciousRelevantContext(query: string, tokenBudget: number = 900): Promise<ContextItem[]> {
+    return getConsciousRelevantContext(this, query, tokenBudget);
   }
 }

@@ -2,10 +2,12 @@ import React, { useState, useEffect } from 'react';
 import { Plus, Trash2, Edit2, AlertCircle, CheckCircle, Save, ChevronDown, Check, RefreshCw, ExternalLink, Loader2 } from 'lucide-react';
 import { STANDARD_CLOUD_MODELS, prettifyModelId } from '../../utils/modelUtils';
 import { validateCurl } from '../../lib/curl-validator';
+import { getOptionalElectronMethod } from '../../lib/electronApi';
 import { ProviderCard } from './ProviderCard';
-import type { CustomProviderPayload } from '../../../shared/ipc';
+import type { CustomProviderPayload, FastResponseConfig } from '../../../shared/ipc';
 
 type CustomProvider = CustomProviderPayload;
+type FastProvider = FastResponseConfig['provider'];
 
 interface ModelOption {
     id: string;
@@ -74,9 +76,21 @@ const ModelSelect: React.FC<ModelSelectProps> = ({ value, options, onChange, pla
 };
 
 export const AIProvidersSettings: React.FC = () => {
+    const getFastResponseConfig = getOptionalElectronMethod('getFastResponseConfig');
+    const getStoredCredentials = getOptionalElectronMethod('getStoredCredentials');
+    const getCustomProviders = getOptionalElectronMethod('getCustomProviders');
+    const getDefaultModel = getOptionalElectronMethod('getDefaultModel');
+    const onFastResponseConfigChanged = getOptionalElectronMethod('onFastResponseConfigChanged');
+    const setFastResponseConfigInMain = getOptionalElectronMethod('setFastResponseConfig');
+    const openExternal = getOptionalElectronMethod('openExternal');
+    const fetchProviderModels = getOptionalElectronMethod('fetchProviderModels');
+    const saveCustomProvider = getOptionalElectronMethod('saveCustomProvider');
+    const deleteCustomProvider = getOptionalElectronMethod('deleteCustomProvider');
+    const setDefaultModelInMain = getOptionalElectronMethod('setDefaultModel');
     // --- Standard Providers ---
     const [apiKey, setApiKey] = useState('');
     const [groqApiKey, setGroqApiKey] = useState('');
+    const [cerebrasApiKey, setCerebrasApiKey] = useState('');
     const [openaiApiKey, setOpenaiApiKey] = useState('');
     const [claudeApiKey, setClaudeApiKey] = useState('');
 
@@ -104,7 +118,10 @@ export const AIProvidersSettings: React.FC = () => {
 
     // --- Default Model ---
     const [defaultModel, setDefaultModel] = useState<string>('gemini-3.1-flash-lite-preview');
-    const [fastResponseMode, setFastResponseMode] = useState(false);
+    const [fastResponseConfig, setFastResponseConfig] = useState<FastResponseConfig>({ enabled: false, provider: 'groq', model: '' });
+    const [fastResponseModels, setFastResponseModels] = useState<Record<FastProvider, ModelOption[]>>({ groq: [], cerebras: [] });
+    const [isFetchingFastResponseModels, setIsFetchingFastResponseModels] = useState<Record<FastProvider, boolean>>({ groq: false, cerebras: false });
+    const [fastResponseFetchError, setFastResponseFetchError] = useState<Record<FastProvider, string | null>>({ groq: null, cerebras: null });
 
     // --- Dynamic Model Discovery ---
     const [preferredModels, setPreferredModels] = useState<Record<string, string>>({});
@@ -113,15 +130,15 @@ export const AIProvidersSettings: React.FC = () => {
     useEffect(() => {
         const loadCredentials = async () => {
             try {                // @ts-ignore
-                const fastMode = await window.electronAPI?.getGroqFastTextMode();
-                if (fastMode) setFastResponseMode(fastMode.enabled);
+                const fastConfig = await getFastResponseConfig?.();
+                if (fastConfig) setFastResponseConfig(fastConfig);
 
-                // @ts-ignore
-                const creds = await window.electronAPI?.getStoredCredentials?.();
+                const creds = await getStoredCredentials?.();
                 if (creds) {
                     setHasStoredKey({
                         gemini: creds.hasGeminiKey,
                         groq: creds.hasGroqKey,
+                        cerebras: creds.hasCerebrasKey,
                         openai: creds.hasOpenaiKey,
                         claude: creds.hasClaudeKey
                     });
@@ -129,20 +146,19 @@ export const AIProvidersSettings: React.FC = () => {
                     const pm: Record<string, string> = {};
                     if (creds.geminiPreferredModel) pm.gemini = creds.geminiPreferredModel;
                     if (creds.groqPreferredModel) pm.groq = creds.groqPreferredModel;
+                    if (creds.cerebrasPreferredModel) pm.cerebras = creds.cerebrasPreferredModel;
                     if (creds.openaiPreferredModel) pm.openai = creds.openaiPreferredModel;
                     if (creds.claudePreferredModel) pm.claude = creds.claudePreferredModel;
                     setPreferredModels(pm);
                 }
 
-                // @ts-ignore
-                const custom = await window.electronAPI?.getCustomProviders();
+                const custom = await getCustomProviders?.();
                 if (custom) {
                     setCustomProviders(custom);
                 }
 
                 // Load persisted default model
-                // @ts-ignore
-                const result = await window.electronAPI?.getDefaultModel();
+                const result = await getDefaultModel?.();
                 if (result && result.model) {
                     setDefaultModel(result.model);
                 }
@@ -157,25 +173,23 @@ export const AIProvidersSettings: React.FC = () => {
         loadCredentials();
 
         // Listen for changes from other windows (2-way sync)
-        if (window.electronAPI?.onGroqFastTextChanged) {
-            // @ts-ignore
-            const unsubscribe = window.electronAPI.onGroqFastTextChanged((enabled: boolean) => {
-                setFastResponseMode(enabled);
-                localStorage.setItem('natively_groq_fast_text', String(enabled));
+        if (onFastResponseConfigChanged) {
+            const unsubscribe = onFastResponseConfigChanged((config: FastResponseConfig) => {
+                setFastResponseConfig(config);
             });
             return () => unsubscribe();
         }
     }, []);
 
-    // Effect to enforce fast mode disabled if no Groq key
+    // Effect to enforce fast mode disabled if the selected provider is not configured
     useEffect(() => {
-        if (!hasStoredKey.groq && fastResponseMode) {
-            setFastResponseMode(false);
-            localStorage.setItem('natively_groq_fast_text', 'false');
-            // @ts-ignore
-            window.electronAPI?.setGroqFastTextMode(false);
+        const providerHasKey = !!hasStoredKey[fastResponseConfig.provider];
+        if (!providerHasKey && fastResponseConfig.enabled) {
+            const nextConfig = { ...fastResponseConfig, enabled: false };
+            setFastResponseConfig(nextConfig);
+            void setFastResponseConfigInMain?.(nextConfig);
         }
-    }, [hasStoredKey.groq, fastResponseMode]);
+    }, [hasStoredKey, fastResponseConfig]);
 
     // Poll for Ollama status every 3 seconds requesting smart start on mount
     useEffect(() => {
@@ -259,6 +273,8 @@ export const AIProvidersSettings: React.FC = () => {
             // @ts-ignore
             if (provider === 'groq') result = await window.electronAPI.setGroqApiKey(key);
             // @ts-ignore
+            if (provider === 'cerebras') result = await window.electronAPI.setCerebrasApiKey(key);
+            // @ts-ignore
             if (provider === 'openai') result = await window.electronAPI.setOpenaiApiKey(key);
             // @ts-ignore
             if (provider === 'claude') result = await window.electronAPI.setClaudeApiKey(key);
@@ -284,6 +300,8 @@ export const AIProvidersSettings: React.FC = () => {
             if (provider === 'gemini') result = await window.electronAPI.setGeminiApiKey('');
             // @ts-ignore
             if (provider === 'groq') result = await window.electronAPI.setGroqApiKey('');
+            // @ts-ignore
+            if (provider === 'cerebras') result = await window.electronAPI.setCerebrasApiKey('');
             // @ts-ignore
             if (provider === 'openai') result = await window.electronAPI.setOpenaiApiKey('');
             // @ts-ignore
@@ -326,11 +344,83 @@ export const AIProvidersSettings: React.FC = () => {
         const urls: Record<string, string> = {
             gemini: 'https://aistudio.google.com/app/apikey',
             groq: 'https://console.groq.com/keys',
+            cerebras: 'https://cloud.cerebras.ai',
             openai: 'https://platform.openai.com/api-keys',
             claude: 'https://console.anthropic.com/settings/keys'
         };
-        // @ts-ignore
-        window.electronAPI?.openExternal(urls[provider]);
+        if (openExternal) {
+            void openExternal(urls[provider]);
+        } else {
+            window.open(urls[provider], '_blank');
+        }
+    };
+
+    const persistFastResponseConfig = async (nextConfig: FastResponseConfig) => {
+        setFastResponseConfig(nextConfig);
+        try {
+            await setFastResponseConfigInMain?.(nextConfig);
+        } catch (e) {
+            console.error('Failed to persist fast response config:', e);
+        }
+    };
+
+    const buildFastResponseModelOptions = (provider: FastProvider): ModelOption[] => {
+        const options = [...(fastResponseModels[provider] || [])];
+        const selectedModel = fastResponseConfig.provider === provider ? fastResponseConfig.model : '';
+        const preferredModel = preferredModels[provider];
+
+        if (selectedModel && !options.some(option => option.id === selectedModel)) {
+            options.unshift({ id: selectedModel, name: prettifyModelId(selectedModel) });
+        }
+
+        if (preferredModel && !options.some(option => option.id === preferredModel)) {
+            options.unshift({ id: preferredModel, name: prettifyModelId(preferredModel) });
+        }
+
+        return options;
+    };
+
+    const fetchFastResponseModels = async (provider: FastProvider) => {
+        setIsFetchingFastResponseModels(prev => ({ ...prev, [provider]: true }));
+        setFastResponseFetchError(prev => ({ ...prev, [provider]: null }));
+
+        try {
+            const result = await fetchProviderModels?.(provider, '');
+            if (!result?.success || !result.models) {
+                setFastResponseFetchError(prev => ({ ...prev, [provider]: result?.error || 'Failed to fetch models' }));
+                return;
+            }
+
+            const models = result.models.map((model: { id: string; label: string }) => ({ id: model.id, name: model.label }));
+            setFastResponseModels(prev => ({ ...prev, [provider]: models }));
+
+            if (fastResponseConfig.provider === provider) {
+                const preferredModel = preferredModels[provider];
+                const candidate = [
+                    fastResponseConfig.model,
+                    preferredModel,
+                    models[0]?.id,
+                ].find((value): value is string => !!value && models.some(model => model.id === value));
+
+                if (candidate && candidate !== fastResponseConfig.model) {
+                    await persistFastResponseConfig({ ...fastResponseConfig, provider, model: candidate });
+                }
+            }
+        } catch (e: any) {
+            setFastResponseFetchError(prev => ({ ...prev, [provider]: e.message || 'Failed to fetch models' }));
+        } finally {
+            setIsFetchingFastResponseModels(prev => ({ ...prev, [provider]: false }));
+        }
+    };
+
+    const handleFastResponseProviderChange = async (provider: FastProvider) => {
+        const nextOptions = buildFastResponseModelOptions(provider);
+        const nextModel = preferredModels[provider] || nextOptions[0]?.id || '';
+        await persistFastResponseConfig({
+            ...fastResponseConfig,
+            provider,
+            model: nextModel,
+        });
     };
 
 
@@ -375,16 +465,16 @@ export const AIProvidersSettings: React.FC = () => {
         };
 
         try {
-            // @ts-ignore
-            const result = await window.electronAPI.saveCustomProvider(newProvider);
-            if (result.success) {
+            const result = await saveCustomProvider?.(newProvider);
+            if (result?.success) {
                 // Refresh list
-                // @ts-ignore
-                const updated = await window.electronAPI.getCustomProviders();
-                setCustomProviders(updated);
+                const updated = await getCustomProviders?.();
+                if (updated) {
+                    setCustomProviders(updated);
+                }
                 setIsEditingCustom(false);
             } else {
-                setCurlError(result.error ?? null);
+                setCurlError(result?.error ?? 'Custom provider bridge unavailable.');
             }
         } catch (e: any) {
             setCurlError(e.message);
@@ -394,12 +484,12 @@ export const AIProvidersSettings: React.FC = () => {
     const handleDeleteCustom = async (id: string) => {
         if (!confirm("Are you sure you want to delete this provider?")) return;
         try {
-            // @ts-ignore
-            const result = await window.electronAPI.deleteCustomProvider(id);
-            if (result.success) {
-                // @ts-ignore
-                const updated = await window.electronAPI.getCustomProviders();
-                setCustomProviders(updated);
+            const result = await deleteCustomProvider?.(id);
+            if (result?.success) {
+                const updated = await getCustomProviders?.();
+                if (updated) {
+                    setCustomProviders(updated);
+                }
             }
         } catch (e) {
             console.error("Failed to delete provider:", e);
@@ -442,43 +532,91 @@ export const AIProvidersSettings: React.FC = () => {
                         })()}
                         onChange={(val) => {
                             setDefaultModel(val);
-                            // @ts-ignore - persist as default + update runtime + broadcast
-                            window.electronAPI?.setDefaultModel(val).catch(console.error);
+                            if (setDefaultModelInMain) {
+                                void setDefaultModelInMain(val).catch(console.error);
+                            }
                         }}
                     />
                 </div>
 
                 {/* Fast Response Mode */}
-                <div
-                    className={`bg-bg-item-surface rounded-xl p-5 border border-border-subtle flex items-center justify-between ${!hasStoredKey.groq ? 'opacity-50 grayscale' : ''}`}
-                    title={!hasStoredKey.groq ? "Requires Groq API Key to be configured" : ""}
-                >
-                    <div>
-                        <div className="flex items-center gap-2">
-                            <label className="block text-xs font-medium text-text-primary uppercase tracking-wide mb-0">Fast Response Mode</label>
-                            <span className="bg-orange-500/10 text-orange-500 text-[9px] font-bold px-1.5 py-0.5 rounded border border-orange-500/20">NEW</span>
+                <div className="bg-bg-item-surface rounded-xl p-5 border border-border-subtle space-y-4">
+                    <div className="flex items-start justify-between gap-4">
+                        <div>
+                            <div className="flex items-center gap-2">
+                                <label className="block text-xs font-medium text-text-primary uppercase tracking-wide mb-0">Fast Response Mode</label>
+                                <span className="bg-orange-500/10 text-orange-500 text-[9px] font-bold px-1.5 py-0.5 rounded border border-orange-500/20">NEW</span>
+                            </div>
+                            <p className="text-[10px] text-text-secondary mt-0.5">Route text-only fast answers through Groq or Cerebras. Multimodal requests still use your Default Model.</p>
+                            {!hasStoredKey[fastResponseConfig.provider] && (
+                                <p className="text-[10px] text-orange-500 mt-0.5 font-medium">Requires a saved {fastResponseConfig.provider === 'cerebras' ? 'Cerebras' : 'Groq'} API key.</p>
+                            )}
                         </div>
-                        <p className="text-[10px] text-text-secondary mt-0.5">Super fast responses using Groq Llama 3 for text. Multimodal requests still use your Default Model.</p>
-                        {!hasStoredKey.groq && (
-                            <p className="text-[10px] text-orange-500 mt-0.5 font-medium">Requires a Groq API Key to be configured below.</p>
-                        )}
+                        <button
+                            onClick={async () => {
+                                if (!hasStoredKey[fastResponseConfig.provider]) {
+                                    alert(`Please configure a ${fastResponseConfig.provider === 'cerebras' ? 'Cerebras' : 'Groq'} API Key first to enable Fast Response Mode.`);
+                                    return;
+                                }
+                                await persistFastResponseConfig({
+                                    ...fastResponseConfig,
+                                    enabled: !fastResponseConfig.enabled,
+                                });
+                            }}
+                            className={`w-10 h-6 rounded-full p-1 transition-colors ${!hasStoredKey[fastResponseConfig.provider] ? 'cursor-not-allowed bg-bg-input border border-border-subtle' : fastResponseConfig.enabled ? 'bg-orange-500' : 'bg-bg-input border border-border-subtle'}`}
+                            type="button"
+                        >
+                            <div className={`w-4 h-4 rounded-full bg-white shadow-sm transition-transform ${fastResponseConfig.enabled ? 'translate-x-4' : 'translate-x-0'}`} />
+                        </button>
                     </div>
-                    <div
-                        onClick={async () => {
-                            if (!hasStoredKey.groq) {
-                                alert("Please configure a Groq API Key first to enable Fast Response Mode.");
-                                return;
-                            }
-                            const newState = !fastResponseMode;
-                            setFastResponseMode(newState);
-                            localStorage.setItem('natively_groq_fast_text', String(newState));
-                            // @ts-ignore
-                            await window.electronAPI?.setGroqFastTextMode(newState);
-                        }}
-                        className={`w-10 h-6 rounded-full p-1 transition-colors ${!hasStoredKey.groq ? 'cursor-not-allowed bg-bg-input border border-border-subtle' : fastResponseMode ? 'bg-orange-500' : 'bg-bg-input border border-border-subtle'}`}
-                    >
-                        <div className={`w-4 h-4 rounded-full bg-white shadow-sm transition-transform ${fastResponseMode ? 'translate-x-4' : 'translate-x-0'}`} />
+
+                    <div className="flex items-center justify-between gap-3 flex-wrap">
+                        <div>
+                            <label className="block text-[10px] font-medium text-text-primary uppercase tracking-wide mb-1">Endpoint</label>
+                            <ModelSelect
+                                value={fastResponseConfig.provider}
+                                options={[
+                                    { id: 'groq', name: 'Groq' },
+                                    { id: 'cerebras', name: 'Cerebras' },
+                                ]}
+                                onChange={(value) => {
+                                    void handleFastResponseProviderChange(value as FastProvider);
+                                }}
+                                placeholder="Select provider"
+                            />
+                        </div>
+
+                        <div>
+                            <label className="block text-[10px] font-medium text-text-primary uppercase tracking-wide mb-1">Model</label>
+                            <ModelSelect
+                                value={fastResponseConfig.model}
+                                options={buildFastResponseModelOptions(fastResponseConfig.provider)}
+                                onChange={(value) => {
+                                    void persistFastResponseConfig({ ...fastResponseConfig, model: value });
+                                }}
+                                placeholder="Fetch latest models"
+                            />
+                        </div>
+
+                        <div className="self-end">
+                            <button
+                                onClick={() => { void fetchFastResponseModels(fastResponseConfig.provider); }}
+                                className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors border border-border-subtle flex items-center gap-2 ${!hasStoredKey[fastResponseConfig.provider] ? 'opacity-50 cursor-not-allowed bg-bg-input text-text-secondary' : isFetchingFastResponseModels[fastResponseConfig.provider] ? 'bg-bg-input text-text-secondary' : 'bg-accent-primary/10 text-accent-primary border-accent-primary/20 hover:bg-accent-primary/20'}`}
+                                disabled={!hasStoredKey[fastResponseConfig.provider] || isFetchingFastResponseModels[fastResponseConfig.provider]}
+                                type="button"
+                            >
+                                {isFetchingFastResponseModels[fastResponseConfig.provider] ? (
+                                    <><Loader2 size={12} className="animate-spin" /> Fetching...</>
+                                ) : (
+                                    <><RefreshCw size={12} /> Fetch Latest Models</>
+                                )}
+                            </button>
+                        </div>
                     </div>
+
+                    {fastResponseFetchError[fastResponseConfig.provider] && (
+                        <p className="text-[10px] text-red-400">{fastResponseFetchError[fastResponseConfig.provider]}</p>
+                    )}
                 </div>
             </div>
 
@@ -529,6 +667,26 @@ export const AIProvidersSettings: React.FC = () => {
                         keyPlaceholder="gsk_..."
                         keyUrl="https://console.groq.com/keys"
                         onPreferredModelChange={(model) => setPreferredModels(prev => ({ ...prev, groq: model }))}
+                    />
+
+                    {/* Cerebras */}
+                    <ProviderCard
+                        providerId="cerebras"
+                        providerName="Cerebras"
+                        apiKey={cerebrasApiKey}
+                        preferredModel={preferredModels.cerebras}
+                        hasStoredKey={!!hasStoredKey.cerebras}
+                        onKeyChange={setCerebrasApiKey}
+                        onSaveKey={async () => { await handleSaveKey('cerebras', cerebrasApiKey, setCerebrasApiKey); }}
+                        onRemoveKey={() => handleRemoveKey('cerebras', setCerebrasApiKey)}
+                        onTestConnection={() => handleTestConnection('cerebras', cerebrasApiKey)}
+                        testStatus={testStatus.cerebras || 'idle'}
+                        testError={testError.cerebras}
+                        savingStatus={!!savingStatus.cerebras}
+                        savedStatus={!!savedStatus.cerebras}
+                        keyPlaceholder="csk_..."
+                        keyUrl="https://cloud.cerebras.ai"
+                        onPreferredModelChange={(model) => setPreferredModels(prev => ({ ...prev, cerebras: model }))}
                     />
 
                     {/* OpenAI */}
@@ -731,13 +889,54 @@ export const AIProvidersSettings: React.FC = () => {
                                         <div className="grid grid-cols-1 gap-2">
                                             <div className="flex items-center gap-2 text-xs">
                                                 <code className="bg-bg-input px-1.5 py-0.5 rounded text-text-primary font-mono border border-border-subtle">{"{{TEXT}}"}</code>
-                                                <span className="text-text-tertiary">Combined System + Context + Message (Recommended)</span>
+                                                <span className="text-text-tertiary">Combined System + Context + Message</span>
+                                            </div>
+                                            <div className="flex items-center gap-2 text-xs">
+                                                <code className="bg-bg-input px-1.5 py-0.5 rounded text-text-primary font-mono border border-border-subtle">{"{{PROMPT}}"}</code>
+                                                <span className="text-text-tertiary">Alias of {"{{TEXT}}"}</span>
+                                            </div>
+                                            <div className="flex items-center gap-2 text-xs">
+                                                <code className="bg-bg-input px-1.5 py-0.5 rounded text-text-primary font-mono border border-border-subtle">{"{{USER_MESSAGE}}"}</code>
+                                                <span className="text-text-tertiary">Raw user message only</span>
+                                            </div>
+                                            <div className="flex items-center gap-2 text-xs">
+                                                <code className="bg-bg-input px-1.5 py-0.5 rounded text-text-primary font-mono border border-border-subtle">{"{{SYSTEM_PROMPT}}"}</code>
+                                                <span className="text-text-tertiary">Injected system instruction</span>
+                                            </div>
+                                            <div className="flex items-center gap-2 text-xs">
+                                                <code className="bg-bg-input px-1.5 py-0.5 rounded text-text-primary font-mono border border-border-subtle">{"{{CONTEXT}}"}</code>
+                                                <span className="text-text-tertiary">Conversation context (if available)</span>
                                             </div>
                                             <div className="flex items-center gap-2 text-xs">
                                                 <code className="bg-bg-input px-1.5 py-0.5 rounded text-text-primary font-mono border border-border-subtle">{"{{IMAGE_BASE64}}"}</code>
-                                                <span className="text-text-tertiary">Screenshot data (if available)</span>
+                                                <span className="text-text-tertiary">First screenshot as base64</span>
+                                            </div>
+                                            <div className="flex items-center gap-2 text-xs">
+                                                <code className="bg-bg-input px-1.5 py-0.5 rounded text-text-primary font-mono border border-border-subtle">{"{{IMAGE_BASE64S}}"}</code>
+                                                <span className="text-text-tertiary">JSON array of all screenshots (base64)</span>
+                                            </div>
+                                            <div className="flex items-center gap-2 text-xs">
+                                                <code className="bg-bg-input px-1.5 py-0.5 rounded text-text-primary font-mono border border-border-subtle">{"{{IMAGE_COUNT}}"}</code>
+                                                <span className="text-text-tertiary">Number of attached screenshots</span>
+                                            </div>
+                                            <div className="flex items-center gap-2 text-xs">
+                                                <code className="bg-bg-input px-1.5 py-0.5 rounded text-text-primary font-mono border border-border-subtle">{"{{OPENAI_USER_CONTENT}}"}</code>
+                                                <span className="text-text-tertiary">OpenAI-compatible user content array (text + images)</span>
+                                            </div>
+                                            <div className="flex items-center gap-2 text-xs">
+                                                <code className="bg-bg-input px-1.5 py-0.5 rounded text-text-primary font-mono border border-border-subtle">{"{{OPENAI_MESSAGES}}"}</code>
+                                                <span className="text-text-tertiary">OpenAI-compatible messages array (system + user multimodal)</span>
+                                            </div>
+                                            <div className="flex items-center gap-2 text-xs">
+                                                <code className="bg-bg-input px-1.5 py-0.5 rounded text-text-primary font-mono border border-border-subtle">{"{{API_KEY}}"}</code>
+                                                <span className="text-text-tertiary">Best-available configured LLM API key</span>
+                                            </div>
+                                            <div className="flex items-center gap-2 text-xs">
+                                                <code className="bg-bg-input px-1.5 py-0.5 rounded text-text-primary font-mono border border-border-subtle">{"{{OPENAI_API_KEY}}"}</code>
+                                                <span className="text-text-tertiary">Provider-specific key placeholders are also supported</span>
                                             </div>
                                         </div>
+                                        <p className="text-[10px] text-text-tertiary mt-2">Tip: include at least one text or image placeholder so input can flow through in text-only, image-only, and mixed scenarios.</p>
                                     </div>
 
                                     <div>
@@ -760,13 +959,10 @@ export const AIProvidersSettings: React.FC = () => {
                                                     <code className="font-mono text-[10px] text-text-primary whitespace-pre block">
                                                         {`curl https://api.openai.com/v1/chat/completions \\
   -H "Content-Type: application/json" \\
-  -H "Authorization: Bearer YOUR_API_KEY" \\
+  -H "Authorization: Bearer {{OPENAI_API_KEY}}" \\
   -d '{
     "model": "gpt-4o-mini",
-    "messages": [
-      {"role": "system", "content": "You are a helpful assistant."},
-      {"role": "user", "content": "{{TEXT}}"}
-    ],
+    "messages": {{OPENAI_MESSAGES}},
     "temperature": 0.7
   }'`}
                                                     </code>

@@ -52,15 +52,22 @@ function disguiseHelperPlists(appOutDir, appName) {
 }
 
 exports.default = async function (context) {
-    // Only process on macOS
-    if (process.platform !== 'darwin') {
+    const targetPlatform = context.electronPlatformName ?? context.packager?.platform?.name;
+
+    // Only process packaged macOS app bundles.
+    if (process.platform !== 'darwin' || targetPlatform !== 'darwin') {
         return;
     }
 
     const appOutDir = context.appOutDir;
     const appName = context.packager.appInfo.productFilename;
     const appPath = path.join(appOutDir, `${appName}.app`);
-    const helperPath = path.join(appPath, 'Contents', 'Resources', 'bin', 'macos', 'stealth-virtual-display-helper');
+    const helperPath = [
+        path.join(appPath, 'Contents', 'Resources', 'bin', 'macos', 'system-services-helper'),
+        path.join(appPath, 'Contents', 'Resources', 'bin', 'macos', 'stealth-virtual-display-helper'),
+    ].find((candidate) => fs.existsSync(candidate));
+    const foundationIntentHelperPath = path.join(appPath, 'Contents', 'Resources', 'bin', 'macos', 'foundation-intent-helper');
+    const fullStealthHelperBundlePath = path.join(appPath, 'Contents', 'XPCServices', 'macos-full-stealth-helper.xpc');
 
     // ── Step 1: Disguise helper display names (before signing) ──
     try {
@@ -76,9 +83,19 @@ exports.default = async function (context) {
     console.log(`[Ad-Hoc Signing] Signing ${appPath} with entitlements from ${entitlementsPath}...`);
 
     try {
-        if (fs.existsSync(helperPath)) {
+        if (helperPath) {
             console.log(`[Ad-Hoc Signing] Signing helper binary ${helperPath}...`);
             execSync(`codesign --force --sign - "${helperPath}"`, { stdio: 'inherit' });
+        }
+
+        if (fs.existsSync(fullStealthHelperBundlePath)) {
+            console.log(`[Ad-Hoc Signing] Signing XPC helper bundle ${fullStealthHelperBundlePath}...`);
+            execSync(`codesign --force --entitlements "${entitlementsPath}" --sign - "${fullStealthHelperBundlePath}"`, { stdio: 'inherit' });
+        }
+
+        if (fs.existsSync(foundationIntentHelperPath)) {
+            console.log(`[Ad-Hoc Signing] Signing foundation intent helper ${foundationIntentHelperPath}...`);
+            execSync(`codesign --force --entitlements "${entitlementsPath}" --sign - "${foundationIntentHelperPath}"`, { stdio: 'inherit' });
         }
 
         // --force: replace existing signature

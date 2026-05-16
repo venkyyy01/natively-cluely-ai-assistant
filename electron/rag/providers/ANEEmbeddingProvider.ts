@@ -1,6 +1,10 @@
 import { IEmbeddingProvider } from './IEmbeddingProvider';
 import { isAppleSilicon, isOptimizationActive } from '../../config/optimizations';
+import { safeCreateOnnxSession, type SafeOnnxSession } from '../../startup/onnxCrashGuard';
+import { incrementOnnxFailureCount, clearOnnxSessionSentinel } from '../../startup/StartupHealer';
+import { registerEmbeddingPipeline } from '../../conscious/embeddingPipelineRegistry';
 import path from 'path';
+import { resolveBundledModelsPath } from '../../utils/modelPaths';
 
 let ort: any = null;
 let loadError: Error | null = null;
@@ -18,21 +22,47 @@ async function loadOnnxRuntime() {
   }
 }
 
+let singletonInstance: ANEEmbeddingProvider | null = null;
+
 export class ANEEmbeddingProvider implements IEmbeddingProvider {
   readonly name = 'ane-embedding';
   readonly dimensions = 384;
-  
-  private session: any = null;
+
+  private session: SafeOnnxSession | null = null;
   private tokenizer: any = null;
   private useANE: boolean = false;
   private initialized: boolean = false;
   private warmedUp: boolean = false;
+  private unregister: (() => void) | null = null;
+
+  /**
+   * Returns the shared singleton instance. Multiple callers (AccelerationManager,
+   * EmbeddingProviderResolver) share one ONNX session to avoid duplicate native
+   * resources and the GC destructor SIGTRAP on orphaned sessions.
+   */
+  static getSharedInstance(): ANEEmbeddingProvider {
+    if (!singletonInstance) {
+      singletonInstance = new ANEEmbeddingProvider();
+    }
+    return singletonInstance;
+  }
 
   async initialize(): Promise<void> {
     if (!isOptimizationActive('useANEEmbeddings')) {
       console.log('[ANEEmbeddingProvider] Disabled via flag (toggle OFF), skipping initialization');
       return;
     }
+
+    // NAT-SELF-HEAL: if ONNX has crashed repeatedly in previous sessions, stay off
+    if (process.env.NATIVELY_DISABLE_ANE_EMBEDDINGS === '1') {
+      console.warn('[ANEEmbeddingProvider] Disabled by crash guard due to repeated ONNX failures in prior sessions');
+      return;
+    }
+
+    // TEMPORARY: Disable ANE embeddings entirely due to SIGTRAP crash in InferenceSessionWrap::FinalizeCallback
+    // The crash guard doesn't prevent GC finalizer crashes. Re-enable once the native binding issue is fixed.
+    console.warn('[ANEEmbeddingProvider] Disabled due to SIGTRAP crash in ONNX session finalizer (GC cleanup). Re-enable after native binding fix.');
+    return;
 
     const runtime = await loadOnnxRuntime();
     if (!runtime) {
@@ -47,10 +77,22 @@ export class ANEEmbeddingProvider implements IEmbeddingProvider {
         ? ['coreml', 'cpu']
         : ['cpu'];
 
-      this.session = await runtime.InferenceSession.create(modelPath, {
+      // NAT-SELF-HEAL: use crash-isolated session creation
+      this.session = await safeCreateOnnxSession(runtime, modelPath, {
         executionProviders,
         graphOptimizationLevel: 'all',
       });
+
+      if (!this.session) {
+        console.warn('[ANEEmbeddingProvider] safeCreateOnnxSession returned null, falling back to existing provider');
+        this.initialized = false;
+        return;
+      }
+
+      // Register with the embedding pipeline registry so the session is
+      // explicitly released during graceful shutdown — preventing the V8
+      // finalizer queue from triggering ~InferenceSessionWrap() SIGTRAP.
+      this.unregister = registerEmbeddingPipeline(this);
 
       this.useANE = executionProviders[0] === 'coreml';
       this.tokenizer = await this.loadTokenizer();
@@ -80,21 +122,27 @@ export class ANEEmbeddingProvider implements IEmbeddingProvider {
     }
   }
 
-  private getModelPath(): string {
-    const resourcesPath = process.env.NODE_ENV === 'production'
-      ? process.resourcesPath
-      : path.join(__dirname, '../../resources');
+  private getModelDirectory(): string {
+    return path.join(resolveBundledModelsPath(), 'Xenova', 'all-MiniLM-L6-v2');
+  }
 
-    return path.join(resourcesPath, 'models', 'minilm-l6-v2.onnx');
+  private getModelPath(): string {
+    return path.join(this.getModelDirectory(), 'onnx', 'model_quantized.onnx');
   }
 
   private async loadTokenizer(): Promise<any> {
     try {
-      const { AutoTokenizer } = await import('@xenova/transformers');
-      return await AutoTokenizer.from_pretrained('Xenova/all-MiniLM-L6-v2');
+      const { AutoTokenizer, env } = await import('@xenova/transformers');
+      // Point transformers.js at the bundled models directory and disable
+      // remote downloads / cache writes that fail inside app.asar (ENOTDIR).
+      env.allowRemoteModels = false;
+      env.localModelPath = resolveBundledModelsPath();
+      return await AutoTokenizer.from_pretrained('Xenova/all-MiniLM-L6-v2', {
+        local_files_only: true,
+      });
     } catch (error) {
       console.warn('[ANEEmbeddingProvider] @xenova/transformers not available, using fallback tokenizer');
-      const vocabPath = path.join(this.getModelPath(), '..', 'tokenizer.json');
+      const vocabPath = path.join(this.getModelDirectory(), 'tokenizer.json');
       const fs = await import('fs/promises');
       const vocabData = JSON.parse(await fs.readFile(vocabPath, 'utf-8'));
       return this.createTokenizerFromVocab(vocabData);
@@ -119,6 +167,18 @@ export class ANEEmbeddingProvider implements IEmbeddingProvider {
     };
   }
 
+  private normalizeTokenization(tokens: any): { ids: number[]; attentionMask: number[] } {
+    const rawIds = tokens?.ids ?? tokens?.inputIds ?? tokens?.input_ids ?? [];
+    const rawAttentionMask = tokens?.attentionMask ?? tokens?.attention_mask ?? [];
+
+    const ids = Array.from(rawIds, Number);
+    const attentionMask = rawAttentionMask.length > 0
+      ? Array.from(rawAttentionMask, Number)
+      : ids.map(() => 1);
+
+    return { ids, attentionMask };
+  }
+
   async isAvailable(): Promise<boolean> {
     return this.initialized;
   }
@@ -128,7 +188,11 @@ export class ANEEmbeddingProvider implements IEmbeddingProvider {
       throw new Error('ANEEmbeddingProvider not initialized');
     }
 
-    const tokens = this.tokenizer.encode(text);
+    const tokens = this.normalizeTokenization(this.tokenizer.encode(text));
+
+    if (tokens.ids.length === 0) {
+      throw new Error('ANEEmbeddingProvider: tokenizer produced zero tokens — CoreML cannot process empty sequence');
+    }
 
     const runtime = await loadOnnxRuntime();
     
@@ -144,13 +208,38 @@ export class ANEEmbeddingProvider implements IEmbeddingProvider {
       [1, tokens.attentionMask.length]
     );
 
-    const results = await this.session.run({
-      input_ids: inputIds,
-      attention_mask: attentionMask,
-    });
+    const tokenTypeIds = new runtime.Tensor(
+      'int64',
+      new BigInt64Array(tokens.ids.length),
+      [1, tokens.ids.length]
+    );
 
-    const embeddings = results['last_hidden_state'].data as Float32Array;
-    return this.meanPool(embeddings, tokens.attentionMask);
+    try {
+      const results = await this.session.run({
+        input_ids: inputIds,
+        attention_mask: attentionMask,
+        token_type_ids: tokenTypeIds,
+      });
+
+      const embeddings = results['last_hidden_state'].data as Float32Array;
+      return this.meanPool(embeddings, tokens.attentionMask);
+    } catch (err) {
+      const count = incrementOnnxFailureCount();
+      console.error(`[ANEEmbeddingProvider] CoreML run error (failure #${count}), marking session as broken:`, err);
+      // Eagerly release the broken session under controlled error-swallowing
+      // (SafeOnnxSession.release() already wraps in try/catch). If we just null
+      // the ref, V8 GC will finalize InferenceSessionWrap later on the main
+      // thread, where its destructor can SIGTRAP from a corrupted internal
+      // state — exactly the EXC_BREAKPOINT crash we observed in production.
+      const brokenSession = this.session;
+      this.session = null;
+      this.initialized = false;
+      this.warmedUp = false;
+      if (brokenSession) {
+        void brokenSession.release().catch(() => { /* SafeOnnxSession swallows internally */ });
+      }
+      throw err;
+    }
   }
 
   async embedQuery(text: string): Promise<number[]> {
@@ -189,5 +278,39 @@ export class ANEEmbeddingProvider implements IEmbeddingProvider {
 
   supportsANE(): boolean {
     return this.useANE;
+  }
+
+  /**
+   * NAT-101: Release the ONNX/CoreML session and clear all state.
+   * Called on app before-quit via AccelerationManager.dispose().
+   * Uses try/finally so teardown errors (EXC_BAD_ACCESS in OrtApis::ReleaseIoBinding)
+   * are swallowed — the SafeOnnxSession.release() wrapper already absorbs them.
+   */
+  async dispose(): Promise<void> {
+    if (!this.session) {
+      return;
+    }
+    const session = this.session;
+    this.session = null;
+    this.initialized = false;
+    this.warmedUp = false;
+    this.tokenizer = null;
+    // Unregister from the pipeline registry so we don't double-dispose
+    if (this.unregister) {
+      this.unregister();
+      this.unregister = null;
+    }
+    try {
+      await session.release();
+      // Clear the ONNX sentinel — session released cleanly, no crash
+      clearOnnxSessionSentinel();
+      console.log('[ANEEmbeddingProvider] Session released cleanly.');
+    } catch (err) {
+      console.warn('[ANEEmbeddingProvider] Session release error (swallowed):', err);
+    }
+    // Clear singleton reference so a fresh instance can be created if needed
+    if (singletonInstance === this) {
+      singletonInstance = null;
+    }
   }
 }

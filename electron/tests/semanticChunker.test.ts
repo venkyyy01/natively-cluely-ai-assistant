@@ -23,7 +23,9 @@ test('semantic chunker handles empty input, speaker changes, overlap, and oversi
 
   assert.equal(speakerChunks.length, 2);
   assert.equal(speakerChunks[0].speaker, 'Speaker');
-  assert.equal(speakerChunks[1].speaker, 'You');
+  assert.equal(speakerChunks[1].speaker, 'Mixed');
+  assert.match(speakerChunks[1].text, /First speaker statement/);
+  assert.match(speakerChunks[1].text, /Second speaker statement/);
 
   const repeatedText = 'word '.repeat(110).trim();
   const overlapChunks = chunkTranscript('m3', [
@@ -44,6 +46,18 @@ test('semantic chunker handles empty input, speaker changes, overlap, and oversi
 
   assert.equal(oversized.length, 1);
   assert.ok(oversized[0].tokenCount > 400);
+});
+
+test('semantic chunker preserves adjacent question-answer context across speaker boundaries', () => {
+  const chunks = chunkTranscript('m6', [
+    { speaker: 'Speaker', text: 'Why Redis?', startMs: 0, endMs: 1000, isQuestion: true, isDecision: false, isActionItem: false },
+    { speaker: 'You', text: 'Redis keeps the hot counters fast while we evaluate durability requirements.', startMs: 1001, endMs: 2000, isQuestion: false, isDecision: false, isActionItem: false },
+  ]);
+
+  assert.equal(chunks.length, 2);
+  assert.equal(chunks[1].speaker, 'Mixed');
+  assert.match(chunks[1].text, /Why Redis\?/);
+  assert.match(chunks[1].text, /hot counters/);
 });
 
 test('formatChunkForContext renders mm:ss timestamp', () => {

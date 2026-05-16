@@ -1,6 +1,56 @@
-import type { CustomProviderPayload, FollowUpEmailInput, GeminiChatOptions, OverlayBounds, TranscriptTextEntry } from '../../shared/ipc'
+import type { CustomProviderPayload, FastResponseConfig, FollowUpEmailInput, GeminiChatOptions, OverlayBounds, TranscriptTextEntry } from '../../shared/ipc'
 
 type StatusResult = { success: boolean; error?: string }
+type AnswerRoute = 'fast_standard_answer' | 'enriched_standard_answer' | 'conscious_answer' | 'manual_answer' | 'follow_up_refinement'
+
+type SuggestedAnswerMetadata = {
+  route: AnswerRoute
+  attemptedRoute?: AnswerRoute
+  fallbackOccurred: boolean
+  fallbackReason?: string
+  intentConfidence?: number
+  intentProviderUsed?: string
+  intentRetryCount?: number
+  intentFallbackReason?: 'primary_unavailable' | 'primary_retries_exhausted' | 'primary_failed' | 'primary_low_confidence' | 'primary_contradiction'
+  prefetchedIntentUsed?: boolean
+  schemaVersion: 'standard_answer_v1' | 'conscious_mode_v1'
+  evidenceHash: string
+  contextSelectionHash?: string
+  transcriptRevision: number
+  threadAction?: 'start' | 'continue' | 'reset' | 'ignore'
+  thread?: {
+    rootQuestion: string
+    lastQuestion: string
+    followUpCount: number
+    updatedAt: number
+  } | null
+  threadState: {
+    activeThread: {
+      rootQuestion: string
+      lastQuestion: string
+      followUpCount: number
+      updatedAt: number
+    } | null
+    threadAction: 'start' | 'continue' | 'reset' | 'ignore'
+    transcriptRevision: number
+  }
+  cooldownSuppressedMs?: number
+  cooldownReason?: 'duplicate_question_debounce'
+  verifier?: {
+    deterministic: 'pass' | 'fail' | 'skipped'
+    judge?: 'pass' | 'fail' | 'skipped'
+    provenance: 'pass' | 'fail' | 'skipped'
+    reasons?: string[]
+  }
+  stealthContainmentActive: boolean
+}
+
+type IntelligenceSuggestedAnswerEvent = {
+  answer: string
+  question: string
+  confidence: number
+  metadata?: SuggestedAnswerMetadata
+}
 
 export interface ElectronAPI {
   updateContentDimensions: (dimensions: {
@@ -68,15 +118,16 @@ setDisguise: (mode: 'terminal' | 'settings' | 'activity' | 'none') => Promise<St
   getAvailableOllamaModels: () => Promise<string[]>
   switchToOllama: (model?: string, url?: string) => Promise<{ success: boolean; error?: string }>
   switchToGemini: (apiKey?: string, modelId?: string) => Promise<{ success: boolean; error?: string }>
-  testLlmConnection: (provider: 'gemini' | 'groq' | 'openai' | 'claude', apiKey?: string) => Promise<{ success: boolean; error?: string }>
+  testLlmConnection: (provider: 'gemini' | 'groq' | 'openai' | 'claude' | 'cerebras', apiKey?: string) => Promise<{ success: boolean; error?: string }>
   selectServiceAccount: () => Promise<{ success: boolean; path?: string; cancelled?: boolean; error?: string }>
 
   // API Key Management
   setGeminiApiKey: (apiKey: string) => Promise<{ success: boolean; error?: string }>
   setGroqApiKey: (apiKey: string) => Promise<{ success: boolean; error?: string }>
+  setCerebrasApiKey: (apiKey: string) => Promise<{ success: boolean; error?: string }>
   setOpenaiApiKey: (apiKey: string) => Promise<{ success: boolean; error?: string }>
   setClaudeApiKey: (apiKey: string) => Promise<{ success: boolean; error?: string }>
-  getStoredCredentials: () => Promise<{ hasGeminiKey: boolean; hasGroqKey: boolean; hasOpenaiKey: boolean; hasClaudeKey: boolean; googleServiceAccountPath: string | null; sttProvider: 'google' | 'groq' | 'openai' | 'deepgram' | 'elevenlabs' | 'azure' | 'ibmwatson' | 'soniox'; hasSttGroqKey: boolean; hasSttOpenaiKey: boolean; hasDeepgramKey: boolean; hasElevenLabsKey: boolean; hasAzureKey: boolean; azureRegion: string; hasIbmWatsonKey: boolean; ibmWatsonRegion: string; groqSttModel?: string; hasSonioxKey?: boolean; hasGoogleSearchKey?: boolean; hasGoogleSearchCseId?: boolean; geminiPreferredModel?: string; groqPreferredModel?: string; openaiPreferredModel?: string; claudePreferredModel?: string }>
+  getStoredCredentials: () => Promise<{ hasGeminiKey: boolean; hasGroqKey: boolean; hasCerebrasKey: boolean; hasOpenaiKey: boolean; hasClaudeKey: boolean; googleServiceAccountPath: string | null; sttProvider: 'google' | 'groq' | 'openai' | 'deepgram' | 'elevenlabs' | 'azure' | 'ibmwatson' | 'soniox'; hasSttGroqKey: boolean; hasSttOpenaiKey: boolean; hasDeepgramKey: boolean; hasElevenLabsKey: boolean; hasAzureKey: boolean; azureRegion: string; hasIbmWatsonKey: boolean; ibmWatsonRegion: string; groqSttModel?: string; hasSonioxKey?: boolean; hasGoogleSearchKey?: boolean; hasGoogleSearchCseId?: boolean; geminiPreferredModel?: string; groqPreferredModel?: string; cerebrasPreferredModel?: string; openaiPreferredModel?: string; claudePreferredModel?: string; fastResponseConfig?: FastResponseConfig }>
 
   // STT Provider Management
   setSttProvider: (provider: 'google' | 'groq' | 'openai' | 'deepgram' | 'elevenlabs' | 'azure' | 'ibmwatson' | 'soniox') => Promise<{ success: boolean; error?: string }>
@@ -114,7 +165,15 @@ setDisguise: (mode: 'terminal' | 'settings' | 'activity' | 'none') => Promise<St
 
   // Intelligence Mode IPC
   generateAssist: () => Promise<{ insight: string | null }>
-  generateWhatToSay: (question?: string, imagePaths?: string[]) => Promise<{ answer: string | null; question?: string; error?: string }>
+  generateWhatToSay: (
+    question?: string,
+    imagePaths?: string[]
+  ) => Promise<{
+    answer: string | null
+    question?: string
+    error?: string
+    status?: 'completed' | 'canceled' | 'error'
+  }>
   generateFollowUp: (intent: string, userRequest?: string) => Promise<{ refined: string | null; intent: string }>
   generateFollowUpQuestions: () => Promise<{ questions: string | null }>
   generateRecap: () => Promise<{ summary: string | null }>
@@ -134,12 +193,27 @@ setDisguise: (mode: 'terminal' | 'settings' | 'activity' | 'none') => Promise<St
   setWindowMode: (mode: 'launcher' | 'overlay') => Promise<void>
   setOverlayClickthrough: (enabled: boolean) => Promise<void>
   onOverlayClickthroughChanged: (callback: (enabled: boolean) => void) => () => void
+  setOverlayInteractive: (enabled: boolean) => Promise<void>
+  setCursorHook: (enabled: boolean) => Promise<{ enabled: boolean; installed: boolean }>
+  getCursorHookStatus: () => Promise<{ enabled: boolean; installed: boolean }>
+  onCursorHookStatus: (callback: (status: { enabled: boolean; installed: boolean }) => void) => () => void
+  onVirtualMouseEvent: (callback: (event: {
+    kind: 'move' | 'down' | 'up' | 'scroll'
+    button: number
+    x: number
+    y: number
+    globalX: number
+    globalY: number
+    scrollDx: number
+    scrollDy: number
+  }) => void) => () => void
   onGlobalShortcutAction: (callback: (actionId: string) => void) => () => void
 
   // Intelligence Mode Events
   onIntelligenceAssistUpdate: (callback: (data: { insight: string }) => void) => () => void
+  onIntelligenceCooldown: (callback: (data: { suppressedMs: number; question?: string; reason?: 'duplicate_question_debounce' }) => void) => () => void
   onIntelligenceSuggestedAnswerToken: (callback: (data: { token: string; question: string; confidence: number }) => void) => () => void
-  onIntelligenceSuggestedAnswer: (callback: (data: { answer: string; question: string; confidence: number }) => void) => () => void
+  onIntelligenceSuggestedAnswer: (callback: (data: IntelligenceSuggestedAnswerEvent) => void) => () => void
   onIntelligenceRefinedAnswerToken: (callback: (data: { token: string; intent: string }) => void) => () => void
   onIntelligenceRefinedAnswer: (callback: (data: { answer: string; intent: string }) => void) => () => void
   onIntelligenceFollowUpQuestionsUpdate: (callback: (data: { questions: string }) => void) => () => void
@@ -152,12 +226,15 @@ setDisguise: (mode: 'terminal' | 'settings' | 'activity' | 'none') => Promise<St
   onIntelligenceError: (callback: (data: { error: string, mode: string }) => void) => () => void;
   // Session Management
   onSessionReset: (callback: () => void) => () => void;
+  onMeetingLifecycleState: (callback: (state: 'idle' | 'starting' | 'active' | 'stopping') => void) => () => void;
+  getMeetingLifecycleState: () => Promise<'idle' | 'starting' | 'active' | 'stopping'>;
 
   // Streaming listeners
   streamGeminiChat: (message: string, imagePaths?: string[], context?: string, options?: GeminiChatOptions) => Promise<void>
-  onGeminiStreamToken: (callback: (data: { requestId?: string; token: string }) => void) => () => void
-  onGeminiStreamDone: (callback: (data: { requestId?: string }) => void) => () => void
-  onGeminiStreamError: (callback: (data: { requestId?: string; error: string }) => void) => () => void;
+  cancelChat: (requestId: string) => void
+  onGeminiStreamToken: (requestId: string, callback: (token: string) => void) => () => void
+  onGeminiStreamDone: (requestId: string, callback: () => void) => () => void
+  onGeminiStreamError: (requestId: string, callback: (error: string) => void) => () => void;
 
   // Model Management
   getDefaultModel: () => Promise<{ model: string }>;
@@ -169,9 +246,9 @@ setDisguise: (mode: 'terminal' | 'settings' | 'activity' | 'none') => Promise<St
   // Settings Window
   toggleSettingsWindow: (coords?: { x: number; y: number }) => Promise<void>;
 
-  // Groq Fast Text Mode
-  getGroqFastTextMode: () => Promise<{ enabled: boolean }>;
-  setGroqFastTextMode: (enabled: boolean) => Promise<{ success: boolean; error?: string }>;
+  // Fast Response Mode
+  getFastResponseConfig: () => Promise<FastResponseConfig>;
+  setFastResponseConfig: (config: FastResponseConfig) => Promise<{ success: boolean; error?: string }>;
 
   // Demo
   seedDemo: () => Promise<{ success: boolean }>;
@@ -196,7 +273,9 @@ setDisguise: (mode: 'terminal' | 'settings' | 'activity' | 'none') => Promise<St
   flushDatabase: () => Promise<{ success: boolean }>;
 
   onUndetectableChanged: (callback: (state: boolean) => void) => () => void;
-  onGroqFastTextChanged: (callback: (enabled: boolean) => void) => () => void;
+  getPrivacyShieldState: () => Promise<{ active: boolean; reason: string | null }>;
+  onPrivacyShieldChanged: (callback: (state: { active: boolean; reason: string | null }) => void) => () => void;
+  onFastResponseConfigChanged: (callback: (config: FastResponseConfig) => void) => () => void;
   onModelChanged: (callback: (modelId: string) => void) => () => void;
   onModelFallback: (callback: (event: { provider: 'gemini' | 'groq' | 'openai' | 'claude'; previousModel: string; fallbackModel: string; reason: string }) => void) => () => void;
 
@@ -222,16 +301,16 @@ setDisguise: (mode: 'terminal' | 'settings' | 'activity' | 'none') => Promise<St
   calendarRefresh: () => Promise<{ success: boolean; error?: string }>
 
 // RAG (Retrieval-Augmented Generation) API
-  ragQueryMeeting: (meetingId: string, query: string, requestId?: string) => Promise<{ success?: boolean; fallback?: boolean; error?: string }>
-  ragQueryLive: (query: string, requestId?: string) => Promise<{ success?: boolean; fallback?: boolean; error?: string }>
-  ragQueryGlobal: (query: string, requestId?: string) => Promise<{ success?: boolean; fallback?: boolean; error?: string }>
-  ragCancelQuery: (options: { meetingId?: string; global?: boolean }) => Promise<StatusResult>
+  ragQueryMeeting: (meetingId: string, query: string) => Promise<{ success?: boolean; fallback?: boolean; error?: string }>
+  ragQueryLive: (query: string) => Promise<{ success?: boolean; fallback?: boolean; error?: string }>
+  ragQueryGlobal: (query: string) => Promise<{ success?: boolean; fallback?: boolean; error?: string }>
+  ragCancelQuery: (options: { meetingId?: string; global?: boolean; live?: boolean }) => Promise<StatusResult>
   ragIsMeetingProcessed: (meetingId: string) => Promise<boolean>
   ragGetQueueStatus: () => Promise<{ pending: number; processing: number; completed: number; failed: number }>
   ragRetryEmbeddings: () => Promise<StatusResult>
-  onRAGStreamChunk: (callback: (data: { meetingId?: string; global?: boolean; live?: boolean; requestId?: string; chunk: string }) => void) => () => void
-  onRAGStreamComplete: (callback: (data: { meetingId?: string; global?: boolean; live?: boolean; requestId?: string }) => void) => () => void
-  onRAGStreamError: (callback: (data: { meetingId?: string; global?: boolean; live?: boolean; requestId?: string; error: string }) => void) => () => void
+  onRAGStreamChunk: (callback: (data: { meetingId?: string; global?: boolean; chunk: string }) => void) => () => void
+  onRAGStreamComplete: (callback: (data: { meetingId?: string; global?: boolean }) => void) => () => void
+  onRAGStreamError: (callback: (data: { meetingId?: string; global?: boolean; error: string }) => void) => () => void
 
   // Donation API
   getDonationStatus: () => Promise<{ shouldShow: boolean; hasDonated: boolean; lifetimeShows: number }>;
@@ -263,8 +342,8 @@ setDisguise: (mode: 'terminal' | 'settings' | 'activity' | 'none') => Promise<St
   setGoogleSearchCseId: (cseId: string) => Promise<StatusResult>
 
   // Dynamic Model Discovery
-  fetchProviderModels: (provider: 'gemini' | 'groq' | 'openai' | 'claude', apiKey: string) => Promise<{ success: boolean; models?: { id: string, label: string }[]; error?: string }>
-  setProviderPreferredModel: (provider: 'gemini' | 'groq' | 'openai' | 'claude', modelId: string) => Promise<void>
+  fetchProviderModels: (provider: 'gemini' | 'groq' | 'openai' | 'claude' | 'cerebras', apiKey: string) => Promise<{ success: boolean; models?: { id: string, label: string }[]; error?: string }>
+  setProviderPreferredModel: (provider: 'gemini' | 'groq' | 'openai' | 'claude' | 'cerebras', modelId: string) => Promise<void>
 
   // License Management
   licenseActivate: (key: string) => Promise<{ success: boolean; error?: string }>

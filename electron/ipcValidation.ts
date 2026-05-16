@@ -1,10 +1,22 @@
 import { z, type ZodIssue } from 'zod';
-import type { FollowUpMeetingType, FollowUpTone, ProviderKind } from '../shared/ipc';
+import type { FastResponseProvider, FollowUpMeetingType, FollowUpTone, ProviderKind } from '../shared/ipc';
 
 const boundedString = (max: number) => z.string().trim().min(1).max(max);
 const optionalBoundedString = (max: number) => z.string().trim().max(max).optional();
+const boundedOptionalString = (max: number) => z.string().trim().min(1).max(max).optional();
 const sttProviderEnum = z.enum(['google', 'groq', 'openai', 'deepgram', 'elevenlabs', 'azure', 'ibmwatson', 'soniox']);
-const llmProviderEnum = z.enum(['gemini', 'groq', 'openai', 'claude']);
+const llmProviderEnum = z.enum(['gemini', 'groq', 'openai', 'claude', 'cerebras']);
+const fastResponseProviderEnum = z.enum(['groq', 'cerebras']);
+const externalUrlSchema = z.string().trim().min(1).max(65535).refine((value) => {
+  try {
+    const parsed = new URL(value);
+    return ['http:', 'https:', 'mailto:'].includes(parsed.protocol);
+  } catch {
+    return false;
+  }
+}, {
+  message: 'Expected a valid http, https, or mailto URL',
+});
 
 export const ipcSchemas = {
   geminiChatArgs: z.tuple([
@@ -13,8 +25,9 @@ export const ipcSchemas = {
     z.string().max(100000).optional(),
     z.object({
       skipSystemPrompt: z.boolean().optional(),
-      requestId: boundedString(128).optional(),
-    }).optional(),
+      qualityTier: z.enum(['fast', 'quality', 'verify']).optional(),
+      requestId: z.string().uuid().optional(),
+    }),
   ]),
   customProvider: z.object({
     id: boundedString(128),
@@ -38,9 +51,14 @@ export const ipcSchemas = {
     y: z.number().finite().optional(),
   }).strict(),
   providerPreferredModel: z.tuple([
-    z.enum(['gemini', 'groq', 'openai', 'claude'] as [ProviderKind, ...ProviderKind[]]),
+    z.enum(['gemini', 'groq', 'openai', 'claude', 'cerebras'] as [ProviderKind, ...ProviderKind[]]),
     boundedString(256),
   ]),
+  fastResponseConfig: z.object({
+    enabled: z.boolean(),
+    provider: z.enum(['groq', 'cerebras'] as [FastResponseProvider, ...FastResponseProvider[]]),
+    model: z.string().trim().max(256),
+  }).strict(),
   recognitionLanguage: boundedString(64),
   aiResponseLanguage: boundedString(64),
   disguiseMode: z.enum(['terminal', 'settings', 'activity', 'none']),
@@ -78,6 +96,12 @@ export const ipcSchemas = {
     width: z.number().finite().positive().max(4000),
     height: z.number().finite().positive().max(4000),
   }).strict(),
+  overlayBounds: z.object({
+    width: z.number().finite().positive().max(4000),
+    height: z.number().finite().positive().max(4000),
+    x: z.number().finite().optional(),
+    y: z.number().finite().optional(),
+  }).strict(),
   windowMode: z.enum(['launcher', 'overlay']),
   absoluteUserDataPath: z.string().trim().min(1).max(2000),
   modelSelectorCoords: z.object({
@@ -89,7 +113,7 @@ export const ipcSchemas = {
   apiKey: boundedString(4096),
   optionalApiKey: z.string().trim().max(4096).optional(),
   azureRegion: boundedString(128),
-  sttConnectionArgs: z.tuple([sttProviderEnum.exclude(['google']), z.string().trim().max(4096), z.string().trim().max(128).optional()]),
+  sttConnectionArgs: z.tuple([sttProviderEnum.exclude(['google']), boundedString(4096), z.string().trim().max(128).optional()]),
   llmConnectionArgs: z.tuple([llmProviderEnum, z.string().trim().max(4096).optional()]),
   providerModelFetchArgs: z.tuple([llmProviderEnum, z.string().trim().max(4096)]),
   providerSwitchGeminiArgs: z.tuple([z.string().trim().max(4096).optional(), z.string().trim().max(256).optional()]),
@@ -103,28 +127,35 @@ export const ipcSchemas = {
   ragMeetingQuery: z.object({
     meetingId: boundedString(128),
     query: boundedString(10000),
-    requestId: boundedString(128).optional(),
   }).strict(),
   ragLiveQuery: z.object({
     query: boundedString(10000),
-    requestId: boundedString(128).optional(),
   }).strict(),
   ragGlobalQuery: z.object({
     query: boundedString(10000),
-    requestId: boundedString(128).optional(),
   }).strict(),
   ragCancelQuery: z.object({
     meetingId: boundedString(128).optional(),
     global: z.boolean().optional(),
-  }).strict().refine((value) => value.global === true || typeof value.meetingId === 'string', {
-    message: 'meetingId or global is required',
+    live: z.boolean().optional(),
+  }).strict().refine((value) => value.global === true || typeof value.meetingId === 'string' || value.live === true, {
+    message: 'meetingId, global, or live is required',
   }),
+  intelligenceQuestion: z.string().trim().max(10000),
+  intelligenceImagePaths: z.array(boundedString(2000)).max(8),
+  intelligenceFollowUpIntent: boundedString(128),
+  intelligenceFollowUpUserRequest: z.string().trim().max(10000),
+  intelligenceManualQuestion: boundedString(10000),
+  calendarEventId: boundedString(1024),
   themeMode: z.enum(['system', 'light', 'dark']),
   openMailtoInput: z.object({
     to: z.string().trim().max(2000),
     subject: z.string().max(500),
     body: z.string().max(20000),
   }).strict(),
+  audioDeviceId: boundedOptionalString(256),
+  meetingId: boundedString(128),
+  externalUrl: externalUrlSchema,
 };
 
 export function parseIpcInput<T>(schema: z.ZodType<T>, payload: unknown, channel: string): T {

@@ -24,16 +24,17 @@ export class EmbeddingProviderResolver {
   static async resolve(config: AppAPIConfig): Promise<IEmbeddingProvider> {
     // ANE (Apple Neural Engine) provider - highest priority when acceleration enabled
     if (isOptimizationActive('useANEEmbeddings')) {
-      const aneProvider = new ANEEmbeddingProvider();
-      
       if (!EmbeddingProviderResolver.aneProviderChecked) {
+        const aneProvider = ANEEmbeddingProvider.getSharedInstance();
+        await aneProvider.initialize();
         EmbeddingProviderResolver.aneProviderAvailable = await aneProvider.isAvailable();
         EmbeddingProviderResolver.aneProviderChecked = true;
       }
 
-      if (EmbeddingProviderResolver.aneProviderAvailable) {
-        console.log(`[EmbeddingProviderResolver] ANE provider available, using ${aneProvider.name} (${aneProvider.dimensions}d)`);
-        return aneProvider;
+      const sharedAne = ANEEmbeddingProvider.getSharedInstance();
+      if (EmbeddingProviderResolver.aneProviderAvailable && sharedAne.isInitialized()) {
+        console.log(`[EmbeddingProviderResolver] ANE provider available, using ${sharedAne.name} (${sharedAne.dimensions}d)`);
+        return sharedAne;
       }
       console.log('[EmbeddingProviderResolver] ANE provider unavailable, falling back to other providers');
     }

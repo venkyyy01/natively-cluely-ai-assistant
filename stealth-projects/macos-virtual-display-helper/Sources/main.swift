@@ -1,6 +1,7 @@
 import Foundation
 
 enum Command: String {
+    case hello
     case createSession = "create-session"
     case releaseSession = "release-session"
     case status = "status"
@@ -36,6 +37,11 @@ guard args.count >= 2, let command = Command(rawValue: args[1]) else {
 }
 
 switch command {
+case .hello:
+    let data = try FileHandle.standardInput.readToEnd() ?? Data()
+    let request = (try JSONSerialization.jsonObject(with: data)) as? [String: Any] ?? [:]
+    let capability = request["capability"] as? String
+    try writeJson(["authenticated": capability != nil, "capability": capability ?? NSNull()])
 case .createSession:
     let data = try FileHandle.standardInput.readToEnd() ?? Data()
     let request = try JSONDecoder().decode(SessionRequest.self, from: data)
@@ -100,6 +106,7 @@ private func telemetryFileURL() -> URL {
 }
 
 private func runServer(service: VirtualDisplayService) throws {
+    var serverCapability: String?
     while let line = readLine() {
         guard !line.isEmpty else {
             continue
@@ -120,8 +127,41 @@ private func runServer(service: VirtualDisplayService) throws {
                 continue
             }
 
+            let requestNonce = request["nonce"] as? String
+            let requestCapability = request["capability"] as? String
+
+            if command == .hello {
+                guard let capability = requestCapability, !capability.isEmpty else {
+                    try writeServerResponse(id: id, ok: false, result: nil, error: "Missing capability", nonce: requestNonce, capability: serverCapability)
+                    continue
+                }
+
+                if let expected = serverCapability, expected != capability {
+                    try writeServerResponse(id: id, ok: false, result: nil, error: "Capability mismatch", nonce: requestNonce, capability: serverCapability)
+                    continue
+                }
+
+                serverCapability = capability
+                try writeServerResponse(
+                    id: id,
+                    ok: true,
+                    result: ["authenticated": true, "capability": capability],
+                    error: nil,
+                    nonce: requestNonce,
+                    capability: capability
+                )
+                continue
+            }
+
+            if let expected = serverCapability, requestCapability != expected {
+                try writeServerResponse(id: id, ok: false, result: nil, error: "Capability mismatch", nonce: requestNonce, capability: expected)
+                continue
+            }
+
             let result: [String: Any]
             switch command {
+            case .hello:
+                result = ["authenticated": true]
             case .createSession:
                 result = try service.createSession(try parseSessionRequest(request)).asJsonObject()
             case .releaseSession:
@@ -148,9 +188,33 @@ private func runServer(service: VirtualDisplayService) throws {
                 result = try service.validateSession(sessionId: try parseSessionLookupRequest(request).sessionId).asJsonObject()
             }
 
-            try writeJson(["id": id, "ok": true, "result": result])
+            try writeServerResponse(id: id, ok: true, result: result, error: nil, nonce: requestNonce, capability: serverCapability)
         } catch {
             try writeJson(["id": requestId ?? NSNull(), "ok": false, "error": error.localizedDescription])
         }
     }
+}
+
+private func writeServerResponse(
+    id: String,
+    ok: Bool,
+    result: [String: Any]?,
+    error: String?,
+    nonce: String?,
+    capability: String?
+) throws {
+    var response: [String: Any] = ["id": id, "ok": ok]
+    if let result {
+        response["result"] = result
+    }
+    if let error {
+        response["error"] = error
+    }
+    if let nonce {
+        response["nonce"] = nonce
+    }
+    if let capability {
+        response["capability"] = capability
+    }
+    try writeJson(response)
 }

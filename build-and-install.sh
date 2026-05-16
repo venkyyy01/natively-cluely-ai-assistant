@@ -357,6 +357,58 @@ require_asar_entry() {
     fi
 }
 
+is_truthy_flag() {
+    local value="${1:-}"
+    case "$value" in
+        1|[Tt][Rr][Uu][Ee]|[Yy][Ee][Ss]|[Oo][Nn])
+            return 0
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+run_packaged_launch_probe() {
+    local mode_label="$1"
+    local app_binary="$2"
+    local disable_helper="$3"
+    local log_file
+    local pid
+
+    log_file=$(mktemp)
+    if [[ "$disable_helper" == "1" ]]; then
+        NATIVELY_DISABLE_MACOS_VIRTUAL_DISPLAY_HELPER=1 "$app_binary" >"$log_file" 2>&1 &
+    else
+        "$app_binary" >"$log_file" 2>&1 &
+    fi
+    pid=$!
+
+    sleep 4
+    if ! kill -0 "$pid" 2>/dev/null; then
+        echo -e "${RED}${BOLD}--- launch log (${mode_label}) -------------------------------------------------${NC}"
+        sed -n '1,160p' "$log_file"
+        rm -f "$log_file"
+        fail "Packaged launch probe failed (${mode_label})"
+    fi
+
+    kill "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+    rm -f "$log_file"
+    success "Packaged launch probe passed (${mode_label})"
+}
+
+validate_packaged_helper_launch_modes() {
+    local app_bundle="$1"
+    local app_binary="$2"
+    local helper_binary="$app_bundle/Contents/XPCServices/macos-full-stealth-helper.xpc/Contents/MacOS/macos-full-stealth-helper"
+
+    require_file "$helper_binary" "Installed macOS full stealth XPC helper"
+    run_packaged_launch_probe "with-helper" "$app_binary" "0"
+    run_packaged_launch_probe "without-helper" "$app_binary" "1"
+    success "Packaged helper launch validation passed (with and without helper)"
+}
+
 if [[ "${BUILD_AND_INSTALL_LIB:-0}" == "1" ]]; then
     return 0 2>/dev/null || exit 0
 fi
@@ -375,11 +427,102 @@ else
     fail "Unsupported architecture: $ARCH"
 fi
 
-# ── Detect Rust ──
-if command -v cargo &>/dev/null; then
-HAS_RUST="true"
+# ── macOS version check ──
+MACOS_VERSION="$(sw_vers -productVersion 2>/dev/null || echo 'unknown')"
+info "macOS version: $MACOS_VERSION ($ARCH_LABEL)"
+
+# ╔═══════════════════════════════════════════════════════════════════╗
+# ║  Prerequisite Auto-Install                                       ║
+# ╚═══════════════════════════════════════════════════════════════════╝
+
+# ── Xcode Command Line Tools (required for git, compilers) ──
+if ! xcode-select -p &>/dev/null; then
+    warn "Xcode Command Line Tools not found — installing (this may take a few minutes)..."
+    xcode-select --install 2>/dev/null || true
+    # Wait for the install to complete (user must click through the dialog)
+    until xcode-select -p &>/dev/null; do
+        sleep 5
+    done
+    success "Xcode Command Line Tools installed"
 else
-HAS_RUST="false"
+    success "Xcode Command Line Tools found: $(xcode-select -p)"
+fi
+
+# ── Homebrew ──
+if command -v brew &>/dev/null; then
+    success "Homebrew found: $(brew --version | head -1)"
+else
+    warn "Homebrew not found — installing..."
+    /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+    # Add brew to PATH for this session (Apple Silicon vs Intel paths)
+    if [[ -f "/opt/homebrew/bin/brew" ]]; then
+        eval "$(/opt/homebrew/bin/brew shellenv)"
+    elif [[ -f "/usr/local/bin/brew" ]]; then
+        eval "$(/usr/local/bin/brew shellenv)"
+    fi
+    if command -v brew &>/dev/null; then
+        success "Homebrew installed"
+    else
+        fail "Homebrew installation failed. Install manually from https://brew.sh"
+    fi
+fi
+
+# ── Node.js ──
+if command -v node &>/dev/null; then
+    NODE_VERSION="$(node --version 2>/dev/null)"
+    success "Node.js found: $NODE_VERSION"
+    NODE_MAJOR="${NODE_VERSION#v}"
+    NODE_MAJOR="${NODE_MAJOR%%.*}"
+    if [[ "$NODE_MAJOR" -lt 18 ]]; then
+        warn "Node.js $NODE_VERSION is below v18. Recommend upgrading: brew upgrade node"
+    fi
+else
+    warn "Node.js not found — installing via Homebrew..."
+    brew install node
+    if command -v node &>/dev/null; then
+        success "Node.js installed: $(node --version)"
+    else
+        fail "Node.js installation failed. Install manually: brew install node"
+    fi
+fi
+
+# ── npm ──
+if command -v npm &>/dev/null; then
+    success "npm found: $(npm --version 2>/dev/null)"
+else
+    fail "npm not found. It ships with Node.js — reinstall Node.js: brew reinstall node"
+fi
+
+# ── Git ──
+if command -v git &>/dev/null; then
+    success "Git found: $(git --version 2>/dev/null)"
+else
+    warn "Git not found — installing via Homebrew..."
+    brew install git
+    if command -v git &>/dev/null; then
+        success "Git installed: $(git --version)"
+    else
+        fail "Git installation failed. Install manually: brew install git"
+    fi
+fi
+
+# ── Rust / Cargo ──
+if command -v cargo &>/dev/null; then
+    HAS_RUST="true"
+    success "Rust found: $(cargo --version 2>/dev/null)"
+else
+    warn "Rust/Cargo not found — installing via rustup..."
+    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y 2>/dev/null
+    # Source cargo env for this session
+    [[ -f "$HOME/.cargo/env" ]] && source "$HOME/.cargo/env"
+    if command -v cargo &>/dev/null; then
+        HAS_RUST="true"
+        success "Rust installed: $(cargo --version)"
+    else
+        HAS_RUST="false"
+        warn "Rust installation failed — native module Rust tests will be skipped"
+        warn "Install manually from https://rustup.rs"
+    fi
 fi
 
 # ╔═══════════════════════════════════════════════════════════════════╗
@@ -466,19 +609,94 @@ fi
 # ║ Step 4: Run Quality Gates                                        
 # ╚═══════════════════════════════════════════════════════════════════╝
 QUALITY_GATES_RAN=false
+QUALITY_GATE_TIMEOUT="${QUALITY_GATE_TIMEOUT:-300}" # seconds per gate, default 5min
+
+# Locate a working timeout binary (coreutils `timeout` or macOS `gtimeout`).
+# These exec-replace the child process, so they work correctly when
+# run_with_spinner backgrounds the command.
+TIMEOUT_CMD=""
+if command -v gtimeout &>/dev/null; then
+    TIMEOUT_CMD="gtimeout"
+elif command -v timeout &>/dev/null && timeout --version &>/dev/null 2>&1; then
+    # Ensure it's GNU timeout (not a shell built-in alias)
+    TIMEOUT_CMD="timeout"
+fi
+
+# run_gate <label> <command...>
+# Runs a quality-gate command with a spinner and an optional hard timeout.
+# On failure the last 200 lines of output are printed before the script exits.
+run_gate() {
+    local label="$1"
+    shift
+    local rc=0
+
+    # Build the command: optionally prepend timeout
+    local cmd=()
+    if [[ -n "$TIMEOUT_CMD" ]]; then
+        cmd+=("$TIMEOUT_CMD" "$QUALITY_GATE_TIMEOUT")
+    fi
+    cmd+=("$@")
+
+    # Use set +e / set -e so we capture the exit code without triggering
+    # the global set -e trap, then call fail() at top level where exit works.
+    set +e
+    run_with_spinner "$label" "${cmd[@]}"
+    rc=$?
+    set -e
+
+    if [[ $rc -ne 0 ]]; then
+        if [[ -n "$TIMEOUT_CMD" && $rc -eq 124 ]]; then
+            fail "$label timed out after ${QUALITY_GATE_TIMEOUT}s"
+        else
+            fail "$label failed"
+        fi
+    fi
+}
+
 if [[ "${SKIP_QUALITY_GATES:-0}" == "0" ]]; then
     step "Step 4/8 — Running Production Quality Gates"
 
-    info "Running quality gates in visible stages so long-running checks do not look frozen..."
+    if [[ -n "$TIMEOUT_CMD" ]]; then
+        info "Each gate has a ${QUALITY_GATE_TIMEOUT}s timeout (set QUALITY_GATE_TIMEOUT to override)"
+    else
+        warn "No timeout command found (install coreutils for gtimeout). Gates will run without a timeout."
+    fi
 
-    run_logged_command "[1/2] Running Electron tests (this may take a minute)..." npm run test:electron
+    # Ensure local node_modules/.bin is on PATH for sub-shells
+    export PATH="$SCRIPT_DIR/node_modules/.bin:$PATH"
+
+    # ── Gate 1: Compile Electron TypeScript ──
+    run_gate "[1/5] Compiling Electron TypeScript" \
+        bash -c 'cd "'"$SCRIPT_DIR"'" && rimraf dist-electron/electron/tests && tsc -p electron/tsconfig.json'
+    success "Electron TypeScript compiled"
+
+    # ── Gate 2: Run Electron tests ──
+    run_gate "[2/5] Running Electron tests" \
+        bash -c 'cd "'"$SCRIPT_DIR"'" && node --test dist-electron/electron/tests/*.test.js'
     success "Electron tests passed"
 
-    run_logged_command "[2/2] Running production verification..." npm run verify:production
-    success "Production verification passed"
+    # ── Gate 3–5: Production verification (decomposed — skip redundant tsc) ──
+    # typecheck is skipped: tsc -p electron/tsconfig.json already ran in gate 1.
+    info "Skipping redundant typecheck (already compiled in gate 1)"
+
+    run_gate "[3/5] Verifying Electron test coverage" \
+        node scripts/verify-electron-coverage.js
+    success "Electron coverage verified"
+
+    run_gate "[4/5] Verifying renderer test coverage" \
+        node scripts/verify-renderer-coverage.js
+    success "Renderer coverage verified"
+
+    if [[ "$HAS_RUST" == "true" ]]; then
+        run_gate "[5/5] Running Rust native module tests" \
+            cargo test --manifest-path native-module/Cargo.toml
+        success "Rust native module tests passed"
+    else
+        warn "[5/5] Skipping Rust tests (cargo not found)"
+    fi
 
     QUALITY_GATES_RAN=true
-    success "Quality gates passed"
+    success "All quality gates passed"
 else
     info "Skipping visible quality gates (set SKIP_QUALITY_GATES=0 to run them before packaging)"
     info "Package-level production verification remains enabled"
@@ -518,6 +736,8 @@ step "Step 6/8 — Force Signing (Ad-Hoc)"
 # to ensure it's clean (handles edge cases where build partially failed)
 
 PACKAGED_HELPER="$APP_GLOB/Contents/Resources/bin/macos/stealth-virtual-display-helper"
+PACKAGED_FOUNDATION_INTENT_HELPER="$APP_GLOB/Contents/Resources/bin/macos/foundation-intent-helper"
+PACKAGED_FULL_STEALTH_XPC="$APP_GLOB/Contents/XPCServices/macos-full-stealth-helper.xpc"
 
 if [[ -f "$PACKAGED_HELPER" ]]; then
     if [[ -f "$HELPER_ENTITLEMENTS" ]]; then
@@ -531,6 +751,34 @@ if [[ -f "$PACKAGED_HELPER" ]]; then
     fi
 else
     warn "Packaged macOS virtual display helper not found before app signing"
+fi
+
+if [[ -f "$PACKAGED_FOUNDATION_INTENT_HELPER" ]]; then
+    if [[ -f "$ENTITLEMENTS" ]]; then
+        info "Signing packaged foundation intent helper with app entitlements: $ENTITLEMENTS"
+        run_with_spinner "signing packaged foundation intent helper" codesign --force --options runtime --entitlements "$ENTITLEMENTS" --sign - "$PACKAGED_FOUNDATION_INTENT_HELPER"
+        success "Packaged foundation intent helper signed"
+    else
+        warn "App entitlements file not found, signing packaged foundation intent helper without entitlements"
+        run_with_spinner "signing packaged foundation intent helper" codesign --force --sign - "$PACKAGED_FOUNDATION_INTENT_HELPER"
+        success "Packaged foundation intent helper signed (ad-hoc, no entitlements)"
+    fi
+else
+    warn "Packaged foundation intent helper not found before app signing"
+fi
+
+if [[ -d "$PACKAGED_FULL_STEALTH_XPC" ]]; then
+    if [[ -f "$ENTITLEMENTS" ]]; then
+        info "Signing packaged macOS full stealth XPC bundle with app entitlements: $ENTITLEMENTS"
+        run_with_spinner "signing packaged full stealth xpc bundle" codesign --force --options runtime --entitlements "$ENTITLEMENTS" --sign - "$PACKAGED_FULL_STEALTH_XPC"
+        success "Packaged macOS full stealth XPC bundle signed"
+    else
+        warn "App entitlements file not found, signing packaged XPC bundle without entitlements"
+        run_with_spinner "signing packaged full stealth xpc bundle" codesign --force --sign - "$PACKAGED_FULL_STEALTH_XPC"
+        success "Packaged macOS full stealth XPC bundle signed (ad-hoc, no entitlements)"
+    fi
+else
+    warn "Packaged macOS full stealth XPC bundle not found before app signing"
 fi
 
 if [[ -f "$ENTITLEMENTS" ]]; then
@@ -572,6 +820,8 @@ require_asar_entry "$APP_ASAR_PATH" "/node_modules/natively-audio/index.js" "Pac
 require_asar_entry "$APP_ASAR_PATH" "/dist-electron/premium/electron/services/LicenseManager.js" "Packaged premium license manager"
 require_asar_entry "$APP_ASAR_PATH" "/dist-electron/premium/electron/knowledge/KnowledgeOrchestrator.js" "Packaged knowledge orchestrator"
 require_file "$APP_RESOURCES_DIR/bin/macos/stealth-virtual-display-helper" "Packaged macOS virtual display helper"
+require_file "$APP_RESOURCES_DIR/bin/macos/foundation-intent-helper" "Packaged foundation intent helper"
+require_file "$APP_GLOB/Contents/XPCServices/macos-full-stealth-helper.xpc/Contents/MacOS/macos-full-stealth-helper" "Packaged macOS full stealth XPC helper"
 
 if [[ "$BUILD_ARCH" == "arm64" ]]; then
     require_file "$APP_ASAR_UNPACKED_DIR/node_modules/natively-audio/index.darwin-arm64.node" "Unpacked arm64 native audio binary"
@@ -615,10 +865,10 @@ fi
 # Copy to Applications
 info "Copying to ${INSTALL_DIR}/${APP_NAME}.app ..."
 if [[ -w "$INSTALL_DIR" ]]; then
-    run_with_spinner "transferring vessel into /Applications" ditto "$APP_GLOB" "${INSTALL_DIR}/${APP_NAME}.app"
+    run_with_spinner "transferring vessel into /Applications" cp -R "$APP_GLOB" "${INSTALL_DIR}/${APP_NAME}.app"
 else
     info "Administrator access required to install into ${INSTALL_DIR}"
-    run_with_spinner "transferring vessel into /Applications" sudo ditto "$APP_GLOB" "${INSTALL_DIR}/${APP_NAME}.app"
+    run_with_spinner "transferring vessel into /Applications" sudo cp -R "$APP_GLOB" "${INSTALL_DIR}/${APP_NAME}.app"
 fi
 
 # Remove quarantine flag (bypass Gatekeeper)
@@ -636,6 +886,13 @@ if file "$INSTALLED_BINARY" | grep -q "$BUILD_ARCH"; then
     success "Installed binary architecture verified (${BUILD_ARCH})"
 else
     fail "Installed binary architecture does not match expected ${BUILD_ARCH}"
+fi
+
+if is_truthy_flag "${NATIVELY_VALIDATE_PACKAGED_HELPER_LAUNCH:-0}"; then
+    step "Step 9/9 — Validating packaged helper launch modes"
+    validate_packaged_helper_launch_modes "${INSTALL_DIR}/${APP_NAME}.app" "$INSTALLED_BINARY"
+else
+    info "Skipping packaged helper launch validation (set NATIVELY_VALIDATE_PACKAGED_HELPER_LAUNCH=1 to enable)"
 fi
 
 # ╔═══════════════════════════════════════════════════════════════════╗

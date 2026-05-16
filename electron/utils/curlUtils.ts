@@ -21,12 +21,24 @@ export const validateCurl = (curl: string): CurlValidationResult => {
     try {
         const json = curl2Json(curl);
 
-        // Ensure {{TEXT}} is present so we can inject the prompt
-        // We check the raw string for the placeholder because it might be in url, header, or body
-        if (!curl.includes("{{TEXT}}")) {
+        // Ensure at least one supported input placeholder is present.
+        // This supports text-only, image-only, and mixed providers.
+        const hasSupportedPlaceholder =
+            curl.includes("{{TEXT}}") ||
+            curl.includes("{{PROMPT}}") ||
+            curl.includes("{{USER_MESSAGE}}") ||
+            curl.includes("{{SYSTEM_PROMPT}}") ||
+            curl.includes("{{CONTEXT}}") ||
+            curl.includes("{{IMAGE_BASE64}}") ||
+            curl.includes("{{IMAGE_BASE64S}}") ||
+            curl.includes("{{IMAGE_COUNT}}") ||
+            curl.includes("{{OPENAI_USER_CONTENT}}") ||
+            curl.includes("{{OPENAI_MESSAGES}}");
+
+        if (!hasSupportedPlaceholder) {
             return {
                 isValid: false,
-                message: "Your cURL must contain {{TEXT}} placeholder for the prompt."
+                message: "Your cURL must include at least one supported placeholder (e.g. {{TEXT}} or {{IMAGE_BASE64}})."
             };
         }
 
@@ -41,13 +53,24 @@ export const validateCurl = (curl: string): CurlValidationResult => {
  */
 export function deepVariableReplacer(
     node: any,
-    variables: Record<string, string>
+    variables: Record<string, unknown>
 ): any {
     if (typeof node === "string") {
+        const exactPlaceholder = node.match(/^\{\{([A-Z0-9_]+)\}\}$/);
+        if (exactPlaceholder) {
+            const key = exactPlaceholder[1];
+            if (Object.prototype.hasOwnProperty.call(variables, key)) {
+                return variables[key];
+            }
+        }
+
         let result = node;
         for (const [key, value] of Object.entries(variables)) {
+            const replacement = typeof value === 'string'
+                ? JSON.stringify(value).slice(1, -1)
+                : JSON.stringify(value);
             // Global replace of {{KEY}}
-            result = result.replace(new RegExp(`\\{\\{${key}\\}\\}`, "g"), value);
+            result = result.replace(new RegExp(`\\{\\{${key}\\}\\}`, "g"), replacement);
         }
         return result;
     }

@@ -40,10 +40,11 @@ function buildChunk(
     segments: CleanedSegment[]
 ): Chunk {
     const text = segments.map(s => s.text).join(' ');
+    const speakers = new Set(segments.map(s => s.speaker));
     return {
         meetingId,
         chunkIndex: index,
-        speaker: segments[0].speaker,
+        speaker: speakers.size === 1 ? segments[0].speaker : 'Mixed',
         startMs: segments[0].startMs,
         endMs: segments[segments.length - 1].endMs,
         text,
@@ -73,6 +74,15 @@ function calculateOverlap(segments: CleanedSegment[]): { overlapSegments: Cleane
 
     const overlapSegments = segments.slice(segments.length - count);
     return { overlapSegments, overlapTokens: tokens };
+}
+
+function shouldCarryCrossSpeakerOverlap(previousChunk: CleanedSegment[], nextSegment: CleanedSegment): boolean {
+    const previousSegment = previousChunk[previousChunk.length - 1];
+    if (!previousSegment) return false;
+    if (startsTopicShift(nextSegment.text)) return false;
+    return previousSegment.isQuestion
+        || nextSegment.isQuestion
+        || estimateTokens(previousSegment.text) <= OVERLAP_TARGET_TOKENS;
 }
 
 /**
@@ -122,11 +132,13 @@ export function chunkTranscript(
         if (shouldSplit && currentChunk.length > 0) {
             chunks.push(buildChunk(meetingId, chunkIndex++, currentChunk));
 
-            // Sliding window: carry last 1-2 segments as overlap into the new chunk
-            // This preserves semantic context across chunk boundaries
-            // Only carry overlap if the next segment is from the SAME speaker
-            // (speaker changes are natural boundaries — no overlap needed)
-            if (seg.speaker === currentChunk[currentChunk.length - 1].speaker) {
+            // Sliding window: carry last 1-2 segments as overlap into the new chunk.
+            // Preserve compact cross-speaker adjacency because interview follow-ups often
+            // rely on the immediately preceding question/answer pair.
+            if (
+                seg.speaker === currentChunk[currentChunk.length - 1].speaker ||
+                shouldCarryCrossSpeakerOverlap(currentChunk, seg)
+            ) {
                 const { overlapSegments, overlapTokens } = calculateOverlap(currentChunk);
                 currentChunk = [...overlapSegments];
                 currentTokens = overlapTokens;

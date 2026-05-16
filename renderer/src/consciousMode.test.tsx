@@ -3,7 +3,6 @@ import {
   ConsciousModeAnswer,
   classifyAssistRender,
   parseConsciousModeAnswer,
-  parseSimpleConsciousModeAnswer,
   validateConsciousModeGuardrails,
 } from '../../src/lib/consciousMode';
 
@@ -23,6 +22,23 @@ const structuredAnswer = [
   'Likely follow-ups:',
   '- They may ask how I would test stale data behavior.',
   'Code transition: If they ask for code, I would sketch the cache interface first.\n```ts\nconst cache = new Map<string, string>();\n```',
+].join('\n');
+
+const behavioralStructuredAnswer = [
+  'Question: Handled disagreement with a PM during a release',
+  'Headline:',
+  'I helped stabilize a risky release by aligning the PM and QA team around a narrower rollback decision.',
+  'Situation:',
+  'We were in the middle of a release and there was disagreement on whether we should keep pushing or roll back after a risky behavior change.',
+  'Task: I needed to get the release back to a safe state quickly without creating more confusion across the team.',
+  'Action:',
+  'I pulled the logs, checked the deployment diff, and isolated the smallest safe rollback. Then I aligned with QA on a quick validation pass and kept the PM updated on the tradeoff between speed and blast radius.',
+  'Result:',
+  'We stabilized the release the same day and added a clearer rollback checklist for future launches.',
+  'Why this answer works:',
+  '- Shows ownership under pressure',
+  '- Shows conflict resolution with evidence',
+  '- Ends with a process improvement',
 ].join('\n');
 
 test('parses backend Conscious Mode text into the five speaking blocks', () => {
@@ -97,59 +113,6 @@ test('placeholder-renders streaming Conscious Mode text until the payload is gua
   expect(screen.queryByText('Say This First')).not.toBeInTheDocument();
 });
 
-test('renders simple spoken fallback blocks when the answer is plain conversational text', () => {
-  const simpleAnswer = 'I would start with the API boundary first.\n\nThen I would separate reads from writes so scaling stays predictable.';
-
-  expect(parseSimpleConsciousModeAnswer(simpleAnswer)).toEqual({
-    paragraphs: [
-      'I would start with the API boundary first.',
-      'Then I would separate reads from writes so scaling stays predictable.',
-    ],
-  });
-
-  render(<ConsciousModeAnswer text={simpleAnswer} />);
-
-  expect(screen.getByText('I would start with the API boundary first.')).toBeInTheDocument();
-  expect(screen.getByText('Then I would separate reads from writes so scaling stays predictable.')).toBeInTheDocument();
-});
-
-test('renders concise spoken fallback code blocks without dropping the natural intro', () => {
-  const conciseCodeAnswer = [
-    'I would start with a simple debounce helper so the intent is clear before I optimize it.',
-    '',
-    '```ts',
-    'function debounce<T extends (...args: unknown[]) => void>(fn: T, wait: number) {',
-    '  let timer: ReturnType<typeof setTimeout> | undefined;',
-    '  return (...args: Parameters<T>) => {',
-    '    clearTimeout(timer);',
-    '    timer = setTimeout(() => fn(...args), wait);',
-    '  };',
-    '}',
-    '```',
-  ].join('\n');
-
-  render(<ConsciousModeAnswer text={conciseCodeAnswer} />);
-
-  expect(screen.getByText('I would start with a simple debounce helper so the intent is clear before I optimize it.')).toBeInTheDocument();
-  expect(screen.getByText(/function debounce/)).toBeInTheDocument();
-});
-
-test('falls back to raw text when the payload looks structured but is malformed', () => {
-  const malformedStructured = [
-    'Opening reasoning: I would start with the cache layer.',
-    'Implementation plan:',
-    '- Put the cache behind an interface.',
-  ].join('\n');
-
-  expect(parseConsciousModeAnswer(malformedStructured)).toBeNull();
-  expect(parseSimpleConsciousModeAnswer(malformedStructured)).toBeNull();
-
-  render(<ConsciousModeAnswer text={malformedStructured} />);
-
-  expect(screen.getByText(/Opening reasoning: I would start with the cache layer\./)).toBeInTheDocument();
-  expect(screen.queryByText('Say This First')).not.toBeInTheDocument();
-});
-
 test('classifies Conscious Mode analytics separately from standard interview assist', () => {
   expect(classifyAssistRender({
     answerText: structuredAnswer,
@@ -164,5 +127,28 @@ test('classifies Conscious Mode analytics separately from standard interview ass
   })).toEqual({
     output_variant: 'standard_interview_assist',
     thread_type: 'fresh_answer',
+  });
+});
+
+test('parses the behavioral STAR layout used by Conscious Mode grounded interview answers', () => {
+  const parsed = parseConsciousModeAnswer(behavioralStructuredAnswer);
+
+  expect(parsed).not.toBeNull();
+  expect(parsed?.sections.map((section: { title: string }) => section.title)).toEqual([
+    'Question',
+    'Headline',
+    'Situation',
+    'Task',
+    'Action',
+    'Result',
+    'Why this answer works',
+  ]);
+
+  expect(classifyAssistRender({
+    answerText: behavioralStructuredAnswer,
+    threadAction: 'start',
+  })).toEqual({
+    output_variant: 'conscious_mode',
+    thread_type: 'fresh_reasoning_thread',
   });
 });

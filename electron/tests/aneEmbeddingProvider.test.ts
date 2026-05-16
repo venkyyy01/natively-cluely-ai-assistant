@@ -1,5 +1,8 @@
 import { describe, it, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { ANEEmbeddingProvider } from '../rag/providers/ANEEmbeddingProvider';
 import { setOptimizationFlagsForTesting } from '../config/optimizations';
 
@@ -44,5 +47,34 @@ describe('ANEEmbeddingProvider', () => {
 
   it('throws a clear error when embed is called before initialization', async () => {
     await assert.rejects(() => provider.embed('Hello world'), /ANEEmbeddingProvider not initialized/);
+  });
+
+  it('normalizes tokenizer outputs that use inputIds without an explicit attention mask', () => {
+    const normalized = (provider as any).normalizeTokenization({
+      inputIds: Uint32Array.from([101, 102, 103]),
+    });
+
+    assert.deepEqual(normalized, {
+      ids: [101, 102, 103],
+      attentionMask: [1, 1, 1],
+    });
+  });
+
+  it('resolves bundled model assets from the shared models directory helper', () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'ane-model-path-'));
+    const modelsPath = path.join(tempRoot, 'resources', 'models');
+    const originalCwd = process.cwd();
+
+    fs.mkdirSync(modelsPath, { recursive: true });
+    process.chdir(tempRoot);
+
+    try {
+      assert.equal(
+        (provider as any).getModelPath(),
+        path.join(fs.realpathSync(modelsPath), 'Xenova', 'all-MiniLM-L6-v2', 'onnx', 'model_quantized.onnx'),
+      );
+    } finally {
+      process.chdir(originalCwd);
+    }
   });
 });

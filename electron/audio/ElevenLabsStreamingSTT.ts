@@ -4,6 +4,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { RECOGNITION_LANGUAGES } from '../config/languages';
+import { DropFrameMetric } from './dropMetrics';
 
 const ELEVENLABS_WS_URL = 'wss://api.elevenlabs.io/v1/speech-to-text/realtime';
 
@@ -18,6 +19,8 @@ export class ElevenLabsStreamingSTT extends EventEmitter {
     private targetSampleRate = 16000; // what ElevenLabs Scribe v2 requires
     
     private buffer: Buffer[] = [];
+    // NAT-021 / audit R-11: visible drop telemetry for backpressure.
+    private dropMetric = new DropFrameMetric({ provider: 'elevenlabs' });
     private isConnecting = false;
     private isSessionReady = false;
     private languageCode = 'en'; // Default to English
@@ -92,9 +95,11 @@ export class ElevenLabsStreamingSTT extends EventEmitter {
     public start(): void {
         if (this.isActive) return;     // Already active
         if (this.isConnecting) return; // Already mid-connect (prevents double-connect race)
+        this.isActive = true;
         this.shouldReconnect = true;
         this.reconnectAttempts = 0;
         this.ensureDebugWriteStream();
+        this.dropMetric.start(); // NAT-021
         this.connect();
     }
 
@@ -117,6 +122,7 @@ export class ElevenLabsStreamingSTT extends EventEmitter {
             this.debugWriteStream.end();
             this.debugWriteStream = null;
         }
+        this.dropMetric.stop(); // NAT-021
         console.log('[ElevenLabsStreaming] Stopped');
     }
 
@@ -137,6 +143,7 @@ export class ElevenLabsStreamingSTT extends EventEmitter {
             this.buffer.push(chunk);
             if (this.buffer.length > 500) {
                 this.buffer.shift(); // Cap buffer size
+                this.dropMetric.recordDrop(); // NAT-021
                 console.warn('[ElevenLabsStreaming] Buffer full — oldest audio chunk dropped.');
             }
 
@@ -161,6 +168,7 @@ export class ElevenLabsStreamingSTT extends EventEmitter {
                 // No downsampling needed
                 outputS16 = inputS16;
             } else {
+                // Legacy path: native NAT-043 resample should make inputSampleRate === 16000.
                 // Downsample from inputSampleRate (e.g. 48000) to 16000Hz
                 const downsampleFactor = this.inputSampleRate / this.targetSampleRate;
                 const outputLength = Math.floor(inputS16.length / downsampleFactor);
@@ -333,7 +341,7 @@ export class ElevenLabsStreamingSTT extends EventEmitter {
             }
             if (this.shouldReconnect && code !== 1000) {
                 this.scheduleReconnect();
-            } else {
+            } else if (!this.shouldReconnect) {
                 // If not reconnecting, mark session as truly inactive
                 this.isActive = false;
             }

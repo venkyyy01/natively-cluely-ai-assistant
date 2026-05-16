@@ -1,25 +1,31 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { EventEmitter } from 'node:events';
 import Module from 'node:module';
 
-function installElectronMock(): () => void {
+function installElectronMock(createdBrowserWindowOptions: Array<Record<string, unknown>> = []): () => void {
   const originalLoad = (Module as any)._load;
 
   (Module as any)._load = function patchedLoad(request: string, parent: unknown, isMain: boolean) {
     if (request === 'electron') {
       return {
-        BrowserWindow: class BrowserWindow {},
+        BrowserWindow: class BrowserWindow {
+          constructor(options: Record<string, unknown>) {
+            createdBrowserWindowOptions.push(options);
+          }
+
+          isDestroyed(): boolean {
+            return false;
+          }
+        },
         screen: {
           getPrimaryDisplay: () => ({ workAreaSize: { width: 1440, height: 900 }, workArea: { x: 0, y: 0, width: 1440, height: 900 } }),
-          getDisplayMatching: () => ({ workAreaSize: { width: 1440, height: 900 }, workArea: { x: 0, y: 0, width: 1440, height: 900 } }),
-          getDisplayNearestPoint: () => ({ workAreaSize: { width: 1440, height: 900 }, workArea: { x: 0, y: 0, width: 1440, height: 900 } }),
-          getCursorScreenPoint: () => ({ x: 100, y: 100 }),
         },
         app: {
           isPackaged: false,
           getAppPath: () => '/tmp/app',
         },
-        ipcMain: { on() {}, removeListener() {} },
+        ipcMain: { on() { }, removeListener() { } },
       };
     }
 
@@ -35,13 +41,20 @@ test('WindowHelper treats overlay as a primary stealth surface', async () => {
   const restoreElectron = installElectronMock();
   const windowHelperPath = require.resolve('../WindowHelper');
   delete require.cache[windowHelperPath];
+  const originalResourcesPath = process.resourcesPath;
+  (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath = '/tmp/resources';
 
   try {
     const { WindowHelper } = await import('../WindowHelper');
-    const calls: Array<{ enable: boolean; role?: string; hideFromSwitcher?: boolean }> = [];
+    const calls: Array<{ enable: boolean; role?: string; hideFromSwitcher?: boolean; allowVirtualDisplayIsolation?: boolean }> = [];
     const fakeStealthManager = {
-      applyToWindow(_win: unknown, enable: boolean, options: { role?: string; hideFromSwitcher?: boolean }) {
-        calls.push({ enable, role: options.role, hideFromSwitcher: options.hideFromSwitcher });
+      applyToWindow(_win: unknown, enable: boolean, options: { role?: string; hideFromSwitcher?: boolean; allowVirtualDisplayIsolation?: boolean }) {
+        calls.push({
+          enable,
+          role: options.role,
+          hideFromSwitcher: options.hideFromSwitcher,
+          allowVirtualDisplayIsolation: options.allowVirtualDisplayIsolation,
+        });
       },
     };
 
@@ -52,9 +65,36 @@ test('WindowHelper treats overlay as a primary stealth surface', async () => {
     helper.setContentProtection(true);
 
     assert.deepEqual(calls, [
-      { enable: true, role: 'primary', hideFromSwitcher: false },
-      { enable: true, role: 'primary', hideFromSwitcher: false },
+      { enable: true, role: 'primary', hideFromSwitcher: true, allowVirtualDisplayIsolation: true },
+      { enable: true, role: 'primary', hideFromSwitcher: true, allowVirtualDisplayIsolation: true },
     ]);
+  } finally {
+    (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath = originalResourcesPath;
+    restoreElectron();
+  }
+});
+
+test('WindowHelper creates persisted invisible launcher hidden from taskbar at birth', async () => {
+  const createdBrowserWindowOptions: Array<Record<string, unknown>> = [];
+  const restoreElectron = installElectronMock(createdBrowserWindowOptions);
+  const windowHelperPath = require.resolve('../WindowHelper');
+  delete require.cache[windowHelperPath];
+
+  try {
+    const { WindowHelper } = await import('../WindowHelper');
+    const helper = new WindowHelper({ getUndetectable: () => true } as never, {
+      applyInitialStealth() { },
+      recordProtectionEvent() { },
+    } as never);
+
+    (helper as any).createDirectWindow({
+      show: true,
+      skipTaskbar: false,
+    });
+
+    assert.equal(createdBrowserWindowOptions.length, 1);
+    assert.equal(createdBrowserWindowOptions[0].show, false);
+    assert.equal(createdBrowserWindowOptions[0].skipTaskbar, true);
   } finally {
     restoreElectron();
   }
@@ -67,7 +107,7 @@ test('WindowHelper centers overlay using the overlay height', async () => {
 
   try {
     const { WindowHelper } = await import('../WindowHelper');
-    const helper = new WindowHelper({} as never, { applyToWindow() {}, reapplyAfterShow() {} } as never);
+    const helper = new WindowHelper({} as never, { applyToWindow() { }, reapplyAfterShow() { } } as never);
     let appliedBounds: { x: number; y: number; width: number; height: number } | null = null;
 
     (helper as any).overlayWindow = {
@@ -76,19 +116,20 @@ test('WindowHelper centers overlay using the overlay height', async () => {
       setBounds: (bounds: { x: number; y: number; width: number; height: number }) => {
         appliedBounds = bounds;
       },
-      setIgnoreMouseEvents() {},
-      setFocusable() {},
-      blur() {},
-      show() {},
-      focus() {},
-      setAlwaysOnTop() {},
+      setIgnoreMouseEvents() { },
+      setFocusable() { },
+      blur() { },
+      show() { },
+      showInactive() { },
+      focus() { },
+      setAlwaysOnTop() { },
     };
     (helper as any).overlayRuntime = {
-      applyStealth() {},
+      applyStealth() { },
     };
     (helper as any).launcherWindow = {
       isDestroyed: () => false,
-      hide() {},
+      hide() { },
     };
 
     helper.switchToOverlay();
@@ -111,7 +152,7 @@ test('WindowHelper can show and hide a direct launcher window when StealthRuntim
       applyToWindow(_win: unknown, enable: boolean, options: { role?: string }) {
         stealthCalls.push({ enable, role: options.role });
       },
-      reapplyAfterShow() {},
+      reapplyAfterShow() { },
     } as never);
 
     let launcherShown = 0;
@@ -120,12 +161,13 @@ test('WindowHelper can show and hide a direct launcher window when StealthRuntim
     let overlayHidden = 0;
 
     (helper as any).launcherRuntime = null;
+    (helper as any).directLauncherLoaded = true;
     (helper as any).launcherWindow = {
       isDestroyed: () => false,
       show() { launcherShown += 1; },
       hide() { launcherHidden += 1; },
       focus() { launcherFocused += 1; },
-      setOpacity() {},
+      setOpacity() { },
     };
     (helper as any).overlayWindow = {
       isDestroyed: () => false,
@@ -145,30 +187,366 @@ test('WindowHelper can show and hide a direct launcher window when StealthRuntim
   }
 });
 
-test('WindowHelper avoids StealthRuntime on Windows standard mode', async () => {
+test('WindowHelper defers direct launcher show requests until the renderer load completes', async () => {
   const restoreElectron = installElectronMock();
-  const originalPlatform = process.platform;
   const windowHelperPath = require.resolve('../WindowHelper');
   delete require.cache[windowHelperPath];
 
-  Object.defineProperty(process, 'platform', {
-    configurable: true,
-    value: 'win32',
-  });
+  try {
+    const { WindowHelper } = await import('../WindowHelper');
+    const helper = new WindowHelper({} as never, { applyToWindow() { }, reapplyAfterShow() { } } as never);
+
+    let launcherShown = 0;
+
+    (helper as any).launcherRuntime = null;
+    (helper as any).directLauncherLoaded = false;
+    (helper as any).launcherWindow = {
+      isDestroyed: () => false,
+      show() { launcherShown += 1; },
+      focus() { },
+      setOpacity() { },
+      hide() { },
+    };
+    (helper as any).overlayWindow = {
+      isDestroyed: () => false,
+      hide() { },
+    };
+
+    helper.switchToLauncher();
+
+    assert.equal(launcherShown, 0);
+    assert.equal((helper as any).pendingDirectLauncherReveal, true);
+    assert.equal(helper.isVisible(), false);
+  } finally {
+    restoreElectron();
+  }
+});
+
+test('WindowHelper reveals the direct launcher after did-finish-load when a show request is pending', async () => {
+  const restoreElectron = installElectronMock();
+  const windowHelperPath = require.resolve('../WindowHelper');
+  delete require.cache[windowHelperPath];
 
   try {
     const { WindowHelper } = await import('../WindowHelper');
-    const helper = new WindowHelper({} as never, {} as never);
+    const helper = new WindowHelper({} as never, { applyToWindow() { }, reapplyAfterShow() { } } as never);
 
-    assert.equal((helper as any).shouldUseStealthRuntime(), false);
+    class FakeWebContents extends EventEmitter {
+      executeJavaScript(): Promise<boolean> {
+        return Promise.resolve(true);
+      }
 
-    helper.setContentProtection(true);
-    assert.equal((helper as any).shouldUseStealthRuntime(), true);
+      reloadIgnoringCache(): void { }
+    }
+
+    class FakeWindow extends EventEmitter {
+      public webContents = new FakeWebContents();
+
+      isDestroyed(): boolean {
+        return false;
+      }
+
+      setOpacity(): void { }
+      hide(): void { }
+      show(): void { }
+      showInactive(): void { }
+      focus(): void { }
+      setIgnoreMouseEvents(): void { }
+      setFocusable(): void { }
+      blur(): void { }
+      setVisibleOnAllWorkspaces(): void { }
+      setAlwaysOnTop(): void { }
+      setBounds(): void { }
+
+      getBounds() {
+        return { x: 0, y: 0, width: 600, height: 300 };
+      }
+
+      close(): void { }
+    }
+
+    let launcherShown = 0;
+    let launcherFocused = 0;
+    const launcherWindow = new FakeWindow();
+    launcherWindow.show = () => {
+      launcherShown += 1;
+    };
+    launcherWindow.focus = () => {
+      launcherFocused += 1;
+    };
+
+    const overlayWindow = new FakeWindow();
+    overlayWindow.show = () => { };
+    overlayWindow.showInactive = () => { };
+    overlayWindow.focus = () => { };
+    overlayWindow.setBounds = () => { };
+    overlayWindow.hide = () => { };
+
+    const appState = {
+      getDisguise: () => 'none',
+      handleStealthRuntimeFault() { },
+      settingsWindowHelper: { reposition() { } },
+    };
+
+    (helper as any).appState = appState;
+    let windowCreationCount = 0;
+    (helper as any).createDirectWindow = () => {
+      windowCreationCount += 1;
+      return windowCreationCount === 1 ? launcherWindow : overlayWindow;
+    };
+    (helper as any).loadDirectWindow = () => { };
+    (helper as any).currentWindowMode = 'launcher';
+
+    helper.createWindow();
+
+    assert.equal((helper as any).directLauncherLoaded, false);
+    assert.equal((helper as any).pendingDirectLauncherReveal, true);
+
+    launcherWindow.webContents.emit('did-finish-load');
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.equal((helper as any).directLauncherLoaded, true);
+    assert.equal((helper as any).pendingDirectLauncherReveal, false);
+    assert.equal(launcherShown, 1);
+    assert.equal(launcherFocused, 2);
   } finally {
-    Object.defineProperty(process, 'platform', {
-      configurable: true,
-      value: originalPlatform,
+    restoreElectron();
+  }
+});
+
+test('WindowHelper blocks startup launcher reveal in strict mode when verification fails', async () => {
+  const restoreElectron = installElectronMock();
+  const windowHelperPath = require.resolve('../WindowHelper');
+  delete require.cache[windowHelperPath];
+  const previousStrict = process.env.NATIVELY_STRICT_PROTECTION;
+  process.env.NATIVELY_STRICT_PROTECTION = '1';
+
+  try {
+    const { WindowHelper } = await import('../WindowHelper');
+
+    class FakeWebContents extends EventEmitter {
+      executeJavaScript(): Promise<boolean> {
+        return Promise.resolve(true);
+      }
+
+      reloadIgnoringCache(): void { }
+    }
+
+    class FakeWindow extends EventEmitter {
+      public webContents = new FakeWebContents();
+
+      isDestroyed(): boolean {
+        return false;
+      }
+
+      setOpacity(): void { }
+      hide(): void { }
+      show(): void { }
+      showInactive(): void { }
+      focus(): void { }
+      setIgnoreMouseEvents(): void { }
+      setFocusable(): void { }
+      blur(): void { }
+      setVisibleOnAllWorkspaces(): void { }
+      setAlwaysOnTop(): void { }
+      setBounds(): void { }
+
+      getBounds() {
+        return { x: 0, y: 0, width: 600, height: 300 };
+      }
+
+      close(): void { }
+    }
+
+    let launcherShown = 0;
+    const launcherWindow = new FakeWindow();
+    launcherWindow.show = () => {
+      launcherShown += 1;
+    };
+
+    const overlayWindow = new FakeWindow();
+    let windowCreationCount = 0;
+    const privacyFaults: Array<{ key: string; reason: string }> = [];
+    const stealthEvents: string[] = [];
+
+    const appState = {
+      getDisguise: () => 'none',
+      handleStealthRuntimeFault() { },
+      settingsWindowHelper: { reposition() { } },
+      shouldStartRendererShielded: () => false,
+      getVisibilityIntent: () => 'visible_app',
+      setPrivacyShieldFault(key: string, reason: string) {
+        privacyFaults.push({ key, reason });
+      },
+    };
+
+    const helper = new WindowHelper(appState as never, {
+      applyToWindow() { },
+      reapplyAfterShow() { },
+      verifyManagedWindows() {
+        return false;
+      },
+      recordProtectionEvent(type: string) {
+        stealthEvents.push(type);
+      },
+    } as never);
+
+    (helper as any).createDirectWindow = () => {
+      windowCreationCount += 1;
+      return windowCreationCount === 1 ? launcherWindow : overlayWindow;
+    };
+    (helper as any).loadDirectWindow = () => { };
+    (helper as any).currentWindowMode = 'launcher';
+
+    helper.createWindow();
+
+    launcherWindow.webContents.emit('did-finish-load');
+    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.equal(launcherShown, 0);
+    assert.equal((helper as any).pendingDirectLauncherReveal, false);
+    assert.deepEqual(privacyFaults.map((fault) => fault.key), ['startup_protection_verification_failed']);
+    assert.ok(stealthEvents.includes('verification-failed'));
+  } finally {
+    if (previousStrict === undefined) {
+      delete process.env.NATIVELY_STRICT_PROTECTION;
+    } else {
+      process.env.NATIVELY_STRICT_PROTECTION = previousStrict;
+    }
+    restoreElectron();
+  }
+});
+
+test('WindowHelper allows observe-only visible safe controls reveal when protection verification fails', async () => {
+  const restoreElectron = installElectronMock();
+  const windowHelperPath = require.resolve('../WindowHelper');
+  delete require.cache[windowHelperPath];
+  const previousStrict = process.env.NATIVELY_STRICT_PROTECTION;
+  delete process.env.NATIVELY_STRICT_PROTECTION;
+
+  try {
+    const { WindowHelper } = await import('../WindowHelper');
+
+    class FakeWindow extends EventEmitter {
+      public shown = 0;
+
+      isDestroyed(): boolean {
+        return false;
+      }
+
+      show(): void {
+        this.shown += 1;
+      }
+    }
+
+    const appState = {
+      getVisibilityIntent: () => 'visible_safe_controls',
+    };
+    const stealthEvents: string[] = [];
+
+    const helper = new WindowHelper(appState as never, {
+      isEnabled: () => true,
+      applyToWindow() { },
+      reapplyAfterShow() { },
+      verifyStealth() {
+        return false;
+      },
+      recordProtectionEvent(type: string) {
+        stealthEvents.push(type);
+      },
+    } as never);
+    const launcherWindow = new FakeWindow();
+
+    (helper as any).requestWindowShow(launcherWindow, 'test.observe-only', 'primary');
+
+    assert.equal(launcherWindow.shown, 1);
+    assert.ok(stealthEvents.includes('verification-failed'));
+  } finally {
+    if (previousStrict === undefined) {
+      delete process.env.NATIVELY_STRICT_PROTECTION;
+    } else {
+      process.env.NATIVELY_STRICT_PROTECTION = previousStrict;
+    }
+    restoreElectron();
+  }
+});
+
+test('WindowHelper keeps faulted invisible mode controls visible outside strict mode', async () => {
+  const restoreElectron = installElectronMock();
+  const windowHelperPath = require.resolve('../WindowHelper');
+  delete require.cache[windowHelperPath];
+  const previousStrict = process.env.NATIVELY_STRICT_PROTECTION;
+  delete process.env.NATIVELY_STRICT_PROTECTION;
+
+  try {
+    const { WindowHelper } = await import('../WindowHelper');
+
+    class FakeWindow extends EventEmitter {
+      public shown = 0;
+
+      isDestroyed(): boolean {
+        return false;
+      }
+
+      show(): void {
+        this.shown += 1;
+      }
+    }
+
+    const appState = {
+      getUndetectable: () => true,
+      getVisibilityIntent: () => 'faulted_shield',
+    };
+    const stealthEvents: string[] = [];
+
+    const helper = new WindowHelper(appState as never, {
+      isEnabled: () => true,
+      applyToWindow() { },
+      reapplyAfterShow() { },
+      verifyStealth() {
+        return false;
+      },
+      recordProtectionEvent(type: string) {
+        stealthEvents.push(type);
+      },
+    } as never);
+    const launcherWindow = new FakeWindow();
+
+    (helper as any).requestWindowShow(launcherWindow, 'test.faulted-local-controls', 'primary');
+
+    assert.equal(launcherWindow.shown, 1);
+    assert.ok(stealthEvents.includes('verification-failed'));
+  } finally {
+    if (previousStrict === undefined) {
+      delete process.env.NATIVELY_STRICT_PROTECTION;
+    } else {
+      process.env.NATIVELY_STRICT_PROTECTION = previousStrict;
+    }
+    restoreElectron();
+  }
+});
+
+test('WindowHelper forwards stealth runtime heartbeat events to the registered listener', async () => {
+  const restoreElectron = installElectronMock();
+  const windowHelperPath = require.resolve('../WindowHelper');
+  delete require.cache[windowHelperPath];
+
+  try {
+    const { WindowHelper } = await import('../WindowHelper');
+    const helper = new WindowHelper({} as never, { applyToWindow() { }, reapplyAfterShow() { } } as never);
+    let heartbeatCount = 0;
+
+    helper.setStealthRuntimeHeartbeatListener(() => {
+      heartbeatCount += 1;
     });
+
+    const listener = (helper as any).stealthHeartbeatListener as (() => void) | null;
+    listener?.();
+    listener?.();
+
+    assert.equal(heartbeatCount, 2);
+  } finally {
     restoreElectron();
   }
 });

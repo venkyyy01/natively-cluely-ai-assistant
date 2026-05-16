@@ -51,6 +51,13 @@ test('ipc schemas validate additional accepted shapes', () => {
     'open-mailto',
   );
   assert.equal(mailto.to, 'test@example.com');
+
+  assert.equal(parseIpcInput(ipcSchemas.audioDeviceId, 'mic-1', 'start-audio-test'), 'mic-1');
+  assert.equal(parseIpcInput(ipcSchemas.meetingId, 'meeting-1', 'get-meeting-details'), 'meeting-1');
+  assert.equal(parseIpcInput(ipcSchemas.externalUrl, 'https://example.com', 'open-external'), 'https://example.com');
+
+  const longGmailUrl = `https://mail.google.com/mail/?view=cm&fs=1&body=${encodeURIComponent('x'.repeat(12000))}`;
+  assert.equal(parseIpcInput(ipcSchemas.externalUrl, longGmailUrl, 'open-external'), longGmailUrl);
 });
 
 test('parseIpcInput reports joined zod issue paths', () => {
@@ -69,6 +76,10 @@ test('parseIpcInput reports joined zod issue paths', () => {
   assert.throws(() => {
     parseIpcInput(ipcSchemas.openMailtoInput, null, 'open-mailto');
   }, /root:/);
+
+  assert.throws(() => {
+    parseIpcInput(ipcSchemas.externalUrl, 'file:///tmp/test', 'open-external');
+  }, /Expected a valid http, https, or mailto URL/);
 });
 
 test('generate suggestion args validation accepts bounded valid payload', () => {
@@ -97,8 +108,12 @@ test('settings, profile, and rag validation schemas accept bounded payloads', ()
   assert.equal(parseIpcInput(ipcSchemas.profileFilePath, '/tmp/resume.pdf', 'profile:upload-resume'), '/tmp/resume.pdf');
   assert.equal(parseIpcInput(ipcSchemas.profileCompanyName, 'Acme', 'profile:research-company'), 'Acme');
   assert.deepEqual(
-    parseIpcInput(ipcSchemas.sttConnectionArgs, ['deepgram', '', undefined], 'test-stt-connection'),
-    ['deepgram', '', undefined],
+    parseIpcInput(ipcSchemas.llmConnectionArgs, ['cerebras', 'test-key'], 'test-llm-connection'),
+    ['cerebras', 'test-key'],
+  );
+  assert.deepEqual(
+    parseIpcInput(ipcSchemas.fastResponseConfig, { enabled: true, provider: 'cerebras', model: 'gpt-oss-120b' }, 'set-fast-response-config'),
+    { enabled: true, provider: 'cerebras', model: 'gpt-oss-120b' },
   );
 
   assert.deepEqual(
@@ -125,6 +140,18 @@ test('settings, profile, and rag validation schemas reject malformed payloads', 
   }, /Invalid IPC payload/);
 
   assert.throws(() => {
+    parseIpcInput(ipcSchemas.fastResponseConfig, { enabled: true, provider: 'openai', model: 'gpt-5' }, 'set-fast-response-config');
+  }, /Invalid IPC payload/);
+
+  assert.throws(() => {
     parseIpcInput(ipcSchemas.ragCancelQuery, {}, 'rag:cancel-query');
+  }, /Invalid IPC payload/);
+
+  assert.throws(() => {
+    parseIpcInput(ipcSchemas.audioDeviceId, '   ', 'start-audio-test');
+  }, /Invalid IPC payload/);
+
+  assert.throws(() => {
+    parseIpcInput(ipcSchemas.meetingId, '', 'get-meeting-details');
   }, /Invalid IPC payload/);
 });

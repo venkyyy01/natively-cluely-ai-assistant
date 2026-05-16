@@ -88,6 +88,7 @@ export type MacosLayer3BlockerCode =
   | 'physical-display-mechanism-unproven'
   | 'screen-recording-permission-missing'
   | 'native-presenter-unavailable'
+  | 'stealth-heartbeat-missed'
   | 'session-not-found'
   | 'surface-not-attached'
   | 'surface-already-attached'
@@ -111,6 +112,7 @@ export interface MacosLayer3ResponseEnvelope<T> {
   presentationAllowed: boolean;
   blockers: MacosLayer3Blocker[];
   data: T;
+  nonce?: string;
 }
 
 export interface MacosLayer3CapabilityReport {
@@ -201,6 +203,7 @@ export type MacosLayer3ControlPlaneMethod =
   | 'createProtectedSession'
   | 'attachSurface'
   | 'present'
+  | 'heartbeat'
   | 'teardownSession'
   | 'getHealth'
   | 'getTelemetry'
@@ -237,6 +240,12 @@ export const MACOS_LAYER3_METHOD_SEMANTICS: MacosLayer3MethodSemantics[] = [
     failClosed: true,
     degradedAllowed: false,
     note: 'Presentation may start only on ok; degraded or blocked states must keep presentation disabled.',
+  },
+  {
+    method: 'heartbeat',
+    failClosed: true,
+    degradedAllowed: false,
+    note: 'Heartbeat is fail-closed; missed deadlines must block presentation until the session is explicitly recovered or re-armed.',
   },
   {
     method: 'teardownSession',

@@ -1,0 +1,947 @@
+import {
+  classifyConsciousModeQuestion,
+  formatConsciousModeResponse,
+  isValidConsciousModeResponse,
+  type ConsciousModeQuestionRoute,
+  type ConsciousModeStructuredResponse,
+  type ReasoningThread,
+  isBehavioralQuestionText,
+} from '../ConsciousMode';
+import { SemanticThreadMatcher } from './SemanticThreadMatcher';
+import type { QuestionReaction } from './QuestionReactionClassifier';
+import type { AnswerHypothesis } from './AnswerHypothesisStore';
+import { ConsciousAnswerPlanner } from './ConsciousAnswerPlanner';
+import type { TemporalContext } from '../llm/TemporalContextBuilder';
+import type { IntentResult } from '../llm/IntentClassifier';
+import type { WhatToAnswerLLM } from '../llm/WhatToAnswerLLM';
+import type { AnswerLLM } from '../llm/AnswerLLM';
+import type { FollowUpLLM } from '../llm/FollowUpLLM';
+import { selectAnswerRoute } from '../latency/answerRouteSelector';
+import type { AnswerRoute } from '../latency/AnswerLatencyTracker';
+import { ConsciousRetrievalOrchestrator } from './ConsciousRetrievalOrchestrator';
+import { isStrongConsciousIntent, isUncertainConsciousIntent } from './ConsciousIntentService';
+import { ConsciousProvenanceVerifier } from './ConsciousProvenanceVerifier';
+import { ConsciousVerifier } from './ConsciousVerifier';
+import { salvageResponse } from './ResponseSalvager';
+import { LayeredIntentRouter, isReliableIntent } from '../llm/LayeredIntentRouter';
+import type { IntentClassificationCoordinator } from '../llm/providers/IntentClassificationCoordinator';
+import { isVerifierOptimizationActive, isConsciousOptimizationActive } from '../config/optimizations';
+import { classifyProbeType, isBehavioralReask } from './ProbeTypeClassifier';
+import type { ProbeAnswer, CodingProblem } from '../coding/types';
+import { isCodingProblemComplete } from '../coding/ProblemExtractor';
+import { logEvent } from '../runtime/ObservabilityLogger';
+import { Metrics } from '../runtime/Metrics';
+import { FlexibleResponseRouter, type ConsciousTurnPlan } from './FlexibleResponseRouter';
+import { HumanLikeConversationEngine } from './HumanLikeConversationEngine';
+import { ConsciousRefinementOrchestrator } from './ConsciousRefinementOrchestrator';
+import { AdaptiveVerificationGate } from './AdaptiveVerificationGate';
+import { TOPIC_SHIFT_CLASSIFICATION_PROMPT } from '../llm/prompts';
+
+interface StructuredGenerationClient {
+  generateContentStructured(message: string): Promise<string>;
+}
+
+interface KnowledgeStatusLike {
+  activeMode?: unknown;
+  hasResume?: unknown;
+  hasActiveJD?: unknown;
+}
+
+interface ConsciousSession {
+  isConsciousModeEnabled(): boolean;
+  getActiveReasoningThread(): ReasoningThread | null;
+  getLatestConsciousResponse(): ConsciousModeStructuredResponse | null;
+  clearConsciousModeThread(): void;
+  getFormattedContext(lastSeconds: number): string;
+  getConsciousEvidenceContext(): string;
+  getConsciousSemanticContext(): string;
+  getConsciousLongMemoryContext(question: string): string;
+  getLatestQuestionReaction(): QuestionReaction | null;
+  getLatestAnswerHypothesis(): AnswerHypothesis | null;
+  recordConsciousResponse(
+    question: string,
+    response: ConsciousModeStructuredResponse,
+    threadAction: 'start' | 'continue' | 'reset'
+  ): void;
+  /** NAT-202: Append a Tier-B probe to the active reasoning thread. */
+  appendProbe(probe: ProbeAnswer): void;
+}
+
+export interface PreparedConsciousRoute {
+  preRouteDecision: ConsciousModeQuestionRoute;
+  activeReasoningThread: ReasoningThread | null;
+  selectedRoute: AnswerRoute;
+  effectiveRoute: AnswerRoute;
+  standardRouteAfterConsciousFallback: AnswerRoute;
+}
+
+export type ConsciousExecutionResult =
+  | { kind: 'skip' }
+  | { kind: 'fallback' }
+  | {
+      kind: 'handled';
+      structuredResponse: ConsciousModeStructuredResponse;
+      fullAnswer: string;
+      verification: ConsciousVerificationMetadata;
+      /** NAT-204: Present only for Tier-B probe answers. */
+      probeAnswer?: ProbeAnswer;
+    };
+
+export interface ConsciousVerificationMetadata {
+  deterministic: 'pass' | 'fail' | 'skipped';
+  judge: 'pass' | 'fail' | 'skipped';
+  provenance: 'pass' | 'fail' | 'skipped';
+  reasons: string[];
+}
+
+export class ConsciousOrchestrator {
+  private static readonly CIRCUIT_BREAKER_FAILURE_THRESHOLD = 6;
+  private static readonly CIRCUIT_BREAKER_COOLDOWN_MS = 20_000;
+  // NAT-CM-AUDIT: tiny LRU for topic-compatibility verdicts. Same (thread.lastQuestion,
+  // candidate question) pair gets queried repeatedly when the user retries — caching
+  // saves 1.2s of LLM time per retry without changing semantics.
+  private static readonly TOPIC_COMPAT_CACHE_SIZE = 32;
+  private readonly topicCompatCache = new Map<string, boolean>();
+
+  private readonly verifier = new ConsciousVerifier();
+  private readonly retrievalOrchestrator: ConsciousRetrievalOrchestrator;
+  private readonly answerPlanner = new ConsciousAnswerPlanner();
+  private readonly provenanceVerifier = new ConsciousProvenanceVerifier();
+  private readonly semanticThreadMatcher = new SemanticThreadMatcher();
+  private readonly humanConversationEngine = new HumanLikeConversationEngine();
+  private readonly verificationGate = new AdaptiveVerificationGate();
+  private readonly refinementOrchestrator = new ConsciousRefinementOrchestrator();
+  private readonly flexibleRouter: FlexibleResponseRouter;
+  private consecutiveFailures = 0;
+  private circuitOpenUntil = 0;
+
+  constructor(
+    private readonly session: ConsciousSession,
+    verifier?: ConsciousVerifier,
+    private readonly structuredClient?: StructuredGenerationClient,
+  ) {
+    if (verifier) {
+      this.verifier = verifier;
+    }
+    this.retrievalOrchestrator = new ConsciousRetrievalOrchestrator(this.session);
+    this.flexibleRouter = new FlexibleResponseRouter(
+      this.humanConversationEngine,
+      this.verificationGate,
+    );
+  }
+
+  /**
+   * Plan a single conscious turn. The IntelligenceEngine calls this BEFORE
+   * deciding whether to enter the conscious pipeline so that smalltalk,
+   * acknowledgements, and refinement requests can short-circuit to standard
+   * mode (which already handles them naturally). Gated by the
+   * `useHumanLikeConsciousMode` flag — with the flag off, every turn is
+   * planned as a strict, structured conscious answer (legacy behaviour).
+   */
+  planTurn(utterance: string): ConsciousTurnPlan {
+    const enabled = isConsciousOptimizationActive('useHumanLikeConsciousMode');
+    return this.flexibleRouter.plan({
+      utterance,
+      options: { enabled },
+    });
+  }
+
+  /**
+   * Build the LLM prompt needed to refine a previous conscious-mode answer.
+   * Returns null when refinement is disabled, the intent is missing, or the
+   * refinement would be a no-op (e.g. asking to shorten an already short
+   * answer).
+   *
+   * The IntelligenceEngine streams the prompt through the standard answer
+   * LLM path so streaming, abort signals, and stealth containment are
+   * handled uniformly with non-conscious refinements.
+   */
+  buildRefinementPrompt(input: {
+    plan: ConsciousTurnPlan;
+    previousAnswer: string;
+    lastInterviewerQuestion?: string;
+    userRefinementRequest: string;
+  }): { systemPrompt: string; userMessage: string } | null {
+    if (!isConsciousOptimizationActive('useConsciousRefinement')) {
+      return null;
+    }
+    const intent = input.plan.refinementIntent;
+    if (!intent || input.plan.conversationKind !== 'refinement') {
+      return null;
+    }
+    if (!this.refinementOrchestrator.isRefinementUseful({ intent, previousAnswer: input.previousAnswer })) {
+      return null;
+    }
+    return this.refinementOrchestrator.buildPrompt({
+      intent,
+      previousAnswer: input.previousAnswer,
+      lastInterviewerQuestion: input.lastInterviewerQuestion,
+      userRefinementRequest: input.userRefinementRequest,
+    });
+  }
+
+  /**
+   * Test/inspection hook: expose the embedded refinement orchestrator so
+   * that test fixtures and other modules can reuse the same flatten/prompt
+   * logic without duplicating it.
+   */
+  getRefinementOrchestrator(): ConsciousRefinementOrchestrator {
+    return this.refinementOrchestrator;
+  }
+
+  private isCircuitOpen(now: number = Date.now()): boolean {
+    return now < this.circuitOpenUntil;
+  }
+
+  private recordExecutionSuccess(): void {
+    this.consecutiveFailures = 0;
+    this.circuitOpenUntil = 0;
+  }
+
+  private recordExecutionFailure(reason: string): void {
+    this.consecutiveFailures += 1;
+    if (this.consecutiveFailures >= ConsciousOrchestrator.CIRCUIT_BREAKER_FAILURE_THRESHOLD) {
+      this.circuitOpenUntil = Date.now() + ConsciousOrchestrator.CIRCUIT_BREAKER_COOLDOWN_MS;
+      console.warn('[ConsciousOrchestrator] Opening conscious-mode circuit breaker after repeated failures:', {
+        reason,
+        consecutiveFailures: this.consecutiveFailures,
+        cooldownMs: ConsciousOrchestrator.CIRCUIT_BREAKER_COOLDOWN_MS,
+      });
+    }
+  }
+
+  private fallback(reason: string): ConsciousExecutionResult {
+    this.recordExecutionFailure(reason);
+    return { kind: 'fallback' };
+  }
+
+  private buildVerificationMetadata(input: {
+    provenanceOk: boolean;
+    provenanceReason?: string;
+    verificationOk: boolean;
+    verificationReason?: string;
+    deterministic?: 'pass' | 'fail' | 'skipped';
+    judge?: 'pass' | 'fail' | 'skipped';
+  }): ConsciousVerificationMetadata {
+    const reasons = [input.provenanceReason, input.verificationReason].filter((reason): reason is string => Boolean(reason));
+    return {
+      deterministic: input.deterministic ?? (input.verificationOk ? 'pass' : 'fail'),
+      judge: input.judge ?? 'skipped',
+      provenance: input.provenanceOk ? 'pass' : 'fail',
+      reasons,
+    };
+  }
+
+  private static readonly THREAD_COMPATIBILITY_STOPWORDS = new Set([
+    'the', 'and', 'for', 'with', 'that', 'this', 'from', 'have', 'your', 'about', 'would', 'what',
+    'when', 'where', 'which', 'into', 'while', 'there', 'their', 'then', 'than', 'been', 'were',
+    'will', 'could', 'should', 'does', 'did', 'are', 'how', 'why', 'can', 'you', 'our', 'but', 'not',
+    'just', 'still', 'also', 'make', 'makes', 'made', 'like', 'need', 'want', 'talk', 'lets',
+  ]);
+
+  private tokenizeForThreadCompatibility(value: string): string[] {
+    return Array.from(new Set(
+      value
+        .toLowerCase()
+        .replace(/[^a-z0-9\s]/g, ' ')
+        .split(/\s+/)
+        .map((token) => {
+          if (token.length > 4 && token.endsWith('ies')) {
+            return `${token.slice(0, -3)}y`;
+          }
+          if (token.length > 4 && token.endsWith('s')) {
+            return token.slice(0, -1);
+          }
+          return token;
+        })
+        .filter((token) => token.length >= 3 && !ConsciousOrchestrator.THREAD_COMPATIBILITY_STOPWORDS.has(token))
+    ));
+  }
+
+  private hasReferentialFollowUpCue(loweredQuestion: string): boolean {
+    return /\b(this|that|it|those|these|them|there|then)\b/.test(loweredQuestion)
+      || /^(and|but|so)\b/.test(loweredQuestion)
+      || /\b(expand|clarify|explain|unpack|elaborate|deeper)\b/.test(loweredQuestion)
+      || /\b(what if|how would that|how does that|why that|why this)\b/.test(loweredQuestion);
+  }
+
+  private isShortReferentialFollowUp(loweredQuestion: string): boolean {
+    const wordCount = loweredQuestion.split(/\s+/).filter(Boolean).length;
+    return wordCount <= 16
+      && /^(would|could|can|should|does|do|is|are|was|were|how|why|what)\b/.test(loweredQuestion)
+      && /\b(this|that|it|those|these|them)\b/.test(loweredQuestion);
+  }
+
+  private isDeterministicContinuationPhrase(loweredQuestion: string): boolean {
+    return /^(what are the tradeoffs\??|how would you shard this\??|what happens during failover\??|what metrics would you watch( first)?\??|would that still hold\??)$/i.test(loweredQuestion)
+      || /^(why this approach|why this|why not|how so|go deeper|can you go deeper|walk me through that|talk through that|and then|what about reliability|what about scale|what about failure handling|what about bottlenecks)$/i.test(loweredQuestion);
+  }
+
+  private async isTopicallyCompatibleWithThread(question: string, thread: ReasoningThread): Promise<boolean> {
+    const normalizedQuestion = question.trim();
+    if (!normalizedQuestion) {
+      return false;
+    }
+
+    const loweredQuestion = normalizedQuestion.toLowerCase();
+    // Fast-path 1: obvious follow-up phrasing that never needs an LLM
+    if (this.isDeterministicContinuationPhrase(loweredQuestion)) {
+      return true;
+    }
+
+    // Fast-path 2: short referential follow-ups (e.g., "what about space?")
+    if (this.isShortReferentialFollowUp(loweredQuestion)) {
+      return true;
+    }
+
+    // NAT-CM-AUDIT: cache by (thread.lastQuestion, candidate). The thread's
+    // lastQuestion already captures the active topic; caching avoids paying
+    // the LLM-call latency on repeated retries of the same pair.
+    const cacheKey = `${thread.lastQuestion.toLowerCase().trim()}::${loweredQuestion}`;
+    const cached = this.topicCompatCache.get(cacheKey);
+    if (cached !== undefined) {
+      // refresh recency so this stays warm
+      this.topicCompatCache.delete(cacheKey);
+      this.topicCompatCache.set(cacheKey, cached);
+      return cached;
+    }
+
+    const verdict = await this.computeTopicallyCompatible(normalizedQuestion, thread);
+    if (this.topicCompatCache.size >= ConsciousOrchestrator.TOPIC_COMPAT_CACHE_SIZE) {
+      const oldest = this.topicCompatCache.keys().next().value;
+      if (oldest !== undefined) this.topicCompatCache.delete(oldest);
+    }
+    this.topicCompatCache.set(cacheKey, verdict);
+    return verdict;
+  }
+
+  private async computeTopicallyCompatible(normalizedQuestion: string, thread: ReasoningThread): Promise<boolean> {
+    const loweredQuestion = normalizedQuestion.toLowerCase();
+    // Tier 1: LLM-based topic shift detection (respects user provider config)
+    if (this.structuredClient) {
+      try {
+        const threadContext = [
+          `Root question: ${thread.rootQuestion}`,
+          `Last question: ${thread.lastQuestion}`,
+          `Previous follow-ups: ${thread.response.likelyFollowUps.join('; ')}`,
+        ].join('\n');
+        const prompt = `${TOPIC_SHIFT_CLASSIFICATION_PROMPT}\n\nACTIVE THREAD CONTEXT:\n${threadContext}\n\nNEW QUERY:\n${normalizedQuestion}\n\nCLASSIFICATION:`;
+        const TOPIC_SHIFT_TIMEOUT_MS = 1200;
+        const timeoutSentinel = Symbol('topic-shift-timeout');
+        const raw = await Promise.race([
+          this.structuredClient.generateContentStructured(prompt),
+          new Promise<symbol>((resolve) => setTimeout(() => resolve(timeoutSentinel), TOPIC_SHIFT_TIMEOUT_MS)),
+        ]);
+        if (raw !== timeoutSentinel) {
+          const cleaned = (raw as string)
+            .trim()
+            .replace(/^```json\s*/i, '')
+            .replace(/^```\s*/i, '')
+            .replace(/```$/i, '')
+            .trim();
+          try {
+            const parsed = JSON.parse(cleaned) as { action?: string; reason?: string };
+            if (parsed.action === 'continue') {
+              console.log('[ConsciousOrchestrator] LLM topic-shift: continue —', parsed.reason);
+              return true;
+            }
+            if (parsed.action === 'reset') {
+              console.log('[ConsciousOrchestrator] LLM topic-shift: reset —', parsed.reason);
+              return false;
+            }
+          } catch {
+            // malformed JSON — fall through to stopword fallback
+          }
+        }
+      } catch (error) {
+        console.warn('[ConsciousOrchestrator] LLM topic-shift detection failed, falling back:', error);
+      }
+    }
+
+    // Tier 2: semantic thread matcher (if enabled) as secondary signal
+    const useSemantic = isVerifierOptimizationActive('useSemanticThreadContinuation');
+    if (useSemantic) {
+      try {
+        const semanticCompatible = await this.semanticThreadMatcher.isCompatible(normalizedQuestion, thread);
+        if (semanticCompatible) {
+          return true;
+        }
+      } catch (error) {
+        console.warn('[ConsciousOrchestrator] Semantic thread matcher failed, falling back to stopword method:', error);
+      }
+    }
+
+    // Tier 3: deterministic stopword overlap (last-resort fallback, no network)
+    const questionTokens = this.tokenizeForThreadCompatibility(normalizedQuestion);
+    const referentialFollowUp = this.hasReferentialFollowUpCue(loweredQuestion);
+
+    const threadCorpus = [
+      thread.rootQuestion,
+      thread.lastQuestion,
+      ...thread.response.likelyFollowUps,
+      thread.response.behavioralAnswer?.question,
+    ].filter(Boolean).join(' ');
+    const threadTokens = new Set(this.tokenizeForThreadCompatibility(threadCorpus));
+
+    if (questionTokens.length === 0 || threadTokens.size === 0) {
+      return referentialFollowUp;
+    }
+
+    let overlapHits = 0;
+    for (const token of questionTokens) {
+      if (threadTokens.has(token)) {
+        overlapHits += 1;
+      }
+    }
+
+    const overlapRatio = overlapHits / questionTokens.length;
+    if (overlapRatio >= 0.25) {
+      return true;
+    }
+
+    if (overlapHits >= 1 && referentialFollowUp) {
+      return true;
+    }
+
+    if (overlapHits === 0 && referentialFollowUp && questionTokens.length <= 1 && thread.followUpCount === 0) {
+      return true;
+    }
+
+    return false;
+  }
+
+  private static isValidIntentResult(value: unknown): value is IntentResult {
+    if (typeof value !== 'object' || value === null) {
+      return false;
+    }
+    const obj = value as Record<string, unknown>;
+    return (
+      typeof obj.intent === 'string'
+      && typeof obj.confidence === 'number'
+      && typeof obj.answerShape === 'string'
+    );
+  }
+
+  async prepareRoute(input: {
+    question: string;
+    knowledgeStatus?: KnowledgeStatusLike | null;
+    screenshotBackedLiveCodingTurn: boolean;
+    prefetchedIntent?: IntentResult | null;
+    transcript?: string;
+    assistantResponseCount?: number;
+    coordinator?: IntentClassificationCoordinator | null;
+    transcriptRevision?: number;
+  }): Promise<PreparedConsciousRoute> {
+    const currentReasoningThread = this.session.getActiveReasoningThread();
+    const latestReaction = this.session.getLatestQuestionReaction();
+    const safePrefetchedIntent = ConsciousOrchestrator.isValidIntentResult(input.prefetchedIntent) ? input.prefetchedIntent : null;
+    const circuitOpen = this.isCircuitOpen();
+
+    // Layered intent router: prefetched coordinator result first, then the
+    // fast SetFit/SLM/embedding/regex ensemble. Reliable model classifiers
+    // take authority over regex cues; disabled conscious mode skips this path.
+    let intentBasedQualifies = false;
+    let routedIntentResult: IntentResult | null = null;
+
+    if (this.session.isConsciousModeEnabled()) {
+      if (safePrefetchedIntent && isReliableIntent(safePrefetchedIntent)) {
+        intentBasedQualifies = true;
+        routedIntentResult = safePrefetchedIntent;
+      } else {
+        const router = LayeredIntentRouter.getInstance();
+        const routerInput = {
+          question: input.question,
+          transcript: input.transcript ?? '',
+          assistantResponseCount: input.assistantResponseCount ?? 0,
+          prefetchedIntent: safePrefetchedIntent,
+          coordinator: input.coordinator ?? null,
+          transcriptRevision: input.transcriptRevision,
+        };
+        const decision = await router.routeFast(routerInput);
+        routedIntentResult = decision.intentResult;
+        intentBasedQualifies = decision.isReliable;
+      }
+    }
+
+    // Regex/thread-based decision for threadAction (handles continuations, topic shifts)
+    let preRouteDecision = this.session.isConsciousModeEnabled()
+      ? classifyConsciousModeQuestion(input.question, currentReasoningThread)
+      : { qualifies: false, threadAction: 'ignore' as const };
+
+    // Intent-based override: if layered router says this is a reliable conscious intent
+    // (deep_dive, behavioral, coding, etc.) but regex/thread logic missed it, override.
+    // NAT-XXX: Exclude follow_up and clarification — they depend on thread context and
+    // regex logic handles them better. Exclude coding without screenshots — live coding
+    // should only go conscious when a screenshot is present. Exclude very short questions
+    // (< 4 words) — vague pushbacks like "What if?" should not hijack threads.
+    const intent = routedIntentResult?.intent;
+    const wordCount = input.question.trim().split(/\s+/).filter(Boolean).length;
+    const isSubstantialQuestion = wordCount >= 4;
+    const canIntentOverride = intentBasedQualifies
+      && isSubstantialQuestion
+      && intent !== 'follow_up'
+      && intent !== 'clarification'
+      && (intent !== 'coding' || input.screenshotBackedLiveCodingTurn);
+
+    if (canIntentOverride && !preRouteDecision.qualifies) {
+      preRouteDecision = {
+        qualifies: true,
+        threadAction: currentReasoningThread ? 'reset' : 'start',
+      };
+    }
+
+    if (latestReaction?.kind === 'topic_shift') {
+      preRouteDecision = { qualifies: true, threadAction: 'reset' };
+    }
+
+    if (
+      preRouteDecision.threadAction === 'continue'
+      && currentReasoningThread
+      && !(await this.isTopicallyCompatibleWithThread(input.question, currentReasoningThread))
+    ) {
+      preRouteDecision = { qualifies: true, threadAction: 'reset' };
+    }
+
+    const activeReasoningThread = preRouteDecision.threadAction === 'reset'
+      ? null
+      : currentReasoningThread;
+
+    // Force standard route if we have a prefetched/intent result that is uncertain
+    // (e.g., low-confidence deep_dive) and not a thread continuation.
+    const hasReliableIntent = routedIntentResult ? isReliableIntent(routedIntentResult) : false;
+    const shouldForceStandardRoute = Boolean(
+      routedIntentResult
+      && !preRouteDecision.qualifies
+      && !hasReliableIntent
+      && !circuitOpen
+    );
+
+    // When the circuit breaker is open, keep qualification/thread decisions for
+    // observability but do not enter the conscious generation path.
+    let selectedRoute = selectAnswerRoute({
+      explicitManual: false,
+      explicitFollowUp: false,
+      consciousModeEnabled: this.session.isConsciousModeEnabled() && !shouldForceStandardRoute && !circuitOpen,
+      profileModeEnabled: !!input.knowledgeStatus?.activeMode,
+      hasProfile: !!input.knowledgeStatus?.hasResume,
+      hasKnowledgeData: !!input.knowledgeStatus?.hasResume || !!input.knowledgeStatus?.hasActiveJD,
+      latestQuestion: input.question,
+      activeReasoningThread,
+    });
+
+    // Override to conscious_answer if we have a reliable intent and circuit is closed.
+    // NAT-XXX: Do not force conscious mode for follow_up / clarification — they rely on
+    // thread context. Do not force coding unless screenshots are present. Do not force
+    // for very short questions — vague pushbacks should stay on the fast path.
+    const canForceConscious = hasReliableIntent
+      && !circuitOpen
+      && selectedRoute !== 'conscious_answer'
+      && isSubstantialQuestion
+      && intent !== 'follow_up'
+      && intent !== 'clarification'
+      && (intent !== 'coding' || input.screenshotBackedLiveCodingTurn);
+
+    if (canForceConscious) {
+      selectedRoute = 'conscious_answer';
+    }
+
+    const preCircuitEffectiveRoute: AnswerRoute = input.screenshotBackedLiveCodingTurn
+      && this.session.isConsciousModeEnabled()
+      && !circuitOpen
+      && !preRouteDecision.qualifies
+      ? 'conscious_answer'
+      : selectedRoute;
+
+    const standardRouteAfterConsciousFallback = preCircuitEffectiveRoute === 'conscious_answer'
+      ? selectAnswerRoute({
+          explicitManual: false,
+          explicitFollowUp: false,
+          consciousModeEnabled: false,
+          profileModeEnabled: !!input.knowledgeStatus?.activeMode,
+          hasProfile: !!input.knowledgeStatus?.hasResume,
+          hasKnowledgeData: !!input.knowledgeStatus?.hasResume || !!input.knowledgeStatus?.hasActiveJD,
+          latestQuestion: input.question,
+          activeReasoningThread: null,
+        })
+      : preCircuitEffectiveRoute;
+
+    const effectiveRoute: AnswerRoute = circuitOpen && preCircuitEffectiveRoute === 'conscious_answer'
+      ? standardRouteAfterConsciousFallback
+      : preCircuitEffectiveRoute;
+
+    return {
+      preRouteDecision,
+      activeReasoningThread,
+      selectedRoute,
+      effectiveRoute,
+      standardRouteAfterConsciousFallback,
+    };
+  }
+
+  applyRouteSideEffects(route: PreparedConsciousRoute): void {
+    if (route.preRouteDecision.threadAction === 'reset') {
+      this.session.clearConsciousModeThread();
+    }
+  }
+
+  private skip(): ConsciousExecutionResult {
+    this.consecutiveFailures = 0;
+    return { kind: 'skip' };
+  }
+
+  async continueThread(input: {
+    followUpLLM: FollowUpLLM | null;
+    activeReasoningThread: ReasoningThread | null;
+    resolvedQuestion: string;
+    isStale: () => boolean;
+  }): Promise<ConsciousExecutionResult> {
+    if (!input.followUpLLM || !input.activeReasoningThread) {
+      return this.skip();
+    }
+
+    const degradedMode = this.isCircuitOpen();
+
+    // NAT-204: Two-Tier routing — use Tier-B probe for non-behavioral follow-ups.
+    const useTwoTier = isConsciousOptimizationActive('useTwoTierAnswerContract');
+    if (useTwoTier && !isBehavioralReask(input.resolvedQuestion)) {
+      try {
+        const probeType = classifyProbeType(input.resolvedQuestion);
+        const probeResult = await input.followUpLLM.generateProbeAnswer(
+          input.activeReasoningThread,
+          input.resolvedQuestion,
+          probeType,
+          { context: this.session.getConsciousSemanticContext() },
+        );
+        if (probeResult.success) {
+          if (input.isStale()) return this.fallback('probe_stale');
+          this.session.appendProbe(probeResult.data);
+          const rootResponse = this.session.getActiveReasoningThread()?.response
+            ?? input.activeReasoningThread.response;
+          this.recordExecutionSuccess();
+          logEvent('probe:generated', { probeType: probeResult.data.probeType, confidence: probeResult.data.confidence });
+          return {
+            kind: 'handled',
+            structuredResponse: rootResponse,
+            fullAnswer: formatConsciousModeResponse(rootResponse),
+            probeAnswer: probeResult.data,
+            verification: this.buildVerificationMetadata({
+              provenanceOk: true, verificationOk: true, deterministic: 'pass',
+            }),
+          };
+        }
+        logEvent('probe:fallback', { reason: 'generation_failed' });
+        console.warn('[ConsciousOrchestrator] Probe generation failed, falling back to Tier-A:', probeResult);
+      } catch (probeErr) {
+        console.warn('[ConsciousOrchestrator] Probe error, falling back to Tier-A:', probeErr);
+      }
+    }
+
+    try {
+      const retrievalPack = this.retrievalOrchestrator.buildPack({
+        question: input.resolvedQuestion,
+        lastSeconds: 600,
+      });
+      const evidenceContextBlock = this.session.getConsciousEvidenceContext();
+
+      const followUpResult = await input.followUpLLM.generateReasoningFirstFollowUp(
+        input.activeReasoningThread,
+        input.resolvedQuestion,
+        [
+          this.answerPlanner.buildContextBlock(this.answerPlanner.plan({
+            question: input.resolvedQuestion,
+            reaction: this.session.getLatestQuestionReaction(),
+            hypothesis: this.session.getLatestAnswerHypothesis(),
+            // NAT-CM-AUDIT: continuation is by definition a follow-up; pass the
+            // count so the planner picks the tighter "probe" word budget.
+            threadFollowUpCount: input.activeReasoningThread.followUpCount || 1,
+          })),
+          this.session.getConsciousSemanticContext(),
+          retrievalPack.combinedContext,
+        ].filter(Boolean).join('\n\n')
+      );
+      const structuredResponse = followUpResult.success ? followUpResult.data : null;
+
+      if (input.isStale() || !isValidConsciousModeResponse(structuredResponse)) {
+        return this.fallback('continuation_invalid_or_stale');
+      }
+
+      const latestHypothesis = this.session.getLatestAnswerHypothesis();
+
+      // Always run rule-based provenance — it is fast, deterministic, no network.
+      // When degraded mode is active, the LLM judge is skipped but rule-based checks
+      // must still run to prevent hallucinations when the system is least healthy.
+      const useDegradedProvenanceCheck = isVerifierOptimizationActive('useDegradedProvenanceCheck');
+      let provenanceVerdict: { ok: boolean; reason?: string; unsupportedTokens?: string[] } = { ok: true };
+      let salvageRemoved: string[] = [];
+      let workingResponse = structuredResponse;
+      if (!degradedMode || useDegradedProvenanceCheck) {
+        provenanceVerdict = await this.provenanceVerifier.verify({
+          response: workingResponse,
+          semanticContextBlock: this.session.getConsciousSemanticContext(),
+          evidenceContextBlock,
+          question: input.resolvedQuestion,
+          hypothesis: latestHypothesis,
+        });
+        // NAT-CM-AUDIT: try to salvage instead of dropping the entire answer.
+        // If verification failed for unsupported tokens AND we have a token list,
+        // scrub the tokens and re-verify. This keeps the answer relevant for the
+        // user even when one specific claim couldn't be grounded.
+        if (
+          !provenanceVerdict.ok
+          && provenanceVerdict.unsupportedTokens
+          && provenanceVerdict.unsupportedTokens.length > 0
+          && (provenanceVerdict.reason === 'unsupported_technology_claim' || provenanceVerdict.reason === 'unsupported_metric_claim')
+        ) {
+          const salvage = salvageResponse({
+            response: workingResponse,
+            unsupportedTokens: provenanceVerdict.unsupportedTokens,
+          });
+          if (salvage.removed.length > 0 && isValidConsciousModeResponse(salvage.response)) {
+            const reverify = await this.provenanceVerifier.verify({
+              response: salvage.response,
+              semanticContextBlock: this.session.getConsciousSemanticContext(),
+              evidenceContextBlock,
+              question: input.resolvedQuestion,
+              hypothesis: latestHypothesis,
+            });
+            if (reverify.ok) {
+              workingResponse = salvage.response;
+              salvageRemoved = salvage.removed;
+              provenanceVerdict = reverify;
+              Metrics.counter('conscious.salvage_success', 1);
+              console.log('[ConsciousOrchestrator] Salvaged continuation by removing unsupported tokens:', salvage.removed);
+            }
+          }
+        }
+        if (!provenanceVerdict.ok) {
+          console.warn('[ConsciousOrchestrator] Continuation provenance verification failed:', provenanceVerdict.reason);
+          if (degradedMode) {
+            Metrics.counter('conscious.degraded_provenance_fail', 1);
+          }
+          return this.fallback(`continuation_provenance:${provenanceVerdict.reason ?? 'unknown'}`);
+        }
+      }
+
+      const verification = await this.verifier.verify({
+        response: workingResponse,
+        route: { qualifies: true, threadAction: 'continue' },
+        reaction: this.session.getLatestQuestionReaction(),
+        hypothesis: latestHypothesis,
+        evidence: latestHypothesis?.evidence,
+        question: input.resolvedQuestion,
+        skipJudge: degradedMode,
+      });
+      if (!verification.ok) {
+        console.warn('[ConsciousOrchestrator] Continuation verification failed:', verification.reason);
+        return this.fallback(`continuation_verification:${verification.reason ?? 'unknown'}`);
+      }
+
+      this.session.recordConsciousResponse(input.resolvedQuestion, workingResponse, 'continue');
+      this.recordExecutionSuccess();
+      const verificationMetadata = this.buildVerificationMetadata({
+        provenanceOk: provenanceVerdict.ok,
+        provenanceReason: provenanceVerdict.reason,
+        verificationOk: verification.ok,
+        verificationReason: verification.reason,
+        deterministic: verification.deterministic,
+        judge: degradedMode ? 'skipped' : verification.judge,
+      });
+      // NAT-CM-AUDIT: surface salvage in metadata so observability sees that
+      // the answer was relevance-preserved by scrubbing unsupported tokens.
+      if (salvageRemoved.length > 0) {
+        verificationMetadata.reasons.push(`provenance_salvaged:${salvageRemoved.join(',')}`);
+      }
+      return {
+        kind: 'handled',
+        structuredResponse: workingResponse,
+        fullAnswer: formatConsciousModeResponse(workingResponse),
+        verification: verificationMetadata,
+      };
+    } catch (error) {
+      console.warn('[ConsciousOrchestrator] Continuation execution failed:', error);
+      return this.fallback('continuation_execution_error');
+    }
+  }
+
+  async executeReasoningFirst(input: {
+    route: ConsciousModeQuestionRoute;
+    question: string;
+    preparedTranscript: string;
+    temporalContext: TemporalContext;
+    intentResult: IntentResult;
+    imagePaths?: string[];
+    whatToAnswerLLM: WhatToAnswerLLM | null;
+    answerLLM: AnswerLLM | null;
+    onEarlyReasoning?: (text: string) => void;
+    /**
+     * Optional pre-computed plan for this turn. When the
+     * `useHumanLikeConsciousMode` flag is on, the IntelligenceEngine passes
+     * the plan it already computed via `planTurn()` so verification rigor
+     * matches the conversational kind.
+     */
+    turnPlan?: ConsciousTurnPlan;
+    /** NAT-304: When set, prepends <problem_context> block to the Tier-A prompt. */
+    codingProblem?: CodingProblem | null;
+  }): Promise<ConsciousExecutionResult> {
+    if (!input.route.qualifies) {
+      return this.skip();
+    }
+
+    const degradedMode = this.isCircuitOpen();
+
+    // NAT-304: Prepend problem context only when extraction is complete (has examples).
+    // Guards against injecting the A/B/C/D coding protocol for theory/generic screenshots.
+    const problemContextBlock = input.codingProblem && isCodingProblemComplete(input.codingProblem)
+      ? this.answerPlanner.buildProblemContextBlock(input.codingProblem)
+      : '';
+    const transcriptWithContext = problemContextBlock
+      ? `${problemContextBlock}\n\n${input.preparedTranscript}`
+      : input.preparedTranscript;
+
+    try {
+      let structuredResponse: ConsciousModeStructuredResponse | null = null;
+
+      if (input.whatToAnswerLLM) {
+        structuredResponse = await input.whatToAnswerLLM!.generateReasoningFirst(
+          transcriptWithContext,
+          input.question,
+          input.temporalContext,
+          input.intentResult,
+          input.imagePaths,
+          {
+            onEarlyReasoning: (text) => {
+              // NAT-L4: Emit opening reasoning as a streaming preview
+              // so the user sees first content within ~400ms instead of
+              // waiting 2-5s for full JSON completion.
+              console.log(`[ConsciousOrchestrator] Early reasoning: "${text.substring(0, 60)}..."`);
+              input.onEarlyReasoning?.(text);
+            },
+          }
+        );
+      } else if (input.answerLLM) {
+        structuredResponse = await input.answerLLM.generateReasoningFirstLegacy(
+          input.question,
+          this.session.getFormattedContext(600)
+        );
+      }
+
+      if (!isValidConsciousModeResponse(structuredResponse)) {
+        return this.fallback('reasoning_invalid_response');
+      }
+
+      const latestHypothesis = this.session.getLatestAnswerHypothesis();
+
+      // Always run rule-based provenance — it is fast, deterministic, no network.
+      // When degraded mode is active, the LLM judge is skipped but rule-based checks
+      // must still run to prevent hallucinations when the system is least healthy.
+      const useDegradedProvenanceCheck = isVerifierOptimizationActive('useDegradedProvenanceCheck');
+      // When a turn plan is supplied (human-like flag on), use it to pick the
+      // adaptive verification rigor. Falls back to legacy strict behaviour.
+      const adaptivePlan = input.turnPlan
+        ? this.verificationGate.applyDegradedMode(input.turnPlan.verification, degradedMode)
+        : null;
+      const shouldRunProvenance = adaptivePlan
+        ? adaptivePlan.runProvenance
+        : (!degradedMode || useDegradedProvenanceCheck);
+      let provenanceVerdict: { ok: boolean; reason?: string; unsupportedTokens?: string[] } = { ok: true };
+      let salvageRemoved: string[] = [];
+      let workingResponse = structuredResponse;
+      if (shouldRunProvenance) {
+        provenanceVerdict = await this.provenanceVerifier.verify({
+          response: workingResponse,
+          semanticContextBlock: this.session.getConsciousSemanticContext(),
+          evidenceContextBlock: this.session.getConsciousEvidenceContext(),
+          question: input.question,
+          hypothesis: latestHypothesis,
+        });
+        // NAT-CM-AUDIT: salvage path — keep most of the answer relevant when
+        // only a few unsupported tokens block it. See ResponseSalvager.
+        if (
+          !provenanceVerdict.ok
+          && provenanceVerdict.unsupportedTokens
+          && provenanceVerdict.unsupportedTokens.length > 0
+          && (provenanceVerdict.reason === 'unsupported_technology_claim' || provenanceVerdict.reason === 'unsupported_metric_claim')
+        ) {
+          const salvage = salvageResponse({
+            response: workingResponse,
+            unsupportedTokens: provenanceVerdict.unsupportedTokens,
+          });
+          if (salvage.removed.length > 0 && isValidConsciousModeResponse(salvage.response)) {
+            const reverify = await this.provenanceVerifier.verify({
+              response: salvage.response,
+              semanticContextBlock: this.session.getConsciousSemanticContext(),
+              evidenceContextBlock: this.session.getConsciousEvidenceContext(),
+              question: input.question,
+              hypothesis: latestHypothesis,
+            });
+            if (reverify.ok) {
+              workingResponse = salvage.response;
+              salvageRemoved = salvage.removed;
+              provenanceVerdict = reverify;
+              Metrics.counter('conscious.salvage_success', 1);
+              console.log('[ConsciousOrchestrator] Salvaged reasoning-first answer by removing unsupported tokens:', salvage.removed);
+            }
+          }
+        }
+        if (!provenanceVerdict.ok) {
+          console.warn('[ConsciousOrchestrator] Structured response provenance verification failed:', provenanceVerdict.reason);
+          if (degradedMode) {
+            Metrics.counter('conscious.degraded_provenance_fail', 1);
+          }
+          return this.fallback(`reasoning_provenance:${provenanceVerdict.reason ?? 'unknown'}`);
+        }
+      }
+
+      // In degraded mode, use rule-only verification (skip LLM judge).
+      // The adaptive plan can also request judge to be skipped on relaxed turns.
+      const skipJudge = adaptivePlan ? !adaptivePlan.runJudge : degradedMode;
+      const verification = await this.verifier.verify({
+        response: workingResponse,
+        route: input.route,
+        reaction: this.session.getLatestQuestionReaction(),
+        hypothesis: latestHypothesis,
+        evidence: latestHypothesis?.evidence,
+        question: input.question,
+        skipJudge,
+      });
+      if (!verification.ok) {
+        console.warn('[ConsciousOrchestrator] Structured response verification failed:', verification.reason);
+        return this.fallback(`reasoning_verification:${verification.reason ?? 'unknown'}`);
+      }
+
+      if (input.route.threadAction !== 'ignore' && input.question) {
+        this.session.recordConsciousResponse(
+          input.question,
+          workingResponse,
+          input.route.threadAction === 'start'
+            ? 'start'
+            : input.route.threadAction === 'reset'
+              ? 'reset'
+              : 'continue'
+        );
+      }
+
+      this.recordExecutionSuccess();
+      const reasoningVerificationMetadata = this.buildVerificationMetadata({
+        provenanceOk: provenanceVerdict.ok,
+        provenanceReason: provenanceVerdict.reason,
+        verificationOk: verification.ok,
+        verificationReason: verification.reason,
+        deterministic: verification.deterministic,
+        judge: skipJudge ? 'skipped' : verification.judge,
+      });
+      if (salvageRemoved.length > 0) {
+        reasoningVerificationMetadata.reasons.push(`provenance_salvaged:${salvageRemoved.join(',')}`);
+      }
+      return {
+        kind: 'handled',
+        structuredResponse: workingResponse,
+        fullAnswer: formatConsciousModeResponse(workingResponse),
+        verification: reasoningVerificationMetadata,
+      };
+    } catch (error) {
+      console.warn('[ConsciousOrchestrator] Reasoning-first execution failed:', error);
+      return this.fallback('reasoning_execution_error');
+    }
+  }
+}
