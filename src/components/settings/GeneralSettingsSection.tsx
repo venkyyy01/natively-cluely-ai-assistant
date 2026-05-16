@@ -7,6 +7,7 @@ import {
   Check,
   ChevronDown,
   MousePointerClick,
+  MousePointer,
   Eye,
   Ghost,
   Globe,
@@ -56,8 +57,11 @@ availableAiLanguages: Array<{ code: string; label: string }>;
 handleAiLanguageChange: (code: string) => void | Promise<void>;
   overlayOpacity: number;
   overlayClickthroughEnabled: boolean;
+  cursorHookEnabled: boolean;
+  cursorHookInstalled: boolean;
   handleOpacityChange: (value: number) => void;
   setOverlayClickthroughEnabled: (value: boolean) => void;
+  setCursorHookEnabled: (value: boolean) => void;
   startPreviewingOpacity: () => void;
 stopPreviewingOpacity: () => void;
 isPreviewingOpacity: boolean;
@@ -91,8 +95,11 @@ export const GeneralSettingsSection: React.FC<GeneralSettingsSectionProps> = ({
   handleAiLanguageChange,
   overlayOpacity,
   overlayClickthroughEnabled,
+  cursorHookEnabled,
+  cursorHookInstalled,
   handleOpacityChange,
   setOverlayClickthroughEnabled,
+  setCursorHookEnabled,
   startPreviewingOpacity,
   stopPreviewingOpacity,
   isPreviewingOpacity,
@@ -446,6 +453,39 @@ className={`w-11 h-6 rounded-full relative transition-colors ${consciousModeEnab
                   className={`w-11 h-6 rounded-full relative transition-colors ${overlayClickthroughEnabled ? 'bg-accent-primary' : 'bg-bg-toggle-switch border border-border-muted'}`}
                 >
                   <div className={`absolute top-1 left-1 w-4 h-4 rounded-full bg-white transition-transform ${overlayClickthroughEnabled ? 'translate-x-5' : 'translate-x-0'}`} />
+                </button>
+              </div>
+            </div>
+
+            <div className="bg-bg-item-surface rounded-xl p-5 border border-border-subtle mt-4">
+              <div className="flex items-start justify-between gap-4">
+                <div className="flex items-start gap-3">
+                  <div className="w-9 h-9 bg-bg-component rounded-lg border border-border-subtle flex items-center justify-center text-text-tertiary shrink-0">
+                    <MousePointer size={16} />
+                  </div>
+                  <div>
+                    <h3 className="text-sm font-bold text-text-primary">Cursor Stealth</h3>
+                    <p className="text-xs text-text-secondary mt-0.5">
+                      Freeze the OS hardware cursor at the overlay edge and paint a software cursor inside the
+                      capture-excluded overlay. In screen recordings the cursor appears to stop at the overlay
+                      boundary instead of clicking on empty space.
+                    </p>
+                    {cursorHookEnabled && !cursorHookInstalled && (
+                      <p className="text-[11px] text-amber-400 mt-2">
+                        Hook not installed. Grant Accessibility permission in System Settings → Privacy &amp;
+                        Security → Accessibility, then re-toggle this switch.
+                      </p>
+                    )}
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  aria-pressed={cursorHookEnabled}
+                  onClick={() => setCursorHookEnabled(!cursorHookEnabled)}
+                  className={`w-11 h-6 rounded-full relative transition-colors ${cursorHookEnabled ? 'bg-accent-primary' : 'bg-bg-toggle-switch border border-border-muted'}`}
+                >
+                  <div className={`absolute top-1 left-1 w-4 h-4 rounded-full bg-white transition-transform ${cursorHookEnabled ? 'translate-x-5' : 'translate-x-0'}`} />
                 </button>
               </div>
             </div>

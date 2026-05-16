@@ -4,7 +4,7 @@ import { AppState } from "./main"
 import path from "node:path"
 import { StealthManager } from "./stealth/StealthManager"
 import { StealthRuntime } from "./stealth/StealthRuntime"
-import { MacosCursorController } from "./stealth/MacosCursorController"
+import { CursorHookController } from "./stealth/CursorHookController"
 import { attachRendererBridgeMonitor } from "./runtime/rendererBridgeHealth"
 import { resolveRendererPreloadPath, resolveRendererStartUrl } from "./runtime/windowAssetPaths"
 import { attachRevealSafetyNet, attachWindowCrashRecovery } from "./startup/rendererBridgeRecovery"
@@ -81,7 +81,7 @@ export class WindowHelper {
   // CURSOR-FREEZE (macOS only): controls the CGEventTap-based hardware
   // cursor freeze. Lifecycle: created lazily on the first enable call after
   // the overlay window exists. Persists across overlay show/hide cycles.
-  private cursorController: MacosCursorController | null = null
+  private cursorController: CursorHookController | null = null
   private cursorHookEnabled: boolean = false
 
   // Initialize with explicit number type and 0 value
@@ -718,23 +718,24 @@ export class WindowHelper {
   }
 
   /**
-   * Enable or disable the macOS cursor freeze hook. When enabled and the
+   * Enable or disable the cursor freeze hook. When enabled and the
    * overlay is visible, the OS hardware cursor is frozen at the overlay's
-   * boundary by a CGEventTap and the renderer paints a software cursor in
-   * its place. The software cursor lives entirely inside the
-   * capture-excluded overlay surface, so screen-share captures only see
-   * the frozen hardware cursor at the overlay edge.
+   * boundary by a low-level cursor hook (CGEventTap on macOS, WH_MOUSE_LL
+   * on Windows) and the renderer paints a software cursor in its place.
+   * The software cursor lives entirely inside the capture-excluded
+   * overlay surface, so screen-share captures only see the frozen
+   * hardware cursor at the overlay edge.
    *
-   * No-op on non-macOS platforms.
+   * No-op on platforms other than macOS / Windows.
    *
    * Returns true if the controller is now installed (or was already);
-   * false if Accessibility permission is denied or the native binding
-   * is unavailable. Callers should surface that to the user with a
-   * clear message ("Grant Accessibility permission to enable cursor
-   * stealth") rather than silently re-trying.
+   * false if the OS permission was denied or the native binding is
+   * unavailable. Callers should surface that to the user with a clear
+   * message ("Grant Accessibility permission to enable cursor stealth"
+   * on macOS) rather than silently re-trying.
    */
   public setCursorHookEnabled(enabled: boolean): boolean {
-    if (process.platform !== 'darwin') return false
+    if (process.platform !== 'darwin' && process.platform !== 'win32') return false
     this.cursorHookEnabled = enabled
     if (!enabled) {
       this.cursorController?.disable()
@@ -748,13 +749,22 @@ export class WindowHelper {
     }
 
     if (!this.cursorController) {
-      this.cursorController = new MacosCursorController(this.overlayWindow)
+      this.cursorController = new CursorHookController(this.overlayWindow)
     }
     return this.cursorController.enable()
   }
 
   public isCursorHookEnabled(): boolean {
     return this.cursorHookEnabled && (this.cursorController?.isEnabled() ?? false)
+  }
+
+  /**
+   * Whether the user has requested cursor stealth (regardless of whether
+   * the native hook is currently installed — useful for showing a
+   * "permission needed" hint in Settings).
+   */
+  public isCursorHookRequested(): boolean {
+    return this.cursorHookEnabled
   }
 
   public createWindow(): void {
@@ -1101,7 +1111,7 @@ this.launcherContentWindow = this.launcherWindow
     // the first setCursorHookEnabled(true) call.
     if (process.platform === 'darwin' && this.cursorHookEnabled && !this.overlayWindow.isDestroyed()) {
       if (!this.cursorController) {
-        this.cursorController = new MacosCursorController(this.overlayWindow)
+        this.cursorController = new CursorHookController(this.overlayWindow)
       }
       this.cursorController.enable()
     }

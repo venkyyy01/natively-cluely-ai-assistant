@@ -364,6 +364,8 @@ const [isThemeDropdownOpen, setIsThemeDropdownOpen] = useState(false);
 const [isAiLangDropdownOpen, setIsAiLangDropdownOpen] = useState(false);
 const [generalSettingsError, setGeneralSettingsError] = useState('');
 const [overlayClickthroughEnabled, setOverlayClickthroughEnabled] = useState(() => localStorage.getItem('natively_overlay_clickthrough') === 'true');
+const [cursorHookEnabled, setCursorHookEnabled] = useState(false);
+const [cursorHookInstalled, setCursorHookInstalled] = useState(false);
 const themeDropdownRef = React.useRef<HTMLDivElement>(null);
 const aiLangDropdownRef = React.useRef<HTMLDivElement>(null);
 
@@ -634,6 +636,63 @@ return () => unsubscribe();
         });
         return () => unsubscribe?.();
     }, []);
+
+    // Cursor stealth: hydrate from main on mount and subscribe to status
+    // changes so the toggle reflects whether the native hook is actually
+    // installed (vs just user-requested but Accessibility-denied).
+    useEffect(() => {
+        let cancelled = false;
+        const getStatus = window.electronAPI?.getCursorHookStatus;
+        if (getStatus) {
+            void getStatus()
+                .then((status) => {
+                    if (cancelled) return;
+                    setCursorHookEnabled(Boolean(status?.enabled));
+                    setCursorHookInstalled(Boolean(status?.installed));
+                })
+                .catch(() => {
+                    if (cancelled) return;
+                    setCursorHookEnabled(false);
+                    setCursorHookInstalled(false);
+                });
+        }
+
+        const unsubscribe = window.electronAPI?.onCursorHookStatus?.((status) => {
+            setCursorHookEnabled(Boolean(status?.enabled));
+            setCursorHookInstalled(Boolean(status?.installed));
+        });
+
+        return () => {
+            cancelled = true;
+            unsubscribe?.();
+        };
+    }, []);
+
+    const handleCursorHookToggle = React.useCallback((next: boolean) => {
+        // Optimistic UI; main will broadcast the canonical status which
+        // overrides this if Accessibility was denied.
+        setCursorHookEnabled(next);
+        const setHook = window.electronAPI?.setCursorHook;
+        if (!setHook) {
+            showGeneralSettingsError('Cursor stealth requires the desktop app.');
+            setCursorHookEnabled(false);
+            return;
+        }
+        void setHook(next)
+            .then((result) => {
+                setCursorHookEnabled(Boolean(result?.enabled));
+                setCursorHookInstalled(Boolean(result?.installed));
+                if (next && !result?.installed) {
+                    showGeneralSettingsError(
+                        'Cursor stealth needs Accessibility permission. Grant it in System Settings → Privacy & Security → Accessibility, then re-toggle.'
+                    );
+                }
+            })
+            .catch(() => {
+                setCursorHookEnabled(!next);
+                showGeneralSettingsError('Unable to update cursor stealth.');
+            });
+    }, [showGeneralSettingsError]);
 
     useEffect(() => {
         const loadLanguages = async () => {
@@ -1483,6 +1542,9 @@ handleAiLanguageChange={handleAiLanguageChange}
               overlayClickthroughEnabled={overlayClickthroughEnabled}
               handleOpacityChange={handleOpacityChange}
               setOverlayClickthroughEnabled={setOverlayClickthroughEnabled}
+              cursorHookEnabled={cursorHookEnabled}
+              cursorHookInstalled={cursorHookInstalled}
+              setCursorHookEnabled={handleCursorHookToggle}
               startPreviewingOpacity={startPreviewingOpacity}
               stopPreviewingOpacity={stopPreviewingOpacity}
               isPreviewingOpacity={isPreviewingOpacity}

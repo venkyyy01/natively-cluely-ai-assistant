@@ -522,35 +522,408 @@ mod macos_cursor {
 }
 
 // ============================================================================
+// Windows: WH_MOUSE_LL low-level mouse hook
+// ============================================================================
+//
+// Windows analogue of the macOS CGEventTap path. SetWindowsHookExW with
+// WH_MOUSE_LL gives us a hook that sees every mouse event before any window
+// procedure does. Returning a non-zero value from the hook callback swallows
+// the event so the window underneath never receives it (and the cursor
+// sprite is not advanced — perfect for our freeze model).
+//
+// Subtleties:
+//   * The hook must run on a thread that pumps a Windows message queue.
+//     We spawn a dedicated thread with `GetMessageW` for that.
+//   * We cannot safely capture rich state by reference in `extern "system"`
+//     callbacks; instead we stash a pointer to a small heap-allocated
+//     context in a thread-local and read it back from the trampoline.
+//   * `MOUSEHOOKSTRUCT` carries the raw client-area cursor coords; deltas
+//     have to be derived. We track the previous absolute position and
+//     compute deltas frame-by-frame, which is how WM_MOUSEMOVE consumers
+//     normally do it.
+
+#[cfg(target_os = "windows")]
+mod windows_cursor {
+    use super::*;
+    use std::cell::Cell;
+    use std::ptr;
+    use std::sync::mpsc;
+    use std::thread;
+    use std::time::Duration;
+
+    use windows::Win32::Foundation::{LPARAM, LRESULT, POINT, WPARAM};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        CallNextHookEx, DispatchMessageW, GetMessageW, PostThreadMessageW,
+        SetWindowsHookExW, TranslateMessage, UnhookWindowsHookEx, HHOOK, MSG,
+        MSLLHOOKSTRUCT, WH_MOUSE_LL, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN,
+        WM_MBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_QUIT, WM_RBUTTONDOWN,
+        WM_RBUTTONUP, WM_XBUTTONDOWN, WM_XBUTTONUP,
+    };
+
+    /// Shared mutable state pulled from the hook callback. Held inside the
+    /// hook context — one per running hook instance.
+    pub struct HookContext {
+        pub callback: ThreadsafeFunction<String, ErrorStrategy::CalleeHandled>,
+        pub stop_signal: Arc<AtomicBool>,
+        pub bounds: SharedOverlayBounds,
+        pub state: SharedVirtualState,
+        pub thread_id: AtomicU32,
+        pub last_real: Mutex<Option<(f64, f64)>>,
+    }
+
+    #[derive(Debug, Clone, Copy, Default)]
+    pub struct VirtualState {
+        pub x: f64,
+        pub y: f64,
+        pub seeded: bool,
+    }
+
+    pub type SharedVirtualState = Arc<Mutex<VirtualState>>;
+
+    use std::sync::atomic::AtomicU32;
+
+    thread_local! {
+        static HOOK_CTX: Cell<*const HookContext> = const { Cell::new(ptr::null()) };
+    }
+
+    fn current_bounds(ctx: &HookContext) -> OverlayBounds {
+        ctx.bounds.lock().map(|b| *b).unwrap_or_default()
+    }
+
+    fn point_inside(x: f64, y: f64, bounds: &OverlayBounds) -> bool {
+        x >= bounds.x
+            && x <= bounds.x + bounds.width
+            && y >= bounds.y
+            && y <= bounds.y + bounds.height
+    }
+
+    fn dispatch(
+        ctx: &HookContext,
+        kind: &str,
+        button: i32,
+        x: f64,
+        y: f64,
+        scroll_dx: f64,
+        scroll_dy: f64,
+    ) {
+        let payload = VirtualMouseEvent {
+            kind: kind.to_string(),
+            button,
+            x,
+            y,
+            scroll_dx,
+            scroll_dy,
+        };
+        if let Ok(json) = serde_json::to_string(&payload) {
+            ctx.callback
+                .call(Ok(json), ThreadsafeFunctionCallMode::NonBlocking);
+        }
+    }
+
+    /// Update virtual cursor position based on real (absolute) coordinates
+    /// reported by the OS hook. Mirrors the macOS `process_move` logic but
+    /// derives deltas from successive absolute samples (Windows mouse hooks
+    /// don't deliver per-event deltas).
+    pub fn process_move(
+        real_x: f64,
+        real_y: f64,
+        last_real: &mut Option<(f64, f64)>,
+        bounds: OverlayBounds,
+        state: &mut VirtualState,
+    ) -> (f64, f64, bool) {
+        let (delta_x, delta_y) = match *last_real {
+            Some((px, py)) => (real_x - px, real_y - py),
+            None => (0.0, 0.0),
+        };
+        *last_real = Some((real_x, real_y));
+
+        if !bounds.active {
+            state.x = real_x;
+            state.y = real_y;
+            state.seeded = true;
+            return (real_x, real_y, false);
+        }
+
+        let inside_real = point_inside(real_x, real_y, &bounds);
+        if !inside_real {
+            state.x = real_x;
+            state.y = real_y;
+            state.seeded = true;
+            return (real_x, real_y, false);
+        }
+
+        if !state.seeded {
+            state.x = real_x;
+            state.y = real_y;
+            state.seeded = true;
+        } else {
+            state.x = (state.x + delta_x).clamp(bounds.x, bounds.x + bounds.width);
+            state.y = (state.y + delta_y).clamp(bounds.y, bounds.y + bounds.height);
+        }
+        (state.x, state.y, true)
+    }
+
+    unsafe extern "system" fn ll_mouse_proc(
+        n_code: i32,
+        w_param: WPARAM,
+        l_param: LPARAM,
+    ) -> LRESULT {
+        if n_code < 0 {
+            return CallNextHookEx(None, n_code, w_param, l_param);
+        }
+        let ctx_ptr = HOOK_CTX.with(|cell| cell.get());
+        if ctx_ptr.is_null() {
+            return CallNextHookEx(None, n_code, w_param, l_param);
+        }
+        let ctx = &*ctx_ptr;
+        if ctx.stop_signal.load(Ordering::Relaxed) {
+            return CallNextHookEx(None, n_code, w_param, l_param);
+        }
+
+        let info = &*(l_param.0 as *const MSLLHOOKSTRUCT);
+        let real_x = info.pt.x as f64;
+        let real_y = info.pt.y as f64;
+        let bounds = current_bounds(ctx);
+
+        let msg = w_param.0 as u32;
+        let mut last_real_guard = match ctx.last_real.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+
+        match msg {
+            WM_MOUSEMOVE => {
+                let mut state_guard = match ctx.state.lock() {
+                    Ok(guard) => guard,
+                    Err(poisoned) => poisoned.into_inner(),
+                };
+                let mut state = *state_guard;
+                let (vx, vy, swallow) = process_move(real_x, real_y, &mut last_real_guard, bounds, &mut state);
+                *state_guard = state;
+                drop(state_guard);
+                drop(last_real_guard);
+                if swallow {
+                    dispatch(ctx, "move", -1, vx, vy, 0.0, 0.0);
+                    return LRESULT(1); // suppress
+                }
+            }
+            WM_LBUTTONDOWN | WM_LBUTTONUP | WM_RBUTTONDOWN | WM_RBUTTONUP
+            | WM_MBUTTONDOWN | WM_MBUTTONUP | WM_XBUTTONDOWN | WM_XBUTTONUP => {
+                if !bounds.active || !point_inside(real_x, real_y, &bounds) {
+                    drop(last_real_guard);
+                    return CallNextHookEx(None, n_code, w_param, l_param);
+                }
+                let virt = match ctx.state.lock() {
+                    Ok(guard) => (guard.x, guard.y),
+                    Err(poisoned) => {
+                        let g = poisoned.into_inner();
+                        (g.x, g.y)
+                    }
+                };
+                let (kind, button) = match msg {
+                    WM_LBUTTONDOWN => ("down", 0),
+                    WM_LBUTTONUP => ("up", 0),
+                    WM_RBUTTONDOWN => ("down", 1),
+                    WM_RBUTTONUP => ("up", 1),
+                    WM_MBUTTONDOWN => ("down", 2),
+                    WM_MBUTTONUP => ("up", 2),
+                    WM_XBUTTONDOWN => ("down", 3),
+                    WM_XBUTTONUP => ("up", 3),
+                    _ => unreachable!(),
+                };
+                drop(last_real_guard);
+                dispatch(ctx, kind, button, virt.0, virt.1, 0.0, 0.0);
+                return LRESULT(1);
+            }
+            WM_MOUSEWHEEL => {
+                if !bounds.active || !point_inside(real_x, real_y, &bounds) {
+                    drop(last_real_guard);
+                    return CallNextHookEx(None, n_code, w_param, l_param);
+                }
+                // mouseData high word is the wheel delta (+/-120 per click).
+                let wheel = (info.mouseData >> 16) as i16 as f64;
+                let virt = match ctx.state.lock() {
+                    Ok(guard) => (guard.x, guard.y),
+                    Err(poisoned) => {
+                        let g = poisoned.into_inner();
+                        (g.x, g.y)
+                    }
+                };
+                drop(last_real_guard);
+                // Treat 120 units as one "tick" = 100 px scroll, matching
+                // the defaults DOM wheel handlers expect on Windows.
+                let dy = wheel / 1.2;
+                dispatch(ctx, "scroll", -1, virt.0, virt.1, 0.0, dy);
+                return LRESULT(1);
+            }
+            _ => {
+                drop(last_real_guard);
+            }
+        }
+
+        CallNextHookEx(None, n_code, w_param, l_param)
+    }
+
+    pub fn start_cursor_hook(
+        callback: ThreadsafeFunction<String, ErrorStrategy::CalleeHandled>,
+        stop_signal: Arc<AtomicBool>,
+        bounds: SharedOverlayBounds,
+        state: SharedVirtualState,
+        thread_id_holder: Arc<AtomicU32>,
+    ) -> napi::Result<()> {
+        let ctx = Box::new(HookContext {
+            callback,
+            stop_signal: stop_signal.clone(),
+            bounds,
+            state,
+            thread_id: AtomicU32::new(0),
+            last_real: Mutex::new(None),
+        });
+        let raw = Box::into_raw(ctx);
+        let raw_usize = raw as usize;
+
+        let (tx, rx) = mpsc::channel::<std::result::Result<(), String>>();
+        let stop = stop_signal;
+        thread::spawn(move || {
+            let ctx_ptr = raw_usize as *mut HookContext;
+            unsafe {
+                HOOK_CTX.with(|cell| cell.set(ctx_ptr));
+                let hook_handle = match SetWindowsHookExW(
+                    WH_MOUSE_LL,
+                    Some(ll_mouse_proc),
+                    None,
+                    0,
+                ) {
+                    Ok(h) => h,
+                    Err(err) => {
+                        let _ = tx.send(Err(format!(
+                            "SetWindowsHookExW(WH_MOUSE_LL) failed: {:?}",
+                            err
+                        )));
+                        let _ = Box::from_raw(ctx_ptr);
+                        HOOK_CTX.with(|cell| cell.set(ptr::null()));
+                        return;
+                    }
+                };
+
+                let tid = windows::Win32::System::Threading::GetCurrentThreadId();
+                thread_id_holder.store(tid, Ordering::SeqCst);
+                let _ = tx.send(Ok(()));
+
+                let mut msg: MSG = MSG::default();
+                while !stop.load(Ordering::Relaxed) {
+                    let r = GetMessageW(&mut msg, None, 0, 0);
+                    if r.0 == 0 || r.0 == -1 {
+                        break;
+                    }
+                    if msg.message == WM_QUIT {
+                        break;
+                    }
+                    let _ = TranslateMessage(&msg);
+                    DispatchMessageW(&msg);
+                }
+
+                let _ = UnhookWindowsHookEx(hook_handle);
+                HOOK_CTX.with(|cell| cell.set(ptr::null()));
+                let _ = Box::from_raw(ctx_ptr);
+            }
+        });
+
+        match rx.recv_timeout(Duration::from_millis(500)) {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(msg)) => Err(napi::Error::from_reason(msg)),
+            Err(_) => Ok(()),
+        }
+    }
+
+    pub fn signal_stop(thread_id_holder: &Arc<AtomicU32>) {
+        let tid = thread_id_holder.load(Ordering::SeqCst);
+        if tid == 0 {
+            return;
+        }
+        unsafe {
+            // Posting WM_QUIT into the hook thread breaks GetMessageW out of
+            // its blocking wait so the thread can observe the stop signal
+            // and exit promptly.
+            let _ = PostThreadMessageW(tid, WM_QUIT, WPARAM(0), LPARAM(0));
+        }
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+mod windows_cursor {
+    use super::*;
+    use std::sync::atomic::AtomicU32;
+
+    #[allow(dead_code)]
+    #[derive(Debug, Clone, Copy, Default)]
+    pub struct VirtualState {
+        pub x: f64,
+        pub y: f64,
+        pub seeded: bool,
+    }
+
+    #[allow(dead_code)]
+    pub type SharedVirtualState = Arc<Mutex<VirtualState>>;
+
+    #[allow(dead_code)]
+    pub fn start_cursor_hook(
+        _callback: ThreadsafeFunction<String, ErrorStrategy::CalleeHandled>,
+        _stop_signal: Arc<AtomicBool>,
+        _bounds: SharedOverlayBounds,
+        _state: SharedVirtualState,
+        _thread_id_holder: Arc<AtomicU32>,
+    ) -> napi::Result<()> {
+        Ok(())
+    }
+
+    #[allow(dead_code)]
+    pub fn signal_stop(_thread_id_holder: &Arc<AtomicU32>) {}
+}
+
+// ============================================================================
 // NAPI exports
 // ============================================================================
 
-/// JS-facing macOS cursor hook controller.
+/// JS-facing cross-platform cursor hook controller.
+///
+/// Backed by `CGEventTap` on macOS and `WH_MOUSE_LL` on Windows. Both
+/// implementations share the same JS API and event payload shape.
 ///
 /// Lifecycle:
-///   const hook = new MacosCursorHook();
+///   const hook = new CursorHook();
 ///   hook.setOverlayBounds(x, y, width, height);
-///   hook.setActive(true);                    // arms the tap (overlay visible)
-///   hook.start(event => { ... });            // creates tap, throws if Accessibility denied
+///   hook.setActive(true);                    // arms (overlay visible)
+///   hook.start(event => { ... });            // installs hook, throws if perms denied / unsupported
 ///   ...
-///   hook.setActive(false);                   // disarms tap (overlay hidden)
-///   hook.stop();                             // tears tap down
+///   hook.setActive(false);                   // disarms (overlay hidden)
+///   hook.stop();                             // tears the hook down
 #[napi]
-pub struct MacosCursorHook {
+pub struct CursorHook {
     stop_signal: Arc<AtomicBool>,
     bounds: SharedOverlayBounds,
-    state: macos_cursor::SharedCursorState,
+    #[cfg(target_os = "macos")]
+    macos_state: macos_cursor::SharedCursorState,
+    #[cfg(target_os = "windows")]
+    windows_state: windows_cursor::SharedVirtualState,
+    #[cfg(target_os = "windows")]
+    windows_thread_id: Arc<std::sync::atomic::AtomicU32>,
     started: bool,
 }
 
 #[napi]
-impl MacosCursorHook {
+impl CursorHook {
     #[napi(constructor)]
     pub fn new() -> Self {
-        MacosCursorHook {
+        CursorHook {
             stop_signal: Arc::new(AtomicBool::new(false)),
             bounds: Arc::new(Mutex::new(OverlayBounds::default())),
-            state: Arc::new(Mutex::new(macos_cursor::VirtualCursorState::default())),
+            #[cfg(target_os = "macos")]
+            macos_state: Arc::new(Mutex::new(macos_cursor::VirtualCursorState::default())),
+            #[cfg(target_os = "windows")]
+            windows_state: Arc::new(Mutex::new(windows_cursor::VirtualState::default())),
+            #[cfg(target_os = "windows")]
+            windows_thread_id: Arc::new(std::sync::atomic::AtomicU32::new(0)),
             started: false,
         }
     }
@@ -575,9 +948,9 @@ impl MacosCursorHook {
     }
 
     /// Toggle whether the hook should suppress events when the cursor enters
-    /// the overlay. The tap stays installed either way; setActive=false just
-    /// makes the hot path a passthrough so we don't pay the round-trip cost
-    /// of starting / stopping the tap on every overlay show/hide.
+    /// the overlay. The hook stays installed either way; `setActive=false`
+    /// just makes the hot path a passthrough so we don't pay the round-trip
+    /// cost of starting / stopping it on every overlay show/hide.
     #[napi]
     pub fn set_active(&self, active: bool) -> napi::Result<()> {
         let mut guard = self.bounds.lock().map_err(|e| {
@@ -587,9 +960,10 @@ impl MacosCursorHook {
         Ok(())
     }
 
-    /// Start the cursor tap. Returns an error if Accessibility permission is
-    /// not granted — the JS layer should treat this as "feature unavailable"
-    /// and fall back gracefully.
+    /// Install the platform-specific hook. Errors when:
+    ///   - macOS: Accessibility permission has not been granted.
+    ///   - Windows: SetWindowsHookExW failed (rare, usually permission-related).
+    ///   - Other platforms: returns Ok with no-op (hook is unsupported).
     #[napi]
     pub fn start(&mut self, callback: JsFunction) -> napi::Result<()> {
         if self.started {
@@ -598,33 +972,72 @@ impl MacosCursorHook {
         let tsfn: ThreadsafeFunction<String, ErrorStrategy::CalleeHandled> =
             callback.create_threadsafe_function(0, |ctx| Ok(vec![ctx.value]))?;
         self.stop_signal.store(false, Ordering::SeqCst);
-        match macos_cursor::start_cursor_tap(
-            tsfn,
-            self.stop_signal.clone(),
-            self.bounds.clone(),
-            self.state.clone(),
-        ) {
-            Ok(()) => {
-                self.started = true;
-                Ok(())
+
+        #[cfg(target_os = "macos")]
+        {
+            match macos_cursor::start_cursor_tap(
+                tsfn,
+                self.stop_signal.clone(),
+                self.bounds.clone(),
+                self.macos_state.clone(),
+            ) {
+                Ok(()) => {
+                    self.started = true;
+                    return Ok(());
+                }
+                Err(err) => {
+                    self.started = false;
+                    return Err(err);
+                }
             }
-            Err(err) => {
-                self.started = false;
-                Err(err)
+        }
+        #[cfg(target_os = "windows")]
+        {
+            match windows_cursor::start_cursor_hook(
+                tsfn,
+                self.stop_signal.clone(),
+                self.bounds.clone(),
+                self.windows_state.clone(),
+                self.windows_thread_id.clone(),
+            ) {
+                Ok(()) => {
+                    self.started = true;
+                    return Ok(());
+                }
+                Err(err) => {
+                    self.started = false;
+                    return Err(err);
+                }
             }
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        {
+            // Unsupported platform — treat as gracefully unavailable.
+            let _ = tsfn;
+            self.started = false;
+            Err(napi::Error::from_reason(
+                "Cursor hook unsupported on this platform".to_string(),
+            ))
         }
     }
 
     #[napi]
     pub fn stop(&mut self) {
         self.stop_signal.store(true, Ordering::SeqCst);
+        #[cfg(target_os = "windows")]
+        windows_cursor::signal_stop(&self.windows_thread_id);
         self.started = false;
-        if let Ok(mut guard) = self.state.lock() {
+        #[cfg(target_os = "macos")]
+        if let Ok(mut guard) = self.macos_state.lock() {
             *guard = macos_cursor::VirtualCursorState::default();
+        }
+        #[cfg(target_os = "windows")]
+        if let Ok(mut guard) = self.windows_state.lock() {
+            *guard = windows_cursor::VirtualState::default();
         }
     }
 
-    /// Whether the tap is currently running.
+    /// Whether the hook is currently running.
     #[napi]
     pub fn is_active(&self) -> bool {
         self.started

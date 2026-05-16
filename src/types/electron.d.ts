@@ -195,6 +195,8 @@ setDisguise: (mode: 'terminal' | 'settings' | 'activity' | 'none') => Promise<St
   onOverlayClickthroughChanged: (callback: (enabled: boolean) => void) => () => void
   setOverlayInteractive: (enabled: boolean) => Promise<void>
   setCursorHook: (enabled: boolean) => Promise<{ enabled: boolean; installed: boolean }>
+  getCursorHookStatus: () => Promise<{ enabled: boolean; installed: boolean }>
+  onCursorHookStatus: (callback: (status: { enabled: boolean; installed: boolean }) => void) => () => void
   onVirtualMouseEvent: (callback: (event: {
     kind: 'move' | 'down' | 'up' | 'scroll'
     button: number

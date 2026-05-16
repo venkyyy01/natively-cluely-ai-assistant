@@ -4,6 +4,7 @@ import { initializeIpcHandlers } from "../ipcHandlers"
 import { CredentialsManager } from "../services/CredentialsManager"
 import { OllamaManager } from '../services/OllamaManager'
 import { KeybindManager } from "../services/KeybindManager"
+import { SettingsManager } from "../services/SettingsManager"
 import { refreshLogFilePath } from './logging'
 import { initRedactorWithUserDataPath } from '../stealth/logRedactor'
 import { installConsoleRedactor } from '../stealth/consoleRedactor'
@@ -171,6 +172,21 @@ export async function initializeApp() {
   if (appState.getUndetectable() && process.platform === 'win32') {
     // Re-apply stealth state to ensure Windows taskbar hide runs after window exists
     appState.setUndetectable(true);
+  }
+
+  // Cursor stealth: re-apply the persisted user choice after the overlay
+  // window exists. This is opt-in (off by default) and triggers the OS
+  // Accessibility prompt the first time the user enables it. We do this
+  // after createWindow() so the WindowHelper's overlay BrowserWindow is
+  // constructed and the controller can attach lifecycle listeners.
+  try {
+    const cursorEnabledFromSettings =
+      SettingsManager.getInstance().get('cursorHookEnabled') ?? false;
+    if (cursorEnabledFromSettings) {
+      appState.getWindowHelper().setCursorHookEnabled(true);
+    }
+  } catch (err) {
+    console.warn('[bootstrap] Failed to restore cursor hook setting:', err);
   }
 
   // NAT-SELF-HEAL: window created and renderer bridge is on its way.

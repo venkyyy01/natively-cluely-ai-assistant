@@ -310,7 +310,7 @@ if (!nativeBinding) {
   throw new Error(`Failed to load native binding`)
 }
 
-const { getHardwareId, verifyGumroadKey, applyMacosWindowStealth, removeMacosWindowStealth, applyMacosPrivateWindowStealth, removeMacosPrivateWindowStealth, setMacosWindowLevel, verifyMacosStealthState, verifyMacosCaptureExclusion, excludeFromCapture, applySckExclusion, verifySckExclusion, applyWindowsWindowStealth, removeWindowsWindowStealth, verifyWindowsStealthState, applyWindowsNoActivate, clearWindowsNoActivate, listVisibleWindows, checkBrowserCaptureWindows, getFilteredDisplayList, getRunningProcesses, StealthKeyMonitor, suppressKeyEvent, MacosCursorHook, SystemAudioCapture, MicrophoneCapture, getInputDevices, getOutputDevices } = nativeBinding
+const { getHardwareId, verifyGumroadKey, applyMacosWindowStealth, removeMacosWindowStealth, applyMacosPrivateWindowStealth, removeMacosPrivateWindowStealth, setMacosWindowLevel, verifyMacosStealthState, verifyMacosCaptureExclusion, excludeFromCapture, applySckExclusion, verifySckExclusion, applyWindowsWindowStealth, removeWindowsWindowStealth, verifyWindowsStealthState, applyWindowsNoActivate, clearWindowsNoActivate, listVisibleWindows, checkBrowserCaptureWindows, getFilteredDisplayList, getRunningProcesses, StealthKeyMonitor, suppressKeyEvent, CursorHook, SystemAudioCapture, MicrophoneCapture, getInputDevices, getOutputDevices } = nativeBinding
 
 module.exports.getHardwareId = getHardwareId
 module.exports.verifyGumroadKey = verifyGumroadKey
@@ -335,7 +335,7 @@ module.exports.getFilteredDisplayList = getFilteredDisplayList
 module.exports.getRunningProcesses = getRunningProcesses
 module.exports.StealthKeyMonitor = StealthKeyMonitor
 module.exports.suppressKeyEvent = suppressKeyEvent
-module.exports.MacosCursorHook = MacosCursorHook
+module.exports.CursorHook = CursorHook
 module.exports.SystemAudioCapture = SystemAudioCapture
 module.exports.MicrophoneCapture = MicrophoneCapture
 module.exports.getInputDevices = getInputDevices

@@ -18,4 +18,17 @@ declare module 'natively-audio' {
         stop(): void;
         isActive(): boolean;
     }
+    /**
+     * Cross-platform cursor hook (CGEventTap on macOS, WH_MOUSE_LL on
+     * Windows). Same shape as MacosCursorHook — kept as a separate
+     * declaration so both names resolve while we transition.
+     */
+    export class CursorHook {
+        constructor();
+        setOverlayBounds(x: number, y: number, width: number, height: number): void;
+        setActive(active: boolean): void;
+        start(callback: (jsonPayload: string) => void): void;
+        stop(): void;
+        isActive(): boolean;
+    }
 }

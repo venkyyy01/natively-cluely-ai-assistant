@@ -209,18 +209,21 @@ export declare class StealthKeyMonitor {
   isTapActive(): boolean
 }
 /**
- * JS-facing macOS cursor hook controller.
+ * JS-facing cross-platform cursor hook controller.
+ *
+ * Backed by `CGEventTap` on macOS and `WH_MOUSE_LL` on Windows. Both
+ * implementations share the same JS API and event payload shape.
  *
  * Lifecycle:
- *   const hook = new MacosCursorHook();
+ *   const hook = new CursorHook();
  *   hook.setOverlayBounds(x, y, width, height);
- *   hook.setActive(true);                    // arms the tap (overlay visible)
- *   hook.start(event => { ... });            // creates tap, throws if Accessibility denied
+ *   hook.setActive(true);                    // arms (overlay visible)
+ *   hook.start(event => { ... });            // installs hook, throws if perms denied / unsupported
  *   ...
- *   hook.setActive(false);                   // disarms tap (overlay hidden)
- *   hook.stop();                             // tears tap down
+ *   hook.setActive(false);                   // disarms (overlay hidden)
+ *   hook.stop();                             // tears the hook down
  */
-export declare class MacosCursorHook {
+export declare class CursorHook {
   constructor()
   /**
    * Update the overlay bounding rectangle in global screen coordinates.
@@ -229,19 +232,20 @@ export declare class MacosCursorHook {
   setOverlayBounds(x: number, y: number, width: number, height: number): void
   /**
    * Toggle whether the hook should suppress events when the cursor enters
-   * the overlay. The tap stays installed either way; setActive=false just
-   * makes the hot path a passthrough so we don't pay the round-trip cost
-   * of starting / stopping the tap on every overlay show/hide.
+   * the overlay. The hook stays installed either way; `setActive=false`
+   * just makes the hot path a passthrough so we don't pay the round-trip
+   * cost of starting / stopping it on every overlay show/hide.
    */
   setActive(active: boolean): void
   /**
-   * Start the cursor tap. Returns an error if Accessibility permission is
-   * not granted — the JS layer should treat this as "feature unavailable"
-   * and fall back gracefully.
+   * Install the platform-specific hook. Errors when:
+   *   - macOS: Accessibility permission has not been granted.
+   *   - Windows: SetWindowsHookExW failed (rare, usually permission-related).
+   *   - Other platforms: returns Ok with no-op (hook is unsupported).
    */
   start(callback: (...args: any[]) => any): void
   stop(): void
-  /** Whether the tap is currently running. */
+  /** Whether the hook is currently running. */
   isActive(): boolean
 }
 export declare class SystemAudioCapture {

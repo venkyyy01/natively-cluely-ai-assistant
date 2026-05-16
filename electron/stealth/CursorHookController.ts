@@ -1,7 +1,7 @@
 import { BrowserWindow, screen } from 'electron';
 
 /**
- * Wires the native `MacosCursorHook` (CGEventTap-based hardware cursor freezer)
+ * Wires the native `CursorHook` (CGEventTap on macOS, WH_MOUSE_LL on Windows)
  * to the overlay window's lifecycle events.
  *
  * Behaviour summary:
@@ -9,22 +9,22 @@ import { BrowserWindow, screen } from 'electron';
  *      and zero events are intercepted — no perf cost, no permission grab.
  *   2. When the overlay becomes visible AND the feature is enabled, we push
  *      the overlay's screen rect into the native hook and call setActive(true).
- *      The CGEventTap then swallows mouse events that land inside the rect,
+ *      The hook then swallows mouse events that land inside the rect,
  *      freezing the OS cursor at the overlay edge.
  *   3. The native module emits virtual cursor events as JSON strings via a
  *      thread-safe N-API callback; we forward them to the overlay renderer
  *      as `virtual-mouse-event` IPC messages so React can paint a software
  *      cursor and synthesize hover / click hits inside the DOM.
- *   4. Permission denial (Accessibility) does not crash anything — we log
- *      a warning, keep the controller in a permanent "unavailable" state,
- *      and the renderer falls back to displaying the OS cursor as before.
+ *   4. Permission denial does not crash anything — we log a warning, keep
+ *      the controller in a permanent "unavailable" state, and the renderer
+ *      falls back to displaying the OS cursor as before.
  *
  * Compatibility:
- *   - macOS only. On other platforms `enable()` is a no-op.
- *   - Tap is created lazily on the first enable() call so we don't grab the
- *     Accessibility prompt at app startup.
+ *   - macOS 10.14+ and Windows 10+. On other platforms `enable()` is a no-op.
+ *   - Hook is created lazily on the first enable() call so we don't grab the
+ *     OS permission prompt at app startup.
  */
-export class MacosCursorController {
+export class CursorHookController {
   private readonly overlayWindow: BrowserWindow;
   private hook: NativeCursorHook | null = null;
   private nativeUnavailable = false;
@@ -46,11 +46,11 @@ export class MacosCursorController {
   /**
    * Enable the cursor hook. Idempotent — safe to call repeatedly.
    * Returns true if the hook is now installed (or was already installed),
-   * false if Accessibility permission was denied or the native binding
+   * false if the OS permission was denied or the native binding
    * is unavailable in the current build.
    */
   public enable(): boolean {
-    if (process.platform !== 'darwin') return false;
+    if (process.platform !== 'darwin' && process.platform !== 'win32') return false;
     if (this.nativeUnavailable) return false;
     if (this.enabled) return true;
 
@@ -65,11 +65,13 @@ export class MacosCursorController {
         this.dispatchVirtualEvent(jsonPayload);
       });
     } catch (err) {
-      // Most common failure: Accessibility permission not granted. We do
-      // not retry here — the user has to grant permission and restart, or
-      // the controller will stay disabled. Log once and back off cleanly.
+      // Most common failures:
+      //   * macOS: Accessibility permission not granted.
+      //   * Windows: SetWindowsHookExW denied (rare; usually elevated apps).
+      // We do not retry here — the user has to grant permission and
+      // re-toggle, or the controller stays disabled. Log once and back off.
       console.warn(
-        '[MacosCursorController] Failed to start native cursor hook (likely Accessibility permission denied):',
+        '[CursorHookController] Failed to start native cursor hook (likely permission denied):',
         err
       );
       this.nativeUnavailable = true;
@@ -98,7 +100,7 @@ export class MacosCursorController {
       try {
         this.hook.stop();
       } catch (err) {
-        console.warn('[MacosCursorController] hook.stop failed:', err);
+        console.warn('[CursorHookController] hook.stop failed:', err);
       }
       this.hook = null;
     }
@@ -119,7 +121,7 @@ export class MacosCursorController {
     try {
       this.hook.setOverlayBounds(bounds.x, bounds.y, bounds.width, bounds.height);
     } catch (err) {
-      console.warn('[MacosCursorController] setOverlayBounds failed:', err);
+      console.warn('[CursorHookController] setOverlayBounds failed:', err);
     }
   }
 
@@ -132,15 +134,19 @@ export class MacosCursorController {
     try {
       // eslint-disable-next-line @typescript-eslint/no-require-imports
       const native = require('natively-audio') as NativeCursorBindings;
-      if (!native?.MacosCursorHook) {
-        console.warn('[MacosCursorController] Native MacosCursorHook export missing — feature unavailable');
+      // The Rust binding now exports a unified `CursorHook` class. The old
+      // `MacosCursorHook` name is kept as an alias for backwards compat
+      // during the transition.
+      const Ctor = native?.CursorHook ?? native?.MacosCursorHook;
+      if (!Ctor) {
+        console.warn('[CursorHookController] Native CursorHook export missing — feature unavailable');
         this.nativeUnavailable = true;
         return null;
       }
-      this.hook = new native.MacosCursorHook();
+      this.hook = new Ctor();
       return this.hook;
     } catch (err) {
-      console.warn('[MacosCursorController] Failed to load native module:', err);
+      console.warn('[CursorHookController] Failed to load native module:', err);
       this.nativeUnavailable = true;
       return null;
     }
@@ -153,7 +159,7 @@ export class MacosCursorController {
       this.hook.setActive(true);
       this.active = true;
     } catch (err) {
-      console.warn('[MacosCursorController] setActive(true) failed:', err);
+      console.warn('[CursorHookController] setActive(true) failed:', err);
     }
   }
 
@@ -162,7 +168,7 @@ export class MacosCursorController {
     try {
       this.hook.setActive(false);
     } catch (err) {
-      console.warn('[MacosCursorController] setActive(false) failed:', err);
+      console.warn('[CursorHookController] setActive(false) failed:', err);
     }
     this.active = false;
   }
@@ -226,7 +232,7 @@ export class MacosCursorController {
     try {
       payload = JSON.parse(jsonPayload) as VirtualMousePayload;
     } catch (err) {
-      console.warn('[MacosCursorController] failed to parse virtual mouse payload:', err);
+      console.warn('[CursorHookController] failed to parse virtual mouse payload:', err);
       return;
     }
     if (!payload) return;
@@ -262,6 +268,7 @@ interface NativeCursorHook {
 
 interface NativeCursorBindings {
   MacosCursorHook?: new () => NativeCursorHook;
+  CursorHook?: new () => NativeCursorHook;
 }
 
 interface VirtualMousePayload {

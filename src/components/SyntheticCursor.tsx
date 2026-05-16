@@ -14,9 +14,10 @@ type VirtualMouseEvent = {
 
 /**
  * Software cursor rendered inside the overlay window. Receives virtual
- * mouse events from the macOS cursor hook (CGEventTap) via preload IPC,
- * paints an SVG cursor at the live position, and synthesises hover / click
- * events on real DOM elements underneath so React buttons keep working.
+ * mouse events from the platform-native cursor hook (CGEventTap on macOS,
+ * WH_MOUSE_LL on Windows) via preload IPC, paints an SVG cursor at the
+ * live position, and synthesises hover / click events on real DOM
+ * elements underneath so React buttons keep working.
  *
  * Why this matters for stealth: the OS hardware cursor is captured into
  * any screen share. By freezing it at the overlay edge and replacing it
@@ -25,12 +26,22 @@ type VirtualMouseEvent = {
  * — no mysterious clicks on empty space, no cursor jitter inside the
  * Natively rectangle.
  *
+ * Lifecycle:
+ *   - The Settings → Cursor Stealth toggle is the source of truth. The
+ *     main process (WindowHelper.setCursorHookEnabled) installs/removes
+ *     the native hook and broadcasts `cursor-hook-status` to the overlay.
+ *   - This component listens to that broadcast and paints the software
+ *     cursor only while the hook is installed. It does NOT enable the
+ *     hook itself — that prevents accidental Accessibility prompts on
+ *     overlay open and avoids the hook running for users who haven't
+ *     opted in.
+ *
  * Failure modes:
- *   - If `setCursorHook` returns `{ installed: false }` (Accessibility
- *     denied / non-mac platform), this component renders nothing and
- *     the OS cursor handles input normally. No behavioural change.
- *   - If the IPC stream stalls, the last-painted position remains; the
- *     OS cursor is still frozen so the screen-share view stays stable.
+ *   - Settings disabled / Accessibility denied / non-supported platform:
+ *     status is `installed: false`, the component renders nothing, and
+ *     the OS cursor handles input as before.
+ *   - IPC stream stalls: the last-painted position remains; the OS cursor
+ *     is still frozen so the screen-share view stays stable.
  */
 export const SyntheticCursor: React.FC = () => {
   const [installed, setInstalled] = useState(false)
@@ -38,36 +49,38 @@ export const SyntheticCursor: React.FC = () => {
   const [pressed, setPressed] = useState(false)
   const lastHoveredRef = useRef<Element | null>(null)
 
-  // Phase 1: try to install the native hook. Re-run when the component
-  // mounts (overlay opens). The Electron main process owns lifecycle
-  // beyond that — when the overlay is hidden, it disarms the tap; when
-  // it shows again, it re-arms. We do not need to re-call here.
+  // Phase 1: subscribe to the controller's status broadcasts from main.
   useEffect(() => {
-    const setCursorHook = getOptionalElectronMethod('setCursorHook')
-    if (!setCursorHook) {
+    const onCursorHookStatus = getOptionalElectronMethod('onCursorHookStatus')
+    if (!onCursorHookStatus) {
       setInstalled(false)
       return
     }
 
-    let cancelled = false
-    void setCursorHook(true)
-      .then((result) => {
-        if (cancelled) return
-        setInstalled(Boolean(result?.installed))
-      })
-      .catch((err) => {
-        // eslint-disable-next-line no-console
-        console.warn('[SyntheticCursor] setCursorHook failed:', err)
-        setInstalled(false)
-      })
+    const unsubscribe = onCursorHookStatus((status) => {
+      setInstalled(Boolean(status?.installed))
+      if (!status?.installed) {
+        setPosition(null)
+        setPressed(false)
+        lastHoveredRef.current = null
+      }
+    })
+
+    // On mount, ask main for the current status — covers the case where
+    // the hook was already enabled before the overlay window existed.
+    const getStatus = getOptionalElectronMethod('getCursorHookStatus')
+    if (getStatus) {
+      void getStatus()
+        .then((status) => setInstalled(Boolean(status?.installed)))
+        .catch(() => setInstalled(false))
+    }
 
     return () => {
-      cancelled = true
-      // Disarm on unmount — the controller in main also clears itself on
-      // overlay 'closed', so this is belt-and-braces for hot reload.
-      void setCursorHook(false).catch(() => {
+      try {
+        unsubscribe()
+      } catch {
         /* ignore */
-      })
+      }
     }
   }, [])
 

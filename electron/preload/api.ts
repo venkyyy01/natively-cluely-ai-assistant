@@ -281,9 +281,11 @@ onAccelerationModeChanged: (callback: (enabled: boolean) => void) => () => void
   // required for HTML <input> focus). Renderer should flip true on input
   // focus and false on input blur / Esc / submit.
   setOverlayInteractive: (enabled: boolean) => Promise<void>;
-  // CURSOR-FREEZE: enable/disable the macOS CGEventTap that freezes the
-  // hardware cursor at the overlay boundary and emits virtual mouse events.
+  // CURSOR-FREEZE: enable/disable the platform cursor freeze hook
+  // (CGEventTap on macOS, WH_MOUSE_LL on Windows).
   setCursorHook: (enabled: boolean) => Promise<{ enabled: boolean; installed: boolean }>;
+  getCursorHookStatus: () => Promise<{ enabled: boolean; installed: boolean }>;
+  onCursorHookStatus: (callback: (status: { enabled: boolean; installed: boolean }) => void) => () => void;
   onVirtualMouseEvent: (callback: (event: VirtualMouseEvent) => void) => () => void;
   onGlobalShortcutAction: (callback: (actionId: string) => void) => () => void;
   onOverlayOpacityChanged: (callback: (opacity: number) => void) => () => void;
@@ -659,6 +661,14 @@ setOpenAtLogin: (open: boolean) => invokeStatus("set-open-at-login", open),
   },
   setOverlayInteractive: (enabled: boolean) => invokeVoid('set-overlay-interactive', enabled),
   setCursorHook: (enabled: boolean) => invokeAndUnwrap<{ enabled: boolean; installed: boolean }>('set-cursor-hook', enabled),
+  getCursorHookStatus: () => invokeAndUnwrap<{ enabled: boolean; installed: boolean }>('get-cursor-hook-status'),
+  onCursorHookStatus: (callback: (status: { enabled: boolean; installed: boolean }) => void) => {
+    const subscription = (_: any, status: { enabled: boolean; installed: boolean }) => callback(status)
+    ipcRenderer.on('cursor-hook-status', subscription)
+    return () => {
+      ipcRenderer.removeListener('cursor-hook-status', subscription)
+    }
+  },
   onVirtualMouseEvent: (callback: (event: VirtualMouseEvent) => void) => {
     const subscription = (_: any, event: VirtualMouseEvent) => callback(event)
     ipcRenderer.on('virtual-mouse-event', subscription)
