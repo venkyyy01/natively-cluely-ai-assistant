@@ -74,6 +74,11 @@ export interface NativeStealthBindings {
   applyWindowsWindowStealth?: (handle: Buffer) => void;
   removeWindowsWindowStealth?: (handle: Buffer) => void;
   verifyWindowsStealthState?: (handle: Buffer) => number;
+  // BLUR-PROOF: Apply / clear WS_EX_NOACTIVATE on the overlay HWND so
+  // clicking the overlay does not raise WM_ACTIVATEAPP and trigger blur in
+  // an underlying browser tab. macOS uses NSPanel via type:'panel' instead.
+  applyWindowsNoActivate?: (handle: Buffer) => void;
+  clearWindowsNoActivate?: (handle: Buffer) => void;
   // S-8: CGWindow native functions
   listVisibleWindows?: () => WindowInfo[];
   checkBrowserCaptureWindows?: () => boolean;

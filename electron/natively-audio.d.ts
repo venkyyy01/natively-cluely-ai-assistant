@@ -8,4 +8,6 @@ declare module 'natively-audio' {
     export function setMacosWindowLevel(windowNumber: number, level: number): void;
     export function applyWindowsWindowStealth(handle: Buffer): void;
     export function removeWindowsWindowStealth(handle: Buffer): void;
+    export function applyWindowsNoActivate(handle: Buffer): void;
+    export function clearWindowsNoActivate(handle: Buffer): void;
 }

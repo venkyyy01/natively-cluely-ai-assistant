@@ -130,27 +130,87 @@ const OverlayWindowContent: React.FC<OverlayWindowContentProps> = ({
   overlayOpacity,
   onClearMeetingAudioError,
   onEndMeeting,
-}) => (
-  <ErrorBoundary context="Overlay">
-    <div className="w-full relative bg-transparent">
-      <AppProviders>
-        <AnimatePresence>
-          {meetingAudioError && (
-            <MemoizedMeetingAudioBanner
-              message={meetingAudioError}
-              title="Audio startup failed"
-              variant="overlay"
-              onDismiss={onClearMeetingAudioError}
-            />
-          )}
-        </AnimatePresence>
-        <div style={{ opacity: overlayOpacity, transition: 'opacity 75ms ease' }}>
-          <NativelyInterface onEndMeeting={onEndMeeting} />
-        </div>
-      </AppProviders>
-    </div>
-  </ErrorBoundary>
-)
+}) => {
+  // BLUR-PROOF (Phase 2C): only flip the overlay window into "activating"
+  // mode while the user is actively typing. The default state is
+  // non-activating so the overlay can be clicked, scrolled, and have buttons
+  // pressed without firing `blur` / `focusout` / `hasFocus()→false` in any
+  // underlying browser tab. Real <input>, <textarea>, and contenteditable
+  // elements need native focus to receive keystrokes — we lend it to them
+  // for the duration of the focus only.
+  useEffect(() => {
+    const electronAPI = getElectronAPI()
+    const setInteractive = (enabled: boolean) => {
+      void electronAPI.setOverlayInteractive?.(enabled).catch((err) => {
+        // Soft-fail. The hook is purely additive — the overlay still works
+        // without it; we just lose blur-proofing while typing.
+        // eslint-disable-next-line no-console
+        console.warn('[overlay] setOverlayInteractive failed:', err)
+      })
+    }
+
+    const isFocusableInput = (el: EventTarget | null): boolean => {
+      if (!(el instanceof HTMLElement)) return false
+      const tag = el.tagName
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return true
+      if (el.isContentEditable) return true
+      return false
+    }
+
+    const onFocusIn = (event: FocusEvent) => {
+      if (isFocusableInput(event.target)) {
+        setInteractive(true)
+      }
+    }
+
+    const onFocusOut = (event: FocusEvent) => {
+      // Only relinquish foreground when nothing focusable is taking over.
+      const next = event.relatedTarget
+      if (!isFocusableInput(next)) {
+        setInteractive(false)
+      }
+    }
+
+    document.addEventListener('focusin', onFocusIn, true)
+    document.addEventListener('focusout', onFocusOut, true)
+    // Belt-and-braces: window blur (e.g. user Esc'd out, OS yanked focus
+    // back to the browser) should also reset the flag so we never get
+    // stuck in interactive mode.
+    const onWindowBlur = () => setInteractive(false)
+    window.addEventListener('blur', onWindowBlur)
+
+    return () => {
+      document.removeEventListener('focusin', onFocusIn, true)
+      document.removeEventListener('focusout', onFocusOut, true)
+      window.removeEventListener('blur', onWindowBlur)
+      // Always release foreground on unmount so a hot reload / nav doesn't
+      // leave the overlay in activating mode.
+      setInteractive(false)
+    }
+  }, [])
+
+  return (
+    <ErrorBoundary context="Overlay">
+      <div className="w-full relative bg-transparent">
+        <AppProviders>
+          <AnimatePresence>
+            {meetingAudioError && (
+              <MemoizedMeetingAudioBanner
+                message={meetingAudioError}
+                title="Audio startup failed"
+                variant="overlay"
+                onDismiss={onClearMeetingAudioError}
+              />
+            )}
+          </AnimatePresence>
+          <div style={{ opacity: overlayOpacity, transition: 'opacity 75ms ease' }}>
+            <NativelyInterface onEndMeeting={onEndMeeting} />
+          </div>
+        </AppProviders>
+      </div>
+    </ErrorBoundary>
+  )
+}
 
 // Memoized OverlayWindowContent component for performance  
 const MemoizedOverlayWindowContent = memo(OverlayWindowContent);

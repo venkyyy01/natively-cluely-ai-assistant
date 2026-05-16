@@ -155,6 +155,13 @@ export async function initializeApp() {
   if (appState.getUndetectable()) {
     if (process.platform === 'darwin') {
       app.dock.hide();
+      // BLUR-PROOF (macOS Phase 2): apply 'accessory' activation policy at
+      // startup too so the very first window the OS sees is non-activating.
+      try {
+        app.setActivationPolicy?.('accessory');
+      } catch (err) {
+        console.warn('[bootstrap] setActivationPolicy(accessory) failed:', err);
+      }
     }
   }
 

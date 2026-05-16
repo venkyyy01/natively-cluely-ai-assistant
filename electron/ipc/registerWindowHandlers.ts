@@ -112,6 +112,18 @@ export function registerWindowHandlers({ appState, safeHandle, safeHandleValidat
     },
   );
 
+  safeHandleValidated(
+    'set-overlay-interactive',
+    (args) => [parseIpcInput(ipcSchemas.booleanFlag, args[0], 'set-overlay-interactive')] as const,
+    async (_event, enabled) => {
+      // BLUR-PROOF: routed straight to the WindowHelper. The renderer flips
+      // this on input focus/blur so the overlay only takes native foreground
+      // when the user is actively typing. Default state stays non-activating.
+      appState.getWindowHelper().setOverlayInteractive(enabled);
+      return ok({ enabled });
+    },
+  );
+
   safeHandle('toggle-window', async () => {
     const windowFacade = getWindowFacade(appState);
     if (windowFacade) {

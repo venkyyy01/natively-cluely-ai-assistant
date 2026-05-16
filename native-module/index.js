@@ -310,7 +310,7 @@ if (!nativeBinding) {
   throw new Error(`Failed to load native binding`)
 }
 
-const { getHardwareId, verifyGumroadKey, applyMacosWindowStealth, removeMacosWindowStealth, applyMacosPrivateWindowStealth, removeMacosPrivateWindowStealth, setMacosWindowLevel, verifyMacosStealthState, verifyMacosCaptureExclusion, excludeFromCapture, applySckExclusion, verifySckExclusion, applyWindowsWindowStealth, removeWindowsWindowStealth, verifyWindowsStealthState, listVisibleWindows, checkBrowserCaptureWindows, getFilteredDisplayList, getRunningProcesses, StealthKeyMonitor, suppressKeyEvent, SystemAudioCapture, MicrophoneCapture, getInputDevices, getOutputDevices } = nativeBinding
+const { getHardwareId, verifyGumroadKey, applyMacosWindowStealth, removeMacosWindowStealth, applyMacosPrivateWindowStealth, removeMacosPrivateWindowStealth, setMacosWindowLevel, verifyMacosStealthState, verifyMacosCaptureExclusion, excludeFromCapture, applySckExclusion, verifySckExclusion, applyWindowsWindowStealth, removeWindowsWindowStealth, verifyWindowsStealthState, applyWindowsNoActivate, clearWindowsNoActivate, listVisibleWindows, checkBrowserCaptureWindows, getFilteredDisplayList, getRunningProcesses, StealthKeyMonitor, suppressKeyEvent, SystemAudioCapture, MicrophoneCapture, getInputDevices, getOutputDevices } = nativeBinding
 
 module.exports.getHardwareId = getHardwareId
 module.exports.verifyGumroadKey = verifyGumroadKey
@@ -327,6 +327,8 @@ module.exports.verifySckExclusion = verifySckExclusion
 module.exports.applyWindowsWindowStealth = applyWindowsWindowStealth
 module.exports.removeWindowsWindowStealth = removeWindowsWindowStealth
 module.exports.verifyWindowsStealthState = verifyWindowsStealthState
+module.exports.applyWindowsNoActivate = applyWindowsNoActivate
+module.exports.clearWindowsNoActivate = clearWindowsNoActivate
 module.exports.listVisibleWindows = listVisibleWindows
 module.exports.checkBrowserCaptureWindows = checkBrowserCaptureWindows
 module.exports.getFilteredDisplayList = getFilteredDisplayList

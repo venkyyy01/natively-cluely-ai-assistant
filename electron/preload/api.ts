@@ -260,6 +260,11 @@ onAccelerationModeChanged: (callback: (enabled: boolean) => void) => () => void
   setOverlayOpacity: (opacity: number) => Promise<void>;
   setOverlayClickthrough: (enabled: boolean) => Promise<void>;
   onOverlayClickthroughChanged: (callback: (enabled: boolean) => void) => () => void;
+  // BLUR-PROOF: toggle the overlay between non-activating (default, won't
+  // fire blur in the underlying browser) and activating (interactive,
+  // required for HTML <input> focus). Renderer should flip true on input
+  // focus and false on input blur / Esc / submit.
+  setOverlayInteractive: (enabled: boolean) => Promise<void>;
   onGlobalShortcutAction: (callback: (actionId: string) => void) => () => void;
   onOverlayOpacityChanged: (callback: (opacity: number) => void) => () => void;
 
@@ -632,6 +637,7 @@ setOpenAtLogin: (open: boolean) => invokeStatus("set-open-at-login", open),
       ipcRenderer.removeListener('overlay-clickthrough-changed', subscription)
     }
   },
+  setOverlayInteractive: (enabled: boolean) => invokeVoid('set-overlay-interactive', enabled),
 
   onGlobalShortcutAction: (callback: (actionId: string) => void) => {
     const subscription = (_: any, actionId: string) => callback(actionId)

@@ -193,6 +193,7 @@ setDisguise: (mode: 'terminal' | 'settings' | 'activity' | 'none') => Promise<St
   setWindowMode: (mode: 'launcher' | 'overlay') => Promise<void>
   setOverlayClickthrough: (enabled: boolean) => Promise<void>
   onOverlayClickthroughChanged: (callback: (enabled: boolean) => void) => () => void
+  setOverlayInteractive: (enabled: boolean) => Promise<void>
   onGlobalShortcutAction: (callback: (actionId: string) => void) => () => void
 
   // Intelligence Mode Events

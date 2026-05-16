@@ -56,6 +56,25 @@ export declare function applyWindowsWindowStealth(hwndBuffer: Buffer): void
 export declare function removeWindowsWindowStealth(hwndBuffer: Buffer): void
 export declare function verifyWindowsStealthState(hwndBuffer: Buffer): number
 /**
+ * Apply the WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW extended window styles to
+ * a Windows HWND. Prevents the OS from promoting the window to foreground
+ * on click — the analogue of macOS's NSPanel non-activating panel. Used by
+ * the overlay window to avoid sending `blur` events to the focused browser
+ * tab when the user interacts with the overlay.
+ *
+ * On non-Windows platforms this is a no-op.
+ */
+export declare function applyWindowsNoActivate(hwndBuffer: Buffer): void
+/**
+ * Reverse of `apply_windows_no_activate`. Restores the ability of the
+ * window to receive native foreground activation. Called when stealth
+ * mode is disabled or when the overlay needs to receive native focus on
+ * demand (e.g. while typing into an input field).
+ *
+ * On non-Windows platforms this is a no-op.
+ */
+export declare function clearWindowsNoActivate(hwndBuffer: Buffer): void
+/**
  * List all visible windows using Core Graphics.
  * This replaces the Python3 subprocess call to Quartz.CGWindowListCopyWindowInfo.
  */
