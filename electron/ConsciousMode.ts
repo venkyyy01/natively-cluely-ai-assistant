@@ -251,6 +251,7 @@ export interface TranscriptSuggestionIntelligenceManager {
     lastQuestion: string;
     confidence: number;
     sourceUtteranceId?: string;
+    imagePaths?: string[];
   }): Promise<void>;
 }
 
@@ -263,6 +264,14 @@ export interface TranscriptSuggestionInput {
   intelligenceManager: TranscriptSuggestionIntelligenceManager;
   utteranceBuffer?: InterviewerUtteranceBuffer;
   triggerAuditLog?: TriggerAuditLog;
+  /**
+   * NAT-SCREENSHOT-AUTOATTACH: Screenshots queued before the interviewer
+   * spoke. Forwarded into the suggestion trigger so the LLM sees both
+   * the audio question and the visual context (e.g. user pre-captured a
+   * coderpad before the question landed). Conscious-mode wiring lives
+   * in `AppState.transcriptHandler`.
+   */
+  imagePaths?: string[];
 }
 
 const defaultInterviewerUtteranceBuffer = new InterviewerUtteranceBuffer();
@@ -954,6 +963,7 @@ async function triggerFromCandidate(input: TranscriptSuggestionInput, candidate:
       lastQuestion: decision.lastQuestion,
       confidence: input.confidence ?? 0.8,
       ...(candidate.sourceUtteranceId ? { sourceUtteranceId: candidate.sourceUtteranceId } : {}),
+      ...(input.imagePaths && input.imagePaths.length > 0 ? { imagePaths: input.imagePaths } : {}),
     };
     await input.intelligenceManager.handleSuggestionTrigger(trigger);
 

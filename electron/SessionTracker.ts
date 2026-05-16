@@ -727,6 +727,26 @@ export class SessionTracker {
   }
 
   /**
+   * Get the last interviewer turn with timestamp metadata.
+   *
+   * NAT-SCREENSHOT-FRESHNESS: Used by `IntelligenceEngine.runWhatShouldISay`
+   * to decide whether the most recent transcript question is fresh enough
+   * to pair with a just-taken screenshot, or whether the screenshot
+   * should drive its own synthetic prompt. Without this, screenshots
+   * silently inherit stale questions and the LLM answers the wrong thing.
+   */
+  getLastInterviewerTurnWithMeta(): { text: string; timestamp: number } | null {
+    const contextItems = this.getContextItems();
+    for (let i = contextItems.length - 1; i >= 0; i--) {
+      const item = contextItems[i];
+      if (item.role === 'interviewer') {
+        return { text: item.text, timestamp: item.timestamp };
+      }
+    }
+    return null;
+  }
+
+  /**
    * Get full session context from accumulated transcript (User + Interviewer + Assistant)
    */
   getFullSessionContext(): string {

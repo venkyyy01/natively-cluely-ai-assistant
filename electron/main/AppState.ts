@@ -1363,7 +1363,26 @@ try {
 
       // Auto-trigger logic with enhanced debugging
       console.log(`[TRANSCRIPT] 🤖 Auto-trigger check: speaker=${speaker}, final=${segment.isFinal}, consciousMode=${this.consciousModeEnabled}, intelligenceManager=${!!this.intelligenceManager}`);
-      
+
+      // NAT-SCREENSHOT-AUTOATTACH: When conscious mode is on and the user
+      // has queued screenshots before the interviewer asked a question
+      // (e.g. captured a coderpad / editor screen mid-conversation), attach
+      // the queue so the LLM sees the screenshots alongside the live
+      // question. Without this, the auto-trigger answers the audio
+      // question with no visual context — exactly the case where the
+      // user *wants* the screenshot to drive a nuanced response.
+      //
+      // Originally wired in 0833816 ("screenshot wiring and llm cnceled
+      // fix") and lost in a later refactor. Conscious-mode-only so the
+      // fast standard path stays lean for plain interview turns.
+      const queuedScreenshots = this.consciousModeEnabled
+        ? [
+            ...this.screenshotHelper.getScreenshotQueue(),
+            ...this.screenshotHelper.getExtraScreenshotQueue(),
+          ]
+        : [];
+      const autoTriggerImagePaths = queuedScreenshots.length > 0 ? queuedScreenshots : undefined;
+
       void maybeHandleSuggestionTriggerFromTranscript({
         speaker,
         text: segment.text,
@@ -1371,6 +1390,7 @@ try {
         confidence: segment.confidence,
         consciousModeEnabled: this.consciousModeEnabled,
         intelligenceManager: this.intelligenceManager,
+        imagePaths: autoTriggerImagePaths,
       }).then((triggered) => {
         if (triggered) {
           console.log('[TRANSCRIPT] ✅ Auto-trigger SUCCEEDED');
