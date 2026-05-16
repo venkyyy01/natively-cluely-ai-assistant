@@ -90,6 +90,15 @@ export class AppState {
   private screenshotHelper: ScreenshotHelper
   public processingHelper: ProcessingHelper
   private accelerationManager: import('../services/AccelerationManager').AccelerationManager | null = null
+  /**
+   * Single-flight guard for `initializeAccelerationManager()`. The init call
+   * downloads + loads the ANE ONNX model on Apple Silicon, which can take
+   * several seconds. Without this guard, a fast off→on→off→on toggle would
+   * fire multiple parallel inits, leaking the orphaned AccelerationManagers
+   * (each owning a WorkerPool and RuntimeBudgetScheduler) that finished
+   * after the user already settled on a different state.
+   */
+  private accelerationManagerInitInFlight: Promise<void> | null = null
   private readonly performanceInstrumentation: PerformanceInstrumentation
   private readonly runtimeCoordinator: RuntimeCoordinator
 
@@ -1103,26 +1112,46 @@ console.error('[AppState] Failed to initialize RAGManager:', error);
 }
 
 private async initializeAccelerationManager(): Promise<void> {
-try {
-const { AccelerationManager } = await import('../services/AccelerationManager');
-const accelerationManager = new AccelerationManager();
-await accelerationManager.initialize();
-this.accelerationManager = accelerationManager;
-if (SettingsManager.getInstance().getAccelerationModeEnabled()) {
-accelerationManager.setConsciousModeEnabled(this.consciousModeEnabled);
-accelerationManager.activate();
-setActiveAccelerationManager(accelerationManager);
-this.intelligenceManager.attachAccelerationManager(accelerationManager);
-} else {
-accelerationManager.deactivate();
-setActiveAccelerationManager(null);
-this.intelligenceManager.attachAccelerationManager(null);
+// Single-flight guard: collapse concurrent calls into one in-flight init.
+// Safe to await even from the synchronous toggle handler because the
+// caller only cares about the post-init state, not the per-call promise
+// identity.
+if (this.accelerationManagerInitInFlight) {
+  return this.accelerationManagerInitInFlight;
 }
-console.log('[AppState] AccelerationManager initialized (Apple Silicon enhancement)');
-} catch (error) {
-this.accelerationManager = null;
-  console.warn('[AppState] AccelerationManager initialization skipped (optional):', error);
-}
+
+const initPromise = (async () => {
+  try {
+    const { AccelerationManager } = await import('../services/AccelerationManager');
+    const accelerationManager = new AccelerationManager();
+    await accelerationManager.initialize();
+    // Re-check the desired state AFTER the async init completes. The user
+    // may have toggled acceleration off while the ANE model was loading;
+    // installing the manager into shared state at that point would
+    // resurrect a feature the user just turned off.
+    const desiredEnabled = SettingsManager.getInstance().getAccelerationModeEnabled();
+    this.accelerationManager = accelerationManager;
+    if (desiredEnabled) {
+      accelerationManager.setConsciousModeEnabled(this.consciousModeEnabled);
+      accelerationManager.activate();
+      setActiveAccelerationManager(accelerationManager);
+      this.intelligenceManager.attachAccelerationManager(accelerationManager);
+    } else {
+      accelerationManager.deactivate();
+      setActiveAccelerationManager(null);
+      this.intelligenceManager.attachAccelerationManager(null);
+    }
+    console.log('[AppState] AccelerationManager initialized (Apple Silicon enhancement)');
+  } catch (error) {
+    this.accelerationManager = null;
+    console.warn('[AppState] AccelerationManager initialization skipped (optional):', error);
+  } finally {
+    this.accelerationManagerInitInFlight = null;
+  }
+})();
+
+this.accelerationManagerInitInFlight = initPromise;
+return initPromise;
 }
 
 private initializeKnowledgeOrchestrator(): void {
