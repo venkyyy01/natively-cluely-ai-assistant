@@ -194,9 +194,12 @@ export class SonioxStreamingSTT extends EventEmitter {
 
         this.configSent = false;
         this.pendingFinalText = '';
-        this.ws = new WebSocket(SONIOX_WEBSOCKET_URL);
+        const socket = new WebSocket(SONIOX_WEBSOCKET_URL);
+        this.ws = socket;
 
-        this.ws.on('open', () => {
+        socket.on('open', () => {
+            if (this.ws !== socket) return;
+
             this.isActive = true;
             this.reconnectAttempts = 0;
             console.log('[SonioxStreaming] Connected, sending config...');
@@ -217,7 +220,7 @@ export class SonioxStreamingSTT extends EventEmitter {
             }
 
             try {
-                this.ws!.send(JSON.stringify(config));
+                socket.send(JSON.stringify(config));
                 this.configSent = true;
                 this.isConnecting = false;
                 console.log('[SonioxStreaming] Config sent');
@@ -225,10 +228,10 @@ export class SonioxStreamingSTT extends EventEmitter {
                 // Flush buffer after config is sent
                 while (this.buffer.length > 0) {
                     const chunk = this.buffer.shift();
-                    if (chunk && this.ws?.readyState === WebSocket.OPEN) {
+                    if (chunk && this.ws === socket && socket.readyState === WebSocket.OPEN) {
                         const pcm16 = resampleToMonoPcm16(chunk, this.inputSampleRate, this.numChannels, this.targetSampleRate);
                         if (pcm16.length > 0) {
-                            this.ws.send(pcm16);
+                            socket.send(pcm16);
                         }
                     }
                 }
@@ -241,7 +244,9 @@ export class SonioxStreamingSTT extends EventEmitter {
             this.startKeepAlive();
         });
 
-        this.ws.on('message', (data: WebSocket.Data) => {
+        socket.on('message', (data: WebSocket.Data) => {
+            if (this.ws !== socket) return;
+
             try {
                 const msg = JSON.parse(data.toString());
 
@@ -301,10 +306,12 @@ export class SonioxStreamingSTT extends EventEmitter {
                 if (msg.finished) {
                     console.log('[SonioxStreaming] Session finished');
                     // We don't stop entirely, just clear WS so it can lazily reconnect on next audio
-                    if (this.ws) {
-                        this.ws.close();
+                    if (this.ws === socket) {
+                        socket.close();
                         this.ws = null;
                         this.configSent = false;
+                        this.isConnecting = false;
+                        this.clearKeepAlive();
                     }
                 }
             } catch (err) {
@@ -312,12 +319,16 @@ export class SonioxStreamingSTT extends EventEmitter {
             }
         });
 
-        this.ws.on('error', (err: Error) => {
+        socket.on('error', (err: Error) => {
+            if (this.ws !== socket) return;
+
             console.error('[SonioxStreaming] WebSocket error:', err.message);
             this.emit('error', err);
         });
 
-        this.ws.on('close', (code: number, reason: Buffer) => {
+        socket.on('close', (code: number, reason: Buffer) => {
+            if (this.ws !== socket) return;
+
             // Null out the ws reference immediately to prevent stale reuse
             this.ws = null;
             this.isConnecting = false;
